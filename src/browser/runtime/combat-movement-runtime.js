@@ -12,6 +12,7 @@ function createCombatMovementRuntime(runtime = {}) {
     staminaRemaining = () => NaN,
     staminaExhaustedThreshold = () => 0,
     combatMovementBlockedByStamina = () => false,
+    isInvulnerable = () => false,
     isCurrentlyActive = () => false,
     isFiringEntity = () => false,
     isMovingThreat = () => false,
