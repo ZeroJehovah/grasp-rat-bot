@@ -246,18 +246,76 @@ function createCombatLogRuntime(runtime = {}) {
         return sanitizeCombatLogIdPart(t + '-self-' + selfId + '-vs-' + target, 'combat-' + Date.now());
       }
 
-	      function rememberCombatPreBuffer(entry) {
-	        const state = bot.combatLogging;
-	        if (combatLogIsAfkAttack(entry)) return;
-	        if (!Array.isArray(state.preBuffer)) state.preBuffer = [];
-	        const snapshot = safeJsonClone({ ...entry, phase: 'prebuffer' }) || { at: entry?.at || Date.now(), phase: 'prebuffer', error: 'clone failed' };
-	        state.preBuffer.push(snapshot);
+      function rememberCombatPreBuffer(entry) {
+        const state = bot.combatLogging;
+        if (combatLogIsAfkAttack(entry)) return;
+        if (!Array.isArray(state.preBuffer)) state.preBuffer = [];
+        const snapshot = safeJsonClone({ ...entry, phase: 'prebuffer' }) || { at: entry?.at || Date.now(), phase: 'prebuffer', error: 'clone failed' };
+        state.preBuffer.push(snapshot);
         const cutoff = Date.now() - Math.max(0, Number(cfg.combatLogPreBufferMs) || 10000);
         const maxEntries = Math.max(20, Math.ceil(Math.max(250, Number(cfg.combatLogPreBufferMs) || 10000) / Math.max(50, Number(cfg.tickMs) || 120)) + 10);
         while (state.preBuffer.length && Number(state.preBuffer[0].at || 0) < cutoff) state.preBuffer.shift();
         while (state.preBuffer.length > maxEntries) state.preBuffer.shift();
       }
 
+      function startCombatLogSession(entry, decision, triggerReason) {
+        const state = bot.combatLogging;
+        const prior = Array.isArray(state.preBuffer) ? state.preBuffer.slice() : [];
+        state.active = true;
+        state.startedAt = entry?.at || Date.now();
+        state.lastCombatAt = entry?.at || Date.now();
+        state.combatId = makeCombatLogId(entry, decision);
+        state.sequence = 0;
+        state.lastError = '';
+        queueCombatLogEntry({
+          type: 'combat-start',
+          at: state.startedAt,
+          triggerReason,
+          source: entry?.source || '',
+          version: cfg.version,
+          sourceHash: cfg.sourceHash,
+          injectedBy: cfg.injectedBy,
+          self: entry?.self || null,
+          target: entry?.target || null,
+          decision: entry?.decision || null,
+          runtime: entry?.runtime || null,
+          login: entry?.login || null,
+          combatMetrics: entry?.combatMetrics || null,
+          nearbyEntities: entry?.nearbyEntities || [],
+          exit: entry?.exit || null,
+          enemyExit: entry?.enemyExit || null
+        });
+        for (const pre of prior) {
+          if (combatLogIsAfkAttack(pre)) continue;
+          queueCombatLogEntry({ ...pre, type: 'combat-pre-frame', phase: 'pre' });
+        }
+      }
+
+      function endCombatLogSession(entry, reason = 'post-buffer-elapsed') {
+        const state = bot.combatLogging;
+        queueCombatLogEntry({
+          type: 'combat-end',
+          at: entry?.at || Date.now(),
+          reason,
+          source: entry?.source || '',
+          version: cfg.version,
+          sourceHash: cfg.sourceHash,
+          injectedBy: cfg.injectedBy,
+          self: entry?.self || null,
+          decision: entry?.decision || null,
+          runtime: entry?.runtime || null,
+          login: entry?.login || null,
+          combatMetrics: entry?.combatMetrics || null,
+          exit: entry?.exit || null,
+          enemyExit: entry?.enemyExit || null,
+          sent: state.sent,
+          dropped: state.dropped
+        });
+        state.active = false;
+        state.combatId = '';
+        state.startedAt = 0;
+        state.lastCombatAt = 0;
+      }
 
       function recordCombatLogTick(source, decision = bot.lastDecision) {
         const recordStartedAt = Date.now();
