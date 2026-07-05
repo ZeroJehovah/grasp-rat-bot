@@ -36,6 +36,7 @@ const REQUIRED_DIST_TOKENS = [
   'function chooseAction',
   'async function tick',
   'function safeStringify',
+  'function createCombatRuntime',
   'function combatShootingPlan',
   'function pickCombatTarget',
   'function buildOpportunityCandidatesCore',
@@ -167,6 +168,7 @@ async function main() {
   const runtimeControlFlowSource = readText('src/browser/runtime/control-flow-runtime.js');
   const runtimeNativeStateSource = readText('src/browser/runtime/native-state-runtime.js');
   const runtimeProfitSource = readText('src/browser/runtime/profit-runtime.js');
+  const runtimeCombatSource = readText('src/browser/runtime/combat-runtime.js');
   const userscriptText = readText('userscript/grasp-rat-bootstrap.user.js');
   const extensionBootstrapText = readText('extension/page-bootstrap.js');
   const extensionManifest = readJson('extension/manifest.json');
@@ -375,6 +377,32 @@ async function main() {
     assert(runtimeProfitSource.includes('function recordActionSwitchDiagnostics'), 'target-switch diagnostics wrapper missing from profit module');
   });
 
+  check('combat runtime owns target movement aim fire state and action bodies', () => {
+    assert(runtimeEntrySource.includes("require('./runtime/combat-runtime')"), 'runtime entry does not import combat runtime module');
+    assert(runtimeEntrySource.includes('createCombatRuntime({'), 'runtime entry does not create combat runtime bindings');
+    assert(!/function\s+rememberCombatEngagement\s*\(/.test(runtimeEntrySource), 'runtime entry still owns combat engagement body');
+    assert(!/function\s+pickCombatTarget\s*\(/.test(runtimeEntrySource), 'runtime entry still owns combat target picker');
+    assert(!/function\s+incomingBulletThreat\s*\(/.test(runtimeEntrySource), 'runtime entry still owns bullet threat picker');
+    assert(!/function\s+combatShootingPlan\s*\(/.test(runtimeEntrySource), 'runtime entry still owns combat shooting plan');
+    assert(!/function\s+combatAimTarget\s*\(/.test(runtimeEntrySource), 'runtime entry still owns combat aim target');
+    assert(!/function\s+combatLeaveCoverAction\s*\(/.test(runtimeEntrySource), 'runtime entry still owns combat leave cover action');
+    assert(!/function\s+buildCombatAction\s*\(/.test(runtimeEntrySource), 'runtime entry still owns combat action builder');
+    assert(!/function\s+combatTickActiveFromState\s*\(/.test(runtimeEntrySource), 'runtime entry still owns combat tick active state');
+    assert(!/function\s+nativeTickMinIntervalMs\s*\(/.test(runtimeEntrySource), 'runtime entry still owns native tick combat interval');
+    assert(!/async\s+function\s+handleTickReentryCombatGap\s*\(/.test(runtimeEntrySource), 'runtime entry still owns combat tick reentry gap handler');
+    assert(runtimeCombatSource.includes('function createCombatRuntime'), 'combat runtime factory missing');
+    assert(runtimeCombatSource.includes('function rememberCombatEngagement'), 'combat engagement body missing from combat module');
+    assert(runtimeCombatSource.includes('function pickCombatTarget'), 'combat target picker missing from combat module');
+    assert(runtimeCombatSource.includes('function incomingBulletThreat'), 'incoming bullet threat missing from combat module');
+    assert(runtimeCombatSource.includes('function combatShootingPlan'), 'combat shooting plan missing from combat module');
+    assert(runtimeCombatSource.includes('function combatAimTarget'), 'combat aim target missing from combat module');
+    assert(runtimeCombatSource.includes('function combatLeaveCoverAction'), 'combat leave cover action missing from combat module');
+    assert(runtimeCombatSource.includes('function buildCombatAction'), 'combat action builder missing from combat module');
+    assert(runtimeCombatSource.includes('function combatTickActiveFromState'), 'combat tick active state missing from combat module');
+    assert(runtimeCombatSource.includes('function nativeTickMinIntervalMs'), 'native tick combat interval missing from combat module');
+    assert(runtimeCombatSource.includes('async function handleTickReentryCombatGap'), 'combat tick reentry gap handler missing from combat module');
+  });
+
   check('obsolete source-fragment files are absent', () => {
     const remaining = sourceGenerationFiles();
     assert(remaining.length === 0, `obsolete browser source-generation files remain: ${remaining.join(', ')}`);
@@ -431,9 +459,9 @@ async function main() {
   });
 
   check('combat target, aim, and fire stay native/realtime-visible only', () => {
-    const pickCombatTargetBody = functionBody(runtimeEntrySource, 'pickCombatTarget');
-    const combatAimTargetBody = functionBody(runtimeEntrySource, 'combatAimTarget');
-    const combatShootingPlanBody = functionBody(runtimeEntrySource, 'combatShootingPlan');
+    const pickCombatTargetBody = functionBody(runtimeCombatSource, 'pickCombatTarget');
+    const combatAimTargetBody = functionBody(runtimeCombatSource, 'combatAimTarget');
+    const combatShootingPlanBody = functionBody(runtimeCombatSource, 'combatShootingPlan');
     assert(!/snapshot/i.test(pickCombatTargetBody), 'pickCombatTarget mentions snapshot data');
     assert(!/snapshot/i.test(combatAimTargetBody), 'combatAimTarget mentions snapshot data');
     assert(!/snapshot/i.test(combatShootingPlanBody), 'combatShootingPlan mentions snapshot data');

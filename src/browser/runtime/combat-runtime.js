@@ -1,0 +1,3830 @@
+'use strict';
+
+function createCombatRuntime(runtime = {}) {
+  const {
+    bot,
+    cfg,
+    safeJsonClone = value => value,
+    arrayCount = value => Array.isArray(value) ? value.length : 0,
+    formatDistance = value => String(value),
+    formatDurationMs = value => String(value),
+    actorLabel = value => String(value?.name || value?.id || ''),
+    hpDisplay = value => String(value),
+    now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now()),
+    hypot = Math.hypot,
+    dist = () => Infinity,
+    speed = () => 0,
+    clamp = (value, min, max) => Math.max(min, Math.min(max, value)),
+    staminaRemaining = () => NaN,
+    staminaExhaustedThreshold = () => 0,
+    combatMovementBlockedByStamina = () => false,
+    staminaBudgetCoinLeaveSummary = () => '',
+    staminaExhaustedWindowLabel = () => '',
+    isInvulnerable = () => false,
+    isCurrentlyActive = () => false,
+    isFiringEntity = () => false,
+    isMovingThreat = () => false,
+    isAfkProfitTarget = () => false,
+    isWhitelistedTarget = () => false,
+    hasCombatActivitySignal = () => false,
+    isJoinModeActive = () => false,
+    hpValue = () => 0,
+    combatHpValue = () => 100,
+    knownHpValue = () => null,
+    dropValue = () => 0,
+    isFullHp = () => true,
+    isAlive = value => Boolean(value),
+    entityFreshEnoughForOffense = () => true,
+    normalizeBullet = value => value,
+    getBullets = () => [],
+    getNativeEntityList = () => [],
+    getSelf = () => null,
+    classify = () => ({}),
+    returnBlockRadius = () => Infinity,
+    attackWorthTakingCore = () => false,
+    attackWorthTaking = attackWorthTakingCore,
+    recordNetworkQualityAttackDamage = () => {},
+    summarizeSelf = value => value,
+    updateSessionStats = () => {},
+    summarizeServerPositionStall = () => null,
+    stopMotionSafely = () => {},
+    leaveOffline = async () => null,
+    activeOfflineLeaveDetail = () => null,
+    requestReload = () => {},
+    updateBotPanel = () => {},
+    summarizeControl = () => null,
+    directionTo = () => ({ dx: 0, dy: 0, distance: Infinity }),
+    opportunityLongStaminaBudget = () => Infinity,
+    scoreEnemyOpportunity = () => -Infinity,
+    opportunityEnemyStaminaCost = () => Infinity,
+    estimatedKillShots = () => 0,
+    opportunityStaminaAffordable = () => false,
+    scoreCoinOpportunity = () => -Infinity
+  } = runtime;
+
+  const {
+    currentOfflineDisplayReasonCore: currentOfflineDisplayReasonForCombatStateCore,
+    offlineLeaveSummaryCore: offlineLeaveSummaryForCombatStateCore,
+    combatExitSummaryCore: combatExitSummaryForCombatActionCore,
+    combatLeaveActionCore: combatLeaveActionForCombatActionCore
+  } = require('./exit-relogin');
+
+  function rememberCombatEngagement(self, target, action) {
+    if (!target) return;
+    const id = target.id ?? target.user_id;
+    if (id === null || id === undefined) return;
+    const previous = bot.combatTarget;
+    const same = previous && String(previous.id ?? '') === String(id);
+    const t = Date.now();
+    const targetDistance = Number.isFinite(Number(target.distance)) ? Number(target.distance) : dist(self, target);
+    const intent = action?.target?.combatIntent || action?.combatIntent || target.combatIntent || '';
+    const currentHp = knownHpValue(target);
+    const previousHp = same && Number.isFinite(Number(previous.hp)) ? Number(previous.hp) : null;
+	    const damaged = currentHp !== null && previousHp !== null && currentHp < previousHp - 0.01;
+	    if (damaged) recordNetworkQualityAttackDamage(target, Math.max(0, previousHp - currentHp), t);
+	    const lastDamageAt = damaged
+      ? t
+      : (same ? Number(previous.lastDamageAt || previous.at || t) : t);
+	    const lastInRangeAt = targetDistance <= Number(cfg.combatAttackRange || 0)
+	      ? t
+	      : (same ? Number(previous.lastInRangeAt || previous.at || t) : t);
+	    const motionSamples = combatMotionSamplesWithCurrent(
+	      self,
+	      target,
+	      t,
+	      Math.max(Number(cfg.combatMotionHistoryWindowMs || 2000), Number(cfg.combatTradeEstimateWindowMs || 6000))
+	    );
+    const incomingOwnerId = action?.incomingBullet?.ownerId ?? action?.incomingBullet?.owner_id ?? null;
+    const targetOwnsRealBullet = Boolean(
+      action?.incomingBullet
+      && !action.incomingBullet.synthetic
+      && incomingOwnerId !== null
+      && incomingOwnerId !== undefined
+      && String(incomingOwnerId) === String(id)
+    );
+	    bot.combatTarget = {
+      id,
+      at: t,
+      firstSeenAt: same ? Number(previous.firstSeenAt || previous.at || t) : t,
+      name: target.name || '',
+      x: Math.round(Number(target.x) || 0),
+      y: Math.round(Number(target.y) || 0),
+      hp: currentHp,
+      displayHp: Number.isFinite(Number(target.hp)) ? Number(target.hp) : null,
+      drop: Number(target.drop || 0),
+      distance: targetDistance,
+      reason: action?.reason || '',
+      intent,
+      originIntent: same ? String(previous.originIntent || previous.intent || intent) : String(intent || ''),
+      originReason: same ? String(previous.originReason || previous.reason || '') : String(action?.reason || ''),
+      lastDamageAt,
+      lastInRangeAt,
+	      seenTargetRealBulletAt: targetOwnsRealBullet
+	        ? t
+	        : (same ? Number(previous.seenTargetRealBulletAt || 0) : 0),
+	      lastDamageAmount: damaged ? Math.max(0, previousHp - currentHp) : Number(previous?.lastDamageAmount || 0),
+	      noDamageMs: Math.max(0, t - lastDamageAt),
+	      motionSamples,
+	      self: summarizeSelf(self)
+	    };
+  }
+
+  function clearCombatEngagement(reason = '') {
+    if (!bot.combatTarget) return;
+    bot.lastCombatTargetClear = { at: Date.now(), reason };
+    bot.combatTarget = null;
+    bot.combatAim = null;
+    clearCombatDisadvantageObservation(reason || 'combat-engagement-cleared');
+  }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  function summarizeOfflineThreat(entity) {
+    if (!entity) return null;
+    return {
+      id: entity.user_id ?? entity.id ?? null,
+      name: entity.name || '',
+      distance: Number.isFinite(Number(entity.distance)) ? Math.round(Number(entity.distance)) : null,
+      drop: Number(entity.drop ?? dropValue(entity) ?? 0) || 0,
+      speed: Number.isFinite(Number(entity.speed ?? speed(entity))) ? Math.round(Number(entity.speed ?? speed(entity))) : null,
+      moving: Boolean(entity.moving || speed(entity) >= cfg.activeSpeedMin),
+      mode: entity.current_join_mode || ''
+    };
+  }
+
+  function assessOfflineSafety(self) {
+    if (!self || !isAlive(self)) {
+      return { unsafe: true, reason: 'no-self', nearestActive: null, nearestHuman: null };
+    }
+    const { activeThreats, nearbyHumans, combatTargets, bullets } = classify(self);
+    const bullet = incomingBulletThreat(self, null, bullets);
+    const dangerThreat = activeThreats.find(entity => entity.distance <= entity.threatRadius) || null;
+    const cautionThreat = activeThreats.find(entity => entity.distance <= entity.cautionRadius + cfg.activeCautionExitMargin) || null;
+    const returnBlockThreat = activeThreats.find(entity => entity.distance <= returnBlockRadius(entity)) || null;
+    const combatThreat = combatTargets.find(entity => !isAfkProfitTarget(entity) && entity.distance <= cfg.combatAttackRange) || null;
+    const passiveDangerRadius = Math.max(0, Number(cfg.offlinePassiveDangerRadius || cfg.passivePanicRadius || 0));
+    const closeHuman = nearbyHumans.find(entity => entity.distance <= passiveDangerRadius) || null;
+    const injury = bot.pendingInjuryLeave;
+    const recentInjury = injury && Date.now() - Number(injury.at || 0) <= Math.max(3000, cfg.combatStrafeLockMs * 4);
+    const picked = dangerThreat || bullet || recentInjury || combatThreat || cautionThreat || returnBlockThreat || closeHuman || null;
+    const reason = dangerThreat ? 'active threat in danger range'
+      : bullet ? 'incoming bullet'
+        : recentInjury ? 'recent injury'
+          : combatThreat ? 'combat target nearby'
+            : cautionThreat ? 'active threat in caution range'
+              : returnBlockThreat ? 'active return-block pressure'
+                : closeHuman ? 'near player'
+                  : 'clear';
+    const safety = {
+      unsafe: Boolean(picked),
+      reason,
+      passiveDangerRadius,
+      nearestActive: summarizeOfflineThreat(activeThreats[0]),
+      nearestHuman: summarizeOfflineThreat(nearbyHumans[0]),
+      threat: summarizeOfflineThreat(picked && picked.user_id !== undefined ? picked : null),
+      incomingBullet: bullet ? {
+        id: bullet.id,
+        ownerId: bullet.ownerId,
+        distance: Math.round(Number(bullet.distance || 0)),
+        laneDistance: Math.round(Number(bullet.laneDistance || 0))
+      } : null,
+      recentInjury: recentInjury ? injury : null
+    };
+    bot.lastOfflineSafety = safety;
+    return safety;
+  }
+
+  function pickActiveCombatWaitThreat(self, activeThreats, bullets = []) {
+    const attackRange = Math.max(0, Number(cfg.combatAttackRange || cfg.attackRange || 0));
+    const dodgeRange = combatDodgeThreatRange();
+    const incoming = incomingBulletThreat(self, null, bullets);
+    const incomingOwnerId = incoming?.ownerId;
+    const unknownIncoming = Boolean(incoming && (incomingOwnerId === null || incomingOwnerId === undefined));
+    return (activeThreats || [])
+      .filter(threat => !isWhitelistedTarget(threat) && !isInvulnerable(threat))
+      .filter(threat => hasCombatActivitySignal(threat))
+      .filter(threat => !activeCombatRequiresThreatEvidence(self, threat) || activeCombatThreatensSelf(threat, incomingOwnerId, unknownIncoming))
+      .filter(threat => {
+        const distance = Number(threat.distance || 0);
+        if (!(distance > attackRange)) return distance <= attackRange;
+        return distance <= dodgeRange && (incomingOwnerMatchesTarget(threat, incomingOwnerId) || (unknownIncoming && isFiringEntity(threat)));
+      })
+      .sort((a, b) => {
+        if (hasCombatActivitySignal(a) !== hasCombatActivitySignal(b)) return hasCombatActivitySignal(a) ? -1 : 1;
+        if (isFiringEntity(a) !== isFiringEntity(b)) return isFiringEntity(a) ? -1 : 1;
+        return Number(a.distance || Infinity) - Number(b.distance || Infinity);
+      })[0] || null;
+  }
+
+  function activeCombatThreatWaitAction(threat) {
+    return {
+      kind: 'wait',
+      reason: 'combat-active-threat-wait',
+      dx: 0,
+      dy: 0,
+      shoot: false,
+      forceShoot: false,
+      activeThreat: threat ? {
+        id: threat.user_id ?? threat.id ?? null,
+        name: threat.name || '',
+        distance: Math.round(Number(threat.distance || 0)),
+        drop: Number(threat.drop || 0),
+        speed: Math.round(Number(threat.speed || 0)),
+        moving: Boolean(threat.moving),
+        firing: isFiringEntity(threat),
+        mode: threat.current_join_mode || threat.mode || ''
+      } : null
+    };
+  }
+
+
+
+
+  function recentCombatInjuryActive() {
+    const injury = bot.pendingInjuryLeave;
+    return injury && Date.now() - Number(injury.at || 0) <= Math.max(1000, cfg.combatStrafeLockMs * 3);
+  }
+
+  function lowValueActiveDropMax() {
+    const value = Number(cfg.combatLowValueActiveDropMax ?? 4);
+    return Math.max(0, Number.isFinite(value) ? value : 4);
+  }
+
+  function isLowValueActiveCombatTarget(target) {
+    if (!target || isAfkProfitTarget(target)) return false;
+    return hasCombatActivitySignal(target) && Number(target.drop ?? dropValue(target) ?? 0) <= lowValueActiveDropMax();
+  }
+
+  function proactiveActiveKillStaminaBudgetMs() {
+    const value = Number(cfg.combatProactiveActiveKillStaminaBudgetMs ?? 100000);
+    return Math.max(0, Number.isFinite(value) ? value : 100000);
+  }
+
+  function proactiveActiveCombatStaminaAffordable(self) {
+    const required = proactiveActiveKillStaminaBudgetMs();
+    if (!(required > 0)) return true;
+    const budget = opportunityLongStaminaBudget(self);
+    return !Number.isFinite(budget) || budget >= required;
+  }
+
+  function activeCombatBudgetBlocked(self, target) {
+    if (!target || isAfkProfitTarget(target) || !hasCombatActivitySignal(target)) return false;
+    if (Number(target.drop ?? dropValue(target) ?? 0) <= lowValueActiveDropMax()) return false;
+    return !proactiveActiveCombatStaminaAffordable(self);
+  }
+
+  function activeCombatRequiresThreatEvidence(self, target) {
+    return isLowValueActiveCombatTarget(target) || activeCombatBudgetBlocked(self, target);
+  }
+
+  function incomingOwnerMatchesTarget(target, incomingOwnerId) {
+    if (!target || incomingOwnerId === null || incomingOwnerId === undefined) return false;
+    const targetId = target.user_id ?? target.id;
+    return targetId !== null && targetId !== undefined && String(targetId) === String(incomingOwnerId);
+  }
+
+  function activeCombatThreatensSelf(target, incomingOwnerId = null, unknownIncoming = false) {
+    if (incomingOwnerMatchesTarget(target, incomingOwnerId)) return true;
+    if (unknownIncoming && isFiringEntity(target)) return true;
+    return Boolean(recentCombatInjuryActive() && (isFiringEntity(target) || isCurrentlyActive(target)));
+  }
+
+  function lowValueActiveThreatensSelf(target, incomingOwnerId = null, unknownIncoming = false) {
+    if (!isLowValueActiveCombatTarget(target)) return true;
+    return activeCombatThreatensSelf(target, incomingOwnerId, unknownIncoming);
+  }
+
+  function combatDodgeThreatRange() {
+    const attackRange = Math.max(0, Number(cfg.combatAttackRange || cfg.attackRange || 0));
+    return attackRange + Math.max(0, Number(cfg.combatDodgeRangeBuffer || 0));
+  }
+
+  function combatTargetPriority(target, incomingOwnerId = null, unknownIncoming = false) {
+    const incomingMatch = incomingOwnerId !== null && incomingOwnerId !== undefined && String(target.user_id) === String(incomingOwnerId);
+    return (incomingMatch ? 1000000000 : 0)
+      + (isFiringEntity(target) ? 500000000 : 0)
+      + (unknownIncoming && isCurrentlyActive(target) ? 200000000 : 0)
+      + (recentCombatInjuryActive() && isCurrentlyActive(target) ? 100000000 : 0)
+      + (isJoinModeActive(target) ? 75000000 : 0)
+      + (isCurrentlyActive(target) ? 50000000 : 0)
+      + Number(target.drop || 0) * 1000000
+      - Number(target.distance || 0);
+  }
+
+  function isDefensiveCombatTarget(self, target, incomingOwnerId = null, unknownIncoming = false) {
+    if (!target || isWhitelistedTarget(target) || isAfkProfitTarget(target) || isInvulnerable(target)) return false;
+    if (incomingOwnerMatchesTarget(target, incomingOwnerId)) return true;
+    if (activeCombatRequiresThreatEvidence(self, target)) return activeCombatThreatensSelf(target, incomingOwnerId, unknownIncoming);
+    if (isFiringEntity(target)) return true;
+    if (isCurrentlyActive(target)) return true;
+    if (unknownIncoming && isCurrentlyActive(target)) return true;
+    return Boolean(recentCombatInjuryActive() && isCurrentlyActive(target));
+  }
+
+  function isProfitableCombatTarget(self, target) {
+    return Boolean(target
+      && !isWhitelistedTarget(target)
+      && !isAfkProfitTarget(target)
+      && !isInvulnerable(target)
+      && isCurrentlyActive(target)
+      && Number(target.drop || 0) > lowValueActiveDropMax()
+      && proactiveActiveCombatStaminaAffordable(self));
+  }
+  function combatHpGapDisadvantaged(self, target) {
+    const knownSelfHp = knownHpValue(self);
+    const knownTargetHp = knownHpValue(target);
+    if (knownSelfHp === null || knownTargetHp === null) return false;
+    const hpGap = Number(knownTargetHp) - Number(knownSelfHp);
+    return Number(knownSelfHp) > cfg.combatLowHpLeaveThreshold
+      && Number.isFinite(hpGap)
+      && hpGap > cfg.combatHighHpDisadvantageGap;
+  }
+  function profitCombatDisadvantaged(self, target) {
+    const selfHp = hpValue(self);
+    const targetHp = combatHpValue(target);
+    return (selfHp < cfg.combatLowHpLeaveThreshold && selfHp < targetHp)
+      || combatHpGapDisadvantaged(self, target);
+  }
+
+
+
+
+  function pickCombatTarget(self, combatTargets, bullets, options = {}) {
+    if (!combatTargets.length) return null;
+    const incoming = incomingBulletThreat(self, null, bullets);
+    const incomingOwnerId = incoming?.ownerId;
+    const unknownIncoming = Boolean(incoming && (incomingOwnerId === null || incomingOwnerId === undefined));
+    if (incoming?.ownerId !== null && incoming?.ownerId !== undefined) {
+      const shooter = combatTargets.find(target => String(target.user_id) === String(incoming.ownerId) && !isWhitelistedTarget(target) && !isInvulnerable(target));
+      if (shooter) return { ...shooter, incomingBullet: incoming, combatIntent: 'defensive' };
+    }
+    const eligibleTargets = combatTargets
+      .filter(target => !isWhitelistedTarget(target) && !isAfkProfitTarget(target) && !isInvulnerable(target))
+      .filter(target => !target.combatDodgeOnlyCandidate || incomingOwnerMatchesTarget(target, incomingOwnerId) || (unknownIncoming && isFiringEntity(target)))
+      .filter(target => !combatRetreatIgnoreActive(target));
+    if (!eligibleTargets.length) return null;
+    const defensiveTargets = eligibleTargets
+      .filter(target => isDefensiveCombatTarget(self, target, incomingOwnerId, unknownIncoming))
+      .sort((a, b) => combatTargetPriority(b, incomingOwnerId, unknownIncoming) - combatTargetPriority(a, incomingOwnerId, unknownIncoming));
+    if (options.mode === 'defensive') return defensiveTargets[0] ? { ...defensiveTargets[0], combatIntent: 'defensive' } : null;
+    const profitableTargets = eligibleTargets
+      .filter(target => isProfitableCombatTarget(self, target))
+      .filter(target => options.mode !== 'profit' || !profitCombatDisadvantaged(self, target))
+      .sort((a, b) => {
+        const scoreA = scoreEnemyOpportunity(a) ?? -Infinity;
+        const scoreB = scoreEnemyOpportunity(b) ?? -Infinity;
+        if (scoreA !== scoreB) return scoreB - scoreA;
+        return a.distance - b.distance;
+      });
+    if (options.mode === 'profit') return profitableTargets[0] ? { ...profitableTargets[0], combatIntent: 'profit' } : null;
+    const sticky = bot.lastTarget?.kind === 'enemy' && now() - bot.lastTargetAt < cfg.targetStickMs
+      ? [...defensiveTargets, ...profitableTargets].find(target => String(target.user_id) === String(bot.lastTarget.id))
+      : null;
+    if (sticky) return sticky;
+    if (defensiveTargets[0]) return { ...defensiveTargets[0], combatIntent: 'defensive' };
+    if (isFullHp(self) && profitableTargets[0]) return { ...profitableTargets[0], combatIntent: 'profit' };
+    return null;
+  }
+
+  function combatEngageGraceRange() {
+    return Math.max(
+      Number(cfg.combatAttackRange || 0),
+      Number(cfg.combatDisengageRange || 0),
+      Number(cfg.combatEngageGraceRange || 0)
+    );
+  }
+
+  function combatTargetCandidateRange(self) {
+    return Number(cfg.combatAttackRange || 0);
+  }
+
+  function combatDodgeOnlyCandidateRange(self) {
+    return combatDodgeThreatRange();
+  }
+
+  function combatEngagedCandidate(self, raw) {
+    if (!raw || !entityFreshEnoughForOffense(raw) || !isAlive(raw) || isWhitelistedTarget(raw) || isInvulnerable(raw)) return null;
+    return {
+      ...raw,
+      distance: dist(self, raw),
+      drop: dropValue(raw),
+      speed: speed(raw),
+      hp: combatHpValue(raw),
+      knownHp: knownHpValue(raw)
+    };
+  }
+
+  function pickEngagedCombatTarget(self, combatTargets, entities, bullets = []) {
+    const engaged = bot.combatTarget;
+    if (!engaged?.id) return null;
+    if (combatRetreatIgnoreActive({ id: engaged.id })) {
+      clearCombatEngagement('target-retreating-ignore');
+      return null;
+    }
+    const t = Date.now();
+    const ageMs = Math.max(0, t - Number(engaged.at || 0));
+    if (ageMs > Math.max(cfg.targetStickMs, cfg.combatEngageStickMs)) {
+      clearCombatEngagement('expired');
+      return null;
+    }
+    const target = (combatTargets || []).find(item => String(item.user_id ?? item.id ?? '') === String(engaged.id));
+    if (target && !isWhitelistedTarget(target) && !isInvulnerable(target)) {
+      if (String(engaged.intent || '') === 'profit' && isAfkProfitTarget(target)) {
+        clearCombatEngagement('afk-profit-target');
+        return null;
+      }
+      const incoming = incomingBulletThreat(self, null, bullets);
+      const incomingOwnerId = incoming?.ownerId;
+      const unknownIncoming = Boolean(incoming && (incomingOwnerId === null || incomingOwnerId === undefined));
+      if (activeCombatRequiresThreatEvidence(self, target) && !activeCombatThreatensSelf(target, incomingOwnerId, unknownIncoming)) {
+        clearCombatEngagement(isLowValueActiveCombatTarget(target) ? 'low-value-active-not-threatening' : 'active-combat-stamina-budget');
+        return null;
+      }
+      return {
+        ...target,
+        combatIntent: 'engaged',
+        combatEngagement: {
+          ageMs: Math.round(ageMs),
+          outOfRangeMs: 0,
+          lastReason: engaged.reason || ''
+        }
+      };
+    }
+    const raw = (entities || []).find(item => String(item.user_id ?? item.id ?? '') === String(engaged.id));
+    const reengageTarget = combatEngagedCandidate(self, raw);
+    const graceRange = combatEngageGraceRange();
+    const activeReengage = Boolean(reengageTarget && (isCurrentlyActive(reengageTarget) || isFiringEntity(reengageTarget) || isMovingThreat(reengageTarget)));
+    const lastInRangeAt = Number(engaged.lastInRangeAt || engaged.at || 0);
+    const outOfRangeMs = Math.max(0, t - lastInRangeAt);
+    const graceMs = Math.max(0, Number(cfg.combatEngageGraceMs || 0));
+    const outOfRangeLimitMs = activeReengage
+      ? Math.max(graceMs, Number(cfg.combatEngageStickMs || 0))
+      : graceMs;
+    if (!outOfRangeLimitMs || outOfRangeMs > outOfRangeLimitMs) {
+      clearCombatEngagement('range-grace-expired');
+      return null;
+    }
+    if (reengageTarget && reengageTarget.distance > graceRange) {
+      clearCombatEngagement('combat-disengage-range');
+      return null;
+    }
+    if (!reengageTarget) return null;
+    if (String(engaged.intent || '') === 'profit' && isAfkProfitTarget(reengageTarget)) {
+      clearCombatEngagement('afk-profit-target');
+      return null;
+    }
+    const incoming = incomingBulletThreat(self, null, bullets);
+    const incomingOwnerId = incoming?.ownerId;
+    const unknownIncoming = Boolean(incoming && (incomingOwnerId === null || incomingOwnerId === undefined));
+    if (activeCombatRequiresThreatEvidence(self, reengageTarget) && !activeCombatThreatensSelf(reengageTarget, incomingOwnerId, unknownIncoming)) {
+      clearCombatEngagement(isLowValueActiveCombatTarget(reengageTarget) ? 'low-value-active-not-threatening' : 'active-combat-stamina-budget');
+      return null;
+    }
+    return {
+      ...reengageTarget,
+      combatIntent: 'reengage',
+      combatEngagement: {
+        ageMs: Math.round(ageMs),
+        outOfRangeMs: Math.round(outOfRangeMs),
+        graceRemainingMs: Math.max(0, Math.round(outOfRangeLimitMs - outOfRangeMs)),
+        graceRange: Math.round(graceRange),
+        activeReengage,
+        outOfRangeLimitMs: Math.round(outOfRangeLimitMs),
+        lastReason: engaged.reason || '',
+        reengage: true
+      }
+    };
+  }
+
+  function defensiveTargetOverridesEngaged(engagedTarget, defensiveTarget) {
+    if (!engagedTarget || !defensiveTarget?.incomingBullet) return false;
+    if (!incomingBulletRequiresTargetSwitch(defensiveTarget.incomingBullet)) return false;
+    const ownerId = defensiveTarget.incomingBullet.ownerId
+      ?? defensiveTarget.incomingBullet.owner_id
+      ?? defensiveTarget.incomingBullet.source_user_id
+      ?? defensiveTarget.incomingBullet.user_id;
+    if (ownerId === null || ownerId === undefined) return false;
+    const defensiveId = defensiveTarget.user_id ?? defensiveTarget.id;
+    const engagedId = engagedTarget.user_id ?? engagedTarget.id;
+    return defensiveId !== null && defensiveId !== undefined
+      && engagedId !== null && engagedId !== undefined
+      && String(defensiveId) !== String(engagedId);
+  }
+
+  function incomingBulletRequiresTargetSwitch(incomingBullet) {
+    if (!incomingBullet) return false;
+    const distance = Number(incomingBullet.distance);
+    const timeToImpactMs = Number(incomingBullet.timeToImpactMs);
+    const switchDistance = Math.max(0, Number(cfg.combatTargetSwitchIncomingDistance || 0));
+    const switchTime = Math.max(0, Number(cfg.combatTargetSwitchIncomingTimeMs || 0));
+    if (switchDistance > 0 && Number.isFinite(distance) && distance <= switchDistance) return true;
+    if (switchTime > 0 && Number.isFinite(timeToImpactMs) && timeToImpactMs <= switchTime) return true;
+    return false;
+  }
+
+  function pickOpportunisticShotTarget(self, entities) {
+    const candidates = (entities || [])
+      .filter(e => Number(e.user_id) !== Number(self.user_id))
+      .filter(e => e.native)
+      .filter(entityFreshEnoughForOffense)
+      .filter(isAlive)
+      .map(e => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e), hp: combatHpValue(e) }))
+      .filter(e => !isWhitelistedTarget(e))
+      .filter(e => e.distance <= cfg.attackRange)
+      .filter(e => (typeof attackWorthTakingCore === 'function'
+        ? attackWorthTakingCore(self, e, {
+          isWhitelistedTarget,
+          dropValue,
+          isAfkProfitTarget,
+          attackMinAfkDrop: cfg.attackMinAfkDrop,
+          attackMinDrop: cfg.attackMinDrop,
+          attackMinRewardRatio: cfg.attackMinRewardRatio
+        })
+        : attackWorthTaking(self, e)) && !isInvulnerable(e))
+      .filter(isAfkProfitTarget)
+      .map(e => ({
+        ...e,
+        score: scoreEnemyOpportunity(e) ?? -Infinity,
+        staminaCost: opportunityEnemyStaminaCost(e),
+        estimatedShots: estimatedKillShots(e)
+      }))
+      .filter(e => opportunityStaminaAffordable(self, e.staminaCost))
+      .sort((a, b) => {
+        const stickyA = bot.attackHistory.some(item => String(item.id) === String(a.user_id) && Date.now() - Number(item.at || 0) <= cfg.targetStickMs);
+        const stickyB = bot.attackHistory.some(item => String(item.id) === String(b.user_id) && Date.now() - Number(item.at || 0) <= cfg.targetStickMs);
+        if (stickyA !== stickyB) return stickyA ? -1 : 1;
+        if (b.score !== a.score) return b.score - a.score;
+        if (b.drop !== a.drop) return b.drop - a.drop;
+        return a.distance - b.distance;
+      });
+    const target = candidates[0] || null;
+    if (!target) return null;
+    return {
+      id: target.user_id,
+      name: target.name || '',
+      x: Number(target.x),
+      y: Number(target.y),
+      hp: combatHpValue(target),
+      drop: target.drop,
+      distance: Math.round(target.distance),
+      score: Math.round(Number(target.score || 0)),
+      staminaCost: Math.round(Number(target.staminaCost || 0)),
+      estimatedShots: target.estimatedShots,
+      mode: target.current_join_mode || '',
+      reason: 'opportunistic-afk-drop-shot'
+    };
+  }
+
+  function actionOpportunityScore(action) {
+    const explicit = Number(action?.score ?? action?.opportunityChoice?.score);
+    if (Number.isFinite(explicit)) return explicit;
+    const target = action?.target || {};
+    if (['coin', 'seek-coin'].includes(action?.kind) && Number(target.amount || 0) > 0) {
+      return scoreCoinOpportunity({
+        amount: Number(target.amount || 0),
+        distance: Number(target.distance ?? action?.distance ?? 0),
+        opportunityStaminaCost: Number.isFinite(Number(action?.staminaCost)) ? Number(action.staminaCost) : undefined
+      });
+    }
+    return -Infinity;
+  }
+
+  function opportunisticShotBeatsAction(action, shot) {
+    const shotScore = Number(shot?.score ?? scoreEnemyOpportunity(shot) ?? -Infinity);
+    if (!Number.isFinite(shotScore)) return false;
+    const actionScore = actionOpportunityScore(action);
+    const minRatio = Math.max(0, Number(cfg.opportunisticShotMinScoreRatio ?? 1));
+    return !Number.isFinite(actionScore) || actionScore <= 0 || shotScore >= actionScore * minRatio;
+  }
+
+  function attachOpportunisticShot(action, self, entities, options = {}) {
+    if (!action || !['coin', 'seek-coin'].includes(action.kind) || action.combat) return action;
+    if (options.recovery) return action;
+    const shot = pickOpportunisticShotTarget(self, entities);
+    if (!shot) return action;
+    if (!opportunisticShotBeatsAction(action, shot)) return action;
+    return { ...action, opportunisticShot: shot };
+  }
+
+  function buildOpportunisticShotWait(self, entities, options = {}) {
+    if (options.recovery) return null;
+    const shot = pickOpportunisticShotTarget(self, entities);
+    if (!shot) return null;
+    return {
+      kind: 'wait',
+      reason: 'opportunistic-afk-drop-shot',
+      dx: 0,
+      dy: 0,
+      opportunisticShot: shot
+    };
+  }
+
+
+
+  function combatMoveVelocityForDirection(dx, dy) {
+    const x = clamp(Math.round(Number(dx) || 0), -1, 1);
+    const y = clamp(Math.round(Number(dy) || 0), -1, 1);
+    if (!(x || y)) return { vx: 0, vy: 0 };
+    const speedPerTick = Math.max(1, Number(cfg.combatTargetDodgeSpeedPerTick || 50));
+    const axisSpeed = x && y ? Math.round(speedPerTick / Math.SQRT2) : speedPerTick;
+    return { vx: x * axisSpeed, vy: y * axisSpeed };
+  }
+
+  function combatBulletThreats(self, target = null, bullets = getBullets()) {
+    const selfId = Number(self?.user_id);
+    const items = [];
+    for (const raw of bullets || []) {
+      const bullet = normalizeBullet(raw, raw?.native ? 'native' : 'snapshot');
+      if (!bullet) continue;
+      if (bullet.ownerId !== null && bullet.ownerId !== undefined && Number(bullet.ownerId) === selfId) continue;
+      if (target && bullet.ownerId !== null && bullet.ownerId !== undefined && String(bullet.ownerId) !== String(target.user_id)) {
+        continue;
+      }
+      const speedValue = hypot(Number(bullet.vx) || 0, Number(bullet.vy) || 0);
+      if (speedValue <= 0.01) continue;
+      const toSelfX = Number(self.x) - Number(bullet.x);
+      const toSelfY = Number(self.y) - Number(bullet.y);
+      const distance = hypot(toSelfX, toSelfY);
+      if (distance > cfg.combatBulletDetectRadius) continue;
+      const projection = (toSelfX * bullet.vx + toSelfY * bullet.vy) / speedValue;
+      if (projection <= 0 || projection > cfg.combatBulletLookaheadDistance) continue;
+      const signedLaneDistance = (toSelfX * bullet.vy - toSelfY * bullet.vx) / speedValue;
+      const laneDistance = Math.abs(signedLaneDistance);
+      if (laneDistance > cfg.combatBulletLaneRadius) continue;
+      const timeToImpactMs = projection / speedValue * 50;
+      const impactTicks = projection / speedValue;
+      const hitRadius = Math.max(0, Number(cfg.combatBulletHitRadiusCm || 90));
+      const score = (cfg.combatBulletLaneRadius - laneDistance) * 1000
+        + (cfg.combatBulletLookaheadDistance - projection)
+        + Math.max(0, 1500 - timeToImpactMs);
+      items.push({
+        id: bullet.id,
+        ownerId: bullet.ownerId,
+        x: bullet.x,
+        y: bullet.y,
+        vx: bullet.vx,
+        vy: bullet.vy,
+        distance,
+        projection,
+        laneDistance,
+        signedLaneDistance,
+        impactTicks,
+        timeToImpactMs,
+        hitRadius,
+        directHit: laneDistance <= hitRadius,
+        score
+      });
+    }
+    return items.sort((a, b) => b.score - a.score || a.timeToImpactMs - b.timeToImpactMs);
+  }
+
+  function incomingBulletThreat(self, target = null, bullets = getBullets()) {
+    const threats = combatBulletThreats(self, target, bullets);
+    const best = threats[0] || null;
+    if (!best) return null;
+    return {
+      ...best,
+      threatCount: threats.length,
+      threats: threats.slice(0, 6)
+    };
+  }
+
+  function combatThreatFieldCandidate(self, threats, dx, dy) {
+    const move = combatMoveVelocityForDirection(dx, dy);
+    let safetyScore = 0;
+    let minCpaDistance = Infinity;
+    let minTimeToImpactMs = Infinity;
+    let directHitCount = 0;
+    for (const threat of threats || []) {
+      const rx = Number(threat.x) - Number(self.x);
+      const ry = Number(threat.y) - Number(self.y);
+      const rvx = (Number(threat.vx) || 0) - move.vx;
+      const rvy = (Number(threat.vy) || 0) - move.vy;
+      const relSpeedSq = rvx * rvx + rvy * rvy;
+      const rawImpactTicks = Number(threat.impactTicks);
+      const horizonTicks = Math.max(0, Math.min(
+        Number.isFinite(rawImpactTicks) ? rawImpactTicks + 1 : 30,
+        Number(cfg.combatBulletLookaheadDistance || 42000) / Math.max(1, Number(cfg.combatBulletSpeedPerTick || 500))
+      ));
+      const cpaTicks = relSpeedSq > 0.000001
+        ? clamp(-(rx * rvx + ry * rvy) / relSpeedSq, 0, horizonTicks)
+        : 0;
+      const cpaX = rx + rvx * cpaTicks;
+      const cpaY = ry + rvy * cpaTicks;
+      const cpaDistance = Math.hypot(cpaX, cpaY);
+      const hitRadius = Math.max(0, Number(threat.hitRadius ?? cfg.combatBulletHitRadiusCm ?? 90));
+      const timeToImpactMs = Number(threat.timeToImpactMs);
+      const urgency = Number.isFinite(timeToImpactMs) ? Math.max(0.35, 1.8 - Math.min(1500, timeToImpactMs) / 1500) : 1;
+      minCpaDistance = Math.min(minCpaDistance, cpaDistance);
+      if (Number.isFinite(timeToImpactMs)) minTimeToImpactMs = Math.min(minTimeToImpactMs, timeToImpactMs);
+      if (cpaDistance <= hitRadius) directHitCount += 1;
+      safetyScore += Math.min(5000, cpaDistance) * urgency;
+      if (cpaDistance <= hitRadius) safetyScore -= (hitRadius - cpaDistance + 1) * 100000 * urgency;
+      else if (cpaDistance <= hitRadius * 3) safetyScore -= (hitRadius * 3 - cpaDistance) * 300 * urgency;
+    }
+    return {
+      dx: clamp(Math.round(Number(dx) || 0), -1, 1),
+      dy: clamp(Math.round(Number(dy) || 0), -1, 1),
+      safetyScore,
+      minCpaDistance,
+      minTimeToImpactMs,
+      directHitCount
+    };
+  }
+
+  function combatBulletThreatField(self, threats, options = {}) {
+    const list = (threats || []).filter(Boolean).slice(0, 6);
+    if (!list.length) return null;
+    const preferred = options.preferred || {};
+    const preferredDx = clamp(Math.round(Number(preferred.dx) || 0), -1, 1);
+    const preferredDy = clamp(Math.round(Number(preferred.dy) || 0), -1, 1);
+    const target = options.target || null;
+    const approachX = target ? Math.sign(Number(target.x) - Number(self.x)) || 0 : 0;
+    const approachY = target ? Math.sign(Number(target.y) - Number(self.y)) || 0 : 0;
+    const directions = [
+      { dx: 1, dy: 0 },
+      { dx: -1, dy: 0 },
+      { dx: 0, dy: 1 },
+      { dx: 0, dy: -1 },
+      { dx: 1, dy: 1 },
+      { dx: 1, dy: -1 },
+      { dx: -1, dy: 1 },
+      { dx: -1, dy: -1 }
+    ];
+    const scored = directions.map(item => {
+      const candidate = combatThreatFieldCandidate(self, list, item.dx, item.dy);
+      let bias = 0;
+      if (candidate.dx === preferredDx && candidate.dy === preferredDy) bias += 120;
+      if (options.preferClosing) {
+        if (candidate.dx && approachX && candidate.dx === approachX) bias += 40;
+        if (candidate.dy && approachY && candidate.dy === approachY) bias += 40;
+      }
+      return { ...candidate, safetyScore: candidate.safetyScore + bias };
+    }).sort((a, b) => {
+      if (a.directHitCount !== b.directHitCount) return a.directHitCount - b.directHitCount;
+      if (b.safetyScore !== a.safetyScore) return b.safetyScore - a.safetyScore;
+      return b.minCpaDistance - a.minCpaDistance;
+    });
+    const best = scored[0] || null;
+    if (!best) return null;
+    return best;
+  }
+
+  function combatStrafeHoldMs() {
+    const base = Math.max(300, Number(cfg.combatStrafeDirectionLockMs ?? cfg.combatStrafeLockMs) || 700);
+    const jitter = Math.max(0, Number(cfg.combatStrafeRandomJitterMs) || 0);
+    return base + (jitter ? Math.floor(Math.random() * jitter) : 0);
+  }
+
+  function combatStrafeKey(target, pressure) {
+    const ownerId = pressure?.ownerId;
+    if (ownerId !== null && ownerId !== undefined) return 'owner:' + ownerId;
+    const targetId = target?.user_id ?? target?.id;
+    if (targetId !== null && targetId !== undefined) return 'target:' + targetId;
+    return 'combat';
+  }
+
+  function combatStrafeMatchesTarget(strafe, target) {
+    if (!strafe) return false;
+    const targetId = target?.user_id ?? target?.id;
+    if (targetId === null || targetId === undefined) return true;
+    const key = String(targetId);
+    return strafe.targetId === key || strafe.key === 'target:' + key || strafe.key === 'owner:' + key;
+  }
+
+  function combatPreciseStrafeSign(pressure) {
+    const signedLane = Number(pressure?.signedLaneDistance);
+    const laneMin = Math.max(0, Number(cfg.combatStrafePreciseLaneMin ?? 1));
+    return !pressure?.synthetic && Number.isFinite(signedLane) && Math.abs(signedLane) > laneMin
+      ? -Math.sign(signedLane)
+      : 0;
+  }
+
+  function selectCombatStrafeSign(existing, key, preciseSign, t = now()) {
+    let sign = 0;
+    let until = 0;
+    let locked = false;
+    let lockOverridden = false;
+    const existingUntil = Number(existing?.until || 0);
+    if (existing && existing.key === key && t < existingUntil) {
+      const existingSign = Math.sign(Number(existing.sign || 0));
+      const precise = Math.sign(Number(preciseSign || 0));
+      if (precise && existingSign && existingSign !== precise) {
+        sign = precise;
+        until = t + combatStrafeHoldMs();
+        lockOverridden = true;
+      } else {
+        sign = existingSign;
+        until = existingUntil;
+        locked = Boolean(sign);
+      }
+    }
+    if (!sign) {
+      sign = Math.sign(Number(preciseSign || 0)) || (Math.random() < 0.5 ? -1 : 1);
+      until = t + combatStrafeHoldMs();
+    }
+    return { sign, until, locked, lockOverridden };
+  }
+
+	  function combatStrafeVector(self, target, pressure, sign, options = {}) {
+	    let baseX = Number(pressure?.vx) || 0;
+	    let baseY = Number(pressure?.vy) || 0;
+	    if (!(baseX || baseY) && target) {
+      baseX = Number(target.x) - Number(self.x);
+      baseY = Number(target.y) - Number(self.y);
+    }
+    const tangentX = -baseY * sign;
+	    const tangentY = baseX * sign;
+	    let dx = Math.sign(tangentX || 0);
+	    let dy = Math.sign(tangentY || 0);
+    let closingBiased = false;
+	    if (target) {
+	      const awayX = Math.sign(Number(self.x) - Number(target.x)) || 0;
+	      const awayY = Math.sign(Number(self.y) - Number(target.y)) || 0;
+	      const approachX = Math.sign(Number(target.x) - Number(self.x)) || 0;
+	      const approachY = Math.sign(Number(target.y) - Number(self.y)) || 0;
+	      const fillX = options.preferClosing ? approachX : awayX;
+	      const fillY = options.preferClosing ? approachY : awayY;
+	      if (dx && !dy && fillY) dy = fillY;
+	      else if (dy && !dx && fillX) dx = fillX;
+      if (options.preferClosing && dx && dy) {
+        const closesX = Boolean(approachX && Math.sign(dx) === approachX);
+        const closesY = Boolean(approachY && Math.sign(dy) === approachY);
+        if (!closesX && !closesY) {
+          const offsetX = Math.abs(Number(target.x) - Number(self.x));
+          const offsetY = Math.abs(Number(target.y) - Number(self.y));
+          if (offsetX >= offsetY && approachX) {
+            closingBiased = Math.sign(dx) !== approachX;
+            dx = approachX;
+          } else if (approachY) {
+            closingBiased = Math.sign(dy) !== approachY;
+            dy = approachY;
+          }
+        }
+      }
+	    }
+	    if (!(dx || dy) && target) {
+	      dx = Math.sign(Number(self.y) - Number(target.y)) || 1;
+	      dy = Math.sign(Number(target.x) - Number(self.x)) || 0;
+	    }
+	    return { dx: clamp(Math.round(dx), -1, 1), dy: clamp(Math.round(dy), -1, 1), closingBiased };
+	  }
+
+  function tangentMoveForBullet(self, target, pressure, options = {}) {
+    const t = now();
+    const existing = bot.combatStrafe;
+    if (!pressure) {
+      if (combatStrafeMatchesTarget(existing, target)
+        && t < Number(existing?.carryUntil || 0)
+        && (existing.dx || existing.dy)) {
+        return {
+          dx: clamp(Math.round(Number(existing.dx) || 0), -1, 1),
+          dy: clamp(Math.round(Number(existing.dy) || 0), -1, 1),
+          locked: true,
+          carried: true,
+          active: true,
+          sign: Number(existing.sign || 0),
+          key: existing.key,
+          holdRemainingMs: Math.max(0, Math.round(Number(existing.until || 0) - t)),
+          carryRemainingMs: Math.max(0, Math.round(Number(existing.carryUntil || 0) - t))
+        };
+      }
+      return { dx: 0, dy: 0, locked: false, carried: false, active: false };
+    }
+
+    const key = combatStrafeKey(target, pressure);
+    const preciseSign = combatPreciseStrafeSign(pressure);
+    const strafeSign = selectCombatStrafeSign(existing, key, preciseSign, t);
+    const sign = strafeSign.sign;
+    const until = strafeSign.until;
+
+	    let { dx, dy, closingBiased } = combatStrafeVector(self, target, pressure, sign, options);
+    const threatField = !pressure.synthetic
+      ? combatBulletThreatField(self, pressure.threats || [pressure], {
+        preferred: { dx, dy },
+        target,
+        preferClosing: Boolean(options.preferClosing)
+      })
+      : null;
+    if (threatField) {
+      dx = threatField.dx;
+      dy = threatField.dy;
+    }
+    if (!(dx || dy) && existing && (existing.dx || existing.dy)) {
+      dx = clamp(Math.round(Number(existing.dx) || 0), -1, 1);
+      dy = clamp(Math.round(Number(existing.dy) || 0), -1, 1);
+    }
+    const carryMs = Math.max(0, Number(cfg.combatStrafeCarryMs) || 0);
+    const targetId = target?.user_id ?? target?.id;
+    bot.combatStrafe = {
+      key,
+      targetId: targetId !== null && targetId !== undefined ? String(targetId) : '',
+      ownerId: pressure.ownerId !== null && pressure.ownerId !== undefined ? String(pressure.ownerId) : '',
+      sign,
+      dx,
+      dy,
+      threatField,
+      until,
+      carryUntil: t + carryMs
+    };
+    return {
+	      dx,
+	      dy,
+	      locked: Boolean(strafeSign.locked),
+	      lockOverridden: Boolean(strafeSign.lockOverridden),
+      closingBiased: Boolean(closingBiased),
+	      carried: false,
+      threatField,
+      active: true,
+      sign,
+      precise: Boolean(preciseSign),
+      key,
+      holdRemainingMs: Math.max(0, Math.round(until - t)),
+      carryRemainingMs: carryMs
+    };
+  }
+
+  function combatMoveClosesDistance(self, target, move) {
+    const dx = clamp(Math.round(Number(move?.dx) || 0), -1, 1);
+    const dy = clamp(Math.round(Number(move?.dy) || 0), -1, 1);
+    if (!(dx || dy) || !self || !target) return false;
+    const toTargetX = Number(target.x) - Number(self.x);
+    const toTargetY = Number(target.y) - Number(self.y);
+    return (toTargetX * dx + toTargetY * dy) > 0;
+  }
+
+  function combatSafeCloseMoveOverride(self, target, pressure, closeMove) {
+    if (!self || !target || !pressure || pressure.synthetic || !closeMove?.active) return null;
+    const dx = clamp(Math.round(Number(closeMove.dx) || 0), -1, 1);
+    const dy = clamp(Math.round(Number(closeMove.dy) || 0), -1, 1);
+    if (!(dx || dy) || !combatMoveClosesDistance(self, target, { dx, dy })) return null;
+    const candidate = combatThreatFieldCandidate(self, pressure.threats || [pressure], dx, dy);
+    const hitRadius = Math.max(0, Number(cfg.combatBulletHitRadiusCm || 90));
+    const minSafeCpa = Math.max(hitRadius * 3, Number(cfg.combatPressureCloseMinCpaCm || 0));
+    if (candidate.directHitCount > 0) return null;
+    if (Number.isFinite(Number(candidate.minCpaDistance)) && Number(candidate.minCpaDistance) < minSafeCpa) return null;
+    return {
+      dx,
+      dy,
+      active: true,
+      reason: closeMove.reason || 'safe-close',
+      source: closeMove,
+      threatField: candidate,
+      minSafeCpa
+    };
+  }
+
+  function combatSpacingVector(self, target, targetDistance = null) {
+    const distance = Number.isFinite(Number(targetDistance)) ? Number(targetDistance) : dist(self, target);
+    const minRange = Math.max(0, Number(cfg.combatSpacingMinRange || 0));
+    const preferredRange = Math.max(minRange, Number(cfg.combatSpacingPreferredRange || minRange));
+    if (!(distance > 0) || !minRange) return { active: false, dx: 0, dy: 0 };
+    const dxRaw = Number(self.x) - Number(target.x);
+    const dyRaw = Number(self.y) - Number(target.y);
+    let dx = Math.sign(dxRaw) || 0;
+    let dy = Math.sign(dyRaw) || 0;
+    if (!(dx || dy)) dx = -Math.sign(Number(target.vx) || 0) || 1;
+    const targetVx = Number(target.vx) || 0;
+    const targetVy = Number(target.vy) || 0;
+    const toTargetX = Number(target.x) - Number(self.x);
+    const toTargetY = Number(target.y) - Number(self.y);
+    const d = Math.max(1, distance);
+    const radialSpeed = (toTargetX / d) * targetVx + (toTargetY / d) * targetVy;
+    const tooClose = distance < minRange;
+    const closing = radialSpeed <= -cfg.combatStationarySpeed && distance < preferredRange;
+    if (!tooClose && !closing) return { active: false, dx: 0, dy: 0, distance, minRange, preferredRange, radialSpeed };
+    return {
+      active: true,
+      dx: clamp(Math.round(dx), -1, 1),
+      dy: clamp(Math.round(dy), -1, 1),
+      distance,
+      minRange,
+      preferredRange,
+      radialSpeed,
+      reason: tooClose ? 'too-close' : 'closing'
+    };
+  }
+
+  function combatSpacingShouldOverrideBullet(spacing, selfHp, targetHp) {
+    if (!spacing?.active || spacing.reason !== 'too-close') return false;
+    const distance = Number(spacing.distance);
+    const emergencyRange = Math.max(0, Number(cfg.combatSpacingEmergencyRange || 0));
+    const lowHpThreshold = Math.max(0, Number(cfg.combatSpacingLowHpThreshold || cfg.combatLowHpLeaveThreshold || 0));
+    const hp = Number(selfHp);
+    const emergencyClose = emergencyRange > 0 && Number.isFinite(distance) && distance <= emergencyRange;
+    const lowHpClose = lowHpThreshold > 0 && Number.isFinite(hp) && hp < lowHpThreshold;
+    return Boolean(emergencyClose || lowHpClose);
+  }
+
+  function combatLowHpCloseRiskState(selfHp, targetHp, spacing, realBulletPressure = false) {
+    const threshold = Math.max(0, Number(cfg.combatLowHpLeaveThreshold || 0));
+    const margin = Math.max(0, Number(cfg.combatLowHpCloseRiskMargin || 0));
+    const hp = Number(selfHp);
+    const enemyHp = Number(targetHp);
+    if (!threshold || !margin || !Number.isFinite(hp) || !Number.isFinite(enemyHp)) return null;
+    if (!(hp < threshold) || !(hp <= enemyHp + margin)) return null;
+    if (!spacing?.active || spacing.reason !== 'too-close') return null;
+    if (!realBulletPressure && !combatSpacingShouldOverrideBullet(spacing, hp, enemyHp)) return null;
+    return {
+      active: true,
+      selfHp: hp,
+      targetHp: enemyHp,
+      hpGap: enemyHp - hp,
+      margin,
+      distance: Math.round(Number(spacing.distance || 0)),
+      realBulletPressure: Boolean(realBulletPressure)
+    };
+  }
+
+  function combatPressureDisadvantageState(selfHp, targetHp, targetDistance, realBulletPressure = false) {
+    const threshold = Math.max(0, Number(cfg.combatPressureExitHpThreshold || 0));
+    const minGap = Math.max(0, Number(cfg.combatPressureExitHpGap || 0));
+    const range = Math.max(0, Number(cfg.combatShootPressureRange || cfg.combatAttackRange || 0));
+    const hp = Number(selfHp);
+    const enemyHp = Number(targetHp);
+    const distance = Number(targetDistance);
+    const hpGap = enemyHp - hp;
+    if (!threshold || !minGap || !range || !realBulletPressure) return null;
+    if (!Number.isFinite(hp) || !Number.isFinite(enemyHp) || !Number.isFinite(distance)) return null;
+    if (!(hp < threshold) || !(hpGap >= minGap) || !(distance <= range)) return null;
+    return {
+      active: true,
+      selfHp: hp,
+      targetHp: enemyHp,
+      hpGap,
+      threshold,
+      minGap,
+      distance: Math.round(distance),
+      realBulletPressure: true
+    };
+  }
+
+  function combatSustainedPressureDisadvantageState(selfHp, targetHp, targetDistance, noDamageMs, targetRealBulletPressure = false) {
+    const waitMs = Math.max(0, Number(cfg.combatPressureNoDamageExitMs || 0));
+    const threshold = Math.max(0, Number(cfg.combatPressureNoDamageExitHpThreshold || 0));
+    const minGap = Math.max(0, Number(cfg.combatPressureNoDamageExitHpGap || 0));
+    const targetHpMin = Math.max(0, Number(cfg.combatPressureNoDamageExitTargetHpMin || 0));
+    const range = Math.max(0, Number(cfg.combatPressureNoDamageExitRange || cfg.combatShootPressureRange || cfg.combatAttackRange || 0));
+    const hp = Number(selfHp);
+    const enemyHp = Number(targetHp);
+    const distance = Number(targetDistance);
+    const elapsed = Math.max(0, Number(noDamageMs || 0));
+    const hpGap = enemyHp - hp;
+    if (!waitMs || !threshold || !minGap || !range || !targetRealBulletPressure) return null;
+    if (!Number.isFinite(hp) || !Number.isFinite(enemyHp) || !Number.isFinite(distance)) return null;
+    if (!(hp <= threshold) || !(enemyHp >= targetHpMin) || !(hpGap >= minGap) || !(elapsed >= waitMs) || !(distance <= range)) return null;
+    return {
+      active: true,
+      selfHp: hp,
+      targetHp: enemyHp,
+      hpGap,
+      threshold,
+      minGap,
+      targetHpMin,
+      noDamageMs: Math.round(elapsed),
+      waitMs,
+      distance: Math.round(distance),
+      targetRealBulletPressure: true
+    };
+  }
+
+  function combatPressureCloseVector(self, target, targetDistance, noDamageMs, selfHp) {
+    const thresholdMs = Math.max(0, Number(cfg.combatPressureCloseNoDamageMs || 0) || 0);
+    const distance = Number.isFinite(Number(targetDistance)) ? Number(targetDistance) : dist(self, target);
+    const closeRange = Math.max(
+      Number(cfg.combatSpacingMinRange || 0),
+      Number(cfg.combatPressureCloseRange || cfg.combatSpacingPreferredRange || 0)
+    );
+    const minHp = Math.max(0, Number(cfg.combatPressureCloseMinHp || cfg.combatLowHpLeaveThreshold || 0));
+    const elapsed = Math.max(0, Number(noDamageMs || 0));
+    if (!thresholdMs || elapsed < thresholdMs || !(distance > closeRange) || Number(selfHp || 0) < minHp) {
+      return { active: false, dx: 0, dy: 0, distance, closeRange, noDamageMs: elapsed };
+    }
+    const dir = directionTo(self, target);
+    return {
+      active: Boolean(dir.dx || dir.dy),
+      dx: dir.dx,
+      dy: dir.dy,
+      distance,
+      closeRange,
+      noDamageMs: elapsed,
+      reason: 'long-no-damage'
+    };
+  }
+
+  function combatFarNoDamageCloseVector(self, target, targetDistance, noDamageMs, selfHp, targetHp) {
+    const thresholdMs = Math.max(0, Number(cfg.combatFarNoDamageCloseMs || 0) || 0);
+    const startRange = Math.max(0, Number(cfg.combatFarNoDamageCloseStartRange || 0) || 0);
+    const distance = Number.isFinite(Number(targetDistance)) ? Number(targetDistance) : dist(self, target);
+    const closeRange = Math.max(
+      Number(cfg.combatSpacingPreferredRange || 0),
+      Number(cfg.combatFarNoDamageCloseRange || cfg.combatPressureCloseRange || 0)
+    );
+    const minHp = Math.max(0, Number(cfg.combatFarNoDamageCloseMinHp || cfg.combatPressureCloseMinHp || 0));
+    const maxHpGap = Math.max(0, Number(cfg.combatFarNoDamageCloseMaxHpGap || 0));
+    const elapsed = Math.max(0, Number(noDamageMs || 0));
+    const hp = Number(selfHp);
+    const enemyHp = Number(targetHp);
+    const hpGap = Number.isFinite(hp) && Number.isFinite(enemyHp) ? enemyHp - hp : 0;
+    if (!thresholdMs || !startRange || elapsed < thresholdMs || !(distance >= startRange) || !(distance > closeRange)) {
+      return { active: false, dx: 0, dy: 0, distance, closeRange, noDamageMs: elapsed };
+    }
+    if (Number.isFinite(hp) && hp < minHp) {
+      return { active: false, dx: 0, dy: 0, distance, closeRange, noDamageMs: elapsed, selfHp: hp, targetHp: enemyHp, hpGap };
+    }
+    if (Number.isFinite(hpGap) && hpGap > maxHpGap) {
+      return { active: false, dx: 0, dy: 0, distance, closeRange, noDamageMs: elapsed, selfHp: hp, targetHp: enemyHp, hpGap };
+    }
+    const dir = directionTo(self, target);
+    return {
+      active: Boolean(dir.dx || dir.dy),
+      dx: dir.dx,
+      dy: dir.dy,
+      distance,
+      closeRange,
+      startRange,
+      noDamageMs: elapsed,
+      selfHp: hp,
+      targetHp: enemyHp,
+      hpGap,
+      reason: 'far-no-damage'
+    };
+  }
+
+  function combatRetreatingFighterCloseVector(self, target, targetDistance, noDamageMs, selfHp, targetHp, retreatingTarget = null, targetRealBulletPressure = false) {
+    const thresholdMs = Math.max(0, Number(cfg.combatFarNoDamageCloseMs || 0) || 0);
+    const startRange = Math.max(0, Number(cfg.combatFarNoDamageCloseStartRange || 0) || 0);
+    const distance = Number.isFinite(Number(targetDistance)) ? Number(targetDistance) : dist(self, target);
+    const closeRange = Math.max(
+      Number(cfg.combatSpacingPreferredRange || 0),
+      Number(cfg.combatFarNoDamageCloseRange || cfg.combatPressureCloseRange || 0)
+    );
+    const minHp = Math.max(0, Number(cfg.combatRetreatingFighterCloseMinHp || cfg.combatFarNoDamageCloseMinHp || 0));
+    const maxHpGap = Math.max(0, Number(cfg.combatRetreatingFighterCloseMaxHpGap || cfg.combatFarNoDamageCloseMaxHpGap || 0));
+    const elapsed = Math.max(0, Number(noDamageMs || 0));
+    const hp = Number(selfHp);
+    const enemyHp = Number(targetHp);
+    const hpGap = Number.isFinite(hp) && Number.isFinite(enemyHp) ? enemyHp - hp : 0;
+    const activeRetreating = Boolean(retreatingTarget?.active && !retreatingTarget?.disengage);
+    if (!activeRetreating || !targetRealBulletPressure || !thresholdMs || !startRange || elapsed < thresholdMs || !(distance >= startRange) || !(distance > closeRange)) {
+      return { active: false, dx: 0, dy: 0, distance, closeRange, noDamageMs: elapsed, retreatingTarget };
+    }
+    if (Number.isFinite(hp) && hp < minHp) {
+      return { active: false, dx: 0, dy: 0, distance, closeRange, noDamageMs: elapsed, selfHp: hp, targetHp: enemyHp, hpGap, retreatingTarget };
+    }
+    if (Number.isFinite(hpGap) && hpGap > maxHpGap) {
+      return { active: false, dx: 0, dy: 0, distance, closeRange, noDamageMs: elapsed, selfHp: hp, targetHp: enemyHp, hpGap, retreatingTarget };
+    }
+    const dir = directionTo(self, target);
+    return {
+      active: Boolean(dir.dx || dir.dy),
+      dx: dir.dx,
+      dy: dir.dy,
+      distance,
+      closeRange,
+      startRange,
+      noDamageMs: elapsed,
+      selfHp: hp,
+      targetHp: enemyHp,
+      hpGap,
+      targetRealBulletPressure: true,
+      farNoDamageClose: true,
+      reason: 'retreating-fighter-close',
+      retreatingTarget
+    };
+  }
+
+  function combatFinishPressureState(self, target, targetDistance, selfHp, targetHp, retreatingTarget = null) {
+    const attackRange = Math.max(0, Number(cfg.combatAttackRange || 0));
+    const distance = Number.isFinite(Number(targetDistance)) ? Number(targetDistance) : dist(self, target);
+    const minSelfHp = Math.max(0, Number(cfg.combatFinishPressureSelfHpMin || 0));
+    const maxTargetHp = Math.max(0, Number(cfg.combatFinishPressureTargetHpMax || 0));
+    const closeRange = Math.max(
+      Number(cfg.combatSpacingMinRange || 0),
+      Number(cfg.combatFinishPressureCloseRange || cfg.combatSpacingPreferredRange || 0)
+    );
+    const ownHp = Number(selfHp);
+    const enemyHp = Number(targetHp);
+    const inAttackRange = attackRange > 0 && distance <= attackRange;
+    const retreatingEdge = Boolean(retreatingTarget?.active && retreatingTarget?.reason === 'target-retreating-edge');
+    if (!retreatingEdge || !inAttackRange || !(distance > closeRange)) {
+      return { active: false, dx: 0, dy: 0, distance, closeRange, selfHp: ownHp, targetHp: enemyHp };
+    }
+    if (!Number.isFinite(ownHp) || !Number.isFinite(enemyHp) || ownHp < minSelfHp || enemyHp > maxTargetHp) {
+      return { active: false, dx: 0, dy: 0, distance, closeRange, selfHp: ownHp, targetHp: enemyHp };
+    }
+    const dir = directionTo(self, target);
+    return {
+      active: Boolean(dir.dx || dir.dy),
+      dx: dir.dx,
+      dy: dir.dy,
+      distance,
+      closeRange,
+      selfHp: ownHp,
+      targetHp: enemyHp,
+      minSelfHp,
+      maxTargetHp,
+      reason: 'low-hp-retreating-target',
+      retreatingTarget
+    };
+  }
+
+  function combatOutOfRangeFinishPressureState(self, target, targetDistance, selfHp, targetHp, damageState = null, retreatingTarget = null) {
+    const attackRange = Math.max(0, Number(cfg.combatAttackRange || 0));
+    const maxRange = Math.max(attackRange, Number(cfg.combatOutOfRangeFinishPressureRange || 0));
+    const distance = Number.isFinite(Number(targetDistance)) ? Number(targetDistance) : dist(self, target);
+    const minSelfHp = Math.max(0, Number(cfg.combatOutOfRangeFinishPressureSelfHpMin || 0));
+    const maxTargetHp = Math.max(0, Number(cfg.combatOutOfRangeFinishPressureTargetHpMax || 0));
+    const maxHpGap = Number.isFinite(Number(cfg.combatOutOfRangeFinishPressureMaxHpGap))
+      ? Number(cfg.combatOutOfRangeFinishPressureMaxHpGap)
+      : 0;
+    const recentDamageMs = Math.max(0, Number(cfg.combatOutOfRangeFinishPressureRecentDamageMs || 0));
+    const noDamageMs = Math.max(0, Number(damageState?.noDamageMs || 0));
+    const ownHp = Number(selfHp);
+    const enemyHp = Number(targetHp);
+    const hpGap = enemyHp - ownHp;
+    if (!attackRange || !maxRange || !(distance > attackRange) || !(distance <= maxRange) || retreatingTarget?.disengage) {
+      return { active: false, dx: 0, dy: 0, distance, attackRange, maxRange, selfHp: ownHp, targetHp: enemyHp, noDamageMs };
+    }
+    if (!recentDamageMs || noDamageMs > recentDamageMs) {
+      return { active: false, dx: 0, dy: 0, distance, attackRange, maxRange, selfHp: ownHp, targetHp: enemyHp, noDamageMs };
+    }
+    if (!Number.isFinite(ownHp) || !Number.isFinite(enemyHp) || ownHp < minSelfHp || enemyHp > maxTargetHp || hpGap > maxHpGap) {
+      return { active: false, dx: 0, dy: 0, distance, attackRange, maxRange, selfHp: ownHp, targetHp: enemyHp, hpGap, noDamageMs };
+    }
+    const dir = directionTo(self, target);
+    return {
+      active: Boolean(dir.dx || dir.dy),
+      dx: dir.dx,
+      dy: dir.dy,
+      distance,
+      attackRange,
+      maxRange,
+      selfHp: ownHp,
+      targetHp: enemyHp,
+      hpGap,
+      noDamageMs,
+      recentDamageMs,
+      reason: 'out-of-range-low-hp-finish',
+      retreatingTarget
+    };
+  }
+
+  function combatOutOfRangeReengageState(self, target, targetDistance, selfHp, targetHp, retreatingTarget = null, targetRealBulletPressure = false) {
+    const attackRange = Math.max(0, Number(cfg.combatAttackRange || 0));
+    const maxRange = Math.max(attackRange, Number(cfg.combatOutOfRangeReengageRange || 0));
+    const distance = Number.isFinite(Number(targetDistance)) ? Number(targetDistance) : dist(self, target);
+    const minSelfHp = Math.max(0, Number(cfg.combatOutOfRangeReengageMinHp || 0));
+    const maxHpGap = Math.max(0, Number(cfg.combatOutOfRangeReengageMaxHpGap || 0));
+    const pressureMaxHpGap = Math.max(maxHpGap, Number(cfg.combatOutOfRangePressureReengageMaxHpGap || maxHpGap));
+    const effectiveMaxHpGap = targetRealBulletPressure ? pressureMaxHpGap : maxHpGap;
+    const recentInRangeMs = Math.max(0, Number(cfg.combatOutOfRangeReengageRecentInRangeMs || 0));
+    const ownHp = Number(selfHp);
+    const enemyHp = Number(targetHp);
+    const hpGap = enemyHp - ownHp;
+    const outOfRangeMs = Math.max(0, Number(target?.combatEngagement?.outOfRangeMs || 0));
+    const graceRemainingMs = Math.max(0, Number(target?.combatEngagement?.graceRemainingMs || 0));
+    const engagedIntent = /^(engaged|reengage)$/.test(String(target?.combatIntent || ''))
+      || Boolean(target?.combatEngagement);
+    const freshInRangeContact = Boolean(
+      recentInRangeMs
+      && outOfRangeMs <= recentInRangeMs
+      && !retreatingTarget?.active
+    );
+    if (!attackRange || !maxRange || !(distance > attackRange) || !(distance <= maxRange) || retreatingTarget?.disengage) {
+      return {
+        active: false,
+        dx: 0,
+        dy: 0,
+        distance,
+        attackRange,
+        maxRange,
+        selfHp: ownHp,
+        targetHp: enemyHp,
+        hpGap,
+        outOfRangeMs,
+        graceRemainingMs
+      };
+    }
+    if (!engagedIntent) {
+      return {
+        active: false,
+        dx: 0,
+        dy: 0,
+        distance,
+        attackRange,
+        maxRange,
+        selfHp: ownHp,
+        targetHp: enemyHp,
+        hpGap,
+        outOfRangeMs,
+        graceRemainingMs
+      };
+    }
+    if (retreatingTarget?.active && !targetRealBulletPressure) {
+      return {
+        active: false,
+        dx: 0,
+        dy: 0,
+        distance,
+        attackRange,
+        maxRange,
+        selfHp: ownHp,
+        targetHp: enemyHp,
+        hpGap,
+        outOfRangeMs,
+        graceRemainingMs,
+        retreatingTarget
+      };
+    }
+    if (!targetRealBulletPressure && !freshInRangeContact) {
+      return {
+        active: false,
+        dx: 0,
+        dy: 0,
+        distance,
+        attackRange,
+        maxRange,
+        selfHp: ownHp,
+        targetHp: enemyHp,
+        hpGap,
+        outOfRangeMs,
+        graceRemainingMs,
+        retreatingTarget
+      };
+    }
+    if (!Number.isFinite(ownHp) || !Number.isFinite(enemyHp) || ownHp < minSelfHp || hpGap > effectiveMaxHpGap || combatMovementBlockedByStamina(self)) {
+      return {
+        active: false,
+        dx: 0,
+        dy: 0,
+        distance,
+        attackRange,
+        maxRange,
+        selfHp: ownHp,
+        targetHp: enemyHp,
+        hpGap,
+        minSelfHp,
+        maxHpGap: effectiveMaxHpGap,
+        baseMaxHpGap: maxHpGap,
+        pressureMaxHpGap,
+        outOfRangeMs,
+        graceRemainingMs,
+        targetRealBulletPressure: Boolean(targetRealBulletPressure),
+        freshInRangeContact,
+        retreatingTarget
+      };
+    }
+    const dir = directionTo(self, target);
+    return {
+      active: Boolean(dir.dx || dir.dy),
+      dx: dir.dx,
+      dy: dir.dy,
+      distance,
+      attackRange,
+      maxRange,
+      selfHp: ownHp,
+      targetHp: enemyHp,
+      hpGap,
+      minSelfHp,
+      maxHpGap: effectiveMaxHpGap,
+      baseMaxHpGap: maxHpGap,
+      pressureMaxHpGap,
+      outOfRangeMs,
+      graceRemainingMs,
+      targetRealBulletPressure: Boolean(targetRealBulletPressure),
+      freshInRangeContact,
+      reason: targetRealBulletPressure ? 'target-real-bullet-pressure' : 'fresh-in-range-contact',
+      retreatingTarget
+    };
+  }
+
+  function combatPassiveRunnerState(self, target, targetDistance, damageState = null, pressure = null, motionScale = 0) {
+    const t = Date.now();
+    const selfHp = hpValue(self);
+    const minSelfHp = Math.max(0, Number(cfg.combatPassiveRunnerMinSelfHp || 0));
+    const minDrop = Math.max(0, Number(cfg.combatPassiveRunnerMinDrop || 0));
+    const confirmMs = Math.max(0, Number(cfg.combatPassiveRunnerConfirmMs || 0));
+    const targetDrop = Math.max(0, Number(dropValue(target) || target?.drop || 0));
+    const active = isCurrentlyActive(target);
+    const moving = speed(target) >= cfg.combatStationarySpeed
+      || Number(motionScale || 0) >= Math.max(0, Number(cfg.combatAimMovingScaleThreshold || 0.15));
+    const realPressure = Boolean(pressure && !pressure.synthetic);
+    const recentlyInjured = bot.pendingInjuryLeave
+      && Date.now() - Number(bot.pendingInjuryLeave.at || 0) <= cfg.combatStrafeLockMs * 3;
+    const current = bot.combatTarget && combatTargetId(bot.combatTarget) === combatTargetId(target) ? bot.combatTarget : null;
+    const samples = Array.isArray(current?.motionSamples) ? current.motionSamples : [];
+    const firstSelfHp = samples.length ? Number(samples[0].selfHp) : null;
+    const lastSelfHp = samples.length ? Number(samples[samples.length - 1].selfHp) : null;
+    const recentSelfDamage = Number.isFinite(firstSelfHp) && Number.isFinite(lastSelfHp)
+      ? Math.max(0, firstSelfHp - lastSelfHp)
+      : 0;
+    const intent = String(target?.combatIntent || current?.intent || '');
+    const originIntent = String(current?.originIntent || current?.intent || intent);
+    const runnerIntent = /^(defensive|engaged|profit|reengage)$/.test(intent);
+    const rewarded = targetDrop >= minDrop || runnerIntent;
+    const engagedMs = current
+      ? Math.max(0, t - Number(current.firstSeenAt || current.at || t))
+      : 0;
+    const confirmed = engagedMs >= confirmMs;
+    const seenTargetRealBulletAt = Number(current?.seenTargetRealBulletAt || 0);
+    const seenTargetRealBulletMs = seenTargetRealBulletAt ? Math.max(0, t - seenTargetRealBulletAt) : 0;
+    const eligible = Boolean(
+      active
+      && moving
+      && runnerIntent
+      && rewarded
+      && !isFiringEntity(target)
+      && !isInvulnerable(target)
+      && !realPressure
+      && !recentlyInjured
+      && confirmed
+      && !seenTargetRealBulletAt
+      && Number.isFinite(selfHp)
+      && selfHp >= minSelfHp
+      && recentSelfDamage <= 0.01
+    );
+    return {
+      active: eligible,
+      selfHp,
+      minSelfHp,
+      targetDrop,
+      minDrop,
+      distance: Number.isFinite(Number(targetDistance)) ? Math.round(Number(targetDistance)) : null,
+      moving,
+      motionScale: Number.isFinite(Number(motionScale)) ? Number(Number(motionScale).toFixed(2)) : 0,
+      recentSelfDamage,
+      pressureReason: pressure?.reason || '',
+      combatIntent: intent,
+      originIntent,
+      engagedMs,
+      confirmMs,
+      confirmed,
+      seenTargetRealBulletAt: seenTargetRealBulletAt || 0,
+      seenTargetRealBulletMs,
+      noDamageMs: Math.max(0, Number(damageState?.noDamageMs || 0))
+    };
+  }
+
+  function combatPassiveRunnerCloseVector(self, target, targetDistance, runnerState) {
+    const distance = Number.isFinite(Number(targetDistance)) ? Number(targetDistance) : dist(self, target);
+    const closeRange = Math.max(
+      Number(cfg.combatSpacingMinRange || 0),
+      Number(cfg.combatPassiveRunnerCloseRange || 0)
+    );
+    if (!runnerState?.active || !(distance > closeRange)) {
+      return { active: false, dx: 0, dy: 0, distance, closeRange, reason: 'passive-runner' };
+    }
+    const dir = directionTo(self, target);
+    return {
+      active: Boolean(dir.dx || dir.dy),
+      dx: dir.dx,
+      dy: dir.dy,
+      distance,
+      closeRange,
+      noDamageMs: Math.max(0, Number(runnerState.noDamageMs || 0)),
+      reason: 'passive-runner'
+    };
+  }
+
+  function mergeCombatMove(primary, spacing, allowSpacingMerge = true) {
+    if (!spacing?.active || !allowSpacingMerge) return primary || { dx: 0, dy: 0 };
+    const current = primary || { dx: 0, dy: 0 };
+    const mergeAxis = (value, spacingValue) => {
+      const v = clamp(Math.round(Number(value) || 0), -1, 1);
+      const s = clamp(Math.round(Number(spacingValue) || 0), -1, 1);
+      if (v && s && Math.sign(v) !== Math.sign(s)) return s;
+      return v || s;
+    };
+    return {
+      ...current,
+      dx: mergeAxis(current.dx, spacing.dx),
+      dy: mergeAxis(current.dy, spacing.dy),
+      spacingMerged: true
+    };
+  }
+
+  function combatPressureThreat(self, target, bullets) {
+    const bullet = target.incomingBullet || incomingBulletThreat(self, target, bullets) || incomingBulletThreat(self, null, bullets);
+    if (bullet) return { ...bullet, reason: 'incoming-bullet' };
+    const injury = bot.pendingInjuryLeave;
+    const recentlyInjured = injury && Date.now() - Number(injury.at || 0) <= cfg.combatStrafeLockMs * 3;
+    const pressure = recentlyInjured || isFiringEntity(target) || isCurrentlyActive(target);
+    if (!pressure) return null;
+    const vx = Number(self.x) - Number(target.x);
+    const vy = Number(self.y) - Number(target.y);
+    const distance = Math.hypot(vx, vy);
+    return {
+      id: 'pressure:' + (target.user_id ?? target.id ?? ''),
+      ownerId: target.user_id ?? null,
+      x: Number(target.x),
+      y: Number(target.y),
+      vx,
+      vy,
+      distance,
+      projection: distance,
+      laneDistance: 0,
+      synthetic: true,
+      reason: recentlyInjured ? 'recent-injury' : 'target-pressure'
+    };
+  }
+
+  function combatOutOfRangeDodgeAction(self, target, pressure, baseTarget, selfHp, targetHp, retreatingTarget = null, closeMove = null) {
+    if (!pressure || pressure.synthetic) return null;
+    const attackRange = Math.max(0, Number(cfg.combatAttackRange || 0));
+    const dodgeRange = combatDodgeThreatRange();
+    const targetDistance = Number.isFinite(Number(target?.distance)) ? Number(target.distance) : dist(self, target);
+    if (!attackRange || !(targetDistance > attackRange) || !(targetDistance <= dodgeRange)) return null;
+    const spacing = combatSpacingVector(self, target, targetDistance);
+    const closeOverride = combatSafeCloseMoveOverride(self, target, pressure, closeMove);
+    const strafe = closeOverride
+      ? {
+        dx: closeOverride.dx,
+        dy: closeOverride.dy,
+        active: true,
+        closingBiased: true,
+        safeCloseOverride: closeOverride
+      }
+      : tangentMoveForBullet(self, target, pressure, { preferClosing: false });
+    const spacingOverride = combatSpacingShouldOverrideBullet(spacing, selfHp, targetHp);
+    let combatMove = mergeCombatMove(strafe, spacing, spacingOverride);
+    const movementSuppressed = combatMovementBlockedByStamina(self) && Boolean(combatMove.dx || combatMove.dy)
+      ? {
+        reason: 'stamina-5s-exhausted',
+        stamina5s: staminaRemaining(self, '5s'),
+        thresholdMs: staminaExhaustedThreshold(),
+        requestedDx: combatMove.dx,
+        requestedDy: combatMove.dy
+      }
+      : null;
+    if (movementSuppressed) combatMove = { ...combatMove, dx: 0, dy: 0, movementSuppressed: true };
+    const spacingActive = Boolean(spacing.active && (combatMove.dx || combatMove.dy));
+    return {
+      kind: 'attack',
+      reason: movementSuppressed ? 'combat-stamina-hold' : (spacingOverride ? 'combat-spacing-dodge' : 'combat-out-of-range-dodge'),
+      combat: true,
+      combatDodgeOnly: true,
+      ignoreReturnBlock: true,
+      shoot: false,
+      forceShoot: false,
+      dx: combatMove.dx,
+      dy: combatMove.dy,
+      target: {
+        ...baseTarget,
+        combatDodgeOnly: true
+      },
+      incomingBullet: {
+        id: pressure.id,
+        ownerId: pressure.ownerId,
+        distance: Math.round(Number(pressure.distance || 0)),
+        laneDistance: Math.round(Number(pressure.laneDistance || 0)),
+        signedLaneDistance: Number.isFinite(Number(pressure.signedLaneDistance)) ? Math.round(Number(pressure.signedLaneDistance)) : null,
+        timeToImpactMs: Number.isFinite(Number(pressure.timeToImpactMs)) ? Math.round(Number(pressure.timeToImpactMs)) : null,
+        threatCount: Number(pressure.threatCount || (Array.isArray(pressure.threats) ? pressure.threats.length : 1)),
+        synthetic: false,
+        reason: pressure.reason || 'incoming-bullet'
+      },
+      combatState: {
+        selfHp,
+        targetHp,
+        dodgeOnly: {
+          distance: Math.round(targetDistance),
+          attackRange: Math.round(attackRange),
+          dodgeRange: Math.round(dodgeRange),
+          buffer: Math.max(0, Math.round(dodgeRange - attackRange)),
+          reason: 'incoming-bullet-outside-attack-range'
+        },
+        strafe: {
+          dx: combatMove.dx,
+          dy: combatMove.dy,
+          sign: strafe.sign,
+          precise: Boolean(strafe.precise),
+          locked: Boolean(strafe.locked),
+          lockOverridden: Boolean(strafe.lockOverridden),
+          closingBiased: Boolean(strafe.closingBiased),
+          safeCloseOverride: closeOverride ? {
+            dx: closeOverride.dx,
+            dy: closeOverride.dy,
+            reason: closeOverride.reason,
+            minCpaDistance: Number.isFinite(Number(closeOverride.threatField?.minCpaDistance)) ? Math.round(Number(closeOverride.threatField.minCpaDistance)) : null,
+            directHitCount: Number(closeOverride.threatField?.directHitCount || 0)
+          } : null,
+          carried: Boolean(strafe.carried),
+          holdRemainingMs: strafe.holdRemainingMs || 0,
+          carryRemainingMs: strafe.carryRemainingMs || 0,
+          spacingMerged: Boolean(combatMove.spacingMerged),
+          threatField: strafe.threatField ? {
+            dx: strafe.threatField.dx,
+            dy: strafe.threatField.dy,
+            directHitCount: strafe.threatField.directHitCount,
+            minCpaDistance: Number.isFinite(Number(strafe.threatField.minCpaDistance)) ? Math.round(Number(strafe.threatField.minCpaDistance)) : null,
+            minTimeToImpactMs: Number.isFinite(Number(strafe.threatField.minTimeToImpactMs)) ? Math.round(Number(strafe.threatField.minTimeToImpactMs)) : null
+          } : null
+        },
+        spacing: spacingActive ? {
+          dx: spacing.dx,
+          dy: spacing.dy,
+          reason: spacing.reason,
+          distance: Math.round(spacing.distance),
+          minRange: Math.round(spacing.minRange),
+          preferredRange: Math.round(spacing.preferredRange),
+          radialSpeed: Number.isFinite(Number(spacing.radialSpeed)) ? Math.round(Number(spacing.radialSpeed)) : null,
+          merged: Boolean(combatMove.spacingMerged),
+          overrideBullet: Boolean(spacingOverride)
+        } : null,
+        movementSuppressed,
+        retreatingTarget: retreatingTarget?.active ? retreatingTarget : null
+      }
+    };
+  }
+
+
+
+  function combatAimJitterLimit(distance, motionScale = 1) {
+    const maxJitter = Math.max(0, Number(cfg.combatAimJitterMaxRadians || cfg.combatAimJitterRadians || 0));
+    const minJitter = clamp(Number(cfg.combatAimJitterMinRadians ?? maxJitter), 0, maxJitter);
+    const scale = clamp(Number.isFinite(Number(motionScale)) ? Number(motionScale) : 1, 0, 1);
+    const minScale = clamp(Number(cfg.combatAimMinMotionJitterScale ?? 0.2), 0, 1);
+    const closeDistance = Math.max(0, Number(cfg.combatAimJitterCloseDistance || 0));
+    const farDistance = Math.max(closeDistance + 1, Number(cfg.combatAimJitterFarDistance || cfg.combatAttackRange || closeDistance + 1));
+    const rawDistance = Number(distance);
+    const d = clamp(Number.isFinite(rawDistance) ? rawDistance : farDistance, closeDistance, farDistance);
+    const nearFactor = 1 - ((d - closeDistance) / (farDistance - closeDistance));
+    const interpolated = (minJitter + (maxJitter - minJitter) * nearFactor) * Math.max(minScale, scale);
+    const bulletSpeed = Math.max(1, Number(cfg.combatBulletSpeedPerTick || 500));
+    const dodgeSpeed = Math.max(0, Number(cfg.combatTargetDodgeSpeedPerTick || 50));
+    const hitRadius = Math.max(0, Number(cfg.combatBulletHitRadiusCm || 90));
+    const evasionScale = Math.max(0, Number(cfg.combatAimEvasionScale ?? 1));
+    const travelTicks = d / bulletSpeed;
+    const evasionWidth = (dodgeSpeed * scale * travelTicks + hitRadius) * evasionScale;
+    const evasionAngle = d > 0 ? Math.atan(evasionWidth / d) : maxJitter;
+    return clamp(Math.max(interpolated, evasionAngle), minJitter * minScale, maxJitter);
+  }
+
+  function combatAimMotionScale(target) {
+    const maxSpeed = Math.max(1, Number(cfg.combatTargetDodgeSpeedPerTick || 50));
+    const observedSpeed = Math.max(
+      speed(target),
+      Number(target?.motionObservedSpeed || 0),
+      Number(target?.motionSampleSpeed || 0)
+    );
+    let scale = clamp(observedSpeed / maxSpeed, 0, 1);
+    if (target?.recentlyMoved) {
+      const decayMs = Math.max(1, Number(cfg.combatAimRecentMotionDecayMs || 900));
+      const ageMs = Number(target.motionAgeMs);
+      const recent = Number.isFinite(ageMs)
+        ? clamp(1 - ageMs / decayMs, 0, 1)
+        : 1;
+      scale = Math.max(scale, recent * Math.max(0, Number(cfg.combatAimMovingScaleThreshold || 0.15)));
+    }
+    return scale;
+  }
+
+  function combatMotionSample(self, target, at = Date.now()) {
+    if (!target) return null;
+    const x = Number(target.x);
+    const y = Number(target.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+    const distance = self ? (Number.isFinite(Number(target.distance)) ? Number(target.distance) : dist(self, target)) : Number(target.distance);
+    return {
+      at,
+      x,
+      y,
+      vx: Number(target.vx) || 0,
+      vy: Number(target.vy) || 0,
+      distance: Number.isFinite(distance) ? distance : null,
+      hp: knownHpValue(target),
+      selfHp: knownHpValue(self)
+    };
+  }
+
+  function combatMotionSamplesWithCurrent(self, target, t = Date.now(), windowMsOverride = null) {
+    const id = combatTargetId(target);
+    const previous = bot.combatTarget || null;
+    const same = previous && id && String(previous.id ?? '') === id;
+    const windowMs = Math.max(250, Number(windowMsOverride || cfg.combatMotionHistoryWindowMs || 2000));
+    const maxSamples = Math.max(2, Math.round(Number(cfg.combatMotionHistoryMaxSamples || 80)));
+    const samples = same && Array.isArray(previous.motionSamples) ? previous.motionSamples.slice() : [];
+    const current = combatMotionSample(self, target, t);
+    if (current) samples.push(current);
+    return samples
+      .filter(sample => sample && Number.isFinite(Number(sample.at)) && t - Number(sample.at) <= windowMs)
+      .sort((a, b) => Number(a.at) - Number(b.at))
+      .slice(-maxSamples);
+  }
+
+  function combatOpponentProfile(self, target, targetDistance = null) {
+    const samples = combatMotionSamplesWithCurrent(self, target, Date.now(), Math.max(250, Number(cfg.combatMotionHistoryWindowMs || 2000)));
+    const threshold = Math.max(1, Number(cfg.combatStationarySpeed || 5));
+    let lateralFlips = 0;
+    let previousLateralSign = 0;
+    let radialSum = 0;
+    let radialCount = 0;
+    let speedSum = 0;
+    let dotSum = 0;
+    let dotCount = 0;
+    for (const sample of samples) {
+      const sx = Number(sample.x);
+      const sy = Number(sample.y);
+      const vx = Number(sample.vx) || 0;
+      const vy = Number(sample.vy) || 0;
+      const dx = sx - Number(self?.x || 0);
+      const dy = sy - Number(self?.y || 0);
+      const d = Math.max(1, Math.hypot(dx, dy));
+      const radial = (dx / d) * vx + (dy / d) * vy;
+      const lateral = (dx / d) * vy - (dy / d) * vx;
+      const lateralSign = Math.abs(lateral) >= threshold ? Math.sign(lateral) : 0;
+      if (lateralSign && previousLateralSign && lateralSign !== previousLateralSign) lateralFlips += 1;
+      if (lateralSign) previousLateralSign = lateralSign;
+      radialSum += radial;
+      radialCount += 1;
+      speedSum += Math.hypot(vx, vy);
+    }
+    for (let i = 1; i < samples.length; i += 1) {
+      const a = samples[i - 1];
+      const b = samples[i];
+      const av = Math.hypot(Number(a.vx) || 0, Number(a.vy) || 0);
+      const bv = Math.hypot(Number(b.vx) || 0, Number(b.vy) || 0);
+      if (av >= threshold && bv >= threshold) {
+        dotSum += ((Number(a.vx) || 0) * (Number(b.vx) || 0) + (Number(a.vy) || 0) * (Number(b.vy) || 0)) / (av * bv);
+        dotCount += 1;
+      }
+    }
+    const durationMs = samples.length >= 2 ? Math.max(0, Number(samples[samples.length - 1].at) - Number(samples[0].at)) : 0;
+    const velocityStability = dotCount ? clamp((dotSum / dotCount + 1) / 2, 0, 1) : 0.5;
+    const avgRadialSpeed = radialCount ? radialSum / radialCount : 0;
+    const avgSpeed = samples.length ? speedSum / samples.length : speed(target);
+    const distance = Number.isFinite(Number(targetDistance)) ? Number(targetDistance) : (Number.isFinite(Number(target?.distance)) ? Number(target.distance) : dist(self, target));
+    const strafePattern = Boolean(samples.length >= 4 && lateralFlips >= 2 && durationMs >= 600);
+    const kiting = Boolean(samples.length >= 3
+      && avgRadialSpeed >= Math.max(3, threshold)
+      && distance >= Math.max(0, Number(cfg.combatSpacingPreferredRange || 0))
+      && (isFiringEntity(target) || isCurrentlyActive(target)));
+    const maneuverScale = clamp((1 - velocityStability) * 0.7 + Math.min(1, lateralFlips / 3) * 0.45 + (kiting ? 0.2 : 0), 0, 1);
+    const aimConfidenceScale = clamp(1.08 - maneuverScale * 0.45, 0.55, 1.08);
+    return {
+      sampleCount: samples.length,
+      durationMs,
+      lateralFlips,
+      velocityStability,
+      avgRadialSpeed,
+      avgSpeed,
+      strafePattern,
+      kiting,
+      maneuverScale,
+      aimConfidenceScale
+    };
+  }
+
+  function combatTradeEstimate(self, target) {
+    const previous = bot.combatTarget || null;
+    const id = combatTargetId(target);
+    const same = previous && id && String(previous.id ?? '') === id;
+    if (!same) return null;
+    const t = Date.now();
+    const windowMs = Math.max(1000, Number(cfg.combatTradeEstimateWindowMs || 6000));
+    const samples = combatMotionSamplesWithCurrent(self, target, t, windowMs)
+      .filter(sample => t - Number(sample.at) <= windowMs && Number.isFinite(Number(sample.hp)) && Number.isFinite(Number(sample.selfHp)));
+    if (samples.length < 3) return null;
+    const first = samples[0];
+    const last = samples[samples.length - 1];
+    const elapsedMs = Math.max(1, Number(last.at) - Number(first.at));
+    if (elapsedMs < Math.max(500, Number(cfg.combatTradeEstimateMinWindowMs || 1800))) return null;
+    const targetDamage = Math.max(0, Number(first.hp) - Number(last.hp));
+    const selfDamage = Math.max(0, Number(first.selfHp) - Number(last.selfHp));
+    const myDps = targetDamage / elapsedMs * 1000;
+    const enemyDps = selfDamage / elapsedMs * 1000;
+    const selfHp = hpValue(self);
+    const targetHp = combatHpValue(target);
+    const tKillMs = myDps > 0.05 ? targetHp / myDps * 1000 : Infinity;
+    const tDeathMs = enemyDps > 0.05 ? selfHp / enemyDps * 1000 : Infinity;
+    const minSelfDamage = Math.max(0, Number(cfg.combatTradeEstimateMinSelfDamage || 6));
+    const minEnemyDps = Math.max(0, Number(cfg.combatTradeEstimateMinEnemyDps || 1.5));
+    const safetyFactor = Math.max(1, Number(cfg.combatTradeEstimateSafetyFactor || 1.15));
+    const noDamageSafeSelfHp = Math.max(0, Number(cfg.combatTradeEstimateNoDamageSafeSelfHp || 75));
+    const noDamageUnsafeTDeathMs = Math.max(1000, Number(cfg.combatTradeEstimateNoDamageUnsafeTDeathMs || 30000));
+    const zeroDamageWindow = targetDamage <= 0.01;
+    const noDamageUnsafe = !zeroDamageWindow
+      || selfHp <= noDamageSafeSelfHp
+      || tDeathMs <= noDamageUnsafeTDeathMs;
+    const disadvantaged = Boolean(
+      selfDamage >= minSelfDamage
+      && enemyDps >= minEnemyDps
+      && tDeathMs < tKillMs * safetyFactor
+      && targetHp > 1
+      && noDamageUnsafe
+    );
+    return {
+      active: disadvantaged,
+      sampleCount: samples.length,
+      elapsedMs,
+      selfDamage,
+      targetDamage,
+      myDps,
+      enemyDps,
+      tKillMs,
+      tDeathMs,
+      safetyFactor,
+      zeroDamageWindow,
+      noDamageUnsafe
+    };
+  }
+
+
+  function combatTargetId(target) {
+    const id = target?.user_id ?? target?.id;
+    return id === null || id === undefined ? '' : String(id);
+  }
+
+  function combatRetreatIgnoreActive(target, t = Date.now()) {
+    const id = combatTargetId(target);
+    if (!id || !bot.combatRetreatIgnore) return false;
+    const until = Number(bot.combatRetreatIgnore.get(id) || 0);
+    if (!until) return false;
+    if (until <= t) {
+      bot.combatRetreatIgnore.delete(id);
+      return false;
+    }
+    return true;
+  }
+
+  function rememberCombatRetreatIgnore(target, t = Date.now()) {
+    const id = combatTargetId(target);
+    if (!id) return;
+    if (!bot.combatRetreatIgnore) bot.combatRetreatIgnore = new Map();
+    bot.combatRetreatIgnore.set(id, t + Math.max(1000, Number(cfg.combatRetreatIgnoreMs || 0) || 15000));
+  }
+
+  function clearCombatDisadvantageObservation(reason = '') {
+    if (!bot.combatDisadvantageObservation) return;
+    bot.lastCombatDisadvantageObservationClear = { at: Date.now(), reason };
+    bot.combatDisadvantageObservation = null;
+  }
+
+  function combatDisadvantageObservationState(target, kind, evidence = {}) {
+    const id = combatTargetId(target);
+    if (!id || !kind) return null;
+    const t = Date.now();
+    const previous = bot.combatDisadvantageObservation || null;
+    const same = previous && String(previous.id || '') === id && String(previous.kind || '') === String(kind);
+    const currentTarget = bot.combatTarget && String(bot.combatTarget.id ?? '') === id ? bot.combatTarget : null;
+    const firstAt = same ? Number(previous.firstAt || previous.at || t) : t;
+    const count = Math.max(1, same ? Number(previous.count || 1) + 1 : 1);
+    const engagedAt = Number(currentTarget?.firstSeenAt || currentTarget?.at || firstAt || t);
+    const observedMs = Math.max(0, t - firstAt);
+    const engagedMs = Math.max(0, t - engagedAt);
+    const confirmMs = Math.max(0, Number(cfg.combatDisadvantageConfirmMs || 0));
+    const minEngageMs = Math.max(0, Number(cfg.combatDisadvantageMinEngageMs || 0));
+    const minSamples = Math.max(1, Math.round(Number(cfg.combatDisadvantageMinSamples || 1)));
+    const sampleCount = Math.max(
+      count,
+      Math.round(Number(evidence?.sampleCount || 0)),
+      Array.isArray(currentTarget?.motionSamples) ? currentTarget.motionSamples.length : 0
+    );
+    const remainingMs = Math.max(0, confirmMs - observedMs, minEngageMs - engagedMs);
+    const samplesRemaining = Math.max(0, minSamples - sampleCount);
+    const state = {
+      active: true,
+      id,
+      kind: String(kind),
+      firstAt,
+      at: t,
+      observedMs: Math.round(observedMs),
+      engagedMs: Math.round(engagedMs),
+      count,
+      sampleCount,
+      confirmMs,
+      minEngageMs,
+      minSamples,
+      remainingMs: Math.round(remainingMs),
+      samplesRemaining,
+      ready: remainingMs <= 0 && samplesRemaining <= 0,
+      evidence
+    };
+    bot.combatDisadvantageObservation = state;
+    return state;
+  }
+
+  function combatAimDamageState(target) {
+    const id = combatTargetId(target);
+    const previous = bot.combatTarget;
+    const same = previous && id && String(previous.id ?? '') === id;
+    const t = Date.now();
+    const currentHp = knownHpValue(target);
+    const previousHp = same && Number.isFinite(Number(previous.hp)) ? Number(previous.hp) : null;
+    const damaged = currentHp !== null && previousHp !== null && currentHp < previousHp - 0.01;
+    const lastDamageAt = damaged
+      ? t
+      : (same ? Number(previous.lastDamageAt || previous.at || t) : t);
+    const noDamageMs = Math.max(0, t - lastDamageAt);
+    return {
+      damaged,
+      currentHp,
+      previousHp,
+      lastDamageAt,
+      noDamageMs,
+      widenMs: Math.max(0, noDamageMs - Math.max(0, Number(cfg.combatAimNoDamageMs) || 0))
+    };
+  }
+
+  function combatLowHpNoDamageLeaveState(selfHp, targetHp, damageState) {
+    const threshold = Math.max(0, Number(cfg.combatLowHpNoDamageLeaveThreshold || 0));
+    const waitMs = Math.max(0, Number(cfg.combatLowHpNoDamageLeaveMs || 0));
+    const minGap = Number.isFinite(Number(cfg.combatLowHpNoDamageMinGap))
+      ? Number(cfg.combatLowHpNoDamageMinGap)
+      : 0;
+    const hpGap = Number(targetHp) - Number(selfHp);
+    const noDamageMs = Number(damageState?.noDamageMs || 0);
+    if (!threshold || !waitMs || !(Number(selfHp) < threshold) || !(hpGap >= minGap) || !(noDamageMs >= waitMs)) return null;
+    return { selfHp, targetHp, hpGap, noDamageMs, threshold, waitMs, minGap };
+  }
+
+  function combatRetreatingTargetState(self, target, targetDistance, damageState = null) {
+    const attackRange = Math.max(0, Number(cfg.combatAttackRange || 0));
+    const disengageRange = Math.max(attackRange, Number(cfg.combatDisengageRange || cfg.combatEngageGraceRange || attackRange || 0));
+    const edgeRange = Math.min(
+      attackRange || Infinity,
+      Math.max(0, Number(cfg.combatRetreatEdgeRange || 0) || attackRange * 0.95)
+    );
+    const minRadialSpeed = Math.max(0, Number(cfg.combatRetreatRadialSpeedMin || cfg.combatStationarySpeed || 0));
+    const minDistanceDelta = Math.max(0, Number(cfg.combatRetreatDistanceDeltaMin || 0));
+    const dx = Number(target?.x) - Number(self?.x);
+    const dy = Number(target?.y) - Number(self?.y);
+    const distance = Number.isFinite(Number(targetDistance)) ? Number(targetDistance) : Math.hypot(dx, dy);
+    const d = Math.max(1, Number.isFinite(distance) ? distance : Math.hypot(dx, dy));
+    const vx = Number(target?.vx) || 0;
+    const vy = Number(target?.vy) || 0;
+    const radialSpeed = (dx / d) * vx + (dy / d) * vy;
+    const previous = bot.combatTarget;
+    const same = previous && combatTargetId(previous) && combatTargetId(previous) === combatTargetId(target);
+    const previousDistance = same && Number.isFinite(Number(previous.distance)) ? Number(previous.distance) : null;
+    const distanceDelta = previousDistance === null ? 0 : distance - previousDistance;
+    const receding = Boolean(
+      (minRadialSpeed > 0 && radialSpeed >= minRadialSpeed)
+      || (minDistanceDelta > 0 && distanceDelta >= minDistanceDelta)
+    );
+    const outOfRange = attackRange > 0 && distance > attackRange;
+    const beyondDisengage = disengageRange > 0 && distance > disengageRange;
+    const edge = edgeRange > 0 && distance >= edgeRange;
+    const active = Boolean(receding && (outOfRange || edge));
+    return {
+      active,
+      disengage: Boolean(beyondDisengage),
+      suppressFire: Boolean(active && edge),
+      reason: beyondDisengage ? 'target-beyond-disengage-range' : (outOfRange ? 'target-out-of-attack-range' : 'target-retreating-edge'),
+      distance: Number.isFinite(distance) ? Math.round(distance) : null,
+      attackRange: Math.round(attackRange),
+      disengageRange: Math.round(disengageRange),
+      edgeRange: Math.round(edgeRange),
+      radialSpeed: Number.isFinite(radialSpeed) ? Math.round(radialSpeed) : 0,
+      distanceDelta: Number.isFinite(distanceDelta) ? Math.round(distanceDelta) : 0,
+      noDamageMs: Math.max(0, Number(damageState?.noDamageMs || 0))
+    };
+  }
+
+  function combatServerStallNoDamageLeaveState(selfHp, targetHp, noDamageMs, realBulletPressure = false, serverPositionStall = null) {
+    const waitMs = Math.max(0, Number(cfg.combatServerStallNoDamageLeaveMs || 0));
+    const precisionWaitMs = Math.max(0, Number(cfg.combatAimFallbackPrecisionNoDamageMs || 0));
+    const precisionGraceMs = Math.max(0, Number(cfg.combatServerStallNoDamagePrecisionGraceMs || 0));
+    const effectiveWaitMs = Math.max(waitMs, precisionWaitMs ? precisionWaitMs + precisionGraceMs : waitMs);
+    const minGap = Math.max(0, Number(cfg.combatServerStallNoDamageHpGap || 0));
+    const hp = Number(selfHp);
+    const enemyHp = Number(targetHp);
+    const hpGap = enemyHp - hp;
+    const elapsed = Math.max(0, Number(noDamageMs || 0));
+    const stall = serverPositionStall || {};
+    if (!waitMs || !stall.stalled || !realBulletPressure) return null;
+    if (!Number.isFinite(hp) || !Number.isFinite(enemyHp) || !Number.isFinite(hpGap)) return null;
+    if (elapsed < effectiveWaitMs || hpGap < minGap) return null;
+    return {
+      active: true,
+      selfHp: hp,
+      targetHp: enemyHp,
+      hpGap,
+      noDamageMs: elapsed,
+      waitMs,
+      effectiveWaitMs,
+      precisionWaitMs,
+      precisionGraceMs,
+      minGap,
+      realBulletPressure: true,
+      serverPositionStall: {
+        stalled: true,
+        reason: stall.reason || 'server-position-stalled',
+        movingMs: Number.isFinite(Number(stall.movingMs)) ? Math.round(Number(stall.movingMs)) : null,
+        gap: Number.isFinite(Number(stall.gap)) ? Math.round(Number(stall.gap)) : null,
+        gapDelta: Number.isFinite(Number(stall.gapDelta)) ? Math.round(Number(stall.gapDelta)) : null,
+        holdRemainingMs: Number.isFinite(Number(stall.holdRemainingMs)) ? Math.round(Number(stall.holdRemainingMs)) : null
+      }
+    };
+  }
+
+  function combatTrendState(self, options = {}) {
+    const selfHp = hpValue(self);
+    const targetHp = Number(options.targetHp);
+    const targetDistance = Number(options.targetDistance);
+    const noDamageMs = Math.max(0, Number(options.noDamageMs || 0));
+    const hpGap = Number(targetHp) - Number(selfHp);
+    const highHpMin = Math.max(0, Number(cfg.combatShootHighHpMinHp || 0));
+    const highHpFireWindow = highHpMin > 0
+      && Number.isFinite(selfHp)
+      && selfHp >= highHpMin
+      && (!Number.isFinite(targetHp) || selfHp >= targetHp);
+    const finishLowThreatMinHp = Math.max(0, Number(cfg.combatShootFinishLowThreatMinHp || 0));
+    const finishLowThreatTargetHpMax = Math.max(0, Number(cfg.combatShootFinishLowThreatTargetHpMax || 0));
+    const finishLowThreatMaxHpGap = Math.max(0, Number(cfg.combatShootFinishLowThreatMaxHpGap || 0));
+    const finishLowThreatRange = Math.max(0, Number(cfg.combatShootFinishLowThreatRange || 0));
+    const finishLowThreatFireWindow = !Boolean(options.realBulletPressure)
+      && finishLowThreatMinHp > 0
+      && finishLowThreatRange > 0
+      && Number.isFinite(selfHp)
+      && Number.isFinite(targetHp)
+      && Number.isFinite(targetDistance)
+      && selfHp >= finishLowThreatMinHp
+      && targetHp <= finishLowThreatTargetHpMax
+      && hpGap <= finishLowThreatMaxHpGap
+      && targetDistance <= finishLowThreatRange;
+    const passiveRunnerFireWindow = Boolean(options.passiveRunner)
+      && !Boolean(options.realBulletPressure)
+      && Number.isFinite(selfHp)
+      && selfHp >= Math.max(0, Number(cfg.combatPassiveRunnerMinSelfHp || 0));
+    const targetPressureFire = options.targetRealBulletPressure !== undefined
+      ? Boolean(options.targetRealBulletPressure)
+      : Boolean(options.realBulletPressure);
+    const opponentProbeMs = Math.max(0, Number(cfg.combatOpponentProbeMs || 0));
+    const opponentProbeEngagedMs = Math.max(0, Number(options.opponentProbeEngagedMs || 0));
+    const opponentProbeSeenTargetRealBullet = Math.max(0, Number(options.opponentProbeSeenTargetRealBulletMs || 0)) > 0;
+    const pressureMinHp = Math.max(0, Number(cfg.combatShootPressureMinHp || 0));
+    const pressureRange = Math.max(0, Number(cfg.combatShootPressureRange || 0));
+    const pressureMaxHpGap = Math.max(0, Number(cfg.combatShootPressureMaxHpGap || 0));
+    const closePressureFireWindow = targetPressureFire
+      && pressureMinHp > 0
+      && pressureRange > 0
+      && Number.isFinite(selfHp)
+      && Number.isFinite(targetHp)
+      && Number.isFinite(targetDistance)
+      && selfHp >= pressureMinHp
+      && hpGap <= pressureMaxHpGap
+      && targetDistance <= pressureRange;
+    const winningPressureMinHp = Math.max(0, Number(cfg.combatShootWinningPressureMinHp || 0));
+    const winningPressureTargetHpMax = Math.max(0, Number(cfg.combatShootWinningPressureTargetHpMax || 0));
+    const winningPressureLeadHp = Math.max(0, Number(cfg.combatShootWinningPressureLeadHp || 0));
+    const winningPressureRange = Math.max(0, Number(cfg.combatShootWinningPressureRange || 0));
+    const winningPressureNoDamageMs = Math.max(0, Number(cfg.combatShootWinningPressureNoDamageMs || 0));
+    const winningPressureFireWindow = targetPressureFire
+      && winningPressureMinHp > 0
+      && winningPressureTargetHpMax > 0
+      && winningPressureRange > 0
+      && Number.isFinite(selfHp)
+      && Number.isFinite(targetHp)
+      && Number.isFinite(targetDistance)
+      && selfHp >= winningPressureMinHp
+      && targetHp <= winningPressureTargetHpMax
+      && hpGap <= -winningPressureLeadHp
+      && noDamageMs >= winningPressureNoDamageMs
+      && targetDistance <= winningPressureRange;
+    const steadyAimMinHp = Math.max(0, Number(cfg.combatShootSteadyAimMinHp || 0));
+    const steadyAimMaxHpGap = Math.max(0, Number(cfg.combatShootSteadyAimMaxHpGap || 0));
+    const steadyAimNoDamageMs = Math.max(0, Number(cfg.combatShootSteadyAimNoDamageMs || cfg.combatAimSteadyNoDamageMs || 0));
+    const steadyAimFireWindow = Boolean(options.steadyAim)
+      && steadyAimMinHp > 0
+      && Number.isFinite(selfHp)
+      && Number.isFinite(targetHp)
+      && selfHp >= steadyAimMinHp
+      && hpGap <= steadyAimMaxHpGap
+      && noDamageMs >= steadyAimNoDamageMs;
+    const noDamageDuelMinHp = Math.max(0, Number(cfg.combatShootNoDamageDuelMinHp || 0));
+    const noDamageDuelMaxHpGap = Math.max(0, Number(cfg.combatShootNoDamageDuelMaxHpGap || 0));
+    const noDamageDuelNoDamageMs = Math.max(0, Number(cfg.combatShootNoDamageDuelNoDamageMs || 0));
+    const noDamageDuelRange = Math.max(0, Number(cfg.combatShootNoDamageDuelRange || cfg.combatAttackRange || 0));
+    const farNoDamageCloseMinHp = Math.max(noDamageDuelMinHp, Number(cfg.combatFarNoDamageCloseMinHp || 0));
+    const farNoDamageCloseFireWindow = Boolean(options.farNoDamageClose)
+      && farNoDamageCloseMinHp > 0
+      && Number.isFinite(selfHp)
+      && selfHp >= farNoDamageCloseMinHp;
+    const noDamageDuelFireWindow = Boolean(options.engagedCombat || options.targetActive || options.targetMoving)
+      && noDamageDuelMinHp > 0
+      && noDamageDuelNoDamageMs > 0
+      && noDamageDuelRange > 0
+      && Number.isFinite(selfHp)
+      && Number.isFinite(targetHp)
+      && Number.isFinite(targetDistance)
+      && selfHp >= noDamageDuelMinHp
+      && hpGap <= noDamageDuelMaxHpGap
+      && noDamageMs >= noDamageDuelNoDamageMs
+      && targetDistance <= noDamageDuelRange;
+    const opponentProbeFireWindow = Boolean(
+      opponentProbeMs > 0
+      && opponentProbeEngagedMs < opponentProbeMs
+      && Boolean(options.targetActive)
+      && !Boolean(options.realBulletPressure)
+      && !targetPressureFire
+      && !opponentProbeSeenTargetRealBullet
+      && !finishLowThreatFireWindow
+      && Number.isFinite(selfHp)
+      && selfHp >= Math.max(0, Number(cfg.combatLowHpLeaveThreshold || 0))
+    );
+    let stance = 'normal';
+    if (winningPressureFireWindow) stance = 'winning-pressure';
+    else if (closePressureFireWindow) stance = 'close-pressure';
+    else if (opponentProbeFireWindow) stance = 'opponent-probe';
+    else if (passiveRunnerFireWindow) stance = 'passive-runner';
+    else if (finishLowThreatFireWindow) stance = 'finish-low-threat';
+    else if (steadyAimFireWindow) stance = 'steady-aim';
+    else if (noDamageDuelFireWindow) stance = 'no-damage-duel';
+    else if (farNoDamageCloseFireWindow) stance = 'far-no-damage-close';
+    else if (highHpFireWindow) stance = 'high-hp-pressure';
+    else if (Number.isFinite(hpGap) && hpGap > 0) stance = 'guarded';
+    return {
+      stance,
+      selfHp,
+      targetHp,
+      hpGap,
+      targetDistance,
+      noDamageMs,
+      highHpFireWindow,
+      passiveRunnerFireWindow,
+      opponentProbeFireWindow,
+      opponentProbeEngagedMs,
+      finishLowThreatFireWindow,
+      closePressureFireWindow,
+      winningPressureFireWindow,
+      steadyAimFireWindow,
+      noDamageDuelFireWindow,
+      farNoDamageCloseFireWindow,
+      engagedCombat: Boolean(options.engagedCombat),
+      targetActive: Boolean(options.targetActive),
+      targetMoving: Boolean(options.targetMoving),
+      passiveRunner: Boolean(options.passiveRunner),
+      opponentProbe: opponentProbeFireWindow,
+      realBulletPressure: Boolean(options.realBulletPressure),
+      targetRealBulletPressure: targetPressureFire,
+      steadyAim: Boolean(options.steadyAim),
+      farNoDamageClose: farNoDamageCloseFireWindow
+    };
+  }
+
+  function combatTickActiveFromState(state = {}) {
+    const t = Number.isFinite(Number(state.nowMs)) ? Number(state.nowMs) : Date.now();
+    const decision = state.decision || null;
+    const recentCombatMs = Math.max(1000, Number(cfg.combatEngageStickMs || 0), Number(cfg.combatEngageGraceMs || 0));
+    const combatAt = Number(state.combatTarget?.at || 0);
+    if (decision?.combat || decision?.combatCover || /^combat-/.test(String(decision?.reason || ''))) return true;
+    if (combatAt && t - combatAt <= recentCombatMs) return true;
+    if (state.pendingExit && /^combat-/.test(String(state.pendingExit.reason || state.pendingExit.rootReason || ''))) return true;
+    return false;
+  }
+
+  function globalSamplingOutageOfflineState(self = null, options = {}) {
+    if (!cfg.globalSamplingOutageOfflineEnabled) return null;
+    const outage = options.outage || bot.globalState.samplingOutage || null;
+    if (!outage?.active) return null;
+    const t = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
+    const minErrors = Math.max(1, Number(cfg.globalSamplingOutageMinErrors || 1));
+    const errorCount = Math.max(0, Number(outage.errorCount || 0));
+    if (errorCount < minErrors) return null;
+    const firstAt = Number(outage.firstAt || 0) || t;
+    const ageMs = Math.max(Number(outage.ageMs || 0), Math.max(0, t - firstAt));
+    const minAgeMs = Math.max(0, Number(cfg.globalSamplingOutageMinAgeMs || 0));
+    if (ageMs < minAgeMs) return null;
+    const combatActive = Boolean(outage.combatActive) || combatTickActiveFromState({
+      decision: bot.lastDecision,
+      combatTarget: bot.combatTarget,
+      pendingExit: bot.pendingExit || bot.pendingCombatLeave,
+      nowMs: t
+    });
+    if (cfg.globalSamplingOutageCombatOnly && !combatActive) return null;
+    return {
+      active: true,
+      reason: 'global sampling outage',
+      firstAt,
+      lastAt: Number(outage.lastAt || 0) || t,
+      ageMs,
+      errorCount,
+      minErrors,
+      minAgeMs,
+      combatOnly: Boolean(cfg.globalSamplingOutageCombatOnly),
+      combatActive,
+      visibilityState: outage.visibilityState || document.visibilityState || '',
+      self: self ? summarizeSelf(self) : null,
+      error: outage.error || bot.globalState.error || '',
+      snapshotError: outage.snapshotError || '',
+      minimapError: outage.minimapError || '',
+      snapshotTimedOut: Boolean(outage.snapshotTimedOut),
+      minimapTimedOut: Boolean(outage.minimapTimedOut),
+      snapshotAgeMs: Number.isFinite(Number(outage.snapshotAgeMs)) ? Math.max(0, Math.round(Number(outage.snapshotAgeMs))) : null,
+      refreshDurationMs: Number.isFinite(Number(outage.refreshDurationMs)) ? Math.max(0, Math.round(Number(outage.refreshDurationMs))) : null,
+      snapshotDurationMs: Number.isFinite(Number(outage.snapshotDurationMs)) ? Math.max(0, Math.round(Number(outage.snapshotDurationMs))) : null,
+      minimapDurationMs: Number.isFinite(Number(outage.minimapDurationMs)) ? Math.max(0, Math.round(Number(outage.minimapDurationMs))) : null,
+      lastTickDurationMs: Number.isFinite(Number(outage.lastTickDurationMs ?? bot.runtimeDiagnostics?.lastTickDurationMs)) ? Math.max(0, Math.round(Number(outage.lastTickDurationMs ?? bot.runtimeDiagnostics?.lastTickDurationMs))) : null,
+      lastTickSource: outage.lastTickSource || bot.runtimeDiagnostics?.lastTickSource || '',
+      lastCombatLogBuildMs: Number.isFinite(Number(outage.lastCombatLogBuildMs ?? bot.runtimeDiagnostics?.lastCombatLogBuildMs)) ? Math.max(0, Math.round(Number(outage.lastCombatLogBuildMs ?? bot.runtimeDiagnostics?.lastCombatLogBuildMs))) : null,
+      lastCombatLogRecordMs: Number.isFinite(Number(outage.lastCombatLogRecordMs ?? bot.runtimeDiagnostics?.lastCombatLogRecordMs)) ? Math.max(0, Math.round(Number(outage.lastCombatLogRecordMs ?? bot.runtimeDiagnostics?.lastCombatLogRecordMs))) : null
+    };
+  }
+
+  function combatTickGapOfflineState(self = null, options = {}) {
+    if (!cfg.combatTickGapOfflineEnabled) return null;
+    const thresholdMs = Math.max(1000, Number(cfg.combatTickGapOfflineMs || 0) || 0);
+    if (!(thresholdMs > 0)) return null;
+    const t = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
+    const previousTickAt = Number(options.previousTickAt ?? bot.previousTickAt ?? 0) || 0;
+    const tickGapMs = Number.isFinite(Number(options.tickGapMs ?? bot.lastTickGapMs))
+      ? Math.max(0, Math.round(Number(options.tickGapMs ?? bot.lastTickGapMs)))
+      : null;
+    const tickInProgressMs = Number.isFinite(Number(options.tickInProgressMs))
+      ? Math.max(0, Math.round(Number(options.tickInProgressMs)))
+      : null;
+    const lastTickCompletedGapMs = Number.isFinite(Number(options.lastTickCompletedGapMs))
+      ? Math.max(0, Math.round(Number(options.lastTickCompletedGapMs)))
+      : null;
+    const combatLogActive = Boolean(bot.combatLogging?.active);
+    const queuedCombatFrameAt = Number(bot.combatLogging?.lastQueuedFrameAt || 0) || 0;
+    const metricCombatFrameAt = Number(bot.lastCombatLogMetric?.at || 0) || 0;
+    const lastCombatFrameAt = queuedCombatFrameAt || (combatLogActive ? metricCombatFrameAt : 0);
+    const combatFrameGapMs = lastCombatFrameAt ? Math.max(0, Math.round(t - lastCombatFrameAt)) : null;
+    const lastBuiltFrameAt = Number(bot.combatLogging?.lastBuiltFrameAt || 0) || 0;
+    const builtFrameGapMs = lastBuiltFrameAt ? Math.max(0, Math.round(t - lastBuiltFrameAt)) : null;
+    const lastCombatAt = Number(bot.combatLogging?.lastCombatAt || 0) || 0;
+    const combatLogGapMs = lastCombatAt ? Math.max(0, Math.round(t - lastCombatAt)) : null;
+    const previousCombatActive = Boolean(options.previousCombatActive ?? bot.previousTickCombatActive ?? bot.lastTickCombatActive);
+    const currentCombatActive = combatTickActiveFromState({
+      decision: bot.lastDecision,
+      combatTarget: bot.combatTarget,
+      pendingExit: bot.pendingExit || bot.pendingCombatLeave,
+      nowMs: t
+    });
+    const recentCombatContextMs = Math.max(
+      thresholdMs,
+      Number(cfg.combatEngageStickMs || 0),
+      Number(cfg.combatEngageGraceMs || 0),
+      Number(cfg.combatLogPostBufferMs || 0)
+    );
+    const recentCombatFrameContext = Boolean(lastCombatFrameAt
+      && recentCombatContextMs > 0
+      && t - lastCombatFrameAt <= recentCombatContextMs);
+    if (!previousCombatActive && !currentCombatActive && !combatLogActive && !recentCombatFrameContext) return null;
+    const liveCombatContext = previousCombatActive || currentCombatActive || combatLogActive;
+    const reentryGap = Boolean(options.reentry && (
+      (tickInProgressMs !== null && tickInProgressMs >= thresholdMs)
+      || (lastTickCompletedGapMs !== null && lastTickCompletedGapMs >= thresholdMs)
+    ));
+    const mainLoopGap = Boolean(!reentryGap && previousTickAt && tickGapMs !== null && tickGapMs >= thresholdMs);
+    const combatFrameGap = !reentryGap && !mainLoopGap && liveCombatContext && combatFrameGapMs !== null && combatFrameGapMs >= thresholdMs;
+    if (!reentryGap && !mainLoopGap && !combatFrameGap) return null;
+    const diagnosis = reentryGap ? 'tick-reentry-gap'
+      : (mainLoopGap ? 'main-loop-gap' : 'combat-log-gap-with-active-tick');
+    const likelyCause = reentryGap ? 'main-loop-stuck-or-awaiting-async'
+      : (mainLoopGap ? 'js-or-main-loop-paused' : 'combat-state-or-log-gating-gap');
+    return {
+      active: true,
+      reason: 'combat tick gap',
+      diagnosis,
+      likelyCause,
+      thresholdMs,
+      tickGapMs,
+      tickInProgressMs,
+      lastTickCompletedGapMs,
+      previousTickAt,
+      currentTickAt: t,
+      previousTickSource: options.previousTickSource || bot.previousTickSource || '',
+      currentTickSource: options.source || bot.lastTickSource || '',
+      previousCombatActive,
+      currentCombatActive,
+      combatLogActive,
+      liveCombatContext,
+      recentCombatFrameContext,
+      recentCombatContextMs,
+      queuedCombatFrameAt,
+      metricCombatFrameAt,
+      lastCombatFrameAt,
+      combatFrameGapMs,
+      lastBuiltFrameAt,
+      builtFrameGapMs,
+      lastCombatAt,
+      combatLogGapMs,
+      self: self ? summarizeSelf(self) : null,
+      lastDecisionReason: bot.lastDecision?.reason || '',
+      visibilityState: document.visibilityState || ''
+    };
+  }
+
+  async function handleTickReentryCombatGap(source = 'timer') {
+    if (!cfg.combatTickGapOfflineEnabled) return null;
+    const thresholdMs = Math.max(1000, Number(cfg.combatTickGapOfflineMs || 0) || 0);
+    if (!(thresholdMs > 0)) return null;
+    const t = Date.now();
+    const tickInProgressMs = bot.lastTickAt ? Math.max(0, Math.round(t - Number(bot.lastTickAt || t))) : null;
+    const lastTickCompletedGapMs = bot.lastTickCompletedAt ? Math.max(0, Math.round(t - Number(bot.lastTickCompletedAt || t))) : null;
+    if ((tickInProgressMs === null || tickInProgressMs < thresholdMs)
+      && (lastTickCompletedGapMs === null || lastTickCompletedGapMs < thresholdMs)) {
+      return null;
+    }
+    const self = getSelf();
+    if (!self || !isAlive(self)) return null;
+    const combatTickGap = combatTickGapOfflineState(self, {
+      source,
+      nowMs: t,
+      reentry: true,
+      tickInProgressMs,
+      lastTickCompletedGapMs,
+      previousTickAt: bot.lastTickAt || bot.previousTickAt || 0,
+      previousTickSource: bot.lastTickSource || bot.previousTickSource || '',
+      previousCombatActive: Boolean(bot.previousTickCombatActive || bot.lastTickCombatActive)
+    });
+    if (!combatTickGap) return null;
+    bot.lastCombatTickGap = combatTickGap;
+    if (t - Number(bot.lastTickReentryGapAt || 0) < thresholdMs) return combatTickGap;
+    bot.lastTickReentryGapAt = t;
+    const currentSummary = summarizeSelf(self);
+    bot.lastSelf = currentSummary;
+    updateSessionStats(currentSummary);
+    stopMotionSafely('combat-tick-reentry-gap');
+    if (!bot.offlineSince) bot.offlineSince = t;
+    const offlineAgeMs = Math.max(0, Date.now() - Number(bot.offlineSince || Date.now()));
+    const offlineSafety = {
+      ...assessOfflineSafety(self),
+      combatTickGap
+    };
+    bot.lastOfflineSafety = offlineSafety;
+    const leaveResult = !cfg.dryRun && !cfg.once
+      ? await leaveOffline('combat tick gap', currentSummary, offlineSafety)
+      : null;
+    const offlineDetail = activeOfflineLeaveDetail();
+    bot.lastDecision = {
+      kind: 'wait',
+      reason: leaveResult?.attempted && !leaveResult?.error ? 'offline-leave' : 'control-combat-tick-gap',
+      control: summarizeControl(),
+      self: currentSummary,
+      offlineAgeMs,
+      leaveDelayMs: 0,
+      offlineSafety,
+      combatTickGap,
+      displayReason: currentOfflineDisplayReasonForCombatStateCore('combat tick gap', offlineSafety, leaveResult, offlineDetail, '战斗主循环断档，正在退出', { offlineLeaveSummary: (summaryReason, summarySafety) => offlineLeaveSummaryForCombatStateCore(summaryReason, summarySafety, { staminaBudgetCoinLeaveSummary, staminaExhaustedWindowLabel }) }),
+      leave: leaveResult,
+      tickReentry: true
+    };
+    updateBotPanel(bot.lastDecision);
+    if (!leaveResult?.attempted && offlineAgeMs > cfg.reloadAfterOfflineMs) {
+      requestReload('combat tick gap too long');
+    }
+    return combatTickGap;
+  }
+
+  function nativeTickMinIntervalMs(state = {}) {
+    const normalMs = Math.max(1, Number(cfg.nativeTickMinMs || cfg.tickMs || 120));
+    const combatMs = Math.max(1, Number(cfg.combatNativeTickMinMs || normalMs));
+    return combatTickActiveFromState(state) ? Math.min(normalMs, combatMs) : normalMs;
+  }
+
+
+
+  function combatShootingPlan(self, options = {}) {
+    const stamina5s = staminaRemaining(self, '5s');
+    const normalEveryMs = Math.max(1, Number(cfg.combatShootEveryMs || cfg.shootEveryMs || 120));
+    const conserveEveryMs = Math.max(normalEveryMs, Number(cfg.combatShootConserveEveryMs || normalEveryMs));
+    const recoveryEveryMs = Math.max(conserveEveryMs, Number(cfg.combatShootRecoveryEveryMs || conserveEveryMs));
+    const hardReserveMs = Math.max(staminaExhaustedThreshold(), Number(cfg.combatShootHardReserveMs || staminaExhaustedThreshold()));
+    const dodgeReserveMs = Math.max(hardReserveMs, Number(cfg.combatShootDodgeReserveMs || hardReserveMs));
+    const highHpDodgeReserveMs = Math.max(hardReserveMs, Number(cfg.combatShootHighHpDodgeReserveMs || dodgeReserveMs));
+    const finishLowThreatDodgeReserveMs = Math.max(hardReserveMs, Number(cfg.combatShootFinishLowThreatDodgeReserveMs || hardReserveMs));
+    const passiveRunnerDodgeReserveMs = Math.max(hardReserveMs, Number(cfg.combatShootPassiveRunnerDodgeReserveMs || highHpDodgeReserveMs));
+    const pressureDodgeReserveMs = Math.max(hardReserveMs, Number(cfg.combatShootPressureDodgeReserveMs || highHpDodgeReserveMs));
+    const winningPressureDodgeReserveMs = Math.max(hardReserveMs, Number(cfg.combatShootWinningPressureDodgeReserveMs || pressureDodgeReserveMs));
+    const steadyAimDodgeReserveMs = Math.max(hardReserveMs, Number(cfg.combatShootSteadyAimDodgeReserveMs || highHpDodgeReserveMs));
+    const noDamageDuelDodgeReserveMs = Math.max(hardReserveMs, Number(cfg.combatShootNoDamageDuelDodgeReserveMs || highHpDodgeReserveMs));
+    const reserveMs = Math.max(dodgeReserveMs, Number(cfg.combatShootReserveMs || dodgeReserveMs));
+    const trend = options.trend && typeof options.trend === 'object'
+      ? options.trend
+      : combatTrendState(self, options);
+    const noDamageMs = Math.max(0, Number(trend.noDamageMs || 0));
+    const highHpFireWindow = Boolean(trend.highHpFireWindow);
+    const passiveRunnerFireWindow = Boolean(trend.passiveRunnerFireWindow);
+    const opponentProbeFireWindow = Boolean(trend.opponentProbeFireWindow);
+    const finishLowThreatFireWindow = Boolean(trend.finishLowThreatFireWindow);
+    const closePressureFireWindow = Boolean(trend.closePressureFireWindow);
+	    const winningPressureFireWindow = Boolean(trend.winningPressureFireWindow);
+	    const steadyAimFireWindow = Boolean(trend.steadyAimFireWindow);
+	    const noDamageDuelFireWindow = Boolean(trend.noDamageDuelFireWindow);
+	    const farNoDamageCloseFireWindow = Boolean(trend.farNoDamageCloseFireWindow);
+	    const aimConfidence = Number.isFinite(Number(options.aimConfidence))
+	      ? Math.max(0, Math.min(1, Number(options.aimConfidence)))
+	      : null;
+	    const lowConfidenceThreshold = Math.max(0, Math.min(1, Number(cfg.combatAimLowConfidenceThreshold || 0)));
+	    const lowConfidenceMinDistance = Math.max(0, Number(cfg.combatAimLowConfidenceMinDistance || 0));
+	    const lowConfidenceMotionScale = Math.max(0, Number(cfg.combatAimLowConfidenceMotionScale || 0));
+	    const lowConfidenceEveryMs = Math.max(conserveEveryMs, Number(cfg.combatAimLowConfidenceEveryMs || conserveEveryMs));
+    const opponentProbeReserveMs = Math.max(
+      dodgeReserveMs,
+      Number(cfg.combatOpponentProbeReserveMs || reserveMs)
+    );
+    const opponentProbeEveryMs = Math.max(
+      normalEveryMs,
+      Number(cfg.combatOpponentProbeEveryMs || lowConfidenceEveryMs)
+    );
+	    const lowConfidenceWindow = Boolean(
+	      aimConfidence !== null
+	      && lowConfidenceThreshold > 0
+	      && aimConfidence < lowConfidenceThreshold
+	      && Number(options.targetDistance || 0) >= lowConfidenceMinDistance
+	      && (options.targetMoving || Number(options.motionScale || 0) >= lowConfidenceMotionScale)
+	      && !closePressureFireWindow
+	      && !steadyAimFireWindow
+	    );
+    let effectiveDodgeReserveMs = dodgeReserveMs;
+    if (opponentProbeFireWindow) {
+      effectiveDodgeReserveMs = Math.max(effectiveDodgeReserveMs, opponentProbeReserveMs);
+    } else {
+      if (highHpFireWindow) effectiveDodgeReserveMs = Math.min(effectiveDodgeReserveMs, highHpDodgeReserveMs);
+      if (passiveRunnerFireWindow) effectiveDodgeReserveMs = Math.min(effectiveDodgeReserveMs, passiveRunnerDodgeReserveMs);
+    }
+    if (finishLowThreatFireWindow) effectiveDodgeReserveMs = Math.min(effectiveDodgeReserveMs, finishLowThreatDodgeReserveMs);
+    if (closePressureFireWindow) effectiveDodgeReserveMs = Math.min(effectiveDodgeReserveMs, pressureDodgeReserveMs);
+    if (winningPressureFireWindow) effectiveDodgeReserveMs = Math.min(effectiveDodgeReserveMs, winningPressureDodgeReserveMs);
+    if (steadyAimFireWindow) effectiveDodgeReserveMs = Math.min(effectiveDodgeReserveMs, steadyAimDodgeReserveMs);
+    if (noDamageDuelFireWindow) effectiveDodgeReserveMs = Math.min(effectiveDodgeReserveMs, noDamageDuelDodgeReserveMs);
+    const needsMovement = Boolean(options.needsMovement || options.dodging || options.realBulletPressure || options.pressureClose);
+    const base = {
+      shoot: true,
+      forceShoot: false,
+      shootEveryMs: normalEveryMs,
+      reason: 'normal',
+      stamina5s,
+      reserveMs,
+      dodgeReserveMs: effectiveDodgeReserveMs,
+      standardDodgeReserveMs: dodgeReserveMs,
+      highHpDodgeReserveMs,
+      passiveRunnerDodgeReserveMs,
+      finishLowThreatDodgeReserveMs,
+      pressureDodgeReserveMs,
+      winningPressureDodgeReserveMs,
+      steadyAimDodgeReserveMs,
+      noDamageDuelDodgeReserveMs,
+      hardReserveMs,
+      needsMovement,
+      highHpFireWindow,
+      passiveRunnerFireWindow,
+      finishLowThreatFireWindow,
+      closePressureFireWindow,
+      winningPressureFireWindow,
+      steadyAimFireWindow,
+	      noDamageDuelFireWindow,
+	      farNoDamageCloseFireWindow,
+      opponentProbeFireWindow,
+      opponentProbeReserveMs,
+      opponentProbeEveryMs,
+	      aimConfidence,
+	      lowConfidenceWindow,
+	      noDamageMs,
+      trend: {
+        stance: trend.stance || 'normal',
+        hpGap: Number.isFinite(Number(trend.hpGap)) ? Number(trend.hpGap) : null,
+        targetDistance: Number.isFinite(Number(trend.targetDistance)) ? Math.round(Number(trend.targetDistance)) : null,
+        noDamageMs: Math.round(noDamageMs),
+        engagedCombat: Boolean(trend.engagedCombat),
+        targetActive: Boolean(trend.targetActive),
+        targetMoving: Boolean(trend.targetMoving),
+        passiveRunner: Boolean(trend.passiveRunner),
+        opponentProbe: Boolean(trend.opponentProbeFireWindow),
+        opponentProbeEngagedMs: Math.round(Math.max(0, Number(trend.opponentProbeEngagedMs || 0))),
+        realBulletPressure: Boolean(trend.realBulletPressure),
+        steadyAim: Boolean(trend.steadyAim),
+        farNoDamageClose: Boolean(trend.farNoDamageCloseFireWindow)
+      },
+      suppressed: false,
+      throttled: false
+    };
+    if (stamina5s !== null && stamina5s < hardReserveMs) {
+      return { ...base, shoot: false, shootEveryMs: recoveryEveryMs, reason: 'stamina-rebuild', suppressed: true };
+    }
+    if (stamina5s !== null && opponentProbeFireWindow && stamina5s < effectiveDodgeReserveMs) {
+      return { ...base, shoot: false, shootEveryMs: recoveryEveryMs, reason: 'reserve-for-dodge', suppressed: true };
+    }
+    if (stamina5s !== null && needsMovement && stamina5s < effectiveDodgeReserveMs) {
+      return { ...base, shoot: false, shootEveryMs: recoveryEveryMs, reason: 'reserve-for-dodge', suppressed: true };
+    }
+	    if (stamina5s !== null && stamina5s < reserveMs) {
+	      return { ...base, shootEveryMs: conserveEveryMs, reason: 'burst-fire', throttled: true };
+	    }
+    if (opponentProbeFireWindow) {
+      return { ...base, shootEveryMs: opponentProbeEveryMs, reason: 'opponent-probe', throttled: true };
+    }
+	    if (lowConfidenceWindow) {
+	      return { ...base, shootEveryMs: lowConfidenceEveryMs, reason: 'low-confidence-burst', throttled: true };
+	    }
+	    return base;
+	  }
+
+  function combatAimNoDamageLevel(widenMs) {
+    const stepMs = Math.max(1, Number(cfg.combatAimNoDamageStepMs) || 800);
+    const elapsed = Math.max(0, Number(widenMs) || 0);
+    return elapsed > 0 ? Math.min(3, 1 + elapsed / stepMs) : 0;
+  }
+
+  function combatAimNoDamageJitterLimit(baseLimit, noDamageLevel) {
+    const base = Math.max(0, Number(baseLimit) || 0);
+    const level = Math.max(0, Number(noDamageLevel) || 0);
+    const maxNoDamageLimit = Math.max(base, Number(cfg.combatAimNoDamageMaxRadians) || base);
+    return level ? Math.min(maxNoDamageLimit, base * (1 + level * 0.45)) : base;
+  }
+  function combatAimSteadyNoDamageState(target, noDamageMs, motionScale = 0) {
+    const thresholdMs = Math.max(0, Number(cfg.combatAimSteadyNoDamageMs || 0));
+    const elapsed = Math.max(0, Number(noDamageMs) || 0);
+    const speedMax = Math.max(0, Number(cfg.combatAimSteadySpeedMax ?? cfg.combatStationarySpeed ?? 0));
+    const currentSpeed = speed(target);
+    const active = Boolean(thresholdMs && elapsed >= thresholdMs && currentSpeed <= speedMax);
+    return {
+      active,
+      noDamageMs: elapsed,
+      thresholdMs,
+      currentSpeed,
+      speedMax,
+      motionScale: Number.isFinite(Number(motionScale)) ? Number(motionScale) : 0
+    };
+  }
+
+  function combatAimFallbackPrecisionState(noDamageMs) {
+    const thresholdMs = Math.max(0, Number(cfg.combatAimFallbackPrecisionNoDamageMs || 0));
+    const elapsed = Math.max(0, Number(noDamageMs) || 0);
+    return {
+      active: Boolean(thresholdMs && elapsed >= thresholdMs),
+      noDamageMs: elapsed,
+      thresholdMs
+    };
+  }
+
+  function combatMovementAimMode(self, target, distance) {
+    const vx = Number(target.vx) || 0;
+    const vy = Number(target.vy) || 0;
+    const targetSpeed = Math.hypot(vx, vy);
+    const dx = Number(target.x) - Number(self.x);
+    const dy = Number(target.y) - Number(self.y);
+    const d = Math.max(1, Number(distance) || Math.hypot(dx, dy) || 1);
+    const ux = dx / d;
+    const uy = dy / d;
+    const radialSpeed = ux * vx + uy * vy;
+    const lateralSpeed = ux * vy - uy * vx;
+    const lateralRatio = targetSpeed > 0.01 ? Math.abs(lateralSpeed) / targetSpeed : 0;
+    let mode = 'drift';
+    let leadScale = 0.75;
+    if (lateralRatio >= 0.55) {
+      mode = 'lateral';
+      leadScale = 1.1;
+    } else if (radialSpeed <= -cfg.combatStationarySpeed) {
+      mode = 'closing';
+      leadScale = 0.5;
+    } else if (radialSpeed >= cfg.combatStationarySpeed) {
+      mode = 'retreating';
+      leadScale = 0.6;
+    }
+    if (target.current_join_mode === 'Active') leadScale += 0.15;
+    if (isFiringEntity(target)) leadScale += 0.1;
+    return {
+      mode,
+      leadScale,
+      lateralSpeed,
+      radialSpeed,
+      lateralRatio,
+      targetSpeed
+    };
+  }
+
+  function combatInterceptSolution(self, target, distance = null, motionScale = 1) {
+    const sx = Number(self?.x);
+    const sy = Number(self?.y);
+    const px = Number(target?.x);
+    const py = Number(target?.y);
+    const vx = Number(target?.vx) || 0;
+    const vy = Number(target?.vy) || 0;
+    if (![sx, sy, px, py].every(Number.isFinite)) return null;
+    const bulletSpeed = Math.max(1, Number(cfg.combatBulletSpeedPerTick || 500));
+    const renderDelayTicks = Math.max(0, Number(cfg.combatRenderDelayTicks ?? 2));
+    const compensatedX = px + vx * renderDelayTicks;
+    const compensatedY = py + vy * renderDelayTicks;
+    const dx = compensatedX - sx;
+    const dy = compensatedY - sy;
+    const c = dx * dx + dy * dy;
+    if (!(c > 0)) return null;
+    const targetSpeedSq = vx * vx + vy * vy;
+    const a = targetSpeedSq - bulletSpeed * bulletSpeed;
+    const b = 2 * (dx * vx + dy * vy);
+    const eps = 1e-6;
+    const roots = [];
+    if (Math.abs(a) < eps) {
+      if (Math.abs(b) > eps) roots.push(-c / b);
+    } else {
+      const disc = b * b - 4 * a * c;
+      if (disc < -eps) return null;
+      const sqrtDisc = Math.sqrt(Math.max(0, disc));
+      roots.push((-b - sqrtDisc) / (2 * a), (-b + sqrtDisc) / (2 * a));
+    }
+    const maxByRange = Math.max(1, Number(cfg.combatBulletRangeCm || cfg.combatAttackRange || 15000) / bulletSpeed);
+    const configuredMax = Number(cfg.combatInterceptMaxTicks || 0);
+    const maxTicks = Math.max(1, configuredMax > 0 ? Math.min(configuredMax, maxByRange) : maxByRange);
+    const t = roots
+      .filter(value => Number.isFinite(value) && value > 0 && value <= maxTicks)
+      .sort((aTick, bTick) => aTick - bTick)[0];
+    if (!Number.isFinite(t)) return null;
+    const x = compensatedX + vx * t;
+    const y = compensatedY + vy * t;
+    const travelDistance = Math.hypot(x - sx, y - sy);
+    const bulletRange = Math.max(1, Number(cfg.combatBulletRangeCm || cfg.combatAttackRange || 15000));
+    if (travelDistance > bulletRange + Math.max(0, Number(cfg.combatBulletHitRadiusCm || 90))) return null;
+    const rawDistance = Number.isFinite(Number(distance)) ? Math.max(1, Number(distance)) : Math.hypot(px - sx, py - sy);
+    const targetSpeed = Math.sqrt(targetSpeedSq);
+    const maxTargetSpeed = Math.max(1, Number(cfg.combatTargetDodgeSpeedPerTick || 50));
+    const speedRatio = targetSpeed / maxTargetSpeed;
+    const timeFactor = 1 - Math.min(1, t / maxTicks) * 0.35;
+    const speedPenalty = Math.max(0, speedRatio - 1) * 0.2;
+    const motionPenalty = Math.max(0, Math.min(1, Number(motionScale) || 0)) * 0.08;
+    const confidence = Math.max(0.25, Math.min(1, 0.62 + timeFactor * 0.25 - speedPenalty - motionPenalty));
+    return {
+      x,
+      y,
+      flightTicks: t,
+      flightMs: t * 50,
+      travelDistance,
+      currentDistance: rawDistance,
+      leadDistance: Math.hypot(x - px, y - py),
+      renderDelayTicks,
+      compensatedX,
+      compensatedY,
+      targetVx: vx,
+      targetVy: vy,
+      targetSpeed,
+      confidence
+    };
+  }
+
+  function combatLiveAimTarget(self, target) {
+    const targetId = combatTargetId(target);
+    const targetName = String(target?.name || '').trim();
+    let live = null;
+    try {
+      const nativeEntities = Array.isArray(bot.testNativeEntities)
+        ? bot.testNativeEntities
+        : (typeof getNativeEntityList === 'function' ? getNativeEntityList() : []);
+      if (Array.isArray(nativeEntities) && nativeEntities.length) {
+        live = nativeEntities.find(entity => {
+          const id = combatTargetId(entity);
+          return targetId && id && String(id) === targetId;
+        }) || null;
+        if (!live && targetName) live = nativeEntities.find(entity => String(entity?.name || '').trim() === targetName) || null;
+      }
+    } catch (_) {
+      live = null;
+    }
+    if (!live || !isAlive(live) || isInvulnerable(live)) return target;
+    const x = Number(live.x);
+    const y = Number(live.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return target;
+    return {
+      ...target,
+      ...live,
+      user_id: live.user_id ?? live.id ?? target.user_id ?? target.id,
+      id: live.user_id ?? live.id ?? target.id ?? target.user_id,
+      hp: combatHpValue(live),
+      knownHp: knownHpValue(live),
+      drop: dropValue(live) || target.drop,
+      distance: dist(self, live),
+      speed: speed(live),
+      combatIntent: target.combatIntent || live.combatIntent || '',
+      nativeAimResolved: true,
+      originalAimTarget: target
+    };
+  }
+  function combatAimSourceDivergenceState(aimSource, distance) {
+    const original = aimSource?.originalAimTarget;
+    const live = Boolean(aimSource?.nativeAimResolved);
+    const ax = Number(aimSource?.x);
+    const ay = Number(aimSource?.y);
+    const ox = Number(original?.x);
+    const oy = Number(original?.y);
+    const divergence = live
+      && Number.isFinite(ax)
+      && Number.isFinite(ay)
+      && Number.isFinite(ox)
+      && Number.isFinite(oy)
+      ? Math.hypot(ax - ox, ay - oy)
+      : null;
+    const baseThreshold = Math.max(0, Number(cfg.combatAimLiveDivergencePrecisionCm || 0));
+    const ratio = Math.max(0, Number(cfg.combatAimLiveDivergencePrecisionRatio || 0));
+    const ratioThreshold = Number.isFinite(Number(distance)) ? Math.round(Math.max(0, Number(distance)) * ratio) : 0;
+    const threshold = Math.max(baseThreshold, ratioThreshold);
+    return {
+      active: Boolean(live && divergence !== null && threshold > 0 && divergence >= threshold),
+      divergenceCm: divergence !== null ? Math.round(divergence) : null,
+      thresholdCm: Math.round(threshold),
+      baseThresholdCm: Math.round(baseThreshold),
+      ratioThresholdCm: Math.round(ratioThreshold)
+    };
+  }
+
+  function combatAimServerStallState() {
+    const stall = typeof summarizeServerPositionStall === 'function'
+      ? summarizeServerPositionStall()
+      : bot.serverPositionStall;
+    return stall && typeof stall === 'object' ? stall : {};
+  }
+
+  function combatAimDynamicStrategyState(self, target, aimSource, damage, moving, distance, movement, steadyAim, options = {}) {
+    const fallbackPrecision = combatAimFallbackPrecisionState(damage?.noDamageMs);
+    const sourceDivergence = combatAimSourceDivergenceState(aimSource, distance);
+    const serverStall = combatAimServerStallState();
+    const live = Boolean(aimSource?.nativeAimResolved);
+    const attackRange = Math.max(0, Number(cfg.combatAttackRange || cfg.attackRange || 0));
+    const radialMax = Math.max(0, Number(cfg.combatAimRadialPrecisionLateralRatio || 0));
+    const realBulletPrecision = Boolean(live
+      && moving
+      && options.realBulletPressure
+      && (!attackRange || Number(distance) <= attackRange));
+    const lateralRatio = Math.abs(Number(movement?.lateralRatio || 0));
+    const passiveRunnerIntercept = Boolean(live
+      && moving
+      && movement
+      && options.passiveRunner
+      && (!attackRange || Number(distance) <= attackRange));
+    const liveIntercept = Boolean(live
+      && moving
+      && movement
+      && (
+        passiveRunnerIntercept
+        || (lateralRatio > radialMax && (
+          realBulletPrecision
+          || (serverStall.stalled && (!attackRange || Number(distance) <= attackRange))
+        ))
+      ));
+    const radialPrecision = Boolean(live
+      && moving
+      && radialMax > 0
+      && movement
+      && Number(movement.targetSpeed || 0) >= Number(cfg.combatStationarySpeed || 0)
+      && lateralRatio <= radialMax
+      && (!attackRange || Number(distance) <= attackRange));
+    let mode = moving ? 'intercept' : 'exact';
+    let strategy = moving ? 'intercept' : 'exact';
+    let reason = moving ? (movement?.mode || 'moving') : 'stationary';
+    let precision = false;
+    let steady = false;
+    let passiveRunnerAim = false;
+    if (sourceDivergence.active) {
+      mode = 'live-precision';
+      strategy = 'live-precision';
+      reason = 'coordinate-divergence';
+      precision = true;
+    } else if (passiveRunnerIntercept) {
+      strategy = 'live-intercept';
+      reason = 'passive-runner-intercept';
+      passiveRunnerAim = true;
+    } else if (realBulletPrecision && liveIntercept) {
+      strategy = 'live-intercept';
+      reason = 'real-bullet-pressure-intercept';
+    } else if (realBulletPrecision) {
+      mode = 'live-precision';
+      strategy = 'live-precision';
+      reason = 'real-bullet-pressure';
+      precision = true;
+    } else if (live && serverStall.stalled && liveIntercept) {
+      strategy = 'live-intercept';
+      reason = 'server-stall-live-intercept';
+    } else if (live && serverStall.stalled) {
+      mode = 'live-precision';
+      strategy = 'live-precision';
+      reason = 'server-stall-live';
+      precision = true;
+    } else if (radialPrecision) {
+      mode = 'live-precision';
+      strategy = 'live-precision';
+      reason = 'radial-motion';
+      precision = true;
+    } else if (fallbackPrecision.active) {
+      mode = 'precision';
+      strategy = 'fallback-precision';
+      reason = 'no-damage-fallback';
+      precision = true;
+    } else if (steadyAim?.active && moving) {
+      mode = 'steady';
+      strategy = 'steady';
+      reason = 'steady-no-damage';
+      steady = true;
+    }
+    return {
+      mode,
+      strategy,
+      reason,
+      precision,
+      steady,
+      bypassJitter: Boolean(!moving || precision || steady),
+      sourceDivergence,
+      serverStall: Boolean(serverStall.stalled),
+      liveIntercept,
+      realBulletPrecision,
+      radialPrecision,
+      fallbackPrecision: Boolean(fallbackPrecision.active),
+      passiveRunner: Boolean(passiveRunnerAim),
+      movementMode: precision ? strategy : (steady ? 'steady' : (movement?.mode || ''))
+    };
+  }
+
+  function combatAimTarget(self, target, options = {}) {
+    const nativeAimSource = combatLiveAimTarget(self, target);
+    const preliminaryDamage = combatAimDamageState(nativeAimSource);
+    const aimSource = nativeAimSource;
+	    const motionScale = combatAimMotionScale(aimSource);
+	    const moving = speed(aimSource) >= cfg.combatStationarySpeed
+	      || motionScale >= Math.max(0, Number(cfg.combatAimMovingScaleThreshold || 0.15));
+	    const targetDistance = Number(aimSource.distance);
+	    const distance = Number.isFinite(targetDistance) ? targetDistance : dist(self, aimSource);
+    const opponentProfile = combatOpponentProfile(self, aimSource, distance);
+	    const damage = preliminaryDamage;
+    const steadyAim = combatAimSteadyNoDamageState(aimSource, damage.noDamageMs, motionScale);
+    const movement = moving
+      ? combatMovementAimMode(self, aimSource, distance)
+      : { mode: '', targetSpeed: 0, lateralRatio: 0, lateralSpeed: 0, radialSpeed: 0 };
+    const aimStrategy = combatAimDynamicStrategyState(self, target, aimSource, damage, moving, distance, movement, steadyAim, {
+      realBulletPressure: Boolean(options.realBulletPressure),
+      passiveRunner: Boolean(options.passiveRunner)
+    });
+    const exact = {
+      x: Number(aimSource.x),
+      y: Number(aimSource.y),
+      mode: aimStrategy.mode,
+      moving,
+      distance,
+      motionScale,
+      movementMode: aimStrategy.movementMode,
+      jitterLimit: 0,
+      noDamageMs: damage.noDamageMs,
+      noDamageWidened: false,
+      precisionAim: Boolean(aimStrategy.precision),
+      steadyAim: Boolean(aimStrategy.steady),
+      lockedAim: false,
+      liveAim: Boolean(aimSource.nativeAimResolved),
+      liveDistance: aimSource.nativeAimResolved ? Math.round(distance) : null,
+      aimStrategy: aimStrategy.strategy,
+      aimStrategyReason: aimStrategy.reason,
+      sourceDivergenceCm: aimStrategy.sourceDivergence.divergenceCm,
+      sourceDivergenceThresholdCm: aimStrategy.sourceDivergence.thresholdCm,
+      serverStallAim: Boolean(aimStrategy.serverStall),
+      realBulletPrecisionAim: Boolean(aimStrategy.realBulletPrecision),
+      radialPrecisionAim: Boolean(aimStrategy.radialPrecision),
+      fallbackPrecisionAim: Boolean(aimStrategy.fallbackPrecision),
+      passiveRunnerAim: Boolean(aimStrategy.passiveRunner),
+      aimConfidence: aimStrategy.bypassJitter ? 1 : null,
+      opponentProfile,
+    };
+    if (aimStrategy.bypassJitter) return exact;
+    const dx = Number(aimSource.x) - Number(self.x);
+    const dy = Number(aimSource.y) - Number(self.y);
+    const baseLimit = combatAimJitterLimit(distance, motionScale);
+    const stepMs = Math.max(1, Number(cfg.combatAimNoDamageStepMs) || 800);
+    const noDamageLevel = combatAimNoDamageLevel(damage.widenMs);
+    const jitterLimit = combatAimNoDamageJitterLimit(baseLimit, noDamageLevel);
+    const targetId = combatTargetId(aimSource);
+    const previousAim = bot.combatAim;
+    let sign = Math.sign(movement.lateralSpeed || 0);
+    if (!sign && previousAim && String(previousAim.targetId || '') === targetId) sign = Math.sign(Number(previousAim.sign || 0));
+    if (!sign) sign = Math.random() < 0.5 ? -1 : 1;
+    const noDamageBucket = noDamageLevel ? Math.floor(damage.widenMs / stepMs) + 1 : 0;
+    const motionBucket = Math.round(motionScale * 10);
+    const intercept = combatInterceptSolution(self, aimSource, distance, motionScale);
+    const lockCompatible = previousAim
+      && String(previousAim.targetId || '') === targetId
+      && String(previousAim.movementMode || '') === movement.mode
+      && String(previousAim.strategy || '') === String(aimStrategy.strategy || '')
+      && Boolean(previousAim.passiveRunner) === Boolean(aimStrategy.passiveRunner)
+      && Number(previousAim.noDamageBucket || 0) === noDamageBucket
+      && Number(previousAim.motionBucket ?? motionBucket) === motionBucket
+      && now() < Number(previousAim.until || 0);
+    if (intercept) {
+      const interceptStrategyReason = aimStrategy.passiveRunner
+        ? (aimStrategy.reason || 'passive-runner-intercept')
+        : (aimStrategy.liveIntercept
+        ? (aimStrategy.reason || 'live-intercept')
+        : 'quadratic-intercept');
+      const interceptConfidence = clamp(Number(intercept.confidence || 0) * Number(opponentProfile.aimConfidenceScale || 1), 0.1, 1);
+      let spreadAngle = 0;
+      const locked = lockCompatible && Number.isFinite(Number(previousAim.spreadAngle));
+      if (locked) {
+        spreadAngle = Number(previousAim.spreadAngle);
+        sign = Math.sign(Number(previousAim.sign || sign)) || sign;
+      } else {
+        const spreadScale = Math.max(0, Number(cfg.combatInterceptSpreadScale ?? 0.18))
+          * (aimStrategy.passiveRunner
+            ? Math.max(0, Number(cfg.combatPassiveRunnerInterceptSpreadScale ?? 0))
+            : (aimStrategy.liveIntercept ? 0.35 : 1));
+        const uncertainty = 1 - Math.max(0, Math.min(1, interceptConfidence));
+        const randomLimit = jitterLimit * spreadScale * (0.35 + uncertainty) * (noDamageLevel ? 1.35 : 1);
+        spreadAngle = (Math.random() * 2 - 1) * randomLimit;
+        bot.combatAim = {
+          targetId,
+          angle: spreadAngle,
+          spreadAngle,
+          sign,
+          movementMode: movement.mode,
+          strategy: aimStrategy.strategy,
+          passiveRunner: Boolean(aimStrategy.passiveRunner),
+          noDamageBucket,
+          motionBucket,
+          intercept: true,
+          until: now() + Math.max(80, Number(cfg.combatAimLockMs) || 450)
+        };
+      }
+      const interceptDx = Number(intercept.x) - Number(self.x);
+      const interceptDy = Number(intercept.y) - Number(self.y);
+      const cos = Math.cos(spreadAngle);
+      const sin = Math.sin(spreadAngle);
+      const currentAngle = Math.atan2(dy, dx);
+      const predictedAngle = Math.atan2(interceptDy, interceptDx);
+      let relativeAngle = predictedAngle - currentAngle + spreadAngle;
+      while (relativeAngle > Math.PI) relativeAngle -= Math.PI * 2;
+      while (relativeAngle < -Math.PI) relativeAngle += Math.PI * 2;
+      return {
+        x: Number(self.x) + interceptDx * cos - interceptDy * sin,
+        y: Number(self.y) + interceptDx * sin + interceptDy * cos,
+        mode: 'intercept',
+        moving,
+        angle: relativeAngle,
+        jitterLimit,
+        distance,
+        motionScale,
+        movementMode: movement.mode,
+        radialSpeed: movement.radialSpeed,
+        lateralSpeed: movement.lateralSpeed,
+        noDamageMs: damage.noDamageMs,
+        noDamageWidened: Boolean(noDamageLevel),
+        precisionAim: false,
+        steadyAim: false,
+        lockedAim: Boolean(locked),
+        liveAim: Boolean(aimSource.nativeAimResolved),
+        liveDistance: aimSource.nativeAimResolved ? Math.round(distance) : null,
+        aimStrategy: aimStrategy.strategy,
+        aimStrategyReason: interceptStrategyReason,
+        sourceDivergenceCm: aimStrategy.sourceDivergence.divergenceCm,
+        sourceDivergenceThresholdCm: aimStrategy.sourceDivergence.thresholdCm,
+        serverStallAim: Boolean(aimStrategy.serverStall),
+        liveInterceptAim: Boolean(aimStrategy.liveIntercept),
+        realBulletPrecisionAim: Boolean(aimStrategy.realBulletPrecision),
+        radialPrecisionAim: Boolean(aimStrategy.radialPrecision),
+        fallbackPrecisionAim: Boolean(aimStrategy.fallbackPrecision),
+        passiveRunnerAim: Boolean(aimStrategy.passiveRunner),
+        interceptAim: true,
+        interceptFlightTicks: intercept.flightTicks,
+        interceptFlightMs: intercept.flightMs,
+        interceptLeadDistance: intercept.leadDistance,
+	        interceptConfidence,
+	        aimConfidence: interceptConfidence,
+	        opponentProfile
+	      };
+	    }
+    let angle = 0;
+    const locked = lockCompatible && Number.isFinite(Number(previousAim.angle));
+    if (locked) {
+      angle = Number(previousAim.angle);
+      sign = Math.sign(Number(previousAim.sign || sign)) || sign;
+    } else {
+      const aimScale = clamp(Math.max(0.2, motionScale), 0.2, 1);
+      const spreadScale = clamp(Math.max(0.35, motionScale), 0.35, 1);
+      const minLead = Math.min(jitterLimit, Math.max(0, Number(cfg.combatAimLeadMinRadians) || 0) * aimScale);
+      const lead = Math.min(jitterLimit, Math.max(minLead, jitterLimit * movement.leadScale * aimScale));
+      const randomSpread = jitterLimit * (noDamageLevel ? 0.35 : 0.22) * spreadScale;
+      angle = sign * lead + (Math.random() * 2 - 1) * randomSpread;
+      if (Math.abs(angle) < minLead && minLead > 0) angle = sign * minLead;
+      angle = clamp(angle, -jitterLimit, jitterLimit);
+      bot.combatAim = {
+        targetId,
+        angle,
+        sign,
+        movementMode: movement.mode,
+        strategy: aimStrategy.strategy,
+        passiveRunner: Boolean(aimStrategy.passiveRunner),
+        noDamageBucket,
+        motionBucket,
+        intercept: false,
+        until: now() + Math.max(80, Number(cfg.combatAimLockMs) || 450)
+      };
+    }
+    const cos = Math.cos(angle);
+    const sin = Math.sin(angle);
+    return {
+      x: Number(self.x) + dx * cos - dy * sin,
+      y: Number(self.y) + dx * sin + dy * cos,
+      mode: 'jitter',
+      moving,
+      angle,
+      jitterLimit,
+      distance,
+      motionScale,
+      movementMode: movement.mode,
+      radialSpeed: movement.radialSpeed,
+      lateralSpeed: movement.lateralSpeed,
+      noDamageMs: damage.noDamageMs,
+      noDamageWidened: Boolean(noDamageLevel),
+      precisionAim: false,
+      steadyAim: false,
+      lockedAim: Boolean(locked),
+      liveAim: Boolean(aimSource.nativeAimResolved),
+      liveDistance: aimSource.nativeAimResolved ? Math.round(distance) : null,
+      aimStrategy: aimStrategy.strategy,
+      aimStrategyReason: aimStrategy.liveIntercept
+        ? (aimStrategy.reason || 'live-intercept')
+        : (aimStrategy.passiveRunner ? (aimStrategy.reason || 'passive-runner-intercept') : 'intercept-fallback'),
+      sourceDivergenceCm: aimStrategy.sourceDivergence.divergenceCm,
+      sourceDivergenceThresholdCm: aimStrategy.sourceDivergence.thresholdCm,
+      serverStallAim: Boolean(aimStrategy.serverStall),
+      liveInterceptAim: Boolean(aimStrategy.liveIntercept),
+      realBulletPrecisionAim: Boolean(aimStrategy.realBulletPrecision),
+      radialPrecisionAim: Boolean(aimStrategy.radialPrecision),
+      fallbackPrecisionAim: Boolean(aimStrategy.fallbackPrecision),
+      passiveRunnerAim: Boolean(aimStrategy.passiveRunner),
+      interceptAim: false,
+	      aimConfidence: Math.max(0.2, Math.min(0.7, Number(opponentProfile.aimConfidenceScale || 1) * (1 - Math.min(0.65, motionScale * 0.35)))),
+	      opponentProfile
+	    };
+	  }
+
+
+
+  function combatLeaveCoverAction(self, target, bullets, targetDistance = null) {
+    const distance = Number.isFinite(Number(targetDistance)) ? Number(targetDistance) : dist(self, target);
+    const selfHp = hpValue(self);
+    const targetHp = combatHpValue(target);
+    const pressure = combatPressureThreat(self, target, bullets);
+    const strafe = tangentMoveForBullet(self, target, pressure, { preferClosing: false });
+    const dodging = Boolean(pressure || strafe.active);
+    const spacing = combatSpacingVector(self, target, distance);
+    const realBulletPressure = Boolean(pressure && !pressure.synthetic);
+    const spacingOverride = realBulletPressure && combatSpacingShouldOverrideBullet(spacing, selfHp, targetHp);
+    let combatMove = dodging
+      ? mergeCombatMove(strafe, spacing, !realBulletPressure || spacingOverride)
+      : mergeCombatMove({ dx: 0, dy: 0 }, spacing, true);
+    const requestedMove = { dx: combatMove.dx, dy: combatMove.dy };
+    const movementSuppressed = combatMovementBlockedByStamina(self) && Boolean(combatMove.dx || combatMove.dy)
+      ? {
+        reason: 'stamina-5s-exhausted',
+        stamina5s: staminaRemaining(self, '5s'),
+        thresholdMs: staminaExhaustedThreshold(),
+        requestedDx: combatMove.dx,
+        requestedDy: combatMove.dy
+      }
+      : null;
+    if (movementSuppressed) combatMove = { ...combatMove, dx: 0, dy: 0, movementSuppressed: true };
+    const aim = combatAimTarget(self, target, { realBulletPressure });
+    const shooting = combatShootingPlan(self, {
+      needsMovement: Boolean(requestedMove.dx || requestedMove.dy),
+      dodging,
+      realBulletPressure,
+      targetDistance: distance,
+      targetHp,
+      steadyAim: Boolean(aim.steadyAim),
+	      engagedCombat: target.combatIntent === 'engaged',
+	      targetActive: isCurrentlyActive(target),
+	      targetMoving: speed(target) >= cfg.combatStationarySpeed,
+	      noDamageMs: Number(aim.noDamageMs || 0),
+	      aimConfidence: aim.aimConfidence,
+	      motionScale: aim.motionScale
+	    });
+    return {
+      reason: movementSuppressed
+        ? 'combat-stamina-hold'
+        : (shooting.suppressed
+          ? 'combat-stamina-conserve'
+          : (realBulletPressure && !spacingOverride
+            ? 'combat-leave-dodge'
+            : (spacing.active && (combatMove.dx || combatMove.dy) ? 'combat-leave-spacing' : 'combat-leave-cover'))),
+      dx: combatMove.dx,
+      dy: combatMove.dy,
+      shoot: shooting.shoot,
+      forceShoot: shooting.forceShoot,
+      shootEveryMs: shooting.shootEveryMs,
+      aimTarget: {
+        x: aim.x,
+        y: aim.y,
+        mode: aim.mode,
+        angle: Number.isFinite(aim.angle) ? Number(aim.angle.toFixed(4)) : 0,
+        jitterLimit: Number.isFinite(aim.jitterLimit) ? Number(aim.jitterLimit.toFixed(4)) : 0,
+        motionScale: Number.isFinite(Number(aim.motionScale)) ? Number(Number(aim.motionScale).toFixed(2)) : 0,
+        movementMode: aim.movementMode || '',
+        strategy: aim.aimStrategy || '',
+        strategyReason: aim.aimStrategyReason || '',
+        noDamageMs: Number.isFinite(Number(aim.noDamageMs)) ? Math.round(Number(aim.noDamageMs)) : 0,
+        widened: Boolean(aim.noDamageWidened),
+        precision: Boolean(aim.precisionAim),
+        steady: Boolean(aim.steadyAim),
+        locked: Boolean(aim.lockedAim),
+        live: Boolean(aim.liveAim),
+        liveDistance: Number.isFinite(Number(aim.liveDistance)) ? Math.round(Number(aim.liveDistance)) : null,
+        sourceDivergenceCm: Number.isFinite(Number(aim.sourceDivergenceCm)) ? Math.round(Number(aim.sourceDivergenceCm)) : null,
+        sourceDivergenceThresholdCm: Number.isFinite(Number(aim.sourceDivergenceThresholdCm)) ? Math.round(Number(aim.sourceDivergenceThresholdCm)) : null,
+        serverStall: Boolean(aim.serverStallAim),
+        realBulletPrecision: Boolean(aim.realBulletPrecisionAim),
+        radialPrecision: Boolean(aim.radialPrecisionAim),
+        fallbackPrecision: Boolean(aim.fallbackPrecisionAim),
+	        intercept: Boolean(aim.interceptAim),
+	        interceptFlightMs: Number.isFinite(Number(aim.interceptFlightMs)) ? Math.round(Number(aim.interceptFlightMs)) : null,
+	        interceptLeadDistance: Number.isFinite(Number(aim.interceptLeadDistance)) ? Math.round(Number(aim.interceptLeadDistance)) : null,
+	        interceptConfidence: Number.isFinite(Number(aim.interceptConfidence)) ? Number(Number(aim.interceptConfidence).toFixed(2)) : null,
+	        aimConfidence: Number.isFinite(Number(aim.aimConfidence)) ? Number(Number(aim.aimConfidence).toFixed(2)) : null,
+	        opponentProfile: aim.opponentProfile || null
+	      },
+      incomingBullet: pressure ? {
+        id: pressure.id,
+        ownerId: pressure.ownerId,
+        distance: Math.round(Number(pressure.distance || 0)),
+        laneDistance: Math.round(Number(pressure.laneDistance || 0)),
+        signedLaneDistance: Number.isFinite(Number(pressure.signedLaneDistance)) ? Math.round(Number(pressure.signedLaneDistance)) : null,
+        timeToImpactMs: Number.isFinite(Number(pressure.timeToImpactMs)) ? Math.round(Number(pressure.timeToImpactMs)) : null,
+        threatCount: Number(pressure.threatCount || (Array.isArray(pressure.threats) ? pressure.threats.length : 1)),
+        synthetic: Boolean(pressure.synthetic),
+        reason: pressure.reason || ''
+      } : null,
+      movementSuppressed,
+      shooting,
+      strafe: dodging ? {
+        dx: combatMove.dx,
+        dy: combatMove.dy,
+        sign: strafe.sign,
+        precise: Boolean(strafe.precise),
+        locked: Boolean(strafe.locked),
+        lockOverridden: Boolean(strafe.lockOverridden),
+        carried: Boolean(strafe.carried),
+        threatField: strafe.threatField ? {
+          dx: strafe.threatField.dx,
+          dy: strafe.threatField.dy,
+          directHitCount: strafe.threatField.directHitCount,
+          minCpaDistance: Number.isFinite(Number(strafe.threatField.minCpaDistance)) ? Math.round(Number(strafe.threatField.minCpaDistance)) : null,
+          minTimeToImpactMs: Number.isFinite(Number(strafe.threatField.minTimeToImpactMs)) ? Math.round(Number(strafe.threatField.minTimeToImpactMs)) : null
+        } : null
+      } : null,
+      spacing: spacing.active ? {
+        dx: spacing.dx,
+        dy: spacing.dy,
+        reason: spacing.reason,
+        distance: Math.round(spacing.distance),
+        minRange: Math.round(spacing.minRange),
+        preferredRange: Math.round(spacing.preferredRange),
+        merged: Boolean(combatMove.spacingMerged),
+        overrideBullet: Boolean(spacingOverride)
+      } : null
+    };
+  }
+
+
+  function buildCombatAction(self, target, bullets) {
+    const selfHp = hpValue(self);
+    const targetHp = combatHpValue(target);
+    const targetDistance = Number.isFinite(Number(target.distance)) ? Number(target.distance) : dist(self, target);
+    const targetMotionScale = combatAimMotionScale(target);
+    const currentCombatTarget = bot.combatTarget && combatTargetId(bot.combatTarget) === combatTargetId(target)
+      ? bot.combatTarget
+      : null;
+    const combatOriginIntent = String(target?.combatEngagement?.originIntent || currentCombatTarget?.originIntent || target.combatIntent || '');
+    const combatOriginReason = String(target?.combatEngagement?.originReason || currentCombatTarget?.originReason || '');
+    const seenTargetRealBulletAt = Number(target?.combatEngagement?.seenTargetRealBulletAt || currentCombatTarget?.seenTargetRealBulletAt || 0);
+    const seenTargetRealBulletMs = seenTargetRealBulletAt ? Math.max(0, Date.now() - seenTargetRealBulletAt) : 0;
+    const targetMoving = speed(target) >= cfg.combatStationarySpeed
+      || targetMotionScale >= Math.max(0, Number(cfg.combatAimMovingScaleThreshold || 0.15));
+    const baseTarget = {
+      id: target.user_id,
+      name: target.name,
+      x: target.x,
+      y: target.y,
+      vx: Number(target.vx) || 0,
+      vy: Number(target.vy) || 0,
+      hp: targetHp,
+      knownHp: knownHpValue(target),
+      drop: target.drop,
+      distance: Math.round(targetDistance),
+      moving: targetMoving,
+      motionScale: Number(targetMotionScale.toFixed(2)),
+      combatIntent: target.combatIntent || '',
+      score: Number.isFinite(Number(target.combatOpportunityScore)) ? Number(target.combatOpportunityScore) : null,
+      competingCoinScore: Number.isFinite(Number(target.competingCoinScore)) ? Number(target.competingCoinScore) : null,
+      mode: target.current_join_mode || target.mode || '',
+      life: target.life || '',
+      active: isCurrentlyActive(target),
+      firing: isFiringEntity(target),
+      invulnerable: isInvulnerable(target),
+      combatOriginIntent,
+      combatOriginReason: combatOriginReason || '',
+      seenTargetRealBulletMs: seenTargetRealBulletMs || 0
+	    };
+	    if (selfHp < cfg.combatCriticalHpLeaveThreshold) {
+	      return combatLeaveActionForCombatActionCore('combat-critical-hp-leave', baseTarget, { selfHp, targetHp }, combatLeaveCoverAction(self, target, bullets, targetDistance), { combatExitSummary: (summaryReason, summaryTarget, summaryState) => combatExitSummaryForCombatActionCore(summaryReason, summaryTarget, summaryState, { cfg, actorLabel, hpDisplay, formatDurationMs }), clamp });
+	    }
+	    if (selfHp < cfg.combatLowHpLeaveThreshold && selfHp < targetHp) {
+	      return combatLeaveActionForCombatActionCore('combat-low-hp-leave', baseTarget, { selfHp, targetHp }, combatLeaveCoverAction(self, target, bullets, targetDistance), { combatExitSummary: (summaryReason, summaryTarget, summaryState) => combatExitSummaryForCombatActionCore(summaryReason, summaryTarget, summaryState, { cfg, actorLabel, hpDisplay, formatDurationMs }), clamp });
+    }
+    const knownSelfHp = knownHpValue(self);
+    const knownTargetHp = knownHpValue(target);
+    const hpGap = Number(knownTargetHp) - Number(knownSelfHp);
+    let disadvantageObservation = null;
+    if (knownSelfHp > cfg.combatLowHpLeaveThreshold
+      && Number.isFinite(hpGap)
+      && hpGap > cfg.combatHighHpDisadvantageGap) {
+      disadvantageObservation = combatDisadvantageObservationState(target, 'hp-gap', { selfHp, targetHp, hpGap });
+      if (disadvantageObservation?.ready) {
+        return combatLeaveActionForCombatActionCore('combat-hp-disadvantage-leave', baseTarget, { selfHp, targetHp, hpGap, disadvantageObservation }, combatLeaveCoverAction(self, target, bullets, targetDistance), { combatExitSummary: (summaryReason, summaryTarget, summaryState) => combatExitSummaryForCombatActionCore(summaryReason, summaryTarget, summaryState, { cfg, actorLabel, hpDisplay, formatDurationMs }), clamp });
+      }
+    }
+    let pressure = combatPressureThreat(self, target, bullets);
+    const spacing = combatSpacingVector(self, target, targetDistance);
+    const damageState = combatAimDamageState(target);
+    let passiveRunner = combatPassiveRunnerState(self, target, targetDistance, damageState, pressure, targetMotionScale);
+    const retreatingTarget = combatRetreatingTargetState(self, target, targetDistance, damageState);
+    if (retreatingTarget.active && passiveRunner.active) {
+      passiveRunner = { ...passiveRunner, active: false, suppressedBy: retreatingTarget.reason || 'retreating-target' };
+    }
+    if (passiveRunner.active && pressure?.synthetic && pressure.reason === 'target-pressure') pressure = null;
+    const realBulletPressure = Boolean(pressure && !pressure.synthetic);
+    const targetRealBulletPressure = Boolean(
+      pressure
+      && !pressure.synthetic
+      && pressure.ownerId !== null
+      && pressure.ownerId !== undefined
+      && combatTargetId(target)
+      && String(pressure.ownerId) === String(combatTargetId(target))
+    );
+    const closeRisk = combatLowHpCloseRiskState(selfHp, targetHp, spacing, realBulletPressure);
+    if (closeRisk) {
+      return combatLeaveActionForCombatActionCore('combat-low-hp-leave', baseTarget, { selfHp, targetHp, closeRisk }, combatLeaveCoverAction(self, target, bullets, targetDistance), { combatExitSummary: (summaryReason, summaryTarget, summaryState) => combatExitSummaryForCombatActionCore(summaryReason, summaryTarget, summaryState, { cfg, actorLabel, hpDisplay, formatDurationMs }), clamp });
+    }
+	    const pressureDisadvantage = combatPressureDisadvantageState(selfHp, targetHp, targetDistance, realBulletPressure);
+		    if (pressureDisadvantage) {
+		      return combatLeaveActionForCombatActionCore('combat-hp-disadvantage-leave', baseTarget, {
+		        selfHp,
+		        targetHp,
+		        hpGap: pressureDisadvantage.hpGap,
+		        pressureDisadvantage
+		      }, combatLeaveCoverAction(self, target, bullets, targetDistance), { combatExitSummary: (summaryReason, summaryTarget, summaryState) => combatExitSummaryForCombatActionCore(summaryReason, summaryTarget, summaryState, { cfg, actorLabel, hpDisplay, formatDurationMs }), clamp });
+		    }
+	    const sustainedPressureDisadvantage = combatSustainedPressureDisadvantageState(
+	      selfHp,
+	      targetHp,
+	      targetDistance,
+	      damageState.noDamageMs,
+	      targetRealBulletPressure
+	    );
+	    if (sustainedPressureDisadvantage) {
+	      return combatLeaveActionForCombatActionCore('combat-hp-disadvantage-leave', baseTarget, {
+	        selfHp,
+	        targetHp,
+	        hpGap: sustainedPressureDisadvantage.hpGap,
+	        sustainedPressureDisadvantage
+	      }, combatLeaveCoverAction(self, target, bullets, targetDistance), { combatExitSummary: (summaryReason, summaryTarget, summaryState) => combatExitSummaryForCombatActionCore(summaryReason, summaryTarget, summaryState, { cfg, actorLabel, hpDisplay, formatDurationMs }), clamp });
+	    }
+	    const tradeEstimate = combatTradeEstimate(self, target);
+    if (!disadvantageObservation && tradeEstimate?.active) {
+      disadvantageObservation = combatDisadvantageObservationState(target, 'trade-estimate', {
+        selfHp,
+        targetHp,
+        hpGap,
+        ...tradeEstimate
+      });
+      if (disadvantageObservation?.ready) {
+        return combatLeaveActionForCombatActionCore('combat-hp-disadvantage-leave', baseTarget, {
+          selfHp,
+          targetHp,
+          hpGap,
+          tradeEstimate,
+          disadvantageObservation
+        }, combatLeaveCoverAction(self, target, bullets, targetDistance), { combatExitSummary: (summaryReason, summaryTarget, summaryState) => combatExitSummaryForCombatActionCore(summaryReason, summaryTarget, summaryState, { cfg, actorLabel, hpDisplay, formatDurationMs }), clamp });
+      }
+    }
+    if (!disadvantageObservation) clearCombatDisadvantageObservation('not-disadvantaged');
+	    const serverStallNoDamage = combatServerStallNoDamageLeaveState(
+      selfHp,
+      targetHp,
+      damageState.noDamageMs,
+      realBulletPressure,
+      summarizeServerPositionStall()
+    );
+    if (serverStallNoDamage && !retreatingTarget.disengage) {
+      return combatLeaveActionForCombatActionCore('combat-hp-disadvantage-leave', baseTarget, {
+        selfHp,
+        targetHp,
+        hpGap: serverStallNoDamage.hpGap,
+        noDamageMs: damageState.noDamageMs,
+        serverStallNoDamage
+      }, combatLeaveCoverAction(self, target, bullets, targetDistance), { combatExitSummary: (summaryReason, summaryTarget, summaryState) => combatExitSummaryForCombatActionCore(summaryReason, summaryTarget, summaryState, { cfg, actorLabel, hpDisplay, formatDurationMs }), clamp });
+    }
+    if (retreatingTarget.disengage) {
+      clearCombatDisadvantageObservation('combat-disengage-range');
+      clearCombatEngagement('combat-disengage-range');
+      return {
+        kind: 'wait',
+        reason: 'combat-disengage-range',
+        combat: false,
+        ignoreReturnBlock: true,
+        shoot: false,
+        forceShoot: false,
+        dx: 0,
+        dy: 0,
+        combatDisengage: retreatingTarget
+      };
+    }
+    const outOfRangeFinishPressure = combatOutOfRangeFinishPressureState(
+      self,
+      target,
+      targetDistance,
+      selfHp,
+      targetHp,
+      damageState,
+      retreatingTarget
+    );
+    const outOfRangeReengage = combatOutOfRangeReengageState(
+      self,
+      target,
+      targetDistance,
+      selfHp,
+      targetHp,
+      retreatingTarget,
+      targetRealBulletPressure
+    );
+    if (targetDistance > Number(cfg.combatAttackRange || 0)) {
+      const outOfRangeCloseMove = outOfRangeFinishPressure.active
+        ? outOfRangeFinishPressure
+        : (outOfRangeReengage.active ? outOfRangeReengage : null);
+      const outOfRangeDodge = combatOutOfRangeDodgeAction(self, target, pressure, baseTarget, selfHp, targetHp, retreatingTarget, outOfRangeCloseMove);
+      if (outOfRangeDodge) return outOfRangeDodge;
+      if (outOfRangeFinishPressure.active) {
+        return {
+          kind: 'attack',
+          reason: 'combat-finish-reengage',
+          combat: true,
+          ignoreReturnBlock: true,
+          shoot: false,
+          forceShoot: false,
+          dx: outOfRangeFinishPressure.dx,
+          dy: outOfRangeFinishPressure.dy,
+          target: baseTarget,
+          combatState: {
+            selfHp,
+            targetHp,
+            outOfRangeFinishPressure,
+            retreatingTarget: retreatingTarget.active ? retreatingTarget : null
+          }
+        };
+      }
+      if (outOfRangeReengage.active) {
+        return {
+          kind: 'attack',
+          reason: 'combat-out-of-range-reengage',
+          combat: true,
+          ignoreReturnBlock: true,
+          shoot: false,
+          forceShoot: false,
+          dx: outOfRangeReengage.dx,
+          dy: outOfRangeReengage.dy,
+          target: baseTarget,
+          combatState: {
+            selfHp,
+            targetHp,
+            outOfRangeReengage,
+            retreatingTarget: retreatingTarget.active ? retreatingTarget : null
+          }
+        };
+      }
+      return {
+        kind: 'wait',
+        reason: 'combat-out-of-range-hold',
+        combat: true,
+        ignoreReturnBlock: true,
+        shoot: false,
+        forceShoot: false,
+        dx: 0,
+        dy: 0,
+        target: baseTarget,
+        combatState: {
+          selfHp,
+          targetHp,
+          outOfRangeHold: {
+            distance: Math.round(targetDistance),
+            attackRange: Math.round(Number(cfg.combatAttackRange || 0)),
+            disengageRange: Math.round(Math.max(Number(cfg.combatAttackRange || 0), Number(cfg.combatDisengageRange || cfg.combatEngageGraceRange || 0))),
+            outOfRangeMs: target.combatEngagement?.outOfRangeMs || 0,
+            graceRemainingMs: target.combatEngagement?.graceRemainingMs || 0
+          }
+        }
+      };
+    }
+    const finishPressure = combatFinishPressureState(self, target, targetDistance, selfHp, targetHp, retreatingTarget);
+    const farNoDamageClose = combatFarNoDamageCloseVector(
+      self,
+      target,
+      targetDistance,
+      damageState.noDamageMs,
+      selfHp,
+      targetHp
+    );
+    const retreatingFighterClose = combatRetreatingFighterCloseVector(
+      self,
+      target,
+      targetDistance,
+      damageState.noDamageMs,
+      selfHp,
+      targetHp,
+      retreatingTarget,
+      targetRealBulletPressure
+    );
+    const retreatingBlocksClose = retreatingTarget.active && !retreatingFighterClose.active;
+    const basePressureClose = finishPressure.active
+      ? finishPressure
+      : (retreatingFighterClose.active
+        ? retreatingFighterClose
+        : (retreatingBlocksClose
+        ? { active: false, dx: 0, dy: 0, distance: targetDistance, closeRange: cfg.combatPressureCloseRange, noDamageMs: damageState.noDamageMs, retreatingTarget }
+        : (farNoDamageClose.active
+          ? farNoDamageClose
+          : combatPressureCloseVector(self, target, targetDistance, damageState.noDamageMs, selfHp))));
+    const passiveRunnerClose = !basePressureClose.active && !retreatingTarget.active
+      ? combatPassiveRunnerCloseVector(self, target, targetDistance, passiveRunner)
+      : { active: false, dx: 0, dy: 0, distance: targetDistance, closeRange: Number(cfg.combatPassiveRunnerCloseRange || 0), noDamageMs: damageState.noDamageMs, reason: 'passive-runner' };
+    const pressureClose = passiveRunnerClose.active ? passiveRunnerClose : basePressureClose;
+    const strafe = tangentMoveForBullet(self, target, pressure, { preferClosing: pressureClose.active });
+    const dodging = Boolean(pressure || strafe.active);
+    const spacingOverride = realBulletPressure && combatSpacingShouldOverrideBullet(spacing, selfHp, targetHp);
+    let combatMove = dodging
+      ? mergeCombatMove(strafe, spacing, !realBulletPressure || spacingOverride)
+      : mergeCombatMove({ dx: 0, dy: 0 }, spacing, true);
+    const safePressureCloseOverride = realBulletPressure
+      ? combatSafeCloseMoveOverride(self, target, pressure, pressureClose)
+      : null;
+    combatMove = safePressureCloseOverride
+      ? {
+        ...combatMove,
+        dx: safePressureCloseOverride.dx,
+        dy: safePressureCloseOverride.dy,
+        safeCloseOverride: safePressureCloseOverride
+      }
+      : mergeCombatMove(combatMove, pressureClose, !realBulletPressure);
+    const requestedMove = { dx: combatMove.dx, dy: combatMove.dy };
+    const movementSuppressed = combatMovementBlockedByStamina(self) && Boolean(combatMove.dx || combatMove.dy)
+      ? {
+        reason: 'stamina-5s-exhausted',
+        stamina5s: staminaRemaining(self, '5s'),
+        thresholdMs: staminaExhaustedThreshold(),
+        requestedDx: combatMove.dx,
+        requestedDy: combatMove.dy
+      }
+      : null;
+    if (movementSuppressed) combatMove = { ...combatMove, dx: 0, dy: 0, movementSuppressed: true };
+    const spacingActive = Boolean(spacing.active && (combatMove.dx || combatMove.dy));
+    const aim = combatAimTarget(self, target, { realBulletPressure, passiveRunner: passiveRunner.active });
+    const pressureCloseActive = Boolean(pressureClose.active && (combatMove.dx || combatMove.dy));
+    const farNoDamageCloseForTrend = Boolean(pressureClose.farNoDamageClose || pressureClose.reason === 'far-no-damage');
+    const trend = combatTrendState(self, {
+      needsMovement: Boolean(requestedMove.dx || requestedMove.dy),
+      dodging,
+      realBulletPressure,
+      targetRealBulletPressure,
+      pressureClose: pressureClose.active,
+      targetDistance,
+      targetHp,
+      steadyAim: Boolean(aim.steadyAim),
+      engagedCombat: target.combatIntent === 'engaged',
+      targetActive: isCurrentlyActive(target),
+      passiveRunner: passiveRunner.active,
+      opponentProbeEngagedMs: passiveRunner.engagedMs,
+      opponentProbeSeenTargetRealBulletMs: passiveRunner.seenTargetRealBulletMs,
+	      targetMoving,
+	      noDamageMs: Number(aim.noDamageMs || 0),
+	      aimConfidence: aim.aimConfidence,
+	      motionScale: aim.motionScale,
+	      farNoDamageClose: farNoDamageCloseForTrend
+	    });
+    let shooting = combatShootingPlan(self, {
+      trend,
+      needsMovement: Boolean(requestedMove.dx || requestedMove.dy),
+      dodging,
+      realBulletPressure,
+      targetRealBulletPressure,
+      pressureClose: pressureClose.active,
+      targetDistance: targetDistance,
+      targetHp,
+      steadyAim: Boolean(aim.steadyAim),
+	      engagedCombat: target.combatIntent === 'engaged',
+	      targetActive: isCurrentlyActive(target),
+	      passiveRunner: passiveRunner.active,
+      opponentProbeEngagedMs: passiveRunner.engagedMs,
+      opponentProbeSeenTargetRealBulletMs: passiveRunner.seenTargetRealBulletMs,
+	      targetMoving,
+	      noDamageMs: Number(aim.noDamageMs || 0),
+	      aimConfidence: aim.aimConfidence,
+	      motionScale: aim.motionScale,
+	      farNoDamageClose: farNoDamageCloseForTrend
+	    });
+    if (retreatingTarget.suppressFire && !finishPressure.active && !retreatingFighterClose.active) {
+      shooting = {
+        ...shooting,
+        shoot: false,
+        forceShoot: false,
+        suppressed: true,
+        reason: 'target-retreating-edge',
+        retreatingTarget
+      };
+    }
+    if (finishPressure.active && !shooting.suppressed) {
+      const finishEveryMs = Math.max(
+        Number(shooting.shootEveryMs || 0),
+        Number(cfg.combatFinishPressureShootEveryMs || cfg.combatShootConserveEveryMs || cfg.combatShootEveryMs || 0)
+      );
+      shooting = {
+        ...shooting,
+        shoot: true,
+        shootEveryMs: finishEveryMs || shooting.shootEveryMs,
+        reason: 'finish-pressure',
+        throttled: true,
+        finishPressure
+      };
+    }
+    const baseReason = realBulletPressure
+      ? (spacingOverride ? 'combat-spacing-dodge' : 'combat-tangent-dodge')
+        : (pressureCloseActive && pressureClose.reason === 'passive-runner'
+        ? 'combat-passive-runner-close'
+        : (spacingActive
+        ? (dodging ? 'combat-spacing-dodge' : 'combat-spacing')
+        : (pressureCloseActive ? (finishPressure.active ? 'combat-finish-pressure' : (retreatingFighterClose.active ? 'combat-retreating-fighter-close' : (farNoDamageClose.active ? 'combat-far-pressure-close' : 'combat-pressure-close'))) : (dodging ? 'combat-tangent-dodge' : 'combat-attack'))));
+    return {
+      kind: 'attack',
+      reason: movementSuppressed
+        ? 'combat-stamina-hold'
+        : (retreatingTarget.suppressFire && !finishPressure.active && !retreatingFighterClose.active ? 'combat-target-retreating' : (shooting.suppressed ? 'combat-stamina-conserve' : (shooting.reason === 'finish-pressure' ? 'combat-finish-pressure' : (shooting.throttled && shooting.reason !== 'opponent-probe' ? 'combat-burst-fire' : baseReason)))),
+      combat: true,
+      ignoreReturnBlock: true,
+      shoot: shooting.shoot,
+      forceShoot: shooting.forceShoot,
+      shootEveryMs: shooting.shootEveryMs,
+      dx: combatMove.dx,
+      dy: combatMove.dy,
+      target: baseTarget,
+      aimTarget: {
+        x: aim.x,
+        y: aim.y,
+        mode: aim.mode,
+        angle: Number.isFinite(aim.angle) ? Number(aim.angle.toFixed(4)) : 0,
+        jitterLimit: Number.isFinite(aim.jitterLimit) ? Number(aim.jitterLimit.toFixed(4)) : 0,
+        motionScale: Number.isFinite(Number(aim.motionScale)) ? Number(Number(aim.motionScale).toFixed(2)) : 0,
+        movementMode: aim.movementMode || '',
+        strategy: aim.aimStrategy || '',
+        strategyReason: aim.aimStrategyReason || '',
+        noDamageMs: Number.isFinite(Number(aim.noDamageMs)) ? Math.round(Number(aim.noDamageMs)) : 0,
+        widened: Boolean(aim.noDamageWidened),
+        precision: Boolean(aim.precisionAim),
+        steady: Boolean(aim.steadyAim),
+        locked: Boolean(aim.lockedAim),
+        live: Boolean(aim.liveAim),
+        liveDistance: Number.isFinite(Number(aim.liveDistance)) ? Math.round(Number(aim.liveDistance)) : null,
+        sourceDivergenceCm: Number.isFinite(Number(aim.sourceDivergenceCm)) ? Math.round(Number(aim.sourceDivergenceCm)) : null,
+        sourceDivergenceThresholdCm: Number.isFinite(Number(aim.sourceDivergenceThresholdCm)) ? Math.round(Number(aim.sourceDivergenceThresholdCm)) : null,
+        serverStall: Boolean(aim.serverStallAim),
+        realBulletPrecision: Boolean(aim.realBulletPrecisionAim),
+        radialPrecision: Boolean(aim.radialPrecisionAim),
+        fallbackPrecision: Boolean(aim.fallbackPrecisionAim),
+        passiveRunner: Boolean(aim.passiveRunnerAim),
+	        intercept: Boolean(aim.interceptAim),
+	        interceptFlightMs: Number.isFinite(Number(aim.interceptFlightMs)) ? Math.round(Number(aim.interceptFlightMs)) : null,
+	        interceptLeadDistance: Number.isFinite(Number(aim.interceptLeadDistance)) ? Math.round(Number(aim.interceptLeadDistance)) : null,
+	        interceptConfidence: Number.isFinite(Number(aim.interceptConfidence)) ? Number(Number(aim.interceptConfidence).toFixed(2)) : null,
+	        aimConfidence: Number.isFinite(Number(aim.aimConfidence)) ? Number(Number(aim.aimConfidence).toFixed(2)) : null,
+	        opponentProfile: aim.opponentProfile || null
+	      },
+      incomingBullet: pressure ? {
+        id: pressure.id,
+        ownerId: pressure.ownerId,
+        distance: Math.round(Number(pressure.distance || 0)),
+        laneDistance: Math.round(Number(pressure.laneDistance || 0)),
+        signedLaneDistance: Number.isFinite(Number(pressure.signedLaneDistance)) ? Math.round(Number(pressure.signedLaneDistance)) : null,
+        timeToImpactMs: Number.isFinite(Number(pressure.timeToImpactMs)) ? Math.round(Number(pressure.timeToImpactMs)) : null,
+        threatCount: Number(pressure.threatCount || (Array.isArray(pressure.threats) ? pressure.threats.length : 1)),
+        synthetic: Boolean(pressure.synthetic),
+        reason: pressure.reason || ''
+      } : null,
+      combatState: {
+        selfHp,
+        targetHp,
+        combatOriginIntent,
+        combatOriginReason: combatOriginReason || '',
+        seenTargetRealBulletMs: seenTargetRealBulletMs || 0,
+        targetRealBulletPressure,
+        aim: {
+          movementMode: aim.movementMode || '',
+          strategy: aim.aimStrategy || '',
+          strategyReason: aim.aimStrategyReason || '',
+          angle: Number.isFinite(aim.angle) ? Number(aim.angle.toFixed(4)) : 0,
+          motionScale: Number.isFinite(Number(aim.motionScale)) ? Number(Number(aim.motionScale).toFixed(2)) : 0,
+          noDamageMs: Number.isFinite(Number(aim.noDamageMs)) ? Math.round(Number(aim.noDamageMs)) : 0,
+          widened: Boolean(aim.noDamageWidened),
+          precision: Boolean(aim.precisionAim),
+          steady: Boolean(aim.steadyAim),
+          locked: Boolean(aim.lockedAim),
+          live: Boolean(aim.liveAim),
+          liveDistance: Number.isFinite(Number(aim.liveDistance)) ? Math.round(Number(aim.liveDistance)) : null,
+          sourceDivergenceCm: Number.isFinite(Number(aim.sourceDivergenceCm)) ? Math.round(Number(aim.sourceDivergenceCm)) : null,
+          sourceDivergenceThresholdCm: Number.isFinite(Number(aim.sourceDivergenceThresholdCm)) ? Math.round(Number(aim.sourceDivergenceThresholdCm)) : null,
+          serverStall: Boolean(aim.serverStallAim),
+          realBulletPrecision: Boolean(aim.realBulletPrecisionAim),
+          radialPrecision: Boolean(aim.radialPrecisionAim),
+          fallbackPrecision: Boolean(aim.fallbackPrecisionAim),
+          passiveRunner: Boolean(aim.passiveRunnerAim),
+        intercept: Boolean(aim.interceptAim),
+        interceptFlightMs: Number.isFinite(Number(aim.interceptFlightMs)) ? Math.round(Number(aim.interceptFlightMs)) : null,
+        interceptLeadDistance: Number.isFinite(Number(aim.interceptLeadDistance)) ? Math.round(Number(aim.interceptLeadDistance)) : null,
+	        interceptConfidence: Number.isFinite(Number(aim.interceptConfidence)) ? Number(Number(aim.interceptConfidence).toFixed(2)) : null,
+	        aimConfidence: Number.isFinite(Number(aim.aimConfidence)) ? Number(Number(aim.aimConfidence).toFixed(2)) : null,
+	        opponentProfile: aim.opponentProfile || null
+	        },
+        strafe: dodging ? {
+          dx: combatMove.dx,
+          dy: combatMove.dy,
+          sign: strafe.sign,
+	          precise: Boolean(strafe.precise),
+	          locked: Boolean(strafe.locked),
+	          lockOverridden: Boolean(strafe.lockOverridden),
+          closingBiased: Boolean(strafe.closingBiased),
+	          carried: Boolean(strafe.carried),
+          holdRemainingMs: strafe.holdRemainingMs || 0,
+          carryRemainingMs: strafe.carryRemainingMs || 0,
+          spacingMerged: Boolean(combatMove.spacingMerged),
+          threatField: strafe.threatField ? {
+            dx: strafe.threatField.dx,
+            dy: strafe.threatField.dy,
+            directHitCount: strafe.threatField.directHitCount,
+            minCpaDistance: Number.isFinite(Number(strafe.threatField.minCpaDistance)) ? Math.round(Number(strafe.threatField.minCpaDistance)) : null,
+            minTimeToImpactMs: Number.isFinite(Number(strafe.threatField.minTimeToImpactMs)) ? Math.round(Number(strafe.threatField.minTimeToImpactMs)) : null
+          } : null
+        } : null,
+        spacing: spacingActive ? {
+          dx: spacing.dx,
+          dy: spacing.dy,
+          reason: spacing.reason,
+          distance: Math.round(spacing.distance),
+          minRange: Math.round(spacing.minRange),
+          preferredRange: Math.round(spacing.preferredRange),
+          radialSpeed: Number.isFinite(Number(spacing.radialSpeed)) ? Math.round(Number(spacing.radialSpeed)) : null,
+          merged: Boolean(combatMove.spacingMerged),
+          overrideBullet: Boolean(spacingOverride)
+        } : null,
+        pressureClose: pressureClose.active ? {
+          dx: pressureClose.dx,
+          dy: pressureClose.dy,
+          reason: pressureClose.reason,
+          distance: Math.round(pressureClose.distance),
+          closeRange: Math.round(pressureClose.closeRange),
+          startRange: Number.isFinite(Number(pressureClose.startRange)) ? Math.round(Number(pressureClose.startRange)) : null,
+          noDamageMs: Math.round(pressureClose.noDamageMs),
+          farNoDamageClose: Boolean(pressureClose.farNoDamageClose || pressureClose.reason === 'far-no-damage'),
+          preferClosing: Boolean(pressureClose.active),
+          merged: Boolean(!realBulletPressure || safePressureCloseOverride),
+          safeCloseOverride: safePressureCloseOverride ? {
+            dx: safePressureCloseOverride.dx,
+            dy: safePressureCloseOverride.dy,
+            reason: safePressureCloseOverride.reason,
+            minCpaDistance: Number.isFinite(Number(safePressureCloseOverride.threatField?.minCpaDistance)) ? Math.round(Number(safePressureCloseOverride.threatField.minCpaDistance)) : null,
+            directHitCount: Number(safePressureCloseOverride.threatField?.directHitCount || 0)
+          } : null
+        } : null,
+        passiveRunner,
+        movementSuppressed,
+        shooting,
+        disadvantageObservation,
+        retreatingTarget: retreatingTarget.active ? retreatingTarget : null
+      }
+    };
+  }
+
+
+
+
+
+
+
+
+  return {
+    rememberCombatEngagement,
+    clearCombatEngagement,
+    summarizeOfflineThreat,
+    assessOfflineSafety,
+    pickActiveCombatWaitThreat,
+    activeCombatThreatWaitAction,
+    recentCombatInjuryActive,
+    lowValueActiveDropMax,
+    isLowValueActiveCombatTarget,
+    proactiveActiveKillStaminaBudgetMs,
+    proactiveActiveCombatStaminaAffordable,
+    activeCombatBudgetBlocked,
+    activeCombatRequiresThreatEvidence,
+    incomingOwnerMatchesTarget,
+    activeCombatThreatensSelf,
+    lowValueActiveThreatensSelf,
+    combatDodgeThreatRange,
+    combatTargetPriority,
+    isDefensiveCombatTarget,
+    isProfitableCombatTarget,
+    combatHpGapDisadvantaged,
+    profitCombatDisadvantaged,
+    pickCombatTarget,
+    combatEngageGraceRange,
+    combatTargetCandidateRange,
+    combatDodgeOnlyCandidateRange,
+    combatEngagedCandidate,
+    pickEngagedCombatTarget,
+    defensiveTargetOverridesEngaged,
+    incomingBulletRequiresTargetSwitch,
+    pickOpportunisticShotTarget,
+    actionOpportunityScore,
+    opportunisticShotBeatsAction,
+    attachOpportunisticShot,
+    buildOpportunisticShotWait,
+    combatMoveVelocityForDirection,
+    combatBulletThreats,
+    incomingBulletThreat,
+    combatThreatFieldCandidate,
+    combatBulletThreatField,
+    combatStrafeHoldMs,
+    combatStrafeKey,
+    combatStrafeMatchesTarget,
+    combatPreciseStrafeSign,
+    selectCombatStrafeSign,
+    tangentMoveForBullet,
+    combatMoveClosesDistance,
+    combatSafeCloseMoveOverride,
+    combatSpacingVector,
+    combatSpacingShouldOverrideBullet,
+    combatLowHpCloseRiskState,
+    combatPressureDisadvantageState,
+    combatSustainedPressureDisadvantageState,
+    combatPressureCloseVector,
+    combatFarNoDamageCloseVector,
+    combatRetreatingFighterCloseVector,
+    combatFinishPressureState,
+    combatOutOfRangeFinishPressureState,
+    combatOutOfRangeReengageState,
+    combatPassiveRunnerState,
+    combatPassiveRunnerCloseVector,
+    mergeCombatMove,
+    combatPressureThreat,
+    combatOutOfRangeDodgeAction,
+    combatAimJitterLimit,
+    combatAimMotionScale,
+    combatMotionSample,
+    combatMotionSamplesWithCurrent,
+    combatOpponentProfile,
+    combatTradeEstimate,
+    combatTargetId,
+    combatRetreatIgnoreActive,
+    rememberCombatRetreatIgnore,
+    clearCombatDisadvantageObservation,
+    combatDisadvantageObservationState,
+    combatAimDamageState,
+    combatLowHpNoDamageLeaveState,
+    combatRetreatingTargetState,
+    combatServerStallNoDamageLeaveState,
+    combatTrendState,
+    combatTickActiveFromState,
+    globalSamplingOutageOfflineState,
+    combatTickGapOfflineState,
+    nativeTickMinIntervalMs,
+    combatShootingPlan,
+    combatAimNoDamageLevel,
+    combatAimNoDamageJitterLimit,
+    combatAimSteadyNoDamageState,
+    combatAimFallbackPrecisionState,
+    combatMovementAimMode,
+    combatInterceptSolution,
+    combatLiveAimTarget,
+    combatAimSourceDivergenceState,
+    combatAimServerStallState,
+    combatAimDynamicStrategyState,
+    combatAimTarget,
+    combatLeaveCoverAction,
+    buildCombatAction
+  };
+}
+
+module.exports = {
+  createCombatRuntime
+};
