@@ -164,6 +164,7 @@ async function main() {
   const runtimeCombatLogSource = readText('src/browser/runtime/combat-log-runtime.js');
   const runtimeImportantLoggingSource = readText('src/browser/runtime/important-logging-runtime.js');
   const runtimeTickSafetySource = readText('src/browser/runtime/tick-safety.js');
+  const runtimeControlFlowSource = readText('src/browser/runtime/control-flow-runtime.js');
   const userscriptText = readText('userscript/grasp-rat-bootstrap.user.js');
   const extensionBootstrapText = readText('extension/page-bootstrap.js');
   const extensionManifest = readJson('extension/manifest.json');
@@ -290,6 +291,26 @@ async function main() {
     assert(runtimeTickSafetySource.includes('function createTickSafetyRuntime'), 'tick safety runtime factory missing');
     assert(runtimeTickSafetySource.includes('function runTickSafely'), 'tick safety wrapper missing from module');
     assert(runtimeTickSafetySource.includes('function runCallbackSafely'), 'callback safety wrapper missing from module');
+  });
+
+  check('control flow runtime owns login exit pending exit and leave flow bodies', () => {
+    assert(runtimeEntrySource.includes("require('./runtime/control-flow-runtime')"), 'runtime entry does not import control flow runtime module');
+    assert(runtimeEntrySource.includes('createControlFlowRuntime({'), 'runtime entry does not create control flow runtime bindings');
+    assert(!/function\s+requestReload\s*\(/.test(runtimeEntrySource), 'runtime entry still owns reload request body');
+    assert(!/function\s+handlePendingExit\s*\(/.test(runtimeEntrySource), 'runtime entry still owns pending exit body');
+    assert(!/async\s+function\s+maybeStartAutoLogin\s*\(/.test(runtimeEntrySource), 'runtime entry still owns auto-login body');
+    assert(!/async\s+function\s+leaveOffline\s*\(/.test(runtimeEntrySource), 'runtime entry still owns offline leave body');
+    assert(!/function\s+loginPointSafetyStatus\s*\(/.test(runtimeEntrySource), 'runtime entry still owns login-point safety body');
+    assert(!/function\s+updatePursuitTracking\s*\(/.test(runtimeEntrySource), 'runtime entry still owns pursuit tracking body');
+    assert(!/async\s+function\s+issueLeaveCommand\s*\(/.test(runtimeEntrySource), 'runtime entry still owns leave command body');
+    assert(runtimeControlFlowSource.includes('function createControlFlowRuntime'), 'control flow runtime factory missing');
+    assert(runtimeControlFlowSource.includes('function requestReload'), 'reload request body missing from control flow module');
+    assert(runtimeControlFlowSource.includes('async function handlePendingExit'), 'pending exit body missing from control flow module');
+    assert(runtimeControlFlowSource.includes('async function maybeStartAutoLogin'), 'auto-login body missing from control flow module');
+    assert(runtimeControlFlowSource.includes('async function leaveOffline'), 'offline leave body missing from control flow module');
+    assert(runtimeControlFlowSource.includes('function loginPointSafetyStatus'), 'login-point safety body missing from control flow module');
+    assert(runtimeControlFlowSource.includes('function updatePursuitTracking'), 'pursuit tracking body missing from control flow module');
+    assert(runtimeControlFlowSource.includes('async function issueLeaveCommand'), 'leave command body missing from control flow module');
   });
 
   check('obsolete source-fragment files are absent', () => {
