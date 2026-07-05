@@ -1699,3 +1699,11 @@ The main bot remains fully functional. Action arbitration is now integrated thro
 - `src/browser/runtime-source.js` imports `browserRuntimeFragmentEntries(config)` directly from `src/browser/runtime-fragment-registry.js`, so the registry keeps provider imports while runtime-source owns source rendering and materialization.
 - Static verification rejects the obsolete materializer file and checks that provider imports do not move into the runtime-source materializer.
 - The `.515` manifest records bundled SHA-256 `d91a6c1b9b3ee4a9eca404d346081b11e6aa4ba2e77a5c3a5172120f4946ece3` and pre-bundle remote direct SHA-256 `471fbe29b12fe09f5cf6f649053211228cb3a96df4a060df655d5989de466fc6`.
+
+`bootstrap-0.4.516` removes the empty exit/relogin source fragment:
+
+- `src/browser/exit-relogin-source.js` is removed.
+- `src/browser/runtime-fragment-registry.js` no longer imports `exitReloginSource` or registers the empty `exit-relogin` fragment.
+- Exit/relogin helpers continue to bundle through `src/browser/runtime/exit-relogin.js` from call-specific source fragments including pending-exit, leave-flow, control-login, combat-state, combat-action, bot-object, tick, and combat-log.
+- Static verification rejects the deleted source file and registry entry while keeping final `require_exit_relogin` bundling covered.
+- The `.516` manifest records bundled SHA-256 `f798fd1b20c19f25c2a9326ec555654f1c9d8c1218f476ce13a75fdabc69bce8` and pre-bundle remote direct SHA-256 `1264b4938e3a5ab5d023e15d493f09bc9b145080c43ce730117f509f664e4c65`.
