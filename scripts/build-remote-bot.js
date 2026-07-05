@@ -60,7 +60,7 @@ async function main() {
     statusEvery: options.statusEvery
   }, {
     production: true,
-    mode: 'production-runtime-entry-source'
+    mode: 'production-runtime-entry'
   });
   console.log(JSON.stringify({
     scriptPath,
