@@ -12,7 +12,7 @@
   var define_GRASP_RAT_RUNTIME_CONFIG_default;
   var init_define_GRASP_RAT_RUNTIME_CONFIG = __esm({
     "<define:__GRASP_RAT_RUNTIME_CONFIG__>"() {
-      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.543" };
+      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.544" };
     }
   });
 
@@ -24851,13 +24851,12 @@
     }
   });
 
-  // src/browser/runtime/orchestration-runtime.js
-  var require_orchestration_runtime = __commonJS({
-    "src/browser/runtime/orchestration-runtime.js"(exports, module) {
+  // src/browser/runtime/orchestration-decision-runtime.js
+  var require_orchestration_decision_runtime = __commonJS({
+    "src/browser/runtime/orchestration-decision-runtime.js"(exports, module) {
       "use strict";
       init_define_GRASP_RAT_RUNTIME_CONFIG();
-      var { createOrchestrationSafetyRuntime } = require_orchestration_safety_runtime();
-      function createOrchestrationRuntime(runtime = {}) {
+      function createOrchestrationDecisionRuntime(runtime = {}) {
         const {
           BOT_KEY,
           ENEMY_LEAVE_STATE_KEY,
@@ -25079,9 +25078,7 @@
           updatePursuitTracking,
           updateSessionStats,
           visibleCoinSourcesConfirmTargetMissing,
-          writePersistentPendingExitStateCore
-        } = runtime;
-        const {
+          writePersistentPendingExitStateCore,
           markRecentMovement,
           fleeDirection,
           lockedFleeDirection,
@@ -25100,17 +25097,7 @@
           mergeThreatLists,
           pickReturnBlockThreat,
           blockThreatReturnAction
-        } = createOrchestrationSafetyRuntime({
-          bot,
-          cfg,
-          dist,
-          hypot,
-          isFiringEntity,
-          isFullHp,
-          isInvulnerableActive,
-          now: now2,
-          speed: speed2
-        });
+        } = runtime;
         function classify(self) {
           const nativeEntities = getNativeEntityList();
           const nativeMeta = buildNativeEntityMeta(nativeEntities);
@@ -25892,6 +25879,302 @@
             }
           };
         }
+        return {
+          classify,
+          chooseAction
+        };
+      }
+      module.exports = {
+        createOrchestrationDecisionRuntime
+      };
+    }
+  });
+
+  // src/browser/runtime/orchestration-runtime.js
+  var require_orchestration_runtime = __commonJS({
+    "src/browser/runtime/orchestration-runtime.js"(exports, module) {
+      "use strict";
+      init_define_GRASP_RAT_RUNTIME_CONFIG();
+      var { createOrchestrationSafetyRuntime } = require_orchestration_safety_runtime();
+      var { createOrchestrationDecisionRuntime } = require_orchestration_decision_runtime();
+      function createOrchestrationRuntime(runtime = {}) {
+        const {
+          BOT_KEY,
+          ENEMY_LEAVE_STATE_KEY,
+          LOGIN_SUPPRESS_KEY,
+          LOGIN_SUPPRESS_REASON_KEY,
+          OFFLINE_LEAVE_STATE_KEY,
+          PENDING_EXIT_STATE_KEY,
+          activeCombatThreatWaitAction,
+          activeEnemyLeaveDetail,
+          activeOfflineLeaveDetail,
+          actorLabel,
+          applyCoinApproachLockUpdate,
+          applyCoinProgressAction,
+          applyFinalActionArbitration,
+          arrayCount,
+          assessActionSettlementStall,
+          assessOfflineSafety,
+          assessServerPositionStall,
+          attachCoinDiagnostics,
+          attachOpportunisticShot,
+          attackWorthTakingCore,
+          bot,
+          buildCoinAction,
+          buildCoinDiagnostics,
+          buildCombatAction,
+          buildDropMatchedKillCore,
+          buildEnemyAction,
+          buildMissingHeldOpportunityCore,
+          buildNativeCoinSnapshotCore,
+          buildNativeEntityMeta,
+          buildOpportunisticShotWait,
+          buildPostAttackDropWaitAction,
+          canPrioritizeHighValueVisibleCoin,
+          cfg,
+          chooseStableOpportunityCore,
+          clearCoinTracking,
+          clearCombatEngagement,
+          clearExitHoldDetail,
+          clearMissingVisibleCoinTarget,
+          clearPersistentExitState,
+          clearPersistentPendingExitState,
+          clearSessionMismatchRecoveryState,
+          cloudflareErrorInfo,
+          coinBlockedByThreat,
+          coinDiagnosticsLimit,
+          coinDiagnosticsNearDistance,
+          coinDirectionToCore,
+          coinMotionCoreOptions,
+          coinMotionMetaCore,
+          coinPickupAttemptSlowCount,
+          coinPickupFailureCount,
+          coinRouteCoreOptions,
+          coinRouteKey,
+          coinStaminaAffordableWithDiagnostic,
+          coinTargetCoreOptions,
+          coinTargetKeyCore,
+          coinThreatDiagnostics,
+          combatDodgeOnlyCandidateRange,
+          combatHpValue,
+          combatTargetCandidateRange,
+          combatTickActiveFromState,
+          combatTickGapOfflineState,
+          controlHasNativeGameSession,
+          currentHeldCoinChoice,
+          currentHeldCoinRouteChoice,
+          dailyStaminaBudgetIsLimitingCore,
+          dailyStaminaFinalCoinAction,
+          decorateActiveThreat,
+          defensiveTargetOverridesEngaged,
+          deferredStaminaExhaustionLeave,
+          dist,
+          dropValue: dropValue2,
+          ensureControlWs,
+          entityFreshEnoughForOffense,
+          exitMotionStopLockRemainingMs,
+          finishImportantCombat,
+          formatDistance,
+          formatDurationMs,
+          getBullets,
+          getCoins,
+          getCurrentUserId,
+          getNativeCoinList,
+          getNativeEntityList,
+          getSelf,
+          globalSamplingOutageOfflineState,
+          handlePendingExit,
+          handleTickReentryCombatGap,
+          highValueCoinPriorityAmount: highValueCoinPriorityAmount2,
+          highValueCoinPriorityHealthyHp,
+          highValueVisibleCoinPriorityNeeded,
+          hpDisplay,
+          hpValue,
+          hypot,
+          importantSessionStaminaSpentMs,
+          incomingBulletThreat,
+          installNativeLoginGateInterceptors,
+          installPageGlobal,
+          installPageNativeSnapshotObserver,
+          isAfkProfitTarget,
+          isAlive,
+          isAvoidanceThreat,
+          isCombatStateForInjuryLeave,
+          isConservingStamina,
+          isCurrentlyActive,
+          isFiringEntity,
+          isFullHp,
+          isInvulnerable: isInvulnerable2,
+          isInvulnerableActive,
+          isRecovering,
+          isSnapshotCoinWaitAction,
+          isSnapshotOnlyCoin,
+          isWhitelistedTarget,
+          knownHpValue,
+          latestEnemyLeaveDisplayReason,
+          leaveForCombat,
+          leaveForInjury,
+          leaveForPursuit,
+          leaveOffline,
+          liveSessionMismatchTakeoverState,
+          logStatus,
+          loginSnapshotGateDisplayReason,
+          markCoinCollected,
+          maybeRecordLoginPoint,
+          maybeReloadCloudflareError,
+          maybeStartAutoLogin,
+          noSelfGameSessionExitState,
+          normalizeCoinDrop,
+          normalizePendingExitReloadConfirmationCore,
+          noteImportantSessionExit,
+          noteSelfUnavailableForPostLoginZoom,
+          now: now2,
+          observeNetworkQualitySelf,
+          opportunityCandidateCoreOptions,
+          opportunityChoiceCoreOptions,
+          opportunityCoinStaminaCost,
+          opportunityEnemyStaminaCost,
+          opportunityLongStaminaBudget: opportunityLongStaminaBudget2,
+          opportunityPriorityTier,
+          opportunityWindowStaminaBudget,
+          pageGlobal,
+          pendingCombatLeaveAction,
+          pendingExitIntentForSkippedLeave,
+          pendingExitPersistenceCoreHelpers,
+          pendingExitSkipNewLeave,
+          pickActiveCombatWaitThreat,
+          pickBestOpportunity,
+          pickBestOpportunityCore,
+          pickCoin,
+          pickCoinField,
+          pickCoinRouteOpportunityCore,
+          pickCombatTarget,
+          pickDistantCoin,
+          pickEngagedCombatTarget,
+          pickHighValueVisibleCoin,
+          pickNearestDailyStaminaFinalCoinCore,
+          pickPostAttackDropCoinCore,
+          pickPostAttackDropWaitTargetCore,
+          pickProfitableCombatTarget,
+          pickRealtimeLocalCoin,
+          postAttackDropResolvedAt,
+          previousBot,
+          readPersistentExitState,
+          recordActionSwitchDiagnostics,
+          recordCoinFilterDiagnostic,
+          recordCombatLogTick,
+          recordImportantCombatTick,
+          recordIncidentalCoinPickups,
+          recordKillHistoryItem,
+          recordUnhandledTickError,
+          refreshGlobalState,
+          rememberAttack,
+          rememberCombatEngagement,
+          rememberLoginPointDamageThreat,
+          rememberOpportunityChoiceCore,
+          requestReload,
+          requestSessionMismatchRecoveryReload,
+          resetOpportunitySwitchLock,
+          resetServerPositionStall,
+          restoreImportantLogsForRemote,
+          restorePersistedCombatLogPendingEntries,
+          restorePersistedExitAuditLogs,
+          runTickSafely,
+          safeCoinCandidates,
+          safeJsonClone,
+          safeStringify,
+          schedulePostLoginZoomOut,
+          scoreCoinOpportunity,
+          sendActionVelocity,
+          sessionMismatchRecoveryReloadSatisfied,
+          setLastTarget,
+          shootAt,
+          shouldClearOpportunityChoiceCore,
+          snapshotCoinAgeMs,
+          snapshotCoinLocalSuppressRadius,
+          snapshotCoinNavigationReasonCore,
+          snapshotDataFreshEnough,
+          snapshotEntityAllowed,
+          speed: speed2,
+          staleOfflineStaminaHoldContradicted,
+          staminaBudgetCoinLeaveAction,
+          staminaBudgetCoinLeaveSummary,
+          staminaBudgetReloginDelayMs,
+          staminaExhaustedWindowLabel,
+          startTargetWhitelistPolling,
+          stopMotionSafely,
+          summarizeBlockedStaminaOpportunityCore,
+          summarizeControl,
+          summarizeNearestCoinStaminaBudgetExitCore,
+          summarizePendingCombatLeave,
+          summarizePursuit,
+          summarizeSelf,
+          summarizeSessionMismatchRecoveryStatus,
+          summarizeStamina,
+          syncPausedFromPage: syncPausedFromPage2,
+          uniqueVisibleRouteCoinsCore,
+          updateBotPanel,
+          updateKillHistory,
+          updateOpportunityAfkStaminaObservations,
+          updatePursuitTracking,
+          updateSessionStats,
+          visibleCoinSourcesConfirmTargetMissing,
+          writePersistentPendingExitStateCore
+        } = runtime;
+        const {
+          markRecentMovement,
+          fleeDirection,
+          lockedFleeDirection,
+          actionMovesTowardThreat,
+          isShortSafeCoinAction,
+          returnBlockRadius,
+          returnBlockExitRadius,
+          returnBlockResumeRadius,
+          returnBlockSuppressRadius,
+          hasReturnBlockThreat,
+          markReturnBlockPressure,
+          pickReturnBlockPressure,
+          returnBlockScanDirection,
+          buildReturnBlockScanAction,
+          threatKey,
+          mergeThreatLists,
+          pickReturnBlockThreat,
+          blockThreatReturnAction
+        } = createOrchestrationSafetyRuntime({
+          bot,
+          cfg,
+          dist,
+          hypot,
+          isFiringEntity,
+          isFullHp,
+          isInvulnerableActive,
+          now: now2,
+          speed: speed2
+        });
+        const {
+          classify,
+          chooseAction
+        } = createOrchestrationDecisionRuntime({
+          ...runtime,
+          markRecentMovement,
+          fleeDirection,
+          lockedFleeDirection,
+          actionMovesTowardThreat,
+          isShortSafeCoinAction,
+          returnBlockRadius,
+          returnBlockExitRadius,
+          returnBlockResumeRadius,
+          returnBlockSuppressRadius,
+          hasReturnBlockThreat,
+          markReturnBlockPressure,
+          pickReturnBlockPressure,
+          returnBlockScanDirection,
+          buildReturnBlockScanAction,
+          threatKey,
+          mergeThreatLists,
+          pickReturnBlockThreat,
+          blockThreatReturnAction
+        });
         const { postExitDecisionWithoutTargetCore: postExitDecisionWithoutTargetForTickCore } = require_exit_motion2();
         const { clearEnemyReloginHoldBoundCore: clearEnemyReloginHoldForTickBoundCore, clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForTickBoundCore, currentOfflineDisplayReasonCore: currentOfflineDisplayReasonForTickCore, enemyReloginHoldRemainingMsBoundCore: enemyReloginHoldRemainingMsForTickBoundCore, injuryLeaveSummaryCore: injuryLeaveSummaryForTickCore, offlineLeaveSummaryCore: offlineLeaveSummaryForTickCore, offlineReloginHoldRemainingMsBoundCore: offlineReloginHoldRemainingMsForTickBoundCore, pursuitLeaveSummaryCore: pursuitLeaveSummaryForTickCore } = require_exit_relogin();
         const { pendingExitRetryMsCore: pendingExitRetryMsForTickCore, summarizePendingExitCore: summarizePendingExitForTickCore } = require_pending_exit2();
