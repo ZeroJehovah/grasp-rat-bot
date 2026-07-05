@@ -394,7 +394,6 @@ async function main() {
   const runtimeStateBindingsSourceModule = readText('src/browser/runtime-state-bindings-source.js');
   const pendingExitPersistenceCallSourceModule = readText('src/browser/pending-exit-persistence-call-source.js');
   const pendingExitSummaryCallSourceModule = readText('src/browser/pending-exit-summary-call-source.js');
-  const exitReloginSourceModule = readText('src/browser/exit-relogin-source.js');
   const pendingExitSourceModule = readText('src/browser/pending-exit-source.js');
   const leaveCommandSourceModule = readText('src/browser/leave-command-source.js');
   const autoLoginSourceModule = readText('src/browser/auto-login-source.js');
@@ -502,7 +501,6 @@ async function main() {
     attackWorthSourceModule,
     exitMotionSourceModule,
     runtimeStateBindingsSourceModule,
-    exitReloginSourceModule,
     pendingExitSourceModule,
     leaveCommandSourceModule,
     autoLoginSourceModule,
@@ -760,7 +758,8 @@ async function main() {
     assert(runtimeFragmentRegistryModule.includes("require('./entity-activity-source')"), 'entity-activity source module import not found');
     assert(runtimeFragmentRegistryModule.includes("require('./stamina-runtime-source')"), 'stamina-runtime source module import not found');
     assert(runtimeFragmentRegistryModule.includes("require('./exit-motion-source')"), 'exit-motion source module import not found');
-    assert(runtimeFragmentRegistryModule.includes("require('./exit-relogin-source')"), 'exit-relogin source module import not found');
+    assert(!fs.existsSync(path.join(ROOT, 'src/browser/exit-relogin-source.js')), 'obsolete empty exit-relogin source file still exists');
+    assert(!runtimeFragmentRegistryModule.includes("require('./exit-relogin-source')"), 'runtime fragment registry still imports obsolete empty exit-relogin source');
     assert(runtimeFragmentRegistryModule.includes("require('./pending-exit-source')"), 'pending-exit source module import not found');
     assert(runtimeFragmentRegistryModule.includes("['pending-exit', () => pendingExitSource(config)]"), 'pending-exit source is not invoked with runtime config');
     assert(runtimeFragmentRegistryModule.includes("['leave-command', () => leaveCommandSource(config)]"), 'leave-command source is not invoked with runtime config');
@@ -810,7 +809,7 @@ async function main() {
     assert(fragmentEntriesBody.includes("['tick-safety', () => tickSafetySource(config)]"), 'tick-safety fragment is not config-aware for bundled runtime migration');
     assert(fragmentEntriesBody.includes("['page-native-snapshot', () => pageNativeSnapshotSource(config)]"), 'page-native-snapshot fragment is not config-aware for bundled runtime migration');
     assert(fragmentEntriesBody.includes("['entity-refresh', () => entityRefreshSource(config)]"), 'entity-refresh fragment is not config-aware for bundled runtime migration');
-    assert(fragmentEntriesBody.includes("['exit-relogin', () => exitReloginSource(config)]"), 'exit-relogin fragment is not config-aware for bundled runtime migration');
+    assert(!fragmentEntriesBody.includes("['exit-relogin'"), 'obsolete empty exit-relogin fragment is still registered');
     assert(fragmentEntriesBody.includes("['leave-flow', () => leaveFlowSource(config)]"), 'leave-flow fragment is not config-aware for bundled runtime migration');
     assert(fragmentEntriesBody.includes("['choose-action', () => chooseActionSource(config)]"), 'choose-action fragment is not config-aware for bundled runtime migration');
     assert(fragmentEntriesBody.includes("['startup', startupSource]"), 'startup fragment is not explicitly named');
@@ -841,7 +840,6 @@ async function main() {
       ['coin-motion-runtime', coinMotionRuntimeSourceModule],
       ['tick-safety', tickSafetySourceModule],
       ['runtime-state-bindings', runtimeStateBindingsSourceModule],
-      ['exit-relogin', exitReloginSourceModule],
       ['pending-exit', pendingExitSourceModule],
       ['leave-command', leaveCommandSourceModule],
       ['leave-flow', leaveFlowSourceModule],
@@ -960,7 +958,6 @@ async function main() {
       'attackWorthSource',
       'exitMotionSource',
       'runtimeStateBindingsSource',
-      'exitReloginSource',
       'pendingExitSource',
       'leaveCommandSource',
       'autoLoginSource',
@@ -1122,7 +1119,6 @@ async function main() {
       ['attack-worth', attackWorthSourceModule, 'attackWorthSource'],
       ['exit-motion', exitMotionSourceModule, 'exitMotionSource'],
       ['runtime-state-bindings', runtimeStateBindingsSourceModule, 'runtimeStateBindingsSource'],
-      ['exit-relogin', exitReloginSourceModule, 'exitReloginSource'],
       ['pending-exit', pendingExitSourceModule, 'pendingExitSource'],
       ['leave-command', leaveCommandSourceModule, 'leaveCommandSource'],
       ['auto-login', autoLoginSourceModule, 'autoLoginSource'],
