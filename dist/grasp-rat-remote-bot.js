@@ -12,7 +12,7 @@
   var define_GRASP_RAT_RUNTIME_CONFIG_default;
   var init_define_GRASP_RAT_RUNTIME_CONFIG = __esm({
     "<define:__GRASP_RAT_RUNTIME_CONFIG__>"() {
-      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.545" };
+      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.546" };
     }
   });
 
@@ -5391,314 +5391,20 @@
     }
   });
 
-  // src/browser/runtime/exit-audit-runtime.js
-  var require_exit_audit_runtime = __commonJS({
-    "src/browser/runtime/exit-audit-runtime.js"(exports, module) {
+  // src/browser/runtime/combat-log-frame-runtime.js
+  var require_combat_log_frame_runtime = __commonJS({
+    "src/browser/runtime/combat-log-frame-runtime.js"(exports, module) {
       "use strict";
       init_define_GRASP_RAT_RUNTIME_CONFIG();
-      var { safeStringify, safeJsonClone } = require_runtime_utils2();
-      var {
-        pendingExitRetryMsCore: pendingExitRetryMsForExitAuditCore,
-        summarizePendingExitCore: summarizePendingExitForExitAuditCore
-      } = require_pending_exit2();
-      function createExitAuditRuntime(runtime = {}) {
-        const {
-          bot,
-          cfg,
-          storage = typeof localStorage2 !== "undefined" ? localStorage2 : null,
-          exitAuditPendingLogsKey,
-          normalizePendingExitReloadConfirmationCore = (value) => value,
-          readImportantLogsStore = () => ({ events: [] }),
-          restoreImportantLogsForRemote = () => 0,
-          noteImportantSessionExit = () => null,
-          getCurrentUserId = () => null,
-          snapshotLoginGateStatus = () => null,
-          summarizeControl = () => null,
-          queueCombatLogEntry = () => false,
-          flushCombatLogs = () => false,
-          combatLogSelfSummary = () => null,
-          combatLogRuntimeSummary = () => null,
-          combatLogGlobalStateSummary = () => null
-        } = runtime;
-        const localStorage2 = storage;
-        const EXIT_AUDIT_PENDING_LOGS_KEY = exitAuditPendingLogsKey;
-        function readPersistedExitAuditLogs() {
-          try {
-            const raw = localStorage2.getItem(EXIT_AUDIT_PENDING_LOGS_KEY) || "[]";
-            const parsed = JSON.parse(raw);
-            return Array.isArray(parsed) ? parsed.filter((item) => item && typeof item === "object") : [];
-          } catch (_) {
-            return [];
-          }
-        }
-        function writePersistedExitAuditLogs(entries) {
-          try {
-            const list = Array.isArray(entries) ? entries.filter((item) => item && typeof item === "object") : [];
-            localStorage2.setItem(EXIT_AUDIT_PENDING_LOGS_KEY, safeStringify(list.slice(-250)));
-          } catch (_) {
-          }
-        }
-        function persistExitAuditLogEntry(entry) {
-          if (!entry?.exitAuditLogId) return;
-          const existing = readPersistedExitAuditLogs();
-          if (!existing.some((item) => item.exitAuditLogId === entry.exitAuditLogId)) {
-            existing.push(safeJsonClone(entry) || entry);
-            writePersistedExitAuditLogs(existing);
-          }
-        }
-        function removePersistedExitAuditLogs(ids) {
-          const idSet = new Set((Array.isArray(ids) ? ids : [ids]).filter(Boolean));
-          if (!idSet.size) return;
-          const remaining = readPersistedExitAuditLogs().filter((item) => !idSet.has(item.exitAuditLogId));
-          writePersistedExitAuditLogs(remaining);
-        }
-        function pendingExitAuditLogIds() {
-          const state2 = bot.combatLogging || {};
-          if (!state2.endpoint) return [];
-          const ids = /* @__PURE__ */ new Set();
-          for (const entry of Array.isArray(state2.pending) ? state2.pending : []) {
-            if (entry?.exitAuditLogId) ids.add(entry.exitAuditLogId);
-          }
-          for (const id of Array.isArray(state2.pendingExitAuditIds) ? state2.pendingExitAuditIds : []) {
-            if (id) ids.add(id);
-          }
-          for (const id of Array.isArray(state2.sendingExitAuditIds) ? state2.sendingExitAuditIds : []) {
-            if (id) ids.add(id);
-          }
-          for (const entry of readPersistedExitAuditLogs()) {
-            if (entry?.exitAuditLogId) ids.add(entry.exitAuditLogId);
-          }
-          return Array.from(ids);
-        }
-        function unresolvedExitAuditLogCount() {
-          return pendingExitAuditLogIds().length;
-        }
-        function exitAuditFlushPending() {
-          return unresolvedExitAuditLogCount() > 0;
-        }
-        function exitAuditFlushBlockDetail(reason) {
-          const state2 = bot.combatLogging || {};
-          return {
-            blocked: true,
-            reason: String(reason || ""),
-            pending: unresolvedExitAuditLogCount(),
-            pendingIds: pendingExitAuditLogIds().slice(0, 12),
-            sending: Boolean(state2.sending),
-            endpoint: String(state2.endpoint || cfg.combatLogEndpoint || ""),
-            lastError: state2.lastError || "",
-            lastOkAt: Number(state2.lastOkAt || 0)
-          };
-        }
-        function pendingImportantSessionEndLogEvents() {
-          const state2 = bot.combatLogging || {};
-          if (!state2.endpoint) return [];
-          const store = readImportantLogsStore();
-          return store.events.filter((event) => event?.importantLogId && event.importantType === "session-end" && !event.remoteSentAt);
-        }
-        function importantSessionEndFlushPending() {
-          return pendingImportantSessionEndLogEvents().length > 0;
-        }
-        function importantSessionEndFlushBlockDetail(reason) {
-          restoreImportantLogsForRemote();
-          flushCombatLogs(true);
-          const state2 = bot.combatLogging || {};
-          const pending = pendingImportantSessionEndLogEvents();
-          return {
-            blocked: true,
-            reason: String(reason || ""),
-            pending: pending.length,
-            pendingIds: pending.map((event) => event.importantLogId).slice(0, 12),
-            sending: Boolean(state2.sending),
-            endpoint: String(state2.endpoint || cfg.combatLogEndpoint || ""),
-            lastError: state2.lastError || bot.importantLogging?.lastRemoteError || "",
-            lastOkAt: Number(state2.lastOkAt || 0)
-          };
-        }
-        function closeCurrentImportantSessionBeforeLogin(reason = "login-before-session-end") {
-          const session = bot.session || {};
-          if (!session.startedAt || session.exitAt) return null;
-          const t = Number(session.missingSince || 0) || Date.now();
-          return noteImportantSessionExit(reason, bot.lastSelf, t, {
-            exitSummary: "\u91CD\u65B0\u767B\u5F55\u524D\u4E0A\u4E00\u5C40\u5DF2\u4E0D\u53EF\u7528\uFF0C\u6309\u767B\u5F55\u524D\u6536\u53E3"
-          });
-        }
-        function closeCurrentImportantSessionBeforeReload(reason = "reload") {
-          const session = bot.session || {};
-          if (!session.startedAt || session.exitAt) return null;
-          const t = Number(session.missingSince || 0) || Date.now();
-          return noteImportantSessionExit("reload-before-session-end:" + String(reason || "reload"), bot.lastSelf, t, {
-            exitSummary: "\u5237\u65B0\u9875\u9762\u524D\u4E0A\u4E00\u5C40\u5DF2\u4E0D\u53EF\u7528\uFF0C\u6309\u5237\u65B0\u524D\u6536\u53E3"
-          });
-        }
-        function restorePersistedExitAuditLogs() {
-          const state2 = bot.combatLogging;
-          if (!state2 || !state2.endpoint) return 0;
-          if (!Array.isArray(state2.pending)) state2.pending = [];
-          const restored = readPersistedExitAuditLogs();
-          let added = 0;
-          const existing = new Set(state2.pending.map((entry) => entry?.exitAuditLogId).filter(Boolean));
-          for (const entry of restored) {
-            if (!entry?.exitAuditLogId || existing.has(entry.exitAuditLogId)) continue;
-            state2.pending.unshift(entry);
-            existing.add(entry.exitAuditLogId);
-            added += 1;
-          }
-          if (!Array.isArray(state2.pendingExitAuditIds)) state2.pendingExitAuditIds = [];
-          for (const entry of state2.pending) {
-            if (entry?.exitAuditLogId && !state2.pendingExitAuditIds.includes(entry.exitAuditLogId)) {
-              state2.pendingExitAuditIds.push(entry.exitAuditLogId);
-            }
-          }
-          bot.exitAudit.restored = added;
-          if (added) flushCombatLogs(true);
-          return added;
-        }
-        function newExitAuditId(source, reason) {
-          bot.exitAudit.sequence = Number(bot.exitAudit.sequence || 0) + 1;
-          const clean = String(source || "exit").replace(/[^\w.-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 24) || "exit";
-          const why = String(reason || "").replace(/[^\w.-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32) || "reason";
-          return clean + "-" + Date.now().toString(36) + "-" + bot.exitAudit.sequence + "-" + why;
-        }
-        function newExitAuditRequestId2(exitAuditId) {
-          bot.exitAudit.requestSequence = Number(bot.exitAudit.requestSequence || 0) + 1;
-          return String(exitAuditId || "exit") + "-req-" + bot.exitAudit.requestSequence;
-        }
-        function ensureExitAuditDetail(detail, meta = {}) {
-          if (!detail || typeof detail !== "object") return null;
-          const source = String(meta.source || detail.exitAuditSource || detail.source || detail.reason || "exit");
-          const reason = String(meta.reason || detail.reason || "");
-          if (!detail.exitAuditId) detail.exitAuditId = newExitAuditId(source, reason);
-          if (!detail.exitTriggeredAt) detail.exitTriggeredAt = Number(detail.at || Date.now());
-          detail.exitAuditSource = source;
-          detail.exitAuditScope = meta.scope || detail.exitAuditScope || "";
-          return detail.exitAuditId;
-        }
-        function exitAuditSelfSummary(selfLike) {
-          return combatLogSelfSummary(selfLike || bot.lastSelf || null);
-        }
-        function recordExitAuditEvent(kind, detail = {}, extra = {}) {
-          const state2 = bot.combatLogging;
-          if (!state2 || !state2.endpoint) return false;
-          const auditId = ensureExitAuditDetail(detail, extra);
-          const t = Number(extra.at || Date.now());
-          const entry = {
-            type: "exit-audit",
-            auditKind: kind,
-            exitAuditId: auditId,
-            exitAuditLogId: String(auditId || "exit") + ":" + kind + ":" + t + ":" + (Number(bot.exitAudit.requestSequence || 0) || 0),
-            at: t,
-            version: cfg.version,
-            sourceHash: cfg.sourceHash,
-            injectedBy: cfg.injectedBy,
-            url: location.href,
-            visibilityState: document.visibilityState || "",
-            scope: extra.scope || detail.exitAuditScope || "",
-            source: extra.source || detail.exitAuditSource || "",
-            reason: extra.reason || detail.reason || "",
-            summary: detail.summary || detail.exitSummary || detail.enemyLeaveSummary || "",
-            displayReason: detail.displayReason || "",
-            triggeredAt: Number(detail.exitTriggeredAt || detail.at || t),
-            confirmedAt: Number(extra.confirmedAt || detail.exitConfirmedAt || 0),
-            successDurationMs: extra.confirmedAt || detail.exitConfirmedAt ? Math.max(0, Math.round(Number(extra.confirmedAt || detail.exitConfirmedAt) - Number(detail.exitTriggeredAt || detail.at || t))) : 0,
-            currentUserId: getCurrentUserId() || null,
-            self: exitAuditSelfSummary(extra.self || detail.self || detail.injury?.self || null),
-            target: detail.target || extra.target || null,
-            injury: detail.injury || extra.injury || null,
-            pursuit: detail.pursuit || extra.pursuit || null,
-            combat: detail.combat || extra.combat || null,
-            offlineSafety: detail.offlineSafety || extra.offlineSafety || null,
-            pendingExit: (() => {
-              const pendingExitSummaryPending = bot.pendingExit;
-              if (!pendingExitSummaryPending) return null;
-              const pendingExitSummaryNow = Date.now();
-              const pendingExitSummaryReload = normalizePendingExitReloadConfirmationCore(pendingExitSummaryPending.reloadConfirmation, pendingExitSummaryPending, pendingExitSummaryNow);
-              return summarizePendingExitForExitAuditCore(pendingExitSummaryPending, {
-                nowMs: pendingExitSummaryNow,
-                retryMs: pendingExitRetryMsForExitAuditCore(pendingExitSummaryPending, {
-                  leaveRetryMinMs: cfg.leaveRetryMinMs,
-                  leaveCommandTimeoutMs: cfg.leaveCommandTimeoutMs,
-                  offlineLeaveRetryMs: cfg.offlineLeaveRetryMs,
-                  combatLeaveRetryMs: cfg.combatLeaveRetryMs,
-                  pursuitLeaveRetryMs: cfg.pursuitLeaveRetryMs
-                }),
-                reloadConfirmation: pendingExitSummaryReload
-              });
-            })(),
-            loginSnapshotGate: snapshotLoginGateStatus(),
-            request: extra.request || null,
-            leave: {
-              attempted: Boolean(detail.attempted),
-              method: detail.method || "",
-              error: detail.error || "",
-              exitPending: Boolean(detail.exitPending),
-              exitConfirmed: Boolean(detail.exitConfirmed),
-              pendingLoginSuppressUntil: detail.pendingLoginSuppressUntil || 0,
-              pendingLoginSuppressDelayMs: detail.pendingLoginSuppressDelayMs || 0,
-              pendingLoginSuppressReason: detail.pendingLoginSuppressReason || "",
-              reloginUntil: detail.reloginUntil || 0,
-              reloginDelayMs: detail.reloginDelayMs || 0,
-              holdRemainingMs: detail.holdRemainingMs || 0
-            },
-            confirmation: extra.confirmation || detail.exitConfirmation || null,
-            control: summarizeControl(),
-            runtime: combatLogRuntimeSummary(t),
-            globalState: combatLogGlobalStateSummary()
-          };
-          bot.exitAudit.lastEvent = {
-            kind,
-            exitAuditId: auditId,
-            at: t,
-            reason: entry.reason,
-            error: entry.leave.error
-          };
-          const queued = queueCombatLogEntry(entry, { critical: true });
-          if (queued) flushCombatLogs(true);
-          return queued;
-        }
-        return {
-          readPersistedExitAuditLogs,
-          writePersistedExitAuditLogs,
-          persistExitAuditLogEntry,
-          removePersistedExitAuditLogs,
-          pendingExitAuditLogIds,
-          unresolvedExitAuditLogCount,
-          exitAuditFlushPending,
-          exitAuditFlushBlockDetail,
-          pendingImportantSessionEndLogEvents,
-          importantSessionEndFlushPending,
-          importantSessionEndFlushBlockDetail,
-          closeCurrentImportantSessionBeforeLogin,
-          closeCurrentImportantSessionBeforeReload,
-          restorePersistedExitAuditLogs,
-          newExitAuditId,
-          newExitAuditRequestId: newExitAuditRequestId2,
-          ensureExitAuditDetail,
-          exitAuditSelfSummary,
-          recordExitAuditEvent
-        };
-      }
-      module.exports = {
-        createExitAuditRuntime
-      };
-    }
-  });
-
-  // src/browser/runtime/combat-log-runtime.js
-  var require_combat_log_runtime = __commonJS({
-    "src/browser/runtime/combat-log-runtime.js"(exports, module) {
-      "use strict";
-      init_define_GRASP_RAT_RUNTIME_CONFIG();
-      var { safeStringify, safeJsonClone, sanitizeCombatLogIdPart } = require_runtime_utils2();
+      var { safeJsonClone } = require_runtime_utils2();
       var { arrayCount } = require_array_count();
-      var { createCombatLogQueueRuntime } = require_combat_log_queue_runtime();
-      var { createExitAuditRuntime } = require_exit_audit_runtime();
       var { combatLogExitSummaryFromDecision } = require_exit_summary2();
       var {
         clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForCombatLogBoundCore,
         enemyReloginHoldRemainingMsBoundCore: enemyReloginHoldRemainingMsForCombatLogBoundCore,
         offlineReloginHoldRemainingMsBoundCore: offlineReloginHoldRemainingMsForCombatLogBoundCore
       } = require_exit_relogin();
-      function createCombatLogRuntime(runtime = {}) {
+      function createCombatLogFrameRuntime(runtime = {}) {
         const {
           bot,
           cfg,
@@ -5754,101 +5460,12 @@
           }
         } = runtime;
         const localStorage2 = storage;
-        const COMBAT_LOG_PENDING_ENTRIES_KEY = combatLogPendingEntriesKey;
-        const EXIT_AUDIT_PENDING_LOGS_KEY = exitAuditPendingLogsKey;
         const LOGIN_SUPPRESS_KEY = loginSuppressKey;
         const LOGIN_SUPPRESS_REASON_KEY = loginSuppressReasonKey;
         const ENEMY_LEAVE_STATE_KEY = enemyLeaveStateKey;
         const OFFLINE_LEAVE_STATE_KEY = offlineLeaveStateKey;
         const PENDING_EXIT_STATE_KEY = pendingExitStateKey;
         const recordRuntimeDiagnosticsCore = (_bot, detail) => recordRuntimeDiagnostics(detail);
-        let readPersistedExitAuditLogs;
-        let writePersistedExitAuditLogs;
-        let persistExitAuditLogEntry;
-        let removePersistedExitAuditLogs;
-        let pendingExitAuditLogIds;
-        let unresolvedExitAuditLogCount;
-        let exitAuditFlushPending;
-        let exitAuditFlushBlockDetail;
-        let pendingImportantSessionEndLogEvents;
-        let importantSessionEndFlushPending;
-        let importantSessionEndFlushBlockDetail;
-        let closeCurrentImportantSessionBeforeLogin;
-        let closeCurrentImportantSessionBeforeReload;
-        let restorePersistedExitAuditLogs;
-        let newExitAuditId;
-        let newExitAuditRequestId2;
-        let ensureExitAuditDetail;
-        let exitAuditSelfSummary;
-        let recordExitAuditEvent;
-        const {
-          combatLogEntryFailureKey,
-          normalizeCombatLogFailedState,
-          markCombatLogEntriesFailed,
-          markCombatLogEntriesSent,
-          combatLogPersistentEntryKey,
-          shouldPersistCombatLogPendingEntry,
-          readPersistedCombatLogPendingEntries,
-          combatLogMaxPersistedEntries,
-          writePersistedCombatLogPendingEntries,
-          persistCombatLogPendingEntries,
-          removePersistedCombatLogPendingEntries,
-          configureCombatLogging,
-          summarizeCombatLoggingStatus,
-          restorePersistedCombatLogPendingEntries,
-          queueCombatLogEntry,
-          flushCombatLogs
-        } = createCombatLogQueueRuntime({
-          bot,
-          cfg,
-          storage: localStorage2,
-          combatLogPendingEntriesKey: COMBAT_LOG_PENDING_ENTRIES_KEY,
-          persistExitAuditLogEntry: (...args) => persistExitAuditLogEntry(...args),
-          removePersistedExitAuditLogs: (...args) => removePersistedExitAuditLogs(...args),
-          unresolvedExitAuditLogCount: (...args) => unresolvedExitAuditLogCount(...args),
-          restorePersistedExitAuditLogs: (...args) => restorePersistedExitAuditLogs(...args),
-          restoreImportantLogsForRemote,
-          markImportantLogsRemoteSent,
-          markImportantLogsRemoteError
-        });
-        ({
-          readPersistedExitAuditLogs,
-          writePersistedExitAuditLogs,
-          persistExitAuditLogEntry,
-          removePersistedExitAuditLogs,
-          pendingExitAuditLogIds,
-          unresolvedExitAuditLogCount,
-          exitAuditFlushPending,
-          exitAuditFlushBlockDetail,
-          pendingImportantSessionEndLogEvents,
-          importantSessionEndFlushPending,
-          importantSessionEndFlushBlockDetail,
-          closeCurrentImportantSessionBeforeLogin,
-          closeCurrentImportantSessionBeforeReload,
-          restorePersistedExitAuditLogs,
-          newExitAuditId,
-          newExitAuditRequestId: newExitAuditRequestId2,
-          ensureExitAuditDetail,
-          exitAuditSelfSummary,
-          recordExitAuditEvent
-        } = createExitAuditRuntime({
-          bot,
-          cfg,
-          storage: localStorage2,
-          exitAuditPendingLogsKey: EXIT_AUDIT_PENDING_LOGS_KEY,
-          normalizePendingExitReloadConfirmationCore,
-          readImportantLogsStore,
-          restoreImportantLogsForRemote,
-          noteImportantSessionExit,
-          getCurrentUserId,
-          snapshotLoginGateStatus,
-          summarizeControl,
-          queueCombatLogEntry,
-          flushCombatLogs,
-          combatLogSelfSummary: (...args) => combatLogSelfSummary(...args),
-          combatLogRuntimeSummary: (...args) => combatLogRuntimeSummary(...args),
-          combatLogGlobalStateSummary: (...args) => combatLogGlobalStateSummary(...args)
-        }));
         function combatLogSelfSummary(selfLike) {
           if (!selfLike) return null;
           if (selfLike.stamina || Object.prototype.hasOwnProperty.call(selfLike, "coins")) {
@@ -6554,6 +6171,111 @@
           if (/^(offline-leave|control-ws-offline|control-ws-offline-unsafe|control-ws-offline-safe-wait|control-ws-reconnect-churn|control-ws-no-self-game-session|control-ws-server-position-stalled|control-global-sampling-outage|control-combat-tick-gap|control-action-settlement-stalled|control-stamina-exhausted|stamina-exhausted-leave)$/.test(reason)) return reason;
           return "";
         }
+        return {
+          combatLogSelfSummary,
+          combatEntitySummary,
+          mergeCombatEntitySource,
+          combatEntitySourceList,
+          summarizeCombatEntities,
+          combatBulletSummary,
+          summarizeCombatBullets,
+          combatMetricNumber,
+          combatMetricRound,
+          combatMetricDelta,
+          combatMetricEntityId,
+          combatMetricHp,
+          combatMetricPoint,
+          combatMetricDistance,
+          combatMetricTarget,
+          combatMetricBulletStats,
+          combatMetricActionSummary,
+          combatLogFrameMetrics,
+          combatLogGlobalStateSummary,
+          combatLogDecisionSummary,
+          combatLogEnemyExitSummary,
+          combatLogLoginResultSummary,
+          combatLogManualLoginSummary,
+          combatLogLoginSummary,
+          combatLogRuntimeSummary,
+          buildTimedCombatLogEntry,
+          combatLogExitSummary,
+          buildCombatLogEntry,
+          combatLogTriggerReason,
+          combatLogIsAfkAttack,
+          combatLogSuspendReason
+        };
+      }
+      module.exports = {
+        createCombatLogFrameRuntime
+      };
+    }
+  });
+
+  // src/browser/runtime/combat-log-diagnostics-runtime.js
+  var require_combat_log_diagnostics_runtime = __commonJS({
+    "src/browser/runtime/combat-log-diagnostics-runtime.js"(exports, module) {
+      "use strict";
+      init_define_GRASP_RAT_RUNTIME_CONFIG();
+      var { safeStringify } = require_runtime_utils2();
+      function createCombatLogDiagnosticsRuntime(runtime = {}) {
+        const {
+          bot,
+          cfg,
+          storage = typeof localStorage !== "undefined" ? localStorage : null,
+          combatLogPendingEntriesKey,
+          exitAuditPendingLogsKey,
+          loginSuppressKey,
+          loginSuppressReasonKey,
+          enemyLeaveStateKey,
+          offlineLeaveStateKey,
+          pendingExitStateKey,
+          now: now2 = () => typeof performance !== "undefined" ? performance.now() : Date.now(),
+          readPersistentExitState = () => null,
+          writePersistentPendingExitStateCore = () => null,
+          pendingExitPersistenceCoreHelpers = () => ({}),
+          clearPersistentPendingExitState = () => {
+          },
+          clearPersistentExitState = () => {
+          },
+          normalizePendingExitReloadConfirmationCore = (value) => value,
+          staleOfflineStaminaHoldContradicted = () => false,
+          readImportantLogsStore = () => ({ events: [] }),
+          restoreImportantLogsForRemote = () => 0,
+          markImportantLogsRemoteSent = () => {
+          },
+          markImportantLogsRemoteError = () => {
+          },
+          noteImportantSessionExit = () => null,
+          getCurrentUserId = () => null,
+          summarizeSelf = (value) => value,
+          dropValue: dropValue2 = () => 0,
+          dist = () => NaN,
+          speed: speed2 = () => 0,
+          hypot = Math.hypot,
+          knownHpValue = () => null,
+          isCurrentlyActive = () => false,
+          isMovingThreat = () => false,
+          isFiringEntity = () => false,
+          isInvulnerable: isInvulnerable2 = () => false,
+          getNativeEntityList = () => [],
+          normalizeBullet = (value) => value,
+          getBullets = () => [],
+          summarizeServerPositionStall = () => null,
+          combatTickActiveFromState = () => false,
+          summarizeNetworkQuality = () => null,
+          getSelf = () => null,
+          incomingBulletThreat = () => null,
+          summarizePendingCombatLeave = () => null,
+          summarizePursuit = (value) => value,
+          summarizeControl = () => null,
+          snapshotLoginGateStatus = () => null,
+          recordRuntimeDiagnostics = () => {
+          },
+          queueCombatLogEntry,
+          combatLogDecisionSummary,
+          combatLogGlobalStateSummary,
+          combatLogRuntimeSummary
+        } = runtime;
         function coinDiagnosticsHasLoggableEntry(diag) {
           return Boolean(diag && (Array.isArray(diag.filteredNearCoins) && diag.filteredNearCoins.length || Array.isArray(diag.ignoredNearCoins) && diag.ignoredNearCoins.length || Array.isArray(diag.snapshotOnlyNearCoins) && diag.snapshotOnlyNearCoins.length));
         }
@@ -6698,6 +6420,540 @@
           });
           return true;
         }
+        return {
+          coinDiagnosticsHasLoggableEntry,
+          coinDiagnosticsSignature,
+          recordCoinDiagnosticsLog,
+          targetSwitchDiagnosticSignature,
+          recordTargetSwitchLog,
+          networkQualityDiagnosticSignature,
+          networkQualityShouldLog,
+          recordNetworkQualityLog
+        };
+      }
+      module.exports = {
+        createCombatLogDiagnosticsRuntime
+      };
+    }
+  });
+
+  // src/browser/runtime/exit-audit-runtime.js
+  var require_exit_audit_runtime = __commonJS({
+    "src/browser/runtime/exit-audit-runtime.js"(exports, module) {
+      "use strict";
+      init_define_GRASP_RAT_RUNTIME_CONFIG();
+      var { safeStringify, safeJsonClone } = require_runtime_utils2();
+      var {
+        pendingExitRetryMsCore: pendingExitRetryMsForExitAuditCore,
+        summarizePendingExitCore: summarizePendingExitForExitAuditCore
+      } = require_pending_exit2();
+      function createExitAuditRuntime(runtime = {}) {
+        const {
+          bot,
+          cfg,
+          storage = typeof localStorage2 !== "undefined" ? localStorage2 : null,
+          exitAuditPendingLogsKey,
+          normalizePendingExitReloadConfirmationCore = (value) => value,
+          readImportantLogsStore = () => ({ events: [] }),
+          restoreImportantLogsForRemote = () => 0,
+          noteImportantSessionExit = () => null,
+          getCurrentUserId = () => null,
+          snapshotLoginGateStatus = () => null,
+          summarizeControl = () => null,
+          queueCombatLogEntry = () => false,
+          flushCombatLogs = () => false,
+          combatLogSelfSummary = () => null,
+          combatLogRuntimeSummary = () => null,
+          combatLogGlobalStateSummary = () => null
+        } = runtime;
+        const localStorage2 = storage;
+        const EXIT_AUDIT_PENDING_LOGS_KEY = exitAuditPendingLogsKey;
+        function readPersistedExitAuditLogs() {
+          try {
+            const raw = localStorage2.getItem(EXIT_AUDIT_PENDING_LOGS_KEY) || "[]";
+            const parsed = JSON.parse(raw);
+            return Array.isArray(parsed) ? parsed.filter((item) => item && typeof item === "object") : [];
+          } catch (_) {
+            return [];
+          }
+        }
+        function writePersistedExitAuditLogs(entries) {
+          try {
+            const list = Array.isArray(entries) ? entries.filter((item) => item && typeof item === "object") : [];
+            localStorage2.setItem(EXIT_AUDIT_PENDING_LOGS_KEY, safeStringify(list.slice(-250)));
+          } catch (_) {
+          }
+        }
+        function persistExitAuditLogEntry(entry) {
+          if (!entry?.exitAuditLogId) return;
+          const existing = readPersistedExitAuditLogs();
+          if (!existing.some((item) => item.exitAuditLogId === entry.exitAuditLogId)) {
+            existing.push(safeJsonClone(entry) || entry);
+            writePersistedExitAuditLogs(existing);
+          }
+        }
+        function removePersistedExitAuditLogs(ids) {
+          const idSet = new Set((Array.isArray(ids) ? ids : [ids]).filter(Boolean));
+          if (!idSet.size) return;
+          const remaining = readPersistedExitAuditLogs().filter((item) => !idSet.has(item.exitAuditLogId));
+          writePersistedExitAuditLogs(remaining);
+        }
+        function pendingExitAuditLogIds() {
+          const state2 = bot.combatLogging || {};
+          if (!state2.endpoint) return [];
+          const ids = /* @__PURE__ */ new Set();
+          for (const entry of Array.isArray(state2.pending) ? state2.pending : []) {
+            if (entry?.exitAuditLogId) ids.add(entry.exitAuditLogId);
+          }
+          for (const id of Array.isArray(state2.pendingExitAuditIds) ? state2.pendingExitAuditIds : []) {
+            if (id) ids.add(id);
+          }
+          for (const id of Array.isArray(state2.sendingExitAuditIds) ? state2.sendingExitAuditIds : []) {
+            if (id) ids.add(id);
+          }
+          for (const entry of readPersistedExitAuditLogs()) {
+            if (entry?.exitAuditLogId) ids.add(entry.exitAuditLogId);
+          }
+          return Array.from(ids);
+        }
+        function unresolvedExitAuditLogCount() {
+          return pendingExitAuditLogIds().length;
+        }
+        function exitAuditFlushPending() {
+          return unresolvedExitAuditLogCount() > 0;
+        }
+        function exitAuditFlushBlockDetail(reason) {
+          const state2 = bot.combatLogging || {};
+          return {
+            blocked: true,
+            reason: String(reason || ""),
+            pending: unresolvedExitAuditLogCount(),
+            pendingIds: pendingExitAuditLogIds().slice(0, 12),
+            sending: Boolean(state2.sending),
+            endpoint: String(state2.endpoint || cfg.combatLogEndpoint || ""),
+            lastError: state2.lastError || "",
+            lastOkAt: Number(state2.lastOkAt || 0)
+          };
+        }
+        function pendingImportantSessionEndLogEvents() {
+          const state2 = bot.combatLogging || {};
+          if (!state2.endpoint) return [];
+          const store = readImportantLogsStore();
+          return store.events.filter((event) => event?.importantLogId && event.importantType === "session-end" && !event.remoteSentAt);
+        }
+        function importantSessionEndFlushPending() {
+          return pendingImportantSessionEndLogEvents().length > 0;
+        }
+        function importantSessionEndFlushBlockDetail(reason) {
+          restoreImportantLogsForRemote();
+          flushCombatLogs(true);
+          const state2 = bot.combatLogging || {};
+          const pending = pendingImportantSessionEndLogEvents();
+          return {
+            blocked: true,
+            reason: String(reason || ""),
+            pending: pending.length,
+            pendingIds: pending.map((event) => event.importantLogId).slice(0, 12),
+            sending: Boolean(state2.sending),
+            endpoint: String(state2.endpoint || cfg.combatLogEndpoint || ""),
+            lastError: state2.lastError || bot.importantLogging?.lastRemoteError || "",
+            lastOkAt: Number(state2.lastOkAt || 0)
+          };
+        }
+        function closeCurrentImportantSessionBeforeLogin(reason = "login-before-session-end") {
+          const session = bot.session || {};
+          if (!session.startedAt || session.exitAt) return null;
+          const t = Number(session.missingSince || 0) || Date.now();
+          return noteImportantSessionExit(reason, bot.lastSelf, t, {
+            exitSummary: "\u91CD\u65B0\u767B\u5F55\u524D\u4E0A\u4E00\u5C40\u5DF2\u4E0D\u53EF\u7528\uFF0C\u6309\u767B\u5F55\u524D\u6536\u53E3"
+          });
+        }
+        function closeCurrentImportantSessionBeforeReload(reason = "reload") {
+          const session = bot.session || {};
+          if (!session.startedAt || session.exitAt) return null;
+          const t = Number(session.missingSince || 0) || Date.now();
+          return noteImportantSessionExit("reload-before-session-end:" + String(reason || "reload"), bot.lastSelf, t, {
+            exitSummary: "\u5237\u65B0\u9875\u9762\u524D\u4E0A\u4E00\u5C40\u5DF2\u4E0D\u53EF\u7528\uFF0C\u6309\u5237\u65B0\u524D\u6536\u53E3"
+          });
+        }
+        function restorePersistedExitAuditLogs() {
+          const state2 = bot.combatLogging;
+          if (!state2 || !state2.endpoint) return 0;
+          if (!Array.isArray(state2.pending)) state2.pending = [];
+          const restored = readPersistedExitAuditLogs();
+          let added = 0;
+          const existing = new Set(state2.pending.map((entry) => entry?.exitAuditLogId).filter(Boolean));
+          for (const entry of restored) {
+            if (!entry?.exitAuditLogId || existing.has(entry.exitAuditLogId)) continue;
+            state2.pending.unshift(entry);
+            existing.add(entry.exitAuditLogId);
+            added += 1;
+          }
+          if (!Array.isArray(state2.pendingExitAuditIds)) state2.pendingExitAuditIds = [];
+          for (const entry of state2.pending) {
+            if (entry?.exitAuditLogId && !state2.pendingExitAuditIds.includes(entry.exitAuditLogId)) {
+              state2.pendingExitAuditIds.push(entry.exitAuditLogId);
+            }
+          }
+          bot.exitAudit.restored = added;
+          if (added) flushCombatLogs(true);
+          return added;
+        }
+        function newExitAuditId(source, reason) {
+          bot.exitAudit.sequence = Number(bot.exitAudit.sequence || 0) + 1;
+          const clean = String(source || "exit").replace(/[^\w.-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 24) || "exit";
+          const why = String(reason || "").replace(/[^\w.-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32) || "reason";
+          return clean + "-" + Date.now().toString(36) + "-" + bot.exitAudit.sequence + "-" + why;
+        }
+        function newExitAuditRequestId2(exitAuditId) {
+          bot.exitAudit.requestSequence = Number(bot.exitAudit.requestSequence || 0) + 1;
+          return String(exitAuditId || "exit") + "-req-" + bot.exitAudit.requestSequence;
+        }
+        function ensureExitAuditDetail(detail, meta = {}) {
+          if (!detail || typeof detail !== "object") return null;
+          const source = String(meta.source || detail.exitAuditSource || detail.source || detail.reason || "exit");
+          const reason = String(meta.reason || detail.reason || "");
+          if (!detail.exitAuditId) detail.exitAuditId = newExitAuditId(source, reason);
+          if (!detail.exitTriggeredAt) detail.exitTriggeredAt = Number(detail.at || Date.now());
+          detail.exitAuditSource = source;
+          detail.exitAuditScope = meta.scope || detail.exitAuditScope || "";
+          return detail.exitAuditId;
+        }
+        function exitAuditSelfSummary(selfLike) {
+          return combatLogSelfSummary(selfLike || bot.lastSelf || null);
+        }
+        function recordExitAuditEvent(kind, detail = {}, extra = {}) {
+          const state2 = bot.combatLogging;
+          if (!state2 || !state2.endpoint) return false;
+          const auditId = ensureExitAuditDetail(detail, extra);
+          const t = Number(extra.at || Date.now());
+          const entry = {
+            type: "exit-audit",
+            auditKind: kind,
+            exitAuditId: auditId,
+            exitAuditLogId: String(auditId || "exit") + ":" + kind + ":" + t + ":" + (Number(bot.exitAudit.requestSequence || 0) || 0),
+            at: t,
+            version: cfg.version,
+            sourceHash: cfg.sourceHash,
+            injectedBy: cfg.injectedBy,
+            url: location.href,
+            visibilityState: document.visibilityState || "",
+            scope: extra.scope || detail.exitAuditScope || "",
+            source: extra.source || detail.exitAuditSource || "",
+            reason: extra.reason || detail.reason || "",
+            summary: detail.summary || detail.exitSummary || detail.enemyLeaveSummary || "",
+            displayReason: detail.displayReason || "",
+            triggeredAt: Number(detail.exitTriggeredAt || detail.at || t),
+            confirmedAt: Number(extra.confirmedAt || detail.exitConfirmedAt || 0),
+            successDurationMs: extra.confirmedAt || detail.exitConfirmedAt ? Math.max(0, Math.round(Number(extra.confirmedAt || detail.exitConfirmedAt) - Number(detail.exitTriggeredAt || detail.at || t))) : 0,
+            currentUserId: getCurrentUserId() || null,
+            self: exitAuditSelfSummary(extra.self || detail.self || detail.injury?.self || null),
+            target: detail.target || extra.target || null,
+            injury: detail.injury || extra.injury || null,
+            pursuit: detail.pursuit || extra.pursuit || null,
+            combat: detail.combat || extra.combat || null,
+            offlineSafety: detail.offlineSafety || extra.offlineSafety || null,
+            pendingExit: (() => {
+              const pendingExitSummaryPending = bot.pendingExit;
+              if (!pendingExitSummaryPending) return null;
+              const pendingExitSummaryNow = Date.now();
+              const pendingExitSummaryReload = normalizePendingExitReloadConfirmationCore(pendingExitSummaryPending.reloadConfirmation, pendingExitSummaryPending, pendingExitSummaryNow);
+              return summarizePendingExitForExitAuditCore(pendingExitSummaryPending, {
+                nowMs: pendingExitSummaryNow,
+                retryMs: pendingExitRetryMsForExitAuditCore(pendingExitSummaryPending, {
+                  leaveRetryMinMs: cfg.leaveRetryMinMs,
+                  leaveCommandTimeoutMs: cfg.leaveCommandTimeoutMs,
+                  offlineLeaveRetryMs: cfg.offlineLeaveRetryMs,
+                  combatLeaveRetryMs: cfg.combatLeaveRetryMs,
+                  pursuitLeaveRetryMs: cfg.pursuitLeaveRetryMs
+                }),
+                reloadConfirmation: pendingExitSummaryReload
+              });
+            })(),
+            loginSnapshotGate: snapshotLoginGateStatus(),
+            request: extra.request || null,
+            leave: {
+              attempted: Boolean(detail.attempted),
+              method: detail.method || "",
+              error: detail.error || "",
+              exitPending: Boolean(detail.exitPending),
+              exitConfirmed: Boolean(detail.exitConfirmed),
+              pendingLoginSuppressUntil: detail.pendingLoginSuppressUntil || 0,
+              pendingLoginSuppressDelayMs: detail.pendingLoginSuppressDelayMs || 0,
+              pendingLoginSuppressReason: detail.pendingLoginSuppressReason || "",
+              reloginUntil: detail.reloginUntil || 0,
+              reloginDelayMs: detail.reloginDelayMs || 0,
+              holdRemainingMs: detail.holdRemainingMs || 0
+            },
+            confirmation: extra.confirmation || detail.exitConfirmation || null,
+            control: summarizeControl(),
+            runtime: combatLogRuntimeSummary(t),
+            globalState: combatLogGlobalStateSummary()
+          };
+          bot.exitAudit.lastEvent = {
+            kind,
+            exitAuditId: auditId,
+            at: t,
+            reason: entry.reason,
+            error: entry.leave.error
+          };
+          const queued = queueCombatLogEntry(entry, { critical: true });
+          if (queued) flushCombatLogs(true);
+          return queued;
+        }
+        return {
+          readPersistedExitAuditLogs,
+          writePersistedExitAuditLogs,
+          persistExitAuditLogEntry,
+          removePersistedExitAuditLogs,
+          pendingExitAuditLogIds,
+          unresolvedExitAuditLogCount,
+          exitAuditFlushPending,
+          exitAuditFlushBlockDetail,
+          pendingImportantSessionEndLogEvents,
+          importantSessionEndFlushPending,
+          importantSessionEndFlushBlockDetail,
+          closeCurrentImportantSessionBeforeLogin,
+          closeCurrentImportantSessionBeforeReload,
+          restorePersistedExitAuditLogs,
+          newExitAuditId,
+          newExitAuditRequestId: newExitAuditRequestId2,
+          ensureExitAuditDetail,
+          exitAuditSelfSummary,
+          recordExitAuditEvent
+        };
+      }
+      module.exports = {
+        createExitAuditRuntime
+      };
+    }
+  });
+
+  // src/browser/runtime/combat-log-runtime.js
+  var require_combat_log_runtime = __commonJS({
+    "src/browser/runtime/combat-log-runtime.js"(exports, module) {
+      "use strict";
+      init_define_GRASP_RAT_RUNTIME_CONFIG();
+      var { safeStringify, safeJsonClone, sanitizeCombatLogIdPart } = require_runtime_utils2();
+      var { arrayCount } = require_array_count();
+      var { createCombatLogQueueRuntime } = require_combat_log_queue_runtime();
+      var { createCombatLogFrameRuntime } = require_combat_log_frame_runtime();
+      var { createCombatLogDiagnosticsRuntime } = require_combat_log_diagnostics_runtime();
+      var { createExitAuditRuntime } = require_exit_audit_runtime();
+      var { combatLogExitSummaryFromDecision } = require_exit_summary2();
+      var {
+        clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForCombatLogBoundCore,
+        enemyReloginHoldRemainingMsBoundCore: enemyReloginHoldRemainingMsForCombatLogBoundCore,
+        offlineReloginHoldRemainingMsBoundCore: offlineReloginHoldRemainingMsForCombatLogBoundCore
+      } = require_exit_relogin();
+      function createCombatLogRuntime(runtime = {}) {
+        const {
+          bot,
+          cfg,
+          storage = typeof localStorage2 !== "undefined" ? localStorage2 : null,
+          combatLogPendingEntriesKey,
+          exitAuditPendingLogsKey,
+          loginSuppressKey,
+          loginSuppressReasonKey,
+          enemyLeaveStateKey,
+          offlineLeaveStateKey,
+          pendingExitStateKey,
+          now: now2 = () => typeof performance !== "undefined" ? performance.now() : Date.now(),
+          readPersistentExitState = () => null,
+          writePersistentPendingExitStateCore = () => null,
+          pendingExitPersistenceCoreHelpers = () => ({}),
+          clearPersistentPendingExitState = () => {
+          },
+          clearPersistentExitState = () => {
+          },
+          normalizePendingExitReloadConfirmationCore = (value) => value,
+          staleOfflineStaminaHoldContradicted = () => false,
+          readImportantLogsStore = () => ({ events: [] }),
+          restoreImportantLogsForRemote = () => 0,
+          markImportantLogsRemoteSent = () => {
+          },
+          markImportantLogsRemoteError = () => {
+          },
+          noteImportantSessionExit = () => null,
+          getCurrentUserId = () => null,
+          summarizeSelf = (value) => value,
+          dropValue: dropValue2 = () => 0,
+          dist = () => NaN,
+          speed: speed2 = () => 0,
+          hypot = Math.hypot,
+          knownHpValue = () => null,
+          isCurrentlyActive = () => false,
+          isMovingThreat = () => false,
+          isFiringEntity = () => false,
+          isInvulnerable: isInvulnerable2 = () => false,
+          getNativeEntityList = () => [],
+          normalizeBullet = (value) => value,
+          getBullets = () => [],
+          summarizeServerPositionStall = () => null,
+          combatTickActiveFromState = () => false,
+          summarizeNetworkQuality = () => null,
+          getSelf = () => null,
+          incomingBulletThreat = () => null,
+          summarizePendingCombatLeave = () => null,
+          summarizePursuit = (value) => value,
+          summarizeControl = () => null,
+          snapshotLoginGateStatus = () => null,
+          recordRuntimeDiagnostics = () => {
+          }
+        } = runtime;
+        const localStorage2 = storage;
+        const COMBAT_LOG_PENDING_ENTRIES_KEY = combatLogPendingEntriesKey;
+        const EXIT_AUDIT_PENDING_LOGS_KEY = exitAuditPendingLogsKey;
+        const LOGIN_SUPPRESS_KEY = loginSuppressKey;
+        const LOGIN_SUPPRESS_REASON_KEY = loginSuppressReasonKey;
+        const ENEMY_LEAVE_STATE_KEY = enemyLeaveStateKey;
+        const OFFLINE_LEAVE_STATE_KEY = offlineLeaveStateKey;
+        const PENDING_EXIT_STATE_KEY = pendingExitStateKey;
+        const recordRuntimeDiagnosticsCore = (_bot, detail) => recordRuntimeDiagnostics(detail);
+        let readPersistedExitAuditLogs;
+        let writePersistedExitAuditLogs;
+        let persistExitAuditLogEntry;
+        let removePersistedExitAuditLogs;
+        let pendingExitAuditLogIds;
+        let unresolvedExitAuditLogCount;
+        let exitAuditFlushPending;
+        let exitAuditFlushBlockDetail;
+        let pendingImportantSessionEndLogEvents;
+        let importantSessionEndFlushPending;
+        let importantSessionEndFlushBlockDetail;
+        let closeCurrentImportantSessionBeforeLogin;
+        let closeCurrentImportantSessionBeforeReload;
+        let restorePersistedExitAuditLogs;
+        let newExitAuditId;
+        let newExitAuditRequestId2;
+        let ensureExitAuditDetail;
+        let exitAuditSelfSummary;
+        let recordExitAuditEvent;
+        const {
+          combatLogEntryFailureKey,
+          normalizeCombatLogFailedState,
+          markCombatLogEntriesFailed,
+          markCombatLogEntriesSent,
+          combatLogPersistentEntryKey,
+          shouldPersistCombatLogPendingEntry,
+          readPersistedCombatLogPendingEntries,
+          combatLogMaxPersistedEntries,
+          writePersistedCombatLogPendingEntries,
+          persistCombatLogPendingEntries,
+          removePersistedCombatLogPendingEntries,
+          configureCombatLogging,
+          summarizeCombatLoggingStatus,
+          restorePersistedCombatLogPendingEntries,
+          queueCombatLogEntry,
+          flushCombatLogs
+        } = createCombatLogQueueRuntime({
+          bot,
+          cfg,
+          storage: localStorage2,
+          combatLogPendingEntriesKey: COMBAT_LOG_PENDING_ENTRIES_KEY,
+          persistExitAuditLogEntry: (...args) => persistExitAuditLogEntry(...args),
+          removePersistedExitAuditLogs: (...args) => removePersistedExitAuditLogs(...args),
+          unresolvedExitAuditLogCount: (...args) => unresolvedExitAuditLogCount(...args),
+          restorePersistedExitAuditLogs: (...args) => restorePersistedExitAuditLogs(...args),
+          restoreImportantLogsForRemote,
+          markImportantLogsRemoteSent,
+          markImportantLogsRemoteError
+        });
+        const {
+          combatLogSelfSummary,
+          combatEntitySummary,
+          mergeCombatEntitySource,
+          combatEntitySourceList,
+          summarizeCombatEntities,
+          combatBulletSummary,
+          summarizeCombatBullets,
+          combatMetricNumber,
+          combatMetricRound,
+          combatMetricDelta,
+          combatMetricEntityId,
+          combatMetricHp,
+          combatMetricPoint,
+          combatMetricDistance,
+          combatMetricTarget,
+          combatMetricBulletStats,
+          combatMetricActionSummary,
+          combatLogFrameMetrics,
+          combatLogGlobalStateSummary,
+          combatLogDecisionSummary,
+          combatLogEnemyExitSummary,
+          combatLogLoginResultSummary,
+          combatLogManualLoginSummary,
+          combatLogLoginSummary,
+          combatLogRuntimeSummary,
+          buildTimedCombatLogEntry,
+          combatLogExitSummary,
+          buildCombatLogEntry,
+          combatLogTriggerReason,
+          combatLogIsAfkAttack,
+          combatLogSuspendReason
+        } = createCombatLogFrameRuntime({
+          ...runtime,
+          storage: localStorage2,
+          loginSuppressKey: LOGIN_SUPPRESS_KEY,
+          loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY,
+          enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY,
+          offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY,
+          pendingExitStateKey: PENDING_EXIT_STATE_KEY
+        });
+        const {
+          coinDiagnosticsHasLoggableEntry,
+          coinDiagnosticsSignature,
+          recordCoinDiagnosticsLog,
+          targetSwitchDiagnosticSignature,
+          recordTargetSwitchLog,
+          networkQualityDiagnosticSignature,
+          networkQualityShouldLog,
+          recordNetworkQualityLog
+        } = createCombatLogDiagnosticsRuntime({
+          ...runtime,
+          queueCombatLogEntry,
+          combatLogDecisionSummary,
+          combatLogGlobalStateSummary,
+          combatLogRuntimeSummary
+        });
+        ({
+          readPersistedExitAuditLogs,
+          writePersistedExitAuditLogs,
+          persistExitAuditLogEntry,
+          removePersistedExitAuditLogs,
+          pendingExitAuditLogIds,
+          unresolvedExitAuditLogCount,
+          exitAuditFlushPending,
+          exitAuditFlushBlockDetail,
+          pendingImportantSessionEndLogEvents,
+          importantSessionEndFlushPending,
+          importantSessionEndFlushBlockDetail,
+          closeCurrentImportantSessionBeforeLogin,
+          closeCurrentImportantSessionBeforeReload,
+          restorePersistedExitAuditLogs,
+          newExitAuditId,
+          newExitAuditRequestId: newExitAuditRequestId2,
+          ensureExitAuditDetail,
+          exitAuditSelfSummary,
+          recordExitAuditEvent
+        } = createExitAuditRuntime({
+          bot,
+          cfg,
+          storage: localStorage2,
+          exitAuditPendingLogsKey: EXIT_AUDIT_PENDING_LOGS_KEY,
+          normalizePendingExitReloadConfirmationCore,
+          readImportantLogsStore,
+          restoreImportantLogsForRemote,
+          noteImportantSessionExit,
+          getCurrentUserId,
+          snapshotLoginGateStatus,
+          summarizeControl,
+          queueCombatLogEntry,
+          flushCombatLogs,
+          combatLogSelfSummary: (...args) => combatLogSelfSummary(...args),
+          combatLogRuntimeSummary: (...args) => combatLogRuntimeSummary(...args),
+          combatLogGlobalStateSummary: (...args) => combatLogGlobalStateSummary(...args)
+        }));
         function combatLogTargetLabel(entry, decision) {
           const candidates = [
             decision?.target,

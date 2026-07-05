@@ -47,6 +47,8 @@ const REQUIRED_DIST_TOKENS = [
   'function createStallDiagnosticsRuntime',
   'function createNetworkQualityRuntime',
   'function createCombatLogQueueRuntime',
+  'function createCombatLogFrameRuntime',
+  'function createCombatLogDiagnosticsRuntime',
   'function createExitAuditRuntime',
   'function createImportantSessionRuntime',
   'function createKillAttributionRuntime',
@@ -85,7 +87,9 @@ const POST_MIGRATION_LINE_BUDGETS = {
   'orchestration safety runtime': 450,
   'orchestration decision runtime': 1160,
   'orchestration tick runtime': 1280,
-  'combat log runtime': 1340,
+  'combat log runtime': 450,
+  'combat log frame runtime': 940,
+  'combat log diagnostics runtime': 260,
   'combat target runtime': 1260,
   'combat movement runtime': 1110,
   'combat aim runtime': 940,
@@ -233,6 +237,8 @@ async function main() {
   const runtimeTargetOverlaySource = readText('src/browser/runtime/target-overlay.js');
   const runtimeStatusPanelSource = readText('src/browser/runtime/status-panel.js');
   const runtimeCombatLogSource = readText('src/browser/runtime/combat-log-runtime.js');
+  const runtimeCombatLogFrameSource = readText('src/browser/runtime/combat-log-frame-runtime.js');
+  const runtimeCombatLogDiagnosticsSource = readText('src/browser/runtime/combat-log-diagnostics-runtime.js');
   const runtimeCombatLogQueueSource = readText('src/browser/runtime/combat-log-queue-runtime.js');
   const runtimeExitAuditSource = readText('src/browser/runtime/exit-audit-runtime.js');
   const runtimeImportantLoggingSource = readText('src/browser/runtime/important-logging-runtime.js');
@@ -454,13 +460,23 @@ async function main() {
     assert(!/function\s+recordUnhandledTickError\s*\(/.test(runtimeEntrySource), 'runtime entry still owns tick error recording');
     assert(!/function\s+runTickSafely\s*\(/.test(runtimeEntrySource), 'runtime entry still owns tick safety wrapper');
     assert(runtimeCombatLogSource.includes("require('./combat-log-queue-runtime')"), 'combat log runtime does not import combat-log queue runtime');
+    assert(runtimeCombatLogSource.includes("require('./combat-log-frame-runtime')"), 'combat log runtime does not import combat-log frame runtime');
+    assert(runtimeCombatLogSource.includes("require('./combat-log-diagnostics-runtime')"), 'combat log runtime does not import combat-log diagnostics runtime');
     assert(runtimeCombatLogSource.includes("require('./exit-audit-runtime')"), 'combat log runtime does not import exit-audit runtime');
     assert(runtimeCombatLogSource.includes('createCombatLogQueueRuntime({'), 'combat log runtime does not create queue bindings');
+    assert(runtimeCombatLogSource.includes('createCombatLogFrameRuntime({'), 'combat log runtime does not create frame bindings');
+    assert(runtimeCombatLogSource.includes('createCombatLogDiagnosticsRuntime({'), 'combat log runtime does not create diagnostics bindings');
     assert(runtimeCombatLogSource.includes('createExitAuditRuntime({'), 'combat log runtime does not create exit-audit bindings');
     assert(!/function\s+combatLogEntryFailureKey\s*\(/.test(runtimeCombatLogSource), 'combat log runtime still owns queue failure key body');
     assert(!/function\s+readPersistedCombatLogPendingEntries\s*\(/.test(runtimeCombatLogSource), 'combat log runtime still owns pending persistence body');
     assert(!/function\s+queueCombatLogEntry\s*\(/.test(runtimeCombatLogSource), 'combat log runtime still owns queue body');
     assert(!/function\s+flushCombatLogs\s*\(/.test(runtimeCombatLogSource), 'combat log runtime still owns flush body');
+    assert(!/function\s+combatLogSelfSummary\s*\(/.test(runtimeCombatLogSource), 'combat log runtime still owns frame self summary body');
+    assert(!/function\s+buildCombatLogEntry\s*\(/.test(runtimeCombatLogSource), 'combat log runtime still owns frame entry builder body');
+    assert(!/function\s+combatLogRuntimeSummary\s*\(/.test(runtimeCombatLogSource), 'combat log runtime still owns runtime summary body');
+    assert(!/function\s+coinDiagnosticsHasLoggableEntry\s*\(/.test(runtimeCombatLogSource), 'combat log runtime still owns coin diagnostics filter body');
+    assert(!/function\s+recordTargetSwitchLog\s*\(/.test(runtimeCombatLogSource), 'combat log runtime still owns target-switch diagnostic body');
+    assert(!/function\s+recordNetworkQualityLog\s*\(/.test(runtimeCombatLogSource), 'combat log runtime still owns network-quality diagnostic body');
     assert(!/function\s+readPersistedExitAuditLogs\s*\(/.test(runtimeCombatLogSource), 'combat log runtime still owns exit-audit persistence body');
     assert(!/function\s+recordExitAuditEvent\s*\(/.test(runtimeCombatLogSource), 'combat log runtime still owns exit-audit event body');
     assert(runtimeImportantLoggingSource.includes("require('./important-session-runtime')"), 'important logging runtime does not import important-session runtime');
@@ -481,6 +497,14 @@ async function main() {
     assert(runtimeCombatLogQueueSource.includes('function readPersistedCombatLogPendingEntries'), 'combat log pending persistence missing from queue module');
     assert(runtimeCombatLogQueueSource.includes('function queueCombatLogEntry'), 'combat log queue body missing from queue module');
     assert(runtimeCombatLogQueueSource.includes('function flushCombatLogs'), 'combat log flush body missing from queue module');
+    assert(runtimeCombatLogFrameSource.includes('function createCombatLogFrameRuntime'), 'combat-log frame runtime factory missing');
+    assert(runtimeCombatLogFrameSource.includes('function combatLogSelfSummary'), 'combat log self summary missing from frame module');
+    assert(runtimeCombatLogFrameSource.includes('function buildCombatLogEntry'), 'combat log frame entry builder missing from frame module');
+    assert(runtimeCombatLogFrameSource.includes('function combatLogRuntimeSummary'), 'combat log runtime summary missing from frame module');
+    assert(runtimeCombatLogDiagnosticsSource.includes('function createCombatLogDiagnosticsRuntime'), 'combat-log diagnostics runtime factory missing');
+    assert(runtimeCombatLogDiagnosticsSource.includes('function coinDiagnosticsHasLoggableEntry'), 'coin diagnostics filter missing from diagnostics module');
+    assert(runtimeCombatLogDiagnosticsSource.includes('function recordTargetSwitchLog'), 'target-switch diagnostics missing from diagnostics module');
+    assert(runtimeCombatLogDiagnosticsSource.includes('function recordNetworkQualityLog'), 'network-quality diagnostics missing from diagnostics module');
     assert(runtimeExitAuditSource.includes('function createExitAuditRuntime'), 'exit-audit runtime factory missing');
     assert(runtimeExitAuditSource.includes('function readPersistedExitAuditLogs'), 'exit-audit persistence missing from exit-audit module');
     assert(runtimeExitAuditSource.includes('function recordExitAuditEvent'), 'exit audit logging body missing from exit-audit module');
@@ -798,6 +822,8 @@ async function main() {
       assertLineBudget(runtimeOrchestrationDecisionSource, 'orchestration decision runtime'),
       assertLineBudget(runtimeOrchestrationTickSource, 'orchestration tick runtime'),
       assertLineBudget(runtimeCombatLogSource, 'combat log runtime'),
+      assertLineBudget(runtimeCombatLogFrameSource, 'combat log frame runtime'),
+      assertLineBudget(runtimeCombatLogDiagnosticsSource, 'combat log diagnostics runtime'),
       assertLineBudget(runtimeCombatTargetSource, 'combat target runtime'),
       assertLineBudget(runtimeCombatMovementSource, 'combat movement runtime'),
       assertLineBudget(runtimeCombatAimSource, 'combat aim runtime'),
