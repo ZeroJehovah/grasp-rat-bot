@@ -1691,3 +1691,11 @@ The main bot remains fully functional. Action arbitration is now integrated thro
 - The provider registry now contains only executable/source-producing runtime fragments, which makes the graph easier to audit before further bundler migration.
 - Static verification rejects separator-only entries in the registry and checks that renderer-owned spacing is the only fragment spacing path.
 - The `.514` manifest records bundled SHA-256 `5244e185b7ce0927b3b05743e391cccbc2c86229843143b28954c2c8924a9425` and pre-bundle remote direct SHA-256 `533621d2d526473229dc33a150752a525edfdb6c26b80531652b4bc7eefe0292`.
+
+`bootstrap-0.4.515` merges the runtime fragment materializer into the runtime source boundary:
+
+- `src/browser/runtime-fragments-source.js` is removed.
+- `src/browser/runtime-source.js` now owns the named fragment contract, `materializeRuntimeFragments(entries)`, and `browserRuntimeFragments(config)`.
+- `src/browser/runtime-source.js` imports `browserRuntimeFragmentEntries(config)` directly from `src/browser/runtime-fragment-registry.js`, so the registry keeps provider imports while runtime-source owns source rendering and materialization.
+- Static verification rejects the obsolete materializer file and checks that provider imports do not move into the runtime-source materializer.
+- The `.515` manifest records bundled SHA-256 `d91a6c1b9b3ee4a9eca404d346081b11e6aa4ba2e77a5c3a5172120f4946ece3` and pre-bundle remote direct SHA-256 `471fbe29b12fe09f5cf6f649053211228cb3a96df4a060df655d5989de466fc6`.
