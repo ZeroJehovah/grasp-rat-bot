@@ -50,6 +50,10 @@ const REQUIRED_DIST_TOKENS = [
   'function createExitAuditRuntime',
   'function createImportantSessionRuntime',
   'function createKillAttributionRuntime',
+  'function createProfitCoinRuntime',
+  'function createProfitOpportunityRuntime',
+  'function createProfitPostAttackRuntime',
+  'function createProfitArbitrationRuntime',
   'function updateBotPanel',
   'function getNativeState',
   'function createOrchestrationRuntime',
@@ -207,6 +211,10 @@ async function main() {
   const runtimeStallDiagnosticsSource = readText('src/browser/runtime/stall-diagnostics-runtime.js');
   const runtimeNetworkQualitySource = readText('src/browser/runtime/network-quality-runtime.js');
   const runtimeProfitSource = readText('src/browser/runtime/profit-runtime.js');
+  const runtimeProfitCoinSource = readText('src/browser/runtime/profit-coin-runtime.js');
+  const runtimeProfitOpportunitySource = readText('src/browser/runtime/profit-opportunity-runtime.js');
+  const runtimeProfitPostAttackSource = readText('src/browser/runtime/profit-post-attack-runtime.js');
+  const runtimeProfitArbitrationSource = readText('src/browser/runtime/profit-arbitration-runtime.js');
   const runtimeCombatSource = readText('src/browser/runtime/combat-runtime.js');
   const runtimeOrchestrationSource = readText('src/browser/runtime/orchestration-runtime.js');
   const userscriptText = readText('userscript/grasp-rat-bootstrap.user.js');
@@ -624,7 +632,7 @@ async function main() {
     assert(runtimeNetworkQualitySource.includes('function recordNetworkQualityAttackDamage'), 'network quality attack-damage body missing from network quality module');
   });
 
-  check('profit runtime owns coin opportunity progress and arbitration bodies', () => {
+  check('profit runtime modules own coin opportunity progress and arbitration bodies', () => {
     assert(runtimeEntrySource.includes("require('./runtime/profit-runtime')"), 'runtime entry does not import profit runtime module');
     assert(runtimeEntrySource.includes('createProfitRuntime({'), 'runtime entry does not create profit runtime bindings');
     assert(!/function\s+coinThreatDangerRadius\s*\(/.test(runtimeEntrySource), 'runtime entry still owns coin threat radius body');
@@ -642,18 +650,45 @@ async function main() {
     assert(!/applyFinalActionArbitrationCore\s*\(\s*action\s*,/.test(runtimeEntrySource), 'runtime entry still applies final action arbitration directly');
     assert(!/recordActionSwitchDiagnosticsCore\s*\(\s*action\s*,/.test(runtimeEntrySource), 'runtime entry still records target-switch diagnostics directly');
     assert(runtimeProfitSource.includes('function createProfitRuntime'), 'profit runtime factory missing');
-    assert(runtimeProfitSource.includes('function coinThreatDangerRadius'), 'coin threat radius body missing from profit module');
-    assert(runtimeProfitSource.includes('function safeCoinCandidates'), 'safe coin candidate body missing from profit module');
-    assert(runtimeProfitSource.includes('function scoreCoinOpportunity'), 'coin opportunity scoring missing from profit module');
-    assert(runtimeProfitSource.includes('function scoreEnemyOpportunity'), 'enemy opportunity scoring missing from profit module');
-    assert(runtimeProfitSource.includes('function buildCoinAction'), 'coin action builder missing from profit module');
-    assert(runtimeProfitSource.includes('function buildEnemyAction'), 'enemy action builder missing from profit module');
-    assert(runtimeProfitSource.includes('function markCoinCollected'), 'coin collection tracking missing from profit module');
-    assert(runtimeProfitSource.includes('function coinProgressCoreOptions'), 'coin progress options missing from profit module');
-    assert(runtimeProfitSource.includes('function applyCoinProgressAction'), 'coin progress action state machine missing from profit module');
-    assert(runtimeProfitSource.includes('function ensureFinalActionArbitration'), 'final action arbitration state missing from profit module');
-    assert(runtimeProfitSource.includes('function applyFinalActionArbitration'), 'final action arbitration wrapper missing from profit module');
-    assert(runtimeProfitSource.includes('function recordActionSwitchDiagnostics'), 'target-switch diagnostics wrapper missing from profit module');
+    assert(runtimeProfitSource.includes("require('./profit-coin-runtime')"), 'profit runtime does not import coin runtime module');
+    assert(runtimeProfitSource.includes("require('./profit-opportunity-runtime')"), 'profit runtime does not import opportunity runtime module');
+    assert(runtimeProfitSource.includes("require('./profit-post-attack-runtime')"), 'profit runtime does not import post-attack runtime module');
+    assert(runtimeProfitSource.includes("require('./profit-arbitration-runtime')"), 'profit runtime does not import arbitration runtime module');
+    assert(runtimeProfitSource.includes('createProfitCoinRuntime({'), 'profit runtime does not create coin runtime bindings');
+    assert(runtimeProfitSource.includes('createProfitOpportunityRuntime({'), 'profit runtime does not create opportunity runtime bindings');
+    assert(runtimeProfitSource.includes('createProfitPostAttackRuntime({'), 'profit runtime does not create post-attack runtime bindings');
+    assert(runtimeProfitSource.includes('createProfitArbitrationRuntime({'), 'profit runtime does not create arbitration runtime bindings');
+    assert(!/function\s+coinThreatDangerRadius\s*\(/.test(runtimeProfitSource), 'profit runtime still owns coin threat radius body');
+    assert(!/function\s+safeCoinCandidates\s*\(/.test(runtimeProfitSource), 'profit runtime still owns safe coin candidate body');
+    assert(!/function\s+scoreCoinOpportunity\s*\(/.test(runtimeProfitSource), 'profit runtime still owns coin opportunity scoring');
+    assert(!/function\s+scoreEnemyOpportunity\s*\(/.test(runtimeProfitSource), 'profit runtime still owns enemy opportunity scoring');
+    assert(!/function\s+buildCoinAction\s*\(/.test(runtimeProfitSource), 'profit runtime still owns coin action builder');
+    assert(!/function\s+buildEnemyAction\s*\(/.test(runtimeProfitSource), 'profit runtime still owns enemy action builder');
+    assert(!/function\s+markCoinCollected\s*\(/.test(runtimeProfitSource), 'profit runtime still owns coin collection tracking');
+    assert(!/function\s+coinProgressCoreOptions\s*\(/.test(runtimeProfitSource), 'profit runtime still owns coin progress options');
+    assert(!/function\s+applyCoinProgressAction\s*\(/.test(runtimeProfitSource), 'profit runtime still owns coin progress action state machine');
+    assert(!/function\s+ensureFinalActionArbitration\s*\(/.test(runtimeProfitSource), 'profit runtime still owns final action arbitration state');
+    assert(runtimeProfitCoinSource.includes('function createProfitCoinRuntime'), 'profit coin runtime factory missing');
+    assert(runtimeProfitCoinSource.includes('function coinThreatDangerRadius'), 'coin threat radius body missing from profit coin module');
+    assert(runtimeProfitCoinSource.includes('function safeCoinCandidates'), 'safe coin candidate body missing from profit coin module');
+    assert(runtimeProfitCoinSource.includes('function pickRealtimeLocalCoin'), 'realtime local coin picker missing from profit coin module');
+    assert(runtimeProfitCoinSource.includes('function pickCoinField'), 'field coin picker missing from profit coin module');
+    assert(runtimeProfitOpportunitySource.includes('function createProfitOpportunityRuntime'), 'profit opportunity runtime factory missing');
+    assert(runtimeProfitOpportunitySource.includes('function scoreCoinOpportunity'), 'coin opportunity scoring missing from profit opportunity module');
+    assert(runtimeProfitOpportunitySource.includes('function scoreEnemyOpportunity'), 'enemy opportunity scoring missing from profit opportunity module');
+    assert(runtimeProfitOpportunitySource.includes('function pickProfitableCombatTarget'), 'profitable combat target picker missing from profit opportunity module');
+    assert(runtimeProfitOpportunitySource.includes('function clearMissingVisibleCoinTarget'), 'missing visible coin cleanup missing from profit opportunity module');
+    assert(runtimeProfitPostAttackSource.includes('function createProfitPostAttackRuntime'), 'profit post-attack runtime factory missing');
+    assert(runtimeProfitPostAttackSource.includes('function buildPostAttackDropWaitAction'), 'post-attack drop wait builder missing from profit post-attack module');
+    assert(runtimeProfitPostAttackSource.includes('function buildCoinAction'), 'coin action builder missing from profit post-attack module');
+    assert(runtimeProfitPostAttackSource.includes('function buildEnemyAction'), 'enemy action builder missing from profit post-attack module');
+    assert(runtimeProfitArbitrationSource.includes('function createProfitArbitrationRuntime'), 'profit arbitration runtime factory missing');
+    assert(runtimeProfitArbitrationSource.includes('function markCoinCollected'), 'coin collection tracking missing from profit arbitration module');
+    assert(runtimeProfitArbitrationSource.includes('function coinProgressCoreOptions'), 'coin progress options missing from profit arbitration module');
+    assert(runtimeProfitArbitrationSource.includes('function applyCoinProgressAction'), 'coin progress action state machine missing from profit arbitration module');
+    assert(runtimeProfitArbitrationSource.includes('function ensureFinalActionArbitration'), 'final action arbitration state missing from profit arbitration module');
+    assert(runtimeProfitArbitrationSource.includes('function applyFinalActionArbitration'), 'final action arbitration wrapper missing from profit arbitration module');
+    assert(runtimeProfitArbitrationSource.includes('function recordActionSwitchDiagnostics'), 'target-switch diagnostics wrapper missing from profit arbitration module');
   });
 
   check('combat runtime owns target movement aim fire state and action bodies', () => {
