@@ -4,14 +4,15 @@ Update this file for every remote bot release or handoff-relevant state change. 
 
 ## Latest Release
 
-- Latest remote bot: `bootstrap-0.4.564`.
-- Latest manifest SHA-256: `63a65abbdbc8f1d5237132e639baa310f9a28060146fd0785f38a6d7b4942289`.
-- Latest remote release commit: `bcca0c9` (`bootstrap-0.4.564` use close passive-runner live precision).
+- Latest remote bot: `bootstrap-0.4.565`.
+- Latest manifest SHA-256: `6048154c8e1bfa228a7dbfcccf74675f9a39695a38a1f7498a75650a5389fd1b`.
+- Latest remote release commit: `pending` (`bootstrap-0.4.565` tighten post-login visible-range zoom fit).
 - Latest bootstrap A versions: Tampermonkey `0.4.74`, extension `0.1.53`.
-- Latest direct entry/config SHA-256: `55caa34d5bec1c746d0d8eb4703f1dabc183b7e20416e1f11fc79832ce3310fc`.
+- Latest direct entry/config SHA-256: `3938c2c1b9a766127075af7e4cbe34a507078c0543c634bff4129515b92baeb9`.
 
 ## Current Handoff
 
+- `bootstrap-0.4.565` changes post-login visible-range zoom from one-way zoom-out to a slower measured fit loop. It now targets a near-full view-circle fit (`postLoginZoomFitTargetRatio = 0.98`, tolerance `0.04`), uses smaller/slower wheel steps (`postLoginZoomWheelDeltaY = 35`, `postLoginZoomOutIntervalMs = 220`), stops immediately after a post-step measurement reaches the target band, and can zoom back in when the view was over-shrunk. Fallback zoom button clicks are serialized with fit rechecks instead of queuing fixed clicks blindly.
 - `bootstrap-0.4.564` changes confirmed passive coin-runner aiming inside `combatPassiveRunnerPrecisionRange = 5500cm` from full intercept lead to live/native/render precision. Recent `xuanze00` replays showed the old close intercept overled small zigzag movement; the new generic passive-runner branch improved estimated hits from `29/229` to `86/229` and from `19/143` to `67/143` on two records, while `colloq168` active-pressure replays stayed effectively unchanged.
 - `bootstrap-0.4.563` preserves healthy high-value visible coin pickup after a same-tick minor injury instead of escalating the generic `injury hp drop` fallback to `leave()`, while keeping low-HP/combat-disadvantage exits intact. Injury leave summaries now prefer an explicit bullet owner or closer real human over a farther/invulnerable Active summary, so the displayed attacker should match the nearby player that caused the HP drop.
 - `bootstrap-0.4.562` passes `directionTo` into combat movement runtime and `now` into combat target runtime, with objective-build smoke coverage for passive-runner close movement and sticky combat target selection; the checked browser runtime surface has no unexpected `no-undef` findings beyond known build/page globals.
@@ -42,7 +43,7 @@ Update this file for every remote bot release or handoff-relevant state change. 
 
 ## Latest Validation Baseline
 
-The latest `bootstrap-0.4.564` release validation passed:
+The latest `bootstrap-0.4.565` release validation passed:
 
 ```bash
 node grasp-rat-bot.js --self-test
@@ -57,13 +58,9 @@ node --check extension/content-bridge.js
 node --check extension/page-bootstrap.js
 node --check extension/popup.js
 cd combat-log-service && npm test
-cd combat-log-service && npm run replay -- --file logs/2026-07-06/combat/20260705171540-self-28886-vs-xuanze00.jsonl --start-line 96 --end-line 2316 --self-id 28886 --target-id 34711 --target-name xuanze00
-cd combat-log-service && npm run replay -- --file logs/2026-07-06/combat/20260705160246-self-28886-vs-xuanze00.jsonl --start-line 1 --end-line 1734 --self-id 28886 --target-id 34711 --target-name xuanze00
-cd combat-log-service && npm run replay -- --file logs/2026-07-06/combat/20260705165650-self-28886-vs-colloq168.jsonl --start-line 1 --end-line 1006 --self-id 28886 --target-id 34683 --target-name colloq168
-cd combat-log-service && npm run replay -- --file logs/2026-07-06/combat/20260705164449-self-28886-vs-colloq168.jsonl --start-line 1 --end-line 1439 --self-id 28886 --target-id 34683 --target-name colloq168
 npm run test:runtime-helper-entry
 npm run test:remote-bundled
-node scripts/build-remote-bot.js --version bootstrap-0.4.564
+node scripts/build-remote-bot.js --version bootstrap-0.4.565
 node scripts/verify-objective-build.js
 git diff --check
 ```
@@ -79,6 +76,7 @@ Latest objective build verification reports 35 checks and guards:
 - dependency-width budgets for high-risk composition factories;
 - native/realtime-only combat target/aim/fire anchors;
 - visible/native ordinary-profit priority before snapshot fallback;
+- post-login visible-range zoom keeps slowed measured steps, bidirectional over-zoom correction, and fallback rechecks;
 - bootstrap auto-login evaluates login-point safety only after login is needed;
 - userscript and extension bootstrap version consistency.
 
