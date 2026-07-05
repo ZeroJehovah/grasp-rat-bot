@@ -12,7 +12,7 @@
   var define_GRASP_RAT_RUNTIME_CONFIG_default;
   var init_define_GRASP_RAT_RUNTIME_CONFIG = __esm({
     "<define:__GRASP_RAT_RUNTIME_CONFIG__>"() {
-      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.561" };
+      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.562" };
     }
   });
 
@@ -712,7 +712,7 @@
         const fetchJsonNoStore = typeof runtime.fetchJsonNoStore === "function" ? runtime.fetchJsonNoStore : async () => null;
         const recordUnhandledTickError = typeof runtime.recordUnhandledTickError === "function" ? runtime.recordUnhandledTickError : () => {
         };
-        const now2 = typeof runtime.now === "function" ? runtime.now : Date.now;
+        const now = typeof runtime.now === "function" ? runtime.now : Date.now;
         const locationHref = typeof runtime.locationHref === "function" ? runtime.locationHref : () => typeof location === "object" && location ? location.href : "";
         const setTimer = typeof runtime.setInterval === "function" ? runtime.setInterval : setInterval;
         function currentState() {
@@ -743,16 +743,16 @@
           if (!raw) return "";
           try {
             const parsed = new URL(raw, locationHref());
-            parsed.searchParams.set("_graspRatWhitelistTs", String(now2()));
+            parsed.searchParams.set("_graspRatWhitelistTs", String(now()));
             return parsed.toString();
           } catch (_) {
-            return raw + (raw.includes("?") ? "&" : "?") + "_graspRatWhitelistTs=" + now2();
+            return raw + (raw.includes("?") ? "&" : "?") + "_graspRatWhitelistTs=" + now();
           }
         }
         async function refreshTargetWhitelist(reason = "manual") {
           const state2 = currentState();
           const url = String(state2.url || "").trim();
-          const t = now2();
+          const t = now();
           if (!url) {
             state2.lastFetchAt = t;
             state2.lastReason = "no-url";
@@ -768,14 +768,14 @@
             const names = parseTargetWhitelistNames(payload, cfg.targetWhitelistMaxNames);
             state2.names = names;
             state2.nameSet = new Set(names);
-            state2.lastOkAt = now2();
+            state2.lastOkAt = now();
             state2.lastError = "";
             state2.lastErrorAt = 0;
             state2.lastReason = String(reason || "refresh");
             return summarizeTargetWhitelistStatus();
           } catch (err) {
             state2.lastError = err?.message || String(err);
-            state2.lastErrorAt = now2();
+            state2.lastErrorAt = now();
             state2.lastReason = String(reason || "refresh") + "-failed";
             return summarizeTargetWhitelistStatus();
           } finally {
@@ -2052,10 +2052,10 @@
           helpers.loginPointSafetyExitSelfForDetail(detail, meta, helpers.lastSelf)
         );
         helpers.ensureExitAuditDetail(detail, meta);
-        const now2 = typeof helpers.now === "function" ? helpers.now() : Number(helpers.now || 0) || Date.now();
+        const now = typeof helpers.now === "function" ? helpers.now() : Number(helpers.now || 0) || Date.now();
         helpers.recordExitAuditEvent("exit-trigger", detail, {
           ...meta,
-          at: Number(detail.exitTriggeredAt || detail.at || now2)
+          at: Number(detail.exitTriggeredAt || detail.at || now)
         });
         return detail.exitAuditId;
       }
@@ -2229,10 +2229,10 @@
         if (!(delayMs > 0)) return 0;
         const suppressReason = helpers.pendingExitSuppressReason(storageReason);
         const until = helpers.setLoginSuppress(suppressReason, delayMs);
-        const now2 = typeof helpers.now === "function" ? helpers.now() : Number(helpers.now || 0) || Date.now();
+        const now = typeof helpers.now === "function" ? helpers.now() : Number(helpers.now || 0) || Date.now();
         detail.pendingLoginSuppressReason = suppressReason;
         detail.pendingLoginSuppressUntil = until;
-        detail.pendingLoginSuppressDelayMs = Math.max(0, Math.round(until - now2));
+        detail.pendingLoginSuppressDelayMs = Math.max(0, Math.round(until - now));
         detail.pendingLoginSuppressMinimumDelayMs = minimumDelayMs;
         detail.pendingLoginSuppressHpDelayMs = delay.hpDelayMs || 0;
         detail.pendingLoginSuppressHp = delay.hp || null;
@@ -2286,7 +2286,7 @@
         return text.includes("reconnect churn") || text.includes("server position") || text.includes("stamina") || text.includes("missing self") || text.includes("sampling outage") || text.includes("combat tick gap");
       }
       function enemyReloginHoldRemainingMsCore(bot, storage, helpers) {
-        const now2 = Number(helpers.now || 0) || 0;
+        const now = Number(helpers.now || 0) || 0;
         let until = Number(bot.pursuitReloginUntil || 0);
         const persistent = helpers.readPersistentExitState(helpers.enemyLeaveStateKey);
         if (Number(persistent?.reloginUntil || 0) > until) {
@@ -2303,14 +2303,14 @@
           }
         } catch (_) {
         }
-        const remaining = Math.max(0, until - now2);
+        const remaining = Math.max(0, until - now);
         if (!remaining && bot.pursuitReloginUntil) {
           bot.pursuitReloginUntil = 0;
         }
         return Math.round(remaining);
       }
       function offlineReloginHoldRemainingMsCore(bot, storage, helpers) {
-        const now2 = Number(helpers.now || 0) || 0;
+        const now = Number(helpers.now || 0) || 0;
         let until = Number(bot.offlineReloginUntil || 0);
         const persistent = helpers.readPersistentExitState(helpers.offlineLeaveStateKey);
         if (Number(persistent?.reloginUntil || 0) > until) {
@@ -2318,7 +2318,7 @@
           bot.offlineReloginUntil = until;
           bot.lastOfflineLeaveResult = persistent;
         }
-        if (until > now2 && helpers.staleOfflineStaminaHoldContradicted(bot.lastOfflineLeaveResult || persistent)) {
+        if (until > now && helpers.staleOfflineStaminaHoldContradicted(bot.lastOfflineLeaveResult || persistent)) {
           helpers.clearOfflineReloginHold("stale stamina hold contradicted by known stamina");
           return 0;
         }
@@ -2331,11 +2331,11 @@
           }
         } catch (_) {
         }
-        if (until > now2 && helpers.staleOfflineStaminaHoldContradicted(bot.lastOfflineLeaveResult || persistent)) {
+        if (until > now && helpers.staleOfflineStaminaHoldContradicted(bot.lastOfflineLeaveResult || persistent)) {
           helpers.clearOfflineReloginHold("stale offline suppress contradicted by known stamina");
           return 0;
         }
-        const remaining = Math.max(0, until - now2);
+        const remaining = Math.max(0, until - now);
         if (!remaining && bot.offlineReloginUntil) {
           bot.offlineReloginUntil = 0;
         }
@@ -2383,13 +2383,13 @@
         );
       }
       function setOfflineLeaveSuppressCore(bot, reason, detail, selfLike = null, options = {}, helpers) {
-        const now2 = Number(helpers.now || 0) || 0;
+        const now = Number(helpers.now || 0) || 0;
         const staminaHold = helpers.staminaExitHoldUntilForDetail(detail);
         if (staminaHold && detail) {
           if (staminaHold.staminaBudgetExit) detail.staminaBudgetHold = staminaHold;
           else detail.staminaReset = staminaHold;
         }
-        if (!staminaHold && !(Number(options.minimumUntil || 0) > now2)) {
+        if (!staminaHold && !(Number(options.minimumUntil || 0) > now)) {
           const unsafeOfflineExit = helpers.offlineExitRequiresUnsafeReloginDelay(reason, detail?.offlineSafety || null);
           bot.offlineReloginUntil = 0;
           bot.lastOfflineLeaveWaitMs = 0;
@@ -2438,14 +2438,14 @@
         });
       }
       function primePendingStaminaExitLoginSuppressCore(detail, helpers) {
-        const now2 = Number(helpers.now || 0) || 0;
+        const now = Number(helpers.now || 0) || 0;
         const hold = helpers.staminaExitHoldUntilForDetail(detail);
         if (!hold) return 0;
-        const delayMs = hold.fixed ? hold.fixedDelayMs : Math.max(1e3, Math.round(Number(hold.until || 0) - now2));
+        const delayMs = hold.fixed ? hold.fixedDelayMs : Math.max(1e3, Math.round(Number(hold.until || 0) - now));
         const until = helpers.setLoginSuppress("stamina leave pending", delayMs);
         if (detail) {
           detail.pendingLoginSuppressUntil = until;
-          detail.pendingLoginSuppressDelayMs = Math.max(0, Math.round(until - now2));
+          detail.pendingLoginSuppressDelayMs = Math.max(0, Math.round(until - now));
           if (hold.staminaBudgetExit) detail.staminaBudgetHold = hold;
           else detail.staminaReset = hold;
         }
@@ -2798,9 +2798,9 @@
         const cfg = runtime.cfg && typeof runtime.cfg === "object" ? runtime.cfg : {};
         const storage = runtime.storage || localStorage;
         const keys = runtime.keys && typeof runtime.keys === "object" ? runtime.keys : {};
-        const now2 = typeof runtime.now === "function" ? runtime.now : fallbackNow;
+        const now = typeof runtime.now === "function" ? runtime.now : fallbackNow;
         const performanceNow = typeof runtime.performanceNow === "function" ? runtime.performanceNow : fallbackPerformanceNow;
-        function refreshExitDetail(detail, t = now2()) {
+        function refreshExitDetail(detail, t = now()) {
           return refreshExitDetailCore(
             detail,
             (summaryReason, summarySafety) => offlineLeaveSummaryCore(summaryReason, summarySafety, {
@@ -2811,13 +2811,13 @@
             t
           );
         }
-        function readPersistentLastSelfState(t = now2()) {
+        function readPersistentLastSelfState(t = now()) {
           return readPersistentLastSelfStateCore(storage, keys.lastSelfStateKey, cfg.lastSelfPersistMaxMs, t);
         }
-        function writePersistentLastSelfState(selfSummary, t = now2()) {
+        function writePersistentLastSelfState(selfSummary, t = now()) {
           writePersistentLastSelfStateCore(storage, keys.lastSelfStateKey, selfSummary, t);
         }
-        function readPersistentExitState(key, t = now2()) {
+        function readPersistentExitState(key, t = now()) {
           return readPersistentExitStateCore(storage, key, refreshExitDetail, t);
         }
         function writePersistentExitState(key, detail) {
@@ -2855,7 +2855,7 @@
           chooseInitialPendingExitState: (memoryState, storedState, t, options) => chooseInitialPendingExitStateCore(memoryState, storedState, t, options, pendingExitPersistenceCoreHelpers()),
           enemyLeaveStateKey: keys.enemyLeaveStateKey,
           offlineLeaveStateKey: keys.offlineLeaveStateKey,
-          nowMs: now2
+          nowMs: now
         });
         return {
           readPersistentLastSelfState,
@@ -3686,7 +3686,7 @@
         const cfg = runtime.cfg && typeof runtime.cfg === "object" ? runtime.cfg : {};
         const hypot = typeof runtime.hypot === "function" ? runtime.hypot : Math.hypot;
         const performanceNow = typeof runtime.performanceNow === "function" ? runtime.performanceNow : fallbackPerformanceNow;
-        const now2 = () => performanceNow();
+        const now = () => performanceNow();
         const dist = (a, b) => hypot(Number(a.x) - Number(b.x), Number(a.y) - Number(b.y));
         const speed = (e) => hypot(Number(e.vx) || 0, Number(e.vy) || 0);
         const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
@@ -3808,7 +3808,7 @@
         };
         return {
           hypot,
-          now: now2,
+          now,
           dist,
           speed,
           clamp,
@@ -3872,7 +3872,7 @@
           clearPersistentExitState = () => {
           },
           refreshExitDetail = (value) => value,
-          now: now2 = fallbackNow
+          now = fallbackNow
         } = runtime;
         function latestEnemyLeaveResult() {
           const candidates = [
@@ -3883,7 +3883,7 @@
           ].filter((item) => item.result);
           return candidates.sort((a, b) => b.at - a.at)[0]?.result || null;
         }
-        function activeEnemyLeaveDetail(t = now2()) {
+        function activeEnemyLeaveDetail(t = now()) {
           const current = latestEnemyLeaveResult();
           const restored = readPersistentExitState(enemyLeaveStateKey, t);
           const picked = current || restored || bot.lastEnemyLeaveResult || null;
@@ -3900,7 +3900,7 @@
           }
           return refreshed;
         }
-        function activeOfflineLeaveDetail(t = now2()) {
+        function activeOfflineLeaveDetail(t = now()) {
           const picked = bot.lastOfflineLeaveResult || readPersistentExitState(offlineLeaveStateKey, t);
           if (!picked) return null;
           const refreshed = refreshExitDetail(picked, t);
@@ -3964,7 +3964,7 @@
           postExitDecisionWithoutTargetCore = (value) => value,
           resetOpportunitySwitchLock = () => {
           },
-          now: now2 = fallbackNow,
+          now = fallbackNow,
           consoleObject = typeof console !== "undefined" ? console : null
         } = runtime;
         function clearPostExitTargetState(reason = "exit-confirmed") {
@@ -4004,7 +4004,7 @@
           const paused = Boolean(readPageGlobal("__graspRatBotPaused", false, pageGlobal) === true || localPaused);
           if (paused !== bot.paused) {
             bot.paused = paused;
-            bot.pauseChangedAt = now2();
+            bot.pauseChangedAt = now();
             if (paused) {
               if (stopOnPause) stopMotionSafely("paused");
               removeTargetOverlay();
@@ -5416,7 +5416,7 @@
           enemyLeaveStateKey,
           offlineLeaveStateKey,
           pendingExitStateKey,
-          now: now2 = () => typeof performance !== "undefined" ? performance.now() : Date.now(),
+          now = () => typeof performance !== "undefined" ? performance.now() : Date.now(),
           readPersistentExitState = () => null,
           writePersistentPendingExitStateCore = () => null,
           pendingExitPersistenceCoreHelpers = () => ({}),
@@ -6064,14 +6064,14 @@
         }
         function buildTimedCombatLogEntry(source, decision) {
           const buildStartedAt = Date.now();
-          const buildStartedPerf = now2();
+          const buildStartedPerf = now();
           try {
             return buildCombatLogEntry(source, decision);
           } finally {
             recordRuntimeDiagnosticsCore(bot, {
               lastCombatLogBuildAt: Date.now(),
               lastCombatLogBuildStartedAt: buildStartedAt,
-              lastCombatLogBuildMs: Math.max(0, Math.round(now2() - buildStartedPerf))
+              lastCombatLogBuildMs: Math.max(0, Math.round(now() - buildStartedPerf))
             });
           }
         }
@@ -6080,7 +6080,7 @@
         }
         function buildCombatLogEntry(source, decision) {
           const entryAt = Date.now();
-          const perfNow = Math.round(now2());
+          const perfNow = Math.round(now());
           let currentSelf = null;
           try {
             currentSelf = getSelf();
@@ -6229,7 +6229,7 @@
           enemyLeaveStateKey,
           offlineLeaveStateKey,
           pendingExitStateKey,
-          now: now2 = () => typeof performance !== "undefined" ? performance.now() : Date.now(),
+          now = () => typeof performance !== "undefined" ? performance.now() : Date.now(),
           readPersistentExitState = () => null,
           writePersistentPendingExitStateCore = () => null,
           pendingExitPersistenceCoreHelpers = () => ({}),
@@ -6302,7 +6302,7 @@
           queueCombatLogEntry({
             type: "coin-diagnostics",
             at: t,
-            perfNow: Math.round(now2()),
+            perfNow: Math.round(now()),
             tickCount: bot.tickCount,
             source,
             version: cfg.version,
@@ -6343,7 +6343,7 @@
           queueCombatLogEntry({
             type: "target-switch",
             at: t,
-            perfNow: Math.round(now2()),
+            perfNow: Math.round(now()),
             tickCount: bot.tickCount,
             source,
             version: cfg.version,
@@ -6400,7 +6400,7 @@
           queueCombatLogEntry({
             type: "network-quality",
             at: t,
-            perfNow: Math.round(now2()),
+            perfNow: Math.round(now()),
             tickCount: bot.tickCount,
             source,
             version: cfg.version,
@@ -6758,7 +6758,7 @@
           enemyLeaveStateKey,
           offlineLeaveStateKey,
           pendingExitStateKey,
-          now: now2 = () => typeof performance !== "undefined" ? performance.now() : Date.now(),
+          now = () => typeof performance !== "undefined" ? performance.now() : Date.now(),
           readPersistentExitState = () => null,
           writePersistentPendingExitStateCore = () => null,
           pendingExitPersistenceCoreHelpers = () => ({}),
@@ -7046,7 +7046,7 @@
         }
         function recordCombatLogTick(source, decision = bot.lastDecision) {
           const recordStartedAt = Date.now();
-          const recordStartedPerf = now2();
+          const recordStartedPerf = now();
           const state2 = bot.combatLogging;
           if (!state2?.enabled) return;
           try {
@@ -7100,7 +7100,7 @@
             recordRuntimeDiagnosticsCore(bot, {
               lastCombatLogRecordAt: Date.now(),
               lastCombatLogRecordStartedAt: recordStartedAt,
-              lastCombatLogRecordMs: Math.max(0, Math.round(now2() - recordStartedPerf))
+              lastCombatLogRecordMs: Math.max(0, Math.round(now() - recordStartedPerf))
             });
           }
         }
@@ -7201,7 +7201,7 @@
       function createTickSafetyRuntime(runtime = {}) {
         const {
           bot,
-          now: now2 = () => typeof performance !== "undefined" ? performance.now() : Date.now(),
+          now = () => typeof performance !== "undefined" ? performance.now() : Date.now(),
           tick = () => void 0,
           recordRuntimeDiagnostics = () => {
           }
@@ -7228,7 +7228,7 @@
         }
         function runTickSafely(source = "timer") {
           const tickStartedAt = Date.now();
-          const tickStartedPerf = now2();
+          const tickStartedPerf = now();
           recordRuntimeDiagnosticsCore(bot, {
             lastTickStartedAt: tickStartedAt,
             lastTickSource: source
@@ -7238,7 +7238,7 @@
           }).finally(() => {
             recordRuntimeDiagnosticsCore(bot, {
               lastTickCompletedAt: Date.now(),
-              lastTickDurationMs: Math.max(0, Math.round(now2() - tickStartedPerf)),
+              lastTickDurationMs: Math.max(0, Math.round(now() - tickStartedPerf)),
               lastTickSource: source
             });
           });
@@ -10293,7 +10293,7 @@
           reloginDelayForHpCore = () => 0,
           randomBetween = () => 0,
           hpInfoForRelogin = () => ({ hp: 100, maxHp: 100, ratio: 1 }),
-          now: now2 = () => typeof performance !== "undefined" ? performance.now() : Date.now(),
+          now = () => typeof performance !== "undefined" ? performance.now() : Date.now(),
           dist = () => 0,
           speed = () => 0,
           clamp = (value, min, max) => Math.max(min, Math.min(max, value)),
@@ -10309,7 +10309,7 @@
         const ENEMY_LEAVE_STATE_KEY = enemyLeaveStateKey;
         function summarizePursuit(pursuit = bot.pursuit) {
           if (!pursuit) return null;
-          const t = now2();
+          const t = now();
           const lastSeenAt = Number(pursuit.lastSeenAt || pursuit.startedAt || t);
           const thresholdMs = Number.isFinite(Number(pursuit.thresholdMs)) ? Number(pursuit.thresholdMs) : cfg.pursuitLeaveMs;
           return {
@@ -10453,7 +10453,7 @@
           return Math.max(0, Math.min(...candidates.filter((value) => Number.isFinite(value))));
         }
         function updatePursuitTracking(self, activeThreats, action) {
-          const t = now2();
+          const t = now();
           const previous = bot.pursuit;
           const candidates = (activeThreats || []).map((threat) => pursuitPressure(self, threat, previous, action)).filter(Boolean).sort((a, b) => b.score - a.score);
           const picked = candidates[0] || null;
@@ -12128,7 +12128,7 @@
           clamp = (value, min, max) => Math.max(min, Math.min(max, value)),
           dist = () => 0,
           speed = () => 0,
-          now: now2 = () => typeof performance !== "undefined" ? performance.now() : Date.now(),
+          now = () => typeof performance !== "undefined" ? performance.now() : Date.now(),
           isFullHp = () => true,
           threatKey = (threat) => String(threat?.id ?? threat?.user_id ?? ""),
           returnBlockRadius = () => 0,
@@ -12571,7 +12571,7 @@
           reloginDelayForHpCore,
           randomBetween,
           hpInfoForRelogin,
-          now: now2,
+          now,
           dist,
           speed,
           clamp,
@@ -13568,7 +13568,7 @@
             return Number.isFinite(number) ? number : null;
           },
           dist = () => Infinity,
-          now: now2 = () => typeof performance !== "undefined" ? performance.now() : Date.now(),
+          now = () => typeof performance !== "undefined" ? performance.now() : Date.now(),
           clamp = (value, min, max) => Math.max(min, Math.min(max, value))
         } = runtime;
         function detachNativeMessagePump() {
@@ -13589,7 +13589,7 @@
         }
         function triggerNativeTick(source, respectMinInterval = true) {
           if (!bot.running || bot.ticking) return;
-          const t = now2();
+          const t = now();
           const minIntervalMs = nativeTickMinIntervalMs({
             decision: bot.lastDecision,
             combatTarget: bot.combatTarget,
@@ -13695,7 +13695,7 @@
             directWsServerMarkerProbe: Boolean(cfg.directWsServerMarkerProbe),
             directVelocityRepeatMs: Number(cfg.directWsVelocityRepeatMs || 0),
             lastDirectVelocity: bot.lastDirectVelocity || "",
-            lastDirectVelocityAgeMs: bot.lastDirectVelocityAt ? Math.max(0, Math.round(now2() - Number(bot.lastDirectVelocityAt || 0))) : null,
+            lastDirectVelocityAgeMs: bot.lastDirectVelocityAt ? Math.max(0, Math.round(now() - Number(bot.lastDirectVelocityAt || 0))) : null,
             serverPositionStall,
             actionSettlementStall
           };
@@ -13818,7 +13818,7 @@
             nativeState.touchMove.dx = 0;
             nativeState.touchMove.dy = 0;
           }
-          const t = now2();
+          const t = now();
           if (Object.prototype.hasOwnProperty.call(nativeState, "lastInputAt")) nativeState.lastInputAt = 0;
           if (Object.prototype.hasOwnProperty.call(nativeState, "lastStopAt")) nativeState.lastStopAt = t;
           return true;
@@ -13828,7 +13828,7 @@
           const nativeState = getNativeState();
           if (nativeState) clearNativeMotionState(nativeState);
           bot.control.lastVelocity = "0 0";
-          bot.control.lastVelocityAt = now2();
+          bot.control.lastVelocityAt = now();
           bot.control.nonZeroVelocitySince = 0;
           bot.control.lastNonZeroVelocityAt = 0;
           if (reason !== "server-position-stalled") resetServerPositionStall(reason || "local-stop");
@@ -13840,7 +13840,7 @@
           if (native?.wsOpen) {
             stopLocalMotionOnly(reason);
             bot.control.lastVelocity = "0 0";
-            bot.control.lastVelocityAt = now2();
+            bot.control.lastVelocityAt = now();
             const sent = sendNativeVelocity(0, 0, true);
             if (sent) scheduleDirectVelocityRepeat(0, 0, true);
             return Boolean(sent);
@@ -13878,7 +13878,7 @@
             setNativeKeys(native.state, dx, dy);
           }
           const message = directWsVelocityMessage(dx, dy);
-          const t = now2();
+          const t = now();
           const dedupeMs = Math.max(0, Math.min(45, Number(cfg.directWsVelocityRepeatMs || 50) - 5));
           if (!force && message === bot.lastDirectVelocity && t - Number(bot.lastDirectVelocityAt || 0) < dedupeMs) return true;
           try {
@@ -13905,7 +13905,7 @@
             bot.directVelocityRepeatUntil = 0;
             bot.directVelocityStopRepeatsLeft = Math.max(0, Math.round(Number(cfg.directWsStopRepeatCount || 0)));
           } else {
-            bot.directVelocityRepeatUntil = now2() + holdMs;
+            bot.directVelocityRepeatUntil = now() + holdMs;
             bot.directVelocityStopRepeatsLeft = 0;
           }
           bot.directVelocityRepeatToken += 1;
@@ -13915,7 +13915,7 @@
             try {
               if (bot.directVelocityRepeatToken !== token) return;
               bot.directVelocityTimer = 0;
-              const keepMoving = moving && now2() <= Number(bot.directVelocityRepeatUntil || 0);
+              const keepMoving = moving && now() <= Number(bot.directVelocityRepeatUntil || 0);
               const keepStopping = !moving && Number(bot.directVelocityStopRepeatsLeft || 0) > 0;
               if (!keepMoving && !keepStopping) return;
               if (!moving) bot.directVelocityStopRepeatsLeft = Math.max(0, Number(bot.directVelocityStopRepeatsLeft || 0) - 1);
@@ -13952,7 +13952,7 @@
           dy = clamp(Math.round(dy), -1, 1);
           if (cfg.dryRun) return true;
           const vel = dx + " " + dy;
-          const t = now2();
+          const t = now();
           if (!force && vel === bot.control.lastVelocity && t - bot.control.lastVelocityAt < 100) return true;
           bot.control.lastVelocity = vel;
           bot.control.lastVelocityAt = t;
@@ -14058,7 +14058,7 @@
         function recordCombatShotAttempt(self, target, detail = {}) {
           if (!target) return;
           const at = Number(detail.at || Date.now());
-          const perfNow = Number(detail.perfNow ?? now2());
+          const perfNow = Number(detail.perfNow ?? now());
           const targetDistance = Number.isFinite(Number(target.distance)) ? Number(target.distance) : self ? dist(self, target) : NaN;
           bot.lastCombatShot = {
             at,
@@ -14087,7 +14087,7 @@
         }
         function shootAt(self, target, force = false, options = {}) {
           if (!target) return false;
-          const t = now2();
+          const t = now();
           const at = Date.now();
           const shootEveryMs = Math.max(0, Number(options.shootEveryMs ?? cfg.shootEveryMs) || 0);
           const cadenceRemainingMs = Math.max(0, shootEveryMs - (t - Number(bot.lastShotAt || 0)));
@@ -15178,7 +15178,7 @@
             const number = Number(entity?.hp);
             return Number.isFinite(number) ? number : null;
           },
-          now: now2 = () => typeof performance !== "undefined" ? performance.now() : Date.now()
+          now = () => typeof performance !== "undefined" ? performance.now() : Date.now()
         } = runtime;
         const localStorage2 = storage;
         const {
@@ -15376,7 +15376,7 @@
           combatMetricEntityId,
           combatMetricHp,
           dist,
-          now: now2,
+          now,
           clamp
         });
         return {
@@ -17660,7 +17660,7 @@
           cfg,
           safeJsonClone = (value) => value,
           arrayCount = (value) => Array.isArray(value) ? value.length : 0,
-          now: now2 = () => typeof performance !== "undefined" ? performance.now() : Date.now(),
+          now = () => typeof performance !== "undefined" ? performance.now() : Date.now(),
           dist = () => Infinity,
           isSnapshotOnlyCoin = () => false,
           normalizeCoinDrop = (value) => value,
@@ -17774,7 +17774,7 @@
           if (!bot.lastTarget || bot.lastTarget.kind !== kind || String(bot.lastTarget.id) !== String(id)) {
             bot.lastTarget = { kind, id };
           }
-          bot.lastTargetAt = now2();
+          bot.lastTargetAt = now();
         }
         function clearCoinTracking(reason = "") {
           bot.coinProgress = null;
@@ -17921,7 +17921,7 @@
           if (!confirmed) return false;
           const amount = Math.max(0, Math.round(Number(target.amount || 0))) || coinDelta;
           if (!amount) return false;
-          const t = now2();
+          const t = now();
           if (id) {
             bot.ignoredCoins.set(id, t + Number(cfg.coinCollectedIgnoreMs || 0));
             bot.coinAttempts.delete(id);
@@ -18010,7 +18010,7 @@
         function applyCoinProgressAction(action, self) {
           const progressAction = action;
           const progressSelf = self;
-          const progressAt = now2();
+          const progressAt = now();
           const progressOptions = coinProgressCoreOptions();
           for (const [progressAttemptId, progressAttempt] of bot.coinAttempts.entries()) {
             if (coinAttemptExpiredCore(progressAttempt, progressAt, progressOptions)) {
@@ -18542,7 +18542,7 @@
           cfg,
           OPPORTUNITY_CONSTANTS = {},
           safeJsonClone = (value) => value,
-          now: now2 = () => typeof performance !== "undefined" ? performance.now() : Date.now(),
+          now = () => typeof performance !== "undefined" ? performance.now() : Date.now(),
           hypot = Math.hypot,
           dist = () => Infinity,
           clamp = (value, min, max) => Math.max(min, Math.min(max, value)),
@@ -18574,7 +18574,7 @@
           coinDirectionToCore,
           coinMotionMetaCore
         } = require_coin_motion2();
-        function directionTo2(self, target, tolerance = 250) {
+        function directionTo(self, target, tolerance = 250) {
           const dxRaw = Number(target.x) - Number(self.x);
           const dyRaw = Number(target.y) - Number(self.y);
           const absX = Math.abs(dxRaw);
@@ -18613,7 +18613,7 @@
             ...extra
           };
         }
-        function coinPickupFailureCount(id, t = now2()) {
+        function coinPickupFailureCount(id, t = now()) {
           if (!id && id !== 0) return 0;
           const failure = bot.coinFailures.get(String(id));
           if (!failure) return 0;
@@ -18621,7 +18621,7 @@
           if (lastAt && t - lastAt > Number(cfg.coinFailureDecayMs || 0)) return 0;
           return Math.max(0, Math.floor(Number(failure.count || 0)));
         }
-        function coinPickupAttemptSlowCount(id, distance, t = now2()) {
+        function coinPickupAttemptSlowCount(id, distance, t = now()) {
           if (!id && id !== 0) return 0;
           if (Number(distance) > Number(cfg.closeCoinStuckDistance || 0)) return 0;
           const progress = bot.coinProgress;
@@ -18728,7 +18728,7 @@
           };
         }
         function safeCoinCandidates(coins, activeThreats, maxDistance, self = null) {
-          const t = now2();
+          const t = now();
           for (const [id, until] of bot.ignoredCoins.entries()) {
             if (until <= t) bot.ignoredCoins.delete(id);
           }
@@ -18782,7 +18782,7 @@
         function pickCoin(self, coins, activeThreats, maxDistance) {
           const candidates = safeCoinCandidates(coins, activeThreats, maxDistance, self);
           if (!candidates.length) return null;
-          if (bot.lastTarget?.kind === "coin" && now2() - bot.lastTargetAt < cfg.coinStickMs) {
+          if (bot.lastTarget?.kind === "coin" && now() - bot.lastTargetAt < cfg.coinStickMs) {
             const sticky = candidates.find((c) => String(c.drop_id) === String(bot.lastTarget.id));
             if (sticky) return sticky;
           }
@@ -18812,7 +18812,7 @@
             };
           };
           const current = bot.opportunityChoice;
-          if (current?.key && current.reason === "migrate-to-known-field" && now2() < Number(current.until || 0)) {
+          if (current?.key && current.reason === "migrate-to-known-field" && now() < Number(current.until || 0)) {
             const heldCoin = candidates.find((c) => String(c.drop_id) === String(current.id));
             const held = heldCoin ? buildFieldItem(heldCoin) : null;
             if (held && !fieldMigrationBlockedByNearbyCoin(self, allCoins, activeThreats, held)) return held;
@@ -18886,7 +18886,7 @@
           coinNearApproachAxisCore,
           coinDirectionToCore,
           coinMotionMetaCore,
-          directionTo: directionTo2,
+          directionTo,
           coinMotionCoreOptions,
           coinPickupFailureCount,
           coinPickupAttemptSlowCount,
@@ -20084,10 +20084,10 @@
         };
       }
       function patrolDirectionCore(self, activeThreats, nearbyHumans, scanCoin = null, options = {}) {
-        const directionTo2 = typeof options.directionTo === "function" ? options.directionTo : defaultDirectionTo;
+        const directionTo = typeof options.directionTo === "function" ? options.directionTo : defaultDirectionTo;
         const dist = typeof options.dist === "function" ? options.dist : defaultDist;
         if (scanCoin) {
-          const dir = directionTo2(self, scanCoin, options.patrolPrecisionTolerance);
+          const dir = directionTo(self, scanCoin, options.patrolPrecisionTolerance);
           if ((dir.dx || dir.dy) && dir.distance <= Math.max(0, Number(options.patrolCoinMaxDistance || 0))) {
             return {
               direction: {
@@ -20203,7 +20203,7 @@
           cfg,
           formatDistance = (value) => String(value),
           formatDurationMs = (value) => String(value),
-          now: now2 = () => typeof performance !== "undefined" ? performance.now() : Date.now(),
+          now = () => typeof performance !== "undefined" ? performance.now() : Date.now(),
           dist = () => Infinity,
           staminaRemaining = () => NaN,
           staminaExhaustedThreshold = () => 0,
@@ -20350,7 +20350,7 @@
           const asOpportunity = (item) => ({ ...item, opportunityScore: item.snapshotScore });
           const asIdleFallback = (item) => ({ ...asOpportunity(item), snapshotIdleFallback: true });
           let stickyFallback = null;
-          if (bot.lastTarget?.kind === "coin" && now2() - bot.lastTargetAt < cfg.coinStickMs) {
+          if (bot.lastTarget?.kind === "coin" && now() - bot.lastTargetAt < cfg.coinStickMs) {
             const sticky = candidates.find((c) => String(c.drop_id) === String(bot.lastTarget.id));
             if (sticky) {
               const stickyItem = buildSnapshotItem(sticky);
@@ -20393,7 +20393,7 @@
         function scoreCoinOpportunity(coin) {
           const override = Number(coin?.opportunityScore ?? coin?.snapshotScore ?? coin?.fieldScore ?? NaN);
           if (Number.isFinite(override)) return override;
-          const sticky = bot.lastTarget?.kind === "coin" && String(bot.lastTarget.id) === String(coin.drop_id) && now2() - bot.lastTargetAt < cfg.coinStickMs;
+          const sticky = bot.lastTarget?.kind === "coin" && String(bot.lastTarget.id) === String(coin.drop_id) && now() - bot.lastTargetAt < cfg.coinStickMs;
           return opportunityValueScoreCore(coin.amount, opportunityCoinStaminaCost(coin), {
             weight: cfg.coinOpportunityValue,
             distanceFloor: cfg.opportunityDistanceFloor,
@@ -20420,7 +20420,7 @@
           const value = Number(cfg.opportunityAfkStaminaDropThresholdMs ?? 100);
           return Math.max(0, Number.isFinite(value) ? value : 100);
         }
-        function updateOpportunityAfkStaminaObservations(targets, t = now2()) {
+        function updateOpportunityAfkStaminaObservations(targets, t = now()) {
           const state2 = opportunityAfkStaminaState();
           const cooldownMs = opportunityAfkStaminaCooldownMs();
           const dropThreshold = opportunityAfkStaminaDropThresholdMs();
@@ -20453,13 +20453,13 @@
             if (cooldownUntil <= t && lastSeenAt > 0 && t - lastSeenAt > ttlMs) state2.delete(id);
           }
         }
-        function opportunityAfkStaminaCooldownRemaining(target, t = now2()) {
+        function opportunityAfkStaminaCooldownRemaining(target, t = now()) {
           const id = opportunityAfkTargetId(target);
           if (!id) return 0;
           const item = opportunityAfkStaminaState().get(id);
           return Math.max(0, Math.round(Number(item?.cooldownUntil || 0) - t));
         }
-        function afkOpportunityBlockedByStaminaCooldown(target, t = now2()) {
+        function afkOpportunityBlockedByStaminaCooldown(target, t = now()) {
           if (!isAfkProfitTarget(target)) return false;
           const distance = Number(target?.distance ?? Infinity);
           if (Number.isFinite(distance) && distance <= Number(cfg.attackRange || 0)) return false;
@@ -20471,7 +20471,7 @@
           const inRange = Number(target.distance || Infinity) <= (afk ? cfg.attackRange : cfg.attackEngageRange);
           if (afk && !inRange && afkOpportunityBlockedByStaminaCooldown(target)) return null;
           if (!afk && !inRange && Number(target.drop || 0) < cfg.attackApproachMinDrop) return null;
-          const sticky = bot.lastTarget?.kind === "enemy" && String(bot.lastTarget.id) === String(target.user_id) && now2() - bot.lastTargetAt < cfg.targetStickMs;
+          const sticky = bot.lastTarget?.kind === "enemy" && String(bot.lastTarget.id) === String(target.user_id) && now() - bot.lastTargetAt < cfg.targetStickMs;
           return opportunityValueScoreCore(target.drop, opportunityEnemyStaminaCost(target), {
             weight: afk ? cfg.coinOpportunityValue : cfg.dropOpportunityValue,
             distanceFloor: cfg.opportunityDistanceFloor,
@@ -20551,7 +20551,7 @@
             isSnapshotOnlyCoin
           };
         }
-        function currentHeldCoinRouteChoice(t = now2()) {
+        function currentHeldCoinRouteChoice(t = now()) {
           const choice = bot.opportunityChoice;
           if (!choice || opportunityChoiceType(choice) !== "coin") return null;
           if (t >= Number(choice.until || 0)) return null;
@@ -20560,7 +20560,7 @@
           if (String(choice.reason || "") !== "best-opportunity-coin-route" && !coinRouteIdsFrom(choice).length) return null;
           return choice;
         }
-        function currentHeldCoinChoice(t = now2()) {
+        function currentHeldCoinChoice(t = now()) {
           const choice = bot.opportunityChoice;
           if (!choice || opportunityChoiceType(choice) !== "coin") return null;
           if (t >= Number(choice.until || 0)) return null;
@@ -20639,7 +20639,7 @@
             switchRelativeMargin: cfg.opportunitySwitchRelativeMargin,
             switchHoldMs: cfg.opportunitySwitchHoldMs,
             oscillationSwitchLimit: cfg.opportunityOscillationSwitchLimit,
-            nowMs: now2(),
+            nowMs: now(),
             ...extra
           };
         }
@@ -20939,7 +20939,7 @@
         const {
           bot,
           cfg,
-          now: now2 = () => typeof performance !== "undefined" ? performance.now() : Date.now(),
+          now = () => typeof performance !== "undefined" ? performance.now() : Date.now(),
           hypot = Math.hypot,
           knownHpValue = () => null,
           dropValue = () => 0,
@@ -20949,7 +20949,7 @@
           isInvulnerable = () => false,
           entityFreshEnoughForOffense = () => true,
           isAfkProfitTarget = () => false,
-          directionTo: directionTo2 = () => ({ dx: 0, dy: 0, distance: Infinity }),
+          directionTo = () => ({ dx: 0, dy: 0, distance: Infinity }),
           coinDirectionToCore = () => ({ direction: { dx: 0, dy: 0, distance: Infinity } }),
           coinMotionCoreOptions = () => ({}),
           coinPickupFailureCount = () => 0,
@@ -21004,7 +21004,7 @@
             const coinDirectionDxRaw = Number(coinDirectionTarget.x) - Number(coinDirectionSelf.x);
             const coinDirectionDyRaw = Number(coinDirectionTarget.y) - Number(coinDirectionSelf.y);
             const coinDirectionDistance = hypot(coinDirectionDxRaw, coinDirectionDyRaw);
-            const coinDirectionAt = now2();
+            const coinDirectionAt = now();
             const coinDirectionId = String(coinDirectionTarget.drop_id ?? coinDirectionTarget.id ?? "");
             const coinDirectionResult = coinDirectionToCore(coinDirectionSelf, coinDirectionTarget, coinMotionCoreOptions(cfg.patrolPrecisionTolerance, {
               nowMs: coinDirectionAt,
@@ -21052,7 +21052,7 @@
             const coinDirectionDxRaw = Number(coinDirectionTarget.x) - Number(coinDirectionSelf.x);
             const coinDirectionDyRaw = Number(coinDirectionTarget.y) - Number(coinDirectionSelf.y);
             const coinDirectionDistance = hypot(coinDirectionDxRaw, coinDirectionDyRaw);
-            const coinDirectionAt = now2();
+            const coinDirectionAt = now();
             const coinDirectionId = String(coinDirectionTarget.drop_id ?? coinDirectionTarget.id ?? "");
             const coinDirectionResult = coinDirectionToCore(coinDirectionSelf, coinDirectionTarget, coinMotionCoreOptions(cfg.coinPrecisionTolerance, {
               nowMs: coinDirectionAt,
@@ -21089,7 +21089,7 @@
         }
         function buildEnemyAction(self, target, reason = "") {
           if (isWhitelistedTarget(target)) return { kind: "wait", reason: "target-whitelisted", dx: 0, dy: 0 };
-          const dir = directionTo2(self, target);
+          const dir = directionTo(self, target);
           const afk = isAfkProfitTarget(target);
           const inRange = Number(dir.distance || Infinity) <= (afk ? cfg.attackRange : cfg.attackEngageRange);
           const staminaCost = opportunityEnemyStaminaCost(target);
@@ -21153,7 +21153,7 @@
           arrayCount = (value) => Array.isArray(value) ? value.length : 0,
           formatDistance = (value) => String(value),
           formatDurationMs = (value) => String(value),
-          now: now2 = () => typeof performance !== "undefined" ? performance.now() : Date.now(),
+          now = () => typeof performance !== "undefined" ? performance.now() : Date.now(),
           hypot = Math.hypot,
           dist = () => Infinity,
           clamp = (value, min, max) => Math.max(min, Math.min(max, value)),
@@ -21203,7 +21203,7 @@
           cfg,
           OPPORTUNITY_CONSTANTS,
           safeJsonClone,
-          now: now2,
+          now,
           hypot,
           dist,
           clamp,
@@ -21230,7 +21230,7 @@
           cfg,
           formatDistance,
           formatDurationMs,
-          now: now2,
+          now,
           dist,
           staminaRemaining,
           staminaExhaustedThreshold,
@@ -21253,7 +21253,7 @@
         const postAttackRuntime = createProfitPostAttackRuntime({
           bot,
           cfg,
-          now: now2,
+          now,
           hypot,
           knownHpValue,
           dropValue,
@@ -21271,7 +21271,7 @@
           cfg,
           safeJsonClone,
           arrayCount,
-          now: now2,
+          now,
           dist,
           isSnapshotOnlyCoin,
           normalizeCoinDrop,
@@ -21975,7 +21975,7 @@
         const {
           bot,
           cfg,
-          now: now2 = () => typeof performance !== "undefined" ? performance.now() : Date.now(),
+          now = () => typeof performance !== "undefined" ? performance.now() : Date.now(),
           dist = () => Infinity,
           speed = () => 0,
           clamp = (value, min, max) => Math.max(min, Math.min(max, value)),
@@ -22617,7 +22617,7 @@
           const noDamageBucket = noDamageLevel ? Math.floor(damage.widenMs / stepMs) + 1 : 0;
           const motionBucket = Math.round(motionScale * 10);
           const intercept = combatInterceptSolution(self, aimSource, distance, motionScale);
-          const lockCompatible = previousAim && String(previousAim.targetId || "") === targetId && String(previousAim.movementMode || "") === movement.mode && String(previousAim.strategy || "") === String(aimStrategy.strategy || "") && Boolean(previousAim.passiveRunner) === Boolean(aimStrategy.passiveRunner) && Number(previousAim.noDamageBucket || 0) === noDamageBucket && Number(previousAim.motionBucket ?? motionBucket) === motionBucket && now2() < Number(previousAim.until || 0);
+          const lockCompatible = previousAim && String(previousAim.targetId || "") === targetId && String(previousAim.movementMode || "") === movement.mode && String(previousAim.strategy || "") === String(aimStrategy.strategy || "") && Boolean(previousAim.passiveRunner) === Boolean(aimStrategy.passiveRunner) && Number(previousAim.noDamageBucket || 0) === noDamageBucket && Number(previousAim.motionBucket ?? motionBucket) === motionBucket && now() < Number(previousAim.until || 0);
           if (intercept) {
             const interceptStrategyReason = aimStrategy.passiveRunner ? aimStrategy.reason || "passive-runner-intercept" : aimStrategy.liveIntercept ? aimStrategy.reason || "live-intercept" : "quadratic-intercept";
             const interceptConfidence = clamp(Number(intercept.confidence || 0) * Number(opponentProfile.aimConfidenceScale || 1), 0.1, 1);
@@ -22642,7 +22642,7 @@
                 noDamageBucket,
                 motionBucket,
                 intercept: true,
-                until: now2() + Math.max(80, Number(cfg.combatAimLockMs) || 450)
+                until: now() + Math.max(80, Number(cfg.combatAimLockMs) || 450)
               };
             }
             const interceptDx = Number(intercept.x) - Number(self.x);
@@ -22716,7 +22716,7 @@
               noDamageBucket,
               motionBucket,
               intercept: false,
-              until: now2() + Math.max(80, Number(cfg.combatAimLockMs) || 450)
+              until: now() + Math.max(80, Number(cfg.combatAimLockMs) || 450)
             };
           }
           const cos = Math.cos(angle);
@@ -22791,7 +22791,7 @@
         const {
           bot,
           cfg,
-          now: now2 = () => typeof performance !== "undefined" ? performance.now() : Date.now(),
+          now = () => typeof performance !== "undefined" ? performance.now() : Date.now(),
           hypot = Math.hypot,
           dist = () => Infinity,
           speed = () => 0,
@@ -22809,7 +22809,8 @@
           getBullets = () => [],
           recentCombatInjuryActive = () => null,
           combatDodgeThreatRange = () => 0,
-          combatTargetId = () => ""
+          combatTargetId = () => "",
+          directionTo = () => ({ dx: 0, dy: 0, distance: Infinity })
         } = runtime;
         function combatMoveVelocityForDirection(dx, dy) {
           const x = clamp(Math.round(Number(dx) || 0), -1, 1);
@@ -22975,7 +22976,7 @@
           const laneMin = Math.max(0, Number(cfg.combatStrafePreciseLaneMin ?? 1));
           return !pressure?.synthetic && Number.isFinite(signedLane) && Math.abs(signedLane) > laneMin ? -Math.sign(signedLane) : 0;
         }
-        function selectCombatStrafeSign(existing, key, preciseSign, t = now2()) {
+        function selectCombatStrafeSign(existing, key, preciseSign, t = now()) {
           let sign = 0;
           let until = 0;
           let locked = false;
@@ -23044,7 +23045,7 @@
           return { dx: clamp(Math.round(dx), -1, 1), dy: clamp(Math.round(dy), -1, 1), closingBiased };
         }
         function tangentMoveForBullet(self, target, pressure, options = {}) {
-          const t = now2();
+          const t = now();
           const existing = bot.combatStrafe;
           if (!pressure) {
             if (combatStrafeMatchesTarget(existing, target) && t < Number(existing?.carryUntil || 0) && (existing.dx || existing.dy)) {
@@ -23844,6 +23845,7 @@
           summarizeControl = () => null,
           dist = () => Infinity,
           speed = () => 0,
+          now = () => typeof performance !== "undefined" ? performance.now() : Date.now(),
           opportunityLongStaminaBudget = () => Infinity,
           scoreEnemyOpportunity = () => -Infinity,
           opportunityEnemyStaminaCost = () => Infinity,
@@ -24822,7 +24824,7 @@
           formatDurationMs = (value) => String(value),
           actorLabel = (value) => String(value?.name || value?.id || ""),
           hpDisplay = (value) => String(value),
-          now: now2 = () => typeof performance !== "undefined" ? performance.now() : Date.now(),
+          now = () => typeof performance !== "undefined" ? performance.now() : Date.now(),
           hypot = Math.hypot,
           dist = () => Infinity,
           speed = () => 0,
@@ -24870,7 +24872,7 @@
           updateBotPanel = () => {
           },
           summarizeControl = () => null,
-          directionTo: directionTo2 = () => ({ dx: 0, dy: 0, distance: Infinity }),
+          directionTo = () => ({ dx: 0, dy: 0, distance: Infinity }),
           opportunityLongStaminaBudget = () => Infinity,
           scoreEnemyOpportunity = () => -Infinity,
           opportunityEnemyStaminaCost = () => Infinity,
@@ -24914,6 +24916,7 @@
           summarizeControl,
           dist,
           speed,
+          now,
           opportunityLongStaminaBudget,
           scoreEnemyOpportunity,
           opportunityEnemyStaminaCost,
@@ -24926,7 +24929,7 @@
         const movementRuntime = createCombatMovementRuntime({
           bot,
           cfg,
-          now: now2,
+          now,
           hypot,
           dist,
           speed,
@@ -24942,12 +24945,13 @@
           dropValue,
           normalizeBullet,
           getBullets,
+          directionTo,
           ...targetRuntime
         });
         const aimRuntime = createCombatAimRuntime({
           bot,
           cfg,
-          now: now2,
+          now,
           dist,
           speed,
           clamp,
@@ -25304,11 +25308,11 @@
           isFiringEntity,
           isFullHp,
           isInvulnerableActive,
-          now: now2,
+          now,
           speed
         } = runtime;
         function markRecentMovement(entities) {
-          const t = now2();
+          const t = now();
           const sampleMs = Math.max(1, Number(cfg.combatAimMotionSampleMs || 50));
           const decayMs = Math.max(sampleMs, Number(cfg.combatAimRecentMotionDecayMs || 900));
           for (const entity of entities) {
@@ -25391,7 +25395,7 @@
           };
         }
         function lockedFleeDirection(self, threats, reason) {
-          const t = now2();
+          const t = now();
           const ids = threats.slice(0, 4).map((item) => String(item.user_id ?? item.id ?? ""));
           if (bot.fleeLock && t < bot.fleeLock.until && (bot.fleeLock.dx || bot.fleeLock.dy)) {
             const previousIds = new Set(bot.fleeLock.threatIds || []);
@@ -25448,11 +25452,11 @@
           if (!threat) return;
           bot.returnBlockRecentThreatId = threatKey(threat);
           if (force || threat.distance <= returnBlockSuppressRadius(threat)) {
-            bot.returnBlockCooldownUntil = Math.max(Number(bot.returnBlockCooldownUntil || 0), now2() + cfg.returnBlockCooldownMs);
+            bot.returnBlockCooldownUntil = Math.max(Number(bot.returnBlockCooldownUntil || 0), now() + cfg.returnBlockCooldownMs);
           }
         }
         function pickReturnBlockPressure(activeThreats) {
-          const t = now2();
+          const t = now();
           const recentId = bot.returnBlockRecentThreatId || bot.returnBlockLock?.id || "";
           if (recentId) {
             const recent = activeThreats.find((threat) => threatKey(threat) === String(recentId));
@@ -25466,7 +25470,7 @@
           return activeThreats.find((e) => e.distance <= returnBlockSuppressRadius(e)) || null;
         }
         function returnBlockScanDirection(self, activeThreats, nearbyHumans) {
-          const t = now2();
+          const t = now();
           const threat = pickReturnBlockPressure(activeThreats) || activeThreats[0] || null;
           const key = threatKey(threat);
           const locked = bot.returnBlockScan;
@@ -25575,10 +25579,10 @@
           if (!threat) {
             const returnThreat = activeThreats.find((e) => e.distance <= returnBlockResumeRadius(e) && actionMovesTowardThreat(self, e, action));
             if (!returnThreat) return null;
-            bot.returnBlockLock = { id: threatKey(returnThreat), startedAt: now2() };
+            bot.returnBlockLock = { id: threatKey(returnThreat), startedAt: now() };
             return { threat: returnThreat, locked: false, mode: "resume-guard" };
           }
-          bot.returnBlockLock = { id: threatKey(threat), startedAt: now2() };
+          bot.returnBlockLock = { id: threatKey(threat), startedAt: now() };
           return { threat, locked: false, mode: "exit" };
         }
         function blockThreatReturnAction(self, activeThreats, action) {
@@ -25740,7 +25744,7 @@
           getSelf,
           installPageGlobal,
           installPageNativeSnapshotObserver,
-          now: now2,
+          now,
           observeNetworkQualitySelf,
           refreshGlobalState,
           resetServerPositionStall,
@@ -25974,14 +25978,14 @@
           const inactiveTargets = attackableEntities.filter((e) => !isCurrentlyActive(e) && dropValue(e) > 0 && !isInvulnerable(e)).map((e) => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e) })).filter((e) => e.distance <= cfg.attackRange).sort((a, b) => {
             const stickyA = bot.lastTarget && String(bot.lastTarget.kind) === "enemy" && String(bot.lastTarget.id) === String(a.user_id);
             const stickyB = bot.lastTarget && String(bot.lastTarget.kind) === "enemy" && String(bot.lastTarget.id) === String(b.user_id);
-            if (stickyA !== stickyB && now2() - bot.lastTargetAt < cfg.targetStickMs) return stickyA ? -1 : 1;
+            if (stickyA !== stickyB && now() - bot.lastTargetAt < cfg.targetStickMs) return stickyA ? -1 : 1;
             if (b.drop !== a.drop) return b.drop - a.drop;
             return a.distance - b.distance;
           });
           const realtimeInactiveTargets = realtimeEntities.filter((e) => !isCurrentlyActive(e) && dropValue(e) > 0 && !isInvulnerable(e)).map((e) => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e) })).filter((e) => e.distance <= cfg.attackRange).sort((a, b) => {
             const stickyA = bot.lastTarget && String(bot.lastTarget.kind) === "enemy" && String(bot.lastTarget.id) === String(a.user_id);
             const stickyB = bot.lastTarget && String(bot.lastTarget.kind) === "enemy" && String(bot.lastTarget.id) === String(b.user_id);
-            if (stickyA !== stickyB && now2() - bot.lastTargetAt < cfg.targetStickMs) return stickyA ? -1 : 1;
+            if (stickyA !== stickyB && now() - bot.lastTargetAt < cfg.targetStickMs) return stickyA ? -1 : 1;
             if (b.drop !== a.drop) return b.drop - a.drop;
             return a.distance - b.distance;
           });
@@ -26035,7 +26039,7 @@
           const combatTargets = attackableEntities.map((e) => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e), hp: combatHpValue(e), knownHp: knownHpValue(e) })).filter((e) => !isInvulnerable(e)).filter((e) => e.native).filter((e) => e.distance <= combatCandidateRange).sort((a, b) => {
             const stickyA = bot.lastTarget?.kind === "enemy" && String(bot.lastTarget.id) === String(a.user_id);
             const stickyB = bot.lastTarget?.kind === "enemy" && String(bot.lastTarget.id) === String(b.user_id);
-            if (stickyA !== stickyB && now2() - bot.lastTargetAt < cfg.targetStickMs) return stickyA ? -1 : 1;
+            if (stickyA !== stickyB && now() - bot.lastTargetAt < cfg.targetStickMs) return stickyA ? -1 : 1;
             if (isCurrentlyActive(a) !== isCurrentlyActive(b)) return isCurrentlyActive(a) ? -1 : 1;
             return a.distance - b.distance;
           });
@@ -26103,7 +26107,7 @@
           }, {
             nearDistance: coinDiagnosticsNearDistance(),
             limit: coinDiagnosticsLimit(),
-            nowMs: now2(),
+            nowMs: now(),
             ignoredCoinUntil: (coin) => bot.ignoredCoins.get(String(coin?.drop_id))
           });
           bot.lastActionEntities = entities;
@@ -26408,7 +26412,7 @@
               const coinDirectionDxRaw = Number(coinDirectionTarget.x) - Number(coinDirectionSelf.x);
               const coinDirectionDyRaw = Number(coinDirectionTarget.y) - Number(coinDirectionSelf.y);
               const coinDirectionDistance = hypot(coinDirectionDxRaw, coinDirectionDyRaw);
-              const coinDirectionAt = now2();
+              const coinDirectionAt = now();
               const coinDirectionId = String(coinDirectionTarget.drop_id ?? coinDirectionTarget.id ?? "");
               const coinDirectionResult = coinDirectionToCore(coinDirectionSelf, coinDirectionTarget, coinMotionCoreOptions(cfg.coinPrecisionTolerance, {
                 nowMs: coinDirectionAt,
@@ -26451,7 +26455,7 @@
                 const coinDirectionDxRaw = Number(coinDirectionTarget.x) - Number(coinDirectionSelf.x);
                 const coinDirectionDyRaw = Number(coinDirectionTarget.y) - Number(coinDirectionSelf.y);
                 const coinDirectionDistance = hypot(coinDirectionDxRaw, coinDirectionDyRaw);
-                const coinDirectionAt = now2();
+                const coinDirectionAt = now();
                 const coinDirectionId = String(coinDirectionTarget.drop_id ?? coinDirectionTarget.id ?? "");
                 const coinDirectionResult = coinDirectionToCore(coinDirectionSelf, coinDirectionTarget, coinMotionCoreOptions(cfg.coinPrecisionTolerance, {
                   nowMs: coinDirectionAt,
@@ -26489,7 +26493,7 @@
               const coinDirectionDxRaw = Number(coinDirectionTarget.x) - Number(coinDirectionSelf.x);
               const coinDirectionDyRaw = Number(coinDirectionTarget.y) - Number(coinDirectionSelf.y);
               const coinDirectionDistance = hypot(coinDirectionDxRaw, coinDirectionDyRaw);
-              const coinDirectionAt = now2();
+              const coinDirectionAt = now();
               const coinDirectionId = String(coinDirectionTarget.drop_id ?? coinDirectionTarget.id ?? "");
               const coinDirectionResult = coinDirectionToCore(coinDirectionSelf, coinDirectionTarget, coinMotionCoreOptions(cfg.coinPrecisionTolerance, {
                 nowMs: coinDirectionAt,
@@ -26590,7 +26594,7 @@
             buildCoinAction,
             buildEnemyAction,
             buildMissingHeldOpportunity: (missingSelf, missingThreats, opportunities) => {
-              const t = now2();
+              const t = now();
               const result = buildMissingHeldOpportunityCore(bot.opportunityChoice, opportunities, opportunityChoiceCoreOptions({
                 nowMs: t,
                 self: missingSelf,
@@ -26655,7 +26659,7 @@
               const coinDirectionDxRaw = Number(coinDirectionTarget.x) - Number(coinDirectionSelf.x);
               const coinDirectionDyRaw = Number(coinDirectionTarget.y) - Number(coinDirectionSelf.y);
               const coinDirectionDistance = hypot(coinDirectionDxRaw, coinDirectionDyRaw);
-              const coinDirectionAt = now2();
+              const coinDirectionAt = now();
               const coinDirectionId = String(coinDirectionTarget.drop_id ?? coinDirectionTarget.id ?? "");
               const coinDirectionResult = coinDirectionToCore(coinDirectionSelf, coinDirectionTarget, coinMotionCoreOptions(cfg.coinPrecisionTolerance, {
                 nowMs: coinDirectionAt,
@@ -26799,7 +26803,7 @@
           getSelf,
           installPageGlobal,
           installPageNativeSnapshotObserver,
-          now: now2,
+          now,
           observeNetworkQualitySelf,
           refreshGlobalState,
           resetServerPositionStall,
@@ -27643,7 +27647,7 @@
             }
             action = attachCoinDiagnostics(applyCoinProgressAction(action, self));
             const escape = bot.staleCoinEscape;
-            const escapeActive = escape && now2() < Number(escape.until || 0) && (escape.dx || escape.dy);
+            const escapeActive = escape && now() < Number(escape.until || 0) && (escape.dx || escape.dy);
             if (escapeActive && action.kind !== "flee") {
               action = {
                 ...action,
@@ -27653,7 +27657,7 @@
                 dy: escape.dy,
                 staleCoinEscape: {
                   id: escape.id,
-                  remainingMs: Math.max(0, Math.round(Number(escape.until || 0) - now2()))
+                  remainingMs: Math.max(0, Math.round(Number(escape.until || 0) - now()))
                 }
               };
             } else if (!escapeActive) {
@@ -28061,7 +28065,7 @@
           normalizePendingExitReloadConfirmationCore,
           noteImportantSessionExit,
           noteSelfUnavailableForPostLoginZoom,
-          now: now2,
+          now,
           observeNetworkQualitySelf,
           opportunityCandidateCoreOptions,
           opportunityChoiceCoreOptions,
@@ -28181,7 +28185,7 @@
           isFiringEntity,
           isFullHp,
           isInvulnerableActive,
-          now: now2,
+          now,
           speed
         });
         const orchestrationSafetyContext = {
@@ -28477,7 +28481,7 @@
         }));
         const {
           hypot,
-          now: now2,
+          now,
           dist,
           speed,
           clamp,
@@ -28744,7 +28748,7 @@
           enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY,
           offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY,
           pendingExitStateKey: PENDING_EXIT_STATE_KEY,
-          now: now2,
+          now,
           readPersistentExitState,
           writePersistentPendingExitStateCore,
           pendingExitPersistenceCoreHelpers,
@@ -28789,7 +28793,7 @@
           runCallbackSafely
         } = createTickSafetyRuntime({
           bot,
-          now: now2,
+          now,
           tick: (...args) => tick(...args),
           recordRuntimeDiagnostics: (detail) => recordRuntimeDiagnosticsCore(bot, detail)
         });
@@ -28990,7 +28994,7 @@
           clamp,
           dist,
           speed,
-          now: now2,
+          now,
           isFullHp,
           threatKey: (...args) => threatKey(...args),
           returnBlockRadius: (...args) => returnBlockRadius(...args),
@@ -29277,7 +29281,7 @@
             const number = Number(entity?.hp);
             return Number.isFinite(number) ? number : null;
           },
-          now: now2
+          now
         }));
         const { createImportantLoggingRuntime } = require_important_logging_runtime();
         ({
@@ -29328,7 +29332,7 @@
           coinNearApproachAxisCore,
           coinDirectionToCore,
           coinMotionMetaCore,
-          directionTo: directionTo2,
+          directionTo,
           coinMotionCoreOptions,
           coinPickupFailureCount,
           coinPickupAttemptSlowCount,
@@ -29509,7 +29513,7 @@
           arrayCount,
           formatDistance,
           formatDurationMs,
-          now: now2,
+          now,
           hypot,
           dist,
           speed,
@@ -29658,7 +29662,7 @@
           formatDurationMs,
           actorLabel,
           hpDisplay,
-          now: now2,
+          now,
           hypot,
           dist,
           clamp,
@@ -29699,7 +29703,7 @@
           requestReload: (...args) => requestReload(...args),
           updateBotPanel: (...args) => updateBotPanel(...args),
           summarizeControl: (...args) => summarizeControl(...args),
-          directionTo: directionTo2,
+          directionTo,
           opportunityLongStaminaBudget,
           scoreEnemyOpportunity,
           opportunityEnemyStaminaCost,
@@ -29839,7 +29843,7 @@
           normalizePendingExitReloadConfirmationCore,
           noteImportantSessionExit,
           noteSelfUnavailableForPostLoginZoom,
-          now: now2,
+          now,
           observeNetworkQualitySelf,
           opportunityCandidateCoreOptions,
           opportunityChoiceCoreOptions,

@@ -22,7 +22,8 @@ function createCombatMovementRuntime(runtime = {}) {
     getBullets = () => [],
     recentCombatInjuryActive = () => null,
     combatDodgeThreatRange = () => 0,
-    combatTargetId = () => ''
+    combatTargetId = () => '',
+    directionTo = () => ({ dx: 0, dy: 0, distance: Infinity })
   } = runtime;
 
   function combatMoveVelocityForDirection(dx, dy) {
