@@ -12,7 +12,7 @@
   var define_GRASP_RAT_RUNTIME_CONFIG_default;
   var init_define_GRASP_RAT_RUNTIME_CONFIG = __esm({
     "<define:__GRASP_RAT_RUNTIME_CONFIG__>"() {
-      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.558" };
+      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.559" };
     }
   });
 
@@ -3688,7 +3688,7 @@
         const performanceNow = typeof runtime.performanceNow === "function" ? runtime.performanceNow : fallbackPerformanceNow;
         const now2 = () => performanceNow();
         const dist = (a, b) => hypot(Number(a.x) - Number(b.x), Number(a.y) - Number(b.y));
-        const speed2 = (e) => hypot(Number(e.vx) || 0, Number(e.vy) || 0);
+        const speed = (e) => hypot(Number(e.vx) || 0, Number(e.vy) || 0);
         const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
         const isAlive = (e) => e && e.life !== "Dead" && e.life !== "WaitingRevive" && !e.waiting_revive;
         const dropValue = (e) => Number(e.death_reward_preview ?? e.death_drop_coins ?? e.drop ?? 0) || 0;
@@ -3723,8 +3723,8 @@
           e?.invincibleRemaining,
           e?.invulnerabilityRemaining
         ) || truthyFlag(e?.invulnerable) || truthyFlag(e?.is_invulnerable) || truthyFlag(e?.isInvulnerable) || truthyFlag(e?.immune) || truthyFlag(e?.is_immune);
-        const isJoinModeActive2 = (e) => e?.current_join_mode === "Active" || e?.mode === "Active";
-        const isInvulnerableActive = (e) => isJoinModeActive2(e) && isInvulnerable2(e);
+        const isJoinModeActive = (e) => e?.current_join_mode === "Active" || e?.mode === "Active";
+        const isInvulnerableActive = (e) => isJoinModeActive(e) && isInvulnerable2(e);
         const staminaRemaining = (e, windowName) => {
           const value = Number(e?.["stamina_" + windowName + "_remaining_milli"] ?? NaN);
           return Number.isFinite(value) ? value : null;
@@ -3749,8 +3749,8 @@
           return Number.isFinite(stamina) && limit > 0 && stamina >= limit * cfg.staminaFullRatio;
         };
         const isFiringEntity = (e) => truthyFlag(e?.shooting) || truthyFlag(e?.is_shooting) || truthyFlag(e?.isShooting) || truthyFlag(e?.firing) || truthyFlag(e?.is_firing) || truthyFlag(e?.attacking) || truthyFlag(e?.is_attacking);
-        const isMovingThreat = (e) => speed2(e) >= cfg.activeSpeedMin || Boolean(e.recentlyMoved);
-        const isCurrentlyActive = (e) => isMovingThreat(e) || isFiringEntity(e) || isJoinModeActive2(e) && (!hasFullStamina(e) || isInvulnerableActive(e));
+        const isMovingThreat = (e) => speed(e) >= cfg.activeSpeedMin || Boolean(e.recentlyMoved);
+        const isCurrentlyActive = (e) => isMovingThreat(e) || isFiringEntity(e) || isJoinModeActive(e) && (!hasFullStamina(e) || isInvulnerableActive(e));
         const hasCombatActivitySignal = (e) => isCurrentlyActive(e) || truthyFlag(e?.active) || truthyFlag(e?.currentlyActive) || truthyFlag(e?.combat) || truthyFlag(e?.engagedCombat) || String(e?.combatIntent || "") === "engaged";
         function entityRecentActivityAgeMs(e) {
           const value = Number(e?.recentActivityAgeMs ?? e?.activityAgeMs ?? e?.motionAgeMs ?? NaN);
@@ -3766,8 +3766,8 @@
           return Boolean(isInvulnerable2(e) && !isMovingThreat(e) && !isFiringEntity(e) && hasFullStamina(e) && !recentlyActionedForAfk(e));
         }
         const isAvoidanceThreat = (e) => isInvulnerable2(e) && !isIdleInvulnerableTarget(e);
-        const isAfkTarget = (e) => !recentlyActionedForAfk(e) && !isJoinModeActive2(e) && !isCurrentlyActive(e) && !isMovingThreat(e);
-        const isAfkProfitTarget = (e) => !recentlyActionedForAfk(e) && (isAfkTarget(e) || isJoinModeActive2(e) && !isCurrentlyActive(e) && !isMovingThreat(e) && !isFiringEntity(e));
+        const isAfkTarget = (e) => !recentlyActionedForAfk(e) && !isJoinModeActive(e) && !isCurrentlyActive(e) && !isMovingThreat(e);
+        const isAfkProfitTarget = (e) => !recentlyActionedForAfk(e) && (isAfkTarget(e) || isJoinModeActive(e) && !isCurrentlyActive(e) && !isMovingThreat(e) && !isFiringEntity(e));
         const hpValue = (e) => Number(e?.hp ?? 0) || 0;
         const combatHpValue = (e) => Number.isFinite(Number(e?.hp)) ? Number(e.hp) : 100;
         const knownHpValue = (e) => {
@@ -3789,7 +3789,7 @@
             ...e,
             distance: dist(self, e),
             drop: dropValue(e),
-            speed: speed2(e),
+            speed: speed(e),
             moving,
             threatRadius: moving ? cfg.dangerRadius : cfg.stationaryActiveDangerRadius,
             cautionRadius: moving ? cfg.activeCautionRadius : cfg.stationaryActiveCautionRadius,
@@ -3810,14 +3810,14 @@
           hypot,
           now: now2,
           dist,
-          speed: speed2,
+          speed,
           clamp,
           isAlive,
           dropValue,
           truthyFlag,
           anyPositiveNumber,
           isInvulnerable: isInvulnerable2,
-          isJoinModeActive: isJoinModeActive2,
+          isJoinModeActive,
           isInvulnerableActive,
           staminaRemaining,
           staminaLimitValue,
@@ -5437,7 +5437,7 @@
           summarizeSelf = (value) => value,
           dropValue = () => 0,
           dist = () => NaN,
-          speed: speed2 = () => 0,
+          speed = () => 0,
           hypot = Math.hypot,
           knownHpValue = () => null,
           isCurrentlyActive = () => false,
@@ -5497,7 +5497,7 @@
             y: Math.round(Number(entity.y) || 0),
             vx: Math.round(Number(entity.vx) || 0),
             vy: Math.round(Number(entity.vy) || 0),
-            speed: Math.round(speed2(entity)),
+            speed: Math.round(speed(entity)),
             distance: Number.isFinite(distance) ? Math.round(distance) : null,
             hp: Number.isFinite(Number(entity.hp)) ? Number(entity.hp) : null,
             knownHp: knownHpValue(entity),
@@ -6250,7 +6250,7 @@
           summarizeSelf = (value) => value,
           dropValue = () => 0,
           dist = () => NaN,
-          speed: speed2 = () => 0,
+          speed = () => 0,
           hypot = Math.hypot,
           knownHpValue = () => null,
           isCurrentlyActive = () => false,
@@ -6779,7 +6779,7 @@
           summarizeSelf = (value) => value,
           dropValue = () => 0,
           dist = () => NaN,
-          speed: speed2 = () => 0,
+          speed = () => 0,
           hypot = Math.hypot,
           knownHpValue = () => null,
           isCurrentlyActive = () => false,
@@ -7883,7 +7883,7 @@
           truthyFlag = (value) => Boolean(value),
           staminaRemaining = () => null,
           staminaLimitValue = (_entity, _windowName, fallback) => fallback,
-          isJoinModeActive: isJoinModeActive2 = () => false,
+          isJoinModeActive = () => false,
           isFiringEntity = () => false,
           isMovingThreat = () => false,
           isAlive = (value) => Boolean(value),
@@ -8137,7 +8137,7 @@
           return Number.isFinite(limit) && limit > 0 && remaining < limit * cfg.staminaFullRatio;
         }
         function loginPointActiveModeDangerReason(state2, entity, t) {
-          if (!isJoinModeActive2(entity)) return "";
+          if (!isJoinModeActive(entity)) return "";
           const moved = loginPointEntityMoved(state2, entity, t);
           if (isFiringEntity(entity)) return "active-mode-firing";
           if (isMovingThreat(entity) || moved) return "active-mode-moving";
@@ -10295,7 +10295,7 @@
           hpInfoForRelogin = () => ({ hp: 100, maxHp: 100, ratio: 1 }),
           now: now2 = () => typeof performance !== "undefined" ? performance.now() : Date.now(),
           dist = () => 0,
-          speed: speed2 = () => 0,
+          speed = () => 0,
           clamp = (value, min, max) => Math.max(min, Math.min(max, value)),
           isAlive = (value) => Boolean(value),
           isFullHp = () => true,
@@ -10415,7 +10415,7 @@
           const id = threatKey(threat);
           const vx = Number(threat.vx || 0);
           const vy = Number(threat.vy || 0);
-          const s = Math.max(0, Number(threat.speed ?? speed2(threat)) || 0);
+          const s = Math.max(0, Number(threat.speed ?? speed(threat)) || 0);
           const tx = Number(self.x) - Number(threat.x);
           const ty = Number(self.y) - Number(threat.y);
           const d = Math.max(1, Math.hypot(tx, ty));
@@ -12118,7 +12118,7 @@
           snapshotSelfFreshEnough = () => false,
           isAlive = (value) => Boolean(value),
           isInvulnerable: isInvulnerable2 = () => false,
-          isJoinModeActive: isJoinModeActive2 = () => false,
+          isJoinModeActive = () => false,
           isFiringEntity = () => false,
           isMovingThreat = () => false,
           truthyFlag = (value) => Boolean(value),
@@ -12127,7 +12127,7 @@
           dropValue = () => 0,
           clamp = (value, min, max) => Math.max(min, Math.min(max, value)),
           dist = () => 0,
-          speed: speed2 = () => 0,
+          speed = () => 0,
           now: now2 = () => typeof performance !== "undefined" ? performance.now() : Date.now(),
           isFullHp = () => true,
           threatKey = (threat) => String(threat?.id ?? threat?.user_id ?? ""),
@@ -12239,7 +12239,7 @@
           truthyFlag,
           staminaRemaining,
           staminaLimitValue,
-          isJoinModeActive: isJoinModeActive2,
+          isJoinModeActive,
           isFiringEntity,
           isMovingThreat,
           isAlive,
@@ -12573,7 +12573,7 @@
           hpInfoForRelogin,
           now: now2,
           dist,
-          speed: speed2,
+          speed,
           clamp,
           isAlive,
           isFullHp,
@@ -13321,9 +13321,9 @@
               const scale = Math.max(Math.abs(dirX), Math.abs(dirY)) > 10 ? 1e6 : 1;
               dirX /= scale;
               dirY /= scale;
-              const speed2 = Number.isFinite(speedPerTick) && speedPerTick > 0 ? speedPerTick : 500;
-              vx = dirX * speed2;
-              vy = dirY * speed2;
+              const speed = Number.isFinite(speedPerTick) && speedPerTick > 0 ? speedPerTick : 500;
+              vx = dirX * speed;
+              vy = dirY * speed;
             }
           }
           const startX = Number(raw.start_x ?? raw.startX ?? raw.origin_x ?? raw.x ?? raw.pos_x);
@@ -13335,9 +13335,9 @@
             const dy = targetY - startY;
             const distance = Math.hypot(dx, dy);
             if (Number.isFinite(distance) && distance > 0.01) {
-              const speed2 = Number.isFinite(speedPerTick) && speedPerTick > 0 ? speedPerTick : 500;
-              vx = dx / distance * speed2;
-              vy = dy / distance * speed2;
+              const speed = Number.isFinite(speedPerTick) && speedPerTick > 0 ? speedPerTick : 500;
+              vx = dx / distance * speed;
+              vy = dy / distance * speed;
             }
           }
           let x = Number(raw.x ?? raw.pos_x ?? raw.head_x ?? raw.headX ?? NaN);
@@ -21309,7 +21309,7 @@
           actorLabel = (value) => String(value?.name || value?.id || ""),
           hpDisplay = (value) => String(value),
           dist = () => Infinity,
-          speed: speed2 = () => 0,
+          speed = () => 0,
           clamp = (value, min, max) => Math.max(min, Math.min(max, value)),
           staminaRemaining = () => NaN,
           staminaExhaustedThreshold = () => 0,
@@ -21388,7 +21388,7 @@
             steadyAim: Boolean(aim.steadyAim),
             engagedCombat: target.combatIntent === "engaged",
             targetActive: isCurrentlyActive(target),
-            targetMoving: speed2(target) >= cfg.combatStationarySpeed,
+            targetMoving: speed(target) >= cfg.combatStationarySpeed,
             noDamageMs: Number(aim.noDamageMs || 0),
             aimConfidence: aim.aimConfidence,
             motionScale: aim.motionScale
@@ -21481,7 +21481,7 @@
           const combatOriginReason = String(target?.combatEngagement?.originReason || currentCombatTarget?.originReason || "");
           const seenTargetRealBulletAt = Number(target?.combatEngagement?.seenTargetRealBulletAt || currentCombatTarget?.seenTargetRealBulletAt || 0);
           const seenTargetRealBulletMs = seenTargetRealBulletAt ? Math.max(0, Date.now() - seenTargetRealBulletAt) : 0;
-          const targetMoving = speed2(target) >= cfg.combatStationarySpeed || targetMotionScale >= Math.max(0, Number(cfg.combatAimMovingScaleThreshold || 0.15));
+          const targetMoving = speed(target) >= cfg.combatStationarySpeed || targetMotionScale >= Math.max(0, Number(cfg.combatAimMovingScaleThreshold || 0.15));
           const baseTarget = {
             id: target.user_id,
             name: target.name,
@@ -21977,7 +21977,7 @@
           cfg,
           now: now2 = () => typeof performance !== "undefined" ? performance.now() : Date.now(),
           dist = () => Infinity,
-          speed: speed2 = () => 0,
+          speed = () => 0,
           clamp = (value, min, max) => Math.max(min, Math.min(max, value)),
           staminaRemaining = () => NaN,
           staminaExhaustedThreshold = () => 0,
@@ -22018,7 +22018,7 @@
         function combatAimMotionScale(target) {
           const maxSpeed = Math.max(1, Number(cfg.combatTargetDodgeSpeedPerTick || 50));
           const observedSpeed = Math.max(
-            speed2(target),
+            speed(target),
             Number(target?.motionObservedSpeed || 0),
             Number(target?.motionSampleSpeed || 0)
           );
@@ -22099,7 +22099,7 @@
           const durationMs = samples.length >= 2 ? Math.max(0, Number(samples[samples.length - 1].at) - Number(samples[0].at)) : 0;
           const velocityStability = dotCount ? clamp((dotSum / dotCount + 1) / 2, 0, 1) : 0.5;
           const avgRadialSpeed = radialCount ? radialSum / radialCount : 0;
-          const avgSpeed = samples.length ? speedSum / samples.length : speed2(target);
+          const avgSpeed = samples.length ? speedSum / samples.length : speed(target);
           const distance = Number.isFinite(Number(targetDistance)) ? Number(targetDistance) : Number.isFinite(Number(target?.distance)) ? Number(target.distance) : dist(self, target);
           const strafePattern = Boolean(samples.length >= 4 && lateralFlips >= 2 && durationMs >= 600);
           const kiting = Boolean(samples.length >= 3 && avgRadialSpeed >= Math.max(3, threshold) && distance >= Math.max(0, Number(cfg.combatSpacingPreferredRange || 0)) && (isFiringEntity(target) || isCurrentlyActive(target)));
@@ -22304,7 +22304,7 @@
           const thresholdMs = Math.max(0, Number(cfg.combatAimSteadyNoDamageMs || 0));
           const elapsed = Math.max(0, Number(noDamageMs) || 0);
           const speedMax = Math.max(0, Number(cfg.combatAimSteadySpeedMax ?? cfg.combatStationarySpeed ?? 0));
-          const currentSpeed = speed2(target);
+          const currentSpeed = speed(target);
           const active = Boolean(thresholdMs && elapsed >= thresholdMs && currentSpeed <= speedMax);
           return {
             active,
@@ -22452,7 +22452,7 @@
             knownHp: knownHpValue(live),
             drop: dropValue(live) || target.drop,
             distance: dist(self, live),
-            speed: speed2(live),
+            speed: speed(live),
             combatIntent: target.combatIntent || live.combatIntent || "",
             nativeAimResolved: true,
             originalAimTarget: target
@@ -22563,7 +22563,7 @@
           const preliminaryDamage = combatAimDamageState(nativeAimSource);
           const aimSource = nativeAimSource;
           const motionScale = combatAimMotionScale(aimSource);
-          const moving = speed2(aimSource) >= cfg.combatStationarySpeed || motionScale >= Math.max(0, Number(cfg.combatAimMovingScaleThreshold || 0.15));
+          const moving = speed(aimSource) >= cfg.combatStationarySpeed || motionScale >= Math.max(0, Number(cfg.combatAimMovingScaleThreshold || 0.15));
           const targetDistance = Number(aimSource.distance);
           const distance = Number.isFinite(targetDistance) ? targetDistance : dist(self, aimSource);
           const opponentProfile = combatOpponentProfile(self, aimSource, distance);
@@ -22794,6 +22794,7 @@
           now: now2 = () => typeof performance !== "undefined" ? performance.now() : Date.now(),
           hypot = Math.hypot,
           dist = () => Infinity,
+          speed = () => 0,
           clamp = (value, min, max) => Math.max(min, Math.min(max, value)),
           staminaRemaining = () => NaN,
           staminaExhaustedThreshold = () => 0,
@@ -23812,6 +23813,7 @@
           isAfkProfitTarget = () => false,
           isWhitelistedTarget = () => false,
           hasCombatActivitySignal = () => false,
+          isJoinModeActive = () => false,
           hpValue = () => 0,
           combatHpValue = () => 100,
           knownHpValue = () => null,
@@ -23839,7 +23841,7 @@
           },
           summarizeControl = () => null,
           dist = () => Infinity,
-          speed: speed2 = () => 0,
+          speed = () => 0,
           opportunityLongStaminaBudget = () => Infinity,
           scoreEnemyOpportunity = () => -Infinity,
           opportunityEnemyStaminaCost = () => Infinity,
@@ -23916,8 +23918,8 @@
             name: entity.name || "",
             distance: Number.isFinite(Number(entity.distance)) ? Math.round(Number(entity.distance)) : null,
             drop: Number(entity.drop ?? dropValue(entity) ?? 0) || 0,
-            speed: Number.isFinite(Number(entity.speed ?? speed2(entity))) ? Math.round(Number(entity.speed ?? speed2(entity))) : null,
-            moving: Boolean(entity.moving || speed2(entity) >= cfg.activeSpeedMin),
+            speed: Number.isFinite(Number(entity.speed ?? speed(entity))) ? Math.round(Number(entity.speed ?? speed(entity))) : null,
+            moving: Boolean(entity.moving || speed(entity) >= cfg.activeSpeedMin),
             mode: entity.current_join_mode || ""
           };
         }
@@ -24112,7 +24114,7 @@
             ...raw,
             distance: dist(self, raw),
             drop: dropValue(raw),
-            speed: speed2(raw),
+            speed: speed(raw),
             hp: combatHpValue(raw),
             knownHp: knownHpValue(raw)
           };
@@ -24216,7 +24218,7 @@
           return false;
         }
         function pickOpportunisticShotTarget(self, entities) {
-          const candidates = (entities || []).filter((e) => Number(e.user_id) !== Number(self.user_id)).filter((e) => e.native).filter(entityFreshEnoughForOffense).filter(isAlive).map((e) => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed2(e), hp: combatHpValue(e) })).filter((e) => !isWhitelistedTarget(e)).filter((e) => e.distance <= cfg.attackRange).filter((e) => (typeof attackWorthTakingCore === "function" ? attackWorthTakingCore(self, e, {
+          const candidates = (entities || []).filter((e) => Number(e.user_id) !== Number(self.user_id)).filter((e) => e.native).filter(entityFreshEnoughForOffense).filter(isAlive).map((e) => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e), hp: combatHpValue(e) })).filter((e) => !isWhitelistedTarget(e)).filter((e) => e.distance <= cfg.attackRange).filter((e) => (typeof attackWorthTakingCore === "function" ? attackWorthTakingCore(self, e, {
             isWhitelistedTarget,
             dropValue,
             isAfkProfitTarget,
@@ -24821,7 +24823,7 @@
           now: now2 = () => typeof performance !== "undefined" ? performance.now() : Date.now(),
           hypot = Math.hypot,
           dist = () => Infinity,
-          speed: speed2 = () => 0,
+          speed = () => 0,
           clamp = (value, min, max) => Math.max(min, Math.min(max, value)),
           staminaRemaining = () => NaN,
           staminaExhaustedThreshold = () => 0,
@@ -24835,7 +24837,7 @@
           isAfkProfitTarget = () => false,
           isWhitelistedTarget = () => false,
           hasCombatActivitySignal = () => false,
-          isJoinModeActive: isJoinModeActive2 = () => false,
+          isJoinModeActive = () => false,
           hpValue = () => 0,
           combatHpValue = () => 100,
           knownHpValue = () => null,
@@ -24886,6 +24888,7 @@
           isAfkProfitTarget,
           isWhitelistedTarget,
           hasCombatActivitySignal,
+          isJoinModeActive,
           hpValue,
           combatHpValue,
           knownHpValue,
@@ -24908,7 +24911,7 @@
           updateBotPanel,
           summarizeControl,
           dist,
-          speed: speed2,
+          speed,
           opportunityLongStaminaBudget,
           scoreEnemyOpportunity,
           opportunityEnemyStaminaCost,
@@ -24924,6 +24927,7 @@
           now: now2,
           hypot,
           dist,
+          speed,
           clamp,
           staminaRemaining,
           staminaExhaustedThreshold,
@@ -24942,7 +24946,7 @@
           cfg,
           now: now2,
           dist,
-          speed: speed2,
+          speed,
           clamp,
           staminaRemaining,
           staminaExhaustedThreshold,
@@ -24965,7 +24969,7 @@
           actorLabel,
           hpDisplay,
           dist,
-          speed: speed2,
+          speed,
           clamp,
           staminaRemaining,
           staminaExhaustedThreshold,
@@ -25298,7 +25302,7 @@
           isFullHp,
           isInvulnerableActive,
           now: now2,
-          speed: speed2
+          speed
         } = runtime;
         function markRecentMovement(entities) {
           const t = now2();
@@ -25314,7 +25318,7 @@
             let activityAt = previous?.activityAt || 0;
             let motionSampleSpeed = 0;
             let motionObservedSpeed = 0;
-            const currentSpeed = speed2(entity);
+            const currentSpeed = speed(entity);
             const firing = isFiringEntity(entity);
             const stamina5s = Number(entity?.stamina_5s_remaining_milli ?? entity?.stamina5s ?? entity?.stamina_5s ?? NaN);
             const previousStamina = Number(previous?.stamina5s);
@@ -25715,7 +25719,7 @@
           isRecovering,
           isWhitelistedTarget,
           knownHpValue,
-          speed: speed2
+          speed
         } = runtimeDomainContexts.entity || {};
         const {
           assessActionSettlementStall,
@@ -25964,14 +25968,14 @@
           const attackableEntities = offensiveEntities.filter((e) => !isWhitelistedTarget(e));
           const realtimeEntities = attackableEntities.filter((e) => e.native && !e.minimapOnly);
           const activeThreats = entities.filter((e) => isCurrentlyActive(e)).map((e) => decorateActiveThreat(self, e)).sort((a, b) => a.distance - b.distance);
-          const inactiveTargets = attackableEntities.filter((e) => !isCurrentlyActive(e) && dropValue(e) > 0 && !isInvulnerable2(e)).map((e) => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed2(e) })).filter((e) => e.distance <= cfg.attackRange).sort((a, b) => {
+          const inactiveTargets = attackableEntities.filter((e) => !isCurrentlyActive(e) && dropValue(e) > 0 && !isInvulnerable2(e)).map((e) => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e) })).filter((e) => e.distance <= cfg.attackRange).sort((a, b) => {
             const stickyA = bot.lastTarget && String(bot.lastTarget.kind) === "enemy" && String(bot.lastTarget.id) === String(a.user_id);
             const stickyB = bot.lastTarget && String(bot.lastTarget.kind) === "enemy" && String(bot.lastTarget.id) === String(b.user_id);
             if (stickyA !== stickyB && now2() - bot.lastTargetAt < cfg.targetStickMs) return stickyA ? -1 : 1;
             if (b.drop !== a.drop) return b.drop - a.drop;
             return a.distance - b.distance;
           });
-          const realtimeInactiveTargets = realtimeEntities.filter((e) => !isCurrentlyActive(e) && dropValue(e) > 0 && !isInvulnerable2(e)).map((e) => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed2(e) })).filter((e) => e.distance <= cfg.attackRange).sort((a, b) => {
+          const realtimeInactiveTargets = realtimeEntities.filter((e) => !isCurrentlyActive(e) && dropValue(e) > 0 && !isInvulnerable2(e)).map((e) => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e) })).filter((e) => e.distance <= cfg.attackRange).sort((a, b) => {
             const stickyA = bot.lastTarget && String(bot.lastTarget.kind) === "enemy" && String(bot.lastTarget.id) === String(a.user_id);
             const stickyB = bot.lastTarget && String(bot.lastTarget.kind) === "enemy" && String(bot.lastTarget.id) === String(b.user_id);
             if (stickyA !== stickyB && now2() - bot.lastTargetAt < cfg.targetStickMs) return stickyA ? -1 : 1;
@@ -25988,11 +25992,11 @@
           });
           const realtimeCoins = allCoins.filter((c) => !isSnapshotOnlyCoin(c));
           const realtimeNearCoins = coins.filter((c) => !isSnapshotOnlyCoin(c));
-          const globalTargets = attackableEntities.filter((e) => !isCurrentlyActive(e) && dropValue(e) > 0 && !isInvulnerable2(e)).map((e) => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed2(e), global: true })).filter((e) => e.distance <= cfg.globalAttackMaxDistance).sort((a, b) => {
+          const globalTargets = attackableEntities.filter((e) => !isCurrentlyActive(e) && dropValue(e) > 0 && !isInvulnerable2(e)).map((e) => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e), global: true })).filter((e) => e.distance <= cfg.globalAttackMaxDistance).sort((a, b) => {
             if (b.drop !== a.drop) return b.drop - a.drop;
             return a.distance - b.distance;
           });
-          const realtimeGlobalTargets = realtimeEntities.filter((e) => !isCurrentlyActive(e) && dropValue(e) > 0 && !isInvulnerable2(e)).map((e) => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed2(e), global: false })).filter((e) => e.distance <= cfg.globalAttackMaxDistance).sort((a, b) => {
+          const realtimeGlobalTargets = realtimeEntities.filter((e) => !isCurrentlyActive(e) && dropValue(e) > 0 && !isInvulnerable2(e)).map((e) => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e), global: false })).filter((e) => e.distance <= cfg.globalAttackMaxDistance).sort((a, b) => {
             if (b.drop !== a.drop) return b.drop - a.drop;
             return a.distance - b.distance;
           });
@@ -26023,9 +26027,9 @@
             return b.amount - a.amount;
           });
           const realtimeScanCoins = scanCoins.filter((c) => !isSnapshotOnlyCoin(c));
-          const nearbyHumans = entities.map((e) => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed2(e) })).sort((a, b) => a.distance - b.distance);
+          const nearbyHumans = entities.map((e) => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e) })).sort((a, b) => a.distance - b.distance);
           const combatCandidateRange = combatTargetCandidateRange(self);
-          const combatTargets = attackableEntities.map((e) => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed2(e), hp: combatHpValue(e), knownHp: knownHpValue(e) })).filter((e) => !isInvulnerable2(e)).filter((e) => e.native).filter((e) => e.distance <= combatCandidateRange).sort((a, b) => {
+          const combatTargets = attackableEntities.map((e) => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e), hp: combatHpValue(e), knownHp: knownHpValue(e) })).filter((e) => !isInvulnerable2(e)).filter((e) => e.native).filter((e) => e.distance <= combatCandidateRange).sort((a, b) => {
             const stickyA = bot.lastTarget?.kind === "enemy" && String(bot.lastTarget.id) === String(a.user_id);
             const stickyB = bot.lastTarget?.kind === "enemy" && String(bot.lastTarget.id) === String(b.user_id);
             if (stickyA !== stickyB && now2() - bot.lastTargetAt < cfg.targetStickMs) return stickyA ? -1 : 1;
@@ -26033,7 +26037,7 @@
             return a.distance - b.distance;
           });
           const combatDodgeOnlyCandidateRangeValue = combatDodgeOnlyCandidateRange(self);
-          const combatDodgeOnlyTargets = attackableEntities.map((e) => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed2(e), hp: combatHpValue(e), knownHp: knownHpValue(e) })).filter((e) => !isInvulnerable2(e)).filter((e) => e.native).filter((e) => e.distance > combatCandidateRange).filter((e) => e.distance <= combatDodgeOnlyCandidateRangeValue).map((e) => ({ ...e, combatDodgeOnlyCandidate: true })).sort((a, b) => a.distance - b.distance);
+          const combatDodgeOnlyTargets = attackableEntities.map((e) => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e), hp: combatHpValue(e), knownHp: knownHpValue(e) })).filter((e) => !isInvulnerable2(e)).filter((e) => e.native).filter((e) => e.distance > combatCandidateRange).filter((e) => e.distance <= combatDodgeOnlyCandidateRangeValue).map((e) => ({ ...e, combatDodgeOnlyCandidate: true })).sort((a, b) => a.distance - b.distance);
           const snapshotCoins = allCoins.filter((c) => isSnapshotOnlyCoin(c) && c.distance <= cfg.snapshotCoinMaxDistance);
           return {
             entities,
@@ -26774,7 +26778,7 @@
           isRecovering,
           isWhitelistedTarget,
           knownHpValue,
-          speed: speed2
+          speed
         } = runtimeDomainContexts.entity || {};
         const {
           assessActionSettlementStall,
@@ -28121,7 +28125,7 @@
           snapshotCoinNavigationReasonCore,
           snapshotDataFreshEnough,
           snapshotEntityAllowed,
-          speed: speed2,
+          speed,
           staleOfflineStaminaHoldContradicted,
           staminaBudgetCoinLeaveAction,
           staminaBudgetCoinLeaveSummary,
@@ -28175,7 +28179,7 @@
           isFullHp,
           isInvulnerableActive,
           now: now2,
-          speed: speed2
+          speed
         });
         const orchestrationSafetyContext = {
           markRecentMovement,
@@ -28472,13 +28476,13 @@
           hypot,
           now: now2,
           dist,
-          speed: speed2,
+          speed,
           clamp,
           isAlive,
           dropValue,
           truthyFlag,
           isInvulnerable: isInvulnerable2,
-          isJoinModeActive: isJoinModeActive2,
+          isJoinModeActive,
           isInvulnerableActive,
           staminaRemaining,
           staminaLimitValue,
@@ -28754,7 +28758,7 @@
           summarizeSelf: (...args) => summarizeSelf(...args),
           dropValue,
           dist,
-          speed: speed2,
+          speed,
           hypot,
           knownHpValue,
           isCurrentlyActive,
@@ -28973,7 +28977,7 @@
           isOfflineishWsReadyState: (...args) => isOfflineishWsReadyState(...args),
           isAlive,
           isInvulnerable: isInvulnerable2,
-          isJoinModeActive: isJoinModeActive2,
+          isJoinModeActive,
           isFiringEntity,
           isMovingThreat,
           truthyFlag,
@@ -28982,7 +28986,7 @@
           dropValue,
           clamp,
           dist,
-          speed: speed2,
+          speed,
           now: now2,
           isFullHp,
           threatKey: (...args) => threatKey(...args),
@@ -29256,7 +29260,7 @@
           dailyStaminaWindowStartAt: (...args) => dailyStaminaWindowStartAt(...args),
           dropValue,
           dist,
-          speed: speed2,
+          speed,
           hypot,
           clamp,
           isAlive,
@@ -29505,7 +29509,7 @@
           now: now2,
           hypot,
           dist,
-          speed: speed2,
+          speed,
           clamp,
           staminaRemaining,
           staminaExhaustedThreshold,
@@ -29667,7 +29671,7 @@
           isAfkProfitTarget,
           isWhitelistedTarget,
           hasCombatActivitySignal,
-          isJoinModeActive: isJoinModeActive2,
+          isJoinModeActive,
           hpValue,
           combatHpValue,
           knownHpValue,
@@ -29898,7 +29902,7 @@
           snapshotCoinNavigationReasonCore,
           snapshotDataFreshEnough,
           snapshotEntityAllowed,
-          speed: speed2,
+          speed,
           staleOfflineStaminaHoldContradicted,
           staminaBudgetCoinLeaveAction,
           staminaBudgetCoinLeaveSummary,

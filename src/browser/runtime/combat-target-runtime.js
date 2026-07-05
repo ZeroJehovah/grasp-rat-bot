@@ -13,6 +13,7 @@ function createCombatTargetRuntime(runtime = {}) {
     isAfkProfitTarget = () => false,
     isWhitelistedTarget = () => false,
     hasCombatActivitySignal = () => false,
+    isJoinModeActive = () => false,
     hpValue = () => 0,
     combatHpValue = () => 100,
     knownHpValue = () => null,
