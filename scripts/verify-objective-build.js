@@ -41,6 +41,8 @@ const REQUIRED_DIST_TOKENS = [
   'function createPendingExitRuntime',
   'function createClashLeaveRescueRuntime',
   'function createLeaveFlowRuntime',
+  'function createNativeDataRuntime',
+  'function createNativeTransportRuntime',
   'function updateBotPanel',
   'function getNativeState',
   'function createOrchestrationRuntime',
@@ -188,6 +190,8 @@ async function main() {
   const runtimeTickSafetySource = readText('src/browser/runtime/tick-safety.js');
   const runtimeControlFlowSource = readText('src/browser/runtime/control-flow-runtime.js');
   const runtimeNativeStateSource = readText('src/browser/runtime/native-state-runtime.js');
+  const runtimeNativeDataSource = readText('src/browser/runtime/native-data-runtime.js');
+  const runtimeNativeTransportSource = readText('src/browser/runtime/native-transport-runtime.js');
   const runtimeProfitSource = readText('src/browser/runtime/profit-runtime.js');
   const runtimeCombatSource = readText('src/browser/runtime/combat-runtime.js');
   const runtimeOrchestrationSource = readText('src/browser/runtime/orchestration-runtime.js');
@@ -493,9 +497,13 @@ async function main() {
     assert(runtimeControlFlowSource.includes('function clearCurrentReloginHold'), 'manual relogin-hold clear body missing from control flow module');
   });
 
-  check('native state runtime owns snapshot state transport session and network bodies', () => {
+  check('native data and transport runtimes own extracted state transport bodies', () => {
     assert(runtimeEntrySource.includes("require('./runtime/native-state-runtime')"), 'runtime entry does not import native state runtime module');
     assert(runtimeEntrySource.includes('createNativeStateRuntime({'), 'runtime entry does not create native state runtime bindings');
+    assert(runtimeNativeStateSource.includes("require('./native-data-runtime')"), 'native state runtime does not import native data runtime');
+    assert(runtimeNativeStateSource.includes("require('./native-transport-runtime')"), 'native state runtime does not import native transport runtime');
+    assert(runtimeNativeStateSource.includes('createNativeDataRuntime({'), 'native state runtime does not create native data bindings');
+    assert(runtimeNativeStateSource.includes('createNativeTransportRuntime({'), 'native state runtime does not create native transport bindings');
     assert(!/function\s+installPageNativeSnapshotObserver\s*\(/.test(runtimeEntrySource), 'runtime entry still owns page-native snapshot observer');
     assert(!/function\s+getNativeState\s*\(/.test(runtimeEntrySource), 'runtime entry still owns native state access');
     assert(!/function\s+getNativeControl\s*\(/.test(runtimeEntrySource), 'runtime entry still owns native control access');
@@ -507,18 +515,42 @@ async function main() {
     assert(!/function\s+stopMotionSafely\s*\(/.test(runtimeEntrySource), 'runtime entry still owns safe stop body');
     assert(!/function\s+sendActionVelocity\s*\(/.test(runtimeEntrySource), 'runtime entry still owns action velocity body');
     assert(!/function\s+shootAt\s*\(/.test(runtimeEntrySource), 'runtime entry still owns shoot transport body');
+    assert(!/function\s+installPageNativeSnapshotObserver\s*\(/.test(runtimeNativeStateSource), 'native state runtime still owns page-native snapshot observer');
+    assert(!/function\s+getNativeState\s*\(/.test(runtimeNativeStateSource), 'native state runtime still owns native state access');
+    assert(!/function\s+getNativeControl\s*\(/.test(runtimeNativeStateSource), 'native state runtime still owns native control access');
+    assert(!/function\s+getCoins\s*\(/.test(runtimeNativeStateSource), 'native state runtime still owns coin normalization/merge');
+    assert(!/function\s+getBullets\s*\(/.test(runtimeNativeStateSource), 'native state runtime still owns bullet normalization/merge');
+    assert(!/async\s+function\s+refreshGlobalState\s*\(/.test(runtimeNativeStateSource), 'native state runtime still owns global state refresh body');
+    assert(!/function\s+stopMotionSafely\s*\(/.test(runtimeNativeStateSource), 'native state runtime still owns safe stop body');
+    assert(!/function\s+sendActionVelocity\s*\(/.test(runtimeNativeStateSource), 'native state runtime still owns action velocity body');
+    assert(!/function\s+shootAt\s*\(/.test(runtimeNativeStateSource), 'native state runtime still owns shoot transport body');
+    assert(runtimeNativeDataSource.includes('function createNativeDataRuntime'), 'native data runtime factory missing');
+    assert(runtimeNativeDataSource.includes('function installPageNativeSnapshotObserver'), 'page-native snapshot observer missing from native data module');
+    assert(runtimeNativeDataSource.includes('function getNativeState'), 'native state access body missing from native data module');
+    assert(runtimeNativeDataSource.includes('function getNativeControl'), 'native control access body missing from native data module');
+    assert(runtimeNativeDataSource.includes('function getCoins'), 'coin normalization/merge body missing from native data module');
+    assert(runtimeNativeDataSource.includes('function getBullets'), 'bullet normalization/merge body missing from native data module');
+    assert(runtimeNativeDataSource.includes('async function refreshGlobalState'), 'global state refresh body missing from native data module');
+    assert(runtimeNativeTransportSource.includes('function createNativeTransportRuntime'), 'native transport runtime factory missing');
+    assert(runtimeNativeTransportSource.includes('function triggerNativeTick'), 'native tick trigger missing from native transport module');
+    assert(runtimeNativeTransportSource.includes('function ensureNativeMessagePump'), 'native message pump missing from native transport module');
+    assert(runtimeNativeTransportSource.includes('function stopMotionSafely'), 'safe stop body missing from native transport module');
+    assert(runtimeNativeTransportSource.includes('function sendActionVelocity'), 'action velocity body missing from native transport module');
+    assert(runtimeNativeTransportSource.includes('function shootAt'), 'shoot transport body missing from native transport module');
+  });
+
+  check('native state runtime owns remaining session stall and network bodies', () => {
     assert(runtimeNativeStateSource.includes('function createNativeStateRuntime'), 'native state runtime factory missing');
-    assert(runtimeNativeStateSource.includes('function installPageNativeSnapshotObserver'), 'page-native snapshot observer missing from native state module');
-    assert(runtimeNativeStateSource.includes('function getNativeState'), 'native state access body missing from native state module');
-    assert(runtimeNativeStateSource.includes('function getNativeControl'), 'native control access body missing from native state module');
-    assert(runtimeNativeStateSource.includes('function getCoins'), 'coin normalization/merge body missing from native state module');
-    assert(runtimeNativeStateSource.includes('function getBullets'), 'bullet normalization/merge body missing from native state module');
+    assert(runtimeNativeStateSource.includes('function summarizeServerPositionStall'), 'server-position stall summary missing from native state module');
+    assert(runtimeNativeStateSource.includes('function assessServerPositionStall'), 'server-position stall assessment missing from native state module');
+    assert(runtimeNativeStateSource.includes('function summarizeActionSettlementStall'), 'action-settlement stall summary missing from native state module');
+    assert(runtimeNativeStateSource.includes('function assessActionSettlementStall'), 'action-settlement stall assessment missing from native state module');
     assert(runtimeNativeStateSource.includes('function summarizeSessionStats'), 'session summary body missing from native state module');
+    assert(runtimeNativeStateSource.includes('function summarizeTodaySessionStats'), 'today-session summary body missing from native state module');
     assert(runtimeNativeStateSource.includes('function summarizeNetworkQuality'), 'network quality summary body missing from native state module');
-    assert(runtimeNativeStateSource.includes('async function refreshGlobalState'), 'global state refresh body missing from native state module');
-    assert(runtimeNativeStateSource.includes('function stopMotionSafely'), 'safe stop body missing from native state module');
-    assert(runtimeNativeStateSource.includes('function sendActionVelocity'), 'action velocity body missing from native state module');
-    assert(runtimeNativeStateSource.includes('function shootAt'), 'shoot transport body missing from native state module');
+    assert(runtimeNativeStateSource.includes('function observeNativeWsFrame'), 'native WS frame observation missing from native state module');
+    assert(runtimeNativeStateSource.includes('function recordNetworkQualityMovementCommand'), 'network quality movement command body missing from native state module');
+    assert(runtimeNativeStateSource.includes('function recordNetworkQualityShot'), 'network quality shot body missing from native state module');
   });
 
   check('profit runtime owns coin opportunity progress and arbitration bodies', () => {
