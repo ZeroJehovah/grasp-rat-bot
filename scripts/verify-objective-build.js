@@ -32,6 +32,7 @@ const REQUIRED_DIST_TOKENS = [
   'function createRuntimeBootstrapBindings',
   'function createRuntimeStateBindings',
   'function createBotApiRuntime',
+  'function createEntityStateRuntime',
   'function updateBotPanel',
   'function getNativeState',
   'function createOrchestrationRuntime',
@@ -161,6 +162,7 @@ async function main() {
   const runtimeShellSource = readText('src/browser/runtime/runtime-shell.js');
   const runtimeBotStateSource = readText('src/browser/runtime/runtime-bot-state.js');
   const runtimeBotApiSource = readText('src/browser/runtime/bot-api-runtime.js');
+  const runtimeEntityStateSource = readText('src/browser/runtime/entity-state-runtime.js');
   const runtimeTargetWhitelistSource = readText('src/browser/runtime/target-whitelist.js');
   const runtimeStaminaStatusSource = readText('src/browser/runtime/stamina-status.js');
   const runtimeTargetOverlaySource = readText('src/browser/runtime/target-overlay.js');
@@ -225,8 +227,10 @@ async function main() {
     assert(runtimeEntrySource.includes("require('./runtime/runtime-shell')"), 'runtime entry does not import the runtime shell module');
     assert(runtimeEntrySource.includes("require('./runtime/runtime-bot-state')"), 'runtime entry does not import the runtime bot-state module');
     assert(runtimeEntrySource.includes("require('./runtime/bot-api-runtime')"), 'runtime entry does not import the bot API runtime module');
+    assert(runtimeEntrySource.includes("require('./runtime/entity-state-runtime')"), 'runtime entry does not import the entity-state runtime module');
     assert(runtimeEntrySource.includes('const bot = createRuntimeBotState({'), 'runtime entry does not create bot state through the extracted module');
     assert(runtimeEntrySource.includes('createBotApiRuntime({'), 'runtime entry does not install public bot APIs through the extracted module');
+    assert(runtimeEntrySource.includes('createEntityStateRuntime({'), 'runtime entry does not create shared entity-state helpers through the extracted module');
     assert(runtimeEntrySource.includes('module.exports.default = __graspRatRuntimeStartup'), 'runtime entry does not expose startup result for local eval');
     assert(!runtimeEntrySource.includes("require('./runtime/runtime-bootstrap-bindings')"), 'runtime entry still imports bootstrap bindings directly');
     assert(!runtimeEntrySource.includes("require('./runtime/runtime-state-bindings')"), 'runtime entry still imports state bindings directly');
@@ -263,6 +267,30 @@ async function main() {
     assert(runtimeBotApiSource.includes('configureClashLeaveRescue(options = {})'), 'Clash rescue API body missing from bot API module');
     assert(runtimeBotApiSource.includes('statusPendingExit'), 'pending-exit status helper missing from bot API module');
     assert(runtimeBotApiSource.includes('status()'), 'bot.status body missing from bot API module');
+  });
+
+  check('entity state runtime owns shared entity HP stamina and activity predicates', () => {
+    assert(runtimeEntrySource.includes("require('./runtime/entity-state-runtime')"), 'runtime entry does not import entity-state runtime');
+    assert(runtimeEntrySource.includes('createEntityStateRuntime({'), 'runtime entry does not create entity-state runtime helpers');
+    assert(!/const\s+isInvulnerable\s*=/.test(runtimeEntrySource), 'runtime entry still owns invulnerability predicate');
+    assert(!/const\s+isFiringEntity\s*=/.test(runtimeEntrySource), 'runtime entry still owns firing predicate');
+    assert(!/const\s+isCurrentlyActive\s*=/.test(runtimeEntrySource), 'runtime entry still owns active predicate');
+    assert(!/function\s+recentlyActionedForAfk\s*\(/.test(runtimeEntrySource), 'runtime entry still owns AFK recent-activity predicate');
+    assert(!/function\s+isIdleInvulnerableTarget\s*\(/.test(runtimeEntrySource), 'runtime entry still owns idle invulnerable predicate');
+    assert(!/const\s+hpValue\s*=/.test(runtimeEntrySource), 'runtime entry still owns HP value helper');
+    assert(!/const\s+staminaRemaining\s*=/.test(runtimeEntrySource), 'runtime entry still owns stamina remaining helper');
+    assert(!/const\s+decorateActiveThreat\s*=/.test(runtimeEntrySource), 'runtime entry still owns active threat decoration');
+    assert(!/const\s+isRecovering\s*=/.test(runtimeEntrySource), 'runtime entry still owns recovery predicate');
+    assert(runtimeEntityStateSource.includes('function createEntityStateRuntime'), 'entity-state runtime factory missing');
+    assert(runtimeEntityStateSource.includes('const isInvulnerable ='), 'invulnerability predicate missing from entity-state module');
+    assert(runtimeEntityStateSource.includes('const isFiringEntity ='), 'firing predicate missing from entity-state module');
+    assert(runtimeEntityStateSource.includes('const isCurrentlyActive ='), 'active predicate missing from entity-state module');
+    assert(runtimeEntityStateSource.includes('function recentlyActionedForAfk'), 'AFK recent-activity predicate missing from entity-state module');
+    assert(runtimeEntityStateSource.includes('function isIdleInvulnerableTarget'), 'idle invulnerable predicate missing from entity-state module');
+    assert(runtimeEntityStateSource.includes('const hpValue ='), 'HP helper missing from entity-state module');
+    assert(runtimeEntityStateSource.includes('const staminaRemaining ='), 'stamina helper missing from entity-state module');
+    assert(runtimeEntityStateSource.includes('const decorateActiveThreat ='), 'active threat decoration missing from entity-state module');
+    assert(runtimeEntityStateSource.includes('const isRecovering ='), 'recovery predicate missing from entity-state module');
   });
 
   check('ui status runtime modules own whitelist stamina overlay and panel bodies', () => {
