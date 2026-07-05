@@ -109,6 +109,16 @@ Verifier 已有 `runtime-entry.js`、`combat-runtime.js`、`profit-runtime.js`�
 
 如果每次都需要远程发布，可从 `bootstrap-0.4.543` 顺延到 `bootstrap-0.4.549`；实际版本号以落地时 `main` 状态为准。每个代码提交应包含对应 build outputs 和 docs/current-state 更新，避免代码和版本说明脱节。
 
+实施状态：
+
+- [x] Commit 1 - Docs Current-State Closeout
+- [ ] Commit 2 - Post-Migration Guard Baseline
+- [ ] Commit 3 - Extract Orchestration Safety Helpers
+- [ ] Commit 4 - Extract Decision Selection Runtime
+- [ ] Commit 5 - Extract Tick And Startup Runtime
+- [ ] Commit 6 - Split Combat Log Frame And Diagnostics Owners
+- [ ] Commit 7 - Final Closeout Guards And Handoff
+
 ### Commit 1 - Docs Current-State Closeout
 
 目的：
@@ -128,6 +138,8 @@ Verifier 已有 `runtime-entry.js`、`combat-runtime.js`、`profit-runtime.js`�
 ```bash
 git diff --check
 ```
+
+Completed after `bootstrap-0.4.542`: `docs/agent/README.md` already points to this closeout plan, and `docs/agent/test-coverage.md` now separates current direct-entry verifier coverage from the pre-`bootstrap-0.4.524` source-fragment coverage archive.
 
 ### Commit 2 - Post-Migration Guard Baseline
 
