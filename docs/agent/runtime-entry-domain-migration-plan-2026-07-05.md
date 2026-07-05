@@ -8,9 +8,9 @@ The previous runtime bundler migration is complete: production and local injecti
 
 - Source-string generation files remaining: 0.
 - Obsolete runtime source layer remaining: 0 (`src/browser/*source.js`, `src/browser/runtime-fragment-registry.js`, `src/browser/runtime-source.js`, and `src/browser/runtime-entry-source.js` are absent).
-- Direct browser entry still to decompose: `src/browser/runtime-entry.js`, 11,026 lines.
-- Function declarations inside the direct entry: 327.
-- Existing executable helper modules: 49 files under `src/browser/runtime/`.
+- Direct browser entry still to decompose: `src/browser/runtime-entry.js`, 9,297 lines.
+- Function declarations inside the direct entry: 215.
+- Existing executable helper modules: 50 files under `src/browser/runtime/`.
 - Current top-level browser files: `src/browser/page-global-core.js`, `src/browser/runtime-entry.js`, and `src/browser/runtime-helper-entry.mjs`.
 
 ## Migration Status
@@ -19,7 +19,7 @@ The previous runtime bundler migration is complete: production and local injecti
 - [x] UI, overlay, status, whitelist, and stamina (`bootstrap-0.4.526`).
 - [x] Logging and history (`bootstrap-0.4.527`).
 - [x] Login, exit, pending exit, and leave flow (`bootstrap-0.4.528`).
-- [ ] Native state, transport, session stats, and network quality.
+- [x] Native state, transport, session stats, and network quality (`bootstrap-0.4.529`).
 - [ ] Coin, opportunity, profit, and arbitration.
 - [ ] Combat domain.
 - [ ] Final orchestrator and verifier tightening.
@@ -40,15 +40,14 @@ The remaining work is structural, not a strategy rewrite.
 
 Approximate line ranges in `src/browser/runtime-entry.js`:
 
-- Runtime shell use, shared bindings, `bot` methods, base helpers, UI/status/logging/tick factory wiring, and control-flow factory wiring: lines 1-1014.
-- Pause handling, page-native snapshot observer, native state/control, session stats, network quality, important logging factory wiring, and entity refresh setup: lines 1015-3412.
-- Native movement/shooting, motion helpers, coin motion options, return-block, classify, offline safety, and coin safety: lines 3413-4615.
-- Visible coin/profit helpers, target selection, combat movement/aim/state/fire/leave/action, opportunity builders, and action arbitration helpers: lines 4616-9196.
-- `chooseAction`, coin tracking, `tick`, and startup tail: lines 9197-11026.
+- Runtime shell use, shared bindings, `bot` methods, base helpers, UI/status/logging/tick/control-flow/native factory wiring, and recent movement setup: lines 1-1879.
+- Recent-activity marking, classify, offline safety, coin safety, and native/profit bridge helpers: lines 1880-3036.
+- Target selection and combat movement/aim/state/fire/leave/action: lines 3037-7467.
+- Opportunity, coin/profit action builders, action arbitration, coin tracking, `chooseAction`, `tick`, and startup tail: lines 7468-9297.
 
 ## Commit Plan
 
-Plan count from current state: 4 future migration commits after the completed shell/context, UI/status, logging/history, and control-flow slices. The implementation commits should each be behavior-preserving unless explicitly called out and validated separately.
+Plan count from current state: 3 future migration commits after the completed shell/context, UI/status, logging/history, control-flow, and native-state slices. The implementation commits should each be behavior-preserving unless explicitly called out and validated separately.
 
 ### 1. Runtime Shell And Context - Completed
 
@@ -135,6 +134,8 @@ Expected result:
 Validation focus:
 
 - Native/realtime entity merge behavior, coin and bullet collection, session stamina accounting, network quality summaries, and movement/shot command side effects remain unchanged.
+
+Completed in `bootstrap-0.4.529`: native state/control access, realtime entity/coin/bullet normalization, page-native snapshot observer, movement/shoot transport, session/today-session stats, server-position/action-settlement stall summaries, global state refresh, and network-quality tracking moved behind `createNativeStateRuntime()` in `src/browser/runtime/native-state-runtime.js`; and `scripts/verify-objective-build.js` now rejects these native-state bodies returning to `runtime-entry.js`.
 
 ### 6. Coin, Opportunity, Profit, And Arbitration
 
