@@ -112,7 +112,7 @@ Verifier 已有 `runtime-entry.js`、`combat-runtime.js`、`profit-runtime.js`�
 实施状态：
 
 - [x] Commit 1 - Docs Current-State Closeout
-- [ ] Commit 2 - Post-Migration Guard Baseline
+- [x] Commit 2 - Post-Migration Guard Baseline
 - [ ] Commit 3 - Extract Orchestration Safety Helpers
 - [ ] Commit 4 - Extract Decision Selection Runtime
 - [ ] Commit 5 - Extract Tick And Startup Runtime
@@ -168,6 +168,8 @@ cd combat-log-service && npm test
 node scripts/build-remote-bot.js --version bootstrap-0.4.xx
 node scripts/verify-objective-build.js
 ```
+
+Completed after `bootstrap-0.4.542`: `scripts/verify-objective-build.js` now keeps the existing size-guard check but extends it to the current large second-level modules: `orchestration-runtime.js`, `combat-log-runtime.js`, `combat-target-runtime.js`, `combat-movement-runtime.js`, `combat-aim-runtime.js`, and `target-overlay.js`.
 
 ### Commit 3 - Extract Orchestration Safety Helpers
 
