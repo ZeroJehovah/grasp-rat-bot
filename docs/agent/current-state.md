@@ -4,14 +4,15 @@ Update this file for every remote bot release or handoff-relevant state change. 
 
 ## Latest Release
 
-- Latest remote bot: `bootstrap-0.4.561`.
-- Latest manifest SHA-256: `48db9e76c87e591677777ae774cd281334de26fb8d77c79af4e10d24f2c4a491`.
-- Latest remote release commit: `007aba7` (`bootstrap-0.4.561` wire combat target id into movement runtime).
+- Latest remote bot: `bootstrap-0.4.562`.
+- Latest manifest SHA-256: `4a305fe51d66252c35e0127ef273d9ec6914c391977f6004464bbe7dd5d587f3`.
+- Latest remote release commit: `e061cc7` (`bootstrap-0.4.562` wire remaining combat runtime dependencies).
 - Latest bootstrap A versions: Tampermonkey `0.4.74`, extension `0.1.53`.
-- Latest direct entry/config SHA-256: `5fb15c0b37341b664a6b8df2094733e2fdefeb38fa7a5e96f7f49177c5b2810f`.
+- Latest direct entry/config SHA-256: `22bcecef3561f002c574fe474e2d03cb6fca02b947e65000e89df3dbe6cb16e8`.
 
 ## Current Handoff
 
+- `bootstrap-0.4.562` passes `directionTo` into combat movement runtime and `now` into combat target runtime, with objective-build smoke coverage for passive-runner close movement and sticky combat target selection; the checked browser runtime surface has no unexpected `no-undef` findings beyond known build/page globals.
 - `bootstrap-0.4.561` passes `combatTargetId` into combat movement runtime and adds an objective-build passive-runner smoke for the dependency; passive-runner combat checks should no longer throw `combatTargetId is not defined` when combat starts.
 - `bootstrap-0.4.560` passes `isInvulnerable` into combat movement runtime and adds objective-build guards for the dependency; passive-runner combat checks should no longer throw `isInvulnerable is not defined` when combat starts.
 - `bootstrap-0.4.559` passes `speed` into combat movement runtime and `isJoinModeActive` into combat target runtime, with objective-build guards for both dependencies; active-combat checks should no longer throw `speed is not defined` or `isJoinModeActive is not defined`.
@@ -39,7 +40,7 @@ Update this file for every remote bot release or handoff-relevant state change. 
 
 ## Latest Validation Baseline
 
-The latest `bootstrap-0.4.561` release validation passed:
+The latest `bootstrap-0.4.562` release validation passed:
 
 ```bash
 node grasp-rat-bot.js --self-test
@@ -56,7 +57,7 @@ node --check extension/popup.js
 cd combat-log-service && npm test
 npm run test:runtime-helper-entry
 npm run test:remote-bundled
-node scripts/build-remote-bot.js --version bootstrap-0.4.561
+node scripts/build-remote-bot.js --version bootstrap-0.4.562
 node scripts/verify-objective-build.js
 git diff --check
 ```
