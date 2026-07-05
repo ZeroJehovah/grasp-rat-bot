@@ -12,7 +12,7 @@
   var define_GRASP_RAT_RUNTIME_CONFIG_default;
   var init_define_GRASP_RAT_RUNTIME_CONFIG = __esm({
     "<define:__GRASP_RAT_RUNTIME_CONFIG__>"() {
-      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.562" };
+      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.563" };
     }
   });
 
@@ -1977,8 +1977,42 @@
         const distanceText = Number.isFinite(distance) ? "\uFF0C\u8DDD\u79BB" + helpers.formatDistance(distance) : "";
         return "\u88AB" + helpers.actorLabel(target) + "\u6301\u7EED\u8FFD\u51FB" + durationText + distanceText + "\uFF0C\u9000\u51FA\u7B49\u5F85\u91CD\u8FDE";
       }
+      function injuryActorDistance(actor) {
+        const distance = Number(actor?.distance);
+        return Number.isFinite(distance) ? distance : Infinity;
+      }
+      function injuryActorId(actor) {
+        const id = actor?.id ?? actor?.user_id;
+        return id === null || id === void 0 ? "" : String(id);
+      }
+      function pickInjuryActorCore(injury) {
+        const active = injury?.nearestActive || null;
+        const avoidance = injury?.nearestAvoidance || null;
+        const human = injury?.nearestHuman || null;
+        const candidates = [active, avoidance, human].filter(Boolean);
+        const bulletOwnerId = injury?.incomingBullet?.ownerId ?? injury?.incomingBullet?.owner_id ?? "";
+        const bulletOwnerKey = bulletOwnerId === null || bulletOwnerId === void 0 ? "" : String(bulletOwnerId);
+        if (bulletOwnerKey) {
+          const bulletOwner = candidates.find((candidate) => injuryActorId(candidate) === bulletOwnerKey);
+          if (bulletOwner) return bulletOwner;
+        }
+        if (human && (!active || active.invulnerable || injuryActorDistance(human) < injuryActorDistance(active))) {
+          return human;
+        }
+        if (active && !active.invulnerable) return active;
+        if (avoidance && !avoidance.invulnerable) return avoidance;
+        return human || active || avoidance || null;
+      }
+      function healthyHighValueCoinInjuryLeaveSuppressedCore(injury, action, options = {}) {
+        if (action?.kind !== "coin") return false;
+        if (action?.reason !== "high-value-visible-coin-priority" && !action?.highValueCoinPriority) return false;
+        const hp = Number(injury?.currentHp ?? injury?.self?.hp);
+        const fallback = Number(options.healthyHp ?? options.combatLowHpLeaveThreshold ?? 50);
+        const healthyHp = Math.max(1, Number.isFinite(fallback) ? fallback : 50);
+        return Number.isFinite(hp) && hp >= healthyHp;
+      }
       function injuryLeaveSummaryCore(injury, helpers) {
-        const actor = injury?.nearestActive || injury?.nearestAvoidance || injury?.nearestHuman || null;
+        const actor = pickInjuryActorCore(injury);
         const previousHp = Number(injury?.previousHp ?? NaN);
         const currentHp = Number(injury?.currentHp ?? injury?.self?.hp ?? NaN);
         const hpText = Number.isFinite(previousHp) && Number.isFinite(currentHp) ? "\uFF0C\u8840\u91CF\u4ECE" + helpers.hpDisplay(previousHp) + "\u964D\u5230" + helpers.hpDisplay(currentHp) : Number.isFinite(currentHp) ? "\uFF0C\u5F53\u524D\u8840\u91CF" + helpers.hpDisplay(currentHp) : "";
@@ -2552,6 +2586,8 @@
         combatExitSummaryCore,
         combatLeaveActionCore,
         pursuitLeaveSummaryCore,
+        pickInjuryActorCore,
+        healthyHighValueCoinInjuryLeaveSuppressedCore,
         injuryLeaveSummaryCore,
         offlineLeaveSummaryCore,
         currentOfflineDisplayReasonCore,
@@ -26991,7 +27027,7 @@
         } = runtimeDomainContexts.safety || {};
         const { chooseAction } = runtimeDomainContexts.decision || {};
         const { postExitDecisionWithoutTargetCore: postExitDecisionWithoutTargetForTickCore } = require_exit_motion2();
-        const { clearEnemyReloginHoldBoundCore: clearEnemyReloginHoldForTickBoundCore, clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForTickBoundCore, currentOfflineDisplayReasonCore: currentOfflineDisplayReasonForTickCore, enemyReloginHoldRemainingMsBoundCore: enemyReloginHoldRemainingMsForTickBoundCore, injuryLeaveSummaryCore: injuryLeaveSummaryForTickCore, offlineLeaveSummaryCore: offlineLeaveSummaryForTickCore, offlineReloginHoldRemainingMsBoundCore: offlineReloginHoldRemainingMsForTickBoundCore, pursuitLeaveSummaryCore: pursuitLeaveSummaryForTickCore } = require_exit_relogin();
+        const { clearEnemyReloginHoldBoundCore: clearEnemyReloginHoldForTickBoundCore, clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForTickBoundCore, currentOfflineDisplayReasonCore: currentOfflineDisplayReasonForTickCore, enemyReloginHoldRemainingMsBoundCore: enemyReloginHoldRemainingMsForTickBoundCore, healthyHighValueCoinInjuryLeaveSuppressedCore: healthyHighValueCoinInjuryLeaveSuppressedForTickCore, injuryLeaveSummaryCore: injuryLeaveSummaryForTickCore, offlineLeaveSummaryCore: offlineLeaveSummaryForTickCore, offlineReloginHoldRemainingMsBoundCore: offlineReloginHoldRemainingMsForTickBoundCore, pursuitLeaveSummaryCore: pursuitLeaveSummaryForTickCore } = require_exit_relogin();
         const { pendingExitRetryMsCore: pendingExitRetryMsForTickCore, summarizePendingExitCore: summarizePendingExitForTickCore } = require_pending_exit2();
         async function tick(source = "timer") {
           if (!bot.running) return;
@@ -27629,21 +27665,25 @@
                 nearestHuman: bot.lastSafety?.nearestHuman || bot.pendingInjuryLeave.nearestHuman || null
               };
               bot.pendingInjuryLeave = null;
-              const skippedLeave = pendingExitSkipNewLeave("injury", "injury hp drop", {
-                injury,
-                summary: injuryLeaveSummaryForTickCore(injury, { actorLabel, hpDisplay })
-              });
-              if (!skippedLeave) {
-                Promise.resolve(leaveForInjury(injury)).catch((err) => recordUnhandledTickError("injury-leave", err));
-              }
-              action = {
-                ...action,
-                injury: skippedLeave ? { ...injury, suppressedByPendingExit: true } : injury,
-                pendingExitIntent: skippedLeave ? pendingExitIntentForSkippedLeave("injury", "injury hp drop", skippedLeave) : {
-                  reason: "injury-leave",
+              if (healthyHighValueCoinInjuryLeaveSuppressedForTickCore(injury, action, { healthyHp: typeof highValueCoinPriorityHealthyHp === "function" ? highValueCoinPriorityHealthyHp() : cfg?.highValueCoinPriorityHealthyHp, combatLowHpLeaveThreshold: cfg?.combatLowHpLeaveThreshold })) {
+                action = { ...action, injury: { ...injury, suppressedByHighValueCoin: true, suppressedReason: "healthy-high-value-coin-priority" } };
+              } else {
+                const skippedLeave = pendingExitSkipNewLeave("injury", "injury hp drop", {
+                  injury,
                   summary: injuryLeaveSummaryForTickCore(injury, { actorLabel, hpDisplay })
+                });
+                if (!skippedLeave) {
+                  Promise.resolve(leaveForInjury(injury)).catch((err) => recordUnhandledTickError("injury-leave", err));
                 }
-              };
+                action = {
+                  ...action,
+                  injury: skippedLeave ? { ...injury, suppressedByPendingExit: true } : injury,
+                  pendingExitIntent: skippedLeave ? pendingExitIntentForSkippedLeave("injury", "injury hp drop", skippedLeave) : {
+                    reason: "injury-leave",
+                    summary: injuryLeaveSummaryForTickCore(injury, { actorLabel, hpDisplay })
+                  }
+                };
+              }
             }
             action = attachCoinDiagnostics(applyCoinProgressAction(action, self));
             const escape = bot.staleCoinEscape;

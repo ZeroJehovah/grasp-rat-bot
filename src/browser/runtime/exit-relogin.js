@@ -235,8 +235,46 @@ function pursuitLeaveSummaryCore(pursuit, helpers) {
   return '被' + helpers.actorLabel(target) + '持续追击' + durationText + distanceText + '，退出等待重连';
 }
 
+function injuryActorDistance(actor) {
+  const distance = Number(actor?.distance);
+  return Number.isFinite(distance) ? distance : Infinity;
+}
+
+function injuryActorId(actor) {
+  const id = actor?.id ?? actor?.user_id;
+  return id === null || id === undefined ? '' : String(id);
+}
+
+function pickInjuryActorCore(injury) {
+  const active = injury?.nearestActive || null;
+  const avoidance = injury?.nearestAvoidance || null;
+  const human = injury?.nearestHuman || null;
+  const candidates = [active, avoidance, human].filter(Boolean);
+  const bulletOwnerId = injury?.incomingBullet?.ownerId ?? injury?.incomingBullet?.owner_id ?? '';
+  const bulletOwnerKey = bulletOwnerId === null || bulletOwnerId === undefined ? '' : String(bulletOwnerId);
+  if (bulletOwnerKey) {
+    const bulletOwner = candidates.find(candidate => injuryActorId(candidate) === bulletOwnerKey);
+    if (bulletOwner) return bulletOwner;
+  }
+  if (human && (!active || active.invulnerable || injuryActorDistance(human) < injuryActorDistance(active))) {
+    return human;
+  }
+  if (active && !active.invulnerable) return active;
+  if (avoidance && !avoidance.invulnerable) return avoidance;
+  return human || active || avoidance || null;
+}
+
+function healthyHighValueCoinInjuryLeaveSuppressedCore(injury, action, options = {}) {
+  if (action?.kind !== 'coin') return false;
+  if (action?.reason !== 'high-value-visible-coin-priority' && !action?.highValueCoinPriority) return false;
+  const hp = Number(injury?.currentHp ?? injury?.self?.hp);
+  const fallback = Number(options.healthyHp ?? options.combatLowHpLeaveThreshold ?? 50);
+  const healthyHp = Math.max(1, Number.isFinite(fallback) ? fallback : 50);
+  return Number.isFinite(hp) && hp >= healthyHp;
+}
+
 function injuryLeaveSummaryCore(injury, helpers) {
-  const actor = injury?.nearestActive || injury?.nearestAvoidance || injury?.nearestHuman || null;
+  const actor = pickInjuryActorCore(injury);
   const previousHp = Number(injury?.previousHp ?? NaN);
   const currentHp = Number(injury?.currentHp ?? injury?.self?.hp ?? NaN);
   const hpText = Number.isFinite(previousHp) && Number.isFinite(currentHp)
@@ -846,6 +884,8 @@ module.exports = {
   combatExitSummaryCore,
   combatLeaveActionCore,
   pursuitLeaveSummaryCore,
+  pickInjuryActorCore,
+  healthyHighValueCoinInjuryLeaveSuppressedCore,
   injuryLeaveSummaryCore,
   offlineLeaveSummaryCore,
   currentOfflineDisplayReasonCore,
