@@ -8,7 +8,7 @@ Keep this file focused on current validation coverage. Do not use it as a migrat
 - Strategy module self-test count: `107`.
 - Combat-log analyzer self-test count: `88`.
 - Combat replay self-test count: `1` local replay case plus skipped historical fixtures when retained logs are absent.
-- Objective build verification count: `34`.
+- Objective build verification count: `35`.
 
 ## Main Validation Surfaces
 
@@ -54,6 +54,7 @@ The browser runtime should adapt page/native state into these pure helpers inste
 - dependency-width budgets prevent wide flat runtime injection from returning;
 - combat target, aim, and fire stay native/realtime-visible only;
 - ordinary profit keeps visible/native coin and visible/native AFK priority before snapshot fallback;
+- bootstrap auto-login evaluates the local login-point safety gate only after deciding that login is needed;
 - userscript and extension bootstrap versions match their runtime constants.
 
 Current high-risk size and dependency guards include:

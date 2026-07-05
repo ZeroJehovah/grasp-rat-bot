@@ -3,7 +3,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.1.52';
+  const BOOTSTRAP_VERSION = '0.1.53';
   const BOOTSTRAP_OWNER = 'extension';
   const REPOSITORY_URL = 'https://github.com/ZeroJehovah/grasp-rat-bot';
   const LOADER_UPDATE_URL = 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/extension/page-bootstrap.js';
@@ -3280,14 +3280,6 @@
       return false;
     }
     const status = getBotStatus();
-    const loginGateBlock = bootstrapLoginPointSafetyBlock(status);
-    if (loginGateBlock && !force) {
-      rememberLoginGateBlock(loginGateBlock, reason);
-      return false;
-    }
-    if (loginGateBlock && force) {
-      rememberLoginGateBlock({ ...loginGateBlock, manualBypassed: true }, reason);
-    }
     const hasToken = Boolean(localStorage.getItem('tmpGameSessionToken') || status?.control?.hasToken);
     const hasSelf = Boolean(status?.self || status?.lastDecision?.self);
     const decisionReason = String(status?.lastDecision?.reason || '');
@@ -3302,6 +3294,14 @@
       ? canStartLogin
       : (!hasToken || (!hasSelf && /login|required/i.test(decisionReason) && loginRequired));
     if (!shouldLogin) return false;
+    const loginGateBlock = bootstrapLoginPointSafetyBlock(status);
+    if (loginGateBlock && !force) {
+      rememberLoginGateBlock(loginGateBlock, reason);
+      return false;
+    }
+    if (loginGateBlock && force) {
+      rememberLoginGateBlock({ ...loginGateBlock, manualBypassed: true }, reason);
+    }
     state.lastLoginAt = t;
     const detail = {
       reason,

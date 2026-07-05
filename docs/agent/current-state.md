@@ -7,12 +7,13 @@ Update this file for every remote bot release or handoff-relevant state change. 
 - Latest remote bot: `bootstrap-0.4.558`.
 - Latest manifest SHA-256: `e0e72991b16e560f687240dffe5b41c69a80a71fad9edbe08c19169e1fc5ce6a`.
 - Latest remote release commit: `5ffc114` (`bootstrap-0.4.558` wire combat movement drop dependency).
-- Latest bootstrap A versions: Tampermonkey `0.4.73`, extension `0.1.52`.
+- Latest bootstrap A versions: Tampermonkey `0.4.74`, extension `0.1.53`.
 - Latest direct entry/config SHA-256: `600c16d1d64c2c161596248eee8a0af9a136199e9b4d71614e81b2c693ef5f0a`.
 
 ## Current Handoff
 
 - `bootstrap-0.4.558` passes `dropValue` into the combat movement runtime and adds objective-build guards for the dependency; passive-runner combat checks should no longer throw `dropValue is not defined`.
+- Bootstrap A Tampermonkey `0.4.74` and extension `0.1.53` now evaluate the local login-point safety gate only after `maybeStartGameLogin()` confirms that an automatic login is actually needed; watchdog intervals should no longer print `login blocked by local login-point safety gate` while an alive in-game self is active.
 - `bootstrap-0.4.557` passes `highValueCoinPriorityAmount` into the profit opportunity runtime and adds an objective-build smoke for `opportunityChoiceCoreOptions()`; missing-held opportunity checks should no longer throw `highValueCoinPriorityAmount is not defined`.
 - `bootstrap-0.4.556` passes `opportunityLongStaminaBudget` from the combat composition runtime into combat-target runtime; active-combat budget checks should no longer throw `opportunityLongStaminaBudget is not defined`.
 - `bootstrap-0.4.555` restores the control-flow dependencies for `newExitAuditRequestId` and `syncPausedFromPage`; the control-flow runtime now instantiates cleanly with stub dependencies and should no longer fail with `newExitAuditRequestId is not defined`.
@@ -57,7 +58,7 @@ node scripts/verify-objective-build.js
 git diff --check
 ```
 
-Latest objective build verification reports 34 checks and guards:
+Latest objective build verification reports 35 checks and guards:
 
 - manifest/dist/source hash consistency;
 - direct runtime-entry bundling for production and local CDP/print-source;
@@ -68,6 +69,7 @@ Latest objective build verification reports 34 checks and guards:
 - dependency-width budgets for high-risk composition factories;
 - native/realtime-only combat target/aim/fire anchors;
 - visible/native ordinary-profit priority before snapshot fallback;
+- bootstrap auto-login evaluates login-point safety only after login is needed;
 - userscript and extension bootstrap version consistency.
 
 ## Report Locations
