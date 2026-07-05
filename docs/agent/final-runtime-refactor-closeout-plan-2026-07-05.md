@@ -44,7 +44,7 @@ Implementation status:
 - [x] Commit 4 - Move Orchestration Composition To Domain Contexts
 - [x] Commit 5 - Move Orchestration Decision To Domain Contexts
 - [x] Commit 6 - Move Orchestration Tick And Startup To Domain Contexts
-- [ ] Commit 7 - Split Remaining Control-Flow Owners
+- [x] Commit 7 - Split Remaining Control-Flow Owners
 - [ ] Commit 8 - Final Documentation, Budgets, And Release Closeout
 
 ### Commit 1 - Add Final Closeout Plan
@@ -384,6 +384,8 @@ Completion criteria:
 
 - `control-flow-runtime.js` is clearly a control composition module.
 - Session recovery and relogin gate logic have dedicated owners and verifier anchors.
+
+Completed in `bootstrap-0.4.551`: `src/browser/runtime/session-recovery-runtime.js` now owns reload requests, leave-confirmation reloads, Cloudflare/BunkerWeb refresh checks, no-self game-session state, session-mismatch recovery state, and live-session takeover gating. `src/browser/runtime/relogin-gate-runtime.js` now owns relogin cooldown candidates, relogin gate summaries, and manual relogin-hold clearing. `src/browser/runtime/control-flow-runtime.js` now composes those owners plus login, login-point safety, post-login zoom, pending-exit, Clash rescue, and leave-flow modules. Static verification guards the new owners, reports 88 runtime modules, tightens the control-flow line budget to `768/850`, and tightens the control-flow dependency-width budget to `74/75`.
 
 ### Commit 8 - Final Documentation, Budgets, And Release Closeout
 
