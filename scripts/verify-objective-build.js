@@ -165,6 +165,7 @@ async function main() {
   const runtimeImportantLoggingSource = readText('src/browser/runtime/important-logging-runtime.js');
   const runtimeTickSafetySource = readText('src/browser/runtime/tick-safety.js');
   const runtimeControlFlowSource = readText('src/browser/runtime/control-flow-runtime.js');
+  const runtimeNativeStateSource = readText('src/browser/runtime/native-state-runtime.js');
   const userscriptText = readText('userscript/grasp-rat-bootstrap.user.js');
   const extensionBootstrapText = readText('extension/page-bootstrap.js');
   const extensionManifest = readJson('extension/manifest.json');
@@ -311,6 +312,34 @@ async function main() {
     assert(runtimeControlFlowSource.includes('function loginPointSafetyStatus'), 'login-point safety body missing from control flow module');
     assert(runtimeControlFlowSource.includes('function updatePursuitTracking'), 'pursuit tracking body missing from control flow module');
     assert(runtimeControlFlowSource.includes('async function issueLeaveCommand'), 'leave command body missing from control flow module');
+  });
+
+  check('native state runtime owns snapshot state transport session and network bodies', () => {
+    assert(runtimeEntrySource.includes("require('./runtime/native-state-runtime')"), 'runtime entry does not import native state runtime module');
+    assert(runtimeEntrySource.includes('createNativeStateRuntime({'), 'runtime entry does not create native state runtime bindings');
+    assert(!/function\s+installPageNativeSnapshotObserver\s*\(/.test(runtimeEntrySource), 'runtime entry still owns page-native snapshot observer');
+    assert(!/function\s+getNativeState\s*\(/.test(runtimeEntrySource), 'runtime entry still owns native state access');
+    assert(!/function\s+getNativeControl\s*\(/.test(runtimeEntrySource), 'runtime entry still owns native control access');
+    assert(!/function\s+getCoins\s*\(/.test(runtimeEntrySource), 'runtime entry still owns coin normalization/merge');
+    assert(!/function\s+getBullets\s*\(/.test(runtimeEntrySource), 'runtime entry still owns bullet normalization/merge');
+    assert(!/function\s+summarizeSessionStats\s*\(/.test(runtimeEntrySource), 'runtime entry still owns session summary body');
+    assert(!/function\s+summarizeNetworkQuality\s*\(/.test(runtimeEntrySource), 'runtime entry still owns network quality summary body');
+    assert(!/async\s+function\s+refreshGlobalState\s*\(/.test(runtimeEntrySource), 'runtime entry still owns global state refresh body');
+    assert(!/function\s+stopMotionSafely\s*\(/.test(runtimeEntrySource), 'runtime entry still owns safe stop body');
+    assert(!/function\s+sendActionVelocity\s*\(/.test(runtimeEntrySource), 'runtime entry still owns action velocity body');
+    assert(!/function\s+shootAt\s*\(/.test(runtimeEntrySource), 'runtime entry still owns shoot transport body');
+    assert(runtimeNativeStateSource.includes('function createNativeStateRuntime'), 'native state runtime factory missing');
+    assert(runtimeNativeStateSource.includes('function installPageNativeSnapshotObserver'), 'page-native snapshot observer missing from native state module');
+    assert(runtimeNativeStateSource.includes('function getNativeState'), 'native state access body missing from native state module');
+    assert(runtimeNativeStateSource.includes('function getNativeControl'), 'native control access body missing from native state module');
+    assert(runtimeNativeStateSource.includes('function getCoins'), 'coin normalization/merge body missing from native state module');
+    assert(runtimeNativeStateSource.includes('function getBullets'), 'bullet normalization/merge body missing from native state module');
+    assert(runtimeNativeStateSource.includes('function summarizeSessionStats'), 'session summary body missing from native state module');
+    assert(runtimeNativeStateSource.includes('function summarizeNetworkQuality'), 'network quality summary body missing from native state module');
+    assert(runtimeNativeStateSource.includes('async function refreshGlobalState'), 'global state refresh body missing from native state module');
+    assert(runtimeNativeStateSource.includes('function stopMotionSafely'), 'safe stop body missing from native state module');
+    assert(runtimeNativeStateSource.includes('function sendActionVelocity'), 'action velocity body missing from native state module');
+    assert(runtimeNativeStateSource.includes('function shootAt'), 'shoot transport body missing from native state module');
   });
 
   check('obsolete source-fragment files are absent', () => {
