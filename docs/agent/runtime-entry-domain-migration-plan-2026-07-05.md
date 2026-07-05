@@ -8,9 +8,9 @@ The previous runtime bundler migration is complete: production and local injecti
 
 - Source-string generation files remaining: 0.
 - Obsolete runtime source layer remaining: 0 (`src/browser/*source.js`, `src/browser/runtime-fragment-registry.js`, `src/browser/runtime-source.js`, and `src/browser/runtime-entry-source.js` are absent).
-- Direct browser entry still to decompose: `src/browser/runtime-entry.js`, 4,568 lines.
-- Function declarations inside the direct entry: 30.
-- Existing executable helper modules: 52 files under `src/browser/runtime/`.
+- Direct browser entry after decomposition: `src/browser/runtime-entry.js`, 2,547 lines.
+- Function declarations inside the direct entry: 14.
+- Existing executable helper modules: 53 files under `src/browser/runtime/`.
 - Current top-level browser files: `src/browser/page-global-core.js`, `src/browser/runtime-entry.js`, and `src/browser/runtime-helper-entry.mjs`.
 
 ## Migration Status
@@ -22,11 +22,11 @@ The previous runtime bundler migration is complete: production and local injecti
 - [x] Native state, transport, session stats, and network quality (`bootstrap-0.4.529`).
 - [x] Coin, opportunity, profit, and arbitration (`bootstrap-0.4.530`).
 - [x] Combat domain (`bootstrap-0.4.531`).
-- [ ] Final orchestrator and verifier tightening.
+- [x] Final orchestrator and verifier tightening (`bootstrap-0.4.532`).
 
-## Remaining Migration Scope
+## Completed Migration Scope
 
-The remaining work is structural, not a strategy rewrite.
+The completed work was structural, not a strategy rewrite.
 
 - Keep `src/browser/runtime-entry.js` as the esbuild entry, but reduce it to startup composition and high-level orchestration.
 - Move domain behavior into executable modules under `src/browser/runtime/` or a subdirectory such as `src/browser/runtime/domains/`.
@@ -40,13 +40,12 @@ The remaining work is structural, not a strategy rewrite.
 
 Approximate line ranges in `src/browser/runtime-entry.js`:
 
-- Runtime shell use, shared bindings, `bot` methods, base helpers, UI/status/logging/tick/control-flow/native factory wiring, and important logging setup: lines 1-1881.
-- Recent-activity marking, return-block helpers, classify, profit factory wiring, and combat factory wiring: lines 1882-2868.
-- `chooseAction`, `tick`, and startup tail: lines 2869-4568.
+- Runtime shell use, shared bindings, `bot` methods, base helpers, UI/status/logging/tick/control-flow/native factory wiring, important logging setup, profit/combat factory wiring, orchestration wiring, and startup delegation: lines 1-2547.
+- Recent-activity marking, return-block helpers, `classify`, `chooseAction`, `tick`, and startup tail now live in `src/browser/runtime/orchestration-runtime.js`, lines 1-2553.
 
 ## Commit Plan
 
-Plan count from current state: 1 future migration commit after the completed shell/context, UI/status, logging/history, control-flow, native-state, profit, and combat slices. The implementation commit should be behavior-preserving unless explicitly called out and validated separately.
+Plan count from current state: 0 future migration commits after the completed shell/context, UI/status, logging/history, control-flow, native-state, profit, combat, and final orchestration slices.
 
 ### 1. Runtime Shell And Context - Completed
 
@@ -188,6 +187,8 @@ Expected result:
 Validation focus:
 
 - Verifier checks direct entry graph, final dist, absent source-string layer, domain boundary anchors, native/realtime combat anchors, and visible/native profit priority anchors.
+
+Completed in `bootstrap-0.4.532`: recent movement marking, return-block helpers, `classify()`, `chooseAction()`, `tick()`, and the startup tail moved behind `createOrchestrationRuntime()` in `src/browser/runtime/orchestration-runtime.js`; `src/browser/runtime-entry.js` now delegates startup through the orchestration runtime after wiring the shell and domain factories; and `scripts/verify-objective-build.js` now rejects orchestration bodies returning to the entry while keeping native/realtime combat anchors and visible/native profit priority checks on the owning modules.
 
 ## Validation Baseline Per Implementation Commit
 
