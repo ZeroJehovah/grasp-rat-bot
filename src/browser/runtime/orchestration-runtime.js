@@ -297,14 +297,19 @@ function createOrchestrationRuntime(runtime = {}) {
   } = createOrchestrationDecisionRuntime({
     domainContexts: decisionDomainContexts
   });
+  const tickDomainContexts = {
+    ...decisionDomainContexts,
+    decision: {
+      ...((decisionDomainContexts && decisionDomainContexts.decision) || {}),
+      chooseAction
+    }
+  };
 
   const {
     tick,
     startRuntime
   } = createOrchestrationTickRuntime({
-    ...runtimeContext,
-    chooseAction,
-    blockThreatReturnAction
+    domainContexts: tickDomainContexts
   });
 
   return {

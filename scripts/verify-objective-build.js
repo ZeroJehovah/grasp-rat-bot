@@ -108,7 +108,7 @@ const POST_MIGRATION_DEPENDENCY_WIDTH_BUDGETS = {
   },
   'orchestration tick runtime': {
     factory: 'createOrchestrationTickRuntime',
-    max: 230
+    max: 10
   },
   'control flow composition runtime': {
     factory: 'createControlFlowRuntime',
@@ -1014,9 +1014,15 @@ async function main() {
     assert(runtimeOrchestrationSource.includes('function createOrchestrationRuntime'), 'orchestration runtime factory missing');
     assert(runtimeOrchestrationSource.includes("require('./orchestration-tick-runtime')"), 'orchestration runtime does not import tick runtime module');
     assert(runtimeOrchestrationSource.includes('createOrchestrationTickRuntime({'), 'orchestration runtime does not create tick runtime bindings');
+    assert(runtimeOrchestrationSource.includes('const tickDomainContexts = {'), 'orchestration runtime does not build tick domain contexts');
+    assert(runtimeOrchestrationSource.includes('domainContexts: tickDomainContexts'), 'orchestration runtime does not pass domain contexts into tick runtime');
+    assert(!runtimeOrchestrationSource.includes('...runtimeContext,\n    chooseAction'), 'orchestration runtime still passes flat runtime context into tick runtime');
     assert(!/async\s+function\s+tick\s*\(/.test(runtimeOrchestrationSource), 'orchestration runtime still owns tick body');
     assert(!/function\s+startRuntime\s*\(/.test(runtimeOrchestrationSource), 'orchestration runtime still owns startup body');
     assert(runtimeOrchestrationTickSource.includes('function createOrchestrationTickRuntime'), 'orchestration tick runtime factory missing');
+    assert(runtimeOrchestrationTickSource.includes('const runtimeDomainContexts = domainContexts || {'), 'orchestration tick runtime does not read domain contexts');
+    assert(runtimeOrchestrationTickSource.includes('runtimeDomainContexts.control'), 'orchestration tick runtime does not group control dependencies');
+    assert(runtimeOrchestrationTickSource.includes('runtimeDomainContexts.decision'), 'orchestration tick runtime does not read decision context');
     assert(runtimeOrchestrationTickSource.includes('async function tick'), 'tick body missing from tick module');
     assert(runtimeOrchestrationTickSource.includes('function startRuntime'), 'startup body missing from tick module');
   });
