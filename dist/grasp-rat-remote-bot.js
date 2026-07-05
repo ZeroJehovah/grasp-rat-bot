@@ -12,7 +12,7 @@
   var define_GRASP_RAT_RUNTIME_CONFIG_default;
   var init_define_GRASP_RAT_RUNTIME_CONFIG = __esm({
     "<define:__GRASP_RAT_RUNTIME_CONFIG__>"() {
-      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.546" };
+      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.547" };
     }
   });
 
@@ -24721,6 +24721,269 @@
     }
   });
 
+  // src/browser/runtime/runtime-domain-contexts.js
+  var require_runtime_domain_contexts = __commonJS({
+    "src/browser/runtime/runtime-domain-contexts.js"(exports, module) {
+      "use strict";
+      init_define_GRASP_RAT_RUNTIME_CONFIG();
+      var DOMAIN_CONTEXT_KEYS = Object.freeze({
+        bootstrap: Object.freeze([
+          "BOT_KEY",
+          "ENEMY_LEAVE_STATE_KEY",
+          "LOGIN_SUPPRESS_KEY",
+          "LOGIN_SUPPRESS_REASON_KEY",
+          "OFFLINE_LEAVE_STATE_KEY",
+          "PENDING_EXIT_STATE_KEY",
+          "cfg",
+          "pageGlobal",
+          "previousBot"
+        ]),
+        state: Object.freeze([
+          "bot",
+          "clearPersistentExitState",
+          "clearPersistentPendingExitState",
+          "normalizePendingExitReloadConfirmationCore",
+          "pendingExitPersistenceCoreHelpers",
+          "readPersistentExitState",
+          "writePersistentPendingExitStateCore"
+        ]),
+        entity: Object.freeze([
+          "decorateActiveThreat",
+          "dist",
+          "dropValue",
+          "hpValue",
+          "hypot",
+          "isAfkProfitTarget",
+          "isAlive",
+          "isAvoidanceThreat",
+          "isConservingStamina",
+          "isCurrentlyActive",
+          "isFiringEntity",
+          "isFullHp",
+          "isInvulnerable",
+          "isInvulnerableActive",
+          "isRecovering",
+          "isWhitelistedTarget",
+          "knownHpValue",
+          "speed"
+        ]),
+        native: Object.freeze([
+          "assessActionSettlementStall",
+          "assessServerPositionStall",
+          "buildNativeCoinSnapshotCore",
+          "buildNativeEntityMeta",
+          "controlHasNativeGameSession",
+          "ensureControlWs",
+          "getBullets",
+          "getCoins",
+          "getCurrentUserId",
+          "getNativeCoinList",
+          "getNativeEntityList",
+          "getSelf",
+          "installPageGlobal",
+          "installPageNativeSnapshotObserver",
+          "observeNetworkQualitySelf",
+          "refreshGlobalState",
+          "resetServerPositionStall",
+          "sendActionVelocity",
+          "shootAt",
+          "snapshotDataFreshEnough",
+          "snapshotEntityAllowed",
+          "stopMotionSafely",
+          "summarizeControl",
+          "summarizeSelf"
+        ]),
+        control: Object.freeze([
+          "activeEnemyLeaveDetail",
+          "activeOfflineLeaveDetail",
+          "clearExitHoldDetail",
+          "clearSessionMismatchRecoveryState",
+          "cloudflareErrorInfo",
+          "handlePendingExit",
+          "installNativeLoginGateInterceptors",
+          "isCombatStateForInjuryLeave",
+          "latestEnemyLeaveDisplayReason",
+          "leaveForCombat",
+          "leaveForInjury",
+          "leaveForPursuit",
+          "leaveOffline",
+          "liveSessionMismatchTakeoverState",
+          "loginSnapshotGateDisplayReason",
+          "maybeRecordLoginPoint",
+          "maybeReloadCloudflareError",
+          "maybeStartAutoLogin",
+          "noSelfGameSessionExitState",
+          "noteSelfUnavailableForPostLoginZoom",
+          "pendingCombatLeaveAction",
+          "pendingExitIntentForSkippedLeave",
+          "pendingExitSkipNewLeave",
+          "requestReload",
+          "requestSessionMismatchRecoveryReload",
+          "schedulePostLoginZoomOut",
+          "sessionMismatchRecoveryReloadSatisfied",
+          "staleOfflineStaminaHoldContradicted",
+          "staminaBudgetReloginDelayMs",
+          "summarizePendingCombatLeave",
+          "summarizePursuit",
+          "summarizeSessionMismatchRecoveryStatus",
+          "syncPausedFromPage",
+          "updatePursuitTracking"
+        ]),
+        profit: Object.freeze([
+          "applyCoinApproachLockUpdate",
+          "applyCoinProgressAction",
+          "applyFinalActionArbitration",
+          "attachCoinDiagnostics",
+          "buildCoinAction",
+          "buildCoinDiagnostics",
+          "buildDropMatchedKillCore",
+          "buildEnemyAction",
+          "buildMissingHeldOpportunityCore",
+          "buildPostAttackDropWaitAction",
+          "canPrioritizeHighValueVisibleCoin",
+          "chooseStableOpportunityCore",
+          "clearCoinTracking",
+          "clearMissingVisibleCoinTarget",
+          "coinBlockedByThreat",
+          "coinDiagnosticsLimit",
+          "coinDiagnosticsNearDistance",
+          "coinDirectionToCore",
+          "coinMotionCoreOptions",
+          "coinMotionMetaCore",
+          "coinPickupAttemptSlowCount",
+          "coinPickupFailureCount",
+          "coinRouteCoreOptions",
+          "coinRouteKey",
+          "coinStaminaAffordableWithDiagnostic",
+          "coinTargetCoreOptions",
+          "coinTargetKeyCore",
+          "coinThreatDiagnostics",
+          "currentHeldCoinChoice",
+          "currentHeldCoinRouteChoice",
+          "dailyStaminaBudgetIsLimitingCore",
+          "dailyStaminaFinalCoinAction",
+          "highValueCoinPriorityAmount",
+          "highValueCoinPriorityHealthyHp",
+          "highValueVisibleCoinPriorityNeeded",
+          "isSnapshotCoinWaitAction",
+          "isSnapshotOnlyCoin",
+          "markCoinCollected",
+          "normalizeCoinDrop",
+          "opportunityCandidateCoreOptions",
+          "opportunityChoiceCoreOptions",
+          "opportunityCoinStaminaCost",
+          "opportunityEnemyStaminaCost",
+          "opportunityLongStaminaBudget",
+          "opportunityPriorityTier",
+          "opportunityWindowStaminaBudget",
+          "pickCoin",
+          "pickCoinField",
+          "pickCoinRouteOpportunityCore",
+          "pickDistantCoin",
+          "pickHighValueVisibleCoin",
+          "pickNearestDailyStaminaFinalCoinCore",
+          "pickPostAttackDropCoinCore",
+          "pickPostAttackDropWaitTargetCore",
+          "pickProfitableCombatTarget",
+          "pickRealtimeLocalCoin",
+          "postAttackDropResolvedAt",
+          "recordActionSwitchDiagnostics",
+          "recordCoinFilterDiagnostic",
+          "recordIncidentalCoinPickups",
+          "rememberOpportunityChoiceCore",
+          "resetOpportunitySwitchLock",
+          "safeCoinCandidates",
+          "scoreCoinOpportunity",
+          "setLastTarget",
+          "shouldClearOpportunityChoiceCore",
+          "snapshotCoinAgeMs",
+          "snapshotCoinLocalSuppressRadius",
+          "snapshotCoinNavigationReasonCore",
+          "staminaBudgetCoinLeaveAction",
+          "staminaBudgetCoinLeaveSummary",
+          "summarizeBlockedStaminaOpportunityCore",
+          "summarizeNearestCoinStaminaBudgetExitCore",
+          "uniqueVisibleRouteCoinsCore",
+          "updateOpportunityAfkStaminaObservations",
+          "visibleCoinSourcesConfirmTargetMissing"
+        ]),
+        combat: Object.freeze([
+          "activeCombatThreatWaitAction",
+          "attachOpportunisticShot",
+          "attackWorthTakingCore",
+          "buildCombatAction",
+          "buildOpportunisticShotWait",
+          "clearCombatEngagement",
+          "combatDodgeOnlyCandidateRange",
+          "combatHpValue",
+          "combatTargetCandidateRange",
+          "combatTickActiveFromState",
+          "combatTickGapOfflineState",
+          "defensiveTargetOverridesEngaged",
+          "entityFreshEnoughForOffense",
+          "globalSamplingOutageOfflineState",
+          "handleTickReentryCombatGap",
+          "incomingBulletThreat",
+          "pickActiveCombatWaitThreat",
+          "pickCombatTarget",
+          "pickEngagedCombatTarget",
+          "rememberCombatEngagement"
+        ]),
+        logging: Object.freeze([
+          "finishImportantCombat",
+          "importantSessionStaminaSpentMs",
+          "logStatus",
+          "noteImportantSessionExit",
+          "recordCombatLogTick",
+          "recordImportantCombatTick",
+          "recordKillHistoryItem",
+          "recordUnhandledTickError",
+          "rememberAttack",
+          "restoreImportantLogsForRemote",
+          "restorePersistedCombatLogPendingEntries",
+          "restorePersistedExitAuditLogs",
+          "runTickSafely",
+          "safeJsonClone",
+          "safeStringify",
+          "updateKillHistory"
+        ]),
+        ui: Object.freeze([
+          "actorLabel",
+          "arrayCount",
+          "deferredStaminaExhaustionLeave",
+          "exitMotionStopLockRemainingMs",
+          "formatDistance",
+          "formatDurationMs",
+          "hpDisplay",
+          "startTargetWhitelistPolling",
+          "staminaExhaustedWindowLabel",
+          "summarizeStamina",
+          "updateBotPanel"
+        ])
+      });
+      function pickContext(bindings, keys) {
+        const context = {};
+        for (const key of keys) {
+          if (Object.prototype.hasOwnProperty.call(bindings, key)) {
+            context[key] = bindings[key];
+          }
+        }
+        return context;
+      }
+      function createRuntimeDomainContexts(bindings = {}) {
+        const contexts = { flat: bindings };
+        for (const [domain, keys] of Object.entries(DOMAIN_CONTEXT_KEYS)) {
+          contexts[domain] = pickContext(bindings, keys);
+        }
+        return contexts;
+      }
+      module.exports = {
+        DOMAIN_CONTEXT_KEYS,
+        createRuntimeDomainContexts
+      };
+    }
+  });
+
   // src/browser/runtime/orchestration-safety-runtime.js
   var require_orchestration_safety_runtime = __commonJS({
     "src/browser/runtime/orchestration-safety-runtime.js"(exports, module) {
@@ -29078,8 +29341,9 @@
           opportunityStaminaAffordable,
           scoreCoinOpportunity
         }));
+        const { createRuntimeDomainContexts } = require_runtime_domain_contexts();
         const { createOrchestrationRuntime } = require_orchestration_runtime();
-        const orchestrationRuntime = createOrchestrationRuntime({
+        const runtimeFlatContext = {
           BOT_KEY,
           ENEMY_LEAVE_STATE_KEY,
           LOGIN_SUPPRESS_KEY,
@@ -29300,6 +29564,11 @@
           updateSessionStats,
           visibleCoinSourcesConfirmTargetMissing,
           writePersistentPendingExitStateCore
+        };
+        const runtimeDomainContexts = createRuntimeDomainContexts(runtimeFlatContext);
+        const orchestrationRuntime = createOrchestrationRuntime({
+          ...runtimeFlatContext,
+          domainContexts: runtimeDomainContexts
         });
         ({
           classify,
