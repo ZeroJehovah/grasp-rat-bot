@@ -33,6 +33,8 @@ const REQUIRED_DIST_TOKENS = [
   'function createRuntimeStateBindings',
   'function createBotApiRuntime',
   'function createEntityStateRuntime',
+  'function createExitDetailRuntime',
+  'function createEntryGlueRuntime',
   'function updateBotPanel',
   'function getNativeState',
   'function createOrchestrationRuntime',
@@ -163,6 +165,8 @@ async function main() {
   const runtimeBotStateSource = readText('src/browser/runtime/runtime-bot-state.js');
   const runtimeBotApiSource = readText('src/browser/runtime/bot-api-runtime.js');
   const runtimeEntityStateSource = readText('src/browser/runtime/entity-state-runtime.js');
+  const runtimeExitDetailSource = readText('src/browser/runtime/exit-detail-runtime.js');
+  const runtimeEntryGlueSource = readText('src/browser/runtime/entry-glue-runtime.js');
   const runtimeTargetWhitelistSource = readText('src/browser/runtime/target-whitelist.js');
   const runtimeStaminaStatusSource = readText('src/browser/runtime/stamina-status.js');
   const runtimeTargetOverlaySource = readText('src/browser/runtime/target-overlay.js');
@@ -228,9 +232,13 @@ async function main() {
     assert(runtimeEntrySource.includes("require('./runtime/runtime-bot-state')"), 'runtime entry does not import the runtime bot-state module');
     assert(runtimeEntrySource.includes("require('./runtime/bot-api-runtime')"), 'runtime entry does not import the bot API runtime module');
     assert(runtimeEntrySource.includes("require('./runtime/entity-state-runtime')"), 'runtime entry does not import the entity-state runtime module');
+    assert(runtimeEntrySource.includes("require('./runtime/exit-detail-runtime')"), 'runtime entry does not import the exit-detail runtime module');
+    assert(runtimeEntrySource.includes("require('./runtime/entry-glue-runtime')"), 'runtime entry does not import the entry-glue runtime module');
     assert(runtimeEntrySource.includes('const bot = createRuntimeBotState({'), 'runtime entry does not create bot state through the extracted module');
     assert(runtimeEntrySource.includes('createBotApiRuntime({'), 'runtime entry does not install public bot APIs through the extracted module');
     assert(runtimeEntrySource.includes('createEntityStateRuntime({'), 'runtime entry does not create shared entity-state helpers through the extracted module');
+    assert(runtimeEntrySource.includes('createExitDetailRuntime({'), 'runtime entry does not create exit-detail helpers through the extracted module');
+    assert(runtimeEntrySource.includes('createEntryGlueRuntime({'), 'runtime entry does not create entry glue helpers through the extracted module');
     assert(runtimeEntrySource.includes('module.exports.default = __graspRatRuntimeStartup'), 'runtime entry does not expose startup result for local eval');
     assert(!runtimeEntrySource.includes("require('./runtime/runtime-bootstrap-bindings')"), 'runtime entry still imports bootstrap bindings directly');
     assert(!runtimeEntrySource.includes("require('./runtime/runtime-state-bindings')"), 'runtime entry still imports state bindings directly');
@@ -291,6 +299,35 @@ async function main() {
     assert(runtimeEntityStateSource.includes('const staminaRemaining ='), 'stamina helper missing from entity-state module');
     assert(runtimeEntityStateSource.includes('const decorateActiveThreat ='), 'active threat decoration missing from entity-state module');
     assert(runtimeEntityStateSource.includes('const isRecovering ='), 'recovery predicate missing from entity-state module');
+  });
+
+  check('exit detail and entry glue runtimes own remaining entry helpers', () => {
+    assert(runtimeEntrySource.includes("require('./runtime/exit-detail-runtime')"), 'runtime entry does not import exit-detail runtime');
+    assert(runtimeEntrySource.includes("require('./runtime/entry-glue-runtime')"), 'runtime entry does not import entry-glue runtime');
+    assert(runtimeEntrySource.includes('createExitDetailRuntime({'), 'runtime entry does not create exit-detail runtime bindings');
+    assert(runtimeEntrySource.includes('createEntryGlueRuntime({'), 'runtime entry does not create entry-glue runtime bindings');
+    assert(!/function\s+activeEnemyLeaveDetail\s*\(/.test(runtimeEntrySource), 'runtime entry still owns active enemy leave detail body');
+    assert(!/function\s+activeOfflineLeaveDetail\s*\(/.test(runtimeEntrySource), 'runtime entry still owns active offline leave detail body');
+    assert(!/function\s+latestEnemyLeaveResult\s*\(/.test(runtimeEntrySource), 'runtime entry still owns latest enemy leave result body');
+    assert(!/function\s+latestEnemyLeaveSummary\s*\(/.test(runtimeEntrySource), 'runtime entry still owns latest enemy leave summary body');
+    assert(!/function\s+latestEnemyLeaveDisplayReason\s*\(/.test(runtimeEntrySource), 'runtime entry still owns latest enemy leave display reason body');
+    assert(!/function\s+clearPostExitTargetState\s*\(/.test(runtimeEntrySource), 'runtime entry still owns post-exit target cleanup body');
+    assert(!/function\s+readPauseReason\s*\(/.test(runtimeEntrySource), 'runtime entry still owns pause reason body');
+    assert(!/function\s+syncPausedFromPage\s*\(/.test(runtimeEntrySource), 'runtime entry still owns pause sync body');
+    assert(!/function\s+getOwnEntity\s*\(/.test(runtimeEntrySource), 'runtime entry still owns own-entity helper body');
+    assert(!/function\s+logStatus\s*\(/.test(runtimeEntrySource), 'runtime entry still owns status logging body');
+    assert(runtimeExitDetailSource.includes('function createExitDetailRuntime'), 'exit-detail runtime factory missing');
+    assert(runtimeExitDetailSource.includes('function activeEnemyLeaveDetail'), 'active enemy leave detail missing from exit-detail module');
+    assert(runtimeExitDetailSource.includes('function activeOfflineLeaveDetail'), 'active offline leave detail missing from exit-detail module');
+    assert(runtimeExitDetailSource.includes('function latestEnemyLeaveResult'), 'latest enemy leave result missing from exit-detail module');
+    assert(runtimeExitDetailSource.includes('function latestEnemyLeaveSummary'), 'latest enemy leave summary missing from exit-detail module');
+    assert(runtimeExitDetailSource.includes('function latestEnemyLeaveDisplayReason'), 'latest enemy leave display reason missing from exit-detail module');
+    assert(runtimeEntryGlueSource.includes('function createEntryGlueRuntime'), 'entry-glue runtime factory missing');
+    assert(runtimeEntryGlueSource.includes('function clearPostExitTargetState'), 'post-exit target cleanup missing from entry-glue module');
+    assert(runtimeEntryGlueSource.includes('function readPauseReason'), 'pause reason helper missing from entry-glue module');
+    assert(runtimeEntryGlueSource.includes('function syncPausedFromPage'), 'pause sync helper missing from entry-glue module');
+    assert(runtimeEntryGlueSource.includes('function getOwnEntity'), 'own-entity helper missing from entry-glue module');
+    assert(runtimeEntryGlueSource.includes('function logStatus'), 'status logging helper missing from entry-glue module');
   });
 
   check('ui status runtime modules own whitelist stamina overlay and panel bodies', () => {

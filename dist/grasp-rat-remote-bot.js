@@ -12,7 +12,7 @@
   var define_GRASP_RAT_RUNTIME_CONFIG_default;
   var init_define_GRASP_RAT_RUNTIME_CONFIG = __esm({
     "<define:__GRASP_RAT_RUNTIME_CONFIG__>"() {
-      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.534" };
+      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.535" };
     }
   });
 
@@ -3851,6 +3851,192 @@
       }
       module.exports = {
         createEntityStateRuntime
+      };
+    }
+  });
+
+  // src/browser/runtime/exit-detail-runtime.js
+  var require_exit_detail_runtime = __commonJS({
+    "src/browser/runtime/exit-detail-runtime.js"(exports, module) {
+      "use strict";
+      init_define_GRASP_RAT_RUNTIME_CONFIG();
+      function fallbackNow() {
+        return Date.now();
+      }
+      function createExitDetailRuntime(runtime = {}) {
+        const {
+          bot,
+          enemyLeaveStateKey = "",
+          offlineLeaveStateKey = "",
+          readPersistentExitState = () => null,
+          clearPersistentExitState = () => {
+          },
+          refreshExitDetail = (value) => value,
+          now = fallbackNow
+        } = runtime;
+        function latestEnemyLeaveResult() {
+          const candidates = [
+            { at: Number(bot.lastEnemyLeaveResult?.at || 0), result: bot.lastEnemyLeaveResult },
+            { at: Number(bot.lastCombatLeaveResult?.at || bot.lastCombatLeaveAt || 0), result: bot.lastCombatLeaveResult },
+            { at: Number(bot.lastPursuitLeaveResult?.at || bot.lastPursuitLeaveAt || 0), result: bot.lastPursuitLeaveResult },
+            { at: Number(bot.lastInjuryLeaveResult?.at || bot.lastInjuryLeaveAt || 0), result: bot.lastInjuryLeaveResult }
+          ].filter((item) => item.result);
+          return candidates.sort((a, b) => b.at - a.at)[0]?.result || null;
+        }
+        function activeEnemyLeaveDetail(t = now()) {
+          const current = latestEnemyLeaveResult();
+          const restored = readPersistentExitState(enemyLeaveStateKey, t);
+          const picked = current || restored || bot.lastEnemyLeaveResult || null;
+          if (!picked) return null;
+          const refreshed = refreshExitDetail(picked, t);
+          if (!refreshed?.holdRemainingMs && Number(refreshed?.reloginUntil || 0)) {
+            clearPersistentExitState(enemyLeaveStateKey);
+            if (bot.lastEnemyLeaveResult === picked) bot.lastEnemyLeaveResult = null;
+            return null;
+          }
+          bot.lastEnemyLeaveResult = refreshed;
+          if (Number(refreshed?.reloginUntil || 0) > 0) {
+            bot.pursuitReloginUntil = Math.max(Number(bot.pursuitReloginUntil || 0), Number(refreshed.reloginUntil));
+          }
+          return refreshed;
+        }
+        function activeOfflineLeaveDetail(t = now()) {
+          const picked = bot.lastOfflineLeaveResult || readPersistentExitState(offlineLeaveStateKey, t);
+          if (!picked) return null;
+          const refreshed = refreshExitDetail(picked, t);
+          if (!refreshed?.holdRemainingMs && Number(refreshed?.reloginUntil || 0)) {
+            clearPersistentExitState(offlineLeaveStateKey);
+            if (bot.lastOfflineLeaveResult === picked) bot.lastOfflineLeaveResult = null;
+            return null;
+          }
+          bot.lastOfflineLeaveResult = refreshed;
+          if (Number(refreshed?.reloginUntil || 0) > 0) {
+            bot.offlineReloginUntil = Math.max(Number(bot.offlineReloginUntil || 0), Number(refreshed.reloginUntil));
+          }
+          return refreshed;
+        }
+        function latestEnemyLeaveSummary() {
+          const result = latestEnemyLeaveResult();
+          return result?.summary || result?.exitSummary || result?.enemyLeaveSummary || result?.displayReason || "";
+        }
+        function latestEnemyLeaveDisplayReason() {
+          const result = latestEnemyLeaveResult();
+          return result?.displayReason || result?.summary || result?.exitSummary || result?.enemyLeaveSummary || "";
+        }
+        return {
+          activeEnemyLeaveDetail,
+          activeOfflineLeaveDetail,
+          latestEnemyLeaveResult,
+          latestEnemyLeaveSummary,
+          latestEnemyLeaveDisplayReason
+        };
+      }
+      module.exports = {
+        createExitDetailRuntime
+      };
+    }
+  });
+
+  // src/browser/runtime/entry-glue-runtime.js
+  var require_entry_glue_runtime = __commonJS({
+    "src/browser/runtime/entry-glue-runtime.js"(exports, module) {
+      "use strict";
+      init_define_GRASP_RAT_RUNTIME_CONFIG();
+      function fallbackNow() {
+        return Date.now();
+      }
+      function createEntryGlueRuntime(runtime = {}) {
+        const {
+          bot,
+          storage = typeof localStorage !== "undefined" ? localStorage : null,
+          pageGlobal = typeof window !== "undefined" ? window : null,
+          pausedKey = "",
+          pauseReasonKey = "",
+          readPageGlobal = (_key, fallbackValue) => fallbackValue,
+          stopMotionSafely = () => {
+          },
+          removeTargetOverlay = () => {
+          },
+          updateBotPanel = () => {
+          },
+          getSelf = () => null,
+          exitMotionStopLockRemainingMs = () => 0,
+          postExitDecisionWithoutTargetCore = (value) => value,
+          resetOpportunitySwitchLock = () => {
+          },
+          now = fallbackNow,
+          consoleObject = typeof console !== "undefined" ? console : null
+        } = runtime;
+        function clearPostExitTargetState(reason = "exit-confirmed") {
+          const exitMotionLockRemainingMs = exitMotionStopLockRemainingMs();
+          bot.lastTarget = null;
+          bot.lastTargetAt = 0;
+          bot.opportunityChoice = null;
+          resetOpportunitySwitchLock();
+          bot.staleCoinEscape = null;
+          bot.coinApproachLock = null;
+          removeTargetOverlay();
+          if (bot.lastDecision && typeof bot.lastDecision === "object") {
+            bot.lastDecision = postExitDecisionWithoutTargetCore(bot.lastDecision, reason, {
+              lastExitMotionStopReason: bot.lastExitMotionStopReason,
+              exitMotionLockRemainingMs
+            });
+            try {
+              updateBotPanel(bot.lastDecision);
+            } catch (_) {
+            }
+          }
+        }
+        function readPauseReason() {
+          let reason = "";
+          try {
+            if (storage) reason = String(storage.getItem(pauseReasonKey) || "");
+          } catch (_) {
+          }
+          return String(readPageGlobal("__graspRatBotPauseReason", "", pageGlobal) || reason || "");
+        }
+        function syncPausedFromPage2(stopOnPause = true) {
+          let localPaused = false;
+          try {
+            localPaused = Boolean(storage && storage.getItem(pausedKey) === "true");
+          } catch (_) {
+          }
+          const paused = Boolean(readPageGlobal("__graspRatBotPaused", false, pageGlobal) === true || localPaused);
+          if (paused !== bot.paused) {
+            bot.paused = paused;
+            bot.pauseChangedAt = now();
+            if (paused) {
+              if (stopOnPause) stopMotionSafely("paused");
+              removeTargetOverlay();
+            }
+          }
+          bot.pauseReason = paused ? readPauseReason() || bot.pauseReason || "manual" : "";
+          return paused;
+        }
+        function getOwnEntity() {
+          try {
+            return typeof getSelf === "function" ? getSelf() : null;
+          } catch (_) {
+            return null;
+          }
+        }
+        function logStatus(text, detail) {
+          bot.lastAction = text;
+          if (detail) bot.lastDecision = detail;
+          if (bot.running) updateBotPanel(bot.lastDecision || detail || { kind: "wait", reason: text, self: bot.lastSelf });
+          if (typeof log === "function") log("[bot] " + text, "info");
+          if (consoleObject && typeof consoleObject.log === "function") consoleObject.log("[grasp-rat-bot]", text, detail || "");
+        }
+        return {
+          clearPostExitTargetState,
+          readPauseReason,
+          syncPausedFromPage: syncPausedFromPage2,
+          getOwnEntity,
+          logStatus
+        };
+      }
+      module.exports = {
+        createEntryGlueRuntime
       };
     }
   });
@@ -24424,6 +24610,12 @@
         const { createRuntimeBotState } = require_runtime_bot_state();
         const { createBotApiRuntime } = require_bot_api_runtime();
         const { createEntityStateRuntime } = require_entity_state_runtime();
+        const { createExitDetailRuntime } = require_exit_detail_runtime();
+        const { createEntryGlueRuntime } = require_entry_glue_runtime();
+        const {
+          exitMotionStopLockRemainingMsCore,
+          postExitDecisionWithoutTargetCore
+        } = require_exit_motion2();
         const runtimeShell = createRuntimeShellContext(define_GRASP_RAT_RUNTIME_CONFIG_default, {
           storage: localStorage,
           now: Date.now,
@@ -24523,6 +24715,47 @@
           normalizeLoginSnapshotGateStateCore,
           loginSnapshotSuccessRequiredCore,
           performanceNow: () => performance.now()
+        });
+        function exitMotionStopLockRemainingMs(t = Date.now()) {
+          return exitMotionStopLockRemainingMsCore(bot.lastExitMotionStopAt, cfg.exitMotionStopLockMs, t);
+        }
+        const {
+          activeEnemyLeaveDetail,
+          activeOfflineLeaveDetail,
+          latestEnemyLeaveResult,
+          latestEnemyLeaveSummary,
+          latestEnemyLeaveDisplayReason
+        } = createExitDetailRuntime({
+          bot,
+          enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY,
+          offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY,
+          readPersistentExitState,
+          clearPersistentExitState,
+          refreshExitDetail,
+          now: Date.now
+        });
+        const {
+          clearPostExitTargetState,
+          readPauseReason,
+          syncPausedFromPage: syncPausedFromPage2,
+          getOwnEntity,
+          logStatus
+        } = createEntryGlueRuntime({
+          bot,
+          storage: localStorage,
+          pageGlobal,
+          pausedKey: PAUSED_KEY,
+          pauseReasonKey: PAUSE_REASON_KEY,
+          readPageGlobal,
+          stopMotionSafely: (...args) => stopMotionSafely(...args),
+          removeTargetOverlay: (...args) => removeTargetOverlay(...args),
+          updateBotPanel: (...args) => updateBotPanel(...args),
+          getSelf: (...args) => getSelf(...args),
+          exitMotionStopLockRemainingMs: (...args) => exitMotionStopLockRemainingMs(...args),
+          postExitDecisionWithoutTargetCore,
+          resetOpportunitySwitchLock: (...args) => resetOpportunitySwitchLock(...args),
+          now: Date.now,
+          consoleObject: console
         });
         Object.assign(bot, createBotApiRuntime({
           bot,
@@ -24653,10 +24886,6 @@
         });
         const { attackWorthTakingCore } = require_attack_worth2();
         const {
-          exitMotionStopLockRemainingMsCore,
-          postExitDecisionWithoutTargetCore
-        } = require_exit_motion2();
-        const {
           reloginDelayForHpCore,
           unsafeExitReloginMinDelayMsCore
         } = require_exit_relogin();
@@ -24664,29 +24893,6 @@
           staminaExhaustedWindowLabel
         } = require_exit_summary2();
         const unsafeExitReloginMinDelayMs = () => unsafeExitReloginMinDelayMsCore(cfg);
-        function exitMotionStopLockRemainingMs(t = Date.now()) {
-          return exitMotionStopLockRemainingMsCore(bot.lastExitMotionStopAt, cfg.exitMotionStopLockMs, t);
-        }
-        function clearPostExitTargetState(reason = "exit-confirmed") {
-          const exitMotionLockRemainingMs = exitMotionStopLockRemainingMs();
-          bot.lastTarget = null;
-          bot.lastTargetAt = 0;
-          bot.opportunityChoice = null;
-          resetOpportunitySwitchLock();
-          bot.staleCoinEscape = null;
-          bot.coinApproachLock = null;
-          removeTargetOverlay();
-          if (bot.lastDecision && typeof bot.lastDecision === "object") {
-            bot.lastDecision = postExitDecisionWithoutTargetCore(bot.lastDecision, reason, {
-              lastExitMotionStopReason: bot.lastExitMotionStopReason,
-              exitMotionLockRemainingMs
-            });
-            try {
-              updateBotPanel(bot.lastDecision);
-            } catch (_) {
-            }
-          }
-        }
         const { createTargetOverlayRuntime } = require_target_overlay();
         const {
           removeTargetOverlay,
@@ -24711,51 +24917,6 @@
           loginPointSafetyStatus: () => loginPointSafetyStatus()
         });
         const { escapeHtml, formatDistance, formatDurationMs, actorLabel, hpDisplay } = require_display_format2();
-        function activeEnemyLeaveDetail(t = Date.now()) {
-          const current = latestEnemyLeaveResult();
-          const restored = readPersistentExitState(ENEMY_LEAVE_STATE_KEY, t);
-          const picked = current || restored || bot.lastEnemyLeaveResult || null;
-          if (!picked) return null;
-          const refreshed = refreshExitDetail(picked, t);
-          if (!refreshed?.holdRemainingMs && Number(refreshed?.reloginUntil || 0)) {
-            clearPersistentExitState(ENEMY_LEAVE_STATE_KEY);
-            if (bot.lastEnemyLeaveResult === picked) bot.lastEnemyLeaveResult = null;
-            return null;
-          }
-          bot.lastEnemyLeaveResult = refreshed;
-          if (Number(refreshed?.reloginUntil || 0) > 0) bot.pursuitReloginUntil = Math.max(Number(bot.pursuitReloginUntil || 0), Number(refreshed.reloginUntil));
-          return refreshed;
-        }
-        function activeOfflineLeaveDetail(t = Date.now()) {
-          const picked = bot.lastOfflineLeaveResult || readPersistentExitState(OFFLINE_LEAVE_STATE_KEY, t);
-          if (!picked) return null;
-          const refreshed = refreshExitDetail(picked, t);
-          if (!refreshed?.holdRemainingMs && Number(refreshed?.reloginUntil || 0)) {
-            clearPersistentExitState(OFFLINE_LEAVE_STATE_KEY);
-            if (bot.lastOfflineLeaveResult === picked) bot.lastOfflineLeaveResult = null;
-            return null;
-          }
-          bot.lastOfflineLeaveResult = refreshed;
-          if (Number(refreshed?.reloginUntil || 0) > 0) bot.offlineReloginUntil = Math.max(Number(bot.offlineReloginUntil || 0), Number(refreshed.reloginUntil));
-          return refreshed;
-        }
-        function latestEnemyLeaveResult() {
-          const candidates = [
-            { at: Number(bot.lastEnemyLeaveResult?.at || 0), result: bot.lastEnemyLeaveResult },
-            { at: Number(bot.lastCombatLeaveResult?.at || bot.lastCombatLeaveAt || 0), result: bot.lastCombatLeaveResult },
-            { at: Number(bot.lastPursuitLeaveResult?.at || bot.lastPursuitLeaveAt || 0), result: bot.lastPursuitLeaveResult },
-            { at: Number(bot.lastInjuryLeaveResult?.at || bot.lastInjuryLeaveAt || 0), result: bot.lastInjuryLeaveResult }
-          ].filter((item) => item.result);
-          return candidates.sort((a, b) => b.at - a.at)[0]?.result || null;
-        }
-        function latestEnemyLeaveSummary() {
-          const result = latestEnemyLeaveResult();
-          return result?.summary || result?.exitSummary || result?.enemyLeaveSummary || result?.displayReason || "";
-        }
-        function latestEnemyLeaveDisplayReason() {
-          const result = latestEnemyLeaveResult();
-          return result?.displayReason || result?.summary || result?.exitSummary || result?.enemyLeaveSummary || "";
-        }
         const { createStatusPanelRuntime } = require_status_panel();
         const {
           removeBotPanel,
@@ -24769,13 +24930,6 @@
           summarizeControl: () => summarizeControl(),
           summarizePursuit: (...args) => summarizePursuit(...args)
         });
-        function logStatus(text, detail) {
-          bot.lastAction = text;
-          if (detail) bot.lastDecision = detail;
-          if (bot.running) updateBotPanel(bot.lastDecision || detail || { kind: "wait", reason: text, self: bot.lastSelf });
-          if (typeof log === "function") log("[bot] " + text, "info");
-          console.log("[grasp-rat-bot]", text, detail || "");
-        }
         const { safeStringify, safeJsonClone, sanitizeCombatLogIdPart } = require_runtime_utils2();
         const { arrayCount } = require_array_count();
         let rememberCombatEngagement;
@@ -25185,39 +25339,6 @@
           staminaExhaustedWindowLabel: (...args) => staminaExhaustedWindowLabel(...args),
           reloginDelayForHpCore
         }));
-        function readPauseReason() {
-          let reason = "";
-          try {
-            reason = String(localStorage.getItem(PAUSE_REASON_KEY) || "");
-          } catch (_) {
-          }
-          return String(readPageGlobal("__graspRatBotPauseReason", "", pageGlobal) || reason || "");
-        }
-        function syncPausedFromPage2(stopOnPause = true) {
-          let localPaused = false;
-          try {
-            localPaused = localStorage.getItem(PAUSED_KEY) === "true";
-          } catch (_) {
-          }
-          const paused = Boolean(readPageGlobal("__graspRatBotPaused", false, pageGlobal) === true || localPaused);
-          if (paused !== bot.paused) {
-            bot.paused = paused;
-            bot.pauseChangedAt = Date.now();
-            if (paused) {
-              if (stopOnPause) stopMotionSafely("paused");
-              removeTargetOverlay();
-            }
-          }
-          bot.pauseReason = paused ? readPauseReason() || bot.pauseReason || "manual" : "";
-          return paused;
-        }
-        function getOwnEntity() {
-          try {
-            return typeof getSelf === "function" ? getSelf() : null;
-          } catch (_) {
-            return null;
-          }
-        }
         let pageNativeSnapshotUrl;
         let pageNativeSnapshotPayload;
         let pageNativeSnapshotError;
