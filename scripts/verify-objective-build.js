@@ -104,7 +104,7 @@ const POST_MIGRATION_DEPENDENCY_WIDTH_BUDGETS = {
   },
   'orchestration decision runtime': {
     factory: 'createOrchestrationDecisionRuntime',
-    max: 245
+    max: 10
   },
   'orchestration tick runtime': {
     factory: 'createOrchestrationTickRuntime',
@@ -471,7 +471,7 @@ async function main() {
     assert(!runtimeEntrySource.includes('...runtimeFlatContext'), 'runtime entry still spreads flat context into orchestration runtime');
     assert(runtimeDomainContextsSource.includes('const DOMAIN_CONTEXT_KEYS'), 'runtime domain context key map missing');
     assert(runtimeDomainContextsSource.includes('function createRuntimeDomainContexts'), 'runtime domain context factory missing');
-    for (const domain of ['bootstrap', 'state', 'entity', 'native', 'control', 'profit', 'combat', 'logging', 'ui']) {
+    for (const domain of ['bootstrap', 'state', 'entity', 'native', 'control', 'profit', 'combat', 'logging', 'ui', 'safety']) {
       assert(runtimeDomainContextsSource.includes(`${domain}: Object.freeze([`), `runtime domain context missing ${domain} group`);
     }
   });
@@ -995,9 +995,15 @@ async function main() {
     assert(!/function\s+chooseAction\s*\(/.test(runtimeEntrySource), 'runtime entry still owns chooseAction body');
     assert(runtimeOrchestrationSource.includes("require('./orchestration-decision-runtime')"), 'orchestration runtime does not import decision runtime module');
     assert(runtimeOrchestrationSource.includes('createOrchestrationDecisionRuntime({'), 'orchestration runtime does not create decision runtime bindings');
+    assert(runtimeOrchestrationSource.includes('const decisionDomainContexts = {'), 'orchestration runtime does not build decision domain contexts');
+    assert(runtimeOrchestrationSource.includes('domainContexts: decisionDomainContexts'), 'orchestration runtime does not pass domain contexts into decision runtime');
+    assert(!runtimeOrchestrationSource.includes('...runtime,\n    markRecentMovement'), 'orchestration runtime still passes flat runtime plus safety fields into decision runtime');
     assert(!/function\s+classify\s*\(/.test(runtimeOrchestrationSource), 'orchestration runtime still owns classify body');
     assert(!/function\s+chooseAction\s*\(/.test(runtimeOrchestrationSource), 'orchestration runtime still owns chooseAction body');
     assert(runtimeOrchestrationDecisionSource.includes('function createOrchestrationDecisionRuntime'), 'orchestration decision runtime factory missing');
+    assert(runtimeOrchestrationDecisionSource.includes('const runtimeDomainContexts = domainContexts || {'), 'orchestration decision runtime does not read domain contexts');
+    assert(runtimeOrchestrationDecisionSource.includes('runtimeDomainContexts.profit'), 'orchestration decision runtime does not group profit dependencies');
+    assert(runtimeOrchestrationDecisionSource.includes('runtimeDomainContexts.safety'), 'orchestration decision runtime does not group safety dependencies');
     assert(runtimeOrchestrationDecisionSource.includes('function classify'), 'classify body missing from decision module');
     assert(runtimeOrchestrationDecisionSource.includes('function chooseAction'), 'chooseAction body missing from decision module');
   });

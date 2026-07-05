@@ -263,12 +263,7 @@ function createOrchestrationRuntime(runtime = {}) {
     now,
     speed
   });
-
-  const {
-    classify,
-    chooseAction
-  } = createOrchestrationDecisionRuntime({
-    ...runtime,
+  const orchestrationSafetyContext = {
     markRecentMovement,
     fleeDirection,
     lockedFleeDirection,
@@ -287,13 +282,27 @@ function createOrchestrationRuntime(runtime = {}) {
     mergeThreatLists,
     pickReturnBlockThreat,
     blockThreatReturnAction
+  };
+  const decisionDomainContexts = {
+    ...(domainContexts || {}),
+    safety: {
+      ...((domainContexts && domainContexts.safety) || {}),
+      ...orchestrationSafetyContext
+    }
+  };
+
+  const {
+    classify,
+    chooseAction
+  } = createOrchestrationDecisionRuntime({
+    domainContexts: decisionDomainContexts
   });
 
   const {
     tick,
     startRuntime
   } = createOrchestrationTickRuntime({
-    ...runtime,
+    ...runtimeContext,
     chooseAction,
     blockThreatReturnAction
   });
