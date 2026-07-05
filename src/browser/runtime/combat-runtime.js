@@ -103,6 +103,7 @@ function createCombatRuntime(runtime = {}) {
     summarizeControl,
     dist,
     speed,
+    now,
     opportunityLongStaminaBudget,
     scoreEnemyOpportunity,
     opportunityEnemyStaminaCost,
@@ -132,6 +133,7 @@ function createCombatRuntime(runtime = {}) {
     dropValue,
     normalizeBullet,
     getBullets,
+    directionTo,
     ...targetRuntime
   });
 
