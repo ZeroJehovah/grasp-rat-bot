@@ -166,6 +166,7 @@ async function main() {
   const runtimeTickSafetySource = readText('src/browser/runtime/tick-safety.js');
   const runtimeControlFlowSource = readText('src/browser/runtime/control-flow-runtime.js');
   const runtimeNativeStateSource = readText('src/browser/runtime/native-state-runtime.js');
+  const runtimeProfitSource = readText('src/browser/runtime/profit-runtime.js');
   const userscriptText = readText('userscript/grasp-rat-bootstrap.user.js');
   const extensionBootstrapText = readText('extension/page-bootstrap.js');
   const extensionManifest = readJson('extension/manifest.json');
@@ -340,6 +341,38 @@ async function main() {
     assert(runtimeNativeStateSource.includes('function stopMotionSafely'), 'safe stop body missing from native state module');
     assert(runtimeNativeStateSource.includes('function sendActionVelocity'), 'action velocity body missing from native state module');
     assert(runtimeNativeStateSource.includes('function shootAt'), 'shoot transport body missing from native state module');
+  });
+
+  check('profit runtime owns coin opportunity progress and arbitration bodies', () => {
+    assert(runtimeEntrySource.includes("require('./runtime/profit-runtime')"), 'runtime entry does not import profit runtime module');
+    assert(runtimeEntrySource.includes('createProfitRuntime({'), 'runtime entry does not create profit runtime bindings');
+    assert(!/function\s+coinThreatDangerRadius\s*\(/.test(runtimeEntrySource), 'runtime entry still owns coin threat radius body');
+    assert(!/function\s+safeCoinCandidates\s*\(/.test(runtimeEntrySource), 'runtime entry still owns safe coin candidate body');
+    assert(!/function\s+pickRealtimeLocalCoin\s*\(/.test(runtimeEntrySource), 'runtime entry still owns realtime local coin picker');
+    assert(!/function\s+pickCoinField\s*\(/.test(runtimeEntrySource), 'runtime entry still owns field coin picker');
+    assert(!/function\s+scoreCoinOpportunity\s*\(/.test(runtimeEntrySource), 'runtime entry still owns coin opportunity scoring');
+    assert(!/function\s+scoreEnemyOpportunity\s*\(/.test(runtimeEntrySource), 'runtime entry still owns enemy opportunity scoring');
+    assert(!/function\s+buildCoinAction\s*\(/.test(runtimeEntrySource), 'runtime entry still owns coin action builder');
+    assert(!/function\s+buildEnemyAction\s*\(/.test(runtimeEntrySource), 'runtime entry still owns enemy action builder');
+    assert(!/function\s+markCoinCollected\s*\(/.test(runtimeEntrySource), 'runtime entry still owns coin collection tracking');
+    assert(!/function\s+coinProgressCoreOptions\s*\(/.test(runtimeEntrySource), 'runtime entry still owns coin progress options');
+    assert(!/const\s+progressAttemptResult\s*=/.test(runtimeEntrySource), 'runtime entry still owns coin progress update state machine');
+    assert(!/function\s+ensureFinalActionArbitration\s*\(/.test(runtimeEntrySource), 'runtime entry still owns final action arbitration state');
+    assert(!/applyFinalActionArbitrationCore\s*\(\s*action\s*,/.test(runtimeEntrySource), 'runtime entry still applies final action arbitration directly');
+    assert(!/recordActionSwitchDiagnosticsCore\s*\(\s*action\s*,/.test(runtimeEntrySource), 'runtime entry still records target-switch diagnostics directly');
+    assert(runtimeProfitSource.includes('function createProfitRuntime'), 'profit runtime factory missing');
+    assert(runtimeProfitSource.includes('function coinThreatDangerRadius'), 'coin threat radius body missing from profit module');
+    assert(runtimeProfitSource.includes('function safeCoinCandidates'), 'safe coin candidate body missing from profit module');
+    assert(runtimeProfitSource.includes('function scoreCoinOpportunity'), 'coin opportunity scoring missing from profit module');
+    assert(runtimeProfitSource.includes('function scoreEnemyOpportunity'), 'enemy opportunity scoring missing from profit module');
+    assert(runtimeProfitSource.includes('function buildCoinAction'), 'coin action builder missing from profit module');
+    assert(runtimeProfitSource.includes('function buildEnemyAction'), 'enemy action builder missing from profit module');
+    assert(runtimeProfitSource.includes('function markCoinCollected'), 'coin collection tracking missing from profit module');
+    assert(runtimeProfitSource.includes('function coinProgressCoreOptions'), 'coin progress options missing from profit module');
+    assert(runtimeProfitSource.includes('function applyCoinProgressAction'), 'coin progress action state machine missing from profit module');
+    assert(runtimeProfitSource.includes('function ensureFinalActionArbitration'), 'final action arbitration state missing from profit module');
+    assert(runtimeProfitSource.includes('function applyFinalActionArbitration'), 'final action arbitration wrapper missing from profit module');
+    assert(runtimeProfitSource.includes('function recordActionSwitchDiagnostics'), 'target-switch diagnostics wrapper missing from profit module');
   });
 
   check('obsolete source-fragment files are absent', () => {
