@@ -1,17 +1,17 @@
 # 运行时迁移收尾计划 - 2026-07-05
 
-本文从 `main` 当前状态（最新远程版本 `bootstrap-0.4.542`）出发，复核现有迁移说明、当前代码结构和验证脚本，给出剩余待迁移或可收尾内容，以及建议的提交拆分。
+本文最初从 `main` 当时状态（最新远程版本 `bootstrap-0.4.542`）出发，复核迁移说明、代码结构和验证脚本，给出剩余待迁移或可收尾内容，以及建议的提交拆分。实施收口后，最终远程版本停在 `bootstrap-0.4.546`，第 7 次提交仅做文档和 handoff 收口，不发新远程版本。
 
 ## 已读取的基线
 
 - `docs/agent/runtime-bundler-migration-plan-2026-07-05.md`: 旧 browser source-string fragment/bundler 迁移已在 `bootstrap-0.4.524` 完成。
 - `docs/agent/runtime-entry-domain-migration-plan-2026-07-05.md`: 18k 行直接运行时入口的域迁移已在 `bootstrap-0.4.532` 完成。
 - `docs/agent/remaining-runtime-migration-plan-2026-07-05.md`: `.533` 到 `.542` 的二次拆分计划已全部完成。
-- `docs/agent/current-state.md`: 当前最新版本为 `bootstrap-0.4.542`，战斗运行时二级拆分和最终 guard tightening 已落地。
-- `docs/agent/test-coverage.md`: 当前 self-test/static/replay 覆盖说明记录 objective build verifier 为 30 项检查。
-- `scripts/verify-objective-build.js`: 当前已检查直接入口、旧 source-string 层缺失、owner 防回流、native/realtime combat 锚点、visible/native profit 优先级、entry/composition 大模块行数预算、80 个 runtime 模块进入 esbuild graph。
+- `docs/agent/current-state.md`: 制定计划时记录的最新版本为 `bootstrap-0.4.542`，战斗运行时二级拆分和最终 guard tightening 已落地。
+- `docs/agent/test-coverage.md`: 制定计划时的 self-test/static/replay 覆盖说明记录 objective build verifier 为 30 项检查。
+- `scripts/verify-objective-build.js`: 制定计划时已检查直接入口、旧 source-string 层缺失、owner 防回流、native/realtime combat 锚点、visible/native profit 优先级、entry/composition 大模块行数预算、80 个 runtime 模块进入 esbuild graph。
 
-## 当前事实
+## 制定计划时的基线事实
 
 严格按前两轮迁移目标统计，剩余必需迁移项为 0。
 
@@ -21,7 +21,7 @@
 - `src/browser/runtime/*.js` 当前 80 个可执行运行时模块，合计约 24,670 行。
 - `scripts/verify-objective-build.js` 当前 905 行，报告 30 项检查。
 
-当前最大的可收尾模块：
+制定计划时最大的可收尾模块：
 
 | 文件 | 行数 | 判断 |
 | --- | ---: | --- |
@@ -34,7 +34,23 @@
 | `src/browser/runtime/combat-aim-runtime.js` | 906 | 混合 motion profile、shooting plan、live/native aim source、dynamic/intercept aim。行为相邻，拆分需谨慎。 |
 | `src/browser/runtime/target-overlay.js` | 603 | UI 长尾，混合 DOM/canvas lifecycle、projection、target resolution、login-point overlay drawing。 |
 
-## 剩余可收尾内容
+## 最终收口结果
+
+本轮从 `bootstrap-0.4.542` 收口到 `bootstrap-0.4.546`，实际完成 6 个发布相关提交和 1 个最终文档收口提交。旧 source-string 层继续保持删除状态，生产远程构建、本地 CDP/eval 注入和 `--print-source` 继续直接打包 `src/browser/runtime-entry.js`。
+
+最终关键事实：
+
+- 最新远程版本：`bootstrap-0.4.546`。
+- 最新 manifest SHA-256：`1242569ab5494c850abe0df7f2687f8ccc714d17b453b2b18129a84202952ba3`。
+- 直接入口/config SHA-256：`ef153b5cdf0a7e0bd6aa3d4882d6c59c7ca46c7483d2a21edc44a9d2a434626a`。
+- runtime module graph：85 个 `src/browser/runtime/*.js` 模块全部进入 esbuild graph。
+- objective verifier：32 项检查通过。
+- `src/browser/runtime-entry.js`：2,139 行，低于 2,200 行预算。
+- `src/browser/runtime/orchestration-runtime.js`：325 行，已收敛为 safety、decision、tick/startup 的组合模块。
+- `src/browser/runtime/combat-log-runtime.js`：412 行，已收敛为 queue、frame、diagnostics、exit-audit 的组合模块和 session/prebuffer orchestration。
+- 保留为后续条件触发项的最大模块：`control-flow-runtime.js` 1,614 行、`combat-target-runtime.js` 1,228 行、`combat-movement-runtime.js` 1,076 行、`combat-aim-runtime.js` 906 行、`target-overlay.js` 603 行。
+
+## 制定计划时的剩余可收尾内容
 
 ### 1. 文档收口
 
@@ -117,7 +133,7 @@ Verifier 已有 `runtime-entry.js`、`combat-runtime.js`、`profit-runtime.js`�
 - [x] Commit 4 - Extract Decision Selection Runtime
 - [x] Commit 5 - Extract Tick And Startup Runtime
 - [x] Commit 6 - Split Combat Log Frame And Diagnostics Owners
-- [ ] Commit 7 - Final Closeout Guards And Handoff
+- [x] Commit 7 - Final Closeout Guards And Handoff
 
 ### Commit 1 - Docs Current-State Closeout
 
@@ -307,6 +323,8 @@ node scripts/build-remote-bot.js --version bootstrap-0.4.xx
 node scripts/verify-objective-build.js
 git diff --check
 ```
+
+Completed after `bootstrap-0.4.546` without a new remote release: the verifier guards introduced across Commit 3-6 are the final guard state for this closeout. `node scripts/verify-objective-build.js` passes 32 checks, confirms all 85 runtime modules are in the esbuild graph, keeps the old source-fragment files absent, verifies native/realtime-only combat target/aim/fire anchors, verifies visible/native ordinary-profit priority before snapshot fallback, and reports final line budgets for runtime entry, orchestration composition/safety/decision/tick, combat-log composition/frame/diagnostics, combat target/movement/aim, target overlay, and the earlier composition modules. `docs/agent/current-state.md`, `docs/agent/test-coverage.md`, and this plan now mark the post-`bootstrap-0.4.542` migration closeout complete while leaving combat deep-splits, overlay deep-split, and entry wiring consolidation as future condition-triggered work.
 
 ## 不纳入本轮完成标准的候选项
 
