@@ -161,6 +161,9 @@ async function main() {
   const runtimeStaminaStatusSource = readText('src/browser/runtime/stamina-status.js');
   const runtimeTargetOverlaySource = readText('src/browser/runtime/target-overlay.js');
   const runtimeStatusPanelSource = readText('src/browser/runtime/status-panel.js');
+  const runtimeCombatLogSource = readText('src/browser/runtime/combat-log-runtime.js');
+  const runtimeImportantLoggingSource = readText('src/browser/runtime/important-logging-runtime.js');
+  const runtimeTickSafetySource = readText('src/browser/runtime/tick-safety.js');
   const userscriptText = readText('userscript/grasp-rat-bootstrap.user.js');
   const extensionBootstrapText = readText('extension/page-bootstrap.js');
   const extensionManifest = readJson('extension/manifest.json');
@@ -260,6 +263,33 @@ async function main() {
     assert(runtimeStatusPanelSource.includes('function createStatusPanelRuntime'), 'status panel runtime factory missing');
     assert(runtimeStatusPanelSource.includes('function updateBotPanel'), 'status panel renderer missing from module');
     assert(runtimeStatusPanelSource.includes('function reasonText'), 'status reason text formatter missing from module');
+  });
+
+  check('logging history runtime modules own combat logs important logs and tick safety', () => {
+    assert(runtimeEntrySource.includes("require('./runtime/combat-log-runtime')"), 'runtime entry does not import combat log runtime module');
+    assert(runtimeEntrySource.includes('createCombatLogRuntime({'), 'runtime entry does not create combat log runtime bindings');
+    assert(runtimeEntrySource.includes("require('./runtime/important-logging-runtime')"), 'runtime entry does not import important logging runtime module');
+    assert(runtimeEntrySource.includes('createImportantLoggingRuntime({'), 'runtime entry does not create important logging runtime bindings');
+    assert(runtimeEntrySource.includes("require('./runtime/tick-safety')"), 'runtime entry does not import tick safety runtime module');
+    assert(runtimeEntrySource.includes('createTickSafetyRuntime({'), 'runtime entry does not create tick safety runtime bindings');
+    assert(!/function\s+combatLogEntryFailureKey\s*\(/.test(runtimeEntrySource), 'runtime entry still owns combat log entry failure keys');
+    assert(!/function\s+recordCombatLogTick\s*\(/.test(runtimeEntrySource), 'runtime entry still owns combat log tick recording');
+    assert(!/function\s+importantLogDay\s*\(/.test(runtimeEntrySource), 'runtime entry still owns important log store helpers');
+    assert(!/function\s+recordImportantCombatTick\s*\(/.test(runtimeEntrySource), 'runtime entry still owns active combat summary ticks');
+    assert(!/function\s+recordKillHistoryItem\s*\(/.test(runtimeEntrySource), 'runtime entry still owns kill history attribution');
+    assert(!/function\s+updateKillHistory\s*\(/.test(runtimeEntrySource), 'runtime entry still owns chat kill history updates');
+    assert(!/function\s+recordUnhandledTickError\s*\(/.test(runtimeEntrySource), 'runtime entry still owns tick error recording');
+    assert(!/function\s+runTickSafely\s*\(/.test(runtimeEntrySource), 'runtime entry still owns tick safety wrapper');
+    assert(runtimeCombatLogSource.includes('function createCombatLogRuntime'), 'combat log runtime factory missing');
+    assert(runtimeCombatLogSource.includes('function recordCombatLogTick'), 'combat log tick body missing from module');
+    assert(runtimeCombatLogSource.includes('function recordExitAuditEvent'), 'exit audit logging body missing from module');
+    assert(runtimeImportantLoggingSource.includes('function createImportantLoggingRuntime'), 'important logging runtime factory missing');
+    assert(runtimeImportantLoggingSource.includes('function recordImportantCombatTick'), 'important combat summary body missing from module');
+    assert(runtimeImportantLoggingSource.includes('function recordKillHistoryItem'), 'kill history attribution body missing from module');
+    assert(runtimeImportantLoggingSource.includes('function updateKillHistory'), 'chat kill history body missing from module');
+    assert(runtimeTickSafetySource.includes('function createTickSafetyRuntime'), 'tick safety runtime factory missing');
+    assert(runtimeTickSafetySource.includes('function runTickSafely'), 'tick safety wrapper missing from module');
+    assert(runtimeTickSafetySource.includes('function runCallbackSafely'), 'callback safety wrapper missing from module');
   });
 
   check('obsolete source-fragment files are absent', () => {
