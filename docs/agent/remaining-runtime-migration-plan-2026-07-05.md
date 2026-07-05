@@ -126,7 +126,7 @@
 实施状态：
 
 - [x] Entry Public API And Status Split (`bootstrap-0.4.533`)
-- [ ] Shared Entity Predicate Split
+- [x] Shared Entity Predicate Split (`bootstrap-0.4.534`)
 - [ ] Exit Detail, Pause, And Entry Glue Split
 - [ ] Control-flow Login Gate And Login-point Safety Split
 - [ ] Control-flow Pending-exit And Leave Flow Split
@@ -157,7 +157,7 @@
 
 Completed in `bootstrap-0.4.533`: `src/browser/runtime/bot-api-runtime.js` owns the public `bot` API methods and full status summary, while `runtime-entry.js` creates bot state and installs the API through `createBotApiRuntime()`. `scripts/verify-objective-build.js` now rejects the public API/status bodies returning to `runtime-entry.js`, requires the bot API module, and checks the direct esbuild graph with 54 runtime modules.
 
-### 2. Shared Entity Predicate Split
+### 2. Shared Entity Predicate Split - Completed
 
 目标：
 
@@ -176,6 +176,8 @@ Completed in `bootstrap-0.4.533`: `src/browser/runtime/bot-api-runtime.js` owns 
 
 - idle invulnerable、moving invulnerable avoidance、AFK recent-activity、Active low-value combat gating、visible/native profit priority 自测仍通过。
 - verifier 检查 shared predicate owner，不允许回流入口。
+
+Completed in `bootstrap-0.4.534`: `src/browser/runtime/entity-state-runtime.js` owns shared math helpers, HP/stamina helpers, invulnerability aliases, Active/firing/moving classification, AFK recent-activity gates, idle-invulnerable handling, recovery/conserve predicates, and active threat decoration. `runtime-entry.js` now creates those helpers through `createEntityStateRuntime()` and passes explicit bindings into the existing domain factories. `scripts/verify-objective-build.js` rejects those predicate bodies returning to `runtime-entry.js` and checks the direct esbuild graph with 55 runtime modules.
 
 ### 3. Exit Detail, Pause, And Entry Glue Split
 
