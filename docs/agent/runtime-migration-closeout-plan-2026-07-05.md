@@ -115,7 +115,7 @@ Verifier 已有 `runtime-entry.js`、`combat-runtime.js`、`profit-runtime.js`�
 - [x] Commit 2 - Post-Migration Guard Baseline
 - [x] Commit 3 - Extract Orchestration Safety Helpers
 - [x] Commit 4 - Extract Decision Selection Runtime
-- [ ] Commit 5 - Extract Tick And Startup Runtime
+- [x] Commit 5 - Extract Tick And Startup Runtime
 - [ ] Commit 6 - Split Combat Log Frame And Diagnostics Owners
 - [ ] Commit 7 - Final Closeout Guards And Handoff
 
@@ -245,6 +245,8 @@ Completed in `bootstrap-0.4.544`: `src/browser/runtime/orchestration-decision-ru
 - `runtime-entry.js` 仍只调用 `orchestrationRuntime.startRuntime()` 或等价 thin startup API。
 - Tick safety、callback safety、native tick interval、post-login startup、panel/overlay update cadence 不变。
 - 收紧 `orchestration-runtime.js` 行数预算，使其不再承载完整 tick body。
+
+Completed in `bootstrap-0.4.545`: `src/browser/runtime/orchestration-tick-runtime.js` now owns `tick()` and `startRuntime()`, including tick reentry/lifecycle handling, startup restore/install flow, startup refresh, timer creation, startup error fallback, final action dispatch, and tick-end combat/important-log recording. `src/browser/runtime/orchestration-runtime.js` composes safety, decision, and tick modules and is down to 325 lines. `scripts/verify-objective-build.js` rejects tick/startup bodies returning to entry/orchestration, tightens orchestration to a 360-line budget, adds a 1,280-line tick budget, and reports 32 checks across 83 runtime modules. Release commit: `6f8595f`; manifest SHA-256: `eb0df51f0a30691cf787871679966339de05f49676f22f448837e3d16c1dfe64`.
 
 ### Commit 6 - Split Combat Log Frame And Diagnostics Owners
 
