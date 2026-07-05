@@ -8,15 +8,15 @@ The previous runtime bundler migration is complete: production and local injecti
 
 - Source-string generation files remaining: 0.
 - Obsolete runtime source layer remaining: 0 (`src/browser/*source.js`, `src/browser/runtime-fragment-registry.js`, `src/browser/runtime-source.js`, and `src/browser/runtime-entry-source.js` are absent).
-- Direct browser entry still to decompose: `src/browser/runtime-entry.js`, 18,434 lines.
-- Function declarations inside the direct entry: 672.
-- Existing executable helper modules: 42 files under `src/browser/runtime/`.
+- Direct browser entry still to decompose: `src/browser/runtime-entry.js`, 17,518 lines.
+- Function declarations inside the direct entry: 622.
+- Existing executable helper modules: 45 files under `src/browser/runtime/`.
 - Current top-level browser files: `src/browser/page-global-core.js`, `src/browser/runtime-entry.js`, and `src/browser/runtime-helper-entry.mjs`.
 
 ## Migration Status
 
 - [x] Runtime shell and context (`bootstrap-0.4.525`).
-- [ ] UI, overlay, status, whitelist, and stamina.
+- [x] UI, overlay, status, whitelist, and stamina (`bootstrap-0.4.526`).
 - [ ] Logging and history.
 - [ ] Login, exit, pending exit, and leave flow.
 - [ ] Native state, transport, session stats, and network quality.
@@ -40,19 +40,18 @@ The remaining work is structural, not a strategy rewrite.
 
 Approximate line ranges in `src/browser/runtime-entry.js`:
 
-- Runtime shell use, shared bindings, `bot` methods, and base helpers: lines 1-475.
-- Target whitelist, stamina, exit motion, target overlay, and status panel: lines 476-1632.
-- Combat log, tick safety, reload/session controls, login gates, login-point safety, post-login zoom, and pause handling: lines 1633-5654.
-- Page-native snapshot observer, pending exit, leave command, auto-login, and leave flow: lines 5655-7820.
-- Native state/control, entity/coin/bullet normalization, session stats, and network quality: lines 7821-9490.
-- Important logs, combat history, kill attribution, and entity refresh: lines 9491-10724.
-- Native movement/shooting, motion helpers, return-block, classify, offline safety, and coin safety: lines 10725-12003.
-- Target selection and combat movement/aim/state/fire/leave/action: lines 12004-15637.
-- Opportunity, coin/profit action builders, action arbitration, coin tracking, `chooseAction`, `tick`, and startup tail: lines 15638-18434.
+- Runtime shell use, shared bindings, `bot` methods, base helpers, and UI/status module wiring: lines 1-716.
+- Combat log, tick safety, reload/session controls, login gates, login-point safety, post-login zoom, and pause handling: lines 717-4804.
+- Page-native snapshot observer, pending exit, leave command, auto-login, and leave flow: lines 4805-6904.
+- Native state/control, entity/coin/bullet normalization, session stats, and network quality: lines 6905-9658.
+- Important logs, combat history, kill attribution, and entity refresh: lines 9659-10793.
+- Native movement/shooting, motion helpers, return-block, classify, offline safety, and coin safety: lines 10794-11257.
+- Target selection and combat movement/aim/state/fire/leave/action: lines 11258-15319.
+- Opportunity, coin/profit action builders, action arbitration, coin tracking, `chooseAction`, `tick`, and startup tail: lines 15320-17518.
 
 ## Commit Plan
 
-Plan count from current state: 7 future migration commits after the completed shell/context slice. The implementation commits should each be behavior-preserving unless explicitly called out and validated separately.
+Plan count from current state: 6 future migration commits after the completed shell/context and UI/status slices. The implementation commits should each be behavior-preserving unless explicitly called out and validated separately.
 
 ### 1. Runtime Shell And Context - Completed
 
@@ -73,7 +72,7 @@ Validation focus:
 
 Completed in `bootstrap-0.4.525`: `src/browser/runtime/runtime-shell.js` creates the bootstrap and runtime-state bindings, `src/browser/runtime/runtime-bot-state.js` owns the extracted initial `bot` state, and `scripts/verify-objective-build.js` checks the new shell/bot-state boundary.
 
-### 2. UI, Overlay, Status, Whitelist, And Stamina
+### 2. UI, Overlay, Status, Whitelist, And Stamina - Completed
 
 Goal:
 
@@ -87,6 +86,8 @@ Expected result:
 Validation focus:
 
 - Status output, target overlay suppression after exit, login-point overlay state, whitelist status, and stamina display remain available through `bot.status()`.
+
+Completed in `bootstrap-0.4.526`: target whitelist polling/status moved behind `createTargetWhitelistRuntime()` in `src/browser/runtime/target-whitelist.js`; stamina summaries and reset-hold helpers moved into `src/browser/runtime/stamina-status.js`; target overlay rendering and login-point overlay state moved into `src/browser/runtime/target-overlay.js`; status panel rendering and text formatting moved into `src/browser/runtime/status-panel.js`; and `scripts/verify-objective-build.js` now rejects these function bodies returning to `runtime-entry.js`.
 
 ### 3. Logging And History
 
