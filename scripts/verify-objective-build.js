@@ -32,6 +32,7 @@ const REQUIRED_DIST_TOKENS = [
   'function createRuntimeBootstrapBindings',
   'function createRuntimeStateBindings',
   'function createBotApiRuntime',
+  'function createRuntimeDomainContexts',
   'function createEntityStateRuntime',
   'function createExitDetailRuntime',
   'function createEntryGlueRuntime',
@@ -335,6 +336,7 @@ async function main() {
   const runtimeShellSource = readText('src/browser/runtime/runtime-shell.js');
   const runtimeBotStateSource = readText('src/browser/runtime/runtime-bot-state.js');
   const runtimeBotApiSource = readText('src/browser/runtime/bot-api-runtime.js');
+  const runtimeDomainContextsSource = readText('src/browser/runtime/runtime-domain-contexts.js');
   const runtimeEntityStateSource = readText('src/browser/runtime/entity-state-runtime.js');
   const runtimeExitDetailSource = readText('src/browser/runtime/exit-detail-runtime.js');
   const runtimeEntryGlueSource = readText('src/browser/runtime/entry-glue-runtime.js');
@@ -430,11 +432,13 @@ async function main() {
     assert(runtimeEntrySource.includes("require('./runtime/runtime-shell')"), 'runtime entry does not import the runtime shell module');
     assert(runtimeEntrySource.includes("require('./runtime/runtime-bot-state')"), 'runtime entry does not import the runtime bot-state module');
     assert(runtimeEntrySource.includes("require('./runtime/bot-api-runtime')"), 'runtime entry does not import the bot API runtime module');
+    assert(runtimeEntrySource.includes("require('./runtime/runtime-domain-contexts')"), 'runtime entry does not import the runtime domain context module');
     assert(runtimeEntrySource.includes("require('./runtime/entity-state-runtime')"), 'runtime entry does not import the entity-state runtime module');
     assert(runtimeEntrySource.includes("require('./runtime/exit-detail-runtime')"), 'runtime entry does not import the exit-detail runtime module');
     assert(runtimeEntrySource.includes("require('./runtime/entry-glue-runtime')"), 'runtime entry does not import the entry-glue runtime module');
     assert(runtimeEntrySource.includes('const bot = createRuntimeBotState({'), 'runtime entry does not create bot state through the extracted module');
     assert(runtimeEntrySource.includes('createBotApiRuntime({'), 'runtime entry does not install public bot APIs through the extracted module');
+    assert(runtimeEntrySource.includes('createRuntimeDomainContexts(runtimeFlatContext)'), 'runtime entry does not create runtime domain contexts from the flat context');
     assert(runtimeEntrySource.includes('createEntityStateRuntime({'), 'runtime entry does not create shared entity-state helpers through the extracted module');
     assert(runtimeEntrySource.includes('createExitDetailRuntime({'), 'runtime entry does not create exit-detail helpers through the extracted module');
     assert(runtimeEntrySource.includes('createEntryGlueRuntime({'), 'runtime entry does not create entry glue helpers through the extracted module');
@@ -458,6 +462,17 @@ async function main() {
     assert(runtimeBotStateSource.includes('running: true'), 'runtime bot-state module does not own base running state');
     assert(runtimeBotStateSource.includes('combatLogging: {'), 'runtime bot-state module does not own combat logging state initialization');
     assert(runtimeBotStateSource.includes('ignoredCoins: new Map(restoredFailures'), 'runtime bot-state module does not own restored coin failure initialization');
+  });
+
+  check('runtime domain contexts group flat runtime bindings', () => {
+    assert(runtimeEntrySource.includes('const runtimeFlatContext = {'), 'runtime entry does not name the flat runtime context');
+    assert(runtimeEntrySource.includes('const runtimeDomainContexts = createRuntimeDomainContexts(runtimeFlatContext);'), 'runtime entry does not create runtime domain contexts');
+    assert(runtimeEntrySource.includes('domainContexts: runtimeDomainContexts'), 'runtime entry does not pass domain contexts forward for later migration');
+    assert(runtimeDomainContextsSource.includes('const DOMAIN_CONTEXT_KEYS'), 'runtime domain context key map missing');
+    assert(runtimeDomainContextsSource.includes('function createRuntimeDomainContexts'), 'runtime domain context factory missing');
+    for (const domain of ['bootstrap', 'state', 'entity', 'native', 'control', 'profit', 'combat', 'logging', 'ui']) {
+      assert(runtimeDomainContextsSource.includes(`${domain}: Object.freeze([`), `runtime domain context missing ${domain} group`);
+    }
   });
 
   check('bot api runtime owns public API and status bodies', () => {

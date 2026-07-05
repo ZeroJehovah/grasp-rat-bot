@@ -1900,8 +1900,9 @@ const __graspRatRuntimeStartup = (() => {
     scoreCoinOpportunity
   }));
 
+  const { createRuntimeDomainContexts } = require('./runtime/runtime-domain-contexts');
   const { createOrchestrationRuntime } = require('./runtime/orchestration-runtime');
-  const orchestrationRuntime = createOrchestrationRuntime({
+  const runtimeFlatContext = {
     BOT_KEY,
     ENEMY_LEAVE_STATE_KEY,
     LOGIN_SUPPRESS_KEY,
@@ -2122,6 +2123,11 @@ const __graspRatRuntimeStartup = (() => {
     updateSessionStats,
     visibleCoinSourcesConfirmTargetMissing,
     writePersistentPendingExitStateCore
+  };
+  const runtimeDomainContexts = createRuntimeDomainContexts(runtimeFlatContext);
+  const orchestrationRuntime = createOrchestrationRuntime({
+    ...runtimeFlatContext,
+    domainContexts: runtimeDomainContexts
   });
   ({
     classify,
