@@ -4,14 +4,15 @@ Update this file for every remote bot release or handoff-relevant state change. 
 
 ## Latest Release
 
-- Latest remote bot: `bootstrap-0.4.559`.
-- Latest manifest SHA-256: `032a4f49f5f952e616b3bdd88ffbc0cd2be43ceeb92a37c72df1ea2806c279ed`.
-- Latest remote release commit: `79b0910` (`bootstrap-0.4.559` wire combat runtime dependencies).
+- Latest remote bot: `bootstrap-0.4.560`.
+- Latest manifest SHA-256: `80e1fdaeba4f1b624f1dab56cbec9b81fbcc2028a8d2eba0d14035e7c30dde00`.
+- Latest remote release commit: `1ea1a0e` (`bootstrap-0.4.560` wire combat invulnerability dependency).
 - Latest bootstrap A versions: Tampermonkey `0.4.74`, extension `0.1.53`.
-- Latest direct entry/config SHA-256: `9078a315236d197496238812f0bd329202d7beb33b03fb3db7e5d445818a5f1c`.
+- Latest direct entry/config SHA-256: `dbb397d67205bf0b6666d60e1a5d72dddfb0edb2db9a4e7d609f7f49e698b5fa`.
 
 ## Current Handoff
 
+- `bootstrap-0.4.560` passes `isInvulnerable` into combat movement runtime and adds objective-build guards for the dependency; passive-runner combat checks should no longer throw `isInvulnerable is not defined` when combat starts.
 - `bootstrap-0.4.559` passes `speed` into combat movement runtime and `isJoinModeActive` into combat target runtime, with objective-build guards for both dependencies; active-combat checks should no longer throw `speed is not defined` or `isJoinModeActive is not defined`.
 - `bootstrap-0.4.558` passes `dropValue` into the combat movement runtime and adds objective-build guards for the dependency; passive-runner combat checks should no longer throw `dropValue is not defined`.
 - Bootstrap A Tampermonkey `0.4.74` and extension `0.1.53` now evaluate the local login-point safety gate only after `maybeStartGameLogin()` confirms that an automatic login is actually needed; watchdog intervals should no longer print `login blocked by local login-point safety gate` while an alive in-game self is active.
@@ -37,7 +38,7 @@ Update this file for every remote bot release or handoff-relevant state change. 
 
 ## Latest Validation Baseline
 
-The latest `bootstrap-0.4.559` release validation passed:
+The latest `bootstrap-0.4.560` release validation passed:
 
 ```bash
 node grasp-rat-bot.js --self-test
@@ -54,7 +55,7 @@ node --check extension/popup.js
 cd combat-log-service && npm test
 npm run test:runtime-helper-entry
 npm run test:remote-bundled
-node scripts/build-remote-bot.js --version bootstrap-0.4.559
+node scripts/build-remote-bot.js --version bootstrap-0.4.560
 node scripts/verify-objective-build.js
 git diff --check
 ```

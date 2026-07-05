@@ -50,7 +50,7 @@ The browser runtime should adapt page/native state into these pure helpers inste
 - all browser runtime modules are included in the esbuild graph;
 - generated dist is browser-safe single-file output with no unresolved relative imports;
 - runtime owner modules retain their assigned shell/API/entity/UI/logging/control/native/profit/combat/orchestration bodies;
-- combat composition guards include known split-runtime dependency wires such as `opportunityLongStaminaBudget`, `dropValue`, `speed`, and `isJoinModeActive`;
+- combat composition guards include known split-runtime dependency wires such as `opportunityLongStaminaBudget`, `dropValue`, `speed`, `isJoinModeActive`, and `isInvulnerable`;
 - module size budgets prevent domain code from flowing back into composition points;
 - dependency-width budgets prevent wide flat runtime injection from returning;
 - combat target, aim, and fire stay native/realtime-visible only;
