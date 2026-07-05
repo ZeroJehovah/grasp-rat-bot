@@ -123,7 +123,20 @@
 
 建议分为 10 次实施提交完成；当前这份文档是计划提交，不计入下面的实施提交数。如果每次都发布远程版本，可从 `bootstrap-0.4.533` 顺延到 `bootstrap-0.4.542`，实际版本号以落地时主干状态为准。
 
-### 1. Entry Public API And Status Split
+实施状态：
+
+- [x] Entry Public API And Status Split (`bootstrap-0.4.533`)
+- [ ] Shared Entity Predicate Split
+- [ ] Exit Detail, Pause, And Entry Glue Split
+- [ ] Control-flow Login Gate And Login-point Safety Split
+- [ ] Control-flow Pending-exit And Leave Flow Split
+- [ ] Native State And Transport Split
+- [ ] Session, Stall, And Network Quality Split
+- [ ] Logging And Important Records Split
+- [ ] Profit Runtime Split
+- [ ] Combat Runtime Split And Final Guard Tightening
+
+### 1. Entry Public API And Status Split - Completed
 
 目标：
 
@@ -141,6 +154,8 @@
 - `bot.status()` 字段结构保持兼容。
 - panel、combat-log、daily-report 依赖的 session/active combat/logging 字段不丢失。
 - verifier 拒绝大段 status body 回流入口。
+
+Completed in `bootstrap-0.4.533`: `src/browser/runtime/bot-api-runtime.js` owns the public `bot` API methods and full status summary, while `runtime-entry.js` creates bot state and installs the API through `createBotApiRuntime()`. `scripts/verify-objective-build.js` now rejects the public API/status bodies returning to `runtime-entry.js`, requires the bot API module, and checks the direct esbuild graph with 54 runtime modules.
 
 ### 2. Shared Entity Predicate Split
 
