@@ -29,16 +29,18 @@
   - `src/browser/runtime/exit-relogin.js`: 880 行。
   - `src/browser/runtime/target-overlay.js`: 603 行。
 
-进度更新到 `bootstrap-0.4.540`：
+进度更新到 `bootstrap-0.4.541`：
 
 - `src/browser/runtime-entry.js`: 2,139 行。
-- `src/browser/runtime/*.js`: 72 个可执行运行时模块，约 24,142 行。
+- `src/browser/runtime/*.js`: 76 个可执行运行时模块，约 24,386 行。
 - `src/browser/runtime/control-flow-runtime.js`: 1,614 行。
 - `src/browser/runtime/native-state-runtime.js`: 376 行。
 - `src/browser/runtime/combat-log-runtime.js`: 1,305 行。
 - `src/browser/runtime/important-logging-runtime.js`: 76 行。
-- `scripts/verify-objective-build.js`: 824 行，当前报告 29 项检查，并覆盖 public API/status、entity-state、exit-detail、entry-glue、control-login、login-point-safety、post-login-zoom、pending-exit、Clash leave rescue、leave-flow、native-data、native-transport、session-stats、stall-diagnostics、network-quality、combat-log queue、exit-audit、important-session、kill-attribution 的 owner 防回流检查。
-- 10 次实施提交中已完成 8 次，剩余 2 次。
+- `src/browser/runtime/profit-runtime.js`: 161 行。
+- `src/browser/runtime/combat-runtime.js`: 3,831 行。
+- `scripts/verify-objective-build.js`: 859 行，当前报告 29 项检查，并覆盖 public API/status、entity-state、exit-detail、entry-glue、control-login、login-point-safety、post-login-zoom、pending-exit、Clash leave rescue、leave-flow、native-data、native-transport、session-stats、stall-diagnostics、network-quality、combat-log queue、exit-audit、important-session、kill-attribution、profit coin/opportunity/post-attack/arbitration 的 owner 防回流检查。
+- 10 次实施提交中已完成 9 次，剩余 1 次。
 
 ## 剩余待迁移内容
 
@@ -100,18 +102,16 @@
 
 这里的拆分风险最高。后续提交必须保持结构性迁移为主；只要触碰行为判断，应按战斗记录变更规则跑离线 replay 并证明收益。
 
-### 6. Profit 域模块仍可继续按机会选择链路拆分
+### 6. Profit 域模块已完成本轮机会链路拆分
 
-`profit-runtime.js` 已把 coin/opportunity/final arbitration 从入口迁出，但仍混合：
+`profit-runtime.js` 已在 `bootstrap-0.4.541` 拆出：
 
-- coin direction/motion options、pickup failure、approach lock。
-- coin safety、distant/high-value coin、AFK stamina cooldown。
-- opportunity scoring、route/choice/current held choice、enemy opportunity。
-- post-attack drop wait/coin、coin action/enemy action。
-- incidental pickup、mark collected、coin progress action。
-- final action arbitration 和 target-switch diagnostics。
+- `profit-coin-runtime.js`: coin motion options、pickup failure、approach lock、coin diagnostics/safety、realtime/field/distant/high-value coin selection。
+- `profit-opportunity-runtime.js`: stamina budget、snapshot wait/fallback、AFK stamina cooldown、coin/enemy scoring、route choice、stable opportunity choice、profitable combat target。
+- `profit-post-attack-runtime.js`: post-attack drop wait、coin action、enemy action。
+- `profit-arbitration-runtime.js`: coin target helpers、incidental pickup、mark collected、coin progress action、final action arbitration 和 target-switch diagnostics。
 
-后续可以拆成 coin tracking、opportunity scoring/action、post-attack、arbitration 四个内部模块。
+剩余 profit 工作不是本轮迁移阻塞项；后续只有在策略行为或字段维护需要时再单独调整。
 
 ### 7. Logging 已完成本轮拆分，UI 长尾仍有拆分空间
 
@@ -144,7 +144,7 @@
 - [x] Native State And Transport Split (`bootstrap-0.4.538`)
 - [x] Session, Stall, And Network Quality Split (`bootstrap-0.4.539`)
 - [x] Logging And Important Records Split (`bootstrap-0.4.540`)
-- [ ] Profit Runtime Split
+- [x] Profit Runtime Split (`bootstrap-0.4.541`)
 - [ ] Combat Runtime Split And Final Guard Tightening
 
 ### 1. Entry Public API And Status Split - Completed
@@ -313,7 +313,7 @@ Completed in `bootstrap-0.4.539`: `src/browser/runtime/session-stats-runtime.js`
 
 Completed in `bootstrap-0.4.540`: `src/browser/runtime/combat-log-queue-runtime.js` owns combat-log endpoint configuration, pending entry keys, pending persistence, queueing, flushing, and combat-log status summaries; `src/browser/runtime/exit-audit-runtime.js` owns persisted exit audit logs, pending audit counts, audit/session-end flush blockers, important-session close before login/reload, and `recordExitAuditEvent()`; `src/browser/runtime/important-session-runtime.js` owns important log store/remote queue, per-login session records, active-player combat summaries, and `recordImportantCombatTick()`; and `src/browser/runtime/kill-attribution-runtime.js` owns attack memory, kill identity matching, kill history, chat/snapshot kill message collection, and `updateKillHistory()`. `src/browser/runtime/combat-log-runtime.js` now composes queue and exit-audit through two factories and is down to 1,305 lines; `src/browser/runtime/important-logging-runtime.js` composes session and kill-attribution through two factories and is down to 76 lines. `scripts/verify-objective-build.js` rejects those bodies returning to the large logging modules, requires the four new modules in the direct esbuild graph, and reports 29 checks across 72 runtime modules.
 
-### 9. Profit Runtime Split
+### 9. Profit Runtime Split - Completed
 
 目标：
 
@@ -332,6 +332,8 @@ Completed in `bootstrap-0.4.540`: `src/browser/runtime/combat-log-queue-runtime.
 
 - visible/native coins 和 visible/native AFK targets 仍优先于 snapshot fallback。
 - final action arbitration、target-stick/switch hysteresis、target-switch diagnostics/status/misc logging 不变。
+
+Completed in `bootstrap-0.4.541`: `src/browser/runtime/profit-coin-runtime.js` owns coin motion options, pickup failure counts, approach locks, coin diagnostics, threat filtering, realtime/local/field/distant/high-value coin pickers, and high-value coin priority gates; `src/browser/runtime/profit-opportunity-runtime.js` owns stamina budget helpers, snapshot coin wait/fallback helpers, coin/enemy opportunity scoring, AFK stamina cooldown, route opportunity choice, stable opportunity choice, and profitable combat target comparison; `src/browser/runtime/profit-post-attack-runtime.js` owns post-attack drop wait plus coin/enemy action builders; and `src/browser/runtime/profit-arbitration-runtime.js` owns coin target helpers, incidental pickup tracking, collected-coin marking, coin progress state machine, final action arbitration, and target-switch diagnostics. `src/browser/runtime/profit-runtime.js` now composes those four modules and is down to 161 lines. `scripts/verify-objective-build.js` rejects those bodies returning to `profit-runtime.js`, requires the four new modules in the direct esbuild graph, and reports 29 checks across 76 runtime modules.
 
 ### 10. Combat Runtime Split And Final Guard Tightening
 
