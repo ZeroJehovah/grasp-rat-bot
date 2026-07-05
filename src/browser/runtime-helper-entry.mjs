@@ -844,6 +844,16 @@ function helperStatus(config = {}) {
     actorLabel: exitReloginSummaryHelpers.actorLabel,
     hpDisplay: exitReloginSummaryHelpers.hpDisplay
   });
+  const exitReloginHealthyHighValueInjurySuppressed = exitRelogin.healthyHighValueCoinInjuryLeaveSuppressedCore(
+    { currentHp: 97 },
+    { kind: 'coin', reason: 'high-value-visible-coin-priority' },
+    { healthyHp: 50 }
+  );
+  const exitReloginLowHpHighValueInjurySuppressed = exitRelogin.healthyHighValueCoinInjuryLeaveSuppressedCore(
+    { currentHp: 49 },
+    { kind: 'coin', reason: 'high-value-visible-coin-priority' },
+    { healthyHp: 50 }
+  );
   const exitReloginOfflineSummary = exitRelogin.offlineLeaveSummaryCore('action settlement', {
     actionSettlementStall: true
   }, {
@@ -1431,6 +1441,8 @@ function helperStatus(config = {}) {
     exitReloginCombatActionShoot: exitReloginCombatAction.shoot,
     exitReloginPursuitSummary,
     exitReloginInjurySummary,
+    exitReloginHealthyHighValueInjurySuppressed,
+    exitReloginLowHpHighValueInjurySuppressed,
     exitReloginOfflineSummary,
     exitReloginOfflineDisplay,
     exitReloginHpDelayMs: exitReloginHpDelay.delayMs,

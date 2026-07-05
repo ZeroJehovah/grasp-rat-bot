@@ -303,6 +303,8 @@ async function selfTest() {
   assert(String(status.exitReloginPursuitSummary || '').includes('持续追击'), 'spike did not execute exit relogin pursuit summary');
   assert(String(status.exitReloginInjurySummary || '').includes('血量从90HP降到55HP'), 'spike did not execute exit relogin injury summary');
   assert(String(status.exitReloginInjurySummary || '').includes('伤害者'), 'spike did not prefer nearby injury actor over far invulnerable actor');
+  assert(status.exitReloginHealthyHighValueInjurySuppressed === true, 'spike did not suppress healthy high-value coin injury leave');
+  assert(status.exitReloginLowHpHighValueInjurySuppressed === false, 'spike suppressed low-HP high-value coin injury leave');
   assert(String(status.exitReloginOfflineSummary || '').includes('移动/开火结算卡死'), 'spike did not execute exit relogin offline summary');
   assert(String(status.exitReloginOfflineDisplay || '').includes('等待3秒'), 'spike did not preserve exit relogin offline display reason');
   assert(status.exitReloginHpDelayMs === 6000, 'spike did not honor exit relogin repeat minimum delay');
