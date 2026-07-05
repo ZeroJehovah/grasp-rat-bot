@@ -8,9 +8,9 @@ The previous runtime bundler migration is complete: production and local injecti
 
 - Source-string generation files remaining: 0.
 - Obsolete runtime source layer remaining: 0 (`src/browser/*source.js`, `src/browser/runtime-fragment-registry.js`, `src/browser/runtime-source.js`, and `src/browser/runtime-entry-source.js` are absent).
-- Direct browser entry still to decompose: `src/browser/runtime-entry.js`, 9,297 lines.
-- Function declarations inside the direct entry: 215.
-- Existing executable helper modules: 50 files under `src/browser/runtime/`.
+- Direct browser entry still to decompose: `src/browser/runtime-entry.js`, 7,969 lines.
+- Function declarations inside the direct entry: 129.
+- Existing executable helper modules: 51 files under `src/browser/runtime/`.
 - Current top-level browser files: `src/browser/page-global-core.js`, `src/browser/runtime-entry.js`, and `src/browser/runtime-helper-entry.mjs`.
 
 ## Migration Status
@@ -20,7 +20,7 @@ The previous runtime bundler migration is complete: production and local injecti
 - [x] Logging and history (`bootstrap-0.4.527`).
 - [x] Login, exit, pending exit, and leave flow (`bootstrap-0.4.528`).
 - [x] Native state, transport, session stats, and network quality (`bootstrap-0.4.529`).
-- [ ] Coin, opportunity, profit, and arbitration.
+- [x] Coin, opportunity, profit, and arbitration (`bootstrap-0.4.530`).
 - [ ] Combat domain.
 - [ ] Final orchestrator and verifier tightening.
 
@@ -40,14 +40,14 @@ The remaining work is structural, not a strategy rewrite.
 
 Approximate line ranges in `src/browser/runtime-entry.js`:
 
-- Runtime shell use, shared bindings, `bot` methods, base helpers, UI/status/logging/tick/control-flow/native factory wiring, and recent movement setup: lines 1-1879.
-- Recent-activity marking, classify, offline safety, coin safety, and native/profit bridge helpers: lines 1880-3036.
-- Target selection and combat movement/aim/state/fire/leave/action: lines 3037-7467.
-- Opportunity, coin/profit action builders, action arbitration, coin tracking, `chooseAction`, `tick`, and startup tail: lines 7468-9297.
+- Runtime shell use, shared bindings, `bot` methods, base helpers, UI/status/logging/tick/control-flow/native factory wiring, and recent movement setup: lines 1-1873.
+- Recent-activity marking, classify, offline safety, combat/profit bridge helpers, and profit factory wiring: lines 1874-2908.
+- Target selection and combat movement/aim/state/fire/leave/action: lines 2909-6269.
+- `chooseAction`, `tick`, and startup tail: lines 6270-7969.
 
 ## Commit Plan
 
-Plan count from current state: 3 future migration commits after the completed shell/context, UI/status, logging/history, control-flow, and native-state slices. The implementation commits should each be behavior-preserving unless explicitly called out and validated separately.
+Plan count from current state: 2 future migration commits after the completed shell/context, UI/status, logging/history, control-flow, native-state, and profit slices. The implementation commits should each be behavior-preserving unless explicitly called out and validated separately.
 
 ### 1. Runtime Shell And Context - Completed
 
@@ -152,6 +152,8 @@ Validation focus:
 
 - Visible/native coin and AFK priority remains ahead of snapshot fallback.
 - Final arbitration continues to keep survival bands separate from ordinary coin-per-stamina scoring.
+
+Completed in `bootstrap-0.4.530`: coin threat/safety filtering, coin motion/target/progress glue, stamina opportunity budget helpers, opportunity/route scoring and choice state, post-attack drop wait/action helpers, coin collection tracking, target-switch diagnostics, and final action arbitration state moved behind `createProfitRuntime()` in `src/browser/runtime/profit-runtime.js`; and `scripts/verify-objective-build.js` now rejects these profit/arbitration bodies returning to `runtime-entry.js`.
 
 ### 7. Combat Domain
 
