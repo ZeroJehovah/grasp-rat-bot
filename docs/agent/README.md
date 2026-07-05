@@ -16,7 +16,15 @@ Read only what is needed for the current task:
 - [runtime-entry-domain-migration-plan-2026-07-05.md](runtime-entry-domain-migration-plan-2026-07-05.md): completed direct runtime entry decomposition inventory and release-slice plan.
 - [remaining-runtime-migration-plan-2026-07-05.md](remaining-runtime-migration-plan-2026-07-05.md): current post-migration cleanup inventory and 10-commit implementation plan.
 - [runtime-migration-closeout-plan-2026-07-05.md](runtime-migration-closeout-plan-2026-07-05.md): post-`bootstrap-0.4.542` migration closeout inventory and 7-commit follow-up plan.
-- [final-runtime-refactor-closeout-plan-2026-07-05.md](final-runtime-refactor-closeout-plan-2026-07-05.md): final 8-commit plan to end the current runtime refactoring round by tightening dependency shape, control-flow ownership, verifier budgets, and documentation.
+- [final-runtime-refactor-closeout-plan-2026-07-05.md](final-runtime-refactor-closeout-plan-2026-07-05.md): completed final 8-commit closeout plan for the current runtime refactoring round, covering dependency shape, control-flow ownership, verifier budgets, and documentation.
+
+## Current Development Surfaces
+
+- `src/strategy/`: pure strategy cores and self-tests.
+- `src/browser/runtime/`: browser runtime domain integration modules.
+- `src/browser/runtime-entry.js`: the single browser runtime entry bundled by esbuild.
+- `grasp-rat-bot.js`: Node/CDP fallback and local CLI wrapper.
+- `userscript/` and `extension/`: script A/bootstrap surfaces.
 
 ## Maintenance Rules
 

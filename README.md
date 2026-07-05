@@ -6,7 +6,7 @@ The primary runtime uses a small bootstrap script A plus the shared remote bot s
 
 - `userscript/grasp-rat-bootstrap.user.js` is script A. Install it in the user's normal Chrome. It checks the manifest every 10 seconds, verifies the remote bot hash, injects the bot, and hot-updates without stopping a working old bot when download or verification fails.
 - `extension/` is the Chrome extension version of script A. Load this directory as an unpacked extension in Chrome.
-- `dist/grasp-rat-remote-bot.js` is script B. It contains the game strategy and native page WebSocket control.
+- `dist/grasp-rat-remote-bot.js` is script B. It is generated from the modular browser runtime and contains the game strategy plus native page WebSocket control.
 - `dist/manifest.json` points A at B and includes the SHA-256 hash A must verify before injection.
 - `dist/target-whitelist.json` is the remote target whitelist. Script B derives this URL from the remote script URL by default, polls it every 10 seconds, and matches only exact trimmed usernames. Poll failures keep the last successful list; before the first successful load, the whitelist is empty. The current usernames are `文月` and `Firefox`.
 
@@ -104,9 +104,19 @@ npm run cleanup
 npm run cleanup -- --dry-run
 ```
 
+## Development Surfaces
+
+Use the current source layout when changing behavior:
+
+- `src/strategy/` contains pure strategy cores and their self-tests. Put reusable scoring, action arbitration, target-switch, coin, stamina, and combat policy helpers here when they can be tested without a browser.
+- `src/browser/runtime/` contains browser runtime domain integration: state binding, control flow, native transport, profit, combat, logging, UI, and orchestration modules.
+- `src/browser/runtime-entry.js` is the single browser runtime entry bundled by esbuild. It should stay a composition entry and should not regain domain bodies.
+- `grasp-rat-bot.js` is the Node/CDP fallback and local CLI wrapper. It delegates self-tests and runtime bundling; normal strategy or runtime changes should not be added there.
+- `userscript/` and `extension/` contain script A/bootstrap code. Change both surfaces unless a bootstrap change is explicitly Tampermonkey-only or extension-only.
+
 ## Build Script B
 
-After changing strategy code in `grasp-rat-bot.js`, regenerate the remote bot and manifest:
+After changing `src/strategy/`, `src/browser/runtime/`, `src/browser/runtime-entry.js`, or runtime config that affects script B, regenerate the remote bot and manifest:
 
 ```bash
 node scripts/build-remote-bot.js
@@ -118,7 +128,7 @@ Use an explicit version when needed:
 node scripts/build-remote-bot.js --version 20260608-remote-loader
 ```
 
-Then commit and push `dist/grasp-rat-remote-bot.js` and `dist/manifest.json`. Installed bootstrap scripts will pick up the new manifest on the next poll.
+Then commit and push the changed source plus `dist/grasp-rat-remote-bot.js` and `dist/manifest.json`. Installed bootstrap scripts will pick up the new manifest on the next poll.
 
 When changing script A behavior, update both `userscript/grasp-rat-bootstrap.user.js` and the Chrome extension bootstrap files under `extension/` unless the change is explicitly Tampermonkey-only or extension-only.
 
@@ -140,7 +150,7 @@ If Windows Chrome cannot reach WSL through `127.0.0.1`, use the WSL IP instead a
 
 ## Validation
 
-Run these checks before pushing strategy changes:
+Run these checks before pushing strategy or runtime changes:
 
 ```bash
 node --check grasp-rat-bot.js
