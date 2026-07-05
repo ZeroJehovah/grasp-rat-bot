@@ -62,6 +62,7 @@ const REQUIRED_DIST_TOKENS = [
   'function getNativeState',
   'function createOrchestrationRuntime',
   'function createOrchestrationSafetyRuntime',
+  'function createOrchestrationDecisionRuntime',
   'function chooseAction',
   'async function tick',
   'function safeStringify',
@@ -79,8 +80,9 @@ const POST_MIGRATION_LINE_BUDGETS = {
   'profit composition runtime': 220,
   'native state composition runtime': 420,
   'control flow composition runtime': 1700,
-  'orchestration runtime': 2200,
+  'orchestration runtime': 1350,
   'orchestration safety runtime': 450,
+  'orchestration decision runtime': 1160,
   'combat log runtime': 1340,
   'combat target runtime': 1260,
   'combat movement runtime': 1110,
@@ -254,6 +256,7 @@ async function main() {
   const runtimeCombatActionSource = readText('src/browser/runtime/combat-action-runtime.js');
   const runtimeOrchestrationSource = readText('src/browser/runtime/orchestration-runtime.js');
   const runtimeOrchestrationSafetySource = readText('src/browser/runtime/orchestration-safety-runtime.js');
+  const runtimeOrchestrationDecisionSource = readText('src/browser/runtime/orchestration-decision-runtime.js');
   const userscriptText = readText('userscript/grasp-rat-bootstrap.user.js');
   const extensionBootstrapText = readText('extension/page-bootstrap.js');
   const extensionManifest = readJson('extension/manifest.json');
@@ -789,6 +792,7 @@ async function main() {
       assertLineBudget(runtimeControlFlowSource, 'control flow composition runtime'),
       assertLineBudget(runtimeOrchestrationSource, 'orchestration runtime'),
       assertLineBudget(runtimeOrchestrationSafetySource, 'orchestration safety runtime'),
+      assertLineBudget(runtimeOrchestrationDecisionSource, 'orchestration decision runtime'),
       assertLineBudget(runtimeCombatLogSource, 'combat log runtime'),
       assertLineBudget(runtimeCombatTargetSource, 'combat target runtime'),
       assertLineBudget(runtimeCombatMovementSource, 'combat movement runtime'),
@@ -818,14 +822,22 @@ async function main() {
     assert(runtimeOrchestrationSafetySource.includes('function blockThreatReturnAction'), 'return-block action missing from safety module');
   });
 
-  check('orchestration runtime owns classify chooseAction tick and startup bodies', () => {
+  check('orchestration decision runtime owns classify and chooseAction bodies', () => {
     assert(!/function\s+classify\s*\(/.test(runtimeEntrySource), 'runtime entry still owns classify body');
     assert(!/function\s+chooseAction\s*\(/.test(runtimeEntrySource), 'runtime entry still owns chooseAction body');
+    assert(runtimeOrchestrationSource.includes("require('./orchestration-decision-runtime')"), 'orchestration runtime does not import decision runtime module');
+    assert(runtimeOrchestrationSource.includes('createOrchestrationDecisionRuntime({'), 'orchestration runtime does not create decision runtime bindings');
+    assert(!/function\s+classify\s*\(/.test(runtimeOrchestrationSource), 'orchestration runtime still owns classify body');
+    assert(!/function\s+chooseAction\s*\(/.test(runtimeOrchestrationSource), 'orchestration runtime still owns chooseAction body');
+    assert(runtimeOrchestrationDecisionSource.includes('function createOrchestrationDecisionRuntime'), 'orchestration decision runtime factory missing');
+    assert(runtimeOrchestrationDecisionSource.includes('function classify'), 'classify body missing from decision module');
+    assert(runtimeOrchestrationDecisionSource.includes('function chooseAction'), 'chooseAction body missing from decision module');
+  });
+
+  check('orchestration runtime owns tick and startup bodies', () => {
     assert(!/async\s+function\s+tick\s*\(/.test(runtimeEntrySource), 'runtime entry still owns tick body');
     assert(!/function\s+startRuntime\s*\(/.test(runtimeEntrySource), 'runtime entry still owns startup body');
     assert(runtimeOrchestrationSource.includes('function createOrchestrationRuntime'), 'orchestration runtime factory missing');
-    assert(runtimeOrchestrationSource.includes('function classify'), 'classify body missing from orchestration module');
-    assert(runtimeOrchestrationSource.includes('function chooseAction'), 'chooseAction body missing from orchestration module');
     assert(runtimeOrchestrationSource.includes('async function tick'), 'tick body missing from orchestration module');
     assert(runtimeOrchestrationSource.includes('function startRuntime'), 'startup body missing from orchestration module');
   });
@@ -895,7 +907,7 @@ async function main() {
   });
 
   check('ordinary profit flow keeps visible/native priority before snapshot fallback', () => {
-    const chooseActionBody = functionBody(runtimeOrchestrationSource, 'chooseAction');
+    const chooseActionBody = functionBody(runtimeOrchestrationDecisionSource, 'chooseAction');
     const visibleCoinIndex = chooseActionBody.indexOf('pickHighValueVisibleCoin');
     const visibleOpportunityIndex = chooseActionBody.indexOf('const opportunityCoinGroups');
     const snapshotIndex = chooseActionBody.indexOf('snapshotCoinNavigationReasonCore');
