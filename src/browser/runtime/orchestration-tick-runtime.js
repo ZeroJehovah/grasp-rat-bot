@@ -96,6 +96,7 @@ function createOrchestrationTickRuntime(runtime = {}) {
     maybeReloadCloudflareError,
     maybeStartAutoLogin,
     noSelfGameSessionExitState,
+    runNoSelfSnapshotExitRecovery,
     noteSelfUnavailableForPostLoginZoom,
     pendingCombatLeaveAction,
     pendingExitIntentForSkippedLeave,
@@ -431,9 +432,7 @@ function createOrchestrationTickRuntime(runtime = {}) {
 	        const control = summarizeControl();
         const noSelfAgeMs = Math.max(0, Date.now() - Number(bot.waitSince || Date.now()));
         const noSelfExit = !self ? noSelfGameSessionExitState(control, noSelfAgeMs) : null;
-        const liveSessionTakeover = !self && noSelfExit?.sessionMismatch && noSelfExit?.mismatchTimedOut
-          ? liveSessionMismatchTakeoverState(control, noSelfExit)
-          : null;
+        const liveSessionTakeover = !self && noSelfExit?.sessionMismatch && noSelfExit?.mismatchTimedOut ? liveSessionMismatchTakeoverState(control, noSelfExit) : null;
         if (!cfg.dryRun && liveSessionTakeover?.allowed) {
           const recoveryReload = sessionMismatchRecoveryReloadSatisfied(control, noSelfExit);
           if (!recoveryReload) {
@@ -523,9 +522,8 @@ function createOrchestrationTickRuntime(runtime = {}) {
           if (cfg.once) bot.stop('once');
           return;
         }
-        if (!noSelfExit?.sessionMismatch && bot.sessionMismatchRecovery) {
-          clearSessionMismatchRecoveryState('session mismatch resolved');
-        }
+        if (!noSelfExit?.sessionMismatch && bot.sessionMismatchRecovery) clearSessionMismatchRecoveryState('session mismatch resolved');
+        if (!cfg.dryRun && !self && noSelfExit?.shouldLeave && runNoSelfSnapshotExitRecovery(control, noSelfExit, { noSelfAgeMs, once: cfg.once })) return;
         if (!cfg.dryRun && noSelfExit?.shouldLeave) {
 	          if (!bot.offlineSince) bot.offlineSince = Date.now();
 	          const offlineAgeMs = Math.max(0, Date.now() - Number(bot.offlineSince || Date.now()));

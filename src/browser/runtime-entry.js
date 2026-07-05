@@ -567,6 +567,10 @@ const __graspRatRuntimeStartup = (() => {
   let snapshotSelfPresenceState;
   let controlHasAuthoritativeSessionMismatch;
   let noSelfGameSessionExitState;
+  let noSelfSnapshotExitConfirmationState;
+  let clearNoSelfSnapshotLocalSession;
+  let handleNoSelfSnapshotExitRecovery;
+  let runNoSelfSnapshotExitRecovery;
   let clearSessionMismatchRecoveryState;
   let sessionMismatchRecoveryReloadSatisfied;
   let summarizeSessionMismatchRecoveryStatus;
@@ -630,6 +634,10 @@ const __graspRatRuntimeStartup = (() => {
     snapshotSelfPresenceState,
     controlHasAuthoritativeSessionMismatch,
     noSelfGameSessionExitState,
+    noSelfSnapshotExitConfirmationState,
+    clearNoSelfSnapshotLocalSession,
+    handleNoSelfSnapshotExitRecovery,
+    runNoSelfSnapshotExitRecovery,
     clearSessionMismatchRecoveryState,
     sessionMismatchRecoveryReloadSatisfied,
     summarizeSessionMismatchRecoveryStatus,
@@ -2030,6 +2038,10 @@ const __graspRatRuntimeStartup = (() => {
     maybeReloadCloudflareError,
     maybeStartAutoLogin,
     noSelfGameSessionExitState,
+    noSelfSnapshotExitConfirmationState,
+    clearNoSelfSnapshotLocalSession,
+    handleNoSelfSnapshotExitRecovery,
+    runNoSelfSnapshotExitRecovery,
     normalizeCoinDrop,
     normalizePendingExitReloadConfirmationCore,
     noteImportantSessionExit,

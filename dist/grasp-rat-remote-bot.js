@@ -12,7 +12,7 @@
   var define_GRASP_RAT_RUNTIME_CONFIG_default;
   var init_define_GRASP_RAT_RUNTIME_CONFIG = __esm({
     "<define:__GRASP_RAT_RUNTIME_CONFIG__>"() {
-      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.565" };
+      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.566" };
     }
   });
 
@@ -4971,6 +4971,7 @@
             "control-ws-offline-safe-wait": "\u7F51\u7EDC\u8FDE\u63A5\u79BB\u7EBF\uFF0C\u5B89\u5168\u533A\u77ED\u6682\u7B49\u5F85\u91CD\u8FDE",
             "control-ws-reconnect-churn": "\u7F51\u7EDC\u8FDE\u63A5\u53CD\u590D\u91CD\u8FDE\uFF0C\u7ACB\u5373\u9000\u51FA",
             "control-ws-no-self-game-session": "\u5DF2\u767B\u5F55\u4F46\u81EA\u8EAB\u5B9E\u4F53\u4E0D\u53EF\u89C1\uFF0C\u7ACB\u5373\u9000\u51FA",
+            "snapshot-no-self-exit-confirmed": "\u5FEB\u7167\u786E\u8BA4\u5DF2\u9000\u51FA\uFF0C\u6B63\u5728\u91CD\u767B",
             "control-ws-server-position-stalled": "\u670D\u52A1\u7AEF\u4F4D\u7F6E\u505C\u6B62\uFF0C\u6309\u7F51\u7EDC\u8FDE\u63A5\u79BB\u7EBF\u5904\u7406",
             "control-global-sampling-outage": "\u7F51\u7EDC\u91C7\u6837\u8D85\u65F6\uFF0C\u6309\u7F51\u7EDC\u8FDE\u63A5\u79BB\u7EBF\u5904\u7406",
             "control-combat-tick-gap": "\u6218\u6597\u4E3B\u5FAA\u73AF\u65AD\u6863\uFF0C\u6309\u7F51\u7EDC\u8FDE\u63A5\u79BB\u7EBF\u5904\u7406",
@@ -6203,7 +6204,7 @@
         function combatLogSuspendReason(decision) {
           const reason = String(decision?.reason || "");
           if (!reason) return "";
-          if (/^(paused|cloudflare-error-refresh|no-self|not-alive|auto-login|manual-login|login-suppressed|login-cooldown|login-snapshot-gate|login-control-missing|session-mismatch-refresh|session-mismatch-recovery|game-session-connecting|exit-log-flush-pending|important-log-flush-pending)$/.test(reason)) return reason;
+          if (/^(paused|cloudflare-error-refresh|no-self|not-alive|auto-login|manual-login|login-suppressed|login-cooldown|login-snapshot-gate|login-control-missing|session-mismatch-refresh|session-mismatch-recovery|snapshot-no-self-exit-confirmed|game-session-connecting|exit-log-flush-pending|important-log-flush-pending)$/.test(reason)) return reason;
           if (/^(enemy-leave-wait|pursuit-leave-wait|offline-leave-wait)$/.test(reason)) return reason;
           if (/^(offline-leave|control-ws-offline|control-ws-offline-unsafe|control-ws-offline-safe-wait|control-ws-reconnect-churn|control-ws-no-self-game-session|control-ws-server-position-stalled|control-global-sampling-outage|control-combat-tick-gap|control-action-settlement-stalled|control-stamina-exhausted|stamina-exhausted-leave)$/.test(reason)) return reason;
           return "";
@@ -11828,6 +11829,202 @@
     }
   });
 
+  // src/browser/runtime/no-self-snapshot-recovery-runtime.js
+  var require_no_self_snapshot_recovery_runtime = __commonJS({
+    "src/browser/runtime/no-self-snapshot-recovery-runtime.js"(exports, module) {
+      "use strict";
+      init_define_GRASP_RAT_RUNTIME_CONFIG();
+      function wsReadyStateNumber(value) {
+        if (value === null || value === void 0 || value === "") return NaN;
+        const n = Number(value);
+        return Number.isFinite(n) ? n : NaN;
+      }
+      function isWsConnectingOrOpen(value) {
+        const n = wsReadyStateNumber(value);
+        return n === 0 || n === 1;
+      }
+      function createNoSelfSnapshotRecoveryRuntime(runtime = {}) {
+        const {
+          bot,
+          storage = typeof localStorage2 !== "undefined" ? localStorage2 : null,
+          getCurrentUserId = () => 0,
+          getNativeControl = () => null,
+          snapshotSelfPresenceState = () => ({ known: false, fresh: false, present: false }),
+          clearPersistentPendingExitState = () => {
+          },
+          noteImportantSessionExit = () => null,
+          requestReload = () => false,
+          summarizeControl = () => null,
+          updateBotPanel = () => {
+          }
+        } = runtime;
+        const localStorage2 = storage;
+        function noSelfSnapshotExitConfirmationState(control, noSelfExit, t = Date.now()) {
+          const userId = Number(control?.currentUserId || getCurrentUserId() || noSelfExit?.userId || 0) || 0;
+          const snapshotSelf = noSelfExit?.snapshotSelf || snapshotSelfPresenceState(userId);
+          const blockedBy = [];
+          if (!noSelfExit?.shouldLeave) blockedBy.push("no-self-leave-not-due");
+          if (!snapshotSelf?.known) blockedBy.push("snapshot-self-unknown");
+          if (snapshotSelf?.fresh !== true) blockedBy.push("snapshot-self-stale");
+          if (snapshotSelf?.present) blockedBy.push("snapshot-self-present");
+          const confirmed = blockedBy.length === 0;
+          return {
+            confirmed,
+            reason: confirmed ? "snapshot-no-self-exit-confirmed" : blockedBy[0] || "snapshot-no-self-not-confirmed",
+            displayReason: confirmed ? "\u5FEB\u7167\u786E\u8BA4\u670D\u52A1\u7AEF\u5DF2\u65E0\u81EA\u8EAB\uFF0C\u6E05\u7406\u672C\u5730\u767B\u5F55\u72B6\u6001\u540E\u91CD\u767B" : "",
+            source: "fresh-snapshot-missing-self",
+            at: t,
+            userId: userId || null,
+            snapshotSelf,
+            noSelfAgeMs: Math.max(0, Math.round(Number(noSelfExit?.ageMs || 0) || 0)),
+            noSelfGameSession: noSelfExit || null,
+            control: control ? {
+              wsOpen: Boolean(control.wsOpen),
+              rawWsOpen: Boolean(control.rawWsOpen),
+              connecting: Boolean(control.connecting),
+              wsReadyState: control.wsReadyState ?? null,
+              nativeWsReadyState: control.nativeWsReadyState ?? null,
+              hasToken: Boolean(control.hasToken),
+              transport: control.transport || ""
+            } : null,
+            blockedBy
+          };
+        }
+        function preserveUserIdInput(userId) {
+          if (!userId) return false;
+          try {
+            const input = document.getElementById("userId");
+            if (!input || String(input.value || "").trim()) return false;
+            input.value = String(userId);
+            try {
+              input.dispatchEvent(new Event("input", { bubbles: true }));
+            } catch (_) {
+            }
+            try {
+              input.dispatchEvent(new Event("change", { bubbles: true }));
+            } catch (_) {
+            }
+            return true;
+          } catch (_) {
+            return false;
+          }
+        }
+        function clearNoSelfSnapshotLocalSession(control, noSelfExit, reason = "snapshot no-self exit confirmed") {
+          const t = Date.now();
+          const confirmation = noSelfSnapshotExitConfirmationState(control, noSelfExit, t);
+          if (!confirmation.confirmed) return confirmation;
+          const userId = confirmation.userId || Number(control?.currentUserId || getCurrentUserId() || 0) || null;
+          const removedKeys = [];
+          const storageErrors = [];
+          for (const key of ["tmpGameSessionToken", "tmpGameUserId"]) {
+            try {
+              const hadValue = localStorage2.getItem(key) !== null;
+              localStorage2.removeItem(key);
+              if (hadValue) removedKeys.push(key);
+            } catch (err) {
+              storageErrors.push({ key, error: err?.message || String(err) });
+            }
+          }
+          const preservedUserIdInput = preserveUserIdInput(userId);
+          let closedNativeWs = false;
+          let closeNativeWsError = "";
+          try {
+            const native = getNativeControl();
+            if (native?.ws && isWsConnectingOrOpen(native.ws.readyState)) {
+              native.ws.close();
+              closedNativeWs = true;
+            }
+          } catch (err) {
+            closeNativeWsError = err?.message || String(err);
+          }
+          if (bot.control && typeof bot.control === "object") {
+            bot.control.currentUserId = userId || bot.control.currentUserId || 0;
+            bot.control.hasToken = false;
+            bot.control.wsOpen = false;
+            bot.control.nativeWsOpen = false;
+            bot.control.connecting = false;
+            bot.control.lastError = String(reason || "snapshot no-self exit confirmed");
+            bot.control.nativeReconnectEvents = [];
+            bot.control.nativeReconnectChurn = false;
+            bot.control.nativeReconnectEventCount = 0;
+          }
+          bot.pendingExit = null;
+          clearPersistentPendingExitState();
+          bot.offlineSince = 0;
+          return {
+            ...confirmation,
+            clearedLocalSession: true,
+            clearedAt: t,
+            clearReason: String(reason || "snapshot no-self exit confirmed"),
+            removedKeys,
+            storageErrors,
+            preservedUserIdInput,
+            closedNativeWs,
+            closeNativeWsError,
+            displayReason: confirmation.displayReason
+          };
+        }
+        function handleNoSelfSnapshotExitRecovery(control, noSelfExit, options = {}) {
+          const confirmation = noSelfSnapshotExitConfirmationState(control, noSelfExit);
+          if (!confirmation.confirmed) return null;
+          const recovery = clearNoSelfSnapshotLocalSession(control, noSelfExit);
+          const leaveResult = {
+            attempted: false,
+            method: "snapshot-confirmation",
+            reason: "snapshot no-self exit confirmed",
+            at: recovery.clearedAt || Date.now(),
+            userId: recovery.userId || getCurrentUserId() || null,
+            self: bot.lastSelf || null,
+            summary: "\u5FEB\u7167\u786E\u8BA4\u670D\u52A1\u7AEF\u5DF2\u65E0\u81EA\u8EAB\uFF0C\u5DF2\u6E05\u7406\u672C\u5730\u767B\u5F55\u72B6\u6001",
+            displayReason: recovery.displayReason,
+            exitPending: false,
+            exitConfirmed: true,
+            localSessionReset: recovery
+          };
+          bot.lastOfflineLeaveResult = leaveResult;
+          noteImportantSessionExit("snapshot-no-self-exit-confirmed", bot.lastSelf, Date.now(), { exit: leaveResult });
+          const reloadRequested = requestReload("snapshot confirmed no-self local session reset");
+          const blockedReload = reloadRequested === false ? bot.exitAudit?.lastBlockedReload || bot.importantLogging?.lastBlockedReload || null : null;
+          return {
+            kind: "wait",
+            reason: "snapshot-no-self-exit-confirmed",
+            dx: 0,
+            dy: 0,
+            currentUserId: recovery.userId || getCurrentUserId(),
+            control: summarizeControl(),
+            visibleEntities: Array.isArray(bot.globalState?.entities) ? bot.globalState.entities.length : 0,
+            self: null,
+            noSelfAgeMs: Math.max(0, Math.round(Number(options.noSelfAgeMs || noSelfExit?.ageMs || 0) || 0)),
+            noSelfGameSession: noSelfExit,
+            snapshotExitConfirmation: recovery,
+            leave: leaveResult,
+            reloadRequested: Boolean(reloadRequested),
+            exitAuditFlush: reloadRequested === false ? bot.exitAudit?.lastBlockedReload || null : null,
+            importantLogFlush: reloadRequested === false ? bot.importantLogging?.lastBlockedReload || null : null,
+            displayReason: blockedReload ? bot.exitAudit?.lastBlockedReload ? "\u7B49\u5F85\u9000\u51FA\u65E5\u5FD7\u53D1\u9001\u5B8C\u6210\uFF0C\u6682\u4E0D\u5237\u65B0\u91CD\u767B" : "\u7B49\u5F85\u4F1A\u8BDD\u7ED3\u675F\u65E5\u5FD7\u53D1\u9001\u5B8C\u6210\uFF0C\u6682\u4E0D\u5237\u65B0\u91CD\u767B" : recovery.displayReason
+          };
+        }
+        function runNoSelfSnapshotExitRecovery(control, noSelfExit, options = {}) {
+          const decision = handleNoSelfSnapshotExitRecovery(control, noSelfExit, options);
+          if (!decision) return false;
+          bot.lastDecision = decision;
+          updateBotPanel(decision);
+          if (options.once && typeof bot.stop === "function") bot.stop("once");
+          return true;
+        }
+        return {
+          noSelfSnapshotExitConfirmationState,
+          clearNoSelfSnapshotLocalSession,
+          handleNoSelfSnapshotExitRecovery,
+          runNoSelfSnapshotExitRecovery
+        };
+      }
+      module.exports = {
+        createNoSelfSnapshotRecoveryRuntime
+      };
+    }
+  });
+
   // src/browser/runtime/relogin-gate-runtime.js
   var require_relogin_gate_runtime = __commonJS({
     "src/browser/runtime/relogin-gate-runtime.js"(exports, module) {
@@ -12114,6 +12311,7 @@
       var { createClashLeaveRescueRuntime } = require_clash_leave_rescue_runtime();
       var { createLeaveFlowRuntime } = require_leave_flow_runtime();
       var { createSessionRecoveryRuntime } = require_session_recovery_runtime();
+      var { createNoSelfSnapshotRecoveryRuntime } = require_no_self_snapshot_recovery_runtime();
       var { createReloginGateRuntime } = require_relogin_gate_runtime();
       function createControlFlowRuntime(runtime = {}) {
         const {
@@ -12416,6 +12614,23 @@
           staleOfflineStaminaHoldContradicted
         });
         const {
+          noSelfSnapshotExitConfirmationState,
+          clearNoSelfSnapshotLocalSession,
+          handleNoSelfSnapshotExitRecovery,
+          runNoSelfSnapshotExitRecovery
+        } = createNoSelfSnapshotRecoveryRuntime({
+          bot,
+          storage: localStorage2,
+          getCurrentUserId: (...args) => getCurrentUserId(...args),
+          getNativeControl: (...args) => getNativeControl(...args),
+          snapshotSelfPresenceState: (...args) => snapshotSelfPresenceState(...args),
+          clearPersistentPendingExitState,
+          noteImportantSessionExit,
+          requestReload: (...args) => requestReload(...args),
+          summarizeControl: (...args) => summarizeControl(...args),
+          updateBotPanel
+        });
+        const {
           reloginCooldownCandidates,
           summarizeReloginGateStatus,
           clearExitHoldDetail,
@@ -12662,6 +12877,10 @@
           snapshotSelfPresenceState,
           controlHasAuthoritativeSessionMismatch,
           noSelfGameSessionExitState,
+          noSelfSnapshotExitConfirmationState,
+          clearNoSelfSnapshotLocalSession,
+          handleNoSelfSnapshotExitRecovery,
+          runNoSelfSnapshotExitRecovery,
           recentUnsafeExitContext,
           firstRecentUnsafeExitContext,
           sessionMismatchRecoveryReloadMaxAgeMs,
@@ -25173,6 +25392,10 @@
           "maybeReloadCloudflareError",
           "maybeStartAutoLogin",
           "noSelfGameSessionExitState",
+          "noSelfSnapshotExitConfirmationState",
+          "clearNoSelfSnapshotLocalSession",
+          "handleNoSelfSnapshotExitRecovery",
+          "runNoSelfSnapshotExitRecovery",
           "noteSelfUnavailableForPostLoginZoom",
           "pendingCombatLeaveAction",
           "pendingExitIntentForSkippedLeave",
@@ -26909,6 +27132,7 @@
           maybeReloadCloudflareError,
           maybeStartAutoLogin,
           noSelfGameSessionExitState,
+          runNoSelfSnapshotExitRecovery,
           noteSelfUnavailableForPostLoginZoom,
           pendingCombatLeaveAction,
           pendingExitIntentForSkippedLeave,
@@ -27303,9 +27527,8 @@
                 if (cfg.once) bot.stop("once");
                 return;
               }
-              if (!noSelfExit?.sessionMismatch && bot.sessionMismatchRecovery) {
-                clearSessionMismatchRecoveryState("session mismatch resolved");
-              }
+              if (!noSelfExit?.sessionMismatch && bot.sessionMismatchRecovery) clearSessionMismatchRecoveryState("session mismatch resolved");
+              if (!cfg.dryRun && !self && noSelfExit?.shouldLeave && runNoSelfSnapshotExitRecovery(control, noSelfExit, { noSelfAgeMs, once: cfg.once })) return;
               if (!cfg.dryRun && noSelfExit?.shouldLeave) {
                 if (!bot.offlineSince) bot.offlineSince = Date.now();
                 const offlineAgeMs = Math.max(0, Date.now() - Number(bot.offlineSince || Date.now()));
@@ -28887,6 +29110,10 @@
         let snapshotSelfPresenceState;
         let controlHasAuthoritativeSessionMismatch;
         let noSelfGameSessionExitState;
+        let noSelfSnapshotExitConfirmationState;
+        let clearNoSelfSnapshotLocalSession;
+        let handleNoSelfSnapshotExitRecovery;
+        let runNoSelfSnapshotExitRecovery;
         let clearSessionMismatchRecoveryState;
         let sessionMismatchRecoveryReloadSatisfied;
         let summarizeSessionMismatchRecoveryStatus;
@@ -28949,6 +29176,10 @@
           snapshotSelfPresenceState,
           controlHasAuthoritativeSessionMismatch,
           noSelfGameSessionExitState,
+          noSelfSnapshotExitConfirmationState,
+          clearNoSelfSnapshotLocalSession,
+          handleNoSelfSnapshotExitRecovery,
+          runNoSelfSnapshotExitRecovery,
           clearSessionMismatchRecoveryState,
           sessionMismatchRecoveryReloadSatisfied,
           summarizeSessionMismatchRecoveryStatus,
@@ -29917,6 +30148,10 @@
           maybeReloadCloudflareError,
           maybeStartAutoLogin,
           noSelfGameSessionExitState,
+          noSelfSnapshotExitConfirmationState,
+          clearNoSelfSnapshotLocalSession,
+          handleNoSelfSnapshotExitRecovery,
+          runNoSelfSnapshotExitRecovery,
           normalizeCoinDrop,
           normalizePendingExitReloadConfirmationCore,
           noteImportantSessionExit,

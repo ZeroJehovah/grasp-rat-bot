@@ -4,7 +4,7 @@ Keep this file focused on current validation coverage. Do not use it as a migrat
 
 ## Current Counts
 
-- Bot self-test count: `311`.
+- Bot self-test count: `313`.
 - Strategy module self-test count: `107`.
 - Combat-log analyzer self-test count: `88`.
 - Combat replay self-test count: `1` local replay case plus skipped historical fixtures when retained logs are absent.
@@ -37,6 +37,10 @@ Keep this file focused on current validation coverage. Do not use it as a migrat
 - ROI calculations.
 
 The browser runtime should adapt page/native state into these pure helpers instead of duplicating the same policy logic.
+
+## Browser Runtime Coverage
+
+`src/node/run-self-test.js` includes focused browser-runtime smoke checks for session recovery, including the no-self snapshot-exit confirmation path that only accepts a fresh authoritative snapshot with current self absent, and the local stale-session reset that clears `tmpGameSessionToken`/`tmpGameUserId` while preserving the login id input before reload.
 
 ## Objective Build Verification
 
