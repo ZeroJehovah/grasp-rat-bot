@@ -3821,7 +3821,8 @@ function createCombatRuntime(runtime = {}) {
     combatAimDynamicStrategyState,
     combatAimTarget,
     combatLeaveCoverAction,
-    buildCombatAction
+    buildCombatAction,
+    handleTickReentryCombatGap
   };
 }
 
