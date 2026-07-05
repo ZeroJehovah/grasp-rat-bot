@@ -45,7 +45,7 @@ Implementation status:
 - [x] Commit 5 - Move Orchestration Decision To Domain Contexts
 - [x] Commit 6 - Move Orchestration Tick And Startup To Domain Contexts
 - [x] Commit 7 - Split Remaining Control-Flow Owners
-- [ ] Commit 8 - Final Documentation, Budgets, And Release Closeout
+- [x] Commit 8 - Final Documentation, Budgets, And Release Closeout
 
 ### Commit 1 - Add Final Closeout Plan
 
@@ -445,6 +445,8 @@ Completion criteria:
 - The refactoring round is documented as complete.
 - The verifier blocks old source-string recovery, entry/domain backflow, large composition-module growth, and wide dependency regression.
 - There is no remaining migration plan item that must be completed before normal feature work resumes.
+
+Completed in `bootstrap-0.4.552`: README and agent docs now describe the current development surfaces (`src/strategy/`, `src/browser/runtime/`, `src/browser/runtime-entry.js`, `grasp-rat-bot.js`, `userscript/`, and `extension/`). Final verifier budgets are tightened to the post-closeout structure, including control-flow composition `768/820`, session recovery `821/835`, relogin gate `229/240`, and control-flow dependency width `74/74`. The final validation passed the bot self-test, objective-status self-test, syntax checks for Node/bootstrap/extension surfaces, `combat-log-service` tests, runtime-helper-entry, remote-bundled candidate generation, objective build verification, and `git diff --check`. No remaining item in this plan blocks normal feature work.
 
 ## Work Not Included In This Round
 
