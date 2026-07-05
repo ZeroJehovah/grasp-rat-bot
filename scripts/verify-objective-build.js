@@ -297,6 +297,16 @@ function functionBody(text, name) {
   throw new Error(`${name} function body not closed`);
 }
 
+function assertBootstrapLoginPointGateAfterNeededCheck(text, label) {
+  const body = functionBody(text, 'maybeStartGameLogin');
+  const shouldLoginIndex = body.indexOf('const shouldLogin =');
+  const noLoginReturnIndex = body.indexOf('if (!shouldLogin) return false;');
+  const gateIndex = body.indexOf('const loginGateBlock = bootstrapLoginPointSafetyBlock(status);');
+  assert(shouldLoginIndex >= 0, `${label} maybeStartGameLogin missing shouldLogin calculation`);
+  assert(noLoginReturnIndex > shouldLoginIndex, `${label} maybeStartGameLogin missing no-login return after shouldLogin`);
+  assert(gateIndex > noLoginReturnIndex, `${label} login-point safety gate runs before login is needed`);
+}
+
 function assertProfitOpportunityRuntimeSmoke() {
   const { createProfitOpportunityRuntime } = require(path.join(ROOT, 'src/browser/runtime/profit-opportunity-runtime'));
   const runtime = createProfitOpportunityRuntime({
@@ -1173,6 +1183,11 @@ async function main() {
     assert(directSource.includes(`// entry: ${RUNTIME_ENTRY_LABEL}`), 'direct source hash input does not name the entry');
     assert(directSource.includes('// runtimeConfig: '), 'direct source hash input does not include runtime config');
     assert(sha256Hex(directSource) === generatedBuild.directSha256, 'direct source hash helper mismatch');
+  });
+
+  check('bootstrap auto-login only gates login-point safety when login is needed', () => {
+    assertBootstrapLoginPointGateAfterNeededCheck(userscriptText, 'userscript');
+    assertBootstrapLoginPointGateAfterNeededCheck(extensionBootstrapText, 'extension');
   });
 
   check('userscript metadata version matches runtime constant', () => {

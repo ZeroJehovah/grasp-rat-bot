@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Grasp Rat Bot Bootstrap
 // @namespace    https://github.com/grasp-rat-bot
-// @version      0.4.73
+// @version      0.4.74
 // @description  Loads, hot-updates, and supervises the Grasp Rat bot from a signed manifest.
 // @match        https://grasp-rat-game.h-e.top/*
 // @match        https://connect.linux.do/oauth2/authorize*
@@ -27,7 +27,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.4.73';
+  const BOOTSTRAP_VERSION = '0.4.74';
   const BOOTSTRAP_OWNER = 'tampermonkey';
   const REPOSITORY_URL = 'https://github.com/ZeroJehovah/grasp-rat-bot';
   const USERSCRIPT_UPDATE_URL = 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/userscript/grasp-rat-bootstrap.user.js';
@@ -3467,14 +3467,6 @@
       return false;
     }
     const status = getBotStatus();
-    const loginGateBlock = bootstrapLoginPointSafetyBlock(status);
-    if (loginGateBlock && !force) {
-      rememberLoginGateBlock(loginGateBlock, reason);
-      return false;
-    }
-    if (loginGateBlock && force) {
-      rememberLoginGateBlock({ ...loginGateBlock, manualBypassed: true }, reason);
-    }
     const hasToken = Boolean(localStorage.getItem('tmpGameSessionToken') || status?.control?.hasToken);
     const hasSelf = Boolean(status?.self || status?.lastDecision?.self);
     const decisionReason = String(status?.lastDecision?.reason || '');
@@ -3489,6 +3481,14 @@
       ? canStartLogin
       : (!hasToken || (!hasSelf && /login|required/i.test(decisionReason) && loginRequired));
     if (!shouldLogin) return false;
+    const loginGateBlock = bootstrapLoginPointSafetyBlock(status);
+    if (loginGateBlock && !force) {
+      rememberLoginGateBlock(loginGateBlock, reason);
+      return false;
+    }
+    if (loginGateBlock && force) {
+      rememberLoginGateBlock({ ...loginGateBlock, manualBypassed: true }, reason);
+    }
     state.lastLoginAt = t;
     const detail = {
       reason,
