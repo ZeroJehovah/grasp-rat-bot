@@ -124,6 +124,7 @@ function createCombatRuntime(runtime = {}) {
     staminaRemaining,
     staminaExhaustedThreshold,
     combatMovementBlockedByStamina,
+    isInvulnerable,
     isCurrentlyActive,
     isFiringEntity,
     isMovingThreat,

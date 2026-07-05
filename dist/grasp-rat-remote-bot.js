@@ -12,7 +12,7 @@
   var define_GRASP_RAT_RUNTIME_CONFIG_default;
   var init_define_GRASP_RAT_RUNTIME_CONFIG = __esm({
     "<define:__GRASP_RAT_RUNTIME_CONFIG__>"() {
-      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.559" };
+      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.560" };
     }
   });
 
@@ -3694,7 +3694,7 @@
         const dropValue = (e) => Number(e.death_reward_preview ?? e.death_drop_coins ?? e.drop ?? 0) || 0;
         const truthyFlag = (value) => value === true || value === 1 || value === "1" || value === "true";
         const anyPositiveNumber = (...values) => values.some((value) => Number(value) > 0);
-        const isInvulnerable2 = (e) => anyPositiveNumber(
+        const isInvulnerable = (e) => anyPositiveNumber(
           e?.invulnerable_remaining_ticks,
           e?.invincible_remaining_ticks,
           e?.invulnerability_remaining_ticks,
@@ -3724,7 +3724,7 @@
           e?.invulnerabilityRemaining
         ) || truthyFlag(e?.invulnerable) || truthyFlag(e?.is_invulnerable) || truthyFlag(e?.isInvulnerable) || truthyFlag(e?.immune) || truthyFlag(e?.is_immune);
         const isJoinModeActive = (e) => e?.current_join_mode === "Active" || e?.mode === "Active";
-        const isInvulnerableActive = (e) => isJoinModeActive(e) && isInvulnerable2(e);
+        const isInvulnerableActive = (e) => isJoinModeActive(e) && isInvulnerable(e);
         const staminaRemaining = (e, windowName) => {
           const value = Number(e?.["stamina_" + windowName + "_remaining_milli"] ?? NaN);
           return Number.isFinite(value) ? value : null;
@@ -3763,9 +3763,9 @@
           return Boolean(e?.recentlyActive || ageMs !== null && ageMs <= cooldownMs);
         }
         function isIdleInvulnerableTarget(e) {
-          return Boolean(isInvulnerable2(e) && !isMovingThreat(e) && !isFiringEntity(e) && hasFullStamina(e) && !recentlyActionedForAfk(e));
+          return Boolean(isInvulnerable(e) && !isMovingThreat(e) && !isFiringEntity(e) && hasFullStamina(e) && !recentlyActionedForAfk(e));
         }
-        const isAvoidanceThreat = (e) => isInvulnerable2(e) && !isIdleInvulnerableTarget(e);
+        const isAvoidanceThreat = (e) => isInvulnerable(e) && !isIdleInvulnerableTarget(e);
         const isAfkTarget = (e) => !recentlyActionedForAfk(e) && !isJoinModeActive(e) && !isCurrentlyActive(e) && !isMovingThreat(e);
         const isAfkProfitTarget = (e) => !recentlyActionedForAfk(e) && (isAfkTarget(e) || isJoinModeActive(e) && !isCurrentlyActive(e) && !isMovingThreat(e) && !isFiringEntity(e));
         const hpValue = (e) => Number(e?.hp ?? 0) || 0;
@@ -3816,7 +3816,7 @@
           dropValue,
           truthyFlag,
           anyPositiveNumber,
-          isInvulnerable: isInvulnerable2,
+          isInvulnerable,
           isJoinModeActive,
           isInvulnerableActive,
           staminaRemaining,
@@ -5443,7 +5443,7 @@
           isCurrentlyActive = () => false,
           isMovingThreat = () => false,
           isFiringEntity = () => false,
-          isInvulnerable: isInvulnerable2 = () => false,
+          isInvulnerable = () => false,
           getNativeEntityList = () => [],
           normalizeBullet = (value) => value,
           getBullets = () => [],
@@ -5508,7 +5508,7 @@
             active: isCurrentlyActive(entity),
             moving: isMovingThreat(entity),
             firing: isFiringEntity(entity),
-            invulnerable: isInvulnerable2(entity),
+            invulnerable: isInvulnerable(entity),
             native: Boolean(entity.native),
             render: Boolean(entity.render || entity.nativeRender),
             realtime: Boolean(entity.realtime || entity.native || entity.render || entity.nativeRender),
@@ -6256,7 +6256,7 @@
           isCurrentlyActive = () => false,
           isMovingThreat = () => false,
           isFiringEntity = () => false,
-          isInvulnerable: isInvulnerable2 = () => false,
+          isInvulnerable = () => false,
           getNativeEntityList = () => [],
           normalizeBullet = (value) => value,
           getBullets = () => [],
@@ -6785,7 +6785,7 @@
           isCurrentlyActive = () => false,
           isMovingThreat = () => false,
           isFiringEntity = () => false,
-          isInvulnerable: isInvulnerable2 = () => false,
+          isInvulnerable = () => false,
           getNativeEntityList = () => [],
           normalizeBullet = (value) => value,
           getBullets = () => [],
@@ -7887,7 +7887,7 @@
           isFiringEntity = () => false,
           isMovingThreat = () => false,
           isAlive = (value) => Boolean(value),
-          isInvulnerable: isInvulnerable2 = () => false
+          isInvulnerable = () => false
         } = runtime;
         const localStorage2 = storage;
         const LOGIN_POINT_SAFETY_KEY = loginPointSafetyKey;
@@ -8166,7 +8166,7 @@
           const radius = loginPointSafetyRadius(state2);
           for (const entity of entities) {
             if (!entity || typeof entity !== "object") continue;
-            if (!isAlive(entity) || isInvulnerable2(entity)) continue;
+            if (!isAlive(entity) || isInvulnerable(entity)) continue;
             const id = Number(entity.user_id ?? entity.userId ?? entity.id ?? NaN);
             if (Number.isFinite(id) && Number(point.userId ?? NaN) === id) continue;
             const x = Number(entity.x);
@@ -10299,7 +10299,7 @@
           clamp = (value, min, max) => Math.max(min, Math.min(max, value)),
           isAlive = (value) => Boolean(value),
           isFullHp = () => true,
-          isInvulnerable: isInvulnerable2 = () => false,
+          isInvulnerable = () => false,
           threatKey = (threat) => String(threat?.id ?? threat?.user_id ?? ""),
           returnBlockRadius = () => 0
         } = runtime;
@@ -10443,7 +10443,7 @@
         function pursuitLeaveThresholdFor(self, threat) {
           const normalMs = Math.max(0, Number(cfg.pursuitLeaveMs || 0));
           const nonFullHp = !isFullHp(self);
-          const invulnerable = isInvulnerable2(threat);
+          const invulnerable = isInvulnerable(threat);
           const candidates = [normalMs];
           if (nonFullHp) candidates.push(Math.max(0, Number(cfg.pursuitLeaveNonFullHpMs || normalMs)));
           if (invulnerable) candidates.push(Math.max(0, Number(cfg.pursuitLeaveInvulnerableMs || normalMs)));
@@ -10486,7 +10486,7 @@
             towardScore: picked.towardScore,
             closingDistance: picked.closingDistance,
             thresholdMs,
-            invulnerable: isInvulnerable2(picked.threat),
+            invulnerable: isInvulnerable(picked.threat),
             nonFullHp: !isFullHp(self),
             combatSuppressed
           };
@@ -12117,7 +12117,7 @@
           summarizeControl = () => null,
           snapshotSelfFreshEnough = () => false,
           isAlive = (value) => Boolean(value),
-          isInvulnerable: isInvulnerable2 = () => false,
+          isInvulnerable = () => false,
           isJoinModeActive = () => false,
           isFiringEntity = () => false,
           isMovingThreat = () => false,
@@ -12243,7 +12243,7 @@
           isFiringEntity,
           isMovingThreat,
           isAlive,
-          isInvulnerable: isInvulnerable2
+          isInvulnerable
         });
         const {
           findLoginControl,
@@ -12577,7 +12577,7 @@
           clamp,
           isAlive,
           isFullHp,
-          isInvulnerable: isInvulnerable2,
+          isInvulnerable,
           threatKey,
           returnBlockRadius
         });
@@ -18547,7 +18547,7 @@
           dist = () => Infinity,
           clamp = (value, min, max) => Math.max(min, Math.min(max, value)),
           isInvulnerableActive = () => false,
-          isInvulnerable: isInvulnerable2 = () => false,
+          isInvulnerable = () => false,
           isCurrentlyActive = () => false,
           isFiringEntity = () => false,
           isWhitelistedTarget = () => false,
@@ -18704,7 +18704,7 @@
             name: threat.name || "",
             distance: Number.isFinite(Number(threat.distance)) ? Math.round(Number(threat.distance)) : null,
             radius: Math.round(coinThreatDangerRadius(threat)),
-            invulnerable: isInvulnerable2(threat),
+            invulnerable: isInvulnerable(threat),
             active: isCurrentlyActive(threat)
           };
         }
@@ -18851,10 +18851,10 @@
           const radius = Math.max(
             Number(cfg.combatAttackRange || 0),
             Number(threat.cautionRadius || 0) + Number(cfg.activeCautionExitMargin || 0),
-            isInvulnerable2(threat) ? Number(cfg.activeAvoidMaxDistance || cfg.activeCautionRadius || 0) : 0
+            isInvulnerable(threat) ? Number(cfg.activeAvoidMaxDistance || cfg.activeCautionRadius || 0) : 0
           );
           if (!Number.isFinite(distance) || distance > radius) return false;
-          if (isInvulnerable2(threat)) return false;
+          if (isInvulnerable(threat)) return false;
           if (isLowValueActiveCombatTarget(threat)) return lowValueActiveThreatensSelf(threat, incomingOwnerId, unknownIncoming);
           return hasCombatActivitySignal(threat) || isCurrentlyActive(threat) || isFiringEntity(threat);
         }
@@ -20946,7 +20946,7 @@
           isAlive = (value) => Boolean(value),
           isWhitelistedTarget = () => false,
           isCurrentlyActive = () => false,
-          isInvulnerable: isInvulnerable2 = () => false,
+          isInvulnerable = () => false,
           entityFreshEnoughForOffense = () => true,
           isAfkProfitTarget = () => false,
           directionTo: directionTo2 = () => ({ dx: 0, dy: 0, distance: Infinity }),
@@ -20984,7 +20984,7 @@
           if (hp !== null && hp <= 0) return false;
           if (isWhitelistedTarget(target)) return false;
           if (isCurrentlyActive(target)) return false;
-          if (isInvulnerable2(target)) return false;
+          if (isInvulnerable(target)) return false;
           return dropValue(target) > 0;
         }
         function postAttackDropResolvedAt(attack, entities, t = Date.now()) {
@@ -21161,7 +21161,7 @@
           staminaExhaustedThreshold = () => 0,
           staminaBudgetReloginDelayMs = () => 0,
           isInvulnerableActive = () => false,
-          isInvulnerable: isInvulnerable2 = () => false,
+          isInvulnerable = () => false,
           isCurrentlyActive = () => false,
           isFiringEntity = () => false,
           isAfkProfitTarget = () => false,
@@ -21208,7 +21208,7 @@
           dist,
           clamp,
           isInvulnerableActive,
-          isInvulnerable: isInvulnerable2,
+          isInvulnerable,
           isCurrentlyActive,
           isFiringEntity,
           isWhitelistedTarget,
@@ -21260,7 +21260,7 @@
           isAlive,
           isWhitelistedTarget,
           isCurrentlyActive,
-          isInvulnerable: isInvulnerable2,
+          isInvulnerable,
           entityFreshEnoughForOffense,
           isAfkProfitTarget,
           ...coinRuntime,
@@ -21314,7 +21314,7 @@
           staminaRemaining = () => NaN,
           staminaExhaustedThreshold = () => 0,
           combatMovementBlockedByStamina = () => false,
-          isInvulnerable: isInvulnerable2 = () => false,
+          isInvulnerable = () => false,
           isCurrentlyActive = () => false,
           isFiringEntity = () => false,
           hpValue = () => 0,
@@ -21502,7 +21502,7 @@
             life: target.life || "",
             active: isCurrentlyActive(target),
             firing: isFiringEntity(target),
-            invulnerable: isInvulnerable2(target),
+            invulnerable: isInvulnerable(target),
             combatOriginIntent,
             combatOriginReason: combatOriginReason || "",
             seenTargetRealBulletMs: seenTargetRealBulletMs || 0
@@ -21981,7 +21981,7 @@
           clamp = (value, min, max) => Math.max(min, Math.min(max, value)),
           staminaRemaining = () => NaN,
           staminaExhaustedThreshold = () => 0,
-          isInvulnerable: isInvulnerable2 = () => false,
+          isInvulnerable = () => false,
           isCurrentlyActive = () => false,
           isFiringEntity = () => false,
           hpValue = () => 0,
@@ -22439,7 +22439,7 @@
           } catch (_) {
             live = null;
           }
-          if (!live || !isAlive(live) || isInvulnerable2(live)) return target;
+          if (!live || !isAlive(live) || isInvulnerable(live)) return target;
           const x = Number(live.x);
           const y = Number(live.y);
           if (!Number.isFinite(x) || !Number.isFinite(y)) return target;
@@ -22799,6 +22799,7 @@
           staminaRemaining = () => NaN,
           staminaExhaustedThreshold = () => 0,
           combatMovementBlockedByStamina = () => false,
+          isInvulnerable = () => false,
           isCurrentlyActive = () => false,
           isFiringEntity = () => false,
           isMovingThreat = () => false,
@@ -23806,7 +23807,7 @@
           cfg,
           staminaBudgetCoinLeaveSummary = () => "",
           staminaExhaustedWindowLabel = () => "",
-          isInvulnerable: isInvulnerable2 = () => false,
+          isInvulnerable = () => false,
           isCurrentlyActive = () => false,
           isFiringEntity = () => false,
           isMovingThreat = () => false,
@@ -23963,7 +23964,7 @@
           const incoming = incomingBulletThreat(self, null, bullets);
           const incomingOwnerId = incoming?.ownerId;
           const unknownIncoming = Boolean(incoming && (incomingOwnerId === null || incomingOwnerId === void 0));
-          return (activeThreats || []).filter((threat) => !isWhitelistedTarget(threat) && !isInvulnerable2(threat)).filter((threat) => hasCombatActivitySignal(threat)).filter((threat) => !activeCombatRequiresThreatEvidence(self, threat) || activeCombatThreatensSelf(threat, incomingOwnerId, unknownIncoming)).filter((threat) => {
+          return (activeThreats || []).filter((threat) => !isWhitelistedTarget(threat) && !isInvulnerable(threat)).filter((threat) => hasCombatActivitySignal(threat)).filter((threat) => !activeCombatRequiresThreatEvidence(self, threat) || activeCombatThreatensSelf(threat, incomingOwnerId, unknownIncoming)).filter((threat) => {
             const distance = Number(threat.distance || 0);
             if (!(distance > attackRange)) return distance <= attackRange;
             return distance <= dodgeRange && (incomingOwnerMatchesTarget(threat, incomingOwnerId) || unknownIncoming && isFiringEntity(threat));
@@ -24046,7 +24047,7 @@
           return (incomingMatch ? 1e9 : 0) + (isFiringEntity(target) ? 5e8 : 0) + (unknownIncoming && isCurrentlyActive(target) ? 2e8 : 0) + (recentCombatInjuryActive() && isCurrentlyActive(target) ? 1e8 : 0) + (isJoinModeActive(target) ? 75e6 : 0) + (isCurrentlyActive(target) ? 5e7 : 0) + Number(target.drop || 0) * 1e6 - Number(target.distance || 0);
         }
         function isDefensiveCombatTarget(self, target, incomingOwnerId = null, unknownIncoming = false) {
-          if (!target || isWhitelistedTarget(target) || isAfkProfitTarget(target) || isInvulnerable2(target)) return false;
+          if (!target || isWhitelistedTarget(target) || isAfkProfitTarget(target) || isInvulnerable(target)) return false;
           if (incomingOwnerMatchesTarget(target, incomingOwnerId)) return true;
           if (activeCombatRequiresThreatEvidence(self, target)) return activeCombatThreatensSelf(target, incomingOwnerId, unknownIncoming);
           if (isFiringEntity(target)) return true;
@@ -24055,7 +24056,7 @@
           return Boolean(recentCombatInjuryActive() && isCurrentlyActive(target));
         }
         function isProfitableCombatTarget(self, target) {
-          return Boolean(target && !isWhitelistedTarget(target) && !isAfkProfitTarget(target) && !isInvulnerable2(target) && isCurrentlyActive(target) && Number(target.drop || 0) > lowValueActiveDropMax() && proactiveActiveCombatStaminaAffordable(self));
+          return Boolean(target && !isWhitelistedTarget(target) && !isAfkProfitTarget(target) && !isInvulnerable(target) && isCurrentlyActive(target) && Number(target.drop || 0) > lowValueActiveDropMax() && proactiveActiveCombatStaminaAffordable(self));
         }
         function combatHpGapDisadvantaged(self, target) {
           const knownSelfHp = knownHpValue(self);
@@ -24075,10 +24076,10 @@
           const incomingOwnerId = incoming?.ownerId;
           const unknownIncoming = Boolean(incoming && (incomingOwnerId === null || incomingOwnerId === void 0));
           if (incoming?.ownerId !== null && incoming?.ownerId !== void 0) {
-            const shooter = combatTargets.find((target) => String(target.user_id) === String(incoming.ownerId) && !isWhitelistedTarget(target) && !isInvulnerable2(target));
+            const shooter = combatTargets.find((target) => String(target.user_id) === String(incoming.ownerId) && !isWhitelistedTarget(target) && !isInvulnerable(target));
             if (shooter) return { ...shooter, incomingBullet: incoming, combatIntent: "defensive" };
           }
-          const eligibleTargets = combatTargets.filter((target) => !isWhitelistedTarget(target) && !isAfkProfitTarget(target) && !isInvulnerable2(target)).filter((target) => !target.combatDodgeOnlyCandidate || incomingOwnerMatchesTarget(target, incomingOwnerId) || unknownIncoming && isFiringEntity(target)).filter((target) => !combatRetreatIgnoreActive(target));
+          const eligibleTargets = combatTargets.filter((target) => !isWhitelistedTarget(target) && !isAfkProfitTarget(target) && !isInvulnerable(target)).filter((target) => !target.combatDodgeOnlyCandidate || incomingOwnerMatchesTarget(target, incomingOwnerId) || unknownIncoming && isFiringEntity(target)).filter((target) => !combatRetreatIgnoreActive(target));
           if (!eligibleTargets.length) return null;
           const defensiveTargets = eligibleTargets.filter((target) => isDefensiveCombatTarget(self, target, incomingOwnerId, unknownIncoming)).sort((a, b) => combatTargetPriority(b, incomingOwnerId, unknownIncoming) - combatTargetPriority(a, incomingOwnerId, unknownIncoming));
           if (options.mode === "defensive") return defensiveTargets[0] ? { ...defensiveTargets[0], combatIntent: "defensive" } : null;
@@ -24109,7 +24110,7 @@
           return combatDodgeThreatRange();
         }
         function combatEngagedCandidate(self, raw) {
-          if (!raw || !entityFreshEnoughForOffense(raw) || !isAlive(raw) || isWhitelistedTarget(raw) || isInvulnerable2(raw)) return null;
+          if (!raw || !entityFreshEnoughForOffense(raw) || !isAlive(raw) || isWhitelistedTarget(raw) || isInvulnerable(raw)) return null;
           return {
             ...raw,
             distance: dist(self, raw),
@@ -24133,7 +24134,7 @@
             return null;
           }
           const target = (combatTargets || []).find((item) => String(item.user_id ?? item.id ?? "") === String(engaged.id));
-          if (target && !isWhitelistedTarget(target) && !isInvulnerable2(target)) {
+          if (target && !isWhitelistedTarget(target) && !isInvulnerable(target)) {
             if (String(engaged.intent || "") === "profit" && isAfkProfitTarget(target)) {
               clearCombatEngagement("afk-profit-target");
               return null;
@@ -24225,7 +24226,7 @@
             attackMinAfkDrop: cfg.attackMinAfkDrop,
             attackMinDrop: cfg.attackMinDrop,
             attackMinRewardRatio: cfg.attackMinRewardRatio
-          }) : attackWorthTaking(self, e)) && !isInvulnerable2(e)).filter(isAfkProfitTarget).map((e) => ({
+          }) : attackWorthTaking(self, e)) && !isInvulnerable(e)).filter(isAfkProfitTarget).map((e) => ({
             ...e,
             score: scoreEnemyOpportunity(e) ?? -Infinity,
             staminaCost: opportunityEnemyStaminaCost(e),
@@ -24830,7 +24831,7 @@
           combatMovementBlockedByStamina = () => false,
           staminaBudgetCoinLeaveSummary = () => "",
           staminaExhaustedWindowLabel = () => "",
-          isInvulnerable: isInvulnerable2 = () => false,
+          isInvulnerable = () => false,
           isCurrentlyActive = () => false,
           isFiringEntity = () => false,
           isMovingThreat = () => false,
@@ -24881,7 +24882,7 @@
           cfg,
           staminaBudgetCoinLeaveSummary,
           staminaExhaustedWindowLabel,
-          isInvulnerable: isInvulnerable2,
+          isInvulnerable,
           isCurrentlyActive,
           isFiringEntity,
           isMovingThreat,
@@ -24932,6 +24933,7 @@
           staminaRemaining,
           staminaExhaustedThreshold,
           combatMovementBlockedByStamina,
+          isInvulnerable,
           isCurrentlyActive,
           isFiringEntity,
           isMovingThreat,
@@ -24950,7 +24952,7 @@
           clamp,
           staminaRemaining,
           staminaExhaustedThreshold,
-          isInvulnerable: isInvulnerable2,
+          isInvulnerable,
           isCurrentlyActive,
           isFiringEntity,
           hpValue,
@@ -24974,7 +24976,7 @@
           staminaRemaining,
           staminaExhaustedThreshold,
           combatMovementBlockedByStamina,
-          isInvulnerable: isInvulnerable2,
+          isInvulnerable,
           isCurrentlyActive,
           isFiringEntity,
           hpValue,
@@ -25714,7 +25716,7 @@
           isCurrentlyActive,
           isFiringEntity,
           isFullHp,
-          isInvulnerable: isInvulnerable2,
+          isInvulnerable,
           isInvulnerableActive,
           isRecovering,
           isWhitelistedTarget,
@@ -25968,14 +25970,14 @@
           const attackableEntities = offensiveEntities.filter((e) => !isWhitelistedTarget(e));
           const realtimeEntities = attackableEntities.filter((e) => e.native && !e.minimapOnly);
           const activeThreats = entities.filter((e) => isCurrentlyActive(e)).map((e) => decorateActiveThreat(self, e)).sort((a, b) => a.distance - b.distance);
-          const inactiveTargets = attackableEntities.filter((e) => !isCurrentlyActive(e) && dropValue(e) > 0 && !isInvulnerable2(e)).map((e) => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e) })).filter((e) => e.distance <= cfg.attackRange).sort((a, b) => {
+          const inactiveTargets = attackableEntities.filter((e) => !isCurrentlyActive(e) && dropValue(e) > 0 && !isInvulnerable(e)).map((e) => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e) })).filter((e) => e.distance <= cfg.attackRange).sort((a, b) => {
             const stickyA = bot.lastTarget && String(bot.lastTarget.kind) === "enemy" && String(bot.lastTarget.id) === String(a.user_id);
             const stickyB = bot.lastTarget && String(bot.lastTarget.kind) === "enemy" && String(bot.lastTarget.id) === String(b.user_id);
             if (stickyA !== stickyB && now2() - bot.lastTargetAt < cfg.targetStickMs) return stickyA ? -1 : 1;
             if (b.drop !== a.drop) return b.drop - a.drop;
             return a.distance - b.distance;
           });
-          const realtimeInactiveTargets = realtimeEntities.filter((e) => !isCurrentlyActive(e) && dropValue(e) > 0 && !isInvulnerable2(e)).map((e) => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e) })).filter((e) => e.distance <= cfg.attackRange).sort((a, b) => {
+          const realtimeInactiveTargets = realtimeEntities.filter((e) => !isCurrentlyActive(e) && dropValue(e) > 0 && !isInvulnerable(e)).map((e) => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e) })).filter((e) => e.distance <= cfg.attackRange).sort((a, b) => {
             const stickyA = bot.lastTarget && String(bot.lastTarget.kind) === "enemy" && String(bot.lastTarget.id) === String(a.user_id);
             const stickyB = bot.lastTarget && String(bot.lastTarget.kind) === "enemy" && String(bot.lastTarget.id) === String(b.user_id);
             if (stickyA !== stickyB && now2() - bot.lastTargetAt < cfg.targetStickMs) return stickyA ? -1 : 1;
@@ -25992,11 +25994,11 @@
           });
           const realtimeCoins = allCoins.filter((c) => !isSnapshotOnlyCoin(c));
           const realtimeNearCoins = coins.filter((c) => !isSnapshotOnlyCoin(c));
-          const globalTargets = attackableEntities.filter((e) => !isCurrentlyActive(e) && dropValue(e) > 0 && !isInvulnerable2(e)).map((e) => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e), global: true })).filter((e) => e.distance <= cfg.globalAttackMaxDistance).sort((a, b) => {
+          const globalTargets = attackableEntities.filter((e) => !isCurrentlyActive(e) && dropValue(e) > 0 && !isInvulnerable(e)).map((e) => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e), global: true })).filter((e) => e.distance <= cfg.globalAttackMaxDistance).sort((a, b) => {
             if (b.drop !== a.drop) return b.drop - a.drop;
             return a.distance - b.distance;
           });
-          const realtimeGlobalTargets = realtimeEntities.filter((e) => !isCurrentlyActive(e) && dropValue(e) > 0 && !isInvulnerable2(e)).map((e) => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e), global: false })).filter((e) => e.distance <= cfg.globalAttackMaxDistance).sort((a, b) => {
+          const realtimeGlobalTargets = realtimeEntities.filter((e) => !isCurrentlyActive(e) && dropValue(e) > 0 && !isInvulnerable(e)).map((e) => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e), global: false })).filter((e) => e.distance <= cfg.globalAttackMaxDistance).sort((a, b) => {
             if (b.drop !== a.drop) return b.drop - a.drop;
             return a.distance - b.distance;
           });
@@ -26029,7 +26031,7 @@
           const realtimeScanCoins = scanCoins.filter((c) => !isSnapshotOnlyCoin(c));
           const nearbyHumans = entities.map((e) => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e) })).sort((a, b) => a.distance - b.distance);
           const combatCandidateRange = combatTargetCandidateRange(self);
-          const combatTargets = attackableEntities.map((e) => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e), hp: combatHpValue(e), knownHp: knownHpValue(e) })).filter((e) => !isInvulnerable2(e)).filter((e) => e.native).filter((e) => e.distance <= combatCandidateRange).sort((a, b) => {
+          const combatTargets = attackableEntities.map((e) => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e), hp: combatHpValue(e), knownHp: knownHpValue(e) })).filter((e) => !isInvulnerable(e)).filter((e) => e.native).filter((e) => e.distance <= combatCandidateRange).sort((a, b) => {
             const stickyA = bot.lastTarget?.kind === "enemy" && String(bot.lastTarget.id) === String(a.user_id);
             const stickyB = bot.lastTarget?.kind === "enemy" && String(bot.lastTarget.id) === String(b.user_id);
             if (stickyA !== stickyB && now2() - bot.lastTargetAt < cfg.targetStickMs) return stickyA ? -1 : 1;
@@ -26037,7 +26039,7 @@
             return a.distance - b.distance;
           });
           const combatDodgeOnlyCandidateRangeValue = combatDodgeOnlyCandidateRange(self);
-          const combatDodgeOnlyTargets = attackableEntities.map((e) => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e), hp: combatHpValue(e), knownHp: knownHpValue(e) })).filter((e) => !isInvulnerable2(e)).filter((e) => e.native).filter((e) => e.distance > combatCandidateRange).filter((e) => e.distance <= combatDodgeOnlyCandidateRangeValue).map((e) => ({ ...e, combatDodgeOnlyCandidate: true })).sort((a, b) => a.distance - b.distance);
+          const combatDodgeOnlyTargets = attackableEntities.map((e) => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e), hp: combatHpValue(e), knownHp: knownHpValue(e) })).filter((e) => !isInvulnerable(e)).filter((e) => e.native).filter((e) => e.distance > combatCandidateRange).filter((e) => e.distance <= combatDodgeOnlyCandidateRangeValue).map((e) => ({ ...e, combatDodgeOnlyCandidate: true })).sort((a, b) => a.distance - b.distance);
           const snapshotCoins = allCoins.filter((c) => isSnapshotOnlyCoin(c) && c.distance <= cfg.snapshotCoinMaxDistance);
           return {
             entities,
@@ -26172,7 +26174,7 @@
               combatIntent: coinThreats[0].combatIntent || "",
               incomingBulletOwnerId: safetyIncomingOwnerId !== null && safetyIncomingOwnerId !== void 0 && String(safetyIncomingOwnerId) === String(coinThreats[0].user_id) ? String(safetyIncomingOwnerId) : "",
               mode: coinThreats[0].current_join_mode || coinThreats[0].mode || "",
-              invulnerable: isInvulnerable2(coinThreats[0])
+              invulnerable: isInvulnerable(coinThreats[0])
             } : null,
             conservingStamina: isConservingStamina(self)
           };
@@ -26247,7 +26249,7 @@
               dx: flee.dx,
               dy: flee.dy,
               locked: flee.locked,
-              threats: closeThreats.slice(0, 4).map((e) => ({ id: e.user_id, name: e.name, d: Math.round(e.distance), drop: e.drop, speed: Math.round(e.speed), moving: Boolean(e.moving), invulnerable: isInvulnerable2(e), r: Math.round(e.threatRadius) }))
+              threats: closeThreats.slice(0, 4).map((e) => ({ id: e.user_id, name: e.name, d: Math.round(e.distance), drop: e.drop, speed: Math.round(e.speed), moving: Boolean(e.moving), invulnerable: isInvulnerable(e), r: Math.round(e.threatRadius) }))
             };
           }
           if (fullHp && cautionThreats.length) {
@@ -26258,7 +26260,7 @@
               dx: flee.dx,
               dy: flee.dy,
               locked: flee.locked,
-              threats: cautionThreats.slice(0, 4).map((e) => ({ id: e.user_id, name: e.name, d: Math.round(e.distance), drop: e.drop, speed: Math.round(e.speed), moving: Boolean(e.moving), invulnerable: isInvulnerable2(e), r: Math.round(e.cautionRadius) }))
+              threats: cautionThreats.slice(0, 4).map((e) => ({ id: e.user_id, name: e.name, d: Math.round(e.distance), drop: e.drop, speed: Math.round(e.speed), moving: Boolean(e.moving), invulnerable: isInvulnerable(e), r: Math.round(e.cautionRadius) }))
             };
           }
           if (!recovery && defensiveCombatTarget) {
@@ -26394,7 +26396,7 @@
               dx: flee.dx,
               dy: flee.dy,
               locked: flee.locked,
-              threats: nearbyAvoidanceThreats.slice(0, 4).map((e) => ({ id: e.user_id, name: e.name, d: Math.round(e.distance), mode: e.current_join_mode, drop: e.drop, speed: Math.round(e.speed), invulnerable: isInvulnerable2(e) }))
+              threats: nearbyAvoidanceThreats.slice(0, 4).map((e) => ({ id: e.user_id, name: e.name, d: Math.round(e.distance), mode: e.current_join_mode, drop: e.drop, speed: Math.round(e.speed), invulnerable: isInvulnerable(e) }))
             };
           }
           if (recovery && nearCoin) {
@@ -26559,7 +26561,7 @@
                 const distance = Number(raw.distance ?? Infinity);
                 if (!drop || !Number.isFinite(distance) || distance > cfg.attackApproachRange) continue;
                 if (isWhitelistedTarget(raw)) continue;
-                if (isInvulnerable2(raw)) continue;
+                if (isInvulnerable(raw)) continue;
                 if (!attackWorthTakingCore(candidateSelf, { ...raw, drop }, {
                   isWhitelistedTarget,
                   dropValue,
@@ -26773,7 +26775,7 @@
           isCurrentlyActive,
           isFiringEntity,
           isFullHp,
-          isInvulnerable: isInvulnerable2,
+          isInvulnerable,
           isInvulnerableActive,
           isRecovering,
           isWhitelistedTarget,
@@ -28034,7 +28036,7 @@
           isCurrentlyActive,
           isFiringEntity,
           isFullHp,
-          isInvulnerable: isInvulnerable2,
+          isInvulnerable,
           isInvulnerableActive,
           isRecovering,
           isSnapshotCoinWaitAction,
@@ -28481,7 +28483,7 @@
           isAlive,
           dropValue,
           truthyFlag,
-          isInvulnerable: isInvulnerable2,
+          isInvulnerable,
           isJoinModeActive,
           isInvulnerableActive,
           staminaRemaining,
@@ -28764,7 +28766,7 @@
           isCurrentlyActive,
           isMovingThreat,
           isFiringEntity,
-          isInvulnerable: isInvulnerable2,
+          isInvulnerable,
           getNativeEntityList: () => getNativeEntityList(),
           normalizeBullet: (...args) => normalizeBullet(...args),
           getBullets: () => getBullets(),
@@ -28976,7 +28978,7 @@
           snapshotSelfFreshEnough: (...args) => snapshotSelfFreshEnough(...args),
           isOfflineishWsReadyState: (...args) => isOfflineishWsReadyState(...args),
           isAlive,
-          isInvulnerable: isInvulnerable2,
+          isInvulnerable,
           isJoinModeActive,
           isFiringEntity,
           isMovingThreat,
@@ -29515,7 +29517,7 @@
           staminaExhaustedThreshold,
           staminaBudgetReloginDelayMs,
           isInvulnerableActive,
-          isInvulnerable: isInvulnerable2,
+          isInvulnerable,
           isCurrentlyActive,
           isFiringEntity,
           isAfkProfitTarget,
@@ -29664,7 +29666,7 @@
           combatMovementBlockedByStamina,
           staminaBudgetCoinLeaveSummary,
           staminaExhaustedWindowLabel,
-          isInvulnerable: isInvulnerable2,
+          isInvulnerable,
           isCurrentlyActive,
           isFiringEntity,
           isMovingThreat,
@@ -29812,7 +29814,7 @@
           isCurrentlyActive,
           isFiringEntity,
           isFullHp,
-          isInvulnerable: isInvulnerable2,
+          isInvulnerable,
           isInvulnerableActive,
           isRecovering,
           isSnapshotCoinWaitAction,

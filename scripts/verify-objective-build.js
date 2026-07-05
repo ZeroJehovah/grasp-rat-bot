@@ -975,6 +975,7 @@ async function main() {
     assert(runtimeCombatSource.includes('createCombatMovementRuntime({'), 'combat runtime does not create movement runtime bindings');
     assert(/createCombatMovementRuntime\(\{[\s\S]*?\bdropValue,/.test(runtimeCombatSource), 'combat runtime does not pass dropValue into movement runtime');
     assert(/createCombatMovementRuntime\(\{[\s\S]*?\bspeed,/.test(runtimeCombatSource), 'combat runtime does not pass speed into movement runtime');
+    assert(/createCombatMovementRuntime\(\{[\s\S]*?\bisInvulnerable,/.test(runtimeCombatSource), 'combat runtime does not pass isInvulnerable into movement runtime');
     assert(runtimeCombatSource.includes('createCombatAimRuntime({'), 'combat runtime does not create aim runtime bindings');
     assert(runtimeCombatSource.includes('createCombatActionRuntime({'), 'combat runtime does not create action runtime bindings');
     assert(!/function\s+rememberCombatEngagement\s*\(/.test(runtimeCombatSource), 'combat runtime still owns combat engagement body');
@@ -998,6 +999,7 @@ async function main() {
     assert(runtimeCombatMovementSource.includes('function createCombatMovementRuntime'), 'combat movement runtime factory missing');
     assert(factoryRuntimeDestructuringFields(runtimeCombatMovementSource, 'createCombatMovementRuntime').some(field => /^dropValue\b/.test(field)), 'combat movement runtime does not receive dropValue dependency');
     assert(factoryRuntimeDestructuringFields(runtimeCombatMovementSource, 'createCombatMovementRuntime').some(field => /^speed\b/.test(field)), 'combat movement runtime does not receive speed dependency');
+    assert(factoryRuntimeDestructuringFields(runtimeCombatMovementSource, 'createCombatMovementRuntime').some(field => /^isInvulnerable\b/.test(field)), 'combat movement runtime does not receive isInvulnerable dependency');
     assert(runtimeCombatMovementSource.includes('function incomingBulletThreat'), 'incoming bullet threat missing from combat movement module');
     assert(runtimeCombatMovementSource.includes('function combatPressureThreat'), 'combat pressure threat missing from combat movement module');
     assert(runtimeCombatMovementSource.includes('function combatOutOfRangeDodgeAction'), 'combat out-of-range dodge action missing from combat movement module');
