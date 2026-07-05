@@ -6,7 +6,7 @@ Update this file for every remote bot release or handoff-relevant state change. 
 
 - Latest remote bot: `bootstrap-0.4.564`.
 - Latest manifest SHA-256: `63a65abbdbc8f1d5237132e639baa310f9a28060146fd0785f38a6d7b4942289`.
-- Latest remote release commit: `pending` (`bootstrap-0.4.564` use close passive-runner live precision).
+- Latest remote release commit: `bcca0c9` (`bootstrap-0.4.564` use close passive-runner live precision).
 - Latest bootstrap A versions: Tampermonkey `0.4.74`, extension `0.1.53`.
 - Latest direct entry/config SHA-256: `55caa34d5bec1c746d0d8eb4703f1dabc183b7e20416e1f11fc79832ce3310fc`.
 
