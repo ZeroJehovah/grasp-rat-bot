@@ -4,14 +4,15 @@ Update this file for every remote bot release or handoff-relevant state change. 
 
 ## Latest Release
 
-- Latest remote bot: `bootstrap-0.4.554`.
-- Latest manifest SHA-256: `a8d4e202545dd12ce44e580d7ed3351335aaa575190c9ffdeb8845101e71ab1e`.
-- Latest remote release commit: `1103557` (`bootstrap-0.4.554` defer stop-motion exit binding).
+- Latest remote bot: `bootstrap-0.4.555`.
+- Latest manifest SHA-256: `a7f98552f05ee4c5dc7059577460b328ca8e12d918414542295e5c955b9122a5`.
+- Latest remote release commit: `9a8900e` (`bootstrap-0.4.555` restore control-flow wiring).
 - Latest bootstrap A versions: Tampermonkey `0.4.73`, extension `0.1.52`.
-- Latest direct entry/config SHA-256: `67716c29cfb8069c23c1b864b80a4f9b0468c527567075a8a35aea405b2c5fb1`.
+- Latest direct entry/config SHA-256: `10e021b785fa2de606085746beecd34ebe4afb4a529f378f571909a4e0d3e741`.
 
 ## Current Handoff
 
+- `bootstrap-0.4.555` restores the control-flow dependencies for `newExitAuditRequestId` and `syncPausedFromPage`; the control-flow runtime now instantiates cleanly with stub dependencies and should no longer fail with `newExitAuditRequestId is not defined`.
 - `bootstrap-0.4.554` defers the control-flow `stopMotionAfterExit` dependency until native state initializes it; remote startup should no longer fail with `Cannot access 'stopMotionAfterExit' before initialization`.
 - `bootstrap-0.4.553` restores the combat-log session boundary helpers that were dropped during the logging runtime split; remote startup should no longer fail with `startCombatLogSession is not defined`.
 - The runtime refactoring result is accepted as complete.
@@ -31,7 +32,7 @@ Update this file for every remote bot release or handoff-relevant state change. 
 
 ## Latest Validation Baseline
 
-The latest `bootstrap-0.4.554` release validation passed:
+The latest `bootstrap-0.4.555` release validation passed:
 
 ```bash
 node grasp-rat-bot.js --self-test
@@ -48,7 +49,7 @@ node --check extension/popup.js
 cd combat-log-service && npm test
 npm run test:runtime-helper-entry
 npm run test:remote-bundled
-node scripts/build-remote-bot.js --version bootstrap-0.4.554
+node scripts/build-remote-bot.js --version bootstrap-0.4.555
 node scripts/verify-objective-build.js
 git diff --check
 ```
