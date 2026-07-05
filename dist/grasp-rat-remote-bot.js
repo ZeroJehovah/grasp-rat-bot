@@ -12,7 +12,7 @@
   var define_GRASP_RAT_RUNTIME_CONFIG_default;
   var init_define_GRASP_RAT_RUNTIME_CONFIG = __esm({
     "<define:__GRASP_RAT_RUNTIME_CONFIG__>"() {
-      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.567" };
+      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.568" };
     }
   });
 
@@ -10727,6 +10727,7 @@
           const snapshotExitRecovery = activeNoSelfSnapshotRecoveryStateCore(localStorage2, userId, { key: NO_SELF_SNAPSHOT_RECOVERY_KEY });
           if (snapshotExitRecovery && hasAliveSelf) clearNoSelfSnapshotRecoveryStateCore(localStorage2, { key: NO_SELF_SNAPSHOT_RECOVERY_KEY, reason: "self restored before login" });
           const ignoreStalePageSession = Boolean(snapshotExitRecovery && !hasAliveSelf);
+          const shouldIgnoreSuppress = Boolean(ignoreSuppress || ignoreStalePageSession);
           const currentStartLinuxDoLogin = readPageGlobal("startLinuxDoLogin", null, pageGlobal);
           const canStartLogin = Boolean(loginControl || typeof currentStartLinuxDoLogin === "function");
           const effectiveHasToken = ignoreStalePageSession ? false : hasToken;
@@ -10778,7 +10779,7 @@
             bot.importantLogging.lastManualLoginBypass = importantSessionEndFlushBlockDetail("manual-login:" + (reason || ""));
           }
           const suppressRemainingMs = loginSuppressRemainingMs();
-          if (suppressRemainingMs > 0 && !ignoreSuppress) {
+          if (suppressRemainingMs > 0 && !shouldIgnoreSuppress) {
             return {
               needed: true,
               attempted: false,
@@ -10856,7 +10857,7 @@
             loginRequired,
             forced: force,
             manualLoginBypass: manualOverride,
-            ignoredSuppressMs: ignoreSuppress ? Math.round(suppressRemainingMs) : 0,
+            ignoredSuppressMs: shouldIgnoreSuppress ? Math.round(suppressRemainingMs) : 0,
             snapshotGate,
             liveSessionTakeover,
             snapshotGateBypassed: Boolean(snapshotGate.liveSessionTakeoverBypass),
@@ -10871,7 +10872,11 @@
             const startLinuxDoLoginFn = readPageGlobal("startLinuxDoLogin", null, pageGlobal);
             const startLoginFn = rawStartLinuxDoLogin || (typeof startLinuxDoLoginFn === "function" ? startLinuxDoLoginFn : null);
             if (manualOverride) markManualLoginBypass(String(reason || "manual login"));
-            if (typeof startLoginFn === "function") {
+            if (ignoreStalePageSession && loginControl) {
+              loginControl.click();
+              detail.attempted = true;
+              detail.method = loginControl.id ? "#" + loginControl.id : controlText(loginControl) || loginControl.tagName.toLowerCase();
+            } else if (typeof startLoginFn === "function") {
               const result = startLoginFn.call(pageGlobal);
               if (result && typeof result.then === "function") await result;
               detail.attempted = true;
@@ -10887,7 +10892,7 @@
           } catch (err) {
             detail.error = err?.message || String(err);
           }
-          if (detail.attempted && !detail.error) setLoginSuppress("bot login started", cfg.postLoginGraceMs);
+          if (detail.attempted && !detail.error) setLoginSuppress("bot login started", ignoreStalePageSession ? Math.max(1e3, Number(cfg.loginCooldownMs || 5e3) || 5e3) : cfg.postLoginGraceMs);
           bot.lastLoginResult = detail;
           return detail;
         }
@@ -27770,7 +27775,7 @@
                 return;
               }
               const login = await maybeStartAutoLogin(self ? "not-alive" : "no-self");
-              const gameSessionPending = !self && controlHasNativeGameSession(control);
+              const gameSessionPending = !self && !noSelfExit?.snapshotExitRecovery && controlHasNativeGameSession(control);
               const waitReason = login?.attempted ? "auto-login" : login?.needed ? login?.reason === "snapshot-gate" ? "login-snapshot-gate" : login?.error ? "login-control-missing" : login?.reason === "suppressed" ? "login-suppressed" : login?.reason === "exit-log-flush-pending" ? "exit-log-flush-pending" : login?.reason === "important-log-flush-pending" ? "important-log-flush-pending" : login?.reason === "session-mismatch-recovery" ? "session-mismatch-recovery" : "login-cooldown" : noSelfExit?.sessionMismatch ? "session-mismatch-recovery" : gameSessionPending ? "game-session-connecting" : self ? "not-alive" : "no-self";
               const loginDisplayReason = waitReason === "game-session-connecting" ? "\u5DF2\u767B\u5F55\uFF0C\u7B49\u5F85\u6E38\u620F\u8FDE\u63A5/\u81EA\u8EAB\u5B9E\u4F53" : waitReason === "session-mismatch-recovery" ? "\u754C\u9762\u663E\u793A\u672A\u767B\u5F55\u4F46\u539F\u751F\u4F1A\u8BDD\u4ECD\u5728\u7EBF\uFF0C\u7B49\u5F85\u5B89\u5168\u91CD\u767B" : waitReason === "exit-log-flush-pending" ? "\u7B49\u5F85\u9000\u51FA\u65E5\u5FD7\u53D1\u9001\u5B8C\u6210\uFF0C\u6682\u4E0D\u5237\u65B0\u6216\u91CD\u65B0\u767B\u5F55" : waitReason === "important-log-flush-pending" ? "\u7B49\u5F85\u4F1A\u8BDD\u7ED3\u675F\u65E5\u5FD7\u53D1\u9001\u5B8C\u6210\uFF0C\u6682\u4E0D\u5237\u65B0\u6216\u91CD\u65B0\u767B\u5F55" : waitReason === "login-snapshot-gate" ? loginSnapshotGateDisplayReason(login?.snapshotGate) : waitReason === "login-suppressed" ? "\u7B49\u5F85\u91CD\u8FDE\uFF1A" + (login?.suppressReason || "login suppressed") + (Number(login?.cooldownRemainingMs || 0) > 0 ? "\uFF0C\u5269\u4F59" + formatDurationMs(login.cooldownRemainingMs) : "") : "";
               refreshGlobalState(false).catch((err) => {

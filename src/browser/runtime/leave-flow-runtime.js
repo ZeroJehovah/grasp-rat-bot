@@ -361,6 +361,7 @@ function createLeaveFlowRuntime(runtime = {}) {
     const snapshotExitRecovery = activeNoSelfSnapshotRecoveryStateCore(localStorage, userId, { key: NO_SELF_SNAPSHOT_RECOVERY_KEY });
     if (snapshotExitRecovery && hasAliveSelf) clearNoSelfSnapshotRecoveryStateCore(localStorage, { key: NO_SELF_SNAPSHOT_RECOVERY_KEY, reason: 'self restored before login' });
     const ignoreStalePageSession = Boolean(snapshotExitRecovery && !hasAliveSelf);
+    const shouldIgnoreSuppress = Boolean(ignoreSuppress || ignoreStalePageSession);
     const currentStartLinuxDoLogin = readPageGlobal('startLinuxDoLogin', null, pageGlobal);
     const canStartLogin = Boolean(loginControl || typeof currentStartLinuxDoLogin === 'function');
     const effectiveHasToken = ignoreStalePageSession ? false : hasToken;
@@ -416,7 +417,7 @@ function createLeaveFlowRuntime(runtime = {}) {
 	      bot.importantLogging.lastManualLoginBypass = importantSessionEndFlushBlockDetail('manual-login:' + (reason || ''));
 	    }
 	    const suppressRemainingMs = loginSuppressRemainingMs();
-    if (suppressRemainingMs > 0 && !ignoreSuppress) {
+    if (suppressRemainingMs > 0 && !shouldIgnoreSuppress) {
       return {
         needed: true,
         attempted: false,
@@ -496,7 +497,7 @@ function createLeaveFlowRuntime(runtime = {}) {
 	      loginRequired,
 	      forced: force,
 	      manualLoginBypass: manualOverride,
-	      ignoredSuppressMs: ignoreSuppress ? Math.round(suppressRemainingMs) : 0,
+	      ignoredSuppressMs: shouldIgnoreSuppress ? Math.round(suppressRemainingMs) : 0,
 	      snapshotGate,
 	      liveSessionTakeover,
 	      snapshotGateBypassed: Boolean(snapshotGate.liveSessionTakeoverBypass),
@@ -515,7 +516,11 @@ function createLeaveFlowRuntime(runtime = {}) {
       const startLinuxDoLoginFn = readPageGlobal('startLinuxDoLogin', null, pageGlobal);
       const startLoginFn = rawStartLinuxDoLogin || (typeof startLinuxDoLoginFn === 'function' ? startLinuxDoLoginFn : null);
       if (manualOverride) markManualLoginBypass(String(reason || 'manual login'));
-      if (typeof startLoginFn === 'function') {
+      if (ignoreStalePageSession && loginControl) {
+        loginControl.click();
+        detail.attempted = true;
+        detail.method = loginControl.id ? '#' + loginControl.id : (controlText(loginControl) || loginControl.tagName.toLowerCase());
+      } else if (typeof startLoginFn === 'function') {
         const result = startLoginFn.call(pageGlobal);
         if (result && typeof result.then === 'function') await result;
         detail.attempted = true;
@@ -531,7 +536,7 @@ function createLeaveFlowRuntime(runtime = {}) {
     } catch (err) {
       detail.error = err?.message || String(err);
     }
-    if (detail.attempted && !detail.error) setLoginSuppress('bot login started', cfg.postLoginGraceMs);
+    if (detail.attempted && !detail.error) setLoginSuppress('bot login started', ignoreStalePageSession ? Math.max(1000, Number(cfg.loginCooldownMs || 5000) || 5000) : cfg.postLoginGraceMs);
     bot.lastLoginResult = detail;
     return detail;
   }
