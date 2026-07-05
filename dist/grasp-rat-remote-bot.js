@@ -12,7 +12,7 @@
   var define_GRASP_RAT_RUNTIME_CONFIG_default;
   var init_define_GRASP_RAT_RUNTIME_CONFIG = __esm({
     "<define:__GRASP_RAT_RUNTIME_CONFIG__>"() {
-      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.555" };
+      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.556" };
     }
   });
 
@@ -20259,7 +20259,7 @@
           const reserve = staminaExhaustedThreshold() + Math.max(0, Number(cfg.opportunityLongStaminaReserveMs || 0));
           return Math.max(0, remaining - reserve);
         }
-        function opportunityLongStaminaBudget2(self) {
+        function opportunityLongStaminaBudget(self) {
           const values = ["1h", "1d"].map((key) => opportunityWindowStaminaBudget(self, key)).filter((value) => Number.isFinite(value));
           if (!values.length) return Infinity;
           return Math.min(...values);
@@ -20267,7 +20267,7 @@
         function opportunityStaminaAffordable(self, staminaCost) {
           const cost = Number(staminaCost);
           if (!Number.isFinite(cost) || cost <= 0) return true;
-          const budget = opportunityLongStaminaBudget2(self);
+          const budget = opportunityLongStaminaBudget(self);
           return !Number.isFinite(budget) || cost <= budget;
         }
         function dailyStaminaFinalCoinAction(self, coin) {
@@ -20718,7 +20718,7 @@
           estimatedKillShots,
           opportunityEnemyStaminaCost,
           opportunityWindowStaminaBudget,
-          opportunityLongStaminaBudget: opportunityLongStaminaBudget2,
+          opportunityLongStaminaBudget,
           opportunityStaminaAffordable,
           dailyStaminaFinalCoinAction,
           staminaBudgetCoinLeaveSummary,
@@ -23838,6 +23838,7 @@
           summarizeControl = () => null,
           dist = () => Infinity,
           speed: speed2 = () => 0,
+          opportunityLongStaminaBudget = () => Infinity,
           scoreEnemyOpportunity = () => -Infinity,
           opportunityEnemyStaminaCost = () => Infinity,
           estimatedKillShots = () => 0,
@@ -24864,7 +24865,7 @@
           },
           summarizeControl = () => null,
           directionTo: directionTo2 = () => ({ dx: 0, dy: 0, distance: Infinity }),
-          opportunityLongStaminaBudget: opportunityLongStaminaBudget2 = () => Infinity,
+          opportunityLongStaminaBudget = () => Infinity,
           scoreEnemyOpportunity = () => -Infinity,
           opportunityEnemyStaminaCost = () => Infinity,
           estimatedKillShots = () => 0,
@@ -24906,6 +24907,7 @@
           summarizeControl,
           dist,
           speed: speed2,
+          opportunityLongStaminaBudget,
           scoreEnemyOpportunity,
           opportunityEnemyStaminaCost,
           estimatedKillShots,
@@ -25821,7 +25823,7 @@
           opportunityChoiceCoreOptions,
           opportunityCoinStaminaCost,
           opportunityEnemyStaminaCost,
-          opportunityLongStaminaBudget: opportunityLongStaminaBudget2,
+          opportunityLongStaminaBudget,
           opportunityPriorityTier,
           opportunityWindowStaminaBudget,
           pickBestOpportunity,
@@ -26684,7 +26686,7 @@
           bot.lastSnapshotCoinWaitAgeMs = 0;
           const hasRealtimeCoinForBudgetWait = (realtimeCoins || []).some((coin) => Number(coin?.amount || 0) > 0);
           const staminaBlocked = hasRealtimeCoinForBudgetWait ? summarizeBlockedStaminaOpportunityCore(realtimeCoins, [], {
-            budget: opportunityLongStaminaBudget2(self),
+            budget: opportunityLongStaminaBudget(self),
             coinStaminaCost: opportunityCoinStaminaCost,
             enemyStaminaCost: opportunityEnemyStaminaCost,
             targetDrop: dropValue2
@@ -26880,7 +26882,7 @@
           opportunityChoiceCoreOptions,
           opportunityCoinStaminaCost,
           opportunityEnemyStaminaCost,
-          opportunityLongStaminaBudget: opportunityLongStaminaBudget2,
+          opportunityLongStaminaBudget,
           opportunityPriorityTier,
           opportunityWindowStaminaBudget,
           pickBestOpportunity,
@@ -28055,7 +28057,7 @@
           opportunityChoiceCoreOptions,
           opportunityCoinStaminaCost,
           opportunityEnemyStaminaCost,
-          opportunityLongStaminaBudget: opportunityLongStaminaBudget2,
+          opportunityLongStaminaBudget,
           opportunityPriorityTier,
           opportunityWindowStaminaBudget,
           pageGlobal,
@@ -29356,7 +29358,7 @@
           estimatedKillShots,
           opportunityEnemyStaminaCost,
           opportunityWindowStaminaBudget,
-          opportunityLongStaminaBudget: opportunityLongStaminaBudget2,
+          opportunityLongStaminaBudget,
           opportunityStaminaAffordable,
           dailyStaminaFinalCoinAction,
           staminaBudgetCoinLeaveSummary,
@@ -29688,7 +29690,7 @@
           updateBotPanel: (...args) => updateBotPanel(...args),
           summarizeControl: (...args) => summarizeControl(...args),
           directionTo: directionTo2,
-          opportunityLongStaminaBudget: opportunityLongStaminaBudget2,
+          opportunityLongStaminaBudget,
           scoreEnemyOpportunity,
           opportunityEnemyStaminaCost,
           estimatedKillShots,
@@ -29833,7 +29835,7 @@
           opportunityChoiceCoreOptions,
           opportunityCoinStaminaCost,
           opportunityEnemyStaminaCost,
-          opportunityLongStaminaBudget: opportunityLongStaminaBudget2,
+          opportunityLongStaminaBudget,
           opportunityPriorityTier,
           opportunityWindowStaminaBudget,
           pageGlobal,

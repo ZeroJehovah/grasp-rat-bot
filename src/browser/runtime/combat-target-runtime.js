@@ -36,6 +36,7 @@ function createCombatTargetRuntime(runtime = {}) {
     summarizeControl = () => null,
     dist = () => Infinity,
     speed = () => 0,
+    opportunityLongStaminaBudget = () => Infinity,
     scoreEnemyOpportunity = () => -Infinity,
     opportunityEnemyStaminaCost = () => Infinity,
     estimatedKillShots = () => 0,
