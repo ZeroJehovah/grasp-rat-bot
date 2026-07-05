@@ -571,7 +571,7 @@ function createOrchestrationTickRuntime(runtime = {}) {
           return;
         }
         const login = await maybeStartAutoLogin(self ? 'not-alive' : 'no-self');
-        const gameSessionPending = !self && controlHasNativeGameSession(control);
+        const gameSessionPending = !self && !noSelfExit?.snapshotExitRecovery && controlHasNativeGameSession(control);
         const waitReason = login?.attempted
           ? 'auto-login'
           : (login?.needed

@@ -309,11 +309,11 @@ async function printSource() {
 }
 
 if (options.selfTest) {
-  runSelfTest();
-  process.exit(0);
-}
-
-if (options.printSource) {
+  Promise.resolve(runSelfTest()).then(() => process.exit(0)).catch((err) => {
+    console.error(err.stack || err.message);
+    process.exit(1);
+  });
+} else if (options.printSource) {
   printSource().catch((err) => {
     console.error(err.stack || err.message);
     process.exit(1);

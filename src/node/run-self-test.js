@@ -26,6 +26,9 @@ const {
   createSessionRecoveryRuntime
 } = require('../browser/runtime/session-recovery-runtime');
 const {
+  createLeaveFlowRuntime
+} = require('../browser/runtime/leave-flow-runtime');
+const {
   normalizeTargetWhitelistName,
   parseTargetWhitelistNames,
   deriveTargetWhitelistUrl
@@ -37,7 +40,7 @@ const {
   runStrategyModuleSelfTests
 } = require('../strategy/self-test');
 
-function runSelfTest() {
+async function runSelfTest() {
   const cfg = {
     dangerRadius: 17000,
     activeCautionRadius: 23000,
@@ -9303,6 +9306,74 @@ function runSelfTest() {
       want: 'false|false|false|true|28886'
     },
     {
+      name: 'snapshot no-self recovery marker clicks login control despite stale native session and suppress',
+      got: (async () => {
+        const t = Date.now();
+        const data = new Map([
+          ['graspRatNoSelfSnapshotRecovery', JSON.stringify({
+            reason: 'snapshot-no-self-exit-confirmed',
+            userId: 28886,
+            requestedAt: t,
+            expiresAt: t + 60000
+          })],
+          ['graspRatLoginSuppressUntil', String(t + 30000)],
+          ['graspRatLoginSuppressReason', 'bot login started']
+        ]);
+        const storage = {
+          getItem: key => (data.has(key) ? data.get(key) : null),
+          setItem: (key, value) => data.set(key, String(value)),
+          removeItem: key => data.delete(key)
+        };
+        const button = {
+          id: 'joinBtn',
+          tagName: 'BUTTON',
+          clickCount: 0,
+          click() {
+            this.clickCount += 1;
+          }
+        };
+        const botState = { control: {}, exitAudit: {}, importantLogging: {}, lastLoginAt: 0 };
+        let startCalls = 0;
+        const runtime = createLeaveFlowRuntime({
+          bot: botState,
+          cfg: { ...cfg, autoLogin: true, dryRun: false, once: false, loginCooldownMs: 5000, postLoginGraceMs: 30000 },
+          storage,
+          pageGlobal: {},
+          loginSuppressKey: 'graspRatLoginSuppressUntil',
+          loginSuppressReasonKey: 'graspRatLoginSuppressReason',
+          getCurrentUserId: () => 28886,
+          getSessionToken: () => '',
+          getNativeControl: () => ({ wsReadyState: 0 }),
+          hasNativeGameSession: () => true,
+          findLoginControl: () => button,
+          hasLoginRequiredText: () => false,
+          getSelf: () => null,
+          syncPausedFromPage: () => false,
+          exitAuditFlushPending: () => false,
+          importantSessionEndFlushPending: () => false,
+          readPageGlobal: name => (name === 'startLinuxDoLogin' ? (() => { startCalls += 1; }) : null),
+          loginSuppressRemainingMs: () => Math.max(0, Number(storage.getItem('graspRatLoginSuppressUntil') || 0) - Date.now()),
+          ensureLoginSnapshotGate: async () => ({ satisfied: true }),
+          loginSnapshotGateAllowsLogin: gate => Boolean(gate.satisfied),
+          setLoginSuppress: (reason, ms) => storage.setItem('graspRatLoginSuppressUntil', String(Date.now() + ms)),
+          controlText: () => '立即登录',
+          isAlive: value => Boolean(value?.hp > 0)
+        });
+        const result = await runtime.maybeStartAutoLogin('no-self');
+        return [
+          result?.attempted,
+          result?.method,
+          result?.hasNativeSession,
+          result?.effectiveHasNativeSession,
+          Boolean(result?.snapshotExitRecovery),
+          button.clickCount,
+          startCalls,
+          Math.round((Number(storage.getItem('graspRatLoginSuppressUntil') || 0) - Date.now()) / 1000)
+        ].map(String).join('|');
+      })(),
+      want: 'true|#joinBtn|true|false|true|1|0|5'
+    },
+    {
       name: 'post-exit session mismatch blocks live takeover bypass',
       got: (() => {
         const blockedBy = [];
@@ -9522,7 +9593,12 @@ function runSelfTest() {
 		      want: '1.5米|12米|1小时|#42|13'
 		    }
 			  ];
-  const failed = cases.filter(item => item.got !== item.want);
+  const resolvedCases = [];
+  for (const item of cases) {
+    const got = item.got && typeof item.got.then === 'function' ? await item.got : item.got;
+    resolvedCases.push({ ...item, got });
+  }
+  const failed = resolvedCases.filter(item => item.got !== item.want);
   if (failed.length) {
     console.error(JSON.stringify({ ok: false, failed }, null, 2));
     process.exit(1);
