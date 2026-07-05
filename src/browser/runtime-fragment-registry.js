@@ -46,7 +46,6 @@ const { staminaRuntimeSource } = require('./stamina-runtime-source');
 const { attackWorthSource } = require('./attack-worth-source');
 const { exitMotionSource } = require('./exit-motion-source');
 const { runtimeStateBindingsSource } = require('./runtime-state-bindings-source');
-const { exitReloginSource } = require('./exit-relogin-source');
 const { pendingExitSource } = require('./pending-exit-source');
 const { leaveCommandSource } = require('./leave-command-source');
 const { autoLoginSource } = require('./auto-login-source');
@@ -75,7 +74,6 @@ function browserRuntimeFragmentEntries(config) {
     ['tick-safety', () => tickSafetySource(config)],
     ['control-login-runtime', () => controlLoginSource(config)],
     ['page-native-snapshot', () => pageNativeSnapshotSource(config)],
-    ['exit-relogin', () => exitReloginSource(config)],
     ['pending-exit', () => pendingExitSource(config)],
     ['leave-command', () => leaveCommandSource(config)],
     ['auto-login', autoLoginSource],
