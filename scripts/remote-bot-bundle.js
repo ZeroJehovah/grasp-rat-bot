@@ -4,20 +4,16 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const esbuild = require('esbuild');
-const {
-  remoteRuntimeEntrySource,
-  runtimeEvalEntrySource
-} = require('../src/browser/runtime-entry-source');
 
 const ROOT = path.resolve(__dirname, '..');
-const VIRTUAL_ENTRY_NAMESPACE = 'grasp-rat-virtual-entry';
-const REMOTE_RUNTIME_ENTRY = 'grasp-rat-remote-runtime-entry.js';
-const RUNTIME_EVAL_ENTRY = 'grasp-rat-runtime-eval-entry.js';
+const RUNTIME_ENTRY_POINT = path.join(ROOT, 'src', 'browser', 'runtime-entry.js');
+const RUNTIME_ENTRY_LABEL = 'src/browser/runtime-entry.js';
 const BUNDLER_INFO = Object.freeze({
   name: 'esbuild',
   format: 'iife',
   platform: 'browser',
-  target: 'es2020'
+  target: 'es2020',
+  entry: RUNTIME_ENTRY_LABEL
 });
 
 function buildVersion() {
@@ -37,41 +33,44 @@ function sha256Hex(text) {
   return crypto.createHash('sha256').update(text).digest('hex');
 }
 
-function remoteSourceFor(options) {
-  return remoteRuntimeEntrySource(options);
+function browserRuntimeConfig(options = {}) {
+  const config = {
+    bundledRuntime: true,
+    dryRun: Boolean(options.dryRun),
+    once: Boolean(options.once),
+    statusEvery: options.statusEvery
+  };
+  if (options.version !== undefined) config.version = options.version;
+  if (options.overrides && typeof options.overrides === 'object') {
+    Object.assign(config, options.overrides);
+  }
+  return config;
 }
 
-function escapeRegExp(text) {
-  return String(text).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-function virtualEntryPlugin(entryPath, contents) {
-  const entryFilter = new RegExp(`^${escapeRegExp(entryPath)}$`);
+function runtimeDefineFor(options = {}) {
   return {
-    name: 'grasp-rat-virtual-entry',
-    setup(build) {
-      build.onResolve({ filter: entryFilter }, () => ({
-        path: entryPath,
-        namespace: VIRTUAL_ENTRY_NAMESPACE
-      }));
-      build.onLoad({ filter: entryFilter, namespace: VIRTUAL_ENTRY_NAMESPACE }, () => ({
-        contents,
-        loader: 'js',
-        resolveDir: ROOT
-      }));
-    }
+    __GRASP_RAT_RUNTIME_CONFIG__: JSON.stringify(browserRuntimeConfig(options))
   };
 }
 
-async function bundleVirtualEntry(entryPath, contents, options = {}) {
+function remoteSourceFor(options = {}) {
+  const entrySource = fs.readFileSync(RUNTIME_ENTRY_POINT, 'utf8');
+  return [
+    `// entry: ${RUNTIME_ENTRY_LABEL}`,
+    `// runtimeConfig: ${JSON.stringify(browserRuntimeConfig(options))}`,
+    entrySource
+  ].join('\n');
+}
+
+async function bundleRuntimeEntry(options = {}, bundleOptions = {}) {
   const result = await esbuild.build({
-    entryPoints: [entryPath],
-    plugins: [virtualEntryPlugin(entryPath, contents)],
+    entryPoints: [RUNTIME_ENTRY_POINT],
     bundle: true,
     format: BUNDLER_INFO.format,
-    ...(options.globalName ? { globalName: options.globalName } : {}),
+    ...(bundleOptions.globalName ? { globalName: bundleOptions.globalName } : {}),
     platform: BUNDLER_INFO.platform,
     target: [BUNDLER_INFO.target],
+    define: runtimeDefineFor(options),
     minify: false,
     sourcemap: false,
     legalComments: 'none',
@@ -80,28 +79,28 @@ async function bundleVirtualEntry(entryPath, contents, options = {}) {
   });
   const output = result.outputFiles && result.outputFiles[0];
   if (!output || typeof output.text !== 'string') {
-    throw new Error(`esbuild did not return bundled output for ${entryPath}`);
+    throw new Error(`esbuild did not return bundled output for ${RUNTIME_ENTRY_LABEL}`);
   }
   return output.text;
 }
 
-async function bundleRemoteSource(directSource) {
-  return bundleVirtualEntry(REMOTE_RUNTIME_ENTRY, directSource);
+async function bundleRemoteSource(options = {}) {
+  return bundleRuntimeEntry(options);
 }
 
-async function bundleRuntimeEvalSource(entrySource) {
+async function bundleRuntimeEvalSource(options = {}) {
   const globalName = '__graspRatBotRuntimeEvalBundle';
-  const output = await bundleVirtualEntry(RUNTIME_EVAL_ENTRY, entrySource, { globalName });
-  return `(() => {\n${output}\nreturn ${globalName}.default;\n})()`;
+  const output = await bundleRuntimeEntry(options, { globalName });
+  return `(() => {\n${output}\nreturn ${globalName}.default || ${globalName};\n})()`;
 }
 
 async function browserRuntimeEvalSourceFor(options = {}) {
-  return bundleRuntimeEvalSource(runtimeEvalEntrySource(options));
+  return bundleRuntimeEvalSource(options);
 }
 
 async function bundledRemoteSourceFor(options) {
   const directSource = remoteSourceFor(options);
-  const bundledSource = await bundleRemoteSource(directSource);
+  const bundledSource = await bundleRemoteSource(options);
   const directSha256 = sha256Hex(directSource);
   const sha256 = sha256Hex(bundledSource);
   return {
@@ -124,7 +123,7 @@ function remoteManifestFor(options, bundle, manifestOptions = {}) {
     production: Boolean(manifestOptions.production),
     bundler: {
       ...BUNDLER_INFO,
-      mode: manifestOptions.mode || 'production-runtime-entry-source',
+      mode: manifestOptions.mode || 'production-runtime-entry',
       directSha256: bundle.directSha256
     },
     config: {}
@@ -151,13 +150,14 @@ async function writeRemoteBotBundle(options, manifestOptions = {}) {
 
 module.exports = {
   BUNDLER_INFO,
-  REMOTE_RUNTIME_ENTRY,
-  RUNTIME_EVAL_ENTRY,
+  RUNTIME_ENTRY_LABEL,
+  RUNTIME_ENTRY_POINT,
   buildVersion,
+  browserRuntimeConfig,
   sha256Hex,
+  runtimeDefineFor,
   remoteSourceFor,
-  virtualEntryPlugin,
-  bundleVirtualEntry,
+  bundleRuntimeEntry,
   bundleRemoteSource,
   bundleRuntimeEvalSource,
   browserRuntimeEvalSourceFor,
