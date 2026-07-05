@@ -4,14 +4,15 @@ Update this file for every remote bot release or handoff-relevant state change. 
 
 ## Latest Release
 
-- Latest remote bot: `bootstrap-0.4.553`.
-- Latest manifest SHA-256: `e48bf4eb1d867c9bc33724571d7951f53b9bd2b8c0c983b1c34a08da3133cbdd`.
-- Latest remote release commit: `6393553` (`bootstrap-0.4.553` combat-log session helper restore).
+- Latest remote bot: `bootstrap-0.4.554`.
+- Latest manifest SHA-256: `a8d4e202545dd12ce44e580d7ed3351335aaa575190c9ffdeb8845101e71ab1e`.
+- Latest remote release commit: `1103557` (`bootstrap-0.4.554` defer stop-motion exit binding).
 - Latest bootstrap A versions: Tampermonkey `0.4.73`, extension `0.1.52`.
-- Latest direct entry/config SHA-256: `493ff6da32137ed771000dd61d6451efecbd7c91ae5d29851d03beafa904118b`.
+- Latest direct entry/config SHA-256: `67716c29cfb8069c23c1b864b80a4f9b0468c527567075a8a35aea405b2c5fb1`.
 
 ## Current Handoff
 
+- `bootstrap-0.4.554` defers the control-flow `stopMotionAfterExit` dependency until native state initializes it; remote startup should no longer fail with `Cannot access 'stopMotionAfterExit' before initialization`.
 - `bootstrap-0.4.553` restores the combat-log session boundary helpers that were dropped during the logging runtime split; remote startup should no longer fail with `startCombatLogSession is not defined`.
 - The runtime refactoring result is accepted as complete.
 - The old refactoring-process documents and migration plans have been removed from tracked docs.
@@ -30,7 +31,7 @@ Update this file for every remote bot release or handoff-relevant state change. 
 
 ## Latest Validation Baseline
 
-The latest `bootstrap-0.4.553` release validation passed:
+The latest `bootstrap-0.4.554` release validation passed:
 
 ```bash
 node grasp-rat-bot.js --self-test
@@ -47,7 +48,7 @@ node --check extension/popup.js
 cd combat-log-service && npm test
 npm run test:runtime-helper-entry
 npm run test:remote-bundled
-node scripts/build-remote-bot.js --version bootstrap-0.4.553
+node scripts/build-remote-bot.js --version bootstrap-0.4.554
 node scripts/verify-objective-build.js
 git diff --check
 ```
