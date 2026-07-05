@@ -116,7 +116,7 @@ Verifier 已有 `runtime-entry.js`、`combat-runtime.js`、`profit-runtime.js`�
 - [x] Commit 3 - Extract Orchestration Safety Helpers
 - [x] Commit 4 - Extract Decision Selection Runtime
 - [x] Commit 5 - Extract Tick And Startup Runtime
-- [ ] Commit 6 - Split Combat Log Frame And Diagnostics Owners
+- [x] Commit 6 - Split Combat Log Frame And Diagnostics Owners
 - [ ] Commit 7 - Final Closeout Guards And Handoff
 
 ### Commit 1 - Docs Current-State Closeout
@@ -275,6 +275,8 @@ Completed in `bootstrap-0.4.545`: `src/browser/runtime/orchestration-tick-runtim
 - `combat-log-service` 测试通过。
 - Daily report 的 per-login statistics 和 per-active-player-combat statistics 字段不变。
 - Verifier 拒绝 frame/schema 和 misc diagnostics body 回流 `combat-log-runtime.js`。
+
+Completed in `bootstrap-0.4.546`: `src/browser/runtime/combat-log-frame-runtime.js` now owns combat-log self/entity/bullet summaries, combat frame metrics, global/decision/login/runtime summaries, timed frame building, trigger/suspend classification, and `buildCombatLogEntry()`. `src/browser/runtime/combat-log-diagnostics-runtime.js` owns coin diagnostics, target-switch diagnostics, and network-quality diagnostic log throttling/queueing. `src/browser/runtime/combat-log-runtime.js` composes queue, frame, diagnostics, and exit-audit modules while retaining session/prebuffer orchestration and `recordCombatLogTick()`. `scripts/verify-objective-build.js` rejects frame/diagnostics bodies returning to combat-log runtime, tightens the combat-log composition budget to 450 lines, adds 940/260-line frame/diagnostics budgets, and reports 32 checks across 85 runtime modules. Release commit: `180c1b7`; manifest SHA-256: `1242569ab5494c850abe0df7f2687f8ccc714d17b453b2b18129a84202952ba3`.
 
 ### Commit 7 - Final Closeout Guards And Handoff
 
