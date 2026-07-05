@@ -106,7 +106,7 @@ npm run cleanup -- --dry-run
 
 ## Development Surfaces
 
-Use the current source layout when changing behavior:
+Use the current source layout when changing behavior. The canonical architecture guide is `docs/agent/current-architecture.md`.
 
 - `src/strategy/` contains pure strategy cores and their self-tests. Put reusable scoring, action arbitration, target-switch, coin, stamina, and combat policy helpers here when they can be tested without a browser.
 - `src/browser/runtime/` contains browser runtime domain integration: state binding, control flow, native transport, profit, combat, logging, UI, and orchestration modules.
