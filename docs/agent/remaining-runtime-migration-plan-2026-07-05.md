@@ -29,13 +29,13 @@
   - `src/browser/runtime/exit-relogin.js`: 880 行。
   - `src/browser/runtime/target-overlay.js`: 603 行。
 
-进度更新到 `bootstrap-0.4.536`：
+进度更新到 `bootstrap-0.4.537`：
 
 - `src/browser/runtime-entry.js`: 2,139 行。
-- `src/browser/runtime/*.js`: 60 个可执行运行时模块，约 22,924 行。
-- `src/browser/runtime/control-flow-runtime.js`: 3,410 行。
-- `scripts/verify-objective-build.js`: 678 行，当前报告 27 项检查，并覆盖 public API/status、entity-state、exit-detail、entry-glue、control-login、login-point-safety、post-login-zoom 的 owner 防回流检查。
-- 10 次实施提交中已完成 4 次，剩余 6 次。
+- `src/browser/runtime/*.js`: 63 个可执行运行时模块，约 23,452 行。
+- `src/browser/runtime/control-flow-runtime.js`: 1,614 行。
+- `scripts/verify-objective-build.js`: 721 行，当前报告 28 项检查，并覆盖 public API/status、entity-state、exit-detail、entry-glue、control-login、login-point-safety、post-login-zoom、pending-exit、Clash leave rescue、leave-flow 的 owner 防回流检查。
+- 10 次实施提交中已完成 5 次，剩余 5 次。
 
 ## 剩余待迁移内容
 
@@ -137,7 +137,7 @@
 - [x] Shared Entity Predicate Split (`bootstrap-0.4.534`)
 - [x] Exit Detail, Pause, And Entry Glue Split (`bootstrap-0.4.535`)
 - [x] Control-flow Login Gate And Login-point Safety Split (`bootstrap-0.4.536`)
-- [ ] Control-flow Pending-exit And Leave Flow Split
+- [x] Control-flow Pending-exit And Leave Flow Split (`bootstrap-0.4.537`)
 - [ ] Native State And Transport Split
 - [ ] Session, Stall, And Network Quality Split
 - [ ] Logging And Important Records Split
@@ -228,7 +228,7 @@ Completed in `bootstrap-0.4.535`: `src/browser/runtime/exit-detail-runtime.js` o
 
 Completed in `bootstrap-0.4.536`: `src/browser/runtime/control-login-runtime.js` owns native login gate interception, manual login bypass, login suppress status, snapshot-gate display/status, and `startLinuxDoLogin` guarding; `src/browser/runtime/login-point-safety-runtime.js` owns login-point safety persistence, dynamic radius, damage evidence, probe recording, reset, and login-point recording; `src/browser/runtime/post-login-zoom-runtime.js` owns post-login visible-range fit, zoom controls, wheel/fallback clicks, and unavailable-self handling. `src/browser/runtime/control-flow-runtime.js` now composes these through three factories and is down to 3,410 lines. `scripts/verify-objective-build.js` rejects these bodies returning to `control-flow-runtime.js`, requires the three new modules in the direct esbuild graph, and reports 27 checks across 60 runtime modules.
 
-### 5. Control-flow Pending-exit And Leave Flow Split
+### 5. Control-flow Pending-exit And Leave Flow Split - Completed
 
 目标：
 
@@ -245,6 +245,8 @@ Completed in `bootstrap-0.4.536`: `src/browser/runtime/control-login-runtime.js`
 
 - pending-exit persistence key、retry display、combat-cover clamping、leave 403 rescue order 不变。
 - exit audit flush block、important session end flush block、safe/unsafe relogin wait timing 不变。
+
+Completed in `bootstrap-0.4.537`: `src/browser/runtime/pending-exit-runtime.js` owns pending-exit cloning, retry summaries, skip/intent helpers, persistence updates, local confirmation, leave-success reload confirmation, leave-403 snapshot recovery, confirmation, combat-cover wait, retry scheduling, and `handlePendingExit()`; `src/browser/runtime/clash-leave-rescue-runtime.js` owns Clash leave rescue hook/proxy/retry state, pending-exit last-result updates, leave-detail confirmation, async leave request completion, and `issueLeaveCommand()`; `src/browser/runtime/leave-flow-runtime.js` owns pending combat-leave retry state, pursuit tracking summaries/actions, auto/manual login, and offline/injury/pursuit/combat/enemy-hold leave wrappers. `src/browser/runtime/control-flow-runtime.js` now composes these through three factories and is down to 1,614 lines. `scripts/verify-objective-build.js` rejects those bodies returning to `control-flow-runtime.js`, requires the three new modules in the direct esbuild graph, and reports 28 checks across 63 runtime modules.
 
 ### 6. Native State And Transport Split
 
