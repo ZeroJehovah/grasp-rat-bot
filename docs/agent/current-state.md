@@ -4,14 +4,15 @@ Update this file for every remote bot release or handoff-relevant state change. 
 
 ## Latest Release
 
-- Latest remote bot: `bootstrap-0.4.563`.
-- Latest manifest SHA-256: `5c7d0ca641ecd592291357b41443756bc3615ccf65e6e17a96a9b76d4e60927e`.
-- Latest remote release commit: `3e718c9` (`bootstrap-0.4.563` keep healthy high-value coin pickup after minor injury).
+- Latest remote bot: `bootstrap-0.4.564`.
+- Latest manifest SHA-256: `63a65abbdbc8f1d5237132e639baa310f9a28060146fd0785f38a6d7b4942289`.
+- Latest remote release commit: `pending` (`bootstrap-0.4.564` use close passive-runner live precision).
 - Latest bootstrap A versions: Tampermonkey `0.4.74`, extension `0.1.53`.
-- Latest direct entry/config SHA-256: `6e855f60fc45e9ae279579fea1e97d5298d0a439833086f478e091b1035d5214`.
+- Latest direct entry/config SHA-256: `55caa34d5bec1c746d0d8eb4703f1dabc183b7e20416e1f11fc79832ce3310fc`.
 
 ## Current Handoff
 
+- `bootstrap-0.4.564` changes confirmed passive coin-runner aiming inside `combatPassiveRunnerPrecisionRange = 5500cm` from full intercept lead to live/native/render precision. Recent `xuanze00` replays showed the old close intercept overled small zigzag movement; the new generic passive-runner branch improved estimated hits from `29/229` to `86/229` and from `19/143` to `67/143` on two records, while `colloq168` active-pressure replays stayed effectively unchanged.
 - `bootstrap-0.4.563` preserves healthy high-value visible coin pickup after a same-tick minor injury instead of escalating the generic `injury hp drop` fallback to `leave()`, while keeping low-HP/combat-disadvantage exits intact. Injury leave summaries now prefer an explicit bullet owner or closer real human over a farther/invulnerable Active summary, so the displayed attacker should match the nearby player that caused the HP drop.
 - `bootstrap-0.4.562` passes `directionTo` into combat movement runtime and `now` into combat target runtime, with objective-build smoke coverage for passive-runner close movement and sticky combat target selection; the checked browser runtime surface has no unexpected `no-undef` findings beyond known build/page globals.
 - `bootstrap-0.4.561` passes `combatTargetId` into combat movement runtime and adds an objective-build passive-runner smoke for the dependency; passive-runner combat checks should no longer throw `combatTargetId is not defined` when combat starts.
@@ -41,7 +42,7 @@ Update this file for every remote bot release or handoff-relevant state change. 
 
 ## Latest Validation Baseline
 
-The latest `bootstrap-0.4.563` release validation passed:
+The latest `bootstrap-0.4.564` release validation passed:
 
 ```bash
 node grasp-rat-bot.js --self-test
@@ -56,10 +57,13 @@ node --check extension/content-bridge.js
 node --check extension/page-bootstrap.js
 node --check extension/popup.js
 cd combat-log-service && npm test
-cd combat-log-service && npm run replay -- --file logs/2026-07-06/combat/20260705162643-self-28886-vs-mango.jsonl --start-line 890 --end-line 937 --self-id 28886 --target-id 31361 --target-name mango
+cd combat-log-service && npm run replay -- --file logs/2026-07-06/combat/20260705171540-self-28886-vs-xuanze00.jsonl --start-line 96 --end-line 2316 --self-id 28886 --target-id 34711 --target-name xuanze00
+cd combat-log-service && npm run replay -- --file logs/2026-07-06/combat/20260705160246-self-28886-vs-xuanze00.jsonl --start-line 1 --end-line 1734 --self-id 28886 --target-id 34711 --target-name xuanze00
+cd combat-log-service && npm run replay -- --file logs/2026-07-06/combat/20260705165650-self-28886-vs-colloq168.jsonl --start-line 1 --end-line 1006 --self-id 28886 --target-id 34683 --target-name colloq168
+cd combat-log-service && npm run replay -- --file logs/2026-07-06/combat/20260705164449-self-28886-vs-colloq168.jsonl --start-line 1 --end-line 1439 --self-id 28886 --target-id 34683 --target-name colloq168
 npm run test:runtime-helper-entry
 npm run test:remote-bundled
-node scripts/build-remote-bot.js --version bootstrap-0.4.563
+node scripts/build-remote-bot.js --version bootstrap-0.4.564
 node scripts/verify-objective-build.js
 git diff --check
 ```
