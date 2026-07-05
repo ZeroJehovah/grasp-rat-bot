@@ -31,6 +31,7 @@ const REQUIRED_DIST_TOKENS = [
   'installPageGlobal(BOT_KEY, bot, pageGlobal)',
   'function createRuntimeBootstrapBindings',
   'function createRuntimeStateBindings',
+  'function createBotApiRuntime',
   'function updateBotPanel',
   'function getNativeState',
   'function createOrchestrationRuntime',
@@ -159,6 +160,7 @@ async function main() {
   const runtimeEntrySource = readText(RUNTIME_ENTRY_LABEL);
   const runtimeShellSource = readText('src/browser/runtime/runtime-shell.js');
   const runtimeBotStateSource = readText('src/browser/runtime/runtime-bot-state.js');
+  const runtimeBotApiSource = readText('src/browser/runtime/bot-api-runtime.js');
   const runtimeTargetWhitelistSource = readText('src/browser/runtime/target-whitelist.js');
   const runtimeStaminaStatusSource = readText('src/browser/runtime/stamina-status.js');
   const runtimeTargetOverlaySource = readText('src/browser/runtime/target-overlay.js');
@@ -222,7 +224,9 @@ async function main() {
     assert(runtimeEntrySource.includes('createRuntimeShellContext(__GRASP_RAT_RUNTIME_CONFIG__'), 'runtime entry does not pass build-time runtime config into the shell context');
     assert(runtimeEntrySource.includes("require('./runtime/runtime-shell')"), 'runtime entry does not import the runtime shell module');
     assert(runtimeEntrySource.includes("require('./runtime/runtime-bot-state')"), 'runtime entry does not import the runtime bot-state module');
-    assert(runtimeEntrySource.includes('...createRuntimeBotState({'), 'runtime entry does not create bot state through the extracted module');
+    assert(runtimeEntrySource.includes("require('./runtime/bot-api-runtime')"), 'runtime entry does not import the bot API runtime module');
+    assert(runtimeEntrySource.includes('const bot = createRuntimeBotState({'), 'runtime entry does not create bot state through the extracted module');
+    assert(runtimeEntrySource.includes('createBotApiRuntime({'), 'runtime entry does not install public bot APIs through the extracted module');
     assert(runtimeEntrySource.includes('module.exports.default = __graspRatRuntimeStartup'), 'runtime entry does not expose startup result for local eval');
     assert(!runtimeEntrySource.includes("require('./runtime/runtime-bootstrap-bindings')"), 'runtime entry still imports bootstrap bindings directly');
     assert(!runtimeEntrySource.includes("require('./runtime/runtime-state-bindings')"), 'runtime entry still imports state bindings directly');
@@ -243,6 +247,22 @@ async function main() {
     assert(runtimeBotStateSource.includes('running: true'), 'runtime bot-state module does not own base running state');
     assert(runtimeBotStateSource.includes('combatLogging: {'), 'runtime bot-state module does not own combat logging state initialization');
     assert(runtimeBotStateSource.includes('ignoredCoins: new Map(restoredFailures'), 'runtime bot-state module does not own restored coin failure initialization');
+  });
+
+  check('bot api runtime owns public API and status bodies', () => {
+    assert(runtimeEntrySource.includes("require('./runtime/bot-api-runtime')"), 'runtime entry does not import bot API runtime');
+    assert(runtimeEntrySource.includes('Object.assign(bot, createBotApiRuntime({'), 'runtime entry does not assign extracted bot API methods');
+    assert(!/stop\s*\(\s*reason\s*=\s*['"]manual['"]\s*\)\s*\{/.test(runtimeEntrySource), 'runtime entry still owns bot.stop body');
+    assert(!/setPaused\s*\(\s*paused\s*,\s*reason\s*=\s*['"]external['"]\s*\)\s*\{/.test(runtimeEntrySource), 'runtime entry still owns bot.setPaused body');
+    assert(!/configureClashLeaveRescue\s*\(\s*options\s*=\s*\{\}\s*\)\s*\{/.test(runtimeEntrySource), 'runtime entry still owns Clash rescue API body');
+    assert(!/status\s*\(\s*\)\s*\{/.test(runtimeEntrySource), 'runtime entry still owns bot.status body');
+    assert(!/pendingExitSummaryPending/.test(runtimeEntrySource), 'runtime entry still owns pending-exit status summary body');
+    assert(runtimeBotApiSource.includes('function createBotApiRuntime'), 'bot API runtime factory missing');
+    assert(runtimeBotApiSource.includes("stop(reason = 'manual')"), 'bot.stop body missing from bot API module');
+    assert(runtimeBotApiSource.includes("setPaused(paused, reason = 'external')"), 'bot.setPaused body missing from bot API module');
+    assert(runtimeBotApiSource.includes('configureClashLeaveRescue(options = {})'), 'Clash rescue API body missing from bot API module');
+    assert(runtimeBotApiSource.includes('statusPendingExit'), 'pending-exit status helper missing from bot API module');
+    assert(runtimeBotApiSource.includes('status()'), 'bot.status body missing from bot API module');
   });
 
   check('ui status runtime modules own whitelist stamina overlay and panel bodies', () => {
