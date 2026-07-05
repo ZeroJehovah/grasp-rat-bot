@@ -4,14 +4,15 @@ Update this file for every remote bot release or handoff-relevant state change. 
 
 ## Latest Release
 
-- Latest remote bot: `bootstrap-0.4.558`.
-- Latest manifest SHA-256: `e0e72991b16e560f687240dffe5b41c69a80a71fad9edbe08c19169e1fc5ce6a`.
-- Latest remote release commit: `5ffc114` (`bootstrap-0.4.558` wire combat movement drop dependency).
+- Latest remote bot: `bootstrap-0.4.559`.
+- Latest manifest SHA-256: `032a4f49f5f952e616b3bdd88ffbc0cd2be43ceeb92a37c72df1ea2806c279ed`.
+- Latest remote release commit: `79b0910` (`bootstrap-0.4.559` wire combat runtime dependencies).
 - Latest bootstrap A versions: Tampermonkey `0.4.74`, extension `0.1.53`.
-- Latest direct entry/config SHA-256: `600c16d1d64c2c161596248eee8a0af9a136199e9b4d71614e81b2c693ef5f0a`.
+- Latest direct entry/config SHA-256: `9078a315236d197496238812f0bd329202d7beb33b03fb3db7e5d445818a5f1c`.
 
 ## Current Handoff
 
+- `bootstrap-0.4.559` passes `speed` into combat movement runtime and `isJoinModeActive` into combat target runtime, with objective-build guards for both dependencies; active-combat checks should no longer throw `speed is not defined` or `isJoinModeActive is not defined`.
 - `bootstrap-0.4.558` passes `dropValue` into the combat movement runtime and adds objective-build guards for the dependency; passive-runner combat checks should no longer throw `dropValue is not defined`.
 - Bootstrap A Tampermonkey `0.4.74` and extension `0.1.53` now evaluate the local login-point safety gate only after `maybeStartGameLogin()` confirms that an automatic login is actually needed; watchdog intervals should no longer print `login blocked by local login-point safety gate` while an alive in-game self is active.
 - `bootstrap-0.4.557` passes `highValueCoinPriorityAmount` into the profit opportunity runtime and adds an objective-build smoke for `opportunityChoiceCoreOptions()`; missing-held opportunity checks should no longer throw `highValueCoinPriorityAmount is not defined`.
@@ -36,7 +37,7 @@ Update this file for every remote bot release or handoff-relevant state change. 
 
 ## Latest Validation Baseline
 
-The latest `bootstrap-0.4.558` release validation passed:
+The latest `bootstrap-0.4.559` release validation passed:
 
 ```bash
 node grasp-rat-bot.js --self-test
@@ -53,7 +54,7 @@ node --check extension/popup.js
 cd combat-log-service && npm test
 npm run test:runtime-helper-entry
 npm run test:remote-bundled
-node scripts/build-remote-bot.js --version bootstrap-0.4.558
+node scripts/build-remote-bot.js --version bootstrap-0.4.559
 node scripts/verify-objective-build.js
 git diff --check
 ```
