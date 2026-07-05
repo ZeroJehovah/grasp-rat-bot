@@ -29,13 +29,14 @@
   - `src/browser/runtime/exit-relogin.js`: 880 行。
   - `src/browser/runtime/target-overlay.js`: 603 行。
 
-进度更新到 `bootstrap-0.4.537`：
+进度更新到 `bootstrap-0.4.538`：
 
 - `src/browser/runtime-entry.js`: 2,139 行。
-- `src/browser/runtime/*.js`: 63 个可执行运行时模块，约 23,452 行。
+- `src/browser/runtime/*.js`: 65 个可执行运行时模块，约 23,741 行。
 - `src/browser/runtime/control-flow-runtime.js`: 1,614 行。
-- `scripts/verify-objective-build.js`: 721 行，当前报告 28 项检查，并覆盖 public API/status、entity-state、exit-detail、entry-glue、control-login、login-point-safety、post-login-zoom、pending-exit、Clash leave rescue、leave-flow 的 owner 防回流检查。
-- 10 次实施提交中已完成 5 次，剩余 5 次。
+- `src/browser/runtime/native-state-runtime.js`: 1,233 行。
+- `scripts/verify-objective-build.js`: 753 行，当前报告 29 项检查，并覆盖 public API/status、entity-state、exit-detail、entry-glue、control-login、login-point-safety、post-login-zoom、pending-exit、Clash leave rescue、leave-flow、native-data、native-transport 的 owner 防回流检查。
+- 10 次实施提交中已完成 6 次，剩余 4 次。
 
 ## 剩余待迁移内容
 
@@ -138,7 +139,7 @@
 - [x] Exit Detail, Pause, And Entry Glue Split (`bootstrap-0.4.535`)
 - [x] Control-flow Login Gate And Login-point Safety Split (`bootstrap-0.4.536`)
 - [x] Control-flow Pending-exit And Leave Flow Split (`bootstrap-0.4.537`)
-- [ ] Native State And Transport Split
+- [x] Native State And Transport Split (`bootstrap-0.4.538`)
 - [ ] Session, Stall, And Network Quality Split
 - [ ] Logging And Important Records Split
 - [ ] Profit Runtime Split
@@ -248,7 +249,7 @@ Completed in `bootstrap-0.4.536`: `src/browser/runtime/control-login-runtime.js`
 
 Completed in `bootstrap-0.4.537`: `src/browser/runtime/pending-exit-runtime.js` owns pending-exit cloning, retry summaries, skip/intent helpers, persistence updates, local confirmation, leave-success reload confirmation, leave-403 snapshot recovery, confirmation, combat-cover wait, retry scheduling, and `handlePendingExit()`; `src/browser/runtime/clash-leave-rescue-runtime.js` owns Clash leave rescue hook/proxy/retry state, pending-exit last-result updates, leave-detail confirmation, async leave request completion, and `issueLeaveCommand()`; `src/browser/runtime/leave-flow-runtime.js` owns pending combat-leave retry state, pursuit tracking summaries/actions, auto/manual login, and offline/injury/pursuit/combat/enemy-hold leave wrappers. `src/browser/runtime/control-flow-runtime.js` now composes these through three factories and is down to 1,614 lines. `scripts/verify-objective-build.js` rejects those bodies returning to `control-flow-runtime.js`, requires the three new modules in the direct esbuild graph, and reports 28 checks across 63 runtime modules.
 
-### 6. Native State And Transport Split
+### 6. Native State And Transport Split - Completed
 
 目标：
 
@@ -265,6 +266,8 @@ Completed in `bootstrap-0.4.537`: `src/browser/runtime/pending-exit-runtime.js` 
 
 - combat target/aim/fire 仍只使用 native/realtime visible authority。
 - direct native WebSocket movement/shooting dispatch、local key/prediction sync、repeat constants 不变。
+
+Completed in `bootstrap-0.4.538`: `src/browser/runtime/native-data-runtime.js` owns WebSocket ready-state helpers, page-native snapshot observer, native state/control access, native/realtime entity and coin source normalization, snapshot freshness gates, coin/bullet merge, fetch helper, self summary, and passive-only `refreshGlobalState()`; `src/browser/runtime/native-transport-runtime.js` owns native WS tick/message pump, control summary/sync, local and direct-WS movement state, stop-motion after exit, velocity repeat, action velocity dispatch, aim, native/direct shoot, combat shot metrics, and fallback WS send. `src/browser/runtime/native-state-runtime.js` now composes these through two factories and is down to 1,233 lines, retaining session, stall, and network-quality bodies for the next split. `scripts/verify-objective-build.js` rejects data/transport bodies returning to `native-state-runtime.js`, requires both new modules in the direct esbuild graph, and reports 29 checks across 65 runtime modules.
 
 ### 7. Session, Stall, And Network Quality Split
 
