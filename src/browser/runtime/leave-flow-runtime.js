@@ -18,6 +18,7 @@ const {
   DEFAULT_NO_SELF_SNAPSHOT_RECOVERY_KEY,
   normalizeNoSelfSnapshotRecoveryState,
   activeNoSelfSnapshotRecoveryState: activeNoSelfSnapshotRecoveryStateCore,
+  markNoSelfSnapshotRecoveryLoginStarted,
   clearNoSelfSnapshotRecoveryState: clearNoSelfSnapshotRecoveryStateCore
 } = require('./no-self-snapshot-recovery-state');
 const { leaveDetailHasHttp403Core } = require('./pending-exit');
@@ -365,9 +366,25 @@ function createLeaveFlowRuntime(runtime = {}) {
     const storedSnapshotExitRecovery = activeNoSelfSnapshotRecoveryStateCore(localStorage, userId, { key: NO_SELF_SNAPSHOT_RECOVERY_KEY });
     const memorySnapshotExitRecovery = storedSnapshotExitRecovery ? null : normalizeNoSelfSnapshotRecoveryState(bot.noSelfSnapshotRecovery);
     const snapshotExitRecovery = storedSnapshotExitRecovery || (memorySnapshotExitRecovery && (!memorySnapshotExitRecovery.userId || !userId || memorySnapshotExitRecovery.userId === userId) ? memorySnapshotExitRecovery : null);
-    if (snapshotExitRecovery && hasAliveSelf) clearNoSelfSnapshotRecoveryStateCore(localStorage, { key: NO_SELF_SNAPSHOT_RECOVERY_KEY, reason: 'self restored before login' });
+    if (snapshotExitRecovery && hasAliveSelf) {
+      clearNoSelfSnapshotRecoveryStateCore(localStorage, { key: NO_SELF_SNAPSHOT_RECOVERY_KEY, reason: 'self restored before login' });
+      bot.noSelfSnapshotRecovery = null;
+    }
     const ignoreStalePageSession = Boolean(snapshotExitRecovery && !hasAliveSelf);
-    const shouldIgnoreSuppress = Boolean(ignoreSuppress || ignoreStalePageSession);
+    const recoveryLoginGraceMs = Math.max(
+      10000,
+      Number(cfg.postLoginGraceMs || 0) || 0,
+      Number(cfg.loginCooldownMs || 0) || 0
+    );
+    const recoveryLoginStartedAt = Number(snapshotExitRecovery?.loginStartedAt || 0) || 0;
+    const recoveryLoginSuppressUntil = Number(snapshotExitRecovery?.loginSuppressUntil || 0) || 0;
+    const recoveryLoginPendingRemainingMs = recoveryLoginStartedAt
+      ? Math.max(
+        0,
+        Math.round(Math.max(recoveryLoginStartedAt + recoveryLoginGraceMs, recoveryLoginSuppressUntil) - t)
+      )
+      : 0;
+    const shouldIgnoreSuppress = Boolean(ignoreSuppress || (ignoreStalePageSession && !recoveryLoginPendingRemainingMs));
     const currentStartLinuxDoLogin = readPageGlobal('startLinuxDoLogin', null, pageGlobal);
     const canStartLogin = Boolean(loginControl || typeof currentStartLinuxDoLogin === 'function');
     const effectiveHasToken = ignoreStalePageSession ? false : hasToken;
@@ -442,6 +459,26 @@ function createLeaveFlowRuntime(runtime = {}) {
 	        liveSessionTakeover
 	      };
 	    }
+    if (recoveryLoginPendingRemainingMs > 0 && !ignoreLoginCooldown && !manualOverride) {
+      return {
+        needed: true,
+        attempted: false,
+        reason: 'cooldown',
+        cooldownRemainingMs: recoveryLoginPendingRemainingMs,
+        error: '',
+        suppressReason: 'bot login started',
+        recoveryLoginPending: true,
+        hasToken,
+        hasNativeSession,
+        effectiveHasToken,
+        effectiveHasNativeSession,
+        snapshotExitRecovery,
+        nativeWsReadyState: native?.wsReadyState ?? null,
+        currentUserId: userId,
+        snapshotGate: snapshotLoginGateStatus(),
+        liveSessionTakeover
+      };
+    }
     if (!ignoreLoginCooldown && t - Number(bot.lastLoginAt || 0) < cfg.loginCooldownMs) {
       const lastError = bot.lastLoginResult?.error || '';
       return {
@@ -542,7 +579,21 @@ function createLeaveFlowRuntime(runtime = {}) {
     } catch (err) {
       detail.error = err?.message || String(err);
     }
-    if (detail.attempted && !detail.error) setLoginSuppress('bot login started', ignoreStalePageSession ? Math.max(1000, Number(cfg.loginCooldownMs || 5000) || 5000) : cfg.postLoginGraceMs);
+    if (detail.attempted && !detail.error) {
+      const loginSuppressUntil = setLoginSuppress('bot login started', cfg.postLoginGraceMs);
+      if (ignoreStalePageSession && snapshotExitRecovery) {
+        const markerResult = markNoSelfSnapshotRecoveryLoginStarted(localStorage, userId, {
+          loginSuppressUntil,
+          loginMethod: detail.method,
+          reason
+        }, { key: NO_SELF_SNAPSHOT_RECOVERY_KEY });
+        if (markerResult.state) {
+          bot.noSelfSnapshotRecovery = markerResult.state;
+          detail.snapshotExitRecovery = markerResult.state;
+        }
+        if (markerResult.error) detail.snapshotExitRecoveryUpdateError = markerResult.error;
+      }
+    }
     bot.lastLoginResult = detail;
     return detail;
   }

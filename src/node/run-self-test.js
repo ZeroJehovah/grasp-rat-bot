@@ -29,6 +29,9 @@ const {
   createLeaveFlowRuntime
 } = require('../browser/runtime/leave-flow-runtime');
 const {
+  createPendingExitRuntime
+} = require('../browser/runtime/pending-exit-runtime');
+const {
   createPostLoginZoomRuntime
 } = require('../browser/runtime/post-login-zoom-runtime');
 const {
@@ -9515,7 +9518,7 @@ async function runSelfTest() {
       want: 'false|false|false|true|28886'
     },
     {
-      name: 'snapshot no-self recovery marker clicks login control despite stale native session and suppress',
+      name: 'snapshot no-self recovery marker clicks login control once and records login pending',
       got: (async () => {
         const t = Date.now();
         const data = new Map([
@@ -9564,7 +9567,12 @@ async function runSelfTest() {
           loginSuppressRemainingMs: () => Math.max(0, Number(storage.getItem('graspRatLoginSuppressUntil') || 0) - Date.now()),
           ensureLoginSnapshotGate: async () => ({ satisfied: true }),
           loginSnapshotGateAllowsLogin: gate => Boolean(gate.satisfied),
-          setLoginSuppress: (reason, ms) => storage.setItem('graspRatLoginSuppressUntil', String(Date.now() + ms)),
+          setLoginSuppress: (reason, ms) => {
+            const until = Date.now() + ms;
+            storage.setItem('graspRatLoginSuppressUntil', String(until));
+            storage.setItem('graspRatLoginSuppressReason', reason);
+            return until;
+          },
           controlText: () => '立即登录',
           isAlive: value => Boolean(value?.hp > 0)
         });
@@ -9577,10 +9585,91 @@ async function runSelfTest() {
           Boolean(result?.snapshotExitRecovery),
           button.clickCount,
           startCalls,
-          Math.round((Number(storage.getItem('graspRatLoginSuppressUntil') || 0) - Date.now()) / 1000)
+          Math.round((Number(storage.getItem('graspRatLoginSuppressUntil') || 0) - Date.now()) / 1000),
+          result?.snapshotExitRecovery?.loginAttemptCount,
+          result?.snapshotExitRecovery?.loginMethod
         ].map(String).join('|');
       })(),
-      want: 'true|#joinBtn|true|false|true|1|0|5'
+      want: 'true|#joinBtn|true|false|true|1|0|30|1|#joinBtn'
+    },
+    {
+      name: 'snapshot no-self recovery marker waits after recorded login start',
+      got: (async () => {
+        const t = Date.now();
+        const data = new Map([
+          ['graspRatNoSelfSnapshotRecovery', JSON.stringify({
+            reason: 'snapshot-no-self-exit-confirmed',
+            userId: 28886,
+            requestedAt: t - 2000,
+            expiresAt: t + 60000,
+            loginStartedAt: t - 1000,
+            loginSuppressUntil: t + 30000,
+            loginAttemptCount: 1,
+            loginMethod: '#joinBtn',
+            lastLoginReason: 'no-self'
+          })],
+          ['graspRatLoginSuppressUntil', String(t + 30000)],
+          ['graspRatLoginSuppressReason', 'bot login started']
+        ]);
+        const storage = {
+          getItem: key => (data.has(key) ? data.get(key) : null),
+          setItem: (key, value) => data.set(key, String(value)),
+          removeItem: key => data.delete(key)
+        };
+        const button = {
+          id: 'joinBtn',
+          tagName: 'BUTTON',
+          clickCount: 0,
+          click() {
+            this.clickCount += 1;
+          }
+        };
+        const botState = { control: {}, exitAudit: {}, importantLogging: {}, lastLoginAt: 0 };
+        let startCalls = 0;
+        const runtime = createLeaveFlowRuntime({
+          bot: botState,
+          cfg: { ...cfg, autoLogin: true, dryRun: false, once: false, loginCooldownMs: 5000, postLoginGraceMs: 30000 },
+          storage,
+          pageGlobal: {},
+          loginSuppressKey: 'graspRatLoginSuppressUntil',
+          loginSuppressReasonKey: 'graspRatLoginSuppressReason',
+          getCurrentUserId: () => 28886,
+          getSessionToken: () => '',
+          getNativeControl: () => ({ wsReadyState: 0 }),
+          hasNativeGameSession: () => true,
+          findLoginControl: () => button,
+          hasLoginRequiredText: () => false,
+          getSelf: () => null,
+          syncPausedFromPage: () => false,
+          exitAuditFlushPending: () => false,
+          importantSessionEndFlushPending: () => false,
+          readPageGlobal: name => (name === 'startLinuxDoLogin' ? (() => { startCalls += 1; }) : null),
+          loginSuppressRemainingMs: () => Math.max(0, Number(storage.getItem('graspRatLoginSuppressUntil') || 0) - Date.now()),
+          ensureLoginSnapshotGate: async () => ({ satisfied: true }),
+          loginSnapshotGateAllowsLogin: gate => Boolean(gate.satisfied),
+          setLoginSuppress: (reason, ms) => {
+            const until = Date.now() + ms;
+            storage.setItem('graspRatLoginSuppressUntil', String(until));
+            storage.setItem('graspRatLoginSuppressReason', reason);
+            return until;
+          },
+          controlText: () => '立即登录',
+          isAlive: value => Boolean(value?.hp > 0)
+        });
+        const result = await runtime.maybeStartAutoLogin('no-self');
+        return [
+          result?.needed,
+          result?.attempted,
+          result?.reason,
+          result?.suppressReason,
+          result?.hasNativeSession,
+          result?.effectiveHasNativeSession,
+          Boolean(result?.snapshotExitRecovery),
+          button.clickCount,
+          startCalls
+        ].map(String).join('|');
+      })(),
+      want: 'true|false|suppressed|bot login started|true|false|true|0|0'
     },
     {
       name: 'no-self leave 403 recovery does not create pending exit retry',
@@ -9792,6 +9881,71 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: '|login-point-missing|login-point-safety|'
+    },
+    {
+      name: 'pending exit confirmation requests page reload',
+      got: (() => {
+        const botState = {
+          globalState: { entities: [] },
+          control: {},
+          exitAudit: {},
+          importantLogging: {},
+          lastSelf: { user_id: 28886, hp: 100, x: 0, y: 0 }
+        };
+        let reloadCalls = 0;
+        const runtime = createPendingExitRuntime({
+          bot: botState,
+          cfg: { ...cfg, leave403ReloginDelayMs: 3600000 },
+          storage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
+          getCurrentUserId: () => 28886,
+          getSessionToken: () => '',
+          summarizeSelf: value => value,
+          summarizeControl: () => ({ currentUserId: 28886, hasToken: false, wsOpen: false }),
+          controlHasAuthoritativeSessionMismatch: () => false,
+          requestReload: reason => {
+            reloadCalls += 1;
+            return reason === 'exit confirmed';
+          },
+          stopMotionAfterExit: () => {},
+          clearCombatEngagement: () => {},
+          resetLoginSnapshotGate: () => ({ reset: true }),
+          loginPointSafetyExitSelfForDetail: () => botState.lastSelf,
+          setLoginSuppress: () => 0,
+          reloginDelayForHpCore: () => ({ delayMs: 0, hpDelayMs: 0, minMs: 0, maxMs: 0, hp: { hp: 100, maxHp: 100, ratio: 1 } }),
+          recordExitAuditEvent: () => false,
+          noteImportantSessionExit: () => null,
+          isAlive: value => Boolean(value?.hp > 0)
+        });
+        const detail = runtime.confirmPendingExit({
+          scope: 'enemy',
+          source: 'combat',
+          reason: 'combat leave',
+          summary: 'combat leave',
+          userId: 28886,
+          self: botState.lastSelf,
+          at: Date.now() - 1000,
+          retryCount: 1,
+          lastResult: {
+            attempted: true,
+            reason: 'combat leave',
+            summary: 'combat leave',
+            userId: 28886,
+            self: botState.lastSelf
+          }
+        }, {
+          known: true,
+          alive: false,
+          source: 'token-chat-left-user-self-missing',
+          self: null
+        });
+        return [
+          detail?.exitConfirmed,
+          detail?.reloadRequested,
+          reloadCalls,
+          botState.pendingExit
+        ].map(String).join('|');
+      })(),
+      want: 'true|true|1|null'
     },
     {
       name: 'local exit confirmation must not accept active session mismatch',

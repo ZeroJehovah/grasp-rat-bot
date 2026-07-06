@@ -445,6 +445,7 @@ function createControlFlowRuntime(runtime = {}) {
     clearPersistentExitState,
     readPersistentExitState,
     writePersistentExitState,
+    requestReload,
     requestLeaveConfirmationReload,
     activeEnemyLeaveDetail: (...args) => activeEnemyLeaveDetail(...args),
     activeOfflineLeaveDetail: (...args) => activeOfflineLeaveDetail(...args),

@@ -44,6 +44,7 @@ function createPendingExitRuntime(runtime = {}) {
     clearPersistentExitState = () => {},
     readPersistentExitState = () => null,
     writePersistentExitState = () => null,
+    requestReload = () => false,
     requestLeaveConfirmationReload = () => false,
     activeEnemyLeaveDetail = () => null,
     activeOfflineLeaveDetail = () => null,
@@ -690,6 +691,7 @@ function createPendingExitRuntime(runtime = {}) {
       scope: pending.scope || detail.exitAuditScope || ''
     });
     noteImportantSessionExit('exit-confirmed:' + (detail.reason || pending.reason || ''), detail.self || pending.self || bot.lastSelf, t, { exit: detail });
+    detail.reloadRequested = Boolean(requestReload('exit confirmed'));
     return detail;
   }
 
