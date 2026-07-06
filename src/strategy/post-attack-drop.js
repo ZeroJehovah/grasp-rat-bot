@@ -54,6 +54,8 @@ function buildPostAttackDropCoinCandidateCore(coin, attack, score, options = {})
       active: attack.active === true || attack.playerCategory === 'active',
       combat: Boolean(attack.combat),
       combatIntent: attack.combatIntent || '',
+      chase: Boolean(attack.chase || attack.chaseMode),
+      chaseMode: attack.chaseMode || null,
       mode: attack.mode || '',
       currentlyActive: Boolean(attack.currentlyActive),
       moving: Boolean(attack.moving),
@@ -114,7 +116,7 @@ function pickPostAttackDropWaitTargetCore(attacks, coins, activeThreats, options
     .filter(item => t - Number(item?.at || 0) <= resolveMaxMs)
     .filter(item => Number(item?.drop || 0) >= minDrop)
     .filter(item => Number.isFinite(Number(item?.x)) && Number.isFinite(Number(item?.y)))
-    .filter(item => item.afk !== false)
+    .filter(item => item.afk !== false || item.chase || item.chaseMode)
     .filter(item => item.action === 'attack' || item.action === 'opportunistic-shot')
     .map(item => {
       const resolvedAt = resolveAttack(item);

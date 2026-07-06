@@ -5,10 +5,10 @@ Keep this file focused on current validation coverage. Do not use it as a migrat
 ## Current Counts
 
 - Bot self-test count: `342`.
-- Strategy module self-test count: `107`.
+- Strategy module self-test count: `112`.
 - Combat-log analyzer self-test count: `88`.
 - Combat replay self-test count: `1` local replay case plus skipped historical fixtures when retained logs are absent.
-- Objective build verification count: `36`.
+- Objective build verification count: `37`.
 
 ## Main Validation Surfaces
 
@@ -35,6 +35,7 @@ Do not run manifest/build-producing commands in parallel with manifest-reading v
 - opportunity choice, candidate, pick, clear, persistence, and missing-held behavior;
 - patrol and post-attack drop behavior;
 - stamina-budget summaries/selectors;
+- chase-mode candidate aggregation, panel union selection, target stickiness, stale/low-Drop state exposure, and active-chase post-attack drop wait eligibility;
 - combat constants and opportunity constants;
 - ROI calculations.
 
@@ -61,6 +62,7 @@ The browser runtime should adapt page/native state into these pure helpers inste
 - dependency-width budgets prevent wide flat runtime injection from returning;
 - combat target, aim, and fire stay native/realtime-visible only;
 - ordinary profit keeps visible/native coin and visible/native AFK priority before snapshot fallback;
+- chase-mode runtime owns target persistence/status and only hands combat off through current visible/attackable native combat targets;
 - post-login zoom keeps the 500m target radius, uses native/page `view r` as the stop condition, applies page-native `setViewRadius(50000)` before wheel fallback, only sends zoom-out fallback steps, disables blind fallback clicks by default, and keeps stable no-token session keys;
 - bootstrap auto-login evaluates the local login-point safety gate only after deciding that login is needed;
 - userscript and extension bootstrap versions match their runtime constants.

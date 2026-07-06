@@ -62,6 +62,7 @@ const REQUIRED_DIST_TOKENS = [
   'function createProfitOpportunityRuntime',
   'function createProfitPostAttackRuntime',
   'function createProfitArbitrationRuntime',
+  'function createChaseModeRuntime',
   'function createCombatTargetRuntime',
   'function createCombatMovementRuntime',
   'function createCombatAimRuntime',
@@ -84,7 +85,7 @@ const REQUIRED_DIST_TOKENS = [
 ];
 
 const POST_MIGRATION_LINE_BUDGETS = {
-  'runtime entry': 2200,
+  'runtime entry': 2220,
   'combat composition runtime': 220,
   'profit composition runtime': 220,
   'native state composition runtime': 420,
@@ -93,7 +94,7 @@ const POST_MIGRATION_LINE_BUDGETS = {
   'relogin gate runtime': 240,
   'orchestration runtime': 360,
   'orchestration safety runtime': 450,
-  'orchestration decision runtime': 1160,
+  'orchestration decision runtime': 1185,
   'orchestration tick runtime': 1280,
   'combat log runtime': 480,
   'combat log frame runtime': 940,
@@ -101,6 +102,7 @@ const POST_MIGRATION_LINE_BUDGETS = {
   'combat target runtime': 1260,
   'combat movement runtime': 1110,
   'combat aim runtime': 940,
+  'chase mode runtime': 540,
   'target overlay runtime': 630
 };
 
@@ -555,6 +557,7 @@ async function main() {
   const runtimeProfitOpportunitySource = readText('src/browser/runtime/profit-opportunity-runtime.js');
   const runtimeProfitPostAttackSource = readText('src/browser/runtime/profit-post-attack-runtime.js');
   const runtimeProfitArbitrationSource = readText('src/browser/runtime/profit-arbitration-runtime.js');
+  const runtimeChaseModeSource = readText('src/browser/runtime/chase-mode-runtime.js');
   const runtimeCombatSource = readText('src/browser/runtime/combat-runtime.js');
   const runtimeCombatTargetSource = readText('src/browser/runtime/combat-target-runtime.js');
   const runtimeCombatMovementSource = readText('src/browser/runtime/combat-movement-runtime.js');
@@ -655,7 +658,7 @@ async function main() {
     assert(!runtimeEntrySource.includes('...runtimeFlatContext'), 'runtime entry still spreads flat context into orchestration runtime');
     assert(runtimeDomainContextsSource.includes('const DOMAIN_CONTEXT_KEYS'), 'runtime domain context key map missing');
     assert(runtimeDomainContextsSource.includes('function createRuntimeDomainContexts'), 'runtime domain context factory missing');
-    for (const domain of ['bootstrap', 'state', 'entity', 'native', 'control', 'profit', 'combat', 'logging', 'ui', 'safety']) {
+    for (const domain of ['bootstrap', 'state', 'entity', 'native', 'control', 'profit', 'combat', 'chase', 'logging', 'ui', 'safety']) {
       assert(runtimeDomainContextsSource.includes(`${domain}: Object.freeze([`), `runtime domain context missing ${domain} group`);
     }
   });
@@ -672,6 +675,8 @@ async function main() {
     assert(runtimeBotApiSource.includes("stop(reason = 'manual')"), 'bot.stop body missing from bot API module');
     assert(runtimeBotApiSource.includes("setPaused(paused, reason = 'external')"), 'bot.setPaused body missing from bot API module');
     assert(runtimeBotApiSource.includes('configureClashLeaveRescue(options = {})'), 'Clash rescue API body missing from bot API module');
+    assert(runtimeBotApiSource.includes('setChaseTarget(target, options = {})'), 'chase target API body missing from bot API module');
+    assert(runtimeBotApiSource.includes('summarizeChaseModeStatus()'), 'chase status API body missing from bot API module');
     assert(runtimeBotApiSource.includes('statusPendingExit'), 'pending-exit status helper missing from bot API module');
     assert(runtimeBotApiSource.includes('status()'), 'bot.status body missing from bot API module');
   });
@@ -1122,6 +1127,30 @@ async function main() {
     assert(runtimeProfitArbitrationSource.includes('function recordActionSwitchDiagnostics'), 'target-switch diagnostics wrapper missing from profit arbitration module');
   });
 
+  check('chase mode runtime owns target persistence status and live combat handoff', () => {
+    assert(runtimeEntrySource.includes("require('./runtime/chase-mode-runtime')"), 'runtime entry does not import chase-mode runtime');
+    assert(runtimeEntrySource.includes('createChaseModeRuntime({'), 'runtime entry does not create chase-mode runtime bindings');
+    assert(runtimeBotStateSource.includes('normalizeChaseModeState'), 'runtime bot-state does not normalize chase-mode state');
+    assert(runtimeBotStateSource.includes('chaseMode: {'), 'runtime bot-state does not initialize chase-mode state');
+    assert(runtimeDomainContextsSource.includes('chase: Object.freeze(['), 'runtime domain contexts missing chase group');
+    assert(runtimeDomainContextsSource.includes("'selectChaseModeAction'"), 'runtime domain contexts missing chase action selector');
+    assert(runtimeOrchestrationDecisionSource.includes('runtimeDomainContexts.chase'), 'orchestration decision runtime does not read chase context');
+    assert(runtimeOrchestrationDecisionSource.includes('selectChaseModeAction(self'), 'orchestration decision runtime does not call chase selector');
+    assert(runtimeOrchestrationTickSource.includes('action.rememberAttack !== false'), 'orchestration tick runtime does not honor chase approach attack-history suppression');
+    assert(runtimeChaseModeSource.includes('function createChaseModeRuntime'), 'chase-mode runtime factory missing');
+    assert(runtimeChaseModeSource.includes('function setChaseTarget'), 'chase-mode target setter missing');
+    assert(runtimeChaseModeSource.includes('function summarizeChaseModeStatus'), 'chase-mode status summary missing');
+    assert(runtimeChaseModeSource.includes('function selectChaseModeAction'), 'chase-mode action selector missing');
+    assert(runtimeChaseModeSource.includes("storageKey = 'graspRatChaseModeTargets'"), 'chase-mode storage key default missing');
+    assert(runtimeChaseModeSource.includes('rememberAttack: false'), 'chase approach does not suppress attack-history writes');
+    assert(!runtimeChaseModeSource.includes('shootAt('), 'chase-mode runtime must not fire directly');
+    const selectBody = functionBody(runtimeChaseModeSource, 'selectChaseModeAction');
+    assert(selectBody.includes('context.combatTargets'), 'chase combat handoff does not require live combat targets');
+    assert(selectBody.includes('selected.visible && selected.attackableNow'), 'chase combat handoff does not require visible attackable state');
+    assert(selectBody.includes('buildCombatAction'), 'chase combat handoff does not reuse combat action builder');
+    assert(selectBody.includes("kind: 'seek-enemy'"), 'chase mode does not expose approach actions');
+  });
+
   check('combat runtime modules own target movement aim fire state and action bodies', () => {
     assert(runtimeEntrySource.includes("require('./runtime/combat-runtime')"), 'runtime entry does not import combat runtime module');
     assert(runtimeEntrySource.includes('createCombatRuntime({'), 'runtime entry does not create combat runtime bindings');
@@ -1208,6 +1237,7 @@ async function main() {
       assertLineBudget(runtimeCombatTargetSource, 'combat target runtime'),
       assertLineBudget(runtimeCombatMovementSource, 'combat movement runtime'),
       assertLineBudget(runtimeCombatAimSource, 'combat aim runtime'),
+      assertLineBudget(runtimeChaseModeSource, 'chase mode runtime'),
       assertLineBudget(runtimeTargetOverlaySource, 'target overlay runtime')
     ].join(', ');
   });

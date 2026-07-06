@@ -12,7 +12,7 @@
   var define_GRASP_RAT_RUNTIME_CONFIG_default;
   var init_define_GRASP_RAT_RUNTIME_CONFIG = __esm({
     "<define:__GRASP_RAT_RUNTIME_CONFIG__>"() {
-      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.590" };
+      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.591" };
     }
   });
 
@@ -99,6 +99,12 @@
           finalActionArbitration: previousBot?.finalActionArbitration && typeof previousBot.finalActionArbitration === "object" ? {
             ...previousBot.finalActionArbitration,
             history: Array.isArray(previousBot.finalActionArbitration.history) ? previousBot.finalActionArbitration.history.slice(-24) : []
+          } : null,
+          chaseMode: previousBot?.chaseMode && typeof previousBot.chaseMode === "object" ? {
+            ...previousBot.chaseMode,
+            targets: Array.isArray(previousBot.chaseMode.targets) ? previousBot.chaseMode.targets.slice(-20) : [],
+            lastClear: previousBot.chaseMode.lastClear && typeof previousBot.chaseMode.lastClear === "object" ? { ...previousBot.chaseMode.lastClear } : null,
+            lastDecision: previousBot.chaseMode.lastDecision && typeof previousBot.chaseMode.lastDecision === "object" ? { ...previousBot.chaseMode.lastDecision } : null
           } : null,
           pendingExit: previousBot?.pendingExit && typeof previousBot.pendingExit === "object" ? { ...previousBot.pendingExit } : null,
           lastLoginAt: Number(previousBot?.lastLoginAt || 0) || 0,
@@ -389,6 +395,15 @@
           afkRecentActivityCooldownMs: 12e3,
           opportunityAfkStaminaCooldownMs: 6e4,
           opportunityAfkStaminaDropThresholdMs: 100,
+          chaseMinDrop: 10,
+          chasePanelTopDropLimit: 10,
+          chasePanelNearestLimit: 10,
+          chasePanelMaxCandidates: 20,
+          chaseTargetPersistMax: 20,
+          chaseSnapshotMaxAgeMs: 15e3,
+          chaseMinimapMaxAgeMs: 15e3,
+          chaseTargetStickMs: 3e3,
+          chaseKillStaminaBudgetMs: 1e5,
           coinMaxDistance: 18e3,
           coinDangerRadius: 25e3,
           invulnerableActiveCoinDangerRadius: 36e3,
@@ -3050,11 +3065,349 @@
     }
   });
 
+  // src/strategy/chase-mode.js
+  var require_chase_mode = __commonJS({
+    "src/strategy/chase-mode.js"(exports, module) {
+      "use strict";
+      init_define_GRASP_RAT_RUNTIME_CONFIG();
+      var CHASE_MODE_STATE_VERSION = 1;
+      function finiteNumber(value) {
+        const number = Number(value);
+        return Number.isFinite(number) ? number : null;
+      }
+      function finiteOrUndefined(value) {
+        const number = finiteNumber(value);
+        return number === null ? void 0 : number;
+      }
+      function roundedOrNull(value) {
+        const number = finiteNumber(value);
+        return number === null ? null : Math.round(number);
+      }
+      function chaseTargetId(target) {
+        const id = target?.id ?? target?.user_id ?? target?.userId ?? target?.targetId;
+        if (id === void 0 || id === null || id === "") return "";
+        return String(id);
+      }
+      function chaseTargetName(target) {
+        return String(target?.name || target?.label || "").trim();
+      }
+      function chaseDropValue(target) {
+        const value = finiteNumber(target?.drop ?? target?.death_reward_preview ?? target?.death_drop_coins ?? target?.lastDrop ?? target?.dropAtMark);
+        return value === null ? null : Math.max(0, Math.round(value));
+      }
+      function chaseHpValue(target) {
+        const value = finiteNumber(target?.hp ?? target?.knownHp ?? target?.lastHp);
+        return value === null ? null : Math.max(0, Math.round(value));
+      }
+      function targetPoint(target) {
+        const x = finiteNumber(target?.x ?? target?.lastX);
+        const y = finiteNumber(target?.y ?? target?.lastY);
+        return x === null || y === null ? null : { x, y };
+      }
+      function defaultDistance(a, b) {
+        const ax = finiteNumber(a?.x);
+        const ay = finiteNumber(a?.y);
+        const bx = finiteNumber(b?.x);
+        const by = finiteNumber(b?.y);
+        if (ax === null || ay === null || bx === null || by === null) return Infinity;
+        return Math.hypot(ax - bx, ay - by);
+      }
+      function normalizeChaseModeState(raw, options = {}) {
+        const limit = Math.max(1, Math.round(Number(options.persistMax || 20) || 20));
+        const state2 = raw && typeof raw === "object" ? raw : {};
+        const targets = [];
+        const seen = /* @__PURE__ */ new Set();
+        for (const item of Array.isArray(state2.targets) ? state2.targets : []) {
+          const id = chaseTargetId(item);
+          if (!id || seen.has(id)) continue;
+          seen.add(id);
+          const markedAt = Number(item.markedAt || item.at || state2.updatedAt || 0) || 0;
+          const lastSeenAt = Number(item.lastSeenAt || 0) || 0;
+          const dropAtMark = chaseDropValue({ drop: item.dropAtMark ?? item.drop ?? item.lastDrop });
+          targets.push({
+            id,
+            name: chaseTargetName(item),
+            dropAtMark,
+            lastDrop: chaseDropValue(item),
+            lastHp: chaseHpValue(item),
+            lastX: finiteOrUndefined(item.lastX ?? item.x),
+            lastY: finiteOrUndefined(item.lastY ?? item.y),
+            lastDistance: roundedOrNull(item.lastDistance ?? item.distance),
+            lastSeenAt,
+            lastSource: String(item.lastSource || item.source || "persisted"),
+            markedAt,
+            markedBy: String(item.markedBy || "panel")
+          });
+          if (targets.length >= limit) break;
+        }
+        return {
+          version: CHASE_MODE_STATE_VERSION,
+          updatedAt: Number(state2.updatedAt || 0) || 0,
+          targets
+        };
+      }
+      function normalizeChaseCandidate(raw, options = {}) {
+        const id = chaseTargetId(raw);
+        if (!id) return null;
+        const self = options.self || null;
+        const dist = typeof options.dist === "function" ? options.dist : defaultDistance;
+        const source = String(options.source || raw?.source || raw?.nativeSource || raw?.lastSource || "unknown");
+        const point = targetPoint(raw);
+        const distance = finiteNumber(raw?.distance ?? raw?.lastDistance);
+        const computedDistance = distance !== null ? distance : self && point ? dist(self, point) : Infinity;
+        const observedAt = Number(raw?.observedAt || raw?.lastSeenAt || options.nowMs || Date.now()) || 0;
+        const nativeVisible = Boolean(
+          raw?.native || raw?.realtime || raw?.render || source === "native" || source === "realtime" || source === "render"
+        ) && !raw?.minimapOnly;
+        const minimapOnly = Boolean(raw?.minimapOnly || source === "minimap");
+        const drop = chaseDropValue(raw);
+        const hp = chaseHpValue(raw);
+        return {
+          id,
+          user_id: raw.user_id ?? raw.userId ?? raw.id ?? id,
+          name: chaseTargetName(raw),
+          x: point ? point.x : void 0,
+          y: point ? point.y : void 0,
+          hp,
+          drop,
+          latestDrop: drop,
+          distance: Number.isFinite(computedDistance) ? computedDistance : Infinity,
+          source,
+          sources: [source],
+          native: Boolean(raw?.native || source === "native"),
+          realtime: Boolean(raw?.realtime || source === "realtime"),
+          render: Boolean(raw?.render || source === "render"),
+          snapshot: Boolean(raw?.snapshot || raw?.global || source === "snapshot"),
+          minimapOnly,
+          visible: nativeVisible,
+          attackableNow: false,
+          seekableNow: Boolean(point),
+          observedAt,
+          stale: Boolean(raw?.stale),
+          mode: raw?.current_join_mode || raw?.mode || "",
+          life: raw?.life || "",
+          invulnerable: Boolean(raw?.invulnerable),
+          whitelisted: Boolean(raw?.whitelisted),
+          active: Boolean(raw?.active || raw?.currentlyActive),
+          afk: raw?.afk === void 0 ? void 0 : Boolean(raw.afk)
+        };
+      }
+      function sourceRank(candidate) {
+        if (!candidate) return 0;
+        if (candidate.visible || candidate.native || candidate.render || candidate.realtime) return 50;
+        if (candidate.snapshot) return 30;
+        if (candidate.minimapOnly) return 20;
+        if (candidate.source === "persisted") return 10;
+        return 1;
+      }
+      function mergeChaseCandidate(previous, next, options = {}) {
+        if (!previous) return next;
+        if (!next) return previous;
+        const previousRank = sourceRank(previous);
+        const nextRank = sourceRank(next);
+        const preferNextPosition = nextRank > previousRank || nextRank === previousRank && Number(next.observedAt || 0) >= Number(previous.observedAt || 0);
+        const nearMs = Math.max(0, Number(options.nearMs || 2e3) || 2e3);
+        const previousDrop = finiteNumber(previous.drop);
+        const nextDrop = finiteNumber(next.drop);
+        const nextLatestDrop = finiteNumber(next.latestDrop);
+        const previousLatestDrop = finiteNumber(previous.latestDrop);
+        const closeObservation = Math.abs(Number(next.observedAt || 0) - Number(previous.observedAt || 0)) <= nearMs;
+        let displayDrop = previousDrop;
+        if (nextDrop !== null) {
+          if (displayDrop === null) displayDrop = nextDrop;
+          else if (closeObservation) displayDrop = Math.max(displayDrop, nextDrop);
+          else if (Number(next.observedAt || 0) >= Number(previous.observedAt || 0)) displayDrop = nextDrop;
+        }
+        const latestDrop = nextLatestDrop !== null && Number(next.observedAt || 0) >= Number(previous.observedAt || 0) ? nextLatestDrop : previousLatestDrop !== null ? previousLatestDrop : displayDrop;
+        const sources = Array.from(/* @__PURE__ */ new Set([...(previous.sources || [previous.source]).filter(Boolean), ...(next.sources || [next.source]).filter(Boolean)]));
+        return {
+          ...previous,
+          ...next,
+          name: next.name || previous.name,
+          x: preferNextPosition && next.x !== void 0 ? next.x : previous.x,
+          y: preferNextPosition && next.y !== void 0 ? next.y : previous.y,
+          hp: next.hp !== null && next.hp !== void 0 && (preferNextPosition || previous.hp === null || previous.hp === void 0) ? next.hp : previous.hp,
+          drop: displayDrop,
+          latestDrop,
+          distance: preferNextPosition && Number.isFinite(next.distance) ? next.distance : previous.distance,
+          source: preferNextPosition ? next.source : previous.source,
+          sources,
+          native: Boolean(previous.native || next.native),
+          realtime: Boolean(previous.realtime || next.realtime),
+          render: Boolean(previous.render || next.render),
+          snapshot: Boolean(previous.snapshot || next.snapshot),
+          minimapOnly: Boolean(previous.minimapOnly && next.minimapOnly || !previous.visible && next.minimapOnly),
+          visible: Boolean(previous.visible || next.visible),
+          seekableNow: Boolean(previous.seekableNow || next.seekableNow),
+          observedAt: Math.max(Number(previous.observedAt || 0), Number(next.observedAt || 0)),
+          stale: Boolean(previous.stale && next.stale)
+        };
+      }
+      function aggregateChaseCandidates(sources = [], options = {}) {
+        const byId = /* @__PURE__ */ new Map();
+        for (const source of sources || []) {
+          const list = Array.isArray(source?.items) ? source.items : [];
+          for (const raw of list) {
+            const candidate = normalizeChaseCandidate(raw, {
+              ...options,
+              source: source.source || source.label || raw?.source
+            });
+            if (!candidate) continue;
+            const previous = byId.get(candidate.id);
+            byId.set(candidate.id, mergeChaseCandidate(previous, candidate, options));
+          }
+        }
+        return Array.from(byId.values());
+      }
+      function chaseCandidateDisplay(candidate) {
+        if (!candidate) return null;
+        return {
+          id: candidate.id,
+          user_id: candidate.user_id ?? candidate.id,
+          name: candidate.name || "",
+          hp: candidate.hp ?? null,
+          drop: candidate.drop ?? null,
+          latestDrop: candidate.latestDrop ?? null,
+          x: finiteOrUndefined(candidate.x),
+          y: finiteOrUndefined(candidate.y),
+          distance: roundedOrNull(candidate.distance),
+          source: candidate.source || "",
+          sources: Array.isArray(candidate.sources) ? candidate.sources.slice(0, 4) : [],
+          visible: Boolean(candidate.visible),
+          attackableNow: Boolean(candidate.attackableNow),
+          seekableNow: Boolean(candidate.seekableNow),
+          stale: Boolean(candidate.stale),
+          minimapOnly: Boolean(candidate.minimapOnly),
+          snapshot: Boolean(candidate.snapshot),
+          native: Boolean(candidate.native),
+          render: Boolean(candidate.render),
+          realtime: Boolean(candidate.realtime),
+          status: candidate.status || "",
+          reason: candidate.reason || "",
+          staminaBlocked: Boolean(candidate.staminaBlocked),
+          staminaCost: roundedOrNull(candidate.staminaCost),
+          staminaBudget: roundedOrNull(candidate.staminaBudget),
+          marked: Boolean(candidate.marked),
+          markedAt: Number(candidate.markedAt || 0) || 0
+        };
+      }
+      function selectPanelCandidates(candidates, targets = [], options = {}) {
+        const minDrop = Math.max(0, Number(options.minDrop ?? 10) || 10);
+        const topDropLimit = Math.max(1, Math.round(Number(options.topDropLimit || 10) || 10));
+        const nearestLimit = Math.max(1, Math.round(Number(options.nearestLimit || 10) || 10));
+        const maxCandidates = Math.max(1, Math.round(Number(options.maxCandidates || 20) || 20));
+        const targetIds = new Set((targets || []).map((item) => String(item.id || "")).filter(Boolean));
+        const eligible = (candidates || []).filter((item) => !item.whitelisted).filter((item) => item.life !== "Dead" && item.life !== "WaitingRevive").filter((item) => Number(item.drop ?? item.latestDrop ?? 0) >= minDrop || targetIds.has(String(item.id)));
+        const byId = /* @__PURE__ */ new Map();
+        const add = (item) => {
+          if (!item?.id || byId.has(String(item.id))) return;
+          byId.set(String(item.id), item);
+        };
+        for (const item of eligible.filter((item2) => targetIds.has(String(item2.id))).sort(comparePanelCandidate)) add(item);
+        for (const item of eligible.slice().sort((a, b) => {
+          const dropDiff = Number(b.drop ?? b.latestDrop ?? 0) - Number(a.drop ?? a.latestDrop ?? 0);
+          if (dropDiff) return dropDiff;
+          return Number(a.distance || Infinity) - Number(b.distance || Infinity);
+        }).slice(0, topDropLimit)) add(item);
+        for (const item of eligible.slice().sort((a, b) => Number(a.distance || Infinity) - Number(b.distance || Infinity)).slice(0, nearestLimit)) add(item);
+        return Array.from(byId.values()).sort(comparePanelCandidate).slice(0, maxCandidates);
+      }
+      function comparePanelCandidate(a, b) {
+        if (Boolean(a.marked) !== Boolean(b.marked)) return a.marked ? -1 : 1;
+        const dropDiff = Number(b.drop ?? b.latestDrop ?? 0) - Number(a.drop ?? a.latestDrop ?? 0);
+        if (dropDiff) return dropDiff;
+        const distanceDiff = Number(a.distance || Infinity) - Number(b.distance || Infinity);
+        if (distanceDiff) return distanceDiff;
+        return String(a.name || a.id).localeCompare(String(b.name || b.id));
+      }
+      function decorateChaseTargets(state2, candidates, options = {}) {
+        const nowMs = Number(options.nowMs || Date.now()) || Date.now();
+        const staleMs = Math.max(1e3, Number(options.staleMs || 15e3) || 15e3);
+        const byId = new Map((candidates || []).map((item) => [String(item.id), item]));
+        return (state2.targets || []).map((target) => {
+          const candidate = byId.get(String(target.id));
+          const lastSeenAt = Number(candidate?.observedAt || target.lastSeenAt || 0) || 0;
+          const stale = !candidate || lastSeenAt > 0 && nowMs - lastSeenAt > staleMs;
+          return {
+            ...target,
+            ...candidate || {},
+            id: target.id,
+            user_id: candidate?.user_id ?? target.id,
+            name: candidate?.name || target.name || "",
+            drop: candidate?.drop ?? target.lastDrop ?? target.dropAtMark ?? null,
+            latestDrop: candidate?.latestDrop ?? target.lastDrop ?? null,
+            hp: candidate?.hp ?? target.lastHp ?? null,
+            x: candidate?.x ?? target.lastX,
+            y: candidate?.y ?? target.lastY,
+            distance: Number.isFinite(Number(candidate?.distance)) ? Number(candidate.distance) : Number.isFinite(Number(target.lastDistance)) ? Number(target.lastDistance) : Infinity,
+            source: candidate?.source || target.lastSource || "persisted",
+            visible: Boolean(candidate?.visible),
+            seekableNow: Boolean(candidate?.seekableNow),
+            attackableNow: Boolean(candidate?.attackableNow),
+            stale,
+            marked: true,
+            markedAt: target.markedAt || 0,
+            lastSeenAt
+          };
+        });
+      }
+      function chooseChaseTarget(targets, previous = null, options = {}) {
+        const stickMs = Math.max(0, Number(options.stickMs || 0) || 0);
+        const nowMs = Number(options.nowMs || Date.now()) || Date.now();
+        const actionable = (targets || []).filter((item) => item && !item.whitelisted).filter((item) => !item.staminaBlocked).filter((item) => item.seekableNow || item.attackableNow || item.visible).filter((item) => Number(item.drop ?? item.latestDrop ?? item.dropAtMark ?? 0) >= Math.max(0, Number(options.minDrop ?? 10) || 10)).sort((a, b) => Number(a.distance || Infinity) - Number(b.distance || Infinity));
+        if (!actionable.length) return null;
+        const previousId = previous?.id ? String(previous.id) : "";
+        const previousAt = Number(previous?.at || 0) || 0;
+        if (previousId && stickMs > 0 && nowMs - previousAt <= stickMs) {
+          const sticky = actionable.find((item) => String(item.id) === previousId);
+          if (sticky) return sticky;
+        }
+        return actionable[0] || null;
+      }
+      function chaseTargetPersistenceRecord(target, previous = {}, options = {}) {
+        const nowMs = Number(options.nowMs || Date.now()) || Date.now();
+        const id = chaseTargetId(target) || chaseTargetId(previous);
+        if (!id) return null;
+        const seen = target && target.source !== "persisted";
+        return {
+          id,
+          name: chaseTargetName(target) || previous.name || "",
+          dropAtMark: previous.dropAtMark ?? chaseDropValue(target),
+          lastDrop: chaseDropValue(target) ?? previous.lastDrop ?? previous.dropAtMark ?? null,
+          lastHp: chaseHpValue(target) ?? previous.lastHp ?? null,
+          lastX: finiteOrUndefined(target?.x ?? previous.lastX),
+          lastY: finiteOrUndefined(target?.y ?? previous.lastY),
+          lastDistance: roundedOrNull(target?.distance ?? previous.lastDistance),
+          lastSeenAt: seen ? nowMs : Number(previous.lastSeenAt || 0) || 0,
+          lastSource: target?.source || previous.lastSource || "persisted",
+          markedAt: Number(previous.markedAt || options.markedAt || nowMs) || nowMs,
+          markedBy: previous.markedBy || options.markedBy || "panel"
+        };
+      }
+      module.exports = {
+        CHASE_MODE_STATE_VERSION,
+        aggregateChaseCandidates,
+        chaseCandidateDisplay,
+        chaseDropValue,
+        chaseHpValue,
+        chaseTargetId,
+        chaseTargetName,
+        chaseTargetPersistenceRecord,
+        chooseChaseTarget,
+        decorateChaseTargets,
+        normalizeChaseCandidate,
+        normalizeChaseModeState,
+        selectPanelCandidates
+      };
+    }
+  });
+
   // src/browser/runtime/runtime-bot-state.js
   var require_runtime_bot_state = __commonJS({
     "src/browser/runtime/runtime-bot-state.js"(exports, module) {
       "use strict";
       init_define_GRASP_RAT_RUNTIME_CONFIG();
+      var { normalizeChaseModeState } = require_chase_mode();
       function fallbackReadPageGlobal(_key, fallbackValue) {
         return fallbackValue;
       }
@@ -3074,6 +3427,7 @@
         const restoredOfflineLeaveState = runtime.restoredOfflineLeaveState || null;
         const targetWhitelistState = runtime.targetWhitelistState || null;
         const initialPendingExitState = runtime.initialPendingExitState || null;
+        const initialChaseModeState = runtime.initialChaseModeState || null;
         const readPersistentLastSelfState = typeof runtime.readPersistentLastSelfState === "function" ? runtime.readPersistentLastSelfState : fallbackReadPersistentLastSelfState;
         const readPageGlobal = typeof runtime.readPageGlobal === "function" ? runtime.readPageGlobal : fallbackReadPageGlobal;
         const performanceNow = typeof runtime.performanceNow === "function" ? runtime.performanceNow : fallbackPerformanceNow;
@@ -3231,6 +3585,17 @@
             lastSelectedAt: Number(preserved.finalActionArbitration?.lastSelectedAt || 0) || 0,
             lastOverride: preserved.finalActionArbitration?.lastOverride || null,
             history: Array.isArray(preserved.finalActionArbitration?.history) ? preserved.finalActionArbitration.history.slice(-24) : []
+          },
+          chaseMode: {
+            ...normalizeChaseModeState(preserved.chaseMode || initialChaseModeState, {
+              persistMax: cfg.chaseTargetPersistMax
+            }),
+            lastClear: preserved.chaseMode?.lastClear || null,
+            lastDecision: preserved.chaseMode?.lastDecision || null,
+            selectedTargetId: String(preserved.chaseMode?.selectedTargetId || ""),
+            selectedTargetAt: Number(preserved.chaseMode?.selectedTargetAt || 0) || 0,
+            panelCandidates: [],
+            selectedTarget: null
           },
           lastSelf: preserved.lastSelf || readPersistentLastSelfState() || null,
           lastSafety: null,
@@ -3414,7 +3779,11 @@
           latestEnemyLeaveSummary = () => "",
           latestEnemyLeaveDisplayReason = () => "",
           readEnemyLeaveStreakBoundCore = () => 0,
-          summarizePendingCombatLeave = (value) => value || null
+          summarizePendingCombatLeave = (value) => value || null,
+          setChaseTarget = () => ({ ok: false, reason: "chase-mode-not-ready" }),
+          clearChaseTarget = () => ({ ok: false, reason: "chase-mode-not-ready" }),
+          clearAllChaseTargets = () => ({ ok: false, reason: "chase-mode-not-ready" }),
+          summarizeChaseModeStatus = () => null
         } = runtime;
         function activeBot(context) {
           return context && typeof context === "object" ? context : bot;
@@ -3521,6 +3890,18 @@
               lastResult: current.clashLeaveRescue.lastResult || null
             };
           },
+          setChaseTarget(target, options = {}) {
+            return setChaseTarget(target, options);
+          },
+          clearChaseTarget(id, reason = "manual") {
+            return clearChaseTarget(id, reason);
+          },
+          clearAllChaseTargets(reason = "manual") {
+            return clearAllChaseTargets(reason);
+          },
+          summarizeChaseModeStatus() {
+            return summarizeChaseModeStatus(getSelf());
+          },
           step(source = "external") {
             return tick(source);
           },
@@ -3575,6 +3956,7 @@
               lastTarget: current.lastTarget,
               combatTarget: current.combatTarget,
               combatAim: current.combatAim,
+              chaseMode: summarizeChaseModeStatus(self || current.lastSelf || null),
               networkQuality: summarizeNetworkQuality(),
               targetWhitelist: summarizeTargetWhitelistStatus(),
               combatLogging: summarizeCombatLoggingStatus(),
@@ -17680,6 +18062,14 @@
           const t = Date.now();
           const targetId = target.id ?? target.user_id;
           const targetName = target.name || "";
+          const chaseModeSource = action?.chaseMode || target.chaseMode || null;
+          const chaseMode = chaseModeSource ? {
+            targetId: String(chaseModeSource.targetId ?? targetId ?? ""),
+            name: String(chaseModeSource.name || targetName || ""),
+            drop: Number(chaseModeSource.drop ?? target.drop ?? 0) || 0,
+            source: String(chaseModeSource.source || target.source || ""),
+            reason: String(chaseModeSource.reason || action?.reason || "")
+          } : null;
           const playerCategory = attackPlayerCategory(target, action);
           const currentlyActive = isCurrentlyActive(target);
           const moving = isMovingThreat(target);
@@ -17701,6 +18091,8 @@
             playerCategory,
             combat: Boolean(action?.combat || target.combat),
             combatIntent: action?.target?.combatIntent || action?.combatIntent || target.combatIntent || "",
+            chase: Boolean(chaseMode),
+            chaseMode,
             mode: target.mode || target.current_join_mode || "",
             currentlyActive,
             moving,
@@ -22222,6 +22614,8 @@
             active: attack.active === true || attack.playerCategory === "active",
             combat: Boolean(attack.combat),
             combatIntent: attack.combatIntent || "",
+            chase: Boolean(attack.chase || attack.chaseMode),
+            chaseMode: attack.chaseMode || null,
             mode: attack.mode || "",
             currentlyActive: Boolean(attack.currentlyActive),
             moving: Boolean(attack.moving),
@@ -22266,7 +22660,7 @@
         const resolveAttack = typeof options.resolveAttack === "function" ? options.resolveAttack : (item) => Number(item?.postAttackDropResolvedAt || 0);
         const visibleCoinExists = typeof options.visibleCoinExists === "function" ? options.visibleCoinExists : (list, item) => postAttackVisibleCoinExistsCore(list, item, options);
         const coinBlockedByThreat = typeof options.coinBlockedByThreat === "function" ? options.coinBlockedByThreat : () => false;
-        return (attacks || []).slice().reverse().filter((item) => t - Number(item?.at || 0) <= resolveMaxMs).filter((item) => Number(item?.drop || 0) >= minDrop).filter((item) => Number.isFinite(Number(item?.x)) && Number.isFinite(Number(item?.y))).filter((item) => item.afk !== false).filter((item) => item.action === "attack" || item.action === "opportunistic-shot").map((item) => {
+        return (attacks || []).slice().reverse().filter((item) => t - Number(item?.at || 0) <= resolveMaxMs).filter((item) => Number(item?.drop || 0) >= minDrop).filter((item) => Number.isFinite(Number(item?.x)) && Number.isFinite(Number(item?.y))).filter((item) => item.afk !== false || item.chase || item.chaseMode).filter((item) => item.action === "attack" || item.action === "opportunistic-shot").map((item) => {
           const resolvedAt = resolveAttack(item);
           return resolvedAt ? { ...item, postAttackDropResolvedAt: resolvedAt } : null;
         }).filter(Boolean).filter((item) => t - Number(item.postAttackDropResolvedAt || 0) <= waitMs).filter((item) => !visibleCoinExists(coins, item)).map((item) => ({ ...item, distance: dist(self, item) })).filter((item) => item.distance > stopDistance && item.distance <= maxDistance).filter((item) => !(activeThreats || []).some((threat) => coinBlockedByThreat(self, item, threat))).sort((a, b) => Number(b.drop || 0) - Number(a.drop || 0) || Number(a.distance || 0) - Number(b.distance || 0))[0] || null;
@@ -26399,6 +26793,496 @@
     }
   });
 
+  // src/browser/runtime/chase-mode-runtime.js
+  var require_chase_mode_runtime = __commonJS({
+    "src/browser/runtime/chase-mode-runtime.js"(exports, module) {
+      "use strict";
+      init_define_GRASP_RAT_RUNTIME_CONFIG();
+      var {
+        aggregateChaseCandidates,
+        chaseCandidateDisplay,
+        chaseDropValue,
+        chaseTargetId,
+        chaseTargetName,
+        chaseTargetPersistenceRecord,
+        chooseChaseTarget,
+        decorateChaseTargets,
+        normalizeChaseCandidate,
+        normalizeChaseModeState,
+        selectPanelCandidates
+      } = require_chase_mode();
+      function createChaseModeRuntime(runtime = {}) {
+        const {
+          bot,
+          cfg,
+          storage = typeof localStorage !== "undefined" ? localStorage : null,
+          storageKey = "graspRatChaseModeTargets",
+          now = () => Date.now(),
+          dist = () => Infinity,
+          directionTo = null,
+          getSelf = () => null,
+          getNativeEntityList = () => [],
+          isAlive = (value) => Boolean(value),
+          isWhitelistedTarget = () => false,
+          isInvulnerable = () => false,
+          dropValue = (value) => Number(value?.drop || 0) || 0,
+          combatHpValue = (value) => Number(value?.hp ?? 100),
+          knownHpValue = (value) => Number.isFinite(Number(value?.hp)) ? Number(value.hp) : null,
+          opportunityLongStaminaBudget = () => Infinity,
+          opportunityEnemyStaminaCost = () => Infinity,
+          buildCombatAction = () => null
+        } = runtime;
+        function minDrop() {
+          return Math.max(0, Number(cfg.chaseMinDrop ?? 10) || 10);
+        }
+        function persistMax() {
+          return Math.max(1, Math.round(Number(cfg.chaseTargetPersistMax || 20) || 20));
+        }
+        function ensureChaseModeState() {
+          bot.chaseMode = {
+            ...normalizeChaseModeState(bot.chaseMode, { persistMax: persistMax() }),
+            lastClear: bot.chaseMode?.lastClear || null,
+            lastDecision: bot.chaseMode?.lastDecision || null,
+            selectedTargetId: String(bot.chaseMode?.selectedTargetId || ""),
+            selectedTargetAt: Number(bot.chaseMode?.selectedTargetAt || 0) || 0,
+            panelCandidates: Array.isArray(bot.chaseMode?.panelCandidates) ? bot.chaseMode.panelCandidates : [],
+            selectedTarget: bot.chaseMode?.selectedTarget || null
+          };
+          return bot.chaseMode;
+        }
+        function readStoredChaseModeState() {
+          if (!storage) return normalizeChaseModeState(null, { persistMax: persistMax() });
+          try {
+            return normalizeChaseModeState(JSON.parse(String(storage.getItem(storageKey) || "null")), {
+              persistMax: persistMax()
+            });
+          } catch (_) {
+            return normalizeChaseModeState(null, { persistMax: persistMax() });
+          }
+        }
+        function writeChaseModeState(reason = "") {
+          const state2 = ensureChaseModeState();
+          state2.updatedAt = now();
+          const stored = normalizeChaseModeState(state2, { persistMax: persistMax() });
+          state2.version = stored.version;
+          state2.targets = stored.targets;
+          state2.updatedAt = stored.updatedAt;
+          if (storage) {
+            try {
+              storage.setItem(storageKey, JSON.stringify(stored));
+            } catch (err) {
+              state2.lastPersistError = err?.message || String(err);
+              state2.lastPersistErrorAt = now();
+            }
+          }
+          state2.lastPersistReason = String(reason || "");
+          return stored;
+        }
+        function restoreChaseModeState() {
+          const restored = readStoredChaseModeState();
+          const state2 = ensureChaseModeState();
+          if (!state2.targets.length && restored.targets.length) {
+            state2.targets = restored.targets;
+            state2.updatedAt = restored.updatedAt;
+          }
+          return ensureChaseModeState();
+        }
+        function targetIsSelf(target) {
+          const self = getSelf();
+          const selfId = self?.user_id ?? self?.id;
+          const id = target?.id ?? target?.user_id ?? target?.userId;
+          return selfId !== void 0 && selfId !== null && id !== void 0 && id !== null && String(selfId) === String(id);
+        }
+        function setChaseTarget(target, options = {}) {
+          const state2 = ensureChaseModeState();
+          const t = now();
+          const normalized = normalizeChaseCandidate(target, {
+            self: getSelf(),
+            dist,
+            source: target?.source || options.source || "panel",
+            nowMs: t
+          });
+          if (!normalized?.id) return { ok: false, reason: "target-id-required" };
+          if (targetIsSelf(normalized)) return { ok: false, reason: "target-is-self" };
+          if (isWhitelistedTarget(normalized)) return { ok: false, reason: "target-whitelisted" };
+          const drop = chaseDropValue(normalized);
+          if (drop === null || drop < minDrop()) return { ok: false, reason: "target-drop-too-low", minDrop: minDrop(), drop };
+          const previous = state2.targets.find((item) => String(item.id) === String(normalized.id)) || {};
+          const record = chaseTargetPersistenceRecord({ ...normalized, drop }, previous, {
+            nowMs: t,
+            markedAt: previous.markedAt || t,
+            markedBy: options.markedBy || "panel"
+          });
+          state2.targets = [
+            record,
+            ...state2.targets.filter((item) => String(item.id) !== String(record.id))
+          ].slice(0, persistMax());
+          state2.lastClear = state2.lastClear || null;
+          writeChaseModeState("set");
+          return { ok: true, target: record, status: summarizeChaseModeStatus(getSelf()) };
+        }
+        function clearChaseTarget(id, reason = "manual") {
+          const state2 = ensureChaseModeState();
+          const key = id === void 0 || id === null ? "" : String(id);
+          if (!key) return { ok: false, reason: "target-id-required" };
+          const before = state2.targets.length;
+          state2.targets = state2.targets.filter((item) => String(item.id) !== key);
+          const cleared = before !== state2.targets.length;
+          if (cleared) {
+            state2.lastClear = { at: now(), id: key, reason: String(reason || "manual") };
+            if (String(state2.selectedTargetId || "") === key) {
+              state2.selectedTargetId = "";
+              state2.selectedTargetAt = 0;
+              state2.selectedTarget = null;
+            }
+            writeChaseModeState("clear:" + reason);
+          }
+          return { ok: true, cleared, id: key, status: summarizeChaseModeStatus(getSelf()) };
+        }
+        function clearAllChaseTargets(reason = "manual") {
+          const state2 = ensureChaseModeState();
+          const count = state2.targets.length;
+          state2.targets = [];
+          state2.selectedTargetId = "";
+          state2.selectedTargetAt = 0;
+          state2.selectedTarget = null;
+          state2.panelCandidates = [];
+          state2.lastClear = { at: now(), id: "", reason: String(reason || "manual"), count };
+          writeChaseModeState("clear-all:" + reason);
+          return { ok: true, cleared: count, status: summarizeChaseModeStatus(getSelf()) };
+        }
+        function sourceFresh(source, observedAt, t) {
+          const ageMs = observedAt ? Math.max(0, t - Number(observedAt || 0)) : Infinity;
+          const maxAge = source === "minimap" ? Math.max(1e3, Number(cfg.chaseMinimapMaxAgeMs || 15e3) || 15e3) : Math.max(1e3, Number(cfg.chaseSnapshotMaxAgeMs || 15e3) || 15e3);
+          if (source === "persisted") return false;
+          return ageMs <= maxAge;
+        }
+        function sourceListsFromRuntime(self, context = {}) {
+          const lists = [];
+          if (Array.isArray(context.realtimeEntities)) lists.push({ source: "native", items: context.realtimeEntities });
+          else {
+            const nativeEntities = getNativeEntityList();
+            if (Array.isArray(nativeEntities)) lists.push({ source: "native", items: nativeEntities });
+          }
+          if (Array.isArray(context.entities)) {
+            lists.push({
+              source: "snapshot",
+              items: context.entities.filter((item) => item?.snapshot || item?.global || !item?.native).map((item) => ({ ...item, observedAt: item.observedAt || bot.globalState?.snapshotRefreshedAt || 0 }))
+            });
+          } else if (Array.isArray(bot.globalState?.entities)) {
+            lists.push({
+              source: "snapshot",
+              items: bot.globalState.entities.map((item) => ({ ...item, observedAt: item.observedAt || bot.globalState?.snapshotRefreshedAt || 0 }))
+            });
+          }
+          if (Array.isArray(context.globalTargets)) {
+            lists.push({
+              source: "snapshot",
+              items: context.globalTargets.map((item) => ({ ...item, observedAt: item.observedAt || bot.globalState?.snapshotRefreshedAt || 0 }))
+            });
+          }
+          if (Array.isArray(context.minimapDropTargets)) {
+            lists.push({
+              source: "minimap",
+              items: context.minimapDropTargets.map((item) => ({ ...item, observedAt: item.observedAt || bot.globalState?.snapshotRefreshedAt || 0 }))
+            });
+          } else if (Array.isArray(bot.globalState?.minimap?.points)) {
+            lists.push({
+              source: "minimap",
+              items: bot.globalState.minimap.points.map((point) => ({
+                user_id: point.u ?? point.user_id ?? point.id,
+                x: point.x,
+                y: point.y,
+                drop: point.d ?? point.drop,
+                minimapOnly: true,
+                observedAt: bot.globalState.snapshotRefreshedAt || now()
+              }))
+            });
+          }
+          if (Array.isArray(context.persistedTargets)) lists.push({ source: "persisted", items: context.persistedTargets });
+          return lists;
+        }
+        function candidateDecorators(self, context = {}) {
+          const combatById = new Map((context.combatTargets || []).map((item) => [String(item.user_id ?? item.id ?? ""), item]));
+          const attackRange = Math.max(0, Number(cfg.combatAttackRange || cfg.attackRange || 0));
+          const budget = opportunityLongStaminaBudget(self);
+          const t = Number(context.nowMs || now()) || now();
+          return (candidate) => {
+            const id = String(candidate.id || "");
+            const combatTarget = combatById.get(id) || null;
+            const drop = candidate.drop ?? dropValue(candidate);
+            const hp = candidate.hp ?? knownHpValue(candidate) ?? combatHpValue(candidate);
+            const whitelisted = isWhitelistedTarget(candidate);
+            const invulnerable = isInvulnerable(candidate);
+            const explicitFreshDropLow = candidate.latestDrop !== null && candidate.latestDrop !== void 0 && Number(candidate.latestDrop) < minDrop() && sourceFresh(candidate.source, candidate.observedAt, t);
+            const travelCost = Math.max(0, Number(candidate.distance || 0) || 0) * Math.max(0, Number(cfg.opportunityMoveStaminaPerCm ?? 1) || 1);
+            const killCost = Number(opportunityEnemyStaminaCost({ ...candidate, drop, hp, distance: candidate.distance }));
+            const staminaCost = travelCost + (Number.isFinite(killCost) ? Math.max(0, killCost) : Math.max(0, Number(cfg.chaseKillStaminaBudgetMs || 1e5) || 1e5));
+            const staminaBlocked = Number.isFinite(budget) && staminaCost > budget;
+            const attackableNow = Boolean(
+              combatTarget && candidate.visible && !candidate.minimapOnly && !whitelisted && !invulnerable && Number(candidate.distance || Infinity) <= attackRange
+            );
+            return {
+              ...candidate,
+              drop,
+              hp,
+              whitelisted,
+              invulnerable,
+              explicitFreshDropLow,
+              attackableNow,
+              seekableNow: Boolean(candidate.seekableNow && !whitelisted && !invulnerable && !explicitFreshDropLow),
+              staminaBlocked,
+              staminaCost,
+              staminaBudget: budget,
+              combatTarget
+            };
+          };
+        }
+        function recentKillMatchesTarget(target, t = now()) {
+          const id = String(target?.id || "");
+          const name = chaseTargetName(target);
+          const maxAge = Math.max(1e3, Number(cfg.killAttributionMergeMs || 12e4) || 12e4);
+          return (bot.killHistory || []).some((item) => {
+            if (t - Number(item?.at || 0) > maxAge) return false;
+            const itemId = item?.id ?? item?.targetId;
+            if (id && itemId !== void 0 && itemId !== null && String(itemId) === id) return true;
+            const itemName = chaseTargetName({ name: item?.victim || item?.name });
+            return Boolean(name && itemName && name === itemName);
+          });
+        }
+        function applyAutomaticClear(decoratedTargets, candidates, t) {
+          const state2 = ensureChaseModeState();
+          const candidateById = new Map((candidates || []).map((item) => [String(item.id), item]));
+          const clearIntents = [];
+          for (const target of decoratedTargets || []) {
+            const candidate = candidateById.get(String(target.id));
+            if (target.whitelisted || candidate && isWhitelistedTarget(candidate)) {
+              clearIntents.push({ id: target.id, reason: "target-whitelisted" });
+              continue;
+            }
+            if (candidate?.explicitFreshDropLow) {
+              clearIntents.push({ id: target.id, reason: "drop-below-min", drop: candidate.latestDrop });
+              continue;
+            }
+            if (recentKillMatchesTarget(target, t)) {
+              clearIntents.push({ id: target.id, reason: "target-killed" });
+            }
+          }
+          if (!clearIntents.length) return clearIntents;
+          const clearIds = new Set(clearIntents.map((item) => String(item.id)));
+          state2.targets = state2.targets.filter((item) => !clearIds.has(String(item.id)));
+          state2.lastClear = { at: t, ...clearIntents[clearIntents.length - 1], count: clearIntents.length };
+          if (clearIds.has(String(state2.selectedTargetId || ""))) {
+            state2.selectedTargetId = "";
+            state2.selectedTargetAt = 0;
+            state2.selectedTarget = null;
+          }
+          writeChaseModeState("auto-clear");
+          return clearIntents;
+        }
+        function updatePersistedTargetObservations(decoratedTargets) {
+          const state2 = ensureChaseModeState();
+          let changed = false;
+          const byId = new Map((decoratedTargets || []).map((item) => [String(item.id), item]));
+          state2.targets = state2.targets.map((target) => {
+            const current = byId.get(String(target.id));
+            if (!current || current.source === "persisted") return target;
+            changed = true;
+            return chaseTargetPersistenceRecord(current, target, { nowMs: now() }) || target;
+          });
+          if (changed) writeChaseModeState("observe");
+        }
+        function summarizeChaseModeStatus(self = getSelf(), context = {}) {
+          const state2 = restoreChaseModeState();
+          const t = Number(context.nowMs || now()) || now();
+          const sources = sourceListsFromRuntime(self, {
+            ...context,
+            persistedTargets: state2.targets.map((item) => ({
+              id: item.id,
+              user_id: item.id,
+              name: item.name,
+              drop: item.lastDrop ?? item.dropAtMark,
+              hp: item.lastHp,
+              x: item.lastX,
+              y: item.lastY,
+              distance: item.lastDistance,
+              source: "persisted",
+              lastSeenAt: item.lastSeenAt
+            }))
+          });
+          const rawCandidates = aggregateChaseCandidates(sources, { self, dist, nowMs: t });
+          const decoratedCandidates = rawCandidates.filter((item) => {
+            const id = item?.id;
+            if (!id && id !== 0) return false;
+            const selfId = self?.user_id ?? self?.id;
+            return selfId === void 0 || selfId === null || String(id) !== String(selfId);
+          }).filter((item) => isAlive(item)).map(candidateDecorators(self, { ...context, nowMs: t }));
+          let targets = decorateChaseTargets(state2, decoratedCandidates, {
+            nowMs: t,
+            staleMs: Math.max(Number(cfg.chaseSnapshotMaxAgeMs || 15e3), Number(cfg.chaseMinimapMaxAgeMs || 15e3), 15e3)
+          }).map(candidateDecorators(self, { ...context, nowMs: t }));
+          const clearIntents = applyAutomaticClear(targets, decoratedCandidates, t);
+          if (clearIntents.length) {
+            targets = decorateChaseTargets(state2, decoratedCandidates, { nowMs: t }).map(candidateDecorators(self, { ...context, nowMs: t }));
+          }
+          updatePersistedTargetObservations(targets);
+          const targetIds = new Set(state2.targets.map((item) => String(item.id)));
+          const panelCandidates = selectPanelCandidates(
+            decoratedCandidates.map((item) => ({
+              ...item,
+              marked: targetIds.has(String(item.id)),
+              markedAt: state2.targets.find((target) => String(target.id) === String(item.id))?.markedAt || 0,
+              status: item.whitelisted ? "\u767D\u540D\u5355" : item.staminaBlocked ? "\u4F53\u529B\u4E0D\u8DB3" : item.attackableNow ? "\u5C04\u7A0B\u5185" : item.visible ? "\u89C6\u91CE" : item.minimapOnly ? "minimap" : item.snapshot ? "\u5FEB\u7167" : "\u672A\u5237\u65B0"
+            })),
+            state2.targets,
+            {
+              minDrop: minDrop(),
+              topDropLimit: cfg.chasePanelTopDropLimit,
+              nearestLimit: cfg.chasePanelNearestLimit,
+              maxCandidates: cfg.chasePanelMaxCandidates
+            }
+          ).map(chaseCandidateDisplay);
+          const selected = chooseChaseTarget(targets, {
+            id: state2.selectedTargetId,
+            at: state2.selectedTargetAt
+          }, {
+            nowMs: t,
+            stickMs: cfg.chaseTargetStickMs,
+            minDrop: minDrop()
+          });
+          state2.panelCandidates = panelCandidates;
+          state2.selectedTarget = selected ? chaseCandidateDisplay(selected) : null;
+          if (selected) {
+            state2.selectedTargetId = String(selected.id);
+            state2.selectedTargetAt = t;
+          }
+          state2.lastDecision = {
+            at: t,
+            selectedTarget: state2.selectedTarget,
+            clearIntents,
+            activeCount: state2.targets.length,
+            candidateCount: panelCandidates.length
+          };
+          return {
+            enabled: true,
+            minDrop: minDrop(),
+            activeCount: state2.targets.length,
+            candidateCount: panelCandidates.length,
+            panelCandidates,
+            targets: targets.map(chaseCandidateDisplay),
+            selectedTarget: state2.selectedTarget,
+            lastClear: state2.lastClear || null,
+            lastDecision: state2.lastDecision || null
+          };
+        }
+        function buildDirection(self, target) {
+          if (typeof directionTo === "function") return directionTo(self, target);
+          const distance = dist(self, target);
+          if (!Number.isFinite(distance) || distance <= 0) return { dx: 0, dy: 0, distance };
+          return {
+            dx: Math.sign(Number(target.x) - Number(self.x)),
+            dy: Math.sign(Number(target.y) - Number(self.y)),
+            distance
+          };
+        }
+        function selectChaseModeAction(self, context = {}) {
+          const status = summarizeChaseModeStatus(self, context);
+          const selected = status.selectedTarget;
+          if (!selected) return null;
+          const targetId = String(selected.id || "");
+          const combatTarget = (context.combatTargets || []).find((item) => String(item.user_id ?? item.id ?? "") === targetId) || null;
+          if (combatTarget && selected.visible && selected.attackableNow) {
+            const chaseCombatTarget = {
+              ...combatTarget,
+              chaseMode: true,
+              combatIntent: "profit",
+              combatOriginReason: "chase-mode-combat"
+            };
+            const action = buildCombatAction(self, chaseCombatTarget, context.bullets || []);
+            if (action) {
+              if (action.kind === "leave") return action;
+              return {
+                ...action,
+                chaseMode: {
+                  targetId,
+                  name: selected.name || "",
+                  drop: selected.drop,
+                  source: selected.source,
+                  reason: "chase-mode-combat"
+                },
+                target: action.target ? {
+                  ...action.target,
+                  chaseMode: true,
+                  combatIntent: action.target.combatIntent || "profit"
+                } : action.target,
+                opportunityChoice: {
+                  type: "chase-target",
+                  id: targetId,
+                  score: Number(action.score || selected.drop * 1e6 || 0),
+                  staminaCost: selected.staminaCost,
+                  priorityTier: 0
+                }
+              };
+            }
+          }
+          if (!selected.seekableNow || selected.staminaBlocked || selected.x === void 0 || selected.y === void 0) return null;
+          const dir = buildDirection(self, selected);
+          return {
+            kind: "seek-enemy",
+            reason: "chase-mode-approach",
+            chaseMode: {
+              targetId,
+              name: selected.name || "",
+              drop: selected.drop,
+              source: selected.source,
+              reason: "chase-mode-approach"
+            },
+            target: {
+              id: targetId,
+              name: selected.name || "",
+              x: selected.x,
+              y: selected.y,
+              drop: selected.drop,
+              hp: selected.hp,
+              distance: Math.round(Number(dir.distance || selected.distance || 0)),
+              source: selected.source,
+              visible: Boolean(selected.visible),
+              minimapOnly: Boolean(selected.minimapOnly),
+              chaseMode: true
+            },
+            dx: dir.dx,
+            dy: dir.dy,
+            shoot: false,
+            rememberAttack: false,
+            score: Math.round(Number(selected.drop || 0) * 1e6 - Number(dir.distance || selected.distance || 0)),
+            staminaCost: Math.round(Number(selected.staminaCost || 0)),
+            opportunityChoice: {
+              type: "chase-target",
+              id: targetId,
+              score: Math.round(Number(selected.drop || 0) * 1e6 - Number(dir.distance || selected.distance || 0)),
+              staminaCost: Math.round(Number(selected.staminaCost || 0)),
+              priorityTier: 0
+            }
+          };
+        }
+        restoreChaseModeState();
+        return {
+          readStoredChaseModeState,
+          restoreChaseModeState,
+          writeChaseModeState,
+          setChaseTarget,
+          clearChaseTarget,
+          clearAllChaseTargets,
+          summarizeChaseModeStatus,
+          selectChaseModeAction
+        };
+      }
+      module.exports = {
+        createChaseModeRuntime
+      };
+    }
+  });
+
   // src/browser/runtime/runtime-domain-contexts.js
   var require_runtime_domain_contexts = __commonJS({
     "src/browser/runtime/runtime-domain-contexts.js"(exports, module) {
@@ -26616,6 +27500,9 @@
           "pickCombatTarget",
           "pickEngagedCombatTarget",
           "rememberCombatEngagement"
+        ]),
+        chase: Object.freeze([
+          "selectChaseModeAction"
         ]),
         logging: Object.freeze([
           "finishImportantCombat",
@@ -27086,7 +27973,7 @@
       init_define_GRASP_RAT_RUNTIME_CONFIG();
       function createOrchestrationDecisionRuntime(runtime = {}) {
         const { domainContexts = null } = runtime;
-        const runtimeDomainContexts = domainContexts || { bootstrap: runtime, state: runtime, entity: runtime, native: runtime, control: runtime, profit: runtime, combat: runtime, logging: runtime, ui: runtime, safety: runtime };
+        const runtimeDomainContexts = domainContexts || { bootstrap: runtime, state: runtime, entity: runtime, native: runtime, control: runtime, profit: runtime, combat: runtime, chase: runtime, logging: runtime, ui: runtime, safety: runtime };
         const {
           BOT_KEY,
           ENEMY_LEAVE_STATE_KEY,
@@ -27294,6 +28181,9 @@
           pickEngagedCombatTarget,
           rememberCombatEngagement
         } = runtimeDomainContexts.combat || {};
+        const {
+          selectChaseModeAction
+        } = runtimeDomainContexts.chase || {};
         const {
           finishImportantCombat,
           importantSessionStaminaSpentMs,
@@ -27883,6 +28773,23 @@
               locked: flee.locked,
               threats: cautionThreats.slice(0, 4).map((e) => ({ id: e.user_id, name: e.name, d: Math.round(e.distance), drop: e.drop, speed: Math.round(e.speed), moving: Boolean(e.moving), r: Math.round(e.cautionRadius) }))
             };
+          }
+          const chaseModeAction = typeof selectChaseModeAction === "function" ? selectChaseModeAction(self, {
+            entities,
+            realtimeEntities,
+            globalTargets,
+            minimapDropTargets,
+            combatTargets,
+            bullets
+          }) : null;
+          if (chaseModeAction) {
+            bot.fleeLock = null;
+            bot.returnBlockScan = null;
+            if (shouldClearOpportunityChoiceCore(bot.opportunityChoice, "enemy", chaseModeAction.target?.id)) {
+              bot.opportunityChoice = null;
+              resetOpportunitySwitchLock();
+            }
+            return chaseModeAction;
           }
           if (footCoin) {
             bot.fleeLock = null;
@@ -29182,7 +30089,7 @@
             } else if ((action.kind === "seek-enemy" || action.kind === "seek-drop") && action.target) {
               setLastTarget("enemy", action.target.id);
               if (action.combat && !action.combatDodgeOnly) rememberCombatEngagement(self, action.target, action);
-              else rememberAttack(self, action.target, action.kind, action);
+              else if (action.rememberAttack !== false) rememberAttack(self, action.target, action.kind, action);
             } else if (action.kind === "flee") {
               bot.lastTarget = null;
               bot.lastTargetAt = 0;
@@ -29796,12 +30703,21 @@
           pendingExitRetryMsForBotObjectCore,
           summarizePendingExitForBotObjectCore
         } = botStatusCores;
+        const CHASE_MODE_TARGETS_KEY = "graspRatChaseModeTargets";
+        const initialChaseModeState = (() => {
+          try {
+            return JSON.parse(String(localStorage.getItem(CHASE_MODE_TARGETS_KEY) || "null"));
+          } catch (_) {
+            return null;
+          }
+        })();
         const bot = createRuntimeBotState({
           cfg,
           config,
           preserved,
           previousBot,
           targetWhitelistState,
+          initialChaseModeState,
           initialPendingExitState,
           restoredEnemyLeaveState,
           restoredOfflineLeaveState,
@@ -29854,6 +30770,11 @@
           now: Date.now,
           consoleObject: console
         });
+        let setChaseTargetApi = () => ({ ok: false, reason: "chase-mode-not-ready" });
+        let clearChaseTargetApi = () => ({ ok: false, reason: "chase-mode-not-ready" });
+        let clearAllChaseTargetsApi = () => ({ ok: false, reason: "chase-mode-not-ready" });
+        let summarizeChaseModeStatusApi = () => null;
+        let selectChaseModeAction;
         Object.assign(bot, createBotApiRuntime({
           bot,
           cfg,
@@ -29910,7 +30831,11 @@
           latestEnemyLeaveSummary: (...args) => latestEnemyLeaveSummary(...args),
           latestEnemyLeaveDisplayReason: (...args) => latestEnemyLeaveDisplayReason(...args),
           readEnemyLeaveStreakBoundCore,
-          summarizePendingCombatLeave: (...args) => summarizePendingCombatLeave(...args)
+          summarizePendingCombatLeave: (...args) => summarizePendingCombatLeave(...args),
+          setChaseTarget: (...args) => setChaseTargetApi(...args),
+          clearChaseTarget: (...args) => clearChaseTargetApi(...args),
+          clearAllChaseTargets: (...args) => clearAllChaseTargetsApi(...args),
+          summarizeChaseModeStatus: (...args) => summarizeChaseModeStatusApi(...args)
         }));
         const {
           hypot,
@@ -31159,6 +32084,33 @@
           opportunityStaminaAffordable,
           scoreCoinOpportunity
         }));
+        const { createChaseModeRuntime } = require_chase_mode_runtime();
+        ({
+          setChaseTarget: setChaseTargetApi,
+          clearChaseTarget: clearChaseTargetApi,
+          clearAllChaseTargets: clearAllChaseTargetsApi,
+          summarizeChaseModeStatus: summarizeChaseModeStatusApi,
+          selectChaseModeAction
+        } = createChaseModeRuntime({
+          bot,
+          cfg,
+          storage: localStorage,
+          storageKey: CHASE_MODE_TARGETS_KEY,
+          now: Date.now,
+          dist,
+          directionTo,
+          getSelf: () => getSelf(),
+          getNativeEntityList: () => getNativeEntityList(),
+          isAlive,
+          isWhitelistedTarget,
+          isInvulnerable,
+          dropValue,
+          combatHpValue,
+          knownHpValue,
+          opportunityLongStaminaBudget,
+          opportunityEnemyStaminaCost,
+          buildCombatAction
+        }));
         const { createRuntimeDomainContexts } = require_runtime_domain_contexts();
         const { createOrchestrationRuntime } = require_orchestration_runtime();
         const runtimeFlatContext = {
@@ -31355,6 +32307,7 @@
           sendActionVelocity,
           sessionMismatchRecoveryReloadSatisfied,
           setLastTarget,
+          selectChaseModeAction,
           shootAt,
           shouldClearOpportunityChoiceCore,
           snapshotCoinAgeMs,

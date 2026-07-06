@@ -100,12 +100,22 @@ const __graspRatRuntimeStartup = (() => {
     summarizePendingExitForBotObjectCore
   } = botStatusCores;
 
+  const CHASE_MODE_TARGETS_KEY = 'graspRatChaseModeTargets';
+  const initialChaseModeState = (() => {
+    try {
+      return JSON.parse(String(localStorage.getItem(CHASE_MODE_TARGETS_KEY) || 'null'));
+    } catch (_) {
+      return null;
+    }
+  })();
+
   const bot = createRuntimeBotState({
     cfg,
     config,
     preserved,
     previousBot,
     targetWhitelistState,
+    initialChaseModeState,
     initialPendingExitState,
     restoredEnemyLeaveState,
     restoredOfflineLeaveState,
@@ -161,6 +171,12 @@ const __graspRatRuntimeStartup = (() => {
     now: Date.now,
     consoleObject: console
   });
+
+  let setChaseTargetApi = () => ({ ok: false, reason: 'chase-mode-not-ready' });
+  let clearChaseTargetApi = () => ({ ok: false, reason: 'chase-mode-not-ready' });
+  let clearAllChaseTargetsApi = () => ({ ok: false, reason: 'chase-mode-not-ready' });
+  let summarizeChaseModeStatusApi = () => null;
+  let selectChaseModeAction;
 
   Object.assign(bot, createBotApiRuntime({
     bot,
@@ -218,7 +234,11 @@ const __graspRatRuntimeStartup = (() => {
     latestEnemyLeaveSummary: (...args) => latestEnemyLeaveSummary(...args),
     latestEnemyLeaveDisplayReason: (...args) => latestEnemyLeaveDisplayReason(...args),
     readEnemyLeaveStreakBoundCore,
-    summarizePendingCombatLeave: (...args) => summarizePendingCombatLeave(...args)
+    summarizePendingCombatLeave: (...args) => summarizePendingCombatLeave(...args),
+    setChaseTarget: (...args) => setChaseTargetApi(...args),
+    clearChaseTarget: (...args) => clearChaseTargetApi(...args),
+    clearAllChaseTargets: (...args) => clearAllChaseTargetsApi(...args),
+    summarizeChaseModeStatus: (...args) => summarizeChaseModeStatusApi(...args)
   }));
 
 	  const {
@@ -1917,6 +1937,34 @@ const __graspRatRuntimeStartup = (() => {
     scoreCoinOpportunity
   }));
 
+  const { createChaseModeRuntime } = require('./runtime/chase-mode-runtime');
+  ({
+    setChaseTarget: setChaseTargetApi,
+    clearChaseTarget: clearChaseTargetApi,
+    clearAllChaseTargets: clearAllChaseTargetsApi,
+    summarizeChaseModeStatus: summarizeChaseModeStatusApi,
+    selectChaseModeAction
+  } = createChaseModeRuntime({
+    bot,
+    cfg,
+    storage: localStorage,
+    storageKey: CHASE_MODE_TARGETS_KEY,
+    now: Date.now,
+    dist,
+    directionTo,
+    getSelf: () => getSelf(),
+    getNativeEntityList: () => getNativeEntityList(),
+    isAlive,
+    isWhitelistedTarget,
+    isInvulnerable,
+    dropValue,
+    combatHpValue,
+    knownHpValue,
+    opportunityLongStaminaBudget,
+    opportunityEnemyStaminaCost,
+    buildCombatAction
+  }));
+
   const { createRuntimeDomainContexts } = require('./runtime/runtime-domain-contexts');
   const { createOrchestrationRuntime } = require('./runtime/orchestration-runtime');
   const runtimeFlatContext = {
@@ -2113,6 +2161,7 @@ const __graspRatRuntimeStartup = (() => {
     sendActionVelocity,
     sessionMismatchRecoveryReloadSatisfied,
     setLastTarget,
+    selectChaseModeAction,
     shootAt,
     shouldClearOpportunityChoiceCore,
     snapshotCoinAgeMs,

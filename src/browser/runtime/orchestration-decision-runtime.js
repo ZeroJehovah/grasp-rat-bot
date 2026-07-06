@@ -2,7 +2,7 @@
 
 function createOrchestrationDecisionRuntime(runtime = {}) {
   const { domainContexts = null } = runtime;
-  const runtimeDomainContexts = domainContexts || { bootstrap: runtime, state: runtime, entity: runtime, native: runtime, control: runtime, profit: runtime, combat: runtime, logging: runtime, ui: runtime, safety: runtime };
+  const runtimeDomainContexts = domainContexts || { bootstrap: runtime, state: runtime, entity: runtime, native: runtime, control: runtime, profit: runtime, combat: runtime, chase: runtime, logging: runtime, ui: runtime, safety: runtime };
 
   const {
     BOT_KEY, ENEMY_LEAVE_STATE_KEY, LOGIN_SUPPRESS_KEY, LOGIN_SUPPRESS_REASON_KEY,
@@ -212,6 +212,10 @@ function createOrchestrationDecisionRuntime(runtime = {}) {
     pickEngagedCombatTarget,
     rememberCombatEngagement
   } = runtimeDomainContexts.combat || {};
+
+  const {
+    selectChaseModeAction
+  } = runtimeDomainContexts.chase || {};
 
   const {
     finishImportantCombat,
@@ -842,8 +846,8 @@ function createOrchestrationDecisionRuntime(runtime = {}) {
       };
     }
 
-	    if (!fullHp && cautionThreats.length) {
-	      if (footCoin) {
+    if (!fullHp && cautionThreats.length) {
+      if (footCoin) {
 	        bot.fleeLock = null;
 	        const dir = (() => {
       const coinDirectionSelf = self;
@@ -879,8 +883,28 @@ function createOrchestrationDecisionRuntime(runtime = {}) {
         dy: flee.dy,
         locked: flee.locked,
         threats: cautionThreats.slice(0, 4).map(e => ({ id: e.user_id, name: e.name, d: Math.round(e.distance), drop: e.drop, speed: Math.round(e.speed), moving: Boolean(e.moving), r: Math.round(e.cautionRadius) }))
-	      };
-	    }
+      };
+    }
+
+    const chaseModeAction = typeof selectChaseModeAction === 'function'
+      ? selectChaseModeAction(self, {
+        entities,
+        realtimeEntities,
+        globalTargets,
+        minimapDropTargets,
+        combatTargets,
+        bullets
+      })
+      : null;
+    if (chaseModeAction) {
+      bot.fleeLock = null;
+      bot.returnBlockScan = null;
+      if (shouldClearOpportunityChoiceCore(bot.opportunityChoice, 'enemy', chaseModeAction.target?.id)) {
+        bot.opportunityChoice = null;
+        resetOpportunitySwitchLock();
+      }
+      return chaseModeAction;
+    }
 
 			    if (footCoin) {
 	      bot.fleeLock = null;

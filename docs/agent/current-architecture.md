@@ -38,6 +38,7 @@ Runtime domain modules under `src/browser/runtime/` own browser integration:
 - Native/page integration: `native-data-runtime.js`, `native-transport-runtime.js`, `native-state-runtime.js`, `session-stats-runtime.js`, `stall-diagnostics-runtime.js`, `network-quality-runtime.js`.
 - Control flow: `control-flow-runtime.js`, `control-login-runtime.js`, `login-point-safety-runtime.js`, `post-login-zoom-runtime.js`, `pending-exit-runtime.js`, `clash-leave-rescue-runtime.js`, `leave-flow-runtime.js`, `session-recovery-runtime.js`, `reload-block-log-throttle.js`, `no-self-snapshot-recovery-runtime.js`, `relogin-gate-runtime.js`.
 - Profit: `profit-runtime.js`, `profit-coin-runtime.js`, `profit-opportunity-runtime.js`, `profit-post-attack-runtime.js`, `profit-arbitration-runtime.js`.
+- Chase mode: `chase-mode-runtime.js`.
 - Combat: `combat-runtime.js`, `combat-target-runtime.js`, `combat-movement-runtime.js`, `combat-aim-runtime.js`, `combat-action-runtime.js`.
 - Logging: `combat-log-runtime.js`, `combat-log-queue-runtime.js`, `combat-log-frame-runtime.js`, `combat-log-diagnostics-runtime.js`, `exit-audit-runtime.js`, `important-session-runtime.js`, `kill-attribution-runtime.js`.
 - Orchestration: `orchestration-runtime.js`, `orchestration-safety-runtime.js`, `orchestration-decision-runtime.js`, `orchestration-tick-runtime.js`.
@@ -54,6 +55,7 @@ Current strategy surfaces include:
 - target-switch diagnostics;
 - coin diagnostics, target identity, progress, motion, and routing;
 - opportunity candidate, choice, pick, and clear helpers;
+- chase-mode candidate aggregation, persistence normalization, panel selection, and target choice;
 - post-attack drop selection;
 - stamina-budget helpers;
 - combat constants, target selection, movement, and fire-discipline helpers;

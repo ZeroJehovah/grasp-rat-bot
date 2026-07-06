@@ -13,7 +13,7 @@ Read only what is needed for the current task:
 - [combat-logging.md](combat-logging.md): combat-log service, analyzer, daily summary, and live monitoring notes.
 - [coin-balance-reporting.md](coin-balance-reporting.md): known-good Elysiver API method, auth variables, monthly coin report command, and fetch retry behavior.
 - [test-coverage.md](test-coverage.md): current self-test/static/replay coverage notes and known validation gaps.
-- [chase-mode-development-plan.md](chase-mode-development-plan.md): planned design for the requested chase mode feature; use before implementing chase-mode UI, persistence, target selection, and strategy integration.
+- [chase-mode-development-plan.md](chase-mode-development-plan.md): original implementation plan for chase mode; current durable behavior/config/model notes live in the current strategy, config, and data-model docs.
 
 ## Current Development Surfaces
 

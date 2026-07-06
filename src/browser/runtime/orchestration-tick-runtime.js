@@ -1091,7 +1091,7 @@ function createOrchestrationTickRuntime(runtime = {}) {
       } else if ((action.kind === 'seek-enemy' || action.kind === 'seek-drop') && action.target) {
         setLastTarget('enemy', action.target.id);
         if (action.combat && !action.combatDodgeOnly) rememberCombatEngagement(self, action.target, action);
-        else rememberAttack(self, action.target, action.kind, action);
+        else if (action.rememberAttack !== false) rememberAttack(self, action.target, action.kind, action);
       } else if (action.kind === 'flee') {
         bot.lastTarget = null;
         bot.lastTargetAt = 0;
