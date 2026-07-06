@@ -12,7 +12,7 @@
   var define_GRASP_RAT_RUNTIME_CONFIG_default;
   var init_define_GRASP_RAT_RUNTIME_CONFIG = __esm({
     "<define:__GRASP_RAT_RUNTIME_CONFIG__>"() {
-      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.577" };
+      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.578" };
     }
   });
 
@@ -4974,6 +4974,7 @@
             "control-ws-reconnect-churn": "\u7F51\u7EDC\u8FDE\u63A5\u53CD\u590D\u91CD\u8FDE\uFF0C\u7ACB\u5373\u9000\u51FA",
             "control-ws-no-self-game-session": "\u5DF2\u767B\u5F55\u4F46\u81EA\u8EAB\u5B9E\u4F53\u4E0D\u53EF\u89C1\uFF0C\u7ACB\u5373\u9000\u51FA",
             "snapshot-no-self-exit-confirmed": "\u5FEB\u7167\u786E\u8BA4\u5DF2\u9000\u51FA\uFF0C\u6B63\u5728\u91CD\u767B",
+            "login-required-no-self-exit-confirmed": "\u65E7\u767B\u5F55\u6001\u5931\u6548\uFF0C\u6B63\u5728\u91CD\u767B",
             "control-ws-server-position-stalled": "\u670D\u52A1\u7AEF\u4F4D\u7F6E\u505C\u6B62\uFF0C\u6309\u7F51\u7EDC\u8FDE\u63A5\u79BB\u7EBF\u5904\u7406",
             "control-global-sampling-outage": "\u7F51\u7EDC\u91C7\u6837\u8D85\u65F6\uFF0C\u6309\u7F51\u7EDC\u8FDE\u63A5\u79BB\u7EBF\u5904\u7406",
             "control-combat-tick-gap": "\u6218\u6597\u4E3B\u5FAA\u73AF\u65AD\u6863\uFF0C\u6309\u7F51\u7EDC\u8FDE\u63A5\u79BB\u7EBF\u5904\u7406",
@@ -6206,7 +6207,7 @@
         function combatLogSuspendReason(decision) {
           const reason = String(decision?.reason || "");
           if (!reason) return "";
-          if (/^(paused|cloudflare-error-refresh|no-self|not-alive|auto-login|manual-login|login-suppressed|login-cooldown|login-snapshot-gate|login-control-missing|session-mismatch-refresh|session-mismatch-recovery|snapshot-no-self-exit-confirmed|game-session-connecting|exit-log-flush-pending|important-log-flush-pending)$/.test(reason)) return reason;
+          if (/^(paused|cloudflare-error-refresh|no-self|not-alive|auto-login|manual-login|login-suppressed|login-cooldown|login-snapshot-gate|login-control-missing|session-mismatch-refresh|session-mismatch-recovery|snapshot-no-self-exit-confirmed|login-required-no-self-exit-confirmed|game-session-connecting|exit-log-flush-pending|important-log-flush-pending)$/.test(reason)) return reason;
           if (/^(enemy-leave-wait|pursuit-leave-wait|offline-leave-wait)$/.test(reason)) return reason;
           if (/^(offline-leave|control-ws-offline|control-ws-offline-unsafe|control-ws-offline-safe-wait|control-ws-reconnect-churn|control-ws-no-self-game-session|control-ws-server-position-stalled|control-global-sampling-outage|control-combat-tick-gap|control-action-settlement-stalled|control-stamina-exhausted|stamina-exhausted-leave)$/.test(reason)) return reason;
           return "";
@@ -8526,9 +8527,31 @@
             return /linuxdo|login|sign in|oauth|authorize|join|start|play|登录|登陆|授权|加入|进入|开始/i.test(text);
           }) || null;
         }
+        function hasLoginRequiredTextValue(value) {
+          return /login required|please login|please sign in|not logged in|未登录|请先登录|请登录|需要登录/i.test(String(value || ""));
+        }
         function hasLoginRequiredText() {
-          const text = (document.body?.innerText || "").slice(0, 5e3);
-          return /login required|please login|please sign in|not logged in|未登录|请先登录|请登录|需要登录/i.test(text);
+          const bodyText = (document.body?.innerText || "").slice(0, 5e3);
+          if (hasLoginRequiredTextValue(bodyText)) return true;
+          for (const selector of ["#chat", "#chatLog", "#chatMessages", ".chat", ".chat-log", ".chat-messages", ".messages", ".side"]) {
+            try {
+              const text = Array.from(document.querySelectorAll(selector)).map((el) => String(el?.innerText || el?.textContent || "")).join("\n").slice(-5e3);
+              if (hasLoginRequiredTextValue(text)) return true;
+            } catch (_) {
+            }
+          }
+          const messages = Array.isArray(bot?.globalState?.messages) ? bot.globalState.messages.slice(-30) : [];
+          for (const message of messages) {
+            const text = typeof message === "string" ? message : [
+              message?.text,
+              message?.message,
+              message?.content,
+              message?.body,
+              message?.type
+            ].filter(Boolean).join(" ");
+            if (hasLoginRequiredTextValue(text)) return true;
+          }
+          return false;
         }
         function setLoginSuppress(reason, ms = cfg.postLoginGraceMs) {
           const requestedUntil = Date.now() + Math.max(1e3, Number(ms) || cfg.postLoginGraceMs);
@@ -11782,7 +11805,9 @@
           const storedSnapshotExitRecovery = activeNoSelfSnapshotRecoveryState(localStorage2, userId, { key: NO_SELF_SNAPSHOT_RECOVERY_KEY });
           const memorySnapshotExitRecovery = storedSnapshotExitRecovery ? null : normalizeNoSelfSnapshotRecoveryState(bot.noSelfSnapshotRecovery);
           const snapshotExitRecovery = storedSnapshotExitRecovery || (memorySnapshotExitRecovery && (!memorySnapshotExitRecovery.userId || !userId || memorySnapshotExitRecovery.userId === userId) ? memorySnapshotExitRecovery : null);
-          const hasSessionEvidence = Boolean(!snapshotExitRecovery && userId && !loginRequired && (control?.hasToken || controlHasNativeGameSession(control) || snapshotSelf.present || control?.transport === "native-page" || Number.isFinite(wsReadyStateNumber(control?.nativeWsReadyState)) || Number.isFinite(wsReadyStateNumber(control?.wsReadyState))));
+          const staleSessionEvidence = Boolean(userId && (control?.hasToken || controlHasNativeGameSession(control) || snapshotSelf.present || control?.transport === "native-page" || Number.isFinite(wsReadyStateNumber(control?.nativeWsReadyState)) || Number.isFinite(wsReadyStateNumber(control?.wsReadyState))));
+          const loginRequiredAuthBlocked = Boolean(!snapshotExitRecovery && loginRequired && staleSessionEvidence);
+          const hasSessionEvidence = Boolean(!snapshotExitRecovery && userId && (loginRequiredAuthBlocked || !loginRequired && staleSessionEvidence));
           const reconnectChurn = Boolean(control?.nativeReconnectChurn);
           const sessionMismatch = Boolean(!snapshotExitRecovery && controlHasAuthoritativeSessionMismatch(control, snapshotSelf));
           const ageMs = Math.max(0, Math.round(Number(noSelfAgeMs || 0) || 0));
@@ -11799,13 +11824,13 @@
             )
           );
           const mismatchTimedOut = Boolean(sessionMismatch && ageMs >= mismatchLeaveMs);
-          const shouldLeave = Boolean(hasSessionEvidence && (reconnectChurn || timedOut || mismatchTimedOut));
-          const reason = reconnectChurn ? "websocket reconnect churn missing self" : mismatchTimedOut ? "game session auth mismatch missing self" : "game session missing self";
+          const shouldLeave = Boolean(loginRequiredAuthBlocked || hasSessionEvidence && (reconnectChurn || timedOut || mismatchTimedOut));
+          const reason = loginRequiredAuthBlocked ? "game session login required missing self" : reconnectChurn ? "websocket reconnect churn missing self" : mismatchTimedOut ? "game session auth mismatch missing self" : "game session missing self";
           return {
             active: hasSessionEvidence,
             shouldLeave,
             reason,
-            displayReason: reconnectChurn ? "\u5DF2\u767B\u5F55\u4F46\u81EA\u8EAB\u5B9E\u4F53\u4E0D\u53EF\u89C1\uFF0C\u7F51\u7EDC\u8FDE\u63A5\u53CD\u590D\u91CD\u8FDE\uFF0C\u6B63\u5728\u9000\u51FA" : mismatchTimedOut ? "\u754C\u9762\u663E\u793A\u672A\u767B\u5F55\u4F46\u539F\u751F\u4F1A\u8BDD\u4ECD\u5728\u7EBF\uFF0C\u81EA\u8EAB\u5B9E\u4F53\u4E0D\u53EF\u89C1\uFF0C\u6B63\u5728\u91CD\u7F6E\u4F1A\u8BDD" : "\u5DF2\u767B\u5F55\u4F46\u81EA\u8EAB\u5B9E\u4F53\u957F\u671F\u4E0D\u53EF\u89C1\uFF0C\u6B63\u5728\u9000\u51FA",
+            displayReason: loginRequiredAuthBlocked ? "\u65E7\u767B\u5F55\u6001\u5DF2\u88AB\u670D\u52A1\u7AEF\u62D2\u7EDD\uFF0C\u6E05\u7406\u672C\u5730\u767B\u5F55\u72B6\u6001\u540E\u91CD\u767B" : reconnectChurn ? "\u5DF2\u767B\u5F55\u4F46\u81EA\u8EAB\u5B9E\u4F53\u4E0D\u53EF\u89C1\uFF0C\u7F51\u7EDC\u8FDE\u63A5\u53CD\u590D\u91CD\u8FDE\uFF0C\u6B63\u5728\u9000\u51FA" : mismatchTimedOut ? "\u754C\u9762\u663E\u793A\u672A\u767B\u5F55\u4F46\u539F\u751F\u4F1A\u8BDD\u4ECD\u5728\u7EBF\uFF0C\u81EA\u8EAB\u5B9E\u4F53\u4E0D\u53EF\u89C1\uFF0C\u6B63\u5728\u91CD\u7F6E\u4F1A\u8BDD" : "\u5DF2\u767B\u5F55\u4F46\u81EA\u8EAB\u5B9E\u4F53\u957F\u671F\u4E0D\u53EF\u89C1\uFF0C\u6B63\u5728\u9000\u51FA",
             userId: userId || null,
             ageMs,
             leaveMs,
@@ -11821,6 +11846,7 @@
             } : null,
             wsOfflineish,
             loginRequired,
+            loginRequiredAuthBlocked,
             control: control ? {
               wsOpen: Boolean(control.wsOpen),
               rawWsOpen: Boolean(control.rawWsOpen),
@@ -12186,17 +12212,20 @@
         function noSelfSnapshotExitConfirmationState(control, noSelfExit, t = Date.now()) {
           const userId = Number(control?.currentUserId || getCurrentUserId() || noSelfExit?.userId || 0) || 0;
           const snapshotSelf = noSelfExit?.snapshotSelf || snapshotSelfPresenceState(userId);
+          const loginRequiredAuthBlocked = Boolean(noSelfExit?.loginRequiredAuthBlocked);
           const blockedBy = [];
           if (!noSelfExit?.shouldLeave) blockedBy.push("no-self-leave-not-due");
-          if (!snapshotSelf?.known) blockedBy.push("snapshot-self-unknown");
-          if (snapshotSelf?.fresh !== true) blockedBy.push("snapshot-self-stale");
-          if (snapshotSelf?.present) blockedBy.push("snapshot-self-present");
+          if (!loginRequiredAuthBlocked) {
+            if (!snapshotSelf?.known) blockedBy.push("snapshot-self-unknown");
+            if (snapshotSelf?.fresh !== true) blockedBy.push("snapshot-self-stale");
+            if (snapshotSelf?.present) blockedBy.push("snapshot-self-present");
+          }
           const confirmed = blockedBy.length === 0;
           return {
             confirmed,
-            reason: confirmed ? "snapshot-no-self-exit-confirmed" : blockedBy[0] || "snapshot-no-self-not-confirmed",
-            displayReason: confirmed ? "\u5FEB\u7167\u786E\u8BA4\u670D\u52A1\u7AEF\u5DF2\u65E0\u81EA\u8EAB\uFF0C\u6E05\u7406\u672C\u5730\u767B\u5F55\u72B6\u6001\u540E\u91CD\u767B" : "",
-            source: "fresh-snapshot-missing-self",
+            reason: confirmed ? loginRequiredAuthBlocked ? "login-required-no-self-exit-confirmed" : "snapshot-no-self-exit-confirmed" : blockedBy[0] || "snapshot-no-self-not-confirmed",
+            displayReason: confirmed ? loginRequiredAuthBlocked ? "\u9875\u9762\u660E\u786E\u8981\u6C42\u91CD\u65B0\u767B\u5F55\uFF0C\u6E05\u7406\u672C\u5730\u767B\u5F55\u72B6\u6001\u540E\u91CD\u767B" : "\u5FEB\u7167\u786E\u8BA4\u670D\u52A1\u7AEF\u5DF2\u65E0\u81EA\u8EAB\uFF0C\u6E05\u7406\u672C\u5730\u767B\u5F55\u72B6\u6001\u540E\u91CD\u767B" : "",
+            source: loginRequiredAuthBlocked ? "login-required-missing-self" : "fresh-snapshot-missing-self",
             at: t,
             userId: userId || null,
             snapshotSelf,
@@ -12396,7 +12425,8 @@
         }
         function clearNoSelfSnapshotLocalSession(control, noSelfExit, reason = "snapshot no-self exit confirmed") {
           const confirmation = noSelfSnapshotExitConfirmationState(control, noSelfExit, Date.now());
-          return clearNoSelfLocalSessionForConfirmation(confirmation, control, noSelfExit, reason);
+          const clearReason = confirmation.reason === "login-required-no-self-exit-confirmed" ? "login required local session reset" : reason;
+          return clearNoSelfLocalSessionForConfirmation(confirmation, control, noSelfExit, clearReason);
         }
         function clearNoSelfLocalSessionAfterLeave403(control, noSelfExit, leaveDetail = null, reason = "leave HTTP 403 no-self recovery") {
           const t = Date.now();
@@ -12458,25 +12488,27 @@
           const confirmation = noSelfSnapshotExitConfirmationState(control, noSelfExit);
           if (!confirmation.confirmed) return null;
           const recovery = clearNoSelfSnapshotLocalSession(control, noSelfExit);
+          const confirmedReason = recovery.reason || "snapshot-no-self-exit-confirmed";
           const leaveResult = {
             attempted: false,
             method: "snapshot-confirmation",
-            reason: "snapshot no-self exit confirmed",
+            reason: confirmedReason,
             at: recovery.clearedAt || Date.now(),
             userId: recovery.userId || getCurrentUserId() || null,
             self: bot.lastSelf || null,
-            summary: "\u5FEB\u7167\u786E\u8BA4\u670D\u52A1\u7AEF\u5DF2\u65E0\u81EA\u8EAB\uFF0C\u5DF2\u6E05\u7406\u672C\u5730\u767B\u5F55\u72B6\u6001",
+            summary: recovery.displayReason || "\u5FEB\u7167\u786E\u8BA4\u670D\u52A1\u7AEF\u5DF2\u65E0\u81EA\u8EAB\uFF0C\u5DF2\u6E05\u7406\u672C\u5730\u767B\u5F55\u72B6\u6001",
             displayReason: recovery.displayReason,
             exitPending: false,
             exitConfirmed: true,
             localSessionReset: recovery
           };
           bot.lastOfflineLeaveResult = leaveResult;
-          noteImportantSessionExit("snapshot-no-self-exit-confirmed", bot.lastSelf, Date.now(), { exit: leaveResult });
-          const reloadRequested = Boolean(requestReload("snapshot no-self local session reset"));
+          noteImportantSessionExit(confirmedReason, bot.lastSelf, Date.now(), { exit: leaveResult });
+          const reloadReason = confirmedReason === "login-required-no-self-exit-confirmed" ? "login required local session reset" : "snapshot no-self local session reset";
+          const reloadRequested = Boolean(requestReload(reloadReason));
           return {
             kind: "wait",
-            reason: "snapshot-no-self-exit-confirmed",
+            reason: confirmedReason,
             dx: 0,
             dy: 0,
             currentUserId: recovery.userId || getCurrentUserId(),

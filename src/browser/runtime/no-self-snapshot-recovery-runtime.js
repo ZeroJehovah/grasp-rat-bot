@@ -50,17 +50,24 @@ function createNoSelfSnapshotRecoveryRuntime(runtime = {}) {
   function noSelfSnapshotExitConfirmationState(control, noSelfExit, t = Date.now()) {
     const userId = Number(control?.currentUserId || getCurrentUserId() || noSelfExit?.userId || 0) || 0;
     const snapshotSelf = noSelfExit?.snapshotSelf || snapshotSelfPresenceState(userId);
+    const loginRequiredAuthBlocked = Boolean(noSelfExit?.loginRequiredAuthBlocked);
     const blockedBy = [];
     if (!noSelfExit?.shouldLeave) blockedBy.push('no-self-leave-not-due');
-    if (!snapshotSelf?.known) blockedBy.push('snapshot-self-unknown');
-    if (snapshotSelf?.fresh !== true) blockedBy.push('snapshot-self-stale');
-    if (snapshotSelf?.present) blockedBy.push('snapshot-self-present');
+    if (!loginRequiredAuthBlocked) {
+      if (!snapshotSelf?.known) blockedBy.push('snapshot-self-unknown');
+      if (snapshotSelf?.fresh !== true) blockedBy.push('snapshot-self-stale');
+      if (snapshotSelf?.present) blockedBy.push('snapshot-self-present');
+    }
     const confirmed = blockedBy.length === 0;
     return {
       confirmed,
-      reason: confirmed ? 'snapshot-no-self-exit-confirmed' : (blockedBy[0] || 'snapshot-no-self-not-confirmed'),
-      displayReason: confirmed ? '快照确认服务端已无自身，清理本地登录状态后重登' : '',
-      source: 'fresh-snapshot-missing-self',
+      reason: confirmed
+        ? (loginRequiredAuthBlocked ? 'login-required-no-self-exit-confirmed' : 'snapshot-no-self-exit-confirmed')
+        : (blockedBy[0] || 'snapshot-no-self-not-confirmed'),
+      displayReason: confirmed
+        ? (loginRequiredAuthBlocked ? '页面明确要求重新登录，清理本地登录状态后重登' : '快照确认服务端已无自身，清理本地登录状态后重登')
+        : '',
+      source: loginRequiredAuthBlocked ? 'login-required-missing-self' : 'fresh-snapshot-missing-self',
       at: t,
       userId: userId || null,
       snapshotSelf,
@@ -267,7 +274,10 @@ function createNoSelfSnapshotRecoveryRuntime(runtime = {}) {
 
   function clearNoSelfSnapshotLocalSession(control, noSelfExit, reason = 'snapshot no-self exit confirmed') {
     const confirmation = noSelfSnapshotExitConfirmationState(control, noSelfExit, Date.now());
-    return clearNoSelfLocalSessionForConfirmation(confirmation, control, noSelfExit, reason);
+    const clearReason = confirmation.reason === 'login-required-no-self-exit-confirmed'
+      ? 'login required local session reset'
+      : reason;
+    return clearNoSelfLocalSessionForConfirmation(confirmation, control, noSelfExit, clearReason);
   }
 
   function clearNoSelfLocalSessionAfterLeave403(control, noSelfExit, leaveDetail = null, reason = 'leave HTTP 403 no-self recovery') {
@@ -332,25 +342,29 @@ function createNoSelfSnapshotRecoveryRuntime(runtime = {}) {
     const confirmation = noSelfSnapshotExitConfirmationState(control, noSelfExit);
     if (!confirmation.confirmed) return null;
     const recovery = clearNoSelfSnapshotLocalSession(control, noSelfExit);
+    const confirmedReason = recovery.reason || 'snapshot-no-self-exit-confirmed';
     const leaveResult = {
       attempted: false,
       method: 'snapshot-confirmation',
-      reason: 'snapshot no-self exit confirmed',
+      reason: confirmedReason,
       at: recovery.clearedAt || Date.now(),
       userId: recovery.userId || getCurrentUserId() || null,
       self: bot.lastSelf || null,
-      summary: '快照确认服务端已无自身，已清理本地登录状态',
+      summary: recovery.displayReason || '快照确认服务端已无自身，已清理本地登录状态',
       displayReason: recovery.displayReason,
       exitPending: false,
       exitConfirmed: true,
       localSessionReset: recovery
     };
     bot.lastOfflineLeaveResult = leaveResult;
-    noteImportantSessionExit('snapshot-no-self-exit-confirmed', bot.lastSelf, Date.now(), { exit: leaveResult });
-    const reloadRequested = Boolean(requestReload('snapshot no-self local session reset'));
+    noteImportantSessionExit(confirmedReason, bot.lastSelf, Date.now(), { exit: leaveResult });
+    const reloadReason = confirmedReason === 'login-required-no-self-exit-confirmed'
+      ? 'login required local session reset'
+      : 'snapshot no-self local session reset';
+    const reloadRequested = Boolean(requestReload(reloadReason));
     return {
       kind: 'wait',
-      reason: 'snapshot-no-self-exit-confirmed',
+      reason: confirmedReason,
       dx: 0,
       dy: 0,
       currentUserId: recovery.userId || getCurrentUserId(),

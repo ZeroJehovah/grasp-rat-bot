@@ -9430,6 +9430,103 @@ async function runSelfTest() {
       want: 'true|true|false|websocket reconnect churn missing self|true|false'
     },
     {
+      name: 'login-required no-self auth block clears stale session without fresh snapshot',
+      got: (() => {
+        const data = new Map([
+          ['tmpGameSessionToken', 'stale-token'],
+          ['tmpGameUserId', '28886'],
+          ['tmpGameSessionShadow', 'stale-shadow'],
+          ['tmpGameHelpSeenV3', '1']
+        ]);
+        const storage = createMapStorage(data);
+        let reloadReason = '';
+        let closed = false;
+        const nativeWs = {
+          readyState: 0,
+          close: () => {
+            closed = true;
+          }
+        };
+        const nativeState = {
+          currentUserId: 28886,
+          sessionToken: 'stale-token',
+          wsOpen: false,
+          ws: nativeWs,
+          entities: [{ user_id: 28886 }],
+          reconnectTimer: 12
+        };
+        const botState = {
+          globalState: { entities: [], snapshotRefreshedAt: 0 },
+          control: { hasToken: true, connecting: true },
+          pendingExit: { reason: 'stale' },
+          offlineSince: 999
+        };
+        const sessionRuntime = createSessionRecoveryRuntime({
+          bot: botState,
+          cfg: { ...cfg, gameSessionNoSelfLeaveMs: 30000, loginCooldownMs: 5000 },
+          storage,
+          getCurrentUserId: () => 28886,
+          snapshotDataAgeMs: () => Infinity,
+          snapshotSelfFreshEnough: () => false,
+          hasLoginRequiredText: () => true,
+          isOfflineishWsReadyState: value => Number(value) === 2 || Number(value) === 3
+        });
+        const noSelfExit = sessionRuntime.noSelfGameSessionExitState({
+          currentUserId: 28886,
+          hasToken: true,
+          connecting: true,
+          wsReadyState: 0,
+          nativeWsReadyState: 0,
+          transport: 'native-page'
+        }, 1000);
+        const noSelfRuntime = createNoSelfSnapshotRecoveryRuntime({
+          bot: botState,
+          cfg,
+          storage,
+          getCurrentUserId: () => 28886,
+          getNativeControl: () => ({ ws: nativeWs, state: nativeState }),
+          snapshotSelfPresenceState: () => ({ known: false, fresh: false, present: false }),
+          clearPersistentPendingExitState: () => {
+            data.set('pendingExitCleared', 'true');
+          },
+          requestReload: reason => {
+            reloadReason = reason;
+            return true;
+          }
+        });
+        const decision = noSelfRuntime.handleNoSelfSnapshotExitRecovery(
+          { currentUserId: 28886, hasToken: true, connecting: true, wsReadyState: 0, nativeWsReadyState: 0, transport: 'native-page' },
+          noSelfExit
+        );
+        return [
+          noSelfExit.active,
+          noSelfExit.shouldLeave,
+          noSelfExit.loginRequired,
+          noSelfExit.loginRequiredAuthBlocked,
+          noSelfExit.reason,
+          noSelfExit.snapshotSelf?.known,
+          decision?.reason,
+          decision?.reloadRequested,
+          reloadReason,
+          data.get('tmpGameSessionToken') === undefined,
+          data.get('tmpGameUserId') === undefined,
+          data.get('tmpGameSessionShadow') === undefined,
+          data.get('tmpGameHelpSeenV3'),
+          data.has('graspRatNoSelfSnapshotRecovery'),
+          nativeState.currentUserId,
+          nativeState.sessionToken,
+          nativeState.wsOpen,
+          nativeState.ws,
+          closed,
+          botState.control.hasToken,
+          botState.pendingExit,
+          botState.offlineSince,
+          data.get('pendingExitCleared')
+        ].map(String).join('|');
+      })(),
+      want: 'true|true|true|true|game session login required missing self|false|login-required-no-self-exit-confirmed|true|login required local session reset|true|true|true|1|true|0||false|null|true|false|null|0|true'
+    },
+    {
       name: 'snapshot no-self recovery requests reload after local reset',
       got: (() => {
         const data = new Map([
