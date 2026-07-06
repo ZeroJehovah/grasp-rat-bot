@@ -82,6 +82,7 @@ function createOrchestrationTickRuntime(runtime = {}) {
     clearExitHoldDetail,
     clearSessionMismatchRecoveryState,
     cloudflareErrorInfo,
+    dismissHelpModal = () => null,
     handlePendingExit,
     installNativeLoginGateInterceptors,
     isCombatStateForInjuryLeave,
@@ -281,6 +282,7 @@ function createOrchestrationTickRuntime(runtime = {}) {
       bot.lastTickAt = tickStartedAt;
       bot.lastCombatTickGap = null;
       bot.tickCount += 1;
+      dismissHelpModal('tick');
       const cloudflare = cloudflareErrorInfo();
       if (cloudflare) {
         bot.lastDecision = {

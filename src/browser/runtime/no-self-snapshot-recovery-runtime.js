@@ -20,6 +20,13 @@ function isWsConnectingOrOpen(value) {
   return n === 0 || n === 1;
 }
 
+function shouldClearTmpGameLocalSessionKey(key) {
+  const text = String(key || '');
+  if (!/^tmpGame/i.test(text)) return false;
+  if (/^tmpGameHelpSeen/i.test(text)) return false;
+  return /^tmpGame(?:Session|User|Login|Auth|Token|OAuth)/i.test(text);
+}
+
 function createNoSelfSnapshotRecoveryRuntime(runtime = {}) {
   const {
     bot,
@@ -101,17 +108,22 @@ function createNoSelfSnapshotRecoveryRuntime(runtime = {}) {
     }
   }
 
-  function removeStorageKeysMatching(store, pattern, prefix, removedKeys, storageErrors) {
+  function storageKeyMatches(matcher, key) {
+    if (typeof matcher === 'function') return Boolean(matcher(key));
+    return matcher?.test?.(String(key)) || false;
+  }
+
+  function removeStorageKeysMatching(store, matcher, prefix, removedKeys, storageErrors) {
     try {
       if (!store?.key || !store?.removeItem) return;
       const keys = [];
       for (let i = 0; i < Number(store.length || 0); i += 1) {
         const key = store.key(i);
-        if (key && pattern.test(String(key))) keys.push(key);
+        if (key && storageKeyMatches(matcher, String(key))) keys.push(key);
       }
       for (const key of keys) removeStorageKey(store, key, prefix + key, removedKeys, storageErrors);
     } catch (err) {
-      storageErrors.push({ key: prefix + String(pattern), error: err?.message || String(err) });
+      storageErrors.push({ key: prefix + String(matcher), error: err?.message || String(err) });
     }
   }
 
@@ -215,8 +227,8 @@ function createNoSelfSnapshotRecoveryRuntime(runtime = {}) {
       removeStorageKey(localStorage, key, key, removedKeys, storageErrors);
       removeStorageKey(browserSessionStorage, key, 'sessionStorage.' + key, removedKeys, storageErrors);
     }
-    removeStorageKeysMatching(localStorage, /^tmpGame/i, '', removedKeys, storageErrors);
-    removeStorageKeysMatching(browserSessionStorage, /^tmpGame/i, 'sessionStorage.', removedKeys, storageErrors);
+    removeStorageKeysMatching(localStorage, shouldClearTmpGameLocalSessionKey, '', removedKeys, storageErrors);
+    removeStorageKeysMatching(browserSessionStorage, shouldClearTmpGameLocalSessionKey, 'sessionStorage.', removedKeys, storageErrors);
     const markerResult = writeNoSelfSnapshotRecoveryState(localStorage, {
       reason: confirmation.reason || 'snapshot-no-self-exit-confirmed',
       userId,
@@ -347,5 +359,6 @@ function createNoSelfSnapshotRecoveryRuntime(runtime = {}) {
 }
 
 module.exports = {
-  createNoSelfSnapshotRecoveryRuntime
+  createNoSelfSnapshotRecoveryRuntime,
+  shouldClearTmpGameLocalSessionKey
 };

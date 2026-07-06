@@ -59,6 +59,7 @@ function createLeaveFlowRuntime(runtime = {}) {
     setLoginSuppress = () => 0,
     requestReload = () => false,
     controlText = () => '',
+    dismissHelpModal = () => ({ dismissed: false, reason: 'unavailable' }),
     clearCurrentReloginHold = () => ({}),
     clearNoSelfLocalSessionAfterLeave403 = () => null,
     updateBotPanel = () => {},
@@ -332,6 +333,7 @@ function createLeaveFlowRuntime(runtime = {}) {
 	      };
     }
     if (!cfg.autoLogin || cfg.dryRun || cfg.once) return null;
+    dismissHelpModal('auto-login');
     const t = Date.now();
     if (exitAuditFlushPending() && !manualOverride) {
       const blocked = exitAuditFlushBlockDetail('login:' + (reason || ''));
