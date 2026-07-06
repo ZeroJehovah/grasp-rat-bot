@@ -77,6 +77,7 @@ function createLeaveFlowRuntime(runtime = {}) {
     staminaExhaustedWindowLabel = () => '',
     staminaBudgetReloginDelayMs = () => 0,
     staminaResetHoldUntil = () => 0,
+    knownLongStaminaExhaustionLoginHold = () => null,
     reloginDelayForHpCore = () => 0,
     randomBetween = () => 0,
     hpInfoForRelogin = () => ({ hp: 100, maxHp: 100, ratio: 1 }),
@@ -397,7 +398,7 @@ function createLeaveFlowRuntime(runtime = {}) {
         || !hasPageSession
         || (force && canStartLogin && (!effectiveHasNativeSession || allowLiveSessionTakeoverBypass))
     );
-	    if (!needsLogin) {
+    if (!needsLogin) {
 	      return force ? {
 	        needed: false,
 	        attempted: false,
@@ -416,6 +417,28 @@ function createLeaveFlowRuntime(runtime = {}) {
 	        self: hasAliveSelf ? summarizeSelf(self) : null
 	      } : null;
 	    }
+    const staminaLoginHold = !manualOverride ? knownLongStaminaExhaustionLoginHold(t) : null;
+    if (staminaLoginHold) {
+      return {
+        needed: true,
+        attempted: false,
+        reason: 'known-long-stamina-exhausted',
+        cooldownRemainingMs: staminaLoginHold.holdRemainingMs || 0,
+        cooldownTotalMs: staminaLoginHold.totalMs || staminaLoginHold.holdRemainingMs || 0,
+        error: '',
+        staminaHold: staminaLoginHold,
+        suppressReason: staminaLoginHold.displayReason || 'known long stamina exhausted',
+        hasToken,
+        hasNativeSession,
+        effectiveHasToken,
+        effectiveHasNativeSession,
+        snapshotExitRecovery,
+        nativeWsReadyState: native?.wsReadyState ?? null,
+        currentUserId: userId,
+        snapshotGate: snapshotLoginGateStatus(),
+        liveSessionTakeover
+      };
+    }
 	    closeCurrentImportantSessionBeforeLogin('login-before-session-end:' + String(reason || 'login'));
 	    if (importantSessionEndFlushPending() && !manualOverride) {
 	      const blocked = importantSessionEndFlushBlockDetail('login:' + (reason || ''));

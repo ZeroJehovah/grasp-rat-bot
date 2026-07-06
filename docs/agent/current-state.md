@@ -4,14 +4,15 @@ Update this file for every remote bot release or handoff-relevant state change. 
 
 ## Latest Release
 
-- Latest remote bot: `bootstrap-0.4.589`.
-- Latest manifest SHA-256: `b0e262ba83884eb1e4ef79b756428115b583ef31af709ea81cc395bed3d061ca`.
-- Latest remote release commit: `28308b7` (`bootstrap-0.4.589` keeps already-engaged in-range Active combat from being cleared by the long-cycle stamina budget gate).
-- Latest bootstrap A versions: Tampermonkey `0.4.76`, extension `0.1.55`.
-- Latest direct entry/config SHA-256: `17a674535d9feb8cc2190c035aaa6f5785b7f0e897192bce8dfcc75e31d8b0e4`.
+- Latest remote bot: `bootstrap-0.4.590`.
+- Latest manifest SHA-256: `51376835092c58ac70120d45aab412261739c0ef3b4f4ca6eaa31e6d8fbbcabb`.
+- Latest remote release commit: pending this release commit (`bootstrap-0.4.590` blocks automatic login while same-day 1d or active 1h long-stamina exhaustion is known from preserved self/session evidence).
+- Latest bootstrap A versions: Tampermonkey `0.4.77`, extension `0.1.56`.
+- Latest direct entry/config SHA-256: `72ab73b696c6fb3d1163eeb4224ffd245ea6d10ad7ca7d20b69c857509d99576`.
 
 ## Current Handoff
 
+- `bootstrap-0.4.590` fixes the long-stamina exhaustion relogin loop where a fully spent daily window could still trigger unattended login, then immediately exit again. Remote script B now preserves timestamps on `lastSelf`, includes timestamps in fresh self summaries, and exposes `known-long-stamina-exhausted` through `maybeStartAutoLogin()` and `status().reloginGate` when latest preserved self/decision/session evidence shows same-day `1d` exhaustion or an active `1h` exhaustion hold. Tampermonkey `0.4.77` and extension `0.1.56` apply the same guard to bootstrap watchdog/fallback login paths by reading the remote relogin gate first and falling back to local persisted same-day `1d` self evidence when remote status is unavailable. Manual login still bypasses this automatic gate.
 - `bootstrap-0.4.589` fixes the Gone fight pattern where HP recovery plus a low 1d/1h opportunity budget could clear an already-engaged high-Drop Active target into `wait-for-full-stamina-and-hp` even while the target stayed native/realtime visible inside `combatAttackRange`. The long-cycle proactive Active budget still blocks fresh Active fights without threat evidence, but once a high-Drop Active target is already engaged and remains visible in range, `pickEngagedCombatTarget()` keeps it through the recovery path so normal combat reserve/stop-loss/disengage or true long-window stamina exhaustion decides the outcome. Offline replay of `20260706091347-self-28886-vs-Gone` showed 83 post-engagement recovery frames with Gone still in range that the old budget gate would clear; the new target gate keeps all 83 as combat-continuable.
 - `bootstrap-0.4.588` fixes the manual/external leave reload loop shown as repeated `reload blocked until exit audit logs flush: external left user local session reset`. Once a `left user <currentUserId>` chat confirmation with strong exit evidence has recorded `external-left-user-exit-confirmed`, the runtime keeps that confirmed recovery in memory while the reload is blocked by exit-audit flushing. Later ticks only retry the same reload instead of recording another exit audit or clearing the same local session again. Reload-block wait status/chat output for pending exit-audit or important session-end logs is throttled by `exitAuditBlockedReloadLogMinMs = 5000` while still forcing combat-log flush attempts, so the page should no longer flicker or spam the console/chat during the wait.
 - `bootstrap-0.4.587` changes post-login zoom to prefer the page-native continuous zoom setter. After login it reads native `state.viewRadiusCm` before the `#scaleText` label, calls `setViewRadius(50000)` directly when available, and verifies the same native/page `view r >= 500m` stop condition. If the setter is unavailable or does not settle at the target, it falls back to one-way centered wheel zoom-out. The fallback starts after 120ms, uses `postLoginZoomWheelDeltaY = 80` and `postLoginZoomOutIntervalMs = 80`, and keeps the 24-step cap and disabled blind click fallback.
@@ -67,7 +68,7 @@ Update this file for every remote bot release or handoff-relevant state change. 
 
 ## Latest Validation Baseline
 
-The latest `bootstrap-0.4.589` release validation passed. Run build-producing commands and manifest-reading validation sequentially, not in parallel; `node scripts/build-remote-bot.js --version ...` rewrites `dist/manifest.json`, while `objective-status` and `verify-objective-build` read it.
+The latest `bootstrap-0.4.590` release validation passed. Run build-producing commands and manifest-reading validation sequentially, not in parallel; `node scripts/build-remote-bot.js --version ...` rewrites `dist/manifest.json`, while `objective-status` and `verify-objective-build` read it.
 
 ```bash
 node grasp-rat-bot.js --self-test
@@ -84,7 +85,7 @@ node --check extension/popup.js
 cd combat-log-service && npm test
 npm run test:runtime-helper-entry
 npm run test:remote-bundled
-node scripts/build-remote-bot.js --version bootstrap-0.4.589
+node scripts/build-remote-bot.js --version bootstrap-0.4.590
 node scripts/verify-objective-build.js
 git diff --check
 ```

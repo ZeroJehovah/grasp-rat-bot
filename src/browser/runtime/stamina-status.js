@@ -8,6 +8,23 @@ function defaultHoldContradicted() {
   return false;
 }
 
+function defaultStaminaEvidenceRemaining(evidence, windowName) {
+  const key = String(windowName || '').toLowerCase();
+  if (key !== '1h' && key !== '1d') return null;
+  const suffix = key === '1h' ? '1h' : '1d';
+  const values = [
+    evidence?.stamina?.['stamina' + suffix],
+    evidence?.['stamina' + suffix],
+    evidence?.['stamina_' + suffix + '_remaining_milli'],
+    key === '1d' ? evidence?.stamina1dLastRemaining : undefined
+  ];
+  for (const value of values) {
+    const number = Number(value);
+    if (Number.isFinite(number)) return number;
+  }
+  return null;
+}
+
 function createStaminaStatusRuntime(runtime = {}) {
   const bot = runtime.bot || null;
   const cfg = runtime.cfg && typeof runtime.cfg === 'object' ? runtime.cfg : {};
@@ -26,6 +43,9 @@ function createStaminaStatusRuntime(runtime = {}) {
   const staminaHoldContradictedByStaminaEvidence = typeof runtime.staminaHoldContradictedByStaminaEvidence === 'function'
     ? runtime.staminaHoldContradictedByStaminaEvidence
     : defaultHoldContradicted;
+  const staminaEvidenceRemaining = typeof runtime.staminaEvidenceRemaining === 'function'
+    ? runtime.staminaEvidenceRemaining
+    : defaultStaminaEvidenceRemaining;
 
   function summarizeStamina(self) {
     const windows = [
@@ -144,6 +164,69 @@ function createStaminaStatusRuntime(runtime = {}) {
     return Boolean(staminaState && longStaminaHoldContradictedByKnownStamina(staminaState));
   }
 
+  function evidenceStamp(evidence) {
+    return Math.max(
+      Number(evidence?.updatedAt || 0) || 0,
+      Number(evidence?.at || 0) || 0,
+      Number(evidence?.missingSince || 0) || 0,
+      Number(evidence?.exitAt || 0) || 0,
+      Number(evidence?.startedAt || 0) || 0,
+      Number(evidence?.stamina1dSegmentStartedAt || 0) || 0
+    );
+  }
+
+  function knownLongStaminaExhaustionLoginHold(t = Date.now()) {
+    const thresholdMs = staminaExhaustedThreshold();
+    const sources = [
+      { source: 'last-self', evidence: bot?.lastSelf },
+      { source: 'last-decision-self', evidence: bot?.lastDecision?.self },
+      { source: 'session', evidence: bot?.session }
+    ].filter(item => item.evidence && typeof item.evidence === 'object')
+      .map(item => ({ ...item, stamp: evidenceStamp(item.evidence) }));
+    let until = 0;
+    let resetAt = 0;
+    let fixedDelayMs = 0;
+    const exhausted = [];
+    const details = [];
+    for (const windowName of ['1d', '1h']) {
+      const known = sources
+        .map(item => ({ ...item, remaining: staminaEvidenceRemaining(item.evidence, windowName) }))
+        .filter(item => item.remaining !== null)
+        .sort((a, b) => Number(b.stamp || 0) - Number(a.stamp || 0));
+      const latest = known[0];
+      if (!latest || latest.remaining >= thresholdMs || !latest.stamp) continue;
+      let windowUntil = 0;
+      if (windowName === '1d') {
+        if (latest.stamp < dailyStaminaWindowStartAt(t)) continue;
+        resetAt = nextDailyStaminaResetAt(t);
+        windowUntil = resetAt + Math.max(0, Number(cfg.staminaResetGraceMs || 0));
+      } else {
+        fixedDelayMs = staminaBudgetReloginDelayMs();
+        windowUntil = latest.stamp + fixedDelayMs;
+      }
+      if (windowUntil <= t) continue;
+      until = Math.max(until, windowUntil);
+      exhausted.push(windowName);
+      details.push({ window: windowName, remaining: latest.remaining, source: latest.source, at: latest.stamp, until: windowUntil });
+    }
+    if (!until) return null;
+    const holdRemainingMs = Math.max(0, Math.round(until - t));
+    const label = exhausted.join('/');
+    return {
+      reason: 'known-long-stamina-exhausted',
+      exhausted,
+      details,
+      thresholdMs,
+      until,
+      resetAt,
+      fixedDelayMs,
+      holdRemainingMs,
+      totalMs: holdRemainingMs,
+      displayReason: (label === '1d' ? '一天体力已耗尽' : (label === '1h' ? '一小时体力已耗尽' : '长周期体力已耗尽'))
+        + '，等待' + Math.ceil(holdRemainingMs / 1000) + '秒后再登录'
+    };
+  }
+
   return {
     summarizeStamina,
     dailyStaminaWindowStartAt,
@@ -153,7 +236,8 @@ function createStaminaStatusRuntime(runtime = {}) {
     longStaminaHoldContradictedByKnownStamina,
     startupStaminaSampleLooksUnsettled,
     deferredStaminaExhaustionLeave,
-    staleOfflineStaminaHoldContradicted
+    staleOfflineStaminaHoldContradicted,
+    knownLongStaminaExhaustionLoginHold
   };
 }
 

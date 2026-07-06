@@ -12,7 +12,7 @@
   var define_GRASP_RAT_RUNTIME_CONFIG_default;
   var init_define_GRASP_RAT_RUNTIME_CONFIG = __esm({
     "<define:__GRASP_RAT_RUNTIME_CONFIG__>"() {
-      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.589" };
+      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.590" };
     }
   });
 
@@ -1223,7 +1223,13 @@
         const maxAgeMs = Math.max(36e5, Number(maxAgeMsValue || 1728e5) || 1728e5);
         if (at && t - at > maxAgeMs) return null;
         const self = state2.self && typeof state2.self === "object" ? state2.self : state2;
-        return self && typeof self === "object" ? { ...self } : null;
+        if (!self || typeof self !== "object") return null;
+        const out = { ...self };
+        if (at) {
+          if (!Number(out.at || 0)) out.at = at;
+          if (!Number(out.updatedAt || 0)) out.updatedAt = at;
+        }
+        return out;
       }
       function writePersistentLastSelfStateCore(storage, key, selfSummary, t = Date.now()) {
         if (!selfSummary || typeof selfSummary !== "object") return false;
@@ -4090,6 +4096,22 @@
       function defaultHoldContradicted() {
         return false;
       }
+      function defaultStaminaEvidenceRemaining(evidence, windowName) {
+        const key = String(windowName || "").toLowerCase();
+        if (key !== "1h" && key !== "1d") return null;
+        const suffix = key === "1h" ? "1h" : "1d";
+        const values = [
+          evidence?.stamina?.["stamina" + suffix],
+          evidence?.["stamina" + suffix],
+          evidence?.["stamina_" + suffix + "_remaining_milli"],
+          key === "1d" ? evidence?.stamina1dLastRemaining : void 0
+        ];
+        for (const value of values) {
+          const number = Number(value);
+          if (Number.isFinite(number)) return number;
+        }
+        return null;
+      }
       function createStaminaStatusRuntime(runtime = {}) {
         const bot = runtime.bot || null;
         const cfg = runtime.cfg && typeof runtime.cfg === "object" ? runtime.cfg : {};
@@ -4098,6 +4120,7 @@
         const staminaExhaustedThreshold = typeof runtime.staminaExhaustedThreshold === "function" ? runtime.staminaExhaustedThreshold : () => Math.max(0, Number(cfg.staminaExhaustedThresholdMs ?? 1e3));
         const staminaExhaustedLongWindows = typeof runtime.staminaExhaustedLongWindows === "function" ? runtime.staminaExhaustedLongWindows : defaultStaminaExhaustedLongWindows;
         const staminaHoldContradictedByStaminaEvidence = typeof runtime.staminaHoldContradictedByStaminaEvidence === "function" ? runtime.staminaHoldContradictedByStaminaEvidence : defaultHoldContradicted;
+        const staminaEvidenceRemaining = typeof runtime.staminaEvidenceRemaining === "function" ? runtime.staminaEvidenceRemaining : defaultStaminaEvidenceRemaining;
         function summarizeStamina(self) {
           const windows = [
             { key: "5s", fallback: 1e4 },
@@ -4204,6 +4227,62 @@
           const staminaState = detail?.offlineSafety?.staminaExhausted;
           return Boolean(staminaState && longStaminaHoldContradictedByKnownStamina(staminaState));
         }
+        function evidenceStamp(evidence) {
+          return Math.max(
+            Number(evidence?.updatedAt || 0) || 0,
+            Number(evidence?.at || 0) || 0,
+            Number(evidence?.missingSince || 0) || 0,
+            Number(evidence?.exitAt || 0) || 0,
+            Number(evidence?.startedAt || 0) || 0,
+            Number(evidence?.stamina1dSegmentStartedAt || 0) || 0
+          );
+        }
+        function knownLongStaminaExhaustionLoginHold(t = Date.now()) {
+          const thresholdMs = staminaExhaustedThreshold();
+          const sources = [
+            { source: "last-self", evidence: bot?.lastSelf },
+            { source: "last-decision-self", evidence: bot?.lastDecision?.self },
+            { source: "session", evidence: bot?.session }
+          ].filter((item) => item.evidence && typeof item.evidence === "object").map((item) => ({ ...item, stamp: evidenceStamp(item.evidence) }));
+          let until = 0;
+          let resetAt = 0;
+          let fixedDelayMs = 0;
+          const exhausted = [];
+          const details = [];
+          for (const windowName of ["1d", "1h"]) {
+            const known = sources.map((item) => ({ ...item, remaining: staminaEvidenceRemaining(item.evidence, windowName) })).filter((item) => item.remaining !== null).sort((a, b) => Number(b.stamp || 0) - Number(a.stamp || 0));
+            const latest = known[0];
+            if (!latest || latest.remaining >= thresholdMs || !latest.stamp) continue;
+            let windowUntil = 0;
+            if (windowName === "1d") {
+              if (latest.stamp < dailyStaminaWindowStartAt(t)) continue;
+              resetAt = nextDailyStaminaResetAt(t);
+              windowUntil = resetAt + Math.max(0, Number(cfg.staminaResetGraceMs || 0));
+            } else {
+              fixedDelayMs = staminaBudgetReloginDelayMs();
+              windowUntil = latest.stamp + fixedDelayMs;
+            }
+            if (windowUntil <= t) continue;
+            until = Math.max(until, windowUntil);
+            exhausted.push(windowName);
+            details.push({ window: windowName, remaining: latest.remaining, source: latest.source, at: latest.stamp, until: windowUntil });
+          }
+          if (!until) return null;
+          const holdRemainingMs = Math.max(0, Math.round(until - t));
+          const label = exhausted.join("/");
+          return {
+            reason: "known-long-stamina-exhausted",
+            exhausted,
+            details,
+            thresholdMs,
+            until,
+            resetAt,
+            fixedDelayMs,
+            holdRemainingMs,
+            totalMs: holdRemainingMs,
+            displayReason: (label === "1d" ? "\u4E00\u5929\u4F53\u529B\u5DF2\u8017\u5C3D" : label === "1h" ? "\u4E00\u5C0F\u65F6\u4F53\u529B\u5DF2\u8017\u5C3D" : "\u957F\u5468\u671F\u4F53\u529B\u5DF2\u8017\u5C3D") + "\uFF0C\u7B49\u5F85" + Math.ceil(holdRemainingMs / 1e3) + "\u79D2\u540E\u518D\u767B\u5F55"
+          };
+        }
         return {
           summarizeStamina,
           dailyStaminaWindowStartAt,
@@ -4213,7 +4292,8 @@
           longStaminaHoldContradictedByKnownStamina,
           startupStaminaSampleLooksUnsettled,
           deferredStaminaExhaustionLeave,
-          staleOfflineStaminaHoldContradicted
+          staleOfflineStaminaHoldContradicted,
+          knownLongStaminaExhaustionLoginHold
         };
       }
       module.exports = {
@@ -4932,6 +5012,7 @@
             "stamina-budget-coin-leave-retry": "\u4E00\u5C0F\u65F6\u4F53\u529B\u9884\u7B97\u4E0D\u8DB3\uFF0C\u91CD\u8BD5\u9000\u51FA",
             "wait-for-snapshot-coin": "\u7B49\u5F85\u89C6\u91CE\u5185\u91D1\u5E01\u5237\u65B0",
             "login-suppressed": "\u7B49\u5F85\u91CD\u8FDE",
+            "known-long-stamina-exhausted": "\u5DF2\u77E5\u957F\u5468\u671F\u4F53\u529B\u8017\u5C3D\uFF0C\u6682\u4E0D\u767B\u5F55",
             "exit-log-flush-pending": "\u7B49\u5F85\u9000\u51FA\u65E5\u5FD7\u53D1\u9001\u5B8C\u6210",
             "important-log-flush-pending": "\u7B49\u5F85\u4F1A\u8BDD\u7ED3\u675F\u65E5\u5FD7\u53D1\u9001\u5B8C\u6210",
             "maintain-safe-spacing": "\u907F\u5F00\u9644\u8FD1\u73A9\u5BB6",
@@ -6208,7 +6289,7 @@
         function combatLogSuspendReason(decision) {
           const reason = String(decision?.reason || "");
           if (!reason) return "";
-          if (/^(paused|cloudflare-error-refresh|no-self|not-alive|auto-login|manual-login|login-suppressed|login-cooldown|login-snapshot-gate|login-control-missing|session-mismatch-refresh|session-mismatch-recovery|snapshot-no-self-exit-confirmed|login-required-no-self-exit-confirmed|game-session-connecting|exit-log-flush-pending|important-log-flush-pending)$/.test(reason)) return reason;
+          if (/^(paused|cloudflare-error-refresh|no-self|not-alive|auto-login|manual-login|login-suppressed|login-cooldown|known-long-stamina-exhausted|login-snapshot-gate|login-control-missing|session-mismatch-refresh|session-mismatch-recovery|snapshot-no-self-exit-confirmed|login-required-no-self-exit-confirmed|game-session-connecting|exit-log-flush-pending|important-log-flush-pending)$/.test(reason)) return reason;
           if (/^(enemy-leave-wait|pursuit-leave-wait|offline-leave-wait)$/.test(reason)) return reason;
           if (/^(offline-leave|control-ws-offline|control-ws-offline-unsafe|control-ws-offline-safe-wait|control-ws-reconnect-churn|control-ws-no-self-game-session|control-ws-server-position-stalled|control-global-sampling-outage|control-combat-tick-gap|control-action-settlement-stalled|control-stamina-exhausted|stamina-exhausted-leave)$/.test(reason)) return reason;
           return "";
@@ -10868,6 +10949,7 @@
           staminaExhaustedWindowLabel = () => "",
           staminaBudgetReloginDelayMs = () => 0,
           staminaResetHoldUntil = () => 0,
+          knownLongStaminaExhaustionLoginHold = () => null,
           reloginDelayForHpCore = () => 0,
           randomBetween = () => 0,
           hpInfoForRelogin = () => ({ hp: 100, maxHp: 100, ratio: 1 }),
@@ -11167,6 +11249,28 @@
               liveSessionTakeover,
               self: hasAliveSelf ? summarizeSelf(self) : null
             } : null;
+          }
+          const staminaLoginHold = !manualOverride ? knownLongStaminaExhaustionLoginHold(t) : null;
+          if (staminaLoginHold) {
+            return {
+              needed: true,
+              attempted: false,
+              reason: "known-long-stamina-exhausted",
+              cooldownRemainingMs: staminaLoginHold.holdRemainingMs || 0,
+              cooldownTotalMs: staminaLoginHold.totalMs || staminaLoginHold.holdRemainingMs || 0,
+              error: "",
+              staminaHold: staminaLoginHold,
+              suppressReason: staminaLoginHold.displayReason || "known long stamina exhausted",
+              hasToken,
+              hasNativeSession,
+              effectiveHasToken,
+              effectiveHasNativeSession,
+              snapshotExitRecovery,
+              nativeWsReadyState: native?.wsReadyState ?? null,
+              currentUserId: userId,
+              snapshotGate: snapshotLoginGateStatus(),
+              liveSessionTakeover
+            };
           }
           closeCurrentImportantSessionBeforeLogin("login-before-session-end:" + String(reason || "login"));
           if (importantSessionEndFlushPending() && !manualOverride) {
@@ -12923,7 +13027,8 @@
           activeOfflineLeaveDetail = () => null,
           loginSuppressStatus = () => ({}),
           snapshotLoginGateStatus = () => ({}),
-          loginPointSafetyStatus = () => ({})
+          loginPointSafetyStatus = () => ({}),
+          knownLongStaminaExhaustionLoginHold = () => null
         } = runtime;
         const localStorage2 = storage;
         const LOGIN_SUPPRESS_KEY = loginSuppressKey;
@@ -12933,7 +13038,7 @@
         function reloginCooldownCandidates(t = Date.now()) {
           const suppress = loginSuppressStatus(t);
           const candidates = [];
-          const pushCandidate = (source, remainingMs, totalMs = 0, reason = "", until = 0) => {
+          const pushCandidate = (source, remainingMs, totalMs = 0, reason = "", until = 0, extra = null) => {
             const remaining = Math.max(0, Math.round(Number(remainingMs || 0) || 0));
             const total = Math.max(remaining, Math.round(Number(totalMs || 0) || 0));
             if (!remaining && !total) return;
@@ -12942,7 +13047,8 @@
               reason: String(reason || ""),
               remainingMs: remaining,
               totalMs: total,
-              until: Number(until || 0) || 0
+              until: Number(until || 0) || 0,
+              ...extra && typeof extra === "object" ? extra : {}
             });
           };
           const loginCooldownTotalMs = Math.max(0, Math.round(Number(cfg.loginCooldownMs || 0) || 0));
@@ -12987,6 +13093,8 @@
             lastLoginResult?.suppressReason || lastLoginResult?.reason || "last login result",
             0
           );
+          const staminaHold = knownLongStaminaExhaustionLoginHold(t);
+          pushCandidate("known-stamina-hold", staminaHold?.holdRemainingMs || 0, staminaHold?.totalMs || staminaHold?.holdRemainingMs || 0, staminaHold?.displayReason || staminaHold?.reason || "known long stamina exhausted", staminaHold?.until || 0, staminaHold ? { staminaHold } : null);
           return candidates.sort((a, b) => {
             const remainingDelta = Number(b.remainingMs || 0) - Number(a.remainingMs || 0);
             if (remainingDelta) return remainingDelta;
@@ -13016,6 +13124,7 @@
               remainingMs: Math.max(0, Math.round(Number(cooldown.remainingMs || 0) || 0)),
               totalMs: Math.max(0, Math.round(Number(cooldown.totalMs || 0) || 0)),
               until: Number(cooldown.until || 0) || 0,
+              staminaHold: cooldown.staminaHold || null,
               candidates: cooldowns.slice(0, 5)
             },
             snapshot: {
@@ -13359,12 +13468,14 @@
           threatKey = (threat) => String(threat?.id ?? threat?.user_id ?? ""),
           returnBlockRadius = () => 0,
           staleOfflineStaminaHoldContradicted = () => false,
-          staminaBudgetReloginDelayMs = () => 0,
-          staminaResetHoldUntil = () => 0,
+          staminaRelogin = {},
           staminaBudgetCoinLeaveSummary = () => "",
           staminaExhaustedWindowLabel = () => "",
           reloginDelayForHpCore = () => 0
         } = runtime;
+        const staminaBudgetReloginDelayMs = typeof staminaRelogin.staminaBudgetReloginDelayMs === "function" ? staminaRelogin.staminaBudgetReloginDelayMs : () => 0;
+        const staminaResetHoldUntil = typeof staminaRelogin.staminaResetHoldUntil === "function" ? staminaRelogin.staminaResetHoldUntil : () => 0;
+        const knownLongStaminaExhaustionLoginHold = typeof staminaRelogin.knownLongStaminaExhaustionLoginHold === "function" ? staminaRelogin.knownLongStaminaExhaustionLoginHold : () => null;
         const localStorage2 = storage;
         const BOT_KEY = botKey;
         const PENDING_EXIT_STATE_KEY = pendingExitStateKey;
@@ -13613,7 +13724,8 @@
           activeOfflineLeaveDetail: (...args) => activeOfflineLeaveDetail(...args),
           loginSuppressStatus: (...args) => loginSuppressStatus(...args),
           snapshotLoginGateStatus: (...args) => snapshotLoginGateStatus(...args),
-          loginPointSafetyStatus: (...args) => loginPointSafetyStatus(...args)
+          loginPointSafetyStatus: (...args) => loginPointSafetyStatus(...args),
+          knownLongStaminaExhaustionLoginHold: (...args) => knownLongStaminaExhaustionLoginHold(...args)
         });
         let issueLeaveCommand;
         let scheduleClashLeaveRescueRetry;
@@ -13817,6 +13929,7 @@
           staminaExhaustedWindowLabel,
           staminaBudgetReloginDelayMs,
           staminaResetHoldUntil,
+          knownLongStaminaExhaustionLoginHold,
           setLoginSuppress,
           reloginDelayForHpCore,
           randomBetween,
@@ -14683,9 +14796,12 @@
         }
         function summarizeSelf(self) {
           const stamina = summarizeStamina(self);
+          const t = Date.now();
           return {
             id: self.user_id,
             name: self.name,
+            at: t,
+            updatedAt: t,
             x: Math.round(Number(self.x) || 0),
             y: Math.round(Number(self.y) || 0),
             hp: self.hp,
@@ -28486,8 +28602,18 @@
                   allowLiveSessionTakeoverBypass: true,
                   liveSessionTakeover
                 });
-                const sessionMismatchWaitReason = login2?.attempted ? "auto-login" : login2?.reason === "snapshot-gate" ? "login-snapshot-gate" : login2?.reason === "exit-log-flush-pending" ? "exit-log-flush-pending" : login2?.reason === "important-log-flush-pending" ? "important-log-flush-pending" : "session-mismatch-recovery";
-                const sessionMismatchDisplayReason = login2?.attempted ? "\u754C\u9762\u663E\u793A\u672A\u767B\u5F55\u4F46\u539F\u751F\u4F1A\u8BDD\u4ECD\u5728\u7EBF\uFF0C\u5DF2\u901A\u8FC7\u63A5\u7BA1\u95E8\u7981\uFF0C\u6B63\u5728\u91CD\u767B\u63A5\u7BA1" : sessionMismatchWaitReason === "login-snapshot-gate" ? loginSnapshotGateDisplayReason(login2?.snapshotGate) : sessionMismatchWaitReason === "exit-log-flush-pending" ? "\u7B49\u5F85\u9000\u51FA\u65E5\u5FD7\u53D1\u9001\u5B8C\u6210\uFF0C\u6682\u4E0D\u5237\u65B0\u6216\u91CD\u65B0\u767B\u5F55" : sessionMismatchWaitReason === "important-log-flush-pending" ? "\u7B49\u5F85\u4F1A\u8BDD\u7ED3\u675F\u65E5\u5FD7\u53D1\u9001\u5B8C\u6210\uFF0C\u6682\u4E0D\u5237\u65B0\u6216\u91CD\u65B0\u767B\u5F55" : "\u754C\u9762\u663E\u793A\u672A\u767B\u5F55\u4F46\u539F\u751F\u4F1A\u8BDD\u4ECD\u5728\u7EBF\uFF0C\u7B49\u5F85\u63A5\u7BA1";
+                let sessionMismatchWaitReason = "session-mismatch-recovery";
+                if (login2?.attempted) sessionMismatchWaitReason = "auto-login";
+                else if (login2?.reason === "snapshot-gate") sessionMismatchWaitReason = "login-snapshot-gate";
+                else if (login2?.reason === "exit-log-flush-pending") sessionMismatchWaitReason = "exit-log-flush-pending";
+                else if (login2?.reason === "important-log-flush-pending") sessionMismatchWaitReason = "important-log-flush-pending";
+                else if (login2?.reason === "known-long-stamina-exhausted") sessionMismatchWaitReason = "known-long-stamina-exhausted";
+                let sessionMismatchDisplayReason = "\u754C\u9762\u663E\u793A\u672A\u767B\u5F55\u4F46\u539F\u751F\u4F1A\u8BDD\u4ECD\u5728\u7EBF\uFF0C\u7B49\u5F85\u63A5\u7BA1";
+                if (login2?.attempted) sessionMismatchDisplayReason = "\u754C\u9762\u663E\u793A\u672A\u767B\u5F55\u4F46\u539F\u751F\u4F1A\u8BDD\u4ECD\u5728\u7EBF\uFF0C\u5DF2\u901A\u8FC7\u63A5\u7BA1\u95E8\u7981\uFF0C\u6B63\u5728\u91CD\u767B\u63A5\u7BA1";
+                else if (sessionMismatchWaitReason === "login-snapshot-gate") sessionMismatchDisplayReason = loginSnapshotGateDisplayReason(login2?.snapshotGate);
+                else if (sessionMismatchWaitReason === "exit-log-flush-pending") sessionMismatchDisplayReason = "\u7B49\u5F85\u9000\u51FA\u65E5\u5FD7\u53D1\u9001\u5B8C\u6210\uFF0C\u6682\u4E0D\u5237\u65B0\u6216\u91CD\u65B0\u767B\u5F55";
+                else if (sessionMismatchWaitReason === "important-log-flush-pending") sessionMismatchDisplayReason = "\u7B49\u5F85\u4F1A\u8BDD\u7ED3\u675F\u65E5\u5FD7\u53D1\u9001\u5B8C\u6210\uFF0C\u6682\u4E0D\u5237\u65B0\u6216\u91CD\u65B0\u767B\u5F55";
+                else if (sessionMismatchWaitReason === "known-long-stamina-exhausted") sessionMismatchDisplayReason = login2?.staminaHold?.displayReason || login2?.suppressReason || "\u5DF2\u77E5\u957F\u5468\u671F\u4F53\u529B\u8017\u5C3D\uFF0C\u6682\u4E0D\u767B\u5F55";
                 const sessionMismatchLoginPending = Boolean(login2?.attempted || login2?.needed && !login2?.error);
                 refreshGlobalState(false).catch((err) => {
                   bot.globalState.error = err.message || String(err);
@@ -28563,8 +28689,26 @@
               }
               const login = await maybeStartAutoLogin(self ? "not-alive" : "no-self");
               const gameSessionPending = !self && !noSelfExit?.snapshotExitRecovery && controlHasNativeGameSession(control);
-              const waitReason = login?.attempted ? "auto-login" : login?.needed ? login?.reason === "snapshot-gate" ? "login-snapshot-gate" : login?.error ? "login-control-missing" : login?.reason === "suppressed" ? "login-suppressed" : login?.reason === "exit-log-flush-pending" ? "exit-log-flush-pending" : login?.reason === "important-log-flush-pending" ? "important-log-flush-pending" : login?.reason === "session-mismatch-recovery" ? "session-mismatch-recovery" : "login-cooldown" : noSelfExit?.sessionMismatch ? "session-mismatch-recovery" : gameSessionPending ? "game-session-connecting" : self ? "not-alive" : "no-self";
-              const loginDisplayReason = waitReason === "game-session-connecting" ? "\u5DF2\u767B\u5F55\uFF0C\u7B49\u5F85\u6E38\u620F\u8FDE\u63A5/\u81EA\u8EAB\u5B9E\u4F53" : waitReason === "session-mismatch-recovery" ? "\u754C\u9762\u663E\u793A\u672A\u767B\u5F55\u4F46\u539F\u751F\u4F1A\u8BDD\u4ECD\u5728\u7EBF\uFF0C\u7B49\u5F85\u5B89\u5168\u91CD\u767B" : waitReason === "exit-log-flush-pending" ? "\u7B49\u5F85\u9000\u51FA\u65E5\u5FD7\u53D1\u9001\u5B8C\u6210\uFF0C\u6682\u4E0D\u5237\u65B0\u6216\u91CD\u65B0\u767B\u5F55" : waitReason === "important-log-flush-pending" ? "\u7B49\u5F85\u4F1A\u8BDD\u7ED3\u675F\u65E5\u5FD7\u53D1\u9001\u5B8C\u6210\uFF0C\u6682\u4E0D\u5237\u65B0\u6216\u91CD\u65B0\u767B\u5F55" : waitReason === "login-snapshot-gate" ? loginSnapshotGateDisplayReason(login?.snapshotGate) : waitReason === "login-suppressed" ? "\u7B49\u5F85\u91CD\u8FDE\uFF1A" + (login?.suppressReason || "login suppressed") + (Number(login?.cooldownRemainingMs || 0) > 0 ? "\uFF0C\u5269\u4F59" + formatDurationMs(login.cooldownRemainingMs) : "") : "";
+              let waitReason = noSelfExit?.sessionMismatch ? "session-mismatch-recovery" : gameSessionPending ? "game-session-connecting" : self ? "not-alive" : "no-self";
+              if (login?.attempted) waitReason = "auto-login";
+              else if (login?.needed) {
+                if (login.reason === "snapshot-gate") waitReason = "login-snapshot-gate";
+                else if (login.error) waitReason = "login-control-missing";
+                else if (login.reason === "suppressed") waitReason = "login-suppressed";
+                else if (login.reason === "known-long-stamina-exhausted") waitReason = "known-long-stamina-exhausted";
+                else if (login.reason === "exit-log-flush-pending") waitReason = "exit-log-flush-pending";
+                else if (login.reason === "important-log-flush-pending") waitReason = "important-log-flush-pending";
+                else if (login.reason === "session-mismatch-recovery") waitReason = "session-mismatch-recovery";
+                else waitReason = "login-cooldown";
+              }
+              let loginDisplayReason = "";
+              if (waitReason === "game-session-connecting") loginDisplayReason = "\u5DF2\u767B\u5F55\uFF0C\u7B49\u5F85\u6E38\u620F\u8FDE\u63A5/\u81EA\u8EAB\u5B9E\u4F53";
+              else if (waitReason === "session-mismatch-recovery") loginDisplayReason = "\u754C\u9762\u663E\u793A\u672A\u767B\u5F55\u4F46\u539F\u751F\u4F1A\u8BDD\u4ECD\u5728\u7EBF\uFF0C\u7B49\u5F85\u5B89\u5168\u91CD\u767B";
+              else if (waitReason === "exit-log-flush-pending") loginDisplayReason = "\u7B49\u5F85\u9000\u51FA\u65E5\u5FD7\u53D1\u9001\u5B8C\u6210\uFF0C\u6682\u4E0D\u5237\u65B0\u6216\u91CD\u65B0\u767B\u5F55";
+              else if (waitReason === "important-log-flush-pending") loginDisplayReason = "\u7B49\u5F85\u4F1A\u8BDD\u7ED3\u675F\u65E5\u5FD7\u53D1\u9001\u5B8C\u6210\uFF0C\u6682\u4E0D\u5237\u65B0\u6216\u91CD\u65B0\u767B\u5F55";
+              else if (waitReason === "login-snapshot-gate") loginDisplayReason = loginSnapshotGateDisplayReason(login?.snapshotGate);
+              else if (waitReason === "login-suppressed") loginDisplayReason = "\u7B49\u5F85\u91CD\u8FDE\uFF1A" + (login?.suppressReason || "login suppressed") + (Number(login?.cooldownRemainingMs || 0) > 0 ? "\uFF0C\u5269\u4F59" + formatDurationMs(login.cooldownRemainingMs) : "");
+              else if (waitReason === "known-long-stamina-exhausted") loginDisplayReason = login?.staminaHold?.displayReason || login?.suppressReason || "\u5DF2\u77E5\u957F\u5468\u671F\u4F53\u529B\u8017\u5C3D\uFF0C\u6682\u4E0D\u767B\u5F55";
               refreshGlobalState(false).catch((err) => {
                 bot.globalState.error = err.message || String(err);
               });
@@ -29827,7 +29971,8 @@
           longStaminaHoldContradictedByKnownStamina,
           startupStaminaSampleLooksUnsettled,
           deferredStaminaExhaustionLeave,
-          staleOfflineStaminaHoldContradicted
+          staleOfflineStaminaHoldContradicted,
+          knownLongStaminaExhaustionLoginHold
         } = createStaminaStatusRuntime({
           bot,
           cfg,
@@ -29835,6 +29980,7 @@
           staminaLimitValue,
           staminaExhaustedThreshold,
           staminaExhaustedLongWindows,
+          staminaEvidenceRemaining,
           staminaHoldContradictedByStaminaEvidence
         });
         const { attackWorthTakingCore } = require_attack_worth2();
@@ -30298,8 +30444,11 @@
           threatKey: (...args) => threatKey(...args),
           returnBlockRadius: (...args) => returnBlockRadius(...args),
           staleOfflineStaminaHoldContradicted: (...args) => staleOfflineStaminaHoldContradicted(...args),
-          staminaBudgetReloginDelayMs,
-          staminaResetHoldUntil,
+          staminaRelogin: {
+            staminaBudgetReloginDelayMs,
+            staminaResetHoldUntil,
+            knownLongStaminaExhaustionLoginHold: (...args) => knownLongStaminaExhaustionLoginHold(...args)
+          },
           staminaBudgetCoinLeaveSummary: (...args) => staminaBudgetCoinLeaveSummary(...args),
           staminaExhaustedWindowLabel: (...args) => staminaExhaustedWindowLabel(...args),
           reloginDelayForHpCore
@@ -31218,6 +31367,7 @@
           staminaBudgetCoinLeaveAction,
           staminaBudgetCoinLeaveSummary,
           staminaBudgetReloginDelayMs,
+          knownLongStaminaExhaustionLoginHold,
           staminaExhaustedWindowLabel,
           startTargetWhitelistPolling,
           stopMotionSafely,
