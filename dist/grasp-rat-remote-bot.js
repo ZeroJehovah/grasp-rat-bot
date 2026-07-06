@@ -12,7 +12,7 @@
   var define_GRASP_RAT_RUNTIME_CONFIG_default;
   var init_define_GRASP_RAT_RUNTIME_CONFIG = __esm({
     "<define:__GRASP_RAT_RUNTIME_CONFIG__>"() {
-      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.568" };
+      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.569" };
     }
   });
 
@@ -10414,6 +10414,7 @@
       } = require_exit_relogin();
       var {
         DEFAULT_NO_SELF_SNAPSHOT_RECOVERY_KEY,
+        normalizeNoSelfSnapshotRecoveryState,
         activeNoSelfSnapshotRecoveryState: activeNoSelfSnapshotRecoveryStateCore,
         clearNoSelfSnapshotRecoveryState: clearNoSelfSnapshotRecoveryStateCore
       } = require_no_self_snapshot_recovery_state();
@@ -10724,7 +10725,9 @@
           const loginRequired = hasLoginRequiredText();
           const self = getSelf();
           const hasAliveSelf = Boolean(self && isAlive(self));
-          const snapshotExitRecovery = activeNoSelfSnapshotRecoveryStateCore(localStorage2, userId, { key: NO_SELF_SNAPSHOT_RECOVERY_KEY });
+          const storedSnapshotExitRecovery = activeNoSelfSnapshotRecoveryStateCore(localStorage2, userId, { key: NO_SELF_SNAPSHOT_RECOVERY_KEY });
+          const memorySnapshotExitRecovery = storedSnapshotExitRecovery ? null : normalizeNoSelfSnapshotRecoveryState(bot.noSelfSnapshotRecovery);
+          const snapshotExitRecovery = storedSnapshotExitRecovery || (memorySnapshotExitRecovery && (!memorySnapshotExitRecovery.userId || !userId || memorySnapshotExitRecovery.userId === userId) ? memorySnapshotExitRecovery : null);
           if (snapshotExitRecovery && hasAliveSelf) clearNoSelfSnapshotRecoveryStateCore(localStorage2, { key: NO_SELF_SNAPSHOT_RECOVERY_KEY, reason: "self restored before login" });
           const ignoreStalePageSession = Boolean(snapshotExitRecovery && !hasAliveSelf);
           const shouldIgnoreSuppress = Boolean(ignoreSuppress || ignoreStalePageSession);
@@ -11230,6 +11233,7 @@
       } = require_exit_relogin();
       var {
         DEFAULT_NO_SELF_SNAPSHOT_RECOVERY_KEY,
+        normalizeNoSelfSnapshotRecoveryState,
         activeNoSelfSnapshotRecoveryState
       } = require_no_self_snapshot_recovery_state();
       function createSessionRecoveryRuntime(runtime = {}) {
@@ -11626,7 +11630,9 @@
           const userId = Number(control?.currentUserId || getCurrentUserId() || 0);
           const loginRequired = Boolean(hasLoginRequiredText() || findLoginControl());
           const snapshotSelf = snapshotSelfPresenceState(userId);
-          const snapshotExitRecovery = activeNoSelfSnapshotRecoveryState(localStorage2, userId, { key: NO_SELF_SNAPSHOT_RECOVERY_KEY });
+          const storedSnapshotExitRecovery = activeNoSelfSnapshotRecoveryState(localStorage2, userId, { key: NO_SELF_SNAPSHOT_RECOVERY_KEY });
+          const memorySnapshotExitRecovery = storedSnapshotExitRecovery ? null : normalizeNoSelfSnapshotRecoveryState(bot.noSelfSnapshotRecovery);
+          const snapshotExitRecovery = storedSnapshotExitRecovery || (memorySnapshotExitRecovery && (!memorySnapshotExitRecovery.userId || !userId || memorySnapshotExitRecovery.userId === userId) ? memorySnapshotExitRecovery : null);
           const hasSessionEvidence = Boolean(!snapshotExitRecovery && userId && !loginRequired && (control?.hasToken || controlHasNativeGameSession(control) || snapshotSelf.present || control?.transport === "native-page" || Number.isFinite(wsReadyStateNumber(control?.nativeWsReadyState)) || Number.isFinite(wsReadyStateNumber(control?.wsReadyState))));
           const reconnectChurn = Boolean(control?.nativeReconnectChurn);
           const sessionMismatch = Boolean(!snapshotExitRecovery && controlHasAuthoritativeSessionMismatch(control, snapshotSelf));
@@ -12082,6 +12088,91 @@
             storageErrors.push({ key: label, error: err?.message || String(err) });
           }
         }
+        function removeStorageKeysMatching(store, pattern, prefix, removedKeys, storageErrors) {
+          try {
+            if (!store?.key || !store?.removeItem) return;
+            const keys = [];
+            for (let i = 0; i < Number(store.length || 0); i += 1) {
+              const key = store.key(i);
+              if (key && pattern.test(String(key))) keys.push(key);
+            }
+            for (const key of keys) removeStorageKey(store, key, prefix + key, removedKeys, storageErrors);
+          } catch (err) {
+            storageErrors.push({ key: prefix + String(pattern), error: err?.message || String(err) });
+          }
+        }
+        function clearNativePageSessionState(userId, reason = "snapshot no-self exit confirmed") {
+          const detail = { attempted: false, hadState: false, clearedFields: [], clearedReconnectFields: [], closedNativeWs: false, error: "" };
+          try {
+            const native = getNativeControl();
+            const nativeState = native?.state || null;
+            const ws = native?.ws || nativeState?.ws || null;
+            detail.attempted = Boolean(native || nativeState || ws);
+            if (nativeState && typeof nativeState === "object") {
+              detail.hadState = true;
+              for (const [key, value] of [
+                ["currentUserId", 0],
+                ["sessionToken", ""],
+                ["wsOpen", false],
+                ["ws", null]
+              ]) {
+                if (key in nativeState) {
+                  nativeState[key] = value;
+                  detail.clearedFields.push(key);
+                }
+              }
+              for (const key of ["entities", "bullets", "coinDrops", "messages"]) {
+                if (Array.isArray(nativeState[key])) {
+                  nativeState[key] = [];
+                  detail.clearedFields.push(key);
+                }
+              }
+              for (const key of Object.keys(nativeState)) {
+                if (!/reconnect/i.test(key)) continue;
+                const value = nativeState[key];
+                if (typeof value === "number") {
+                  try {
+                    clearTimeout(value);
+                    clearInterval(value);
+                  } catch (_) {
+                  }
+                  nativeState[key] = 0;
+                  detail.clearedReconnectFields.push(key);
+                } else if (value && typeof value === "object") {
+                  nativeState[key] = null;
+                  detail.clearedReconnectFields.push(key);
+                }
+              }
+            }
+            if (ws && isWsConnectingOrOpen(ws.readyState)) {
+              try {
+                ws.close();
+                detail.closedNativeWs = true;
+              } catch (err) {
+                detail.error = err?.message || String(err);
+              }
+            }
+            if (bot.control && typeof bot.control === "object") {
+              bot.control.currentUserId = userId || bot.control.currentUserId || 0;
+              bot.control.hasToken = false;
+              bot.control.wsOpen = false;
+              bot.control.rawWsOpen = false;
+              bot.control.nativeWsOpen = false;
+              bot.control.connecting = false;
+              bot.control.wsReadyState = null;
+              bot.control.nativeWsReadyState = null;
+              bot.control.observedNativeWs = null;
+              bot.control.observedNativeWsReadyState = null;
+              bot.control.lastError = String(reason || "snapshot no-self exit confirmed");
+              bot.control.nativeReconnectEvents = [];
+              bot.control.nativeReconnectChurn = false;
+              bot.control.nativeReconnectEventCount = 0;
+            }
+          } catch (err) {
+            detail.error = err?.message || String(err);
+          }
+          return detail;
+        }
         function readNoSelfSnapshotRecoveryState(t = Date.now()) {
           const state2 = readNoSelfSnapshotRecoveryStateCore(localStorage2, { key: NO_SELF_SNAPSHOT_RECOVERY_KEY, now: t });
           bot.noSelfSnapshotRecovery = state2;
@@ -12108,6 +12199,8 @@
             removeStorageKey(localStorage2, key, key, removedKeys, storageErrors);
             removeStorageKey(browserSessionStorage, key, "sessionStorage." + key, removedKeys, storageErrors);
           }
+          removeStorageKeysMatching(localStorage2, /^tmpGame/i, "", removedKeys, storageErrors);
+          removeStorageKeysMatching(browserSessionStorage, /^tmpGame/i, "sessionStorage.", removedKeys, storageErrors);
           const markerResult = writeNoSelfSnapshotRecoveryState(localStorage2, {
             reason: "snapshot-no-self-exit-confirmed",
             userId,
@@ -12122,31 +12215,11 @@
           });
           bot.noSelfSnapshotRecovery = markerResult.state;
           const preservedUserIdInput = preserveUserIdInput(userId);
-          let closedNativeWs = false;
-          let closeNativeWsError = "";
-          try {
-            const native = getNativeControl();
-            if (native?.ws && isWsConnectingOrOpen(native.ws.readyState)) {
-              native.ws.close();
-              closedNativeWs = true;
-            }
-          } catch (err) {
-            closeNativeWsError = err?.message || String(err);
-          }
-          if (bot.control && typeof bot.control === "object") {
-            bot.control.currentUserId = userId || bot.control.currentUserId || 0;
-            bot.control.hasToken = false;
-            bot.control.wsOpen = false;
-            bot.control.nativeWsOpen = false;
-            bot.control.connecting = false;
-            bot.control.lastError = String(reason || "snapshot no-self exit confirmed");
-            bot.control.nativeReconnectEvents = [];
-            bot.control.nativeReconnectChurn = false;
-            bot.control.nativeReconnectEventCount = 0;
-          }
+          const nativeSessionReset = clearNativePageSessionState(userId, reason);
           bot.pendingExit = null;
           clearPersistentPendingExitState();
           bot.offlineSince = 0;
+          bot.waitSince = Date.now();
           return {
             ...confirmation,
             clearedLocalSession: true,
@@ -12156,9 +12229,10 @@
             storageErrors,
             recoveryMarker: markerResult.state,
             recoveryMarkerError: markerResult.error,
+            nativeSessionReset,
             preservedUserIdInput,
-            closedNativeWs,
-            closeNativeWsError,
+            closedNativeWs: Boolean(nativeSessionReset.closedNativeWs),
+            closeNativeWsError: nativeSessionReset.error,
             displayReason: confirmation.displayReason
           };
         }
@@ -12181,8 +12255,6 @@
           };
           bot.lastOfflineLeaveResult = leaveResult;
           noteImportantSessionExit("snapshot-no-self-exit-confirmed", bot.lastSelf, Date.now(), { exit: leaveResult });
-          const reloadRequested = requestReload("snapshot confirmed no-self local session reset");
-          const blockedReload = reloadRequested === false ? bot.exitAudit?.lastBlockedReload || bot.importantLogging?.lastBlockedReload || null : null;
           return {
             kind: "wait",
             reason: "snapshot-no-self-exit-confirmed",
@@ -12196,10 +12268,8 @@
             noSelfGameSession: noSelfExit,
             snapshotExitConfirmation: recovery,
             leave: leaveResult,
-            reloadRequested: Boolean(reloadRequested),
-            exitAuditFlush: reloadRequested === false ? bot.exitAudit?.lastBlockedReload || null : null,
-            importantLogFlush: reloadRequested === false ? bot.importantLogging?.lastBlockedReload || null : null,
-            displayReason: blockedReload ? bot.exitAudit?.lastBlockedReload ? "\u7B49\u5F85\u9000\u51FA\u65E5\u5FD7\u53D1\u9001\u5B8C\u6210\uFF0C\u6682\u4E0D\u5237\u65B0\u91CD\u767B" : "\u7B49\u5F85\u4F1A\u8BDD\u7ED3\u675F\u65E5\u5FD7\u53D1\u9001\u5B8C\u6210\uFF0C\u6682\u4E0D\u5237\u65B0\u91CD\u767B" : recovery.displayReason
+            reloadRequested: false,
+            displayReason: recovery.displayReason
           };
         }
         function runNoSelfSnapshotExitRecovery(control, noSelfExit, options = {}) {
@@ -27795,7 +27865,7 @@
               };
               updateBotPanel(bot.lastDecision);
               const loginPending = Boolean(login?.attempted || login?.needed && !login?.error);
-              if (!loginPending && Date.now() - bot.waitSince > cfg.reloadAfterNoSelfMs) {
+              if (!loginPending && !noSelfExit?.snapshotExitRecovery && Date.now() - bot.waitSince > cfg.reloadAfterNoSelfMs) {
                 requestReload("no self for too long");
               }
               if (cfg.once) bot.stop("once");

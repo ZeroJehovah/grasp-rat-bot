@@ -4,7 +4,7 @@ Keep this file focused on current validation coverage. Do not use it as a migrat
 
 ## Current Counts
 
-- Bot self-test count: `315`.
+- Bot self-test count: `316`.
 - Strategy module self-test count: `107`.
 - Combat-log analyzer self-test count: `88`.
 - Combat replay self-test count: `1` local replay case plus skipped historical fixtures when retained logs are absent.
@@ -40,7 +40,7 @@ The browser runtime should adapt page/native state into these pure helpers inste
 
 ## Browser Runtime Coverage
 
-`src/node/run-self-test.js` includes focused browser-runtime smoke checks for session recovery, including the no-self snapshot-exit confirmation path that only accepts a fresh authoritative snapshot with current self absent, the local stale-session reset that clears `tmpGameSessionToken`/`tmpGameUserId` while preserving the login id input before reload, writes the recovery marker, and the post-reload marker path that suppresses repeat leave/session-mismatch handling while the stale native session is still reconnecting. It also directly exercises `maybeStartAutoLogin()` for the marker path, verifying that stale native-session evidence and an old post-login suppress do not block login and that a visible login control is clicked before falling back to the page global login function.
+`src/node/run-self-test.js` includes focused browser-runtime smoke checks for session recovery, including the no-self snapshot-exit confirmation path that only accepts a fresh authoritative snapshot with current self absent, the local stale-session reset that clears `tmpGameSessionToken`/`tmpGameUserId` while preserving the login id input, writes the recovery marker, and clears page-native `state.currentUserId/sessionToken/ws/wsOpen` plus stale entity/reconnect state before relogin. It also covers both persisted and in-memory marker paths that suppress repeat leave/session-mismatch handling while stale native-session evidence is still present, and directly exercises `maybeStartAutoLogin()` for the marker path, verifying that stale native-session evidence and an old post-login suppress do not block login and that a visible login control is clicked before falling back to the page global login function.
 
 ## Objective Build Verification
 

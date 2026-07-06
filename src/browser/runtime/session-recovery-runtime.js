@@ -13,6 +13,7 @@ const {
 } = require('./exit-relogin');
 const {
   DEFAULT_NO_SELF_SNAPSHOT_RECOVERY_KEY,
+  normalizeNoSelfSnapshotRecoveryState,
   activeNoSelfSnapshotRecoveryState
 } = require('./no-self-snapshot-recovery-state');
 
@@ -432,7 +433,9 @@ function createSessionRecoveryRuntime(runtime = {}) {
     const userId = Number(control?.currentUserId || getCurrentUserId() || 0);
     const loginRequired = Boolean(hasLoginRequiredText() || findLoginControl());
     const snapshotSelf = snapshotSelfPresenceState(userId);
-    const snapshotExitRecovery = activeNoSelfSnapshotRecoveryState(localStorage, userId, { key: NO_SELF_SNAPSHOT_RECOVERY_KEY });
+    const storedSnapshotExitRecovery = activeNoSelfSnapshotRecoveryState(localStorage, userId, { key: NO_SELF_SNAPSHOT_RECOVERY_KEY });
+    const memorySnapshotExitRecovery = storedSnapshotExitRecovery ? null : normalizeNoSelfSnapshotRecoveryState(bot.noSelfSnapshotRecovery);
+    const snapshotExitRecovery = storedSnapshotExitRecovery || (memorySnapshotExitRecovery && (!memorySnapshotExitRecovery.userId || !userId || memorySnapshotExitRecovery.userId === userId) ? memorySnapshotExitRecovery : null);
     const hasSessionEvidence = Boolean(!snapshotExitRecovery && userId && !loginRequired && (
       control?.hasToken
       || controlHasNativeGameSession(control)
