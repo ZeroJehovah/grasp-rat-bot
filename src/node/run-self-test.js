@@ -10347,6 +10347,215 @@ async function runSelfTest() {
       want: 'true|false|1|true|confirmed-no-self-exit-local-session-reset|true|true|true|1|true|0||false|null|true|false|null|0|true'
     },
     {
+      name: 'external left user recovery clears stale self entity',
+      got: (async () => {
+        const data = new Map([
+          ['tmpGameUserId', '28886'],
+          ['tmpGameSessionShadow', 'stale-shadow'],
+          ['tmpGameHelpSeenV3', '1']
+        ]);
+        const storage = createMapStorage(data);
+        let closed = false;
+        let reloadCalls = 0;
+        let stopReason = '';
+        let resetReason = '';
+        let auditCalls = 0;
+        let importantReason = '';
+        const nativeWs = {
+          readyState: 1,
+          close: () => {
+            closed = true;
+          }
+        };
+        const nativeState = {
+          currentUserId: 28886,
+          sessionToken: 'stale-token',
+          wsOpen: true,
+          ws: nativeWs,
+          entities: [{ user_id: 28886, hp: 100, life: 'Alive' }],
+          reconnectTimer: 99
+        };
+        const oldDocument = global.document;
+        global.document = {
+          querySelectorAll: () => [{ innerText: '14:06:11 left user 28886' }],
+          body: { innerText: '14:06:11 left user 28886' },
+          getElementById: () => null
+        };
+        try {
+          const botState = {
+            globalState: { entities: [], snapshotRefreshedAt: Date.now() },
+            control: { hasToken: false, wsOpen: true, nativeWsOpen: true },
+            exitAudit: {},
+            importantLogging: {},
+            lastSelf: { user_id: 28886, id: 28886, hp: 100, x: 1, y: 2 }
+          };
+          const noSelfRuntime = createNoSelfSnapshotRecoveryRuntime({
+            bot: botState,
+            cfg,
+            storage,
+            getCurrentUserId: () => 28886,
+            getNativeControl: () => ({ ws: nativeWs, state: nativeState }),
+            snapshotSelfPresenceState: () => ({ known: true, fresh: true, present: false }),
+            clearPersistentPendingExitState: () => {
+              data.set('pendingExitCleared', 'true');
+            }
+          });
+          const runtime = createPendingExitRuntime({
+            bot: botState,
+            cfg: { ...cfg, leave403ReloginDelayMs: 3600000 },
+            storage,
+            getCurrentUserId: () => 28886,
+            getSessionToken: () => '',
+            getNativeControl: () => ({ ws: nativeWs, state: nativeState }),
+            getNativeState: () => nativeState,
+            hasNativeGameSession: () => true,
+            snapshotSelfFreshEnough: () => true,
+            summarizeSelf: value => ({ id: value.user_id ?? value.id, hp: value.hp, x: value.x, y: value.y }),
+            summarizeControl: () => ({
+              currentUserId: 28886,
+              hasToken: false,
+              wsOpen: true,
+              rawWsOpen: true,
+              nativeWsOpen: true,
+              connecting: false,
+              wsReadyState: 1,
+              nativeWsReadyState: 1,
+              transport: 'native-page'
+            }),
+            controlHasAuthoritativeSessionMismatch: () => false,
+            clearCombatEngagement: () => {},
+            stopMotionAfterExit: reason => {
+              stopReason = reason;
+            },
+            requestReload: () => {
+              reloadCalls += 1;
+              return true;
+            },
+            clearPersistentPendingExitState: () => {
+              data.set('pendingExitClearedByPendingRuntime', 'true');
+            },
+            resetLoginSnapshotGate: reason => {
+              resetReason = reason;
+              return { reset: true, reason };
+            },
+            loginPointSafetyExitSelfForDetail: () => botState.lastSelf,
+            recordExitAuditEvent: () => {
+              auditCalls += 1;
+              return true;
+            },
+            noteImportantSessionExit: reason => {
+              importantReason = reason;
+            },
+            isAlive: value => Boolean(value?.hp > 0),
+            clearNoSelfLocalSessionAfterConfirmedExit: (...args) => noSelfRuntime.clearNoSelfLocalSessionAfterConfirmedExit(...args)
+          });
+          const decision = await runtime.handlePendingExit({ user_id: 28886, hp: 100, life: 'Alive', x: 1, y: 2 });
+          return [
+            decision?.reason,
+            decision?.reloadRequested,
+            reloadCalls,
+            stopReason,
+            Boolean(decision?.localSessionReset),
+            data.get('tmpGameUserId') === undefined,
+            data.get('tmpGameSessionShadow') === undefined,
+            data.get('tmpGameHelpSeenV3'),
+            data.has('graspRatNoSelfSnapshotRecovery'),
+            nativeState.currentUserId,
+            nativeState.sessionToken,
+            nativeState.wsOpen,
+            nativeState.ws,
+            nativeState.entities.length,
+            nativeState.reconnectTimer,
+            closed,
+            botState.control.hasToken,
+            botState.pendingExit,
+            botState.lastOfflineLeaveResult?.reason,
+            resetReason,
+            auditCalls,
+            importantReason,
+            data.get('pendingExitCleared'),
+            data.get('pendingExitClearedByPendingRuntime')
+          ].map(String).join('|');
+        } finally {
+          global.document = oldDocument;
+        }
+      })(),
+      want: 'external-left-user-exit-confirmed|true|1|external-left-user-exit-confirmed|true|true|true|1|true|0||false|null|0|0|true|false|null|external-left-user-exit-confirmed|exit-confirmed:external-left-user-exit-confirmed|1|exit-confirmed:external-left-user-exit-confirmed|true|true'
+    },
+    {
+      name: 'external left user recovery ignores live current self',
+      got: (async () => {
+        const data = new Map([
+          ['tmpGameSessionToken', 'live-token'],
+          ['tmpGameUserId', '28886']
+        ]);
+        const storage = createMapStorage(data);
+        let reloadCalls = 0;
+        let stopCalls = 0;
+        const oldDocument = global.document;
+        global.document = {
+          querySelectorAll: () => [{ innerText: '14:06:11 left user 28886' }],
+          body: { innerText: '14:06:11 left user 28886' },
+          getElementById: () => null
+        };
+        try {
+          const self = { user_id: 28886, hp: 100, life: 'Alive' };
+          const nativeState = { entities: [self] };
+          const botState = {
+            globalState: { entities: [self], snapshotRefreshedAt: Date.now() },
+            control: { hasToken: true, wsOpen: true, nativeWsOpen: true },
+            exitAudit: {},
+            importantLogging: {},
+            lastSelf: self
+          };
+          const runtime = createPendingExitRuntime({
+            bot: botState,
+            cfg: { ...cfg, leave403ReloginDelayMs: 3600000 },
+            storage,
+            getCurrentUserId: () => 28886,
+            getSessionToken: () => storage.getItem('tmpGameSessionToken') || '',
+            getNativeControl: () => ({ ws: { readyState: 1 }, state: nativeState }),
+            getNativeState: () => nativeState,
+            hasNativeGameSession: () => true,
+            snapshotSelfFreshEnough: () => true,
+            summarizeSelf: value => ({ id: value.user_id ?? value.id, hp: value.hp }),
+            summarizeControl: () => ({
+              currentUserId: 28886,
+              hasToken: true,
+              wsOpen: true,
+              rawWsOpen: true,
+              nativeWsOpen: true,
+              connecting: false,
+              wsReadyState: 1,
+              nativeWsReadyState: 1,
+              transport: 'native-page'
+            }),
+            requestReload: () => {
+              reloadCalls += 1;
+              return true;
+            },
+            stopMotionAfterExit: () => {
+              stopCalls += 1;
+            },
+            isAlive: value => Boolean(value?.hp > 0)
+          });
+          const decision = await runtime.handlePendingExit(self);
+          return [
+            decision,
+            reloadCalls,
+            stopCalls,
+            data.get('tmpGameSessionToken'),
+            data.get('tmpGameUserId'),
+            nativeState.entities.length,
+            botState.pendingExit
+          ].map(String).join('|');
+        } finally {
+          global.document = oldDocument;
+        }
+      })(),
+      want: 'null|0|0|live-token|28886|1|undefined'
+    },
+    {
       name: 'local exit confirmation must not accept active session mismatch',
       got: (() => {
         const tokenCleared = true;

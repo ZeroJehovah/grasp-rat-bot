@@ -320,6 +320,8 @@ function createPendingExitRuntime(runtime = {}) {
   function chatLeftUserMessageSeen(userId = getCurrentUserId()) {
     const id = String(userId || '').trim();
     if (!id) return false;
+    const doc = typeof document === 'object' && document ? document : null;
+    if (!doc) return false;
     const pattern = new RegExp('(?:^|\\b)left\\s+user\\s+' + escapeRegExpLiteral(id) + '(?:\\b|$)', 'i');
     const selectors = [
       '#chat',
@@ -334,12 +336,12 @@ function createPendingExitRuntime(runtime = {}) {
     const roots = [];
     for (const selector of selectors) {
       try {
-        document.querySelectorAll(selector).forEach(el => {
+        doc.querySelectorAll(selector).forEach(el => {
           if (el && !roots.includes(el)) roots.push(el);
         });
       } catch (_) {}
     }
-    if (!roots.length && document.body) roots.push(document.body);
+    if (!roots.length && doc.body) roots.push(doc.body);
     for (const root of roots) {
       const text = String(root?.innerText || root?.textContent || '');
       if (pattern.test(text)) return true;
@@ -412,6 +414,180 @@ function createPendingExitRuntime(runtime = {}) {
       sessionMismatch,
       previousState: state || null
     };
+  }
+
+  function snapshotSelfPresenceForPendingExit(userId = getCurrentUserId()) {
+    const id = Number(userId || 0) || 0;
+    const fresh = Boolean(id && snapshotSelfFreshEnough());
+    const entities = Array.isArray(bot.globalState?.entities) ? bot.globalState.entities : [];
+    const entity = fresh
+      ? entities.find(item => Number(item?.user_id ?? item?.userId ?? item?.id ?? NaN) === id) || null
+      : null;
+    return {
+      known: Boolean(fresh),
+      fresh,
+      present: Boolean(entity && isAlive(entity)),
+      userId: id || null,
+      self: entity ? summarizeSelf(entity) : null
+    };
+  }
+
+  function externalLeftUserExitState(self, control = summarizeControl()) {
+    const userId = Number(control?.currentUserId || getCurrentUserId() || 0) || 0;
+    const blockedBy = [];
+    const chatLeftUser = Boolean(userId && chatLeftUserMessageSeen(userId));
+    const tokenCleared = Boolean(!getSessionToken() && !control?.hasToken);
+    const snapshotSelf = snapshotSelfPresenceForPendingExit(userId);
+    const snapshotMissingSelf = Boolean(snapshotSelf.known && !snapshotSelf.present);
+    const loginRequired = Boolean(hasLoginRequiredText());
+    let loginControlVisible = false;
+    try {
+      loginControlVisible = Boolean(findLoginControl());
+    } catch (_) {
+      loginControlVisible = false;
+    }
+    const native = getNativeControl();
+    const nativeSession = Boolean(hasNativeGameSession(native, userId));
+    const controlSession = Boolean(control?.rawWsOpen || control?.nativeWsOpen || control?.connecting);
+    const noPageSession = Boolean(!nativeSession && !controlSession);
+    const selfAlive = Boolean(self && Number(self.user_id ?? self.id ?? NaN) === userId && isAlive(self));
+    const liveSelfStillAuthoritative = Boolean(
+      selfAlive
+        && !snapshotMissingSelf
+        && !tokenCleared
+        && !loginRequired
+        && !loginControlVisible
+        && (control?.hasToken || nativeSession || controlSession)
+    );
+    if (!userId) blockedBy.push('missing-user-id');
+    if (!chatLeftUser) blockedBy.push('left-user-message-missing');
+    if (liveSelfStillAuthoritative) blockedBy.push('self-still-authoritative');
+    if (!tokenCleared && !snapshotMissingSelf && !loginRequired && !(loginControlVisible && noPageSession)) {
+      blockedBy.push('exit-evidence-incomplete');
+    }
+    const confirmed = blockedBy.length === 0;
+    const reason = confirmed ? 'external-left-user-exit-confirmed' : (blockedBy[0] || 'external-left-user-not-confirmed');
+    const displayReason = confirmed
+      ? '聊天确认当前用户已离开，清理本地登录状态后重登'
+      : '';
+    const noSelfGameSession = confirmed ? {
+      shouldLeave: true,
+      reason: 'external left user missing self',
+      displayReason,
+      userId: userId || null,
+      ageMs: 0,
+      externalLeftUser: true,
+      snapshotSelf,
+      control: control ? {
+        wsOpen: Boolean(control.wsOpen),
+        rawWsOpen: Boolean(control.rawWsOpen),
+        connecting: Boolean(control.connecting),
+        wsReadyState: control.wsReadyState ?? null,
+        nativeWsReadyState: control.nativeWsReadyState ?? null,
+        hasToken: Boolean(control.hasToken),
+        transport: control.transport || ''
+      } : null
+    } : null;
+    return {
+      confirmed,
+      reason,
+      displayReason,
+      source: 'external-left-user',
+      at: Date.now(),
+      userId: userId || null,
+      chatLeftUser,
+      tokenCleared,
+      loginRequired,
+      loginControlVisible,
+      noPageSession,
+      nativeSession,
+      controlSession,
+      selfAlive,
+      snapshotSelf,
+      noSelfGameSession,
+      control: control || null,
+      blockedBy
+    };
+  }
+
+  function externalLeftUserExitRecoveryDecision(self, state) {
+    const t = Date.now();
+    stopMotionAfterExit('external-left-user-exit-confirmed');
+    clearCombatEngagement('external-left-user-exit-confirmed');
+    bot.pendingCombatLeave = null;
+    bot.pendingInjuryLeave = null;
+    bot.pursuit = null;
+    if (bot.lastSafety) bot.lastSafety.pursuit = null;
+    const selfSummary = self && isAlive(self) ? summarizeSelf(self) : (bot.lastSelf || null);
+    const detail = {
+      attempted: false,
+      method: 'chat-left-user-confirmation',
+      reason: state.reason || 'external-left-user-exit-confirmed',
+      summary: state.displayReason || '聊天确认当前用户已离开',
+      displayReason: state.displayReason || '',
+      at: t,
+      userId: state.userId || getCurrentUserId() || null,
+      self: selfSummary,
+      offlineSafety: {
+        unsafe: true,
+        noSelfGameSession: state.noSelfGameSession,
+        externalLeftUser: state
+      },
+      error: '',
+      exitPending: false,
+      exitConfirmed: true,
+      exitConfirmedAt: t,
+      exitConfirmation: state
+    };
+    const recovery = clearNoSelfLocalSessionAfterConfirmedExit(
+      state.control || summarizeControl(),
+      state.noSelfGameSession,
+      detail,
+      'external left user local session reset'
+    );
+    if (recovery?.clearedLocalSession) {
+      detail.localSessionReset = recovery;
+      detail.noSelfSnapshotRecovery = recovery.recoveryMarker || null;
+    }
+    detail.loginSnapshotGateReset = resetLoginSnapshotGate(
+      'exit-confirmed:' + detail.reason,
+      loginPointSafetyExitSelfForDetail(detail, { self: detail.self || null }, bot.lastSelf)
+    );
+    bot.pendingExit = null;
+    clearPersistentPendingExitState();
+    bot.lastOfflineLeaveAt = t;
+    bot.lastOfflineLeaveResult = detail;
+    recordExitAuditEvent('exit-confirmed', detail, {
+      at: t,
+      confirmedAt: t,
+      confirmation: state,
+      source: 'external-left-user',
+      scope: 'offline'
+    });
+    noteImportantSessionExit('exit-confirmed:' + detail.reason, detail.self || bot.lastSelf, t, { exit: detail });
+    detail.reloadRequested = Boolean(requestReload('external left user local session reset'));
+    return {
+      kind: 'wait',
+      reason: detail.reason,
+      dx: 0,
+      dy: 0,
+      self: null,
+      currentUserId: detail.userId || getCurrentUserId(),
+      control: summarizeControl(),
+      displayReason: detail.reloadRequested ? detail.displayReason + '，正在刷新页面' : detail.displayReason,
+      leave: detail,
+      offlineSafety: detail.offlineSafety,
+      exitConfirmation: state,
+      localSessionReset: detail.localSessionReset || null,
+      reloadRequested: detail.reloadRequested
+    };
+  }
+
+  function handleExternalLeftUserExitRecovery(self) {
+    if (bot.pendingExit) return null;
+    const state = externalLeftUserExitState(self);
+    if (!state.confirmed) return null;
+    return externalLeftUserExitRecoveryDecision(self, state);
   }
 
 	  function attachLeaveSuccessReloadConfirmation(pending, detail, t = Date.now()) {
@@ -915,7 +1091,7 @@ function createPendingExitRuntime(runtime = {}) {
 
   async function handlePendingExit(self) {
     const pending = bot.pendingExit;
-    if (!pending) return null;
+    if (!pending) return handleExternalLeftUserExitRecovery(self);
     const existingHoldMs = pending.scope === 'offline' ? offlineReloginHoldRemainingMsForPendingExitBoundCore(bot, localStorage, { loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, readPersistentExitState, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY, staleOfflineStaminaHoldContradicted, clearOfflineReloginHold: reason => clearOfflineReloginHoldForPendingExitBoundCore(bot, localStorage, reason, { now: Date.now, writePersistentPendingExitState: pending => writePersistentPendingExitStateCore(localStorage, PENDING_EXIT_STATE_KEY, pending || bot.pendingExit, Date.now(), pendingExitPersistenceCoreHelpers()), clearPersistentPendingExitState, clearPersistentExitState, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY }), now: Date.now }) : enemyReloginHoldRemainingMsForPendingExitBoundCore(bot, localStorage, { loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, readPersistentExitState, enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY, now: Date.now });
     if (existingHoldMs > 0) {
       bot.pendingExit = null;
@@ -1082,6 +1258,10 @@ function createPendingExitRuntime(runtime = {}) {
     chatLeftUserMessageSeen,
     ownEntityDisappearedState,
     pendingExitLocalConfirmationState,
+    snapshotSelfPresenceForPendingExit,
+    externalLeftUserExitState,
+    externalLeftUserExitRecoveryDecision,
+    handleExternalLeftUserExitRecovery,
     attachLeaveSuccessReloadConfirmation,
     pendingExitLeaveSuccessReloadWaitDetail,
     requestPendingExitLeaveSuccessReload,
