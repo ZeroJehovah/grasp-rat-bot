@@ -4,14 +4,15 @@ Update this file for every remote bot release or handoff-relevant state change. 
 
 ## Latest Release
 
-- Latest remote bot: `bootstrap-0.4.579`.
-- Latest manifest SHA-256: `ba9d46cc3f557fd62bd590ddffea58c72b6a38c40c472b390a338bf524c5e34d`.
-- Latest remote release commit: `9b359eb` (`bootstrap-0.4.579` prefer visible login control for no-self relogin).
+- Latest remote bot: `bootstrap-0.4.580`.
+- Latest manifest SHA-256: `8055b75fb9ada7f6b9042c95edd550a96132fcd5d8f2d6ca52d1085a54ed5af1`.
+- Latest remote release commit: `0a403ac` (`bootstrap-0.4.580` use native view radius for post-login zoom).
 - Latest bootstrap A versions: Tampermonkey `0.4.74`, extension `0.1.53`.
-- Latest direct entry/config SHA-256: `942d16bd482fe5b61bc3f03ea47855e0fe844f33617c2b12b2055a719362e91b`.
+- Latest direct entry/config SHA-256: `34493285a2452d0dfd7afc75d6badee5168b5b66aff93ca9e7bb7542e5492b7c`.
 
 ## Current Handoff
 
+- `bootstrap-0.4.580` changes post-login zoom back to a one-way native view-radius loop. After login it reads the native/page `view r` value from `#scaleText` or native state, sends one centered zoom-out wheel step at a time while the view radius is below 500m, and stops as soon as the radius reaches or exceeds 500m for that login/session key. It no longer uses screen-fit ratio, no longer sends zoom-in correction steps when the view is over-shrunk, and no longer stops after a single non-improving measurement, so delayed label updates do not create early aborts or back-and-forth adjustment.
 - `bootstrap-0.4.579` fixes the post-safety no-self relogin loop where the panel reached `登录点安全 3/3`, then repeatedly reset `bot login started` cooldown to about 45s without opening OAuth or reconnecting. In ordinary no-self/no-page-session auto-login, `maybeStartAutoLogin()` now prefers the visible native login control over page-global `startLinuxDoLogin()` when both are available. This avoids the no-op global login path while preserving the recovery-marker behavior that waits after a real login click has started.
 - `bootstrap-0.4.578` fixes the earlier stale-login branch where the page/chat already said `websocket blocked: login required`, but session recovery still classified the tab as logged-in/no-self and waited on reconnect/snapshot handling. Explicit login-required text in the body, chat DOM, or recent page messages now counts as a server auth block when stale local/native session evidence and a missing self are present. That path confirms `login-required-no-self-exit-confirmed`, clears session/auth/login-like `tmpGame*` local/session keys while preserving `tmpGameHelpSeen*`, writes `graspRatNoSelfSnapshotRecovery`, resets page-native session/WebSocket/reconnect state, closes the native WebSocket, clears pending exit state, and requests a page reload without waiting for a fresh snapshot or calling `leave()`.
 - `bootstrap-0.4.577` fixes the no-self pending-exit follow-up where a stale server-exited/local-session state could fall back to `leave()`, later reach `exit-confirmed`, and then keep the old native WebSocket reconnecting because `requestReload('exit confirmed')` was blocked by pending exit-audit flush. Confirmed pending exits that came from `offlineSafety.noSelfGameSession` now run the same local-session reset before requesting reload: session/auth/login-like `tmpGame*` keys are removed, `tmpGameHelpSeen*` is preserved, `graspRatNoSelfSnapshotRecovery` is written, page-native `state.currentUserId/sessionToken/ws/wsOpen` plus stale reconnect/cache state are cleared, the native WebSocket is closed, and gated relogin can proceed even if audit-log flushing delays the page reload.
@@ -57,7 +58,7 @@ Update this file for every remote bot release or handoff-relevant state change. 
 
 ## Latest Validation Baseline
 
-The latest `bootstrap-0.4.579` release validation passed. Run build-producing commands and manifest-reading validation sequentially, not in parallel; `node scripts/build-remote-bot.js --version ...` rewrites `dist/manifest.json`, while `objective-status` and `verify-objective-build` read it.
+The latest `bootstrap-0.4.580` release validation passed. Run build-producing commands and manifest-reading validation sequentially, not in parallel; `node scripts/build-remote-bot.js --version ...` rewrites `dist/manifest.json`, while `objective-status` and `verify-objective-build` read it.
 
 ```bash
 node grasp-rat-bot.js --self-test
@@ -74,7 +75,7 @@ node --check extension/popup.js
 cd combat-log-service && npm test
 npm run test:runtime-helper-entry
 npm run test:remote-bundled
-node scripts/build-remote-bot.js --version bootstrap-0.4.579
+node scripts/build-remote-bot.js --version bootstrap-0.4.580
 node scripts/verify-objective-build.js
 git diff --check
 ```
@@ -91,7 +92,7 @@ Latest objective build verification reports 35 checks and guards:
 - native/realtime-only combat target/aim/fire anchors;
 - visible/native ordinary-profit priority before snapshot fallback;
 - no-self snapshot recovery remains a dedicated control runtime module, visible login controls do not hide stale no-self page sessions, ordinary no-self auto-login prefers a visible native login control over page-global login when no page session is active, explicit login-required stale no-self sessions clear local/session/native state and reload without fresh snapshot confirmation, no-self cleanup requests a page reload after clearing stale local sessions, no-self recovery cleanup preserves `tmpGameHelpSeen*` tutorial markers, no-self recovery login markers suppress duplicate OAuth/login clicks after recovery login starts, confirmed pending exits request a page reload, confirmed no-self pending exits clear stale local sessions before any reload-block wait, no-self leave 403 recovery clears stale local sessions without pending-exit retry, the shared recovery marker helper is included in the browser module graph, and composition owners stay under size/dependency guards;
-- post-login visible-range zoom keeps the 500m target radius, does not stop on the page view-radius label, limits measured steps, disables blind fallback clicks by default, and keeps stable no-token session keys;
+- post-login visible-range zoom keeps the 500m target radius, uses the native/page `view r` as the stop condition, only sends zoom-out steps, disables blind fallback clicks by default, and keeps stable no-token session keys;
 - bootstrap auto-login evaluates login-point safety only after login is needed;
 - userscript and extension bootstrap version consistency.
 
