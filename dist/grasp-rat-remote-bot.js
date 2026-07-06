@@ -12,7 +12,7 @@
   var define_GRASP_RAT_RUNTIME_CONFIG_default;
   var init_define_GRASP_RAT_RUNTIME_CONFIG = __esm({
     "<define:__GRASP_RAT_RUNTIME_CONFIG__>"() {
-      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.574" };
+      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.575" };
     }
   });
 
@@ -8906,6 +8906,7 @@
           },
           readPersistentExitState = () => null,
           writePersistentExitState = () => null,
+          requestReload = () => false,
           requestLeaveConfirmationReload = () => false,
           activeEnemyLeaveDetail = () => null,
           activeOfflineLeaveDetail = () => null,
@@ -9525,6 +9526,7 @@
             scope: pending.scope || detail.exitAuditScope || ""
           });
           noteImportantSessionExit("exit-confirmed:" + (detail.reason || pending.reason || ""), detail.self || pending.self || bot.lastSelf, t, { exit: detail });
+          detail.reloadRequested = Boolean(requestReload("exit confirmed"));
           return detail;
         }
         function pendingExitWaitDecision(pending, self, leaveResult, state2, confirmed = false) {
@@ -10339,6 +10341,11 @@
           noSelfAgeMs: Math.max(0, Math.round(finiteNumber(raw.noSelfAgeMs, 0))),
           snapshotAgeMs: Number.isFinite(Number(raw.snapshotAgeMs)) ? Math.max(0, Math.round(Number(raw.snapshotAgeMs))) : null,
           pageTimeOrigin: finiteNumber(raw.pageTimeOrigin, 0) || 0,
+          loginStartedAt: finiteNumber(raw.loginStartedAt, 0) || 0,
+          loginSuppressUntil: finiteNumber(raw.loginSuppressUntil, 0) || 0,
+          loginAttemptCount: Math.max(0, Math.round(finiteNumber(raw.loginAttemptCount, 0))),
+          loginMethod: String(raw.loginMethod || ""),
+          lastLoginReason: String(raw.lastLoginReason || ""),
           ageMs: Math.max(0, Math.round(t - requestedAt)),
           remainingMs: Math.max(0, Math.round(expiresAt - t))
         };
@@ -10380,7 +10387,12 @@
           source: detail.source || "fresh-snapshot-missing-self",
           noSelfAgeMs: detail.noSelfAgeMs,
           snapshotAgeMs: detail.snapshotAgeMs,
-          pageTimeOrigin: detail.pageTimeOrigin
+          pageTimeOrigin: detail.pageTimeOrigin,
+          loginStartedAt: detail.loginStartedAt,
+          loginSuppressUntil: detail.loginSuppressUntil,
+          loginAttemptCount: detail.loginAttemptCount,
+          loginMethod: detail.loginMethod,
+          lastLoginReason: detail.lastLoginReason
         }, t);
         let error = "";
         try {
@@ -10389,6 +10401,27 @@
           error = err?.message || String(err);
         }
         return { state: state2, error };
+      }
+      function markNoSelfSnapshotRecoveryLoginStarted(storage, userId = 0, detail = {}, options = {}) {
+        const key = options.key || DEFAULT_NO_SELF_SNAPSHOT_RECOVERY_KEY;
+        const t = Number.isFinite(Number(options.now)) ? Number(options.now) : Date.now();
+        const state2 = activeNoSelfSnapshotRecoveryState(storage, userId, { key, now: t });
+        if (!state2) return { state: null, error: "" };
+        const next = normalizeNoSelfSnapshotRecoveryState({
+          ...state2,
+          loginStartedAt: t,
+          loginSuppressUntil: finiteNumber(detail.loginSuppressUntil, 0) || state2.loginSuppressUntil || 0,
+          loginAttemptCount: Math.max(0, Math.round(finiteNumber(state2.loginAttemptCount, 0))) + 1,
+          loginMethod: detail.loginMethod || state2.loginMethod || "",
+          lastLoginReason: detail.reason || state2.lastLoginReason || ""
+        }, t);
+        let error = "";
+        try {
+          storage?.setItem?.(key, JSON.stringify(next));
+        } catch (err) {
+          error = err?.message || String(err);
+        }
+        return { state: next, error };
       }
       function clearNoSelfSnapshotRecoveryState(storage, options = {}) {
         const key = options.key || DEFAULT_NO_SELF_SNAPSHOT_RECOVERY_KEY;
@@ -10407,6 +10440,7 @@
         readNoSelfSnapshotRecoveryState,
         activeNoSelfSnapshotRecoveryState,
         writeNoSelfSnapshotRecoveryState,
+        markNoSelfSnapshotRecoveryLoginStarted,
         clearNoSelfSnapshotRecoveryState
       };
     }
@@ -10435,6 +10469,7 @@
         DEFAULT_NO_SELF_SNAPSHOT_RECOVERY_KEY,
         normalizeNoSelfSnapshotRecoveryState,
         activeNoSelfSnapshotRecoveryState: activeNoSelfSnapshotRecoveryStateCore,
+        markNoSelfSnapshotRecoveryLoginStarted,
         clearNoSelfSnapshotRecoveryState: clearNoSelfSnapshotRecoveryStateCore
       } = require_no_self_snapshot_recovery_state();
       var { leaveDetailHasHttp403Core } = require_pending_exit2();
@@ -10750,9 +10785,23 @@
           const storedSnapshotExitRecovery = activeNoSelfSnapshotRecoveryStateCore(localStorage2, userId, { key: NO_SELF_SNAPSHOT_RECOVERY_KEY });
           const memorySnapshotExitRecovery = storedSnapshotExitRecovery ? null : normalizeNoSelfSnapshotRecoveryState(bot.noSelfSnapshotRecovery);
           const snapshotExitRecovery = storedSnapshotExitRecovery || (memorySnapshotExitRecovery && (!memorySnapshotExitRecovery.userId || !userId || memorySnapshotExitRecovery.userId === userId) ? memorySnapshotExitRecovery : null);
-          if (snapshotExitRecovery && hasAliveSelf) clearNoSelfSnapshotRecoveryStateCore(localStorage2, { key: NO_SELF_SNAPSHOT_RECOVERY_KEY, reason: "self restored before login" });
+          if (snapshotExitRecovery && hasAliveSelf) {
+            clearNoSelfSnapshotRecoveryStateCore(localStorage2, { key: NO_SELF_SNAPSHOT_RECOVERY_KEY, reason: "self restored before login" });
+            bot.noSelfSnapshotRecovery = null;
+          }
           const ignoreStalePageSession = Boolean(snapshotExitRecovery && !hasAliveSelf);
-          const shouldIgnoreSuppress = Boolean(ignoreSuppress || ignoreStalePageSession);
+          const recoveryLoginGraceMs = Math.max(
+            1e4,
+            Number(cfg.postLoginGraceMs || 0) || 0,
+            Number(cfg.loginCooldownMs || 0) || 0
+          );
+          const recoveryLoginStartedAt = Number(snapshotExitRecovery?.loginStartedAt || 0) || 0;
+          const recoveryLoginSuppressUntil = Number(snapshotExitRecovery?.loginSuppressUntil || 0) || 0;
+          const recoveryLoginPendingRemainingMs = recoveryLoginStartedAt ? Math.max(
+            0,
+            Math.round(Math.max(recoveryLoginStartedAt + recoveryLoginGraceMs, recoveryLoginSuppressUntil) - t)
+          ) : 0;
+          const shouldIgnoreSuppress = Boolean(ignoreSuppress || ignoreStalePageSession && !recoveryLoginPendingRemainingMs);
           const currentStartLinuxDoLogin = readPageGlobal("startLinuxDoLogin", null, pageGlobal);
           const canStartLogin = Boolean(loginControl || typeof currentStartLinuxDoLogin === "function");
           const effectiveHasToken = ignoreStalePageSession ? false : hasToken;
@@ -10812,6 +10861,26 @@
               cooldownRemainingMs: Math.round(suppressRemainingMs),
               error: "",
               suppressReason: localStorage2.getItem(LOGIN_SUPPRESS_REASON_KEY) || "login flow",
+              hasToken,
+              hasNativeSession,
+              effectiveHasToken,
+              effectiveHasNativeSession,
+              snapshotExitRecovery,
+              nativeWsReadyState: native?.wsReadyState ?? null,
+              currentUserId: userId,
+              snapshotGate: snapshotLoginGateStatus(),
+              liveSessionTakeover
+            };
+          }
+          if (recoveryLoginPendingRemainingMs > 0 && !ignoreLoginCooldown && !manualOverride) {
+            return {
+              needed: true,
+              attempted: false,
+              reason: "cooldown",
+              cooldownRemainingMs: recoveryLoginPendingRemainingMs,
+              error: "",
+              suppressReason: "bot login started",
+              recoveryLoginPending: true,
               hasToken,
               hasNativeSession,
               effectiveHasToken,
@@ -10917,7 +10986,21 @@
           } catch (err) {
             detail.error = err?.message || String(err);
           }
-          if (detail.attempted && !detail.error) setLoginSuppress("bot login started", ignoreStalePageSession ? Math.max(1e3, Number(cfg.loginCooldownMs || 5e3) || 5e3) : cfg.postLoginGraceMs);
+          if (detail.attempted && !detail.error) {
+            const loginSuppressUntil = setLoginSuppress("bot login started", cfg.postLoginGraceMs);
+            if (ignoreStalePageSession && snapshotExitRecovery) {
+              const markerResult = markNoSelfSnapshotRecoveryLoginStarted(localStorage2, userId, {
+                loginSuppressUntil,
+                loginMethod: detail.method,
+                reason
+              }, { key: NO_SELF_SNAPSHOT_RECOVERY_KEY });
+              if (markerResult.state) {
+                bot.noSelfSnapshotRecovery = markerResult.state;
+                detail.snapshotExitRecovery = markerResult.state;
+              }
+              if (markerResult.error) detail.snapshotExitRecoveryUpdateError = markerResult.error;
+            }
+          }
           bot.lastLoginResult = detail;
           return detail;
         }
@@ -13046,6 +13129,7 @@
           clearPersistentExitState,
           readPersistentExitState,
           writePersistentExitState,
+          requestReload,
           requestLeaveConfirmationReload,
           activeEnemyLeaveDetail: (...args) => activeEnemyLeaveDetail(...args),
           activeOfflineLeaveDetail: (...args) => activeOfflineLeaveDetail(...args),

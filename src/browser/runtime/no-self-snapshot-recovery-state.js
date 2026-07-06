@@ -31,6 +31,11 @@ function normalizeNoSelfSnapshotRecoveryState(value, t = Date.now()) {
     noSelfAgeMs: Math.max(0, Math.round(finiteNumber(raw.noSelfAgeMs, 0))),
     snapshotAgeMs: Number.isFinite(Number(raw.snapshotAgeMs)) ? Math.max(0, Math.round(Number(raw.snapshotAgeMs))) : null,
     pageTimeOrigin: finiteNumber(raw.pageTimeOrigin, 0) || 0,
+    loginStartedAt: finiteNumber(raw.loginStartedAt, 0) || 0,
+    loginSuppressUntil: finiteNumber(raw.loginSuppressUntil, 0) || 0,
+    loginAttemptCount: Math.max(0, Math.round(finiteNumber(raw.loginAttemptCount, 0))),
+    loginMethod: String(raw.loginMethod || ''),
+    lastLoginReason: String(raw.lastLoginReason || ''),
     ageMs: Math.max(0, Math.round(t - requestedAt)),
     remainingMs: Math.max(0, Math.round(expiresAt - t))
   };
@@ -74,7 +79,12 @@ function writeNoSelfSnapshotRecoveryState(storage, detail = {}, options = {}) {
     source: detail.source || 'fresh-snapshot-missing-self',
     noSelfAgeMs: detail.noSelfAgeMs,
     snapshotAgeMs: detail.snapshotAgeMs,
-    pageTimeOrigin: detail.pageTimeOrigin
+    pageTimeOrigin: detail.pageTimeOrigin,
+    loginStartedAt: detail.loginStartedAt,
+    loginSuppressUntil: detail.loginSuppressUntil,
+    loginAttemptCount: detail.loginAttemptCount,
+    loginMethod: detail.loginMethod,
+    lastLoginReason: detail.lastLoginReason
   }, t);
   let error = '';
   try {
@@ -83,6 +93,28 @@ function writeNoSelfSnapshotRecoveryState(storage, detail = {}, options = {}) {
     error = err?.message || String(err);
   }
   return { state, error };
+}
+
+function markNoSelfSnapshotRecoveryLoginStarted(storage, userId = 0, detail = {}, options = {}) {
+  const key = options.key || DEFAULT_NO_SELF_SNAPSHOT_RECOVERY_KEY;
+  const t = Number.isFinite(Number(options.now)) ? Number(options.now) : Date.now();
+  const state = activeNoSelfSnapshotRecoveryState(storage, userId, { key, now: t });
+  if (!state) return { state: null, error: '' };
+  const next = normalizeNoSelfSnapshotRecoveryState({
+    ...state,
+    loginStartedAt: t,
+    loginSuppressUntil: finiteNumber(detail.loginSuppressUntil, 0) || state.loginSuppressUntil || 0,
+    loginAttemptCount: Math.max(0, Math.round(finiteNumber(state.loginAttemptCount, 0))) + 1,
+    loginMethod: detail.loginMethod || state.loginMethod || '',
+    lastLoginReason: detail.reason || state.lastLoginReason || ''
+  }, t);
+  let error = '';
+  try {
+    storage?.setItem?.(key, JSON.stringify(next));
+  } catch (err) {
+    error = err?.message || String(err);
+  }
+  return { state: next, error };
 }
 
 function clearNoSelfSnapshotRecoveryState(storage, options = {}) {
@@ -103,5 +135,6 @@ module.exports = {
   readNoSelfSnapshotRecoveryState,
   activeNoSelfSnapshotRecoveryState,
   writeNoSelfSnapshotRecoveryState,
+  markNoSelfSnapshotRecoveryLoginStarted,
   clearNoSelfSnapshotRecoveryState
 };
