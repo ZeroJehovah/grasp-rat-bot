@@ -4,14 +4,15 @@ Update this file for every remote bot release or handoff-relevant state change. 
 
 ## Latest Release
 
-- Latest remote bot: `bootstrap-0.4.582`.
-- Latest manifest SHA-256: `c56dacef658778a5387af646dc9b456f19be7f56fea1b76805c2df1c6cdb061e`.
-- Latest remote release commit: `b770539` (`bootstrap-0.4.582` prefer visible login control for stale relogin).
-- Latest bootstrap A versions: Tampermonkey `0.4.74`, extension `0.1.53`.
-- Latest direct entry/config SHA-256: `2b89d62d206db84f89486e10db1e524828c7e609b128588dc230094bc188c4d1`.
+- Latest remote bot: `bootstrap-0.4.583`.
+- Latest manifest SHA-256: `0092a7ed0f9294864d8ceff481ceddde50dde2888f193bf4c073fde17a6c6cee`.
+- Latest remote release commit: `1bae6b0` (`bootstrap-0.4.583` prefer native login control for immediate login).
+- Latest bootstrap A versions: Tampermonkey `0.4.75`, extension `0.1.54`.
+- Latest direct entry/config SHA-256: `e21673ea686f07617a304ad42b19500e6ec09550e02a10ecf257e6b52b8eecac`.
 
 ## Current Handoff
 
+- `bootstrap-0.4.583` fixes the remaining immediate-login no-op path behind the left-panel `立即登录` button and the repeated `bot login started` 45s loop. Bootstrap A inserts its own inline login proxy and hides the native `#joinBtn`; remote script B now recognizes the hidden native join button as the real login control, skips the bot-owned inline proxy when scanning generic login buttons, and manual `forceLoginNow()` now prefers that native control before any page-global `startLinuxDoLogin()`/raw fallback. Tampermonkey `0.4.75` and extension `0.1.54` apply the same control-first order in their watchdog login helper, so stale/no-op page globals should no longer make a click appear to do nothing while still starting the 45s grace.
 - `bootstrap-0.4.582` fixes another `bot login started` cooldown loop after frozen/network exits or stale-session takeover. Once automatic relogin has already passed the need and safety-gate checks, a visible native login control is preferred over page-global `startLinuxDoLogin()` even when stale token/native-session evidence remains, preventing a no-op global call from resetting the 45s login grace repeatedly. `status().reloginGate` now reports the configured 45s total for `bot login started` instead of mirroring the current remaining value as the total.
 - `bootstrap-0.4.581` handles external/manual exits that leave no pending-exit context. Before normal action selection, if chat confirms `left user <currentUserId>` and strong exit evidence is present, especially a fresh page-native snapshot with the current self absent, the bot now ignores stale native `state.entities` self data, stops motion, clears local/session/native stale login state through the no-self recovery path, records `external-left-user-exit-confirmed`, resets the relogin safety gate, and requests reload. A live current self with token/session evidence blocks the path so old chat history cannot kick an active session.
 - `bootstrap-0.4.580` changes post-login zoom back to a one-way native view-radius loop. After login it reads the native/page `view r` value from `#scaleText` or native state, sends one centered zoom-out wheel step at a time while the view radius is below 500m, and stops as soon as the radius reaches or exceeds 500m for that login/session key. It no longer uses screen-fit ratio, no longer sends zoom-in correction steps when the view is over-shrunk, and no longer stops after a single non-improving measurement, so delayed label updates do not create early aborts or back-and-forth adjustment.
@@ -60,7 +61,7 @@ Update this file for every remote bot release or handoff-relevant state change. 
 
 ## Latest Validation Baseline
 
-The latest `bootstrap-0.4.582` release validation passed. Run build-producing commands and manifest-reading validation sequentially, not in parallel; `node scripts/build-remote-bot.js --version ...` rewrites `dist/manifest.json`, while `objective-status` and `verify-objective-build` read it.
+The latest `bootstrap-0.4.583` release validation passed. Run build-producing commands and manifest-reading validation sequentially, not in parallel; `node scripts/build-remote-bot.js --version ...` rewrites `dist/manifest.json`, while `objective-status` and `verify-objective-build` read it.
 
 ```bash
 node grasp-rat-bot.js --self-test
@@ -77,12 +78,12 @@ node --check extension/popup.js
 cd combat-log-service && npm test
 npm run test:runtime-helper-entry
 npm run test:remote-bundled
-node scripts/build-remote-bot.js --version bootstrap-0.4.582
+node scripts/build-remote-bot.js --version bootstrap-0.4.583
 node scripts/verify-objective-build.js
 git diff --check
 ```
 
-Latest objective build verification reports 35 checks and guards:
+Latest objective build verification reports 36 checks and guards:
 
 - manifest/dist/source hash consistency;
 - direct runtime-entry bundling for production and local CDP/print-source;
@@ -95,7 +96,7 @@ Latest objective build verification reports 35 checks and guards:
 - visible/native ordinary-profit priority before snapshot fallback;
 - no-self snapshot recovery remains a dedicated control runtime module, visible login controls do not hide stale no-self page sessions, ordinary no-self auto-login prefers a visible native login control over page-global login when no page session is active, explicit login-required stale no-self sessions clear local/session/native state and reload without fresh snapshot confirmation, no-self cleanup requests a page reload after clearing stale local sessions, no-self recovery cleanup preserves `tmpGameHelpSeen*` tutorial markers, no-self recovery login markers suppress duplicate OAuth/login clicks after recovery login starts, confirmed pending exits request a page reload, confirmed no-self pending exits clear stale local sessions before any reload-block wait, external/manual `left user <currentUserId>` exits clear stale native self entities when fresh snapshot evidence says self is gone while old `left user` chat is ignored for a live current self, no-self leave 403 recovery clears stale local sessions without pending-exit retry, the shared recovery marker helper is included in the browser module graph, and composition owners stay under size/dependency guards;
 - post-login visible-range zoom keeps the 500m target radius, uses the native/page `view r` as the stop condition, only sends zoom-out steps, disables blind fallback clicks by default, and keeps stable no-token session keys;
-- bootstrap auto-login evaluates login-point safety only after login is needed;
+- bootstrap auto-login evaluates login-point safety only after login is needed, and login-start paths prefer native controls over page-global login fallbacks while ignoring the bot-owned inline proxy button;
 - userscript and extension bootstrap version consistency.
 
 ## Report Locations
