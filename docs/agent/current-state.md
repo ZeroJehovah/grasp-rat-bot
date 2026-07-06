@@ -4,15 +4,16 @@ Update this file for every remote bot release or handoff-relevant state change. 
 
 ## Latest Release
 
-- Latest remote bot: `bootstrap-0.4.568`.
-- Latest manifest SHA-256: `18c244ce4cc7ffa5351785edabbbdb62268d2d36d6c2db34bcdcc79aee5964ec`.
-- Latest remote release commit: `1e40025` (`bootstrap-0.4.568` fix no-self recovery login retry).
+- Latest remote bot: `bootstrap-0.4.569`.
+- Latest manifest SHA-256: `962106a22d7334a6660c2d4c9ad9f35083c7dd56dd17bb755a0eda03f78bf0ea`.
+- Latest remote release commit: `d1a9428` (`bootstrap-0.4.569` reset native session after no-self confirmation).
 - Latest bootstrap A versions: Tampermonkey `0.4.74`, extension `0.1.53`.
-- Latest direct entry/config SHA-256: `966bddd5664aa5062af8ca64988c190782c388977f0ef357cb93ce55edb5af82`.
+- Latest direct entry/config SHA-256: `9f182f8d08f9364ba968dc21ec4fa91721666ff9fdbd1d5a33d4703ab1a824a2`.
 
 ## Current Handoff
 
-- `bootstrap-0.4.568` completes the no-self recovery relogin path. When `localStorage.graspRatNoSelfSnapshotRecovery` is active after a snapshot-confirmed server-side exit, the generic no-self wait no longer treats the stale reconnecting native WebSocket as `game-session-connecting`, so it does not fall into the reload countdown. `maybeStartAutoLogin()` now ignores stale generic post-login suppress for this marker path, uses normal login cooldown for retries, and clicks a visible login control before falling back to page-global `startLinuxDoLogin`, avoiding the observed no-op global login call while the native sidebar still shows `立即登录`.
+- `bootstrap-0.4.569` stops using page refresh as the recovery mechanism after a snapshot-confirmed no-self server-side exit. The recovery path now clears all `tmpGame*` local/session storage keys, writes `graspRatNoSelfSnapshotRecovery`, closes the native WebSocket, and resets page-native `state.currentUserId`, `state.sessionToken`, `state.ws`, `state.wsOpen`, cached entity arrays, and reconnect timer fields before returning to the normal gated auto-login path on the same page. Session recovery and auto-login also accept the in-memory marker, so the same tick cannot fall back into repeat leave/session-mismatch or `game-session-connecting` reload loops if localStorage is rewritten.
+- `bootstrap-0.4.568` completes the no-self recovery relogin path. When `localStorage.graspRatNoSelfSnapshotRecovery` is active after a snapshot-confirmed server-side exit, the generic no-self wait no longer treats the stale reconnecting native WebSocket as `game-session-connecting`, so it does not fall into the reload countdown. `maybeStartAutoLogin()` ignores stale generic post-login suppress for this marker path, uses normal login cooldown for retries, and clicks a visible login control before falling back to page-global `startLinuxDoLogin`, avoiding the observed no-op global login call while the native sidebar still shows `立即登录`.
 - `bootstrap-0.4.567` fixes the follow-up stale no-self recovery trap where the refresh after `snapshot-no-self-exit-confirmed` still left the page showing a user id and reconnecting native WebSocket, so auto-login treated it as an active page session and never clicked login. Snapshot-confirmed server-side exit clears the same local/session login keys, writes a short-lived `localStorage.graspRatNoSelfSnapshotRecovery` marker, and after reload the no-self/session-mismatch logic ignores stale native session evidence while that marker matches the current user. The normal login-point safety gate still controls unattended relogin.
 - `bootstrap-0.4.566` handles the stale logged-in/no-self trap where the page still has a user id and reconnecting WebSocket but the server has already exited the player. Once the old no-self leave threshold is reached, a fresh `/snapshot` that is authoritative and lacks the current self confirms the server-side exit, clears stale local login keys (`tmpGameSessionToken`/`tmpGameUserId`), closes the page WebSocket, records `snapshot-no-self-exit-confirmed`, and refreshes for the next gated login instead of repeatedly calling `leave()` into HTTP 403. Fresh snapshots that still contain self continue through live session/mismatch recovery; stale/unknown snapshots keep the existing offline leave path.
 - `bootstrap-0.4.565` changes post-login visible-range zoom from one-way zoom-out to a slower measured fit loop. It now targets a near-full view-circle fit (`postLoginZoomFitTargetRatio = 0.98`, tolerance `0.04`), uses smaller/slower wheel steps (`postLoginZoomWheelDeltaY = 35`, `postLoginZoomOutIntervalMs = 220`), stops immediately after a post-step measurement reaches the target band, and can zoom back in when the view was over-shrunk. Fallback zoom button clicks are serialized with fit rechecks instead of queuing fixed clicks blindly.
@@ -46,7 +47,7 @@ Update this file for every remote bot release or handoff-relevant state change. 
 
 ## Latest Validation Baseline
 
-The latest `bootstrap-0.4.568` release validation passed:
+The latest `bootstrap-0.4.569` release validation passed:
 
 ```bash
 node grasp-rat-bot.js --self-test
@@ -63,7 +64,7 @@ node --check extension/popup.js
 cd combat-log-service && npm test
 npm run test:runtime-helper-entry
 npm run test:remote-bundled
-node scripts/build-remote-bot.js --version bootstrap-0.4.568
+node scripts/build-remote-bot.js --version bootstrap-0.4.569
 node scripts/verify-objective-build.js
 git diff --check
 ```
