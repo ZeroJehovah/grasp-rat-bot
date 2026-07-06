@@ -443,6 +443,7 @@ function buildRuntimeDefaults(config, combatLogEndpointConfigured) {
     sessionMismatchRecoveryReloadMaxAgeMs: 120000,
     reloadAfterNoSelfMs: 45000,
     reloadAfterOfflineMs: 20000,
+    exitAuditBlockedReloadLogMinMs: 5000,
     cloudflareErrorReloadMs: 5000,
     page403ErrorReloadMs: 600000,
     globalRefreshTimeoutMs: 3000,
