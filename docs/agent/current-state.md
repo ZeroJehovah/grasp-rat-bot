@@ -4,14 +4,15 @@ Update this file for every remote bot release or handoff-relevant state change. 
 
 ## Latest Release
 
-- Latest remote bot: `bootstrap-0.4.591`.
-- Latest manifest SHA-256: `7fd27f21be28ae06873735dc7998a4ea43b747b44dbca9cda20af15fe36e1a2e`.
-- Latest remote release commit: `b284f8e` (`bootstrap-0.4.591` adds manual chase mode with persisted high-Drop target marking, status/API/panel support, and native-visible-only combat handoff).
+- Latest remote bot: `bootstrap-0.4.592`.
+- Latest manifest SHA-256: `1b4766182d501b6b0c90f6e70f4413cea185a494fd1071c8038be7eef8f8e84d`.
+- Latest remote release commit: `pending` (`bootstrap-0.4.592` preserves chase mode when a marked target enters native/realtime view with a transient `Drop = 0` frame).
 - Latest bootstrap A versions: Tampermonkey `0.4.79`, extension `0.1.58`.
-- Latest direct entry/config SHA-256: `4370a56cc834a21fc3600cb58f8e08f50faa3aedf298219993bfa100e142ded9`.
+- Latest direct entry/config SHA-256: `b497b04a619776beaa5dac54331c0352dacc7ef0bb4fb80f19c9f9f1b06d2389`.
 
 ## Current Handoff
 
+- `bootstrap-0.4.592` fixes chase mode clearing when a marked target crosses from out-of-view into native/realtime view and briefly reports `Drop = 0` before the real reward value arrives. Visible/native low-Drop observations now wait for `chaseVisibleLowDropClearMs = 1500` before clearing, keep the transient observation in memory only, and do not write the temporary zero back into `localStorage.graspRatChaseModeTargets`; snapshot/minimap fresh low-Drop observations, whitelist matches, and confirmed kills still clear immediately. Strategy self-tests now cover the visible low-Drop grace path.
 - `bootstrap-0.4.591` implements chase mode. Bootstrap A Tampermonkey `0.4.79` and extension `0.1.58` add a compact `追杀` panel that reads `status().chaseMode` and calls the remote `setChaseTarget` / `clearChaseTarget` APIs; each candidate renders as two lines, and the normal visible-state `视野` label is omitted from the compact stat row. Remote script B persists marked non-whitelisted `Drop >= 10` targets in `localStorage.graspRatChaseModeTargets`, preserves chase state across hot updates, merges native/realtime, snapshot, minimap, and persisted records for panel display/approach, and auto-clears only on whitelist, fresh low-Drop observation, or matching kill history. Chase actions run before ordinary 1-coin/AFK profit but after survival, high-value visible coin priority, post-attack drop pickup/wait, recovery, and avoidance; combat handoff still requires a current native/realtime visible attackable combat target and reuses `buildCombatAction()`.
 - `bootstrap-0.4.590` fixes the long-stamina exhaustion relogin loop where a fully spent daily window could still trigger unattended login, then immediately exit again. Remote script B now preserves timestamps on `lastSelf`, includes timestamps in fresh self summaries, and exposes `known-long-stamina-exhausted` through `maybeStartAutoLogin()` and `status().reloginGate` when latest preserved self/decision/session evidence shows same-day `1d` exhaustion or an active `1h` exhaustion hold. Tampermonkey `0.4.77` and extension `0.1.56` apply the same guard to bootstrap watchdog/fallback login paths by reading the remote relogin gate first and falling back to local persisted same-day `1d` self evidence when remote status is unavailable. Manual login still bypasses this automatic gate.
 - `bootstrap-0.4.589` fixes the Gone fight pattern where HP recovery plus a low 1d/1h opportunity budget could clear an already-engaged high-Drop Active target into `wait-for-full-stamina-and-hp` even while the target stayed native/realtime visible inside `combatAttackRange`. The long-cycle proactive Active budget still blocks fresh Active fights without threat evidence, but once a high-Drop Active target is already engaged and remains visible in range, `pickEngagedCombatTarget()` keeps it through the recovery path so normal combat reserve/stop-loss/disengage or true long-window stamina exhaustion decides the outcome. Offline replay of `20260706091347-self-28886-vs-Gone` showed 83 post-engagement recovery frames with Gone still in range that the old budget gate would clear; the new target gate keeps all 83 as combat-continuable.
@@ -69,7 +70,7 @@ Update this file for every remote bot release or handoff-relevant state change. 
 
 ## Latest Validation Baseline
 
-The latest `bootstrap-0.4.591` release validation passed. Run build-producing commands and manifest-reading validation sequentially, not in parallel; `node scripts/build-remote-bot.js --version ...` rewrites `dist/manifest.json`, while `objective-status` and `verify-objective-build` read it.
+The latest `bootstrap-0.4.592` release validation passed. Run build-producing commands and manifest-reading validation sequentially, not in parallel; `node scripts/build-remote-bot.js --version ...` rewrites `dist/manifest.json`, while `objective-status` and `verify-objective-build` read it.
 
 ```bash
 node grasp-rat-bot.js --self-test
@@ -86,7 +87,7 @@ node --check extension/popup.js
 cd combat-log-service && npm test
 npm run test:runtime-helper-entry
 npm run test:remote-bundled
-node scripts/build-remote-bot.js --version bootstrap-0.4.591
+node scripts/build-remote-bot.js --version bootstrap-0.4.592
 node scripts/verify-objective-build.js
 git diff --check
 ```

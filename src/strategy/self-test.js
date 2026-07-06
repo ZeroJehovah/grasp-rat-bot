@@ -99,6 +99,7 @@ const {
 } = require('./stamina-budget');
 const {
   aggregateChaseCandidates,
+  chaseLowDropClearDecision,
   chooseChaseTarget,
   decorateChaseTargets,
   normalizeChaseModeState,
@@ -1971,6 +1972,44 @@ function runStrategyModuleSelfTests() {
     passed: lowDropDecorated[0]?.explicitFreshDropLow === true
       && minimapOnlyDecorated[0]?.visible === false
       && minimapOnlyDecorated[0]?.seekableNow === true
+  });
+  const visibleLowDropCandidate = {
+    id: 'visible-low',
+    drop: 0,
+    latestDrop: 0,
+    visible: true,
+    native: true,
+    explicitFreshDropLow: true
+  };
+  const visibleLowDropFirst = chaseLowDropClearDecision(visibleLowDropCandidate, null, {
+    nowMs: 1000,
+    visibleGraceMs: 1500
+  });
+  const visibleLowDropPending = chaseLowDropClearDecision(visibleLowDropCandidate, visibleLowDropFirst.observation, {
+    nowMs: 2200,
+    visibleGraceMs: 1500
+  });
+  const visibleLowDropMature = chaseLowDropClearDecision(visibleLowDropCandidate, visibleLowDropFirst.observation, {
+    nowMs: 2600,
+    visibleGraceMs: 1500
+  });
+  const snapshotLowDropClear = chaseLowDropClearDecision({
+    id: 'snapshot-low',
+    drop: 0,
+    latestDrop: 0,
+    snapshot: true,
+    source: 'snapshot',
+    explicitFreshDropLow: true
+  }, null, { nowMs: 1000, visibleGraceMs: 1500 });
+  results.push({
+    name: 'chase-mode-visible-low-drop-clear-waits-for-grace-window',
+    passed: visibleLowDropFirst.pending === true
+      && visibleLowDropFirst.clear === false
+      && visibleLowDropFirst.observation?.since === 1000
+      && visibleLowDropPending.clear === false
+      && visibleLowDropMature.clear === true
+      && snapshotLowDropClear.clear === true
+      && snapshotLowDropClear.pending === false
   });
 
   // Test combat constants validation

@@ -5,7 +5,7 @@ Keep this file focused on current validation coverage. Do not use it as a migrat
 ## Current Counts
 
 - Bot self-test count: `342`.
-- Strategy module self-test count: `112`.
+- Strategy module self-test count: `113`.
 - Combat-log analyzer self-test count: `88`.
 - Combat replay self-test count: `1` local replay case plus skipped historical fixtures when retained logs are absent.
 - Objective build verification count: `37`.
@@ -35,7 +35,7 @@ Do not run manifest/build-producing commands in parallel with manifest-reading v
 - opportunity choice, candidate, pick, clear, persistence, and missing-held behavior;
 - patrol and post-attack drop behavior;
 - stamina-budget summaries/selectors;
-- chase-mode candidate aggregation, panel union selection, target stickiness, stale/low-Drop state exposure, and active-chase post-attack drop wait eligibility;
+- chase-mode candidate aggregation, panel union selection, target stickiness, stale/low-Drop state exposure, visible low-Drop clear grace, and active-chase post-attack drop wait eligibility;
 - combat constants and opportunity constants;
 - ROI calculations.
 

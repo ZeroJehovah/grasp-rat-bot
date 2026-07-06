@@ -241,6 +241,7 @@ function buildRuntimeDefaults(config, combatLogEndpointConfigured) {
     chaseSnapshotMaxAgeMs: 15000,
     chaseMinimapMaxAgeMs: 15000,
     chaseTargetStickMs: 3000,
+    chaseVisibleLowDropClearMs: 1500,
     chaseKillStaminaBudgetMs: 100000,
     coinMaxDistance: 18000,
     coinDangerRadius: 25000,

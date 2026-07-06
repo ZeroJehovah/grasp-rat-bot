@@ -50,6 +50,7 @@
 - `targetSwitchDiagnosticsHistoryLimit = 24`
 - `targetSwitchOscillationWindowMs = 10000`
 - `targetSwitchLogMinIntervalMs = 1000`
+- `chaseVisibleLowDropClearMs = 1500`
 - `coinRouteMaxDistance = 50000`
 - `coinRouteClusterRadius = 13000`
 - `coinRouteLinkDistance = 15000`
