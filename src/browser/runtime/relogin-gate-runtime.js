@@ -49,7 +49,11 @@ function createReloginGateRuntime(runtime = {}) {
       ? Math.max(0, Math.round(Number(bot.lastLoginAt || 0) + loginCooldownTotalMs - t))
       : 0;
     pushCandidate('login-cooldown', loginCooldownRemainingMs, loginCooldownTotalMs, 'login cooldown', Number(bot.lastLoginAt || 0) + loginCooldownTotalMs);
-    pushCandidate('login-suppress', suppress.remainingMs, suppress.remainingMs, suppress.reason || 'login suppress', suppress.until);
+    const suppressReason = String(suppress.reason || 'login suppress');
+    const suppressTotalMs = suppressReason === 'bot login started'
+      ? Math.max(Number(suppress.remainingMs || 0) || 0, Number(cfg.postLoginGraceMs || 0) || 0)
+      : Number(suppress.remainingMs || 0) || 0;
+    pushCandidate('login-suppress', suppress.remainingMs, suppressTotalMs, suppressReason, suppress.until);
     const enemyDetail = activeEnemyLeaveDetail(t);
     const enemyUntil = Math.max(Number(enemyDetail?.reloginUntil || 0) || 0, Number(bot.pursuitReloginUntil || 0) || 0);
     const enemyRemainingMs = Math.max(

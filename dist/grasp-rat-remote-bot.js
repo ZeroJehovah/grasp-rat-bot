@@ -12,7 +12,7 @@
   var define_GRASP_RAT_RUNTIME_CONFIG_default;
   var init_define_GRASP_RAT_RUNTIME_CONFIG = __esm({
     "<define:__GRASP_RAT_RUNTIME_CONFIG__>"() {
-      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.581" };
+      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.582" };
     }
   });
 
@@ -11142,7 +11142,7 @@
             const rawStartLinuxDoLogin = typeof rawStartLinuxDoLoginCandidate === "function" ? rawStartLinuxDoLoginCandidate : null;
             const startLinuxDoLoginFn = readPageGlobal("startLinuxDoLogin", null, pageGlobal);
             const startLoginFn = rawStartLinuxDoLogin || (typeof startLinuxDoLoginFn === "function" ? startLinuxDoLoginFn : null);
-            const preferLoginControl = Boolean(!manualOverride && loginControl && !hasAliveSelf && (ignoreStalePageSession || loginRequired || !hasPageSession));
+            const preferLoginControl = Boolean(!manualOverride && loginControl && !hasAliveSelf);
             if (manualOverride) markManualLoginBypass(String(reason || "manual login"));
             if (preferLoginControl) {
               loginControl.click();
@@ -12731,7 +12731,9 @@
           const loginCooldownTotalMs = Math.max(0, Math.round(Number(cfg.loginCooldownMs || 0) || 0));
           const loginCooldownRemainingMs = bot.lastLoginAt ? Math.max(0, Math.round(Number(bot.lastLoginAt || 0) + loginCooldownTotalMs - t)) : 0;
           pushCandidate("login-cooldown", loginCooldownRemainingMs, loginCooldownTotalMs, "login cooldown", Number(bot.lastLoginAt || 0) + loginCooldownTotalMs);
-          pushCandidate("login-suppress", suppress.remainingMs, suppress.remainingMs, suppress.reason || "login suppress", suppress.until);
+          const suppressReason = String(suppress.reason || "login suppress");
+          const suppressTotalMs = suppressReason === "bot login started" ? Math.max(Number(suppress.remainingMs || 0) || 0, Number(cfg.postLoginGraceMs || 0) || 0) : Number(suppress.remainingMs || 0) || 0;
+          pushCandidate("login-suppress", suppress.remainingMs, suppressTotalMs, suppressReason, suppress.until);
           const enemyDetail = activeEnemyLeaveDetail(t);
           const enemyUntil = Math.max(Number(enemyDetail?.reloginUntil || 0) || 0, Number(bot.pursuitReloginUntil || 0) || 0);
           const enemyRemainingMs = Math.max(
