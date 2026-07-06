@@ -12,7 +12,7 @@
   var define_GRASP_RAT_RUNTIME_CONFIG_default;
   var init_define_GRASP_RAT_RUNTIME_CONFIG = __esm({
     "<define:__GRASP_RAT_RUNTIME_CONFIG__>"() {
-      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.586" };
+      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.587" };
     }
   });
 
@@ -618,9 +618,11 @@
           postLoginZoomFitRadiusCm: 5e4,
           postLoginZoomFitMaxSteps: 24,
           postLoginZoomFitMaxOutSteps: 24,
-          postLoginZoomWheelDeltaY: 35,
-          postLoginZoomStartDelayMs: 350,
-          postLoginZoomOutIntervalMs: 220,
+          postLoginZoomDirectSetEnabled: true,
+          postLoginZoomDirectSettleMs: 60,
+          postLoginZoomWheelDeltaY: 80,
+          postLoginZoomStartDelayMs: 120,
+          postLoginZoomOutIntervalMs: 80,
           postLoginZoomArmMissingMs: 1e3,
           status: "",
           ...config,
@@ -7544,6 +7546,7 @@
           return clickZoomControl("out");
         }
         function postLoginZoomScaleTextRadiusCm() {
+          if (typeof document === "undefined") return 0;
           const text = String(document.getElementById("scaleText")?.textContent || "");
           const match = text.match(/r\s*=\s*([0-9]+(?:\.[0-9]+)?)\s*(km|m)\b/i);
           if (!match) return 0;
@@ -7554,11 +7557,11 @@
         function postLoginZoomCurrentViewRadiusCm() {
           const nativeState = getNativeState();
           const values = [
-            postLoginZoomScaleTextRadiusCm(),
             nativeState?.viewRadiusCm,
             nativeState?.view_radius_cm,
             nativeState?.viewRadius,
-            nativeState?.view_radius
+            nativeState?.view_radius,
+            postLoginZoomScaleTextRadiusCm()
           ];
           for (const value of values) {
             const radius = Number(value);
@@ -7684,6 +7687,39 @@
             canceled: !notCanceled
           };
         }
+        function postLoginZoomApplyNativeViewRadius(targetRadiusCm = postLoginZoomTargetRadiusCm()) {
+          const targetRadius = Math.round(Number(targetRadiusCm || 0));
+          if (!Number.isFinite(targetRadius) || targetRadius <= 0) {
+            return { applied: false, method: "setViewRadius", error: "invalid target radius", targetRadiusCm };
+          }
+          const directSetter = typeof setViewRadius === "function" ? setViewRadius : null;
+          const globalSetter = readPageGlobal("setViewRadius", null, pageGlobal);
+          const setter = typeof directSetter === "function" ? directSetter : typeof globalSetter === "function" ? globalSetter : null;
+          if (!setter) {
+            return { applied: false, method: "setViewRadius", error: "setViewRadius unavailable", targetRadiusCm: targetRadius };
+          }
+          const beforeRadius = postLoginZoomCurrentViewRadiusCm();
+          try {
+            setter.call(pageGlobal || (typeof window !== "undefined" ? window : null), targetRadius);
+            requestNativeViewportResize("post-login-zoom-direct-set");
+            const afterRadius = postLoginZoomCurrentViewRadiusCm();
+            return {
+              applied: true,
+              method: "setViewRadius",
+              targetRadiusCm: targetRadius,
+              beforeRadiusCm: beforeRadius > 0 ? Math.round(beforeRadius) : null,
+              afterRadiusCm: afterRadius > 0 ? Math.round(afterRadius) : null
+            };
+          } catch (err) {
+            return {
+              applied: false,
+              method: "setViewRadius",
+              error: err?.message || String(err),
+              targetRadiusCm: targetRadius,
+              beforeRadiusCm: beforeRadius > 0 ? Math.round(beforeRadius) : null
+            };
+          }
+        }
         function postLoginZoomStepImproved(before, after, direction) {
           if (!before?.ok || !after?.ok) return false;
           const beforeRadius = Number(before.viewRadiusCm);
@@ -7781,6 +7817,30 @@
               finishPostLoginZoomResult(state2, "fit", { lastError: "" });
               return;
             }
+            if (stepIndex === 0 && cfg.postLoginZoomDirectSetEnabled !== false) {
+              const directAction = postLoginZoomApplyNativeViewRadius(postLoginZoomTargetRadiusCm());
+              latest.directSetAttempted = true;
+              latest.directSetApplied = Boolean(directAction.applied);
+              latest.lastAction = directAction;
+              latest.lastError = directAction.error || "";
+              state2.lastResult = latest;
+              const directMeasure = postLoginZoomFitMeasurement(selfSummary);
+              const directDecision = postLoginZoomFitDecision(directMeasure);
+              latest.lastMeasure = directMeasure;
+              latest.fitRatio = directMeasure?.ok ? directMeasure.fitRatio : latest.fitRatio;
+              latest.viewRadiusCm = directMeasure?.ok ? directMeasure.viewRadiusCm : latest.viewRadiusCm;
+              latest.lastDecision = directDecision;
+              state2.lastResult = latest;
+              if (directDecision.done) {
+                finishPostLoginZoomResult(state2, "fit", { lastError: "" });
+                return;
+              }
+              if (directAction.applied) {
+                const settleMs = Math.max(0, Number(cfg.postLoginZoomDirectSettleMs || 60) || 60);
+                schedulePostLoginZoomFitStep(selfSummary, stepIndex + 1, settleMs, key);
+                return;
+              }
+            }
             if (stepIndex >= maxSteps) {
               finishPostLoginZoomResult(state2, "max-steps", { lastError: "post-login zoom fit max steps reached" });
               return;
@@ -7854,7 +7914,7 @@
           const fitBounds = postLoginZoomFitBounds();
           state2.lastResult = {
             key,
-            mode: "view-radius-zoom-out",
+            mode: "view-radius-direct-set-with-wheel-fallback",
             scheduledAt: t,
             startDelayMs: Math.max(0, Number(cfg.postLoginZoomStartDelayMs || 0) || 0),
             requestedRadiusCm: Math.round(postLoginZoomTargetRadiusCm()),
@@ -7871,6 +7931,8 @@
             outWheelSteps: 0,
             inWheelSteps: 0,
             failedWheelSteps: 0,
+            directSetAttempted: false,
+            directSetApplied: false,
             fallbackClicks: 0,
             lastError: ""
           };
@@ -7899,6 +7961,7 @@
           postLoginZoomFitDecision,
           postLoginZoomWheelTarget,
           dispatchPostLoginZoomWheel,
+          postLoginZoomApplyNativeViewRadius,
           postLoginZoomStepImproved,
           finishPostLoginZoomResult,
           currentBotIsInstalled,
