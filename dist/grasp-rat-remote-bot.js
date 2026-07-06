@@ -12,7 +12,7 @@
   var define_GRASP_RAT_RUNTIME_CONFIG_default;
   var init_define_GRASP_RAT_RUNTIME_CONFIG = __esm({
     "<define:__GRASP_RAT_RUNTIME_CONFIG__>"() {
-      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.588" };
+      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.589" };
     }
   });
 
@@ -25292,6 +25292,13 @@
         function activeCombatRequiresThreatEvidence(self, target) {
           return isLowValueActiveCombatTarget(target) || activeCombatBudgetBlocked(self, target);
         }
+        function engagedActiveCombatBudgetContinuationAllowed(self, target) {
+          if (!target || isLowValueActiveCombatTarget(target) || !activeCombatBudgetBlocked(self, target)) return false;
+          const distance = Number(target.distance);
+          const attackRange = Math.max(0, Number(cfg.combatAttackRange || cfg.attackRange || 0));
+          if (!Number.isFinite(distance) || distance > attackRange) return false;
+          return Boolean(target.native || target.realtime || target.render);
+        }
         function incomingOwnerMatchesTarget(target, incomingOwnerId) {
           if (!target || incomingOwnerId === null || incomingOwnerId === void 0) return false;
           const targetId = target.user_id ?? target.id;
@@ -25410,7 +25417,8 @@
             const incoming2 = incomingBulletThreat(self, null, bullets);
             const incomingOwnerId2 = incoming2?.ownerId;
             const unknownIncoming2 = Boolean(incoming2 && (incomingOwnerId2 === null || incomingOwnerId2 === void 0));
-            if (activeCombatRequiresThreatEvidence(self, target) && !activeCombatThreatensSelf(target, incomingOwnerId2, unknownIncoming2)) {
+            const budgetContinuationAllowed = engagedActiveCombatBudgetContinuationAllowed(self, target);
+            if (activeCombatRequiresThreatEvidence(self, target) && !budgetContinuationAllowed && !activeCombatThreatensSelf(target, incomingOwnerId2, unknownIncoming2)) {
               clearCombatEngagement(isLowValueActiveCombatTarget(target) ? "low-value-active-not-threatening" : "active-combat-stamina-budget");
               return null;
             }
@@ -25420,7 +25428,8 @@
               combatEngagement: {
                 ageMs: Math.round(ageMs),
                 outOfRangeMs: 0,
-                lastReason: engaged.reason || ""
+                lastReason: engaged.reason || "",
+                budgetContinuationAllowed
               }
             };
           }

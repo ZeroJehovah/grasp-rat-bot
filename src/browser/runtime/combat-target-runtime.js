@@ -284,6 +284,14 @@ function createCombatTargetRuntime(runtime = {}) {
     return isLowValueActiveCombatTarget(target) || activeCombatBudgetBlocked(self, target);
   }
 
+  function engagedActiveCombatBudgetContinuationAllowed(self, target) {
+    if (!target || isLowValueActiveCombatTarget(target) || !activeCombatBudgetBlocked(self, target)) return false;
+    const distance = Number(target.distance);
+    const attackRange = Math.max(0, Number(cfg.combatAttackRange || cfg.attackRange || 0));
+    if (!Number.isFinite(distance) || distance > attackRange) return false;
+    return Boolean(target.native || target.realtime || target.render);
+  }
+
   function incomingOwnerMatchesTarget(target, incomingOwnerId) {
     if (!target || incomingOwnerId === null || incomingOwnerId === undefined) return false;
     const targetId = target.user_id ?? target.id;
@@ -443,7 +451,8 @@ function createCombatTargetRuntime(runtime = {}) {
       const incoming = incomingBulletThreat(self, null, bullets);
       const incomingOwnerId = incoming?.ownerId;
       const unknownIncoming = Boolean(incoming && (incomingOwnerId === null || incomingOwnerId === undefined));
-      if (activeCombatRequiresThreatEvidence(self, target) && !activeCombatThreatensSelf(target, incomingOwnerId, unknownIncoming)) {
+      const budgetContinuationAllowed = engagedActiveCombatBudgetContinuationAllowed(self, target);
+      if (activeCombatRequiresThreatEvidence(self, target) && !budgetContinuationAllowed && !activeCombatThreatensSelf(target, incomingOwnerId, unknownIncoming)) {
         clearCombatEngagement(isLowValueActiveCombatTarget(target) ? 'low-value-active-not-threatening' : 'active-combat-stamina-budget');
         return null;
       }
@@ -453,7 +462,8 @@ function createCombatTargetRuntime(runtime = {}) {
         combatEngagement: {
           ageMs: Math.round(ageMs),
           outOfRangeMs: 0,
-          lastReason: engaged.reason || ''
+          lastReason: engaged.reason || '',
+          budgetContinuationAllowed
         }
       };
     }

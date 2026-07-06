@@ -422,6 +422,52 @@ function assertCombatTargetRuntimeSmoke() {
     []
   );
   assert(target && target.user_id === 'target-1', 'combat target smoke did not preserve sticky target through now dependency');
+
+  const engagedAt = Date.now();
+  const budgetRuntime = createCombatTargetRuntime({
+    bot: {
+      combatTarget: {
+        id: 'budget-target',
+        at: engagedAt,
+        firstSeenAt: engagedAt,
+        lastInRangeAt: engagedAt,
+        reason: 'combat-burst-fire',
+        intent: 'engaged'
+      },
+      combatRetreatIgnore: new Map()
+    },
+    cfg: {
+      targetStickMs: 10000,
+      combatEngageStickMs: 10000,
+      combatAttackRange: 14500,
+      combatDisengageRange: 17000,
+      combatEngageGraceRange: 17000,
+      combatLowValueActiveDropMax: 4,
+      combatProactiveActiveKillStaminaBudgetMs: 100000
+    },
+    isCurrentlyActive: () => true,
+    isFiringEntity: () => false,
+    hasCombatActivitySignal: () => true,
+    isAlive: () => true,
+    entityFreshEnoughForOffense: () => true,
+    combatHpValue: entity => Number.isFinite(Number(entity?.hp)) ? Number(entity.hp) : 100,
+    knownHpValue: entity => Number.isFinite(Number(entity?.hp)) ? Number(entity.hp) : 100,
+    dropValue: entity => Number(entity?.drop || 0),
+    opportunityLongStaminaBudget: () => 3000,
+    dist: (_self, targetEntity) => Number(targetEntity.distance || 0),
+    speed: () => 50
+  });
+  const budgetSelf = { user_id: 'self', hp: 96 };
+  const budgetTarget = { user_id: 'budget-target', hp: 52, distance: 13800, current_join_mode: 'Active', native: true, drop: 229 };
+  const freshBudgetTarget = budgetRuntime.pickCombatTarget(budgetSelf, [budgetTarget], [], { mode: 'defensive' });
+  assert(!freshBudgetTarget, 'combat target smoke allowed fresh proactive Active fight under low long stamina budget');
+  const engagedBudgetTarget = budgetRuntime.pickEngagedCombatTarget(budgetSelf, [budgetTarget], [budgetTarget], []);
+  assert(
+    engagedBudgetTarget
+      && engagedBudgetTarget.user_id === 'budget-target'
+      && engagedBudgetTarget.combatEngagement?.budgetContinuationAllowed === true,
+    'combat target smoke dropped in-range engaged Active target under low long stamina budget'
+  );
 }
 
 function sourceGenerationFiles() {
