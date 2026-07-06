@@ -33,6 +33,9 @@ const {
   createLeaveFlowRuntime
 } = require('../browser/runtime/leave-flow-runtime');
 const {
+  createReloginGateRuntime
+} = require('../browser/runtime/relogin-gate-runtime');
+const {
   createPendingExitRuntime
 } = require('../browser/runtime/pending-exit-runtime');
 const {
@@ -9943,6 +9946,108 @@ async function runSelfTest() {
         ].map(String).join('|');
       })(),
       want: 'true|#joinBtn|false|false|1|0|bot login started'
+    },
+    {
+      name: 'forced stale-session auto login prefers visible login control over page global',
+      got: (async () => {
+        const data = new Map();
+        const storage = {
+          getItem: key => (data.has(key) ? data.get(key) : null),
+          setItem: (key, value) => data.set(key, String(value)),
+          removeItem: key => data.delete(key)
+        };
+        const button = {
+          id: 'joinBtn',
+          tagName: 'BUTTON',
+          clickCount: 0,
+          click() {
+            this.clickCount += 1;
+          }
+        };
+        const botState = { control: {}, exitAudit: {}, importantLogging: {}, lastLoginAt: 0 };
+        let startCalls = 0;
+        const runtime = createLeaveFlowRuntime({
+          bot: botState,
+          cfg: { ...cfg, autoLogin: true, dryRun: false, once: false, loginCooldownMs: 5000, postLoginGraceMs: 45000 },
+          storage,
+          pageGlobal: {},
+          loginSuppressKey: 'graspRatLoginSuppressUntil',
+          loginSuppressReasonKey: 'graspRatLoginSuppressReason',
+          getCurrentUserId: () => 28886,
+          getSessionToken: () => 'stale-token',
+          getNativeControl: () => ({ wsReadyState: 0 }),
+          hasNativeGameSession: () => true,
+          findLoginControl: () => button,
+          hasLoginRequiredText: () => false,
+          getSelf: () => null,
+          syncPausedFromPage: () => false,
+          exitAuditFlushPending: () => false,
+          importantSessionEndFlushPending: () => false,
+          readPageGlobal: name => (name === 'startLinuxDoLogin' ? (() => { startCalls += 1; }) : null),
+          loginSuppressRemainingMs: () => 0,
+          ensureLoginSnapshotGate: async () => ({ satisfied: true, liveSessionTakeoverBypass: true }),
+          loginSnapshotGateAllowsLogin: gate => Boolean(gate.satisfied),
+          setLoginSuppress: (reason, ms) => {
+            const until = Date.now() + ms;
+            storage.setItem('graspRatLoginSuppressUntil', String(until));
+            storage.setItem('graspRatLoginSuppressReason', reason);
+            return until;
+          },
+          controlText: () => '立即登录',
+          isAlive: value => Boolean(value?.hp > 0)
+        });
+        const result = await runtime.maybeStartAutoLogin('session-mismatch-recovery', {
+          force: true,
+          ignoreSuppress: true,
+          ignoreLoginCooldown: true,
+          allowLiveSessionTakeoverBypass: true,
+          liveSessionTakeover: { allowed: true }
+        });
+        return [
+          result?.attempted,
+          result?.method,
+          result?.hasToken,
+          result?.hasNativeSession,
+          result?.effectiveHasToken,
+          result?.effectiveHasNativeSession,
+          button.clickCount,
+          startCalls,
+          data.get('graspRatLoginSuppressReason')
+        ].map(String).join('|');
+      })(),
+      want: 'true|#joinBtn|true|true|true|true|1|0|bot login started'
+    },
+    {
+      name: 'bot-login-started relogin gate cooldown keeps configured total',
+      got: (() => {
+        const t = Date.now();
+        const runtime = createReloginGateRuntime({
+          bot: { lastLoginAt: 0 },
+          cfg: { loginCooldownMs: 5000, postLoginGraceMs: 45000 },
+          storage: { getItem: () => null, removeItem: () => {} },
+          loginSuppressStatus: () => ({
+            until: t + 31000,
+            remainingMs: 31000,
+            reason: 'bot login started'
+          }),
+          activeEnemyLeaveDetail: () => null,
+          activeOfflineLeaveDetail: () => null,
+          snapshotLoginGateStatus: () => ({
+            pointSafety: { satisfied: true, hasPoint: true, streak: 3, required: 3 }
+          }),
+          loginPointSafetyStatus: () => ({ satisfied: true, hasPoint: true, streak: 3, required: 3 })
+        });
+        const status = runtime.summarizeReloginGateStatus(t);
+        return [
+          status.cooldown.source,
+          status.cooldown.reason,
+          status.cooldown.remainingMs,
+          status.cooldown.totalMs,
+          status.loginPointSafety.streak,
+          status.loginPointSafety.required
+        ].map(String).join('|');
+      })(),
+      want: 'login-suppress|bot login started|31000|45000|3|3'
     },
     {
       name: 'no-self leave 403 recovery does not create pending exit retry',
