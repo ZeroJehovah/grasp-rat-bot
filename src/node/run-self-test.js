@@ -9277,6 +9277,42 @@ async function runSelfTest() {
       want: 'true|true|true|28886|true|true|true|true|true|0||false|null|0|0|false|null|0|true'
     },
     {
+      name: 'visible login control does not hide stale no-self game session',
+      got: (() => {
+        const runtime = createSessionRecoveryRuntime({
+          bot: { globalState: { entities: [], snapshotRefreshedAt: 101000 } },
+          cfg: { ...cfg, gameSessionNoSelfLeaveMs: 30000, loginCooldownMs: 5000 },
+          storage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
+          getCurrentUserId: () => 28886,
+          snapshotDataAgeMs: () => 1000,
+          snapshotSelfFreshEnough: () => true,
+          hasLoginRequiredText: () => false,
+          findLoginControl: () => ({ id: 'joinBtn' }),
+          isOfflineishWsReadyState: value => Number(value) === 2 || Number(value) === 3
+        });
+        const state = runtime.noSelfGameSessionExitState({
+          currentUserId: 28886,
+          hasToken: true,
+          connecting: true,
+          wsReadyState: 0,
+          nativeWsReadyState: 0,
+          nativeReconnectChurn: true,
+          nativeReconnectEventCount: 3,
+          nativeReconnectWindowMs: 10000,
+          transport: 'native-page'
+        }, 5000);
+        return [
+          state.active,
+          state.shouldLeave,
+          state.loginRequired,
+          state.reason,
+          state.snapshotSelf?.known,
+          state.snapshotSelf?.present
+        ].map(String).join('|');
+      })(),
+      want: 'true|true|false|websocket reconnect churn missing self|true|false'
+    },
+    {
       name: 'snapshot no-self recovery marker suppresses repeat leave state',
       got: (() => {
         const t = Date.now();
