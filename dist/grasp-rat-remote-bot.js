@@ -12,7 +12,7 @@
   var define_GRASP_RAT_RUNTIME_CONFIG_default;
   var init_define_GRASP_RAT_RUNTIME_CONFIG = __esm({
     "<define:__GRASP_RAT_RUNTIME_CONFIG__>"() {
-      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.578" };
+      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.579" };
     }
   });
 
@@ -11014,8 +11014,9 @@
             const rawStartLinuxDoLogin = typeof rawStartLinuxDoLoginCandidate === "function" ? rawStartLinuxDoLoginCandidate : null;
             const startLinuxDoLoginFn = readPageGlobal("startLinuxDoLogin", null, pageGlobal);
             const startLoginFn = rawStartLinuxDoLogin || (typeof startLinuxDoLoginFn === "function" ? startLinuxDoLoginFn : null);
+            const preferLoginControl = Boolean(!manualOverride && loginControl && !hasAliveSelf && (ignoreStalePageSession || loginRequired || !hasPageSession));
             if (manualOverride) markManualLoginBypass(String(reason || "manual login"));
-            if (ignoreStalePageSession && loginControl) {
+            if (preferLoginControl) {
               loginControl.click();
               detail.attempted = true;
               detail.method = loginControl.id ? "#" + loginControl.id : controlText(loginControl) || loginControl.tagName.toLowerCase();
