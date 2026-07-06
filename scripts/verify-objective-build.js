@@ -805,8 +805,15 @@ async function main() {
     assert(runtimePostLoginZoomSource.includes('function schedulePostLoginZoomOut'), 'post-login zoom scheduling body missing from module');
     assert(runtimePostLoginZoomSource.includes('function noteSelfUnavailableForPostLoginZoom'), 'post-login zoom self-unavailable body missing from module');
     assert(runtimePostLoginZoomSource.includes("if (ratio < minRatio) return { done: false, direction: 'in'"), 'post-login zoom does not correct over-zoomed visible-range fit');
-    assert(runtimePostLoginZoomSource.includes("schedulePostLoginZoomFallbackClicks(state, before?.error || 'fit measurement unavailable', selfSummary)"), 'post-login zoom fallback clicks do not retain fit rechecks');
+    assert(runtimePostLoginZoomSource.includes("reason: 'view-radius-cap'"), 'post-login zoom does not cap outward zoom at the configured view radius');
+    assert(runtimePostLoginZoomSource.includes("finishPostLoginZoomResult(state, 'no-improvement'"), 'post-login zoom still risks button fallback after non-improving measured steps');
+    assert(runtimePostLoginZoomSource.includes("return String(userId) + ':no-token'"), 'post-login zoom no-token key is not stable across no-self generations');
+    assert(runtimeDefaultsSource.includes('postLoginZoomOutClicks: 0'), 'post-login zoom fallback clicks are not disabled by default');
+    assert(runtimeDefaultsSource.includes('postLoginZoomFitRadiusCm: 50000'), 'post-login zoom target radius is not the 500m view radius');
+    assert(runtimeDefaultsSource.includes('postLoginZoomMaxViewRadiusCm: 50000'), 'post-login zoom max view radius does not cap at 500m');
     assert(runtimeDefaultsSource.includes('postLoginZoomFitTargetRatio: 0.98'), 'post-login zoom target ratio default is not near full visible-range fit');
+    assert(runtimeDefaultsSource.includes('postLoginZoomFitMaxSteps: 8'), 'post-login zoom measured step cap is not conservative');
+    assert(runtimeDefaultsSource.includes('postLoginZoomFitMaxOutSteps: 4'), 'post-login zoom outward step cap is missing');
     assert(runtimeDefaultsSource.includes('postLoginZoomWheelDeltaY: 35'), 'post-login zoom wheel step default is not slowed down');
     assert(runtimeDefaultsSource.includes('postLoginZoomOutIntervalMs: 220'), 'post-login zoom interval default is not slowed down');
     assert(runtimeLoginPointSafetySource.includes('function createLoginPointSafetyRuntime'), 'login-point safety runtime factory missing');

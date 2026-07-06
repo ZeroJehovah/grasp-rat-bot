@@ -29,6 +29,9 @@ const {
   createLeaveFlowRuntime
 } = require('../browser/runtime/leave-flow-runtime');
 const {
+  createPostLoginZoomRuntime
+} = require('../browser/runtime/post-login-zoom-runtime');
+const {
   normalizeTargetWhitelistName,
   parseTargetWhitelistNames,
   deriveTargetWhitelistUrl
@@ -9428,6 +9431,61 @@ async function runSelfTest() {
         ].map(String).join('|');
       })(),
       want: 'true|#joinBtn|true|false|true|1|0|5'
+    },
+    {
+      name: 'post-login zoom caps outward fit at configured 500m radius',
+      got: (() => {
+        const runtime = createPostLoginZoomRuntime({
+          bot: {},
+          cfg: {
+            postLoginZoomFitRadiusCm: 50000,
+            postLoginZoomMaxViewRadiusCm: 50000,
+            postLoginZoomFitTargetRatio: 0.98,
+            postLoginZoomFitTolerance: 0.04
+          }
+        });
+        const clippedAtCap = runtime.postLoginZoomFitDecision({
+          ok: true,
+          fitRatio: 1.08,
+          minRatio: 0.94,
+          maxRatio: 1,
+          viewRadiusCm: 50000,
+          maxViewRadiusCm: 50000
+        });
+        const overZoomed = runtime.postLoginZoomFitDecision({
+          ok: true,
+          fitRatio: 0.7,
+          minRatio: 0.94,
+          maxRatio: 1,
+          viewRadiusCm: 80000,
+          maxViewRadiusCm: 50000
+        });
+        return [
+          clippedAtCap.done,
+          clippedAtCap.reason,
+          overZoomed.done,
+          overZoomed.direction,
+          overZoomed.reason
+        ].map(String).join('|');
+      })(),
+      want: 'true|view-radius-cap|false|in|visible-range-too-small'
+    },
+    {
+      name: 'post-login zoom no-token session key is stable across no-self generations',
+      got: (() => {
+        const botState = { postLoginZoom: { generation: 1 } };
+        const runtime = createPostLoginZoomRuntime({
+          bot: botState,
+          cfg: {},
+          getCurrentUserId: () => 28886,
+          getSessionToken: () => ''
+        });
+        const first = runtime.postLoginZoomSessionKey({ user_id: 28886 });
+        botState.postLoginZoom.generation = 9;
+        const second = runtime.postLoginZoomSessionKey({ user_id: 28886 });
+        return [first, second, String(first === second)].join('|');
+      })(),
+      want: '28886:no-token|28886:no-token|true'
     },
     {
       name: 'post-exit session mismatch blocks live takeover bypass',

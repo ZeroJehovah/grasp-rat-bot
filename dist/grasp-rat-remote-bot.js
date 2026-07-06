@@ -12,7 +12,7 @@
   var define_GRASP_RAT_RUNTIME_CONFIG_default;
   var init_define_GRASP_RAT_RUNTIME_CONFIG = __esm({
     "<define:__GRASP_RAT_RUNTIME_CONFIG__>"() {
-      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.569" };
+      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.570" };
     }
   });
 
@@ -614,12 +614,15 @@
           combatLogPendingPersistMinMs: 5e3,
           combatLogMaxBulletEntries: 24,
           combatLogMaxEntityEntries: 12,
-          postLoginZoomOutClicks: 5,
+          postLoginZoomOutClicks: 0,
           postLoginZoomFitRadiusCm: 5e4,
+          postLoginZoomMaxViewRadiusCm: 5e4,
           postLoginZoomFitTargetRatio: 0.98,
           postLoginZoomFitTolerance: 0.04,
           postLoginZoomFitPaddingPx: 16,
-          postLoginZoomFitMaxSteps: 40,
+          postLoginZoomFitMaxSteps: 8,
+          postLoginZoomFitMaxOutSteps: 4,
+          postLoginZoomFitMaxInSteps: 3,
           postLoginZoomWheelDeltaY: 35,
           postLoginZoomStartDelayMs: 350,
           postLoginZoomOutIntervalMs: 220,
@@ -7568,8 +7571,12 @@
         function postLoginZoomTargetRadiusCm() {
           const configured = Number(cfg.postLoginZoomFitRadiusCm || 0);
           if (Number.isFinite(configured) && configured > 0) return configured;
-          const nativeAuthority = Number(cfg.nativeCoinAuthoritativeRadius || 0);
-          return Number.isFinite(nativeAuthority) && nativeAuthority > 0 ? nativeAuthority : 5e4;
+          return 5e4;
+        }
+        function postLoginZoomMaxViewRadiusCm() {
+          const configured = Number(cfg.postLoginZoomMaxViewRadiusCm || 0);
+          if (Number.isFinite(configured) && configured > 0) return configured;
+          return postLoginZoomTargetRadiusCm();
         }
         function postLoginZoomFitBounds() {
           const targetRatio = Math.min(0.99, Math.max(0.5, Number(cfg.postLoginZoomFitTargetRatio || 0.98) || 0.98));
@@ -7644,10 +7651,12 @@
           const circleRadiusPx = radiusCm / units;
           const fitRatio = circleRadiusPx / availablePx;
           const bounds = postLoginZoomFitBounds();
+          const maxViewRadiusCm = postLoginZoomMaxViewRadiusCm();
           return {
             ok: true,
             radiusCm: Math.round(radiusCm),
             viewRadiusCm: Math.round(postLoginZoomCurrentViewRadiusCm() || 0),
+            maxViewRadiusCm: Math.round(maxViewRadiusCm),
             units: Number(units.toFixed(2)),
             circleRadiusPx: Math.round(circleRadiusPx),
             availablePx: Math.round(availablePx),
@@ -7670,6 +7679,11 @@
           const minRatio = Number(measure.minRatio);
           if (!Number.isFinite(ratio) || !Number.isFinite(maxRatio) || !Number.isFinite(minRatio)) {
             return { done: false, direction: "out", reason: "invalid-ratio" };
+          }
+          const viewRadiusCm = Number(measure.viewRadiusCm || 0);
+          const maxViewRadiusCm = Number(measure.maxViewRadiusCm || postLoginZoomMaxViewRadiusCm());
+          if (ratio > maxRatio && Number.isFinite(viewRadiusCm) && Number.isFinite(maxViewRadiusCm) && maxViewRadiusCm > 0 && viewRadiusCm >= maxViewRadiusCm) {
+            return { done: true, direction: "", reason: "view-radius-cap" };
           }
           if (ratio > maxRatio) return { done: false, direction: "out", reason: "circle-clipped" };
           if (ratio < minRatio) return { done: false, direction: "in", reason: "visible-range-too-small" };
@@ -7737,7 +7751,7 @@
           state2.lastResult = latest;
           return { latest, decision };
         }
-        function schedulePostLoginZoomFallbackClicks(state2, reason = "", selfSummary = null) {
+        function schedulePostLoginZoomFallbackClicks(state2, reason = "", selfSummary = null, key = "") {
           const clicks = Math.max(0, Math.round(Number(cfg.postLoginZoomOutClicks || 0)));
           const latest = state2.lastResult || {};
           latest.fallbackReason = reason || latest.fallbackReason || "";
@@ -7749,6 +7763,7 @@
           const runFallbackClick = (index = 0) => {
             setTimeout(() => {
               if (!currentBotIsInstalled() || !bot.running) return;
+              if (key && state2.lastResult?.key !== key) return;
               if (selfSummary) {
                 requestNativeViewportResize("post-login-zoom-fallback-check-" + (index + 1));
                 const before = postLoginZoomFitMeasurement(selfSummary);
@@ -7758,7 +7773,7 @@
                     finishPostLoginZoomResult(state2, "fit", { lastError: "" });
                     return;
                   }
-                  schedulePostLoginZoomFitStep(selfSummary, 0, intervalMs);
+                  schedulePostLoginZoomFitStep(selfSummary, 0, intervalMs, key);
                   return;
                 }
               }
@@ -7783,17 +7798,22 @@
           runFallbackClick(0);
           return state2.lastResult;
         }
-        function schedulePostLoginZoomFitStep(selfSummary, stepIndex = 0, delayMs = 0) {
+        function schedulePostLoginZoomFitStep(selfSummary, stepIndex = 0, delayMs = 0, key = "") {
           setTimeout(() => {
             if (!currentBotIsInstalled() || !bot.running) return;
             const state2 = bot.postLoginZoom;
             if (!state2?.lastResult) return;
-            const maxSteps = Math.max(1, Math.round(Number(cfg.postLoginZoomFitMaxSteps || 40) || 40));
+            if (key && state2.lastResult.key !== key) return;
+            const maxSteps = Math.max(1, Math.round(Number(cfg.postLoginZoomFitMaxSteps || 8) || 8));
+            const configuredMaxOutSteps = Number(cfg.postLoginZoomFitMaxOutSteps ?? 4);
+            const configuredMaxInSteps = Number(cfg.postLoginZoomFitMaxInSteps ?? 3);
+            const maxOutSteps = Math.max(0, Math.round(Number.isFinite(configuredMaxOutSteps) ? configuredMaxOutSteps : 4));
+            const maxInSteps = Math.max(0, Math.round(Number.isFinite(configuredMaxInSteps) ? configuredMaxInSteps : 3));
             requestNativeViewportResize("post-login-zoom-fit-step-" + (stepIndex + 1));
             const before = postLoginZoomFitMeasurement(selfSummary);
             const { latest, decision } = notePostLoginZoomMeasure(state2, before);
             if (!before?.ok && stepIndex === 0) {
-              schedulePostLoginZoomFallbackClicks(state2, before?.error || "fit measurement unavailable", selfSummary);
+              schedulePostLoginZoomFallbackClicks(state2, before?.error || "fit measurement unavailable", selfSummary, key);
               return;
             }
             if (decision.done) {
@@ -7804,8 +7824,20 @@
               finishPostLoginZoomResult(state2, "max-steps", { lastError: "post-login zoom fit max steps reached" });
               return;
             }
+            const outSteps = Number(latest.outWheelSteps || 0);
+            const inSteps = Number(latest.inWheelSteps || 0);
+            if (decision.direction === "out" && outSteps >= maxOutSteps) {
+              finishPostLoginZoomResult(state2, "out-step-cap", { lastError: "post-login zoom out step cap reached" });
+              return;
+            }
+            if (decision.direction === "in" && inSteps >= maxInSteps) {
+              finishPostLoginZoomResult(state2, "in-step-cap", { lastError: "post-login zoom in step cap reached" });
+              return;
+            }
             const action = dispatchPostLoginZoomWheel(decision.direction);
             latest.wheelSteps = Number(latest.wheelSteps || 0) + (action.dispatched ? 1 : 0);
+            if (action.dispatched && decision.direction === "out") latest.outWheelSteps = outSteps + 1;
+            if (action.dispatched && decision.direction === "in") latest.inWheelSteps = inSteps + 1;
             latest.failedWheelSteps = Number(latest.failedWheelSteps || 0) + (action.dispatched ? 0 : 1);
             latest.lastAction = action;
             latest.lastError = action.error || "";
@@ -7813,6 +7845,7 @@
             const intervalMs = Math.max(0, Number(cfg.postLoginZoomOutIntervalMs || 220) || 220);
             setTimeout(() => {
               if (!currentBotIsInstalled() || !bot.running) return;
+              if (key && state2.lastResult?.key !== key) return;
               const current = state2.lastResult || {};
               const after = postLoginZoomFitMeasurement(selfSummary);
               const afterDecision = postLoginZoomFitDecision(after);
@@ -7826,16 +7859,11 @@
                 return;
               }
               if (!postLoginZoomStepImproved(before, after, decision.direction)) {
-                const fallback = clickZoomControl(decision.direction);
-                current.fallbackClicks = Number(current.fallbackClicks || 0) + 1;
-                current.completedClicks = Number(current.completedClicks || 0) + (fallback.clicked ? 1 : 0);
-                current.failedClicks = Number(current.failedClicks || 0) + (fallback.clicked ? 0 : 1);
-                current.lastAction = { ...fallback, method: "button-fallback" };
-                current.lastError = fallback.error || current.lastError || "";
-                current.control = fallback.control || current.control || "";
+                finishPostLoginZoomResult(state2, "no-improvement", { lastError: "post-login zoom step did not improve fit ratio" });
+                return;
               }
               state2.lastResult = current;
-              schedulePostLoginZoomFitStep(selfSummary, stepIndex + 1, intervalMs);
+              schedulePostLoginZoomFitStep(selfSummary, stepIndex + 1, intervalMs, key);
             }, intervalMs);
           }, delayMs);
         }
@@ -7843,7 +7871,7 @@
           const userId = selfSummary?.user_id ?? getCurrentUserId() ?? "";
           const token = getSessionToken();
           if (token) return String(userId) + ":token:" + String(token).slice(0, 24);
-          return String(userId) + ":generation:" + Number(bot.postLoginZoom?.generation || 0);
+          return String(userId) + ":no-token";
         }
         function noteSelfUnavailableForPostLoginZoom() {
           const state2 = bot.postLoginZoom;
@@ -7879,21 +7907,26 @@
             scheduledAt: t,
             startDelayMs: Math.max(0, Number(cfg.postLoginZoomStartDelayMs || 0) || 0),
             requestedRadiusCm: Math.round(postLoginZoomTargetRadiusCm()),
+            maxViewRadiusCm: Math.round(postLoginZoomMaxViewRadiusCm()),
             targetRatio: fitBounds.targetRatio,
             minRatio: Number(fitBounds.minRatio.toFixed(3)),
             maxRatio: Number(fitBounds.maxRatio.toFixed(3)),
-            maxSteps: Math.max(1, Math.round(Number(cfg.postLoginZoomFitMaxSteps || 40) || 40)),
+            maxSteps: Math.max(1, Math.round(Number(cfg.postLoginZoomFitMaxSteps || 8) || 8)),
+            maxOutSteps: Math.max(0, Math.round(Number.isFinite(Number(cfg.postLoginZoomFitMaxOutSteps ?? 4)) ? Number(cfg.postLoginZoomFitMaxOutSteps ?? 4) : 4)),
+            maxInSteps: Math.max(0, Math.round(Number.isFinite(Number(cfg.postLoginZoomFitMaxInSteps ?? 3)) ? Number(cfg.postLoginZoomFitMaxInSteps ?? 3) : 3)),
             fallbackRequestedClicks: clicks,
             completedClicks: 0,
             failedClicks: 0,
             wheelSteps: 0,
+            outWheelSteps: 0,
+            inWheelSteps: 0,
             failedWheelSteps: 0,
             fallbackClicks: 0,
             lastError: ""
           };
           requestNativeViewportResize("post-login-zoom-schedule");
           setTimeout(() => requestNativeViewportResize("post-login-zoom-before-clicks"), state2.lastResult.startDelayMs);
-          schedulePostLoginZoomFitStep(selfSummary, 0, state2.lastResult.startDelayMs);
+          schedulePostLoginZoomFitStep(selfSummary, 0, state2.lastResult.startDelayMs, key);
           return state2.lastResult;
         }
         return {
@@ -7908,6 +7941,7 @@
           postLoginZoomScaleTextRadiusCm,
           postLoginZoomCurrentViewRadiusCm,
           postLoginZoomTargetRadiusCm,
+          postLoginZoomMaxViewRadiusCm,
           postLoginZoomFitBounds,
           postLoginZoomViewElements,
           postLoginZoomProjection,
