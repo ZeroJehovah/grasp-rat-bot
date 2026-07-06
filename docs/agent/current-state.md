@@ -4,14 +4,15 @@ Update this file for every remote bot release or handoff-relevant state change. 
 
 ## Latest Release
 
-- Latest remote bot: `bootstrap-0.4.569`.
-- Latest manifest SHA-256: `962106a22d7334a6660c2d4c9ad9f35083c7dd56dd17bb755a0eda03f78bf0ea`.
-- Latest remote release commit: `d1a9428` (`bootstrap-0.4.569` reset native session after no-self confirmation).
+- Latest remote bot: `bootstrap-0.4.570`.
+- Latest manifest SHA-256: `be6c3c512fed3aa59138cc2e269f42daa16f99bdfb46e50b8bd38a261c7f5865`.
+- Latest remote release commit: `987d311` (`bootstrap-0.4.570` cap post-login zoom at 500m).
 - Latest bootstrap A versions: Tampermonkey `0.4.74`, extension `0.1.53`.
-- Latest direct entry/config SHA-256: `9f182f8d08f9364ba968dc21ec4fa91721666ff9fdbd1d5a33d4703ab1a824a2`.
+- Latest direct entry/config SHA-256: `28e7a69dac3d03156b7ce01a5aece62ce4c5b6509b233207c44527297ded9306`.
 
 ## Current Handoff
 
+- `bootstrap-0.4.570` keeps the post-login target at a 500m visible range while preventing runaway zoom-out. The measured fit now stops with `view-radius-cap` once `postLoginZoomMaxViewRadiusCm = 50000` is reached, limits each pass to 8 measured steps with at most 4 outward steps and 3 inward steps, stops on non-improving measured steps instead of falling back to zoom buttons, disables blind fallback zoom-out clicks by default, and uses a stable no-token session key so no-self/self jitter cannot repeatedly re-arm zoom without a real new session token.
 - `bootstrap-0.4.569` stops using page refresh as the recovery mechanism after a snapshot-confirmed no-self server-side exit. The recovery path now clears all `tmpGame*` local/session storage keys, writes `graspRatNoSelfSnapshotRecovery`, closes the native WebSocket, and resets page-native `state.currentUserId`, `state.sessionToken`, `state.ws`, `state.wsOpen`, cached entity arrays, and reconnect timer fields before returning to the normal gated auto-login path on the same page. Session recovery and auto-login also accept the in-memory marker, so the same tick cannot fall back into repeat leave/session-mismatch or `game-session-connecting` reload loops if localStorage is rewritten.
 - `bootstrap-0.4.568` completes the no-self recovery relogin path. When `localStorage.graspRatNoSelfSnapshotRecovery` is active after a snapshot-confirmed server-side exit, the generic no-self wait no longer treats the stale reconnecting native WebSocket as `game-session-connecting`, so it does not fall into the reload countdown. `maybeStartAutoLogin()` ignores stale generic post-login suppress for this marker path, uses normal login cooldown for retries, and clicks a visible login control before falling back to page-global `startLinuxDoLogin`, avoiding the observed no-op global login call while the native sidebar still shows `立即登录`.
 - `bootstrap-0.4.567` fixes the follow-up stale no-self recovery trap where the refresh after `snapshot-no-self-exit-confirmed` still left the page showing a user id and reconnecting native WebSocket, so auto-login treated it as an active page session and never clicked login. Snapshot-confirmed server-side exit clears the same local/session login keys, writes a short-lived `localStorage.graspRatNoSelfSnapshotRecovery` marker, and after reload the no-self/session-mismatch logic ignores stale native session evidence while that marker matches the current user. The normal login-point safety gate still controls unattended relogin.
@@ -47,7 +48,7 @@ Update this file for every remote bot release or handoff-relevant state change. 
 
 ## Latest Validation Baseline
 
-The latest `bootstrap-0.4.569` release validation passed:
+The latest `bootstrap-0.4.570` release validation passed:
 
 ```bash
 node grasp-rat-bot.js --self-test
@@ -64,7 +65,7 @@ node --check extension/popup.js
 cd combat-log-service && npm test
 npm run test:runtime-helper-entry
 npm run test:remote-bundled
-node scripts/build-remote-bot.js --version bootstrap-0.4.569
+node scripts/build-remote-bot.js --version bootstrap-0.4.570
 node scripts/verify-objective-build.js
 git diff --check
 ```
@@ -81,7 +82,7 @@ Latest objective build verification reports 35 checks and guards:
 - native/realtime-only combat target/aim/fire anchors;
 - visible/native ordinary-profit priority before snapshot fallback;
 - no-self snapshot recovery remains a dedicated control runtime module, the shared recovery marker helper is included in the browser module graph, and composition owners stay under size/dependency guards;
-- post-login visible-range zoom keeps slowed measured steps, bidirectional over-zoom correction, and fallback rechecks;
+- post-login visible-range zoom keeps the 500m target radius, caps outward adjustment at 500m, limits measured steps, disables blind fallback clicks by default, and keeps stable no-token session keys;
 - bootstrap auto-login evaluates login-point safety only after login is needed;
 - userscript and extension bootstrap version consistency.
 
