@@ -56,7 +56,6 @@ function createSessionRecoveryRuntime(runtime = {}) {
     snapshotSelfFreshEnough = () => false,
     isOfflineishWsReadyState = () => false,
     isAlive = value => Boolean(value),
-    findLoginControl = () => null,
     hasLoginRequiredText = () => false,
     loginSuppressRemainingMs = () => 0,
     snapshotLoginGateStatus = () => ({}),
@@ -424,14 +423,14 @@ function createSessionRecoveryRuntime(runtime = {}) {
   function controlHasAuthoritativeSessionMismatch(control, snapshotSelf = null) {
     if (!control) return false;
     if (Boolean(control.hasToken)) return false;
-    if (Boolean(hasLoginRequiredText() || findLoginControl())) return false;
+    if (Boolean(hasLoginRequiredText())) return false;
     const snapshotSelfState = snapshotSelf || snapshotSelfPresenceState(control?.currentUserId || getCurrentUserId());
     return Boolean(controlHasNativeGameSession(control) || snapshotSelfState?.present);
   }
 
   function noSelfGameSessionExitState(control, noSelfAgeMs = 0) {
     const userId = Number(control?.currentUserId || getCurrentUserId() || 0);
-    const loginRequired = Boolean(hasLoginRequiredText() || findLoginControl());
+    const loginRequired = Boolean(hasLoginRequiredText());
     const snapshotSelf = snapshotSelfPresenceState(userId);
     const storedSnapshotExitRecovery = activeNoSelfSnapshotRecoveryState(localStorage, userId, { key: NO_SELF_SNAPSHOT_RECOVERY_KEY });
     const memorySnapshotExitRecovery = storedSnapshotExitRecovery ? null : normalizeNoSelfSnapshotRecoveryState(bot.noSelfSnapshotRecovery);
@@ -671,7 +670,7 @@ function createSessionRecoveryRuntime(runtime = {}) {
     const blockedBy = [];
     const userId = Number(control?.currentUserId || getCurrentUserId() || 0) || 0;
     const hasToken = Boolean(control?.hasToken || getSessionToken());
-    const loginRequired = Boolean(hasLoginRequiredText() || findLoginControl());
+    const loginRequired = Boolean(hasLoginRequiredText());
     const nativeWsOpenOrConnecting = Boolean(
       control?.rawWsOpen
         || control?.nativeWsOpen

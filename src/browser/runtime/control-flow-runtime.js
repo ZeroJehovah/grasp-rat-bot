@@ -346,7 +346,6 @@ function createControlFlowRuntime(runtime = {}) {
     summarizeSelf: (...args) => summarizeSelf(...args),
     snapshotSelfFreshEnough: (...args) => snapshotSelfFreshEnough(...args),
     isAlive,
-    findLoginControl: (...args) => findLoginControl(...args),
     hasLoginRequiredText: (...args) => hasLoginRequiredText(...args),
     loginSuppressRemainingMs: (...args) => loginSuppressRemainingMs(...args),
     snapshotLoginGateStatus: (...args) => snapshotLoginGateStatus(...args),

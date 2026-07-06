@@ -12,7 +12,7 @@
   var define_GRASP_RAT_RUNTIME_CONFIG_default;
   var init_define_GRASP_RAT_RUNTIME_CONFIG = __esm({
     "<define:__GRASP_RAT_RUNTIME_CONFIG__>"() {
-      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.571" };
+      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.572" };
     }
   });
 
@@ -11297,7 +11297,6 @@
           snapshotSelfFreshEnough = () => false,
           isOfflineishWsReadyState = () => false,
           isAlive = (value) => Boolean(value),
-          findLoginControl = () => null,
           hasLoginRequiredText = () => false,
           loginSuppressRemainingMs = () => 0,
           snapshotLoginGateStatus = () => ({}),
@@ -11641,13 +11640,13 @@
         function controlHasAuthoritativeSessionMismatch(control, snapshotSelf = null) {
           if (!control) return false;
           if (Boolean(control.hasToken)) return false;
-          if (Boolean(hasLoginRequiredText() || findLoginControl())) return false;
+          if (Boolean(hasLoginRequiredText())) return false;
           const snapshotSelfState = snapshotSelf || snapshotSelfPresenceState(control?.currentUserId || getCurrentUserId());
           return Boolean(controlHasNativeGameSession(control) || snapshotSelfState?.present);
         }
         function noSelfGameSessionExitState(control, noSelfAgeMs = 0) {
           const userId = Number(control?.currentUserId || getCurrentUserId() || 0);
-          const loginRequired = Boolean(hasLoginRequiredText() || findLoginControl());
+          const loginRequired = Boolean(hasLoginRequiredText());
           const snapshotSelf = snapshotSelfPresenceState(userId);
           const storedSnapshotExitRecovery = activeNoSelfSnapshotRecoveryState(localStorage2, userId, { key: NO_SELF_SNAPSHOT_RECOVERY_KEY });
           const memorySnapshotExitRecovery = storedSnapshotExitRecovery ? null : normalizeNoSelfSnapshotRecoveryState(bot.noSelfSnapshotRecovery);
@@ -11851,7 +11850,7 @@
           const blockedBy = [];
           const userId = Number(control?.currentUserId || getCurrentUserId() || 0) || 0;
           const hasToken = Boolean(control?.hasToken || getSessionToken());
-          const loginRequired = Boolean(hasLoginRequiredText() || findLoginControl());
+          const loginRequired = Boolean(hasLoginRequiredText());
           const nativeWsOpenOrConnecting = Boolean(
             control?.rawWsOpen || control?.nativeWsOpen || control?.connecting || isWsConnectingOrOpen(control?.nativeWsReadyState) || isWsConnectingOrOpen(control?.wsReadyState)
           );
@@ -12897,7 +12896,6 @@
           summarizeSelf: (...args) => summarizeSelf(...args),
           snapshotSelfFreshEnough: (...args) => snapshotSelfFreshEnough(...args),
           isAlive,
-          findLoginControl: (...args) => findLoginControl(...args),
           hasLoginRequiredText: (...args) => hasLoginRequiredText(...args),
           loginSuppressRemainingMs: (...args) => loginSuppressRemainingMs(...args),
           snapshotLoginGateStatus: (...args) => snapshotLoginGateStatus(...args),
