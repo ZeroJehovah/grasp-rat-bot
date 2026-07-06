@@ -4,14 +4,15 @@ Update this file for every remote bot release or handoff-relevant state change. 
 
 ## Latest Release
 
-- Latest remote bot: `bootstrap-0.4.570`.
-- Latest manifest SHA-256: `be6c3c512fed3aa59138cc2e269f42daa16f99bdfb46e50b8bd38a261c7f5865`.
-- Latest remote release commit: `987d311` (`bootstrap-0.4.570` cap post-login zoom at 500m).
+- Latest remote bot: `bootstrap-0.4.571`.
+- Latest manifest SHA-256: `7b23f2e4f6ab5f6505d37416d2466a622779bf5ee4301e5aa7d56502099a13fd`.
+- Latest remote release commit: `04c2ec7` (`bootstrap-0.4.571` fit post-login zoom by measured 500m circle).
 - Latest bootstrap A versions: Tampermonkey `0.4.74`, extension `0.1.53`.
-- Latest direct entry/config SHA-256: `28e7a69dac3d03156b7ce01a5aece62ce4c5b6509b233207c44527297ded9306`.
+- Latest direct entry/config SHA-256: `bb2d749f0ac9b5e1c8e2214d16e38d99c8cca51e490c8a816c2bcd510c4b209d`.
 
 ## Current Handoff
 
+- `bootstrap-0.4.571` fixes the `bootstrap-0.4.570` post-login zoom stop-at-~200m regression. The page `viewRadiusCm`/scale label can already report 500m even when the 500m circle is still clipped on screen, so zoom fitting no longer stops on that label. It continues zooming out while measured `fitRatio > maxRatio`, preserves the no-improvement stop and disabled blind fallback clicks, and raises the measured pass caps to 24 total/outward steps and 8 inward steps so the small wheel delta can actually reach the 500m target.
 - `bootstrap-0.4.570` keeps the post-login target at a 500m visible range while preventing runaway zoom-out. The measured fit now stops with `view-radius-cap` once `postLoginZoomMaxViewRadiusCm = 50000` is reached, limits each pass to 8 measured steps with at most 4 outward steps and 3 inward steps, stops on non-improving measured steps instead of falling back to zoom buttons, disables blind fallback zoom-out clicks by default, and uses a stable no-token session key so no-self/self jitter cannot repeatedly re-arm zoom without a real new session token.
 - `bootstrap-0.4.569` stops using page refresh as the recovery mechanism after a snapshot-confirmed no-self server-side exit. The recovery path now clears all `tmpGame*` local/session storage keys, writes `graspRatNoSelfSnapshotRecovery`, closes the native WebSocket, and resets page-native `state.currentUserId`, `state.sessionToken`, `state.ws`, `state.wsOpen`, cached entity arrays, and reconnect timer fields before returning to the normal gated auto-login path on the same page. Session recovery and auto-login also accept the in-memory marker, so the same tick cannot fall back into repeat leave/session-mismatch or `game-session-connecting` reload loops if localStorage is rewritten.
 - `bootstrap-0.4.568` completes the no-self recovery relogin path. When `localStorage.graspRatNoSelfSnapshotRecovery` is active after a snapshot-confirmed server-side exit, the generic no-self wait no longer treats the stale reconnecting native WebSocket as `game-session-connecting`, so it does not fall into the reload countdown. `maybeStartAutoLogin()` ignores stale generic post-login suppress for this marker path, uses normal login cooldown for retries, and clicks a visible login control before falling back to page-global `startLinuxDoLogin`, avoiding the observed no-op global login call while the native sidebar still shows `立即登录`.
@@ -48,7 +49,7 @@ Update this file for every remote bot release or handoff-relevant state change. 
 
 ## Latest Validation Baseline
 
-The latest `bootstrap-0.4.570` release validation passed:
+The latest `bootstrap-0.4.571` release validation passed:
 
 ```bash
 node grasp-rat-bot.js --self-test
@@ -65,7 +66,7 @@ node --check extension/popup.js
 cd combat-log-service && npm test
 npm run test:runtime-helper-entry
 npm run test:remote-bundled
-node scripts/build-remote-bot.js --version bootstrap-0.4.570
+node scripts/build-remote-bot.js --version bootstrap-0.4.571
 node scripts/verify-objective-build.js
 git diff --check
 ```
@@ -82,7 +83,7 @@ Latest objective build verification reports 35 checks and guards:
 - native/realtime-only combat target/aim/fire anchors;
 - visible/native ordinary-profit priority before snapshot fallback;
 - no-self snapshot recovery remains a dedicated control runtime module, the shared recovery marker helper is included in the browser module graph, and composition owners stay under size/dependency guards;
-- post-login visible-range zoom keeps the 500m target radius, caps outward adjustment at 500m, limits measured steps, disables blind fallback clicks by default, and keeps stable no-token session keys;
+- post-login visible-range zoom keeps the 500m target radius, does not stop on the page view-radius label, limits measured steps, disables blind fallback clicks by default, and keeps stable no-token session keys;
 - bootstrap auto-login evaluates login-point safety only after login is needed;
 - userscript and extension bootstrap version consistency.
 
