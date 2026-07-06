@@ -873,7 +873,7 @@ async function main() {
     assert(runtimePostLoginZoomSource.includes('function createPostLoginZoomRuntime'), 'post-login zoom runtime factory missing');
     assert(runtimePostLoginZoomSource.includes('function schedulePostLoginZoomOut'), 'post-login zoom scheduling body missing from module');
     assert(runtimePostLoginZoomSource.includes('function noteSelfUnavailableForPostLoginZoom'), 'post-login zoom self-unavailable body missing from module');
-    assert(runtimePostLoginZoomSource.includes("reason: 'view-radius-below-target'"), 'post-login zoom does not keep shrinking below the native 500m view-radius target');
+    assert(runtimePostLoginZoomSource.includes("reason: 'view-radius-below-target'"), 'post-login zoom does not keep shrinking below the native 502m view-radius target');
     assert(runtimePostLoginZoomSource.includes("reason: 'view-radius-target-reached'"), 'post-login zoom does not stop on the native view-radius target');
     assert(runtimePostLoginZoomSource.includes('function postLoginZoomApplyNativeViewRadius'), 'post-login zoom native setViewRadius direct path is missing');
     assert(runtimePostLoginZoomSource.includes("readPageGlobal('setViewRadius'"), 'post-login zoom does not read the page-native setViewRadius function');
@@ -883,9 +883,9 @@ async function main() {
     assert(!runtimePostLoginZoomSource.includes("finishPostLoginZoomResult(state, 'no-improvement'"), 'post-login zoom still stops after a single non-improving measured step');
     assert(runtimePostLoginZoomSource.includes("return String(userId) + ':no-token'"), 'post-login zoom no-token key is not stable across no-self generations');
     assert(runtimeDefaultsSource.includes('postLoginZoomOutClicks: 0'), 'post-login zoom fallback clicks are not disabled by default');
-    assert(runtimeDefaultsSource.includes('postLoginZoomFitRadiusCm: 50000'), 'post-login zoom target radius is not the 500m view radius');
-    assert(runtimeDefaultsSource.includes('postLoginZoomFitMaxSteps: 24'), 'post-login zoom measured step cap is not enough to reach the 500m target');
-    assert(runtimeDefaultsSource.includes('postLoginZoomFitMaxOutSteps: 24'), 'post-login zoom outward step cap is not enough to reach the 500m target');
+    assert(runtimeDefaultsSource.includes('postLoginZoomFitRadiusCm: 50200'), 'post-login zoom target radius is not the 502m view radius');
+    assert(runtimeDefaultsSource.includes('postLoginZoomFitMaxSteps: 24'), 'post-login zoom measured step cap is not enough to reach the 502m target');
+    assert(runtimeDefaultsSource.includes('postLoginZoomFitMaxOutSteps: 24'), 'post-login zoom outward step cap is not enough to reach the 502m target');
     assert(runtimeDefaultsSource.includes('postLoginZoomDirectSetEnabled: true'), 'post-login zoom native direct set is not enabled by default');
     assert(runtimeDefaultsSource.includes('postLoginZoomDirectSettleMs: 60'), 'post-login zoom direct-set settle delay default changed unexpectedly');
     assert(runtimeDefaultsSource.includes('postLoginZoomWheelDeltaY: 80'), 'post-login zoom wheel fallback step is not fast enough');
@@ -1400,6 +1400,17 @@ async function main() {
   check('bootstrap auto-login only gates login-point safety when login is needed', () => {
     assertBootstrapLoginPointGateAfterNeededCheck(userscriptText, 'userscript');
     assertBootstrapLoginPointGateAfterNeededCheck(extensionBootstrapText, 'extension');
+  });
+
+  check('bootstrap panels expose manual view-radius buttons', () => {
+    for (const [label, source] of [['userscript', userscriptText], ['extension', extensionBootstrapText]]) {
+      assert(source.includes('PANEL_ZOOM_NEAR_RADIUS_CM = 15100'), `${label} missing 151m panel zoom radius`);
+      assert(source.includes('PANEL_ZOOM_FAR_RADIUS_CM = 50200'), `${label} missing 502m panel zoom radius`);
+      assert(source.includes('function setPanelViewRadius'), `${label} missing panel view-radius setter`);
+      assert(source.includes('createPanelZoomButton(PANEL_ZOOM_NEAR_RADIUS_CM'), `${label} missing red 151m panel zoom button`);
+      assert(source.includes('createPanelZoomButton(PANEL_ZOOM_FAR_RADIUS_CM'), `${label} missing blue 502m panel zoom button`);
+      assert(source.includes('border:1.6px dashed '), `${label} panel zoom buttons are not dashed-circle icons`);
+    }
   });
 
   check('login start paths prefer native controls over page globals', () => {

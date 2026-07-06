@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Grasp Rat Bot Bootstrap
 // @namespace    https://github.com/grasp-rat-bot
-// @version      0.4.79
+// @version      0.4.80
 // @description  Loads, hot-updates, and supervises the Grasp Rat bot from a signed manifest.
 // @match        https://grasp-rat-game.h-e.top/*
 // @match        https://connect.linux.do/oauth2/authorize*
@@ -27,7 +27,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.4.79';
+  const BOOTSTRAP_VERSION = '0.4.80';
   const BOOTSTRAP_OWNER = 'tampermonkey';
   const REPOSITORY_URL = 'https://github.com/ZeroJehovah/grasp-rat-bot';
   const USERSCRIPT_UPDATE_URL = 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/userscript/grasp-rat-bootstrap.user.js';
@@ -35,6 +35,8 @@
   const PANEL_ID = 'grasp-rat-bot-panel';
   const CHASE_PANEL_ID = 'grasp-rat-chase-panel';
   const CHASE_PANEL_VISIBLE_KEY = 'graspRatChasePanelVisible';
+  const PANEL_ZOOM_NEAR_RADIUS_CM = 15100;
+  const PANEL_ZOOM_FAR_RADIUS_CM = 50200;
   const HOST_LAYOUT_STYLE_ID = 'grasp-rat-bot-host-layout-style';
   const INLINE_LOGIN_BUTTON_ID = 'grasp-rat-bot-inline-login';
   const PAUSED_KEY = 'graspRatBotPaused';
@@ -1758,6 +1760,40 @@
     }, 320);
   }
 
+  function setPanelViewRadius(radiusCm, reason = 'panel zoom') {
+    const target = Math.round(Number(radiusCm || 0));
+    if (!Number.isFinite(target) || target <= 0) {
+      return { ok: false, error: 'invalid view radius', targetRadiusCm: radiusCm };
+    }
+    const owner = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+    let setter = typeof owner?.setViewRadius === 'function'
+      ? owner.setViewRadius
+      : (typeof window.setViewRadius === 'function' ? window.setViewRadius : null);
+    if (!setter && typeof owner?.eval === 'function') {
+      try {
+        const evaluated = owner.eval('(typeof setViewRadius === "function" ? setViewRadius : null)');
+        if (typeof evaluated === 'function') setter = evaluated;
+      } catch (_) {}
+    }
+    if (!setter) {
+      const error = 'setViewRadius unavailable';
+      state.lastInstallStatus = '视野缩放失败：' + error;
+      logBootstrap('panel view radius failed', { reason, targetRadiusCm: target, error });
+      return { ok: false, error, targetRadiusCm: target };
+    }
+    try {
+      setter.call(owner || window, target);
+      dispatchNativeViewportResize(String(reason || 'panel zoom'));
+      state.lastInstallStatus = '视野缩放到 ' + Math.round(target / 100) + 'm';
+      state.lastError = '';
+      logBootstrap('panel view radius set', { reason, targetRadiusCm: target });
+      return { ok: true, targetRadiusCm: target };
+    } catch (err) {
+      noteBootstrapError('panel view radius failed', err, { reason, targetRadiusCm: target });
+      return { ok: false, error: err?.message || String(err), targetRadiusCm: target };
+    }
+  }
+
   function ensureHostLayoutStyle() {
     if (!document.head) return;
     let style = document.getElementById(HOST_LAYOUT_STYLE_ID);
@@ -2545,6 +2581,47 @@
       appendParent.appendChild(grid);
       return grid;
     };
+    const createPanelZoomButton = (radiusCm, color, label) => {
+      const radiusM = Math.round(Number(radiusCm || 0) / 100);
+      const title = label || ('缩放到 ' + radiusM + 'm 视野');
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.title = title;
+      button.setAttribute('aria-label', title);
+      button.style.cssText = [
+        'display:inline-flex',
+        'align-items:center',
+        'justify-content:center',
+        'flex:0 0 auto',
+        'width:22px',
+        'height:22px',
+        'box-sizing:border-box',
+        'padding:0',
+        'border:1px solid rgba(148,163,184,.22)',
+        'border-radius:50%',
+        'background:rgba(15,23,42,.42)',
+        'box-shadow:inset 0 1px 0 rgba(255,255,255,.04)',
+        'cursor:pointer'
+      ].join(';');
+      const icon = document.createElement('span');
+      icon.setAttribute('aria-hidden', 'true');
+      icon.style.cssText = [
+        'display:block',
+        'width:12px',
+        'height:12px',
+        'box-sizing:border-box',
+        'border:1.6px dashed ' + color,
+        'border-radius:50%'
+      ].join(';');
+      button.appendChild(icon);
+      button.addEventListener('click', event => {
+        event.preventDefault();
+        event.stopPropagation();
+        setPanelViewRadius(radiusCm, title);
+        updateBootstrapPanel(true);
+      });
+      return button;
+    };
     const appendClockNetworkLine = () => {
       const line = document.createElement('div');
       line.style.cssText = 'min-width:0;display:flex;align-items:center;gap:7px;flex-wrap:nowrap;font-size:10.5px;line-height:1.34;margin:2px 0 0;color:#94a3b8;font-variant-numeric:tabular-nums;overflow:hidden';
@@ -2552,6 +2629,11 @@
       time.textContent = '当前时间：' + formatClockTime();
       time.style.cssText = 'flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#94a3b8';
       line.appendChild(time);
+      const controls = document.createElement('span');
+      controls.style.cssText = 'display:inline-flex;align-items:center;gap:5px;flex:0 0 auto';
+      controls.appendChild(createPanelZoomButton(PANEL_ZOOM_NEAR_RADIUS_CM, '#f87171', '缩放到 151m 视野'));
+      controls.appendChild(createPanelZoomButton(PANEL_ZOOM_FAR_RADIUS_CM, '#60a5fa', '缩放到 502m 视野'));
+      line.appendChild(controls);
       appendParent.appendChild(line);
       return line;
     };

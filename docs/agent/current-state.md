@@ -4,14 +4,15 @@ Update this file for every remote bot release or handoff-relevant state change. 
 
 ## Latest Release
 
-- Latest remote bot: `bootstrap-0.4.592`.
-- Latest manifest SHA-256: `1b4766182d501b6b0c90f6e70f4413cea185a494fd1071c8038be7eef8f8e84d`.
-- Latest remote release commit: `383ede5` (`bootstrap-0.4.592` preserves chase mode when a marked target enters native/realtime view with a transient `Drop = 0` frame).
-- Latest bootstrap A versions: Tampermonkey `0.4.79`, extension `0.1.58`.
-- Latest direct entry/config SHA-256: `b497b04a619776beaa5dac54331c0352dacc7ef0bb4fb80f19c9f9f1b06d2389`.
+- Latest remote bot: `bootstrap-0.4.593`.
+- Latest manifest SHA-256: `0705c08ae8610a2cc2c80408dc84107d640f8de27a297c0a1f693b25c348d666`.
+- Latest remote release commit: `pending` (`bootstrap-0.4.593` changes post-login zoom to 502m and adds manual 151m/502m panel view-radius buttons).
+- Latest bootstrap A versions: Tampermonkey `0.4.80`, extension `0.1.59`.
+- Latest direct entry/config SHA-256: `4663b32224c675af8b31b5238ab20ac3d1e4743191683539f02618c80a3e49d2`.
 
 ## Current Handoff
 
+- `bootstrap-0.4.593` changes the post-login page-native view-radius target from 500m to 502m (`postLoginZoomFitRadiusCm = 50200`, direct `setViewRadius(50200)` before one-way wheel fallback). Bootstrap A Tampermonkey `0.4.80` and extension `0.1.59` add two dashed-circle buttons on the current-time row: red calls page-native `setViewRadius(15100)` for 151m, and blue calls `setViewRadius(50200)` for 502m.
 - `bootstrap-0.4.592` fixes chase mode clearing when a marked target crosses from out-of-view into native/realtime view and briefly reports `Drop = 0` before the real reward value arrives. Visible/native low-Drop observations now wait for `chaseVisibleLowDropClearMs = 1500` before clearing, keep the transient observation in memory only, and do not write the temporary zero back into `localStorage.graspRatChaseModeTargets`; snapshot/minimap fresh low-Drop observations, whitelist matches, and confirmed kills still clear immediately. Strategy self-tests now cover the visible low-Drop grace path.
 - `bootstrap-0.4.591` implements chase mode. Bootstrap A Tampermonkey `0.4.79` and extension `0.1.58` add a compact `追杀` panel that reads `status().chaseMode` and calls the remote `setChaseTarget` / `clearChaseTarget` APIs; each candidate renders as two lines, and the normal visible-state `视野` label is omitted from the compact stat row. Remote script B persists marked non-whitelisted `Drop >= 10` targets in `localStorage.graspRatChaseModeTargets`, preserves chase state across hot updates, merges native/realtime, snapshot, minimap, and persisted records for panel display/approach, and auto-clears only on whitelist, fresh low-Drop observation, or matching kill history. Chase actions run before ordinary 1-coin/AFK profit but after survival, high-value visible coin priority, post-attack drop pickup/wait, recovery, and avoidance; combat handoff still requires a current native/realtime visible attackable combat target and reuses `buildCombatAction()`.
 - `bootstrap-0.4.590` fixes the long-stamina exhaustion relogin loop where a fully spent daily window could still trigger unattended login, then immediately exit again. Remote script B now preserves timestamps on `lastSelf`, includes timestamps in fresh self summaries, and exposes `known-long-stamina-exhausted` through `maybeStartAutoLogin()` and `status().reloginGate` when latest preserved self/decision/session evidence shows same-day `1d` exhaustion or an active `1h` exhaustion hold. Tampermonkey `0.4.77` and extension `0.1.56` apply the same guard to bootstrap watchdog/fallback login paths by reading the remote relogin gate first and falling back to local persisted same-day `1d` self evidence when remote status is unavailable. Manual login still bypasses this automatic gate.
@@ -70,7 +71,7 @@ Update this file for every remote bot release or handoff-relevant state change. 
 
 ## Latest Validation Baseline
 
-The latest `bootstrap-0.4.592` release validation passed. Run build-producing commands and manifest-reading validation sequentially, not in parallel; `node scripts/build-remote-bot.js --version ...` rewrites `dist/manifest.json`, while `objective-status` and `verify-objective-build` read it.
+The latest `bootstrap-0.4.593` release validation passed. Run build-producing commands and manifest-reading validation sequentially, not in parallel; `node scripts/build-remote-bot.js --version ...` rewrites `dist/manifest.json`, while `objective-status` and `verify-objective-build` read it.
 
 ```bash
 node grasp-rat-bot.js --self-test
@@ -87,12 +88,12 @@ node --check extension/popup.js
 cd combat-log-service && npm test
 npm run test:runtime-helper-entry
 npm run test:remote-bundled
-node scripts/build-remote-bot.js --version bootstrap-0.4.592
+node scripts/build-remote-bot.js --version bootstrap-0.4.593
 node scripts/verify-objective-build.js
 git diff --check
 ```
 
-Latest objective build verification reports 37 checks and guards:
+Latest objective build verification reports 38 checks and guards:
 
 - manifest/dist/source hash consistency;
 - direct runtime-entry bundling for production and local CDP/print-source;
@@ -105,7 +106,8 @@ Latest objective build verification reports 37 checks and guards:
 - visible/native ordinary-profit priority before snapshot fallback;
 - chase-mode target persistence/status and native-visible-only combat handoff;
 - no-self snapshot recovery remains a dedicated control runtime module, visible login controls do not hide stale no-self page sessions, ordinary no-self auto-login prefers a visible native login control over page-global login when no page session is active, explicit login-required stale no-self sessions clear local/session/native state and reload without fresh snapshot confirmation, no-self cleanup requests a page reload after clearing stale local sessions, no-self recovery cleanup preserves `tmpGameHelpSeen*` tutorial markers, no-self recovery login markers suppress duplicate OAuth/login clicks after recovery login starts, confirmed pending exits request a page reload, confirmed no-self pending exits clear stale local sessions before any reload-block wait, stale native session evidence no longer blocks no-self/offline pending-exit confirmation when a fresh snapshot already proves the current self is absent, external/manual `left user <currentUserId>` exits clear stale native self entities when fresh snapshot evidence says self is gone while old `left user` chat is ignored for a live current self, no-self leave 403 recovery clears stale local sessions without pending-exit retry, the shared recovery marker helper is included in the browser module graph, and composition owners stay under size/dependency guards;
-- post-login visible-range zoom keeps the 500m target radius, uses the native/page `view r` as the stop condition, applies page-native `setViewRadius(50000)` before wheel fallback, only sends zoom-out fallback steps, disables blind fallback clicks by default, and keeps stable no-token session keys;
+- post-login visible-range zoom keeps the 502m target radius, uses the native/page `view r` as the stop condition, applies page-native `setViewRadius(50200)` before wheel fallback, only sends zoom-out fallback steps, disables blind fallback clicks by default, and keeps stable no-token session keys;
+- bootstrap panels expose red/blue dashed-circle manual view-radius buttons for 151m and 502m on the current-time row;
 - bootstrap auto-login evaluates login-point safety only after login is needed, and login-start paths prefer native controls over page-global login fallbacks while ignoring the bot-owned inline proxy button;
 - userscript and extension bootstrap version consistency.
 

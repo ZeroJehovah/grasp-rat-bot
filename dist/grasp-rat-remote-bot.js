@@ -12,7 +12,7 @@
   var define_GRASP_RAT_RUNTIME_CONFIG_default;
   var init_define_GRASP_RAT_RUNTIME_CONFIG = __esm({
     "<define:__GRASP_RAT_RUNTIME_CONFIG__>"() {
-      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.592" };
+      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.593" };
     }
   });
 
@@ -632,7 +632,7 @@
           combatLogMaxBulletEntries: 24,
           combatLogMaxEntityEntries: 12,
           postLoginZoomOutClicks: 0,
-          postLoginZoomFitRadiusCm: 5e4,
+          postLoginZoomFitRadiusCm: 50200,
           postLoginZoomFitMaxSteps: 24,
           postLoginZoomFitMaxOutSteps: 24,
           postLoginZoomDirectSetEnabled: true,
@@ -8055,7 +8055,7 @@
         function postLoginZoomTargetRadiusCm() {
           const configured = Number(cfg.postLoginZoomFitRadiusCm || 0);
           if (Number.isFinite(configured) && configured > 0) return configured;
-          return 5e4;
+          return 50200;
         }
         function postLoginZoomFitBounds() {
           const targetRatio = 1;

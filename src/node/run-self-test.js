@@ -10394,27 +10394,27 @@ async function runSelfTest() {
       want: 'true|true|false|true|true|1|1|0|null'
     },
     {
-      name: 'post-login zoom shrinks one way until native view radius reaches 500m',
+      name: 'post-login zoom shrinks one way until native view radius reaches 502m',
       got: (() => {
         const runtime = createPostLoginZoomRuntime({
           bot: {},
           cfg: {
-            postLoginZoomFitRadiusCm: 50000
+            postLoginZoomFitRadiusCm: 50200
           }
         });
         const belowTarget = runtime.postLoginZoomFitDecision({
           ok: true,
-          radiusCm: 50000,
+          radiusCm: 50200,
           viewRadiusCm: 10000
         });
         const atTarget = runtime.postLoginZoomFitDecision({
           ok: true,
-          radiusCm: 50000,
-          viewRadiusCm: 50000
+          radiusCm: 50200,
+          viewRadiusCm: 50200
         });
         const overZoomed = runtime.postLoginZoomFitDecision({
           ok: true,
-          radiusCm: 50000,
+          radiusCm: 50200,
           viewRadiusCm: 80000
         });
         return [
@@ -10443,14 +10443,14 @@ async function runSelfTest() {
         const runtime = createPostLoginZoomRuntime({
           bot: {},
           cfg: {
-            postLoginZoomFitRadiusCm: 50000
+            postLoginZoomFitRadiusCm: 50200
           },
           pageGlobal,
           readPageGlobal: (key, fallback, global) => global?.[key] ?? fallback,
           getNativeState: () => ({ viewRadiusCm })
         });
         const before = runtime.postLoginZoomFitMeasurement({});
-        const action = runtime.postLoginZoomApplyNativeViewRadius(50000);
+        const action = runtime.postLoginZoomApplyNativeViewRadius(50200);
         const after = runtime.postLoginZoomFitMeasurement({});
         const afterDecision = runtime.postLoginZoomFitDecision(after);
         return [
@@ -10463,7 +10463,7 @@ async function runSelfTest() {
           afterDecision.reason
         ].map(String).join('|');
       })(),
-      want: '10000|true|setViewRadius|50000|50000|true|view-radius-target-reached'
+      want: '10000|true|setViewRadius|50200|50200|true|view-radius-target-reached'
     },
     {
       name: 'post-login zoom no-token session key is stable across no-self generations',
