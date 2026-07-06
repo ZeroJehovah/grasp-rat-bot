@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Grasp Rat Bot Bootstrap
 // @namespace    https://github.com/grasp-rat-bot
-// @version      0.4.76
+// @version      0.4.77
 // @description  Loads, hot-updates, and supervises the Grasp Rat bot from a signed manifest.
 // @match        https://grasp-rat-game.h-e.top/*
 // @match        https://connect.linux.do/oauth2/authorize*
@@ -27,7 +27,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.4.76';
+  const BOOTSTRAP_VERSION = '0.4.77';
   const BOOTSTRAP_OWNER = 'tampermonkey';
   const REPOSITORY_URL = 'https://github.com/ZeroJehovah/grasp-rat-bot';
   const USERSCRIPT_UPDATE_URL = 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/userscript/grasp-rat-bootstrap.user.js';
@@ -42,6 +42,7 @@
   const LOGIN_POINT_SAFETY_KEY = 'graspRatLoginPointSafety';
   const ENEMY_LEAVE_STATE_KEY = 'graspRatEnemyLeaveState';
   const OFFLINE_LEAVE_STATE_KEY = 'graspRatOfflineLeaveState';
+  const LAST_SELF_STATE_KEY = 'graspRatLastSelfState';
   const CLOUDFLARE_RELOAD_KEY = 'graspRatCloudflareReloadAt';
   const CLASH_SECRET_KEY = 'clashControllerSecret';
   const BLOCKED_REMOTE_HASHES = new Set([
@@ -389,7 +390,9 @@
         remainingMs: Math.max(0, Math.round(Number(cooldown.remainingMs || 0) || 0)),
         totalMs: Math.max(0, Math.round(cooldownTotalMs)),
         source: String(cooldown.source || ''),
-        reason: String(cooldown.reason || '')
+        reason: String(cooldown.reason || ''),
+        staminaHold: cooldown.staminaHold || null,
+        candidates: Array.isArray(cooldown.candidates) ? cooldown.candidates.slice(0, 5) : []
       },
       snapshot: {
         ok: Boolean(snapshot.ok ?? snapshot.satisfied),
@@ -406,6 +409,69 @@
         lastDanger: point.lastDanger || null,
         lastError: String(point.lastError || '')
       }
+    };
+  }
+
+  function bootstrapStaminaEvidenceRemaining(evidence, windowName) {
+    const suffix = String(windowName || '').toLowerCase();
+    const values = [
+      evidence?.stamina?.['stamina' + suffix],
+      evidence?.['stamina' + suffix],
+      evidence?.['stamina_' + suffix + '_remaining_milli'],
+      suffix === '1d' ? evidence?.stamina1dLastRemaining : undefined
+    ];
+    for (const value of values) {
+      const n = Number(value);
+      if (Number.isFinite(n)) return n;
+    }
+    return null;
+  }
+
+  function bootstrapDailyStaminaWindowStartAt(t = Date.now()) {
+    const dayMs = 24 * 60 * 60 * 1000;
+    const utc8OffsetMs = 8 * 60 * 60 * 1000;
+    return Math.floor((t + utc8OffsetMs) / dayMs) * dayMs - utc8OffsetMs;
+  }
+
+  function bootstrapEvidenceStamp(evidence) {
+    return Math.max(Number(evidence?.updatedAt || 0) || 0, Number(evidence?.at || 0) || 0, Number(evidence?.missingSince || 0) || 0, Number(evidence?.exitAt || 0) || 0, Number(evidence?.startedAt || 0) || 0, Number(evidence?.stamina1dSegmentStartedAt || 0) || 0);
+  }
+
+  function readStoredLastSelfEvidence() {
+    try {
+      const state = JSON.parse(localStorage.getItem(LAST_SELF_STATE_KEY) || 'null');
+      if (!state || typeof state !== 'object') return null;
+      const self = state.self && typeof state.self === 'object' ? { ...state.self } : { ...state };
+      const at = Number(state.at || state.updatedAt || self.at || self.updatedAt || 0) || 0;
+      if (at && !Number(self.at || 0)) self.at = at;
+      if (at && !Number(self.updatedAt || 0)) self.updatedAt = at;
+      return self;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function bootstrapKnownLongStaminaLoginBlock(status = getBotStatus()) {
+    const gate = reloginGateFromStatus(status);
+    const cooldowns = [gate.cooldown, ...gate.cooldown.candidates].filter(Boolean);
+    const remote = cooldowns.find(item => item.source === 'known-stamina-hold' && Number(item.remainingMs || 0) > 0);
+    if (remote) return { at: Date.now(), reason: 'known-long-stamina-exhausted', displayReason: remote.reason || remote.staminaHold?.displayReason || '已知长周期体力耗尽，暂不登录', staminaHold: remote.staminaHold || null };
+    const t = Date.now();
+    const thresholdMs = 1000;
+    const sources = [status?.self, status?.lastSelf, status?.lastDecision?.self, status?.session, readStoredLastSelfEvidence()]
+      .filter(item => item && typeof item === 'object')
+      .map(evidence => ({ evidence, stamp: bootstrapEvidenceStamp(evidence) }))
+      .sort((a, b) => Number(b.stamp || 0) - Number(a.stamp || 0));
+    const daily = sources.find(item => bootstrapStaminaEvidenceRemaining(item.evidence, '1d') !== null);
+    if (!daily || daily.stamp < bootstrapDailyStaminaWindowStartAt(t)) return null;
+    const remaining = bootstrapStaminaEvidenceRemaining(daily.evidence, '1d');
+    if (remaining === null || remaining >= thresholdMs) return null;
+    const until = bootstrapDailyStaminaWindowStartAt(t) + 24 * 60 * 60 * 1000;
+    return {
+      at: t,
+      reason: 'known-long-stamina-exhausted',
+      displayReason: '一天体力已耗尽，等待' + formatReloginGateDuration(until - t) + '后再登录',
+      staminaHold: { exhausted: ['1d'], until, holdRemainingMs: Math.max(0, Math.round(until - t)), details: [{ window: '1d', remaining, at: daily.stamp }] }
     };
   }
 
@@ -476,6 +542,8 @@
   }
 
   function bootstrapLoginPointSafetyBlock(status = getBotStatus()) {
+    const staminaBlock = bootstrapKnownLongStaminaLoginBlock(status);
+    if (staminaBlock) return staminaBlock;
     const point = bootstrapLoginPointSafetyStatus(status);
     if (point.ok || Number(point.required || 0) <= 0) return null;
     if (!point.hasPoint && !point.missingPoint) return null;
@@ -689,7 +757,7 @@
   function waitOnlyExitDetailText(value) {
     const text = String(value || '').trim();
     if (!text) return true;
-    if (/^(?:login|relogin|snapshot-gate|no-self|not-alive|session-mismatch|game-session-connecting|offline-leave-wait|enemy-leave-wait|pursuit-leave-wait|exit-log-flush-pending|important-log-flush-pending|auto-login|login-cooldown|login-control-missing)$/.test(text)) return true;
+    if (/^(?:login|relogin|snapshot-gate|no-self|not-alive|session-mismatch|game-session-connecting|offline-leave-wait|enemy-leave-wait|pursuit-leave-wait|exit-log-flush-pending|important-log-flush-pending|auto-login|login-cooldown|login-control-missing|known-long-stamina-exhausted)$/.test(text)) return true;
     return /^等待(?:登录点安全快照|重连|退出日志发送完成|会话结束日志发送完成|游戏连接|登录控件|页面跳转)/.test(text)
       || /^已登录，等待游戏连接/.test(text)
       || /^界面显示未登录但原生会话仍在线，等待/.test(text)
@@ -1020,6 +1088,7 @@
       'stamina-budget-coin-leave-retry': '一小时体力预算不足，重试退出',
       'wait-for-snapshot-coin': '等待视野内金币刷新',
       'login-suppressed': '等待重连',
+      'known-long-stamina-exhausted': '已知长周期体力耗尽，暂不登录',
       'exit-log-flush-pending': '等待退出日志发送完成',
       'important-log-flush-pending': '等待会话结束日志发送完成',
       'maintain-safe-spacing': '避开附近玩家',

@@ -149,6 +149,7 @@ function createStatusPanelRuntime(runtime = {}) {
       'stamina-budget-coin-leave-retry': '一小时体力预算不足，重试退出',
       'wait-for-snapshot-coin': '等待视野内金币刷新',
       'login-suppressed': '等待重连',
+      'known-long-stamina-exhausted': '已知长周期体力耗尽，暂不登录',
       'exit-log-flush-pending': '等待退出日志发送完成',
       'important-log-flush-pending': '等待会话结束日志发送完成',
       'maintain-safe-spacing': '避开附近玩家',

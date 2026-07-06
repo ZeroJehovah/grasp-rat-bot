@@ -714,9 +714,12 @@ function createNativeDataRuntime(runtime = {}) {
 
   function summarizeSelf(self) {
     const stamina = summarizeStamina(self);
+    const t = Date.now();
     return {
       id: self.user_id,
       name: self.name,
+      at: t,
+      updatedAt: t,
       x: Math.round(Number(self.x) || 0),
       y: Math.round(Number(self.y) || 0),
       hp: self.hp,

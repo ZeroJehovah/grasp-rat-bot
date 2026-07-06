@@ -21,7 +21,8 @@ function createReloginGateRuntime(runtime = {}) {
     activeOfflineLeaveDetail = () => null,
     loginSuppressStatus = () => ({}),
     snapshotLoginGateStatus = () => ({}),
-    loginPointSafetyStatus = () => ({})
+    loginPointSafetyStatus = () => ({}),
+    knownLongStaminaExhaustionLoginHold = () => null
   } = runtime;
   const localStorage = storage;
   const LOGIN_SUPPRESS_KEY = loginSuppressKey;
@@ -32,7 +33,7 @@ function createReloginGateRuntime(runtime = {}) {
   function reloginCooldownCandidates(t = Date.now()) {
     const suppress = loginSuppressStatus(t);
     const candidates = [];
-    const pushCandidate = (source, remainingMs, totalMs = 0, reason = '', until = 0) => {
+    const pushCandidate = (source, remainingMs, totalMs = 0, reason = '', until = 0, extra = null) => {
       const remaining = Math.max(0, Math.round(Number(remainingMs || 0) || 0));
       const total = Math.max(remaining, Math.round(Number(totalMs || 0) || 0));
       if (!remaining && !total) return;
@@ -41,7 +42,8 @@ function createReloginGateRuntime(runtime = {}) {
         reason: String(reason || ''),
         remainingMs: remaining,
         totalMs: total,
-        until: Number(until || 0) || 0
+        until: Number(until || 0) || 0,
+        ...(extra && typeof extra === 'object' ? extra : {})
       });
     };
     const loginCooldownTotalMs = Math.max(0, Math.round(Number(cfg.loginCooldownMs || 0) || 0));
@@ -90,6 +92,8 @@ function createReloginGateRuntime(runtime = {}) {
       lastLoginResult?.suppressReason || lastLoginResult?.reason || 'last login result',
       0
     );
+    const staminaHold = knownLongStaminaExhaustionLoginHold(t);
+    pushCandidate('known-stamina-hold', staminaHold?.holdRemainingMs || 0, staminaHold?.totalMs || staminaHold?.holdRemainingMs || 0, staminaHold?.displayReason || staminaHold?.reason || 'known long stamina exhausted', staminaHold?.until || 0, staminaHold ? { staminaHold } : null);
     return candidates.sort((a, b) => {
       const remainingDelta = Number(b.remainingMs || 0) - Number(a.remainingMs || 0);
       if (remainingDelta) return remainingDelta;
@@ -121,6 +125,7 @@ function createReloginGateRuntime(runtime = {}) {
         remainingMs: Math.max(0, Math.round(Number(cooldown.remainingMs || 0) || 0)),
         totalMs: Math.max(0, Math.round(Number(cooldown.totalMs || 0) || 0)),
         until: Number(cooldown.until || 0) || 0,
+        staminaHold: cooldown.staminaHold || null,
         candidates: cooldowns.slice(0, 5)
       },
       snapshot: {

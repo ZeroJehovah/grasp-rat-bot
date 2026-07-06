@@ -131,12 +131,14 @@ function createControlFlowRuntime(runtime = {}) {
     threatKey = threat => String(threat?.id ?? threat?.user_id ?? ''),
     returnBlockRadius = () => 0,
     staleOfflineStaminaHoldContradicted = () => false,
-    staminaBudgetReloginDelayMs = () => 0,
-    staminaResetHoldUntil = () => 0,
+    staminaRelogin = {},
     staminaBudgetCoinLeaveSummary = () => '',
     staminaExhaustedWindowLabel = () => '',
     reloginDelayForHpCore = () => 0
   } = runtime;
+  const staminaBudgetReloginDelayMs = typeof staminaRelogin.staminaBudgetReloginDelayMs === 'function' ? staminaRelogin.staminaBudgetReloginDelayMs : () => 0;
+  const staminaResetHoldUntil = typeof staminaRelogin.staminaResetHoldUntil === 'function' ? staminaRelogin.staminaResetHoldUntil : () => 0;
+  const knownLongStaminaExhaustionLoginHold = typeof staminaRelogin.knownLongStaminaExhaustionLoginHold === 'function' ? staminaRelogin.knownLongStaminaExhaustionLoginHold : () => null;
   const localStorage = storage;
   const BOT_KEY = botKey;
   const PENDING_EXIT_STATE_KEY = pendingExitStateKey;
@@ -394,7 +396,8 @@ function createControlFlowRuntime(runtime = {}) {
     activeOfflineLeaveDetail: (...args) => activeOfflineLeaveDetail(...args),
     loginSuppressStatus: (...args) => loginSuppressStatus(...args),
     snapshotLoginGateStatus: (...args) => snapshotLoginGateStatus(...args),
-    loginPointSafetyStatus: (...args) => loginPointSafetyStatus(...args)
+    loginPointSafetyStatus: (...args) => loginPointSafetyStatus(...args),
+    knownLongStaminaExhaustionLoginHold: (...args) => knownLongStaminaExhaustionLoginHold(...args)
   });
 
   let issueLeaveCommand;
@@ -602,6 +605,7 @@ function createControlFlowRuntime(runtime = {}) {
     staminaExhaustedWindowLabel,
     staminaBudgetReloginDelayMs,
     staminaResetHoldUntil,
+    knownLongStaminaExhaustionLoginHold,
     setLoginSuppress,
     reloginDelayForHpCore,
     randomBetween,

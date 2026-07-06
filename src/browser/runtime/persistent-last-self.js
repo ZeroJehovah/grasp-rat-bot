@@ -12,7 +12,13 @@ function readPersistentLastSelfStateCore(storage, key, maxAgeMsValue, t = Date.n
   const maxAgeMs = Math.max(3600000, Number(maxAgeMsValue || 172800000) || 172800000);
   if (at && t - at > maxAgeMs) return null;
   const self = state.self && typeof state.self === 'object' ? state.self : state;
-  return self && typeof self === 'object' ? { ...self } : null;
+  if (!self || typeof self !== 'object') return null;
+  const out = { ...self };
+  if (at) {
+    if (!Number(out.at || 0)) out.at = at;
+    if (!Number(out.updatedAt || 0)) out.updatedAt = at;
+  }
+  return out;
 }
 
 function writePersistentLastSelfStateCore(storage, key, selfSummary, t = Date.now()) {

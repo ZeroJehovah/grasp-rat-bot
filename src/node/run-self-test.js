@@ -42,6 +42,9 @@ const {
   createReloginGateRuntime
 } = require('../browser/runtime/relogin-gate-runtime');
 const {
+  createStaminaStatusRuntime
+} = require('../browser/runtime/stamina-status');
+const {
   createPendingExitRuntime
 } = require('../browser/runtime/pending-exit-runtime');
 const {
@@ -9976,6 +9979,88 @@ async function runSelfTest() {
         ].map(String).join('|');
       })(),
       want: 'true|#joinBtn|false|false|1|0|bot login started'
+    },
+    {
+      name: 'known same-day long stamina exhaustion blocks auto login',
+      got: (async () => {
+        const t = Date.now();
+        const data = new Map();
+        const storage = {
+          getItem: key => (data.has(key) ? data.get(key) : null),
+          setItem: (key, value) => data.set(key, String(value)),
+          removeItem: key => data.delete(key)
+        };
+        const button = {
+          id: 'joinBtn',
+          tagName: 'BUTTON',
+          clickCount: 0,
+          click() {
+            this.clickCount += 1;
+          }
+        };
+        const botState = {
+          control: {},
+          exitAudit: {},
+          importantLogging: {},
+          lastLoginAt: 0,
+          lastSelf: {
+            at: t,
+            updatedAt: t,
+            stamina: {
+              stamina1d: 0,
+              stamina1h: 3000000
+            }
+          }
+        };
+        const staminaRuntime = createStaminaStatusRuntime({
+          bot: botState,
+          cfg: { ...cfg, staminaExhaustedThresholdMs: 1000, staminaBudgetReloginDelayMs: 1800000 },
+          staminaExhaustedThreshold: () => 1000
+        });
+        let startCalls = 0;
+        const runtime = createLeaveFlowRuntime({
+          bot: botState,
+          cfg: { ...cfg, autoLogin: true, dryRun: false, once: false, loginCooldownMs: 5000, postLoginGraceMs: 45000 },
+          storage,
+          pageGlobal: {},
+          loginSuppressKey: 'graspRatLoginSuppressUntil',
+          loginSuppressReasonKey: 'graspRatLoginSuppressReason',
+          getCurrentUserId: () => 28886,
+          getSessionToken: () => '',
+          getNativeControl: () => null,
+          hasNativeGameSession: () => false,
+          findLoginControl: () => button,
+          hasLoginRequiredText: () => false,
+          getSelf: () => null,
+          syncPausedFromPage: () => false,
+          exitAuditFlushPending: () => false,
+          importantSessionEndFlushPending: () => false,
+          readPageGlobal: name => (name === 'startLinuxDoLogin' ? (() => { startCalls += 1; }) : null),
+          loginSuppressRemainingMs: () => 0,
+          ensureLoginSnapshotGate: async () => ({ satisfied: true }),
+          loginSnapshotGateAllowsLogin: gate => Boolean(gate.satisfied),
+          setLoginSuppress: (reason, ms) => {
+            const until = Date.now() + ms;
+            storage.setItem('graspRatLoginSuppressUntil', String(until));
+            storage.setItem('graspRatLoginSuppressReason', reason);
+            return until;
+          },
+          controlText: () => '立即登录',
+          isAlive: value => Boolean(value?.hp > 0),
+          knownLongStaminaExhaustionLoginHold: staminaRuntime.knownLongStaminaExhaustionLoginHold
+        });
+        const result = await runtime.maybeStartAutoLogin('no-self');
+        return [
+          result?.needed,
+          result?.attempted,
+          result?.reason,
+          Number(result?.cooldownRemainingMs || 0) > 0,
+          button.clickCount,
+          startCalls,
+          Array.isArray(result?.staminaHold?.exhausted) ? result.staminaHold.exhausted.join('/') : ''
+        ].map(String).join('|');
+      })(),
+      want: 'true|false|known-long-stamina-exhausted|true|0|0|1d'
     },
     {
       name: 'login control finder prefers hidden native join over inline proxy',

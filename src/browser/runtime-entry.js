@@ -284,7 +284,8 @@ const __graspRatRuntimeStartup = (() => {
     longStaminaHoldContradictedByKnownStamina,
     startupStaminaSampleLooksUnsettled,
     deferredStaminaExhaustionLeave,
-    staleOfflineStaminaHoldContradicted
+    staleOfflineStaminaHoldContradicted,
+    knownLongStaminaExhaustionLoginHold
   } = createStaminaStatusRuntime({
     bot,
     cfg,
@@ -292,6 +293,7 @@ const __graspRatRuntimeStartup = (() => {
     staminaLimitValue,
     staminaExhaustedThreshold,
     staminaExhaustedLongWindows,
+    staminaEvidenceRemaining,
     staminaHoldContradictedByStaminaEvidence
   });
 
@@ -768,8 +770,11 @@ const __graspRatRuntimeStartup = (() => {
     threatKey: (...args) => threatKey(...args),
     returnBlockRadius: (...args) => returnBlockRadius(...args),
     staleOfflineStaminaHoldContradicted: (...args) => staleOfflineStaminaHoldContradicted(...args),
-    staminaBudgetReloginDelayMs,
-    staminaResetHoldUntil,
+    staminaRelogin: {
+      staminaBudgetReloginDelayMs,
+      staminaResetHoldUntil,
+      knownLongStaminaExhaustionLoginHold: (...args) => knownLongStaminaExhaustionLoginHold(...args)
+    },
     staminaBudgetCoinLeaveSummary: (...args) => staminaBudgetCoinLeaveSummary(...args),
     staminaExhaustedWindowLabel: (...args) => staminaExhaustedWindowLabel(...args),
     reloginDelayForHpCore
@@ -2120,6 +2125,7 @@ const __graspRatRuntimeStartup = (() => {
     staminaBudgetCoinLeaveAction,
     staminaBudgetCoinLeaveSummary,
     staminaBudgetReloginDelayMs,
+    knownLongStaminaExhaustionLoginHold,
     staminaExhaustedWindowLabel,
     startTargetWhitelistPolling,
     stopMotionSafely,
