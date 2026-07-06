@@ -205,9 +205,8 @@ function createNoSelfSnapshotRecoveryRuntime(runtime = {}) {
     return result;
   }
 
-  function clearNoSelfSnapshotLocalSession(control, noSelfExit, reason = 'snapshot no-self exit confirmed') {
+  function clearNoSelfLocalSessionForConfirmation(confirmation, control, noSelfExit, reason = 'snapshot no-self exit confirmed') {
     const t = Date.now();
-    const confirmation = noSelfSnapshotExitConfirmationState(control, noSelfExit, t);
     if (!confirmation.confirmed) return confirmation;
     const userId = confirmation.userId || Number(control?.currentUserId || getCurrentUserId() || 0) || null;
     const removedKeys = [];
@@ -219,7 +218,7 @@ function createNoSelfSnapshotRecoveryRuntime(runtime = {}) {
     removeStorageKeysMatching(localStorage, /^tmpGame/i, '', removedKeys, storageErrors);
     removeStorageKeysMatching(browserSessionStorage, /^tmpGame/i, 'sessionStorage.', removedKeys, storageErrors);
     const markerResult = writeNoSelfSnapshotRecoveryState(localStorage, {
-      reason: 'snapshot-no-self-exit-confirmed',
+      reason: confirmation.reason || 'snapshot-no-self-exit-confirmed',
       userId,
       source: confirmation.source,
       noSelfAgeMs: confirmation.noSelfAgeMs,
@@ -252,6 +251,40 @@ function createNoSelfSnapshotRecoveryRuntime(runtime = {}) {
       closeNativeWsError: nativeSessionReset.error,
       displayReason: confirmation.displayReason
     };
+  }
+
+  function clearNoSelfSnapshotLocalSession(control, noSelfExit, reason = 'snapshot no-self exit confirmed') {
+    const confirmation = noSelfSnapshotExitConfirmationState(control, noSelfExit, Date.now());
+    return clearNoSelfLocalSessionForConfirmation(confirmation, control, noSelfExit, reason);
+  }
+
+  function clearNoSelfLocalSessionAfterLeave403(control, noSelfExit, leaveDetail = null, reason = 'leave HTTP 403 no-self recovery') {
+    const t = Date.now();
+    const userId = Number(control?.currentUserId || getCurrentUserId() || noSelfExit?.userId || leaveDetail?.userId || 0) || 0;
+    const snapshotSelf = noSelfExit?.snapshotSelf || snapshotSelfPresenceState(userId);
+    const confirmation = {
+      confirmed: true,
+      reason: 'leave-403-no-self-exit-confirmed',
+      displayReason: 'leave接口返回403，按服务端已无自身清理本地登录状态后重登',
+      source: 'leave-http-403-missing-self',
+      at: t,
+      userId: userId || null,
+      snapshotSelf,
+      noSelfAgeMs: Math.max(0, Math.round(Number(noSelfExit?.ageMs || 0) || 0)),
+      noSelfGameSession: noSelfExit || null,
+      leave: leaveDetail || null,
+      control: control ? {
+        wsOpen: Boolean(control.wsOpen),
+        rawWsOpen: Boolean(control.rawWsOpen),
+        connecting: Boolean(control.connecting),
+        wsReadyState: control.wsReadyState ?? null,
+        nativeWsReadyState: control.nativeWsReadyState ?? null,
+        hasToken: Boolean(control.hasToken),
+        transport: control.transport || ''
+      } : null,
+      blockedBy: []
+    };
+    return clearNoSelfLocalSessionForConfirmation(confirmation, control, noSelfExit, reason);
   }
 
   function handleNoSelfSnapshotExitRecovery(control, noSelfExit, options = {}) {
@@ -306,6 +339,7 @@ function createNoSelfSnapshotRecoveryRuntime(runtime = {}) {
     activeNoSelfSnapshotRecoveryState,
     clearNoSelfSnapshotRecoveryState,
     clearNoSelfSnapshotLocalSession,
+    clearNoSelfLocalSessionAfterLeave403,
     handleNoSelfSnapshotExitRecovery,
     runNoSelfSnapshotExitRecovery
   };

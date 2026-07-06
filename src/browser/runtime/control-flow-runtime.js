@@ -355,6 +355,7 @@ function createControlFlowRuntime(runtime = {}) {
   const {
     noSelfSnapshotExitConfirmationState,
     clearNoSelfSnapshotLocalSession,
+    clearNoSelfLocalSessionAfterLeave403,
     handleNoSelfSnapshotExitRecovery,
     runNoSelfSnapshotExitRecovery
   } = createNoSelfSnapshotRecoveryRuntime({
@@ -577,6 +578,7 @@ function createControlFlowRuntime(runtime = {}) {
     setLoginSuppress,
     controlText,
     clearCurrentReloginHold,
+    clearNoSelfLocalSessionAfterLeave403: (...args) => clearNoSelfLocalSessionAfterLeave403(...args),
     updateBotPanel,
     triggerNativeTick,
     issueLeaveCommand,
@@ -626,6 +628,7 @@ function createControlFlowRuntime(runtime = {}) {
     noSelfGameSessionExitState,
     noSelfSnapshotExitConfirmationState,
     clearNoSelfSnapshotLocalSession,
+    clearNoSelfLocalSessionAfterLeave403,
     handleNoSelfSnapshotExitRecovery,
     runNoSelfSnapshotExitRecovery,
     recentUnsafeExitContext,

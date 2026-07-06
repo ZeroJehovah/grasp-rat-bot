@@ -20,6 +20,7 @@ const {
   activeNoSelfSnapshotRecoveryState: activeNoSelfSnapshotRecoveryStateCore,
   clearNoSelfSnapshotRecoveryState: clearNoSelfSnapshotRecoveryStateCore
 } = require('./no-self-snapshot-recovery-state');
+const { leaveDetailHasHttp403Core } = require('./pending-exit');
 
 function createLeaveFlowRuntime(runtime = {}) {
   const {
@@ -57,6 +58,7 @@ function createLeaveFlowRuntime(runtime = {}) {
     setLoginSuppress = () => 0,
     controlText = () => '',
     clearCurrentReloginHold = () => ({}),
+    clearNoSelfLocalSessionAfterLeave403 = () => null,
     updateBotPanel = () => {},
     triggerNativeTick = () => false,
     issueLeaveCommand = async detail => detail,
@@ -638,13 +640,31 @@ function createLeaveFlowRuntime(runtime = {}) {
     startExitAuditBoundCore(detail, { scope: 'offline', source: 'offline', reason, self: selfSummary, offlineSafety }, bot, { resetLoginSnapshotGate, loginPointSafetyExitSelfForDetail, ensureExitAuditDetail, recordExitAuditEvent, now: Date.now });
     bot.lastOfflineLeaveAt = t;
     await issueLeaveCommand(detail);
-    if (detail.attempted) {
+    if (detail.attempted && leaveDetailHasHttp403Core(detail) && offlineSafety?.noSelfGameSession) {
+      const recovery = clearNoSelfLocalSessionAfterLeave403(summarizeControl(), offlineSafety.noSelfGameSession, detail);
+      if (recovery?.clearedLocalSession) {
+        detail.exitPending = false;
+        detail.exitConfirmed = true;
+        detail.exitConfirmedAt = recovery.clearedAt || Date.now();
+        detail.exitConfirmation = {
+          known: true,
+          alive: false,
+          source: 'leave-http-403-no-self-local-session-reset',
+          http403: true,
+          localSessionReset: recovery
+        };
+        detail.localSessionReset = recovery;
+        detail.summary = recovery.displayReason || detail.summary;
+        detail.displayReason = recovery.displayReason || detail.displayReason || detail.summary;
+      }
+    }
+    if (detail.attempted && !detail.exitConfirmed) {
       const staminaSuppress = primePendingStaminaExitLoginSuppressBoundCore(detail, { now: Date.now, staminaBudgetReloginDelayMs, staminaResetHoldUntil, setLoginSuppress });
       if (!staminaSuppress && offlineExitRequiresUnsafeReloginDelayCore(reason, offlineSafety)) {
         primePendingUnsafeExitLoginSuppressBoundCore('offline leave', reason, detail, selfSummary, {}, { hpInfoForRelogin, reloginDelayForHp: (selfLike, detail) => reloginDelayForHpCore(selfLike, detail, { cfg, hpInfoForRelogin, randomBetween, clamp }), cfg, setLoginSuppress, now: Date.now });
       }
     }
-    if (detail.attempted || detail.exitAuditId) {
+    if ((detail.attempted || detail.exitAuditId) && !detail.exitConfirmed) {
       rememberPendingExit('offline', 'offline', detail, selfSummary);
     }
     finalizeLeaveDisplayReasonForLeaveFlowCore(detail, (base, value) => leaveWaitDisplayForLeaveFlowCore(base, value, formatDurationMs));

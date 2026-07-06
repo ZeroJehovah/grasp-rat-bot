@@ -9313,6 +9313,74 @@ async function runSelfTest() {
       want: 'true|true|false|websocket reconnect churn missing self|true|false'
     },
     {
+      name: 'leave 403 no-self recovery clears stale local session',
+      got: (() => {
+        const data = new Map([
+          ['tmpGameSessionToken', 'stale-token'],
+          ['tmpGameUserId', '28886']
+        ]);
+        const storage = {
+          getItem: key => (data.has(key) ? data.get(key) : null),
+          setItem: (key, value) => data.set(key, String(value)),
+          removeItem: key => data.delete(key)
+        };
+        let closed = false;
+        const nativeWs = {
+          readyState: 0,
+          close: () => {
+            closed = true;
+          }
+        };
+        const nativeState = {
+          currentUserId: 28886,
+          sessionToken: 'stale-token',
+          wsOpen: false,
+          ws: nativeWs,
+          entities: [{ user_id: 28886 }],
+          reconnectTimer: 9
+        };
+        const botState = {
+          globalState: { entities: [], snapshotRefreshedAt: 0 },
+          control: { hasToken: true, connecting: true },
+          pendingExit: { reason: 'stale' },
+          offlineSince: 123
+        };
+        const runtime = createNoSelfSnapshotRecoveryRuntime({
+          bot: botState,
+          cfg,
+          storage,
+          getCurrentUserId: () => 28886,
+          getNativeControl: () => ({ ws: nativeWs, state: nativeState }),
+          snapshotSelfPresenceState: () => ({ known: false, fresh: false, present: false }),
+          clearPersistentPendingExitState: () => {
+            data.set('pendingExitCleared', 'true');
+          }
+        });
+        const result = runtime.clearNoSelfLocalSessionAfterLeave403(
+          { currentUserId: 28886, hasToken: true, connecting: true, wsReadyState: 0, nativeWsReadyState: 0 },
+          { shouldLeave: true, ageMs: 5000, userId: 28886, reconnectChurn: { count: 3 } },
+          { attempted: true, lastLeaveRequest: { result: { status: 403 } } }
+        );
+        return [
+          result.confirmed,
+          result.reason,
+          data.get('tmpGameSessionToken') === undefined,
+          data.get('tmpGameUserId') === undefined,
+          Boolean(result.recoveryMarker),
+          result.recoveryMarker?.reason,
+          result.closedNativeWs,
+          closed,
+          nativeState.currentUserId,
+          nativeState.sessionToken,
+          botState.control.hasToken,
+          botState.pendingExit,
+          botState.offlineSince,
+          data.get('pendingExitCleared')
+        ].map(String).join('|');
+      })(),
+      want: 'true|leave-403-no-self-exit-confirmed|true|true|true|leave-403-no-self-exit-confirmed|true|true|0||false|null|0|true'
+    },
+    {
       name: 'snapshot no-self recovery marker suppresses repeat leave state',
       got: (() => {
         const t = Date.now();
@@ -9467,6 +9535,75 @@ async function runSelfTest() {
         ].map(String).join('|');
       })(),
       want: 'true|#joinBtn|true|false|true|1|0|5'
+    },
+    {
+      name: 'no-self leave 403 recovery does not create pending exit retry',
+      got: (async () => {
+        const botState = { control: {}, exitAudit: {}, importantLogging: {}, lastLoginAt: 0 };
+        let rememberCalls = 0;
+        let recoveryCalls = 0;
+        const runtime = createLeaveFlowRuntime({
+          bot: botState,
+          cfg: { ...cfg, autoLogin: true, dryRun: false, once: false, offlineLeaveRetryMs: 1000, combatLeaveRetryMs: 1000 },
+          storage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
+          getCurrentUserId: () => 28886,
+          summarizeControl: () => ({ currentUserId: 28886, hasToken: true, connecting: true }),
+          issueLeaveCommand: async detail => {
+            detail.attempted = true;
+            detail.method = 'leave(userId)';
+            detail.lastLeaveRequest = {
+              completedAt: Date.now(),
+              result: { status: 403 }
+            };
+            detail.leaveRequests = [detail.lastLeaveRequest];
+            return detail;
+          },
+          rememberPendingExit: () => {
+            rememberCalls += 1;
+          },
+          clearNoSelfLocalSessionAfterLeave403: () => {
+            recoveryCalls += 1;
+            botState.pendingExit = null;
+            return {
+              confirmed: true,
+              clearedLocalSession: true,
+              clearedAt: Date.now(),
+              displayReason: 'leave接口返回403，按服务端已无自身清理本地登录状态后重登'
+            };
+          },
+          activeOfflineLeaveDetail: () => null,
+          resetLoginSnapshotGate: () => null,
+          loginPointSafetyExitSelfForDetail: () => null,
+          ensureExitAuditDetail: detail => {
+            detail.exitAuditId = detail.exitAuditId || 'audit-1';
+          },
+          recordExitAuditEvent: () => false,
+          staminaBudgetReloginDelayMs: () => 0,
+          staminaResetHoldUntil: () => 0,
+          setLoginSuppress: () => 0,
+          reloginDelayForHpCore: () => ({ delayMs: 0, hpDelayMs: 0, minMs: 0, maxMs: 0, hp: { hp: 100, maxHp: 100, ratio: 1 } }),
+          isAlive: value => Boolean(value?.hp > 0)
+        });
+        const result = await runtime.leaveOffline(
+          'websocket reconnect churn missing self',
+          null,
+          {
+            unsafe: true,
+            noSelfGameSession: { shouldLeave: true, userId: 28886, ageMs: 5000 },
+            reconnectChurn: { count: 3 }
+          }
+        );
+        return [
+          result?.attempted,
+          result?.exitConfirmed,
+          result?.exitPending,
+          Boolean(result?.localSessionReset),
+          recoveryCalls,
+          rememberCalls,
+          botState.pendingExit
+        ].map(String).join('|');
+      })(),
+      want: 'true|true|false|true|1|0|null'
     },
     {
       name: 'post-login zoom keeps fitting clipped 500m circle despite view radius label',
