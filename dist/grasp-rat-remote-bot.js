@@ -12,7 +12,7 @@
   var define_GRASP_RAT_RUNTIME_CONFIG_default;
   var init_define_GRASP_RAT_RUNTIME_CONFIG = __esm({
     "<define:__GRASP_RAT_RUNTIME_CONFIG__>"() {
-      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.584" };
+      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.585" };
     }
   });
 
@@ -6031,11 +6031,12 @@
             Number(cfg.combatLogPostBufferMs || 0)
           );
           const recentCombatFrameContext = Boolean(lastCombatFrameAt && recentCombatContextMs > 0 && t - lastCombatFrameAt <= recentCombatContextMs);
-          const activeCombatContext = previousCombatActive || currentCombatActive || combatLogActive || recentCombatFrameContext || Boolean(recordedCombatTickGap);
-          const liveCombatContext = previousCombatActive || currentCombatActive || combatLogActive;
+          const combatFrameActiveContext = previousCombatActive || currentCombatActive;
+          const activeCombatContext = combatFrameActiveContext || combatLogActive || recentCombatFrameContext || Boolean(recordedCombatTickGap);
+          const liveCombatContext = combatFrameActiveContext;
           const reentryGapOverThreshold = Boolean(activeCombatContext && (recordedDiagnosis === "tick-reentry-gap" || decision?.tickReentry) && thresholdMs > 0 && (tickInProgressMs !== null && tickInProgressMs >= thresholdMs || lastTickCompletedGapMs !== null && lastTickCompletedGapMs >= thresholdMs));
           const tickGapOverThreshold = Boolean(activeCombatContext && tickGapMs !== null && thresholdMs > 0 && tickGapMs >= thresholdMs);
-          const combatFrameGapOverThreshold = Boolean(liveCombatContext && combatFrameGapMs !== null && thresholdMs > 0 && combatFrameGapMs >= thresholdMs);
+          const combatFrameGapOverThreshold = Boolean(combatFrameActiveContext && combatFrameGapMs !== null && thresholdMs > 0 && combatFrameGapMs >= thresholdMs);
           const diagnosis = recordedDiagnosis || (reentryGapOverThreshold ? "tick-reentry-gap" : tickGapOverThreshold ? "main-loop-gap" : combatFrameGapOverThreshold ? "combat-log-gap-with-active-tick" : "normal");
           const lastRefresh = diagnostics.lastRefresh && typeof diagnostics.lastRefresh === "object" ? diagnostics.lastRefresh : null;
           const lastRefreshSummary = lastRefresh ? {
@@ -6076,6 +6077,7 @@
             decisionCombatActive,
             combatLogActive,
             liveCombatContext,
+            combatFrameActiveContext,
             recentCombatFrameContext,
             recentCombatContextMs,
             activeCombatContext,
@@ -25732,11 +25734,13 @@
             Number(cfg.combatLogPostBufferMs || 0)
           );
           const recentCombatFrameContext = Boolean(lastCombatFrameAt && recentCombatContextMs > 0 && t - lastCombatFrameAt <= recentCombatContextMs);
-          if (!previousCombatActive && !currentCombatActive && !combatLogActive && !recentCombatFrameContext) return null;
-          const liveCombatContext = previousCombatActive || currentCombatActive || combatLogActive;
+          const combatFrameActiveContext = previousCombatActive || currentCombatActive;
+          const activeCombatContext = combatFrameActiveContext || combatLogActive || recentCombatFrameContext;
+          if (!activeCombatContext) return null;
+          const liveCombatContext = combatFrameActiveContext;
           const reentryGap = Boolean(options.reentry && (tickInProgressMs !== null && tickInProgressMs >= thresholdMs || lastTickCompletedGapMs !== null && lastTickCompletedGapMs >= thresholdMs));
           const mainLoopGap = Boolean(!reentryGap && previousTickAt && tickGapMs !== null && tickGapMs >= thresholdMs);
-          const combatFrameGap = !reentryGap && !mainLoopGap && liveCombatContext && combatFrameGapMs !== null && combatFrameGapMs >= thresholdMs;
+          const combatFrameGap = !reentryGap && !mainLoopGap && combatFrameActiveContext && combatFrameGapMs !== null && combatFrameGapMs >= thresholdMs;
           if (!reentryGap && !mainLoopGap && !combatFrameGap) return null;
           const diagnosis = reentryGap ? "tick-reentry-gap" : mainLoopGap ? "main-loop-gap" : "combat-log-gap-with-active-tick";
           const likelyCause = reentryGap ? "main-loop-stuck-or-awaiting-async" : mainLoopGap ? "js-or-main-loop-paused" : "combat-state-or-log-gating-gap";
@@ -25757,6 +25761,8 @@
             currentCombatActive,
             combatLogActive,
             liveCombatContext,
+            activeCombatContext,
+            combatFrameActiveContext,
             recentCombatFrameContext,
             recentCombatContextMs,
             queuedCombatFrameAt,

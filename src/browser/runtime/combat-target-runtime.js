@@ -1058,14 +1058,16 @@ function createCombatTargetRuntime(runtime = {}) {
     const recentCombatFrameContext = Boolean(lastCombatFrameAt
       && recentCombatContextMs > 0
       && t - lastCombatFrameAt <= recentCombatContextMs);
-    if (!previousCombatActive && !currentCombatActive && !combatLogActive && !recentCombatFrameContext) return null;
-    const liveCombatContext = previousCombatActive || currentCombatActive || combatLogActive;
+    const combatFrameActiveContext = previousCombatActive || currentCombatActive;
+    const activeCombatContext = combatFrameActiveContext || combatLogActive || recentCombatFrameContext;
+    if (!activeCombatContext) return null;
+    const liveCombatContext = combatFrameActiveContext;
     const reentryGap = Boolean(options.reentry && (
       (tickInProgressMs !== null && tickInProgressMs >= thresholdMs)
       || (lastTickCompletedGapMs !== null && lastTickCompletedGapMs >= thresholdMs)
     ));
     const mainLoopGap = Boolean(!reentryGap && previousTickAt && tickGapMs !== null && tickGapMs >= thresholdMs);
-    const combatFrameGap = !reentryGap && !mainLoopGap && liveCombatContext && combatFrameGapMs !== null && combatFrameGapMs >= thresholdMs;
+    const combatFrameGap = !reentryGap && !mainLoopGap && combatFrameActiveContext && combatFrameGapMs !== null && combatFrameGapMs >= thresholdMs;
     if (!reentryGap && !mainLoopGap && !combatFrameGap) return null;
     const diagnosis = reentryGap ? 'tick-reentry-gap'
       : (mainLoopGap ? 'main-loop-gap' : 'combat-log-gap-with-active-tick');
@@ -1088,6 +1090,8 @@ function createCombatTargetRuntime(runtime = {}) {
       currentCombatActive,
       combatLogActive,
       liveCombatContext,
+      activeCombatContext,
+      combatFrameActiveContext,
       recentCombatFrameContext,
       recentCombatContextMs,
       queuedCombatFrameAt,
