@@ -10926,6 +10926,141 @@ async function runSelfTest() {
       want: 'external-left-user-exit-confirmed|true|1|external-left-user-exit-confirmed|true|true|true|1|true|0||false|null|0|0|true|false|null|external-left-user-exit-confirmed|exit-confirmed:external-left-user-exit-confirmed|1|exit-confirmed:external-left-user-exit-confirmed|true|true'
     },
     {
+      name: 'external left user recovery is idempotent while reload is audit-blocked',
+      got: (async () => {
+        const data = new Map([
+          ['tmpGameUserId', '28886'],
+          ['tmpGameSessionShadow', 'stale-shadow'],
+          ['tmpGameHelpSeenV3', '1']
+        ]);
+        const storage = createMapStorage(data);
+        let reloadCalls = 0;
+        let stopCalls = 0;
+        let auditCalls = 0;
+        let importantCalls = 0;
+        let resetCalls = 0;
+        let clearCalls = 0;
+        const nativeWs = { readyState: 1, close: () => {} };
+        const nativeState = {
+          currentUserId: 28886,
+          sessionToken: 'stale-token',
+          wsOpen: true,
+          ws: nativeWs,
+          entities: [{ user_id: 28886, hp: 100, life: 'Alive' }],
+          reconnectTimer: 42
+        };
+        const oldDocument = global.document;
+        global.document = {
+          querySelectorAll: () => [{ innerText: '14:06:11 left user 28886' }],
+          body: { innerText: '14:06:11 left user 28886' },
+          getElementById: () => null
+        };
+        try {
+          const botState = {
+            globalState: { entities: [], snapshotRefreshedAt: Date.now() },
+            control: { hasToken: false, wsOpen: true, nativeWsOpen: true },
+            exitAudit: {},
+            importantLogging: {},
+            lastSelf: { user_id: 28886, id: 28886, hp: 100, x: 1, y: 2 }
+          };
+          const noSelfRuntime = createNoSelfSnapshotRecoveryRuntime({
+            bot: botState,
+            cfg,
+            storage,
+            getCurrentUserId: () => 28886,
+            getNativeControl: () => ({ ws: nativeWs, state: nativeState }),
+            snapshotSelfPresenceState: () => ({ known: true, fresh: true, present: false }),
+            clearPersistentPendingExitState: () => {
+              data.set('pendingExitCleared', 'true');
+            }
+          });
+          const runtime = createPendingExitRuntime({
+            bot: botState,
+            cfg: { ...cfg, leave403ReloginDelayMs: 3600000 },
+            storage,
+            getCurrentUserId: () => 28886,
+            getSessionToken: () => '',
+            getNativeControl: () => ({ ws: nativeWs, state: nativeState }),
+            getNativeState: () => nativeState,
+            hasNativeGameSession: () => true,
+            snapshotSelfFreshEnough: () => true,
+            summarizeSelf: value => ({ id: value.user_id ?? value.id, hp: value.hp, x: value.x, y: value.y }),
+            summarizeControl: () => ({
+              currentUserId: 28886,
+              hasToken: false,
+              wsOpen: true,
+              rawWsOpen: true,
+              nativeWsOpen: true,
+              connecting: false,
+              wsReadyState: 1,
+              nativeWsReadyState: 1,
+              transport: 'native-page'
+            }),
+            controlHasAuthoritativeSessionMismatch: () => false,
+            clearCombatEngagement: () => {},
+            stopMotionAfterExit: () => {
+              stopCalls += 1;
+            },
+            requestReload: () => {
+              reloadCalls += 1;
+              return reloadCalls >= 2;
+            },
+            clearPersistentPendingExitState: () => {
+              data.set('pendingExitClearedByPendingRuntime', 'true');
+            },
+            resetLoginSnapshotGate: () => {
+              resetCalls += 1;
+              return { reset: true };
+            },
+            loginPointSafetyExitSelfForDetail: () => botState.lastSelf,
+            recordExitAuditEvent: () => {
+              auditCalls += 1;
+              return true;
+            },
+            noteImportantSessionExit: () => {
+              importantCalls += 1;
+            },
+            isAlive: value => Boolean(value?.hp > 0),
+            clearNoSelfLocalSessionAfterConfirmedExit: (...args) => {
+              clearCalls += 1;
+              return noSelfRuntime.clearNoSelfLocalSessionAfterConfirmedExit(...args);
+            }
+          });
+          const first = await runtime.handlePendingExit({ user_id: 28886, hp: 100, life: 'Alive', x: 1, y: 2 });
+          const second = await runtime.handlePendingExit({ user_id: 28886, hp: 100, life: 'Alive', x: 1, y: 2 });
+          return [
+            first?.reason,
+            first?.reloadRequested,
+            second?.reason,
+            second?.reloadRequested,
+            reloadCalls,
+            auditCalls,
+            importantCalls,
+            resetCalls,
+            clearCalls,
+            stopCalls,
+            data.get('tmpGameUserId') === undefined,
+            data.get('tmpGameSessionShadow') === undefined,
+            data.get('tmpGameHelpSeenV3'),
+            data.has('graspRatNoSelfSnapshotRecovery'),
+            nativeState.currentUserId,
+            nativeState.sessionToken,
+            nativeState.wsOpen,
+            nativeState.entities.length,
+            botState.externalLeftUserExitRecovery?.reloadAttempts,
+            botState.externalLeftUserExitRecovery?.auditRecorded,
+            botState.lastOfflineLeaveResult?.reason,
+            second?.externalLeftUserRecovery?.reloadAttempts,
+            data.get('pendingExitCleared'),
+            data.get('pendingExitClearedByPendingRuntime')
+          ].map(String).join('|');
+        } finally {
+          global.document = oldDocument;
+        }
+      })(),
+      want: 'external-left-user-exit-confirmed|false|external-left-user-exit-confirmed|true|2|1|1|1|1|1|true|true|1|true|0||false|0|2|true|external-left-user-exit-confirmed|2|true|true'
+    },
+    {
       name: 'external left user recovery ignores live current self',
       got: (async () => {
         const data = new Map([
@@ -10997,6 +11132,67 @@ async function runSelfTest() {
         }
       })(),
       want: 'null|0|0|live-token|28886|1|undefined'
+    },
+    {
+      name: 'exit audit reload block logs are throttled',
+      got: (() => {
+        const originalNow = Date.now;
+        let t = 100000;
+        Date.now = () => t;
+        try {
+          const logs = [];
+          let flushCalls = 0;
+          const botState = {
+            exitAudit: {},
+            importantLogging: {},
+            lastSelf: null,
+            combatLogging: {}
+          };
+          const runtime = createSessionRecoveryRuntime({
+            bot: botState,
+            cfg: { ...cfg, exitAuditBlockedReloadLogMinMs: 5000 },
+            storage: createMapStorage(),
+            exitAuditFlushPending: () => true,
+            exitAuditFlushBlockDetail: reason => ({
+              blocked: true,
+              reason,
+              pending: 1,
+              pendingIds: ['audit-1'],
+              sending: false,
+              endpoint: 'http://127.0.0.1:18765/combat-log',
+              lastError: '',
+              lastOkAt: 0
+            }),
+            flushCombatLogs: () => {
+              flushCalls += 1;
+              return true;
+            },
+            logStatus: text => {
+              logs.push(text);
+            }
+          });
+          runtime.requestReload('external left user local session reset');
+          t += 1000;
+          runtime.requestReload('external left user local session reset');
+          t += 1000;
+          runtime.requestReload('external left user local session reset');
+          const suppressedBeforeDue = botState.exitAudit.lastBlockedReloadLog?.suppressed || 0;
+          t += 5000;
+          runtime.requestReload('external left user local session reset');
+          return [
+            logs.length,
+            flushCalls,
+            suppressedBeforeDue,
+            logs[0],
+            logs[1],
+            botState.exitAudit.lastBlockedReload?.pending,
+            botState.exitAudit.lastBlockedReloadLog?.suppressed
+          ].map(String).join('|');
+        } finally {
+          Date.now = originalNow;
+        }
+      })(),
+      want: '2|4|2|reload blocked until exit audit logs flush: external left user local session reset|reload blocked until exit audit logs flush: external left user local session reset|1|0'
     },
     {
       name: 'local exit confirmation must not accept active session mismatch',

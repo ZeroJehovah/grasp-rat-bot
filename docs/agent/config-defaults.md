@@ -203,6 +203,7 @@
 - When Clash leave rescue is enabled locally, each exit round starts on `clashAutoProxyName`, then falls back through `clashDirectProxyName` and `clashManualProxyName`; pending-exit retries restart from the auto proxy.
 - `leave403ReloginDelayMs = 3600000`
 - `sessionMismatchRecoveryReloadMaxAgeMs = 120000`
+- `exitAuditBlockedReloadLogMinMs = 5000`
 - `cloudflareErrorReloadMs = 5000`
 - `enemyReloginRepeatResetMs = 7200000`
 - `enemyReloginRepeatSecondMaxMs = 0`

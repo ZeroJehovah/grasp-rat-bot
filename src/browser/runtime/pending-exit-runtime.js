@@ -525,6 +525,62 @@ function createPendingExitRuntime(runtime = {}) {
     };
   }
 
+  function summarizeExternalLeftUserRecovery(detail) {
+    if (!detail || typeof detail !== 'object') return null;
+    return {
+      reason: detail.reason || 'external-left-user-exit-confirmed',
+      userId: detail.userId || null,
+      at: Number(detail.at || 0) || 0,
+      exitConfirmedAt: Number(detail.exitConfirmedAt || 0) || 0,
+      reloadRequested: Boolean(detail.reloadRequested),
+      reloadAttempts: Math.max(0, Number(detail.reloadAttempts || 0) || 0),
+      lastReloadAttemptAt: Number(detail.lastReloadAttemptAt || 0) || 0,
+      auditRecorded: Boolean(detail.auditRecorded),
+      importantSessionClosed: Boolean(detail.importantSessionClosed),
+      localSessionReset: detail.localSessionReset || null,
+      noSelfSnapshotRecovery: detail.noSelfSnapshotRecovery || null,
+      exitConfirmation: detail.exitConfirmation || null
+    };
+  }
+
+  function externalLeftUserRecoveryWaitDecision(detail) {
+    const state = detail?.exitConfirmation || null;
+    return {
+      kind: 'wait',
+      reason: detail?.reason || 'external-left-user-exit-confirmed',
+      dx: 0,
+      dy: 0,
+      self: null,
+      currentUserId: detail?.userId || state?.userId || getCurrentUserId(),
+      control: summarizeControl(),
+      displayReason: detail?.reloadRequested
+        ? (detail.displayReason || state?.displayReason || '') + '，正在刷新页面'
+        : (detail?.displayReason || state?.displayReason || '聊天确认当前用户已离开') + '，等待退出日志发送完成后刷新页面',
+      leave: detail || null,
+      offlineSafety: detail?.offlineSafety || {
+        unsafe: true,
+        noSelfGameSession: state?.noSelfGameSession || null,
+        externalLeftUser: state
+      },
+      exitConfirmation: state,
+      localSessionReset: detail?.localSessionReset || null,
+      externalLeftUserRecovery: summarizeExternalLeftUserRecovery(detail),
+      reloadRequested: Boolean(detail?.reloadRequested)
+    };
+  }
+
+  function retryExternalLeftUserRecoveryReload() {
+    const detail = bot.externalLeftUserExitRecovery;
+    if (!detail || typeof detail !== 'object') return null;
+    if (detail.reloadRequested) return externalLeftUserRecoveryWaitDecision(detail);
+    const t = Date.now();
+    detail.reloadAttempts = Math.max(0, Number(detail.reloadAttempts || 0) || 0) + 1;
+    detail.lastReloadAttemptAt = t;
+    detail.reloadRequested = Boolean(requestReload('external left user local session reset'));
+    bot.lastOfflineLeaveResult = detail;
+    return externalLeftUserRecoveryWaitDecision(detail);
+  }
+
   function externalLeftUserExitRecoveryDecision(self, state) {
     const t = Date.now();
     stopMotionAfterExit('external-left-user-exit-confirmed');
@@ -579,27 +635,20 @@ function createPendingExitRuntime(runtime = {}) {
       source: 'external-left-user',
       scope: 'offline'
     });
+    detail.auditRecorded = true;
     noteImportantSessionExit('exit-confirmed:' + detail.reason, detail.self || bot.lastSelf, t, { exit: detail });
+    detail.importantSessionClosed = true;
+    bot.externalLeftUserExitRecovery = detail;
+    detail.reloadAttempts = 1;
+    detail.lastReloadAttemptAt = t;
     detail.reloadRequested = Boolean(requestReload('external left user local session reset'));
-    return {
-      kind: 'wait',
-      reason: detail.reason,
-      dx: 0,
-      dy: 0,
-      self: null,
-      currentUserId: detail.userId || getCurrentUserId(),
-      control: summarizeControl(),
-      displayReason: detail.reloadRequested ? detail.displayReason + '，正在刷新页面' : detail.displayReason,
-      leave: detail,
-      offlineSafety: detail.offlineSafety,
-      exitConfirmation: state,
-      localSessionReset: detail.localSessionReset || null,
-      reloadRequested: detail.reloadRequested
-    };
+    return externalLeftUserRecoveryWaitDecision(detail);
   }
 
   function handleExternalLeftUserExitRecovery(self) {
     if (bot.pendingExit) return null;
+    const existing = retryExternalLeftUserRecoveryReload(self);
+    if (existing) return existing;
     const state = externalLeftUserExitState(self);
     if (!state.confirmed) return null;
     return externalLeftUserExitRecoveryDecision(self, state);

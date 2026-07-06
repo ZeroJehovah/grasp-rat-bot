@@ -12,7 +12,7 @@
   var define_GRASP_RAT_RUNTIME_CONFIG_default;
   var init_define_GRASP_RAT_RUNTIME_CONFIG = __esm({
     "<define:__GRASP_RAT_RUNTIME_CONFIG__>"() {
-      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.587" };
+      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.588" };
     }
   });
 
@@ -599,6 +599,7 @@
           sessionMismatchRecoveryReloadMaxAgeMs: 12e4,
           reloadAfterNoSelfMs: 45e3,
           reloadAfterOfflineMs: 2e4,
+          exitAuditBlockedReloadLogMinMs: 5e3,
           cloudflareErrorReloadMs: 5e3,
           page403ErrorReloadMs: 6e5,
           globalRefreshTimeoutMs: 3e3,
@@ -9455,6 +9456,57 @@
             blockedBy
           };
         }
+        function summarizeExternalLeftUserRecovery(detail) {
+          if (!detail || typeof detail !== "object") return null;
+          return {
+            reason: detail.reason || "external-left-user-exit-confirmed",
+            userId: detail.userId || null,
+            at: Number(detail.at || 0) || 0,
+            exitConfirmedAt: Number(detail.exitConfirmedAt || 0) || 0,
+            reloadRequested: Boolean(detail.reloadRequested),
+            reloadAttempts: Math.max(0, Number(detail.reloadAttempts || 0) || 0),
+            lastReloadAttemptAt: Number(detail.lastReloadAttemptAt || 0) || 0,
+            auditRecorded: Boolean(detail.auditRecorded),
+            importantSessionClosed: Boolean(detail.importantSessionClosed),
+            localSessionReset: detail.localSessionReset || null,
+            noSelfSnapshotRecovery: detail.noSelfSnapshotRecovery || null,
+            exitConfirmation: detail.exitConfirmation || null
+          };
+        }
+        function externalLeftUserRecoveryWaitDecision(detail) {
+          const state2 = detail?.exitConfirmation || null;
+          return {
+            kind: "wait",
+            reason: detail?.reason || "external-left-user-exit-confirmed",
+            dx: 0,
+            dy: 0,
+            self: null,
+            currentUserId: detail?.userId || state2?.userId || getCurrentUserId(),
+            control: summarizeControl(),
+            displayReason: detail?.reloadRequested ? (detail.displayReason || state2?.displayReason || "") + "\uFF0C\u6B63\u5728\u5237\u65B0\u9875\u9762" : (detail?.displayReason || state2?.displayReason || "\u804A\u5929\u786E\u8BA4\u5F53\u524D\u7528\u6237\u5DF2\u79BB\u5F00") + "\uFF0C\u7B49\u5F85\u9000\u51FA\u65E5\u5FD7\u53D1\u9001\u5B8C\u6210\u540E\u5237\u65B0\u9875\u9762",
+            leave: detail || null,
+            offlineSafety: detail?.offlineSafety || {
+              unsafe: true,
+              noSelfGameSession: state2?.noSelfGameSession || null,
+              externalLeftUser: state2
+            },
+            exitConfirmation: state2,
+            localSessionReset: detail?.localSessionReset || null,
+            externalLeftUserRecovery: summarizeExternalLeftUserRecovery(detail),
+            reloadRequested: Boolean(detail?.reloadRequested)
+          };
+        }
+        function retryExternalLeftUserRecoveryReload() {
+          const detail = bot.externalLeftUserExitRecovery;
+          if (!detail || typeof detail !== "object") return null;
+          if (detail.reloadRequested) return externalLeftUserRecoveryWaitDecision(detail);
+          const t = Date.now();
+          detail.reloadAttempts = Math.max(0, Number(detail.reloadAttempts || 0) || 0) + 1;
+          detail.lastReloadAttemptAt = t;
+          detail.reloadRequested = Boolean(requestReload("external left user local session reset"));
+          bot.lastOfflineLeaveResult = detail;
+          return externalLeftUserRecoveryWaitDecision(detail);
+        }
         function externalLeftUserExitRecoveryDecision(self, state2) {
           const t = Date.now();
           stopMotionAfterExit("external-left-user-exit-confirmed");
@@ -9509,26 +9561,19 @@
             source: "external-left-user",
             scope: "offline"
           });
+          detail.auditRecorded = true;
           noteImportantSessionExit("exit-confirmed:" + detail.reason, detail.self || bot.lastSelf, t, { exit: detail });
+          detail.importantSessionClosed = true;
+          bot.externalLeftUserExitRecovery = detail;
+          detail.reloadAttempts = 1;
+          detail.lastReloadAttemptAt = t;
           detail.reloadRequested = Boolean(requestReload("external left user local session reset"));
-          return {
-            kind: "wait",
-            reason: detail.reason,
-            dx: 0,
-            dy: 0,
-            self: null,
-            currentUserId: detail.userId || getCurrentUserId(),
-            control: summarizeControl(),
-            displayReason: detail.reloadRequested ? detail.displayReason + "\uFF0C\u6B63\u5728\u5237\u65B0\u9875\u9762" : detail.displayReason,
-            leave: detail,
-            offlineSafety: detail.offlineSafety,
-            exitConfirmation: state2,
-            localSessionReset: detail.localSessionReset || null,
-            reloadRequested: detail.reloadRequested
-          };
+          return externalLeftUserRecoveryWaitDecision(detail);
         }
         function handleExternalLeftUserExitRecovery(self) {
           if (bot.pendingExit) return null;
+          const existing = retryExternalLeftUserRecoveryReload(self);
+          if (existing) return existing;
           const state2 = externalLeftUserExitState(self);
           if (!state2.confirmed) return null;
           return externalLeftUserExitRecoveryDecision(self, state2);
@@ -11636,6 +11681,58 @@
     }
   });
 
+  // src/browser/runtime/reload-block-log-throttle.js
+  var require_reload_block_log_throttle = __commonJS({
+    "src/browser/runtime/reload-block-log-throttle.js"(exports, module) {
+      "use strict";
+      init_define_GRASP_RAT_RUNTIME_CONFIG();
+      function reloadBlockLogMinMs(cfg) {
+        return Math.max(1e3, Number(cfg?.exitAuditBlockedReloadLogMinMs || 5e3) || 5e3);
+      }
+      function reloadBlockSignature(reason, blocked) {
+        const pendingIds = Array.isArray(blocked?.pendingIds) ? blocked.pendingIds.join(",") : "";
+        return [
+          String(reason || ""),
+          Number(blocked?.pending || 0) || 0,
+          pendingIds,
+          Boolean(blocked?.sending),
+          String(blocked?.lastError || "")
+        ].join("|");
+      }
+      function reloadBlockLogDue(owner, cfg, reason, blocked, t = Date.now()) {
+        if (!owner || typeof owner !== "object") return true;
+        const signature = reloadBlockSignature(reason, blocked);
+        const previous = owner.lastBlockedReloadLog || null;
+        if (!previous || previous.signature !== signature || t - Number(previous.at || 0) >= reloadBlockLogMinMs(cfg)) {
+          owner.lastBlockedReloadLog = {
+            at: t,
+            signature,
+            reason: String(reason || ""),
+            suppressed: 0
+          };
+          return true;
+        }
+        owner.lastBlockedReloadLog = {
+          ...previous,
+          suppressed: Number(previous.suppressed || 0) + 1,
+          lastSuppressedAt: t
+        };
+        return false;
+      }
+      function logBlockedReload(owner, cfg, reason, text, detail, logStatus) {
+        if (reloadBlockLogDue(owner, cfg, reason, detail?.exitAuditFlush || detail?.importantLogFlush)) {
+          logStatus(text, detail);
+        }
+      }
+      module.exports = {
+        reloadBlockLogMinMs,
+        reloadBlockSignature,
+        reloadBlockLogDue,
+        logBlockedReload
+      };
+    }
+  });
+
   // src/browser/runtime/session-recovery-runtime.js
   var require_session_recovery_runtime = __commonJS({
     "src/browser/runtime/session-recovery-runtime.js"(exports, module) {
@@ -11657,6 +11754,7 @@
         normalizeNoSelfSnapshotRecoveryState,
         activeNoSelfSnapshotRecoveryState
       } = require_no_self_snapshot_recovery_state();
+      var { logBlockedReload } = require_reload_block_log_throttle();
       function createSessionRecoveryRuntime(runtime = {}) {
         const {
           bot,
@@ -11736,21 +11834,21 @@
             const blocked = exitAuditFlushBlockDetail("reload:" + (reason || ""));
             bot.exitAudit.lastBlockedReload = blocked;
             flushCombatLogs(true);
-            logStatus("reload blocked until exit audit logs flush: " + (reason || ""), {
+            logBlockedReload(bot.exitAudit, cfg, "reload:" + (reason || ""), "reload blocked until exit audit logs flush: " + (reason || ""), {
               kind: "wait",
               reason: "exit-log-flush-pending",
               dx: 0,
               dy: 0,
               self: bot.lastSelf,
               exitAuditFlush: blocked
-            });
+            }, logStatus);
             return false;
           }
           closeCurrentImportantSessionBeforeReload(reason || "reload");
           if (importantSessionEndFlushPending()) {
             const blocked = importantSessionEndFlushBlockDetail("reload:" + (reason || ""));
             bot.importantLogging.lastBlockedReload = blocked;
-            logStatus("reload blocked until important session-end log flush: " + (reason || ""), {
+            logBlockedReload(bot.importantLogging, cfg, "reload:" + (reason || ""), "reload blocked until important session-end log flush: " + (reason || ""), {
               kind: "wait",
               reason: "important-log-flush-pending",
               dx: 0,
@@ -11758,7 +11856,7 @@
               self: bot.lastSelf,
               importantLogFlush: blocked,
               displayReason: "\u7B49\u5F85\u4F1A\u8BDD\u7ED3\u675F\u65E5\u5FD7\u53D1\u9001\u5B8C\u6210\uFF0C\u6682\u4E0D\u5237\u65B0"
-            });
+            }, logStatus);
             return false;
           }
           try {
@@ -11786,7 +11884,7 @@
               writePersistentPendingExitStateCore(localStorage2, PENDING_EXIT_STATE_KEY, pending || bot.pendingExit, Date.now(), pendingExitPersistenceCoreHelpers());
             }
             flushCombatLogs(true);
-            logStatus("leave confirmation reload blocked until exit audit logs flush: " + (reason || ""), {
+            logBlockedReload(bot.exitAudit, cfg, "leave-confirmation-reload:" + (reason || ""), "leave confirmation reload blocked until exit audit logs flush: " + (reason || ""), {
               kind: "wait",
               reason: "exit-log-flush-pending",
               dx: 0,
@@ -11795,7 +11893,7 @@
               pendingExit: pendingExitSummaryForRecovery(pending),
               exitAuditFlush: blocked,
               displayReason: "\u7B49\u5F85\u9000\u51FA\u65E5\u5FD7\u53D1\u9001\u5B8C\u6210\uFF0C\u6682\u4E0D\u5237\u65B0\u786E\u8BA4\u9000\u51FA"
-            });
+            }, logStatus);
             return false;
           }
           try {
@@ -11853,7 +11951,7 @@
             const blocked = exitAuditFlushBlockDetail("session-mismatch-refresh:" + (liveSessionTakeover.reason || ""));
             bot.exitAudit.lastBlockedReload = blocked;
             flushCombatLogs(true);
-            logStatus("session mismatch refresh blocked until exit audit logs flush", {
+            logBlockedReload(bot.exitAudit, cfg, "session-mismatch-refresh:" + (liveSessionTakeover.reason || ""), "session mismatch refresh blocked until exit audit logs flush", {
               kind: "wait",
               reason: "exit-log-flush-pending",
               dx: 0,
@@ -11863,7 +11961,7 @@
               liveSessionTakeover,
               exitAuditFlush: blocked,
               displayReason: "\u7B49\u5F85\u9000\u51FA\u65E5\u5FD7\u53D1\u9001\u5B8C\u6210\uFF0C\u6682\u4E0D\u5237\u65B0\u786E\u8BA4\u4F1A\u8BDD\u72B6\u6001"
-            });
+            }, logStatus);
             return {
               requested: false,
               blocked: true,
@@ -11970,7 +12068,7 @@
             const blocked = exitAuditFlushBlockDetail("reload:cloudflare error");
             bot.exitAudit.lastBlockedReload = blocked;
             flushCombatLogs(true);
-            logStatus("reload blocked until exit audit logs flush: cloudflare error", {
+            logBlockedReload(bot.exitAudit, cfg, "reload:cloudflare error", "reload blocked until exit audit logs flush: cloudflare error", {
               kind: "wait",
               reason: "exit-log-flush-pending",
               dx: 0,
@@ -11979,14 +12077,14 @@
               cloudflare: info,
               exitAuditFlush: blocked,
               displayReason: "\u7B49\u5F85\u9000\u51FA\u65E5\u5FD7\u53D1\u9001\u5B8C\u6210\uFF0C\u6682\u4E0D\u5237\u65B0\u9519\u8BEF\u9875"
-            });
+            }, logStatus);
             return false;
           }
           closeCurrentImportantSessionBeforeReload("cloudflare error");
           if (importantSessionEndFlushPending()) {
             const blocked = importantSessionEndFlushBlockDetail("reload:cloudflare error");
             bot.importantLogging.lastBlockedReload = blocked;
-            logStatus("reload blocked until important session-end log flush: cloudflare error", {
+            logBlockedReload(bot.importantLogging, cfg, "reload:cloudflare error", "reload blocked until important session-end log flush: cloudflare error", {
               kind: "wait",
               reason: "important-log-flush-pending",
               dx: 0,
@@ -11995,7 +12093,7 @@
               cloudflare: info,
               importantLogFlush: blocked,
               displayReason: "\u7B49\u5F85\u4F1A\u8BDD\u7ED3\u675F\u65E5\u5FD7\u53D1\u9001\u5B8C\u6210\uFF0C\u6682\u4E0D\u5237\u65B0\u9519\u8BEF\u9875"
-            });
+            }, logStatus);
             return false;
           }
           try {

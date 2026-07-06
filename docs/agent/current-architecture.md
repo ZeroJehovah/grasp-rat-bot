@@ -36,7 +36,7 @@ Runtime domain modules under `src/browser/runtime/` own browser integration:
 - Context shape: `runtime-domain-contexts.js`.
 - Entity/UI glue: `entity-state-runtime.js`, `status-panel.js`, `target-overlay.js`, `target-whitelist.js`.
 - Native/page integration: `native-data-runtime.js`, `native-transport-runtime.js`, `native-state-runtime.js`, `session-stats-runtime.js`, `stall-diagnostics-runtime.js`, `network-quality-runtime.js`.
-- Control flow: `control-flow-runtime.js`, `control-login-runtime.js`, `login-point-safety-runtime.js`, `post-login-zoom-runtime.js`, `pending-exit-runtime.js`, `clash-leave-rescue-runtime.js`, `leave-flow-runtime.js`, `session-recovery-runtime.js`, `no-self-snapshot-recovery-runtime.js`, `relogin-gate-runtime.js`.
+- Control flow: `control-flow-runtime.js`, `control-login-runtime.js`, `login-point-safety-runtime.js`, `post-login-zoom-runtime.js`, `pending-exit-runtime.js`, `clash-leave-rescue-runtime.js`, `leave-flow-runtime.js`, `session-recovery-runtime.js`, `reload-block-log-throttle.js`, `no-self-snapshot-recovery-runtime.js`, `relogin-gate-runtime.js`.
 - Profit: `profit-runtime.js`, `profit-coin-runtime.js`, `profit-opportunity-runtime.js`, `profit-post-attack-runtime.js`, `profit-arbitration-runtime.js`.
 - Combat: `combat-runtime.js`, `combat-target-runtime.js`, `combat-movement-runtime.js`, `combat-aim-runtime.js`, `combat-action-runtime.js`.
 - Logging: `combat-log-runtime.js`, `combat-log-queue-runtime.js`, `combat-log-frame-runtime.js`, `combat-log-diagnostics-runtime.js`, `exit-audit-runtime.js`, `important-session-runtime.js`, `kill-attribution-runtime.js`.

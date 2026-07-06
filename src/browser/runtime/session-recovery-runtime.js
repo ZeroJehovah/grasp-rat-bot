@@ -1,5 +1,4 @@
 'use strict';
-
 const { arrayCount } = require('./array-count');
 const { formatDurationMs } = require('./display-format');
 const {
@@ -16,6 +15,7 @@ const {
   normalizeNoSelfSnapshotRecoveryState,
   activeNoSelfSnapshotRecoveryState
 } = require('./no-self-snapshot-recovery-state');
+const { logBlockedReload } = require('./reload-block-log-throttle');
 
 function createSessionRecoveryRuntime(runtime = {}) {
   const {
@@ -95,21 +95,21 @@ function createSessionRecoveryRuntime(runtime = {}) {
       const blocked = exitAuditFlushBlockDetail('reload:' + (reason || ''));
       bot.exitAudit.lastBlockedReload = blocked;
       flushCombatLogs(true);
-      logStatus('reload blocked until exit audit logs flush: ' + (reason || ''), {
+      logBlockedReload(bot.exitAudit, cfg, 'reload:' + (reason || ''), 'reload blocked until exit audit logs flush: ' + (reason || ''), {
         kind: 'wait',
         reason: 'exit-log-flush-pending',
         dx: 0,
         dy: 0,
         self: bot.lastSelf,
         exitAuditFlush: blocked
-      });
+      }, logStatus);
       return false;
     }
     closeCurrentImportantSessionBeforeReload(reason || 'reload');
     if (importantSessionEndFlushPending()) {
       const blocked = importantSessionEndFlushBlockDetail('reload:' + (reason || ''));
       bot.importantLogging.lastBlockedReload = blocked;
-      logStatus('reload blocked until important session-end log flush: ' + (reason || ''), {
+      logBlockedReload(bot.importantLogging, cfg, 'reload:' + (reason || ''), 'reload blocked until important session-end log flush: ' + (reason || ''), {
         kind: 'wait',
         reason: 'important-log-flush-pending',
         dx: 0,
@@ -117,7 +117,7 @@ function createSessionRecoveryRuntime(runtime = {}) {
         self: bot.lastSelf,
         importantLogFlush: blocked,
         displayReason: '等待会话结束日志发送完成，暂不刷新'
-      });
+      }, logStatus);
       return false;
     }
     try {
@@ -145,7 +145,7 @@ function createSessionRecoveryRuntime(runtime = {}) {
         writePersistentPendingExitStateCore(localStorage, PENDING_EXIT_STATE_KEY, pending || bot.pendingExit, Date.now(), pendingExitPersistenceCoreHelpers());
       }
       flushCombatLogs(true);
-      logStatus('leave confirmation reload blocked until exit audit logs flush: ' + (reason || ''), {
+      logBlockedReload(bot.exitAudit, cfg, 'leave-confirmation-reload:' + (reason || ''), 'leave confirmation reload blocked until exit audit logs flush: ' + (reason || ''), {
         kind: 'wait',
         reason: 'exit-log-flush-pending',
         dx: 0,
@@ -154,7 +154,7 @@ function createSessionRecoveryRuntime(runtime = {}) {
         pendingExit: pendingExitSummaryForRecovery(pending),
         exitAuditFlush: blocked,
         displayReason: '等待退出日志发送完成，暂不刷新确认退出'
-      });
+      }, logStatus);
       return false;
     }
     try {
@@ -212,7 +212,7 @@ function createSessionRecoveryRuntime(runtime = {}) {
       const blocked = exitAuditFlushBlockDetail('session-mismatch-refresh:' + (liveSessionTakeover.reason || ''));
       bot.exitAudit.lastBlockedReload = blocked;
       flushCombatLogs(true);
-      logStatus('session mismatch refresh blocked until exit audit logs flush', {
+      logBlockedReload(bot.exitAudit, cfg, 'session-mismatch-refresh:' + (liveSessionTakeover.reason || ''), 'session mismatch refresh blocked until exit audit logs flush', {
         kind: 'wait',
         reason: 'exit-log-flush-pending',
         dx: 0,
@@ -222,7 +222,7 @@ function createSessionRecoveryRuntime(runtime = {}) {
         liveSessionTakeover,
         exitAuditFlush: blocked,
         displayReason: '等待退出日志发送完成，暂不刷新确认会话状态'
-      });
+      }, logStatus);
       return {
         requested: false,
         blocked: true,
@@ -334,7 +334,7 @@ function createSessionRecoveryRuntime(runtime = {}) {
       const blocked = exitAuditFlushBlockDetail('reload:cloudflare error');
       bot.exitAudit.lastBlockedReload = blocked;
       flushCombatLogs(true);
-      logStatus('reload blocked until exit audit logs flush: cloudflare error', {
+      logBlockedReload(bot.exitAudit, cfg, 'reload:cloudflare error', 'reload blocked until exit audit logs flush: cloudflare error', {
         kind: 'wait',
         reason: 'exit-log-flush-pending',
         dx: 0,
@@ -343,14 +343,14 @@ function createSessionRecoveryRuntime(runtime = {}) {
         cloudflare: info,
         exitAuditFlush: blocked,
         displayReason: '等待退出日志发送完成，暂不刷新错误页'
-      });
+      }, logStatus);
       return false;
     }
     closeCurrentImportantSessionBeforeReload('cloudflare error');
     if (importantSessionEndFlushPending()) {
       const blocked = importantSessionEndFlushBlockDetail('reload:cloudflare error');
       bot.importantLogging.lastBlockedReload = blocked;
-      logStatus('reload blocked until important session-end log flush: cloudflare error', {
+      logBlockedReload(bot.importantLogging, cfg, 'reload:cloudflare error', 'reload blocked until important session-end log flush: cloudflare error', {
         kind: 'wait',
         reason: 'important-log-flush-pending',
         dx: 0,
@@ -359,7 +359,7 @@ function createSessionRecoveryRuntime(runtime = {}) {
         cloudflare: info,
         importantLogFlush: blocked,
         displayReason: '等待会话结束日志发送完成，暂不刷新错误页'
-      });
+      }, logStatus);
       return false;
     }
     try {
