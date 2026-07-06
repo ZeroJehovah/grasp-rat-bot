@@ -662,15 +662,16 @@ function createCombatLogFrameRuntime(runtime = {}) {
         const recentCombatFrameContext = Boolean(lastCombatFrameAt
           && recentCombatContextMs > 0
           && t - lastCombatFrameAt <= recentCombatContextMs);
-        const activeCombatContext = previousCombatActive || currentCombatActive || combatLogActive || recentCombatFrameContext || Boolean(recordedCombatTickGap);
-        const liveCombatContext = previousCombatActive || currentCombatActive || combatLogActive;
+        const combatFrameActiveContext = previousCombatActive || currentCombatActive;
+        const activeCombatContext = combatFrameActiveContext || combatLogActive || recentCombatFrameContext || Boolean(recordedCombatTickGap);
+        const liveCombatContext = combatFrameActiveContext;
         const reentryGapOverThreshold = Boolean(activeCombatContext
           && (recordedDiagnosis === 'tick-reentry-gap' || decision?.tickReentry)
           && thresholdMs > 0
           && ((tickInProgressMs !== null && tickInProgressMs >= thresholdMs)
             || (lastTickCompletedGapMs !== null && lastTickCompletedGapMs >= thresholdMs)));
         const tickGapOverThreshold = Boolean(activeCombatContext && tickGapMs !== null && thresholdMs > 0 && tickGapMs >= thresholdMs);
-        const combatFrameGapOverThreshold = Boolean(liveCombatContext && combatFrameGapMs !== null && thresholdMs > 0 && combatFrameGapMs >= thresholdMs);
+        const combatFrameGapOverThreshold = Boolean(combatFrameActiveContext && combatFrameGapMs !== null && thresholdMs > 0 && combatFrameGapMs >= thresholdMs);
         const diagnosis = recordedDiagnosis || (reentryGapOverThreshold
           ? 'tick-reentry-gap'
           : (tickGapOverThreshold
@@ -717,6 +718,7 @@ function createCombatLogFrameRuntime(runtime = {}) {
           decisionCombatActive,
           combatLogActive,
           liveCombatContext,
+          combatFrameActiveContext,
           recentCombatFrameContext,
           recentCombatContextMs,
           activeCombatContext,

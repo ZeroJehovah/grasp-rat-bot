@@ -4075,14 +4075,16 @@ async function runSelfTest() {
     const recentCombatFrameContext = Boolean(lastCombatFrameAt
       && recentCombatContextMs > 0
       && t - lastCombatFrameAt <= recentCombatContextMs);
-    if (!previousCombatActive && !currentCombatActive && !combatLogActive && !recentCombatFrameContext) return null;
-    const liveCombatContext = previousCombatActive || currentCombatActive || combatLogActive;
+    const combatFrameActiveContext = previousCombatActive || currentCombatActive;
+    const activeCombatContext = combatFrameActiveContext || combatLogActive || recentCombatFrameContext;
+    if (!activeCombatContext) return null;
+    const liveCombatContext = combatFrameActiveContext;
     const reentryGap = Boolean(state.reentry && (
       (tickInProgressMs !== null && tickInProgressMs >= thresholdMs)
       || (lastTickCompletedGapMs !== null && lastTickCompletedGapMs >= thresholdMs)
     ));
     const mainLoopGap = Boolean(!reentryGap && previousTickAt && tickGapMs !== null && tickGapMs >= thresholdMs);
-    const combatFrameGap = !reentryGap && !mainLoopGap && liveCombatContext && combatFrameGapMs !== null && combatFrameGapMs >= thresholdMs;
+    const combatFrameGap = !reentryGap && !mainLoopGap && combatFrameActiveContext && combatFrameGapMs !== null && combatFrameGapMs >= thresholdMs;
     if (!reentryGap && !mainLoopGap && !combatFrameGap) return null;
     const diagnosis = reentryGap ? 'tick-reentry-gap'
       : (mainLoopGap ? 'main-loop-gap' : 'combat-log-gap-with-active-tick');
@@ -4102,6 +4104,8 @@ async function runSelfTest() {
       currentCombatActive,
       combatLogActive,
       liveCombatContext,
+      activeCombatContext,
+      combatFrameActiveContext,
       recentCombatFrameContext,
       recentCombatContextMs,
       lastCombatFrameAt,
@@ -8917,6 +8921,26 @@ async function runSelfTest() {
 	        return (state?.reason || 'none') + '|' + (state?.diagnosis || '') + '|' + (state?.likelyCause || '');
 	      })(),
 	      want: 'combat tick gap|combat-log-gap-with-active-tick|combat-state-or-log-gating-gap'
+	    },
+	    {
+	      name: 'combat log post-buffer frame gap alone does not exit after combat target switch',
+	      got: (() => {
+	        const state = combatTickGapOfflineStateForTest({
+	          nowMs: 48000,
+	          previousTickAt: 47880,
+	          tickGapMs: 120,
+	          combatLogActive: true,
+	          decision: {
+	            kind: 'seek-enemy',
+	            reason: 'approach-afk-drop-target',
+	            target: { id: 9114, name: 'leon tree', afk: true }
+	          },
+	          lastCombatFrameAt: 42950,
+	          lastBuiltFrameAt: 47920
+	        });
+	        return (state?.reason || 'none') + '|' + (state?.diagnosis || '') + '|' + Boolean(state?.combatLogActive);
+	      })(),
+	      want: 'none||false'
 	    },
 	    {
 	      name: 'combat tick reentry gap records stuck async diagnosis',
