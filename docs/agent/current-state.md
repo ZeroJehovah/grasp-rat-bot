@@ -4,14 +4,15 @@ Update this file for every remote bot release or handoff-relevant state change. 
 
 ## Latest Release
 
-- Latest remote bot: `bootstrap-0.4.585`.
-- Latest manifest SHA-256: `dae88bd330bf377d25567d9e72cf76ae593f3d2715a20d94f1ce8c4cf46dd1f1`.
-- Latest remote release commit: `c02061d` (`bootstrap-0.4.585` fixes post-buffer combat tick gap false exits).
+- Latest remote bot: `bootstrap-0.4.586`.
+- Latest manifest SHA-256: `d848e592e009698e353336034bbb1842bb00134995c3833162405689c913dae0`.
+- Latest remote release commit: `b149c72` (`bootstrap-0.4.586` fixes no-self pending-exit relogin recovery after another browser exits).
 - Latest bootstrap A versions: Tampermonkey `0.4.76`, extension `0.1.55`.
-- Latest direct entry/config SHA-256: `a411ddf806903af2d83b8c500d2361742ae1f32680638a92476e49af00702f5b`.
+- Latest direct entry/config SHA-256: `9d3d8911f8612d500b68af1758670d96b9c9bc00e2f9bc7dcafec16cef4f4290`.
 
 ## Current Handoff
 
+- `bootstrap-0.4.586` fixes the no-self pending-exit stall seen after exiting from another browser: the panel could show login-point safety reaching `3/3`, but an existing offline/no-self `pendingExit` kept `handlePendingExit()` returning before auto-login, because `pendingExitSelfState()` treated stale native session evidence as `native-session-pending` before considering the fresh missing-self snapshot. For offline pending exits that came from `offlineSafety.noSelfGameSession`, a fresh snapshot with the current self absent now confirms the exit as `snapshot-no-self-offline-pending`, clears stale local/session/native state through the same no-self recovery path, writes the recovery marker, requests reload, and lets gated relogin proceed. This exception is scoped to no-self/offline exit confirmation and is not used for combat target, aim, or fire decisions.
 - `bootstrap-0.4.585` fixes false `combat tick gap` exits after an opponent leaves attack range and the bot switches to another AFK/profit target. Combat-frame gap exits with otherwise healthy ticks now require a real previous/current combat-active tick; `combatLogActive` and recent post-combat frame context remain diagnostics but cannot independently force an offline leave while the current decision is AFK profit seeking or coin routing. The July 6 logs at 15:13:36, 15:16:27, and 15:18:49 Asia/Shanghai showed this false-exit pattern: `tickGapMs` was only 36-96ms, the native WebSocket was open with `lastMessageAgeMs` 4-7ms, and only `combatFrameGapMs` exceeded 5s after the target switch.
 - `bootstrap-0.4.584` makes the login-point safety success streak page-load scoped. Remote script B stores the current `performance.timeOrigin` in `localStorage.graspRatLoginPointSafety` and clears `streak`, sample timestamps, stale danger/error, and movement evidence whenever a new tab/page refresh has a different page-load marker, while preserving the learned login point, same-day damage actors, and last-exit HP radius context. Tampermonkey `0.4.76` and extension `0.1.55` apply the same reset before their local watchdog login gate reads `localStorage`, so a freshly opened/refreshed page can no longer immediately auto-login from a stale persisted `登录点安全 3/3` before three new page-native `/snapshot` safety passes.
 - `bootstrap-0.4.583` fixes the remaining immediate-login no-op path behind the left-panel `立即登录` button and the repeated `bot login started` 45s loop. Bootstrap A inserts its own inline login proxy and hides the native `#joinBtn`; remote script B now recognizes the hidden native join button as the real login control, skips the bot-owned inline proxy when scanning generic login buttons, and manual `forceLoginNow()` now prefers that native control before any page-global `startLinuxDoLogin()`/raw fallback. Tampermonkey `0.4.75` and extension `0.1.54` apply the same control-first order in their watchdog login helper, so stale/no-op page globals should no longer make a click appear to do nothing while still starting the 45s grace.
@@ -63,7 +64,7 @@ Update this file for every remote bot release or handoff-relevant state change. 
 
 ## Latest Validation Baseline
 
-The latest `bootstrap-0.4.585` release validation passed. Run build-producing commands and manifest-reading validation sequentially, not in parallel; `node scripts/build-remote-bot.js --version ...` rewrites `dist/manifest.json`, while `objective-status` and `verify-objective-build` read it.
+The latest `bootstrap-0.4.586` release validation passed. Run build-producing commands and manifest-reading validation sequentially, not in parallel; `node scripts/build-remote-bot.js --version ...` rewrites `dist/manifest.json`, while `objective-status` and `verify-objective-build` read it.
 
 ```bash
 node grasp-rat-bot.js --self-test
@@ -80,7 +81,7 @@ node --check extension/popup.js
 cd combat-log-service && npm test
 npm run test:runtime-helper-entry
 npm run test:remote-bundled
-node scripts/build-remote-bot.js --version bootstrap-0.4.585
+node scripts/build-remote-bot.js --version bootstrap-0.4.586
 node scripts/verify-objective-build.js
 git diff --check
 ```
@@ -96,7 +97,7 @@ Latest objective build verification reports 36 checks and guards:
 - dependency-width budgets for high-risk composition factories;
 - native/realtime-only combat target/aim/fire anchors;
 - visible/native ordinary-profit priority before snapshot fallback;
-- no-self snapshot recovery remains a dedicated control runtime module, visible login controls do not hide stale no-self page sessions, ordinary no-self auto-login prefers a visible native login control over page-global login when no page session is active, explicit login-required stale no-self sessions clear local/session/native state and reload without fresh snapshot confirmation, no-self cleanup requests a page reload after clearing stale local sessions, no-self recovery cleanup preserves `tmpGameHelpSeen*` tutorial markers, no-self recovery login markers suppress duplicate OAuth/login clicks after recovery login starts, confirmed pending exits request a page reload, confirmed no-self pending exits clear stale local sessions before any reload-block wait, external/manual `left user <currentUserId>` exits clear stale native self entities when fresh snapshot evidence says self is gone while old `left user` chat is ignored for a live current self, no-self leave 403 recovery clears stale local sessions without pending-exit retry, the shared recovery marker helper is included in the browser module graph, and composition owners stay under size/dependency guards;
+- no-self snapshot recovery remains a dedicated control runtime module, visible login controls do not hide stale no-self page sessions, ordinary no-self auto-login prefers a visible native login control over page-global login when no page session is active, explicit login-required stale no-self sessions clear local/session/native state and reload without fresh snapshot confirmation, no-self cleanup requests a page reload after clearing stale local sessions, no-self recovery cleanup preserves `tmpGameHelpSeen*` tutorial markers, no-self recovery login markers suppress duplicate OAuth/login clicks after recovery login starts, confirmed pending exits request a page reload, confirmed no-self pending exits clear stale local sessions before any reload-block wait, stale native session evidence no longer blocks no-self/offline pending-exit confirmation when a fresh snapshot already proves the current self is absent, external/manual `left user <currentUserId>` exits clear stale native self entities when fresh snapshot evidence says self is gone while old `left user` chat is ignored for a live current self, no-self leave 403 recovery clears stale local sessions without pending-exit retry, the shared recovery marker helper is included in the browser module graph, and composition owners stay under size/dependency guards;
 - post-login visible-range zoom keeps the 500m target radius, uses the native/page `view r` as the stop condition, only sends zoom-out steps, disables blind fallback clicks by default, and keeps stable no-token session keys;
 - bootstrap auto-login evaluates login-point safety only after login is needed, and login-start paths prefer native controls over page-global login fallbacks while ignoring the bot-owned inline proxy button;
 - userscript and extension bootstrap version consistency.
