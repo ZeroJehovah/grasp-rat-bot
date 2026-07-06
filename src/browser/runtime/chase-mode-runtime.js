@@ -4,6 +4,7 @@ const {
   aggregateChaseCandidates,
   chaseCandidateDisplay,
   chaseDropValue,
+  chaseLowDropClearDecision,
   chaseTargetId,
   chaseTargetName,
   chaseTargetPersistenceRecord,
@@ -52,6 +53,7 @@ function createChaseModeRuntime(runtime = {}) {
       selectedTargetId: String(bot.chaseMode?.selectedTargetId || ''),
       selectedTargetAt: Number(bot.chaseMode?.selectedTargetAt || 0) || 0,
       panelCandidates: Array.isArray(bot.chaseMode?.panelCandidates) ? bot.chaseMode.panelCandidates : [],
+      lowDropObservations: bot.chaseMode?.lowDropObservations && typeof bot.chaseMode.lowDropObservations === 'object' ? { ...bot.chaseMode.lowDropObservations } : {},
       selectedTarget: bot.chaseMode?.selectedTarget || null
     };
     return bot.chaseMode;
@@ -142,6 +144,7 @@ function createChaseModeRuntime(runtime = {}) {
     const cleared = before !== state.targets.length;
     if (cleared) {
       state.lastClear = { at: now(), id: key, reason: String(reason || 'manual') };
+      delete state.lowDropObservations[key];
       if (String(state.selectedTargetId || '') === key) {
         state.selectedTargetId = '';
         state.selectedTargetAt = 0;
@@ -159,7 +162,7 @@ function createChaseModeRuntime(runtime = {}) {
     state.selectedTargetId = '';
     state.selectedTargetAt = 0;
     state.selectedTarget = null;
-    state.panelCandidates = [];
+    state.panelCandidates = []; state.lowDropObservations = {};
     state.lastClear = { at: now(), id: '', reason: String(reason || 'manual'), count };
     writeChaseModeState('clear-all:' + reason);
     return { ok: true, cleared: count, status: summarizeChaseModeStatus(getSelf()) };
@@ -285,6 +288,7 @@ function createChaseModeRuntime(runtime = {}) {
     const state = ensureChaseModeState();
     const candidateById = new Map((candidates || []).map(item => [String(item.id), item]));
     const clearIntents = [];
+    const nextLowDropObservations = {};
     for (const target of decoratedTargets || []) {
       const candidate = candidateById.get(String(target.id));
       if (target.whitelisted || (candidate && isWhitelistedTarget(candidate))) {
@@ -292,16 +296,27 @@ function createChaseModeRuntime(runtime = {}) {
         continue;
       }
       if (candidate?.explicitFreshDropLow) {
-        clearIntents.push({ id: target.id, reason: 'drop-below-min', drop: candidate.latestDrop });
+        const decision = chaseLowDropClearDecision(candidate, state.lowDropObservations[String(target.id)], {
+          nowMs: t,
+          visibleGraceMs: cfg.chaseVisibleLowDropClearMs
+        });
+        if (decision.observation && decision.observation.id) {
+          nextLowDropObservations[String(target.id)] = decision.observation;
+        }
+        if (decision.clear) {
+          clearIntents.push({ id: target.id, reason: 'drop-below-min', drop: candidate.latestDrop });
+        }
         continue;
       }
       if (recentKillMatchesTarget(target, t)) {
         clearIntents.push({ id: target.id, reason: 'target-killed' });
       }
     }
+    state.lowDropObservations = nextLowDropObservations;
     if (!clearIntents.length) return clearIntents;
     const clearIds = new Set(clearIntents.map(item => String(item.id)));
     state.targets = state.targets.filter(item => !clearIds.has(String(item.id)));
+    for (const id of clearIds) delete state.lowDropObservations[id];
     state.lastClear = { at: t, ...clearIntents[clearIntents.length - 1], count: clearIntents.length };
     if (clearIds.has(String(state.selectedTargetId || ''))) {
       state.selectedTargetId = '';
@@ -319,6 +334,7 @@ function createChaseModeRuntime(runtime = {}) {
     state.targets = state.targets.map(target => {
       const current = byId.get(String(target.id));
       if (!current || current.source === 'persisted') return target;
+      if (current.explicitFreshDropLow && state.lowDropObservations[String(target.id)]) return target;
       changed = true;
       return chaseTargetPersistenceRecord(current, target, { nowMs: now() }) || target;
     });
@@ -520,6 +536,4 @@ function createChaseModeRuntime(runtime = {}) {
   };
 }
 
-module.exports = {
-  createChaseModeRuntime
-};
+module.exports = { createChaseModeRuntime };

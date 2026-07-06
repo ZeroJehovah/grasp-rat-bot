@@ -12,7 +12,7 @@
   var define_GRASP_RAT_RUNTIME_CONFIG_default;
   var init_define_GRASP_RAT_RUNTIME_CONFIG = __esm({
     "<define:__GRASP_RAT_RUNTIME_CONFIG__>"() {
-      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.591" };
+      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.592" };
     }
   });
 
@@ -403,6 +403,7 @@
           chaseSnapshotMaxAgeMs: 15e3,
           chaseMinimapMaxAgeMs: 15e3,
           chaseTargetStickMs: 3e3,
+          chaseVisibleLowDropClearMs: 1500,
           chaseKillStaminaBudgetMs: 1e5,
           coinMaxDistance: 18e3,
           coinDangerRadius: 25e3,
@@ -3320,6 +3321,22 @@
         if (distanceDiff) return distanceDiff;
         return String(a.name || a.id).localeCompare(String(b.name || b.id));
       }
+      function chaseLowDropClearDecision(candidate, previous = null, options = {}) {
+        if (!candidate?.explicitFreshDropLow) return { clear: false, pending: false, observation: null };
+        const visible = Boolean((candidate.visible || candidate.native || candidate.realtime || candidate.render) && !candidate.minimapOnly);
+        if (!visible) return { clear: true, pending: false, observation: null };
+        const nowMs = Number(options.nowMs || Date.now()) || Date.now();
+        const graceMs = Math.max(0, Number(options.visibleGraceMs ?? 1500) || 0);
+        const since = Number(previous?.since || nowMs) || nowMs;
+        const observation = {
+          id: String(candidate.id || ""),
+          since,
+          lastAt: nowMs,
+          drop: chaseDropValue(candidate)
+        };
+        const clear = graceMs <= 0 || nowMs - since >= graceMs;
+        return { clear, pending: !clear && graceMs > 0, observation };
+      }
       function decorateChaseTargets(state2, candidates, options = {}) {
         const nowMs = Number(options.nowMs || Date.now()) || Date.now();
         const staleMs = Math.max(1e3, Number(options.staleMs || 15e3) || 15e3);
@@ -3393,6 +3410,7 @@
         chaseTargetId,
         chaseTargetName,
         chaseTargetPersistenceRecord,
+        chaseLowDropClearDecision,
         chooseChaseTarget,
         decorateChaseTargets,
         normalizeChaseCandidate,
@@ -3594,6 +3612,7 @@
             lastDecision: preserved.chaseMode?.lastDecision || null,
             selectedTargetId: String(preserved.chaseMode?.selectedTargetId || ""),
             selectedTargetAt: Number(preserved.chaseMode?.selectedTargetAt || 0) || 0,
+            lowDropObservations: preserved.chaseMode?.lowDropObservations && typeof preserved.chaseMode.lowDropObservations === "object" ? { ...preserved.chaseMode.lowDropObservations } : {},
             panelCandidates: [],
             selectedTarget: null
           },
@@ -26802,6 +26821,7 @@
         aggregateChaseCandidates,
         chaseCandidateDisplay,
         chaseDropValue,
+        chaseLowDropClearDecision,
         chaseTargetId,
         chaseTargetName,
         chaseTargetPersistenceRecord,
@@ -26846,6 +26866,7 @@
             selectedTargetId: String(bot.chaseMode?.selectedTargetId || ""),
             selectedTargetAt: Number(bot.chaseMode?.selectedTargetAt || 0) || 0,
             panelCandidates: Array.isArray(bot.chaseMode?.panelCandidates) ? bot.chaseMode.panelCandidates : [],
+            lowDropObservations: bot.chaseMode?.lowDropObservations && typeof bot.chaseMode.lowDropObservations === "object" ? { ...bot.chaseMode.lowDropObservations } : {},
             selectedTarget: bot.chaseMode?.selectedTarget || null
           };
           return bot.chaseMode;
@@ -26930,6 +26951,7 @@
           const cleared = before !== state2.targets.length;
           if (cleared) {
             state2.lastClear = { at: now(), id: key, reason: String(reason || "manual") };
+            delete state2.lowDropObservations[key];
             if (String(state2.selectedTargetId || "") === key) {
               state2.selectedTargetId = "";
               state2.selectedTargetAt = 0;
@@ -26947,6 +26969,7 @@
           state2.selectedTargetAt = 0;
           state2.selectedTarget = null;
           state2.panelCandidates = [];
+          state2.lowDropObservations = {};
           state2.lastClear = { at: now(), id: "", reason: String(reason || "manual"), count };
           writeChaseModeState("clear-all:" + reason);
           return { ok: true, cleared: count, status: summarizeChaseModeStatus(getSelf()) };
@@ -27054,6 +27077,7 @@
           const state2 = ensureChaseModeState();
           const candidateById = new Map((candidates || []).map((item) => [String(item.id), item]));
           const clearIntents = [];
+          const nextLowDropObservations = {};
           for (const target of decoratedTargets || []) {
             const candidate = candidateById.get(String(target.id));
             if (target.whitelisted || candidate && isWhitelistedTarget(candidate)) {
@@ -27061,16 +27085,27 @@
               continue;
             }
             if (candidate?.explicitFreshDropLow) {
-              clearIntents.push({ id: target.id, reason: "drop-below-min", drop: candidate.latestDrop });
+              const decision = chaseLowDropClearDecision(candidate, state2.lowDropObservations[String(target.id)], {
+                nowMs: t,
+                visibleGraceMs: cfg.chaseVisibleLowDropClearMs
+              });
+              if (decision.observation && decision.observation.id) {
+                nextLowDropObservations[String(target.id)] = decision.observation;
+              }
+              if (decision.clear) {
+                clearIntents.push({ id: target.id, reason: "drop-below-min", drop: candidate.latestDrop });
+              }
               continue;
             }
             if (recentKillMatchesTarget(target, t)) {
               clearIntents.push({ id: target.id, reason: "target-killed" });
             }
           }
+          state2.lowDropObservations = nextLowDropObservations;
           if (!clearIntents.length) return clearIntents;
           const clearIds = new Set(clearIntents.map((item) => String(item.id)));
           state2.targets = state2.targets.filter((item) => !clearIds.has(String(item.id)));
+          for (const id of clearIds) delete state2.lowDropObservations[id];
           state2.lastClear = { at: t, ...clearIntents[clearIntents.length - 1], count: clearIntents.length };
           if (clearIds.has(String(state2.selectedTargetId || ""))) {
             state2.selectedTargetId = "";
@@ -27087,6 +27122,7 @@
           state2.targets = state2.targets.map((target) => {
             const current = byId.get(String(target.id));
             if (!current || current.source === "persisted") return target;
+            if (current.explicitFreshDropLow && state2.lowDropObservations[String(target.id)]) return target;
             changed = true;
             return chaseTargetPersistenceRecord(current, target, { nowMs: now() }) || target;
           });
@@ -27277,9 +27313,7 @@
           selectChaseModeAction
         };
       }
-      module.exports = {
-        createChaseModeRuntime
-      };
+      module.exports = { createChaseModeRuntime };
     }
   });
 

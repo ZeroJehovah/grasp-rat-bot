@@ -281,6 +281,23 @@ function comparePanelCandidate(a, b) {
   return String(a.name || a.id).localeCompare(String(b.name || b.id));
 }
 
+function chaseLowDropClearDecision(candidate, previous = null, options = {}) {
+  if (!candidate?.explicitFreshDropLow) return { clear: false, pending: false, observation: null };
+  const visible = Boolean((candidate.visible || candidate.native || candidate.realtime || candidate.render) && !candidate.minimapOnly);
+  if (!visible) return { clear: true, pending: false, observation: null };
+  const nowMs = Number(options.nowMs || Date.now()) || Date.now();
+  const graceMs = Math.max(0, Number(options.visibleGraceMs ?? 1500) || 0);
+  const since = Number(previous?.since || nowMs) || nowMs;
+  const observation = {
+    id: String(candidate.id || ''),
+    since,
+    lastAt: nowMs,
+    drop: chaseDropValue(candidate)
+  };
+  const clear = graceMs <= 0 || nowMs - since >= graceMs;
+  return { clear, pending: !clear && graceMs > 0, observation };
+}
+
 function decorateChaseTargets(state, candidates, options = {}) {
   const nowMs = Number(options.nowMs || Date.now()) || Date.now();
   const staleMs = Math.max(1000, Number(options.staleMs || 15000) || 15000);
@@ -362,6 +379,7 @@ module.exports = {
   chaseTargetId,
   chaseTargetName,
   chaseTargetPersistenceRecord,
+  chaseLowDropClearDecision,
   chooseChaseTarget,
   decorateChaseTargets,
   normalizeChaseCandidate,
