@@ -36,6 +36,9 @@ const {
   createControlLoginRuntime
 } = require('../browser/runtime/control-login-runtime');
 const {
+  createLoginPointSafetyRuntime
+} = require('../browser/runtime/login-point-safety-runtime');
+const {
   createReloginGateRuntime
 } = require('../browser/runtime/relogin-gate-runtime');
 const {
@@ -10063,6 +10066,45 @@ async function runSelfTest() {
         ].map(String).join('|');
       })(),
       want: 'true|#joinBtn|1|0|bot login started'
+    },
+    {
+      name: 'login point safety streak resets on new page load',
+      got: (() => {
+        const storage = createMapStorage(new Map([
+          ['graspRatLoginPointSafety', JSON.stringify({
+            point: { x: 100, y: 200, userId: 28886, at: 1000, loginAt: 900, source: 'post-login-self' },
+            streak: 3,
+            required: 3,
+            lastSampleAt: 2000,
+            lastOkAt: 2000,
+            lastDanger: { reason: 'old-danger' },
+            movement: { 'id:42': { x: 120, y: 220, at: 1900 } },
+            pageLoadAt: 111
+          })]
+        ]));
+        const runtime = createLoginPointSafetyRuntime({
+          bot: { globalState: { entities: [] } },
+          cfg: { loginPointSafetySuccessRequired: 3 },
+          storage,
+          loginPointSafetyKey: 'graspRatLoginPointSafety',
+          pageLoadAt: () => 222
+        });
+        const status = runtime.loginPointSafetyStatus(3000);
+        const stored = JSON.parse(storage.getItem('graspRatLoginPointSafety') || '{}');
+        return [
+          status.hasPoint,
+          status.streak,
+          status.required,
+          status.satisfied,
+          status.point?.x,
+          stored.pageLoadAt,
+          stored.streak,
+          stored.lastOkAt,
+          stored.lastDanger === null,
+          Object.keys(stored.movement || {}).length
+        ].map(String).join('|');
+      })(),
+      want: 'true|0|3|false|100|222|0|0|true|0'
     },
     {
       name: 'forced stale-session auto login prefers visible login control over page global',

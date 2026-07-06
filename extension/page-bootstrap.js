@@ -3,7 +3,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.1.54';
+  const BOOTSTRAP_VERSION = '0.1.55';
   const BOOTSTRAP_OWNER = 'extension';
   const REPOSITORY_URL = 'https://github.com/ZeroJehovah/grasp-rat-bot';
   const LOADER_UPDATE_URL = 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/extension/page-bootstrap.js';
@@ -498,10 +498,40 @@
   function readStoredLoginPointSafety() {
     try {
       const raw = JSON.parse(localStorage.getItem(LOGIN_POINT_SAFETY_KEY) || 'null');
-      return raw && typeof raw === 'object' ? raw : null;
+      if (!raw || typeof raw !== 'object') return null;
+      return resetStoredLoginPointSafetyForCurrentPage(raw);
     } catch (_) {
       return null;
     }
+  }
+
+  function currentPageLoadAt() {
+    const n = Number(typeof performance !== 'undefined' ? performance.timeOrigin : 0);
+    return Number.isFinite(n) && n > 0 ? Math.round(n) : 0;
+  }
+
+  function resetStoredLoginPointSafetyForCurrentPage(stored) {
+    const pageLoadAt = currentPageLoadAt();
+    if (!pageLoadAt || Number(stored.pageLoadAt || 0) === pageLoadAt) return stored;
+    const next = {
+      ...stored,
+      streak: 0,
+      lastSampleAt: 0,
+      lastOkAt: 0,
+      lastUnsafeAt: 0,
+      lastErrorAt: 0,
+      lastError: '',
+      lastTick: 0,
+      lastDanger: null,
+      movement: {},
+      pageLoadAt,
+      pageLoadResetAt: Date.now(),
+      pageLoadResetReason: 'page-load'
+    };
+    try {
+      localStorage.setItem(LOGIN_POINT_SAFETY_KEY, JSON.stringify(next));
+    } catch (_) {}
+    return next;
   }
 
   function bootstrapLoginPointSafetyStatus(status = getBotStatus()) {
