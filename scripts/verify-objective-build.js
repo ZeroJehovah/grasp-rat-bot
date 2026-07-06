@@ -308,6 +308,17 @@ function assertBootstrapLoginPointGateAfterNeededCheck(text, label) {
   assert(gateIndex > noLoginReturnIndex, `${label} login-point safety gate runs before login is needed`);
 }
 
+function assertBootstrapLoginControlBeforeGlobal(text, label) {
+  const body = functionBody(text, 'maybeStartGameLogin');
+  const finderBody = functionBody(text, 'findGameLoginControl');
+  assert(finderBody.includes("direct.dataset.graspRatNativeLoginHidden === 'true'"), `${label} does not allow hidden native join control`);
+  assert(finderBody.includes("el.id !== INLINE_LOGIN_BUTTON_ID"), `${label} does not skip bot-owned inline login proxy`);
+  const controlClickIndex = body.indexOf('if (loginControl) {');
+  const globalLoginIndex = body.indexOf("} else if (typeof startLoginFn === 'function') {");
+  assert(controlClickIndex >= 0, `${label} missing login-control click branch`);
+  assert(globalLoginIndex > controlClickIndex, `${label} tries page-global login before native login control`);
+}
+
 function assertProfitOpportunityRuntimeSmoke() {
   const { createProfitOpportunityRuntime } = require(path.join(ROOT, 'src/browser/runtime/profit-opportunity-runtime'));
   const runtime = createProfitOpportunityRuntime({
@@ -1307,6 +1318,23 @@ async function main() {
   check('bootstrap auto-login only gates login-point safety when login is needed', () => {
     assertBootstrapLoginPointGateAfterNeededCheck(userscriptText, 'userscript');
     assertBootstrapLoginPointGateAfterNeededCheck(extensionBootstrapText, 'extension');
+  });
+
+  check('login start paths prefer native controls over page globals', () => {
+    assert(runtimeControlLoginSource.includes("el.id === 'grasp-rat-bot-inline-login'"), 'control login finder does not recognize bot-owned inline login proxy');
+    assert(runtimeControlLoginSource.includes("direct.dataset?.graspRatNativeLoginHidden === 'true'"), 'control login finder does not allow hidden native join control');
+    assert(runtimeControlLoginSource.includes('!isBotOwnedLoginControl(el)'), 'control login finder does not skip bot-owned inline login proxy');
+    const leaveBody = functionBody(runtimeLeaveFlowSource, 'maybeStartAutoLogin');
+    const preferControlIndex = leaveBody.indexOf('const preferLoginControl = Boolean(loginControl && !hasAliveSelf);');
+    const rawGlobalIndex = leaveBody.indexOf("rawStartLinuxDoLoginCandidate = manualOverride");
+    const controlClickIndex = leaveBody.indexOf('if (preferLoginControl) {');
+    const globalLoginIndex = leaveBody.indexOf("} else if (typeof startLoginFn === 'function') {");
+    assert(preferControlIndex >= 0, 'auto-login no longer prefers login control for manual override');
+    assert(rawGlobalIndex >= 0, 'auto-login raw global lookup missing');
+    assert(controlClickIndex > rawGlobalIndex, 'auto-login control click branch not after login function setup');
+    assert(globalLoginIndex > controlClickIndex, 'auto-login tries page-global login before native login control');
+    assertBootstrapLoginControlBeforeGlobal(userscriptText, 'userscript');
+    assertBootstrapLoginControlBeforeGlobal(extensionBootstrapText, 'extension');
   });
 
   check('userscript metadata version matches runtime constant', () => {

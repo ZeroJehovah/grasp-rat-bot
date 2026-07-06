@@ -33,6 +33,9 @@ const {
   createLeaveFlowRuntime
 } = require('../browser/runtime/leave-flow-runtime');
 const {
+  createControlLoginRuntime
+} = require('../browser/runtime/control-login-runtime');
+const {
   createReloginGateRuntime
 } = require('../browser/runtime/relogin-gate-runtime');
 const {
@@ -9946,6 +9949,120 @@ async function runSelfTest() {
         ].map(String).join('|');
       })(),
       want: 'true|#joinBtn|false|false|1|0|bot login started'
+    },
+    {
+      name: 'login control finder prefers hidden native join over inline proxy',
+      got: (() => {
+        const previousDocument = global.document;
+        const nativeJoin = {
+          id: 'joinBtn',
+          dataset: { graspRatNativeLoginHidden: 'true' },
+          matches: selector => String(selector || '').includes('#joinBtn')
+        };
+        const inlineProxy = {
+          id: 'grasp-rat-bot-inline-login',
+          dataset: {},
+          matches: () => false,
+          closest: () => inlineProxy
+        };
+        const oauthButton = {
+          id: 'oauthButton',
+          dataset: {},
+          matches: () => false
+        };
+        try {
+          global.document = {
+            querySelector: selector => (String(selector || '').includes('#joinBtn') ? nativeJoin : null),
+            querySelectorAll: () => [inlineProxy, oauthButton]
+          };
+          const runtime = createControlLoginRuntime({
+            bot: { loginSnapshotGate: {} },
+            cfg: {},
+            storage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
+            isVisible: el => el === inlineProxy || el === oauthButton,
+            controlText: el => (el === oauthButton ? 'LinuxDO 登录' : '立即登录'),
+            loginPointSafetyStatus: () => ({ satisfied: true }),
+            loginSnapshotSuccessRequiredCore: () => 0
+          });
+          const found = runtime.findLoginControl();
+          const inlineEventControl = runtime.nativeLoginEventControl({ target: inlineProxy });
+          return [
+            found === nativeJoin,
+            found?.id,
+            inlineEventControl === null
+          ].map(String).join('|');
+        } finally {
+          global.document = previousDocument;
+        }
+      })(),
+      want: 'true|joinBtn|true'
+    },
+    {
+      name: 'manual force login prefers native login control over raw global',
+      got: (async () => {
+        const data = new Map();
+        const storage = {
+          getItem: key => (data.has(key) ? data.get(key) : null),
+          setItem: (key, value) => data.set(key, String(value)),
+          removeItem: key => data.delete(key)
+        };
+        const button = {
+          id: 'joinBtn',
+          tagName: 'BUTTON',
+          clickCount: 0,
+          click() {
+            this.clickCount += 1;
+          }
+        };
+        const botState = { control: {}, exitAudit: {}, importantLogging: {}, lastLoginAt: 0 };
+        let startCalls = 0;
+        const runtime = createLeaveFlowRuntime({
+          bot: botState,
+          cfg: { ...cfg, autoLogin: true, dryRun: false, once: false, loginCooldownMs: 5000, postLoginGraceMs: 45000 },
+          storage,
+          pageGlobal: {},
+          loginSuppressKey: 'graspRatLoginSuppressUntil',
+          loginSuppressReasonKey: 'graspRatLoginSuppressReason',
+          getCurrentUserId: () => 28886,
+          getSessionToken: () => '',
+          getNativeControl: () => null,
+          hasNativeGameSession: () => false,
+          findLoginControl: () => button,
+          hasLoginRequiredText: () => false,
+          getSelf: () => null,
+          syncPausedFromPage: () => false,
+          exitAuditFlushPending: () => false,
+          importantSessionEndFlushPending: () => false,
+          readPageGlobal: name => (name === '__graspRatBotRawStartLinuxDoLogin' || name === 'startLinuxDoLogin' ? (() => { startCalls += 1; }) : null),
+          installPageGlobal: () => {},
+          loginSuppressRemainingMs: () => 0,
+          ensureLoginSnapshotGate: async () => ({ satisfied: true }),
+          loginSnapshotGateAllowsLogin: gate => Boolean(gate.satisfied),
+          setLoginSuppress: (reason, ms) => {
+            const until = Date.now() + ms;
+            storage.setItem('graspRatLoginSuppressUntil', String(until));
+            storage.setItem('graspRatLoginSuppressReason', reason);
+            return until;
+          },
+          controlText: () => '立即登录',
+          isAlive: value => Boolean(value?.hp > 0)
+        });
+        const result = await runtime.maybeStartAutoLogin('sidebar immediate login', {
+          force: true,
+          manual: true,
+          manualOverride: true,
+          ignoreSuppress: true,
+          ignoreLoginCooldown: true
+        });
+        return [
+          result?.attempted,
+          result?.method,
+          button.clickCount,
+          startCalls,
+          data.get('graspRatLoginSuppressReason')
+        ].map(String).join('|');
+      })(),
+      want: 'true|#joinBtn|1|0|bot login started'
     },
     {
       name: 'forced stale-session auto login prefers visible login control over page global',

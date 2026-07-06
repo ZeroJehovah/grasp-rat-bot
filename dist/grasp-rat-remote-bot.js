@@ -12,7 +12,7 @@
   var define_GRASP_RAT_RUNTIME_CONFIG_default;
   var init_define_GRASP_RAT_RUNTIME_CONFIG = __esm({
     "<define:__GRASP_RAT_RUNTIME_CONFIG__>"() {
-      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.582" };
+      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.583" };
     }
   });
 
@@ -8478,10 +8478,13 @@
         const BOT_KEY = botKey;
         const LOGIN_SUPPRESS_KEY = loginSuppressKey;
         const LOGIN_SUPPRESS_REASON_KEY = loginSuppressReasonKey;
+        function isBotOwnedLoginControl(el) {
+          return Boolean(el && el.id === "grasp-rat-bot-inline-login");
+        }
         function findLoginControl() {
           const direct = document.querySelector('#joinBtn, #loginBtn, [data-testid="login"], [data-testid="join"]');
-          if (direct && isVisible(direct)) return direct;
-          const candidates = Array.from(document.querySelectorAll('a, button, input[type="submit"], input[type="button"], [role="button"]')).filter(isVisible);
+          if (direct && (isVisible(direct) || direct.dataset?.graspRatNativeLoginHidden === "true")) return direct;
+          const candidates = Array.from(document.querySelectorAll('a, button, input[type="submit"], input[type="button"], [role="button"]')).filter((el) => isVisible(el) && !isBotOwnedLoginControl(el));
           return candidates.find((el) => {
             const text = controlText(el);
             if (/leave|logout|sign out|cancel|退出|离开|取消/i.test(text)) return false;
@@ -8702,7 +8705,7 @@
         function nativeLoginEventControl(event) {
           const raw = event?.submitter || event?.target || null;
           const el = raw?.closest?.('#joinBtn, #loginBtn, [data-testid="login"], [data-testid="join"], a, button, input[type="submit"], input[type="button"], [role="button"]') || null;
-          if (!el) return null;
+          if (!el || isBotOwnedLoginControl(el)) return null;
           if (el.matches?.('#joinBtn, #loginBtn, [data-testid="login"], [data-testid="join"]')) return el;
           const text = controlText(el);
           if (/leave|logout|sign out|cancel|退出|离开|取消/i.test(text)) return null;
@@ -11142,7 +11145,7 @@
             const rawStartLinuxDoLogin = typeof rawStartLinuxDoLoginCandidate === "function" ? rawStartLinuxDoLoginCandidate : null;
             const startLinuxDoLoginFn = readPageGlobal("startLinuxDoLogin", null, pageGlobal);
             const startLoginFn = rawStartLinuxDoLogin || (typeof startLinuxDoLoginFn === "function" ? startLinuxDoLoginFn : null);
-            const preferLoginControl = Boolean(!manualOverride && loginControl && !hasAliveSelf);
+            const preferLoginControl = Boolean(loginControl && !hasAliveSelf);
             if (manualOverride) markManualLoginBypass(String(reason || "manual login"));
             if (preferLoginControl) {
               loginControl.click();
