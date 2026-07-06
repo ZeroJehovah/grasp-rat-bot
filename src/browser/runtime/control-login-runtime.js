@@ -41,9 +41,36 @@ function createControlLoginRuntime(runtime = {}) {
       }) || null;
     }
 
+    function hasLoginRequiredTextValue(value) {
+      return /login required|please login|please sign in|not logged in|未登录|请先登录|请登录|需要登录/i.test(String(value || ''));
+    }
+
     function hasLoginRequiredText() {
-      const text = (document.body?.innerText || '').slice(0, 5000);
-      return /login required|please login|please sign in|not logged in|未登录|请先登录|请登录|需要登录/i.test(text);
+      const bodyText = (document.body?.innerText || '').slice(0, 5000);
+      if (hasLoginRequiredTextValue(bodyText)) return true;
+      for (const selector of ['#chat', '#chatLog', '#chatMessages', '.chat', '.chat-log', '.chat-messages', '.messages', '.side']) {
+        try {
+          const text = Array.from(document.querySelectorAll(selector))
+            .map(el => String(el?.innerText || el?.textContent || ''))
+            .join('\n')
+            .slice(-5000);
+          if (hasLoginRequiredTextValue(text)) return true;
+        } catch (_) {}
+      }
+      const messages = Array.isArray(bot?.globalState?.messages) ? bot.globalState.messages.slice(-30) : [];
+      for (const message of messages) {
+        const text = typeof message === 'string'
+          ? message
+          : [
+            message?.text,
+            message?.message,
+            message?.content,
+            message?.body,
+            message?.type
+          ].filter(Boolean).join(' ');
+        if (hasLoginRequiredTextValue(text)) return true;
+      }
+      return false;
     }
 
     function setLoginSuppress(reason, ms = cfg.postLoginGraceMs) {

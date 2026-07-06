@@ -435,7 +435,7 @@ function createSessionRecoveryRuntime(runtime = {}) {
     const storedSnapshotExitRecovery = activeNoSelfSnapshotRecoveryState(localStorage, userId, { key: NO_SELF_SNAPSHOT_RECOVERY_KEY });
     const memorySnapshotExitRecovery = storedSnapshotExitRecovery ? null : normalizeNoSelfSnapshotRecoveryState(bot.noSelfSnapshotRecovery);
     const snapshotExitRecovery = storedSnapshotExitRecovery || (memorySnapshotExitRecovery && (!memorySnapshotExitRecovery.userId || !userId || memorySnapshotExitRecovery.userId === userId) ? memorySnapshotExitRecovery : null);
-    const hasSessionEvidence = Boolean(!snapshotExitRecovery && userId && !loginRequired && (
+    const staleSessionEvidence = Boolean(userId && (
       control?.hasToken
       || controlHasNativeGameSession(control)
       || snapshotSelf.present
@@ -443,6 +443,9 @@ function createSessionRecoveryRuntime(runtime = {}) {
       || Number.isFinite(wsReadyStateNumber(control?.nativeWsReadyState))
       || Number.isFinite(wsReadyStateNumber(control?.wsReadyState))
     ));
+    const loginRequiredAuthBlocked = Boolean(!snapshotExitRecovery && loginRequired && staleSessionEvidence);
+    const hasSessionEvidence = Boolean(!snapshotExitRecovery && userId
+      && (loginRequiredAuthBlocked || (!loginRequired && staleSessionEvidence)));
     const reconnectChurn = Boolean(control?.nativeReconnectChurn);
     const sessionMismatch = Boolean(!snapshotExitRecovery && controlHasAuthoritativeSessionMismatch(control, snapshotSelf));
     const ageMs = Math.max(0, Math.round(Number(noSelfAgeMs || 0) || 0));
@@ -464,17 +467,17 @@ function createSessionRecoveryRuntime(runtime = {}) {
       )
     );
     const mismatchTimedOut = Boolean(sessionMismatch && ageMs >= mismatchLeaveMs);
-    const shouldLeave = Boolean(hasSessionEvidence && (reconnectChurn || timedOut || mismatchTimedOut));
-    const reason = reconnectChurn
+    const shouldLeave = Boolean(loginRequiredAuthBlocked || (hasSessionEvidence && (reconnectChurn || timedOut || mismatchTimedOut)));
+    const reason = loginRequiredAuthBlocked ? 'game session login required missing self' : (reconnectChurn
       ? 'websocket reconnect churn missing self'
-      : (mismatchTimedOut ? 'game session auth mismatch missing self' : 'game session missing self');
+      : (mismatchTimedOut ? 'game session auth mismatch missing self' : 'game session missing self'));
     return {
       active: hasSessionEvidence,
       shouldLeave,
       reason,
-      displayReason: reconnectChurn
+      displayReason: loginRequiredAuthBlocked ? '旧登录态已被服务端拒绝，清理本地登录状态后重登' : (reconnectChurn
         ? '已登录但自身实体不可见，网络连接反复重连，正在退出'
-        : (mismatchTimedOut ? '界面显示未登录但原生会话仍在线，自身实体不可见，正在重置会话' : '已登录但自身实体长期不可见，正在退出'),
+        : (mismatchTimedOut ? '界面显示未登录但原生会话仍在线，自身实体不可见，正在重置会话' : '已登录但自身实体长期不可见，正在退出')),
       userId: userId || null,
       ageMs,
       leaveMs,
@@ -490,6 +493,7 @@ function createSessionRecoveryRuntime(runtime = {}) {
       } : null,
       wsOfflineish,
       loginRequired,
+      loginRequiredAuthBlocked,
       control: control ? {
         wsOpen: Boolean(control.wsOpen),
         rawWsOpen: Boolean(control.rawWsOpen),
