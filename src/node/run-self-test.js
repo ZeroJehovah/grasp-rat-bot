@@ -9883,6 +9883,68 @@ async function runSelfTest() {
       want: 'true|false|suppressed|bot login started|true|false|true|0|0'
     },
     {
+      name: 'no-self auto login prefers visible login control over page global',
+      got: (async () => {
+        const data = new Map();
+        const storage = {
+          getItem: key => (data.has(key) ? data.get(key) : null),
+          setItem: (key, value) => data.set(key, String(value)),
+          removeItem: key => data.delete(key)
+        };
+        const button = {
+          id: 'joinBtn',
+          tagName: 'BUTTON',
+          clickCount: 0,
+          click() {
+            this.clickCount += 1;
+          }
+        };
+        const botState = { control: {}, exitAudit: {}, importantLogging: {}, lastLoginAt: 0 };
+        let startCalls = 0;
+        const runtime = createLeaveFlowRuntime({
+          bot: botState,
+          cfg: { ...cfg, autoLogin: true, dryRun: false, once: false, loginCooldownMs: 5000, postLoginGraceMs: 45000 },
+          storage,
+          pageGlobal: {},
+          loginSuppressKey: 'graspRatLoginSuppressUntil',
+          loginSuppressReasonKey: 'graspRatLoginSuppressReason',
+          getCurrentUserId: () => 28886,
+          getSessionToken: () => '',
+          getNativeControl: () => null,
+          hasNativeGameSession: () => false,
+          findLoginControl: () => button,
+          hasLoginRequiredText: () => false,
+          getSelf: () => null,
+          syncPausedFromPage: () => false,
+          exitAuditFlushPending: () => false,
+          importantSessionEndFlushPending: () => false,
+          readPageGlobal: name => (name === 'startLinuxDoLogin' ? (() => { startCalls += 1; }) : null),
+          loginSuppressRemainingMs: () => 0,
+          ensureLoginSnapshotGate: async () => ({ satisfied: true }),
+          loginSnapshotGateAllowsLogin: gate => Boolean(gate.satisfied),
+          setLoginSuppress: (reason, ms) => {
+            const until = Date.now() + ms;
+            storage.setItem('graspRatLoginSuppressUntil', String(until));
+            storage.setItem('graspRatLoginSuppressReason', reason);
+            return until;
+          },
+          controlText: () => '立即登录',
+          isAlive: value => Boolean(value?.hp > 0)
+        });
+        const result = await runtime.maybeStartAutoLogin('no-self');
+        return [
+          result?.attempted,
+          result?.method,
+          result?.hasNativeSession,
+          result?.effectiveHasNativeSession,
+          button.clickCount,
+          startCalls,
+          data.get('graspRatLoginSuppressReason')
+        ].map(String).join('|');
+      })(),
+      want: 'true|#joinBtn|false|false|1|0|bot login started'
+    },
+    {
       name: 'no-self leave 403 recovery does not create pending exit retry',
       got: (async () => {
         const botState = { control: {}, exitAudit: {}, importantLogging: {}, lastLoginAt: 0 };

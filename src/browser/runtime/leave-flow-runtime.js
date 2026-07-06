@@ -560,8 +560,10 @@ function createLeaveFlowRuntime(runtime = {}) {
         : null;
       const startLinuxDoLoginFn = readPageGlobal('startLinuxDoLogin', null, pageGlobal);
       const startLoginFn = rawStartLinuxDoLogin || (typeof startLinuxDoLoginFn === 'function' ? startLinuxDoLoginFn : null);
+      const preferLoginControl = Boolean(!manualOverride && loginControl && !hasAliveSelf
+        && (ignoreStalePageSession || loginRequired || !hasPageSession));
       if (manualOverride) markManualLoginBypass(String(reason || 'manual login'));
-      if (ignoreStalePageSession && loginControl) {
+      if (preferLoginControl) {
         loginControl.click();
         detail.attempted = true;
         detail.method = loginControl.id ? '#' + loginControl.id : (controlText(loginControl) || loginControl.tagName.toLowerCase());
