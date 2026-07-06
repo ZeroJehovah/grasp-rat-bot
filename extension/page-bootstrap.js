@@ -3,7 +3,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.1.53';
+  const BOOTSTRAP_VERSION = '0.1.54';
   const BOOTSTRAP_OWNER = 'extension';
   const REPOSITORY_URL = 'https://github.com/ZeroJehovah/grasp-rat-bot';
   const LOADER_UPDATE_URL = 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/extension/page-bootstrap.js';
@@ -3246,7 +3246,8 @@
   function findGameLoginControl() {
     const direct = document.querySelector('#joinBtn, #loginBtn, [data-testid="login"], [data-testid="join"]');
     if (direct && (visible(direct) || direct.dataset.graspRatNativeLoginHidden === 'true')) return direct;
-    const candidates = Array.from(document.querySelectorAll('a, button, input[type="submit"], input[type="button"], [role="button"]')).filter(visible);
+    const candidates = Array.from(document.querySelectorAll('a, button, input[type="submit"], input[type="button"], [role="button"]'))
+      .filter(el => visible(el) && el.id !== INLINE_LOGIN_BUTTON_ID);
     return candidates.find(el => {
       const text = controlText(el);
       if (/leave|logout|sign out|cancel|退出|离开|取消/i.test(text)) return false;
@@ -3317,14 +3318,14 @@
     };
     try {
       if (force) markManualLoginBypass(reason);
-      if (typeof startLoginFn === 'function') {
-        const result = startLoginFn.call(window);
-        if (result && typeof result.then === 'function') await result;
-        detail.method = rawStartLinuxDoLogin ? 'rawStartLinuxDoLogin' : 'startLinuxDoLogin';
-      } else if (loginControl) {
+      if (loginControl) {
         if (force) markManualLoginBypass(reason);
         loginControl.click();
         detail.method = loginControl.id ? `#${loginControl.id}` : controlText(loginControl) || loginControl.tagName.toLowerCase();
+      } else if (typeof startLoginFn === 'function') {
+        const result = startLoginFn.call(window);
+        if (result && typeof result.then === 'function') await result;
+        detail.method = rawStartLinuxDoLogin ? 'rawStartLinuxDoLogin' : 'startLinuxDoLogin';
       } else {
         detail.error = 'login control not found';
       }

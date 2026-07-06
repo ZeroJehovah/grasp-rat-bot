@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Grasp Rat Bot Bootstrap
 // @namespace    https://github.com/grasp-rat-bot
-// @version      0.4.74
+// @version      0.4.75
 // @description  Loads, hot-updates, and supervises the Grasp Rat bot from a signed manifest.
 // @match        https://grasp-rat-game.h-e.top/*
 // @match        https://connect.linux.do/oauth2/authorize*
@@ -27,7 +27,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.4.74';
+  const BOOTSTRAP_VERSION = '0.4.75';
   const BOOTSTRAP_OWNER = 'tampermonkey';
   const REPOSITORY_URL = 'https://github.com/ZeroJehovah/grasp-rat-bot';
   const USERSCRIPT_UPDATE_URL = 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/userscript/grasp-rat-bootstrap.user.js';
@@ -3433,7 +3433,7 @@
     const direct = document.querySelector('#joinBtn, #loginBtn, [data-testid="login"], [data-testid="join"]');
     if (direct && (visible(direct) || direct.dataset.graspRatNativeLoginHidden === 'true')) return direct;
     const candidates = Array.from(document.querySelectorAll('a, button, input[type="submit"], input[type="button"], [role="button"]'))
-      .filter(visible);
+      .filter(el => visible(el) && el.id !== INLINE_LOGIN_BUTTON_ID);
     return candidates.find(el => {
       const text = controlText(el);
       if (/leave|logout|sign out|cancel|退出|离开|取消/i.test(text)) return false;
@@ -3504,14 +3504,14 @@
     };
     try {
       if (force) markManualLoginBypass(reason);
-      if (typeof startLoginFn === 'function') {
-        const result = startLoginFn.call(unsafeWindow);
-        if (result && typeof result.then === 'function') await result;
-        detail.method = rawStartLinuxDoLogin ? 'rawStartLinuxDoLogin' : 'startLinuxDoLogin';
-      } else if (loginControl) {
+      if (loginControl) {
         if (force) markManualLoginBypass(reason);
         loginControl.click();
         detail.method = loginControl.id ? `#${loginControl.id}` : controlText(loginControl) || loginControl.tagName.toLowerCase();
+      } else if (typeof startLoginFn === 'function') {
+        const result = startLoginFn.call(unsafeWindow);
+        if (result && typeof result.then === 'function') await result;
+        detail.method = rawStartLinuxDoLogin ? 'rawStartLinuxDoLogin' : 'startLinuxDoLogin';
       } else {
         detail.error = 'login control not found';
       }
