@@ -16,6 +16,7 @@ const {
 } = require('./exit-relogin');
 const {
   DEFAULT_NO_SELF_SNAPSHOT_RECOVERY_KEY,
+  normalizeNoSelfSnapshotRecoveryState,
   activeNoSelfSnapshotRecoveryState: activeNoSelfSnapshotRecoveryStateCore,
   clearNoSelfSnapshotRecoveryState: clearNoSelfSnapshotRecoveryStateCore
 } = require('./no-self-snapshot-recovery-state');
@@ -358,7 +359,9 @@ function createLeaveFlowRuntime(runtime = {}) {
     const loginRequired = hasLoginRequiredText();
     const self = getSelf();
     const hasAliveSelf = Boolean(self && isAlive(self));
-    const snapshotExitRecovery = activeNoSelfSnapshotRecoveryStateCore(localStorage, userId, { key: NO_SELF_SNAPSHOT_RECOVERY_KEY });
+    const storedSnapshotExitRecovery = activeNoSelfSnapshotRecoveryStateCore(localStorage, userId, { key: NO_SELF_SNAPSHOT_RECOVERY_KEY });
+    const memorySnapshotExitRecovery = storedSnapshotExitRecovery ? null : normalizeNoSelfSnapshotRecoveryState(bot.noSelfSnapshotRecovery);
+    const snapshotExitRecovery = storedSnapshotExitRecovery || (memorySnapshotExitRecovery && (!memorySnapshotExitRecovery.userId || !userId || memorySnapshotExitRecovery.userId === userId) ? memorySnapshotExitRecovery : null);
     if (snapshotExitRecovery && hasAliveSelf) clearNoSelfSnapshotRecoveryStateCore(localStorage, { key: NO_SELF_SNAPSHOT_RECOVERY_KEY, reason: 'self restored before login' });
     const ignoreStalePageSession = Boolean(snapshotExitRecovery && !hasAliveSelf);
     const shouldIgnoreSuppress = Boolean(ignoreSuppress || ignoreStalePageSession);

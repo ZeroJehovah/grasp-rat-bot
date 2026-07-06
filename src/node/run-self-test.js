@@ -9205,6 +9205,14 @@ async function runSelfTest() {
             closed = true;
           }
         };
+        const nativeState = {
+          currentUserId: 28886,
+          sessionToken: 'stale-token',
+          wsOpen: true,
+          ws: nativeWs,
+          entities: [{ user_id: 28886 }],
+          reconnectTimer: 7
+        };
         const input = {
           value: '',
           dispatchEvent: () => {}
@@ -9225,7 +9233,7 @@ async function runSelfTest() {
             cfg,
             storage,
             getCurrentUserId: () => 28886,
-            getNativeControl: () => ({ ws: nativeWs }),
+            getNativeControl: () => ({ ws: nativeWs, state: nativeState }),
             snapshotDataAgeMs: () => 1000,
             snapshotSelfFreshEnough: () => true,
             summarizeSelf: entity => ({ id: entity.user_id }),
@@ -9248,6 +9256,12 @@ async function runSelfTest() {
             closed,
             Boolean(result.recoveryMarker),
             data.has('graspRatNoSelfSnapshotRecovery'),
+            nativeState.currentUserId,
+            nativeState.sessionToken,
+            nativeState.wsOpen,
+            nativeState.ws,
+            nativeState.entities.length,
+            nativeState.reconnectTimer,
             botState.control.hasToken,
             botState.pendingExit,
             botState.offlineSince,
@@ -9257,7 +9271,7 @@ async function runSelfTest() {
           global.document = oldDocument;
         }
       })(),
-      want: 'true|true|true|28886|true|true|true|true|true|false|null|0|true'
+      want: 'true|true|true|28886|true|true|true|true|true|0||false|null|0|0|false|null|0|true'
     },
     {
       name: 'snapshot no-self recovery marker suppresses repeat leave state',
@@ -9278,6 +9292,48 @@ async function runSelfTest() {
         };
         const runtime = createSessionRecoveryRuntime({
           bot: { globalState: { entities: [], snapshotRefreshedAt: 101000 } },
+          cfg: { ...cfg, gameSessionNoSelfLeaveMs: 30000, loginCooldownMs: 5000 },
+          storage,
+          getCurrentUserId: () => 28886,
+          snapshotDataAgeMs: () => 1000,
+          snapshotSelfFreshEnough: () => true,
+          hasLoginRequiredText: () => false,
+          findLoginControl: () => null,
+          isOfflineishWsReadyState: () => false
+        });
+        const state = runtime.noSelfGameSessionExitState({
+          currentUserId: 28886,
+          hasToken: false,
+          connecting: true,
+          wsReadyState: 0,
+          nativeWsReadyState: 0,
+          transport: 'native-page'
+        }, 45000);
+        return [
+          state.active,
+          state.shouldLeave,
+          state.sessionMismatch,
+          Boolean(state.snapshotExitRecovery),
+          state.snapshotExitRecovery?.userId
+        ].map(String).join('|');
+      })(),
+      want: 'false|false|false|true|28886'
+    },
+    {
+      name: 'snapshot no-self in-memory recovery marker suppresses repeat leave state',
+      got: (() => {
+        const t = Date.now();
+        const storage = { getItem: () => null, setItem: () => {}, removeItem: () => {} };
+        const runtime = createSessionRecoveryRuntime({
+          bot: {
+            noSelfSnapshotRecovery: {
+              reason: 'snapshot-no-self-exit-confirmed',
+              userId: 28886,
+              requestedAt: t,
+              expiresAt: t + 60000
+            },
+            globalState: { entities: [], snapshotRefreshedAt: t }
+          },
           cfg: { ...cfg, gameSessionNoSelfLeaveMs: 30000, loginCooldownMs: 5000 },
           storage,
           getCurrentUserId: () => 28886,

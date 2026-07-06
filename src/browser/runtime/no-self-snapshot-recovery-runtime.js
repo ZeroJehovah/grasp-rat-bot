@@ -101,6 +101,92 @@ function createNoSelfSnapshotRecoveryRuntime(runtime = {}) {
     }
   }
 
+  function removeStorageKeysMatching(store, pattern, prefix, removedKeys, storageErrors) {
+    try {
+      if (!store?.key || !store?.removeItem) return;
+      const keys = [];
+      for (let i = 0; i < Number(store.length || 0); i += 1) {
+        const key = store.key(i);
+        if (key && pattern.test(String(key))) keys.push(key);
+      }
+      for (const key of keys) removeStorageKey(store, key, prefix + key, removedKeys, storageErrors);
+    } catch (err) {
+      storageErrors.push({ key: prefix + String(pattern), error: err?.message || String(err) });
+    }
+  }
+
+  function clearNativePageSessionState(userId, reason = 'snapshot no-self exit confirmed') {
+    const detail = { attempted: false, hadState: false, clearedFields: [], clearedReconnectFields: [], closedNativeWs: false, error: '' };
+    try {
+      const native = getNativeControl();
+      const nativeState = native?.state || null;
+      const ws = native?.ws || nativeState?.ws || null;
+      detail.attempted = Boolean(native || nativeState || ws);
+      if (nativeState && typeof nativeState === 'object') {
+        detail.hadState = true;
+        for (const [key, value] of [
+          ['currentUserId', 0],
+          ['sessionToken', ''],
+          ['wsOpen', false],
+          ['ws', null]
+        ]) {
+          if (key in nativeState) {
+            nativeState[key] = value;
+            detail.clearedFields.push(key);
+          }
+        }
+        for (const key of ['entities', 'bullets', 'coinDrops', 'messages']) {
+          if (Array.isArray(nativeState[key])) {
+            nativeState[key] = [];
+            detail.clearedFields.push(key);
+          }
+        }
+        for (const key of Object.keys(nativeState)) {
+          if (!/reconnect/i.test(key)) continue;
+          const value = nativeState[key];
+          if (typeof value === 'number') {
+            try {
+              clearTimeout(value);
+              clearInterval(value);
+            } catch (_) {}
+            nativeState[key] = 0;
+            detail.clearedReconnectFields.push(key);
+          } else if (value && typeof value === 'object') {
+            nativeState[key] = null;
+            detail.clearedReconnectFields.push(key);
+          }
+        }
+      }
+      if (ws && isWsConnectingOrOpen(ws.readyState)) {
+        try {
+          ws.close();
+          detail.closedNativeWs = true;
+        } catch (err) {
+          detail.error = err?.message || String(err);
+        }
+      }
+      if (bot.control && typeof bot.control === 'object') {
+        bot.control.currentUserId = userId || bot.control.currentUserId || 0;
+        bot.control.hasToken = false;
+        bot.control.wsOpen = false;
+        bot.control.rawWsOpen = false;
+        bot.control.nativeWsOpen = false;
+        bot.control.connecting = false;
+        bot.control.wsReadyState = null;
+        bot.control.nativeWsReadyState = null;
+        bot.control.observedNativeWs = null;
+        bot.control.observedNativeWsReadyState = null;
+        bot.control.lastError = String(reason || 'snapshot no-self exit confirmed');
+        bot.control.nativeReconnectEvents = [];
+        bot.control.nativeReconnectChurn = false;
+        bot.control.nativeReconnectEventCount = 0;
+      }
+    } catch (err) {
+      detail.error = err?.message || String(err);
+    }
+    return detail;
+  }
+
   function readNoSelfSnapshotRecoveryState(t = Date.now()) {
     const state = readNoSelfSnapshotRecoveryStateCore(localStorage, { key: NO_SELF_SNAPSHOT_RECOVERY_KEY, now: t });
     bot.noSelfSnapshotRecovery = state;
@@ -130,6 +216,8 @@ function createNoSelfSnapshotRecoveryRuntime(runtime = {}) {
       removeStorageKey(localStorage, key, key, removedKeys, storageErrors);
       removeStorageKey(browserSessionStorage, key, 'sessionStorage.' + key, removedKeys, storageErrors);
     }
+    removeStorageKeysMatching(localStorage, /^tmpGame/i, '', removedKeys, storageErrors);
+    removeStorageKeysMatching(browserSessionStorage, /^tmpGame/i, 'sessionStorage.', removedKeys, storageErrors);
     const markerResult = writeNoSelfSnapshotRecoveryState(localStorage, {
       reason: 'snapshot-no-self-exit-confirmed',
       userId,
@@ -144,31 +232,11 @@ function createNoSelfSnapshotRecoveryRuntime(runtime = {}) {
     });
     bot.noSelfSnapshotRecovery = markerResult.state;
     const preservedUserIdInput = preserveUserIdInput(userId);
-    let closedNativeWs = false;
-    let closeNativeWsError = '';
-    try {
-      const native = getNativeControl();
-      if (native?.ws && isWsConnectingOrOpen(native.ws.readyState)) {
-        native.ws.close();
-        closedNativeWs = true;
-      }
-    } catch (err) {
-      closeNativeWsError = err?.message || String(err);
-    }
-    if (bot.control && typeof bot.control === 'object') {
-      bot.control.currentUserId = userId || bot.control.currentUserId || 0;
-      bot.control.hasToken = false;
-      bot.control.wsOpen = false;
-      bot.control.nativeWsOpen = false;
-      bot.control.connecting = false;
-      bot.control.lastError = String(reason || 'snapshot no-self exit confirmed');
-      bot.control.nativeReconnectEvents = [];
-      bot.control.nativeReconnectChurn = false;
-      bot.control.nativeReconnectEventCount = 0;
-    }
+    const nativeSessionReset = clearNativePageSessionState(userId, reason);
     bot.pendingExit = null;
     clearPersistentPendingExitState();
     bot.offlineSince = 0;
+    bot.waitSince = Date.now();
     return {
       ...confirmation,
       clearedLocalSession: true,
@@ -178,9 +246,10 @@ function createNoSelfSnapshotRecoveryRuntime(runtime = {}) {
       storageErrors,
       recoveryMarker: markerResult.state,
       recoveryMarkerError: markerResult.error,
+      nativeSessionReset,
       preservedUserIdInput,
-      closedNativeWs,
-      closeNativeWsError,
+      closedNativeWs: Boolean(nativeSessionReset.closedNativeWs),
+      closeNativeWsError: nativeSessionReset.error,
       displayReason: confirmation.displayReason
     };
   }
@@ -204,10 +273,6 @@ function createNoSelfSnapshotRecoveryRuntime(runtime = {}) {
     };
     bot.lastOfflineLeaveResult = leaveResult;
     noteImportantSessionExit('snapshot-no-self-exit-confirmed', bot.lastSelf, Date.now(), { exit: leaveResult });
-    const reloadRequested = requestReload('snapshot confirmed no-self local session reset');
-    const blockedReload = reloadRequested === false
-      ? (bot.exitAudit?.lastBlockedReload || bot.importantLogging?.lastBlockedReload || null)
-      : null;
     return {
       kind: 'wait',
       reason: 'snapshot-no-self-exit-confirmed',
@@ -221,14 +286,8 @@ function createNoSelfSnapshotRecoveryRuntime(runtime = {}) {
       noSelfGameSession: noSelfExit,
       snapshotExitConfirmation: recovery,
       leave: leaveResult,
-      reloadRequested: Boolean(reloadRequested),
-      exitAuditFlush: reloadRequested === false ? bot.exitAudit?.lastBlockedReload || null : null,
-      importantLogFlush: reloadRequested === false ? bot.importantLogging?.lastBlockedReload || null : null,
-      displayReason: blockedReload
-        ? (bot.exitAudit?.lastBlockedReload
-          ? '等待退出日志发送完成，暂不刷新重登'
-          : '等待会话结束日志发送完成，暂不刷新重登')
-        : recovery.displayReason
+      reloadRequested: false,
+      displayReason: recovery.displayReason
     };
   }
 

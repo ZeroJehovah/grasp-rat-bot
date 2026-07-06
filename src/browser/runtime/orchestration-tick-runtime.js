@@ -610,7 +610,7 @@ function createOrchestrationTickRuntime(runtime = {}) {
 		        };
 	        updateBotPanel(bot.lastDecision);
 	        const loginPending = Boolean(login?.attempted || (login?.needed && !login?.error));
-	        if (!loginPending && Date.now() - bot.waitSince > cfg.reloadAfterNoSelfMs) {
+	        if (!loginPending && !noSelfExit?.snapshotExitRecovery && Date.now() - bot.waitSince > cfg.reloadAfterNoSelfMs) {
 	          requestReload('no self for too long');
         }
         if (cfg.once) bot.stop('once');
