@@ -359,6 +359,7 @@ function createControlFlowRuntime(runtime = {}) {
     noSelfSnapshotExitConfirmationState,
     clearNoSelfSnapshotLocalSession,
     clearNoSelfLocalSessionAfterLeave403,
+    clearNoSelfLocalSessionAfterConfirmedExit,
     handleNoSelfSnapshotExitRecovery,
     runNoSelfSnapshotExitRecovery
   } = createNoSelfSnapshotRecoveryRuntime({
@@ -483,7 +484,8 @@ function createControlFlowRuntime(runtime = {}) {
     reloginDelayForHpCore,
     clamp,
     scheduleClashLeaveRescueRetry: (...args) => scheduleClashLeaveRescueRetry(...args),
-    issueLeaveCommand: (...args) => issueLeaveCommand(...args)
+    issueLeaveCommand: (...args) => issueLeaveCommand(...args),
+    clearNoSelfLocalSessionAfterConfirmedExit: (...args) => clearNoSelfLocalSessionAfterConfirmedExit(...args)
   });
 
   const clashLeaveRescueRuntime = createClashLeaveRescueRuntime({

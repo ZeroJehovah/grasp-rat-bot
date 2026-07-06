@@ -471,6 +471,7 @@ async function main() {
   const runtimeClashLeaveRescueSource = readText('src/browser/runtime/clash-leave-rescue-runtime.js');
   const runtimeLeaveFlowSource = readText('src/browser/runtime/leave-flow-runtime.js');
   const runtimeSessionRecoverySource = readText('src/browser/runtime/session-recovery-runtime.js');
+  const runtimeNoSelfSnapshotRecoverySource = readText('src/browser/runtime/no-self-snapshot-recovery-runtime.js');
   const runtimeReloginGateSource = readText('src/browser/runtime/relogin-gate-runtime.js');
   const runtimeTargetWhitelistSource = readText('src/browser/runtime/target-whitelist.js');
   const runtimeStaminaStatusSource = readText('src/browser/runtime/stamina-status.js');
@@ -868,6 +869,9 @@ async function main() {
     assert(runtimePendingExitSource.includes('function pendingExitSkipNewLeave'), 'pending-exit skip body missing from module');
     assert(runtimePendingExitSource.includes('function rememberPendingExit'), 'pending-exit recording body missing from module');
     assert(runtimePendingExitSource.includes('function noteLeave403SnapshotProbe'), 'leave-403 snapshot probe body missing from pending-exit module');
+    assert(runtimePendingExitSource.includes('clearNoSelfLocalSessionAfterConfirmedExit'), 'pending-exit runtime does not clear stale no-self local sessions after confirmed exit');
+    assert(runtimeControlFlowSource.includes('clearNoSelfLocalSessionAfterConfirmedExit: (...args) => clearNoSelfLocalSessionAfterConfirmedExit(...args)'), 'control flow runtime does not pass confirmed no-self cleanup into pending-exit runtime');
+    assert(runtimeNoSelfSnapshotRecoverySource.includes('function clearNoSelfLocalSessionAfterConfirmedExit'), 'no-self snapshot recovery runtime missing confirmed-exit local-session cleanup');
     assert(runtimePendingExitSource.includes('async function handlePendingExit'), 'pending-exit handler body missing from module');
     assert(runtimeClashLeaveRescueSource.includes('function createClashLeaveRescueRuntime'), 'Clash leave rescue runtime factory missing');
     assert(runtimeClashLeaveRescueSource.includes('function scheduleClashLeaveRescueRetry'), 'Clash leave rescue retry body missing from module');

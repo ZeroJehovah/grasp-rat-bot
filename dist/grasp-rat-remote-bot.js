@@ -12,7 +12,7 @@
   var define_GRASP_RAT_RUNTIME_CONFIG_default;
   var init_define_GRASP_RAT_RUNTIME_CONFIG = __esm({
     "<define:__GRASP_RAT_RUNTIME_CONFIG__>"() {
-      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.576" };
+      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.577" };
     }
   });
 
@@ -8946,7 +8946,8 @@
           reloginDelayForHpCore = () => 0,
           clamp = (value, min, max) => Math.max(min, Math.min(max, value)),
           scheduleClashLeaveRescueRetry = () => false,
-          issueLeaveCommand = async (detail) => detail
+          issueLeaveCommand = async (detail) => detail,
+          clearNoSelfLocalSessionAfterConfirmedExit = () => null
         } = runtime;
         const localStorage2 = storage;
         const PENDING_EXIT_STATE_KEY = pendingExitStateKey;
@@ -9474,6 +9475,28 @@
           bot.leave403SnapshotRecovery.lastError = String(detail.error || detail.message || "");
           return false;
         }
+        function pendingNoSelfGameSession(pending, detail, state2 = null) {
+          if (pending?.scope !== "offline") return null;
+          return pending?.offlineSafety?.noSelfGameSession || detail?.offlineSafety?.noSelfGameSession || pending?.lastResult?.offlineSafety?.noSelfGameSession || state2?.noSelfGameSession || null;
+        }
+        function clearConfirmedNoSelfLocalSession(pending, detail, state2 = null) {
+          const noSelfExit = pendingNoSelfGameSession(pending, detail, state2);
+          if (!noSelfExit) return null;
+          const recovery = clearNoSelfLocalSessionAfterConfirmedExit(
+            summarizeControl(),
+            noSelfExit,
+            detail,
+            "pending exit no-self confirmed"
+          );
+          if (!recovery?.clearedLocalSession) return recovery || null;
+          detail.localSessionReset = recovery;
+          detail.noSelfSnapshotRecovery = recovery.recoveryMarker || null;
+          if (detail.exitConfirmation && typeof detail.exitConfirmation === "object") {
+            detail.exitConfirmation.localSessionReset = recovery;
+            detail.exitConfirmation.noSelfLocalSessionReset = true;
+          }
+          return recovery;
+        }
         function confirmPendingExit(pending, state2) {
           const t = Date.now();
           const detail = cloneForPendingExit(pending.lastResult || {}) || {};
@@ -9488,6 +9511,7 @@
           detail.exitConfirmed = true;
           detail.exitConfirmedAt = t;
           detail.exitConfirmation = state2 || null;
+          clearConfirmedNoSelfLocalSession(pending, detail, state2);
           detail.loginSnapshotGateReset = resetLoginSnapshotGate(
             "exit-confirmed:" + (detail.reason || pending.reason || ""),
             loginPointSafetyExitSelfForDetail(detail, { self: pending.self || state2?.self || null }, bot.lastSelf)
@@ -12402,6 +12426,34 @@
           };
           return clearNoSelfLocalSessionForConfirmation(confirmation, control, noSelfExit, reason);
         }
+        function clearNoSelfLocalSessionAfterConfirmedExit(control, noSelfExit, exitDetail = null, reason = "confirmed no-self exit recovery") {
+          const t = Date.now();
+          const userId = Number(control?.currentUserId || getCurrentUserId() || noSelfExit?.userId || exitDetail?.userId || 0) || 0;
+          const snapshotSelf = noSelfExit?.snapshotSelf || snapshotSelfPresenceState(userId);
+          const confirmation = {
+            confirmed: true,
+            reason: "confirmed-no-self-exit-local-session-reset",
+            displayReason: "\u9000\u51FA\u5DF2\u786E\u8BA4\uFF0C\u6309\u670D\u52A1\u7AEF\u5DF2\u65E0\u81EA\u8EAB\u6E05\u7406\u672C\u5730\u767B\u5F55\u72B6\u6001\u540E\u91CD\u767B",
+            source: "confirmed-missing-self",
+            at: t,
+            userId: userId || null,
+            snapshotSelf,
+            noSelfAgeMs: Math.max(0, Math.round(Number(noSelfExit?.ageMs || 0) || 0)),
+            noSelfGameSession: noSelfExit || null,
+            leave: exitDetail || null,
+            control: control ? {
+              wsOpen: Boolean(control.wsOpen),
+              rawWsOpen: Boolean(control.rawWsOpen),
+              connecting: Boolean(control.connecting),
+              wsReadyState: control.wsReadyState ?? null,
+              nativeWsReadyState: control.nativeWsReadyState ?? null,
+              hasToken: Boolean(control.hasToken),
+              transport: control.transport || ""
+            } : null,
+            blockedBy: []
+          };
+          return clearNoSelfLocalSessionForConfirmation(confirmation, control, noSelfExit, reason);
+        }
         function handleNoSelfSnapshotExitRecovery(control, noSelfExit, options = {}) {
           const confirmation = noSelfSnapshotExitConfirmationState(control, noSelfExit);
           if (!confirmation.confirmed) return null;
@@ -12454,6 +12506,7 @@
           clearNoSelfSnapshotRecoveryState,
           clearNoSelfSnapshotLocalSession,
           clearNoSelfLocalSessionAfterLeave403,
+          clearNoSelfLocalSessionAfterConfirmedExit,
           handleNoSelfSnapshotExitRecovery,
           runNoSelfSnapshotExitRecovery
         };
@@ -13146,6 +13199,7 @@
           noSelfSnapshotExitConfirmationState,
           clearNoSelfSnapshotLocalSession,
           clearNoSelfLocalSessionAfterLeave403,
+          clearNoSelfLocalSessionAfterConfirmedExit,
           handleNoSelfSnapshotExitRecovery,
           runNoSelfSnapshotExitRecovery
         } = createNoSelfSnapshotRecoveryRuntime({
@@ -13267,7 +13321,8 @@
           reloginDelayForHpCore,
           clamp,
           scheduleClashLeaveRescueRetry: (...args) => scheduleClashLeaveRescueRetry(...args),
-          issueLeaveCommand: (...args) => issueLeaveCommand(...args)
+          issueLeaveCommand: (...args) => issueLeaveCommand(...args),
+          clearNoSelfLocalSessionAfterConfirmedExit: (...args) => clearNoSelfLocalSessionAfterConfirmedExit(...args)
         });
         const clashLeaveRescueRuntime = createClashLeaveRescueRuntime({
           bot,
