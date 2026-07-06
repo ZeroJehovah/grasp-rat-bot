@@ -6,7 +6,7 @@ Update this file for every remote bot release or handoff-relevant state change. 
 
 - Latest remote bot: `bootstrap-0.4.592`.
 - Latest manifest SHA-256: `1b4766182d501b6b0c90f6e70f4413cea185a494fd1071c8038be7eef8f8e84d`.
-- Latest remote release commit: `pending` (`bootstrap-0.4.592` preserves chase mode when a marked target enters native/realtime view with a transient `Drop = 0` frame).
+- Latest remote release commit: `383ede5` (`bootstrap-0.4.592` preserves chase mode when a marked target enters native/realtime view with a transient `Drop = 0` frame).
 - Latest bootstrap A versions: Tampermonkey `0.4.79`, extension `0.1.58`.
 - Latest direct entry/config SHA-256: `b497b04a619776beaa5dac54331c0352dacc7ef0bb4fb80f19c9f9f1b06d2389`.
 
