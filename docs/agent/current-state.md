@@ -4,14 +4,15 @@ Update this file for every remote bot release or handoff-relevant state change. 
 
 ## Latest Release
 
-- Latest remote bot: `bootstrap-0.4.576`.
-- Latest manifest SHA-256: `f6581b315120f77ac65d896d6fe3d4836212dbfb4bdc2a9c175d3a05f9ecdbd2`.
-- Latest remote release commit: `df9d294` (`bootstrap-0.4.576` preserve tutorial marker during session cleanup).
+- Latest remote bot: `bootstrap-0.4.577`.
+- Latest manifest SHA-256: `0c7ae65ed91888a72ed916507bafb7d95073cadf9320e591677a27b0ba916c27`.
+- Latest remote release commit: `1f42688` (`bootstrap-0.4.577` clean stale no-self sessions after confirmed exits).
 - Latest bootstrap A versions: Tampermonkey `0.4.74`, extension `0.1.53`.
-- Latest direct entry/config SHA-256: `19ae9aee1460bf719aacb383cf5268550fb7a4bab846c40b40a3902c152a9a60`.
+- Latest direct entry/config SHA-256: `b0111532e94b2e9bdaaf386f458962b0825120bfd6fd20b18a76e1596ce4eb17`.
 
 ## Current Handoff
 
+- `bootstrap-0.4.577` fixes the no-self pending-exit follow-up where a stale server-exited/local-session state could fall back to `leave()`, later reach `exit-confirmed`, and then keep the old native WebSocket reconnecting because `requestReload('exit confirmed')` was blocked by pending exit-audit flush. Confirmed pending exits that came from `offlineSafety.noSelfGameSession` now run the same local-session reset before requesting reload: session/auth/login-like `tmpGame*` keys are removed, `tmpGameHelpSeen*` is preserved, `graspRatNoSelfSnapshotRecovery` is written, page-native `state.currentUserId/sessionToken/ws/wsOpen` plus stale reconnect/cache state are cleared, the native WebSocket is closed, and gated relogin can proceed even if audit-log flushing delays the page reload.
 - `bootstrap-0.4.576` narrows stale no-self local-session cleanup so it removes only session/auth/login-like `tmpGame*` keys (`tmpGameSession*`, `tmpGameUser*`, `tmpGameLogin*`, `tmpGameAuth*`, `tmpGameToken*`, `tmpGameOAuth*`) and explicitly preserves `tmpGameHelpSeen*`, including the observed tutorial marker `tmpGameHelpSeenV3`. A new page-modal runtime also clicks the visible `#helpModal` / `#helpOkBtn` new-player tutorial confirmation during tick and before auto-login as a fallback if the page still shows the modal.
 - `bootstrap-0.4.575` fixes two follow-up session edge cases. First, `graspRatNoSelfSnapshotRecovery` now records when its recovery login has already been started, including method and suppress expiry, so the first stale-session relogin can still ignore old native session evidence but an OAuth callback/page reload will wait through the active `bot login started` grace instead of clicking the login control again and restarting OAuth. Second, any pending-exit confirmation now requests the normal page reload path after logging `exit-confirmed`, so native page WebSocket reconnect timers and stale movement state are cleared even when the exit was confirmed from chat/token/self-missing evidence rather than the stale no-self cleanup path.
 - `bootstrap-0.4.574` refreshes the page immediately after stale no-self local-session cleanup succeeds. Both snapshot-confirmed no-self cleanup and no-self leave-403 cleanup now call the normal reload path after removing `tmpGame*`, writing the recovery marker, and resetting native page WebSocket state. This stops the native page script's own stale WebSocket reconnect loop from continuing to post `websocket reconnecting` / `websocket blocked: login required` messages with the old token after the bot has already cleared login state.
@@ -54,7 +55,7 @@ Update this file for every remote bot release or handoff-relevant state change. 
 
 ## Latest Validation Baseline
 
-The latest `bootstrap-0.4.576` release validation passed. Run build-producing commands and manifest-reading validation sequentially, not in parallel; `node scripts/build-remote-bot.js --version ...` rewrites `dist/manifest.json`, while `objective-status` and `verify-objective-build` read it.
+The latest `bootstrap-0.4.577` release validation passed. Run build-producing commands and manifest-reading validation sequentially, not in parallel; `node scripts/build-remote-bot.js --version ...` rewrites `dist/manifest.json`, while `objective-status` and `verify-objective-build` read it.
 
 ```bash
 node grasp-rat-bot.js --self-test
@@ -71,7 +72,7 @@ node --check extension/popup.js
 cd combat-log-service && npm test
 npm run test:runtime-helper-entry
 npm run test:remote-bundled
-node scripts/build-remote-bot.js --version bootstrap-0.4.576
+node scripts/build-remote-bot.js --version bootstrap-0.4.577
 node scripts/verify-objective-build.js
 git diff --check
 ```
@@ -87,7 +88,7 @@ Latest objective build verification reports 35 checks and guards:
 - dependency-width budgets for high-risk composition factories;
 - native/realtime-only combat target/aim/fire anchors;
 - visible/native ordinary-profit priority before snapshot fallback;
-- no-self snapshot recovery remains a dedicated control runtime module, visible login controls do not hide stale no-self page sessions, no-self cleanup requests a page reload after clearing stale local sessions, no-self recovery cleanup preserves `tmpGameHelpSeen*` tutorial markers, no-self recovery login markers suppress duplicate OAuth/login clicks after recovery login starts, confirmed pending exits request a page reload, no-self leave 403 recovery clears stale local sessions without pending-exit retry, the shared recovery marker helper is included in the browser module graph, and composition owners stay under size/dependency guards;
+- no-self snapshot recovery remains a dedicated control runtime module, visible login controls do not hide stale no-self page sessions, no-self cleanup requests a page reload after clearing stale local sessions, no-self recovery cleanup preserves `tmpGameHelpSeen*` tutorial markers, no-self recovery login markers suppress duplicate OAuth/login clicks after recovery login starts, confirmed pending exits request a page reload, confirmed no-self pending exits clear stale local sessions before any reload-block wait, no-self leave 403 recovery clears stale local sessions without pending-exit retry, the shared recovery marker helper is included in the browser module graph, and composition owners stay under size/dependency guards;
 - post-login visible-range zoom keeps the 500m target radius, does not stop on the page view-radius label, limits measured steps, disables blind fallback clicks by default, and keeps stable no-token session keys;
 - bootstrap auto-login evaluates login-point safety only after login is needed;
 - userscript and extension bootstrap version consistency.
