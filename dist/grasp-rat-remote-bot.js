@@ -12,7 +12,7 @@
   var define_GRASP_RAT_RUNTIME_CONFIG_default;
   var init_define_GRASP_RAT_RUNTIME_CONFIG = __esm({
     "<define:__GRASP_RAT_RUNTIME_CONFIG__>"() {
-      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.573" };
+      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.574" };
     }
   });
 
@@ -10473,6 +10473,7 @@
           markManualLoginBypass = () => {
           },
           setLoginSuppress = () => 0,
+          requestReload = () => false,
           controlText = () => "",
           clearCurrentReloginHold = () => ({}),
           clearNoSelfLocalSessionAfterLeave403 = () => null,
@@ -11029,6 +11030,7 @@
               detail.localSessionReset = recovery;
               detail.summary = recovery.displayReason || detail.summary;
               detail.displayReason = recovery.displayReason || detail.displayReason || detail.summary;
+              detail.reloadRequested = Boolean(requestReload("leave 403 no-self local session reset"));
             }
           }
           if (detail.attempted && !detail.exitConfirmed) {
@@ -12324,6 +12326,7 @@
           };
           bot.lastOfflineLeaveResult = leaveResult;
           noteImportantSessionExit("snapshot-no-self-exit-confirmed", bot.lastSelf, Date.now(), { exit: leaveResult });
+          const reloadRequested = Boolean(requestReload("snapshot no-self local session reset"));
           return {
             kind: "wait",
             reason: "snapshot-no-self-exit-confirmed",
@@ -12337,8 +12340,8 @@
             noSelfGameSession: noSelfExit,
             snapshotExitConfirmation: recovery,
             leave: leaveResult,
-            reloadRequested: false,
-            displayReason: recovery.displayReason
+            reloadRequested,
+            displayReason: reloadRequested ? recovery.displayReason + "\uFF0C\u6B63\u5728\u5237\u65B0\u9875\u9762" : recovery.displayReason
           };
         }
         function runNoSelfSnapshotExitRecovery(control, noSelfExit, options = {}) {
@@ -13172,6 +13175,7 @@
           loginSnapshotGateAllowsLogin,
           markManualLoginBypass,
           setLoginSuppress,
+          requestReload: (...args) => requestReload(...args),
           controlText,
           clearCurrentReloginHold,
           clearNoSelfLocalSessionAfterLeave403: (...args) => clearNoSelfLocalSessionAfterLeave403(...args),

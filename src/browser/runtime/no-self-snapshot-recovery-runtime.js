@@ -306,6 +306,7 @@ function createNoSelfSnapshotRecoveryRuntime(runtime = {}) {
     };
     bot.lastOfflineLeaveResult = leaveResult;
     noteImportantSessionExit('snapshot-no-self-exit-confirmed', bot.lastSelf, Date.now(), { exit: leaveResult });
+    const reloadRequested = Boolean(requestReload('snapshot no-self local session reset'));
     return {
       kind: 'wait',
       reason: 'snapshot-no-self-exit-confirmed',
@@ -319,8 +320,8 @@ function createNoSelfSnapshotRecoveryRuntime(runtime = {}) {
       noSelfGameSession: noSelfExit,
       snapshotExitConfirmation: recovery,
       leave: leaveResult,
-      reloadRequested: false,
-      displayReason: recovery.displayReason
+      reloadRequested,
+      displayReason: reloadRequested ? recovery.displayReason + '，正在刷新页面' : recovery.displayReason
     };
   }
 

@@ -576,6 +576,7 @@ function createControlFlowRuntime(runtime = {}) {
     loginSnapshotGateAllowsLogin,
     markManualLoginBypass,
     setLoginSuppress,
+    requestReload: (...args) => requestReload(...args),
     controlText,
     clearCurrentReloginHold,
     clearNoSelfLocalSessionAfterLeave403: (...args) => clearNoSelfLocalSessionAfterLeave403(...args),
