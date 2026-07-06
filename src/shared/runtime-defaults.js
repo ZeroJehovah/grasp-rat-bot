@@ -470,7 +470,7 @@ function buildRuntimeDefaults(config, combatLogEndpointConfigured) {
     combatLogMaxBulletEntries: 24,
     combatLogMaxEntityEntries: 12,
     postLoginZoomOutClicks: 0,
-    postLoginZoomFitRadiusCm: 50000,
+    postLoginZoomFitRadiusCm: 50200,
     postLoginZoomFitMaxSteps: 24,
     postLoginZoomFitMaxOutSteps: 24,
     postLoginZoomDirectSetEnabled: true,

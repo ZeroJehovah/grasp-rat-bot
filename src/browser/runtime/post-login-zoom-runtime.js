@@ -117,7 +117,7 @@ function createPostLoginZoomRuntime(runtime = {}) {
     function postLoginZoomTargetRadiusCm() {
       const configured = Number(cfg.postLoginZoomFitRadiusCm || 0);
       if (Number.isFinite(configured) && configured > 0) return configured;
-      return 50000;
+      return 50200;
     }
 
     function postLoginZoomFitBounds() {
