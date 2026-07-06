@@ -1,5 +1,7 @@
 'use strict';
 
+const { normalizeChaseModeState } = require('../../strategy/chase-mode');
+
 function fallbackReadPageGlobal(_key, fallbackValue) {
   return fallbackValue;
 }
@@ -22,6 +24,7 @@ function createRuntimeBotState(runtime = {}) {
   const restoredOfflineLeaveState = runtime.restoredOfflineLeaveState || null;
   const targetWhitelistState = runtime.targetWhitelistState || null;
   const initialPendingExitState = runtime.initialPendingExitState || null;
+  const initialChaseModeState = runtime.initialChaseModeState || null;
   const readPersistentLastSelfState = typeof runtime.readPersistentLastSelfState === 'function'
     ? runtime.readPersistentLastSelfState
     : fallbackReadPersistentLastSelfState;
@@ -190,6 +193,17 @@ function createRuntimeBotState(runtime = {}) {
       lastSelectedAt: Number(preserved.finalActionArbitration?.lastSelectedAt || 0) || 0,
       lastOverride: preserved.finalActionArbitration?.lastOverride || null,
       history: Array.isArray(preserved.finalActionArbitration?.history) ? preserved.finalActionArbitration.history.slice(-24) : []
+    },
+    chaseMode: {
+      ...normalizeChaseModeState(preserved.chaseMode || initialChaseModeState, {
+        persistMax: cfg.chaseTargetPersistMax
+      }),
+      lastClear: preserved.chaseMode?.lastClear || null,
+      lastDecision: preserved.chaseMode?.lastDecision || null,
+      selectedTargetId: String(preserved.chaseMode?.selectedTargetId || ''),
+      selectedTargetAt: Number(preserved.chaseMode?.selectedTargetAt || 0) || 0,
+      panelCandidates: [],
+      selectedTarget: null
     },
     lastSelf: preserved.lastSelf || readPersistentLastSelfState() || null,
     lastSafety: null,

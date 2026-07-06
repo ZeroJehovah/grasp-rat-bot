@@ -213,6 +213,9 @@ const DOMAIN_CONTEXT_KEYS = Object.freeze({
     'pickEngagedCombatTarget',
     'rememberCombatEngagement'
   ]),
+  chase: Object.freeze([
+    'selectChaseModeAction'
+  ]),
   logging: Object.freeze([
     'finishImportantCombat',
     'importantSessionStaminaSpentMs',

@@ -97,6 +97,13 @@ const {
   summarizeNearestCoinStaminaBudgetExitCore,
   pickNearestDailyStaminaFinalCoinCore
 } = require('./stamina-budget');
+const {
+  aggregateChaseCandidates,
+  chooseChaseTarget,
+  decorateChaseTargets,
+  normalizeChaseModeState,
+  selectPanelCandidates
+} = require('./chase-mode');
 const { COMBAT_CONSTANTS, validateCombatConstants } = require('./combat-constants');
 const { OPPORTUNITY_CONSTANTS, calculateOpportunityROI, validateOpportunityConstants } = require('./opportunity-constants');
 
@@ -1783,6 +1790,15 @@ function runStrategyModuleSelfTests() {
       && Math.round(postAttackPicked?.distance || 0) === 2200
   });
 
+  const postAttackChaseActivePicked = pickPostAttackDropWaitTargetCore([
+    { id: 'active-chase', x: 2200, y: 0, at: 9000, resolvedAt: 9700, drop: 20, afk: false, active: true, chase: true, action: 'attack' },
+    { id: 'active-normal', x: 1800, y: 0, at: 9000, resolvedAt: 9700, drop: 25, afk: false, active: true, action: 'attack' }
+  ], [], [], postAttackWaitOptions);
+  results.push({
+    name: 'post-attack-drop-wait-allows-active-chase-targets',
+    passed: postAttackChaseActivePicked?.id === 'active-chase'
+  });
+
   const postAttackCovered = pickPostAttackDropWaitTargetCore([
     { id: 'covered', x: 2200, y: 0, at: 9000, resolvedAt: 9700, drop: 20, afk: true, action: 'attack' }
   ], [{ x: 2200, y: 100, amount: 1 }], [], postAttackWaitOptions);
@@ -1856,6 +1872,105 @@ function runStrategyModuleSelfTests() {
   results.push({
     name: 'stamina-budget-daily-final-picks-nearest-visible-limiting-coin',
     passed: dailyFinalCoin?.drop_id === 'near'
+  });
+
+  const chaseSelf = { user_id: 'self', x: 0, y: 0 };
+  const chaseDist = (a, b) => Math.hypot(Number(a.x) - Number(b.x), Number(a.y) - Number(b.y));
+  const chaseCandidates = aggregateChaseCandidates([
+    {
+      source: 'snapshot',
+      items: [
+        { user_id: 'a', name: 'A-old', x: 10000, y: 0, drop: 15, hp: 80, snapshot: true, observedAt: 1000 },
+        { user_id: 'b', name: 'B', x: 4000, y: 0, drop: 11, hp: 60, snapshot: true, observedAt: 1000 }
+      ]
+    },
+    {
+      source: 'native',
+      items: [
+        { user_id: 'a', name: 'A-live', x: 2000, y: 0, drop: 12, hp: 70, native: true, observedAt: 1200 }
+      ]
+    },
+    {
+      source: 'minimap',
+      items: [
+        { user_id: 'c', x: 1000, y: 0, drop: 20, minimapOnly: true, observedAt: 1200 }
+      ]
+    }
+  ], { self: chaseSelf, dist: chaseDist, nowMs: 1200 });
+  const chaseA = chaseCandidates.find(item => item.id === 'a');
+  const chaseC = chaseCandidates.find(item => item.id === 'c');
+  results.push({
+    name: 'chase-mode-aggregation-prefers-native-position-and-preserves-drop-metadata',
+    passed: chaseA?.name === 'A-live'
+      && chaseA?.x === 2000
+      && chaseA?.visible === true
+      && chaseA?.drop === 15
+      && chaseA?.latestDrop === 12
+      && chaseC?.minimapOnly === true
+      && chaseC?.visible === false
+  });
+
+  const chasePanelPool = [];
+  for (let i = 0; i < 12; i += 1) {
+    chasePanelPool.push({ id: 'drop-' + i, name: 'D' + i, drop: 30 - i, distance: 100000 + i, marked: false });
+  }
+  for (let i = 0; i < 12; i += 1) {
+    chasePanelPool.push({ id: 'near-' + i, name: 'N' + i, drop: 10 + i, distance: i + 1, marked: false });
+  }
+  const chasePanel = selectPanelCandidates(chasePanelPool, [{ id: 'marked' }], {
+    minDrop: 10,
+    topDropLimit: 10,
+    nearestLimit: 10,
+    maxCandidates: 20
+  });
+  results.push({
+    name: 'chase-mode-panel-candidates-use-top-drop-nearest-union-cap',
+    passed: chasePanel.length === 20
+      && chasePanel.some(item => item.id === 'drop-0')
+      && chasePanel.some(item => item.id === 'near-0')
+      && !chasePanel.some(item => item.id === 'drop-11')
+  });
+
+  const chaseState = normalizeChaseModeState({
+    targets: [
+      { id: 'far', name: 'Far', dropAtMark: 18, lastDrop: 18, markedAt: 100 },
+      { id: 'near', name: 'Near', dropAtMark: 16, lastDrop: 16, markedAt: 100 }
+    ]
+  });
+  const decoratedChaseTargets = decorateChaseTargets(chaseState, [
+    { id: 'far', name: 'Far', drop: 18, distance: 5000, seekableNow: true },
+    { id: 'near', name: 'Near', drop: 16, distance: 1000, seekableNow: true }
+  ], { nowMs: 500 });
+  const chaseSticky = chooseChaseTarget(decoratedChaseTargets, { id: 'far', at: 100 }, {
+    nowMs: 500,
+    stickMs: 1000,
+    minDrop: 10
+  });
+  const chaseNearest = chooseChaseTarget(decoratedChaseTargets, { id: 'far', at: 100 }, {
+    nowMs: 2000,
+    stickMs: 1000,
+    minDrop: 10
+  });
+  results.push({
+    name: 'chase-mode-target-selection-sticks-then-picks-nearest',
+    passed: chaseSticky?.id === 'far' && chaseNearest?.id === 'near'
+  });
+
+  const lowDropDecorated = decorateChaseTargets(
+    normalizeChaseModeState({ targets: [{ id: 'low', dropAtMark: 14, lastDrop: 14 }] }),
+    [{ id: 'low', drop: 7, latestDrop: 7, distance: 1000, seekableNow: true, source: 'snapshot', observedAt: 1000, explicitFreshDropLow: true }],
+    { nowMs: 1100 }
+  );
+  const minimapOnlyDecorated = decorateChaseTargets(
+    normalizeChaseModeState({ targets: [{ id: 'mini', dropAtMark: 20, lastDrop: 20 }] }),
+    [{ id: 'mini', drop: 20, distance: 500, seekableNow: true, visible: false, minimapOnly: true, source: 'minimap' }],
+    { nowMs: 1100 }
+  );
+  results.push({
+    name: 'chase-mode-state-retains-targets-but-exposes-low-drop-and-minimap-status',
+    passed: lowDropDecorated[0]?.explicitFreshDropLow === true
+      && minimapOnlyDecorated[0]?.visible === false
+      && minimapOnlyDecorated[0]?.seekableNow === true
   });
 
   // Test combat constants validation

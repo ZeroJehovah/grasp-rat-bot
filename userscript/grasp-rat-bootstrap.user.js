@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Grasp Rat Bot Bootstrap
 // @namespace    https://github.com/grasp-rat-bot
-// @version      0.4.77
+// @version      0.4.78
 // @description  Loads, hot-updates, and supervises the Grasp Rat bot from a signed manifest.
 // @match        https://grasp-rat-game.h-e.top/*
 // @match        https://connect.linux.do/oauth2/authorize*
@@ -27,12 +27,14 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.4.77';
+  const BOOTSTRAP_VERSION = '0.4.78';
   const BOOTSTRAP_OWNER = 'tampermonkey';
   const REPOSITORY_URL = 'https://github.com/ZeroJehovah/grasp-rat-bot';
   const USERSCRIPT_UPDATE_URL = 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/userscript/grasp-rat-bootstrap.user.js';
   const MIN_REMOTE_BOT_VERSION = 'bootstrap-0.4.0';
   const PANEL_ID = 'grasp-rat-bot-panel';
+  const CHASE_PANEL_ID = 'grasp-rat-chase-panel';
+  const CHASE_PANEL_VISIBLE_KEY = 'graspRatChasePanelVisible';
   const HOST_LAYOUT_STYLE_ID = 'grasp-rat-bot-host-layout-style';
   const INLINE_LOGIN_BUTTON_ID = 'grasp-rat-bot-inline-login';
   const PAUSED_KEY = 'graspRatBotPaused';
@@ -2019,6 +2021,227 @@
     } catch (_) {}
   }
 
+  function chasePanelVisible() {
+    try {
+      return localStorage.getItem(CHASE_PANEL_VISIBLE_KEY) === 'true';
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function setChasePanelVisible(next) {
+    try {
+      localStorage.setItem(CHASE_PANEL_VISIBLE_KEY, next ? 'true' : 'false');
+    } catch (_) {}
+  }
+
+  function removeChasePanel() {
+    try {
+      document.getElementById(CHASE_PANEL_ID)?.remove();
+    } catch (_) {}
+  }
+
+  function chaseStatusFrom(status) {
+    return status?.chaseMode && typeof status.chaseMode === 'object' ? status.chaseMode : null;
+  }
+
+  function createChaseToggleButton(status) {
+    const chase = chaseStatusFrom(status);
+    const active = Math.max(0, Number(chase?.activeCount || 0) || 0);
+    const visible = chasePanelVisible();
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = active > 0 ? '追杀 ' + active : '追杀';
+    button.title = chase ? '显示/隐藏追杀目标面板' : '等待远程脚本加载追杀模式';
+    button.setAttribute('aria-pressed', String(visible));
+    const accent = active > 0
+      ? 'rgba(251,191,36,.58)'
+      : (visible ? 'rgba(96,165,250,.62)' : 'rgba(148,163,184,.24)');
+    const color = active > 0 ? '#fbbf24' : (visible ? '#bfdbfe' : '#cbd5e1');
+    button.style.cssText = [
+      'flex:0 0 auto',
+      'height:24px',
+      'box-sizing:border-box',
+      'padding:0 9px',
+      'border:1px solid ' + accent,
+      'border-radius:999px',
+      'background:' + (active > 0 ? 'rgba(120,53,15,.34)' : 'rgba(15,23,42,.54)'),
+      'color:' + color,
+      'box-shadow:' + (visible ? '0 0 14px rgba(96,165,250,.22),inset 0 1px 0 rgba(255,255,255,.04)' : 'inset 0 1px 0 rgba(255,255,255,.04)'),
+      'font:800 10.5px/1 ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace',
+      'letter-spacing:0',
+      'cursor:pointer',
+      'white-space:nowrap'
+    ].join(';');
+    button.addEventListener('click', event => {
+      event.preventDefault();
+      event.stopPropagation();
+      setChasePanelVisible(!chasePanelVisible());
+      updateBootstrapPanel(true);
+    });
+    return button;
+  }
+
+  function chaseCandidateLabel(candidate) {
+    const name = String(candidate?.name || '').trim();
+    return name || ('#' + String(candidate?.id ?? candidate?.user_id ?? '-'));
+  }
+
+  function chaseCandidateStatusText(candidate) {
+    if (!candidate) return '';
+    if (candidate.status) return String(candidate.status);
+    if (candidate.attackableNow) return '射程内';
+    if (candidate.visible) return '视野';
+    if (candidate.minimapOnly) return 'minimap';
+    if (candidate.snapshot) return '快照';
+    if (candidate.stale) return '未刷新';
+    return candidate.source || '';
+  }
+
+  function callChaseApi(method, ...args) {
+    try {
+      const bot = unsafeWindow.__graspRatBot || null;
+      if (!bot || typeof bot[method] !== 'function') return null;
+      return bot[method](...args);
+    } catch (err) {
+      noteBootstrapError('chase api failed', err);
+      return null;
+    }
+  }
+
+  function positionChasePanel(panel, anchor) {
+    const width = 336;
+    const gap = 8;
+    const rect = anchor?.getBoundingClientRect?.();
+    const top = rect ? Math.max(8, Math.min(rect.top, window.innerHeight - 120)) : 16;
+    let left = rect ? rect.right + gap : window.innerWidth - width - 16;
+    if (left + width + 8 > window.innerWidth) left = Math.max(8, window.innerWidth - width - 8);
+    panel.style.cssText = [
+      'position:fixed',
+      'left:' + Math.round(left) + 'px',
+      'top:' + Math.round(top) + 'px',
+      'z-index:2147483647',
+      'width:min(336px,calc(100vw - 16px))',
+      'max-height:calc(100vh - ' + Math.round(top + 8) + 'px)',
+      'box-sizing:border-box',
+      'border:1px solid rgba(148,163,184,.22)',
+      'border-radius:8px',
+      'background:rgba(15,23,42,.88)',
+      'color:#e5edf7',
+      'font:12px/1.35 ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace',
+      'box-shadow:0 18px 48px rgba(0,0,0,.34)',
+      'backdrop-filter:blur(14px)',
+      '-webkit-backdrop-filter:blur(14px)',
+      'overflow:auto',
+      'pointer-events:auto'
+    ].join(';');
+  }
+
+  function renderChasePanel(status, anchorPanel) {
+    if (!isGamePage() || !document.body || !chasePanelVisible()) {
+      removeChasePanel();
+      return;
+    }
+    let panel = document.getElementById(CHASE_PANEL_ID);
+    if (!panel) {
+      panel = document.createElement('div');
+      panel.id = CHASE_PANEL_ID;
+      document.body.appendChild(panel);
+    }
+    positionChasePanel(panel, anchorPanel);
+    while (panel.firstChild) panel.removeChild(panel.firstChild);
+    const chase = chaseStatusFrom(status);
+    const header = document.createElement('div');
+    header.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 12px;border-bottom:1px solid rgba(148,163,184,.18)';
+    const title = document.createElement('div');
+    title.textContent = '追杀目标';
+    title.style.cssText = 'font-size:12px;font-weight:800;color:#e5edf7';
+    const count = document.createElement('div');
+    count.textContent = chase ? ((chase.candidateCount || 0) + ' / ' + (chase.activeCount || 0)) : '等待脚本';
+    count.style.cssText = 'font-size:10.5px;color:#94a3b8;font-variant-numeric:tabular-nums';
+    header.appendChild(title);
+    header.appendChild(count);
+    panel.appendChild(header);
+    const list = document.createElement('div');
+    list.style.cssText = 'display:grid;gap:0;padding:2px 0';
+    panel.appendChild(list);
+    if (!chase) {
+      const wait = document.createElement('div');
+      wait.textContent = '等待远程脚本加载';
+      wait.style.cssText = 'padding:12px;color:#94a3b8;font-size:11.5px';
+      list.appendChild(wait);
+      return;
+    }
+    const rows = Array.isArray(chase.panelCandidates) ? chase.panelCandidates : [];
+    if (!rows.length) {
+      const empty = document.createElement('div');
+      empty.textContent = '暂无 Drop >= ' + (chase.minDrop || 10) + ' 的候选目标';
+      empty.style.cssText = 'padding:12px;color:#94a3b8;font-size:11.5px';
+      list.appendChild(empty);
+      return;
+    }
+    for (const candidate of rows) {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center;padding:8px 10px;border-top:1px solid rgba(148,163,184,.10)';
+      const info = document.createElement('div');
+      info.style.cssText = 'min-width:0;display:grid;gap:3px';
+      const name = document.createElement('div');
+      name.textContent = chaseCandidateLabel(candidate);
+      name.title = name.textContent;
+      name.style.cssText = 'min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11.5px;font-weight:800;color:#e5edf7';
+      const meta = document.createElement('div');
+      meta.textContent = 'HP ' + (candidate.hp ?? '?')
+        + '  Drop ' + (candidate.drop ?? '?')
+        + '  ' + formatDistance(candidate.distance);
+      meta.style.cssText = 'font-size:10.5px;color:#cbd5e1;font-variant-numeric:tabular-nums';
+      const source = document.createElement('div');
+      source.textContent = chaseCandidateStatusText(candidate);
+      source.style.cssText = 'font-size:10px;color:' + (candidate.staminaBlocked ? '#fca5a5' : '#94a3b8');
+      info.appendChild(name);
+      info.appendChild(meta);
+      info.appendChild(source);
+      const controls = document.createElement('div');
+      controls.style.cssText = 'display:flex;align-items:center;gap:5px';
+      if (candidate.marked) {
+        const tag = document.createElement('span');
+        tag.textContent = '追杀中';
+        tag.style.cssText = 'height:22px;display:inline-flex;align-items:center;padding:0 7px;border:1px solid rgba(251,191,36,.48);border-radius:999px;background:rgba(120,53,15,.28);color:#fbbf24;font-size:10px;font-weight:800;box-shadow:0 0 12px rgba(251,191,36,.18)';
+        controls.appendChild(tag);
+        const cancel = document.createElement('button');
+        cancel.type = 'button';
+        cancel.textContent = '取消';
+        cancel.title = '取消追杀 ' + chaseCandidateLabel(candidate);
+        cancel.style.cssText = 'height:22px;padding:0 7px;border:1px solid rgba(148,163,184,.24);border-radius:999px;background:rgba(15,23,42,.54);color:#cbd5e1;font:700 10px/1 ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace;cursor:pointer';
+        cancel.addEventListener('click', event => {
+          event.preventDefault();
+          event.stopPropagation();
+          callChaseApi('clearChaseTarget', candidate.id, 'panel');
+          updateBootstrapPanel(true);
+        });
+        controls.appendChild(cancel);
+      } else {
+        const action = document.createElement('button');
+        action.type = 'button';
+        const disabled = !status || candidate.whitelisted || Number(candidate.drop ?? 0) < Number(chase.minDrop || 10);
+        action.textContent = candidate.whitelisted ? '白名单' : '追杀';
+        action.disabled = disabled;
+        action.title = disabled ? '不可追杀' : '标记追杀 ' + chaseCandidateLabel(candidate);
+        action.style.cssText = 'height:22px;padding:0 8px;border:1px solid ' + (disabled ? 'rgba(148,163,184,.16)' : 'rgba(251,191,36,.42)') + ';border-radius:999px;background:' + (disabled ? 'rgba(15,23,42,.30)' : 'rgba(120,53,15,.30)') + ';color:' + (disabled ? '#64748b' : '#fbbf24') + ';font:800 10px/1 ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace;cursor:' + (disabled ? 'not-allowed' : 'pointer');
+        action.addEventListener('click', event => {
+          event.preventDefault();
+          event.stopPropagation();
+          if (action.disabled) return;
+          callChaseApi('setChaseTarget', candidate, { markedBy: 'panel' });
+          updateBootstrapPanel(true);
+        });
+        controls.appendChild(action);
+      }
+      row.appendChild(info);
+      row.appendChild(controls);
+      list.appendChild(row);
+    }
+  }
+
   function configureCombatLogging(options = {}) {
     const next = options && typeof options === 'object' ? options : {};
     if (Object.prototype.hasOwnProperty.call(next, 'endpoint')) {
@@ -2504,7 +2727,14 @@
     appendClockNetworkLine();
     appendSection();
     const hold = reloginHold;
-    appendLine('当前行为：' + behaviorText(decision, status) + (hold > 0 ? '，等待重连：' + formatDuration(hold) : ''));
+    const behaviorRow = document.createElement('div');
+    behaviorRow.style.cssText = 'min-width:0;display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:11.5px;line-height:1.34;color:#e5edf7';
+    const behaviorLabel = document.createElement('div');
+    behaviorLabel.textContent = '当前行为：' + behaviorText(decision, status) + (hold > 0 ? '，等待重连：' + formatDuration(hold) : '');
+    behaviorLabel.style.cssText = 'min-width:0;flex:1 1 auto;overflow-wrap:anywhere';
+    behaviorRow.appendChild(behaviorLabel);
+    behaviorRow.appendChild(createChaseToggleButton(status));
+    appendParent.appendChild(behaviorRow);
     appendRichLine([
       { text: '当前目标：', style: 'color:#94a3b8' },
       ...targetSummaryParts(decision, status)
@@ -2567,6 +2797,7 @@
         appendLine('BOT错误：' + (status.errors[status.errors.length - 1]?.message || ''), 'color:#fca5a5');
       }
     }
+    renderChasePanel(status, panel);
   }
 
   function updateBootstrapPanel(force = false) {

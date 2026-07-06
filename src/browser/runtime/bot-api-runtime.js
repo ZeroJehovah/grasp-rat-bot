@@ -71,7 +71,11 @@ function createBotApiRuntime(runtime = {}) {
     latestEnemyLeaveSummary = () => '',
     latestEnemyLeaveDisplayReason = () => '',
     readEnemyLeaveStreakBoundCore = () => 0,
-    summarizePendingCombatLeave = value => value || null
+    summarizePendingCombatLeave = value => value || null,
+    setChaseTarget = () => ({ ok: false, reason: 'chase-mode-not-ready' }),
+    clearChaseTarget = () => ({ ok: false, reason: 'chase-mode-not-ready' }),
+    clearAllChaseTargets = () => ({ ok: false, reason: 'chase-mode-not-ready' }),
+    summarizeChaseModeStatus = () => null
   } = runtime;
 
   function activeBot(context) {
@@ -179,6 +183,18 @@ function createBotApiRuntime(runtime = {}) {
         lastResult: current.clashLeaveRescue.lastResult || null
       };
     },
+    setChaseTarget(target, options = {}) {
+      return setChaseTarget(target, options);
+    },
+    clearChaseTarget(id, reason = 'manual') {
+      return clearChaseTarget(id, reason);
+    },
+    clearAllChaseTargets(reason = 'manual') {
+      return clearAllChaseTargets(reason);
+    },
+    summarizeChaseModeStatus() {
+      return summarizeChaseModeStatus(getSelf());
+    },
     step(source = 'external') {
       return tick(source);
     },
@@ -234,6 +250,7 @@ function createBotApiRuntime(runtime = {}) {
         lastTarget: current.lastTarget,
         combatTarget: current.combatTarget,
         combatAim: current.combatAim,
+        chaseMode: summarizeChaseModeStatus(self || current.lastSelf || null),
         networkQuality: summarizeNetworkQuality(),
         targetWhitelist: summarizeTargetWhitelistStatus(),
         combatLogging: summarizeCombatLoggingStatus(),

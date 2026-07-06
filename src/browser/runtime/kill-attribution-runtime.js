@@ -37,6 +37,16 @@ function createKillAttributionRuntime(runtime = {}) {
     const t = Date.now();
     const targetId = target.id ?? target.user_id;
     const targetName = target.name || '';
+    const chaseModeSource = action?.chaseMode || target.chaseMode || null;
+    const chaseMode = chaseModeSource
+      ? {
+        targetId: String(chaseModeSource.targetId ?? targetId ?? ''),
+        name: String(chaseModeSource.name || targetName || ''),
+        drop: Number(chaseModeSource.drop ?? target.drop ?? 0) || 0,
+        source: String(chaseModeSource.source || target.source || ''),
+        reason: String(chaseModeSource.reason || action?.reason || '')
+      }
+      : null;
     const playerCategory = attackPlayerCategory(target, action);
     const currentlyActive = isCurrentlyActive(target);
     const moving = isMovingThreat(target);
@@ -64,6 +74,8 @@ function createKillAttributionRuntime(runtime = {}) {
       playerCategory,
       combat: Boolean(action?.combat || target.combat),
       combatIntent: action?.target?.combatIntent || action?.combatIntent || target.combatIntent || '',
+      chase: Boolean(chaseMode),
+      chaseMode,
       mode: target.mode || target.current_join_mode || '',
       currentlyActive,
       moving,
