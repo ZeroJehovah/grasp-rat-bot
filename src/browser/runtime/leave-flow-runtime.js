@@ -56,6 +56,7 @@ function createLeaveFlowRuntime(runtime = {}) {
     loginSnapshotGateAllowsLogin = () => false,
     markManualLoginBypass = () => {},
     setLoginSuppress = () => 0,
+    requestReload = () => false,
     controlText = () => '',
     clearCurrentReloginHold = () => ({}),
     clearNoSelfLocalSessionAfterLeave403 = () => null,
@@ -656,6 +657,7 @@ function createLeaveFlowRuntime(runtime = {}) {
         detail.localSessionReset = recovery;
         detail.summary = recovery.displayReason || detail.summary;
         detail.displayReason = recovery.displayReason || detail.displayReason || detail.summary;
+        detail.reloadRequested = Boolean(requestReload('leave 403 no-self local session reset'));
       }
     }
     if (detail.attempted && !detail.exitConfirmed) {

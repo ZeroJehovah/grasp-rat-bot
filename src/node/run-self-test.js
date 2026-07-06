@@ -9313,6 +9313,52 @@ async function runSelfTest() {
       want: 'true|true|false|websocket reconnect churn missing self|true|false'
     },
     {
+      name: 'snapshot no-self recovery requests reload after local reset',
+      got: (() => {
+        const data = new Map([
+          ['tmpGameSessionToken', 'stale-token'],
+          ['tmpGameUserId', '28886']
+        ]);
+        const storage = {
+          getItem: key => (data.has(key) ? data.get(key) : null),
+          setItem: (key, value) => data.set(key, String(value)),
+          removeItem: key => data.delete(key)
+        };
+        let reloadReason = '';
+        const botState = {
+          globalState: { entities: [], snapshotRefreshedAt: Date.now() },
+          control: { hasToken: true, connecting: true },
+          pendingExit: null,
+          offlineSince: 0
+        };
+        const runtime = createNoSelfSnapshotRecoveryRuntime({
+          bot: botState,
+          cfg,
+          storage,
+          getCurrentUserId: () => 28886,
+          getNativeControl: () => null,
+          snapshotSelfPresenceState: () => ({ known: true, fresh: true, present: false, snapshotAgeMs: 500 }),
+          requestReload: reason => {
+            reloadReason = reason;
+            return true;
+          }
+        });
+        const decision = runtime.handleNoSelfSnapshotExitRecovery(
+          { currentUserId: 28886, hasToken: true, connecting: true },
+          { shouldLeave: true, ageMs: 30000, userId: 28886, snapshotSelf: { known: true, fresh: true, present: false, snapshotAgeMs: 500 } }
+        );
+        return [
+          decision?.reason,
+          decision?.reloadRequested,
+          reloadReason,
+          data.get('tmpGameSessionToken') === undefined,
+          data.get('tmpGameUserId') === undefined,
+          data.has('graspRatNoSelfSnapshotRecovery')
+        ].map(String).join('|');
+      })(),
+      want: 'snapshot-no-self-exit-confirmed|true|snapshot no-self local session reset|true|true|true'
+    },
+    {
       name: 'leave 403 no-self recovery clears stale local session',
       got: (() => {
         const data = new Map([
@@ -9542,6 +9588,7 @@ async function runSelfTest() {
         const botState = { control: {}, exitAudit: {}, importantLogging: {}, lastLoginAt: 0 };
         let rememberCalls = 0;
         let recoveryCalls = 0;
+        let reloadCalls = 0;
         const runtime = createLeaveFlowRuntime({
           bot: botState,
           cfg: { ...cfg, autoLogin: true, dryRun: false, once: false, offlineLeaveRetryMs: 1000, combatLeaveRetryMs: 1000 },
@@ -9571,6 +9618,10 @@ async function runSelfTest() {
               displayReason: 'leave接口返回403，按服务端已无自身清理本地登录状态后重登'
             };
           },
+          requestReload: () => {
+            reloadCalls += 1;
+            return true;
+          },
           activeOfflineLeaveDetail: () => null,
           resetLoginSnapshotGate: () => null,
           loginPointSafetyExitSelfForDetail: () => null,
@@ -9598,12 +9649,14 @@ async function runSelfTest() {
           result?.exitConfirmed,
           result?.exitPending,
           Boolean(result?.localSessionReset),
+          result?.reloadRequested,
           recoveryCalls,
+          reloadCalls,
           rememberCalls,
           botState.pendingExit
         ].map(String).join('|');
       })(),
-      want: 'true|true|false|true|1|0|null'
+      want: 'true|true|false|true|true|1|1|0|null'
     },
     {
       name: 'post-login zoom keeps fitting clipped 500m circle despite view radius label',
