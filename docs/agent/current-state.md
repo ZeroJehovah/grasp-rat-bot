@@ -4,14 +4,15 @@ Update this file for every remote bot release or handoff-relevant state change. 
 
 ## Latest Release
 
-- Latest remote bot: `bootstrap-0.4.587`.
-- Latest manifest SHA-256: `eb9eb4cde91772854adffb2a3d7e7937bfbc5d36dedbfdd326eaf4a9fd1c68b0`.
-- Latest remote release commit: `7bda185` (`bootstrap-0.4.587` uses the page-native post-login zoom radius setter).
+- Latest remote bot: `bootstrap-0.4.588`.
+- Latest manifest SHA-256: `ea98c5fa7a9ecc60d254b3019d677a1b42c82b4908e42573118344dbbf9c18ab`.
+- Latest remote release commit: `29ae0fa` (`bootstrap-0.4.588` fixes the manual/external leave audit reload loop).
 - Latest bootstrap A versions: Tampermonkey `0.4.76`, extension `0.1.55`.
-- Latest direct entry/config SHA-256: `a54bab029249b52f9bf71520654085d4d9c73631fc9c1fc488363085b417014a`.
+- Latest direct entry/config SHA-256: `751d48fec4fcc77b7d19f0f5cbe9771e3f98c8ccd4790d650d5cc204bcaa90bf`.
 
 ## Current Handoff
 
+- `bootstrap-0.4.588` fixes the manual/external leave reload loop shown as repeated `reload blocked until exit audit logs flush: external left user local session reset`. Once a `left user <currentUserId>` chat confirmation with strong exit evidence has recorded `external-left-user-exit-confirmed`, the runtime keeps that confirmed recovery in memory while the reload is blocked by exit-audit flushing. Later ticks only retry the same reload instead of recording another exit audit or clearing the same local session again. Reload-block wait status/chat output for pending exit-audit or important session-end logs is throttled by `exitAuditBlockedReloadLogMinMs = 5000` while still forcing combat-log flush attempts, so the page should no longer flicker or spam the console/chat during the wait.
 - `bootstrap-0.4.587` changes post-login zoom to prefer the page-native continuous zoom setter. After login it reads native `state.viewRadiusCm` before the `#scaleText` label, calls `setViewRadius(50000)` directly when available, and verifies the same native/page `view r >= 500m` stop condition. If the setter is unavailable or does not settle at the target, it falls back to one-way centered wheel zoom-out. The fallback starts after 120ms, uses `postLoginZoomWheelDeltaY = 80` and `postLoginZoomOutIntervalMs = 80`, and keeps the 24-step cap and disabled blind click fallback.
 - `bootstrap-0.4.586` fixes the no-self pending-exit stall seen after exiting from another browser: the panel could show login-point safety reaching `3/3`, but an existing offline/no-self `pendingExit` kept `handlePendingExit()` returning before auto-login, because `pendingExitSelfState()` treated stale native session evidence as `native-session-pending` before considering the fresh missing-self snapshot. For offline pending exits that came from `offlineSafety.noSelfGameSession`, a fresh snapshot with the current self absent now confirms the exit as `snapshot-no-self-offline-pending`, clears stale local/session/native state through the same no-self recovery path, writes the recovery marker, requests reload, and lets gated relogin proceed. This exception is scoped to no-self/offline exit confirmation and is not used for combat target, aim, or fire decisions.
 - `bootstrap-0.4.585` fixes false `combat tick gap` exits after an opponent leaves attack range and the bot switches to another AFK/profit target. Combat-frame gap exits with otherwise healthy ticks now require a real previous/current combat-active tick; `combatLogActive` and recent post-combat frame context remain diagnostics but cannot independently force an offline leave while the current decision is AFK profit seeking or coin routing. The July 6 logs at 15:13:36, 15:16:27, and 15:18:49 Asia/Shanghai showed this false-exit pattern: `tickGapMs` was only 36-96ms, the native WebSocket was open with `lastMessageAgeMs` 4-7ms, and only `combatFrameGapMs` exceeded 5s after the target switch.
@@ -58,14 +59,14 @@ Update this file for every remote bot release or handoff-relevant state change. 
 
 - `src/browser/runtime-entry.js` is the single browser runtime entry bundled by esbuild.
 - The old browser source-string layer is gone and must stay gone: no `src/browser/*source.js`, `runtime-source.js`, `runtime-entry-source.js`, or `runtime-fragment-registry.js`.
-- `src/browser/runtime/` contains 91 executable browser runtime modules in the esbuild graph.
+- `src/browser/runtime/` contains 92 executable browser runtime modules in the esbuild graph.
 - Orchestration runtime factories use named domain contexts instead of the former wide flat dependency bag.
 - `control-flow-runtime.js` is a composition owner; session recovery and relogin gate behavior have dedicated modules.
 - `grasp-rat-bot.js` is the Node/CDP fallback and local CLI wrapper, not the normal home for strategy or browser-runtime changes.
 
 ## Latest Validation Baseline
 
-The latest `bootstrap-0.4.587` release validation passed. Run build-producing commands and manifest-reading validation sequentially, not in parallel; `node scripts/build-remote-bot.js --version ...` rewrites `dist/manifest.json`, while `objective-status` and `verify-objective-build` read it.
+The latest `bootstrap-0.4.588` release validation passed. Run build-producing commands and manifest-reading validation sequentially, not in parallel; `node scripts/build-remote-bot.js --version ...` rewrites `dist/manifest.json`, while `objective-status` and `verify-objective-build` read it.
 
 ```bash
 node grasp-rat-bot.js --self-test
@@ -82,7 +83,7 @@ node --check extension/popup.js
 cd combat-log-service && npm test
 npm run test:runtime-helper-entry
 npm run test:remote-bundled
-node scripts/build-remote-bot.js --version bootstrap-0.4.587
+node scripts/build-remote-bot.js --version bootstrap-0.4.588
 node scripts/verify-objective-build.js
 git diff --check
 ```
