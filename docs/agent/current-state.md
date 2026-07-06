@@ -4,14 +4,15 @@ Update this file for every remote bot release or handoff-relevant state change. 
 
 ## Latest Release
 
-- Latest remote bot: `bootstrap-0.4.572`.
-- Latest manifest SHA-256: `47369fd9b8f4b2239eebbd7f0bc7650313ab98eefe3e3bd71c7ae8ade29686bc`.
-- Latest remote release commit: `47bcfab` (`bootstrap-0.4.572` fix stale no-self session detection).
+- Latest remote bot: `bootstrap-0.4.573`.
+- Latest manifest SHA-256: `0c5ab1ade32f274f027ed6cb83efd218d9718bd48a9a7af10cc6c026f6ec6971`.
+- Latest remote release commit: `fa0fc23` (`bootstrap-0.4.573` recover stale no-self sessions after leave 403).
 - Latest bootstrap A versions: Tampermonkey `0.4.74`, extension `0.1.53`.
-- Latest direct entry/config SHA-256: `1904be5e2a8ae6713a86753a455843a35b3b979c3b40c1ba8b376813c4414571`.
+- Latest direct entry/config SHA-256: `485ecc963d532167b8ee37f42ce82e7ebd6a6130eb29990da3ed5f9fe96d1c67`.
 
 ## Current Handoff
 
+- `bootstrap-0.4.573` fixes the follow-up regression in `bootstrap-0.4.572` where stale no-self sessions could still fall through to `leaveOffline()`, receive HTTP 403 from `/leave`, and then be persisted as a pending exit that kept showing "waiting for exit confirmation / will resend". For no-self game-session recovery only, a leave HTTP 403 now confirms that the local session is stale enough to clear locally: it removes `tmpGame*` local/session storage, writes the no-self recovery marker with reason `leave-403-no-self-exit-confirmed`, closes/resets the native page WebSocket state, clears pending exit state, and returns to gated relogin without creating a pending-exit retry or a 403 risk-control hold. Ordinary offline, combat, pursuit, injury, and stamina exits keep their existing pending/retry behavior.
 - `bootstrap-0.4.572` fixes the stale server-exited/local-session reconnect loop where the service has already removed the player but `tmpGameSessionToken`/`tmpGameUserId` and the page WebSocket reconnect state remain. Session recovery no longer treats a visible login control as proof that the page is in a login-required state, because the native/sidebar login entry can be present while the script controls it. Only explicit login-required text is used for that state signal; the login control remains only an action target. A no-self state with current user/session/native WebSocket evidence can now reach the reconnect-churn or timeout recovery path, allowing snapshot-confirmed local-session cleanup and gated relogin instead of falling back to repeated no-self reloads.
 - `bootstrap-0.4.571` fixes the `bootstrap-0.4.570` post-login zoom stop-at-~200m regression. The page `viewRadiusCm`/scale label can already report 500m even when the 500m circle is still clipped on screen, so zoom fitting no longer stops on that label. It continues zooming out while measured `fitRatio > maxRatio`, preserves the no-improvement stop and disabled blind fallback clicks, and raises the measured pass caps to 24 total/outward steps and 8 inward steps so the small wheel delta can actually reach the 500m target.
 - `bootstrap-0.4.570` keeps the post-login target at a 500m visible range while preventing runaway zoom-out. The measured fit now stops with `view-radius-cap` once `postLoginZoomMaxViewRadiusCm = 50000` is reached, limits each pass to 8 measured steps with at most 4 outward steps and 3 inward steps, stops on non-improving measured steps instead of falling back to zoom buttons, disables blind fallback zoom-out clicks by default, and uses a stable no-token session key so no-self/self jitter cannot repeatedly re-arm zoom without a real new session token.
@@ -50,7 +51,7 @@ Update this file for every remote bot release or handoff-relevant state change. 
 
 ## Latest Validation Baseline
 
-The latest `bootstrap-0.4.572` release validation passed:
+The latest `bootstrap-0.4.573` release validation passed:
 
 ```bash
 node grasp-rat-bot.js --self-test
@@ -67,7 +68,7 @@ node --check extension/popup.js
 cd combat-log-service && npm test
 npm run test:runtime-helper-entry
 npm run test:remote-bundled
-node scripts/build-remote-bot.js --version bootstrap-0.4.572
+node scripts/build-remote-bot.js --version bootstrap-0.4.573
 node scripts/verify-objective-build.js
 git diff --check
 ```
@@ -83,7 +84,7 @@ Latest objective build verification reports 35 checks and guards:
 - dependency-width budgets for high-risk composition factories;
 - native/realtime-only combat target/aim/fire anchors;
 - visible/native ordinary-profit priority before snapshot fallback;
-- no-self snapshot recovery remains a dedicated control runtime module, visible login controls do not hide stale no-self page sessions, the shared recovery marker helper is included in the browser module graph, and composition owners stay under size/dependency guards;
+- no-self snapshot recovery remains a dedicated control runtime module, visible login controls do not hide stale no-self page sessions, no-self leave 403 recovery clears stale local sessions without pending-exit retry, the shared recovery marker helper is included in the browser module graph, and composition owners stay under size/dependency guards;
 - post-login visible-range zoom keeps the 500m target radius, does not stop on the page view-radius label, limits measured steps, disables blind fallback clicks by default, and keeps stable no-token session keys;
 - bootstrap auto-login evaluates login-point safety only after login is needed;
 - userscript and extension bootstrap version consistency.
