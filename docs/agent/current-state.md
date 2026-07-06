@@ -4,14 +4,15 @@ Update this file for every remote bot release or handoff-relevant state change. 
 
 ## Latest Release
 
-- Latest remote bot: `bootstrap-0.4.581`.
-- Latest manifest SHA-256: `e1aa4b40785403e9424da425b2284a7c36d9e9d1ec55e9521f76a353214b7eed`.
-- Latest remote release commit: `9e2b03a` (`bootstrap-0.4.581` handle external left-user exits).
+- Latest remote bot: `bootstrap-0.4.582`.
+- Latest manifest SHA-256: `c56dacef658778a5387af646dc9b456f19be7f56fea1b76805c2df1c6cdb061e`.
+- Latest remote release commit: `b770539` (`bootstrap-0.4.582` prefer visible login control for stale relogin).
 - Latest bootstrap A versions: Tampermonkey `0.4.74`, extension `0.1.53`.
-- Latest direct entry/config SHA-256: `0b6a86a15546df2acae3d30e9413a37a30c2186755b8813536be3b2d3fa92abf`.
+- Latest direct entry/config SHA-256: `2b89d62d206db84f89486e10db1e524828c7e609b128588dc230094bc188c4d1`.
 
 ## Current Handoff
 
+- `bootstrap-0.4.582` fixes another `bot login started` cooldown loop after frozen/network exits or stale-session takeover. Once automatic relogin has already passed the need and safety-gate checks, a visible native login control is preferred over page-global `startLinuxDoLogin()` even when stale token/native-session evidence remains, preventing a no-op global call from resetting the 45s login grace repeatedly. `status().reloginGate` now reports the configured 45s total for `bot login started` instead of mirroring the current remaining value as the total.
 - `bootstrap-0.4.581` handles external/manual exits that leave no pending-exit context. Before normal action selection, if chat confirms `left user <currentUserId>` and strong exit evidence is present, especially a fresh page-native snapshot with the current self absent, the bot now ignores stale native `state.entities` self data, stops motion, clears local/session/native stale login state through the no-self recovery path, records `external-left-user-exit-confirmed`, resets the relogin safety gate, and requests reload. A live current self with token/session evidence blocks the path so old chat history cannot kick an active session.
 - `bootstrap-0.4.580` changes post-login zoom back to a one-way native view-radius loop. After login it reads the native/page `view r` value from `#scaleText` or native state, sends one centered zoom-out wheel step at a time while the view radius is below 500m, and stops as soon as the radius reaches or exceeds 500m for that login/session key. It no longer uses screen-fit ratio, no longer sends zoom-in correction steps when the view is over-shrunk, and no longer stops after a single non-improving measurement, so delayed label updates do not create early aborts or back-and-forth adjustment.
 - `bootstrap-0.4.579` fixes the post-safety no-self relogin loop where the panel reached `登录点安全 3/3`, then repeatedly reset `bot login started` cooldown to about 45s without opening OAuth or reconnecting. In ordinary no-self/no-page-session auto-login, `maybeStartAutoLogin()` now prefers the visible native login control over page-global `startLinuxDoLogin()` when both are available. This avoids the no-op global login path while preserving the recovery-marker behavior that waits after a real login click has started.
@@ -59,7 +60,7 @@ Update this file for every remote bot release or handoff-relevant state change. 
 
 ## Latest Validation Baseline
 
-The latest `bootstrap-0.4.581` release validation passed. Run build-producing commands and manifest-reading validation sequentially, not in parallel; `node scripts/build-remote-bot.js --version ...` rewrites `dist/manifest.json`, while `objective-status` and `verify-objective-build` read it.
+The latest `bootstrap-0.4.582` release validation passed. Run build-producing commands and manifest-reading validation sequentially, not in parallel; `node scripts/build-remote-bot.js --version ...` rewrites `dist/manifest.json`, while `objective-status` and `verify-objective-build` read it.
 
 ```bash
 node grasp-rat-bot.js --self-test
@@ -76,7 +77,7 @@ node --check extension/popup.js
 cd combat-log-service && npm test
 npm run test:runtime-helper-entry
 npm run test:remote-bundled
-node scripts/build-remote-bot.js --version bootstrap-0.4.581
+node scripts/build-remote-bot.js --version bootstrap-0.4.582
 node scripts/verify-objective-build.js
 git diff --check
 ```
