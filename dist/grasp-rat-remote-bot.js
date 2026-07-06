@@ -12,7 +12,7 @@
   var define_GRASP_RAT_RUNTIME_CONFIG_default;
   var init_define_GRASP_RAT_RUNTIME_CONFIG = __esm({
     "<define:__GRASP_RAT_RUNTIME_CONFIG__>"() {
-      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.570" };
+      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.571" };
     }
   });
 
@@ -616,13 +616,12 @@
           combatLogMaxEntityEntries: 12,
           postLoginZoomOutClicks: 0,
           postLoginZoomFitRadiusCm: 5e4,
-          postLoginZoomMaxViewRadiusCm: 5e4,
           postLoginZoomFitTargetRatio: 0.98,
           postLoginZoomFitTolerance: 0.04,
           postLoginZoomFitPaddingPx: 16,
-          postLoginZoomFitMaxSteps: 8,
-          postLoginZoomFitMaxOutSteps: 4,
-          postLoginZoomFitMaxInSteps: 3,
+          postLoginZoomFitMaxSteps: 24,
+          postLoginZoomFitMaxOutSteps: 24,
+          postLoginZoomFitMaxInSteps: 8,
           postLoginZoomWheelDeltaY: 35,
           postLoginZoomStartDelayMs: 350,
           postLoginZoomOutIntervalMs: 220,
@@ -7573,11 +7572,6 @@
           if (Number.isFinite(configured) && configured > 0) return configured;
           return 5e4;
         }
-        function postLoginZoomMaxViewRadiusCm() {
-          const configured = Number(cfg.postLoginZoomMaxViewRadiusCm || 0);
-          if (Number.isFinite(configured) && configured > 0) return configured;
-          return postLoginZoomTargetRadiusCm();
-        }
         function postLoginZoomFitBounds() {
           const targetRatio = Math.min(0.99, Math.max(0.5, Number(cfg.postLoginZoomFitTargetRatio || 0.98) || 0.98));
           const tolerance = Math.max(5e-3, Number(cfg.postLoginZoomFitTolerance || 0.04) || 0.04);
@@ -7651,12 +7645,10 @@
           const circleRadiusPx = radiusCm / units;
           const fitRatio = circleRadiusPx / availablePx;
           const bounds = postLoginZoomFitBounds();
-          const maxViewRadiusCm = postLoginZoomMaxViewRadiusCm();
           return {
             ok: true,
             radiusCm: Math.round(radiusCm),
             viewRadiusCm: Math.round(postLoginZoomCurrentViewRadiusCm() || 0),
-            maxViewRadiusCm: Math.round(maxViewRadiusCm),
             units: Number(units.toFixed(2)),
             circleRadiusPx: Math.round(circleRadiusPx),
             availablePx: Math.round(availablePx),
@@ -7679,11 +7671,6 @@
           const minRatio = Number(measure.minRatio);
           if (!Number.isFinite(ratio) || !Number.isFinite(maxRatio) || !Number.isFinite(minRatio)) {
             return { done: false, direction: "out", reason: "invalid-ratio" };
-          }
-          const viewRadiusCm = Number(measure.viewRadiusCm || 0);
-          const maxViewRadiusCm = Number(measure.maxViewRadiusCm || postLoginZoomMaxViewRadiusCm());
-          if (ratio > maxRatio && Number.isFinite(viewRadiusCm) && Number.isFinite(maxViewRadiusCm) && maxViewRadiusCm > 0 && viewRadiusCm >= maxViewRadiusCm) {
-            return { done: true, direction: "", reason: "view-radius-cap" };
           }
           if (ratio > maxRatio) return { done: false, direction: "out", reason: "circle-clipped" };
           if (ratio < minRatio) return { done: false, direction: "in", reason: "visible-range-too-small" };
@@ -7804,11 +7791,11 @@
             const state2 = bot.postLoginZoom;
             if (!state2?.lastResult) return;
             if (key && state2.lastResult.key !== key) return;
-            const maxSteps = Math.max(1, Math.round(Number(cfg.postLoginZoomFitMaxSteps || 8) || 8));
-            const configuredMaxOutSteps = Number(cfg.postLoginZoomFitMaxOutSteps ?? 4);
-            const configuredMaxInSteps = Number(cfg.postLoginZoomFitMaxInSteps ?? 3);
-            const maxOutSteps = Math.max(0, Math.round(Number.isFinite(configuredMaxOutSteps) ? configuredMaxOutSteps : 4));
-            const maxInSteps = Math.max(0, Math.round(Number.isFinite(configuredMaxInSteps) ? configuredMaxInSteps : 3));
+            const maxSteps = Math.max(1, Math.round(Number(cfg.postLoginZoomFitMaxSteps || 24) || 24));
+            const configuredMaxOutSteps = Number(cfg.postLoginZoomFitMaxOutSteps ?? 24);
+            const configuredMaxInSteps = Number(cfg.postLoginZoomFitMaxInSteps ?? 8);
+            const maxOutSteps = Math.max(0, Math.round(Number.isFinite(configuredMaxOutSteps) ? configuredMaxOutSteps : 24));
+            const maxInSteps = Math.max(0, Math.round(Number.isFinite(configuredMaxInSteps) ? configuredMaxInSteps : 8));
             requestNativeViewportResize("post-login-zoom-fit-step-" + (stepIndex + 1));
             const before = postLoginZoomFitMeasurement(selfSummary);
             const { latest, decision } = notePostLoginZoomMeasure(state2, before);
@@ -7907,13 +7894,12 @@
             scheduledAt: t,
             startDelayMs: Math.max(0, Number(cfg.postLoginZoomStartDelayMs || 0) || 0),
             requestedRadiusCm: Math.round(postLoginZoomTargetRadiusCm()),
-            maxViewRadiusCm: Math.round(postLoginZoomMaxViewRadiusCm()),
             targetRatio: fitBounds.targetRatio,
             minRatio: Number(fitBounds.minRatio.toFixed(3)),
             maxRatio: Number(fitBounds.maxRatio.toFixed(3)),
-            maxSteps: Math.max(1, Math.round(Number(cfg.postLoginZoomFitMaxSteps || 8) || 8)),
-            maxOutSteps: Math.max(0, Math.round(Number.isFinite(Number(cfg.postLoginZoomFitMaxOutSteps ?? 4)) ? Number(cfg.postLoginZoomFitMaxOutSteps ?? 4) : 4)),
-            maxInSteps: Math.max(0, Math.round(Number.isFinite(Number(cfg.postLoginZoomFitMaxInSteps ?? 3)) ? Number(cfg.postLoginZoomFitMaxInSteps ?? 3) : 3)),
+            maxSteps: Math.max(1, Math.round(Number(cfg.postLoginZoomFitMaxSteps || 24) || 24)),
+            maxOutSteps: Math.max(0, Math.round(Number.isFinite(Number(cfg.postLoginZoomFitMaxOutSteps ?? 24)) ? Number(cfg.postLoginZoomFitMaxOutSteps ?? 24) : 24)),
+            maxInSteps: Math.max(0, Math.round(Number.isFinite(Number(cfg.postLoginZoomFitMaxInSteps ?? 8)) ? Number(cfg.postLoginZoomFitMaxInSteps ?? 8) : 8)),
             fallbackRequestedClicks: clicks,
             completedClicks: 0,
             failedClicks: 0,
@@ -7941,7 +7927,6 @@
           postLoginZoomScaleTextRadiusCm,
           postLoginZoomCurrentViewRadiusCm,
           postLoginZoomTargetRadiusCm,
-          postLoginZoomMaxViewRadiusCm,
           postLoginZoomFitBounds,
           postLoginZoomViewElements,
           postLoginZoomProjection,

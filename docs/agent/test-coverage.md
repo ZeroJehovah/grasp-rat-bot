@@ -40,7 +40,7 @@ The browser runtime should adapt page/native state into these pure helpers inste
 
 ## Browser Runtime Coverage
 
-`src/node/run-self-test.js` includes focused browser-runtime smoke checks for session recovery, including the no-self snapshot-exit confirmation path that only accepts a fresh authoritative snapshot with current self absent, the local stale-session reset that clears `tmpGameSessionToken`/`tmpGameUserId` while preserving the login id input, writes the recovery marker, and clears page-native `state.currentUserId/sessionToken/ws/wsOpen` plus stale entity/reconnect state before relogin. It also covers both persisted and in-memory marker paths that suppress repeat leave/session-mismatch handling while stale native-session evidence is still present, and directly exercises `maybeStartAutoLogin()` for the marker path, verifying that stale native-session evidence and an old post-login suppress do not block login and that a visible login control is clicked before falling back to the page global login function. Post-login zoom smoke checks cover the 500m outward zoom cap and stable no-token zoom session key.
+`src/node/run-self-test.js` includes focused browser-runtime smoke checks for session recovery, including the no-self snapshot-exit confirmation path that only accepts a fresh authoritative snapshot with current self absent, the local stale-session reset that clears `tmpGameSessionToken`/`tmpGameUserId` while preserving the login id input, writes the recovery marker, and clears page-native `state.currentUserId/sessionToken/ws/wsOpen` plus stale entity/reconnect state before relogin. It also covers both persisted and in-memory marker paths that suppress repeat leave/session-mismatch handling while stale native-session evidence is still present, and directly exercises `maybeStartAutoLogin()` for the marker path, verifying that stale native-session evidence and an old post-login suppress do not block login and that a visible login control is clicked before falling back to the page global login function. Post-login zoom smoke checks cover continuing to fit a clipped 500m circle even when the page view-radius label already says 500m, plus stable no-token zoom session keys.
 
 ## Objective Build Verification
 
@@ -59,7 +59,7 @@ The browser runtime should adapt page/native state into these pure helpers inste
 - dependency-width budgets prevent wide flat runtime injection from returning;
 - combat target, aim, and fire stay native/realtime-visible only;
 - ordinary profit keeps visible/native coin and visible/native AFK priority before snapshot fallback;
-- post-login zoom keeps the 500m target radius, caps outward adjustment at 500m, limits measured steps, disables blind fallback clicks by default, and keeps stable no-token session keys;
+- post-login zoom keeps the 500m target radius, does not stop on the page view-radius label, limits measured steps, disables blind fallback clicks by default, and keeps stable no-token session keys;
 - bootstrap auto-login evaluates the local login-point safety gate only after deciding that login is needed;
 - userscript and extension bootstrap versions match their runtime constants.
 
