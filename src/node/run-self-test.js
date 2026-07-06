@@ -10347,6 +10347,40 @@ async function runSelfTest() {
       want: 'false|out|view-radius-below-target|true||view-radius-target-reached|true||view-radius-target-reached'
     },
     {
+      name: 'post-login zoom applies native setViewRadius directly',
+      got: (() => {
+        let viewRadiusCm = 10000;
+        const pageGlobal = {
+          setViewRadius(cm) {
+            viewRadiusCm = Math.round(Number(cm || 0));
+          }
+        };
+        const runtime = createPostLoginZoomRuntime({
+          bot: {},
+          cfg: {
+            postLoginZoomFitRadiusCm: 50000
+          },
+          pageGlobal,
+          readPageGlobal: (key, fallback, global) => global?.[key] ?? fallback,
+          getNativeState: () => ({ viewRadiusCm })
+        });
+        const before = runtime.postLoginZoomFitMeasurement({});
+        const action = runtime.postLoginZoomApplyNativeViewRadius(50000);
+        const after = runtime.postLoginZoomFitMeasurement({});
+        const afterDecision = runtime.postLoginZoomFitDecision(after);
+        return [
+          before.viewRadiusCm,
+          action.applied,
+          action.method,
+          action.targetRadiusCm,
+          after.viewRadiusCm,
+          afterDecision.done,
+          afterDecision.reason
+        ].map(String).join('|');
+      })(),
+      want: '10000|true|setViewRadius|50000|50000|true|view-radius-target-reached'
+    },
+    {
       name: 'post-login zoom no-token session key is stable across no-self generations',
       got: (() => {
         const botState = { postLoginZoom: { generation: 1 } };
