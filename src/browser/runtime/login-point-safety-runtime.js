@@ -16,6 +16,11 @@ function createLoginPointSafetyRuntime(runtime = {}) {
     isJoinModeActive = () => false,
     isFiringEntity = () => false,
     isMovingThreat = () => false,
+    pageLoadAt = () => (
+      typeof performance !== 'undefined' && Number.isFinite(Number(performance.timeOrigin))
+        ? performance.timeOrigin
+        : 0
+    ),
     isAlive = value => Boolean(value),
     isInvulnerable = () => false
   } = runtime;
@@ -32,6 +37,12 @@ function createLoginPointSafetyRuntime(runtime = {}) {
       if (value === undefined || value === null || value === '') return null;
       const n = Number(value);
       return Number.isFinite(n) ? n : null;
+    }
+
+    function loginPointSafetyCurrentPageLoadAt() {
+      const raw = typeof pageLoadAt === 'function' ? pageLoadAt() : pageLoadAt;
+      const n = Number(raw);
+      return Number.isFinite(n) && n > 0 ? Math.round(n) : 0;
     }
 
     function loginPointSafetyLastExitHp(state = null) {
@@ -196,10 +207,34 @@ function createLoginPointSafetyRuntime(runtime = {}) {
         lastTick: Number(source.lastTick || 0) || 0,
         resetAt: Number(source.resetAt || 0) || 0,
         resetReason: String(source.resetReason || ''),
+        pageLoadAt: Number(source.pageLoadAt || 0) || 0,
+        pageLoadResetAt: Number(source.pageLoadResetAt || 0) || 0,
+        pageLoadResetReason: String(source.pageLoadResetReason || ''),
         lastDanger: source.lastDanger && typeof source.lastDanger === 'object' ? { ...source.lastDanger } : null,
         movement,
         damagedBy
       };
+    }
+
+    function resetLoginPointSafetyStateForCurrentPage(state = null, t = Date.now()) {
+      const normalized = normalizeLoginPointSafetyState(state, t);
+      const currentPageLoadAt = loginPointSafetyCurrentPageLoadAt();
+      if (!currentPageLoadAt || Number(normalized.pageLoadAt || 0) === currentPageLoadAt) return normalized;
+      return normalizeLoginPointSafetyState({
+        ...normalized,
+        streak: 0,
+        lastSampleAt: 0,
+        lastOkAt: 0,
+        lastUnsafeAt: 0,
+        lastErrorAt: 0,
+        lastError: '',
+        lastTick: 0,
+        lastDanger: null,
+        movement: {},
+        pageLoadAt: currentPageLoadAt,
+        pageLoadResetAt: t,
+        pageLoadResetReason: 'page-load'
+      }, t);
     }
 
     function loginPointHasPoint(state) {
@@ -248,8 +283,14 @@ function createLoginPointSafetyRuntime(runtime = {}) {
       } catch (_) {
         stored = null;
       }
-      const state = mergeLoginPointSafetyState(bot.loginPointSafety, stored, t);
+      const merged = mergeLoginPointSafetyState(bot.loginPointSafety, stored, t);
+      const state = resetLoginPointSafetyStateForCurrentPage(merged, t);
       bot.loginPointSafety = state;
+      if (Number(merged?.pageLoadAt || 0) !== Number(state.pageLoadAt || 0)) {
+        try {
+          localStorage.setItem(LOGIN_POINT_SAFETY_KEY, JSON.stringify(state));
+        } catch (_) {}
+      }
       return state;
     }
 
@@ -554,6 +595,7 @@ function createLoginPointSafetyRuntime(runtime = {}) {
   return {
     loginPointSafetySuccessRequired,
     optionalFiniteNumber,
+    loginPointSafetyCurrentPageLoadAt,
     loginPointSafetyLastExitHp,
     loginPointSafetyHealthyHpThreshold,
     loginPointSafetyLowHpRadius,
@@ -567,6 +609,7 @@ function createLoginPointSafetyRuntime(runtime = {}) {
     loginPointEntityKey,
     loginPointActorSummary,
     normalizeLoginPointSafetyState,
+    resetLoginPointSafetyStateForCurrentPage,
     loginPointHasPoint,
     loginPointPointStamp,
     mergeLoginPointSafetyState,

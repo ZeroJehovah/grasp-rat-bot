@@ -12,7 +12,7 @@
   var define_GRASP_RAT_RUNTIME_CONFIG_default;
   var init_define_GRASP_RAT_RUNTIME_CONFIG = __esm({
     "<define:__GRASP_RAT_RUNTIME_CONFIG__>"() {
-      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.583" };
+      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.584" };
     }
   });
 
@@ -7934,6 +7934,7 @@
           isJoinModeActive = () => false,
           isFiringEntity = () => false,
           isMovingThreat = () => false,
+          pageLoadAt = () => typeof performance !== "undefined" && Number.isFinite(Number(performance.timeOrigin)) ? performance.timeOrigin : 0,
           isAlive = (value) => Boolean(value),
           isInvulnerable = () => false
         } = runtime;
@@ -7948,6 +7949,11 @@
           if (value === void 0 || value === null || value === "") return null;
           const n = Number(value);
           return Number.isFinite(n) ? n : null;
+        }
+        function loginPointSafetyCurrentPageLoadAt() {
+          const raw = typeof pageLoadAt === "function" ? pageLoadAt() : pageLoadAt;
+          const n = Number(raw);
+          return Number.isFinite(n) && n > 0 ? Math.round(n) : 0;
         }
         function loginPointSafetyLastExitHp(state2 = null) {
           return optionalFiniteNumber(
@@ -8083,10 +8089,33 @@
             lastTick: Number(source.lastTick || 0) || 0,
             resetAt: Number(source.resetAt || 0) || 0,
             resetReason: String(source.resetReason || ""),
+            pageLoadAt: Number(source.pageLoadAt || 0) || 0,
+            pageLoadResetAt: Number(source.pageLoadResetAt || 0) || 0,
+            pageLoadResetReason: String(source.pageLoadResetReason || ""),
             lastDanger: source.lastDanger && typeof source.lastDanger === "object" ? { ...source.lastDanger } : null,
             movement,
             damagedBy
           };
+        }
+        function resetLoginPointSafetyStateForCurrentPage(state2 = null, t = Date.now()) {
+          const normalized = normalizeLoginPointSafetyState(state2, t);
+          const currentPageLoadAt = loginPointSafetyCurrentPageLoadAt();
+          if (!currentPageLoadAt || Number(normalized.pageLoadAt || 0) === currentPageLoadAt) return normalized;
+          return normalizeLoginPointSafetyState({
+            ...normalized,
+            streak: 0,
+            lastSampleAt: 0,
+            lastOkAt: 0,
+            lastUnsafeAt: 0,
+            lastErrorAt: 0,
+            lastError: "",
+            lastTick: 0,
+            lastDanger: null,
+            movement: {},
+            pageLoadAt: currentPageLoadAt,
+            pageLoadResetAt: t,
+            pageLoadResetReason: "page-load"
+          }, t);
         }
         function loginPointHasPoint(state2) {
           return Boolean(
@@ -8125,8 +8154,15 @@
           } catch (_) {
             stored = null;
           }
-          const state2 = mergeLoginPointSafetyState(bot.loginPointSafety, stored, t);
+          const merged = mergeLoginPointSafetyState(bot.loginPointSafety, stored, t);
+          const state2 = resetLoginPointSafetyStateForCurrentPage(merged, t);
           bot.loginPointSafety = state2;
+          if (Number(merged?.pageLoadAt || 0) !== Number(state2.pageLoadAt || 0)) {
+            try {
+              localStorage2.setItem(LOGIN_POINT_SAFETY_KEY, JSON.stringify(state2));
+            } catch (_) {
+            }
+          }
           return state2;
         }
         function writeLoginPointSafetyState(state2) {
@@ -8404,6 +8440,7 @@
         return {
           loginPointSafetySuccessRequired,
           optionalFiniteNumber,
+          loginPointSafetyCurrentPageLoadAt,
           loginPointSafetyLastExitHp,
           loginPointSafetyHealthyHpThreshold,
           loginPointSafetyLowHpRadius,
@@ -8417,6 +8454,7 @@
           loginPointEntityKey,
           loginPointActorSummary,
           normalizeLoginPointSafetyState,
+          resetLoginPointSafetyStateForCurrentPage,
           loginPointHasPoint,
           loginPointPointStamp,
           mergeLoginPointSafetyState,
