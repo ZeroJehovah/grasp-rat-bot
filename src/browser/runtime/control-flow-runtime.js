@@ -56,6 +56,7 @@ const { createLeaveFlowRuntime } = require('./leave-flow-runtime');
 const { createSessionRecoveryRuntime } = require('./session-recovery-runtime');
 const { createNoSelfSnapshotRecoveryRuntime } = require('./no-self-snapshot-recovery-runtime');
 const { createReloginGateRuntime } = require('./relogin-gate-runtime');
+const { createPageModalRuntime } = require('./page-modal-runtime');
 
 function createControlFlowRuntime(runtime = {}) {
   const {
@@ -193,6 +194,8 @@ function createControlFlowRuntime(runtime = {}) {
     getSessionToken: (...args) => getSessionToken(...args),
     getNativeState: (...args) => getNativeState(...args)
   });
+
+  const { visibleHelpModal, dismissHelpModal } = createPageModalRuntime({ bot, isVisible, controlText });
 
   const {
     loginPointSafetySuccessRequired,
@@ -579,6 +582,7 @@ function createControlFlowRuntime(runtime = {}) {
     setLoginSuppress,
     requestReload: (...args) => requestReload(...args),
     controlText,
+    dismissHelpModal,
     clearCurrentReloginHold,
     clearNoSelfLocalSessionAfterLeave403: (...args) => clearNoSelfLocalSessionAfterLeave403(...args),
     updateBotPanel,
@@ -674,6 +678,8 @@ function createControlFlowRuntime(runtime = {}) {
     noteSelfUnavailableForPostLoginZoom,
     schedulePostLoginZoomOut,
     findLoginControl,
+    visibleHelpModal,
+    dismissHelpModal,
     hasLoginRequiredText,
     setLoginSuppress,
     loginSuppressRemainingMs,

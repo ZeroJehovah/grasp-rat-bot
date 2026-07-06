@@ -75,6 +75,7 @@ const DOMAIN_CONTEXT_KEYS = Object.freeze({
     'clearExitHoldDetail',
     'clearSessionMismatchRecoveryState',
     'cloudflareErrorInfo',
+    'dismissHelpModal',
     'handlePendingExit',
     'installNativeLoginGateInterceptors',
     'isCombatStateForInjuryLeave',

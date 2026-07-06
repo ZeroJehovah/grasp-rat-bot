@@ -12,7 +12,7 @@
   var define_GRASP_RAT_RUNTIME_CONFIG_default;
   var init_define_GRASP_RAT_RUNTIME_CONFIG = __esm({
     "<define:__GRASP_RAT_RUNTIME_CONFIG__>"() {
-      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.575" };
+      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.576" };
     }
   });
 
@@ -10510,6 +10510,7 @@
           setLoginSuppress = () => 0,
           requestReload = () => false,
           controlText = () => "",
+          dismissHelpModal = () => ({ dismissed: false, reason: "unavailable" }),
           clearCurrentReloginHold = () => ({}),
           clearNoSelfLocalSessionAfterLeave403 = () => null,
           updateBotPanel = () => {
@@ -10751,6 +10752,7 @@
             };
           }
           if (!cfg.autoLogin || cfg.dryRun || cfg.once) return null;
+          dismissHelpModal("auto-login");
           const t = Date.now();
           if (exitAuditFlushPending() && !manualOverride) {
             const blocked = exitAuditFlushBlockDetail("login:" + (reason || ""));
@@ -12130,6 +12132,12 @@
         const n = wsReadyStateNumber(value);
         return n === 0 || n === 1;
       }
+      function shouldClearTmpGameLocalSessionKey(key) {
+        const text = String(key || "");
+        if (!/^tmpGame/i.test(text)) return false;
+        if (/^tmpGameHelpSeen/i.test(text)) return false;
+        return /^tmpGame(?:Session|User|Login|Auth|Token|OAuth)/i.test(text);
+      }
       function createNoSelfSnapshotRecoveryRuntime(runtime = {}) {
         const {
           bot,
@@ -12211,17 +12219,21 @@
             storageErrors.push({ key: label, error: err?.message || String(err) });
           }
         }
-        function removeStorageKeysMatching(store, pattern, prefix, removedKeys, storageErrors) {
+        function storageKeyMatches(matcher, key) {
+          if (typeof matcher === "function") return Boolean(matcher(key));
+          return matcher?.test?.(String(key)) || false;
+        }
+        function removeStorageKeysMatching(store, matcher, prefix, removedKeys, storageErrors) {
           try {
             if (!store?.key || !store?.removeItem) return;
             const keys = [];
             for (let i = 0; i < Number(store.length || 0); i += 1) {
               const key = store.key(i);
-              if (key && pattern.test(String(key))) keys.push(key);
+              if (key && storageKeyMatches(matcher, String(key))) keys.push(key);
             }
             for (const key of keys) removeStorageKey(store, key, prefix + key, removedKeys, storageErrors);
           } catch (err) {
-            storageErrors.push({ key: prefix + String(pattern), error: err?.message || String(err) });
+            storageErrors.push({ key: prefix + String(matcher), error: err?.message || String(err) });
           }
         }
         function clearNativePageSessionState(userId, reason = "snapshot no-self exit confirmed") {
@@ -12321,8 +12333,8 @@
             removeStorageKey(localStorage2, key, key, removedKeys, storageErrors);
             removeStorageKey(browserSessionStorage, key, "sessionStorage." + key, removedKeys, storageErrors);
           }
-          removeStorageKeysMatching(localStorage2, /^tmpGame/i, "", removedKeys, storageErrors);
-          removeStorageKeysMatching(browserSessionStorage, /^tmpGame/i, "sessionStorage.", removedKeys, storageErrors);
+          removeStorageKeysMatching(localStorage2, shouldClearTmpGameLocalSessionKey, "", removedKeys, storageErrors);
+          removeStorageKeysMatching(browserSessionStorage, shouldClearTmpGameLocalSessionKey, "sessionStorage.", removedKeys, storageErrors);
           const markerResult = writeNoSelfSnapshotRecoveryState(localStorage2, {
             reason: confirmation.reason || "snapshot-no-self-exit-confirmed",
             userId,
@@ -12447,7 +12459,8 @@
         };
       }
       module.exports = {
-        createNoSelfSnapshotRecoveryRuntime
+        createNoSelfSnapshotRecoveryRuntime,
+        shouldClearTmpGameLocalSessionKey
       };
     }
   });
@@ -12679,6 +12692,94 @@
     }
   });
 
+  // src/browser/runtime/page-modal-runtime.js
+  var require_page_modal_runtime = __commonJS({
+    "src/browser/runtime/page-modal-runtime.js"(exports, module) {
+      "use strict";
+      init_define_GRASP_RAT_RUNTIME_CONFIG();
+      function createPageModalRuntime(runtime = {}) {
+        const {
+          bot = null,
+          isVisible = () => false,
+          controlText = () => ""
+        } = runtime;
+        function describeModalControl(el) {
+          if (!el) return "";
+          if (el.id) return "#" + el.id;
+          const text = controlText(el);
+          if (text) return text;
+          return String(el.tagName || "").toLowerCase();
+        }
+        function visibleHelpModal() {
+          const modal = document.getElementById("helpModal");
+          if (!modal || !isVisible(modal)) return null;
+          const shownByClass = modal.classList?.contains("show");
+          const shownByAria = String(modal.getAttribute("aria-hidden") || "").toLowerCase() === "false";
+          if (!shownByClass && !shownByAria) return null;
+          const titleText = String(document.getElementById("helpTitle")?.textContent || "").trim();
+          if (titleText && !/新手教程|help|tutorial/i.test(titleText)) return null;
+          return modal;
+        }
+        function dismissHelpModal(reason = "tick") {
+          const modal = visibleHelpModal();
+          if (!modal) return { dismissed: false, reason: "not-visible" };
+          const button = modal.querySelector("#helpOkBtn") || document.getElementById("helpOkBtn");
+          if (!button || !isVisible(button)) {
+            const result = {
+              dismissed: false,
+              reason: "button-missing",
+              modal: describeModalControl(modal),
+              at: Date.now()
+            };
+            if (bot) bot.lastHelpModalDismiss = result;
+            return result;
+          }
+          const text = controlText(button);
+          if (text && !/知道了|ok|got it|close|关闭|明白/i.test(text)) {
+            const result = {
+              dismissed: false,
+              reason: "button-text-mismatch",
+              button: describeModalControl(button),
+              buttonText: text,
+              at: Date.now()
+            };
+            if (bot) bot.lastHelpModalDismiss = result;
+            return result;
+          }
+          try {
+            button.click();
+            const result = {
+              dismissed: true,
+              reason: String(reason || "tick"),
+              modal: describeModalControl(modal),
+              button: describeModalControl(button),
+              at: Date.now()
+            };
+            if (bot) bot.lastHelpModalDismiss = result;
+            return result;
+          } catch (err) {
+            const result = {
+              dismissed: false,
+              reason: "click-error",
+              button: describeModalControl(button),
+              error: err?.message || String(err),
+              at: Date.now()
+            };
+            if (bot) bot.lastHelpModalDismiss = result;
+            return result;
+          }
+        }
+        return {
+          visibleHelpModal,
+          dismissHelpModal
+        };
+      }
+      module.exports = {
+        createPageModalRuntime
+      };
+    }
+  });
+
   // src/browser/runtime/control-flow-runtime.js
   var require_control_flow_runtime = __commonJS({
     "src/browser/runtime/control-flow-runtime.js"(exports, module) {
@@ -12740,6 +12841,7 @@
       var { createSessionRecoveryRuntime } = require_session_recovery_runtime();
       var { createNoSelfSnapshotRecoveryRuntime } = require_no_self_snapshot_recovery_runtime();
       var { createReloginGateRuntime } = require_relogin_gate_runtime();
+      var { createPageModalRuntime } = require_page_modal_runtime();
       function createControlFlowRuntime(runtime = {}) {
         const {
           bot,
@@ -12884,6 +12986,7 @@
           getSessionToken: (...args) => getSessionToken(...args),
           getNativeState: (...args) => getNativeState(...args)
         });
+        const { visibleHelpModal, dismissHelpModal } = createPageModalRuntime({ bot, isVisible, controlText });
         const {
           loginPointSafetySuccessRequired,
           optionalFiniteNumber,
@@ -13261,6 +13364,7 @@
           setLoginSuppress,
           requestReload: (...args) => requestReload(...args),
           controlText,
+          dismissHelpModal,
           clearCurrentReloginHold,
           clearNoSelfLocalSessionAfterLeave403: (...args) => clearNoSelfLocalSessionAfterLeave403(...args),
           updateBotPanel,
@@ -13353,6 +13457,8 @@
           noteSelfUnavailableForPostLoginZoom,
           schedulePostLoginZoomOut,
           findLoginControl,
+          visibleHelpModal,
+          dismissHelpModal,
           hasLoginRequiredText,
           setLoginSuppress,
           loginSuppressRemainingMs,
@@ -25809,6 +25915,7 @@
           "clearExitHoldDetail",
           "clearSessionMismatchRecoveryState",
           "cloudflareErrorInfo",
+          "dismissHelpModal",
           "handlePendingExit",
           "installNativeLoginGateInterceptors",
           "isCombatStateForInjuryLeave",
@@ -27549,6 +27656,7 @@
           clearExitHoldDetail,
           clearSessionMismatchRecoveryState,
           cloudflareErrorInfo,
+          dismissHelpModal = () => null,
           handlePendingExit,
           installNativeLoginGateInterceptors,
           isCombatStateForInjuryLeave,
@@ -27740,6 +27848,7 @@
             bot.lastTickAt = tickStartedAt;
             bot.lastCombatTickGap = null;
             bot.tickCount += 1;
+            dismissHelpModal("tick");
             const cloudflare = cloudflareErrorInfo();
             if (cloudflare) {
               bot.lastDecision = {
@@ -29552,6 +29661,7 @@
         let noteSelfUnavailableForPostLoginZoom;
         let schedulePostLoginZoomOut;
         let findLoginControl;
+        let dismissHelpModal;
         let hasLoginRequiredText;
         let setLoginSuppress;
         let loginSuppressRemainingMs;
@@ -29618,6 +29728,7 @@
           noteSelfUnavailableForPostLoginZoom,
           schedulePostLoginZoomOut,
           findLoginControl,
+          dismissHelpModal,
           hasLoginRequiredText,
           setLoginSuppress,
           loginSuppressRemainingMs,
@@ -30523,6 +30634,7 @@
           decorateActiveThreat,
           defensiveTargetOverridesEngaged,
           deferredStaminaExhaustionLeave,
+          dismissHelpModal,
           dist,
           dropValue,
           ensureControlWs,

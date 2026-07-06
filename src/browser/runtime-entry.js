@@ -578,6 +578,7 @@ const __graspRatRuntimeStartup = (() => {
   let noteSelfUnavailableForPostLoginZoom;
   let schedulePostLoginZoomOut;
   let findLoginControl;
+  let dismissHelpModal;
   let hasLoginRequiredText;
   let setLoginSuppress;
   let loginSuppressRemainingMs;
@@ -645,6 +646,7 @@ const __graspRatRuntimeStartup = (() => {
     noteSelfUnavailableForPostLoginZoom,
     schedulePostLoginZoomOut,
     findLoginControl,
+    dismissHelpModal,
     hasLoginRequiredText,
     setLoginSuppress,
     loginSuppressRemainingMs,
@@ -1982,6 +1984,7 @@ const __graspRatRuntimeStartup = (() => {
     decorateActiveThreat,
     defensiveTargetOverridesEngaged,
     deferredStaminaExhaustionLeave,
+    dismissHelpModal,
     dist,
     dropValue,
     ensureControlWs,

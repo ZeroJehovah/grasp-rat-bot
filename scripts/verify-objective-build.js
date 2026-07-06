@@ -36,6 +36,7 @@ const REQUIRED_DIST_TOKENS = [
   'function createEntityStateRuntime',
   'function createExitDetailRuntime',
   'function createEntryGlueRuntime',
+  'function createPageModalRuntime',
   'function createPostLoginZoomRuntime',
   'function createLoginPointSafetyRuntime',
   'function createControlLoginRuntime',
@@ -462,6 +463,7 @@ async function main() {
   const runtimeEntityStateSource = readText('src/browser/runtime/entity-state-runtime.js');
   const runtimeExitDetailSource = readText('src/browser/runtime/exit-detail-runtime.js');
   const runtimeEntryGlueSource = readText('src/browser/runtime/entry-glue-runtime.js');
+  const runtimePageModalSource = readText('src/browser/runtime/page-modal-runtime.js');
   const runtimePostLoginZoomSource = readText('src/browser/runtime/post-login-zoom-runtime.js');
   const runtimeLoginPointSafetySource = readText('src/browser/runtime/login-point-safety-runtime.js');
   const runtimeControlLoginSource = readText('src/browser/runtime/control-login-runtime.js');
@@ -670,6 +672,8 @@ async function main() {
   });
 
   check('ui status runtime modules own whitelist stamina overlay and panel bodies', () => {
+    assert(runtimeControlFlowSource.includes("require('./page-modal-runtime')"), 'control flow runtime does not import page modal runtime module');
+    assert(runtimeControlFlowSource.includes('createPageModalRuntime({'), 'control flow runtime does not create page modal runtime bindings');
     assert(runtimeEntrySource.includes("require('./runtime/target-whitelist')"), 'runtime entry does not import target whitelist runtime module');
     assert(runtimeEntrySource.includes('createTargetWhitelistRuntime({'), 'runtime entry does not create target whitelist runtime bindings');
     assert(runtimeEntrySource.includes("require('./runtime/stamina-status')"), 'runtime entry does not import stamina status runtime module');
@@ -685,6 +689,8 @@ async function main() {
     assert(!/function\s+formatStaminaDisplay\s*\(/.test(runtimeEntrySource), 'runtime entry still owns status panel stamina formatter');
     assert(!/function\s+updateBotPanel\s*\(/.test(runtimeEntrySource), 'runtime entry still owns status panel renderer');
     assert(runtimeTargetWhitelistSource.includes('function createTargetWhitelistRuntime'), 'target whitelist runtime factory missing');
+    assert(runtimePageModalSource.includes('function createPageModalRuntime'), 'page modal runtime factory missing');
+    assert(runtimePageModalSource.includes('function dismissHelpModal'), 'help modal dismissal missing from page modal module');
     assert(runtimeTargetWhitelistSource.includes('async function refreshTargetWhitelist'), 'target whitelist refresh body missing from module');
     assert(runtimeStaminaStatusSource.includes('function createStaminaStatusRuntime'), 'stamina status runtime factory missing');
     assert(runtimeStaminaStatusSource.includes('function summarizeStamina'), 'stamina summary body missing from module');

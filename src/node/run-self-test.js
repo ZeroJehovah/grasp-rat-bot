@@ -20,8 +20,12 @@ const {
   buildBrowserPreservedState
 } = require('../shared/browser-preserved-state');
 const {
-  createNoSelfSnapshotRecoveryRuntime
+  createNoSelfSnapshotRecoveryRuntime,
+  shouldClearTmpGameLocalSessionKey
 } = require('../browser/runtime/no-self-snapshot-recovery-runtime');
+const {
+  createPageModalRuntime
+} = require('../browser/runtime/page-modal-runtime');
 const {
   createSessionRecoveryRuntime
 } = require('../browser/runtime/session-recovery-runtime');
@@ -45,6 +49,18 @@ const {
 const {
   runStrategyModuleSelfTests
 } = require('../strategy/self-test');
+
+function createMapStorage(data = new Map()) {
+  return {
+    get length() {
+      return data.size;
+    },
+    key: index => Array.from(data.keys())[index] ?? null,
+    getItem: key => (data.has(key) ? data.get(key) : null),
+    setItem: (key, value) => data.set(key, String(value)),
+    removeItem: key => data.delete(key)
+  };
+}
 
 async function runSelfTest() {
   const cfg = {
@@ -9197,13 +9213,13 @@ async function runSelfTest() {
       got: (() => {
         const data = new Map([
           ['tmpGameSessionToken', 'stale-token'],
-          ['tmpGameUserId', '28886']
+          ['tmpGameUserId', '28886'],
+          ['tmpGameSessionShadow', 'stale-shadow'],
+          ['tmpGameLoginNonce', 'stale-nonce'],
+          ['tmpGameHelpSeenV3', '1'],
+          ['tmpGameMapView', 'keep-map-view']
         ]);
-        const storage = {
-          getItem: key => (data.has(key) ? data.get(key) : null),
-          setItem: (key, value) => data.set(key, String(value)),
-          removeItem: key => data.delete(key)
-        };
+        const storage = createMapStorage(data);
         let closed = false;
         const nativeWs = {
           readyState: 1,
@@ -9256,6 +9272,10 @@ async function runSelfTest() {
             result.confirmed,
             data.get('tmpGameSessionToken') === undefined,
             data.get('tmpGameUserId') === undefined,
+            data.get('tmpGameSessionShadow') === undefined,
+            data.get('tmpGameLoginNonce') === undefined,
+            data.get('tmpGameHelpSeenV3'),
+            data.get('tmpGameMapView'),
             input.value,
             result.preservedUserIdInput,
             result.closedNativeWs,
@@ -9277,7 +9297,101 @@ async function runSelfTest() {
           global.document = oldDocument;
         }
       })(),
-      want: 'true|true|true|28886|true|true|true|true|true|0||false|null|0|0|false|null|0|true'
+      want: 'true|true|true|true|true|1|keep-map-view|28886|true|true|true|true|true|0||false|null|0|0|false|null|0|true'
+    },
+    {
+      name: 'tmpGame local session cleanup preserves tutorial marker',
+      got: [
+        shouldClearTmpGameLocalSessionKey('tmpGameSessionToken'),
+        shouldClearTmpGameLocalSessionKey('tmpGameUserId'),
+        shouldClearTmpGameLocalSessionKey('tmpGameLoginNonce'),
+        shouldClearTmpGameLocalSessionKey('tmpGameAuthState'),
+        shouldClearTmpGameLocalSessionKey('tmpGameHelpSeenV3'),
+        shouldClearTmpGameLocalSessionKey('tmpGameMapView'),
+        shouldClearTmpGameLocalSessionKey('otherTmpGameSessionToken')
+      ].map(String).join('|'),
+      want: 'true|true|true|true|false|false|false'
+    },
+    {
+      name: 'help modal runtime clicks visible tutorial ok button only',
+      got: (() => {
+        function buildDocument(shown, titleText = '新手教程', buttonText = '知道了') {
+          let clicked = 0;
+          const button = {
+            id: 'helpOkBtn',
+            tagName: 'BUTTON',
+            text: buttonText,
+            shown,
+            click: () => {
+              clicked += 1;
+            }
+          };
+          const modal = {
+            id: 'helpModal',
+            tagName: 'DIV',
+            shown,
+            classList: { contains: name => name === 'show' && shown },
+            getAttribute: name => (name === 'aria-hidden' ? (shown ? 'false' : 'true') : ''),
+            querySelector: selector => (selector === '#helpOkBtn' ? button : null)
+          };
+          const title = { id: 'helpTitle', textContent: titleText };
+          return {
+            clicked: () => clicked,
+            document: {
+              getElementById: id => {
+                if (id === 'helpModal') return modal;
+                if (id === 'helpOkBtn') return button;
+                if (id === 'helpTitle') return title;
+                return null;
+              }
+            }
+          };
+        }
+        const oldDocument = global.document;
+        try {
+          const visible = buildDocument(true);
+          const visibleBot = {};
+          global.document = visible.document;
+          const visibleRuntime = createPageModalRuntime({
+            bot: visibleBot,
+            isVisible: el => Boolean(el?.shown),
+            controlText: el => String(el?.text || '')
+          });
+          const visibleResult = visibleRuntime.dismissHelpModal('self-test');
+
+          const hidden = buildDocument(false);
+          const hiddenBot = {};
+          global.document = hidden.document;
+          const hiddenRuntime = createPageModalRuntime({
+            bot: hiddenBot,
+            isVisible: el => Boolean(el?.shown),
+            controlText: el => String(el?.text || '')
+          });
+          const hiddenResult = hiddenRuntime.dismissHelpModal('self-test');
+
+          const mismatched = buildDocument(true, '系统公告', '知道了');
+          global.document = mismatched.document;
+          const mismatchedRuntime = createPageModalRuntime({
+            bot: {},
+            isVisible: el => Boolean(el?.shown),
+            controlText: el => String(el?.text || '')
+          });
+          const mismatchedResult = mismatchedRuntime.dismissHelpModal('self-test');
+
+          return [
+            visibleResult.dismissed,
+            visible.clicked(),
+            visibleBot.lastHelpModalDismiss?.button,
+            hiddenResult.dismissed,
+            hidden.clicked(),
+            mismatchedResult.dismissed,
+            mismatched.clicked()
+          ].map(String).join('|');
+        } finally {
+          global.document = oldDocument;
+        }
+      })(),
+      want: 'true|1|#helpOkBtn|false|0|false|0'
     },
     {
       name: 'visible login control does not hide stale no-self game session',
@@ -9320,13 +9434,11 @@ async function runSelfTest() {
       got: (() => {
         const data = new Map([
           ['tmpGameSessionToken', 'stale-token'],
-          ['tmpGameUserId', '28886']
+          ['tmpGameUserId', '28886'],
+          ['tmpGameSessionShadow', 'stale-shadow'],
+          ['tmpGameHelpSeenV3', '1']
         ]);
-        const storage = {
-          getItem: key => (data.has(key) ? data.get(key) : null),
-          setItem: (key, value) => data.set(key, String(value)),
-          removeItem: key => data.delete(key)
-        };
+        const storage = createMapStorage(data);
         let reloadReason = '';
         const botState = {
           globalState: { entities: [], snapshotRefreshedAt: Date.now() },
@@ -9356,23 +9468,23 @@ async function runSelfTest() {
           reloadReason,
           data.get('tmpGameSessionToken') === undefined,
           data.get('tmpGameUserId') === undefined,
+          data.get('tmpGameSessionShadow') === undefined,
+          data.get('tmpGameHelpSeenV3'),
           data.has('graspRatNoSelfSnapshotRecovery')
         ].map(String).join('|');
       })(),
-      want: 'snapshot-no-self-exit-confirmed|true|snapshot no-self local session reset|true|true|true'
+      want: 'snapshot-no-self-exit-confirmed|true|snapshot no-self local session reset|true|true|true|1|true'
     },
     {
       name: 'leave 403 no-self recovery clears stale local session',
       got: (() => {
         const data = new Map([
           ['tmpGameSessionToken', 'stale-token'],
-          ['tmpGameUserId', '28886']
+          ['tmpGameUserId', '28886'],
+          ['tmpGameAuthState', 'stale-auth'],
+          ['tmpGameHelpSeenV3', '1']
         ]);
-        const storage = {
-          getItem: key => (data.has(key) ? data.get(key) : null),
-          setItem: (key, value) => data.set(key, String(value)),
-          removeItem: key => data.delete(key)
-        };
+        const storage = createMapStorage(data);
         let closed = false;
         const nativeWs = {
           readyState: 0,
@@ -9415,6 +9527,8 @@ async function runSelfTest() {
           result.reason,
           data.get('tmpGameSessionToken') === undefined,
           data.get('tmpGameUserId') === undefined,
+          data.get('tmpGameAuthState') === undefined,
+          data.get('tmpGameHelpSeenV3'),
           Boolean(result.recoveryMarker),
           result.recoveryMarker?.reason,
           result.closedNativeWs,
@@ -9427,7 +9541,7 @@ async function runSelfTest() {
           data.get('pendingExitCleared')
         ].map(String).join('|');
       })(),
-      want: 'true|leave-403-no-self-exit-confirmed|true|true|true|leave-403-no-self-exit-confirmed|true|true|0||false|null|0|true'
+      want: 'true|leave-403-no-self-exit-confirmed|true|true|true|1|true|leave-403-no-self-exit-confirmed|true|true|0||false|null|0|true'
     },
     {
       name: 'snapshot no-self recovery marker suppresses repeat leave state',
