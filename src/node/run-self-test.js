@@ -9433,42 +9433,40 @@ async function runSelfTest() {
       want: 'true|#joinBtn|true|false|true|1|0|5'
     },
     {
-      name: 'post-login zoom caps outward fit at configured 500m radius',
+      name: 'post-login zoom keeps fitting clipped 500m circle despite view radius label',
       got: (() => {
         const runtime = createPostLoginZoomRuntime({
           bot: {},
           cfg: {
             postLoginZoomFitRadiusCm: 50000,
-            postLoginZoomMaxViewRadiusCm: 50000,
             postLoginZoomFitTargetRatio: 0.98,
             postLoginZoomFitTolerance: 0.04
           }
         });
-        const clippedAtCap = runtime.postLoginZoomFitDecision({
+        const clippedAtLabeledRadius = runtime.postLoginZoomFitDecision({
           ok: true,
           fitRatio: 1.08,
           minRatio: 0.94,
           maxRatio: 1,
-          viewRadiusCm: 50000,
-          maxViewRadiusCm: 50000
+          viewRadiusCm: 50000
         });
         const overZoomed = runtime.postLoginZoomFitDecision({
           ok: true,
           fitRatio: 0.7,
           minRatio: 0.94,
           maxRatio: 1,
-          viewRadiusCm: 80000,
-          maxViewRadiusCm: 50000
+          viewRadiusCm: 80000
         });
         return [
-          clippedAtCap.done,
-          clippedAtCap.reason,
+          clippedAtLabeledRadius.done,
+          clippedAtLabeledRadius.direction,
+          clippedAtLabeledRadius.reason,
           overZoomed.done,
           overZoomed.direction,
           overZoomed.reason
         ].map(String).join('|');
       })(),
-      want: 'true|view-radius-cap|false|in|visible-range-too-small'
+      want: 'false|out|circle-clipped|false|in|visible-range-too-small'
     },
     {
       name: 'post-login zoom no-token session key is stable across no-self generations',
