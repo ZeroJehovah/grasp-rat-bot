@@ -10062,6 +10062,130 @@ async function runSelfTest() {
       want: 'true|true|1|null'
     },
     {
+      name: 'pending no-self exit confirmation clears stale local session before blocked reload',
+      got: (() => {
+        const data = new Map([
+          ['tmpGameSessionToken', 'stale-token'],
+          ['tmpGameUserId', '28886'],
+          ['tmpGameSessionShadow', 'stale-shadow'],
+          ['tmpGameHelpSeenV3', '1']
+        ]);
+        const storage = createMapStorage(data);
+        let closed = false;
+        let reloadCalls = 0;
+        const nativeWs = {
+          readyState: 0,
+          close: () => {
+            closed = true;
+          }
+        };
+        const nativeState = {
+          currentUserId: 28886,
+          sessionToken: 'stale-token',
+          wsOpen: false,
+          ws: nativeWs,
+          entities: [{ user_id: 28886 }],
+          reconnectTimer: 11
+        };
+        const botState = {
+          globalState: { entities: [] },
+          control: { hasToken: true, connecting: true, nativeWsOpen: false },
+          exitAudit: {},
+          importantLogging: {},
+          lastSelf: { user_id: 28886, hp: 100, x: 0, y: 0 }
+        };
+        const noSelfRuntime = createNoSelfSnapshotRecoveryRuntime({
+          bot: botState,
+          cfg,
+          storage,
+          getCurrentUserId: () => 28886,
+          getNativeControl: () => ({ ws: nativeWs, state: nativeState }),
+          snapshotSelfPresenceState: () => ({ known: false, fresh: false, present: false }),
+          clearPersistentPendingExitState: () => {
+            data.set('pendingExitCleared', 'true');
+          }
+        });
+        const runtime = createPendingExitRuntime({
+          bot: botState,
+          cfg: { ...cfg, leave403ReloginDelayMs: 3600000 },
+          storage,
+          getCurrentUserId: () => 28886,
+          getSessionToken: () => storage.getItem('tmpGameSessionToken') || '',
+          summarizeSelf: value => value,
+          summarizeControl: () => ({
+            currentUserId: 28886,
+            hasToken: storage.getItem('tmpGameSessionToken') !== null,
+            connecting: true,
+            wsReadyState: 0,
+            nativeWsReadyState: 0
+          }),
+          controlHasAuthoritativeSessionMismatch: () => false,
+          requestReload: () => {
+            reloadCalls += 1;
+            return false;
+          },
+          stopMotionAfterExit: () => {},
+          clearCombatEngagement: () => {},
+          resetLoginSnapshotGate: () => ({ reset: true }),
+          loginPointSafetyExitSelfForDetail: () => botState.lastSelf,
+          setLoginSuppress: () => 0,
+          reloginDelayForHpCore: () => ({ delayMs: 0, hpDelayMs: 0, minMs: 0, maxMs: 0, hp: { hp: 100, maxHp: 100, ratio: 1 } }),
+          recordExitAuditEvent: () => false,
+          noteImportantSessionExit: () => null,
+          isAlive: value => Boolean(value?.hp > 0),
+          clearNoSelfLocalSessionAfterConfirmedExit: (...args) => noSelfRuntime.clearNoSelfLocalSessionAfterConfirmedExit(...args)
+        });
+        const noSelfGameSession = { shouldLeave: true, userId: 28886, ageMs: 45000, reconnectChurn: { count: 3 } };
+        const pending = {
+          scope: 'offline',
+          source: 'offline',
+          reason: 'game session missing self',
+          summary: '已登录但自身实体不可见',
+          userId: 28886,
+          self: botState.lastSelf,
+          at: Date.now() - 1000,
+          retryCount: 2,
+          offlineSafety: { unsafe: true, noSelfGameSession },
+          lastResult: {
+            attempted: true,
+            reason: 'game session missing self',
+            summary: '已登录但自身实体不可见',
+            userId: 28886,
+            offlineSafety: { unsafe: true, noSelfGameSession }
+          }
+        };
+        botState.pendingExit = pending;
+        const detail = runtime.confirmPendingExit(pending, {
+          known: true,
+          alive: false,
+          source: 'snapshot',
+          self: null
+        });
+        return [
+          detail?.exitConfirmed,
+          detail?.reloadRequested,
+          reloadCalls,
+          Boolean(detail?.localSessionReset),
+          detail?.localSessionReset?.reason,
+          data.get('tmpGameSessionToken') === undefined,
+          data.get('tmpGameUserId') === undefined,
+          data.get('tmpGameSessionShadow') === undefined,
+          data.get('tmpGameHelpSeenV3'),
+          data.has('graspRatNoSelfSnapshotRecovery'),
+          nativeState.currentUserId,
+          nativeState.sessionToken,
+          nativeState.wsOpen,
+          nativeState.ws,
+          closed,
+          botState.control.hasToken,
+          botState.pendingExit,
+          botState.offlineSince,
+          data.get('pendingExitCleared')
+        ].map(String).join('|');
+      })(),
+      want: 'true|false|1|true|confirmed-no-self-exit-local-session-reset|true|true|true|1|true|0||false|null|true|false|null|0|true'
+    },
+    {
       name: 'local exit confirmation must not accept active session mismatch',
       got: (() => {
         const tokenCleared = true;

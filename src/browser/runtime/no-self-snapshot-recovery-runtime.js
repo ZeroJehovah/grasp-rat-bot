@@ -299,6 +299,35 @@ function createNoSelfSnapshotRecoveryRuntime(runtime = {}) {
     return clearNoSelfLocalSessionForConfirmation(confirmation, control, noSelfExit, reason);
   }
 
+  function clearNoSelfLocalSessionAfterConfirmedExit(control, noSelfExit, exitDetail = null, reason = 'confirmed no-self exit recovery') {
+    const t = Date.now();
+    const userId = Number(control?.currentUserId || getCurrentUserId() || noSelfExit?.userId || exitDetail?.userId || 0) || 0;
+    const snapshotSelf = noSelfExit?.snapshotSelf || snapshotSelfPresenceState(userId);
+    const confirmation = {
+      confirmed: true,
+      reason: 'confirmed-no-self-exit-local-session-reset',
+      displayReason: '退出已确认，按服务端已无自身清理本地登录状态后重登',
+      source: 'confirmed-missing-self',
+      at: t,
+      userId: userId || null,
+      snapshotSelf,
+      noSelfAgeMs: Math.max(0, Math.round(Number(noSelfExit?.ageMs || 0) || 0)),
+      noSelfGameSession: noSelfExit || null,
+      leave: exitDetail || null,
+      control: control ? {
+        wsOpen: Boolean(control.wsOpen),
+        rawWsOpen: Boolean(control.rawWsOpen),
+        connecting: Boolean(control.connecting),
+        wsReadyState: control.wsReadyState ?? null,
+        nativeWsReadyState: control.nativeWsReadyState ?? null,
+        hasToken: Boolean(control.hasToken),
+        transport: control.transport || ''
+      } : null,
+      blockedBy: []
+    };
+    return clearNoSelfLocalSessionForConfirmation(confirmation, control, noSelfExit, reason);
+  }
+
   function handleNoSelfSnapshotExitRecovery(control, noSelfExit, options = {}) {
     const confirmation = noSelfSnapshotExitConfirmationState(control, noSelfExit);
     if (!confirmation.confirmed) return null;
@@ -353,6 +382,7 @@ function createNoSelfSnapshotRecoveryRuntime(runtime = {}) {
     clearNoSelfSnapshotRecoveryState,
     clearNoSelfSnapshotLocalSession,
     clearNoSelfLocalSessionAfterLeave403,
+    clearNoSelfLocalSessionAfterConfirmedExit,
     handleNoSelfSnapshotExitRecovery,
     runNoSelfSnapshotExitRecovery
   };

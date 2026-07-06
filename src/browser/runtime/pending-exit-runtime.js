@@ -79,7 +79,8 @@ function createPendingExitRuntime(runtime = {}) {
     reloginDelayForHpCore = () => 0,
     clamp = (value, min, max) => Math.max(min, Math.min(max, value)),
     scheduleClashLeaveRescueRetry = () => false,
-    issueLeaveCommand = async detail => detail
+    issueLeaveCommand = async detail => detail,
+    clearNoSelfLocalSessionAfterConfirmedExit = () => null
   } = runtime;
   const localStorage = storage;
   const PENDING_EXIT_STATE_KEY = pendingExitStateKey;
@@ -637,6 +638,34 @@ function createPendingExitRuntime(runtime = {}) {
     return false;
   }
 
+  function pendingNoSelfGameSession(pending, detail, state = null) {
+    if (pending?.scope !== 'offline') return null;
+    return pending?.offlineSafety?.noSelfGameSession
+      || detail?.offlineSafety?.noSelfGameSession
+      || pending?.lastResult?.offlineSafety?.noSelfGameSession
+      || state?.noSelfGameSession
+      || null;
+  }
+
+  function clearConfirmedNoSelfLocalSession(pending, detail, state = null) {
+    const noSelfExit = pendingNoSelfGameSession(pending, detail, state);
+    if (!noSelfExit) return null;
+    const recovery = clearNoSelfLocalSessionAfterConfirmedExit(
+      summarizeControl(),
+      noSelfExit,
+      detail,
+      'pending exit no-self confirmed'
+    );
+    if (!recovery?.clearedLocalSession) return recovery || null;
+    detail.localSessionReset = recovery;
+    detail.noSelfSnapshotRecovery = recovery.recoveryMarker || null;
+    if (detail.exitConfirmation && typeof detail.exitConfirmation === 'object') {
+      detail.exitConfirmation.localSessionReset = recovery;
+      detail.exitConfirmation.noSelfLocalSessionReset = true;
+    }
+    return recovery;
+  }
+
 	  function confirmPendingExit(pending, state) {
 	    const t = Date.now();
 	    const detail = cloneForPendingExit(pending.lastResult || {}) || {};
@@ -651,6 +680,7 @@ function createPendingExitRuntime(runtime = {}) {
 	    detail.exitConfirmed = true;
 	    detail.exitConfirmedAt = t;
 	    detail.exitConfirmation = state || null;
+    clearConfirmedNoSelfLocalSession(pending, detail, state);
 	    detail.loginSnapshotGateReset = resetLoginSnapshotGate(
 	      'exit-confirmed:' + (detail.reason || pending.reason || ''),
 	      loginPointSafetyExitSelfForDetail(detail, { self: pending.self || state?.self || null }, bot.lastSelf)
