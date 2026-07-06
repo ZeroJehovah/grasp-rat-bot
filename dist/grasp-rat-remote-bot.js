@@ -12,7 +12,7 @@
   var define_GRASP_RAT_RUNTIME_CONFIG_default;
   var init_define_GRASP_RAT_RUNTIME_CONFIG = __esm({
     "<define:__GRASP_RAT_RUNTIME_CONFIG__>"() {
-      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.572" };
+      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.573" };
     }
   });
 
@@ -10437,6 +10437,7 @@
         activeNoSelfSnapshotRecoveryState: activeNoSelfSnapshotRecoveryStateCore,
         clearNoSelfSnapshotRecoveryState: clearNoSelfSnapshotRecoveryStateCore
       } = require_no_self_snapshot_recovery_state();
+      var { leaveDetailHasHttp403Core } = require_pending_exit2();
       function createLeaveFlowRuntime(runtime = {}) {
         const {
           bot,
@@ -10474,6 +10475,7 @@
           setLoginSuppress = () => 0,
           controlText = () => "",
           clearCurrentReloginHold = () => ({}),
+          clearNoSelfLocalSessionAfterLeave403 = () => null,
           updateBotPanel = () => {
           },
           triggerNativeTick = () => false,
@@ -11011,13 +11013,31 @@
           startExitAuditBoundCore(detail, { scope: "offline", source: "offline", reason, self: selfSummary, offlineSafety }, bot, { resetLoginSnapshotGate, loginPointSafetyExitSelfForDetail, ensureExitAuditDetail, recordExitAuditEvent, now: Date.now });
           bot.lastOfflineLeaveAt = t;
           await issueLeaveCommand(detail);
-          if (detail.attempted) {
+          if (detail.attempted && leaveDetailHasHttp403Core(detail) && offlineSafety?.noSelfGameSession) {
+            const recovery = clearNoSelfLocalSessionAfterLeave403(summarizeControl(), offlineSafety.noSelfGameSession, detail);
+            if (recovery?.clearedLocalSession) {
+              detail.exitPending = false;
+              detail.exitConfirmed = true;
+              detail.exitConfirmedAt = recovery.clearedAt || Date.now();
+              detail.exitConfirmation = {
+                known: true,
+                alive: false,
+                source: "leave-http-403-no-self-local-session-reset",
+                http403: true,
+                localSessionReset: recovery
+              };
+              detail.localSessionReset = recovery;
+              detail.summary = recovery.displayReason || detail.summary;
+              detail.displayReason = recovery.displayReason || detail.displayReason || detail.summary;
+            }
+          }
+          if (detail.attempted && !detail.exitConfirmed) {
             const staminaSuppress = primePendingStaminaExitLoginSuppressBoundCore(detail, { now: Date.now, staminaBudgetReloginDelayMs, staminaResetHoldUntil, setLoginSuppress });
             if (!staminaSuppress && offlineExitRequiresUnsafeReloginDelayCore(reason, offlineSafety)) {
               primePendingUnsafeExitLoginSuppressBoundCore("offline leave", reason, detail, selfSummary, {}, { hpInfoForRelogin, reloginDelayForHp: (selfLike, detail2) => reloginDelayForHpCore(selfLike, detail2, { cfg, hpInfoForRelogin, randomBetween, clamp }), cfg, setLoginSuppress, now: Date.now });
             }
           }
-          if (detail.attempted || detail.exitAuditId) {
+          if ((detail.attempted || detail.exitAuditId) && !detail.exitConfirmed) {
             rememberPendingExit("offline", "offline", detail, selfSummary);
           }
           finalizeLeaveDisplayReasonForLeaveFlowCore(detail, (base, value) => leaveWaitDisplayForLeaveFlowCore(base, value, formatDurationMs));
@@ -12206,9 +12226,8 @@
           bot.noSelfSnapshotRecovery = null;
           return result;
         }
-        function clearNoSelfSnapshotLocalSession(control, noSelfExit, reason = "snapshot no-self exit confirmed") {
+        function clearNoSelfLocalSessionForConfirmation(confirmation, control, noSelfExit, reason = "snapshot no-self exit confirmed") {
           const t = Date.now();
-          const confirmation = noSelfSnapshotExitConfirmationState(control, noSelfExit, t);
           if (!confirmation.confirmed) return confirmation;
           const userId = confirmation.userId || Number(control?.currentUserId || getCurrentUserId() || 0) || null;
           const removedKeys = [];
@@ -12220,7 +12239,7 @@
           removeStorageKeysMatching(localStorage2, /^tmpGame/i, "", removedKeys, storageErrors);
           removeStorageKeysMatching(browserSessionStorage, /^tmpGame/i, "sessionStorage.", removedKeys, storageErrors);
           const markerResult = writeNoSelfSnapshotRecoveryState(localStorage2, {
-            reason: "snapshot-no-self-exit-confirmed",
+            reason: confirmation.reason || "snapshot-no-self-exit-confirmed",
             userId,
             source: confirmation.source,
             noSelfAgeMs: confirmation.noSelfAgeMs,
@@ -12253,6 +12272,38 @@
             closeNativeWsError: nativeSessionReset.error,
             displayReason: confirmation.displayReason
           };
+        }
+        function clearNoSelfSnapshotLocalSession(control, noSelfExit, reason = "snapshot no-self exit confirmed") {
+          const confirmation = noSelfSnapshotExitConfirmationState(control, noSelfExit, Date.now());
+          return clearNoSelfLocalSessionForConfirmation(confirmation, control, noSelfExit, reason);
+        }
+        function clearNoSelfLocalSessionAfterLeave403(control, noSelfExit, leaveDetail = null, reason = "leave HTTP 403 no-self recovery") {
+          const t = Date.now();
+          const userId = Number(control?.currentUserId || getCurrentUserId() || noSelfExit?.userId || leaveDetail?.userId || 0) || 0;
+          const snapshotSelf = noSelfExit?.snapshotSelf || snapshotSelfPresenceState(userId);
+          const confirmation = {
+            confirmed: true,
+            reason: "leave-403-no-self-exit-confirmed",
+            displayReason: "leave\u63A5\u53E3\u8FD4\u56DE403\uFF0C\u6309\u670D\u52A1\u7AEF\u5DF2\u65E0\u81EA\u8EAB\u6E05\u7406\u672C\u5730\u767B\u5F55\u72B6\u6001\u540E\u91CD\u767B",
+            source: "leave-http-403-missing-self",
+            at: t,
+            userId: userId || null,
+            snapshotSelf,
+            noSelfAgeMs: Math.max(0, Math.round(Number(noSelfExit?.ageMs || 0) || 0)),
+            noSelfGameSession: noSelfExit || null,
+            leave: leaveDetail || null,
+            control: control ? {
+              wsOpen: Boolean(control.wsOpen),
+              rawWsOpen: Boolean(control.rawWsOpen),
+              connecting: Boolean(control.connecting),
+              wsReadyState: control.wsReadyState ?? null,
+              nativeWsReadyState: control.nativeWsReadyState ?? null,
+              hasToken: Boolean(control.hasToken),
+              transport: control.transport || ""
+            } : null,
+            blockedBy: []
+          };
+          return clearNoSelfLocalSessionForConfirmation(confirmation, control, noSelfExit, reason);
         }
         function handleNoSelfSnapshotExitRecovery(control, noSelfExit, options = {}) {
           const confirmation = noSelfSnapshotExitConfirmationState(control, noSelfExit);
@@ -12304,6 +12355,7 @@
           activeNoSelfSnapshotRecoveryState,
           clearNoSelfSnapshotRecoveryState,
           clearNoSelfSnapshotLocalSession,
+          clearNoSelfLocalSessionAfterLeave403,
           handleNoSelfSnapshotExitRecovery,
           runNoSelfSnapshotExitRecovery
         };
@@ -12904,6 +12956,7 @@
         const {
           noSelfSnapshotExitConfirmationState,
           clearNoSelfSnapshotLocalSession,
+          clearNoSelfLocalSessionAfterLeave403,
           handleNoSelfSnapshotExitRecovery,
           runNoSelfSnapshotExitRecovery
         } = createNoSelfSnapshotRecoveryRuntime({
@@ -13121,6 +13174,7 @@
           setLoginSuppress,
           controlText,
           clearCurrentReloginHold,
+          clearNoSelfLocalSessionAfterLeave403: (...args) => clearNoSelfLocalSessionAfterLeave403(...args),
           updateBotPanel,
           triggerNativeTick,
           issueLeaveCommand,
@@ -13167,6 +13221,7 @@
           noSelfGameSessionExitState,
           noSelfSnapshotExitConfirmationState,
           clearNoSelfSnapshotLocalSession,
+          clearNoSelfLocalSessionAfterLeave403,
           handleNoSelfSnapshotExitRecovery,
           runNoSelfSnapshotExitRecovery,
           recentUnsafeExitContext,
