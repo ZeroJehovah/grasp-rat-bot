@@ -3,7 +3,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.1.57';
+  const BOOTSTRAP_VERSION = '0.1.58';
   const BOOTSTRAP_OWNER = 'extension';
   const REPOSITORY_URL = 'https://github.com/ZeroJehovah/grasp-rat-bot';
   const LOADER_UPDATE_URL = 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/extension/page-bootstrap.js';
@@ -2171,9 +2171,12 @@
 
   function chaseCandidateStatusText(candidate) {
     if (!candidate) return '';
-    if (candidate.status) return String(candidate.status);
+    if (candidate.status) {
+      const status = String(candidate.status).trim();
+      return status === '视野' ? '' : status;
+    }
     if (candidate.attackableNow) return '射程内';
-    if (candidate.visible) return '视野';
+    if (candidate.visible) return '';
     if (candidate.minimapOnly) return 'minimap';
     if (candidate.snapshot) return '快照';
     if (candidate.stale) return '未刷新';
@@ -2272,16 +2275,16 @@
       name.title = name.textContent;
       name.style.cssText = 'min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11.5px;font-weight:800;color:#e5edf7';
       const meta = document.createElement('div');
-      meta.textContent = 'HP ' + (candidate.hp ?? '?')
-        + '  Drop ' + (candidate.drop ?? '?')
-        + '  ' + formatDistance(candidate.distance);
-      meta.style.cssText = 'font-size:10.5px;color:#cbd5e1;font-variant-numeric:tabular-nums';
-      const source = document.createElement('div');
-      source.textContent = chaseCandidateStatusText(candidate);
-      source.style.cssText = 'font-size:10px;color:' + (candidate.staminaBlocked ? '#fca5a5' : '#94a3b8');
+      const statusText = chaseCandidateStatusText(candidate);
+      meta.textContent = [
+        'HP ' + (candidate.hp ?? '?'),
+        'Drop ' + (candidate.drop ?? '?'),
+        formatDistance(candidate.distance),
+        statusText
+      ].filter(Boolean).join('  ');
+      meta.style.cssText = 'min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10.5px;color:' + (candidate.staminaBlocked ? '#fca5a5' : '#cbd5e1') + ';font-variant-numeric:tabular-nums';
       info.appendChild(name);
       info.appendChild(meta);
-      info.appendChild(source);
       const controls = document.createElement('div');
       controls.style.cssText = 'display:flex;align-items:center;gap:5px';
       if (candidate.marked) {
