@@ -4,14 +4,15 @@ Update this file for every remote bot release or handoff-relevant state change. 
 
 ## Latest Release
 
-- Latest remote bot: `bootstrap-0.4.583`.
-- Latest manifest SHA-256: `0092a7ed0f9294864d8ceff481ceddde50dde2888f193bf4c073fde17a6c6cee`.
-- Latest remote release commit: `1bae6b0` (`bootstrap-0.4.583` prefer native login control for immediate login).
-- Latest bootstrap A versions: Tampermonkey `0.4.75`, extension `0.1.54`.
-- Latest direct entry/config SHA-256: `e21673ea686f07617a304ad42b19500e6ec09550e02a10ecf257e6b52b8eecac`.
+- Latest remote bot: `bootstrap-0.4.584`.
+- Latest manifest SHA-256: `89f7b14311c0da42f3b278b28d07fb1ca4102ce82ea89f83f4c80b709db8fad4`.
+- Latest remote release commit: `22a938f` (`bootstrap-0.4.584` reset login safety streak on page load).
+- Latest bootstrap A versions: Tampermonkey `0.4.76`, extension `0.1.55`.
+- Latest direct entry/config SHA-256: `c680660a53429ed497591fd8a8e98ce44b3a6f93144a9aa5618438922319ecb1`.
 
 ## Current Handoff
 
+- `bootstrap-0.4.584` makes the login-point safety success streak page-load scoped. Remote script B stores the current `performance.timeOrigin` in `localStorage.graspRatLoginPointSafety` and clears `streak`, sample timestamps, stale danger/error, and movement evidence whenever a new tab/page refresh has a different page-load marker, while preserving the learned login point, same-day damage actors, and last-exit HP radius context. Tampermonkey `0.4.76` and extension `0.1.55` apply the same reset before their local watchdog login gate reads `localStorage`, so a freshly opened/refreshed page can no longer immediately auto-login from a stale persisted `登录点安全 3/3` before three new page-native `/snapshot` safety passes.
 - `bootstrap-0.4.583` fixes the remaining immediate-login no-op path behind the left-panel `立即登录` button and the repeated `bot login started` 45s loop. Bootstrap A inserts its own inline login proxy and hides the native `#joinBtn`; remote script B now recognizes the hidden native join button as the real login control, skips the bot-owned inline proxy when scanning generic login buttons, and manual `forceLoginNow()` now prefers that native control before any page-global `startLinuxDoLogin()`/raw fallback. Tampermonkey `0.4.75` and extension `0.1.54` apply the same control-first order in their watchdog login helper, so stale/no-op page globals should no longer make a click appear to do nothing while still starting the 45s grace.
 - `bootstrap-0.4.582` fixes another `bot login started` cooldown loop after frozen/network exits or stale-session takeover. Once automatic relogin has already passed the need and safety-gate checks, a visible native login control is preferred over page-global `startLinuxDoLogin()` even when stale token/native-session evidence remains, preventing a no-op global call from resetting the 45s login grace repeatedly. `status().reloginGate` now reports the configured 45s total for `bot login started` instead of mirroring the current remaining value as the total.
 - `bootstrap-0.4.581` handles external/manual exits that leave no pending-exit context. Before normal action selection, if chat confirms `left user <currentUserId>` and strong exit evidence is present, especially a fresh page-native snapshot with the current self absent, the bot now ignores stale native `state.entities` self data, stops motion, clears local/session/native stale login state through the no-self recovery path, records `external-left-user-exit-confirmed`, resets the relogin safety gate, and requests reload. A live current self with token/session evidence blocks the path so old chat history cannot kick an active session.
@@ -61,7 +62,7 @@ Update this file for every remote bot release or handoff-relevant state change. 
 
 ## Latest Validation Baseline
 
-The latest `bootstrap-0.4.583` release validation passed. Run build-producing commands and manifest-reading validation sequentially, not in parallel; `node scripts/build-remote-bot.js --version ...` rewrites `dist/manifest.json`, while `objective-status` and `verify-objective-build` read it.
+The latest `bootstrap-0.4.584` release validation passed. Run build-producing commands and manifest-reading validation sequentially, not in parallel; `node scripts/build-remote-bot.js --version ...` rewrites `dist/manifest.json`, while `objective-status` and `verify-objective-build` read it.
 
 ```bash
 node grasp-rat-bot.js --self-test
@@ -78,7 +79,7 @@ node --check extension/popup.js
 cd combat-log-service && npm test
 npm run test:runtime-helper-entry
 npm run test:remote-bundled
-node scripts/build-remote-bot.js --version bootstrap-0.4.583
+node scripts/build-remote-bot.js --version bootstrap-0.4.584
 node scripts/verify-objective-build.js
 git diff --check
 ```
