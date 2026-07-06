@@ -10635,6 +10635,127 @@ async function runSelfTest() {
       want: 'true|false|1|true|confirmed-no-self-exit-local-session-reset|true|true|true|1|true|0||false|null|true|false|null|0|true'
     },
     {
+      name: 'pending no-self exit accepts fresh missing snapshot despite stale native session',
+      got: (async () => {
+        const data = new Map([
+          ['tmpGameSessionToken', 'stale-token'],
+          ['tmpGameUserId', '28886'],
+          ['tmpGameSessionShadow', 'stale-shadow'],
+          ['tmpGameHelpSeenV3', '1']
+        ]);
+        const storage = createMapStorage(data);
+        let reloadCalls = 0;
+        const nativeWs = {
+          readyState: 1,
+          close: () => {}
+        };
+        const nativeState = {
+          currentUserId: 28886,
+          sessionToken: 'stale-token',
+          wsOpen: true,
+          ws: nativeWs,
+          entities: [],
+          reconnectTimer: 13
+        };
+        const botState = {
+          globalState: { entities: [], snapshotRefreshedAt: Date.now() },
+          control: { hasToken: true, rawWsOpen: true, nativeWsOpen: true },
+          exitAudit: {},
+          importantLogging: {},
+          lastSelf: { user_id: 28886, hp: 100, x: 0, y: 0 }
+        };
+        const noSelfRuntime = createNoSelfSnapshotRecoveryRuntime({
+          bot: botState,
+          cfg,
+          storage,
+          getCurrentUserId: () => 28886,
+          getNativeControl: () => ({ ws: nativeWs, state: nativeState }),
+          snapshotSelfPresenceState: () => ({ known: true, fresh: true, present: false }),
+          clearPersistentPendingExitState: () => {
+            data.set('pendingExitClearedByNoSelfRuntime', 'true');
+          }
+        });
+        const runtime = createPendingExitRuntime({
+          bot: botState,
+          cfg: { ...cfg, leave403ReloginDelayMs: 3600000 },
+          storage,
+          getCurrentUserId: () => 28886,
+          getSessionToken: () => storage.getItem('tmpGameSessionToken') || '',
+          getNativeState: () => nativeState,
+          getNativeControl: () => ({ ws: nativeWs, state: nativeState }),
+          hasNativeGameSession: () => true,
+          snapshotSelfFreshEnough: () => true,
+          summarizeSelf: value => value,
+          summarizeControl: () => ({
+            currentUserId: 28886,
+            hasToken: storage.getItem('tmpGameSessionToken') !== null,
+            rawWsOpen: true,
+            nativeWsOpen: true,
+            wsReadyState: 1,
+            nativeWsReadyState: 1
+          }),
+          controlHasAuthoritativeSessionMismatch: () => false,
+          requestReload: () => {
+            reloadCalls += 1;
+            return false;
+          },
+          stopMotionAfterExit: () => {},
+          clearCombatEngagement: () => {},
+          clearPersistentPendingExitState: () => {
+            data.set('pendingExitClearedByPendingRuntime', 'true');
+          },
+          resetLoginSnapshotGate: () => ({ reset: true }),
+          loginPointSafetyExitSelfForDetail: () => botState.lastSelf,
+          setLoginSuppress: () => 0,
+          reloginDelayForHpCore: () => ({ delayMs: 0, hpDelayMs: 0, minMs: 0, maxMs: 0, hp: { hp: 100, maxHp: 100, ratio: 1 } }),
+          recordExitAuditEvent: () => false,
+          noteImportantSessionExit: () => null,
+          isAlive: value => Boolean(value?.hp > 0),
+          clearNoSelfLocalSessionAfterConfirmedExit: (...args) => noSelfRuntime.clearNoSelfLocalSessionAfterConfirmedExit(...args)
+        });
+        const noSelfGameSession = { shouldLeave: true, userId: 28886, ageMs: 180000, reconnectChurn: { count: 3 } };
+        botState.pendingExit = {
+          scope: 'offline',
+          source: 'offline',
+          reason: 'game session missing self',
+          summary: '已登录但自身实体不可见',
+          userId: 28886,
+          self: botState.lastSelf,
+          at: Date.now() - 180000,
+          retryCount: 5,
+          offlineSafety: { unsafe: true, noSelfGameSession },
+          lastResult: {
+            attempted: false,
+            reason: 'cooldown',
+            summary: '已登录但自身实体不可见',
+            userId: 28886,
+            offlineSafety: { unsafe: true, noSelfGameSession }
+          }
+        };
+        const decision = await runtime.handlePendingExit(null);
+        return [
+          decision?.reason,
+          decision?.exitConfirmation?.source,
+          decision?.leave?.exitConfirmed,
+          Boolean(decision?.leave?.localSessionReset),
+          data.get('tmpGameSessionToken') === undefined,
+          data.get('tmpGameUserId') === undefined,
+          data.get('tmpGameSessionShadow') === undefined,
+          data.has('graspRatNoSelfSnapshotRecovery'),
+          nativeState.currentUserId,
+          nativeState.sessionToken,
+          nativeState.wsOpen,
+          nativeState.ws,
+          botState.control.hasToken,
+          botState.pendingExit,
+          reloadCalls,
+          data.get('pendingExitClearedByNoSelfRuntime'),
+          data.get('pendingExitClearedByPendingRuntime')
+        ].map(String).join('|');
+      })(),
+      want: 'offline-leave-wait|snapshot-no-self-offline-pending|true|true|true|true|true|true|0||false|null|false|null|1|true|true'
+    },
+    {
       name: 'external left user recovery clears stale self entity',
       got: (async () => {
         const data = new Map([

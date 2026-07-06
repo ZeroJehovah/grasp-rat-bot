@@ -270,7 +270,22 @@ function createPendingExitRuntime(runtime = {}) {
 	    return pending;
 	  }
 
-  function pendingExitSelfState(self) {
+  function pendingExitFreshSnapshotSelfState(userId = getCurrentUserId()) {
+    if (!userId || !snapshotSelfFreshEnough()) return null;
+    const snapshotSelf = (bot.globalState.entities || []).find(entity => Number(entity.user_id) === userId) || null;
+    return {
+      known: true,
+      alive: Boolean(snapshotSelf && isAlive(snapshotSelf)),
+      source: 'snapshot',
+      self: snapshotSelf ? summarizeSelf(snapshotSelf) : null
+    };
+  }
+
+  function pendingExitCanUseSnapshotMissingSelf(pending) {
+    return Boolean(pending?.scope === 'offline' && pendingNoSelfGameSession(pending, pending?.lastResult || null));
+  }
+
+  function pendingExitSelfState(self, pending = null) {
     const userId = getCurrentUserId();
     if (!userId) return { known: true, alive: false, source: 'no-current-user-id', self: null };
     try {
@@ -295,21 +310,21 @@ function createPendingExitRuntime(runtime = {}) {
     if (self) {
       return { known: true, alive: Boolean(isAlive(self)), source: 'tick-self', self: summarizeSelf(self) };
     }
+    const snapshotState = pendingExitFreshSnapshotSelfState(userId);
+    if (snapshotState?.alive) return snapshotState;
+    if (snapshotState?.known && !snapshotState.alive && pendingExitCanUseSnapshotMissingSelf(pending)) {
+      return {
+        ...snapshotState,
+        source: 'snapshot-no-self-offline-pending'
+      };
+    }
     if (hasNativeGameSession(getNativeControl(), userId)) {
       return { known: false, alive: false, source: 'native-session-pending', self: null };
     }
     if (hasLoginRequiredText() || findLoginControl()) {
       return { known: true, alive: false, source: 'login-required', self: null };
     }
-    if (snapshotSelfFreshEnough()) {
-      const snapshotSelf = (bot.globalState.entities || []).find(entity => Number(entity.user_id) === userId) || null;
-      return {
-        known: true,
-        alive: Boolean(snapshotSelf && isAlive(snapshotSelf)),
-        source: 'snapshot',
-        self: snapshotSelf ? summarizeSelf(snapshotSelf) : null
-      };
-    }
+    if (snapshotState) return snapshotState;
     return { known: false, alive: false, source: 'unknown', self: null };
   }
 
@@ -1098,7 +1113,7 @@ function createPendingExitRuntime(runtime = {}) {
       clearPersistentPendingExitState();
       return null;
     }
-    const state = pendingExitSelfState(self);
+    const state = pendingExitSelfState(self, pending);
     const lastDetail = pending.lastResult || {};
     if (leaveDetailHasHttp403Core(lastDetail)) {
       if (scheduleClashLeaveRescueRetry(lastDetail)) {
