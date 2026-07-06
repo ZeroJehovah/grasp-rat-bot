@@ -10021,40 +10021,42 @@ async function runSelfTest() {
       want: 'true|true|false|true|true|1|1|0|null'
     },
     {
-      name: 'post-login zoom keeps fitting clipped 500m circle despite view radius label',
+      name: 'post-login zoom shrinks one way until native view radius reaches 500m',
       got: (() => {
         const runtime = createPostLoginZoomRuntime({
           bot: {},
           cfg: {
-            postLoginZoomFitRadiusCm: 50000,
-            postLoginZoomFitTargetRatio: 0.98,
-            postLoginZoomFitTolerance: 0.04
+            postLoginZoomFitRadiusCm: 50000
           }
         });
-        const clippedAtLabeledRadius = runtime.postLoginZoomFitDecision({
+        const belowTarget = runtime.postLoginZoomFitDecision({
           ok: true,
-          fitRatio: 1.08,
-          minRatio: 0.94,
-          maxRatio: 1,
+          radiusCm: 50000,
+          viewRadiusCm: 10000
+        });
+        const atTarget = runtime.postLoginZoomFitDecision({
+          ok: true,
+          radiusCm: 50000,
           viewRadiusCm: 50000
         });
         const overZoomed = runtime.postLoginZoomFitDecision({
           ok: true,
-          fitRatio: 0.7,
-          minRatio: 0.94,
-          maxRatio: 1,
+          radiusCm: 50000,
           viewRadiusCm: 80000
         });
         return [
-          clippedAtLabeledRadius.done,
-          clippedAtLabeledRadius.direction,
-          clippedAtLabeledRadius.reason,
+          belowTarget.done,
+          belowTarget.direction,
+          belowTarget.reason,
+          atTarget.done,
+          atTarget.direction,
+          atTarget.reason,
           overZoomed.done,
           overZoomed.direction,
           overZoomed.reason
         ].map(String).join('|');
       })(),
-      want: 'false|out|circle-clipped|false|in|visible-range-too-small'
+      want: 'false|out|view-radius-below-target|true||view-radius-target-reached|true||view-radius-target-reached'
     },
     {
       name: 'post-login zoom no-token session key is stable across no-self generations',

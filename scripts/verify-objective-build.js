@@ -811,13 +811,14 @@ async function main() {
     assert(runtimePostLoginZoomSource.includes('function createPostLoginZoomRuntime'), 'post-login zoom runtime factory missing');
     assert(runtimePostLoginZoomSource.includes('function schedulePostLoginZoomOut'), 'post-login zoom scheduling body missing from module');
     assert(runtimePostLoginZoomSource.includes('function noteSelfUnavailableForPostLoginZoom'), 'post-login zoom self-unavailable body missing from module');
-    assert(runtimePostLoginZoomSource.includes("if (ratio < minRatio) return { done: false, direction: 'in'"), 'post-login zoom does not correct over-zoomed visible-range fit');
-    assert(!runtimePostLoginZoomSource.includes("reason: 'view-radius-cap'"), 'post-login zoom still stops on the page view-radius label instead of measured fit');
-    assert(runtimePostLoginZoomSource.includes("finishPostLoginZoomResult(state, 'no-improvement'"), 'post-login zoom still risks button fallback after non-improving measured steps');
+    assert(runtimePostLoginZoomSource.includes("reason: 'view-radius-below-target'"), 'post-login zoom does not keep shrinking below the native 500m view-radius target');
+    assert(runtimePostLoginZoomSource.includes("reason: 'view-radius-target-reached'"), 'post-login zoom does not stop on the native view-radius target');
+    assert(runtimePostLoginZoomSource.includes("dispatchPostLoginZoomWheel('out')"), 'post-login zoom is not locked to one-way zoom-out steps');
+    assert(!runtimePostLoginZoomSource.includes("visible-range-too-small"), 'post-login zoom still contains the old zoom-in fit correction');
+    assert(!runtimePostLoginZoomSource.includes("finishPostLoginZoomResult(state, 'no-improvement'"), 'post-login zoom still stops after a single non-improving measured step');
     assert(runtimePostLoginZoomSource.includes("return String(userId) + ':no-token'"), 'post-login zoom no-token key is not stable across no-self generations');
     assert(runtimeDefaultsSource.includes('postLoginZoomOutClicks: 0'), 'post-login zoom fallback clicks are not disabled by default');
     assert(runtimeDefaultsSource.includes('postLoginZoomFitRadiusCm: 50000'), 'post-login zoom target radius is not the 500m view radius');
-    assert(runtimeDefaultsSource.includes('postLoginZoomFitTargetRatio: 0.98'), 'post-login zoom target ratio default is not near full visible-range fit');
     assert(runtimeDefaultsSource.includes('postLoginZoomFitMaxSteps: 24'), 'post-login zoom measured step cap is not enough to reach the 500m target');
     assert(runtimeDefaultsSource.includes('postLoginZoomFitMaxOutSteps: 24'), 'post-login zoom outward step cap is not enough to reach the 500m target');
     assert(runtimeDefaultsSource.includes('postLoginZoomWheelDeltaY: 35'), 'post-login zoom wheel step default is not slowed down');
