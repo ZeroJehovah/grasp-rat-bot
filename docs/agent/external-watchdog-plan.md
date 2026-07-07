@@ -257,51 +257,419 @@ The validation should perform a harmless authenticated request, such as reading 
 
 If validation fails, Clash rescue should be disabled automatically for that runtime session and the reason should be visible in status/log output. A failed validation must not block or delay direct game leave requests. In the emergency path, direct leave should remain the primary action, with proxy rescue running only after or in parallel with leave.
 
-## Implementation Phases
+## Development Commit Plan
 
-Phase 1: Observation only.
+Implement this feature in narrow commits. Each commit should leave the tree in a working state, keep active rescue disabled unless explicitly stated, and include the validation listed for that commit. Commits that touch browser runtime or bootstrap behavior must also rebuild the remote bot and update release/handoff docs according to the project release flow.
 
-- Add `/watchdog/heartbeat` and `/watchdog/status` to `combat-log-service`.
-- Add explicit userscript configuration for watchdog enablement and endpoint.
-- Send non-batched heartbeat from the userscript/runtime only when watchdog is enabled.
-- Maintain in-memory per-user/page watchdog state.
-- Record heartbeat age, combat tick age, visibility/lifecycle fields, control state, and direct leave readiness.
-- Emit structured watchdog logs without taking action.
+### Commit 1: Service Watchdog Skeleton
 
-Phase 2: Dry-run rescue decisions.
+Purpose: add the local service surface without changing browser behavior or triggering rescue.
 
-- Add the emergency state machine.
-- Log when a rescue would have triggered.
-- Compare dry-run triggers against real combat logs to tune thresholds.
+Implement:
 
-Phase 3: Direct leave client.
+- Add a `combat-log-service/watchdog.js` module or similarly scoped server-side owner.
+- Add disabled-by-default watchdog defaults to `combat-log-service/server.js` options.
+- Add `GET /watchdog/status`.
+- Add `POST /watchdog/config` for local-only config updates.
+- Return `enabled: false`, `activeRescueEnabled: false`, and empty state by default.
+- Do not add heartbeat sending from the browser yet.
+- Do not send leave requests or Clash requests.
 
-- Verify the game leave endpoint, method, request body, and authentication source.
-- Add a `leaveClient` in `combat-log-service`.
-- Add heartbeat fields for the current leave request descriptor or short-lived auth snapshot.
-- Add direct leave validation/readiness status without triggering real leave.
-- Keep active rescue disabled until direct leave has a controlled live validation.
+Files likely touched:
 
-Phase 4: Clash rescue.
+- `combat-log-service/server.js`
+- `combat-log-service/watchdog.js`
+- `combat-log-service/README.md`
+- `docs/agent/combat-logging.md`
 
-- Add Clash authenticated API validation at startup.
-- Add page-side Clash validation after configuration changes and after script injection while page-side rescue still exists.
-- Disable Clash rescue automatically for the runtime session when validation fails.
-- Trigger proxy switching only under configured high-risk conditions and never before direct leave.
-- Record proxy-switch attempts and failures in watchdog logs.
+Validation:
 
-Phase 5: Active rescue.
+- `cd combat-log-service && npm test`
+- `node combat-log-service/server.js --self-test`
+- Manual smoke with `GET /health`, `GET /watchdog/status`, and `POST /watchdog/config`.
 
-- Enable direct leave on high-risk stale heartbeat.
-- Run Clash rescue in parallel or after direct leave only when validation is passing.
-- Add retry policy, duplicate-rescue suppression, and exit confirmation tracking.
-- Keep page-side leave as normal strategy behavior, not as the watchdog's primary rescue path.
+Done when:
 
-Phase 6: Service hardening.
+- Existing `/combat-log` behavior is unchanged.
+- Watchdog endpoints exist and are inert while disabled.
+- Service status clearly reports disabled watchdog state.
 
-- Package `combat-log-service` as a Windows-startable process or service.
-- Add restart behavior, log rotation, config validation, and a local status endpoint.
-- Add a clear manual pause/disable control.
+### Commit 2: Heartbeat Ingest And State Model
+
+Purpose: make the service able to receive heartbeat data, normalize it, and expose it without rescue logic.
+
+Implement:
+
+- Add `POST /watchdog/heartbeat`.
+- Reject oversized or malformed heartbeat payloads with JSON errors.
+- Normalize `pageId`, `userId`, `sequence`, `combatActive`, `damagedInCombat`, `self`, `target`, `decision`, `control`, `runtime`, and `leaveAuth`.
+- Maintain in-memory state keyed by `pageId` plus `userId` when available.
+- Track Node receive time separately from page timestamp.
+- Track heartbeat age, sequence gaps, last combat-active time, last damaged-combat time, and current direct-leave readiness.
+- Keep all secret-bearing data in memory only.
+- Keep rescue disabled even when high-risk stale state is present.
+
+Files likely touched:
+
+- `combat-log-service/server.js`
+- `combat-log-service/watchdog.js`
+- `combat-log-service/README.md`
+
+Validation:
+
+- `cd combat-log-service && npm test`
+- Add self-test cases for valid heartbeat, malformed heartbeat, state replacement, and disabled state.
+- Manual `curl` or PowerShell POST to `/watchdog/heartbeat`, then verify `/watchdog/status`.
+
+Done when:
+
+- A synthetic heartbeat updates state.
+- Heartbeat state never appears in ordinary combat JSONL.
+- No rescue action can happen from heartbeat ingestion alone.
+
+### Commit 3: Userscript Watchdog Configuration
+
+Purpose: add opt-in browser-side configuration, still without sending heartbeat by default.
+
+Implement:
+
+- Add `configureWatchdog(options)` to the Tampermonkey bootstrap API.
+- Persist `watchdogEnabled`, `watchdogEndpoint`, and initial heartbeat interval settings with `GM_setValue`.
+- Mirror the same user-facing configuration path in the extension bootstrap if that surface is still maintained.
+- Default `watchdogEnabled` to `false`.
+- Add status/panel visibility for whether watchdog is disabled, enabled, or misconfigured.
+- Do not send heartbeat until the user enables watchdog.
+
+Files likely touched:
+
+- `userscript/grasp-rat-bootstrap.user.js`
+- `extension/page-bootstrap.js`
+- `src/browser/runtime/bot-api-runtime.js` if status needs runtime exposure
+- `docs/agent/config-defaults.md`
+- `docs/agent/combat-logging.md`
+
+Validation:
+
+- `node --check userscript/grasp-rat-bootstrap.user.js`
+- `node --check extension/page-bootstrap.js`
+- Runtime/browser validation surface required by the release flow.
+- Build remote bot if runtime or generated outputs are touched.
+
+Done when:
+
+- Console configuration can enable/disable watchdog settings.
+- Disabled watchdog sends no network traffic.
+- Existing combat logging config remains unchanged.
+
+### Commit 4: Non-Batched Browser Heartbeat Sender
+
+Purpose: send fresh watchdog heartbeat directly to the service only when explicitly enabled.
+
+Implement:
+
+- Add a heartbeat sender that bypasses the combat-log queue.
+- Use short request timeouts and avoid blocking combat ticks.
+- Send lower-frequency heartbeat while logged in and higher-frequency heartbeat during combat.
+- Include current state fields from the plan: user id, HP, combat-active flag, damage flag, target summary, decision reason, pending-exit state, visibility, control state, and runtime tick timing.
+- Include only non-secret `leaveAuth.available` / readiness fields until direct leave descriptor handling is implemented.
+- Track heartbeat send success/failure counters in status.
+- Stop sending immediately when watchdog is disabled.
+
+Files likely touched:
+
+- `userscript/grasp-rat-bootstrap.user.js`
+- `src/browser/runtime/combat-log-runtime.js` or a new focused runtime owner if heartbeat is runtime-owned
+- `src/browser/runtime/combat-log-frame-runtime.js` only if reusing frame summaries is appropriate
+- `extension/page-bootstrap.js`
+- `docs/agent/combat-logging.md`
+
+Validation:
+
+- Browser/runtime self-tests required by the touched surface.
+- `cd combat-log-service && npm test`
+- Manual enable command:
+
+```js
+window.__graspRatBotBootstrap.configureWatchdog({
+  enabled: true,
+  endpoint: 'http://127.0.0.1:18765/watchdog/heartbeat'
+})
+```
+
+- Verify `/watchdog/status` shows fresh heartbeat age while enabled.
+- Disable watchdog and verify heartbeat age stops updating because no new POSTs arrive.
+
+Done when:
+
+- Heartbeat is fresh under normal play.
+- Heartbeat traffic is independent of combat-log queue flushing.
+- No active rescue action exists.
+
+### Commit 5: Watchdog Audit Logging And Dry-Run Detector
+
+Purpose: make the service decide when it would rescue, but only log dry-run decisions.
+
+Implement:
+
+- Add service-side stale heartbeat detection interval.
+- Add configurable thresholds: `heartbeatStaleMs`, `combatHeartbeatStaleMs`, `damagedCombatStaleMs`, and HP threshold.
+- Add high-risk state function based on combat active, damaged-in-combat, HP, target recency, and heartbeat age.
+- Add dry-run audit events: `watchdog-would-rescue`, `watchdog-state-change`, and `watchdog-disabled`.
+- Write watchdog audit JSONL under the daily audit layout.
+- Add duplicate suppression so the same stale window does not spam logs.
+- Keep `activeRescueEnabled` default false.
+
+Files likely touched:
+
+- `combat-log-service/watchdog.js`
+- `combat-log-service/server.js`
+- `combat-log-service/README.md`
+- `docs/agent/combat-logging.md`
+
+Validation:
+
+- `cd combat-log-service && npm test`
+- Add synthetic timer/self-test cases for no combat, combat without damage, damaged combat stale heartbeat, duplicate suppression, and recovery after fresh heartbeat.
+- Replay recent death windows by feeding synthetic heartbeats matching known timings and checking dry-run audit output.
+
+Done when:
+
+- The service logs exactly when it would have rescued in high-risk stale-heartbeat cases.
+- No leave or Clash call can happen yet.
+
+### Commit 6: Service-Side Clash Client And Validation
+
+Purpose: move Clash validation/rescue capability into Node without allowing it to delay direct leave.
+
+Implement:
+
+- Add service-side Clash config: controller URL, secret, proxy group, auto/manual/direct proxy names, timeout.
+- Add startup and config-change validation that performs harmless authenticated reads.
+- Add `POST /watchdog/test-clash`.
+- Preserve exact secret strings, including backslashes, without JavaScript console escape corruption when configured through JSON/config files.
+- Mark Clash rescue unavailable when validation fails.
+- Do not switch proxy from watchdog stale-heartbeat detection yet.
+
+Files likely touched:
+
+- `combat-log-service/watchdog.js`
+- `combat-log-service/server.js`
+- `combat-log-service/README.md`
+- `docs/agent/config-defaults.md`
+
+Validation:
+
+- `cd combat-log-service && npm test`
+- Manual validation with a known-good Clash secret containing a backslash.
+- Manual validation with bad secret should produce a clear disabled reason and no retry loop.
+
+Done when:
+
+- Clash readiness is visible in `/watchdog/status`.
+- Invalid Clash configuration disables Clash rescue before combat.
+- No proxy switch occurs during stale-heartbeat dry-run.
+
+### Commit 7: Direct Leave Descriptor Plumbing
+
+Purpose: identify and transport enough leave information for Node to know whether direct leave is possible.
+
+Implement:
+
+- Verify the live game leave endpoint, method, request body, and authentication source in a controlled session.
+- Define `leaveAuth` / `leaveDescriptor` schema for the heartbeat.
+- Add browser-side collection of the minimum direct-leave descriptor while the page is healthy.
+- Send descriptor only when watchdog is enabled.
+- Keep descriptor in service memory with a short TTL.
+- Expose `directLeaveReady`, descriptor age, and missing fields in `/watchdog/status`.
+- Do not write tokens/cookies to ordinary logs.
+- Do not send active leave from stale-heartbeat detection yet.
+
+Files likely touched:
+
+- `userscript/grasp-rat-bootstrap.user.js`
+- `src/browser/runtime/*` owner that can read session/user state safely
+- `combat-log-service/watchdog.js`
+- `docs/agent/data-model.md`
+- `docs/agent/combat-logging.md`
+
+Validation:
+
+- Runtime validation required by touched browser files.
+- `cd combat-log-service && npm test`
+- Manual status check confirms `directLeaveReady=true` only when the descriptor is fresh and complete.
+- Manual logout/login confirms stale descriptors expire.
+
+Done when:
+
+- The service can tell whether it has enough information to call direct leave.
+- Missing or expired leave information is explicit and auditable.
+
+### Commit 8: Direct Leave Client In Manual-Test Mode
+
+Purpose: implement the Node leave client and validate it only through explicit manual test commands.
+
+Implement:
+
+- Add `sendDirectLeave(userId, leaveDescriptor)` in `combat-log-service`.
+- Add a manual-only `POST /watchdog/test-leave` endpoint or equivalent guarded command.
+- Require an explicit `confirm: true` or similarly hard-to-trigger field for manual test leave.
+- Record request timestamp, duration, HTTP status, response summary, and error.
+- Redact credentials from logs and status.
+- Do not connect this client to stale-heartbeat rescue yet.
+
+Files likely touched:
+
+- `combat-log-service/watchdog.js`
+- `combat-log-service/server.js`
+- `combat-log-service/README.md`
+
+Validation:
+
+- `cd combat-log-service && npm test`
+- Unit/self-test for request construction, timeout, redaction, and failure reporting.
+- Controlled live test in a low-risk session proving Node can make the game leave successfully.
+
+Done when:
+
+- A manual local command can make the game leave through Node.
+- Failure modes are clear enough to debug without exposing credentials.
+
+### Commit 9: Active Direct-Leave Rescue
+
+Purpose: enable the actual safety behavior, guarded by explicit user configuration and direct leave readiness.
+
+Implement:
+
+- Add `activeRescueEnabled`, default `false`.
+- Require both watchdog enabled and active rescue enabled before automatic leave.
+- On high-risk stale heartbeat, send direct leave immediately if `directLeaveReady=true`.
+- Log `watchdog-rescue-start`, `watchdog-direct-leave-request`, and `watchdog-rescue-result`.
+- If direct leave is not ready, log `direct-leave-not-ready` and do not pretend rescue was available.
+- Add duplicate suppression per stale window/rescue id.
+- Do not run Clash before direct leave.
+
+Files likely touched:
+
+- `combat-log-service/watchdog.js`
+- `combat-log-service/server.js`
+- `combat-log-service/README.md`
+- `docs/agent/strategy-summary.md` if user-visible behavior is now active
+- `docs/agent/config-defaults.md`
+
+Validation:
+
+- `cd combat-log-service && npm test`
+- Synthetic stale-heartbeat self-test proving direct leave is called once within threshold.
+- Controlled live test where a deliberately induced stale heartbeat causes Node direct leave.
+- Verify direct leave request timestamp precedes any Clash operation.
+
+Done when:
+
+- Active rescue can be manually enabled.
+- High-risk stale heartbeat triggers Node direct leave without page JavaScript.
+- The feature remains off unless explicitly configured.
+
+### Commit 10: Clash Rescue As Parallel Fallback
+
+Purpose: allow validated proxy rescue without ever delaying direct leave.
+
+Implement:
+
+- If Clash validation is passing, start Clash switch after or in parallel with direct leave.
+- Ensure direct leave request is created before awaiting any Clash operation.
+- Log `watchdog-clash-rescue-request` and result.
+- If Clash validation is failing, skip Clash and include the validation failure reason in rescue audit.
+- Add per-rescue and per-stage duplicate suppression.
+
+Files likely touched:
+
+- `combat-log-service/watchdog.js`
+- `combat-log-service/README.md`
+- `docs/agent/strategy-summary.md`
+
+Validation:
+
+- `cd combat-log-service && npm test`
+- Synthetic test proving direct leave is not delayed by slow Clash request.
+- Manual test with valid Clash config and with invalid secret.
+
+Done when:
+
+- Valid Clash rescue can run as a secondary action.
+- Invalid Clash configuration is visible but does not block direct leave.
+
+### Commit 11: Exit Confirmation And Retry Policy
+
+Purpose: make rescue state robust after the first direct leave request.
+
+Implement:
+
+- Add exit confirmation state from later heartbeat, page-side exit audit, direct leave success response, or safe authenticated status endpoint when available.
+- Add retry policy for uncertain direct leave result: bounded attempts, conservative backoff, and credential-expiry stop condition.
+- Add status fields for rescue active/completed/failed/confirmed.
+- Clear or age out stale rescue state after confirmation or timeout.
+- Ensure a later page heartbeat cannot accidentally re-enter unsafe combat before the pending exit state is visible.
+
+Files likely touched:
+
+- `combat-log-service/watchdog.js`
+- `src/browser/runtime/*` if page heartbeat needs to report post-rescue pending state
+- `docs/agent/combat-logging.md`
+
+Validation:
+
+- `cd combat-log-service && npm test`
+- Synthetic tests for success confirmation, timeout retry, credential expiry, duplicate heartbeat recovery, and no retry after confirmation.
+- Controlled live test where direct leave confirmation is observed.
+
+Done when:
+
+- Rescue attempts have clear lifecycle state.
+- Uncertain direct leave responses get limited retries.
+- Confirmed exits stop retries.
+
+### Commit 12: Operator UX And Release Hardening
+
+Purpose: make the feature practical to operate day to day.
+
+Implement:
+
+- Add clear README commands for enabling, disabling, status, dry-run, active rescue, Clash test, and manual leave test.
+- Add panel/status indicators for watchdog enabled, heartbeat age, dry-run/active mode, direct leave readiness, and Clash readiness.
+- Add startup config validation and clear console output.
+- Add optional Windows start script or service instructions for `combat-log-service`.
+- Update tracked handoff docs.
+- Keep `AGENTS.md` untouched unless explicitly requested.
+
+Files likely touched:
+
+- `combat-log-service/README.md`
+- `docs/agent/combat-logging.md`
+- `docs/agent/config-defaults.md`
+- `docs/agent/current-state.md` when a remote bot release is made
+- `userscript/`, `extension/`, `dist/` if panel/status behavior changes
+
+Validation:
+
+- Full validation required for browser/runtime release if generated outputs change.
+- `cd combat-log-service && npm test`
+- `git diff --check`
+- Manual operator walkthrough: enable dry-run, observe heartbeat, enable active rescue, disable watchdog.
+
+Done when:
+
+- The feature can be safely run without remembering internal endpoint details.
+- The default state is still disabled.
+- The user can see why rescue is or is not armed.
+
+## Cross-Commit Release Rules
+
+- Never enable active rescue in the same commit that first introduces an unvalidated leave client.
+- Never let Clash run before direct leave in active rescue.
+- Never log raw tokens, cookies, Authorization headers, or full credential descriptors.
+- Every code commit must preserve existing combat-log collection.
+- Every browser/runtime behavior commit must follow the remote build and release documentation flow.
+- Every combat-logic change, if any is made while implementing watchdog state, must be validated with offline replay. The watchdog itself should avoid changing combat policy.
 
 ## Validation
 
