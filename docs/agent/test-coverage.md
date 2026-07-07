@@ -49,10 +49,11 @@ The browser runtime should adapt page/native state into these pure helpers inste
 - runtime config update;
 - valid heartbeat ingestion and malformed heartbeat rejection;
 - direct-leave descriptor readiness;
-- stale damaged-combat dry-run audit logging with token redaction;
+- stale damaged-combat dry-run audit logging with `watchdog-state-change`, duplicate suppression, fresh-heartbeat recovery, and token redaction;
 - service-side Clash validation preserving exact secret strings, including backslashes;
 - active-rescue ordering where the direct leave request is created before the Clash switch;
-- manual direct-leave test requiring `confirm:true`.
+- manual direct-leave test requiring `confirm:true`;
+- direct-leave success confirmation, timeout retry, credential-expiry retry stop, and no retry after exit confirmation.
 
 The remaining validation gap is live direct-leave proof: the actual game leave endpoint/method/body/authentication must be verified in a controlled low-risk session before setting service config `directLeave.verified=true` or relying on active automatic rescue.
 

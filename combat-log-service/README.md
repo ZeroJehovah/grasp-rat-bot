@@ -105,7 +105,7 @@ curl -X POST http://127.0.0.1:18765/watchdog/config \
   --data '{"enabled":true,"dryRun":true,"damagedCombatStaleMs":2000}'
 ```
 
-dry-run 只写审计，不会调用游戏退出或 Clash。审计写入：
+dry-run 只写审计，不会调用游戏退出或 Clash。审计会包含 `watchdog-state-change`、`watchdog-would-rescue`，主动救援时还会包含 direct-leave / Clash 请求结果和最终 `watchdog-rescue-result`。审计写入：
 
 ```text
 combat-log-service/logs/YYYY-MM-DD/audit/watchdog.jsonl

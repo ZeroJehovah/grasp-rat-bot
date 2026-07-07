@@ -403,6 +403,8 @@ class WatchdogService {
     this.fetch = typeof options.fetch === 'function' ? options.fetch : global.fetch;
     this.setInterval = typeof options.setInterval === 'function' ? options.setInterval : setInterval;
     this.clearInterval = typeof options.clearInterval === 'function' ? options.clearInterval : clearInterval;
+    this.setTimeout = typeof options.setTimeout === 'function' ? options.setTimeout : setTimeout;
+    this.clearTimeout = typeof options.clearTimeout === 'function' ? options.clearTimeout : clearTimeout;
     this.config = mergeConfig(DEFAULT_WATCHDOG_CONFIG, options.config || options);
     this.states = new Map();
     this.timer = null;
@@ -544,7 +546,8 @@ class WatchdogService {
       lastTargetAt: hb.target ? hb.receivedAt : Number(previous?.lastTargetAt || 0),
       rescue: previous?.rescue || null,
       lastWouldRescueKey: previous?.lastWouldRescueKey || '',
-      lastWouldRescueAt: Number(previous?.lastWouldRescueAt || 0)
+      lastWouldRescueAt: Number(previous?.lastWouldRescueAt || 0),
+      lastWatchdogState: previous?.lastWatchdogState || ''
     };
     if (record.rescue && !hb.combatActive) {
       record.rescue.confirmed = true;
@@ -655,6 +658,29 @@ class WatchdogService {
     };
   }
 
+  watchdogStateKey(risk) {
+    if (risk.risky) return 'risky';
+    if (risk.combatActive && risk.stale) return 'stale-not-high-risk';
+    if (risk.combatActive) return 'combat-fresh';
+    return 'idle';
+  }
+
+  async appendWatchdogStateChange(record, risk, now) {
+    const state = this.watchdogStateKey(risk);
+    if (record.lastWatchdogState === state) return false;
+    const previous = record.lastWatchdogState || '';
+    record.lastWatchdogState = state;
+    await this.appendAudit({
+      type: 'watchdog-state-change',
+      at: now,
+      key: record.key,
+      previous,
+      state,
+      risk
+    });
+    return true;
+  }
+
   async checkNow() {
     if (!this.config.enabled) return { checked: 0, rescues: 0 };
     const now = this.now();
@@ -663,6 +689,7 @@ class WatchdogService {
     for (const record of this.states.values()) {
       checked += 1;
       const risk = this.highRiskState(record, now);
+      await this.appendWatchdogStateChange(record, risk, now);
       if (!risk.risky) continue;
       const rescueKey = `${record.key}:${record.sequence ?? ''}:${record.lastHeartbeatReceivedAt}:${risk.thresholdMs}`;
       const suppressMs = Math.max(1000, Number(this.config.rescueSuppressMs || 15000) || 15000);
@@ -685,6 +712,45 @@ class WatchdogService {
       await this.startRescue(record, risk);
     }
     return { checked, rescues };
+  }
+
+  delay(ms) {
+    return new Promise(resolve => {
+      const timer = this.setTimeout(resolve, Math.max(0, Number(ms) || 0));
+      if (timer && typeof timer.unref === 'function') timer.unref();
+    });
+  }
+
+  async skipClashRescue(rescue, reason, detail = {}) {
+    const result = {
+      ok: false,
+      skipped: true,
+      at: this.now(),
+      reason,
+      ...redact(detail)
+    };
+    rescue.clash = result;
+    await this.appendAudit({
+      type: 'watchdog-clash-rescue-result',
+      at: result.at,
+      rescueId: rescue.id,
+      result
+    });
+    return result;
+  }
+
+  async finalizeRescue(record, rescue, results = null) {
+    rescue.completedAt = rescue.completedAt || this.now();
+    rescue.active = false;
+    if (results) rescue.results = redact(results);
+    await this.appendAudit({
+      type: 'watchdog-rescue-result',
+      at: rescue.completedAt,
+      rescueId: rescue.id,
+      key: record.key,
+      rescue
+    });
+    return rescue;
   }
 
   async startRescue(record, risk) {
@@ -728,38 +794,66 @@ class WatchdogService {
         key: record.key,
         missing: leaveSummary.missing
       });
-    } else {
-      const leavePromise = this.runDirectLeaveAttempt(record, rescue, 'initial');
-      const clashPromise = this.config.clash.enabled && this.clashValidation.ok
-        ? this.runClashRescue(rescue)
-        : Promise.resolve(null);
-      Promise.allSettled([leavePromise, clashPromise]).then(results => {
-        rescue.completedAt = this.now();
-        rescue.active = false;
-        rescue.results = redact(results);
-        this.appendAudit({
-          type: 'watchdog-rescue-result',
-          at: rescue.completedAt,
-          rescueId: rescue.id,
-          key: record.key,
-          rescue
-        }).catch(() => {});
-      });
+      const clashResult = this.config.clash.enabled && this.clashValidation.ok
+        ? await this.runClashRescue(rescue)
+        : this.config.clash.enabled
+          ? await this.skipClashRescue(rescue, 'clash-validation-failed', { validation: this.clashValidation })
+          : null;
+      await this.finalizeRescue(record, rescue, clashResult ? [{ status: 'fulfilled', value: clashResult }] : []);
       return rescue;
     }
-    if (this.config.clash.enabled && this.clashValidation.ok) {
-      this.runClashRescue(rescue).finally(() => {
-        rescue.completedAt = this.now();
-        rescue.active = false;
-      });
-    } else {
-      rescue.completedAt = this.now();
-      rescue.active = false;
-    }
+    const leavePromise = this.runDirectLeaveAttempt(record, rescue, 'initial');
+    const clashPromise = this.config.clash.enabled && this.clashValidation.ok
+      ? this.runClashRescue(rescue)
+      : this.config.clash.enabled
+        ? this.skipClashRescue(rescue, 'clash-validation-failed', { validation: this.clashValidation })
+        : Promise.resolve(null);
+    Promise.allSettled([leavePromise, clashPromise]).then(results => {
+      this.finalizeRescue(record, rescue, results).catch(() => {});
+    });
     return rescue;
   }
 
   async runDirectLeaveAttempt(record, rescue, stage = 'initial') {
+    if (rescue.confirmed) {
+      const result = {
+        ok: false,
+        skipped: true,
+        at: this.now(),
+        reason: 'exit-already-confirmed',
+        confirmation: rescue.confirmation || ''
+      };
+      rescue.directLeave = result;
+      await this.appendAudit({
+        type: 'watchdog-direct-leave-result',
+        at: result.at,
+        rescueId: rescue.id,
+        key: record.key,
+        stage,
+        result
+      });
+      return result;
+    }
+    const readiness = summarizeLeaveAuth(record.leaveAuth, this.config, this.now());
+    if (!readiness.directLeaveReady) {
+      const result = {
+        ok: false,
+        skipped: true,
+        at: this.now(),
+        reason: 'direct-leave-not-ready',
+        missing: readiness.missing
+      };
+      rescue.directLeave = result;
+      await this.appendAudit({
+        type: 'watchdog-direct-leave-result',
+        at: result.at,
+        rescueId: rescue.id,
+        key: record.key,
+        stage,
+        result
+      });
+      return result;
+    }
     const at = this.now();
     const request = buildDirectLeaveRequest(record.leaveAuth, this.config);
     const auditRequest = {
@@ -775,26 +869,17 @@ class WatchdogService {
         bodyPresent: request.body !== undefined
       })
     };
-    await this.appendAudit(auditRequest);
+    const requestAudit = this.appendAudit(auditRequest);
     const result = await this.sendDirectLeaveRequest(request, this.config.directLeave.timeoutMs);
+    await requestAudit;
     rescue.directLeave = result;
+    if (!Array.isArray(rescue.directLeaveAttempts)) rescue.directLeaveAttempts = [];
+    rescue.directLeaveAttempts.push({ stage, result });
     if (result.ok && this.config.directLeave.successConfirmsExit) {
       rescue.confirmed = true;
       rescue.confirmedAt = this.now();
       rescue.confirmation = 'direct-leave-success-response';
       rescue.active = false;
-    } else if (!result.ok && stage !== 'manual') {
-      const retryMax = Math.max(0, Number(this.config.directLeave.retryMax || 0));
-      const retryCount = Number(rescue.directLeaveRetryCount || 0);
-      if (retryCount < retryMax && summarizeLeaveAuth(record.leaveAuth, this.config, this.now()).directLeaveReady) {
-        rescue.directLeaveRetryCount = retryCount + 1;
-        const backoffMs = Math.max(250, Number(this.config.directLeave.retryBackoffMs || 1200));
-        setTimeout(() => {
-          this.runDirectLeaveAttempt(record, rescue, `retry-${rescue.directLeaveRetryCount}`).catch(err => {
-            rescue.error = err?.message || String(err);
-          });
-        }, backoffMs);
-      }
     }
     await this.appendAudit({
       type: 'watchdog-direct-leave-result',
@@ -804,6 +889,17 @@ class WatchdogService {
       stage,
       result
     });
+    if (!result.ok && stage !== 'manual' && !rescue.confirmed) {
+      const retryMax = Math.max(0, Number(this.config.directLeave.retryMax || 0));
+      const retryCount = Number(rescue.directLeaveRetryCount || 0);
+      if (retryCount < retryMax && summarizeLeaveAuth(record.leaveAuth, this.config, this.now()).directLeaveReady) {
+        rescue.directLeaveRetryCount = retryCount + 1;
+        const retryStage = `retry-${rescue.directLeaveRetryCount}`;
+        const backoffMs = Math.max(250, Number(this.config.directLeave.retryBackoffMs || 1200));
+        await this.delay(backoffMs);
+        return this.runDirectLeaveAttempt(record, rescue, retryStage);
+      }
+    }
     return result;
   }
 
@@ -1080,6 +1176,20 @@ async function runWatchdogSelfTest(options = {}) {
       text: async () => text
     };
   };
+  const countMatches = (text, pattern) => (text.match(pattern) || []).length;
+  const makeLeaveAuth = (config, userId, receivedAt, expiresAt, token = 'secret-token') => normalizeLeaveAuth({
+    available: true,
+    userId,
+    origin: GAME_ORIGIN,
+    sessionToken: token,
+    expiresAt,
+    descriptor: {
+      url: `${GAME_ORIGIN}/api/leave`,
+      method: 'POST',
+      headers: { authorization: 'Bearer ${sessionToken}' },
+      bodyJson: { userId: '${userId}' }
+    }
+  }, { userId }, config, receivedAt);
   const watchdog = createWatchdogService({
     dir: root,
     autoStart: false,
@@ -1145,13 +1255,56 @@ async function runWatchdogSelfTest(options = {}) {
     status = watchdog.status();
     const state = status.states[0];
     if (!state || state.leaveAuth.directLeaveReady !== true) throw new Error('direct leave readiness missing after heartbeat');
+    watchdog.handleHeartbeat({
+      ...heartbeat,
+      pageId: 'page-no-combat',
+      userId: 10001,
+      sequence: 1,
+      combatActive: false,
+      damagedInCombat: false,
+      self: { id: 10001, hp: 100, maxHp: 100, life: 'Alive' },
+      target: null,
+      leaveAuth: null
+    });
+    watchdog.handleHeartbeat({
+      ...heartbeat,
+      pageId: 'page-combat-undamaged',
+      userId: 10002,
+      sequence: 1,
+      combatActive: true,
+      damagedInCombat: false,
+      self: { id: 10002, hp: 100, maxHp: 100, life: 'Alive' },
+      target: { id: 20002, name: 'safe-target', hp: 100, distance: 12000 },
+      leaveAuth: null
+    });
     currentNow += 2500;
+    const noCombatRisk = watchdog.highRiskState(watchdog.states.get('page-no-combat:10001'), currentNow);
+    if (noCombatRisk.risky) throw new Error('no-combat heartbeat was classified as high risk');
+    const undamagedRisk = watchdog.highRiskState(watchdog.states.get('page-combat-undamaged:10002'), currentNow);
+    if (undamagedRisk.risky) throw new Error('undamaged high-HP combat heartbeat was classified as high risk');
     await watchdog.checkNow();
     await watchdog.flushAudit();
     const auditFile = watchdog.auditPath(currentNow);
-    const auditText = fs.readFileSync(auditFile, 'utf8');
+    let auditText = fs.readFileSync(auditFile, 'utf8');
     if (!auditText.includes('watchdog-would-rescue')) throw new Error('dry-run rescue audit was not written');
+    if (!auditText.includes('watchdog-state-change')) throw new Error('watchdog state-change audit was not written');
     if (/secret-token/.test(auditText)) throw new Error('secret token leaked into watchdog audit');
+    const wouldRescueCount = countMatches(auditText, /watchdog-would-rescue/g);
+    currentNow += 100;
+    await watchdog.checkNow();
+    await watchdog.flushAudit();
+    auditText = fs.readFileSync(auditFile, 'utf8');
+    if (countMatches(auditText, /watchdog-would-rescue/g) !== wouldRescueCount) throw new Error('duplicate dry-run rescue audit was not suppressed');
+    watchdog.handleHeartbeat({ ...heartbeat, sequence: 2, at: currentNow - 5 });
+    await watchdog.checkNow();
+    await watchdog.flushAudit();
+    auditText = fs.readFileSync(auditFile, 'utf8');
+    if (!/"state":"combat-fresh"/.test(auditText)) throw new Error('fresh heartbeat recovery state-change audit was not written');
+    currentNow += 2500;
+    await watchdog.checkNow();
+    await watchdog.flushAudit();
+    auditText = fs.readFileSync(auditFile, 'utf8');
+    if (countMatches(auditText, /watchdog-would-rescue/g) <= wouldRescueCount) throw new Error('fresh heartbeat did not open a new dry-run stale window');
     await watchdog.updateConfig({ activeRescueEnabled: true, dryRun: false });
     currentNow += 20000;
     watchdog.handleHeartbeat({ ...heartbeat, sequence: 3, at: currentNow - 5 });
@@ -1172,7 +1325,131 @@ async function runWatchdogSelfTest(options = {}) {
     if (!malformed) throw new Error('malformed heartbeat was not rejected');
     const manual = await watchdog.testLeave({ confirm: true, key: 'page-a:28886' });
     if (!manual.ok) throw new Error('manual direct leave test failed');
-    console.log(JSON.stringify({ ok: true, cases: 9 }, null, 2));
+
+    let successNow = currentNow;
+    const successCalls = [];
+    const successWatchdog = createWatchdogService({
+      dir: root,
+      autoStart: false,
+      now: () => successNow,
+      fetch: async (url, req = {}) => {
+        successCalls.push({ url: String(url), req });
+        return { status: 200, statusText: 'OK', text: async () => '{"left":true}' };
+      },
+      config: {
+        auditEnabled: false,
+        directLeave: { enabled: true, verified: true, successConfirmsExit: true, retryMax: 2 }
+      }
+    });
+    const successRecord = {
+      key: 'success:1',
+      userId: 1,
+      leaveAuth: makeLeaveAuth(successWatchdog.config, 1, successNow, successNow + 30000, 'success-token')
+    };
+    const successRescue = { id: 'success-rescue', key: successRecord.key, active: true, confirmed: false };
+    await successWatchdog.runDirectLeaveAttempt(successRecord, successRescue, 'initial');
+    if (!successRescue.confirmed || successCalls.length !== 1) throw new Error('direct leave success response did not confirm exit once');
+
+    let retryNow = currentNow;
+    const retryCalls = [];
+    const retryWatchdog = createWatchdogService({
+      dir: root,
+      autoStart: false,
+      now: () => retryNow,
+      setTimeout: fn => {
+        fn();
+        return 1;
+      },
+      fetch: async (url, req = {}) => {
+        retryCalls.push({ url: String(url), req });
+        if (retryCalls.length === 1) {
+          const err = new Error('aborted');
+          err.name = 'AbortError';
+          throw err;
+        }
+        return { status: 200, statusText: 'OK', text: async () => '{"ok":true}' };
+      },
+      config: {
+        auditEnabled: false,
+        directLeave: { enabled: true, verified: true, retryMax: 1, retryBackoffMs: 250 }
+      }
+    });
+    const retryRecord = {
+      key: 'retry:1',
+      userId: 1,
+      leaveAuth: makeLeaveAuth(retryWatchdog.config, 1, retryNow, retryNow + 30000, 'retry-token')
+    };
+    const retryRescue = { id: 'retry-rescue', key: retryRecord.key, active: true, confirmed: false };
+    await retryWatchdog.runDirectLeaveAttempt(retryRecord, retryRescue, 'initial');
+    if (retryCalls.length !== 2 || retryRescue.directLeave?.ok !== true) throw new Error('direct leave timeout retry did not run exactly once');
+
+    let expiryNow = currentNow;
+    const expiryCalls = [];
+    const expiryWatchdog = createWatchdogService({
+      dir: root,
+      autoStart: false,
+      now: () => expiryNow,
+      setTimeout: fn => {
+        expiryNow += 5000;
+        fn();
+        return 1;
+      },
+      fetch: async (url, req = {}) => {
+        expiryCalls.push({ url: String(url), req });
+        return { status: 504, statusText: 'Gateway Timeout', text: async () => 'timeout' };
+      },
+      config: {
+        auditEnabled: false,
+        directLeave: { enabled: true, verified: true, retryMax: 1, retryBackoffMs: 250 }
+      }
+    });
+    const expiryRecord = {
+      key: 'expiry:1',
+      userId: 1,
+      leaveAuth: makeLeaveAuth(expiryWatchdog.config, 1, expiryNow, expiryNow + 1000, 'expiry-token')
+    };
+    const expiryRescue = { id: 'expiry-rescue', key: expiryRecord.key, active: true, confirmed: false };
+    await expiryWatchdog.runDirectLeaveAttempt(expiryRecord, expiryRescue, 'initial');
+    if (expiryCalls.length !== 1 || expiryRescue.directLeave?.reason !== 'direct-leave-not-ready') {
+      throw new Error('direct leave retry did not stop after credential expiry');
+    }
+
+    let confirmNow = currentNow;
+    const confirmCalls = [];
+    let confirmRescue = null;
+    const confirmWatchdog = createWatchdogService({
+      dir: root,
+      autoStart: false,
+      now: () => confirmNow,
+      setTimeout: fn => {
+        confirmRescue.confirmed = true;
+        confirmRescue.confirmedAt = confirmNow;
+        confirmRescue.confirmation = 'heartbeat-combat-inactive';
+        confirmRescue.active = false;
+        fn();
+        return 1;
+      },
+      fetch: async (url, req = {}) => {
+        confirmCalls.push({ url: String(url), req });
+        return { status: 503, statusText: 'Service Unavailable', text: async () => 'retry later' };
+      },
+      config: {
+        auditEnabled: false,
+        directLeave: { enabled: true, verified: true, retryMax: 1, retryBackoffMs: 250 }
+      }
+    });
+    const confirmRecord = {
+      key: 'confirm:1',
+      userId: 1,
+      leaveAuth: makeLeaveAuth(confirmWatchdog.config, 1, confirmNow, confirmNow + 30000, 'confirm-token')
+    };
+    confirmRescue = { id: 'confirm-rescue', key: confirmRecord.key, active: true, confirmed: false };
+    await confirmWatchdog.runDirectLeaveAttempt(confirmRecord, confirmRescue, 'initial');
+    if (confirmCalls.length !== 1 || confirmRescue.directLeave?.reason !== 'exit-already-confirmed') {
+      throw new Error('direct leave retry did not stop after exit confirmation');
+    }
+
+    console.log(JSON.stringify({ ok: true, cases: 18 }, null, 2));
   } finally {
     watchdog.stop();
     fs.rmSync(root, { recursive: true, force: true });
