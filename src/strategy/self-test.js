@@ -99,9 +99,12 @@ const {
 } = require('./stamina-budget');
 const {
   aggregateChaseCandidates,
+  buildChaseSourceListsCore,
+  chaseKilledCandidateSuppressionDecision,
   chaseLowDropClearDecision,
   chooseChaseTarget,
   decorateChaseTargets,
+  normalizeChaseCandidate,
   normalizeChaseModeState,
   selectPanelCandidates
 } = require('./chase-mode');
@@ -2010,6 +2013,57 @@ function runStrategyModuleSelfTests() {
       && visibleLowDropMature.clear === true
       && snapshotLowDropClear.clear === true
       && snapshotLowDropClear.pending === false
+  });
+
+  const killedSuppression = { id: 'killed', killedAt: 5000 };
+  const staleKilledCandidate = normalizeChaseCandidate({
+    user_id: 'killed',
+    name: 'Killed',
+    drop: 20,
+    x: 1000,
+    y: 0,
+    observedAt: 4900
+  }, { self: chaseSelf, dist: chaseDist, nowMs: 6000 });
+  const liveResidualKilledCandidate = normalizeChaseCandidate({
+    user_id: 'killed',
+    name: 'Killed',
+    drop: 20,
+    x: 1000,
+    y: 0,
+    native: true
+  }, { self: chaseSelf, dist: chaseDist, nowMs: 6000 });
+  const freshKilledCandidate = normalizeChaseCandidate({
+    user_id: 'killed',
+    name: 'Killed',
+    drop: 20,
+    x: 1000,
+    y: 0,
+    observedAt: 5100
+  }, { self: chaseSelf, dist: chaseDist, nowMs: 6000 });
+  const staleSuppressionDecision = chaseKilledCandidateSuppressionDecision(staleKilledCandidate, killedSuppression);
+  const liveResidualSuppressionDecision = chaseKilledCandidateSuppressionDecision(liveResidualKilledCandidate, killedSuppression);
+  const freshSuppressionDecision = chaseKilledCandidateSuppressionDecision(freshKilledCandidate, killedSuppression);
+  const nativeGlobalResidualCandidate = aggregateChaseCandidates(buildChaseSourceListsCore({
+    globalTargets: [{
+      user_id: 'killed',
+      name: 'Killed',
+      drop: 20,
+      x: 1000,
+      y: 0,
+      native: true,
+      global: true
+    }]
+  }, { snapshotRefreshedAt: 5100 }), { self: chaseSelf, dist: chaseDist, nowMs: 6000 })[0];
+  const nativeGlobalSuppressionDecision = chaseKilledCandidateSuppressionDecision(nativeGlobalResidualCandidate, killedSuppression);
+  results.push({
+    name: 'chase-mode-killed-target-suppression-waits-for-explicit-new-observation',
+    passed: staleSuppressionDecision.suppress === true
+      && liveResidualSuppressionDecision.suppress === true
+      && liveResidualSuppressionDecision.observedAt === 0
+      && nativeGlobalSuppressionDecision.suppress === true
+      && nativeGlobalSuppressionDecision.observedAt === 0
+      && freshSuppressionDecision.release === true
+      && freshSuppressionDecision.observedAt === 5100
   });
 
   // Test combat constants validation

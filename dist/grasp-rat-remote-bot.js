@@ -12,7 +12,7 @@
   var define_GRASP_RAT_RUNTIME_CONFIG_default;
   var init_define_GRASP_RAT_RUNTIME_CONFIG = __esm({
     "<define:__GRASP_RAT_RUNTIME_CONFIG__>"() {
-      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.594" };
+      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.595" };
     }
   });
 
@@ -104,7 +104,8 @@
             ...previousBot.chaseMode,
             targets: Array.isArray(previousBot.chaseMode.targets) ? previousBot.chaseMode.targets.slice(-20) : [],
             lastClear: previousBot.chaseMode.lastClear && typeof previousBot.chaseMode.lastClear === "object" ? { ...previousBot.chaseMode.lastClear } : null,
-            lastDecision: previousBot.chaseMode.lastDecision && typeof previousBot.chaseMode.lastDecision === "object" ? { ...previousBot.chaseMode.lastDecision } : null
+            lastDecision: previousBot.chaseMode.lastDecision && typeof previousBot.chaseMode.lastDecision === "object" ? { ...previousBot.chaseMode.lastDecision } : null,
+            killedTargetSuppressions: previousBot.chaseMode.killedTargetSuppressions && typeof previousBot.chaseMode.killedTargetSuppressions === "object" ? { ...previousBot.chaseMode.killedTargetSuppressions } : {}
           } : null,
           pendingExit: previousBot?.pendingExit && typeof previousBot.pendingExit === "object" ? { ...previousBot.pendingExit } : null,
           lastLoginAt: Number(previousBot?.lastLoginAt || 0) || 0,
@@ -3085,6 +3086,26 @@
         const number = finiteNumber(value);
         return number === null ? null : Math.round(number);
       }
+      function explicitObservedAtValue(target) {
+        if (!target || typeof target !== "object") return 0;
+        const explicit = Boolean(target.observedAtExplicit || target.explicitObservedAt || target.hasExplicitObservedAt);
+        const value = finiteNumber(target.explicitObservedAt ?? (explicit ? target.observedAt : null));
+        return value === null ? 0 : Math.max(0, Math.round(value));
+      }
+      function chaseExplicitObservationForItem(item, options = {}) {
+        const ownAt = finiteNumber(item?.observedAt ?? item?.lastSeenAt);
+        if (ownAt !== null && ownAt > 0) return { observedAt: ownAt, observedAtExplicit: true };
+        const snapshotAt = finiteNumber(options.snapshotRefreshedAt);
+        const snapshotLike = Boolean(item?.snapshot || item?.global || !item?.native || options.source === "minimap");
+        const nativeOnlyGlobal = Boolean(item?.native && !item?.snapshot && item?.global);
+        if (snapshotAt !== null && snapshotAt > 0 && snapshotLike && !nativeOnlyGlobal) {
+          return { observedAt: snapshotAt, observedAtExplicit: true };
+        }
+        return { observedAt: 0, observedAtExplicit: false };
+      }
+      function withChaseExplicitObservation(item, options = {}) {
+        return { ...item, ...chaseExplicitObservationForItem(item, options) };
+      }
       function chaseTargetId(target) {
         const id = target?.id ?? target?.user_id ?? target?.userId ?? target?.targetId;
         if (id === void 0 || id === null || id === "") return "";
@@ -3157,7 +3178,9 @@
         const point = targetPoint(raw);
         const distance = finiteNumber(raw?.distance ?? raw?.lastDistance);
         const computedDistance = distance !== null ? distance : self && point ? dist(self, point) : Infinity;
-        const observedAt = Number(raw?.observedAt || raw?.lastSeenAt || options.nowMs || Date.now()) || 0;
+        const rawObservedAt = finiteNumber(raw?.observedAt ?? raw?.lastSeenAt);
+        const explicitObservedAt = rawObservedAt !== null && raw?.observedAtExplicit !== false ? Math.max(0, Math.round(rawObservedAt)) : explicitObservedAtValue(raw);
+        const observedAt = rawObservedAt !== null ? rawObservedAt : Number(options.nowMs || Date.now()) || 0;
         const nativeVisible = Boolean(
           raw?.native || raw?.realtime || raw?.render || source === "native" || source === "realtime" || source === "render"
         ) && !raw?.minimapOnly;
@@ -3185,6 +3208,8 @@
           attackableNow: false,
           seekableNow: Boolean(point),
           observedAt,
+          observedAtExplicit: explicitObservedAt > 0,
+          explicitObservedAt,
           stale: Boolean(raw?.stale),
           mode: raw?.current_join_mode || raw?.mode || "",
           life: raw?.life || "",
@@ -3214,6 +3239,7 @@
         const nextLatestDrop = finiteNumber(next.latestDrop);
         const previousLatestDrop = finiteNumber(previous.latestDrop);
         const closeObservation = Math.abs(Number(next.observedAt || 0) - Number(previous.observedAt || 0)) <= nearMs;
+        const explicitObservedAt = Math.max(explicitObservedAtValue(previous), explicitObservedAtValue(next));
         let displayDrop = previousDrop;
         if (nextDrop !== null) {
           if (displayDrop === null) displayDrop = nextDrop;
@@ -3242,6 +3268,8 @@
           visible: Boolean(previous.visible || next.visible),
           seekableNow: Boolean(previous.seekableNow || next.seekableNow),
           observedAt: Math.max(Number(previous.observedAt || 0), Number(next.observedAt || 0)),
+          observedAtExplicit: explicitObservedAt > 0,
+          explicitObservedAt,
           stale: Boolean(previous.stale && next.stale)
         };
       }
@@ -3260,6 +3288,35 @@
           }
         }
         return Array.from(byId.values());
+      }
+      function buildChaseSourceListsCore(context = {}, options = {}) {
+        const snapshotRefreshedAt = Number(options.snapshotRefreshedAt || 0) || 0;
+        const withObservation = (item, source = "") => withChaseExplicitObservation(item, { snapshotRefreshedAt, source });
+        const lists = [];
+        const nativeItems = Array.isArray(context.realtimeEntities) ? context.realtimeEntities : Array.isArray(options.nativeEntities) ? options.nativeEntities : null;
+        if (Array.isArray(nativeItems)) lists.push({ source: "native", items: nativeItems });
+        const snapshotItems = Array.isArray(context.entities) ? context.entities.filter((item) => item?.snapshot || item?.global || !item?.native) : Array.isArray(options.globalEntities) ? options.globalEntities : null;
+        if (Array.isArray(snapshotItems)) lists.push({ source: "snapshot", items: snapshotItems.map((item) => withObservation(item, "snapshot")) });
+        if (Array.isArray(context.globalTargets)) {
+          lists.push({ source: "snapshot", items: context.globalTargets.map((item) => withObservation(item, "snapshot")) });
+        }
+        if (Array.isArray(context.minimapDropTargets)) {
+          lists.push({ source: "minimap", items: context.minimapDropTargets.map((item) => withObservation(item, "minimap")) });
+        } else if (Array.isArray(options.minimapPoints)) {
+          lists.push({
+            source: "minimap",
+            items: options.minimapPoints.map((point) => withObservation({
+              user_id: point.u ?? point.user_id ?? point.id,
+              x: point.x,
+              y: point.y,
+              drop: point.d ?? point.drop,
+              minimapOnly: true,
+              observedAt: point.observedAt || point.lastSeenAt || 0
+            }, "minimap"))
+          });
+        }
+        if (Array.isArray(context.persistedTargets)) lists.push({ source: "persisted", items: context.persistedTargets });
+        return lists;
       }
       function chaseCandidateDisplay(candidate) {
         if (!candidate) return null;
@@ -3338,6 +3395,29 @@
         const clear = graceMs <= 0 || nowMs - since >= graceMs;
         return { clear, pending: !clear && graceMs > 0, observation };
       }
+      function chaseKilledCandidateSuppressionDecision(candidate, suppression = null) {
+        const killedAt = finiteNumber(suppression?.killedAt ?? suppression?.at);
+        if (!candidate || killedAt === null || killedAt <= 0) return { suppress: false, release: false, killedAt: 0, observedAt: 0 };
+        const observedAt = explicitObservedAtValue(candidate);
+        if (observedAt > killedAt) return { suppress: false, release: true, killedAt, observedAt };
+        return { suppress: true, release: false, killedAt, observedAt };
+      }
+      function filterChaseKilledCandidates(candidates, suppressions = {}, options = {}) {
+        const nowMs = Number(options.nowMs || Date.now()) || Date.now();
+        const maxAgeMs = Math.max(1e3, Number(options.maxAgeMs || 12e4) || 12e4);
+        const nextSuppressions = suppressions && typeof suppressions === "object" ? { ...suppressions } : {};
+        for (const [id, item] of Object.entries(nextSuppressions)) {
+          if (!item || nowMs - Number(item.killedAt || item.at || 0) > maxAgeMs) delete nextSuppressions[id];
+        }
+        const kept = [];
+        for (const candidate of candidates || []) {
+          const id = String(candidate?.id || "");
+          const decision = chaseKilledCandidateSuppressionDecision(candidate, id ? nextSuppressions[id] : null);
+          if (decision.release) delete nextSuppressions[id];
+          if (!decision.suppress) kept.push(candidate);
+        }
+        return { candidates: kept, suppressions: nextSuppressions };
+      }
       function decorateChaseTargets(state2, candidates, options = {}) {
         const nowMs = Number(options.nowMs || Date.now()) || Date.now();
         const staleMs = Math.max(1e3, Number(options.staleMs || 15e3) || 15e3);
@@ -3405,13 +3485,17 @@
       module.exports = {
         CHASE_MODE_STATE_VERSION,
         aggregateChaseCandidates,
+        buildChaseSourceListsCore,
         chaseCandidateDisplay,
         chaseDropValue,
         chaseHpValue,
+        chaseExplicitObservationForItem,
         chaseTargetId,
         chaseTargetName,
         chaseTargetPersistenceRecord,
         chaseLowDropClearDecision,
+        chaseKilledCandidateSuppressionDecision,
+        filterChaseKilledCandidates,
         chooseChaseTarget,
         decorateChaseTargets,
         normalizeChaseCandidate,
@@ -3614,6 +3698,7 @@
             selectedTargetId: String(preserved.chaseMode?.selectedTargetId || ""),
             selectedTargetAt: Number(preserved.chaseMode?.selectedTargetAt || 0) || 0,
             lowDropObservations: preserved.chaseMode?.lowDropObservations && typeof preserved.chaseMode.lowDropObservations === "object" ? { ...preserved.chaseMode.lowDropObservations } : {},
+            killedTargetSuppressions: preserved.chaseMode?.killedTargetSuppressions && typeof preserved.chaseMode.killedTargetSuppressions === "object" ? { ...preserved.chaseMode.killedTargetSuppressions } : {},
             panelCandidates: [],
             selectedTarget: null
           },
@@ -26900,6 +26985,7 @@
       init_define_GRASP_RAT_RUNTIME_CONFIG();
       var {
         aggregateChaseCandidates,
+        buildChaseSourceListsCore,
         chaseCandidateDisplay,
         chaseDropValue,
         chaseLowDropClearDecision,
@@ -26908,6 +26994,7 @@
         chaseTargetPersistenceRecord,
         chooseChaseTarget,
         decorateChaseTargets,
+        filterChaseKilledCandidates,
         normalizeChaseCandidate,
         normalizeChaseModeState,
         selectPanelCandidates
@@ -26948,6 +27035,7 @@
             selectedTargetAt: Number(bot.chaseMode?.selectedTargetAt || 0) || 0,
             panelCandidates: Array.isArray(bot.chaseMode?.panelCandidates) ? bot.chaseMode.panelCandidates : [],
             lowDropObservations: bot.chaseMode?.lowDropObservations && typeof bot.chaseMode.lowDropObservations === "object" ? { ...bot.chaseMode.lowDropObservations } : {},
+            killedTargetSuppressions: bot.chaseMode?.killedTargetSuppressions && typeof bot.chaseMode.killedTargetSuppressions === "object" ? { ...bot.chaseMode.killedTargetSuppressions } : {},
             selectedTarget: bot.chaseMode?.selectedTarget || null
           };
           return bot.chaseMode;
@@ -27033,6 +27121,7 @@
           if (cleared) {
             state2.lastClear = { at: now(), id: key, reason: String(reason || "manual") };
             delete state2.lowDropObservations[key];
+            delete state2.killedTargetSuppressions[key];
             if (String(state2.selectedTargetId || "") === key) {
               state2.selectedTargetId = "";
               state2.selectedTargetAt = 0;
@@ -27051,6 +27140,7 @@
           state2.selectedTarget = null;
           state2.panelCandidates = [];
           state2.lowDropObservations = {};
+          state2.killedTargetSuppressions = {};
           state2.lastClear = { at: now(), id: "", reason: String(reason || "manual"), count };
           writeChaseModeState("clear-all:" + reason);
           return { ok: true, cleared: count, status: summarizeChaseModeStatus(getSelf()) };
@@ -27060,51 +27150,6 @@
           const maxAge = source === "minimap" ? Math.max(1e3, Number(cfg.chaseMinimapMaxAgeMs || 15e3) || 15e3) : Math.max(1e3, Number(cfg.chaseSnapshotMaxAgeMs || 15e3) || 15e3);
           if (source === "persisted") return false;
           return ageMs <= maxAge;
-        }
-        function sourceListsFromRuntime(self, context = {}) {
-          const lists = [];
-          if (Array.isArray(context.realtimeEntities)) lists.push({ source: "native", items: context.realtimeEntities });
-          else {
-            const nativeEntities = getNativeEntityList();
-            if (Array.isArray(nativeEntities)) lists.push({ source: "native", items: nativeEntities });
-          }
-          if (Array.isArray(context.entities)) {
-            lists.push({
-              source: "snapshot",
-              items: context.entities.filter((item) => item?.snapshot || item?.global || !item?.native).map((item) => ({ ...item, observedAt: item.observedAt || bot.globalState?.snapshotRefreshedAt || 0 }))
-            });
-          } else if (Array.isArray(bot.globalState?.entities)) {
-            lists.push({
-              source: "snapshot",
-              items: bot.globalState.entities.map((item) => ({ ...item, observedAt: item.observedAt || bot.globalState?.snapshotRefreshedAt || 0 }))
-            });
-          }
-          if (Array.isArray(context.globalTargets)) {
-            lists.push({
-              source: "snapshot",
-              items: context.globalTargets.map((item) => ({ ...item, observedAt: item.observedAt || bot.globalState?.snapshotRefreshedAt || 0 }))
-            });
-          }
-          if (Array.isArray(context.minimapDropTargets)) {
-            lists.push({
-              source: "minimap",
-              items: context.minimapDropTargets.map((item) => ({ ...item, observedAt: item.observedAt || bot.globalState?.snapshotRefreshedAt || 0 }))
-            });
-          } else if (Array.isArray(bot.globalState?.minimap?.points)) {
-            lists.push({
-              source: "minimap",
-              items: bot.globalState.minimap.points.map((point) => ({
-                user_id: point.u ?? point.user_id ?? point.id,
-                x: point.x,
-                y: point.y,
-                drop: point.d ?? point.drop,
-                minimapOnly: true,
-                observedAt: bot.globalState.snapshotRefreshedAt || now()
-              }))
-            });
-          }
-          if (Array.isArray(context.persistedTargets)) lists.push({ source: "persisted", items: context.persistedTargets });
-          return lists;
         }
         function candidateDecorators(self, context = {}) {
           const combatById = new Map((context.combatTargets || []).map((item) => [String(item.user_id ?? item.id ?? ""), item]));
@@ -27146,13 +27191,22 @@
           const id = String(target?.id || "");
           const name = chaseTargetName(target);
           const maxAge = Math.max(1e3, Number(cfg.killAttributionMergeMs || 12e4) || 12e4);
-          return (bot.killHistory || []).some((item) => {
+          return (bot.killHistory || []).find((item) => {
             if (t - Number(item?.at || 0) > maxAge) return false;
             const itemId = item?.id ?? item?.targetId;
             if (id && itemId !== void 0 && itemId !== null && String(itemId) === id) return true;
             const itemName = chaseTargetName({ name: item?.victim || item?.name });
             return Boolean(name && itemName && name === itemName);
+          }) || null;
+        }
+        function applyKilledTargetSuppression(candidates, t = now()) {
+          const state2 = ensureChaseModeState();
+          const result = filterChaseKilledCandidates(candidates, state2.killedTargetSuppressions, {
+            nowMs: t,
+            maxAgeMs: cfg.killAttributionMergeMs
           });
+          state2.killedTargetSuppressions = result.suppressions;
+          return result.candidates;
         }
         function applyAutomaticClear(decoratedTargets, candidates, t) {
           const state2 = ensureChaseModeState();
@@ -27178,8 +27232,15 @@
               }
               continue;
             }
-            if (recentKillMatchesTarget(target, t)) {
-              clearIntents.push({ id: target.id, reason: "target-killed" });
+            const matchingKill = recentKillMatchesTarget(target, t);
+            if (matchingKill) {
+              clearIntents.push({
+                id: target.id,
+                reason: "target-killed",
+                killedAt: Number(matchingKill.at || t) || t,
+                name: chaseTargetName({ name: matchingKill.victim || matchingKill.name }) || target.name || "",
+                drop: matchingKill.targetDrop ?? matchingKill.drop ?? target.drop ?? null
+              });
             }
           }
           state2.lowDropObservations = nextLowDropObservations;
@@ -27187,6 +27248,18 @@
           const clearIds = new Set(clearIntents.map((item) => String(item.id)));
           state2.targets = state2.targets.filter((item) => !clearIds.has(String(item.id)));
           for (const id of clearIds) delete state2.lowDropObservations[id];
+          for (const intent of clearIntents) {
+            if (intent.reason !== "target-killed") continue;
+            const id = String(intent.id || "");
+            if (!id) continue;
+            state2.killedTargetSuppressions[id] = {
+              id,
+              name: intent.name || "",
+              killedAt: Number(intent.killedAt || t) || t,
+              drop: intent.drop ?? null,
+              reason: "target-killed"
+            };
+          }
           state2.lastClear = { at: t, ...clearIntents[clearIntents.length - 1], count: clearIntents.length };
           if (clearIds.has(String(state2.selectedTargetId || ""))) {
             state2.selectedTargetId = "";
@@ -27212,7 +27285,7 @@
         function summarizeChaseModeStatus(self = getSelf(), context = {}) {
           const state2 = restoreChaseModeState();
           const t = Number(context.nowMs || now()) || now();
-          const sources = sourceListsFromRuntime(self, {
+          const sources = buildChaseSourceListsCore({
             ...context,
             persistedTargets: state2.targets.map((item) => ({
               id: item.id,
@@ -27226,20 +27299,26 @@
               source: "persisted",
               lastSeenAt: item.lastSeenAt
             }))
+          }, {
+            nativeEntities: getNativeEntityList(),
+            globalEntities: bot.globalState?.entities,
+            minimapPoints: bot.globalState?.minimap?.points,
+            snapshotRefreshedAt: bot.globalState?.snapshotRefreshedAt
           });
           const rawCandidates = aggregateChaseCandidates(sources, { self, dist, nowMs: t });
-          const decoratedCandidates = rawCandidates.filter((item) => {
+          let decoratedCandidates = applyKilledTargetSuppression(rawCandidates.filter((item) => {
             const id = item?.id;
             if (!id && id !== 0) return false;
             const selfId = self?.user_id ?? self?.id;
             return selfId === void 0 || selfId === null || String(id) !== String(selfId);
-          }).filter((item) => isAlive(item)).map(candidateDecorators(self, { ...context, nowMs: t }));
+          }).filter((item) => isAlive(item)).map(candidateDecorators(self, { ...context, nowMs: t })), t);
           let targets = decorateChaseTargets(state2, decoratedCandidates, {
             nowMs: t,
             staleMs: Math.max(Number(cfg.chaseSnapshotMaxAgeMs || 15e3), Number(cfg.chaseMinimapMaxAgeMs || 15e3), 15e3)
           }).map(candidateDecorators(self, { ...context, nowMs: t }));
           const clearIntents = applyAutomaticClear(targets, decoratedCandidates, t);
           if (clearIntents.length) {
+            decoratedCandidates = applyKilledTargetSuppression(decoratedCandidates, t);
             targets = decorateChaseTargets(state2, decoratedCandidates, { nowMs: t }).map(candidateDecorators(self, { ...context, nowMs: t }));
           }
           updatePersistedTargetObservations(targets);
