@@ -32,7 +32,7 @@ Recommended first implementation:
 
 The userscript should continue to own normal strategy decisions. The watchdog should own only high-risk failure handling: missing heartbeat during combat, page-side tick stalls, validated direct leave, validated Clash rescue, and audit logging.
 
-CDP can still be added later as an observability enhancement, but it should not be required for the first implementation. The first version should work with the user's normal browser profile and Tampermonkey setup.
+The watchdog must be opt-in, like combat logging. It should remain fully disabled until the user explicitly enables and configures it.
 
 ## Why Not A Browser Extension
 
@@ -45,40 +45,22 @@ A browser extension can help with UI or diagnostics, but it is not a strong safe
 
 For combat safety, the watchdog should live outside Chrome's renderer scheduling path.
 
-## CDP Optional Enhancement
-
-CDP is optional for this design. When CDP observation is needed later, launch Chrome with a local remote-debugging port and an isolated user profile:
-
-```bat
-chrome.exe ^
-  --remote-debugging-port=9222 ^
-  --user-data-dir=C:\grasp-rat-profile ^
-  --disable-background-timer-throttling ^
-  --disable-renderer-backgrounding ^
-  --disable-backgrounding-occluded-windows
-```
-
-Notes:
-
-- Bind only to localhost. Do not expose the debugging port to the LAN or public network.
-- Use a dedicated Chrome profile for the bot.
-- The throttling-related flags can reduce background scheduling risk, but they are not a full safety guarantee.
-- CDP mode is not the same as manually opening DevTools. It only allows the local watchdog process to inspect and control the browser.
-
-The `combat-log-service` watchdog does not require this startup mode. It detects stalls by observing that the page has stopped sending fresh heartbeat messages.
-
 ## Combat Log Service Integration
 
 The watchdog should be implemented as a side module of `combat-log-service/server.js`, not as part of the normal JSONL append path.
+
+The service should expose watchdog endpoints even when disabled, but the userscript should not send heartbeat traffic and the service should not trigger rescue until watchdog configuration is explicitly enabled.
 
 New local endpoints:
 
 - `POST /watchdog/heartbeat`: lightweight, high-frequency page heartbeat. This must not be batched behind combat log flushing.
 - `GET /watchdog/status`: current in-memory watchdog state and last rescue decision.
-- `POST /watchdog/config`: optional local-only runtime config update for thresholds, dry-run mode, Clash validation, and direct leave settings.
+- `POST /watchdog/config`: local-only runtime config update for enabling/disabling watchdog, thresholds, dry-run mode, Clash validation, and direct leave settings.
 - `POST /watchdog/test-clash`: optional manual Clash validation endpoint.
 
-The heartbeat should be small and sent frequently, for example every 250-500 ms while logged in and every 150-250 ms during active combat. It should use a short timeout and should not wait for combat log queue flushing.
+The userscript should gain a manual configuration entry similar to `configureCombatLogging`, for example `configureWatchdog({ enabled: true, endpoint: 'http://127.0.0.1:18765/watchdog/heartbeat' })`. Configuration should persist through Tampermonkey storage. When disabled, no heartbeat should be sent.
+
+The heartbeat should be small and sent frequently only while the watchdog is enabled, for example every 250-500 ms while logged in and every 150-250 ms during active combat. It should use a short timeout and should not wait for combat log queue flushing.
 
 Example heartbeat:
 
@@ -156,7 +138,6 @@ The watchdog should maintain its own state machine outside the page:
 - WebSocket frame receive/send activity.
 - Heartbeat sequence continuity.
 - Direct leave credential freshness and validation state.
-- Optional CDP `Runtime.evaluate` responsiveness and timeout, when CDP is enabled later.
 - Clash API availability and authentication status.
 - Last successful leave request and exit confirmation time.
 
@@ -173,7 +154,6 @@ Emergency decisions should focus on high-risk combinations such as:
 - A hostile target is still present or was recently present.
 - Page heartbeat or combat tick age exceeds the stall threshold.
 - The page is reported as hidden/frozen during active combat.
-- Optional CDP runtime calls time out while combat was recently active.
 
 Example first-version rule:
 
@@ -195,10 +175,8 @@ Preferred order:
 1. Send a direct game leave request from the Node watchdog using the freshest validated leave credentials/request descriptor.
 2. Call the Clash REST API directly from the Node watchdog when proxy rescue is enabled and validation is currently passing. This may run in parallel with direct leave, but it must not delay direct leave.
 3. If the page heartbeat later resumes, let the userscript observe pending exit state and avoid re-entering unsafe combat.
-4. If CDP is enabled later, optionally use CDP to attempt the existing page-side leave path when the renderer still responds.
-5. As a last resort, close or reload the tab only when CDP or another browser-control layer exists.
 
-Closing the tab is not guaranteed to equal an in-game leave. It should be treated as a final fallback, not as the primary safety mechanism.
+The watchdog should not close or reload the browser as part of this design. Direct game leave is the safety action.
 
 ## Direct Leave Plan
 
@@ -284,7 +262,8 @@ If validation fails, Clash rescue should be disabled automatically for that runt
 Phase 1: Observation only.
 
 - Add `/watchdog/heartbeat` and `/watchdog/status` to `combat-log-service`.
-- Send non-batched heartbeat from the userscript/runtime.
+- Add explicit userscript configuration for watchdog enablement and endpoint.
+- Send non-batched heartbeat from the userscript/runtime only when watchdog is enabled.
 - Maintain in-memory per-user/page watchdog state.
 - Record heartbeat age, combat tick age, visibility/lifecycle fields, control state, and direct leave readiness.
 - Emit structured watchdog logs without taking action.
@@ -323,7 +302,6 @@ Phase 6: Service hardening.
 - Package `combat-log-service` as a Windows-startable process or service.
 - Add restart behavior, log rotation, config validation, and a local status endpoint.
 - Add a clear manual pause/disable control.
-- Optionally add CDP observation later for richer diagnostics.
 
 ## Validation
 
@@ -353,4 +331,3 @@ Success criteria:
 - Should hidden/frozen visibility during active damaged combat trigger immediate leave, or only lower the heartbeat stall threshold?
 - What HP/damage threshold should count as high risk for watchdog policy?
 - Should proxy switching run after direct leave or in parallel with direct leave?
-- Should CDP be added later only for diagnostics, or also for final browser-control fallback?
