@@ -4,16 +4,17 @@ Update this file for every remote bot release or handoff-relevant state change. 
 
 ## Latest Release
 
-- Latest remote bot: `bootstrap-0.4.596`.
-- Latest manifest SHA-256: `a29ed06af4aed81d36a5e0d9b10f64c9363fb6e1d4242172c0eda5f78dc52406`.
-- Latest remote release commit: `10c38c7` (`bootstrap-0.4.596` keeps invulnerable chase targets selectable and seekable while displaying their remaining invulnerability time).
+- Latest remote bot: `bootstrap-0.4.597`.
+- Latest manifest SHA-256: `ca9435a63f9009ee7fe0ce06f56cd3bf59a11fd4bb3e10d9d3309128c3b0c15c`.
+- Latest remote release commit: pending this release commit (`bootstrap-0.4.597` improves visible coin route planning so comparable routes prefer closer first pickups and avoid passing closer same-lane route points).
 - Latest bootstrap A versions: Tampermonkey `0.4.84`, extension `0.1.63`.
-- Latest direct entry/config SHA-256: `4f6a19b1d34b2bf7adec87ec72dd461db8dd0adb29b379c8ec12a344a7ce15fb`.
+- Latest direct entry/config SHA-256: `1ff4fd23e31e7a401fec0f0d8a83802058f85bd3ebd57e7ba47fc97775d14c1d`.
 
 ## Current Handoff
 
 - Bootstrap A Tampermonkey `0.4.84` and extension `0.1.63` add a panel interaction guard around the bootstrap panel, chase panel, and inline login button. Scheduled 500ms panel redraws are deferred while a panel control is between pointer/touch/mouse down and click dispatch, then flushed after the click. This prevents the panel from replacing the clicked DOM node before the browser emits `click`, which matched the intermittent first-click-no-op symptom on BOT/Log/view-radius/chase controls. Remote B is unchanged.
 - Bootstrap A Tampermonkey `0.4.83` and extension `0.1.62` set visible chase-mode Chinese wording to `猎杀`, replace the main panel toggle text with the hunt icon button, and move that toggle to the end of the current-time row after the 151m/502m view-radius buttons. The toggle keeps the existing visual state language: amber background when there are active hunt targets, dark/blue styling when empty or open, and title/aria text carrying the target count. Remote B `chaseMode` APIs, storage keys, and internal English naming are unchanged.
+- `bootstrap-0.4.597` improves native/realtime visible coin route planning. Route expansion now uses a bounded beam search instead of one greedy next point, rejects a route when its chosen first pickup would pass a clearly closer later route point in the same lane/direction, and after viable routes are built prefers a closer comparable first pickup unless the farther route clears the configured score and distance margins. This targets poor route choices where the bot picked a higher-scored route that started by running past a near route coin or stealing control with a farther first leg. Strategy self-tests cover the non-greedy route branch, same-lane closer route-point rejection, and closer comparable first-target arbitration. Bootstrap A is unchanged.
 - `bootstrap-0.4.596` changes chase-mode invulnerable handling: `status().chaseMode` candidates and selected targets now carry `invulnerable`, `invulnerableRemainingMs`, and `invulnerableRemainingTicks`, and bootstrap A displays the remaining time in the `猎杀` panel. Invulnerable targets can still be marked and selected as chase targets; a marked invulnerable target is excluded only from the generic invulnerable-avoidance branch for that same target so chase mode keeps moving toward and following it. Combat handoff remains blocked until the target is visible, in range, and no longer invulnerable, so the bot waits/follows inside range instead of shooting during invulnerability. Strategy self-tests cover invulnerable remaining-time normalization and seekability. Bootstrap A Tampermonkey `0.4.82` and extension `0.1.61` carry the panel display change.
 - `bootstrap-0.4.595` changes chase-mode confirmed-kill handling: once kill history matches a marked chase target, the target is cleared from `localStorage.graspRatChaseModeTargets` and the same id is also suppressed from the `可猎杀` panel/action candidate pool. The suppression is in-memory and hot-update preserved, and it releases only after an explicit observation newer than the kill time is pulled; that later observation must still pass normal Drop/whitelist filters before the target can be marked again. This prevents stale native/render/snapshot residue from immediately re-adding a just-killed target while still allowing future respawn/new Drop observations to re-enter normally. Strategy self-tests now cover killed-target suppression until newer explicit observation.
 - `bootstrap-0.4.594` fixes the post-stamina-hold `bot login started` 45s loop. The July 7 logs show the bot exited at 00:48:14-00:49:05 Asia/Shanghai for a normal 1h `stamina-budget-coin-leave` hold, not 1d exhaustion, and no later `session-start` appeared after the 30-minute relogin hold. Remote script B and bootstrap A now require observable login-start evidence after a native login-control click or page-global login call before writing the 45s grace; no-op attempts record `login-start-no-evidence` / `登录未启动，等待重试` and stay on the short retry cooldown. Bootstrap A Tampermonkey `0.4.81` and extension `0.1.60` carry the same evidence gate.
@@ -76,7 +77,7 @@ Update this file for every remote bot release or handoff-relevant state change. 
 
 ## Latest Validation Baseline
 
-The latest `bootstrap-0.4.596` release validation passed. Run build-producing commands and manifest-reading validation sequentially, not in parallel; `node scripts/build-remote-bot.js --version ...` rewrites `dist/manifest.json`, while `objective-status` and `verify-objective-build` read it.
+The latest `bootstrap-0.4.597` release validation passed. Run build-producing commands and manifest-reading validation sequentially, not in parallel; `node scripts/build-remote-bot.js --version ...` rewrites `dist/manifest.json`, while `objective-status` and `verify-objective-build` read it.
 
 ```bash
 node grasp-rat-bot.js --self-test
@@ -93,7 +94,7 @@ node --check extension/popup.js
 cd combat-log-service && npm test
 npm run test:runtime-helper-entry
 npm run test:remote-bundled
-node scripts/build-remote-bot.js --version bootstrap-0.4.596
+node scripts/build-remote-bot.js --version bootstrap-0.4.597
 node scripts/verify-objective-build.js
 git diff --check
 ```

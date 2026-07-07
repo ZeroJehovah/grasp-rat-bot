@@ -5,7 +5,7 @@ Keep this file focused on current validation coverage. Do not use it as a migrat
 ## Current Counts
 
 - Bot self-test count: `343`.
-- Strategy module self-test count: `114`.
+- Strategy module self-test count: `118`.
 - Combat-log analyzer self-test count: `88`.
 - Combat replay self-test count: `1` local replay case plus skipped historical fixtures when retained logs are absent.
 - Objective build verification count: `38`.

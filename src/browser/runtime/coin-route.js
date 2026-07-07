@@ -12,7 +12,9 @@ const {
   coinRouteActionMetaCore,
   buildCoinRouteFromAnchorCore,
   coinRouteSkipsCloserFirstCoinCore,
+  coinRouteSkipsCloserRoutePointCore,
   coinRouteSkipsHeldSingleCoinCore,
+  closerCoinRouteForFirstTargetCore,
   coinRouteMatchesHeldChoiceCore,
   heldCoinRouteBeatsSwitchCore,
   pickCoinRouteOpportunityCore
@@ -30,7 +32,9 @@ module.exports = {
   coinRouteActionMetaCore,
   buildCoinRouteFromAnchorCore,
   coinRouteSkipsCloserFirstCoinCore,
+  coinRouteSkipsCloserRoutePointCore,
   coinRouteSkipsHeldSingleCoinCore,
+  closerCoinRouteForFirstTargetCore,
   coinRouteMatchesHeldChoiceCore,
   heldCoinRouteBeatsSwitchCore,
   pickCoinRouteOpportunityCore

@@ -67,6 +67,8 @@ const {
   buildCoinRouteFromAnchorCore,
   coinRouteActionMetaCore,
   coinRouteSkipsCloserFirstCoinCore,
+  coinRouteSkipsCloserRoutePointCore,
+  closerCoinRouteForFirstTargetCore,
   pickCoinRouteOpportunityCore
 } = require('./coin-route');
 const {
@@ -1191,9 +1193,16 @@ function runStrategyModuleSelfTests() {
     maxPointsSparse: 3,
     linkDistance: 1500,
     maxLinkDistance: 2500,
+    beamWidth: 4,
     nearbyFirstCoinDistance: 22000,
     firstCoinDistanceRatio: 1.45,
     firstCoinDistanceSlack: 6000,
+    firstRoutePointDistanceRatio: 1.15,
+    firstRoutePointDistanceSlack: 2500,
+    firstRoutePointCosMin: 0.9,
+    firstRoutePointLaneRadius: 3000,
+    firstRouteDistanceRatio: 1.25,
+    firstRouteDistanceSlack: 3000,
     choiceType: choice => String(choice?.type || ''),
     choiceId: choice => String(choice?.id ?? ''),
     heldMinOverlap: 2,
@@ -1250,6 +1259,62 @@ function runStrategyModuleSelfTests() {
       [{ drop_id: 'near', amount: 1, x: 10000, y: 0, distance: 10000 }],
       routeOptions
     ) === true
+  });
+
+  const beamRoute = buildCoinRouteFromAnchorCore(routeSelf, { drop_id: 'a', amount: 1, x: 10000, y: 0, distance: 10000 }, [
+    { drop_id: 'a', amount: 1, x: 10000, y: 0, distance: 10000 },
+    { drop_id: 'bad', amount: 1, x: 12000, y: 0, distance: 12000 },
+    { drop_id: 'b', amount: 1, x: 10000, y: 2200, distance: 10239 },
+    { drop_id: 'c', amount: 1, x: 10000, y: 4400, distance: 10926 }
+  ], [], { ...routeOptions, beamWidth: 2, staminaAffordable: cost => cost <= 20000 });
+  results.push({
+    name: 'coin-route-beam-keeps-non-greedy-branch',
+    passed: beamRoute?.coinRoute?.ids?.join(',') === 'a,b,c'
+  });
+
+  const farPointRoute = {
+    drop_id: 'far',
+    amount: 1,
+    x: 18000,
+    y: 0,
+    distance: 18000,
+    coinRoute: {
+      firstDistance: 18000,
+      points: [
+        { id: 'far', x: 18000, y: 0, amount: 1 },
+        { id: 'near', x: 12000, y: 200, amount: 1 },
+        { id: 'next', x: 19000, y: 0, amount: 1 }
+      ]
+    }
+  };
+  results.push({
+    name: 'coin-route-rejects-route-that-passes-closer-route-point',
+    passed: coinRouteSkipsCloserRoutePointCore(routeSelf, farPointRoute, routeOptions) === true
+  });
+
+  const nearComparableRoute = {
+    drop_id: 'near-route',
+    x: 14000,
+    y: 0,
+    distance: 14000,
+    opportunityScore: 18750,
+    coinRoute: { firstDistance: 14000 }
+  };
+  const farComparableRoute = {
+    drop_id: 'far-route',
+    x: 19000,
+    y: 0,
+    distance: 19000,
+    opportunityScore: 19050,
+    coinRoute: { firstDistance: 19000 }
+  };
+  results.push({
+    name: 'coin-route-prefers-closer-comparable-first-target',
+    passed: closerCoinRouteForFirstTargetCore(farComparableRoute, [nearComparableRoute, farComparableRoute], {
+      ...routeOptions,
+      switchMargin: 0,
+      switchRelativeMargin: 0.1
+    })?.drop_id === 'near-route'
   });
 
   const heldRouteChoice = {

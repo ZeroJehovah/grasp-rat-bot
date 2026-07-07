@@ -68,6 +68,13 @@
 - `coinRouteSwitchMargin = 3000`
 - `coinRouteSwitchRelativeMargin = 0.1`
 - `coinRouteHeldMinOverlap = 2`
+- `coinRouteBeamWidth = 4`
+- `coinRouteFirstRoutePointDistanceRatio = 1.15`
+- `coinRouteFirstRoutePointDistanceSlack = 2500`
+- `coinRouteFirstRoutePointCosMin = 0.9`
+- `coinRouteFirstRoutePointLaneRadius = 3000`
+- `coinRouteFirstRouteDistanceRatio = 1.25`
+- `coinRouteFirstRouteDistanceSlack = 3000`
 - Held single-coin route guard reuses `opportunitySwitchHoldMs = 7000`, `coinRouteNearbyFirstCoinDistance`, `coinRouteFirstCoinDistanceRatio`, and `coinRouteFirstCoinDistanceSlack`; it has no separate config knob.
 - `coinDangerRadius = 25000`
 - `invulnerableActiveCoinDangerRadius = 36000`
