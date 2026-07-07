@@ -6,7 +6,7 @@ Update this file for every remote bot release or handoff-relevant state change. 
 
 - Latest remote bot: `bootstrap-0.4.597`.
 - Latest manifest SHA-256: `ca9435a63f9009ee7fe0ce06f56cd3bf59a11fd4bb3e10d9d3309128c3b0c15c`.
-- Latest remote release commit: pending this release commit (`bootstrap-0.4.597` improves visible coin route planning so comparable routes prefer closer first pickups and avoid passing closer same-lane route points).
+- Latest remote release commit: `4fbd0a2` (`bootstrap-0.4.597` improves visible coin route planning so comparable routes prefer closer first pickups and avoid passing closer same-lane route points).
 - Latest bootstrap A versions: Tampermonkey `0.4.84`, extension `0.1.63`.
 - Latest direct entry/config SHA-256: `1ff4fd23e31e7a401fec0f0d8a83802058f85bd3ebd57e7ba47fc97775d14c1d`.
 
