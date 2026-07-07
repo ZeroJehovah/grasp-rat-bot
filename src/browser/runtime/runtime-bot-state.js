@@ -203,6 +203,7 @@ function createRuntimeBotState(runtime = {}) {
       selectedTargetId: String(preserved.chaseMode?.selectedTargetId || ''),
       selectedTargetAt: Number(preserved.chaseMode?.selectedTargetAt || 0) || 0,
       lowDropObservations: preserved.chaseMode?.lowDropObservations && typeof preserved.chaseMode.lowDropObservations === 'object' ? { ...preserved.chaseMode.lowDropObservations } : {},
+      killedTargetSuppressions: preserved.chaseMode?.killedTargetSuppressions && typeof preserved.chaseMode.killedTargetSuppressions === 'object' ? { ...preserved.chaseMode.killedTargetSuppressions } : {},
       panelCandidates: [],
       selectedTarget: null
     },

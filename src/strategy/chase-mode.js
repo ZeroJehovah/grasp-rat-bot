@@ -17,6 +17,29 @@ function roundedOrNull(value) {
   return number === null ? null : Math.round(number);
 }
 
+function explicitObservedAtValue(target) {
+  if (!target || typeof target !== 'object') return 0;
+  const explicit = Boolean(target.observedAtExplicit || target.explicitObservedAt || target.hasExplicitObservedAt);
+  const value = finiteNumber(target.explicitObservedAt ?? (explicit ? target.observedAt : null));
+  return value === null ? 0 : Math.max(0, Math.round(value));
+}
+
+function chaseExplicitObservationForItem(item, options = {}) {
+  const ownAt = finiteNumber(item?.observedAt ?? item?.lastSeenAt);
+  if (ownAt !== null && ownAt > 0) return { observedAt: ownAt, observedAtExplicit: true };
+  const snapshotAt = finiteNumber(options.snapshotRefreshedAt);
+  const snapshotLike = Boolean(item?.snapshot || item?.global || !item?.native || options.source === 'minimap');
+  const nativeOnlyGlobal = Boolean(item?.native && !item?.snapshot && item?.global);
+  if (snapshotAt !== null && snapshotAt > 0 && snapshotLike && !nativeOnlyGlobal) {
+    return { observedAt: snapshotAt, observedAtExplicit: true };
+  }
+  return { observedAt: 0, observedAtExplicit: false };
+}
+
+function withChaseExplicitObservation(item, options = {}) {
+  return { ...item, ...chaseExplicitObservationForItem(item, options) };
+}
+
 function chaseTargetId(target) {
   const id = target?.id ?? target?.user_id ?? target?.userId ?? target?.targetId;
   if (id === undefined || id === null || id === '') return '';
@@ -98,7 +121,13 @@ function normalizeChaseCandidate(raw, options = {}) {
   const computedDistance = distance !== null
     ? distance
     : (self && point ? dist(self, point) : Infinity);
-  const observedAt = Number(raw?.observedAt || raw?.lastSeenAt || options.nowMs || Date.now()) || 0;
+  const rawObservedAt = finiteNumber(raw?.observedAt ?? raw?.lastSeenAt);
+  const explicitObservedAt = rawObservedAt !== null && (raw?.observedAtExplicit !== false)
+    ? Math.max(0, Math.round(rawObservedAt))
+    : explicitObservedAtValue(raw);
+  const observedAt = rawObservedAt !== null
+    ? rawObservedAt
+    : (Number(options.nowMs || Date.now()) || 0);
   const nativeVisible = Boolean(
     raw?.native
     || raw?.realtime
@@ -131,6 +160,8 @@ function normalizeChaseCandidate(raw, options = {}) {
     attackableNow: false,
     seekableNow: Boolean(point),
     observedAt,
+    observedAtExplicit: explicitObservedAt > 0,
+    explicitObservedAt,
     stale: Boolean(raw?.stale),
     mode: raw?.current_join_mode || raw?.mode || '',
     life: raw?.life || '',
@@ -163,6 +194,7 @@ function mergeChaseCandidate(previous, next, options = {}) {
   const nextLatestDrop = finiteNumber(next.latestDrop);
   const previousLatestDrop = finiteNumber(previous.latestDrop);
   const closeObservation = Math.abs(Number(next.observedAt || 0) - Number(previous.observedAt || 0)) <= nearMs;
+  const explicitObservedAt = Math.max(explicitObservedAtValue(previous), explicitObservedAtValue(next));
   let displayDrop = previousDrop;
   if (nextDrop !== null) {
     if (displayDrop === null) displayDrop = nextDrop;
@@ -193,6 +225,8 @@ function mergeChaseCandidate(previous, next, options = {}) {
     visible: Boolean(previous.visible || next.visible),
     seekableNow: Boolean(previous.seekableNow || next.seekableNow),
     observedAt: Math.max(Number(previous.observedAt || 0), Number(next.observedAt || 0)),
+    observedAtExplicit: explicitObservedAt > 0,
+    explicitObservedAt,
     stale: Boolean(previous.stale && next.stale)
   };
 }
@@ -212,6 +246,40 @@ function aggregateChaseCandidates(sources = [], options = {}) {
     }
   }
   return Array.from(byId.values());
+}
+
+function buildChaseSourceListsCore(context = {}, options = {}) {
+  const snapshotRefreshedAt = Number(options.snapshotRefreshedAt || 0) || 0;
+  const withObservation = (item, source = '') => withChaseExplicitObservation(item, { snapshotRefreshedAt, source });
+  const lists = [];
+  const nativeItems = Array.isArray(context.realtimeEntities)
+    ? context.realtimeEntities
+    : (Array.isArray(options.nativeEntities) ? options.nativeEntities : null);
+  if (Array.isArray(nativeItems)) lists.push({ source: 'native', items: nativeItems });
+  const snapshotItems = Array.isArray(context.entities)
+    ? context.entities.filter(item => item?.snapshot || item?.global || !item?.native)
+    : (Array.isArray(options.globalEntities) ? options.globalEntities : null);
+  if (Array.isArray(snapshotItems)) lists.push({ source: 'snapshot', items: snapshotItems.map(item => withObservation(item, 'snapshot')) });
+  if (Array.isArray(context.globalTargets)) {
+    lists.push({ source: 'snapshot', items: context.globalTargets.map(item => withObservation(item, 'snapshot')) });
+  }
+  if (Array.isArray(context.minimapDropTargets)) {
+    lists.push({ source: 'minimap', items: context.minimapDropTargets.map(item => withObservation(item, 'minimap')) });
+  } else if (Array.isArray(options.minimapPoints)) {
+    lists.push({
+      source: 'minimap',
+      items: options.minimapPoints.map(point => withObservation({
+        user_id: point.u ?? point.user_id ?? point.id,
+        x: point.x,
+        y: point.y,
+        drop: point.d ?? point.drop,
+        minimapOnly: true,
+        observedAt: point.observedAt || point.lastSeenAt || 0
+      }, 'minimap'))
+    });
+  }
+  if (Array.isArray(context.persistedTargets)) lists.push({ source: 'persisted', items: context.persistedTargets });
+  return lists;
 }
 
 function chaseCandidateDisplay(candidate) {
@@ -298,6 +366,31 @@ function chaseLowDropClearDecision(candidate, previous = null, options = {}) {
   return { clear, pending: !clear && graceMs > 0, observation };
 }
 
+function chaseKilledCandidateSuppressionDecision(candidate, suppression = null) {
+  const killedAt = finiteNumber(suppression?.killedAt ?? suppression?.at);
+  if (!candidate || killedAt === null || killedAt <= 0) return { suppress: false, release: false, killedAt: 0, observedAt: 0 };
+  const observedAt = explicitObservedAtValue(candidate);
+  if (observedAt > killedAt) return { suppress: false, release: true, killedAt, observedAt };
+  return { suppress: true, release: false, killedAt, observedAt };
+}
+
+function filterChaseKilledCandidates(candidates, suppressions = {}, options = {}) {
+  const nowMs = Number(options.nowMs || Date.now()) || Date.now();
+  const maxAgeMs = Math.max(1000, Number(options.maxAgeMs || 120000) || 120000);
+  const nextSuppressions = suppressions && typeof suppressions === 'object' ? { ...suppressions } : {};
+  for (const [id, item] of Object.entries(nextSuppressions)) {
+    if (!item || nowMs - Number(item.killedAt || item.at || 0) > maxAgeMs) delete nextSuppressions[id];
+  }
+  const kept = [];
+  for (const candidate of candidates || []) {
+    const id = String(candidate?.id || '');
+    const decision = chaseKilledCandidateSuppressionDecision(candidate, id ? nextSuppressions[id] : null);
+    if (decision.release) delete nextSuppressions[id];
+    if (!decision.suppress) kept.push(candidate);
+  }
+  return { candidates: kept, suppressions: nextSuppressions };
+}
+
 function decorateChaseTargets(state, candidates, options = {}) {
   const nowMs = Number(options.nowMs || Date.now()) || Date.now();
   const staleMs = Math.max(1000, Number(options.staleMs || 15000) || 15000);
@@ -373,13 +466,17 @@ function chaseTargetPersistenceRecord(target, previous = {}, options = {}) {
 module.exports = {
   CHASE_MODE_STATE_VERSION,
   aggregateChaseCandidates,
+  buildChaseSourceListsCore,
   chaseCandidateDisplay,
   chaseDropValue,
   chaseHpValue,
+  chaseExplicitObservationForItem,
   chaseTargetId,
   chaseTargetName,
   chaseTargetPersistenceRecord,
   chaseLowDropClearDecision,
+  chaseKilledCandidateSuppressionDecision,
+  filterChaseKilledCandidates,
   chooseChaseTarget,
   decorateChaseTargets,
   normalizeChaseCandidate,

@@ -34,7 +34,8 @@ function buildBrowserPreservedState(previousBot) {
         ...previousBot.chaseMode,
         targets: Array.isArray(previousBot.chaseMode.targets) ? previousBot.chaseMode.targets.slice(-20) : [],
         lastClear: previousBot.chaseMode.lastClear && typeof previousBot.chaseMode.lastClear === 'object' ? { ...previousBot.chaseMode.lastClear } : null,
-        lastDecision: previousBot.chaseMode.lastDecision && typeof previousBot.chaseMode.lastDecision === 'object' ? { ...previousBot.chaseMode.lastDecision } : null
+        lastDecision: previousBot.chaseMode.lastDecision && typeof previousBot.chaseMode.lastDecision === 'object' ? { ...previousBot.chaseMode.lastDecision } : null,
+        killedTargetSuppressions: previousBot.chaseMode.killedTargetSuppressions && typeof previousBot.chaseMode.killedTargetSuppressions === 'object' ? { ...previousBot.chaseMode.killedTargetSuppressions } : {}
       }
       : null,
     pendingExit: previousBot?.pendingExit && typeof previousBot.pendingExit === 'object' ? { ...previousBot.pendingExit } : null,

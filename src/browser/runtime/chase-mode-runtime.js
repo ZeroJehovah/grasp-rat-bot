@@ -2,6 +2,7 @@
 
 const {
   aggregateChaseCandidates,
+  buildChaseSourceListsCore,
   chaseCandidateDisplay,
   chaseDropValue,
   chaseLowDropClearDecision,
@@ -10,6 +11,7 @@ const {
   chaseTargetPersistenceRecord,
   chooseChaseTarget,
   decorateChaseTargets,
+  filterChaseKilledCandidates,
   normalizeChaseCandidate,
   normalizeChaseModeState,
   selectPanelCandidates
@@ -54,6 +56,7 @@ function createChaseModeRuntime(runtime = {}) {
       selectedTargetAt: Number(bot.chaseMode?.selectedTargetAt || 0) || 0,
       panelCandidates: Array.isArray(bot.chaseMode?.panelCandidates) ? bot.chaseMode.panelCandidates : [],
       lowDropObservations: bot.chaseMode?.lowDropObservations && typeof bot.chaseMode.lowDropObservations === 'object' ? { ...bot.chaseMode.lowDropObservations } : {},
+      killedTargetSuppressions: bot.chaseMode?.killedTargetSuppressions && typeof bot.chaseMode.killedTargetSuppressions === 'object' ? { ...bot.chaseMode.killedTargetSuppressions } : {},
       selectedTarget: bot.chaseMode?.selectedTarget || null
     };
     return bot.chaseMode;
@@ -145,6 +148,7 @@ function createChaseModeRuntime(runtime = {}) {
     if (cleared) {
       state.lastClear = { at: now(), id: key, reason: String(reason || 'manual') };
       delete state.lowDropObservations[key];
+      delete state.killedTargetSuppressions[key];
       if (String(state.selectedTargetId || '') === key) {
         state.selectedTargetId = '';
         state.selectedTargetAt = 0;
@@ -162,7 +166,7 @@ function createChaseModeRuntime(runtime = {}) {
     state.selectedTargetId = '';
     state.selectedTargetAt = 0;
     state.selectedTarget = null;
-    state.panelCandidates = []; state.lowDropObservations = {};
+    state.panelCandidates = []; state.lowDropObservations = {}; state.killedTargetSuppressions = {};
     state.lastClear = { at: now(), id: '', reason: String(reason || 'manual'), count };
     writeChaseModeState('clear-all:' + reason);
     return { ok: true, cleared: count, status: summarizeChaseModeStatus(getSelf()) };
@@ -175,55 +179,6 @@ function createChaseModeRuntime(runtime = {}) {
       : Math.max(1000, Number(cfg.chaseSnapshotMaxAgeMs || 15000) || 15000);
     if (source === 'persisted') return false;
     return ageMs <= maxAge;
-  }
-
-  function sourceListsFromRuntime(self, context = {}) {
-    const lists = [];
-    if (Array.isArray(context.realtimeEntities)) lists.push({ source: 'native', items: context.realtimeEntities });
-    else {
-      const nativeEntities = getNativeEntityList();
-      if (Array.isArray(nativeEntities)) lists.push({ source: 'native', items: nativeEntities });
-    }
-    if (Array.isArray(context.entities)) {
-      lists.push({
-        source: 'snapshot',
-        items: context.entities
-          .filter(item => item?.snapshot || item?.global || !item?.native)
-          .map(item => ({ ...item, observedAt: item.observedAt || bot.globalState?.snapshotRefreshedAt || 0 }))
-      });
-    } else if (Array.isArray(bot.globalState?.entities)) {
-      lists.push({
-        source: 'snapshot',
-        items: bot.globalState.entities.map(item => ({ ...item, observedAt: item.observedAt || bot.globalState?.snapshotRefreshedAt || 0 }))
-      });
-    }
-    if (Array.isArray(context.globalTargets)) {
-      lists.push({
-        source: 'snapshot',
-        items: context.globalTargets.map(item => ({ ...item, observedAt: item.observedAt || bot.globalState?.snapshotRefreshedAt || 0 }))
-      });
-    }
-    if (Array.isArray(context.minimapDropTargets)) {
-      lists.push({
-        source: 'minimap',
-        items: context.minimapDropTargets.map(item => ({ ...item, observedAt: item.observedAt || bot.globalState?.snapshotRefreshedAt || 0 }))
-      });
-    }
-    else if (Array.isArray(bot.globalState?.minimap?.points)) {
-      lists.push({
-        source: 'minimap',
-        items: bot.globalState.minimap.points.map(point => ({
-          user_id: point.u ?? point.user_id ?? point.id,
-          x: point.x,
-          y: point.y,
-          drop: point.d ?? point.drop,
-          minimapOnly: true,
-          observedAt: bot.globalState.snapshotRefreshedAt || now()
-        }))
-      });
-    }
-    if (Array.isArray(context.persistedTargets)) lists.push({ source: 'persisted', items: context.persistedTargets });
-    return lists;
   }
 
   function candidateDecorators(self, context = {}) {
@@ -275,13 +230,23 @@ function createChaseModeRuntime(runtime = {}) {
     const id = String(target?.id || '');
     const name = chaseTargetName(target);
     const maxAge = Math.max(1000, Number(cfg.killAttributionMergeMs || 120000) || 120000);
-    return (bot.killHistory || []).some(item => {
+    return (bot.killHistory || []).find(item => {
       if (t - Number(item?.at || 0) > maxAge) return false;
       const itemId = item?.id ?? item?.targetId;
       if (id && itemId !== undefined && itemId !== null && String(itemId) === id) return true;
       const itemName = chaseTargetName({ name: item?.victim || item?.name });
       return Boolean(name && itemName && name === itemName);
+    }) || null;
+  }
+
+  function applyKilledTargetSuppression(candidates, t = now()) {
+    const state = ensureChaseModeState();
+    const result = filterChaseKilledCandidates(candidates, state.killedTargetSuppressions, {
+      nowMs: t,
+      maxAgeMs: cfg.killAttributionMergeMs
     });
+    state.killedTargetSuppressions = result.suppressions;
+    return result.candidates;
   }
 
   function applyAutomaticClear(decoratedTargets, candidates, t) {
@@ -308,8 +273,15 @@ function createChaseModeRuntime(runtime = {}) {
         }
         continue;
       }
-      if (recentKillMatchesTarget(target, t)) {
-        clearIntents.push({ id: target.id, reason: 'target-killed' });
+      const matchingKill = recentKillMatchesTarget(target, t);
+      if (matchingKill) {
+        clearIntents.push({
+          id: target.id,
+          reason: 'target-killed',
+          killedAt: Number(matchingKill.at || t) || t,
+          name: chaseTargetName({ name: matchingKill.victim || matchingKill.name }) || target.name || '',
+          drop: matchingKill.targetDrop ?? matchingKill.drop ?? target.drop ?? null
+        });
       }
     }
     state.lowDropObservations = nextLowDropObservations;
@@ -317,6 +289,18 @@ function createChaseModeRuntime(runtime = {}) {
     const clearIds = new Set(clearIntents.map(item => String(item.id)));
     state.targets = state.targets.filter(item => !clearIds.has(String(item.id)));
     for (const id of clearIds) delete state.lowDropObservations[id];
+    for (const intent of clearIntents) {
+      if (intent.reason !== 'target-killed') continue;
+      const id = String(intent.id || '');
+      if (!id) continue;
+      state.killedTargetSuppressions[id] = {
+        id,
+        name: intent.name || '',
+        killedAt: Number(intent.killedAt || t) || t,
+        drop: intent.drop ?? null,
+        reason: 'target-killed'
+      };
+    }
     state.lastClear = { at: t, ...clearIntents[clearIntents.length - 1], count: clearIntents.length };
     if (clearIds.has(String(state.selectedTargetId || ''))) {
       state.selectedTargetId = '';
@@ -344,7 +328,7 @@ function createChaseModeRuntime(runtime = {}) {
   function summarizeChaseModeStatus(self = getSelf(), context = {}) {
     const state = restoreChaseModeState();
     const t = Number(context.nowMs || now()) || now();
-    const sources = sourceListsFromRuntime(self, {
+    const sources = buildChaseSourceListsCore({
       ...context,
       persistedTargets: state.targets.map(item => ({
         id: item.id,
@@ -358,9 +342,14 @@ function createChaseModeRuntime(runtime = {}) {
         source: 'persisted',
         lastSeenAt: item.lastSeenAt
       }))
+    }, {
+      nativeEntities: getNativeEntityList(),
+      globalEntities: bot.globalState?.entities,
+      minimapPoints: bot.globalState?.minimap?.points,
+      snapshotRefreshedAt: bot.globalState?.snapshotRefreshedAt
     });
     const rawCandidates = aggregateChaseCandidates(sources, { self, dist, nowMs: t });
-    const decoratedCandidates = rawCandidates
+    let decoratedCandidates = applyKilledTargetSuppression(rawCandidates
       .filter(item => {
         const id = item?.id;
         if (!id && id !== 0) return false;
@@ -368,13 +357,14 @@ function createChaseModeRuntime(runtime = {}) {
         return selfId === undefined || selfId === null || String(id) !== String(selfId);
       })
       .filter(item => isAlive(item))
-      .map(candidateDecorators(self, { ...context, nowMs: t }));
+      .map(candidateDecorators(self, { ...context, nowMs: t })), t);
     let targets = decorateChaseTargets(state, decoratedCandidates, {
       nowMs: t,
       staleMs: Math.max(Number(cfg.chaseSnapshotMaxAgeMs || 15000), Number(cfg.chaseMinimapMaxAgeMs || 15000), 15000)
     }).map(candidateDecorators(self, { ...context, nowMs: t }));
     const clearIntents = applyAutomaticClear(targets, decoratedCandidates, t);
     if (clearIntents.length) {
+      decoratedCandidates = applyKilledTargetSuppression(decoratedCandidates, t);
       targets = decorateChaseTargets(state, decoratedCandidates, { nowMs: t }).map(candidateDecorators(self, { ...context, nowMs: t }));
     }
     updatePersistedTargetObservations(targets);
