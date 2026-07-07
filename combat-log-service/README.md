@@ -23,6 +23,12 @@ http://127.0.0.1:18765/combat-log
 curl http://127.0.0.1:18765/health
 ```
 
+外部 Watchdog 状态：
+
+```bash
+curl http://127.0.0.1:18765/watchdog/status
+```
+
 日志默认按类型拆分写入：
 
 ```text
@@ -71,6 +77,91 @@ window.__graspRatBotBootstrap.configureCombatLogging({ enabled: false })
 ```
 
 配置会通过 Tampermonkey `GM_setValue` 持久化。
+
+## 外部 Watchdog
+
+Watchdog 默认完全关闭。服务端即使启动了 `/watchdog/*` 端点，也不会触发救援；浏览器也不会发送心跳，直到显式配置。
+
+启用浏览器心跳：
+
+```js
+window.__graspRatBotBootstrap.configureWatchdog({
+  enabled: true,
+  endpoint: 'http://127.0.0.1:18765/watchdog/heartbeat'
+})
+```
+
+关闭：
+
+```js
+window.__graspRatBotBootstrap.configureWatchdog({ enabled: false })
+```
+
+服务端启用 dry-run 检测：
+
+```bash
+curl -X POST http://127.0.0.1:18765/watchdog/config \
+  -H 'content-type: application/json' \
+  --data '{"enabled":true,"dryRun":true,"damagedCombatStaleMs":2000}'
+```
+
+dry-run 只写审计，不会调用游戏退出或 Clash。审计写入：
+
+```text
+combat-log-service/logs/YYYY-MM-DD/audit/watchdog.jsonl
+```
+
+查看状态：
+
+```bash
+curl http://127.0.0.1:18765/watchdog/status
+```
+
+配置并验证 Clash：
+
+```bash
+curl -X POST http://127.0.0.1:18765/watchdog/config \
+  -H 'content-type: application/json' \
+  --data '{"clash":{"enabled":true,"controllerUrl":"http://127.0.0.1:9097","secret":"YOUR_SECRET","group":"GRASP-RAT-GAME","autoProxy":"S2-自动","manualProxy":"S2-手动","directProxy":"DIRECT"}}'
+
+curl -X POST http://127.0.0.1:18765/watchdog/test-clash \
+  -H 'content-type: application/json' \
+  --data '{}'
+```
+
+主动救援还需要 direct leave 明确启用并标记已验证。不要在未完成低风险 live 验证前打开：
+
+```bash
+curl -X POST http://127.0.0.1:18765/watchdog/config \
+  -H 'content-type: application/json' \
+  --data '{"directLeave":{"enabled":true,"verified":true},"activeRescueEnabled":true,"dryRun":false}'
+```
+
+手动 direct leave 测试必须显式 `confirm: true`，可以使用最近一次心跳里的 descriptor，也可以在请求体里传入临时 descriptor。请求和审计会脱敏 token、cookie、Authorization 等字段：
+
+```bash
+curl -X POST http://127.0.0.1:18765/watchdog/test-leave \
+  -H 'content-type: application/json' \
+  --data '{"confirm":true,"key":"<pageId>:<userId>"}'
+```
+
+浏览器默认只发送 `leaveAuth.available` / `sessionTokenPresent` 等 readiness 字段。只有显式配置 `sendLeaveDescriptor: true` 且提供 `leaveDescriptor` 时，才会把短期 token 快照发送到本地服务：
+
+```js
+window.__graspRatBotBootstrap.configureWatchdog({
+  enabled: true,
+  endpoint: 'http://127.0.0.1:18765/watchdog/heartbeat',
+  sendLeaveDescriptor: true,
+  leaveDescriptor: {
+    url: 'https://grasp-rat-game.h-e.top/api/leave',
+    method: 'POST',
+    headers: { authorization: 'Bearer ${sessionToken}' },
+    bodyJson: { userId: '${userId}' }
+  }
+})
+```
+
+上面的 direct leave endpoint 只是 descriptor 形状示例；真实 endpoint、方法、请求体和认证方式必须先在低风险 live 会话中验证，再把服务端 `directLeave.verified` 设为 `true`。
 
 ## 记录范围
 

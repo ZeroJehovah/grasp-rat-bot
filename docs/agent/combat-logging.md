@@ -66,3 +66,29 @@ window.__graspRatBotBootstrap.configureCombatLogging({ enabled: false })
 - Current local old logs (`bootstrap-0.4.71` through `bootstrap-0.4.96`) show 50 exit events, all missing top-level `exit`, and 39 unsafe exits below the 60s delay evidence; this is expected historical evidence and not validation of latest `bootstrap-0.4.109`.
 - `bootstrap-0.4.93` historical safety counts show `unsafe=23`, `unsafeDelayOk=0`, `unsafeDelayBelowMin=23`, and `unsafeDelayMissing=23`; reason counts show exits dominated by `injury hp drop=14`, then `cooldown=6`, then `login-suppressed=3`; behavior reason counts show `wait-for-clear-opportunity=6` events covering 902 frames and `best-opportunity-coin=2` events covering 30 frames; Active-in-range combat evidence shows 24 events; HP-disadvantage exit evidence shows 0. This validates the analyzer and old-root-cause explanation, not the current bot.
 - If the collector is unavailable, the bot keeps the bounded pending queue, records failure status in the panel/status, and does not affect combat decisions.
+
+## External Watchdog
+
+- The local collector now also owns the opt-in external watchdog surface under `/watchdog/*`. It is separate from `/combat-log`; heartbeat traffic is not batched through the combat-log queue and watchdog audit records are written separately under `combat-log-service/logs/YYYY-MM-DD/audit/watchdog.jsonl`.
+- Service endpoints:
+  - `GET /watchdog/status` returns disabled/enabled state, latest heartbeat state, direct-leave readiness, Clash readiness, and last rescue decision.
+  - `POST /watchdog/config` updates local runtime config for `enabled`, `dryRun`, stale thresholds, `activeRescueEnabled`, `directLeave`, and `clash`.
+  - `POST /watchdog/heartbeat` ingests lightweight page heartbeats keyed by `pageId:userId`.
+  - `POST /watchdog/test-clash` performs a harmless Clash proxy-group read and validates configured target proxy names.
+  - `POST /watchdog/test-leave` is manual-only and requires `confirm:true` before sending a direct leave request.
+- Defaults are inert: service watchdog `enabled=false`, `activeRescueEnabled=false`, `dryRun=true`; browser `watchdogEnabled=false` and `watchdogEndpointConfigured=false`. No heartbeat is sent and no rescue action can run until explicitly configured.
+- Browser bootstrap exposes:
+
+```js
+window.__graspRatBotBootstrap.configureWatchdog({
+  enabled: true,
+  endpoint: 'http://127.0.0.1:18765/watchdog/heartbeat'
+})
+```
+
+- Remote runtime status exposes `status().watchdog`; bootstrap A shows a compact `WD` status dot once the watchdog endpoint has been configured.
+- Heartbeats include page id, user id, visibility/lifecycle state, combat-active and damaged-in-combat flags, self HP/life, target summary, decision reason/pending-exit state, control state, runtime tick timing, and `leaveAuth` readiness.
+- Browser heartbeats do not send a token or direct-leave descriptor by default. To test direct leave, the operator must explicitly configure `sendLeaveDescriptor:true` with a descriptor template and keep the service-side descriptor TTL short.
+- Service-side direct leave is implemented as a configurable client with origin allow-listing, short timeout, bounded retry, request/response audit, and credential redaction. Active rescue requires `enabled=true`, `activeRescueEnabled=true`, `dryRun=false`, and `directLeave.enabled=true` plus `directLeave.verified=true`.
+- The actual game leave endpoint, method, request body, and authentication source remain a live-validation requirement before `directLeave.verified` should be set. Without that verification, the watchdog can still dry-run stale-heartbeat decisions and validate Clash, but direct-leave safety must be treated as unarmed.
+- Service-side Clash validation preserves the exact secret string, including backslashes, by accepting JSON config on the local endpoint. Validation reads the configured proxy group and checks configured rescue proxy names before Clash rescue is considered available. Clash rescue is secondary and is started only after the direct-leave request has been created.

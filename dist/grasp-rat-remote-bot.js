@@ -12,7 +12,7 @@
   var define_GRASP_RAT_RUNTIME_CONFIG_default;
   var init_define_GRASP_RAT_RUNTIME_CONFIG = __esm({
     "<define:__GRASP_RAT_RUNTIME_CONFIG__>"() {
-      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.599" };
+      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.600" };
     }
   });
 
@@ -134,6 +134,16 @@
             ...previousBot.combatLogging,
             preBuffer: Array.isArray(previousBot.combatLogging.preBuffer) ? previousBot.combatLogging.preBuffer.slice(-160) : [],
             pending: Array.isArray(previousBot.combatLogging.pending) ? previousBot.combatLogging.pending.slice(-1e3) : []
+          } : null,
+          watchdog: previousBot?.watchdog && typeof previousBot.watchdog === "object" ? {
+            pageId: String(previousBot.watchdog.pageId || ""),
+            sequence: Number(previousBot.watchdog.sequence || 0) || 0,
+            sent: Number(previousBot.watchdog.sent || 0) || 0,
+            failed: Number(previousBot.watchdog.failed || 0) || 0,
+            lastOkAt: Number(previousBot.watchdog.lastOkAt || 0) || 0,
+            lastError: String(previousBot.watchdog.lastError || ""),
+            pageLifecycle: String(previousBot.watchdog.pageLifecycle || ""),
+            leaveDescriptor: previousBot.watchdog.leaveDescriptor && typeof previousBot.watchdog.leaveDescriptor === "object" ? { ...previousBot.watchdog.leaveDescriptor } : null
           } : null,
           coinFailures: previousBot?.coinFailures instanceof Map ? Array.from(previousBot.coinFailures.entries()).slice(-120) : []
         };
@@ -598,6 +608,15 @@
           offlineLeaveRetryMs: 600,
           leaveRetryMinMs: 1e4,
           leaveCommandTimeoutMs: 3e3,
+          watchdogEnabled: false,
+          watchdogEndpoint: String(config.watchdogEndpoint || "http://127.0.0.1:18765/watchdog/heartbeat"),
+          watchdogEndpointConfigured: Boolean(config.watchdogEndpointConfigured),
+          watchdogHeartbeatMs: 500,
+          watchdogCombatHeartbeatMs: 200,
+          watchdogHeartbeatTimeoutMs: 400,
+          watchdogSendLeaveDescriptor: false,
+          watchdogLeaveDescriptor: config.watchdogLeaveDescriptor || null,
+          watchdogLeaveDescriptorTtlMs: 3e4,
           clashLeaveRescueEnabled: false,
           clashLeaveRescueTimeoutMs: 9e3,
           pendingExitPersistMaxMs: 36e5,
@@ -3713,6 +3732,27 @@
             lastOkAt: Number(preserved.combatLogging?.lastOkAt || 0),
             sequence: Number(preserved.combatLogging?.sequence || 0)
           },
+          watchdog: {
+            enabled: Boolean(cfg.watchdogEnabled && cfg.watchdogEndpointConfigured),
+            endpoint: cfg.watchdogEndpointConfigured ? String(cfg.watchdogEndpoint || "http://127.0.0.1:18765/watchdog/heartbeat") : "",
+            endpointConfigured: Boolean(cfg.watchdogEndpointConfigured),
+            pageId: String(preserved.watchdog?.pageId || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`),
+            sequence: Number(preserved.watchdog?.sequence || 0),
+            sent: Number(preserved.watchdog?.sent || 0),
+            failed: Number(preserved.watchdog?.failed || 0),
+            lastAttemptAt: 0,
+            lastOkAt: Number(preserved.watchdog?.lastOkAt || 0),
+            lastError: String(preserved.watchdog?.lastError || ""),
+            lastSkipReason: "",
+            sending: false,
+            timer: 0,
+            pageLifecycle: String(preserved.watchdog?.pageLifecycle || ""),
+            leaveDescriptor: preserved.watchdog?.leaveDescriptor && typeof preserved.watchdog.leaveDescriptor === "object" ? { ...preserved.watchdog.leaveDescriptor } : null,
+            damagedInCombat: false,
+            combatDamageActive: false,
+            combatDamageStartHp: null,
+            combatDamageMinHp: null
+          },
           exitAudit: {
             sequence: Number(preserved.exitAudit?.sequence || previousBot?.exitAudit?.sequence || 0),
             requestSequence: Number(preserved.exitAudit?.requestSequence || previousBot?.exitAudit?.requestSequence || 0),
@@ -3945,6 +3985,7 @@
           renderTargetOverlay = noop,
           forceLoginNow = () => null,
           configureCombatLogging = () => null,
+          configureWatchdog = () => null,
           tick = () => null,
           syncPausedFromPage = () => false,
           triggerNativeTick = () => false,
@@ -3962,6 +4003,7 @@
           summarizeNativeTransportRecovery = () => null,
           summarizeTargetWhitelistStatus = () => null,
           summarizeCombatLoggingStatus = () => null,
+          summarizeWatchdogStatus = () => null,
           summarizeImportantLoggingStatus = () => null,
           unresolvedExitAuditLogCount = () => 0,
           pendingExitAuditLogIds = () => [],
@@ -4022,6 +4064,8 @@
             closeControlWs(reason);
             if (current.timer) clearIntervalFn(current.timer);
             current.timer = 0;
+            if (current.watchdog?.timer) clearIntervalFn(current.watchdog.timer);
+            if (current.watchdog) current.watchdog.timer = 0;
             if (current.targetWhitelist?.timer) clearIntervalFn(current.targetWhitelist.timer);
             if (current.targetWhitelist) current.targetWhitelist.timer = 0;
             try {
@@ -4074,6 +4118,9 @@
           },
           configureCombatLogging(options = {}) {
             return configureCombatLogging(options);
+          },
+          configureWatchdog(options = {}) {
+            return configureWatchdog(options);
           },
           configureClashLeaveRescue(options = {}) {
             const current = activeBot(this);
@@ -4160,6 +4207,7 @@
               networkQuality: summarizeNetworkQuality(),
               targetWhitelist: summarizeTargetWhitelistStatus(),
               combatLogging: summarizeCombatLoggingStatus(),
+              watchdog: summarizeWatchdogStatus(),
               importantLogging: summarizeImportantLoggingStatus(),
               exitAudit: {
                 pending: unresolvedExitAuditLogCount(),
@@ -27809,6 +27857,412 @@
     }
   });
 
+  // src/browser/runtime/watchdog-heartbeat-runtime.js
+  var require_watchdog_heartbeat_runtime = __commonJS({
+    "src/browser/runtime/watchdog-heartbeat-runtime.js"(exports, module) {
+      "use strict";
+      init_define_GRASP_RAT_RUNTIME_CONFIG();
+      function fallbackNow() {
+        return Date.now();
+      }
+      function safeClone(value) {
+        try {
+          return JSON.parse(JSON.stringify(value));
+        } catch (_) {
+          return null;
+        }
+      }
+      function numberValue(value, fallback = 0) {
+        const n = Number(value);
+        return Number.isFinite(n) ? n : fallback;
+      }
+      function objectValue(value) {
+        return value && typeof value === "object" && !Array.isArray(value) ? value : null;
+      }
+      function parseDescriptor(value) {
+        if (!value) return null;
+        if (typeof value === "string") {
+          try {
+            const parsed = JSON.parse(value);
+            return objectValue(parsed);
+          } catch (_) {
+            return null;
+          }
+        }
+        return objectValue(value);
+      }
+      function createWatchdogHeartbeatRuntime(runtime = {}) {
+        const {
+          bot,
+          cfg,
+          storage = typeof localStorage !== "undefined" ? localStorage : null,
+          pageGlobal = typeof window !== "undefined" ? window : null,
+          documentRef = typeof document !== "undefined" ? document : null,
+          locationRef = typeof location !== "undefined" ? location : null,
+          fetchFn = typeof fetch !== "undefined" ? fetch : null,
+          setIntervalFn = typeof setInterval !== "undefined" ? setInterval : null,
+          clearIntervalFn = typeof clearInterval !== "undefined" ? clearInterval : null,
+          setTimeoutFn = typeof setTimeout !== "undefined" ? setTimeout : null,
+          clearTimeoutFn = typeof clearTimeout !== "undefined" ? clearTimeout : null,
+          now = fallbackNow,
+          getSelf = () => null,
+          summarizeSelf = (value) => value,
+          getCurrentUserId = () => null,
+          getSessionToken = () => "",
+          summarizeControl = () => null,
+          combatTickActiveFromState = () => false,
+          recordRuntimeDiagnostics = () => {
+          }
+        } = runtime;
+        function watchdogState() {
+          if (!bot.watchdog || typeof bot.watchdog !== "object") {
+            bot.watchdog = {};
+          }
+          return bot.watchdog;
+        }
+        function endpointConfigured() {
+          return Boolean(cfg.watchdogEndpointConfigured || watchdogState().endpointConfigured);
+        }
+        function watchdogEnabled() {
+          return Boolean(cfg.watchdogEnabled && endpointConfigured());
+        }
+        function configuredEndpoint() {
+          return String(cfg.watchdogEndpoint || watchdogState().endpoint || "http://127.0.0.1:18765/watchdog/heartbeat");
+        }
+        function watchdogIntervalMs(combatActive) {
+          const fallback = combatActive ? 200 : 500;
+          const key = combatActive ? "watchdogCombatHeartbeatMs" : "watchdogHeartbeatMs";
+          return Math.max(100, Number(cfg[key] || fallback) || fallback);
+        }
+        function watchdogTimeoutMs() {
+          return Math.max(100, Number(cfg.watchdogHeartbeatTimeoutMs || 400) || 400);
+        }
+        function summarizeTarget(decision) {
+          const target = decision?.target || decision?.combatState?.target || decision?.aimTarget?.target || decision?.attack?.target || bot.combatTarget || bot.lastTarget || null;
+          if (!target || typeof target !== "object") return null;
+          const id = target.id ?? target.user_id ?? target.userId ?? target.targetId;
+          const out = {};
+          if (id !== void 0 && id !== null && id !== "") out.id = id;
+          if (target.name || target.label) out.name = String(target.name || target.label);
+          const hp = numberValue(target.hp ?? target.knownHp ?? target.health ?? target.currentHp, NaN);
+          if (Number.isFinite(hp)) out.hp = hp;
+          const distance = numberValue(target.distance ?? target.d, NaN);
+          if (Number.isFinite(distance)) out.distance = Math.round(distance);
+          return Object.keys(out).length ? out : null;
+        }
+        function currentCombatActive(decision = bot.lastDecision) {
+          try {
+            return Boolean(combatTickActiveFromState({
+              decision,
+              combatTarget: bot.combatTarget,
+              pendingExit: bot.pendingExit || bot.pendingCombatLeave,
+              nowMs: now()
+            }));
+          } catch (_) {
+            return Boolean(bot.lastTickCombatActive || bot.combatTarget || bot.pendingCombatLeave);
+          }
+        }
+        function updateDamageState(self, combatActive) {
+          const state2 = watchdogState();
+          const hp = numberValue(self?.hp, NaN);
+          if (!combatActive) {
+            state2.combatDamageActive = false;
+            state2.combatDamageStartHp = Number.isFinite(hp) ? hp : null;
+            state2.combatDamageMinHp = Number.isFinite(hp) ? hp : null;
+            state2.damagedInCombat = false;
+            return false;
+          }
+          if (!state2.combatDamageActive) {
+            state2.combatDamageActive = true;
+            state2.combatDamageStartHp = Number.isFinite(hp) ? hp : null;
+            state2.combatDamageMinHp = Number.isFinite(hp) ? hp : null;
+            state2.damagedInCombat = false;
+          }
+          if (Number.isFinite(hp)) {
+            const priorMin = Number.isFinite(Number(state2.combatDamageMinHp)) ? Number(state2.combatDamageMinHp) : hp;
+            if (hp < priorMin) state2.combatDamageMinHp = hp;
+            const startHp = Number.isFinite(Number(state2.combatDamageStartHp)) ? Number(state2.combatDamageStartHp) : hp;
+            if (hp < startHp) state2.damagedInCombat = true;
+          }
+          return Boolean(state2.damagedInCombat);
+        }
+        function leaveDescriptorConfig() {
+          return parseDescriptor(cfg.watchdogLeaveDescriptor || watchdogState().leaveDescriptor);
+        }
+        function buildLeaveAuth(userId, control) {
+          const token = (() => {
+            try {
+              return String(getSessionToken() || storage?.getItem?.("tmpGameSessionToken") || "");
+            } catch (_) {
+              return "";
+            }
+          })();
+          const descriptor = leaveDescriptorConfig();
+          const sendDescriptor = Boolean(cfg.watchdogSendLeaveDescriptor && descriptor);
+          const ttlMs = Math.max(1e3, Number(cfg.watchdogLeaveDescriptorTtlMs || 3e4) || 3e4);
+          const available = Boolean(control?.hasToken || token || userId);
+          const out = {
+            available,
+            userId,
+            origin: locationRef?.origin || "https://grasp-rat-game.h-e.top",
+            sessionTokenPresent: Boolean(token),
+            expiresAt: now() + ttlMs
+          };
+          if (sendDescriptor) {
+            out.sessionToken = token;
+            out.descriptor = safeClone(descriptor);
+          }
+          return out;
+        }
+        function buildWatchdogHeartbeat() {
+          const state2 = watchdogState();
+          const decision = bot.lastDecision || null;
+          const rawSelf = getSelf() || bot.lastSelf || null;
+          const self = rawSelf ? summarizeSelf(rawSelf) : null;
+          const combatActive = currentCombatActive(decision);
+          const damagedInCombat = updateDamageState(self, combatActive);
+          const control = summarizeControl() || {};
+          const userId = getCurrentUserId() ?? self?.id ?? control.currentUserId ?? bot.session?.userId ?? null;
+          return {
+            type: "watchdog-heartbeat",
+            pageId: state2.pageId,
+            userId,
+            at: now(),
+            sequence: Number(state2.sequence || 0) + 1,
+            visibilityState: documentRef?.visibilityState || "",
+            pageLifecycle: state2.pageLifecycle || "",
+            combatActive,
+            damagedInCombat,
+            self: self ? {
+              id: self.id ?? self.user_id ?? userId ?? null,
+              hp: self.hp ?? null,
+              maxHp: self.maxHp ?? self.max_hp ?? null,
+              life: self.life || ""
+            } : null,
+            target: summarizeTarget(decision),
+            decision: decision ? {
+              kind: decision.kind || "",
+              reason: decision.reason || "",
+              pendingExit: Boolean(bot.pendingExit || decision.pendingExit || decision.leave?.pendingExit),
+              displayReason: decision.displayReason || decision.leave?.displayReason || ""
+            } : null,
+            control: {
+              wsOpen: Boolean(control.wsOpen),
+              nativeWsOpen: Boolean(control.nativeWsOpen),
+              rawWsOpen: Boolean(control.rawWsOpen),
+              connecting: Boolean(control.connecting),
+              hasToken: Boolean(control.hasToken || getSessionToken()),
+              currentUserId: control.currentUserId ?? userId ?? null
+            },
+            runtime: {
+              lastCombatTickAt: bot.lastTickCombatActive ? Number(bot.lastTickAt || 0) : 0,
+              lastTickAt: Number(bot.lastTickAt || 0),
+              lastTickCompletedAt: Number(bot.lastTickCompletedAt || 0),
+              tickGapMs: bot.lastTickGapMs ?? null,
+              diagnosis: bot.runtimeDiagnostics?.diagnosis || ""
+            },
+            leaveAuth: buildLeaveAuth(userId, control)
+          };
+        }
+        function requestWithTimeout(endpoint, payload) {
+          if (typeof fetchFn !== "function") return Promise.reject(new Error("fetch unavailable"));
+          const body = JSON.stringify(payload);
+          const timeoutMs = watchdogTimeoutMs();
+          const AbortControllerImpl = typeof AbortController !== "undefined" ? AbortController : null;
+          const controller = AbortControllerImpl ? new AbortControllerImpl() : null;
+          const timer = controller && typeof setTimeoutFn === "function" ? setTimeoutFn(() => controller.abort(), timeoutMs) : 0;
+          return Promise.resolve().then(() => fetchFn(endpoint, {
+            method: "POST",
+            mode: "cors",
+            cache: "no-store",
+            keepalive: body.length < 6e4,
+            headers: { "content-type": "application/json" },
+            body,
+            signal: controller?.signal
+          })).finally(() => {
+            if (timer && typeof clearTimeoutFn === "function") clearTimeoutFn(timer);
+          });
+        }
+        function shouldSendHeartbeat(force = false) {
+          const state2 = watchdogState();
+          if (!watchdogEnabled()) {
+            state2.lastSkipReason = endpointConfigured() ? "disabled" : "endpoint-not-configured";
+            return false;
+          }
+          if (!configuredEndpoint()) {
+            state2.lastSkipReason = "endpoint-missing";
+            return false;
+          }
+          if (state2.sending) {
+            state2.lastSkipReason = "send-in-flight";
+            return false;
+          }
+          const decision = bot.lastDecision || null;
+          const combatActive = currentCombatActive(decision);
+          const t = now();
+          if (!force && state2.lastAttemptAt && t - Number(state2.lastAttemptAt || 0) < watchdogIntervalMs(combatActive)) {
+            state2.lastSkipReason = "interval";
+            return false;
+          }
+          const self = getSelf() || bot.lastSelf || null;
+          const control = summarizeControl() || {};
+          if (!combatActive && !self && !control.hasToken && !getCurrentUserId()) {
+            state2.lastSkipReason = "not-logged-in";
+            return false;
+          }
+          return true;
+        }
+        function sendWatchdogHeartbeat(force = false) {
+          const state2 = watchdogState();
+          if (!shouldSendHeartbeat(force)) return false;
+          const payload = buildWatchdogHeartbeat();
+          state2.sequence = Number(payload.sequence || 0);
+          state2.lastAttemptAt = now();
+          state2.sending = true;
+          state2.lastSkipReason = "";
+          requestWithTimeout(configuredEndpoint(), payload).then((res) => {
+            if (!res || !res.ok) throw new Error("watchdog heartbeat failed: HTTP " + (res?.status || 0));
+            state2.sent = Number(state2.sent || 0) + 1;
+            state2.lastOkAt = now();
+            state2.lastError = "";
+          }).catch((err) => {
+            state2.failed = Number(state2.failed || 0) + 1;
+            state2.lastError = err?.name === "AbortError" ? "watchdog heartbeat timed out" : err?.message || String(err);
+          }).finally(() => {
+            state2.sending = false;
+            recordRuntimeDiagnostics({
+              watchdogHeartbeatLastAttemptAt: state2.lastAttemptAt,
+              watchdogHeartbeatLastOkAt: state2.lastOkAt || 0,
+              watchdogHeartbeatFailed: Number(state2.failed || 0)
+            });
+          });
+          return true;
+        }
+        function startWatchdogHeartbeat() {
+          const state2 = watchdogState();
+          stopWatchdogHeartbeat();
+          if (!watchdogEnabled() || typeof setIntervalFn !== "function") return false;
+          const minInterval = Math.min(
+            watchdogIntervalMs(false),
+            watchdogIntervalMs(true)
+          );
+          state2.timer = setIntervalFn(() => {
+            try {
+              sendWatchdogHeartbeat(false);
+            } catch (err) {
+              state2.lastError = err?.message || String(err);
+            }
+          }, Math.max(100, minInterval));
+          return true;
+        }
+        function stopWatchdogHeartbeat() {
+          const state2 = watchdogState();
+          if (state2.timer && typeof clearIntervalFn === "function") clearIntervalFn(state2.timer);
+          state2.timer = 0;
+          state2.sending = false;
+          return true;
+        }
+        function configureWatchdog(options = {}) {
+          const next = options && typeof options === "object" ? options : {};
+          const state2 = watchdogState();
+          if (Object.prototype.hasOwnProperty.call(next, "endpoint")) {
+            cfg.watchdogEndpoint = String(next.endpoint || "http://127.0.0.1:18765/watchdog/heartbeat");
+            cfg.watchdogEndpointConfigured = true;
+            state2.endpoint = cfg.watchdogEndpoint;
+            state2.endpointConfigured = true;
+          }
+          if (Object.prototype.hasOwnProperty.call(next, "enabled")) {
+            cfg.watchdogEnabled = Boolean(next.enabled) && Boolean(cfg.watchdogEndpointConfigured);
+            state2.enabled = cfg.watchdogEnabled;
+          }
+          if (Object.prototype.hasOwnProperty.call(next, "heartbeatMs")) {
+            cfg.watchdogHeartbeatMs = Math.max(100, Number(next.heartbeatMs || cfg.watchdogHeartbeatMs || 500) || 500);
+          }
+          if (Object.prototype.hasOwnProperty.call(next, "combatHeartbeatMs")) {
+            cfg.watchdogCombatHeartbeatMs = Math.max(100, Number(next.combatHeartbeatMs || cfg.watchdogCombatHeartbeatMs || 200) || 200);
+          }
+          if (Object.prototype.hasOwnProperty.call(next, "timeoutMs")) {
+            cfg.watchdogHeartbeatTimeoutMs = Math.max(100, Number(next.timeoutMs || cfg.watchdogHeartbeatTimeoutMs || 400) || 400);
+          }
+          if (Object.prototype.hasOwnProperty.call(next, "sendLeaveDescriptor")) {
+            cfg.watchdogSendLeaveDescriptor = Boolean(next.sendLeaveDescriptor);
+          }
+          if (Object.prototype.hasOwnProperty.call(next, "leaveDescriptor")) {
+            cfg.watchdogLeaveDescriptor = parseDescriptor(next.leaveDescriptor);
+            state2.leaveDescriptor = safeClone(cfg.watchdogLeaveDescriptor);
+          }
+          if (Object.prototype.hasOwnProperty.call(next, "leaveDescriptorTtlMs")) {
+            cfg.watchdogLeaveDescriptorTtlMs = Math.max(1e3, Number(next.leaveDescriptorTtlMs || cfg.watchdogLeaveDescriptorTtlMs || 3e4) || 3e4);
+          }
+          if (!watchdogEnabled()) stopWatchdogHeartbeat();
+          else startWatchdogHeartbeat();
+          return summarizeWatchdogStatus();
+        }
+        function summarizeWatchdogStatus() {
+          const state2 = watchdogState();
+          const t = now();
+          return {
+            enabled: watchdogEnabled(),
+            endpoint: endpointConfigured() ? configuredEndpoint() : "",
+            endpointConfigured: endpointConfigured(),
+            pageId: state2.pageId || "",
+            heartbeatMs: watchdogIntervalMs(false),
+            combatHeartbeatMs: watchdogIntervalMs(true),
+            timeoutMs: watchdogTimeoutMs(),
+            sendLeaveDescriptor: Boolean(cfg.watchdogSendLeaveDescriptor),
+            leaveDescriptorConfigured: Boolean(leaveDescriptorConfig()),
+            timerActive: Boolean(state2.timer),
+            sending: Boolean(state2.sending),
+            sequence: Number(state2.sequence || 0),
+            sent: Number(state2.sent || 0),
+            failed: Number(state2.failed || 0),
+            lastAttemptAt: Number(state2.lastAttemptAt || 0),
+            lastAttemptAgeMs: state2.lastAttemptAt ? Math.max(0, Math.round(t - Number(state2.lastAttemptAt || t))) : null,
+            lastOkAt: Number(state2.lastOkAt || 0),
+            lastOkAgeMs: state2.lastOkAt ? Math.max(0, Math.round(t - Number(state2.lastOkAt || t))) : null,
+            lastError: state2.lastError || "",
+            lastSkipReason: state2.lastSkipReason || "",
+            damagedInCombat: Boolean(state2.damagedInCombat),
+            pageLifecycle: state2.pageLifecycle || ""
+          };
+        }
+        function installLifecycleListeners() {
+          const state2 = watchdogState();
+          if (state2.lifecycleListenersInstalled || !pageGlobal?.addEventListener) return false;
+          state2.lifecycleListenersInstalled = true;
+          const mark = (label) => {
+            state2.pageLifecycle = label;
+            if (watchdogEnabled()) sendWatchdogHeartbeat(true);
+          };
+          try {
+            pageGlobal.addEventListener("freeze", () => mark("freeze"));
+            pageGlobal.addEventListener("resume", () => mark("resume"));
+            pageGlobal.addEventListener("pagehide", () => mark("pagehide"));
+            pageGlobal.addEventListener("pageshow", () => mark("pageshow"));
+            if (documentRef?.addEventListener) {
+              documentRef.addEventListener("visibilitychange", () => mark(documentRef.visibilityState || "visibilitychange"));
+            }
+            return true;
+          } catch (_) {
+            return false;
+          }
+        }
+        installLifecycleListeners();
+        return {
+          configureWatchdog,
+          summarizeWatchdogStatus,
+          buildWatchdogHeartbeat,
+          sendWatchdogHeartbeat,
+          startWatchdogHeartbeat,
+          stopWatchdogHeartbeat
+        };
+      }
+      module.exports = {
+        createWatchdogHeartbeatRuntime
+      };
+    }
+  });
+
   // src/browser/runtime/runtime-domain-contexts.js
   var require_runtime_domain_contexts = __commonJS({
     "src/browser/runtime/runtime-domain-contexts.js"(exports, module) {
@@ -31318,6 +31772,7 @@
         let clearAllChaseTargetsApi = () => ({ ok: false, reason: "chase-mode-not-ready" });
         let summarizeChaseModeStatusApi = () => null;
         let selectChaseModeAction;
+        let configureWatchdogApi = () => ({ enabled: false, reason: "watchdog-not-ready" }), summarizeWatchdogStatusApi = () => null, startWatchdogHeartbeatApi = () => false;
         Object.assign(bot, createBotApiRuntime({
           bot,
           cfg,
@@ -31341,6 +31796,7 @@
           renderTargetOverlay: (...args) => renderTargetOverlay(...args),
           forceLoginNow: (...args) => forceLoginNow(...args),
           configureCombatLogging: (...args) => configureCombatLogging(...args),
+          configureWatchdog: (...args) => configureWatchdogApi(...args),
           tick: (...args) => tick(...args),
           syncPausedFromPage: (...args) => syncPausedFromPage(...args),
           triggerNativeTick: (...args) => triggerNativeTick(...args),
@@ -31358,6 +31814,7 @@
           summarizeNativeTransportRecovery: (...args) => summarizeNativeTransportRecovery(...args),
           summarizeTargetWhitelistStatus: (...args) => summarizeTargetWhitelistStatus(...args),
           summarizeCombatLoggingStatus: (...args) => summarizeCombatLoggingStatus(...args),
+          summarizeWatchdogStatus: (...args) => summarizeWatchdogStatusApi(...args),
           summarizeImportantLoggingStatus: (...args) => summarizeImportantLoggingStatus(...args),
           unresolvedExitAuditLogCount: (...args) => unresolvedExitAuditLogCount(...args),
           pendingExitAuditLogIds: (...args) => pendingExitAuditLogIds(...args),
@@ -32659,6 +33116,11 @@
           opportunityEnemyStaminaCost,
           buildCombatAction
         }));
+        const watchdogRuntime = require_watchdog_heartbeat_runtime().createWatchdogHeartbeatRuntime({ bot, cfg, storage: localStorage, pageGlobal, documentRef: document, locationRef: location, fetchFn: fetch, now: Date.now, getSelf: () => getSelf(), summarizeSelf: (...args) => summarizeSelf(...args), getCurrentUserId: () => getCurrentUserId(), getSessionToken: () => getSessionToken(), summarizeControl: (...args) => summarizeControl(...args), combatTickActiveFromState: (...args) => combatTickActiveFromState(...args), recordRuntimeDiagnostics: (detail) => recordRuntimeDiagnosticsCore(bot, detail) });
+        configureWatchdogApi = watchdogRuntime.configureWatchdog;
+        summarizeWatchdogStatusApi = watchdogRuntime.summarizeWatchdogStatus;
+        startWatchdogHeartbeatApi = watchdogRuntime.startWatchdogHeartbeat;
+        startWatchdogHeartbeatApi();
         const { createRuntimeDomainContexts } = require_runtime_domain_contexts();
         const { createOrchestrationRuntime } = require_orchestration_runtime();
         const runtimeFlatContext = {

@@ -78,6 +78,20 @@ function buildBrowserPreservedState(previousBot) {
         pending: Array.isArray(previousBot.combatLogging.pending) ? previousBot.combatLogging.pending.slice(-1000) : []
       }
       : null,
+    watchdog: previousBot?.watchdog && typeof previousBot.watchdog === 'object'
+      ? {
+        pageId: String(previousBot.watchdog.pageId || ''),
+        sequence: Number(previousBot.watchdog.sequence || 0) || 0,
+        sent: Number(previousBot.watchdog.sent || 0) || 0,
+        failed: Number(previousBot.watchdog.failed || 0) || 0,
+        lastOkAt: Number(previousBot.watchdog.lastOkAt || 0) || 0,
+        lastError: String(previousBot.watchdog.lastError || ''),
+        pageLifecycle: String(previousBot.watchdog.pageLifecycle || ''),
+        leaveDescriptor: previousBot.watchdog.leaveDescriptor && typeof previousBot.watchdog.leaveDescriptor === 'object'
+          ? { ...previousBot.watchdog.leaveDescriptor }
+          : null
+      }
+      : null,
     coinFailures: previousBot?.coinFailures instanceof Map ? Array.from(previousBot.coinFailures.entries()).slice(-120) : []
   };
 }
