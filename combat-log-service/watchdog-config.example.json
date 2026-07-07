@@ -8,6 +8,7 @@
     "directLeave": {
       "enabled": false,
       "verified": false,
+      "requireAuthEvidence": true,
       "timeoutMs": 3000,
       "retryMax": 2,
       "descriptorTtlMs": 30000,
