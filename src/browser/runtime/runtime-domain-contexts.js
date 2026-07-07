@@ -57,6 +57,7 @@ const DOMAIN_CONTEXT_KEYS = Object.freeze({
     'getSelf',
     'installPageGlobal',
     'installPageNativeSnapshotObserver',
+    'maybeRecoverNativeTransportStall',
     'now',
     'observeNetworkQualitySelf',
     'refreshGlobalState',
@@ -67,6 +68,7 @@ const DOMAIN_CONTEXT_KEYS = Object.freeze({
     'snapshotEntityAllowed',
     'stopMotionSafely',
     'summarizeControl',
+    'summarizeNativeTransportRecovery',
     'summarizeSelf'
   ]),
   control: Object.freeze([

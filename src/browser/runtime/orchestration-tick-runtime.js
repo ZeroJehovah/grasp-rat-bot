@@ -63,6 +63,7 @@ function createOrchestrationTickRuntime(runtime = {}) {
     getSelf,
     installPageGlobal,
     installPageNativeSnapshotObserver,
+    maybeRecoverNativeTransportStall = () => null,
     now,
     observeNetworkQualitySelf,
     refreshGlobalState,
@@ -239,7 +240,6 @@ function createOrchestrationTickRuntime(runtime = {}) {
     updateKillHistory,
     updateSessionStats
   } = runtimeDomainContexts.logging || {};
-
   const {
     actorLabel,
     arrayCount,
@@ -257,9 +257,7 @@ function createOrchestrationTickRuntime(runtime = {}) {
   const {
     blockThreatReturnAction
   } = runtimeDomainContexts.safety || {};
-
   const { chooseAction } = runtimeDomainContexts.decision || {};
-
   const { postExitDecisionWithoutTargetCore: postExitDecisionWithoutTargetForTickCore } = require('./exit-motion');
   const { clearEnemyReloginHoldBoundCore: clearEnemyReloginHoldForTickBoundCore, clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForTickBoundCore, currentOfflineDisplayReasonCore: currentOfflineDisplayReasonForTickCore, enemyReloginHoldRemainingMsBoundCore: enemyReloginHoldRemainingMsForTickBoundCore, healthyHighValueCoinInjuryLeaveSuppressedCore: healthyHighValueCoinInjuryLeaveSuppressedForTickCore, injuryLeaveSummaryCore: injuryLeaveSummaryForTickCore, offlineLeaveSummaryCore: offlineLeaveSummaryForTickCore, offlineReloginHoldRemainingMsBoundCore: offlineReloginHoldRemainingMsForTickBoundCore, pursuitLeaveSummaryCore: pursuitLeaveSummaryForTickCore } = require('./exit-relogin');
   const { pendingExitRetryMsCore: pendingExitRetryMsForTickCore, summarizePendingExitCore: summarizePendingExitForTickCore } = require('./pending-exit');
@@ -736,8 +734,14 @@ function createOrchestrationTickRuntime(runtime = {}) {
       const samplingOutage = globalSamplingOutageOfflineState(self);
       const combatTickGap = combatTickGapOfflineState(self, { source });
       bot.lastCombatTickGap = combatTickGap;
-      const controlOffline = !bot.control.wsOpen || serverPositionStallOffline || actionSettlementStallOffline || reconnectChurn || Boolean(samplingOutage) || Boolean(combatTickGap);
       const pendingExitAlive = Boolean(bot.pendingExit && self && isAlive(self));
+      const nativeTransportRecovery = !cfg.dryRun && !pendingExitAlive ? maybeRecoverNativeTransportStall(actionSettlementStallOffline ? 'action-settlement-stalled' : (serverPositionStall?.stalled ? (serverPositionStall.reason || 'server-position-stalled') : ''), { actionSettlementStall, serverPositionStall }) : null;
+      if (nativeTransportRecovery?.waiting) {
+        bot.pursuit = null; bot.offlineSince = 0;
+        bot.lastDecision = { kind: 'wait', reason: 'native-transport-reset', control: summarizeControl(), self: summarizeSelf(self), nativeTransportRecovery, actionSettlementStall, serverPositionStall, displayReason: '原生连接控制疑似卡死，正在重置连接' };
+        updateBotPanel(bot.lastDecision); if (cfg.once) bot.stop('once'); return;
+      }
+      const controlOffline = !bot.control.wsOpen || serverPositionStallOffline || actionSettlementStallOffline || reconnectChurn || Boolean(samplingOutage) || Boolean(combatTickGap);
 		    if (!cfg.dryRun && controlOffline && !pendingExitAlive) {
 		      bot.pursuit = null;
 		      stopMotionSafely(samplingOutage ? 'global-sampling-outage' : (combatTickGap ? 'combat-tick-gap' : (actionSettlementStallOffline ? 'action-settlement-stalled' : (serverPositionStallOffline ? 'server-position-stalled' : (reconnectChurn ? 'control-ws-reconnect-churn' : 'control-ws-offline')))));

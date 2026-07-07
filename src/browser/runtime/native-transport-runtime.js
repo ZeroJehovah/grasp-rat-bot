@@ -22,6 +22,7 @@ function createNativeTransportRuntime(runtime = {}) {
     summarizeServerPositionStall = () => null,
     summarizeActionSettlementStall = () => null,
     resetServerPositionStall = () => {},
+    resetActionSettlementStall = () => {},
     summarizeNetworkQuality = () => ({ enabled: false }),
     observeNativeWsFrame = () => null,
     recordNetworkQualityMovementCommand = () => null,
@@ -139,6 +140,7 @@ function createNativeTransportRuntime(runtime = {}) {
     const serverPositionStallOffline = Boolean(cfg.serverPositionStallOfflineEnabled && serverPositionStall?.stalled);
     const actionSettlementStall = summarizeActionSettlementStall();
     const actionSettlementStallOffline = Boolean(cfg.actionSettlementStallOfflineEnabled && actionSettlementStall?.stalled);
+    const nativeTransportRecovery = summarizeNativeTransportRecovery();
     const effectiveWsOpen = Boolean(control.wsOpen && !serverPositionStallOffline && !actionSettlementStallOffline);
 	    const nativeCurrentVel = nativeState?.currentVel
 	      ? (Number(nativeState.currentVel.dx || 0) + ' ' + Number(nativeState.currentVel.dy || 0))
@@ -179,10 +181,102 @@ function createNativeTransportRuntime(runtime = {}) {
       directVelocityRepeatMs: Number(cfg.directWsVelocityRepeatMs || 0),
       lastDirectVelocity: bot.lastDirectVelocity || '',
       lastDirectVelocityAgeMs: bot.lastDirectVelocityAt ? Math.max(0, Math.round(now() - Number(bot.lastDirectVelocityAt || 0))) : null,
+      nativeTransportRecovery,
       serverPositionStall,
       actionSettlementStall
 	    };
 	  }
+
+  function summarizeNativeTransportRecovery(state = bot.nativeTransportRecovery) {
+    if (!state) return null;
+    const t = Date.now();
+    return {
+      active: Boolean(state.active),
+      waiting: Boolean(state.active && t < Number(state.deadlineAt || 0)),
+      reason: state.reason || '',
+      startedAt: state.startedAt || 0,
+      ageMs: state.startedAt ? Math.max(0, Math.round(t - Number(state.startedAt || 0))) : 0,
+      waitRemainingMs: state.deadlineAt ? Math.max(0, Math.round(Number(state.deadlineAt || 0) - t)) : 0,
+      cooldownRemainingMs: state.cooldownUntil ? Math.max(0, Math.round(Number(state.cooldownUntil || 0) - t)) : 0,
+      closedNativeWs: Boolean(state.closedNativeWs),
+      wsReadyState: Number.isFinite(Number(state.wsReadyState)) ? Number(state.wsReadyState) : null,
+      recoveredAt: state.recoveredAt || 0,
+      failedAt: state.failedAt || 0,
+      failureReason: state.failureReason || '',
+      error: state.error || ''
+    };
+  }
+
+  function nativeTransportRecoveryRestored(state, native) {
+    if (!state?.active || !native?.wsOpen) return false;
+    if (state.ws && native.ws && native.ws !== state.ws) return true;
+    const startedAt = Number(state.startedAt || 0);
+    return Boolean(
+      (bot.control.lastOpenAt && Number(bot.control.lastOpenAt || 0) >= startedAt)
+      || (bot.networkQuality?.lastFrameAt && Number(bot.networkQuality.lastFrameAt || 0) >= startedAt)
+    );
+  }
+
+  function maybeRecoverNativeTransportStall(reason = '', detail = {}) {
+    if (!cfg.nativeTransportStallRecoveryEnabled || bot.pendingExit) return null;
+    const t = Date.now();
+    let state = bot.nativeTransportRecovery || null;
+    const native = getNativeControl();
+    if (native) syncNativeControl(native);
+    if (state?.active) {
+      if (nativeTransportRecoveryRestored(state, native)) {
+        Object.assign(state, { active: false, recoveredAt: t, failureReason: '', error: '' });
+        return null;
+      }
+      if (t < Number(state.deadlineAt || 0)) return summarizeNativeTransportRecovery(state);
+      Object.assign(state, { active: false, failedAt: t, failureReason: 'timeout' });
+      bot.control.wsOpen = false;
+      bot.control.nativeWsOpen = false;
+      bot.control.connecting = false;
+      bot.control.lastError = 'native transport reset timeout';
+      return null;
+    }
+    const signal = String(reason || '')
+      || (detail?.actionSettlementStall?.stalled ? 'action-settlement-stalled' : '')
+      || (detail?.serverPositionStall?.stalled ? (detail.serverPositionStall.reason || 'server-position-stalled') : '');
+    if (!signal) return null;
+    if (state?.cooldownUntil && t < Number(state.cooldownUntil || 0)) return null;
+    if (!native?.ws || !isWsConnectingOrOpen(native.ws.readyState)) return null;
+    const waitMs = Math.max(1000, Number(cfg.nativeTransportStallRecoveryWaitMs || 8000) || 8000);
+    const cooldownMs = Math.max(waitMs, Number(cfg.nativeTransportStallRecoveryCooldownMs || 60000) || 60000);
+    state = {
+      active: true,
+      reason: signal,
+      startedAt: t,
+      deadlineAt: t + waitMs,
+      cooldownUntil: t + cooldownMs,
+      ws: native.ws,
+      wsReadyState: native.ws.readyState,
+      closedNativeWs: false,
+      recoveredAt: 0,
+      failedAt: 0,
+      failureReason: '',
+      error: ''
+    };
+    bot.nativeTransportRecovery = state;
+    stopLocalMotionOnly('native-transport-reset');
+    detachNativeMessagePump();
+    try {
+      if (native.state && typeof native.state === 'object') native.state.wsOpen = false;
+      native.ws.close();
+      state.closedNativeWs = true;
+    } catch (err) {
+      state.error = err?.message || String(err);
+    }
+    bot.control.wsOpen = false;
+    bot.control.nativeWsOpen = false;
+    bot.control.connecting = false;
+    bot.control.lastError = 'native transport reset: ' + signal;
+    if (bot.networkQuality && typeof bot.networkQuality === 'object') bot.networkQuality.pendingMovement = null;
+    resetServerPositionStall('native-transport-reset');
+    resetActionSettlementStall('native-transport-reset');
+    return summarizeNativeTransportRecovery(state);
+  }
 
 	  function closeControlWs(reason = '') {
 	    const ws = bot.control.ws;
@@ -636,6 +730,8 @@ function createNativeTransportRuntime(runtime = {}) {
     summarizeControl,
     closeControlWs,
     ensureControlWs,
+    summarizeNativeTransportRecovery,
+    maybeRecoverNativeTransportStall,
     wsSend,
     setNativeKeys,
     cancelVelocityStopTimer,

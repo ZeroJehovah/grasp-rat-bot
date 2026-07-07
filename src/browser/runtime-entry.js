@@ -215,6 +215,7 @@ const __graspRatRuntimeStartup = (() => {
     exitMotionStopLockRemainingMs: (...args) => exitMotionStopLockRemainingMs(...args),
     postExitDecisionWithoutTargetForStatusCore,
     summarizeNetworkQuality: (...args) => summarizeNetworkQuality(...args),
+    summarizeNativeTransportRecovery: (...args) => summarizeNativeTransportRecovery(...args),
     summarizeTargetWhitelistStatus: (...args) => summarizeTargetWhitelistStatus(...args),
     summarizeCombatLoggingStatus: (...args) => summarizeCombatLoggingStatus(...args),
     summarizeImportantLoggingStatus: (...args) => summarizeImportantLoggingStatus(...args),
@@ -1017,10 +1018,6 @@ const __graspRatRuntimeStartup = (() => {
 
 
 
-
-
-
-
   let pageNativeSnapshotUrl;
   let pageNativeSnapshotPayload;
   let pageNativeSnapshotError;
@@ -1115,6 +1112,8 @@ const __graspRatRuntimeStartup = (() => {
   let recordNetworkQualityShot;
   let recordNetworkQualityAttackDamage;
   let summarizeNetworkQuality;
+  let summarizeNativeTransportRecovery;
+  let maybeRecoverNativeTransportStall;
   let refreshGlobalState;
   let wsSend;
   let setNativeKeys;
@@ -1231,6 +1230,8 @@ const __graspRatRuntimeStartup = (() => {
     recordNetworkQualityShot,
     recordNetworkQualityAttackDamage,
     summarizeNetworkQuality,
+    summarizeNativeTransportRecovery,
+    maybeRecoverNativeTransportStall,
     refreshGlobalState,
     wsSend,
     setNativeKeys,
@@ -2104,6 +2105,7 @@ const __graspRatRuntimeStartup = (() => {
     noteSelfUnavailableForPostLoginZoom,
     now,
     observeNetworkQualitySelf,
+    maybeRecoverNativeTransportStall,
     opportunityCandidateCoreOptions,
     opportunityChoiceCoreOptions,
     opportunityCoinStaminaCost,
@@ -2180,6 +2182,7 @@ const __graspRatRuntimeStartup = (() => {
     stopMotionSafely,
     summarizeBlockedStaminaOpportunityCore,
     summarizeControl,
+    summarizeNativeTransportRecovery,
     summarizeNearestCoinStaminaBudgetExitCore,
     summarizePendingCombatLeave,
     summarizePursuit,

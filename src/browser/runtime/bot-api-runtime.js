@@ -52,6 +52,7 @@ function createBotApiRuntime(runtime = {}) {
     exitMotionStopLockRemainingMs = () => 0,
     postExitDecisionWithoutTargetForStatusCore = value => value,
     summarizeNetworkQuality = () => null,
+    summarizeNativeTransportRecovery = () => null,
     summarizeTargetWhitelistStatus = () => null,
     summarizeCombatLoggingStatus = () => null,
     summarizeImportantLoggingStatus = () => null,
@@ -334,6 +335,7 @@ function createBotApiRuntime(runtime = {}) {
           loginSnapshotGate: snapshotLoginGateStatus()
         },
         control: summarizeControl(),
+        nativeTransportRecovery: summarizeNativeTransportRecovery(),
         serverPositionStall: summarizeServerPositionStall(),
         actionSettlementStall: summarizeActionSettlementStall(),
         login: {
