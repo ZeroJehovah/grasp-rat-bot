@@ -5,6 +5,7 @@ const path = require('path');
 
 const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
 const SECRET_KEY_RE = /(?:secret|token|cookie|authorization|password|credential|session)/i;
+const NON_SECRET_CONFIG_KEY_RE = /^(?:requiredCookieNames|requiredHeaders)$/i;
 
 const DEFAULT_WATCHDOG_CONFIG = {
   enabled: false,
@@ -29,7 +30,9 @@ const DEFAULT_WATCHDOG_CONFIG = {
     retryBackoffMs: 1200,
     descriptorTtlMs: 30000,
     successConfirmsExit: false,
-    allowedOrigins: [GAME_ORIGIN]
+    allowedOrigins: [GAME_ORIGIN],
+    requiredHeaders: [],
+    requiredCookieNames: []
   },
   clash: {
     enabled: false,
@@ -128,6 +131,8 @@ function mergeConfig(base, update) {
     if (Array.isArray(src.allowedOrigins)) {
       next.directLeave.allowedOrigins = src.allowedOrigins.map(item => stringValue(item).replace(/\/+$/, '')).filter(Boolean).slice(0, 12);
     }
+    if (Array.isArray(src.requiredHeaders)) next.directLeave.requiredHeaders = uniqueStrings(src.requiredHeaders, 12);
+    if (Array.isArray(src.requiredCookieNames)) next.directLeave.requiredCookieNames = uniqueStrings(src.requiredCookieNames, 12);
   }
   if (isObject(patch.clash)) {
     const src = patch.clash;
@@ -170,7 +175,7 @@ function normalizeClashStage(value) {
 
 function redact(value, seen = new WeakSet(), key = '') {
   if (value === null || value === undefined) return value;
-  if (SECRET_KEY_RE.test(key)) return value ? '[redacted]' : '';
+  if (SECRET_KEY_RE.test(key) && !NON_SECRET_CONFIG_KEY_RE.test(key)) return value ? '[redacted]' : '';
   if (Array.isArray(value)) return value.slice(0, 50).map(item => redact(item, seen));
   if (typeof value === 'object') {
     if (seen.has(value)) return '[circular]';
@@ -227,6 +232,24 @@ function normalizeSmallObject(value, allowedKeys = []) {
 
 function heartbeatKey(pageId, userId) {
   return `${pageId || 'page'}:${userId === null || userId === undefined || userId === '' ? 'unknown' : String(userId)}`;
+}
+
+function headerValue(headers, name) {
+  if (!isObject(headers)) return '';
+  const wanted = stringValue(name || '').toLowerCase();
+  for (const [key, value] of Object.entries(headers)) {
+    if (String(key).toLowerCase() === wanted) return stringValue(value);
+  }
+  return '';
+}
+
+function cookieHeaderHas(cookieHeader, cookieName) {
+  const wanted = stringValue(cookieName || '').trim();
+  if (!wanted) return false;
+  return stringValue(cookieHeader || '')
+    .split(';')
+    .map(part => part.trim())
+    .some(part => part.startsWith(`${wanted}=`));
 }
 
 function summarizeLeaveAuth(authState, config, now) {
@@ -287,9 +310,17 @@ function normalizeLeaveAuth(raw, payload, config, receivedAt) {
     if (raw.sessionTokenPresent && !sessionToken) missing.push('session-token-not-sent');
   }
   if (authRequired && !authEvidence) missing.push('auth-missing');
+  for (const header of uniqueStrings(config?.directLeave?.requiredHeaders || [], 12)) {
+    if (!headerValue(headers, header)) missing.push(`header:${header}`);
+  }
+  const cookieHeader = headerValue(headers, 'cookie');
+  for (const cookieName of uniqueStrings(config?.directLeave?.requiredCookieNames || [], 12)) {
+    if (!cookieHeaderHas(cookieHeader, cookieName)) missing.push(`cookie:${cookieName}`);
+  }
+  const complete = Boolean(available && url && method && (!authRequired || authEvidence) && missing.length === 0);
   return {
     available,
-    complete: Boolean(available && url && method && (!authRequired || authEvidence)),
+    complete,
     missing: Array.from(new Set(missing)),
     receivedAt,
     userId,
@@ -888,8 +919,7 @@ class WatchdogService {
       await this.appendWatchdogStateChange(record, risk, now);
       if (!risk.risky) continue;
       const rescueKey = `${record.key}:${record.sequence ?? ''}:${record.lastHeartbeatReceivedAt}:${risk.thresholdMs}`;
-      const suppressMs = Math.max(1000, Number(this.config.rescueSuppressMs || 15000) || 15000);
-      if (record.lastWouldRescueKey === rescueKey && now - Number(record.lastWouldRescueAt || 0) < suppressMs) continue;
+      if (record.lastWouldRescueKey === rescueKey) continue;
       record.lastWouldRescueKey = rescueKey;
       record.lastWouldRescueAt = now;
       if (!this.config.activeRescueEnabled || this.config.dryRun) {
@@ -1511,13 +1541,32 @@ async function runWatchdogSelfTest(options = {}) {
     currentNow += 20000;
     watchdog.handleHeartbeat({ ...heartbeat, sequence: 3, at: currentNow - 5 });
     currentNow += 2500;
+    const activeLeaveCountBefore = calls.filter(call => String(call.url).includes('/api/leave')).length;
     await watchdog.checkNow();
     await new Promise(resolve => setTimeout(resolve, 20));
     await watchdog.flushAudit();
-    if (!calls.some(call => String(call.url).includes('/api/leave'))) throw new Error('active rescue did not call direct leave');
+    const activeLeaveCountAfter = calls.filter(call => String(call.url).includes('/api/leave')).length;
+    if (activeLeaveCountAfter !== activeLeaveCountBefore + 1) throw new Error('active rescue did not call direct leave exactly once');
     const leaveIndex = calls.findIndex(call => String(call.url).includes('/api/leave'));
     const switchIndex = calls.findIndex((call, index) => index > leaveIndex && String(call.url).includes('/proxies/'));
     if (leaveIndex < 0 || switchIndex < 0) throw new Error('active rescue did not run direct leave before Clash switch');
+    currentNow += 20000;
+    await watchdog.checkNow();
+    await new Promise(resolve => setTimeout(resolve, 20));
+    await watchdog.flushAudit();
+    const activeLeaveCountAfterDuplicateCheck = calls.filter(call => String(call.url).includes('/api/leave')).length;
+    if (activeLeaveCountAfterDuplicateCheck !== activeLeaveCountAfter) {
+      throw new Error('active rescue repeated direct leave for the same stale heartbeat window');
+    }
+    watchdog.handleHeartbeat({
+      ...heartbeat,
+      sequence: 4,
+      at: currentNow - 5,
+      leaveAuth: {
+        ...heartbeat.leaveAuth,
+        expiresAt: currentNow + 30000
+      }
+    });
     let malformed = false;
     try {
       watchdog.handleHeartbeat({ type: 'watchdog-heartbeat' });
@@ -1540,6 +1589,45 @@ async function runWatchdogSelfTest(options = {}) {
     const noAuthSummary = summarizeLeaveAuth(noAuth, watchdog.config, currentNow);
     if (noAuthSummary.directLeaveReady || !noAuthSummary.missing.includes('auth-missing')) {
       throw new Error('direct leave descriptor without auth evidence was treated as ready');
+    }
+    const cookieRequiredConfig = mergeConfig(watchdog.config, {
+      directLeave: {
+        requiredCookieNames: ['cf_clearance']
+      }
+    });
+    const missingCookieAuth = normalizeLeaveAuth({
+      available: true,
+      userId: 28886,
+      origin: GAME_ORIGIN,
+      sessionToken: 'secret-token',
+      expiresAt: currentNow + 30000,
+      descriptor: {
+        url: `${GAME_ORIGIN}/leave?user_id=\${userId}&token=\${sessionToken}`,
+        method: 'GET'
+      }
+    }, { userId: 28886 }, cookieRequiredConfig, currentNow);
+    const missingCookieSummary = summarizeLeaveAuth(missingCookieAuth, cookieRequiredConfig, currentNow);
+    if (missingCookieSummary.directLeaveReady || !missingCookieSummary.missing.includes('cookie:cf_clearance')) {
+      throw new Error('direct leave descriptor without required Cloudflare cookie was treated as ready');
+    }
+    const cookieAuth = normalizeLeaveAuth({
+      available: true,
+      userId: 28886,
+      origin: GAME_ORIGIN,
+      sessionToken: 'secret-token',
+      expiresAt: currentNow + 30000,
+      descriptor: {
+        url: `${GAME_ORIGIN}/leave?user_id=\${userId}&token=\${sessionToken}`,
+        method: 'GET',
+        headers: {
+          Cookie: 'cf_clearance=test-clearance',
+          'User-Agent': 'self-test'
+        }
+      }
+    }, { userId: 28886 }, cookieRequiredConfig, currentNow);
+    const cookieSummary = summarizeLeaveAuth(cookieAuth, cookieRequiredConfig, currentNow);
+    if (!cookieSummary.directLeaveReady || cookieSummary.missing.length) {
+      throw new Error('direct leave descriptor with required Cloudflare cookie was not ready');
     }
 
     const warningWatchdog = createWatchdogService({
@@ -1712,7 +1800,7 @@ async function runWatchdogSelfTest(options = {}) {
       throw new Error('direct leave retry did not stop after combat-log exit confirmation');
     }
 
-    console.log(JSON.stringify({ ok: true, cases: 23 }, null, 2));
+    console.log(JSON.stringify({ ok: true, cases: 25 }, null, 2));
   } finally {
     watchdog.stop();
     fs.rmSync(root, { recursive: true, force: true });
