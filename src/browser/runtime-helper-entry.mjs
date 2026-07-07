@@ -511,7 +511,8 @@ function helperStatus(config = {}) {
     method: 'leave',
     lastLeaveRequest: {
       completedAt: 2100,
-      requestId: 'spike-leave'
+      requestId: 'spike-leave',
+      result: { ok: true, event: 'left', joined: 'UserRecordOnly', current_join_mode: 'None' }
     }
   });
   const pendingExitCoreReloadConfirmation = pendingExit.leaveSuccessReloadConfirmationForDetailCore({
@@ -520,7 +521,8 @@ function helperStatus(config = {}) {
     at: 2000,
     lastLeaveRequest: {
       completedAt: 2100,
-      requestId: 'spike-leave'
+      requestId: 'spike-leave',
+      result: { ok: true, event: 'left', joined: 'UserRecordOnly', current_join_mode: 'None' }
     }
   }, {
     reloadConfirmation: {

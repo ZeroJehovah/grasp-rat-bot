@@ -7,6 +7,7 @@ const {
   leaveRequestHasHttp403Core,
   leaveDetailHasHttp403Core,
   leaveDetailSucceededCore,
+  leaveResponseConfirmsExitCore,
   leaveSuccessReloadConfirmationForDetailCore,
   leaveSuccessReloadConfirmationSatisfiedCore,
   pendingExitWaitReasonCore
@@ -19,6 +20,7 @@ module.exports = {
   leaveRequestHasHttp403Core,
   leaveDetailHasHttp403Core,
   leaveDetailSucceededCore,
+  leaveResponseConfirmsExitCore,
   leaveSuccessReloadConfirmationForDetailCore,
   leaveSuccessReloadConfirmationSatisfiedCore,
   pendingExitWaitReasonCore

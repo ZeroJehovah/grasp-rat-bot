@@ -2,8 +2,12 @@
 
 const {
   leaveDetailHasHttp403Core,
-  leaveDetailSucceededCore
+  leaveDetailSucceededCore,
+  leaveResponseConfirmsExitCore
 } = require('./pending-exit');
+const {
+  summarizeLeaveResponseCore
+} = require('../shared/leave-response');
 
 const CLASH_LEAVE_RESCUE_STAGE_ORDER = Object.freeze(['auto', 'direct', 'manual']);
 
@@ -28,12 +32,14 @@ function summarizeLeaveCommandResultCore(value) {
   if (typeof value !== 'object') return { type: typeof value, value: String(value).slice(0, 200) };
   return {
     type: Array.isArray(value) ? 'array' : 'object',
+    leaveConfirmed: leaveResponseConfirmsExitCore(value),
     ok: value.ok ?? null,
     success: value.success ?? null,
     status: value.status ?? value.statusCode ?? null,
     statusText: value.statusText || '',
     message: value.message || '',
-    error: value.error || ''
+    error: value.error || '',
+    response: summarizeLeaveResponseCore(value)
   };
 }
 

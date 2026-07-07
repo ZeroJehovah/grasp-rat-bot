@@ -2,6 +2,10 @@
 
 const fs = require('fs');
 const path = require('path');
+const {
+  leaveResponseConfirmsExitCore,
+  summarizeLeaveResponseCore
+} = require('../src/shared/leave-response');
 
 const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
 const SECRET_KEY_RE = /(?:secret|token|cookie|authorization|password|credential|session)/i;
@@ -400,12 +404,14 @@ function buildDirectLeaveRequest(authState, config) {
 
 function responseSummary(text, max = 180) {
   const raw = stringValue(text || '');
+  const json = safeJsonParse(raw);
   return {
     bodyLength: raw.length,
     bodySample: raw
       .replace(/[\r\n\t]+/g, ' ')
       .replace(/\s{2,}/g, ' ')
-      .slice(0, max)
+      .slice(0, max),
+    json: summarizeLeaveResponseCore(json)
   };
 }
 
@@ -1135,8 +1141,13 @@ class WatchdogService {
       }, timeoutMs);
       const text = await responseText(res);
       const status = Number(res?.status || 0) || 0;
+      const json = safeJsonParse(text);
+      const httpOk = status >= 200 && status < 300;
+      const leaveConfirmed = httpOk && leaveResponseConfirmsExitCore(json);
       return {
-        ok: status >= 200 && status < 300,
+        ok: leaveConfirmed,
+        httpOk,
+        leaveConfirmed,
         cloudflareBlocked: isCloudflareBlockedResponse(status, res?.statusText || '', text),
         at: startedAt,
         durationMs: Math.max(0, Math.round(this.now() - startedAt)),
@@ -1391,7 +1402,7 @@ async function runWatchdogSelfTest(options = {}) {
     calls.push({ url: String(url), req });
     const text = String(url).includes('/proxies/')
       ? JSON.stringify({ now: 'S2-自动', all: ['S2-自动', 'S2-手动', 'DIRECT'] })
-      : JSON.stringify({ ok: true });
+      : JSON.stringify({ ok: true, event: 'left', joined: 'UserRecordOnly', current_join_mode: 'None' });
     return {
       status: 200,
       statusText: 'OK',
@@ -1724,7 +1735,7 @@ async function runWatchdogSelfTest(options = {}) {
       now: () => successNow,
       fetch: async (url, req = {}) => {
         successCalls.push({ url: String(url), req });
-        return { status: 200, statusText: 'OK', text: async () => '{"left":true}' };
+        return { status: 200, statusText: 'OK', text: async () => '{"ok":true,"event":"left","joined":"UserRecordOnly","current_join_mode":"None"}' };
       },
       config: {
         auditEnabled: false,
@@ -1739,6 +1750,31 @@ async function runWatchdogSelfTest(options = {}) {
     const successRescue = { id: 'success-rescue', key: successRecord.key, active: true, confirmed: false };
     await successWatchdog.runDirectLeaveAttempt(successRecord, successRescue, 'initial');
     if (!successRescue.confirmed || successCalls.length !== 1) throw new Error('direct leave success response did not confirm exit once');
+
+    const ambiguousCalls = [];
+    const ambiguousWatchdog = createWatchdogService({
+      dir: root,
+      autoStart: false,
+      now: () => successNow,
+      fetch: async (url, req = {}) => {
+        ambiguousCalls.push({ url: String(url), req });
+        return { status: 200, statusText: 'OK', text: async () => '{"ok":true}' };
+      },
+      config: {
+        auditEnabled: false,
+        directLeave: { enabled: true, verified: true, successConfirmsExit: true, retryMax: 0 }
+      }
+    });
+    const ambiguousRecord = {
+      key: 'ambiguous:1',
+      userId: 1,
+      leaveAuth: makeLeaveAuth(ambiguousWatchdog.config, 1, successNow, successNow + 30000, 'ambiguous-token')
+    };
+    const ambiguousRescue = { id: 'ambiguous-rescue', key: ambiguousRecord.key, active: true, confirmed: false };
+    await ambiguousWatchdog.runDirectLeaveAttempt(ambiguousRecord, ambiguousRescue, 'initial');
+    if (ambiguousRescue.confirmed || ambiguousRescue.directLeave?.ok || !ambiguousRescue.directLeave?.httpOk) {
+      throw new Error('ambiguous direct leave HTTP success incorrectly confirmed exit');
+    }
 
     let retryNow = currentNow;
     const retryCalls = [];
@@ -1757,7 +1793,7 @@ async function runWatchdogSelfTest(options = {}) {
           err.name = 'AbortError';
           throw err;
         }
-        return { status: 200, statusText: 'OK', text: async () => '{"ok":true}' };
+        return { status: 200, statusText: 'OK', text: async () => '{"ok":true,"event":"left","joined":"UserRecordOnly","current_join_mode":"None"}' };
       },
       config: {
         auditEnabled: false,
@@ -1844,7 +1880,7 @@ async function runWatchdogSelfTest(options = {}) {
       throw new Error('direct leave retry did not stop after combat-log exit confirmation');
     }
 
-    console.log(JSON.stringify({ ok: true, cases: 25 }, null, 2));
+    console.log(JSON.stringify({ ok: true, cases: 26 }, null, 2));
   } finally {
     watchdog.stop();
     fs.rmSync(root, { recursive: true, force: true });

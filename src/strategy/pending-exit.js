@@ -1,5 +1,9 @@
 'use strict';
 
+const {
+  leaveResponseConfirmsExitCore
+} = require('../shared/leave-response');
+
 function pendingExitRetryMsCore(pending, options = {}) {
   const source = String(pending?.source || '');
   const retryFloorMs = Math.max(
@@ -97,7 +101,10 @@ function leaveDetailSucceededCore(detail) {
   if (!detail || typeof detail !== 'object') return false;
   if (!detail.attempted || detail.leaveRequestPending || detail.error || leaveDetailHasHttp403Core(detail)) return false;
   const request = latestLeaveRequest(detail);
-  return !request || Boolean(request.completedAt || request.method || detail.method);
+  return leaveResponseConfirmsExitCore(detail)
+    || leaveResponseConfirmsExitCore(detail.result)
+    || leaveResponseConfirmsExitCore(request)
+    || leaveResponseConfirmsExitCore(request?.result);
 }
 
 function defaultNormalizeReloadConfirmation(value) {
@@ -147,6 +154,7 @@ module.exports = {
   leaveRequestHasHttp403Core,
   leaveDetailHasHttp403Core,
   leaveDetailSucceededCore,
+  leaveResponseConfirmsExitCore,
   leaveSuccessReloadConfirmationForDetailCore,
   leaveSuccessReloadConfirmationSatisfiedCore,
   pendingExitWaitReasonCore
