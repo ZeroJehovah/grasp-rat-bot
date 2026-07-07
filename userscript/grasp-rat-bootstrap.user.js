@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Grasp Rat Bot Bootstrap
 // @namespace    https://github.com/grasp-rat-bot
-// @version      0.4.87
+// @version      0.4.88
 // @description  Loads, hot-updates, and supervises the Grasp Rat bot from a signed manifest.
 // @match        https://grasp-rat-game.h-e.top/*
 // @match        https://connect.linux.do/oauth2/authorize*
@@ -27,7 +27,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.4.87';
+  const BOOTSTRAP_VERSION = '0.4.88';
   const BOOTSTRAP_OWNER = 'tampermonkey';
   const REPOSITORY_URL = 'https://github.com/ZeroJehovah/grasp-rat-bot';
   const USERSCRIPT_UPDATE_URL = 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/userscript/grasp-rat-bootstrap.user.js';
@@ -464,7 +464,10 @@
   function reloginGateFromStatus(status) {
     const gate = status?.reloginGate || {};
     const snapshot = gate.snapshot || status?.loginSnapshotGate || status?.globalState?.loginSnapshotGate || {};
-    const point = gate.loginPointSafety || snapshot.pointSafety || {};
+    const point = {
+      ...(snapshot.pointSafety || {}),
+      ...(gate.loginPointSafety || {})
+    };
     const cooldown = gate.cooldown || {};
     const cooldownTotalMs = Math.max(
       Number(cooldown.totalMs || 0) || 0,
@@ -491,6 +494,10 @@
         missingPoint: Boolean(point.missingPoint),
         streak: Math.max(0, Math.round(Number(point.streak || 0) || 0)),
         required: Math.max(0, Math.round(Number(point.required || 0) || 0)),
+        resetAt: Math.max(0, Math.round(Number(point.resetAt || 0) || 0)),
+        resetReason: String(point.resetReason || ''),
+        lastSampleAt: Math.max(0, Math.round(Number(point.lastSampleAt || 0) || 0)),
+        lastExitSelfHpAt: Math.max(0, Math.round(Number(point.lastExitSelfHpAt || point.lastExitHpAt || 0) || 0)),
         lastDanger: point.lastDanger || null,
         lastError: String(point.lastError || '')
       }
@@ -836,6 +843,17 @@
     );
   }
 
+  function exitDetailEventTimestamp(detail) {
+    if (!detail) return 0;
+    return Math.max(
+      Number(detail.lastAt || 0) || 0,
+      Number(detail.at || 0) || 0,
+      Number(detail.updatedAt || 0) || 0,
+      Number(detail.lastResult?.at || 0) || 0,
+      Number(detail.lastResult?.updatedAt || 0) || 0
+    );
+  }
+
   function exitDetailHasText(detail) {
     return Boolean(exitDetailText(detail));
   }
@@ -902,6 +920,36 @@
 
   function waitReasonPrefersLastExit(status) {
     return /login|relogin|snapshot-gate|no-self|not-alive|session-mismatch|game-session-connecting|offline-leave-wait|enemy-leave-wait|pursuit-leave-wait/.test(reloginWaitReason(status));
+  }
+
+  function panelLoginPointSafetyActivityAt(status) {
+    const gate = reloginGateFromStatus(status);
+    const point = gate.loginPointSafety || {};
+    const stored = readStoredLoginPointSafety() || {};
+    return Math.max(
+      Number(point.resetAt || 0) || 0,
+      Number(point.lastExitSelfHpAt || 0) || 0,
+      Number(point.lastSampleAt || 0) || 0,
+      Number(point.lastDanger?.at || 0) || 0,
+      Number(stored.resetAt || 0) || 0,
+      Number(stored.lastExitSelfHpAt || stored.lastExitHpAt || 0) || 0,
+      Number(stored.lastSampleAt || stored.lastOkAt || stored.lastUnsafeAt || stored.lastErrorAt || 0) || 0,
+      Number(stored.lastDanger?.at || 0) || 0
+    );
+  }
+
+  function panelHasPostLoginAttemptReloginEvidence(status, attemptAt) {
+    if (!waitReasonPrefersLastExit(status)) return false;
+    const sinceAt = Math.max(0, Number(attemptAt || 0) || 0);
+    const activityAt = Math.max(
+      panelLoginPointSafetyActivityAt(status),
+      exitDetailEventTimestamp(activePersistentExitDetail(status))
+    );
+    if (activityAt && activityAt >= sinceAt) return true;
+    const gate = reloginGateFromStatus(status);
+    return Boolean(Number(gate.loginPointSafety.required || 0) > 0
+      && !gate.loginPointSafety.ok
+      && Number(gate.loginPointSafety.streak || 0) > 0);
   }
 
   function decisionReasonDetail(decision, status) {
@@ -1961,6 +2009,7 @@
   }
 
   function panelHasFreshAliveSelf(status, self = null, t = Date.now()) {
+    if (waitReasonPrefersLastExit(status)) return false;
     const candidate = self || status?.lastDecision?.self || status?.self || null;
     if (!panelSelfLooksAlive(candidate)) return false;
     const userId = Number(currentUserIdFromStatus(status) || 0) || 0;
@@ -2046,6 +2095,7 @@
   function panelHasRecentLoginConfirmation(status, t = Date.now()) {
     const attemptAt = panelRecentLoginAttemptAt(status, t);
     if (!attemptAt || hasLoginRequiredText()) return false;
+    if (panelHasPostLoginAttemptReloginEvidence(status, attemptAt)) return false;
     if (pageHasVisibleLeaveControl() && pageLooksLoggedIn(status)) return true;
     return panelRecentLoginOkSeen(status, attemptAt, t);
   }
