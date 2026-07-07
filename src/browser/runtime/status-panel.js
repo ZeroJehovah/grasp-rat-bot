@@ -212,6 +212,7 @@ function createStatusPanelRuntime(runtime = {}) {
       'login-cooldown': '登录已触发，等待页面跳转',
       'login-snapshot-gate': '等待登录点安全快照',
       'login-control-missing': '等待登录控件出现',
+      'login-start-no-evidence': '登录未启动，等待重试',
       'session-mismatch-refresh': '界面显示未登录但原生会话仍在线，刷新确认状态',
       'session-mismatch-recovery': '界面显示未登录但原生会话仍在线，等待安全恢复接管',
       'game-session-connecting': '已登录，等待游戏连接/自身实体',

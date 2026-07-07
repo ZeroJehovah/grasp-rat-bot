@@ -9783,25 +9783,27 @@ async function runSelfTest() {
           setItem: (key, value) => data.set(key, String(value)),
           removeItem: key => data.delete(key)
         };
+        let token = '';
         const button = {
           id: 'joinBtn',
           tagName: 'BUTTON',
           clickCount: 0,
           click() {
             this.clickCount += 1;
+            token = 'started-token';
           }
         };
         const botState = { control: {}, exitAudit: {}, importantLogging: {}, lastLoginAt: 0 };
         let startCalls = 0;
         const runtime = createLeaveFlowRuntime({
           bot: botState,
-          cfg: { ...cfg, autoLogin: true, dryRun: false, once: false, loginCooldownMs: 5000, postLoginGraceMs: 30000 },
+          cfg: { ...cfg, autoLogin: true, dryRun: false, once: false, loginCooldownMs: 5000, loginStartEvidenceMs: 0, postLoginGraceMs: 30000 },
           storage,
           pageGlobal: {},
           loginSuppressKey: 'graspRatLoginSuppressUntil',
           loginSuppressReasonKey: 'graspRatLoginSuppressReason',
           getCurrentUserId: () => 28886,
-          getSessionToken: () => '',
+          getSessionToken: () => token,
           getNativeControl: () => ({ wsReadyState: 0 }),
           hasNativeGameSession: () => true,
           findLoginControl: () => button,
@@ -9863,12 +9865,14 @@ async function runSelfTest() {
           setItem: (key, value) => data.set(key, String(value)),
           removeItem: key => data.delete(key)
         };
+        let token = '';
         const button = {
           id: 'joinBtn',
           tagName: 'BUTTON',
           clickCount: 0,
           click() {
             this.clickCount += 1;
+            token = 'started-token';
           }
         };
         const botState = { control: {}, exitAudit: {}, importantLogging: {}, lastLoginAt: 0 };
@@ -9927,25 +9931,27 @@ async function runSelfTest() {
           setItem: (key, value) => data.set(key, String(value)),
           removeItem: key => data.delete(key)
         };
+        let token = '';
         const button = {
           id: 'joinBtn',
           tagName: 'BUTTON',
           clickCount: 0,
           click() {
             this.clickCount += 1;
+            token = 'started-token';
           }
         };
         const botState = { control: {}, exitAudit: {}, importantLogging: {}, lastLoginAt: 0 };
         let startCalls = 0;
         const runtime = createLeaveFlowRuntime({
           bot: botState,
-          cfg: { ...cfg, autoLogin: true, dryRun: false, once: false, loginCooldownMs: 5000, postLoginGraceMs: 45000 },
+          cfg: { ...cfg, autoLogin: true, dryRun: false, once: false, loginCooldownMs: 5000, loginStartEvidenceMs: 0, postLoginGraceMs: 45000 },
           storage,
           pageGlobal: {},
           loginSuppressKey: 'graspRatLoginSuppressUntil',
           loginSuppressReasonKey: 'graspRatLoginSuppressReason',
           getCurrentUserId: () => 28886,
-          getSessionToken: () => '',
+          getSessionToken: () => token,
           getNativeControl: () => null,
           hasNativeGameSession: () => false,
           findLoginControl: () => button,
@@ -9979,6 +9985,69 @@ async function runSelfTest() {
         ].map(String).join('|');
       })(),
       want: 'true|#joinBtn|false|false|1|0|bot login started'
+    },
+    {
+      name: 'login control without start evidence does not enter bot-login-started grace',
+      got: (async () => {
+        const data = new Map();
+        const storage = {
+          getItem: key => (data.has(key) ? data.get(key) : null),
+          setItem: (key, value) => data.set(key, String(value)),
+          removeItem: key => data.delete(key)
+        };
+        const button = {
+          id: 'joinBtn',
+          tagName: 'BUTTON',
+          clickCount: 0,
+          click() {
+            this.clickCount += 1;
+          }
+        };
+        const botState = { control: {}, exitAudit: {}, importantLogging: {}, lastLoginAt: 0 };
+        const runtime = createLeaveFlowRuntime({
+          bot: botState,
+          cfg: { ...cfg, autoLogin: true, dryRun: false, once: false, loginCooldownMs: 5000, loginStartEvidenceMs: 0, postLoginGraceMs: 45000 },
+          storage,
+          pageGlobal: {},
+          loginSuppressKey: 'graspRatLoginSuppressUntil',
+          loginSuppressReasonKey: 'graspRatLoginSuppressReason',
+          getCurrentUserId: () => 28886,
+          getSessionToken: () => '',
+          getNativeControl: () => null,
+          hasNativeGameSession: () => false,
+          findLoginControl: () => button,
+          hasLoginRequiredText: () => false,
+          getSelf: () => null,
+          syncPausedFromPage: () => false,
+          exitAuditFlushPending: () => false,
+          importantSessionEndFlushPending: () => false,
+          readPageGlobal: () => null,
+          loginSuppressRemainingMs: () => 0,
+          ensureLoginSnapshotGate: async () => ({ satisfied: true }),
+          loginSnapshotGateAllowsLogin: gate => Boolean(gate.satisfied),
+          setLoginSuppress: (reason, ms) => {
+            const until = Date.now() + ms;
+            storage.setItem('graspRatLoginSuppressUntil', String(until));
+            storage.setItem('graspRatLoginSuppressReason', reason);
+            return until;
+          },
+          controlText: () => '立即登录',
+          isAlive: value => Boolean(value?.hp > 0)
+        });
+        const result = await runtime.maybeStartAutoLogin('no-self');
+        return [
+          result?.attempted,
+          result?.method || '',
+          result?.clickAttempted,
+          result?.loginStarted,
+          result?.error,
+          button.clickCount,
+          data.get('graspRatLoginSuppressReason') || '',
+          Number(data.get('graspRatLoginSuppressUntil') || 0) > 0,
+          Number(botState.lastLoginAt || 0) > 0
+        ].map(String).join('|');
+      })(),
+      want: 'false||true|false|#joinBtn did not start login|1||false|true'
     },
     {
       name: 'known same-day long stamina exhaustion blocks auto login',
@@ -10118,25 +10187,27 @@ async function runSelfTest() {
           setItem: (key, value) => data.set(key, String(value)),
           removeItem: key => data.delete(key)
         };
+        let token = '';
         const button = {
           id: 'joinBtn',
           tagName: 'BUTTON',
           clickCount: 0,
           click() {
             this.clickCount += 1;
+            token = 'started-token';
           }
         };
         const botState = { control: {}, exitAudit: {}, importantLogging: {}, lastLoginAt: 0 };
         let startCalls = 0;
         const runtime = createLeaveFlowRuntime({
           bot: botState,
-          cfg: { ...cfg, autoLogin: true, dryRun: false, once: false, loginCooldownMs: 5000, postLoginGraceMs: 45000 },
+          cfg: { ...cfg, autoLogin: true, dryRun: false, once: false, loginCooldownMs: 5000, loginStartEvidenceMs: 0, postLoginGraceMs: 45000 },
           storage,
           pageGlobal: {},
           loginSuppressKey: 'graspRatLoginSuppressUntil',
           loginSuppressReasonKey: 'graspRatLoginSuppressReason',
           getCurrentUserId: () => 28886,
-          getSessionToken: () => '',
+          getSessionToken: () => token,
           getNativeControl: () => null,
           hasNativeGameSession: () => false,
           findLoginControl: () => button,
@@ -10224,23 +10295,26 @@ async function runSelfTest() {
           setItem: (key, value) => data.set(key, String(value)),
           removeItem: key => data.delete(key)
         };
+        let href = 'https://grasp-rat-game.h-e.top/';
         const button = {
           id: 'joinBtn',
           tagName: 'BUTTON',
           clickCount: 0,
           click() {
             this.clickCount += 1;
+            href = 'https://connect.linux.do/oauth2/authorize?client_id=grasp-rat';
           }
         };
         const botState = { control: {}, exitAudit: {}, importantLogging: {}, lastLoginAt: 0 };
         let startCalls = 0;
         const runtime = createLeaveFlowRuntime({
           bot: botState,
-          cfg: { ...cfg, autoLogin: true, dryRun: false, once: false, loginCooldownMs: 5000, postLoginGraceMs: 45000 },
+          cfg: { ...cfg, autoLogin: true, dryRun: false, once: false, loginCooldownMs: 5000, loginStartEvidenceMs: 0, postLoginGraceMs: 45000 },
           storage,
           pageGlobal: {},
           loginSuppressKey: 'graspRatLoginSuppressUntil',
           loginSuppressReasonKey: 'graspRatLoginSuppressReason',
+          locationHref: () => href,
           getCurrentUserId: () => 28886,
           getSessionToken: () => 'stale-token',
           getNativeControl: () => ({ wsReadyState: 0 }),

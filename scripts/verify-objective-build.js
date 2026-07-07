@@ -315,10 +315,14 @@ function assertBootstrapLoginControlBeforeGlobal(text, label) {
   const finderBody = functionBody(text, 'findGameLoginControl');
   assert(finderBody.includes("direct.dataset.graspRatNativeLoginHidden === 'true'"), `${label} does not allow hidden native join control`);
   assert(finderBody.includes("el.id !== INLINE_LOGIN_BUTTON_ID"), `${label} does not skip bot-owned inline login proxy`);
-  const controlClickIndex = body.indexOf('if (loginControl) {');
-  const globalLoginIndex = body.indexOf("} else if (typeof startLoginFn === 'function') {");
-  assert(controlClickIndex >= 0, `${label} missing login-control click branch`);
-  assert(globalLoginIndex > controlClickIndex, `${label} tries page-global login before native login control`);
+  const controlMethodIndex = body.indexOf("if (loginControl) loginMethods.push({ type: 'control', method: controlMethod });");
+  const globalMethodIndex = body.indexOf("if (startLoginFn) loginMethods.push({ type: 'global', method: globalMethod });");
+  const evidenceIndex = body.indexOf('const evidence = await waitForLoginStartEvidence(evidenceBefore, methodResult);');
+  const suppressIndex = body.indexOf('if (detail.method && detail.loginStarted && !detail.error) {');
+  assert(controlMethodIndex >= 0, `${label} missing login-control candidate`);
+  assert(globalMethodIndex > controlMethodIndex, `${label} queues page-global login before native login control`);
+  assert(evidenceIndex > globalMethodIndex, `${label} does not verify login-start evidence after login attempts`);
+  assert(suppressIndex > evidenceIndex, `${label} can suppress login before verified login-start evidence`);
 }
 
 function assertProfitOpportunityRuntimeSmoke() {
@@ -1420,12 +1424,18 @@ async function main() {
     const leaveBody = functionBody(runtimeLeaveFlowSource, 'maybeStartAutoLogin');
     const preferControlIndex = leaveBody.indexOf('const preferLoginControl = Boolean(loginControl && !hasAliveSelf);');
     const rawGlobalIndex = leaveBody.indexOf("rawStartLinuxDoLoginCandidate = manualOverride");
-    const controlClickIndex = leaveBody.indexOf('if (preferLoginControl) {');
-    const globalLoginIndex = leaveBody.indexOf("} else if (typeof startLoginFn === 'function') {");
+    const controlFirstIndex = leaveBody.indexOf("if (preferLoginControl && loginControl) loginMethods.push({ type: 'control', method: controlMethod });");
+    const globalLoginIndex = leaveBody.indexOf("if (startLoginFn) loginMethods.push({ type: 'global', method: globalMethod });");
+    const controlFallbackIndex = leaveBody.indexOf("if (!preferLoginControl && loginControl) loginMethods.push({ type: 'control', method: controlMethod });");
+    const evidenceIndex = leaveBody.indexOf('const evidence = await waitForLoginStartEvidence(evidenceBefore, methodResult, userId);');
+    const suppressIndex = leaveBody.indexOf("const loginSuppressUntil = setLoginSuppress('bot login started', cfg.postLoginGraceMs);");
     assert(preferControlIndex >= 0, 'auto-login no longer prefers login control for manual override');
     assert(rawGlobalIndex >= 0, 'auto-login raw global lookup missing');
-    assert(controlClickIndex > rawGlobalIndex, 'auto-login control click branch not after login function setup');
-    assert(globalLoginIndex > controlClickIndex, 'auto-login tries page-global login before native login control');
+    assert(controlFirstIndex > rawGlobalIndex, 'auto-login control-first candidate missing after login function setup');
+    assert(globalLoginIndex > controlFirstIndex, 'auto-login tries page-global login before preferred native login control');
+    assert(controlFallbackIndex > globalLoginIndex, 'auto-login missing native login control fallback after page-global login');
+    assert(evidenceIndex > controlFallbackIndex, 'auto-login does not verify login-start evidence after login attempts');
+    assert(suppressIndex > evidenceIndex && leaveBody.includes('if (detail.attempted && !detail.error) {'), 'auto-login can suppress login before verified login-start evidence');
     assertBootstrapLoginControlBeforeGlobal(userscriptText, 'userscript');
     assertBootstrapLoginControlBeforeGlobal(extensionBootstrapText, 'extension');
   });

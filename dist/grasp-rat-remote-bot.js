@@ -12,7 +12,7 @@
   var define_GRASP_RAT_RUNTIME_CONFIG_default;
   var init_define_GRASP_RAT_RUNTIME_CONFIG = __esm({
     "<define:__GRASP_RAT_RUNTIME_CONFIG__>"() {
-      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.593" };
+      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.594" };
     }
   });
 
@@ -567,6 +567,7 @@
           loginPointSafetyHealthyHpThreshold: 80,
           autoLogin: true,
           loginCooldownMs: 5e3,
+          loginStartEvidenceMs: 700,
           postLoginGraceMs: 45e3,
           fleeLockMs: 1400,
           pursuitLeaveMs: 3e5,
@@ -5476,6 +5477,7 @@
             "login-cooldown": "\u767B\u5F55\u5DF2\u89E6\u53D1\uFF0C\u7B49\u5F85\u9875\u9762\u8DF3\u8F6C",
             "login-snapshot-gate": "\u7B49\u5F85\u767B\u5F55\u70B9\u5B89\u5168\u5FEB\u7167",
             "login-control-missing": "\u7B49\u5F85\u767B\u5F55\u63A7\u4EF6\u51FA\u73B0",
+            "login-start-no-evidence": "\u767B\u5F55\u672A\u542F\u52A8\uFF0C\u7B49\u5F85\u91CD\u8BD5",
             "session-mismatch-refresh": "\u754C\u9762\u663E\u793A\u672A\u767B\u5F55\u4F46\u539F\u751F\u4F1A\u8BDD\u4ECD\u5728\u7EBF\uFF0C\u5237\u65B0\u786E\u8BA4\u72B6\u6001",
             "session-mismatch-recovery": "\u754C\u9762\u663E\u793A\u672A\u767B\u5F55\u4F46\u539F\u751F\u4F1A\u8BDD\u4ECD\u5728\u7EBF\uFF0C\u7B49\u5F85\u5B89\u5168\u6062\u590D\u63A5\u7BA1",
             "game-session-connecting": "\u5DF2\u767B\u5F55\uFF0C\u7B49\u5F85\u6E38\u620F\u8FDE\u63A5/\u81EA\u8EAB\u5B9E\u4F53",
@@ -6690,7 +6692,7 @@
         function combatLogSuspendReason(decision) {
           const reason = String(decision?.reason || "");
           if (!reason) return "";
-          if (/^(paused|cloudflare-error-refresh|no-self|not-alive|auto-login|manual-login|login-suppressed|login-cooldown|known-long-stamina-exhausted|login-snapshot-gate|login-control-missing|session-mismatch-refresh|session-mismatch-recovery|snapshot-no-self-exit-confirmed|login-required-no-self-exit-confirmed|game-session-connecting|exit-log-flush-pending|important-log-flush-pending)$/.test(reason)) return reason;
+          if (/^(paused|cloudflare-error-refresh|no-self|not-alive|auto-login|manual-login|login-suppressed|login-cooldown|known-long-stamina-exhausted|login-snapshot-gate|login-control-missing|login-start-no-evidence|session-mismatch-refresh|session-mismatch-recovery|snapshot-no-self-exit-confirmed|login-required-no-self-exit-confirmed|game-session-connecting|exit-log-flush-pending|important-log-flush-pending)$/.test(reason)) return reason;
           if (/^(enemy-leave-wait|pursuit-leave-wait|offline-leave-wait)$/.test(reason)) return reason;
           if (/^(offline-leave|control-ws-offline|control-ws-offline-unsafe|control-ws-offline-safe-wait|control-ws-reconnect-churn|control-ws-no-self-game-session|control-ws-server-position-stalled|control-global-sampling-outage|control-combat-tick-gap|control-action-settlement-stalled|control-stamina-exhausted|stamina-exhausted-leave)$/.test(reason)) return reason;
           return "";
@@ -11323,6 +11325,8 @@
           flushCombatLogs = () => false,
           closeCurrentImportantSessionBeforeLogin = () => null,
           readPageGlobal = () => null,
+          locationHref = () => typeof location === "object" && location ? location.href : "",
+          sleepMs = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
           loginSuppressRemainingMs = () => 0,
           ensureLoginSnapshotGate = async () => ({}),
           loginSnapshotGateAllowsLogin = () => false,
@@ -11442,6 +11446,66 @@
             target: pending.target || null,
             combatCover: pending.combatCover || null,
             combatState: pending.combatState || null
+          };
+        }
+        function nativeWsConnectingOrOpen(native) {
+          return [
+            native?.wsReadyState,
+            native?.nativeWsReadyState,
+            native?.ws?.readyState,
+            native?.state?.ws?.readyState
+          ].some((value) => {
+            const n = Number(value);
+            return n === 0 || n === 1;
+          });
+        }
+        function loginStartEvidenceSnapshot(userId = 0) {
+          const native = getNativeControl();
+          const currentUserId = Number(getCurrentUserId() || userId || 0) || 0;
+          const self = getSelf();
+          let href = "";
+          try {
+            href = String(locationHref() || "");
+          } catch (_) {
+          }
+          return {
+            href,
+            hasToken: Boolean(getSessionToken()),
+            currentUserId,
+            hasAliveSelf: Boolean(self && isAlive(self)),
+            hasNativeSession: Boolean(hasNativeGameSession(native, currentUserId || userId)),
+            nativeWsConnectingOrOpen: nativeWsConnectingOrOpen(native)
+          };
+        }
+        function loginStartEvidenceStarted(before, after, methodResult) {
+          return Boolean(
+            before.href && after.href && before.href !== after.href || !before.hasAliveSelf && after.hasAliveSelf || !before.hasToken && after.hasToken || !before.currentUserId && after.currentUserId || !before.hasNativeSession && after.hasNativeSession || !before.nativeWsConnectingOrOpen && after.nativeWsConnectingOrOpen
+          );
+        }
+        function summarizeLoginMethodResult(value) {
+          if (value === void 0) return "undefined";
+          if (value === null) return null;
+          if (typeof value === "boolean" || typeof value === "number" || typeof value === "string") return value;
+          if (value && typeof value === "object") {
+            return {
+              ok: Boolean(value.ok),
+              started: Boolean(value.started || value.loginStarted),
+              reason: String(value.reason || ""),
+              error: String(value.error || "")
+            };
+          }
+          return typeof value;
+        }
+        async function waitForLoginStartEvidence(before, methodResult, userId = 0) {
+          const waitMs = methodResult === false ? 0 : Math.max(0, Number(cfg.loginStartEvidenceMs ?? 700) || 0);
+          if (waitMs > 0) await sleepMs(waitMs);
+          const after = loginStartEvidenceSnapshot(userId);
+          return {
+            started: methodResult !== false && loginStartEvidenceStarted(before, after, methodResult),
+            waitMs,
+            methodResult: summarizeLoginMethodResult(methodResult),
+            before,
+            after
           };
         }
         function hasRecentCombatEngagementForInjuryLeave() {
@@ -11803,6 +11867,9 @@
             snapshotGateBypassed: Boolean(snapshotGate.liveSessionTakeoverBypass),
             loginControl: loginControl ? loginControl.id ? "#" + loginControl.id : controlText(loginControl) || loginControl.tagName.toLowerCase() : "",
             method: "",
+            clickAttempted: false,
+            loginStarted: false,
+            loginStartAttempts: [],
             error: ""
           };
           bot.lastLoginAt = t;
@@ -11813,22 +11880,36 @@
             const startLoginFn = rawStartLinuxDoLogin || (typeof startLinuxDoLoginFn === "function" ? startLinuxDoLoginFn : null);
             const preferLoginControl = Boolean(loginControl && !hasAliveSelf);
             if (manualOverride) markManualLoginBypass(String(reason || "manual login"));
-            if (preferLoginControl) {
-              loginControl.click();
-              detail.attempted = true;
-              detail.method = loginControl.id ? "#" + loginControl.id : controlText(loginControl) || loginControl.tagName.toLowerCase();
-            } else if (typeof startLoginFn === "function") {
-              const result = startLoginFn.call(pageGlobal);
-              if (result && typeof result.then === "function") await result;
-              detail.attempted = true;
-              detail.method = rawStartLinuxDoLogin ? "rawStartLinuxDoLogin" : "startLinuxDoLogin";
-            } else if (loginControl) {
-              if (manualOverride) markManualLoginBypass(String(reason || "manual login"));
-              loginControl.click();
-              detail.attempted = true;
-              detail.method = loginControl.id ? "#" + loginControl.id : controlText(loginControl) || loginControl.tagName.toLowerCase();
-            } else {
+            const controlMethod = loginControl ? loginControl.id ? "#" + loginControl.id : controlText(loginControl) || loginControl.tagName.toLowerCase() : "";
+            const globalMethod = startLoginFn ? rawStartLinuxDoLogin ? "rawStartLinuxDoLogin" : "startLinuxDoLogin" : "";
+            const loginMethods = [];
+            if (preferLoginControl && loginControl) loginMethods.push({ type: "control", method: controlMethod });
+            if (startLoginFn) loginMethods.push({ type: "global", method: globalMethod });
+            if (!preferLoginControl && loginControl) loginMethods.push({ type: "control", method: controlMethod });
+            if (!loginMethods.length) {
               detail.error = "login control not found";
+            } else {
+              for (const item of loginMethods) {
+                let methodResult;
+                const evidenceBefore = loginStartEvidenceSnapshot(userId);
+                if (item.type === "control") {
+                  detail.clickAttempted = true;
+                  loginControl.click();
+                } else {
+                  methodResult = startLoginFn.call(pageGlobal);
+                  if (methodResult && typeof methodResult.then === "function") methodResult = await methodResult;
+                }
+                const evidence = await waitForLoginStartEvidence(evidenceBefore, methodResult, userId);
+                detail.loginStartAttempts.push({ type: item.type, method: item.method, evidence });
+                if (evidence.started) {
+                  detail.attempted = true;
+                  detail.loginStarted = true;
+                  detail.method = item.method;
+                  detail.error = "";
+                  break;
+                }
+                detail.error = item.method + " did not start login";
+              }
             }
           } catch (err) {
             detail.error = err?.message || String(err);
@@ -29546,12 +29627,14 @@
                 let sessionMismatchWaitReason = "session-mismatch-recovery";
                 if (login2?.attempted) sessionMismatchWaitReason = "auto-login";
                 else if (login2?.reason === "snapshot-gate") sessionMismatchWaitReason = "login-snapshot-gate";
+                else if (login2?.error) sessionMismatchWaitReason = "login-start-no-evidence";
                 else if (login2?.reason === "exit-log-flush-pending") sessionMismatchWaitReason = "exit-log-flush-pending";
                 else if (login2?.reason === "important-log-flush-pending") sessionMismatchWaitReason = "important-log-flush-pending";
                 else if (login2?.reason === "known-long-stamina-exhausted") sessionMismatchWaitReason = "known-long-stamina-exhausted";
                 let sessionMismatchDisplayReason = "\u754C\u9762\u663E\u793A\u672A\u767B\u5F55\u4F46\u539F\u751F\u4F1A\u8BDD\u4ECD\u5728\u7EBF\uFF0C\u7B49\u5F85\u63A5\u7BA1";
                 if (login2?.attempted) sessionMismatchDisplayReason = "\u754C\u9762\u663E\u793A\u672A\u767B\u5F55\u4F46\u539F\u751F\u4F1A\u8BDD\u4ECD\u5728\u7EBF\uFF0C\u5DF2\u901A\u8FC7\u63A5\u7BA1\u95E8\u7981\uFF0C\u6B63\u5728\u91CD\u767B\u63A5\u7BA1";
                 else if (sessionMismatchWaitReason === "login-snapshot-gate") sessionMismatchDisplayReason = loginSnapshotGateDisplayReason(login2?.snapshotGate);
+                else if (sessionMismatchWaitReason === "login-start-no-evidence") sessionMismatchDisplayReason = "\u767B\u5F55\u672A\u542F\u52A8\uFF0C\u7B49\u5F85\u91CD\u8BD5\uFF1A" + login2.error;
                 else if (sessionMismatchWaitReason === "exit-log-flush-pending") sessionMismatchDisplayReason = "\u7B49\u5F85\u9000\u51FA\u65E5\u5FD7\u53D1\u9001\u5B8C\u6210\uFF0C\u6682\u4E0D\u5237\u65B0\u6216\u91CD\u65B0\u767B\u5F55";
                 else if (sessionMismatchWaitReason === "important-log-flush-pending") sessionMismatchDisplayReason = "\u7B49\u5F85\u4F1A\u8BDD\u7ED3\u675F\u65E5\u5FD7\u53D1\u9001\u5B8C\u6210\uFF0C\u6682\u4E0D\u5237\u65B0\u6216\u91CD\u65B0\u767B\u5F55";
                 else if (sessionMismatchWaitReason === "known-long-stamina-exhausted") sessionMismatchDisplayReason = login2?.staminaHold?.displayReason || login2?.suppressReason || "\u5DF2\u77E5\u957F\u5468\u671F\u4F53\u529B\u8017\u5C3D\uFF0C\u6682\u4E0D\u767B\u5F55";
@@ -29634,7 +29717,7 @@
               if (login?.attempted) waitReason = "auto-login";
               else if (login?.needed) {
                 if (login.reason === "snapshot-gate") waitReason = "login-snapshot-gate";
-                else if (login.error) waitReason = "login-control-missing";
+                else if (login.error) waitReason = login.error === "login control not found" ? "login-control-missing" : "login-start-no-evidence";
                 else if (login.reason === "suppressed") waitReason = "login-suppressed";
                 else if (login.reason === "known-long-stamina-exhausted") waitReason = "known-long-stamina-exhausted";
                 else if (login.reason === "exit-log-flush-pending") waitReason = "exit-log-flush-pending";
@@ -29648,6 +29731,7 @@
               else if (waitReason === "exit-log-flush-pending") loginDisplayReason = "\u7B49\u5F85\u9000\u51FA\u65E5\u5FD7\u53D1\u9001\u5B8C\u6210\uFF0C\u6682\u4E0D\u5237\u65B0\u6216\u91CD\u65B0\u767B\u5F55";
               else if (waitReason === "important-log-flush-pending") loginDisplayReason = "\u7B49\u5F85\u4F1A\u8BDD\u7ED3\u675F\u65E5\u5FD7\u53D1\u9001\u5B8C\u6210\uFF0C\u6682\u4E0D\u5237\u65B0\u6216\u91CD\u65B0\u767B\u5F55";
               else if (waitReason === "login-snapshot-gate") loginDisplayReason = loginSnapshotGateDisplayReason(login?.snapshotGate);
+              else if (waitReason === "login-start-no-evidence") loginDisplayReason = "\u767B\u5F55\u672A\u542F\u52A8\uFF0C\u7B49\u5F85\u91CD\u8BD5\uFF1A" + login.error;
               else if (waitReason === "login-suppressed") loginDisplayReason = "\u7B49\u5F85\u91CD\u8FDE\uFF1A" + (login?.suppressReason || "login suppressed") + (Number(login?.cooldownRemainingMs || 0) > 0 ? "\uFF0C\u5269\u4F59" + formatDurationMs(login.cooldownRemainingMs) : "");
               else if (waitReason === "known-long-stamina-exhausted") loginDisplayReason = login?.staminaHold?.displayReason || login?.suppressReason || "\u5DF2\u77E5\u957F\u5468\u671F\u4F53\u529B\u8017\u5C3D\uFF0C\u6682\u4E0D\u767B\u5F55";
               refreshGlobalState(false).catch((err) => {

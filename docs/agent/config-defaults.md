@@ -27,6 +27,7 @@
 - `actionSettlementStallMs = 15000`
 - `actionSettlementStallAckStaleMs = 15000`
 - `actionSettlementStallMoveMinDistance = 80`
+- `loginStartEvidenceMs = 700`
 - `loginSnapshotProbeMinMs = 5000`
 - `loginPointSafetySuccessRequired = 3`
 - `loginPointSafetyRadius = 30000`
