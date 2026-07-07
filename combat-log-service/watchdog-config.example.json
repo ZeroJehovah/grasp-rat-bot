@@ -14,9 +14,7 @@
       "descriptorTtlMs": 30000,
       "allowedOrigins": [
         "https://grasp-rat-game.h-e.top"
-      ],
-      "requiredHeaders": [],
-      "requiredCookieNames": []
+      ]
     },
     "clash": {
       "enabled": false,

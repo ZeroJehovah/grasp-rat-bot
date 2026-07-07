@@ -173,7 +173,7 @@ The watchdog should not depend on page JavaScript for the primary rescue path.
 Preferred order:
 
 1. Send a direct game leave request from the Node watchdog using the freshest validated leave credentials/request descriptor.
-2. Call the Clash REST API directly from the Node watchdog when proxy rescue is enabled and validation is currently passing. This may run in parallel with direct leave, but it must not delay direct leave.
+2. If the direct leave response is a Cloudflare challenge and Clash validation is currently passing, call the Clash REST API from the Node watchdog and retry direct leave once after the switch.
 3. If the page heartbeat later resumes, let the userscript observe pending exit state and avoid re-entering unsafe combat.
 
 The watchdog should not close or reload the browser as part of this design. Direct game leave is the safety action.
@@ -187,7 +187,7 @@ Requirements:
 - The direct leave endpoint, method, request body, and authentication method must be verified against the live game before active rescue is enabled.
 - The userscript should send the latest leave authentication/request descriptor to `/watchdog/heartbeat` while the page is healthy.
 - If the game leave request can be authenticated with `tmpGameSessionToken`, the heartbeat can provide a short-lived token snapshot to the local service.
-- If the game leave request requires HttpOnly cookies or browser-only state that JavaScript cannot read, the Node watchdog cannot directly leave until a different authenticated client path is identified.
+- If the game leave request hits a Cloudflare challenge from Node, the watchdog should treat that as a response-time rescue condition and use validated Clash switching before retrying.
 - Credentials should be stored in memory with a short TTL. Avoid writing tokens/cookies to normal logs.
 - Direct leave must never wait for Clash switching or page-side confirmation before sending the first request.
 
@@ -201,7 +201,8 @@ heartbeat received
 watchdog interval detects high-risk stale heartbeat
   -> create rescue id
   -> immediately call sendDirectLeave(userId, leaveAuth)
-  -> in parallel, call Clash rescue only if validated
+  -> if response is Cloudflare-blocked, call Clash rescue only if validated
+  -> after a successful Clash switch, retry sendDirectLeave once with stage after-clash
   -> record request timestamps, status, response summary, and errors
   -> retry direct leave on timeout/uncertain result with conservative backoff
   -> stop retrying when exit is confirmed or credentials expire
@@ -255,7 +256,7 @@ The validation should perform a harmless authenticated request, such as reading 
 - The configured proxy group exists.
 - The configured rescue proxy names exist when they will be used.
 
-If validation fails, Clash rescue should be disabled automatically for that runtime session and the reason should be visible in status/log output. A failed validation must not block or delay direct game leave requests. In the emergency path, direct leave should remain the primary action, with proxy rescue running only after or in parallel with leave.
+If validation fails, Clash rescue should be disabled automatically for that runtime session and the reason should be visible in status/log output. A failed validation must not block or delay the first direct game leave request. In the emergency path, direct leave remains the primary action, and proxy rescue runs only after a Cloudflare-blocked response.
 
 ## Development Commit Plan
 
@@ -569,13 +570,13 @@ Done when:
 - High-risk stale heartbeat triggers Node direct leave without page JavaScript.
 - The feature remains off unless explicitly configured.
 
-### Commit 10: Clash Rescue As Parallel Fallback
+### Commit 10: Clash Rescue After Cloudflare Block
 
-Purpose: allow validated proxy rescue without ever delaying direct leave.
+Purpose: allow validated proxy rescue for Cloudflare-blocked direct leave without ever delaying the first direct request.
 
 Implement:
 
-- If Clash validation is passing, start Clash switch after or in parallel with direct leave.
+- If direct leave returns a Cloudflare challenge and Clash validation is passing, start Clash switch and then retry direct leave with stage `after-clash`.
 - Ensure direct leave request is created before awaiting any Clash operation.
 - Log `watchdog-clash-rescue-request` and result.
 - If Clash validation is failing, skip Clash and include the validation failure reason in rescue audit.
@@ -665,7 +666,7 @@ Done when:
 ## Cross-Commit Release Rules
 
 - Never enable active rescue in the same commit that first introduces an unvalidated leave client.
-- Never let Clash run before direct leave in active rescue.
+- When a ready descriptor exists, direct leave is attempted before Clash; Cloudflare-blocked direct leave is the trigger for Clash rescue plus one post-Clash retry.
 - Never log raw tokens, cookies, Authorization headers, or full credential descriptors.
 - Every code commit must preserve existing combat-log collection.
 - Every browser/runtime behavior commit must follow the remote build and release documentation flow.
@@ -676,11 +677,10 @@ Done when:
 2026-07-07 live validation result:
 
 - The live direct game leave endpoint is `GET https://grasp-rat-game.h-e.top/leave?user_id=${userId}&token=${sessionToken}` with no request body.
-- `tmpGameSessionToken` is necessary but not sufficient for Node direct leave. A Node request with only the token is blocked by Cloudflare 403.
-- The validated Node request also includes the browser network-layer HttpOnly `cf_clearance` cookie plus normal browser request context such as User-Agent/Accept/Referer. Page JavaScript cannot read `cf_clearance`; the controlled validation used CDP `Network.getCookies` as the local credential source.
-- `/watchdog/test-leave` returned 200 with game JSON `event:"left"`.
-- A controlled stale damaged-combat heartbeat with `directLeave.requiredCookieNames:["cf_clearance"]` armed active rescue, triggered at 1319ms heartbeat age, sent the direct leave request 1ms after `watchdog-rescue-start`, returned 200 `event:"left"`, and wrote exactly one start/request/result/final-result group for that stale window. Clash was disabled and did not run.
-- The service now keeps descriptors missing configured required cookies or headers unready with explicit `cookie:<name>` / `header:<name>` reasons, and suppresses repeated rescues for the same stale heartbeat window until a new heartbeat sequence/receive time opens a new window.
+- `tmpGameSessionToken` is necessary direct-leave auth evidence. A Node request with only the token can be blocked by Cloudflare 403.
+- The service no longer configures browser clearance cookies as descriptor requirements. It detects Cloudflare challenge responses, records `cloudflareBlocked`, runs validated Clash rescue, and retries direct leave once with stage `after-clash`.
+- If Clash is enabled but validation fails, the service records `clash-validation-failed` and does not send the post-Clash retry.
+- The service suppresses repeated rescues for the same stale heartbeat window until a new heartbeat sequence/receive time opens a new window.
 
 Before enabling active rescue, validate with:
 
@@ -695,16 +695,16 @@ Before enabling active rescue, validate with:
 Success criteria:
 
 - The watchdog detects page heartbeat stalls without relying on in-page JavaScript recovery.
-- In high-risk combat, the watchdog attempts direct leave within the configured threshold.
-- Direct leave is sent before any Clash operation can delay it.
+- In high-risk combat with a ready descriptor, the watchdog attempts direct leave within the configured threshold.
+- Cloudflare-blocked direct leave triggers validated Clash rescue before the `after-clash` retry.
 - Clash authentication problems are detected before combat.
 - All rescue attempts are logged with enough timing detail to reconstruct the decision.
 
 ## Open Questions
 
 - Answered: the primary direct leave path is `GET /leave?user_id=${userId}&token=${sessionToken}` on `https://grasp-rat-game.h-e.top`.
-- Answered: direct leave requires both `tmpGameSessionToken` and browser network-layer Cloudflare clearance. The needed `cf_clearance` cookie is HttpOnly, so it must come from CDP or another browser-level credential source, not page JavaScript.
-- Descriptor plumbing should support both configured templates and runtime/CDP-sourced credential material. For the current live game, set `directLeave.requiredCookieNames:["cf_clearance"]` so token-only descriptors cannot arm active rescue.
+- Answered: direct leave uses `tmpGameSessionToken` as the service-side auth evidence; browser Cloudflare clearance is not configured. Cloudflare challenge responses are handled by Clash IP switching and one post-Clash retry.
+- Descriptor plumbing supports configured templates and runtime token material. For the current live game, do not add browser clearance-cookie requirements to direct-leave readiness.
 - Should hidden/frozen visibility during active damaged combat trigger immediate leave, or only lower the heartbeat stall threshold?
 - What HP/damage threshold should count as high risk for watchdog policy?
-- Answered for ordering: direct leave must be created first; validated Clash may run only after or in parallel without delaying direct leave. The live validation ran with Clash disabled.
+- Answered for ordering: ready direct leave is attempted first; validated Clash runs only after a Cloudflare-blocked direct-leave response, then the service retries direct leave with stage `after-clash`.
