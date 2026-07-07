@@ -4,15 +4,16 @@ Update this file for every remote bot release or handoff-relevant state change. 
 
 ## Latest Release
 
-- Latest remote bot: `bootstrap-0.4.600`.
-- Latest manifest SHA-256: `017c8d451e37e5a6b3331b2abb5d7f1dbc5d2ee7939cc9db4020ab2167453934`.
-- Latest remote release commit: `7438bca` (`bootstrap-0.4.600` adds the opt-in external watchdog service, browser heartbeat sender, dry-run stale-heartbeat detector, service-side Clash validation, and guarded direct-leave plumbing).
-- Latest bootstrap A versions: Tampermonkey `0.4.90`, extension `0.1.69`.
-- Latest direct entry/config SHA-256: `69ad9123b52c85ce09fa39c296afa621e1efe89730adfbbfd0cbfbc53eb08819`.
+- Latest remote bot: `bootstrap-0.4.601`.
+- Latest manifest SHA-256: `4e1a0d55ab9443ee5aa149b51399a49709144906234918528f835b5a205564ac`.
+- Latest remote release commit: `4e3d645` (`bootstrap-0.4.601` adds browser watchdog service-status polling and exposes service dry-run/active/direct-leave/Clash readiness in `status().watchdog` and the WD panel tooltip).
+- Latest bootstrap A versions: Tampermonkey `0.4.91`, extension `0.1.70`.
+- Latest direct entry/config SHA-256: `477a3798b883165c10fb96fc6cb195133bb2bb5ae3e67f971e0653815bc6a35f`.
 
 ## Current Handoff
 
-- Post-release service watchdog hardening adds `watchdog-state-change` audit events, always-final `watchdog-rescue-result` records for skipped/partial rescues, explicit Clash-skip results when validation is failing, and confirmation/descriptor-expiry-aware direct-leave retry. `node combat-log-service/server.js --self-test` now covers no-combat, undamaged combat, duplicate dry-run suppression, fresh-heartbeat recovery, direct-leave success confirmation, timeout retry, credential-expiry stop, and no retry after confirmation. No remote bot version changed for this service-only hardening; live direct-leave endpoint/auth validation and controlled active rescue validation remain open.
+- `bootstrap-0.4.601` adds browser-side watchdog service-status polling. When watchdog heartbeat is enabled, Remote B derives `/watchdog/status` from the configured heartbeat endpoint every `watchdogServiceStatusMs = 2000`, summarizes service dry-run/active mode, direct-leave readiness, Clash readiness, heartbeat age, warnings, and last decision in `status().watchdog.service`, and Bootstrap A shows that state in the WD tooltip. Tampermonkey `0.4.91` and extension `0.1.70` carry the tooltip/pending-state update. The actual game direct-leave endpoint/auth and controlled active rescue validation remain open.
+- Post-release service watchdog hardening adds `watchdog-state-change` audit events, always-final `watchdog-rescue-result` records for skipped/partial rescues, explicit Clash-skip results when validation is failing, and confirmation/descriptor-expiry-aware direct-leave retry. `node combat-log-service/server.js --self-test` now covers no-combat, undamaged combat, duplicate dry-run suppression, fresh-heartbeat recovery, direct-leave success confirmation, timeout retry, credential-expiry stop, and no retry after confirmation. Live direct-leave endpoint/auth validation and controlled active rescue validation remain open.
 - `bootstrap-0.4.600` adds the opt-in external watchdog path described in `docs/agent/external-watchdog-plan.md`. `combat-log-service` now exposes `/watchdog/status`, `/watchdog/config`, `/watchdog/heartbeat`, `/watchdog/test-clash`, and manual-confirmed `/watchdog/test-leave`; writes watchdog audit events to `logs/YYYY-MM-DD/audit/watchdog.jsonl`; dry-runs high-risk damaged-combat stale heartbeat detection by default; validates Clash from the Node service; and includes a guarded direct-leave client that stays unarmed until `directLeave.enabled=true`, `directLeave.verified=true`, `activeRescueEnabled=true`, and `dryRun=false`. Remote B sends non-batched heartbeat traffic only when explicitly configured through `configureWatchdog()`, and Bootstrap A Tampermonkey `0.4.90` / extension `0.1.69` persist that config and show a `WD` panel dot. The actual game direct-leave endpoint/auth still requires controlled live validation before marking `directLeave.verified=true`.
 - Bootstrap A Tampermonkey `0.4.89` and extension `0.1.68` make stale relogin chrome suppression page-load scoped. After OAuth return, page refresh, or reopening a logged-in game page, the panel hides previous exit reasons, relogin cooldown, login-point safety rows, inline `立即登录`, and old reconnect history while the current page has login confirmation and no new exit-detail event after this page load. A confirmed login is no longer cancelled by login-point safety reset/sample activity alone; only a real exit-detail event after the login attempt/page load brings those rows back. Remote B is unchanged.
 - Bootstrap A Tampermonkey `0.4.88` and extension `0.1.67` fix post-exit relogin panel suppression. The A panel still hides stale relogin chrome during a just-accepted login transition, but it no longer treats display-only `status.self`/`lastSelf` as a live self while the current reason is a relogin/no-self/login-snapshot wait, and it cancels accepted-login suppression when login-point safety reset/sample or exit-detail evidence occurs after the login attempt. Exit reason, cooldown, login-point safety rows, inline login, and reconnect rows should appear immediately after a new exit instead of first reappearing around `登录点安全 2/3`. Remote B is unchanged.
@@ -79,14 +80,14 @@ Update this file for every remote bot release or handoff-relevant state change. 
 
 - `src/browser/runtime-entry.js` is the single browser runtime entry bundled by esbuild.
 - The old browser source-string layer is gone and must stay gone: no `src/browser/*source.js`, `runtime-source.js`, `runtime-entry-source.js`, or `runtime-fragment-registry.js`.
-- `src/browser/runtime/` contains 93 executable browser runtime modules in the esbuild graph.
+- `src/browser/runtime/` contains 94 executable browser runtime modules in the esbuild graph.
 - Orchestration runtime factories use named domain contexts instead of the former wide flat dependency bag.
 - `control-flow-runtime.js` is a composition owner; session recovery and relogin gate behavior have dedicated modules.
 - `grasp-rat-bot.js` is the Node/CDP fallback and local CLI wrapper, not the normal home for strategy or browser-runtime changes.
 
 ## Latest Validation Baseline
 
-The latest `bootstrap-0.4.600` release validation passed. Run build-producing commands and manifest-reading validation sequentially, not in parallel; `node scripts/build-remote-bot.js --version ...` rewrites `dist/manifest.json`, while `objective-status` and `verify-objective-build` read it.
+The latest `bootstrap-0.4.601` release validation passed. Run build-producing commands and manifest-reading validation sequentially, not in parallel; `node scripts/build-remote-bot.js --version ...` rewrites `dist/manifest.json`, while `objective-status` and `verify-objective-build` read it.
 
 ```bash
 node grasp-rat-bot.js --self-test
@@ -101,9 +102,10 @@ node --check extension/content-bridge.js
 node --check extension/page-bootstrap.js
 node --check extension/popup.js
 cd combat-log-service && npm test
+npm run test:watchdog-runtime
 npm run test:runtime-helper-entry
 npm run test:remote-bundled
-node scripts/build-remote-bot.js --version bootstrap-0.4.600
+node scripts/build-remote-bot.js --version bootstrap-0.4.601
 node scripts/verify-objective-build.js
 git diff --check
 ```
