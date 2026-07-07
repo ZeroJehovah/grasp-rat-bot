@@ -14,6 +14,7 @@ Read only what is needed for the current task:
 - [coin-balance-reporting.md](coin-balance-reporting.md): known-good Elysiver API method, auth variables, monthly coin report command, and fetch retry behavior.
 - [test-coverage.md](test-coverage.md): current self-test/static/replay coverage notes and known validation gaps.
 - [chase-mode-development-plan.md](chase-mode-development-plan.md): original implementation plan for chase mode; current durable behavior/config/model notes live in the current strategy, config, and data-model docs.
+- [external-watchdog-plan.md](external-watchdog-plan.md): proposed out-of-page watchdog design for combat stalls, CDP observation, direct leave rescue, and Clash rescue.
 
 ## Current Development Surfaces
 
