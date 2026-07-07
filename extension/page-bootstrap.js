@@ -3,7 +3,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.1.63';
+  const BOOTSTRAP_VERSION = '0.1.64';
   const BOOTSTRAP_OWNER = 'extension';
   const REPOSITORY_URL = 'https://github.com/ZeroJehovah/grasp-rat-bot';
   const LOADER_UPDATE_URL = 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/extension/page-bootstrap.js';
@@ -3007,8 +3007,11 @@
         { label: '本次登录统计：击杀次数', value: formatNumber(kills, '0'), color: kills > 0 ? '#fde68a' : '#e0f2fe' }
       ]);
       appendStaminaLine();
-      if (control.nativeReconnectChurn || Number(control.nativeReconnectEventCount || 0) > 0) {
-        appendLine('重连：' + formatNumber(control.nativeReconnectEventCount, '0') + ' / ' + formatDuration(control.nativeReconnectWindowMs || 0), control.nativeReconnectChurn ? 'color:#fca5a5;font-weight:700' : 'color:#cbd5e1');
+      const reconnectEventCount = Number(control.nativeReconnectEventCount || 0) || 0;
+      const wsRecovered = Boolean(control.wsOpen || control.nativeWsOpen || control.rawWsOpen);
+      const showReconnectLine = Boolean(control.nativeReconnectChurn || (!wsRecovered && reconnectEventCount > 0));
+      if (showReconnectLine) {
+        appendLine('重连：' + formatNumber(reconnectEventCount, '0') + ' / ' + formatDuration(control.nativeReconnectWindowMs || 0), control.nativeReconnectChurn ? 'color:#fca5a5;font-weight:700' : 'color:#cbd5e1');
       }
       if (decision?.opportunisticShot) {
         const shot = decision.opportunisticShot;

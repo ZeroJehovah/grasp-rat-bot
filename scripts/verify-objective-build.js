@@ -1417,6 +1417,15 @@ async function main() {
     }
   });
 
+  check('bootstrap panels hide benign reconnect history after websocket recovery', () => {
+    for (const [label, source] of [['userscript', userscriptText], ['extension', extensionBootstrapText]]) {
+      assert(source.includes('const reconnectEventCount = Number(control.nativeReconnectEventCount || 0) || 0;'), `${label} missing reconnect event count normalization`);
+      assert(source.includes('const wsRecovered = Boolean(control.wsOpen || control.nativeWsOpen || control.rawWsOpen);'), `${label} missing websocket recovery check for reconnect display`);
+      assert(source.includes('const showReconnectLine = Boolean(control.nativeReconnectChurn || (!wsRecovered && reconnectEventCount > 0));'), `${label} shows benign reconnect history after websocket recovery`);
+      assert(source.includes("appendLine('重连：' + formatNumber(reconnectEventCount, '0')"), `${label} reconnect display does not use normalized count`);
+    }
+  });
+
   check('login start paths prefer native controls over page globals', () => {
     assert(runtimeControlLoginSource.includes("el.id === 'grasp-rat-bot-inline-login'"), 'control login finder does not recognize bot-owned inline login proxy');
     assert(runtimeControlLoginSource.includes("direct.dataset?.graspRatNativeLoginHidden === 'true'"), 'control login finder does not allow hidden native join control');
