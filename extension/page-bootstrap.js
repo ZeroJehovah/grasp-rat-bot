@@ -3,7 +3,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.1.67';
+  const BOOTSTRAP_VERSION = '0.1.68';
   const BOOTSTRAP_OWNER = 'extension';
   const REPOSITORY_URL = 'https://github.com/ZeroJehovah/grasp-rat-bot';
   const LOADER_UPDATE_URL = 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/extension/page-bootstrap.js';
@@ -1027,13 +1027,18 @@
     );
   }
 
-  function panelHasPostLoginAttemptReloginEvidence(status, attemptAt) {
+  function panelHasExitDetailEventAtOrAfter(status, sinceAt) {
+    const threshold = Math.max(0, Number(sinceAt || 0) || 0);
+    const eventAt = exitDetailEventTimestamp(activePersistentExitDetail(status));
+    return Boolean(eventAt && eventAt >= threshold);
+  }
+
+  function panelHasPostLoginAttemptReloginEvidence(status, attemptAt, options = {}) {
     if (!waitReasonPrefersLastExit(status)) return false;
     const sinceAt = Math.max(0, Number(attemptAt || 0) || 0);
-    const activityAt = Math.max(
-      panelLoginPointSafetyActivityAt(status),
-      exitDetailEventTimestamp(activePersistentExitDetail(status))
-    );
+    if (panelHasExitDetailEventAtOrAfter(status, sinceAt)) return true;
+    if (options.confirmedLogin) return false;
+    const activityAt = panelLoginPointSafetyActivityAt(status);
     if (activityAt && activityAt >= sinceAt) return true;
     const gate = reloginGateFromStatus(status);
     return Boolean(Number(gate.loginPointSafety.required || 0) > 0
@@ -2183,13 +2188,29 @@
   function panelHasRecentLoginConfirmation(status, t = Date.now()) {
     const attemptAt = panelRecentLoginAttemptAt(status, t);
     if (!attemptAt || hasLoginRequiredText()) return false;
-    if (panelHasPostLoginAttemptReloginEvidence(status, attemptAt)) return false;
+    const confirmed = Boolean(
+      (pageHasVisibleLeaveControl() && pageLooksLoggedIn(status))
+      || panelRecentLoginOkSeen(status, attemptAt, t)
+    );
+    if (!confirmed) return false;
+    if (panelHasPostLoginAttemptReloginEvidence(status, attemptAt, { confirmedLogin: true })) return false;
+    return true;
+  }
+
+  function panelHasCurrentPageLoginConfirmation(status, t = Date.now()) {
+    const pageLoadAt = currentPageLoadAt();
+    if (!pageLoadAt || hasLoginRequiredText()) return false;
+    if (panelHasExitDetailEventAtOrAfter(status, pageLoadAt)) return false;
     if (pageHasVisibleLeaveControl() && pageLooksLoggedIn(status)) return true;
-    return panelRecentLoginOkSeen(status, attemptAt, t);
+    return panelRecentLoginOkSeen(status, pageLoadAt, t);
   }
 
   function panelSuppressesReloginChrome(status, self = null, t = Date.now()) {
-    return Boolean(panelHasFreshAliveSelf(status, self, t) || panelHasRecentLoginConfirmation(status, t));
+    return Boolean(
+      panelHasFreshAliveSelf(status, self, t)
+      || panelHasRecentLoginConfirmation(status, t)
+      || panelHasCurrentPageLoginConfirmation(status, t)
+    );
   }
 
   function reloginHoldRemainingFromStatus(status) {
