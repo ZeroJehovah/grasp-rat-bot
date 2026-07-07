@@ -102,6 +102,7 @@ function buildRuntimeDefaults(config, combatLogEndpointConfigured) {
     combatOpponentProbeEveryMs: 520,
     combatPassiveRunnerCloseRange: 4500,
     combatPassiveRunnerPrecisionRange: 5500,
+    combatPassiveRunnerPrecisionMaxNoDamageMs: 8000,
     combatPassiveRunnerInterceptSpreadScale: 0,
     combatShootHardReserveMs: 1800,
     combatShootConserveEveryMs: 360,

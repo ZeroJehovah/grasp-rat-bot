@@ -167,6 +167,7 @@
 - `combatOpponentProbeEveryMs = 520`
 - `combatPassiveRunnerCloseRange = 4500`
 - `combatPassiveRunnerPrecisionRange = 5500`
+- `combatPassiveRunnerPrecisionMaxNoDamageMs = 8000`
 - `combatPassiveRunnerInterceptSpreadScale = 0`
 - `combatAimMotionSampleMs = 50`
 - `combatAimRecentMotionDecayMs = 900`

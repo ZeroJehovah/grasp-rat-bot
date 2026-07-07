@@ -57,6 +57,7 @@ const DEFAULTS = {
   combatOpponentProbeEveryMs: 520,
   combatPassiveRunnerCloseRange: 4500,
   combatPassiveRunnerPrecisionRange: 5500,
+  combatPassiveRunnerPrecisionMaxNoDamageMs: 8000,
   combatPassiveRunnerInterceptSpreadScale: 0,
   combatOutOfRangeReengageRange: 15000,
   combatOutOfRangeReengageMinHp: 60,
@@ -1050,12 +1051,18 @@ function dynamicAimForShot(shot, options) {
   const lateralRatio = Math.abs(Number(movement?.lateralRatio || 0));
   const realBulletPrecision = Boolean(live && moving && incomingRealBullet(frame) && withinAttackRange);
   const passiveRunnerPrecisionRange = Math.max(0, Number(options.combatPassiveRunnerPrecisionRange || 0));
+  const passiveRunnerPrecisionMaxNoDamageMs = Math.max(0, Number(options.combatPassiveRunnerPrecisionMaxNoDamageMs || 0));
+  const passiveRunnerPrecisionLimited = Boolean(
+    passiveRunnerPrecisionMaxNoDamageMs
+    && frame.noDamageMs >= passiveRunnerPrecisionMaxNoDamageMs
+  );
   const passiveRunnerPrecision = Boolean(
     live
     && moving
     && passiveRunnerActive(frame, options)
     && passiveRunnerPrecisionRange > 0
     && Number(liveDistance) <= passiveRunnerPrecisionRange
+    && !passiveRunnerPrecisionLimited
     && withinAttackRange
   );
   const passiveRunnerIntercept = Boolean(
@@ -1183,7 +1190,19 @@ function passiveRunnerActive(frame, options, allowMissingIntent = false) {
   const minSelfHp = Math.max(0, Number(options.combatPassiveRunnerMinSelfHp || 0));
   const minDrop = Math.max(0, Number(options.combatPassiveRunnerMinDrop || 0));
   const confirmMs = Math.max(0, Number(options.combatPassiveRunnerConfirmMs || 0));
-  const moving = entitySpeed(target) >= Number(options.combatStationarySpeed || 0);
+  const motionScale = Math.max(
+    0,
+    Number(
+      target.motionScale
+        ?? frame.target?.motionScale
+        ?? frame.aim?.motionScale
+        ?? frame.entry?.combatState?.aim?.motionScale
+        ?? frame.entry?.decision?.combatState?.aim?.motionScale
+        ?? 0
+    ) || 0
+  );
+  const moving = entitySpeed(target) >= Number(options.combatStationarySpeed || 0)
+    || motionScale >= Math.max(0, Number(options.combatAimMovingScaleThreshold || 0.15));
   const active = Boolean(target.active || target.current_join_mode === 'Active' || target.mode === 'Active');
   const firing = Boolean(target.firing || target.attacking || target.is_attacking);
   const invulnerable = Boolean(target.invulnerable || target.invulnerable_remaining_ticks > 0);
@@ -1994,6 +2013,15 @@ function selfTest() {
       file: path.join(__dirname, 'logs/2026-07-06/combat/20260705171540-self-28886-vs-xuanze00.jsonl'),
       startLine: 96,
       endLine: 2316,
+      selfId: '28886',
+      targetId: '34711',
+      targetName: 'xuanze00'
+    },
+    {
+      id: '2026-07-07-xuanze00-passive-runner-close-no-damage-intercept',
+      file: path.join(__dirname, 'logs/2026-07-07/combat/20260707034130-self-28886-vs-xuanze00.jsonl'),
+      startLine: 64,
+      endLine: 1068,
       selfId: '28886',
       targetId: '34711',
       targetName: 'xuanze00'
