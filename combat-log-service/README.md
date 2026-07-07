@@ -130,6 +130,58 @@ combat-log-service/logs/YYYY-MM-DD/audit/watchdog.jsonl
 curl http://127.0.0.1:18765/watchdog/status
 ```
 
+状态里的关键字段：
+
+- `activeRescue.armed`: 当前是否具备自动 direct-leave 救援条件。
+- `activeRescue.reasons`: 未武装原因，例如 `dry-run`、`active-rescue-disabled`、`direct-leave-unverified`、`no-heartbeat-state`、`no-direct-leave-ready-state`。
+- `warnings`: 人可读警告；主动救援打开但没有新鲜 heartbeat、没有 direct-leave ready descriptor、direct leave 未验证或 Clash 校验失败时会显示。
+- `directLeave.missing`: 最近 heartbeat descriptor 缺失项，例如 `auth-missing`、`expired`、`stale`。
+
+日常 dry-run 操作流程：
+
+1. 启动服务：
+
+```bash
+npm start
+```
+
+2. 在游戏控制台开启浏览器心跳：
+
+```js
+window.__graspRatBotBootstrap.configureWatchdog({
+  enabled: true,
+  endpoint: 'http://127.0.0.1:18765/watchdog/heartbeat'
+})
+```
+
+3. 服务端启用 dry-run 检测：
+
+```bash
+curl -X POST http://127.0.0.1:18765/watchdog/config \
+  -H 'content-type: application/json' \
+  --data '{"enabled":true,"dryRun":true,"activeRescueEnabled":false}'
+```
+
+4. 查看 `armed` / `reasons` / `warnings` 和 `heartbeatAgeMs`：
+
+```bash
+curl http://127.0.0.1:18765/watchdog/status
+```
+
+5. 结束观察后，在游戏控制台关闭浏览器心跳：
+
+```js
+window.__graspRatBotBootstrap.configureWatchdog({ enabled: false })
+```
+
+6. 关闭服务端 watchdog：
+
+```bash
+curl -X POST http://127.0.0.1:18765/watchdog/config \
+  -H 'content-type: application/json' \
+  --data '{"enabled":false,"activeRescueEnabled":false,"dryRun":true}'
+```
+
 配置并验证 Clash：
 
 ```bash
@@ -179,6 +231,18 @@ window.__graspRatBotBootstrap.configureWatchdog({
 上面的 direct leave endpoint 只是 descriptor 形状示例；真实 endpoint、方法、请求体和认证方式必须先在低风险 live 会话中验证，再把服务端 `directLeave.verified` 设为 `true`。
 默认 `directLeave.requireAuthEvidence=true`，所以 descriptor 还必须包含可见的认证证据，例如 `sessionToken`、Authorization/Cookie/header 模板、token 查询参数或 body 里的 token/session 字段；只有 URL/method/userId 不会被标记为 direct-leave ready。
 
+主动救援打开前，`/watchdog/status` 应至少满足：
+
+- `enabled=true`
+- `activeRescueEnabled=true`
+- `dryRun=false`
+- `directLeave.enabled=true`
+- `directLeave.verified=true`
+- `activeRescue.armed=true`
+- `warnings` 不包含 direct-leave 或 heartbeat readiness 警告
+
+如果 `activeRescueEnabled=true` 但 direct leave 未验证、没有 heartbeat state、descriptor 缺认证证据，状态会保持 `activeRescue.armed=false` 并在 `activeRescue.reasons` / `warnings` 中说明原因。
+
 本地 smoke 测试会启动临时服务、启用 watchdog dry-run、发送合成高风险心跳、检查审计脱敏，然后用 fake fetch 验证主动 direct-leave 路径会发出一次请求。它不会访问真实游戏或 Clash：
 
 ```bash
@@ -191,6 +255,16 @@ npm run watchdog:smoke
 npm run watchdog:replay
 npm run watchdog:replay -- --stall-ms 1000 --threshold-ms 2000 --expect none
 ```
+
+Windows 本地启动建议使用 JSON 配置文件，避免在控制台转义 secret：
+
+```powershell
+cd C:\path\to\grasp-rat-bot\combat-log-service
+copy watchdog-config.example.json watchdog-config.local.json
+node server.js --watchdog-config .\watchdog-config.local.json
+```
+
+需要开机自启时，用 Windows 任务计划程序创建“登录时启动”任务即可：程序填 Node 可执行文件，例如 `C:\Program Files\nodejs\node.exe`；参数填 `server.js --watchdog-config .\watchdog-config.local.json`；起始位置填 `C:\path\to\grasp-rat-bot\combat-log-service`。不要把 `watchdog-config.local.json` 提交到 Git。
 
 ## 记录范围
 

@@ -408,6 +408,19 @@ function responseSummary(text, max = 180) {
   };
 }
 
+function uniqueStrings(values, limit = 24) {
+  const out = [];
+  const seen = new Set();
+  for (const value of values || []) {
+    const text = stringValue(value || '').trim();
+    if (!text || seen.has(text)) continue;
+    seen.add(text);
+    out.push(text);
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
 function fetchWithTimeout(fetchImpl, url, options = {}, timeoutMs = 3000) {
   if (typeof fetchImpl !== 'function') return Promise.reject(new Error('fetch is unavailable'));
   const AbortControllerImpl = typeof AbortController !== 'undefined' ? AbortController : null;
@@ -717,9 +730,69 @@ class WatchdogService {
     };
   }
 
+  directLeaveMissingReasons(states) {
+    return uniqueStrings(states.flatMap(item => item.leaveAuth?.missing || []), 12);
+  }
+
+  activeRescueReadiness(states) {
+    const readyStates = states.filter(item => item.leaveAuth?.directLeaveReady).length;
+    const descriptorReadyStates = states.filter(item => item.leaveAuth?.descriptorReady).length;
+    const directLeaveMissing = this.directLeaveMissingReasons(states);
+    const reasons = [];
+    if (!this.config.enabled) reasons.push('watchdog-disabled');
+    if (!this.config.activeRescueEnabled) reasons.push('active-rescue-disabled');
+    if (this.config.dryRun) reasons.push('dry-run');
+    if (!this.config.directLeave.enabled) reasons.push('direct-leave-disabled');
+    if (!this.config.directLeave.verified) reasons.push('direct-leave-unverified');
+    if (!states.length) reasons.push('no-heartbeat-state');
+    if (!readyStates) reasons.push('no-direct-leave-ready-state');
+    const armed = Boolean(
+      this.config.enabled
+      && this.config.activeRescueEnabled
+      && !this.config.dryRun
+      && this.config.directLeave.enabled
+      && this.config.directLeave.verified
+      && readyStates > 0
+    );
+    return {
+      armed,
+      readyStates,
+      descriptorReadyStates,
+      reasons: armed ? [] : uniqueStrings(reasons, 12),
+      directLeaveMissing
+    };
+  }
+
+  statusWarnings(states, readiness) {
+    const warnings = [];
+    if (this.lastConfigWarning) warnings.push(this.lastConfigWarning);
+    if (this.config.activeRescueEnabled) {
+      if (!this.config.enabled) warnings.push('active rescue is enabled but watchdog is disabled');
+      if (this.config.dryRun) warnings.push('active rescue is enabled but dry-run is still on');
+      if (!this.config.directLeave.enabled) warnings.push('active rescue is enabled but direct leave is disabled');
+      if (!this.config.directLeave.verified) warnings.push('active rescue is enabled but direct leave is unverified');
+      if (this.config.directLeave.enabled && this.config.directLeave.verified) {
+        if (!states.length) {
+          warnings.push('active rescue has no heartbeat state');
+        } else if (!readiness.readyStates) {
+          const suffix = readiness.directLeaveMissing.length
+            ? `: ${readiness.directLeaveMissing.join(', ')}`
+            : '';
+          warnings.push(`active rescue has no direct-leave-ready state${suffix}`);
+        }
+      }
+    }
+    if (this.config.clash.enabled && !this.clashValidation.ok) {
+      warnings.push(`Clash rescue is configured but not ready: ${this.clashValidation.error || 'not validated'}`);
+    }
+    return uniqueStrings(warnings, 12);
+  }
+
   status() {
     const now = this.now();
     const states = Array.from(this.states.values()).map(record => this.summarizeRecord(record, now));
+    const activeRescue = this.activeRescueReadiness(states);
+    const warnings = this.statusWarnings(states, activeRescue);
     return {
       ok: true,
       enabled: Boolean(this.config.enabled),
@@ -732,8 +805,11 @@ class WatchdogService {
       directLeave: {
         enabled: Boolean(this.config.directLeave.enabled),
         verified: Boolean(this.config.directLeave.verified),
-        readyStates: states.filter(item => item.leaveAuth?.directLeaveReady).length
+        readyStates: activeRescue.readyStates,
+        descriptorReadyStates: activeRescue.descriptorReadyStates,
+        missing: activeRescue.directLeaveMissing
       },
+      activeRescue,
       clash: redact({
         enabled: Boolean(this.config.clash.enabled),
         controllerUrl: this.config.clash.controllerUrl,
@@ -741,7 +817,8 @@ class WatchdogService {
         rescueStage: this.config.clash.rescueStage,
         validation: this.clashValidation
       }),
-      warning: this.lastConfigWarning || ''
+      warnings,
+      warning: warnings.join('; ')
     };
   }
 
@@ -1321,6 +1398,9 @@ async function runWatchdogSelfTest(options = {}) {
     if (status.enabled !== false || status.activeRescueEnabled !== false || status.stateCount !== 0) {
       throw new Error('default watchdog status is not disabled and empty');
     }
+    if (status.activeRescue?.armed !== false || !status.activeRescue?.reasons?.includes('watchdog-disabled')) {
+      throw new Error('default watchdog status does not explain unarmed active rescue');
+    }
     await watchdog.updateConfig({
       enabled: true,
       heartbeatStaleMs: 2000,
@@ -1374,6 +1454,9 @@ async function runWatchdogSelfTest(options = {}) {
     status = watchdog.status();
     const state = status.states[0];
     if (!state || state.leaveAuth.directLeaveReady !== true) throw new Error('direct leave readiness missing after heartbeat');
+    if (status.directLeave.readyStates !== 1 || status.directLeave.descriptorReadyStates !== 1) {
+      throw new Error('direct leave readiness counters missing after heartbeat');
+    }
     watchdog.handleHeartbeat({
       ...heartbeat,
       pageId: 'page-no-combat',
@@ -1457,6 +1540,48 @@ async function runWatchdogSelfTest(options = {}) {
     const noAuthSummary = summarizeLeaveAuth(noAuth, watchdog.config, currentNow);
     if (noAuthSummary.directLeaveReady || !noAuthSummary.missing.includes('auth-missing')) {
       throw new Error('direct leave descriptor without auth evidence was treated as ready');
+    }
+
+    const warningWatchdog = createWatchdogService({
+      dir: root,
+      autoStart: false,
+      now: () => currentNow,
+      config: {
+        enabled: true,
+        activeRescueEnabled: true,
+        dryRun: false,
+        auditEnabled: false,
+        directLeave: { enabled: true, verified: true }
+      }
+    });
+    let warningStatus = warningWatchdog.status();
+    if (warningStatus.activeRescue.armed || !warningStatus.activeRescue.reasons.includes('no-heartbeat-state')) {
+      throw new Error('active rescue status did not report missing heartbeat state');
+    }
+    if (!warningStatus.warnings.includes('active rescue has no heartbeat state')) {
+      throw new Error('active rescue status did not warn about missing heartbeat state');
+    }
+    warningWatchdog.handleHeartbeat({
+      ...heartbeat,
+      pageId: 'warning-page',
+      userId: 28886,
+      leaveAuth: {
+        available: true,
+        userId: 28886,
+        origin: GAME_ORIGIN,
+        descriptor: {
+          url: `${GAME_ORIGIN}/api/leave`,
+          method: 'POST',
+          bodyJson: { userId: '${userId}' }
+        }
+      }
+    });
+    warningStatus = warningWatchdog.status();
+    if (warningStatus.activeRescue.armed || !warningStatus.directLeave.missing.includes('auth-missing')) {
+      throw new Error('active rescue status did not expose auth-missing readiness reason');
+    }
+    if (!warningStatus.warning.includes('auth-missing')) {
+      throw new Error('active rescue warning did not include direct-leave missing reasons');
     }
 
     let successNow = currentNow;
@@ -1587,7 +1712,7 @@ async function runWatchdogSelfTest(options = {}) {
       throw new Error('direct leave retry did not stop after combat-log exit confirmation');
     }
 
-    console.log(JSON.stringify({ ok: true, cases: 20 }, null, 2));
+    console.log(JSON.stringify({ ok: true, cases: 23 }, null, 2));
   } finally {
     watchdog.stop();
     fs.rmSync(root, { recursive: true, force: true });

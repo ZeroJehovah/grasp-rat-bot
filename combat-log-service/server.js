@@ -324,13 +324,19 @@ function summarizeWatchdogStartup(status, configFile = '') {
     directLeave: {
       enabled: Boolean(status?.directLeave?.enabled),
       verified: Boolean(status?.directLeave?.verified),
-      readyStates: Number(status?.directLeave?.readyStates || 0)
+      readyStates: Number(status?.directLeave?.readyStates || 0),
+      missing: Array.isArray(status?.directLeave?.missing) ? status.directLeave.missing.slice(0, 12) : []
+    },
+    activeRescue: {
+      armed: Boolean(status?.activeRescue?.armed),
+      reasons: Array.isArray(status?.activeRescue?.reasons) ? status.activeRescue.reasons.slice(0, 12) : []
     },
     clash: {
       enabled: Boolean(status?.clash?.enabled),
       validationOk: Boolean(status?.clash?.validation?.ok),
       validationError: status?.clash?.validation?.error || ''
-    }
+    },
+    warnings: Array.isArray(status?.warnings) ? status.warnings.slice(0, 12) : []
   };
 }
 
