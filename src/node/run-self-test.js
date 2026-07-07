@@ -51,6 +51,9 @@ const {
   createPostLoginZoomRuntime
 } = require('../browser/runtime/post-login-zoom-runtime');
 const {
+  createNativeTransportRuntime
+} = require('../browser/runtime/native-transport-runtime');
+const {
   normalizeTargetWhitelistName,
   parseTargetWhitelistNames,
   deriveTargetWhitelistUrl
@@ -8639,6 +8642,68 @@ async function runSelfTest() {
 	      got: offlineLeaveSummaryText('websocket reconnect churn', { reconnectChurn: { count: 3, windowMs: 10000 } }),
 		      want: '网络连接反复重连，退出等待重连'
 		    },
+    {
+      name: 'native transport stall recovery resets current websocket once',
+      got: (() => {
+        const originalWebSocket = global.WebSocket;
+        const originalDateNow = Date.now;
+        const FakeWebSocket = { CONNECTING: 0, OPEN: 1, CLOSING: 2, CLOSED: 3 };
+        let nowMs = 100000;
+        Date.now = () => nowMs;
+        global.WebSocket = FakeWebSocket;
+        const makeWs = () => ({
+          readyState: FakeWebSocket.OPEN,
+          closed: 0,
+          listeners: {},
+          addEventListener(type, fn) { this.listeners[type] = fn; },
+          removeEventListener(type) { delete this.listeners[type]; },
+          close() { this.closed += 1; this.readyState = FakeWebSocket.CLOSED; }
+        });
+        const ws1 = makeWs();
+        const nativeState = { ws: ws1, wsOpen: true, currentUserId: 28886, sessionToken: 'token', keys: new Set(['w']), currentVel: { dx: 1, dy: 0 } };
+        const botState = {
+          control: { currentUserId: 28886, hasToken: true, wsOpen: true, nativeWsOpen: true, connecting: false, lastVelocity: '1 0', lastVelocityAt: 0, nonZeroVelocitySince: 90000, lastNonZeroVelocityAt: 99900 },
+          networkQuality: { pendingMovement: { at: 99000 } },
+          directVelocityRepeatToken: 0,
+          directVelocityStopRepeatsLeft: 0,
+          velocityPulseToken: 0
+        };
+        let serverReset = '';
+        let actionReset = '';
+        const native = () => ({ state: nativeState, ws: nativeState.ws, wsOpen: Boolean(nativeState.wsOpen && nativeState.ws?.readyState === FakeWebSocket.OPEN), wsReadyState: nativeState.ws?.readyState ?? null });
+        const runtime = createNativeTransportRuntime({
+          bot: botState,
+          cfg: { nativeTransportStallRecoveryEnabled: true, nativeTransportStallRecoveryWaitMs: 8000, nativeTransportStallRecoveryCooldownMs: 60000 },
+          getNativeControl: native,
+          getNativeState: () => nativeState,
+          isWsConnectingOrOpen: value => value === FakeWebSocket.CONNECTING || value === FakeWebSocket.OPEN,
+          runCallbackSafely: (_label, fn) => fn,
+          now: () => nowMs,
+          resetServerPositionStall: reason => { serverReset = reason; },
+          resetActionSettlementStall: reason => { actionReset = reason; }
+        });
+        try {
+          const first = runtime.maybeRecoverNativeTransportStall('action-settlement-stalled', { actionSettlementStall: { stalled: true } });
+          const afterFirst = [first?.waiting, ws1.closed, nativeState.wsOpen, botState.control.hasToken, nativeState.currentUserId, nativeState.sessionToken, nativeState.keys.size, nativeState.currentVel.dx, botState.networkQuality.pendingMovement === null, serverReset, actionReset].map(String).join('|');
+          const ws2 = makeWs();
+          nativeState.ws = ws2; nativeState.wsOpen = true; nowMs += 1000;
+          const second = runtime.maybeRecoverNativeTransportStall('', {});
+          const afterSecond = [second, botState.nativeTransportRecovery.active, Boolean(botState.nativeTransportRecovery.recoveredAt), ws2.closed].map(String).join('|');
+          const ws3 = makeWs();
+          nativeState.ws = ws3; nativeState.wsOpen = true; nowMs += 70000;
+          const third = runtime.maybeRecoverNativeTransportStall('server-position-no-move', { serverPositionStall: { stalled: true, reason: 'server-position-no-move' } });
+          botState.nativeTransportRecovery.deadlineAt = nowMs - 1; nowMs += 1;
+          const fourth = runtime.maybeRecoverNativeTransportStall('', {});
+          const fifth = runtime.maybeRecoverNativeTransportStall('action-settlement-stalled', { actionSettlementStall: { stalled: true } });
+          return [afterFirst, afterSecond, [third?.waiting, ws3.closed, fourth, botState.nativeTransportRecovery.failureReason, botState.control.wsOpen, botState.control.nativeWsOpen, fifth].map(String).join('|')].join(' / ');
+        } finally {
+          Date.now = originalDateNow;
+          if (originalWebSocket === undefined) delete global.WebSocket;
+          else global.WebSocket = originalWebSocket;
+        }
+      })(),
+      want: 'true|1|false|true|28886|token|0|0|true|native-transport-reset|native-transport-reset / null|false|true|0 / true|1|null|timeout|false|false|null'
+    },
 	    {
 	      name: 'current websocket offline display beats stale pending combat detail',
 	      got: currentOfflineDisplayReasonForTest(

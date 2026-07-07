@@ -12,7 +12,7 @@
   var define_GRASP_RAT_RUNTIME_CONFIG_default;
   var init_define_GRASP_RAT_RUNTIME_CONFIG = __esm({
     "<define:__GRASP_RAT_RUNTIME_CONFIG__>"() {
-      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.597" };
+      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.598" };
     }
   });
 
@@ -608,9 +608,12 @@
           serverPositionStallEnabled: true,
           serverPositionStallOfflineEnabled: false,
           serverPositionStallMs: 2500,
-          serverPositionNoMoveStallMs: 0,
+          serverPositionNoMoveStallMs: 5e3,
           serverPositionStallHoldMs: 6e3,
           serverPositionCommandFreshMs: 900,
+          nativeTransportStallRecoveryEnabled: true,
+          nativeTransportStallRecoveryWaitMs: 8e3,
+          nativeTransportStallRecoveryCooldownMs: 6e4,
           directWsControlEnabled: true,
           directWsServerMarkerProbe: false,
           directWsVelocityRepeatMs: 50,
@@ -3955,6 +3958,7 @@
           exitMotionStopLockRemainingMs = () => 0,
           postExitDecisionWithoutTargetForStatusCore = (value) => value,
           summarizeNetworkQuality = () => null,
+          summarizeNativeTransportRecovery = () => null,
           summarizeTargetWhitelistStatus = () => null,
           summarizeCombatLoggingStatus = () => null,
           summarizeImportantLoggingStatus = () => null,
@@ -4235,6 +4239,7 @@
                 loginSnapshotGate: snapshotLoginGateStatus()
               },
               control: summarizeControl(),
+              nativeTransportRecovery: summarizeNativeTransportRecovery(),
               serverPositionStall: summarizeServerPositionStall(),
               actionSettlementStall: summarizeActionSettlementStall(),
               login: {
@@ -5633,6 +5638,7 @@
             "snapshot-no-self-exit-confirmed": "\u5FEB\u7167\u786E\u8BA4\u5DF2\u9000\u51FA\uFF0C\u6B63\u5728\u91CD\u767B",
             "login-required-no-self-exit-confirmed": "\u65E7\u767B\u5F55\u6001\u5931\u6548\uFF0C\u6B63\u5728\u91CD\u767B",
             "control-ws-server-position-stalled": "\u670D\u52A1\u7AEF\u4F4D\u7F6E\u505C\u6B62\uFF0C\u6309\u7F51\u7EDC\u8FDE\u63A5\u79BB\u7EBF\u5904\u7406",
+            "native-transport-reset": "\u539F\u751F\u8FDE\u63A5\u63A7\u5236\u7591\u4F3C\u5361\u6B7B\uFF0C\u6B63\u5728\u91CD\u7F6E\u8FDE\u63A5",
             "control-global-sampling-outage": "\u7F51\u7EDC\u91C7\u6837\u8D85\u65F6\uFF0C\u6309\u7F51\u7EDC\u8FDE\u63A5\u79BB\u7EBF\u5904\u7406",
             "control-combat-tick-gap": "\u6218\u6597\u4E3B\u5FAA\u73AF\u65AD\u6863\uFF0C\u6309\u7F51\u7EDC\u8FDE\u63A5\u79BB\u7EBF\u5904\u7406",
             "control-action-settlement-stalled": "\u79FB\u52A8/\u5F00\u706B\u7ED3\u7B97\u5361\u6B7B\uFF0C\u6309\u7F51\u7EDC\u8FDE\u63A5\u79BB\u7EBF\u5904\u7406",
@@ -15581,6 +15587,8 @@
           summarizeActionSettlementStall = () => null,
           resetServerPositionStall = () => {
           },
+          resetActionSettlementStall = () => {
+          },
           summarizeNetworkQuality = () => ({ enabled: false }),
           observeNativeWsFrame = () => null,
           recordNetworkQualityMovementCommand = () => null,
@@ -15694,6 +15702,7 @@
           const serverPositionStallOffline = Boolean(cfg.serverPositionStallOfflineEnabled && serverPositionStall?.stalled);
           const actionSettlementStall = summarizeActionSettlementStall();
           const actionSettlementStallOffline = Boolean(cfg.actionSettlementStallOfflineEnabled && actionSettlementStall?.stalled);
+          const nativeTransportRecovery = summarizeNativeTransportRecovery();
           const effectiveWsOpen = Boolean(control.wsOpen && !serverPositionStallOffline && !actionSettlementStallOffline);
           const nativeCurrentVel = nativeState?.currentVel ? Number(nativeState.currentVel.dx || 0) + " " + Number(nativeState.currentVel.dy || 0) : "";
           const nativeKeys = nativeState?.keys && typeof nativeState.keys[Symbol.iterator] === "function" ? Array.from(nativeState.keys) : [];
@@ -15726,9 +15735,95 @@
             directVelocityRepeatMs: Number(cfg.directWsVelocityRepeatMs || 0),
             lastDirectVelocity: bot.lastDirectVelocity || "",
             lastDirectVelocityAgeMs: bot.lastDirectVelocityAt ? Math.max(0, Math.round(now() - Number(bot.lastDirectVelocityAt || 0))) : null,
+            nativeTransportRecovery,
             serverPositionStall,
             actionSettlementStall
           };
+        }
+        function summarizeNativeTransportRecovery(state2 = bot.nativeTransportRecovery) {
+          if (!state2) return null;
+          const t = Date.now();
+          return {
+            active: Boolean(state2.active),
+            waiting: Boolean(state2.active && t < Number(state2.deadlineAt || 0)),
+            reason: state2.reason || "",
+            startedAt: state2.startedAt || 0,
+            ageMs: state2.startedAt ? Math.max(0, Math.round(t - Number(state2.startedAt || 0))) : 0,
+            waitRemainingMs: state2.deadlineAt ? Math.max(0, Math.round(Number(state2.deadlineAt || 0) - t)) : 0,
+            cooldownRemainingMs: state2.cooldownUntil ? Math.max(0, Math.round(Number(state2.cooldownUntil || 0) - t)) : 0,
+            closedNativeWs: Boolean(state2.closedNativeWs),
+            wsReadyState: Number.isFinite(Number(state2.wsReadyState)) ? Number(state2.wsReadyState) : null,
+            recoveredAt: state2.recoveredAt || 0,
+            failedAt: state2.failedAt || 0,
+            failureReason: state2.failureReason || "",
+            error: state2.error || ""
+          };
+        }
+        function nativeTransportRecoveryRestored(state2, native) {
+          if (!state2?.active || !native?.wsOpen) return false;
+          if (state2.ws && native.ws && native.ws !== state2.ws) return true;
+          const startedAt = Number(state2.startedAt || 0);
+          return Boolean(
+            bot.control.lastOpenAt && Number(bot.control.lastOpenAt || 0) >= startedAt || bot.networkQuality?.lastFrameAt && Number(bot.networkQuality.lastFrameAt || 0) >= startedAt
+          );
+        }
+        function maybeRecoverNativeTransportStall(reason = "", detail = {}) {
+          if (!cfg.nativeTransportStallRecoveryEnabled || bot.pendingExit) return null;
+          const t = Date.now();
+          let state2 = bot.nativeTransportRecovery || null;
+          const native = getNativeControl();
+          if (native) syncNativeControl(native);
+          if (state2?.active) {
+            if (nativeTransportRecoveryRestored(state2, native)) {
+              Object.assign(state2, { active: false, recoveredAt: t, failureReason: "", error: "" });
+              return null;
+            }
+            if (t < Number(state2.deadlineAt || 0)) return summarizeNativeTransportRecovery(state2);
+            Object.assign(state2, { active: false, failedAt: t, failureReason: "timeout" });
+            bot.control.wsOpen = false;
+            bot.control.nativeWsOpen = false;
+            bot.control.connecting = false;
+            bot.control.lastError = "native transport reset timeout";
+            return null;
+          }
+          const signal = String(reason || "") || (detail?.actionSettlementStall?.stalled ? "action-settlement-stalled" : "") || (detail?.serverPositionStall?.stalled ? detail.serverPositionStall.reason || "server-position-stalled" : "");
+          if (!signal) return null;
+          if (state2?.cooldownUntil && t < Number(state2.cooldownUntil || 0)) return null;
+          if (!native?.ws || !isWsConnectingOrOpen(native.ws.readyState)) return null;
+          const waitMs = Math.max(1e3, Number(cfg.nativeTransportStallRecoveryWaitMs || 8e3) || 8e3);
+          const cooldownMs = Math.max(waitMs, Number(cfg.nativeTransportStallRecoveryCooldownMs || 6e4) || 6e4);
+          state2 = {
+            active: true,
+            reason: signal,
+            startedAt: t,
+            deadlineAt: t + waitMs,
+            cooldownUntil: t + cooldownMs,
+            ws: native.ws,
+            wsReadyState: native.ws.readyState,
+            closedNativeWs: false,
+            recoveredAt: 0,
+            failedAt: 0,
+            failureReason: "",
+            error: ""
+          };
+          bot.nativeTransportRecovery = state2;
+          stopLocalMotionOnly("native-transport-reset");
+          detachNativeMessagePump();
+          try {
+            if (native.state && typeof native.state === "object") native.state.wsOpen = false;
+            native.ws.close();
+            state2.closedNativeWs = true;
+          } catch (err) {
+            state2.error = err?.message || String(err);
+          }
+          bot.control.wsOpen = false;
+          bot.control.nativeWsOpen = false;
+          bot.control.connecting = false;
+          bot.control.lastError = "native transport reset: " + signal;
+          if (bot.networkQuality && typeof bot.networkQuality === "object") bot.networkQuality.pendingMovement = null;
+          resetServerPositionStall("native-transport-reset");
+          resetActionSettlementStall("native-transport-reset");
+          return summarizeNativeTransportRecovery(state2);
         }
         function closeControlWs(reason = "") {
           const ws = bot.control.ws;
@@ -16159,6 +16254,8 @@
           summarizeControl,
           closeControlWs,
           ensureControlWs,
+          summarizeNativeTransportRecovery,
+          maybeRecoverNativeTransportStall,
           wsSend,
           setNativeKeys,
           cancelVelocityStopTimer,
@@ -17357,6 +17454,8 @@
           summarizeControl,
           closeControlWs,
           ensureControlWs,
+          summarizeNativeTransportRecovery,
+          maybeRecoverNativeTransportStall,
           wsSend,
           setNativeKeys,
           cancelVelocityStopTimer,
@@ -17396,6 +17495,7 @@
           summarizeServerPositionStall,
           summarizeActionSettlementStall,
           resetServerPositionStall,
+          resetActionSettlementStall,
           summarizeNetworkQuality,
           observeNativeWsFrame,
           recordNetworkQualityMovementCommand,
@@ -17427,6 +17527,8 @@
           summarizeControl,
           closeControlWs,
           ensureControlWs,
+          summarizeNativeTransportRecovery,
+          maybeRecoverNativeTransportStall,
           getSelf,
           getEntities,
           realtimeEntityWorldPoint,
@@ -27756,6 +27858,7 @@
           "getSelf",
           "installPageGlobal",
           "installPageNativeSnapshotObserver",
+          "maybeRecoverNativeTransportStall",
           "now",
           "observeNetworkQualitySelf",
           "refreshGlobalState",
@@ -27766,6 +27869,7 @@
           "snapshotEntityAllowed",
           "stopMotionSafely",
           "summarizeControl",
+          "summarizeNativeTransportRecovery",
           "summarizeSelf"
         ]),
         control: Object.freeze([
@@ -29522,6 +29626,7 @@
           getSelf,
           installPageGlobal,
           installPageNativeSnapshotObserver,
+          maybeRecoverNativeTransportStall = () => null,
           now,
           observeNetworkQualitySelf,
           refreshGlobalState,
@@ -30173,8 +30278,17 @@
             const samplingOutage = globalSamplingOutageOfflineState(self);
             const combatTickGap = combatTickGapOfflineState(self, { source });
             bot.lastCombatTickGap = combatTickGap;
-            const controlOffline = !bot.control.wsOpen || serverPositionStallOffline || actionSettlementStallOffline || reconnectChurn || Boolean(samplingOutage) || Boolean(combatTickGap);
             const pendingExitAlive = Boolean(bot.pendingExit && self && isAlive(self));
+            const nativeTransportRecovery = !cfg.dryRun && !pendingExitAlive ? maybeRecoverNativeTransportStall(actionSettlementStallOffline ? "action-settlement-stalled" : serverPositionStall?.stalled ? serverPositionStall.reason || "server-position-stalled" : "", { actionSettlementStall, serverPositionStall }) : null;
+            if (nativeTransportRecovery?.waiting) {
+              bot.pursuit = null;
+              bot.offlineSince = 0;
+              bot.lastDecision = { kind: "wait", reason: "native-transport-reset", control: summarizeControl(), self: summarizeSelf(self), nativeTransportRecovery, actionSettlementStall, serverPositionStall, displayReason: "\u539F\u751F\u8FDE\u63A5\u63A7\u5236\u7591\u4F3C\u5361\u6B7B\uFF0C\u6B63\u5728\u91CD\u7F6E\u8FDE\u63A5" };
+              updateBotPanel(bot.lastDecision);
+              if (cfg.once) bot.stop("once");
+              return;
+            }
+            const controlOffline = !bot.control.wsOpen || serverPositionStallOffline || actionSettlementStallOffline || reconnectChurn || Boolean(samplingOutage) || Boolean(combatTickGap);
             if (!cfg.dryRun && controlOffline && !pendingExitAlive) {
               bot.pursuit = null;
               stopMotionSafely(samplingOutage ? "global-sampling-outage" : combatTickGap ? "combat-tick-gap" : actionSettlementStallOffline ? "action-settlement-stalled" : serverPositionStallOffline ? "server-position-stalled" : reconnectChurn ? "control-ws-reconnect-churn" : "control-ws-offline");
@@ -31228,6 +31342,7 @@
           exitMotionStopLockRemainingMs: (...args) => exitMotionStopLockRemainingMs(...args),
           postExitDecisionWithoutTargetForStatusCore,
           summarizeNetworkQuality: (...args) => summarizeNetworkQuality(...args),
+          summarizeNativeTransportRecovery: (...args) => summarizeNativeTransportRecovery(...args),
           summarizeTargetWhitelistStatus: (...args) => summarizeTargetWhitelistStatus(...args),
           summarizeCombatLoggingStatus: (...args) => summarizeCombatLoggingStatus(...args),
           summarizeImportantLoggingStatus: (...args) => summarizeImportantLoggingStatus(...args),
@@ -31888,6 +32003,8 @@
         let recordNetworkQualityShot;
         let recordNetworkQualityAttackDamage;
         let summarizeNetworkQuality;
+        let summarizeNativeTransportRecovery;
+        let maybeRecoverNativeTransportStall;
         let refreshGlobalState;
         let wsSend;
         let setNativeKeys;
@@ -32003,6 +32120,8 @@
           recordNetworkQualityShot,
           recordNetworkQualityAttackDamage,
           summarizeNetworkQuality,
+          summarizeNativeTransportRecovery,
+          maybeRecoverNativeTransportStall,
           refreshGlobalState,
           wsSend,
           setNativeKeys,
@@ -32666,6 +32785,7 @@
           noteSelfUnavailableForPostLoginZoom,
           now,
           observeNetworkQualitySelf,
+          maybeRecoverNativeTransportStall,
           opportunityCandidateCoreOptions,
           opportunityChoiceCoreOptions,
           opportunityCoinStaminaCost,
@@ -32742,6 +32862,7 @@
           stopMotionSafely,
           summarizeBlockedStaminaOpportunityCore,
           summarizeControl,
+          summarizeNativeTransportRecovery,
           summarizeNearestCoinStaminaBudgetExitCore,
           summarizePendingCombatLeave,
           summarizePursuit,

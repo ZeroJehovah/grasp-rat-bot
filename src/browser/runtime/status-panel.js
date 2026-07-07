@@ -193,6 +193,7 @@ function createStatusPanelRuntime(runtime = {}) {
       'snapshot-no-self-exit-confirmed': '快照确认已退出，正在重登',
       'login-required-no-self-exit-confirmed': '旧登录态失效，正在重登',
       'control-ws-server-position-stalled': '服务端位置停止，按网络连接离线处理',
+      'native-transport-reset': '原生连接控制疑似卡死，正在重置连接',
       'control-global-sampling-outage': '网络采样超时，按网络连接离线处理',
       'control-combat-tick-gap': '战斗主循环断档，按网络连接离线处理',
       'control-action-settlement-stalled': '移动/开火结算卡死，按网络连接离线处理',

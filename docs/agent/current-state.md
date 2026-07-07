@@ -4,14 +4,15 @@ Update this file for every remote bot release or handoff-relevant state change. 
 
 ## Latest Release
 
-- Latest remote bot: `bootstrap-0.4.597`.
-- Latest manifest SHA-256: `ca9435a63f9009ee7fe0ce06f56cd3bf59a11fd4bb3e10d9d3309128c3b0c15c`.
-- Latest remote release commit: `4fbd0a2` (`bootstrap-0.4.597` improves visible coin route planning so comparable routes prefer closer first pickups and avoid passing closer same-lane route points).
+- Latest remote bot: `bootstrap-0.4.598`.
+- Latest manifest SHA-256: `efd355904cf6f40f821909835be1dfd6623772b8aa4021d11fadf1fc5e835826`.
+- Latest remote release commit: pending this release commit (`bootstrap-0.4.598` adds guarded native transport stall recovery before the normal offline/relogin path).
 - Latest bootstrap A versions: Tampermonkey `0.4.84`, extension `0.1.63`.
-- Latest direct entry/config SHA-256: `1ff4fd23e31e7a401fec0f0d8a83802058f85bd3ebd57e7ba47fc97775d14c1d`.
+- Latest direct entry/config SHA-256: `57893e5c2760d0112dc09f39ea4021f53a0992dd26eb0e4647f8ba7b7295ea6f`.
 
 ## Current Handoff
 
+- `bootstrap-0.4.598` adds guarded native transport stall recovery for the half-stall pattern where movement/shot intent keeps being sent but server position or action settlement stops advancing while state frames can still arrive. Before falling into the existing offline exit/relogin flow, Remote B stops local motion, detaches the native message pump, closes only the current page-owned native WebSocket, preserves current user/session/token state, waits up to 8s for the page's own reconnect, and then applies a 60s cooldown so repeated stalls cannot keep closing sockets. If the page reconnects with a replacement/open native WebSocket, normal control resumes; if it times out, the existing offline path handles the fallback. Bootstrap A is unchanged.
 - Bootstrap A Tampermonkey `0.4.84` and extension `0.1.63` add a panel interaction guard around the bootstrap panel, chase panel, and inline login button. Scheduled 500ms panel redraws are deferred while a panel control is between pointer/touch/mouse down and click dispatch, then flushed after the click. This prevents the panel from replacing the clicked DOM node before the browser emits `click`, which matched the intermittent first-click-no-op symptom on BOT/Log/view-radius/chase controls. Remote B is unchanged.
 - Bootstrap A Tampermonkey `0.4.83` and extension `0.1.62` set visible chase-mode Chinese wording to `猎杀`, replace the main panel toggle text with the hunt icon button, and move that toggle to the end of the current-time row after the 151m/502m view-radius buttons. The toggle keeps the existing visual state language: amber background when there are active hunt targets, dark/blue styling when empty or open, and title/aria text carrying the target count. Remote B `chaseMode` APIs, storage keys, and internal English naming are unchanged.
 - `bootstrap-0.4.597` improves native/realtime visible coin route planning. Route expansion now uses a bounded beam search instead of one greedy next point, rejects a route when its chosen first pickup would pass a clearly closer later route point in the same lane/direction, and after viable routes are built prefers a closer comparable first pickup unless the farther route clears the configured score and distance margins. This targets poor route choices where the bot picked a higher-scored route that started by running past a near route coin or stealing control with a farther first leg. Strategy self-tests cover the non-greedy route branch, same-lane closer route-point rejection, and closer comparable first-target arbitration. Bootstrap A is unchanged.
@@ -77,7 +78,7 @@ Update this file for every remote bot release or handoff-relevant state change. 
 
 ## Latest Validation Baseline
 
-The latest `bootstrap-0.4.597` release validation passed. Run build-producing commands and manifest-reading validation sequentially, not in parallel; `node scripts/build-remote-bot.js --version ...` rewrites `dist/manifest.json`, while `objective-status` and `verify-objective-build` read it.
+The latest `bootstrap-0.4.598` release validation passed. Run build-producing commands and manifest-reading validation sequentially, not in parallel; `node scripts/build-remote-bot.js --version ...` rewrites `dist/manifest.json`, while `objective-status` and `verify-objective-build` read it.
 
 ```bash
 node grasp-rat-bot.js --self-test
@@ -94,7 +95,7 @@ node --check extension/popup.js
 cd combat-log-service && npm test
 npm run test:runtime-helper-entry
 npm run test:remote-bundled
-node scripts/build-remote-bot.js --version bootstrap-0.4.597
+node scripts/build-remote-bot.js --version bootstrap-0.4.598
 node scripts/verify-objective-build.js
 git diff --check
 ```
