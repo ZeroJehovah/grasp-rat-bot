@@ -230,6 +230,7 @@
   - `targetRecentMs = 8000`
   - `directLeave.enabled = false`
   - `directLeave.verified = false`
+  - `directLeave.requireAuthEvidence = true`
   - `directLeave.timeoutMs = 3000`
   - `directLeave.retryMax = 2`
   - `directLeave.retryBackoffMs = 1200`

@@ -52,7 +52,7 @@ The browser runtime should adapt page/native state into these pure helpers inste
 - runtime config update;
 - startup `--watchdog-config` JSON parsing, later CLI override precedence, exact Clash secret preservation, and redacted startup summary;
 - valid heartbeat ingestion and malformed heartbeat rejection;
-- direct-leave descriptor readiness;
+- direct-leave descriptor readiness, including `auth-missing` for URL/method descriptors with no token/header/query/body auth evidence;
 - stale damaged-combat dry-run audit logging with `watchdog-state-change`, duplicate suppression, fresh-heartbeat recovery, and token redaction;
 - service-side Clash validation preserving exact secret strings, including backslashes;
 - active-rescue ordering where the direct leave request is created before the Clash switch;

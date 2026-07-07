@@ -177,6 +177,7 @@ window.__graspRatBotBootstrap.configureWatchdog({
 ```
 
 上面的 direct leave endpoint 只是 descriptor 形状示例；真实 endpoint、方法、请求体和认证方式必须先在低风险 live 会话中验证，再把服务端 `directLeave.verified` 设为 `true`。
+默认 `directLeave.requireAuthEvidence=true`，所以 descriptor 还必须包含可见的认证证据，例如 `sessionToken`、Authorization/Cookie/header 模板、token 查询参数或 body 里的 token/session 字段；只有 URL/method/userId 不会被标记为 direct-leave ready。
 
 本地 smoke 测试会启动临时服务、启用 watchdog dry-run、发送合成高风险心跳、检查审计脱敏，然后用 fake fetch 验证主动 direct-leave 路径会发出一次请求。它不会访问真实游戏或 Clash：
 

@@ -23,6 +23,7 @@ const DEFAULT_WATCHDOG_CONFIG = {
   directLeave: {
     enabled: false,
     verified: false,
+    requireAuthEvidence: true,
     timeoutMs: 3000,
     retryMax: 2,
     retryBackoffMs: 1200,
@@ -118,6 +119,7 @@ function mergeConfig(base, update) {
     const src = patch.directLeave;
     if (Object.prototype.hasOwnProperty.call(src, 'enabled')) next.directLeave.enabled = boolValue(src.enabled, next.directLeave.enabled);
     if (Object.prototype.hasOwnProperty.call(src, 'verified')) next.directLeave.verified = boolValue(src.verified, next.directLeave.verified);
+    if (Object.prototype.hasOwnProperty.call(src, 'requireAuthEvidence')) next.directLeave.requireAuthEvidence = boolValue(src.requireAuthEvidence, next.directLeave.requireAuthEvidence);
     if (Object.prototype.hasOwnProperty.call(src, 'successConfirmsExit')) next.directLeave.successConfirmsExit = boolValue(src.successConfirmsExit, next.directLeave.successConfirmsExit);
     if (Object.prototype.hasOwnProperty.call(src, 'timeoutMs')) next.directLeave.timeoutMs = positiveInt(src.timeoutMs, next.directLeave.timeoutMs, 250, 60000);
     if (Object.prototype.hasOwnProperty.call(src, 'retryMax')) next.directLeave.retryMax = positiveInt(src.retryMax, next.directLeave.retryMax, 0, 10);
@@ -275,6 +277,8 @@ function normalizeLeaveAuth(raw, payload, config, receivedAt) {
   const sessionToken = stringValue(raw.sessionToken || raw.token || descriptor.sessionToken || descriptor.token || '');
   const expiresAt = finiteNumber(raw.expiresAt ?? descriptor.expiresAt, 0) || 0;
   const available = boolValue(raw.available, Boolean(url || sessionToken || raw.sessionTokenPresent || raw.hasToken));
+  const authEvidence = leaveAuthHasAuthEvidence({ url, headers, bodyJson, body, sessionToken, descriptor });
+  const authRequired = !config?.directLeave || config.directLeave.requireAuthEvidence !== false;
   const missing = [];
   if (!available) missing.push('available');
   if (!url) missing.push('url');
@@ -282,9 +286,10 @@ function normalizeLeaveAuth(raw, payload, config, receivedAt) {
   if (!sessionToken && !Object.keys(headers).some(key => SECRET_KEY_RE.test(key)) && !stringValue(headers.Authorization || headers.authorization || '').includes('${sessionToken}')) {
     if (raw.sessionTokenPresent && !sessionToken) missing.push('session-token-not-sent');
   }
+  if (authRequired && !authEvidence) missing.push('auth-missing');
   return {
     available,
-    complete: Boolean(available && url && method),
+    complete: Boolean(available && url && method && (!authRequired || authEvidence)),
     missing: Array.from(new Set(missing)),
     receivedAt,
     userId,
@@ -296,6 +301,7 @@ function normalizeLeaveAuth(raw, payload, config, receivedAt) {
     bodyJson,
     body,
     sessionToken,
+    authEvidence,
     expiresAt,
     rawSummary: redact({
       available: raw.available,
@@ -308,6 +314,30 @@ function normalizeLeaveAuth(raw, payload, config, receivedAt) {
       sessionTokenPresent: Boolean(sessionToken || raw.sessionTokenPresent)
     })
   };
+}
+
+function leaveAuthHasAuthEvidence(auth = {}) {
+  if (auth.sessionToken) return true;
+  const headers = isObject(auth.headers) ? auth.headers : {};
+  for (const [key, value] of Object.entries(headers)) {
+    if (SECRET_KEY_RE.test(key)) return true;
+    if (/\$\{sessionToken\}|bearer\s+\S+|token|session|cookie|authorization/i.test(stringValue(value))) return true;
+  }
+  const bodyText = (() => {
+    try {
+      return JSON.stringify({ bodyJson: auth.bodyJson, body: auth.body, descriptor: auth.descriptor });
+    } catch (_) {
+      return '';
+    }
+  })();
+  if (/\$\{sessionToken\}|token|session|authorization|cookie/i.test(bodyText)) return true;
+  try {
+    const u = new URL(stringValue(auth.url || ''), GAME_ORIGIN);
+    for (const key of Array.from(u.searchParams.keys())) {
+      if (SECRET_KEY_RE.test(key)) return true;
+    }
+  } catch (_) {}
+  return false;
 }
 
 function redactUrl(value) {
@@ -1414,6 +1444,20 @@ async function runWatchdogSelfTest(options = {}) {
     if (!malformed) throw new Error('malformed heartbeat was not rejected');
     const manual = await watchdog.testLeave({ confirm: true, key: 'page-a:28886' });
     if (!manual.ok) throw new Error('manual direct leave test failed');
+    const noAuth = normalizeLeaveAuth({
+      available: true,
+      userId: 28886,
+      origin: GAME_ORIGIN,
+      descriptor: {
+        url: `${GAME_ORIGIN}/api/leave`,
+        method: 'POST',
+        bodyJson: { userId: '${userId}' }
+      }
+    }, { userId: 28886 }, watchdog.config, currentNow);
+    const noAuthSummary = summarizeLeaveAuth(noAuth, watchdog.config, currentNow);
+    if (noAuthSummary.directLeaveReady || !noAuthSummary.missing.includes('auth-missing')) {
+      throw new Error('direct leave descriptor without auth evidence was treated as ready');
+    }
 
     let successNow = currentNow;
     const successCalls = [];
@@ -1543,7 +1587,7 @@ async function runWatchdogSelfTest(options = {}) {
       throw new Error('direct leave retry did not stop after combat-log exit confirmation');
     }
 
-    console.log(JSON.stringify({ ok: true, cases: 19 }, null, 2));
+    console.log(JSON.stringify({ ok: true, cases: 20 }, null, 2));
   } finally {
     watchdog.stop();
     fs.rmSync(root, { recursive: true, force: true });
@@ -1558,5 +1602,6 @@ module.exports = {
   redact,
   buildDirectLeaveRequest,
   normalizeLeaveAuth,
+  leaveAuthHasAuthEvidence,
   entryConfirmationSignal
 };
