@@ -162,6 +162,27 @@ async function runWatchdogSmoke() {
     await sleep(20);
     await server.watchdog.flushAudit();
     assert(externalCalls.some(call => call.url === `${GAME_ORIGIN}/api/leave`), 'active rescue did not call fake direct leave');
+    await requestJson(baseUrl, '/combat-log', {
+      method: 'POST',
+      body: {
+        combatId: 'watchdog-smoke-exit',
+        startedAt: Date.now(),
+        entries: [{
+          type: 'exit-audit',
+          auditKind: 'exit-confirmed',
+          at: Date.now(),
+          userId: 28886,
+          combatId: 'watchdog-smoke-exit',
+          exitAuditId: 'watchdog-smoke-exit-confirmed',
+          exitAuditLogId: 'watchdog-smoke-exit-confirmed:exit-confirmed'
+        }]
+      }
+    });
+    await sleep(20);
+    await server.watchdog.flushAudit();
+    status = await requestJson(baseUrl, '/watchdog/status');
+    assert(status.states[0]?.rescue?.confirmed === true, 'combat-log exit confirmation did not update watchdog rescue state');
+    assert(status.states[0]?.rescue?.confirmation === 'combat-log:exit-confirmed', 'watchdog rescue confirmation did not record combat-log source');
 
     status = await requestJson(baseUrl, '/watchdog/config', {
       method: 'POST',

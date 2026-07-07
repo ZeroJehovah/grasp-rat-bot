@@ -396,6 +396,46 @@ async function responseText(res) {
   return '';
 }
 
+function entryUserId(entry) {
+  if (!isObject(entry)) return null;
+  const userId = entry.userId
+    ?? entry.currentUserId
+    ?? entry.self?.id
+    ?? entry.exit?.userId
+    ?? entry.exit?.self?.id
+    ?? entry.session?.userId
+    ?? entry.control?.currentUserId
+    ?? null;
+  return userId === null || userId === undefined || userId === '' ? null : userId;
+}
+
+function entryConfirmationSignal(entry, fallbackAt = Date.now()) {
+  if (!isObject(entry)) return null;
+  const type = stringValue(entry.type || '').toLowerCase();
+  const auditKind = stringValue(entry.auditKind || '').toLowerCase();
+  const importantType = stringValue(entry.importantType || '').toLowerCase();
+  const exitReason = stringValue(entry.exitReason || entry.reason || entry.exit?.reason || entry.exit?.summary || entry.displayReason || entry.exitSummary || '');
+  const combined = `${type} ${auditKind} ${importantType} ${exitReason}`.toLowerCase();
+  const at = Number(entry.at || entry.exitAt || entry.exit?.at || entry.exit?.exitAt || entry.session?.exitAt || entry.receivedAt || fallbackAt) || fallbackAt;
+  const explicitExitAudit = type === 'exit-audit'
+    && (auditKind === 'exit-confirmed' || /exit-confirmed|leave-success|leave-http-403|external-left-user-exit-confirmed|snapshot-no-self-exit-confirmed|login-required-no-self-exit-confirmed/.test(combined));
+  const sessionEnded = importantType === 'session-end'
+    && (Number(entry.exitAt || entry.session?.exitAt || 0) > 0 || /exit-confirmed|leave-success|left-user|no-self-exit-confirmed/.test(combined));
+  if (!explicitExitAudit && !sessionEnded) return null;
+  return {
+    at,
+    userId: entryUserId(entry),
+    source: type || (importantType ? 'important-log' : 'combat-log'),
+    auditKind,
+    importantType,
+    exitReason,
+    exitAuditId: entry.exitAuditId || entry.exit?.exitAuditId || '',
+    exitAuditLogId: entry.exitAuditLogId || '',
+    importantLogId: entry.importantLogId || '',
+    combatId: entry.combatId || ''
+  };
+}
+
 class WatchdogService {
   constructor(options = {}) {
     this.dir = path.resolve(options.dir || path.join(__dirname, 'logs'));
@@ -564,6 +604,55 @@ class WatchdogService {
       heartbeatAgeMs: 0,
       sequenceGap
     };
+  }
+
+  async handleCombatLogEntries(entries, context = {}) {
+    const list = Array.isArray(entries) ? entries : [entries];
+    let confirmed = 0;
+    for (const entry of list) {
+      const signal = entryConfirmationSignal(entry, Number(context?.receivedAt || this.now()) || this.now());
+      if (!signal) continue;
+      const matches = this.matchRecordsForConfirmation(signal);
+      for (const record of matches) {
+        if (await this.confirmRecordFromSignal(record, signal)) confirmed += 1;
+      }
+    }
+    return { ok: true, checked: list.length, confirmed };
+  }
+
+  matchRecordsForConfirmation(signal) {
+    const states = Array.from(this.states.values());
+    if (!states.length) return [];
+    const signalUserId = signal?.userId;
+    if (signalUserId !== null && signalUserId !== undefined && signalUserId !== '') {
+      return states.filter(record => record.userId !== null && record.userId !== undefined && String(record.userId) === String(signalUserId));
+    }
+    const active = states.filter(record => record.rescue?.active);
+    return active.length === 1 ? active : [];
+  }
+
+  async confirmRecordFromSignal(record, signal) {
+    if (!record?.rescue) return false;
+    const rescue = record.rescue;
+    const signalAt = Number(signal?.at || this.now()) || this.now();
+    const rescueStartedAt = Number(rescue.startedAt || 0);
+    if (rescueStartedAt && signalAt < rescueStartedAt - 5000) return false;
+    if (rescue.confirmed && rescue.confirmation) return false;
+    rescue.confirmed = true;
+    rescue.confirmedAt = signalAt;
+    rescue.confirmation = `combat-log:${signal.auditKind || signal.importantType || signal.source || 'exit-confirmed'}`;
+    rescue.confirmationSignal = redact(signal);
+    rescue.active = false;
+    record.combatActive = false;
+    await this.appendAudit({
+      type: 'watchdog-exit-confirmed',
+      at: signalAt,
+      key: record.key,
+      rescueId: rescue.id || '',
+      confirmation: rescue.confirmation,
+      signal
+    });
+    return true;
   }
 
   summarizeRecord(record, now = this.now()) {
@@ -1422,11 +1511,14 @@ async function runWatchdogSelfTest(options = {}) {
       autoStart: false,
       now: () => confirmNow,
       setTimeout: fn => {
-        confirmRescue.confirmed = true;
-        confirmRescue.confirmedAt = confirmNow;
-        confirmRescue.confirmation = 'heartbeat-combat-inactive';
-        confirmRescue.active = false;
-        fn();
+        confirmWatchdog.handleCombatLogEntries([{
+          type: 'exit-audit',
+          auditKind: 'exit-confirmed',
+          at: confirmNow,
+          userId: 1,
+          exitAuditId: 'confirm-exit',
+          exitAuditLogId: 'confirm-exit:exit-confirmed'
+        }]).then(() => fn());
         return 1;
       },
       fetch: async (url, req = {}) => {
@@ -1444,12 +1536,14 @@ async function runWatchdogSelfTest(options = {}) {
       leaveAuth: makeLeaveAuth(confirmWatchdog.config, 1, confirmNow, confirmNow + 30000, 'confirm-token')
     };
     confirmRescue = { id: 'confirm-rescue', key: confirmRecord.key, active: true, confirmed: false };
+    confirmRecord.rescue = confirmRescue;
+    confirmWatchdog.states.set(confirmRecord.key, confirmRecord);
     await confirmWatchdog.runDirectLeaveAttempt(confirmRecord, confirmRescue, 'initial');
-    if (confirmCalls.length !== 1 || confirmRescue.directLeave?.reason !== 'exit-already-confirmed') {
-      throw new Error('direct leave retry did not stop after exit confirmation');
+    if (confirmCalls.length !== 1 || confirmRescue.directLeave?.reason !== 'exit-already-confirmed' || confirmRescue.confirmation !== 'combat-log:exit-confirmed') {
+      throw new Error('direct leave retry did not stop after combat-log exit confirmation');
     }
 
-    console.log(JSON.stringify({ ok: true, cases: 18 }, null, 2));
+    console.log(JSON.stringify({ ok: true, cases: 19 }, null, 2));
   } finally {
     watchdog.stop();
     fs.rmSync(root, { recursive: true, force: true });
@@ -1463,5 +1557,6 @@ module.exports = {
   mergeConfig,
   redact,
   buildDirectLeaveRequest,
-  normalizeLeaveAuth
+  normalizeLeaveAuth,
+  entryConfirmationSignal
 };
