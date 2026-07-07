@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Grasp Rat Bot Bootstrap
 // @namespace    https://github.com/grasp-rat-bot
-// @version      0.4.83
+// @version      0.4.84
 // @description  Loads, hot-updates, and supervises the Grasp Rat bot from a signed manifest.
 // @match        https://grasp-rat-game.h-e.top/*
 // @match        https://connect.linux.do/oauth2/authorize*
@@ -27,7 +27,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.4.83';
+  const BOOTSTRAP_VERSION = '0.4.84';
   const BOOTSTRAP_OWNER = 'tampermonkey';
   const REPOSITORY_URL = 'https://github.com/ZeroJehovah/grasp-rat-bot';
   const USERSCRIPT_UPDATE_URL = 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/userscript/grasp-rat-bootstrap.user.js';
@@ -37,6 +37,7 @@
   const CHASE_PANEL_VISIBLE_KEY = 'graspRatChasePanelVisible';
   const PANEL_ZOOM_NEAR_RADIUS_CM = 15100;
   const PANEL_ZOOM_FAR_RADIUS_CM = 50200;
+  const PANEL_INTERACTION_HOLD_MS = 900;
   const HOST_LAYOUT_STYLE_ID = 'grasp-rat-bot-host-layout-style';
   const INLINE_LOGIN_BUTTON_ID = 'grasp-rat-bot-inline-login';
   const PAUSED_KEY = 'graspRatBotPaused';
@@ -182,6 +183,11 @@
     lastScriptStatus: '',
     lastRemoteStatus: '',
     lastPanelUpdateAt: 0,
+    panelInteractionUntil: 0,
+    panelInteractionTimer: 0,
+    panelRenderDeferred: false,
+    panelInteractionPressed: false,
+    panelInteractionClicking: false,
     paused: false,
     pauseReason: '',
     pauseChangedAt: 0,
@@ -289,6 +295,79 @@
 
   function setSafeInterval(label, fn, ms) {
     return setInterval(() => runSafely(label, fn), ms);
+  }
+
+  function bootstrapPanelOwnsTarget(target) {
+    try {
+      return Boolean(target?.closest?.(`#${PANEL_ID},#${CHASE_PANEL_ID},#${INLINE_LOGIN_BUTTON_ID}`));
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function panelInteractionActive(t = Date.now()) {
+    return Boolean(state.panelInteractionPressed || Number(state.panelInteractionUntil || 0) > t);
+  }
+
+  function schedulePanelInteractionFlush() {
+    if (state.panelInteractionTimer) {
+      clearTimeout(state.panelInteractionTimer);
+      state.panelInteractionTimer = 0;
+    }
+    const remaining = Number(state.panelInteractionUntil || 0) - Date.now() + 20;
+    const delay = state.panelInteractionPressed && remaining <= 0 ? 120 : Math.max(0, remaining);
+    state.panelInteractionTimer = setTimeout(() => {
+      state.panelInteractionTimer = 0;
+      if (panelInteractionActive()) {
+        schedulePanelInteractionFlush();
+        return;
+      }
+      if (!state.panelRenderDeferred) return;
+      state.panelRenderDeferred = false;
+      updateBootstrapPanel(true);
+    }, delay);
+  }
+
+  function holdPanelRender(ms, options = {}) {
+    const until = Date.now() + Math.max(0, Number(ms || 0) || 0);
+    state.panelInteractionUntil = options.extend
+      ? Math.max(Number(state.panelInteractionUntil || 0), until)
+      : until;
+    schedulePanelInteractionFlush();
+  }
+
+  function noteBootstrapPanelInteraction(event) {
+    const type = String(event?.type || '');
+    const start = type === 'pointerdown' || type === 'mousedown' || type === 'touchstart';
+    const end = type === 'pointerup' || type === 'mouseup' || type === 'touchend' || type === 'touchcancel';
+    const click = type === 'click';
+    const owned = bootstrapPanelOwnsTarget(event?.target);
+    if (start && owned) {
+      state.panelInteractionPressed = true;
+      holdPanelRender(PANEL_INTERACTION_HOLD_MS, { extend: true });
+      return;
+    }
+    if (click && (owned || state.panelInteractionPressed)) {
+      state.panelInteractionPressed = false;
+      state.panelInteractionClicking = true;
+      setTimeout(() => {
+        state.panelInteractionClicking = false;
+      }, 0);
+      holdPanelRender(80);
+      return;
+    }
+    if (end && (owned || state.panelInteractionPressed)) {
+      state.panelInteractionPressed = false;
+      holdPanelRender(PANEL_INTERACTION_HOLD_MS);
+    }
+  }
+
+  function installBootstrapPanelInteractionGuard() {
+    if (state.panelInteractionGuardInstalled) return;
+    state.panelInteractionGuardInstalled = true;
+    for (const type of ['pointerdown', 'mousedown', 'touchstart', 'pointerup', 'mouseup', 'touchend', 'touchcancel', 'click']) {
+      document.addEventListener(type, noteBootstrapPanelInteraction, true);
+    }
   }
 
   function beginBusy(reason, flags = {}) {
@@ -2476,8 +2555,14 @@
   function renderBootstrapPanel(force = false) {
     if (!isGamePage()) return;
     const t = Date.now();
+    if (panelInteractionActive(t) && !state.panelInteractionClicking) {
+      state.panelRenderDeferred = true;
+      schedulePanelInteractionFlush();
+      return;
+    }
     if (!force && t - Number(state.lastPanelUpdateAt || 0) < cfg.panelUpdateMs) return;
     state.lastPanelUpdateAt = t;
+    state.panelRenderDeferred = false;
     const panel = ensureBootstrapPanel();
     if (!panel) return;
     const paused = isPaused();
@@ -4299,6 +4384,7 @@
   }
 
   if (!isGamePage()) return;
+  installBootstrapPanelInteractionGuard();
   installNativeLoginGateInterceptors();
   loginSuppressRemainingMs();
   syncPauseToPage();
