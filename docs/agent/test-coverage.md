@@ -56,9 +56,9 @@ The browser runtime should adapt page/native state into these pure helpers inste
 - service-side Clash validation preserving exact secret strings, including backslashes;
 - active-rescue ordering where the direct leave request is created before the Clash switch;
 - manual direct-leave test requiring `confirm:true`;
-- direct-leave success confirmation, timeout retry, credential-expiry retry stop, and no retry after exit confirmation.
+- direct-leave success confirmation, timeout retry, credential-expiry retry stop, and no retry after heartbeat or combat-log exit confirmation.
 
-`node combat-log-service/watchdog-smoke.js` covers the local HTTP surface end to end with a temporary service: `/health`, `/watchdog/config`, `/watchdog/heartbeat`, `/watchdog/status`, dry-run stale-heartbeat audit logging, audit redaction, active-rescue direct-leave dispatch through fake fetch, and clean disable behavior.
+`node combat-log-service/watchdog-smoke.js` covers the local HTTP surface end to end with a temporary service: `/health`, `/watchdog/config`, `/watchdog/heartbeat`, `/watchdog/status`, dry-run stale-heartbeat audit logging, audit redaction, active-rescue direct-leave dispatch through fake fetch, `/combat-log` exit-confirmation observation, and clean disable behavior.
 
 The remaining validation gap is live direct-leave proof: the actual game leave endpoint/method/body/authentication must be verified in a controlled low-risk session before setting service config `directLeave.verified=true` or relying on active automatic rescue.
 

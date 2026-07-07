@@ -199,6 +199,7 @@ async function appendCombatLog(options, payload, req) {
   const entries = normalizeEntries(payload);
   if (!entries.length) return { entries: 0, files: [] };
   const files = new Map();
+  const records = [];
   const receivedAt = Date.now();
   for (const raw of entries) {
     const entry = raw && typeof raw === 'object' ? raw : { value: raw };
@@ -214,12 +215,16 @@ async function appendCombatLog(options, payload, req) {
         userAgent: req.headers['user-agent'] || ''
       }
     };
+    records.push(record);
     const line = JSON.stringify(record) + '\n';
     files.set(filePath, (files.get(filePath) || '') + line);
   }
   for (const [filePath, text] of files) {
     await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
     await fs.promises.appendFile(filePath, text);
+  }
+  if (options.watchdogService && typeof options.watchdogService.handleCombatLogEntries === 'function') {
+    Promise.resolve(options.watchdogService.handleCombatLogEntries(records, { receivedAt, payload })).catch(() => {});
   }
   return { entries: entries.length, files: Array.from(files.keys()).map(file => path.relative(options.dir, file)) };
 }
@@ -297,7 +302,7 @@ function createServer(options) {
     try {
       const body = await readBody(req, options.maxBodyBytes);
       const payload = body ? JSON.parse(body) : null;
-      const result = await appendCombatLog(options, payload, req);
+      const result = await appendCombatLog({ ...options, watchdogService: watchdog }, payload, req);
       sendJson(res, 200, { ok: true, ...result });
     } catch (err) {
       sendJson(res, 400, { ok: false, error: err?.message || String(err) });
