@@ -86,7 +86,7 @@ window.__graspRatBotBootstrap.configureWatchdog({
 })
 ```
 
-- Remote runtime status exposes `status().watchdog`; bootstrap A shows a compact `WD` status dot once the watchdog endpoint has been configured.
+- Remote runtime status exposes `status().watchdog`; bootstrap A shows a compact `WD` status dot once the watchdog endpoint has been configured. When watchdog heartbeat is enabled, the runtime also derives `/watchdog/status` from the heartbeat endpoint and polls it every `watchdogServiceStatusMs = 2000` ms so the WD tooltip can show service dry-run/active mode, direct-leave readiness, Clash readiness, heartbeat age, and service warnings.
 - Heartbeats include page id, user id, visibility/lifecycle state, combat-active and damaged-in-combat flags, self HP/life, target summary, decision reason/pending-exit state, control state, runtime tick timing, and `leaveAuth` readiness.
 - Browser heartbeats do not send a token or direct-leave descriptor by default. To test direct leave, the operator must explicitly configure `sendLeaveDescriptor:true` with a descriptor template and keep the service-side descriptor TTL short.
 - Service-side direct leave is implemented as a configurable client with origin allow-listing, short timeout, bounded retry, request/response audit, and credential redaction. Active rescue requires `enabled=true`, `activeRescueEnabled=true`, `dryRun=false`, and `directLeave.enabled=true` plus `directLeave.verified=true`.

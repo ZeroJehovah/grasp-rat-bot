@@ -212,6 +212,7 @@
   - `watchdogEndpointConfigured = false`
   - `watchdogHeartbeatMs = 500`
   - `watchdogCombatHeartbeatMs = 200`
+  - `watchdogServiceStatusMs = 2000`
   - `watchdogHeartbeatTimeoutMs = 400`
   - `watchdogSendLeaveDescriptor = false`
   - `watchdogLeaveDescriptor = null`

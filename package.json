@@ -5,6 +5,7 @@
   "scripts": {
     "build:runtime-helper-entry": "node scripts/build-runtime-helper-entry.js",
     "test:runtime-helper-entry": "node scripts/build-runtime-helper-entry.js --self-test",
+    "test:watchdog-runtime": "node scripts/watchdog-heartbeat-runtime-self-test.js",
     "build:remote-bundled": "node scripts/build-remote-bot-bundled.js",
     "test:remote-bundled": "node scripts/build-remote-bot-bundled.js --self-test"
   },
