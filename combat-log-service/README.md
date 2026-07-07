@@ -184,6 +184,13 @@ window.__graspRatBotBootstrap.configureWatchdog({
 npm run watchdog:smoke
 ```
 
+干跑重放会在本地临时 watchdog 实例里模拟 2026-07-07 的 21 秒页面主循环停顿形态，验证 `damagedCombatStaleMs` 阈值会产生 `watchdog-would-rescue`，并确认 dry-run 不发出任何外部请求：
+
+```bash
+npm run watchdog:replay
+npm run watchdog:replay -- --stall-ms 1000 --threshold-ms 2000 --expect none
+```
+
 ## 记录范围
 
 默认记录：
