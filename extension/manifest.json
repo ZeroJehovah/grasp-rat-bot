@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Grasp Rat Bot Bootstrap",
-  "version": "0.1.60",
+  "version": "0.1.61",
   "description": "Loads, hot-updates, and supervises the Grasp Rat bot from the shared signed manifest.",
   "permissions": [
     "storage",

@@ -497,16 +497,20 @@ function createOrchestrationDecisionRuntime(runtime = {}) {
     bot.lastActionEntities = entities;
     updateOpportunityAfkStaminaObservations(realtimeEntities);
     const fullHp = isFullHp(self);
-    const avoidanceThreats = activeThreats.filter(isAvoidanceThreat);
+    const chaseMode = bot.chaseMode && typeof bot.chaseMode === 'object' ? bot.chaseMode : {};
+    const chaseTargets = Array.isArray(chaseMode.targets) ? chaseMode.targets : [];
+    const chaseMarkedTargetIds = new Set(chaseTargets.map(target => target?.id ?? target?.user_id ?? target?.userId).concat([chaseMode.selectedTargetId ?? chaseMode.selectedTarget?.id]).filter(id => id !== undefined && id !== null && id !== '').map(String));
+    const isMarkedChaseEntity = entity => chaseMarkedTargetIds.has(String(entity?.user_id ?? entity?.id ?? entity?.userId ?? ''));
+    const avoidanceThreats = activeThreats.filter(e => isAvoidanceThreat(e) && !isMarkedChaseEntity(e));
     const nearbyAvoidanceRadius = Math.max(
       Number(cfg.dangerRadius || 0) || 0,
       Number(cfg.activeAvoidMaxDistance || cfg.activeCautionRadius || 0) || 0,
       Number(cfg.recoveryAvoidRadius || 0) || 0
     );
-    const nearbyAvoidanceThreats = nearbyHumans.filter(e => e.distance <= nearbyAvoidanceRadius && isAvoidanceThreat(e));
+    const nearbyAvoidanceThreats = nearbyHumans.filter(e => e.distance <= nearbyAvoidanceRadius && isAvoidanceThreat(e) && !isMarkedChaseEntity(e));
     const highValueCoinThreats = mergeThreatLists(
       avoidanceThreats,
-      nearbyHumans.filter(e => e.native && isAvoidanceThreat(e))
+      nearbyHumans.filter(e => e.native && isAvoidanceThreat(e) && !isMarkedChaseEntity(e))
     );
     const coinThreats = highValueCoinThreats;
     bot.actionThreats = coinThreats;
@@ -1176,6 +1180,4 @@ function createOrchestrationDecisionRuntime(runtime = {}) {
   };
 }
 
-module.exports = {
-  createOrchestrationDecisionRuntime
-};
+module.exports = { createOrchestrationDecisionRuntime };

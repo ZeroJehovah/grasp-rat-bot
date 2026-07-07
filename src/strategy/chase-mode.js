@@ -1,6 +1,54 @@
 'use strict';
 
 const CHASE_MODE_STATE_VERSION = 1;
+const CHASE_INVULNERABLE_TICK_MS = 50;
+
+const INVULNERABLE_MS_FIELDS = [
+  'invulnerable_remaining_ms',
+  'invincible_remaining_ms',
+  'invulnerability_remaining_ms',
+  'invulnerableRemainingMs',
+  'invincibleRemainingMs',
+  'invulnerabilityRemainingMs',
+  'invulnerable_ms',
+  'invincible_ms',
+  'invulnerability_ms',
+  'immune_remaining_ms',
+  'immuneRemainingMs'
+];
+
+const INVULNERABLE_TICK_FIELDS = [
+  'invulnerable_remaining_ticks',
+  'invincible_remaining_ticks',
+  'invulnerability_remaining_ticks',
+  'invulnerableTicks',
+  'invulnerableRemainingTicks',
+  'invincibleRemainingTicks',
+  'invulnerabilityRemainingTicks',
+  'invulnerable_ticks',
+  'invincible_ticks',
+  'invulnerability_ticks',
+  'invulnerable_tick',
+  'invincible_tick',
+  'invulnerability_tick'
+];
+
+const INVULNERABLE_GENERIC_REMAINING_FIELDS = [
+  'invulnerable_remaining',
+  'invincible_remaining',
+  'invulnerability_remaining',
+  'invulnerableRemaining',
+  'invincibleRemaining',
+  'invulnerabilityRemaining'
+];
+
+const INVULNERABLE_FLAG_FIELDS = [
+  'invulnerable',
+  'is_invulnerable',
+  'isInvulnerable',
+  'immune',
+  'is_immune'
+];
 
 function finiteNumber(value) {
   const number = Number(value);
@@ -15,6 +63,37 @@ function finiteOrUndefined(value) {
 function roundedOrNull(value) {
   const number = finiteNumber(value);
   return number === null ? null : Math.round(number);
+}
+
+function truthyFlag(value) {
+  return value === true || value === 1 || value === '1' || value === 'true';
+}
+
+function positiveFieldValue(source, fields) {
+  if (!source || typeof source !== 'object') return null;
+  let picked = null;
+  for (const field of fields) {
+    const value = finiteNumber(source[field]);
+    if (value === null || value <= 0) continue;
+    picked = picked === null ? value : Math.max(picked, value);
+  }
+  return picked;
+}
+
+function chaseInvulnerableState(target) {
+  const remainingMs = positiveFieldValue(target, INVULNERABLE_MS_FIELDS);
+  const remainingTicks = positiveFieldValue(target, INVULNERABLE_TICK_FIELDS);
+  const genericRemaining = positiveFieldValue(target, INVULNERABLE_GENERIC_REMAINING_FIELDS);
+  const resolvedTicks = remainingTicks !== null ? remainingTicks : genericRemaining;
+  const resolvedMs = remainingMs !== null
+    ? remainingMs
+    : (resolvedTicks !== null ? resolvedTicks * CHASE_INVULNERABLE_TICK_MS : null);
+  const flag = INVULNERABLE_FLAG_FIELDS.some(field => truthyFlag(target?.[field]));
+  return {
+    invulnerable: Boolean(flag || remainingMs !== null || resolvedTicks !== null),
+    invulnerableRemainingMs: resolvedMs === null ? null : Math.max(0, Math.round(resolvedMs)),
+    invulnerableRemainingTicks: resolvedTicks === null ? null : Math.max(0, Math.round(resolvedTicks))
+  };
 }
 
 function explicitObservedAtValue(target) {
@@ -139,6 +218,7 @@ function normalizeChaseCandidate(raw, options = {}) {
   const minimapOnly = Boolean(raw?.minimapOnly || source === 'minimap');
   const drop = chaseDropValue(raw);
   const hp = chaseHpValue(raw);
+  const invulnerableState = chaseInvulnerableState(raw);
   return {
     id,
     user_id: raw.user_id ?? raw.userId ?? raw.id ?? id,
@@ -165,7 +245,9 @@ function normalizeChaseCandidate(raw, options = {}) {
     stale: Boolean(raw?.stale),
     mode: raw?.current_join_mode || raw?.mode || '',
     life: raw?.life || '',
-    invulnerable: Boolean(raw?.invulnerable),
+    invulnerable: invulnerableState.invulnerable,
+    invulnerableRemainingMs: invulnerableState.invulnerableRemainingMs,
+    invulnerableRemainingTicks: invulnerableState.invulnerableRemainingTicks,
     whitelisted: Boolean(raw?.whitelisted),
     active: Boolean(raw?.active || raw?.currentlyActive),
     afk: raw?.afk === undefined ? undefined : Boolean(raw.afk)
@@ -188,6 +270,7 @@ function mergeChaseCandidate(previous, next, options = {}) {
   const nextRank = sourceRank(next);
   const preferNextPosition = nextRank > previousRank
     || (nextRank === previousRank && Number(next.observedAt || 0) >= Number(previous.observedAt || 0));
+  const preferNextStatus = preferNextPosition;
   const nearMs = Math.max(0, Number(options.nearMs || 2000) || 2000);
   const previousDrop = finiteNumber(previous.drop);
   const nextDrop = finiteNumber(next.drop);
@@ -224,6 +307,9 @@ function mergeChaseCandidate(previous, next, options = {}) {
     minimapOnly: Boolean((previous.minimapOnly && next.minimapOnly) || (!previous.visible && next.minimapOnly)),
     visible: Boolean(previous.visible || next.visible),
     seekableNow: Boolean(previous.seekableNow || next.seekableNow),
+    invulnerable: preferNextStatus ? Boolean(next.invulnerable) : Boolean(previous.invulnerable),
+    invulnerableRemainingMs: preferNextStatus ? next.invulnerableRemainingMs : previous.invulnerableRemainingMs,
+    invulnerableRemainingTicks: preferNextStatus ? next.invulnerableRemainingTicks : previous.invulnerableRemainingTicks,
     observedAt: Math.max(Number(previous.observedAt || 0), Number(next.observedAt || 0)),
     observedAtExplicit: explicitObservedAt > 0,
     explicitObservedAt,
@@ -305,6 +391,9 @@ function chaseCandidateDisplay(candidate) {
     native: Boolean(candidate.native),
     render: Boolean(candidate.render),
     realtime: Boolean(candidate.realtime),
+    invulnerable: Boolean(candidate.invulnerable),
+    invulnerableRemainingMs: roundedOrNull(candidate.invulnerableRemainingMs),
+    invulnerableRemainingTicks: roundedOrNull(candidate.invulnerableRemainingTicks),
     status: candidate.status || '',
     reason: candidate.reason || '',
     staminaBlocked: Boolean(candidate.staminaBlocked),
@@ -415,6 +504,9 @@ function decorateChaseTargets(state, candidates, options = {}) {
       visible: Boolean(candidate?.visible),
       seekableNow: Boolean(candidate?.seekableNow),
       attackableNow: Boolean(candidate?.attackableNow),
+      invulnerable: Boolean(candidate?.invulnerable),
+      invulnerableRemainingMs: roundedOrNull(candidate?.invulnerableRemainingMs),
+      invulnerableRemainingTicks: roundedOrNull(candidate?.invulnerableRemainingTicks),
       stale,
       marked: true,
       markedAt: target.markedAt || 0,

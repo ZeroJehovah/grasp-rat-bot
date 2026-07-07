@@ -4,14 +4,15 @@ Update this file for every remote bot release or handoff-relevant state change. 
 
 ## Latest Release
 
-- Latest remote bot: `bootstrap-0.4.595`.
-- Latest manifest SHA-256: `c7e0324edc55ed27bda893136f2ff0bce65a93b49175be72eb3780c623ace6fd`.
-- Latest remote release commit: `5883bc2` (`bootstrap-0.4.595` suppresses confirmed chase kills from the `可追杀` candidate pool until a newer explicit observation arrives).
-- Latest bootstrap A versions: Tampermonkey `0.4.81`, extension `0.1.60`.
-- Latest direct entry/config SHA-256: `d7167721cd0553eda202d23dd483e7c02bdfcc664f4daed27eab1ccfaa9d27da`.
+- Latest remote bot: `bootstrap-0.4.596`.
+- Latest manifest SHA-256: `a29ed06af4aed81d36a5e0d9b10f64c9363fb6e1d4242172c0eda5f78dc52406`.
+- Latest remote release commit: pending this release commit (`bootstrap-0.4.596` keeps invulnerable chase targets selectable and seekable while displaying their remaining invulnerability time).
+- Latest bootstrap A versions: Tampermonkey `0.4.82`, extension `0.1.61`.
+- Latest direct entry/config SHA-256: `4f6a19b1d34b2bf7adec87ec72dd461db8dd0adb29b379c8ec12a344a7ce15fb`.
 
 ## Current Handoff
 
+- `bootstrap-0.4.596` changes chase-mode invulnerable handling: `status().chaseMode` candidates and selected targets now carry `invulnerable`, `invulnerableRemainingMs`, and `invulnerableRemainingTicks`, and bootstrap A displays the remaining time in the `追杀` panel. Invulnerable targets can still be marked and selected as chase targets; a marked invulnerable target is excluded only from the generic invulnerable-avoidance branch for that same target so chase mode keeps moving toward and following it. Combat handoff remains blocked until the target is visible, in range, and no longer invulnerable, so the bot waits/follows inside range instead of shooting during invulnerability. Strategy self-tests cover invulnerable remaining-time normalization and seekability. Bootstrap A Tampermonkey `0.4.82` and extension `0.1.61` carry the panel display change.
 - `bootstrap-0.4.595` changes chase-mode confirmed-kill handling: once kill history matches a marked chase target, the target is cleared from `localStorage.graspRatChaseModeTargets` and the same id is also suppressed from the `可追杀` panel/action candidate pool. The suppression is in-memory and hot-update preserved, and it releases only after an explicit observation newer than the kill time is pulled; that later observation must still pass normal Drop/whitelist filters before the target can be marked again. This prevents stale native/render/snapshot residue from immediately re-adding a just-killed target while still allowing future respawn/new Drop observations to re-enter normally. Strategy self-tests now cover killed-target suppression until newer explicit observation.
 - `bootstrap-0.4.594` fixes the post-stamina-hold `bot login started` 45s loop. The July 7 logs show the bot exited at 00:48:14-00:49:05 Asia/Shanghai for a normal 1h `stamina-budget-coin-leave` hold, not 1d exhaustion, and no later `session-start` appeared after the 30-minute relogin hold. Remote script B and bootstrap A now require observable login-start evidence after a native login-control click or page-global login call before writing the 45s grace; no-op attempts record `login-start-no-evidence` / `登录未启动，等待重试` and stay on the short retry cooldown. Bootstrap A Tampermonkey `0.4.81` and extension `0.1.60` carry the same evidence gate.
 - `bootstrap-0.4.593` changes the post-login page-native view-radius target from 500m to 502m (`postLoginZoomFitRadiusCm = 50200`, direct `setViewRadius(50200)` before one-way wheel fallback). Bootstrap A Tampermonkey `0.4.80` and extension `0.1.59` add two dashed-circle buttons on the current-time row: red calls page-native `setViewRadius(15100)` for 151m, and blue calls `setViewRadius(50200)` for 502m.
@@ -73,7 +74,7 @@ Update this file for every remote bot release or handoff-relevant state change. 
 
 ## Latest Validation Baseline
 
-The latest `bootstrap-0.4.595` release validation passed. Run build-producing commands and manifest-reading validation sequentially, not in parallel; `node scripts/build-remote-bot.js --version ...` rewrites `dist/manifest.json`, while `objective-status` and `verify-objective-build` read it.
+The latest `bootstrap-0.4.596` release validation passed. Run build-producing commands and manifest-reading validation sequentially, not in parallel; `node scripts/build-remote-bot.js --version ...` rewrites `dist/manifest.json`, while `objective-status` and `verify-objective-build` read it.
 
 ```bash
 node grasp-rat-bot.js --self-test
@@ -90,7 +91,7 @@ node --check extension/popup.js
 cd combat-log-service && npm test
 npm run test:runtime-helper-entry
 npm run test:remote-bundled
-node scripts/build-remote-bot.js --version bootstrap-0.4.595
+node scripts/build-remote-bot.js --version bootstrap-0.4.596
 node scripts/verify-objective-build.js
 git diff --check
 ```

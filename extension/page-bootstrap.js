@@ -3,7 +3,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.1.60';
+  const BOOTSTRAP_VERSION = '0.1.61';
   const BOOTSTRAP_OWNER = 'extension';
   const REPOSITORY_URL = 'https://github.com/ZeroJehovah/grasp-rat-bot';
   const LOADER_UPDATE_URL = 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/extension/page-bootstrap.js';
@@ -2207,12 +2207,23 @@
     return name || ('#' + String(candidate?.id ?? candidate?.user_id ?? '-'));
   }
 
+  function chaseInvulnerableText(candidate) {
+    if (!candidate?.invulnerable) return '';
+    const remainingMs = Number(candidate.invulnerableRemainingMs);
+    if (Number.isFinite(remainingMs) && remainingMs > 0) return '无敌 ' + formatDuration(remainingMs);
+    const remainingTicks = Number(candidate.invulnerableRemainingTicks);
+    if (Number.isFinite(remainingTicks) && remainingTicks > 0) return '无敌 ' + formatDuration(remainingTicks * 50);
+    return '无敌';
+  }
+
   function chaseCandidateStatusText(candidate) {
     if (!candidate) return '';
     if (candidate.status) {
       const status = String(candidate.status).trim();
+      if (status === '无敌') return chaseInvulnerableText(candidate) || status;
       return status === '视野' ? '' : status;
     }
+    if (candidate.invulnerable) return chaseInvulnerableText(candidate);
     if (candidate.attackableNow) return '射程内';
     if (candidate.visible) return '';
     if (candidate.minimapOnly) return 'minimap';

@@ -35,7 +35,7 @@ Do not run manifest/build-producing commands in parallel with manifest-reading v
 - opportunity choice, candidate, pick, clear, persistence, and missing-held behavior;
 - patrol and post-attack drop behavior;
 - stamina-budget summaries/selectors;
-- chase-mode candidate aggregation, panel union selection, target stickiness, stale/low-Drop state exposure, visible low-Drop clear grace, killed-target candidate suppression until explicit newer observation, and active-chase post-attack drop wait eligibility;
+- chase-mode candidate aggregation, invulnerable remaining-time normalization and seekability, panel union selection, target stickiness, stale/low-Drop state exposure, visible low-Drop clear grace, killed-target candidate suppression until explicit newer observation, and active-chase post-attack drop wait eligibility;
 - combat constants and opportunity constants;
 - ROI calculations.
 
