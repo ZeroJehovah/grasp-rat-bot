@@ -1426,12 +1426,15 @@ async function main() {
     }
   });
 
-  check('bootstrap panels suppress stale relogin chrome after fresh alive self or accepted login', () => {
+  check('bootstrap panels suppress stale relogin chrome after fresh alive self accepted login or page-load login', () => {
     for (const [label, source] of [['userscript', userscriptText], ['extension', extensionBootstrapText]]) {
       assert(source.includes('...(snapshot.pointSafety || {}),'), `${label} relogin gate status does not preserve full point-safety fields`);
       assert(source.includes('lastExitSelfHpAt: Math.max(0, Math.round(Number(point.lastExitSelfHpAt || point.lastExitHpAt || 0) || 0))'), `${label} missing login-point exit timestamp for panel suppression`);
+      assert(source.includes('function panelHasExitDetailEventAtOrAfter'), `${label} missing page/load scoped exit-event guard`);
       assert(source.includes('function panelHasPostLoginAttemptReloginEvidence'), `${label} missing post-login relogin-evidence guard`);
-      assert(source.includes('panelHasPostLoginAttemptReloginEvidence(status, attemptAt)'), `${label} accepted-login suppression ignores newer relogin evidence`);
+      assert(source.includes('if (panelHasExitDetailEventAtOrAfter(status, sinceAt)) return true;'), `${label} accepted-login suppression ignores newer exit events`);
+      assert(source.includes('if (options.confirmedLogin) return false;'), `${label} confirmed login can be cancelled by gate-only relogin activity`);
+      assert(source.includes('panelHasPostLoginAttemptReloginEvidence(status, attemptAt, { confirmedLogin: true })'), `${label} accepted-login detector does not preserve confirmed-login semantics`);
       assert(source.includes('function panelHasFreshAliveSelf'), `${label} missing fresh alive self detector`);
       assert(source.includes('if (waitReasonPrefersLastExit(status)) return false;'), `${label} fresh self detector can treat relogin wait lastSelf as live self`);
       assert(source.includes('const stamp = panelSelfStamp(candidate);'), `${label} fresh self detector can ignore self timestamps`);
@@ -1439,8 +1442,12 @@ async function main() {
       assert(source.includes('function panelHasRecentLoginConfirmation'), `${label} missing accepted-login transition detector`);
       assert(source.includes('const attemptAt = panelRecentLoginAttemptAt(status, t);'), `${label} accepted-login detector is not tied to a recent login attempt`);
       assert(source.includes('if (!attemptAt || hasLoginRequiredText()) return false;'), `${label} accepted-login detector can pass without an attempt or while logged out`);
+      assert(source.includes('function panelHasCurrentPageLoginConfirmation'), `${label} missing page-load login confirmation detector`);
+      assert(source.includes('if (panelHasExitDetailEventAtOrAfter(status, pageLoadAt)) return false;'), `${label} page-load suppression can hide a current-page exit`);
       assert(source.includes('function panelSuppressesReloginChrome'), `${label} missing shared relogin chrome suppression guard`);
-      assert(source.includes('panelHasFreshAliveSelf(status, self, t) || panelHasRecentLoginConfirmation(status, t)'), `${label} shared suppression guard does not combine fresh self and accepted login`);
+      assert(source.includes('panelHasFreshAliveSelf(status, self, t)'), `${label} shared suppression guard does not include fresh self`);
+      assert(source.includes('panelHasRecentLoginConfirmation(status, t)'), `${label} shared suppression guard does not include accepted login`);
+      assert(source.includes('panelHasCurrentPageLoginConfirmation(status, t)'), `${label} shared suppression guard does not include page-load login confirmation`);
       assert(source.includes('if (panelSuppressesReloginChrome(status)) return 0;'), `${label} relogin hold can survive suppression guard`);
       assert(source.includes('if (panelSuppressesReloginChrome(status)) return false;'), `${label} inline login can survive suppression guard`);
       assert(source.includes('const suppressReloginChrome = panelSuppressesReloginChrome(status, self, t);'), `${label} panel render does not compute suppression guard`);
