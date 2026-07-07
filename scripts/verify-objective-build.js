@@ -1421,20 +1421,27 @@ async function main() {
     for (const [label, source] of [['userscript', userscriptText], ['extension', extensionBootstrapText]]) {
       assert(source.includes('const reconnectEventCount = Number(control.nativeReconnectEventCount || 0) || 0;'), `${label} missing reconnect event count normalization`);
       assert(source.includes('const wsRecovered = Boolean(control.wsOpen || control.nativeWsOpen || control.rawWsOpen);'), `${label} missing websocket recovery check for reconnect display`);
-      assert(source.includes('const showReconnectLine = Boolean(control.nativeReconnectChurn || (!wsRecovered && reconnectEventCount > 0));'), `${label} shows benign reconnect history after websocket recovery`);
+      assert(source.includes('const showReconnectLine = Boolean(!suppressReloginChrome && (control.nativeReconnectChurn || (!wsRecovered && reconnectEventCount > 0)));'), `${label} shows benign reconnect history after websocket recovery or post-login suppression`);
       assert(source.includes("appendLine('重连：' + formatNumber(reconnectEventCount, '0')"), `${label} reconnect display does not use normalized count`);
     }
   });
 
-  check('bootstrap panels suppress stale relogin chrome after fresh alive self', () => {
+  check('bootstrap panels suppress stale relogin chrome after fresh alive self or accepted login', () => {
     for (const [label, source] of [['userscript', userscriptText], ['extension', extensionBootstrapText]]) {
       assert(source.includes('function panelHasFreshAliveSelf'), `${label} missing fresh alive self detector`);
-      assert(source.includes('if (panelHasFreshAliveSelf(status)) return 0;'), `${label} relogin hold can survive fresh alive self`);
-      assert(source.includes('if (panelHasFreshAliveSelf(status)) return false;'), `${label} inline login can survive fresh alive self`);
-      assert(source.includes('const freshAliveSelf = panelHasFreshAliveSelf(status, self, t);'), `${label} panel render does not compute fresh alive self`);
-      assert(source.includes("const rawReasonDetail = freshAliveSelf && waitReasonPrefersLastExit(status)"), `${label} panel reason can show stale relogin exit detail after fresh alive self`);
-      assert(source.includes('const panelWsRecovered = Boolean(control.wsOpen || control.nativeWsOpen || control.rawWsOpen || freshAliveSelf);'), `${label} WS dot does not recover from fresh alive self`);
-      assert(source.includes('if (!freshAliveSelf && reloginGateVisible(status, hold))'), `${label} relogin gate can show during fresh alive self`);
+      assert(source.includes('const stamp = panelSelfStamp(candidate);'), `${label} fresh self detector can ignore self timestamps`);
+      assert(source.includes('return Boolean(stamp && t - stamp <= 5000);'), `${label} fresh self detector can treat stale lastSelf as fresh`);
+      assert(source.includes('function panelHasRecentLoginConfirmation'), `${label} missing accepted-login transition detector`);
+      assert(source.includes('const attemptAt = panelRecentLoginAttemptAt(status, t);'), `${label} accepted-login detector is not tied to a recent login attempt`);
+      assert(source.includes('if (!attemptAt || hasLoginRequiredText()) return false;'), `${label} accepted-login detector can pass without an attempt or while logged out`);
+      assert(source.includes('function panelSuppressesReloginChrome'), `${label} missing shared relogin chrome suppression guard`);
+      assert(source.includes('panelHasFreshAliveSelf(status, self, t) || panelHasRecentLoginConfirmation(status, t)'), `${label} shared suppression guard does not combine fresh self and accepted login`);
+      assert(source.includes('if (panelSuppressesReloginChrome(status)) return 0;'), `${label} relogin hold can survive suppression guard`);
+      assert(source.includes('if (panelSuppressesReloginChrome(status)) return false;'), `${label} inline login can survive suppression guard`);
+      assert(source.includes('const suppressReloginChrome = panelSuppressesReloginChrome(status, self, t);'), `${label} panel render does not compute suppression guard`);
+      assert(source.includes("const rawReasonDetail = suppressReloginChrome && waitReasonPrefersLastExit(status)"), `${label} panel reason can show stale relogin exit detail during suppression guard`);
+      assert(source.includes('const panelWsRecovered = Boolean(control.wsOpen || control.nativeWsOpen || control.rawWsOpen || suppressReloginChrome);'), `${label} WS dot does not recover during suppression guard`);
+      assert(source.includes('if (!suppressReloginChrome && reloginGateVisible(status, hold))'), `${label} relogin gate can show during suppression guard`);
     }
   });
 

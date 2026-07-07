@@ -3,7 +3,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.1.65';
+  const BOOTSTRAP_VERSION = '0.1.66';
   const BOOTSTRAP_OWNER = 'extension';
   const REPOSITORY_URL = 'https://github.com/ZeroJehovah/grasp-rat-bot';
   const LOADER_UPDATE_URL = 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/extension/page-bootstrap.js';
@@ -839,6 +839,7 @@
 
   function reloginGateVisible(status, reloginHold = 0) {
     if (!status) return false;
+    if (panelSuppressesReloginChrome(status)) return false;
     if (Number(reloginHold || 0) > 0) return true;
     const reason = String(status?.lastDecision?.reason || status?.login?.lastResult?.reason || '');
     if (/login|relogin|snapshot-gate|no-self|not-alive|session-mismatch|game-session-connecting|offline-leave-wait|enemy-leave-wait|pursuit-leave-wait/.test(reason)) return true;
@@ -2057,8 +2058,92 @@
     return Boolean(stamp && t - stamp <= 5000);
   }
 
+  function pageHasVisibleLeaveControl() {
+    const direct = document.getElementById('leaveBtn');
+    if (direct && visible(direct)) return true;
+    const candidates = Array.from(document.querySelectorAll('button, input[type="submit"], input[type="button"], [role="button"]'));
+    return candidates.some(el => visible(el) && /leave|logout|sign out|退出|离开/i.test(controlText(el)));
+  }
+
+  function panelRecentLoginAttemptAt(status, t = Date.now()) {
+    const graceMs = Math.max(5000, Number(cfg.postLoginGraceMs || DEFAULTS.postLoginGraceMs) || DEFAULTS.postLoginGraceMs);
+    const values = [
+      Number(state.lastLoginAt || 0) || 0,
+      Number(status?.login?.lastAt || 0) || 0
+    ];
+    const suppress = currentSuppressEntry();
+    if (/^(?:bot )?login started$|oauth callback/i.test(String(suppress.reason || ''))) {
+      const inferredAt = Number(suppress.until || 0) - graceMs;
+      if (Number.isFinite(inferredAt) && inferredAt > 0) values.push(inferredAt);
+    }
+    const at = Math.max(...values);
+    return at > 0 && t - at <= Math.max(graceMs, 60000) ? at : 0;
+  }
+
+  function panelCurrentUserId(status) {
+    const inputText = String(document.getElementById('userId')?.value || '').trim();
+    const inputId = Number(inputText);
+    if (Number.isFinite(inputId) && inputId > 0) return inputId;
+    return Number(currentUserIdFromStatus(status) || 0) || 0;
+  }
+
+  function escapeRegExpText(value) {
+    return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
+  function panelChatTextTail() {
+    const roots = [];
+    for (const selector of ['#chat', '#chatLog', '#chatMessages', '.chat', '.chat-log', '.chat-messages', '.log', '.side']) {
+      try {
+        for (const el of document.querySelectorAll(selector)) {
+          if (el && !roots.includes(el)) roots.push(el);
+        }
+      } catch (_) {}
+    }
+    if (!roots.length && document.body) roots.push(document.body);
+    return roots
+      .map(el => String(el?.innerText || el?.textContent || ''))
+      .join('\n')
+      .slice(-8000);
+  }
+
+  function panelChatLineTimeAt(line, t = Date.now()) {
+    const match = String(line || '').match(/\b([01]?\d|2[0-3]):([0-5]\d):([0-5]\d)\b/);
+    if (!match) return 0;
+    const date = new Date(t);
+    date.setHours(Number(match[1]), Number(match[2]), Number(match[3]), 0);
+    let at = date.getTime();
+    if (at - t > 3600000) at -= 24 * 60 * 60 * 1000;
+    return at;
+  }
+
+  function panelRecentLoginOkSeen(status, sinceAt, t = Date.now()) {
+    const userId = panelCurrentUserId(status);
+    const loginOkRe = userId
+      ? new RegExp('login\\s+ok\\s+User\\s+' + escapeRegExpText(userId), 'i')
+      : /login\s+ok\s+User\s+\d+/i;
+    const graceMs = Math.max(5000, Number(cfg.postLoginGraceMs || DEFAULTS.postLoginGraceMs) || DEFAULTS.postLoginGraceMs);
+    for (const line of panelChatTextTail().split(/\n+/).slice(-80)) {
+      if (!loginOkRe.test(line)) continue;
+      const at = panelChatLineTimeAt(line, t);
+      if (at && at + 2000 >= sinceAt && t - at <= Math.max(graceMs, 60000)) return true;
+    }
+    return false;
+  }
+
+  function panelHasRecentLoginConfirmation(status, t = Date.now()) {
+    const attemptAt = panelRecentLoginAttemptAt(status, t);
+    if (!attemptAt || hasLoginRequiredText()) return false;
+    if (pageHasVisibleLeaveControl() && pageLooksLoggedIn(status)) return true;
+    return panelRecentLoginOkSeen(status, attemptAt, t);
+  }
+
+  function panelSuppressesReloginChrome(status, self = null, t = Date.now()) {
+    return Boolean(panelHasFreshAliveSelf(status, self, t) || panelHasRecentLoginConfirmation(status, t));
+  }
+
   function reloginHoldRemainingFromStatus(status) {
-    if (panelHasFreshAliveSelf(status)) return 0;
+    if (panelSuppressesReloginChrome(status)) return 0;
     const persistent = activePersistentExitDetail(status);
     return Math.max(
       0,
@@ -2071,7 +2156,7 @@
   }
 
   function shouldShowInlineLogin(status) {
-    if (panelHasFreshAliveSelf(status)) return false;
+    if (panelSuppressesReloginChrome(status)) return false;
     const reloginHold = reloginHoldRemainingFromStatus(status);
     return reloginHold > 0
       || waitReasonPrefersLastExit(status)
@@ -2617,8 +2702,8 @@
     const decision = status?.lastDecision || null;
     const todaySession = status?.todaySession || {};
     const self = status?.self || decision?.self || status?.lastSelf || lastDailyStaminaSelf(status) || null;
-    const freshAliveSelf = panelHasFreshAliveSelf(status, self, t);
-    const rawReasonDetail = freshAliveSelf && waitReasonPrefersLastExit(status)
+    const suppressReloginChrome = panelSuppressesReloginChrome(status, self, t);
+    const rawReasonDetail = suppressReloginChrome && waitReasonPrefersLastExit(status)
       ? ''
       : panelReasonDetail(decision, status);
     const reasonDetail = state.cloudflareError?.displayReason || rawReasonDetail || '';
@@ -2627,7 +2712,7 @@
     const manifest = readCachedManifest();
     const bVersion = status?.version || manifest?.version || state.lastManifestVersion || '-';
     const aVersion = BOOTSTRAP_VERSION;
-    const panelWsRecovered = Boolean(control.wsOpen || control.nativeWsOpen || control.rawWsOpen || freshAliveSelf);
+    const panelWsRecovered = Boolean(control.wsOpen || control.nativeWsOpen || control.rawWsOpen || suppressReloginChrome);
     const wsLabel = panelWsRecovered ? 'online' : (control.connecting ? 'connecting' : 'offline');
     const wsColor = panelWsRecovered ? '#86efac' : (control.connecting ? '#fde68a' : '#fca5a5');
     const wsTitle = 'WS ' + wsLabel;
@@ -2651,8 +2736,8 @@
       + '，待发 ' + formatNumber(remoteLogPending, '0')
       + '，失败 ' + formatNumber(remoteLogFailed, '0')
       + (combatLogStatus.lastError ? '，最近错误 ' + String(combatLogStatus.lastError) : '');
-    const persistent = freshAliveSelf ? null : activePersistentExitDetail(status);
-    const reloginHold = freshAliveSelf ? 0 : (status?.enemyLeave?.holdRemainingMs || status?.pursuitLeave?.holdRemainingMs || status?.offlineLeave?.holdRemainingMs || persistent?.holdRemainingMs || 0);
+    const persistent = suppressReloginChrome ? null : activePersistentExitDetail(status);
+    const reloginHold = suppressReloginChrome ? 0 : (status?.enemyLeave?.holdRemainingMs || status?.pursuitLeave?.holdRemainingMs || status?.offlineLeave?.holdRemainingMs || persistent?.holdRemainingMs || 0);
     const statusText = paused ? '暂停' : (status?.running ? '运行' : '未运行');
     const statusTitle = 'BOT ' + statusText + (paused && state.pauseReason ? '：' + state.pauseReason : '');
     const statusColor = paused ? '#fca5a5' : (status?.running ? '#86efac' : '#fde68a');
@@ -2999,7 +3084,7 @@
         { text: reasonDetail, style: 'color:#94a3b8' }
       ], 'font-size:11px;color:#94a3b8');
     }
-    if (!freshAliveSelf && reloginGateVisible(status, hold)) {
+    if (!suppressReloginChrome && reloginGateVisible(status, hold)) {
       for (const row of reloginGatePanelRows(status)) {
         appendLine(row.text, 'font-size:10.8px;color:' + reloginGateLineColor(row.ok, row.blocked) + ';font-variant-numeric:tabular-nums');
         if (appendParent.lastChild && row.title) appendParent.lastChild.title = row.title;
@@ -3038,7 +3123,7 @@
       appendStaminaLine();
       const reconnectEventCount = Number(control.nativeReconnectEventCount || 0) || 0;
       const wsRecovered = Boolean(control.wsOpen || control.nativeWsOpen || control.rawWsOpen);
-      const showReconnectLine = Boolean(control.nativeReconnectChurn || (!wsRecovered && reconnectEventCount > 0));
+      const showReconnectLine = Boolean(!suppressReloginChrome && (control.nativeReconnectChurn || (!wsRecovered && reconnectEventCount > 0)));
       if (showReconnectLine) {
         appendLine('重连：' + formatNumber(reconnectEventCount, '0') + ' / ' + formatDuration(control.nativeReconnectWindowMs || 0), control.nativeReconnectChurn ? 'color:#fca5a5;font-weight:700' : 'color:#cbd5e1');
       }
