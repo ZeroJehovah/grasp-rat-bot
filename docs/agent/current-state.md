@@ -4,14 +4,15 @@ Update this file for every remote bot release or handoff-relevant state change. 
 
 ## Latest Release
 
-- Latest remote bot: `bootstrap-0.4.601`.
-- Latest manifest SHA-256: `4e1a0d55ab9443ee5aa149b51399a49709144906234918528f835b5a205564ac`.
-- Latest remote release commit: `4e3d645` (`bootstrap-0.4.601` adds browser watchdog service-status polling and exposes service dry-run/active/direct-leave/Clash readiness in `status().watchdog` and the WD panel tooltip).
+- Latest remote bot: `bootstrap-0.4.602`.
+- Latest manifest SHA-256: `0699ee54206104e6a5a2343c3727343b7cf4a2b3389989c6739bd9b483e363cd`.
+- Latest remote release commit: `PENDING` (`bootstrap-0.4.602` carries structured service `activeRescue` readiness, direct-leave missing reasons, and warnings through `status().watchdog.service`).
 - Latest bootstrap A versions: Tampermonkey `0.4.91`, extension `0.1.70`.
-- Latest direct entry/config SHA-256: `477a3798b883165c10fb96fc6cb195133bb2bb5ae3e67f971e0653815bc6a35f`.
+- Latest direct entry/config SHA-256: `b29f6313ca5b0124c11581ea9d391d045d0e969049a7b12165ea80e14edf7864`.
 
 ## Current Handoff
 
+- `bootstrap-0.4.602` extends the browser-side watchdog service-status summary. `status().watchdog.service` now includes service `activeRescueArmed`, `activeRescueReasons`, `directLeaveDescriptorReadyStates`, `directLeaveMissing`, and `warnings` in addition to the previous dry-run/direct-leave/Clash/heartbeat fields. This lets the browser status preserve the service's structured "why not armed" evidence, including `auth-missing`, dry-run mode, unverified direct leave, and missing heartbeat state. The actual game direct-leave endpoint/auth and controlled active rescue validation remain open.
 - Post-release watchdog status hardening adds structured `/watchdog/status` readiness output: `activeRescue.armed`, `activeRescue.reasons`, `warnings`, and `directLeave.missing`. Active rescue now explains unarmed states such as dry-run mode, disabled/unverified direct leave, no heartbeat state, no direct-leave-ready descriptor, `auth-missing`, or invalid Clash validation without exposing raw descriptors or credentials. Live direct-leave endpoint/auth validation and controlled active rescue validation remain open.
 - `bootstrap-0.4.601` adds browser-side watchdog service-status polling. When watchdog heartbeat is enabled, Remote B derives `/watchdog/status` from the configured heartbeat endpoint every `watchdogServiceStatusMs = 2000`, summarizes service dry-run/active mode, direct-leave readiness, Clash readiness, heartbeat age, warnings, and last decision in `status().watchdog.service`, and Bootstrap A shows that state in the WD tooltip. Tampermonkey `0.4.91` and extension `0.1.70` carry the tooltip/pending-state update. The actual game direct-leave endpoint/auth and controlled active rescue validation remain open.
 - Post-release watchdog direct-leave readiness now requires authentication evidence by default (`directLeave.requireAuthEvidence=true`). A descriptor with only URL/method/userId stays unready with `auth-missing`; ready descriptors must carry a session token, Authorization/Cookie/header template, token query parameter, or token/session body evidence before active rescue can use them.
@@ -93,7 +94,7 @@ Update this file for every remote bot release or handoff-relevant state change. 
 
 ## Latest Validation Baseline
 
-The latest `bootstrap-0.4.601` release validation passed. Run build-producing commands and manifest-reading validation sequentially, not in parallel; `node scripts/build-remote-bot.js --version ...` rewrites `dist/manifest.json`, while `objective-status` and `verify-objective-build` read it.
+The latest `bootstrap-0.4.602` release validation passed. Run build-producing commands and manifest-reading validation sequentially, not in parallel; `node scripts/build-remote-bot.js --version ...` rewrites `dist/manifest.json`, while `objective-status` and `verify-objective-build` read it.
 
 ```bash
 node grasp-rat-bot.js --self-test
@@ -111,7 +112,7 @@ cd combat-log-service && npm test
 npm run test:watchdog-runtime
 npm run test:runtime-helper-entry
 npm run test:remote-bundled
-node scripts/build-remote-bot.js --version bootstrap-0.4.601
+node scripts/build-remote-bot.js --version bootstrap-0.4.602
 node scripts/verify-objective-build.js
 git diff --check
 ```

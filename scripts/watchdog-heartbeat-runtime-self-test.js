@@ -78,9 +78,20 @@ async function runSelfTest() {
             dryRun: true,
             stateCount: 1,
             states: [{ pageId: 'page-runtime-test', heartbeatAgeMs: 37 }],
-            directLeave: { enabled: true, verified: false, readyStates: 0 },
+            directLeave: {
+              enabled: true,
+              verified: false,
+              readyStates: 0,
+              descriptorReadyStates: 0,
+              missing: ['direct-leave-unverified', 'auth-missing']
+            },
+            activeRescue: {
+              armed: false,
+              reasons: ['active-rescue-disabled', 'dry-run', 'direct-leave-unverified']
+            },
             clash: { enabled: true, validation: { ok: true } },
-            warning: 'active rescue is enabled but direct leave is disabled or unverified',
+            warnings: ['active rescue is enabled but direct leave is unverified'],
+            warning: 'active rescue is enabled but direct leave is unverified',
             lastDecision: { type: 'watchdog-would-rescue', at: now - 1000 }
           })
         };
@@ -157,6 +168,11 @@ async function runSelfTest() {
   assert(status.service?.enabled === true, 'service status enabled flag missing');
   assert(status.service?.dryRun === true, 'service status dry-run flag missing');
   assert(status.service?.directLeaveVerified === false, 'service direct leave verification summary mismatch');
+  assert(status.service?.directLeaveDescriptorReadyStates === 0, 'service direct leave descriptor-ready summary mismatch');
+  assert(status.service?.directLeaveMissing?.includes('auth-missing'), 'service direct leave missing reasons summary missing');
+  assert(status.service?.activeRescueArmed === false, 'service active rescue armed summary mismatch');
+  assert(status.service?.activeRescueReasons?.includes('dry-run'), 'service active rescue reason summary missing');
+  assert(status.service?.warnings?.includes('active rescue is enabled but direct leave is unverified'), 'service warnings array summary missing');
   assert(status.service?.clashValidationOk === true, 'service Clash validation summary missing');
   assert(status.service?.heartbeatAgeMs === 37, 'service heartbeat age summary missing');
   assert(status.service?.lastDecisionType === 'watchdog-would-rescue', 'service last decision summary missing');
@@ -165,7 +181,7 @@ async function runSelfTest() {
   assert(runtime.summarizeWatchdogStatus().enabled === false, 'watchdog did not disable');
   assert(runtime.sendWatchdogHeartbeat(true) === false, 'disabled watchdog sent heartbeat after disable');
 
-  console.log(JSON.stringify({ ok: true, cases: 16 }, null, 2));
+  console.log(JSON.stringify({ ok: true, cases: 21 }, null, 2));
 }
 
 if (require.main === module) {

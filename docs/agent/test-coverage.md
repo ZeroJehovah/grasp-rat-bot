@@ -66,7 +66,7 @@ The browser runtime should adapt page/native state into these pure helpers inste
 
 The remaining validation gap is live direct-leave proof: the actual game leave endpoint/method/body/authentication must be verified in a controlled low-risk session before setting service config `directLeave.verified=true` or relying on active automatic rescue.
 
-`npm run test:watchdog-runtime` covers browser-side watchdog heartbeat behavior: disabled config sends no heartbeat, enabled config sends a direct non-batched heartbeat payload, token snapshots are omitted unless `sendLeaveDescriptor=true`, descriptor templates are preserved, `/watchdog/status` is derived from the heartbeat endpoint, and the service dry-run/direct-leave/Clash readiness summary appears in `status().watchdog`.
+`npm run test:watchdog-runtime` covers browser-side watchdog heartbeat behavior: disabled config sends no heartbeat, enabled config sends a direct non-batched heartbeat payload, token snapshots are omitted unless `sendLeaveDescriptor=true`, descriptor templates are preserved, `/watchdog/status` is derived from the heartbeat endpoint, and the service dry-run/direct-leave/Clash readiness summary appears in `status().watchdog`. It also verifies structured service readiness propagation for `activeRescueArmed`, `activeRescueReasons`, `directLeaveMissing`, descriptor-ready counts, and service `warnings`.
 
 ## Browser Runtime Coverage
 
