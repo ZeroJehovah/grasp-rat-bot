@@ -201,7 +201,7 @@ curl -X POST http://127.0.0.1:18765/watchdog/test-clash \
 ```bash
 curl -X POST http://127.0.0.1:18765/watchdog/config \
   -H 'content-type: application/json' \
-  --data '{"directLeave":{"enabled":true,"verified":true},"activeRescueEnabled":true,"dryRun":false}'
+  --data '{"directLeave":{"enabled":true,"verified":true,"requiredCookieNames":["cf_clearance"]},"activeRescueEnabled":true,"dryRun":false}'
 ```
 
 手动 direct leave 测试必须显式 `confirm: true`，可以使用最近一次心跳里的 descriptor，也可以在请求体里传入临时 descriptor。请求和审计会脱敏 token、cookie、Authorization 等字段：
@@ -229,7 +229,9 @@ window.__graspRatBotBootstrap.configureWatchdog({
 ```
 
 上面的 direct leave endpoint 只是 descriptor 形状示例；真实 endpoint、方法、请求体和认证方式必须先在低风险 live 会话中验证，再把服务端 `directLeave.verified` 设为 `true`。
-默认 `directLeave.requireAuthEvidence=true`，所以 descriptor 还必须包含可见的认证证据，例如 `sessionToken`、Authorization/Cookie/header 模板、token 查询参数或 body 里的 token/session 字段；只有 URL/method/userId 不会被标记为 direct-leave ready。
+默认 `directLeave.requireAuthEvidence=true`，所以 descriptor 还必须包含可见的认证证据，例如 `sessionToken`、Authorization/Cookie/header 模板、token 查询参数或 body 里的 token/session 字段；只有 URL/method/userId 不会被标记为 direct-leave ready。`directLeave.requiredHeaders` 和 `directLeave.requiredCookieNames` 可用于声明 live 验证后的额外必需项，缺失时状态会显示 `header:<name>` 或 `cookie:<name>`。
+
+2026-07-07 live 验证确认当前游戏 direct leave 为 `GET https://grasp-rat-game.h-e.top/leave?user_id=${userId}&token=${sessionToken}`，无请求体。Node 只带 session token 会被 Cloudflare 返回 403；验证通过的 descriptor 还需要浏览器网络层的 HttpOnly `cf_clearance` Cookie，以及常规浏览器请求上下文如 User-Agent/Accept/Referer。页面 JavaScript 不能读取 HttpOnly Cookie；本次验证用 CDP `Network.getCookies` 提供给本地 descriptor，审计中 Cookie/token 均脱敏。
 
 主动救援打开前，`/watchdog/status` 应至少满足：
 

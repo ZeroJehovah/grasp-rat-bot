@@ -52,10 +52,10 @@ The browser runtime should adapt page/native state into these pure helpers inste
 - runtime config update;
 - startup `--watchdog-config` JSON parsing, later CLI override precedence, exact Clash secret preservation, and redacted startup summary;
 - valid heartbeat ingestion and malformed heartbeat rejection;
-- direct-leave descriptor readiness, including `auth-missing` for URL/method descriptors with no token/header/query/body auth evidence;
+- direct-leave descriptor readiness, including `auth-missing` for URL/method descriptors with no token/header/query/body auth evidence and `cookie:cf_clearance` when the live game's required Cloudflare cookie is configured but missing;
 - stale damaged-combat dry-run audit logging with `watchdog-state-change`, duplicate suppression, fresh-heartbeat recovery, and token redaction;
 - service-side Clash validation preserving exact secret strings, including backslashes;
-- active-rescue ordering where the direct leave request is created before the Clash switch;
+- active-rescue ordering where the direct leave request is created before the Clash switch, and duplicate suppression that prevents the same stale heartbeat window from sending repeated direct leave requests;
 - manual direct-leave test requiring `confirm:true`;
 - `/watchdog/status` readiness reporting for `activeRescue.armed`, missing heartbeat state, no direct-leave-ready state, and `auth-missing` descriptors;
 - direct-leave success confirmation, timeout retry, credential-expiry retry stop, and no retry after heartbeat or combat-log exit confirmation.
@@ -64,7 +64,7 @@ The browser runtime should adapt page/native state into these pure helpers inste
 
 `node combat-log-service/watchdog-dry-run-replay.js --self-test` covers the synthetic July 7 main-loop-gap replay and a below-threshold negative case. It asserts that a 21s damaged-combat heartbeat stall writes exactly one `watchdog-would-rescue`, a 1s stall under a 2s threshold does not, dry-run makes no external fetch calls, and replay audit does not leak the synthetic token.
 
-The remaining validation gap is live direct-leave proof: the actual game leave endpoint/method/body/authentication must be verified in a controlled low-risk session before setting service config `directLeave.verified=true` or relying on active automatic rescue.
+Live direct-leave proof was completed on 2026-07-07. `/watchdog/test-leave` and controlled active rescue both returned 200 game JSON `event:"left"` using `GET /leave?user_id=${userId}&token=${sessionToken}` plus the browser network-layer HttpOnly `cf_clearance` cookie and normal browser request context. Token-only Node requests were confirmed to fail with Cloudflare 403 and are now kept unready by configuring `directLeave.requiredCookieNames:["cf_clearance"]`.
 
 `npm run test:watchdog-runtime` covers browser-side watchdog heartbeat behavior: disabled config sends no heartbeat, enabled config sends a direct non-batched heartbeat payload, token snapshots are omitted unless `sendLeaveDescriptor=true`, descriptor templates are preserved, `/watchdog/status` is derived from the heartbeat endpoint, and the service dry-run/direct-leave/Clash readiness summary appears in `status().watchdog`. It also verifies structured service readiness propagation for `activeRescueArmed`, `activeRescueReasons`, `directLeaveMissing`, descriptor-ready counts, and service `warnings`.
 

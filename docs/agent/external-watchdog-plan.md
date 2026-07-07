@@ -673,6 +673,15 @@ Done when:
 
 ## Validation
 
+2026-07-07 live validation result:
+
+- The live direct game leave endpoint is `GET https://grasp-rat-game.h-e.top/leave?user_id=${userId}&token=${sessionToken}` with no request body.
+- `tmpGameSessionToken` is necessary but not sufficient for Node direct leave. A Node request with only the token is blocked by Cloudflare 403.
+- The validated Node request also includes the browser network-layer HttpOnly `cf_clearance` cookie plus normal browser request context such as User-Agent/Accept/Referer. Page JavaScript cannot read `cf_clearance`; the controlled validation used CDP `Network.getCookies` as the local credential source.
+- `/watchdog/test-leave` returned 200 with game JSON `event:"left"`.
+- A controlled stale damaged-combat heartbeat with `directLeave.requiredCookieNames:["cf_clearance"]` armed active rescue, triggered at 1319ms heartbeat age, sent the direct leave request 1ms after `watchdog-rescue-start`, returned 200 `event:"left"`, and wrote exactly one start/request/result/final-result group for that stale window. Clash was disabled and did not run.
+- The service now keeps descriptors missing configured required cookies or headers unready with explicit `cookie:<name>` / `header:<name>` reasons, and suppresses repeated rescues for the same stale heartbeat window until a new heartbeat sequence/receive time opens a new window.
+
 Before enabling active rescue, validate with:
 
 - Synthetic heartbeat stall tests.
@@ -693,9 +702,9 @@ Success criteria:
 
 ## Open Questions
 
-- Which direct game leave endpoint and credentials should the watchdog use as the primary exit path?
-- Can direct leave use `tmpGameSessionToken`, or does it require HttpOnly browser cookies or another credential source?
-- Should the direct leave request descriptor be configured statically, discovered at runtime, or both?
+- Answered: the primary direct leave path is `GET /leave?user_id=${userId}&token=${sessionToken}` on `https://grasp-rat-game.h-e.top`.
+- Answered: direct leave requires both `tmpGameSessionToken` and browser network-layer Cloudflare clearance. The needed `cf_clearance` cookie is HttpOnly, so it must come from CDP or another browser-level credential source, not page JavaScript.
+- Descriptor plumbing should support both configured templates and runtime/CDP-sourced credential material. For the current live game, set `directLeave.requiredCookieNames:["cf_clearance"]` so token-only descriptors cannot arm active rescue.
 - Should hidden/frozen visibility during active damaged combat trigger immediate leave, or only lower the heartbeat stall threshold?
 - What HP/damage threshold should count as high risk for watchdog policy?
-- Should proxy switching run after direct leave or in parallel with direct leave?
+- Answered for ordering: direct leave must be created first; validated Clash may run only after or in parallel without delaying direct leave. The live validation ran with Clash disabled.

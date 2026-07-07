@@ -237,6 +237,8 @@
   - `directLeave.descriptorTtlMs = 30000`
   - `directLeave.successConfirmsExit = false`
   - `directLeave.allowedOrigins = [https://grasp-rat-game.h-e.top]`
+  - `directLeave.requiredHeaders = []`
+  - `directLeave.requiredCookieNames = []`; for the current live game direct-leave path, set this to `[cf_clearance]` when `directLeave.verified=true`, because token-only Node requests are blocked by Cloudflare.
   - `clash.enabled = false`
   - `clash.controllerUrl = http://127.0.0.1:9097`
   - `clash.group = GRASP-RAT-GAME`
