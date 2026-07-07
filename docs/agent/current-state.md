@@ -6,7 +6,7 @@ Update this file for every remote bot release or handoff-relevant state change. 
 
 - Latest remote bot: `bootstrap-0.4.594`.
 - Latest manifest SHA-256: `3541de1805170e9ea1de7d324fbd758ef95ec93812af4ee208aea469b488d7bc`.
-- Latest remote release commit: `pending` (`bootstrap-0.4.594` fixes post-hold no-op login attempts repeatedly resetting the 45s `bot login started` grace).
+- Latest remote release commit: `56a1045` (`bootstrap-0.4.594` fixes post-hold no-op login attempts repeatedly resetting the 45s `bot login started` grace).
 - Latest bootstrap A versions: Tampermonkey `0.4.81`, extension `0.1.60`.
 - Latest direct entry/config SHA-256: `2d90c81b7031fe433f13ca94c24357c39aae7113963014db90eb382ac7f3b246`.
 
