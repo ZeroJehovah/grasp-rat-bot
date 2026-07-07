@@ -1426,6 +1426,18 @@ async function main() {
     }
   });
 
+  check('bootstrap panels suppress stale relogin chrome after fresh alive self', () => {
+    for (const [label, source] of [['userscript', userscriptText], ['extension', extensionBootstrapText]]) {
+      assert(source.includes('function panelHasFreshAliveSelf'), `${label} missing fresh alive self detector`);
+      assert(source.includes('if (panelHasFreshAliveSelf(status)) return 0;'), `${label} relogin hold can survive fresh alive self`);
+      assert(source.includes('if (panelHasFreshAliveSelf(status)) return false;'), `${label} inline login can survive fresh alive self`);
+      assert(source.includes('const freshAliveSelf = panelHasFreshAliveSelf(status, self, t);'), `${label} panel render does not compute fresh alive self`);
+      assert(source.includes("const rawReasonDetail = freshAliveSelf && waitReasonPrefersLastExit(status)"), `${label} panel reason can show stale relogin exit detail after fresh alive self`);
+      assert(source.includes('const panelWsRecovered = Boolean(control.wsOpen || control.nativeWsOpen || control.rawWsOpen || freshAliveSelf);'), `${label} WS dot does not recover from fresh alive self`);
+      assert(source.includes('if (!freshAliveSelf && reloginGateVisible(status, hold))'), `${label} relogin gate can show during fresh alive self`);
+    }
+  });
+
   check('login start paths prefer native controls over page globals', () => {
     assert(runtimeControlLoginSource.includes("el.id === 'grasp-rat-bot-inline-login'"), 'control login finder does not recognize bot-owned inline login proxy');
     assert(runtimeControlLoginSource.includes("direct.dataset?.graspRatNativeLoginHidden === 'true'"), 'control login finder does not allow hidden native join control');

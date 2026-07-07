@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Grasp Rat Bot Bootstrap
 // @namespace    https://github.com/grasp-rat-bot
-// @version      0.4.85
+// @version      0.4.86
 // @description  Loads, hot-updates, and supervises the Grasp Rat bot from a signed manifest.
 // @match        https://grasp-rat-game.h-e.top/*
 // @match        https://connect.linux.do/oauth2/authorize*
@@ -27,7 +27,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.4.85';
+  const BOOTSTRAP_VERSION = '0.4.86';
   const BOOTSTRAP_OWNER = 'tampermonkey';
   const REPOSITORY_URL = 'https://github.com/ZeroJehovah/grasp-rat-bot';
   const USERSCRIPT_UPDATE_URL = 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/userscript/grasp-rat-bootstrap.user.js';
@@ -1947,7 +1947,30 @@
     return Boolean(hasNativeUser || hasToken || hasSelf || (statusUserId && controlWsLooksActive(control)));
   }
 
+  function panelSelfLooksAlive(self) {
+    if (!self || typeof self !== 'object') return false;
+    const life = String(self.life || '').toLowerCase();
+    if (/dead|death|waitingrevive|waiting_revive|死亡/.test(life)) return false;
+    const hp = Number(self.hp);
+    return !Number.isFinite(hp) || hp > 0;
+  }
+
+  function panelSelfStamp(self) {
+    return Math.max(Number(self?.updatedAt || 0) || 0, Number(self?.at || 0) || 0);
+  }
+
+  function panelHasFreshAliveSelf(status, self = null, t = Date.now()) {
+    const candidate = self || status?.lastDecision?.self || status?.self || null;
+    if (!panelSelfLooksAlive(candidate)) return false;
+    const userId = Number(currentUserIdFromStatus(status) || 0) || 0;
+    const selfId = Number(candidate?.id ?? candidate?.user_id ?? 0) || 0;
+    if (userId && selfId && userId !== selfId) return false;
+    const stamp = panelSelfStamp(candidate);
+    return Boolean(stamp && t - stamp <= 5000);
+  }
+
   function reloginHoldRemainingFromStatus(status) {
+    if (panelHasFreshAliveSelf(status)) return 0;
     const persistent = activePersistentExitDetail(status);
     return Math.max(
       0,
@@ -1960,6 +1983,7 @@
   }
 
   function shouldShowInlineLogin(status) {
+    if (panelHasFreshAliveSelf(status)) return false;
     const reloginHold = reloginHoldRemainingFromStatus(status);
     return reloginHold > 0
       || waitReasonPrefersLastExit(status)
@@ -2569,16 +2593,21 @@
     const status = getBotStatus();
     syncEntityControlLogin(status);
     const decision = status?.lastDecision || null;
-    const reasonDetail = state.cloudflareError?.displayReason || panelReasonDetail(decision, status) || '';
     const todaySession = status?.todaySession || {};
     const self = status?.self || decision?.self || status?.lastSelf || lastDailyStaminaSelf(status) || null;
+    const freshAliveSelf = panelHasFreshAliveSelf(status, self, t);
+    const rawReasonDetail = freshAliveSelf && waitReasonPrefersLastExit(status)
+      ? ''
+      : panelReasonDetail(decision, status);
+    const reasonDetail = state.cloudflareError?.displayReason || rawReasonDetail || '';
     const safety = status?.safety || {};
     const control = status?.control || {};
     const manifest = readCachedManifest();
     const bVersion = status?.version || manifest?.version || state.lastManifestVersion || '-';
     const aVersion = BOOTSTRAP_VERSION;
-    const wsLabel = control.wsOpen ? 'online' : (control.connecting ? 'connecting' : 'offline');
-    const wsColor = control.wsOpen ? '#86efac' : (control.connecting ? '#fde68a' : '#fca5a5');
+    const panelWsRecovered = Boolean(control.wsOpen || control.nativeWsOpen || control.rawWsOpen || freshAliveSelf);
+    const wsLabel = panelWsRecovered ? 'online' : (control.connecting ? 'connecting' : 'offline');
+    const wsColor = panelWsRecovered ? '#86efac' : (control.connecting ? '#fde68a' : '#fca5a5');
     const wsTitle = 'WS ' + wsLabel;
     const networkQuality = status?.networkQuality || {};
     const nearestActive = safety.nearestActive
@@ -2600,8 +2629,8 @@
       + '，待发 ' + formatNumber(remoteLogPending, '0')
       + '，失败 ' + formatNumber(remoteLogFailed, '0')
       + (combatLogStatus.lastError ? '，最近错误 ' + String(combatLogStatus.lastError) : '');
-    const persistent = activePersistentExitDetail(status);
-    const reloginHold = status?.enemyLeave?.holdRemainingMs || status?.pursuitLeave?.holdRemainingMs || status?.offlineLeave?.holdRemainingMs || persistent?.holdRemainingMs || 0;
+    const persistent = freshAliveSelf ? null : activePersistentExitDetail(status);
+    const reloginHold = freshAliveSelf ? 0 : (status?.enemyLeave?.holdRemainingMs || status?.pursuitLeave?.holdRemainingMs || status?.offlineLeave?.holdRemainingMs || persistent?.holdRemainingMs || 0);
     const statusText = paused ? '暂停' : (status?.running ? '运行' : '未运行');
     const statusTitle = 'BOT ' + statusText + (paused && state.pauseReason ? '：' + state.pauseReason : '');
     const statusColor = paused ? '#fca5a5' : (status?.running ? '#86efac' : '#fde68a');
@@ -2898,7 +2927,7 @@
     });
     statusDot.setAttribute('aria-pressed', String(paused));
     actions.appendChild(statusDot);
-    actions.appendChild(createDot(wsTitle, wsColor, control.wsOpen ? 'rgba(52,211,153,.13)' : (control.connecting ? 'rgba(251,191,36,.14)' : 'rgba(251,113,133,.13)'), control.wsOpen ? 'rgba(52,211,153,.45)' : (control.connecting ? 'rgba(251,191,36,.45)' : 'rgba(251,113,133,.45)'), {
+    actions.appendChild(createDot(wsTitle, wsColor, panelWsRecovered ? 'rgba(52,211,153,.13)' : (control.connecting ? 'rgba(251,191,36,.14)' : 'rgba(251,113,133,.13)'), panelWsRecovered ? 'rgba(52,211,153,.45)' : (control.connecting ? 'rgba(251,191,36,.45)' : 'rgba(251,113,133,.45)'), {
       label: 'WS'
     }));
     if (remoteLogVisible) {
@@ -2948,7 +2977,7 @@
         { text: reasonDetail, style: 'color:#94a3b8' }
       ], 'font-size:11px;color:#94a3b8');
     }
-    if (reloginGateVisible(status, hold)) {
+    if (!freshAliveSelf && reloginGateVisible(status, hold)) {
       for (const row of reloginGatePanelRows(status)) {
         appendLine(row.text, 'font-size:10.8px;color:' + reloginGateLineColor(row.ok, row.blocked) + ';font-variant-numeric:tabular-nums');
         if (appendParent.lastChild && row.title) appendParent.lastChild.title = row.title;
