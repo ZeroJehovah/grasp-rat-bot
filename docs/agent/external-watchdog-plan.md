@@ -126,8 +126,26 @@ The watchdog should own Clash API configuration and validation:
 - Target proxy group.
 - Rescue proxy choice or policy.
 - Startup self-test that performs a harmless authenticated read.
+- Validation after every Clash configuration change.
+- Validation after every userscript/runtime injection when page-side Clash rescue remains enabled.
 
 The 2026-07-07 incident included a page-side Clash rescue failure with HTTP `401`. A watchdog implementation should surface this as a startup/configuration failure instead of discovering it only during combat.
+
+The same class of failure can happen when the configured Clash secret contains characters that are accidentally escaped or transformed while being entered through the browser console or stored configuration. A backslash in the secret is a known risk because JavaScript string literals may interpret it as an escape prefix unless it is entered as an escaped backslash or through a safer UI path.
+
+When page-side Clash rescue remains available before the external watchdog is implemented, the script should asynchronously validate the configured Clash connection in two places:
+
+- Immediately after every call that changes Clash rescue configuration.
+- On every script injection/bootstrap, before trusting Clash rescue during combat.
+
+The validation should perform a harmless authenticated request, such as reading the configured proxy group. It should verify:
+
+- The controller URL is reachable.
+- The Authorization secret is accepted.
+- The configured proxy group exists.
+- The configured rescue proxy names exist when they will be used.
+
+If validation fails, Clash rescue should be disabled automatically for that runtime session and the reason should be visible in status/log output. A failed validation must not block or delay direct game leave requests. In the emergency path, direct leave should remain the primary action, with proxy rescue running only after or in parallel with leave.
 
 ## Implementation Phases
 
@@ -154,6 +172,8 @@ Phase 3: Direct leave rescue.
 Phase 4: Clash rescue.
 
 - Add Clash authenticated API validation at startup.
+- Add page-side Clash validation after configuration changes and after script injection while page-side rescue still exists.
+- Disable Clash rescue automatically for the runtime session when validation fails.
 - Trigger proxy switching only under configured high-risk conditions.
 - Record proxy-switch attempts and failures in watchdog logs.
 
@@ -187,4 +207,3 @@ Success criteria:
 - What HP/damage threshold should count as high risk for watchdog policy?
 - Should proxy switching run before, after, or in parallel with direct leave?
 - Should the watchdog control Chrome startup itself, or attach to an already-started debug-profile Chrome?
-
