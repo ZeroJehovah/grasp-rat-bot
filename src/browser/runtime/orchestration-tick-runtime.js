@@ -482,12 +482,14 @@ function createOrchestrationTickRuntime(runtime = {}) {
           let sessionMismatchWaitReason = 'session-mismatch-recovery';
           if (login?.attempted) sessionMismatchWaitReason = 'auto-login';
           else if (login?.reason === 'snapshot-gate') sessionMismatchWaitReason = 'login-snapshot-gate';
+          else if (login?.error) sessionMismatchWaitReason = 'login-start-no-evidence';
           else if (login?.reason === 'exit-log-flush-pending') sessionMismatchWaitReason = 'exit-log-flush-pending';
           else if (login?.reason === 'important-log-flush-pending') sessionMismatchWaitReason = 'important-log-flush-pending';
           else if (login?.reason === 'known-long-stamina-exhausted') sessionMismatchWaitReason = 'known-long-stamina-exhausted';
           let sessionMismatchDisplayReason = '界面显示未登录但原生会话仍在线，等待接管';
           if (login?.attempted) sessionMismatchDisplayReason = '界面显示未登录但原生会话仍在线，已通过接管门禁，正在重登接管';
           else if (sessionMismatchWaitReason === 'login-snapshot-gate') sessionMismatchDisplayReason = loginSnapshotGateDisplayReason(login?.snapshotGate);
+          else if (sessionMismatchWaitReason === 'login-start-no-evidence') sessionMismatchDisplayReason = '登录未启动，等待重试：' + login.error;
           else if (sessionMismatchWaitReason === 'exit-log-flush-pending') sessionMismatchDisplayReason = '等待退出日志发送完成，暂不刷新或重新登录';
           else if (sessionMismatchWaitReason === 'important-log-flush-pending') sessionMismatchDisplayReason = '等待会话结束日志发送完成，暂不刷新或重新登录';
           else if (sessionMismatchWaitReason === 'known-long-stamina-exhausted') sessionMismatchDisplayReason = login?.staminaHold?.displayReason || login?.suppressReason || '已知长周期体力耗尽，暂不登录';
@@ -572,7 +574,7 @@ function createOrchestrationTickRuntime(runtime = {}) {
         if (login?.attempted) waitReason = 'auto-login';
         else if (login?.needed) {
           if (login.reason === 'snapshot-gate') waitReason = 'login-snapshot-gate';
-          else if (login.error) waitReason = 'login-control-missing';
+          else if (login.error) waitReason = login.error === 'login control not found' ? 'login-control-missing' : 'login-start-no-evidence';
           else if (login.reason === 'suppressed') waitReason = 'login-suppressed';
           else if (login.reason === 'known-long-stamina-exhausted') waitReason = 'known-long-stamina-exhausted';
           else if (login.reason === 'exit-log-flush-pending') waitReason = 'exit-log-flush-pending';
@@ -586,6 +588,7 @@ function createOrchestrationTickRuntime(runtime = {}) {
         else if (waitReason === 'exit-log-flush-pending') loginDisplayReason = '等待退出日志发送完成，暂不刷新或重新登录';
         else if (waitReason === 'important-log-flush-pending') loginDisplayReason = '等待会话结束日志发送完成，暂不刷新或重新登录';
         else if (waitReason === 'login-snapshot-gate') loginDisplayReason = loginSnapshotGateDisplayReason(login?.snapshotGate);
+        else if (waitReason === 'login-start-no-evidence') loginDisplayReason = '登录未启动，等待重试：' + login.error;
         else if (waitReason === 'login-suppressed') loginDisplayReason = '等待重连：' + (login?.suppressReason || 'login suppressed') + (Number(login?.cooldownRemainingMs || 0) > 0 ? '，剩余' + formatDurationMs(login.cooldownRemainingMs) : '');
         else if (waitReason === 'known-long-stamina-exhausted') loginDisplayReason = login?.staminaHold?.displayReason || login?.suppressReason || '已知长周期体力耗尽，暂不登录';
 		        refreshGlobalState(false).catch(err => {

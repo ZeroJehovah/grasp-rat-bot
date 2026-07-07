@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Grasp Rat Bot Bootstrap
 // @namespace    https://github.com/grasp-rat-bot
-// @version      0.4.80
+// @version      0.4.81
 // @description  Loads, hot-updates, and supervises the Grasp Rat bot from a signed manifest.
 // @match        https://grasp-rat-game.h-e.top/*
 // @match        https://connect.linux.do/oauth2/authorize*
@@ -27,7 +27,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.4.80';
+  const BOOTSTRAP_VERSION = '0.4.81';
   const BOOTSTRAP_OWNER = 'tampermonkey';
   const REPOSITORY_URL = 'https://github.com/ZeroJehovah/grasp-rat-bot';
   const USERSCRIPT_UPDATE_URL = 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/userscript/grasp-rat-bootstrap.user.js';
@@ -78,6 +78,7 @@
     installConfirmMs: 3500,
     restartAfterCacheUpdateMs: 800,
     loginCooldownMs: 5000,
+    loginStartEvidenceMs: 700,
     postLoginGraceMs: 45000,
     authReturnGraceMs: 45000,
     authorizeCooldownMs: 1000,
@@ -128,6 +129,7 @@
     installConfirmMs: Math.max(1000, Number(GM_getValue('installConfirmMs', DEFAULTS.installConfirmMs)) || DEFAULTS.installConfirmMs),
     restartAfterCacheUpdateMs: Math.max(0, Number(GM_getValue('restartAfterCacheUpdateMs', DEFAULTS.restartAfterCacheUpdateMs)) || DEFAULTS.restartAfterCacheUpdateMs),
     loginCooldownMs: Math.max(1000, Number(GM_getValue('loginCooldownMs', DEFAULTS.loginCooldownMs)) || DEFAULTS.loginCooldownMs),
+    loginStartEvidenceMs: Math.max(0, Number(GM_getValue('loginStartEvidenceMs', DEFAULTS.loginStartEvidenceMs)) || DEFAULTS.loginStartEvidenceMs),
     postLoginGraceMs: Math.max(5000, Number(GM_getValue('postLoginGraceMs', DEFAULTS.postLoginGraceMs)) || DEFAULTS.postLoginGraceMs),
     authReturnGraceMs: Math.max(5000, Number(GM_getValue('authReturnGraceMs', DEFAULTS.authReturnGraceMs)) || DEFAULTS.authReturnGraceMs),
     authorizeCooldownMs: Math.max(250, Number(GM_getValue('authorizeCooldownMs', DEFAULTS.authorizeCooldownMs)) || DEFAULTS.authorizeCooldownMs),
@@ -761,7 +763,7 @@
   function waitOnlyExitDetailText(value) {
     const text = String(value || '').trim();
     if (!text) return true;
-    if (/^(?:login|relogin|snapshot-gate|no-self|not-alive|session-mismatch|game-session-connecting|offline-leave-wait|enemy-leave-wait|pursuit-leave-wait|exit-log-flush-pending|important-log-flush-pending|auto-login|login-cooldown|login-control-missing|known-long-stamina-exhausted)$/.test(text)) return true;
+    if (/^(?:login|relogin|snapshot-gate|no-self|not-alive|session-mismatch|game-session-connecting|offline-leave-wait|enemy-leave-wait|pursuit-leave-wait|exit-log-flush-pending|important-log-flush-pending|auto-login|login-cooldown|login-control-missing|login-start-no-evidence|known-long-stamina-exhausted)$/.test(text)) return true;
     return /^等待(?:登录点安全快照|重连|退出日志发送完成|会话结束日志发送完成|游戏连接|登录控件|页面跳转)/.test(text)
       || /^已登录，等待游戏连接/.test(text)
       || /^界面显示未登录但原生会话仍在线，等待/.test(text)
@@ -1134,6 +1136,7 @@
       'paused': '手动暂停',
       'auto-login': '自动触发登录/加入',
       'login-cooldown': '登录已触发，等待页面跳转',
+      'login-start-no-evidence': '登录未启动，等待重试',
       'control-ws-offline': 'WebSocket 离线',
       'control-ws-offline-unsafe': 'WebSocket 离线且周围危险，立即退出',
       'control-ws-offline-safe-wait': 'WebSocket 离线，安全区短暂等待重连',
@@ -3861,6 +3864,56 @@
     return /login required|please login|please sign in|not logged in|未登录|请先登录|请登录|需要登录/i.test(text);
   }
 
+  function loginStartEvidenceSnapshot() {
+    const status = getBotStatus();
+    const control = status?.control || {};
+    return {
+      href: location.href,
+      hasToken: Boolean(localStorage.getItem('tmpGameSessionToken') || control.hasToken),
+      hasSelf: Boolean(status?.self || status?.lastDecision?.self),
+      currentUserId: Number(currentUserIdFromStatus(status) || 0) || 0,
+      wsActive: controlWsLooksActive(control)
+    };
+  }
+
+  function loginMethodStarted(before, after, methodResult) {
+    return Boolean(
+      (before.href && after.href && before.href !== after.href)
+        || (!before.hasToken && after.hasToken)
+        || (!before.hasSelf && after.hasSelf)
+        || (!before.currentUserId && after.currentUserId)
+        || (!before.wsActive && after.wsActive)
+    );
+  }
+
+  function summarizeLoginMethodResult(value) {
+    if (value === undefined) return 'undefined';
+    if (value === null) return null;
+    if (typeof value === 'boolean' || typeof value === 'number' || typeof value === 'string') return value;
+    if (value && typeof value === 'object') {
+      return {
+        ok: Boolean(value.ok),
+        started: Boolean(value.started || value.loginStarted),
+        reason: String(value.reason || ''),
+        error: String(value.error || '')
+      };
+    }
+    return typeof value;
+  }
+
+  async function waitForLoginStartEvidence(before, methodResult) {
+    const waitMs = methodResult === false ? 0 : Math.max(0, Number(cfg.loginStartEvidenceMs || 0) || 0);
+    if (waitMs > 0) await sleep(waitMs);
+    const after = loginStartEvidenceSnapshot();
+    return {
+      started: methodResult !== false && loginMethodStarted(before, after, methodResult),
+      waitMs,
+      methodResult: summarizeLoginMethodResult(methodResult),
+      before,
+      after
+    };
+  }
+
   async function maybeStartGameLogin(reason = 'watchdog', options = {}) {
     const force = Boolean(options.force || options.immediate || options.manual);
     const ignoreSuppress = Boolean(options.ignoreSuppress || force);
@@ -3915,25 +3968,53 @@
       ignoredSuppressMs: ignoreSuppress ? Math.round(suppressRemainingMs) : 0,
       loginControl: loginControl ? (loginControl.id ? `#${loginControl.id}` : controlText(loginControl) || loginControl.tagName.toLowerCase()) : '',
       method: '',
+      clickAttempted: false,
+      loginStarted: false,
+      loginStartAttempts: [],
       error: ''
     };
     try {
       if (force) markManualLoginBypass(reason);
-      if (loginControl) {
-        if (force) markManualLoginBypass(reason);
-        loginControl.click();
-        detail.method = loginControl.id ? `#${loginControl.id}` : controlText(loginControl) || loginControl.tagName.toLowerCase();
-      } else if (typeof startLoginFn === 'function') {
-        const result = startLoginFn.call(unsafeWindow);
-        if (result && typeof result.then === 'function') await result;
-        detail.method = rawStartLinuxDoLogin ? 'rawStartLinuxDoLogin' : 'startLinuxDoLogin';
-      } else {
+      const controlMethod = loginControl ? (loginControl.id ? `#${loginControl.id}` : controlText(loginControl) || loginControl.tagName.toLowerCase()) : '';
+      const globalMethod = startLoginFn ? (rawStartLinuxDoLogin ? 'rawStartLinuxDoLogin' : 'startLinuxDoLogin') : '';
+      const loginMethods = [];
+      if (loginControl) loginMethods.push({ type: 'control', method: controlMethod });
+      if (startLoginFn) loginMethods.push({ type: 'global', method: globalMethod });
+      if (!loginMethods.length) {
         detail.error = 'login control not found';
+      } else {
+        for (const item of loginMethods) {
+          let methodResult;
+          const evidenceBefore = loginStartEvidenceSnapshot();
+          if (item.type === 'control') {
+            if (force) markManualLoginBypass(reason);
+            detail.clickAttempted = true;
+            loginControl.click();
+          } else {
+            methodResult = startLoginFn.call(unsafeWindow);
+            if (methodResult && typeof methodResult.then === 'function') methodResult = await methodResult;
+          }
+          const evidence = await waitForLoginStartEvidence(evidenceBefore, methodResult);
+          detail.loginStartAttempts.push({ type: item.type, method: item.method, evidence });
+          if (evidence.started) {
+            detail.method = item.method;
+            detail.loginStarted = true;
+            detail.error = '';
+            break;
+          }
+          detail.error = item.method + ' did not start login';
+        }
       }
     } catch (err) {
       detail.error = err?.message || String(err);
     }
-    if (detail.method && !detail.error) suppressLogin('login started', cfg.postLoginGraceMs);
+    if (detail.method && detail.loginStarted && !detail.error) {
+      suppressLogin('login started', cfg.postLoginGraceMs);
+    } else if (detail.error) {
+      state.lastError = detail.error;
+      state.lastInstallStatus = '登录未启动：' + detail.error;
+      logBootstrap('login start had no evidence', detail);
+    }
     return Boolean(detail.method && !detail.error);
   }
 

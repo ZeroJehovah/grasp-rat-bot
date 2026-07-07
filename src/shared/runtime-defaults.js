@@ -405,6 +405,7 @@ function buildRuntimeDefaults(config, combatLogEndpointConfigured) {
     loginPointSafetyHealthyHpThreshold: 80,
     autoLogin: true,
     loginCooldownMs: 5000,
+    loginStartEvidenceMs: 700,
     postLoginGraceMs: 45000,
     fleeLockMs: 1400,
     pursuitLeaveMs: 300000,

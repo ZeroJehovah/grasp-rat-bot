@@ -52,6 +52,8 @@ function createLeaveFlowRuntime(runtime = {}) {
     flushCombatLogs = () => false,
     closeCurrentImportantSessionBeforeLogin = () => null,
     readPageGlobal = () => null,
+    locationHref = () => (typeof location === 'object' && location ? location.href : ''),
+    sleepMs = ms => new Promise(resolve => setTimeout(resolve, ms)),
     loginSuppressRemainingMs = () => 0,
     ensureLoginSnapshotGate = async () => ({}),
     loginSnapshotGateAllowsLogin = () => false,
@@ -173,6 +175,75 @@ function createLeaveFlowRuntime(runtime = {}) {
 	      target: pending.target || null,
       combatCover: pending.combatCover || null,
       combatState: pending.combatState || null
+    };
+  }
+
+  function nativeWsConnectingOrOpen(native) {
+    return [
+      native?.wsReadyState,
+      native?.nativeWsReadyState,
+      native?.ws?.readyState,
+      native?.state?.ws?.readyState
+    ].some(value => {
+      const n = Number(value);
+      return n === 0 || n === 1;
+    });
+  }
+
+  function loginStartEvidenceSnapshot(userId = 0) {
+    const native = getNativeControl();
+    const currentUserId = Number(getCurrentUserId() || userId || 0) || 0;
+    const self = getSelf();
+    let href = '';
+    try {
+      href = String(locationHref() || '');
+    } catch (_) {}
+    return {
+      href,
+      hasToken: Boolean(getSessionToken()),
+      currentUserId,
+      hasAliveSelf: Boolean(self && isAlive(self)),
+      hasNativeSession: Boolean(hasNativeGameSession(native, currentUserId || userId)),
+      nativeWsConnectingOrOpen: nativeWsConnectingOrOpen(native)
+    };
+  }
+
+  function loginStartEvidenceStarted(before, after, methodResult) {
+    return Boolean(
+      (before.href && after.href && before.href !== after.href)
+        || (!before.hasAliveSelf && after.hasAliveSelf)
+        || (!before.hasToken && after.hasToken)
+        || (!before.currentUserId && after.currentUserId)
+        || (!before.hasNativeSession && after.hasNativeSession)
+        || (!before.nativeWsConnectingOrOpen && after.nativeWsConnectingOrOpen)
+    );
+  }
+
+  function summarizeLoginMethodResult(value) {
+    if (value === undefined) return 'undefined';
+    if (value === null) return null;
+    if (typeof value === 'boolean' || typeof value === 'number' || typeof value === 'string') return value;
+    if (value && typeof value === 'object') {
+      return {
+        ok: Boolean(value.ok),
+        started: Boolean(value.started || value.loginStarted),
+        reason: String(value.reason || ''),
+        error: String(value.error || '')
+      };
+    }
+    return typeof value;
+  }
+
+  async function waitForLoginStartEvidence(before, methodResult, userId = 0) {
+    const waitMs = methodResult === false ? 0 : Math.max(0, Number(cfg.loginStartEvidenceMs ?? 700) || 0);
+    if (waitMs > 0) await sleepMs(waitMs);
+    const after = loginStartEvidenceSnapshot(userId);
+    return {
+      started: methodResult !== false && loginStartEvidenceStarted(before, after, methodResult),
+      waitMs,
+      methodResult: summarizeLoginMethodResult(methodResult),
+      before,
+      after
     };
   }
 
@@ -571,6 +642,9 @@ function createLeaveFlowRuntime(runtime = {}) {
 	      snapshotGateBypassed: Boolean(snapshotGate.liveSessionTakeoverBypass),
 	      loginControl: loginControl ? (loginControl.id ? '#' + loginControl.id : (controlText(loginControl) || loginControl.tagName.toLowerCase())) : '',
       method: '',
+      clickAttempted: false,
+      loginStarted: false,
+      loginStartAttempts: [],
       error: ''
     };
     bot.lastLoginAt = t;
@@ -585,22 +659,36 @@ function createLeaveFlowRuntime(runtime = {}) {
       const startLoginFn = rawStartLinuxDoLogin || (typeof startLinuxDoLoginFn === 'function' ? startLinuxDoLoginFn : null);
       const preferLoginControl = Boolean(loginControl && !hasAliveSelf);
       if (manualOverride) markManualLoginBypass(String(reason || 'manual login'));
-      if (preferLoginControl) {
-        loginControl.click();
-        detail.attempted = true;
-        detail.method = loginControl.id ? '#' + loginControl.id : (controlText(loginControl) || loginControl.tagName.toLowerCase());
-      } else if (typeof startLoginFn === 'function') {
-        const result = startLoginFn.call(pageGlobal);
-        if (result && typeof result.then === 'function') await result;
-        detail.attempted = true;
-        detail.method = rawStartLinuxDoLogin ? 'rawStartLinuxDoLogin' : 'startLinuxDoLogin';
-      } else if (loginControl) {
-        if (manualOverride) markManualLoginBypass(String(reason || 'manual login'));
-        loginControl.click();
-        detail.attempted = true;
-        detail.method = loginControl.id ? '#' + loginControl.id : (controlText(loginControl) || loginControl.tagName.toLowerCase());
-      } else {
+      const controlMethod = loginControl ? (loginControl.id ? '#' + loginControl.id : (controlText(loginControl) || loginControl.tagName.toLowerCase())) : '';
+      const globalMethod = startLoginFn ? (rawStartLinuxDoLogin ? 'rawStartLinuxDoLogin' : 'startLinuxDoLogin') : '';
+      const loginMethods = [];
+      if (preferLoginControl && loginControl) loginMethods.push({ type: 'control', method: controlMethod });
+      if (startLoginFn) loginMethods.push({ type: 'global', method: globalMethod });
+      if (!preferLoginControl && loginControl) loginMethods.push({ type: 'control', method: controlMethod });
+      if (!loginMethods.length) {
         detail.error = 'login control not found';
+      } else {
+        for (const item of loginMethods) {
+          let methodResult;
+          const evidenceBefore = loginStartEvidenceSnapshot(userId);
+          if (item.type === 'control') {
+            detail.clickAttempted = true;
+            loginControl.click();
+          } else {
+            methodResult = startLoginFn.call(pageGlobal);
+            if (methodResult && typeof methodResult.then === 'function') methodResult = await methodResult;
+          }
+          const evidence = await waitForLoginStartEvidence(evidenceBefore, methodResult, userId);
+          detail.loginStartAttempts.push({ type: item.type, method: item.method, evidence });
+          if (evidence.started) {
+            detail.attempted = true;
+            detail.loginStarted = true;
+            detail.method = item.method;
+            detail.error = '';
+            break;
+          }
+          detail.error = item.method + ' did not start login';
+        }
       }
     } catch (err) {
       detail.error = err?.message || String(err);
