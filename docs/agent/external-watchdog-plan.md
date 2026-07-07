@@ -18,17 +18,21 @@ The important constraint is that page-side logic can only react after it is sche
 
 ## Recommended Shape
 
-Build the watchdog as a separate local program, not as a browser extension.
+Build the first watchdog inside the existing `combat-log-service` process. This keeps the first version operationally simple: the same local Node service that already receives combat logs can also receive a lightweight heartbeat, maintain watchdog state, and issue emergency rescue actions outside the browser page's JavaScript loop.
 
 Recommended first implementation:
 
-- A Node.js or Windows service/process running outside Chrome's renderer process.
-- Chrome launched with a local DevTools Protocol port.
-- CDP used for observation and optional page-side fallback actions.
-- Direct game leave requests sent by the watchdog itself when possible.
-- Direct Clash REST API calls sent by the watchdog itself when configured.
+- Add a non-batched watchdog heartbeat endpoint to `combat-log-service`.
+- Keep combat JSONL logging on `/combat-log` unchanged.
+- Maintain latest heartbeat/combat state in memory, keyed by user/session/page id.
+- Run a Node-side interval that detects stale heartbeats during high-risk combat.
+- Send direct game leave requests from the Node service when enough authenticated leave information is available.
+- Call the Clash REST API directly from the Node service when proxy rescue is enabled and validated.
+- Log watchdog decisions and rescue attempts to the existing daily audit log layout.
 
-The userscript should continue to own normal strategy decisions. The watchdog should own only high-risk failure handling: combat heartbeat stalls, renderer unresponsiveness, lifecycle freezes, hidden/frozen tab state during combat, and emergency exit/proxy rescue.
+The userscript should continue to own normal strategy decisions. The watchdog should own only high-risk failure handling: missing heartbeat during combat, page-side tick stalls, validated direct leave, validated Clash rescue, and audit logging.
+
+CDP can still be added later as an observability enhancement, but it should not be required for the first implementation. The first version should work with the user's normal browser profile and Tampermonkey setup.
 
 ## Why Not A Browser Extension
 
@@ -41,9 +45,9 @@ A browser extension can help with UI or diagnostics, but it is not a strong safe
 
 For combat safety, the watchdog should live outside Chrome's renderer scheduling path.
 
-## Chrome Startup
+## CDP Optional Enhancement
 
-When CDP observation is needed, launch Chrome with a local remote-debugging port and an isolated user profile:
+CDP is optional for this design. When CDP observation is needed later, launch Chrome with a local remote-debugging port and an isolated user profile:
 
 ```bat
 chrome.exe ^
@@ -61,7 +65,83 @@ Notes:
 - The throttling-related flags can reduce background scheduling risk, but they are not a full safety guarantee.
 - CDP mode is not the same as manually opening DevTools. It only allows the local watchdog process to inspect and control the browser.
 
-If the watchdog only consumes local logs and sends direct backend requests, CDP is not strictly required. However, CDP is recommended for the first serious version because it gives better tab identification, lifecycle visibility, runtime liveness checks, and WebSocket visibility.
+The `combat-log-service` watchdog does not require this startup mode. It detects stalls by observing that the page has stopped sending fresh heartbeat messages.
+
+## Combat Log Service Integration
+
+The watchdog should be implemented as a side module of `combat-log-service/server.js`, not as part of the normal JSONL append path.
+
+New local endpoints:
+
+- `POST /watchdog/heartbeat`: lightweight, high-frequency page heartbeat. This must not be batched behind combat log flushing.
+- `GET /watchdog/status`: current in-memory watchdog state and last rescue decision.
+- `POST /watchdog/config`: optional local-only runtime config update for thresholds, dry-run mode, Clash validation, and direct leave settings.
+- `POST /watchdog/test-clash`: optional manual Clash validation endpoint.
+
+The heartbeat should be small and sent frequently, for example every 250-500 ms while logged in and every 150-250 ms during active combat. It should use a short timeout and should not wait for combat log queue flushing.
+
+Example heartbeat:
+
+```json
+{
+  "type": "watchdog-heartbeat",
+  "pageId": "mrae7o2a",
+  "userId": 28886,
+  "at": 1783413267336,
+  "sequence": 12345,
+  "visibilityState": "hidden",
+  "combatActive": true,
+  "damagedInCombat": true,
+  "self": {
+    "id": 28886,
+    "hp": 58,
+    "maxHp": 100,
+    "life": "Alive"
+  },
+  "target": {
+    "id": 27355,
+    "name": "RIS_YI",
+    "hp": 100,
+    "distance": 12665
+  },
+  "decision": {
+    "reason": "combat-hp-disadvantage-leave",
+    "pendingExit": false
+  },
+  "control": {
+    "wsOpen": true,
+    "nativeWsOpen": true,
+    "hasToken": true
+  },
+  "runtime": {
+    "lastCombatTickAt": 1783413267336,
+    "lastTickCompletedAt": 1783413267273
+  },
+  "leaveAuth": {
+    "available": true,
+    "userId": 28886,
+    "origin": "https://grasp-rat-game.h-e.top",
+    "sessionTokenPresent": true,
+    "expiresAt": 1783413297336
+  }
+}
+```
+
+The exact `leaveAuth` shape depends on the verified game leave API. It should contain only what the Node process needs to perform direct leave and should be kept in memory where possible. Do not write secrets, cookies, or session tokens into tracked files or ordinary JSONL combat logs.
+
+In-memory state per page/user should include:
+
+- Last heartbeat received time according to Node.
+- Last page timestamp and monotonic heartbeat sequence.
+- Current combat-active flag.
+- Current self HP and whether HP dropped during the current combat.
+- Current target id/name/HP/distance.
+- Current pending-exit state, if the page already triggered one.
+- Latest direct leave credential/request descriptor and its expiry.
+- Latest Clash validation result.
+- Active rescue attempt state so repeated intervals do not spam leave requests.
+
+Watchdog audit events should be written separately from normal combat frames, for example under `logs/YYYY-MM-DD/audit/watchdog.jsonl` or a per-combat audit file when the combat id is known.
 
 ## Signals To Monitor
 
@@ -74,7 +154,9 @@ The watchdog should maintain its own state machine outside the page:
 - Current target and target HP.
 - Page visibility and lifecycle state, including `hidden`, `freeze`, `resume`, `pagehide`, and `pageshow`.
 - WebSocket frame receive/send activity.
-- CDP `Runtime.evaluate` responsiveness and timeout.
+- Heartbeat sequence continuity.
+- Direct leave credential freshness and validation state.
+- Optional CDP `Runtime.evaluate` responsiveness and timeout, when CDP is enabled later.
 - Clash API availability and authentication status.
 - Last successful leave request and exit confirmation time.
 
@@ -91,7 +173,7 @@ Emergency decisions should focus on high-risk combinations such as:
 - A hostile target is still present or was recently present.
 - Page heartbeat or combat tick age exceeds the stall threshold.
 - The page is reported as hidden/frozen during active combat.
-- CDP runtime calls time out while combat was recently active.
+- Optional CDP runtime calls time out while combat was recently active.
 
 Example first-version rule:
 
@@ -110,12 +192,62 @@ The watchdog should not depend on page JavaScript for the primary rescue path.
 
 Preferred order:
 
-1. Send a direct game leave request from the watchdog process using the current browser session credentials or a separately configured authenticated client.
-2. Call the Clash REST API directly from the watchdog process when proxy rescue is enabled.
-3. Use CDP to attempt the existing page-side leave path if the renderer still responds.
-4. As a last resort, close or reload the tab.
+1. Send a direct game leave request from the Node watchdog using the freshest validated leave credentials/request descriptor.
+2. Call the Clash REST API directly from the Node watchdog when proxy rescue is enabled and validation is currently passing. This may run in parallel with direct leave, but it must not delay direct leave.
+3. If the page heartbeat later resumes, let the userscript observe pending exit state and avoid re-entering unsafe combat.
+4. If CDP is enabled later, optionally use CDP to attempt the existing page-side leave path when the renderer still responds.
+5. As a last resort, close or reload the tab only when CDP or another browser-control layer exists.
 
 Closing the tab is not guaranteed to equal an in-game leave. It should be treated as a final fallback, not as the primary safety mechanism.
+
+## Direct Leave Plan
+
+The watchdog is only useful as a safety boundary if it can issue leave without page JavaScript. The first implementation must therefore add a service-side `leaveClient` to `combat-log-service`.
+
+Requirements:
+
+- The direct leave endpoint, method, request body, and authentication method must be verified against the live game before active rescue is enabled.
+- The userscript should send the latest leave authentication/request descriptor to `/watchdog/heartbeat` while the page is healthy.
+- If the game leave request can be authenticated with `tmpGameSessionToken`, the heartbeat can provide a short-lived token snapshot to the local service.
+- If the game leave request requires HttpOnly cookies or browser-only state that JavaScript cannot read, the Node watchdog cannot directly leave until a different authenticated client path is identified.
+- Credentials should be stored in memory with a short TTL. Avoid writing tokens/cookies to normal logs.
+- Direct leave must never wait for Clash switching or page-side confirmation before sending the first request.
+
+The direct leave flow should be:
+
+```text
+heartbeat received
+  -> update lastKnownLeaveAuth
+  -> mark directLeaveReady only if descriptor is fresh and complete
+
+watchdog interval detects high-risk stale heartbeat
+  -> create rescue id
+  -> immediately call sendDirectLeave(userId, leaveAuth)
+  -> in parallel, call Clash rescue only if validated
+  -> record request timestamps, status, response summary, and errors
+  -> retry direct leave on timeout/uncertain result with conservative backoff
+  -> stop retrying when exit is confirmed or credentials expire
+```
+
+Pseudocode:
+
+```js
+if (shouldRescue(state) && !state.rescue.active) {
+  state.rescue = startRescue(state);
+  const jobs = [sendDirectLeave(state.userId, state.leaveAuth)];
+  if (state.clash.valid) jobs.push(switchClashProxy(state.clash));
+  Promise.allSettled(jobs).then(results => recordWatchdogRescueResult(state, results));
+}
+```
+
+Exit confirmation sources:
+
+- A later heartbeat or combat/audit log showing the user is no longer in session.
+- A direct leave response that is verified to mean success.
+- A later page-side `exit-confirmed` audit event.
+- Optional snapshot/status fetch from the game backend, if a safe authenticated status endpoint is available.
+
+If direct leave is not ready, active rescue must log `direct-leave-not-ready` and should still attempt validated Clash rescue if configured. This state is not considered a complete safety implementation.
 
 ## Clash Requirements
 
@@ -151,11 +283,11 @@ If validation fails, Clash rescue should be disabled automatically for that runt
 
 Phase 1: Observation only.
 
-- Start watchdog outside Chrome.
-- Connect to CDP.
-- Identify the game tab.
-- Record page heartbeat age, combat tick age, visibility/lifecycle events, CDP runtime responsiveness, and WebSocket activity.
-- Emit structured logs without taking action.
+- Add `/watchdog/heartbeat` and `/watchdog/status` to `combat-log-service`.
+- Send non-batched heartbeat from the userscript/runtime.
+- Maintain in-memory per-user/page watchdog state.
+- Record heartbeat age, combat tick age, visibility/lifecycle fields, control state, and direct leave readiness.
+- Emit structured watchdog logs without taking action.
 
 Phase 2: Dry-run rescue decisions.
 
@@ -163,47 +295,62 @@ Phase 2: Dry-run rescue decisions.
 - Log when a rescue would have triggered.
 - Compare dry-run triggers against real combat logs to tune thresholds.
 
-Phase 3: Direct leave rescue.
+Phase 3: Direct leave client.
 
-- Implement authenticated direct leave requests from the watchdog.
-- Keep CDP page-side leave as fallback only.
-- Log request time, response status, and exit confirmation.
+- Verify the game leave endpoint, method, request body, and authentication source.
+- Add a `leaveClient` in `combat-log-service`.
+- Add heartbeat fields for the current leave request descriptor or short-lived auth snapshot.
+- Add direct leave validation/readiness status without triggering real leave.
+- Keep active rescue disabled until direct leave has a controlled live validation.
 
 Phase 4: Clash rescue.
 
 - Add Clash authenticated API validation at startup.
 - Add page-side Clash validation after configuration changes and after script injection while page-side rescue still exists.
 - Disable Clash rescue automatically for the runtime session when validation fails.
-- Trigger proxy switching only under configured high-risk conditions.
+- Trigger proxy switching only under configured high-risk conditions and never before direct leave.
 - Record proxy-switch attempts and failures in watchdog logs.
 
-Phase 5: Service hardening.
+Phase 5: Active rescue.
 
-- Package as a Windows-startable process or service.
+- Enable direct leave on high-risk stale heartbeat.
+- Run Clash rescue in parallel or after direct leave only when validation is passing.
+- Add retry policy, duplicate-rescue suppression, and exit confirmation tracking.
+- Keep page-side leave as normal strategy behavior, not as the watchdog's primary rescue path.
+
+Phase 6: Service hardening.
+
+- Package `combat-log-service` as a Windows-startable process or service.
 - Add restart behavior, log rotation, config validation, and a local status endpoint.
 - Add a clear manual pause/disable control.
+- Optionally add CDP observation later for richer diagnostics.
 
 ## Validation
 
 Before enabling active rescue, validate with:
 
 - Synthetic heartbeat stall tests.
-- CDP runtime timeout simulation.
+- Watchdog dry-run replay against existing death windows.
 - Clash API authentication self-test.
+- Direct leave client readiness test.
+- Controlled direct leave test in a low-risk live session.
 - Dry-run comparison against existing combat logs.
 - A controlled live session where the watchdog exits only after a deliberately induced stall.
 
 Success criteria:
 
 - The watchdog detects page heartbeat stalls without relying on in-page JavaScript recovery.
-- In high-risk combat, the watchdog attempts external leave within the configured threshold.
+- In high-risk combat, the watchdog attempts direct leave within the configured threshold.
+- Direct leave is sent before any Clash operation can delay it.
 - Clash authentication problems are detected before combat.
 - All rescue attempts are logged with enough timing detail to reconstruct the decision.
 
 ## Open Questions
 
 - Which direct game leave endpoint and credentials should the watchdog use as the primary exit path?
+- Can direct leave use `tmpGameSessionToken`, or does it require HttpOnly browser cookies or another credential source?
+- Should the direct leave request descriptor be configured statically, discovered at runtime, or both?
 - Should hidden/frozen visibility during active damaged combat trigger immediate leave, or only lower the heartbeat stall threshold?
 - What HP/damage threshold should count as high risk for watchdog policy?
-- Should proxy switching run before, after, or in parallel with direct leave?
-- Should the watchdog control Chrome startup itself, or attach to an already-started debug-profile Chrome?
+- Should proxy switching run after direct leave or in parallel with direct leave?
+- Should CDP be added later only for diagnostics, or also for final browser-control fallback?
