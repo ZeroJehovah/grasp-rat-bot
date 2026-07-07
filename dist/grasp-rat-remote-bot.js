@@ -12,7 +12,7 @@
   var define_GRASP_RAT_RUNTIME_CONFIG_default;
   var init_define_GRASP_RAT_RUNTIME_CONFIG = __esm({
     "<define:__GRASP_RAT_RUNTIME_CONFIG__>"() {
-      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.601" };
+      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.602" };
     }
   });
 
@@ -27880,6 +27880,19 @@
       function objectValue(value) {
         return value && typeof value === "object" && !Array.isArray(value) ? value : null;
       }
+      function stringList(value, limit = 12) {
+        const raw = Array.isArray(value) ? value : value ? [value] : [];
+        const out = [];
+        const seen = /* @__PURE__ */ new Set();
+        for (const item of raw) {
+          const text = String(item || "").trim();
+          if (!text || seen.has(text)) continue;
+          seen.add(text);
+          out.push(text);
+          if (out.length >= limit) break;
+        }
+        return out;
+      }
       function parseDescriptor(value) {
         if (!value) return null;
         if (typeof value === "string") {
@@ -27965,6 +27978,8 @@
           const source = objectValue(body) || {};
           const state2 = Array.isArray(source.states) ? source.states.find((item) => String(item?.pageId || "") === String(watchdogState().pageId || "")) || source.states[0] || null : null;
           const clashValidation = source.clash?.validation || null;
+          const activeRescue = objectValue(source.activeRescue) || {};
+          const warnings = stringList(source.warnings || source.warning);
           return {
             ok: Boolean(source.ok),
             enabled: Boolean(source.enabled),
@@ -27975,10 +27990,15 @@
             directLeaveEnabled: Boolean(source.directLeave?.enabled),
             directLeaveVerified: Boolean(source.directLeave?.verified),
             directLeaveReadyStates: Number(source.directLeave?.readyStates || 0) || 0,
+            directLeaveDescriptorReadyStates: Number(source.directLeave?.descriptorReadyStates || 0) || 0,
+            directLeaveMissing: stringList(source.directLeave?.missing),
+            activeRescueArmed: Boolean(activeRescue.armed),
+            activeRescueReasons: stringList(activeRescue.reasons),
             clashEnabled: Boolean(source.clash?.enabled),
             clashValidationOk: Boolean(clashValidation?.ok),
             clashValidationError: String(clashValidation?.error || ""),
-            warning: String(source.warning || ""),
+            warnings,
+            warning: String(source.warning || warnings.join("; ")),
             lastDecisionType: String(source.lastDecision?.type || ""),
             lastDecisionAt: Number(source.lastDecision?.at || 0) || 0
           };
