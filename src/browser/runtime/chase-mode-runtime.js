@@ -217,7 +217,7 @@ function createChaseModeRuntime(runtime = {}) {
         invulnerable,
         explicitFreshDropLow,
         attackableNow,
-        seekableNow: Boolean(candidate.seekableNow && !whitelisted && !invulnerable && !explicitFreshDropLow),
+        seekableNow: Boolean(candidate.seekableNow && !whitelisted && !explicitFreshDropLow),
         staminaBlocked,
         staminaCost,
         staminaBudget: budget,
@@ -376,7 +376,7 @@ function createChaseModeRuntime(runtime = {}) {
         markedAt: state.targets.find(target => String(target.id) === String(item.id))?.markedAt || 0,
         status: item.whitelisted
           ? '白名单'
-          : (item.staminaBlocked ? '体力不足' : (item.attackableNow ? '射程内' : (item.visible ? '视野' : (item.minimapOnly ? 'minimap' : (item.snapshot ? '快照' : '未刷新')))))
+          : (item.invulnerable ? '无敌' : (item.staminaBlocked ? '体力不足' : (item.attackableNow ? '射程内' : (item.visible ? '视野' : (item.minimapOnly ? 'minimap' : (item.snapshot ? '快照' : '未刷新'))))))
       })),
       state.targets,
       {
@@ -436,6 +436,7 @@ function createChaseModeRuntime(runtime = {}) {
     const selected = status.selectedTarget;
     if (!selected) return null;
     const targetId = String(selected.id || '');
+    const selectedInvulnerability = { invulnerable: Boolean(selected.invulnerable), invulnerableRemainingMs: selected.invulnerableRemainingMs ?? null, invulnerableRemainingTicks: selected.invulnerableRemainingTicks ?? null };
     const combatTarget = (context.combatTargets || []).find(item => String(item.user_id ?? item.id ?? '') === targetId) || null;
     if (combatTarget && selected.visible && selected.attackableNow) {
       const chaseCombatTarget = {
@@ -454,6 +455,7 @@ function createChaseModeRuntime(runtime = {}) {
             name: selected.name || '',
             drop: selected.drop,
             source: selected.source,
+            ...selectedInvulnerability,
             reason: 'chase-mode-combat'
           },
           target: action.target ? {
@@ -481,6 +483,7 @@ function createChaseModeRuntime(runtime = {}) {
         name: selected.name || '',
         drop: selected.drop,
         source: selected.source,
+        ...selectedInvulnerability,
         reason: 'chase-mode-approach'
       },
       target: {
@@ -493,6 +496,7 @@ function createChaseModeRuntime(runtime = {}) {
         distance: Math.round(Number(dir.distance || selected.distance || 0)),
         source: selected.source,
         visible: Boolean(selected.visible),
+        ...selectedInvulnerability,
         minimapOnly: Boolean(selected.minimapOnly),
         chaseMode: true
       },

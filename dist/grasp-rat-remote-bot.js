@@ -12,7 +12,7 @@
   var define_GRASP_RAT_RUNTIME_CONFIG_default;
   var init_define_GRASP_RAT_RUNTIME_CONFIG = __esm({
     "<define:__GRASP_RAT_RUNTIME_CONFIG__>"() {
-      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.595" };
+      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.596" };
     }
   });
 
@@ -3074,6 +3074,50 @@
       "use strict";
       init_define_GRASP_RAT_RUNTIME_CONFIG();
       var CHASE_MODE_STATE_VERSION = 1;
+      var CHASE_INVULNERABLE_TICK_MS = 50;
+      var INVULNERABLE_MS_FIELDS = [
+        "invulnerable_remaining_ms",
+        "invincible_remaining_ms",
+        "invulnerability_remaining_ms",
+        "invulnerableRemainingMs",
+        "invincibleRemainingMs",
+        "invulnerabilityRemainingMs",
+        "invulnerable_ms",
+        "invincible_ms",
+        "invulnerability_ms",
+        "immune_remaining_ms",
+        "immuneRemainingMs"
+      ];
+      var INVULNERABLE_TICK_FIELDS = [
+        "invulnerable_remaining_ticks",
+        "invincible_remaining_ticks",
+        "invulnerability_remaining_ticks",
+        "invulnerableTicks",
+        "invulnerableRemainingTicks",
+        "invincibleRemainingTicks",
+        "invulnerabilityRemainingTicks",
+        "invulnerable_ticks",
+        "invincible_ticks",
+        "invulnerability_ticks",
+        "invulnerable_tick",
+        "invincible_tick",
+        "invulnerability_tick"
+      ];
+      var INVULNERABLE_GENERIC_REMAINING_FIELDS = [
+        "invulnerable_remaining",
+        "invincible_remaining",
+        "invulnerability_remaining",
+        "invulnerableRemaining",
+        "invincibleRemaining",
+        "invulnerabilityRemaining"
+      ];
+      var INVULNERABLE_FLAG_FIELDS = [
+        "invulnerable",
+        "is_invulnerable",
+        "isInvulnerable",
+        "immune",
+        "is_immune"
+      ];
       function finiteNumber(value) {
         const number = Number(value);
         return Number.isFinite(number) ? number : null;
@@ -3085,6 +3129,32 @@
       function roundedOrNull(value) {
         const number = finiteNumber(value);
         return number === null ? null : Math.round(number);
+      }
+      function truthyFlag(value) {
+        return value === true || value === 1 || value === "1" || value === "true";
+      }
+      function positiveFieldValue(source, fields) {
+        if (!source || typeof source !== "object") return null;
+        let picked = null;
+        for (const field of fields) {
+          const value = finiteNumber(source[field]);
+          if (value === null || value <= 0) continue;
+          picked = picked === null ? value : Math.max(picked, value);
+        }
+        return picked;
+      }
+      function chaseInvulnerableState(target) {
+        const remainingMs = positiveFieldValue(target, INVULNERABLE_MS_FIELDS);
+        const remainingTicks = positiveFieldValue(target, INVULNERABLE_TICK_FIELDS);
+        const genericRemaining = positiveFieldValue(target, INVULNERABLE_GENERIC_REMAINING_FIELDS);
+        const resolvedTicks = remainingTicks !== null ? remainingTicks : genericRemaining;
+        const resolvedMs = remainingMs !== null ? remainingMs : resolvedTicks !== null ? resolvedTicks * CHASE_INVULNERABLE_TICK_MS : null;
+        const flag = INVULNERABLE_FLAG_FIELDS.some((field) => truthyFlag(target?.[field]));
+        return {
+          invulnerable: Boolean(flag || remainingMs !== null || resolvedTicks !== null),
+          invulnerableRemainingMs: resolvedMs === null ? null : Math.max(0, Math.round(resolvedMs)),
+          invulnerableRemainingTicks: resolvedTicks === null ? null : Math.max(0, Math.round(resolvedTicks))
+        };
       }
       function explicitObservedAtValue(target) {
         if (!target || typeof target !== "object") return 0;
@@ -3187,6 +3257,7 @@
         const minimapOnly = Boolean(raw?.minimapOnly || source === "minimap");
         const drop = chaseDropValue(raw);
         const hp = chaseHpValue(raw);
+        const invulnerableState = chaseInvulnerableState(raw);
         return {
           id,
           user_id: raw.user_id ?? raw.userId ?? raw.id ?? id,
@@ -3213,7 +3284,9 @@
           stale: Boolean(raw?.stale),
           mode: raw?.current_join_mode || raw?.mode || "",
           life: raw?.life || "",
-          invulnerable: Boolean(raw?.invulnerable),
+          invulnerable: invulnerableState.invulnerable,
+          invulnerableRemainingMs: invulnerableState.invulnerableRemainingMs,
+          invulnerableRemainingTicks: invulnerableState.invulnerableRemainingTicks,
           whitelisted: Boolean(raw?.whitelisted),
           active: Boolean(raw?.active || raw?.currentlyActive),
           afk: raw?.afk === void 0 ? void 0 : Boolean(raw.afk)
@@ -3233,6 +3306,7 @@
         const previousRank = sourceRank(previous);
         const nextRank = sourceRank(next);
         const preferNextPosition = nextRank > previousRank || nextRank === previousRank && Number(next.observedAt || 0) >= Number(previous.observedAt || 0);
+        const preferNextStatus = preferNextPosition;
         const nearMs = Math.max(0, Number(options.nearMs || 2e3) || 2e3);
         const previousDrop = finiteNumber(previous.drop);
         const nextDrop = finiteNumber(next.drop);
@@ -3267,6 +3341,9 @@
           minimapOnly: Boolean(previous.minimapOnly && next.minimapOnly || !previous.visible && next.minimapOnly),
           visible: Boolean(previous.visible || next.visible),
           seekableNow: Boolean(previous.seekableNow || next.seekableNow),
+          invulnerable: preferNextStatus ? Boolean(next.invulnerable) : Boolean(previous.invulnerable),
+          invulnerableRemainingMs: preferNextStatus ? next.invulnerableRemainingMs : previous.invulnerableRemainingMs,
+          invulnerableRemainingTicks: preferNextStatus ? next.invulnerableRemainingTicks : previous.invulnerableRemainingTicks,
           observedAt: Math.max(Number(previous.observedAt || 0), Number(next.observedAt || 0)),
           observedAtExplicit: explicitObservedAt > 0,
           explicitObservedAt,
@@ -3341,6 +3418,9 @@
           native: Boolean(candidate.native),
           render: Boolean(candidate.render),
           realtime: Boolean(candidate.realtime),
+          invulnerable: Boolean(candidate.invulnerable),
+          invulnerableRemainingMs: roundedOrNull(candidate.invulnerableRemainingMs),
+          invulnerableRemainingTicks: roundedOrNull(candidate.invulnerableRemainingTicks),
           status: candidate.status || "",
           reason: candidate.reason || "",
           staminaBlocked: Boolean(candidate.staminaBlocked),
@@ -3442,6 +3522,9 @@
             visible: Boolean(candidate?.visible),
             seekableNow: Boolean(candidate?.seekableNow),
             attackableNow: Boolean(candidate?.attackableNow),
+            invulnerable: Boolean(candidate?.invulnerable),
+            invulnerableRemainingMs: roundedOrNull(candidate?.invulnerableRemainingMs),
+            invulnerableRemainingTicks: roundedOrNull(candidate?.invulnerableRemainingTicks),
             stale,
             marked: true,
             markedAt: target.markedAt || 0,
@@ -27179,7 +27262,7 @@
               invulnerable,
               explicitFreshDropLow,
               attackableNow,
-              seekableNow: Boolean(candidate.seekableNow && !whitelisted && !invulnerable && !explicitFreshDropLow),
+              seekableNow: Boolean(candidate.seekableNow && !whitelisted && !explicitFreshDropLow),
               staminaBlocked,
               staminaCost,
               staminaBudget: budget,
@@ -27328,7 +27411,7 @@
               ...item,
               marked: targetIds.has(String(item.id)),
               markedAt: state2.targets.find((target) => String(target.id) === String(item.id))?.markedAt || 0,
-              status: item.whitelisted ? "\u767D\u540D\u5355" : item.staminaBlocked ? "\u4F53\u529B\u4E0D\u8DB3" : item.attackableNow ? "\u5C04\u7A0B\u5185" : item.visible ? "\u89C6\u91CE" : item.minimapOnly ? "minimap" : item.snapshot ? "\u5FEB\u7167" : "\u672A\u5237\u65B0"
+              status: item.whitelisted ? "\u767D\u540D\u5355" : item.invulnerable ? "\u65E0\u654C" : item.staminaBlocked ? "\u4F53\u529B\u4E0D\u8DB3" : item.attackableNow ? "\u5C04\u7A0B\u5185" : item.visible ? "\u89C6\u91CE" : item.minimapOnly ? "minimap" : item.snapshot ? "\u5FEB\u7167" : "\u672A\u5237\u65B0"
             })),
             state2.targets,
             {
@@ -27386,6 +27469,7 @@
           const selected = status.selectedTarget;
           if (!selected) return null;
           const targetId = String(selected.id || "");
+          const selectedInvulnerability = { invulnerable: Boolean(selected.invulnerable), invulnerableRemainingMs: selected.invulnerableRemainingMs ?? null, invulnerableRemainingTicks: selected.invulnerableRemainingTicks ?? null };
           const combatTarget = (context.combatTargets || []).find((item) => String(item.user_id ?? item.id ?? "") === targetId) || null;
           if (combatTarget && selected.visible && selected.attackableNow) {
             const chaseCombatTarget = {
@@ -27404,6 +27488,7 @@
                   name: selected.name || "",
                   drop: selected.drop,
                   source: selected.source,
+                  ...selectedInvulnerability,
                   reason: "chase-mode-combat"
                 },
                 target: action.target ? {
@@ -27431,6 +27516,7 @@
               name: selected.name || "",
               drop: selected.drop,
               source: selected.source,
+              ...selectedInvulnerability,
               reason: "chase-mode-approach"
             },
             target: {
@@ -27443,6 +27529,7 @@
               distance: Math.round(Number(dir.distance || selected.distance || 0)),
               source: selected.source,
               visible: Boolean(selected.visible),
+              ...selectedInvulnerability,
               minimapOnly: Boolean(selected.minimapOnly),
               chaseMode: true
             },
@@ -28596,16 +28683,20 @@
           bot.lastActionEntities = entities;
           updateOpportunityAfkStaminaObservations(realtimeEntities);
           const fullHp = isFullHp(self);
-          const avoidanceThreats = activeThreats.filter(isAvoidanceThreat);
+          const chaseMode = bot.chaseMode && typeof bot.chaseMode === "object" ? bot.chaseMode : {};
+          const chaseTargets = Array.isArray(chaseMode.targets) ? chaseMode.targets : [];
+          const chaseMarkedTargetIds = new Set(chaseTargets.map((target) => target?.id ?? target?.user_id ?? target?.userId).concat([chaseMode.selectedTargetId ?? chaseMode.selectedTarget?.id]).filter((id) => id !== void 0 && id !== null && id !== "").map(String));
+          const isMarkedChaseEntity = (entity) => chaseMarkedTargetIds.has(String(entity?.user_id ?? entity?.id ?? entity?.userId ?? ""));
+          const avoidanceThreats = activeThreats.filter((e) => isAvoidanceThreat(e) && !isMarkedChaseEntity(e));
           const nearbyAvoidanceRadius = Math.max(
             Number(cfg.dangerRadius || 0) || 0,
             Number(cfg.activeAvoidMaxDistance || cfg.activeCautionRadius || 0) || 0,
             Number(cfg.recoveryAvoidRadius || 0) || 0
           );
-          const nearbyAvoidanceThreats = nearbyHumans.filter((e) => e.distance <= nearbyAvoidanceRadius && isAvoidanceThreat(e));
+          const nearbyAvoidanceThreats = nearbyHumans.filter((e) => e.distance <= nearbyAvoidanceRadius && isAvoidanceThreat(e) && !isMarkedChaseEntity(e));
           const highValueCoinThreats = mergeThreatLists(
             avoidanceThreats,
-            nearbyHumans.filter((e) => e.native && isAvoidanceThreat(e))
+            nearbyHumans.filter((e) => e.native && isAvoidanceThreat(e) && !isMarkedChaseEntity(e))
           );
           const coinThreats = highValueCoinThreats;
           bot.actionThreats = coinThreats;
@@ -29233,9 +29324,7 @@
           chooseAction
         };
       }
-      module.exports = {
-        createOrchestrationDecisionRuntime
-      };
+      module.exports = { createOrchestrationDecisionRuntime };
     }
   });
 

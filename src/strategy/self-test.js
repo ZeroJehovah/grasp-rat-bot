@@ -1914,6 +1914,36 @@ function runStrategyModuleSelfTests() {
       && chaseC?.visible === false
   });
 
+  const chaseInvulnerableCandidate = normalizeChaseCandidate({
+    user_id: 'shielded',
+    name: 'Shielded',
+    x: 3000,
+    y: 0,
+    drop: 20,
+    hp: 100,
+    native: true,
+    invulnerable_remaining_ticks: 50
+  }, { self: chaseSelf, dist: chaseDist, nowMs: 1300 });
+  const chaseInvulnerableTargets = decorateChaseTargets(
+    normalizeChaseModeState({ targets: [{ id: 'shielded', dropAtMark: 20, lastDrop: 20 }] }),
+    [{ ...chaseInvulnerableCandidate, seekableNow: true, attackableNow: false }],
+    { nowMs: 1300 }
+  );
+  const chaseInvulnerablePicked = chooseChaseTarget(chaseInvulnerableTargets, null, {
+    nowMs: 1300,
+    stickMs: 0,
+    minDrop: 10
+  });
+  results.push({
+    name: 'chase-mode-invulnerable-target-keeps-remaining-time-and-remains-seekable',
+    passed: chaseInvulnerableCandidate?.invulnerable === true
+      && chaseInvulnerableCandidate?.invulnerableRemainingTicks === 50
+      && chaseInvulnerableCandidate?.invulnerableRemainingMs === 2500
+      && chaseInvulnerableTargets[0]?.seekableNow === true
+      && chaseInvulnerableTargets[0]?.attackableNow === false
+      && chaseInvulnerablePicked?.id === 'shielded'
+  });
+
   const chasePanelPool = [];
   for (let i = 0; i < 12; i += 1) {
     chasePanelPool.push({ id: 'drop-' + i, name: 'D' + i, drop: 30 - i, distance: 100000 + i, marked: false });
