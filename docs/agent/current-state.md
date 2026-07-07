@@ -4,14 +4,15 @@ Update this file for every remote bot release or handoff-relevant state change. 
 
 ## Latest Release
 
-- Latest remote bot: `bootstrap-0.4.599`.
-- Latest manifest SHA-256: `09105cd9567f72e8397750784ce51428d38d2429a77ce40c9568e3bd4aa3df15`.
-- Latest remote release commit: `f9b6d3a` (`bootstrap-0.4.599` switches moving passive runners back to live intercept after long close-range no-damage precision windows).
-- Latest bootstrap A versions: Tampermonkey `0.4.89`, extension `0.1.68`.
-- Latest direct entry/config SHA-256: `a18f51cdbbba0968883a477bf63968e0d0c161ca2f5d8a8fbd610e898d2c27fa`.
+- Latest remote bot: `bootstrap-0.4.600`.
+- Latest manifest SHA-256: `017c8d451e37e5a6b3331b2abb5d7f1dbc5d2ee7939cc9db4020ab2167453934`.
+- Latest remote release commit: `7438bca` (`bootstrap-0.4.600` adds the opt-in external watchdog service, browser heartbeat sender, dry-run stale-heartbeat detector, service-side Clash validation, and guarded direct-leave plumbing).
+- Latest bootstrap A versions: Tampermonkey `0.4.90`, extension `0.1.69`.
+- Latest direct entry/config SHA-256: `69ad9123b52c85ce09fa39c296afa621e1efe89730adfbbfd0cbfbc53eb08819`.
 
 ## Current Handoff
 
+- `bootstrap-0.4.600` adds the opt-in external watchdog path described in `docs/agent/external-watchdog-plan.md`. `combat-log-service` now exposes `/watchdog/status`, `/watchdog/config`, `/watchdog/heartbeat`, `/watchdog/test-clash`, and manual-confirmed `/watchdog/test-leave`; writes watchdog audit events to `logs/YYYY-MM-DD/audit/watchdog.jsonl`; dry-runs high-risk damaged-combat stale heartbeat detection by default; validates Clash from the Node service; and includes a guarded direct-leave client that stays unarmed until `directLeave.enabled=true`, `directLeave.verified=true`, `activeRescueEnabled=true`, and `dryRun=false`. Remote B sends non-batched heartbeat traffic only when explicitly configured through `configureWatchdog()`, and Bootstrap A Tampermonkey `0.4.90` / extension `0.1.69` persist that config and show a `WD` panel dot. The actual game direct-leave endpoint/auth still requires controlled live validation before marking `directLeave.verified=true`.
 - Bootstrap A Tampermonkey `0.4.89` and extension `0.1.68` make stale relogin chrome suppression page-load scoped. After OAuth return, page refresh, or reopening a logged-in game page, the panel hides previous exit reasons, relogin cooldown, login-point safety rows, inline `立即登录`, and old reconnect history while the current page has login confirmation and no new exit-detail event after this page load. A confirmed login is no longer cancelled by login-point safety reset/sample activity alone; only a real exit-detail event after the login attempt/page load brings those rows back. Remote B is unchanged.
 - Bootstrap A Tampermonkey `0.4.88` and extension `0.1.67` fix post-exit relogin panel suppression. The A panel still hides stale relogin chrome during a just-accepted login transition, but it no longer treats display-only `status.self`/`lastSelf` as a live self while the current reason is a relogin/no-self/login-snapshot wait, and it cancels accepted-login suppression when login-point safety reset/sample or exit-detail evidence occurs after the login attempt. Exit reason, cooldown, login-point safety rows, inline login, and reconnect rows should appear immediately after a new exit instead of first reappearing around `登录点安全 2/3`. Remote B is unchanged.
 - Bootstrap A Tampermonkey `0.4.87` and extension `0.1.66` suppress stale relogin UI during the short post-login transition when a recent login attempt has been accepted by the page, even before a fresh runtime self is visible. The signal is page-level login acceptance such as the visible leave control or a same-window `login ok User <id>` chat line after the login attempt; old HP/Drop/stamina rows from `lastSelf` are not treated as self-visible evidence. During that transition, the panel hides old exit reasons, relogin cooldown, login-point safety rows, inline `立即登录`, and reconnect history. Remote B is unchanged.
@@ -84,7 +85,7 @@ Update this file for every remote bot release or handoff-relevant state change. 
 
 ## Latest Validation Baseline
 
-The latest `bootstrap-0.4.599` release validation passed. Run build-producing commands and manifest-reading validation sequentially, not in parallel; `node scripts/build-remote-bot.js --version ...` rewrites `dist/manifest.json`, while `objective-status` and `verify-objective-build` read it.
+The latest `bootstrap-0.4.600` release validation passed. Run build-producing commands and manifest-reading validation sequentially, not in parallel; `node scripts/build-remote-bot.js --version ...` rewrites `dist/manifest.json`, while `objective-status` and `verify-objective-build` read it.
 
 ```bash
 node grasp-rat-bot.js --self-test
@@ -101,7 +102,7 @@ node --check extension/popup.js
 cd combat-log-service && npm test
 npm run test:runtime-helper-entry
 npm run test:remote-bundled
-node scripts/build-remote-bot.js --version bootstrap-0.4.599
+node scripts/build-remote-bot.js --version bootstrap-0.4.600
 node scripts/verify-objective-build.js
 git diff --check
 ```
