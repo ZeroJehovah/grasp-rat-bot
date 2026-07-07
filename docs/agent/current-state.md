@@ -6,7 +6,7 @@ Update this file for every remote bot release or handoff-relevant state change. 
 
 - Latest remote bot: `bootstrap-0.4.596`.
 - Latest manifest SHA-256: `a29ed06af4aed81d36a5e0d9b10f64c9363fb6e1d4242172c0eda5f78dc52406`.
-- Latest remote release commit: pending this release commit (`bootstrap-0.4.596` keeps invulnerable chase targets selectable and seekable while displaying their remaining invulnerability time).
+- Latest remote release commit: `10c38c7` (`bootstrap-0.4.596` keeps invulnerable chase targets selectable and seekable while displaying their remaining invulnerability time).
 - Latest bootstrap A versions: Tampermonkey `0.4.82`, extension `0.1.61`.
 - Latest direct entry/config SHA-256: `4f6a19b1d34b2bf7adec87ec72dd461db8dd0adb29b379c8ec12a344a7ce15fb`.
 
