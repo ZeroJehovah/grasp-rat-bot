@@ -3,7 +3,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.1.70';
+  const BOOTSTRAP_VERSION = '0.1.71';
   const BOOTSTRAP_OWNER = 'extension';
   const REPOSITORY_URL = 'https://github.com/ZeroJehovah/grasp-rat-bot';
   const LOADER_UPDATE_URL = 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/extension/page-bootstrap.js';
@@ -2906,6 +2906,15 @@
     const watchdogFailed = Number(watchdogStatus.failed || 0) || 0;
     const watchdogSent = Number(watchdogStatus.sent || 0) || 0;
     const watchdogService = watchdogStatus.service || null;
+    const watchdogServiceReasons = Array.isArray(watchdogService?.activeRescueReasons)
+      ? watchdogService.activeRescueReasons.filter(Boolean).slice(0, 4).join('|')
+      : '';
+    const watchdogServiceMissing = Array.isArray(watchdogService?.directLeaveMissing)
+      ? watchdogService.directLeaveMissing.filter(Boolean).slice(0, 4).join('|')
+      : '';
+    const watchdogServiceWarning = Array.isArray(watchdogService?.warnings) && watchdogService.warnings.length
+      ? watchdogService.warnings.filter(Boolean).slice(0, 3).join('|')
+      : String(watchdogService?.warning || '');
     const watchdogHasError = Boolean(watchdogStatus.lastError || watchdogStatus.serviceLastError);
     const watchdogColor = watchdogHasError ? '#fca5a5' : (watchdogEnabled ? '#67e8f9' : '#fde68a');
     const watchdogHalo = watchdogHasError ? 'rgba(251,113,133,.13)' : (watchdogEnabled ? 'rgba(34,211,238,.13)' : 'rgba(251,191,36,.14)');
@@ -2915,13 +2924,16 @@
       + '，失败 ' + formatNumber(watchdogFailed, '0')
       + (watchdogStatus.lastOkAgeMs !== null && watchdogStatus.lastOkAgeMs !== undefined ? '，最近成功 ' + formatDuration(watchdogStatus.lastOkAgeMs) + '前' : '')
       + (watchdogService ? '，服务' + (watchdogService.enabled ? '开启' : '关闭') + (watchdogService.dryRun ? '/dry-run' : (watchdogService.activeRescueEnabled ? '/主动' : '/待命')) : '')
+      + (watchdogService ? '，救援' + (watchdogService.activeRescueArmed ? 'armed' : '未武装') : '')
+      + (watchdogServiceReasons ? '，原因 ' + watchdogServiceReasons : '')
       + (watchdogService ? '，direct ' + (watchdogService.directLeaveReadyStates > 0 ? 'ready' : (watchdogService.directLeaveVerified ? 'unready' : 'unverified')) : '')
+      + (watchdogServiceMissing ? '，direct缺 ' + watchdogServiceMissing : '')
       + (watchdogService ? '，Clash ' + (watchdogService.clashValidationOk ? 'ok' : (watchdogService.clashEnabled ? '异常' : '关闭')) : '')
       + (watchdogService && watchdogService.heartbeatAgeMs !== null && watchdogService.heartbeatAgeMs !== undefined ? '，服务心跳 ' + formatDuration(watchdogService.heartbeatAgeMs) : '')
       + (watchdogStatus.lastServiceStatusAgeMs !== null && watchdogStatus.lastServiceStatusAgeMs !== undefined ? '，服务状态 ' + formatDuration(watchdogStatus.lastServiceStatusAgeMs) + '前' : '')
       + (watchdogStatus.lastError ? '，最近错误 ' + String(watchdogStatus.lastError) : '')
       + (watchdogStatus.serviceLastError ? '，服务错误 ' + String(watchdogStatus.serviceLastError) : '')
-      + (watchdogService?.warning ? '，服务警告 ' + String(watchdogService.warning) : '')
+      + (watchdogServiceWarning ? '，服务警告 ' + watchdogServiceWarning : '')
       + (watchdogStatus.lastSkipReason ? '，跳过原因 ' + String(watchdogStatus.lastSkipReason) : '');
     const persistent = suppressReloginChrome ? null : activePersistentExitDetail(status);
     const reloginHold = suppressReloginChrome ? 0 : (status?.enemyLeave?.holdRemainingMs || status?.pursuitLeave?.holdRemainingMs || status?.offlineLeave?.holdRemainingMs || persistent?.holdRemainingMs || 0);
