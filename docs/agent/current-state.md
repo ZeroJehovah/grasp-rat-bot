@@ -4,15 +4,16 @@ Update this file for every remote bot release or handoff-relevant state change. 
 
 ## Latest Release
 
-- Latest remote bot: `bootstrap-0.4.602`.
-- Latest manifest SHA-256: `0699ee54206104e6a5a2343c3727343b7cf4a2b3389989c6739bd9b483e363cd`.
-- Latest remote release commit: `54a927e` (`bootstrap-0.4.602` carries structured service `activeRescue` readiness, direct-leave missing reasons, and warnings through `status().watchdog.service`).
+- Latest remote bot: `bootstrap-0.4.603`.
+- Latest manifest SHA-256: `f49a89ccd0452a8a4d17d5ec4e95215c47406ad808fb17b2199cfeef57ed69e9`.
+- Latest remote release commit: pending push (`bootstrap-0.4.603` tightens leave response success confirmation for browser exits and watchdog direct leave).
 - Latest bootstrap A versions: Tampermonkey `0.4.92`, extension `0.1.71`.
 - Latest direct entry/config SHA-256: `b29f6313ca5b0124c11581ea9d391d045d0e969049a7b12165ea80e14edf7864`.
 
 ## Current Handoff
 
 - Post-release watchdog Cloudflare rescue now treats the live game leave path as `GET https://grasp-rat-game.h-e.top/leave?user_id=${userId}&token=${sessionToken}` with no body and no browser clearance-cookie configuration. A token/auth descriptor can arm direct leave; if the Node request returns a Cloudflare challenge response, the result is marked `cloudflareBlocked`, ordinary naked retry is skipped, validated Clash rescue switches IP, and direct leave is retried once with stage `after-clash`.
+- `bootstrap-0.4.603` tightens leave response success confirmation. Browser leave requests and watchdog direct leave now distinguish HTTP/request completion from confirmed server-side exit: `undefined`, button-click completion, plain `{ok:true}`, or HTTP 2xx without explicit left-state evidence stay pending/retryable. Confirmed success requires an explicit left response such as `event:"left"`, `left:true`, or `ok:true` with `joined:"UserRecordOnly"` and `current_join_mode:"None"`, matching the live `/leave` response shape. Watchdog direct-leave results now expose `httpOk` separately from confirmed `ok`.
 - The old watchdog cookie/header readiness gates have been removed. Missing browser clearance cookies are no longer a service config/readiness concept; the fallback is response-time Cloudflare detection plus Clash rescue. If Clash is enabled but not validated, Cloudflare rescue logs `clash-validation-failed` and does not send the post-Clash retry. The watchdog still suppresses repeated rescues for the same stale heartbeat window indefinitely; a new heartbeat sequence/receive time opens a new window.
 - Bootstrap A Tampermonkey `0.4.92` and extension `0.1.71` expand the WD tooltip to show the structured watchdog readiness data from Remote B/service status: whether active rescue is armed, the first readiness reasons, direct-leave missing fields such as `auth-missing`, and service warnings. Remote B remains `bootstrap-0.4.602`.
 - `bootstrap-0.4.602` extends the browser-side watchdog service-status summary. `status().watchdog.service` now includes service `activeRescueArmed`, `activeRescueReasons`, `directLeaveDescriptorReadyStates`, `directLeaveMissing`, and `warnings` in addition to the previous dry-run/direct-leave/Clash/heartbeat fields. This lets the browser status preserve the service's structured "why not armed" evidence, including `auth-missing`, dry-run mode, unverified direct leave, and missing heartbeat state.
@@ -97,7 +98,7 @@ Update this file for every remote bot release or handoff-relevant state change. 
 
 ## Latest Validation Baseline
 
-The latest `bootstrap-0.4.602` release validation passed. Run build-producing commands and manifest-reading validation sequentially, not in parallel; `node scripts/build-remote-bot.js --version ...` rewrites `dist/manifest.json`, while `objective-status` and `verify-objective-build` read it.
+The latest `bootstrap-0.4.603` release validation passed. Run build-producing commands and manifest-reading validation sequentially, not in parallel; `node scripts/build-remote-bot.js --version ...` rewrites `dist/manifest.json`, while `objective-status` and `verify-objective-build` read it.
 
 ```bash
 node grasp-rat-bot.js --self-test
@@ -115,7 +116,7 @@ cd combat-log-service && npm test
 npm run test:watchdog-runtime
 npm run test:runtime-helper-entry
 npm run test:remote-bundled
-node scripts/build-remote-bot.js --version bootstrap-0.4.602
+node scripts/build-remote-bot.js --version bootstrap-0.4.603
 node scripts/verify-objective-build.js
 git diff --check
 ```

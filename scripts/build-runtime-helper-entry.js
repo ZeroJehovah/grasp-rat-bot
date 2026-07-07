@@ -110,6 +110,7 @@ async function selfTest() {
   assert(source.includes('function normalizePendingExitStateForStorageCore'), 'pending-exit persistence helper was not bundled');
   assert(source.includes('function pendingExitRetryMsCore'), 'pending-exit helper was not bundled');
   assert(source.includes('function leaveRequestHasHttp403Core'), 'pending-exit leave request 403 helper was not bundled');
+  assert(source.includes('function leaveResponseConfirmsExitCore'), 'pending-exit leave response confirmation helper was not bundled');
   assert(source.includes('function leaveSuccessReloadConfirmationForDetailCore'), 'pending-exit leave success reload helper was not bundled');
   assert(source.includes('function leaveCommandFailureMessageCore'), 'leave-command failure helper was not bundled');
   assert(source.includes('function nextClashLeaveRescueStageCore'), 'leave-command Clash rescue stage helper was not bundled');

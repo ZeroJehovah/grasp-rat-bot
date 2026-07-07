@@ -21,6 +21,7 @@ const {
   leaveRequestHasHttp403Core,
   leaveDetailHasHttp403Core,
   leaveDetailSucceededCore,
+  leaveResponseConfirmsExitCore,
   leaveSuccessReloadConfirmationForDetailCore,
   leaveSuccessReloadConfirmationSatisfiedCore,
   pendingExitWaitReasonCore
@@ -277,8 +278,18 @@ function runStrategyModuleSelfTests() {
       && leaveDetailHasHttp403Core({ leaveRequests: [{ status: 500 }] }) === false
   });
   results.push({
-    name: 'pending-exit-leave-detail-success-core-rejects-error-pending-and-403',
-    passed: leaveDetailSucceededCore({ attempted: true, method: 'leave', lastLeaveRequest: { completedAt: 1000 } }) === true
+    name: 'pending-exit-leave-response-confirmation-core-requires-explicit-left-state',
+    passed: leaveResponseConfirmsExitCore({ ok: true, event: 'left', joined: 'UserRecordOnly', current_join_mode: 'None', life: 'Alive' }) === true
+      && leaveResponseConfirmsExitCore({ ok: true, left: true }) === true
+      && leaveResponseConfirmsExitCore({ ok: true, joined: 'UserRecordOnly', current_join_mode: 'None' }) === true
+      && leaveResponseConfirmsExitCore({ ok: true }) === false
+      && leaveResponseConfirmsExitCore({ ok: true, joined: 'Joined', current_join_mode: 'Active' }) === false
+      && leaveResponseConfirmsExitCore(undefined) === false
+  });
+  results.push({
+    name: 'pending-exit-leave-detail-success-core-rejects-error-pending-403-and-ambiguous-completion',
+    passed: leaveDetailSucceededCore({ attempted: true, method: 'leave', lastLeaveRequest: { completedAt: 1000 } }) === false
+      && leaveDetailSucceededCore({ attempted: true, method: 'leave', lastLeaveRequest: { completedAt: 1000, result: { ok: true, event: 'left', joined: 'UserRecordOnly', current_join_mode: 'None' } } }) === true
       && leaveDetailSucceededCore({ attempted: true, leaveRequestPending: true, method: 'leave' }) === false
       && leaveDetailSucceededCore({ attempted: true, error: 'timeout', method: 'leave' }) === false
       && leaveDetailSucceededCore({ attempted: true, method: 'leave', lastLeaveRequest: { status: 403 } }) === false
@@ -295,7 +306,8 @@ function runStrategyModuleSelfTests() {
     at: 900,
     lastLeaveRequest: {
       completedAt: 1000,
-      requestId: 'leave-request-1'
+      requestId: 'leave-request-1',
+      result: { ok: true, event: 'left', joined: 'UserRecordOnly', current_join_mode: 'None' }
     }
   }, {
     reloadConfirmation: existingReloadConfirmation
@@ -342,6 +354,12 @@ function runStrategyModuleSelfTests() {
     message: 'blocked',
     error: 'denied'
   });
+  const summarizedLeaveSuccess = summarizeLeaveCommandResultCore({
+    ok: true,
+    event: 'left',
+    joined: 'UserRecordOnly',
+    current_join_mode: 'None'
+  });
   results.push({
     name: 'leave-command-result-summary-core-normalizes-primitive-and-object-results',
     passed: summarizeLeaveCommandResultCore(undefined).type === 'undefined'
@@ -350,6 +368,8 @@ function runStrategyModuleSelfTests() {
       && summarizedLeaveResult.type === 'object'
       && summarizedLeaveResult.status === 403
       && summarizedLeaveResult.error === 'denied'
+      && summarizedLeaveSuccess.leaveConfirmed === true
+      && summarizedLeaveSuccess.response.current_join_mode === 'None'
   });
   results.push({
     name: 'leave-command-clash-rescue-failure-core-gates-hook-enabled-failed-detail',

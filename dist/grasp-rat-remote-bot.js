@@ -12,7 +12,7 @@
   var define_GRASP_RAT_RUNTIME_CONFIG_default;
   var init_define_GRASP_RAT_RUNTIME_CONFIG = __esm({
     "<define:__GRASP_RAT_RUNTIME_CONFIG__>"() {
-      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.602" };
+      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.603" };
     }
   });
 
@@ -1525,11 +1525,82 @@
     }
   });
 
+  // src/shared/leave-response.js
+  var require_leave_response = __commonJS({
+    "src/shared/leave-response.js"(exports, module) {
+      "use strict";
+      init_define_GRASP_RAT_RUNTIME_CONFIG();
+      function isObject(value) {
+        return Boolean(value && typeof value === "object" && !Array.isArray(value));
+      }
+      function stringValue(value) {
+        if (value === null || value === void 0) return "";
+        return String(value);
+      }
+      function truthyFlag(value) {
+        if (value === true) return true;
+        if (typeof value === "string") return /^(?:1|true|yes)$/i.test(value.trim());
+        return false;
+      }
+      function responseStatus(value) {
+        const status = Number(value?.status ?? value?.statusCode ?? NaN);
+        return Number.isFinite(status) ? status : 0;
+      }
+      function responseExplicitlyFailed(value) {
+        if (!isObject(value)) return false;
+        const status = responseStatus(value);
+        return value.ok === false || value.success === false || status >= 400 || Boolean(value.error && value.ok !== true && value.success !== true);
+      }
+      function leaveResponseConfirmsExitCore(value) {
+        if (!isObject(value)) return false;
+        if (responseExplicitlyFailed(value)) return false;
+        if (truthyFlag(value.leaveConfirmed) || truthyFlag(value.exitConfirmed)) return true;
+        if (isObject(value.result) && leaveResponseConfirmsExitCore(value.result)) return true;
+        if (isObject(value.response) && leaveResponseConfirmsExitCore(value.response)) return true;
+        const event = stringValue(value.event || value.type || value.action).trim().toLowerCase();
+        if (/^(?:left|leave|user-left|left-user)$/.test(event)) return true;
+        if (truthyFlag(value.left)) return true;
+        const joined = stringValue(value.joined || value.joinState || value.join_state).trim().toLowerCase();
+        const mode = stringValue(value.current_join_mode || value.currentJoinMode || value.joinMode || value.join_mode).trim().toLowerCase();
+        const responseOk = value.ok === true || value.success === true;
+        return Boolean(responseOk && joined === "userrecordonly" && mode === "none");
+      }
+      function summarizeLeaveResponseCore(value) {
+        if (!isObject(value)) return {};
+        const out = {
+          leaveConfirmed: leaveResponseConfirmsExitCore(value)
+        };
+        const copyString = (key, sourceKey = key) => {
+          if (value[sourceKey] !== void 0 && value[sourceKey] !== null) out[key] = stringValue(value[sourceKey]).slice(0, 80);
+        };
+        const copyRaw = (key) => {
+          if (value[key] !== void 0 && value[key] !== null) out[key] = value[key];
+        };
+        copyRaw("ok");
+        copyRaw("success");
+        copyString("event");
+        copyRaw("left");
+        copyString("joined");
+        copyString("current_join_mode");
+        copyString("life");
+        copyString("visible");
+        return out;
+      }
+      module.exports = {
+        leaveResponseConfirmsExitCore,
+        summarizeLeaveResponseCore
+      };
+    }
+  });
+
   // src/strategy/pending-exit.js
   var require_pending_exit = __commonJS({
     "src/strategy/pending-exit.js"(exports, module) {
       "use strict";
       init_define_GRASP_RAT_RUNTIME_CONFIG();
+      var {
+        leaveResponseConfirmsExitCore
+      } = require_leave_response();
       function pendingExitRetryMsCore(pending, options = {}) {
         const source = String(pending?.source || "");
         const retryFloorMs = Math.max(
@@ -1618,7 +1689,7 @@
         if (!detail || typeof detail !== "object") return false;
         if (!detail.attempted || detail.leaveRequestPending || detail.error || leaveDetailHasHttp403Core(detail)) return false;
         const request = latestLeaveRequest(detail);
-        return !request || Boolean(request.completedAt || request.method || detail.method);
+        return leaveResponseConfirmsExitCore(detail) || leaveResponseConfirmsExitCore(detail.result) || leaveResponseConfirmsExitCore(request) || leaveResponseConfirmsExitCore(request?.result);
       }
       function defaultNormalizeReloadConfirmation(value) {
         return value && typeof value === "object" && value.required ? value : null;
@@ -1661,6 +1732,7 @@
         leaveRequestHasHttp403Core,
         leaveDetailHasHttp403Core,
         leaveDetailSucceededCore,
+        leaveResponseConfirmsExitCore,
         leaveSuccessReloadConfirmationForDetailCore,
         leaveSuccessReloadConfirmationSatisfiedCore,
         pendingExitWaitReasonCore
@@ -1680,6 +1752,7 @@
         leaveRequestHasHttp403Core,
         leaveDetailHasHttp403Core,
         leaveDetailSucceededCore,
+        leaveResponseConfirmsExitCore,
         leaveSuccessReloadConfirmationForDetailCore,
         leaveSuccessReloadConfirmationSatisfiedCore,
         pendingExitWaitReasonCore
@@ -1691,6 +1764,7 @@
         leaveRequestHasHttp403Core,
         leaveDetailHasHttp403Core,
         leaveDetailSucceededCore,
+        leaveResponseConfirmsExitCore,
         leaveSuccessReloadConfirmationForDetailCore,
         leaveSuccessReloadConfirmationSatisfiedCore,
         pendingExitWaitReasonCore
@@ -8033,8 +8107,12 @@
       init_define_GRASP_RAT_RUNTIME_CONFIG();
       var {
         leaveDetailHasHttp403Core,
-        leaveDetailSucceededCore
+        leaveDetailSucceededCore,
+        leaveResponseConfirmsExitCore
       } = require_pending_exit();
+      var {
+        summarizeLeaveResponseCore
+      } = require_leave_response();
       var CLASH_LEAVE_RESCUE_STAGE_ORDER = Object.freeze(["auto", "direct", "manual"]);
       function leaveCommandFailureMessageCore(value) {
         if (value === false) return "leave request returned false";
@@ -8056,12 +8134,14 @@
         if (typeof value !== "object") return { type: typeof value, value: String(value).slice(0, 200) };
         return {
           type: Array.isArray(value) ? "array" : "object",
+          leaveConfirmed: leaveResponseConfirmsExitCore(value),
           ok: value.ok ?? null,
           success: value.success ?? null,
           status: value.status ?? value.statusCode ?? null,
           statusText: value.statusText || "",
           message: value.message || "",
-          error: value.error || ""
+          error: value.error || "",
+          response: summarizeLeaveResponseCore(value)
         };
       }
       function leaveDetailFailedForClashRescueCore(detail, options = {}) {
