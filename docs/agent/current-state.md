@@ -6,7 +6,7 @@ Update this file for every remote bot release or handoff-relevant state change. 
 
 - Latest remote bot: `bootstrap-0.4.595`.
 - Latest manifest SHA-256: `c7e0324edc55ed27bda893136f2ff0bce65a93b49175be72eb3780c623ace6fd`.
-- Latest remote release commit: pending this release commit (`bootstrap-0.4.595` suppresses confirmed chase kills from the `可追杀` candidate pool until a newer explicit observation arrives).
+- Latest remote release commit: `5883bc2` (`bootstrap-0.4.595` suppresses confirmed chase kills from the `可追杀` candidate pool until a newer explicit observation arrives).
 - Latest bootstrap A versions: Tampermonkey `0.4.81`, extension `0.1.60`.
 - Latest direct entry/config SHA-256: `d7167721cd0553eda202d23dd483e7c02bdfcc664f4daed27eab1ccfaa9d27da`.
 
