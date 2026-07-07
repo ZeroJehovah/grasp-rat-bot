@@ -12,7 +12,7 @@
   var define_GRASP_RAT_RUNTIME_CONFIG_default;
   var init_define_GRASP_RAT_RUNTIME_CONFIG = __esm({
     "<define:__GRASP_RAT_RUNTIME_CONFIG__>"() {
-      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.600" };
+      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.601" };
     }
   });
 
@@ -613,6 +613,7 @@
           watchdogEndpointConfigured: Boolean(config.watchdogEndpointConfigured),
           watchdogHeartbeatMs: 500,
           watchdogCombatHeartbeatMs: 200,
+          watchdogServiceStatusMs: 2e3,
           watchdogHeartbeatTimeoutMs: 400,
           watchdogSendLeaveDescriptor: false,
           watchdogLeaveDescriptor: config.watchdogLeaveDescriptor || null,
@@ -27891,6 +27892,13 @@
         }
         return objectValue(value);
       }
+      function safeJsonParse(text) {
+        try {
+          return text ? JSON.parse(text) : null;
+        } catch (_) {
+          return null;
+        }
+      }
       function createWatchdogHeartbeatRuntime(runtime = {}) {
         const {
           bot,
@@ -27929,13 +27937,51 @@
         function configuredEndpoint() {
           return String(cfg.watchdogEndpoint || watchdogState().endpoint || "http://127.0.0.1:18765/watchdog/heartbeat");
         }
+        function configuredStatusEndpoint() {
+          const endpoint = configuredEndpoint();
+          try {
+            const url = new URL(endpoint, locationRef?.origin || "https://grasp-rat-game.h-e.top");
+            if (!/\/watchdog\/heartbeat\/?$/i.test(url.pathname)) return "";
+            url.pathname = url.pathname.replace(/\/watchdog\/heartbeat\/?$/i, "/watchdog/status");
+            url.search = "";
+            url.hash = "";
+            return url.toString();
+          } catch (_) {
+            return "";
+          }
+        }
         function watchdogIntervalMs(combatActive) {
           const fallback = combatActive ? 200 : 500;
           const key = combatActive ? "watchdogCombatHeartbeatMs" : "watchdogHeartbeatMs";
           return Math.max(100, Number(cfg[key] || fallback) || fallback);
         }
+        function watchdogServiceStatusMs() {
+          return Math.max(1e3, Number(cfg.watchdogServiceStatusMs || 2e3) || 2e3);
+        }
         function watchdogTimeoutMs() {
           return Math.max(100, Number(cfg.watchdogHeartbeatTimeoutMs || 400) || 400);
+        }
+        function summarizeServiceStatus(body) {
+          const source = objectValue(body) || {};
+          const state2 = Array.isArray(source.states) ? source.states.find((item) => String(item?.pageId || "") === String(watchdogState().pageId || "")) || source.states[0] || null : null;
+          const clashValidation = source.clash?.validation || null;
+          return {
+            ok: Boolean(source.ok),
+            enabled: Boolean(source.enabled),
+            activeRescueEnabled: Boolean(source.activeRescueEnabled),
+            dryRun: Boolean(source.dryRun),
+            stateCount: Number(source.stateCount || 0) || 0,
+            heartbeatAgeMs: state2?.heartbeatAgeMs ?? null,
+            directLeaveEnabled: Boolean(source.directLeave?.enabled),
+            directLeaveVerified: Boolean(source.directLeave?.verified),
+            directLeaveReadyStates: Number(source.directLeave?.readyStates || 0) || 0,
+            clashEnabled: Boolean(source.clash?.enabled),
+            clashValidationOk: Boolean(clashValidation?.ok),
+            clashValidationError: String(clashValidation?.error || ""),
+            warning: String(source.warning || ""),
+            lastDecisionType: String(source.lastDecision?.type || ""),
+            lastDecisionAt: Number(source.lastDecision?.at || 0) || 0
+          };
         }
         function summarizeTarget(decision) {
           const target = decision?.target || decision?.combatState?.target || decision?.aimTarget?.target || decision?.attack?.target || bot.combatTarget || bot.lastTarget || null;
@@ -28083,6 +28129,57 @@
             if (timer && typeof clearTimeoutFn === "function") clearTimeoutFn(timer);
           });
         }
+        function requestStatusWithTimeout(endpoint) {
+          if (typeof fetchFn !== "function") return Promise.reject(new Error("fetch unavailable"));
+          const timeoutMs = watchdogTimeoutMs();
+          const AbortControllerImpl = typeof AbortController !== "undefined" ? AbortController : null;
+          const controller = AbortControllerImpl ? new AbortControllerImpl() : null;
+          const timer = controller && typeof setTimeoutFn === "function" ? setTimeoutFn(() => controller.abort(), timeoutMs) : 0;
+          return Promise.resolve().then(() => fetchFn(endpoint, {
+            method: "GET",
+            mode: "cors",
+            cache: "no-store",
+            signal: controller?.signal
+          })).then(async (res) => {
+            if (!res || !res.ok) throw new Error("watchdog status failed: HTTP " + (res?.status || 0));
+            const text = typeof res.text === "function" ? await res.text() : "";
+            return safeJsonParse(text) || {};
+          }).finally(() => {
+            if (timer && typeof clearTimeoutFn === "function") clearTimeoutFn(timer);
+          });
+        }
+        function pollWatchdogServiceStatus(force = false) {
+          const state2 = watchdogState();
+          if (!endpointConfigured()) {
+            state2.serviceStatus = null;
+            state2.serviceStatusEndpoint = "";
+            state2.serviceLastError = "";
+            return false;
+          }
+          const endpoint = configuredStatusEndpoint();
+          state2.serviceStatusEndpoint = endpoint;
+          if (!endpoint) {
+            state2.serviceLastError = "watchdog status endpoint unavailable";
+            return false;
+          }
+          if (state2.serviceStatusInFlight) return false;
+          const t = now();
+          if (!force && state2.lastServiceStatusAttemptAt && t - Number(state2.lastServiceStatusAttemptAt || 0) < watchdogServiceStatusMs()) {
+            return false;
+          }
+          state2.lastServiceStatusAttemptAt = t;
+          state2.serviceStatusInFlight = true;
+          requestStatusWithTimeout(endpoint).then((body) => {
+            state2.serviceStatus = summarizeServiceStatus(body);
+            state2.lastServiceStatusAt = now();
+            state2.serviceLastError = "";
+          }).catch((err) => {
+            state2.serviceLastError = err?.name === "AbortError" ? "watchdog status timed out" : err?.message || String(err);
+          }).finally(() => {
+            state2.serviceStatusInFlight = false;
+          });
+          return true;
+        }
         function shouldSendHeartbeat(force = false) {
           const state2 = watchdogState();
           if (!watchdogEnabled()) {
@@ -28148,11 +28245,13 @@
           );
           state2.timer = setIntervalFn(() => {
             try {
+              pollWatchdogServiceStatus(false);
               sendWatchdogHeartbeat(false);
             } catch (err) {
               state2.lastError = err?.message || String(err);
             }
           }, Math.max(100, minInterval));
+          pollWatchdogServiceStatus(true);
           return true;
         }
         function stopWatchdogHeartbeat() {
@@ -28201,13 +28300,16 @@
         function summarizeWatchdogStatus() {
           const state2 = watchdogState();
           const t = now();
+          const service = state2.serviceStatus || null;
           return {
             enabled: watchdogEnabled(),
             endpoint: endpointConfigured() ? configuredEndpoint() : "",
+            statusEndpoint: endpointConfigured() ? configuredStatusEndpoint() : "",
             endpointConfigured: endpointConfigured(),
             pageId: state2.pageId || "",
             heartbeatMs: watchdogIntervalMs(false),
             combatHeartbeatMs: watchdogIntervalMs(true),
+            serviceStatusMs: watchdogServiceStatusMs(),
             timeoutMs: watchdogTimeoutMs(),
             sendLeaveDescriptor: Boolean(cfg.watchdogSendLeaveDescriptor),
             leaveDescriptorConfigured: Boolean(leaveDescriptorConfig()),
@@ -28222,6 +28324,12 @@
             lastOkAgeMs: state2.lastOkAt ? Math.max(0, Math.round(t - Number(state2.lastOkAt || t))) : null,
             lastError: state2.lastError || "",
             lastSkipReason: state2.lastSkipReason || "",
+            service,
+            serviceStatusInFlight: Boolean(state2.serviceStatusInFlight),
+            lastServiceStatusAttemptAt: Number(state2.lastServiceStatusAttemptAt || 0),
+            lastServiceStatusAt: Number(state2.lastServiceStatusAt || 0),
+            lastServiceStatusAgeMs: state2.lastServiceStatusAt ? Math.max(0, Math.round(t - Number(state2.lastServiceStatusAt || t))) : null,
+            serviceLastError: state2.serviceLastError || "",
             damagedInCombat: Boolean(state2.damagedInCombat),
             pageLifecycle: state2.pageLifecycle || ""
           };
@@ -28254,7 +28362,8 @@
           buildWatchdogHeartbeat,
           sendWatchdogHeartbeat,
           startWatchdogHeartbeat,
-          stopWatchdogHeartbeat
+          stopWatchdogHeartbeat,
+          pollWatchdogServiceStatus
         };
       }
       module.exports = {

@@ -440,6 +440,7 @@ function buildRuntimeDefaults(config, combatLogEndpointConfigured) {
     watchdogEndpointConfigured: Boolean(config.watchdogEndpointConfigured),
     watchdogHeartbeatMs: 500,
     watchdogCombatHeartbeatMs: 200,
+    watchdogServiceStatusMs: 2000,
     watchdogHeartbeatTimeoutMs: 400,
     watchdogSendLeaveDescriptor: false,
     watchdogLeaveDescriptor: config.watchdogLeaveDescriptor || null,

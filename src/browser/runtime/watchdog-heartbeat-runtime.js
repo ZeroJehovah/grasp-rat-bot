@@ -40,6 +40,14 @@ function parseDescriptor(value) {
   return objectValue(value);
 }
 
+function safeJsonParse(text) {
+  try {
+    return text ? JSON.parse(text) : null;
+  } catch (_) {
+    return null;
+  }
+}
+
 function createWatchdogHeartbeatRuntime(runtime = {}) {
   const {
     bot,
@@ -82,14 +90,57 @@ function createWatchdogHeartbeatRuntime(runtime = {}) {
     return String(cfg.watchdogEndpoint || watchdogState().endpoint || 'http://127.0.0.1:18765/watchdog/heartbeat');
   }
 
+  function configuredStatusEndpoint() {
+    const endpoint = configuredEndpoint();
+    try {
+      const url = new URL(endpoint, locationRef?.origin || 'https://grasp-rat-game.h-e.top');
+      if (!/\/watchdog\/heartbeat\/?$/i.test(url.pathname)) return '';
+      url.pathname = url.pathname.replace(/\/watchdog\/heartbeat\/?$/i, '/watchdog/status');
+      url.search = '';
+      url.hash = '';
+      return url.toString();
+    } catch (_) {
+      return '';
+    }
+  }
+
   function watchdogIntervalMs(combatActive) {
     const fallback = combatActive ? 200 : 500;
     const key = combatActive ? 'watchdogCombatHeartbeatMs' : 'watchdogHeartbeatMs';
     return Math.max(100, Number(cfg[key] || fallback) || fallback);
   }
 
+  function watchdogServiceStatusMs() {
+    return Math.max(1000, Number(cfg.watchdogServiceStatusMs || 2000) || 2000);
+  }
+
   function watchdogTimeoutMs() {
     return Math.max(100, Number(cfg.watchdogHeartbeatTimeoutMs || 400) || 400);
+  }
+
+  function summarizeServiceStatus(body) {
+    const source = objectValue(body) || {};
+    const state = Array.isArray(source.states)
+      ? (source.states.find(item => String(item?.pageId || '') === String(watchdogState().pageId || '')) || source.states[0] || null)
+      : null;
+    const clashValidation = source.clash?.validation || null;
+    return {
+      ok: Boolean(source.ok),
+      enabled: Boolean(source.enabled),
+      activeRescueEnabled: Boolean(source.activeRescueEnabled),
+      dryRun: Boolean(source.dryRun),
+      stateCount: Number(source.stateCount || 0) || 0,
+      heartbeatAgeMs: state?.heartbeatAgeMs ?? null,
+      directLeaveEnabled: Boolean(source.directLeave?.enabled),
+      directLeaveVerified: Boolean(source.directLeave?.verified),
+      directLeaveReadyStates: Number(source.directLeave?.readyStates || 0) || 0,
+      clashEnabled: Boolean(source.clash?.enabled),
+      clashValidationOk: Boolean(clashValidation?.ok),
+      clashValidationError: String(clashValidation?.error || ''),
+      warning: String(source.warning || ''),
+      lastDecisionType: String(source.lastDecision?.type || ''),
+      lastDecisionAt: Number(source.lastDecision?.at || 0) || 0
+    };
   }
 
   function summarizeTarget(decision) {
@@ -255,6 +306,67 @@ function createWatchdogHeartbeatRuntime(runtime = {}) {
       });
   }
 
+  function requestStatusWithTimeout(endpoint) {
+    if (typeof fetchFn !== 'function') return Promise.reject(new Error('fetch unavailable'));
+    const timeoutMs = watchdogTimeoutMs();
+    const AbortControllerImpl = typeof AbortController !== 'undefined' ? AbortController : null;
+    const controller = AbortControllerImpl ? new AbortControllerImpl() : null;
+    const timer = controller && typeof setTimeoutFn === 'function'
+      ? setTimeoutFn(() => controller.abort(), timeoutMs)
+      : 0;
+    return Promise.resolve()
+      .then(() => fetchFn(endpoint, {
+        method: 'GET',
+        mode: 'cors',
+        cache: 'no-store',
+        signal: controller?.signal
+      }))
+      .then(async res => {
+        if (!res || !res.ok) throw new Error('watchdog status failed: HTTP ' + (res?.status || 0));
+        const text = typeof res.text === 'function' ? await res.text() : '';
+        return safeJsonParse(text) || {};
+      })
+      .finally(() => {
+        if (timer && typeof clearTimeoutFn === 'function') clearTimeoutFn(timer);
+      });
+  }
+
+  function pollWatchdogServiceStatus(force = false) {
+    const state = watchdogState();
+    if (!endpointConfigured()) {
+      state.serviceStatus = null;
+      state.serviceStatusEndpoint = '';
+      state.serviceLastError = '';
+      return false;
+    }
+    const endpoint = configuredStatusEndpoint();
+    state.serviceStatusEndpoint = endpoint;
+    if (!endpoint) {
+      state.serviceLastError = 'watchdog status endpoint unavailable';
+      return false;
+    }
+    if (state.serviceStatusInFlight) return false;
+    const t = now();
+    if (!force && state.lastServiceStatusAttemptAt && t - Number(state.lastServiceStatusAttemptAt || 0) < watchdogServiceStatusMs()) {
+      return false;
+    }
+    state.lastServiceStatusAttemptAt = t;
+    state.serviceStatusInFlight = true;
+    requestStatusWithTimeout(endpoint)
+      .then(body => {
+        state.serviceStatus = summarizeServiceStatus(body);
+        state.lastServiceStatusAt = now();
+        state.serviceLastError = '';
+      })
+      .catch(err => {
+        state.serviceLastError = err?.name === 'AbortError' ? 'watchdog status timed out' : (err?.message || String(err));
+      })
+      .finally(() => {
+        state.serviceStatusInFlight = false;
+      });
+    return true;
+  }
+
   function shouldSendHeartbeat(force = false) {
     const state = watchdogState();
     if (!watchdogEnabled()) {
@@ -325,11 +437,13 @@ function createWatchdogHeartbeatRuntime(runtime = {}) {
     );
     state.timer = setIntervalFn(() => {
       try {
+        pollWatchdogServiceStatus(false);
         sendWatchdogHeartbeat(false);
       } catch (err) {
         state.lastError = err?.message || String(err);
       }
     }, Math.max(100, minInterval));
+    pollWatchdogServiceStatus(true);
     return true;
   }
 
@@ -381,13 +495,16 @@ function createWatchdogHeartbeatRuntime(runtime = {}) {
   function summarizeWatchdogStatus() {
     const state = watchdogState();
     const t = now();
+    const service = state.serviceStatus || null;
     return {
       enabled: watchdogEnabled(),
       endpoint: endpointConfigured() ? configuredEndpoint() : '',
+      statusEndpoint: endpointConfigured() ? configuredStatusEndpoint() : '',
       endpointConfigured: endpointConfigured(),
       pageId: state.pageId || '',
       heartbeatMs: watchdogIntervalMs(false),
       combatHeartbeatMs: watchdogIntervalMs(true),
+      serviceStatusMs: watchdogServiceStatusMs(),
       timeoutMs: watchdogTimeoutMs(),
       sendLeaveDescriptor: Boolean(cfg.watchdogSendLeaveDescriptor),
       leaveDescriptorConfigured: Boolean(leaveDescriptorConfig()),
@@ -402,6 +519,12 @@ function createWatchdogHeartbeatRuntime(runtime = {}) {
       lastOkAgeMs: state.lastOkAt ? Math.max(0, Math.round(t - Number(state.lastOkAt || t))) : null,
       lastError: state.lastError || '',
       lastSkipReason: state.lastSkipReason || '',
+      service,
+      serviceStatusInFlight: Boolean(state.serviceStatusInFlight),
+      lastServiceStatusAttemptAt: Number(state.lastServiceStatusAttemptAt || 0),
+      lastServiceStatusAt: Number(state.lastServiceStatusAt || 0),
+      lastServiceStatusAgeMs: state.lastServiceStatusAt ? Math.max(0, Math.round(t - Number(state.lastServiceStatusAt || t))) : null,
+      serviceLastError: state.serviceLastError || '',
       damagedInCombat: Boolean(state.damagedInCombat),
       pageLifecycle: state.pageLifecycle || ''
     };
@@ -437,7 +560,8 @@ function createWatchdogHeartbeatRuntime(runtime = {}) {
     buildWatchdogHeartbeat,
     sendWatchdogHeartbeat,
     startWatchdogHeartbeat,
-    stopWatchdogHeartbeat
+    stopWatchdogHeartbeat,
+    pollWatchdogServiceStatus
   };
 }
 
