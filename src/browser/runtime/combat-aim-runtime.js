@@ -576,11 +576,18 @@ function createCombatAimRuntime(runtime = {}) {
       && (!attackRange || Number(distance) <= attackRange));
     const lateralRatio = Math.abs(Number(movement?.lateralRatio || 0));
     const passiveRunnerPrecisionRange = Math.max(0, Number(cfg.combatPassiveRunnerPrecisionRange || 0));
+    const passiveRunnerPrecisionMaxNoDamageMs = Math.max(0, Number(cfg.combatPassiveRunnerPrecisionMaxNoDamageMs || 0));
+    const passiveRunnerNoDamageMs = Math.max(0, Number(damage?.noDamageMs || 0));
+    const passiveRunnerPrecisionLimited = Boolean(
+      passiveRunnerPrecisionMaxNoDamageMs
+      && passiveRunnerNoDamageMs >= passiveRunnerPrecisionMaxNoDamageMs
+    );
     const passiveRunnerPrecision = Boolean(live
       && moving
       && options.passiveRunner
       && passiveRunnerPrecisionRange > 0
       && Number(distance) <= passiveRunnerPrecisionRange
+      && !passiveRunnerPrecisionLimited
       && (!attackRange || Number(distance) <= attackRange));
     const passiveRunnerIntercept = Boolean(live
       && moving
@@ -672,6 +679,7 @@ function createCombatAimRuntime(runtime = {}) {
       radialPrecision,
       fallbackPrecision: Boolean(fallbackPrecision.active),
       passiveRunner: Boolean(passiveRunnerAim),
+      passiveRunnerPrecisionLimited,
       movementMode: precision ? strategy : (steady ? 'steady' : (movement?.mode || ''))
     };
   }
@@ -720,6 +728,7 @@ function createCombatAimRuntime(runtime = {}) {
       radialPrecisionAim: Boolean(aimStrategy.radialPrecision),
       fallbackPrecisionAim: Boolean(aimStrategy.fallbackPrecision),
       passiveRunnerAim: Boolean(aimStrategy.passiveRunner),
+      passiveRunnerPrecisionLimited: Boolean(aimStrategy.passiveRunnerPrecisionLimited),
       aimConfidence: aimStrategy.bypassJitter ? 1 : null,
       opponentProfile,
     };
@@ -818,6 +827,7 @@ function createCombatAimRuntime(runtime = {}) {
         radialPrecisionAim: Boolean(aimStrategy.radialPrecision),
         fallbackPrecisionAim: Boolean(aimStrategy.fallbackPrecision),
         passiveRunnerAim: Boolean(aimStrategy.passiveRunner),
+        passiveRunnerPrecisionLimited: Boolean(aimStrategy.passiveRunnerPrecisionLimited),
         interceptAim: true,
         interceptFlightTicks: intercept.flightTicks,
         interceptFlightMs: intercept.flightMs,
@@ -887,6 +897,7 @@ function createCombatAimRuntime(runtime = {}) {
       radialPrecisionAim: Boolean(aimStrategy.radialPrecision),
       fallbackPrecisionAim: Boolean(aimStrategy.fallbackPrecision),
       passiveRunnerAim: Boolean(aimStrategy.passiveRunner),
+      passiveRunnerPrecisionLimited: Boolean(aimStrategy.passiveRunnerPrecisionLimited),
       interceptAim: false,
 	      aimConfidence: Math.max(0.2, Math.min(0.7, Number(opponentProfile.aimConfidenceScale || 1) * (1 - Math.min(0.65, motionScale * 0.35)))),
 	      opponentProfile

@@ -12,7 +12,7 @@
   var define_GRASP_RAT_RUNTIME_CONFIG_default;
   var init_define_GRASP_RAT_RUNTIME_CONFIG = __esm({
     "<define:__GRASP_RAT_RUNTIME_CONFIG__>"() {
-      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.598" };
+      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.599" };
     }
   });
 
@@ -265,6 +265,7 @@
           combatOpponentProbeEveryMs: 520,
           combatPassiveRunnerCloseRange: 4500,
           combatPassiveRunnerPrecisionRange: 5500,
+          combatPassiveRunnerPrecisionMaxNoDamageMs: 8e3,
           combatPassiveRunnerInterceptSpreadScale: 0,
           combatShootHardReserveMs: 1800,
           combatShootConserveEveryMs: 360,
@@ -23690,6 +23691,7 @@
               realBulletPrecision: Boolean(aim.realBulletPrecisionAim),
               radialPrecision: Boolean(aim.radialPrecisionAim),
               fallbackPrecision: Boolean(aim.fallbackPrecisionAim),
+              passiveRunnerPrecisionLimited: Boolean(aim.passiveRunnerPrecisionLimited),
               intercept: Boolean(aim.interceptAim),
               interceptFlightMs: Number.isFinite(Number(aim.interceptFlightMs)) ? Math.round(Number(aim.interceptFlightMs)) : null,
               interceptLeadDistance: Number.isFinite(Number(aim.interceptLeadDistance)) ? Math.round(Number(aim.interceptLeadDistance)) : null,
@@ -24112,6 +24114,7 @@
               radialPrecision: Boolean(aim.radialPrecisionAim),
               fallbackPrecision: Boolean(aim.fallbackPrecisionAim),
               passiveRunner: Boolean(aim.passiveRunnerAim),
+              passiveRunnerPrecisionLimited: Boolean(aim.passiveRunnerPrecisionLimited),
               intercept: Boolean(aim.interceptAim),
               interceptFlightMs: Number.isFinite(Number(aim.interceptFlightMs)) ? Math.round(Number(aim.interceptFlightMs)) : null,
               interceptLeadDistance: Number.isFinite(Number(aim.interceptLeadDistance)) ? Math.round(Number(aim.interceptLeadDistance)) : null,
@@ -24157,6 +24160,7 @@
                 radialPrecision: Boolean(aim.radialPrecisionAim),
                 fallbackPrecision: Boolean(aim.fallbackPrecisionAim),
                 passiveRunner: Boolean(aim.passiveRunnerAim),
+                passiveRunnerPrecisionLimited: Boolean(aim.passiveRunnerPrecisionLimited),
                 intercept: Boolean(aim.interceptAim),
                 interceptFlightMs: Number.isFinite(Number(aim.interceptFlightMs)) ? Math.round(Number(aim.interceptFlightMs)) : null,
                 interceptLeadDistance: Number.isFinite(Number(aim.interceptLeadDistance)) ? Math.round(Number(aim.interceptLeadDistance)) : null,
@@ -24759,7 +24763,12 @@
           const realBulletPrecision = Boolean(live && moving && options.realBulletPressure && (!attackRange || Number(distance) <= attackRange));
           const lateralRatio = Math.abs(Number(movement?.lateralRatio || 0));
           const passiveRunnerPrecisionRange = Math.max(0, Number(cfg.combatPassiveRunnerPrecisionRange || 0));
-          const passiveRunnerPrecision = Boolean(live && moving && options.passiveRunner && passiveRunnerPrecisionRange > 0 && Number(distance) <= passiveRunnerPrecisionRange && (!attackRange || Number(distance) <= attackRange));
+          const passiveRunnerPrecisionMaxNoDamageMs = Math.max(0, Number(cfg.combatPassiveRunnerPrecisionMaxNoDamageMs || 0));
+          const passiveRunnerNoDamageMs = Math.max(0, Number(damage?.noDamageMs || 0));
+          const passiveRunnerPrecisionLimited = Boolean(
+            passiveRunnerPrecisionMaxNoDamageMs && passiveRunnerNoDamageMs >= passiveRunnerPrecisionMaxNoDamageMs
+          );
+          const passiveRunnerPrecision = Boolean(live && moving && options.passiveRunner && passiveRunnerPrecisionRange > 0 && Number(distance) <= passiveRunnerPrecisionRange && !passiveRunnerPrecisionLimited && (!attackRange || Number(distance) <= attackRange));
           const passiveRunnerIntercept = Boolean(live && moving && movement && options.passiveRunner && !passiveRunnerPrecision && (!attackRange || Number(distance) <= attackRange));
           const liveIntercept = Boolean(live && moving && movement && (passiveRunnerIntercept || lateralRatio > radialMax && (realBulletPrecision || serverStall.stalled && (!attackRange || Number(distance) <= attackRange))));
           const radialPrecision = Boolean(live && moving && radialMax > 0 && movement && Number(movement.targetSpeed || 0) >= Number(cfg.combatStationarySpeed || 0) && lateralRatio <= radialMax && (!attackRange || Number(distance) <= attackRange));
@@ -24830,6 +24839,7 @@
             radialPrecision,
             fallbackPrecision: Boolean(fallbackPrecision.active),
             passiveRunner: Boolean(passiveRunnerAim),
+            passiveRunnerPrecisionLimited,
             movementMode: precision ? strategy : steady ? "steady" : movement?.mode || ""
           };
         }
@@ -24874,6 +24884,7 @@
             radialPrecisionAim: Boolean(aimStrategy.radialPrecision),
             fallbackPrecisionAim: Boolean(aimStrategy.fallbackPrecision),
             passiveRunnerAim: Boolean(aimStrategy.passiveRunner),
+            passiveRunnerPrecisionLimited: Boolean(aimStrategy.passiveRunnerPrecisionLimited),
             aimConfidence: aimStrategy.bypassJitter ? 1 : null,
             opponentProfile
           };
@@ -24958,6 +24969,7 @@
               radialPrecisionAim: Boolean(aimStrategy.radialPrecision),
               fallbackPrecisionAim: Boolean(aimStrategy.fallbackPrecision),
               passiveRunnerAim: Boolean(aimStrategy.passiveRunner),
+              passiveRunnerPrecisionLimited: Boolean(aimStrategy.passiveRunnerPrecisionLimited),
               interceptAim: true,
               interceptFlightTicks: intercept.flightTicks,
               interceptFlightMs: intercept.flightMs,
@@ -25025,6 +25037,7 @@
             radialPrecisionAim: Boolean(aimStrategy.radialPrecision),
             fallbackPrecisionAim: Boolean(aimStrategy.fallbackPrecision),
             passiveRunnerAim: Boolean(aimStrategy.passiveRunner),
+            passiveRunnerPrecisionLimited: Boolean(aimStrategy.passiveRunnerPrecisionLimited),
             interceptAim: false,
             aimConfidence: Math.max(0.2, Math.min(0.7, Number(opponentProfile.aimConfidenceScale || 1) * (1 - Math.min(0.65, motionScale * 0.35)))),
             opponentProfile
