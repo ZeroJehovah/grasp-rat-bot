@@ -218,6 +218,7 @@
   - `watchdogLeaveDescriptor = null`
   - `watchdogLeaveDescriptorTtlMs = 30000`
 - Combat-log-service watchdog defaults:
+  - Startup config can be loaded with `node server.js --watchdog-config <json-file>`; `combat-log-service/watchdog-config.example.json` documents the shape. Defaults remain disabled unless the file or later CLI flags explicitly enable them.
   - `enabled = false`
   - `activeRescueEnabled = false`
   - `dryRun = true`

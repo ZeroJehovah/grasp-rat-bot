@@ -77,6 +77,7 @@ window.__graspRatBotBootstrap.configureCombatLogging({ enabled: false })
   - `POST /watchdog/test-clash` performs a harmless Clash proxy-group read and validates configured target proxy names.
   - `POST /watchdog/test-leave` is manual-only and requires `confirm:true` before sending a direct leave request.
 - Defaults are inert: service watchdog `enabled=false`, `activeRescueEnabled=false`, `dryRun=true`; browser `watchdogEnabled=false` and `watchdogEndpointConfigured=false`. No heartbeat is sent and no rescue action can run until explicitly configured.
+- The collector can load service-side watchdog config from `node server.js --watchdog-config <json-file>`. Use `combat-log-service/watchdog-config.example.json` as the local template for Clash/direct-leave settings so exact secret strings, including backslashes, are preserved by JSON parsing. Startup output includes a redacted readiness summary.
 - Browser bootstrap exposes:
 
 ```js

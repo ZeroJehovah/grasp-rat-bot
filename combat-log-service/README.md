@@ -59,6 +59,19 @@ npm run cleanup
 npm run cleanup -- --dry-run
 ```
 
+Watchdog 可以从本地 JSON 文件启动配置，避免把 Clash secret 或 direct-leave 模板粘贴到浏览器控制台。示例文件：
+
+```bash
+cp watchdog-config.example.json watchdog-config.local.json
+node server.js --watchdog-config ./watchdog-config.local.json
+```
+
+启动日志会打印脱敏后的 watchdog 摘要，包括 dry-run/active 状态、direct-leave 是否已验证、Clash 校验状态和配置警告；不会打印 secret、token、Authorization 或完整 descriptor。命令行参数按顺序应用，写在 `--watchdog-config` 后面的 watchdog 参数会覆盖文件值，例如：
+
+```bash
+node server.js --watchdog-config ./watchdog-config.local.json --watchdog-dry-run
+```
+
 ## Tampermonkey 配置
 
 在游戏页面控制台执行：
@@ -120,6 +133,8 @@ curl http://127.0.0.1:18765/watchdog/status
 配置并验证 Clash：
 
 ```bash
+node server.js --watchdog-config ./watchdog-config.local.json
+
 curl -X POST http://127.0.0.1:18765/watchdog/config \
   -H 'content-type: application/json' \
   --data '{"clash":{"enabled":true,"controllerUrl":"http://127.0.0.1:9097","secret":"YOUR_SECRET","group":"GRASP-RAT-GAME","autoProxy":"S2-自动","manualProxy":"S2-手动","directProxy":"DIRECT"}}'

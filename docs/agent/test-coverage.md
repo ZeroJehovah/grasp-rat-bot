@@ -49,6 +49,7 @@ The browser runtime should adapt page/native state into these pure helpers inste
 
 - disabled default status;
 - runtime config update;
+- startup `--watchdog-config` JSON parsing, later CLI override precedence, exact Clash secret preservation, and redacted startup summary;
 - valid heartbeat ingestion and malformed heartbeat rejection;
 - direct-leave descriptor readiness;
 - stale damaged-combat dry-run audit logging with `watchdog-state-change`, duplicate suppression, fresh-heartbeat recovery, and token redaction;

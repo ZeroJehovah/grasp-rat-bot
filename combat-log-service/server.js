@@ -6,7 +6,7 @@ const http = require('http');
 const os = require('os');
 const path = require('path');
 const { cleanupDetailedLogs } = require('./cleanup-logs');
-const { DEFAULT_WATCHDOG_CONFIG, createWatchdogService, runWatchdogSelfTest } = require('./watchdog');
+const { DEFAULT_WATCHDOG_CONFIG, createWatchdogService, runWatchdogSelfTest, mergeConfig } = require('./watchdog');
 
 const DEFAULTS = {
   host: '127.0.0.1',
@@ -18,8 +18,40 @@ const DEFAULTS = {
   cleanupRetentionDays: 3,
   cleanupAt: '03:30',
   watchdog: DEFAULT_WATCHDOG_CONFIG,
+  watchdogConfigFile: '',
   selfTest: false
 };
+
+function isObject(value) {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+}
+
+function loadJsonFile(filePath, label = 'JSON file') {
+  const resolved = path.resolve(String(filePath || ''));
+  if (!filePath) throw new Error(`${label} path is required`);
+  let text = '';
+  try {
+    text = fs.readFileSync(resolved, 'utf8');
+  } catch (err) {
+    throw new Error(`cannot read ${label} ${resolved}: ${err?.message || String(err)}`);
+  }
+  try {
+    const data = JSON.parse(text);
+    if (!isObject(data)) throw new Error('top-level value must be an object');
+    return { path: resolved, data };
+  } catch (err) {
+    throw new Error(`invalid ${label} ${resolved}: ${err?.message || String(err)}`);
+  }
+}
+
+function loadWatchdogConfigFile(filePath, baseConfig = DEFAULT_WATCHDOG_CONFIG) {
+  const loaded = loadJsonFile(filePath, 'watchdog config');
+  const patch = isObject(loaded.data.watchdog) ? loaded.data.watchdog : loaded.data;
+  return {
+    path: loaded.path,
+    config: mergeConfig(baseConfig, patch)
+  };
+}
 
 function parseArgs(args) {
   const out = { ...DEFAULTS };
@@ -33,6 +65,11 @@ function parseArgs(args) {
     else if (arg === '--no-cleanup') out.cleanupEnabled = false;
     else if (arg === '--cleanup-retention-days') out.cleanupRetentionDays = Math.max(1, Math.floor(Number(args[++i] || out.cleanupRetentionDays) || out.cleanupRetentionDays));
     else if (arg === '--cleanup-at') out.cleanupAt = String(args[++i] || out.cleanupAt).trim() || out.cleanupAt;
+    else if (arg === '--watchdog-config') {
+      const loaded = loadWatchdogConfigFile(args[++i] || '', out.watchdog);
+      out.watchdog = loaded.config;
+      out.watchdogConfigFile = loaded.path;
+    }
     else if (arg === '--watchdog-enabled') out.watchdog = { ...out.watchdog, enabled: true };
     else if (arg === '--watchdog-active-rescue') out.watchdog = { ...out.watchdog, activeRescueEnabled: true, dryRun: false };
     else if (arg === '--watchdog-dry-run') out.watchdog = { ...out.watchdog, dryRun: true };
@@ -61,6 +98,7 @@ Options:
   --cleanup-retention-days <days>
                             Keep detailed combat/misc logs for this many local date directories. Default: ${DEFAULTS.cleanupRetentionDays}
   --cleanup-at <HH:MM>      Local time for daily cleanup. Default: ${DEFAULTS.cleanupAt}
+  --watchdog-config <file>  Load watchdog runtime config from a local JSON file. Later flags override it.
   --watchdog-enabled        Start external watchdog enabled. Rescue still stays inactive by default.
   --watchdog-active-rescue  Allow active watchdog rescue at startup. Requires configured/verified direct leave.
   --watchdog-dry-run        Force watchdog dry-run mode.
@@ -270,6 +308,27 @@ function createServer(options) {
   return server;
 }
 
+function summarizeWatchdogStartup(status, configFile = '') {
+  return {
+    enabled: Boolean(status?.enabled),
+    activeRescueEnabled: Boolean(status?.activeRescueEnabled),
+    dryRun: Boolean(status?.dryRun),
+    configFile: configFile || '',
+    stateCount: Number(status?.stateCount || 0),
+    warning: status?.warning || '',
+    directLeave: {
+      enabled: Boolean(status?.directLeave?.enabled),
+      verified: Boolean(status?.directLeave?.verified),
+      readyStates: Number(status?.directLeave?.readyStates || 0)
+    },
+    clash: {
+      enabled: Boolean(status?.clash?.enabled),
+      validationOk: Boolean(status?.clash?.validation?.ok),
+      validationError: status?.clash?.validation?.error || ''
+    }
+  };
+}
+
 function parseCleanupAt(value) {
   const text = String(value || DEFAULTS.cleanupAt).trim();
   const match = /^(\d{1,2}):(\d{2})$/.exec(text);
@@ -379,8 +438,42 @@ async function runSelfTest() {
     const later = new Date(2026, 5, 26, 4, 0, 0, 0).getTime();
     if (nextCleanupDelayMs(morning, '03:30') !== 30 * 60 * 1000) throw new Error('same-day cleanup delay mismatch');
     if (nextCleanupDelayMs(later, '03:30') !== 23.5 * 60 * 60 * 1000) throw new Error('next-day cleanup delay mismatch');
+    const watchdogConfigPath = path.join(root, 'watchdog-config.json');
+    fs.writeFileSync(watchdogConfigPath, JSON.stringify({
+      watchdog: {
+        enabled: true,
+        dryRun: true,
+        intervalMs: 333,
+        directLeave: {
+          enabled: true,
+          verified: false,
+          allowedOrigins: ['https://grasp-rat-game.h-e.top']
+        },
+        clash: {
+          enabled: true,
+          controllerUrl: 'http://127.0.0.1:9097',
+          secret: 'abc\\def',
+          group: 'GRASP-RAT-GAME'
+        }
+      }
+    }));
+    const parsed = parseArgs(['--watchdog-config', watchdogConfigPath, '--watchdog-interval-ms', '444']);
+    if (parsed.watchdogConfigFile !== watchdogConfigPath) throw new Error('watchdog config path was not retained');
+    if (!parsed.watchdog.enabled || !parsed.watchdog.dryRun) throw new Error('watchdog config file did not apply booleans');
+    if (parsed.watchdog.intervalMs !== 444) throw new Error('later watchdog flag did not override config file');
+    if (parsed.watchdog.clash.secret !== 'abc\\def') throw new Error('watchdog config did not preserve exact Clash secret');
+    const startup = summarizeWatchdogStartup({
+      enabled: parsed.watchdog.enabled,
+      activeRescueEnabled: parsed.watchdog.activeRescueEnabled,
+      dryRun: parsed.watchdog.dryRun,
+      stateCount: 0,
+      directLeave: { enabled: parsed.watchdog.directLeave.enabled, verified: parsed.watchdog.directLeave.verified, readyStates: 0 },
+      clash: { enabled: parsed.watchdog.clash.enabled, validation: { ok: false, error: 'not validated' } },
+      warning: ''
+    }, parsed.watchdogConfigFile);
+    if (JSON.stringify(startup).includes('abc\\def')) throw new Error('watchdog startup summary leaked Clash secret');
     await runWatchdogSelfTest();
-    console.log(JSON.stringify({ ok: true, cases: 5 }, null, 2));
+    console.log(JSON.stringify({ ok: true, cases: 6 }, null, 2));
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -404,6 +497,7 @@ function main() {
       endpoint: `http://${options.host}:${options.port}/combat-log`,
       health: `http://${options.host}:${options.port}/health`,
       dir: options.dir,
+      watchdog: summarizeWatchdogStartup(server.watchdog.status(), options.watchdogConfigFile),
       cleanup: options.cleanupEnabled ? {
         retentionDays: options.cleanupRetentionDays,
         dailyAt: options.cleanupAt
@@ -426,4 +520,13 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { createServer, appendCombatLog, parseArgs, nextCleanupDelayMs, scheduleDailyCleanup, runSelfTest };
+module.exports = {
+  createServer,
+  appendCombatLog,
+  parseArgs,
+  loadWatchdogConfigFile,
+  summarizeWatchdogStartup,
+  nextCleanupDelayMs,
+  scheduleDailyCleanup,
+  runSelfTest
+};
