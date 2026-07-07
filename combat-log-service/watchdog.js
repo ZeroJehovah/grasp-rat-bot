@@ -5,7 +5,6 @@ const path = require('path');
 
 const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
 const SECRET_KEY_RE = /(?:secret|token|cookie|authorization|password|credential|session)/i;
-const NON_SECRET_CONFIG_KEY_RE = /^(?:requiredCookieNames|requiredHeaders)$/i;
 
 const DEFAULT_WATCHDOG_CONFIG = {
   enabled: false,
@@ -30,9 +29,7 @@ const DEFAULT_WATCHDOG_CONFIG = {
     retryBackoffMs: 1200,
     descriptorTtlMs: 30000,
     successConfirmsExit: false,
-    allowedOrigins: [GAME_ORIGIN],
-    requiredHeaders: [],
-    requiredCookieNames: []
+    allowedOrigins: [GAME_ORIGIN]
   },
   clash: {
     enabled: false,
@@ -131,8 +128,6 @@ function mergeConfig(base, update) {
     if (Array.isArray(src.allowedOrigins)) {
       next.directLeave.allowedOrigins = src.allowedOrigins.map(item => stringValue(item).replace(/\/+$/, '')).filter(Boolean).slice(0, 12);
     }
-    if (Array.isArray(src.requiredHeaders)) next.directLeave.requiredHeaders = uniqueStrings(src.requiredHeaders, 12);
-    if (Array.isArray(src.requiredCookieNames)) next.directLeave.requiredCookieNames = uniqueStrings(src.requiredCookieNames, 12);
   }
   if (isObject(patch.clash)) {
     const src = patch.clash;
@@ -175,7 +170,7 @@ function normalizeClashStage(value) {
 
 function redact(value, seen = new WeakSet(), key = '') {
   if (value === null || value === undefined) return value;
-  if (SECRET_KEY_RE.test(key) && !NON_SECRET_CONFIG_KEY_RE.test(key)) return value ? '[redacted]' : '';
+  if (SECRET_KEY_RE.test(key)) return value ? '[redacted]' : '';
   if (Array.isArray(value)) return value.slice(0, 50).map(item => redact(item, seen));
   if (typeof value === 'object') {
     if (seen.has(value)) return '[circular]';
@@ -232,24 +227,6 @@ function normalizeSmallObject(value, allowedKeys = []) {
 
 function heartbeatKey(pageId, userId) {
   return `${pageId || 'page'}:${userId === null || userId === undefined || userId === '' ? 'unknown' : String(userId)}`;
-}
-
-function headerValue(headers, name) {
-  if (!isObject(headers)) return '';
-  const wanted = stringValue(name || '').toLowerCase();
-  for (const [key, value] of Object.entries(headers)) {
-    if (String(key).toLowerCase() === wanted) return stringValue(value);
-  }
-  return '';
-}
-
-function cookieHeaderHas(cookieHeader, cookieName) {
-  const wanted = stringValue(cookieName || '').trim();
-  if (!wanted) return false;
-  return stringValue(cookieHeader || '')
-    .split(';')
-    .map(part => part.trim())
-    .some(part => part.startsWith(`${wanted}=`));
 }
 
 function summarizeLeaveAuth(authState, config, now) {
@@ -310,13 +287,6 @@ function normalizeLeaveAuth(raw, payload, config, receivedAt) {
     if (raw.sessionTokenPresent && !sessionToken) missing.push('session-token-not-sent');
   }
   if (authRequired && !authEvidence) missing.push('auth-missing');
-  for (const header of uniqueStrings(config?.directLeave?.requiredHeaders || [], 12)) {
-    if (!headerValue(headers, header)) missing.push(`header:${header}`);
-  }
-  const cookieHeader = headerValue(headers, 'cookie');
-  for (const cookieName of uniqueStrings(config?.directLeave?.requiredCookieNames || [], 12)) {
-    if (!cookieHeaderHas(cookieHeader, cookieName)) missing.push(`cookie:${cookieName}`);
-  }
   const complete = Boolean(available && url && method && (!authRequired || authEvidence) && missing.length === 0);
   return {
     available,
@@ -437,6 +407,17 @@ function responseSummary(text, max = 180) {
       .replace(/\s{2,}/g, ' ')
       .slice(0, max)
   };
+}
+
+function isCloudflareBlockedResponse(status, statusText, bodyText) {
+  const code = Number(status || 0) || 0;
+  if (![403, 429, 503].includes(code)) return false;
+  const text = `${statusText || ''} ${bodyText || ''}`;
+  return /cloudflare|cf-ray|just a moment|checking your browser|attention required|challenge-platform|turnstile/i.test(text);
+}
+
+function isCloudflareBlockedResult(result) {
+  return Boolean(result && result.cloudflareBlocked);
 }
 
 function uniqueStrings(values, limit = 24) {
@@ -1020,23 +1001,36 @@ class WatchdogService {
         key: record.key,
         missing: leaveSummary.missing
       });
-      const clashResult = this.config.clash.enabled && this.clashValidation.ok
-        ? await this.runClashRescue(rescue)
-        : this.config.clash.enabled
-          ? await this.skipClashRescue(rescue, 'clash-validation-failed', { validation: this.clashValidation })
-          : null;
+      const clashResult = await this.runConfiguredClashRescue(rescue);
       await this.finalizeRescue(record, rescue, clashResult ? [{ status: 'fulfilled', value: clashResult }] : []);
       return rescue;
     }
-    const leavePromise = this.runDirectLeaveAttempt(record, rescue, 'initial');
-    const clashPromise = this.config.clash.enabled && this.clashValidation.ok
-      ? this.runClashRescue(rescue)
-      : this.config.clash.enabled
-        ? this.skipClashRescue(rescue, 'clash-validation-failed', { validation: this.clashValidation })
-        : Promise.resolve(null);
-    Promise.allSettled([leavePromise, clashPromise]).then(results => {
-      this.finalizeRescue(record, rescue, results).catch(() => {});
+    this.runActiveRescueFlow(record, rescue).catch(err => {
+      rescue.error = err?.message || String(err);
+      this.finalizeRescue(record, rescue, [{ status: 'rejected', reason: rescue.error }]).catch(() => {});
     });
+    return rescue;
+  }
+
+  async runConfiguredClashRescue(rescue) {
+    if (!this.config.clash.enabled) return null;
+    if (this.clashValidation.ok) return this.runClashRescue(rescue);
+    return this.skipClashRescue(rescue, 'clash-validation-failed', { validation: this.clashValidation });
+  }
+
+  async runActiveRescueFlow(record, rescue) {
+    const results = [];
+    const initialLeave = await this.runDirectLeaveAttempt(record, rescue, 'initial');
+    results.push({ status: 'fulfilled', value: initialLeave });
+    if (!rescue.confirmed && isCloudflareBlockedResult(initialLeave)) {
+      const clashResult = await this.runConfiguredClashRescue(rescue);
+      if (clashResult) results.push({ status: 'fulfilled', value: clashResult });
+      if (clashResult?.ok && !rescue.confirmed) {
+        const retryLeave = await this.runDirectLeaveAttempt(record, rescue, 'after-clash');
+        results.push({ status: 'fulfilled', value: retryLeave });
+      }
+    }
+    await this.finalizeRescue(record, rescue, results);
     return rescue;
   }
 
@@ -1115,7 +1109,7 @@ class WatchdogService {
       stage,
       result
     });
-    if (!result.ok && stage !== 'manual' && !rescue.confirmed) {
+    if (!result.ok && !result.cloudflareBlocked && stage !== 'manual' && !rescue.confirmed) {
       const retryMax = Math.max(0, Number(this.config.directLeave.retryMax || 0));
       const retryCount = Number(rescue.directLeaveRetryCount || 0);
       if (retryCount < retryMax && summarizeLeaveAuth(record.leaveAuth, this.config, this.now()).directLeaveReady) {
@@ -1143,6 +1137,7 @@ class WatchdogService {
       const status = Number(res?.status || 0) || 0;
       return {
         ok: status >= 200 && status < 300,
+        cloudflareBlocked: isCloudflareBlockedResponse(status, res?.statusText || '', text),
         at: startedAt,
         durationMs: Math.max(0, Math.round(this.now() - startedAt)),
         status,
@@ -1152,6 +1147,7 @@ class WatchdogService {
     } catch (err) {
       return {
         ok: false,
+        cloudflareBlocked: false,
         at: startedAt,
         durationMs: Math.max(0, Math.round(this.now() - startedAt)),
         error: err?.name === 'AbortError' ? 'direct leave timed out' : (err?.message || String(err))
@@ -1403,6 +1399,13 @@ async function runWatchdogSelfTest(options = {}) {
     };
   };
   const countMatches = (text, pattern) => (text.match(pattern) || []).length;
+  const waitForRescue = async (rescue, label) => {
+    for (let i = 0; i < 50; i += 1) {
+      if (!rescue.active) return;
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    throw new Error(`${label} rescue did not finish`);
+  };
   const makeLeaveAuth = (config, userId, receivedAt, expiresAt, token = 'secret-token') => normalizeLeaveAuth({
     available: true,
     userId,
@@ -1542,14 +1545,14 @@ async function runWatchdogSelfTest(options = {}) {
     watchdog.handleHeartbeat({ ...heartbeat, sequence: 3, at: currentNow - 5 });
     currentNow += 2500;
     const activeLeaveCountBefore = calls.filter(call => String(call.url).includes('/api/leave')).length;
+    const activeSwitchCountBefore = calls.filter(call => String(call.url).includes('/proxies/') && call.req?.method === 'PUT').length;
     await watchdog.checkNow();
-    await new Promise(resolve => setTimeout(resolve, 20));
+    await waitForRescue(watchdog.states.get('page-a:28886').rescue, 'active direct-leave');
     await watchdog.flushAudit();
     const activeLeaveCountAfter = calls.filter(call => String(call.url).includes('/api/leave')).length;
+    const activeSwitchCountAfter = calls.filter(call => String(call.url).includes('/proxies/') && call.req?.method === 'PUT').length;
     if (activeLeaveCountAfter !== activeLeaveCountBefore + 1) throw new Error('active rescue did not call direct leave exactly once');
-    const leaveIndex = calls.findIndex(call => String(call.url).includes('/api/leave'));
-    const switchIndex = calls.findIndex((call, index) => index > leaveIndex && String(call.url).includes('/proxies/'));
-    if (leaveIndex < 0 || switchIndex < 0) throw new Error('active rescue did not run direct leave before Clash switch');
+    if (activeSwitchCountAfter !== activeSwitchCountBefore) throw new Error('active rescue switched Clash after direct leave success');
     currentNow += 20000;
     await watchdog.checkNow();
     await new Promise(resolve => setTimeout(resolve, 20));
@@ -1589,45 +1592,6 @@ async function runWatchdogSelfTest(options = {}) {
     const noAuthSummary = summarizeLeaveAuth(noAuth, watchdog.config, currentNow);
     if (noAuthSummary.directLeaveReady || !noAuthSummary.missing.includes('auth-missing')) {
       throw new Error('direct leave descriptor without auth evidence was treated as ready');
-    }
-    const cookieRequiredConfig = mergeConfig(watchdog.config, {
-      directLeave: {
-        requiredCookieNames: ['cf_clearance']
-      }
-    });
-    const missingCookieAuth = normalizeLeaveAuth({
-      available: true,
-      userId: 28886,
-      origin: GAME_ORIGIN,
-      sessionToken: 'secret-token',
-      expiresAt: currentNow + 30000,
-      descriptor: {
-        url: `${GAME_ORIGIN}/leave?user_id=\${userId}&token=\${sessionToken}`,
-        method: 'GET'
-      }
-    }, { userId: 28886 }, cookieRequiredConfig, currentNow);
-    const missingCookieSummary = summarizeLeaveAuth(missingCookieAuth, cookieRequiredConfig, currentNow);
-    if (missingCookieSummary.directLeaveReady || !missingCookieSummary.missing.includes('cookie:cf_clearance')) {
-      throw new Error('direct leave descriptor without required Cloudflare cookie was treated as ready');
-    }
-    const cookieAuth = normalizeLeaveAuth({
-      available: true,
-      userId: 28886,
-      origin: GAME_ORIGIN,
-      sessionToken: 'secret-token',
-      expiresAt: currentNow + 30000,
-      descriptor: {
-        url: `${GAME_ORIGIN}/leave?user_id=\${userId}&token=\${sessionToken}`,
-        method: 'GET',
-        headers: {
-          Cookie: 'cf_clearance=test-clearance',
-          'User-Agent': 'self-test'
-        }
-      }
-    }, { userId: 28886 }, cookieRequiredConfig, currentNow);
-    const cookieSummary = summarizeLeaveAuth(cookieAuth, cookieRequiredConfig, currentNow);
-    if (!cookieSummary.directLeaveReady || cookieSummary.missing.length) {
-      throw new Error('direct leave descriptor with required Cloudflare cookie was not ready');
     }
 
     const warningWatchdog = createWatchdogService({
@@ -1671,6 +1635,86 @@ async function runWatchdogSelfTest(options = {}) {
     if (!warningStatus.warning.includes('auth-missing')) {
       throw new Error('active rescue warning did not include direct-leave missing reasons');
     }
+
+    let cloudflareNow = currentNow;
+    const cloudflareCalls = [];
+    const cloudflareWatchdog = createWatchdogService({
+      dir: root,
+      autoStart: false,
+      now: () => cloudflareNow,
+      fetch: async (url, req = {}) => {
+        cloudflareCalls.push({ url: String(url), req });
+        if (String(url).includes('/proxies/') && (req.method || 'GET') === 'GET') {
+          return { status: 200, statusText: 'OK', text: async () => JSON.stringify({ now: 'S2-自动', all: ['S2-自动', 'S2-手动', 'DIRECT'] }) };
+        }
+        if (String(url).includes('/proxies/') && req.method === 'PUT') {
+          return { status: 204, statusText: 'No Content', text: async () => '' };
+        }
+        if (String(url).includes('/connections')) {
+          return { status: 204, statusText: 'No Content', text: async () => '' };
+        }
+        const leaveCallCount = cloudflareCalls.filter(call => String(call.url).includes('/api/leave')).length;
+        if (leaveCallCount === 1) {
+          return { status: 403, statusText: 'Forbidden', text: async () => '<!doctype html><title>Just a moment...</title><body>Cloudflare challenge-platform</body>' };
+        }
+        return { status: 200, statusText: 'OK', text: async () => '{"left":true}' };
+      },
+      config: {
+        enabled: true,
+        activeRescueEnabled: true,
+        dryRun: false,
+        auditEnabled: false,
+        directLeave: { enabled: true, verified: true, retryMax: 2 },
+        clash: { enabled: true, secret: 'abc', group: 'GRASP-RAT-GAME' }
+      }
+    });
+    const cloudflareValidation = await cloudflareWatchdog.validateClash('self-test-cloudflare');
+    if (!cloudflareValidation.ok) throw new Error(`Cloudflare rescue Clash validation failed: ${cloudflareValidation.error}`);
+    const cloudflareRecord = {
+      key: 'cloudflare:1',
+      userId: 1,
+      leaveAuth: makeLeaveAuth(cloudflareWatchdog.config, 1, cloudflareNow, cloudflareNow + 30000, 'cloudflare-token')
+    };
+    const cloudflareRescue = await cloudflareWatchdog.startRescue(cloudflareRecord, { risky: true, reason: 'self-test-cloudflare', thresholdMs: 1 });
+    await waitForRescue(cloudflareRescue, 'Cloudflare');
+    const cloudflareLeaveCalls = cloudflareCalls.filter(call => String(call.url).includes('/api/leave'));
+    const cloudflareSwitchIndex = cloudflareCalls.findIndex(call => String(call.url).includes('/proxies/') && call.req?.method === 'PUT');
+    const secondLeaveIndex = cloudflareCalls.findIndex((call, index) => index > cloudflareSwitchIndex && String(call.url).includes('/api/leave'));
+    if (cloudflareLeaveCalls.length !== 2) throw new Error('Cloudflare rescue did not retry direct leave once after Clash');
+    if (!cloudflareRescue.directLeaveAttempts?.[0]?.result?.cloudflareBlocked) throw new Error('Cloudflare 403 response was not marked cloudflareBlocked');
+    if (cloudflareSwitchIndex < 0 || secondLeaveIndex < 0) throw new Error('Cloudflare rescue did not switch Clash before retrying direct leave');
+    if (cloudflareRescue.directLeaveAttempts?.[1]?.stage !== 'after-clash' || cloudflareRescue.directLeave?.ok !== true) {
+      throw new Error('Cloudflare rescue retry did not succeed after Clash');
+    }
+
+    const blockedCalls = [];
+    const blockedWatchdog = createWatchdogService({
+      dir: root,
+      autoStart: false,
+      now: () => cloudflareNow,
+      fetch: async (url, req = {}) => {
+        blockedCalls.push({ url: String(url), req });
+        return { status: 403, statusText: 'Forbidden', text: async () => '<html>Just a moment... Cloudflare</html>' };
+      },
+      config: {
+        enabled: true,
+        activeRescueEnabled: true,
+        dryRun: false,
+        auditEnabled: false,
+        directLeave: { enabled: true, verified: true, retryMax: 2 },
+        clash: { enabled: true, secret: 'abc', group: 'GRASP-RAT-GAME' }
+      }
+    });
+    const blockedRecord = {
+      key: 'cloudflare-blocked:1',
+      userId: 1,
+      leaveAuth: makeLeaveAuth(blockedWatchdog.config, 1, cloudflareNow, cloudflareNow + 30000, 'blocked-token')
+    };
+    const blockedRescue = await blockedWatchdog.startRescue(blockedRecord, { risky: true, reason: 'self-test-cloudflare-blocked', thresholdMs: 1 });
+    await waitForRescue(blockedRescue, 'Cloudflare blocked');
+    const blockedLeaveCalls = blockedCalls.filter(call => String(call.url).includes('/api/leave'));
+    if (blockedLeaveCalls.length !== 1) throw new Error('Cloudflare blocked rescue retried direct leave without valid Clash');
+    if (blockedRescue.clash?.reason !== 'clash-validation-failed') throw new Error('Cloudflare blocked rescue did not report Clash validation failure');
 
     let successNow = currentNow;
     const successCalls = [];
