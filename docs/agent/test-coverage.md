@@ -64,7 +64,7 @@ The browser runtime should adapt page/native state into these pure helpers inste
 - ordinary profit keeps visible/native coin and visible/native AFK priority before snapshot fallback;
 - chase-mode runtime owns target persistence/status and only hands combat off through current visible/attackable native combat targets;
 - post-login zoom keeps the 502m target radius, uses native/page `view r` as the stop condition, applies page-native `setViewRadius(50200)` before wheel fallback, only sends zoom-out fallback steps, disables blind fallback clicks by default, and keeps stable no-token session keys;
-- bootstrap panels expose red/blue dashed-circle manual view-radius buttons for 151m and 502m on the current-time row;
+- bootstrap panels expose red/blue dashed-circle manual view-radius buttons for 151m and 502m plus the icon-only hunt-panel toggle on the current-time row;
 - bootstrap auto-login evaluates the local login-point safety gate only after deciding that login is needed, and login-start grace is written only after observable login-start evidence;
 - userscript and extension bootstrap versions match their runtime constants.
 

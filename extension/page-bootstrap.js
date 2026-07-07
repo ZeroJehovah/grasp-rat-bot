@@ -3,7 +3,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.1.61';
+  const BOOTSTRAP_VERSION = '0.1.62';
   const BOOTSTRAP_OWNER = 'extension';
   const REPOSITORY_URL = 'https://github.com/ZeroJehovah/grasp-rat-bot';
   const LOADER_UPDATE_URL = 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/extension/page-bootstrap.js';
@@ -2171,28 +2171,47 @@
     const visible = chasePanelVisible();
     const button = document.createElement('button');
     button.type = 'button';
-    button.textContent = active > 0 ? '追杀 ' + active : '追杀';
-    button.title = chase ? '显示/隐藏追杀目标面板' : '等待远程脚本加载追杀模式';
+    button.title = chase
+      ? ('显示/隐藏猎杀目标面板' + (active > 0 ? '，猎杀中 ' + active : '，暂无猎杀目标'))
+      : '等待远程脚本加载猎杀模式';
+    button.setAttribute('aria-label', button.title);
     button.setAttribute('aria-pressed', String(visible));
     const accent = active > 0
       ? 'rgba(251,191,36,.58)'
       : (visible ? 'rgba(96,165,250,.62)' : 'rgba(148,163,184,.24)');
     const color = active > 0 ? '#fbbf24' : (visible ? '#bfdbfe' : '#cbd5e1');
     button.style.cssText = [
+      'display:inline-flex',
+      'align-items:center',
+      'justify-content:center',
       'flex:0 0 auto',
-      'height:24px',
+      'width:22px',
+      'height:22px',
       'box-sizing:border-box',
-      'padding:0 9px',
+      'padding:0',
       'border:1px solid ' + accent,
-      'border-radius:999px',
+      'border-radius:50%',
       'background:' + (active > 0 ? 'rgba(120,53,15,.34)' : 'rgba(15,23,42,.54)'),
       'color:' + color,
       'box-shadow:' + (visible ? '0 0 14px rgba(96,165,250,.22),inset 0 1px 0 rgba(255,255,255,.04)' : 'inset 0 1px 0 rgba(255,255,255,.04)'),
-      'font:800 10.5px/1 ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace',
-      'letter-spacing:0',
-      'cursor:pointer',
-      'white-space:nowrap'
+      'cursor:pointer'
     ].join(';');
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('aria-hidden', 'true');
+    svg.setAttribute('viewBox', '0 0 1024 1024');
+    svg.setAttribute('width', '16');
+    svg.setAttribute('height', '16');
+    svg.setAttribute('fill', 'currentColor');
+    svg.setAttribute('focusable', 'false');
+    for (const d of [
+      'M722.974 48.78l104.214 104.234-373.646 373.644-149.802-299.63c-3.662 3.098-7.646 5.604-11.136 8.986-11.414 11.06-24.008 20.38-36.768 29.382l152.996 305.972L348.4 630H390v45l61.502-61.176 307.258 153.658c8.924-12.608 18.504-24.826 29.428-36.086 3.548-3.658 6.16-7.77 9.376-11.602L496.172 569.1 869.496 195.334l103.704 103.73L1024 0 722.974 48.78zM170.402 896.8l41.996 127.2L390 844.2v-169.2zM178.002 630L0 811.602l127.8 42.6L348.4 630z',
+      'M677.77 105.44C609.772 37.442 519.39 0 423.238 0s-186.562 37.442-254.56 105.44C143.606 130.51 107.842 143.346 73.316 140.126L64 259.98c71.21 5.672 137.828-19.526 186.856-67.06 48.72-47.226 111.298-73.242 176.19-73.242 61.464 0 118.946 23.672 161.924 66.65l60.052 60.018 84.844-84.852-56.096-56.054zM918.728 346.232l-57.622-57.584-84.808 84.906 61.542 61.506c91.494 91.494 88.594 240-6.592 338.116-48.516 50.01-72.95 118.126-67.09 186.826l119.882-9.316c-3.076-35.45 9.55-70.196 34.688-95.332 140.362-140.362 140.362-368.76 0-509.122z'
+    ]) {
+      const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      path.setAttribute('d', d);
+      svg.appendChild(path);
+    }
+    button.appendChild(svg);
     button.addEventListener('click', event => {
       event.preventDefault();
       event.stopPropagation();
@@ -2288,7 +2307,7 @@
     const header = document.createElement('div');
     header.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 12px;border-bottom:1px solid rgba(148,163,184,.18)';
     const title = document.createElement('div');
-    title.textContent = '追杀目标';
+    title.textContent = '猎杀目标';
     title.style.cssText = 'font-size:12px;font-weight:800;color:#e5edf7';
     const count = document.createElement('div');
     count.textContent = chase ? ((chase.candidateCount || 0) + ' / ' + (chase.activeCount || 0)) : '等待脚本';
@@ -2338,13 +2357,13 @@
       controls.style.cssText = 'display:flex;align-items:center;gap:5px';
       if (candidate.marked) {
         const tag = document.createElement('span');
-        tag.textContent = '追杀中';
+        tag.textContent = '猎杀中';
         tag.style.cssText = 'height:22px;display:inline-flex;align-items:center;padding:0 7px;border:1px solid rgba(251,191,36,.48);border-radius:999px;background:rgba(120,53,15,.28);color:#fbbf24;font-size:10px;font-weight:800;box-shadow:0 0 12px rgba(251,191,36,.18)';
         controls.appendChild(tag);
         const cancel = document.createElement('button');
         cancel.type = 'button';
         cancel.textContent = '取消';
-        cancel.title = '取消追杀 ' + chaseCandidateLabel(candidate);
+        cancel.title = '取消猎杀 ' + chaseCandidateLabel(candidate);
         cancel.style.cssText = 'height:22px;padding:0 7px;border:1px solid rgba(148,163,184,.24);border-radius:999px;background:rgba(15,23,42,.54);color:#cbd5e1;font:700 10px/1 ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace;cursor:pointer';
         cancel.addEventListener('click', event => {
           event.preventDefault();
@@ -2357,9 +2376,9 @@
         const action = document.createElement('button');
         action.type = 'button';
         const disabled = !status || candidate.whitelisted || Number(candidate.drop ?? 0) < Number(chase.minDrop || 10);
-        action.textContent = candidate.whitelisted ? '白名单' : '追杀';
+        action.textContent = candidate.whitelisted ? '白名单' : '猎杀';
         action.disabled = disabled;
-        action.title = disabled ? '不可追杀' : '标记追杀 ' + chaseCandidateLabel(candidate);
+        action.title = disabled ? '不可猎杀' : '标记猎杀 ' + chaseCandidateLabel(candidate);
         action.style.cssText = 'height:22px;padding:0 8px;border:1px solid ' + (disabled ? 'rgba(148,163,184,.16)' : 'rgba(251,191,36,.42)') + ';border-radius:999px;background:' + (disabled ? 'rgba(15,23,42,.30)' : 'rgba(120,53,15,.30)') + ';color:' + (disabled ? '#64748b' : '#fbbf24') + ';font:800 10px/1 ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace;cursor:' + (disabled ? 'not-allowed' : 'pointer');
         action.addEventListener('click', event => {
           event.preventDefault();
@@ -2666,6 +2685,7 @@
       controls.style.cssText = 'display:inline-flex;align-items:center;gap:5px;flex:0 0 auto';
       controls.appendChild(createPanelZoomButton(PANEL_ZOOM_NEAR_RADIUS_CM, '#f87171', '缩放到 151m 视野'));
       controls.appendChild(createPanelZoomButton(PANEL_ZOOM_FAR_RADIUS_CM, '#60a5fa', '缩放到 502m 视野'));
+      controls.appendChild(createChaseToggleButton(status));
       line.appendChild(controls);
       appendParent.appendChild(line);
       return line;
@@ -2851,7 +2871,6 @@
     behaviorLabel.textContent = '当前行为：' + behaviorText(decision, status) + (hold > 0 ? '，等待重连：' + formatDuration(hold) : '');
     behaviorLabel.style.cssText = 'min-width:0;flex:1 1 auto;overflow-wrap:anywhere';
     behaviorRow.appendChild(behaviorLabel);
-    behaviorRow.appendChild(createChaseToggleButton(status));
     appendParent.appendChild(behaviorRow);
     appendRichLine([
       { text: '当前目标：', style: 'color:#94a3b8' },
