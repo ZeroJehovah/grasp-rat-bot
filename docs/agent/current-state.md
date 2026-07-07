@@ -6,7 +6,7 @@ Update this file for every remote bot release or handoff-relevant state change. 
 
 - Latest remote bot: `bootstrap-0.4.598`.
 - Latest manifest SHA-256: `efd355904cf6f40f821909835be1dfd6623772b8aa4021d11fadf1fc5e835826`.
-- Latest remote release commit: pending this release commit (`bootstrap-0.4.598` adds guarded native transport stall recovery before the normal offline/relogin path).
+- Latest remote release commit: `a56fb1e` (`bootstrap-0.4.598` adds guarded native transport stall recovery before the normal offline/relogin path).
 - Latest bootstrap A versions: Tampermonkey `0.4.84`, extension `0.1.63`.
 - Latest direct entry/config SHA-256: `57893e5c2760d0112dc09f39ea4021f53a0992dd26eb0e4647f8ba7b7295ea6f`.
 
