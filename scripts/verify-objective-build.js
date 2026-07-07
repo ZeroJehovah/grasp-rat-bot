@@ -1428,7 +1428,12 @@ async function main() {
 
   check('bootstrap panels suppress stale relogin chrome after fresh alive self or accepted login', () => {
     for (const [label, source] of [['userscript', userscriptText], ['extension', extensionBootstrapText]]) {
+      assert(source.includes('...(snapshot.pointSafety || {}),'), `${label} relogin gate status does not preserve full point-safety fields`);
+      assert(source.includes('lastExitSelfHpAt: Math.max(0, Math.round(Number(point.lastExitSelfHpAt || point.lastExitHpAt || 0) || 0))'), `${label} missing login-point exit timestamp for panel suppression`);
+      assert(source.includes('function panelHasPostLoginAttemptReloginEvidence'), `${label} missing post-login relogin-evidence guard`);
+      assert(source.includes('panelHasPostLoginAttemptReloginEvidence(status, attemptAt)'), `${label} accepted-login suppression ignores newer relogin evidence`);
       assert(source.includes('function panelHasFreshAliveSelf'), `${label} missing fresh alive self detector`);
+      assert(source.includes('if (waitReasonPrefersLastExit(status)) return false;'), `${label} fresh self detector can treat relogin wait lastSelf as live self`);
       assert(source.includes('const stamp = panelSelfStamp(candidate);'), `${label} fresh self detector can ignore self timestamps`);
       assert(source.includes('return Boolean(stamp && t - stamp <= 5000);'), `${label} fresh self detector can treat stale lastSelf as fresh`);
       assert(source.includes('function panelHasRecentLoginConfirmation'), `${label} missing accepted-login transition detector`);
