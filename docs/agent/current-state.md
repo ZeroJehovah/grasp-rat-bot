@@ -7,11 +7,12 @@ Update this file for every remote bot release or handoff-relevant state change. 
 - Latest remote bot: `bootstrap-0.4.599`.
 - Latest manifest SHA-256: `09105cd9567f72e8397750784ce51428d38d2429a77ce40c9568e3bd4aa3df15`.
 - Latest remote release commit: `f9b6d3a` (`bootstrap-0.4.599` switches moving passive runners back to live intercept after long close-range no-damage precision windows).
-- Latest bootstrap A versions: Tampermonkey `0.4.84`, extension `0.1.63`.
+- Latest bootstrap A versions: Tampermonkey `0.4.85`, extension `0.1.64`.
 - Latest direct entry/config SHA-256: `a18f51cdbbba0968883a477bf63968e0d0c161ca2f5d8a8fbd610e898d2c27fa`.
 
 ## Current Handoff
 
+- Bootstrap A Tampermonkey `0.4.85` and extension `0.1.64` hide benign reconnect history after the WebSocket has recovered. The panel still shows `重连` while the socket is not recovered, and still highlights reconnect churn when Remote B reports it, but a healthy `wsOpen` session no longer displays a single stale `1 / 10s` rolling-window reconnect count. Remote B is unchanged.
 - `bootstrap-0.4.599` limits close-range passive-runner precision after long no-damage windows. Confirmed passive coin-runners still use live/native/render precision inside `combatPassiveRunnerPrecisionRange = 5500cm` while target damage remains recent, but once a moving runner reaches `combatPassiveRunnerPrecisionMaxNoDamageMs = 8000` without target damage, close precision is disabled and the existing live intercept branch takes over. This targets July 7 `xuanze00`/`mango` logs where the bot kept aiming at current coordinates around 40-55m while the non-firing target continued moving. Offline replay improved `20260707034130-self-28886-vs-xuanze00` dynamic hits from `18/136` to `27/136` and `20260707034538-self-28886-vs-mango` from `25/227` to `40/227`; the earlier `20260705171540-self-28886-vs-xuanze00` precision reference stayed improved at `86/231` vs logged `29/231`. Bootstrap A is unchanged.
 - `bootstrap-0.4.598` adds guarded native transport stall recovery for the half-stall pattern where movement/shot intent keeps being sent but server position or action settlement stops advancing while state frames can still arrive. Before falling into the existing offline exit/relogin flow, Remote B stops local motion, detaches the native message pump, closes only the current page-owned native WebSocket, preserves current user/session/token state, waits up to 8s for the page's own reconnect, and then applies a 60s cooldown so repeated stalls cannot keep closing sockets. If the page reconnects with a replacement/open native WebSocket, normal control resumes; if it times out, the existing offline path handles the fallback. Bootstrap A is unchanged.
 - Bootstrap A Tampermonkey `0.4.84` and extension `0.1.63` add a panel interaction guard around the bootstrap panel, chase panel, and inline login button. Scheduled 500ms panel redraws are deferred while a panel control is between pointer/touch/mouse down and click dispatch, then flushed after the click. This prevents the panel from replacing the clicked DOM node before the browser emits `click`, which matched the intermittent first-click-no-op symptom on BOT/Log/view-radius/chase controls. Remote B is unchanged.
@@ -101,7 +102,7 @@ node scripts/verify-objective-build.js
 git diff --check
 ```
 
-Latest objective build verification reports 38 checks and guards:
+Latest objective build verification reports 39 checks and guards:
 
 - manifest/dist/source hash consistency;
 - direct runtime-entry bundling for production and local CDP/print-source;
@@ -115,7 +116,7 @@ Latest objective build verification reports 38 checks and guards:
 - chase-mode target persistence/status and native-visible-only combat handoff;
 - no-self snapshot recovery remains a dedicated control runtime module, visible login controls do not hide stale no-self page sessions, ordinary no-self auto-login prefers a visible native login control over page-global login when no page session is active, explicit login-required stale no-self sessions clear local/session/native state and reload without fresh snapshot confirmation, no-self cleanup requests a page reload after clearing stale local sessions, no-self recovery cleanup preserves `tmpGameHelpSeen*` tutorial markers, no-self recovery login markers suppress duplicate OAuth/login clicks after recovery login starts, confirmed pending exits request a page reload, confirmed no-self pending exits clear stale local sessions before any reload-block wait, stale native session evidence no longer blocks no-self/offline pending-exit confirmation when a fresh snapshot already proves the current self is absent, external/manual `left user <currentUserId>` exits clear stale native self entities when fresh snapshot evidence says self is gone while old `left user` chat is ignored for a live current self, no-self leave 403 recovery clears stale local sessions without pending-exit retry, the shared recovery marker helper is included in the browser module graph, and composition owners stay under size/dependency guards;
 - post-login visible-range zoom keeps the 502m target radius, uses the native/page `view r` as the stop condition, applies page-native `setViewRadius(50200)` before wheel fallback, only sends zoom-out fallback steps, disables blind fallback clicks by default, and keeps stable no-token session keys;
-- bootstrap panels expose red/blue dashed-circle manual view-radius buttons for 151m and 502m plus the icon-only hunt-panel toggle on the current-time row, and defer automatic panel redraws while panel controls are being clicked;
+- bootstrap panels expose red/blue dashed-circle manual view-radius buttons for 151m and 502m plus the icon-only hunt-panel toggle on the current-time row, defer automatic panel redraws while panel controls are being clicked, and hide benign reconnect history after WebSocket recovery while preserving churn display;
 - bootstrap auto-login evaluates login-point safety only after login is needed, and login-start paths prefer native controls over page-global login fallbacks while ignoring the bot-owned inline proxy button and only writing login-start grace after observable evidence;
 - userscript and extension bootstrap version consistency.
 
