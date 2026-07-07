@@ -1460,6 +1460,7 @@ module.exports = {
   DEFAULT_WATCHDOG_CONFIG,
   createWatchdogService,
   runWatchdogSelfTest,
+  mergeConfig,
   redact,
   buildDirectLeaveRequest,
   normalizeLeaveAuth
