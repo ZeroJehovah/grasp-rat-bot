@@ -14,7 +14,8 @@ Keep this file focused on current validation coverage. Do not use it as a migrat
 
 - `node grasp-rat-bot.js --self-test`: runs the Node self-test suite and delegates strategy module tests through `src/node/run-self-test.js`.
 - `node scripts/objective-status.js --self-test`: verifies objective-status reporting behavior.
-- `cd combat-log-service && npm test`: runs collector, cleanup, analyzer, daily-summary, and replay self-tests.
+- `cd combat-log-service && npm test`: runs collector, external-watchdog smoke, cleanup, analyzer, daily-summary, and replay self-tests.
+- `cd combat-log-service && npm run watchdog:smoke`: starts a temporary collector, exercises dry-run watchdog audit and active direct-leave dispatch with fake fetch, and verifies token redaction without touching the live game or Clash.
 - `npm run test:watchdog-runtime`: exercises the browser watchdog heartbeat runtime for disabled/no-traffic behavior, heartbeat payload shape, descriptor token opt-in, and derived `/watchdog/status` summaries.
 - `npm run test:runtime-helper-entry`: bundles and smoke-tests the browser runtime helper entry.
 - `npm run test:remote-bundled`: builds a candidate remote bot/manifest through the bundled runtime path.
@@ -55,6 +56,8 @@ The browser runtime should adapt page/native state into these pure helpers inste
 - active-rescue ordering where the direct leave request is created before the Clash switch;
 - manual direct-leave test requiring `confirm:true`;
 - direct-leave success confirmation, timeout retry, credential-expiry retry stop, and no retry after exit confirmation.
+
+`node combat-log-service/watchdog-smoke.js` covers the local HTTP surface end to end with a temporary service: `/health`, `/watchdog/config`, `/watchdog/heartbeat`, `/watchdog/status`, dry-run stale-heartbeat audit logging, audit redaction, active-rescue direct-leave dispatch through fake fetch, and clean disable behavior.
 
 The remaining validation gap is live direct-leave proof: the actual game leave endpoint/method/body/authentication must be verified in a controlled low-risk session before setting service config `directLeave.verified=true` or relying on active automatic rescue.
 
