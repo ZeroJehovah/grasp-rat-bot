@@ -6,6 +6,7 @@ const http = require('http');
 const os = require('os');
 const path = require('path');
 const { cleanupDetailedLogs } = require('./cleanup-logs');
+const { DEFAULT_WATCHDOG_CONFIG, createWatchdogService, runWatchdogSelfTest } = require('./watchdog');
 
 const DEFAULTS = {
   host: '127.0.0.1',
@@ -16,6 +17,7 @@ const DEFAULTS = {
   cleanupEnabled: true,
   cleanupRetentionDays: 3,
   cleanupAt: '03:30',
+  watchdog: DEFAULT_WATCHDOG_CONFIG,
   selfTest: false
 };
 
@@ -31,6 +33,10 @@ function parseArgs(args) {
     else if (arg === '--no-cleanup') out.cleanupEnabled = false;
     else if (arg === '--cleanup-retention-days') out.cleanupRetentionDays = Math.max(1, Math.floor(Number(args[++i] || out.cleanupRetentionDays) || out.cleanupRetentionDays));
     else if (arg === '--cleanup-at') out.cleanupAt = String(args[++i] || out.cleanupAt).trim() || out.cleanupAt;
+    else if (arg === '--watchdog-enabled') out.watchdog = { ...out.watchdog, enabled: true };
+    else if (arg === '--watchdog-active-rescue') out.watchdog = { ...out.watchdog, activeRescueEnabled: true, dryRun: false };
+    else if (arg === '--watchdog-dry-run') out.watchdog = { ...out.watchdog, dryRun: true };
+    else if (arg === '--watchdog-interval-ms') out.watchdog = { ...out.watchdog, intervalMs: Math.max(100, Number(args[++i] || out.watchdog.intervalMs) || out.watchdog.intervalMs) };
     else if (arg === '--self-test') out.selfTest = true;
     else if (arg === '--help' || arg === '-h') {
       printHelp();
@@ -55,6 +61,11 @@ Options:
   --cleanup-retention-days <days>
                             Keep detailed combat/misc logs for this many local date directories. Default: ${DEFAULTS.cleanupRetentionDays}
   --cleanup-at <HH:MM>      Local time for daily cleanup. Default: ${DEFAULTS.cleanupAt}
+  --watchdog-enabled        Start external watchdog enabled. Rescue still stays inactive by default.
+  --watchdog-active-rescue  Allow active watchdog rescue at startup. Requires configured/verified direct leave.
+  --watchdog-dry-run        Force watchdog dry-run mode.
+  --watchdog-interval-ms <ms>
+                            Watchdog stale-heartbeat scan interval. Default: ${DEFAULTS.watchdog.intervalMs}
   --self-test               Run collector regression checks
 `);
 }
@@ -128,6 +139,23 @@ function readBody(req, maxBodyBytes) {
   });
 }
 
+function requestPathname(req) {
+  try {
+    return new URL(req.url || '/', 'http://127.0.0.1').pathname;
+  } catch (_) {
+    return req.url || '/';
+  }
+}
+
+function isLocalRequest(req) {
+  const addr = String(req.socket?.remoteAddress || '');
+  return addr === '127.0.0.1'
+    || addr === '::1'
+    || addr === '::ffff:127.0.0.1'
+    || addr === ''
+    || addr === 'test';
+}
+
 async function appendCombatLog(options, payload, req) {
   if (!payload || typeof payload !== 'object') throw new Error('payload must be an object');
   const entries = normalizeEntries(payload);
@@ -159,7 +187,13 @@ async function appendCombatLog(options, payload, req) {
 }
 
 function createServer(options) {
-  return http.createServer(async (req, res) => {
+  const watchdog = options.watchdogService || createWatchdogService({
+    dir: options.dir,
+    config: options.watchdog || DEFAULT_WATCHDOG_CONFIG,
+    fetch: options.fetch
+  });
+  const server = http.createServer(async (req, res) => {
+    const pathname = requestPathname(req);
     res.setHeader('access-control-allow-origin', '*');
     res.setHeader('access-control-allow-methods', 'GET,POST,OPTIONS');
     res.setHeader('access-control-allow-headers', 'content-type');
@@ -169,11 +203,56 @@ function createServer(options) {
       res.end();
       return;
     }
-    if (req.method === 'GET' && req.url === '/health') {
-      sendJson(res, 200, { ok: true, service: 'grasp-rat-combat-log-service', dir: options.dir });
+    if (req.method === 'GET' && pathname === '/health') {
+      sendJson(res, 200, { ok: true, service: 'grasp-rat-combat-log-service', dir: options.dir, watchdog: watchdog.status() });
       return;
     }
-    if (req.method !== 'POST' || req.url !== '/combat-log') {
+    if (pathname.startsWith('/watchdog/')) {
+      try {
+        if (req.method === 'GET' && pathname === '/watchdog/status') {
+          sendJson(res, 200, watchdog.status());
+          return;
+        }
+        if (req.method !== 'POST') {
+          sendJson(res, 405, { ok: false, error: 'method not allowed' });
+          return;
+        }
+        if (pathname !== '/watchdog/heartbeat' && !isLocalRequest(req)) {
+          sendJson(res, 403, { ok: false, error: 'watchdog configuration endpoints are local-only' });
+          return;
+        }
+        const body = await readBody(req, watchdog.bodyLimit(pathname));
+        const payload = body ? JSON.parse(body) : {};
+        if (pathname === '/watchdog/config') {
+          const status = await watchdog.updateConfig(payload);
+          sendJson(res, 200, status);
+          return;
+        }
+        if (pathname === '/watchdog/heartbeat') {
+          const result = watchdog.handleHeartbeat(payload, {
+            remoteAddress: req.socket.remoteAddress || '',
+            userAgent: req.headers['user-agent'] || ''
+          });
+          sendJson(res, 200, result);
+          return;
+        }
+        if (pathname === '/watchdog/test-clash') {
+          const result = await watchdog.validateClash('manual-endpoint');
+          sendJson(res, result.ok ? 200 : 400, { ok: Boolean(result.ok), validation: result });
+          return;
+        }
+        if (pathname === '/watchdog/test-leave') {
+          const result = await watchdog.testLeave(payload);
+          sendJson(res, result.ok ? 200 : 400, result);
+          return;
+        }
+        sendJson(res, 404, { ok: false, error: 'not found' });
+      } catch (err) {
+        sendJson(res, 400, { ok: false, error: err?.message || String(err) });
+      }
+      return;
+    }
+    if (req.method !== 'POST' || pathname !== '/combat-log') {
       sendJson(res, 404, { ok: false, error: 'not found' });
       return;
     }
@@ -186,6 +265,9 @@ function createServer(options) {
       sendJson(res, 400, { ok: false, error: err?.message || String(err) });
     }
   });
+  server.watchdog = watchdog;
+  server.on('close', () => watchdog.stop());
+  return server;
 }
 
 function parseCleanupAt(value) {
@@ -297,7 +379,8 @@ async function runSelfTest() {
     const later = new Date(2026, 5, 26, 4, 0, 0, 0).getTime();
     if (nextCleanupDelayMs(morning, '03:30') !== 30 * 60 * 1000) throw new Error('same-day cleanup delay mismatch');
     if (nextCleanupDelayMs(later, '03:30') !== 23.5 * 60 * 60 * 1000) throw new Error('next-day cleanup delay mismatch');
-    console.log(JSON.stringify({ ok: true, cases: 4 }, null, 2));
+    await runWatchdogSelfTest();
+    console.log(JSON.stringify({ ok: true, cases: 5 }, null, 2));
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

@@ -3,7 +3,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.1.68';
+  const BOOTSTRAP_VERSION = '0.1.69';
   const BOOTSTRAP_OWNER = 'extension';
   const REPOSITORY_URL = 'https://github.com/ZeroJehovah/grasp-rat-bot';
   const LOADER_UPDATE_URL = 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/extension/page-bootstrap.js';
@@ -70,6 +70,15 @@
     combatLoggingEnabled: false,
     combatLogEndpoint: 'http://127.0.0.1:18765/combat-log',
     combatLogEndpointConfigured: false,
+    watchdogEnabled: false,
+    watchdogEndpoint: 'http://127.0.0.1:18765/watchdog/heartbeat',
+    watchdogEndpointConfigured: false,
+    watchdogHeartbeatMs: 500,
+    watchdogCombatHeartbeatMs: 200,
+    watchdogHeartbeatTimeoutMs: 400,
+    watchdogSendLeaveDescriptor: false,
+    watchdogLeaveDescriptor: '',
+    watchdogLeaveDescriptorTtlMs: 30000,
     debugBootstrapLogging: false,
     cacheBust: true,
     autoLogin: true,
@@ -476,6 +485,13 @@
       storedBoolean(readStored('combatLogEndpointConfigured', DEFAULTS.combatLogEndpointConfigured))
       || storedCombatLogEndpoint
     );
+    const storedWatchdogEndpoint = storedKeys.has('watchdogEndpoint')
+      ? String(readStored('watchdogEndpoint', '') || '')
+      : '';
+    const storedWatchdogEndpointConfigured = Boolean(
+      storedBoolean(readStored('watchdogEndpointConfigured', DEFAULTS.watchdogEndpointConfigured))
+      || storedWatchdogEndpoint
+    );
     const storedStatusEveryRaw = readStored('statusEvery', DEFAULTS.statusEvery);
     const storedStatusEvery = Number(storedStatusEveryRaw) === 1000 ? DEFAULTS.statusEvery : Number(storedStatusEveryRaw);
     cfg = {
@@ -504,6 +520,15 @@
       combatLoggingEnabled: Boolean(storedBoolean(readStored('combatLoggingEnabled', DEFAULTS.combatLoggingEnabled)) && storedCombatLogEndpointConfigured),
       combatLogEndpoint: storedCombatLogEndpoint || DEFAULTS.combatLogEndpoint,
       combatLogEndpointConfigured: storedCombatLogEndpointConfigured,
+      watchdogEnabled: Boolean(storedBoolean(readStored('watchdogEnabled', DEFAULTS.watchdogEnabled)) && storedWatchdogEndpointConfigured),
+      watchdogEndpoint: storedWatchdogEndpoint || DEFAULTS.watchdogEndpoint,
+      watchdogEndpointConfigured: storedWatchdogEndpointConfigured,
+      watchdogHeartbeatMs: Math.max(100, Number(readStored('watchdogHeartbeatMs', DEFAULTS.watchdogHeartbeatMs)) || DEFAULTS.watchdogHeartbeatMs),
+      watchdogCombatHeartbeatMs: Math.max(100, Number(readStored('watchdogCombatHeartbeatMs', DEFAULTS.watchdogCombatHeartbeatMs)) || DEFAULTS.watchdogCombatHeartbeatMs),
+      watchdogHeartbeatTimeoutMs: Math.max(100, Number(readStored('watchdogHeartbeatTimeoutMs', DEFAULTS.watchdogHeartbeatTimeoutMs)) || DEFAULTS.watchdogHeartbeatTimeoutMs),
+      watchdogSendLeaveDescriptor: Boolean(storedBoolean(readStored('watchdogSendLeaveDescriptor', DEFAULTS.watchdogSendLeaveDescriptor))),
+      watchdogLeaveDescriptor: String(readStored('watchdogLeaveDescriptor', DEFAULTS.watchdogLeaveDescriptor) || ''),
+      watchdogLeaveDescriptorTtlMs: Math.max(1000, Number(readStored('watchdogLeaveDescriptorTtlMs', DEFAULTS.watchdogLeaveDescriptorTtlMs)) || DEFAULTS.watchdogLeaveDescriptorTtlMs),
       cacheBust: Boolean(storedBoolean(readStored('cacheBust', DEFAULTS.cacheBust))),
       autoLogin: Boolean(storedBoolean(readStored('autoLogin', DEFAULTS.autoLogin))),
       clashLeaveRescueEnabled: Boolean(storedBoolean(readStored('clashLeaveRescueEnabled', DEFAULTS.clashLeaveRescueEnabled))),
@@ -2690,6 +2715,74 @@
     };
   }
 
+  function configureWatchdog(options = {}) {
+    const next = options && typeof options === 'object' ? options : {};
+    const stored = {};
+    if (Object.prototype.hasOwnProperty.call(next, 'endpoint')) {
+      cfg.watchdogEndpoint = String(next.endpoint || DEFAULTS.watchdogEndpoint);
+      cfg.watchdogEndpointConfigured = true;
+      stored.watchdogEndpoint = cfg.watchdogEndpoint;
+      stored.watchdogEndpointConfigured = true;
+    }
+    if (Object.prototype.hasOwnProperty.call(next, 'enabled')) {
+      cfg.watchdogEnabled = Boolean(next.enabled) && Boolean(cfg.watchdogEndpointConfigured);
+      stored.watchdogEnabled = cfg.watchdogEnabled;
+    }
+    if (Object.prototype.hasOwnProperty.call(next, 'heartbeatMs')) {
+      cfg.watchdogHeartbeatMs = Math.max(100, Number(next.heartbeatMs || DEFAULTS.watchdogHeartbeatMs) || DEFAULTS.watchdogHeartbeatMs);
+      stored.watchdogHeartbeatMs = cfg.watchdogHeartbeatMs;
+    }
+    if (Object.prototype.hasOwnProperty.call(next, 'combatHeartbeatMs')) {
+      cfg.watchdogCombatHeartbeatMs = Math.max(100, Number(next.combatHeartbeatMs || DEFAULTS.watchdogCombatHeartbeatMs) || DEFAULTS.watchdogCombatHeartbeatMs);
+      stored.watchdogCombatHeartbeatMs = cfg.watchdogCombatHeartbeatMs;
+    }
+    if (Object.prototype.hasOwnProperty.call(next, 'timeoutMs')) {
+      cfg.watchdogHeartbeatTimeoutMs = Math.max(100, Number(next.timeoutMs || DEFAULTS.watchdogHeartbeatTimeoutMs) || DEFAULTS.watchdogHeartbeatTimeoutMs);
+      stored.watchdogHeartbeatTimeoutMs = cfg.watchdogHeartbeatTimeoutMs;
+    }
+    if (Object.prototype.hasOwnProperty.call(next, 'sendLeaveDescriptor')) {
+      cfg.watchdogSendLeaveDescriptor = Boolean(next.sendLeaveDescriptor);
+      stored.watchdogSendLeaveDescriptor = cfg.watchdogSendLeaveDescriptor;
+    }
+    if (Object.prototype.hasOwnProperty.call(next, 'leaveDescriptor')) {
+      cfg.watchdogLeaveDescriptor = next.leaveDescriptor
+        ? (typeof next.leaveDescriptor === 'string' ? next.leaveDescriptor : safeStringify(next.leaveDescriptor))
+        : '';
+      stored.watchdogLeaveDescriptor = cfg.watchdogLeaveDescriptor;
+    }
+    if (Object.prototype.hasOwnProperty.call(next, 'leaveDescriptorTtlMs')) {
+      cfg.watchdogLeaveDescriptorTtlMs = Math.max(1000, Number(next.leaveDescriptorTtlMs || DEFAULTS.watchdogLeaveDescriptorTtlMs) || DEFAULTS.watchdogLeaveDescriptorTtlMs);
+      stored.watchdogLeaveDescriptorTtlMs = cfg.watchdogLeaveDescriptorTtlMs;
+    }
+    if (Object.keys(stored).length) writeStored(stored);
+    try {
+      const bot = window.__graspRatBot;
+      if (bot && typeof bot.configureWatchdog === 'function') {
+        bot.configureWatchdog({
+          enabled: Boolean(cfg.watchdogEnabled && cfg.watchdogEndpointConfigured),
+          endpoint: cfg.watchdogEndpointConfigured ? cfg.watchdogEndpoint : '',
+          heartbeatMs: cfg.watchdogHeartbeatMs,
+          combatHeartbeatMs: cfg.watchdogCombatHeartbeatMs,
+          timeoutMs: cfg.watchdogHeartbeatTimeoutMs,
+          sendLeaveDescriptor: Boolean(cfg.watchdogSendLeaveDescriptor),
+          leaveDescriptor: cfg.watchdogLeaveDescriptor,
+          leaveDescriptorTtlMs: cfg.watchdogLeaveDescriptorTtlMs
+        });
+      }
+    } catch (_) {}
+    updateBootstrapPanel(true);
+    return {
+      enabled: cfg.watchdogEnabled,
+      endpoint: cfg.watchdogEndpoint,
+      endpointConfigured: Boolean(cfg.watchdogEndpointConfigured),
+      heartbeatMs: cfg.watchdogHeartbeatMs,
+      combatHeartbeatMs: cfg.watchdogCombatHeartbeatMs,
+      timeoutMs: cfg.watchdogHeartbeatTimeoutMs,
+      sendLeaveDescriptor: Boolean(cfg.watchdogSendLeaveDescriptor),
+      leaveDescriptorConfigured: Boolean(cfg.watchdogLeaveDescriptor)
+    };
+  }
+
   function configureClashLeaveRescue(options = {}) {
     const next = options && typeof options === 'object' ? options : {};
     const stored = {};
@@ -2807,6 +2900,21 @@
       + '，待发 ' + formatNumber(remoteLogPending, '0')
       + '，失败 ' + formatNumber(remoteLogFailed, '0')
       + (combatLogStatus.lastError ? '，最近错误 ' + String(combatLogStatus.lastError) : '');
+    const watchdogStatus = status?.watchdog || {};
+    const watchdogVisible = Boolean(cfg.watchdogEndpointConfigured || watchdogStatus.endpointConfigured);
+    const watchdogEnabled = watchdogVisible && Boolean(cfg.watchdogEnabled || watchdogStatus.enabled);
+    const watchdogFailed = Number(watchdogStatus.failed || 0) || 0;
+    const watchdogSent = Number(watchdogStatus.sent || 0) || 0;
+    const watchdogHasError = Boolean(watchdogStatus.lastError);
+    const watchdogColor = watchdogHasError ? '#fca5a5' : (watchdogEnabled ? '#67e8f9' : '#fde68a');
+    const watchdogHalo = watchdogHasError ? 'rgba(251,113,133,.13)' : (watchdogEnabled ? 'rgba(34,211,238,.13)' : 'rgba(251,191,36,.14)');
+    const watchdogGlow = watchdogHasError ? 'rgba(251,113,133,.45)' : (watchdogEnabled ? 'rgba(34,211,238,.45)' : 'rgba(251,191,36,.45)');
+    const watchdogTitle = '外部 Watchdog ' + (watchdogEnabled ? '开启' : '关闭')
+      + '，已发 ' + formatNumber(watchdogSent, '0')
+      + '，失败 ' + formatNumber(watchdogFailed, '0')
+      + (watchdogStatus.lastOkAgeMs !== null && watchdogStatus.lastOkAgeMs !== undefined ? '，最近成功 ' + formatDuration(watchdogStatus.lastOkAgeMs) + '前' : '')
+      + (watchdogStatus.lastError ? '，最近错误 ' + String(watchdogStatus.lastError) : '')
+      + (watchdogStatus.lastSkipReason ? '，跳过原因 ' + String(watchdogStatus.lastSkipReason) : '');
     const persistent = suppressReloginChrome ? null : activePersistentExitDetail(status);
     const reloginHold = suppressReloginChrome ? 0 : (status?.enemyLeave?.holdRemainingMs || status?.pursuitLeave?.holdRemainingMs || status?.offlineLeave?.holdRemainingMs || persistent?.holdRemainingMs || 0);
     const statusText = paused ? '暂停' : (status?.running ? '运行' : '未运行');
@@ -3116,6 +3224,15 @@
       });
       logDot.setAttribute('aria-pressed', String(remoteLogEnabled));
       actions.appendChild(logDot);
+    }
+    if (watchdogVisible) {
+      const watchdogDot = createDot(watchdogTitle, watchdogColor, watchdogHalo, watchdogGlow, {
+        label: 'WD',
+        pending: Boolean(watchdogStatus.sending),
+        onClick: () => configureWatchdog({ enabled: !watchdogEnabled })
+      });
+      watchdogDot.setAttribute('aria-pressed', String(watchdogEnabled));
+      actions.appendChild(watchdogDot);
     }
     actions.appendChild(createNetworkQualityPill());
     header.appendChild(actions);
@@ -3743,6 +3860,15 @@
       combatLoggingEnabled: Boolean(cfg.combatLoggingEnabled && cfg.combatLogEndpointConfigured),
       combatLogEndpoint: cfg.combatLogEndpointConfigured ? cfg.combatLogEndpoint : '',
       combatLogEndpointConfigured: Boolean(cfg.combatLogEndpointConfigured),
+      watchdogEnabled: Boolean(cfg.watchdogEnabled && cfg.watchdogEndpointConfigured),
+      watchdogEndpoint: cfg.watchdogEndpointConfigured ? cfg.watchdogEndpoint : '',
+      watchdogEndpointConfigured: Boolean(cfg.watchdogEndpointConfigured),
+      watchdogHeartbeatMs: cfg.watchdogHeartbeatMs,
+      watchdogCombatHeartbeatMs: cfg.watchdogCombatHeartbeatMs,
+      watchdogHeartbeatTimeoutMs: cfg.watchdogHeartbeatTimeoutMs,
+      watchdogSendLeaveDescriptor: Boolean(cfg.watchdogSendLeaveDescriptor),
+      watchdogLeaveDescriptor: cfg.watchdogLeaveDescriptor,
+      watchdogLeaveDescriptorTtlMs: cfg.watchdogLeaveDescriptorTtlMs,
       clashLeaveRescueEnabled: Boolean(cfg.clashLeaveRescueEnabled),
       clashLeaveRescueTimeoutMs: Math.max(1000, Number(cfg.clashControllerTimeoutMs || DEFAULTS.clashControllerTimeoutMs) || DEFAULTS.clashControllerTimeoutMs)
     };
@@ -4354,6 +4480,9 @@
       },
       configureCombatLogging(options = {}) {
         return configureCombatLogging(options);
+      },
+      configureWatchdog(options = {}) {
+        return configureWatchdog(options);
       },
       configureClashLeaveRescue(options = {}) {
         return configureClashLeaveRescue(options);

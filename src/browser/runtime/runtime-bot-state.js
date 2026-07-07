@@ -120,6 +120,29 @@ function createRuntimeBotState(runtime = {}) {
       lastOkAt: Number(preserved.combatLogging?.lastOkAt || 0),
       sequence: Number(preserved.combatLogging?.sequence || 0)
     },
+    watchdog: {
+      enabled: Boolean(cfg.watchdogEnabled && cfg.watchdogEndpointConfigured),
+      endpoint: cfg.watchdogEndpointConfigured ? String(cfg.watchdogEndpoint || 'http://127.0.0.1:18765/watchdog/heartbeat') : '',
+      endpointConfigured: Boolean(cfg.watchdogEndpointConfigured),
+      pageId: String(preserved.watchdog?.pageId || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`),
+      sequence: Number(preserved.watchdog?.sequence || 0),
+      sent: Number(preserved.watchdog?.sent || 0),
+      failed: Number(preserved.watchdog?.failed || 0),
+      lastAttemptAt: 0,
+      lastOkAt: Number(preserved.watchdog?.lastOkAt || 0),
+      lastError: String(preserved.watchdog?.lastError || ''),
+      lastSkipReason: '',
+      sending: false,
+      timer: 0,
+      pageLifecycle: String(preserved.watchdog?.pageLifecycle || ''),
+      leaveDescriptor: preserved.watchdog?.leaveDescriptor && typeof preserved.watchdog.leaveDescriptor === 'object'
+        ? { ...preserved.watchdog.leaveDescriptor }
+        : null,
+      damagedInCombat: false,
+      combatDamageActive: false,
+      combatDamageStartHp: null,
+      combatDamageMinHp: null
+    },
     exitAudit: {
       sequence: Number(preserved.exitAudit?.sequence || previousBot?.exitAudit?.sequence || 0),
       requestSequence: Number(preserved.exitAudit?.requestSequence || previousBot?.exitAudit?.requestSequence || 0),

@@ -38,6 +38,7 @@ function createBotApiRuntime(runtime = {}) {
     renderTargetOverlay = noop,
     forceLoginNow = () => null,
     configureCombatLogging = () => null,
+    configureWatchdog = () => null,
     tick = () => null,
     syncPausedFromPage = () => false,
     triggerNativeTick = () => false,
@@ -55,6 +56,7 @@ function createBotApiRuntime(runtime = {}) {
     summarizeNativeTransportRecovery = () => null,
     summarizeTargetWhitelistStatus = () => null,
     summarizeCombatLoggingStatus = () => null,
+    summarizeWatchdogStatus = () => null,
     summarizeImportantLoggingStatus = () => null,
     unresolvedExitAuditLogCount = () => 0,
     pendingExitAuditLogIds = () => [],
@@ -118,6 +120,8 @@ function createBotApiRuntime(runtime = {}) {
       closeControlWs(reason);
       if (current.timer) clearIntervalFn(current.timer);
       current.timer = 0;
+      if (current.watchdog?.timer) clearIntervalFn(current.watchdog.timer);
+      if (current.watchdog) current.watchdog.timer = 0;
       if (current.targetWhitelist?.timer) clearIntervalFn(current.targetWhitelist.timer);
       if (current.targetWhitelist) current.targetWhitelist.timer = 0;
       try {
@@ -168,6 +172,9 @@ function createBotApiRuntime(runtime = {}) {
     },
     configureCombatLogging(options = {}) {
       return configureCombatLogging(options);
+    },
+    configureWatchdog(options = {}) {
+      return configureWatchdog(options);
     },
     configureClashLeaveRescue(options = {}) {
       const current = activeBot(this);
@@ -255,6 +262,7 @@ function createBotApiRuntime(runtime = {}) {
         networkQuality: summarizeNetworkQuality(),
         targetWhitelist: summarizeTargetWhitelistStatus(),
         combatLogging: summarizeCombatLoggingStatus(),
+        watchdog: summarizeWatchdogStatus(),
         importantLogging: summarizeImportantLoggingStatus(),
         exitAudit: {
           pending: unresolvedExitAuditLogCount(),
