@@ -77,6 +77,46 @@ function countWhere(items, predicate) {
   return items.reduce((count, item) => count + (predicate(item) ? 1 : 0), 0);
 }
 
+function parseTimeMs(value) {
+  const ms = Date.parse(String(value || ''));
+  return Number.isFinite(ms) ? ms : null;
+}
+
+function selectedRunWindow(finalEntry) {
+  const detail = finalEntry?.detail || {};
+  const startMs = parseTimeMs(detail.startedAt);
+  const endMs = parseTimeMs(detail.completedAt) ?? parseTimeMs(finalEntry?.at);
+  if (startMs === null || endMs === null || endMs < startMs) {
+    return {
+      applied: false,
+      startAt: '',
+      completedAt: ''
+    };
+  }
+  return {
+    applied: true,
+    startMs,
+    endMs,
+    startAt: new Date(startMs).toISOString(),
+    completedAt: new Date(endMs).toISOString()
+  };
+}
+
+function entryInRunWindow(entry, window) {
+  if (!window?.applied) return true;
+  const atMs = parseTimeMs(entry?.at);
+  return atMs !== null && atMs >= window.startMs && atMs <= window.endMs;
+}
+
+function filterStreamsToRunWindow(streams, window) {
+  if (!window?.applied) return streams;
+  const filtered = {};
+  for (const [key, entries] of Object.entries(streams)) {
+    filtered[key] = entries.filter(entry => entryInRunWindow(entry, window));
+  }
+  return filtered;
+}
+
 function addCheck(checks, key, ok, evidence, detail = {}) {
   checks.push({
     key,
@@ -113,11 +153,13 @@ function summarizeAudit(options = {}) {
   const finalEntries = finalCanaryEntries(streams.runner, mode);
   const finalEntry = selectFinalCanaryEntry(finalEntries, { requireStop: options.requireStop });
   const final = finalEntry?.detail || null;
-  const decisionCount = countWhere(streams.decisions, entry => entry?.type === 'decision');
-  const movementCommandCount = countWhere(streams.runner, entry => entry?.type === 'movement-command');
-  const combatDryRunEntries = streams.combat.filter(entry => entry?.type === 'combat-dry-run');
-  const combatLiveEntries = streams.combat.filter(entry => entry?.type === 'combat-live');
-  const safetyEvents = streams.exits.filter(entry => entry?.type === 'safety-event');
+  const runWindow = selectedRunWindow(finalEntry);
+  const scopedStreams = filterStreamsToRunWindow(streams, runWindow);
+  const decisionCount = countWhere(scopedStreams.decisions, entry => entry?.type === 'decision');
+  const movementCommandCount = countWhere(scopedStreams.runner, entry => entry?.type === 'movement-command');
+  const combatDryRunEntries = scopedStreams.combat.filter(entry => entry?.type === 'combat-dry-run');
+  const combatLiveEntries = scopedStreams.combat.filter(entry => entry?.type === 'combat-live');
+  const safetyEvents = scopedStreams.exits.filter(entry => entry?.type === 'safety-event');
   const explicitStopEvents = safetyEvents.filter(entry => entry?.detail?.reason === 'explicit-stop');
   const leaveOk = Boolean(final?.leave?.ok || final?.safety?.exit?.leave?.ok);
   const explicitStopOk = Boolean(explicitStopEvents.length && leaveOk);
@@ -139,20 +181,20 @@ function summarizeAudit(options = {}) {
   addCheck(checks, 'decisions-logged', decisionCount > 0, `decision entries=${decisionCount}`);
 
   if (profile === 'read-only') {
-    addCheck(checks, 'no-actions', Number(final?.actions?.sentCount || 0) === 0, `sent=${Number(final?.actions?.sentCount || 0)}, same-day movement logs=${movementCommandCount}`);
+    addCheck(checks, 'no-actions', Number(final?.actions?.sentCount || 0) === 0, `sent=${Number(final?.actions?.sentCount || 0)}, movement logs=${movementCommandCount}`);
     addCheck(checks, 'no-shoot', Number(final?.actions?.shootSentCount || 0) === 0, `shootSentCount=${Number(final?.actions?.shootSentCount || 0)}`);
   } else if (profile === 'movement-only') {
-    addCheck(checks, 'velocity-sent', Number(final?.actions?.velocitySentCount || 0) > 0, `velocity=${Number(final?.actions?.velocitySentCount || 0)}, same-day movement logs=${movementCommandCount}`);
+    addCheck(checks, 'velocity-sent', Number(final?.actions?.velocitySentCount || 0) > 0, `velocity=${Number(final?.actions?.velocitySentCount || 0)}, movement logs=${movementCommandCount}`);
     addCheck(checks, 'no-shoot', Number(final?.actions?.shootSentCount || 0) === 0, `shootSentCount=${Number(final?.actions?.shootSentCount || 0)}`);
   } else if (profile === 'profit') {
-    const profitDecisionCount = countWhere(streams.decisions, entry => Boolean(entry?.detail?.profit));
+    const profitDecisionCount = countWhere(scopedStreams.decisions, entry => Boolean(entry?.detail?.profit));
     addCheck(checks, 'profit-decisions', profitDecisionCount > 0, `profit decision entries=${profitDecisionCount}`);
     addCheck(checks, 'no-shoot', Number(final?.actions?.shootSentCount || 0) === 0, `shootSentCount=${Number(final?.actions?.shootSentCount || 0)}`);
   } else if (profile === 'combat-dry-run') {
     addCheck(checks, 'combat-logged', combatDryRunEntries.length > 0, `combat-dry-run entries=${combatDryRunEntries.length}`);
     addCheck(checks, 'combat-realtime-authority', allCombatTargetsRealtime(combatDryRunEntries), 'all logged combat targets/candidates use realtime authority');
     addCheck(checks, 'combat-suppressed', allCombatDryRunSuppressed(combatDryRunEntries), 'dry-run shooting rows are suppressed');
-    addCheck(checks, 'no-actions', Number(final?.actions?.sentCount || 0) === 0, `sent=${Number(final?.actions?.sentCount || 0)}, same-day movement logs=${movementCommandCount}`);
+    addCheck(checks, 'no-actions', Number(final?.actions?.sentCount || 0) === 0, `sent=${Number(final?.actions?.sentCount || 0)}, movement logs=${movementCommandCount}`);
   } else if (profile === 'combat-live') {
     addCheck(checks, 'combat-logged', combatLiveEntries.length > 0, `combat-live entries=${combatLiveEntries.length}`);
     addCheck(checks, 'combat-realtime-authority', allCombatTargetsRealtime(combatLiveEntries), 'all logged combat targets/candidates use realtime authority');
@@ -170,16 +212,27 @@ function summarizeAudit(options = {}) {
     generatedAt: new Date().toISOString(),
     requireStop: Boolean(options.requireStop),
     finalEvent: finalEntry ? { at: finalEntry.at || '', type: finalEntry.type || '', mode: final?.mode || '' } : null,
+    runWindow: {
+      applied: Boolean(runWindow.applied),
+      startedAt: runWindow.startAt || '',
+      completedAt: runWindow.completedAt || ''
+    },
     counts: {
-      runner: streams.runner.length,
-      decisions: streams.decisions.length,
-      combat: streams.combat.length,
-      exits: streams.exits.length,
+      runner: scopedStreams.runner.length,
+      decisions: scopedStreams.decisions.length,
+      combat: scopedStreams.combat.length,
+      exits: scopedStreams.exits.length,
       movementCommand: movementCommandCount,
       combatDryRun: combatDryRunEntries.length,
       combatLive: combatLiveEntries.length,
       safetyEvent: safetyEvents.length,
       explicitStop: explicitStopEvents.length
+    },
+    rawCounts: {
+      runner: streams.runner.length,
+      decisions: streams.decisions.length,
+      combat: streams.combat.length,
+      exits: streams.exits.length
     },
     checks,
     failed
@@ -192,6 +245,9 @@ function formatHuman(report) {
     `Profile: ${report.profile} (${report.mode})`,
     `Logs: ${report.dayDir}`
   ];
+  if (report.runWindow?.applied) {
+    lines.push(`Run window: ${report.runWindow.startedAt} .. ${report.runWindow.completedAt}`);
+  }
   for (const check of report.checks) {
     lines.push(`- ${check.ok ? 'ok' : 'missing'} ${check.key}: ${check.evidence}`);
   }
