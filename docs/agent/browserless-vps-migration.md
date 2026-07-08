@@ -197,6 +197,7 @@ On 2026-07-08, the VPS one-shot demo succeeded after the Node 18 `ws` fallback a
 - 2026-07-08: Canary evidence auditing now scopes `decisions`, `combat`, `exits`, and `movement-command` evidence to the selected final event's `startedAt`/`completedAt` run window when available. This prevents same-day staged canaries from borrowing evidence across runs while preserving whole-day compatibility for older logs.
 - 2026-07-08: Canary action evidence checks were tightened. Read-only and combat-dry-run audits now fail if scoped `movement-command` logs are present, while movement-only and profit audits require scoped movement-command evidence alongside positive velocity counters.
 - 2026-07-08: Combat-live canary auditing now also requires scoped movement-command/action evidence alongside positive velocity counters, realtime combat logs, and shoot acknowledgement evidence when shots are sent.
+- 2026-07-08: Canary shoot evidence auditing now reads scoped action logs as well as final counters. No-shoot profiles fail on leaked `action.shoot.command`, cumulative `state.shootSentCount`, or `state.lastShootCommand`; combat-live requires `lastShootAck` when either final counters or action logs prove a shot was sent.
 
 ## Next Plan
 

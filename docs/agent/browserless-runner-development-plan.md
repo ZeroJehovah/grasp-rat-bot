@@ -113,6 +113,7 @@ Update this table in the same task that completes each feature.
 | Commit 25: Scope Canary Audit To Selected Run | Complete | `scripts/browserless-canary-audit.js` now filters decision, combat, exit, and movement evidence to the selected canary final event's `startedAt`/`completedAt` window when available, while retaining whole-day compatibility for older logs. Self-tests include outside-window entries to prove staged same-day runs do not contaminate the selected audit. |
 | Commit 26: Tighten Canary Action Evidence | Complete | `scripts/browserless-canary-audit.js` now fails read-only and combat-dry-run audits when scoped `movement-command` logs appear, and requires scoped movement logs alongside positive velocity counts for movement-only and profit profiles. Self-tests cover read-only action leakage inside the selected run window. |
 | Commit 27: Require Combat Live Action Evidence | Complete | `scripts/browserless-canary-audit.js` now requires combat-live canaries to include scoped `movement-command` evidence alongside positive velocity counters, in addition to realtime combat logs and shoot acknowledgement checks. Self-tests cover accepted combat-live evidence and missing-action rejection. |
+| Commit 28: Audit Scoped Shoot Command Evidence | Complete | `scripts/browserless-canary-audit.js` now detects scoped shoot evidence from action logs (`action.shoot.command`, cumulative `state.shootSentCount`, or `state.lastShootCommand`) so no-shoot profiles cannot pass with leaked shoot commands, and combat-live runs with logged shoot commands still require `lastShootAck`. Self-tests cover movement-only shoot leakage and combat-live missing acknowledgement from action-log evidence. |
 
 ## Commit Plan
 
@@ -658,9 +659,29 @@ Validation:
 - `node --check scripts/browserless-canary-audit.js`
 - `git diff --check`
 
+### Commit 28: Audit Scoped Shoot Command Evidence
+
+Files:
+
+- Update `scripts/browserless-canary-audit.js`.
+- Update browserless canary audit self-test coverage.
+- Update operator, migration, current-state, test-coverage, and this development plan.
+
+Purpose:
+
+- Detect scoped shoot commands from action-log evidence, not only final canary counters.
+- Make no-shoot profile audits fail if action logs show a leaked shoot command.
+- Make combat-live shoot acknowledgement checks apply when scoped action logs prove a shot was sent even if the final counter is inconsistent.
+
+Validation:
+
+- `node grasp-rat-bot.js --self-test`
+- `node --check scripts/browserless-canary-audit.js`
+- `git diff --check`
+
 ## External VPS Validation Required
 
-Local implementation work is complete through Commit 27, and the VPS systemd deployment validation passed on 2026-07-08. The production runner is not accepted until the remaining live canary validations below produce evidence and the aggregate acceptance report passes.
+Local implementation work is complete through Commit 28, and the VPS systemd deployment validation passed on 2026-07-08. The production runner is not accepted until the remaining live canary validations below produce evidence and the aggregate acceptance report passes.
 
 Use the production service path and audit commands from `docs/agent/browserless-vps-migration.md` and `docs/agent/browserless-runner-operator.md`. Do not mark `headless-demo/` superseded until these validations pass:
 
