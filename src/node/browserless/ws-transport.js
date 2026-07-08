@@ -98,6 +98,10 @@ function createTransportHandle(ws, runtime, wsUrl, hooks = {}) {
     const number = Number(value);
     return Number.isFinite(number) ? number : 0;
   };
+  const velocityNumber = value => {
+    const number = Math.round(commandNumber(value));
+    return Math.max(-1, Math.min(1, number));
+  };
   const handle = {
     ws,
     runtime,
@@ -112,7 +116,7 @@ function createTransportHandle(ws, runtime, wsUrl, hooks = {}) {
       return message;
     },
     sendVelocity(dx, dy) {
-      return handle.send(`vel ${commandNumber(dx)} ${commandNumber(dy)}`);
+      return handle.send(`vel ${velocityNumber(dx)} ${velocityNumber(dy)}`);
     },
     sendShoot(targetX, targetY, startX, startY) {
       return handle.send(`shoot ${commandNumber(targetX)} ${commandNumber(targetY)} ${commandNumber(startX)} ${commandNumber(startY)}`);

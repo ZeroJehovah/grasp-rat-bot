@@ -5531,7 +5531,8 @@ async function runSelfTest() {
         socket.open();
         const transport = await openPromise;
         socket.emit('message', { data: 'frame-1' });
-        transport.sendVelocity(1, -1);
+        transport.sendVelocity(0.6, -0.6);
+        transport.sendVelocity(2, -2);
         transport.sendShoot(2, 3, 4, 5);
         transport.close(1000, 'done');
         return [
@@ -5541,7 +5542,7 @@ async function runSelfTest() {
           sent.join(',')
         ].join('|');
       })(),
-      want: 'start:fake:true,open:fake,close:1000:done:true|frame-1|vel 1 -1,shoot 2 3 4 5|vel 1 -1,shoot 2 3 4 5'
+      want: 'start:fake:true,open:fake,close:1000:done:true|frame-1|vel 1 -1,vel 1 -1,shoot 2 3 4 5|vel 1 -1,vel 1 -1,shoot 2 3 4 5'
     },
     {
       name: 'browserless websocket transport times out unopened sockets',
@@ -5882,6 +5883,44 @@ async function runSelfTest() {
       want: 'wait|no-profitable-candidate|none|false|active-threat-visible|8'
     },
     {
+      name: 'browserless profit live targets AFK but blocks AFK profit near active threat',
+      got: (() => {
+        const choose = entities => {
+          const store = createBrowserlessStateStore({ userId: 7 });
+          store.ingestFrame({
+            type: 'pos',
+            tick: 59,
+            entities,
+            bullets: []
+          }, { receivedAtMs: 1000 });
+          return buildBrowserlessDecision(store.getState(1200), {}, {
+            nowMs: 1200,
+            controlMode: 'profit-live'
+          });
+        };
+        const afkOnly = choose([
+          { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 90 },
+          { entity_id: 2, user_id: 8, name: 'afk', x: 1000, y: 0, hp: 80, current_join_mode: 'None', drop: 10 }
+        ]);
+        const activeVisible = choose([
+          { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 90 },
+          { entity_id: 2, user_id: 8, name: 'afk', x: 1000, y: 0, hp: 80, current_join_mode: 'None', drop: 10 },
+          { entity_id: 3, user_id: 9, name: 'active', x: 500, y: 0, hp: 80, current_join_mode: 'Active', drop: 10 }
+        ]);
+        return [
+          afkOnly.kind,
+          afkOnly.action.kind,
+          afkOnly.action.target.type,
+          afkOnly.action.target.userId,
+          afkOnly.action.target.active,
+          activeVisible.kind,
+          activeVisible.reason,
+          activeVisible.profit.best === null
+        ].join('|');
+      })(),
+      want: 'profit-candidate|attack|enemy|8|false|wait|no-profitable-candidate|true'
+    },
+    {
       name: 'browserless combat dry-run uses realtime target and ignores snapshot target',
       got: (() => {
         const store = createBrowserlessStateStore({ userId: 7 });
@@ -6115,6 +6154,43 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'stop|unsupported-or-wait-decision|stop|target-reached|vel 0 0,vel 0 0'
+    },
+    {
+      name: 'browserless action adapter attacks visible AFK profit target',
+      got: (() => {
+        const commands = [];
+        const adapter = createBrowserlessActionAdapter({
+          now: () => 1000 + commands.length * 200,
+          commandIntervalMs: 1,
+          combatShootMinIntervalMs: 160,
+          attackRangeCm: 14500,
+          transport: {
+            sendVelocity: (dx, dy) => commands.push(`vel ${dx} ${dy}`),
+            sendShoot: (targetX, targetY, startX, startY) => commands.push(`shoot ${targetX} ${targetY} ${startX} ${startY}`)
+          }
+        });
+        const action = adapter.applyDecision({
+          realtime: { self: { x: 0, y: 0 }, tick: 1 }
+        }, {
+          kind: 'profit-candidate',
+          band: 'profit',
+          action: {
+            kind: 'attack',
+            band: 'profit',
+            target: { type: 'enemy', userId: 8, x: 1000, y: 0, active: false }
+          }
+        });
+        const state = adapter.getState();
+        return [
+          action.kind,
+          action.movement.command.type,
+          action.shoot.command.type,
+          commands.join(','),
+          state.velocitySentCount,
+          state.shootSentCount
+        ].join('|');
+      })(),
+      want: 'profit-attack|velocity|shoot|vel 0 0,shoot 1000 0 0 0|1|1'
     },
     {
       name: 'browserless action adapter sends guarded combat movement shoot and records ack',
