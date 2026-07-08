@@ -199,6 +199,7 @@ function summarizeAudit(options = {}) {
   } else if (profile === 'combat-live') {
     addCheck(checks, 'combat-logged', combatLiveEntries.length > 0, `combat-live entries=${combatLiveEntries.length}`);
     addCheck(checks, 'combat-realtime-authority', allCombatTargetsRealtime(combatLiveEntries), 'all logged combat targets/candidates use realtime authority');
+    addCheck(checks, 'combat-action-logged', Number(final?.actions?.velocitySentCount || 0) > 0 && movementCommandCount > 0, `velocity=${Number(final?.actions?.velocitySentCount || 0)}, movement logs=${movementCommandCount}`);
     addCheck(checks, 'shoot-ack-or-no-shot', Number(final?.actions?.shootSentCount || 0) === 0 || Boolean(final?.actions?.lastShootAck), `shootSentCount=${Number(final?.actions?.shootSentCount || 0)}, lastShootAck=${Boolean(final?.actions?.lastShootAck)}`);
   }
 

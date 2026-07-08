@@ -6662,6 +6662,58 @@ async function runSelfTest() {
         writeActionLeak('decisions', { at: '2026-07-10T01:00:01.000Z', type: 'decision', detail: { kind: 'wait' } });
         writeActionLeak('runner', { at: '2026-07-10T01:00:02.000Z', type: 'movement-command', detail: { action: { kind: 'velocity' } } });
         const actionLeak = summarizeBrowserlessCanaryAudit({ logDir: dir, day: '2026-07-10', profile: 'read-only' });
+
+        const combatLiveDayDir = path.join(dir, '2026-07-11');
+        fs.mkdirSync(combatLiveDayDir, { recursive: true });
+        const writeCombatLive = (stream, entry) => {
+          fs.appendFileSync(path.join(combatLiveDayDir, `${stream}.jsonl`), `${JSON.stringify(entry)}\n`);
+        };
+        writeCombatLive('runner', {
+          at: '2026-07-11T01:05:00.000Z',
+          type: 'canary-finish',
+          detail: {
+            ...baseFinish,
+            mode: 'combat-live',
+            startedAt: '2026-07-11T01:00:00.000Z',
+            completedAt: '2026-07-11T01:05:00.000Z',
+            actions: { sentCount: 2, velocitySentCount: 1, shootSentCount: 1, lastShootAck: { bullet_id: 77 } }
+          }
+        });
+        writeCombatLive('decisions', { at: '2026-07-11T01:00:01.000Z', type: 'decision', detail: { kind: 'combat-live' } });
+        writeCombatLive('runner', { at: '2026-07-11T01:00:02.000Z', type: 'movement-command', detail: { action: { kind: 'combat-live' } } });
+        writeCombatLive('combat', {
+          at: '2026-07-11T01:00:03.000Z',
+          type: 'combat-live',
+          detail: {
+            target: { authority: 'realtime' },
+            candidates: [{ authority: 'realtime' }]
+          }
+        });
+        const combatLive = summarizeBrowserlessCanaryAudit({ logDir: dir, day: '2026-07-11', profile: 'combat-live' });
+
+        const combatLiveMissingActionDayDir = path.join(dir, '2026-07-12');
+        fs.mkdirSync(combatLiveMissingActionDayDir, { recursive: true });
+        const writeCombatLiveMissingAction = (stream, entry) => {
+          fs.appendFileSync(path.join(combatLiveMissingActionDayDir, `${stream}.jsonl`), `${JSON.stringify(entry)}\n`);
+        };
+        writeCombatLiveMissingAction('runner', {
+          at: '2026-07-12T01:05:00.000Z',
+          type: 'canary-finish',
+          detail: {
+            ...baseFinish,
+            mode: 'combat-live',
+            startedAt: '2026-07-12T01:00:00.000Z',
+            completedAt: '2026-07-12T01:05:00.000Z',
+            actions: { sentCount: 1, velocitySentCount: 1, shootSentCount: 0 }
+          }
+        });
+        writeCombatLiveMissingAction('decisions', { at: '2026-07-12T01:00:01.000Z', type: 'decision', detail: { kind: 'combat-live' } });
+        writeCombatLiveMissingAction('combat', {
+          at: '2026-07-12T01:00:03.000Z',
+          type: 'combat-live',
+          detail: { target: { authority: 'realtime' } }
+        });
+        const combatLiveMissingAction = summarizeBrowserlessCanaryAudit({ logDir: dir, day: '2026-07-12', profile: 'combat-live' });
         return [
           clean.ok,
           clean.failed.length,
@@ -6673,10 +6725,14 @@ async function runSelfTest() {
           forcedStop.ok,
           forcedStop.counts.explicitStop,
           actionLeak.ok,
-          actionLeak.failed.some(item => item.key === 'no-actions')
+          actionLeak.failed.some(item => item.key === 'no-actions'),
+          combatLive.ok,
+          combatLive.counts.movementCommand,
+          combatLiveMissingAction.ok,
+          combatLiveMissingAction.failed.some(item => item.key === 'combat-action-logged')
         ].join('|');
       }),
-      want: 'true|0|true|1|0|false|true|true|1|false|true'
+      want: 'true|0|true|1|0|false|true|true|1|false|true|true|1|false|true'
     },
     {
       name: 'browserless runner config parses env and cli overrides',

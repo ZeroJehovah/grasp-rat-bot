@@ -196,6 +196,7 @@ On 2026-07-08, the VPS one-shot demo succeeded after the Node 18 `ws` fallback a
 - 2026-07-08: Deployment env auditing now rejects mismatched `GRASP_RAT_BROWSERLESS_CANARY_PROFILE` and `GRASP_RAT_BROWSERLESS_CONTROL_MODE` pairs in safe/live/any modes. During staged VPS rollout, prefer changing only `GRASP_RAT_BROWSERLESS_CANARY_PROFILE`, or keep `CONTROL_MODE` matched to the profile mapping documented in the operator notes.
 - 2026-07-08: Canary evidence auditing now scopes `decisions`, `combat`, `exits`, and `movement-command` evidence to the selected final event's `startedAt`/`completedAt` run window when available. This prevents same-day staged canaries from borrowing evidence across runs while preserving whole-day compatibility for older logs.
 - 2026-07-08: Canary action evidence checks were tightened. Read-only and combat-dry-run audits now fail if scoped `movement-command` logs are present, while movement-only and profit audits require scoped movement-command evidence alongside positive velocity counters.
+- 2026-07-08: Combat-live canary auditing now also requires scoped movement-command/action evidence alongside positive velocity counters, realtime combat logs, and shoot acknowledgement evidence when shots are sent.
 
 ## Next Plan
 
@@ -205,7 +206,7 @@ On 2026-07-08, the VPS one-shot demo succeeded after the Node 18 `ws` fallback a
 4. Run a supervised short `controlMode=movement-only` VPS validation and inspect `runner.jsonl`, `decisions.jsonl`, status action rows, command settlement, and verified `leave`; then audit with `--profile movement-only`, which now requires scoped movement-command evidence.
 5. Run a supervised `controlMode=non-combat-profit` VPS validation and inspect profit decisions for realtime-first behavior, guarded snapshot fallback, no shoot commands, scoped movement-command evidence, and verified `leave`; then audit with `--profile profit`.
 6. Run a supervised `controlMode=combat-dry-run` VPS validation under visible Active-player conditions and inspect `combat.jsonl`/`decisions.jsonl` for realtime-only targets, aim/fire summaries, suppressed commands, and verified `leave`; then audit with `--profile combat-dry-run`.
-7. Run a supervised short `controlMode=combat-live` plus `combatEnabled=true` VPS validation and inspect `combat.jsonl`, `runner.jsonl`, status action rows, `shoot_ok` acknowledgement evidence, command pacing, and verified `leave`; then audit with `--profile combat-live`.
+7. Run a supervised short `controlMode=combat-live` plus `combatEnabled=true` VPS validation and inspect `combat.jsonl`, `runner.jsonl`, status action rows, scoped movement-command evidence, `shoot_ok` acknowledgement evidence, command pacing, and verified `leave`; then audit with `--profile combat-live`.
 8. After all staged canaries have accepted evidence, run `sudo node scripts/browserless-acceptance-report.js --log-dir /var/log/grasp-rat-browserless --day YYYY-MM-DD --fail-on-incomplete` and keep its output with the cutover handoff.
 9. Use `GRASP_RAT_BROWSERLESS_CANARY_PROFILE` for subsequent staged canaries so the production service can move through read-only, movement-only, profit, combat dry-run, and combat live without code edits.
 10. Keep the browserless runtime boundary explicit:

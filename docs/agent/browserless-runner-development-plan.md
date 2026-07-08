@@ -112,6 +112,7 @@ Update this table in the same task that completes each feature.
 | Commit 24: Harden Live Env Mode Consistency | Complete | `scripts/browserless-deployment-audit.js` now rejects mismatched `GRASP_RAT_BROWSERLESS_CANARY_PROFILE` and `GRASP_RAT_BROWSERLESS_CONTROL_MODE` pairs in safe/live/any env modes, so VPS staged canaries cannot pass readiness with a misleading profile/control combination. Self-tests cover the conflict case and operator/migration/state docs record the constraint. |
 | Commit 25: Scope Canary Audit To Selected Run | Complete | `scripts/browserless-canary-audit.js` now filters decision, combat, exit, and movement evidence to the selected canary final event's `startedAt`/`completedAt` window when available, while retaining whole-day compatibility for older logs. Self-tests include outside-window entries to prove staged same-day runs do not contaminate the selected audit. |
 | Commit 26: Tighten Canary Action Evidence | Complete | `scripts/browserless-canary-audit.js` now fails read-only and combat-dry-run audits when scoped `movement-command` logs appear, and requires scoped movement logs alongside positive velocity counts for movement-only and profit profiles. Self-tests cover read-only action leakage inside the selected run window. |
+| Commit 27: Require Combat Live Action Evidence | Complete | `scripts/browserless-canary-audit.js` now requires combat-live canaries to include scoped `movement-command` evidence alongside positive velocity counters, in addition to realtime combat logs and shoot acknowledgement checks. Self-tests cover accepted combat-live evidence and missing-action rejection. |
 
 ## Commit Plan
 
@@ -637,9 +638,29 @@ Validation:
 - `node --check scripts/browserless-canary-audit.js`
 - `git diff --check`
 
+### Commit 27: Require Combat Live Action Evidence
+
+Files:
+
+- Update `scripts/browserless-canary-audit.js`.
+- Update browserless canary audit self-test coverage.
+- Update operator, migration, current-state, test-coverage, and this development plan.
+
+Purpose:
+
+- Require guarded combat-live canaries to prove that the action adapter actually logged a scoped movement/action row.
+- Keep shoot acknowledgement validation for runs that send shots.
+- Prevent combat-live acceptance from passing on combat summaries alone.
+
+Validation:
+
+- `node grasp-rat-bot.js --self-test`
+- `node --check scripts/browserless-canary-audit.js`
+- `git diff --check`
+
 ## External VPS Validation Required
 
-Local implementation work is complete through Commit 26, and the VPS systemd deployment validation passed on 2026-07-08. The production runner is not accepted until the remaining live canary validations below produce evidence and the aggregate acceptance report passes.
+Local implementation work is complete through Commit 27, and the VPS systemd deployment validation passed on 2026-07-08. The production runner is not accepted until the remaining live canary validations below produce evidence and the aggregate acceptance report passes.
 
 Use the production service path and audit commands from `docs/agent/browserless-vps-migration.md` and `docs/agent/browserless-runner-operator.md`. Do not mark `headless-demo/` superseded until these validations pass:
 
