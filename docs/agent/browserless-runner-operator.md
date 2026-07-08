@@ -292,7 +292,7 @@ sudo node scripts/browserless-canary-audit.js \
   --fail-on-incomplete
 ```
 
-Use `--profile movement-only`, `--profile profit`, `--profile combat-dry-run`, or `--profile combat-live` for later stages. For the forced `/api/stop` validation, add `--require-stop`; that mode accepts an explicit-stop safety exit only when verified `leave` evidence is present. Use `sudo` for production logs under `/var/log/grasp-rat-browserless`.
+Use `--profile movement-only`, `--profile profit`, `--profile combat-dry-run`, or `--profile combat-live` for later stages. For the forced `/api/stop` validation, add `--require-stop`; that mode accepts an explicit-stop safety exit only when verified `leave` evidence is present. When a selected final canary event includes `startedAt` and `completedAt`, the audit counts decision, combat, exit, and movement evidence only inside that run window, so same-day staged runs can be reviewed separately. Use `sudo` for production logs under `/var/log/grasp-rat-browserless`.
 
 After all staged canaries and the deployment audit have run, generate the aggregate cutover readiness report:
 

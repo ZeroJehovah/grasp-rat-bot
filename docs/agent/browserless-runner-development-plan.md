@@ -110,6 +110,7 @@ Update this table in the same task that completes each feature.
 | Commit 22: Split Deployment Env Audit Modes | Complete | `scripts/browserless-deployment-audit.js` now supports `--env-mode safe|live|any`: safe preserves the initial dry-run/read-only deployment check, live verifies `DRY_RUN=false` plus session/login-point readiness before supervised live canaries, and any lets the final aggregate acceptance report verify the service surface after staged canary env changes. `scripts/browserless-acceptance-report.js` uses deployment env mode `any` by default, and self-tests cover live/aggregate deployment audit paths. |
 | Commit 23: Align VPS Audit Commands | Complete | Operator and migration docs now run production canary audits with `sudo` for `/var/log/grasp-rat-browserless` access and use deployment `--env-mode any` for post-live service-surface checks, while keeping `--env-mode live` as the pre-restart readiness check before supervised canaries. |
 | Commit 24: Harden Live Env Mode Consistency | Complete | `scripts/browserless-deployment-audit.js` now rejects mismatched `GRASP_RAT_BROWSERLESS_CANARY_PROFILE` and `GRASP_RAT_BROWSERLESS_CONTROL_MODE` pairs in safe/live/any env modes, so VPS staged canaries cannot pass readiness with a misleading profile/control combination. Self-tests cover the conflict case and operator/migration/state docs record the constraint. |
+| Commit 25: Scope Canary Audit To Selected Run | Complete | `scripts/browserless-canary-audit.js` now filters decision, combat, exit, and movement evidence to the selected canary final event's `startedAt`/`completedAt` window when available, while retaining whole-day compatibility for older logs. Self-tests include outside-window entries to prove staged same-day runs do not contaminate the selected audit. |
 
 ## Commit Plan
 
@@ -595,9 +596,29 @@ Validation:
 - `node --check scripts/browserless-deployment-audit.js`
 - `git diff --check`
 
+### Commit 25: Scope Canary Audit To Selected Run
+
+Files:
+
+- Update `scripts/browserless-canary-audit.js`.
+- Update browserless canary audit self-test coverage.
+- Update operator, migration, current-state, test-coverage, and this development plan.
+
+Purpose:
+
+- Count `decisions`, `combat`, `exits`, and `movement-command` evidence only inside the selected canary run when `startedAt`/`completedAt` are present.
+- Avoid false pass/fail evidence when multiple staged canaries run on the same UTC day.
+- Keep older logs without run timestamps auditable by falling back to whole-day evidence.
+
+Validation:
+
+- `node grasp-rat-bot.js --self-test`
+- `node --check scripts/browserless-canary-audit.js`
+- `git diff --check`
+
 ## External VPS Validation Required
 
-Local implementation work is complete through Commit 24, and the VPS systemd deployment validation passed on 2026-07-08. The production runner is not accepted until the remaining live canary validations below produce evidence and the aggregate acceptance report passes.
+Local implementation work is complete through Commit 25, and the VPS systemd deployment validation passed on 2026-07-08. The production runner is not accepted until the remaining live canary validations below produce evidence and the aggregate acceptance report passes.
 
 Use the production service path and audit commands from `docs/agent/browserless-vps-migration.md` and `docs/agent/browserless-runner-operator.md`. Do not mark `headless-demo/` superseded until these validations pass:
 

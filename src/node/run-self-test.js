@@ -6608,14 +6608,18 @@ async function runSelfTest() {
         const baseFinish = {
           mode: 'read-only',
           ok: true,
+          startedAt: '2026-07-08T01:00:00.000Z',
+          completedAt: '2026-07-08T01:05:00.000Z',
           snapshotSafety: { ok: true },
           stats: { decodedFrameCount: 120, selfPresent: { true: 118, false: 2 } },
           frameHealth: { decodeErrors: 0 },
           actions: { sentCount: 0, velocitySentCount: 0, shootSentCount: 0 },
           leave: { ok: true }
         };
-        write('runner', { at: '2026-07-08T01:00:00.000Z', type: 'canary-finish', detail: baseFinish });
+        write('runner', { at: '2026-07-08T01:05:00.000Z', type: 'canary-finish', detail: baseFinish });
         write('decisions', { at: '2026-07-08T01:00:01.000Z', type: 'decision', detail: { kind: 'wait' } });
+        write('decisions', { at: '2026-07-08T01:06:01.000Z', type: 'decision', detail: { kind: 'outside-window' } });
+        write('runner', { at: '2026-07-08T01:06:02.000Z', type: 'movement-command', detail: { action: { kind: 'outside-window' } } });
         const clean = summarizeBrowserlessCanaryAudit({ logDir: dir, day: '2026-07-08', profile: 'read-only' });
         const cleanWithStopRequirement = summarizeBrowserlessCanaryAudit({ logDir: dir, day: '2026-07-08', profile: 'read-only', requireStop: true });
 
@@ -6625,10 +6629,12 @@ async function runSelfTest() {
           fs.appendFileSync(path.join(stopDayDir, `${stream}.jsonl`), `${JSON.stringify(entry)}\n`);
         };
         writeStop('runner', {
-          at: '2026-07-09T01:00:00.000Z',
+          at: '2026-07-09T01:05:00.000Z',
           type: 'canary-failed',
           detail: {
             ...baseFinish,
+            startedAt: '2026-07-09T01:00:00.000Z',
+            completedAt: '2026-07-09T01:05:00.000Z',
             ok: false,
             error: 'explicit-stop',
             safety: { event: { reason: 'explicit-stop' }, exit: { leave: { ok: true } } }
@@ -6636,17 +6642,21 @@ async function runSelfTest() {
         });
         writeStop('decisions', { at: '2026-07-09T01:00:01.000Z', type: 'decision', detail: { kind: 'wait' } });
         writeStop('exits', { at: '2026-07-09T01:00:02.000Z', type: 'safety-event', detail: { reason: 'explicit-stop' } });
+        writeStop('exits', { at: '2026-07-09T01:06:02.000Z', type: 'safety-event', detail: { reason: 'outside-window' } });
         const forcedStop = summarizeBrowserlessCanaryAudit({ logDir: dir, day: '2026-07-09', profile: 'read-only', requireStop: true });
         return [
           clean.ok,
           clean.failed.length,
+          clean.runWindow.applied,
+          clean.counts.decisions,
+          clean.counts.movementCommand,
           cleanWithStopRequirement.ok,
           cleanWithStopRequirement.failed.some(item => item.key === 'explicit-stop'),
           forcedStop.ok,
           forcedStop.counts.explicitStop
         ].join('|');
       }),
-      want: 'true|0|false|true|true|1'
+      want: 'true|0|true|1|0|false|true|true|1'
     },
     {
       name: 'browserless runner config parses env and cli overrides',
