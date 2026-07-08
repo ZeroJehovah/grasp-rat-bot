@@ -27,6 +27,7 @@ The installer writes:
 
 - service unit: `/etc/systemd/system/grasp-rat-browserless-runner.service`
 - env file: `/etc/grasp-rat/browserless-runner.env`
+- runtime directories: `/var/lib/grasp-rat-browserless` and `/var/log/grasp-rat-browserless`
 
 The unit uses:
 
@@ -61,7 +62,7 @@ sudo journalctl -u grasp-rat-browserless-runner -n 120 --no-pager
 After installing and starting the service in safe read-only dry-run mode, audit the deployment evidence:
 
 ```bash
-node scripts/browserless-deployment-audit.js --fail-on-incomplete
+sudo node scripts/browserless-deployment-audit.js --fail-on-incomplete
 ```
 
 The audit checks the installed unit, env path, runner entrypoint, safe read-only dry-run defaults, non-placeholder status token, data/log directory access, and `systemctl is-enabled/is-active` state. Use `--skip-systemctl` only for static file/directory checks.
@@ -284,13 +285,13 @@ Use `--profile movement-only`, `--profile profit`, `--profile combat-dry-run`, o
 After all staged canaries and the deployment audit have run, generate the aggregate cutover readiness report:
 
 ```bash
-node scripts/browserless-acceptance-report.js \
+sudo node scripts/browserless-acceptance-report.js \
   --log-dir /var/log/grasp-rat-browserless \
   --day YYYY-MM-DD \
   --fail-on-incomplete
 ```
 
-This report aggregates deployment, normal read-only, forced-stop, movement-only, profit, combat dry-run, and combat live audit results. It is the final local evidence summary before marking `headless-demo/` superseded.
+This report aggregates deployment, normal read-only, forced-stop, movement-only, profit, combat dry-run, and combat live audit results. Run it with `sudo` because the included deployment audit reads the protected env file. It is the final local evidence summary before marking `headless-demo/` superseded.
 
 ## Environment
 
