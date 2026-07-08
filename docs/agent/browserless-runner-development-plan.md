@@ -103,6 +103,7 @@ Update this table in the same task that completes each feature.
 | Commit 15: Add Guarded Combat Live Mode | Implemented; VPS live combat validation pending | `controlMode=combat-live` plus explicit `combatEnabled=true` enables guarded realtime combat movement and paced `sendShoot()` commands through `src/node/browserless/action-adapter.js`; default config keeps live combat off, shoot commands require fire-discipline/range/reserve gates, `shoot_ok` acknowledgements are surfaced in action state, and synthetic self-tests cover disabled and enabled paths. A supervised short VPS combat validation is still required before unattended use. |
 | Commit 16: Add Supervisor And Deployment Surface | Implemented; VPS systemd validation pending | `deploy/browserless-runner.service`, `deploy/browserless-runner.env.example`, and `scripts/install-browserless-runner-service.sh` define the `grasp-rat-browserless-runner` systemd surface with `/etc/grasp-rat/browserless-runner.env`, `/var/lib/grasp-rat-browserless`, `/var/log/grasp-rat-browserless`, status token config, restart/journal controls, and safe dry-run defaults. Local syntax/static checks pass; VPS install/restart/status validation is still required. |
 | Commit 17: Production Canary And Cutover Docs | Implemented; production cutover pending VPS acceptance | Runner config supports `--canary-profile read-only|movement-only|profit|combat-dry-run|combat-live` and `GRASP_RAT_BROWSERLESS_CANARY_PROFILE` for staged rollout without code edits; `docs/agent/current-state.md`, `current-architecture.md`, `browserless-vps-migration.md`, `test-coverage.md`, and operator docs record the production canary/cutover surface while preserving the browser bot fallback. Local self-tests pass; headless-demo remains diagnostic until VPS runner canaries are accepted. |
+| Commit 18: Add Canary Evidence Audit | Complete | `scripts/browserless-canary-audit.js` reads browserless JSONL logs for a UTC day and checks staged profile evidence for clean finish or forced-stop validation, verified leave, snapshot safety, decoded frames, decision logging, no forbidden shoot/action behavior, realtime combat authority, and combat dry-run suppression. `node grasp-rat-bot.js --self-test` covers normal read-only and forced-stop audit fixtures. VPS validations are still pending, but their evidence review now has a deterministic local command. |
 
 ## Commit Plan
 
@@ -440,6 +441,26 @@ Validation:
 - Browserless runner self-tests.
 - `node grasp-rat-bot.js --self-test`
 - `node scripts/objective-status.js --self-test`
+- `git diff --check`
+
+### Commit 18: Add Canary Evidence Audit
+
+Files:
+
+- Add `scripts/browserless-canary-audit.js`.
+- Add self-test coverage for normal read-only and forced-stop audit evidence.
+- Update operator and migration docs with the audit command.
+
+Purpose:
+
+- Make VPS canary acceptance review deterministic from local JSONL logs instead of relying only on manual `tail` inspection.
+- Check the evidence that matters for each staged profile: snapshot safety, decoded realtime frames, self observation, decision logs, verified leave, forced stop when requested, no forbidden movement/shoot behavior, realtime combat authority, combat dry-run suppression, and combat live acknowledgement evidence when shots are sent.
+- Keep validation honest: the audit can prove that a reported VPS log set has the expected evidence, but it does not replace running the VPS canary.
+
+Validation:
+
+- `node grasp-rat-bot.js --self-test`
+- `node --check scripts/browserless-canary-audit.js`
 - `git diff --check`
 
 ## User Validation Required

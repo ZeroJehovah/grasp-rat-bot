@@ -185,48 +185,52 @@ On 2026-07-08, the VPS one-shot demo succeeded after the Node 18 `ws` fallback a
 - 2026-07-08: Guarded browserless combat live mode was added behind `controlMode=combat-live` plus explicit `combatEnabled=true`. The action adapter now sends realtime combat velocity and paced `shoot targetX targetY startX startY` commands only when the combat adapter's range/reserve/fire-state gates allow shooting, records `shoot_ok` acknowledgement evidence in action state, and keeps normal verified `leave` and safety-stop paths. The default remains disabled and this still needs a supervised short VPS combat validation before any unattended live combat.
 - 2026-07-08: Production supervisor/deployment files were added for the browserless runner. `deploy/browserless-runner.service` defines the `grasp-rat-browserless-runner` systemd unit, `deploy/browserless-runner.env.example` defines safe dry-run defaults and production paths, and `scripts/install-browserless-runner-service.sh` installs the unit/env surface without replacing an existing env file by default. Production state is under `/var/lib/grasp-rat-browserless`, JSONL logs are under `/var/log/grasp-rat-browserless`, and the service uses `/etc/grasp-rat/browserless-runner.env`. This still needs a VPS systemd install/restart/status validation.
 - 2026-07-08: Production canary profile support and cutover docs were added. `GRASP_RAT_BROWSERLESS_CANARY_PROFILE` / `--canary-profile` maps `read-only`, `movement-only`, `profit`, `combat-dry-run`, and `combat-live` to the existing staged control modes so VPS rollout can switch stages through env/config changes instead of code edits. The `combat-live` profile still requires explicit `combatEnabled=true` before shooting. Current architecture/state/test docs now record the browserless runner as a tracked Node runtime surface with production cutover pending accepted VPS canaries.
+- 2026-07-08: Browserless canary evidence audit tooling was added at `scripts/browserless-canary-audit.js`. The command reads local JSONL logs for a UTC day and checks profile-specific acceptance evidence including snapshot safety, decoded frames, self observation, decisions, verified leave, explicit forced stop when requested, no forbidden movement/shoot behavior, realtime combat authority, combat dry-run suppression, and combat live acknowledgement evidence when shots are sent. This does not replace the pending VPS canaries; it gives those canaries a deterministic acceptance check once logs are available.
 
 ## Next Plan
 
-1. Run the production browserless read-only canary on VPS for 10-30 minutes and inspect status/log evidence, including `decisions.jsonl` and a forced `/api/stop` that ends with verified `leave`.
-2. Run a supervised short `controlMode=movement-only` VPS validation and inspect `runner.jsonl`, `decisions.jsonl`, status action rows, command settlement, and verified `leave`.
-3. Run a supervised `controlMode=non-combat-profit` VPS validation and inspect profit decisions for realtime-first behavior, guarded snapshot fallback, no shoot commands, and verified `leave`.
-4. Run a supervised `controlMode=combat-dry-run` VPS validation under visible Active-player conditions and inspect `combat.jsonl`/`decisions.jsonl` for realtime-only targets, aim/fire summaries, suppressed commands, and verified `leave`.
-5. Run a supervised short `controlMode=combat-live` plus `combatEnabled=true` VPS validation and inspect `combat.jsonl`, `runner.jsonl`, status action rows, `shoot_ok` acknowledgement evidence, command pacing, and verified `leave`.
-6. Install the `grasp-rat-browserless-runner` systemd service on VPS, verify env/data/log paths, start in dry-run/read-only safe mode, and inspect `systemctl status` plus `journalctl -u grasp-rat-browserless-runner`.
-7. Use `GRASP_RAT_BROWSERLESS_CANARY_PROFILE` for subsequent staged canaries so the production service can move through read-only, movement-only, profit, combat dry-run, and combat live without code edits.
-8. Keep the browserless runtime boundary explicit:
+1. Run the production browserless read-only canary on VPS for 10-30 minutes and inspect status/log evidence, including `decisions.jsonl`; then run `node scripts/browserless-canary-audit.js --log-dir /var/log/grasp-rat-browserless --day YYYY-MM-DD --profile read-only --fail-on-incomplete`.
+2. During a supervised read-only service run, trigger forced `/api/stop` and verify it ends with confirmed `leave`; then run the same audit with `--require-stop`.
+3. Run a supervised short `controlMode=movement-only` VPS validation and inspect `runner.jsonl`, `decisions.jsonl`, status action rows, command settlement, and verified `leave`; then audit with `--profile movement-only`.
+4. Run a supervised `controlMode=non-combat-profit` VPS validation and inspect profit decisions for realtime-first behavior, guarded snapshot fallback, no shoot commands, and verified `leave`; then audit with `--profile profit`.
+5. Run a supervised `controlMode=combat-dry-run` VPS validation under visible Active-player conditions and inspect `combat.jsonl`/`decisions.jsonl` for realtime-only targets, aim/fire summaries, suppressed commands, and verified `leave`; then audit with `--profile combat-dry-run`.
+6. Run a supervised short `controlMode=combat-live` plus `combatEnabled=true` VPS validation and inspect `combat.jsonl`, `runner.jsonl`, status action rows, `shoot_ok` acknowledgement evidence, command pacing, and verified `leave`; then audit with `--profile combat-live`.
+7. Install the `grasp-rat-browserless-runner` systemd service on VPS, verify env/data/log paths, start in dry-run/read-only safe mode, and inspect `systemctl status` plus `journalctl -u grasp-rat-browserless-runner`.
+8. Use `GRASP_RAT_BROWSERLESS_CANARY_PROFILE` for subsequent staged canaries so the production service can move through read-only, movement-only, profit, combat dry-run, and combat live without code edits.
+9. Keep the browserless runtime boundary explicit:
    - shared pure strategy remains in `src/strategy/`;
    - browser DOM/CDP integration remains browser-specific;
    - a new Node transport/runtime adapter can own auth/session state, direct WebSocket IO, timers, and verified exit.
-9. Mark `headless-demo/` superseded only after the production runner canaries and systemd validation above have accepted evidence; until then it remains a diagnostic protocol probe.
+10. Mark `headless-demo/` superseded only after the production runner canaries and systemd validation above have accepted evidence; until then it remains a diagnostic protocol probe.
 
 ## Evidence To Request From VPS Runs
 
 When the user reports a failure, ask for only the relevant outputs and keep secrets redacted:
 
 ```bash
-tail -n 200 headless-demo/data/logs/$(date -u +%F).jsonl
+sudo journalctl -u grasp-rat-browserless-runner -n 120 --no-pager
+sudo find /var/log/grasp-rat-browserless/$(date -u +%F) -maxdepth 1 -type f -name '*.jsonl' -print
+sudo tail -n 120 /var/log/grasp-rat-browserless/$(date -u +%F)/runner.jsonl
+sudo tail -n 120 /var/log/grasp-rat-browserless/$(date -u +%F)/decisions.jsonl
 ```
 
-If the demo is running as systemd later:
+For combat stages, also ask for:
 
 ```bash
-sudo journalctl -u grasp-rat-headless-demo -n 120 --no-pager
-sudo tail -n 200 /var/log/grasp-rat-headless-demo/$(date -u +%F).jsonl
+sudo tail -n 120 /var/log/grasp-rat-browserless/$(date -u +%F)/combat.jsonl
 ```
 
-For the current manual process, the log path shown in `/api/status` is authoritative.
+For forced-stop or leave failures, also ask for:
 
-For the next protocol validation, ask for `/api/status` fields:
+```bash
+sudo tail -n 120 /var/log/grasp-rat-browserless/$(date -u +%F)/exits.jsonl
+node scripts/browserless-canary-audit.js --log-dir /var/log/grasp-rat-browserless --day $(date -u +%F) --profile read-only --require-stop
+```
 
-- `lastSnapshotProbe`
-- `lastSelfSummary`
-- `lastError`
+For normal profile acceptance, ask the operator to run the matching audit command, for example:
 
-For read-only WS validation, ask for:
+```bash
+node scripts/browserless-canary-audit.js --log-dir /var/log/grasp-rat-browserless --day $(date -u +%F) --profile read-only --fail-on-incomplete
+```
 
-- `lastProbe`
-- `lastFrameSummary`
-- `recentFrames` last 2 entries
-- `lastLeaveSummary`
+If `headless-demo/` is being used only as a diagnostic probe, the log path shown in its `/api/status` remains authoritative for that probe.
