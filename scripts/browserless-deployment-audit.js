@@ -120,7 +120,8 @@ function isPositiveNumber(value) {
 }
 
 function isNumber(value) {
-  return Number.isFinite(Number(value));
+  const text = String(value ?? '').trim();
+  return text !== '' && Number.isFinite(Number(text));
 }
 
 function addEnvChecks(checks, env, envMode) {
