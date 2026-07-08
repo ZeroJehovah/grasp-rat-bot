@@ -7216,7 +7216,13 @@ async function runSelfTest() {
           '--user-id',
           '7',
           '--session-token',
-          'runner-secret-token'
+          'runner-secret-token',
+          '--login-point-x',
+          '1',
+          '--login-point-y',
+          '2',
+          '--login-point-hp',
+          '100'
         ], {});
         const liveRun = await runBrowserlessRunner(liveConfig, {
           now: () => Date.UTC(2026, 6, 8, 1, 1, 0),
@@ -7260,24 +7266,28 @@ async function runSelfTest() {
           '--data-dir',
           dir
         ], {});
+        let hydratedLoginPointX = null;
         const liveRun = await runBrowserlessRunner(config, {
           now: () => Date.UTC(2026, 6, 8, 1, 2, 0),
-          runReadOnlyOnce: async hydrated => ({
-            ok: true,
-            snapshotSafety: { ok: true, reason: 'safe' },
-            state: {
-              realtime: {
-                self: { user_id: hydrated.userId, x: 6001, y: 66270, hp: 99, name: 'self' }
-              }
-            },
-            decisions: {
-              last: {
-                input: {
+          runReadOnlyOnce: async hydrated => {
+            hydratedLoginPointX = hydrated.loginPointX;
+            return {
+              ok: true,
+              snapshotSafety: { ok: true, reason: 'safe' },
+              state: {
+                realtime: {
                   self: { user_id: hydrated.userId, x: 6001, y: 66270, hp: 99, name: 'self' }
                 }
+              },
+              decisions: {
+                last: {
+                  input: {
+                    self: { user_id: hydrated.userId, x: 6001, y: 66270, hp: 99, name: 'self' }
+                  }
+                }
               }
-            }
-          })
+            };
+          }
         });
         const stored = readBrowserlessStateFile(browserlessPath);
         const logFile = path.join(dir, 'logs', '2026-07-08', 'runner.jsonl');
@@ -7287,6 +7297,7 @@ async function runSelfTest() {
           imported.userId,
           imported.tokenPresent,
           imported.loginPoint.source,
+          hydratedLoginPointX,
           liveRun.ok,
           stored.session.userId,
           stored.session.authenticated,
@@ -7295,7 +7306,7 @@ async function runSelfTest() {
           !text.includes('legacy-secret-token')
         ].join('|');
       }),
-      want: 'true|28886|true|self-test|true|28886|true|6001|canary-self|true'
+      want: 'true|28886|true|self-test|5999|true|28886|true|6001|canary-self|true'
     },
     {
       name: 'browserless state file public status redacts session token',

@@ -53,10 +53,14 @@ function publicConfig(config) {
     combatEnabled: Boolean(config.combatEnabled),
     combatShootMinIntervalMs: Number(config.combatShootMinIntervalMs || 0),
     stateFile: config.stateFile || stateFilePath(config),
-    loginPointPresent: Number.isFinite(Number(config.loginPointX)) && Number.isFinite(Number(config.loginPointY)),
+    loginPointPresent: hasConfigNumber(config.loginPointX) && hasConfigNumber(config.loginPointY),
     userId: Number(config.userId || 0),
     sessionTokenPresent: Boolean(config.sessionToken)
   };
+}
+
+function hasConfigNumber(value) {
+  return value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value));
 }
 
 function hydrateConfigFromState(config, state) {
@@ -66,9 +70,9 @@ function hydrateConfigFromState(config, state) {
     ...config,
     userId: Number(config.userId || 0) || session.userId,
     sessionToken: config.sessionToken || session.sessionToken,
-    loginPointX: Number.isFinite(Number(config.loginPointX)) ? config.loginPointX : loginPoint?.x ?? config.loginPointX,
-    loginPointY: Number.isFinite(Number(config.loginPointY)) ? config.loginPointY : loginPoint?.y ?? config.loginPointY,
-    loginPointHp: Number.isFinite(Number(config.loginPointHp)) ? config.loginPointHp : loginPoint?.hp ?? config.loginPointHp
+    loginPointX: hasConfigNumber(config.loginPointX) ? Number(config.loginPointX) : loginPoint?.x ?? config.loginPointX,
+    loginPointY: hasConfigNumber(config.loginPointY) ? Number(config.loginPointY) : loginPoint?.y ?? config.loginPointY,
+    loginPointHp: hasConfigNumber(config.loginPointHp) ? Number(config.loginPointHp) : loginPoint?.hp ?? config.loginPointHp
   };
 }
 
@@ -106,10 +110,10 @@ async function runBrowserlessRunner(config, deps = {}) {
   });
   let persisted = readBrowserlessStateFile(stateFile);
   const envSessionTokenProvided = Boolean(config.sessionToken);
-  const envLoginPointProvided = Number.isFinite(Number(config.loginPointX)) && Number.isFinite(Number(config.loginPointY));
+  const envLoginPointProvided = hasConfigNumber(config.loginPointX) && hasConfigNumber(config.loginPointY);
   const persistedLoginPoint = loginPointFromAnyState(persisted);
   config = hydrateConfigFromState(config, persisted);
-  const loginPointProvided = Number.isFinite(Number(config.loginPointX)) && Number.isFinite(Number(config.loginPointY));
+  const loginPointProvided = hasConfigNumber(config.loginPointX) && hasConfigNumber(config.loginPointY);
   persisted = writeBrowserlessStateFile(stateFile, {
     ...persisted,
     updatedAt: new Date(now()).toISOString(),
@@ -138,7 +142,7 @@ async function runBrowserlessRunner(config, deps = {}) {
           point: {
             x: Number(config.loginPointX),
             y: Number(config.loginPointY),
-            hp: Number.isFinite(Number(config.loginPointHp)) ? Number(config.loginPointHp) : null,
+            hp: hasConfigNumber(config.loginPointHp) ? Number(config.loginPointHp) : null,
             source: envLoginPointProvided ? 'cli' : (persistedLoginPoint?.source || 'state')
           },
           checkedAt: ''
