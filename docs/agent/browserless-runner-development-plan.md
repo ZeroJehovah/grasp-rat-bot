@@ -118,6 +118,7 @@ Update this table in the same task that completes each feature.
 | Commit 30: Add Canary Run Identity | Complete | `src/node/browserless/canary.js` now assigns a stable `runId` to each canary run and stamps runner/decision/action/combat/exit log entries with it. `scripts/browserless-canary-audit.js` prefers `runId` filtering before falling back to time-window filtering, and acceptance summaries include the selected run id. Self-tests cover deterministic id generation and same-window cross-run contamination rejection. |
 | Commit 31: Harden Live Login Point Audit | Complete | `scripts/browserless-deployment-audit.js` now treats empty login-point fields as missing instead of numeric zero in live env mode, so supervised live canaries cannot pass readiness without explicit X/Y/HP coordinates. Self-tests cover empty login-point rejection. |
 | Commit 32: Load Live Session From State | Complete | `scripts/browserless-import-state.js` imports already authorized legacy/demo state into production `state.json` without printing tokens; `src/node/browserless/runner.js` hydrates `userId`, `sessionToken`, and login-point coordinates from state when env/CLI fields are blank; the status API can request an auth URL and submit callback data for future manual authorization; live deployment audit accepts session/login-point evidence from state as well as env. Read-only bootstrap can learn an initial login point from realtime self and then requires a formal snapshot-safety canary, and canary audit rejects bootstrap-only finals as acceptance evidence. Self-tests cover import/hydration and bootstrap-only audit rejection. |
+| Commit 33: Require Combat Target Evidence | Complete | `scripts/browserless-canary-audit.js` now requires combat-dry-run and combat-live acceptance evidence to include at least one scoped realtime combat target entry, not just targetless combat diagnostic rows. `scripts/browserless-acceptance-report.js` prints combat target counts in section summaries, and self-tests cover accepted target evidence plus targetless dry-run rejection. |
 
 ## Commit Plan
 
@@ -782,12 +783,12 @@ Validation:
 
 ## External VPS Validation Required
 
-Local implementation work is complete through Commit 32, and the VPS systemd deployment validation passed on 2026-07-08. The production runner is not accepted until the remaining live canary validations below produce evidence and the aggregate acceptance report passes.
+Local implementation work is complete through Commit 33, and the VPS systemd deployment validation passed on 2026-07-08. The production runner is not accepted until the remaining live canary validations below produce evidence and the aggregate acceptance report passes.
 
 Use the production service path and audit commands from `docs/agent/browserless-vps-migration.md` and `docs/agent/browserless-runner-operator.md`. Do not mark `headless-demo/` superseded until these validations pass:
 
-1. Combat dry-run canary: realtime-only combat targets, aim/fire summaries, suppressed commands, verified `leave`, and `--profile combat-dry-run`.
-2. Guarded combat live canary: explicit `combatEnabled=true`, realtime combat movement/shoot pacing, `shoot_ok` evidence when shots are sent, verified `leave`, and `--profile combat-live`.
+1. Combat dry-run canary: 2 minute supervised run with at least one realtime combat target, aim/fire summaries, suppressed commands, verified `leave`, and `--profile combat-dry-run`.
+2. Guarded combat live canary: 2 minute supervised run with explicit `combatEnabled=true`, realtime combat movement/shoot pacing, `shoot_ok` evidence when shots are sent, verified `leave`, and `--profile combat-live`.
 3. Final cutover readiness: `sudo node scripts/browserless-acceptance-report.js --log-dir /var/log/grasp-rat-browserless --day YYYY-MM-DD --fail-on-incomplete`.
 
 Completed VPS deployment validation:
@@ -800,6 +801,7 @@ Completed VPS deployment validation:
 - 2026-07-08: The forced-stop read-only canary passed on VPS with run id `read-only-20260708T145958570Z` over `2026-07-08T14:59:58.570Z .. 2026-07-08T15:00:59.352Z`. Audit accepted 1 explicit-stop event from the status API, verified `leave`, 1189 decoded frames, 1189 self-observed frames, 0 decode errors, 59 decision entries, 0 movement commands, and 0 shoot commands.
 - 2026-07-08: The movement-only canary passed on VPS with run id `movement-only-20260708T151108072Z` over `2026-07-08T15:11:08.072Z .. 2026-07-08T15:12:10.382Z`. Audit accepted snapshot safety, 1213 decoded frames, 1212 self-observed frames, 0 decode errors, verified `leave`, 59 decision entries, 60 velocity/movement-command entries, command settlement, and 0 shoot commands.
 - 2026-07-08: The non-combat profit canary passed on VPS with run id `non-combat-profit-20260708T151524293Z` over `2026-07-08T15:15:24.293Z .. 2026-07-08T15:16:26.489Z`. Audit accepted snapshot safety, 1212 decoded frames, 1211 self-observed frames, 0 decode errors, verified `leave`, 59 profit decision entries, 60 velocity/movement-command entries, 58 visible coin actions, 0 combat actions, and 0 shoot commands.
+- 2026-07-08: A 10 minute combat-dry-run attempt `combat-dry-run-20260708T152147589Z` cleanly finished with verified `leave`, 11982 decoded/self-observed frames, 584 dry-run combat diagnostic rows, 0 movement commands, and 0 shoot commands, but it had 0 realtime combat targets/candidates. This is useful safety evidence but is not accepted Commit 14 canary evidence; Commit 33 tightens the audit so targetless combat diagnostic rows cannot satisfy combat canary acceptance.
 
 Historical snapshot safety validation:
 

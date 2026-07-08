@@ -169,6 +169,10 @@ function hasShootCommandEvidence(entry) {
   );
 }
 
+function hasCombatTarget(entry) {
+  return Boolean(entry?.detail?.target);
+}
+
 function summarizeAudit(options = {}) {
   const profile = String(options.profile || 'read-only');
   const mode = PROFILE_MODES[profile];
@@ -185,6 +189,8 @@ function summarizeAudit(options = {}) {
   const shootCommandCount = countWhere(scopedStreams.runner, entry => entry?.type === 'movement-command' && hasShootCommandEvidence(entry));
   const combatDryRunEntries = scopedStreams.combat.filter(entry => entry?.type === 'combat-dry-run');
   const combatLiveEntries = scopedStreams.combat.filter(entry => entry?.type === 'combat-live');
+  const combatDryRunTargetCount = countWhere(combatDryRunEntries, hasCombatTarget);
+  const combatLiveTargetCount = countWhere(combatLiveEntries, hasCombatTarget);
   const safetyEvents = scopedStreams.exits.filter(entry => entry?.type === 'safety-event');
   const explicitStopEvents = safetyEvents.filter(entry => entry?.detail?.reason === 'explicit-stop');
   const leaveOk = Boolean(final?.leave?.ok || final?.safety?.exit?.leave?.ok);
@@ -224,11 +230,13 @@ function summarizeAudit(options = {}) {
     addCheck(checks, 'no-shoot', Number(final?.actions?.shootSentCount || 0) === 0 && shootCommandCount === 0, `shootSentCount=${Number(final?.actions?.shootSentCount || 0)}, shoot logs=${shootCommandCount}`);
   } else if (profile === 'combat-dry-run') {
     addCheck(checks, 'combat-logged', combatDryRunEntries.length > 0, `combat-dry-run entries=${combatDryRunEntries.length}`);
+    addCheck(checks, 'combat-target-logged', combatDryRunTargetCount > 0, `combat targets=${combatDryRunTargetCount}`);
     addCheck(checks, 'combat-realtime-authority', allCombatTargetsRealtime(combatDryRunEntries), 'all logged combat targets/candidates use realtime authority');
     addCheck(checks, 'combat-suppressed', allCombatDryRunSuppressed(combatDryRunEntries), 'dry-run shooting rows are suppressed');
     addCheck(checks, 'no-actions', Number(final?.actions?.sentCount || 0) === 0 && movementCommandCount === 0, `sent=${Number(final?.actions?.sentCount || 0)}, movement logs=${movementCommandCount}`);
   } else if (profile === 'combat-live') {
     addCheck(checks, 'combat-logged', combatLiveEntries.length > 0, `combat-live entries=${combatLiveEntries.length}`);
+    addCheck(checks, 'combat-target-logged', combatLiveTargetCount > 0, `combat targets=${combatLiveTargetCount}`);
     addCheck(checks, 'combat-realtime-authority', allCombatTargetsRealtime(combatLiveEntries), 'all logged combat targets/candidates use realtime authority');
     addCheck(checks, 'combat-action-logged', Number(final?.actions?.velocitySentCount || 0) > 0 && movementCommandCount > 0, `velocity=${Number(final?.actions?.velocitySentCount || 0)}, movement logs=${movementCommandCount}`);
     addCheck(checks, 'shoot-ack-or-no-shot', (Number(final?.actions?.shootSentCount || 0) === 0 && shootCommandCount === 0) || Boolean(final?.actions?.lastShootAck), `shootSentCount=${Number(final?.actions?.shootSentCount || 0)}, shoot logs=${shootCommandCount}, lastShootAck=${Boolean(final?.actions?.lastShootAck)}`);
@@ -259,7 +267,9 @@ function summarizeAudit(options = {}) {
       movementCommand: movementCommandCount,
       shootCommand: shootCommandCount,
       combatDryRun: combatDryRunEntries.length,
+      combatDryRunTarget: combatDryRunTargetCount,
       combatLive: combatLiveEntries.length,
+      combatLiveTarget: combatLiveTargetCount,
       safetyEvent: safetyEvents.length,
       explicitStop: explicitStopEvents.length
     },

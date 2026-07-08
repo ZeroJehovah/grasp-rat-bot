@@ -147,7 +147,7 @@ node scripts/browserless-runner.js \
   --read-only-probe-ms 1800000
 ```
 
-For the first supervised validation, use 10-30 minutes for `--read-only-probe-ms`. The canary should end with verified `leave`; if leave is not confirmed, treat the run as failed and inspect `runner.jsonl`. Inspect `decisions.jsonl` to confirm combat candidates use realtime authority and snapshot coins appear only as fallback profit candidates. If no login point is present in state, a read-only bootstrap run may learn one from realtime self, but canary acceptance still requires the subsequent formal snapshot-safety run; `browserless-canary-audit` rejects bootstrap-only final events.
+For supervised validation, use 2 minutes for `--read-only-probe-ms` unless a longer diagnostic run is explicitly needed. The canary should end with verified `leave`; if leave is not confirmed, treat the run as failed and inspect `runner.jsonl`. Inspect `decisions.jsonl` to confirm combat candidates use realtime authority and snapshot coins appear only as fallback profit candidates. If no login point is present in state, a read-only bootstrap run may learn one from realtime self, but canary acceptance still requires the subsequent formal snapshot-safety run; `browserless-canary-audit` rejects bootstrap-only final events.
 
 During a supervised run, `POST /api/stop` or the panel Stop button requests an explicit safety stop. The runner records the event in `exits.jsonl` and should leave through the verified direct `leave` path.
 
@@ -170,7 +170,7 @@ node scripts/browserless-runner.js \
   --movement-command-interval-ms 500 \
   --movement-target-dead-zone-cm 900 \
   --movement-settlement-frames 2 \
-  --read-only-probe-ms 60000
+  --read-only-probe-ms 120000
 ```
 
 Inspect `runner.jsonl` for `movement-command` entries and final verified `leave`. Inspect status action rows for command settlement. Any `shoot` command in logs or transport evidence is a release blocker.
@@ -194,7 +194,7 @@ node scripts/browserless-runner.js \
   --movement-command-interval-ms 500 \
   --movement-target-dead-zone-cm 900 \
   --movement-settlement-frames 2 \
-  --read-only-probe-ms 60000
+  --read-only-probe-ms 120000
 ```
 
 Review `decisions.jsonl` before considering longer runs. Expected evidence: realtime/native coin candidates win when present; snapshot fallback appears only when no realtime profit and no visible Active threat is blocking fallback; combat targets may appear in diagnostic rows but must not become action commands.
@@ -215,10 +215,10 @@ node scripts/browserless-runner.js \
   --login-point-y <y-cm> \
   --login-point-hp <hp> \
   --decision-interval-ms 1000 \
-  --read-only-probe-ms 60000
+  --read-only-probe-ms 120000
 ```
 
-Review `combat.jsonl` and `decisions.jsonl` before enabling any guarded live combat work. Expected evidence: combat targets have `authority: "realtime"`, snapshot-only targets never appear as combat targets, aim summaries include `exact` or `linear-intercept`, shooting rows say `dryRunOnly: true` and `commandSuppressed: true`, and there are no velocity or shoot commands.
+Review `combat.jsonl` and `decisions.jsonl` before enabling any guarded live combat work. Expected evidence: at least one scoped combat target has `authority: "realtime"`, snapshot-only targets never appear as combat targets, aim summaries include `exact` or `linear-intercept`, shooting rows say `dryRunOnly: true` and `commandSuppressed: true`, and there are no velocity or shoot commands.
 
 ## Guarded Combat Live Validation
 
@@ -240,10 +240,10 @@ node scripts/browserless-runner.js \
   --movement-command-interval-ms 500 \
   --movement-settlement-frames 2 \
   --combat-shoot-min-interval-ms 160 \
-  --read-only-probe-ms 60000
+  --read-only-probe-ms 120000
 ```
 
-Run only under direct supervision. Expected evidence: `combat.jsonl` entries use realtime authority, `runner.jsonl` action rows show combat movement and shoot command pacing, status action state shows `shootSentCount` and the latest `shoot_ok` acknowledgement when the server accepts a shot, and the run ends with verified `leave`. Any missing leave confirmation is a failed validation.
+Run only under direct supervision. Expected evidence: at least one `combat.jsonl` target entry uses realtime authority, `runner.jsonl` action rows show combat movement and shoot command pacing, status action state shows `shootSentCount` and the latest `shoot_ok` acknowledgement when the server accepts a shot, and the run ends with verified `leave`. Any missing leave confirmation is a failed validation.
 
 ## Status API
 
@@ -321,7 +321,7 @@ sudo node scripts/browserless-canary-audit.js \
   --fail-on-incomplete
 ```
 
-Use `--profile movement-only`, `--profile profit`, `--profile combat-dry-run`, or `--profile combat-live` for later stages. For the forced `/api/stop` validation, add `--require-stop`; that mode accepts an explicit-stop safety exit only when verified `leave` evidence is present. Current canary logs carry a `runId`, and the audit uses that to correlate runner, decision, combat, action, and exit evidence; older logs fall back to the selected final event's `startedAt`/`completedAt` window. Read-only and combat-dry-run audits fail if scoped movement-command logs are present; movement-only, profit, and combat-live audits require scoped movement-command evidence in addition to positive velocity counters. No-shoot profiles also fail when scoped action logs show shoot-command evidence, and combat-live requires `lastShootAck` when either final counters or scoped action logs prove a shot was sent. Use `sudo` for production logs under `/var/log/grasp-rat-browserless`.
+Use `--profile movement-only`, `--profile profit`, `--profile combat-dry-run`, or `--profile combat-live` for later stages. For the forced `/api/stop` validation, add `--require-stop`; that mode accepts an explicit-stop safety exit only when verified `leave` evidence is present. Current canary logs carry a `runId`, and the audit uses that to correlate runner, decision, combat, action, and exit evidence; older logs fall back to the selected final event's `startedAt`/`completedAt` window. Read-only and combat-dry-run audits fail if scoped movement-command logs are present; movement-only, profit, and combat-live audits require scoped movement-command evidence in addition to positive velocity counters. Combat dry-run/live audits require at least one scoped realtime combat target entry. No-shoot profiles also fail when scoped action logs show shoot-command evidence, and combat-live requires `lastShootAck` when either final counters or scoped action logs prove a shot was sent. Use `sudo` for production logs under `/var/log/grasp-rat-browserless`.
 
 After all staged canaries and the deployment audit have run, generate the aggregate cutover readiness report:
 
