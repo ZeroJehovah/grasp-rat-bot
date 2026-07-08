@@ -93,6 +93,9 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
     } else if (arg === '--non-combat-profit') {
       config.controlMode = 'non-combat-profit';
       config.readOnly = false;
+    } else if (arg === '--combat-dry-run') {
+      config.controlMode = 'combat-dry-run';
+      config.readOnly = false;
     } else if (arg === '--control-mode') {
       config.controlMode = argv[++i] || config.controlMode;
       config.readOnly = config.controlMode === 'read-only';
@@ -150,7 +153,7 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
       throw new Error(`unknown argument: ${arg}`);
     }
   }
-  if (!['read-only', 'movement-only', 'non-combat-profit'].includes(String(config.controlMode || ''))) {
+  if (!['read-only', 'movement-only', 'non-combat-profit', 'combat-dry-run'].includes(String(config.controlMode || ''))) {
     throw new Error(`unsupported control mode: ${config.controlMode}`);
   }
   config.readOnly = config.controlMode === 'read-only';
@@ -168,9 +171,10 @@ function usage() {
     '  --read-only              Start in read-only mode (default)',
     '  --movement-only          Enable live movement-only velocity commands; shooting remains disabled',
     '  --non-combat-profit      Enable supervised non-combat coin profit movement; shooting remains disabled',
-    '  --control-mode <mode>    read-only, movement-only, or non-combat-profit. Default: read-only',
+    '  --combat-dry-run         Evaluate combat target/movement/aim/fire intent without movement or shooting',
+    '  --control-mode <mode>    read-only, movement-only, non-combat-profit, or combat-dry-run. Default: read-only',
     '  --dry-run                Do not connect to live game transport (default)',
-    '  --live                   Disable dry-run; live transport still requires read-only, movement-only, or non-combat-profit mode',
+    '  --live                   Disable dry-run; live transport still requires read-only, movement-only, non-combat-profit, or combat-dry-run mode',
     '  --once                   Run one bounded skeleton cycle and exit',
     '  --data-dir <dir>         State/log root. Default: data/browserless-runner',
     '  --status-host <host>     Status host placeholder. Default: 127.0.0.1',

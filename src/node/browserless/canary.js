@@ -200,6 +200,9 @@ async function runReadOnlyCanary(config, options = {}) {
   const logAction = detail => {
     if (logStore) logStore.append('runner', 'movement-command', detail);
   };
+  const logCombat = detail => {
+    if (logStore) logStore.append('combat', 'combat-dry-run', detail);
+  };
   const updateActionResult = actionResult => {
     if (!actionResult) return;
     const adapterState = actionAdapter?.getState?.() || {};
@@ -282,6 +285,9 @@ async function runReadOnlyCanary(config, options = {}) {
             lastDecisionAtMs = atMs;
             logDecision(summary);
             result.decisions.loggedCount += 1;
+            if (summary?.combat?.target || controlMode === 'combat-dry-run') {
+              logCombat(summary.combat || {});
+            }
             if (typeof options.onDecision === 'function') {
               try {
                 options.onDecision(summary, { state: currentState, decision });

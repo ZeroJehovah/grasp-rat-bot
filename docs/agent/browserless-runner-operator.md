@@ -4,10 +4,11 @@ This document tracks the production browserless runner surface. The older `headl
 
 ## Current Scope
 
-- The runner currently supports dry-run mode, a live read-only canary, supervised movement-only mode, and supervised non-combat profit mode.
+- The runner currently supports dry-run mode, a live read-only canary, supervised movement-only mode, supervised non-combat profit mode, and combat dry-run mode.
 - Live read-only canary sends no movement or shoot commands. It runs pre-login snapshot safety, joins direct WS, collects frame health, and calls verified `leave`.
 - Movement-only mode sends velocity commands only toward snapshot coin fallback targets, never sends shoot commands, and remains supervised-validation-only.
 - Non-combat profit mode prefers realtime/native coin drops when present, uses snapshot coins only as guarded fallback, and keeps combat targets diagnostic-only.
+- Combat dry-run mode evaluates realtime `pos` combat target, movement, aim, and fire intent, writes `combat.jsonl`, and still sends no movement or shoot commands.
 - The safety controller handles no-self, frame gap, stale self, WS close/error, stamina exhaustion, unsafe login point, direct leave failure, and explicit stop.
 - The runner writes local JSONL logs and a persistent state file under the configured data directory.
 - The status server and web panel are available for non-`--once` runs.
@@ -107,6 +108,27 @@ node scripts/browserless-runner.js \
 ```
 
 Review `decisions.jsonl` before considering longer runs. Expected evidence: realtime/native coin candidates win when present; snapshot fallback appears only when no realtime profit and no visible Active threat is blocking fallback; combat targets may appear in diagnostic rows but must not become action commands.
+
+## Combat Dry-Run Validation
+
+Combat dry-run uses the same pre-login safety and verified leave path, but only evaluates combat intent from realtime `pos` frames. It does not send movement or shoot commands.
+
+```bash
+node scripts/browserless-runner.js \
+  --once \
+  --live \
+  --combat-dry-run \
+  --data-dir data/browserless-runner \
+  --user-id <user-id> \
+  --session-token '<session-token>' \
+  --login-point-x <x-cm> \
+  --login-point-y <y-cm> \
+  --login-point-hp <hp> \
+  --decision-interval-ms 1000 \
+  --read-only-probe-ms 60000
+```
+
+Review `combat.jsonl` and `decisions.jsonl` before enabling any guarded live combat work. Expected evidence: combat targets have `authority: "realtime"`, snapshot-only targets never appear as combat targets, aim summaries include `exact` or `linear-intercept`, shooting rows say `dryRunOnly: true` and `commandSuppressed: true`, and there are no velocity or shoot commands.
 
 ## Status API
 

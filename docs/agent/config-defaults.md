@@ -33,7 +33,8 @@
   - `GRASP_RAT_BROWSERLESS_LOGIN_POINT_X = null`
   - `GRASP_RAT_BROWSERLESS_LOGIN_POINT_Y = null`
   - `GRASP_RAT_BROWSERLESS_LOGIN_POINT_HP = null`
-  - The CLI accepts `--read-only`, `--movement-only`, `--non-combat-profit`, `--control-mode`, `--dry-run`, `--live`, `--once`, `--data-dir`, `--status-host`, `--status-port`, `--web-token`, `--user-id`, `--session-token`, `--read-only-probe-ms`, `--frame-gap-alert-ms`, `--snapshot-path`, `--decision-interval-ms`, `--stale-self-ms`, `--no-self-grace-ms`, `--stamina-exhausted-below-ms`, `--movement-command-interval-ms`, `--movement-target-dead-zone-cm`, `--movement-settlement-frames`, `--login-point-x`, `--login-point-y`, and `--login-point-hp`. Live control beyond non-combat profit remains gated by later plan items.
+  - `GRASP_RAT_BROWSERLESS_CONTROL_MODE` accepts `read-only`, `movement-only`, `non-combat-profit`, or `combat-dry-run`.
+  - The CLI accepts `--read-only`, `--movement-only`, `--non-combat-profit`, `--combat-dry-run`, `--control-mode`, `--dry-run`, `--live`, `--once`, `--data-dir`, `--status-host`, `--status-port`, `--web-token`, `--user-id`, `--session-token`, `--read-only-probe-ms`, `--frame-gap-alert-ms`, `--snapshot-path`, `--decision-interval-ms`, `--stale-self-ms`, `--no-self-grace-ms`, `--stamina-exhausted-below-ms`, `--movement-command-interval-ms`, `--movement-target-dead-zone-cm`, `--movement-settlement-frames`, `--login-point-x`, `--login-point-y`, and `--login-point-hp`. Live shooting remains gated by later plan items.
 
 - `globalRefreshMs = 5000`
 - `globalRefreshTimeoutMs = 3000`
