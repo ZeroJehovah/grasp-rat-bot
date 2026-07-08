@@ -15,6 +15,7 @@ const DATA_DIR = process.env.GRASP_RAT_DEMO_DATA_DIR || path.join(__dirname, 'da
 const LOG_DIR = process.env.GRASP_RAT_DEMO_LOG_DIR || path.join(DATA_DIR, 'logs');
 const STATE_FILE = process.env.GRASP_RAT_DEMO_STATE_FILE || path.join(DATA_DIR, 'state.json');
 const ACTION_DELAY_MS = Math.max(50, Number(process.env.GRASP_RAT_DEMO_ACTION_DELAY_MS || 550));
+const READONLY_PROBE_MS = Math.max(1000, Number(process.env.GRASP_RAT_DEMO_READONLY_PROBE_MS || 30000));
 const LEAVE_RETRY_MAX = Math.max(0, Number(process.env.GRASP_RAT_DEMO_LEAVE_RETRY_MAX || 3));
 const LEAVE_RETRY_MS = Math.max(250, Number(process.env.GRASP_RAT_DEMO_LEAVE_RETRY_MS || 1200));
 const HTTP_TIMEOUT_MS = Math.max(1000, Number(process.env.GRASP_RAT_DEMO_HTTP_TIMEOUT_MS || 10000));
@@ -25,6 +26,7 @@ const WS_FRAME_DECODED_SAMPLE_BYTES = Math.max(0, Number(process.env.GRASP_RAT_D
 const WS_PATH = process.env.GRASP_RAT_DEMO_WS_PATH || '/ws';
 const WS_EXTRA_QUERY = process.env.GRASP_RAT_DEMO_WS_EXTRA_QUERY || 'compress=gzip%2Cdeflate';
 let cachedWebSocketRuntime = null;
+const frameObservers = new Set();
 
 if (!isLoopbackHost(HOST) && (!WEB_TOKEN || WEB_TOKEN === 'change-this-before-start')) {
   console.error('Refusing to listen on a non-loopback host without a non-placeholder GRASP_RAT_DEMO_WEB_TOKEN.');
@@ -52,6 +54,7 @@ const state = {
   lastLeaveSummary: null,
   running: false,
   lastRun: null,
+  lastProbe: null,
   leaveAlert: '',
   lastError: '',
   logFile: ''
@@ -104,6 +107,16 @@ function summarizeLeaveAttemptForPublic(attempt) {
   };
 }
 
+function summarizeLeaveResultForPublic(leave) {
+  if (!leave || typeof leave !== 'object') return leave || null;
+  return {
+    ok: Boolean(leave.ok),
+    attempts: Array.isArray(leave.attempts)
+      ? leave.attempts.map(summarizeLeaveAttemptForPublic)
+      : []
+  };
+}
+
 function summarizeRunForPublic(run) {
   if (!run || typeof run !== 'object') return run;
   return {
@@ -111,14 +124,7 @@ function summarizeRunForPublic(run) {
     completedAt: Number(run.completedAt || 0),
     ok: Boolean(run.ok),
     error: run.error || '',
-    leave: run.leave && typeof run.leave === 'object'
-      ? {
-          ok: Boolean(run.leave.ok),
-          attempts: Array.isArray(run.leave.attempts)
-            ? run.leave.attempts.map(summarizeLeaveAttemptForPublic)
-            : []
-        }
-      : run.leave || null
+    leave: summarizeLeaveResultForPublic(run.leave)
   };
 }
 
@@ -162,6 +168,7 @@ function publicState() {
     lastLeaveSummary: redactStructured(state.lastLeaveSummary),
     running: state.running,
     lastRun: redactStructured(summarizeRunForPublic(state.lastRun)),
+    lastProbe: redactStructured(state.lastProbe),
     leaveAlert: redact(state.leaveAlert),
     lastError: redact(state.lastError),
     logFile: state.logFile,
@@ -187,6 +194,7 @@ function persistState() {
     lastJoinAt: state.lastJoinAt,
     lastLeaveAt: state.lastLeaveAt,
     lastLeaveSummary: state.lastLeaveSummary,
+    lastProbe: state.lastProbe,
     leaveAlert: state.leaveAlert,
     lastError: state.lastError,
     logFile: state.logFile
@@ -807,6 +815,85 @@ function summarizeDecodedJson(json, userId) {
   return summary;
 }
 
+function rangeInitial() {
+  return { min: null, max: null, last: null };
+}
+
+function updateRange(range, value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return;
+  if (range.min === null || number < range.min) range.min = number;
+  if (range.max === null || number > range.max) range.max = number;
+  range.last = number;
+}
+
+function createProbeStats(durationTargetMs) {
+  return {
+    durationTargetMs,
+    frameCount: 0,
+    decodedFrameCount: 0,
+    binaryFrameCount: 0,
+    textFrameCount: 0,
+    typeCounts: {},
+    keySetCounts: {},
+    firstFrameAt: '',
+    lastFrameAt: '',
+    tick: rangeInitial(),
+    entityCount: rangeInitial(),
+    bulletCount: rangeInitial(),
+    coinDropCount: rangeInitial(),
+    messageCount: rangeInitial(),
+    selfPresent: { true: 0, false: 0, unknown: 0 },
+    decodeErrors: 0
+  };
+}
+
+function incrementCount(map, key) {
+  const normalized = String(key || 'unknown');
+  map[normalized] = Number(map[normalized] || 0) + 1;
+}
+
+function updateProbeStats(stats, frame) {
+  stats.frameCount += 1;
+  if (!stats.firstFrameAt) stats.firstFrameAt = frame.at || '';
+  stats.lastFrameAt = frame.at || stats.lastFrameAt;
+  if (frame.kind === 'binary') stats.binaryFrameCount += 1;
+  if (frame.kind === 'text') stats.textFrameCount += 1;
+  if (frame.decodeError) stats.decodeErrors += 1;
+
+  const keys = Array.isArray(frame.decodedJsonKeys) ? frame.decodedJsonKeys.join(',') : '';
+  if (keys) incrementCount(stats.keySetCounts, keys);
+
+  const summary = frame.decodedSummary;
+  if (!summary || typeof summary !== 'object') return;
+  stats.decodedFrameCount += 1;
+  incrementCount(stats.typeCounts, summary.type || frame.decodedType || 'unknown');
+  updateRange(stats.tick, summary.tick);
+  updateRange(stats.entityCount, summary.entityCount);
+  updateRange(stats.bulletCount, summary.bulletCount);
+  updateRange(stats.coinDropCount, summary.coinDropCount);
+  updateRange(stats.messageCount, summary.messageCount);
+  if (summary.selfPresent === true) {
+    stats.selfPresent.true += 1;
+  } else if (summary.selfPresent === false) {
+    stats.selfPresent.false += 1;
+  } else {
+    stats.selfPresent.unknown += 1;
+  }
+}
+
+async function collectProbeStats(durationMs) {
+  const stats = createProbeStats(durationMs);
+  const observer = frame => updateProbeStats(stats, frame);
+  frameObservers.add(observer);
+  try {
+    await sleep(durationMs);
+  } finally {
+    frameObservers.delete(observer);
+  }
+  return stats;
+}
+
 function inspectBinaryFrame(buffer) {
   const frame = {
     kind: 'binary',
@@ -863,7 +950,15 @@ function recordFrame(data) {
   if (frame.decodedSummary?.ack) state.lastCommandAck = frame.decodedSummary.ack;
   state.lastFrames.push(frame);
   if (state.lastFrames.length > WS_FRAME_LIMIT) state.lastFrames.splice(0, state.lastFrames.length - WS_FRAME_LIMIT);
+  for (const observer of frameObservers) {
+    try {
+      observer(frame);
+    } catch (err) {
+      logEvent('ws-frame-observer-error', { message: err?.message || String(err) });
+    }
+  }
   logEvent('ws-frame', frame);
+  return frame;
 }
 
 function getWebSocketRuntime() {
@@ -1095,6 +1190,71 @@ async function runActionDemo() {
   }
 }
 
+async function runReadOnlyProbe() {
+  if (state.running) throw new Error('demo already running');
+  if (!state.userId || !state.sessionToken) throw new Error('not logged in');
+  const startedAt = Date.now();
+  state.running = true;
+  state.leaveAlert = '';
+  state.lastFrameSummary = null;
+  state.lastCommandAck = null;
+  state.lastProbe = {
+    startedAt,
+    completedAt: 0,
+    durationTargetMs: READONLY_PROBE_MS,
+    ok: false,
+    error: '',
+    stats: null,
+    leave: null
+  };
+  persistState();
+  logEvent('readonly-probe-start', { userId: state.userId, durationMs: READONLY_PROBE_MS });
+
+  let ws = null;
+  let leave = null;
+  let error = '';
+  try {
+    ws = await openWs();
+    state.lastProbe.stats = await collectProbeStats(READONLY_PROBE_MS);
+  } catch (err) {
+    error = err?.message || String(err);
+    state.lastProbe.error = error;
+    state.lastError = error;
+    logEvent('readonly-probe-error', { error });
+  }
+
+  if (ws || state.inGame) {
+    try {
+      leave = await leaveWithVerification();
+      state.lastProbe.leave = summarizeLeaveResultForPublic(leave);
+    } catch (err) {
+      const leaveError = err?.message || String(err);
+      state.lastProbe.leave = { ok: false, error: leaveError, attempts: [] };
+      if (!error) error = leaveError;
+      state.lastProbe.error = error;
+      state.lastError = error;
+      logEvent('readonly-probe-leave-error', { error: leaveError });
+    }
+  }
+
+  try {
+    if (isWsOpen(ws)) ws.close();
+  } catch (_) {}
+  state.wsOpen = false;
+  if (leave?.ok) state.inGame = false;
+  state.running = false;
+  state.lastProbe.completedAt = Date.now();
+  state.lastProbe.ok = Boolean(!error && leave?.ok);
+  if (!state.lastProbe.ok && !state.lastProbe.error) {
+    state.lastProbe.error = state.leaveAlert || 'read-only probe leave not confirmed';
+    state.lastError = state.lastProbe.error;
+  }
+  persistState();
+  logEvent('readonly-probe-finish', state.lastProbe);
+  if (!state.lastProbe.ok) throw new Error(state.lastProbe.error || 'read-only probe failed');
+  return state.lastProbe;
+}
+
 function sendJson(res, status, body) {
   const text = JSON.stringify(body, null, 2);
   res.writeHead(status, {
@@ -1156,9 +1316,10 @@ function sendHtml(res) {
     </section>
     <section>
       <div class="row">
+        <button id="probeBtn">运行只读 WS Probe</button>
         <button class="danger" id="runBtn">运行一次移动/开枪/退出 Demo</button>
       </div>
-      <p class="muted">只在点击后运行一次：上、下、左、右、开枪、leave。leave 未被服务端明确确认时会醒目报警。</p>
+      <p class="muted">只读 Probe 会连接 WS、收集帧统计、再 leave，不发送移动或开枪。Demo 会运行一次上、下、左、右、开枪、leave。leave 未被服务端明确确认时会醒目报警。</p>
     </section>
     <section>
       <h2>状态</h2>
@@ -1201,7 +1362,9 @@ function sendHtml(res) {
       } else {
         clearError();
       }
-      document.getElementById('runBtn').disabled = data.state.running || !(data.state.authenticated || data.state.loggedIn);
+      const disabled = data.state.running || !(data.state.authenticated || data.state.loggedIn);
+      document.getElementById('probeBtn').disabled = disabled;
+      document.getElementById('runBtn').disabled = disabled;
     }
     document.getElementById('authBtn').onclick = async () => {
       try { clearError(); const data = await api('/api/auth-url', { method: 'POST' }); document.getElementById('authUrl').textContent = data.authUrl; await refresh(); }
@@ -1214,6 +1377,11 @@ function sendHtml(res) {
     document.getElementById('runBtn').onclick = async () => {
       if (!confirm('确认运行一次移动/开枪/退出 demo？')) return;
       try { clearError(); await api('/api/run-demo', { method: 'POST' }); await refresh(); }
+      catch (err) { showError(err); await refresh().catch(() => {}); }
+    };
+    document.getElementById('probeBtn').onclick = async () => {
+      if (!confirm('确认运行只读 WS Probe？它会进入游戏但不会移动或开枪，结束后会 leave。')) return;
+      try { clearError(); await api('/api/run-readonly-probe', { method: 'POST' }); await refresh(); }
       catch (err) { showError(err); await refresh().catch(() => {}); }
     };
     document.getElementById('refreshBtn').onclick = () => refresh().catch(showError);
@@ -1261,6 +1429,10 @@ const server = http.createServer(async (req, res) => {
     }
     if (parsed.pathname === '/api/run-demo' && req.method === 'POST') {
       const result = await runActionDemo();
+      return sendJson(res, 200, { ok: Boolean(result.ok), result, state: publicState() });
+    }
+    if (parsed.pathname === '/api/run-readonly-probe' && req.method === 'POST') {
+      const result = await runReadOnlyProbe();
       return sendJson(res, 200, { ok: Boolean(result.ok), result, state: publicState() });
     }
     return sendJson(res, 404, { ok: false, error: 'not found' });
