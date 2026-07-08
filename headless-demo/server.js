@@ -91,6 +91,56 @@ function redactStructured(value, depth = 0) {
   return output;
 }
 
+function summarizeLeaveAttemptForPublic(attempt) {
+  if (!attempt || typeof attempt !== 'object') return attempt;
+  return {
+    stage: attempt.stage || '',
+    httpOk: Boolean(attempt.httpOk),
+    status: Number(attempt.status || 0),
+    statusText: attempt.statusText || '',
+    durationMs: Number(attempt.durationMs || 0),
+    ok: Boolean(attempt.ok),
+    summary: attempt.summary || null
+  };
+}
+
+function summarizeRunForPublic(run) {
+  if (!run || typeof run !== 'object') return run;
+  return {
+    startedAt: Number(run.startedAt || 0),
+    completedAt: Number(run.completedAt || 0),
+    ok: Boolean(run.ok),
+    error: run.error || '',
+    leave: run.leave && typeof run.leave === 'object'
+      ? {
+          ok: Boolean(run.leave.ok),
+          attempts: Array.isArray(run.leave.attempts)
+            ? run.leave.attempts.map(summarizeLeaveAttemptForPublic)
+            : []
+        }
+      : run.leave || null
+  };
+}
+
+function summarizeFrameForPublic(frame) {
+  if (!frame || typeof frame !== 'object') return frame;
+  const output = {
+    at: frame.at || '',
+    kind: frame.kind || ''
+  };
+  if (frame.byteLength !== undefined) output.byteLength = frame.byteLength;
+  if (frame.format) output.format = frame.format;
+  if (frame.version !== undefined) output.version = frame.version;
+  if (frame.compression) output.compression = frame.compression;
+  if (frame.decodedByteLength !== undefined) output.decodedByteLength = frame.decodedByteLength;
+  if (frame.decodedType) output.decodedType = frame.decodedType;
+  if (frame.decodedTick !== undefined) output.decodedTick = frame.decodedTick;
+  if (frame.decodedSummary) output.decodedSummary = frame.decodedSummary;
+  if (frame.decodeError) output.decodeError = frame.decodeError;
+  if (frame.sample) output.sample = frame.sample;
+  return output;
+}
+
 function publicState() {
   const authenticated = Boolean(state.userId && state.sessionToken);
   return {
@@ -111,13 +161,13 @@ function publicState() {
     lastLeaveAt: state.lastLeaveAt || 0,
     lastLeaveSummary: redactStructured(state.lastLeaveSummary),
     running: state.running,
-    lastRun: redactStructured(state.lastRun),
+    lastRun: redactStructured(summarizeRunForPublic(state.lastRun)),
     leaveAlert: redact(state.leaveAlert),
     lastError: redact(state.lastError),
     logFile: state.logFile,
     lastFrameSummary: redactStructured(state.lastFrameSummary),
     lastCommandAck: redactStructured(state.lastCommandAck),
-    recentFrames: redactStructured(state.lastFrames.slice(-10))
+    recentFrames: redactStructured(state.lastFrames.slice(-10).map(summarizeFrameForPublic))
   };
 }
 
@@ -748,6 +798,7 @@ function summarizeDecodedJson(json, userId) {
   if (json.occupied_cells !== undefined) summary.occupiedCells = json.occupied_cells;
 
   const self = userId ? entities.find(entity => Number(entity?.user_id) === Number(userId)) : null;
+  if (userId && Array.isArray(json.entities)) summary.selfPresent = Boolean(self);
   if (self) summary.self = summarizeEntity(self);
 
   if (summary.type === 'shoot_ok') {

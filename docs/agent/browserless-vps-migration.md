@@ -50,6 +50,7 @@ The web UI supports:
 - Showing a red page alert if `leave` is not explicitly confirmed.
 - Reporting `authenticated` separately from `inGame`: `authenticated` means the demo has a reusable token, while `inGame` means the current demo WebSocket session is in the visible entity layer.
 - Reporting `lastFrameSummary` and `lastCommandAck` from decoded WebSocket JSON so VPS checks can focus on frame type, tick, entity counts, self state, and command acknowledgements instead of large raw samples.
+- Keeping `/api/status` compact: public status shows summaries, while complete frame metadata and full leave responses remain in JSONL logs.
 
 ## Observed Live Auth Flow
 
@@ -135,6 +136,8 @@ On 2026-07-08, the VPS one-shot demo succeeded after the Node 18 `ws` fallback a
 - A later restart/manual authorization test ran the one-shot demo twice successfully. `leave` kept the session token usable, so repeat runs can reconnect with the stored token; this is expected because leaving the visible entity layer is not the same as clearing authentication.
 - The decoded leave response after the repeat run confirmed `joined: UserRecordOnly`, `current_join_mode: None`, `visible: Hidden`, and `life: Alive`. This means `inGame` should become false after `leave`, while `authenticated`/legacy `loggedIn` remains true because the auth token is still present and reusable.
 - The decoded `shoot_ok` acknowledgement proves the text command path is accepted by the direct WebSocket transport.
+- After the structured-summary update was pulled to VPS and the demo was restarted, `/api/status` showed `lastCommandAck` for `shoot_ok` with bullet id, range, speed, and tick window. Recent `pos` frames initially included the self entity, and frames after `leave` no longer included self; this is consistent with leaving the visible entity layer.
+- The same post-update status showed a pushed `snapshot` frame over WS, with 100 coin drops and 80 messages in that sample. This confirms snapshot data can arrive via the direct transport, but it remains non-combat/fallback evidence rather than a combat decision source.
 
 ## Progress Log
 
@@ -151,6 +154,7 @@ On 2026-07-08, the VPS one-shot demo succeeded after the Node 18 `ws` fallback a
 - 2026-07-08: Frame logging was updated to keep binary metadata instead of lossy UTF-8 samples and to attempt `GRZ1` gzip decoding.
 - 2026-07-08: VPS logs confirmed `GRZ1` version `1` gzip JSON frames. Decoded frame types include `pos`, `snapshot`, and `shoot_ok`; `leave` exits the visible entity layer but does not invalidate the reusable session token.
 - 2026-07-08: Demo frame diagnostics were tightened to log structured summaries (`decodedType`, `decodedTick`, counts, self entity, command ack) instead of relying on large decoded JSON samples.
+- 2026-07-08: A post-update VPS status check confirmed the structured summaries render in the UI/API. Public status was then compacted so large raw frame/base64 samples and full leave bodies stay in the log file instead of the page state blob.
 
 ## Next Plan
 
