@@ -281,6 +281,17 @@ node scripts/browserless-canary-audit.js \
 
 Use `--profile movement-only`, `--profile profit`, `--profile combat-dry-run`, or `--profile combat-live` for later stages. For the forced `/api/stop` validation, add `--require-stop`; that mode accepts an explicit-stop safety exit only when verified `leave` evidence is present.
 
+After all staged canaries and the deployment audit have run, generate the aggregate cutover readiness report:
+
+```bash
+node scripts/browserless-acceptance-report.js \
+  --log-dir /var/log/grasp-rat-browserless \
+  --day YYYY-MM-DD \
+  --fail-on-incomplete
+```
+
+This report aggregates deployment, normal read-only, forced-stop, movement-only, profit, combat dry-run, and combat live audit results. It is the final local evidence summary before marking `headless-demo/` superseded.
+
 ## Environment
 
 Important variables:

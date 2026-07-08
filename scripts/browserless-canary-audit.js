@@ -58,6 +58,21 @@ function lastItem(items) {
   return items.length ? items[items.length - 1] : null;
 }
 
+function isExplicitStopFinal(entry) {
+  const detail = entry?.detail || {};
+  return detail?.safety?.event?.reason === 'explicit-stop'
+    || detail?.error === 'explicit-stop';
+}
+
+function selectFinalCanaryEntry(entries, options = {}) {
+  const ordered = entries.slice().sort((a, b) => String(a.at || '').localeCompare(String(b.at || '')));
+  if (options.requireStop) {
+    return ordered.slice().reverse().find(isExplicitStopFinal) || lastItem(ordered);
+  }
+  return ordered.slice().reverse().find(entry => entry?.type === 'canary-finish' && entry?.detail?.ok === true)
+    || lastItem(ordered);
+}
+
 function countWhere(items, predicate) {
   return items.reduce((count, item) => count + (predicate(item) ? 1 : 0), 0);
 }
@@ -96,7 +111,7 @@ function summarizeAudit(options = {}) {
   const { dayDir, streams } = loadStreams(options.logDir, options.day);
   const checks = [];
   const finalEntries = finalCanaryEntries(streams.runner, mode);
-  const finalEntry = lastItem(finalEntries);
+  const finalEntry = selectFinalCanaryEntry(finalEntries, { requireStop: options.requireStop });
   const final = finalEntry?.detail || null;
   const decisionCount = countWhere(streams.decisions, entry => entry?.type === 'decision');
   const movementCommandCount = countWhere(streams.runner, entry => entry?.type === 'movement-command');
@@ -124,10 +139,10 @@ function summarizeAudit(options = {}) {
   addCheck(checks, 'decisions-logged', decisionCount > 0, `decision entries=${decisionCount}`);
 
   if (profile === 'read-only') {
-    addCheck(checks, 'no-actions', Number(final?.actions?.sentCount || 0) === 0 && movementCommandCount === 0, `sent=${Number(final?.actions?.sentCount || 0)}, movement logs=${movementCommandCount}`);
+    addCheck(checks, 'no-actions', Number(final?.actions?.sentCount || 0) === 0, `sent=${Number(final?.actions?.sentCount || 0)}, same-day movement logs=${movementCommandCount}`);
     addCheck(checks, 'no-shoot', Number(final?.actions?.shootSentCount || 0) === 0, `shootSentCount=${Number(final?.actions?.shootSentCount || 0)}`);
   } else if (profile === 'movement-only') {
-    addCheck(checks, 'velocity-sent', Number(final?.actions?.velocitySentCount || 0) > 0 && movementCommandCount > 0, `velocity=${Number(final?.actions?.velocitySentCount || 0)}, movement logs=${movementCommandCount}`);
+    addCheck(checks, 'velocity-sent', Number(final?.actions?.velocitySentCount || 0) > 0, `velocity=${Number(final?.actions?.velocitySentCount || 0)}, same-day movement logs=${movementCommandCount}`);
     addCheck(checks, 'no-shoot', Number(final?.actions?.shootSentCount || 0) === 0, `shootSentCount=${Number(final?.actions?.shootSentCount || 0)}`);
   } else if (profile === 'profit') {
     const profitDecisionCount = countWhere(streams.decisions, entry => Boolean(entry?.detail?.profit));
@@ -137,7 +152,7 @@ function summarizeAudit(options = {}) {
     addCheck(checks, 'combat-logged', combatDryRunEntries.length > 0, `combat-dry-run entries=${combatDryRunEntries.length}`);
     addCheck(checks, 'combat-realtime-authority', allCombatTargetsRealtime(combatDryRunEntries), 'all logged combat targets/candidates use realtime authority');
     addCheck(checks, 'combat-suppressed', allCombatDryRunSuppressed(combatDryRunEntries), 'dry-run shooting rows are suppressed');
-    addCheck(checks, 'no-actions', Number(final?.actions?.sentCount || 0) === 0 && movementCommandCount === 0, `sent=${Number(final?.actions?.sentCount || 0)}, movement logs=${movementCommandCount}`);
+    addCheck(checks, 'no-actions', Number(final?.actions?.sentCount || 0) === 0, `sent=${Number(final?.actions?.sentCount || 0)}, same-day movement logs=${movementCommandCount}`);
   } else if (profile === 'combat-live') {
     addCheck(checks, 'combat-logged', combatLiveEntries.length > 0, `combat-live entries=${combatLiveEntries.length}`);
     addCheck(checks, 'combat-realtime-authority', allCombatTargetsRealtime(combatLiveEntries), 'all logged combat targets/candidates use realtime authority');

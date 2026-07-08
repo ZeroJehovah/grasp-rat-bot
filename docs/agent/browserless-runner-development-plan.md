@@ -105,6 +105,7 @@ Update this table in the same task that completes each feature.
 | Commit 17: Production Canary And Cutover Docs | Implemented; production cutover pending VPS acceptance | Runner config supports `--canary-profile read-only|movement-only|profit|combat-dry-run|combat-live` and `GRASP_RAT_BROWSERLESS_CANARY_PROFILE` for staged rollout without code edits; `docs/agent/current-state.md`, `current-architecture.md`, `browserless-vps-migration.md`, `test-coverage.md`, and operator docs record the production canary/cutover surface while preserving the browser bot fallback. Local self-tests pass; headless-demo remains diagnostic until VPS runner canaries are accepted. |
 | Commit 18: Add Canary Evidence Audit | Complete | `scripts/browserless-canary-audit.js` reads browserless JSONL logs for a UTC day and checks staged profile evidence for clean finish or forced-stop validation, verified leave, snapshot safety, decoded frames, decision logging, no forbidden shoot/action behavior, realtime combat authority, and combat dry-run suppression. `node grasp-rat-bot.js --self-test` covers normal read-only and forced-stop audit fixtures. VPS validations are still pending, but their evidence review now has a deterministic local command. |
 | Commit 19: Add Deployment Evidence Audit | Complete | `scripts/browserless-deployment-audit.js` checks the installed systemd unit, env file, runner entrypoint, safe read-only dry-run env, non-placeholder web token, data/log directory access, and `systemctl is-enabled/is-active` status for `grasp-rat-browserless-runner`. `node grasp-rat-bot.js --self-test` covers successful and failing deployment-audit fixtures. The VPS systemd run still needs operator execution, but acceptance now has a deterministic command. |
+| Commit 20: Add Aggregate Acceptance Report | Complete | `scripts/browserless-acceptance-report.js` aggregates deployment, read-only, forced-stop, movement-only, profit, combat-dry-run, and combat-live audit results into one cutover-readiness report. The canary audit now selects the latest clean finish for normal checks and explicit-stop evidence for forced-stop checks, so multiple same-day staged runs can be reviewed together. `node grasp-rat-bot.js --self-test` covers aggregate success and missing-profile failure fixtures. VPS evidence is still required before cutover. |
 
 ## Commit Plan
 
@@ -482,6 +483,28 @@ Validation:
 
 - `node grasp-rat-bot.js --self-test`
 - `node --check scripts/browserless-deployment-audit.js`
+- `git diff --check`
+
+### Commit 20: Add Aggregate Acceptance Report
+
+Files:
+
+- Add `scripts/browserless-acceptance-report.js`.
+- Update `scripts/browserless-canary-audit.js` so same-day staged runs do not cross-contaminate normal read-only and forced-stop evidence.
+- Add self-test coverage for aggregate acceptance reporting.
+- Update operator and migration docs with the cutover report command.
+
+Purpose:
+
+- Provide one deterministic readiness command after all VPS canaries and the deployment check have been run.
+- Aggregate deployment, read-only, forced-stop, movement-only, profit, combat-dry-run, and combat-live evidence into one pass/fail report.
+- Keep final cutover acceptance grounded in audited VPS logs instead of manual checklist interpretation.
+
+Validation:
+
+- `node grasp-rat-bot.js --self-test`
+- `node --check scripts/browserless-acceptance-report.js`
+- `node --check scripts/browserless-canary-audit.js`
 - `git diff --check`
 
 ## User Validation Required

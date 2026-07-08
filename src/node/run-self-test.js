@@ -103,6 +103,9 @@ const {
   auditDeployment: auditBrowserlessDeployment
 } = require('../../scripts/browserless-deployment-audit');
 const {
+  buildAcceptanceReport: buildBrowserlessAcceptanceReport
+} = require('../../scripts/browserless-acceptance-report');
+const {
   createNoSelfSnapshotRecoveryRuntime,
   shouldClearTmpGameLocalSessionKey
 } = require('../browser/runtime/no-self-snapshot-recovery-runtime');
@@ -6794,6 +6797,73 @@ async function runSelfTest() {
         ].join('|');
       }),
       want: 'true|0|false|true|true'
+    },
+    {
+      name: 'browserless acceptance report aggregates deployment canary and stop audits',
+      got: withTempDirForTest(async dir => {
+        const dayDir = path.join(dir, 'logs', '2026-07-08');
+        fs.mkdirSync(dayDir, { recursive: true });
+        const write = (stream, entry) => {
+          fs.appendFileSync(path.join(dayDir, `${stream}.jsonl`), `${JSON.stringify(entry)}\n`);
+        };
+        const base = {
+          ok: true,
+          snapshotSafety: { ok: true },
+          stats: { decodedFrameCount: 10, selfPresent: { true: 9, false: 1 } },
+          frameHealth: { decodeErrors: 0 },
+          leave: { ok: true }
+        };
+        write('runner', {
+          at: '2026-07-08T01:00:00.000Z',
+          type: 'canary-finish',
+          detail: { ...base, mode: 'read-only', actions: { sentCount: 0, shootSentCount: 0 } }
+        });
+        write('runner', {
+          at: '2026-07-08T01:01:00.000Z',
+          type: 'canary-failed',
+          detail: {
+            ...base,
+            mode: 'read-only',
+            ok: false,
+            error: 'explicit-stop',
+            actions: { sentCount: 0, shootSentCount: 0 },
+            safety: { event: { reason: 'explicit-stop' }, exit: { leave: { ok: true } } }
+          }
+        });
+        write('runner', {
+          at: '2026-07-08T01:02:00.000Z',
+          type: 'canary-finish',
+          detail: { ...base, mode: 'movement-only', actions: { velocitySentCount: 2, shootSentCount: 0 } }
+        });
+        write('runner', { at: '2026-07-08T01:02:01.000Z', type: 'movement-command', detail: { action: { kind: 'velocity' } } });
+        write('decisions', { at: '2026-07-08T01:00:01.000Z', type: 'decision', detail: { kind: 'wait' } });
+        write('decisions', { at: '2026-07-08T01:02:01.000Z', type: 'decision', detail: { kind: 'coin' } });
+        write('exits', { at: '2026-07-08T01:01:01.000Z', type: 'safety-event', detail: { reason: 'explicit-stop' } });
+        const ok = buildBrowserlessAcceptanceReport({
+          logDir: path.join(dir, 'logs'),
+          day: '2026-07-08',
+          profiles: ['read-only', 'movement-only'],
+          includeStop: true,
+          skipDeployment: false
+        }, {
+          deploymentAudit: () => ({ ok: true, failed: [] })
+        });
+        const missing = buildBrowserlessAcceptanceReport({
+          logDir: path.join(dir, 'logs'),
+          day: '2026-07-08',
+          profiles: ['profit'],
+          includeStop: false,
+          skipDeployment: true
+        });
+        return [
+          ok.ok,
+          ok.sections.length,
+          ok.failed.length,
+          missing.ok,
+          missing.failed[0]?.key
+        ].join('|');
+      }),
+      want: 'true|4|0|false|canary:profit'
     },
     {
       name: 'browserless runner config maps canary profiles without enabling combat',

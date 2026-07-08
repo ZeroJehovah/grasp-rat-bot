@@ -187,6 +187,7 @@ On 2026-07-08, the VPS one-shot demo succeeded after the Node 18 `ws` fallback a
 - 2026-07-08: Production canary profile support and cutover docs were added. `GRASP_RAT_BROWSERLESS_CANARY_PROFILE` / `--canary-profile` maps `read-only`, `movement-only`, `profit`, `combat-dry-run`, and `combat-live` to the existing staged control modes so VPS rollout can switch stages through env/config changes instead of code edits. The `combat-live` profile still requires explicit `combatEnabled=true` before shooting. Current architecture/state/test docs now record the browserless runner as a tracked Node runtime surface with production cutover pending accepted VPS canaries.
 - 2026-07-08: Browserless canary evidence audit tooling was added at `scripts/browserless-canary-audit.js`. The command reads local JSONL logs for a UTC day and checks profile-specific acceptance evidence including snapshot safety, decoded frames, self observation, decisions, verified leave, explicit forced stop when requested, no forbidden movement/shoot behavior, realtime combat authority, combat dry-run suppression, and combat live acknowledgement evidence when shots are sent. This does not replace the pending VPS canaries; it gives those canaries a deterministic acceptance check once logs are available.
 - 2026-07-08: Browserless deployment evidence audit tooling was added at `scripts/browserless-deployment-audit.js`. The command checks the installed `grasp-rat-browserless-runner` systemd unit, env file reference, runner entrypoint, restart policy, read/write paths, safe initial read-only dry-run env, non-placeholder web token, data/log directory access, and `systemctl is-enabled/is-active` state. This still needs to be run on the VPS after service install/start.
+- 2026-07-08: Browserless aggregate acceptance reporting was added at `scripts/browserless-acceptance-report.js`. It combines deployment, normal read-only, forced-stop, movement-only, profit, combat-dry-run, and combat-live audit results into one pass/fail cutover report. The canary audit now selects the latest clean finish for normal profile checks and explicit-stop evidence for forced-stop checks, so same-day staged runs can be reviewed together.
 
 ## Next Plan
 
@@ -197,12 +198,13 @@ On 2026-07-08, the VPS one-shot demo succeeded after the Node 18 `ws` fallback a
 5. Run a supervised `controlMode=combat-dry-run` VPS validation under visible Active-player conditions and inspect `combat.jsonl`/`decisions.jsonl` for realtime-only targets, aim/fire summaries, suppressed commands, and verified `leave`; then audit with `--profile combat-dry-run`.
 6. Run a supervised short `controlMode=combat-live` plus `combatEnabled=true` VPS validation and inspect `combat.jsonl`, `runner.jsonl`, status action rows, `shoot_ok` acknowledgement evidence, command pacing, and verified `leave`; then audit with `--profile combat-live`.
 7. Install the `grasp-rat-browserless-runner` systemd service on VPS, verify env/data/log paths, start in dry-run/read-only safe mode, inspect `systemctl status` plus `journalctl -u grasp-rat-browserless-runner`, then run `node scripts/browserless-deployment-audit.js --fail-on-incomplete`.
-8. Use `GRASP_RAT_BROWSERLESS_CANARY_PROFILE` for subsequent staged canaries so the production service can move through read-only, movement-only, profit, combat dry-run, and combat live without code edits.
-9. Keep the browserless runtime boundary explicit:
+8. After all staged canaries and deployment validation have accepted evidence, run `node scripts/browserless-acceptance-report.js --log-dir /var/log/grasp-rat-browserless --day YYYY-MM-DD --fail-on-incomplete` and keep its output with the cutover handoff.
+9. Use `GRASP_RAT_BROWSERLESS_CANARY_PROFILE` for subsequent staged canaries so the production service can move through read-only, movement-only, profit, combat dry-run, and combat live without code edits.
+10. Keep the browserless runtime boundary explicit:
    - shared pure strategy remains in `src/strategy/`;
    - browser DOM/CDP integration remains browser-specific;
    - a new Node transport/runtime adapter can own auth/session state, direct WebSocket IO, timers, and verified exit.
-10. Mark `headless-demo/` superseded only after the production runner canaries and systemd validation above have accepted evidence; until then it remains a diagnostic protocol probe.
+11. Mark `headless-demo/` superseded only after the production runner canaries, systemd validation, and aggregate acceptance report above have accepted evidence; until then it remains a diagnostic protocol probe.
 
 ## Evidence To Request From VPS Runs
 
@@ -233,6 +235,12 @@ For normal profile acceptance, ask the operator to run the matching audit comman
 
 ```bash
 node scripts/browserless-canary-audit.js --log-dir /var/log/grasp-rat-browserless --day $(date -u +%F) --profile read-only --fail-on-incomplete
+```
+
+For final cutover readiness, ask for:
+
+```bash
+node scripts/browserless-acceptance-report.js --log-dir /var/log/grasp-rat-browserless --day $(date -u +%F) --fail-on-incomplete
 ```
 
 If `headless-demo/` is being used only as a diagnostic probe, the log path shown in its `/api/status` remains authoritative for that probe.
