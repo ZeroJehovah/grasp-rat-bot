@@ -236,6 +236,7 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
 function buildBrowserlessCombatDryRun(state = {}, options = {}) {
   const realtime = state?.realtime || {};
   const dataGaps = [];
+  const liveCombatEnabled = options.liveCombatEnabled === true || options.combatEnabled === true;
   const self = normalizeCombatEntity(realtime.self, null);
   if (!self) dataGaps.push('missing-realtime-self');
   const selfUserId = Number(self?.user_id ?? state?.userId ?? options.userId ?? 0);
@@ -269,9 +270,11 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
   const lowConfidence = aim.ok ? checkLowConfidenceThrottle({ confidence: aim.confidence, distance: aim.distance }) : { throttle: false, cadenceMs: null };
   const inRange = target ? Number(target.distance || Infinity) <= Number(options.attackRange || COMBAT_CONSTANTS.ATTACK_RANGE) : false;
   const wouldShoot = Boolean(target && aim.ok && inRange && fireState.state !== 'disabled' && fireState.state !== 'paused');
+  const commandSuppressed = Boolean(!liveCombatEnabled || !wouldShoot);
   return {
     ok: Boolean(self),
-    dryRun: true,
+    dryRun: !liveCombatEnabled,
+    liveEnabled: liveCombatEnabled,
     authority: 'realtime',
     tick: realtime.tick ?? null,
     self: summarizeCombatTarget(self),
@@ -280,9 +283,9 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     movement,
     aim: aim.ok ? aim : null,
     shooting: {
-      dryRunOnly: true,
+      dryRunOnly: !liveCombatEnabled,
       wouldShoot,
-      commandSuppressed: true,
+      commandSuppressed,
       inRange,
       state: fireState.state,
       reason: fireState.reason,

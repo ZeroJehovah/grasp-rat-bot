@@ -86,7 +86,7 @@ function renderBrowserlessWebPanel() {
       const s = await res.json();
       document.getElementById('stamp').textContent = s.updatedAt || new Date().toISOString();
       document.getElementById('stamp').className = 'pill ' + (s.runner?.lastError ? 'bad' : s.runner?.running ? 'ok' : 'info');
-      rows('runner', [['mode', s.runner?.mode], ['running', s.runner?.running], ['readOnly', s.runner?.readOnly], ['dryRun', s.runner?.dryRun], ['action', s.runner?.currentAction?.kind || s.runner?.currentAction], ['error', s.runner?.lastError]]);
+      rows('runner', [['mode', s.runner?.mode], ['control', s.runner?.controlMode], ['running', s.runner?.running], ['readOnly', s.runner?.readOnly], ['dryRun', s.runner?.dryRun], ['combat', s.runner?.combatEnabled], ['action', s.runner?.currentAction?.kind || s.runner?.currentAction], ['error', s.runner?.lastError]]);
       rows('session', [['userId', s.session?.userId], ['authenticated', s.session?.authenticated], ['token', s.session?.tokenPresent ? 'present' : 'missing'], ['tokenAt', s.session?.tokenUpdatedAt]]);
       rows('safety', [['ok', s.loginPointSafety?.ok], ['reason', s.loginPointSafety?.reason], ['checkedAt', s.loginPointSafety?.checkedAt], ['point', s.loginPointSafety?.point ? JSON.stringify(s.loginPointSafety.point) : '']]);
       rows('self', [['name', s.current?.self?.name], ['hp', s.current?.self?.hp], ['x', s.current?.self?.x], ['y', s.current?.self?.y], ['stamina', s.current?.stamina ? JSON.stringify(s.current.stamina) : '']]);

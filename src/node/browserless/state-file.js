@@ -20,7 +20,9 @@ function defaultBrowserlessState() {
       running: false,
       mode: 'idle',
       readOnly: true,
+      controlMode: 'read-only',
       dryRun: true,
+      combatEnabled: false,
       currentAction: null,
       lastRun: null,
       lastError: ''

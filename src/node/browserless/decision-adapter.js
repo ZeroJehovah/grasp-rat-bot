@@ -347,20 +347,30 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
 }
 
 function buildCombatDecision(input, options = {}) {
+  const combatLiveEnabled = options.controlMode === 'combat-live' && options.combatEnabled === true;
   const combat = buildBrowserlessCombatDryRun({
     userId: input.userId,
     realtime: input.rawRealtime || {}
-  }, options);
+  }, {
+    ...options,
+    liveCombatEnabled: combatLiveEnabled
+  });
   const target = combat.target || null;
+  const actionKind = combatLiveEnabled
+    ? 'combat-live'
+    : (options.controlMode === 'combat-dry-run' ? 'combat-dry-run' : 'combat-candidate');
+  const actionReason = combatLiveEnabled
+    ? 'combat-live-realtime'
+    : (options.controlMode === 'combat-dry-run' ? 'combat-dry-run-realtime' : 'realtime-visible-threat');
   return {
     target,
     candidates: combat.candidates || [],
     dryRun: combat,
     action: target
       ? {
-          kind: options.controlMode === 'combat-dry-run' ? 'combat-dry-run' : 'combat-candidate',
+          kind: actionKind,
           band: 'combat',
-          reason: options.controlMode === 'combat-dry-run' ? 'combat-dry-run-realtime' : 'realtime-visible-threat',
+          reason: actionReason,
           target
         }
       : null
@@ -372,6 +382,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
   const staleSelfMs = Math.max(1000, Number(options.staleSelfMs || DEFAULT_STALE_SELF_MS));
   const nonCombatProfit = options.controlMode === 'non-combat-profit' || options.nonCombatProfit === true;
   const combatDryRun = options.controlMode === 'combat-dry-run';
+  const combatLiveEnabled = options.controlMode === 'combat-live' && options.combatEnabled === true;
   const combatDecisionEnabled = options.combatDecisionEnabled !== false && !nonCombatProfit;
   const frameAge = Number(input.realtime.frameAgeMs);
   const opportunity = buildOpportunityDecision(input, stateful, {
@@ -390,7 +401,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     reason = 'stale-realtime-self';
     action.reason = reason;
   } else if (combat.target && combatDecisionEnabled) {
-    kind = combatDryRun ? 'combat-dry-run' : 'combat-candidate';
+    kind = combatLiveEnabled ? 'combat-live' : (combatDryRun ? 'combat-dry-run' : 'combat-candidate');
     band = 'combat';
     reason = combat.action.reason;
     action = combat.action;

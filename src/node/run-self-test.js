@@ -5984,6 +5984,34 @@ async function runSelfTest() {
       want: 'combat-dry-run|combat-dry-run|combat-dry-run-realtime|exact|true|true|false'
     },
     {
+      name: 'browserless combat live remains suppressed without explicit enable flag',
+      got: (() => {
+        const decision = buildBrowserlessDecision({
+          userId: 7,
+          realtime: {
+            tick: 64,
+            frameAgeMs: 100,
+            self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 90, stamina_5s_remaining_milli: 5000 },
+            entities: [
+              { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 90, stamina_5s_remaining_milli: 5000 },
+              { entity_id: 2, user_id: 8, name: 'active', x: 1000, y: 0, hp: 80, current_join_mode: 'Active', firing: true, drop: 8 }
+            ],
+            bullets: [],
+            coinDrops: []
+          },
+          fallback: { coinDrops: [] }
+        }, {}, { nowMs: 1200, controlMode: 'combat-live', combatEnabled: false });
+        return [
+          decision.kind,
+          decision.action.kind,
+          decision.combat.liveEnabled,
+          decision.combat.shooting.wouldShoot,
+          decision.combat.shooting.commandSuppressed
+        ].join('|');
+      })(),
+      want: 'combat-candidate|combat-candidate|false|true|true'
+    },
+    {
       name: 'browserless decision adapter waits without realtime self',
       got: (() => {
         const decision = buildBrowserlessDecision({
@@ -6074,6 +6102,56 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'stop|unsupported-or-wait-decision|stop|target-reached|vel 0 0,vel 0 0'
+    },
+    {
+      name: 'browserless action adapter sends guarded combat movement shoot and records ack',
+      got: (() => {
+        const commands = [];
+        const adapter = createBrowserlessActionAdapter({
+          now: () => 1000 + commands.length * 200,
+          commandIntervalMs: 1,
+          combatShootMinIntervalMs: 160,
+          transport: {
+            sendVelocity: (dx, dy) => commands.push(`vel ${dx} ${dy}`),
+            sendShoot: (targetX, targetY, startX, startY) => commands.push(`shoot ${targetX} ${targetY} ${startX} ${startY}`)
+          }
+        });
+        const action = adapter.applyDecision({
+          realtime: { self: { x: 0, y: 0 }, tick: 1 }
+        }, {
+          kind: 'combat-live',
+          band: 'combat',
+          action: { kind: 'combat-live', band: 'combat', reason: 'combat-live-realtime' },
+          combat: {
+            self: { x: 0, y: 0 },
+            target: { userId: 8, x: 1000, y: 0, authority: 'realtime' },
+            movement: { dx: 1, dy: 0, reason: 'close-in' },
+            aim: { x: 1000, y: 0 },
+            shooting: {
+              wouldShoot: true,
+              commandSuppressed: false,
+              reason: 'normal-fire',
+              effectiveCadenceMs: 160
+            }
+          }
+        });
+        adapter.observeState({
+          realtime: { tick: 2 },
+          command: { lastAck: { bullet_id: 44, source: 'shoot_ok', receivedAtMs: 1300 } }
+        });
+        const state = adapter.getState();
+        return [
+          action.kind,
+          action.movement.command.type,
+          action.shoot.command.type,
+          commands.join(','),
+          state.sentCount,
+          state.velocitySentCount,
+          state.shootSentCount,
+          state.lastShootAck.bullet_id
+        ].join('|');
+      })(),
+      want: 'combat-live|velocity|shoot|vel 1 0,shoot 1000 0 0 0|2|1|1|44'
     },
     {
       name: 'browserless read-only canary runs snapshot ws frames and verified leave',
@@ -6233,6 +6311,96 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'true|movement-only|true|3|2|false|pending|true|vel 0 0|true'
+    },
+    {
+      name: 'browserless combat-live canary sends guarded shoot only when enabled',
+      got: (async () => {
+        let t = Date.UTC(2026, 6, 8, 1, 0, 0);
+        let wsOptions = null;
+        let sleepCount = 0;
+        const commands = [];
+        const posFrame = encodeGrzFrameForTest({
+          type: 'pos',
+          tick: 30,
+          entities: [
+            { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 90, stamina_5s_remaining_milli: 6000 },
+            { entity_id: 2, user_id: 8, name: 'active', x: 1000, y: 0, hp: 80, current_join_mode: 'Active', firing: true, drop: 8 }
+          ],
+          bullets: []
+        });
+        const ackFrame = encodeGrzFrameForTest({
+          type: 'shoot_ok',
+          bullet_id: 99,
+          owner_user_id: 7,
+          start_x: 0,
+          start_y: 0,
+          target_x: 1000,
+          target_y: 0,
+          range_cm: 14500,
+          speed_per_tick: 500,
+          created_tick: 31,
+          expire_tick: 60
+        });
+        const result = await runReadOnlyCanary({
+          gameOrigin: 'https://grasp-rat-game.h-e.top',
+          snapshotPath: '/snapshot',
+          wsPath: '/ws',
+          wsExtraQuery: 'compress=gzip%2Cdeflate',
+          controlMode: 'combat-live',
+          combatEnabled: true,
+          combatShootMinIntervalMs: 1,
+          readOnlyProbeMs: 1000,
+          decisionIntervalMs: 1,
+          frameGapAlertMs: 5000,
+          movementCommandIntervalMs: 1,
+          movementSettlementFrames: 1,
+          userId: 7,
+          sessionToken: 'combat-token'
+        }, {
+          now: () => t,
+          sleep: async ms => {
+            t += ms;
+            sleepCount += 1;
+            if (sleepCount === 1) wsOptions.onMessage(posFrame);
+            if (sleepCount === 2) wsOptions.onMessage(ackFrame);
+          },
+          persistedState: {
+            loginPointSafety: { point: { x: 0, y: 0, hp: 90, source: 'test' } }
+          },
+          fetchImpl: async () => fakeResponseForTest({
+            body: {
+              type: 'snapshot',
+              tick: 29,
+              entities: [{ entity_id: 1, user_id: 7, x: 0, y: 0, hp: 90 }],
+              bullets: [],
+              coin_drops: [],
+              messages: []
+            }
+          }),
+          openBrowserlessWs: async options => {
+            wsOptions = options;
+            return {
+              isOpen: () => true,
+              close: () => {},
+              sendVelocity: (dx, dy) => commands.push(`vel ${dx} ${dy}`),
+              sendShoot: (targetX, targetY, startX, startY) => commands.push(`shoot ${targetX} ${targetY} ${startX} ${startY}`)
+            };
+          },
+          leaveWithVerification: async () => ({ ok: true, attempts: [{ ok: true, summary: { leaveConfirmed: true } }] })
+        });
+        return [
+          result.ok,
+          result.mode,
+          result.actions.enabled,
+          result.actions.shootSentCount > 0,
+          commands.some(command => command.startsWith('shoot ')),
+          result.actions.lastShootAck?.bullet_id,
+          result.decisions.last.kind,
+          result.decisions.last.combat.shooting.commandSuppressed,
+          result.leave.ok
+        ].join('|');
+      })(),
+      want: 'true|combat-live|true|true|true|99|combat-live|false|true'
     },
     {
       name: 'browserless read-only canary blocks before ws without login point',
@@ -6432,7 +6600,10 @@ async function runSelfTest() {
           '19999',
           '--web-token',
           'cli-token',
-          '--combat-dry-run',
+          '--combat-live',
+          '--combat-enabled',
+          '--combat-shoot-min-interval-ms',
+          '220',
           '--decision-interval-ms',
           '250',
           '--stale-self-ms',
@@ -6466,6 +6637,8 @@ async function runSelfTest() {
           config.controlMode,
           config.statusPort,
           config.webToken,
+          config.combatEnabled,
+          config.combatShootMinIntervalMs,
           config.userId,
           config.sessionToken,
           config.decisionIntervalMs,
@@ -6481,7 +6654,7 @@ async function runSelfTest() {
           config.logDir.endsWith('/tmp/grasp-rat-runner/logs')
         ].join('|');
       })(),
-      want: 'true|false|false|combat-dry-run|19999|cli-token|42|env-token|250|3500|4500|150|300|800|3|123|456|90|true'
+      want: 'true|false|false|combat-live|19999|cli-token|true|220|42|env-token|250|3500|4500|150|300|800|3|123|456|90|true'
     },
     {
       name: 'browserless runner dry-run and fake read-only path write redacted logs',

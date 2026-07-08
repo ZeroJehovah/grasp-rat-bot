@@ -43,6 +43,8 @@ function publicConfig(config) {
     movementCommandIntervalMs: Number(config.movementCommandIntervalMs || 0),
     movementTargetDeadZoneCm: Number(config.movementTargetDeadZoneCm || 0),
     movementSettlementFrames: Number(config.movementSettlementFrames || 0),
+    combatEnabled: Boolean(config.combatEnabled),
+    combatShootMinIntervalMs: Number(config.combatShootMinIntervalMs || 0),
     stateFile: config.stateFile || stateFilePath(config),
     loginPointPresent: Number.isFinite(Number(config.loginPointX)) && Number.isFinite(Number(config.loginPointY)),
     userId: Number(config.userId || 0),
@@ -84,6 +86,7 @@ async function runBrowserlessRunner(config, deps = {}) {
       readOnly: config.readOnly,
       controlMode: config.controlMode,
       dryRun: config.dryRun,
+      combatEnabled: Boolean(config.combatEnabled),
       lastError: ''
     },
     loginPointSafety: loginPointProvided
@@ -139,7 +142,7 @@ async function runBrowserlessRunner(config, deps = {}) {
     statusServer: statusHandle ? { host: config.statusHost, port: statusHandle.port } : null
   });
 
-  if (!['read-only', 'movement-only', 'non-combat-profit', 'combat-dry-run'].includes(String(config.controlMode || ''))) {
+  if (!['read-only', 'movement-only', 'non-combat-profit', 'combat-dry-run', 'combat-live'].includes(String(config.controlMode || ''))) {
     const result = { ok: false, reason: 'unsupported-control-mode' };
     updateBrowserlessStateFile(stateFile, {
       runner: {
