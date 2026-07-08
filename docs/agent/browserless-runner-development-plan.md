@@ -507,21 +507,27 @@ Validation:
 - `node --check scripts/browserless-canary-audit.js`
 - `git diff --check`
 
-## User Validation Required
+## External VPS Validation Required
 
-Immediate new validation exposed by this revision:
+Local implementation work is complete through Commit 20, but the production runner is not accepted until the remaining VPS validations below produce evidence and the aggregate acceptance report passes.
 
-1. Run a pre-login snapshot safety probe from VPS while `inGame=false`.
-2. Confirm whether direct `/snapshot` can be fetched with the stored token/session shape before WS join.
-3. Confirm whether the response contains enough entity coordinates/modes to evaluate the last login point safety radius.
+Use the production service path and audit commands from `docs/agent/browserless-vps-migration.md` and `docs/agent/browserless-runner-operator.md`. Do not mark `headless-demo/` superseded until these validations pass:
 
-Status on 2026-07-08: direct `/snapshot?user_id=<id>&token=<token>` fetch works before WS join and returns the expected full snapshot shape. The first safety verdict was blocked only because the demo state predated `lastSelfSummary` persistence and therefore had no login point. A fresh updated-code WS probe/demo run should populate `lastSelfSummary`, then the snapshot safety probe can complete the radius evaluation.
+1. Production read-only canary: 10-30 minutes, verified `leave`, decision logs, and `scripts/browserless-canary-audit.js --profile read-only --fail-on-incomplete`.
+2. Forced stop canary: `/api/stop` or panel Stop, explicit-stop safety event, verified `leave`, and `scripts/browserless-canary-audit.js --profile read-only --require-stop --fail-on-incomplete`.
+3. Movement-only canary: short supervised velocity-only run, no shoot commands, command settlement evidence, verified `leave`, and `--profile movement-only`.
+4. Non-combat profit canary: realtime/native profit priority or guarded snapshot fallback, no combat commands, verified `leave`, and `--profile profit`.
+5. Combat dry-run canary: realtime-only combat targets, aim/fire summaries, suppressed commands, verified `leave`, and `--profile combat-dry-run`.
+6. Guarded combat live canary: explicit `combatEnabled=true`, realtime combat movement/shoot pacing, `shoot_ok` evidence when shots are sent, verified `leave`, and `--profile combat-live`.
+7. Systemd deployment validation: installed and active `grasp-rat-browserless-runner`, env/data/log paths, non-placeholder web token, and `scripts/browserless-deployment-audit.js --fail-on-incomplete`.
+8. Final cutover readiness: `scripts/browserless-acceptance-report.js --log-dir /var/log/grasp-rat-browserless --day YYYY-MM-DD --fail-on-incomplete`.
 
-Follow-up on 2026-07-08: a later radius verdict was positive, but the returned snapshot tick was older than the latest known WS tick and still showed self as `InGame` after verified leave. The production safety client must cache-bust snapshot requests and reject stale ticks before trusting the radius verdict.
+Historical snapshot safety validation:
 
-Final 2026-07-08 validation: cache-busted direct snapshot passed freshness and radius safety checks before WS join. The response tick was newer than the latest known WS tick, self was absent, and the persisted healthy login point had 0 nearby Active entities inside the 170m radius. The pre-login snapshot safety path is validated for implementation.
+- Direct `/snapshot?user_id=<id>&token=<token>` fetch works before WS join and returns the expected full snapshot shape.
+- Cache-busted direct snapshot passed freshness and radius safety checks before WS join. The response tick was newer than the latest known WS tick, self was absent, and the persisted healthy login point had 0 nearby Active entities inside the 170m radius.
 
-Already completed:
+Other completed VPS/demo validations:
 
 - Bounded read-only WS probe: only `pos` and pushed `snapshot` appeared; coin drops/messages appeared only in `snapshot`.
 - Stored token reuse across process restart.
