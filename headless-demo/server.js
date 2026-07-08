@@ -3,9 +3,9 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const zlib = require('zlib');
 const { URL } = require('url');
 const { leaveResponseConfirmsExitCore, summarizeLeaveResponseCore } = require('../src/shared/leave-response');
+const { parseGrzFrame } = require('../src/shared/grz-frame');
 
 const GAME_ORIGIN = process.env.GRASP_RAT_GAME_ORIGIN || 'https://grasp-rat-game.h-e.top';
 const HOST = process.env.GRASP_RAT_DEMO_HOST || '127.0.0.1';
@@ -900,83 +900,6 @@ function frameDataToText(data) {
   return String(value);
 }
 
-function summarizeEntity(entity) {
-  if (!entity || typeof entity !== 'object') return null;
-  const output = {};
-  for (const key of [
-    'entity_id',
-    'user_id',
-    'name',
-    'x',
-    'y',
-    'vx',
-    'vy',
-    'hp',
-    'max_hp',
-    'life',
-    'visible',
-    'joined',
-    'current_join_mode',
-    'coins'
-  ]) {
-    if (entity[key] !== undefined) output[key] = entity[key];
-  }
-  if (Array.isArray(entity.cell)) output.cell = entity.cell.slice(0, 2);
-  return Object.keys(output).length ? output : null;
-}
-
-function summarizeShotAck(json) {
-  const output = {};
-  for (const key of [
-    'type',
-    'bullet_id',
-    'owner_user_id',
-    'start_x',
-    'start_y',
-    'target_x',
-    'target_y',
-    'dir_x_micros',
-    'dir_y_micros',
-    'range_cm',
-    'speed_per_tick',
-    'created_tick',
-    'expire_tick'
-  ]) {
-    if (json[key] !== undefined) output[key] = json[key];
-  }
-  return output;
-}
-
-function summarizeDecodedJson(json, userId) {
-  if (!json || typeof json !== 'object') return null;
-  const hasEntities = Array.isArray(json.entities);
-  const hasBullets = Array.isArray(json.bullets);
-  const entities = hasEntities ? json.entities : [];
-  const bullets = hasBullets ? json.bullets : [];
-  const summary = {
-    type: typeof json.type === 'string' ? json.type : '',
-    tick: Number.isFinite(Number(json.tick)) ? Number(json.tick) : undefined,
-    keyCount: Object.keys(json).length
-  };
-  if (hasEntities) summary.entityCount = entities.length;
-  if (hasBullets) summary.bulletCount = bullets.length;
-  if (Array.isArray(json.coin_drops)) summary.coinDropCount = json.coin_drops.length;
-  if (Array.isArray(json.messages)) summary.messageCount = json.messages.length;
-  if (json.total_entities !== undefined) summary.totalEntities = json.total_entities;
-  if (json.in_game !== undefined) summary.inGameCount = json.in_game;
-  if (json.visible !== undefined) summary.visibleCount = json.visible;
-  if (json.occupied_cells !== undefined) summary.occupiedCells = json.occupied_cells;
-
-  const self = userId ? entities.find(entity => Number(entity?.user_id) === Number(userId)) : null;
-  if (userId && hasEntities) summary.selfPresent = Boolean(self);
-  if (self) summary.self = summarizeEntity(self);
-
-  if (summary.type === 'shoot_ok') {
-    summary.ack = summarizeShotAck(json);
-  }
-  return summary;
-}
-
 function rangeInitial() {
   return { min: null, max: null, last: null };
 }
@@ -1066,34 +989,15 @@ function inspectBinaryFrame(buffer) {
     frame.base64Sample = buffer.subarray(0, WS_FRAME_BASE64_BYTES).toString('base64');
   }
   if (buffer.length >= 5 && buffer.subarray(0, 4).toString('ascii') === 'GRZ1') {
-    frame.format = 'GRZ1';
-    frame.version = buffer[4];
-    const payload = buffer.subarray(5);
-    if (payload.length >= 2 && payload[0] === 0x1f && payload[1] === 0x8b) {
-      frame.compression = 'gzip';
-      try {
-        const decoded = zlib.gunzipSync(payload);
-        const decodedText = decoded.toString('utf8');
-        frame.decodedByteLength = decoded.length;
-        try {
-          const json = JSON.parse(decodedText);
-          frame.decodedJsonKeys = json && typeof json === 'object' ? Object.keys(json).slice(0, 20) : [];
-          frame.decodedType = typeof json?.type === 'string' ? json.type : '';
-          if (Number.isFinite(Number(json?.tick))) frame.decodedTick = Number(json.tick);
-          frame.decodedSummary = summarizeDecodedJson(json, state.userId);
-          if (!frame.decodedSummary && WS_FRAME_DECODED_SAMPLE_BYTES > 0) {
-            frame.decodedSample = redact(decodedText.slice(0, WS_FRAME_DECODED_SAMPLE_BYTES));
-          }
-        } catch (_) {}
-        if (!frame.decodedJsonKeys && WS_FRAME_DECODED_SAMPLE_BYTES > 0) {
-          frame.decodedSample = redact(decodedText.slice(0, WS_FRAME_DECODED_SAMPLE_BYTES));
-        }
-      } catch (err) {
-        frame.decodeError = err?.message || String(err);
-      }
-    } else {
-      frame.compression = 'unknown';
+    const parsed = parseGrzFrame(buffer, {
+      userId: state.userId,
+      decodedTextSampleBytes: WS_FRAME_DECODED_SAMPLE_BYTES
+    });
+    Object.assign(frame, parsed);
+    if (!frame.decodedJsonKeys && frame.decodedTextSample) {
+      frame.decodedSample = redact(frame.decodedTextSample);
     }
+    delete frame.decodedTextSample;
   }
   return frame;
 }
