@@ -72,10 +72,15 @@ The audit checks the installed unit, env path, runner entrypoint, safe read-only
 Before switching a supervised live canary on, audit the live env shape:
 
 ```bash
+cd ~/grasp-rat-bot
+git pull --ff-only origin main
+node scripts/browserless-deployment-audit.js --help | grep -- '--env-mode'
 sudo node scripts/browserless-deployment-audit.js --env-mode live --fail-on-incomplete
 ```
 
 `--env-mode live` expects `GRASP_RAT_BROWSERLESS_DRY_RUN=false`, a valid canary/control mode, matching profile/control values when both are present, manual session values, and login-point coordinates. The aggregate acceptance report uses deployment env mode `any` by default so it can run after the service has legitimately moved through live staged profiles.
+
+If the audit prints `unknown argument: --env-mode`, the VPS checkout is older than the live-readiness audit support. Pull `origin/main` with `git pull --ff-only origin main` and rerun the help check before restarting the service. Do not restart into a live canary after a failed live env audit.
 
 The status panel remains token-gated at the configured host/port. Emergency stop is available through the panel Stop button or:
 

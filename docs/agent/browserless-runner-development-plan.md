@@ -730,7 +730,7 @@ Local implementation work is complete through Commit 30, and the VPS systemd dep
 
 Use the production service path and audit commands from `docs/agent/browserless-vps-migration.md` and `docs/agent/browserless-runner-operator.md`. Do not mark `headless-demo/` superseded until these validations pass:
 
-1. Production read-only canary: configure `/etc/grasp-rat/browserless-runner.env` with `GRASP_RAT_BROWSERLESS_DRY_RUN=false`, session values, and login-point coordinates, run `sudo node scripts/browserless-deployment-audit.js --env-mode live --fail-on-incomplete`, then run 10-30 minutes with verified `leave`, decision logs, and `sudo node scripts/browserless-canary-audit.js --profile read-only --fail-on-incomplete`.
+1. Production read-only canary: pull the latest repo on VPS, verify `node scripts/browserless-deployment-audit.js --help | grep -- '--env-mode'`, configure `/etc/grasp-rat/browserless-runner.env` with `GRASP_RAT_BROWSERLESS_DRY_RUN=false`, session values, and login-point coordinates, run `sudo node scripts/browserless-deployment-audit.js --env-mode live --fail-on-incomplete`, then run 10-30 minutes with verified `leave`, decision logs, and `sudo node scripts/browserless-canary-audit.js --profile read-only --fail-on-incomplete`.
 2. Forced stop canary: `/api/stop` or panel Stop, explicit-stop safety event, verified `leave`, and `sudo node scripts/browserless-canary-audit.js --profile read-only --require-stop --fail-on-incomplete`.
 3. Movement-only canary: short supervised velocity-only run, no shoot commands, command settlement evidence, verified `leave`, and `--profile movement-only`.
 4. Non-combat profit canary: realtime/native profit priority or guarded snapshot fallback, no combat commands, verified `leave`, and `--profile profit`.
@@ -742,6 +742,7 @@ Completed VPS deployment validation:
 
 - 2026-07-08: After pulling `223551d` and rerunning `sudo scripts/install-browserless-runner-service.sh --install-env`, `grasp-rat-browserless-runner` restarted as active, the data/log runtime directories existed, `systemctl is-enabled/is-active` passed, and `sudo node scripts/browserless-deployment-audit.js --fail-on-incomplete` returned `Browserless deployment audit: ok`.
 - 2026-07-08: The first service log review after deployment confirmed only the intended safe default dry-run skeleton path: `dryRun:true`, `controlMode:"read-only"`, `userId:0`, `sessionTokenPresent:false`, `runner-start`, and `runner-dry-run`. `browserless-canary-audit --profile read-only` was incomplete because no live WS canary had run yet.
+- 2026-07-08: A live-readiness attempt failed before canary start because the VPS checkout was stale and `scripts/browserless-deployment-audit.js` did not recognize `--env-mode`. This is not accepted canary evidence; the next attempt must pull `origin/main`, verify the audit help lists `--env-mode`, and only restart after the live env audit passes.
 
 Historical snapshot safety validation:
 
