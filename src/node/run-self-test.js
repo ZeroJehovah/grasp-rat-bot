@@ -1,5 +1,8 @@
 'use strict';
 
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const zlib = require('zlib');
 const {
   offlineLeaveSummaryText,
@@ -47,6 +50,16 @@ const {
   createBrowserlessStateStore,
   selectRealtimeCombatState
 } = require('./browserless/state-store');
+const {
+  createLocalLogStore
+} = require('./browserless/local-log-store');
+const {
+  cleanupOldLogDays
+} = require('./browserless/log-retention');
+const {
+  summarizeBrowserlessLogDay,
+  writeBrowserlessLogSummary
+} = require('../../scripts/browserless-log-summary');
 const {
   createNoSelfSnapshotRecoveryRuntime,
   shouldClearTmpGameLocalSessionKey
@@ -5168,6 +5181,15 @@ async function runSelfTest() {
     };
   }
 
+  async function withTempDirForTest(fn) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'grasp-rat-test-'));
+    try {
+      return await fn(dir);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
   const cases = [
     {
       name: 'strategy module self-tests pass',
@@ -5647,6 +5669,82 @@ async function runSelfTest() {
       name: 'browserless combat selector source does not reference snapshot state',
       got: /snapshot|fallback|coinDrops/.test(selectRealtimeCombatState.toString()),
       want: false
+    },
+    {
+      name: 'browserless local log store appends redacted UTC day files',
+      got: withTempDirForTest(async dir => {
+        let current = Date.UTC(2026, 6, 8, 1, 0, 0);
+        const store = createLocalLogStore({ logDir: dir, now: () => current });
+        const first = store.append('runner', 'session-start', {
+          url: 'https://x.test/?token=secret-token',
+          token: 'secret-field',
+          code: 'secret-code'
+        });
+        current = Date.UTC(2026, 6, 9, 1, 0, 0);
+        const second = store.append('exits', 'leave', {
+          authorization: 'Bearer secret-bearer',
+          nested: { url: 'https://x.test/?secret=secret-url' }
+        });
+        const firstText = fs.readFileSync(first.file, 'utf8');
+        const secondText = fs.readFileSync(second.file, 'utf8');
+        return [
+          path.relative(dir, first.file),
+          path.relative(dir, second.file),
+          firstText.includes('[redacted]'),
+          secondText.includes('[redacted]'),
+          !/secret-token|secret-field|secret-code|secret-bearer|secret-url/.test(firstText + secondText),
+          store.readEntries('runner', '2026-07-08')[0]?.type
+        ].join('|');
+      }),
+      want: '2026-07-08/runner.jsonl|2026-07-09/exits.jsonl|true|true|true|session-start'
+    },
+    {
+      name: 'browserless log retention deletes day directories outside keep window',
+      got: withTempDirForTest(async dir => {
+        for (const day of ['2026-07-04', '2026-07-05', '2026-07-06', '2026-07-07', '2026-07-08']) {
+          fs.mkdirSync(path.join(dir, day), { recursive: true });
+          fs.writeFileSync(path.join(dir, day, 'runner.jsonl'), '');
+        }
+        fs.mkdirSync(path.join(dir, 'misc'), { recursive: true });
+        const result = cleanupOldLogDays(dir, {
+          nowMs: Date.UTC(2026, 6, 8, 12, 0, 0),
+          keepDays: 3
+        });
+        return [
+          result.cutoffDay,
+          result.removed.join(','),
+          result.kept.join(','),
+          fs.existsSync(path.join(dir, '2026-07-05')),
+          fs.existsSync(path.join(dir, '2026-07-06')),
+          fs.existsSync(path.join(dir, 'misc'))
+        ].join('|');
+      }),
+      want: '2026-07-06|2026-07-04,2026-07-05|2026-07-06,2026-07-07,2026-07-08|false|true|true'
+    },
+    {
+      name: 'browserless log summary counts streams and writes summary file',
+      got: withTempDirForTest(async dir => {
+        const store = createLocalLogStore({
+          logDir: dir,
+          now: () => Date.UTC(2026, 6, 8, 1, 0, 0)
+        });
+        store.append('runner', 'start', { ok: true });
+        store.append('runner', 'frame-gap', { gapMs: 1200 });
+        store.append('decisions', 'decision', { kind: 'wait' });
+        const summary = summarizeBrowserlessLogDay({ logDir: dir, day: '2026-07-08' });
+        const output = writeBrowserlessLogSummary(summary);
+        const written = JSON.parse(fs.readFileSync(output, 'utf8'));
+        return [
+          summary.totals.entries,
+          summary.streams.runner.entries,
+          summary.streams.runner.typeCounts.start,
+          summary.streams.runner.typeCounts['frame-gap'],
+          summary.streams.decisions.typeCounts.decision,
+          path.basename(output),
+          written.totals.entries
+        ].join('|');
+      }),
+      want: '3|2|1|1|1|summary.json|3'
     },
     {
       name: 'final arbitration keeps recent safety action over profit',
