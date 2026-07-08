@@ -31,6 +31,7 @@ function publicConfig(config) {
     webTokenPresent: Boolean(config.webToken),
     readOnly: Boolean(config.readOnly),
     controlMode: config.controlMode || 'read-only',
+    canaryProfile: config.canaryProfile || '',
     dryRun: Boolean(config.dryRun),
     once: Boolean(config.once),
     logRetentionDays: Number(config.logRetentionDays || 0),
@@ -85,6 +86,7 @@ async function runBrowserlessRunner(config, deps = {}) {
       mode: config.dryRun ? 'dry-run' : config.controlMode,
       readOnly: config.readOnly,
       controlMode: config.controlMode,
+      canaryProfile: config.canaryProfile || '',
       dryRun: config.dryRun,
       combatEnabled: Boolean(config.combatEnabled),
       lastError: ''
