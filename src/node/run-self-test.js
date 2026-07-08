@@ -6735,10 +6735,14 @@ async function runSelfTest() {
           env.includes('GRASP_RAT_BROWSERLESS_CANARY_PROFILE=read-only'),
           env.includes('GRASP_RAT_BROWSERLESS_DRY_RUN=true'),
           installer.includes('grasp-rat-browserless-runner'),
+          installer.includes('DATA_DIR="/var/lib/grasp-rat-browserless"'),
+          installer.includes('LOG_DIR="/var/log/grasp-rat-browserless"'),
+          installer.includes('install -d -m 0750 "$DATA_DIR"'),
+          installer.includes('install -d -m 0750 "$LOG_DIR"'),
           installer.includes('systemctl daemon-reload')
         ].join('|');
       })(),
-      want: 'true|true|true|true|true|true|true|true|true|true'
+      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless deployment audit checks installed service evidence',

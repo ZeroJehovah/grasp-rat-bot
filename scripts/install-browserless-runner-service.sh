@@ -7,6 +7,8 @@ UNIT_SOURCE="${APP_DIR}/deploy/browserless-runner.service"
 ENV_SOURCE="${APP_DIR}/deploy/browserless-runner.env.example"
 UNIT_DEST="${UNIT_DEST:-/etc/systemd/system/${SERVICE_NAME}.service}"
 ENV_DEST="${ENV_DEST:-/etc/grasp-rat/browserless-runner.env}"
+DATA_DIR="/var/lib/grasp-rat-browserless"
+LOG_DIR="/var/log/grasp-rat-browserless"
 INSTALL_ENV=0
 RUN_SYSTEMCTL=1
 
@@ -83,6 +85,8 @@ sed "s/WorkingDirectory=\\/opt\\/grasp-rat-bot/WorkingDirectory=${escaped_app_di
 
 $SUDO install -d -m 0755 "$(dirname "$UNIT_DEST")"
 $SUDO install -m 0644 "$tmp_unit" "$UNIT_DEST"
+$SUDO install -d -m 0750 "$DATA_DIR"
+$SUDO install -d -m 0750 "$LOG_DIR"
 
 if [ "$INSTALL_ENV" -eq 1 ]; then
   $SUDO install -d -m 0750 "$(dirname "$ENV_DEST")"
@@ -104,6 +108,10 @@ Installed $SERVICE_NAME unit:
 
 Environment file:
   $ENV_DEST
+
+Runtime directories:
+  $DATA_DIR
+  $LOG_DIR
 
 Next commands:
   sudo systemctl start $SERVICE_NAME
