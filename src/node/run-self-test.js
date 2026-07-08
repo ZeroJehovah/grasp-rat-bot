@@ -6777,6 +6777,62 @@ async function runSelfTest() {
         });
         const combatLive = summarizeBrowserlessCanaryAudit({ logDir: dir, day: '2026-07-11', profile: 'combat-live' });
 
+        const combatDryRunDayDir = path.join(dir, '2026-07-17');
+        fs.mkdirSync(combatDryRunDayDir, { recursive: true });
+        const writeCombatDryRun = (stream, entry) => {
+          fs.appendFileSync(path.join(combatDryRunDayDir, `${stream}.jsonl`), `${JSON.stringify(entry)}\n`);
+        };
+        writeCombatDryRun('runner', {
+          at: '2026-07-17T01:05:00.000Z',
+          type: 'canary-finish',
+          detail: {
+            ...baseFinish,
+            mode: 'combat-dry-run',
+            startedAt: '2026-07-17T01:00:00.000Z',
+            completedAt: '2026-07-17T01:05:00.000Z',
+            actions: { sentCount: 0, velocitySentCount: 0, shootSentCount: 0 }
+          }
+        });
+        writeCombatDryRun('decisions', { at: '2026-07-17T01:00:01.000Z', type: 'decision', detail: { kind: 'combat-dry-run' } });
+        writeCombatDryRun('combat', {
+          at: '2026-07-17T01:00:03.000Z',
+          type: 'combat-dry-run',
+          detail: {
+            target: { authority: 'realtime' },
+            candidates: [{ authority: 'realtime' }],
+            shooting: { dryRunOnly: true, commandSuppressed: true }
+          }
+        });
+        const combatDryRun = summarizeBrowserlessCanaryAudit({ logDir: dir, day: '2026-07-17', profile: 'combat-dry-run' });
+
+        const combatDryRunNoTargetDayDir = path.join(dir, '2026-07-18');
+        fs.mkdirSync(combatDryRunNoTargetDayDir, { recursive: true });
+        const writeCombatDryRunNoTarget = (stream, entry) => {
+          fs.appendFileSync(path.join(combatDryRunNoTargetDayDir, `${stream}.jsonl`), `${JSON.stringify(entry)}\n`);
+        };
+        writeCombatDryRunNoTarget('runner', {
+          at: '2026-07-18T01:05:00.000Z',
+          type: 'canary-finish',
+          detail: {
+            ...baseFinish,
+            mode: 'combat-dry-run',
+            startedAt: '2026-07-18T01:00:00.000Z',
+            completedAt: '2026-07-18T01:05:00.000Z',
+            actions: { sentCount: 0, velocitySentCount: 0, shootSentCount: 0 }
+          }
+        });
+        writeCombatDryRunNoTarget('decisions', { at: '2026-07-18T01:00:01.000Z', type: 'decision', detail: { kind: 'combat-dry-run' } });
+        writeCombatDryRunNoTarget('combat', {
+          at: '2026-07-18T01:00:03.000Z',
+          type: 'combat-dry-run',
+          detail: {
+            target: null,
+            candidates: [],
+            shooting: { dryRunOnly: true, commandSuppressed: true }
+          }
+        });
+        const combatDryRunNoTarget = summarizeBrowserlessCanaryAudit({ logDir: dir, day: '2026-07-18', profile: 'combat-dry-run' });
+
         const combatLiveMissingActionDayDir = path.join(dir, '2026-07-12');
         fs.mkdirSync(combatLiveMissingActionDayDir, { recursive: true });
         const writeCombatLiveMissingAction = (stream, entry) => {
@@ -6911,6 +6967,10 @@ async function runSelfTest() {
           actionLeak.failed.some(item => item.key === 'no-actions'),
           combatLive.ok,
           combatLive.counts.movementCommand,
+          combatDryRun.ok,
+          combatDryRun.counts.combatDryRunTarget,
+          combatDryRunNoTarget.ok,
+          combatDryRunNoTarget.failed.some(item => item.key === 'combat-target-logged'),
           combatLiveMissingAction.ok,
           combatLiveMissingAction.failed.some(item => item.key === 'combat-action-logged'),
           movementShootLeak.ok,
@@ -6928,7 +6988,7 @@ async function runSelfTest() {
           bootstrapOnly.failed.some(item => item.key === 'snapshot-safety')
         ].join('|');
       }),
-      want: 'true|0|true|1|0|false|true|true|1|false|true|true|1|false|true|false|true|1|false|true|1|read-only-20260715T010000000Z|true|read-only-20260715T010000000Z|1|0|false|true'
+      want: 'true|0|true|1|0|false|true|true|1|false|true|true|1|true|1|false|true|false|true|false|true|1|false|true|1|read-only-20260715T010000000Z|true|read-only-20260715T010000000Z|1|0|false|true'
     },
     {
       name: 'browserless runner config parses env and cli overrides',

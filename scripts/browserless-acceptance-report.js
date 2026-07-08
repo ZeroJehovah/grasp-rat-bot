@@ -71,6 +71,9 @@ function canaryEvidenceSummary(report) {
   if (Number(counts.combatDryRun || 0) || Number(counts.combatLive || 0)) {
     parts.push(`combat=${Number(counts.combatDryRun || 0) + Number(counts.combatLive || 0)}`);
   }
+  if (Number(counts.combatDryRunTarget || 0) || Number(counts.combatLiveTarget || 0)) {
+    parts.push(`combatTargets=${Number(counts.combatDryRunTarget || 0) + Number(counts.combatLiveTarget || 0)}`);
+  }
   if (Number(counts.explicitStop || 0)) {
     parts.push(`explicitStop=${Number(counts.explicitStop || 0)}`);
   }
