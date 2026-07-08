@@ -139,25 +139,57 @@ function openBrowserlessWs(options = {}) {
   const ws = createWebSocket(runtime, wsUrl, options);
   const handle = createTransportHandle(ws, runtime, wsUrl, options);
   let opened = false;
+  let settled = false;
   return new Promise((resolve, reject) => {
+    const failOpen = error => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(error);
+    };
     const timer = setTimeout(() => {
       if (!opened) {
         try { handle.close(); } catch (_) {}
-        reject(new Error('websocket connect timeout'));
+        failOpen(new Error('websocket connect timeout'));
       }
     }, connectTimeoutMs);
     addWsHandler(ws, 'open', () => {
       opened = true;
+      settled = true;
       clearTimeout(timer);
       if (typeof options.onOpen === 'function') options.onOpen({ wsUrl, runtime: runtime.name });
       resolve(handle);
     });
+    if (typeof ws.on === 'function') {
+      ws.on('unexpected-response', (_request, response) => {
+        const chunks = [];
+        const statusCode = Number(response?.statusCode || 0);
+        const statusMessage = response?.statusMessage || '';
+        const headers = response?.headers || {};
+        const finish = () => {
+          const body = Buffer.concat(chunks).toString('utf8').slice(0, 300);
+          const contentType = headers['content-type'] || headers['Content-Type'] || '';
+          const message = [
+            `websocket unexpected response ${statusCode || 'unknown'}`,
+            statusMessage,
+            contentType ? `content-type=${contentType}` : '',
+            body ? `body=${body}` : ''
+          ].filter(Boolean).join(' ');
+          if (typeof options.onError === 'function') {
+            options.onError({ message, opened, statusCode, statusMessage, contentType, body });
+          }
+          failOpen(new Error(message));
+        };
+        response.on('data', chunk => chunks.push(Buffer.from(chunk)));
+        response.on('end', finish);
+        response.on('error', finish);
+      });
+    }
     addWsHandler(ws, 'error', event => {
       const message = event?.message || event?.error?.message || String(event || 'websocket error');
       if (typeof options.onError === 'function') options.onError({ message, event, opened });
       if (!opened) {
-        clearTimeout(timer);
-        reject(new Error(message));
+        failOpen(new Error(message));
       }
     });
     addWsHandler(ws, 'close', (eventOrCode, reason) => {

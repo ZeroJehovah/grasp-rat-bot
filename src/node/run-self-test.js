@@ -5201,8 +5201,12 @@ async function runSelfTest() {
         this.listeners[name].push(handler);
       }
 
-      emit(name, event) {
-        for (const handler of this.listeners[name] || []) handler(event);
+      on(name, handler) {
+        this.addEventListener(name, handler);
+      }
+
+      emit(name, ...args) {
+        for (const handler of this.listeners[name] || []) handler(...args);
       }
 
       open() {
@@ -5566,6 +5570,42 @@ async function runSelfTest() {
         }
       })(),
       want: 'true|1|true'
+    },
+    {
+      name: 'browserless websocket transport reports unexpected response details',
+      got: (async () => {
+        const fake = createFakeWebSocketRuntimeForTest();
+        const openPromise = openBrowserlessWs({
+          runtime: fake.runtime,
+          gameOrigin: 'https://grasp-rat-game.h-e.top',
+          userId: 7,
+          sessionToken: 'ws-token',
+          connectTimeoutMs: 1000
+        });
+        const response = {
+          statusCode: 403,
+          statusMessage: 'Forbidden',
+          headers: { 'content-type': 'text/plain' },
+          on(name, handler) {
+            if (name === 'data') handler(Buffer.from('join forbidden'));
+            if (name === 'end') handler();
+          }
+        };
+        fake.instances[0].emit('unexpected-response', {}, response);
+        try {
+          await openPromise;
+          return 'opened';
+        } catch (err) {
+          const message = err?.message || String(err);
+          return [
+            message.includes('403'),
+            message.includes('Forbidden'),
+            message.includes('text/plain'),
+            message.includes('join forbidden')
+          ].join('|');
+        }
+      })(),
+      want: 'true|true|true|true'
     },
     {
       name: 'browserless frame stats aggregate decoded frame summaries',

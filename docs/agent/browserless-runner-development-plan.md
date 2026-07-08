@@ -121,6 +121,7 @@ Update this table in the same task that completes each feature.
 | Commit 33: Require Combat Target Evidence | Complete | `scripts/browserless-canary-audit.js` now requires combat-dry-run and combat-live acceptance evidence to include at least one scoped realtime combat target entry, not just targetless combat diagnostic rows. `scripts/browserless-acceptance-report.js` prints combat target counts in section summaries, and self-tests cover accepted target evidence plus targetless dry-run rejection. |
 | Commit 34: Quantize Browserless Velocity Commands | Complete; VPS movement revalidation pending | `src/node/browserless/ws-transport.js` now sends direct WS velocity commands using the same rounded/clamped `-1/0/1` format as the browser native transport instead of fractional vectors. Self-tests cover fractional and out-of-range velocity command formatting. A 2026-07-08 active-search attempt sent fractional commands and observed no self-position change, so movement-only/profit VPS canaries should be rerun with 2 minute windows before relying on movement-dependent stages. |
 | Commit 35: Add Explicit Profit-Live AFK Mode | Complete; VPS formal-run validation pending | `controlMode=profit-live` is now a separate explicit mode for ordinary coins plus visible AFK targets. The `profit` canary profile remains mapped to `non-combat-profit` and keeps its no-shoot audit contract; `profit-live` blocks AFK profit while a visible Active threat exists and does not replace combat-live. Self-tests cover AFK target selection, Active-threat blocking, and AFK shoot command emission. |
+| Commit 36: Surface WS Join Rejection Details | Complete; VPS reauthorization pending | `src/node/browserless/ws-transport.js` now records Node `ws` `unexpected-response` status, content type, and a short body snippet in the connection error. The 2026-07-09 VPS movement-only revalidation attempt showed direct `/snapshot` returns 200 even for empty/wrong tokens, while the real state-backed WS join returned HTTP 403, so the stored session must be refreshed before live canaries can continue. |
 
 ## Commit Plan
 
@@ -785,7 +786,7 @@ Validation:
 
 ## External VPS Validation Required
 
-Local implementation work is complete through Commit 35, and the VPS systemd deployment validation passed on 2026-07-08. The production runner is not accepted until the remaining live canary validations below produce evidence and the aggregate acceptance report passes.
+Local implementation work is complete through Commit 36, and the VPS systemd deployment validation passed on 2026-07-08. The production runner is not accepted until the remaining live canary validations below produce evidence and the aggregate acceptance report passes.
 
 Use the production service path and audit commands from `docs/agent/browserless-vps-migration.md` and `docs/agent/browserless-runner-operator.md`. Do not mark `headless-demo/` superseded until these validations pass:
 

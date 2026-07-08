@@ -81,6 +81,7 @@ sudo node scripts/browserless-deployment-audit.js --env-mode live --fail-on-inco
 ```
 
 `--env-mode live` expects `GRASP_RAT_BROWSERLESS_DRY_RUN=false`, a valid canary/control mode, matching profile/control values when both are present, and reusable session/login-point evidence from either env variables or the persisted state file. Prefer state-backed evidence so tokens and coordinates do not need to be copied into `/etc/grasp-rat/browserless-runner.env`. The aggregate acceptance report uses deployment env mode `any` by default so it can run after the service has legitimately moved through live staged profiles.
+Live env audit validates the presence and shape of session evidence, not whether the token is still accepted by WS join. `/snapshot` may return public data for empty or wrong tokens; a direct WS open with the real user id/token is the effective session-validity check.
 
 If the audit prints `unknown argument: --env-mode`, the VPS checkout is older than the live-readiness audit support. Pull `origin/main` with `git pull --ff-only origin main` and rerun the help check before restarting the service. Do not restart into a live canary after a failed live env audit.
 
