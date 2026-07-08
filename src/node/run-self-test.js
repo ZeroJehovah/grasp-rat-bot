@@ -62,6 +62,10 @@ const {
   movementVectorToTarget
 } = require('./browserless/action-adapter');
 const {
+  buildBrowserlessCombatDryRun,
+  estimateAim
+} = require('./browserless/combat-adapter');
+const {
   createBrowserlessSafetyController,
   evaluateBrowserlessSafety,
   executeSafetyExit
@@ -5865,6 +5869,121 @@ async function runSelfTest() {
       want: 'wait|no-profitable-candidate|none|false|active-threat-visible|8'
     },
     {
+      name: 'browserless combat dry-run uses realtime target and ignores snapshot target',
+      got: (() => {
+        const store = createBrowserlessStateStore({ userId: 7 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 60,
+          entities: [
+            { entity_id: 1, user_id: 7, name: 'self', x: 100, y: 100, hp: 90, stamina_5s_remaining_milli: 5000 },
+            { entity_id: 2, user_id: 8, name: 'active', x: 1000, y: 100, hp: 80, current_join_mode: 'Active', firing: true, drop: 8 }
+          ],
+          bullets: []
+        }, { receivedAtMs: 1000 });
+        store.ingestFrame({
+          type: 'snapshot',
+          tick: 61,
+          entities: [
+            { entity_id: 1, user_id: 7, name: 'self', x: 9999, y: 9999, hp: 90 },
+            { entity_id: 3, user_id: 9, name: 'snapshot-active', x: 120, y: 120, hp: 80, current_join_mode: 'Active', firing: true, drop: 100 }
+          ],
+          bullets: [],
+          coin_drops: [],
+          messages: []
+        }, { receivedAtMs: 1100 });
+        const combat = buildBrowserlessCombatDryRun(store.getState(1200), { nowMs: 1200 });
+        return [
+          combat.dryRun,
+          combat.authority,
+          combat.target.userId,
+          combat.target.authority,
+          combat.self.x,
+          combat.aim.mode,
+          combat.shooting.wouldShoot,
+          combat.shooting.commandSuppressed,
+          combat.dataGaps.includes('no-realtime-bullet-evidence')
+        ].join('|');
+      })(),
+      want: 'true|realtime|8|realtime|100|exact|true|true|true'
+    },
+    {
+      name: 'browserless combat dry-run computes linear intercept and reserve suppression',
+      got: (() => {
+        const aim = estimateAim(
+          { user_id: 7, x: 0, y: 0 },
+          { user_id: 8, x: 1000, y: 0, vx: 100, vy: 0 },
+          { bulletSpeedCmPerTick: 500, renderDelayTicks: 2 }
+        );
+        const combat = buildBrowserlessCombatDryRun({
+          userId: 7,
+          realtime: {
+            tick: 62,
+            self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 90, stamina_5s_remaining_milli: 500 },
+            entities: [
+              { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 90, stamina_5s_remaining_milli: 500 },
+              { entity_id: 2, user_id: 8, name: 'moving-active', x: 1000, y: 0, vx: 100, vy: 0, hp: 90, current_join_mode: 'Active', firing: true, drop: 5 }
+            ],
+            bullets: [
+              {
+                bullet_id: 9,
+                owner_user_id: 8,
+                start_x: -5000,
+                start_y: 0,
+                target_x: 5000,
+                target_y: 0,
+                speed_per_tick: 500,
+                created_tick: 57,
+                expire_tick: 77
+              }
+            ]
+          }
+        });
+        return [
+          aim.mode,
+          aim.x,
+          aim.intercept,
+          combat.aim.mode,
+          combat.movement.reason,
+          combat.shooting.state,
+          combat.shooting.reason,
+          combat.shooting.wouldShoot,
+          combat.shooting.commandSuppressed
+        ].join('|');
+      })(),
+      want: 'linear-intercept|1400|true|linear-intercept|direct-threat-dodge|disabled|below-hard-reserve|false|true'
+    },
+    {
+      name: 'browserless decision adapter exposes combat dry-run action without firing',
+      got: (() => {
+        const decision = buildBrowserlessDecision({
+          userId: 7,
+          realtime: {
+            tick: 63,
+            frameAgeMs: 100,
+            self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 90, stamina_5s_remaining_milli: 5000 },
+            entities: [
+              { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 90, stamina_5s_remaining_milli: 5000 },
+              { entity_id: 2, user_id: 8, name: 'active', x: 1000, y: 0, hp: 80, current_join_mode: 'Active', firing: true, drop: 8 }
+            ],
+            bullets: [],
+            coinDrops: []
+          },
+          fallback: { coinDrops: [] }
+        }, {}, { nowMs: 1200, controlMode: 'combat-dry-run' });
+        return [
+          decision.kind,
+          decision.action.kind,
+          decision.action.reason,
+          decision.combat.aim.mode,
+          decision.combat.shooting.wouldShoot,
+          decision.combat.shooting.commandSuppressed,
+          Object.prototype.hasOwnProperty.call(decision.action, 'command')
+        ].join('|');
+      })(),
+      want: 'combat-dry-run|combat-dry-run|combat-dry-run-realtime|exact|true|true|false'
+    },
+    {
       name: 'browserless decision adapter waits without realtime self',
       got: (() => {
         const decision = buildBrowserlessDecision({
@@ -6313,7 +6432,7 @@ async function runSelfTest() {
           '19999',
           '--web-token',
           'cli-token',
-          '--non-combat-profit',
+          '--combat-dry-run',
           '--decision-interval-ms',
           '250',
           '--stale-self-ms',
@@ -6362,7 +6481,7 @@ async function runSelfTest() {
           config.logDir.endsWith('/tmp/grasp-rat-runner/logs')
         ].join('|');
       })(),
-      want: 'true|false|false|non-combat-profit|19999|cli-token|42|env-token|250|3500|4500|150|300|800|3|123|456|90|true'
+      want: 'true|false|false|combat-dry-run|19999|cli-token|42|env-token|250|3500|4500|150|300|800|3|123|456|90|true'
     },
     {
       name: 'browserless runner dry-run and fake read-only path write redacted logs',

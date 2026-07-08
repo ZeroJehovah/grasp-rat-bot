@@ -1,12 +1,7 @@
 'use strict';
 
 const { attackWorthTakingCore } = require('../../strategy/attack-worth');
-const {
-  isCombatEligibleThreat,
-  isInvulnerableEntity,
-  selectBestCombatTarget,
-  calculateCombatTargetPriority
-} = require('../../strategy/combat-target-selection');
+const { isInvulnerableEntity } = require('../../strategy/combat-target-selection');
 const {
   buildOpportunityCandidatesCore,
   opportunityPriorityTierCore,
@@ -22,6 +17,7 @@ const {
   coinTargetKeyCore,
   snapshotCoinNavigationReasonCore
 } = require('../../strategy/coin-target');
+const { buildBrowserlessCombatDryRun } = require('./combat-adapter');
 
 const DEFAULT_STALE_SELF_MS = 2500;
 const DEFAULT_ATTACK_RANGE = 14500;
@@ -214,6 +210,7 @@ function buildBrowserlessStrategyInput(state, options = {}) {
   return {
     userId: Number(state?.userId || options.userId || 0),
     nowMs: Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now(),
+    rawRealtime: realtime,
     self,
     stamina: entityStaminaSummary(self || {}),
     frameAges: state?.frameAges || {},
@@ -350,29 +347,21 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
 }
 
 function buildCombatDecision(input, options = {}) {
-  if (!input.self) return { target: null, candidates: [], action: null };
-  const context = {
+  const combat = buildBrowserlessCombatDryRun({
     userId: input.userId,
-    bullets: input.bullets,
-    whitelistCheck: typeof options.whitelistCheck === 'function' ? options.whitelistCheck : () => false
-  };
-  const candidates = input.visibleTargets
-    .filter(target => isCombatEligibleThreat(target, context))
-    .map(target => ({
-      ...target,
-      combatScore: calculateCombatTargetPriority(input.self, target, context)
-    }))
-    .sort((a, b) => Number(b.combatScore || 0) - Number(a.combatScore || 0));
-  const target = selectBestCombatTarget(input.self, candidates, context);
+    realtime: input.rawRealtime || {}
+  }, options);
+  const target = combat.target || null;
   return {
     target,
-    candidates,
+    candidates: combat.candidates || [],
+    dryRun: combat,
     action: target
       ? {
-          kind: 'combat-candidate',
+          kind: options.controlMode === 'combat-dry-run' ? 'combat-dry-run' : 'combat-candidate',
           band: 'combat',
-          reason: 'realtime-visible-threat',
-          target: summarizeTarget(target)
+          reason: options.controlMode === 'combat-dry-run' ? 'combat-dry-run-realtime' : 'realtime-visible-threat',
+          target
         }
       : null
   };
@@ -382,6 +371,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
   const input = buildBrowserlessStrategyInput(state, options);
   const staleSelfMs = Math.max(1000, Number(options.staleSelfMs || DEFAULT_STALE_SELF_MS));
   const nonCombatProfit = options.controlMode === 'non-combat-profit' || options.nonCombatProfit === true;
+  const combatDryRun = options.controlMode === 'combat-dry-run';
   const combatDecisionEnabled = options.combatDecisionEnabled !== false && !nonCombatProfit;
   const frameAge = Number(input.realtime.frameAgeMs);
   const opportunity = buildOpportunityDecision(input, stateful, {
@@ -400,7 +390,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     reason = 'stale-realtime-self';
     action.reason = reason;
   } else if (combat.target && combatDecisionEnabled) {
-    kind = 'combat-candidate';
+    kind = combatDryRun ? 'combat-dry-run' : 'combat-candidate';
     band = 'combat';
     reason = combat.action.reason;
     action = combat.action;
@@ -435,8 +425,9 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       candidates: topItems(opportunity.sorted, summarizeOpportunity)
     },
     combat: {
-      target: summarizeTarget(combat.target),
-      candidates: topItems(combat.candidates, target => ({
+      ...(combat.dryRun || {}),
+      target: combat.dryRun?.target || summarizeTarget(combat.target),
+      candidates: combat.dryRun?.candidates || topItems(combat.candidates, target => ({
         ...summarizeTarget(target),
         score: Number.isFinite(Number(target.combatScore)) ? Math.round(Number(target.combatScore)) : null
       }))
