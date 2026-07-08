@@ -144,6 +144,7 @@ On 2026-07-08, the VPS one-shot demo succeeded after the Node 18 `ws` fallback a
 - The same post-update status showed a pushed `snapshot` frame over WS, with 100 coin drops and 80 messages in that sample. This confirms snapshot data can arrive via the direct transport, but it remains non-combat/fallback evidence rather than a combat decision source.
 - After the compact status update, the VPS process was restarted and the user ran the demo without reauthorizing. The stored token still connected successfully, `shoot_ok` was received, `leave` was confirmed on the initial attempt, and compact `recentFrames` showed `selfPresent` changing from `true` before leave to `false` after leave.
 - A 30 second read-only probe observed 599 decoded binary frames with no decode errors: 569 `pos` frames and 30 pushed `snapshot` frames. The only key sets were `type,tick,entities,bullets` and `type,tick,total_entities,in_game,visible,occupied_cells,entities,bullets,coin_drops,messages`. This means no additional realtime coin/drop frame type has been observed yet; coin drops/messages are currently known only from pushed snapshots, so browserless combat must stay on `pos` and ordinary coin profit must treat snapshot coins as non-combat fallback data.
+- A direct pre-WS snapshot probe against `https://grasp-rat-game.h-e.top/snapshot?user_id=<id>&token=<token>` returned HTTP 200 JSON without opening WS. The response shape matched pushed snapshot frames and included `total_entities`, `in_game`, `visible`, `occupied_cells`, `entities`, `bullets`, `coin_drops`, and `messages`; the sample had about 1.09MB text, 1001 entities, 1 bullet, 99 coin drops, and 80 messages. The first safety evaluation could not complete because the upgraded demo had no persisted `lastSelfSummary` login point from an earlier build. This is expected for pre-upgrade state; a fresh WS probe or demo run on the updated code should persist `lastSelfSummary`.
 
 ## Progress Log
 
@@ -163,6 +164,7 @@ On 2026-07-08, the VPS one-shot demo succeeded after the Node 18 `ws` fallback a
 - 2026-07-08: A post-update VPS status check confirmed the structured summaries render in the UI/API. Public status was then compacted so large raw frame/base64 samples and full leave bodies stay in the log file instead of the page state blob.
 - 2026-07-08: A no-reauthorization restart test passed: the persisted token survived demo process restart, direct WS reconnect worked, command ack was received, and verified leave returned `inGame` to false.
 - 2026-07-08: The bounded read-only WS probe passed. Over 30 seconds, direct WS state consisted only of high-frequency `pos` frames and about 1Hz pushed `snapshot` frames; no separate realtime coin/drop frame type appeared.
+- 2026-07-08: Direct pre-login `/snapshot?user_id=<id>&token=<token>` fetch from VPS worked before WS join. Safety verdict still needs one updated-code run to persist a login point first.
 
 ## Next Plan
 

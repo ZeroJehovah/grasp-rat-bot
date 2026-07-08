@@ -413,6 +413,8 @@ Immediate new validation exposed by this revision:
 2. Confirm whether direct `/snapshot` can be fetched with the stored token/session shape before WS join.
 3. Confirm whether the response contains enough entity coordinates/modes to evaluate the last login point safety radius.
 
+Status on 2026-07-08: direct `/snapshot?user_id=<id>&token=<token>` fetch works before WS join and returns the expected full snapshot shape. The first safety verdict was blocked only because the demo state predated `lastSelfSummary` persistence and therefore had no login point. A fresh updated-code WS probe/demo run should populate `lastSelfSummary`, then the snapshot safety probe can complete the radius evaluation.
+
 Already completed:
 
 - Bounded read-only WS probe: only `pos` and pushed `snapshot` appeared; coin drops/messages appeared only in `snapshot`.
