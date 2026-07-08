@@ -4,8 +4,22 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const { URL } = require('url');
-const { leaveResponseConfirmsExitCore, summarizeLeaveResponseCore } = require('../src/shared/leave-response');
-const { parseGrzFrame } = require('../src/shared/grz-frame');
+const { parseGrzFrame, summarizeGrzEntity } = require('../src/shared/grz-frame');
+const {
+  buildSnapshotProbeUrl,
+  fetchWithTimeout: browserlessFetchWithTimeout,
+  readResponseBody: browserlessReadResponseBody,
+  redactSecrets,
+  redactStructuredSecrets,
+  requestAuthUrl,
+  submitCallbackInput,
+  summarizeSnapshotPayload: summarizeSnapshotPayloadCore
+} = require('../src/node/browserless/session-client');
+const {
+  leaveOnce: browserlessLeaveOnce,
+  leaveWithVerification: browserlessLeaveWithVerification,
+  summarizeLeaveResultForPublic
+} = require('../src/node/browserless/leave-client');
 
 const GAME_ORIGIN = process.env.GRASP_RAT_GAME_ORIGIN || 'https://grasp-rat-game.h-e.top';
 const HOST = process.env.GRASP_RAT_DEMO_HOST || '127.0.0.1';
@@ -75,52 +89,11 @@ function isLoopbackHost(host) {
 }
 
 function redact(value) {
-  return String(value || '')
-    .replace(/([?&](?:code|token|session|auth|secret)[^=]*=)[^&"'\\\s]+/ig, '$1[redacted]')
-    .replace(/("(?:code|token|sessionToken|auth|secret|cookie|set-cookie)"\s*:\s*")[^"]+/ig, '$1[redacted]')
-    .replace(/((?:auth\.session-token|cf_clearance|_cfuvid|__stripe_mid)=)[^;"'\s]+/ig, '$1[redacted]')
-    .replace(/\b(Bearer\s+)[A-Za-z0-9._~+/-]+=*/ig, '$1[redacted]');
+  return redactSecrets(value);
 }
 
 function redactStructured(value, depth = 0) {
-  if (value === null || value === undefined) return value;
-  if (typeof value === 'string') return redact(value);
-  if (typeof value === 'number' || typeof value === 'boolean') return value;
-  if (depth > 8) return redact(JSON.stringify(value));
-  if (Array.isArray(value)) return value.map(item => redactStructured(item, depth + 1));
-  if (typeof value !== 'object') return value;
-  const output = {};
-  for (const [key, item] of Object.entries(value)) {
-    if (/^(?:token|sessionToken|session_token|tmpGameSessionToken|cookie|set-cookie|authorization)$/i.test(key)) {
-      output[key] = '[redacted]';
-    } else {
-      output[key] = redactStructured(item, depth + 1);
-    }
-  }
-  return output;
-}
-
-function summarizeLeaveAttemptForPublic(attempt) {
-  if (!attempt || typeof attempt !== 'object') return attempt;
-  return {
-    stage: attempt.stage || '',
-    httpOk: Boolean(attempt.httpOk),
-    status: Number(attempt.status || 0),
-    statusText: attempt.statusText || '',
-    durationMs: Number(attempt.durationMs || 0),
-    ok: Boolean(attempt.ok),
-    summary: attempt.summary || null
-  };
-}
-
-function summarizeLeaveResultForPublic(leave) {
-  if (!leave || typeof leave !== 'object') return leave || null;
-  return {
-    ok: Boolean(leave.ok),
-    attempts: Array.isArray(leave.attempts)
-      ? leave.attempts.map(summarizeLeaveAttemptForPublic)
-      : []
-  };
+  return redactStructuredSecrets(value, depth);
 }
 
 function summarizeRunForPublic(run) {
@@ -244,47 +217,23 @@ function sleep(ms) {
 }
 
 async function fetchWithTimeout(url, options = {}) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), Number(options.timeoutMs || HTTP_TIMEOUT_MS));
-  try {
-    return await fetch(url, {
-      ...options,
-      signal: controller.signal,
-      headers: {
-        accept: 'application/json,text/plain,*/*',
-        ...(options.headers || {})
-      }
-    });
-  } finally {
-    clearTimeout(timer);
-  }
+  return browserlessFetchWithTimeout(url, {
+    timeoutMs: HTTP_TIMEOUT_MS,
+    ...options
+  });
 }
 
 async function readResponseBody(response) {
-  const text = await response.text();
-  try {
-    return { text, json: JSON.parse(text) };
-  } catch (_) {
-    return { text, json: null };
-  }
+  return browserlessReadResponseBody(response);
 }
 
 function snapshotProbeUrl() {
-  const url = new URL(SNAPSHOT_PATH, GAME_ORIGIN);
-  url.searchParams.set('user_id', String(state.userId || 0));
-  url.searchParams.set('token', state.sessionToken || '');
-  url.searchParams.set('_graspRatProbeTs', String(Date.now()));
-  return url.toString();
-}
-
-function isAliveEntity(entity) {
-  const life = String(entity?.life || '').toLowerCase();
-  return !life || life === 'alive';
-}
-
-function isActiveEntity(entity) {
-  const mode = String(entity?.current_join_mode || entity?.mode || entity?.joined || '').toLowerCase();
-  return mode === 'active';
+  return buildSnapshotProbeUrl({
+    gameOrigin: GAME_ORIGIN,
+    snapshotPath: SNAPSHOT_PATH,
+    userId: state.userId,
+    sessionToken: state.sessionToken
+  });
 }
 
 function latestKnownFrameTick() {
@@ -301,301 +250,28 @@ function latestKnownFrameTick() {
   return latest;
 }
 
-function summarizeSnapshotFreshness(payload) {
-  const tick = Number(payload?.tick);
-  const latestKnownTick = latestKnownFrameTick();
-  if (!Number.isFinite(tick)) {
-    return {
-      ok: false,
-      reason: 'missing-snapshot-tick',
-      tick: null,
-      latestKnownTick: latestKnownTick || null
-    };
-  }
-  if (!latestKnownTick) {
-    return {
-      ok: true,
-      reason: 'no-prior-tick',
-      tick,
-      latestKnownTick: null
-    };
-  }
-  return {
-    ok: tick >= latestKnownTick,
-    reason: tick >= latestKnownTick ? 'fresh' : 'stale-snapshot-tick',
-    tick,
-    latestKnownTick,
-    tickDelta: tick - latestKnownTick
-  };
-}
-
-function summarizeSnapshotSafety(payload, loginPoint, freshness = null) {
-  const entities = Array.isArray(payload?.entities) ? payload.entities : [];
-  const point = loginPoint
-    && Number.isFinite(Number(loginPoint.x))
-    && Number.isFinite(Number(loginPoint.y))
-    ? {
-        x: Number(loginPoint.x),
-        y: Number(loginPoint.y),
-        hp: Number.isFinite(Number(loginPoint.hp)) ? Number(loginPoint.hp) : null,
-        source: String(loginPoint.source || 'last-self')
-      }
-    : null;
-  if (!point) {
-    return {
-      ok: false,
-      reason: 'missing-login-point',
-      entityCount: entities.length
-    };
-  }
-  const healthy = Number.isFinite(point.hp) && point.hp >= LOGIN_POINT_HEALTHY_HP_THRESHOLD;
-  const radius = healthy ? LOGIN_POINT_HEALTHY_RADIUS : LOGIN_POINT_LOW_RADIUS;
-  const nearby = [];
-  const activeNearby = [];
-  for (const entity of entities) {
-    if (!entity || typeof entity !== 'object') continue;
-    if (Number(entity.user_id) === Number(state.userId)) continue;
-    const x = Number(entity.x);
-    const y = Number(entity.y);
-    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
-    const distance = Math.hypot(x - point.x, y - point.y);
-    if (distance > radius) continue;
-    const base = summarizeEntity(entity) || {};
-    const item = {
-      ...base,
-      distance: Math.round(distance),
-      active: isActiveEntity(entity),
-      alive: isAliveEntity(entity)
-    };
-    nearby.push(item);
-    if (item.active && item.alive) activeNearby.push(item);
-  }
-  activeNearby.sort((a, b) => a.distance - b.distance);
-  nearby.sort((a, b) => a.distance - b.distance);
-  const fresh = freshness || summarizeSnapshotFreshness(payload);
-  const activeSafe = activeNearby.length === 0;
-  const ok = Boolean(fresh.ok && activeSafe);
-  return {
-    ok,
-    reason: fresh.ok ? (activeSafe ? 'safe' : 'active-near-login-point') : fresh.reason,
-    freshness: fresh,
-    point,
-    radius,
-    radiusReason: healthy ? 'last-self-healthy' : 'last-self-low-or-unknown',
-    entityCount: entities.length,
-    nearbyCount: nearby.length,
-    activeNearbyCount: activeNearby.length,
-    nearestActive: activeNearby[0] || null,
-    nearest: nearby[0] || null
-  };
-}
-
 function summarizeSnapshotPayload(payload) {
-  if (!payload || typeof payload !== 'object') {
-    return { valid: false, reason: 'non-json-payload' };
-  }
-  const entities = Array.isArray(payload.entities) ? payload.entities : [];
-  const bullets = Array.isArray(payload.bullets) ? payload.bullets : [];
-  const coinDrops = Array.isArray(payload.coin_drops) ? payload.coin_drops : [];
-  const messages = Array.isArray(payload.messages) ? payload.messages : [];
-  const self = entities.find(entity => Number(entity?.user_id) === Number(state.userId));
-  const freshness = summarizeSnapshotFreshness(payload);
-  return {
-    valid: Array.isArray(payload.entities),
-    jsonKeys: Object.keys(payload).slice(0, 20),
-    tick: Number.isFinite(Number(payload.tick)) ? Number(payload.tick) : null,
-    totalEntities: payload.total_entities ?? null,
-    inGameCount: payload.in_game ?? null,
-    visibleCount: payload.visible ?? null,
-    occupiedCells: payload.occupied_cells ?? null,
-    entityCount: entities.length,
-    bulletCount: bullets.length,
-    coinDropCount: coinDrops.length,
-    messageCount: messages.length,
-    selfPresent: Boolean(self),
-    self: summarizeEntity(self),
-    freshness,
-    safety: summarizeSnapshotSafety(payload, state.lastSelfSummary, freshness)
-  };
-}
-
-function extractAuthUrl(payload) {
-  if (!payload || typeof payload !== 'object') return '';
-  return String(payload.auth_url || payload.authUrl || payload.url || payload.location || '');
+  return summarizeSnapshotPayloadCore(payload, {
+    userId: state.userId,
+    loginPoint: state.lastSelfSummary,
+    latestKnownTick: latestKnownFrameTick(),
+    healthyHpThreshold: LOGIN_POINT_HEALTHY_HP_THRESHOLD,
+    healthyRadius: LOGIN_POINT_HEALTHY_RADIUS,
+    lowRadius: LOGIN_POINT_LOW_RADIUS
+  });
 }
 
 async function getAuthUrl() {
-  const response = await fetchWithTimeout(`${GAME_ORIGIN}/auth/linuxdo/start`, { cache: 'no-store' });
-  const body = await readResponseBody(response);
-  if (!response.ok) throw new Error(`/auth/linuxdo/start HTTP ${response.status}: ${body.text.slice(0, 240)}`);
-  const authUrl = extractAuthUrl(body.json);
-  if (!authUrl || !/^https:\/\/connect\.linux\.do\/oauth2\/authorize\b/i.test(authUrl)) {
-    throw new Error('auth_url missing or unexpected: ' + body.text.slice(0, 240));
-  }
+  const authUrl = await requestAuthUrl({
+    gameOrigin: GAME_ORIGIN,
+    timeoutMs: HTTP_TIMEOUT_MS
+  });
   state.authUrl = authUrl;
   state.authUrlAt = Date.now();
   state.lastError = '';
   persistState();
   logEvent('auth-url', { authUrl });
   return authUrl;
-}
-
-function normalizeCallbackUrl(input) {
-  const raw = String(input || '').trim();
-  if (!raw) throw new Error('callback URL is empty');
-  let parsed;
-  try {
-    parsed = new URL(raw);
-  } catch (err) {
-    throw new Error('invalid callback URL: ' + (err.message || String(err)));
-  }
-  if (parsed.origin === 'https://connect.linux.do' && parsed.pathname.startsWith('/oauth2/approve/')) {
-    throw new Error('this is a LinuxDO approve URL; open it in your browser, complete approval, then paste the final game callback URL or callback JSON');
-  }
-  if (parsed.origin !== GAME_ORIGIN || (!parsed.pathname.startsWith('/auth/linuxdo/callback') && !isDirectLoginUrl(parsed))) {
-    throw new Error(`callback origin/path mismatch: ${parsed.origin}${parsed.pathname}`);
-  }
-  return parsed.toString();
-}
-
-function isDirectLoginUrl(parsed) {
-  return parsed
-    && parsed.pathname === '/'
-    && parsed.searchParams.get('login') === 'ok'
-    && parsed.searchParams.get('user_id')
-    && parsed.searchParams.get('token');
-}
-
-function extractLoginData(payload) {
-  const candidates = [
-    payload,
-    payload?.data,
-    payload?.result,
-    payload?.user,
-    payload?.session
-  ].filter(Boolean);
-  for (const item of candidates) {
-    if (!item || typeof item !== 'object') continue;
-    const token = item.token || item.sessionToken || item.session_token || item.tmpGameSessionToken;
-    const id = item.user_id || item.userId || item.id || item.tmpGameUserId;
-    if (token && id) return { userId: Number(id), sessionToken: String(token) };
-  }
-  const found = findLoginFields(payload);
-  if (found.userId && found.sessionToken) return found;
-  return { userId: 0, sessionToken: '' };
-}
-
-function extractLoginDataFromText(text) {
-  const raw = String(text || '');
-  if (!raw) return { userId: 0, sessionToken: '' };
-  const tokenPatterns = [
-    /localStorage\.setItem\(\s*['"]tmpGameSessionToken['"]\s*,\s*['"]([^'"]+)['"]\s*\)/i,
-    /['"]tmpGameSessionToken['"]\s*[,=:]\s*['"]([^'"]+)['"]/i,
-    /['"]sessionToken['"]\s*[,=:]\s*['"]([^'"]+)['"]/i,
-    /['"]session_token['"]\s*[,=:]\s*['"]([^'"]+)['"]/i,
-    /['"]token['"]\s*[,=:]\s*['"]([^'"]+)['"]/i
-  ];
-  const idPatterns = [
-    /localStorage\.setItem\(\s*['"]tmpGameUserId['"]\s*,\s*['"]?(\d+)['"]?\s*\)/i,
-    /['"]tmpGameUserId['"]\s*[,=:]\s*['"]?(\d+)['"]?/i,
-    /['"]user_id['"]\s*[,=:]\s*['"]?(\d+)['"]?/i,
-    /['"]userId['"]\s*[,=:]\s*['"]?(\d+)['"]?/i,
-    /['"]id['"]\s*[,=:]\s*['"]?(\d+)['"]?/i
-  ];
-  const token = firstPattern(raw, tokenPatterns);
-  const id = firstPattern(raw, idPatterns);
-  return { userId: Number(id || 0), sessionToken: token || '' };
-}
-
-function extractLoginDataFromUrl(url) {
-  try {
-    const parsed = new URL(String(url || ''));
-    const hashParams = new URLSearchParams(String(parsed.hash || '').replace(/^#/, ''));
-    const token = firstSearchParam(parsed.searchParams, hashParams, ['token', 'sessionToken', 'session_token', 'tmpGameSessionToken']);
-    const id = firstSearchParam(parsed.searchParams, hashParams, ['user_id', 'userId', 'id', 'tmpGameUserId']);
-    return { userId: Number(id || 0), sessionToken: token };
-  } catch (_) {
-    return { userId: 0, sessionToken: '' };
-  }
-}
-
-function extractMetaRefreshUrl(text, baseUrl) {
-  const raw = String(text || '');
-  const tags = raw.match(/<meta\b[^>]*>/ig) || [];
-  for (const tag of tags) {
-    const httpEquiv = readHtmlAttribute(tag, 'http-equiv');
-    if (!/^refresh$/i.test(String(httpEquiv || '').trim())) continue;
-    const content = readHtmlAttribute(tag, 'content');
-    const match = /(?:^|;)\s*url\s*=\s*(.+?)\s*$/i.exec(content);
-    if (!match?.[1]) continue;
-    const target = decodeHtmlEntities(match[1].trim().replace(/^['"]|['"]$/g, ''));
-    const resolved = resolveLocation(target, baseUrl);
-    if (resolved) return resolved;
-  }
-  return '';
-}
-
-function readHtmlAttribute(tag, name) {
-  const pattern = new RegExp(`\\b${escapeRegExp(name)}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s>]+))`, 'i');
-  const match = pattern.exec(String(tag || ''));
-  return decodeHtmlEntities(match?.[1] || match?.[2] || match?.[3] || '');
-}
-
-function decodeHtmlEntities(value) {
-  return String(value || '')
-    .replace(/&amp;/ig, '&')
-    .replace(/&quot;/ig, '"')
-    .replace(/&#39;|&apos;/ig, "'")
-    .replace(/&lt;/ig, '<')
-    .replace(/&gt;/ig, '>')
-    .replace(/&#x([0-9a-f]+);/ig, (_, hex) => String.fromCodePoint(parseInt(hex, 16)))
-    .replace(/&#(\d+);/g, (_, num) => String.fromCodePoint(parseInt(num, 10)));
-}
-
-function escapeRegExp(value) {
-  return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-function firstSearchParam(primary, secondary, keys) {
-  for (const key of keys) {
-    const value = primary.get(key) || secondary.get(key);
-    if (value) return value;
-  }
-  return '';
-}
-
-function firstPattern(text, patterns) {
-  for (const pattern of patterns) {
-    const match = pattern.exec(text);
-    if (match?.[1]) return match[1];
-  }
-  return '';
-}
-
-function findLoginFields(value, depth = 0) {
-  if (!value || typeof value !== 'object' || depth > 4) return { userId: 0, sessionToken: '' };
-  let userId = 0;
-  let sessionToken = '';
-  if (!Array.isArray(value)) {
-    const token = value.token || value.sessionToken || value.session_token || value.tmpGameSessionToken;
-    const id = value.user_id || value.userId || value.id || value.tmpGameUserId;
-    if (token) sessionToken = String(token);
-    if (id) userId = Number(id);
-  }
-  for (const child of Object.values(value)) {
-    if (userId && sessionToken) break;
-    const found = findLoginFields(child, depth + 1);
-    if (!userId && found.userId) userId = found.userId;
-    if (!sessionToken && found.sessionToken) sessionToken = found.sessionToken;
-  }
-  return { userId: Number(userId || 0), sessionToken };
-}
-
-function summarizeLoginPayload(payload) {
-  return {
-    jsonKeys: payload && typeof payload === 'object' ? Object.keys(payload).slice(0, 20) : [],
-    source: 'manual-payload'
-  };
 }
 
 function applyLogin(login, summary = null) {
@@ -619,226 +295,25 @@ function applyLogin(login, summary = null) {
 async function submitCallback(callbackUrl) {
   const rawInput = String(callbackUrl || '').trim();
   if (!rawInput) throw new Error('callback URL is empty');
-  if (/^curl\s+/i.test(rawInput) && /connect\.linux\.do\/oauth2\/approve\//i.test(rawInput)) {
-    return submitApproveCurl(rawInput);
-  }
-  if (/^\{/.test(rawInput)) {
-    let payload;
-    try {
-      payload = JSON.parse(rawInput);
-    } catch (err) {
-      throw new Error('invalid JSON login payload: ' + (err.message || String(err)));
-    }
-    const login = extractLoginData(payload);
-    return applyLogin(login, summarizeLoginPayload(payload));
-  }
-  const url = normalizeCallbackUrl(callbackUrl);
-  const directLogin = extractLoginDataFromUrl(url);
-  if (directLogin.userId && directLogin.sessionToken) {
-    state.callbackUrl = url;
-    return applyLogin(directLogin, { source: 'direct-login-url' });
-  }
-  logEvent('callback-submit', { callbackUrl: url });
-  return submitGameCallbackUrl(url);
-}
-
-async function submitApproveCurl(rawInput) {
-  const request = parseCurlCommand(rawInput);
-  const parsed = new URL(request.url);
-  if (parsed.origin !== 'https://connect.linux.do' || !parsed.pathname.startsWith('/oauth2/approve/')) {
-    throw new Error('approve curl must target https://connect.linux.do/oauth2/approve/...');
-  }
-  if (!request.headers.cookie) {
-    throw new Error('approve curl is missing Cookie header; use browser DevTools "Copy as cURL" for the LinuxDO approve request');
-  }
-  logEvent('approve-curl-submit', {
-    url: request.url,
-    method: request.method,
-    headerNames: Object.keys(request.headers)
-  });
-  const approveResponse = await fetchWithTimeout(request.url, {
-    method: request.method,
-    redirect: 'manual',
-    headers: request.headers,
-    body: request.body,
-    cache: 'no-store'
-  });
-  const approveLocation = resolveLocation(approveResponse.headers.get('location') || '', request.url);
-  const approveBody = await readResponseBody(approveResponse);
-  const approveSummary = {
-    status: approveResponse.status,
-    location: redact(approveLocation),
-    contentType: approveResponse.headers.get('content-type') || '',
-    textLength: approveBody.text.length,
-    textSample: redact(approveBody.text.slice(0, 500))
-  };
-  logEvent('approve-curl-result', approveSummary);
-  if (!approveLocation || new URL(approveLocation).origin !== GAME_ORIGIN) {
-    state.lastCallbackDebug = redactStructured({ source: 'approve-curl', approve: approveSummary });
-    state.lastError = 'approve request did not redirect to game callback';
-    persistState();
-    throw new Error(`approve request did not redirect to game callback; status=${approveResponse.status}, location=${approveSummary.location || 'none'}`);
-  }
-  return submitGameCallbackUrl(approveLocation, { source: 'approve-curl', approve: approveSummary });
-}
-
-async function submitGameCallbackUrl(url, extraSummary = {}) {
-  const response = await fetchWithTimeout(url, {
-    method: 'GET',
-    redirect: 'manual',
-    cache: 'no-store'
-  });
-  const body = await readResponseBody(response);
-  const location = resolveLocation(response.headers.get('location') || '', url);
-  const refreshUrl = extractMetaRefreshUrl(body.text, url);
-  const summary = {
-    ...extraSummary,
-    status: response.status,
-    ok: response.ok,
-    finalUrl: redact(response.url || url),
-    location: redact(location),
-    refreshUrl: redact(refreshUrl),
-    redirected: response.status >= 300 && response.status < 400,
-    contentType: response.headers.get('content-type') || '',
-    setCookiePresent: Boolean(response.headers.get('set-cookie')),
-    jsonKeys: body.json && typeof body.json === 'object' ? Object.keys(body.json).slice(0, 20) : [],
-    textLength: body.text.length,
-    textSample: body.json ? '' : redact(body.text.slice(0, 500))
-  };
-  let login = extractLoginData(body.json || {});
-  if (!login.userId || !login.sessionToken) login = extractLoginDataFromText(body.text);
-  if ((!login.userId || !login.sessionToken) && location) login = extractLoginDataFromUrl(location);
-  if ((!login.userId || !login.sessionToken) && refreshUrl) login = extractLoginDataFromUrl(refreshUrl);
-  if (!login.userId || !login.sessionToken) login = extractLoginDataFromUrl(response.url);
-  const safeSummary = redactStructured(summary);
-  state.lastCallbackDebug = safeSummary;
-  if (!response.ok && !summary.redirected) {
-    state.lastError = `callback HTTP ${response.status}`;
-    state.loginPayloadSummary = safeSummary;
-    persistState();
-    logEvent('callback-failed', { callbackUrl: url, summary: safeSummary });
-    throw new Error(`callback HTTP ${response.status}: ${redact((body.text || '<empty body>').slice(0, 240))}`);
-  }
-  if (!login.userId || !login.sessionToken) {
-    state.lastError = 'callback did not return userId/sessionToken';
-    state.loginPayloadSummary = safeSummary;
-    persistState();
-    logEvent('callback-unrecognized', { callbackUrl: url, summary: safeSummary, body: body.json || body.text.slice(0, 1000) });
-    throw new Error(`callback response did not expose userId/sessionToken; status=${response.status}, content-type=${summary.contentType || 'unknown'}, location=${summary.location || 'none'}, refresh=${summary.refreshUrl || 'none'}, body=${body.text ? redact(body.text.slice(0, 240)) : 'empty'}`);
-  }
-  state.callbackUrl = redact(url);
-  return applyLogin(login, safeSummary);
-}
-
-function parseCurlCommand(input) {
-  const tokens = tokenizeShellLike(input);
-  if (!tokens.length || tokens[0] !== 'curl') throw new Error('expected a curl command');
-  const request = {
-    url: '',
-    method: 'GET',
-    headers: {},
-    body: null
-  };
-  for (let i = 1; i < tokens.length; i += 1) {
-    const token = tokens[i];
-    if (token === '-H' || token === '--header') {
-      const header = tokens[++i] || '';
-      const index = header.indexOf(':');
-      if (index > 0) {
-        const name = header.slice(0, index).trim().toLowerCase();
-        const value = header.slice(index + 1).trim();
-        if (name && !forbiddenForwardHeader(name)) request.headers[name] = value;
-      }
-      continue;
-    }
-    if (token === '-b' || token === '--cookie' || token === '--cookie-jar') {
-      const cookie = tokens[++i] || '';
-      if (cookie && token !== '--cookie-jar') request.headers.cookie = cookie;
-      continue;
-    }
-    if (token === '-X' || token === '--request') {
-      request.method = String(tokens[++i] || 'GET').toUpperCase();
-      continue;
-    }
-    if (token === '--data' || token === '--data-raw' || token === '--data-binary' || token === '-d') {
-      request.body = tokens[++i] || '';
-      if (request.method === 'GET') request.method = 'POST';
-      continue;
-    }
-    if (token === '-A' || token === '--user-agent') {
-      request.headers['user-agent'] = tokens[++i] || '';
-      continue;
-    }
-    if (token === '-e' || token === '--referer') {
-      request.headers.referer = tokens[++i] || '';
-      continue;
-    }
-    if (token.startsWith('http://') || token.startsWith('https://')) {
-      request.url = token;
-    }
-  }
-  if (!request.url) throw new Error('curl command did not contain a URL');
-  if (request.body !== null) request.headers['content-type'] = request.headers['content-type'] || 'application/x-www-form-urlencoded';
-  return request;
-}
-
-function forbiddenForwardHeader(name) {
-  return [
-    'host',
-    'connection',
-    'content-length',
-    'upgrade',
-    'sec-websocket-key',
-    'sec-websocket-version',
-    'sec-websocket-extensions'
-  ].includes(String(name || '').toLowerCase());
-}
-
-function tokenizeShellLike(input) {
-  const text = String(input || '').replace(/\\\r?\n/g, ' ');
-  const tokens = [];
-  let current = '';
-  let quote = '';
-  for (let i = 0; i < text.length; i += 1) {
-    const ch = text[i];
-    if (quote) {
-      if (ch === quote) {
-        quote = '';
-      } else if (ch === '\\' && quote === '"' && i + 1 < text.length) {
-        current += text[++i];
-      } else {
-        current += ch;
-      }
-      continue;
-    }
-    if (ch === '"' || ch === "'") {
-      quote = ch;
-      continue;
-    }
-    if (/\s/.test(ch)) {
-      if (current) {
-        tokens.push(current);
-        current = '';
-      }
-      continue;
-    }
-    if (ch === '\\' && i + 1 < text.length) {
-      current += text[++i];
-      continue;
-    }
-    current += ch;
-  }
-  if (quote) throw new Error('unterminated quote in curl command');
-  if (current) tokens.push(current);
-  return tokens;
-}
-
-function resolveLocation(location, baseUrl) {
-  if (!location) return '';
+  logEvent('callback-submit', { callbackUrl: redact(rawInput.slice(0, 1000)) });
   try {
-    return new URL(location, baseUrl).toString();
-  } catch (_) {
-    return String(location || '');
+    const result = await submitCallbackInput(rawInput, {
+      gameOrigin: GAME_ORIGIN,
+      timeoutMs: HTTP_TIMEOUT_MS
+    });
+    if (result.callbackUrl) state.callbackUrl = redact(result.callbackUrl);
+    if (result.debug || result.summary) state.lastCallbackDebug = redactStructured(result.debug || result.summary);
+    return applyLogin(result.login, result.summary);
+  } catch (err) {
+    const safeSummary = err?.summary ? redactStructured(err.summary) : null;
+    if (safeSummary) {
+      state.lastCallbackDebug = safeSummary;
+      state.loginPayloadSummary = safeSummary;
+    }
+    state.lastError = err?.message || String(err);
+    persistState();
+    logEvent('callback-failed', { error: state.lastError, summary: safeSummary });
+    throw err;
   }
 }
 
@@ -1152,49 +627,45 @@ function wsSend(ws, message) {
 }
 
 async function leaveOnce(stage = 'initial') {
-  if (!state.userId || !state.sessionToken) throw new Error('not logged in');
-  const url = `${GAME_ORIGIN}/leave?user_id=${encodeURIComponent(state.userId)}&token=${encodeURIComponent(state.sessionToken)}`;
-  const startedAt = Date.now();
-  logEvent('leave-request', { stage, url });
-  const response = await fetchWithTimeout(url, { method: 'GET', cache: 'no-store' });
-  const body = await readResponseBody(response);
-  const result = {
+  const result = await browserlessLeaveOnce({
+    gameOrigin: GAME_ORIGIN,
+    userId: state.userId,
+    sessionToken: state.sessionToken,
+    timeoutMs: HTTP_TIMEOUT_MS,
     stage,
-    httpOk: response.ok,
-    status: response.status,
-    statusText: response.statusText || '',
-    durationMs: Date.now() - startedAt,
-    response: body.json || { textSample: body.text.slice(0, 1000) }
-  };
-  result.ok = leaveResponseConfirmsExitCore(result.response);
-  result.summary = summarizeLeaveResponseCore(result.response);
+    onRequest: detail => logEvent('leave-request', detail)
+  });
   logEvent('leave-result', result);
   return result;
 }
 
 async function leaveWithVerification() {
-  const attempts = [];
-  for (let index = 0; index <= LEAVE_RETRY_MAX; index += 1) {
-    const result = await leaveOnce(index === 0 ? 'initial' : `retry-${index}`);
-    attempts.push(result);
-    if (result.ok) {
-      state.inGame = false;
-      state.lastLeaveAt = Date.now();
-      state.lastLeaveSummary = result.summary || null;
-      state.lastSelfSummary = summarizeEntity(result.response) || state.lastSelfSummary;
-      state.leaveAlert = '';
-      state.lastError = '';
-      persistState();
-      return { ok: true, attempts };
-    }
-    if (index < LEAVE_RETRY_MAX) await sleep(LEAVE_RETRY_MS);
+  const result = await browserlessLeaveWithVerification({
+    gameOrigin: GAME_ORIGIN,
+    userId: state.userId,
+    sessionToken: state.sessionToken,
+    timeoutMs: HTTP_TIMEOUT_MS,
+    retryMax: LEAVE_RETRY_MAX,
+    retryDelayMs: LEAVE_RETRY_MS,
+    sleep,
+    leaveOnceImpl: options => leaveOnce(options.stage)
+  });
+  const confirmed = result.attempts.find(attempt => attempt?.ok);
+  if (confirmed) {
+    state.inGame = false;
+    state.lastLeaveAt = Date.now();
+    state.lastLeaveSummary = confirmed.summary || null;
+    state.lastSelfSummary = summarizeGrzEntity(confirmed.response) || state.lastSelfSummary;
+    state.leaveAlert = '';
+    state.lastError = '';
+    persistState();
+    return result;
   }
-  const last = attempts[attempts.length - 1] || null;
-  state.leaveAlert = `LEAVE NOT CONFIRMED${last ? `: HTTP ${last.status}, response ${JSON.stringify(last.summary || last.response || {}).slice(0, 200)}` : ''}`;
+  state.leaveAlert = result.alert || 'LEAVE NOT CONFIRMED';
   state.lastError = state.leaveAlert;
   persistState();
-  logEvent('leave-alert', { leaveAlert: state.leaveAlert, attempts });
-  return { ok: false, attempts };
+  logEvent('leave-alert', { leaveAlert: state.leaveAlert, attempts: result.attempts });
+  return result;
 }
 
 async function runActionDemo() {

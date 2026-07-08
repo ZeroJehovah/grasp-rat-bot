@@ -25,6 +25,17 @@ const {
   summarizeGrzJson
 } = require('../shared/grz-frame');
 const {
+  fetchWithTimeout: browserlessFetchWithTimeout,
+  redactSecrets,
+  redactStructuredSecrets,
+  submitGameCallbackUrl,
+  summarizeSnapshotPayload
+} = require('./browserless/session-client');
+const {
+  leaveOnce: browserlessLeaveOnce,
+  leaveWithVerification: browserlessLeaveWithVerification
+} = require('./browserless/leave-client');
+const {
   createNoSelfSnapshotRecoveryRuntime,
   shouldClearTmpGameLocalSessionKey
 } = require('../browser/runtime/no-self-snapshot-recovery-runtime');
@@ -5073,6 +5084,27 @@ async function runSelfTest() {
     ]);
   }
 
+  function fakeHeadersForTest(values = {}) {
+    const normalized = {};
+    for (const [key, value] of Object.entries(values)) normalized[String(key).toLowerCase()] = String(value);
+    return {
+      get: name => normalized[String(name || '').toLowerCase()] || ''
+    };
+  }
+
+  function fakeResponseForTest(options = {}) {
+    const status = Number(options.status ?? 200);
+    const body = options.body === undefined ? {} : options.body;
+    return {
+      ok: options.ok ?? (status >= 200 && status < 300),
+      status,
+      statusText: options.statusText || '',
+      url: options.url || 'https://grasp-rat-game.h-e.top/auth/linuxdo/callback?code=fake-code',
+      headers: fakeHeadersForTest(options.headers || {}),
+      text: async () => (typeof body === 'string' ? body : JSON.stringify(body))
+    };
+  }
+
   const cases = [
     {
       name: 'strategy module self-tests pass',
@@ -5181,6 +5213,155 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'snapshot|88|0|0|2|1|1001|55|12|9'
+    },
+    {
+      name: 'browserless session client parses callback meta refresh login',
+      got: (async () => {
+        const origin = 'https://grasp-rat-game.h-e.top';
+        const result = await submitGameCallbackUrl(`${origin}/auth/linuxdo/callback?code=secret-code`, {
+          gameOrigin: origin,
+          fetchImpl: async url => fakeResponseForTest({
+            url,
+            headers: { 'content-type': 'text/html' },
+            body: '<html><head><meta http-equiv="refresh" content="0; url=/?login=ok&amp;user_id=42&amp;token=secret-token&amp;linux_do_id=9"></head></html>'
+          })
+        });
+        return [
+          result.login.userId,
+          result.login.sessionToken,
+          result.summary.finalUrl.includes('[redacted]'),
+          result.summary.refreshUrl.includes('[redacted]'),
+          result.summary.textSample.includes('[redacted]')
+        ].join('|');
+      })(),
+      want: '42|secret-token|true|true|true'
+    },
+    {
+      name: 'browserless session redaction covers URLs cookies and bearer tokens',
+      got: (() => {
+        const text = redactSecrets('https://x.test/?code=abc&token=def &amp;token=ghi auth.session-token=jkl; Authorization: Bearer mno.pqr');
+        const structured = redactStructuredSecrets({
+          token: 'abc',
+          nested: {
+            sessionToken: 'def',
+            url: 'https://x.test/?secret=ghi'
+          }
+        });
+        return [
+          !/(abc|def|ghi|jkl|mno\.pqr)/.test(text),
+          structured.token,
+          structured.nested.sessionToken,
+          structured.nested.url.includes('[redacted]')
+        ].join('|');
+      })(),
+      want: 'true|[redacted]|[redacted]|true'
+    },
+    {
+      name: 'browserless leave client summarizes confirmed leave response',
+      got: (async () => {
+        const result = await browserlessLeaveOnce({
+          gameOrigin: 'https://grasp-rat-game.h-e.top',
+          userId: 7,
+          sessionToken: 'leave-token',
+          now: (() => {
+            let value = 1000;
+            return () => {
+              value += 25;
+              return value;
+            };
+          })(),
+          fetchImpl: async () => fakeResponseForTest({
+            body: {
+              ok: true,
+              event: 'left',
+              joined: 'UserRecordOnly',
+              current_join_mode: 'None',
+              life: 'Alive',
+              visible: 'Hidden'
+            }
+          })
+        });
+        return [
+          result.ok,
+          result.httpOk,
+          result.status,
+          result.summary.leaveConfirmed,
+          result.summary.event,
+          result.summary.joined,
+          result.durationMs
+        ].join('|');
+      })(),
+      want: 'true|true|200|true|left|UserRecordOnly|25'
+    },
+    {
+      name: 'browserless leave client retries until verified leave',
+      got: (async () => {
+        let calls = 0;
+        const result = await browserlessLeaveWithVerification({
+          retryMax: 2,
+          retryDelayMs: 0,
+          sleep: async () => {},
+          leaveOnceImpl: async ({ stage }) => {
+            calls += 1;
+            return calls < 2
+              ? { stage, ok: false, status: 200, summary: { leaveConfirmed: false } }
+              : { stage, ok: true, status: 200, summary: { leaveConfirmed: true }, response: { event: 'left' } };
+          }
+        });
+        return [
+          result.ok,
+          calls,
+          result.attempts.map(item => item.stage).join(',')
+        ].join('|');
+      })(),
+      want: 'true|2|initial,retry-1'
+    },
+    {
+      name: 'browserless fetch timeout aborts stalled requests',
+      got: (async () => {
+        try {
+          await browserlessFetchWithTimeout('https://example.test/stall', {
+            timeoutMs: 1,
+            fetchImpl: (_url, options) => new Promise((_resolve, reject) => {
+              options.signal.addEventListener('abort', () => reject(new Error('aborted')));
+            })
+          });
+          return false;
+        } catch (err) {
+          return /abort/i.test(err?.message || String(err));
+        }
+      })(),
+      want: true
+    },
+    {
+      name: 'browserless snapshot safety rejects stale active login-point evidence',
+      got: (() => {
+        const summary = summarizeSnapshotPayload({
+          type: 'snapshot',
+          tick: 90,
+          entities: [
+            { user_id: 8, name: 'near-active', x: 100, y: 0, current_join_mode: 'Active', life: 'Alive' }
+          ],
+          bullets: [],
+          coin_drops: [],
+          messages: []
+        }, {
+          userId: 7,
+          loginPoint: { x: 0, y: 0, hp: 100, source: 'test' },
+          latestKnownTick: 100,
+          healthyHpThreshold: 80,
+          healthyRadius: 17000,
+          lowRadius: 30000
+        });
+        return [
+          summary.valid,
+          summary.safety.ok,
+          summary.safety.reason,
+          summary.safety.freshness.reason,
+          summary.safety.activeNearbyCount
+        ].join('|');
+      })(),
+      want: 'true|false|stale-snapshot-tick|stale-snapshot-tick|1'
     },
     {
       name: 'final arbitration keeps recent safety action over profit',

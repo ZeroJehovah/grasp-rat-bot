@@ -88,7 +88,7 @@ Update this table in the same task that completes each feature.
 | --- | --- | --- |
 | Commit 1: Extract Shared Frame Parser | Complete | `src/shared/grz-frame.js` owns `GRZ1` gzip JSON parsing and deterministic summaries; `headless-demo/server.js` calls the shared parser; `node grasp-rat-bot.js --self-test` includes focused parser coverage. |
 | Commit 2: Add Pre-Login Snapshot Safety Probe | Complete | `headless-demo/server.js` exposes `lastSnapshotProbe` with cache-busted freshness checks; `headless-demo/README.md` documents the operator flow; `docs/agent/browserless-vps-migration.md` records the fresh VPS validation. |
-| Commit 3: Create Node Browserless Session And Leave Client | Not started | No `src/node/browserless/session-client.js` or `leave-client.js` yet. |
+| Commit 3: Create Node Browserless Session And Leave Client | Complete | `src/node/browserless/session-client.js` owns callback/meta-refresh/curl parsing, redaction, timeout fetch, and snapshot safety summaries; `src/node/browserless/leave-client.js` owns direct verified leave and retry summaries; `headless-demo/server.js` uses both modules. |
 | Commit 4: Add Browserless WebSocket Transport | Not started | No `src/node/browserless/ws-transport.js` yet. |
 | Commit 5: Add Browserless State Store | Not started | No `src/node/browserless/state-store.js` yet. |
 | Commit 6: Add Local Log Store And Retention | Not started | No browserless local log store or summary script yet. |
