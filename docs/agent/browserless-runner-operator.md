@@ -6,6 +6,7 @@ This document tracks the production browserless runner surface. The older `headl
 
 - The runner currently supports dry-run mode and a live read-only canary.
 - Live read-only canary sends no movement or shoot commands. It runs pre-login snapshot safety, joins direct WS, collects frame health, and calls verified `leave`.
+- The safety controller handles no-self, frame gap, stale self, WS close/error, stamina exhaustion, unsafe login point, direct leave failure, and explicit stop.
 - The runner writes local JSONL logs and a persistent state file under the configured data directory.
 - The status server and web panel are available for non-`--once` runs.
 
@@ -55,12 +56,14 @@ node scripts/browserless-runner.js \
 
 For the first supervised validation, use 10-30 minutes for `--read-only-probe-ms`. The canary should end with verified `leave`; if leave is not confirmed, treat the run as failed and inspect `runner.jsonl`. Inspect `decisions.jsonl` to confirm combat candidates use realtime authority and snapshot coins appear only as fallback profit candidates.
 
+During a supervised run, `POST /api/stop` or the panel Stop button requests an explicit safety stop. The runner records the event in `exits.jsonl` and should leave through the verified direct `leave` path.
+
 ## Status API
 
 - `GET /` serves the built-in browserless runner panel.
 - `GET /api/health` returns a simple local health response.
 - `GET /api/status` returns redacted status and requires the configured web token.
-- `POST /api/stop` is token-gated and currently a placeholder until the safety/exit controller owns stop behavior.
+- `POST /api/stop` is token-gated and requests an explicit safety stop through the safety/exit controller.
 
 The token can be passed with `?token=...`, `x-web-token`, or `Authorization: Bearer ...`.
 
@@ -106,6 +109,9 @@ Important variables:
 - `GRASP_RAT_BROWSERLESS_READONLY_PROBE_MS`
 - `GRASP_RAT_BROWSERLESS_FRAME_GAP_ALERT_MS`
 - `GRASP_RAT_BROWSERLESS_DECISION_INTERVAL_MS`
+- `GRASP_RAT_BROWSERLESS_STALE_SELF_MS`
+- `GRASP_RAT_BROWSERLESS_NO_SELF_GRACE_MS`
+- `GRASP_RAT_BROWSERLESS_STAMINA_EXHAUSTED_BELOW_MS`
 - `GRASP_RAT_BROWSERLESS_USER_ID`
 - `GRASP_RAT_BROWSERLESS_SESSION_TOKEN`
 - `GRASP_RAT_BROWSERLESS_LOGIN_POINT_X`

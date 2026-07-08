@@ -58,6 +58,11 @@ const {
   runReadOnlyCanary
 } = require('./browserless/canary');
 const {
+  createBrowserlessSafetyController,
+  evaluateBrowserlessSafety,
+  executeSafetyExit
+} = require('./browserless/safety-controller');
+const {
   createLocalLogStore
 } = require('./browserless/local-log-store');
 const {
@@ -5881,6 +5886,83 @@ async function runSelfTest() {
       want: 'false|missing-login-point|snapshot safety not confirmed: missing-login-point|false'
     },
     {
+      name: 'browserless safety controller classifies unsafe states',
+      got: (() => {
+        const safeSelf = { user_id: 7, x: 1, y: 2, hp: 90, stamina_5s_remaining_milli: 1000 };
+        const checks = [
+          evaluateBrowserlessSafety({}, { snapshotSafety: { ok: false, reason: 'active-near-login-point' }, nowMs: 1000 }).reason,
+          evaluateBrowserlessSafety({}, { wsError: { message: 'boom' }, nowMs: 1000 }).reason,
+          evaluateBrowserlessSafety({}, { wsClosed: { code: 1006 }, nowMs: 1000 }).reason,
+          evaluateBrowserlessSafety({ realtime: { self: safeSelf, frameAgeMs: 10 }, frameAges: { latestFrameAgeMs: 6000 } }, { nowMs: 7000, frameGapAlertMs: 5000 }).reason,
+          evaluateBrowserlessSafety({ realtime: { self: null, frameAgeMs: null }, frameAges: {} }, { startedAtMs: 1000, nowMs: 5000, noSelfGraceMs: 3000 }).reason,
+          evaluateBrowserlessSafety({ realtime: { self: safeSelf, frameAgeMs: 4000 }, frameAges: {} }, { nowMs: 5000, staleSelfMs: 3000 }).reason,
+          evaluateBrowserlessSafety({ realtime: { self: { ...safeSelf, stamina_5s_remaining_milli: 100 }, frameAgeMs: 10 }, frameAges: {} }, { nowMs: 5000, staminaExhaustedBelowMs: 200 }).reason,
+          evaluateBrowserlessSafety({}, { leaveResult: { ok: false, attempts: [{ status: 500, summary: { leaveConfirmed: false } }] }, nowMs: 5000 }).reason
+        ];
+        return checks.join('|');
+      })(),
+      want: 'unsafe-login-point|ws-error|ws-closed|frame-gap|no-self|stale-self|stamina-exhausted|direct-leave-failed'
+    },
+    {
+      name: 'browserless safety controller explicit stop persists until cleared',
+      got: (() => {
+        let t = 1000;
+        const controller = createBrowserlessSafetyController({ now: () => t });
+        const requested = controller.requestStop('explicit-stop', { source: 'test' });
+        t = 1200;
+        const stopped = controller.evaluate({
+          realtime: { self: { user_id: 7, x: 1, y: 2, stamina_5s_remaining_milli: 1000 }, frameAgeMs: 10 },
+          frameAges: {}
+        }, { nowMs: t });
+        controller.clearStop();
+        const clear = controller.evaluate({
+          realtime: { self: { user_id: 7, x: 1, y: 2, stamina_5s_remaining_milli: 1000 }, frameAgeMs: 10 },
+          frameAges: {}
+        }, { nowMs: t });
+        return [
+          requested.reason,
+          requested.detail.source,
+          stopped.reason,
+          clear.ok,
+          clear.reason
+        ].join('|');
+      })(),
+      want: 'explicit-stop|test|explicit-stop|true|safe'
+    },
+    {
+      name: 'browserless safety exit sends stop motion and verified leave',
+      got: (async () => {
+        const sent = [];
+        const result = await executeSafetyExit({
+          reason: 'frame-gap',
+          shouldLeave: true,
+          stopMotion: true
+        }, {
+          gameOrigin: 'https://grasp-rat-game.h-e.top',
+          userId: 7,
+          sessionToken: 'safety-token'
+        }, {
+          allowStopMotion: true,
+          transport: {
+            sendVelocity: (dx, dy) => sent.push(`${dx},${dy}`)
+          },
+          leaveWithVerification: async options => ({
+            ok: true,
+            attempts: [{ ok: true, userId: options.userId, summary: { leaveConfirmed: true } }]
+          })
+        });
+        return [
+          result.ok,
+          result.stopMotion.sent,
+          sent.join(';'),
+          result.leave.ok,
+          result.leave.attempts[0].userId,
+          result.leaveFailure === null
+        ].join('|');
+      })(),
+      want: 'true|true|0,0|true|7|true'
+    },
+    {
       name: 'browserless combat selector source does not reference snapshot state',
       got: /snapshot|fallback|coinDrops/.test(selectRealtimeCombatState.toString()),
       want: false
@@ -5975,6 +6057,12 @@ async function runSelfTest() {
           'cli-token',
           '--decision-interval-ms',
           '250',
+          '--stale-self-ms',
+          '3500',
+          '--no-self-grace-ms',
+          '4500',
+          '--stamina-exhausted-below-ms',
+          '150',
           '--login-point-x',
           '123',
           '--login-point-y',
@@ -5995,13 +6083,16 @@ async function runSelfTest() {
           config.userId,
           config.sessionToken,
           config.decisionIntervalMs,
+          config.staleSelfMs,
+          config.noSelfGraceMs,
+          config.staminaExhaustedBelowMs,
           config.loginPointX,
           config.loginPointY,
           config.loginPointHp,
           config.logDir.endsWith('/tmp/grasp-rat-runner/logs')
         ].join('|');
       })(),
-      want: 'true|false|19999|cli-token|42|env-token|250|123|456|90|true'
+      want: 'true|false|19999|cli-token|42|env-token|250|3500|4500|150|123|456|90|true'
     },
     {
       name: 'browserless runner dry-run and fake read-only path write redacted logs',

@@ -35,7 +35,7 @@ function renderBrowserlessWebPanel() {
   <main>
     <header>
       <h1>Grasp Rat Browserless Runner</h1>
-      <div class="bar"><span id="stamp" class="pill">--</span><button id="refreshBtn" type="button">Refresh</button></div>
+      <div class="bar"><span id="stamp" class="pill">--</span><button id="refreshBtn" type="button">Refresh</button><button id="stopBtn" type="button">Stop</button></div>
     </header>
     <div class="grid">
       <section>
@@ -96,6 +96,14 @@ function renderBrowserlessWebPanel() {
       document.getElementById('raw').textContent = JSON.stringify(s, null, 2);
     }
     document.getElementById('refreshBtn').onclick = () => refresh().catch(err => {
+      document.getElementById('stamp').textContent = err.message;
+      document.getElementById('stamp').className = 'pill bad';
+    });
+    document.getElementById('stopBtn').onclick = () => (async () => {
+      const res = await fetch('/api/stop' + (token ? '?token=' + encodeURIComponent(token) : ''), { method: 'POST' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      await refresh();
+    })().catch(err => {
       document.getElementById('stamp').textContent = err.message;
       document.getElementById('stamp').className = 'pill bad';
     });

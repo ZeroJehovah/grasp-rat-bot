@@ -16,6 +16,7 @@ const {
 const { startStatusServer } = require('./status-server');
 const { runReadOnlyCanary } = require('./canary');
 const { decisionStatePatch } = require('./decision-adapter');
+const { createBrowserlessSafetyController } = require('./safety-controller');
 
 function publicConfig(config) {
   return {
@@ -35,6 +36,9 @@ function publicConfig(config) {
     readOnlyProbeMs: Number(config.readOnlyProbeMs || 0),
     frameGapAlertMs: Number(config.frameGapAlertMs || 0),
     decisionIntervalMs: Number(config.decisionIntervalMs || 0),
+    staleSelfMs: Number(config.staleSelfMs || 0),
+    noSelfGraceMs: Number(config.noSelfGraceMs || 0),
+    staminaExhaustedBelowMs: Number(config.staminaExhaustedBelowMs || 0),
     stateFile: config.stateFile || stateFilePath(config),
     loginPointPresent: Number.isFinite(Number(config.loginPointX)) && Number.isFinite(Number(config.loginPointY)),
     userId: Number(config.userId || 0),
@@ -45,6 +49,13 @@ function publicConfig(config) {
 async function runBrowserlessRunner(config, deps = {}) {
   const now = typeof deps.now === 'function' ? deps.now : Date.now;
   const logStore = deps.logStore || createLocalLogStore({ logDir: config.logDir, now });
+  const safetyController = deps.safetyController || createBrowserlessSafetyController({
+    now,
+    frameGapAlertMs: config.frameGapAlertMs,
+    staleSelfMs: config.staleSelfMs,
+    noSelfGraceMs: config.noSelfGraceMs,
+    staminaExhaustedBelowMs: config.staminaExhaustedBelowMs
+  });
   const stateFile = config.stateFile || stateFilePath(config);
   fs.mkdirSync(config.dataDir, { recursive: true });
   const retention = cleanupOldLogDays(config.logDir, {
@@ -100,7 +111,20 @@ async function runBrowserlessRunner(config, deps = {}) {
       host: config.statusHost,
       port: config.statusPort,
       webToken: config.webToken,
-      getStatus: () => buildPublicBrowserlessStatus(readBrowserlessStateFile(stateFile), config)
+      getStatus: () => buildPublicBrowserlessStatus(readBrowserlessStateFile(stateFile), config),
+      onStop: async () => {
+        const event = safetyController.requestStop('explicit-stop', { source: 'status-api' });
+        const currentState = readBrowserlessStateFile(stateFile);
+        updateBrowserlessStateFile(stateFile, {
+          runner: {
+            lastError: event.reason,
+            currentAction: { kind: 'stop', band: 'safety', reason: event.reason }
+          },
+          recentExits: [...(currentState.recentExits || []), event].slice(-20)
+        }, { updatedAt: new Date(now()).toISOString() });
+        logStore.append('exits', 'stop-request', event);
+        return { ok: true, event };
+      }
     });
   }
 
@@ -161,6 +185,7 @@ async function runBrowserlessRunner(config, deps = {}) {
     logStore,
     now,
     persistedState: readBrowserlessStateFile(stateFile),
+    safetyController,
     onDecision: decision => {
       updateBrowserlessStateFile(stateFile, decisionStatePatch(decision), {
         updatedAt: new Date(now()).toISOString()
@@ -169,8 +194,13 @@ async function runBrowserlessRunner(config, deps = {}) {
   });
   const result = { ok: Boolean(canary?.ok), mode: 'read-only', canary: canary || null };
   const finalDecisionPatch = canary?.decisions?.last ? decisionStatePatch(canary.decisions.last) : {};
+  const safetyEvents = [canary?.safety?.event, canary?.safety?.leaveFailure].filter(Boolean);
+  const currentStateBeforeFinish = readBrowserlessStateFile(stateFile);
   updateBrowserlessStateFile(stateFile, {
     ...finalDecisionPatch,
+    ...(safetyEvents.length ? {
+      recentExits: [...(currentStateBeforeFinish.recentExits || []), ...safetyEvents].slice(-20)
+    } : {}),
     runner: {
       ...(finalDecisionPatch.runner || {}),
       running: !config.once,
