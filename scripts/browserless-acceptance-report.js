@@ -17,6 +17,7 @@ function parseArgs(argv) {
     skipSystemctl: false,
     unitPath: '',
     envPath: '',
+    deploymentEnvMode: 'any',
     dataDir: '',
     deploymentLogDir: '',
     json: false,
@@ -34,6 +35,7 @@ function parseArgs(argv) {
     else if (arg === '--skip-systemctl') out.skipSystemctl = true;
     else if (arg === '--unit') out.unitPath = argv[++i] || '';
     else if (arg === '--env') out.envPath = argv[++i] || '';
+    else if (arg === '--deployment-env-mode') out.deploymentEnvMode = argv[++i] || out.deploymentEnvMode;
     else if (arg === '--data-dir') out.dataDir = argv[++i] || '';
     else if (arg === '--deployment-log-dir') out.deploymentLogDir = argv[++i] || '';
     else if (arg === '--json') out.json = true;
@@ -61,6 +63,7 @@ function buildAcceptanceReport(options = {}, deps = {}) {
     const deployment = deploymentAudit({
       unitPath: options.unitPath || undefined,
       envPath: options.envPath || undefined,
+      envMode: options.deploymentEnvMode || 'any',
       dataDir: options.dataDir || undefined,
       logDir: options.deploymentLogDir || undefined,
       skipSystemctl: Boolean(options.skipSystemctl)
@@ -117,6 +120,7 @@ function buildAcceptanceReport(options = {}, deps = {}) {
     profiles,
     includeStop: options.includeStop !== false,
     skipDeployment: Boolean(options.skipDeployment),
+    deploymentEnvMode: options.deploymentEnvMode || 'any',
     sections,
     failed: failed.map(section => ({
       key: section.key,
@@ -139,10 +143,10 @@ function formatHuman(report) {
 
 function usage() {
   return [
-    'Usage: node scripts/browserless-acceptance-report.js [--log-dir <dir>] [--day YYYY-MM-DD] [--profiles a,b] [--no-stop] [--skip-deployment] [--skip-systemctl] [--json] [--fail-on-incomplete]',
+    'Usage: node scripts/browserless-acceptance-report.js [--log-dir <dir>] [--day YYYY-MM-DD] [--profiles a,b] [--no-stop] [--skip-deployment] [--skip-systemctl] [--deployment-env-mode safe|live|any] [--json] [--fail-on-incomplete]',
     '',
     'Aggregates browserless deployment and staged canary audit results for cutover review.',
-    'Defaults require deployment, read-only forced-stop, and all staged canary profiles.'
+    'Defaults require deployment, read-only forced-stop, and all staged canary profiles. Deployment env mode defaults to any so final reports can run after live canary env changes.'
   ].join('\n');
 }
 

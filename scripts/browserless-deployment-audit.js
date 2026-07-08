@@ -10,6 +10,9 @@ const DEFAULT_UNIT_PATH = `/etc/systemd/system/${DEFAULT_SERVICE_NAME}.service`;
 const DEFAULT_ENV_PATH = '/etc/grasp-rat/browserless-runner.env';
 const DEFAULT_DATA_DIR = '/var/lib/grasp-rat-browserless';
 const DEFAULT_LOG_DIR = '/var/log/grasp-rat-browserless';
+const VALID_ENV_MODES = new Set(['safe', 'live', 'any']);
+const VALID_CONTROL_MODES = new Set(['read-only', 'movement-only', 'non-combat-profit', 'combat-dry-run', 'combat-live']);
+const VALID_CANARY_PROFILES = new Set(['read-only', 'movement-only', 'profit', 'combat-dry-run', 'combat-live']);
 
 function parseArgs(argv) {
   const out = {
@@ -18,6 +21,7 @@ function parseArgs(argv) {
     envPath: DEFAULT_ENV_PATH,
     dataDir: '',
     logDir: '',
+    envMode: 'safe',
     skipSystemctl: false,
     json: false,
     failOnIncomplete: false,
@@ -30,6 +34,7 @@ function parseArgs(argv) {
     else if (arg === '--env') out.envPath = argv[++i] || out.envPath;
     else if (arg === '--data-dir') out.dataDir = argv[++i] || out.dataDir;
     else if (arg === '--log-dir') out.logDir = argv[++i] || out.logDir;
+    else if (arg === '--env-mode') out.envMode = argv[++i] || out.envMode;
     else if (arg === '--skip-systemctl') out.skipSystemctl = true;
     else if (arg === '--json') out.json = true;
     else if (arg === '--fail-on-incomplete') out.failOnIncomplete = true;
@@ -98,10 +103,55 @@ function accessOk(dir) {
   }
 }
 
+function isEnvBool(value) {
+  return /^(?:true|false)$/i.test(String(value || '').trim());
+}
+
+function isPositiveNumber(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0;
+}
+
+function isNumber(value) {
+  return Number.isFinite(Number(value));
+}
+
+function addEnvChecks(checks, env, envMode) {
+  const profile = env.GRASP_RAT_BROWSERLESS_CANARY_PROFILE || '';
+  const control = env.GRASP_RAT_BROWSERLESS_CONTROL_MODE || '';
+  const dryRun = env.GRASP_RAT_BROWSERLESS_DRY_RUN || '';
+  const profilePresent = Boolean(profile);
+  const controlPresent = Boolean(control);
+  const profileOk = !profile || VALID_CANARY_PROFILES.has(profile);
+  const controlOk = !control || VALID_CONTROL_MODES.has(control);
+  const modeOk = profileOk && controlOk && (profilePresent || controlPresent);
+
+  addCheck(checks, 'env-mode', VALID_ENV_MODES.has(envMode), `envMode=${envMode}`);
+  if (!VALID_ENV_MODES.has(envMode)) return;
+
+  if (envMode === 'safe') {
+    addCheck(checks, 'env-safe-dry-run', dryRun === 'true', `GRASP_RAT_BROWSERLESS_DRY_RUN=${dryRun || 'missing'}`);
+    addCheck(checks, 'env-read-only-profile', profile === 'read-only' || control === 'read-only', `profile=${profile}, control=${control}`);
+    return;
+  }
+
+  if (envMode === 'live') {
+    addCheck(checks, 'env-live-dry-run', dryRun === 'false', `GRASP_RAT_BROWSERLESS_DRY_RUN=${dryRun || 'missing'}`);
+    addCheck(checks, 'env-live-profile', modeOk, `profile=${profile}, control=${control}`);
+    addCheck(checks, 'env-live-session', isPositiveNumber(env.GRASP_RAT_BROWSERLESS_USER_ID) && Boolean(env.GRASP_RAT_BROWSERLESS_SESSION_TOKEN), `userId=${env.GRASP_RAT_BROWSERLESS_USER_ID || 'missing'}, sessionTokenPresent=${Boolean(env.GRASP_RAT_BROWSERLESS_SESSION_TOKEN)}`);
+    addCheck(checks, 'env-login-point', isNumber(env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_X) && isNumber(env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_Y) && isNumber(env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_HP), `x=${env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_X || 'missing'}, y=${env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_Y || 'missing'}, hp=${env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_HP || 'missing'}`);
+    return;
+  }
+
+  addCheck(checks, 'env-dry-run-value', isEnvBool(dryRun), `GRASP_RAT_BROWSERLESS_DRY_RUN=${dryRun || 'missing'}`);
+  addCheck(checks, 'env-control-profile', modeOk, `profile=${profile}, control=${control}`);
+}
+
 function auditDeployment(options = {}, deps = {}) {
   const serviceName = options.serviceName || DEFAULT_SERVICE_NAME;
   const unitPath = path.resolve(String(options.unitPath || DEFAULT_UNIT_PATH));
   const envPath = path.resolve(String(options.envPath || DEFAULT_ENV_PATH));
+  const envMode = String(options.envMode || 'safe').trim() || 'safe';
   const runCommand = deps.runCommand || commandRunner;
   const checks = [];
 
@@ -128,8 +178,7 @@ function auditDeployment(options = {}, deps = {}) {
 
   addCheck(checks, 'env-data-dir', env.GRASP_RAT_BROWSERLESS_DATA_DIR === dataDir, `GRASP_RAT_BROWSERLESS_DATA_DIR=${env.GRASP_RAT_BROWSERLESS_DATA_DIR || 'missing'}`);
   addCheck(checks, 'env-log-dir', env.GRASP_RAT_BROWSERLESS_LOG_DIR === logDir, `GRASP_RAT_BROWSERLESS_LOG_DIR=${env.GRASP_RAT_BROWSERLESS_LOG_DIR || 'missing'}`);
-  addCheck(checks, 'env-safe-dry-run', env.GRASP_RAT_BROWSERLESS_DRY_RUN === 'true', `GRASP_RAT_BROWSERLESS_DRY_RUN=${env.GRASP_RAT_BROWSERLESS_DRY_RUN || 'missing'}`);
-  addCheck(checks, 'env-read-only-profile', env.GRASP_RAT_BROWSERLESS_CANARY_PROFILE === 'read-only' || env.GRASP_RAT_BROWSERLESS_CONTROL_MODE === 'read-only', `profile=${env.GRASP_RAT_BROWSERLESS_CANARY_PROFILE || ''}, control=${env.GRASP_RAT_BROWSERLESS_CONTROL_MODE || ''}`);
+  addEnvChecks(checks, env, envMode);
   addCheck(checks, 'env-web-token', Boolean(env.GRASP_RAT_BROWSERLESS_WEB_TOKEN && env.GRASP_RAT_BROWSERLESS_WEB_TOKEN !== 'replace-with-a-long-random-token'), 'web token is present and not the example placeholder');
 
   const dataAccess = accessOk(dataDir);
@@ -160,6 +209,7 @@ function auditDeployment(options = {}, deps = {}) {
     serviceName,
     unitPath,
     envPath,
+    envMode,
     dataDir,
     logDir,
     generatedAt: new Date().toISOString(),
@@ -174,7 +224,8 @@ function formatHuman(report) {
     `Browserless deployment audit: ${report.ok ? 'ok' : 'incomplete'}`,
     `Service: ${report.serviceName}`,
     `Unit: ${report.unitPath}`,
-    `Env: ${report.envPath}`
+    `Env: ${report.envPath}`,
+    `Env mode: ${report.envMode}`
   ];
   for (const check of report.checks) {
     lines.push(`- ${check.ok ? 'ok' : 'missing'} ${check.key}: ${check.evidence}`);
@@ -184,9 +235,10 @@ function formatHuman(report) {
 
 function usage() {
   return [
-    'Usage: node scripts/browserless-deployment-audit.js [--unit <file>] [--env <file>] [--data-dir <dir>] [--log-dir <dir>] [--skip-systemctl] [--json] [--fail-on-incomplete]',
+    'Usage: node scripts/browserless-deployment-audit.js [--unit <file>] [--env <file>] [--env-mode safe|live|any] [--data-dir <dir>] [--log-dir <dir>] [--skip-systemctl] [--json] [--fail-on-incomplete]',
     '',
     'Run on the VPS after installing and starting grasp-rat-browserless-runner.',
+    'Default --env-mode safe checks dry-run/read-only deployment defaults. Use live before supervised live canaries and any for final aggregate acceptance.',
     'Use --skip-systemctl only for static file/directory checks.'
   ].join('\n');
 }
