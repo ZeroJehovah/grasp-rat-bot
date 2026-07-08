@@ -8,6 +8,7 @@ const DEFAULTS = {
   wsExtraQuery: 'compress=gzip%2Cdeflate',
   snapshotPath: '/snapshot',
   dataDir: path.join(process.cwd(), 'data', 'browserless-runner'),
+  logDir: '',
   statusHost: '127.0.0.1',
   statusPort: 18767,
   webToken: '',
@@ -43,6 +44,7 @@ function boolEnv(value, fallback = false) {
 }
 
 function numberEnv(value, fallback) {
+  if (value === undefined || value === null || value === '') return fallback;
   const number = Number(value);
   return Number.isFinite(number) ? number : fallback;
 }
@@ -55,6 +57,7 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
     wsExtraQuery: env.GRASP_RAT_BROWSERLESS_WS_EXTRA_QUERY || DEFAULTS.wsExtraQuery,
     snapshotPath: env.GRASP_RAT_BROWSERLESS_SNAPSHOT_PATH || DEFAULTS.snapshotPath,
     dataDir: env.GRASP_RAT_BROWSERLESS_DATA_DIR || DEFAULTS.dataDir,
+    logDir: env.GRASP_RAT_BROWSERLESS_LOG_DIR || DEFAULTS.logDir,
     statusHost: env.GRASP_RAT_BROWSERLESS_STATUS_HOST || DEFAULTS.statusHost,
     statusPort: numberEnv(env.GRASP_RAT_BROWSERLESS_STATUS_PORT, DEFAULTS.statusPort),
     webToken: env.GRASP_RAT_BROWSERLESS_WEB_TOKEN || DEFAULTS.webToken,
@@ -118,6 +121,8 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
       config.once = true;
     } else if (arg === '--data-dir') {
       config.dataDir = argv[++i] || config.dataDir;
+    } else if (arg === '--log-dir') {
+      config.logDir = argv[++i] || config.logDir;
     } else if (arg === '--status-host') {
       config.statusHost = argv[++i] || config.statusHost;
     } else if (arg === '--status-port') {
@@ -171,7 +176,7 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
   }
   config.readOnly = config.controlMode === 'read-only';
   config.dataDir = path.resolve(config.dataDir);
-  config.logDir = path.join(config.dataDir, 'logs');
+  config.logDir = path.resolve(config.logDir || path.join(config.dataDir, 'logs'));
   config.stateFile = path.join(config.dataDir, 'state.json');
   return config;
 }
@@ -192,6 +197,7 @@ function usage() {
     '  --live                   Disable dry-run; live transport still requires an explicit control mode',
     '  --once                   Run one bounded skeleton cycle and exit',
     '  --data-dir <dir>         State/log root. Default: data/browserless-runner',
+    '  --log-dir <dir>          JSONL log root. Default: <data-dir>/logs',
     '  --status-host <host>     Status host placeholder. Default: 127.0.0.1',
     '  --status-port <port>     Status port placeholder. Default: 18767',
     '  --web-token <token>      Required later when status server is enabled',

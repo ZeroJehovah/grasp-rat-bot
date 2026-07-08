@@ -6596,6 +6596,8 @@ async function runSelfTest() {
           '--live',
           '--data-dir',
           '/tmp/grasp-rat-runner',
+          '--log-dir',
+          '/tmp/grasp-rat-browserless-logs',
           '--status-port',
           '19999',
           '--web-token',
@@ -6651,10 +6653,49 @@ async function runSelfTest() {
           config.loginPointX,
           config.loginPointY,
           config.loginPointHp,
-          config.logDir.endsWith('/tmp/grasp-rat-runner/logs')
+          config.dataDir.endsWith('/tmp/grasp-rat-runner'),
+          config.logDir.endsWith('/tmp/grasp-rat-browserless-logs')
         ].join('|');
       })(),
-      want: 'true|false|false|combat-live|19999|cli-token|true|220|42|env-token|250|3500|4500|150|300|800|3|123|456|90|true'
+      want: 'true|false|false|combat-live|19999|cli-token|true|220|42|env-token|250|3500|4500|150|300|800|3|123|456|90|true|true'
+    },
+    {
+      name: 'browserless deployment files define service env and install surface',
+      got: (() => {
+        const unit = fs.readFileSync(path.join(__dirname, '../../deploy/browserless-runner.service'), 'utf8');
+        const env = fs.readFileSync(path.join(__dirname, '../../deploy/browserless-runner.env.example'), 'utf8');
+        const installer = fs.readFileSync(path.join(__dirname, '../../scripts/install-browserless-runner-service.sh'), 'utf8');
+        return [
+          unit.includes('Description=Grasp Rat Browserless Runner'),
+          unit.includes('EnvironmentFile=/etc/grasp-rat/browserless-runner.env'),
+          unit.includes('ExecStart=/usr/bin/env node scripts/browserless-runner.js'),
+          unit.includes('ReadWritePaths=/var/lib/grasp-rat-browserless /var/log/grasp-rat-browserless'),
+          env.includes('GRASP_RAT_BROWSERLESS_DATA_DIR=/var/lib/grasp-rat-browserless'),
+          env.includes('GRASP_RAT_BROWSERLESS_LOG_DIR=/var/log/grasp-rat-browserless'),
+          env.includes('GRASP_RAT_BROWSERLESS_DRY_RUN=true'),
+          installer.includes('grasp-rat-browserless-runner'),
+          installer.includes('systemctl daemon-reload')
+        ].join('|');
+      })(),
+      want: 'true|true|true|true|true|true|true|true|true'
+    },
+    {
+      name: 'browserless runner config treats empty numeric env as unset',
+      got: (() => {
+        const config = parseBrowserlessRunnerArgs([], {
+          GRASP_RAT_BROWSERLESS_LOGIN_POINT_X: '',
+          GRASP_RAT_BROWSERLESS_LOGIN_POINT_Y: '',
+          GRASP_RAT_BROWSERLESS_STATUS_PORT: '',
+          GRASP_RAT_BROWSERLESS_LOG_RETENTION_DAYS: ''
+        });
+        return [
+          config.loginPointX === null,
+          config.loginPointY === null,
+          config.statusPort,
+          config.logRetentionDays
+        ].join('|');
+      })(),
+      want: 'true|true|18767|3'
     },
     {
       name: 'browserless runner dry-run and fake read-only path write redacted logs',
