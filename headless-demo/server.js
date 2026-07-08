@@ -58,7 +58,8 @@ function isLoopbackHost(host) {
 function redact(value) {
   return String(value || '')
     .replace(/([?&](?:code|token|session|auth|secret)[^=]*=)[^&"'\\\s]+/ig, '$1[redacted]')
-    .replace(/("(?:code|token|sessionToken|auth|secret)"\s*:\s*")[^"]+/ig, '$1[redacted]');
+    .replace(/("(?:code|token|sessionToken|auth|secret|cookie|set-cookie)"\s*:\s*")[^"]+/ig, '$1[redacted]')
+    .replace(/((?:auth\.session-token|cf_clearance|_cfuvid|__stripe_mid)=)[^;"'\s]+/ig, '$1[redacted]');
 }
 
 function publicState() {
@@ -317,6 +318,9 @@ function applyLogin(login, summary = null) {
 async function submitCallback(callbackUrl) {
   const rawInput = String(callbackUrl || '').trim();
   if (!rawInput) throw new Error('callback URL is empty');
+  if (/^curl\s+/i.test(rawInput) && /connect\.linux\.do\/oauth2\/approve\//i.test(rawInput)) {
+    return submitApproveCurl(rawInput);
+  }
   if (/^\{/.test(rawInput)) {
     let payload;
     try {
@@ -334,6 +338,50 @@ async function submitCallback(callbackUrl) {
     return applyLogin(directLogin, { source: 'direct-login-url' });
   }
   logEvent('callback-submit', { callbackUrl: url });
+  return submitGameCallbackUrl(url);
+}
+
+async function submitApproveCurl(rawInput) {
+  const request = parseCurlCommand(rawInput);
+  const parsed = new URL(request.url);
+  if (parsed.origin !== 'https://connect.linux.do' || !parsed.pathname.startsWith('/oauth2/approve/')) {
+    throw new Error('approve curl must target https://connect.linux.do/oauth2/approve/...');
+  }
+  if (!request.headers.cookie) {
+    throw new Error('approve curl is missing Cookie header; use browser DevTools "Copy as cURL" for the LinuxDO approve request');
+  }
+  logEvent('approve-curl-submit', {
+    url: request.url,
+    method: request.method,
+    headerNames: Object.keys(request.headers)
+  });
+  const approveResponse = await fetchWithTimeout(request.url, {
+    method: request.method,
+    redirect: 'manual',
+    headers: request.headers,
+    body: request.body,
+    cache: 'no-store'
+  });
+  const approveLocation = resolveLocation(approveResponse.headers.get('location') || '', request.url);
+  const approveBody = await readResponseBody(approveResponse);
+  const approveSummary = {
+    status: approveResponse.status,
+    location: redact(approveLocation),
+    contentType: approveResponse.headers.get('content-type') || '',
+    textLength: approveBody.text.length,
+    textSample: approveBody.text.slice(0, 500)
+  };
+  logEvent('approve-curl-result', approveSummary);
+  if (!approveLocation || new URL(approveLocation).origin !== GAME_ORIGIN) {
+    state.lastCallbackDebug = { source: 'approve-curl', approve: approveSummary };
+    state.lastError = 'approve request did not redirect to game callback';
+    persistState();
+    throw new Error(`approve request did not redirect to game callback; status=${approveResponse.status}, location=${approveSummary.location || 'none'}`);
+  }
+  return submitGameCallbackUrl(approveLocation, { source: 'approve-curl', approve: approveSummary });
+}
+
+async function submitGameCallbackUrl(url, extraSummary = {}) {
   const response = await fetchWithTimeout(url, {
     method: 'GET',
     redirect: 'manual',
@@ -342,6 +390,7 @@ async function submitCallback(callbackUrl) {
   const body = await readResponseBody(response);
   const location = resolveLocation(response.headers.get('location') || '', url);
   const summary = {
+    ...extraSummary,
     status: response.status,
     ok: response.ok,
     finalUrl: redact(response.url || url),
@@ -374,6 +423,109 @@ async function submitCallback(callbackUrl) {
   }
   state.callbackUrl = url;
   return applyLogin(login, summary);
+}
+
+function parseCurlCommand(input) {
+  const tokens = tokenizeShellLike(input);
+  if (!tokens.length || tokens[0] !== 'curl') throw new Error('expected a curl command');
+  const request = {
+    url: '',
+    method: 'GET',
+    headers: {},
+    body: null
+  };
+  for (let i = 1; i < tokens.length; i += 1) {
+    const token = tokens[i];
+    if (token === '-H' || token === '--header') {
+      const header = tokens[++i] || '';
+      const index = header.indexOf(':');
+      if (index > 0) {
+        const name = header.slice(0, index).trim().toLowerCase();
+        const value = header.slice(index + 1).trim();
+        if (name && !forbiddenForwardHeader(name)) request.headers[name] = value;
+      }
+      continue;
+    }
+    if (token === '-b' || token === '--cookie' || token === '--cookie-jar') {
+      const cookie = tokens[++i] || '';
+      if (cookie && token !== '--cookie-jar') request.headers.cookie = cookie;
+      continue;
+    }
+    if (token === '-X' || token === '--request') {
+      request.method = String(tokens[++i] || 'GET').toUpperCase();
+      continue;
+    }
+    if (token === '--data' || token === '--data-raw' || token === '--data-binary' || token === '-d') {
+      request.body = tokens[++i] || '';
+      if (request.method === 'GET') request.method = 'POST';
+      continue;
+    }
+    if (token === '-A' || token === '--user-agent') {
+      request.headers['user-agent'] = tokens[++i] || '';
+      continue;
+    }
+    if (token === '-e' || token === '--referer') {
+      request.headers.referer = tokens[++i] || '';
+      continue;
+    }
+    if (token.startsWith('http://') || token.startsWith('https://')) {
+      request.url = token;
+    }
+  }
+  if (!request.url) throw new Error('curl command did not contain a URL');
+  if (request.body !== null) request.headers['content-type'] = request.headers['content-type'] || 'application/x-www-form-urlencoded';
+  return request;
+}
+
+function forbiddenForwardHeader(name) {
+  return [
+    'host',
+    'connection',
+    'content-length',
+    'upgrade',
+    'sec-websocket-key',
+    'sec-websocket-version',
+    'sec-websocket-extensions'
+  ].includes(String(name || '').toLowerCase());
+}
+
+function tokenizeShellLike(input) {
+  const text = String(input || '').replace(/\\\r?\n/g, ' ');
+  const tokens = [];
+  let current = '';
+  let quote = '';
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (quote) {
+      if (ch === quote) {
+        quote = '';
+      } else if (ch === '\\' && quote === '"' && i + 1 < text.length) {
+        current += text[++i];
+      } else {
+        current += ch;
+      }
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      continue;
+    }
+    if (/\s/.test(ch)) {
+      if (current) {
+        tokens.push(current);
+        current = '';
+      }
+      continue;
+    }
+    if (ch === '\\' && i + 1 < text.length) {
+      current += text[++i];
+      continue;
+    }
+    current += ch;
+  }
+  if (quote) throw new Error('unterminated quote in curl command');
+  if (current) tokens.push(current);
+  return tokens;
 }
 
 function resolveLocation(location, baseUrl) {
