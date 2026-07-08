@@ -106,6 +106,17 @@ The first demo sends a deliberately limited action sequence:
 
 This sequence is only started by an explicit web button click.
 
+## Validated Probe Result
+
+On 2026-07-08, the VPS one-shot demo succeeded after the Node 18 `ws` fallback and `MessageEvent` frame handling fixes:
+
+- LinuxDO callback login succeeded through the HTML meta-refresh path.
+- Direct WebSocket connection used `wss://grasp-rat-game.h-e.top/ws?user_id=<id>&token=<token>&compress=gzip%2Cdeflate`.
+- The demo sent the up/down/left/right/fire action sequence and then called `leave`.
+- `leave` succeeded on the initial attempt with HTTP 200 in about 631ms.
+- `leaveResponseConfirmsExitCore()` confirmed exit from the response summary: `leaveConfirmed: true`, `event: left`, `joined: UserRecordOnly`, `current_join_mode: None`, `life: Alive`, `visible: Hidden`.
+- Recent WebSocket frames were binary/compressed samples beginning with `GRZ1` followed by a gzip-looking payload. This confirms the next protocol task is a headless frame decompressor/parser before any real strategy migration can depend on WS state.
+
 ## Progress Log
 
 - `09cf031`: Added the initial standalone VPS auth/control demo.
@@ -116,18 +127,17 @@ This sequence is only started by an explicit web button click.
 - 2026-07-08: Added Node 18 WebSocket fallback through the `ws` package after the first successful callback login hit `Node.js global WebSocket is unavailable` on VPS Node `v18.19.1`.
 - 2026-07-08: Added `headless-demo/start-demo.sh` as the quick VPS test launcher with default host `0.0.0.0`, port `18766`, and token `1234567890`.
 - 2026-07-08: VPS Node 18 plus `ws` emitted browser-style `MessageEvent` objects through `addEventListener`; frame recording now unwraps `.data`, handles Buffer/ArrayBuffer/TypedArray/object payloads defensively, and logs frame-recording errors instead of crashing the demo process.
+- 2026-07-08: The one-shot VPS run completed successfully: callback login, WebSocket open, command send, compressed frame receipt, and verified leave all worked.
 
 ## Next Plan
 
-1. Run the fixed demo once on the VPS with a fresh unused callback URL.
-2. Collect the JSON result and the relevant JSONL log lines if login, WebSocket connect, demo action, or leave verification fails.
-3. Confirm WebSocket frame shape and command acceptance from the VPS logs.
-4. Once the one-shot probe is stable, define the browserless runtime boundary:
+1. Decode and summarize `GRZ1` compressed WebSocket frames in the headless demo logs so future feedback is readable and strategy migration can inspect live state.
+2. Define the browserless runtime boundary:
    - shared pure strategy remains in `src/strategy/`;
    - browser DOM/CDP integration remains browser-specific;
    - a new Node transport/runtime adapter can own auth/session state, direct WebSocket IO, timers, and verified exit.
-5. Migrate strategy execution conservatively, starting with non-combat or low-risk actions before direct combat logic.
-6. Add replay/static tests for any shared protocol parser or transport adapter before using it for long-running unattended operation.
+3. Migrate strategy execution conservatively, starting with non-combat or low-risk actions before direct combat logic.
+4. Add replay/static tests for any shared protocol parser or transport adapter before using it for long-running unattended operation.
 
 ## Evidence To Request From VPS Runs
 
