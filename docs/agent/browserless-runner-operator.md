@@ -37,7 +37,7 @@ The unit uses:
 - log dir: `/var/log/grasp-rat-browserless`
 - env file: `/etc/grasp-rat/browserless-runner.env`
 
-The installed env example defaults to dry-run read-only mode. Edit `/etc/grasp-rat/browserless-runner.env` before live canaries: set a long `GRASP_RAT_BROWSERLESS_WEB_TOKEN`, manual session values, login-point coordinates, and the intended `GRASP_RAT_BROWSERLESS_CONTROL_MODE`.
+The installed env example defaults to dry-run read-only mode. This proves the service/deployment surface but does not connect to live WS, does not write `decisions.jsonl`, and does not satisfy canary acceptance. Edit `/etc/grasp-rat/browserless-runner.env` before live canaries: set `GRASP_RAT_BROWSERLESS_DRY_RUN=false`, a long `GRASP_RAT_BROWSERLESS_WEB_TOKEN`, manual session values, login-point coordinates, and the intended `GRASP_RAT_BROWSERLESS_CONTROL_MODE`.
 
 For staged rollout, prefer `GRASP_RAT_BROWSERLESS_CANARY_PROFILE` or `--canary-profile` over editing mode-specific command lines. Profiles map to existing modes:
 
@@ -103,6 +103,8 @@ node scripts/browserless-runner.js --once --dry-run
 
 The canary requires a reusable session and a known login point. The login point is verified again through direct `/snapshot` before the runner joins WS.
 While the canary is connected, the dry-run decision adapter evaluates current state and writes throttled `decisions.jsonl` entries. It does not send movement or shoot commands.
+
+For service-based validation, configure `/etc/grasp-rat/browserless-runner.env` with `GRASP_RAT_BROWSERLESS_DRY_RUN=false`, `GRASP_RAT_BROWSERLESS_CANARY_PROFILE=read-only`, `GRASP_RAT_BROWSERLESS_USER_ID`, `GRASP_RAT_BROWSERLESS_SESSION_TOKEN`, and the three login-point values, then restart `grasp-rat-browserless-runner`.
 
 ```bash
 node scripts/browserless-runner.js \
