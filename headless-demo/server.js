@@ -3,6 +3,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const zlib = require('zlib');
 const { URL } = require('url');
 const { leaveResponseConfirmsExitCore, summarizeLeaveResponseCore } = require('../src/shared/leave-response');
 
@@ -19,6 +20,7 @@ const LEAVE_RETRY_MS = Math.max(250, Number(process.env.GRASP_RAT_DEMO_LEAVE_RET
 const HTTP_TIMEOUT_MS = Math.max(1000, Number(process.env.GRASP_RAT_DEMO_HTTP_TIMEOUT_MS || 10000));
 const WS_CONNECT_TIMEOUT_MS = Math.max(1000, Number(process.env.GRASP_RAT_DEMO_WS_CONNECT_TIMEOUT_MS || 10000));
 const WS_FRAME_LIMIT = Math.max(0, Number(process.env.GRASP_RAT_DEMO_WS_FRAME_LIMIT || 80));
+const WS_FRAME_BASE64_BYTES = Math.max(0, Number(process.env.GRASP_RAT_DEMO_WS_FRAME_BASE64_BYTES || 256));
 const WS_PATH = process.env.GRASP_RAT_DEMO_WS_PATH || '/ws';
 const WS_EXTRA_QUERY = process.env.GRASP_RAT_DEMO_WS_EXTRA_QUERY || 'compress=gzip%2Cdeflate';
 let cachedWebSocketRuntime = null;
@@ -41,6 +43,10 @@ const state = {
   wsOpen: false,
   wsLastMessageAt: 0,
   lastFrames: [],
+  inGame: false,
+  lastJoinAt: 0,
+  lastLeaveAt: 0,
+  lastLeaveSummary: null,
   running: false,
   lastRun: null,
   leaveAlert: '',
@@ -83,11 +89,14 @@ function redactStructured(value, depth = 0) {
 }
 
 function publicState() {
+  const authenticated = Boolean(state.userId && state.sessionToken);
   return {
     authUrl: redact(state.authUrl),
     authUrlAt: state.authUrlAt,
     callbackAt: state.callbackAt,
-    loggedIn: Boolean(state.userId && state.sessionToken),
+    authenticated,
+    loggedIn: authenticated,
+    inGame: Boolean(state.inGame),
     userId: state.userId || 0,
     tokenPresent: Boolean(state.sessionToken),
     loginPayloadSummary: redactStructured(state.loginPayloadSummary),
@@ -95,6 +104,9 @@ function publicState() {
     wsUrl: redact(state.wsUrl),
     wsOpen: state.wsOpen,
     wsLastMessageAt: state.wsLastMessageAt,
+    lastJoinAt: state.lastJoinAt || 0,
+    lastLeaveAt: state.lastLeaveAt || 0,
+    lastLeaveSummary: redactStructured(state.lastLeaveSummary),
     running: state.running,
     lastRun: redactStructured(state.lastRun),
     leaveAlert: redact(state.leaveAlert),
@@ -116,6 +128,10 @@ function persistState() {
     loginPayloadSummary: state.loginPayloadSummary,
     lastCallbackDebug: state.lastCallbackDebug,
     wsUrl: state.wsUrl,
+    inGame: state.inGame,
+    lastJoinAt: state.lastJoinAt,
+    lastLeaveAt: state.lastLeaveAt,
+    lastLeaveSummary: state.lastLeaveSummary,
     leaveAlert: state.leaveAlert,
     lastError: state.lastError,
     logFile: state.logFile
@@ -130,6 +146,9 @@ function loadState() {
       Object.assign(state, parsed);
       state.sessionToken = String(state.sessionToken || '');
       state.userId = Number(state.userId || 0);
+      state.inGame = Boolean(state.inGame);
+      state.lastJoinAt = Number(state.lastJoinAt || 0);
+      state.lastLeaveAt = Number(state.lastLeaveAt || 0);
     }
   } catch (_) {}
 }
@@ -366,6 +385,7 @@ function applyLogin(login, summary = null) {
   state.sessionToken = login.sessionToken;
   state.loginPayloadSummary = safeSummary;
   state.lastCallbackDebug = null;
+  state.inGame = false;
   state.leaveAlert = '';
   state.lastError = '';
   persistState();
@@ -633,12 +653,19 @@ function normalizeFrameData(data) {
   return value;
 }
 
+function frameDataToBuffer(data) {
+  const value = normalizeFrameData(data);
+  if (Buffer.isBuffer(value)) return value;
+  if (value instanceof ArrayBuffer) return Buffer.from(value);
+  if (ArrayBuffer.isView(value)) return Buffer.from(value.buffer, value.byteOffset, value.byteLength);
+  return null;
+}
+
 function frameDataToText(data) {
   const value = normalizeFrameData(data);
   if (typeof value === 'string') return value;
-  if (Buffer.isBuffer(value)) return value.toString('utf8');
-  if (value instanceof ArrayBuffer) return Buffer.from(value).toString('utf8');
-  if (ArrayBuffer.isView(value)) return Buffer.from(value.buffer, value.byteOffset, value.byteLength).toString('utf8');
+  const buffer = frameDataToBuffer(value);
+  if (buffer) return buffer.toString('utf8');
   if (value === null || value === undefined) return '';
   if (typeof value === 'object') {
     try {
@@ -650,12 +677,44 @@ function frameDataToText(data) {
   return String(value);
 }
 
-function recordFrame(data) {
-  const text = frameDataToText(data);
+function inspectBinaryFrame(buffer) {
   const frame = {
-    at: new Date().toISOString(),
-    sample: text.slice(0, 1000)
+    kind: 'binary',
+    byteLength: buffer.length,
+    prefixHex: buffer.subarray(0, 16).toString('hex')
   };
+  if (WS_FRAME_BASE64_BYTES > 0) {
+    frame.base64Sample = buffer.subarray(0, WS_FRAME_BASE64_BYTES).toString('base64');
+  }
+  if (buffer.length >= 5 && buffer.subarray(0, 4).toString('ascii') === 'GRZ1') {
+    frame.format = 'GRZ1';
+    frame.version = buffer[4];
+    const payload = buffer.subarray(5);
+    if (payload.length >= 2 && payload[0] === 0x1f && payload[1] === 0x8b) {
+      frame.compression = 'gzip';
+      try {
+        const decoded = zlib.gunzipSync(payload);
+        frame.decodedByteLength = decoded.length;
+        frame.decodedSample = redact(decoded.toString('utf8').slice(0, 1000));
+        try {
+          const json = JSON.parse(decoded.toString('utf8'));
+          frame.decodedJsonKeys = json && typeof json === 'object' ? Object.keys(json).slice(0, 20) : [];
+        } catch (_) {}
+      } catch (err) {
+        frame.decodeError = err?.message || String(err);
+      }
+    } else {
+      frame.compression = 'unknown';
+    }
+  }
+  return frame;
+}
+
+function recordFrame(data) {
+  const buffer = frameDataToBuffer(data);
+  const frame = buffer
+    ? { at: new Date().toISOString(), ...inspectBinaryFrame(buffer) }
+    : { at: new Date().toISOString(), kind: 'text', sample: frameDataToText(data).slice(0, 1000) };
   state.wsLastMessageAt = Date.now();
   state.lastFrames.push(frame);
   if (state.lastFrames.length > WS_FRAME_LIMIT) state.lastFrames.splice(0, state.lastFrames.length - WS_FRAME_LIMIT);
@@ -744,7 +803,10 @@ function openWs() {
       opened = true;
       clearTimeout(timer);
       state.wsOpen = true;
+      state.inGame = true;
+      state.lastJoinAt = Date.now();
       state.lastError = '';
+      persistState();
       logEvent('ws-open', { wsUrl, runtime: runtime.name });
       resolve(ws);
     });
@@ -809,6 +871,9 @@ async function leaveWithVerification() {
     const result = await leaveOnce(index === 0 ? 'initial' : `retry-${index}`);
     attempts.push(result);
     if (result.ok) {
+      state.inGame = false;
+      state.lastLeaveAt = Date.now();
+      state.lastLeaveSummary = result.summary || null;
       state.leaveAlert = '';
       state.lastError = '';
       persistState();
@@ -875,6 +940,7 @@ async function runActionDemo() {
       if (isWsOpen(ws)) ws.close();
     } catch (_) {}
     state.wsOpen = false;
+    if (state.lastRun?.leave?.ok) state.inGame = false;
     state.running = false;
     state.lastRun.completedAt = Date.now();
     persistState();
@@ -988,7 +1054,7 @@ function sendHtml(res) {
       } else {
         clearError();
       }
-      document.getElementById('runBtn').disabled = data.state.running || !data.state.loggedIn;
+      document.getElementById('runBtn').disabled = data.state.running || !(data.state.authenticated || data.state.loggedIn);
     }
     document.getElementById('authBtn').onclick = async () => {
       try { clearError(); const data = await api('/api/auth-url', { method: 'POST' }); document.getElementById('authUrl').textContent = data.authUrl; await refresh(); }
