@@ -5,6 +5,7 @@ This is a deliberately small VPS probe for the browserless runner idea. It expos
 - request the LinuxDO authorize URL from `/auth/linuxdo/start`;
 - accept a manually pasted callback URL or callback response JSON;
 - try to exchange that callback through the game callback endpoint;
+- run a login-point snapshot probe without joining WebSocket;
 - run a read-only WebSocket probe: connect, collect frame statistics, then verified `leave`;
 - run one explicit demo sequence: move up/down/left/right, shoot once, then call `leave`;
 - verify `leave` with the same explicit response confirmation helper used by the current bot.
@@ -89,6 +90,15 @@ Environment=GRASP_RAT_DEMO_READONLY_PROBE_MS=60000
 ```
 
 After a probe, `/api/status` includes `lastProbe.stats` with frame counts, decoded frame type counts, JSON key-set counts, tick ranges, entity/bullet/coin/message count ranges, and `selfPresent` counts. Complete frame metadata remains in the JSONL log.
+
+The login-point snapshot probe requests `${GAME_ORIGIN}/snapshot?user_id=<id>&token=<token>` without opening the WebSocket. It summarizes whether snapshot can be fetched before join and whether the last known self coordinate appears safe by the current login-point radius rule. Override the path only if the game changes it:
+
+```ini
+[Service]
+Environment=GRASP_RAT_DEMO_SNAPSHOT_PATH=/snapshot
+```
+
+After a snapshot probe, `/api/status` includes `lastSnapshotProbe` and `lastSelfSummary`.
 
 OAuth codes are usually one-time use. If the browser has already loaded the game callback URL and the demo cannot exchange that same URL again, paste the callback response JSON instead. The demo accepts a JSON object containing `user_id`/`userId`/`id` plus `token`/`sessionToken`/`session_token`.
 

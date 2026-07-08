@@ -47,6 +47,7 @@ The web UI supports:
 - Fetching the LinuxDO authorize URL from `GET/POST` flow against `${GAME_ORIGIN}/auth/linuxdo/start`.
 - Accepting a fresh game callback URL, a direct `/?login=ok&user_id=...&token=...` URL, a compatible JSON payload, or a copied LinuxDO approve `curl`.
 - Storing `userId` and session token in the demo state file on the VPS.
+- Running a login-point snapshot probe without opening WS, using the stored token to test whether pre-login snapshot safety can be evaluated from the VPS.
 - Opening the game WebSocket, running one explicit command sequence, then calling verified `leave`.
 - Running a read-only WebSocket probe for a bounded duration, recording frame statistics, then calling verified `leave` without movement or shooting.
 - Writing JSONL logs under the configured log directory.
@@ -165,7 +166,7 @@ On 2026-07-08, the VPS one-shot demo succeeded after the Node 18 `ws` fallback a
 
 ## Next Plan
 
-1. Run the read-only VPS probe and inspect `lastProbe.stats` to confirm long-enough direct WS state coverage before product control work proceeds. The immediate question is whether non-combat profit data arrives only through pushed `snapshot` frames or through another realtime frame type.
+1. Run the login-point snapshot probe and inspect `lastSnapshotProbe` to confirm whether the VPS can evaluate pre-login safety from direct `/snapshot` before WS join.
 2. Define the browserless runtime boundary:
    - shared pure strategy remains in `src/strategy/`;
    - browser DOM/CDP integration remains browser-specific;
@@ -191,6 +192,12 @@ sudo tail -n 200 /var/log/grasp-rat-headless-demo/$(date -u +%F).jsonl
 For the current manual process, the log path shown in `/api/status` is authoritative.
 
 For the next protocol validation, ask for `/api/status` fields:
+
+- `lastSnapshotProbe`
+- `lastSelfSummary`
+- `lastError`
+
+For read-only WS validation, ask for:
 
 - `lastProbe`
 - `lastFrameSummary`

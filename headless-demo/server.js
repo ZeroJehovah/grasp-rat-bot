@@ -25,6 +25,10 @@ const WS_FRAME_BASE64_BYTES = Math.max(0, Number(process.env.GRASP_RAT_DEMO_WS_F
 const WS_FRAME_DECODED_SAMPLE_BYTES = Math.max(0, Number(process.env.GRASP_RAT_DEMO_DECODED_SAMPLE_BYTES || 500));
 const WS_PATH = process.env.GRASP_RAT_DEMO_WS_PATH || '/ws';
 const WS_EXTRA_QUERY = process.env.GRASP_RAT_DEMO_WS_EXTRA_QUERY || 'compress=gzip%2Cdeflate';
+const SNAPSHOT_PATH = process.env.GRASP_RAT_DEMO_SNAPSHOT_PATH || '/snapshot';
+const LOGIN_POINT_HEALTHY_HP_THRESHOLD = Math.max(0, Number(process.env.GRASP_RAT_DEMO_LOGIN_POINT_HEALTHY_HP || 80));
+const LOGIN_POINT_HEALTHY_RADIUS = Math.max(0, Number(process.env.GRASP_RAT_DEMO_LOGIN_POINT_HEALTHY_RADIUS || 17000));
+const LOGIN_POINT_LOW_RADIUS = Math.max(0, Number(process.env.GRASP_RAT_DEMO_LOGIN_POINT_LOW_RADIUS || 30000));
 let cachedWebSocketRuntime = null;
 const frameObservers = new Set();
 
@@ -48,6 +52,8 @@ const state = {
   lastFrames: [],
   lastFrameSummary: null,
   lastCommandAck: null,
+  lastSelfSummary: null,
+  lastSnapshotProbe: null,
   inGame: false,
   lastJoinAt: 0,
   lastLeaveAt: 0,
@@ -174,6 +180,8 @@ function publicState() {
     logFile: state.logFile,
     lastFrameSummary: redactStructured(state.lastFrameSummary),
     lastCommandAck: redactStructured(state.lastCommandAck),
+    lastSelfSummary: redactStructured(state.lastSelfSummary),
+    lastSnapshotProbe: redactStructured(state.lastSnapshotProbe),
     recentFrames: redactStructured(state.lastFrames.slice(-10).map(summarizeFrameForPublic))
   };
 }
@@ -190,6 +198,8 @@ function persistState() {
     loginPayloadSummary: state.loginPayloadSummary,
     lastCallbackDebug: state.lastCallbackDebug,
     wsUrl: state.wsUrl,
+    lastSelfSummary: state.lastSelfSummary,
+    lastSnapshotProbe: state.lastSnapshotProbe,
     inGame: state.inGame,
     lastJoinAt: state.lastJoinAt,
     lastLeaveAt: state.lastLeaveAt,
@@ -257,6 +267,107 @@ async function readResponseBody(response) {
   } catch (_) {
     return { text, json: null };
   }
+}
+
+function snapshotProbeUrl() {
+  const url = new URL(SNAPSHOT_PATH, GAME_ORIGIN);
+  url.searchParams.set('user_id', String(state.userId || 0));
+  url.searchParams.set('token', state.sessionToken || '');
+  return url.toString();
+}
+
+function isAliveEntity(entity) {
+  const life = String(entity?.life || '').toLowerCase();
+  return !life || life === 'alive';
+}
+
+function isActiveEntity(entity) {
+  const mode = String(entity?.current_join_mode || entity?.mode || entity?.joined || '').toLowerCase();
+  return mode === 'active';
+}
+
+function summarizeSnapshotSafety(payload, loginPoint) {
+  const entities = Array.isArray(payload?.entities) ? payload.entities : [];
+  const point = loginPoint
+    && Number.isFinite(Number(loginPoint.x))
+    && Number.isFinite(Number(loginPoint.y))
+    ? {
+        x: Number(loginPoint.x),
+        y: Number(loginPoint.y),
+        hp: Number.isFinite(Number(loginPoint.hp)) ? Number(loginPoint.hp) : null,
+        source: String(loginPoint.source || 'last-self')
+      }
+    : null;
+  if (!point) {
+    return {
+      ok: false,
+      reason: 'missing-login-point',
+      entityCount: entities.length
+    };
+  }
+  const healthy = Number.isFinite(point.hp) && point.hp >= LOGIN_POINT_HEALTHY_HP_THRESHOLD;
+  const radius = healthy ? LOGIN_POINT_HEALTHY_RADIUS : LOGIN_POINT_LOW_RADIUS;
+  const nearby = [];
+  const activeNearby = [];
+  for (const entity of entities) {
+    if (!entity || typeof entity !== 'object') continue;
+    if (Number(entity.user_id) === Number(state.userId)) continue;
+    const x = Number(entity.x);
+    const y = Number(entity.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+    const distance = Math.hypot(x - point.x, y - point.y);
+    if (distance > radius) continue;
+    const base = summarizeEntity(entity) || {};
+    const item = {
+      ...base,
+      distance: Math.round(distance),
+      active: isActiveEntity(entity),
+      alive: isAliveEntity(entity)
+    };
+    nearby.push(item);
+    if (item.active && item.alive) activeNearby.push(item);
+  }
+  activeNearby.sort((a, b) => a.distance - b.distance);
+  nearby.sort((a, b) => a.distance - b.distance);
+  return {
+    ok: activeNearby.length === 0,
+    reason: activeNearby.length === 0 ? 'safe' : 'active-near-login-point',
+    point,
+    radius,
+    radiusReason: healthy ? 'last-self-healthy' : 'last-self-low-or-unknown',
+    entityCount: entities.length,
+    nearbyCount: nearby.length,
+    activeNearbyCount: activeNearby.length,
+    nearestActive: activeNearby[0] || null,
+    nearest: nearby[0] || null
+  };
+}
+
+function summarizeSnapshotPayload(payload) {
+  if (!payload || typeof payload !== 'object') {
+    return { valid: false, reason: 'non-json-payload' };
+  }
+  const entities = Array.isArray(payload.entities) ? payload.entities : [];
+  const bullets = Array.isArray(payload.bullets) ? payload.bullets : [];
+  const coinDrops = Array.isArray(payload.coin_drops) ? payload.coin_drops : [];
+  const messages = Array.isArray(payload.messages) ? payload.messages : [];
+  const self = entities.find(entity => Number(entity?.user_id) === Number(state.userId));
+  return {
+    valid: Array.isArray(payload.entities),
+    jsonKeys: Object.keys(payload).slice(0, 20),
+    tick: Number.isFinite(Number(payload.tick)) ? Number(payload.tick) : null,
+    totalEntities: payload.total_entities ?? null,
+    inGameCount: payload.in_game ?? null,
+    visibleCount: payload.visible ?? null,
+    occupiedCells: payload.occupied_cells ?? null,
+    entityCount: entities.length,
+    bulletCount: bullets.length,
+    coinDropCount: coinDrops.length,
+    messageCount: messages.length,
+    selfPresent: Boolean(self),
+    self: summarizeEntity(self),
+    safety: summarizeSnapshotSafety(payload, state.lastSelfSummary)
+  };
 }
 
 function extractAuthUrl(payload) {
@@ -950,6 +1061,7 @@ function recordFrame(data) {
     sample: frame.sample
   };
   if (frame.decodedSummary?.ack) state.lastCommandAck = frame.decodedSummary.ack;
+  if (frame.decodedSummary?.self) state.lastSelfSummary = frame.decodedSummary.self;
   state.lastFrames.push(frame);
   if (state.lastFrames.length > WS_FRAME_LIMIT) state.lastFrames.splice(0, state.lastFrames.length - WS_FRAME_LIMIT);
   for (const observer of frameObservers) {
@@ -1116,6 +1228,7 @@ async function leaveWithVerification() {
       state.inGame = false;
       state.lastLeaveAt = Date.now();
       state.lastLeaveSummary = result.summary || null;
+      state.lastSelfSummary = summarizeEntity(result.response) || state.lastSelfSummary;
       state.leaveAlert = '';
       state.lastError = '';
       persistState();
@@ -1257,6 +1370,66 @@ async function runReadOnlyProbe() {
   return state.lastProbe;
 }
 
+async function runSnapshotProbe() {
+  if (state.running) throw new Error('demo already running');
+  if (!state.userId || !state.sessionToken) throw new Error('not logged in');
+  const startedAt = Date.now();
+  state.running = true;
+  state.leaveAlert = '';
+  state.lastSnapshotProbe = {
+    startedAt,
+    completedAt: 0,
+    ok: false,
+    error: '',
+    request: null,
+    response: null
+  };
+  persistState();
+
+  const url = snapshotProbeUrl();
+  logEvent('snapshot-probe-start', { url, loginPoint: state.lastSelfSummary });
+  try {
+    const response = await fetchWithTimeout(url, { method: 'GET', cache: 'no-store' });
+    const body = await readResponseBody(response);
+    const summary = summarizeSnapshotPayload(body.json);
+    state.lastSnapshotProbe.request = {
+      url: redact(url),
+      loginPoint: state.lastSelfSummary || null
+    };
+    state.lastSnapshotProbe.response = {
+      httpOk: response.ok,
+      status: response.status,
+      statusText: response.statusText || '',
+      durationMs: Date.now() - startedAt,
+      contentType: response.headers.get('content-type') || '',
+      textLength: body.text.length,
+      textSample: body.json ? '' : redact(body.text.slice(0, 500)),
+      summary
+    };
+    state.lastSnapshotProbe.ok = Boolean(response.ok && summary.valid && summary.safety?.ok);
+    if (!state.lastSnapshotProbe.ok) {
+      state.lastSnapshotProbe.error = response.ok
+        ? `snapshot safety not confirmed: ${summary.safety?.reason || 'invalid-payload'}`
+        : `snapshot HTTP ${response.status}`;
+      state.lastError = state.lastSnapshotProbe.error;
+    } else {
+      state.lastError = '';
+    }
+    logEvent('snapshot-probe-result', state.lastSnapshotProbe);
+  } catch (err) {
+    const message = err?.message || String(err);
+    state.lastSnapshotProbe.error = message;
+    state.lastError = message;
+    logEvent('snapshot-probe-error', { error: message });
+  } finally {
+    state.running = false;
+    state.lastSnapshotProbe.completedAt = Date.now();
+    persistState();
+  }
+  if (!state.lastSnapshotProbe.ok) throw new Error(state.lastSnapshotProbe.error || 'snapshot probe failed');
+  return state.lastSnapshotProbe;
+}
+
 function sendJson(res, status, body) {
   const text = JSON.stringify(body, null, 2);
   res.writeHead(status, {
@@ -1318,10 +1491,11 @@ function sendHtml(res) {
     </section>
     <section>
       <div class="row">
+        <button id="snapshotProbeBtn">运行登录点快照 Probe</button>
         <button id="probeBtn">运行只读 WS Probe</button>
         <button class="danger" id="runBtn">运行一次移动/开枪/退出 Demo</button>
       </div>
-      <p class="muted">只读 Probe 会连接 WS、收集帧统计、再 leave，不发送移动或开枪。Demo 会运行一次上、下、左、右、开枪、leave。leave 未被服务端明确确认时会醒目报警。</p>
+      <p class="muted">快照 Probe 不进入 WS，用于验证登录点安全校验接口。只读 WS Probe 会连接 WS、收集帧统计、再 leave，不发送移动或开枪。Demo 会运行一次上、下、左、右、开枪、leave。leave 未被服务端明确确认时会醒目报警。</p>
     </section>
     <section>
       <h2>状态</h2>
@@ -1365,6 +1539,7 @@ function sendHtml(res) {
         clearError();
       }
       const disabled = data.state.running || !(data.state.authenticated || data.state.loggedIn);
+      document.getElementById('snapshotProbeBtn').disabled = disabled;
       document.getElementById('probeBtn').disabled = disabled;
       document.getElementById('runBtn').disabled = disabled;
     }
@@ -1384,6 +1559,11 @@ function sendHtml(res) {
     document.getElementById('probeBtn').onclick = async () => {
       if (!confirm('确认运行只读 WS Probe？它会进入游戏但不会移动或开枪，结束后会 leave。')) return;
       try { clearError(); await api('/api/run-readonly-probe', { method: 'POST' }); await refresh(); }
+      catch (err) { showError(err); await refresh().catch(() => {}); }
+    };
+    document.getElementById('snapshotProbeBtn').onclick = async () => {
+      if (!confirm('确认运行登录点快照 Probe？它不会进入 WS，只会请求一次 snapshot 并评估最近 self 坐标附近风险。')) return;
+      try { clearError(); await api('/api/run-snapshot-probe', { method: 'POST' }); await refresh(); }
       catch (err) { showError(err); await refresh().catch(() => {}); }
     };
     document.getElementById('refreshBtn').onclick = () => refresh().catch(showError);
@@ -1435,6 +1615,10 @@ const server = http.createServer(async (req, res) => {
     }
     if (parsed.pathname === '/api/run-readonly-probe' && req.method === 'POST') {
       const result = await runReadOnlyProbe();
+      return sendJson(res, 200, { ok: Boolean(result.ok), result, state: publicState() });
+    }
+    if (parsed.pathname === '/api/run-snapshot-probe' && req.method === 'POST') {
+      const result = await runSnapshotProbe();
       return sendJson(res, 200, { ok: Boolean(result.ok), result, state: publicState() });
     }
     return sendJson(res, 404, { ok: false, error: 'not found' });
