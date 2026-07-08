@@ -256,14 +256,24 @@ async function runReadOnlyCanary(config, options = {}) {
   result.snapshotSafety = await (options.runPreLoginSnapshotSafety || runPreLoginSnapshotSafety)(config, options.persistedState || {}, options);
   log('canary-snapshot-safety', result.snapshotSafety);
   if (!result.snapshotSafety.ok) {
-    recordSafetyEvent(safetyController.evaluate(null, {
-      snapshotSafety: result.snapshotSafety,
-      nowMs: now()
-    }));
-    result.error = `snapshot safety not confirmed: ${result.snapshotSafety.reason}`;
-    result.completedAt = new Date(now()).toISOString();
-    log('canary-blocked', { error: result.error });
-    return result;
+    if (options.allowMissingLoginPointBootstrap && result.snapshotSafety.reason === 'missing-login-point') {
+      result.snapshotSafety = {
+        ...result.snapshotSafety,
+        ok: true,
+        bootstrapOnly: true,
+        reason: 'bootstrap-missing-login-point'
+      };
+      log('canary-bootstrap-login-point', result.snapshotSafety);
+    } else {
+      recordSafetyEvent(safetyController.evaluate(null, {
+        snapshotSafety: result.snapshotSafety,
+        nowMs: now()
+      }));
+      result.error = `snapshot safety not confirmed: ${result.snapshotSafety.reason}`;
+      result.completedAt = new Date(now()).toISOString();
+      log('canary-blocked', { error: result.error });
+      return result;
+    }
   }
 
   let transport = null;
@@ -433,6 +443,10 @@ async function runReadOnlyCanary(config, options = {}) {
     result.actions.lastShootAck = adapterState.lastShootAck || result.actions.lastShootAck;
   }
   result.ok = Boolean(!result.error);
+  if (result.ok && result.snapshotSafety?.bootstrapOnly && !result.state?.realtime?.self) {
+    result.error = 'bootstrap login point was not observed';
+    result.ok = false;
+  }
   result.completedAt = new Date(now()).toISOString();
   log(result.ok ? 'canary-finish' : 'canary-failed', result);
   return result;

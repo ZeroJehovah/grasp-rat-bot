@@ -8,7 +8,9 @@ const { cleanupOldLogDays } = require('./log-retention');
 const { createLocalLogStore } = require('./local-log-store');
 const {
   buildPublicBrowserlessStatus,
+  loginPointFromAnyState,
   readBrowserlessStateFile,
+  sessionFromAnyState,
   stateFilePath,
   updateBrowserlessStateFile,
   writeBrowserlessStateFile
@@ -17,6 +19,10 @@ const { startStatusServer } = require('./status-server');
 const { runReadOnlyCanary } = require('./canary');
 const { decisionStatePatch } = require('./decision-adapter');
 const { createBrowserlessSafetyController } = require('./safety-controller');
+const {
+  requestAuthUrl,
+  submitCallbackInput
+} = require('./session-client');
 
 function publicConfig(config) {
   return {
@@ -53,6 +59,35 @@ function publicConfig(config) {
   };
 }
 
+function hydrateConfigFromState(config, state) {
+  const session = sessionFromAnyState(state);
+  const loginPoint = loginPointFromAnyState(state);
+  return {
+    ...config,
+    userId: Number(config.userId || 0) || session.userId,
+    sessionToken: config.sessionToken || session.sessionToken,
+    loginPointX: Number.isFinite(Number(config.loginPointX)) ? config.loginPointX : loginPoint?.x ?? config.loginPointX,
+    loginPointY: Number.isFinite(Number(config.loginPointY)) ? config.loginPointY : loginPoint?.y ?? config.loginPointY,
+    loginPointHp: Number.isFinite(Number(config.loginPointHp)) ? config.loginPointHp : loginPoint?.hp ?? config.loginPointHp
+  };
+}
+
+function learnedLoginPointFromCanary(canary) {
+  const finalSelf = canary?.state?.realtime?.self || canary?.decisions?.last?.input?.self || null;
+  if (!finalSelf || !Number.isFinite(Number(finalSelf.x)) || !Number.isFinite(Number(finalSelf.y))) {
+    return { finalSelf: null, loginPoint: null };
+  }
+  return {
+    finalSelf,
+    loginPoint: {
+      x: Number(finalSelf.x),
+      y: Number(finalSelf.y),
+      hp: Number.isFinite(Number(finalSelf.hp)) ? Number(finalSelf.hp) : null,
+      source: 'canary-self'
+    }
+  };
+}
+
 async function runBrowserlessRunner(config, deps = {}) {
   const now = typeof deps.now === 'function' ? deps.now : Date.now;
   const logStore = deps.logStore || createLocalLogStore({ logDir: config.logDir, now });
@@ -70,6 +105,10 @@ async function runBrowserlessRunner(config, deps = {}) {
     keepDays: config.logRetentionDays
   });
   let persisted = readBrowserlessStateFile(stateFile);
+  const envSessionTokenProvided = Boolean(config.sessionToken);
+  const envLoginPointProvided = Number.isFinite(Number(config.loginPointX)) && Number.isFinite(Number(config.loginPointY));
+  const persistedLoginPoint = loginPointFromAnyState(persisted);
+  config = hydrateConfigFromState(config, persisted);
   const loginPointProvided = Number.isFinite(Number(config.loginPointX)) && Number.isFinite(Number(config.loginPointY));
   persisted = writeBrowserlessStateFile(stateFile, {
     ...persisted,
@@ -78,7 +117,7 @@ async function runBrowserlessRunner(config, deps = {}) {
       ...persisted.session,
       userId: config.userId || persisted.session.userId,
       sessionToken: config.sessionToken || persisted.session.sessionToken,
-      tokenUpdatedAt: config.sessionToken ? new Date(now()).toISOString() : persisted.session.tokenUpdatedAt
+      tokenUpdatedAt: envSessionTokenProvided ? new Date(now()).toISOString() : persisted.session.tokenUpdatedAt
     },
     runner: {
       ...persisted.runner,
@@ -100,7 +139,7 @@ async function runBrowserlessRunner(config, deps = {}) {
             x: Number(config.loginPointX),
             y: Number(config.loginPointY),
             hp: Number.isFinite(Number(config.loginPointHp)) ? Number(config.loginPointHp) : null,
-            source: 'cli'
+            source: envLoginPointProvided ? 'cli' : (persistedLoginPoint?.source || 'state')
           },
           checkedAt: ''
         }
@@ -134,6 +173,48 @@ async function runBrowserlessRunner(config, deps = {}) {
         }, { updatedAt: new Date(now()).toISOString() });
         logStore.append('exits', 'stop-request', event);
         return { ok: true, event };
+      },
+      onAuthUrl: async () => {
+        const authUrl = await (deps.requestAuthUrl || requestAuthUrl)({
+          gameOrigin: config.gameOrigin,
+          timeoutMs: config.httpTimeoutMs
+        });
+        updateBrowserlessStateFile(stateFile, {
+          session: {
+            lastAuthUrl: authUrl,
+            lastAuthUrlAt: new Date(now()).toISOString()
+          }
+        }, { updatedAt: new Date(now()).toISOString() });
+        logStore.append('runner', 'auth-url', { authUrlPresent: Boolean(authUrl) });
+        return { ok: true, authUrl };
+      },
+      onCallback: async input => {
+        const result = await (deps.submitCallbackInput || submitCallbackInput)(input, {
+          gameOrigin: config.gameOrigin,
+          timeoutMs: config.httpTimeoutMs
+        });
+        updateBrowserlessStateFile(stateFile, {
+          session: {
+            userId: result.login.userId,
+            sessionToken: result.login.sessionToken,
+            tokenUpdatedAt: new Date(now()).toISOString(),
+            lastLoginSource: result.source || '',
+            lastLoginSummary: result.summary || null
+          }
+        }, { updatedAt: new Date(now()).toISOString() });
+        logStore.append('runner', 'login-ok', {
+          userId: result.login.userId,
+          tokenPresent: true,
+          source: result.source || '',
+          summary: result.summary || null
+        });
+        return {
+          ok: true,
+          userId: result.login.userId,
+          tokenPresent: true,
+          source: result.source || '',
+          summary: result.summary || null
+        };
       }
     });
   }
@@ -192,6 +273,53 @@ async function runBrowserlessRunner(config, deps = {}) {
   }
 
   const readOnlyCanary = deps.runReadOnlyOnce || runReadOnlyCanary;
+  if (!loginPointProvided && config.controlMode === 'read-only') {
+    const bootstrap = await readOnlyCanary(config, {
+      logStore,
+      now,
+      persistedState: readBrowserlessStateFile(stateFile),
+      safetyController,
+      allowMissingLoginPointBootstrap: true
+    });
+    const learned = learnedLoginPointFromCanary(bootstrap);
+    if (learned.loginPoint) {
+      updateBrowserlessStateFile(stateFile, {
+        loginPointSafety: {
+          ok: false,
+          reason: 'learned-login-point-pending-snapshot-safety',
+          point: learned.loginPoint,
+          checkedAt: bootstrap.completedAt || new Date(now()).toISOString()
+        },
+        current: {
+          self: learned.finalSelf
+        },
+        probes: {
+          lastReadOnlyProbe: bootstrap
+        }
+      }, { updatedAt: new Date(now()).toISOString() });
+      persisted = readBrowserlessStateFile(stateFile);
+      config = hydrateConfigFromState(config, persisted);
+      logStore.append('runner', 'login-point-learned', {
+        point: learned.loginPoint,
+        bootstrapRunId: bootstrap.runId || ''
+      });
+    } else {
+      const result = { ok: false, mode: config.controlMode || 'read-only', reason: 'login-point-bootstrap-failed', canary: bootstrap };
+      updateBrowserlessStateFile(stateFile, {
+        runner: {
+          running: false,
+          mode: config.controlMode || 'read-only',
+          lastRun: result,
+          lastError: result.reason
+        },
+        probes: {
+          lastReadOnlyProbe: bootstrap
+        }
+      }, { updatedAt: new Date(now()).toISOString() });
+      logStore.append('runner', 'runner-stop', result);
+      return result;
+    }
+  }
   const canary = await readOnlyCanary(config, {
     logStore,
     now,
@@ -221,6 +349,7 @@ async function runBrowserlessRunner(config, deps = {}) {
       });
     }
   });
+  const { finalSelf, loginPoint: learnedLoginPoint } = learnedLoginPointFromCanary(canary);
   const result = { ok: Boolean(canary?.ok), mode: config.controlMode || 'read-only', canary: canary || null };
   const finalDecisionPatch = canary?.decisions?.last ? decisionStatePatch(canary.decisions.last) : {};
   const safetyEvents = [canary?.safety?.event, canary?.safety?.leaveFailure].filter(Boolean);
@@ -237,6 +366,18 @@ async function runBrowserlessRunner(config, deps = {}) {
       lastRun: result,
       lastError: result.ok ? '' : (canary?.error || 'read-only-canary-failed')
     },
+    ...(learnedLoginPoint ? {
+      loginPointSafety: {
+        ok: Boolean(canary?.snapshotSafety?.ok),
+        reason: canary?.snapshotSafety?.reason || 'learned-from-canary-self',
+        point: learnedLoginPoint,
+        checkedAt: canary?.completedAt || new Date(now()).toISOString()
+      },
+      current: {
+        ...(finalDecisionPatch.current || {}),
+        self: finalSelf
+      }
+    } : {}),
     probes: {
       lastReadOnlyProbe: canary || null
     }
@@ -260,7 +401,13 @@ async function runBrowserlessRunnerSelfTest() {
       '--user-id',
       '7',
       '--session-token',
-      'self-test-token'
+      'self-test-token',
+      '--login-point-x',
+      '1',
+      '--login-point-y',
+      '2',
+      '--login-point-hp',
+      '100'
     ], {});
     const liveRun = await runBrowserlessRunner(liveConfig, {
       now: () => Date.UTC(2026, 6, 8, 1, 1, 0),
@@ -280,6 +427,8 @@ async function runBrowserlessRunnerSelfTest() {
 }
 
 module.exports = {
+  hydrateConfigFromState,
+  learnedLoginPointFromCanary,
   publicConfig,
   runBrowserlessRunner,
   runBrowserlessRunnerSelfTest

@@ -46,6 +46,8 @@ function createStatusServer(options = {}) {
   const webToken = String(options.webToken || '');
   const getStatus = typeof options.getStatus === 'function' ? options.getStatus : () => ({ ok: true });
   const onStop = typeof options.onStop === 'function' ? options.onStop : null;
+  const onAuthUrl = typeof options.onAuthUrl === 'function' ? options.onAuthUrl : null;
+  const onCallback = typeof options.onCallback === 'function' ? options.onCallback : null;
   const server = http.createServer(async (req, res) => {
     const parsed = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
     try {
@@ -65,6 +67,17 @@ function createStatusServer(options = {}) {
         sendJson(res, 200, redactStructuredSecrets(getStatus()));
         return;
       }
+      if (req.method === 'POST' && parsed.pathname === '/api/auth-url') {
+        const result = onAuthUrl ? await onAuthUrl() : { ok: false, reason: 'auth-not-implemented' };
+        sendJson(res, result?.ok === false ? 409 : 200, redactStructuredSecrets(result || { ok: true }));
+        return;
+      }
+      if (req.method === 'POST' && parsed.pathname === '/api/callback') {
+        const body = await readRequestJson(req);
+        const result = onCallback ? await onCallback(body.callbackUrl || body.input || '') : { ok: false, reason: 'auth-not-implemented' };
+        sendJson(res, result?.ok === false ? 409 : 200, redactStructuredSecrets(result || { ok: true }));
+        return;
+      }
       if (req.method === 'POST' && parsed.pathname === '/api/stop') {
         const result = onStop ? await onStop() : { ok: false, reason: 'control-not-implemented' };
         sendJson(res, result?.ok === false ? 409 : 200, result || { ok: true });
@@ -76,6 +89,31 @@ function createStatusServer(options = {}) {
     }
   });
   return server;
+}
+
+function readRequestJson(req) {
+  return new Promise((resolve, reject) => {
+    let text = '';
+    req.on('data', chunk => {
+      text += chunk;
+      if (text.length > 1024 * 1024) {
+        reject(new Error('request body too large'));
+        req.destroy();
+      }
+    });
+    req.on('error', reject);
+    req.on('end', () => {
+      if (!text.trim()) {
+        resolve({});
+        return;
+      }
+      try {
+        resolve(JSON.parse(text));
+      } catch (err) {
+        reject(new Error('invalid JSON request body: ' + (err?.message || String(err))));
+      }
+    });
+  });
 }
 
 function startStatusServer(options = {}) {
@@ -107,6 +145,7 @@ function startStatusServer(options = {}) {
 module.exports = {
   createStatusServer,
   isLoopbackHost,
+  readRequestJson,
   requestAuthorized,
   startStatusServer,
   tokenFromRequest

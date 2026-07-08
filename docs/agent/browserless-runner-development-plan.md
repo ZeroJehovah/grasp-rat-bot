@@ -117,6 +117,7 @@ Update this table in the same task that completes each feature.
 | Commit 29: Expose Acceptance Evidence Summaries | Complete | `scripts/browserless-acceptance-report.js` now includes each canary section's selected final event, run window, decision/action/shoot/combat/forced-stop counts in human summaries, so final VPS cutover output is reviewable without opening the JSON report first. Self-tests cover movement/forced-stop summary evidence. |
 | Commit 30: Add Canary Run Identity | Complete | `src/node/browserless/canary.js` now assigns a stable `runId` to each canary run and stamps runner/decision/action/combat/exit log entries with it. `scripts/browserless-canary-audit.js` prefers `runId` filtering before falling back to time-window filtering, and acceptance summaries include the selected run id. Self-tests cover deterministic id generation and same-window cross-run contamination rejection. |
 | Commit 31: Harden Live Login Point Audit | Complete | `scripts/browserless-deployment-audit.js` now treats empty login-point fields as missing instead of numeric zero in live env mode, so supervised live canaries cannot pass readiness without explicit X/Y/HP coordinates. Self-tests cover empty login-point rejection. |
+| Commit 32: Load Live Session From State | Complete | `scripts/browserless-import-state.js` imports already authorized legacy/demo state into production `state.json` without printing tokens; `src/node/browserless/runner.js` hydrates `userId`, `sessionToken`, and login-point coordinates from state when env/CLI fields are blank; the status API can request an auth URL and submit callback data for future manual authorization; live deployment audit accepts session/login-point evidence from state as well as env. Read-only bootstrap can learn an initial login point from realtime self and then requires a formal snapshot-safety canary, and canary audit rejects bootstrap-only finals as acceptance evidence. Self-tests cover import/hydration and bootstrap-only audit rejection. |
 
 ## Commit Plan
 
@@ -745,13 +746,47 @@ Validation:
 - `node --check src/node/run-self-test.js`
 - `git diff --check`
 
+### Commit 32: Load Live Session From State
+
+Files:
+
+- Add `scripts/browserless-import-state.js`.
+- Update `src/node/browserless/state-file.js`.
+- Update `src/node/browserless/runner.js`.
+- Update `src/node/browserless/status-server.js`.
+- Update `src/node/browserless/canary.js`.
+- Update `scripts/browserless-deployment-audit.js`.
+- Update `scripts/browserless-canary-audit.js`.
+- Update browserless self-test coverage and operator/migration/current-state/test docs.
+
+Purpose:
+
+- Import already authorized demo/headless state into the production browserless state file without printing tokens.
+- Hydrate live runner config from persisted state when env/CLI session and login-point values are blank.
+- Let live deployment readiness accept state-backed session/login-point evidence, while still requiring `DRY_RUN=false` and consistent staged profile/control mode.
+- Add token-gated status endpoints for requesting an auth URL and submitting callback data when no reusable state exists.
+- Allow a read-only bootstrap run only to learn an initial login point, then require a formal snapshot-safety canary; reject bootstrap-only finals in canary acceptance audits.
+
+Validation:
+
+- `node grasp-rat-bot.js --self-test`
+- `node --check scripts/browserless-import-state.js`
+- `node --check scripts/browserless-deployment-audit.js`
+- `node --check scripts/browserless-canary-audit.js`
+- `node --check src/node/browserless/runner.js`
+- `node --check src/node/browserless/canary.js`
+- `node --check src/node/browserless/status-server.js`
+- `node --check src/node/browserless/state-file.js`
+- `node --check src/node/run-self-test.js`
+- `git diff --check`
+
 ## External VPS Validation Required
 
-Local implementation work is complete through Commit 31, and the VPS systemd deployment validation passed on 2026-07-08. The production runner is not accepted until the remaining live canary validations below produce evidence and the aggregate acceptance report passes.
+Local implementation work is complete through Commit 32, and the VPS systemd deployment validation passed on 2026-07-08. The production runner is not accepted until the remaining live canary validations below produce evidence and the aggregate acceptance report passes.
 
 Use the production service path and audit commands from `docs/agent/browserless-vps-migration.md` and `docs/agent/browserless-runner-operator.md`. Do not mark `headless-demo/` superseded until these validations pass:
 
-1. Production read-only canary: pull the latest repo on VPS, verify `node scripts/browserless-deployment-audit.js --help | grep -- '--env-mode'`, configure `/etc/grasp-rat/browserless-runner.env` with `GRASP_RAT_BROWSERLESS_DRY_RUN=false`, session values, and login-point coordinates, run `sudo node scripts/browserless-deployment-audit.js --env-mode live --fail-on-incomplete`, then run 10-30 minutes with verified `leave`, decision logs, and `sudo node scripts/browserless-canary-audit.js --profile read-only --fail-on-incomplete`.
+1. Production read-only canary: pull the latest repo on VPS, import existing legacy/demo state into `/var/lib/grasp-rat-browserless/state.json` or authorize through the token-gated status API, configure `/etc/grasp-rat/browserless-runner.env` with `GRASP_RAT_BROWSERLESS_DRY_RUN=false` and `GRASP_RAT_BROWSERLESS_CANARY_PROFILE=read-only`, run `sudo node scripts/browserless-deployment-audit.js --env-mode live --fail-on-incomplete`, then run 10-30 minutes with verified `leave`, decision logs, and `sudo node scripts/browserless-canary-audit.js --profile read-only --fail-on-incomplete`.
 2. Forced stop canary: `/api/stop` or panel Stop, explicit-stop safety event, verified `leave`, and `sudo node scripts/browserless-canary-audit.js --profile read-only --require-stop --fail-on-incomplete`.
 3. Movement-only canary: short supervised velocity-only run, no shoot commands, command settlement evidence, verified `leave`, and `--profile movement-only`.
 4. Non-combat profit canary: realtime/native profit priority or guarded snapshot fallback, no combat commands, verified `leave`, and `--profile profit`.
@@ -764,6 +799,7 @@ Completed VPS deployment validation:
 - 2026-07-08: After pulling `223551d` and rerunning `sudo scripts/install-browserless-runner-service.sh --install-env`, `grasp-rat-browserless-runner` restarted as active, the data/log runtime directories existed, `systemctl is-enabled/is-active` passed, and `sudo node scripts/browserless-deployment-audit.js --fail-on-incomplete` returned `Browserless deployment audit: ok`.
 - 2026-07-08: The first service log review after deployment confirmed only the intended safe default dry-run skeleton path: `dryRun:true`, `controlMode:"read-only"`, `userId:0`, `sessionTokenPresent:false`, `runner-start`, and `runner-dry-run`. `browserless-canary-audit --profile read-only` was incomplete because no live WS canary had run yet.
 - 2026-07-08: A live-readiness attempt failed before canary start because the VPS checkout was stale and `scripts/browserless-deployment-audit.js` did not recognize `--env-mode`. This is not accepted canary evidence; the next attempt must pull `origin/main`, verify the audit help lists `--env-mode`, and only restart after the live env audit passes.
+- 2026-07-08: VPS inspection found reusable legacy demo state at `headless-demo/data/state.json` with a user id, token present, and a last self/login point. Commit 32 adds a production import/hydration path so operators no longer need to copy `USER_ID`, `SESSION_TOKEN`, or login-point values into the env file.
 
 Historical snapshot safety validation:
 

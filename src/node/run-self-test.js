@@ -107,6 +107,9 @@ const {
   buildAcceptanceReport: buildBrowserlessAcceptanceReport
 } = require('../../scripts/browserless-acceptance-report');
 const {
+  importBrowserlessState
+} = require('../../scripts/browserless-import-state');
+const {
   createNoSelfSnapshotRecoveryRuntime,
   shouldClearTmpGameLocalSessionKey
 } = require('../browser/runtime/no-self-snapshot-recovery-runtime');
@@ -6795,6 +6798,23 @@ async function runSelfTest() {
         writeRunId('decisions', { at: '2026-07-15T01:00:02.000Z', type: 'decision', detail: { runId: 'other-run', kind: 'outside-run-id' } });
         writeRunId('runner', { at: '2026-07-15T01:00:03.000Z', type: 'movement-command', detail: { runId: 'other-run', action: { kind: 'velocity' } } });
         const runIdScoped = summarizeBrowserlessCanaryAudit({ logDir: dir, day: '2026-07-15', profile: 'read-only' });
+        const bootstrapOnlyDayDir = path.join(dir, '2026-07-16');
+        fs.mkdirSync(bootstrapOnlyDayDir, { recursive: true });
+        const writeBootstrapOnly = (stream, entry) => {
+          fs.appendFileSync(path.join(bootstrapOnlyDayDir, `${stream}.jsonl`), `${JSON.stringify(entry)}\n`);
+        };
+        writeBootstrapOnly('runner', {
+          at: '2026-07-16T01:05:00.000Z',
+          type: 'canary-finish',
+          detail: {
+            ...baseFinish,
+            startedAt: '2026-07-16T01:00:00.000Z',
+            completedAt: '2026-07-16T01:05:00.000Z',
+            snapshotSafety: { ok: true, bootstrapOnly: true, reason: 'bootstrap-missing-login-point' }
+          }
+        });
+        writeBootstrapOnly('decisions', { at: '2026-07-16T01:00:01.000Z', type: 'decision', detail: { kind: 'wait' } });
+        const bootstrapOnly = summarizeBrowserlessCanaryAudit({ logDir: dir, day: '2026-07-16', profile: 'read-only' });
         return [
           clean.ok,
           clean.failed.length,
@@ -6821,10 +6841,12 @@ async function runSelfTest() {
           runIdScoped.ok,
           runIdScoped.runId,
           runIdScoped.counts.decisions,
-          runIdScoped.counts.movementCommand
+          runIdScoped.counts.movementCommand,
+          bootstrapOnly.ok,
+          bootstrapOnly.failed.some(item => item.key === 'snapshot-safety')
         ].join('|');
       }),
-      want: 'true|0|true|1|0|false|true|true|1|false|true|true|1|false|true|false|true|1|false|true|1|read-only-20260715T010000000Z|true|read-only-20260715T010000000Z|1|0'
+      want: 'true|0|true|1|0|false|true|true|1|false|true|true|1|false|true|false|true|1|false|true|1|read-only-20260715T010000000Z|true|read-only-20260715T010000000Z|1|0|false|true'
     },
     {
       name: 'browserless runner config parses env and cli overrides',
@@ -6970,13 +6992,22 @@ async function runSelfTest() {
           'GRASP_RAT_BROWSERLESS_CANARY_PROFILE=profit',
           'GRASP_RAT_BROWSERLESS_CONTROL_MODE=non-combat-profit',
           'GRASP_RAT_BROWSERLESS_WEB_TOKEN=local-secret-token',
-          'GRASP_RAT_BROWSERLESS_USER_ID=123',
-          'GRASP_RAT_BROWSERLESS_SESSION_TOKEN=live-secret-token',
-          'GRASP_RAT_BROWSERLESS_LOGIN_POINT_X=10',
-          'GRASP_RAT_BROWSERLESS_LOGIN_POINT_Y=20',
-          'GRASP_RAT_BROWSERLESS_LOGIN_POINT_HP=90',
+          'GRASP_RAT_BROWSERLESS_USER_ID=0',
+          'GRASP_RAT_BROWSERLESS_SESSION_TOKEN=',
+          'GRASP_RAT_BROWSERLESS_LOGIN_POINT_X=',
+          'GRASP_RAT_BROWSERLESS_LOGIN_POINT_Y=',
+          'GRASP_RAT_BROWSERLESS_LOGIN_POINT_HP=',
           ''
         ].join('\n'));
+        updateBrowserlessStateFile(path.join(dataDir, 'state.json'), {
+          session: {
+            userId: 123,
+            sessionToken: 'state-live-secret-token'
+          },
+          loginPointSafety: {
+            point: { x: 10, y: 20, hp: 90, source: 'test-state' }
+          }
+        });
         const live = auditBrowserlessDeployment({
           unitPath,
           envPath,
@@ -6999,9 +7030,7 @@ async function runSelfTest() {
         });
         const missingLoginPointEnvPath = path.join(dir, 'missing-login-point.env');
         fs.writeFileSync(missingLoginPointEnvPath, fs.readFileSync(envPath, 'utf8')
-          .replace('GRASP_RAT_BROWSERLESS_LOGIN_POINT_X=10', 'GRASP_RAT_BROWSERLESS_LOGIN_POINT_X=')
-          .replace('GRASP_RAT_BROWSERLESS_LOGIN_POINT_Y=20', 'GRASP_RAT_BROWSERLESS_LOGIN_POINT_Y=')
-          .replace('GRASP_RAT_BROWSERLESS_LOGIN_POINT_HP=90', 'GRASP_RAT_BROWSERLESS_LOGIN_POINT_HP='));
+          .replace(`GRASP_RAT_BROWSERLESS_DATA_DIR=${dataDir}`, `GRASP_RAT_BROWSERLESS_DATA_DIR=${path.join(dir, 'missing-data')}`));
         const missingLoginPoint = auditBrowserlessDeployment({
           unitPath,
           envPath: missingLoginPointEnvPath,
@@ -7209,6 +7238,64 @@ async function runSelfTest() {
         ].join('|');
       }),
       want: 'true|dry-run|true|read-only|true|true|true'
+    },
+    {
+      name: 'browserless runner imports legacy state and hydrates live config',
+      got: withTempDirForTest(async dir => {
+        const legacyPath = path.join(dir, 'legacy-state.json');
+        const browserlessPath = path.join(dir, 'state.json');
+        fs.writeFileSync(legacyPath, JSON.stringify({
+          userId: 28886,
+          sessionToken: 'legacy-secret-token',
+          lastSelfSummary: { x: 5999, y: 66268, hp: 100, name: 'self' }
+        }));
+        const imported = importBrowserlessState({
+          from: legacyPath,
+          to: browserlessPath,
+          source: 'self-test'
+        });
+        const config = parseBrowserlessRunnerArgs([
+          '--once',
+          '--live',
+          '--data-dir',
+          dir
+        ], {});
+        const liveRun = await runBrowserlessRunner(config, {
+          now: () => Date.UTC(2026, 6, 8, 1, 2, 0),
+          runReadOnlyOnce: async hydrated => ({
+            ok: true,
+            snapshotSafety: { ok: true, reason: 'safe' },
+            state: {
+              realtime: {
+                self: { user_id: hydrated.userId, x: 6001, y: 66270, hp: 99, name: 'self' }
+              }
+            },
+            decisions: {
+              last: {
+                input: {
+                  self: { user_id: hydrated.userId, x: 6001, y: 66270, hp: 99, name: 'self' }
+                }
+              }
+            }
+          })
+        });
+        const stored = readBrowserlessStateFile(browserlessPath);
+        const logFile = path.join(dir, 'logs', '2026-07-08', 'runner.jsonl');
+        const text = fs.readFileSync(logFile, 'utf8');
+        return [
+          imported.ok,
+          imported.userId,
+          imported.tokenPresent,
+          imported.loginPoint.source,
+          liveRun.ok,
+          stored.session.userId,
+          stored.session.authenticated,
+          stored.loginPointSafety.point.x,
+          stored.loginPointSafety.point.source,
+          !text.includes('legacy-secret-token')
+        ].join('|');
+      }),
+      want: 'true|28886|true|self-test|true|28886|true|6001|canary-self|true'
     },
     {
       name: 'browserless state file public status redacts session token',

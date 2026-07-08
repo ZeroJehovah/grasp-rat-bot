@@ -37,7 +37,7 @@ The unit uses:
 - log dir: `/var/log/grasp-rat-browserless`
 - env file: `/etc/grasp-rat/browserless-runner.env`
 
-The installed env example defaults to dry-run read-only mode. This proves the service/deployment surface but does not connect to live WS, does not write `decisions.jsonl`, and does not satisfy canary acceptance. Edit `/etc/grasp-rat/browserless-runner.env` before live canaries: set `GRASP_RAT_BROWSERLESS_DRY_RUN=false`, a long `GRASP_RAT_BROWSERLESS_WEB_TOKEN`, manual session values, login-point coordinates, and the intended `GRASP_RAT_BROWSERLESS_CANARY_PROFILE`.
+The installed env example defaults to dry-run read-only mode. This proves the service/deployment surface but does not connect to live WS, does not write `decisions.jsonl`, and does not satisfy canary acceptance. Before live canaries, keep a long `GRASP_RAT_BROWSERLESS_WEB_TOKEN`, set `GRASP_RAT_BROWSERLESS_DRY_RUN=false`, and set the intended `GRASP_RAT_BROWSERLESS_CANARY_PROFILE`. Session and login-point data should normally come from `/var/lib/grasp-rat-browserless/state.json`, either imported from an already authorized demo state or created through the status auth API.
 
 For staged rollout, prefer `GRASP_RAT_BROWSERLESS_CANARY_PROFILE` or `--canary-profile` over editing mode-specific command lines. Profiles map to existing modes:
 
@@ -78,7 +78,7 @@ node scripts/browserless-deployment-audit.js --help | grep -- '--env-mode'
 sudo node scripts/browserless-deployment-audit.js --env-mode live --fail-on-incomplete
 ```
 
-`--env-mode live` expects `GRASP_RAT_BROWSERLESS_DRY_RUN=false`, a valid canary/control mode, matching profile/control values when both are present, manual session values, and login-point coordinates. The aggregate acceptance report uses deployment env mode `any` by default so it can run after the service has legitimately moved through live staged profiles.
+`--env-mode live` expects `GRASP_RAT_BROWSERLESS_DRY_RUN=false`, a valid canary/control mode, matching profile/control values when both are present, and reusable session/login-point evidence from either env variables or the persisted state file. Prefer state-backed evidence so tokens and coordinates do not need to be copied into `/etc/grasp-rat/browserless-runner.env`. The aggregate acceptance report uses deployment env mode `any` by default so it can run after the service has legitimately moved through live staged profiles.
 
 If the audit prints `unknown argument: --env-mode`, the VPS checkout is older than the live-readiness audit support. Pull `origin/main` with `git pull --ff-only origin main` and rerun the help check before restarting the service. Do not restart into a live canary after a failed live env audit.
 
@@ -116,10 +116,21 @@ node scripts/browserless-runner.js --once --dry-run
 
 ## Read-Only Canary
 
-The canary requires a reusable session and a known login point. The login point is verified again through direct `/snapshot` before the runner joins WS.
+The canary requires a reusable session and a known login point. The runner loads both from persisted state when env/CLI values are blank, and the login point is verified again through direct `/snapshot` before the formal runner joins WS.
 While the canary is connected, the dry-run decision adapter evaluates current state and writes throttled `decisions.jsonl` entries. It does not send movement or shoot commands.
 
-For service-based validation, configure `/etc/grasp-rat/browserless-runner.env` with `GRASP_RAT_BROWSERLESS_DRY_RUN=false`, `GRASP_RAT_BROWSERLESS_CANARY_PROFILE=read-only`, `GRASP_RAT_BROWSERLESS_USER_ID`, `GRASP_RAT_BROWSERLESS_SESSION_TOKEN`, and the three login-point values, then restart `grasp-rat-browserless-runner`.
+For service-based validation, first populate `/var/lib/grasp-rat-browserless/state.json`. If the VPS already has an authorized demo state, import it:
+
+```bash
+sudo node scripts/browserless-import-state.js \
+  --from /home/ubuntu/grasp-rat-bot/headless-demo/data/state.json \
+  --to /var/lib/grasp-rat-browserless/state.json \
+  --source headless-demo
+```
+
+Then configure `/etc/grasp-rat/browserless-runner.env` with `GRASP_RAT_BROWSERLESS_DRY_RUN=false` and `GRASP_RAT_BROWSERLESS_CANARY_PROFILE=read-only`, audit with `sudo node scripts/browserless-deployment-audit.js --env-mode live --fail-on-incomplete`, and restart `grasp-rat-browserless-runner` only after the audit passes.
+
+For one-off CLI validation, either provide the same values as CLI args or point `--data-dir` at a state directory that already has `state.json`:
 
 ```bash
 node scripts/browserless-runner.js \
@@ -136,7 +147,7 @@ node scripts/browserless-runner.js \
   --read-only-probe-ms 1800000
 ```
 
-For the first supervised validation, use 10-30 minutes for `--read-only-probe-ms`. The canary should end with verified `leave`; if leave is not confirmed, treat the run as failed and inspect `runner.jsonl`. Inspect `decisions.jsonl` to confirm combat candidates use realtime authority and snapshot coins appear only as fallback profit candidates.
+For the first supervised validation, use 10-30 minutes for `--read-only-probe-ms`. The canary should end with verified `leave`; if leave is not confirmed, treat the run as failed and inspect `runner.jsonl`. Inspect `decisions.jsonl` to confirm combat candidates use realtime authority and snapshot coins appear only as fallback profit candidates. If no login point is present in state, a read-only bootstrap run may learn one from realtime self, but canary acceptance still requires the subsequent formal snapshot-safety run; `browserless-canary-audit` rejects bootstrap-only final events.
 
 During a supervised run, `POST /api/stop` or the panel Stop button requests an explicit safety stop. The runner records the event in `exits.jsonl` and should leave through the verified direct `leave` path.
 
@@ -239,6 +250,8 @@ Run only under direct supervision. Expected evidence: `combat.jsonl` entries use
 - `GET /` serves the built-in browserless runner panel.
 - `GET /api/health` returns a simple local health response.
 - `GET /api/status` returns redacted status and requires the configured web token.
+- `POST /api/auth-url` requests a LinuxDO authorize URL and stores its presence in state.
+- `POST /api/callback` accepts JSON with `callbackUrl` or `input`, submits the game callback/compatible login payload, and stores the returned user id and session token in state without returning the token.
 - `POST /api/stop` is token-gated and requests an explicit safety stop through the safety/exit controller.
 
 The token can be passed with `?token=...`, `x-web-token`, or `Authorization: Bearer ...`.
@@ -276,7 +289,18 @@ Production service layout:
     summary.json
 ```
 
-`state.json` may contain the manually authorized session token. Public status redacts secrets and reports only token presence.
+`state.json` may contain the manually authorized session token. Public status redacts secrets and reports only token presence. The runner will use `state.session.userId`, `state.session.sessionToken`, and `state.loginPointSafety.point` when env/CLI values are blank.
+
+Import an already authorized legacy demo state into the production state file:
+
+```bash
+sudo node scripts/browserless-import-state.js \
+  --from /home/ubuntu/grasp-rat-bot/headless-demo/data/state.json \
+  --to /var/lib/grasp-rat-browserless/state.json \
+  --source headless-demo
+```
+
+The import output reports token presence only; it does not print the session token.
 
 Generate a day summary:
 
@@ -336,10 +360,10 @@ Important variables:
 - `GRASP_RAT_BROWSERLESS_MOVEMENT_SETTLEMENT_FRAMES`
 - `GRASP_RAT_BROWSERLESS_COMBAT_ENABLED`
 - `GRASP_RAT_BROWSERLESS_COMBAT_SHOOT_MIN_INTERVAL_MS`
-- `GRASP_RAT_BROWSERLESS_USER_ID`
-- `GRASP_RAT_BROWSERLESS_SESSION_TOKEN`
-- `GRASP_RAT_BROWSERLESS_LOGIN_POINT_X`
-- `GRASP_RAT_BROWSERLESS_LOGIN_POINT_Y`
-- `GRASP_RAT_BROWSERLESS_LOGIN_POINT_HP`
+- `GRASP_RAT_BROWSERLESS_USER_ID` (optional when state has a session)
+- `GRASP_RAT_BROWSERLESS_SESSION_TOKEN` (optional when state has a session)
+- `GRASP_RAT_BROWSERLESS_LOGIN_POINT_X` (optional when state has a login point)
+- `GRASP_RAT_BROWSERLESS_LOGIN_POINT_Y` (optional when state has a login point)
+- `GRASP_RAT_BROWSERLESS_LOGIN_POINT_HP` (optional when state has a login point)
 
 Full default values are listed in `docs/agent/config-defaults.md`.
