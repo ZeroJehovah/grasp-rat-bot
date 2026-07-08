@@ -44,6 +44,10 @@ const {
   openBrowserlessWs
 } = require('./browserless/ws-transport');
 const {
+  createBrowserlessStateStore,
+  selectRealtimeCombatState
+} = require('./browserless/state-store');
+const {
   createNoSelfSnapshotRecoveryRuntime,
   shouldClearTmpGameLocalSessionKey
 } = require('../browser/runtime/no-self-snapshot-recovery-runtime');
@@ -5543,6 +5547,106 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: '3|2|2|1|1|1|10|12|5|3|1|1|1'
+    },
+    {
+      name: 'browserless state store ingests realtime pos authority',
+      got: (() => {
+        const store = createBrowserlessStateStore({ userId: 7, now: () => 2000 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 11,
+          entities: [
+            { entity_id: 1, user_id: 7, name: 'self', x: '100', y: 200, hp: 90 },
+            { entity_id: 2, user_id: 8, name: 'other', x: 300, y: 400, hp: 80 }
+          ],
+          bullets: [{ bullet_id: 9, owner_user_id: 8 }]
+        }, { receivedAtMs: 1000 });
+        const realtime = store.getRealtimeState(1600);
+        return [
+          realtime.authority,
+          realtime.tick,
+          realtime.frameAgeMs,
+          realtime.self?.authority,
+          realtime.self?.source,
+          realtime.self?.x,
+          realtime.entities.length,
+          realtime.bullets[0]?.authority
+        ].join('|');
+      })(),
+      want: 'realtime|11|600|realtime|pos|100|2|realtime'
+    },
+    {
+      name: 'browserless state store keeps snapshot fallback out of combat state',
+      got: (() => {
+        const store = createBrowserlessStateStore({ userId: 7 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 20,
+          entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 10, y: 20, hp: 80 }],
+          bullets: []
+        }, { receivedAtMs: 1000 });
+        store.ingestFrame({
+          type: 'snapshot',
+          tick: 21,
+          total_entities: 1001,
+          in_game: 50,
+          visible: 10,
+          occupied_cells: 8,
+          entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 999, y: 999, hp: 80 }],
+          bullets: [{ bullet_id: 1 }],
+          coin_drops: [{ drop_id: 3, x: 400, y: 500, amount: 2 }],
+          messages: ['hello']
+        }, { receivedAtMs: 1200 });
+        const combat = selectRealtimeCombatState(store, 1500);
+        const fallback = store.getFallbackState(1500);
+        return [
+          combat.self?.x,
+          combat.self?.authority,
+          Object.prototype.hasOwnProperty.call(combat, 'fallback'),
+          Object.prototype.hasOwnProperty.call(combat, 'coinDrops'),
+          fallback.self?.x,
+          fallback.self?.authority,
+          fallback.coinDrops[0]?.authority,
+          fallback.counts.totalEntities,
+          fallback.frameAgeMs
+        ].join('|');
+      })(),
+      want: '10|realtime|false|false|999|snapshot|snapshot|1001|300'
+    },
+    {
+      name: 'browserless state store records shoot acknowledgements and frame ages',
+      got: (() => {
+        const store = createBrowserlessStateStore({ userId: 7 });
+        store.ingestFrame({
+          type: 'shoot_ok',
+          tick: 30,
+          bullet_id: 44,
+          owner_user_id: 7,
+          start_x: 1,
+          start_y: 2,
+          target_x: 3,
+          target_y: 4,
+          range_cm: 14500,
+          speed_per_tick: 800
+        }, { receivedAtMs: 2000 });
+        const command = store.getCommandState(2600);
+        const ages = store.getFrameAges(2600);
+        return [
+          command.lastAck?.authority,
+          command.lastAck?.source,
+          command.lastAck?.bullet_id,
+          command.lastAck?.range_cm,
+          command.ackAgeMs,
+          ages.latestFrameAgeMs,
+          store.getState(2600).frameCounts.shoot_ok
+        ].join('|');
+      })(),
+      want: 'realtime|shoot_ok|44|14500|600|600|1'
+    },
+    {
+      name: 'browserless combat selector source does not reference snapshot state',
+      got: /snapshot|fallback|coinDrops/.test(selectRealtimeCombatState.toString()),
+      want: false
     },
     {
       name: 'final arbitration keeps recent safety action over profit',
