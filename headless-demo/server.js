@@ -21,6 +21,7 @@ const HTTP_TIMEOUT_MS = Math.max(1000, Number(process.env.GRASP_RAT_DEMO_HTTP_TI
 const WS_CONNECT_TIMEOUT_MS = Math.max(1000, Number(process.env.GRASP_RAT_DEMO_WS_CONNECT_TIMEOUT_MS || 10000));
 const WS_FRAME_LIMIT = Math.max(0, Number(process.env.GRASP_RAT_DEMO_WS_FRAME_LIMIT || 80));
 const WS_FRAME_BASE64_BYTES = Math.max(0, Number(process.env.GRASP_RAT_DEMO_WS_FRAME_BASE64_BYTES || 256));
+const WS_FRAME_DECODED_SAMPLE_BYTES = Math.max(0, Number(process.env.GRASP_RAT_DEMO_DECODED_SAMPLE_BYTES || 500));
 const WS_PATH = process.env.GRASP_RAT_DEMO_WS_PATH || '/ws';
 const WS_EXTRA_QUERY = process.env.GRASP_RAT_DEMO_WS_EXTRA_QUERY || 'compress=gzip%2Cdeflate';
 let cachedWebSocketRuntime = null;
@@ -43,6 +44,8 @@ const state = {
   wsOpen: false,
   wsLastMessageAt: 0,
   lastFrames: [],
+  lastFrameSummary: null,
+  lastCommandAck: null,
   inGame: false,
   lastJoinAt: 0,
   lastLeaveAt: 0,
@@ -112,6 +115,8 @@ function publicState() {
     leaveAlert: redact(state.leaveAlert),
     lastError: redact(state.lastError),
     logFile: state.logFile,
+    lastFrameSummary: redactStructured(state.lastFrameSummary),
+    lastCommandAck: redactStructured(state.lastCommandAck),
     recentFrames: redactStructured(state.lastFrames.slice(-10))
   };
 }
@@ -677,6 +682,80 @@ function frameDataToText(data) {
   return String(value);
 }
 
+function summarizeEntity(entity) {
+  if (!entity || typeof entity !== 'object') return null;
+  const output = {};
+  for (const key of [
+    'entity_id',
+    'user_id',
+    'name',
+    'x',
+    'y',
+    'vx',
+    'vy',
+    'hp',
+    'max_hp',
+    'life',
+    'visible',
+    'joined',
+    'current_join_mode',
+    'coins'
+  ]) {
+    if (entity[key] !== undefined) output[key] = entity[key];
+  }
+  if (Array.isArray(entity.cell)) output.cell = entity.cell.slice(0, 2);
+  return Object.keys(output).length ? output : null;
+}
+
+function summarizeShotAck(json) {
+  const output = {};
+  for (const key of [
+    'type',
+    'bullet_id',
+    'owner_user_id',
+    'start_x',
+    'start_y',
+    'target_x',
+    'target_y',
+    'dir_x_micros',
+    'dir_y_micros',
+    'range_cm',
+    'speed_per_tick',
+    'created_tick',
+    'expire_tick'
+  ]) {
+    if (json[key] !== undefined) output[key] = json[key];
+  }
+  return output;
+}
+
+function summarizeDecodedJson(json, userId) {
+  if (!json || typeof json !== 'object') return null;
+  const entities = Array.isArray(json.entities) ? json.entities : [];
+  const bullets = Array.isArray(json.bullets) ? json.bullets : [];
+  const summary = {
+    type: typeof json.type === 'string' ? json.type : '',
+    tick: Number.isFinite(Number(json.tick)) ? Number(json.tick) : undefined,
+    keyCount: Object.keys(json).length
+  };
+  if (entities.length) summary.entityCount = entities.length;
+  if (bullets.length) summary.bulletCount = bullets.length;
+  if (Array.isArray(json.coin_drops)) summary.coinDropCount = json.coin_drops.length;
+  if (Array.isArray(json.messages)) summary.messageCount = json.messages.length;
+  if (json.total_entities !== undefined) summary.totalEntities = json.total_entities;
+  if (json.in_game !== undefined) summary.inGameCount = json.in_game;
+  if (json.visible !== undefined) summary.visibleCount = json.visible;
+  if (json.occupied_cells !== undefined) summary.occupiedCells = json.occupied_cells;
+
+  const self = userId ? entities.find(entity => Number(entity?.user_id) === Number(userId)) : null;
+  if (self) summary.self = summarizeEntity(self);
+
+  if (summary.type === 'shoot_ok') {
+    summary.ack = summarizeShotAck(json);
+  }
+  return summary;
+}
+
 function inspectBinaryFrame(buffer) {
   const frame = {
     kind: 'binary',
@@ -694,12 +773,21 @@ function inspectBinaryFrame(buffer) {
       frame.compression = 'gzip';
       try {
         const decoded = zlib.gunzipSync(payload);
+        const decodedText = decoded.toString('utf8');
         frame.decodedByteLength = decoded.length;
-        frame.decodedSample = redact(decoded.toString('utf8').slice(0, 1000));
         try {
-          const json = JSON.parse(decoded.toString('utf8'));
+          const json = JSON.parse(decodedText);
           frame.decodedJsonKeys = json && typeof json === 'object' ? Object.keys(json).slice(0, 20) : [];
+          frame.decodedType = typeof json?.type === 'string' ? json.type : '';
+          if (Number.isFinite(Number(json?.tick))) frame.decodedTick = Number(json.tick);
+          frame.decodedSummary = summarizeDecodedJson(json, state.userId);
+          if (!frame.decodedSummary && WS_FRAME_DECODED_SAMPLE_BYTES > 0) {
+            frame.decodedSample = redact(decodedText.slice(0, WS_FRAME_DECODED_SAMPLE_BYTES));
+          }
         } catch (_) {}
+        if (!frame.decodedJsonKeys && WS_FRAME_DECODED_SAMPLE_BYTES > 0) {
+          frame.decodedSample = redact(decodedText.slice(0, WS_FRAME_DECODED_SAMPLE_BYTES));
+        }
       } catch (err) {
         frame.decodeError = err?.message || String(err);
       }
@@ -716,6 +804,12 @@ function recordFrame(data) {
     ? { at: new Date().toISOString(), ...inspectBinaryFrame(buffer) }
     : { at: new Date().toISOString(), kind: 'text', sample: frameDataToText(data).slice(0, 1000) };
   state.wsLastMessageAt = Date.now();
+  state.lastFrameSummary = frame.decodedSummary || {
+    kind: frame.kind,
+    byteLength: frame.byteLength,
+    sample: frame.sample
+  };
+  if (frame.decodedSummary?.ack) state.lastCommandAck = frame.decodedSummary.ack;
   state.lastFrames.push(frame);
   if (state.lastFrames.length > WS_FRAME_LIMIT) state.lastFrames.splice(0, state.lastFrames.length - WS_FRAME_LIMIT);
   logEvent('ws-frame', frame);
@@ -894,6 +988,8 @@ async function runActionDemo() {
   if (!state.userId || !state.sessionToken) throw new Error('not logged in');
   state.running = true;
   state.leaveAlert = '';
+  state.lastFrameSummary = null;
+  state.lastCommandAck = null;
   state.lastRun = {
     startedAt: Date.now(),
     completedAt: 0,

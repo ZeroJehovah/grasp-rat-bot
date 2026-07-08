@@ -49,6 +49,7 @@ The web UI supports:
 - Writing JSONL logs under the configured log directory.
 - Showing a red page alert if `leave` is not explicitly confirmed.
 - Reporting `authenticated` separately from `inGame`: `authenticated` means the demo has a reusable token, while `inGame` means the current demo WebSocket session is in the visible entity layer.
+- Reporting `lastFrameSummary` and `lastCommandAck` from decoded WebSocket JSON so VPS checks can focus on frame type, tick, entity counts, self state, and command acknowledgements instead of large raw samples.
 
 ## Observed Live Auth Flow
 
@@ -107,6 +108,20 @@ The first demo sends a deliberately limited action sequence:
 
 This sequence is only started by an explicit web button click.
 
+Observed incoming WebSocket frames use a small binary envelope:
+
+- Prefix bytes: ASCII `GRZ1`
+- Version byte: `1`
+- Payload: gzip-compressed JSON
+
+Decoded frame types observed from the VPS run:
+
+- `pos`: high-frequency realtime visible state with `tick`, `entities`, and `bullets`.
+- `snapshot`: larger state frame delivered over the same WebSocket, with `total_entities`, `in_game`, `visible`, `occupied_cells`, `entities`, `bullets`, `coin_drops`, and `messages`.
+- `shoot_ok`: command acknowledgement after `shoot 0 0 0 0`, including `bullet_id`, owner, start/target coordinates, direction, range, speed, and tick window.
+
+Combat migration should consume realtime `pos` frames first. The pushed `snapshot` frame is useful as protocol evidence and potential non-combat fallback data, but combat target, aim, and fire decisions must continue to use realtime/native visible state rather than snapshot state.
+
 ## Validated Probe Result
 
 On 2026-07-08, the VPS one-shot demo succeeded after the Node 18 `ws` fallback and `MessageEvent` frame handling fixes:
@@ -118,6 +133,8 @@ On 2026-07-08, the VPS one-shot demo succeeded after the Node 18 `ws` fallback a
 - `leaveResponseConfirmsExitCore()` confirmed exit from the response summary: `leaveConfirmed: true`, `event: left`, `joined: UserRecordOnly`, `current_join_mode: None`, `life: Alive`, `visible: Hidden`.
 - Recent WebSocket frames were binary/compressed samples beginning with `GRZ1` followed by a gzip-looking payload. This confirms the next protocol task is a headless frame decompressor/parser before any real strategy migration can depend on WS state.
 - A later restart/manual authorization test ran the one-shot demo twice successfully. `leave` kept the session token usable, so repeat runs can reconnect with the stored token; this is expected because leaving the visible entity layer is not the same as clearing authentication.
+- The decoded leave response after the repeat run confirmed `joined: UserRecordOnly`, `current_join_mode: None`, `visible: Hidden`, and `life: Alive`. This means `inGame` should become false after `leave`, while `authenticated`/legacy `loggedIn` remains true because the auth token is still present and reusable.
+- The decoded `shoot_ok` acknowledgement proves the text command path is accepted by the direct WebSocket transport.
 
 ## Progress Log
 
@@ -132,10 +149,12 @@ On 2026-07-08, the VPS one-shot demo succeeded after the Node 18 `ws` fallback a
 - 2026-07-08: The one-shot VPS run completed successfully: callback login, WebSocket open, command send, compressed frame receipt, and verified leave all worked.
 - 2026-07-08: Restart/manual authorization followed by two consecutive `run-demo` clicks both succeeded. The status model should distinguish cached authentication from active in-game presence.
 - 2026-07-08: Frame logging was updated to keep binary metadata instead of lossy UTF-8 samples and to attempt `GRZ1` gzip decoding.
+- 2026-07-08: VPS logs confirmed `GRZ1` version `1` gzip JSON frames. Decoded frame types include `pos`, `snapshot`, and `shoot_ok`; `leave` exits the visible entity layer but does not invalidate the reusable session token.
+- 2026-07-08: Demo frame diagnostics were tightened to log structured summaries (`decodedType`, `decodedTick`, counts, self entity, command ack) instead of relying on large decoded JSON samples.
 
 ## Next Plan
 
-1. Run one more VPS demo after the structured frame logging update and inspect whether `decodedSample` appears for `GRZ1` frames.
+1. Run one more VPS demo after the structured frame-summary update and inspect `lastFrameSummary`, `lastCommandAck`, and the latest JSONL `decodedSummary` fields.
 2. Define the browserless runtime boundary:
    - shared pure strategy remains in `src/strategy/`;
    - browser DOM/CDP integration remains browser-specific;
