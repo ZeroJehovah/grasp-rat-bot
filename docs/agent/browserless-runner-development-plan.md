@@ -119,6 +119,8 @@ Update this table in the same task that completes each feature.
 | Commit 31: Harden Live Login Point Audit | Complete | `scripts/browserless-deployment-audit.js` now treats empty login-point fields as missing instead of numeric zero in live env mode, so supervised live canaries cannot pass readiness without explicit X/Y/HP coordinates. Self-tests cover empty login-point rejection. |
 | Commit 32: Load Live Session From State | Complete | `scripts/browserless-import-state.js` imports already authorized legacy/demo state into production `state.json` without printing tokens; `src/node/browserless/runner.js` hydrates `userId`, `sessionToken`, and login-point coordinates from state when env/CLI fields are blank; the status API can request an auth URL and submit callback data for future manual authorization; live deployment audit accepts session/login-point evidence from state as well as env. Read-only bootstrap can learn an initial login point from realtime self and then requires a formal snapshot-safety canary, and canary audit rejects bootstrap-only finals as acceptance evidence. Self-tests cover import/hydration and bootstrap-only audit rejection. |
 | Commit 33: Require Combat Target Evidence | Complete | `scripts/browserless-canary-audit.js` now requires combat-dry-run and combat-live acceptance evidence to include at least one scoped realtime combat target entry, not just targetless combat diagnostic rows. `scripts/browserless-acceptance-report.js` prints combat target counts in section summaries, and self-tests cover accepted target evidence plus targetless dry-run rejection. |
+| Commit 34: Quantize Browserless Velocity Commands | Complete; VPS movement revalidation pending | `src/node/browserless/ws-transport.js` now sends direct WS velocity commands using the same rounded/clamped `-1/0/1` format as the browser native transport instead of fractional vectors. Self-tests cover fractional and out-of-range velocity command formatting. A 2026-07-08 active-search attempt sent fractional commands and observed no self-position change, so movement-only/profit VPS canaries should be rerun with 2 minute windows before relying on movement-dependent stages. |
+| Commit 35: Add Explicit Profit-Live AFK Mode | Complete; VPS formal-run validation pending | `controlMode=profit-live` is now a separate explicit mode for ordinary coins plus visible AFK targets. The `profit` canary profile remains mapped to `non-combat-profit` and keeps its no-shoot audit contract; `profit-live` blocks AFK profit while a visible Active threat exists and does not replace combat-live. Self-tests cover AFK target selection, Active-threat blocking, and AFK shoot command emission. |
 
 ## Commit Plan
 
@@ -783,13 +785,15 @@ Validation:
 
 ## External VPS Validation Required
 
-Local implementation work is complete through Commit 33, and the VPS systemd deployment validation passed on 2026-07-08. The production runner is not accepted until the remaining live canary validations below produce evidence and the aggregate acceptance report passes.
+Local implementation work is complete through Commit 35, and the VPS systemd deployment validation passed on 2026-07-08. The production runner is not accepted until the remaining live canary validations below produce evidence and the aggregate acceptance report passes.
 
 Use the production service path and audit commands from `docs/agent/browserless-vps-migration.md` and `docs/agent/browserless-runner-operator.md`. Do not mark `headless-demo/` superseded until these validations pass:
 
-1. Combat dry-run canary: 2 minute supervised run with at least one realtime combat target, aim/fire summaries, suppressed commands, verified `leave`, and `--profile combat-dry-run`.
-2. Guarded combat live canary: 2 minute supervised run with explicit `combatEnabled=true`, realtime combat movement/shoot pacing, `shoot_ok` evidence when shots are sent, verified `leave`, and `--profile combat-live`.
-3. Final cutover readiness: `sudo node scripts/browserless-acceptance-report.js --log-dir /var/log/grasp-rat-browserless --day YYYY-MM-DD --fail-on-incomplete`.
+1. Revalidate movement-only and profit with 2 minute VPS windows after Commit 34; inspect self-position delta in addition to command/audit evidence.
+2. Combat dry-run canary: 2 minute supervised run with at least one realtime combat target, aim/fire summaries, suppressed commands, verified `leave`, and `--profile combat-dry-run`.
+3. Guarded combat live canary: 2 minute supervised run with explicit `combatEnabled=true`, realtime combat movement/shoot pacing, `shoot_ok` evidence when shots are sent, verified `leave`, and `--profile combat-live`.
+4. Optional formal-run validation for explicit `controlMode=profit-live` after the required canaries pass; use direct control mode rather than the `profit` canary profile.
+5. Final cutover readiness: `sudo node scripts/browserless-acceptance-report.js --log-dir /var/log/grasp-rat-browserless --day YYYY-MM-DD --fail-on-incomplete`.
 
 Completed VPS deployment validation:
 
@@ -802,6 +806,7 @@ Completed VPS deployment validation:
 - 2026-07-08: The movement-only canary passed on VPS with run id `movement-only-20260708T151108072Z` over `2026-07-08T15:11:08.072Z .. 2026-07-08T15:12:10.382Z`. Audit accepted snapshot safety, 1213 decoded frames, 1212 self-observed frames, 0 decode errors, verified `leave`, 59 decision entries, 60 velocity/movement-command entries, command settlement, and 0 shoot commands.
 - 2026-07-08: The non-combat profit canary passed on VPS with run id `non-combat-profit-20260708T151524293Z` over `2026-07-08T15:15:24.293Z .. 2026-07-08T15:16:26.489Z`. Audit accepted snapshot safety, 1212 decoded frames, 1211 self-observed frames, 0 decode errors, verified `leave`, 59 profit decision entries, 60 velocity/movement-command entries, 58 visible coin actions, 0 combat actions, and 0 shoot commands.
 - 2026-07-08: A 10 minute combat-dry-run attempt `combat-dry-run-20260708T152147589Z` cleanly finished with verified `leave`, 11982 decoded/self-observed frames, 584 dry-run combat diagnostic rows, 0 movement commands, and 0 shoot commands, but it had 0 realtime combat targets/candidates. This is useful safety evidence but is not accepted Commit 14 canary evidence; Commit 33 tightens the audit so targetless combat diagnostic rows cannot satisfy combat canary acceptance.
+- 2026-07-08: An active-search navigation attempt toward snapshot-located Active player `JeremyOp` sent 358 direct velocity commands over 182.8s and verified `leave`, but self remained at the starting coordinates. This exposed that browserless direct WS velocity commands were fractional while the browser native transport rounds/clamps `vel` payloads to `-1/0/1`; Commit 34 fixes the command format and requires rerunning movement-dependent VPS validations.
 
 Historical snapshot safety validation:
 

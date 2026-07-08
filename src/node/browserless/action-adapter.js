@@ -4,6 +4,7 @@ const DEFAULT_TARGET_DEAD_ZONE_CM = 900;
 const DEFAULT_COMMAND_INTERVAL_MS = 500;
 const DEFAULT_SETTLEMENT_FRAMES = 2;
 const DEFAULT_COMBAT_SHOOT_MIN_INTERVAL_MS = 160;
+const DEFAULT_ATTACK_RANGE_CM = 14500;
 
 function numberOrNull(value) {
   const number = Number(value);
@@ -41,15 +42,19 @@ function movementVectorToTarget(self, target, options = {}) {
   };
 }
 
-function movementTargetFromDecision(decision) {
+function profitActionFromDecision(decision) {
   const action = decision?.action || decision || {};
   const target = action.target || null;
   const kind = String(action.kind || decision?.kind || '');
   const band = String(action.band || decision?.band || '');
   if (band !== 'profit') return null;
-  if (kind !== 'coin' && kind !== 'seek-coin' && kind !== 'profit-candidate') return null;
-  if (!target || target.type !== 'coin') return null;
-  return target;
+  if ((kind === 'coin' || kind === 'seek-coin' || kind === 'profit-candidate') && target?.type === 'coin') {
+    return { type: 'coin', kind, target };
+  }
+  if ((kind === 'attack' || kind === 'seek-enemy') && target?.type === 'enemy') {
+    return { type: 'enemy', kind, target };
+  }
+  return null;
 }
 
 function combatSummaryFromDecision(decision) {
@@ -182,8 +187,8 @@ function createBrowserlessActionAdapter(options = {}) {
       return applyCombatDecision(stateSnapshot, decision);
     }
     const self = stateSnapshot?.realtime?.self || decision?.input?.self || null;
-    const target = movementTargetFromDecision(decision);
-    if (!target) {
+    const profitAction = profitActionFromDecision(decision);
+    if (!profitAction) {
       const stopped = stop('unsupported-or-wait-decision');
       return {
         ok: stopped.ok,
@@ -193,6 +198,10 @@ function createBrowserlessActionAdapter(options = {}) {
         skipped: Boolean(stopped.skipped)
       };
     }
+    if (profitAction.type === 'enemy') {
+      return applyProfitEnemyDecision(self, profitAction.target, decision);
+    }
+    const target = profitAction.target;
     const vector = movementVectorToTarget(self, target, options);
     if (!vector.ok) {
       const stopped = stop(vector.reason);
@@ -213,6 +222,87 @@ function createBrowserlessActionAdapter(options = {}) {
       vector,
       command: sent.command || null,
       skipped: Boolean(sent.skipped)
+    };
+  }
+
+  function applyProfitEnemyDecision(self, target, decision) {
+    if (target?.active) {
+      const stopped = stop('profit-active-target-blocked');
+      return {
+        ok: stopped.ok,
+        kind: 'stop',
+        reason: 'profit-active-target-blocked',
+        command: stopped.command || null,
+        skipped: Boolean(stopped.skipped),
+        target
+      };
+    }
+    const vector = movementVectorToTarget(self, target, options);
+    const distance = Number.isFinite(Number(vector.distance))
+      ? Number(vector.distance)
+      : Math.hypot(Number(target?.x) - Number(self?.x), Number(target?.y) - Number(self?.y));
+    const attackRange = Math.max(0, Number(options.attackRangeCm ?? options.attackRange ?? DEFAULT_ATTACK_RANGE_CM));
+    if (!(Number.isFinite(distance) && distance <= attackRange)) {
+      if (!vector.ok) {
+        const stopped = stop(vector.reason || 'profit-afk-missing-position');
+        return {
+          ok: stopped.ok,
+          kind: 'stop',
+          reason: vector.reason || 'profit-afk-missing-position',
+          vector,
+          command: stopped.command || null,
+          skipped: Boolean(stopped.skipped),
+          target
+        };
+      }
+      const sent = sendVelocity(vector.dx, vector.dy, 'profit-afk-seek', target);
+      return {
+        ok: sent.ok,
+        kind: 'velocity',
+        reason: 'profit-afk-seek',
+        vector,
+        command: sent.command || null,
+        skipped: Boolean(sent.skipped),
+        target
+      };
+    }
+
+    const hold = sendVelocity(0, 0, 'profit-afk-attack-hold', target);
+    const startX = numberOrNull(self?.x);
+    const startY = numberOrNull(self?.y);
+    const targetX = numberOrNull(target?.x);
+    const targetY = numberOrNull(target?.y);
+    let shoot = { ok: false, skipped: true, reason: 'missing-shoot-coordinates' };
+    if (startX !== null && startY !== null && targetX !== null && targetY !== null) {
+      shoot = sendShoot(
+        targetX,
+        targetY,
+        startX,
+        startY,
+        decision?.action?.reason || decision?.reason || 'profit-afk-attack',
+        target
+      );
+    } else {
+      state.skippedCount += 1;
+    }
+    return {
+      ok: Boolean(hold.ok && shoot.ok),
+      kind: 'profit-attack',
+      reason: 'profit-afk-attack',
+      movement: {
+        ok: hold.ok,
+        skipped: Boolean(hold.skipped),
+        reason: hold.reason || 'profit-afk-attack-hold',
+        command: hold.command || null
+      },
+      shoot: {
+        ok: shoot.ok,
+        skipped: Boolean(shoot.skipped),
+        reason: shoot.reason,
+        command: shoot.command || null,
+        cadenceMs: shoot.cadenceMs || null
+      },
+      target
     };
   }
 
@@ -345,6 +435,6 @@ module.exports = {
   DEFAULT_TARGET_DEAD_ZONE_CM,
   combatSummaryFromDecision,
   createBrowserlessActionAdapter,
-  movementTargetFromDecision,
+  profitActionFromDecision,
   movementVectorToTarget
 };

@@ -113,6 +113,7 @@ function normalizeCoinForDecision(drop, self, authority = 'snapshot') {
 function summarizeTarget(target) {
   if (!target) return null;
   return {
+    type: 'enemy',
     userId: numberOrNull(target.user_id),
     entityId: numberOrNull(target.entity_id),
     name: target.name || '',
@@ -280,7 +281,7 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
       action: null
     };
   }
-  const includeAfkProfitTargets = options.includeAfkProfitTargets !== false;
+  const includeAfkProfitTargets = options.includeAfkProfitTargets !== false && !(options.blockAfkProfitWhenActiveThreatVisible && input.activeThreats.length);
   const coinGroups = input.profitCoins.length
     ? [{ coins: input.profitCoins, maxDistance: options.globalCoinMaxDistance || OPPORTUNITY_CONSTANTS.GLOBAL_COIN_MAX_DISTANCE }]
     : [];
@@ -381,13 +382,15 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
   const input = buildBrowserlessStrategyInput(state, options);
   const staleSelfMs = Math.max(1000, Number(options.staleSelfMs || DEFAULT_STALE_SELF_MS));
   const nonCombatProfit = options.controlMode === 'non-combat-profit' || options.nonCombatProfit === true;
+  const profitLive = options.controlMode === 'profit-live';
   const combatDryRun = options.controlMode === 'combat-dry-run';
   const combatLiveEnabled = options.controlMode === 'combat-live' && options.combatEnabled === true;
-  const combatDecisionEnabled = options.combatDecisionEnabled !== false && !nonCombatProfit;
+  const combatDecisionEnabled = options.combatDecisionEnabled !== false && !nonCombatProfit && !profitLive;
   const frameAge = Number(input.realtime.frameAgeMs);
   const opportunity = buildOpportunityDecision(input, stateful, {
     ...options,
-    includeAfkProfitTargets: nonCombatProfit ? false : options.includeAfkProfitTargets
+    includeAfkProfitTargets: nonCombatProfit ? false : options.includeAfkProfitTargets,
+    blockAfkProfitWhenActiveThreatVisible: profitLive ? true : options.blockAfkProfitWhenActiveThreatVisible
   });
   const combat = buildCombatDecision(input, options);
   let kind = 'wait';

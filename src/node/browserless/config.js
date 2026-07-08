@@ -125,6 +125,10 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
       config.controlMode = 'non-combat-profit';
       config.readOnly = false;
       config.canaryProfile = '';
+    } else if (arg === '--profit-live') {
+      config.controlMode = 'profit-live';
+      config.readOnly = false;
+      config.canaryProfile = '';
     } else if (arg === '--combat-dry-run') {
       config.controlMode = 'combat-dry-run';
       config.readOnly = false;
@@ -201,7 +205,7 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
       throw new Error(`unknown argument: ${arg}`);
     }
   }
-  if (!['read-only', 'movement-only', 'non-combat-profit', 'combat-dry-run', 'combat-live'].includes(String(config.controlMode || ''))) {
+  if (!['read-only', 'movement-only', 'non-combat-profit', 'profit-live', 'combat-dry-run', 'combat-live'].includes(String(config.controlMode || ''))) {
     throw new Error(`unsupported control mode: ${config.controlMode}`);
   }
   config.readOnly = config.controlMode === 'read-only';
@@ -219,11 +223,12 @@ function usage() {
     '  --read-only              Start in read-only mode (default)',
     '  --movement-only          Enable live movement-only velocity commands; shooting remains disabled',
     '  --non-combat-profit      Enable supervised non-combat coin profit movement; shooting remains disabled',
+    '  --profit-live            Enable supervised profit mode for coins and AFK targets; Active-player combat remains disabled',
     '  --combat-dry-run         Evaluate combat target/movement/aim/fire intent without movement or shooting',
     '  --combat-live            Enable guarded live combat mode; requires --combat-enabled before shooting',
     '  --combat-enabled         Allow combat-live movement/shoot commands. Default: false',
     '  --canary-profile <name>  read-only, movement-only, profit, combat-dry-run, or combat-live',
-    '  --control-mode <mode>    read-only, movement-only, non-combat-profit, combat-dry-run, or combat-live. Default: read-only',
+    '  --control-mode <mode>    read-only, movement-only, non-combat-profit, profit-live, combat-dry-run, or combat-live. Default: read-only',
     '  --dry-run                Do not connect to live game transport (default)',
     '  --live                   Disable dry-run; live transport still requires an explicit control mode',
     '  --once                   Run one bounded skeleton cycle and exit',

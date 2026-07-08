@@ -4,10 +4,11 @@ This document tracks the production browserless runner surface. The older `headl
 
 ## Current Scope
 
-- The runner currently supports dry-run mode, a live read-only canary, supervised movement-only mode, supervised non-combat profit mode, combat dry-run mode, and explicit guarded combat live mode.
+- The runner currently supports dry-run mode, a live read-only canary, supervised movement-only mode, supervised non-combat profit mode, explicit profit-live mode for coins/AFK targets, combat dry-run mode, and explicit guarded combat live mode.
 - Live read-only canary sends no movement or shoot commands. It runs pre-login snapshot safety, joins direct WS, collects frame health, and calls verified `leave`.
 - Movement-only mode sends velocity commands only toward snapshot coin fallback targets, never sends shoot commands, and remains supervised-validation-only.
 - Non-combat profit mode prefers realtime/native coin drops when present, uses snapshot coins only as guarded fallback, and keeps combat targets diagnostic-only.
+- Profit-live mode extends profit behavior to visible AFK targets while blocking AFK profit when an Active-player threat is visible; Active-player combat still requires combat-live.
 - Combat dry-run mode evaluates realtime `pos` combat target, movement, aim, and fire intent, writes `combat.jsonl`, and still sends no movement or shoot commands.
 - Combat live mode is default-off and requires both `--combat-live` and `--combat-enabled`; it sends realtime combat movement and paced shoot commands only when combat gates allow shooting.
 - The safety controller handles no-self, frame gap, stale self, WS close/error, stamina exhaustion, unsafe login point, direct leave failure, and explicit stop.
@@ -48,6 +49,7 @@ For staged rollout, prefer `GRASP_RAT_BROWSERLESS_CANARY_PROFILE` or `--canary-p
 - `combat-live` -> `controlMode=combat-live`
 
 The `combat-live` profile does not enable live shooting by itself; `GRASP_RAT_BROWSERLESS_COMBAT_ENABLED=true` or `--combat-enabled` is still required.
+`profit-live` is an explicit control mode, not the `profit` canary profile, so existing non-combat profit acceptance audits keep their no-shoot contract.
 
 If both `GRASP_RAT_BROWSERLESS_CANARY_PROFILE` and `GRASP_RAT_BROWSERLESS_CONTROL_MODE` are present, they must describe the same staged mode. The deployment audit rejects mismatches such as `CANARY_PROFILE=profit` with `CONTROL_MODE=combat-live`; prefer changing only the profile during VPS rollout.
 

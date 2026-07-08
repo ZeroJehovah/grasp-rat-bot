@@ -16,7 +16,7 @@ const DEFAULT_ENV_PATH = '/etc/grasp-rat/browserless-runner.env';
 const DEFAULT_DATA_DIR = '/var/lib/grasp-rat-browserless';
 const DEFAULT_LOG_DIR = '/var/log/grasp-rat-browserless';
 const VALID_ENV_MODES = new Set(['safe', 'live', 'any']);
-const VALID_CONTROL_MODES = new Set(['read-only', 'movement-only', 'non-combat-profit', 'combat-dry-run', 'combat-live']);
+const VALID_CONTROL_MODES = new Set(['read-only', 'movement-only', 'non-combat-profit', 'profit-live', 'combat-dry-run', 'combat-live']);
 const VALID_CANARY_PROFILES = new Set(['read-only', 'movement-only', 'profit', 'combat-dry-run', 'combat-live']);
 const CANARY_PROFILE_CONTROL_MODES = {
   'read-only': 'read-only',
