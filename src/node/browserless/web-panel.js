@@ -90,7 +90,7 @@ function renderBrowserlessWebPanel() {
       rows('session', [['userId', s.session?.userId], ['authenticated', s.session?.authenticated], ['token', s.session?.tokenPresent ? 'present' : 'missing'], ['tokenAt', s.session?.tokenUpdatedAt]]);
       rows('safety', [['ok', s.loginPointSafety?.ok], ['reason', s.loginPointSafety?.reason], ['checkedAt', s.loginPointSafety?.checkedAt], ['point', s.loginPointSafety?.point ? JSON.stringify(s.loginPointSafety.point) : '']]);
       rows('self', [['name', s.current?.self?.name], ['hp', s.current?.self?.hp], ['x', s.current?.self?.x], ['y', s.current?.self?.y], ['stamina', s.current?.stamina ? JSON.stringify(s.current.stamina) : '']]);
-      rows('work', [['profit', s.current?.profit ? JSON.stringify(s.current.profit) : ''], ['combat', s.current?.combatSummary ? JSON.stringify(s.current.combatSummary) : ''], ['lastRun', s.runner?.lastRun ? JSON.stringify(s.runner.lastRun) : ''], ['probe', s.probes?.lastReadOnlyProbe ? JSON.stringify(s.probes.lastReadOnlyProbe) : '']]);
+      rows('work', [['decision', s.current?.decision ? JSON.stringify(s.current.decision) : ''], ['profit', s.current?.profit ? JSON.stringify(s.current.profit) : ''], ['combat', s.current?.combatSummary ? JSON.stringify(s.current.combatSummary) : ''], ['lastRun', s.runner?.lastRun ? JSON.stringify(s.runner.lastRun) : ''], ['probe', s.probes?.lastReadOnlyProbe ? JSON.stringify(s.probes.lastReadOnlyProbe) : '']]);
       rows('logs', [['dataDir', s.logs?.dataDir], ['logDir', s.logs?.logDir], ['stateFile', s.logs?.stateFile], ['dayDir', s.logs?.currentDayDir]]);
       document.getElementById('exits').textContent = JSON.stringify(s.recentExits || [], null, 2);
       document.getElementById('raw').textContent = JSON.stringify(s, null, 2);

@@ -15,6 +15,7 @@ const {
 } = require('./state-file');
 const { startStatusServer } = require('./status-server');
 const { runReadOnlyCanary } = require('./canary');
+const { decisionStatePatch } = require('./decision-adapter');
 
 function publicConfig(config) {
   return {
@@ -33,6 +34,7 @@ function publicConfig(config) {
     logRetentionDays: Number(config.logRetentionDays || 0),
     readOnlyProbeMs: Number(config.readOnlyProbeMs || 0),
     frameGapAlertMs: Number(config.frameGapAlertMs || 0),
+    decisionIntervalMs: Number(config.decisionIntervalMs || 0),
     stateFile: config.stateFile || stateFilePath(config),
     loginPointPresent: Number.isFinite(Number(config.loginPointX)) && Number.isFinite(Number(config.loginPointY)),
     userId: Number(config.userId || 0),
@@ -158,11 +160,19 @@ async function runBrowserlessRunner(config, deps = {}) {
   const canary = await readOnlyCanary(config, {
     logStore,
     now,
-    persistedState: readBrowserlessStateFile(stateFile)
+    persistedState: readBrowserlessStateFile(stateFile),
+    onDecision: decision => {
+      updateBrowserlessStateFile(stateFile, decisionStatePatch(decision), {
+        updatedAt: new Date(now()).toISOString()
+      });
+    }
   });
   const result = { ok: Boolean(canary?.ok), mode: 'read-only', canary: canary || null };
+  const finalDecisionPatch = canary?.decisions?.last ? decisionStatePatch(canary.decisions.last) : {};
   updateBrowserlessStateFile(stateFile, {
+    ...finalDecisionPatch,
     runner: {
+      ...(finalDecisionPatch.runner || {}),
       running: !config.once,
       mode: 'read-only',
       lastRun: result,

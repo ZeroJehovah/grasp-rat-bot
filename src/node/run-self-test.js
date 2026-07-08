@@ -51,6 +51,10 @@ const {
   selectRealtimeCombatState
 } = require('./browserless/state-store');
 const {
+  buildBrowserlessDecision,
+  createBrowserlessDecisionAdapter
+} = require('./browserless/decision-adapter');
+const {
   runReadOnlyCanary
 } = require('./browserless/canary');
 const {
@@ -5685,6 +5689,93 @@ async function runSelfTest() {
       want: 'realtime|shoot_ok|44|14500|600|600|1'
     },
     {
+      name: 'browserless decision adapter keeps combat on realtime authority',
+      got: (() => {
+        const store = createBrowserlessStateStore({ userId: 7 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 40,
+          entities: [
+            { entity_id: 1, user_id: 7, name: 'self', x: 100, y: 100, hp: 90 },
+            { entity_id: 2, user_id: 8, name: 'active', x: 900, y: 100, hp: 80, current_join_mode: 'Active', firing: true, drop: 6 }
+          ],
+          bullets: []
+        }, { receivedAtMs: 1000 });
+        store.ingestFrame({
+          type: 'snapshot',
+          tick: 41,
+          entities: [
+            { entity_id: 1, user_id: 7, name: 'self', x: 9999, y: 9999, hp: 90 },
+            { entity_id: 3, user_id: 9, name: 'snapshot-only-active', x: 120, y: 120, hp: 80, current_join_mode: 'Active', firing: true, drop: 100 }
+          ],
+          bullets: [],
+          coin_drops: [{ drop_id: 5, amount: 20, x: 130, y: 100 }],
+          messages: []
+        }, { receivedAtMs: 1100 });
+        const decision = buildBrowserlessDecision(store.getState(1200), {}, { nowMs: 1200 });
+        return [
+          decision.kind,
+          decision.band,
+          decision.action.target.userId,
+          decision.action.target.authority,
+          decision.profit.best.coin.authority,
+          decision.profit.best.coin.snapshotOnly,
+          decision.input.self.x,
+          decision.input.dataGaps.includes('snapshot-coin-fallback-only')
+        ].join('|');
+      })(),
+      want: 'combat-candidate|combat|8|realtime|snapshot|true|100|true'
+    },
+    {
+      name: 'browserless decision adapter emits snapshot fallback profit without commands',
+      got: (() => {
+        const adapter = createBrowserlessDecisionAdapter({ userId: 7 });
+        const store = createBrowserlessStateStore({ userId: 7 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 50,
+          entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 100, y: 100, hp: 90 }],
+          bullets: []
+        }, { receivedAtMs: 1000 });
+        store.ingestFrame({
+          type: 'snapshot',
+          tick: 51,
+          entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 100, y: 100, hp: 90 }],
+          bullets: [],
+          coin_drops: [{ drop_id: 6, amount: 4, x: 200, y: 100 }],
+          messages: []
+        }, { receivedAtMs: 1100 });
+        const decision = adapter.decide(store.getState(1200), { nowMs: 1200 });
+        return [
+          decision.kind,
+          decision.action.kind,
+          decision.action.target.id,
+          decision.action.target.authority,
+          decision.action.target.distance,
+          decision.dryRun,
+          Object.prototype.hasOwnProperty.call(decision.action, 'command')
+        ].join('|');
+      })(),
+      want: 'profit-candidate|coin|6|snapshot|100|true|false'
+    },
+    {
+      name: 'browserless decision adapter waits without realtime self',
+      got: (() => {
+        const decision = buildBrowserlessDecision({
+          userId: 7,
+          realtime: { self: null, entities: [], bullets: [], frameAgeMs: null },
+          fallback: { coinDrops: [{ drop_id: 1, amount: 9, x: 1, y: 2 }] }
+        }, {}, { nowMs: 1000 });
+        return [
+          decision.kind,
+          decision.reason,
+          decision.action.kind,
+          decision.input.dataGaps.includes('missing-realtime-self')
+        ].join('|');
+      })(),
+      want: 'wait|missing-realtime-self|wait|true'
+    },
+    {
       name: 'browserless read-only canary runs snapshot ws frames and verified leave',
       got: (async () => {
         let t = Date.UTC(2026, 6, 8, 1, 0, 0);
@@ -5711,6 +5802,7 @@ async function runSelfTest() {
           userId: 7,
           sessionToken: 'canary-token',
           readOnlyProbeMs: 1000,
+          decisionIntervalMs: 1,
           frameGapAlertMs: 5000,
           wsConnectTimeoutMs: 1000,
           httpTimeoutMs: 1000
@@ -5733,7 +5825,7 @@ async function runSelfTest() {
           openBrowserlessWs: async options => {
             t += 100;
             options.onMessage(posFrame);
-            t += 100;
+            t += 300;
             options.onMessage(snapshotFrame);
             return {
               isOpen: () => true,
@@ -5750,13 +5842,15 @@ async function runSelfTest() {
           result.stats.typeCounts.pos,
           result.stats.typeCounts.snapshot,
           result.stats.selfPresent.true,
+          result.decisions.loggedCount,
+          result.decisions.last.kind,
           result.leave.ok,
           result.state.realtime.self.name,
           result.state.fallback.coinDrops[0].amount,
           commandCount
         ].join('|');
       })(),
-      want: 'true|true|2|1|1|2|true|self|2|0'
+      want: 'true|true|2|1|1|2|2|profit-candidate|true|self|2|0'
     },
     {
       name: 'browserless read-only canary blocks before ws without login point',
@@ -5879,6 +5973,8 @@ async function runSelfTest() {
           '19999',
           '--web-token',
           'cli-token',
+          '--decision-interval-ms',
+          '250',
           '--login-point-x',
           '123',
           '--login-point-y',
@@ -5898,13 +5994,14 @@ async function runSelfTest() {
           config.webToken,
           config.userId,
           config.sessionToken,
+          config.decisionIntervalMs,
           config.loginPointX,
           config.loginPointY,
           config.loginPointHp,
           config.logDir.endsWith('/tmp/grasp-rat-runner/logs')
         ].join('|');
       })(),
-      want: 'true|false|19999|cli-token|42|env-token|123|456|90|true'
+      want: 'true|false|19999|cli-token|42|env-token|250|123|456|90|true'
     },
     {
       name: 'browserless runner dry-run and fake read-only path write redacted logs',
