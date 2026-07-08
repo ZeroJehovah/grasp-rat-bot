@@ -94,7 +94,7 @@ Update this table in the same task that completes each feature.
 | Commit 6: Add Local Log Store And Retention | Complete | `src/node/browserless/local-log-store.js` appends redacted daily JSONL streams, `src/node/browserless/log-retention.js` deletes old UTC day directories, and `scripts/browserless-log-summary.js` generates stream/type summaries. |
 | Commit 7: Add Runner CLI Skeleton | Complete | `scripts/browserless-runner.js`, `src/node/browserless/runner.js`, and `src/node/browserless/config.js` provide a dry-run/read-only CLI skeleton with `--once`, data/log dirs, status host/port placeholders, web token config, self-test, and fake read-only validation. |
 | Commit 8: Add Status Server And Web Panel Skeleton | Complete | `src/node/browserless/status-server.js`, `web-panel.js`, and `state-file.js` provide token-gated status, a built-in VPS-oriented panel, redacted public status, persistent `state.json`, and a placeholder stop endpoint; `docs/agent/browserless-runner-operator.md` documents the operator surface. |
-| Commit 9: Add Read-Only Canary Runner | Implemented; VPS live validation pending | `src/node/browserless/canary.js` runs pre-login snapshot safety, direct read-only WS frame collection, state-store ingestion, frame-health checks, local logs/status updates, and verified leave. Fake self-tests pass. The 2026-07-08 service log review showed only safe `dryRun:true` skeleton evidence (`runner-start`/`runner-dry-run`, no `decisions.jsonl`), so the required 10-30 minute VPS canary still needs live env configuration and operator validation. |
+| Commit 9: Add Read-Only Canary Runner | Complete | `src/node/browserless/canary.js` runs pre-login snapshot safety, direct read-only WS frame collection, state-store ingestion, frame-health checks, local logs/status updates, and verified leave. The 2026-07-08 VPS read-only canary `read-only-20260708T142429656Z` passed audit with snapshot safety, 11987 decoded frames, 11987 self-observed frames, 0 decode errors, verified leave, 585 decision entries, and no movement or shoot commands. |
 | Commit 10: Add Dry-Run Decision Adapter | Complete | `src/node/browserless/decision-adapter.js` maps browserless realtime/snapshot state into dry-run safety/profit/combat candidate decisions, keeps combat candidates on realtime `pos` authority, logs throttled `decisions` JSONL entries during read-only canaries, and surfaces current decision/profit/combat rows in status. |
 | Commit 11: Add Safety And Exit Controller | Implemented; VPS forced-stop validation pending | `src/node/browserless/safety-controller.js` classifies no-self, WS close/error, frame gap, stale self, unsafe login point, stamina exhaustion, direct leave failure, and explicit stop events; the read-only canary now evaluates safety during the run, `/api/stop` requests a safety stop, and unsafe exits call verified `leave`. Offline fake-transport self-tests pass; the status API forced-stop VPS canary still needs operator validation. |
 | Commit 12: Add Movement-Only Live Mode | Implemented; VPS movement validation pending | `src/node/browserless/action-adapter.js` maps safe coin movement decisions into velocity-only commands, tracks stop pulses and frame-based command settlement, and the runner/canary support `controlMode=movement-only` without shoot commands. Fake transport self-tests pass; the required supervised short VPS movement-only run still needs operator validation. |
@@ -786,13 +786,12 @@ Local implementation work is complete through Commit 32, and the VPS systemd dep
 
 Use the production service path and audit commands from `docs/agent/browserless-vps-migration.md` and `docs/agent/browserless-runner-operator.md`. Do not mark `headless-demo/` superseded until these validations pass:
 
-1. Production read-only canary: pull the latest repo on VPS, import existing legacy/demo state into `/var/lib/grasp-rat-browserless/state.json` or authorize through the token-gated status API, configure `/etc/grasp-rat/browserless-runner.env` with `GRASP_RAT_BROWSERLESS_DRY_RUN=false` and `GRASP_RAT_BROWSERLESS_CANARY_PROFILE=read-only`, run `sudo node scripts/browserless-deployment-audit.js --env-mode live --fail-on-incomplete`, then run 10-30 minutes with verified `leave`, decision logs, and `sudo node scripts/browserless-canary-audit.js --profile read-only --fail-on-incomplete`.
-2. Forced stop canary: `/api/stop` or panel Stop, explicit-stop safety event, verified `leave`, and `sudo node scripts/browserless-canary-audit.js --profile read-only --require-stop --fail-on-incomplete`.
-3. Movement-only canary: short supervised velocity-only run, no shoot commands, command settlement evidence, verified `leave`, and `--profile movement-only`.
-4. Non-combat profit canary: realtime/native profit priority or guarded snapshot fallback, no combat commands, verified `leave`, and `--profile profit`.
-5. Combat dry-run canary: realtime-only combat targets, aim/fire summaries, suppressed commands, verified `leave`, and `--profile combat-dry-run`.
-6. Guarded combat live canary: explicit `combatEnabled=true`, realtime combat movement/shoot pacing, `shoot_ok` evidence when shots are sent, verified `leave`, and `--profile combat-live`.
-7. Final cutover readiness: `sudo node scripts/browserless-acceptance-report.js --log-dir /var/log/grasp-rat-browserless --day YYYY-MM-DD --fail-on-incomplete`.
+1. Forced stop canary: `/api/stop` or panel Stop, explicit-stop safety event, verified `leave`, and `sudo node scripts/browserless-canary-audit.js --profile read-only --require-stop --fail-on-incomplete`.
+2. Movement-only canary: short supervised velocity-only run, no shoot commands, command settlement evidence, verified `leave`, and `--profile movement-only`.
+3. Non-combat profit canary: realtime/native profit priority or guarded snapshot fallback, no combat commands, verified `leave`, and `--profile profit`.
+4. Combat dry-run canary: realtime-only combat targets, aim/fire summaries, suppressed commands, verified `leave`, and `--profile combat-dry-run`.
+5. Guarded combat live canary: explicit `combatEnabled=true`, realtime combat movement/shoot pacing, `shoot_ok` evidence when shots are sent, verified `leave`, and `--profile combat-live`.
+6. Final cutover readiness: `sudo node scripts/browserless-acceptance-report.js --log-dir /var/log/grasp-rat-browserless --day YYYY-MM-DD --fail-on-incomplete`.
 
 Completed VPS deployment validation:
 
@@ -800,6 +799,7 @@ Completed VPS deployment validation:
 - 2026-07-08: The first service log review after deployment confirmed only the intended safe default dry-run skeleton path: `dryRun:true`, `controlMode:"read-only"`, `userId:0`, `sessionTokenPresent:false`, `runner-start`, and `runner-dry-run`. `browserless-canary-audit --profile read-only` was incomplete because no live WS canary had run yet.
 - 2026-07-08: A live-readiness attempt failed before canary start because the VPS checkout was stale and `scripts/browserless-deployment-audit.js` did not recognize `--env-mode`. This is not accepted canary evidence; the next attempt must pull `origin/main`, verify the audit help lists `--env-mode`, and only restart after the live env audit passes.
 - 2026-07-08: VPS inspection found reusable legacy demo state at `headless-demo/data/state.json` with a user id, token present, and a last self/login point. Commit 32 adds a production import/hydration path so operators no longer need to copy `USER_ID`, `SESSION_TOKEN`, or login-point values into the env file.
+- 2026-07-08: The production read-only canary passed on VPS with run id `read-only-20260708T142429656Z` over `2026-07-08T14:24:29.656Z .. 2026-07-08T14:34:32.273Z`. Audit accepted snapshot safety, 11987 decoded frames, 11987 self-observed frames, 0 decode errors, verified `leave`, 585 decision entries, 0 movement commands, and 0 shoot commands.
 
 Historical snapshot safety validation:
 
@@ -814,7 +814,7 @@ Other completed VPS/demo validations:
 
 Later validations are staged and should not be combined:
 
-- 10-30 minute read-only canary after Commit 9.
+- Forced-stop read-only canary after Commit 11.
 - Short supervised movement-only run after Commit 12.
 - Supervised non-combat profit run after Commit 13.
 - Combat dry-run review after Commit 14.
