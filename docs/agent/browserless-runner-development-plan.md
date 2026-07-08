@@ -114,6 +114,7 @@ Update this table in the same task that completes each feature.
 | Commit 26: Tighten Canary Action Evidence | Complete | `scripts/browserless-canary-audit.js` now fails read-only and combat-dry-run audits when scoped `movement-command` logs appear, and requires scoped movement logs alongside positive velocity counts for movement-only and profit profiles. Self-tests cover read-only action leakage inside the selected run window. |
 | Commit 27: Require Combat Live Action Evidence | Complete | `scripts/browserless-canary-audit.js` now requires combat-live canaries to include scoped `movement-command` evidence alongside positive velocity counters, in addition to realtime combat logs and shoot acknowledgement checks. Self-tests cover accepted combat-live evidence and missing-action rejection. |
 | Commit 28: Audit Scoped Shoot Command Evidence | Complete | `scripts/browserless-canary-audit.js` now detects scoped shoot evidence from action logs (`action.shoot.command`, cumulative `state.shootSentCount`, or `state.lastShootCommand`) so no-shoot profiles cannot pass with leaked shoot commands, and combat-live runs with logged shoot commands still require `lastShootAck`. Self-tests cover movement-only shoot leakage and combat-live missing acknowledgement from action-log evidence. |
+| Commit 29: Expose Acceptance Evidence Summaries | Complete | `scripts/browserless-acceptance-report.js` now includes each canary section's selected final event, run window, decision/action/shoot/combat/forced-stop counts in human summaries, so final VPS cutover output is reviewable without opening the JSON report first. Self-tests cover movement/forced-stop summary evidence. |
 
 ## Commit Plan
 
@@ -679,9 +680,29 @@ Validation:
 - `node --check scripts/browserless-canary-audit.js`
 - `git diff --check`
 
+### Commit 29: Expose Acceptance Evidence Summaries
+
+Files:
+
+- Update `scripts/browserless-acceptance-report.js`.
+- Update aggregate acceptance self-test coverage.
+- Update operator, migration, current-state, test-coverage, and this development plan.
+
+Purpose:
+
+- Make final human acceptance output show which canary run was selected.
+- Surface run-window and key evidence counts for decisions, movement commands, shoot commands, combat logs, and explicit stop.
+- Reduce the need to inspect full JSON before deciding whether the VPS cutover report is the intended evidence set.
+
+Validation:
+
+- `node grasp-rat-bot.js --self-test`
+- `node --check scripts/browserless-acceptance-report.js`
+- `git diff --check`
+
 ## External VPS Validation Required
 
-Local implementation work is complete through Commit 28, and the VPS systemd deployment validation passed on 2026-07-08. The production runner is not accepted until the remaining live canary validations below produce evidence and the aggregate acceptance report passes.
+Local implementation work is complete through Commit 29, and the VPS systemd deployment validation passed on 2026-07-08. The production runner is not accepted until the remaining live canary validations below produce evidence and the aggregate acceptance report passes.
 
 Use the production service path and audit commands from `docs/agent/browserless-vps-migration.md` and `docs/agent/browserless-runner-operator.md`. Do not mark `headless-demo/` superseded until these validations pass:
 

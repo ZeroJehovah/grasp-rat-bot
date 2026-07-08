@@ -305,6 +305,8 @@ sudo node scripts/browserless-acceptance-report.js \
 
 This report aggregates deployment, normal read-only, forced-stop, movement-only, profit, combat dry-run, and combat live audit results. Run it with `sudo` because the included deployment audit reads the protected env file. It is the final local evidence summary before marking `headless-demo/` superseded.
 
+The human report includes each canary section's selected final event, run window, and key evidence counts (`decisions`, `movement`, `shoot`, `combat`, and `explicitStop` when present). Confirm these summaries point at the intended staged runs before treating the aggregate report as cutover evidence.
+
 ## Environment
 
 Important variables:
