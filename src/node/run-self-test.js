@@ -97,6 +97,9 @@ const {
   writeBrowserlessLogSummary
 } = require('../../scripts/browserless-log-summary');
 const {
+  summarizeAudit: summarizeBrowserlessCanaryAudit
+} = require('../../scripts/browserless-canary-audit');
+const {
   createNoSelfSnapshotRecoveryRuntime,
   shouldClearTmpGameLocalSessionKey
 } = require('../browser/runtime/no-self-snapshot-recovery-runtime');
@@ -6587,6 +6590,57 @@ async function runSelfTest() {
         ].join('|');
       }),
       want: '3|2|1|1|1|summary.json|3'
+    },
+    {
+      name: 'browserless canary audit validates finish and forced stop evidence',
+      got: withTempDirForTest(async dir => {
+        const dayDir = path.join(dir, '2026-07-08');
+        fs.mkdirSync(dayDir, { recursive: true });
+        const write = (stream, entry) => {
+          fs.appendFileSync(path.join(dayDir, `${stream}.jsonl`), `${JSON.stringify(entry)}\n`);
+        };
+        const baseFinish = {
+          mode: 'read-only',
+          ok: true,
+          snapshotSafety: { ok: true },
+          stats: { decodedFrameCount: 120, selfPresent: { true: 118, false: 2 } },
+          frameHealth: { decodeErrors: 0 },
+          actions: { sentCount: 0, velocitySentCount: 0, shootSentCount: 0 },
+          leave: { ok: true }
+        };
+        write('runner', { at: '2026-07-08T01:00:00.000Z', type: 'canary-finish', detail: baseFinish });
+        write('decisions', { at: '2026-07-08T01:00:01.000Z', type: 'decision', detail: { kind: 'wait' } });
+        const clean = summarizeBrowserlessCanaryAudit({ logDir: dir, day: '2026-07-08', profile: 'read-only' });
+        const cleanWithStopRequirement = summarizeBrowserlessCanaryAudit({ logDir: dir, day: '2026-07-08', profile: 'read-only', requireStop: true });
+
+        const stopDayDir = path.join(dir, '2026-07-09');
+        fs.mkdirSync(stopDayDir, { recursive: true });
+        const writeStop = (stream, entry) => {
+          fs.appendFileSync(path.join(stopDayDir, `${stream}.jsonl`), `${JSON.stringify(entry)}\n`);
+        };
+        writeStop('runner', {
+          at: '2026-07-09T01:00:00.000Z',
+          type: 'canary-failed',
+          detail: {
+            ...baseFinish,
+            ok: false,
+            error: 'explicit-stop',
+            safety: { event: { reason: 'explicit-stop' }, exit: { leave: { ok: true } } }
+          }
+        });
+        writeStop('decisions', { at: '2026-07-09T01:00:01.000Z', type: 'decision', detail: { kind: 'wait' } });
+        writeStop('exits', { at: '2026-07-09T01:00:02.000Z', type: 'safety-event', detail: { reason: 'explicit-stop' } });
+        const forcedStop = summarizeBrowserlessCanaryAudit({ logDir: dir, day: '2026-07-09', profile: 'read-only', requireStop: true });
+        return [
+          clean.ok,
+          clean.failed.length,
+          cleanWithStopRequirement.ok,
+          cleanWithStopRequirement.failed.some(item => item.key === 'explicit-stop'),
+          forcedStop.ok,
+          forcedStop.counts.explicitStop
+        ].join('|');
+      }),
+      want: 'true|0|false|true|true|1'
     },
     {
       name: 'browserless runner config parses env and cli overrides',
