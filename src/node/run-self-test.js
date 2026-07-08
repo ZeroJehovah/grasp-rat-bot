@@ -6811,6 +6811,14 @@ async function runSelfTest() {
           envMode: 'any',
           skipSystemctl: true
         });
+        const conflictEnvPath = path.join(dir, 'conflict.env');
+        fs.writeFileSync(conflictEnvPath, fs.readFileSync(envPath, 'utf8').replace('GRASP_RAT_BROWSERLESS_CONTROL_MODE=non-combat-profit', 'GRASP_RAT_BROWSERLESS_CONTROL_MODE=combat-live'));
+        const conflict = auditBrowserlessDeployment({
+          unitPath,
+          envPath: conflictEnvPath,
+          envMode: 'live',
+          skipSystemctl: true
+        });
         const placeholderEnvPath = path.join(dir, 'placeholder.env');
         fs.writeFileSync(placeholderEnvPath, fs.readFileSync(envPath, 'utf8').replace('local-secret-token', 'replace-with-a-long-random-token'));
         const placeholder = auditBrowserlessDeployment({
@@ -6825,12 +6833,14 @@ async function runSelfTest() {
           live.failed.length,
           aggregate.ok,
           aggregate.failed.length,
+          conflict.ok,
+          conflict.failed.some(item => item.key === 'env-profile-control-consistency'),
           placeholder.ok,
           placeholder.failed.some(item => item.key === 'environment-file-reference'),
           placeholder.failed.some(item => item.key === 'env-web-token')
         ].join('|');
       }),
-      want: 'true|0|true|0|true|0|false|true|true'
+      want: 'true|0|true|0|true|0|false|true|false|true|true'
     },
     {
       name: 'browserless acceptance report aggregates deployment canary and stop audits',

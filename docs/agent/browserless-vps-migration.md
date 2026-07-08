@@ -193,10 +193,11 @@ On 2026-07-08, the VPS one-shot demo succeeded after the Node 18 `ws` fallback a
 - 2026-07-08: The first post-deployment service log review showed the runner intentionally remained in safe `dry-run` skeleton mode: `dryRun:true`, `controlMode:"read-only"`, `userId:0`, and `sessionTokenPresent:false`. It wrote `runner-start` and `runner-dry-run` only, produced no `decisions.jsonl`, and `browserless-canary-audit --profile read-only` was incomplete because no live WS canary ran. This is not a runtime failure; the next step is to configure `/etc/grasp-rat/browserless-runner.env` with `GRASP_RAT_BROWSERLESS_DRY_RUN=false`, manual session values, and login-point coordinates for the supervised read-only canary.
 - 2026-07-08: Deployment env auditing was split into `--env-mode safe|live|any`. The initial deployment audit still defaults to safe dry-run/read-only checks; `--env-mode live` validates `DRY_RUN=false`, valid profile/control mode, session values, and login-point coordinates before supervised live canaries; the aggregate acceptance report passes deployment env mode `any` by default so final cutover review is not blocked just because the env legitimately moved out of safe dry-run for staged canaries.
 - 2026-07-08: VPS evidence commands were aligned for production file permissions and live env changes. Canary audits should run with `sudo` when reading `/var/log/grasp-rat-browserless`, and post-live service-surface checks should use `sudo node scripts/browserless-deployment-audit.js --env-mode any --fail-on-incomplete` unless the operator is explicitly validating live readiness with `--env-mode live`.
+- 2026-07-08: Deployment env auditing now rejects mismatched `GRASP_RAT_BROWSERLESS_CANARY_PROFILE` and `GRASP_RAT_BROWSERLESS_CONTROL_MODE` pairs in safe/live/any modes. During staged VPS rollout, prefer changing only `GRASP_RAT_BROWSERLESS_CANARY_PROFILE`, or keep `CONTROL_MODE` matched to the profile mapping documented in the operator notes.
 
 ## Next Plan
 
-1. Configure `/etc/grasp-rat/browserless-runner.env` for the supervised live read-only canary: `GRASP_RAT_BROWSERLESS_DRY_RUN=false`, `GRASP_RAT_BROWSERLESS_CANARY_PROFILE=read-only`, `GRASP_RAT_BROWSERLESS_USER_ID`, `GRASP_RAT_BROWSERLESS_SESSION_TOKEN`, and the known-safe login-point coordinates/HP; run `sudo node scripts/browserless-deployment-audit.js --env-mode live --fail-on-incomplete`, then restart `grasp-rat-browserless-runner`.
+1. Configure `/etc/grasp-rat/browserless-runner.env` for the supervised live read-only canary: `GRASP_RAT_BROWSERLESS_DRY_RUN=false`, `GRASP_RAT_BROWSERLESS_CANARY_PROFILE=read-only`, matching `GRASP_RAT_BROWSERLESS_CONTROL_MODE=read-only` if that variable remains present, `GRASP_RAT_BROWSERLESS_USER_ID`, `GRASP_RAT_BROWSERLESS_SESSION_TOKEN`, and the known-safe login-point coordinates/HP; run `sudo node scripts/browserless-deployment-audit.js --env-mode live --fail-on-incomplete`, then restart `grasp-rat-browserless-runner`.
 2. Run the production browserless read-only canary on VPS for 10-30 minutes and inspect status/log evidence, including `decisions.jsonl`; then run `sudo node scripts/browserless-canary-audit.js --log-dir /var/log/grasp-rat-browserless --day YYYY-MM-DD --profile read-only --fail-on-incomplete`.
 3. During a supervised read-only service run, trigger forced `/api/stop` and verify it ends with confirmed `leave`; then run the same audit with `--require-stop`.
 4. Run a supervised short `controlMode=movement-only` VPS validation and inspect `runner.jsonl`, `decisions.jsonl`, status action rows, command settlement, and verified `leave`; then audit with `--profile movement-only`.
@@ -233,7 +234,7 @@ For forced-stop or leave failures, also ask for:
 
 ```bash
 sudo tail -n 120 /var/log/grasp-rat-browserless/$(date -u +%F)/exits.jsonl
-sudo node scripts/browserless-canary-audit.js --log-dir /var/log/grasp-rat-browserless --day $(date -u +%F) --profile read-only --require-stop
+sudo node scripts/browserless-canary-audit.js --log-dir /var/log/grasp-rat-browserless --day $(date -u +%F) --profile read-only --require-stop --fail-on-incomplete
 ```
 
 For normal profile acceptance, ask the operator to run the matching audit command, for example:

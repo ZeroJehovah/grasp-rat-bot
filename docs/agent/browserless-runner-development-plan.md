@@ -109,6 +109,7 @@ Update this table in the same task that completes each feature.
 | Commit 21: Fix Runtime Directory Install | Complete | VPS deployment validation initially showed `status=226/NAMESPACE` because systemd could not apply `ReadWritePaths` for missing `/var/lib/grasp-rat-browserless` and `/var/log/grasp-rat-browserless`. `scripts/install-browserless-runner-service.sh` now creates both runtime directories, self-test anchors cover the installer surface, operator/migration docs run deployment audit with `sudo`, and the 2026-07-08 VPS rerun passed with `Browserless deployment audit: ok`. |
 | Commit 22: Split Deployment Env Audit Modes | Complete | `scripts/browserless-deployment-audit.js` now supports `--env-mode safe|live|any`: safe preserves the initial dry-run/read-only deployment check, live verifies `DRY_RUN=false` plus session/login-point readiness before supervised live canaries, and any lets the final aggregate acceptance report verify the service surface after staged canary env changes. `scripts/browserless-acceptance-report.js` uses deployment env mode `any` by default, and self-tests cover live/aggregate deployment audit paths. |
 | Commit 23: Align VPS Audit Commands | Complete | Operator and migration docs now run production canary audits with `sudo` for `/var/log/grasp-rat-browserless` access and use deployment `--env-mode any` for post-live service-surface checks, while keeping `--env-mode live` as the pre-restart readiness check before supervised canaries. |
+| Commit 24: Harden Live Env Mode Consistency | Complete | `scripts/browserless-deployment-audit.js` now rejects mismatched `GRASP_RAT_BROWSERLESS_CANARY_PROFILE` and `GRASP_RAT_BROWSERLESS_CONTROL_MODE` pairs in safe/live/any env modes, so VPS staged canaries cannot pass readiness with a misleading profile/control combination. Self-tests cover the conflict case and operator/migration/state docs record the constraint. |
 
 ## Commit Plan
 
@@ -574,9 +575,29 @@ Validation:
 
 - `git diff --check`
 
+### Commit 24: Harden Live Env Mode Consistency
+
+Files:
+
+- Update `scripts/browserless-deployment-audit.js`.
+- Update browserless deployment audit self-test coverage.
+- Update operator, migration, current-state, test-coverage, and this development plan.
+
+Purpose:
+
+- Catch env files where `GRASP_RAT_BROWSERLESS_CANARY_PROFILE` and `GRASP_RAT_BROWSERLESS_CONTROL_MODE` are both present but point to different staged modes.
+- Make `--env-mode live` a stronger pre-restart guard before supervised canaries.
+- Keep the final `--env-mode any` service-surface check from accepting misleading staged rollout env.
+
+Validation:
+
+- `node grasp-rat-bot.js --self-test`
+- `node --check scripts/browserless-deployment-audit.js`
+- `git diff --check`
+
 ## External VPS Validation Required
 
-Local implementation work is complete through Commit 23, and the VPS systemd deployment validation passed on 2026-07-08. The production runner is not accepted until the remaining live canary validations below produce evidence and the aggregate acceptance report passes.
+Local implementation work is complete through Commit 24, and the VPS systemd deployment validation passed on 2026-07-08. The production runner is not accepted until the remaining live canary validations below produce evidence and the aggregate acceptance report passes.
 
 Use the production service path and audit commands from `docs/agent/browserless-vps-migration.md` and `docs/agent/browserless-runner-operator.md`. Do not mark `headless-demo/` superseded until these validations pass:
 

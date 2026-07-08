@@ -13,6 +13,13 @@ const DEFAULT_LOG_DIR = '/var/log/grasp-rat-browserless';
 const VALID_ENV_MODES = new Set(['safe', 'live', 'any']);
 const VALID_CONTROL_MODES = new Set(['read-only', 'movement-only', 'non-combat-profit', 'combat-dry-run', 'combat-live']);
 const VALID_CANARY_PROFILES = new Set(['read-only', 'movement-only', 'profit', 'combat-dry-run', 'combat-live']);
+const CANARY_PROFILE_CONTROL_MODES = {
+  'read-only': 'read-only',
+  'movement-only': 'movement-only',
+  profit: 'non-combat-profit',
+  'combat-dry-run': 'combat-dry-run',
+  'combat-live': 'combat-live'
+};
 
 function parseArgs(argv) {
   const out = {
@@ -124,7 +131,9 @@ function addEnvChecks(checks, env, envMode) {
   const controlPresent = Boolean(control);
   const profileOk = !profile || VALID_CANARY_PROFILES.has(profile);
   const controlOk = !control || VALID_CONTROL_MODES.has(control);
-  const modeOk = profileOk && controlOk && (profilePresent || controlPresent);
+  const expectedControl = profileOk && profile ? CANARY_PROFILE_CONTROL_MODES[profile] : '';
+  const profileControlConsistent = !profilePresent || !controlPresent || expectedControl === control;
+  const modeOk = profileOk && controlOk && profileControlConsistent && (profilePresent || controlPresent);
 
   addCheck(checks, 'env-mode', VALID_ENV_MODES.has(envMode), `envMode=${envMode}`);
   if (!VALID_ENV_MODES.has(envMode)) return;
@@ -132,12 +141,14 @@ function addEnvChecks(checks, env, envMode) {
   if (envMode === 'safe') {
     addCheck(checks, 'env-safe-dry-run', dryRun === 'true', `GRASP_RAT_BROWSERLESS_DRY_RUN=${dryRun || 'missing'}`);
     addCheck(checks, 'env-read-only-profile', profile === 'read-only' || control === 'read-only', `profile=${profile}, control=${control}`);
+    addCheck(checks, 'env-profile-control-consistency', profileControlConsistent, `profile=${profile || 'missing'}, control=${control || 'missing'}, expectedControl=${expectedControl || 'missing'}`);
     return;
   }
 
   if (envMode === 'live') {
     addCheck(checks, 'env-live-dry-run', dryRun === 'false', `GRASP_RAT_BROWSERLESS_DRY_RUN=${dryRun || 'missing'}`);
     addCheck(checks, 'env-live-profile', modeOk, `profile=${profile}, control=${control}`);
+    addCheck(checks, 'env-profile-control-consistency', profileControlConsistent, `profile=${profile || 'missing'}, control=${control || 'missing'}, expectedControl=${expectedControl || 'missing'}`);
     addCheck(checks, 'env-live-session', isPositiveNumber(env.GRASP_RAT_BROWSERLESS_USER_ID) && Boolean(env.GRASP_RAT_BROWSERLESS_SESSION_TOKEN), `userId=${env.GRASP_RAT_BROWSERLESS_USER_ID || 'missing'}, sessionTokenPresent=${Boolean(env.GRASP_RAT_BROWSERLESS_SESSION_TOKEN)}`);
     addCheck(checks, 'env-login-point', isNumber(env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_X) && isNumber(env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_Y) && isNumber(env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_HP), `x=${env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_X || 'missing'}, y=${env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_Y || 'missing'}, hp=${env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_HP || 'missing'}`);
     return;
@@ -145,6 +156,7 @@ function addEnvChecks(checks, env, envMode) {
 
   addCheck(checks, 'env-dry-run-value', isEnvBool(dryRun), `GRASP_RAT_BROWSERLESS_DRY_RUN=${dryRun || 'missing'}`);
   addCheck(checks, 'env-control-profile', modeOk, `profile=${profile}, control=${control}`);
+  addCheck(checks, 'env-profile-control-consistency', profileControlConsistent, `profile=${profile || 'missing'}, control=${control || 'missing'}, expectedControl=${expectedControl || 'missing'}`);
 }
 
 function auditDeployment(options = {}, deps = {}) {

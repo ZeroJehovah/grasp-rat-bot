@@ -37,7 +37,7 @@ The unit uses:
 - log dir: `/var/log/grasp-rat-browserless`
 - env file: `/etc/grasp-rat/browserless-runner.env`
 
-The installed env example defaults to dry-run read-only mode. This proves the service/deployment surface but does not connect to live WS, does not write `decisions.jsonl`, and does not satisfy canary acceptance. Edit `/etc/grasp-rat/browserless-runner.env` before live canaries: set `GRASP_RAT_BROWSERLESS_DRY_RUN=false`, a long `GRASP_RAT_BROWSERLESS_WEB_TOKEN`, manual session values, login-point coordinates, and the intended `GRASP_RAT_BROWSERLESS_CONTROL_MODE`.
+The installed env example defaults to dry-run read-only mode. This proves the service/deployment surface but does not connect to live WS, does not write `decisions.jsonl`, and does not satisfy canary acceptance. Edit `/etc/grasp-rat/browserless-runner.env` before live canaries: set `GRASP_RAT_BROWSERLESS_DRY_RUN=false`, a long `GRASP_RAT_BROWSERLESS_WEB_TOKEN`, manual session values, login-point coordinates, and the intended `GRASP_RAT_BROWSERLESS_CANARY_PROFILE`.
 
 For staged rollout, prefer `GRASP_RAT_BROWSERLESS_CANARY_PROFILE` or `--canary-profile` over editing mode-specific command lines. Profiles map to existing modes:
 
@@ -48,6 +48,8 @@ For staged rollout, prefer `GRASP_RAT_BROWSERLESS_CANARY_PROFILE` or `--canary-p
 - `combat-live` -> `controlMode=combat-live`
 
 The `combat-live` profile does not enable live shooting by itself; `GRASP_RAT_BROWSERLESS_COMBAT_ENABLED=true` or `--combat-enabled` is still required.
+
+If both `GRASP_RAT_BROWSERLESS_CANARY_PROFILE` and `GRASP_RAT_BROWSERLESS_CONTROL_MODE` are present, they must describe the same staged mode. The deployment audit rejects mismatches such as `CANARY_PROFILE=profit` with `CONTROL_MODE=combat-live`; prefer changing only the profile during VPS rollout.
 
 Standard controls:
 
@@ -73,7 +75,7 @@ Before switching a supervised live canary on, audit the live env shape:
 sudo node scripts/browserless-deployment-audit.js --env-mode live --fail-on-incomplete
 ```
 
-`--env-mode live` expects `GRASP_RAT_BROWSERLESS_DRY_RUN=false`, a valid canary/control mode, manual session values, and login-point coordinates. The aggregate acceptance report uses deployment env mode `any` by default so it can run after the service has legitimately moved through live staged profiles.
+`--env-mode live` expects `GRASP_RAT_BROWSERLESS_DRY_RUN=false`, a valid canary/control mode, matching profile/control values when both are present, manual session values, and login-point coordinates. The aggregate acceptance report uses deployment env mode `any` by default so it can run after the service has legitimately moved through live staged profiles.
 
 The status panel remains token-gated at the configured host/port. Emergency stop is available through the panel Stop button or:
 
