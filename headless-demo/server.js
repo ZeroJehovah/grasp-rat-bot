@@ -611,8 +611,47 @@ function wsUrlForUser(userId) {
   return origin.toString();
 }
 
+function normalizeFrameData(data) {
+  let value = data;
+  const seen = new Set();
+  while (
+    value
+    && typeof value === 'object'
+    && typeof value !== 'string'
+    && !Buffer.isBuffer(value)
+    && !(value instanceof ArrayBuffer)
+    && !ArrayBuffer.isView(value)
+  ) {
+    if (seen.has(value)) break;
+    seen.add(value);
+    if ('data' in value) {
+      value = value.data;
+      continue;
+    }
+    break;
+  }
+  return value;
+}
+
+function frameDataToText(data) {
+  const value = normalizeFrameData(data);
+  if (typeof value === 'string') return value;
+  if (Buffer.isBuffer(value)) return value.toString('utf8');
+  if (value instanceof ArrayBuffer) return Buffer.from(value).toString('utf8');
+  if (ArrayBuffer.isView(value)) return Buffer.from(value.buffer, value.byteOffset, value.byteLength).toString('utf8');
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'object') {
+    try {
+      return JSON.stringify(redactStructured(value));
+    } catch (_) {
+      return Object.prototype.toString.call(value);
+    }
+  }
+  return String(value);
+}
+
 function recordFrame(data) {
-  const text = typeof data === 'string' ? data : Buffer.from(data).toString('utf8');
+  const text = frameDataToText(data);
   const frame = {
     at: new Date().toISOString(),
     sample: text.slice(0, 1000)
@@ -726,10 +765,13 @@ function openWs() {
       logEvent('ws-close', { code, reason: textReason, wasClean });
     });
     addWsHandler(ws, 'message', (eventOrData) => {
-      const data = eventOrData && Object.prototype.hasOwnProperty.call(eventOrData, 'data')
-        ? eventOrData.data
-        : eventOrData;
-      recordFrame(data);
+      try {
+        recordFrame(eventOrData);
+      } catch (err) {
+        const message = err?.message || String(err);
+        state.lastError = 'websocket frame record failed: ' + message;
+        logEvent('ws-frame-error', { message });
+      }
     });
   });
 }
