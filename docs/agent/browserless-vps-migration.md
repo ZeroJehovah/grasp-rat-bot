@@ -2,6 +2,8 @@
 
 This document is the durable handoff for migrating Grasp Rat operation away from a local browser-bound bot toward a browserless Linux VPS runner. Keep it updated when the authentication path, WebSocket protocol, headless runner behavior, validation status, or rollout plan changes.
 
+The commit-by-commit product implementation sequence is tracked separately in `docs/agent/browserless-runner-development-plan.md`.
+
 ## Goal
 
 Move the runtime-critical control loop to a remote Linux VPS so gameplay stability depends on the VPS network rather than the user's local browser machine. The long-term target is to preserve the existing bot's decision logic while replacing browser/CDP interaction with direct game transport calls wherever the game protocol allows it.
@@ -46,6 +48,7 @@ The web UI supports:
 - Accepting a fresh game callback URL, a direct `/?login=ok&user_id=...&token=...` URL, a compatible JSON payload, or a copied LinuxDO approve `curl`.
 - Storing `userId` and session token in the demo state file on the VPS.
 - Opening the game WebSocket, running one explicit command sequence, then calling verified `leave`.
+- Running a read-only WebSocket probe for a bounded duration, recording frame statistics, then calling verified `leave` without movement or shooting.
 - Writing JSONL logs under the configured log directory.
 - Showing a red page alert if `leave` is not explicitly confirmed.
 - Reporting `authenticated` separately from `inGame`: `authenticated` means the demo has a reusable token, while `inGame` means the current demo WebSocket session is in the visible entity layer.
@@ -160,7 +163,7 @@ On 2026-07-08, the VPS one-shot demo succeeded after the Node 18 `ws` fallback a
 
 ## Next Plan
 
-1. Run one more VPS demo after the structured frame-summary update and inspect `lastFrameSummary`, `lastCommandAck`, and the latest JSONL `decodedSummary` fields.
+1. Run the read-only VPS probe and inspect `lastProbe.stats` to confirm long-enough direct WS state coverage before product control work proceeds. The immediate question is whether non-combat profit data arrives only through pushed `snapshot` frames or through another realtime frame type.
 2. Define the browserless runtime boundary:
    - shared pure strategy remains in `src/strategy/`;
    - browser DOM/CDP integration remains browser-specific;
@@ -184,3 +187,10 @@ sudo tail -n 200 /var/log/grasp-rat-headless-demo/$(date -u +%F).jsonl
 ```
 
 For the current manual process, the log path shown in `/api/status` is authoritative.
+
+For the next protocol validation, ask for `/api/status` fields:
+
+- `lastProbe`
+- `lastFrameSummary`
+- `recentFrames` last 2 entries
+- `lastLeaveSummary`

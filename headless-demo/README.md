@@ -5,10 +5,11 @@ This is a deliberately small VPS probe for the browserless runner idea. It expos
 - request the LinuxDO authorize URL from `/auth/linuxdo/start`;
 - accept a manually pasted callback URL or callback response JSON;
 - try to exchange that callback through the game callback endpoint;
+- run a read-only WebSocket probe: connect, collect frame statistics, then verified `leave`;
 - run one explicit demo sequence: move up/down/left/right, shoot once, then call `leave`;
 - verify `leave` with the same explicit response confirmation helper used by the current bot.
 
-It does not run unattended strategy logic. The action sequence only runs after pressing the web button.
+It does not run unattended strategy logic. The probe and action sequence only run after pressing the web button.
 
 ## Run Manually
 
@@ -79,6 +80,15 @@ Logs are JSONL:
 If `leave` is not explicitly confirmed by the game response, the web page shows a red alert and the JSONL log includes `leave-alert`.
 
 In `/api/status`, `authenticated` means the demo still has a usable `userId` and session token. `inGame` means the current demo WebSocket session is inside the visible game entity layer. A successful `leave` should set `inGame` to `false` while `authenticated` stays `true`, so the same token can run another one-shot demo without reauthorizing.
+
+The read-only probe defaults to 30 seconds. It sends no movement or shoot commands, then calls verified `leave`. Override the duration when needed:
+
+```ini
+[Service]
+Environment=GRASP_RAT_DEMO_READONLY_PROBE_MS=60000
+```
+
+After a probe, `/api/status` includes `lastProbe.stats` with frame counts, decoded frame type counts, JSON key-set counts, tick ranges, entity/bullet/coin/message count ranges, and `selfPresent` counts. Complete frame metadata remains in the JSONL log.
 
 OAuth codes are usually one-time use. If the browser has already loaded the game callback URL and the demo cannot exchange that same URL again, paste the callback response JSON instead. The demo accepts a JSON object containing `user_id`/`userId`/`id` plus `token`/`sessionToken`/`session_token`.
 
