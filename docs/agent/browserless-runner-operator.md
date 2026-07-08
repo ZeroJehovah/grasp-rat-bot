@@ -38,6 +38,16 @@ The unit uses:
 
 The installed env example defaults to dry-run read-only mode. Edit `/etc/grasp-rat/browserless-runner.env` before live canaries: set a long `GRASP_RAT_BROWSERLESS_WEB_TOKEN`, manual session values, login-point coordinates, and the intended `GRASP_RAT_BROWSERLESS_CONTROL_MODE`.
 
+For staged rollout, prefer `GRASP_RAT_BROWSERLESS_CANARY_PROFILE` or `--canary-profile` over editing mode-specific command lines. Profiles map to existing modes:
+
+- `read-only` -> `controlMode=read-only`
+- `movement-only` -> `controlMode=movement-only`
+- `profit` -> `controlMode=non-combat-profit`
+- `combat-dry-run` -> `controlMode=combat-dry-run`
+- `combat-live` -> `controlMode=combat-live`
+
+The `combat-live` profile does not enable live shooting by itself; `GRASP_RAT_BROWSERLESS_COMBAT_ENABLED=true` or `--combat-enabled` is still required.
+
 Standard controls:
 
 ```bash
@@ -89,7 +99,7 @@ While the canary is connected, the dry-run decision adapter evaluates current st
 node scripts/browserless-runner.js \
   --once \
   --live \
-  --read-only \
+  --canary-profile read-only \
   --data-dir data/browserless-runner \
   --user-id <user-id> \
   --session-token '<session-token>' \
@@ -112,7 +122,7 @@ Movement-only mode uses the same pre-login safety and verified leave path, but e
 node scripts/browserless-runner.js \
   --once \
   --live \
-  --movement-only \
+  --canary-profile movement-only \
   --data-dir data/browserless-runner \
   --user-id <user-id> \
   --session-token '<session-token>' \
@@ -136,7 +146,7 @@ Non-combat profit mode uses velocity commands to move toward coin profit only. I
 node scripts/browserless-runner.js \
   --once \
   --live \
-  --non-combat-profit \
+  --canary-profile profit \
   --data-dir data/browserless-runner \
   --user-id <user-id> \
   --session-token '<session-token>' \
@@ -160,7 +170,7 @@ Combat dry-run uses the same pre-login safety and verified leave path, but only 
 node scripts/browserless-runner.js \
   --once \
   --live \
-  --combat-dry-run \
+  --canary-profile combat-dry-run \
   --data-dir data/browserless-runner \
   --user-id <user-id> \
   --session-token '<session-token>' \
@@ -181,7 +191,7 @@ Combat live mode uses the same pre-login safety and verified leave path, but it 
 node scripts/browserless-runner.js \
   --once \
   --live \
-  --combat-live \
+  --canary-profile combat-live \
   --combat-enabled \
   --data-dir data/browserless-runner \
   --user-id <user-id> \
@@ -262,6 +272,7 @@ Important variables:
 - `GRASP_RAT_BROWSERLESS_WEB_TOKEN`
 - `GRASP_RAT_BROWSERLESS_READ_ONLY`
 - `GRASP_RAT_BROWSERLESS_CONTROL_MODE`
+- `GRASP_RAT_BROWSERLESS_CANARY_PROFILE`
 - `GRASP_RAT_BROWSERLESS_DRY_RUN`
 - `GRASP_RAT_BROWSERLESS_READONLY_PROBE_MS`
 - `GRASP_RAT_BROWSERLESS_FRAME_GAP_ALERT_MS`

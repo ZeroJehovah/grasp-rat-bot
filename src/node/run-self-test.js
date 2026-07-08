@@ -6672,12 +6672,41 @@ async function runSelfTest() {
           unit.includes('ReadWritePaths=/var/lib/grasp-rat-browserless /var/log/grasp-rat-browserless'),
           env.includes('GRASP_RAT_BROWSERLESS_DATA_DIR=/var/lib/grasp-rat-browserless'),
           env.includes('GRASP_RAT_BROWSERLESS_LOG_DIR=/var/log/grasp-rat-browserless'),
+          env.includes('GRASP_RAT_BROWSERLESS_CANARY_PROFILE=read-only'),
           env.includes('GRASP_RAT_BROWSERLESS_DRY_RUN=true'),
           installer.includes('grasp-rat-browserless-runner'),
           installer.includes('systemctl daemon-reload')
         ].join('|');
       })(),
-      want: 'true|true|true|true|true|true|true|true|true'
+      want: 'true|true|true|true|true|true|true|true|true|true'
+    },
+    {
+      name: 'browserless runner config maps canary profiles without enabling combat',
+      got: (() => {
+        const envProfile = parseBrowserlessRunnerArgs([], {
+          GRASP_RAT_BROWSERLESS_CANARY_PROFILE: 'profit'
+        });
+        const cliProfile = parseBrowserlessRunnerArgs(['--canary-profile', 'combat-live'], {});
+        const override = parseBrowserlessRunnerArgs(['--canary-profile', 'combat-live', '--movement-only'], {});
+        let badProfile = '';
+        try {
+          parseBrowserlessRunnerArgs(['--canary-profile', 'invalid'], {});
+        } catch (err) {
+          badProfile = err.message;
+        }
+        return [
+          envProfile.canaryProfile,
+          envProfile.controlMode,
+          envProfile.readOnly,
+          cliProfile.canaryProfile,
+          cliProfile.controlMode,
+          cliProfile.combatEnabled,
+          override.canaryProfile,
+          override.controlMode,
+          /unsupported canary profile/.test(badProfile)
+        ].join('|');
+      })(),
+      want: 'profit|non-combat-profit|false|combat-live|combat-live|false||movement-only|true'
     },
     {
       name: 'browserless runner config treats empty numeric env as unset',

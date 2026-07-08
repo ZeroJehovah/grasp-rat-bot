@@ -14,6 +14,7 @@ const DEFAULTS = {
   webToken: '',
   readOnly: true,
   controlMode: 'read-only',
+  canaryProfile: '',
   dryRun: true,
   once: false,
   logRetentionDays: 3,
@@ -37,6 +38,14 @@ const DEFAULTS = {
   loginPointHp: null
 };
 
+const CANARY_PROFILES = {
+  'read-only': 'read-only',
+  'movement-only': 'movement-only',
+  profit: 'non-combat-profit',
+  'combat-dry-run': 'combat-dry-run',
+  'combat-live': 'combat-live'
+};
+
 function boolEnv(value, fallback = false) {
   if (value === undefined || value === null || value === '') return fallback;
   if (typeof value === 'boolean') return value;
@@ -47,6 +56,17 @@ function numberEnv(value, fallback) {
   if (value === undefined || value === null || value === '') return fallback;
   const number = Number(value);
   return Number.isFinite(number) ? number : fallback;
+}
+
+function applyCanaryProfile(config, profile) {
+  const value = String(profile || '').trim();
+  if (!value) return config;
+  const controlMode = CANARY_PROFILES[value];
+  if (!controlMode) throw new Error(`unsupported canary profile: ${profile}`);
+  config.canaryProfile = value;
+  config.controlMode = controlMode;
+  config.readOnly = controlMode === 'read-only';
+  return config;
 }
 
 function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
@@ -63,6 +83,7 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
     webToken: env.GRASP_RAT_BROWSERLESS_WEB_TOKEN || DEFAULTS.webToken,
     readOnly: boolEnv(env.GRASP_RAT_BROWSERLESS_READ_ONLY, DEFAULTS.readOnly),
     controlMode: env.GRASP_RAT_BROWSERLESS_CONTROL_MODE || DEFAULTS.controlMode,
+    canaryProfile: env.GRASP_RAT_BROWSERLESS_CANARY_PROFILE || DEFAULTS.canaryProfile,
     dryRun: boolEnv(env.GRASP_RAT_BROWSERLESS_DRY_RUN, DEFAULTS.dryRun),
     once: boolEnv(env.GRASP_RAT_BROWSERLESS_ONCE, DEFAULTS.once),
     logRetentionDays: numberEnv(env.GRASP_RAT_BROWSERLESS_LOG_RETENTION_DAYS, DEFAULTS.logRetentionDays),
@@ -89,23 +110,29 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
     selfTest: false,
     help: false
   };
+  applyCanaryProfile(config, config.canaryProfile);
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--read-only') {
       config.readOnly = true;
       config.controlMode = 'read-only';
+      config.canaryProfile = '';
     } else if (arg === '--movement-only') {
       config.controlMode = 'movement-only';
       config.readOnly = false;
+      config.canaryProfile = '';
     } else if (arg === '--non-combat-profit') {
       config.controlMode = 'non-combat-profit';
       config.readOnly = false;
+      config.canaryProfile = '';
     } else if (arg === '--combat-dry-run') {
       config.controlMode = 'combat-dry-run';
       config.readOnly = false;
+      config.canaryProfile = '';
     } else if (arg === '--combat-live') {
       config.controlMode = 'combat-live';
       config.readOnly = false;
+      config.canaryProfile = '';
     } else if (arg === '--combat-enabled') {
       config.combatEnabled = true;
     } else if (arg === '--no-combat-enabled') {
@@ -113,6 +140,9 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
     } else if (arg === '--control-mode') {
       config.controlMode = argv[++i] || config.controlMode;
       config.readOnly = config.controlMode === 'read-only';
+      config.canaryProfile = '';
+    } else if (arg === '--canary-profile') {
+      applyCanaryProfile(config, argv[++i] || '');
     } else if (arg === '--dry-run') {
       config.dryRun = true;
     } else if (arg === '--live') {
@@ -192,6 +222,7 @@ function usage() {
     '  --combat-dry-run         Evaluate combat target/movement/aim/fire intent without movement or shooting',
     '  --combat-live            Enable guarded live combat mode; requires --combat-enabled before shooting',
     '  --combat-enabled         Allow combat-live movement/shoot commands. Default: false',
+    '  --canary-profile <name>  read-only, movement-only, profit, combat-dry-run, or combat-live',
     '  --control-mode <mode>    read-only, movement-only, non-combat-profit, combat-dry-run, or combat-live. Default: read-only',
     '  --dry-run                Do not connect to live game transport (default)',
     '  --live                   Disable dry-run; live transport still requires an explicit control mode',
@@ -222,7 +253,9 @@ function usage() {
 }
 
 module.exports = {
+  CANARY_PROFILES,
   DEFAULTS,
+  applyCanaryProfile,
   parseBrowserlessRunnerArgs,
   usage
 };

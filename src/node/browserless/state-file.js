@@ -21,6 +21,7 @@ function defaultBrowserlessState() {
       mode: 'idle',
       readOnly: true,
       controlMode: 'read-only',
+      canaryProfile: '',
       dryRun: true,
       combatEnabled: false,
       currentAction: null,

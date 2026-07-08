@@ -21,7 +21,7 @@ The important result is not just smaller files. The project now has explicit own
 - `src/strategy/`: pure strategy cores and self-tests.
 - `src/browser/runtime-entry.js`: the single browser runtime entry bundled by esbuild.
 - `src/browser/runtime/`: browser runtime domain modules.
-- `src/node/`: Node-only local CLI and self-test support.
+- `src/node/`: Node-only local CLI, browserless runner, transport/session clients, and self-test support.
 - `src/shared/`: small helpers shared by Node, strategy, and browser wrappers.
 - `combat-log-service/`: local log collector, analyzer, daily summary, and replay tooling.
 - `docs/agent/`: current handoff, architecture, data model, strategy, config, logging, and validation notes.
@@ -44,6 +44,14 @@ Runtime domain modules under `src/browser/runtime/` own browser integration:
 - Orchestration: `orchestration-runtime.js`, `orchestration-safety-runtime.js`, `orchestration-decision-runtime.js`, `orchestration-tick-runtime.js`.
 
 Composition modules wire narrower owners. They should stay small enough that a reviewer can see which owner handles each behavior.
+
+## Browserless Runner Boundary
+
+The browserless VPS runner is a Node-owned runtime surface under `src/node/browserless/` with entrypoint `scripts/browserless-runner.js`. It owns direct auth/session reuse, pre-login snapshot safety, direct WebSocket IO, local JSONL logs, status/control HTTP, systemd deployment, verified `leave`, and canary-profile rollout. It must not depend on DOM, CDP, userscript bootstrap, browser overlays, or `combat-log-service` for normal operation.
+
+Browserless combat target, aim, and fire inputs must come from realtime `pos` authority only. Snapshot state is allowed for pre-login safety and guarded non-combat profit fallback, but not as combat authority. Browserless live control remains staged by config: `GRASP_RAT_BROWSERLESS_CANARY_PROFILE` selects the rollout profile, and `combat-live` still requires explicit `GRASP_RAT_BROWSERLESS_COMBAT_ENABLED=true` before shooting.
+
+The browser bot remains a supported fallback surface. Browserless runner failures should not block browser bot emergency releases, and browser remote build/release artifacts remain separate from the browserless systemd service.
 
 ## Strategy Boundaries
 
