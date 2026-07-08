@@ -36,6 +36,14 @@ const {
   leaveWithVerification: browserlessLeaveWithVerification
 } = require('./browserless/leave-client');
 const {
+  createFrameStats,
+  updateFrameStats
+} = require('./browserless/frame-stats');
+const {
+  buildWsUrl,
+  openBrowserlessWs
+} = require('./browserless/ws-transport');
+const {
   createNoSelfSnapshotRecoveryRuntime,
   shouldClearTmpGameLocalSessionKey
 } = require('../browser/runtime/no-self-snapshot-recovery-runtime');
@@ -5105,6 +5113,57 @@ async function runSelfTest() {
     };
   }
 
+  function createFakeWebSocketRuntimeForTest() {
+    const instances = [];
+    class FakeWebSocket {
+      static CONNECTING = 0;
+      static OPEN = 1;
+      static CLOSING = 2;
+      static CLOSED = 3;
+
+      constructor(url) {
+        this.url = url;
+        this.readyState = FakeWebSocket.CONNECTING;
+        this.sent = [];
+        this.closed = false;
+        this.listeners = {};
+        instances.push(this);
+      }
+
+      addEventListener(name, handler) {
+        this.listeners[name] = this.listeners[name] || [];
+        this.listeners[name].push(handler);
+      }
+
+      emit(name, event) {
+        for (const handler of this.listeners[name] || []) handler(event);
+      }
+
+      open() {
+        this.readyState = FakeWebSocket.OPEN;
+        this.emit('open', {});
+      }
+
+      send(message) {
+        this.sent.push(message);
+      }
+
+      close(code = 1000, reason = '') {
+        this.closed = true;
+        this.readyState = FakeWebSocket.CLOSED;
+        this.emit('close', { code, reason, wasClean: code === 1000 });
+      }
+    }
+    return {
+      instances,
+      runtime: {
+        name: 'fake',
+        WebSocket: FakeWebSocket,
+        supportsOptions: false
+      }
+    };
+  }
+
   const cases = [
     {
       name: 'strategy module self-tests pass',
@@ -5362,6 +5421,128 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'true|false|stale-snapshot-tick|stale-snapshot-tick|1'
+    },
+    {
+      name: 'browserless websocket transport builds direct game URL',
+      got: buildWsUrl({
+        gameOrigin: 'https://grasp-rat-game.h-e.top',
+        wsPath: '/ws',
+        wsExtraQuery: 'compress=gzip%2Cdeflate&extra=1',
+        userId: 42,
+        sessionToken: 'tok en'
+      }),
+      want: 'wss://grasp-rat-game.h-e.top/ws?user_id=42&token=tok+en&compress=gzip%2Cdeflate&extra=1'
+    },
+    {
+      name: 'browserless websocket transport opens dispatches and sends narrow commands',
+      got: (async () => {
+        const fake = createFakeWebSocketRuntimeForTest();
+        const events = [];
+        const messages = [];
+        const sent = [];
+        const openPromise = openBrowserlessWs({
+          runtime: fake.runtime,
+          gameOrigin: 'https://grasp-rat-game.h-e.top',
+          userId: 7,
+          sessionToken: 'ws-token',
+          connectTimeoutMs: 1000,
+          onConnectStart: detail => events.push(`start:${detail.runtime}:${detail.wsUrl.includes('token=ws-token')}`),
+          onOpen: detail => events.push(`open:${detail.runtime}`),
+          onMessage: message => messages.push(message),
+          onSend: detail => sent.push(detail.message),
+          onClose: detail => events.push(`close:${detail.code}:${detail.reason}:${detail.wasClean}`)
+        });
+        const socket = fake.instances[0];
+        socket.open();
+        const transport = await openPromise;
+        socket.emit('message', { data: 'frame-1' });
+        transport.sendVelocity(1, -1);
+        transport.sendShoot(2, 3, 4, 5);
+        transport.close(1000, 'done');
+        return [
+          events.join(','),
+          messages[0]?.data,
+          socket.sent.join(','),
+          sent.join(',')
+        ].join('|');
+      })(),
+      want: 'start:fake:true,open:fake,close:1000:done:true|frame-1|vel 1 -1,shoot 2 3 4 5|vel 1 -1,shoot 2 3 4 5'
+    },
+    {
+      name: 'browserless websocket transport times out unopened sockets',
+      got: (async () => {
+        const fake = createFakeWebSocketRuntimeForTest();
+        try {
+          await openBrowserlessWs({
+            runtime: fake.runtime,
+            gameOrigin: 'https://grasp-rat-game.h-e.top',
+            userId: 7,
+            sessionToken: 'ws-token',
+            connectTimeoutMs: 1
+          });
+          return 'opened';
+        } catch (err) {
+          return [
+            /timeout/.test(err?.message || String(err)),
+            fake.instances.length,
+            fake.instances[0]?.closed
+          ].join('|');
+        }
+      })(),
+      want: 'true|1|true'
+    },
+    {
+      name: 'browserless frame stats aggregate decoded frame summaries',
+      got: (() => {
+        const stats = createFrameStats(30000);
+        updateFrameStats(stats, {
+          at: '2026-07-08T00:00:00.000Z',
+          kind: 'binary',
+          decodedJsonKeys: ['type', 'tick', 'entities', 'bullets'],
+          decodedSummary: {
+            type: 'pos',
+            tick: 10,
+            entityCount: 2,
+            bulletCount: 1,
+            selfPresent: true
+          }
+        });
+        updateFrameStats(stats, {
+          at: '2026-07-08T00:00:01.000Z',
+          kind: 'binary',
+          decodedJsonKeys: ['type', 'tick', 'entities', 'bullets', 'coin_drops'],
+          decodedSummary: {
+            type: 'snapshot',
+            tick: 12,
+            entityCount: 5,
+            bulletCount: 0,
+            coinDropCount: 3,
+            messageCount: 1,
+            selfPresent: false
+          }
+        });
+        updateFrameStats(stats, {
+          at: '2026-07-08T00:00:02.000Z',
+          kind: 'text',
+          decodeError: 'bad'
+        });
+        return [
+          stats.frameCount,
+          stats.decodedFrameCount,
+          stats.binaryFrameCount,
+          stats.textFrameCount,
+          stats.typeCounts.pos,
+          stats.typeCounts.snapshot,
+          stats.tick.min,
+          stats.tick.max,
+          stats.entityCount.last,
+          stats.coinDropCount.last,
+          stats.selfPresent.true,
+          stats.selfPresent.false,
+          stats.decodeErrors
+        ].join('|');
+      })(),
+      want: '3|2|2|1|1|1|10|12|5|3|1|1|1'
     },
     {
       name: 'final arbitration keeps recent safety action over profit',
