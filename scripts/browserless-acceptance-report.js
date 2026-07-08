@@ -51,6 +51,36 @@ function failedKeys(report) {
   return (report?.failed || []).map(item => item.key).join(',') || '';
 }
 
+function canaryEvidenceSummary(report) {
+  const parts = [];
+  const finalEvent = report?.finalEvent || null;
+  const runWindow = report?.runWindow || null;
+  const counts = report?.counts || {};
+  if (finalEvent?.type) {
+    parts.push(`final=${finalEvent.type}@${finalEvent.at || 'missing'}`);
+  }
+  if (runWindow?.applied) {
+    parts.push(`window=${runWindow.startedAt || 'missing'}..${runWindow.completedAt || 'missing'}`);
+  }
+  parts.push(`decisions=${Number(counts.decisions || 0)}`);
+  parts.push(`movement=${Number(counts.movementCommand || 0)}`);
+  parts.push(`shoot=${Number(counts.shootCommand || 0)}`);
+  if (Number(counts.combatDryRun || 0) || Number(counts.combatLive || 0)) {
+    parts.push(`combat=${Number(counts.combatDryRun || 0) + Number(counts.combatLive || 0)}`);
+  }
+  if (Number(counts.explicitStop || 0)) {
+    parts.push(`explicitStop=${Number(counts.explicitStop || 0)}`);
+  }
+  return parts.join(', ');
+}
+
+function canarySectionSummary(profile, report, options = {}) {
+  const label = options.requireStop ? `${profile} forced-stop` : `${profile} canary`;
+  const evidence = canaryEvidenceSummary(report);
+  if (report.ok) return `${label} audit passed${evidence ? ` (${evidence})` : ''}`;
+  return `${label} audit failed: ${failedKeys(report)}${evidence ? ` (${evidence})` : ''}`;
+}
+
 function buildAcceptanceReport(options = {}, deps = {}) {
   const logDir = path.resolve(String(options.logDir || '/var/log/grasp-rat-browserless'));
   const day = String(options.day || new Date().toISOString().slice(0, 10));
@@ -88,7 +118,7 @@ function buildAcceptanceReport(options = {}, deps = {}) {
       kind: 'canary',
       profile,
       ok: Boolean(report.ok),
-      summary: report.ok ? `${profile} canary audit passed` : `${profile} canary audit failed: ${failedKeys(report)}`,
+      summary: canarySectionSummary(profile, report),
       report
     });
   }
@@ -106,7 +136,7 @@ function buildAcceptanceReport(options = {}, deps = {}) {
       profile: 'read-only',
       requireStop: true,
       ok: Boolean(report.ok),
-      summary: report.ok ? 'read-only forced-stop audit passed' : `read-only forced-stop audit failed: ${failedKeys(report)}`,
+      summary: canarySectionSummary('read-only', report, { requireStop: true }),
       report
     });
   }
@@ -171,6 +201,8 @@ if (require.main === module) {
 module.exports = {
   DEFAULT_PROFILES,
   buildAcceptanceReport,
+  canaryEvidenceSummary,
+  canarySectionSummary,
   formatHuman,
   parseArgs
 };

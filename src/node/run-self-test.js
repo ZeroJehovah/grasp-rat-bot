@@ -7062,6 +7062,8 @@ async function runSelfTest() {
             return { ok: true, failed: [] };
           }
         });
+        const movementSummary = ok.sections.find(section => section.key === 'canary:movement-only')?.summary || '';
+        const forcedStopSummary = ok.sections.find(section => section.key === 'canary:read-only:forced-stop')?.summary || '';
         const missing = buildBrowserlessAcceptanceReport({
           logDir: path.join(dir, 'logs'),
           day: '2026-07-08',
@@ -7074,11 +7076,15 @@ async function runSelfTest() {
           ok.sections.length,
           ok.failed.length,
           deploymentEnvMode,
+          movementSummary.includes('window=2026-07-08T01:02:00.000Z..2026-07-08T01:02:30.000Z'),
+          movementSummary.includes('movement=1'),
+          movementSummary.includes('shoot=0'),
+          forcedStopSummary.includes('explicitStop=1'),
           missing.ok,
           missing.failed[0]?.key
         ].join('|');
       }),
-      want: 'true|4|0|any|false|canary:profit'
+      want: 'true|4|0|any|true|true|true|true|false|canary:profit'
     },
     {
       name: 'browserless runner config maps canary profiles without enabling combat',
