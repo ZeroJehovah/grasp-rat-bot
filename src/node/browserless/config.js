@@ -6,6 +6,7 @@ const DEFAULTS = {
   gameOrigin: 'https://grasp-rat-game.h-e.top',
   wsPath: '/ws',
   wsExtraQuery: 'compress=gzip%2Cdeflate',
+  snapshotPath: '/snapshot',
   dataDir: path.join(process.cwd(), 'data', 'browserless-runner'),
   statusHost: '127.0.0.1',
   statusPort: 18767,
@@ -14,7 +15,15 @@ const DEFAULTS = {
   dryRun: true,
   once: false,
   logRetentionDays: 3,
-  wsConnectTimeoutMs: 10000
+  wsConnectTimeoutMs: 10000,
+  readOnlyProbeMs: 30000,
+  frameGapAlertMs: 5000,
+  leaveRetryMax: 3,
+  leaveRetryMs: 1200,
+  httpTimeoutMs: 10000,
+  loginPointX: null,
+  loginPointY: null,
+  loginPointHp: null
 };
 
 function boolEnv(value, fallback = false) {
@@ -34,6 +43,7 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
     gameOrigin: env.GRASP_RAT_BROWSERLESS_GAME_ORIGIN || DEFAULTS.gameOrigin,
     wsPath: env.GRASP_RAT_BROWSERLESS_WS_PATH || DEFAULTS.wsPath,
     wsExtraQuery: env.GRASP_RAT_BROWSERLESS_WS_EXTRA_QUERY || DEFAULTS.wsExtraQuery,
+    snapshotPath: env.GRASP_RAT_BROWSERLESS_SNAPSHOT_PATH || DEFAULTS.snapshotPath,
     dataDir: env.GRASP_RAT_BROWSERLESS_DATA_DIR || DEFAULTS.dataDir,
     statusHost: env.GRASP_RAT_BROWSERLESS_STATUS_HOST || DEFAULTS.statusHost,
     statusPort: numberEnv(env.GRASP_RAT_BROWSERLESS_STATUS_PORT, DEFAULTS.statusPort),
@@ -43,8 +53,16 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
     once: boolEnv(env.GRASP_RAT_BROWSERLESS_ONCE, DEFAULTS.once),
     logRetentionDays: numberEnv(env.GRASP_RAT_BROWSERLESS_LOG_RETENTION_DAYS, DEFAULTS.logRetentionDays),
     wsConnectTimeoutMs: numberEnv(env.GRASP_RAT_BROWSERLESS_WS_CONNECT_TIMEOUT_MS, DEFAULTS.wsConnectTimeoutMs),
+    readOnlyProbeMs: numberEnv(env.GRASP_RAT_BROWSERLESS_READONLY_PROBE_MS, DEFAULTS.readOnlyProbeMs),
+    frameGapAlertMs: numberEnv(env.GRASP_RAT_BROWSERLESS_FRAME_GAP_ALERT_MS, DEFAULTS.frameGapAlertMs),
+    leaveRetryMax: numberEnv(env.GRASP_RAT_BROWSERLESS_LEAVE_RETRY_MAX, DEFAULTS.leaveRetryMax),
+    leaveRetryMs: numberEnv(env.GRASP_RAT_BROWSERLESS_LEAVE_RETRY_MS, DEFAULTS.leaveRetryMs),
+    httpTimeoutMs: numberEnv(env.GRASP_RAT_BROWSERLESS_HTTP_TIMEOUT_MS, DEFAULTS.httpTimeoutMs),
     userId: numberEnv(env.GRASP_RAT_BROWSERLESS_USER_ID, 0),
     sessionToken: env.GRASP_RAT_BROWSERLESS_SESSION_TOKEN || '',
+    loginPointX: numberEnv(env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_X, DEFAULTS.loginPointX),
+    loginPointY: numberEnv(env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_Y, DEFAULTS.loginPointY),
+    loginPointHp: numberEnv(env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_HP, DEFAULTS.loginPointHp),
     selfTest: false,
     help: false
   };
@@ -72,6 +90,18 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
       config.sessionToken = argv[++i] || '';
     } else if (arg === '--log-retention-days') {
       config.logRetentionDays = numberEnv(argv[++i], config.logRetentionDays);
+    } else if (arg === '--read-only-probe-ms') {
+      config.readOnlyProbeMs = numberEnv(argv[++i], config.readOnlyProbeMs);
+    } else if (arg === '--frame-gap-alert-ms') {
+      config.frameGapAlertMs = numberEnv(argv[++i], config.frameGapAlertMs);
+    } else if (arg === '--snapshot-path') {
+      config.snapshotPath = argv[++i] || config.snapshotPath;
+    } else if (arg === '--login-point-x') {
+      config.loginPointX = numberEnv(argv[++i], config.loginPointX);
+    } else if (arg === '--login-point-y') {
+      config.loginPointY = numberEnv(argv[++i], config.loginPointY);
+    } else if (arg === '--login-point-hp') {
+      config.loginPointHp = numberEnv(argv[++i], config.loginPointHp);
     } else if (arg === '--self-test') {
       config.selfTest = true;
     } else if (arg === '--help' || arg === '-h') {
@@ -101,6 +131,12 @@ function usage() {
     '  --web-token <token>      Required later when status server is enabled',
     '  --user-id <id>           Manual session user id, usually loaded from state later',
     '  --session-token <token>  Manual session token, usually loaded from state later',
+    '  --read-only-probe-ms <ms>  Read-only canary duration. Default: 30000',
+    '  --frame-gap-alert-ms <ms>  Read-only canary frame-gap failure threshold. Default: 5000',
+    '  --snapshot-path <path>    Snapshot path for pre-login safety. Default: /snapshot',
+    '  --login-point-x <cm>      Manual login point x for canary safety',
+    '  --login-point-y <cm>      Manual login point y for canary safety',
+    '  --login-point-hp <hp>     Manual login point HP context for canary safety',
     '  --self-test              Run runner skeleton self-test'
   ].join('\n');
 }

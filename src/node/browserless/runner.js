@@ -14,12 +14,14 @@ const {
   writeBrowserlessStateFile
 } = require('./state-file');
 const { startStatusServer } = require('./status-server');
+const { runReadOnlyCanary } = require('./canary');
 
 function publicConfig(config) {
   return {
     gameOrigin: config.gameOrigin,
     wsPath: config.wsPath,
     wsExtraQuery: config.wsExtraQuery,
+    snapshotPath: config.snapshotPath,
     dataDir: config.dataDir,
     logDir: config.logDir,
     statusHost: config.statusHost,
@@ -29,7 +31,10 @@ function publicConfig(config) {
     dryRun: Boolean(config.dryRun),
     once: Boolean(config.once),
     logRetentionDays: Number(config.logRetentionDays || 0),
+    readOnlyProbeMs: Number(config.readOnlyProbeMs || 0),
+    frameGapAlertMs: Number(config.frameGapAlertMs || 0),
     stateFile: config.stateFile || stateFilePath(config),
+    loginPointPresent: Number.isFinite(Number(config.loginPointX)) && Number.isFinite(Number(config.loginPointY)),
     userId: Number(config.userId || 0),
     sessionTokenPresent: Boolean(config.sessionToken)
   };
@@ -45,6 +50,7 @@ async function runBrowserlessRunner(config, deps = {}) {
     keepDays: config.logRetentionDays
   });
   let persisted = readBrowserlessStateFile(stateFile);
+  const loginPointProvided = Number.isFinite(Number(config.loginPointX)) && Number.isFinite(Number(config.loginPointY));
   persisted = writeBrowserlessStateFile(stateFile, {
     ...persisted,
     updatedAt: new Date(now()).toISOString(),
@@ -62,6 +68,20 @@ async function runBrowserlessRunner(config, deps = {}) {
       dryRun: config.dryRun,
       lastError: ''
     },
+    loginPointSafety: loginPointProvided
+      ? {
+          ...persisted.loginPointSafety,
+          ok: false,
+          reason: 'manual-login-point-pending-snapshot-safety',
+          point: {
+            x: Number(config.loginPointX),
+            y: Number(config.loginPointY),
+            hp: Number.isFinite(Number(config.loginPointHp)) ? Number(config.loginPointHp) : null,
+            source: 'cli'
+          },
+          checkedAt: ''
+        }
+      : persisted.loginPointSafety,
     logs: {
       ...persisted.logs,
       dataDir: config.dataDir,
@@ -134,38 +154,25 @@ async function runBrowserlessRunner(config, deps = {}) {
     return result;
   }
 
-  if (typeof deps.runReadOnlyOnce === 'function') {
-    const canary = await deps.runReadOnlyOnce(config, { logStore, now });
-    const result = { ok: Boolean(canary?.ok), mode: 'read-only', canary: canary || null };
-    updateBrowserlessStateFile(stateFile, {
-      runner: {
-        running: !config.once,
-        mode: 'read-only',
-        lastRun: result,
-        lastError: result.ok ? '' : 'read-only-canary-failed'
-      },
-      probes: {
-        lastReadOnlyProbe: canary || null
-      }
-    }, { updatedAt: new Date(now()).toISOString() });
-    logStore.append('runner', 'runner-finish', result);
-    return result;
-  }
-
-  const result = {
-    ok: false,
-    reason: 'live-read-only-canary-pending',
-    message: 'live read-only transport is intentionally gated until the read-only canary runner is implemented'
-  };
+  const readOnlyCanary = deps.runReadOnlyOnce || runReadOnlyCanary;
+  const canary = await readOnlyCanary(config, {
+    logStore,
+    now,
+    persistedState: readBrowserlessStateFile(stateFile)
+  });
+  const result = { ok: Boolean(canary?.ok), mode: 'read-only', canary: canary || null };
   updateBrowserlessStateFile(stateFile, {
     runner: {
-      running: false,
+      running: !config.once,
       mode: 'read-only',
       lastRun: result,
-      lastError: result.reason
+      lastError: result.ok ? '' : (canary?.error || 'read-only-canary-failed')
+    },
+    probes: {
+      lastReadOnlyProbe: canary || null
     }
   }, { updatedAt: new Date(now()).toISOString() });
-  logStore.append('runner', 'runner-stop', result);
+  logStore.append('runner', result.ok ? 'runner-finish' : 'runner-stop', result);
   return result;
 }
 
