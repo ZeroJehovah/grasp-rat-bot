@@ -14,7 +14,11 @@ function defaultBrowserlessState() {
       userId: 0,
       sessionToken: '',
       authenticated: false,
-      tokenUpdatedAt: ''
+      tokenUpdatedAt: '',
+      lastAuthUrl: '',
+      lastAuthUrlAt: '',
+      lastLoginSource: '',
+      lastLoginSummary: null
     },
     runner: {
       running: false,
@@ -122,6 +126,61 @@ function normalizeBrowserlessState(state, file = '') {
   return normalized;
 }
 
+function loginPointFromAnyState(state) {
+  const point = state?.loginPointSafety?.point
+    || state?.current?.self
+    || state?.lastSelfSummary
+    || null;
+  if (!point || !Number.isFinite(Number(point.x)) || !Number.isFinite(Number(point.y))) return null;
+  return {
+    x: Number(point.x),
+    y: Number(point.y),
+    hp: Number.isFinite(Number(point.hp)) ? Number(point.hp) : null,
+    source: point.source || 'state'
+  };
+}
+
+function sessionFromAnyState(state) {
+  const userId = Number(state?.session?.userId || state?.userId || 0);
+  const sessionToken = String(state?.session?.sessionToken || state?.sessionToken || '');
+  return {
+    userId: Number.isFinite(userId) ? userId : 0,
+    sessionToken
+  };
+}
+
+function browserlessPatchFromLegacyState(state, options = {}) {
+  const session = sessionFromAnyState(state);
+  const loginPoint = loginPointFromAnyState(state);
+  const nowIso = options.updatedAt || new Date().toISOString();
+  const patch = {};
+  if (session.userId || session.sessionToken) {
+    patch.session = {
+      userId: session.userId,
+      sessionToken: session.sessionToken,
+      tokenUpdatedAt: state?.session?.tokenUpdatedAt || (session.sessionToken ? nowIso : '')
+    };
+  }
+  if (loginPoint) {
+    patch.loginPointSafety = {
+      ok: Boolean(state?.loginPointSafety?.ok),
+      reason: state?.loginPointSafety?.reason || 'imported-login-point-pending-snapshot-safety',
+      point: {
+        ...loginPoint,
+        source: options.source || loginPoint.source || 'import'
+      },
+      checkedAt: state?.loginPointSafety?.checkedAt || ''
+    };
+    patch.current = {
+      self: {
+        ...loginPoint,
+        name: state?.lastSelfSummary?.name || state?.current?.self?.name || ''
+      }
+    };
+  }
+  return patch;
+}
+
 function buildPublicBrowserlessStatus(state, config = {}) {
   const normalized = normalizeBrowserlessState(state, state?.logs?.stateFile || '');
   const publicState = {
@@ -131,7 +190,11 @@ function buildPublicBrowserlessStatus(state, config = {}) {
       userId: normalized.session.userId,
       authenticated: normalized.session.authenticated,
       tokenPresent: Boolean(normalized.session.sessionToken),
-      tokenUpdatedAt: normalized.session.tokenUpdatedAt || ''
+      tokenUpdatedAt: normalized.session.tokenUpdatedAt || '',
+      lastAuthUrl: normalized.session.lastAuthUrl || '',
+      lastAuthUrlAt: normalized.session.lastAuthUrlAt || '',
+      lastLoginSource: normalized.session.lastLoginSource || '',
+      lastLoginSummary: normalized.session.lastLoginSummary || null
     },
     runner: normalized.runner,
     probes: normalized.probes,
@@ -154,10 +217,13 @@ function buildPublicBrowserlessStatus(state, config = {}) {
 }
 
 module.exports = {
+  browserlessPatchFromLegacyState,
   buildPublicBrowserlessStatus,
   defaultBrowserlessState,
+  loginPointFromAnyState,
   mergeState,
   readBrowserlessStateFile,
+  sessionFromAnyState,
   stateFilePath,
   updateBrowserlessStateFile,
   writeBrowserlessStateFile

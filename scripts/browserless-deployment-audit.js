@@ -4,6 +4,11 @@
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
+const {
+  loginPointFromAnyState,
+  readBrowserlessStateFile,
+  sessionFromAnyState
+} = require('../src/node/browserless/state-file');
 
 const DEFAULT_SERVICE_NAME = 'grasp-rat-browserless-runner';
 const DEFAULT_UNIT_PATH = `/etc/systemd/system/${DEFAULT_SERVICE_NAME}.service`;
@@ -124,10 +129,12 @@ function isNumber(value) {
   return text !== '' && Number.isFinite(Number(text));
 }
 
-function addEnvChecks(checks, env, envMode) {
+function addEnvChecks(checks, env, envMode, persistedState = {}) {
   const profile = env.GRASP_RAT_BROWSERLESS_CANARY_PROFILE || '';
   const control = env.GRASP_RAT_BROWSERLESS_CONTROL_MODE || '';
   const dryRun = env.GRASP_RAT_BROWSERLESS_DRY_RUN || '';
+  const stateSession = sessionFromAnyState(persistedState);
+  const stateLoginPoint = loginPointFromAnyState(persistedState);
   const profilePresent = Boolean(profile);
   const controlPresent = Boolean(control);
   const profileOk = !profile || VALID_CANARY_PROFILES.has(profile);
@@ -147,11 +154,16 @@ function addEnvChecks(checks, env, envMode) {
   }
 
   if (envMode === 'live') {
+    const userId = Number(env.GRASP_RAT_BROWSERLESS_USER_ID || 0) || stateSession.userId;
+    const sessionTokenPresent = Boolean(env.GRASP_RAT_BROWSERLESS_SESSION_TOKEN || stateSession.sessionToken);
+    const loginPointX = isNumber(env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_X) ? Number(env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_X) : stateLoginPoint?.x;
+    const loginPointY = isNumber(env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_Y) ? Number(env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_Y) : stateLoginPoint?.y;
+    const loginPointHp = isNumber(env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_HP) ? Number(env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_HP) : stateLoginPoint?.hp;
     addCheck(checks, 'env-live-dry-run', dryRun === 'false', `GRASP_RAT_BROWSERLESS_DRY_RUN=${dryRun || 'missing'}`);
     addCheck(checks, 'env-live-profile', modeOk, `profile=${profile}, control=${control}`);
     addCheck(checks, 'env-profile-control-consistency', profileControlConsistent, `profile=${profile || 'missing'}, control=${control || 'missing'}, expectedControl=${expectedControl || 'missing'}`);
-    addCheck(checks, 'env-live-session', isPositiveNumber(env.GRASP_RAT_BROWSERLESS_USER_ID) && Boolean(env.GRASP_RAT_BROWSERLESS_SESSION_TOKEN), `userId=${env.GRASP_RAT_BROWSERLESS_USER_ID || 'missing'}, sessionTokenPresent=${Boolean(env.GRASP_RAT_BROWSERLESS_SESSION_TOKEN)}`);
-    addCheck(checks, 'env-login-point', isNumber(env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_X) && isNumber(env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_Y) && isNumber(env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_HP), `x=${env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_X || 'missing'}, y=${env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_Y || 'missing'}, hp=${env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_HP || 'missing'}`);
+    addCheck(checks, 'env-live-session', isPositiveNumber(userId) && sessionTokenPresent, `userId=${userId || 'missing'}, sessionTokenPresent=${sessionTokenPresent}, source=${env.GRASP_RAT_BROWSERLESS_SESSION_TOKEN ? 'env' : (stateSession.sessionToken ? 'state' : 'missing')}`);
+    addCheck(checks, 'env-login-point', isNumber(loginPointX) && isNumber(loginPointY) && isNumber(loginPointHp), `x=${loginPointX ?? 'missing'}, y=${loginPointY ?? 'missing'}, hp=${loginPointHp ?? 'missing'}, source=${stateLoginPoint ? 'state' : 'env'}`);
     return;
   }
 
@@ -191,7 +203,8 @@ function auditDeployment(options = {}, deps = {}) {
 
   addCheck(checks, 'env-data-dir', env.GRASP_RAT_BROWSERLESS_DATA_DIR === dataDir, `GRASP_RAT_BROWSERLESS_DATA_DIR=${env.GRASP_RAT_BROWSERLESS_DATA_DIR || 'missing'}`);
   addCheck(checks, 'env-log-dir', env.GRASP_RAT_BROWSERLESS_LOG_DIR === logDir, `GRASP_RAT_BROWSERLESS_LOG_DIR=${env.GRASP_RAT_BROWSERLESS_LOG_DIR || 'missing'}`);
-  addEnvChecks(checks, env, envMode);
+  const persistedState = readBrowserlessStateFile(path.join(dataDir, 'state.json'));
+  addEnvChecks(checks, env, envMode, persistedState);
   addCheck(checks, 'env-web-token', Boolean(env.GRASP_RAT_BROWSERLESS_WEB_TOKEN && env.GRASP_RAT_BROWSERLESS_WEB_TOKEN !== 'replace-with-a-long-random-token'), 'web token is present and not the example placeholder');
 
   const dataAccess = accessOk(dataDir);

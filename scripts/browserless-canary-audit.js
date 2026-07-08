@@ -192,7 +192,12 @@ function summarizeAudit(options = {}) {
 
   addCheck(checks, 'final-event', Boolean(finalEntry), `found ${finalEntries.length} final canary events for mode ${mode}`);
   addCheck(checks, 'mode', final?.mode === mode, `expected ${mode}, got ${final?.mode || 'missing'}`);
-  addCheck(checks, 'snapshot-safety', final?.snapshotSafety?.ok === true, `snapshotSafety.ok=${String(final?.snapshotSafety?.ok)}`);
+  addCheck(
+    checks,
+    'snapshot-safety',
+    final?.snapshotSafety?.ok === true && final?.snapshotSafety?.bootstrapOnly !== true,
+    `snapshotSafety.ok=${String(final?.snapshotSafety?.ok)}, bootstrapOnly=${String(Boolean(final?.snapshotSafety?.bootstrapOnly))}`
+  );
   addCheck(checks, 'decoded-frames', Number(final?.stats?.decodedFrameCount || 0) > 0, `decodedFrameCount=${Number(final?.stats?.decodedFrameCount || 0)}`);
   addCheck(checks, 'self-observed', Number(final?.stats?.selfPresent?.true || 0) > 0, `selfPresent.true=${Number(final?.stats?.selfPresent?.true || 0)}`);
   addCheck(checks, 'decode-errors', Number(final?.frameHealth?.decodeErrors || 0) === 0, `decodeErrors=${Number(final?.frameHealth?.decodeErrors || 0)}`);
