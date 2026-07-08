@@ -6714,6 +6714,65 @@ async function runSelfTest() {
           detail: { target: { authority: 'realtime' } }
         });
         const combatLiveMissingAction = summarizeBrowserlessCanaryAudit({ logDir: dir, day: '2026-07-12', profile: 'combat-live' });
+
+        const movementShootLeakDayDir = path.join(dir, '2026-07-13');
+        fs.mkdirSync(movementShootLeakDayDir, { recursive: true });
+        const writeMovementShootLeak = (stream, entry) => {
+          fs.appendFileSync(path.join(movementShootLeakDayDir, `${stream}.jsonl`), `${JSON.stringify(entry)}\n`);
+        };
+        writeMovementShootLeak('runner', {
+          at: '2026-07-13T01:05:00.000Z',
+          type: 'canary-finish',
+          detail: {
+            ...baseFinish,
+            mode: 'movement-only',
+            startedAt: '2026-07-13T01:00:00.000Z',
+            completedAt: '2026-07-13T01:05:00.000Z',
+            actions: { sentCount: 1, velocitySentCount: 1, shootSentCount: 0 }
+          }
+        });
+        writeMovementShootLeak('decisions', { at: '2026-07-13T01:00:01.000Z', type: 'decision', detail: { kind: 'profit-candidate' } });
+        writeMovementShootLeak('runner', {
+          at: '2026-07-13T01:00:02.000Z',
+          type: 'movement-command',
+          detail: {
+            action: { kind: 'velocity' },
+            state: { shootSentCount: 1, lastShootCommand: { type: 'shoot' } }
+          }
+        });
+        const movementShootLeak = summarizeBrowserlessCanaryAudit({ logDir: dir, day: '2026-07-13', profile: 'movement-only' });
+
+        const combatLiveMissingAckDayDir = path.join(dir, '2026-07-14');
+        fs.mkdirSync(combatLiveMissingAckDayDir, { recursive: true });
+        const writeCombatLiveMissingAck = (stream, entry) => {
+          fs.appendFileSync(path.join(combatLiveMissingAckDayDir, `${stream}.jsonl`), `${JSON.stringify(entry)}\n`);
+        };
+        writeCombatLiveMissingAck('runner', {
+          at: '2026-07-14T01:05:00.000Z',
+          type: 'canary-finish',
+          detail: {
+            ...baseFinish,
+            mode: 'combat-live',
+            startedAt: '2026-07-14T01:00:00.000Z',
+            completedAt: '2026-07-14T01:05:00.000Z',
+            actions: { sentCount: 1, velocitySentCount: 1, shootSentCount: 0 }
+          }
+        });
+        writeCombatLiveMissingAck('decisions', { at: '2026-07-14T01:00:01.000Z', type: 'decision', detail: { kind: 'combat-live' } });
+        writeCombatLiveMissingAck('runner', {
+          at: '2026-07-14T01:00:02.000Z',
+          type: 'movement-command',
+          detail: {
+            action: { kind: 'combat-live', shoot: { command: { type: 'shoot' } } },
+            state: { shootSentCount: 1 }
+          }
+        });
+        writeCombatLiveMissingAck('combat', {
+          at: '2026-07-14T01:00:03.000Z',
+          type: 'combat-live',
+          detail: { target: { authority: 'realtime' } }
+        });
+        const combatLiveMissingAck = summarizeBrowserlessCanaryAudit({ logDir: dir, day: '2026-07-14', profile: 'combat-live' });
         return [
           clean.ok,
           clean.failed.length,
@@ -6729,10 +6788,16 @@ async function runSelfTest() {
           combatLive.ok,
           combatLive.counts.movementCommand,
           combatLiveMissingAction.ok,
-          combatLiveMissingAction.failed.some(item => item.key === 'combat-action-logged')
+          combatLiveMissingAction.failed.some(item => item.key === 'combat-action-logged'),
+          movementShootLeak.ok,
+          movementShootLeak.failed.some(item => item.key === 'no-shoot'),
+          movementShootLeak.counts.shootCommand,
+          combatLiveMissingAck.ok,
+          combatLiveMissingAck.failed.some(item => item.key === 'shoot-ack-or-no-shot'),
+          combatLiveMissingAck.counts.shootCommand
         ].join('|');
       }),
-      want: 'true|0|true|1|0|false|true|true|1|false|true|true|1|false|true'
+      want: 'true|0|true|1|0|false|true|true|1|false|true|true|1|false|true|false|true|1|false|true|1'
     },
     {
       name: 'browserless runner config parses env and cli overrides',
