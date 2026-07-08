@@ -374,6 +374,8 @@ Planning exposes one immediate protocol validation before product control work s
 2. Confirm whether frame traffic contains only `pos` and pushed `snapshot`, or additional realtime coin/drop/message frame types.
 3. Confirm a longer no-action connection leaves cleanly and `selfPresent` changes from true to false after verified leave.
 
+Status on 2026-07-08: complete for the first 30 second probe. It observed only `pos` and pushed `snapshot` frames. Coin drops and messages appeared only in `snapshot`, so the implementation plan should assume no separate realtime coin/drop frame until later evidence proves otherwise.
+
 Later validations are staged and should not be combined:
 
 - 10-30 minute read-only canary after Commit 8.
