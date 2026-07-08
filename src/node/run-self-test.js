@@ -61,6 +61,15 @@ const {
   runBrowserlessRunnerSelfTest
 } = require('./browserless/runner');
 const {
+  buildPublicBrowserlessStatus,
+  readBrowserlessStateFile,
+  stateFilePath,
+  updateBrowserlessStateFile
+} = require('./browserless/state-file');
+const {
+  startStatusServer
+} = require('./browserless/status-server');
+const {
   cleanupOldLogDays
 } = require('./browserless/log-retention');
 const {
@@ -5820,6 +5829,83 @@ async function runSelfTest() {
         ].join('|');
       }),
       want: 'true|dry-run|true|read-only|true|true|true'
+    },
+    {
+      name: 'browserless state file public status redacts session token',
+      got: withTempDirForTest(async dir => {
+        const config = parseBrowserlessRunnerArgs(['--data-dir', dir, '--web-token', 'web-secret'], {});
+        const file = stateFilePath(config);
+        updateBrowserlessStateFile(file, {
+          session: {
+            userId: 77,
+            sessionToken: 'state-secret-token',
+            tokenUpdatedAt: '2026-07-08T00:00:00.000Z'
+          },
+          current: {
+            self: { name: 'self', hp: 88, x: 10, y: 20 }
+          },
+          recentExits: [{ reason: 'test-exit' }]
+        }, { updatedAt: '2026-07-08T00:00:01.000Z' });
+        const stored = readBrowserlessStateFile(file);
+        const publicStatus = buildPublicBrowserlessStatus(stored, config);
+        return [
+          stored.session.sessionToken,
+          publicStatus.session.userId,
+          publicStatus.session.authenticated,
+          publicStatus.session.tokenPresent,
+          JSON.stringify(publicStatus).includes('state-secret-token'),
+          publicStatus.current.self.name,
+          publicStatus.recentExits[0].reason
+        ].join('|');
+      }),
+      want: 'state-secret-token|77|true|true|false|self|test-exit'
+    },
+    {
+      name: 'browserless status server gates status and redacts payload',
+      got: (async () => {
+        let stopCalled = 0;
+        const handle = await startStatusServer({
+          host: '127.0.0.1',
+          port: 0,
+          webToken: 'test-token',
+          getStatus: () => ({
+            ok: true,
+            session: {
+              tokenPresent: true,
+              sessionToken: 'must-not-leak'
+            }
+          }),
+          onStop: async () => {
+            stopCalled += 1;
+            return { ok: true, stopped: true };
+          }
+        });
+        try {
+          const base = `http://127.0.0.1:${handle.port}`;
+          const denied = await fetch(`${base}/api/status`);
+          const allowed = await fetch(`${base}/api/status?token=test-token`);
+          const allowedText = await allowed.text();
+          const panel = await fetch(`${base}/?token=test-token`);
+          const stop = await fetch(`${base}/api/stop`, {
+            method: 'POST',
+            headers: { authorization: 'Bearer test-token' }
+          });
+          return [
+            denied.status,
+            allowed.status,
+            JSON.parse(allowedText).session.tokenPresent,
+            !allowedText.includes('must-not-leak'),
+            panel.status,
+            /Browserless Runner/.test(await panel.text()),
+            stop.status,
+            JSON.parse(await stop.text()).stopped,
+            stopCalled
+          ].join('|');
+        } finally {
+          await handle.close();
+        }
+      })(),
+      want: '401|200|true|true|200|true|200|true|1'
     },
     {
       name: 'browserless runner self-test passes',

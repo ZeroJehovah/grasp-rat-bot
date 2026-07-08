@@ -175,10 +175,11 @@ On 2026-07-08, the VPS one-shot demo succeeded after the Node 18 `ws` fallback a
 - 2026-07-08: Browserless state-store support was added under `src/node/browserless/state-store.js`. Decoded `pos`, pushed `snapshot`, and `shoot_ok` frames now have a production-owned in-memory model with explicit realtime/snapshot/command authority tags. Combat-facing selection is realtime-only and self-tests verify snapshot-only coordinates do not enter combat state.
 - 2026-07-08: Browserless local JSONL log storage, UTC-day retention, and summary generation were added. Normal browserless operation can now append redacted `runner`, `decisions`, `combat`, and `exits` streams locally, keep only the latest 3 UTC day directories, and generate per-day `summary.json` without depending on `combat-log-service`.
 - 2026-07-08: The production browserless runner CLI skeleton was added at `scripts/browserless-runner.js` with config parsing under `src/node/browserless/config.js` and startup orchestration under `src/node/browserless/runner.js`. It initializes local logs/retention and supports read-only dry-run/fake once validation, but live read-only transport remains gated until the canary runner step adds verified leave.
+- 2026-07-08: Browserless status server, web panel, and state-file helpers were added. Non-`--once` runner starts can now expose a token-gated `/api/status` and built-in panel backed by redacted `state.json`; `/api/stop` is present only as a placeholder until the safety/exit controller owns stop behavior.
 
 ## Next Plan
 
-1. Add the browserless status server, persisted state-file helper, and initial web panel skeleton with token-gated status access.
+1. Add the read-only canary runner: pre-login snapshot safety, direct WS connect, frame health tracking, local logs/status updates, and verified leave.
 2. Define the browserless runtime boundary:
    - shared pure strategy remains in `src/strategy/`;
    - browser DOM/CDP integration remains browser-specific;

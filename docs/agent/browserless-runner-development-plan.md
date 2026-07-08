@@ -93,7 +93,7 @@ Update this table in the same task that completes each feature.
 | Commit 5: Add Browserless State Store | Complete | `src/node/browserless/state-store.js` ingests `pos`, `snapshot`, and `shoot_ok` frames into authority-tagged realtime, snapshot fallback, and command states; self-tests cover selector isolation so combat-facing state cannot read snapshot-only coordinates. |
 | Commit 6: Add Local Log Store And Retention | Complete | `src/node/browserless/local-log-store.js` appends redacted daily JSONL streams, `src/node/browserless/log-retention.js` deletes old UTC day directories, and `scripts/browserless-log-summary.js` generates stream/type summaries. |
 | Commit 7: Add Runner CLI Skeleton | Complete | `scripts/browserless-runner.js`, `src/node/browserless/runner.js`, and `src/node/browserless/config.js` provide a dry-run/read-only CLI skeleton with `--once`, data/log dirs, status host/port placeholders, web token config, self-test, and fake read-only validation. |
-| Commit 8: Add Status Server And Web Panel Skeleton | Not started | No browserless status server or panel module yet. |
+| Commit 8: Add Status Server And Web Panel Skeleton | Complete | `src/node/browserless/status-server.js`, `web-panel.js`, and `state-file.js` provide token-gated status, a built-in VPS-oriented panel, redacted public status, persistent `state.json`, and a placeholder stop endpoint; `docs/agent/browserless-runner-operator.md` documents the operator surface. |
 | Commit 9: Add Read-Only Canary Runner | Not started | No production read-only canary runner yet. |
 | Commit 10: Add Dry-Run Decision Adapter | Not started | No browserless decision adapter yet. |
 | Commit 11: Add Safety And Exit Controller | Not started | No browserless safety controller yet. |
