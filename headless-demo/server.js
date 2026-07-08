@@ -20,6 +20,13 @@ const {
   leaveWithVerification: browserlessLeaveWithVerification,
   summarizeLeaveResultForPublic
 } = require('../src/node/browserless/leave-client');
+const {
+  collectFrameStats
+} = require('../src/node/browserless/frame-stats');
+const {
+  openBrowserlessWs,
+  isWsOpen: browserlessIsWsOpen
+} = require('../src/node/browserless/ws-transport');
 
 const GAME_ORIGIN = process.env.GRASP_RAT_GAME_ORIGIN || 'https://grasp-rat-game.h-e.top';
 const HOST = process.env.GRASP_RAT_DEMO_HOST || '127.0.0.1';
@@ -43,7 +50,6 @@ const SNAPSHOT_PATH = process.env.GRASP_RAT_DEMO_SNAPSHOT_PATH || '/snapshot';
 const LOGIN_POINT_HEALTHY_HP_THRESHOLD = Math.max(0, Number(process.env.GRASP_RAT_DEMO_LOGIN_POINT_HEALTHY_HP || 80));
 const LOGIN_POINT_HEALTHY_RADIUS = Math.max(0, Number(process.env.GRASP_RAT_DEMO_LOGIN_POINT_HEALTHY_RADIUS || 17000));
 const LOGIN_POINT_LOW_RADIUS = Math.max(0, Number(process.env.GRASP_RAT_DEMO_LOGIN_POINT_LOW_RADIUS || 30000));
-let cachedWebSocketRuntime = null;
 const frameObservers = new Set();
 
 if (!isLoopbackHost(HOST) && (!WEB_TOKEN || WEB_TOKEN === 'change-this-before-start')) {
@@ -317,18 +323,6 @@ async function submitCallback(callbackUrl) {
   }
 }
 
-function wsUrlForUser(userId) {
-  const origin = new URL(GAME_ORIGIN);
-  origin.protocol = origin.protocol === 'https:' ? 'wss:' : 'ws:';
-  origin.pathname = WS_PATH;
-  origin.search = `?user_id=${encodeURIComponent(userId)}&token=${encodeURIComponent(state.sessionToken)}`;
-  if (WS_EXTRA_QUERY) {
-    const extra = new URLSearchParams(WS_EXTRA_QUERY.replace(/^\?/, ''));
-    for (const [key, value] of extra) origin.searchParams.set(key, value);
-  }
-  return origin.toString();
-}
-
 function normalizeFrameData(data) {
   let value = data;
   const seen = new Set();
@@ -375,83 +369,12 @@ function frameDataToText(data) {
   return String(value);
 }
 
-function rangeInitial() {
-  return { min: null, max: null, last: null };
-}
-
-function updateRange(range, value) {
-  const number = Number(value);
-  if (!Number.isFinite(number)) return;
-  if (range.min === null || number < range.min) range.min = number;
-  if (range.max === null || number > range.max) range.max = number;
-  range.last = number;
-}
-
-function createProbeStats(durationTargetMs) {
-  return {
-    durationTargetMs,
-    frameCount: 0,
-    decodedFrameCount: 0,
-    binaryFrameCount: 0,
-    textFrameCount: 0,
-    typeCounts: {},
-    keySetCounts: {},
-    firstFrameAt: '',
-    lastFrameAt: '',
-    tick: rangeInitial(),
-    entityCount: rangeInitial(),
-    bulletCount: rangeInitial(),
-    coinDropCount: rangeInitial(),
-    messageCount: rangeInitial(),
-    selfPresent: { true: 0, false: 0, unknown: 0 },
-    decodeErrors: 0
-  };
-}
-
-function incrementCount(map, key) {
-  const normalized = String(key || 'unknown');
-  map[normalized] = Number(map[normalized] || 0) + 1;
-}
-
-function updateProbeStats(stats, frame) {
-  stats.frameCount += 1;
-  if (!stats.firstFrameAt) stats.firstFrameAt = frame.at || '';
-  stats.lastFrameAt = frame.at || stats.lastFrameAt;
-  if (frame.kind === 'binary') stats.binaryFrameCount += 1;
-  if (frame.kind === 'text') stats.textFrameCount += 1;
-  if (frame.decodeError) stats.decodeErrors += 1;
-
-  const keys = Array.isArray(frame.decodedJsonKeys) ? frame.decodedJsonKeys.join(',') : '';
-  if (keys) incrementCount(stats.keySetCounts, keys);
-
-  const summary = frame.decodedSummary;
-  if (!summary || typeof summary !== 'object') return;
-  stats.decodedFrameCount += 1;
-  incrementCount(stats.typeCounts, summary.type || frame.decodedType || 'unknown');
-  updateRange(stats.tick, summary.tick);
-  updateRange(stats.entityCount, summary.entityCount);
-  updateRange(stats.bulletCount, summary.bulletCount);
-  updateRange(stats.coinDropCount, summary.coinDropCount);
-  updateRange(stats.messageCount, summary.messageCount);
-  if (summary.selfPresent === true) {
-    stats.selfPresent.true += 1;
-  } else if (summary.selfPresent === false) {
-    stats.selfPresent.false += 1;
-  } else {
-    stats.selfPresent.unknown += 1;
-  }
-}
-
 async function collectProbeStats(durationMs) {
-  const stats = createProbeStats(durationMs);
-  const observer = frame => updateProbeStats(stats, frame);
-  frameObservers.add(observer);
-  try {
-    await sleep(durationMs);
-  } finally {
-    frameObservers.delete(observer);
-  }
-  return stats;
+  return collectFrameStats(durationMs, {
+    addObserver: observer => frameObservers.add(observer),
+    removeObserver: observer => frameObservers.delete(observer),
+    sleep
+  });
 }
 
 function inspectBinaryFrame(buffer) {
@@ -503,112 +426,42 @@ function recordFrame(data) {
   return frame;
 }
 
-function getWebSocketRuntime() {
-  if (cachedWebSocketRuntime) return cachedWebSocketRuntime;
-  if (typeof globalThis.WebSocket === 'function') {
-    cachedWebSocketRuntime = {
-      name: 'global',
-      WebSocket: globalThis.WebSocket,
-      supportsOptions: false
-    };
-    return cachedWebSocketRuntime;
-  }
-  try {
-    const wsModule = require('ws');
-    const WebSocketImpl = wsModule.WebSocket || wsModule;
-    if (typeof WebSocketImpl === 'function') {
-      cachedWebSocketRuntime = {
-        name: 'ws-package',
-        WebSocket: WebSocketImpl,
-        supportsOptions: true
-      };
-      return cachedWebSocketRuntime;
-    }
-  } catch (err) {
-    throw new Error('WebSocket runtime unavailable. Run `npm install` in the repo on Node 18, or use Node 22+ with global WebSocket support. Original error: ' + (err?.message || String(err)));
-  }
-  throw new Error('WebSocket runtime unavailable. Run `npm install` in the repo on Node 18, or use Node 22+ with global WebSocket support.');
-}
-
-function wsOpenState(runtime) {
-  const value = Number(runtime?.WebSocket?.OPEN);
-  return Number.isFinite(value) ? value : 1;
-}
-
-function isWsOpen(ws, runtime = cachedWebSocketRuntime) {
-  return Boolean(ws && Number(ws.readyState) === wsOpenState(runtime));
-}
-
-function addWsHandler(ws, eventName, handler) {
-  if (typeof ws.addEventListener === 'function') {
-    ws.addEventListener(eventName, handler);
-    return;
-  }
-  if (typeof ws.on === 'function') {
-    ws.on(eventName, handler);
-    return;
-  }
-  ws['on' + eventName] = handler;
-}
-
-function closeReasonText(reason) {
-  if (!reason) return '';
-  if (Buffer.isBuffer(reason)) return reason.toString('utf8');
-  return String(reason || '');
-}
-
-function createWebSocket(runtime, wsUrl) {
-  if (!runtime.supportsOptions) return new runtime.WebSocket(wsUrl);
-  return new runtime.WebSocket(wsUrl, [], {
-    headers: { Origin: GAME_ORIGIN },
-    perMessageDeflate: false
-  });
+function isWsOpen(transport) {
+  if (transport?.isOpen) return transport.isOpen();
+  return browserlessIsWsOpen(transport);
 }
 
 function openWs() {
   if (!state.userId || !state.sessionToken) throw new Error('not logged in');
-  const runtime = getWebSocketRuntime();
-  const wsUrl = wsUrlForUser(state.userId);
-  state.wsUrl = wsUrl;
-  persistState();
-  logEvent('ws-connect-start', { wsUrl, runtime: runtime.name });
-  const ws = createWebSocket(runtime, wsUrl);
-  let opened = false;
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      if (!opened) {
-        try { ws.close(); } catch (_) {}
-        reject(new Error('websocket connect timeout'));
-      }
-    }, WS_CONNECT_TIMEOUT_MS);
-    addWsHandler(ws, 'open', () => {
-      opened = true;
-      clearTimeout(timer);
+  return openBrowserlessWs({
+    gameOrigin: GAME_ORIGIN,
+    wsPath: WS_PATH,
+    wsExtraQuery: WS_EXTRA_QUERY,
+    userId: state.userId,
+    sessionToken: state.sessionToken,
+    connectTimeoutMs: WS_CONNECT_TIMEOUT_MS,
+    onConnectStart: detail => {
+      state.wsUrl = detail.wsUrl;
+      persistState();
+      logEvent('ws-connect-start', detail);
+    },
+    onOpen: detail => {
       state.wsOpen = true;
       state.inGame = true;
       state.lastJoinAt = Date.now();
       state.lastError = '';
       persistState();
-      logEvent('ws-open', { wsUrl, runtime: runtime.name });
-      resolve(ws);
-    });
-    addWsHandler(ws, 'error', event => {
-      const message = event?.message || event?.error?.message || String(event || 'websocket error');
-      state.lastError = message;
-      logEvent('ws-error', { message });
-      if (!opened) {
-        clearTimeout(timer);
-        reject(new Error(message));
-      }
-    });
-    addWsHandler(ws, 'close', (eventOrCode, reason) => {
+      logEvent('ws-open', detail);
+    },
+    onError: detail => {
+      state.lastError = detail.message;
+      logEvent('ws-error', { message: detail.message });
+    },
+    onClose: detail => {
       state.wsOpen = false;
-      const code = typeof eventOrCode === 'number' ? eventOrCode : eventOrCode?.code || 0;
-      const textReason = typeof eventOrCode === 'number' ? closeReasonText(reason) : closeReasonText(eventOrCode?.reason);
-      const wasClean = typeof eventOrCode === 'number' ? code === 1000 : Boolean(eventOrCode?.wasClean);
-      logEvent('ws-close', { code, reason: textReason, wasClean });
-    });
-    addWsHandler(ws, 'message', (eventOrData) => {
+      logEvent('ws-close', detail);
+    },
+    onMessage: eventOrData => {
       try {
         recordFrame(eventOrData);
       } catch (err) {
@@ -616,14 +469,9 @@ function openWs() {
         state.lastError = 'websocket frame record failed: ' + message;
         logEvent('ws-frame-error', { message });
       }
-    });
+    },
+    onSend: detail => logEvent('ws-send', detail)
   });
-}
-
-function wsSend(ws, message) {
-  if (!isWsOpen(ws)) throw new Error('websocket is not open');
-  ws.send(message);
-  logEvent('ws-send', { message });
 }
 
 async function leaveOnce(stage = 'initial') {
@@ -688,22 +536,22 @@ async function runActionDemo() {
   try {
     ws = await openWs();
     const actions = [
-      'vel 0 -1',
-      'vel 0 0',
-      'vel 0 1',
-      'vel 0 0',
-      'vel -1 0',
-      'vel 0 0',
-      'vel 1 0',
-      'vel 0 0',
-      'shoot 0 0 0 0'
+      () => ws.sendVelocity(0, -1),
+      () => ws.sendVelocity(0, 0),
+      () => ws.sendVelocity(0, 1),
+      () => ws.sendVelocity(0, 0),
+      () => ws.sendVelocity(-1, 0),
+      () => ws.sendVelocity(0, 0),
+      () => ws.sendVelocity(1, 0),
+      () => ws.sendVelocity(0, 0),
+      () => ws.sendShoot(0, 0, 0, 0)
     ];
-    for (const action of actions) {
-      wsSend(ws, action);
+    for (const sendAction of actions) {
+      sendAction();
       await sleep(ACTION_DELAY_MS);
     }
     try {
-      wsSend(ws, 'vel 0 0');
+      ws.sendVelocity(0, 0);
     } catch (_) {}
     await sleep(250);
     const leave = await leaveWithVerification();

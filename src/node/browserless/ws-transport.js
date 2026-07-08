@@ -1,0 +1,186 @@
+'use strict';
+
+const DEFAULT_GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
+const DEFAULT_WS_PATH = '/ws';
+const DEFAULT_WS_EXTRA_QUERY = 'compress=gzip%2Cdeflate';
+const DEFAULT_CONNECT_TIMEOUT_MS = 10000;
+
+let cachedWebSocketRuntime = null;
+
+function buildWsUrl(options = {}) {
+  const userId = Number(options.userId || 0);
+  const sessionToken = String(options.sessionToken || '');
+  if (!userId || !sessionToken) throw new Error('not logged in');
+  const origin = new URL(options.gameOrigin || DEFAULT_GAME_ORIGIN);
+  origin.protocol = origin.protocol === 'https:' ? 'wss:' : 'ws:';
+  origin.pathname = options.wsPath || DEFAULT_WS_PATH;
+  origin.search = `?user_id=${encodeURIComponent(userId)}&token=${encodeURIComponent(sessionToken)}`;
+  const extraQuery = options.wsExtraQuery ?? DEFAULT_WS_EXTRA_QUERY;
+  if (extraQuery) {
+    const extra = new URLSearchParams(String(extraQuery).replace(/^\?/, ''));
+    for (const [key, value] of extra) origin.searchParams.set(key, value);
+  }
+  return origin.toString();
+}
+
+function getWebSocketRuntime(options = {}) {
+  if (options.runtime) return options.runtime;
+  if (typeof options.WebSocketImpl === 'function') {
+    return {
+      name: options.runtimeName || 'custom',
+      WebSocket: options.WebSocketImpl,
+      supportsOptions: Boolean(options.supportsOptions)
+    };
+  }
+  if (cachedWebSocketRuntime) return cachedWebSocketRuntime;
+  if (typeof globalThis.WebSocket === 'function') {
+    cachedWebSocketRuntime = {
+      name: 'global',
+      WebSocket: globalThis.WebSocket,
+      supportsOptions: false
+    };
+    return cachedWebSocketRuntime;
+  }
+  try {
+    const wsModule = require('ws');
+    const WebSocketImpl = wsModule.WebSocket || wsModule;
+    if (typeof WebSocketImpl === 'function') {
+      cachedWebSocketRuntime = {
+        name: 'ws-package',
+        WebSocket: WebSocketImpl,
+        supportsOptions: true
+      };
+      return cachedWebSocketRuntime;
+    }
+  } catch (err) {
+    throw new Error('WebSocket runtime unavailable. Run `npm install` in the repo on Node 18, or use Node 22+ with global WebSocket support. Original error: ' + (err?.message || String(err)));
+  }
+  throw new Error('WebSocket runtime unavailable. Run `npm install` in the repo on Node 18, or use Node 22+ with global WebSocket support.');
+}
+
+function wsOpenState(runtime) {
+  const value = Number(runtime?.WebSocket?.OPEN);
+  return Number.isFinite(value) ? value : 1;
+}
+
+function isWsOpen(ws, runtime = cachedWebSocketRuntime) {
+  return Boolean(ws && Number(ws.readyState) === wsOpenState(runtime));
+}
+
+function addWsHandler(ws, eventName, handler) {
+  if (typeof ws.addEventListener === 'function') {
+    ws.addEventListener(eventName, handler);
+    return;
+  }
+  if (typeof ws.on === 'function') {
+    ws.on(eventName, handler);
+    return;
+  }
+  ws['on' + eventName] = handler;
+}
+
+function closeReasonText(reason) {
+  if (!reason) return '';
+  if (Buffer.isBuffer(reason)) return reason.toString('utf8');
+  return String(reason || '');
+}
+
+function createWebSocket(runtime, wsUrl, options = {}) {
+  if (!runtime.supportsOptions) return new runtime.WebSocket(wsUrl);
+  return new runtime.WebSocket(wsUrl, [], {
+    headers: { Origin: options.gameOrigin || DEFAULT_GAME_ORIGIN },
+    perMessageDeflate: false
+  });
+}
+
+function createTransportHandle(ws, runtime, wsUrl, hooks = {}) {
+  const commandNumber = value => {
+    const number = Number(value);
+    return Number.isFinite(number) ? number : 0;
+  };
+  const handle = {
+    ws,
+    runtime,
+    wsUrl,
+    isOpen() {
+      return isWsOpen(ws, runtime);
+    },
+    send(message) {
+      if (!handle.isOpen()) throw new Error('websocket is not open');
+      ws.send(message);
+      if (typeof hooks.onSend === 'function') hooks.onSend({ message });
+      return message;
+    },
+    sendVelocity(dx, dy) {
+      return handle.send(`vel ${commandNumber(dx)} ${commandNumber(dy)}`);
+    },
+    sendShoot(targetX, targetY, startX, startY) {
+      return handle.send(`shoot ${commandNumber(targetX)} ${commandNumber(targetY)} ${commandNumber(startX)} ${commandNumber(startY)}`);
+    },
+    close(code, reason) {
+      if (typeof ws.close === 'function') return ws.close(code, reason);
+      return undefined;
+    }
+  };
+  return handle;
+}
+
+function openBrowserlessWs(options = {}) {
+  const runtime = getWebSocketRuntime(options);
+  const wsUrl = options.wsUrl || buildWsUrl(options);
+  const connectTimeoutMs = Math.max(1, Number(options.connectTimeoutMs || DEFAULT_CONNECT_TIMEOUT_MS));
+  if (typeof options.onConnectStart === 'function') {
+    options.onConnectStart({ wsUrl, runtime: runtime.name });
+  }
+  const ws = createWebSocket(runtime, wsUrl, options);
+  const handle = createTransportHandle(ws, runtime, wsUrl, options);
+  let opened = false;
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      if (!opened) {
+        try { handle.close(); } catch (_) {}
+        reject(new Error('websocket connect timeout'));
+      }
+    }, connectTimeoutMs);
+    addWsHandler(ws, 'open', () => {
+      opened = true;
+      clearTimeout(timer);
+      if (typeof options.onOpen === 'function') options.onOpen({ wsUrl, runtime: runtime.name });
+      resolve(handle);
+    });
+    addWsHandler(ws, 'error', event => {
+      const message = event?.message || event?.error?.message || String(event || 'websocket error');
+      if (typeof options.onError === 'function') options.onError({ message, event, opened });
+      if (!opened) {
+        clearTimeout(timer);
+        reject(new Error(message));
+      }
+    });
+    addWsHandler(ws, 'close', (eventOrCode, reason) => {
+      const code = typeof eventOrCode === 'number' ? eventOrCode : eventOrCode?.code || 0;
+      const textReason = typeof eventOrCode === 'number' ? closeReasonText(reason) : closeReasonText(eventOrCode?.reason);
+      const wasClean = typeof eventOrCode === 'number' ? code === 1000 : Boolean(eventOrCode?.wasClean);
+      if (typeof options.onClose === 'function') options.onClose({ code, reason: textReason, wasClean });
+    });
+    addWsHandler(ws, 'message', eventOrData => {
+      if (typeof options.onMessage === 'function') options.onMessage(eventOrData);
+    });
+  });
+}
+
+function resetWebSocketRuntimeForTest() {
+  cachedWebSocketRuntime = null;
+}
+
+module.exports = {
+  addWsHandler,
+  buildWsUrl,
+  closeReasonText,
+  createTransportHandle,
+  createWebSocket,
+  getWebSocketRuntime,
+  isWsOpen,
+  openBrowserlessWs,
+  resetWebSocketRuntimeForTest,
+  wsOpenState
+};
