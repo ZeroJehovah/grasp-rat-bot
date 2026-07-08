@@ -4,8 +4,8 @@ This document tracks the production browserless runner surface. The older `headl
 
 ## Current Scope
 
-- The runner currently supports a dry-run/read-only skeleton.
-- Live read-only transport is intentionally gated until the read-only canary runner step is implemented.
+- The runner currently supports dry-run mode and a live read-only canary.
+- Live read-only canary sends no movement or shoot commands. It runs pre-login snapshot safety, joins direct WS, collects frame health, and calls verified `leave`.
 - The runner writes local JSONL logs and a persistent state file under the configured data directory.
 - The status server and web panel are available for non-`--once` runs.
 
@@ -32,6 +32,26 @@ For a bounded smoke that exits:
 node scripts/browserless-runner.js --self-test
 node scripts/browserless-runner.js --once --dry-run
 ```
+
+## Read-Only Canary
+
+The canary requires a reusable session and a known login point. The login point is verified again through direct `/snapshot` before the runner joins WS.
+
+```bash
+node scripts/browserless-runner.js \
+  --once \
+  --live \
+  --read-only \
+  --data-dir data/browserless-runner \
+  --user-id <user-id> \
+  --session-token '<session-token>' \
+  --login-point-x <x-cm> \
+  --login-point-y <y-cm> \
+  --login-point-hp <hp> \
+  --read-only-probe-ms 1800000
+```
+
+For the first supervised validation, use 10-30 minutes for `--read-only-probe-ms`. The canary should end with verified `leave`; if leave is not confirmed, treat the run as failed and inspect `runner.jsonl`.
 
 ## Status API
 
@@ -81,7 +101,12 @@ Important variables:
 - `GRASP_RAT_BROWSERLESS_WEB_TOKEN`
 - `GRASP_RAT_BROWSERLESS_READ_ONLY`
 - `GRASP_RAT_BROWSERLESS_DRY_RUN`
+- `GRASP_RAT_BROWSERLESS_READONLY_PROBE_MS`
+- `GRASP_RAT_BROWSERLESS_FRAME_GAP_ALERT_MS`
 - `GRASP_RAT_BROWSERLESS_USER_ID`
 - `GRASP_RAT_BROWSERLESS_SESSION_TOKEN`
+- `GRASP_RAT_BROWSERLESS_LOGIN_POINT_X`
+- `GRASP_RAT_BROWSERLESS_LOGIN_POINT_Y`
+- `GRASP_RAT_BROWSERLESS_LOGIN_POINT_HP`
 
 Full default values are listed in `docs/agent/config-defaults.md`.

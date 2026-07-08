@@ -176,10 +176,11 @@ On 2026-07-08, the VPS one-shot demo succeeded after the Node 18 `ws` fallback a
 - 2026-07-08: Browserless local JSONL log storage, UTC-day retention, and summary generation were added. Normal browserless operation can now append redacted `runner`, `decisions`, `combat`, and `exits` streams locally, keep only the latest 3 UTC day directories, and generate per-day `summary.json` without depending on `combat-log-service`.
 - 2026-07-08: The production browserless runner CLI skeleton was added at `scripts/browserless-runner.js` with config parsing under `src/node/browserless/config.js` and startup orchestration under `src/node/browserless/runner.js`. It initializes local logs/retention and supports read-only dry-run/fake once validation, but live read-only transport remains gated until the canary runner step adds verified leave.
 - 2026-07-08: Browserless status server, web panel, and state-file helpers were added. Non-`--once` runner starts can now expose a token-gated `/api/status` and built-in panel backed by redacted `state.json`; `/api/stop` is present only as a placeholder until the safety/exit controller owns stop behavior.
+- 2026-07-08: Read-only canary implementation was added under `src/node/browserless/canary.js` and wired into the runner's live read-only path. It checks pre-login snapshot safety before WS join, collects and decodes direct WS frames without sending movement/shoot commands, ingests state-store data, checks frame/self health, and calls verified `leave`. This still needs the staged 10-30 minute VPS canary run before Commit 9 can be marked fully complete.
 
 ## Next Plan
 
-1. Add the read-only canary runner: pre-login snapshot safety, direct WS connect, frame health tracking, local logs/status updates, and verified leave.
+1. Run the production browserless read-only canary on VPS for 10-30 minutes and inspect status/log evidence before moving to dry-run decision adapters.
 2. Define the browserless runtime boundary:
    - shared pure strategy remains in `src/strategy/`;
    - browser DOM/CDP integration remains browser-specific;

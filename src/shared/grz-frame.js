@@ -114,6 +114,7 @@ function parseGrzFrame(buffer, options = {}) {
       }
       try {
         const json = JSON.parse(decodedText);
+        if (options.includeJson) frame.decodedJson = json;
         frame.decodedJsonKeys = json && typeof json === 'object' ? Object.keys(json).slice(0, 20) : [];
         frame.decodedType = typeof json?.type === 'string' ? json.type : '';
         if (Number.isFinite(Number(json?.tick))) frame.decodedTick = Number(json.tick);

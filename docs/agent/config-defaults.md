@@ -5,6 +5,7 @@
   - `GRASP_RAT_BROWSERLESS_GAME_ORIGIN = https://grasp-rat-game.h-e.top`
   - `GRASP_RAT_BROWSERLESS_WS_PATH = /ws`
   - `GRASP_RAT_BROWSERLESS_WS_EXTRA_QUERY = compress=gzip%2Cdeflate`
+  - `GRASP_RAT_BROWSERLESS_SNAPSHOT_PATH = /snapshot`
   - `GRASP_RAT_BROWSERLESS_DATA_DIR = data/browserless-runner`
   - `GRASP_RAT_BROWSERLESS_STATUS_HOST = 127.0.0.1`
   - `GRASP_RAT_BROWSERLESS_STATUS_PORT = 18767`
@@ -14,9 +15,17 @@
   - `GRASP_RAT_BROWSERLESS_ONCE = false`
   - `GRASP_RAT_BROWSERLESS_LOG_RETENTION_DAYS = 3`
   - `GRASP_RAT_BROWSERLESS_WS_CONNECT_TIMEOUT_MS = 10000`
+  - `GRASP_RAT_BROWSERLESS_READONLY_PROBE_MS = 30000`
+  - `GRASP_RAT_BROWSERLESS_FRAME_GAP_ALERT_MS = 5000`
+  - `GRASP_RAT_BROWSERLESS_LEAVE_RETRY_MAX = 3`
+  - `GRASP_RAT_BROWSERLESS_LEAVE_RETRY_MS = 1200`
+  - `GRASP_RAT_BROWSERLESS_HTTP_TIMEOUT_MS = 10000`
   - `GRASP_RAT_BROWSERLESS_USER_ID = 0`
   - `GRASP_RAT_BROWSERLESS_SESSION_TOKEN = ""`
-  - The CLI accepts `--read-only`, `--dry-run`, `--live`, `--once`, `--data-dir`, `--status-host`, `--status-port`, `--web-token`, `--user-id`, and `--session-token`. Live read-only is intentionally gated until the read-only canary runner is implemented.
+  - `GRASP_RAT_BROWSERLESS_LOGIN_POINT_X = null`
+  - `GRASP_RAT_BROWSERLESS_LOGIN_POINT_Y = null`
+  - `GRASP_RAT_BROWSERLESS_LOGIN_POINT_HP = null`
+  - The CLI accepts `--read-only`, `--dry-run`, `--live`, `--once`, `--data-dir`, `--status-host`, `--status-port`, `--web-token`, `--user-id`, `--session-token`, `--read-only-probe-ms`, `--frame-gap-alert-ms`, `--snapshot-path`, `--login-point-x`, `--login-point-y`, and `--login-point-hp`. Live control beyond read-only canary remains gated by later plan items.
 
 - `globalRefreshMs = 5000`
 - `globalRefreshTimeoutMs = 3000`

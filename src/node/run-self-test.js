@@ -51,6 +51,9 @@ const {
   selectRealtimeCombatState
 } = require('./browserless/state-store');
 const {
+  runReadOnlyCanary
+} = require('./browserless/canary');
+const {
   createLocalLogStore
 } = require('./browserless/local-log-store');
 const {
@@ -5682,6 +5685,108 @@ async function runSelfTest() {
       want: 'realtime|shoot_ok|44|14500|600|600|1'
     },
     {
+      name: 'browserless read-only canary runs snapshot ws frames and verified leave',
+      got: (async () => {
+        let t = Date.UTC(2026, 6, 8, 1, 0, 0);
+        let commandCount = 0;
+        const posFrame = encodeGrzFrameForTest({
+          type: 'pos',
+          tick: 10,
+          entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 100, y: 200, hp: 90 }],
+          bullets: []
+        });
+        const snapshotFrame = encodeGrzFrameForTest({
+          type: 'snapshot',
+          tick: 11,
+          entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 100, y: 200, hp: 90 }],
+          bullets: [],
+          coin_drops: [{ drop_id: 1, amount: 2, x: 150, y: 210 }],
+          messages: []
+        });
+        const result = await runReadOnlyCanary({
+          gameOrigin: 'https://grasp-rat-game.h-e.top',
+          snapshotPath: '/snapshot',
+          wsPath: '/ws',
+          wsExtraQuery: 'compress=gzip%2Cdeflate',
+          userId: 7,
+          sessionToken: 'canary-token',
+          readOnlyProbeMs: 1000,
+          frameGapAlertMs: 5000,
+          wsConnectTimeoutMs: 1000,
+          httpTimeoutMs: 1000
+        }, {
+          now: () => t,
+          sleep: async ms => { t += ms; },
+          persistedState: {
+            loginPointSafety: { point: { x: 100, y: 200, hp: 90, source: 'test' } }
+          },
+          fetchImpl: async () => fakeResponseForTest({
+            body: {
+              type: 'snapshot',
+              tick: 9,
+              entities: [{ entity_id: 1, user_id: 7, x: 100, y: 200, hp: 90 }],
+              bullets: [],
+              coin_drops: [],
+              messages: []
+            }
+          }),
+          openBrowserlessWs: async options => {
+            t += 100;
+            options.onMessage(posFrame);
+            t += 100;
+            options.onMessage(snapshotFrame);
+            return {
+              isOpen: () => true,
+              close: () => {},
+              send: () => { commandCount += 1; }
+            };
+          },
+          leaveWithVerification: async () => ({ ok: true, attempts: [{ ok: true, summary: { leaveConfirmed: true } }] })
+        });
+        return [
+          result.ok,
+          result.snapshotSafety.ok,
+          result.stats.decodedFrameCount,
+          result.stats.typeCounts.pos,
+          result.stats.typeCounts.snapshot,
+          result.stats.selfPresent.true,
+          result.leave.ok,
+          result.state.realtime.self.name,
+          result.state.fallback.coinDrops[0].amount,
+          commandCount
+        ].join('|');
+      })(),
+      want: 'true|true|2|1|1|2|true|self|2|0'
+    },
+    {
+      name: 'browserless read-only canary blocks before ws without login point',
+      got: (async () => {
+        let opened = false;
+        const result = await runReadOnlyCanary({
+          gameOrigin: 'https://grasp-rat-game.h-e.top',
+          userId: 7,
+          sessionToken: 'canary-token',
+          readOnlyProbeMs: 1000
+        }, {
+          now: () => Date.UTC(2026, 6, 8, 1, 0, 0),
+          persistedState: {},
+          fetchImpl: async () => { throw new Error('fetch should not run'); },
+          openBrowserlessWs: async () => {
+            opened = true;
+            throw new Error('ws should not open');
+          },
+          leaveWithVerification: async () => ({ ok: true })
+        });
+        return [
+          result.ok,
+          result.snapshotSafety.reason,
+          result.error,
+          opened
+        ].join('|');
+      })(),
+      want: 'false|missing-login-point|snapshot safety not confirmed: missing-login-point|false'
+    },
+    {
       name: 'browserless combat selector source does not reference snapshot state',
       got: /snapshot|fallback|coinDrops/.test(selectRealtimeCombatState.toString()),
       want: false
@@ -5773,7 +5878,13 @@ async function runSelfTest() {
           '--status-port',
           '19999',
           '--web-token',
-          'cli-token'
+          'cli-token',
+          '--login-point-x',
+          '123',
+          '--login-point-y',
+          '456',
+          '--login-point-hp',
+          '90'
         ], {
           GRASP_RAT_BROWSERLESS_STATUS_PORT: '18888',
           GRASP_RAT_BROWSERLESS_DRY_RUN: 'true',
@@ -5787,10 +5898,13 @@ async function runSelfTest() {
           config.webToken,
           config.userId,
           config.sessionToken,
+          config.loginPointX,
+          config.loginPointY,
+          config.loginPointHp,
           config.logDir.endsWith('/tmp/grasp-rat-runner/logs')
         ].join('|');
       })(),
-      want: 'true|false|19999|cli-token|42|env-token|true'
+      want: 'true|false|19999|cli-token|42|env-token|123|456|90|true'
     },
     {
       name: 'browserless runner dry-run and fake read-only path write redacted logs',
