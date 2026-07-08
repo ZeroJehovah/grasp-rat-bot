@@ -172,10 +172,11 @@ On 2026-07-08, the VPS one-shot demo succeeded after the Node 18 `ws` fallback a
 - 2026-07-08: Shared `GRZ1` frame parsing was extracted into `src/shared/grz-frame.js` and the demo now uses it for gzip JSON parsing plus deterministic frame summaries. This is an implementation refactor over already validated protocol evidence; no new VPS validation was required.
 - 2026-07-08: Reusable browserless Node session and leave clients were added under `src/node/browserless/`. The demo now delegates manual callback/direct-login/approve-curl parsing, secret redaction, timeout fetches, snapshot safety summaries, and verified HTTP `leave` retries to those modules while keeping demo-specific state and logging local. No new VPS validation was required because the transport behavior is unchanged.
 - 2026-07-08: Browserless WebSocket transport and frame-stat modules were added under `src/node/browserless/`. The demo now delegates direct WS URL construction, Node 18/22 runtime selection, connect/open/close/error/message dispatch, narrow movement/shoot command sending, and read-only probe stats to those modules. No new VPS validation was required because the direct WS protocol and demo actions are unchanged.
+- 2026-07-08: Browserless state-store support was added under `src/node/browserless/state-store.js`. Decoded `pos`, pushed `snapshot`, and `shoot_ok` frames now have a production-owned in-memory model with explicit realtime/snapshot/command authority tags. Combat-facing selection is realtime-only and self-tests verify snapshot-only coordinates do not enter combat state.
 
 ## Next Plan
 
-1. Add the browserless state store so decoded `pos`, pushed `snapshot`, and `shoot_ok` frames become current state with explicit realtime/snapshot authority tags.
+1. Add local browserless JSONL log storage, 3-day retention, and a lightweight summary script.
 2. Define the browserless runtime boundary:
    - shared pure strategy remains in `src/strategy/`;
    - browser DOM/CDP integration remains browser-specific;
