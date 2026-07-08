@@ -1,6 +1,6 @@
 # Browserless Runner Operator Notes
 
-This document tracks the production browserless runner surface. The older `headless-demo/` remains a protocol probe; the production entrypoint is `scripts/browserless-runner.js`.
+This document tracks the production browserless runner surface. `headless-demo/` is superseded for production operation and remains only a protocol probe; the production entrypoint is `scripts/browserless-runner.js`.
 
 ## Current Scope
 
