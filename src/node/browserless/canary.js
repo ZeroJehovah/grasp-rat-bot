@@ -16,6 +16,10 @@ const {
   createBrowserlessDecisionAdapter,
   summarizeBrowserlessDecision
 } = require('./decision-adapter');
+const {
+  createBrowserlessSafetyController,
+  executeSafetyExit
+} = require('./safety-controller');
 
 const DEFAULT_READONLY_PROBE_MS = 30000;
 const DEFAULT_FRAME_GAP_ALERT_MS = 5000;
@@ -129,6 +133,13 @@ async function runReadOnlyCanary(config, options = {}) {
   const decisionIntervalMs = Math.max(250, Number(config.decisionIntervalMs || 1000));
   const stateStore = options.stateStore || createBrowserlessStateStore({ userId: config.userId, now });
   const decisionAdapter = options.decisionAdapter || createBrowserlessDecisionAdapter({ userId: config.userId, now });
+  const safetyController = options.safetyController || createBrowserlessSafetyController({
+    now,
+    frameGapAlertMs,
+    staleSelfMs: config.staleSelfMs,
+    noSelfGraceMs: config.noSelfGraceMs,
+    staminaExhaustedBelowMs: config.staminaExhaustedBelowMs
+  });
   const stats = createFrameStats(durationMs);
   const frameHealth = {
     firstFrameAtMs: 0,
@@ -152,10 +163,18 @@ async function runReadOnlyCanary(config, options = {}) {
       loggedCount: 0,
       last: null
     },
+    safety: {
+      event: null,
+      exit: null,
+      leaveFailure: null
+    },
     leave: null,
     error: ''
   };
   let lastDecisionAtMs = 0;
+  let wsError = null;
+  let wsClosed = null;
+  let ending = false;
 
   const log = (type, detail) => {
     if (logStore) logStore.append('runner', type, detail);
@@ -163,10 +182,24 @@ async function runReadOnlyCanary(config, options = {}) {
   const logDecision = detail => {
     if (logStore) logStore.append('decisions', 'decision', detail);
   };
+  const logSafety = detail => {
+    if (logStore) logStore.append('exits', 'safety-event', detail);
+  };
+  const recordSafetyEvent = event => {
+    if (!event || event.ok || result.safety.event) return false;
+    result.safety.event = event;
+    result.error = event.reason;
+    logSafety(event);
+    return true;
+  };
 
   result.snapshotSafety = await (options.runPreLoginSnapshotSafety || runPreLoginSnapshotSafety)(config, options.persistedState || {}, options);
   log('canary-snapshot-safety', result.snapshotSafety);
   if (!result.snapshotSafety.ok) {
+    recordSafetyEvent(safetyController.evaluate(null, {
+      snapshotSafety: result.snapshotSafety,
+      nowMs: now()
+    }));
     result.error = `snapshot safety not confirmed: ${result.snapshotSafety.reason}`;
     result.completedAt = new Date(now()).toISOString();
     log('canary-blocked', { error: result.error });
@@ -183,6 +216,12 @@ async function runReadOnlyCanary(config, options = {}) {
       userId: config.userId,
       sessionToken: config.sessionToken,
       connectTimeoutMs: config.wsConnectTimeoutMs,
+      onError: event => {
+        wsError = event;
+      },
+      onClose: event => {
+        if (!ending) wsClosed = event;
+      },
       onMessage: data => {
         const atMs = now();
         if (!frameHealth.firstFrameAtMs) frameHealth.firstFrameAtMs = atMs;
@@ -213,29 +252,67 @@ async function runReadOnlyCanary(config, options = {}) {
               }
             }
           }
+          recordSafetyEvent(safetyController.evaluate(stateStore.getState(atMs), {
+            startedAtMs: startedAt,
+            frameGapAlertMs,
+            staleSelfMs: config.staleSelfMs,
+            noSelfGraceMs: config.noSelfGraceMs,
+            staminaExhaustedBelowMs: config.staminaExhaustedBelowMs,
+            nowMs: atMs
+          }));
         }
       }
     });
     log('canary-ws-open', { durationMs });
-    await sleep(durationMs);
+    const deadline = now() + durationMs;
+    while (now() < deadline && !result.safety.event) {
+      const waitMs = Math.min(250, Math.max(0, deadline - now()));
+      if (waitMs > 0) await sleep(waitMs);
+      const atMs = now();
+      const frameGapMs = frameHealth.lastFrameAtMs ? atMs - frameHealth.lastFrameAtMs : null;
+      const safetyEvent = safetyController.evaluate(stateStore.getState(atMs), {
+        startedAtMs: startedAt,
+        frameGapMs,
+        frameGapAlertMs,
+        staleSelfMs: config.staleSelfMs,
+        noSelfGraceMs: config.noSelfGraceMs,
+        staminaExhaustedBelowMs: config.staminaExhaustedBelowMs,
+        wsError,
+        wsClosed,
+        nowMs: atMs
+      });
+      recordSafetyEvent(safetyEvent);
+    }
   } catch (err) {
     result.error = err?.message || String(err);
     log('canary-error', { error: result.error });
   }
 
   if (transport || !result.error) {
-    const leave = options.leaveWithVerification || leaveWithVerification;
-    result.leave = await leave({
-      gameOrigin: config.gameOrigin,
-      userId: config.userId,
-      sessionToken: config.sessionToken,
-      timeoutMs: config.httpTimeoutMs || 10000,
-      retryMax: config.leaveRetryMax ?? 3,
-      retryDelayMs: config.leaveRetryMs ?? 1200
-    });
+    if (result.safety.event) {
+      result.safety.exit = await executeSafetyExit(result.safety.event, config, {
+        transport,
+        allowStopMotion: false,
+        leaveWithVerification: options.leaveWithVerification,
+        now,
+        sleep
+      });
+      result.leave = result.safety.exit.leave;
+    } else {
+      const leave = options.leaveWithVerification || leaveWithVerification;
+      result.leave = await leave({
+        gameOrigin: config.gameOrigin,
+        userId: config.userId,
+        sessionToken: config.sessionToken,
+        timeoutMs: config.httpTimeoutMs || 10000,
+        retryMax: config.leaveRetryMax ?? 3,
+        retryDelayMs: config.leaveRetryMs ?? 1200
+      });
+    }
   }
 
   try {
+    ending = true;
     if (transport && (transport.isOpen?.() || isWsOpen(transport.ws))) transport.close();
   } catch (_) {}
 
@@ -246,6 +323,16 @@ async function runReadOnlyCanary(config, options = {}) {
   if (!result.error && noFrames) result.error = 'no decoded frames received';
   if (!result.error && noSelf) result.error = 'self not observed in realtime frames';
   if (!result.error && frameGap) result.error = `frame gap exceeded ${frameGapAlertMs}ms`;
+  if (leaveFailed && result.leave) {
+    const leaveFailure = safetyController.evaluate(null, {
+      leaveResult: result.leave,
+      nowMs: now()
+    });
+    if (!leaveFailure.ok) {
+      result.safety.leaveFailure = leaveFailure;
+      logSafety(leaveFailure);
+    }
+  }
   if (!result.error && leaveFailed) result.error = 'leave not confirmed';
   result.state = stateStore.getState(now());
   result.ok = Boolean(!result.error);

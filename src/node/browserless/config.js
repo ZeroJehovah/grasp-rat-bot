@@ -22,6 +22,9 @@ const DEFAULTS = {
   leaveRetryMs: 1200,
   httpTimeoutMs: 10000,
   decisionIntervalMs: 1000,
+  staleSelfMs: 3000,
+  noSelfGraceMs: 3000,
+  staminaExhaustedBelowMs: 200,
   loginPointX: null,
   loginPointY: null,
   loginPointHp: null
@@ -60,6 +63,9 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
     leaveRetryMs: numberEnv(env.GRASP_RAT_BROWSERLESS_LEAVE_RETRY_MS, DEFAULTS.leaveRetryMs),
     httpTimeoutMs: numberEnv(env.GRASP_RAT_BROWSERLESS_HTTP_TIMEOUT_MS, DEFAULTS.httpTimeoutMs),
     decisionIntervalMs: numberEnv(env.GRASP_RAT_BROWSERLESS_DECISION_INTERVAL_MS, DEFAULTS.decisionIntervalMs),
+    staleSelfMs: numberEnv(env.GRASP_RAT_BROWSERLESS_STALE_SELF_MS, DEFAULTS.staleSelfMs),
+    noSelfGraceMs: numberEnv(env.GRASP_RAT_BROWSERLESS_NO_SELF_GRACE_MS, DEFAULTS.noSelfGraceMs),
+    staminaExhaustedBelowMs: numberEnv(env.GRASP_RAT_BROWSERLESS_STAMINA_EXHAUSTED_BELOW_MS, DEFAULTS.staminaExhaustedBelowMs),
     userId: numberEnv(env.GRASP_RAT_BROWSERLESS_USER_ID, 0),
     sessionToken: env.GRASP_RAT_BROWSERLESS_SESSION_TOKEN || '',
     loginPointX: numberEnv(env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_X, DEFAULTS.loginPointX),
@@ -100,6 +106,12 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
       config.snapshotPath = argv[++i] || config.snapshotPath;
     } else if (arg === '--decision-interval-ms') {
       config.decisionIntervalMs = numberEnv(argv[++i], config.decisionIntervalMs);
+    } else if (arg === '--stale-self-ms') {
+      config.staleSelfMs = numberEnv(argv[++i], config.staleSelfMs);
+    } else if (arg === '--no-self-grace-ms') {
+      config.noSelfGraceMs = numberEnv(argv[++i], config.noSelfGraceMs);
+    } else if (arg === '--stamina-exhausted-below-ms') {
+      config.staminaExhaustedBelowMs = numberEnv(argv[++i], config.staminaExhaustedBelowMs);
     } else if (arg === '--login-point-x') {
       config.loginPointX = numberEnv(argv[++i], config.loginPointX);
     } else if (arg === '--login-point-y') {
@@ -139,6 +151,9 @@ function usage() {
     '  --frame-gap-alert-ms <ms>  Read-only canary frame-gap failure threshold. Default: 5000',
     '  --snapshot-path <path>    Snapshot path for pre-login safety. Default: /snapshot',
     '  --decision-interval-ms <ms>  Dry-run decision log/status interval. Default: 1000',
+    '  --stale-self-ms <ms>      Safety stale-self threshold. Default: 3000',
+    '  --no-self-grace-ms <ms>   Safety no-self grace window. Default: 3000',
+    '  --stamina-exhausted-below-ms <ms>  Safety stamina floor. Default: 200',
     '  --login-point-x <cm>      Manual login point x for canary safety',
     '  --login-point-y <cm>      Manual login point y for canary safety',
     '  --login-point-hp <hp>     Manual login point HP context for canary safety',
