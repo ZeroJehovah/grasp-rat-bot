@@ -59,28 +59,47 @@ function redact(value) {
   return String(value || '')
     .replace(/([?&](?:code|token|session|auth|secret)[^=]*=)[^&"'\\\s]+/ig, '$1[redacted]')
     .replace(/("(?:code|token|sessionToken|auth|secret|cookie|set-cookie)"\s*:\s*")[^"]+/ig, '$1[redacted]')
-    .replace(/((?:auth\.session-token|cf_clearance|_cfuvid|__stripe_mid)=)[^;"'\s]+/ig, '$1[redacted]');
+    .replace(/((?:auth\.session-token|cf_clearance|_cfuvid|__stripe_mid)=)[^;"'\s]+/ig, '$1[redacted]')
+    .replace(/\b(Bearer\s+)[A-Za-z0-9._~+/-]+=*/ig, '$1[redacted]');
+}
+
+function redactStructured(value, depth = 0) {
+  if (value === null || value === undefined) return value;
+  if (typeof value === 'string') return redact(value);
+  if (typeof value === 'number' || typeof value === 'boolean') return value;
+  if (depth > 8) return redact(JSON.stringify(value));
+  if (Array.isArray(value)) return value.map(item => redactStructured(item, depth + 1));
+  if (typeof value !== 'object') return value;
+  const output = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (/^(?:token|sessionToken|session_token|tmpGameSessionToken|cookie|set-cookie|authorization)$/i.test(key)) {
+      output[key] = '[redacted]';
+    } else {
+      output[key] = redactStructured(item, depth + 1);
+    }
+  }
+  return output;
 }
 
 function publicState() {
   return {
-    authUrl: state.authUrl,
+    authUrl: redact(state.authUrl),
     authUrlAt: state.authUrlAt,
     callbackAt: state.callbackAt,
     loggedIn: Boolean(state.userId && state.sessionToken),
     userId: state.userId || 0,
     tokenPresent: Boolean(state.sessionToken),
-    loginPayloadSummary: state.loginPayloadSummary,
-    lastCallbackDebug: state.lastCallbackDebug,
+    loginPayloadSummary: redactStructured(state.loginPayloadSummary),
+    lastCallbackDebug: redactStructured(state.lastCallbackDebug),
     wsUrl: redact(state.wsUrl),
     wsOpen: state.wsOpen,
     wsLastMessageAt: state.wsLastMessageAt,
     running: state.running,
-    lastRun: state.lastRun,
-    leaveAlert: state.leaveAlert,
-    lastError: state.lastError,
+    lastRun: redactStructured(state.lastRun),
+    leaveAlert: redact(state.leaveAlert),
+    lastError: redact(state.lastError),
     logFile: state.logFile,
-    recentFrames: state.lastFrames.slice(-10)
+    recentFrames: redactStructured(state.lastFrames.slice(-10))
   };
 }
 
@@ -257,6 +276,43 @@ function extractLoginDataFromUrl(url) {
   }
 }
 
+function extractMetaRefreshUrl(text, baseUrl) {
+  const raw = String(text || '');
+  const tags = raw.match(/<meta\b[^>]*>/ig) || [];
+  for (const tag of tags) {
+    const httpEquiv = readHtmlAttribute(tag, 'http-equiv');
+    if (!/^refresh$/i.test(String(httpEquiv || '').trim())) continue;
+    const content = readHtmlAttribute(tag, 'content');
+    const match = /(?:^|;)\s*url\s*=\s*(.+?)\s*$/i.exec(content);
+    if (!match?.[1]) continue;
+    const target = decodeHtmlEntities(match[1].trim().replace(/^['"]|['"]$/g, ''));
+    const resolved = resolveLocation(target, baseUrl);
+    if (resolved) return resolved;
+  }
+  return '';
+}
+
+function readHtmlAttribute(tag, name) {
+  const pattern = new RegExp(`\\b${escapeRegExp(name)}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s>]+))`, 'i');
+  const match = pattern.exec(String(tag || ''));
+  return decodeHtmlEntities(match?.[1] || match?.[2] || match?.[3] || '');
+}
+
+function decodeHtmlEntities(value) {
+  return String(value || '')
+    .replace(/&amp;/ig, '&')
+    .replace(/&quot;/ig, '"')
+    .replace(/&#39;|&apos;/ig, "'")
+    .replace(/&lt;/ig, '<')
+    .replace(/&gt;/ig, '>')
+    .replace(/&#x([0-9a-f]+);/ig, (_, hex) => String.fromCodePoint(parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_, num) => String.fromCodePoint(parseInt(num, 10)));
+}
+
+function escapeRegExp(value) {
+  return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 function firstSearchParam(primary, secondary, keys) {
   for (const key of keys) {
     const value = primary.get(key) || secondary.get(key);
@@ -303,16 +359,17 @@ function applyLogin(login, summary = null) {
   if (!login.userId || !login.sessionToken) {
     throw new Error('login payload did not expose userId/sessionToken');
   }
+  const safeSummary = redactStructured(summary);
   state.callbackAt = Date.now();
   state.userId = login.userId;
   state.sessionToken = login.sessionToken;
-  state.loginPayloadSummary = summary;
+  state.loginPayloadSummary = safeSummary;
   state.lastCallbackDebug = null;
   state.leaveAlert = '';
   state.lastError = '';
   persistState();
-  logEvent('login-ok', { userId: login.userId, tokenPresent: true, summary });
-  return { userId: login.userId, tokenPresent: true, summary };
+  logEvent('login-ok', { userId: login.userId, tokenPresent: true, summary: safeSummary });
+  return { userId: login.userId, tokenPresent: true, summary: safeSummary };
 }
 
 async function submitCallback(callbackUrl) {
@@ -369,11 +426,11 @@ async function submitApproveCurl(rawInput) {
     location: redact(approveLocation),
     contentType: approveResponse.headers.get('content-type') || '',
     textLength: approveBody.text.length,
-    textSample: approveBody.text.slice(0, 500)
+    textSample: redact(approveBody.text.slice(0, 500))
   };
   logEvent('approve-curl-result', approveSummary);
   if (!approveLocation || new URL(approveLocation).origin !== GAME_ORIGIN) {
-    state.lastCallbackDebug = { source: 'approve-curl', approve: approveSummary };
+    state.lastCallbackDebug = redactStructured({ source: 'approve-curl', approve: approveSummary });
     state.lastError = 'approve request did not redirect to game callback';
     persistState();
     throw new Error(`approve request did not redirect to game callback; status=${approveResponse.status}, location=${approveSummary.location || 'none'}`);
@@ -389,40 +446,44 @@ async function submitGameCallbackUrl(url, extraSummary = {}) {
   });
   const body = await readResponseBody(response);
   const location = resolveLocation(response.headers.get('location') || '', url);
+  const refreshUrl = extractMetaRefreshUrl(body.text, url);
   const summary = {
     ...extraSummary,
     status: response.status,
     ok: response.ok,
     finalUrl: redact(response.url || url),
     location: redact(location),
+    refreshUrl: redact(refreshUrl),
     redirected: response.status >= 300 && response.status < 400,
     contentType: response.headers.get('content-type') || '',
     setCookiePresent: Boolean(response.headers.get('set-cookie')),
     jsonKeys: body.json && typeof body.json === 'object' ? Object.keys(body.json).slice(0, 20) : [],
     textLength: body.text.length,
-    textSample: body.json ? '' : body.text.slice(0, 500)
+    textSample: body.json ? '' : redact(body.text.slice(0, 500))
   };
   let login = extractLoginData(body.json || {});
   if (!login.userId || !login.sessionToken) login = extractLoginDataFromText(body.text);
   if ((!login.userId || !login.sessionToken) && location) login = extractLoginDataFromUrl(location);
+  if ((!login.userId || !login.sessionToken) && refreshUrl) login = extractLoginDataFromUrl(refreshUrl);
   if (!login.userId || !login.sessionToken) login = extractLoginDataFromUrl(response.url);
-  state.lastCallbackDebug = summary;
+  const safeSummary = redactStructured(summary);
+  state.lastCallbackDebug = safeSummary;
   if (!response.ok && !summary.redirected) {
     state.lastError = `callback HTTP ${response.status}`;
-    state.loginPayloadSummary = summary;
+    state.loginPayloadSummary = safeSummary;
     persistState();
-    logEvent('callback-failed', { callbackUrl: url, summary });
-    throw new Error(`callback HTTP ${response.status}: ${(body.text || '<empty body>').slice(0, 240)}`);
+    logEvent('callback-failed', { callbackUrl: url, summary: safeSummary });
+    throw new Error(`callback HTTP ${response.status}: ${redact((body.text || '<empty body>').slice(0, 240))}`);
   }
   if (!login.userId || !login.sessionToken) {
     state.lastError = 'callback did not return userId/sessionToken';
-    state.loginPayloadSummary = summary;
+    state.loginPayloadSummary = safeSummary;
     persistState();
-    logEvent('callback-unrecognized', { callbackUrl: url, summary, body: body.json || body.text.slice(0, 1000) });
-    throw new Error(`callback response did not expose userId/sessionToken; status=${response.status}, content-type=${summary.contentType || 'unknown'}, location=${summary.location || 'none'}, body=${body.text ? body.text.slice(0, 240) : 'empty'}`);
+    logEvent('callback-unrecognized', { callbackUrl: url, summary: safeSummary, body: body.json || body.text.slice(0, 1000) });
+    throw new Error(`callback response did not expose userId/sessionToken; status=${response.status}, content-type=${summary.contentType || 'unknown'}, location=${summary.location || 'none'}, refresh=${summary.refreshUrl || 'none'}, body=${body.text ? redact(body.text.slice(0, 240)) : 'empty'}`);
   }
-  state.callbackUrl = url;
-  return applyLogin(login, summary);
+  state.callbackUrl = redact(url);
+  return applyLogin(login, safeSummary);
 }
 
 function parseCurlCommand(input) {
@@ -880,7 +941,7 @@ const server = http.createServer(async (req, res) => {
     }
     return sendJson(res, 404, { ok: false, error: 'not found' });
   } catch (err) {
-    const message = err?.message || String(err);
+    const message = redact(err?.message || String(err));
     state.lastError = message;
     persistState();
     logEvent('http-error', { method: req.method, url: req.url, error: message });
