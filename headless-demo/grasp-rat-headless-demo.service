@@ -16,7 +16,7 @@ Environment=GRASP_RAT_DEMO_DATA_DIR=/var/lib/grasp-rat-headless-demo
 Environment=GRASP_RAT_DEMO_LOG_DIR=/var/log/grasp-rat-headless-demo
 Environment=GRASP_RAT_DEMO_WEB_TOKEN=change-this-before-start
 Environment=GRASP_RAT_DEMO_WS_PATH=/ws
-Environment=GRASP_RAT_DEMO_WS_EXTRA_QUERY=view=50000
+Environment=GRASP_RAT_DEMO_WS_EXTRA_QUERY=compress=gzip%2Cdeflate
 
 [Install]
 WantedBy=multi-user.target
