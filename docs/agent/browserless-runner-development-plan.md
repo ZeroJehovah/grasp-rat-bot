@@ -108,6 +108,7 @@ Update this table in the same task that completes each feature.
 | Commit 20: Add Aggregate Acceptance Report | Complete | `scripts/browserless-acceptance-report.js` aggregates deployment, read-only, forced-stop, movement-only, profit, combat-dry-run, and combat-live audit results into one cutover-readiness report. The canary audit now selects the latest clean finish for normal checks and explicit-stop evidence for forced-stop checks, so multiple same-day staged runs can be reviewed together. `node grasp-rat-bot.js --self-test` covers aggregate success and missing-profile failure fixtures. VPS evidence is still required before cutover. |
 | Commit 21: Fix Runtime Directory Install | Complete | VPS deployment validation initially showed `status=226/NAMESPACE` because systemd could not apply `ReadWritePaths` for missing `/var/lib/grasp-rat-browserless` and `/var/log/grasp-rat-browserless`. `scripts/install-browserless-runner-service.sh` now creates both runtime directories, self-test anchors cover the installer surface, operator/migration docs run deployment audit with `sudo`, and the 2026-07-08 VPS rerun passed with `Browserless deployment audit: ok`. |
 | Commit 22: Split Deployment Env Audit Modes | Complete | `scripts/browserless-deployment-audit.js` now supports `--env-mode safe|live|any`: safe preserves the initial dry-run/read-only deployment check, live verifies `DRY_RUN=false` plus session/login-point readiness before supervised live canaries, and any lets the final aggregate acceptance report verify the service surface after staged canary env changes. `scripts/browserless-acceptance-report.js` uses deployment env mode `any` by default, and self-tests cover live/aggregate deployment audit paths. |
+| Commit 23: Align VPS Audit Commands | Complete | Operator and migration docs now run production canary audits with `sudo` for `/var/log/grasp-rat-browserless` access and use deployment `--env-mode any` for post-live service-surface checks, while keeping `--env-mode live` as the pre-restart readiness check before supervised canaries. |
 
 ## Commit Plan
 
@@ -555,14 +556,32 @@ Validation:
 - `node --check scripts/browserless-acceptance-report.js`
 - `git diff --check`
 
+### Commit 23: Align VPS Audit Commands
+
+Files:
+
+- Update `docs/agent/browserless-runner-operator.md`.
+- Update `docs/agent/browserless-vps-migration.md`.
+- Update `docs/agent/current-state.md` and this development plan.
+
+Purpose:
+
+- Make production canary audit commands match the protected `/var/log/grasp-rat-browserless` path by running them with `sudo`.
+- Avoid post-live handoff checks accidentally reusing the default safe dry-run deployment audit after `GRASP_RAT_BROWSERLESS_DRY_RUN=false` is intentionally set.
+- Preserve `--env-mode live` as the explicit readiness check before restarting into a live canary.
+
+Validation:
+
+- `git diff --check`
+
 ## External VPS Validation Required
 
-Local implementation work is complete through Commit 22, and the VPS systemd deployment validation passed on 2026-07-08. The production runner is not accepted until the remaining live canary validations below produce evidence and the aggregate acceptance report passes.
+Local implementation work is complete through Commit 23, and the VPS systemd deployment validation passed on 2026-07-08. The production runner is not accepted until the remaining live canary validations below produce evidence and the aggregate acceptance report passes.
 
 Use the production service path and audit commands from `docs/agent/browserless-vps-migration.md` and `docs/agent/browserless-runner-operator.md`. Do not mark `headless-demo/` superseded until these validations pass:
 
-1. Production read-only canary: configure `/etc/grasp-rat/browserless-runner.env` with `GRASP_RAT_BROWSERLESS_DRY_RUN=false`, session values, and login-point coordinates, then run 10-30 minutes with verified `leave`, decision logs, and `scripts/browserless-canary-audit.js --profile read-only --fail-on-incomplete`.
-2. Forced stop canary: `/api/stop` or panel Stop, explicit-stop safety event, verified `leave`, and `scripts/browserless-canary-audit.js --profile read-only --require-stop --fail-on-incomplete`.
+1. Production read-only canary: configure `/etc/grasp-rat/browserless-runner.env` with `GRASP_RAT_BROWSERLESS_DRY_RUN=false`, session values, and login-point coordinates, run `sudo node scripts/browserless-deployment-audit.js --env-mode live --fail-on-incomplete`, then run 10-30 minutes with verified `leave`, decision logs, and `sudo node scripts/browserless-canary-audit.js --profile read-only --fail-on-incomplete`.
+2. Forced stop canary: `/api/stop` or panel Stop, explicit-stop safety event, verified `leave`, and `sudo node scripts/browserless-canary-audit.js --profile read-only --require-stop --fail-on-incomplete`.
 3. Movement-only canary: short supervised velocity-only run, no shoot commands, command settlement evidence, verified `leave`, and `--profile movement-only`.
 4. Non-combat profit canary: realtime/native profit priority or guarded snapshot fallback, no combat commands, verified `leave`, and `--profile profit`.
 5. Combat dry-run canary: realtime-only combat targets, aim/fire summaries, suppressed commands, verified `leave`, and `--profile combat-dry-run`.

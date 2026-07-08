@@ -283,14 +283,14 @@ node scripts/browserless-log-summary.js \
 Audit canary evidence after a VPS run:
 
 ```bash
-node scripts/browserless-canary-audit.js \
+sudo node scripts/browserless-canary-audit.js \
   --log-dir /var/log/grasp-rat-browserless \
   --day YYYY-MM-DD \
   --profile read-only \
   --fail-on-incomplete
 ```
 
-Use `--profile movement-only`, `--profile profit`, `--profile combat-dry-run`, or `--profile combat-live` for later stages. For the forced `/api/stop` validation, add `--require-stop`; that mode accepts an explicit-stop safety exit only when verified `leave` evidence is present.
+Use `--profile movement-only`, `--profile profit`, `--profile combat-dry-run`, or `--profile combat-live` for later stages. For the forced `/api/stop` validation, add `--require-stop`; that mode accepts an explicit-stop safety exit only when verified `leave` evidence is present. Use `sudo` for production logs under `/var/log/grasp-rat-browserless`.
 
 After all staged canaries and the deployment audit have run, generate the aggregate cutover readiness report:
 
