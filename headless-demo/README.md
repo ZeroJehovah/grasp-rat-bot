@@ -78,6 +78,8 @@ Logs are JSONL:
 
 If `leave` is not explicitly confirmed by the game response, the web page shows a red alert and the JSONL log includes `leave-alert`.
 
+In `/api/status`, `authenticated` means the demo still has a usable `userId` and session token. `inGame` means the current demo WebSocket session is inside the visible game entity layer. A successful `leave` should set `inGame` to `false` while `authenticated` stays `true`, so the same token can run another one-shot demo without reauthorizing.
+
 OAuth codes are usually one-time use. If the browser has already loaded the game callback URL and the demo cannot exchange that same URL again, paste the callback response JSON instead. The demo accepts a JSON object containing `user_id`/`userId`/`id` plus `token`/`sessionToken`/`session_token`.
 
 The preferred input is an unused `https://grasp-rat-game.h-e.top/auth/linuxdo/callback?...` URL. The demo requests it with manual redirect handling and extracts `user_id` and `token` from either the callback redirect or the HTML meta-refresh URL returned by the callback page.

@@ -48,6 +48,7 @@ The web UI supports:
 - Opening the game WebSocket, running one explicit command sequence, then calling verified `leave`.
 - Writing JSONL logs under the configured log directory.
 - Showing a red page alert if `leave` is not explicitly confirmed.
+- Reporting `authenticated` separately from `inGame`: `authenticated` means the demo has a reusable token, while `inGame` means the current demo WebSocket session is in the visible entity layer.
 
 ## Observed Live Auth Flow
 
@@ -116,6 +117,7 @@ On 2026-07-08, the VPS one-shot demo succeeded after the Node 18 `ws` fallback a
 - `leave` succeeded on the initial attempt with HTTP 200 in about 631ms.
 - `leaveResponseConfirmsExitCore()` confirmed exit from the response summary: `leaveConfirmed: true`, `event: left`, `joined: UserRecordOnly`, `current_join_mode: None`, `life: Alive`, `visible: Hidden`.
 - Recent WebSocket frames were binary/compressed samples beginning with `GRZ1` followed by a gzip-looking payload. This confirms the next protocol task is a headless frame decompressor/parser before any real strategy migration can depend on WS state.
+- A later restart/manual authorization test ran the one-shot demo twice successfully. `leave` kept the session token usable, so repeat runs can reconnect with the stored token; this is expected because leaving the visible entity layer is not the same as clearing authentication.
 
 ## Progress Log
 
@@ -128,10 +130,12 @@ On 2026-07-08, the VPS one-shot demo succeeded after the Node 18 `ws` fallback a
 - 2026-07-08: Added `headless-demo/start-demo.sh` as the quick VPS test launcher with default host `0.0.0.0`, port `18766`, and token `1234567890`.
 - 2026-07-08: VPS Node 18 plus `ws` emitted browser-style `MessageEvent` objects through `addEventListener`; frame recording now unwraps `.data`, handles Buffer/ArrayBuffer/TypedArray/object payloads defensively, and logs frame-recording errors instead of crashing the demo process.
 - 2026-07-08: The one-shot VPS run completed successfully: callback login, WebSocket open, command send, compressed frame receipt, and verified leave all worked.
+- 2026-07-08: Restart/manual authorization followed by two consecutive `run-demo` clicks both succeeded. The status model should distinguish cached authentication from active in-game presence.
+- 2026-07-08: Frame logging was updated to keep binary metadata instead of lossy UTF-8 samples and to attempt `GRZ1` gzip decoding.
 
 ## Next Plan
 
-1. Decode and summarize `GRZ1` compressed WebSocket frames in the headless demo logs so future feedback is readable and strategy migration can inspect live state.
+1. Run one more VPS demo after the structured frame logging update and inspect whether `decodedSample` appears for `GRZ1` frames.
 2. Define the browserless runtime boundary:
    - shared pure strategy remains in `src/strategy/`;
    - browser DOM/CDP integration remains browser-specific;
