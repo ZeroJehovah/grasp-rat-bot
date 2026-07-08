@@ -3,6 +3,14 @@
 
 - Local collector lives in `combat-log-service/` and uses Node built-in modules only.
 - Start collector with `cd combat-log-service && npm start`.
+
+## Browserless Local Logs
+
+- The browserless VPS runner does not require `combat-log-service` for normal operation. It writes local JSONL files through `src/node/browserless/local-log-store.js` under `data/logs/YYYY-MM-DD/<stream>.jsonl`, with planned streams `runner`, `decisions`, `combat`, and `exits`.
+- Browserless log entries are redacted before append. OAuth codes, session tokens, cookies, authorization headers, bearer values, and token-like URL parameters must not be stored in plaintext.
+- `src/node/browserless/log-retention.js` keeps the latest 3 UTC day directories by default and leaves non-date support directories alone. `scripts/browserless-log-summary.js --log-dir <dir> --day YYYY-MM-DD --write` generates `<dir>/YYYY-MM-DD/summary.json` with stream and event-type counts.
+- These browserless logs are for production runner review and later strategy summaries. Existing browser/combat-log-service analysis commands remain separate until browserless runner logs are explicitly integrated.
+
 - Enable in game console:
 
 ```js

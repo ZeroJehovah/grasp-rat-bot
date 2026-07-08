@@ -23,7 +23,7 @@ function redactStructuredSecrets(value, depth = 0) {
   if (typeof value !== 'object') return value;
   const output = {};
   for (const [key, item] of Object.entries(value)) {
-    if (/^(?:token|sessionToken|session_token|tmpGameSessionToken|cookie|set-cookie|authorization)$/i.test(key)) {
+    if (/^(?:code|token|sessionToken|session_token|tmpGameSessionToken|cookie|set-cookie|authorization)$/i.test(key)) {
       output[key] = '[redacted]';
     } else {
       output[key] = redactStructuredSecrets(item, depth + 1);
