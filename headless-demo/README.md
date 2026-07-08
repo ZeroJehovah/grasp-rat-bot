@@ -91,7 +91,7 @@ Environment=GRASP_RAT_DEMO_READONLY_PROBE_MS=60000
 
 After a probe, `/api/status` includes `lastProbe.stats` with frame counts, decoded frame type counts, JSON key-set counts, tick ranges, entity/bullet/coin/message count ranges, and `selfPresent` counts. Complete frame metadata remains in the JSONL log.
 
-The login-point snapshot probe requests `${GAME_ORIGIN}/snapshot?user_id=<id>&token=<token>` without opening the WebSocket. It summarizes whether snapshot can be fetched before join and whether the last known self coordinate appears safe by the current login-point radius rule. Override the path only if the game changes it:
+The login-point snapshot probe requests `${GAME_ORIGIN}/snapshot?user_id=<id>&token=<token>&_graspRatProbeTs=<ms>` without opening the WebSocket. It summarizes whether snapshot can be fetched before join, whether the snapshot tick is fresh compared with the latest known WS tick, and whether the last known self coordinate appears safe by the current login-point radius rule. Override the path only if the game changes it:
 
 ```ini
 [Service]

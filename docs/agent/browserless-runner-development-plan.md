@@ -428,6 +428,8 @@ Immediate new validation exposed by this revision:
 
 Status on 2026-07-08: direct `/snapshot?user_id=<id>&token=<token>` fetch works before WS join and returns the expected full snapshot shape. The first safety verdict was blocked only because the demo state predated `lastSelfSummary` persistence and therefore had no login point. A fresh updated-code WS probe/demo run should populate `lastSelfSummary`, then the snapshot safety probe can complete the radius evaluation.
 
+Follow-up on 2026-07-08: a later radius verdict was positive, but the returned snapshot tick was older than the latest known WS tick and still showed self as `InGame` after verified leave. The production safety client must cache-bust snapshot requests and reject stale ticks before trusting the radius verdict.
+
 Already completed:
 
 - Bounded read-only WS probe: only `pos` and pushed `snapshot` appeared; coin drops/messages appeared only in `snapshot`.

@@ -273,6 +273,7 @@ function snapshotProbeUrl() {
   const url = new URL(SNAPSHOT_PATH, GAME_ORIGIN);
   url.searchParams.set('user_id', String(state.userId || 0));
   url.searchParams.set('token', state.sessionToken || '');
+  url.searchParams.set('_graspRatProbeTs', String(Date.now()));
   return url.toString();
 }
 
@@ -286,7 +287,49 @@ function isActiveEntity(entity) {
   return mode === 'active';
 }
 
-function summarizeSnapshotSafety(payload, loginPoint) {
+function latestKnownFrameTick() {
+  const candidates = [
+    state.lastFrameSummary?.tick,
+    state.lastFrameSummary?.decodedTick,
+    state.lastProbe?.stats?.tick?.last
+  ];
+  let latest = 0;
+  for (const value of candidates) {
+    const n = Number(value);
+    if (Number.isFinite(n) && n > latest) latest = n;
+  }
+  return latest;
+}
+
+function summarizeSnapshotFreshness(payload) {
+  const tick = Number(payload?.tick);
+  const latestKnownTick = latestKnownFrameTick();
+  if (!Number.isFinite(tick)) {
+    return {
+      ok: false,
+      reason: 'missing-snapshot-tick',
+      tick: null,
+      latestKnownTick: latestKnownTick || null
+    };
+  }
+  if (!latestKnownTick) {
+    return {
+      ok: true,
+      reason: 'no-prior-tick',
+      tick,
+      latestKnownTick: null
+    };
+  }
+  return {
+    ok: tick >= latestKnownTick,
+    reason: tick >= latestKnownTick ? 'fresh' : 'stale-snapshot-tick',
+    tick,
+    latestKnownTick,
+    tickDelta: tick - latestKnownTick
+  };
+}
+
+function summarizeSnapshotSafety(payload, loginPoint, freshness = null) {
   const entities = Array.isArray(payload?.entities) ? payload.entities : [];
   const point = loginPoint
     && Number.isFinite(Number(loginPoint.x))
@@ -329,9 +372,13 @@ function summarizeSnapshotSafety(payload, loginPoint) {
   }
   activeNearby.sort((a, b) => a.distance - b.distance);
   nearby.sort((a, b) => a.distance - b.distance);
+  const fresh = freshness || summarizeSnapshotFreshness(payload);
+  const activeSafe = activeNearby.length === 0;
+  const ok = Boolean(fresh.ok && activeSafe);
   return {
-    ok: activeNearby.length === 0,
-    reason: activeNearby.length === 0 ? 'safe' : 'active-near-login-point',
+    ok,
+    reason: fresh.ok ? (activeSafe ? 'safe' : 'active-near-login-point') : fresh.reason,
+    freshness: fresh,
     point,
     radius,
     radiusReason: healthy ? 'last-self-healthy' : 'last-self-low-or-unknown',
@@ -352,6 +399,7 @@ function summarizeSnapshotPayload(payload) {
   const coinDrops = Array.isArray(payload.coin_drops) ? payload.coin_drops : [];
   const messages = Array.isArray(payload.messages) ? payload.messages : [];
   const self = entities.find(entity => Number(entity?.user_id) === Number(state.userId));
+  const freshness = summarizeSnapshotFreshness(payload);
   return {
     valid: Array.isArray(payload.entities),
     jsonKeys: Object.keys(payload).slice(0, 20),
@@ -366,7 +414,8 @@ function summarizeSnapshotPayload(payload) {
     messageCount: messages.length,
     selfPresent: Boolean(self),
     self: summarizeEntity(self),
-    safety: summarizeSnapshotSafety(payload, state.lastSelfSummary)
+    freshness,
+    safety: summarizeSnapshotSafety(payload, state.lastSelfSummary, freshness)
   };
 }
 
