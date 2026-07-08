@@ -58,6 +58,10 @@ const {
   runReadOnlyCanary
 } = require('./browserless/canary');
 const {
+  createBrowserlessActionAdapter,
+  movementVectorToTarget
+} = require('./browserless/action-adapter');
+const {
   createBrowserlessSafetyController,
   evaluateBrowserlessSafety,
   executeSafetyExit
@@ -5781,6 +5785,81 @@ async function runSelfTest() {
       want: 'wait|missing-realtime-self|wait|true'
     },
     {
+      name: 'browserless action adapter maps coin target to velocity only',
+      got: (() => {
+        const commands = [];
+        const adapter = createBrowserlessActionAdapter({
+          now: () => 1000 + commands.length * 600,
+          targetDeadZoneCm: 100,
+          transport: {
+            sendVelocity: (dx, dy) => commands.push(`vel ${dx} ${dy}`),
+            sendShoot: () => commands.push('shoot')
+          }
+        });
+        const vector = movementVectorToTarget({ x: 10, y: 20 }, { x: 1010, y: 20 }, { targetDeadZoneCm: 100 });
+        const action = adapter.applyDecision({
+          realtime: { self: { x: 10, y: 20 }, tick: 1 }
+        }, {
+          kind: 'profit-candidate',
+          band: 'profit',
+          action: {
+            kind: 'coin',
+            band: 'profit',
+            target: { id: 1, x: 1010, y: 20, snapshotOnly: true }
+          }
+        });
+        adapter.observeState({ realtime: { tick: 2 } });
+        adapter.observeState({ realtime: { tick: 3 } });
+        const state = adapter.getState();
+        return [
+          vector.ok,
+          vector.dx,
+          vector.dy,
+          action.kind,
+          commands.join(','),
+          state.sentCount,
+          state.lastSettlement.ok,
+          !commands.join(',').includes('shoot')
+        ].join('|');
+      })(),
+      want: 'true|1|0|velocity|vel 1 0|1|true|true'
+    },
+    {
+      name: 'browserless action adapter stops for combat and reached targets',
+      got: (() => {
+        const commands = [];
+        const adapter = createBrowserlessActionAdapter({
+          now: () => 1000 + commands.length * 600,
+          targetDeadZoneCm: 100,
+          transport: {
+            sendVelocity: (dx, dy) => commands.push(`vel ${dx} ${dy}`)
+          }
+        });
+        const combat = adapter.applyDecision({
+          realtime: { self: { x: 0, y: 0 }, tick: 1 }
+        }, {
+          kind: 'combat-candidate',
+          band: 'combat',
+          action: { kind: 'combat-candidate', band: 'combat', target: { x: 1000, y: 0 } }
+        });
+        const reached = adapter.applyDecision({
+          realtime: { self: { x: 0, y: 0 }, tick: 2 }
+        }, {
+          kind: 'profit-candidate',
+          band: 'profit',
+          action: { kind: 'coin', band: 'profit', target: { id: 1, x: 50, y: 0, snapshotOnly: true } }
+        });
+        return [
+          combat.kind,
+          combat.reason,
+          reached.kind,
+          reached.reason,
+          commands.join(',')
+        ].join('|');
+      })(),
+      want: 'stop|unsupported-or-wait-decision|stop|target-reached|vel 0 0,vel 0 0'
+    },
+    {
       name: 'browserless read-only canary runs snapshot ws frames and verified leave',
       got: (async () => {
         let t = Date.UTC(2026, 6, 8, 1, 0, 0);
@@ -5856,6 +5935,88 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'true|true|2|1|1|2|2|profit-candidate|true|self|2|0'
+    },
+    {
+      name: 'browserless movement-only canary sends velocity without shooting',
+      got: (async () => {
+        let t = Date.UTC(2026, 6, 8, 1, 0, 0);
+        let wsOptions = null;
+        let sleepCount = 0;
+        const commands = [];
+        const posFrame = encodeGrzFrameForTest({
+          type: 'pos',
+          tick: 20,
+          entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 100, y: 200, hp: 90, stamina_5s_remaining_milli: 1000 }],
+          bullets: []
+        });
+        const snapshotFrame = encodeGrzFrameForTest({
+          type: 'snapshot',
+          tick: 21,
+          entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 100, y: 200, hp: 90, stamina_5s_remaining_milli: 1000 }],
+          bullets: [],
+          coin_drops: [{ drop_id: 2, amount: 3, x: 1100, y: 200 }],
+          messages: []
+        });
+        const result = await runReadOnlyCanary({
+          gameOrigin: 'https://grasp-rat-game.h-e.top',
+          snapshotPath: '/snapshot',
+          wsPath: '/ws',
+          wsExtraQuery: 'compress=gzip%2Cdeflate',
+          controlMode: 'movement-only',
+          readOnlyProbeMs: 1000,
+          decisionIntervalMs: 1,
+          frameGapAlertMs: 5000,
+          movementCommandIntervalMs: 1,
+          movementTargetDeadZoneCm: 100,
+          movementSettlementFrames: 1,
+          userId: 7,
+          sessionToken: 'movement-token'
+        }, {
+          now: () => t,
+          sleep: async ms => {
+            t += ms;
+            sleepCount += 1;
+            if (sleepCount === 1) wsOptions.onMessage(posFrame);
+            if (sleepCount === 2) wsOptions.onMessage(snapshotFrame);
+          },
+          persistedState: {
+            loginPointSafety: { point: { x: 100, y: 200, hp: 90, source: 'test' } }
+          },
+          fetchImpl: async () => fakeResponseForTest({
+            body: {
+              type: 'snapshot',
+              tick: 19,
+              entities: [{ entity_id: 1, user_id: 7, x: 100, y: 200, hp: 90 }],
+              bullets: [],
+              coin_drops: [],
+              messages: []
+            }
+          }),
+          openBrowserlessWs: async options => {
+            wsOptions = options;
+            return {
+              isOpen: () => true,
+              close: () => {},
+              sendVelocity: (dx, dy) => commands.push(`vel ${dx} ${dy}`),
+              sendShoot: () => commands.push('shoot')
+            };
+          },
+          leaveWithVerification: async () => ({ ok: true, attempts: [{ ok: true, summary: { leaveConfirmed: true } }] })
+        });
+        return [
+          result.ok,
+          result.mode,
+          result.actions.enabled,
+          result.actions.sentCount,
+          result.actions.stopCount,
+          result.actions.settlement.ok,
+          result.actions.settlement.reason,
+          commands.includes('vel 1 0'),
+          commands[commands.length - 1],
+          !commands.includes('shoot')
+        ].join('|');
+      })(),
+      want: 'true|movement-only|true|3|2|false|pending|true|vel 0 0|true'
     },
     {
       name: 'browserless read-only canary blocks before ws without login point',
@@ -6055,6 +6216,7 @@ async function runSelfTest() {
           '19999',
           '--web-token',
           'cli-token',
+          '--movement-only',
           '--decision-interval-ms',
           '250',
           '--stale-self-ms',
@@ -6063,6 +6225,12 @@ async function runSelfTest() {
           '4500',
           '--stamina-exhausted-below-ms',
           '150',
+          '--movement-command-interval-ms',
+          '300',
+          '--movement-target-dead-zone-cm',
+          '800',
+          '--movement-settlement-frames',
+          '3',
           '--login-point-x',
           '123',
           '--login-point-y',
@@ -6078,6 +6246,8 @@ async function runSelfTest() {
         return [
           config.once,
           config.dryRun,
+          config.readOnly,
+          config.controlMode,
           config.statusPort,
           config.webToken,
           config.userId,
@@ -6086,13 +6256,16 @@ async function runSelfTest() {
           config.staleSelfMs,
           config.noSelfGraceMs,
           config.staminaExhaustedBelowMs,
+          config.movementCommandIntervalMs,
+          config.movementTargetDeadZoneCm,
+          config.movementSettlementFrames,
           config.loginPointX,
           config.loginPointY,
           config.loginPointHp,
           config.logDir.endsWith('/tmp/grasp-rat-runner/logs')
         ].join('|');
       })(),
-      want: 'true|false|19999|cli-token|42|env-token|250|3500|4500|150|123|456|90|true'
+      want: 'true|false|false|movement-only|19999|cli-token|42|env-token|250|3500|4500|150|300|800|3|123|456|90|true'
     },
     {
       name: 'browserless runner dry-run and fake read-only path write redacted logs',

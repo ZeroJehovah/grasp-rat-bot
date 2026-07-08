@@ -30,6 +30,7 @@ function publicConfig(config) {
     statusPort: config.statusPort,
     webTokenPresent: Boolean(config.webToken),
     readOnly: Boolean(config.readOnly),
+    controlMode: config.controlMode || 'read-only',
     dryRun: Boolean(config.dryRun),
     once: Boolean(config.once),
     logRetentionDays: Number(config.logRetentionDays || 0),
@@ -39,6 +40,9 @@ function publicConfig(config) {
     staleSelfMs: Number(config.staleSelfMs || 0),
     noSelfGraceMs: Number(config.noSelfGraceMs || 0),
     staminaExhaustedBelowMs: Number(config.staminaExhaustedBelowMs || 0),
+    movementCommandIntervalMs: Number(config.movementCommandIntervalMs || 0),
+    movementTargetDeadZoneCm: Number(config.movementTargetDeadZoneCm || 0),
+    movementSettlementFrames: Number(config.movementSettlementFrames || 0),
     stateFile: config.stateFile || stateFilePath(config),
     loginPointPresent: Number.isFinite(Number(config.loginPointX)) && Number.isFinite(Number(config.loginPointY)),
     userId: Number(config.userId || 0),
@@ -76,8 +80,9 @@ async function runBrowserlessRunner(config, deps = {}) {
     runner: {
       ...persisted.runner,
       running: true,
-      mode: config.dryRun ? 'dry-run' : 'read-only',
+      mode: config.dryRun ? 'dry-run' : config.controlMode,
       readOnly: config.readOnly,
+      controlMode: config.controlMode,
       dryRun: config.dryRun,
       lastError: ''
     },
@@ -134,8 +139,8 @@ async function runBrowserlessRunner(config, deps = {}) {
     statusServer: statusHandle ? { host: config.statusHost, port: statusHandle.port } : null
   });
 
-  if (!config.readOnly) {
-    const result = { ok: false, reason: 'only-read-only-mode-is-supported' };
+  if (!['read-only', 'movement-only'].includes(String(config.controlMode || ''))) {
+    const result = { ok: false, reason: 'unsupported-control-mode' };
     updateBrowserlessStateFile(stateFile, {
       runner: {
         running: false,
@@ -151,6 +156,7 @@ async function runBrowserlessRunner(config, deps = {}) {
     const result = {
       ok: true,
       mode: 'dry-run',
+      controlMode: config.controlMode || 'read-only',
       once: Boolean(config.once),
       statusPort: config.statusPort,
       message: 'browserless runner skeleton initialized without live transport'
@@ -190,9 +196,27 @@ async function runBrowserlessRunner(config, deps = {}) {
       updateBrowserlessStateFile(stateFile, decisionStatePatch(decision), {
         updatedAt: new Date(now()).toISOString()
       });
+    },
+    onAction: (action, context = {}) => {
+      updateBrowserlessStateFile(stateFile, {
+        runner: {
+          currentAction: {
+            ...(action || {}),
+            actionState: context.actionState || null
+          }
+        },
+        current: {
+          action: {
+            ...(action || {}),
+            actionState: context.actionState || null
+          }
+        }
+      }, {
+        updatedAt: new Date(now()).toISOString()
+      });
     }
   });
-  const result = { ok: Boolean(canary?.ok), mode: 'read-only', canary: canary || null };
+  const result = { ok: Boolean(canary?.ok), mode: config.controlMode || 'read-only', canary: canary || null };
   const finalDecisionPatch = canary?.decisions?.last ? decisionStatePatch(canary.decisions.last) : {};
   const safetyEvents = [canary?.safety?.event, canary?.safety?.leaveFailure].filter(Boolean);
   const currentStateBeforeFinish = readBrowserlessStateFile(stateFile);
@@ -204,7 +228,7 @@ async function runBrowserlessRunner(config, deps = {}) {
     runner: {
       ...(finalDecisionPatch.runner || {}),
       running: !config.once,
-      mode: 'read-only',
+      mode: config.controlMode || 'read-only',
       lastRun: result,
       lastError: result.ok ? '' : (canary?.error || 'read-only-canary-failed')
     },

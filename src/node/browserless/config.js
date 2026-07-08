@@ -12,6 +12,7 @@ const DEFAULTS = {
   statusPort: 18767,
   webToken: '',
   readOnly: true,
+  controlMode: 'read-only',
   dryRun: true,
   once: false,
   logRetentionDays: 3,
@@ -25,6 +26,9 @@ const DEFAULTS = {
   staleSelfMs: 3000,
   noSelfGraceMs: 3000,
   staminaExhaustedBelowMs: 200,
+  movementCommandIntervalMs: 500,
+  movementTargetDeadZoneCm: 900,
+  movementSettlementFrames: 2,
   loginPointX: null,
   loginPointY: null,
   loginPointHp: null
@@ -53,6 +57,7 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
     statusPort: numberEnv(env.GRASP_RAT_BROWSERLESS_STATUS_PORT, DEFAULTS.statusPort),
     webToken: env.GRASP_RAT_BROWSERLESS_WEB_TOKEN || DEFAULTS.webToken,
     readOnly: boolEnv(env.GRASP_RAT_BROWSERLESS_READ_ONLY, DEFAULTS.readOnly),
+    controlMode: env.GRASP_RAT_BROWSERLESS_CONTROL_MODE || DEFAULTS.controlMode,
     dryRun: boolEnv(env.GRASP_RAT_BROWSERLESS_DRY_RUN, DEFAULTS.dryRun),
     once: boolEnv(env.GRASP_RAT_BROWSERLESS_ONCE, DEFAULTS.once),
     logRetentionDays: numberEnv(env.GRASP_RAT_BROWSERLESS_LOG_RETENTION_DAYS, DEFAULTS.logRetentionDays),
@@ -66,6 +71,9 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
     staleSelfMs: numberEnv(env.GRASP_RAT_BROWSERLESS_STALE_SELF_MS, DEFAULTS.staleSelfMs),
     noSelfGraceMs: numberEnv(env.GRASP_RAT_BROWSERLESS_NO_SELF_GRACE_MS, DEFAULTS.noSelfGraceMs),
     staminaExhaustedBelowMs: numberEnv(env.GRASP_RAT_BROWSERLESS_STAMINA_EXHAUSTED_BELOW_MS, DEFAULTS.staminaExhaustedBelowMs),
+    movementCommandIntervalMs: numberEnv(env.GRASP_RAT_BROWSERLESS_MOVEMENT_COMMAND_INTERVAL_MS, DEFAULTS.movementCommandIntervalMs),
+    movementTargetDeadZoneCm: numberEnv(env.GRASP_RAT_BROWSERLESS_MOVEMENT_TARGET_DEAD_ZONE_CM, DEFAULTS.movementTargetDeadZoneCm),
+    movementSettlementFrames: numberEnv(env.GRASP_RAT_BROWSERLESS_MOVEMENT_SETTLEMENT_FRAMES, DEFAULTS.movementSettlementFrames),
     userId: numberEnv(env.GRASP_RAT_BROWSERLESS_USER_ID, 0),
     sessionToken: env.GRASP_RAT_BROWSERLESS_SESSION_TOKEN || '',
     loginPointX: numberEnv(env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_X, DEFAULTS.loginPointX),
@@ -78,6 +86,13 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
     const arg = argv[i];
     if (arg === '--read-only') {
       config.readOnly = true;
+      config.controlMode = 'read-only';
+    } else if (arg === '--movement-only') {
+      config.controlMode = 'movement-only';
+      config.readOnly = false;
+    } else if (arg === '--control-mode') {
+      config.controlMode = argv[++i] || config.controlMode;
+      config.readOnly = config.controlMode === 'read-only';
     } else if (arg === '--dry-run') {
       config.dryRun = true;
     } else if (arg === '--live') {
@@ -112,6 +127,12 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
       config.noSelfGraceMs = numberEnv(argv[++i], config.noSelfGraceMs);
     } else if (arg === '--stamina-exhausted-below-ms') {
       config.staminaExhaustedBelowMs = numberEnv(argv[++i], config.staminaExhaustedBelowMs);
+    } else if (arg === '--movement-command-interval-ms') {
+      config.movementCommandIntervalMs = numberEnv(argv[++i], config.movementCommandIntervalMs);
+    } else if (arg === '--movement-target-dead-zone-cm') {
+      config.movementTargetDeadZoneCm = numberEnv(argv[++i], config.movementTargetDeadZoneCm);
+    } else if (arg === '--movement-settlement-frames') {
+      config.movementSettlementFrames = numberEnv(argv[++i], config.movementSettlementFrames);
     } else if (arg === '--login-point-x') {
       config.loginPointX = numberEnv(argv[++i], config.loginPointX);
     } else if (arg === '--login-point-y') {
@@ -126,6 +147,10 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
       throw new Error(`unknown argument: ${arg}`);
     }
   }
+  if (!['read-only', 'movement-only'].includes(String(config.controlMode || ''))) {
+    throw new Error(`unsupported control mode: ${config.controlMode}`);
+  }
+  config.readOnly = config.controlMode === 'read-only';
   config.dataDir = path.resolve(config.dataDir);
   config.logDir = path.join(config.dataDir, 'logs');
   config.stateFile = path.join(config.dataDir, 'state.json');
@@ -138,8 +163,10 @@ function usage() {
     '',
     'Options:',
     '  --read-only              Start in read-only mode (default)',
+    '  --movement-only          Enable live movement-only velocity commands; shooting remains disabled',
+    '  --control-mode <mode>    read-only or movement-only. Default: read-only',
     '  --dry-run                Do not connect to live game transport (default)',
-    '  --live                   Disable dry-run; live read-only is gated until canary support is added',
+    '  --live                   Disable dry-run; live transport still requires read-only or movement-only mode',
     '  --once                   Run one bounded skeleton cycle and exit',
     '  --data-dir <dir>         State/log root. Default: data/browserless-runner',
     '  --status-host <host>     Status host placeholder. Default: 127.0.0.1',
@@ -154,6 +181,9 @@ function usage() {
     '  --stale-self-ms <ms>      Safety stale-self threshold. Default: 3000',
     '  --no-self-grace-ms <ms>   Safety no-self grace window. Default: 3000',
     '  --stamina-exhausted-below-ms <ms>  Safety stamina floor. Default: 200',
+    '  --movement-command-interval-ms <ms>  Movement velocity throttle. Default: 500',
+    '  --movement-target-dead-zone-cm <cm>  Movement target stop radius. Default: 900',
+    '  --movement-settlement-frames <n>  Realtime frames needed after command. Default: 2',
     '  --login-point-x <cm>      Manual login point x for canary safety',
     '  --login-point-y <cm>      Manual login point y for canary safety',
     '  --login-point-hp <hp>     Manual login point HP context for canary safety',
