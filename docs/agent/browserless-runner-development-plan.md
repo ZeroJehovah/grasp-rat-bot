@@ -115,6 +115,7 @@ Update this table in the same task that completes each feature.
 | Commit 27: Require Combat Live Action Evidence | Complete | `scripts/browserless-canary-audit.js` now requires combat-live canaries to include scoped `movement-command` evidence alongside positive velocity counters, in addition to realtime combat logs and shoot acknowledgement checks. Self-tests cover accepted combat-live evidence and missing-action rejection. |
 | Commit 28: Audit Scoped Shoot Command Evidence | Complete | `scripts/browserless-canary-audit.js` now detects scoped shoot evidence from action logs (`action.shoot.command`, cumulative `state.shootSentCount`, or `state.lastShootCommand`) so no-shoot profiles cannot pass with leaked shoot commands, and combat-live runs with logged shoot commands still require `lastShootAck`. Self-tests cover movement-only shoot leakage and combat-live missing acknowledgement from action-log evidence. |
 | Commit 29: Expose Acceptance Evidence Summaries | Complete | `scripts/browserless-acceptance-report.js` now includes each canary section's selected final event, run window, decision/action/shoot/combat/forced-stop counts in human summaries, so final VPS cutover output is reviewable without opening the JSON report first. Self-tests cover movement/forced-stop summary evidence. |
+| Commit 30: Add Canary Run Identity | Complete | `src/node/browserless/canary.js` now assigns a stable `runId` to each canary run and stamps runner/decision/action/combat/exit log entries with it. `scripts/browserless-canary-audit.js` prefers `runId` filtering before falling back to time-window filtering, and acceptance summaries include the selected run id. Self-tests cover deterministic id generation and same-window cross-run contamination rejection. |
 
 ## Commit Plan
 
@@ -700,9 +701,32 @@ Validation:
 - `node --check scripts/browserless-acceptance-report.js`
 - `git diff --check`
 
+### Commit 30: Add Canary Run Identity
+
+Files:
+
+- Update `src/node/browserless/canary.js`.
+- Update `scripts/browserless-canary-audit.js`.
+- Update `scripts/browserless-acceptance-report.js`.
+- Update browserless canary audit self-test coverage.
+- Update operator, migration, current-state, test-coverage, and this development plan.
+
+Purpose:
+
+- Stamp every canary run and its JSONL evidence with a stable `runId`.
+- Make canary audits prefer exact run-id evidence correlation before using timestamp windows.
+- Make aggregate acceptance summaries show the selected run id for VPS handoff review.
+
+Validation:
+
+- `node grasp-rat-bot.js --self-test`
+- `node --check src/node/browserless/canary.js`
+- `node --check scripts/browserless-canary-audit.js`
+- `git diff --check`
+
 ## External VPS Validation Required
 
-Local implementation work is complete through Commit 29, and the VPS systemd deployment validation passed on 2026-07-08. The production runner is not accepted until the remaining live canary validations below produce evidence and the aggregate acceptance report passes.
+Local implementation work is complete through Commit 30, and the VPS systemd deployment validation passed on 2026-07-08. The production runner is not accepted until the remaining live canary validations below produce evidence and the aggregate acceptance report passes.
 
 Use the production service path and audit commands from `docs/agent/browserless-vps-migration.md` and `docs/agent/browserless-runner-operator.md`. Do not mark `headless-demo/` superseded until these validations pass:
 

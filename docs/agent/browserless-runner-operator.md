@@ -292,7 +292,7 @@ sudo node scripts/browserless-canary-audit.js \
   --fail-on-incomplete
 ```
 
-Use `--profile movement-only`, `--profile profit`, `--profile combat-dry-run`, or `--profile combat-live` for later stages. For the forced `/api/stop` validation, add `--require-stop`; that mode accepts an explicit-stop safety exit only when verified `leave` evidence is present. When a selected final canary event includes `startedAt` and `completedAt`, the audit counts decision, combat, exit, and movement evidence only inside that run window, so same-day staged runs can be reviewed separately. Read-only and combat-dry-run audits fail if scoped movement-command logs are present; movement-only, profit, and combat-live audits require scoped movement-command evidence in addition to positive velocity counters. No-shoot profiles also fail when scoped action logs show shoot-command evidence, and combat-live requires `lastShootAck` when either final counters or scoped action logs prove a shot was sent. Use `sudo` for production logs under `/var/log/grasp-rat-browserless`.
+Use `--profile movement-only`, `--profile profit`, `--profile combat-dry-run`, or `--profile combat-live` for later stages. For the forced `/api/stop` validation, add `--require-stop`; that mode accepts an explicit-stop safety exit only when verified `leave` evidence is present. Current canary logs carry a `runId`, and the audit uses that to correlate runner, decision, combat, action, and exit evidence; older logs fall back to the selected final event's `startedAt`/`completedAt` window. Read-only and combat-dry-run audits fail if scoped movement-command logs are present; movement-only, profit, and combat-live audits require scoped movement-command evidence in addition to positive velocity counters. No-shoot profiles also fail when scoped action logs show shoot-command evidence, and combat-live requires `lastShootAck` when either final counters or scoped action logs prove a shot was sent. Use `sudo` for production logs under `/var/log/grasp-rat-browserless`.
 
 After all staged canaries and the deployment audit have run, generate the aggregate cutover readiness report:
 
@@ -305,7 +305,7 @@ sudo node scripts/browserless-acceptance-report.js \
 
 This report aggregates deployment, normal read-only, forced-stop, movement-only, profit, combat dry-run, and combat live audit results. Run it with `sudo` because the included deployment audit reads the protected env file. It is the final local evidence summary before marking `headless-demo/` superseded.
 
-The human report includes each canary section's selected final event, run window, and key evidence counts (`decisions`, `movement`, `shoot`, `combat`, and `explicitStop` when present). Confirm these summaries point at the intended staged runs before treating the aggregate report as cutover evidence.
+The human report includes each canary section's selected run id, final event, run window, and key evidence counts (`decisions`, `movement`, `shoot`, `combat`, and `explicitStop` when present). Confirm these summaries point at the intended staged runs before treating the aggregate report as cutover evidence.
 
 ## Environment
 

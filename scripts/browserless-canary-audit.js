@@ -102,17 +102,29 @@ function selectedRunWindow(finalEntry) {
   };
 }
 
+function selectedRunScope(finalEntry) {
+  return {
+    runId: String(finalEntry?.detail?.runId || ''),
+    window: selectedRunWindow(finalEntry)
+  };
+}
+
 function entryInRunWindow(entry, window) {
   if (!window?.applied) return true;
   const atMs = parseTimeMs(entry?.at);
   return atMs !== null && atMs >= window.startMs && atMs <= window.endMs;
 }
 
-function filterStreamsToRunWindow(streams, window) {
-  if (!window?.applied) return streams;
+function entryInRunScope(entry, scope) {
+  if (scope?.runId) return String(entry?.detail?.runId || '') === scope.runId;
+  return entryInRunWindow(entry, scope?.window);
+}
+
+function filterStreamsToRunScope(streams, scope) {
+  if (!scope?.runId && !scope?.window?.applied) return streams;
   const filtered = {};
   for (const [key, entries] of Object.entries(streams)) {
-    filtered[key] = entries.filter(entry => entryInRunWindow(entry, window));
+    filtered[key] = entries.filter(entry => entryInRunScope(entry, scope));
   }
   return filtered;
 }
@@ -165,8 +177,9 @@ function summarizeAudit(options = {}) {
   const finalEntries = finalCanaryEntries(streams.runner, mode);
   const finalEntry = selectFinalCanaryEntry(finalEntries, { requireStop: options.requireStop });
   const final = finalEntry?.detail || null;
-  const runWindow = selectedRunWindow(finalEntry);
-  const scopedStreams = filterStreamsToRunWindow(streams, runWindow);
+  const runScope = selectedRunScope(finalEntry);
+  const runWindow = runScope.window;
+  const scopedStreams = filterStreamsToRunScope(streams, runScope);
   const decisionCount = countWhere(scopedStreams.decisions, entry => entry?.type === 'decision');
   const movementCommandCount = countWhere(scopedStreams.runner, entry => entry?.type === 'movement-command');
   const shootCommandCount = countWhere(scopedStreams.runner, entry => entry?.type === 'movement-command' && hasShootCommandEvidence(entry));
@@ -226,7 +239,8 @@ function summarizeAudit(options = {}) {
     dayDir,
     generatedAt: new Date().toISOString(),
     requireStop: Boolean(options.requireStop),
-    finalEvent: finalEntry ? { at: finalEntry.at || '', type: finalEntry.type || '', mode: final?.mode || '' } : null,
+    finalEvent: finalEntry ? { at: finalEntry.at || '', type: finalEntry.type || '', mode: final?.mode || '', runId: final?.runId || '' } : null,
+    runId: runScope.runId,
     runWindow: {
       applied: Boolean(runWindow.applied),
       startedAt: runWindow.startAt || '',
@@ -261,6 +275,9 @@ function formatHuman(report) {
     `Profile: ${report.profile} (${report.mode})`,
     `Logs: ${report.dayDir}`
   ];
+  if (report.runId) {
+    lines.push(`Run id: ${report.runId}`);
+  }
   if (report.runWindow?.applied) {
     lines.push(`Run window: ${report.runWindow.startedAt} .. ${report.runWindow.completedAt}`);
   }

@@ -56,6 +56,9 @@ function canaryEvidenceSummary(report) {
   const finalEvent = report?.finalEvent || null;
   const runWindow = report?.runWindow || null;
   const counts = report?.counts || {};
+  if (report?.runId || finalEvent?.runId) {
+    parts.push(`runId=${report.runId || finalEvent.runId}`);
+  }
   if (finalEvent?.type) {
     parts.push(`final=${finalEvent.type}@${finalEvent.at || 'missing'}`);
   }

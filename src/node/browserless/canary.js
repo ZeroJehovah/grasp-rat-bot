@@ -25,6 +25,11 @@ const { createBrowserlessActionAdapter } = require('./action-adapter');
 const DEFAULT_READONLY_PROBE_MS = 30000;
 const DEFAULT_FRAME_GAP_ALERT_MS = 5000;
 
+function createCanaryRunId(mode, startedAtMs) {
+  const stamp = new Date(startedAtMs).toISOString().replace(/[-:.]/g, '');
+  return `${String(mode || 'canary')}-${stamp}`;
+}
+
 function normalizeFrameData(data) {
   let value = data;
   const seen = new Set();
@@ -152,8 +157,10 @@ async function runReadOnlyCanary(config, options = {}) {
     decodeErrors: 0
   };
   const startedAt = now();
+  const runId = String(options.runId || createCanaryRunId(controlMode, startedAt));
   const result = {
     ok: false,
+    runId,
     mode: controlMode,
     startedAt: new Date(startedAt).toISOString(),
     completedAt: '',
@@ -191,21 +198,32 @@ async function runReadOnlyCanary(config, options = {}) {
   let wsClosed = null;
   let ending = false;
   let actionAdapter = null;
+  const addRunMeta = detail => {
+    const base = detail && typeof detail === 'object' && !Array.isArray(detail)
+      ? detail
+      : { value: detail };
+    return {
+      ...base,
+      runId,
+      canaryMode: controlMode,
+      canaryStartedAt: result.startedAt
+    };
+  };
 
   const log = (type, detail) => {
-    if (logStore) logStore.append('runner', type, detail);
+    if (logStore) logStore.append('runner', type, addRunMeta(detail));
   };
   const logDecision = detail => {
-    if (logStore) logStore.append('decisions', 'decision', detail);
+    if (logStore) logStore.append('decisions', 'decision', addRunMeta(detail));
   };
   const logSafety = detail => {
-    if (logStore) logStore.append('exits', 'safety-event', detail);
+    if (logStore) logStore.append('exits', 'safety-event', addRunMeta(detail));
   };
   const logAction = detail => {
-    if (logStore) logStore.append('runner', 'movement-command', detail);
+    if (logStore) logStore.append('runner', 'movement-command', addRunMeta(detail));
   };
   const logCombat = detail => {
-    if (logStore) logStore.append('combat', combatLiveEnabled ? 'combat-live' : 'combat-dry-run', detail);
+    if (logStore) logStore.append('combat', combatLiveEnabled ? 'combat-live' : 'combat-dry-run', addRunMeta(detail));
   };
   const updateActionResult = actionResult => {
     if (!actionResult) return;
@@ -421,6 +439,7 @@ async function runReadOnlyCanary(config, options = {}) {
 }
 
 module.exports = {
+  createCanaryRunId,
   frameDataToBuffer,
   inspectCanaryFrame,
   loginPointFromState,
