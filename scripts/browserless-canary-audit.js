@@ -181,20 +181,21 @@ function summarizeAudit(options = {}) {
   addCheck(checks, 'decisions-logged', decisionCount > 0, `decision entries=${decisionCount}`);
 
   if (profile === 'read-only') {
-    addCheck(checks, 'no-actions', Number(final?.actions?.sentCount || 0) === 0, `sent=${Number(final?.actions?.sentCount || 0)}, movement logs=${movementCommandCount}`);
+    addCheck(checks, 'no-actions', Number(final?.actions?.sentCount || 0) === 0 && movementCommandCount === 0, `sent=${Number(final?.actions?.sentCount || 0)}, movement logs=${movementCommandCount}`);
     addCheck(checks, 'no-shoot', Number(final?.actions?.shootSentCount || 0) === 0, `shootSentCount=${Number(final?.actions?.shootSentCount || 0)}`);
   } else if (profile === 'movement-only') {
-    addCheck(checks, 'velocity-sent', Number(final?.actions?.velocitySentCount || 0) > 0, `velocity=${Number(final?.actions?.velocitySentCount || 0)}, movement logs=${movementCommandCount}`);
+    addCheck(checks, 'velocity-sent', Number(final?.actions?.velocitySentCount || 0) > 0 && movementCommandCount > 0, `velocity=${Number(final?.actions?.velocitySentCount || 0)}, movement logs=${movementCommandCount}`);
     addCheck(checks, 'no-shoot', Number(final?.actions?.shootSentCount || 0) === 0, `shootSentCount=${Number(final?.actions?.shootSentCount || 0)}`);
   } else if (profile === 'profit') {
     const profitDecisionCount = countWhere(scopedStreams.decisions, entry => Boolean(entry?.detail?.profit));
     addCheck(checks, 'profit-decisions', profitDecisionCount > 0, `profit decision entries=${profitDecisionCount}`);
+    addCheck(checks, 'velocity-sent', Number(final?.actions?.velocitySentCount || 0) > 0 && movementCommandCount > 0, `velocity=${Number(final?.actions?.velocitySentCount || 0)}, movement logs=${movementCommandCount}`);
     addCheck(checks, 'no-shoot', Number(final?.actions?.shootSentCount || 0) === 0, `shootSentCount=${Number(final?.actions?.shootSentCount || 0)}`);
   } else if (profile === 'combat-dry-run') {
     addCheck(checks, 'combat-logged', combatDryRunEntries.length > 0, `combat-dry-run entries=${combatDryRunEntries.length}`);
     addCheck(checks, 'combat-realtime-authority', allCombatTargetsRealtime(combatDryRunEntries), 'all logged combat targets/candidates use realtime authority');
     addCheck(checks, 'combat-suppressed', allCombatDryRunSuppressed(combatDryRunEntries), 'dry-run shooting rows are suppressed');
-    addCheck(checks, 'no-actions', Number(final?.actions?.sentCount || 0) === 0, `sent=${Number(final?.actions?.sentCount || 0)}, movement logs=${movementCommandCount}`);
+    addCheck(checks, 'no-actions', Number(final?.actions?.sentCount || 0) === 0 && movementCommandCount === 0, `sent=${Number(final?.actions?.sentCount || 0)}, movement logs=${movementCommandCount}`);
   } else if (profile === 'combat-live') {
     addCheck(checks, 'combat-logged', combatLiveEntries.length > 0, `combat-live entries=${combatLiveEntries.length}`);
     addCheck(checks, 'combat-realtime-authority', allCombatTargetsRealtime(combatLiveEntries), 'all logged combat targets/candidates use realtime authority');

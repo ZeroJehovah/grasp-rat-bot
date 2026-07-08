@@ -6644,6 +6644,24 @@ async function runSelfTest() {
         writeStop('exits', { at: '2026-07-09T01:00:02.000Z', type: 'safety-event', detail: { reason: 'explicit-stop' } });
         writeStop('exits', { at: '2026-07-09T01:06:02.000Z', type: 'safety-event', detail: { reason: 'outside-window' } });
         const forcedStop = summarizeBrowserlessCanaryAudit({ logDir: dir, day: '2026-07-09', profile: 'read-only', requireStop: true });
+
+        const actionLeakDayDir = path.join(dir, '2026-07-10');
+        fs.mkdirSync(actionLeakDayDir, { recursive: true });
+        const writeActionLeak = (stream, entry) => {
+          fs.appendFileSync(path.join(actionLeakDayDir, `${stream}.jsonl`), `${JSON.stringify(entry)}\n`);
+        };
+        writeActionLeak('runner', {
+          at: '2026-07-10T01:05:00.000Z',
+          type: 'canary-finish',
+          detail: {
+            ...baseFinish,
+            startedAt: '2026-07-10T01:00:00.000Z',
+            completedAt: '2026-07-10T01:05:00.000Z'
+          }
+        });
+        writeActionLeak('decisions', { at: '2026-07-10T01:00:01.000Z', type: 'decision', detail: { kind: 'wait' } });
+        writeActionLeak('runner', { at: '2026-07-10T01:00:02.000Z', type: 'movement-command', detail: { action: { kind: 'velocity' } } });
+        const actionLeak = summarizeBrowserlessCanaryAudit({ logDir: dir, day: '2026-07-10', profile: 'read-only' });
         return [
           clean.ok,
           clean.failed.length,
@@ -6653,10 +6671,12 @@ async function runSelfTest() {
           cleanWithStopRequirement.ok,
           cleanWithStopRequirement.failed.some(item => item.key === 'explicit-stop'),
           forcedStop.ok,
-          forcedStop.counts.explicitStop
+          forcedStop.counts.explicitStop,
+          actionLeak.ok,
+          actionLeak.failed.some(item => item.key === 'no-actions')
         ].join('|');
       }),
-      want: 'true|0|true|1|0|false|true|true|1'
+      want: 'true|0|true|1|0|false|true|true|1|false|true'
     },
     {
       name: 'browserless runner config parses env and cli overrides',
@@ -6868,16 +6888,24 @@ async function runSelfTest() {
           leave: { ok: true }
         };
         write('runner', {
-          at: '2026-07-08T01:00:00.000Z',
+          at: '2026-07-08T01:00:30.000Z',
           type: 'canary-finish',
-          detail: { ...base, mode: 'read-only', actions: { sentCount: 0, shootSentCount: 0 } }
+          detail: {
+            ...base,
+            mode: 'read-only',
+            startedAt: '2026-07-08T01:00:00.000Z',
+            completedAt: '2026-07-08T01:00:30.000Z',
+            actions: { sentCount: 0, shootSentCount: 0 }
+          }
         });
         write('runner', {
-          at: '2026-07-08T01:01:00.000Z',
+          at: '2026-07-08T01:01:30.000Z',
           type: 'canary-failed',
           detail: {
             ...base,
             mode: 'read-only',
+            startedAt: '2026-07-08T01:01:00.000Z',
+            completedAt: '2026-07-08T01:01:30.000Z',
             ok: false,
             error: 'explicit-stop',
             actions: { sentCount: 0, shootSentCount: 0 },
@@ -6885,12 +6913,19 @@ async function runSelfTest() {
           }
         });
         write('runner', {
-          at: '2026-07-08T01:02:00.000Z',
+          at: '2026-07-08T01:02:30.000Z',
           type: 'canary-finish',
-          detail: { ...base, mode: 'movement-only', actions: { velocitySentCount: 2, shootSentCount: 0 } }
+          detail: {
+            ...base,
+            mode: 'movement-only',
+            startedAt: '2026-07-08T01:02:00.000Z',
+            completedAt: '2026-07-08T01:02:30.000Z',
+            actions: { velocitySentCount: 2, shootSentCount: 0 }
+          }
         });
         write('runner', { at: '2026-07-08T01:02:01.000Z', type: 'movement-command', detail: { action: { kind: 'velocity' } } });
         write('decisions', { at: '2026-07-08T01:00:01.000Z', type: 'decision', detail: { kind: 'wait' } });
+        write('decisions', { at: '2026-07-08T01:01:01.000Z', type: 'decision', detail: { kind: 'stop-requested' } });
         write('decisions', { at: '2026-07-08T01:02:01.000Z', type: 'decision', detail: { kind: 'coin' } });
         write('exits', { at: '2026-07-08T01:01:01.000Z', type: 'safety-event', detail: { reason: 'explicit-stop' } });
         let deploymentEnvMode = '';
