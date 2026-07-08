@@ -82,6 +82,7 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
   }
   config.dataDir = path.resolve(config.dataDir);
   config.logDir = path.join(config.dataDir, 'logs');
+  config.stateFile = path.join(config.dataDir, 'state.json');
   return config;
 }
 
