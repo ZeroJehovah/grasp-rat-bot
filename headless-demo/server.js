@@ -789,15 +789,17 @@ function summarizeShotAck(json) {
 
 function summarizeDecodedJson(json, userId) {
   if (!json || typeof json !== 'object') return null;
-  const entities = Array.isArray(json.entities) ? json.entities : [];
-  const bullets = Array.isArray(json.bullets) ? json.bullets : [];
+  const hasEntities = Array.isArray(json.entities);
+  const hasBullets = Array.isArray(json.bullets);
+  const entities = hasEntities ? json.entities : [];
+  const bullets = hasBullets ? json.bullets : [];
   const summary = {
     type: typeof json.type === 'string' ? json.type : '',
     tick: Number.isFinite(Number(json.tick)) ? Number(json.tick) : undefined,
     keyCount: Object.keys(json).length
   };
-  if (entities.length) summary.entityCount = entities.length;
-  if (bullets.length) summary.bulletCount = bullets.length;
+  if (hasEntities) summary.entityCount = entities.length;
+  if (hasBullets) summary.bulletCount = bullets.length;
   if (Array.isArray(json.coin_drops)) summary.coinDropCount = json.coin_drops.length;
   if (Array.isArray(json.messages)) summary.messageCount = json.messages.length;
   if (json.total_entities !== undefined) summary.totalEntities = json.total_entities;
@@ -806,7 +808,7 @@ function summarizeDecodedJson(json, userId) {
   if (json.occupied_cells !== undefined) summary.occupiedCells = json.occupied_cells;
 
   const self = userId ? entities.find(entity => Number(entity?.user_id) === Number(userId)) : null;
-  if (userId && Array.isArray(json.entities)) summary.selfPresent = Boolean(self);
+  if (userId && hasEntities) summary.selfPresent = Boolean(self);
   if (self) summary.self = summarizeEntity(self);
 
   if (summary.type === 'shoot_ok') {
