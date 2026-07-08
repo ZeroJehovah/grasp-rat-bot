@@ -146,6 +146,7 @@ On 2026-07-08, the VPS one-shot demo succeeded after the Node 18 `ws` fallback a
 - A 30 second read-only probe observed 599 decoded binary frames with no decode errors: 569 `pos` frames and 30 pushed `snapshot` frames. The only key sets were `type,tick,entities,bullets` and `type,tick,total_entities,in_game,visible,occupied_cells,entities,bullets,coin_drops,messages`. This means no additional realtime coin/drop frame type has been observed yet; coin drops/messages are currently known only from pushed snapshots, so browserless combat must stay on `pos` and ordinary coin profit must treat snapshot coins as non-combat fallback data.
 - A direct pre-WS snapshot probe against `https://grasp-rat-game.h-e.top/snapshot?user_id=<id>&token=<token>` returned HTTP 200 JSON without opening WS. The response shape matched pushed snapshot frames and included `total_entities`, `in_game`, `visible`, `occupied_cells`, `entities`, `bullets`, `coin_drops`, and `messages`; the sample had about 1.09MB text, 1001 entities, 1 bullet, 99 coin drops, and 80 messages. The first safety evaluation could not complete because the upgraded demo had no persisted `lastSelfSummary` login point from an earlier build. This is expected for pre-upgrade state; a fresh WS probe or demo run on the updated code should persist `lastSelfSummary`.
 - A later snapshot safety probe with a persisted login point returned `ok:true` for the radius check, but its snapshot tick was lower than the latest known WS tick and it still showed self as `InGame`/`Active` after verified leave. Treat that result as stale evidence. Snapshot safety must include a cache-busting query parameter and reject responses whose `tick` is older than the latest known realtime WS tick.
+- After adding cache-busting and freshness checks, a repeated snapshot safety probe returned fresh evidence: snapshot tick `1012158` vs latest known WS tick `1005191`, `selfPresent:false`, `freshness.ok:true`, and login-point safety `ok:true` with healthy 170m radius, 10 nearby entities, and 0 nearby Active entities. This validates the pre-login safety snapshot path for the browserless runner.
 
 ## Progress Log
 
@@ -167,6 +168,7 @@ On 2026-07-08, the VPS one-shot demo succeeded after the Node 18 `ws` fallback a
 - 2026-07-08: The bounded read-only WS probe passed. Over 30 seconds, direct WS state consisted only of high-frequency `pos` frames and about 1Hz pushed `snapshot` frames; no separate realtime coin/drop frame type appeared.
 - 2026-07-08: Direct pre-login `/snapshot?user_id=<id>&token=<token>` fetch from VPS worked before WS join. Safety verdict still needs one updated-code run to persist a login point first.
 - 2026-07-08: Snapshot probe freshness guard added after a cached/stale-looking response returned an older tick and self `InGame` after leave. Pre-login safety now requires a non-stale snapshot tick.
+- 2026-07-08: Fresh pre-login snapshot safety probe passed with cache-busting: direct `/snapshot` before WS join can evaluate the persisted login point and confirmed no nearby Active entity in the healthy-radius band.
 
 ## Next Plan
 

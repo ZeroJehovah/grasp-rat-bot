@@ -430,6 +430,8 @@ Status on 2026-07-08: direct `/snapshot?user_id=<id>&token=<token>` fetch works 
 
 Follow-up on 2026-07-08: a later radius verdict was positive, but the returned snapshot tick was older than the latest known WS tick and still showed self as `InGame` after verified leave. The production safety client must cache-bust snapshot requests and reject stale ticks before trusting the radius verdict.
 
+Final 2026-07-08 validation: cache-busted direct snapshot passed freshness and radius safety checks before WS join. The response tick was newer than the latest known WS tick, self was absent, and the persisted healthy login point had 0 nearby Active entities inside the 170m radius. The pre-login snapshot safety path is validated for implementation.
+
 Already completed:
 
 - Bounded read-only WS probe: only `pos` and pushed `snapshot` appeared; coin drops/messages appeared only in `snapshot`.
