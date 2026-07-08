@@ -6448,10 +6448,18 @@ async function runSelfTest() {
       got: (async () => {
         let t = Date.UTC(2026, 6, 8, 1, 0, 0);
         let deadlineMs = 0;
+        let wsOptions = null;
+        let sentLateNoSelf = false;
         const posFrame = encodeGrzFrameForTest({
           type: 'pos',
           tick: 40,
           entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 100, y: 200, hp: 90 }],
+          bullets: []
+        });
+        const noSelfFrame = encodeGrzFrameForTest({
+          type: 'pos',
+          tick: 41,
+          entities: [{ entity_id: 2, user_id: 8, name: 'other', x: 150, y: 200, hp: 90 }],
           bullets: []
         });
         const result = await runReadOnlyCanary({
@@ -6468,7 +6476,13 @@ async function runSelfTest() {
           httpTimeoutMs: 1000
         }, {
           now: () => t,
-          sleep: async ms => { t += ms; },
+          sleep: async ms => {
+            t += ms;
+            if (!sentLateNoSelf && deadlineMs && t >= deadlineMs) {
+              sentLateNoSelf = true;
+              wsOptions.onMessage(noSelfFrame);
+            }
+          },
           persistedState: {
             loginPointSafety: { point: { x: 100, y: 200, hp: 90, source: 'test' } }
           },
@@ -6483,6 +6497,7 @@ async function runSelfTest() {
             }
           }),
           openBrowserlessWs: async options => {
+            wsOptions = options;
             deadlineMs = t + 1000;
             options.onMessage(posFrame);
             return {
@@ -6504,10 +6519,11 @@ async function runSelfTest() {
           result.ok,
           result.error || '',
           result.safety.event?.reason || '',
+          result.stats.selfPresent.false,
           result.leave.ok
         ].join('|');
       })(),
-      want: 'true|||true'
+      want: 'true|||1|true'
     },
     {
       name: 'browserless safety controller classifies unsafe states',

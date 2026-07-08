@@ -197,6 +197,7 @@ async function runReadOnlyCanary(config, options = {}) {
   let wsError = null;
   let wsClosed = null;
   let ending = false;
+  let deadlineAtMs = 0;
   let actionAdapter = null;
   const addRunMeta = detail => {
     const base = detail && typeof detail === 'object' && !Array.isArray(detail)
@@ -312,6 +313,7 @@ async function runReadOnlyCanary(config, options = {}) {
               result.actions.settlement = settlement;
             }
           }
+          if (deadlineAtMs && atMs >= deadlineAtMs) return;
           if (!lastDecisionAtMs || atMs - lastDecisionAtMs >= decisionIntervalMs) {
             const decision = decisionAdapter.decide(currentState, {
               nowMs: atMs,
@@ -360,12 +362,12 @@ async function runReadOnlyCanary(config, options = {}) {
       });
     }
     log('canary-ws-open', { durationMs });
-    const deadline = now() + durationMs;
-    while (now() < deadline && !result.safety.event) {
-      const waitMs = Math.min(250, Math.max(0, deadline - now()));
+    deadlineAtMs = now() + durationMs;
+    while (now() < deadlineAtMs && !result.safety.event) {
+      const waitMs = Math.min(250, Math.max(0, deadlineAtMs - now()));
       if (waitMs > 0) await sleep(waitMs);
       const atMs = now();
-      if (atMs >= deadline) break;
+      if (atMs >= deadlineAtMs) break;
       const frameGapMs = frameHealth.lastFrameAtMs ? atMs - frameHealth.lastFrameAtMs : null;
       const safetyEvent = safetyController.evaluate(stateStore.getState(atMs), {
         startedAtMs: startedAt,
