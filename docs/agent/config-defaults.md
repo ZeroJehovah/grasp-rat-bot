@@ -20,12 +20,13 @@
   - `GRASP_RAT_BROWSERLESS_LEAVE_RETRY_MAX = 3`
   - `GRASP_RAT_BROWSERLESS_LEAVE_RETRY_MS = 1200`
   - `GRASP_RAT_BROWSERLESS_HTTP_TIMEOUT_MS = 10000`
+  - `GRASP_RAT_BROWSERLESS_DECISION_INTERVAL_MS = 1000`
   - `GRASP_RAT_BROWSERLESS_USER_ID = 0`
   - `GRASP_RAT_BROWSERLESS_SESSION_TOKEN = ""`
   - `GRASP_RAT_BROWSERLESS_LOGIN_POINT_X = null`
   - `GRASP_RAT_BROWSERLESS_LOGIN_POINT_Y = null`
   - `GRASP_RAT_BROWSERLESS_LOGIN_POINT_HP = null`
-  - The CLI accepts `--read-only`, `--dry-run`, `--live`, `--once`, `--data-dir`, `--status-host`, `--status-port`, `--web-token`, `--user-id`, `--session-token`, `--read-only-probe-ms`, `--frame-gap-alert-ms`, `--snapshot-path`, `--login-point-x`, `--login-point-y`, and `--login-point-hp`. Live control beyond read-only canary remains gated by later plan items.
+  - The CLI accepts `--read-only`, `--dry-run`, `--live`, `--once`, `--data-dir`, `--status-host`, `--status-port`, `--web-token`, `--user-id`, `--session-token`, `--read-only-probe-ms`, `--frame-gap-alert-ms`, `--snapshot-path`, `--decision-interval-ms`, `--login-point-x`, `--login-point-y`, and `--login-point-hp`. Live control beyond read-only canary remains gated by later plan items.
 
 - `globalRefreshMs = 5000`
 - `globalRefreshTimeoutMs = 3000`

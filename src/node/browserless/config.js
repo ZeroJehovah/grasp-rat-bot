@@ -21,6 +21,7 @@ const DEFAULTS = {
   leaveRetryMax: 3,
   leaveRetryMs: 1200,
   httpTimeoutMs: 10000,
+  decisionIntervalMs: 1000,
   loginPointX: null,
   loginPointY: null,
   loginPointHp: null
@@ -58,6 +59,7 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
     leaveRetryMax: numberEnv(env.GRASP_RAT_BROWSERLESS_LEAVE_RETRY_MAX, DEFAULTS.leaveRetryMax),
     leaveRetryMs: numberEnv(env.GRASP_RAT_BROWSERLESS_LEAVE_RETRY_MS, DEFAULTS.leaveRetryMs),
     httpTimeoutMs: numberEnv(env.GRASP_RAT_BROWSERLESS_HTTP_TIMEOUT_MS, DEFAULTS.httpTimeoutMs),
+    decisionIntervalMs: numberEnv(env.GRASP_RAT_BROWSERLESS_DECISION_INTERVAL_MS, DEFAULTS.decisionIntervalMs),
     userId: numberEnv(env.GRASP_RAT_BROWSERLESS_USER_ID, 0),
     sessionToken: env.GRASP_RAT_BROWSERLESS_SESSION_TOKEN || '',
     loginPointX: numberEnv(env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_X, DEFAULTS.loginPointX),
@@ -96,6 +98,8 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
       config.frameGapAlertMs = numberEnv(argv[++i], config.frameGapAlertMs);
     } else if (arg === '--snapshot-path') {
       config.snapshotPath = argv[++i] || config.snapshotPath;
+    } else if (arg === '--decision-interval-ms') {
+      config.decisionIntervalMs = numberEnv(argv[++i], config.decisionIntervalMs);
     } else if (arg === '--login-point-x') {
       config.loginPointX = numberEnv(argv[++i], config.loginPointX);
     } else if (arg === '--login-point-y') {
@@ -134,6 +138,7 @@ function usage() {
     '  --read-only-probe-ms <ms>  Read-only canary duration. Default: 30000',
     '  --frame-gap-alert-ms <ms>  Read-only canary frame-gap failure threshold. Default: 5000',
     '  --snapshot-path <path>    Snapshot path for pre-login safety. Default: /snapshot',
+    '  --decision-interval-ms <ms>  Dry-run decision log/status interval. Default: 1000',
     '  --login-point-x <cm>      Manual login point x for canary safety',
     '  --login-point-y <cm>      Manual login point y for canary safety',
     '  --login-point-hp <hp>     Manual login point HP context for canary safety',

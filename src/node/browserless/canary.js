@@ -12,6 +12,10 @@ const { createFrameStats, updateFrameStats } = require('./frame-stats');
 const { createBrowserlessStateStore } = require('./state-store');
 const { openBrowserlessWs, isWsOpen } = require('./ws-transport');
 const { leaveWithVerification } = require('./leave-client');
+const {
+  createBrowserlessDecisionAdapter,
+  summarizeBrowserlessDecision
+} = require('./decision-adapter');
 
 const DEFAULT_READONLY_PROBE_MS = 30000;
 const DEFAULT_FRAME_GAP_ALERT_MS = 5000;
@@ -122,7 +126,9 @@ async function runReadOnlyCanary(config, options = {}) {
   const logStore = options.logStore || null;
   const durationMs = Math.max(1000, Number(config.readOnlyProbeMs || DEFAULT_READONLY_PROBE_MS));
   const frameGapAlertMs = Math.max(1000, Number(config.frameGapAlertMs || DEFAULT_FRAME_GAP_ALERT_MS));
+  const decisionIntervalMs = Math.max(250, Number(config.decisionIntervalMs || 1000));
   const stateStore = options.stateStore || createBrowserlessStateStore({ userId: config.userId, now });
+  const decisionAdapter = options.decisionAdapter || createBrowserlessDecisionAdapter({ userId: config.userId, now });
   const stats = createFrameStats(durationMs);
   const frameHealth = {
     firstFrameAtMs: 0,
@@ -140,12 +146,22 @@ async function runReadOnlyCanary(config, options = {}) {
     snapshotSafety: null,
     stats,
     frameHealth,
+    decisions: {
+      intervalMs: decisionIntervalMs,
+      evaluatedCount: 0,
+      loggedCount: 0,
+      last: null
+    },
     leave: null,
     error: ''
   };
+  let lastDecisionAtMs = 0;
 
   const log = (type, detail) => {
     if (logStore) logStore.append('runner', type, detail);
+  };
+  const logDecision = detail => {
+    if (logStore) logStore.append('decisions', 'decision', detail);
   };
 
   result.snapshotSafety = await (options.runPreLoginSnapshotSafety || runPreLoginSnapshotSafety)(config, options.persistedState || {}, options);
@@ -178,7 +194,26 @@ async function runReadOnlyCanary(config, options = {}) {
           at: new Date(atMs).toISOString(),
           ...frame
         });
-        if (frame.decodedJson) stateStore.ingestFrame(frame.decodedJson, { receivedAtMs: atMs });
+        if (frame.decodedJson) {
+          stateStore.ingestFrame(frame.decodedJson, { receivedAtMs: atMs });
+          if (!lastDecisionAtMs || atMs - lastDecisionAtMs >= decisionIntervalMs) {
+            const currentState = stateStore.getState(atMs);
+            const decision = decisionAdapter.decide(currentState, { nowMs: atMs });
+            const summary = summarizeBrowserlessDecision(decision);
+            result.decisions.evaluatedCount += 1;
+            result.decisions.last = summary;
+            lastDecisionAtMs = atMs;
+            logDecision(summary);
+            result.decisions.loggedCount += 1;
+            if (typeof options.onDecision === 'function') {
+              try {
+                options.onDecision(summary, { state: currentState, decision });
+              } catch (err) {
+                log('canary-decision-status-error', { error: err?.message || String(err) });
+              }
+            }
+          }
+        }
       }
     });
     log('canary-ws-open', { durationMs });

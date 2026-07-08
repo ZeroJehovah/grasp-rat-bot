@@ -39,7 +39,8 @@ function defaultBrowserlessState() {
       self: null,
       stamina: null,
       profit: null,
-      combatSummary: null
+      combatSummary: null,
+      decision: null
     },
     recentExits: [],
     logs: {

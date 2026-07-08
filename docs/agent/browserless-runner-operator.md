@@ -36,6 +36,7 @@ node scripts/browserless-runner.js --once --dry-run
 ## Read-Only Canary
 
 The canary requires a reusable session and a known login point. The login point is verified again through direct `/snapshot` before the runner joins WS.
+While the canary is connected, the dry-run decision adapter evaluates current state and writes throttled `decisions.jsonl` entries. It does not send movement or shoot commands.
 
 ```bash
 node scripts/browserless-runner.js \
@@ -48,10 +49,11 @@ node scripts/browserless-runner.js \
   --login-point-x <x-cm> \
   --login-point-y <y-cm> \
   --login-point-hp <hp> \
+  --decision-interval-ms 1000 \
   --read-only-probe-ms 1800000
 ```
 
-For the first supervised validation, use 10-30 minutes for `--read-only-probe-ms`. The canary should end with verified `leave`; if leave is not confirmed, treat the run as failed and inspect `runner.jsonl`.
+For the first supervised validation, use 10-30 minutes for `--read-only-probe-ms`. The canary should end with verified `leave`; if leave is not confirmed, treat the run as failed and inspect `runner.jsonl`. Inspect `decisions.jsonl` to confirm combat candidates use realtime authority and snapshot coins appear only as fallback profit candidates.
 
 ## Status API
 
@@ -103,6 +105,7 @@ Important variables:
 - `GRASP_RAT_BROWSERLESS_DRY_RUN`
 - `GRASP_RAT_BROWSERLESS_READONLY_PROBE_MS`
 - `GRASP_RAT_BROWSERLESS_FRAME_GAP_ALERT_MS`
+- `GRASP_RAT_BROWSERLESS_DECISION_INTERVAL_MS`
 - `GRASP_RAT_BROWSERLESS_USER_ID`
 - `GRASP_RAT_BROWSERLESS_SESSION_TOKEN`
 - `GRASP_RAT_BROWSERLESS_LOGIN_POINT_X`
