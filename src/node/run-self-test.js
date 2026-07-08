@@ -6444,6 +6444,72 @@ async function runSelfTest() {
       want: 'false|missing-login-point|snapshot safety not confirmed: missing-login-point|false'
     },
     {
+      name: 'browserless read-only canary does not fail safety after deadline',
+      got: (async () => {
+        let t = Date.UTC(2026, 6, 8, 1, 0, 0);
+        let deadlineMs = 0;
+        const posFrame = encodeGrzFrameForTest({
+          type: 'pos',
+          tick: 40,
+          entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 100, y: 200, hp: 90 }],
+          bullets: []
+        });
+        const result = await runReadOnlyCanary({
+          gameOrigin: 'https://grasp-rat-game.h-e.top',
+          snapshotPath: '/snapshot',
+          wsPath: '/ws',
+          wsExtraQuery: 'compress=gzip%2Cdeflate',
+          userId: 7,
+          sessionToken: 'deadline-token',
+          readOnlyProbeMs: 1000,
+          decisionIntervalMs: 1,
+          frameGapAlertMs: 5000,
+          wsConnectTimeoutMs: 1000,
+          httpTimeoutMs: 1000
+        }, {
+          now: () => t,
+          sleep: async ms => { t += ms; },
+          persistedState: {
+            loginPointSafety: { point: { x: 100, y: 200, hp: 90, source: 'test' } }
+          },
+          fetchImpl: async () => fakeResponseForTest({
+            body: {
+              type: 'snapshot',
+              tick: 39,
+              entities: [{ entity_id: 1, user_id: 7, x: 100, y: 200, hp: 90 }],
+              bullets: [],
+              coin_drops: [],
+              messages: []
+            }
+          }),
+          openBrowserlessWs: async options => {
+            deadlineMs = t + 1000;
+            options.onMessage(posFrame);
+            return {
+              isOpen: () => true,
+              close: () => {}
+            };
+          },
+          safetyController: {
+            evaluate: (_state, context = {}) => {
+              if (Number(context.nowMs || 0) >= deadlineMs) {
+                return { ok: false, reason: 'no-self', shouldLeave: true, stopMotion: true };
+              }
+              return { ok: true, reason: 'safe' };
+            }
+          },
+          leaveWithVerification: async () => ({ ok: true, attempts: [{ ok: true, summary: { leaveConfirmed: true } }] })
+        });
+        return [
+          result.ok,
+          result.error || '',
+          result.safety.event?.reason || '',
+          result.leave.ok
+        ].join('|');
+      })(),
+      want: 'true|||true'
+    },
+    {
       name: 'browserless safety controller classifies unsafe states',
       got: (() => {
         const safeSelf = { user_id: 7, x: 1, y: 2, hp: 90, stamina_5s_remaining_milli: 1000 };

@@ -365,6 +365,7 @@ async function runReadOnlyCanary(config, options = {}) {
       const waitMs = Math.min(250, Math.max(0, deadline - now()));
       if (waitMs > 0) await sleep(waitMs);
       const atMs = now();
+      if (atMs >= deadline) break;
       const frameGapMs = frameHealth.lastFrameAtMs ? atMs - frameHealth.lastFrameAtMs : null;
       const safetyEvent = safetyController.evaluate(stateStore.getState(atMs), {
         startedAtMs: startedAt,
