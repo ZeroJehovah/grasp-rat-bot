@@ -1,6 +1,23 @@
 # Current Important Config Defaults
 
 
+- Browserless runner defaults:
+  - `GRASP_RAT_BROWSERLESS_GAME_ORIGIN = https://grasp-rat-game.h-e.top`
+  - `GRASP_RAT_BROWSERLESS_WS_PATH = /ws`
+  - `GRASP_RAT_BROWSERLESS_WS_EXTRA_QUERY = compress=gzip%2Cdeflate`
+  - `GRASP_RAT_BROWSERLESS_DATA_DIR = data/browserless-runner`
+  - `GRASP_RAT_BROWSERLESS_STATUS_HOST = 127.0.0.1`
+  - `GRASP_RAT_BROWSERLESS_STATUS_PORT = 18767`
+  - `GRASP_RAT_BROWSERLESS_WEB_TOKEN = ""`
+  - `GRASP_RAT_BROWSERLESS_READ_ONLY = true`
+  - `GRASP_RAT_BROWSERLESS_DRY_RUN = true`
+  - `GRASP_RAT_BROWSERLESS_ONCE = false`
+  - `GRASP_RAT_BROWSERLESS_LOG_RETENTION_DAYS = 3`
+  - `GRASP_RAT_BROWSERLESS_WS_CONNECT_TIMEOUT_MS = 10000`
+  - `GRASP_RAT_BROWSERLESS_USER_ID = 0`
+  - `GRASP_RAT_BROWSERLESS_SESSION_TOKEN = ""`
+  - The CLI accepts `--read-only`, `--dry-run`, `--live`, `--once`, `--data-dir`, `--status-host`, `--status-port`, `--web-token`, `--user-id`, and `--session-token`. Live read-only is intentionally gated until the read-only canary runner is implemented.
+
 - `globalRefreshMs = 5000`
 - `globalRefreshTimeoutMs = 3000`
 - Active bot-owned `/snapshot` and `/minimap` polling is disabled; `globalRefreshMs` now only throttles passive-refresh diagnostics.

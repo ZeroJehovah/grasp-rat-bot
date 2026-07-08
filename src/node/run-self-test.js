@@ -54,6 +54,13 @@ const {
   createLocalLogStore
 } = require('./browserless/local-log-store');
 const {
+  parseBrowserlessRunnerArgs
+} = require('./browserless/config');
+const {
+  runBrowserlessRunner,
+  runBrowserlessRunnerSelfTest
+} = require('./browserless/runner');
+const {
   cleanupOldLogDays
 } = require('./browserless/log-retention');
 const {
@@ -5745,6 +5752,82 @@ async function runSelfTest() {
         ].join('|');
       }),
       want: '3|2|1|1|1|summary.json|3'
+    },
+    {
+      name: 'browserless runner config parses env and cli overrides',
+      got: (() => {
+        const config = parseBrowserlessRunnerArgs([
+          '--once',
+          '--live',
+          '--data-dir',
+          '/tmp/grasp-rat-runner',
+          '--status-port',
+          '19999',
+          '--web-token',
+          'cli-token'
+        ], {
+          GRASP_RAT_BROWSERLESS_STATUS_PORT: '18888',
+          GRASP_RAT_BROWSERLESS_DRY_RUN: 'true',
+          GRASP_RAT_BROWSERLESS_USER_ID: '42',
+          GRASP_RAT_BROWSERLESS_SESSION_TOKEN: 'env-token'
+        });
+        return [
+          config.once,
+          config.dryRun,
+          config.statusPort,
+          config.webToken,
+          config.userId,
+          config.sessionToken,
+          config.logDir.endsWith('/tmp/grasp-rat-runner/logs')
+        ].join('|');
+      })(),
+      want: 'true|false|19999|cli-token|42|env-token|true'
+    },
+    {
+      name: 'browserless runner dry-run and fake read-only path write redacted logs',
+      got: withTempDirForTest(async dir => {
+        const dryConfig = parseBrowserlessRunnerArgs(['--once', '--dry-run', '--data-dir', dir], {});
+        const dryRun = await runBrowserlessRunner(dryConfig, {
+          now: () => Date.UTC(2026, 6, 8, 1, 0, 0)
+        });
+        const liveConfig = parseBrowserlessRunnerArgs([
+          '--once',
+          '--live',
+          '--data-dir',
+          dir,
+          '--user-id',
+          '7',
+          '--session-token',
+          'runner-secret-token'
+        ], {});
+        const liveRun = await runBrowserlessRunner(liveConfig, {
+          now: () => Date.UTC(2026, 6, 8, 1, 1, 0),
+          runReadOnlyOnce: async (_config, context) => {
+            context.logStore.append('runner', 'fake-read-only', { ok: true });
+            return { ok: true, frames: 0 };
+          }
+        });
+        const logFile = path.join(dir, 'logs', '2026-07-08', 'runner.jsonl');
+        const text = fs.readFileSync(logFile, 'utf8');
+        return [
+          dryRun.ok,
+          dryRun.mode,
+          liveRun.ok,
+          liveRun.mode,
+          /runner-dry-run/.test(text),
+          /fake-read-only/.test(text),
+          !/runner-secret-token/.test(text)
+        ].join('|');
+      }),
+      want: 'true|dry-run|true|read-only|true|true|true'
+    },
+    {
+      name: 'browserless runner self-test passes',
+      got: (async () => {
+        const result = await runBrowserlessRunnerSelfTest();
+        return result.ok;
+      })(),
+      want: true
     },
     {
       name: 'final arbitration keeps recent safety action over profit',
