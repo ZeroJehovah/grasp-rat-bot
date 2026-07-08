@@ -11,5 +11,8 @@
   },
   "devDependencies": {
     "esbuild": "0.25.11"
+  },
+  "dependencies": {
+    "ws": "^8.21.0"
   }
 }
