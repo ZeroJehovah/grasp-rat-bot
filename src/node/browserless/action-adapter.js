@@ -3,6 +3,7 @@
 const DEFAULT_TARGET_DEAD_ZONE_CM = 900;
 const DEFAULT_COMMAND_INTERVAL_MS = 500;
 const DEFAULT_SETTLEMENT_FRAMES = 2;
+const DEFAULT_COMBAT_SHOOT_MIN_INTERVAL_MS = 160;
 
 function numberOrNull(value) {
   const number = Number(value);
@@ -51,12 +52,24 @@ function movementTargetFromDecision(decision) {
   return target;
 }
 
+function combatSummaryFromDecision(decision) {
+  const action = decision?.action || decision || {};
+  const kind = String(action.kind || decision?.kind || '');
+  const band = String(action.band || decision?.band || '');
+  if (band !== 'combat' || kind !== 'combat-live') return null;
+  return decision?.combat || null;
+}
+
 function createInitialActionState() {
   return {
     sentCount: 0,
+    velocitySentCount: 0,
+    shootSentCount: 0,
     stopCount: 0,
     skippedCount: 0,
     lastCommand: null,
+    lastShootCommand: null,
+    lastShootAck: null,
     lastSettlement: null
   };
 }
@@ -68,6 +81,10 @@ function summarizeCommand(command) {
     type: command.type,
     dx: command.dx,
     dy: command.dy,
+    targetX: command.targetX,
+    targetY: command.targetY,
+    startX: command.startX,
+    startY: command.startY,
     reason: command.reason,
     sentAt: command.sentAt,
     target: command.target || null
@@ -79,6 +96,7 @@ function createBrowserlessActionAdapter(options = {}) {
   const transport = options.transport || null;
   const commandIntervalMs = Math.max(0, Number(options.commandIntervalMs ?? DEFAULT_COMMAND_INTERVAL_MS));
   const settlementFrames = Math.max(1, Number(options.settlementFrames ?? DEFAULT_SETTLEMENT_FRAMES));
+  const combatShootMinIntervalMs = Math.max(1, Number(options.combatShootMinIntervalMs ?? DEFAULT_COMBAT_SHOOT_MIN_INTERVAL_MS));
   const state = createInitialActionState();
   let nextCommandId = 1;
 
@@ -109,6 +127,7 @@ function createBrowserlessActionAdapter(options = {}) {
     };
     nextCommandId += 1;
     state.sentCount += 1;
+    state.velocitySentCount += 1;
     if (Number(command.dx) === 0 && Number(command.dy) === 0) state.stopCount += 1;
     state.lastCommand = command;
     state.lastSettlement = {
@@ -121,11 +140,47 @@ function createBrowserlessActionAdapter(options = {}) {
     return { ok: true, skipped: false, command: summarizeCommand(command) };
   }
 
+  function sendShoot(targetX, targetY, startX, startY, reason, target = null, cadenceMs = combatShootMinIntervalMs) {
+    const atMs = now();
+    if (!transport || typeof transport.sendShoot !== 'function') {
+      state.skippedCount += 1;
+      return { ok: false, skipped: true, reason: 'missing-transport' };
+    }
+    const last = state.lastShootCommand;
+    const intervalMs = Math.max(combatShootMinIntervalMs, Number(cadenceMs || 0));
+    if (last && atMs - Number(last.sentAtMs || 0) < intervalMs) {
+      state.skippedCount += 1;
+      return { ok: true, skipped: true, reason: 'shoot-command-throttled', command: summarizeCommand(last), cadenceMs: intervalMs };
+    }
+    transport.sendShoot(targetX, targetY, startX, startY);
+    const command = {
+      id: nextCommandId,
+      type: 'shoot',
+      targetX: Math.round(Number(targetX) || 0),
+      targetY: Math.round(Number(targetY) || 0),
+      startX: Math.round(Number(startX) || 0),
+      startY: Math.round(Number(startY) || 0),
+      reason,
+      sentAtMs: atMs,
+      sentAt: new Date(atMs).toISOString(),
+      target,
+      cadenceMs: intervalMs
+    };
+    nextCommandId += 1;
+    state.sentCount += 1;
+    state.shootSentCount += 1;
+    state.lastShootCommand = command;
+    return { ok: true, skipped: false, command: summarizeCommand(command), cadenceMs: intervalMs };
+  }
+
   function stop(reason = 'stop') {
     return sendVelocity(0, 0, reason);
   }
 
   function applyDecision(stateSnapshot, decision) {
+    if (combatSummaryFromDecision(decision)) {
+      return applyCombatDecision(stateSnapshot, decision);
+    }
     const self = stateSnapshot?.realtime?.self || decision?.input?.self || null;
     const target = movementTargetFromDecision(decision);
     if (!target) {
@@ -161,7 +216,79 @@ function createBrowserlessActionAdapter(options = {}) {
     };
   }
 
+  function applyCombatDecision(stateSnapshot, decision) {
+    const combat = combatSummaryFromDecision(decision);
+    const self = stateSnapshot?.realtime?.self || combat?.self || null;
+    if (!combat?.target) {
+      const stopped = stop('combat-live-no-target');
+      return {
+        ok: stopped.ok,
+        kind: 'stop',
+        reason: 'combat-live-no-target',
+        command: stopped.command || null,
+        skipped: Boolean(stopped.skipped)
+      };
+    }
+    const movement = combat.movement || {};
+    const velocity = sendVelocity(
+      roundVelocity(movement.dx),
+      roundVelocity(movement.dy),
+      movement.reason || 'combat-live-movement',
+      combat.target
+    );
+    const shooting = combat.shooting || {};
+    let shoot = {
+      ok: true,
+      skipped: true,
+      reason: shooting.commandSuppressed ? (shooting.reason || 'shoot-command-suppressed') : 'shoot-not-requested'
+    };
+    if (shooting.wouldShoot && !shooting.commandSuppressed) {
+      const aim = combat.aim || {};
+      const startX = numberOrNull(self?.x ?? combat.self?.x);
+      const startY = numberOrNull(self?.y ?? combat.self?.y);
+      const targetX = numberOrNull(aim.x);
+      const targetY = numberOrNull(aim.y);
+      if (startX === null || startY === null || targetX === null || targetY === null) {
+        state.skippedCount += 1;
+        shoot = { ok: false, skipped: true, reason: 'missing-shoot-coordinates' };
+      } else {
+        shoot = sendShoot(
+          targetX,
+          targetY,
+          startX,
+          startY,
+          shooting.reason || 'combat-live-shoot',
+          combat.target,
+          shooting.effectiveCadenceMs || shooting.cadenceMs
+        );
+      }
+    }
+    return {
+      ok: Boolean(velocity.ok && shoot.ok),
+      kind: 'combat-live',
+      reason: decision?.action?.reason || decision?.reason || 'combat-live',
+      movement: {
+        ok: velocity.ok,
+        skipped: Boolean(velocity.skipped),
+        reason: movement.reason || velocity.reason,
+        command: velocity.command || null
+      },
+      shoot: {
+        ok: shoot.ok,
+        skipped: Boolean(shoot.skipped),
+        reason: shoot.reason,
+        command: shoot.command || null,
+        cadenceMs: shoot.cadenceMs || null
+      },
+      target: combat.target
+    };
+  }
+
   function observeState(stateSnapshot) {
+    const ack = stateSnapshot?.command?.lastAck || null;
+    if (ack && (!state.lastShootAck || Number(ack.receivedAtMs || 0) !== Number(state.lastShootAck.receivedAtMs || 0) || ack.bullet_id !== state.lastShootAck.bullet_id)) {
+      state.lastShootAck = ack;
+    }
     const command = state.lastCommand;
     if (!command) return null;
     const tick = numberOrNull(stateSnapshot?.realtime?.tick);
@@ -191,15 +318,20 @@ function createBrowserlessActionAdapter(options = {}) {
   function getState() {
     return {
       sentCount: state.sentCount,
+      velocitySentCount: state.velocitySentCount,
+      shootSentCount: state.shootSentCount,
       stopCount: state.stopCount,
       skippedCount: state.skippedCount,
       lastCommand: summarizeCommand(state.lastCommand),
+      lastShootCommand: summarizeCommand(state.lastShootCommand),
+      lastShootAck: state.lastShootAck,
       lastSettlement: state.lastSettlement
     };
   }
 
   return {
     applyDecision,
+    applyCombatDecision,
     getState,
     observeState,
     stop
@@ -208,8 +340,10 @@ function createBrowserlessActionAdapter(options = {}) {
 
 module.exports = {
   DEFAULT_COMMAND_INTERVAL_MS,
+  DEFAULT_COMBAT_SHOOT_MIN_INTERVAL_MS,
   DEFAULT_SETTLEMENT_FRAMES,
   DEFAULT_TARGET_DEAD_ZONE_CM,
+  combatSummaryFromDecision,
   createBrowserlessActionAdapter,
   movementTargetFromDecision,
   movementVectorToTarget

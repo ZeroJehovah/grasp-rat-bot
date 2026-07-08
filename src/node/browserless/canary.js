@@ -130,7 +130,8 @@ async function runReadOnlyCanary(config, options = {}) {
     : ms => new Promise(resolve => setTimeout(resolve, ms));
   const logStore = options.logStore || null;
   const controlMode = config.controlMode || (config.readOnly === false ? 'movement-only' : 'read-only');
-  const movementEnabled = controlMode === 'movement-only' || controlMode === 'non-combat-profit';
+  const combatLiveEnabled = controlMode === 'combat-live' && config.combatEnabled === true;
+  const actionEnabled = controlMode === 'movement-only' || controlMode === 'non-combat-profit' || combatLiveEnabled;
   const durationMs = Math.max(1000, Number(config.readOnlyProbeMs || DEFAULT_READONLY_PROBE_MS));
   const frameGapAlertMs = Math.max(1000, Number(config.frameGapAlertMs || DEFAULT_FRAME_GAP_ALERT_MS));
   const decisionIntervalMs = Math.max(250, Number(config.decisionIntervalMs || 1000));
@@ -172,12 +173,15 @@ async function runReadOnlyCanary(config, options = {}) {
       leaveFailure: null
     },
     actions: {
-      enabled: movementEnabled,
+      enabled: actionEnabled,
       sentCount: 0,
+      velocitySentCount: 0,
+      shootSentCount: 0,
       stopCount: 0,
       skippedCount: 0,
       last: null,
-      settlement: null
+      settlement: null,
+      lastShootAck: null
     },
     leave: null,
     error: ''
@@ -201,16 +205,19 @@ async function runReadOnlyCanary(config, options = {}) {
     if (logStore) logStore.append('runner', 'movement-command', detail);
   };
   const logCombat = detail => {
-    if (logStore) logStore.append('combat', 'combat-dry-run', detail);
+    if (logStore) logStore.append('combat', combatLiveEnabled ? 'combat-live' : 'combat-dry-run', detail);
   };
   const updateActionResult = actionResult => {
     if (!actionResult) return;
     const adapterState = actionAdapter?.getState?.() || {};
     result.actions.sentCount = Number(adapterState.sentCount || 0);
+    result.actions.velocitySentCount = Number(adapterState.velocitySentCount || 0);
+    result.actions.shootSentCount = Number(adapterState.shootSentCount || 0);
     result.actions.stopCount = Number(adapterState.stopCount || 0);
     result.actions.skippedCount = Number(adapterState.skippedCount || 0);
     result.actions.last = actionResult;
     result.actions.settlement = adapterState.lastSettlement || result.actions.settlement;
+    result.actions.lastShootAck = adapterState.lastShootAck || result.actions.lastShootAck;
     logAction({ action: actionResult, state: adapterState });
     if (typeof options.onAction === 'function') {
       try {
@@ -278,7 +285,11 @@ async function runReadOnlyCanary(config, options = {}) {
             }
           }
           if (!lastDecisionAtMs || atMs - lastDecisionAtMs >= decisionIntervalMs) {
-            const decision = decisionAdapter.decide(currentState, { nowMs: atMs, controlMode });
+            const decision = decisionAdapter.decide(currentState, {
+              nowMs: atMs,
+              controlMode,
+              combatEnabled: config.combatEnabled
+            });
             const summary = summarizeBrowserlessDecision(decision);
             result.decisions.evaluatedCount += 1;
             result.decisions.last = summary;
@@ -310,13 +321,14 @@ async function runReadOnlyCanary(config, options = {}) {
         }
       }
     });
-    if (movementEnabled) {
+    if (actionEnabled) {
       actionAdapter = options.actionAdapter || createBrowserlessActionAdapter({
         transport,
         now,
         commandIntervalMs: config.movementCommandIntervalMs,
         targetDeadZoneCm: config.movementTargetDeadZoneCm,
-        settlementFrames: config.movementSettlementFrames
+        settlementFrames: config.movementSettlementFrames,
+        combatShootMinIntervalMs: config.combatShootMinIntervalMs
       });
     }
     log('canary-ws-open', { durationMs });
@@ -348,7 +360,7 @@ async function runReadOnlyCanary(config, options = {}) {
     if (result.safety.event) {
       result.safety.exit = await executeSafetyExit(result.safety.event, config, {
         transport,
-        allowStopMotion: movementEnabled,
+        allowStopMotion: actionEnabled,
         leaveWithVerification: options.leaveWithVerification,
         now,
         sleep
@@ -395,9 +407,12 @@ async function runReadOnlyCanary(config, options = {}) {
   if (actionAdapter) {
     const adapterState = actionAdapter.getState();
     result.actions.sentCount = Number(adapterState.sentCount || 0);
+    result.actions.velocitySentCount = Number(adapterState.velocitySentCount || 0);
+    result.actions.shootSentCount = Number(adapterState.shootSentCount || 0);
     result.actions.stopCount = Number(adapterState.stopCount || 0);
     result.actions.skippedCount = Number(adapterState.skippedCount || 0);
     result.actions.settlement = adapterState.lastSettlement || result.actions.settlement;
+    result.actions.lastShootAck = adapterState.lastShootAck || result.actions.lastShootAck;
   }
   result.ok = Boolean(!result.error);
   result.completedAt = new Date(now()).toISOString();

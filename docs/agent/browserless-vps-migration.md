@@ -182,6 +182,7 @@ On 2026-07-08, the VPS one-shot demo succeeded after the Node 18 `ws` fallback a
 - 2026-07-08: Browserless movement-only live mode was added behind `controlMode=movement-only` with `src/node/browserless/action-adapter.js`. The adapter only sends velocity commands toward snapshot coin fallback targets, sends stop pulses for wait/unsupported/reached states and before leave, tracks frame-based command settlement, and never sends shoot commands. This still needs a supervised short VPS movement-only validation before non-combat profit behavior can be promoted.
 - 2026-07-08: Browserless non-combat profit mode was added behind `controlMode=non-combat-profit`. The decision adapter now models realtime/native coin drops separately from snapshot fallback coins, chooses realtime/native coin profit first, blocks snapshot fallback while realtime profit or visible active threats exist, keeps combat targets diagnostic-only, and continues to send only velocity/stop commands through the action adapter. This still needs supervised VPS profit logs before any default enablement.
 - 2026-07-08: Browserless combat dry-run mode was added behind `controlMode=combat-dry-run`. `src/node/browserless/combat-adapter.js` maps realtime `pos` self/entities/bullets into existing target-selection, movement, and fire-discipline helpers plus a local dry-run aim summary; decisions and `combat.jsonl` entries show target authority, movement intent, aim mode, and suppressed shooting intent. The mode sends no movement or shoot commands and still ends through verified `leave`. This still needs a supervised VPS dry-run with visible Active-player evidence before guarded live combat work.
+- 2026-07-08: Guarded browserless combat live mode was added behind `controlMode=combat-live` plus explicit `combatEnabled=true`. The action adapter now sends realtime combat velocity and paced `shoot targetX targetY startX startY` commands only when the combat adapter's range/reserve/fire-state gates allow shooting, records `shoot_ok` acknowledgement evidence in action state, and keeps normal verified `leave` and safety-stop paths. The default remains disabled and this still needs a supervised short VPS combat validation before any unattended live combat.
 
 ## Next Plan
 
@@ -189,11 +190,12 @@ On 2026-07-08, the VPS one-shot demo succeeded after the Node 18 `ws` fallback a
 2. Run a supervised short `controlMode=movement-only` VPS validation and inspect `runner.jsonl`, `decisions.jsonl`, status action rows, command settlement, and verified `leave`.
 3. Run a supervised `controlMode=non-combat-profit` VPS validation and inspect profit decisions for realtime-first behavior, guarded snapshot fallback, no shoot commands, and verified `leave`.
 4. Run a supervised `controlMode=combat-dry-run` VPS validation under visible Active-player conditions and inspect `combat.jsonl`/`decisions.jsonl` for realtime-only targets, aim/fire summaries, suppressed commands, and verified `leave`.
-5. Keep the browserless runtime boundary explicit:
+5. Run a supervised short `controlMode=combat-live` plus `combatEnabled=true` VPS validation and inspect `combat.jsonl`, `runner.jsonl`, status action rows, `shoot_ok` acknowledgement evidence, command pacing, and verified `leave`.
+6. Keep the browserless runtime boundary explicit:
    - shared pure strategy remains in `src/strategy/`;
    - browser DOM/CDP integration remains browser-specific;
    - a new Node transport/runtime adapter can own auth/session state, direct WebSocket IO, timers, and verified exit.
-6. Add guarded live combat only after non-combat profit logs and combat dry-run logs are reviewed.
+7. Move to supervisor/deployment surface only after the staged VPS canaries above have accepted evidence.
 
 ## Evidence To Request From VPS Runs
 

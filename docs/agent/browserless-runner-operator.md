@@ -4,11 +4,12 @@ This document tracks the production browserless runner surface. The older `headl
 
 ## Current Scope
 
-- The runner currently supports dry-run mode, a live read-only canary, supervised movement-only mode, supervised non-combat profit mode, and combat dry-run mode.
+- The runner currently supports dry-run mode, a live read-only canary, supervised movement-only mode, supervised non-combat profit mode, combat dry-run mode, and explicit guarded combat live mode.
 - Live read-only canary sends no movement or shoot commands. It runs pre-login snapshot safety, joins direct WS, collects frame health, and calls verified `leave`.
 - Movement-only mode sends velocity commands only toward snapshot coin fallback targets, never sends shoot commands, and remains supervised-validation-only.
 - Non-combat profit mode prefers realtime/native coin drops when present, uses snapshot coins only as guarded fallback, and keeps combat targets diagnostic-only.
 - Combat dry-run mode evaluates realtime `pos` combat target, movement, aim, and fire intent, writes `combat.jsonl`, and still sends no movement or shoot commands.
+- Combat live mode is default-off and requires both `--combat-live` and `--combat-enabled`; it sends realtime combat movement and paced shoot commands only when combat gates allow shooting.
 - The safety controller handles no-self, frame gap, stale self, WS close/error, stamina exhaustion, unsafe login point, direct leave failure, and explicit stop.
 - The runner writes local JSONL logs and a persistent state file under the configured data directory.
 - The status server and web panel are available for non-`--once` runs.
@@ -130,6 +131,31 @@ node scripts/browserless-runner.js \
 
 Review `combat.jsonl` and `decisions.jsonl` before enabling any guarded live combat work. Expected evidence: combat targets have `authority: "realtime"`, snapshot-only targets never appear as combat targets, aim summaries include `exact` or `linear-intercept`, shooting rows say `dryRunOnly: true` and `commandSuppressed: true`, and there are no velocity or shoot commands.
 
+## Guarded Combat Live Validation
+
+Combat live mode uses the same pre-login safety and verified leave path, but it can send velocity and shoot commands. It is unavailable by default: `--combat-live` selects the mode, and `--combat-enabled` is the separate live-control confirmation.
+
+```bash
+node scripts/browserless-runner.js \
+  --once \
+  --live \
+  --combat-live \
+  --combat-enabled \
+  --data-dir data/browserless-runner \
+  --user-id <user-id> \
+  --session-token '<session-token>' \
+  --login-point-x <x-cm> \
+  --login-point-y <y-cm> \
+  --login-point-hp <hp> \
+  --decision-interval-ms 1000 \
+  --movement-command-interval-ms 500 \
+  --movement-settlement-frames 2 \
+  --combat-shoot-min-interval-ms 160 \
+  --read-only-probe-ms 60000
+```
+
+Run only under direct supervision. Expected evidence: `combat.jsonl` entries use realtime authority, `runner.jsonl` action rows show combat movement and shoot command pacing, status action state shows `shootSentCount` and the latest `shoot_ok` acknowledgement when the server accepts a shot, and the run ends with verified `leave`. Any missing leave confirmation is a failed validation.
+
 ## Status API
 
 - `GET /` serves the built-in browserless runner panel.
@@ -188,6 +214,8 @@ Important variables:
 - `GRASP_RAT_BROWSERLESS_MOVEMENT_COMMAND_INTERVAL_MS`
 - `GRASP_RAT_BROWSERLESS_MOVEMENT_TARGET_DEAD_ZONE_CM`
 - `GRASP_RAT_BROWSERLESS_MOVEMENT_SETTLEMENT_FRAMES`
+- `GRASP_RAT_BROWSERLESS_COMBAT_ENABLED`
+- `GRASP_RAT_BROWSERLESS_COMBAT_SHOOT_MIN_INTERVAL_MS`
 - `GRASP_RAT_BROWSERLESS_USER_ID`
 - `GRASP_RAT_BROWSERLESS_SESSION_TOKEN`
 - `GRASP_RAT_BROWSERLESS_LOGIN_POINT_X`

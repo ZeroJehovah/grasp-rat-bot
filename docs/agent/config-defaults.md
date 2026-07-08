@@ -28,13 +28,15 @@
   - `GRASP_RAT_BROWSERLESS_MOVEMENT_COMMAND_INTERVAL_MS = 500`
   - `GRASP_RAT_BROWSERLESS_MOVEMENT_TARGET_DEAD_ZONE_CM = 900`
   - `GRASP_RAT_BROWSERLESS_MOVEMENT_SETTLEMENT_FRAMES = 2`
+  - `GRASP_RAT_BROWSERLESS_COMBAT_ENABLED = false`
+  - `GRASP_RAT_BROWSERLESS_COMBAT_SHOOT_MIN_INTERVAL_MS = 160`
   - `GRASP_RAT_BROWSERLESS_USER_ID = 0`
   - `GRASP_RAT_BROWSERLESS_SESSION_TOKEN = ""`
   - `GRASP_RAT_BROWSERLESS_LOGIN_POINT_X = null`
   - `GRASP_RAT_BROWSERLESS_LOGIN_POINT_Y = null`
   - `GRASP_RAT_BROWSERLESS_LOGIN_POINT_HP = null`
-  - `GRASP_RAT_BROWSERLESS_CONTROL_MODE` accepts `read-only`, `movement-only`, `non-combat-profit`, or `combat-dry-run`.
-  - The CLI accepts `--read-only`, `--movement-only`, `--non-combat-profit`, `--combat-dry-run`, `--control-mode`, `--dry-run`, `--live`, `--once`, `--data-dir`, `--status-host`, `--status-port`, `--web-token`, `--user-id`, `--session-token`, `--read-only-probe-ms`, `--frame-gap-alert-ms`, `--snapshot-path`, `--decision-interval-ms`, `--stale-self-ms`, `--no-self-grace-ms`, `--stamina-exhausted-below-ms`, `--movement-command-interval-ms`, `--movement-target-dead-zone-cm`, `--movement-settlement-frames`, `--login-point-x`, `--login-point-y`, and `--login-point-hp`. Live shooting remains gated by later plan items.
+  - `GRASP_RAT_BROWSERLESS_CONTROL_MODE` accepts `read-only`, `movement-only`, `non-combat-profit`, `combat-dry-run`, or `combat-live`.
+  - The CLI accepts `--read-only`, `--movement-only`, `--non-combat-profit`, `--combat-dry-run`, `--combat-live`, `--combat-enabled`, `--no-combat-enabled`, `--control-mode`, `--dry-run`, `--live`, `--once`, `--data-dir`, `--status-host`, `--status-port`, `--web-token`, `--user-id`, `--session-token`, `--read-only-probe-ms`, `--frame-gap-alert-ms`, `--snapshot-path`, `--decision-interval-ms`, `--stale-self-ms`, `--no-self-grace-ms`, `--stamina-exhausted-below-ms`, `--movement-command-interval-ms`, `--movement-target-dead-zone-cm`, `--movement-settlement-frames`, `--combat-shoot-min-interval-ms`, `--login-point-x`, `--login-point-y`, and `--login-point-hp`. Live shooting requires both `controlMode=combat-live` and `combatEnabled=true`.
 
 - `globalRefreshMs = 5000`
 - `globalRefreshTimeoutMs = 3000`

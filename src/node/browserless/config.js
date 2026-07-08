@@ -29,6 +29,8 @@ const DEFAULTS = {
   movementCommandIntervalMs: 500,
   movementTargetDeadZoneCm: 900,
   movementSettlementFrames: 2,
+  combatEnabled: false,
+  combatShootMinIntervalMs: 160,
   loginPointX: null,
   loginPointY: null,
   loginPointHp: null
@@ -74,6 +76,8 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
     movementCommandIntervalMs: numberEnv(env.GRASP_RAT_BROWSERLESS_MOVEMENT_COMMAND_INTERVAL_MS, DEFAULTS.movementCommandIntervalMs),
     movementTargetDeadZoneCm: numberEnv(env.GRASP_RAT_BROWSERLESS_MOVEMENT_TARGET_DEAD_ZONE_CM, DEFAULTS.movementTargetDeadZoneCm),
     movementSettlementFrames: numberEnv(env.GRASP_RAT_BROWSERLESS_MOVEMENT_SETTLEMENT_FRAMES, DEFAULTS.movementSettlementFrames),
+    combatEnabled: boolEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_ENABLED, DEFAULTS.combatEnabled),
+    combatShootMinIntervalMs: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_SHOOT_MIN_INTERVAL_MS, DEFAULTS.combatShootMinIntervalMs),
     userId: numberEnv(env.GRASP_RAT_BROWSERLESS_USER_ID, 0),
     sessionToken: env.GRASP_RAT_BROWSERLESS_SESSION_TOKEN || '',
     loginPointX: numberEnv(env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_X, DEFAULTS.loginPointX),
@@ -96,6 +100,13 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
     } else if (arg === '--combat-dry-run') {
       config.controlMode = 'combat-dry-run';
       config.readOnly = false;
+    } else if (arg === '--combat-live') {
+      config.controlMode = 'combat-live';
+      config.readOnly = false;
+    } else if (arg === '--combat-enabled') {
+      config.combatEnabled = true;
+    } else if (arg === '--no-combat-enabled') {
+      config.combatEnabled = false;
     } else if (arg === '--control-mode') {
       config.controlMode = argv[++i] || config.controlMode;
       config.readOnly = config.controlMode === 'read-only';
@@ -139,6 +150,8 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
       config.movementTargetDeadZoneCm = numberEnv(argv[++i], config.movementTargetDeadZoneCm);
     } else if (arg === '--movement-settlement-frames') {
       config.movementSettlementFrames = numberEnv(argv[++i], config.movementSettlementFrames);
+    } else if (arg === '--combat-shoot-min-interval-ms') {
+      config.combatShootMinIntervalMs = numberEnv(argv[++i], config.combatShootMinIntervalMs);
     } else if (arg === '--login-point-x') {
       config.loginPointX = numberEnv(argv[++i], config.loginPointX);
     } else if (arg === '--login-point-y') {
@@ -153,7 +166,7 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
       throw new Error(`unknown argument: ${arg}`);
     }
   }
-  if (!['read-only', 'movement-only', 'non-combat-profit', 'combat-dry-run'].includes(String(config.controlMode || ''))) {
+  if (!['read-only', 'movement-only', 'non-combat-profit', 'combat-dry-run', 'combat-live'].includes(String(config.controlMode || ''))) {
     throw new Error(`unsupported control mode: ${config.controlMode}`);
   }
   config.readOnly = config.controlMode === 'read-only';
@@ -172,9 +185,11 @@ function usage() {
     '  --movement-only          Enable live movement-only velocity commands; shooting remains disabled',
     '  --non-combat-profit      Enable supervised non-combat coin profit movement; shooting remains disabled',
     '  --combat-dry-run         Evaluate combat target/movement/aim/fire intent without movement or shooting',
-    '  --control-mode <mode>    read-only, movement-only, non-combat-profit, or combat-dry-run. Default: read-only',
+    '  --combat-live            Enable guarded live combat mode; requires --combat-enabled before shooting',
+    '  --combat-enabled         Allow combat-live movement/shoot commands. Default: false',
+    '  --control-mode <mode>    read-only, movement-only, non-combat-profit, combat-dry-run, or combat-live. Default: read-only',
     '  --dry-run                Do not connect to live game transport (default)',
-    '  --live                   Disable dry-run; live transport still requires read-only, movement-only, non-combat-profit, or combat-dry-run mode',
+    '  --live                   Disable dry-run; live transport still requires an explicit control mode',
     '  --once                   Run one bounded skeleton cycle and exit',
     '  --data-dir <dir>         State/log root. Default: data/browserless-runner',
     '  --status-host <host>     Status host placeholder. Default: 127.0.0.1',
@@ -192,6 +207,7 @@ function usage() {
     '  --movement-command-interval-ms <ms>  Movement velocity throttle. Default: 500',
     '  --movement-target-dead-zone-cm <cm>  Movement target stop radius. Default: 900',
     '  --movement-settlement-frames <n>  Realtime frames needed after command. Default: 2',
+    '  --combat-shoot-min-interval-ms <ms>  Minimum live combat shoot interval. Default: 160',
     '  --login-point-x <cm>      Manual login point x for canary safety',
     '  --login-point-y <cm>      Manual login point y for canary safety',
     '  --login-point-hp <hp>     Manual login point HP context for canary safety',
