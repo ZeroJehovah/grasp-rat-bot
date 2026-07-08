@@ -4,6 +4,7 @@
 AGENTS.md
 grasp-rat-debug-events.log
 debug-artifacts/
+headless-demo/data/
 node_modules/
 .DS_Store
 .env
