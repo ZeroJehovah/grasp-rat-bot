@@ -20,7 +20,7 @@ const HTTP_TIMEOUT_MS = Math.max(1000, Number(process.env.GRASP_RAT_DEMO_HTTP_TI
 const WS_CONNECT_TIMEOUT_MS = Math.max(1000, Number(process.env.GRASP_RAT_DEMO_WS_CONNECT_TIMEOUT_MS || 10000));
 const WS_FRAME_LIMIT = Math.max(0, Number(process.env.GRASP_RAT_DEMO_WS_FRAME_LIMIT || 80));
 const WS_PATH = process.env.GRASP_RAT_DEMO_WS_PATH || '/ws';
-const WS_EXTRA_QUERY = process.env.GRASP_RAT_DEMO_WS_EXTRA_QUERY || 'view=50000';
+const WS_EXTRA_QUERY = process.env.GRASP_RAT_DEMO_WS_EXTRA_QUERY || 'compress=gzip%2Cdeflate';
 
 if (!isLoopbackHost(HOST) && (!WEB_TOKEN || WEB_TOKEN === 'change-this-before-start')) {
   console.error('Refusing to listen on a non-loopback host without a non-placeholder GRASP_RAT_DEMO_WEB_TOKEN.');
@@ -35,6 +35,7 @@ const state = {
   userId: 0,
   sessionToken: '',
   loginPayloadSummary: null,
+  lastCallbackDebug: null,
   wsUrl: '',
   wsOpen: false,
   wsLastMessageAt: 0,
@@ -69,6 +70,7 @@ function publicState() {
     userId: state.userId || 0,
     tokenPresent: Boolean(state.sessionToken),
     loginPayloadSummary: state.loginPayloadSummary,
+    lastCallbackDebug: state.lastCallbackDebug,
     wsUrl: redact(state.wsUrl),
     wsOpen: state.wsOpen,
     wsLastMessageAt: state.wsLastMessageAt,
@@ -91,6 +93,7 @@ function persistState() {
     userId: state.userId,
     sessionToken: state.sessionToken,
     loginPayloadSummary: state.loginPayloadSummary,
+    lastCallbackDebug: state.lastCallbackDebug,
     wsUrl: state.wsUrl,
     leaveAlert: state.leaveAlert,
     lastError: state.lastError,
@@ -186,10 +189,18 @@ function normalizeCallbackUrl(input) {
   if (parsed.origin === 'https://connect.linux.do' && parsed.pathname.startsWith('/oauth2/approve/')) {
     throw new Error('this is a LinuxDO approve URL; open it in your browser, complete approval, then paste the final game callback URL or callback JSON');
   }
-  if (parsed.origin !== GAME_ORIGIN || !parsed.pathname.startsWith('/auth/linuxdo/callback')) {
+  if (parsed.origin !== GAME_ORIGIN || (!parsed.pathname.startsWith('/auth/linuxdo/callback') && !isDirectLoginUrl(parsed))) {
     throw new Error(`callback origin/path mismatch: ${parsed.origin}${parsed.pathname}`);
   }
   return parsed.toString();
+}
+
+function isDirectLoginUrl(parsed) {
+  return parsed
+    && parsed.pathname === '/'
+    && parsed.searchParams.get('login') === 'ok'
+    && parsed.searchParams.get('user_id')
+    && parsed.searchParams.get('token');
 }
 
 function extractLoginData(payload) {
@@ -236,20 +247,21 @@ function extractLoginDataFromText(text) {
 function extractLoginDataFromUrl(url) {
   try {
     const parsed = new URL(String(url || ''));
-    const token = parsed.searchParams.get('token')
-      || parsed.searchParams.get('sessionToken')
-      || parsed.searchParams.get('session_token')
-      || parsed.searchParams.get('tmpGameSessionToken')
-      || '';
-    const id = parsed.searchParams.get('user_id')
-      || parsed.searchParams.get('userId')
-      || parsed.searchParams.get('id')
-      || parsed.searchParams.get('tmpGameUserId')
-      || '';
+    const hashParams = new URLSearchParams(String(parsed.hash || '').replace(/^#/, ''));
+    const token = firstSearchParam(parsed.searchParams, hashParams, ['token', 'sessionToken', 'session_token', 'tmpGameSessionToken']);
+    const id = firstSearchParam(parsed.searchParams, hashParams, ['user_id', 'userId', 'id', 'tmpGameUserId']);
     return { userId: Number(id || 0), sessionToken: token };
   } catch (_) {
     return { userId: 0, sessionToken: '' };
   }
+}
+
+function firstSearchParam(primary, secondary, keys) {
+  for (const key of keys) {
+    const value = primary.get(key) || secondary.get(key);
+    if (value) return value;
+  }
+  return '';
 }
 
 function firstPattern(text, patterns) {
@@ -294,6 +306,7 @@ function applyLogin(login, summary = null) {
   state.userId = login.userId;
   state.sessionToken = login.sessionToken;
   state.loginPayloadSummary = summary;
+  state.lastCallbackDebug = null;
   state.leaveAlert = '';
   state.lastError = '';
   persistState();
@@ -315,26 +328,37 @@ async function submitCallback(callbackUrl) {
     return applyLogin(login, summarizeLoginPayload(payload));
   }
   const url = normalizeCallbackUrl(callbackUrl);
+  const directLogin = extractLoginDataFromUrl(url);
+  if (directLogin.userId && directLogin.sessionToken) {
+    state.callbackUrl = url;
+    return applyLogin(directLogin, { source: 'direct-login-url' });
+  }
   logEvent('callback-submit', { callbackUrl: url });
   const response = await fetchWithTimeout(url, {
     method: 'GET',
-    redirect: 'follow',
+    redirect: 'manual',
     cache: 'no-store'
   });
   const body = await readResponseBody(response);
+  const location = resolveLocation(response.headers.get('location') || '', url);
   const summary = {
     status: response.status,
     ok: response.ok,
     finalUrl: redact(response.url || url),
+    location: redact(location),
+    redirected: response.status >= 300 && response.status < 400,
     contentType: response.headers.get('content-type') || '',
+    setCookiePresent: Boolean(response.headers.get('set-cookie')),
     jsonKeys: body.json && typeof body.json === 'object' ? Object.keys(body.json).slice(0, 20) : [],
     textLength: body.text.length,
     textSample: body.json ? '' : body.text.slice(0, 500)
   };
   let login = extractLoginData(body.json || {});
   if (!login.userId || !login.sessionToken) login = extractLoginDataFromText(body.text);
+  if ((!login.userId || !login.sessionToken) && location) login = extractLoginDataFromUrl(location);
   if (!login.userId || !login.sessionToken) login = extractLoginDataFromUrl(response.url);
-  if (!response.ok) {
+  state.lastCallbackDebug = summary;
+  if (!response.ok && !summary.redirected) {
     state.lastError = `callback HTTP ${response.status}`;
     state.loginPayloadSummary = summary;
     persistState();
@@ -346,10 +370,19 @@ async function submitCallback(callbackUrl) {
     state.loginPayloadSummary = summary;
     persistState();
     logEvent('callback-unrecognized', { callbackUrl: url, summary, body: body.json || body.text.slice(0, 1000) });
-    throw new Error(`callback response did not expose userId/sessionToken; status=${response.status}, content-type=${summary.contentType || 'unknown'}, body=${body.text ? 'see log sample' : 'empty'}`);
+    throw new Error(`callback response did not expose userId/sessionToken; status=${response.status}, content-type=${summary.contentType || 'unknown'}, location=${summary.location || 'none'}, body=${body.text ? body.text.slice(0, 240) : 'empty'}`);
   }
   state.callbackUrl = url;
   return applyLogin(login, summary);
+}
+
+function resolveLocation(location, baseUrl) {
+  if (!location) return '';
+  try {
+    return new URL(location, baseUrl).toString();
+  } catch (_) {
+    return String(location || '');
+  }
 }
 
 function wsUrlForUser(userId) {
@@ -579,7 +612,7 @@ function sendHtml(res) {
     </section>
     <section>
       <label>回调 URL 或回调响应 JSON</label>
-      <textarea id="callbackInput" placeholder="https://grasp-rat-game.h-e.top/auth/linuxdo/callback?code=...&#10;或粘贴包含 user_id/userId/id 和 token/sessionToken 的 JSON"></textarea>
+      <textarea id="callbackInput" placeholder="https://grasp-rat-game.h-e.top/auth/linuxdo/callback?code=...&#10;或 https://grasp-rat-game.h-e.top/?login=ok&user_id=...&token=...&#10;或粘贴包含 user_id/userId/id 和 token/sessionToken 的 JSON"></textarea>
       <div class="row" style="margin-top:8px">
         <button id="callbackBtn">提交回调并登录</button>
       </div>

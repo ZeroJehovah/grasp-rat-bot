@@ -69,7 +69,7 @@ Do not paste `https://connect.linux.do/oauth2/approve/...` into the demo as the 
 The WebSocket URL defaults to:
 
 ```text
-wss://grasp-rat-game.h-e.top/ws?user_id=<id>&token=<token>&view=50000
+wss://grasp-rat-game.h-e.top/ws?user_id=<id>&token=<token>&compress=gzip%2Cdeflate
 ```
 
 The important path is `wss://grasp-rat-game.h-e.top/ws`. If the live app uses a different optional query name, override:
@@ -77,5 +77,5 @@ The important path is `wss://grasp-rat-game.h-e.top/ws`. If the live app uses a 
 ```ini
 [Service]
 Environment=GRASP_RAT_DEMO_WS_PATH=/ws
-Environment=GRASP_RAT_DEMO_WS_EXTRA_QUERY=viewRadius=50000
+Environment=GRASP_RAT_DEMO_WS_EXTRA_QUERY=compress=gzip%2Cdeflate
 ```
