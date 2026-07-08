@@ -21,8 +21,15 @@ The first phase is intentionally a small probe under `headless-demo/`, not an un
 
 - Server: `headless-demo/server.js`
 - Operator docs: `headless-demo/README.md`
+- Quick test launcher: `headless-demo/start-demo.sh`
 - Optional systemd unit: `headless-demo/grasp-rat-headless-demo.service`
-- Manual run command used by the user on VPS:
+- Quick run command for the current VPS test flow:
+
+```bash
+./headless-demo/start-demo.sh
+```
+
+The launcher defaults to:
 
 ```bash
 GRASP_RAT_DEMO_HOST=0.0.0.0 \
@@ -30,6 +37,8 @@ GRASP_RAT_DEMO_PORT=18766 \
 GRASP_RAT_DEMO_WEB_TOKEN='1234567890' \
 node headless-demo/server.js
 ```
+
+The user's first VPS run used Node `v18.19.1`, which has global `fetch` but no global `WebSocket`. As of the next demo update, `headless-demo/server.js` keeps Node 22's global WebSocket path and falls back to the `ws` package on Node 18. Operators on Node 18 should run `npm install` after pulling the repo before starting the demo.
 
 The web UI supports:
 
@@ -104,6 +113,8 @@ This sequence is only started by an explicit web button click.
 - `61fbfa8`: Added direct login URL / callback redirect handling.
 - `e8083b5`: Added support for pasted LinuxDO approve `curl`.
 - `525b61f`: Added parsing for callback HTML meta-refresh login URLs and stronger redaction of token-bearing diagnostics.
+- 2026-07-08: Added Node 18 WebSocket fallback through the `ws` package after the first successful callback login hit `Node.js global WebSocket is unavailable` on VPS Node `v18.19.1`.
+- 2026-07-08: Added `headless-demo/start-demo.sh` as the quick VPS test launcher with default host `0.0.0.0`, port `18766`, and token `1234567890`.
 
 ## Next Plan
 

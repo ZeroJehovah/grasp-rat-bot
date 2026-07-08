@@ -12,17 +12,33 @@ It does not run unattended strategy logic. The action sequence only runs after p
 
 ## Run Manually
 
-Requires Node with global `fetch` and `WebSocket` support. Node 22+ is recommended.
+Requires Node with global `fetch` support. Node 22+ can use its built-in WebSocket; Node 18 should install dependencies so the demo can use the `ws` fallback.
+
+For quick VPS testing, use the bundled launcher. It defaults to `0.0.0.0:18766` and web token `1234567890`, and installs production npm dependencies if the `ws` fallback is missing:
 
 ```bash
 cd /opt/grasp-rat-bot
+./headless-demo/start-demo.sh
+```
+
+Open:
+
+```text
+http://<vps-ip>:18766/?token=1234567890
+```
+
+The equivalent manual command is:
+
+```bash
+cd /opt/grasp-rat-bot
+npm install
 GRASP_RAT_DEMO_HOST=0.0.0.0 \
 GRASP_RAT_DEMO_PORT=18766 \
 GRASP_RAT_DEMO_WEB_TOKEN='replace-with-a-secret' \
 node headless-demo/server.js
 ```
 
-Open:
+Open for the manual command:
 
 ```text
 http://<vps-ip>:18766/?token=replace-with-a-secret

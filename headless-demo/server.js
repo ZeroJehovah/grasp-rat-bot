@@ -21,6 +21,7 @@ const WS_CONNECT_TIMEOUT_MS = Math.max(1000, Number(process.env.GRASP_RAT_DEMO_W
 const WS_FRAME_LIMIT = Math.max(0, Number(process.env.GRASP_RAT_DEMO_WS_FRAME_LIMIT || 80));
 const WS_PATH = process.env.GRASP_RAT_DEMO_WS_PATH || '/ws';
 const WS_EXTRA_QUERY = process.env.GRASP_RAT_DEMO_WS_EXTRA_QUERY || 'compress=gzip%2Cdeflate';
+let cachedWebSocketRuntime = null;
 
 if (!isLoopbackHost(HOST) && (!WEB_TOKEN || WEB_TOKEN === 'change-this-before-start')) {
   console.error('Refusing to listen on a non-loopback host without a non-placeholder GRASP_RAT_DEMO_WEB_TOKEN.');
@@ -622,16 +623,76 @@ function recordFrame(data) {
   logEvent('ws-frame', frame);
 }
 
+function getWebSocketRuntime() {
+  if (cachedWebSocketRuntime) return cachedWebSocketRuntime;
+  if (typeof globalThis.WebSocket === 'function') {
+    cachedWebSocketRuntime = {
+      name: 'global',
+      WebSocket: globalThis.WebSocket,
+      supportsOptions: false
+    };
+    return cachedWebSocketRuntime;
+  }
+  try {
+    const wsModule = require('ws');
+    const WebSocketImpl = wsModule.WebSocket || wsModule;
+    if (typeof WebSocketImpl === 'function') {
+      cachedWebSocketRuntime = {
+        name: 'ws-package',
+        WebSocket: WebSocketImpl,
+        supportsOptions: true
+      };
+      return cachedWebSocketRuntime;
+    }
+  } catch (err) {
+    throw new Error('WebSocket runtime unavailable. Run `npm install` in the repo on Node 18, or use Node 22+ with global WebSocket support. Original error: ' + (err?.message || String(err)));
+  }
+  throw new Error('WebSocket runtime unavailable. Run `npm install` in the repo on Node 18, or use Node 22+ with global WebSocket support.');
+}
+
+function wsOpenState(runtime) {
+  const value = Number(runtime?.WebSocket?.OPEN);
+  return Number.isFinite(value) ? value : 1;
+}
+
+function isWsOpen(ws, runtime = cachedWebSocketRuntime) {
+  return Boolean(ws && Number(ws.readyState) === wsOpenState(runtime));
+}
+
+function addWsHandler(ws, eventName, handler) {
+  if (typeof ws.addEventListener === 'function') {
+    ws.addEventListener(eventName, handler);
+    return;
+  }
+  if (typeof ws.on === 'function') {
+    ws.on(eventName, handler);
+    return;
+  }
+  ws['on' + eventName] = handler;
+}
+
+function closeReasonText(reason) {
+  if (!reason) return '';
+  if (Buffer.isBuffer(reason)) return reason.toString('utf8');
+  return String(reason || '');
+}
+
+function createWebSocket(runtime, wsUrl) {
+  if (!runtime.supportsOptions) return new runtime.WebSocket(wsUrl);
+  return new runtime.WebSocket(wsUrl, [], {
+    headers: { Origin: GAME_ORIGIN },
+    perMessageDeflate: false
+  });
+}
+
 function openWs() {
   if (!state.userId || !state.sessionToken) throw new Error('not logged in');
-  if (typeof WebSocket !== 'function') {
-    throw new Error('Node.js global WebSocket is unavailable; use Node 20+ or Node 18.13+ with WebSocket support');
-  }
+  const runtime = getWebSocketRuntime();
   const wsUrl = wsUrlForUser(state.userId);
   state.wsUrl = wsUrl;
   persistState();
-  logEvent('ws-connect-start', { wsUrl });
-  const ws = new WebSocket(wsUrl);
+  logEvent('ws-connect-start', { wsUrl, runtime: runtime.name });
+  const ws = createWebSocket(runtime, wsUrl);
   let opened = false;
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
@@ -640,33 +701,41 @@ function openWs() {
         reject(new Error('websocket connect timeout'));
       }
     }, WS_CONNECT_TIMEOUT_MS);
-    ws.onopen = () => {
+    addWsHandler(ws, 'open', () => {
       opened = true;
       clearTimeout(timer);
       state.wsOpen = true;
       state.lastError = '';
-      logEvent('ws-open', { wsUrl });
+      logEvent('ws-open', { wsUrl, runtime: runtime.name });
       resolve(ws);
-    };
-    ws.onerror = event => {
-      const message = event?.message || 'websocket error';
+    });
+    addWsHandler(ws, 'error', event => {
+      const message = event?.message || event?.error?.message || String(event || 'websocket error');
       state.lastError = message;
       logEvent('ws-error', { message });
       if (!opened) {
         clearTimeout(timer);
         reject(new Error(message));
       }
-    };
-    ws.onclose = event => {
+    });
+    addWsHandler(ws, 'close', (eventOrCode, reason) => {
       state.wsOpen = false;
-      logEvent('ws-close', { code: event?.code || 0, reason: event?.reason || '', wasClean: Boolean(event?.wasClean) });
-    };
-    ws.onmessage = event => recordFrame(event.data);
+      const code = typeof eventOrCode === 'number' ? eventOrCode : eventOrCode?.code || 0;
+      const textReason = typeof eventOrCode === 'number' ? closeReasonText(reason) : closeReasonText(eventOrCode?.reason);
+      const wasClean = typeof eventOrCode === 'number' ? code === 1000 : Boolean(eventOrCode?.wasClean);
+      logEvent('ws-close', { code, reason: textReason, wasClean });
+    });
+    addWsHandler(ws, 'message', (eventOrData) => {
+      const data = eventOrData && Object.prototype.hasOwnProperty.call(eventOrData, 'data')
+        ? eventOrData.data
+        : eventOrData;
+      recordFrame(data);
+    });
   });
 }
 
 function wsSend(ws, message) {
-  if (!ws || ws.readyState !== WebSocket.OPEN) throw new Error('websocket is not open');
+  if (!isWsOpen(ws)) throw new Error('websocket is not open');
   ws.send(message);
   logEvent('ws-send', { message });
 }
@@ -761,7 +830,7 @@ async function runActionDemo() {
     throw err;
   } finally {
     try {
-      if (ws && ws.readyState === WebSocket.OPEN) ws.close();
+      if (isWsOpen(ws)) ws.close();
     } catch (_) {}
     state.wsOpen = false;
     state.running = false;
