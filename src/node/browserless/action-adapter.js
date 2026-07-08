@@ -47,7 +47,7 @@ function movementTargetFromDecision(decision) {
   const band = String(action.band || decision?.band || '');
   if (band !== 'profit') return null;
   if (kind !== 'coin' && kind !== 'seek-coin' && kind !== 'profit-candidate') return null;
-  if (!target || target.snapshotOnly !== true) return null;
+  if (!target || target.type !== 'coin') return null;
   return target;
 }
 

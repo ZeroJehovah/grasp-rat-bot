@@ -5698,6 +5698,28 @@ async function runSelfTest() {
       want: 'realtime|shoot_ok|44|14500|600|600|1'
     },
     {
+      name: 'browserless state store keeps realtime coin drops out of combat selector',
+      got: (() => {
+        const store = createBrowserlessStateStore({ userId: 7 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 35,
+          entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 10, y: 20, hp: 80 }],
+          bullets: [],
+          coin_drops: [{ drop_id: 'native-1', amount: 5, x: 30, y: 40 }]
+        }, { receivedAtMs: 1000 });
+        const realtime = store.getRealtimeState(1200);
+        const combat = selectRealtimeCombatState(store, 1200);
+        return [
+          realtime.coinDrops[0]?.authority,
+          realtime.coinDrops[0]?.amount,
+          Object.prototype.hasOwnProperty.call(combat, 'coinDrops'),
+          /coinDrops/.test(selectRealtimeCombatState.toString())
+        ].join('|');
+      })(),
+      want: 'realtime|5|false|false'
+    },
+    {
       name: 'browserless decision adapter keeps combat on realtime authority',
       got: (() => {
         const store = createBrowserlessStateStore({ userId: 7 });
@@ -5727,13 +5749,13 @@ async function runSelfTest() {
           decision.band,
           decision.action.target.userId,
           decision.action.target.authority,
-          decision.profit.best.coin.authority,
-          decision.profit.best.coin.snapshotOnly,
+          decision.profit.best === null,
           decision.input.self.x,
-          decision.input.dataGaps.includes('snapshot-coin-fallback-only')
+          decision.input.dataGaps.includes('snapshot-coin-fallback-only'),
+          decision.input.dataGaps.includes('snapshot-fallback-blocked:active-threat-visible')
         ].join('|');
       })(),
-      want: 'combat-candidate|combat|8|realtime|snapshot|true|100|true'
+      want: 'combat-candidate|combat|8|realtime|true|100|true|true'
     },
     {
       name: 'browserless decision adapter emits snapshot fallback profit without commands',
@@ -5766,6 +5788,81 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'profit-candidate|coin|6|snapshot|100|true|false'
+    },
+    {
+      name: 'browserless non-combat profit prefers realtime coin over snapshot and combat',
+      got: (() => {
+        const store = createBrowserlessStateStore({ userId: 7 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 55,
+          entities: [
+            { entity_id: 1, user_id: 7, name: 'self', x: 100, y: 100, hp: 90 },
+            { entity_id: 2, user_id: 8, name: 'active-far', x: 50000, y: 100, hp: 80, current_join_mode: 'Active', firing: true, drop: 20 }
+          ],
+          bullets: [],
+          coin_drops: [{ drop_id: 'native-coin', amount: 2, x: 300, y: 100 }]
+        }, { receivedAtMs: 1000 });
+        store.ingestFrame({
+          type: 'snapshot',
+          tick: 56,
+          entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 100, y: 100, hp: 90 }],
+          bullets: [],
+          coin_drops: [{ drop_id: 'snapshot-coin', amount: 99, x: 120, y: 100 }],
+          messages: []
+        }, { receivedAtMs: 1100 });
+        const decision = buildBrowserlessDecision(store.getState(1200), {}, {
+          nowMs: 1200,
+          controlMode: 'non-combat-profit'
+        });
+        return [
+          decision.kind,
+          decision.band,
+          decision.action.target.id,
+          decision.action.target.authority,
+          decision.action.target.native,
+          decision.input.profitCoinSource,
+          decision.combat.target.userId,
+          decision.input.dataGaps.includes('snapshot-fallback-blocked:realtime-profit-present')
+        ].join('|');
+      })(),
+      want: 'profit-candidate|profit|native-coin|realtime|true|realtime|8|true'
+    },
+    {
+      name: 'browserless non-combat profit blocks snapshot fallback near active threat',
+      got: (() => {
+        const store = createBrowserlessStateStore({ userId: 7 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 57,
+          entities: [
+            { entity_id: 1, user_id: 7, name: 'self', x: 100, y: 100, hp: 90 },
+            { entity_id: 2, user_id: 8, name: 'active-near', x: 500, y: 100, hp: 80, current_join_mode: 'Active', firing: true, drop: 20 }
+          ],
+          bullets: []
+        }, { receivedAtMs: 1000 });
+        store.ingestFrame({
+          type: 'snapshot',
+          tick: 58,
+          entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 100, y: 100, hp: 90 }],
+          bullets: [],
+          coin_drops: [{ drop_id: 'snapshot-coin', amount: 99, x: 120, y: 100 }],
+          messages: []
+        }, { receivedAtMs: 1100 });
+        const decision = buildBrowserlessDecision(store.getState(1200), {}, {
+          nowMs: 1200,
+          controlMode: 'non-combat-profit'
+        });
+        return [
+          decision.kind,
+          decision.reason,
+          decision.input.profitCoinSource,
+          decision.input.fallback.snapshotCoinFallbackAllowed,
+          decision.input.fallback.snapshotFallbackBlockedReasons.join(','),
+          decision.combat.target.userId
+        ].join('|');
+      })(),
+      want: 'wait|no-profitable-candidate|none|false|active-threat-visible|8'
     },
     {
       name: 'browserless decision adapter waits without realtime self',
@@ -5805,7 +5902,7 @@ async function runSelfTest() {
           action: {
             kind: 'coin',
             band: 'profit',
-            target: { id: 1, x: 1010, y: 20, snapshotOnly: true }
+            target: { type: 'coin', id: 1, x: 1010, y: 20, snapshotOnly: true }
           }
         });
         adapter.observeState({ realtime: { tick: 2 } });
@@ -5847,7 +5944,7 @@ async function runSelfTest() {
         }, {
           kind: 'profit-candidate',
           band: 'profit',
-          action: { kind: 'coin', band: 'profit', target: { id: 1, x: 50, y: 0, snapshotOnly: true } }
+          action: { kind: 'coin', band: 'profit', target: { type: 'coin', id: 1, x: 50, y: 0, snapshotOnly: true } }
         });
         return [
           combat.kind,
@@ -6216,7 +6313,7 @@ async function runSelfTest() {
           '19999',
           '--web-token',
           'cli-token',
-          '--movement-only',
+          '--non-combat-profit',
           '--decision-interval-ms',
           '250',
           '--stale-self-ms',
@@ -6265,7 +6362,7 @@ async function runSelfTest() {
           config.logDir.endsWith('/tmp/grasp-rat-runner/logs')
         ].join('|');
       })(),
-      want: 'true|false|false|movement-only|19999|cli-token|42|env-token|250|3500|4500|150|300|800|3|123|456|90|true'
+      want: 'true|false|false|non-combat-profit|19999|cli-token|42|env-token|250|3500|4500|150|300|800|3|123|456|90|true'
     },
     {
       name: 'browserless runner dry-run and fake read-only path write redacted logs',
