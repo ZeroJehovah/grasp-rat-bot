@@ -100,6 +100,9 @@ const {
   summarizeAudit: summarizeBrowserlessCanaryAudit
 } = require('../../scripts/browserless-canary-audit');
 const {
+  auditDeployment: auditBrowserlessDeployment
+} = require('../../scripts/browserless-deployment-audit');
+const {
   createNoSelfSnapshotRecoveryRuntime,
   shouldClearTmpGameLocalSessionKey
 } = require('../browser/runtime/no-self-snapshot-recovery-runtime');
@@ -6733,6 +6736,64 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'true|true|true|true|true|true|true|true|true|true'
+    },
+    {
+      name: 'browserless deployment audit checks installed service evidence',
+      got: withTempDirForTest(async dir => {
+        const appDir = path.join(dir, 'app');
+        const scriptsDir = path.join(appDir, 'scripts');
+        const dataDir = path.join(dir, 'data');
+        const logDir = path.join(dir, 'logs');
+        fs.mkdirSync(scriptsDir, { recursive: true });
+        fs.mkdirSync(dataDir, { recursive: true });
+        fs.mkdirSync(logDir, { recursive: true });
+        fs.writeFileSync(path.join(scriptsDir, 'browserless-runner.js'), '');
+        const unitPath = path.join(dir, 'grasp-rat-browserless-runner.service');
+        const envPath = path.join(dir, 'browserless-runner.env');
+        fs.writeFileSync(unitPath, [
+          '[Service]',
+          `WorkingDirectory=${appDir}`,
+          `EnvironmentFile=${envPath}`,
+          'ExecStart=/usr/bin/env node scripts/browserless-runner.js',
+          'Restart=on-failure',
+          `ReadWritePaths=${dataDir} ${logDir}`,
+          ''
+        ].join('\n'));
+        fs.writeFileSync(envPath, [
+          `GRASP_RAT_BROWSERLESS_DATA_DIR=${dataDir}`,
+          `GRASP_RAT_BROWSERLESS_LOG_DIR=${logDir}`,
+          'GRASP_RAT_BROWSERLESS_DRY_RUN=true',
+          'GRASP_RAT_BROWSERLESS_CANARY_PROFILE=read-only',
+          'GRASP_RAT_BROWSERLESS_CONTROL_MODE=read-only',
+          'GRASP_RAT_BROWSERLESS_WEB_TOKEN=local-secret-token',
+          ''
+        ].join('\n'));
+        const ok = auditBrowserlessDeployment({
+          unitPath,
+          envPath
+        }, {
+          runCommand: (_command, args) => ({
+            status: 0,
+            stdout: args[0] === 'is-enabled' ? 'enabled\n' : 'active\n',
+            stderr: ''
+          })
+        });
+        const placeholderEnvPath = path.join(dir, 'placeholder.env');
+        fs.writeFileSync(placeholderEnvPath, fs.readFileSync(envPath, 'utf8').replace('local-secret-token', 'replace-with-a-long-random-token'));
+        const placeholder = auditBrowserlessDeployment({
+          unitPath,
+          envPath: placeholderEnvPath,
+          skipSystemctl: true
+        });
+        return [
+          ok.ok,
+          ok.failed.length,
+          placeholder.ok,
+          placeholder.failed.some(item => item.key === 'environment-file-reference'),
+          placeholder.failed.some(item => item.key === 'env-web-token')
+        ].join('|');
+      }),
+      want: 'true|0|false|true|true'
     },
     {
       name: 'browserless runner config maps canary profiles without enabling combat',

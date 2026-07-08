@@ -186,6 +186,7 @@ On 2026-07-08, the VPS one-shot demo succeeded after the Node 18 `ws` fallback a
 - 2026-07-08: Production supervisor/deployment files were added for the browserless runner. `deploy/browserless-runner.service` defines the `grasp-rat-browserless-runner` systemd unit, `deploy/browserless-runner.env.example` defines safe dry-run defaults and production paths, and `scripts/install-browserless-runner-service.sh` installs the unit/env surface without replacing an existing env file by default. Production state is under `/var/lib/grasp-rat-browserless`, JSONL logs are under `/var/log/grasp-rat-browserless`, and the service uses `/etc/grasp-rat/browserless-runner.env`. This still needs a VPS systemd install/restart/status validation.
 - 2026-07-08: Production canary profile support and cutover docs were added. `GRASP_RAT_BROWSERLESS_CANARY_PROFILE` / `--canary-profile` maps `read-only`, `movement-only`, `profit`, `combat-dry-run`, and `combat-live` to the existing staged control modes so VPS rollout can switch stages through env/config changes instead of code edits. The `combat-live` profile still requires explicit `combatEnabled=true` before shooting. Current architecture/state/test docs now record the browserless runner as a tracked Node runtime surface with production cutover pending accepted VPS canaries.
 - 2026-07-08: Browserless canary evidence audit tooling was added at `scripts/browserless-canary-audit.js`. The command reads local JSONL logs for a UTC day and checks profile-specific acceptance evidence including snapshot safety, decoded frames, self observation, decisions, verified leave, explicit forced stop when requested, no forbidden movement/shoot behavior, realtime combat authority, combat dry-run suppression, and combat live acknowledgement evidence when shots are sent. This does not replace the pending VPS canaries; it gives those canaries a deterministic acceptance check once logs are available.
+- 2026-07-08: Browserless deployment evidence audit tooling was added at `scripts/browserless-deployment-audit.js`. The command checks the installed `grasp-rat-browserless-runner` systemd unit, env file reference, runner entrypoint, restart policy, read/write paths, safe initial read-only dry-run env, non-placeholder web token, data/log directory access, and `systemctl is-enabled/is-active` state. This still needs to be run on the VPS after service install/start.
 
 ## Next Plan
 
@@ -195,7 +196,7 @@ On 2026-07-08, the VPS one-shot demo succeeded after the Node 18 `ws` fallback a
 4. Run a supervised `controlMode=non-combat-profit` VPS validation and inspect profit decisions for realtime-first behavior, guarded snapshot fallback, no shoot commands, and verified `leave`; then audit with `--profile profit`.
 5. Run a supervised `controlMode=combat-dry-run` VPS validation under visible Active-player conditions and inspect `combat.jsonl`/`decisions.jsonl` for realtime-only targets, aim/fire summaries, suppressed commands, and verified `leave`; then audit with `--profile combat-dry-run`.
 6. Run a supervised short `controlMode=combat-live` plus `combatEnabled=true` VPS validation and inspect `combat.jsonl`, `runner.jsonl`, status action rows, `shoot_ok` acknowledgement evidence, command pacing, and verified `leave`; then audit with `--profile combat-live`.
-7. Install the `grasp-rat-browserless-runner` systemd service on VPS, verify env/data/log paths, start in dry-run/read-only safe mode, and inspect `systemctl status` plus `journalctl -u grasp-rat-browserless-runner`.
+7. Install the `grasp-rat-browserless-runner` systemd service on VPS, verify env/data/log paths, start in dry-run/read-only safe mode, inspect `systemctl status` plus `journalctl -u grasp-rat-browserless-runner`, then run `node scripts/browserless-deployment-audit.js --fail-on-incomplete`.
 8. Use `GRASP_RAT_BROWSERLESS_CANARY_PROFILE` for subsequent staged canaries so the production service can move through read-only, movement-only, profit, combat dry-run, and combat live without code edits.
 9. Keep the browserless runtime boundary explicit:
    - shared pure strategy remains in `src/strategy/`;
@@ -212,6 +213,7 @@ sudo journalctl -u grasp-rat-browserless-runner -n 120 --no-pager
 sudo find /var/log/grasp-rat-browserless/$(date -u +%F) -maxdepth 1 -type f -name '*.jsonl' -print
 sudo tail -n 120 /var/log/grasp-rat-browserless/$(date -u +%F)/runner.jsonl
 sudo tail -n 120 /var/log/grasp-rat-browserless/$(date -u +%F)/decisions.jsonl
+node scripts/browserless-deployment-audit.js --fail-on-incomplete
 ```
 
 For combat stages, also ask for:

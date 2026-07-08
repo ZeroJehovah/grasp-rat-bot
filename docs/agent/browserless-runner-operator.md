@@ -58,6 +58,14 @@ sudo systemctl status grasp-rat-browserless-runner
 sudo journalctl -u grasp-rat-browserless-runner -n 120 --no-pager
 ```
 
+After installing and starting the service in safe read-only dry-run mode, audit the deployment evidence:
+
+```bash
+node scripts/browserless-deployment-audit.js --fail-on-incomplete
+```
+
+The audit checks the installed unit, env path, runner entrypoint, safe read-only dry-run defaults, non-placeholder status token, data/log directory access, and `systemctl is-enabled/is-active` state. Use `--skip-systemctl` only for static file/directory checks.
+
 The status panel remains token-gated at the configured host/port. Emergency stop is available through the panel Stop button or:
 
 ```bash

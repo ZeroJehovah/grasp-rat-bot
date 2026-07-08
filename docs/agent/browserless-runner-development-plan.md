@@ -104,6 +104,7 @@ Update this table in the same task that completes each feature.
 | Commit 16: Add Supervisor And Deployment Surface | Implemented; VPS systemd validation pending | `deploy/browserless-runner.service`, `deploy/browserless-runner.env.example`, and `scripts/install-browserless-runner-service.sh` define the `grasp-rat-browserless-runner` systemd surface with `/etc/grasp-rat/browserless-runner.env`, `/var/lib/grasp-rat-browserless`, `/var/log/grasp-rat-browserless`, status token config, restart/journal controls, and safe dry-run defaults. Local syntax/static checks pass; VPS install/restart/status validation is still required. |
 | Commit 17: Production Canary And Cutover Docs | Implemented; production cutover pending VPS acceptance | Runner config supports `--canary-profile read-only|movement-only|profit|combat-dry-run|combat-live` and `GRASP_RAT_BROWSERLESS_CANARY_PROFILE` for staged rollout without code edits; `docs/agent/current-state.md`, `current-architecture.md`, `browserless-vps-migration.md`, `test-coverage.md`, and operator docs record the production canary/cutover surface while preserving the browser bot fallback. Local self-tests pass; headless-demo remains diagnostic until VPS runner canaries are accepted. |
 | Commit 18: Add Canary Evidence Audit | Complete | `scripts/browserless-canary-audit.js` reads browserless JSONL logs for a UTC day and checks staged profile evidence for clean finish or forced-stop validation, verified leave, snapshot safety, decoded frames, decision logging, no forbidden shoot/action behavior, realtime combat authority, and combat dry-run suppression. `node grasp-rat-bot.js --self-test` covers normal read-only and forced-stop audit fixtures. VPS validations are still pending, but their evidence review now has a deterministic local command. |
+| Commit 19: Add Deployment Evidence Audit | Complete | `scripts/browserless-deployment-audit.js` checks the installed systemd unit, env file, runner entrypoint, safe read-only dry-run env, non-placeholder web token, data/log directory access, and `systemctl is-enabled/is-active` status for `grasp-rat-browserless-runner`. `node grasp-rat-bot.js --self-test` covers successful and failing deployment-audit fixtures. The VPS systemd run still needs operator execution, but acceptance now has a deterministic command. |
 
 ## Commit Plan
 
@@ -461,6 +462,26 @@ Validation:
 
 - `node grasp-rat-bot.js --self-test`
 - `node --check scripts/browserless-canary-audit.js`
+- `git diff --check`
+
+### Commit 19: Add Deployment Evidence Audit
+
+Files:
+
+- Add `scripts/browserless-deployment-audit.js`.
+- Add self-test coverage for installed-service evidence checks.
+- Update operator and migration docs with the deployment audit command.
+
+Purpose:
+
+- Make the VPS systemd validation deterministic after install/start.
+- Check installed unit and env evidence for the production service name, working directory, entrypoint, env file reference, restart policy, read/write paths, safe initial read-only dry-run config, non-placeholder web token, data/log directory access, and enabled/active systemd state.
+- Keep deployment verification separate from live game canary evidence.
+
+Validation:
+
+- `node grasp-rat-bot.js --self-test`
+- `node --check scripts/browserless-deployment-audit.js`
 - `git diff --check`
 
 ## User Validation Required
