@@ -55,6 +55,7 @@ const {
   createBrowserlessDecisionAdapter
 } = require('./browserless/decision-adapter');
 const {
+  createCanaryRunId,
   runReadOnlyCanary
 } = require('./browserless/canary');
 const {
@@ -6773,6 +6774,27 @@ async function runSelfTest() {
           detail: { target: { authority: 'realtime' } }
         });
         const combatLiveMissingAck = summarizeBrowserlessCanaryAudit({ logDir: dir, day: '2026-07-14', profile: 'combat-live' });
+
+        const runIdDayDir = path.join(dir, '2026-07-15');
+        fs.mkdirSync(runIdDayDir, { recursive: true });
+        const writeRunId = (stream, entry) => {
+          fs.appendFileSync(path.join(runIdDayDir, `${stream}.jsonl`), `${JSON.stringify(entry)}\n`);
+        };
+        const selectedRunId = createCanaryRunId('read-only', Date.UTC(2026, 6, 15, 1, 0, 0));
+        writeRunId('runner', {
+          at: '2026-07-15T01:05:00.000Z',
+          type: 'canary-finish',
+          detail: {
+            ...baseFinish,
+            runId: selectedRunId,
+            startedAt: '2026-07-15T01:00:00.000Z',
+            completedAt: '2026-07-15T01:05:00.000Z'
+          }
+        });
+        writeRunId('decisions', { at: '2026-07-15T01:00:01.000Z', type: 'decision', detail: { runId: selectedRunId, kind: 'wait' } });
+        writeRunId('decisions', { at: '2026-07-15T01:00:02.000Z', type: 'decision', detail: { runId: 'other-run', kind: 'outside-run-id' } });
+        writeRunId('runner', { at: '2026-07-15T01:00:03.000Z', type: 'movement-command', detail: { runId: 'other-run', action: { kind: 'velocity' } } });
+        const runIdScoped = summarizeBrowserlessCanaryAudit({ logDir: dir, day: '2026-07-15', profile: 'read-only' });
         return [
           clean.ok,
           clean.failed.length,
@@ -6794,10 +6816,15 @@ async function runSelfTest() {
           movementShootLeak.counts.shootCommand,
           combatLiveMissingAck.ok,
           combatLiveMissingAck.failed.some(item => item.key === 'shoot-ack-or-no-shot'),
-          combatLiveMissingAck.counts.shootCommand
+          combatLiveMissingAck.counts.shootCommand,
+          selectedRunId,
+          runIdScoped.ok,
+          runIdScoped.runId,
+          runIdScoped.counts.decisions,
+          runIdScoped.counts.movementCommand
         ].join('|');
       }),
-      want: 'true|0|true|1|0|false|true|true|1|false|true|true|1|false|true|false|true|1|false|true|1'
+      want: 'true|0|true|1|0|false|true|true|1|false|true|true|1|false|true|false|true|1|false|true|1|read-only-20260715T010000000Z|true|read-only-20260715T010000000Z|1|0'
     },
     {
       name: 'browserless runner config parses env and cli overrides',
