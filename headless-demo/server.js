@@ -56,7 +56,7 @@ function isLoopbackHost(host) {
 
 function redact(value) {
   return String(value || '')
-    .replace(/([?&](?:code|token|session|auth|secret)[^=]*=)[^&]+/ig, '$1[redacted]')
+    .replace(/([?&](?:code|token|session|auth|secret)[^=]*=)[^&"'\\\s]+/ig, '$1[redacted]')
     .replace(/("(?:code|token|sessionToken|auth|secret)"\s*:\s*")[^"]+/ig, '$1[redacted]');
 }
 
@@ -211,6 +211,55 @@ function extractLoginData(payload) {
   return { userId: 0, sessionToken: '' };
 }
 
+function extractLoginDataFromText(text) {
+  const raw = String(text || '');
+  if (!raw) return { userId: 0, sessionToken: '' };
+  const tokenPatterns = [
+    /localStorage\.setItem\(\s*['"]tmpGameSessionToken['"]\s*,\s*['"]([^'"]+)['"]\s*\)/i,
+    /['"]tmpGameSessionToken['"]\s*[,=:]\s*['"]([^'"]+)['"]/i,
+    /['"]sessionToken['"]\s*[,=:]\s*['"]([^'"]+)['"]/i,
+    /['"]session_token['"]\s*[,=:]\s*['"]([^'"]+)['"]/i,
+    /['"]token['"]\s*[,=:]\s*['"]([^'"]+)['"]/i
+  ];
+  const idPatterns = [
+    /localStorage\.setItem\(\s*['"]tmpGameUserId['"]\s*,\s*['"]?(\d+)['"]?\s*\)/i,
+    /['"]tmpGameUserId['"]\s*[,=:]\s*['"]?(\d+)['"]?/i,
+    /['"]user_id['"]\s*[,=:]\s*['"]?(\d+)['"]?/i,
+    /['"]userId['"]\s*[,=:]\s*['"]?(\d+)['"]?/i,
+    /['"]id['"]\s*[,=:]\s*['"]?(\d+)['"]?/i
+  ];
+  const token = firstPattern(raw, tokenPatterns);
+  const id = firstPattern(raw, idPatterns);
+  return { userId: Number(id || 0), sessionToken: token || '' };
+}
+
+function extractLoginDataFromUrl(url) {
+  try {
+    const parsed = new URL(String(url || ''));
+    const token = parsed.searchParams.get('token')
+      || parsed.searchParams.get('sessionToken')
+      || parsed.searchParams.get('session_token')
+      || parsed.searchParams.get('tmpGameSessionToken')
+      || '';
+    const id = parsed.searchParams.get('user_id')
+      || parsed.searchParams.get('userId')
+      || parsed.searchParams.get('id')
+      || parsed.searchParams.get('tmpGameUserId')
+      || '';
+    return { userId: Number(id || 0), sessionToken: token };
+  } catch (_) {
+    return { userId: 0, sessionToken: '' };
+  }
+}
+
+function firstPattern(text, patterns) {
+  for (const pattern of patterns) {
+    const match = pattern.exec(text);
+    if (match?.[1]) return match[1];
+  }
+  return '';
+}
+
 function findLoginFields(value, depth = 0) {
   if (!value || typeof value !== 'object' || depth > 4) return { userId: 0, sessionToken: '' };
   let userId = 0;
@@ -276,24 +325,28 @@ async function submitCallback(callbackUrl) {
   const summary = {
     status: response.status,
     ok: response.ok,
+    finalUrl: redact(response.url || url),
     contentType: response.headers.get('content-type') || '',
     jsonKeys: body.json && typeof body.json === 'object' ? Object.keys(body.json).slice(0, 20) : [],
+    textLength: body.text.length,
     textSample: body.json ? '' : body.text.slice(0, 500)
   };
-  const login = extractLoginData(body.json || {});
+  let login = extractLoginData(body.json || {});
+  if (!login.userId || !login.sessionToken) login = extractLoginDataFromText(body.text);
+  if (!login.userId || !login.sessionToken) login = extractLoginDataFromUrl(response.url);
   if (!response.ok) {
     state.lastError = `callback HTTP ${response.status}`;
     state.loginPayloadSummary = summary;
     persistState();
     logEvent('callback-failed', { callbackUrl: url, summary });
-    throw new Error(`callback HTTP ${response.status}: ${body.text.slice(0, 240)}`);
+    throw new Error(`callback HTTP ${response.status}: ${(body.text || '<empty body>').slice(0, 240)}`);
   }
   if (!login.userId || !login.sessionToken) {
     state.lastError = 'callback did not return userId/sessionToken';
     state.loginPayloadSummary = summary;
     persistState();
     logEvent('callback-unrecognized', { callbackUrl: url, summary, body: body.json || body.text.slice(0, 1000) });
-    throw new Error('callback response did not expose userId/sessionToken; check log for response shape');
+    throw new Error(`callback response did not expose userId/sessionToken; status=${response.status}, content-type=${summary.contentType || 'unknown'}, body=${body.text ? 'see log sample' : 'empty'}`);
   }
   state.callbackUrl = url;
   return applyLogin(login, summary);
@@ -605,8 +658,12 @@ async function readJsonBody(req) {
   const chunks = [];
   for await (const chunk of req) chunks.push(chunk);
   const text = Buffer.concat(chunks).toString('utf8');
-  if (!text) return {};
-  return JSON.parse(text);
+  if (!text.trim()) return {};
+  try {
+    return JSON.parse(text);
+  } catch (err) {
+    throw new Error('invalid JSON request body: ' + (err.message || String(err)));
+  }
 }
 
 function authorized(req) {
