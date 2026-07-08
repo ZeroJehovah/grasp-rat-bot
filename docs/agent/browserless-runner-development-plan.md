@@ -111,6 +111,7 @@ Update this table in the same task that completes each feature.
 | Commit 23: Align VPS Audit Commands | Complete | Operator and migration docs now run production canary audits with `sudo` for `/var/log/grasp-rat-browserless` access and use deployment `--env-mode any` for post-live service-surface checks, while keeping `--env-mode live` as the pre-restart readiness check before supervised canaries. |
 | Commit 24: Harden Live Env Mode Consistency | Complete | `scripts/browserless-deployment-audit.js` now rejects mismatched `GRASP_RAT_BROWSERLESS_CANARY_PROFILE` and `GRASP_RAT_BROWSERLESS_CONTROL_MODE` pairs in safe/live/any env modes, so VPS staged canaries cannot pass readiness with a misleading profile/control combination. Self-tests cover the conflict case and operator/migration/state docs record the constraint. |
 | Commit 25: Scope Canary Audit To Selected Run | Complete | `scripts/browserless-canary-audit.js` now filters decision, combat, exit, and movement evidence to the selected canary final event's `startedAt`/`completedAt` window when available, while retaining whole-day compatibility for older logs. Self-tests include outside-window entries to prove staged same-day runs do not contaminate the selected audit. |
+| Commit 26: Tighten Canary Action Evidence | Complete | `scripts/browserless-canary-audit.js` now fails read-only and combat-dry-run audits when scoped `movement-command` logs appear, and requires scoped movement logs alongside positive velocity counts for movement-only and profit profiles. Self-tests cover read-only action leakage inside the selected run window. |
 
 ## Commit Plan
 
@@ -616,9 +617,29 @@ Validation:
 - `node --check scripts/browserless-canary-audit.js`
 - `git diff --check`
 
+### Commit 26: Tighten Canary Action Evidence
+
+Files:
+
+- Update `scripts/browserless-canary-audit.js`.
+- Update browserless canary audit self-test coverage.
+- Update operator, migration, current-state, test-coverage, and this development plan.
+
+Purpose:
+
+- Make read-only and combat-dry-run audits fail if the selected run contains movement-command evidence.
+- Require movement-only and non-combat profit canaries to have both positive final velocity counters and scoped movement-command logs.
+- Reduce false acceptance from inconsistent final summaries or stale same-day action logs.
+
+Validation:
+
+- `node grasp-rat-bot.js --self-test`
+- `node --check scripts/browserless-canary-audit.js`
+- `git diff --check`
+
 ## External VPS Validation Required
 
-Local implementation work is complete through Commit 25, and the VPS systemd deployment validation passed on 2026-07-08. The production runner is not accepted until the remaining live canary validations below produce evidence and the aggregate acceptance report passes.
+Local implementation work is complete through Commit 26, and the VPS systemd deployment validation passed on 2026-07-08. The production runner is not accepted until the remaining live canary validations below produce evidence and the aggregate acceptance report passes.
 
 Use the production service path and audit commands from `docs/agent/browserless-vps-migration.md` and `docs/agent/browserless-runner-operator.md`. Do not mark `headless-demo/` superseded until these validations pass:
 
