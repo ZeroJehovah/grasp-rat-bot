@@ -4,7 +4,7 @@ Keep this file focused on current validation coverage. Do not use it as a migrat
 
 ## Current Counts
 
-- Bot self-test count: `391`.
+- Bot self-test count: `393`.
 - Strategy module self-test count: `118`.
 - Combat-log analyzer self-test count: `88`.
 - Combat replay self-test count: `2` local replay cases plus skipped historical fixtures when retained logs are absent.
@@ -46,7 +46,7 @@ The browser runtime should adapt page/native state into these pure helpers inste
 
 ## Browserless Runner Coverage
 
-`src/node/run-self-test.js` includes browserless runner coverage for shared `GRZ1` frame parsing, session/callback parsing, verified leave retries, direct WebSocket transport, frame statistics, state-store realtime/snapshot authority separation, local log retention/summary generation, runner config parsing, status server redaction, read-only canary flow, dry-run decisions, safety exits, movement-only control, non-combat profit fallback gating, combat dry-run target/aim/fire summaries, and guarded combat live behavior.
+`src/node/run-self-test.js` includes browserless runner coverage for shared `GRZ1` frame parsing, session/callback parsing, verified leave retries, direct WebSocket transport, frame statistics, state-store realtime/snapshot authority separation, local log retention/summary generation, runner config parsing, status server redaction, deployment file anchors, read-only canary flow, dry-run decisions, safety exits, movement-only control, non-combat profit fallback gating, combat dry-run target/aim/fire summaries, and guarded combat live behavior.
 
 The guarded combat live tests verify that `controlMode=combat-live` remains command-suppressed unless `combatEnabled=true`, that enabled live combat sends combat velocity plus paced `shoot targetX targetY startX startY` through the action adapter, and that `shoot_ok` acknowledgements are retained in action state. These are synthetic/fake-transport tests; supervised VPS validation is still required before unattended live combat use.
 

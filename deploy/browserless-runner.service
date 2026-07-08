@@ -1,0 +1,23 @@
+[Unit]
+Description=Grasp Rat Browserless Runner
+Documentation=https://github.com/ZeroJehovah/grasp-rat-bot
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/grasp-rat-bot
+EnvironmentFile=/etc/grasp-rat/browserless-runner.env
+ExecStart=/usr/bin/env node scripts/browserless-runner.js
+Restart=on-failure
+RestartSec=10
+KillSignal=SIGINT
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/var/lib/grasp-rat-browserless /var/log/grasp-rat-browserless
+
+[Install]
+WantedBy=multi-user.target

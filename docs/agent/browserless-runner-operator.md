@@ -13,6 +13,48 @@ This document tracks the production browserless runner surface. The older `headl
 - The safety controller handles no-self, frame gap, stale self, WS close/error, stamina exhaustion, unsafe login point, direct leave failure, and explicit stop.
 - The runner writes local JSONL logs and a persistent state file under the configured data directory.
 - The status server and web panel are available for non-`--once` runs.
+- Production service files live under `deploy/`; the service name is `grasp-rat-browserless-runner`.
+
+## Production Service
+
+Install or refresh the systemd unit from the repo:
+
+```bash
+sudo scripts/install-browserless-runner-service.sh --install-env
+```
+
+The installer writes:
+
+- service unit: `/etc/systemd/system/grasp-rat-browserless-runner.service`
+- env file: `/etc/grasp-rat/browserless-runner.env`
+
+The unit uses:
+
+- executable: `/usr/bin/env node scripts/browserless-runner.js`
+- app directory: the current repo path at install time
+- data dir: `/var/lib/grasp-rat-browserless`
+- log dir: `/var/log/grasp-rat-browserless`
+- env file: `/etc/grasp-rat/browserless-runner.env`
+
+The installed env example defaults to dry-run read-only mode. Edit `/etc/grasp-rat/browserless-runner.env` before live canaries: set a long `GRASP_RAT_BROWSERLESS_WEB_TOKEN`, manual session values, login-point coordinates, and the intended `GRASP_RAT_BROWSERLESS_CONTROL_MODE`.
+
+Standard controls:
+
+```bash
+sudo systemctl start grasp-rat-browserless-runner
+sudo systemctl stop grasp-rat-browserless-runner
+sudo systemctl restart grasp-rat-browserless-runner
+sudo systemctl status grasp-rat-browserless-runner
+sudo journalctl -u grasp-rat-browserless-runner -n 120 --no-pager
+```
+
+The status panel remains token-gated at the configured host/port. Emergency stop is available through the panel Stop button or:
+
+```bash
+curl -X POST 'http://127.0.0.1:18767/api/stop?token=<web-token>'
+```
+
+`headless-demo/start-demo.sh` is only a diagnostic protocol probe after this point; production operation should use `grasp-rat-browserless-runner`.
 
 ## Local Dry Run
 
@@ -183,13 +225,28 @@ data/browserless-runner/
       summary.json
 ```
 
+Production service layout:
+
+```text
+/var/lib/grasp-rat-browserless/
+  state.json
+
+/var/log/grasp-rat-browserless/
+  YYYY-MM-DD/
+    runner.jsonl
+    decisions.jsonl
+    combat.jsonl
+    exits.jsonl
+    summary.json
+```
+
 `state.json` may contain the manually authorized session token. Public status redacts secrets and reports only token presence.
 
 Generate a day summary:
 
 ```bash
 node scripts/browserless-log-summary.js \
-  --log-dir data/browserless-runner/logs \
+  --log-dir /var/log/grasp-rat-browserless \
   --day YYYY-MM-DD \
   --write
 ```
@@ -199,6 +256,7 @@ node scripts/browserless-log-summary.js \
 Important variables:
 
 - `GRASP_RAT_BROWSERLESS_DATA_DIR`
+- `GRASP_RAT_BROWSERLESS_LOG_DIR`
 - `GRASP_RAT_BROWSERLESS_STATUS_HOST`
 - `GRASP_RAT_BROWSERLESS_STATUS_PORT`
 - `GRASP_RAT_BROWSERLESS_WEB_TOKEN`
