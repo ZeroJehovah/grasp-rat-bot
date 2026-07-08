@@ -116,6 +116,7 @@ Update this table in the same task that completes each feature.
 | Commit 28: Audit Scoped Shoot Command Evidence | Complete | `scripts/browserless-canary-audit.js` now detects scoped shoot evidence from action logs (`action.shoot.command`, cumulative `state.shootSentCount`, or `state.lastShootCommand`) so no-shoot profiles cannot pass with leaked shoot commands, and combat-live runs with logged shoot commands still require `lastShootAck`. Self-tests cover movement-only shoot leakage and combat-live missing acknowledgement from action-log evidence. |
 | Commit 29: Expose Acceptance Evidence Summaries | Complete | `scripts/browserless-acceptance-report.js` now includes each canary section's selected final event, run window, decision/action/shoot/combat/forced-stop counts in human summaries, so final VPS cutover output is reviewable without opening the JSON report first. Self-tests cover movement/forced-stop summary evidence. |
 | Commit 30: Add Canary Run Identity | Complete | `src/node/browserless/canary.js` now assigns a stable `runId` to each canary run and stamps runner/decision/action/combat/exit log entries with it. `scripts/browserless-canary-audit.js` prefers `runId` filtering before falling back to time-window filtering, and acceptance summaries include the selected run id. Self-tests cover deterministic id generation and same-window cross-run contamination rejection. |
+| Commit 31: Harden Live Login Point Audit | Complete | `scripts/browserless-deployment-audit.js` now treats empty login-point fields as missing instead of numeric zero in live env mode, so supervised live canaries cannot pass readiness without explicit X/Y/HP coordinates. Self-tests cover empty login-point rejection. |
 
 ## Commit Plan
 
@@ -724,9 +725,29 @@ Validation:
 - `node --check scripts/browserless-canary-audit.js`
 - `git diff --check`
 
+### Commit 31: Harden Live Login Point Audit
+
+Files:
+
+- Update `scripts/browserless-deployment-audit.js`.
+- Update browserless deployment audit self-test coverage.
+- Update migration notes and this development plan.
+
+Purpose:
+
+- Reject empty `GRASP_RAT_BROWSERLESS_LOGIN_POINT_X/Y/HP` values during `--env-mode live`.
+- Prevent live readiness from treating blank login-point fields as numeric zero.
+
+Validation:
+
+- `node grasp-rat-bot.js --self-test`
+- `node --check scripts/browserless-deployment-audit.js`
+- `node --check src/node/run-self-test.js`
+- `git diff --check`
+
 ## External VPS Validation Required
 
-Local implementation work is complete through Commit 30, and the VPS systemd deployment validation passed on 2026-07-08. The production runner is not accepted until the remaining live canary validations below produce evidence and the aggregate acceptance report passes.
+Local implementation work is complete through Commit 31, and the VPS systemd deployment validation passed on 2026-07-08. The production runner is not accepted until the remaining live canary validations below produce evidence and the aggregate acceptance report passes.
 
 Use the production service path and audit commands from `docs/agent/browserless-vps-migration.md` and `docs/agent/browserless-runner-operator.md`. Do not mark `headless-demo/` superseded until these validations pass:
 

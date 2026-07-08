@@ -201,6 +201,7 @@ On 2026-07-08, the VPS one-shot demo succeeded after the Node 18 `ws` fallback a
 - 2026-07-08: Aggregate acceptance reporting now prints each canary section's selected final event, run window, and key evidence counts in the human output, so final VPS cutover evidence can be checked without opening JSON first.
 - 2026-07-08: Canary runs now stamp runner, decision, action, combat, and exit JSONL entries with a stable `runId`. `browserless-canary-audit` prefers exact run-id correlation before falling back to `startedAt`/`completedAt` windows for older logs, and aggregate acceptance summaries print the selected run id.
 - 2026-07-08: A supervised live-readiness attempt on VPS failed before canary start because the checkout did not yet contain deployment audit `--env-mode` support (`unknown argument: --env-mode`). This is not canary evidence. Before live canaries, pull `origin/main`, verify `node scripts/browserless-deployment-audit.js --help | grep -- '--env-mode'`, and only restart the service after `sudo node scripts/browserless-deployment-audit.js --env-mode live --fail-on-incomplete` passes.
+- 2026-07-08: After pulling `5f7f812`, VPS live-readiness audit reached the intended checks and correctly blocked live canary start because the env still had `GRASP_RAT_BROWSERLESS_DRY_RUN=true`, `GRASP_RAT_BROWSERLESS_USER_ID=0`, and no session token. The audit also exposed that empty login-point fields were accepted as numeric zero locally; Commit 31 fixes that so `--env-mode live` requires explicit X/Y/HP values before restart.
 
 ## Next Plan
 

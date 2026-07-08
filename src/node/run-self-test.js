@@ -6997,6 +6997,17 @@ async function runSelfTest() {
           envMode: 'live',
           skipSystemctl: true
         });
+        const missingLoginPointEnvPath = path.join(dir, 'missing-login-point.env');
+        fs.writeFileSync(missingLoginPointEnvPath, fs.readFileSync(envPath, 'utf8')
+          .replace('GRASP_RAT_BROWSERLESS_LOGIN_POINT_X=10', 'GRASP_RAT_BROWSERLESS_LOGIN_POINT_X=')
+          .replace('GRASP_RAT_BROWSERLESS_LOGIN_POINT_Y=20', 'GRASP_RAT_BROWSERLESS_LOGIN_POINT_Y=')
+          .replace('GRASP_RAT_BROWSERLESS_LOGIN_POINT_HP=90', 'GRASP_RAT_BROWSERLESS_LOGIN_POINT_HP='));
+        const missingLoginPoint = auditBrowserlessDeployment({
+          unitPath,
+          envPath: missingLoginPointEnvPath,
+          envMode: 'live',
+          skipSystemctl: true
+        });
         const placeholderEnvPath = path.join(dir, 'placeholder.env');
         fs.writeFileSync(placeholderEnvPath, fs.readFileSync(envPath, 'utf8').replace('local-secret-token', 'replace-with-a-long-random-token'));
         const placeholder = auditBrowserlessDeployment({
@@ -7013,12 +7024,14 @@ async function runSelfTest() {
           aggregate.failed.length,
           conflict.ok,
           conflict.failed.some(item => item.key === 'env-profile-control-consistency'),
+          missingLoginPoint.ok,
+          missingLoginPoint.failed.some(item => item.key === 'env-login-point'),
           placeholder.ok,
           placeholder.failed.some(item => item.key === 'environment-file-reference'),
           placeholder.failed.some(item => item.key === 'env-web-token')
         ].join('|');
       }),
-      want: 'true|0|true|0|true|0|false|true|false|true|true'
+      want: 'true|0|true|0|true|0|false|true|false|true|false|true|true'
     },
     {
       name: 'browserless acceptance report aggregates deployment canary and stop audits',
