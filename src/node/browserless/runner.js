@@ -139,7 +139,7 @@ async function runBrowserlessRunner(config, deps = {}) {
     statusServer: statusHandle ? { host: config.statusHost, port: statusHandle.port } : null
   });
 
-  if (!['read-only', 'movement-only'].includes(String(config.controlMode || ''))) {
+  if (!['read-only', 'movement-only', 'non-combat-profit'].includes(String(config.controlMode || ''))) {
     const result = { ok: false, reason: 'unsupported-control-mode' };
     updateBrowserlessStateFile(stateFile, {
       runner: {

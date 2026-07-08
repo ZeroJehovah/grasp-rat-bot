@@ -82,7 +82,8 @@ function createInitialState(userId = 0) {
       self: null,
       entities: [],
       entitiesByKey: {},
-      bullets: []
+      bullets: [],
+      coinDrops: []
     },
     snapshot: {
       authority: 'snapshot',
@@ -141,6 +142,7 @@ function createBrowserlessStateStore(options = {}) {
   function ingestRealtimeFrame(frame, meta) {
     const entities = Array.isArray(frame.entities) ? frame.entities : [];
     const bullets = Array.isArray(frame.bullets) ? frame.bullets : [];
+    const coinDrops = Array.isArray(frame.coin_drops) ? frame.coin_drops : (Array.isArray(frame.coinDrops) ? frame.coinDrops : []);
     const normalizedEntities = entities
       .map(entity => normalizeEntity(entity, { ...meta, authority: 'realtime', source: 'pos' }))
       .filter(Boolean);
@@ -155,6 +157,9 @@ function createBrowserlessStateStore(options = {}) {
     state.realtime.entitiesByKey = entitiesByKey;
     state.realtime.bullets = bullets
       .map(bullet => normalizeBullet(bullet, { ...meta, authority: 'realtime', source: 'pos' }))
+      .filter(Boolean);
+    state.realtime.coinDrops = coinDrops
+      .map(drop => normalizeCoinDrop(drop, { ...meta, authority: 'realtime', source: 'pos' }))
       .filter(Boolean);
     state.realtime.self = normalizedEntities.find(entity => Number(entity.user_id) === Number(state.userId)) || null;
   }
@@ -219,7 +224,8 @@ function createBrowserlessStateStore(options = {}) {
       frameAgeMs: frameAge(nowMs, state.realtime.receivedAtMs),
       self: cloneJson(state.realtime.self),
       entities: cloneJson(state.realtime.entities),
-      bullets: cloneJson(state.realtime.bullets)
+      bullets: cloneJson(state.realtime.bullets),
+      coinDrops: cloneJson(state.realtime.coinDrops)
     };
   }
 

@@ -130,12 +130,12 @@ async function runReadOnlyCanary(config, options = {}) {
     : ms => new Promise(resolve => setTimeout(resolve, ms));
   const logStore = options.logStore || null;
   const controlMode = config.controlMode || (config.readOnly === false ? 'movement-only' : 'read-only');
-  const movementEnabled = controlMode === 'movement-only';
+  const movementEnabled = controlMode === 'movement-only' || controlMode === 'non-combat-profit';
   const durationMs = Math.max(1000, Number(config.readOnlyProbeMs || DEFAULT_READONLY_PROBE_MS));
   const frameGapAlertMs = Math.max(1000, Number(config.frameGapAlertMs || DEFAULT_FRAME_GAP_ALERT_MS));
   const decisionIntervalMs = Math.max(250, Number(config.decisionIntervalMs || 1000));
   const stateStore = options.stateStore || createBrowserlessStateStore({ userId: config.userId, now });
-  const decisionAdapter = options.decisionAdapter || createBrowserlessDecisionAdapter({ userId: config.userId, now });
+  const decisionAdapter = options.decisionAdapter || createBrowserlessDecisionAdapter({ userId: config.userId, now, controlMode });
   const safetyController = options.safetyController || createBrowserlessSafetyController({
     now,
     frameGapAlertMs,
@@ -275,7 +275,7 @@ async function runReadOnlyCanary(config, options = {}) {
             }
           }
           if (!lastDecisionAtMs || atMs - lastDecisionAtMs >= decisionIntervalMs) {
-            const decision = decisionAdapter.decide(currentState, { nowMs: atMs });
+            const decision = decisionAdapter.decide(currentState, { nowMs: atMs, controlMode });
             const summary = summarizeBrowserlessDecision(decision);
             result.decisions.evaluatedCount += 1;
             result.decisions.last = summary;

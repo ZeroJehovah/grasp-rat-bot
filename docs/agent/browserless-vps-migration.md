@@ -180,16 +180,18 @@ On 2026-07-08, the VPS one-shot demo succeeded after the Node 18 `ws` fallback a
 - 2026-07-08: Browserless dry-run decision adapter was added under `src/node/browserless/decision-adapter.js` and wired into the read-only canary. It maps realtime `pos` self/entities into combat candidates, snapshot coin drops into non-combat fallback profit candidates, records browserless data gaps, writes throttled `decisions` JSONL entries, and updates status/panel decision rows without sending movement or shoot commands.
 - 2026-07-08: Browserless safety controller was added under `src/node/browserless/safety-controller.js` and wired into the runner/status/canary path. It classifies no-self, WS close/error, frame gap, stale self, unsafe login point, stamina exhaustion, direct leave failure, and explicit stop; `/api/stop` now requests a controller-backed stop; unsafe read-only exits call verified `leave` through `leave-client.js`. This still needs a supervised VPS read-only canary with forced `/api/stop` to validate the status stop path against the live service.
 - 2026-07-08: Browserless movement-only live mode was added behind `controlMode=movement-only` with `src/node/browserless/action-adapter.js`. The adapter only sends velocity commands toward snapshot coin fallback targets, sends stop pulses for wait/unsupported/reached states and before leave, tracks frame-based command settlement, and never sends shoot commands. This still needs a supervised short VPS movement-only validation before non-combat profit behavior can be promoted.
+- 2026-07-08: Browserless non-combat profit mode was added behind `controlMode=non-combat-profit`. The decision adapter now models realtime/native coin drops separately from snapshot fallback coins, chooses realtime/native coin profit first, blocks snapshot fallback while realtime profit or visible active threats exist, keeps combat targets diagnostic-only, and continues to send only velocity/stop commands through the action adapter. This still needs supervised VPS profit logs before any default enablement.
 
 ## Next Plan
 
 1. Run the production browserless read-only canary on VPS for 10-30 minutes and inspect status/log evidence, including `decisions.jsonl` and a forced `/api/stop` that ends with verified `leave`.
 2. Run a supervised short `controlMode=movement-only` VPS validation and inspect `runner.jsonl`, `decisions.jsonl`, status action rows, command settlement, and verified `leave`.
-3. Keep the browserless runtime boundary explicit:
+3. Run a supervised `controlMode=non-combat-profit` VPS validation and inspect profit decisions for realtime-first behavior, guarded snapshot fallback, no shoot commands, and verified `leave`.
+4. Keep the browserless runtime boundary explicit:
    - shared pure strategy remains in `src/strategy/`;
    - browser DOM/CDP integration remains browser-specific;
    - a new Node transport/runtime adapter can own auth/session state, direct WebSocket IO, timers, and verified exit.
-4. Migrate strategy execution conservatively, starting with non-combat profit actions before direct combat logic.
+5. Migrate combat only after non-combat profit logs are reviewed.
 
 ## Evidence To Request From VPS Runs
 

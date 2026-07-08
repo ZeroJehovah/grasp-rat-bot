@@ -4,9 +4,10 @@ This document tracks the production browserless runner surface. The older `headl
 
 ## Current Scope
 
-- The runner currently supports dry-run mode, a live read-only canary, and a supervised movement-only mode.
+- The runner currently supports dry-run mode, a live read-only canary, supervised movement-only mode, and supervised non-combat profit mode.
 - Live read-only canary sends no movement or shoot commands. It runs pre-login snapshot safety, joins direct WS, collects frame health, and calls verified `leave`.
 - Movement-only mode sends velocity commands only toward snapshot coin fallback targets, never sends shoot commands, and remains supervised-validation-only.
+- Non-combat profit mode prefers realtime/native coin drops when present, uses snapshot coins only as guarded fallback, and keeps combat targets diagnostic-only.
 - The safety controller handles no-self, frame gap, stale self, WS close/error, stamina exhaustion, unsafe login point, direct leave failure, and explicit stop.
 - The runner writes local JSONL logs and a persistent state file under the configured data directory.
 - The status server and web panel are available for non-`--once` runs.
@@ -82,6 +83,30 @@ node scripts/browserless-runner.js \
 ```
 
 Inspect `runner.jsonl` for `movement-command` entries and final verified `leave`. Inspect status action rows for command settlement. Any `shoot` command in logs or transport evidence is a release blocker.
+
+## Non-Combat Profit Validation
+
+Non-combat profit mode uses velocity commands to move toward coin profit only. It should not chase or shoot active-player combat targets.
+
+```bash
+node scripts/browserless-runner.js \
+  --once \
+  --live \
+  --non-combat-profit \
+  --data-dir data/browserless-runner \
+  --user-id <user-id> \
+  --session-token '<session-token>' \
+  --login-point-x <x-cm> \
+  --login-point-y <y-cm> \
+  --login-point-hp <hp> \
+  --decision-interval-ms 1000 \
+  --movement-command-interval-ms 500 \
+  --movement-target-dead-zone-cm 900 \
+  --movement-settlement-frames 2 \
+  --read-only-probe-ms 60000
+```
+
+Review `decisions.jsonl` before considering longer runs. Expected evidence: realtime/native coin candidates win when present; snapshot fallback appears only when no realtime profit and no visible Active threat is blocking fallback; combat targets may appear in diagnostic rows but must not become action commands.
 
 ## Status API
 
