@@ -107,6 +107,7 @@ Update this table in the same task that completes each feature.
 | Commit 19: Add Deployment Evidence Audit | Complete | `scripts/browserless-deployment-audit.js` checks the installed systemd unit, env file, runner entrypoint, safe read-only dry-run env, non-placeholder web token, data/log directory access, and `systemctl is-enabled/is-active` status for `grasp-rat-browserless-runner`. `node grasp-rat-bot.js --self-test` covers successful and failing deployment-audit fixtures. The 2026-07-08 VPS deployment audit passed with the service enabled and active. |
 | Commit 20: Add Aggregate Acceptance Report | Complete | `scripts/browserless-acceptance-report.js` aggregates deployment, read-only, forced-stop, movement-only, profit, combat-dry-run, and combat-live audit results into one cutover-readiness report. The canary audit now selects the latest clean finish for normal checks and explicit-stop evidence for forced-stop checks, so multiple same-day staged runs can be reviewed together. `node grasp-rat-bot.js --self-test` covers aggregate success and missing-profile failure fixtures. VPS evidence is still required before cutover. |
 | Commit 21: Fix Runtime Directory Install | Complete | VPS deployment validation initially showed `status=226/NAMESPACE` because systemd could not apply `ReadWritePaths` for missing `/var/lib/grasp-rat-browserless` and `/var/log/grasp-rat-browserless`. `scripts/install-browserless-runner-service.sh` now creates both runtime directories, self-test anchors cover the installer surface, operator/migration docs run deployment audit with `sudo`, and the 2026-07-08 VPS rerun passed with `Browserless deployment audit: ok`. |
+| Commit 22: Split Deployment Env Audit Modes | Complete | `scripts/browserless-deployment-audit.js` now supports `--env-mode safe|live|any`: safe preserves the initial dry-run/read-only deployment check, live verifies `DRY_RUN=false` plus session/login-point readiness before supervised live canaries, and any lets the final aggregate acceptance report verify the service surface after staged canary env changes. `scripts/browserless-acceptance-report.js` uses deployment env mode `any` by default, and self-tests cover live/aggregate deployment audit paths. |
 
 ## Commit Plan
 
@@ -533,9 +534,30 @@ Validation:
 - `systemd-analyze verify deploy/browserless-runner.service`
 - `git diff --check`
 
+### Commit 22: Split Deployment Env Audit Modes
+
+Files:
+
+- Update `scripts/browserless-deployment-audit.js`.
+- Update `scripts/browserless-acceptance-report.js`.
+- Update browserless self-test coverage and operator/migration/state docs.
+
+Purpose:
+
+- Keep the initial deployment audit strict about safe dry-run/read-only defaults.
+- Add a live readiness mode that catches missing session token, user id, and login-point values before a supervised live canary.
+- Prevent final aggregate acceptance from failing only because the service env has legitimately moved from safe dry-run into a staged live canary profile.
+
+Validation:
+
+- `node grasp-rat-bot.js --self-test`
+- `node --check scripts/browserless-deployment-audit.js`
+- `node --check scripts/browserless-acceptance-report.js`
+- `git diff --check`
+
 ## External VPS Validation Required
 
-Local implementation work is complete through Commit 21, and the VPS systemd deployment validation passed on 2026-07-08. The production runner is not accepted until the remaining live canary validations below produce evidence and the aggregate acceptance report passes.
+Local implementation work is complete through Commit 22, and the VPS systemd deployment validation passed on 2026-07-08. The production runner is not accepted until the remaining live canary validations below produce evidence and the aggregate acceptance report passes.
 
 Use the production service path and audit commands from `docs/agent/browserless-vps-migration.md` and `docs/agent/browserless-runner-operator.md`. Do not mark `headless-demo/` superseded until these validations pass:
 

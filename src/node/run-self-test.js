@@ -6785,6 +6785,32 @@ async function runSelfTest() {
             stderr: ''
           })
         });
+        fs.writeFileSync(envPath, [
+          `GRASP_RAT_BROWSERLESS_DATA_DIR=${dataDir}`,
+          `GRASP_RAT_BROWSERLESS_LOG_DIR=${logDir}`,
+          'GRASP_RAT_BROWSERLESS_DRY_RUN=false',
+          'GRASP_RAT_BROWSERLESS_CANARY_PROFILE=profit',
+          'GRASP_RAT_BROWSERLESS_CONTROL_MODE=non-combat-profit',
+          'GRASP_RAT_BROWSERLESS_WEB_TOKEN=local-secret-token',
+          'GRASP_RAT_BROWSERLESS_USER_ID=123',
+          'GRASP_RAT_BROWSERLESS_SESSION_TOKEN=live-secret-token',
+          'GRASP_RAT_BROWSERLESS_LOGIN_POINT_X=10',
+          'GRASP_RAT_BROWSERLESS_LOGIN_POINT_Y=20',
+          'GRASP_RAT_BROWSERLESS_LOGIN_POINT_HP=90',
+          ''
+        ].join('\n'));
+        const live = auditBrowserlessDeployment({
+          unitPath,
+          envPath,
+          envMode: 'live',
+          skipSystemctl: true
+        });
+        const aggregate = auditBrowserlessDeployment({
+          unitPath,
+          envPath,
+          envMode: 'any',
+          skipSystemctl: true
+        });
         const placeholderEnvPath = path.join(dir, 'placeholder.env');
         fs.writeFileSync(placeholderEnvPath, fs.readFileSync(envPath, 'utf8').replace('local-secret-token', 'replace-with-a-long-random-token'));
         const placeholder = auditBrowserlessDeployment({
@@ -6795,12 +6821,16 @@ async function runSelfTest() {
         return [
           ok.ok,
           ok.failed.length,
+          live.ok,
+          live.failed.length,
+          aggregate.ok,
+          aggregate.failed.length,
           placeholder.ok,
           placeholder.failed.some(item => item.key === 'environment-file-reference'),
           placeholder.failed.some(item => item.key === 'env-web-token')
         ].join('|');
       }),
-      want: 'true|0|false|true|true'
+      want: 'true|0|true|0|true|0|false|true|true'
     },
     {
       name: 'browserless acceptance report aggregates deployment canary and stop audits',
@@ -6843,6 +6873,7 @@ async function runSelfTest() {
         write('decisions', { at: '2026-07-08T01:00:01.000Z', type: 'decision', detail: { kind: 'wait' } });
         write('decisions', { at: '2026-07-08T01:02:01.000Z', type: 'decision', detail: { kind: 'coin' } });
         write('exits', { at: '2026-07-08T01:01:01.000Z', type: 'safety-event', detail: { reason: 'explicit-stop' } });
+        let deploymentEnvMode = '';
         const ok = buildBrowserlessAcceptanceReport({
           logDir: path.join(dir, 'logs'),
           day: '2026-07-08',
@@ -6850,7 +6881,10 @@ async function runSelfTest() {
           includeStop: true,
           skipDeployment: false
         }, {
-          deploymentAudit: () => ({ ok: true, failed: [] })
+          deploymentAudit: options => {
+            deploymentEnvMode = options.envMode;
+            return { ok: true, failed: [] };
+          }
         });
         const missing = buildBrowserlessAcceptanceReport({
           logDir: path.join(dir, 'logs'),
@@ -6863,11 +6897,12 @@ async function runSelfTest() {
           ok.ok,
           ok.sections.length,
           ok.failed.length,
+          deploymentEnvMode,
           missing.ok,
           missing.failed[0]?.key
         ].join('|');
       }),
-      want: 'true|4|0|false|canary:profit'
+      want: 'true|4|0|any|false|canary:profit'
     },
     {
       name: 'browserless runner config maps canary profiles without enabling combat',

@@ -67,6 +67,14 @@ sudo node scripts/browserless-deployment-audit.js --fail-on-incomplete
 
 The audit checks the installed unit, env path, runner entrypoint, safe read-only dry-run defaults, non-placeholder status token, data/log directory access, and `systemctl is-enabled/is-active` state. Use `--skip-systemctl` only for static file/directory checks.
 
+Before switching a supervised live canary on, audit the live env shape:
+
+```bash
+sudo node scripts/browserless-deployment-audit.js --env-mode live --fail-on-incomplete
+```
+
+`--env-mode live` expects `GRASP_RAT_BROWSERLESS_DRY_RUN=false`, a valid canary/control mode, manual session values, and login-point coordinates. The aggregate acceptance report uses deployment env mode `any` by default so it can run after the service has legitimately moved through live staged profiles.
+
 The status panel remains token-gated at the configured host/port. Emergency stop is available through the panel Stop button or:
 
 ```bash
