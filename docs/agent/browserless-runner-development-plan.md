@@ -80,6 +80,30 @@ Retention: delete day directories older than 3 UTC days at startup and once per 
 - Coin drops and messages were observed only in pushed `snapshot`.
 - `selfPresent` changes from true during the session to false after verified leave.
 
+## Implementation Status
+
+Update this table in the same task that completes each feature.
+
+| Plan Item | Status | Evidence |
+| --- | --- | --- |
+| Commit 1: Extract Shared Frame Parser | Complete | `src/shared/grz-frame.js` owns `GRZ1` gzip JSON parsing and deterministic summaries; `headless-demo/server.js` calls the shared parser; `node grasp-rat-bot.js --self-test` includes focused parser coverage. |
+| Commit 2: Add Pre-Login Snapshot Safety Probe | Complete | `headless-demo/server.js` exposes `lastSnapshotProbe` with cache-busted freshness checks; `headless-demo/README.md` documents the operator flow; `docs/agent/browserless-vps-migration.md` records the fresh VPS validation. |
+| Commit 3: Create Node Browserless Session And Leave Client | Not started | No `src/node/browserless/session-client.js` or `leave-client.js` yet. |
+| Commit 4: Add Browserless WebSocket Transport | Not started | No `src/node/browserless/ws-transport.js` yet. |
+| Commit 5: Add Browserless State Store | Not started | No `src/node/browserless/state-store.js` yet. |
+| Commit 6: Add Local Log Store And Retention | Not started | No browserless local log store or summary script yet. |
+| Commit 7: Add Runner CLI Skeleton | Not started | No `scripts/browserless-runner.js` yet. |
+| Commit 8: Add Status Server And Web Panel Skeleton | Not started | No browserless status server or panel module yet. |
+| Commit 9: Add Read-Only Canary Runner | Not started | No production read-only canary runner yet. |
+| Commit 10: Add Dry-Run Decision Adapter | Not started | No browserless decision adapter yet. |
+| Commit 11: Add Safety And Exit Controller | Not started | No browserless safety controller yet. |
+| Commit 12: Add Movement-Only Live Mode | Not started | No browserless action adapter or movement-only live mode yet. |
+| Commit 13: Add Non-Combat Profit Mode | Not started | Browserless profit mode not implemented yet. |
+| Commit 14: Add Combat Dry-Run Mode | Not started | No browserless combat adapter yet. |
+| Commit 15: Add Guarded Combat Live Mode | Not started | Live browserless combat remains unavailable and default-off. |
+| Commit 16: Add Supervisor And Deployment Surface | Not started | Production service files are not present yet. |
+| Commit 17: Production Canary And Cutover Docs | Not started | Cutover docs wait for accepted production canaries. |
+
 ## Commit Plan
 
 ### Commit 1: Extract Shared Frame Parser

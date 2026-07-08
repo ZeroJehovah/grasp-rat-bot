@@ -1,5 +1,6 @@
 'use strict';
 
+const zlib = require('zlib');
 const {
   offlineLeaveSummaryText,
   staminaHoldContradictedByStaminaEvidence,
@@ -19,6 +20,10 @@ const {
 const {
   buildBrowserPreservedState
 } = require('../shared/browser-preserved-state');
+const {
+  parseGrzFrame,
+  summarizeGrzJson
+} = require('../shared/grz-frame');
 const {
   createNoSelfSnapshotRecoveryRuntime,
   shouldClearTmpGameLocalSessionKey
@@ -5060,6 +5065,14 @@ async function runSelfTest() {
     return leaveDisplay || String(offlineDetail?.displayReason || '') || String(fallback || '');
   }
 
+  function encodeGrzFrameForTest(json) {
+    return Buffer.concat([
+      Buffer.from('GRZ1', 'ascii'),
+      Buffer.from([1]),
+      zlib.gzipSync(Buffer.from(JSON.stringify(json), 'utf8'))
+    ]);
+  }
+
   const cases = [
     {
       name: 'strategy module self-tests pass',
@@ -5068,6 +5081,106 @@ async function runSelfTest() {
         return `${result.failed}:${result.success}`;
       })(),
       want: '0:true'
+    },
+    {
+      name: 'shared GRZ frame parser decodes gzip pos summaries',
+      got: (() => {
+        const parsed = parseGrzFrame(encodeGrzFrameForTest({
+          type: 'pos',
+          tick: 42,
+          entities: [
+            { entity_id: 1, user_id: 7, name: 'self', x: 100, y: 200, hp: 90, cell: [2, 3, 4] },
+            { entity_id: 2, user_id: 8, name: 'other', x: 500, y: 900 }
+          ],
+          bullets: [{ bullet_id: 3 }]
+        }), { userId: 7 });
+        return [
+          parsed.format,
+          parsed.version,
+          parsed.compression,
+          parsed.decodedType,
+          parsed.decodedTick,
+          parsed.decodedSummary?.entityCount,
+          parsed.decodedSummary?.bulletCount,
+          parsed.decodedSummary?.selfPresent,
+          parsed.decodedSummary?.self?.name,
+          parsed.decodedSummary?.self?.cell?.join(',')
+        ].join('|');
+      })(),
+      want: 'GRZ1|1|gzip|pos|42|2|1|true|self|2,3'
+    },
+    {
+      name: 'shared GRZ frame parser summarizes shoot acknowledgements',
+      got: (() => {
+        const parsed = parseGrzFrame(encodeGrzFrameForTest({
+          type: 'shoot_ok',
+          tick: 77,
+          bullet_id: 101,
+          owner_user_id: 7,
+          start_x: 10,
+          start_y: 11,
+          target_x: 12,
+          target_y: 13,
+          range_cm: 14500,
+          speed_per_tick: 800,
+          ignored_extra: 'not copied'
+        }), { userId: 7 });
+        return [
+          parsed.decodedSummary?.type,
+          parsed.decodedSummary?.ack?.bullet_id,
+          parsed.decodedSummary?.ack?.owner_user_id,
+          parsed.decodedSummary?.ack?.range_cm,
+          Object.prototype.hasOwnProperty.call(parsed.decodedSummary?.ack || {}, 'ignored_extra')
+        ].join('|');
+      })(),
+      want: 'shoot_ok|101|7|14500|false'
+    },
+    {
+      name: 'shared GRZ frame parser ignores non-GRZ buffers',
+      got: Object.keys(parseGrzFrame(Buffer.from('plain text'))).length,
+      want: 0
+    },
+    {
+      name: 'shared GRZ frame parser reports gzip decode errors',
+      got: (() => {
+        const parsed = parseGrzFrame(Buffer.concat([
+          Buffer.from('GRZ1', 'ascii'),
+          Buffer.from([1]),
+          Buffer.from([0x1f, 0x8b, 0x00, 0x00])
+        ]));
+        return parsed.format + '|' + parsed.compression + '|' + Boolean(parsed.decodeError);
+      })(),
+      want: 'GRZ1|gzip|true'
+    },
+    {
+      name: 'shared GRZ JSON summary counts snapshot fallback fields',
+      got: (() => {
+        const summary = summarizeGrzJson({
+          type: 'snapshot',
+          tick: '88',
+          entities: [],
+          bullets: [],
+          coin_drops: [{ amount: 1 }, { amount: 2 }],
+          messages: ['a'],
+          total_entities: 1001,
+          in_game: 55,
+          visible: 12,
+          occupied_cells: 9
+        });
+        return [
+          summary.type,
+          summary.tick,
+          summary.entityCount,
+          summary.bulletCount,
+          summary.coinDropCount,
+          summary.messageCount,
+          summary.totalEntities,
+          summary.inGameCount,
+          summary.visibleCount,
+          summary.occupiedCells
+        ].join('|');
+      })(),
+      want: 'snapshot|88|0|0|2|1|1001|55|12|9'
     },
     {
       name: 'final arbitration keeps recent safety action over profit',
