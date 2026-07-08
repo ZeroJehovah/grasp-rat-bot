@@ -20,6 +20,7 @@ The finished runner should:
 - send movement, shooting, and leave commands through a narrow transport adapter;
 - store local logs for 3 days for strategy review;
 - expose a web panel roughly equivalent to the current script panel, with clearer VPS-oriented wording;
+- run as a real `systemd` service in production, not through `headless-demo/start-demo.sh`;
 - exit safely on no-self, frame gaps, command stalls, stamina exhaustion, unsafe login point, explicit stop, or confirmed risk;
 - support dry-run/canary modes before unattended live control.
 
@@ -372,6 +373,8 @@ Validation:
 Files:
 
 - Add `deploy/browserless-runner.service`.
+- Add `deploy/browserless-runner.env.example`.
+- Add `scripts/install-browserless-runner-service.sh` if the install steps are repetitive enough to justify a helper.
 - Add operator README for env vars, status port, data/log dirs, restart, retention, and emergency stop.
 - Update `docs/agent/browserless-vps-migration.md`.
 
@@ -379,6 +382,16 @@ Purpose:
 
 - Make the runner operable as a service, not a foreground demo.
 - Keep demo and production service names distinct until cutover.
+- Establish the production operation shape:
+  - service name: `grasp-rat-browserless-runner`;
+  - executable: `node scripts/browserless-runner.js`;
+  - env file: `/etc/grasp-rat/browserless-runner.env`;
+  - data dir: `/var/lib/grasp-rat-browserless`;
+  - log dir: `/var/log/grasp-rat-browserless`;
+  - status panel bound to the configured host/port with a required web token;
+  - standard controls through `systemctl start|stop|restart|status grasp-rat-browserless-runner`;
+  - journal visibility through `journalctl -u grasp-rat-browserless-runner`.
+- Keep `headless-demo/start-demo.sh` documented only as a diagnostic/protocol probe, not a production run path.
 
 Validation:
 

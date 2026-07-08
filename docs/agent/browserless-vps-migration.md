@@ -8,7 +8,7 @@ The commit-by-commit product implementation sequence is tracked separately in `d
 
 Move the runtime-critical control loop to a remote Linux VPS so gameplay stability depends on the VPS network rather than the user's local browser machine. The long-term target is to preserve the existing bot's decision logic while replacing browser/CDP interaction with direct game transport calls wherever the game protocol allows it.
 
-The first phase is intentionally a small probe under `headless-demo/`, not an unattended production bot.
+The first phase is intentionally a small probe under `headless-demo/`, not an unattended production bot. The production browserless runner should run as a real `systemd` service (`grasp-rat-browserless-runner`) rather than through `headless-demo/start-demo.sh`.
 
 ## Standing Constraints
 
