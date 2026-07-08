@@ -20,6 +20,7 @@ const {
   createBrowserlessSafetyController,
   executeSafetyExit
 } = require('./safety-controller');
+const { createBrowserlessActionAdapter } = require('./action-adapter');
 
 const DEFAULT_READONLY_PROBE_MS = 30000;
 const DEFAULT_FRAME_GAP_ALERT_MS = 5000;
@@ -128,6 +129,8 @@ async function runReadOnlyCanary(config, options = {}) {
     ? options.sleep
     : ms => new Promise(resolve => setTimeout(resolve, ms));
   const logStore = options.logStore || null;
+  const controlMode = config.controlMode || (config.readOnly === false ? 'movement-only' : 'read-only');
+  const movementEnabled = controlMode === 'movement-only';
   const durationMs = Math.max(1000, Number(config.readOnlyProbeMs || DEFAULT_READONLY_PROBE_MS));
   const frameGapAlertMs = Math.max(1000, Number(config.frameGapAlertMs || DEFAULT_FRAME_GAP_ALERT_MS));
   const decisionIntervalMs = Math.max(250, Number(config.decisionIntervalMs || 1000));
@@ -150,7 +153,7 @@ async function runReadOnlyCanary(config, options = {}) {
   const startedAt = now();
   const result = {
     ok: false,
-    mode: 'read-only',
+    mode: controlMode,
     startedAt: new Date(startedAt).toISOString(),
     completedAt: '',
     durationTargetMs: durationMs,
@@ -168,6 +171,14 @@ async function runReadOnlyCanary(config, options = {}) {
       exit: null,
       leaveFailure: null
     },
+    actions: {
+      enabled: movementEnabled,
+      sentCount: 0,
+      stopCount: 0,
+      skippedCount: 0,
+      last: null,
+      settlement: null
+    },
     leave: null,
     error: ''
   };
@@ -175,6 +186,7 @@ async function runReadOnlyCanary(config, options = {}) {
   let wsError = null;
   let wsClosed = null;
   let ending = false;
+  let actionAdapter = null;
 
   const log = (type, detail) => {
     if (logStore) logStore.append('runner', type, detail);
@@ -184,6 +196,26 @@ async function runReadOnlyCanary(config, options = {}) {
   };
   const logSafety = detail => {
     if (logStore) logStore.append('exits', 'safety-event', detail);
+  };
+  const logAction = detail => {
+    if (logStore) logStore.append('runner', 'movement-command', detail);
+  };
+  const updateActionResult = actionResult => {
+    if (!actionResult) return;
+    const adapterState = actionAdapter?.getState?.() || {};
+    result.actions.sentCount = Number(adapterState.sentCount || 0);
+    result.actions.stopCount = Number(adapterState.stopCount || 0);
+    result.actions.skippedCount = Number(adapterState.skippedCount || 0);
+    result.actions.last = actionResult;
+    result.actions.settlement = adapterState.lastSettlement || result.actions.settlement;
+    logAction({ action: actionResult, state: adapterState });
+    if (typeof options.onAction === 'function') {
+      try {
+        options.onAction(actionResult, { actionState: adapterState });
+      } catch (err) {
+        log('canary-action-status-error', { error: err?.message || String(err) });
+      }
+    }
   };
   const recordSafetyEvent = event => {
     if (!event || event.ok || result.safety.event) return false;
@@ -235,8 +267,14 @@ async function runReadOnlyCanary(config, options = {}) {
         });
         if (frame.decodedJson) {
           stateStore.ingestFrame(frame.decodedJson, { receivedAtMs: atMs });
+          const currentState = stateStore.getState(atMs);
+          if (actionAdapter) {
+            const settlement = actionAdapter.observeState(currentState);
+            if (settlement) {
+              result.actions.settlement = settlement;
+            }
+          }
           if (!lastDecisionAtMs || atMs - lastDecisionAtMs >= decisionIntervalMs) {
-            const currentState = stateStore.getState(atMs);
             const decision = decisionAdapter.decide(currentState, { nowMs: atMs });
             const summary = summarizeBrowserlessDecision(decision);
             result.decisions.evaluatedCount += 1;
@@ -251,8 +289,11 @@ async function runReadOnlyCanary(config, options = {}) {
                 log('canary-decision-status-error', { error: err?.message || String(err) });
               }
             }
+            if (actionAdapter) {
+              updateActionResult(actionAdapter.applyDecision(currentState, summary));
+            }
           }
-          recordSafetyEvent(safetyController.evaluate(stateStore.getState(atMs), {
+          recordSafetyEvent(safetyController.evaluate(currentState, {
             startedAtMs: startedAt,
             frameGapAlertMs,
             staleSelfMs: config.staleSelfMs,
@@ -263,6 +304,15 @@ async function runReadOnlyCanary(config, options = {}) {
         }
       }
     });
+    if (movementEnabled) {
+      actionAdapter = options.actionAdapter || createBrowserlessActionAdapter({
+        transport,
+        now,
+        commandIntervalMs: config.movementCommandIntervalMs,
+        targetDeadZoneCm: config.movementTargetDeadZoneCm,
+        settlementFrames: config.movementSettlementFrames
+      });
+    }
     log('canary-ws-open', { durationMs });
     const deadline = now() + durationMs;
     while (now() < deadline && !result.safety.event) {
@@ -292,13 +342,14 @@ async function runReadOnlyCanary(config, options = {}) {
     if (result.safety.event) {
       result.safety.exit = await executeSafetyExit(result.safety.event, config, {
         transport,
-        allowStopMotion: false,
+        allowStopMotion: movementEnabled,
         leaveWithVerification: options.leaveWithVerification,
         now,
         sleep
       });
       result.leave = result.safety.exit.leave;
     } else {
+      if (actionAdapter) updateActionResult(actionAdapter.stop('normal-complete'));
       const leave = options.leaveWithVerification || leaveWithVerification;
       result.leave = await leave({
         gameOrigin: config.gameOrigin,
@@ -335,6 +386,13 @@ async function runReadOnlyCanary(config, options = {}) {
   }
   if (!result.error && leaveFailed) result.error = 'leave not confirmed';
   result.state = stateStore.getState(now());
+  if (actionAdapter) {
+    const adapterState = actionAdapter.getState();
+    result.actions.sentCount = Number(adapterState.sentCount || 0);
+    result.actions.stopCount = Number(adapterState.stopCount || 0);
+    result.actions.skippedCount = Number(adapterState.skippedCount || 0);
+    result.actions.settlement = adapterState.lastSettlement || result.actions.settlement;
+  }
   result.ok = Boolean(!result.error);
   result.completedAt = new Date(now()).toISOString();
   log(result.ok ? 'canary-finish' : 'canary-failed', result);

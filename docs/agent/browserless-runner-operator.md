@@ -4,8 +4,9 @@ This document tracks the production browserless runner surface. The older `headl
 
 ## Current Scope
 
-- The runner currently supports dry-run mode and a live read-only canary.
+- The runner currently supports dry-run mode, a live read-only canary, and a supervised movement-only mode.
 - Live read-only canary sends no movement or shoot commands. It runs pre-login snapshot safety, joins direct WS, collects frame health, and calls verified `leave`.
+- Movement-only mode sends velocity commands only toward snapshot coin fallback targets, never sends shoot commands, and remains supervised-validation-only.
 - The safety controller handles no-self, frame gap, stale self, WS close/error, stamina exhaustion, unsafe login point, direct leave failure, and explicit stop.
 - The runner writes local JSONL logs and a persistent state file under the configured data directory.
 - The status server and web panel are available for non-`--once` runs.
@@ -58,6 +59,30 @@ For the first supervised validation, use 10-30 minutes for `--read-only-probe-ms
 
 During a supervised run, `POST /api/stop` or the panel Stop button requests an explicit safety stop. The runner records the event in `exits.jsonl` and should leave through the verified direct `leave` path.
 
+## Movement-Only Validation
+
+Movement-only mode uses the same pre-login safety and verified leave path, but enables velocity commands. Use short supervised runs first.
+
+```bash
+node scripts/browserless-runner.js \
+  --once \
+  --live \
+  --movement-only \
+  --data-dir data/browserless-runner \
+  --user-id <user-id> \
+  --session-token '<session-token>' \
+  --login-point-x <x-cm> \
+  --login-point-y <y-cm> \
+  --login-point-hp <hp> \
+  --decision-interval-ms 1000 \
+  --movement-command-interval-ms 500 \
+  --movement-target-dead-zone-cm 900 \
+  --movement-settlement-frames 2 \
+  --read-only-probe-ms 60000
+```
+
+Inspect `runner.jsonl` for `movement-command` entries and final verified `leave`. Inspect status action rows for command settlement. Any `shoot` command in logs or transport evidence is a release blocker.
+
 ## Status API
 
 - `GET /` serves the built-in browserless runner panel.
@@ -105,6 +130,7 @@ Important variables:
 - `GRASP_RAT_BROWSERLESS_STATUS_PORT`
 - `GRASP_RAT_BROWSERLESS_WEB_TOKEN`
 - `GRASP_RAT_BROWSERLESS_READ_ONLY`
+- `GRASP_RAT_BROWSERLESS_CONTROL_MODE`
 - `GRASP_RAT_BROWSERLESS_DRY_RUN`
 - `GRASP_RAT_BROWSERLESS_READONLY_PROBE_MS`
 - `GRASP_RAT_BROWSERLESS_FRAME_GAP_ALERT_MS`
@@ -112,6 +138,9 @@ Important variables:
 - `GRASP_RAT_BROWSERLESS_STALE_SELF_MS`
 - `GRASP_RAT_BROWSERLESS_NO_SELF_GRACE_MS`
 - `GRASP_RAT_BROWSERLESS_STAMINA_EXHAUSTED_BELOW_MS`
+- `GRASP_RAT_BROWSERLESS_MOVEMENT_COMMAND_INTERVAL_MS`
+- `GRASP_RAT_BROWSERLESS_MOVEMENT_TARGET_DEAD_ZONE_CM`
+- `GRASP_RAT_BROWSERLESS_MOVEMENT_SETTLEMENT_FRAMES`
 - `GRASP_RAT_BROWSERLESS_USER_ID`
 - `GRASP_RAT_BROWSERLESS_SESSION_TOKEN`
 - `GRASP_RAT_BROWSERLESS_LOGIN_POINT_X`

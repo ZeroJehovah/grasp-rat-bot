@@ -11,6 +11,7 @@
   - `GRASP_RAT_BROWSERLESS_STATUS_PORT = 18767`
   - `GRASP_RAT_BROWSERLESS_WEB_TOKEN = ""`
   - `GRASP_RAT_BROWSERLESS_READ_ONLY = true`
+  - `GRASP_RAT_BROWSERLESS_CONTROL_MODE = read-only`
   - `GRASP_RAT_BROWSERLESS_DRY_RUN = true`
   - `GRASP_RAT_BROWSERLESS_ONCE = false`
   - `GRASP_RAT_BROWSERLESS_LOG_RETENTION_DAYS = 3`
@@ -24,12 +25,15 @@
   - `GRASP_RAT_BROWSERLESS_STALE_SELF_MS = 3000`
   - `GRASP_RAT_BROWSERLESS_NO_SELF_GRACE_MS = 3000`
   - `GRASP_RAT_BROWSERLESS_STAMINA_EXHAUSTED_BELOW_MS = 200`
+  - `GRASP_RAT_BROWSERLESS_MOVEMENT_COMMAND_INTERVAL_MS = 500`
+  - `GRASP_RAT_BROWSERLESS_MOVEMENT_TARGET_DEAD_ZONE_CM = 900`
+  - `GRASP_RAT_BROWSERLESS_MOVEMENT_SETTLEMENT_FRAMES = 2`
   - `GRASP_RAT_BROWSERLESS_USER_ID = 0`
   - `GRASP_RAT_BROWSERLESS_SESSION_TOKEN = ""`
   - `GRASP_RAT_BROWSERLESS_LOGIN_POINT_X = null`
   - `GRASP_RAT_BROWSERLESS_LOGIN_POINT_Y = null`
   - `GRASP_RAT_BROWSERLESS_LOGIN_POINT_HP = null`
-  - The CLI accepts `--read-only`, `--dry-run`, `--live`, `--once`, `--data-dir`, `--status-host`, `--status-port`, `--web-token`, `--user-id`, `--session-token`, `--read-only-probe-ms`, `--frame-gap-alert-ms`, `--snapshot-path`, `--decision-interval-ms`, `--stale-self-ms`, `--no-self-grace-ms`, `--stamina-exhausted-below-ms`, `--login-point-x`, `--login-point-y`, and `--login-point-hp`. Live control beyond read-only canary remains gated by later plan items.
+  - The CLI accepts `--read-only`, `--movement-only`, `--control-mode`, `--dry-run`, `--live`, `--once`, `--data-dir`, `--status-host`, `--status-port`, `--web-token`, `--user-id`, `--session-token`, `--read-only-probe-ms`, `--frame-gap-alert-ms`, `--snapshot-path`, `--decision-interval-ms`, `--stale-self-ms`, `--no-self-grace-ms`, `--stamina-exhausted-below-ms`, `--movement-command-interval-ms`, `--movement-target-dead-zone-cm`, `--movement-settlement-frames`, `--login-point-x`, `--login-point-y`, and `--login-point-hp`. Live control beyond movement-only remains gated by later plan items.
 
 - `globalRefreshMs = 5000`
 - `globalRefreshTimeoutMs = 3000`
