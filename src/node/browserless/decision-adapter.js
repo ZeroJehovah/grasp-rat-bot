@@ -202,11 +202,16 @@ function buildBrowserlessStrategyInput(state, options = {}) {
     .filter(coin => Number(coin.amount || 0) > 0);
   const snapshotFrameAgeMs = numberOrNull(fallback.frameAgeMs);
   const snapshotMaxAgeMs = Math.max(1000, Number(options.snapshotCoinFallbackMaxAgeMs || 5000));
+  const snapshotFallbackEnabledOption = options.snapshotCoinFallbackEnabled ?? options.allowSnapshotCoinFallback;
+  const snapshotFallbackEnabled = snapshotFallbackEnabledOption === undefined
+    ? options.controlMode !== 'profit-live'
+    : snapshotFallbackEnabledOption !== false;
   const snapshotFallbackBlockedReasons = [];
+  if (!snapshotFallbackEnabled) snapshotFallbackBlockedReasons.push('snapshot-fallback-disabled');
   if (realtimeCoins.length) snapshotFallbackBlockedReasons.push('realtime-profit-present');
   if (activeThreats.length) snapshotFallbackBlockedReasons.push('active-threat-visible');
   if (snapshotFrameAgeMs !== null && snapshotFrameAgeMs > snapshotMaxAgeMs) snapshotFallbackBlockedReasons.push('snapshot-stale');
-  const snapshotFallbackAllowed = Boolean(snapshotCoins.length && !snapshotFallbackBlockedReasons.length);
+  const snapshotFallbackAllowed = Boolean(snapshotFallbackEnabled && snapshotCoins.length && !snapshotFallbackBlockedReasons.length);
   if (!realtimeCoins.length && !snapshotCoins.length) dataGaps.push('no-coin-frame-type-observed');
   if (!realtimeCoins.length && snapshotCoins.length) dataGaps.push('snapshot-coin-fallback-only');
   if (snapshotFallbackBlockedReasons.length) dataGaps.push(...snapshotFallbackBlockedReasons.map(reason => `snapshot-fallback-blocked:${reason}`));
