@@ -467,16 +467,27 @@ function buildBrowserlessStrategyInput(state, options = {}) {
 }
 
 function scoreCoinOpportunity(coin, options = {}) {
+  const weight = Number(options.coinOpportunityValue ?? BROWSER_RUNTIME_DEFAULTS.coinOpportunityValue ?? 1);
   return opportunityValueScoreCore(coin?.amount, coin?.distance, {
-    distanceScoreScale: options.distanceScoreScale || 10000,
-    coinOpportunityValue: options.coinOpportunityValue ?? 1
+    distanceScoreScale: options.distanceScoreScale || options.opportunityDistanceScoreScale || BROWSER_RUNTIME_DEFAULTS.opportunityDistanceScoreScale || 10000,
+    weight
   });
 }
 
 function scoreEnemyOpportunity(target, options = {}) {
+  const isAfkProfitTarget = typeof options.isAfkProfitTarget === 'function'
+    ? options.isAfkProfitTarget
+    : () => false;
+  const coinWeight = Number(options.coinOpportunityValue ?? BROWSER_RUNTIME_DEFAULTS.coinOpportunityValue ?? 1);
+  const dropWeight = Number(options.dropOpportunityValue ?? BROWSER_RUNTIME_DEFAULTS.dropOpportunityValue ?? coinWeight);
+  const weight = Number(options.enemyOpportunityValue ?? (
+    isAfkProfitTarget(target)
+      ? coinWeight
+      : dropWeight
+  ) ?? 1);
   return opportunityValueScoreCore(entityDropValue(target), enemyStaminaCost(target, options), {
-    distanceScoreScale: options.distanceScoreScale || 10000,
-    coinOpportunityValue: options.enemyOpportunityValue ?? 1
+    distanceScoreScale: options.distanceScoreScale || options.opportunityDistanceScoreScale || BROWSER_RUNTIME_DEFAULTS.opportunityDistanceScoreScale || 10000,
+    weight
   });
 }
 
@@ -580,7 +591,10 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
           isSnapshotOnlyCoin: item => Boolean(item?.snapshotOnly)
         })
       : 'visible-coin',
-    scoreEnemyOpportunity: target => scoreEnemyOpportunity(target, options),
+    scoreEnemyOpportunity: target => scoreEnemyOpportunity(target, {
+      ...options,
+      isAfkProfitTarget: item => input.afkTargets.includes(item)
+    }),
     enemyStaminaCost: target => enemyStaminaCost(target, options),
     opportunityStaminaAffordable: () => true,
     isAfkProfitTarget: target => input.afkTargets.includes(target),

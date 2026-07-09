@@ -6123,6 +6123,43 @@ async function runSelfTest() {
       want: 'profit-candidate|attack|8|9|2'
     },
     {
+      name: 'browserless profit live ranks in-range min-drop AFK over distant one coin',
+      got: (() => {
+        const store = createBrowserlessStateStore({ userId: 7 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 59,
+          entities: [
+            { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+            { entity_id: 2, user_id: 8, name: 'drop-three-afk', x: 14000, y: 0, hp: 100, current_join_mode: 'Passive', drop: 3 }
+          ],
+          bullets: []
+        }, { receivedAtMs: 1000 });
+        store.ingestFrame({
+          type: 'snapshot',
+          tick: 60,
+          entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100 }],
+          bullets: [],
+          coin_drops: [{ drop_id: 'distant-one-coin', amount: 1, x: 10500, y: 0 }],
+          messages: []
+        }, { receivedAtMs: 1100 });
+        const decision = buildBrowserlessDecision(store.getState(1200), {}, {
+          nowMs: 1200,
+          controlMode: 'profit-live'
+        });
+        const coin = (decision.profit.candidates || []).find(item => item.type === 'coin');
+        return [
+          decision.kind,
+          decision.action.kind,
+          decision.action.target.userId,
+          decision.action.target.drop,
+          Math.round(decision.profit.best.score / 1000),
+          Math.round((coin?.score || 0) / 1000)
+        ].join('|');
+      })(),
+      want: 'profit-candidate|attack|8|3|124|57'
+    },
+    {
       name: 'browserless profit live damaged self recovers instead of ordinary coin',
       got: (() => {
         const store = createBrowserlessStateStore({ userId: 7 });
