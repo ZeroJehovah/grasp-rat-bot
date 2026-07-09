@@ -6575,6 +6575,178 @@ async function runSelfTest() {
       want: 'safety-exit|safety|profit-live-snapshot-active-threat|true|8|true'
     },
     {
+      name: 'browserless action shoot records attack history for post-attack logic',
+      got: (() => {
+        const decisionAdapter = createBrowserlessDecisionAdapter({ userId: 7, controlMode: 'profit-live' });
+        const commands = [];
+        const actionAdapter = createBrowserlessActionAdapter({
+          now: () => 1200 + commands.length * 200,
+          commandIntervalMs: 1,
+          attackRangeCm: 14500,
+          transport: {
+            sendVelocity: (dx, dy) => commands.push(`vel ${dx} ${dy}`),
+            sendShoot: (targetX, targetY, startX, startY) => commands.push(`shoot ${targetX} ${targetY} ${startX} ${startY}`)
+          }
+        });
+        const store = createBrowserlessStateStore({ userId: 7 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 59,
+          entities: [
+            { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+            { entity_id: 2, user_id: 8, name: 'afk', x: 1000, y: 0, hp: 80, current_join_mode: 'Passive', drop: 12 }
+          ],
+          bullets: []
+        }, { receivedAtMs: 1000 });
+        const decision = decisionAdapter.decide(store.getState(1200), { nowMs: 1200, controlMode: 'profit-live' });
+        const actionResult = actionAdapter.applyDecision(store.getState(1200), decision);
+        const recorded = decisionAdapter.observeActionResult(actionResult, decision, { nowMs: 1400 });
+        const state = decisionAdapter.getState();
+        return [
+          actionResult.kind,
+          actionResult.shoot.ok,
+          recorded.id,
+          recorded.action,
+          recorded.drop,
+          state.attackHistory.length,
+          state.attackHistory[0].id,
+          commands.some(item => item.startsWith('shoot '))
+        ].join('|');
+      })(),
+      want: 'profit-attack|true|8|attack|12|1|8|true'
+    },
+    {
+      name: 'browserless profit live waits at resolved post-attack target before drop appears',
+      got: (() => {
+        const stateful = {
+          attackHistory: [{
+            id: 8,
+            name: 'afk',
+            x: 5000,
+            y: 0,
+            drop: 20,
+            at: 1000,
+            action: 'attack',
+            afk: true
+          }]
+        };
+        const decision = buildBrowserlessDecision({
+          userId: 7,
+          realtime: {
+            tick: 60,
+            frameAgeMs: 100,
+            self: { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+            entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 }],
+            bullets: [],
+            coinDrops: []
+          },
+          fallback: { coinDrops: [] }
+        }, stateful, {
+          nowMs: 1600,
+          controlMode: 'profit-live',
+          postAttackDropWaitMs: 1000,
+          postAttackDropResolveMaxMs: 5000,
+          postAttackDropWaitMinDrop: 8,
+          postAttackDropWaitStopDistance: 900
+        });
+        return [
+          decision.kind,
+          decision.band,
+          decision.reason,
+          decision.action.target.id,
+          decision.action.target.distance,
+          decision.action.target.postAttackTarget.drop
+        ].join('|');
+      })(),
+      want: 'post-attack-drop-wait|profit|post-attack-drop-wait-position|8|5000|20'
+    },
+    {
+      name: 'browserless profit live picks matched post-attack player drop',
+      got: (() => {
+        const stateful = {
+          attackHistory: [{
+            id: 8,
+            name: 'afk',
+            x: 5000,
+            y: 0,
+            drop: 20,
+            at: 1000,
+            action: 'attack',
+            afk: true
+          }]
+        };
+        const decision = buildBrowserlessDecision({
+          userId: 7,
+          realtime: {
+            tick: 60,
+            frameAgeMs: 100,
+            self: { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+            entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 }],
+            bullets: [],
+            coinDrops: [{ drop_id: 'post-drop', amount: 20, x: 5050, y: 0 }]
+          },
+          fallback: { coinDrops: [] }
+        }, stateful, {
+          nowMs: 1600,
+          controlMode: 'profit-live',
+          postAttackDropCoinRadius: 3500,
+          postAttackDropCoinPriorityMs: 45000
+        });
+        return [
+          decision.kind,
+          decision.band,
+          decision.reason,
+          decision.action.target.id,
+          decision.action.postAttackTarget.id,
+          decision.action.postAttackTarget.drop,
+          decision.action.target.authority
+        ].join('|');
+      })(),
+      want: 'coin|profit|post-attack-drop-coin|post-drop|8|20|realtime'
+    },
+    {
+      name: 'browserless profit live ignores stale post-attack history',
+      got: (() => {
+        const stateful = {
+          attackHistory: [{
+            id: 8,
+            name: 'old-afk',
+            x: 5000,
+            y: 0,
+            drop: 20,
+            at: 1000,
+            postAttackDropResolvedAt: 1200,
+            action: 'attack',
+            afk: true
+          }]
+        };
+        const decision = buildBrowserlessDecision({
+          userId: 7,
+          realtime: {
+            tick: 60,
+            frameAgeMs: 100,
+            self: { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+            entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 }],
+            bullets: [],
+            coinDrops: []
+          },
+          fallback: { coinDrops: [] }
+        }, stateful, {
+          nowMs: 8000,
+          controlMode: 'profit-live',
+          postAttackDropWaitMs: 1000,
+          postAttackDropResolveMaxMs: 5000,
+          postAttackDropCoinPriorityMs: 2000
+        });
+        return [
+          decision.kind,
+          decision.reason,
+          decision.action.postAttackTarget === undefined
+        ].join('|');
+      })(),
+      want: 'wait|no-profitable-candidate|true'
+    },
+    {
       name: 'browserless profit live leaves when nearest allowed coin exceeds 1h stamina budget',
       got: (() => {
         const store = createBrowserlessStateStore({ userId: 7 });
@@ -7605,7 +7777,7 @@ async function runSelfTest() {
           commands.join(',')
         ].join('|');
       })(),
-      want: 'wait|no-profitable-candidate|action-adapter-stop|post-attack-drop-wait|post-attack-drop-wait-position|leave|safety-controller|true|unsupported-action|dance|unknown-action|vel 0 0,vel 0 0,vel 0 0,vel 0 0'
+      want: 'wait|no-profitable-candidate|action-adapter-stop|post-attack-drop-wait|post-attack-drop-wait-position|leave|safety-controller|true|unsupported-action|dance|unknown-action|vel 0 0,vel 1 0,vel 0 0,vel 0 0'
     },
     {
       name: 'browserless action adapter executes flee and return-block scan velocity',

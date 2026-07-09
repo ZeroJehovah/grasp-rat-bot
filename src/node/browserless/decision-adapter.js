@@ -30,6 +30,10 @@ const {
   lockedFleeDirectionCore
 } = require('../../strategy/active-threat-avoidance');
 const {
+  pickPostAttackDropCoinCore,
+  pickPostAttackDropWaitTargetCore
+} = require('../../strategy/post-attack-drop');
+const {
   createBrowserlessDecisionState,
   summarizeBrowserlessDecisionState
 } = require('./decision-state');
@@ -440,6 +444,7 @@ function buildBrowserlessStrategyInput(state, options = {}) {
       && Number(coin.distance) <= snapshotVisibleCoinMaxDistance
   ));
   const selfKillTargetTicks = selfKillTargetTicksFromMessages(Array.isArray(fallback.messages) ? fallback.messages : [], selfUserId);
+  const selfKillTargetIds = Array.from(selfKillTargetTicks.keys());
   const selfKilledPlayerDropFallbackEnabled = options.controlMode === 'profit-live';
   const selfKilledPlayerDropCoins = selfKilledPlayerDropFallbackEnabled
     ? snapshotCoins.filter(coin => isSelfKilledPlayerDropCoin(coin, selfKillTargetTicks, options))
@@ -501,6 +506,7 @@ function buildBrowserlessStrategyInput(state, options = {}) {
     realtimeCoins,
     snapshotCoins,
     selfKilledPlayerDropCoins,
+    selfKillTargetIds,
     profitCoins,
     profitCoinSource,
     bullets: Array.isArray(realtime.bullets) ? cloneJson(realtime.bullets) : [],
@@ -973,6 +979,114 @@ function buildRecoveryDecision(input, opportunity, options = {}) {
   };
 }
 
+function entityMatchesAttack(entity, attack) {
+  if (!entity || !attack) return false;
+  const entityId = entity.user_id ?? entity.userId ?? entity.entity_id ?? entity.entityId;
+  return entityId !== null
+    && entityId !== undefined
+    && attack.id !== null
+    && attack.id !== undefined
+    && String(entityId) === String(attack.id);
+}
+
+function browserlessPostAttackDropResolvedAt(attack, input, nowMs) {
+  if (!attack) return 0;
+  const selfKillIds = new Set((input?.selfKillTargetIds || []).map(String));
+  if (selfKillIds.has(String(attack.id))) {
+    if (!attack.postAttackDropResolvedAt) attack.postAttackDropResolvedAt = nowMs;
+    return attack.postAttackDropResolvedAt;
+  }
+  const visible = (input?.visibleTargets || []).find(entity => entityMatchesAttack(entity, attack));
+  if (visible && visible.alive !== false && Number(visible.hp ?? 1) > 0) {
+    attack.postAttackDropResolvedAt = 0;
+    return 0;
+  }
+  if (!attack.postAttackDropResolvedAt) attack.postAttackDropResolvedAt = nowMs;
+  return attack.postAttackDropResolvedAt;
+}
+
+function postAttackThreats(input) {
+  return [
+    ...(input?.activeThreats || []),
+    ...(input?.snapshotActiveThreats || [])
+  ];
+}
+
+function safePostAttackCoinCandidates(input, maxDistance, options = {}) {
+  if (!input?.self) return [];
+  const threats = postAttackThreats(input);
+  return (input.profitCoins || [])
+    .filter(coin => Number(coin?.amount || 0) > 0)
+    .filter(coin => Number(coin?.distance || Infinity) <= Number(maxDistance || Infinity))
+    .filter(coin => coinSafeFromThreats(coin, threats, options))
+    .filter(coin => opportunityStaminaAffordable(input.self, opportunityCoinStaminaCost(coin, options), options));
+}
+
+function buildPostAttackDropCoinDecision(input, stateful = {}, options = {}) {
+  if (!input?.self || !Array.isArray(stateful.attackHistory) || !stateful.attackHistory.length) return null;
+  const recovery = isRecoveringSelf(input.self);
+  const maxDistance = recovery
+    ? Math.max(0, Number(options.postAttackRecoveryDropMaxDistance ?? DEFAULT_POST_ATTACK_RECOVERY_DROP_MAX_DISTANCE))
+    : Math.max(0, Number(options.postAttackDropCoinMaxDistance ?? BROWSER_RUNTIME_DEFAULTS.postAttackDropCoinMaxDistance));
+  const result = pickPostAttackDropCoinCore(stateful.attackHistory, safePostAttackCoinCandidates(input, maxDistance, options), {
+    nowMs: input.nowMs,
+    priorityMs: Math.max(0, Number(options.postAttackDropCoinPriorityMs ?? BROWSER_RUNTIME_DEFAULTS.postAttackDropCoinPriorityMs)),
+    includeSingle: !recovery,
+    minAmount: Math.max(0, Number(options.postAttackDropCoinMinAmount ?? 1)),
+    maxDistance,
+    minScore: recovery ? Math.max(0, Number(options.postAttackRecoveryDropMinScore ?? 0)) : 0,
+    dropCoinRadius: Math.max(0, Number(options.postAttackDropCoinRadius ?? BROWSER_RUNTIME_DEFAULTS.postAttackDropCoinRadius)),
+    dist: distanceBetween,
+    resolveAttack: attack => browserlessPostAttackDropResolvedAt(attack, input, input.nowMs),
+    scoreCoin: coin => scoreCoinOpportunity(coin, options)
+  });
+  const coin = result.selected || null;
+  if (!coin) return null;
+  return buildPriorityCoinDecision(input, coin, 'post-attack-drop-coin', options, {
+    postAttackTarget: coin.postAttackTarget || null
+  });
+}
+
+function buildPostAttackDropWaitDecision(input, stateful = {}, options = {}) {
+  if (!input?.self || !Array.isArray(stateful.attackHistory) || !stateful.attackHistory.length) return null;
+  const waitMs = Math.max(0, Number(options.postAttackDropWaitMs ?? BROWSER_RUNTIME_DEFAULTS.postAttackDropWaitMs));
+  const target = pickPostAttackDropWaitTargetCore(stateful.attackHistory, input.profitCoins || [], postAttackThreats(input), {
+    nowMs: input.nowMs,
+    self: input.self,
+    dist: distanceBetween,
+    waitMs,
+    minDrop: Math.max(0, Number(options.postAttackDropWaitMinDrop ?? options.attackMinDrop ?? DEFAULT_ATTACK_MIN_DROP) || 0),
+    resolveMaxMs: Math.max(waitMs, Number(options.postAttackDropResolveMaxMs ?? BROWSER_RUNTIME_DEFAULTS.postAttackDropResolveMaxMs ?? waitMs) || waitMs),
+    maxDistance: Math.max(0, Number(options.postAttackDropWaitMaxDistance ?? options.opportunityVisibleDistance ?? options.globalCoinMaxDistance ?? DEFAULT_GLOBAL_COIN_MAX_DISTANCE)),
+    stopDistance: Math.max(0, Number(options.postAttackDropWaitStopDistance ?? BROWSER_RUNTIME_DEFAULTS.postAttackDropWaitStopDistance ?? BROWSER_RUNTIME_DEFAULTS.coinPickupSweepDistance ?? 0)),
+    dropCoinRadius: Math.max(0, Number(options.postAttackDropCoinRadius ?? BROWSER_RUNTIME_DEFAULTS.postAttackDropCoinRadius)),
+    resolveAttack: attack => browserlessPostAttackDropResolvedAt(attack, input, input.nowMs),
+    coinBlockedByThreat: (_origin, item, threat) => !coinSafeFromThreats(item, [threat], options)
+  });
+  if (!target) return null;
+  return {
+    kind: 'post-attack-drop-wait',
+    band: 'profit',
+    reason: 'post-attack-drop-wait-position',
+    target: {
+      type: 'post-attack-target',
+      id: target.id,
+      name: target.name || '',
+      x: numberOrNull(target.x),
+      y: numberOrNull(target.y),
+      drop: numberOrNull(target.drop),
+      distance: Number.isFinite(Number(target.distance)) ? Math.round(Number(target.distance)) : null,
+      postAttackTarget: {
+        id: target.id,
+        name: target.name || '',
+        drop: numberOrNull(target.drop),
+        ageMs: Math.max(0, Math.round(input.nowMs - Number(target.at || input.nowMs))),
+        resolvedAgeMs: Math.max(0, Math.round(input.nowMs - Number(target.postAttackDropResolvedAt || input.nowMs)))
+      }
+    }
+  };
+}
+
 function pickNearestSafeProfitCoin(input, maxDistance, options = {}) {
   if (!input?.self || !(Number(maxDistance) > 0)) return null;
   const threats = [
@@ -1209,6 +1323,8 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     ? buildHighValueVisibleCoinPriorityDecision(input, combat, options)
     : null;
   const staminaBudgetExitAction = (profitLive || nonCombatProfit) ? buildStaminaBudgetExitDecision(input, options) : null;
+  const postAttackDropCoinAction = (profitLive || nonCombatProfit) ? buildPostAttackDropCoinDecision(input, stateful, options) : null;
+  const postAttackDropWaitAction = (profitLive || nonCombatProfit) ? buildPostAttackDropWaitDecision(input, stateful, options) : null;
   const recoveryFootCoinAction = (profitLive || nonCombatProfit) ? buildRecoveryFootCoinDecision(input, options) : null;
   const recoveryAction = (profitLive || nonCombatProfit) ? buildRecoveryDecision(input, opportunity, options) : null;
   const injuredCautionFootCoinAction = safetyAction
@@ -1259,6 +1375,16 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     band = staminaBudgetExitAction.band;
     reason = staminaBudgetExitAction.reason;
     action = staminaBudgetExitAction;
+  } else if (postAttackDropCoinAction) {
+    kind = postAttackDropCoinAction.kind;
+    band = postAttackDropCoinAction.band;
+    reason = postAttackDropCoinAction.reason;
+    action = postAttackDropCoinAction;
+  } else if (postAttackDropWaitAction) {
+    kind = postAttackDropWaitAction.kind;
+    band = postAttackDropWaitAction.band;
+    reason = postAttackDropWaitAction.reason;
+    action = postAttackDropWaitAction;
   } else if (recoveryFootCoinAction) {
     kind = recoveryFootCoinAction.kind;
     band = recoveryFootCoinAction.band;
@@ -1373,6 +1499,42 @@ function decisionStatePatch(decision) {
   };
 }
 
+function targetIdForAttackHistory(target) {
+  return target?.userId ?? target?.user_id ?? target?.entityId ?? target?.entity_id ?? target?.id ?? null;
+}
+
+function recordAttackHistoryFromActionResult(decisionState, actionResult, decision, options = {}) {
+  if (!decisionState || !actionResult) return null;
+  const shoot = actionResult.shoot || null;
+  if (!shoot?.ok || shoot.skipped || !shoot.command) return null;
+  const target = actionResult.target || decision?.action?.target || decision?.combat?.target || null;
+  const id = targetIdForAttackHistory(target);
+  if (id === null || id === undefined || id === '') return null;
+  const nowMs = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
+  const combat = actionResult.kind === 'combat-live' || decision?.band === 'combat';
+  const entry = {
+    id,
+    name: target?.name || '',
+    drop: numberOrNull(target?.drop),
+    x: numberOrNull(target?.x),
+    y: numberOrNull(target?.y),
+    distance: numberOrNull(target?.distance),
+    at: nowMs,
+    action: combat ? 'opportunistic-shot' : 'attack',
+    afk: !combat && target?.active !== true,
+    active: Boolean(target?.active),
+    combat,
+    mode: target?.mode || target?.profitMetadataMode || '',
+    moving: Boolean(target?.moving),
+    firing: Boolean(target?.firing)
+  };
+  decisionState.attackHistory = [
+    ...(Array.isArray(decisionState.attackHistory) ? decisionState.attackHistory : []),
+    entry
+  ].slice(-50);
+  return entry;
+}
+
 function createBrowserlessDecisionAdapter(options = {}) {
   const decisionState = createBrowserlessDecisionState(options);
   return {
@@ -1391,6 +1553,11 @@ function createBrowserlessDecisionAdapter(options = {}) {
     },
     getStatusSummary() {
       return summarizeBrowserlessDecisionState(decisionState);
+    },
+    observeActionResult(actionResult, decision, eventOptions = {}) {
+      return recordAttackHistoryFromActionResult(decisionState, actionResult, decision, {
+        nowMs: eventOptions.nowMs ?? eventOptions.atMs ?? options.now?.() ?? Date.now()
+      });
     }
   };
 }
@@ -1405,6 +1572,7 @@ module.exports = {
   distanceBetween,
   normalizeCoinForDecision,
   normalizeEntityForDecision,
+  recordAttackHistoryFromActionResult,
   summarizeBrowserlessDecision,
   summarizeBrowserlessDecisionState
 };

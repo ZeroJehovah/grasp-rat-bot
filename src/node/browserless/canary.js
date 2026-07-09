@@ -431,7 +431,11 @@ async function runReadOnlyCanary(config, options = {}) {
             });
             if (recordSafetyEvent(decisionSafetyEvent)) return;
             if (actionAdapter) {
-              updateActionResult(actionAdapter.applyDecision(currentState, summary));
+              const actionResult = actionAdapter.applyDecision(currentState, summary);
+              updateActionResult(actionResult);
+              if (typeof decisionAdapter.observeActionResult === 'function') {
+                decisionAdapter.observeActionResult(actionResult, decision, { nowMs: atMs });
+              }
             }
           }
           recordSafetyEvent(safetyController.evaluate(currentState, {

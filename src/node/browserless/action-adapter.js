@@ -194,6 +194,13 @@ function safetyMotionFromDecision(decision) {
   return action;
 }
 
+function postAttackWaitFromDecision(decision) {
+  const action = decision?.action || decision || {};
+  const kind = String(action.kind || decision?.kind || '');
+  if (kind !== 'post-attack-drop-wait') return null;
+  return action;
+}
+
 function controlActionFromDecision(decision) {
   const action = decision?.action || decision || {};
   const kind = String(action.kind || decision?.kind || '');
@@ -207,7 +214,7 @@ function controlActionFromDecision(decision) {
       action
     };
   }
-  if (kind === 'wait' || kind === 'recover' || kind === 'post-attack-drop-wait') {
+  if (kind === 'wait' || kind === 'recover') {
     return {
       type: 'stop',
       kind,
@@ -467,6 +474,10 @@ function createBrowserlessActionAdapter(options = {}) {
     if (safetyMotion) {
       return applySafetyMotionDecision(safetyMotion);
     }
+    const postAttackWait = postAttackWaitFromDecision(decision);
+    if (postAttackWait) {
+      return applyPostAttackWaitDecision(stateSnapshot, postAttackWait);
+    }
     const controlAction = controlActionFromDecision(decision);
     if (controlAction) {
       return applyControlDecision(controlAction);
@@ -511,6 +522,34 @@ function createBrowserlessActionAdapter(options = {}) {
       command: sent.command || null,
       skipped: Boolean(sent.skipped),
       precisionPulseMs
+    };
+  }
+
+  function applyPostAttackWaitDecision(stateSnapshot, action) {
+    const self = stateSnapshot?.realtime?.self || null;
+    const target = action.target || null;
+    const vector = movementVectorToTarget(self, target, options);
+    if (!vector.ok) {
+      const stopped = stop(vector.reason || 'post-attack-drop-wait-stop');
+      return {
+        ok: stopped.ok,
+        kind: 'post-attack-drop-wait',
+        reason: vector.reason || action.reason || 'post-attack-drop-wait-position',
+        vector,
+        command: stopped.command || null,
+        skipped: Boolean(stopped.skipped),
+        target
+      };
+    }
+    const sent = sendVelocity(vector.dx, vector.dy, action.reason || 'post-attack-drop-wait-position', target);
+    return {
+      ok: sent.ok,
+      kind: 'post-attack-drop-wait',
+      reason: action.reason || 'post-attack-drop-wait-position',
+      vector,
+      command: sent.command || null,
+      skipped: Boolean(sent.skipped),
+      target
     };
   }
 
