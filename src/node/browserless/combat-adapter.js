@@ -291,6 +291,62 @@ function passiveRunnerState(self, target, combatTargetState = {}, options = {}) 
   };
 }
 
+function buildCombatExitDecision(self, target, combatTargetState = {}, bullets = [], options = {}) {
+  if (!self || !target) return null;
+  const selfHp = hpValue(self);
+  const targetHp = hpValue(target);
+  if (selfHp === null) return null;
+  const criticalHp = Math.max(0, Number(options.combatCriticalHp ?? COMBAT_CONSTANTS.CRITICAL_HP));
+  const lowHp = Math.max(0, Number(options.combatLowHpLeaveThreshold ?? options.combatLowHpThreshold ?? COMBAT_CONSTANTS.LOW_HP_THRESHOLD));
+  const highHpGap = Math.max(0, Number(options.combatHighHpDisadvantageGap ?? COMBAT_CONSTANTS.DISADVANTAGE_HP_GAP));
+  const noDamageMs = Math.max(0, Number(combatTargetState?.noDamageMs || 0));
+  const targetPressure = (bullets || []).some(bullet => Number(bullet.ownerId) === Number(target.user_id));
+  if (selfHp <= criticalHp) {
+    return {
+      shouldLeave: true,
+      reason: 'combat-critical-hp-leave',
+      selfHp,
+      targetHp,
+      threshold: criticalHp,
+      noDamageMs
+    };
+  }
+  if (targetHp !== null && selfHp < lowHp && targetHp > selfHp) {
+    const lowHpNoDamageMs = Math.max(0, Number(options.combatLowHpNoDamageLeaveMs || 8000));
+    return {
+      shouldLeave: true,
+      reason: noDamageMs >= lowHpNoDamageMs ? 'combat-low-hp-no-damage-leave' : 'combat-low-hp-disadvantage-leave',
+      selfHp,
+      targetHp,
+      threshold: lowHp,
+      noDamageMs
+    };
+  }
+  if (targetHp !== null && selfHp >= lowHp && targetHp - selfHp > highHpGap) {
+    return {
+      shouldLeave: true,
+      reason: 'combat-hp-disadvantage-leave',
+      selfHp,
+      targetHp,
+      hpGap: Math.round(targetHp - selfHp),
+      threshold: highHpGap,
+      noDamageMs
+    };
+  }
+  const pressureNoDamageMs = Math.max(0, Number(options.combatPressureDisadvantageNoDamageMs || 10000));
+  if (targetPressure && targetHp !== null && noDamageMs >= pressureNoDamageMs && selfHp <= 80 && targetHp - selfHp >= 10) {
+    return {
+      shouldLeave: true,
+      reason: 'combat-pressure-disadvantage-leave',
+      selfHp,
+      targetHp,
+      hpGap: Math.round(targetHp - selfHp),
+      noDamageMs
+    };
+  }
+  return null;
+}
+
 function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
   if (!self || !target) return { dx: 0, dy: 0, reason: 'missing-target', spacing: null, dodge: null, modifiers: [] };
   const combatTargetState = options.combatTargetState || null;
@@ -494,13 +550,21 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     ...options,
     combatTargetState
   });
+  const exitDecision = buildCombatExitDecision(self, target, combatTargetState, bullets, options);
   const fireState = target ? determineCombatFireState(self || {}, target, {
     targetPressureFire: bullets.some(bullet => Number(bullet.ownerId) === Number(target.user_id)),
-    passiveRunner: Boolean(movement.passiveRunner?.active)
+    passiveRunner: Boolean(movement.passiveRunner?.active),
+    finishLowThreat: Boolean(
+      target
+        && !exitDecision
+        && (hpValue(self) ?? 0) >= Math.max(1, Number(options.combatFinishLowThreatMinSelfHp || 60))
+        && (hpValue(target) ?? 100) <= Math.max(1, Number(options.combatFinishLowThreatHp ?? COMBAT_CONSTANTS.FINISH_LOW_THREAT_HP))
+        && !bullets.some(bullet => Number(bullet.ownerId) === Number(target.user_id))
+    )
   }) : { state: 'disabled', cadenceMs: Infinity, reserve: null, reason: 'no-target' };
   const lowConfidence = aim.ok ? checkLowConfidenceThrottle({ confidence: aim.confidence, distance: aim.distance }) : { throttle: false, cadenceMs: null };
   const inRange = target ? Number(target.distance || Infinity) <= Number(options.attackRange || COMBAT_CONSTANTS.ATTACK_RANGE) : false;
-  const wouldShoot = Boolean(target && aim.ok && inRange && fireState.state !== 'disabled' && fireState.state !== 'paused');
+  const wouldShoot = Boolean(target && !exitDecision && aim.ok && inRange && fireState.state !== 'disabled' && fireState.state !== 'paused');
   const commandSuppressed = Boolean(!liveCombatEnabled || !wouldShoot);
   return {
     ok: Boolean(self),
@@ -513,6 +577,12 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     candidates: candidates.slice(0, 5).map(summarizeCombatTarget),
     movement,
     aim: aim.ok ? aim : null,
+    exit: exitDecision
+      ? {
+          ...exitDecision,
+          target: summarizeCombatTarget(target)
+        }
+      : null,
     shooting: {
       dryRunOnly: !liveCombatEnabled,
       wouldShoot,

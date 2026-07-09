@@ -1664,10 +1664,22 @@ function buildCombatDecision(input, stateful = {}, options = {}) {
   const actionReason = combatLiveEnabled
     ? 'combat-live-realtime'
     : (options.controlMode === 'combat-dry-run' ? 'combat-dry-run-realtime' : 'realtime-visible-threat');
+  const exitAction = combat.exit?.shouldLeave
+    ? {
+        kind: 'safety-exit',
+        band: 'safety',
+        reason: combat.exit.reason,
+        shouldLeave: true,
+        stopMotion: true,
+        target: combat.exit.target || target,
+        combatExit: combat.exit
+      }
+    : null;
   return {
     target,
     candidates: combat.candidates || [],
     dryRun: combat,
+    exitAction,
     action: target
       ? {
           kind: actionKind,
@@ -1835,6 +1847,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     : null;
   const safetyAction = profitLiveSafetyDecision(input, combat, stateful, options, opportunity.action);
   const hardSafetyAction = safetyActionIsHardLeave(safetyAction) ? safetyAction : null;
+  const combatExitAction = combat.exitAction || null;
   const safetyYieldsToHighValueCoin = Boolean(
     safetyAction
       && safetyAction.reason === 'avoid-invulnerable-target'
@@ -1879,6 +1892,11 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     band = hardSafetyAction.band;
     reason = hardSafetyAction.reason;
     action = hardSafetyAction;
+  } else if (combatExitAction) {
+    kind = combatExitAction.kind;
+    band = combatExitAction.band;
+    reason = combatExitAction.reason;
+    action = combatExitAction;
   } else if (immediateSafetyAction) {
     kind = immediateSafetyAction.kind;
     band = immediateSafetyAction.band;

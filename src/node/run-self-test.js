@@ -8112,6 +8112,159 @@ async function runSelfTest() {
       want: '2|true|true|8'
     },
     {
+      name: 'browserless combat critical hp exits through safety action',
+      got: (() => {
+        const decision = buildBrowserlessDecision({
+          userId: 7,
+          realtime: {
+            tick: 62,
+            frameAgeMs: 100,
+            self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 15, stamina_5s_remaining_milli: 10000 },
+            entities: [
+              { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 15, stamina_5s_remaining_milli: 10000 },
+              { entity_id: 2, user_id: 8, name: 'active', x: 1000, y: 0, hp: 80, current_join_mode: 'Active', firing: true, drop: 12 }
+            ],
+            bullets: [],
+            coinDrops: []
+          },
+          fallback: { coinDrops: [] }
+        }, {}, {
+          nowMs: 1500,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          combatCriticalHp: 20,
+          combatAttackRange: 11000
+        });
+        return [
+          decision.kind,
+          decision.band,
+          decision.reason,
+          decision.action.shouldLeave,
+          decision.action.target.userId,
+          decision.combat.exit.reason
+        ].join('|');
+      })(),
+      want: 'safety-exit|safety|combat-critical-hp-leave|true|8|combat-critical-hp-leave'
+    },
+    {
+      name: 'browserless combat low hp no-damage exits',
+      got: (() => {
+        const stateful = {
+          combatTarget: { id: 8, at: 1000, firstSeenAt: 1000, lastInRangeAt: 1000, lastDamageAt: 1000, hp: 90, intent: 'engaged' }
+        };
+        const combat = buildBrowserlessCombatDryRun({
+          userId: 7,
+          realtime: {
+            tick: 62,
+            self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 40, stamina_5s_remaining_milli: 10000 },
+            entities: [
+              { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 40, stamina_5s_remaining_milli: 10000 },
+              { entity_id: 2, user_id: 8, name: 'active', x: 1000, y: 0, hp: 90, current_join_mode: 'Active', firing: true, drop: 12 }
+            ],
+            bullets: []
+          }
+        }, {
+          nowMs: 12000,
+          decisionState: stateful,
+          combatAttackRange: 11000,
+          targetStickMs: 20000,
+          combatEngageStickMs: 20000,
+          combatLowHpLeaveThreshold: 60,
+          combatLowHpNoDamageLeaveMs: 8000
+        });
+        return [
+          combat.exit.reason,
+          combat.exit.selfHp,
+          combat.exit.targetHp,
+          combat.exit.noDamageMs >= 8000
+        ].join('|');
+      })(),
+      want: 'combat-low-hp-no-damage-leave|40|90|true'
+    },
+    {
+      name: 'browserless combat high hp gap exits',
+      got: (() => {
+        const combat = buildBrowserlessCombatDryRun({
+          userId: 7,
+          realtime: {
+            tick: 62,
+            self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 70, stamina_5s_remaining_milli: 10000 },
+            entities: [
+              { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 70, stamina_5s_remaining_milli: 10000 },
+              { entity_id: 2, user_id: 8, name: 'active', x: 1000, y: 0, hp: 96, current_join_mode: 'Active', firing: true, drop: 12 }
+            ],
+            bullets: []
+          }
+        }, { nowMs: 1500, combatAttackRange: 11000, combatLowHpLeaveThreshold: 60, combatHighHpDisadvantageGap: 20 });
+        return [
+          combat.exit.reason,
+          combat.exit.hpGap,
+          combat.shooting.wouldShoot
+        ].join('|');
+      })(),
+      want: 'combat-hp-disadvantage-leave|26|false'
+    },
+    {
+      name: 'browserless combat pressure disadvantage exits',
+      got: (() => {
+        const stateful = {
+          combatTarget: { id: 8, at: 1000, firstSeenAt: 1000, lastInRangeAt: 1000, lastDamageAt: 1000, hp: 90, intent: 'engaged' }
+        };
+        const combat = buildBrowserlessCombatDryRun({
+          userId: 7,
+          realtime: {
+            tick: 62,
+            self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 78, stamina_5s_remaining_milli: 10000 },
+            entities: [
+              { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 78, stamina_5s_remaining_milli: 10000 },
+              { entity_id: 2, user_id: 8, name: 'active', x: 1000, y: 0, hp: 90, current_join_mode: 'Active', firing: true, drop: 12 }
+            ],
+            bullets: [
+              { bullet_id: 4, owner_user_id: 8, x: 1000, y: 0, target_x: 0, target_y: 0, speed_per_tick: 500 }
+            ]
+          }
+        }, {
+          nowMs: 12000,
+          decisionState: stateful,
+          combatAttackRange: 11000,
+          targetStickMs: 20000,
+          combatEngageStickMs: 20000,
+          combatPressureDisadvantageNoDamageMs: 10000
+        });
+        return [
+          combat.exit.reason,
+          combat.exit.hpGap,
+          combat.exit.noDamageMs >= 10000
+        ].join('|');
+      })(),
+      want: 'combat-pressure-disadvantage-leave|12|true'
+    },
+    {
+      name: 'browserless combat finish pressure can shoot with reserve',
+      got: (() => {
+        const combat = buildBrowserlessCombatDryRun({
+          userId: 7,
+          realtime: {
+            tick: 62,
+            self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
+            entities: [
+              { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
+              { entity_id: 2, user_id: 8, name: 'low-target', x: 1000, y: 0, hp: 50, current_join_mode: 'Active', firing: true, drop: 12 }
+            ],
+            bullets: []
+          }
+        }, { nowMs: 1500, combatAttackRange: 11000, combatFinishLowThreatHp: 75, combatFinishLowThreatMinSelfHp: 60 });
+        return [
+          combat.exit === null,
+          combat.shooting.state,
+          combat.shooting.reason,
+          combat.shooting.wouldShoot,
+          combat.shooting.commandSuppressed
+        ].join('|');
+      })(),
+      want: 'true|finish|finish-low-threat|true|true'
+    },
+    {
       name: 'browserless combat dry-run computes linear intercept and reserve suppression',
       got: (() => {
         const aim = estimateAim(
