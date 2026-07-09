@@ -7,15 +7,78 @@ const {
 } = require('../src/node/browserless/config');
 const {
   runBrowserlessRunner,
+  hydrateConfigFromState,
   runBrowserlessRunnerSelfTest
 } = require('../src/node/browserless/runner');
+const {
+  readBrowserlessStateFile
+} = require('../src/node/browserless/state-file');
+const {
+  leaveWithVerification,
+  summarizeLeaveResultForPublic
+} = require('../src/node/browserless/leave-client');
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+async function gracefulShutdownLeave(config, options = {}) {
+  const readState = options.readState || readBrowserlessStateFile;
+  const state = readState(config.stateFile);
+  const hydrated = hydrateConfigFromState(config, state);
+  const userId = Number(hydrated.userId || 0);
+  const sessionToken = String(hydrated.sessionToken || '');
+  if (!userId || !sessionToken) {
+    return { ok: false, skipped: true, reason: 'missing-session' };
+  }
+  const leave = options.leaveWithVerification || leaveWithVerification;
+  const result = await leave({
+    gameOrigin: hydrated.gameOrigin,
+    userId,
+    sessionToken,
+    localAddress: state?.network?.sourceIp || hydrated.sourceIp || '',
+    timeoutMs: Math.min(Math.max(1000, Number(hydrated.httpTimeoutMs || 10000)), 5000),
+    retryMax: Math.min(Math.max(0, Number(hydrated.leaveRetryMax ?? 3)), 2),
+    retryDelayMs: Math.min(Math.max(0, Number(hydrated.leaveRetryMs ?? 1200)), 800)
+  });
+  return {
+    ok: Boolean(result?.ok),
+    skipped: false,
+    leave: summarizeLeaveResultForPublic(result)
+  };
+}
+
+function installGracefulShutdownHandlers(config, options = {}) {
+  if (config.selfTest || config.help) return;
+  let shuttingDown = false;
+  const log = typeof options.log === 'function' ? options.log : message => console.error(message);
+  const exit = typeof options.exit === 'function' ? options.exit : code => process.exit(code);
+  const signals = options.signals || ['SIGINT', 'SIGTERM'];
+  const signalExitCode = signal => signal === 'SIGTERM' ? 143 : 130;
+  const onSignal = signal => {
+    if (shuttingDown) {
+      exit(signalExitCode(signal));
+      return;
+    }
+    shuttingDown = true;
+    log(JSON.stringify({ type: 'shutdown-leave-start', signal }));
+    gracefulShutdownLeave(config, options)
+      .then(result => {
+        log(JSON.stringify({ type: 'shutdown-leave-finish', signal, result }));
+      })
+      .catch(err => {
+        log(JSON.stringify({ type: 'shutdown-leave-error', signal, error: err?.message || String(err) }));
+      })
+      .finally(() => exit(0));
+  };
+  for (const signal of signals) {
+    process.once(signal, () => onSignal(signal));
+  }
+}
+
 async function main() {
   const config = parseBrowserlessRunnerArgs(process.argv.slice(2), process.env);
+  installGracefulShutdownHandlers(config);
   if (config.help) {
     console.log(usage());
     return;
@@ -53,5 +116,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  gracefulShutdownLeave,
+  installGracefulShutdownHandlers,
   main
 };

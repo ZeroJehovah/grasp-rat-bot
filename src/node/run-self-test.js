@@ -93,6 +93,9 @@ const {
   runBrowserlessRunnerSelfTest
 } = require('./browserless/runner');
 const {
+  gracefulShutdownLeave
+} = require('../../scripts/browserless-runner');
+const {
   buildPublicBrowserlessStatus,
   readBrowserlessStateFile,
   stateFilePath,
@@ -11448,6 +11451,52 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'true|1234|true|stamina-budget-coin-leave|1800000|true|injury-leave|1234|true|pursuit-leave|1234|true|combat-hp-disadvantage-leave|1234|true|ws-closed|1000|true|ws-closed|1000|false|true|true|true|ws-auth-blocked-self-present|1000|true|60000|true|ws-connect-timeout|1000'
+    },
+    {
+      name: 'browserless runner best-effort shutdown leave hydrates persisted session',
+      got: withTempDirForTest(async dir => {
+        const config = parseBrowserlessRunnerArgs(['--live', '--data-dir', dir], {});
+        updateBrowserlessStateFile(config.stateFile, {
+          session: {
+            userId: 7,
+            sessionToken: 'persisted-secret'
+          },
+          network: {
+            sourceIp: '10.0.0.101'
+          }
+        }, { updatedAt: '2026-07-08T00:00:00.000Z' });
+        let optionsSeen = null;
+        const result = await gracefulShutdownLeave(config, {
+          leaveWithVerification: async options => {
+            optionsSeen = options;
+            return {
+              ok: true,
+              attempts: [
+                {
+                  stage: 'initial',
+                  httpOk: true,
+                  status: 200,
+                  statusText: 'OK',
+                  durationMs: 12,
+                  ok: true,
+                  summary: { leaveConfirmed: true }
+                }
+              ]
+            };
+          }
+        });
+        return [
+          result.ok,
+          result.skipped,
+          result.leave.attempts.length,
+          optionsSeen.userId,
+          optionsSeen.sessionToken,
+          optionsSeen.localAddress,
+          optionsSeen.retryMax,
+          optionsSeen.timeoutMs
+        ].join('|');
+      }),
+      want: 'true|false|1|7|persisted-secret|10.0.0.101|2|5000'
     },
     {
       name: 'browserless runner dry-run and fake read-only path write redacted logs',
