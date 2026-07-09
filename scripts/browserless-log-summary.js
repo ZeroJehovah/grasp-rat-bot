@@ -49,6 +49,55 @@ function increment(map, key) {
   map[normalized] = Number(map[normalized] || 0) + 1;
 }
 
+function coinLikeFieldsFromKeys(keys) {
+  return (Array.isArray(keys) ? keys : [])
+    .filter(key => /coin|drop|loot/i.test(String(key)))
+    .sort();
+}
+
+function summarizeWsDiagnostics(entries) {
+  const diagnostics = {
+    messageEntries: 0,
+    decodedEntries: 0,
+    keySetCounts: {},
+    frameTypeKeySetCounts: {},
+    coinLikeFieldCounts: {},
+    realtimeCoinLikeFieldCounts: {},
+    snapshotCoinLikeFieldCounts: {},
+    realtimeCoinDropFrames: 0,
+    snapshotCoinDropFrames: 0,
+    lastRealtimeCoinLikeFields: [],
+    lastSnapshotCoinLikeFields: []
+  };
+  for (const entry of entries || []) {
+    if (entry?.type !== 'message') continue;
+    diagnostics.messageEntries += 1;
+    const detail = entry.detail || {};
+    const decodedType = String(detail.decodedType || detail.decodedSummary?.type || '');
+    const keys = Array.isArray(detail.decodedJsonKeys) ? detail.decodedJsonKeys.slice().sort() : [];
+    if (!decodedType && !keys.length) continue;
+    diagnostics.decodedEntries += 1;
+    const keySet = keys.join(',');
+    if (keySet) {
+      increment(diagnostics.keySetCounts, keySet);
+      increment(diagnostics.frameTypeKeySetCounts, `${decodedType || 'unknown'}|${keySet}`);
+    }
+    const coinLikeFields = coinLikeFieldsFromKeys(keys);
+    for (const field of coinLikeFields) increment(diagnostics.coinLikeFieldCounts, field);
+    const coinDropCount = Number(detail.decodedSummary?.coinDropCount || 0);
+    if (decodedType === 'pos') {
+      for (const field of coinLikeFields) increment(diagnostics.realtimeCoinLikeFieldCounts, field);
+      diagnostics.lastRealtimeCoinLikeFields = coinLikeFields;
+      if (coinDropCount > 0) diagnostics.realtimeCoinDropFrames += 1;
+    } else if (decodedType === 'snapshot') {
+      for (const field of coinLikeFields) increment(diagnostics.snapshotCoinLikeFieldCounts, field);
+      diagnostics.lastSnapshotCoinLikeFields = coinLikeFields;
+      if (coinDropCount > 0) diagnostics.snapshotCoinDropFrames += 1;
+    }
+  }
+  return diagnostics;
+}
+
 function summarizeEntries(entries) {
   const summary = {
     entries: entries.length,
@@ -79,6 +128,7 @@ function summarizeBrowserlessLogDay(options = {}) {
       const stream = dirent.name.replace(/\.jsonl$/, '');
       const entries = readJsonlEntries(path.join(dayDir, dirent.name));
       const streamSummary = summarizeEntries(entries);
+      if (stream === 'ws') streamSummary.wsDiagnostics = summarizeWsDiagnostics(entries);
       streams[stream] = streamSummary;
       totals.entries += streamSummary.entries;
       for (const [type, count] of Object.entries(streamSummary.typeCounts)) {
@@ -139,5 +189,6 @@ module.exports = {
   readJsonlEntries,
   summarizeBrowserlessLogDay,
   summarizeEntries,
+  summarizeWsDiagnostics,
   writeBrowserlessLogSummary
 };

@@ -5699,10 +5699,12 @@ async function runSelfTest() {
           stats.coinDropCount.last,
           stats.selfPresent.true,
           stats.selfPresent.false,
-          stats.decodeErrors
+          stats.decodeErrors,
+          stats.keySetCounts['type,tick,entities,bullets'],
+          stats.keySetCounts['type,tick,entities,bullets,coin_drops']
         ].join('|');
       })(),
-      want: '3|2|2|1|1|1|10|12|5|3|1|1|1'
+      want: '3|2|2|1|1|1|10|12|5|3|1|1|1|1|1'
     },
     {
       name: 'browserless state store ingests realtime pos authority',
@@ -5808,18 +5810,23 @@ async function runSelfTest() {
           tick: 35,
           entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 10, y: 20, hp: 80 }],
           bullets: [],
-          coin_drops: [{ drop_id: 'native-1', amount: 5, x: 30, y: 40 }]
+          drops: [{ drop_id: 'native-1', amount: 5, x: 30, y: 40 }]
         }, { receivedAtMs: 1000 });
         const realtime = store.getRealtimeState(1200);
         const combat = selectRealtimeCombatState(store, 1200);
+        const diagnostics = store.getState(1200).transportDiagnostics;
         return [
           realtime.coinDrops[0]?.authority,
           realtime.coinDrops[0]?.amount,
           Object.prototype.hasOwnProperty.call(combat, 'coinDrops'),
-          /coinDrops/.test(selectRealtimeCombatState.toString())
+          /coinDrops/.test(selectRealtimeCombatState.toString()),
+          diagnostics.realtimeCoinLikeFieldCounts.drops,
+          diagnostics.realtimeCoinDropFrames,
+          diagnostics.lastRealtimeCoinLikeFields.join(','),
+          diagnostics.frameTypeKeySetCounts['pos|bullets,drops,entities,tick,type']
         ].join('|');
       })(),
-      want: 'realtime|5|false|false'
+      want: 'realtime|5|false|false|1|1|drops|1'
     },
     {
       name: 'browserless decision adapter keeps combat on realtime authority',
@@ -7913,6 +7920,16 @@ async function runSelfTest() {
         store.append('runner', 'start', { ok: true });
         store.append('runner', 'frame-gap', { gapMs: 1200 });
         store.append('decisions', 'decision', { kind: 'wait' });
+        store.append('ws', 'message', {
+          decodedType: 'pos',
+          decodedJsonKeys: ['type', 'tick', 'entities', 'bullets', 'drops'],
+          decodedSummary: { type: 'pos', coinDropCount: 1 }
+        });
+        store.append('ws', 'message', {
+          decodedType: 'snapshot',
+          decodedJsonKeys: ['type', 'tick', 'entities', 'bullets', 'coin_drops', 'messages'],
+          decodedSummary: { type: 'snapshot', coinDropCount: 3 }
+        });
         const summary = summarizeBrowserlessLogDay({ logDir: dir, day: '2026-07-08' });
         const output = writeBrowserlessLogSummary(summary);
         const written = JSON.parse(fs.readFileSync(output, 'utf8'));
@@ -7922,11 +7939,16 @@ async function runSelfTest() {
           summary.streams.runner.typeCounts.start,
           summary.streams.runner.typeCounts['frame-gap'],
           summary.streams.decisions.typeCounts.decision,
+          summary.streams.ws.entries,
+          summary.streams.ws.wsDiagnostics.realtimeCoinLikeFieldCounts.drops,
+          summary.streams.ws.wsDiagnostics.realtimeCoinDropFrames,
+          summary.streams.ws.wsDiagnostics.snapshotCoinLikeFieldCounts.coin_drops,
+          summary.streams.ws.wsDiagnostics.snapshotCoinDropFrames,
           path.basename(output),
           written.totals.entries
         ].join('|');
       }),
-      want: '3|2|1|1|1|summary.json|3'
+      want: '5|2|1|1|1|2|1|1|1|1|summary.json|5'
     },
     {
       name: 'browserless action parity audit normalizes known decision cases',

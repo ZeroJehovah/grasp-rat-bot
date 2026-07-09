@@ -19,6 +19,34 @@ function numericOrNull(value) {
   return Number.isFinite(number) ? number : null;
 }
 
+function incrementCount(map, key) {
+  const normalized = String(key || 'unknown');
+  map[normalized] = Number(map[normalized] || 0) + 1;
+}
+
+function frameKeySet(frame) {
+  if (!frame || typeof frame !== 'object') return '';
+  return Object.keys(frame).sort().join(',');
+}
+
+function topLevelCoinLikeFields(frame) {
+  if (!frame || typeof frame !== 'object') return [];
+  return Object.keys(frame)
+    .filter(key => /coin|drop|loot/i.test(String(key)))
+    .sort();
+}
+
+function coinDropArraysFromFrame(frame) {
+  if (!frame || typeof frame !== 'object') return [];
+  const fields = ['coin_drops', 'coinDrops', 'drops', 'coins'];
+  const arrays = [];
+  for (const field of fields) {
+    const value = frame[field];
+    if (Array.isArray(value)) arrays.push(...value);
+  }
+  return arrays;
+}
+
 function normalizeEntity(entity, meta) {
   if (!entity || typeof entity !== 'object') return null;
   return {
@@ -105,6 +133,17 @@ function createInitialState(userId = 0) {
     },
     command: {
       lastAck: null
+    },
+    transportDiagnostics: {
+      frameKeySetCounts: {},
+      frameTypeKeySetCounts: {},
+      coinLikeFieldCounts: {},
+      realtimeCoinLikeFieldCounts: {},
+      snapshotCoinLikeFieldCounts: {},
+      realtimeCoinDropFrames: 0,
+      snapshotCoinDropFrames: 0,
+      lastRealtimeCoinLikeFields: [],
+      lastSnapshotCoinLikeFields: []
     }
   };
 }
@@ -133,16 +172,36 @@ function createBrowserlessStateStore(options = {}) {
     state.latestFrameAtMs = receivedAtMs;
     state.latestFrameType = type || 'unknown';
     state.frameCounts[state.latestFrameType] = Number(state.frameCounts[state.latestFrameType] || 0) + 1;
+    recordTransportDiagnostics(frame, state.latestFrameType);
     if (type === 'pos') ingestRealtimeFrame(frame, { receivedAtMs, tick });
     else if (type === 'snapshot') ingestSnapshotFrame(frame, { receivedAtMs, tick });
     else if (type === 'shoot_ok') ingestShootOk(frame, { receivedAtMs, tick });
     return { ok: true, type: state.latestFrameType, tick };
   }
 
+  function recordTransportDiagnostics(frame, type) {
+    const keySet = frameKeySet(frame);
+    if (keySet) {
+      incrementCount(state.transportDiagnostics.frameKeySetCounts, keySet);
+      incrementCount(state.transportDiagnostics.frameTypeKeySetCounts, `${type || 'unknown'}|${keySet}`);
+    }
+    const coinLikeFields = topLevelCoinLikeFields(frame);
+    for (const field of coinLikeFields) incrementCount(state.transportDiagnostics.coinLikeFieldCounts, field);
+    if (type === 'pos') {
+      for (const field of coinLikeFields) incrementCount(state.transportDiagnostics.realtimeCoinLikeFieldCounts, field);
+      state.transportDiagnostics.lastRealtimeCoinLikeFields = coinLikeFields;
+      if (coinDropArraysFromFrame(frame).length) state.transportDiagnostics.realtimeCoinDropFrames += 1;
+    } else if (type === 'snapshot') {
+      for (const field of coinLikeFields) incrementCount(state.transportDiagnostics.snapshotCoinLikeFieldCounts, field);
+      state.transportDiagnostics.lastSnapshotCoinLikeFields = coinLikeFields;
+      if (coinDropArraysFromFrame(frame).length) state.transportDiagnostics.snapshotCoinDropFrames += 1;
+    }
+  }
+
   function ingestRealtimeFrame(frame, meta) {
     const entities = Array.isArray(frame.entities) ? frame.entities : [];
     const bullets = Array.isArray(frame.bullets) ? frame.bullets : [];
-    const coinDrops = Array.isArray(frame.coin_drops) ? frame.coin_drops : (Array.isArray(frame.coinDrops) ? frame.coinDrops : []);
+    const coinDrops = coinDropArraysFromFrame(frame);
     const normalizedEntities = entities
       .map(entity => normalizeEntity(entity, { ...meta, authority: 'realtime', source: 'pos' }))
       .filter(Boolean);
@@ -167,7 +226,7 @@ function createBrowserlessStateStore(options = {}) {
   function ingestSnapshotFrame(frame, meta) {
     const entities = Array.isArray(frame.entities) ? frame.entities : [];
     const bullets = Array.isArray(frame.bullets) ? frame.bullets : [];
-    const coinDrops = Array.isArray(frame.coin_drops) ? frame.coin_drops : [];
+    const coinDrops = coinDropArraysFromFrame(frame);
     const normalizedEntities = entities
       .map(entity => normalizeEntity(entity, { ...meta, authority: 'snapshot', source: 'snapshot' }))
       .filter(Boolean);
@@ -261,7 +320,8 @@ function createBrowserlessStateStore(options = {}) {
       frameAges: getFrameAges(nowMs),
       realtime: getRealtimeState(nowMs),
       fallback: getFallbackState(nowMs),
-      command: getCommandState(nowMs)
+      command: getCommandState(nowMs),
+      transportDiagnostics: cloneJson(state.transportDiagnostics)
     };
   }
 
@@ -293,6 +353,8 @@ function selectRealtimeCombatState(store, nowMs) {
 
 module.exports = {
   createBrowserlessStateStore,
+  coinDropArraysFromFrame,
   entityKey,
+  frameKeySet,
   selectRealtimeCombatState
 };
