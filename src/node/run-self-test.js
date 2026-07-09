@@ -6036,7 +6036,7 @@ async function runSelfTest() {
           decision.input.dataGaps.includes('snapshot-fallback-blocked:realtime-profit-present')
         ].join('|');
       })(),
-      want: 'profit-candidate|profit|native-coin|realtime|true|realtime|8|true'
+      want: 'coin|profit|native-coin|realtime|true|realtime|8|true'
     },
     {
       name: 'browserless non-combat profit blocks snapshot fallback near active threat',
@@ -6300,7 +6300,7 @@ async function runSelfTest() {
       want: 'combat-live|combat|combat-live-realtime|8|true|active-threat-visible'
     },
     {
-      name: 'browserless profit live attacks in-range high-drop AFK over ordinary one coin',
+      name: 'browserless profit live takes foot coin before in-range high-drop AFK',
       got: (() => {
         const store = createBrowserlessStateStore({ userId: 7 });
         store.ingestFrame({
@@ -6332,7 +6332,7 @@ async function runSelfTest() {
           decision.profit.best.priorityTier
         ].join('|');
       })(),
-      want: 'profit-candidate|attack|8|9|2'
+      want: 'coin|coin|||2'
     },
     {
       name: 'browserless profit live ranks in-range min-drop AFK over distant one coin',
@@ -6435,6 +6435,144 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'coin|profit|recovery-foot-coin|coin|foot-coin'
+    },
+    {
+      name: 'browserless profit live recovery combat target beats recovery hold',
+      got: (() => {
+        const store = createBrowserlessStateStore({ userId: 7 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 59,
+          entities: [
+            { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 80, max_hp: 100, stamina_5s_remaining_milli: 5000 },
+            { entity_id: 2, user_id: 8, name: 'active', x: 1000, y: 0, hp: 80, current_join_mode: 'Active', firing: true, drop: 12 }
+          ],
+          bullets: []
+        }, { receivedAtMs: 1000 });
+        const decision = buildBrowserlessDecision(store.getState(1200), {}, {
+          nowMs: 1200,
+          controlMode: 'profit-live',
+          combatEnabled: true
+        });
+        return [
+          decision.kind,
+          decision.band,
+          decision.reason,
+          decision.action.kind,
+          decision.action.target.userId,
+          decision.action.target.authority
+        ].join('|');
+      })(),
+      want: 'combat-live|combat|combat-live-realtime|combat-live|8|realtime'
+    },
+    {
+      name: 'browserless profit live takes normal foot coin before broader opportunity',
+      got: (() => {
+        const store = createBrowserlessStateStore({ userId: 7 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 59,
+          entities: [
+            { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+            { entity_id: 2, user_id: 8, name: 'afk', x: 1000, y: 0, hp: 80, current_join_mode: 'Passive', drop: 20 }
+          ],
+          bullets: []
+        }, { receivedAtMs: 1000 });
+        store.ingestFrame({
+          type: 'snapshot',
+          tick: 60,
+          entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100 }],
+          bullets: [],
+          coin_drops: [{ drop_id: 'foot-coin', amount: 1, x: 300, y: 0 }],
+          messages: []
+        }, { receivedAtMs: 1100 });
+        const decision = buildBrowserlessDecision(store.getState(1200), {}, {
+          nowMs: 1200,
+          controlMode: 'profit-live'
+        });
+        return [
+          decision.kind,
+          decision.band,
+          decision.reason,
+          decision.action.target.id,
+          decision.action.target.amount,
+          decision.profit.best?.type,
+          decision.profit.best?.target?.userId
+        ].join('|');
+      })(),
+      want: 'coin|profit|foot-coin-priority|foot-coin|1|enemy|8'
+    },
+    {
+      name: 'browserless profit live injured foot coin can pass return-block scan',
+      got: (() => {
+        const store = createBrowserlessStateStore({ userId: 7 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 59,
+          entities: [
+            { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+            { entity_id: 2, user_id: 8, name: 'active-caution', x: 20000, y: 0, hp: 100, current_join_mode: 'Active', drop: 0 }
+          ],
+          bullets: [],
+          coin_drops: [{ drop_id: 'safe-foot-coin', amount: 1, x: -400, y: 0 }]
+        }, { receivedAtMs: 1000 });
+        const decision = buildBrowserlessDecision(store.getState(1200), {}, {
+          nowMs: 1200,
+          controlMode: 'profit-live',
+          profitLiveThreatExitRange: 25000,
+          profitLiveInjuryHp: 100,
+          dangerRadius: 17000
+        });
+        return [
+          decision.kind,
+          decision.band,
+          decision.reason,
+          decision.action.target.id,
+          decision.action.target.distance,
+          decision.combat.target?.userId || ''
+        ].join('|');
+      })(),
+      want: 'coin|profit|foot-coin-before-active-caution|safe-foot-coin|400|'
+    },
+    {
+      name: 'browserless profit live hard safety leave beats foot coin',
+      got: (() => {
+        const store = createBrowserlessStateStore({ userId: 7 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 59,
+          entities: [
+            { entity_id: 1, user_id: 7, name: 'self', x: 100, y: 100, hp: 100, max_hp: 100 },
+            { entity_id: 2, user_id: 8, name: 'mode-missing-active', x: 9000, y: 100, hp: 100 }
+          ],
+          bullets: []
+        }, { receivedAtMs: 1000 });
+        store.ingestFrame({
+          type: 'snapshot',
+          tick: 60,
+          entities: [
+            { entity_id: 1, user_id: 7, name: 'self', x: 100, y: 100, hp: 100 },
+            { entity_id: 22, user_id: 8, name: 'mode-missing-active', x: 9010, y: 100, hp: 100, current_join_mode: 'Active' }
+          ],
+          bullets: [],
+          coin_drops: [{ drop_id: 'foot-coin', amount: 1, x: 200, y: 100 }],
+          messages: []
+        }, { receivedAtMs: 1100 });
+        const decision = buildBrowserlessDecision(store.getState(1200), {}, {
+          nowMs: 1200,
+          controlMode: 'profit-live',
+          combatEnabled: true
+        });
+        return [
+          decision.kind,
+          decision.band,
+          decision.reason,
+          decision.action.shouldLeave,
+          decision.action.target.userId,
+          decision.action.target.profitMetadataActive
+        ].join('|');
+      })(),
+      want: 'safety-exit|safety|profit-live-snapshot-active-threat|true|8|true'
     },
     {
       name: 'browserless profit live leaves when nearest allowed coin exceeds 1h stamina budget',
@@ -6598,7 +6736,7 @@ async function runSelfTest() {
           decision.action.target.snapshotOnly
         ].join('|');
       })(),
-      want: 'profit-candidate|best-opportunity-coin|snapshot-fallback|true||coin|snapshot-coin|snapshot|true'
+      want: 'coin|foot-coin-priority|snapshot-fallback|true||coin|snapshot-coin|snapshot|true'
     },
     {
       name: 'browserless profit live ignores out-of-view snapshot coin fallback',
@@ -6749,7 +6887,7 @@ async function runSelfTest() {
           decision.input.dataGaps.includes('self-killed-player-drop-visible')
         ].join('|');
       })(),
-      want: 'profit-candidate|coin|coin|self-kill-drop|6|snapshot-player-drop|1||true'
+      want: 'coin|coin|coin|self-kill-drop|6|snapshot-player-drop|1||true'
     },
     {
       name: 'browserless profit live enriches realtime AFK reward from fresh snapshot metadata',

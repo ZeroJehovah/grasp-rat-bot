@@ -973,6 +973,60 @@ function buildRecoveryDecision(input, opportunity, options = {}) {
   };
 }
 
+function pickNearestSafeProfitCoin(input, maxDistance, options = {}) {
+  if (!input?.self || !(Number(maxDistance) > 0)) return null;
+  const threats = [
+    ...(input.activeThreats || []),
+    ...(input.snapshotActiveThreats || [])
+  ];
+  return (input.profitCoins || [])
+    .filter(coin => Number(coin?.amount || 0) > 0)
+    .filter(coin => Number(coin?.distance || Infinity) <= Number(maxDistance))
+    .filter(coin => coinSafeFromThreats(coin, threats, options))
+    .filter(coin => opportunityStaminaAffordable(input.self, opportunityCoinStaminaCost(coin, options), options))
+    .sort((a, b) => Number(a.distance || Infinity) - Number(b.distance || Infinity)
+      || Number(b.amount || 0) - Number(a.amount || 0))[0] || null;
+}
+
+function buildPriorityCoinDecision(input, coin, reason, options = {}, extra = {}) {
+  if (!input?.self || !coin) return null;
+  return {
+    kind: Number(coin.distance || Infinity) <= Number(options.coinMaxDistance ?? BROWSER_RUNTIME_DEFAULTS.coinMaxDistance)
+      ? 'coin'
+      : 'seek-coin',
+    band: 'profit',
+    reason,
+    target: summarizeCoin(coin),
+    ...extra
+  };
+}
+
+function buildRecoveryFootCoinDecision(input, options = {}) {
+  if (!input?.self || !isRecoveringSelf(input.self)) return null;
+  const coin = pickNearestSafeProfitCoin(input, Math.max(0, Number(options.recoveryCoinMaxDistance ?? DEFAULT_RECOVERY_COIN_MAX_DISTANCE)), options);
+  if (!coin) return null;
+  return buildPriorityCoinDecision(input, coin, 'recovery-foot-coin', options, {
+    recovery: recoverySummary(input.self)
+  });
+}
+
+function buildFootCoinPriorityDecision(input, reason, options = {}) {
+  if (!input?.self) return null;
+  const maxDistance = Math.max(0, Number(options.footCoinPriorityDistance ?? OPPORTUNITY_CONSTANTS.FOOT_COIN_PRIORITY_DISTANCE));
+  const coin = pickNearestSafeProfitCoin(input, maxDistance, options);
+  if (!coin) return null;
+  return buildPriorityCoinDecision(input, coin, reason, options);
+}
+
+function safetyActionIsHardLeave(action) {
+  return Boolean(action && (action.shouldLeave === true || action.kind === 'safety-exit' || action.kind === 'leave'));
+}
+
+function safetyActionCanYieldToInjuredFootCoin(action) {
+  if (!action || safetyActionIsHardLeave(action)) return false;
+  return action.kind === 'return-block-scan' || action.reason === 'return-block-lateral-scan';
+}
+
 function recoverySummary(self) {
   return {
     hp: hpValue(self),
@@ -1101,7 +1155,7 @@ function profitLiveSafetyDecision(input, combatDecision, stateful = {}, options 
         ? { ...avoidance, target: summarizeTarget(target), self: summarizeTarget(input.self) }
         : buildThreatFleeDecision(stateful, input, target, 'profit-live-active-threat', options);
     }
-    if (injured && distance <= threatExitRange) {
+    if (!combatHandlesThreat && injured && distance <= threatExitRange) {
       return buildThreatFleeDecision(stateful, input, target, 'profit-live-combat-injury-threat', options);
     }
     return null;
@@ -1147,11 +1201,23 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
   const combat = buildCombatDecision(input, options);
   const combatActionEligible = isCombatActionEligibleForDecision(combat, options);
   const safetyAction = profitLiveSafetyDecision(input, combat, stateful, options, opportunity.action);
+  const hardSafetyAction = safetyActionIsHardLeave(safetyAction) ? safetyAction : null;
+  const immediateSafetyAction = safetyAction && !hardSafetyAction && !safetyActionCanYieldToInjuredFootCoin(safetyAction)
+    ? safetyAction
+    : null;
   const highValueCoinPriorityAction = (profitLive || nonCombatProfit)
     ? buildHighValueVisibleCoinPriorityDecision(input, combat, options)
     : null;
   const staminaBudgetExitAction = (profitLive || nonCombatProfit) ? buildStaminaBudgetExitDecision(input, options) : null;
+  const recoveryFootCoinAction = (profitLive || nonCombatProfit) ? buildRecoveryFootCoinDecision(input, options) : null;
   const recoveryAction = (profitLive || nonCombatProfit) ? buildRecoveryDecision(input, opportunity, options) : null;
+  const injuredCautionFootCoinAction = safetyAction
+    && safetyActionCanYieldToInjuredFootCoin(safetyAction)
+    && input.self
+    && isInjuredSelf(input.self, options)
+    ? buildFootCoinPriorityDecision(input, 'foot-coin-before-active-caution', options)
+    : null;
+  const footCoinPriorityAction = (profitLive || nonCombatProfit) ? buildFootCoinPriorityDecision(input, 'foot-coin-priority', options) : null;
   const dailyFinalCoinAction = (profitLive || nonCombatProfit) && !recoveryAction
     ? buildDailyStaminaFinalCoinDecision(input, options)
     : null;
@@ -1168,11 +1234,16 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
   } else if (Number.isFinite(frameAge) && frameAge > staleSelfMs) {
     reason = 'stale-realtime-self';
     action.reason = reason;
-  } else if (safetyAction) {
-    kind = safetyAction.kind;
-    band = safetyAction.band;
-    reason = safetyAction.reason;
-    action = safetyAction;
+  } else if (hardSafetyAction) {
+    kind = hardSafetyAction.kind;
+    band = hardSafetyAction.band;
+    reason = hardSafetyAction.reason;
+    action = hardSafetyAction;
+  } else if (immediateSafetyAction) {
+    kind = immediateSafetyAction.kind;
+    band = immediateSafetyAction.band;
+    reason = immediateSafetyAction.reason;
+    action = immediateSafetyAction;
   } else if (highValueCoinPriorityAction) {
     kind = highValueCoinPriorityAction.kind;
     band = highValueCoinPriorityAction.band;
@@ -1188,11 +1259,31 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     band = staminaBudgetExitAction.band;
     reason = staminaBudgetExitAction.reason;
     action = staminaBudgetExitAction;
+  } else if (recoveryFootCoinAction) {
+    kind = recoveryFootCoinAction.kind;
+    band = recoveryFootCoinAction.band;
+    reason = recoveryFootCoinAction.reason;
+    action = recoveryFootCoinAction;
   } else if (recoveryAction) {
     kind = recoveryAction.kind;
     band = recoveryAction.band;
     reason = recoveryAction.reason;
     action = recoveryAction;
+  } else if (injuredCautionFootCoinAction) {
+    kind = injuredCautionFootCoinAction.kind;
+    band = injuredCautionFootCoinAction.band;
+    reason = injuredCautionFootCoinAction.reason;
+    action = injuredCautionFootCoinAction;
+  } else if (safetyAction) {
+    kind = safetyAction.kind;
+    band = safetyAction.band;
+    reason = safetyAction.reason;
+    action = safetyAction;
+  } else if (footCoinPriorityAction) {
+    kind = footCoinPriorityAction.kind;
+    band = footCoinPriorityAction.band;
+    reason = footCoinPriorityAction.reason;
+    action = footCoinPriorityAction;
   } else if (dailyFinalCoinAction) {
     kind = dailyFinalCoinAction.kind;
     band = dailyFinalCoinAction.band;
