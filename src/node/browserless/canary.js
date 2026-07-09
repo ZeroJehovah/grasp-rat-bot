@@ -128,6 +128,50 @@ function inspectCanaryFrame(data, options = {}) {
   return frame;
 }
 
+function wsTracePayloadPatch(payload, config = {}) {
+  if (config.wsTracePayload === false || payload === undefined) return {};
+  const maxChars = Math.max(0, Number(config.wsTraceMaxPayloadChars || 0));
+  if (maxChars > 0) {
+    const text = redactSecrets(JSON.stringify(payload));
+    return {
+      payloadJsonSample: text.slice(0, maxChars),
+      payloadTruncated: text.length > maxChars,
+      payloadJsonLength: text.length
+    };
+  }
+  return { payload };
+}
+
+function buildWsFrameTrace(frame, config = {}) {
+  const base = {
+    direction: 'in',
+    kind: frame?.kind || '',
+    byteLength: frame?.byteLength ?? null,
+    prefixHex: frame?.prefixHex || '',
+    format: frame?.format || '',
+    version: frame?.version ?? null,
+    compression: frame?.compression || '',
+    payloadByteLength: frame?.payloadByteLength ?? null,
+    decodedByteLength: frame?.decodedByteLength ?? null,
+    decodedType: frame?.decodedType || '',
+    decodedTick: frame?.decodedTick ?? null,
+    decodedJsonKeys: frame?.decodedJsonKeys || [],
+    decodedSummary: frame?.decodedSummary || null,
+    decodeError: frame?.decodeError || '',
+    jsonParseError: frame?.jsonParseError || ''
+  };
+  if (frame?.kind === 'text') {
+    return {
+      ...base,
+      sample: redactSecrets(frame.sample || '')
+    };
+  }
+  return {
+    ...base,
+    ...wsTracePayloadPatch(frame?.decodedJson, config)
+  };
+}
+
 async function runReadOnlyCanary(config, options = {}) {
   const now = typeof options.now === 'function' ? options.now : Date.now;
   const sleep = typeof options.sleep === 'function'
@@ -226,6 +270,9 @@ async function runReadOnlyCanary(config, options = {}) {
   const logCombat = detail => {
     if (logStore) logStore.append('combat', combatLiveEnabled ? 'combat-live' : 'combat-dry-run', addRunMeta(detail));
   };
+  const logWs = (type, detail) => {
+    if (config.wsTraceEnabled && logStore) logStore.append('ws', type, addRunMeta(detail));
+  };
   const updateActionResult = actionResult => {
     if (!actionResult) return;
     const adapterState = actionAdapter?.getState?.() || {};
@@ -287,11 +334,36 @@ async function runReadOnlyCanary(config, options = {}) {
       userId: config.userId,
       sessionToken: config.sessionToken,
       connectTimeoutMs: config.wsConnectTimeoutMs,
+      onConnectStart: event => {
+        logWs('connect-start', {
+          runtime: event?.runtime || ''
+        });
+      },
+      onOpen: event => {
+        logWs('open', {
+          runtime: event?.runtime || ''
+        });
+      },
       onError: event => {
         wsError = event;
+        logWs('error', {
+          message: event?.message || '',
+          opened: Boolean(event?.opened),
+          statusCode: event?.statusCode || null,
+          statusMessage: event?.statusMessage || '',
+          contentType: event?.contentType || '',
+          body: event?.body || ''
+        });
       },
       onClose: event => {
         if (!ending) wsClosed = event;
+        logWs('close', event || {});
+      },
+      onSend: event => {
+        logWs('send', {
+          direction: 'out',
+          message: event?.message || ''
+        });
       },
       onMessage: data => {
         const atMs = now();
@@ -299,6 +371,7 @@ async function runReadOnlyCanary(config, options = {}) {
         if (frameHealth.lastFrameAtMs) frameHealth.maxFrameGapMs = Math.max(frameHealth.maxFrameGapMs, atMs - frameHealth.lastFrameAtMs);
         frameHealth.lastFrameAtMs = atMs;
         const frame = inspectCanaryFrame(data, { userId: config.userId });
+        logWs('message', buildWsFrameTrace(frame, config));
         if (frame.decodeError || frame.jsonParseError) frameHealth.decodeErrors += 1;
         updateFrameStats(stats, {
           at: new Date(atMs).toISOString(),

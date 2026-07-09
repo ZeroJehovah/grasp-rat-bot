@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const { redactStructuredSecrets } = require('./session-client');
 
-const DEFAULT_STREAMS = new Set(['runner', 'decisions', 'combat', 'exits']);
+const DEFAULT_STREAMS = new Set(['runner', 'decisions', 'combat', 'exits', 'ws']);
 
 function utcDay(ms) {
   return new Date(Number(ms)).toISOString().slice(0, 10);

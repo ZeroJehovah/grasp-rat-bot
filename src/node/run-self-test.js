@@ -5995,7 +5995,7 @@ async function runSelfTest() {
       want: 'profit-candidate|attack|9|3|false|true'
     },
     {
-      name: 'browserless profit live disables snapshot-only coin fallback',
+      name: 'browserless profit live admits fresh in-view snapshot coin fallback',
       got: (() => {
         const store = createBrowserlessStateStore({ userId: 7 });
         store.ingestFrame({
@@ -6009,12 +6009,126 @@ async function runSelfTest() {
           tick: 60,
           entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 100, y: 100, hp: 100, coins: 1000 }],
           bullets: [],
-          coin_drops: [{ drop_id: 2602, amount: 1, x: 120, y: 100 }],
+          coin_drops: [{ drop_id: 'snapshot-coin', amount: 1, x: 120, y: 100 }],
           messages: []
         }, { receivedAtMs: 1100 });
         const decision = buildBrowserlessDecision(store.getState(1200), {}, {
           nowMs: 1200,
           controlMode: 'profit-live'
+        });
+        return [
+          decision.kind,
+          decision.reason,
+          decision.input.profitCoinSource,
+          decision.input.fallback.snapshotCoinFallbackAllowed,
+          decision.input.fallback.snapshotFallbackBlockedReasons.join(','),
+          decision.action.kind,
+          decision.action.target.id,
+          decision.action.target.authority,
+          decision.action.target.snapshotOnly
+        ].join('|');
+      })(),
+      want: 'profit-candidate|best-opportunity-coin|snapshot-fallback|true||coin|snapshot-coin|snapshot|true'
+    },
+    {
+      name: 'browserless profit live ignores out-of-view snapshot coin fallback',
+      got: (() => {
+        const store = createBrowserlessStateStore({ userId: 7 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 59,
+          entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 100, y: 100, hp: 100 }],
+          bullets: []
+        }, { receivedAtMs: 1000 });
+        store.ingestFrame({
+          type: 'snapshot',
+          tick: 60,
+          entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 100, y: 100, hp: 100, coins: 1000 }],
+          bullets: [],
+          coin_drops: [{ drop_id: 'far-snapshot-coin', amount: 10, x: 60101, y: 100 }],
+          messages: []
+        }, { receivedAtMs: 1100 });
+        const decision = buildBrowserlessDecision(store.getState(1200), {}, {
+          nowMs: 1200,
+          controlMode: 'profit-live'
+        });
+        return [
+          decision.kind,
+          decision.reason,
+          decision.input.profitCoinSource,
+          decision.input.fallback.snapshotCoinFallbackAllowed,
+          decision.input.fallback.snapshotVisibleCoinCount,
+          decision.input.fallback.snapshotFallbackBlockedReasons.join(','),
+          decision.profit.best === null
+        ].join('|');
+      })(),
+      want: 'wait|no-profitable-candidate|none|false|0|snapshot-coins-out-of-visible-range|true'
+    },
+    {
+      name: 'browserless profit live allows visible snapshot coin when snapshot-active threat is distant',
+      got: (() => {
+        const store = createBrowserlessStateStore({ userId: 7 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 59,
+          entities: [
+            { entity_id: 1, user_id: 7, name: 'self', x: 100, y: 100, hp: 100, max_hp: 100 },
+            { entity_id: 2, user_id: 8, name: 'edge-active', x: 49700, y: 100, hp: 100 }
+          ],
+          bullets: []
+        }, { receivedAtMs: 1000 });
+        store.ingestFrame({
+          type: 'snapshot',
+          tick: 60,
+          entities: [
+            { entity_id: 1, user_id: 7, name: 'self', x: 100, y: 100, hp: 100, coins: 1000 },
+            { entity_id: 22, user_id: 8, name: 'edge-active', x: 49700, y: 100, hp: 100, current_join_mode: 'Active', death_reward_preview: 3, death_drop_coins: 3 }
+          ],
+          bullets: [],
+          coin_drops: [{ drop_id: 'near-visible-coin', amount: 1, x: 2700, y: 100 }],
+          messages: []
+        }, { receivedAtMs: 1100 });
+        const decision = buildBrowserlessDecision(store.getState(1200), {}, {
+          nowMs: 1200,
+          controlMode: 'profit-live',
+          combatEnabled: true
+        });
+        return [
+          decision.kind,
+          decision.reason,
+          decision.input.profitCoinSource,
+          decision.input.fallback.snapshotCoinFallbackAllowed,
+          decision.input.fallback.snapshotFallbackThreatCount,
+          decision.input.dataGaps.includes('snapshot-active-threat-visible'),
+          decision.input.dataGaps.includes('snapshot-fallback-blocked:active-threat-visible'),
+          decision.action.kind,
+          decision.action.target.id
+        ].join('|');
+      })(),
+      want: 'profit-candidate|best-opportunity-coin|snapshot-fallback|true|0|true|false|coin|near-visible-coin'
+    },
+    {
+      name: 'browserless profit live can explicitly disable snapshot coin fallback',
+      got: (() => {
+        const store = createBrowserlessStateStore({ userId: 7 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 59,
+          entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 100, y: 100, hp: 100 }],
+          bullets: []
+        }, { receivedAtMs: 1000 });
+        store.ingestFrame({
+          type: 'snapshot',
+          tick: 60,
+          entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 100, y: 100, hp: 100, coins: 1000 }],
+          bullets: [],
+          coin_drops: [{ drop_id: 'snapshot-coin', amount: 1, x: 120, y: 100 }],
+          messages: []
+        }, { receivedAtMs: 1100 });
+        const decision = buildBrowserlessDecision(store.getState(1200), {}, {
+          nowMs: 1200,
+          controlMode: 'profit-live',
+          snapshotCoinFallbackEnabled: false
         });
         return [
           decision.kind,
@@ -6065,7 +6179,7 @@ async function runSelfTest() {
           decision.input.dataGaps.includes('self-killed-player-drop-visible')
         ].join('|');
       })(),
-      want: 'profit-candidate|coin|coin|self-kill-drop|6|snapshot-player-drop|1|snapshot-fallback-disabled|true'
+      want: 'profit-candidate|coin|coin|self-kill-drop|6|snapshot-player-drop|1||true'
     },
     {
       name: 'browserless profit live enriches realtime AFK reward from fresh snapshot metadata',
@@ -6088,7 +6202,7 @@ async function runSelfTest() {
             { entity_id: 22, user_id: 8, name: 'afk', x: 1010, y: 100, hp: 100, current_join_mode: 'Passive', death_reward_preview: 8, death_drop_coins: 8 }
           ],
           bullets: [],
-          coin_drops: [{ drop_id: 2602, amount: 1, x: 120, y: 100 }],
+          coin_drops: [],
           messages: []
         }, { receivedAtMs: 1100 });
         const decision = buildBrowserlessDecision(store.getState(1200), {}, {
@@ -6153,7 +6267,7 @@ async function runSelfTest() {
           decision.input.dataGaps.includes('snapshot-fallback-blocked:active-threat-visible')
         ].join('|');
       })(),
-      want: 'safety-exit|safety|profit-live-snapshot-active-threat|8|realtime|true|true||false|true|false'
+      want: 'safety-exit|safety|profit-live-snapshot-active-threat|8|realtime|true|true||false|true|true'
     },
     {
       name: 'browserless profit live exits instead of chasing coin under combat threat',
@@ -6192,7 +6306,7 @@ async function runSelfTest() {
           decision.combat.target.userId
         ].join('|');
       })(),
-      want: 'safety-exit|safety|profit-live-active-threat|31361|realtime|||true|31361'
+      want: 'safety-exit|safety|profit-live-active-threat|31361|realtime|||false|31361'
     },
     {
       name: 'browserless profit live can fight active players when enabled',
@@ -7160,18 +7274,24 @@ async function runSelfTest() {
           authorization: 'Bearer secret-bearer',
           nested: { url: 'https://x.test/?secret=secret-url' }
         });
+        const third = store.append('ws', 'send', {
+          message: 'vel 1 0'
+        });
         const firstText = fs.readFileSync(first.file, 'utf8');
         const secondText = fs.readFileSync(second.file, 'utf8');
+        const thirdText = fs.readFileSync(third.file, 'utf8');
         return [
           path.relative(dir, first.file),
           path.relative(dir, second.file),
+          path.relative(dir, third.file),
           firstText.includes('[redacted]'),
           secondText.includes('[redacted]'),
-          !/secret-token|secret-field|secret-code|secret-bearer|secret-url/.test(firstText + secondText),
+          thirdText.includes('vel 1 0'),
+          !/secret-token|secret-field|secret-code|secret-bearer|secret-url/.test(firstText + secondText + thirdText),
           store.readEntries('runner', '2026-07-08')[0]?.type
         ].join('|');
       }),
-      want: '2026-07-08/runner.jsonl|2026-07-09/exits.jsonl|true|true|true|session-start'
+      want: '2026-07-08/runner.jsonl|2026-07-09/exits.jsonl|2026-07-09/ws.jsonl|true|true|true|true|session-start'
     },
     {
       name: 'browserless log retention deletes day directories outside keep window',
@@ -7560,6 +7680,9 @@ async function runSelfTest() {
           '800',
           '--movement-settlement-frames',
           '3',
+          '--ws-trace',
+          '--ws-trace-max-payload-chars',
+          '4096',
           '--login-point-x',
           '123',
           '--login-point-y',
@@ -7590,6 +7713,9 @@ async function runSelfTest() {
           config.movementCommandIntervalMs,
           config.movementTargetDeadZoneCm,
           config.movementSettlementFrames,
+          config.wsTraceEnabled,
+          config.wsTracePayload,
+          config.wsTraceMaxPayloadChars,
           config.loginPointX,
           config.loginPointY,
           config.loginPointHp,
@@ -7597,7 +7723,7 @@ async function runSelfTest() {
           config.logDir.endsWith('/tmp/grasp-rat-browserless-logs')
         ].join('|');
       })(),
-      want: 'true|false|false|combat-live|19999|cli-token|true|220|42|env-token|250|3500|4500|150|300|800|3|123|456|90|true|true'
+      want: 'true|false|false|combat-live|19999|cli-token|true|220|42|env-token|250|3500|4500|150|300|800|3|true|true|4096|123|456|90|true|true'
     },
     {
       name: 'browserless deployment files define service env and install surface',
@@ -7614,6 +7740,7 @@ async function runSelfTest() {
           env.includes('GRASP_RAT_BROWSERLESS_LOG_DIR=/var/log/grasp-rat-browserless'),
           env.includes('GRASP_RAT_BROWSERLESS_CANARY_PROFILE=read-only'),
           env.includes('GRASP_RAT_BROWSERLESS_DRY_RUN=true'),
+          env.includes('GRASP_RAT_BROWSERLESS_WS_TRACE_ENABLED=false'),
           installer.includes('grasp-rat-browserless-runner'),
           installer.includes('DATA_DIR="/var/lib/grasp-rat-browserless"'),
           installer.includes('LOG_DIR="/var/log/grasp-rat-browserless"'),
@@ -7622,7 +7749,7 @@ async function runSelfTest() {
           installer.includes('systemctl daemon-reload')
         ].join('|');
       })(),
-      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true'
+      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless deployment audit checks installed service evidence',
