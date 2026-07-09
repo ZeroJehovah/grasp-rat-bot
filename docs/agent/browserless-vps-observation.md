@@ -4,13 +4,13 @@ Keep this file short. It is the current live-observation handoff for the Oracle 
 
 ## Latest Baseline
 
-- Updated: 2026-07-09 10:31 CST / 2026-07-09 02:31 UTC.
-- VPS service: `grasp-rat-browserless-runner` is active on the VPS, checkout `25c69db` (`Loop browserless runner after safe exits`).
+- Updated: 2026-07-09 10:36 CST / 2026-07-09 02:36 UTC.
+- VPS service: `grasp-rat-browserless-runner` is active on the VPS, checkout `9614b24`. The running service process was started after deploying code commit `25c69db`; later commits are documentation-only.
 - Production env: `GRASP_RAT_BROWSERLESS_DRY_RUN=false`, `GRASP_RAT_BROWSERLESS_CONTROL_MODE=profit-live`, `GRASP_RAT_BROWSERLESS_COMBAT_ENABLED=true`.
 - Current run: `profit-live-20260709T022052916Z`, started after deploying the loop fix and restarting the service at 2026-07-09 10:20 CST.
-- Current fresh snapshot evidence at tick `755344`: HP 100, Drop 28, coins 1000, 1d stamina remaining 19,659,167, death count 2, Active enemies within 170m: 0.
+- Current fresh snapshot evidence at tick `760807`: HP 100, Drop 30, coins 1000, 1d stamina remaining 19,542,915, death count 2, Active enemies within 170m: 0.
 - Baseline for this run: previous verified leave from `profit-live-20260709T015902559Z` ended with HP 100, Drop 16, 1d stamina remaining 19,937,260, death count 2, and `joined=UserRecordOnly/current_join_mode=None/life=Alive/visible=Hidden`.
-- Current delta since previous verified leave: Drop +12, 1d stamina spent 278,093, death count +0. Drop is counted only from self Drop / `death_drop_coins`, not kill messages.
+- Current delta since previous verified leave: Drop +14, 1d stamina spent 394,345, death count +0. Drop is counted only from self Drop / `death_drop_coins`, not kill messages.
 - Recent behavior evidence: current run has sent movement and shoot commands, killed several Passive/AFK targets, and then moved on to the next target. Kill messages remain supporting evidence only; realized income is self Drop.
 
 ## Known Issues
