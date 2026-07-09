@@ -5997,6 +5997,49 @@ async function runSelfTest() {
       want: 'wait|no-profitable-candidate|none|false|snapshot-fallback-disabled|true'
     },
     {
+      name: 'browserless profit live enriches realtime AFK reward from fresh snapshot metadata',
+      got: (() => {
+        const store = createBrowserlessStateStore({ userId: 7 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 59,
+          entities: [
+            { entity_id: 1, user_id: 7, name: 'self', x: 100, y: 100, hp: 100 },
+            { entity_id: 2, user_id: 8, name: 'afk', x: 1000, y: 100, hp: 100, current_join_mode: 'Passive' }
+          ],
+          bullets: []
+        }, { receivedAtMs: 1000 });
+        store.ingestFrame({
+          type: 'snapshot',
+          tick: 60,
+          entities: [
+            { entity_id: 1, user_id: 7, name: 'self', x: 100, y: 100, hp: 100, coins: 1000 },
+            { entity_id: 22, user_id: 8, name: 'afk', x: 1010, y: 100, hp: 100, current_join_mode: 'Passive', death_reward_preview: 8, death_drop_coins: 8 }
+          ],
+          bullets: [],
+          coin_drops: [{ drop_id: 2602, amount: 1, x: 120, y: 100 }],
+          messages: []
+        }, { receivedAtMs: 1100 });
+        const decision = buildBrowserlessDecision(store.getState(1200), {}, {
+          nowMs: 1200,
+          controlMode: 'profit-live'
+        });
+        return [
+          decision.kind,
+          decision.action.kind,
+          decision.action.target.type,
+          decision.action.target.userId,
+          decision.action.target.authority,
+          decision.action.target.x,
+          decision.action.target.drop,
+          decision.action.target.profitMetadataAuthority,
+          decision.input.profitCoinSource,
+          decision.input.fallback.snapshotCoinFallbackAllowed
+        ].join('|');
+      })(),
+      want: 'profit-candidate|attack|enemy|8|realtime|1000|8|snapshot|none|false'
+    },
+    {
       name: 'browserless profit live exits instead of chasing coin under combat threat',
       got: (() => {
         const store = createBrowserlessStateStore({ userId: 7 });

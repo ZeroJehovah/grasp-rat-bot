@@ -57,7 +57,7 @@ function isActiveEntity(entity) {
 }
 
 function entityDropValue(entity) {
-  return Number(entity?.drop ?? entity?.Drop ?? entity?.reward ?? entity?.coin_reward ?? 0) || 0;
+  return Number(entity?.drop ?? entity?.Drop ?? entity?.reward ?? entity?.coin_reward ?? entity?.death_reward_preview ?? entity?.death_drop_coins ?? 0) || 0;
 }
 
 function entityStaminaSummary(entity) {
@@ -89,6 +89,37 @@ function normalizeEntityForDecision(entity, self = null, authority = 'realtime')
   };
   normalized.distance = self ? distanceBetween(self, normalized) : numberOrNull(entity.distance);
   return normalized;
+}
+
+function snapshotEntityByUserId(fallback) {
+  const entities = Array.isArray(fallback?.entities) ? fallback.entities : [];
+  const byUserId = new Map();
+  for (const entity of entities) {
+    const userId = numberOrNull(entity?.user_id);
+    if (userId !== null && !byUserId.has(userId)) byUserId.set(userId, entity);
+  }
+  return byUserId;
+}
+
+function enrichRealtimeEntityWithSnapshotProfitMetadata(entity, snapshotEntity, options = {}) {
+  if (!entity || !snapshotEntity) return entity;
+  const reward = entityDropValue(snapshotEntity);
+  if (!(reward > 0)) return entity;
+  const maxDistance = Math.max(0, Number(options.snapshotEntityMetadataMaxDistanceCm || 5000));
+  const metadataDistance = distanceBetween(entity, snapshotEntity);
+  if (Number.isFinite(metadataDistance) && maxDistance > 0 && metadataDistance > maxDistance) return entity;
+  const currentDrop = entityDropValue(entity);
+  return {
+    ...entity,
+    death_reward_preview: snapshotEntity.death_reward_preview,
+    death_drop_coins: snapshotEntity.death_drop_coins,
+    coins: snapshotEntity.coins,
+    reward: currentDrop > 0 ? entity.reward : reward,
+    coin_reward: currentDrop > 0 ? entity.coin_reward : reward,
+    drop: currentDrop > 0 ? entity.drop : reward,
+    profitMetadataAuthority: 'snapshot',
+    profitMetadataDistance: Number.isFinite(metadataDistance) ? Math.round(metadataDistance) : null
+  };
 }
 
 function normalizeCoinForDecision(drop, self, authority = 'snapshot') {
@@ -127,7 +158,8 @@ function summarizeTarget(target) {
     drop: entityDropValue(target),
     distance: Number.isFinite(Number(target.distance)) ? Math.round(Number(target.distance)) : null,
     active: Boolean(target.active || isActiveEntity(target)),
-    alive: target.alive !== false
+    alive: target.alive !== false,
+    profitMetadataAuthority: target.profitMetadataAuthority || ''
   };
 }
 
@@ -172,9 +204,18 @@ function buildBrowserlessStrategyInput(state, options = {}) {
   const realtime = state?.realtime || {};
   const fallback = state?.fallback || state?.snapshot || {};
   const dataGaps = [];
+  const snapshotFrameAgeMs = numberOrNull(fallback.frameAgeMs);
+  const snapshotMaxAgeMs = Math.max(1000, Number(options.snapshotCoinFallbackMaxAgeMs || 5000));
+  const snapshotFreshForMetadata = snapshotFrameAgeMs === null || snapshotFrameAgeMs <= snapshotMaxAgeMs;
+  const snapshotEntitiesByUserId = snapshotFreshForMetadata ? snapshotEntityByUserId(fallback) : new Map();
   const self = normalizeEntityForDecision(realtime.self, null, 'realtime');
   if (!self) dataGaps.push('missing-realtime-self');
   const realtimeEntities = (Array.isArray(realtime.entities) ? realtime.entities : [])
+    .map(entity => enrichRealtimeEntityWithSnapshotProfitMetadata(
+      entity,
+      snapshotEntitiesByUserId.get(numberOrNull(entity?.user_id)),
+      options
+    ))
     .map(entity => normalizeEntityForDecision(entity, self, 'realtime'))
     .filter(Boolean);
   const selfUserId = Number(self?.user_id ?? state?.userId ?? options.userId ?? 0);
@@ -200,8 +241,6 @@ function buildBrowserlessStrategyInput(state, options = {}) {
     .map(drop => normalizeCoinForDecision(drop, self, 'snapshot'))
     .filter(Boolean)
     .filter(coin => Number(coin.amount || 0) > 0);
-  const snapshotFrameAgeMs = numberOrNull(fallback.frameAgeMs);
-  const snapshotMaxAgeMs = Math.max(1000, Number(options.snapshotCoinFallbackMaxAgeMs || 5000));
   const snapshotFallbackEnabledOption = options.snapshotCoinFallbackEnabled ?? options.allowSnapshotCoinFallback;
   const snapshotFallbackEnabled = snapshotFallbackEnabledOption === undefined
     ? options.controlMode !== 'profit-live'
