@@ -9612,6 +9612,75 @@ async function runSelfTest() {
       want: 'false|websocket connect timeout|true|0|true|1|7|true'
     },
     {
+      name: 'browserless canary opens ws when snapshot self is already present near active login point',
+      got: (async () => {
+        let t = Date.UTC(2026, 6, 8, 1, 0, 0);
+        let opened = false;
+        const posFrame = encodeGrzFrameForTest({
+          type: 'pos',
+          tick: 20,
+          entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 100, y: 200, hp: 90 }],
+          bullets: []
+        });
+        const result = await runReadOnlyCanary({
+          gameOrigin: 'https://grasp-rat-game.h-e.top',
+          snapshotPath: '/snapshot',
+          wsPath: '/ws',
+          wsExtraQuery: 'compress=gzip%2Cdeflate',
+          userId: 7,
+          sessionToken: 'canary-token',
+          readOnlyProbeMs: 1000,
+          decisionIntervalMs: 1,
+          frameGapAlertMs: 5000,
+          wsConnectTimeoutMs: 1000,
+          httpTimeoutMs: 1000
+        }, {
+          now: () => t,
+          sleep: async ms => { t += ms; },
+          persistedState: {
+            loginPointSafety: { point: { x: 0, y: 0, hp: 100, source: 'test' } }
+          },
+          fetchImpl: async () => fakeResponseForTest({
+            body: {
+              type: 'snapshot',
+              tick: 19,
+              entities: [
+                { entity_id: 1, user_id: 7, name: 'self', x: 100, y: 200, hp: 90 },
+                { entity_id: 2, user_id: 8, name: 'active', x: 500, y: 0, hp: 100, current_join_mode: 'Active', life: 'Alive' }
+              ],
+              bullets: [],
+              coin_drops: [],
+              messages: []
+            }
+          }),
+          openBrowserlessWs: async options => {
+            opened = true;
+            t += 100;
+            options.onMessage(posFrame);
+            return {
+              isOpen: () => true,
+              close: () => {},
+              send: () => {}
+            };
+          },
+          leaveWithVerification: async () => ({ ok: true, attempts: [{ ok: true, summary: { leaveConfirmed: true } }] })
+        });
+        return [
+          result.ok,
+          opened,
+          result.snapshotSafety.ok,
+          result.snapshotSafety.reason,
+          result.snapshotSafety.originalReason,
+          result.snapshotSafety.bypassedPreLoginSafety,
+          result.snapshotSafety.response.summary.selfPresent,
+          result.snapshotSafety.response.summary.safety.reason,
+          result.stats.selfPresent.true,
+          result.leave.ok
+        ].join('|');
+      })(),
+      want: 'true|true|true|self-present-reentry|active-near-login-point|true|true|active-near-login-point|1|true'
+    },
+    {
       name: 'browserless movement-only canary sends velocity without shooting',
       got: (async () => {
         let t = Date.UTC(2026, 6, 8, 1, 0, 0);

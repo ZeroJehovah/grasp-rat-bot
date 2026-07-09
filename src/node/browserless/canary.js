@@ -31,6 +31,17 @@ function snapshotSafetySelfPresent(snapshotSafety) {
   return Boolean(snapshotSafety?.response?.summary?.selfPresent);
 }
 
+function allowSelfPresentSnapshotControl(snapshotSafety) {
+  if (!snapshotSafety || snapshotSafety.ok || !snapshotSafetySelfPresent(snapshotSafety)) return snapshotSafety;
+  return {
+    ...snapshotSafety,
+    ok: true,
+    reason: 'self-present-reentry',
+    originalReason: snapshotSafety.reason || '',
+    bypassedPreLoginSafety: true
+  };
+}
+
 function errorMessage(error) {
   return error?.message || String(error || 'unknown error');
 }
@@ -338,6 +349,10 @@ async function runReadOnlyCanary(config, options = {}) {
     log('canary-snapshot-safety-error', { error: message });
   }
   log('canary-snapshot-safety', result.snapshotSafety);
+  result.snapshotSafety = allowSelfPresentSnapshotControl(result.snapshotSafety);
+  if (result.snapshotSafety?.bypassedPreLoginSafety) {
+    log('canary-snapshot-self-present-reentry', result.snapshotSafety);
+  }
   if (!result.snapshotSafety.ok) {
     if (options.allowMissingLoginPointBootstrap && result.snapshotSafety.reason === 'missing-login-point') {
       result.snapshotSafety = {
