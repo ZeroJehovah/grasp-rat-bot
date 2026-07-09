@@ -496,6 +496,13 @@ function buildCombatDecision(input, options = {}) {
   };
 }
 
+function isCombatActionEligibleForDecision(combatDecision, options = {}) {
+  const target = combatDecision?.target || combatDecision?.dryRun?.target || null;
+  if (!target) return false;
+  if (options.controlMode !== 'profit-live') return true;
+  return Boolean(target.active || target.firing);
+}
+
 function profitLiveSafetyDecision(input, combatDecision, options = {}) {
   if (options.controlMode !== 'profit-live' || !input.self) return null;
   const target = combatDecision?.dryRun?.target || combatDecision?.target || null;
@@ -554,6 +561,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     blockAfkProfitWhenActiveThreatVisible: profitLive ? true : options.blockAfkProfitWhenActiveThreatVisible
   });
   const combat = buildCombatDecision(input, options);
+  const combatActionEligible = isCombatActionEligibleForDecision(combat, options);
   const safetyAction = profitLiveSafetyDecision(input, combat, options);
   let kind = 'wait';
   let band = 'wait';
@@ -570,7 +578,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     band = safetyAction.band;
     reason = safetyAction.reason;
     action = safetyAction;
-  } else if (combat.target && combatDecisionEnabled) {
+  } else if (combat.target && combatDecisionEnabled && combatActionEligible) {
     kind = combatLiveEnabled ? 'combat-live' : (combatDryRun ? 'combat-dry-run' : 'combat-candidate');
     band = 'combat';
     reason = combat.action.reason;
@@ -608,6 +616,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     combat: {
       ...(combat.dryRun || {}),
       target: combat.dryRun?.target || summarizeTarget(combat.target),
+      actionEligible: combatActionEligible,
       candidates: combat.dryRun?.candidates || topItems(combat.candidates, target => ({
         ...summarizeTarget(target),
         score: Number.isFinite(Number(target.combatScore)) ? Math.round(Number(target.combatScore)) : null
