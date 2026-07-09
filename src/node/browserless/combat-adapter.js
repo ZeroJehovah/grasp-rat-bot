@@ -40,6 +40,11 @@ function entityDropValue(entity) {
   return Number(entity?.drop ?? entity?.Drop ?? entity?.reward ?? entity?.coin_reward ?? 0) || 0;
 }
 
+function isActiveCombatEntity(entity) {
+  const mode = String(entity?.current_join_mode || entity?.mode || entity?.joined || '').toLowerCase();
+  return mode === 'active';
+}
+
 function normalizeCombatEntity(entity, self = null) {
   if (!entity || typeof entity !== 'object') return null;
   const vx = numberOrNull(entity.vx);
@@ -59,6 +64,8 @@ function normalizeCombatEntity(entity, self = null) {
     hp: numberOrNull(entity.hp),
     max_hp: numberOrNull(entity.max_hp),
     drop: entityDropValue(entity),
+    active: isActiveCombatEntity(entity),
+    firing: Boolean(entity.firing || entity.is_firing || entity.shooting),
     authority: 'realtime'
   };
   normalized.distance = self ? distanceBetween(self, normalized) : numberOrNull(entity.distance);
@@ -173,6 +180,8 @@ function summarizeCombatTarget(target) {
     vy: numberOrNull(target.vy),
     hp: numberOrNull(target.hp),
     drop: entityDropValue(target),
+    active: Boolean(target.active || isActiveCombatEntity(target)),
+    firing: Boolean(target.firing || target.is_firing || target.shooting),
     distance: Number.isFinite(Number(target.distance)) ? Math.round(Number(target.distance)) : null,
     score: Number.isFinite(Number(target.combatScore)) ? Math.round(Number(target.combatScore)) : null
   };

@@ -45,6 +45,25 @@ function selfStaminaRemainingMs(self) {
   return null;
 }
 
+function decisionSafetyDetail(decision) {
+  const action = decision?.action || decision || {};
+  return {
+    kind: action.kind || decision?.kind || '',
+    band: action.band || decision?.band || '',
+    reason: action.reason || decision?.reason || '',
+    self: action.self || decision?.input?.self || null,
+    target: action.target || decision?.combat?.target || null,
+    combat: decision?.combat ? {
+      target: decision.combat.target || null,
+      movement: decision.combat.movement || null,
+      shooting: decision.combat.shooting || null
+    } : null,
+    profit: decision?.profit ? {
+      best: decision.profit.best || null
+    } : null
+  };
+}
+
 function evaluateBrowserlessSafety(state = {}, context = {}, options = {}) {
   const nowMs = numberOrNull(options.nowMs ?? context.nowMs) ?? Date.now();
   const staleSelfMs = Math.max(1000, Number(options.staleSelfMs ?? context.staleSelfMs ?? DEFAULT_STALE_SELF_MS));
@@ -54,6 +73,18 @@ function evaluateBrowserlessSafety(state = {}, context = {}, options = {}) {
 
   if (context.stopRequested) {
     return createSafetyEvent('explicit-stop', context.stopDetail || {}, { nowMs });
+  }
+
+  const decisionAction = context.decision?.action || context.decision || null;
+  if (decisionAction && String(decisionAction.band || '') === 'safety') {
+    return createSafetyEvent(decisionAction.reason || 'decision-safety', {
+      decision: decisionSafetyDetail(context.decision)
+    }, {
+      nowMs,
+      shouldLeave: decisionAction.shouldLeave !== false,
+      stopMotion: decisionAction.stopMotion !== false,
+      severity: decisionAction.severity || 'stop'
+    });
   }
 
   if (context.snapshotSafety && context.snapshotSafety.ok === false) {
