@@ -6080,6 +6080,51 @@ async function runSelfTest() {
       want: 'profit-candidate|attack|enemy|8|realtime|1000|8|snapshot|none|false'
     },
     {
+      name: 'browserless profit live treats snapshot-active realtime target as safety threat',
+      got: (() => {
+        const store = createBrowserlessStateStore({ userId: 7 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 59,
+          entities: [
+            { entity_id: 1, user_id: 7, name: 'self', x: 100, y: 100, hp: 100, max_hp: 100 },
+            { entity_id: 2, user_id: 8, name: 'mode-missing-active', x: 9000, y: 100, hp: 100 }
+          ],
+          bullets: []
+        }, { receivedAtMs: 1000 });
+        store.ingestFrame({
+          type: 'snapshot',
+          tick: 60,
+          entities: [
+            { entity_id: 1, user_id: 7, name: 'self', x: 100, y: 100, hp: 100, coins: 1000 },
+            { entity_id: 22, user_id: 8, name: 'mode-missing-active', x: 9010, y: 100, hp: 100, current_join_mode: 'Active', death_reward_preview: 24, death_drop_coins: 24 }
+          ],
+          bullets: [],
+          coin_drops: [],
+          messages: []
+        }, { receivedAtMs: 1100 });
+        const decision = buildBrowserlessDecision(store.getState(1200), {}, {
+          nowMs: 1200,
+          controlMode: 'profit-live',
+          combatEnabled: true
+        });
+        return [
+          decision.kind,
+          decision.band,
+          decision.reason,
+          decision.action.target.userId,
+          decision.action.target.authority,
+          decision.action.target.profitMetadataActive,
+          decision.profit.best === null,
+          decision.combat.target?.userId || '',
+          Boolean(decision.combat.actionEligible),
+          decision.input.dataGaps.includes('snapshot-active-threat-visible'),
+          decision.input.dataGaps.includes('snapshot-fallback-blocked:active-threat-visible')
+        ].join('|');
+      })(),
+      want: 'safety-exit|safety|profit-live-snapshot-active-threat|8|realtime|true|true||false|true|true'
+    },
+    {
       name: 'browserless profit live exits instead of chasing coin under combat threat',
       got: (() => {
         const store = createBrowserlessStateStore({ userId: 7 });
