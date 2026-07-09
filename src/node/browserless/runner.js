@@ -19,11 +19,8 @@ const { startStatusServer } = require('./status-server');
 const { runReadOnlyCanary } = require('./canary');
 const { decisionStatePatch } = require('./decision-adapter');
 const { createBrowserlessActionAdapter } = require('./action-adapter');
+const { createSourceIpController } = require('./source-ip-controller');
 const { createBrowserlessSafetyController } = require('./safety-controller');
-const {
-  requestAuthUrl,
-  submitCallbackInput
-} = require('./session-client');
 
 function publicConfig(config) {
   return {
@@ -58,6 +55,7 @@ function publicConfig(config) {
     wsTracePayload: Boolean(config.wsTracePayload),
     wsTraceMaxPayloadChars: Number(config.wsTraceMaxPayloadChars || 0),
     sourceIp: config.sourceIp || '',
+    sourceIps: config.sourceIps || [],
     stateFile: config.stateFile || stateFilePath(config),
     loginPointPresent: hasConfigNumber(config.loginPointX) && hasConfigNumber(config.loginPointY),
     userId: Number(config.userId || 0),
@@ -246,6 +244,22 @@ async function runBrowserlessRunner(config, deps = {}) {
     }
   });
 
+  const sourceIpController = deps.sourceIpController || createSourceIpController({
+    config,
+    stateFile,
+    state: persisted,
+    logStore,
+    now,
+    fetchWithTimeout: deps.fetchWithTimeout,
+    openBrowserlessWs: deps.openBrowserlessWs,
+    requestAuthUrl: deps.requestAuthUrl,
+    submitCallbackInput: deps.submitCallbackInput,
+    leaveWithVerification: deps.leaveWithVerification
+  });
+  config.sourceIp = sourceIpController.currentSourceIp();
+  config.sourceIps = sourceIpController.sourceIps();
+  persisted = readBrowserlessStateFile(stateFile);
+
   let statusHandle = null;
   if (!config.once && Number(config.statusPort || 0) > 0 && deps.startStatusServer !== false) {
     const starter = deps.startStatusServer || startStatusServer;
@@ -268,9 +282,8 @@ async function runBrowserlessRunner(config, deps = {}) {
         return { ok: true, event };
       },
       onAuthUrl: async () => {
-        const authUrl = await (deps.requestAuthUrl || requestAuthUrl)({
+        const authUrl = await sourceIpController.requestAuthUrl({
           gameOrigin: config.gameOrigin,
-          localAddress: config.sourceIp,
           timeoutMs: config.httpTimeoutMs
         });
         updateBrowserlessStateFile(stateFile, {
@@ -283,9 +296,8 @@ async function runBrowserlessRunner(config, deps = {}) {
         return { ok: true, authUrl };
       },
       onCallback: async input => {
-        const result = await (deps.submitCallbackInput || submitCallbackInput)(input, {
+        const result = await sourceIpController.submitCallbackInput(input, {
           gameOrigin: config.gameOrigin,
-          localAddress: config.sourceIp,
           timeoutMs: config.httpTimeoutMs
         });
         updateBrowserlessStateFile(stateFile, {
@@ -376,7 +388,10 @@ async function runBrowserlessRunner(config, deps = {}) {
         now,
         persistedState: readBrowserlessStateFile(stateFile),
         safetyController,
-        allowMissingLoginPointBootstrap: true
+        allowMissingLoginPointBootstrap: true,
+        fetchWithTimeout: sourceIpController.fetchWithTimeout,
+        openBrowserlessWs: sourceIpController.openBrowserlessWs,
+        leaveWithVerification: sourceIpController.leaveWithVerification
       });
       const learned = learnedLoginPointFromCanary(bootstrap);
       if (learned.loginPoint) {
@@ -422,6 +437,9 @@ async function runBrowserlessRunner(config, deps = {}) {
       now,
       persistedState: readBrowserlessStateFile(stateFile),
       safetyController,
+      fetchWithTimeout: sourceIpController.fetchWithTimeout,
+      openBrowserlessWs: sourceIpController.openBrowserlessWs,
+      leaveWithVerification: sourceIpController.leaveWithVerification,
       onDecision: decision => {
         updateBrowserlessStateFile(stateFile, decisionStatePatch(decision), {
           updatedAt: new Date(now()).toISOString()
@@ -554,6 +572,9 @@ async function runBrowserlessRunner(config, deps = {}) {
     safetyController.clearStop();
     persisted = readBrowserlessStateFile(stateFile);
     config = hydrateConfigFromState(config, persisted);
+    sourceIpController.refreshFromState(persisted);
+    config.sourceIp = sourceIpController.currentSourceIp();
+    config.sourceIps = sourceIpController.sourceIps();
   }
 }
 

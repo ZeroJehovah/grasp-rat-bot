@@ -38,6 +38,7 @@ const DEFAULTS = {
   wsTracePayload: true,
   wsTraceMaxPayloadChars: 0,
   sourceIp: '',
+  sourceIps: [],
   loginPointX: null,
   loginPointY: null,
   loginPointHp: null
@@ -61,6 +62,15 @@ function numberEnv(value, fallback) {
   if (value === undefined || value === null || value === '') return fallback;
   const number = Number(value);
   return Number.isFinite(number) ? number : fallback;
+}
+
+function listEnv(value, fallback = []) {
+  if (Array.isArray(value)) return value.map(item => String(item || '').trim()).filter(Boolean);
+  if (value === undefined || value === null || value === '') return fallback.slice();
+  return String(value)
+    .split(/[\s,;]+/g)
+    .map(item => item.trim())
+    .filter(Boolean);
 }
 
 function applyCanaryProfile(config, profile) {
@@ -112,6 +122,7 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
     wsTracePayload: boolEnv(env.GRASP_RAT_BROWSERLESS_WS_TRACE_PAYLOAD, DEFAULTS.wsTracePayload),
     wsTraceMaxPayloadChars: numberEnv(env.GRASP_RAT_BROWSERLESS_WS_TRACE_MAX_PAYLOAD_CHARS, DEFAULTS.wsTraceMaxPayloadChars),
     sourceIp: env.GRASP_RAT_BROWSERLESS_SOURCE_IP || DEFAULTS.sourceIp,
+    sourceIps: listEnv(env.GRASP_RAT_BROWSERLESS_SOURCE_IPS, DEFAULTS.sourceIps),
     userId: numberEnv(env.GRASP_RAT_BROWSERLESS_USER_ID, 0),
     sessionToken: env.GRASP_RAT_BROWSERLESS_SESSION_TOKEN || '',
     loginPointX: numberEnv(env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_X, DEFAULTS.loginPointX),
@@ -213,6 +224,8 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
       config.wsTraceMaxPayloadChars = numberEnv(argv[++i], config.wsTraceMaxPayloadChars);
     } else if (arg === '--source-ip') {
       config.sourceIp = argv[++i] || '';
+    } else if (arg === '--source-ips') {
+      config.sourceIps = listEnv(argv[++i] || '', []);
     } else if (arg === '--login-point-x') {
       config.loginPointX = numberEnv(argv[++i], config.loginPointX);
     } else if (arg === '--login-point-y') {
@@ -278,6 +291,7 @@ function usage() {
     '  --ws-trace-summary-only  Log WebSocket frame summaries without decoded payloads',
     '  --ws-trace-max-payload-chars <n>  Truncate decoded WS payload JSON; 0 means full payload',
     '  --source-ip <ip>        Bind browserless HTTP/WS outbound sockets to this local source IP',
+    '  --source-ips <list>     Ordered local source IP list for 403-based hot switching',
     '  --login-point-x <cm>      Manual login point x for canary safety',
     '  --login-point-y <cm>      Manual login point y for canary safety',
     '  --login-point-hp <hp>     Manual login point HP context for canary safety',

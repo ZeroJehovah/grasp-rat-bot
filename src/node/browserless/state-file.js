@@ -52,6 +52,14 @@ function defaultBrowserlessState() {
       action: null
     },
     recentExits: [],
+    network: {
+      sourceIp: '',
+      sourceIps: [],
+      lastSelectedAt: '',
+      lastSelectionReason: '',
+      lastProbe: null,
+      lastSwitch: null
+    },
     logs: {
       dataDir: '',
       logDir: '',
@@ -134,6 +142,10 @@ function normalizeBrowserlessState(state, file = '') {
   normalized.runner.readOnly = normalized.runner.readOnly !== false;
   normalized.runner.dryRun = normalized.runner.dryRun !== false;
   normalized.recentExits = Array.isArray(normalized.recentExits) ? normalized.recentExits.slice(-20) : [];
+  normalized.network.sourceIp = String(normalized.network.sourceIp || '');
+  normalized.network.sourceIps = Array.isArray(normalized.network.sourceIps)
+    ? normalized.network.sourceIps.map(item => String(item || '').trim()).filter(Boolean)
+    : [];
   if (file) normalized.logs.stateFile = path.resolve(file);
   return normalized;
 }
@@ -213,6 +225,7 @@ function buildPublicBrowserlessStatus(state, config = {}) {
     loginPointSafety: normalized.loginPointSafety,
     current: normalized.current,
     recentExits: normalized.recentExits,
+    network: normalized.network,
     logs: {
       dataDir: normalized.logs.dataDir || config.dataDir || '',
       logDir: normalized.logs.logDir || config.logDir || '',

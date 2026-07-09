@@ -102,6 +102,9 @@ const {
   startStatusServer
 } = require('./browserless/status-server');
 const {
+  createSourceIpController
+} = require('./browserless/source-ip-controller');
+const {
   cleanupOldLogDays
 } = require('./browserless/log-retention');
 const {
@@ -10828,15 +10831,133 @@ async function runSelfTest() {
       name: 'browserless runner config accepts source IP binding',
       got: (() => {
         const envConfig = parseBrowserlessRunnerArgs([], {
-          GRASP_RAT_BROWSERLESS_SOURCE_IP: '10.0.0.101'
+          GRASP_RAT_BROWSERLESS_SOURCE_IP: '10.0.0.101',
+          GRASP_RAT_BROWSERLESS_SOURCE_IPS: '10.0.0.101,10.0.0.145'
         });
-        const cliConfig = parseBrowserlessRunnerArgs(['--source-ip', '10.0.0.145'], {});
+        const cliConfig = parseBrowserlessRunnerArgs(['--source-ip', '10.0.0.145', '--source-ips', '10.0.0.145 10.0.0.20'], {});
         return [
           envConfig.sourceIp,
-          cliConfig.sourceIp
+          envConfig.sourceIps.join(','),
+          cliConfig.sourceIp,
+          cliConfig.sourceIps.join(',')
         ].join('|');
       })(),
-      want: '10.0.0.101|10.0.0.145'
+      want: '10.0.0.101|10.0.0.101,10.0.0.145|10.0.0.145|10.0.0.145,10.0.0.20'
+    },
+    {
+      name: 'browserless source IP controller keeps persisted selection',
+      got: withTempDirForTest(async dir => {
+        const stateFile = path.join(dir, 'state.json');
+        updateBrowserlessStateFile(stateFile, {
+          network: {
+            sourceIp: '10.0.0.145'
+          }
+        }, { updatedAt: '2026-07-09T00:00:00.000Z' });
+        const controller = createSourceIpController({
+          config: {
+            gameOrigin: 'https://grasp-rat-game.h-e.top',
+            sourceIp: '10.0.0.101',
+            sourceIps: ['10.0.0.101', '10.0.0.145']
+          },
+          stateFile,
+          now: () => Date.UTC(2026, 6, 9, 1, 0, 0)
+        });
+        const state = readBrowserlessStateFile(stateFile);
+        return [
+          controller.currentSourceIp(),
+          controller.sourceIps().join(','),
+          state.network.sourceIp,
+          state.network.sourceIps.join(',')
+        ].join('|');
+      }),
+      want: '10.0.0.145|10.0.0.101,10.0.0.145|10.0.0.145|10.0.0.101,10.0.0.145'
+    },
+    {
+      name: 'browserless source IP controller leaves empty config unbound',
+      got: withTempDirForTest(async dir => {
+        const controller = createSourceIpController({
+          config: {
+            gameOrigin: 'https://grasp-rat-game.h-e.top',
+            sourceIp: '',
+            sourceIps: []
+          },
+          stateFile: path.join(dir, 'state.json'),
+          now: () => Date.UTC(2026, 6, 9, 1, 2, 0)
+        });
+        return [
+          controller.currentSourceIp(),
+          controller.sourceIps().length
+        ].join('|');
+      }),
+      want: '|0'
+    },
+    {
+      name: 'browserless source IP controller switches only when all probes are 403',
+      got: withTempDirForTest(async dir => {
+        const stateFile = path.join(dir, 'state.json');
+        const calls = [];
+        const controller = createSourceIpController({
+          config: {
+            gameOrigin: 'https://grasp-rat-game.h-e.top',
+            sourceIp: '10.0.0.101',
+            sourceIps: ['10.0.0.101', '10.0.0.145'],
+            httpTimeoutMs: 1000
+          },
+          stateFile,
+          now: () => Date.UTC(2026, 6, 9, 2, 0, 0),
+          fetchWithTimeout: async (url, options = {}) => {
+            const ip = options.localAddress || '';
+            const pathName = new URL(url).pathname;
+            calls.push(`${ip}:${pathName}`);
+            if (pathName === '/target') {
+              return fakeResponseForTest({ status: ip === '10.0.0.101' ? 403 : 200, body: { ok: ip !== '10.0.0.101' } });
+            }
+            return fakeResponseForTest({ status: 403, body: 'forbidden' });
+          }
+        });
+        const response = await controller.fetchWithTimeout('https://grasp-rat-game.h-e.top/target', { timeoutMs: 1000 });
+        const state = readBrowserlessStateFile(stateFile);
+        return [
+          response.status,
+          controller.currentSourceIp(),
+          state.network.lastSwitch?.switched,
+          state.network.lastSwitch?.from,
+          state.network.lastSwitch?.to,
+          calls.join(',')
+        ].join('|');
+      }),
+      want: '200|10.0.0.145|true|10.0.0.101|10.0.0.145|10.0.0.101:/target,10.0.0.101:/,10.0.0.101:/auth/linuxdo/start,10.0.0.145:/target'
+    },
+    {
+      name: 'browserless source IP controller keeps IP when another probe is healthy',
+      got: withTempDirForTest(async dir => {
+        const stateFile = path.join(dir, 'state.json');
+        const controller = createSourceIpController({
+          config: {
+            gameOrigin: 'https://grasp-rat-game.h-e.top',
+            sourceIp: '10.0.0.101',
+            sourceIps: ['10.0.0.101', '10.0.0.145'],
+            httpTimeoutMs: 1000
+          },
+          stateFile,
+          now: () => Date.UTC(2026, 6, 9, 2, 1, 0),
+          fetchWithTimeout: async (url, options = {}) => {
+            const pathName = new URL(url).pathname;
+            if (pathName === '/target') return fakeResponseForTest({ status: 403, body: 'forbidden' });
+            if (pathName === '/') return fakeResponseForTest({ status: 200, body: '<html></html>' });
+            return fakeResponseForTest({ status: 403, body: 'forbidden' });
+          }
+        });
+        const response = await controller.fetchWithTimeout('https://grasp-rat-game.h-e.top/target', { timeoutMs: 1000 });
+        const state = readBrowserlessStateFile(stateFile);
+        return [
+          response.status,
+          controller.currentSourceIp(),
+          Boolean(state.network.lastSwitch?.switched),
+          state.network.lastProbe?.allForbidden
+        ].join('|');
+      }),
+      want: '403|10.0.0.101|false|false'
     },
     {
       name: 'browserless runner loop plan resumes only recoverable exits',

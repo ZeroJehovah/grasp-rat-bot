@@ -54,6 +54,10 @@ function renderBrowserlessWebPanel() {
         <h2>Self</h2>
         <dl id="self"></dl>
       </section>
+      <section>
+        <h2>Network</h2>
+        <dl id="network"></dl>
+      </section>
       <section class="wide">
         <h2>Profit / Combat</h2>
         <dl id="work"></dl>
@@ -90,6 +94,7 @@ function renderBrowserlessWebPanel() {
       rows('session', [['userId', s.session?.userId], ['authenticated', s.session?.authenticated], ['token', s.session?.tokenPresent ? 'present' : 'missing'], ['tokenAt', s.session?.tokenUpdatedAt]]);
       rows('safety', [['ok', s.loginPointSafety?.ok], ['reason', s.loginPointSafety?.reason], ['checkedAt', s.loginPointSafety?.checkedAt], ['point', s.loginPointSafety?.point ? JSON.stringify(s.loginPointSafety.point) : '']]);
       rows('self', [['name', s.current?.self?.name], ['hp', s.current?.self?.hp], ['x', s.current?.self?.x], ['y', s.current?.self?.y], ['stamina', s.current?.stamina ? JSON.stringify(s.current.stamina) : '']]);
+      rows('network', [['sourceIp', s.network?.sourceIp], ['sourceIps', s.network?.sourceIps ? s.network.sourceIps.join(', ') : ''], ['selectedAt', s.network?.lastSelectedAt], ['reason', s.network?.lastSelectionReason], ['lastSwitch', s.network?.lastSwitch ? JSON.stringify(s.network.lastSwitch) : '']]);
       rows('work', [['decision', s.current?.decision ? JSON.stringify(s.current.decision) : ''], ['action', s.current?.action ? JSON.stringify(s.current.action) : ''], ['profit', s.current?.profit ? JSON.stringify(s.current.profit) : ''], ['combat', s.current?.combatSummary ? JSON.stringify(s.current.combatSummary) : ''], ['lastRun', s.runner?.lastRun ? JSON.stringify(s.runner.lastRun) : ''], ['probe', s.probes?.lastReadOnlyProbe ? JSON.stringify(s.probes.lastReadOnlyProbe) : '']]);
       rows('logs', [['dataDir', s.logs?.dataDir], ['logDir', s.logs?.logDir], ['stateFile', s.logs?.stateFile], ['dayDir', s.logs?.currentDayDir]]);
       document.getElementById('exits').textContent = JSON.stringify(s.recentExits || [], null, 2);
