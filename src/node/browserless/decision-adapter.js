@@ -105,22 +105,39 @@ function snapshotEntityByUserId(fallback) {
 
 function enrichRealtimeEntityWithSnapshotProfitMetadata(entity, snapshotEntity, options = {}) {
   if (!entity || !snapshotEntity) return entity;
-  const reward = entityDropValue(snapshotEntity);
-  if (!(reward > 0)) return entity;
   const maxDistance = Math.max(0, Number(options.snapshotEntityMetadataMaxDistanceCm || 5000));
   const metadataDistance = distanceBetween(entity, snapshotEntity);
   if (Number.isFinite(metadataDistance) && maxDistance > 0 && metadataDistance > maxDistance) return entity;
+  const snapshotJoinMode = String(snapshotEntity.current_join_mode || snapshotEntity.mode || snapshotEntity.joined || '');
+  const snapshotActive = isActiveEntity(snapshotEntity);
+  const modePatch = snapshotJoinMode
+    ? {
+        profitMetadataMode: snapshotJoinMode,
+        profitMetadataActive: snapshotActive,
+        profitMetadataDistance: Number.isFinite(metadataDistance) ? Math.round(metadataDistance) : null
+      }
+    : {
+        profitMetadataActive: snapshotActive,
+        profitMetadataDistance: Number.isFinite(metadataDistance) ? Math.round(metadataDistance) : null
+      };
+  const reward = entityDropValue(snapshotEntity);
+  if (!(reward > 0)) {
+    return {
+      ...entity,
+      ...modePatch
+    };
+  }
   const currentDrop = entityDropValue(entity);
   return {
     ...entity,
+    ...modePatch,
     death_reward_preview: snapshotEntity.death_reward_preview,
     death_drop_coins: snapshotEntity.death_drop_coins,
     coins: snapshotEntity.coins,
     reward: currentDrop > 0 ? entity.reward : reward,
     coin_reward: currentDrop > 0 ? entity.coin_reward : reward,
     drop: currentDrop > 0 ? entity.drop : reward,
-    profitMetadataAuthority: 'snapshot',
-    profitMetadataDistance: Number.isFinite(metadataDistance) ? Math.round(metadataDistance) : null
+    profitMetadataAuthority: 'snapshot'
   };
 }
 
@@ -216,7 +233,9 @@ function summarizeTarget(target) {
     distance: Number.isFinite(Number(target.distance)) ? Math.round(Number(target.distance)) : null,
     active: Boolean(target.active || isActiveEntity(target)),
     alive: target.alive !== false,
-    profitMetadataAuthority: target.profitMetadataAuthority || ''
+    profitMetadataAuthority: target.profitMetadataAuthority || '',
+    profitMetadataMode: target.profitMetadataMode || '',
+    profitMetadataActive: Boolean(target.profitMetadataActive)
   };
 }
 
@@ -279,9 +298,10 @@ function buildBrowserlessStrategyInput(state, options = {}) {
   const visibleTargets = realtimeEntities
     .filter(entity => Number(entity.user_id) !== selfUserId)
     .filter(entity => Number.isFinite(Number(entity.x)) && Number.isFinite(Number(entity.y)));
-  const activeThreats = visibleTargets.filter(entity => entity.active && entity.alive !== false);
+  const activeThreats = visibleTargets.filter(entity => (entity.active || entity.profitMetadataActive) && entity.alive !== false);
+  const snapshotActiveThreats = visibleTargets.filter(entity => entity.profitMetadataActive && !entity.active && entity.alive !== false);
   const afkTargets = visibleTargets.filter(entity => {
-    if (entity.active || entity.alive === false || entity.invulnerable) return false;
+    if (entity.active || entity.profitMetadataActive || entity.alive === false || entity.invulnerable) return false;
     return attackWorthTakingCore(self, entity, {
       attackMinDrop: options.attackMinDrop ?? DEFAULT_ATTACK_MIN_DROP,
       attackMinAfkDrop: options.attackMinAfkDrop ?? DEFAULT_ATTACK_MIN_DROP,
@@ -316,6 +336,7 @@ function buildBrowserlessStrategyInput(state, options = {}) {
   if (!realtimeCoins.length && !snapshotCoins.length) dataGaps.push('no-coin-frame-type-observed');
   if (!realtimeCoins.length && snapshotCoins.length) dataGaps.push('snapshot-coin-fallback-only');
   if (selfKilledPlayerDropCoins.length) dataGaps.push('self-killed-player-drop-visible');
+  if (snapshotActiveThreats.length) dataGaps.push('snapshot-active-threat-visible');
   if (snapshotFallbackBlockedReasons.length) dataGaps.push(...snapshotFallbackBlockedReasons.map(reason => `snapshot-fallback-blocked:${reason}`));
   if (!realtime.frameAgeMs && realtime.receivedAtMs) dataGaps.push('unknown-realtime-frame-age');
   const profitCoins = realtimeCoins.length
@@ -348,6 +369,7 @@ function buildBrowserlessStrategyInput(state, options = {}) {
     },
     visibleTargets,
     activeThreats,
+    snapshotActiveThreats,
     afkTargets,
     realtimeCoins,
     snapshotCoins,
@@ -505,10 +527,16 @@ function isCombatActionEligibleForDecision(combatDecision, options = {}) {
 
 function profitLiveSafetyDecision(input, combatDecision, options = {}) {
   if (options.controlMode !== 'profit-live' || !input.self) return null;
-  const target = combatDecision?.dryRun?.target || combatDecision?.target || null;
+  const realtimeTarget = combatDecision?.dryRun?.target || combatDecision?.target || null;
+  const snapshotThreat = (input.snapshotActiveThreats || [])
+    .slice()
+    .sort((a, b) => Number(a.distance || Infinity) - Number(b.distance || Infinity))[0] || null;
+  const realtimeThreatening = Boolean(realtimeTarget?.active || realtimeTarget?.firing);
+  const target = realtimeThreatening ? realtimeTarget : (snapshotThreat || realtimeTarget);
   const distance = Number(target?.distance);
   if (!target || !Number.isFinite(distance)) return null;
-  const threatening = Boolean(target.active || target.firing);
+  const snapshotThreatening = Boolean(target.profitMetadataActive && !target.active);
+  const threatening = Boolean(target.active || target.firing || snapshotThreatening);
   if (!threatening) return null;
   const threatExitRange = Math.max(0, Number(options.profitLiveThreatExitRange || DEFAULT_PROFIT_LIVE_THREAT_EXIT_RANGE));
   const injuryExitRange = Math.max(threatExitRange, Number(options.profitLiveInjuryExitRange || DEFAULT_PROFIT_LIVE_INJURY_EXIT_RANGE));
@@ -518,6 +546,17 @@ function profitLiveSafetyDecision(input, combatDecision, options = {}) {
   const injured = Number.isFinite(hp)
     && ((Number.isFinite(maxHp) && hp < maxHp) || hp <= injuryHp);
   if (options.combatEnabled === true) {
+    if (snapshotThreatening && distance <= threatExitRange) {
+      return {
+        kind: 'safety-exit',
+        band: 'safety',
+        reason: 'profit-live-snapshot-active-threat',
+        shouldLeave: true,
+        stopMotion: true,
+        target: summarizeTarget(target),
+        self: summarizeTarget(input.self)
+      };
+    }
     if (injured && distance <= threatExitRange) {
       return {
         kind: 'safety-exit',
