@@ -137,11 +137,20 @@ function browserlessLoopPlan(result, config = {}) {
     ?? safetyEvent?.detail?.decision?.staminaBudgetExit?.reloginDelayMs
     ?? 0
   );
+  const fastRecoverableTransportReasons = new Set([
+    'frame-gap',
+    'stale-self',
+    'ws-closed',
+    'ws-error'
+  ]);
 
   if (config.once) return stop('once');
   if (!result) return stop('missing-result');
   if (result.reason === 'missing-manual-session') return stop('missing-manual-session');
   if (safetyReason === 'explicit-stop') return stop('explicit-stop');
+  if (fastRecoverableTransportReasons.has(safetyReason)) {
+    return resumeFast(safetyReason);
+  }
   if (safetyReason === 'direct-leave-failed' || canary?.safety?.leaveFailure) return stop('direct-leave-failed');
   if (safetyReason === 'no-self') return stop('no-self');
   if (/websocket unexpected response 403|http 403|missing-manual-session|login-point-bootstrap-failed/i.test(error)) {
@@ -150,14 +159,6 @@ function browserlessLoopPlan(result, config = {}) {
   if (result.ok) return resume('cycle-complete');
   if (safetyReason === 'stamina-budget-coin-leave') {
     return resume(safetyReason, Number.isFinite(decisionDelayMs) ? decisionDelayMs : 0);
-  }
-  if ([
-    'frame-gap',
-    'stale-self',
-    'ws-closed',
-    'ws-error'
-  ].includes(safetyReason)) {
-    return resumeFast(safetyReason);
   }
   if ([
     'profit-live-snapshot-active-threat',

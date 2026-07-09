@@ -10866,6 +10866,17 @@ async function runSelfTest() {
             safety: { event: { reason: 'ws-closed' } }
           }
         }, config);
+        const wsClosedLeaveFailure = browserlessLoopPlan({
+          ok: false,
+          canary: {
+            runId: 'ws-closed-leave-failed-test',
+            error: 'ws-closed',
+            safety: {
+              event: { reason: 'ws-closed' },
+              leaveFailure: { reason: 'direct-leave-failed' }
+            }
+          }
+        }, config);
         const explicitStop = browserlessLoopPlan({
           ok: false,
           canary: {
@@ -10922,6 +10933,9 @@ async function runSelfTest() {
           wsClosed.continue,
           wsClosed.reason,
           wsClosed.delayMs,
+          wsClosedLeaveFailure.continue,
+          wsClosedLeaveFailure.reason,
+          wsClosedLeaveFailure.delayMs,
           explicitStop.continue,
           noSelf.continue,
           auth403.continue,
@@ -10932,7 +10946,7 @@ async function runSelfTest() {
           connectTimeout.delayMs
         ].join('|');
       })(),
-      want: 'true|1234|true|stamina-budget-coin-leave|1800000|true|injury-leave|1234|true|pursuit-leave|1234|true|combat-hp-disadvantage-leave|1234|true|ws-closed|1000|false|false|false|true|60000|true|ws-connect-timeout|1000'
+      want: 'true|1234|true|stamina-budget-coin-leave|1800000|true|injury-leave|1234|true|pursuit-leave|1234|true|combat-hp-disadvantage-leave|1234|true|ws-closed|1000|true|ws-closed|1000|false|false|false|true|60000|true|ws-connect-timeout|1000'
     },
     {
       name: 'browserless runner dry-run and fake read-only path write redacted logs',
