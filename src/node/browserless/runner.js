@@ -18,6 +18,7 @@ const {
 const { startStatusServer } = require('./status-server');
 const { runReadOnlyCanary } = require('./canary');
 const { decisionStatePatch } = require('./decision-adapter');
+const { createBrowserlessActionAdapter } = require('./action-adapter');
 const { createBrowserlessSafetyController } = require('./safety-controller');
 const {
   requestAuthUrl,
@@ -103,6 +104,7 @@ function browserlessLoopPlan(result, config = {}) {
   const error = String(canary?.error || result?.reason || result?.error || '');
   const runId = canary?.runId || '';
   const delayMs = Math.max(1000, Number(config.loopDelayMs || 30000));
+  const fastDelayMs = 1000;
   const stop = reason => ({
     continue: false,
     reason,
@@ -117,6 +119,14 @@ function browserlessLoopPlan(result, config = {}) {
     delayMs: /^snapshot safety not confirmed:/i.test(error)
       ? Math.max(delayMs, 60000, Number(minimumDelayMs || 0))
       : Math.max(delayMs, Number(minimumDelayMs || 0)),
+    previousRunId: runId,
+    error,
+    safetyReason
+  });
+  const resumeFast = reason => ({
+    continue: true,
+    reason,
+    delayMs: fastDelayMs,
     previousRunId: runId,
     error,
     safetyReason
@@ -142,17 +152,22 @@ function browserlessLoopPlan(result, config = {}) {
     return resume(safetyReason, Number.isFinite(decisionDelayMs) ? decisionDelayMs : 0);
   }
   if ([
-    'profit-live-snapshot-active-threat',
-    'injury-leave',
-    'pursuit-leave',
     'frame-gap',
     'stale-self',
     'ws-closed',
     'ws-error'
   ].includes(safetyReason)) {
+    return resumeFast(safetyReason);
+  }
+  if ([
+    'profit-live-snapshot-active-threat',
+    'combat-hp-disadvantage-leave',
+    'injury-leave',
+    'pursuit-leave'
+  ].includes(safetyReason)) {
     return resume(safetyReason);
   }
-  if (/^websocket connect timeout$/i.test(error)) return resume('ws-connect-timeout');
+  if (/^websocket connect timeout$/i.test(error)) return resumeFast('ws-connect-timeout');
   if (/^snapshot safety not confirmed:/i.test(error)) return resume('snapshot-safety-retry');
   return stop(error || safetyReason || 'unknown-error');
 }
@@ -561,12 +576,58 @@ async function runBrowserlessRunnerSelfTest() {
       now: () => Date.UTC(2026, 6, 8, 1, 1, 0),
       runReadOnlyOnce: async () => ({ ok: true, frames: 0, fake: true })
     });
+    const wsClosedPlan = browserlessLoopPlan({
+      ok: false,
+      canary: {
+        runId: 'self-test-ws-closed',
+        error: 'ws-closed',
+        safety: { event: { reason: 'ws-closed' } }
+      }
+    }, { loopDelayMs: 30000 });
+    const combatExitPlan = browserlessLoopPlan({
+      ok: false,
+      canary: {
+        runId: 'self-test-combat-exit',
+        error: 'combat-hp-disadvantage-leave',
+        safety: { event: { reason: 'combat-hp-disadvantage-leave' } }
+      }
+    }, { loopDelayMs: 30000 });
+    const closedTransportAdapter = createBrowserlessActionAdapter({
+      transport: {
+        sendVelocity() {
+          throw new Error('websocket is not open');
+        }
+      },
+      now: () => Date.UTC(2026, 6, 8, 1, 2, 0),
+      commandIntervalMs: 0
+    });
+    const closedTransportAction = closedTransportAdapter.applyDecision({}, {
+      kind: 'wait',
+      band: 'wait',
+      reason: 'missing-realtime-self',
+      action: { kind: 'wait', band: 'wait', reason: 'missing-realtime-self' }
+    });
     const runnerLog = path.join(tmp, 'logs', '2026-07-08', 'runner.jsonl');
     const text = fs.readFileSync(runnerLog, 'utf8');
     return {
-      ok: Boolean(dryRun.ok && liveRun.ok && /runner-dry-run/.test(text) && /runner-finish/.test(text) && !/self-test-token/.test(text)),
+      ok: Boolean(
+        dryRun.ok
+        && liveRun.ok
+        && /runner-dry-run/.test(text)
+        && /runner-finish/.test(text)
+        && !/self-test-token/.test(text)
+        && wsClosedPlan.continue
+        && wsClosedPlan.delayMs === 1000
+        && combatExitPlan.continue
+        && combatExitPlan.delayMs === 30000
+        && closedTransportAction.ok === false
+        && closedTransportAction.transportClosed === true
+      ),
       dryRun,
       liveRun,
+      wsClosedPlan,
+      combatExitPlan,
+      closedTransportAction,
       logFile: runnerLog
     };
   } finally {

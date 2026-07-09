@@ -414,7 +414,21 @@ function createBrowserlessActionAdapter(options = {}) {
     clearPrecisionPulseStop();
     state.velocityPulseToken += 1;
     const pulseToken = state.velocityPulseToken;
-    transport.sendVelocity(dx, dy);
+    try {
+      transport.sendVelocity(dx, dy);
+    } catch (err) {
+      const message = err?.message || String(err);
+      cancelVelocityRepeat();
+      state.lastVelocityRepeatError = message;
+      state.skippedCount += 1;
+      return {
+        ok: false,
+        skipped: false,
+        reason: 'send-velocity-failed',
+        error: message,
+        transportClosed: /websocket is not open|not open|closed/i.test(message)
+      };
+    }
     const repeat = scheduleVelocityRepeat(dx, dy);
     const command = {
       id: nextCommandId,
@@ -455,7 +469,19 @@ function createBrowserlessActionAdapter(options = {}) {
       state.skippedCount += 1;
       return { ok: true, skipped: true, reason: 'shoot-command-throttled', command: summarizeCommand(last), cadenceMs: intervalMs };
     }
-    transport.sendShoot(targetX, targetY, startX, startY);
+    try {
+      transport.sendShoot(targetX, targetY, startX, startY);
+    } catch (err) {
+      const message = err?.message || String(err);
+      state.skippedCount += 1;
+      return {
+        ok: false,
+        skipped: false,
+        reason: 'send-shoot-failed',
+        error: message,
+        transportClosed: /websocket is not open|not open|closed/i.test(message)
+      };
+    }
     const command = {
       id: nextCommandId,
       type: 'shoot',
@@ -478,6 +504,14 @@ function createBrowserlessActionAdapter(options = {}) {
 
   function stop(reason = 'stop') {
     return sendVelocity(0, 0, reason);
+  }
+
+  function transportFailure(...results) {
+    const transportClosed = results.some(result => Boolean(result?.transportClosed));
+    const failed = results.find(result => result?.error);
+    return transportClosed || failed
+      ? { transportClosed, error: failed?.error || '' }
+      : {};
   }
 
   function applyDecision(stateSnapshot, decision) {
@@ -517,6 +551,7 @@ function createBrowserlessActionAdapter(options = {}) {
         reason: 'unsupported-action',
         command: stopped.command || null,
         skipped: Boolean(stopped.skipped),
+        ...transportFailure(stopped),
         unsupportedAction: diagnostics
       };
     }
@@ -533,7 +568,8 @@ function createBrowserlessActionAdapter(options = {}) {
         reason: vector.reason,
         vector,
         command: stopped.command || null,
-        skipped: Boolean(stopped.skipped)
+        skipped: Boolean(stopped.skipped),
+        ...transportFailure(stopped)
       };
     }
     const sent = sendVelocity(vector.dx, vector.dy, vector.reason, target);
@@ -558,7 +594,8 @@ function createBrowserlessActionAdapter(options = {}) {
       opportunisticShot: opportunisticShot || null,
       target: opportunisticShot || target,
       skipped: Boolean(sent.skipped),
-      precisionPulseMs
+      precisionPulseMs,
+      ...transportFailure(sent, shoot)
     };
   }
 
@@ -594,17 +631,20 @@ function createBrowserlessActionAdapter(options = {}) {
         ok: stopped.ok,
         skipped: Boolean(stopped.skipped),
         reason: stopped.reason || 'opportunistic-shot-hold',
-        command: stopped.command || null
+        command: stopped.command || null,
+        ...transportFailure(stopped)
       },
       shoot: {
         ok: shoot.ok,
         skipped: Boolean(shoot.skipped),
         reason: shoot.reason,
         command: shoot.command || null,
-        cadenceMs: shoot.cadenceMs || null
+        cadenceMs: shoot.cadenceMs || null,
+        ...transportFailure(shoot)
       },
       target,
-      opportunisticShot: target
+      opportunisticShot: target,
+      ...transportFailure(stopped, shoot)
     };
   }
 
@@ -621,6 +661,7 @@ function createBrowserlessActionAdapter(options = {}) {
         vector,
         command: stopped.command || null,
         skipped: Boolean(stopped.skipped),
+        ...transportFailure(stopped),
         target
       };
     }
@@ -632,6 +673,7 @@ function createBrowserlessActionAdapter(options = {}) {
       vector,
       command: sent.command || null,
       skipped: Boolean(sent.skipped),
+      ...transportFailure(sent),
       target
     };
   }
@@ -649,6 +691,7 @@ function createBrowserlessActionAdapter(options = {}) {
       skipped: Boolean(stopped.skipped),
       handledBy: controlAction.type === 'leave' ? 'safety-controller' : 'action-adapter-stop',
       shouldLeave: controlAction.type === 'leave',
+      ...transportFailure(stopped),
       target: controlAction.action?.target || null
     };
   }
@@ -668,7 +711,8 @@ function createBrowserlessActionAdapter(options = {}) {
       skipped: Boolean(sent.skipped),
       target: action.target || null,
       staleCoinEscape: action.staleCoinEscape || null,
-      ignoredCoin: action.ignoredCoin || null
+      ignoredCoin: action.ignoredCoin || null,
+      ...transportFailure(sent)
     };
   }
 
@@ -688,7 +732,8 @@ function createBrowserlessActionAdapter(options = {}) {
       locked: Boolean(action.locked),
       target: action.target || null,
       threats: action.threats || [],
-      blockedAction: action.blockedAction || null
+      blockedAction: action.blockedAction || null,
+      ...transportFailure(sent)
     };
   }
 
@@ -701,6 +746,7 @@ function createBrowserlessActionAdapter(options = {}) {
         reason: 'profit-active-target-blocked',
         command: stopped.command || null,
         skipped: Boolean(stopped.skipped),
+        ...transportFailure(stopped),
         target
       };
     }
@@ -719,6 +765,7 @@ function createBrowserlessActionAdapter(options = {}) {
           vector,
           command: stopped.command || null,
           skipped: Boolean(stopped.skipped),
+          ...transportFailure(stopped),
           target
         };
       }
@@ -730,6 +777,7 @@ function createBrowserlessActionAdapter(options = {}) {
         vector,
         command: sent.command || null,
         skipped: Boolean(sent.skipped),
+        ...transportFailure(sent),
         target
       };
     }
@@ -760,16 +808,19 @@ function createBrowserlessActionAdapter(options = {}) {
         ok: hold.ok,
         skipped: Boolean(hold.skipped),
         reason: hold.reason || 'profit-afk-attack-hold',
-        command: hold.command || null
+        command: hold.command || null,
+        ...transportFailure(hold)
       },
       shoot: {
         ok: shoot.ok,
         skipped: Boolean(shoot.skipped),
         reason: shoot.reason,
         command: shoot.command || null,
-        cadenceMs: shoot.cadenceMs || null
+        cadenceMs: shoot.cadenceMs || null,
+        ...transportFailure(shoot)
       },
-      target
+      target,
+      ...transportFailure(hold, shoot)
     };
   }
 
@@ -783,7 +834,8 @@ function createBrowserlessActionAdapter(options = {}) {
         kind: 'stop',
         reason: 'combat-live-no-target',
         command: stopped.command || null,
-        skipped: Boolean(stopped.skipped)
+        skipped: Boolean(stopped.skipped),
+        ...transportFailure(stopped)
       };
     }
     const movement = combat.movement || {};
@@ -828,16 +880,19 @@ function createBrowserlessActionAdapter(options = {}) {
         ok: velocity.ok,
         skipped: Boolean(velocity.skipped),
         reason: movement.reason || velocity.reason,
-        command: velocity.command || null
+        command: velocity.command || null,
+        ...transportFailure(velocity)
       },
       shoot: {
         ok: shoot.ok,
         skipped: Boolean(shoot.skipped),
         reason: shoot.reason,
         command: shoot.command || null,
-        cadenceMs: shoot.cadenceMs || null
+        cadenceMs: shoot.cadenceMs || null,
+        ...transportFailure(shoot)
       },
-      target: combat.target
+      target: combat.target,
+      ...transportFailure(velocity, shoot)
     };
   }
 

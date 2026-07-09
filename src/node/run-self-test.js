@@ -10850,6 +10850,22 @@ async function runSelfTest() {
             safety: { event: { reason: 'pursuit-leave' } }
           }
         }, config);
+        const combatExit = browserlessLoopPlan({
+          ok: false,
+          canary: {
+            runId: 'combat-exit-test',
+            error: 'combat-hp-disadvantage-leave',
+            safety: { event: { reason: 'combat-hp-disadvantage-leave' } }
+          }
+        }, config);
+        const wsClosed = browserlessLoopPlan({
+          ok: false,
+          canary: {
+            runId: 'ws-closed-test',
+            error: 'ws-closed',
+            safety: { event: { reason: 'ws-closed' } }
+          }
+        }, config);
         const explicitStop = browserlessLoopPlan({
           ok: false,
           canary: {
@@ -10900,6 +10916,12 @@ async function runSelfTest() {
           pursuitLeave.continue,
           pursuitLeave.reason,
           pursuitLeave.delayMs,
+          combatExit.continue,
+          combatExit.reason,
+          combatExit.delayMs,
+          wsClosed.continue,
+          wsClosed.reason,
+          wsClosed.delayMs,
           explicitStop.continue,
           noSelf.continue,
           auth403.continue,
@@ -10910,7 +10932,7 @@ async function runSelfTest() {
           connectTimeout.delayMs
         ].join('|');
       })(),
-      want: 'true|1234|true|stamina-budget-coin-leave|1800000|true|injury-leave|1234|true|pursuit-leave|1234|false|false|false|true|60000|true|ws-connect-timeout|1234'
+      want: 'true|1234|true|stamina-budget-coin-leave|1800000|true|injury-leave|1234|true|pursuit-leave|1234|true|combat-hp-disadvantage-leave|1234|true|ws-closed|1000|false|false|false|true|60000|true|ws-connect-timeout|1000'
     },
     {
       name: 'browserless runner dry-run and fake read-only path write redacted logs',

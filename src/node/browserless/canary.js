@@ -19,6 +19,7 @@ const {
 } = require('./decision-adapter');
 const {
   createBrowserlessSafetyController,
+  createSafetyEvent,
   executeSafetyExit
 } = require('./safety-controller');
 const { createBrowserlessActionAdapter } = require('./action-adapter');
@@ -379,6 +380,7 @@ async function runReadOnlyCanary(config, options = {}) {
         });
       },
       onMessage: data => {
+        if (ending || result.safety.event) return;
         const atMs = now();
         if (!frameHealth.firstFrameAtMs) frameHealth.firstFrameAtMs = atMs;
         if (frameHealth.lastFrameAtMs) frameHealth.maxFrameGapMs = Math.max(frameHealth.maxFrameGapMs, atMs - frameHealth.lastFrameAtMs);
@@ -434,8 +436,34 @@ async function runReadOnlyCanary(config, options = {}) {
             });
             if (recordSafetyEvent(decisionSafetyEvent)) return;
             if (actionAdapter) {
-              const actionResult = actionAdapter.applyDecision(currentState, summary);
+              let actionResult;
+              try {
+                actionResult = actionAdapter.applyDecision(currentState, summary);
+              } catch (err) {
+                const message = err?.message || String(err);
+                actionResult = {
+                  ok: false,
+                  kind: 'action-error',
+                  reason: 'action-apply-failed',
+                  error: message,
+                  transportClosed: /websocket is not open|not open|closed/i.test(message)
+                };
+              }
               updateActionResult(actionResult);
+              if (actionResult?.transportClosed) {
+                recordSafetyEvent(createSafetyEvent('ws-closed', {
+                  source: 'action-send',
+                  action: actionResult
+                }, { nowMs: atMs, stopMotion: false }));
+                return;
+              }
+              if (actionResult?.ok === false && actionResult?.error) {
+                recordSafetyEvent(createSafetyEvent('ws-error', {
+                  source: actionResult.reason === 'action-apply-failed' ? 'action-apply' : 'action-send',
+                  error: actionResult.error || 'action failed'
+                }, { nowMs: atMs, stopMotion: false }));
+                return;
+              }
               if (typeof decisionAdapter.observeActionResult === 'function') {
                 decisionAdapter.observeActionResult(actionResult, decision, { nowMs: atMs });
               }
