@@ -234,6 +234,7 @@ async function runReadOnlyCanary(config, options = {}) {
       enabled: actionEnabled,
       sentCount: 0,
       velocitySentCount: 0,
+      velocityRepeatSentCount: 0,
       shootSentCount: 0,
       stopCount: 0,
       skippedCount: 0,
@@ -285,6 +286,7 @@ async function runReadOnlyCanary(config, options = {}) {
     const adapterState = actionAdapter?.getState?.() || {};
     result.actions.sentCount = Number(adapterState.sentCount || 0);
     result.actions.velocitySentCount = Number(adapterState.velocitySentCount || 0);
+    result.actions.velocityRepeatSentCount = Number(adapterState.velocityRepeatSentCount || 0);
     result.actions.shootSentCount = Number(adapterState.shootSentCount || 0);
     result.actions.stopCount = Number(adapterState.stopCount || 0);
     result.actions.skippedCount = Number(adapterState.skippedCount || 0);
@@ -447,7 +449,9 @@ async function runReadOnlyCanary(config, options = {}) {
         ...runtimeDefaults,
         transport,
         now,
+        decisionIntervalMs: config.decisionIntervalMs,
         commandIntervalMs: config.movementCommandIntervalMs,
+        velocityRepeatEnabled: true,
         targetDeadZoneCm: config.movementTargetDeadZoneCm,
         settlementFrames: config.movementSettlementFrames,
         combatShootMinIntervalMs: config.combatShootMinIntervalMs
@@ -531,6 +535,7 @@ async function runReadOnlyCanary(config, options = {}) {
     const adapterState = actionAdapter.getState();
     result.actions.sentCount = Number(adapterState.sentCount || 0);
     result.actions.velocitySentCount = Number(adapterState.velocitySentCount || 0);
+    result.actions.velocityRepeatSentCount = Number(adapterState.velocityRepeatSentCount || 0);
     result.actions.shootSentCount = Number(adapterState.shootSentCount || 0);
     result.actions.stopCount = Number(adapterState.stopCount || 0);
     result.actions.skippedCount = Number(adapterState.skippedCount || 0);

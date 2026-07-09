@@ -6795,6 +6795,64 @@ async function runSelfTest() {
       want: 'true|1|0|velocity|vel 1 0|1|true|true'
     },
     {
+      name: 'browserless action adapter repeats velocity through decision gap',
+      got: (() => {
+        let t = 1000;
+        const commands = [];
+        const timers = [];
+        const adapter = createBrowserlessActionAdapter({
+          now: () => t,
+          commandIntervalMs: 500,
+          decisionIntervalMs: 1000,
+          velocityRepeatEnabled: true,
+          velocityRepeatMs: 50,
+          velocityRepeatHoldMs: 220,
+          setTimeout: (fn, ms) => {
+            const timer = { fn, ms, canceled: false };
+            timers.push(timer);
+            return timer;
+          },
+          clearTimeout: timer => {
+            if (timer) timer.canceled = true;
+          },
+          transport: {
+            sendVelocity: (dx, dy) => commands.push(`vel ${dx} ${dy}`)
+          }
+        });
+        const action = adapter.applyDecision({
+          realtime: { self: { x: 0, y: 0 }, tick: 1 }
+        }, {
+          kind: 'profit-candidate',
+          band: 'profit',
+          action: {
+            kind: 'attack',
+            band: 'profit',
+            target: { type: 'enemy', userId: 8, x: 50000, y: 0, active: false }
+          }
+        });
+        let guard = 0;
+        while (timers.length && guard < 40) {
+          guard += 1;
+          const timer = timers.shift();
+          if (!timer || timer.canceled) continue;
+          t += timer.ms;
+          timer.fn();
+        }
+        const state = adapter.getState();
+        return [
+          action.kind,
+          action.command.dx,
+          action.command.dy,
+          commands[0],
+          commands.length,
+          state.velocityRepeatSentCount,
+          state.velocityRepeatUntilMs - 1000,
+          state.lastVelocityRepeatError || 'none'
+        ].join('|');
+      })(),
+      want: 'velocity|1|0|vel 1 0|22|21|1050|none'
+    },
+    {
       name: 'browserless action adapter uses tighter dead zone for coins',
       got: (() => {
         const coinVector = movementVectorToTarget(
