@@ -12,7 +12,7 @@
   var define_GRASP_RAT_RUNTIME_CONFIG_default;
   var init_define_GRASP_RAT_RUNTIME_CONFIG = __esm({
     "<define:__GRASP_RAT_RUNTIME_CONFIG__>"() {
-      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.605" };
+      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.606" };
     }
   });
 
@@ -723,6 +723,22 @@
         }
         return names;
       }
+      function targetWhitelistNameSet(names = [], maxNames = 100) {
+        return new Set(parseTargetWhitelistNames(names, maxNames));
+      }
+      function targetIsWhitelisted(target, whitelist = null) {
+        if (!target) return false;
+        const name = normalizeTargetWhitelistName(target.name);
+        if (!name || !whitelist) return false;
+        if (typeof whitelist === "function") return Boolean(whitelist(target));
+        if (whitelist instanceof Set) return whitelist.has(name);
+        if (Array.isArray(whitelist)) return targetWhitelistNameSet(whitelist).has(name);
+        if (whitelist && typeof whitelist === "object") {
+          if (whitelist.nameSet instanceof Set) return whitelist.nameSet.has(name);
+          if (Array.isArray(whitelist.names)) return targetWhitelistNameSet(whitelist.names).has(name);
+        }
+        return false;
+      }
       function deriveTargetWhitelistUrl(sourceUrl, configuredUrl = "") {
         const explicit = String(configuredUrl || "").trim();
         if (explicit) return explicit;
@@ -741,6 +757,8 @@
       module.exports = {
         normalizeTargetWhitelistName,
         parseTargetWhitelistNames,
+        targetIsWhitelisted,
+        targetWhitelistNameSet,
         deriveTargetWhitelistUrl
       };
     }

@@ -19,6 +19,7 @@ const {
   determineCombatFireState
 } = require('../../strategy/combat-fire-discipline');
 const { COMBAT_CONSTANTS } = require('../../strategy/combat-constants');
+const { targetIsWhitelisted, targetWhitelistNameSet } = require('../../shared/target-whitelist');
 
 function cloneJson(value) {
   if (value === null || value === undefined) return value;
@@ -41,6 +42,20 @@ function distanceBetween(a, b) {
 
 function entityDropValue(entity) {
   return Number(entity?.drop ?? entity?.Drop ?? entity?.reward ?? entity?.coin_reward ?? 0) || 0;
+}
+
+function targetWhitelistFromOptions(options = {}) {
+  if (options.targetWhitelistNameSet instanceof Set) return options.targetWhitelistNameSet;
+  if (options.targetWhitelist && typeof options.targetWhitelist === 'object') return options.targetWhitelist;
+  if (Array.isArray(options.targetWhitelistNames)) return targetWhitelistNameSet(options.targetWhitelistNames, options.targetWhitelistMaxNames);
+  return null;
+}
+
+function isWhitelistedTargetForOptions(entity, options = {}) {
+  if (!entity) return false;
+  if (entity.whitelisted === true) return true;
+  if (typeof options.whitelistCheck === 'function' && options.whitelistCheck(entity)) return true;
+  return targetIsWhitelisted(entity, targetWhitelistFromOptions(options));
 }
 
 function hpValue(entity) {
@@ -492,7 +507,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     incomingBullet,
     incomingBulletOwnerId: incomingBullet?.ownerId,
     unknownIncoming: Boolean(incomingBullet && (incomingBullet.ownerId === null || incomingBullet.ownerId === undefined)),
-    whitelistCheck: typeof options.whitelistCheck === 'function' ? options.whitelistCheck : () => false
+    whitelistCheck: target => isWhitelistedTargetForOptions(target, options)
   };
   const combatAttackRange = Math.max(0, Number(options.combatAttackRange || options.attackRange || COMBAT_CONSTANTS.ATTACK_RANGE));
   const combatDodgeRange = combatAttackRange + Math.max(0, Number(options.combatDodgeRangeBuffer || 0));

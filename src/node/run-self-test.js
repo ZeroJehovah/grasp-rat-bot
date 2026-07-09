@@ -85,10 +85,14 @@ const {
   parseBrowserlessRunnerArgs
 } = require('./browserless/config');
 const {
+  createBrowserlessTargetWhitelist
+} = require('./browserless/target-whitelist');
+const {
   buildRuntimeDefaults
 } = require('../shared/runtime-defaults');
 const {
   browserlessLoopPlan,
+  publicConfig,
   runBrowserlessRunner,
   runBrowserlessRunnerSelfTest
 } = require('./browserless/runner');
@@ -6174,6 +6178,216 @@ async function runSelfTest() {
       want: 'profit-candidate|attack|9|3|false|true'
     },
     {
+      name: 'browserless profit live skips whitelisted AFK targets',
+      got: (() => {
+        const store = createBrowserlessStateStore({ userId: 7 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 59,
+          entities: [
+            { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+            { entity_id: 2, user_id: 8, name: 'protected', x: 1000, y: 0, hp: 80, current_join_mode: 'None', drop: 99 },
+            { entity_id: 3, user_id: 9, name: 'allowed', x: 2000, y: 0, hp: 80, current_join_mode: 'None', drop: 3 }
+          ],
+          bullets: []
+        }, { receivedAtMs: 1000 });
+        const decision = buildBrowserlessDecision(store.getState(1200), {}, {
+          nowMs: 1200,
+          controlMode: 'profit-live',
+          targetWhitelistNames: ['protected']
+        });
+        const candidateIds = (decision.profit.candidates || []).map(item => String(item.id)).join(',');
+        return [
+          decision.kind,
+          decision.action.kind,
+          decision.action.target.userId,
+          decision.action.target.name,
+          candidateIds.includes('8'),
+          candidateIds.includes('9'),
+          decision.input.dataGaps.includes('whitelisted-target-visible')
+        ].join('|');
+      })(),
+      want: 'profit-candidate|attack|9|allowed|false|true|true'
+    },
+    {
+      name: 'browserless opportunistic shot ignores whitelisted AFK targets',
+      got: (() => {
+        const store = createBrowserlessStateStore({ userId: 7 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 59,
+          entities: [
+            { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+            { entity_id: 2, user_id: 8, name: 'protected', x: 1000, y: 0, hp: 80, current_join_mode: 'None', drop: 99 }
+          ],
+          bullets: [],
+          coin_drops: [{ drop_id: 'coin-a', amount: 1, x: 10000, y: 0 }]
+        }, { receivedAtMs: 1000 });
+        const decision = buildBrowserlessDecision(store.getState(1200), {}, {
+          nowMs: 1200,
+          controlMode: 'profit-live',
+          coinMaxDistance: 500,
+          footCoinPriorityDistance: 500,
+          targetWhitelistNames: ['protected']
+        });
+        return [
+          decision.kind,
+          decision.action.kind,
+          decision.action.target.id,
+          decision.action.opportunisticShot === undefined,
+          decision.input.dataGaps.includes('whitelisted-target-visible')
+        ].join('|');
+      })(),
+      want: 'profit-candidate|seek-coin|coin-a|true|true'
+    },
+    {
+      name: 'browserless combat selector skips whitelisted active targets',
+      got: (() => {
+        const combat = buildBrowserlessCombatDryRun({
+          userId: 7,
+          realtime: {
+            tick: 59,
+            self: { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+            entities: [
+              { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+              { entity_id: 2, user_id: 8, name: 'protected', x: 1000, y: 0, hp: 80, current_join_mode: 'Active', firing: true, drop: 99 }
+            ],
+            bullets: []
+          }
+        }, {
+          nowMs: 1200,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          liveCombatEnabled: true,
+          targetWhitelistNames: ['protected']
+        });
+        return [
+          combat.target === null,
+          combat.candidates.length,
+          combat.shooting.reason,
+          combat.dataGaps.includes('missing-self-or-target')
+        ].join('|');
+      })(),
+      want: 'true|0|no-target|true'
+    },
+    {
+      name: 'browserless recent activity blocks just-stopped AFK profit target',
+      got: (() => {
+        const stateful = {};
+        const makeState = (x, stamina5s, tick) => ({
+          userId: 7,
+          realtime: {
+            tick,
+            frameAgeMs: 100,
+            self: { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+            entities: [
+              { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+              { entity_id: 2, user_id: 8, name: 'just-stopped', x, y: 0, hp: 80, current_join_mode: 'None', drop: 20, stamina_5s_remaining_milli: stamina5s }
+            ],
+            bullets: [],
+            coinDrops: []
+          },
+          fallback: { coinDrops: [] }
+        });
+        const options = {
+          controlMode: 'profit-live',
+          afkRecentActivityCooldownMs: 12000,
+          activeSeenMs: 1800,
+          activeMoveMin: 120
+        };
+        buildBrowserlessDecision(makeState(1000, 10000, 60), stateful, { ...options, nowMs: 1000 });
+        buildBrowserlessDecision(makeState(1500, 10000, 61), stateful, { ...options, nowMs: 1500 });
+        const decision = buildBrowserlessDecision(makeState(1500, 10000, 62), stateful, { ...options, nowMs: 4000 });
+        return [
+          decision.kind,
+          decision.reason,
+          decision.profit.best === null,
+          decision.input.dataGaps.includes('recently-active-target-visible'),
+          stateful.seenEntities['8'].activityAt,
+          stateful.seenEntities['8'].movedAt
+        ].join('|');
+      })(),
+      want: 'wait|no-profitable-candidate|true|true|1500|1500'
+    },
+    {
+      name: 'browserless recent stamina drop blocks AFK profit target',
+      got: (() => {
+        const stateful = {};
+        const makeState = (stamina5s, tick) => ({
+          userId: 7,
+          realtime: {
+            tick,
+            frameAgeMs: 100,
+            self: { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+            entities: [
+              { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+              { entity_id: 2, user_id: 8, name: 'spent-stamina', x: 1000, y: 0, hp: 80, current_join_mode: 'None', drop: 20, stamina_5s_remaining_milli: stamina5s }
+            ],
+            bullets: [],
+            coinDrops: []
+          },
+          fallback: { coinDrops: [] }
+        });
+        const options = {
+          controlMode: 'profit-live',
+          afkRecentActivityCooldownMs: 12000,
+          opportunityAfkStaminaDropThresholdMs: 100
+        };
+        buildBrowserlessDecision(makeState(10000, 60), stateful, { ...options, nowMs: 1000 });
+        const decision = buildBrowserlessDecision(makeState(9800, 61), stateful, { ...options, nowMs: 2500 });
+        return [
+          decision.kind,
+          decision.reason,
+          decision.profit.best === null,
+          decision.input.dataGaps.includes('recently-active-target-visible'),
+          stateful.seenEntities['8'].activityAt
+        ].join('|');
+      })(),
+      want: 'wait|no-profitable-candidate|true|true|2500'
+    },
+    {
+      name: 'browserless out-of-range AFK stamina cooldown blocks opportunity chase',
+      got: (() => {
+        const stateful = {};
+        const makeState = (stamina5s, tick) => ({
+          userId: 7,
+          realtime: {
+            tick,
+            frameAgeMs: 100,
+            self: { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+            entities: [
+              { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+              { entity_id: 2, user_id: 8, name: 'far-spent-stamina', x: 8000, y: 0, hp: 80, current_join_mode: 'None', drop: 20, stamina_5s_remaining_milli: stamina5s }
+            ],
+            bullets: [],
+            coinDrops: []
+          },
+          fallback: { coinDrops: [] }
+        });
+        const options = {
+          controlMode: 'profit-live',
+          attackRange: 5000,
+          afkRecentActivityCooldownMs: 12000,
+          opportunityAfkStaminaCooldownMs: 60000,
+          opportunityAfkStaminaDropThresholdMs: 100
+        };
+        buildBrowserlessDecision(makeState(10000, 60), stateful, { ...options, nowMs: 1000 });
+        buildBrowserlessDecision(makeState(9800, 61), stateful, { ...options, nowMs: 2500 });
+        const decision = buildBrowserlessDecision(makeState(9800, 62), stateful, { ...options, nowMs: 16000 });
+        const candidates = decision.profit.candidates || [];
+        return [
+          decision.kind,
+          decision.reason,
+          candidates.some(candidate => candidate.type === 'enemy'),
+          stateful.opportunityAfkStamina['8'].cooldownUntil - 16000,
+          stateful.opportunityAfkStamina['8'].cooldownUntil,
+          decision.input.dataGaps.includes('afk-stamina-cooldown-target-visible'),
+          decision.input.dataGaps.includes('recently-active-target-visible')
+        ].join('|');
+      })(),
+      want: 'wait|no-profitable-candidate|false|46500|62500|true|false'
+    },
+    {
       name: 'browserless strategy defaults track browser runtime defaults',
       got: (() => {
         const browser = buildRuntimeDefaults({}, false);
@@ -7123,6 +7337,62 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: '4|coin:coin-c|coin:coin-f|4|2|true'
+    },
+    {
+      name: 'browserless post-attack wait runs before stamina budget leave',
+      got: (() => {
+        const stateful = {
+          attackHistory: [{
+            id: 8,
+            name: 'fresh-afk',
+            x: 5000,
+            y: 0,
+            drop: 20,
+            at: 1000,
+            action: 'attack',
+            afk: true
+          }]
+        };
+        const decision = buildBrowserlessDecision({
+          userId: 7,
+          realtime: {
+            tick: 60,
+            frameAgeMs: 100,
+            self: {
+              entity_id: 1,
+              user_id: 7,
+              name: 'self',
+              x: 0,
+              y: 0,
+              hp: 100,
+              max_hp: 100,
+              stamina_5s_remaining_milli: 10000,
+              stamina_1h_remaining_milli: 3000,
+              stamina_1d_remaining_milli: 100000
+            },
+            entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 }],
+            bullets: [],
+            coinDrops: [{ drop_id: 'budget-coin', amount: 5, x: 20000, y: 0 }]
+          },
+          fallback: { coinDrops: [] }
+        }, stateful, {
+          nowMs: 1600,
+          controlMode: 'profit-live',
+          postAttackDropWaitMs: 1000,
+          postAttackDropResolveMaxMs: 5000,
+          postAttackDropWaitMinDrop: 8,
+          postAttackDropWaitStopDistance: 900
+        });
+        return [
+          decision.kind,
+          decision.band,
+          decision.reason,
+          decision.action.target.id,
+          decision.action.target.postAttackTarget.drop,
+          decision.action.staminaBudgetExit === undefined
+        ].join('|');
+      })(),
+      want: 'post-attack-drop-wait|profit|post-attack-drop-wait-position|8|20|true'
     },
     {
       name: 'browserless profit live leaves when nearest allowed coin exceeds 1h stamina budget',
@@ -10767,6 +11037,38 @@ async function runSelfTest() {
       want: 'profit-live-parity|true|4|0|1|0|0|1|1|false|true|true|true|1|1|1'
     },
     {
+      name: 'browserless target whitelist loads local fallback and remote override',
+      got: withTempDirForTest(async dir => {
+        const file = path.join(dir, 'target-whitelist.json');
+        fs.writeFileSync(file, JSON.stringify({ names: ['Local Protected'] }));
+        const whitelist = createBrowserlessTargetWhitelist({
+          file,
+          url: 'https://example.test/target-whitelist.json?token=secret-token',
+          now: () => 1234,
+          fetchWithTimeout: async () => ({
+            ok: true,
+            status: 200,
+            statusText: 'OK',
+            text: async () => JSON.stringify({ names: ['Remote Protected'] })
+          })
+        });
+        const summary = await whitelist.refresh('self-test');
+        return [
+          summary.loaded,
+          summary.count,
+          summary.lastSource,
+          whitelist.isWhitelistedTarget({ name: 'Remote Protected' }),
+          whitelist.isWhitelistedTarget({ name: 'Local Protected' }),
+          summary.sources.length,
+          summary.sources[0].source,
+          summary.sources[1].source,
+          summary.url.includes('secret-token'),
+          summary.url.includes('[redacted]')
+        ].join('|');
+      }),
+      want: 'true|1|remote-url|true|false|2|local-file|remote-url|false|true'
+    },
+    {
       name: 'browserless runner config parses env and cli overrides',
       got: (() => {
         const config = parseBrowserlessRunnerArgs([
@@ -10801,6 +11103,14 @@ async function runSelfTest() {
           '--ws-trace',
           '--ws-trace-max-payload-chars',
           '4096',
+          '--target-whitelist-url',
+          'https://example.test/target-whitelist.json',
+          '--target-whitelist-file',
+          '/tmp/target-whitelist.json',
+          '--target-whitelist-timeout-ms',
+          '1234',
+          '--target-whitelist-max-names',
+          '12',
           '--login-point-x',
           '123',
           '--login-point-y',
@@ -10834,6 +11144,10 @@ async function runSelfTest() {
           config.wsTraceEnabled,
           config.wsTracePayload,
           config.wsTraceMaxPayloadChars,
+          config.targetWhitelistUrl,
+          config.targetWhitelistFile.endsWith('/tmp/target-whitelist.json'),
+          config.targetWhitelistTimeoutMs,
+          config.targetWhitelistMaxNames,
           config.loginPointX,
           config.loginPointY,
           config.loginPointHp,
@@ -10841,7 +11155,7 @@ async function runSelfTest() {
           config.logDir.endsWith('/tmp/grasp-rat-browserless-logs')
         ].join('|');
       })(),
-      want: 'true|false|false|combat-live|19999|cli-token|true|220|42|env-token|250|3500|4500|150|300|800|3|true|true|4096|123|456|90|true|true'
+      want: 'true|false|false|combat-live|19999|cli-token|true|220|42|env-token|250|3500|4500|150|300|800|3|true|true|4096|https://example.test/target-whitelist.json|true|1234|12|123|456|90|true|true'
     },
     {
       name: 'browserless deployment files define service env and install surface',
@@ -10858,6 +11172,8 @@ async function runSelfTest() {
           env.includes('GRASP_RAT_BROWSERLESS_LOG_DIR=/var/log/grasp-rat-browserless'),
           env.includes('GRASP_RAT_BROWSERLESS_CANARY_PROFILE=read-only'),
           env.includes('GRASP_RAT_BROWSERLESS_DRY_RUN=true'),
+          env.includes('GRASP_RAT_BROWSERLESS_TARGET_WHITELIST_URL='),
+          env.includes('GRASP_RAT_BROWSERLESS_TARGET_WHITELIST_FILE='),
           env.includes('GRASP_RAT_BROWSERLESS_WS_TRACE_ENABLED=false'),
           installer.includes('grasp-rat-browserless-runner'),
           installer.includes('DATA_DIR="/var/lib/grasp-rat-browserless"'),
@@ -10867,7 +11183,7 @@ async function runSelfTest() {
           installer.includes('systemctl daemon-reload')
         ].join('|');
       })(),
-      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
+      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless deployment audit checks installed service evidence',
@@ -11888,6 +12204,30 @@ async function runSelfTest() {
         return result.ok;
       })(),
       want: true
+    },
+    {
+      name: 'browserless public config redacts target whitelist URL secrets',
+      got: (() => {
+        const config = publicConfig({
+          gameOrigin: 'https://game.test',
+          wsPath: '/ws',
+          wsExtraQuery: '',
+          snapshotPath: '/snapshot',
+          targetWhitelistUrl: 'https://example.test/target-whitelist.json?token=secret-token&safe=1',
+          targetWhitelistFile: '/tmp/target-whitelist.json',
+          targetWhitelistTimeoutMs: 1234,
+          targetWhitelistMaxNames: 12,
+          controlMode: 'read-only'
+        });
+        return [
+          config.targetWhitelistUrl.includes('secret-token'),
+          config.targetWhitelistUrl.includes('[redacted]'),
+          config.targetWhitelistFile,
+          config.targetWhitelistTimeoutMs,
+          config.targetWhitelistMaxNames
+        ].join('|');
+      })(),
+      want: 'false|true|/tmp/target-whitelist.json|1234|12'
     },
     {
       name: 'final arbitration keeps recent safety action over profit',

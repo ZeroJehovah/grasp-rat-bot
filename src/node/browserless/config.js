@@ -1,12 +1,20 @@
 'use strict';
 
 const path = require('path');
+const {
+  DEFAULT_LOCAL_TARGET_WHITELIST_FILE,
+  DEFAULT_TARGET_WHITELIST_URL
+} = require('./target-whitelist');
 
 const DEFAULTS = {
   gameOrigin: 'https://grasp-rat-game.h-e.top',
   wsPath: '/ws',
   wsExtraQuery: 'compress=gzip%2Cdeflate',
   snapshotPath: '/snapshot',
+  targetWhitelistUrl: DEFAULT_TARGET_WHITELIST_URL,
+  targetWhitelistFile: DEFAULT_LOCAL_TARGET_WHITELIST_FILE,
+  targetWhitelistTimeoutMs: 7000,
+  targetWhitelistMaxNames: 100,
   dataDir: path.join(process.cwd(), 'data', 'browserless-runner'),
   logDir: '',
   statusHost: '127.0.0.1',
@@ -91,6 +99,10 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
     wsPath: env.GRASP_RAT_BROWSERLESS_WS_PATH || DEFAULTS.wsPath,
     wsExtraQuery: env.GRASP_RAT_BROWSERLESS_WS_EXTRA_QUERY || DEFAULTS.wsExtraQuery,
     snapshotPath: env.GRASP_RAT_BROWSERLESS_SNAPSHOT_PATH || DEFAULTS.snapshotPath,
+    targetWhitelistUrl: env.GRASP_RAT_BROWSERLESS_TARGET_WHITELIST_URL ?? DEFAULTS.targetWhitelistUrl,
+    targetWhitelistFile: env.GRASP_RAT_BROWSERLESS_TARGET_WHITELIST_FILE ?? DEFAULTS.targetWhitelistFile,
+    targetWhitelistTimeoutMs: numberEnv(env.GRASP_RAT_BROWSERLESS_TARGET_WHITELIST_TIMEOUT_MS, DEFAULTS.targetWhitelistTimeoutMs),
+    targetWhitelistMaxNames: numberEnv(env.GRASP_RAT_BROWSERLESS_TARGET_WHITELIST_MAX_NAMES, DEFAULTS.targetWhitelistMaxNames),
     dataDir: env.GRASP_RAT_BROWSERLESS_DATA_DIR || DEFAULTS.dataDir,
     logDir: env.GRASP_RAT_BROWSERLESS_LOG_DIR || DEFAULTS.logDir,
     statusHost: env.GRASP_RAT_BROWSERLESS_STATUS_HOST || DEFAULTS.statusHost,
@@ -196,6 +208,14 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
       config.frameGapAlertMs = numberEnv(argv[++i], config.frameGapAlertMs);
     } else if (arg === '--snapshot-path') {
       config.snapshotPath = argv[++i] || config.snapshotPath;
+    } else if (arg === '--target-whitelist-url') {
+      config.targetWhitelistUrl = argv[++i] ?? '';
+    } else if (arg === '--target-whitelist-file') {
+      config.targetWhitelistFile = argv[++i] ?? '';
+    } else if (arg === '--target-whitelist-timeout-ms') {
+      config.targetWhitelistTimeoutMs = numberEnv(argv[++i], config.targetWhitelistTimeoutMs);
+    } else if (arg === '--target-whitelist-max-names') {
+      config.targetWhitelistMaxNames = numberEnv(argv[++i], config.targetWhitelistMaxNames);
     } else if (arg === '--decision-interval-ms') {
       config.decisionIntervalMs = numberEnv(argv[++i], config.decisionIntervalMs);
     } else if (arg === '--loop-delay-ms') {
@@ -246,6 +266,7 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
   config.readOnly = config.controlMode === 'read-only';
   config.dataDir = path.resolve(config.dataDir);
   config.logDir = path.resolve(config.logDir || path.join(config.dataDir, 'logs'));
+  config.targetWhitelistFile = config.targetWhitelistFile ? path.resolve(config.targetWhitelistFile) : '';
   config.stateFile = path.join(config.dataDir, 'state.json');
   return config;
 }
@@ -277,6 +298,8 @@ function usage() {
     '  --read-only-probe-ms <ms>  Read-only canary duration. Default: 30000',
     '  --frame-gap-alert-ms <ms>  Read-only canary frame-gap failure threshold. Default: 5000',
     '  --snapshot-path <path>    Snapshot path for pre-login safety. Default: /snapshot',
+    '  --target-whitelist-url <url>   Browserless target whitelist URL. Default: project dist/target-whitelist.json',
+    '  --target-whitelist-file <file> Local whitelist fallback. Default: ./dist/target-whitelist.json',
     '  --decision-interval-ms <ms>  Dry-run decision log/status interval. Default: 1000',
     '  --loop-delay-ms <ms>    Delay before the next non-once live cycle after recoverable exit. Default: 30000',
     '  --stale-self-ms <ms>      Safety stale-self threshold. Default: 3000',

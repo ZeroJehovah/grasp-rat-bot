@@ -52,6 +52,7 @@ const {
 } = require('../../strategy/coin-route');
 const { applyFinalActionArbitrationCore } = require('../../strategy/action-arbitration');
 const { recordActionSwitchDiagnosticsCore } = require('../../strategy/action-switch-diagnostics');
+const { targetIsWhitelisted, targetWhitelistNameSet } = require('../../shared/target-whitelist');
 const {
   createBrowserlessDecisionState,
   summarizeBrowserlessDecisionState
@@ -125,9 +126,36 @@ function entitySpeed(entity) {
 
 function isMovingEntity(entity, options = {}) {
   if (!entity) return false;
-  if (entity.moving === true || entity.recentlyMoved === true || entity.recentlyActive === true) return true;
+  if (entity.moving === true || entity.recentlyMoved === true) return true;
   const threshold = Math.max(0, Number(options.activeSpeedMin ?? BROWSER_RUNTIME_DEFAULTS.activeSpeedMin));
   return entitySpeed(entity) >= threshold;
+}
+
+function targetWhitelistFromOptions(options = {}) {
+  if (options.targetWhitelistNameSet instanceof Set) return options.targetWhitelistNameSet;
+  if (options.targetWhitelist && typeof options.targetWhitelist === 'object') return options.targetWhitelist;
+  if (Array.isArray(options.targetWhitelistNames)) {
+    return targetWhitelistNameSet(options.targetWhitelistNames, options.targetWhitelistMaxNames ?? BROWSER_RUNTIME_DEFAULTS.targetWhitelistMaxNames);
+  }
+  return null;
+}
+
+function isWhitelistedTargetForOptions(entity, options = {}) {
+  if (!entity) return false;
+  if (entity.whitelisted === true) return true;
+  if (typeof options.whitelistCheck === 'function' && options.whitelistCheck(entity)) return true;
+  return targetIsWhitelisted(entity, targetWhitelistFromOptions(options));
+}
+
+function refreshDecisionEntityActivity(entity, options = {}) {
+  if (!entity) return entity;
+  const moving = isMovingEntity(entity, options);
+  return {
+    ...entity,
+    moving,
+    active: moving || entity.firing || isActiveEntity(entity),
+    whitelisted: isWhitelistedTargetForOptions(entity, options)
+  };
 }
 
 function isCurrentlyActiveEntity(entity, options = {}) {
@@ -147,6 +175,172 @@ function entityStaminaSummary(entity) {
     stamina1dRemainingMilli: numberOrNull(entity?.stamina_1d_remaining_milli ?? entity?.stamina1dRemainingMilli),
     staminaSpent: numberOrNull(entity?.stamina_spent ?? entity?.staminaSpent)
   };
+}
+
+function ensureSeenEntitiesState(stateful = {}) {
+  if (!stateful || typeof stateful !== 'object') return null;
+  if (!stateful.seenEntities || typeof stateful.seenEntities !== 'object' || Array.isArray(stateful.seenEntities)) {
+    stateful.seenEntities = {};
+  }
+  return stateful.seenEntities;
+}
+
+function browserlessRecentActivityKey(entity) {
+  const id = entity?.user_id ?? entity?.userId ?? entity?.entity_id ?? entity?.entityId;
+  if (id === null || id === undefined || id === '') return '';
+  return String(id);
+}
+
+function annotateBrowserlessRecentActivity(entities = [], stateful = {}, nowMs = 0, options = {}) {
+  const seenEntities = ensureSeenEntitiesState(stateful);
+  if (!seenEntities) return entities;
+  const t = Number.isFinite(Number(nowMs)) ? Number(nowMs) : Date.now();
+  const sampleMs = Math.max(1, Number(options.combatAimMotionSampleMs ?? BROWSER_RUNTIME_DEFAULTS.combatAimMotionSampleMs ?? 50));
+  const decayMs = Math.max(sampleMs, Number(options.combatAimRecentMotionDecayMs ?? BROWSER_RUNTIME_DEFAULTS.combatAimRecentMotionDecayMs ?? 900));
+  const activeMoveMin = Math.max(0, Number(options.activeMoveMin ?? BROWSER_RUNTIME_DEFAULTS.activeMoveMin ?? 120));
+  const activeSpeedMin = Math.max(0, Number(options.activeSpeedMin ?? BROWSER_RUNTIME_DEFAULTS.activeSpeedMin ?? 30));
+  const activeSeenMs = Math.max(0, Number(options.activeSeenMs ?? BROWSER_RUNTIME_DEFAULTS.activeSeenMs ?? 1800));
+  const afkCooldownMs = Math.max(0, Number(options.afkRecentActivityCooldownMs ?? BROWSER_RUNTIME_DEFAULTS.afkRecentActivityCooldownMs ?? 0) || 0);
+  const staminaDropThreshold = Math.max(0, Number(options.opportunityAfkStaminaDropThresholdMs ?? BROWSER_RUNTIME_DEFAULTS.opportunityAfkStaminaDropThresholdMs ?? 100) || 100);
+  for (const entity of entities || []) {
+    const key = browserlessRecentActivityKey(entity);
+    if (!key) continue;
+    const x = numberOrNull(entity.x);
+    const y = numberOrNull(entity.y);
+    const previous = seenEntities[key] || null;
+    let movedAt = Number(previous?.movedAt || 0);
+    let activityAt = Number(previous?.activityAt || 0);
+    let motionSampleSpeed = 0;
+    let motionObservedSpeed = 0;
+    const currentSpeed = entitySpeed(entity);
+    const firing = isFiringEntity(entity);
+    const stamina5s = numberOrNull(entity?.stamina_5s_remaining_milli ?? entity?.stamina5s ?? entity?.stamina_5s);
+    const previousStamina = numberOrNull(previous?.stamina5s);
+    if (previous
+      && x !== null
+      && y !== null
+      && numberOrNull(previous.x) !== null
+      && numberOrNull(previous.y) !== null) {
+      const elapsedMs = Math.max(sampleMs, t - Number(previous.seenAt || t));
+      const delta = Math.hypot(x - Number(previous.x), y - Number(previous.y));
+      motionSampleSpeed = delta * sampleMs / elapsedMs;
+      const retained = Math.max(0, Number(previous.motionObservedSpeed || 0)) * Math.max(0, 1 - elapsedMs / decayMs);
+      motionObservedSpeed = Math.max(motionSampleSpeed, retained);
+      if (delta >= activeMoveMin) {
+        movedAt = t;
+        activityAt = t;
+      }
+    }
+    if (!previous && (Math.abs(Number(entity.vx) || 0) || Math.abs(Number(entity.vy) || 0))) {
+      movedAt = t;
+      activityAt = t;
+    }
+    if (currentSpeed >= activeSpeedMin || firing) activityAt = t;
+    if (stamina5s !== null && previousStamina !== null && stamina5s + staminaDropThreshold < previousStamina) {
+      activityAt = t;
+    }
+    const motionAgeMs = movedAt ? Math.max(0, t - movedAt) : null;
+    const recentActivityAgeMs = activityAt ? Math.max(0, t - activityAt) : null;
+    entity.motionSampleSpeed = motionSampleSpeed;
+    entity.motionObservedSpeed = motionObservedSpeed;
+    entity.motionAgeMs = motionAgeMs;
+    entity.recentActivityAgeMs = recentActivityAgeMs;
+    entity.recentlyActive = Boolean(recentActivityAgeMs !== null && recentActivityAgeMs <= afkCooldownMs);
+    entity.recentlyMoved = Boolean(movedAt && t - movedAt <= activeSeenMs);
+    seenEntities[key] = {
+      x,
+      y,
+      seenAt: t,
+      movedAt,
+      activityAt,
+      motionSampleSpeed,
+      motionObservedSpeed,
+      stamina5s: stamina5s !== null ? stamina5s : (previousStamina !== null ? previousStamina : null)
+    };
+  }
+  const seenTtlMs = Math.max(10000, afkCooldownMs + 2000);
+  for (const [key, seen] of Object.entries(seenEntities)) {
+    if (t - Number(seen?.seenAt || 0) > seenTtlMs) delete seenEntities[key];
+  }
+  return entities;
+}
+
+function ensureOpportunityAfkStaminaState(stateful = {}) {
+  if (!stateful || typeof stateful !== 'object') return null;
+  if (!stateful.opportunityAfkStamina || typeof stateful.opportunityAfkStamina !== 'object' || Array.isArray(stateful.opportunityAfkStamina)) {
+    stateful.opportunityAfkStamina = {};
+  }
+  return stateful.opportunityAfkStamina;
+}
+
+function opportunityAfkTargetId(target) {
+  const id = target?.user_id ?? target?.userId ?? target?.id;
+  return id === undefined || id === null || id === '' ? '' : String(id);
+}
+
+function targetStamina5sRemaining(target) {
+  const stamina5s = numberOrNull(target?.stamina_5s_remaining_milli ?? target?.stamina5s ?? target?.stamina_5s);
+  return stamina5s !== null ? stamina5s : null;
+}
+
+function opportunityAfkStaminaCooldownMs(options = {}) {
+  const value = Number(options.opportunityAfkStaminaCooldownMs ?? BROWSER_RUNTIME_DEFAULTS.opportunityAfkStaminaCooldownMs ?? 60000);
+  return Math.max(0, Number.isFinite(value) ? value : 60000);
+}
+
+function opportunityAfkStaminaDropThresholdMs(options = {}) {
+  const value = Number(options.opportunityAfkStaminaDropThresholdMs ?? BROWSER_RUNTIME_DEFAULTS.opportunityAfkStaminaDropThresholdMs ?? 100);
+  return Math.max(0, Number.isFinite(value) ? value : 100);
+}
+
+function updateBrowserlessOpportunityAfkStaminaObservations(targets = [], stateful = {}, nowMs = 0, options = {}) {
+  const state = ensureOpportunityAfkStaminaState(stateful);
+  if (!state) return targets;
+  const t = Number.isFinite(Number(nowMs)) ? Number(nowMs) : Date.now();
+  const cooldownMs = opportunityAfkStaminaCooldownMs(options);
+  const dropThreshold = opportunityAfkStaminaDropThresholdMs(options);
+  const observationGapMs = Math.max(
+    1000,
+    Number(options.activeSeenMs ?? BROWSER_RUNTIME_DEFAULTS.activeSeenMs ?? 0) * 2,
+    Number(options.tickMs ?? BROWSER_RUNTIME_DEFAULTS.tickMs ?? 0) * 8
+  );
+  for (const target of targets || []) {
+    const id = opportunityAfkTargetId(target);
+    if (!id) continue;
+    const stamina5s = targetStamina5sRemaining(target);
+    const previous = state[id] || {};
+    const previousStamina = Number(previous.stamina5s);
+    const previousSeenAt = Number(previous.lastSeenAt || 0);
+    const continuous = previousSeenAt > 0 && t - previousSeenAt <= observationGapMs;
+    let cooldownUntil = Math.max(0, Number(previous.cooldownUntil || 0));
+    let consumedAt = Math.max(0, Number(previous.consumedAt || 0));
+    if (stamina5s !== null && continuous && Number.isFinite(previousStamina) && stamina5s + dropThreshold < previousStamina) {
+      cooldownUntil = Math.max(cooldownUntil, t + cooldownMs);
+      consumedAt = t;
+    }
+    state[id] = {
+      stamina5s: stamina5s !== null ? stamina5s : (Number.isFinite(previousStamina) ? previousStamina : null),
+      lastSeenAt: t,
+      cooldownUntil,
+      consumedAt
+    };
+    target.afkStaminaCooldownRemainingMs = Math.max(0, Math.round(cooldownUntil - t));
+    if (target.afkStaminaCooldownRemainingMs > 0) target.afkStaminaConsumedAt = consumedAt;
+  }
+  const ttlMs = Math.max(300000, cooldownMs * 5);
+  for (const [id, item] of Object.entries(state)) {
+    const lastSeenAt = Number(item?.lastSeenAt || 0);
+    const cooldownUntil = Number(item?.cooldownUntil || 0);
+    if (cooldownUntil <= t && lastSeenAt > 0 && t - lastSeenAt > ttlMs) delete state[id];
+  }
+  return targets;
+}
+
+function afkOpportunityBlockedByStaminaCooldown(target, options = {}) {
+  const distance = Number(target?.distance ?? Infinity);
+  const attackRange = Math.max(0, Number(options.attackRange ?? options.combatAttackRange ?? DEFAULT_ATTACK_RANGE));
+  if (Number.isFinite(distance) && distance <= attackRange) return false;
+  return Number(target?.afkStaminaCooldownRemainingMs || 0) > 0;
 }
 
 function hpValue(entity) {
@@ -358,6 +552,11 @@ function summarizeTarget(target) {
     drop: entityDropValue(target),
     distance: Number.isFinite(Number(target.distance)) ? Math.round(Number(target.distance)) : null,
     active: Boolean(target.active || isActiveEntity(target)),
+    moving: Boolean(target.moving),
+    firing: Boolean(target.firing),
+    recentlyActive: Boolean(target.recentlyActive),
+    recentlyMoved: Boolean(target.recentlyMoved),
+    whitelisted: Boolean(target.whitelisted),
     alive: target.alive !== false,
     profitMetadataAuthority: target.profitMetadataAuthority || '',
     profitMetadataMode: target.profitMetadataMode || '',
@@ -407,7 +606,7 @@ function topItems(items, mapper, limit = 5) {
   return (items || []).slice(0, limit).map(mapper).filter(Boolean);
 }
 
-function buildBrowserlessStrategyInput(state, options = {}) {
+function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
   const realtime = state?.realtime || {};
   const fallback = state?.fallback || state?.snapshot || {};
   const dataGaps = [];
@@ -426,7 +625,9 @@ function buildBrowserlessStrategyInput(state, options = {}) {
     ))
     .map(entity => normalizeEntityForDecision(entity, self, 'realtime', options))
     .filter(Boolean);
-  const visibleTargets = realtimeEntities
+  annotateBrowserlessRecentActivity(realtimeEntities, stateful, options.nowMs, options);
+  const decisionEntities = realtimeEntities.map(entity => refreshDecisionEntityActivity(entity, options));
+  const visibleTargets = decisionEntities
     .filter(entity => Number(entity.user_id) !== selfUserId)
     .filter(entity => Number.isFinite(Number(entity.x)) && Number.isFinite(Number(entity.y)));
   const activeThreats = visibleTargets.filter(entity => entity.active && entity.alive !== false);
@@ -438,16 +639,19 @@ function buildBrowserlessStrategyInput(state, options = {}) {
     ...firingThreats.filter(threat => !activeThreats.includes(threat)),
     ...snapshotActiveThreats
   ].filter(threat => snapshotFallbackThreatBlocks(threat, self, options));
-  const afkTargets = visibleTargets.filter(entity => {
-    if (entity.active || entity.moving || entity.firing || entity.profitMetadataActive || entity.alive === false || entity.invulnerable) return false;
+  const afkObservationTargets = visibleTargets.filter(entity => {
+    if (entity.whitelisted || entity.active || entity.moving || entity.firing || entity.profitMetadataActive || entity.alive === false || entity.invulnerable) return false;
     return attackWorthTakingCore(self, entity, {
       attackMinDrop: options.attackMinDrop ?? DEFAULT_ATTACK_MIN_DROP,
       attackMinAfkDrop: options.attackMinAfkDrop ?? DEFAULT_ATTACK_MIN_AFK_DROP,
       attackMinRewardRatio: options.attackMinRewardRatio ?? DEFAULT_ATTACK_MIN_REWARD_RATIO,
+      isWhitelistedTarget: target => isWhitelistedTargetForOptions(target, options),
       isAfkProfitTarget: () => true,
       dropValue: entityDropValue
     });
   });
+  updateBrowserlessOpportunityAfkStaminaObservations(afkObservationTargets, stateful, options.nowMs, options);
+  const afkTargets = afkObservationTargets.filter(entity => !entity.recentlyActive);
   const realtimeCoins = buildNativeCoinSnapshotCore(Array.isArray(realtime.coinDrops) ? realtime.coinDrops : [], { nowMs: options.nowMs })
     .map(drop => normalizeCoinForDecision(drop, self, 'realtime'))
     .filter(Boolean)
@@ -489,6 +693,9 @@ function buildBrowserlessStrategyInput(state, options = {}) {
   if (!realtimeCoins.length && snapshotCoins.length) dataGaps.push('snapshot-coin-fallback-only');
   if (selfKilledPlayerDropCoins.length) dataGaps.push('self-killed-player-drop-visible');
   if (snapshotActiveThreats.length) dataGaps.push('snapshot-active-threat-visible');
+  if (visibleTargets.some(target => target.whitelisted)) dataGaps.push('whitelisted-target-visible');
+  if (visibleTargets.some(target => target.recentlyActive)) dataGaps.push('recently-active-target-visible');
+  if (afkTargets.some(target => Number(target.afkStaminaCooldownRemainingMs || 0) > 0)) dataGaps.push('afk-stamina-cooldown-target-visible');
   if (snapshotFallbackBlockedReasons.length) dataGaps.push(...snapshotFallbackBlockedReasons.map(reason => `snapshot-fallback-blocked:${reason}`));
   if (!realtime.frameAgeMs && realtime.receivedAtMs) dataGaps.push('unknown-realtime-frame-age');
   const profitCoins = realtimeCoins.length
@@ -507,7 +714,7 @@ function buildBrowserlessStrategyInput(state, options = {}) {
     realtime: {
       tick: realtime.tick ?? null,
       frameAgeMs: numberOrNull(realtime.frameAgeMs),
-      entityCount: realtimeEntities.length,
+      entityCount: decisionEntities.length,
       bulletCount: Array.isArray(realtime.bullets) ? realtime.bullets.length : 0
     },
     fallback: {
@@ -553,6 +760,7 @@ function scoreEnemyOpportunity(target, options = {}) {
   const isAfkProfitTarget = typeof options.isAfkProfitTarget === 'function'
     ? options.isAfkProfitTarget
     : () => false;
+  if (isAfkProfitTarget(target) && afkOpportunityBlockedByStaminaCooldown(target, options)) return null;
   const coinWeight = Number(options.coinOpportunityValue ?? BROWSER_RUNTIME_DEFAULTS.coinOpportunityValue ?? 1);
   const dropWeight = Number(options.dropOpportunityValue ?? BROWSER_RUNTIME_DEFAULTS.dropOpportunityValue ?? coinWeight);
   const weight = Number(options.enemyOpportunityValue ?? (
@@ -1396,11 +1604,14 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
     }),
     nowMs: input.nowMs
   };
+  const afkOpportunityTargets = includeAfkProfitTargets
+    ? input.afkTargets.filter(target => !afkOpportunityBlockedByStaminaCooldown(target, opportunityOptions))
+    : [];
   const opportunities = prioritizeBrowserlessOpportunities(buildOpportunityCandidatesCore(
     input.self,
     opportunityThreats,
     coinGroups,
-    includeAfkProfitTargets ? input.afkTargets : [],
+    afkOpportunityTargets,
     routeCoin,
     opportunityOptions
   ), options);
@@ -2265,7 +2476,7 @@ function profitLiveSafetyDecision(input, combatDecision, stateful = {}, options 
 }
 
 function buildBrowserlessDecision(state, stateful = {}, options = {}) {
-  const input = buildBrowserlessStrategyInput(state, options);
+  const input = buildBrowserlessStrategyInput(state, options, stateful);
   cleanupCoinProgressState(stateful, input.nowMs, options);
   applyIgnoredCoinFilter(input, stateful);
   const staleSelfMs = Math.max(1000, Number(options.staleSelfMs || DEFAULT_STALE_SELF_MS));
@@ -2376,11 +2587,6 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     band = 'combat';
     reason = combat.action.reason;
     action = combat.action;
-  } else if (staminaBudgetExitAction) {
-    kind = staminaBudgetExitAction.kind;
-    band = staminaBudgetExitAction.band;
-    reason = staminaBudgetExitAction.reason;
-    action = staminaBudgetExitAction;
   } else if (postAttackDropCoinAction) {
     kind = postAttackDropCoinAction.kind;
     band = postAttackDropCoinAction.band;
@@ -2391,6 +2597,11 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     band = postAttackDropWaitAction.band;
     reason = postAttackDropWaitAction.reason;
     action = postAttackDropWaitAction;
+  } else if (staminaBudgetExitAction) {
+    kind = staminaBudgetExitAction.kind;
+    band = staminaBudgetExitAction.band;
+    reason = staminaBudgetExitAction.reason;
+    action = staminaBudgetExitAction;
   } else if (recoveryFootCoinAction) {
     kind = recoveryFootCoinAction.kind;
     band = recoveryFootCoinAction.band;

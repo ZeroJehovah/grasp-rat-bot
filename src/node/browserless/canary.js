@@ -23,6 +23,7 @@ const {
   executeSafetyExit
 } = require('./safety-controller');
 const { createBrowserlessActionAdapter } = require('./action-adapter');
+const { createBrowserlessTargetWhitelist } = require('./target-whitelist');
 
 const DEFAULT_READONLY_PROBE_MS = 30000;
 const DEFAULT_FRAME_GAP_ALERT_MS = 5000;
@@ -208,6 +209,26 @@ async function runReadOnlyCanary(config, options = {}) {
   const decisionIntervalMs = Math.max(250, Number(config.decisionIntervalMs || 1000));
   const stateStore = options.stateStore || createBrowserlessStateStore({ userId: config.userId, now });
   const runtimeDefaults = buildBrowserlessRuntimeDefaults(config);
+  const targetWhitelist = options.targetWhitelist || createBrowserlessTargetWhitelist({
+    url: Object.prototype.hasOwnProperty.call(config, 'targetWhitelistUrl') ? config.targetWhitelistUrl : '',
+    file: Object.prototype.hasOwnProperty.call(config, 'targetWhitelistFile') ? config.targetWhitelistFile : '',
+    timeoutMs: config.targetWhitelistTimeoutMs,
+    maxNames: config.targetWhitelistMaxNames,
+    localAddress: config.sourceIp,
+    fetchWithTimeout: options.fetchWithTimeout,
+    fetchImpl: options.fetchImpl,
+    now
+  });
+  let targetWhitelistSummary = null;
+  try {
+    targetWhitelistSummary = await targetWhitelist.refresh('canary-startup');
+  } catch (err) {
+    targetWhitelistSummary = {
+      loaded: false,
+      lastReason: 'canary-startup-failed',
+      lastError: errorMessage(err)
+    };
+  }
   const decisionAdapter = options.decisionAdapter || createBrowserlessDecisionAdapter({
     ...runtimeDefaults,
     userId: config.userId,
@@ -215,7 +236,10 @@ async function runReadOnlyCanary(config, options = {}) {
     controlMode,
     decisionIntervalMs,
     readOnlyProbeMs: durationMs,
-    loopDelayMs: config.loopDelayMs
+    loopDelayMs: config.loopDelayMs,
+    targetWhitelistNames: targetWhitelist.names,
+    targetWhitelistNameSet: targetWhitelist.nameSet,
+    whitelistCheck: target => targetWhitelist.isWhitelistedTarget(target)
   });
   const safetyController = options.safetyController || createBrowserlessSafetyController({
     now,
@@ -268,6 +292,7 @@ async function runReadOnlyCanary(config, options = {}) {
       lastShootAck: null
     },
     leave: null,
+    targetWhitelist: targetWhitelistSummary,
     error: ''
   };
   let lastDecisionAtMs = 0;
@@ -307,6 +332,7 @@ async function runReadOnlyCanary(config, options = {}) {
   const logWs = (type, detail) => {
     if (config.wsTraceEnabled && logStore) logStore.append('ws', type, addRunMeta(detail));
   };
+  log('canary-target-whitelist', targetWhitelistSummary || {});
   const updateActionResult = actionResult => {
     if (!actionResult) return;
     const adapterState = actionAdapter?.getState?.() || {};

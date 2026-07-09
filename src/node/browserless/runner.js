@@ -21,6 +21,7 @@ const { decisionStatePatch } = require('./decision-adapter');
 const { createBrowserlessActionAdapter } = require('./action-adapter');
 const { createSourceIpController } = require('./source-ip-controller');
 const { createBrowserlessSafetyController } = require('./safety-controller');
+const { redactSecrets } = require('./session-client');
 
 function publicConfig(config) {
   return {
@@ -28,6 +29,10 @@ function publicConfig(config) {
     wsPath: config.wsPath,
     wsExtraQuery: config.wsExtraQuery,
     snapshotPath: config.snapshotPath,
+    targetWhitelistUrl: redactSecrets(config.targetWhitelistUrl || ''),
+    targetWhitelistFile: config.targetWhitelistFile || '',
+    targetWhitelistTimeoutMs: Number(config.targetWhitelistTimeoutMs || 0),
+    targetWhitelistMaxNames: Number(config.targetWhitelistMaxNames || 0),
     dataDir: config.dataDir,
     logDir: config.logDir,
     statusHost: config.statusHost,

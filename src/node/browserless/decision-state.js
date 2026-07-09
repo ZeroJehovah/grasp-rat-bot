@@ -66,10 +66,12 @@ function createInitialDecisionState(options = {}) {
     ignoredCoins: asRecord(options.ignoredCoins),
     coinApproachLock: cloneJson(options.coinApproachLock || null),
     staleCoinEscape: cloneJson(options.staleCoinEscape || null),
+    opportunityAfkStamina: asRecord(options.opportunityAfkStamina),
     attackHistory: asArray(options.attackHistory),
     combatTarget: cloneJson(options.combatTarget || null),
     combatAim: cloneJson(options.combatAim || null),
     combatDisadvantageObservation: cloneJson(options.combatDisadvantageObservation || null),
+    seenEntities: asRecord(options.seenEntities),
     browserlessLastSelf: cloneJson(options.browserlessLastSelf || null),
     browserlessInjury: cloneJson(options.browserlessInjury || null),
     browserlessPursuit: cloneJson(options.browserlessPursuit || null),
@@ -139,6 +141,9 @@ function summarizeBrowserlessDecisionState(state, options = {}) {
       disadvantageObservation: redactBoundedValue(state.combatDisadvantageObservation || null)
     },
     browserlessSafety: {
+      seenEntityCount: Object.keys(state.seenEntities || {}).length,
+      recentSeenEntities: recordEntries(state.seenEntities || {}, limit),
+      opportunityAfkStamina: recordEntries(state.opportunityAfkStamina || {}, limit),
       lastSelf: redactBoundedValue(state.browserlessLastSelf || null),
       injury: redactBoundedValue(state.browserlessInjury || null),
       pursuit: redactBoundedValue(state.browserlessPursuit || null)
