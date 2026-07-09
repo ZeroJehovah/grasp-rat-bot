@@ -69,11 +69,19 @@ function isPlainObject(value) {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
 }
 
-function mergeState(base, patch) {
+function shouldReplaceStateObject(pathParts) {
+  const pathKey = pathParts.join('.');
+  return pathKey === 'runner.currentAction' || pathKey === 'current.action';
+}
+
+function mergeState(base, patch, pathParts = []) {
   const output = cloneJson(base || {});
   for (const [key, value] of Object.entries(patch || {})) {
-    if (isPlainObject(value) && isPlainObject(output[key])) {
-      output[key] = mergeState(output[key], value);
+    const nextPath = [...pathParts, key];
+    if (shouldReplaceStateObject(nextPath)) {
+      output[key] = cloneJson(value);
+    } else if (isPlainObject(value) && isPlainObject(output[key])) {
+      output[key] = mergeState(output[key], value, nextPath);
     } else {
       output[key] = cloneJson(value);
     }

@@ -8073,6 +8073,65 @@ async function runSelfTest() {
       want: 'state-secret-token|77|true|true|false|self|test-exit'
     },
     {
+      name: 'browserless state file replaces current action snapshots',
+      got: withTempDirForTest(async dir => {
+        const config = parseBrowserlessRunnerArgs(['--data-dir', dir], {});
+        const file = stateFilePath(config);
+        updateBrowserlessStateFile(file, {
+          runner: {
+            currentAction: {
+              kind: 'safety-exit',
+              band: 'safety',
+              reason: 'profit-live-snapshot-active-threat',
+              shouldLeave: true,
+              stopMotion: true,
+              target: { userId: 31361, drop: 44 }
+            }
+          },
+          current: {
+            action: {
+              kind: 'safety-exit',
+              band: 'safety',
+              reason: 'profit-live-snapshot-active-threat',
+              shouldLeave: true,
+              stopMotion: true,
+              target: { userId: 31361, drop: 44 }
+            }
+          }
+        }, { updatedAt: '2026-07-08T00:00:01.000Z' });
+        updateBrowserlessStateFile(file, {
+          runner: {
+            currentAction: {
+              kind: 'stop',
+              reason: 'unsupported-or-wait-decision',
+              command: { type: 'velocity', dx: 0, dy: 0 },
+              actionState: { sentCount: 1, stopCount: 1 }
+            }
+          },
+          current: {
+            action: {
+              kind: 'stop',
+              reason: 'unsupported-or-wait-decision',
+              command: { type: 'velocity', dx: 0, dy: 0 },
+              actionState: { sentCount: 1, stopCount: 1 }
+            }
+          }
+        }, { updatedAt: '2026-07-08T00:00:02.000Z' });
+        const stored = readBrowserlessStateFile(file);
+        return [
+          stored.runner.currentAction.kind,
+          stored.runner.currentAction.shouldLeave === undefined,
+          stored.runner.currentAction.stopMotion === undefined,
+          stored.runner.currentAction.target === undefined,
+          stored.runner.currentAction.actionState.stopCount,
+          stored.current.action.kind,
+          stored.current.action.shouldLeave === undefined,
+          stored.current.action.target === undefined
+        ].join('|');
+      }),
+      want: 'stop|true|true|true|1|stop|true|true'
+    },
+    {
       name: 'browserless status server gates status and redacts payload',
       got: (async () => {
         let stopCalled = 0;
