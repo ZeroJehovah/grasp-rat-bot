@@ -8114,6 +8114,44 @@ async function runSelfTest() {
       want: '2|true|true|8'
     },
     {
+      name: 'browserless profit live fights passive incoming bullet owner',
+      got: (() => {
+        const decision = buildBrowserlessDecision({
+          userId: 7,
+          realtime: {
+            tick: 62,
+            frameAgeMs: 100,
+            self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
+            entities: [
+              { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
+              { entity_id: 2, user_id: 8, name: 'passive-shooter', x: 5000, y: 0, hp: 100, current_join_mode: 'Passive', drop: 0 }
+            ],
+            bullets: [
+              { owner_user_id: 8, start_x: 5000, start_y: 0, target_x: 0, target_y: 0, created_tick: 60, expire_tick: 90, speed_per_tick: 500 }
+            ],
+            coinDrops: []
+          },
+          fallback: { coinDrops: [] }
+        }, {}, {
+          nowMs: 1500,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          combatAttackRange: 11000
+        });
+        return [
+          decision.kind,
+          decision.band,
+          decision.reason,
+          decision.action.target.userId,
+          decision.combat.target.combatIntent,
+          decision.combat.movement.reason,
+          decision.combat.shooting.wouldShoot,
+          decision.combat.shooting.reason
+        ].join('|');
+      })(),
+      want: 'combat-live|combat|combat-live-realtime|8|defensive|direct-threat-dodge|true|target-pressure-fire'
+    },
+    {
       name: 'browserless combat critical hp exits through safety action',
       got: (() => {
         const decision = buildBrowserlessDecision({

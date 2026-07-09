@@ -2113,6 +2113,7 @@ function isCombatActionEligibleForDecision(combatDecision, options = {}) {
   const target = combatDecision?.target || combatDecision?.dryRun?.target || null;
   if (!target) return false;
   if (options.controlMode !== 'profit-live') return true;
+  if (target.combatIntent === 'defensive') return true;
   return Boolean(target.active || target.firing);
 }
 
