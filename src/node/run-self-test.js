@@ -5856,7 +5856,7 @@ async function runSelfTest() {
           type: 'pos',
           tick: 55,
           entities: [
-            { entity_id: 1, user_id: 7, name: 'self', x: 100, y: 100, hp: 90 },
+            { entity_id: 1, user_id: 7, name: 'self', x: 100, y: 100, hp: 100, max_hp: 100 },
             { entity_id: 2, user_id: 8, name: 'active-far', x: 50000, y: 100, hp: 80, current_join_mode: 'Active', firing: true, drop: 20 }
           ],
           bullets: [],
@@ -5895,7 +5895,7 @@ async function runSelfTest() {
           type: 'pos',
           tick: 57,
           entities: [
-            { entity_id: 1, user_id: 7, name: 'self', x: 100, y: 100, hp: 90 },
+            { entity_id: 1, user_id: 7, name: 'self', x: 100, y: 100, hp: 100, max_hp: 100 },
             { entity_id: 2, user_id: 8, name: 'active-near', x: 500, y: 100, hp: 80, current_join_mode: 'Active', firing: true, drop: 20 }
           ],
           bullets: []
@@ -5940,11 +5940,11 @@ async function runSelfTest() {
           });
         };
         const afkOnly = choose([
-          { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 90 },
+          { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
           { entity_id: 2, user_id: 8, name: 'afk', x: 1000, y: 0, hp: 80, current_join_mode: 'None', drop: 10 }
         ]);
         const activeVisible = choose([
-          { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 90 },
+          { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
           { entity_id: 2, user_id: 8, name: 'afk', x: 1000, y: 0, hp: 80, current_join_mode: 'None', drop: 10 },
           { entity_id: 3, user_id: 9, name: 'active', x: 500, y: 0, hp: 80, current_join_mode: 'Active', firing: true, drop: 10 }
         ]);
@@ -5972,7 +5972,7 @@ async function runSelfTest() {
           type: 'pos',
           tick: 59,
           entities: [
-            { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 90 },
+            { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
             { entity_id: 2, user_id: 8, name: 'low-drop-afk', x: 1000, y: 0, hp: 80, current_join_mode: 'None', drop: 1 },
             { entity_id: 3, user_id: 9, name: 'min-drop-afk', x: 2000, y: 0, hp: 80, current_join_mode: 'None', drop: 3 }
           ],
@@ -5993,6 +5993,143 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'profit-candidate|attack|9|3|false|true'
+    },
+    {
+      name: 'browserless profit live prioritizes visible high-drop AFK over ordinary one coin',
+      got: (() => {
+        const store = createBrowserlessStateStore({ userId: 7 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 59,
+          entities: [
+            { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+            { entity_id: 2, user_id: 8, name: 'drop-nine-afk', x: 49800, y: 0, hp: 100, current_join_mode: 'Passive', drop: 9 }
+          ],
+          bullets: []
+        }, { receivedAtMs: 1000 });
+        store.ingestFrame({
+          type: 'snapshot',
+          tick: 60,
+          entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100 }],
+          bullets: [],
+          coin_drops: [{ drop_id: 'one-coin', amount: 1, x: 3500, y: 0 }],
+          messages: []
+        }, { receivedAtMs: 1100 });
+        const decision = buildBrowserlessDecision(store.getState(1200), {}, {
+          nowMs: 1200,
+          controlMode: 'profit-live'
+        });
+        const coin = (decision.profit.candidates || []).find(item => item.type === 'coin');
+        return [
+          decision.kind,
+          decision.action.kind,
+          decision.action.target.userId,
+          decision.action.target.drop,
+          decision.profit.best.priorityTier,
+          coin?.priorityTier
+        ].join('|');
+      })(),
+      want: 'profit-candidate|seek-enemy|8|9|2|1'
+    },
+    {
+      name: 'browserless profit live attacks in-range high-drop AFK over ordinary one coin',
+      got: (() => {
+        const store = createBrowserlessStateStore({ userId: 7 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 59,
+          entities: [
+            { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+            { entity_id: 2, user_id: 8, name: 'drop-nine-afk', x: 13600, y: 0, hp: 100, current_join_mode: 'Passive', drop: 9 }
+          ],
+          bullets: []
+        }, { receivedAtMs: 1000 });
+        store.ingestFrame({
+          type: 'snapshot',
+          tick: 60,
+          entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100 }],
+          bullets: [],
+          coin_drops: [{ drop_id: 'one-coin', amount: 1, x: 1000, y: 0 }],
+          messages: []
+        }, { receivedAtMs: 1100 });
+        const decision = buildBrowserlessDecision(store.getState(1200), {}, {
+          nowMs: 1200,
+          controlMode: 'profit-live'
+        });
+        return [
+          decision.kind,
+          decision.action.kind,
+          decision.action.target.userId,
+          decision.action.target.drop,
+          decision.profit.best.priorityTier
+        ].join('|');
+      })(),
+      want: 'profit-candidate|attack|8|9|2'
+    },
+    {
+      name: 'browserless profit live damaged self recovers instead of ordinary coin',
+      got: (() => {
+        const store = createBrowserlessStateStore({ userId: 7 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 59,
+          entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 98 }],
+          bullets: []
+        }, { receivedAtMs: 1000 });
+        store.ingestFrame({
+          type: 'snapshot',
+          tick: 60,
+          entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 98 }],
+          bullets: [],
+          coin_drops: [{ drop_id: 'ordinary-coin', amount: 1, x: 1000, y: 0 }],
+          messages: []
+        }, { receivedAtMs: 1100 });
+        const decision = buildBrowserlessDecision(store.getState(1200), {}, {
+          nowMs: 1200,
+          controlMode: 'profit-live'
+        });
+        return [
+          decision.kind,
+          decision.band,
+          decision.reason,
+          decision.action.stopMotion,
+          decision.profit.best?.type,
+          decision.action.recovery?.maxHp
+        ].join('|');
+      })(),
+      want: 'recover|recover|wait-for-full-stamina-and-hp|true|coin|100'
+    },
+    {
+      name: 'browserless profit live damaged self can take recovery foot coin',
+      got: (() => {
+        const store = createBrowserlessStateStore({ userId: 7 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 59,
+          entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 98 }],
+          bullets: []
+        }, { receivedAtMs: 1000 });
+        store.ingestFrame({
+          type: 'snapshot',
+          tick: 60,
+          entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 98 }],
+          bullets: [],
+          coin_drops: [{ drop_id: 'foot-coin', amount: 1, x: 500, y: 0 }],
+          messages: []
+        }, { receivedAtMs: 1100 });
+        const decision = buildBrowserlessDecision(store.getState(1200), {}, {
+          nowMs: 1200,
+          controlMode: 'profit-live'
+        });
+        return [
+          decision.kind,
+          decision.band,
+          decision.reason,
+          decision.action.kind,
+          decision.action.target.id
+        ].join('|');
+      })(),
+      want: 'coin|profit|recovery-foot-coin|coin|foot-coin'
     },
     {
       name: 'browserless profit live admits fresh in-view snapshot coin fallback',

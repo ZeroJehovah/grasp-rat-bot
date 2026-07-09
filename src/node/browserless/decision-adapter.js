@@ -31,6 +31,12 @@ const DEFAULT_PROFIT_LIVE_INJURY_HP = 90;
 const DEFAULT_PROFIT_LIVE_PLAYER_DROP_MAX_DISTANCE = 22000;
 const DEFAULT_PROFIT_LIVE_PLAYER_DROP_MAX_AGE_TICKS = 8000;
 const DEFAULT_SNAPSHOT_VISIBLE_COIN_MAX_DISTANCE = 50000;
+const DEFAULT_OPPORTUNITY_VISIBLE_DISTANCE = 50000;
+const DEFAULT_OPPORTUNITY_NEARBY_PRIORITY_DISTANCE = 50000;
+const DEFAULT_GLOBAL_COIN_MAX_DISTANCE = 50000;
+const DEFAULT_RECOVERY_COIN_MAX_DISTANCE = 600;
+const DEFAULT_RECOVERY_PLAYER_DROP_MIN_AMOUNT = 2;
+const DEFAULT_POST_ATTACK_RECOVERY_DROP_MAX_DISTANCE = 50000;
 
 function cloneJson(value) {
   if (value === null || value === undefined) return value;
@@ -75,6 +81,24 @@ function entityStaminaSummary(entity) {
     stamina5sRemainingMilli: numberOrNull(entity?.stamina_5s_remaining_milli ?? entity?.stamina5sRemainingMilli),
     staminaSpent: numberOrNull(entity?.stamina_spent ?? entity?.staminaSpent)
   };
+}
+
+function hpValue(entity) {
+  const hp = Number(entity?.hp);
+  return Number.isFinite(hp) ? hp : null;
+}
+
+function maxHpValue(entity) {
+  const maxHp = Number(entity?.max_hp ?? entity?.maxHp);
+  return Number.isFinite(maxHp) && maxHp > 0 ? maxHp : null;
+}
+
+function isRecoveringSelf(self) {
+  const hp = hpValue(self);
+  if (hp === null) return false;
+  const maxHp = maxHpValue(self);
+  if (maxHp !== null) return hp < maxHp;
+  return hp < 100;
 }
 
 function isInjuredSelf(self, options = {}) {
@@ -464,6 +488,50 @@ function enemyStaminaCost(target, options = {}) {
   return Math.max(1, Number(target?.distance || 0) + shotCost);
 }
 
+function opportunityVisibleDistance(options = {}) {
+  const value = Number(options.opportunityVisibleDistance
+    ?? options.opportunityNearbyPriorityDistance
+    ?? DEFAULT_OPPORTUNITY_VISIBLE_DISTANCE);
+  return Number.isFinite(value) ? Math.max(0, value) : DEFAULT_OPPORTUNITY_VISIBLE_DISTANCE;
+}
+
+function opportunityNearbyPriorityDistance(options = {}) {
+  const value = Number(options.opportunityNearbyPriorityDistance
+    ?? options.opportunityVisibleDistance
+    ?? DEFAULT_OPPORTUNITY_NEARBY_PRIORITY_DISTANCE);
+  return Number.isFinite(value) ? Math.max(0, value) : DEFAULT_OPPORTUNITY_NEARBY_PRIORITY_DISTANCE;
+}
+
+function browserlessOpportunityPriorityTier(item, options = {}) {
+  const base = opportunityPriorityTierCore(item, {
+    visibleDistance: opportunityVisibleDistance(options),
+    nearbyPriorityDistance: opportunityNearbyPriorityDistance(options)
+  });
+  const distance = Number(item?.distance ?? Infinity);
+  if (!Number.isFinite(distance) || distance > opportunityVisibleDistance(options)) return base;
+  if (String(item?.type || '') === 'coin') {
+    const amount = Number(item?.amount ?? item?.sourceCoin?.amount ?? 0);
+    const highValueAmount = Math.max(1, Number(options.highValueCoinPriorityAmount || OPPORTUNITY_CONSTANTS.HIGH_VALUE_COIN_PRIORITY_AMOUNT));
+    return amount >= highValueAmount ? Math.max(base, 2) : base;
+  }
+  if (String(item?.type || '') === 'enemy') {
+    const drop = entityDropValue(item?.sourceTarget || item);
+    const priorityDrop = Math.max(
+      Number(options.afkTargetPriorityMinDrop ?? 0) || 0,
+      Number(options.attackMinDrop ?? DEFAULT_ATTACK_MIN_DROP) || DEFAULT_ATTACK_MIN_DROP
+    );
+    return drop >= priorityDrop ? Math.max(base, 2) : base;
+  }
+  return base;
+}
+
+function prioritizeBrowserlessOpportunities(opportunities, options = {}) {
+  return (opportunities || []).map(item => ({
+    ...item,
+    priorityTier: browserlessOpportunityPriorityTier(item, options)
+  }));
+}
+
 function buildOpportunityDecision(input, stateful = {}, options = {}) {
   if (!input.self) {
     return {
@@ -477,14 +545,15 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
   }
   const includeAfkProfitTargets = options.includeAfkProfitTargets !== false && !(options.blockAfkProfitWhenActiveThreatVisible && input.activeThreats.length);
   const coinGroups = input.profitCoins.length
-    ? [{ coins: input.profitCoins, maxDistance: options.globalCoinMaxDistance || OPPORTUNITY_CONSTANTS.GLOBAL_COIN_MAX_DISTANCE }]
+    ? [{ coins: input.profitCoins, maxDistance: options.globalCoinMaxDistance || DEFAULT_GLOBAL_COIN_MAX_DISTANCE }]
     : [];
   const opportunityOptions = {
     maxCoinDistance: options.nearCoinPriorityDistance || OPPORTUNITY_CONSTANTS.NEAR_COIN_PRIORITY_DISTANCE,
-    globalCoinMaxDistance: options.globalCoinMaxDistance || OPPORTUNITY_CONSTANTS.GLOBAL_COIN_MAX_DISTANCE,
+    globalCoinMaxDistance: options.globalCoinMaxDistance || DEFAULT_GLOBAL_COIN_MAX_DISTANCE,
     attackRange: options.attackRange || DEFAULT_ATTACK_RANGE,
     attackEngageRange: options.attackEngageRange || DEFAULT_ATTACK_ENGAGE_RANGE,
-    visibleDistance: options.nearCoinPriorityDistance || OPPORTUNITY_CONSTANTS.NEAR_COIN_PRIORITY_DISTANCE,
+    visibleDistance: opportunityVisibleDistance(options),
+    nearbyPriorityDistance: opportunityNearbyPriorityDistance(options),
     highValueCoinPriorityAmount: options.highValueCoinPriorityAmount || OPPORTUNITY_CONSTANTS.HIGH_VALUE_COIN_PRIORITY_AMOUNT,
     switchHoldMs: options.opportunitySwitchHoldMs || OPPORTUNITY_CONSTANTS.OPPORTUNITY_SWITCH_HOLD_MS,
     switchMargin: options.opportunitySwitchMargin || OPPORTUNITY_CONSTANTS.OPPORTUNITY_SWITCH_MARGIN,
@@ -509,18 +578,19 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
     opportunityStaminaAffordable: () => true,
     isAfkProfitTarget: target => input.afkTargets.includes(target),
     priorityTier: item => opportunityPriorityTierCore(item, {
-      visibleDistance: options.nearCoinPriorityDistance || OPPORTUNITY_CONSTANTS.NEAR_COIN_PRIORITY_DISTANCE
+      visibleDistance: opportunityVisibleDistance(options),
+      nearbyPriorityDistance: opportunityNearbyPriorityDistance(options)
     }),
     nowMs: input.nowMs
   };
-  const opportunities = buildOpportunityCandidatesCore(
+  const opportunities = prioritizeBrowserlessOpportunities(buildOpportunityCandidatesCore(
     input.self,
     input.activeThreats.concat(input.snapshotActiveThreats || []),
     coinGroups,
     includeAfkProfitTargets ? input.afkTargets : [],
     null,
     opportunityOptions
-  );
+  ), options);
   const choice = chooseStableOpportunityCore(
     opportunities,
     stateful.currentOpportunity || null,
@@ -544,6 +614,58 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
     switchLock: choice.switchLock || null,
     opportunityChoice: remembered.choice || stateful.currentOpportunity || null,
     action: remembered.action || action
+  };
+}
+
+function buildRecoveryDecision(input, opportunity, options = {}) {
+  if (!input?.self || !isRecoveringSelf(input.self)) return null;
+  const choice = opportunity?.choice || null;
+  if (choice?.type === 'coin') {
+    const distance = Number(choice.distance ?? choice.sourceCoin?.distance ?? Infinity);
+    const amount = Number(choice.amount ?? choice.sourceCoin?.amount ?? 0);
+    const recoveryCoinMaxDistance = Math.max(0, Number(options.recoveryCoinMaxDistance ?? DEFAULT_RECOVERY_COIN_MAX_DISTANCE));
+    if (Number.isFinite(distance) && distance <= recoveryCoinMaxDistance) {
+      return {
+        ...(opportunity.action || {}),
+        kind: choice.actionKind || 'coin',
+        band: 'profit',
+        reason: 'recovery-foot-coin',
+        target: summarizeCoin(choice.sourceCoin),
+        recovery: recoverySummary(input.self)
+      };
+    }
+    const playerDropMinAmount = Math.max(1, Number(options.recoveryPlayerDropMinAmount ?? DEFAULT_RECOVERY_PLAYER_DROP_MIN_AMOUNT));
+    const playerDropMaxDistance = Math.max(0, Number(options.postAttackRecoveryDropMaxDistance ?? DEFAULT_POST_ATTACK_RECOVERY_DROP_MAX_DISTANCE));
+    if (input.profitCoinSource === 'snapshot-player-drop'
+      && amount >= playerDropMinAmount
+      && Number.isFinite(distance)
+      && distance <= playerDropMaxDistance) {
+      return {
+        ...(opportunity.action || {}),
+        kind: choice.actionKind || 'coin',
+        band: 'profit',
+        reason: 'post-attack-drop-coin',
+        target: summarizeCoin(choice.sourceCoin),
+        recovery: recoverySummary(input.self)
+      };
+    }
+  }
+  return {
+    kind: 'recover',
+    band: 'recover',
+    reason: 'wait-for-full-stamina-and-hp',
+    stopMotion: true,
+    self: summarizeTarget(input.self),
+    recovery: recoverySummary(input.self)
+  };
+}
+
+function recoverySummary(self) {
+  return {
+    hp: hpValue(self),
+    maxHp: maxHpValue(self) ?? 100,
+    stamina5s: numberOrNull(self?.stamina_5s_remaining_milli ?? self?.stamina5sRemainingMilli),
+    stamina5sLimit: numberOrNull(self?.stamina_5s_limit_milli ?? self?.stamina5sLimitMilli)
   };
 }
 
@@ -658,6 +780,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
   const combat = buildCombatDecision(input, options);
   const combatActionEligible = isCombatActionEligibleForDecision(combat, options);
   const safetyAction = profitLiveSafetyDecision(input, combat, options);
+  const recoveryAction = (profitLive || nonCombatProfit) ? buildRecoveryDecision(input, opportunity, options) : null;
   let kind = 'wait';
   let band = 'wait';
   let reason = '';
@@ -678,6 +801,11 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     band = 'combat';
     reason = combat.action.reason;
     action = combat.action;
+  } else if (recoveryAction) {
+    kind = recoveryAction.kind;
+    band = recoveryAction.band;
+    reason = recoveryAction.reason;
+    action = recoveryAction;
   } else if (opportunity.choice) {
     kind = 'profit-candidate';
     band = 'profit';
