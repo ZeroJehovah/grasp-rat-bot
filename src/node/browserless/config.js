@@ -37,6 +37,7 @@ const DEFAULTS = {
   wsTraceEnabled: false,
   wsTracePayload: true,
   wsTraceMaxPayloadChars: 0,
+  sourceIp: '',
   loginPointX: null,
   loginPointY: null,
   loginPointHp: null
@@ -110,6 +111,7 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
     wsTraceEnabled: boolEnv(env.GRASP_RAT_BROWSERLESS_WS_TRACE_ENABLED ?? env.GRASP_RAT_BROWSERLESS_WS_TRACE, DEFAULTS.wsTraceEnabled),
     wsTracePayload: boolEnv(env.GRASP_RAT_BROWSERLESS_WS_TRACE_PAYLOAD, DEFAULTS.wsTracePayload),
     wsTraceMaxPayloadChars: numberEnv(env.GRASP_RAT_BROWSERLESS_WS_TRACE_MAX_PAYLOAD_CHARS, DEFAULTS.wsTraceMaxPayloadChars),
+    sourceIp: env.GRASP_RAT_BROWSERLESS_SOURCE_IP || DEFAULTS.sourceIp,
     userId: numberEnv(env.GRASP_RAT_BROWSERLESS_USER_ID, 0),
     sessionToken: env.GRASP_RAT_BROWSERLESS_SESSION_TOKEN || '',
     loginPointX: numberEnv(env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_X, DEFAULTS.loginPointX),
@@ -209,6 +211,8 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
       config.wsTracePayload = false;
     } else if (arg === '--ws-trace-max-payload-chars') {
       config.wsTraceMaxPayloadChars = numberEnv(argv[++i], config.wsTraceMaxPayloadChars);
+    } else if (arg === '--source-ip') {
+      config.sourceIp = argv[++i] || '';
     } else if (arg === '--login-point-x') {
       config.loginPointX = numberEnv(argv[++i], config.loginPointX);
     } else if (arg === '--login-point-y') {
@@ -273,6 +277,7 @@ function usage() {
     '  --no-ws-trace           Disable WebSocket trace logging',
     '  --ws-trace-summary-only  Log WebSocket frame summaries without decoded payloads',
     '  --ws-trace-max-payload-chars <n>  Truncate decoded WS payload JSON; 0 means full payload',
+    '  --source-ip <ip>        Bind browserless HTTP/WS outbound sockets to this local source IP',
     '  --login-point-x <cm>      Manual login point x for canary safety',
     '  --login-point-y <cm>      Manual login point y for canary safety',
     '  --login-point-hp <hp>     Manual login point HP context for canary safety',

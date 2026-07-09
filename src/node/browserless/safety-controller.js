@@ -211,6 +211,7 @@ async function executeSafetyExit(event, config = {}, deps = {}) {
     userId: config.userId,
     sessionToken: config.sessionToken,
     timeoutMs: config.httpTimeoutMs || 10000,
+    localAddress: config.sourceIp,
     retryMax: config.leaveRetryMax ?? 3,
     retryDelayMs: config.leaveRetryMs ?? 1200,
     fetchImpl: deps.fetchImpl,

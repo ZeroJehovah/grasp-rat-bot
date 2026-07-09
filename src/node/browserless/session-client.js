@@ -1,10 +1,40 @@
 'use strict';
 
+const http = require('http');
+const https = require('https');
 const { summarizeGrzEntity } = require('../../shared/grz-frame');
 
 const DEFAULT_GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
 const DEFAULT_HTTP_TIMEOUT_MS = 10000;
 const DEFAULT_ACCEPT_HEADER = 'application/json,text/plain,*/*';
+
+let undiciAgentConstructor = null;
+let undiciAgentLoaded = false;
+const localAddressDispatchers = new Map();
+
+function getUndiciAgentConstructor() {
+  if (undiciAgentLoaded) return undiciAgentConstructor;
+  undiciAgentLoaded = true;
+  try {
+    undiciAgentConstructor = require('undici').Agent;
+  } catch (_) {
+    undiciAgentConstructor = null;
+  }
+  return undiciAgentConstructor;
+}
+
+function dispatcherForLocalAddress(localAddress) {
+  const value = String(localAddress || '').trim();
+  if (!value) return null;
+  if (localAddressDispatchers.has(value)) return localAddressDispatchers.get(value);
+  const Agent = getUndiciAgentConstructor();
+  if (typeof Agent !== 'function') {
+    throw new Error('HTTP source IP binding requires undici Agent support');
+  }
+  const dispatcher = new Agent({ connect: { localAddress: value } });
+  localAddressDispatchers.set(value, dispatcher);
+  return dispatcher;
+}
 
 function redactSecrets(value) {
   return String(value || '')
@@ -34,11 +64,19 @@ function redactStructuredSecrets(value, depth = 0) {
 
 async function fetchWithTimeout(url, options = {}) {
   const timeoutMs = Math.max(1, Number(options.timeoutMs || DEFAULT_HTTP_TIMEOUT_MS));
+  const hasCustomFetchImpl = typeof options.fetchImpl === 'function';
   const fetchImpl = options.fetchImpl || globalThis.fetch;
   if (typeof fetchImpl !== 'function') throw new Error('fetch implementation unavailable');
+  if (options.localAddress && !hasCustomFetchImpl) {
+    return fetchWithLocalAddress(url, options);
+  }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
-  const { timeoutMs: _timeoutMs, fetchImpl: _fetchImpl, ...fetchOptions } = options;
+  const { timeoutMs: _timeoutMs, fetchImpl: _fetchImpl, localAddress, ...fetchOptions } = options;
+  if (localAddress) {
+    fetchOptions.dispatcher = fetchOptions.dispatcher || dispatcherForLocalAddress(localAddress);
+    fetchOptions.localAddress = localAddress;
+  }
   try {
     return await fetchImpl(url, {
       ...fetchOptions,
@@ -51,6 +89,51 @@ async function fetchWithTimeout(url, options = {}) {
   } finally {
     clearTimeout(timer);
   }
+}
+
+function fetchWithLocalAddress(url, options = {}) {
+  const timeoutMs = Math.max(1, Number(options.timeoutMs || DEFAULT_HTTP_TIMEOUT_MS));
+  const parsed = new URL(String(url));
+  const client = parsed.protocol === 'http:' ? http : https;
+  const headers = {
+    accept: DEFAULT_ACCEPT_HEADER,
+    ...(options.headers || {})
+  };
+  const method = String(options.method || 'GET').toUpperCase();
+  const body = options.body === undefined || options.body === null ? null : options.body;
+  return new Promise((resolve, reject) => {
+    const request = client.request(parsed, {
+      method,
+      headers,
+      localAddress: String(options.localAddress || ''),
+      family: String(options.localAddress || '').includes(':') ? 6 : 4,
+      timeout: timeoutMs
+    }, response => {
+      const chunks = [];
+      response.on('data', chunk => chunks.push(Buffer.from(chunk)));
+      response.on('end', () => {
+        const buffer = Buffer.concat(chunks);
+        const responseHeaders = response.headers || {};
+        resolve({
+          ok: Number(response.statusCode || 0) >= 200 && Number(response.statusCode || 0) < 300,
+          status: Number(response.statusCode || 0),
+          statusText: response.statusMessage || '',
+          url: String(url),
+          headers: {
+            get(name) {
+              const value = responseHeaders[String(name || '').toLowerCase()];
+              return Array.isArray(value) ? value.join(', ') : (value || '');
+            }
+          },
+          text: async () => buffer.toString('utf8')
+        });
+      });
+    });
+    request.on('timeout', () => request.destroy(new Error('request timeout')));
+    request.on('error', reject);
+    if (body !== null) request.write(body);
+    request.end();
+  });
 }
 
 async function readResponseBody(response) {
@@ -81,6 +164,7 @@ async function requestAuthUrl(options = {}) {
   const response = await fetchWithTimeout(`${gameOrigin}/auth/linuxdo/start`, {
     fetchImpl: options.fetchImpl,
     timeoutMs: options.timeoutMs,
+    localAddress: options.localAddress,
     cache: 'no-store'
   });
   const body = await readResponseBody(response);
@@ -298,6 +382,7 @@ async function submitApproveCurl(rawInput, options = {}) {
   const approveResponse = await fetchWithTimeout(request.url, {
     fetchImpl: options.fetchImpl,
     timeoutMs: options.timeoutMs,
+    localAddress: options.localAddress,
     method: request.method,
     redirect: 'manual',
     headers: request.headers,
@@ -328,6 +413,7 @@ async function submitGameCallbackUrl(url, options = {}) {
   const response = await fetchWithTimeout(url, {
     fetchImpl: options.fetchImpl,
     timeoutMs: options.timeoutMs,
+    localAddress: options.localAddress,
     method: 'GET',
     redirect: 'manual',
     cache: 'no-store'

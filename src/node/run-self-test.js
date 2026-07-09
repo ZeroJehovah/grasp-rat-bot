@@ -5203,8 +5203,10 @@ async function runSelfTest() {
       static CLOSING = 2;
       static CLOSED = 3;
 
-      constructor(url) {
+      constructor(url, protocols, options) {
         this.url = url;
+        this.protocols = protocols;
+        this.options = options || {};
         this.readyState = FakeWebSocket.CONNECTING;
         this.sent = [];
         this.closed = false;
@@ -5563,6 +5565,22 @@ async function runSelfTest() {
       want: 'wss://grasp-rat-game.h-e.top/ws?user_id=42&token=tok+en&compress=gzip%2Cdeflate&extra=1'
     },
     {
+      name: 'browserless http fetch binds local source IP through dispatcher',
+      got: (async () => {
+        let sawDispatcher = false;
+        const response = await browserlessFetchWithTimeout('https://grasp-rat-game.h-e.top/', {
+          localAddress: '10.0.0.101',
+          timeoutMs: 1000,
+          fetchImpl: async (_url, options = {}) => {
+            sawDispatcher = Boolean(options.dispatcher);
+            return fakeResponseForTest({ status: 200, body: { ok: true } });
+          }
+        });
+        return [response.ok, sawDispatcher].join('|');
+      })(),
+      want: 'true|true'
+    },
+    {
       name: 'browserless websocket transport opens dispatches and sends narrow commands',
       got: (async () => {
         const fake = createFakeWebSocketRuntimeForTest();
@@ -5570,10 +5588,11 @@ async function runSelfTest() {
         const messages = [];
         const sent = [];
         const openPromise = openBrowserlessWs({
-          runtime: fake.runtime,
+          runtime: { ...fake.runtime, supportsOptions: true },
           gameOrigin: 'https://grasp-rat-game.h-e.top',
           userId: 7,
           sessionToken: 'ws-token',
+          localAddress: '10.0.0.101',
           connectTimeoutMs: 1000,
           onConnectStart: detail => events.push(`start:${detail.runtime}:${detail.wsUrl.includes('token=ws-token')}`),
           onOpen: detail => events.push(`open:${detail.runtime}`),
@@ -5593,10 +5612,11 @@ async function runSelfTest() {
           events.join(','),
           messages[0]?.data,
           socket.sent.join(','),
-          sent.join(',')
+          sent.join(','),
+          socket.options.localAddress
         ].join('|');
       })(),
-      want: 'start:fake:true,open:fake,close:1000:done:true|frame-1|vel 1 -1,vel 1 -1,shoot 2 3 4 5|vel 1 -1,vel 1 -1,shoot 2 3 4 5'
+      want: 'start:fake:true,open:fake,close:1000:done:true|frame-1|vel 1 -1,vel 1 -1,shoot 2 3 4 5|vel 1 -1,vel 1 -1,shoot 2 3 4 5|10.0.0.101'
     },
     {
       name: 'browserless websocket transport times out unopened sockets',
@@ -10803,6 +10823,20 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'true|true|18767|3'
+    },
+    {
+      name: 'browserless runner config accepts source IP binding',
+      got: (() => {
+        const envConfig = parseBrowserlessRunnerArgs([], {
+          GRASP_RAT_BROWSERLESS_SOURCE_IP: '10.0.0.101'
+        });
+        const cliConfig = parseBrowserlessRunnerArgs(['--source-ip', '10.0.0.145'], {});
+        return [
+          envConfig.sourceIp,
+          cliConfig.sourceIp
+        ].join('|');
+      })(),
+      want: '10.0.0.101|10.0.0.145'
     },
     {
       name: 'browserless runner loop plan resumes only recoverable exits',

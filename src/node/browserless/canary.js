@@ -96,6 +96,7 @@ async function runPreLoginSnapshotSafety(config, state, deps = {}) {
   const response = await (deps.fetchWithTimeout || fetchWithTimeout)(url, {
     fetchImpl,
     timeoutMs: config.httpTimeoutMs || config.wsConnectTimeoutMs || 10000,
+    localAddress: config.sourceIp,
     method: 'GET',
     cache: 'no-store'
   });
@@ -351,10 +352,12 @@ async function runReadOnlyCanary(config, options = {}) {
       wsExtraQuery: config.wsExtraQuery,
       userId: config.userId,
       sessionToken: config.sessionToken,
+      localAddress: config.sourceIp,
       connectTimeoutMs: config.wsConnectTimeoutMs,
       onConnectStart: event => {
         logWs('connect-start', {
-          runtime: event?.runtime || ''
+          runtime: event?.runtime || '',
+          localAddress: event?.localAddress || ''
         });
       },
       onOpen: event => {
@@ -551,6 +554,7 @@ async function runReadOnlyCanary(config, options = {}) {
         gameOrigin: config.gameOrigin,
         userId: config.userId,
         sessionToken: config.sessionToken,
+        localAddress: config.sourceIp,
         timeoutMs: config.httpTimeoutMs || 10000,
         retryMax: config.leaveRetryMax ?? 3,
         retryDelayMs: config.leaveRetryMs ?? 1200

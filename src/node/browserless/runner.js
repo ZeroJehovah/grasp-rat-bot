@@ -57,6 +57,7 @@ function publicConfig(config) {
     wsTraceEnabled: Boolean(config.wsTraceEnabled),
     wsTracePayload: Boolean(config.wsTracePayload),
     wsTraceMaxPayloadChars: Number(config.wsTraceMaxPayloadChars || 0),
+    sourceIp: config.sourceIp || '',
     stateFile: config.stateFile || stateFilePath(config),
     loginPointPresent: hasConfigNumber(config.loginPointX) && hasConfigNumber(config.loginPointY),
     userId: Number(config.userId || 0),
@@ -269,6 +270,7 @@ async function runBrowserlessRunner(config, deps = {}) {
       onAuthUrl: async () => {
         const authUrl = await (deps.requestAuthUrl || requestAuthUrl)({
           gameOrigin: config.gameOrigin,
+          localAddress: config.sourceIp,
           timeoutMs: config.httpTimeoutMs
         });
         updateBrowserlessStateFile(stateFile, {
@@ -283,6 +285,7 @@ async function runBrowserlessRunner(config, deps = {}) {
       onCallback: async input => {
         const result = await (deps.submitCallbackInput || submitCallbackInput)(input, {
           gameOrigin: config.gameOrigin,
+          localAddress: config.sourceIp,
           timeoutMs: config.httpTimeoutMs
         });
         updateBrowserlessStateFile(stateFile, {

@@ -39,6 +39,7 @@ async function leaveOnce(options = {}) {
   const response = await fetchWithTimeout(url, {
     fetchImpl: options.fetchImpl,
     timeoutMs: options.timeoutMs,
+    localAddress: options.localAddress,
     method: 'GET',
     cache: 'no-store'
   });

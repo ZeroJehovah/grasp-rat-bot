@@ -89,6 +89,7 @@ function createWebSocket(runtime, wsUrl, options = {}) {
   if (!runtime.supportsOptions) return new runtime.WebSocket(wsUrl);
   return new runtime.WebSocket(wsUrl, [], {
     headers: { Origin: options.gameOrigin || DEFAULT_GAME_ORIGIN },
+    localAddress: options.localAddress || undefined,
     perMessageDeflate: false
   });
 }
@@ -134,7 +135,7 @@ function openBrowserlessWs(options = {}) {
   const wsUrl = options.wsUrl || buildWsUrl(options);
   const connectTimeoutMs = Math.max(1, Number(options.connectTimeoutMs || DEFAULT_CONNECT_TIMEOUT_MS));
   if (typeof options.onConnectStart === 'function') {
-    options.onConnectStart({ wsUrl, runtime: runtime.name });
+    options.onConnectStart({ wsUrl, runtime: runtime.name, localAddress: options.localAddress || '' });
   }
   const ws = createWebSocket(runtime, wsUrl, options);
   const handle = createTransportHandle(ws, runtime, wsUrl, options);
