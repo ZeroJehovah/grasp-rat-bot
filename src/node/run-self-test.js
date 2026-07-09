@@ -6122,7 +6122,7 @@ async function runSelfTest() {
           decision.input.dataGaps.includes('snapshot-fallback-blocked:active-threat-visible')
         ].join('|');
       })(),
-      want: 'safety-exit|safety|profit-live-snapshot-active-threat|8|realtime|true|true||false|true|true'
+      want: 'safety-exit|safety|profit-live-snapshot-active-threat|8|realtime|true|true||false|true|false'
     },
     {
       name: 'browserless profit live exits instead of chasing coin under combat threat',

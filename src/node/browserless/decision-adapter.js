@@ -298,7 +298,7 @@ function buildBrowserlessStrategyInput(state, options = {}) {
   const visibleTargets = realtimeEntities
     .filter(entity => Number(entity.user_id) !== selfUserId)
     .filter(entity => Number.isFinite(Number(entity.x)) && Number.isFinite(Number(entity.y)));
-  const activeThreats = visibleTargets.filter(entity => (entity.active || entity.profitMetadataActive) && entity.alive !== false);
+  const activeThreats = visibleTargets.filter(entity => entity.active && entity.alive !== false);
   const snapshotActiveThreats = visibleTargets.filter(entity => entity.profitMetadataActive && !entity.active && entity.alive !== false);
   const afkTargets = visibleTargets.filter(entity => {
     if (entity.active || entity.profitMetadataActive || entity.alive === false || entity.invulnerable) return false;
