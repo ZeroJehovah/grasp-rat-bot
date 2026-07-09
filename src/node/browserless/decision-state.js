@@ -70,6 +70,9 @@ function createInitialDecisionState(options = {}) {
     combatTarget: cloneJson(options.combatTarget || null),
     combatAim: cloneJson(options.combatAim || null),
     combatDisadvantageObservation: cloneJson(options.combatDisadvantageObservation || null),
+    browserlessLastSelf: cloneJson(options.browserlessLastSelf || null),
+    browserlessInjury: cloneJson(options.browserlessInjury || null),
+    browserlessPursuit: cloneJson(options.browserlessPursuit || null),
     fleeLock: cloneJson(options.fleeLock || null),
     returnBlockLock: cloneJson(options.returnBlockLock || null),
     returnBlockScan: cloneJson(options.returnBlockScan || null),
@@ -134,6 +137,11 @@ function summarizeBrowserlessDecisionState(state, options = {}) {
       target: redactBoundedValue(state.combatTarget || null),
       aim: redactBoundedValue(state.combatAim || null),
       disadvantageObservation: redactBoundedValue(state.combatDisadvantageObservation || null)
+    },
+    browserlessSafety: {
+      lastSelf: redactBoundedValue(state.browserlessLastSelf || null),
+      injury: redactBoundedValue(state.browserlessInjury || null),
+      pursuit: redactBoundedValue(state.browserlessPursuit || null)
     },
     safety: {
       fleeLock: redactBoundedValue(state.fleeLock || null),

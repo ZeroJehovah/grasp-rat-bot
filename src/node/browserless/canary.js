@@ -191,7 +191,10 @@ async function runReadOnlyCanary(config, options = {}) {
     ...runtimeDefaults,
     userId: config.userId,
     now,
-    controlMode
+    controlMode,
+    decisionIntervalMs,
+    readOnlyProbeMs: durationMs,
+    loopDelayMs: config.loopDelayMs
   });
   const safetyController = options.safetyController || createBrowserlessSafetyController({
     now,

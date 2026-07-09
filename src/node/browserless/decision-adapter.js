@@ -1754,6 +1754,317 @@ function criticalUnknownPressureExit(input, options = {}) {
   };
 }
 
+function browserlessSafetyExitModeEnabled(options = {}) {
+  const mode = String(options.controlMode || '');
+  return options.nonCombatProfit === true
+    || mode === 'non-combat-profit'
+    || mode === 'profit-live'
+    || mode === 'combat-live';
+}
+
+function targetKey(target) {
+  const id = target?.user_id ?? target?.userId ?? target?.id ?? target?.entity_id ?? target?.entityId;
+  return id === null || id === undefined || id === '' ? '' : String(id);
+}
+
+function combatDecisionHandlesVisibleTarget(combat, target, options = {}) {
+  if (!target || options.combatActionEligible === false) return false;
+  const combatTarget = combat?.target || combat?.dryRun?.target || null;
+  const combatKey = targetKey(combatTarget);
+  const currentKey = targetKey(target);
+  return Boolean(combatKey && currentKey && combatKey === currentKey);
+}
+
+function incomingBulletPressure(input) {
+  const selfId = input?.self?.user_id ?? input?.self?.userId ?? input?.userId ?? null;
+  const ownerIds = new Set();
+  let unknownIncoming = false;
+  let incomingCount = 0;
+  for (const bullet of input?.bullets || []) {
+    const ownerId = bulletOwnerId(bullet);
+    if (ownerId === null || ownerId === undefined || ownerId === '') {
+      unknownIncoming = true;
+      incomingCount += 1;
+      continue;
+    }
+    if (selfId !== null && selfId !== undefined && selfId !== '' && String(ownerId) === String(selfId)) continue;
+    ownerIds.add(String(ownerId));
+    incomingCount += 1;
+  }
+  return {
+    ownerIds,
+    unknownIncoming,
+    incomingCount,
+    hasIncoming: unknownIncoming || ownerIds.size > 0
+  };
+}
+
+function pickBrowserlessInjuryPressure(input, options = {}) {
+  const bulletPressure = incomingBulletPressure(input);
+  const maxDistance = Math.max(
+    Number(options.browserlessInjuryThreatRangeCm || 0),
+    Number(options.profitLiveInjuryExitRange || 0),
+    Number(options.activeAvoidMaxDistance || 0),
+    Number(BROWSER_RUNTIME_DEFAULTS.activeAvoidMaxDistance || 0),
+    DEFAULT_PROFIT_LIVE_INJURY_EXIT_RANGE
+  );
+  const candidates = (input?.visibleTargets || [])
+    .filter(target => target?.alive !== false)
+    .filter(target => {
+      const key = targetKey(target);
+      const distance = Number(target.distance);
+      if (key && bulletPressure.ownerIds.has(key)) return true;
+      if (!Number.isFinite(distance) || distance > maxDistance) return false;
+      return Boolean(target.active || target.firing || target.invulnerable || target.profitMetadataActive);
+    })
+    .map(target => {
+      const key = targetKey(target);
+      const distance = Number(target.distance);
+      const bulletOwner = key && bulletPressure.ownerIds.has(key);
+      const unknownFiring = bulletPressure.unknownIncoming && target.firing;
+      const score = (bulletOwner ? 1000000000 : 0)
+        + (unknownFiring ? 700000000 : 0)
+        + (target.firing ? 500000000 : 0)
+        + (target.invulnerable ? 200000000 : 0)
+        + ((target.active || target.profitMetadataActive) ? 100000000 : 0)
+        - (Number.isFinite(distance) ? distance : 0);
+      return { target, score };
+    })
+    .sort((a, b) => b.score - a.score);
+  return {
+    target: candidates[0]?.target || null,
+    ...bulletPressure
+  };
+}
+
+function rememberBrowserlessInjury(input, stateful, options = {}) {
+  if (!stateful || typeof stateful !== 'object') return null;
+  const nowMs = Number(input?.nowMs || Date.now());
+  const self = input?.self || null;
+  const hp = hpValue(self);
+  const key = targetKey(self);
+  const previous = stateful.browserlessLastSelf || null;
+  const recentMs = Math.max(1000, Number(options.browserlessInjuryLeaveRecentMs || 6000));
+  const minDrop = Math.max(0.1, Number(options.browserlessInjuryLeaveMinHpDrop || 1));
+  if (!self || hp === null || !key) {
+    stateful.browserlessLastSelf = null;
+    return stateful.browserlessInjury || null;
+  }
+  if (previous && String(previous.key || '') === key) {
+    const previousHp = Number(previous.hp);
+    const hpDrop = previousHp - hp;
+    if (Number.isFinite(previousHp) && hpDrop >= minDrop) {
+      const pressure = pickBrowserlessInjuryPressure(input, options);
+      stateful.browserlessInjury = {
+        at: nowMs,
+        previousHp,
+        currentHp: hp,
+        hpDrop: Math.round(hpDrop * 10) / 10,
+        targetKey: targetKey(pressure.target),
+        target: summarizeTarget(pressure.target),
+        hasIncoming: pressure.hasIncoming,
+        unknownIncoming: pressure.unknownIncoming,
+        incomingCount: pressure.incomingCount,
+        reason: 'self-hp-drop'
+      };
+    }
+  }
+  stateful.browserlessLastSelf = {
+    key,
+    hp,
+    x: numberOrNull(self.x),
+    y: numberOrNull(self.y),
+    at: nowMs
+  };
+  const injury = stateful.browserlessInjury || null;
+  if (injury && nowMs - Number(injury.at || 0) > recentMs) {
+    stateful.browserlessInjury = null;
+    return null;
+  }
+  return stateful.browserlessInjury || null;
+}
+
+function buildBrowserlessInjuryLeaveDecision(input, stateful, combat, options = {}) {
+  const injury = rememberBrowserlessInjury(input, stateful, options);
+  if (options.browserlessInjuryLeaveEnabled === false) return null;
+  if (!browserlessSafetyExitModeEnabled(options) || !input?.self || !injury) return null;
+  const currentPressure = pickBrowserlessInjuryPressure(input, options);
+  const target = currentPressure.target || null;
+  if (combat?.target && options.combatActionEligible !== false) return null;
+  if (!target && !injury.hasIncoming && !currentPressure.hasIncoming) return null;
+  return {
+    kind: 'safety-exit',
+    band: 'safety',
+    reason: 'injury-leave',
+    shouldLeave: true,
+    stopMotion: true,
+    self: summarizeTarget(input.self),
+    target: summarizeTarget(target) || injury.target || null,
+    injury: {
+      previousHp: numberOrNull(injury.previousHp),
+      currentHp: hpValue(input.self),
+      hpDrop: numberOrNull(injury.hpDrop),
+      ageMs: Math.max(0, Math.round(Number(input.nowMs || Date.now()) - Number(injury.at || input.nowMs || Date.now()))),
+      hasIncoming: Boolean(injury.hasIncoming || currentPressure.hasIncoming),
+      unknownIncoming: Boolean(injury.unknownIncoming || currentPressure.unknownIncoming),
+      incomingCount: Number(currentPressure.incomingCount || injury.incomingCount || 0)
+    }
+  };
+}
+
+function browserlessPursuitThresholdMs(self, threat, options = {}) {
+  const normalMs = Math.max(0, Number(options.pursuitLeaveMs ?? BROWSER_RUNTIME_DEFAULTS.pursuitLeaveMs ?? 300000));
+  const nonFullHp = isInjuredSelf(self, options);
+  const invulnerable = Boolean(threat?.invulnerable);
+  const candidates = [normalMs];
+  if (nonFullHp) candidates.push(Math.max(0, Number(options.pursuitLeaveNonFullHpMs ?? BROWSER_RUNTIME_DEFAULTS.pursuitLeaveNonFullHpMs ?? normalMs)));
+  if (invulnerable) candidates.push(Math.max(0, Number(options.pursuitLeaveInvulnerableMs ?? BROWSER_RUNTIME_DEFAULTS.pursuitLeaveInvulnerableMs ?? normalMs)));
+  if (nonFullHp && invulnerable) {
+    candidates.push(Math.max(0, Number(options.pursuitLeaveNonFullHpInvulnerableMs
+      ?? BROWSER_RUNTIME_DEFAULTS.pursuitLeaveNonFullHpInvulnerableMs
+      ?? options.pursuitLeaveInvulnerableMs
+      ?? options.pursuitLeaveNonFullHpMs
+      ?? normalMs)));
+  }
+  return Math.max(0, Math.min(...candidates.filter(value => Number.isFinite(value))));
+}
+
+function browserlessPursuitPressure(input, threat, previous, options = {}) {
+  if (!input?.self || !threat || threat.alive === false) return null;
+  const distance = Number(threat.distance ?? distanceBetween(input.self, threat));
+  const trackRadius = Math.max(0, Number(options.pursuitTrackRadius ?? BROWSER_RUNTIME_DEFAULTS.pursuitTrackRadius ?? 42000));
+  if (!Number.isFinite(distance) || distance > trackRadius) return null;
+  const id = targetKey(threat);
+  if (!id) return null;
+  const vx = Number(threat.vx || 0);
+  const vy = Number(threat.vy || 0);
+  const speedValue = Math.max(0, Number(threat.speed ?? entitySpeed(threat)) || 0);
+  const tx = Number(input.self.x) - Number(threat.x);
+  const ty = Number(input.self.y) - Number(threat.y);
+  const d = Math.max(1, Math.hypot(tx, ty));
+  const towardScore = speedValue > 0 ? ((vx * tx) + (vy * ty)) / (speedValue * d) : 0;
+  const closingDistance = previous && String(previous.id || '') === id
+    ? Number(previous.distance) - distance
+    : 0;
+  const dangerRadius = Math.max(0, Number(options.dangerRadius ?? BROWSER_RUNTIME_DEFAULTS.dangerRadius ?? 17000));
+  const cautionRadius = Math.max(0, Number(options.activeCautionRadius ?? BROWSER_RUNTIME_DEFAULTS.activeCautionRadius ?? 23000));
+  const cautionMargin = Math.max(0, Number(options.activeCautionExitMargin ?? BROWSER_RUNTIME_DEFAULTS.activeCautionExitMargin ?? 0));
+  const towardMin = Number(options.pursuitTowardCosMin ?? BROWSER_RUNTIME_DEFAULTS.pursuitTowardCosMin ?? 0.25);
+  const closingMin = Math.max(0, Number(options.pursuitClosingMinDistance ?? BROWSER_RUNTIME_DEFAULTS.pursuitClosingMinDistance ?? 250));
+  const closePressure = distance <= dangerRadius;
+  const cautionPressure = distance <= cautionRadius + cautionMargin;
+  const towardPressure = cautionPressure && towardScore >= towardMin;
+  const closingPressure = cautionPressure && closingDistance >= closingMin;
+  const firingPressure = Boolean(threat.firing && cautionPressure);
+  const invulnerablePressure = Boolean(threat.invulnerable && distance <= Math.max(cautionRadius, Number(options.activeAvoidMaxDistance || BROWSER_RUNTIME_DEFAULTS.activeAvoidMaxDistance || 0)));
+  if (!closePressure && !towardPressure && !closingPressure && !firingPressure && !invulnerablePressure) return null;
+  return {
+    threat,
+    id,
+    score: (firingPressure ? 50000 : 0)
+      + (closePressure ? 30000 : 0)
+      + (invulnerablePressure ? 20000 : 0)
+      + Math.max(0, towardScore) * 10000
+      + Math.max(0, closingDistance)
+      - distance / 10,
+    reason: firingPressure ? 'firing-threat'
+      : closePressure ? 'inside-danger-radius'
+        : invulnerablePressure ? 'invulnerable-pressure'
+          : towardPressure ? 'moving-toward-self'
+            : 'closing-distance',
+    distance,
+    speed: speedValue,
+    moving: Boolean(threat.moving),
+    towardScore,
+    closingDistance
+  };
+}
+
+function updateBrowserlessPursuit(input, stateful, combat, options = {}) {
+  if (!stateful || typeof stateful !== 'object') return null;
+  if (!browserlessSafetyExitModeEnabled(options) || !input?.self) {
+    stateful.browserlessPursuit = null;
+    return null;
+  }
+  const nowMs = Number(input.nowMs || Date.now());
+  const previous = stateful.browserlessPursuit || null;
+  const candidates = (input.avoidanceThreats || [])
+    .map(threat => browserlessPursuitPressure(input, threat, previous, options))
+    .filter(Boolean)
+    .sort((a, b) => b.score - a.score);
+  const picked = candidates[0] || null;
+  const loopGapGraceMs = Number.isFinite(Number(options.loopDelayMs))
+    ? Number(options.loopDelayMs) + Math.max(10000, Number(options.decisionIntervalMs || 0) * 5)
+    : 0;
+  const lostGraceMs = Math.max(0, Number(
+    options.browserlessPursuitLostGraceMs
+      ?? Math.max(Number(options.pursuitLostGraceMs ?? BROWSER_RUNTIME_DEFAULTS.pursuitLostGraceMs ?? 10000), loopGapGraceMs)
+  ));
+  if (!picked) {
+    if (previous && nowMs - Number(previous.lastSeenAt || 0) <= lostGraceMs) {
+      stateful.browserlessPursuit = {
+        ...previous,
+        active: false,
+        durationMs: Math.max(0, Number(previous.lastSeenAt || nowMs) - Number(previous.startedAt || nowMs))
+      };
+      return stateful.browserlessPursuit;
+    }
+    stateful.browserlessPursuit = null;
+    return null;
+  }
+  const same = previous && String(previous.id || '') === String(picked.id)
+    && nowMs - Number(previous.lastSeenAt || 0) <= lostGraceMs;
+  const combatSuppressed = combatDecisionHandlesVisibleTarget(combat, picked.threat, options);
+  const startedAt = combatSuppressed ? nowMs : (same ? Number(previous.startedAt || nowMs) : nowMs);
+  const thresholdMs = browserlessPursuitThresholdMs(input.self, picked.threat, options);
+  stateful.browserlessPursuit = {
+    id: picked.id,
+    name: picked.threat.name || '',
+    startedAt,
+    lastSeenAt: nowMs,
+    durationMs: Math.max(0, nowMs - startedAt),
+    distance: Math.round(picked.distance),
+    speed: Math.round(picked.speed),
+    moving: Boolean(picked.moving),
+    active: true,
+    reason: picked.reason,
+    towardScore: Math.round(picked.towardScore * 1000) / 1000,
+    closingDistance: Math.round(picked.closingDistance),
+    thresholdMs,
+    invulnerable: Boolean(picked.threat.invulnerable),
+    nonFullHp: isInjuredSelf(input.self, options),
+    combatSuppressed,
+    target: summarizeTarget(picked.threat)
+  };
+  return stateful.browserlessPursuit;
+}
+
+function buildBrowserlessPursuitLeaveDecision(input, stateful, combat, options = {}) {
+  if (options.browserlessPursuitLeaveEnabled === false) return null;
+  const pursuit = updateBrowserlessPursuit(input, stateful, combat, options);
+  if (!pursuit || !pursuit.active || pursuit.combatSuppressed) return null;
+  if (Number(pursuit.durationMs || 0) < Number(pursuit.thresholdMs || 0)) return null;
+  return {
+    kind: 'safety-exit',
+    band: 'safety',
+    reason: 'pursuit-leave',
+    shouldLeave: true,
+    stopMotion: true,
+    self: summarizeTarget(input.self),
+    target: pursuit.target || null,
+    pursuit: {
+      id: pursuit.id,
+      name: pursuit.name,
+      durationMs: Math.round(Number(pursuit.durationMs || 0)),
+      thresholdMs: Math.round(Number(pursuit.thresholdMs || 0)),
+      distance: pursuit.distance,
+      reason: pursuit.reason,
+      invulnerable: Boolean(pursuit.invulnerable),
+      nonFullHp: Boolean(pursuit.nonFullHp)
+    }
+  };
+}
+
 function buildCombatDecision(input, stateful = {}, options = {}) {
   const combatLiveEnabled = (options.controlMode === 'combat-live' || options.controlMode === 'profit-live') && options.combatEnabled === true;
   const combat = buildBrowserlessCombatDryRun({
@@ -1963,6 +2274,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
   const combatLiveEnabled = (options.controlMode === 'combat-live' || profitLive) && options.combatEnabled === true;
   const combatDecisionEnabled = options.combatDecisionEnabled !== false && !nonCombatProfit && (!profitLive || options.combatEnabled === true);
   const frameAge = Number(input.realtime.frameAgeMs);
+  const realtimeStale = Number.isFinite(frameAge) && frameAge > staleSelfMs;
   const opportunity = buildOpportunityDecision(input, stateful, {
     ...options,
     includeAfkProfitTargets: nonCombatProfit ? false : options.includeAfkProfitTargets,
@@ -1974,6 +2286,16 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     ? buildHighValueVisibleCoinPriorityDecision(input, combat, options)
     : null;
   const safetyAction = profitLiveSafetyDecision(input, combat, stateful, options, opportunity.action);
+  const safetyContextOptions = {
+    ...options,
+    combatActionEligible
+  };
+  const injuryLeaveAction = input.self && !realtimeStale
+    ? buildBrowserlessInjuryLeaveDecision(input, stateful, combat, safetyContextOptions)
+    : null;
+  const pursuitLeaveAction = input.self && !realtimeStale
+    ? buildBrowserlessPursuitLeaveDecision(input, stateful, combat, safetyContextOptions)
+    : null;
   const hardSafetyAction = safetyActionIsHardLeave(safetyAction) ? safetyAction : null;
   const combatExitAction = combat.exitAction || null;
   const safetyYieldsToHighValueCoin = Boolean(
@@ -2015,7 +2337,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
   if (!input.self) {
     reason = 'missing-realtime-self';
     action.reason = reason;
-  } else if (Number.isFinite(frameAge) && frameAge > staleSelfMs) {
+  } else if (realtimeStale) {
     reason = 'stale-realtime-self';
     action.reason = reason;
   } else if (hardSafetyAction) {
@@ -2028,6 +2350,16 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     band = combatExitAction.band;
     reason = combatExitAction.reason;
     action = combatExitAction;
+  } else if (injuryLeaveAction) {
+    kind = injuryLeaveAction.kind;
+    band = injuryLeaveAction.band;
+    reason = injuryLeaveAction.reason;
+    action = injuryLeaveAction;
+  } else if (pursuitLeaveAction) {
+    kind = pursuitLeaveAction.kind;
+    band = pursuitLeaveAction.band;
+    reason = pursuitLeaveAction.reason;
+    action = pursuitLeaveAction;
   } else if (immediateSafetyAction) {
     kind = immediateSafetyAction.kind;
     band = immediateSafetyAction.band;
@@ -2107,7 +2439,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     reason = 'no-profitable-candidate';
     action.reason = reason;
   }
-  if (input.self && !(Number.isFinite(frameAge) && frameAge > staleSelfMs)) {
+  if (input.self && !realtimeStale) {
     const selectedAction = attachOpportunisticShotDecision(action, input, options);
     if (selectedAction !== action) {
       action = selectedAction;

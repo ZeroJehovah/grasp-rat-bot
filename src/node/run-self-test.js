@@ -8222,6 +8222,113 @@ async function runSelfTest() {
       want: 'safety-exit|safety|profit-live-critical-unknown-pressure|true|1|no-target'
     },
     {
+      name: 'browserless profit live exits after injury under unattributed combat pressure',
+      got: (() => {
+        const stateful = {};
+        const base = {
+          userId: 7,
+          realtime: {
+            tick: 62,
+            frameAgeMs: 100,
+            self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+            entities: [
+              { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+              { entity_id: 2, user_id: 8, name: 'far-pressure', x: 20000, y: 0, hp: 80, firing: true, drop: 12 }
+            ],
+            bullets: [
+              { owner_user_id: 8, start_x: 20000, start_y: 0, target_x: 0, target_y: 0, created_tick: 40, expire_tick: 90, speed_per_tick: 500 }
+            ],
+            coinDrops: []
+          },
+          fallback: { coinDrops: [] }
+        };
+        buildBrowserlessDecision(base, stateful, {
+          nowMs: 1000,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          combatAttackRange: 11000,
+          combatCriticalHp: 20
+        });
+        const injured = {
+          ...base,
+          realtime: {
+            ...base.realtime,
+            tick: 63,
+            self: { ...base.realtime.self, hp: 73 },
+            entities: [
+              { ...base.realtime.entities[0], hp: 73 },
+              base.realtime.entities[1]
+            ]
+          }
+        };
+        const decision = buildBrowserlessDecision(injured, stateful, {
+          nowMs: 2000,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          combatAttackRange: 11000,
+          combatCriticalHp: 20
+        });
+        return [
+          decision.kind,
+          decision.band,
+          decision.reason,
+          decision.action.shouldLeave,
+          decision.action.target.userId,
+          decision.action.injury.previousHp,
+          decision.action.injury.currentHp,
+          decision.combat.target?.userId || 'no-target'
+        ].join('|');
+      })(),
+      want: 'safety-exit|safety|injury-leave|true|8|100|73|no-target'
+    },
+    {
+      name: 'browserless profit live exits after sustained pursuit',
+      got: (() => {
+        const stateful = {};
+        const stateAt = (tick, nowMs) => ({
+          userId: 7,
+          realtime: {
+            tick,
+            frameAgeMs: 100,
+            self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 90, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+            entities: [
+              { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 90, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+              { entity_id: 2, user_id: 8, name: 'pursuer', x: 10000, y: 0, hp: 100, current_join_mode: 'Active', drop: 1 }
+            ],
+            bullets: [],
+            coinDrops: []
+          },
+          fallback: { coinDrops: [] },
+          nowMs
+        });
+        const options = {
+          controlMode: 'profit-live',
+          combatEnabled: false,
+          pursuitLeaveNonFullHpMs: 90000,
+          pursuitLeaveMs: 300000,
+          loopDelayMs: 30000,
+          decisionIntervalMs: 1000,
+          dangerRadius: 17000,
+          activeCautionRadius: 23000
+        };
+        buildBrowserlessDecision(stateAt(62, 1000), stateful, { ...options, nowMs: 1000 });
+        buildBrowserlessDecision(stateAt(63, 31000), stateful, { ...options, nowMs: 31000 });
+        buildBrowserlessDecision(stateAt(64, 61000), stateful, { ...options, nowMs: 61000 });
+        const decision = buildBrowserlessDecision(stateAt(65, 91000), stateful, { ...options, nowMs: 91000 });
+        return [
+          decision.kind,
+          decision.band,
+          decision.reason,
+          decision.action.shouldLeave,
+          decision.action.target.userId,
+          decision.action.pursuit.durationMs,
+          decision.action.pursuit.thresholdMs,
+          stateful.browserlessPursuit.reason
+        ].join('|');
+      })(),
+      want: 'safety-exit|safety|pursuit-leave|true|8|90000|90000|inside-danger-radius'
+    },
+    {
       name: 'browserless combat low hp no-damage exits',
       got: (() => {
         const stateful = {
