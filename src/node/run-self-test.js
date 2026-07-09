@@ -108,6 +108,9 @@ const {
   summarizeAudit: summarizeBrowserlessCanaryAudit
 } = require('../../scripts/browserless-canary-audit');
 const {
+  summarizeAudit: summarizeBrowserlessActionParityAudit
+} = require('../../scripts/browserless-action-parity-audit');
+const {
   auditDeployment: auditBrowserlessDeployment
 } = require('../../scripts/browserless-deployment-audit');
 const {
@@ -7885,6 +7888,102 @@ async function runSelfTest() {
         ].join('|');
       }),
       want: '3|2|1|1|1|summary.json|3'
+    },
+    {
+      name: 'browserless action parity audit normalizes known decision cases',
+      got: withTempDirForTest(async dir => {
+        const dayDir = path.join(dir, '2026-07-08');
+        fs.mkdirSync(dayDir, { recursive: true });
+        const write = (stream, entry) => {
+          fs.appendFileSync(path.join(dayDir, `${stream}.jsonl`), `${JSON.stringify(entry)}\n`);
+        };
+        const decision = (at, action) => write('decisions', {
+          at,
+          type: 'decision',
+          detail: {
+            kind: action.kind,
+            band: action.band,
+            reason: action.reason,
+            action
+          }
+        });
+        decision('2026-07-08T01:00:00.000Z', {
+          kind: 'coin',
+          band: 'profit',
+          reason: 'best-opportunity-coin',
+          target: { type: 'coin', id: 'coin-safe', authority: 'realtime', amount: 1 }
+        });
+        decision('2026-07-08T01:00:01.000Z', {
+          kind: 'attack',
+          band: 'profit',
+          reason: 'best-opportunity-enemy',
+          target: { type: 'enemy', userId: 42, authority: 'realtime', drop: 12, active: false, moving: false, firing: false }
+        });
+        decision('2026-07-08T01:00:02.000Z', {
+          kind: 'safety-exit',
+          band: 'safety',
+          reason: 'profit-live-active-threat',
+          shouldLeave: true,
+          target: { type: 'enemy', userId: 43, authority: 'realtime', active: false, moving: true, firing: false }
+        });
+        decision('2026-07-08T01:00:03.000Z', {
+          kind: 'combat-live',
+          band: 'combat',
+          reason: 'combat-live-realtime',
+          dx: 1,
+          dy: -1,
+          shoot: true,
+          target: { type: 'enemy', userId: 44, authority: 'realtime', active: false, moving: false, firing: true }
+        });
+        decision('2026-07-08T01:00:04.000Z', {
+          kind: 'safety-exit',
+          band: 'safety',
+          reason: 'profit-live-active-threat',
+          shouldLeave: true,
+          target: { type: 'enemy', userId: 45, authority: 'realtime', active: true, moving: true, firing: false }
+        });
+        decision('2026-07-08T01:00:05.000Z', {
+          kind: 'recover',
+          band: 'recover',
+          reason: 'wait-for-full-stamina-and-hp'
+        });
+        decision('2026-07-08T01:00:06.000Z', {
+          kind: 'leave',
+          band: 'exit',
+          reason: 'nearest-coin-stamina-budget',
+          shouldLeave: true
+        });
+        decision('2026-07-08T01:00:07.000Z', {
+          kind: 'coin',
+          band: 'profit',
+          reason: 'daily-stamina-final-coin',
+          target: { type: 'coin', id: 'daily-final', authority: 'realtime', amount: 1 }
+        });
+        decision('2026-07-08T01:00:08.000Z', {
+          kind: 'seek-coin',
+          band: 'profit',
+          reason: 'best-opportunity-visible-coin',
+          target: { type: 'coin', id: 'snapshot-coin', authority: 'snapshot', snapshotOnly: true, amount: 1 }
+        });
+        const summary = summarizeBrowserlessActionParityAudit({ logDir: dir, day: '2026-07-08' });
+        const combat = summary.records.find(record => record.kind === 'combat-live');
+        const activeExit = summary.missing.find(record => record.targetId === '45');
+        const snapshot = summary.knownTransportExceptions.find(record => record.targetId === 'snapshot-coin');
+        return [
+          summary.ok,
+          summary.counts.actions,
+          summary.counts.byStatus.aligned,
+          summary.counts.byStatus['missing-browser-branch'],
+          summary.counts.byStatus['known-transport-exception'],
+          combat?.shoot,
+          combat?.dx,
+          combat?.dy,
+          combat?.authority,
+          activeExit?.classification?.key,
+          snapshot?.classification?.key
+        ].join('|');
+      }),
+      want: 'false|9|6|2|1|true|1|-1|realtime|browserless-safety-exit|snapshot-coin-fallback'
     },
     {
       name: 'browserless canary audit validates finish and forced stop evidence',
