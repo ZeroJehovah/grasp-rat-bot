@@ -14,6 +14,7 @@ Read only what is needed for the current task:
 - [coin-balance-reporting.md](coin-balance-reporting.md): known-good Elysiver API method, auth variables, monthly coin report command, and fetch retry behavior.
 - [test-coverage.md](test-coverage.md): current self-test/static/replay coverage notes and known validation gaps.
 - [browserless-vps-migration.md](browserless-vps-migration.md): long-running browserless VPS runner migration goal, auth/WS findings, demo status, rollout plan, and VPS log handoff notes.
+- [browserless-vps-observation.md](browserless-vps-observation.md): short live VPS observation handoff with known issues, fixes, current watch items, and latest Drop/stamina baseline.
 - [browserless-runner-development-plan.md](browserless-runner-development-plan.md): commit-by-commit implementation plan for turning the headless demo into the production browserless VPS runner.
 - [browserless-runner-operator.md](browserless-runner-operator.md): production browserless runner commands, status API, state file, and local log operation notes.
 - [chase-mode-development-plan.md](chase-mode-development-plan.md): original implementation plan for chase mode; current durable behavior/config/model notes live in the current strategy, config, and data-model docs.

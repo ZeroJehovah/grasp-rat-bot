@@ -78,6 +78,7 @@ const {
   parseBrowserlessRunnerArgs
 } = require('./browserless/config');
 const {
+  browserlessLoopPlan,
   runBrowserlessRunner,
   runBrowserlessRunnerSelfTest
 } = require('./browserless/runner');
@@ -7849,6 +7850,60 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'true|true|18767|3'
+    },
+    {
+      name: 'browserless runner loop plan resumes only recoverable exits',
+      got: (() => {
+        const config = { once: false, loopDelayMs: 1234 };
+        const activeThreat = browserlessLoopPlan({
+          ok: false,
+          canary: {
+            runId: 'profit-live-test',
+            error: 'profit-live-snapshot-active-threat',
+            safety: { event: { reason: 'profit-live-snapshot-active-threat' } }
+          }
+        }, config);
+        const explicitStop = browserlessLoopPlan({
+          ok: false,
+          canary: {
+            runId: 'stop-test',
+            error: 'explicit-stop',
+            safety: { event: { reason: 'explicit-stop' } }
+          }
+        }, config);
+        const noSelf = browserlessLoopPlan({
+          ok: false,
+          canary: {
+            runId: 'death-risk-test',
+            error: 'no-self',
+            safety: { event: { reason: 'no-self' } }
+          }
+        }, config);
+        const auth403 = browserlessLoopPlan({
+          ok: false,
+          canary: {
+            runId: 'auth-test',
+            error: 'websocket unexpected response 403'
+          }
+        }, config);
+        const snapshotRetry = browserlessLoopPlan({
+          ok: false,
+          canary: {
+            runId: 'unsafe-point-test',
+            error: 'snapshot safety not confirmed: unsafe'
+          }
+        }, config);
+        return [
+          activeThreat.continue,
+          activeThreat.delayMs,
+          explicitStop.continue,
+          noSelf.continue,
+          auth403.continue,
+          snapshotRetry.continue,
+          snapshotRetry.delayMs
+        ].join('|');
+      })(),
+      want: 'true|1234|false|false|false|true|60000'
     },
     {
       name: 'browserless runner dry-run and fake read-only path write redacted logs',

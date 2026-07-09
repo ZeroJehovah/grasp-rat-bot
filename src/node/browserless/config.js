@@ -25,6 +25,7 @@ const DEFAULTS = {
   leaveRetryMs: 1200,
   httpTimeoutMs: 10000,
   decisionIntervalMs: 1000,
+  loopDelayMs: 30000,
   staleSelfMs: 3000,
   noSelfGraceMs: 3000,
   staminaExhaustedBelowMs: 200,
@@ -94,6 +95,7 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
     leaveRetryMs: numberEnv(env.GRASP_RAT_BROWSERLESS_LEAVE_RETRY_MS, DEFAULTS.leaveRetryMs),
     httpTimeoutMs: numberEnv(env.GRASP_RAT_BROWSERLESS_HTTP_TIMEOUT_MS, DEFAULTS.httpTimeoutMs),
     decisionIntervalMs: numberEnv(env.GRASP_RAT_BROWSERLESS_DECISION_INTERVAL_MS, DEFAULTS.decisionIntervalMs),
+    loopDelayMs: numberEnv(env.GRASP_RAT_BROWSERLESS_LOOP_DELAY_MS, DEFAULTS.loopDelayMs),
     staleSelfMs: numberEnv(env.GRASP_RAT_BROWSERLESS_STALE_SELF_MS, DEFAULTS.staleSelfMs),
     noSelfGraceMs: numberEnv(env.GRASP_RAT_BROWSERLESS_NO_SELF_GRACE_MS, DEFAULTS.noSelfGraceMs),
     staminaExhaustedBelowMs: numberEnv(env.GRASP_RAT_BROWSERLESS_STAMINA_EXHAUSTED_BELOW_MS, DEFAULTS.staminaExhaustedBelowMs),
@@ -177,6 +179,8 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
       config.snapshotPath = argv[++i] || config.snapshotPath;
     } else if (arg === '--decision-interval-ms') {
       config.decisionIntervalMs = numberEnv(argv[++i], config.decisionIntervalMs);
+    } else if (arg === '--loop-delay-ms') {
+      config.loopDelayMs = numberEnv(argv[++i], config.loopDelayMs);
     } else if (arg === '--stale-self-ms') {
       config.staleSelfMs = numberEnv(argv[++i], config.staleSelfMs);
     } else if (arg === '--no-self-grace-ms') {
@@ -243,6 +247,7 @@ function usage() {
     '  --frame-gap-alert-ms <ms>  Read-only canary frame-gap failure threshold. Default: 5000',
     '  --snapshot-path <path>    Snapshot path for pre-login safety. Default: /snapshot',
     '  --decision-interval-ms <ms>  Dry-run decision log/status interval. Default: 1000',
+    '  --loop-delay-ms <ms>    Delay before the next non-once live cycle after recoverable exit. Default: 30000',
     '  --stale-self-ms <ms>      Safety stale-self threshold. Default: 3000',
     '  --no-self-grace-ms <ms>   Safety no-self grace window. Default: 3000',
     '  --stamina-exhausted-below-ms <ms>  Safety stamina floor. Default: 200',

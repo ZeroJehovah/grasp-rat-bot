@@ -44,6 +44,7 @@ function publicConfig(config) {
     readOnlyProbeMs: Number(config.readOnlyProbeMs || 0),
     frameGapAlertMs: Number(config.frameGapAlertMs || 0),
     decisionIntervalMs: Number(config.decisionIntervalMs || 0),
+    loopDelayMs: Number(config.loopDelayMs || 0),
     staleSelfMs: Number(config.staleSelfMs || 0),
     noSelfGraceMs: Number(config.noSelfGraceMs || 0),
     staminaExhaustedBelowMs: Number(config.staminaExhaustedBelowMs || 0),
@@ -92,8 +93,51 @@ function learnedLoginPointFromCanary(canary) {
   };
 }
 
+function browserlessLoopPlan(result, config = {}) {
+  const canary = result?.canary || null;
+  const safetyReason = canary?.safety?.event?.reason || canary?.safety?.leaveFailure?.reason || '';
+  const error = String(canary?.error || result?.reason || result?.error || '');
+  const runId = canary?.runId || '';
+  const delayMs = Math.max(1000, Number(config.loopDelayMs || 30000));
+  const stop = reason => ({
+    continue: false,
+    reason,
+    delayMs: 0,
+    previousRunId: runId,
+    error,
+    safetyReason
+  });
+  const resume = reason => ({
+    continue: true,
+    reason,
+    delayMs: /^snapshot safety not confirmed:/i.test(error) ? Math.max(delayMs, 60000) : delayMs,
+    previousRunId: runId,
+    error,
+    safetyReason
+  });
+
+  if (config.once) return stop('once');
+  if (!result) return stop('missing-result');
+  if (result.reason === 'missing-manual-session') return stop('missing-manual-session');
+  if (safetyReason === 'explicit-stop') return stop('explicit-stop');
+  if (safetyReason === 'direct-leave-failed' || canary?.safety?.leaveFailure) return stop('direct-leave-failed');
+  if (safetyReason === 'no-self') return stop('no-self');
+  if (/websocket unexpected response 403|http 403|missing-manual-session|login-point-bootstrap-failed/i.test(error)) {
+    return stop(error || 'non-recoverable-error');
+  }
+  if (result.ok) return resume('cycle-complete');
+  if (['profit-live-snapshot-active-threat', 'frame-gap', 'stale-self', 'ws-closed', 'ws-error'].includes(safetyReason)) {
+    return resume(safetyReason);
+  }
+  if (/^snapshot safety not confirmed:/i.test(error)) return resume('snapshot-safety-retry');
+  return stop(error || safetyReason || 'unknown-error');
+}
+
 async function runBrowserlessRunner(config, deps = {}) {
   const now = typeof deps.now === 'function' ? deps.now : Date.now;
+  const sleep = typeof deps.sleep === 'function'
+    ? deps.sleep
+    : ms => new Promise(resolve => setTimeout(resolve, ms));
   const logStore = deps.logStore || createLocalLogStore({ logDir: config.logDir, now });
   const safetyController = deps.safetyController || createBrowserlessSafetyController({
     now,
@@ -113,7 +157,7 @@ async function runBrowserlessRunner(config, deps = {}) {
   const envLoginPointProvided = hasConfigNumber(config.loginPointX) && hasConfigNumber(config.loginPointY);
   const persistedLoginPoint = loginPointFromAnyState(persisted);
   config = hydrateConfigFromState(config, persisted);
-  const loginPointProvided = hasConfigNumber(config.loginPointX) && hasConfigNumber(config.loginPointY);
+  let loginPointProvided = hasConfigNumber(config.loginPointX) && hasConfigNumber(config.loginPointY);
   persisted = writeBrowserlessStateFile(stateFile, {
     ...persisted,
     updatedAt: new Date(now()).toISOString(),
@@ -277,117 +321,193 @@ async function runBrowserlessRunner(config, deps = {}) {
   }
 
   const readOnlyCanary = deps.runReadOnlyOnce || runReadOnlyCanary;
-  if (!loginPointProvided && config.controlMode === 'read-only') {
-    const bootstrap = await readOnlyCanary(config, {
+  while (true) {
+    loginPointProvided = hasConfigNumber(config.loginPointX) && hasConfigNumber(config.loginPointY);
+    if (!loginPointProvided && config.controlMode === 'read-only') {
+      const bootstrap = await readOnlyCanary(config, {
+        logStore,
+        now,
+        persistedState: readBrowserlessStateFile(stateFile),
+        safetyController,
+        allowMissingLoginPointBootstrap: true
+      });
+      const learned = learnedLoginPointFromCanary(bootstrap);
+      if (learned.loginPoint) {
+        updateBrowserlessStateFile(stateFile, {
+          loginPointSafety: {
+            ok: false,
+            reason: 'learned-login-point-pending-snapshot-safety',
+            point: learned.loginPoint,
+            checkedAt: bootstrap.completedAt || new Date(now()).toISOString()
+          },
+          current: {
+            self: learned.finalSelf
+          },
+          probes: {
+            lastReadOnlyProbe: bootstrap
+          }
+        }, { updatedAt: new Date(now()).toISOString() });
+        persisted = readBrowserlessStateFile(stateFile);
+        config = hydrateConfigFromState(config, persisted);
+        logStore.append('runner', 'login-point-learned', {
+          point: learned.loginPoint,
+          bootstrapRunId: bootstrap.runId || ''
+        });
+      } else {
+        const result = { ok: false, mode: config.controlMode || 'read-only', reason: 'login-point-bootstrap-failed', canary: bootstrap };
+        updateBrowserlessStateFile(stateFile, {
+          runner: {
+            running: false,
+            mode: config.controlMode || 'read-only',
+            lastRun: result,
+            lastError: result.reason
+          },
+          probes: {
+            lastReadOnlyProbe: bootstrap
+          }
+        }, { updatedAt: new Date(now()).toISOString() });
+        logStore.append('runner', 'runner-stop', result);
+        return result;
+      }
+    }
+    const canary = await readOnlyCanary(config, {
       logStore,
       now,
       persistedState: readBrowserlessStateFile(stateFile),
       safetyController,
-      allowMissingLoginPointBootstrap: true
+      onDecision: decision => {
+        updateBrowserlessStateFile(stateFile, decisionStatePatch(decision), {
+          updatedAt: new Date(now()).toISOString()
+        });
+      },
+      onAction: (action, context = {}) => {
+        updateBrowserlessStateFile(stateFile, {
+          runner: {
+            currentAction: {
+              ...(action || {}),
+              actionState: context.actionState || null
+            }
+          },
+          current: {
+            action: {
+              ...(action || {}),
+              actionState: context.actionState || null
+            }
+          }
+        }, {
+          updatedAt: new Date(now()).toISOString()
+        });
+      }
     });
-    const learned = learnedLoginPointFromCanary(bootstrap);
-    if (learned.loginPoint) {
-      updateBrowserlessStateFile(stateFile, {
+    const { finalSelf, loginPoint: learnedLoginPoint } = learnedLoginPointFromCanary(canary);
+    const result = { ok: Boolean(canary?.ok), mode: config.controlMode || 'read-only', canary: canary || null };
+    const finalDecisionPatch = canary?.decisions?.last ? decisionStatePatch(canary.decisions.last) : {};
+    const safetyEvents = [canary?.safety?.event, canary?.safety?.leaveFailure].filter(Boolean);
+    const currentStateBeforeFinish = readBrowserlessStateFile(stateFile);
+    updateBrowserlessStateFile(stateFile, {
+      ...finalDecisionPatch,
+      ...(safetyEvents.length ? {
+        recentExits: [...(currentStateBeforeFinish.recentExits || []), ...safetyEvents].slice(-20)
+      } : {}),
+      runner: {
+        ...(finalDecisionPatch.runner || {}),
+        running: !config.once,
+        mode: config.controlMode || 'read-only',
+        lastRun: result,
+        lastError: result.ok ? '' : (canary?.error || 'read-only-canary-failed')
+      },
+      ...(learnedLoginPoint ? {
         loginPointSafety: {
-          ok: false,
-          reason: 'learned-login-point-pending-snapshot-safety',
-          point: learned.loginPoint,
-          checkedAt: bootstrap.completedAt || new Date(now()).toISOString()
+          ok: Boolean(canary?.snapshotSafety?.ok),
+          reason: canary?.snapshotSafety?.reason || 'learned-from-canary-self',
+          point: learnedLoginPoint,
+          checkedAt: canary?.completedAt || new Date(now()).toISOString()
         },
         current: {
-          self: learned.finalSelf
-        },
-        probes: {
-          lastReadOnlyProbe: bootstrap
+          ...(finalDecisionPatch.current || {}),
+          self: finalSelf
         }
-      }, { updatedAt: new Date(now()).toISOString() });
-      persisted = readBrowserlessStateFile(stateFile);
-      config = hydrateConfigFromState(config, persisted);
-      logStore.append('runner', 'login-point-learned', {
-        point: learned.loginPoint,
-        bootstrapRunId: bootstrap.runId || ''
-      });
-    } else {
-      const result = { ok: false, mode: config.controlMode || 'read-only', reason: 'login-point-bootstrap-failed', canary: bootstrap };
+      } : {}),
+      probes: {
+        lastReadOnlyProbe: canary || null
+      }
+    }, { updatedAt: new Date(now()).toISOString() });
+    logStore.append('runner', result.ok ? 'runner-finish' : 'runner-stop', result);
+
+    const loopPlan = browserlessLoopPlan(result, config);
+    if (!loopPlan.continue) {
+      if (!config.once) {
+        updateBrowserlessStateFile(stateFile, {
+          runner: {
+            running: false,
+            currentAction: {
+              kind: 'stopped',
+              band: 'recover',
+              reason: loopPlan.reason,
+              previousRunId: loopPlan.previousRunId || ''
+            }
+          }
+        }, { updatedAt: new Date(now()).toISOString() });
+        logStore.append('runner', 'runner-loop-stop', loopPlan);
+      }
+      return result;
+    }
+
+    const nextRunAtMs = now() + loopPlan.delayMs;
+    const nextRunAt = new Date(nextRunAtMs).toISOString();
+    const waitDetail = {
+      ...loopPlan,
+      nextRunAt
+    };
+    updateBrowserlessStateFile(stateFile, {
+      runner: {
+        running: true,
+        mode: config.controlMode || 'read-only',
+        lastError: '',
+        currentAction: {
+          kind: 'loop-wait',
+          band: 'recover',
+          reason: loopPlan.reason,
+          delayMs: loopPlan.delayMs,
+          nextRunAt,
+          previousRunId: loopPlan.previousRunId || ''
+        }
+      }
+    }, { updatedAt: new Date(now()).toISOString() });
+    logStore.append('runner', 'runner-loop-wait', waitDetail);
+    await sleep(loopPlan.delayMs);
+    const requestedStop = safetyController.getStopEvent();
+    if (requestedStop) {
+      const stopped = {
+        ok: false,
+        mode: config.controlMode || 'read-only',
+        reason: requestedStop.reason || 'explicit-stop',
+        event: requestedStop
+      };
       updateBrowserlessStateFile(stateFile, {
         runner: {
           running: false,
-          mode: config.controlMode || 'read-only',
-          lastRun: result,
-          lastError: result.reason
-        },
-        probes: {
-          lastReadOnlyProbe: bootstrap
+          lastRun: stopped,
+          lastError: stopped.reason,
+          currentAction: {
+            kind: 'stopped',
+            band: 'recover',
+            reason: stopped.reason,
+            previousRunId: loopPlan.previousRunId || ''
+          }
         }
       }, { updatedAt: new Date(now()).toISOString() });
-      logStore.append('runner', 'runner-stop', result);
-      return result;
+      logStore.append('runner', 'runner-loop-stop', {
+        ...loopPlan,
+        reason: stopped.reason,
+        requestedStop
+      });
+      return stopped;
     }
+    safetyController.clearStop();
+    persisted = readBrowserlessStateFile(stateFile);
+    config = hydrateConfigFromState(config, persisted);
   }
-  const canary = await readOnlyCanary(config, {
-    logStore,
-    now,
-    persistedState: readBrowserlessStateFile(stateFile),
-    safetyController,
-    onDecision: decision => {
-      updateBrowserlessStateFile(stateFile, decisionStatePatch(decision), {
-        updatedAt: new Date(now()).toISOString()
-      });
-    },
-    onAction: (action, context = {}) => {
-      updateBrowserlessStateFile(stateFile, {
-        runner: {
-          currentAction: {
-            ...(action || {}),
-            actionState: context.actionState || null
-          }
-        },
-        current: {
-          action: {
-            ...(action || {}),
-            actionState: context.actionState || null
-          }
-        }
-      }, {
-        updatedAt: new Date(now()).toISOString()
-      });
-    }
-  });
-  const { finalSelf, loginPoint: learnedLoginPoint } = learnedLoginPointFromCanary(canary);
-  const result = { ok: Boolean(canary?.ok), mode: config.controlMode || 'read-only', canary: canary || null };
-  const finalDecisionPatch = canary?.decisions?.last ? decisionStatePatch(canary.decisions.last) : {};
-  const safetyEvents = [canary?.safety?.event, canary?.safety?.leaveFailure].filter(Boolean);
-  const currentStateBeforeFinish = readBrowserlessStateFile(stateFile);
-  updateBrowserlessStateFile(stateFile, {
-    ...finalDecisionPatch,
-    ...(safetyEvents.length ? {
-      recentExits: [...(currentStateBeforeFinish.recentExits || []), ...safetyEvents].slice(-20)
-    } : {}),
-    runner: {
-      ...(finalDecisionPatch.runner || {}),
-      running: !config.once,
-      mode: config.controlMode || 'read-only',
-      lastRun: result,
-      lastError: result.ok ? '' : (canary?.error || 'read-only-canary-failed')
-    },
-    ...(learnedLoginPoint ? {
-      loginPointSafety: {
-        ok: Boolean(canary?.snapshotSafety?.ok),
-        reason: canary?.snapshotSafety?.reason || 'learned-from-canary-self',
-        point: learnedLoginPoint,
-        checkedAt: canary?.completedAt || new Date(now()).toISOString()
-      },
-      current: {
-        ...(finalDecisionPatch.current || {}),
-        self: finalSelf
-      }
-    } : {}),
-    probes: {
-      lastReadOnlyProbe: canary || null
-    }
-  }, { updatedAt: new Date(now()).toISOString() });
-  logStore.append('runner', result.ok ? 'runner-finish' : 'runner-stop', result);
-  return result;
 }
 
 async function runBrowserlessRunnerSelfTest() {
@@ -431,6 +551,7 @@ async function runBrowserlessRunnerSelfTest() {
 }
 
 module.exports = {
+  browserlessLoopPlan,
   hydrateConfigFromState,
   learnedLoginPointFromCanary,
   publicConfig,

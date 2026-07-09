@@ -261,6 +261,8 @@ The token can be passed with `?token=...`, `x-web-token`, or `Authorization: Bea
 
 The status server refuses non-loopback hosts without a web token.
 
+In non-`--once` live mode, the runner keeps the status server open and starts another cycle after recoverable exits. Recoverable cases include normal cycle completion, verified safety exits such as `profit-live-snapshot-active-threat`, frame/stale-self/WS interruptions, and pre-WS snapshot-safety retry. The default retry delay is `GRASP_RAT_BROWSERLESS_LOOP_DELAY_MS=30000`; snapshot-safety retry uses at least 60000ms. `explicit-stop`, `no-self`, direct leave failure, and auth-like 403 errors stop the loop and leave the status server available for inspection.
+
 ## State And Logs
 
 Default layout:
@@ -355,6 +357,7 @@ Important variables:
 - `GRASP_RAT_BROWSERLESS_READONLY_PROBE_MS`
 - `GRASP_RAT_BROWSERLESS_FRAME_GAP_ALERT_MS`
 - `GRASP_RAT_BROWSERLESS_DECISION_INTERVAL_MS`
+- `GRASP_RAT_BROWSERLESS_LOOP_DELAY_MS`
 - `GRASP_RAT_BROWSERLESS_STALE_SELF_MS`
 - `GRASP_RAT_BROWSERLESS_NO_SELF_GRACE_MS`
 - `GRASP_RAT_BROWSERLESS_STAMINA_EXHAUSTED_BELOW_MS`
