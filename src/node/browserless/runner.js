@@ -98,7 +98,8 @@ function learnedLoginPointFromCanary(canary) {
 
 function browserlessLoopPlan(result, config = {}) {
   const canary = result?.canary || null;
-  const safetyReason = canary?.safety?.event?.reason || canary?.safety?.leaveFailure?.reason || '';
+  const safetyEvent = canary?.safety?.event || null;
+  const safetyReason = safetyEvent?.reason || canary?.safety?.leaveFailure?.reason || '';
   const error = String(canary?.error || result?.reason || result?.error || '');
   const runId = canary?.runId || '';
   const delayMs = Math.max(1000, Number(config.loopDelayMs || 30000));
@@ -110,14 +111,22 @@ function browserlessLoopPlan(result, config = {}) {
     error,
     safetyReason
   });
-  const resume = reason => ({
+  const resume = (reason, minimumDelayMs = 0) => ({
     continue: true,
     reason,
-    delayMs: /^snapshot safety not confirmed:/i.test(error) ? Math.max(delayMs, 60000) : delayMs,
+    delayMs: /^snapshot safety not confirmed:/i.test(error)
+      ? Math.max(delayMs, 60000, Number(minimumDelayMs || 0))
+      : Math.max(delayMs, Number(minimumDelayMs || 0)),
     previousRunId: runId,
     error,
     safetyReason
   });
+
+  const decisionDelayMs = Number(
+    safetyEvent?.detail?.decision?.reloginDelayMs
+    ?? safetyEvent?.detail?.decision?.staminaBudgetExit?.reloginDelayMs
+    ?? 0
+  );
 
   if (config.once) return stop('once');
   if (!result) return stop('missing-result');
@@ -129,6 +138,9 @@ function browserlessLoopPlan(result, config = {}) {
     return stop(error || 'non-recoverable-error');
   }
   if (result.ok) return resume('cycle-complete');
+  if (safetyReason === 'stamina-budget-coin-leave') {
+    return resume(safetyReason, Number.isFinite(decisionDelayMs) ? decisionDelayMs : 0);
+  }
   if (['profit-live-snapshot-active-threat', 'frame-gap', 'stale-self', 'ws-closed', 'ws-error'].includes(safetyReason)) {
     return resume(safetyReason);
   }

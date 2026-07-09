@@ -17,6 +17,12 @@ const {
   coinTargetKeyCore,
   snapshotCoinNavigationReasonCore
 } = require('../../strategy/coin-target');
+const {
+  dailyStaminaBudgetIsLimitingCore,
+  pickNearestDailyStaminaFinalCoinCore,
+  summarizeBlockedStaminaOpportunityCore,
+  summarizeNearestCoinStaminaBudgetExitCore
+} = require('../../strategy/stamina-budget');
 const { buildRuntimeDefaults } = require('../../shared/runtime-defaults');
 const { buildBrowserlessCombatDryRun } = require('./combat-adapter');
 
@@ -39,6 +45,7 @@ const DEFAULT_GLOBAL_COIN_MAX_DISTANCE = BROWSER_RUNTIME_DEFAULTS.globalCoinMaxD
 const DEFAULT_RECOVERY_COIN_MAX_DISTANCE = BROWSER_RUNTIME_DEFAULTS.recoveryCoinMaxDistance;
 const DEFAULT_RECOVERY_PLAYER_DROP_MIN_AMOUNT = 2;
 const DEFAULT_POST_ATTACK_RECOVERY_DROP_MAX_DISTANCE = BROWSER_RUNTIME_DEFAULTS.postAttackRecoveryDropMaxDistance;
+const DEFAULT_STAMINA_BUDGET_RELOGIN_DELAY_MS = BROWSER_RUNTIME_DEFAULTS.staminaBudgetReloginDelayMs;
 
 function buildBrowserlessRuntimeDefaults(config = {}) {
   return buildRuntimeDefaults(config, false);
@@ -77,6 +84,26 @@ function isFiringEntity(entity) {
   return Boolean(entity?.firing || entity?.is_firing || entity?.shooting);
 }
 
+function entitySpeed(entity) {
+  const explicit = numberOrNull(entity?.speed ?? entity?.speed_per_tick ?? entity?.speedPerTick);
+  if (explicit !== null) return explicit;
+  const vx = Number(entity?.vx || 0);
+  const vy = Number(entity?.vy || 0);
+  return Math.hypot(vx, vy);
+}
+
+function isMovingEntity(entity, options = {}) {
+  if (!entity) return false;
+  if (entity.moving === true || entity.recentlyMoved === true || entity.recentlyActive === true) return true;
+  const threshold = Math.max(0, Number(options.activeSpeedMin ?? BROWSER_RUNTIME_DEFAULTS.activeSpeedMin));
+  return entitySpeed(entity) >= threshold;
+}
+
+function isCurrentlyActiveEntity(entity, options = {}) {
+  if (!entity) return false;
+  return isMovingEntity(entity, options) || isFiringEntity(entity) || isActiveEntity(entity);
+}
+
 function entityDropValue(entity) {
   return Number(entity?.drop ?? entity?.Drop ?? entity?.reward ?? entity?.coin_reward ?? entity?.death_reward_preview ?? entity?.death_drop_coins ?? 0) || 0;
 }
@@ -85,6 +112,8 @@ function entityStaminaSummary(entity) {
   return {
     stamina: numberOrNull(entity?.stamina),
     stamina5sRemainingMilli: numberOrNull(entity?.stamina_5s_remaining_milli ?? entity?.stamina5sRemainingMilli),
+    stamina1hRemainingMilli: numberOrNull(entity?.stamina_1h_remaining_milli ?? entity?.stamina1hRemainingMilli),
+    stamina1dRemainingMilli: numberOrNull(entity?.stamina_1d_remaining_milli ?? entity?.stamina1dRemainingMilli),
     staminaSpent: numberOrNull(entity?.stamina_spent ?? entity?.staminaSpent)
   };
 }
@@ -130,10 +159,12 @@ function snapshotFallbackThreatBlocks(threat, self, options = {}) {
   return distance <= threatRange;
 }
 
-function normalizeEntityForDecision(entity, self = null, authority = 'realtime') {
+function normalizeEntityForDecision(entity, self = null, authority = 'realtime', options = {}) {
   if (!entity || typeof entity !== 'object') return null;
   const x = numberOrNull(entity.x);
   const y = numberOrNull(entity.y);
+  const moving = isMovingEntity(entity, options);
+  const firing = isFiringEntity(entity);
   const normalized = {
     ...cloneJson(entity),
     user_id: numberOrNull(entity.user_id),
@@ -145,8 +176,11 @@ function normalizeEntityForDecision(entity, self = null, authority = 'realtime')
     max_hp: numberOrNull(entity.max_hp),
     drop: entityDropValue(entity),
     authority,
-    active: isActiveEntity(entity),
-    firing: isFiringEntity(entity),
+    joinModeActive: isActiveEntity(entity),
+    active: moving || firing || isActiveEntity(entity),
+    moving,
+    speed: numberOrNull(entity.speed ?? entity.speed_per_tick ?? entity.speedPerTick) ?? entitySpeed(entity),
+    firing,
     alive: isAliveEntity(entity),
     invulnerable: isInvulnerableEntity(entity)
   };
@@ -170,7 +204,7 @@ function enrichRealtimeEntityWithSnapshotProfitMetadata(entity, snapshotEntity, 
   const metadataDistance = distanceBetween(entity, snapshotEntity);
   if (Number.isFinite(metadataDistance) && maxDistance > 0 && metadataDistance > maxDistance) return entity;
   const snapshotJoinMode = String(snapshotEntity.current_join_mode || snapshotEntity.mode || snapshotEntity.joined || '');
-  const snapshotActive = isActiveEntity(snapshotEntity);
+  const snapshotActive = isCurrentlyActiveEntity(snapshotEntity, options);
   const modePatch = snapshotJoinMode
     ? {
         profitMetadataMode: snapshotJoinMode,
@@ -345,7 +379,7 @@ function buildBrowserlessStrategyInput(state, options = {}) {
   const snapshotMaxAgeMs = Math.max(1000, Number(options.snapshotCoinFallbackMaxAgeMs || 5000));
   const snapshotFreshForMetadata = snapshotFrameAgeMs === null || snapshotFrameAgeMs <= snapshotMaxAgeMs;
   const snapshotEntitiesByUserId = snapshotFreshForMetadata ? snapshotEntityByUserId(fallback) : new Map();
-  const self = normalizeEntityForDecision(realtime.self, null, 'realtime');
+  const self = normalizeEntityForDecision(realtime.self, null, 'realtime', options);
   if (!self) dataGaps.push('missing-realtime-self');
   const selfUserId = Number(self?.user_id ?? state?.userId ?? options.userId ?? 0);
   const realtimeEntities = (Array.isArray(realtime.entities) ? realtime.entities : [])
@@ -354,7 +388,7 @@ function buildBrowserlessStrategyInput(state, options = {}) {
       snapshotEntitiesByUserId.get(numberOrNull(entity?.user_id)),
       options
     ))
-    .map(entity => normalizeEntityForDecision(entity, self, 'realtime'))
+    .map(entity => normalizeEntityForDecision(entity, self, 'realtime', options))
     .filter(Boolean);
   const visibleTargets = realtimeEntities
     .filter(entity => Number(entity.user_id) !== selfUserId)
@@ -368,7 +402,7 @@ function buildBrowserlessStrategyInput(state, options = {}) {
     ...snapshotActiveThreats
   ].filter(threat => snapshotFallbackThreatBlocks(threat, self, options));
   const afkTargets = visibleTargets.filter(entity => {
-    if (entity.active || entity.profitMetadataActive || entity.alive === false || entity.invulnerable) return false;
+    if (entity.active || entity.moving || entity.firing || entity.profitMetadataActive || entity.alive === false || entity.invulnerable) return false;
     return attackWorthTakingCore(self, entity, {
       attackMinDrop: options.attackMinDrop ?? DEFAULT_ATTACK_MIN_DROP,
       attackMinAfkDrop: options.attackMinAfkDrop ?? DEFAULT_ATTACK_MIN_AFK_DROP,
@@ -468,7 +502,8 @@ function buildBrowserlessStrategyInput(state, options = {}) {
 
 function scoreCoinOpportunity(coin, options = {}) {
   const weight = Number(options.coinOpportunityValue ?? BROWSER_RUNTIME_DEFAULTS.coinOpportunityValue ?? 1);
-  return opportunityValueScoreCore(coin?.amount, coin?.distance, {
+  return opportunityValueScoreCore(coin?.amount, opportunityCoinStaminaCost(coin, options), {
+    distanceFloor: options.opportunityDistanceFloor ?? BROWSER_RUNTIME_DEFAULTS.opportunityDistanceFloor,
     distanceScoreScale: options.distanceScoreScale || options.opportunityDistanceScoreScale || BROWSER_RUNTIME_DEFAULTS.opportunityDistanceScoreScale || 10000,
     weight
   });
@@ -485,7 +520,8 @@ function scoreEnemyOpportunity(target, options = {}) {
       ? coinWeight
       : dropWeight
   ) ?? 1);
-  return opportunityValueScoreCore(entityDropValue(target), enemyStaminaCost(target, options), {
+  return opportunityValueScoreCore(entityDropValue(target), opportunityEnemyStaminaCost(target, options), {
+    distanceFloor: options.opportunityDistanceFloor ?? BROWSER_RUNTIME_DEFAULTS.opportunityDistanceFloor,
     distanceScoreScale: options.distanceScoreScale || options.opportunityDistanceScoreScale || BROWSER_RUNTIME_DEFAULTS.opportunityDistanceScoreScale || 10000,
     weight
   });
@@ -502,8 +538,145 @@ function coinSafeFromThreats(coin, threats = [], options = {}) {
 }
 
 function enemyStaminaCost(target, options = {}) {
-  const shotCost = Math.max(0, Number(options.shotStaminaCostMs ?? OPPORTUNITY_CONSTANTS.SHOT_STAMINA_COST_MS));
-  return Math.max(1, Number(target?.distance || 0) + shotCost);
+  return opportunityEnemyStaminaCost(target, options);
+}
+
+function opportunityMoveStaminaCost(distance, options = {}, stopDistance = 0) {
+  const travel = Math.max(0, Number(distance || 0) - Math.max(0, Number(stopDistance || 0)));
+  return travel * Math.max(0, Number(options.opportunityMoveStaminaPerCm ?? BROWSER_RUNTIME_DEFAULTS.opportunityMoveStaminaPerCm ?? 1));
+}
+
+function opportunityCoinStaminaCost(coin, options = {}) {
+  const override = Number(coin?.opportunityStaminaCost ?? coin?.staminaCost ?? NaN);
+  if (Number.isFinite(override) && override >= 0) return override;
+  return opportunityMoveStaminaCost(coin?.distance, options, 0)
+    + Math.max(0, Number(options.opportunityCoinPickupStaminaMs ?? BROWSER_RUNTIME_DEFAULTS.opportunityCoinPickupStaminaMs ?? 0));
+}
+
+function estimatedKillShots(target, options = {}) {
+  const damage = Math.max(0.1, Number(options.opportunityEstimatedDamagePerShot ?? BROWSER_RUNTIME_DEFAULTS.opportunityEstimatedDamagePerShot ?? 3));
+  const hp = Math.max(1, Number(target?.hp ?? target?.knownHp ?? 100) || 100);
+  return Math.max(1, Math.ceil(hp / damage));
+}
+
+function opportunityEnemyStaminaCost(target, options = {}) {
+  const moveCost = opportunityMoveStaminaCost(target?.distance, options, 0);
+  const shotCost = estimatedKillShots(target, options)
+    * Math.max(0, Number(options.opportunityShotStaminaCostMs ?? BROWSER_RUNTIME_DEFAULTS.opportunityShotStaminaCostMs ?? OPPORTUNITY_CONSTANTS.SHOT_STAMINA_COST_MS));
+  return moveCost + shotCost;
+}
+
+function staminaRemaining(self, windowName) {
+  const key = String(windowName || '').toLowerCase();
+  if (!self || (key !== '5s' && key !== '1h' && key !== '1d')) return null;
+  const value = numberOrNull(self[`stamina_${key}_remaining_milli`]);
+  return value;
+}
+
+function staminaExhaustedThreshold(options = {}) {
+  return Math.max(0, Number(options.staminaExhaustedThresholdMs ?? BROWSER_RUNTIME_DEFAULTS.staminaExhaustedThresholdMs ?? 1000));
+}
+
+function opportunityWindowStaminaBudget(self, windowName, options = {}) {
+  const remaining = staminaRemaining(self, windowName);
+  if (!Number.isFinite(remaining)) return Infinity;
+  const reserve = staminaExhaustedThreshold(options)
+    + Math.max(0, Number(options.opportunityLongStaminaReserveMs ?? BROWSER_RUNTIME_DEFAULTS.opportunityLongStaminaReserveMs ?? 0));
+  return Math.max(0, remaining - reserve);
+}
+
+function opportunityLongStaminaBudget(self, options = {}) {
+  const values = ['1h', '1d']
+    .map(key => opportunityWindowStaminaBudget(self, key, options))
+    .filter(value => Number.isFinite(value));
+  if (!values.length) return Infinity;
+  return Math.min(...values);
+}
+
+function opportunityStaminaAffordable(self, staminaCost, options = {}) {
+  const cost = Number(staminaCost);
+  if (!Number.isFinite(cost) || cost <= 0) return true;
+  const budget = opportunityLongStaminaBudget(self, options);
+  return !Number.isFinite(budget) || cost <= budget;
+}
+
+function safeBudgetCoinCandidates(input, options = {}) {
+  if (!input?.self) return [];
+  return (input.profitCoins || [])
+    .filter(coin => Number(coin?.amount || 0) > 0)
+    .filter(coin => coinSafeFromThreats(coin, [
+      ...(input.activeThreats || []),
+      ...(input.snapshotActiveThreats || [])
+    ], options));
+}
+
+function buildStaminaBudgetExitDecision(input, options = {}) {
+  if (!input?.self) return null;
+  const coins = safeBudgetCoinCandidates(input, options);
+  const exit = summarizeNearestCoinStaminaBudgetExitCore(input.self, coins, {
+    budget: opportunityWindowStaminaBudget(input.self, '1h', options),
+    dist: distanceBetween,
+    coinStaminaCost: coin => opportunityCoinStaminaCost(coin, options),
+    reloginDelayMs: options.staminaBudgetReloginDelayMs ?? DEFAULT_STAMINA_BUDGET_RELOGIN_DELAY_MS
+  });
+  if (!exit) return null;
+  return {
+    kind: 'leave',
+    band: 'safety',
+    reason: 'stamina-budget-coin-leave',
+    shouldLeave: true,
+    stopMotion: true,
+    staminaBudgetExit: exit,
+    reloginDelayMs: exit.reloginDelayMs ?? options.staminaBudgetReloginDelayMs ?? DEFAULT_STAMINA_BUDGET_RELOGIN_DELAY_MS,
+    self: summarizeTarget(input.self)
+  };
+}
+
+function buildDailyStaminaFinalCoinDecision(input, options = {}) {
+  if (!input?.self) return null;
+  const coin = pickNearestDailyStaminaFinalCoinCore(safeBudgetCoinCandidates(input, options), {
+    isSnapshotOnlyCoin: item => Boolean(item?.snapshotOnly),
+    coinStaminaCost: item => opportunityCoinStaminaCost(item, options),
+    dailyStaminaBudgetIsLimiting: staminaCost => dailyStaminaBudgetIsLimitingCore(
+      staminaCost,
+      opportunityWindowStaminaBudget(input.self, '1h', options),
+      opportunityWindowStaminaBudget(input.self, '1d', options)
+    )
+  });
+  if (!coin) return null;
+  return {
+    kind: Number(coin.distance || Infinity) <= Number(options.coinMaxDistance ?? BROWSER_RUNTIME_DEFAULTS.coinMaxDistance)
+      ? 'coin'
+      : 'seek-coin',
+    band: 'profit',
+    reason: 'daily-stamina-final-visible-coin',
+    target: summarizeCoin(coin),
+    dailyStaminaFinalRun: {
+      staminaCost: Math.round(opportunityCoinStaminaCost(coin, options)),
+      budgetMs: Math.max(0, Math.round(opportunityWindowStaminaBudget(input.self, '1d', options))),
+      distance: Math.round(Number(coin.distance || 0)),
+      amount: Math.max(0, Math.round(Number(coin.amount || 0)))
+    }
+  };
+}
+
+function buildStaminaBlockedWaitDecision(input, options = {}) {
+  if (!input?.self) return null;
+  const blocked = summarizeBlockedStaminaOpportunityCore(safeBudgetCoinCandidates(input, options), input.afkTargets || [], {
+    budget: opportunityLongStaminaBudget(input.self, options),
+    coinStaminaCost: coin => opportunityCoinStaminaCost(coin, options),
+    enemyStaminaCost: target => opportunityEnemyStaminaCost(target, options),
+    targetDrop: entityDropValue
+  });
+  if (!blocked) return null;
+  return {
+    kind: 'wait',
+    band: 'wait',
+    reason: 'wait-for-stamina-budget',
+    staminaBlocked: blocked,
+    stopMotion: true,
+    self: summarizeTarget(input.self)
+  };
 }
 
 function opportunityVisibleDistance(options = {}) {
@@ -566,7 +739,7 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
     ? [{ coins: input.profitCoins, maxDistance: options.globalCoinMaxDistance || DEFAULT_GLOBAL_COIN_MAX_DISTANCE }]
     : [];
   const opportunityOptions = {
-    maxCoinDistance: options.nearCoinPriorityDistance || OPPORTUNITY_CONSTANTS.NEAR_COIN_PRIORITY_DISTANCE,
+    maxCoinDistance: options.coinMaxDistance || BROWSER_RUNTIME_DEFAULTS.coinMaxDistance,
     globalCoinMaxDistance: options.globalCoinMaxDistance || DEFAULT_GLOBAL_COIN_MAX_DISTANCE,
     attackRange: options.attackRange || DEFAULT_ATTACK_RANGE,
     attackEngageRange: options.attackEngageRange || DEFAULT_ATTACK_ENGAGE_RANGE,
@@ -576,8 +749,8 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
     switchHoldMs: options.opportunitySwitchHoldMs || OPPORTUNITY_CONSTANTS.OPPORTUNITY_SWITCH_HOLD_MS,
     switchMargin: options.opportunitySwitchMargin || OPPORTUNITY_CONSTANTS.OPPORTUNITY_SWITCH_MARGIN,
     scoreCoinOpportunity: coin => scoreCoinOpportunity(coin, options),
-    coinStaminaCost: coin => Math.max(1, Number(coin?.distance || 0)),
-    coinStaminaAffordable: () => true,
+    coinStaminaCost: coin => opportunityCoinStaminaCost(coin, options),
+    coinStaminaAffordable: (_coin, staminaCost) => opportunityStaminaAffordable(input.self, staminaCost, options),
     safeCoinCandidates: (coins, activeThreats, maxDistance) => (coins || [])
       .filter(coin => {
         const limit = Number(maxDistance);
@@ -596,7 +769,7 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
       isAfkProfitTarget: item => input.afkTargets.includes(item)
     }),
     enemyStaminaCost: target => enemyStaminaCost(target, options),
-    opportunityStaminaAffordable: () => true,
+    opportunityStaminaAffordable: staminaCost => opportunityStaminaAffordable(input.self, staminaCost, options),
     isAfkProfitTarget: target => input.afkTargets.includes(target),
     priorityTier: item => opportunityPriorityTierCore(item, {
       visibleDistance: opportunityVisibleDistance(options),
@@ -835,7 +1008,14 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
   const combat = buildCombatDecision(input, options);
   const combatActionEligible = isCombatActionEligibleForDecision(combat, options);
   const safetyAction = profitLiveSafetyDecision(input, combat, options);
+  const staminaBudgetExitAction = (profitLive || nonCombatProfit) ? buildStaminaBudgetExitDecision(input, options) : null;
   const recoveryAction = (profitLive || nonCombatProfit) ? buildRecoveryDecision(input, opportunity, options) : null;
+  const dailyFinalCoinAction = (profitLive || nonCombatProfit) && !recoveryAction
+    ? buildDailyStaminaFinalCoinDecision(input, options)
+    : null;
+  const staminaBlockedWaitAction = (profitLive || nonCombatProfit)
+    ? buildStaminaBlockedWaitDecision(input, options)
+    : null;
   let kind = 'wait';
   let band = 'wait';
   let reason = '';
@@ -856,16 +1036,31 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     band = 'combat';
     reason = combat.action.reason;
     action = combat.action;
+  } else if (staminaBudgetExitAction) {
+    kind = staminaBudgetExitAction.kind;
+    band = staminaBudgetExitAction.band;
+    reason = staminaBudgetExitAction.reason;
+    action = staminaBudgetExitAction;
   } else if (recoveryAction) {
     kind = recoveryAction.kind;
     band = recoveryAction.band;
     reason = recoveryAction.reason;
     action = recoveryAction;
+  } else if (dailyFinalCoinAction) {
+    kind = dailyFinalCoinAction.kind;
+    band = dailyFinalCoinAction.band;
+    reason = dailyFinalCoinAction.reason;
+    action = dailyFinalCoinAction;
   } else if (opportunity.choice) {
     kind = 'profit-candidate';
     band = 'profit';
     reason = opportunity.action.reason;
     action = opportunity.action;
+  } else if (staminaBlockedWaitAction) {
+    kind = staminaBlockedWaitAction.kind;
+    band = staminaBlockedWaitAction.band;
+    reason = staminaBlockedWaitAction.reason;
+    action = staminaBlockedWaitAction;
   } else {
     reason = 'no-profitable-candidate';
     action.reason = reason;

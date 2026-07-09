@@ -6157,7 +6157,7 @@ async function runSelfTest() {
           Math.round((coin?.score || 0) / 1000)
         ].join('|');
       })(),
-      want: 'profit-candidate|attack|8|3|124|57'
+      want: 'profit-candidate|attack|8|3|58|57'
     },
     {
       name: 'browserless profit live damaged self recovers instead of ordinary coin',
@@ -6223,6 +6223,134 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'coin|profit|recovery-foot-coin|coin|foot-coin'
+    },
+    {
+      name: 'browserless profit live leaves when nearest allowed coin exceeds 1h stamina budget',
+      got: (() => {
+        const store = createBrowserlessStateStore({ userId: 7 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 59,
+          entities: [{
+            entity_id: 1,
+            user_id: 7,
+            name: 'self',
+            x: 0,
+            y: 0,
+            hp: 100,
+            max_hp: 100,
+            stamina_5s_remaining_milli: 10000,
+            stamina_1h_remaining_milli: 3000,
+            stamina_1d_remaining_milli: 100000
+          }],
+          bullets: []
+        }, { receivedAtMs: 1000 });
+        store.ingestFrame({
+          type: 'snapshot',
+          tick: 60,
+          entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100 }],
+          bullets: [],
+          coin_drops: [{ drop_id: 'budget-coin', amount: 5, x: 5000, y: 0 }],
+          messages: []
+        }, { receivedAtMs: 1100 });
+        const decision = buildBrowserlessDecision(store.getState(1200), {}, {
+          nowMs: 1200,
+          controlMode: 'profit-live'
+        });
+        return [
+          decision.kind,
+          decision.band,
+          decision.reason,
+          decision.action.kind,
+          decision.action.shouldLeave,
+          decision.action.staminaBudgetExit.id,
+          decision.action.staminaBudgetExit.shortageMs,
+          decision.action.reloginDelayMs
+        ].join('|');
+      })(),
+      want: 'leave|safety|stamina-budget-coin-leave|leave|true|budget-coin|4500|1800000'
+    },
+    {
+      name: 'browserless profit live takes realtime final coin under 1d stamina limit',
+      got: (() => {
+        const store = createBrowserlessStateStore({ userId: 7 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 59,
+          entities: [{
+            entity_id: 1,
+            user_id: 7,
+            name: 'self',
+            x: 0,
+            y: 0,
+            hp: 100,
+            max_hp: 100,
+            stamina_5s_remaining_milli: 10000,
+            stamina_1h_remaining_milli: 100000,
+            stamina_1d_remaining_milli: 3000
+          }],
+          bullets: [],
+          coin_drops: [{ drop_id: 'final-realtime-coin', amount: 5, x: 1000, y: 0 }]
+        }, { receivedAtMs: 1000 });
+        const decision = buildBrowserlessDecision(store.getState(1200), {}, {
+          nowMs: 1200,
+          controlMode: 'profit-live'
+        });
+        return [
+          decision.kind,
+          decision.band,
+          decision.reason,
+          decision.action.target.id,
+          decision.action.target.authority,
+          decision.action.dailyStaminaFinalRun.staminaCost,
+          decision.action.dailyStaminaFinalRun.budgetMs
+        ].join('|');
+      })(),
+      want: 'coin|profit|daily-stamina-final-visible-coin|final-realtime-coin|realtime|1000|500'
+    },
+    {
+      name: 'browserless profit live waits for budget instead of moving to unaffordable snapshot coin',
+      got: (() => {
+        const store = createBrowserlessStateStore({ userId: 7 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 59,
+          entities: [{
+            entity_id: 1,
+            user_id: 7,
+            name: 'self',
+            x: 0,
+            y: 0,
+            hp: 100,
+            max_hp: 100,
+            stamina_5s_remaining_milli: 10000,
+            stamina_1h_remaining_milli: 100000,
+            stamina_1d_remaining_milli: 3000
+          }],
+          bullets: []
+        }, { receivedAtMs: 1000 });
+        store.ingestFrame({
+          type: 'snapshot',
+          tick: 60,
+          entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100 }],
+          bullets: [],
+          coin_drops: [{ drop_id: 'unaffordable-snapshot-coin', amount: 5, x: 1000, y: 0 }],
+          messages: []
+        }, { receivedAtMs: 1100 });
+        const decision = buildBrowserlessDecision(store.getState(1200), {}, {
+          nowMs: 1200,
+          controlMode: 'profit-live'
+        });
+        return [
+          decision.kind,
+          decision.band,
+          decision.reason,
+          decision.action.staminaBlocked.id,
+          decision.action.staminaBlocked.shortageMs,
+          decision.profit.best === null
+        ].join('|');
+      })(),
+      want: 'wait|wait|wait-for-stamina-budget|unaffordable-snapshot-coin|500|true'
     },
     {
       name: 'browserless profit live admits fresh in-view snapshot coin fallback',
@@ -6570,7 +6698,7 @@ async function runSelfTest() {
       want: 'combat-live|combat|combat-live-realtime|combat-live|9|realtime|true'
     },
     {
-      name: 'browserless profit live ignores passive moving combat candidate when enabled',
+      name: 'browserless profit live treats passive moving player as safety threat',
       got: (() => {
         const store = createBrowserlessStateStore({ userId: 7 });
         store.ingestFrame({
@@ -6591,6 +6719,7 @@ async function runSelfTest() {
         return [
           decision.kind,
           decision.band,
+          decision.reason,
           decision.action.kind,
           decision.action.target.userId,
           decision.combat.target?.userId || '',
@@ -6598,7 +6727,7 @@ async function runSelfTest() {
           decision.combat.actionEligible
         ].join('|');
       })(),
-      want: 'profit-candidate|profit|attack|10||0|false'
+      want: 'safety-exit|safety|profit-live-active-threat|safety-exit|8||0|false'
     },
     {
       name: 'browserless profit live exits for low-drop active moving threat without combat promotion',
@@ -8436,6 +8565,24 @@ async function runSelfTest() {
             safety: { event: { reason: 'profit-live-snapshot-active-threat' } }
           }
         }, config);
+        const staminaBudget = browserlessLoopPlan({
+          ok: false,
+          canary: {
+            runId: 'budget-test',
+            error: 'stamina-budget-coin-leave',
+            safety: {
+              event: {
+                reason: 'stamina-budget-coin-leave',
+                detail: {
+                  decision: {
+                    reloginDelayMs: 1800000,
+                    staminaBudgetExit: { reloginDelayMs: 1800000 }
+                  }
+                }
+              }
+            }
+          }
+        }, config);
         const explicitStop = browserlessLoopPlan({
           ok: false,
           canary: {
@@ -8477,6 +8624,9 @@ async function runSelfTest() {
         return [
           activeThreat.continue,
           activeThreat.delayMs,
+          staminaBudget.continue,
+          staminaBudget.reason,
+          staminaBudget.delayMs,
           explicitStop.continue,
           noSelf.continue,
           auth403.continue,
@@ -8487,7 +8637,7 @@ async function runSelfTest() {
           connectTimeout.delayMs
         ].join('|');
       })(),
-      want: 'true|1234|false|false|false|true|60000|true|ws-connect-timeout|1234'
+      want: 'true|1234|true|stamina-budget-coin-leave|1800000|false|false|false|true|60000|true|ws-connect-timeout|1234'
     },
     {
       name: 'browserless runner dry-run and fake read-only path write redacted logs',
