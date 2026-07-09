@@ -545,6 +545,117 @@ function coinSafeFromThreats(coin, threats = [], options = {}) {
   return true;
 }
 
+function highValueCoinPriorityAmount(options = {}) {
+  const value = Number(options.highValueCoinPriorityAmount ?? OPPORTUNITY_CONSTANTS.HIGH_VALUE_COIN_PRIORITY_AMOUNT);
+  return Math.max(1, Number.isFinite(value) ? value : OPPORTUNITY_CONSTANTS.HIGH_VALUE_COIN_PRIORITY_AMOUNT);
+}
+
+function highValueCoinPriorityHealthyHp(options = {}) {
+  const value = Number(options.highValueCoinPriorityHealthyHp
+    ?? options.combatLowHpLeaveThreshold
+    ?? OPPORTUNITY_CONSTANTS.HIGH_VALUE_COIN_PRIORITY_HEALTHY_HP);
+  return Math.max(1, Number.isFinite(value) ? value : OPPORTUNITY_CONSTANTS.HIGH_VALUE_COIN_PRIORITY_HEALTHY_HP);
+}
+
+function bulletOwnerId(bullet) {
+  return bullet?.owner_user_id ?? bullet?.ownerUserId ?? bullet?.owner_id ?? bullet?.ownerId ?? bullet?.user_id ?? bullet?.userId ?? null;
+}
+
+function hasLikelyIncomingBullet(input) {
+  const selfId = input?.self?.user_id ?? input?.self?.userId ?? input?.userId ?? null;
+  return (input?.bullets || []).some(bullet => {
+    const ownerId = bulletOwnerId(bullet);
+    if (ownerId === null || ownerId === undefined || ownerId === '') return true;
+    if (selfId === null || selfId === undefined || selfId === '') return true;
+    return String(ownerId) !== String(selfId);
+  });
+}
+
+function highValueThreatBlocksLowHpCoin(threat, options = {}) {
+  if (!threat || threat.alive === false || threat.invulnerable) return false;
+  const distance = Number(threat.distance ?? Infinity);
+  if (!Number.isFinite(distance)) return false;
+  const cautionRadius = Math.max(0, Number(threat.cautionRadius || options.activeCautionRadius || 0));
+  const radius = Math.max(
+    Number(options.combatAttackRange || options.attackRange || DEFAULT_ATTACK_RANGE) || DEFAULT_ATTACK_RANGE,
+    Number(options.profitLiveThreatExitRange || DEFAULT_PROFIT_LIVE_THREAT_EXIT_RANGE) || DEFAULT_PROFIT_LIVE_THREAT_EXIT_RANGE,
+    cautionRadius + Math.max(0, Number(options.activeCautionExitMargin || 0))
+  );
+  if (distance > radius) return false;
+  return Boolean(threat.active || threat.firing || threat.profitMetadataActive || isCurrentlyActiveEntity(threat, options));
+}
+
+function pickHighValueVisibleCoin(input, combatDecision, options = {}) {
+  if (!input?.self) return null;
+  const realtimeCandidates = (input.realtimeCoins || []).filter(coin => !coin.snapshotOnly);
+  const snapshotCandidates = !realtimeCandidates.length && input.profitCoinSource === 'snapshot-fallback'
+    ? (input.profitCoins || []).filter(coin => coin.snapshotOnly)
+    : [];
+  const usingSnapshotFallback = !realtimeCandidates.length && snapshotCandidates.length > 0;
+  if (usingSnapshotFallback && (combatDecision?.target || combatDecision?.dryRun?.target)) return null;
+  const candidates = realtimeCandidates.length ? realtimeCandidates : snapshotCandidates;
+  if (!candidates.length) return null;
+  const minAmount = highValueCoinPriorityAmount(options);
+  const healthyHp = highValueCoinPriorityHealthyHp(options);
+  const hp = hpValue(input.self);
+  const healthy = hp !== null && hp >= healthyHp;
+  const maxDistance = Math.max(0, Number(options.globalCoinMaxDistance
+    ?? options.opportunityVisibleDistance
+    ?? options.coinMaxDistance
+    ?? DEFAULT_GLOBAL_COIN_MAX_DISTANCE));
+  const threats = [
+    ...(input.activeThreats || []),
+    ...(input.snapshotActiveThreats || [])
+  ];
+  if (!healthy) {
+    if (hasLikelyIncomingBullet(input)) return null;
+    if (combatDecision?.target || combatDecision?.dryRun?.target) return null;
+    if (threats.some(threat => highValueThreatBlocksLowHpCoin(threat, options))) return null;
+  }
+  return candidates
+    .filter(coin => Number(coin.amount || 0) >= minAmount)
+    .filter(coin => Number(coin.distance || Infinity) <= maxDistance)
+    .filter(coin => opportunityStaminaAffordable(input.self, opportunityCoinStaminaCost(coin, options), options))
+    .filter(coin => healthy || coinSafeFromThreats(coin, threats, options))
+    .sort((a, b) => {
+      const scoreDiff = scoreCoinOpportunity(b, options) - scoreCoinOpportunity(a, options);
+      if (scoreDiff) return scoreDiff;
+      return Number(b.amount || 0) - Number(a.amount || 0)
+        || Number(a.distance || Infinity) - Number(b.distance || Infinity);
+    })[0] || null;
+}
+
+function highValueVisibleCoinPriorityNeeded(input, combatDecision, options = {}) {
+  if (!input?.self) return false;
+  if (isRecoveringSelf(input.self)) return true;
+  if (combatDecision?.target || combatDecision?.dryRun?.target) return true;
+  if ((input.activeThreats || []).length || (input.snapshotActiveThreats || []).length) return true;
+  if (hasLikelyIncomingBullet(input)) return true;
+  return false;
+}
+
+function buildHighValueVisibleCoinPriorityDecision(input, combatDecision, options = {}) {
+  if (!highValueVisibleCoinPriorityNeeded(input, combatDecision, options)) return null;
+  const coin = pickHighValueVisibleCoin(input, combatDecision, options);
+  if (!coin) return null;
+  return {
+    kind: Number(coin.distance || Infinity) <= Number(options.coinMaxDistance ?? BROWSER_RUNTIME_DEFAULTS.coinMaxDistance)
+      ? 'coin'
+      : 'seek-coin',
+    band: 'profit',
+    reason: 'high-value-visible-coin-priority',
+    ignoreReturnBlock: true,
+    target: summarizeCoin(coin),
+    highValueCoinPriority: {
+      amount: Math.max(0, Math.round(Number(coin.amount || 0))),
+      minAmount: highValueCoinPriorityAmount(options),
+      hp: Math.round(hpValue(input.self) ?? 0),
+      healthyHp: highValueCoinPriorityHealthyHp(options),
+      source: coin.snapshotOnly ? 'snapshot-fallback' : 'realtime'
+    }
+  };
+}
+
 function enemyStaminaCost(target, options = {}) {
   return opportunityEnemyStaminaCost(target, options);
 }
@@ -1036,6 +1147,9 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
   const combat = buildCombatDecision(input, options);
   const combatActionEligible = isCombatActionEligibleForDecision(combat, options);
   const safetyAction = profitLiveSafetyDecision(input, combat, stateful, options, opportunity.action);
+  const highValueCoinPriorityAction = (profitLive || nonCombatProfit)
+    ? buildHighValueVisibleCoinPriorityDecision(input, combat, options)
+    : null;
   const staminaBudgetExitAction = (profitLive || nonCombatProfit) ? buildStaminaBudgetExitDecision(input, options) : null;
   const recoveryAction = (profitLive || nonCombatProfit) ? buildRecoveryDecision(input, opportunity, options) : null;
   const dailyFinalCoinAction = (profitLive || nonCombatProfit) && !recoveryAction
@@ -1059,6 +1173,11 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     band = safetyAction.band;
     reason = safetyAction.reason;
     action = safetyAction;
+  } else if (highValueCoinPriorityAction) {
+    kind = highValueCoinPriorityAction.kind;
+    band = highValueCoinPriorityAction.band;
+    reason = highValueCoinPriorityAction.reason;
+    action = highValueCoinPriorityAction;
   } else if (combat.target && combatDecisionEnabled && combatActionEligible) {
     kind = combatLiveEnabled ? 'combat-live' : (combatDryRun ? 'combat-dry-run' : 'combat-candidate');
     band = 'combat';

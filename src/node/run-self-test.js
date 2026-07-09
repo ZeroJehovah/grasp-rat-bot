@@ -6199,6 +6199,107 @@ async function runSelfTest() {
       want: 'profit-candidate|seek-enemy|8|9|2|1'
     },
     {
+      name: 'browserless profit live hard-prioritizes high-value realtime coin while recovering',
+      got: (() => {
+        const store = createBrowserlessStateStore({ userId: 7 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 59,
+          entities: [
+            { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 80, max_hp: 100 }
+          ],
+          bullets: [],
+          coin_drops: [
+            { drop_id: 'small-foot-coin', amount: 1, x: 200, y: 0 },
+            { drop_id: 'high-value-coin', amount: 12, x: 1400, y: 0 }
+          ]
+        }, { receivedAtMs: 1000 });
+        const decision = buildBrowserlessDecision(store.getState(1200), {}, {
+          nowMs: 1200,
+          controlMode: 'profit-live'
+        });
+        return [
+          decision.kind,
+          decision.band,
+          decision.reason,
+          decision.action.target.id,
+          decision.action.target.amount,
+          decision.action.highValueCoinPriority.source,
+          decision.action.highValueCoinPriority.minAmount,
+          decision.profit.best?.id
+        ].join('|');
+      })(),
+      want: 'coin|profit|high-value-visible-coin-priority|high-value-coin|12|realtime|10|high-value-coin'
+    },
+    {
+      name: 'browserless profit live blocks low-hp high-value coin under incoming bullet',
+      got: (() => {
+        const store = createBrowserlessStateStore({ userId: 7 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 59,
+          entities: [
+            { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 40, max_hp: 100 }
+          ],
+          bullets: [
+            { bullet_id: 1, owner_user_id: 8, start_x: 5000, start_y: 0, target_x: 0, target_y: 0, speed_per_tick: 500 }
+          ],
+          coin_drops: [
+            { drop_id: 'high-value-coin', amount: 12, x: 5000, y: 0 }
+          ]
+        }, { receivedAtMs: 1000 });
+        const decision = buildBrowserlessDecision(store.getState(1200), {}, {
+          nowMs: 1200,
+          controlMode: 'profit-live'
+        });
+        return [
+          decision.kind,
+          decision.band,
+          decision.reason,
+          decision.action.highValueCoinPriority === undefined,
+          decision.profit.best?.id
+        ].join('|');
+      })(),
+      want: 'recover|recover|wait-for-full-stamina-and-hp|true|high-value-coin'
+    },
+    {
+      name: 'browserless snapshot high-value coin cannot bypass realtime combat',
+      got: (() => {
+        const store = createBrowserlessStateStore({ userId: 7 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 59,
+          entities: [
+            { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+            { entity_id: 2, user_id: 8, name: 'active', x: 1000, y: 0, hp: 80, current_join_mode: 'Active', firing: true, drop: 12 }
+          ],
+          bullets: []
+        }, { receivedAtMs: 1000 });
+        store.ingestFrame({
+          type: 'snapshot',
+          tick: 60,
+          entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100 }],
+          bullets: [],
+          coin_drops: [{ drop_id: 'snapshot-high-value', amount: 99, x: 200, y: 0 }],
+          messages: []
+        }, { receivedAtMs: 1100 });
+        const decision = buildBrowserlessDecision(store.getState(1200), {}, {
+          nowMs: 1200,
+          controlMode: 'profit-live',
+          combatEnabled: true
+        });
+        return [
+          decision.kind,
+          decision.band,
+          decision.reason,
+          decision.action.target.userId,
+          decision.action.highValueCoinPriority === undefined,
+          decision.input.fallback.snapshotFallbackBlockedReasons.join(',')
+        ].join('|');
+      })(),
+      want: 'combat-live|combat|combat-live-realtime|8|true|active-threat-visible'
+    },
+    {
       name: 'browserless profit live attacks in-range high-drop AFK over ordinary one coin',
       got: (() => {
         const store = createBrowserlessStateStore({ userId: 7 });
