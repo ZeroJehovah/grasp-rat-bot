@@ -5,7 +5,8 @@ const { isInvulnerableEntity } = require('../../strategy/combat-target-selection
 const {
   buildOpportunityCandidatesCore,
   opportunityPriorityTierCore,
-  opportunityValueScoreCore
+  opportunityValueScoreCore,
+  uniqueVisibleRouteCoinsCore
 } = require('../../strategy/opportunity-candidates');
 const {
   chooseStableOpportunityCore,
@@ -44,6 +45,11 @@ const {
   buildIgnoredCoinPatrolActionCore,
   coinIgnoreCleanupIntentCore
 } = require('../../strategy/coin-progress');
+const {
+  coinRouteActionMetaCore,
+  coinRouteKey,
+  pickCoinRouteOpportunityCore
+} = require('../../strategy/coin-route');
 const {
   createBrowserlessDecisionState,
   summarizeBrowserlessDecisionState
@@ -359,6 +365,7 @@ function summarizeTarget(target) {
 
 function summarizeCoin(coin) {
   if (!coin) return null;
+  const routeMeta = coinRouteActionMetaCore(coin.coinRoute || null, coin.distance);
   return {
     type: 'coin',
     id: coin.drop_id ?? coin.id ?? '',
@@ -368,6 +375,9 @@ function summarizeCoin(coin) {
     amount: numberOrNull(coin.amount),
     distance: Number.isFinite(Number(coin.distance)) ? Math.round(Number(coin.distance)) : null,
     key: coin.key || coinTargetKeyCore(coin),
+    fieldMembers: numberOrNull(coin.snapshotMembers ?? coin.fieldMembers),
+    fieldAmount: numberOrNull(coin.snapshotAmount ?? coin.fieldAmount),
+    coinRoute: routeMeta,
     native: Boolean(coin.native),
     snapshotOnly: Boolean(coin.snapshotOnly)
   };
@@ -561,6 +571,16 @@ function coinSafeFromThreats(coin, threats = [], options = {}) {
     if (distanceBetween(coin, threat) <= radius) return false;
   }
   return true;
+}
+
+function coinThreatDangerRadius(threat, options = {}) {
+  const dangerRadius = Math.max(0, Number(options.coinDangerRadius || OPPORTUNITY_CONSTANTS.COIN_DANGER_RADIUS));
+  const invulnerableRadius = Math.max(dangerRadius, Number(options.invulnerableCoinDangerRadius || OPPORTUNITY_CONSTANTS.INVULNERABLE_COIN_DANGER_RADIUS));
+  return threat?.invulnerable ? invulnerableRadius : dangerRadius;
+}
+
+function coinBlockedByThreat(_origin, coin, threat, options = {}) {
+  return !coinSafeFromThreats(coin, [threat], options);
 }
 
 function highValueCoinPriorityAmount(options = {}) {
@@ -1082,6 +1102,157 @@ function prioritizeBrowserlessOpportunities(opportunities, options = {}) {
   }));
 }
 
+function nearestRealtimeCoinWithin(self, coins, activeThreats, maxDistance, options = {}) {
+  if (!(Number(maxDistance) > 0)) return null;
+  return (coins || [])
+    .filter(coin => !coin.snapshotOnly)
+    .filter(coin => Number(coin?.amount || 0) > 0)
+    .map(coin => ({ ...coin, distance: Number.isFinite(Number(coin.distance)) ? Number(coin.distance) : distanceBetween(self, coin) }))
+    .filter(coin => Number.isFinite(Number(coin.distance)) && Number(coin.distance) <= Number(maxDistance))
+    .filter(coin => coinSafeFromThreats(coin, activeThreats, options))
+    .filter(coin => opportunityStaminaAffordable(self, opportunityCoinStaminaCost(coin, options), options))
+    .sort((a, b) => Number(a.distance || Infinity) - Number(b.distance || Infinity)
+      || Number(b.amount || 0) - Number(a.amount || 0))[0] || null;
+}
+
+function fieldMigrationBlockedByNearbyCoin(self, coins, activeThreats, fieldCoin = null, options = {}) {
+  const blockDistance = Math.max(0, Number(options.fieldMigrationNearbyCoinBlockDistance ?? BROWSER_RUNTIME_DEFAULTS.fieldMigrationNearbyCoinBlockDistance));
+  if (!(blockDistance > 0)) return false;
+  const nearby = nearestRealtimeCoinWithin(self, coins, activeThreats, blockDistance, options);
+  if (!nearby) return false;
+  if (fieldCoin) {
+    const nearbyId = nearby.drop_id ?? nearby.id;
+    const fieldId = fieldCoin.drop_id ?? fieldCoin.id;
+    if (nearbyId !== undefined && fieldId !== undefined && String(nearbyId) === String(fieldId)) return false;
+    const nearbyDistance = Number(nearby.distance ?? distanceBetween(self, nearby));
+    const fieldDistance = Number(fieldCoin.distance ?? distanceBetween(self, fieldCoin));
+    if (Number.isFinite(nearbyDistance) && Number.isFinite(fieldDistance) && nearbyDistance >= fieldDistance) return false;
+  }
+  return true;
+}
+
+function pickFieldMigrationCoin(input, activeThreats, options = {}) {
+  const self = input?.self || null;
+  if (!self) return null;
+  const stamina5s = Number(input?.stamina?.stamina5sRemainingMilli ?? self.stamina_5s_remaining_milli ?? Infinity);
+  const threshold = Math.max(0, Number(options.fieldMigrationStaminaThreshold ?? BROWSER_RUNTIME_DEFAULTS.fieldMigrationStaminaThreshold));
+  if (Number.isFinite(stamina5s) && stamina5s < threshold) return null;
+  const minDistance = Math.max(0, Number(options.fieldMigrationMinDistance ?? BROWSER_RUNTIME_DEFAULTS.fieldMigrationMinDistance));
+  const maxDistance = Math.max(minDistance, Number(options.fieldMigrationMaxDistance ?? BROWSER_RUNTIME_DEFAULTS.fieldMigrationMaxDistance));
+  const clusterRadius = Math.max(0, Number(options.fieldMigrationClusterRadius ?? BROWSER_RUNTIME_DEFAULTS.fieldMigrationClusterRadius));
+  const minCoins = Math.max(1, Math.round(Number(options.fieldMigrationMinCoins ?? BROWSER_RUNTIME_DEFAULTS.fieldMigrationMinCoins)));
+  const candidates = (input.profitCoins || [])
+    .map(coin => ({ ...coin, distance: Number.isFinite(Number(coin.distance)) ? Number(coin.distance) : distanceBetween(self, coin), amount: Number(coin.amount || 0) }))
+    .filter(coin => coin.amount > 0
+      && Number.isFinite(Number(coin.distance))
+      && coin.distance >= minDistance
+      && coin.distance <= maxDistance)
+    .filter(coin => coinSafeFromThreats(coin, activeThreats, options))
+    .filter(coin => opportunityStaminaAffordable(self, opportunityCoinStaminaCost(coin, options), options));
+  let best = null;
+  for (const coin of candidates) {
+    const members = candidates.filter(other => distanceBetween(coin, other) <= clusterRadius);
+    if (members.length < minCoins) continue;
+    const totalAmount = members.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+    const staminaCost = opportunityCoinStaminaCost(coin, options);
+    const score = opportunityValueScoreCore(totalAmount, staminaCost, {
+      weight: options.coinOpportunityValue ?? BROWSER_RUNTIME_DEFAULTS.coinOpportunityValue,
+      distanceFloor: options.opportunityDistanceFloor ?? BROWSER_RUNTIME_DEFAULTS.opportunityDistanceFloor,
+      distanceScoreScale: options.opportunityDistanceScoreScale ?? BROWSER_RUNTIME_DEFAULTS.opportunityDistanceScoreScale
+    });
+    if (!best || score > Number(best.score || -Infinity)) {
+      best = {
+        ...coin,
+        score,
+        fieldScore: score,
+        opportunityScore: score,
+        opportunityStaminaCost: staminaCost,
+        fieldMigration: true,
+        fieldMembers: members.length,
+        fieldAmount: totalAmount,
+        members: members.length,
+        totalAmount
+      };
+    }
+  }
+  if (best && fieldMigrationBlockedByNearbyCoin(self, input.profitCoins || [], activeThreats, best, options)) return null;
+  return best;
+}
+
+function currentHeldCoinChoice(stateful = {}, nowMs = 0) {
+  const choice = stateful.opportunityChoice || stateful.currentOpportunity || null;
+  const t = Number(nowMs) || 0;
+  if (!choice || String(choice.type || '') !== 'coin') return null;
+  if (Number(choice.until || 0) && t >= Number(choice.until || 0)) return null;
+  const id = choice.id ?? '';
+  if (id === '') return null;
+  return choice;
+}
+
+function currentHeldCoinRouteChoice(stateful = {}, nowMs = 0) {
+  const choice = currentHeldCoinChoice(stateful, nowMs);
+  if (!choice) return null;
+  if (String(choice.reason || '') !== 'best-opportunity-coin-route'
+    && !(Array.isArray(choice.coinRouteIds) && choice.coinRouteIds.length)) return null;
+  return choice;
+}
+
+function coinRouteCoreOptions(input, stateful = {}, options = {}) {
+  const self = input?.self || null;
+  return {
+    dist: distanceBetween,
+    moveStaminaCost: distance => opportunityMoveStaminaCost(distance, options),
+    pickupStaminaMs: options.opportunityCoinPickupStaminaMs ?? BROWSER_RUNTIME_DEFAULTS.opportunityCoinPickupStaminaMs,
+    sampleDistance: options.coinRouteLegSampleDistance ?? BROWSER_RUNTIME_DEFAULTS.coinRouteLegSampleDistance,
+    threatDangerRadius: threat => coinThreatDangerRadius(threat, options),
+    coinBlockedByThreat: (origin, coin, threat) => coinBlockedByThreat(origin, coin, threat, options),
+    clusterRadius: options.coinRouteClusterRadius ?? BROWSER_RUNTIME_DEFAULTS.coinRouteClusterRadius,
+    maxPointsDense: options.coinRouteMaxPointsDense ?? BROWSER_RUNTIME_DEFAULTS.coinRouteMaxPointsDense,
+    maxPointsMid: options.coinRouteMaxPointsMid ?? BROWSER_RUNTIME_DEFAULTS.coinRouteMaxPointsMid,
+    maxPointsSparse: options.coinRouteMaxPointsSparse ?? BROWSER_RUNTIME_DEFAULTS.coinRouteMaxPointsSparse,
+    linkDistance: options.coinRouteLinkDistance ?? BROWSER_RUNTIME_DEFAULTS.coinRouteLinkDistance,
+    maxLinkDistance: options.coinRouteMaxLinkDistance ?? BROWSER_RUNTIME_DEFAULTS.coinRouteMaxLinkDistance,
+    beamWidth: options.coinRouteBeamWidth ?? BROWSER_RUNTIME_DEFAULTS.coinRouteBeamWidth,
+    coinOpportunityValue: options.coinOpportunityValue ?? BROWSER_RUNTIME_DEFAULTS.coinOpportunityValue,
+    valueScore: (value, staminaCost, weight = options.coinOpportunityValue ?? BROWSER_RUNTIME_DEFAULTS.coinOpportunityValue) => opportunityValueScoreCore(value, staminaCost, {
+      weight,
+      distanceFloor: options.opportunityDistanceFloor ?? BROWSER_RUNTIME_DEFAULTS.opportunityDistanceFloor,
+      distanceScoreScale: options.opportunityDistanceScoreScale ?? BROWSER_RUNTIME_DEFAULTS.opportunityDistanceScoreScale
+    }),
+    staminaAffordable: staminaCost => opportunityStaminaAffordable(self, staminaCost, options),
+    nearbyFirstCoinDistance: options.coinRouteNearbyFirstCoinDistance ?? BROWSER_RUNTIME_DEFAULTS.coinRouteNearbyFirstCoinDistance,
+    firstCoinDistanceRatio: options.coinRouteFirstCoinDistanceRatio ?? BROWSER_RUNTIME_DEFAULTS.coinRouteFirstCoinDistanceRatio,
+    firstCoinDistanceSlack: options.coinRouteFirstCoinDistanceSlack ?? BROWSER_RUNTIME_DEFAULTS.coinRouteFirstCoinDistanceSlack,
+    firstRoutePointDistanceRatio: options.coinRouteFirstRoutePointDistanceRatio ?? BROWSER_RUNTIME_DEFAULTS.coinRouteFirstRoutePointDistanceRatio,
+    firstRoutePointDistanceSlack: options.coinRouteFirstRoutePointDistanceSlack ?? BROWSER_RUNTIME_DEFAULTS.coinRouteFirstRoutePointDistanceSlack,
+    firstRoutePointCosMin: options.coinRouteFirstRoutePointCosMin ?? BROWSER_RUNTIME_DEFAULTS.coinRouteFirstRoutePointCosMin,
+    firstRoutePointLaneRadius: options.coinRouteFirstRoutePointLaneRadius ?? BROWSER_RUNTIME_DEFAULTS.coinRouteFirstRoutePointLaneRadius,
+    firstRouteDistanceRatio: options.coinRouteFirstRouteDistanceRatio ?? BROWSER_RUNTIME_DEFAULTS.coinRouteFirstRouteDistanceRatio,
+    firstRouteDistanceSlack: options.coinRouteFirstRouteDistanceSlack ?? BROWSER_RUNTIME_DEFAULTS.coinRouteFirstRouteDistanceSlack,
+    choiceType: choice => String(choice?.type || ''),
+    choiceId: choice => String(choice?.id ?? ''),
+    heldMinOverlap: options.coinRouteHeldMinOverlap ?? BROWSER_RUNTIME_DEFAULTS.coinRouteHeldMinOverlap,
+    switchMargin: options.coinRouteSwitchMargin ?? BROWSER_RUNTIME_DEFAULTS.coinRouteSwitchMargin,
+    opportunitySwitchMargin: options.opportunitySwitchMargin ?? OPPORTUNITY_CONSTANTS.OPPORTUNITY_SWITCH_MARGIN,
+    switchRelativeMargin: options.coinRouteSwitchRelativeMargin ?? BROWSER_RUNTIME_DEFAULTS.coinRouteSwitchRelativeMargin,
+    opportunitySwitchRelativeMargin: options.opportunitySwitchRelativeMargin ?? BROWSER_RUNTIME_DEFAULTS.opportunitySwitchRelativeMargin,
+    maxDistance: Math.max(0, Number(options.coinRouteMaxDistance ?? options.globalCoinMaxDistance ?? BROWSER_RUNTIME_DEFAULTS.coinRouteMaxDistance)),
+    poolLimit: options.coinRoutePoolLimit ?? BROWSER_RUNTIME_DEFAULTS.coinRoutePoolLimit,
+    anchorLimit: options.coinRouteAnchorLimit ?? BROWSER_RUNTIME_DEFAULTS.coinRouteAnchorLimit,
+    safeCoinCandidates: (coins, routeThreats, maxDistance, routeSelf = self) => (coins || [])
+      .filter(coin => {
+        const limit = Number(maxDistance);
+        if (Number.isFinite(limit) && limit > 0 && Number(coin?.distance) > limit) return false;
+        return true;
+      })
+      .filter(coin => coinSafeFromThreats(coin, routeThreats, options))
+      .filter(coin => opportunityStaminaAffordable(routeSelf, opportunityCoinStaminaCost(coin, options), options)),
+    isSnapshotOnlyCoin: coin => Boolean(coin?.snapshotOnly && input?.profitCoinSource !== 'snapshot-fallback'),
+    heldChoice: currentHeldCoinChoice(stateful, input?.nowMs),
+    heldRouteChoice: currentHeldCoinRouteChoice(stateful, input?.nowMs)
+  };
+}
+
 function buildOpportunityDecision(input, stateful = {}, options = {}) {
   if (!input.self) {
     return {
@@ -1094,12 +1265,31 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
     };
   }
   const includeAfkProfitTargets = options.includeAfkProfitTargets !== false && !(options.blockAfkProfitWhenActiveThreatVisible && input.activeThreats.length);
+  const coinMaxDistance = Math.max(0, Number(options.coinMaxDistance || BROWSER_RUNTIME_DEFAULTS.coinMaxDistance));
+  const globalCoinMaxDistance = Math.max(0, Number(options.globalCoinMaxDistance || DEFAULT_GLOBAL_COIN_MAX_DISTANCE));
+  const fieldMigrationCoin = pickFieldMigrationCoin(input, input.activeThreats.concat(input.snapshotActiveThreats || []), options);
   const coinGroups = input.profitCoins.length
-    ? [{ coins: input.profitCoins, maxDistance: options.globalCoinMaxDistance || DEFAULT_GLOBAL_COIN_MAX_DISTANCE }]
+    ? [
+        { coins: input.profitCoins, maxDistance: coinMaxDistance },
+        { coins: input.profitCoins, maxDistance: globalCoinMaxDistance },
+        ...(fieldMigrationCoin ? [{ coins: [fieldMigrationCoin], maxDistance: Math.max(0, Number(options.fieldMigrationMaxDistance ?? BROWSER_RUNTIME_DEFAULTS.fieldMigrationMaxDistance)) }] : [])
+      ]
     : [];
+  const routeCoin = input.self && coinGroups.length
+    ? pickCoinRouteOpportunityCore(
+        input.self,
+        uniqueVisibleRouteCoinsCore(coinGroups, {
+          isSnapshotOnlyCoin: coin => Boolean(coin?.snapshotOnly && input.profitCoinSource !== 'snapshot-fallback'),
+          coinKey: coinRouteKey
+        }),
+        input.activeThreats.concat(input.snapshotActiveThreats || []),
+        coinRouteCoreOptions(input, stateful, options)
+      )
+    : null;
   const opportunityOptions = {
-    maxCoinDistance: options.coinMaxDistance || BROWSER_RUNTIME_DEFAULTS.coinMaxDistance,
-    globalCoinMaxDistance: options.globalCoinMaxDistance || DEFAULT_GLOBAL_COIN_MAX_DISTANCE,
+    maxCoinDistance: coinMaxDistance,
+    globalCoinMaxDistance,
+    routeMaxDistance: options.coinRouteMaxDistance ?? BROWSER_RUNTIME_DEFAULTS.coinRouteMaxDistance,
     attackRange: options.attackRange || DEFAULT_ATTACK_RANGE,
     attackEngageRange: options.attackEngageRange || DEFAULT_ATTACK_ENGAGE_RANGE,
     visibleDistance: opportunityVisibleDistance(options),
@@ -1141,7 +1331,7 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
     input.activeThreats.concat(input.snapshotActiveThreats || []),
     coinGroups,
     includeAfkProfitTargets ? input.afkTargets : [],
-    null,
+    routeCoin,
     opportunityOptions
   ), options);
   const choice = chooseStableOpportunityCore(
@@ -1156,7 +1346,10 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
         kind: chosen.actionKind || chosen.type,
         band: 'profit',
         reason: chosen.reason || 'best-opportunity',
-        target: chosen.type === 'coin' ? summarizeCoin(chosen.sourceCoin) : summarizeTarget(chosen.sourceTarget)
+        target: chosen.type === 'coin' ? summarizeCoin(chosen.sourceCoin) : summarizeTarget(chosen.sourceTarget),
+        ...(chosen.type === 'coin' && chosen.sourceCoin?.coinRoute
+          ? { coinRoute: coinRouteActionMetaCore(chosen.sourceCoin.coinRoute, chosen.sourceCoin.distance) }
+          : {})
       }
     : null;
   const remembered = rememberOpportunityChoiceCore(chosen, action, stateful.currentOpportunity || null, opportunityOptions);

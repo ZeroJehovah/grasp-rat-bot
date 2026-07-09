@@ -6830,6 +6830,135 @@ async function runSelfTest() {
       want: 'patrol|ignore-close-stale-coin|-1|id:close-stuck-coin|600|1|id:close-stuck-coin|2600'
     },
     {
+      name: 'browserless profit live picks multi-coin route over single coin',
+      got: (() => {
+        const decision = buildBrowserlessDecision({
+          userId: 7,
+          realtime: {
+            tick: 60,
+            frameAgeMs: 100,
+            self: { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+            entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 }],
+            bullets: [],
+            coinDrops: [
+              { drop_id: 'route-a', amount: 2, x: 10000, y: 0 },
+              { drop_id: 'route-b', amount: 2, x: 10000, y: 2000 },
+              { drop_id: 'route-c', amount: 2, x: 10000, y: 4000 },
+              { drop_id: 'single', amount: 2, x: 9000, y: -9000 }
+            ]
+          },
+          fallback: { coinDrops: [] }
+        }, {}, {
+          nowMs: 1600,
+          controlMode: 'profit-live',
+          coinMaxDistance: 500,
+          footCoinPriorityDistance: 500,
+          opportunityCoinPickupStaminaMs: 0
+        });
+        return [
+          decision.kind,
+          decision.reason,
+          decision.action.target.id,
+          decision.action.coinRoute.ids.join(','),
+          decision.action.coinRoute.value,
+          decision.action.target.coinRoute.legCount,
+          decision.profit.best.reason
+        ].join('|');
+      })(),
+      want: 'profit-candidate|best-opportunity-coin-route|route-a|route-a,route-b,route-c|6|3|best-opportunity-coin-route'
+    },
+    {
+      name: 'browserless profit live keeps held coin route within switch margin',
+      got: (() => {
+        const stateful = {
+          opportunityChoice: {
+            type: 'coin',
+            id: 'held-a',
+            reason: 'best-opportunity-coin-route',
+            until: 5000,
+            coinRouteIds: ['held-a', 'held-b', 'held-c'],
+            amount: 2,
+            x: 10000,
+            y: 0
+          }
+        };
+        const decision = buildBrowserlessDecision({
+          userId: 7,
+          realtime: {
+            tick: 60,
+            frameAgeMs: 100,
+            self: { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+            entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 }],
+            bullets: [],
+            coinDrops: [
+              { drop_id: 'held-a', amount: 2, x: 10000, y: 0 },
+              { drop_id: 'held-b', amount: 2, x: 10000, y: 2000 },
+              { drop_id: 'held-c', amount: 2, x: 10000, y: 4000 },
+              { drop_id: 'new-a', amount: 2, x: 12000, y: 0 },
+              { drop_id: 'new-b', amount: 2, x: 12000, y: 2000 },
+              { drop_id: 'new-c', amount: 2, x: 12000, y: 4000 }
+            ]
+          },
+          fallback: { coinDrops: [] }
+        }, stateful, {
+          nowMs: 1600,
+          controlMode: 'profit-live',
+          coinMaxDistance: 500,
+          footCoinPriorityDistance: 500,
+          opportunityCoinPickupStaminaMs: 0,
+          opportunitySwitchMargin: 1000000
+        });
+        return [
+          decision.kind,
+          decision.action.target.id,
+          decision.action.coinRoute.ids.slice(0, 3).join(','),
+          decision.action.coinRoute.legCount >= 3,
+          decision.stateful.opportunityChoice.id
+        ].join('|');
+      })(),
+      want: 'profit-candidate|held-a|held-a,held-b,held-c|true|held-a'
+    },
+    {
+      name: 'browserless profit live blocks field migration behind nearer safe coin',
+      got: (() => {
+        const decision = buildBrowserlessDecision({
+          userId: 7,
+          realtime: {
+            tick: 60,
+            frameAgeMs: 100,
+            self: { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+            entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 }],
+            bullets: [],
+            coinDrops: [
+              { drop_id: 'near-safe', amount: 1, x: 5000, y: 0 },
+              { drop_id: 'field-a', amount: 5, x: 25000, y: 0 },
+              { drop_id: 'field-b', amount: 5, x: 26000, y: 1000 },
+              { drop_id: 'field-c', amount: 5, x: 27000, y: -1000 }
+            ]
+          },
+          fallback: { coinDrops: [] }
+        }, {}, {
+          nowMs: 1600,
+          controlMode: 'profit-live',
+          coinMaxDistance: 500,
+          footCoinPriorityDistance: 500,
+          coinRouteMaxDistance: 0,
+          fieldMigrationMinDistance: 22000,
+          fieldMigrationMaxDistance: 45000,
+          fieldMigrationMinCoins: 3,
+          fieldMigrationNearbyCoinBlockDistance: 30000
+        });
+        return [
+          decision.kind,
+          decision.reason,
+          decision.action.target.id,
+          decision.action.target.fieldMembers === null,
+          decision.profit.candidates.some(item => item.coin?.fieldMembers >= 3)
+        ].join('|');
+      })(),
+      want: 'profit-candidate|visible-coin|near-safe|true|false'
+    },
+    {
       name: 'browserless profit live leaves when nearest allowed coin exceeds 1h stamina budget',
       got: (() => {
         const store = createBrowserlessStateStore({ userId: 7 });
