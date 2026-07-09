@@ -13,6 +13,7 @@ const { createBrowserlessStateStore } = require('./state-store');
 const { openBrowserlessWs, isWsOpen } = require('./ws-transport');
 const { leaveWithVerification } = require('./leave-client');
 const {
+  buildBrowserlessRuntimeDefaults,
   createBrowserlessDecisionAdapter,
   summarizeBrowserlessDecision
 } = require('./decision-adapter');
@@ -185,7 +186,13 @@ async function runReadOnlyCanary(config, options = {}) {
   const frameGapAlertMs = Math.max(1000, Number(config.frameGapAlertMs || DEFAULT_FRAME_GAP_ALERT_MS));
   const decisionIntervalMs = Math.max(250, Number(config.decisionIntervalMs || 1000));
   const stateStore = options.stateStore || createBrowserlessStateStore({ userId: config.userId, now });
-  const decisionAdapter = options.decisionAdapter || createBrowserlessDecisionAdapter({ userId: config.userId, now, controlMode });
+  const runtimeDefaults = buildBrowserlessRuntimeDefaults(config);
+  const decisionAdapter = options.decisionAdapter || createBrowserlessDecisionAdapter({
+    ...runtimeDefaults,
+    userId: config.userId,
+    now,
+    controlMode
+  });
   const safetyController = options.safetyController || createBrowserlessSafetyController({
     now,
     frameGapAlertMs,
@@ -389,6 +396,7 @@ async function runReadOnlyCanary(config, options = {}) {
           if (deadlineAtMs && atMs >= deadlineAtMs) return;
           if (!lastDecisionAtMs || atMs - lastDecisionAtMs >= decisionIntervalMs) {
             const decision = decisionAdapter.decide(currentState, {
+              ...runtimeDefaults,
               nowMs: atMs,
               controlMode,
               combatEnabled: config.combatEnabled
@@ -436,6 +444,7 @@ async function runReadOnlyCanary(config, options = {}) {
     });
     if (actionEnabled) {
       actionAdapter = options.actionAdapter || createBrowserlessActionAdapter({
+        ...runtimeDefaults,
         transport,
         now,
         commandIntervalMs: config.movementCommandIntervalMs,

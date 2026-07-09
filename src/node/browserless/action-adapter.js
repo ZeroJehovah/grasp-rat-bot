@@ -1,11 +1,18 @@
 'use strict';
 
+const { buildRuntimeDefaults } = require('../../shared/runtime-defaults');
+const {
+  coinDirectionToCore,
+  coinMotionMetaCore
+} = require('../../strategy/coin-motion');
+
+const BROWSER_RUNTIME_DEFAULTS = buildRuntimeDefaults({}, false);
 const DEFAULT_TARGET_DEAD_ZONE_CM = 900;
 const DEFAULT_COIN_TARGET_DEAD_ZONE_CM = 150;
 const DEFAULT_COMMAND_INTERVAL_MS = 500;
 const DEFAULT_SETTLEMENT_FRAMES = 2;
 const DEFAULT_COMBAT_SHOOT_MIN_INTERVAL_MS = 160;
-const DEFAULT_ATTACK_RANGE_CM = 14500;
+const DEFAULT_ATTACK_RANGE_CM = BROWSER_RUNTIME_DEFAULTS.attackRange;
 
 function numberOrNull(value) {
   const number = Number(value);
@@ -17,6 +24,109 @@ function roundVelocity(value) {
   if (!Number.isFinite(number)) return 0;
   if (Math.abs(number) < 0.0005) return 0;
   return Math.round(number * 1000) / 1000;
+}
+
+function clampNumber(value, min, max) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return min;
+  return Math.max(min, Math.min(max, number));
+}
+
+function optionNumber(options, key, fallback) {
+  const number = Number(options?.[key]);
+  return Number.isFinite(number) ? number : fallback;
+}
+
+function coinMotionCoreOptions(options = {}, extra = {}) {
+  return {
+    tolerance: optionNumber(options, 'coinPrecisionTolerance', BROWSER_RUNTIME_DEFAULTS.coinPrecisionTolerance),
+    coinPrecisionTolerance: optionNumber(options, 'coinPrecisionTolerance', BROWSER_RUNTIME_DEFAULTS.coinPrecisionTolerance),
+    coinAxisApproachMinDistance: optionNumber(options, 'coinAxisApproachMinDistance', BROWSER_RUNTIME_DEFAULTS.coinAxisApproachMinDistance),
+    coinAxisApproachRatio: optionNumber(options, 'coinAxisApproachRatio', BROWSER_RUNTIME_DEFAULTS.coinAxisApproachRatio),
+    coinAxisApproachLaneTolerance: optionNumber(options, 'coinAxisApproachLaneTolerance', BROWSER_RUNTIME_DEFAULTS.coinAxisApproachLaneTolerance),
+    coinPickupStopDistance: optionNumber(options, 'coinPickupStopDistance', BROWSER_RUNTIME_DEFAULTS.coinPickupStopDistance),
+    coinPickupStopPulseMs: optionNumber(options, 'coinPickupStopPulseMs', BROWSER_RUNTIME_DEFAULTS.coinPickupStopPulseMs),
+    coinPickupMicroDistance: optionNumber(options, 'coinPickupMicroDistance', BROWSER_RUNTIME_DEFAULTS.coinPickupMicroDistance),
+    coinPickupMicroPulseMs: optionNumber(options, 'coinPickupMicroPulseMs', BROWSER_RUNTIME_DEFAULTS.coinPickupMicroPulseMs),
+    coinPickupFineDistance: optionNumber(options, 'coinPickupFineDistance', BROWSER_RUNTIME_DEFAULTS.coinPickupFineDistance),
+    coinPickupFinePulseMs: optionNumber(options, 'coinPickupFinePulseMs', BROWSER_RUNTIME_DEFAULTS.coinPickupFinePulseMs),
+    coinPickupBrakeDistance: optionNumber(options, 'coinPickupBrakeDistance', BROWSER_RUNTIME_DEFAULTS.coinPickupBrakeDistance),
+    coinPickupBrakePulseMs: optionNumber(options, 'coinPickupBrakePulseMs', BROWSER_RUNTIME_DEFAULTS.coinPickupBrakePulseMs),
+    coinPickupSweepDistance: optionNumber(options, 'coinPickupSweepDistance', BROWSER_RUNTIME_DEFAULTS.coinPickupSweepDistance),
+    coinPickupSweepPulseMs: optionNumber(options, 'coinPickupSweepPulseMs', BROWSER_RUNTIME_DEFAULTS.coinPickupSweepPulseMs),
+    coinPickupPulseMs: optionNumber(options, 'coinPickupPulseMs', BROWSER_RUNTIME_DEFAULTS.coinPickupPulseMs),
+    coinPickupExactTolerance: optionNumber(options, 'coinPickupExactTolerance', BROWSER_RUNTIME_DEFAULTS.coinPickupExactTolerance),
+    coinPickupFailureSlowStepMs: optionNumber(options, 'coinPickupFailureSlowStepMs', BROWSER_RUNTIME_DEFAULTS.coinPickupFailureSlowStepMs),
+    coinPickupFailureMinPulseMs: optionNumber(options, 'coinPickupFailureMinPulseMs', BROWSER_RUNTIME_DEFAULTS.coinPickupFailureMinPulseMs),
+    coinApproachBrakeDistance: optionNumber(options, 'coinApproachBrakeDistance', BROWSER_RUNTIME_DEFAULTS.coinApproachBrakeDistance),
+    coinAxisFlipTolerance: optionNumber(options, 'coinAxisFlipTolerance', BROWSER_RUNTIME_DEFAULTS.coinAxisFlipTolerance),
+    coinApproachLockMs: optionNumber(options, 'coinApproachLockMs', BROWSER_RUNTIME_DEFAULTS.coinApproachLockMs),
+    nearCoinStuckDistance: optionNumber(options, 'nearCoinStuckDistance', BROWSER_RUNTIME_DEFAULTS.nearCoinStuckDistance),
+    ...extra
+  };
+}
+
+function applyCoinApproachLockUpdate(state, update) {
+  if (!state || !update) return;
+  if (update.action === 'set' && update.lock) {
+    state.coinApproachLock = update.lock;
+    return;
+  }
+  if (update.action === 'clear') {
+    if (update.all || !state.coinApproachLock || String(state.coinApproachLock.id) === String(update.id)) {
+      state.coinApproachLock = null;
+    }
+  }
+}
+
+function coinMotionVectorToTarget(self, target, options = {}, state = null, nowMs = Date.now()) {
+  const sx = numberOrNull(self?.x);
+  const sy = numberOrNull(self?.y);
+  const tx = numberOrNull(target?.x);
+  const ty = numberOrNull(target?.y);
+  if (sx === null || sy === null || tx === null || ty === null) {
+    return { ok: false, reason: 'missing-position', dx: 0, dy: 0, distance: null };
+  }
+  const coin = {
+    ...target,
+    drop_id: target?.drop_id ?? target?.id,
+    id: target?.id ?? target?.drop_id,
+    x: tx,
+    y: ty
+  };
+  const result = coinDirectionToCore({ x: sx, y: sy }, coin, coinMotionCoreOptions(options, {
+    nowMs,
+    lock: state?.coinApproachLock || null
+  }));
+  applyCoinApproachLockUpdate(state, result.lockUpdate);
+  const direction = result.direction || {};
+  const meta = coinMotionMetaCore(direction);
+  const dx = clampNumber(Math.round(Number(direction.dx || 0)), -1, 1);
+  const dy = clampNumber(Math.round(Number(direction.dy || 0)), -1, 1);
+  const distance = Number.isFinite(Number(direction.distance))
+    ? Math.round(Number(direction.distance))
+    : Math.round(Math.hypot(tx - sx, ty - sy));
+  const reason = meta.pickupMode
+    ? 'coin-pickup-sweep'
+    : (meta.routeMode ? 'coin-route-motion' : 'move-to-target');
+  if (!(dx || dy)) {
+    return {
+      ok: false,
+      reason: 'target-reached',
+      dx,
+      dy,
+      distance,
+      ...meta
+    };
+  }
+  return {
+    ok: true,
+    reason,
+    dx,
+    dy,
+    distance,
+    ...meta
+  };
 }
 
 function movementVectorToTarget(self, target, options = {}) {
@@ -79,7 +189,10 @@ function createInitialActionState() {
     lastCommand: null,
     lastShootCommand: null,
     lastShootAck: null,
-    lastSettlement: null
+    lastSettlement: null,
+    coinApproachLock: null,
+    velocityPulseToken: 0,
+    velocityStopTimer: null
   };
 }
 
@@ -106,8 +219,33 @@ function createBrowserlessActionAdapter(options = {}) {
   const commandIntervalMs = Math.max(0, Number(options.commandIntervalMs ?? DEFAULT_COMMAND_INTERVAL_MS));
   const settlementFrames = Math.max(1, Number(options.settlementFrames ?? DEFAULT_SETTLEMENT_FRAMES));
   const combatShootMinIntervalMs = Math.max(1, Number(options.combatShootMinIntervalMs ?? DEFAULT_COMBAT_SHOOT_MIN_INTERVAL_MS));
+  const setTimeoutFn = typeof options.setTimeout === 'function' ? options.setTimeout : setTimeout;
+  const clearTimeoutFn = typeof options.clearTimeout === 'function' ? options.clearTimeout : clearTimeout;
   const state = createInitialActionState();
   let nextCommandId = 1;
+
+  function clearPrecisionPulseStop() {
+    if (!state.velocityStopTimer) return;
+    clearTimeoutFn(state.velocityStopTimer);
+    state.velocityStopTimer = null;
+  }
+
+  function schedulePrecisionPulseStop(sent, pulseMs, actionKind) {
+    const pulse = Number(pulseMs);
+    if (!sent?.ok || sent.skipped || !(pulse > 0)) return null;
+    const command = sent.command || null;
+    if (!command || !(Number(command.dx || 0) || Number(command.dy || 0))) return null;
+    if (actionKind !== 'coin' && actionKind !== 'seek-coin' && actionKind !== 'profit-candidate') return null;
+    const pulseMaxMs = Math.max(110, Number(options.precisionPulseMaxMs || BROWSER_RUNTIME_DEFAULTS.precisionPulseMaxMs));
+    const delayMs = Math.round(clampNumber(pulse, 20, pulseMaxMs));
+    const token = sent.pulseToken;
+    state.velocityStopTimer = setTimeoutFn(() => {
+      if (state.velocityPulseToken !== token) return;
+      state.velocityStopTimer = null;
+      sendVelocity(0, 0, 'precision-pulse');
+    }, delayMs);
+    return delayMs;
+  }
 
   function sendVelocity(dx, dy, reason, target = null) {
     const atMs = now();
@@ -121,6 +259,9 @@ function createBrowserlessActionAdapter(options = {}) {
       state.skippedCount += 1;
       return { ok: true, skipped: true, reason: 'unchanged-command-throttled', command: summarizeCommand(last) };
     }
+    clearPrecisionPulseStop();
+    state.velocityPulseToken += 1;
+    const pulseToken = state.velocityPulseToken;
     transport.sendVelocity(dx, dy);
     const command = {
       id: nextCommandId,
@@ -146,7 +287,7 @@ function createBrowserlessActionAdapter(options = {}) {
       observedFrames: 0,
       tick: null
     };
-    return { ok: true, skipped: false, command: summarizeCommand(command) };
+    return { ok: true, skipped: false, command: summarizeCommand(command), pulseToken };
   }
 
   function sendShoot(targetX, targetY, startX, startY, reason, target = null, cadenceMs = combatShootMinIntervalMs) {
@@ -206,7 +347,7 @@ function createBrowserlessActionAdapter(options = {}) {
       return applyProfitEnemyDecision(self, profitAction.target, decision);
     }
     const target = profitAction.target;
-    const vector = movementVectorToTarget(self, target, options);
+    const vector = coinMotionVectorToTarget(self, target, options, state, now());
     if (!vector.ok) {
       const stopped = stop(vector.reason);
       return {
@@ -219,13 +360,15 @@ function createBrowserlessActionAdapter(options = {}) {
       };
     }
     const sent = sendVelocity(vector.dx, vector.dy, vector.reason, target);
+    const precisionPulseMs = schedulePrecisionPulseStop(sent, vector.precisionPulseMs, profitAction.kind);
     return {
       ok: sent.ok,
       kind: 'velocity',
       reason: vector.reason,
       vector,
       command: sent.command || null,
-      skipped: Boolean(sent.skipped)
+      skipped: Boolean(sent.skipped),
+      precisionPulseMs
     };
   }
 
@@ -440,6 +583,8 @@ module.exports = {
   DEFAULT_TARGET_DEAD_ZONE_CM,
   combatSummaryFromDecision,
   createBrowserlessActionAdapter,
+  coinMotionCoreOptions,
+  coinMotionVectorToTarget,
   profitActionFromDecision,
   movementVectorToTarget
 };

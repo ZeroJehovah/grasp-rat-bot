@@ -17,26 +17,32 @@ const {
   coinTargetKeyCore,
   snapshotCoinNavigationReasonCore
 } = require('../../strategy/coin-target');
+const { buildRuntimeDefaults } = require('../../shared/runtime-defaults');
 const { buildBrowserlessCombatDryRun } = require('./combat-adapter');
 
+const BROWSER_RUNTIME_DEFAULTS = buildRuntimeDefaults({}, false);
 const DEFAULT_STALE_SELF_MS = 2500;
-const DEFAULT_ATTACK_RANGE = 14500;
-const DEFAULT_ATTACK_ENGAGE_RANGE = 26000;
-const DEFAULT_ATTACK_MIN_DROP = 8;
-const DEFAULT_ATTACK_MIN_AFK_DROP = 3;
-const DEFAULT_ATTACK_MIN_REWARD_RATIO = 0.5;
+const DEFAULT_ATTACK_RANGE = BROWSER_RUNTIME_DEFAULTS.attackRange;
+const DEFAULT_ATTACK_ENGAGE_RANGE = BROWSER_RUNTIME_DEFAULTS.attackEngageRange;
+const DEFAULT_ATTACK_MIN_DROP = BROWSER_RUNTIME_DEFAULTS.attackMinDrop;
+const DEFAULT_ATTACK_MIN_AFK_DROP = BROWSER_RUNTIME_DEFAULTS.attackMinAfkDrop;
+const DEFAULT_ATTACK_MIN_REWARD_RATIO = BROWSER_RUNTIME_DEFAULTS.attackMinRewardRatio;
 const DEFAULT_PROFIT_LIVE_THREAT_EXIT_RANGE = DEFAULT_ATTACK_RANGE;
 const DEFAULT_PROFIT_LIVE_INJURY_EXIT_RANGE = DEFAULT_ATTACK_ENGAGE_RANGE;
 const DEFAULT_PROFIT_LIVE_INJURY_HP = 90;
-const DEFAULT_PROFIT_LIVE_PLAYER_DROP_MAX_DISTANCE = 22000;
+const DEFAULT_PROFIT_LIVE_PLAYER_DROP_MAX_DISTANCE = BROWSER_RUNTIME_DEFAULTS.postAttackDropCoinMaxDistance;
 const DEFAULT_PROFIT_LIVE_PLAYER_DROP_MAX_AGE_TICKS = 8000;
-const DEFAULT_SNAPSHOT_VISIBLE_COIN_MAX_DISTANCE = 50000;
-const DEFAULT_OPPORTUNITY_VISIBLE_DISTANCE = 50000;
-const DEFAULT_OPPORTUNITY_NEARBY_PRIORITY_DISTANCE = 50000;
-const DEFAULT_GLOBAL_COIN_MAX_DISTANCE = 50000;
-const DEFAULT_RECOVERY_COIN_MAX_DISTANCE = 600;
+const DEFAULT_SNAPSHOT_VISIBLE_COIN_MAX_DISTANCE = BROWSER_RUNTIME_DEFAULTS.globalCoinMaxDistance;
+const DEFAULT_OPPORTUNITY_VISIBLE_DISTANCE = BROWSER_RUNTIME_DEFAULTS.opportunityVisibleDistance;
+const DEFAULT_OPPORTUNITY_NEARBY_PRIORITY_DISTANCE = BROWSER_RUNTIME_DEFAULTS.opportunityNearbyPriorityDistance;
+const DEFAULT_GLOBAL_COIN_MAX_DISTANCE = BROWSER_RUNTIME_DEFAULTS.globalCoinMaxDistance;
+const DEFAULT_RECOVERY_COIN_MAX_DISTANCE = BROWSER_RUNTIME_DEFAULTS.recoveryCoinMaxDistance;
 const DEFAULT_RECOVERY_PLAYER_DROP_MIN_AMOUNT = 2;
-const DEFAULT_POST_ATTACK_RECOVERY_DROP_MAX_DISTANCE = 50000;
+const DEFAULT_POST_ATTACK_RECOVERY_DROP_MAX_DISTANCE = BROWSER_RUNTIME_DEFAULTS.postAttackRecoveryDropMaxDistance;
+
+function buildBrowserlessRuntimeDefaults(config = {}) {
+  return buildRuntimeDefaults(config, false);
+}
 
 function cloneJson(value) {
   if (value === null || value === undefined) return value;
@@ -906,7 +912,9 @@ function createBrowserlessDecisionAdapter(options = {}) {
 }
 
 module.exports = {
+  BROWSER_RUNTIME_DEFAULTS,
   buildBrowserlessDecision,
+  buildBrowserlessRuntimeDefaults,
   buildBrowserlessStrategyInput,
   createBrowserlessDecisionAdapter,
   decisionStatePatch,

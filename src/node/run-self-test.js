@@ -52,6 +52,7 @@ const {
 } = require('./browserless/state-store');
 const {
   buildBrowserlessDecision,
+  buildBrowserlessRuntimeDefaults,
   createBrowserlessDecisionAdapter
 } = require('./browserless/decision-adapter');
 const {
@@ -60,6 +61,7 @@ const {
 } = require('./browserless/canary');
 const {
   createBrowserlessActionAdapter,
+  coinMotionVectorToTarget,
   movementVectorToTarget
 } = require('./browserless/action-adapter');
 const {
@@ -77,6 +79,9 @@ const {
 const {
   parseBrowserlessRunnerArgs
 } = require('./browserless/config');
+const {
+  buildRuntimeDefaults
+} = require('../shared/runtime-defaults');
 const {
   browserlessLoopPlan,
   runBrowserlessRunner,
@@ -5995,6 +6000,22 @@ async function runSelfTest() {
       want: 'profit-candidate|attack|9|3|false|true'
     },
     {
+      name: 'browserless strategy defaults track browser runtime defaults',
+      got: (() => {
+        const browser = buildRuntimeDefaults({}, false);
+        const browserless = buildBrowserlessRuntimeDefaults();
+        return [
+          browserless.attackRange === browser.attackRange,
+          browserless.attackEngageRange === browser.attackEngageRange,
+          browserless.attackMinAfkDrop === browser.attackMinAfkDrop,
+          browserless.globalCoinMaxDistance === browser.globalCoinMaxDistance,
+          browserless.coinPrecisionTolerance === browser.coinPrecisionTolerance,
+          browserless.attackEngageRange
+        ].join('|');
+      })(),
+      want: 'true|true|true|true|true|11000'
+    },
+    {
       name: 'browserless profit live prioritizes visible high-drop AFK over ordinary one coin',
       got: (() => {
         const store = createBrowserlessStateStore({ userId: 7 });
@@ -6763,6 +6784,54 @@ async function runSelfTest() {
       want: 'true|move-to-target|761|false|target-reached|761'
     },
     {
+      name: 'browserless action adapter uses shared coin pickup pulse',
+      got: (() => {
+        const commands = [];
+        const timers = [];
+        const adapter = createBrowserlessActionAdapter({
+          now: () => 1000 + commands.length * 200,
+          commandIntervalMs: 1,
+          setTimeout: (fn, ms) => {
+            timers.push({ fn, ms });
+            return timers.length;
+          },
+          clearTimeout: () => {},
+          transport: {
+            sendVelocity: (dx, dy) => commands.push(`vel ${dx} ${dy}`)
+          }
+        });
+        const directVector = coinMotionVectorToTarget(
+          { x: 0, y: 0 },
+          { type: 'coin', id: 'near-coin', x: 50, y: 0 },
+          {},
+          { coinApproachLock: null },
+          1000
+        );
+        const action = adapter.applyDecision({
+          realtime: { self: { x: 0, y: 0 }, tick: 1 }
+        }, {
+          kind: 'profit-candidate',
+          band: 'profit',
+          action: { kind: 'coin', band: 'profit', target: { type: 'coin', id: 'near-coin', x: 50, y: 0 } }
+        });
+        const beforePulse = commands.join(',');
+        if (timers[0]) timers[0].fn();
+        return [
+          directVector.ok,
+          directVector.dx,
+          directVector.pickupMode,
+          directVector.precisionPulseMs,
+          action.kind,
+          action.vector.pickupMode,
+          action.precisionPulseMs,
+          timers[0]?.ms,
+          beforePulse,
+          commands.join(',')
+        ].join('|');
+      })(),
+      want: 'true|1|micro|60|velocity|micro|60|60|vel 1 0|vel 1 0,vel 0 0'
+    },
+    {
       name: 'browserless action adapter stops for combat and reached targets',
       got: (() => {
         const commands = [];
@@ -6785,7 +6854,7 @@ async function runSelfTest() {
         }, {
           kind: 'profit-candidate',
           band: 'profit',
-          action: { kind: 'coin', band: 'profit', target: { type: 'coin', id: 1, x: 50, y: 0, snapshotOnly: true } }
+          action: { kind: 'coin', band: 'profit', target: { type: 'coin', id: 1, x: 0, y: 0, snapshotOnly: true } }
         });
         return [
           combat.kind,
