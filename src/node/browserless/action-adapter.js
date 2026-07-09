@@ -185,6 +185,15 @@ function combatSummaryFromDecision(decision) {
   return decision?.combat || null;
 }
 
+function safetyMotionFromDecision(decision) {
+  const action = decision?.action || decision || {};
+  const kind = String(action.kind || decision?.kind || '');
+  const band = String(action.band || decision?.band || '');
+  if (band !== 'safety') return null;
+  if (kind !== 'flee' && kind !== 'return-block-scan') return null;
+  return action;
+}
+
 function createInitialActionState() {
   return {
     sentCount: 0,
@@ -418,6 +427,10 @@ function createBrowserlessActionAdapter(options = {}) {
     if (combatSummaryFromDecision(decision)) {
       return applyCombatDecision(stateSnapshot, decision);
     }
+    const safetyMotion = safetyMotionFromDecision(decision);
+    if (safetyMotion) {
+      return applySafetyMotionDecision(safetyMotion);
+    }
     const self = stateSnapshot?.realtime?.self || decision?.input?.self || null;
     const profitAction = profitActionFromDecision(decision);
     if (!profitAction) {
@@ -456,6 +469,26 @@ function createBrowserlessActionAdapter(options = {}) {
       command: sent.command || null,
       skipped: Boolean(sent.skipped),
       precisionPulseMs
+    };
+  }
+
+  function applySafetyMotionDecision(action) {
+    const sent = sendVelocity(
+      roundVelocity(action.dx),
+      roundVelocity(action.dy),
+      action.reason || action.kind || 'safety-motion',
+      action.target || action.threats?.[0] || null
+    );
+    return {
+      ok: sent.ok,
+      kind: action.kind || 'safety-motion',
+      reason: action.reason || action.kind || 'safety-motion',
+      command: sent.command || null,
+      skipped: Boolean(sent.skipped),
+      locked: Boolean(action.locked),
+      target: action.target || null,
+      threats: action.threats || [],
+      blockedAction: action.blockedAction || null
     };
   }
 
@@ -677,5 +710,6 @@ module.exports = {
   coinMotionCoreOptions,
   coinMotionVectorToTarget,
   profitActionFromDecision,
+  safetyMotionFromDecision,
   movementVectorToTarget
 };

@@ -5967,7 +5967,7 @@ async function runSelfTest() {
       want: 'wait|no-profitable-candidate|none|false|active-threat-visible|8'
     },
     {
-      name: 'browserless profit live targets AFK but exits near active threat',
+      name: 'browserless profit live targets AFK but flees near active threat',
       got: (() => {
         const choose = entities => {
           const store = createBrowserlessStateStore({ userId: 7 });
@@ -6005,7 +6005,7 @@ async function runSelfTest() {
           activeVisible.profit.best === null
         ].join('|');
       })(),
-      want: 'profit-candidate|attack|enemy|8|false|safety-exit|safety|profit-live-active-threat|true|9|true'
+      want: 'profit-candidate|attack|enemy|8|false|flee|safety|active-threat-return-block||9|true'
     },
     {
       name: 'browserless profit live rejects low-drop AFK targets by default',
@@ -6631,7 +6631,7 @@ async function runSelfTest() {
       want: 'safety-exit|safety|profit-live-snapshot-active-threat|8|realtime|true|true||false|true|true'
     },
     {
-      name: 'browserless profit live exits instead of chasing coin under combat threat',
+      name: 'browserless profit live flees instead of chasing coin under combat threat',
       got: (() => {
         const store = createBrowserlessStateStore({ userId: 7 });
         store.ingestFrame({
@@ -6667,7 +6667,7 @@ async function runSelfTest() {
           decision.combat.target.userId
         ].join('|');
       })(),
-      want: 'safety-exit|safety|profit-live-active-threat|31361|realtime|||false|31361'
+      want: 'flee|safety|active-threat-return-block|31361|realtime|||false|31361'
     },
     {
       name: 'browserless profit live can fight active players when enabled',
@@ -6701,7 +6701,7 @@ async function runSelfTest() {
       want: 'combat-live|combat|combat-live-realtime|combat-live|9|realtime|true'
     },
     {
-      name: 'browserless profit live treats passive moving player as safety threat',
+      name: 'browserless profit live flees passive moving safety threat',
       got: (() => {
         const store = createBrowserlessStateStore({ userId: 7 });
         store.ingestFrame({
@@ -6730,10 +6730,10 @@ async function runSelfTest() {
           decision.combat.actionEligible
         ].join('|');
       })(),
-      want: 'safety-exit|safety|profit-live-active-threat|safety-exit|8||0|false'
+      want: 'flee|safety|active-threat-return-block|flee|8||0|false'
     },
     {
-      name: 'browserless profit live exits for low-drop active moving threat without combat promotion',
+      name: 'browserless profit live flees low-drop active moving threat without combat promotion',
       got: (() => {
         const store = createBrowserlessStateStore({ userId: 7 });
         store.ingestFrame({
@@ -6761,7 +6761,7 @@ async function runSelfTest() {
           decision.action.shouldLeave
         ].join('|');
       })(),
-      want: 'safety-exit|safety|profit-live-active-threat|8||false|true'
+      want: 'flee|safety|active-threat-return-block|8||false|'
     },
     {
       name: 'browserless profit live can fight firing passive players when enabled',
@@ -7159,6 +7159,41 @@ async function runSelfTest() {
       want: 'stop|unsupported-or-wait-decision|stop|target-reached|vel 0 0,vel 0 0'
     },
     {
+      name: 'browserless action adapter executes flee and return-block scan velocity',
+      got: (() => {
+        const commands = [];
+        const adapter = createBrowserlessActionAdapter({
+          now: () => 1000 + commands.length * 600,
+          commandIntervalMs: 1,
+          transport: {
+            sendVelocity: (dx, dy) => commands.push(`vel ${dx} ${dy}`)
+          }
+        });
+        const flee = adapter.applyDecision({
+          realtime: { self: { x: 0, y: 0 }, tick: 1 }
+        }, {
+          kind: 'flee',
+          band: 'safety',
+          action: { kind: 'flee', band: 'safety', reason: 'active-threat-return-block', dx: -1, dy: 0 }
+        });
+        const scan = adapter.applyDecision({
+          realtime: { self: { x: 0, y: 0 }, tick: 2 }
+        }, {
+          kind: 'return-block-scan',
+          band: 'safety',
+          action: { kind: 'return-block-scan', band: 'safety', reason: 'return-block-lateral-scan', dx: 0, dy: 1 }
+        });
+        return [
+          flee.kind,
+          flee.reason,
+          scan.kind,
+          scan.reason,
+          commands.join(',')
+        ].join('|');
+      })(),
+      want: 'flee|active-threat-return-block|return-block-scan|return-block-lateral-scan|vel -1 0,vel 0 1'
+    },
+    {
       name: 'browserless action adapter attacks visible AFK profit target',
       got: (() => {
         const commands = [];
@@ -7455,7 +7490,7 @@ async function runSelfTest() {
       want: 'true|movement-only|true|3|2|false|pending|true|vel 0 0|true'
     },
     {
-      name: 'browserless profit-live canary leaves before profit action under threat',
+      name: 'browserless profit-live canary flees before profit action under threat',
       got: (async () => {
         let t = Date.UTC(2026, 6, 8, 1, 0, 0);
         let wsOptions = null;
@@ -7523,7 +7558,7 @@ async function runSelfTest() {
           result.decisions.last.reason
         ].join('|');
       })(),
-      want: 'false|profit-live-active-threat|profit-live-active-threat|true|0|vel 0 0|safety-exit|profit-live-active-threat'
+      want: 'true||||2|vel -1 0,vel 0 0|flee|active-threat-return-block'
     },
     {
       name: 'browserless combat-live canary sends guarded shoot only when enabled',
@@ -7737,11 +7772,15 @@ async function runSelfTest() {
           evaluateBrowserlessSafety({ realtime: { self: null, frameAgeMs: null }, frameAges: {} }, { startedAtMs: 1000, nowMs: 5000, noSelfGraceMs: 3000 }).reason,
           evaluateBrowserlessSafety({ realtime: { self: safeSelf, frameAgeMs: 4000 }, frameAges: {} }, { nowMs: 5000, staleSelfMs: 3000 }).reason,
           evaluateBrowserlessSafety({ realtime: { self: { ...safeSelf, stamina_5s_remaining_milli: 100 }, frameAgeMs: 10 }, frameAges: {} }, { nowMs: 5000, staminaExhaustedBelowMs: 200 }).reason,
-          evaluateBrowserlessSafety({}, { leaveResult: { ok: false, attempts: [{ status: 500, summary: { leaveConfirmed: false } }] }, nowMs: 5000 }).reason
+          evaluateBrowserlessSafety({}, { leaveResult: { ok: false, attempts: [{ status: 500, summary: { leaveConfirmed: false } }] }, nowMs: 5000 }).reason,
+          evaluateBrowserlessSafety({ realtime: { self: safeSelf, frameAgeMs: 10 }, frameAges: {} }, {
+            decision: { action: { kind: 'flee', band: 'safety', reason: 'active-threat-return-block', dx: -1, dy: 0 } },
+            nowMs: 5000
+          }).reason
         ];
         return checks.join('|');
       })(),
-      want: 'unsafe-login-point|ws-error|ws-closed|frame-gap|no-self|stale-self|stamina-exhausted|direct-leave-failed'
+      want: 'unsafe-login-point|ws-error|ws-closed|frame-gap|no-self|stale-self|stamina-exhausted|direct-leave-failed|safe'
     },
     {
       name: 'browserless safety controller explicit stop persists until cleared',

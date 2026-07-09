@@ -25,6 +25,10 @@ const {
 } = require('../../strategy/stamina-budget');
 const { buildRuntimeDefaults } = require('../../shared/runtime-defaults');
 const { buildBrowserlessCombatDryRun } = require('./combat-adapter');
+const {
+  buildReturnBlockActionCore,
+  lockedFleeDirectionCore
+} = require('../../strategy/active-threat-avoidance');
 
 const BROWSER_RUNTIME_DEFAULTS = buildRuntimeDefaults({}, false);
 const DEFAULT_STALE_SELF_MS = 2500;
@@ -901,7 +905,28 @@ function isCombatActionEligibleForDecision(combatDecision, options = {}) {
   return Boolean(target.active || target.firing);
 }
 
-function profitLiveSafetyDecision(input, combatDecision, options = {}) {
+function buildThreatFleeDecision(stateful, input, target, reason, options = {}, extra = {}) {
+  const flee = lockedFleeDirectionCore(stateful, input.self, [target], reason, {
+    ...options,
+    nowMs: input.nowMs,
+    dangerRadius: options.dangerRadius ?? options.activeCautionRadius ?? DEFAULT_PROFIT_LIVE_THREAT_EXIT_RANGE
+  });
+  return {
+    kind: 'flee',
+    band: 'safety',
+    reason,
+    dx: flee.dx,
+    dy: flee.dy,
+    locked: flee.locked,
+    stopMotion: false,
+    target: summarizeTarget(target),
+    threats: [summarizeTarget(target)].filter(Boolean),
+    self: summarizeTarget(input.self),
+    ...extra
+  };
+}
+
+function profitLiveSafetyDecision(input, combatDecision, stateful = {}, options = {}, blockedAction = null) {
   if (options.controlMode !== 'profit-live' || !input.self) return null;
   const realtimeTarget = combatDecision?.dryRun?.target || combatDecision?.target || null;
   const realtimeThreatsById = new Map();
@@ -953,26 +978,16 @@ function profitLiveSafetyDecision(input, combatDecision, options = {}) {
       };
     }
     if (!combatHandlesThreat && (target.active || target.firing) && distance <= threatExitRange) {
-      return {
-        kind: 'safety-exit',
-        band: 'safety',
-        reason: 'profit-live-active-threat',
-        shouldLeave: true,
-        stopMotion: true,
-        target: summarizeTarget(target),
-        self: summarizeTarget(input.self)
-      };
+      const avoidance = buildReturnBlockActionCore(stateful, input.self, [target], blockedAction || { kind: 'wait', reason: 'blocked-by-active-threat' }, {
+        ...options,
+        nowMs: input.nowMs
+      });
+      return avoidance
+        ? { ...avoidance, target: summarizeTarget(target), self: summarizeTarget(input.self) }
+        : buildThreatFleeDecision(stateful, input, target, 'profit-live-active-threat', options);
     }
     if (injured && distance <= threatExitRange) {
-      return {
-        kind: 'safety-exit',
-        band: 'safety',
-        reason: 'profit-live-combat-injury-threat',
-        shouldLeave: true,
-        stopMotion: true,
-        target,
-        self: summarizeTarget(input.self)
-      };
+      return buildThreatFleeDecision(stateful, input, target, 'profit-live-combat-injury-threat', options);
     }
     return null;
   }
@@ -980,15 +995,24 @@ function profitLiveSafetyDecision(input, combatDecision, options = {}) {
   if (distance <= threatExitRange) reason = 'profit-live-active-threat';
   else if (injured && distance <= injuryExitRange) reason = 'profit-live-injury-threat';
   if (!reason) return null;
-  return {
-    kind: 'safety-exit',
-    band: 'safety',
-    reason,
-    shouldLeave: true,
-    stopMotion: true,
-    target: summarizeTarget(target),
-    self: summarizeTarget(input.self)
-  };
+  if (snapshotThreatening) {
+    return {
+      kind: 'safety-exit',
+      band: 'safety',
+      reason: 'profit-live-snapshot-active-threat',
+      shouldLeave: true,
+      stopMotion: true,
+      target: summarizeTarget(target),
+      self: summarizeTarget(input.self)
+    };
+  }
+  const avoidance = buildReturnBlockActionCore(stateful, input.self, [target], blockedAction || { kind: 'wait', reason: 'blocked-by-active-threat' }, {
+    ...options,
+    nowMs: input.nowMs
+  });
+  return avoidance
+    ? { ...avoidance, target: summarizeTarget(target), self: summarizeTarget(input.self) }
+    : buildThreatFleeDecision(stateful, input, target, reason, options);
 }
 
 function buildBrowserlessDecision(state, stateful = {}, options = {}) {
@@ -1007,7 +1031,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
   });
   const combat = buildCombatDecision(input, options);
   const combatActionEligible = isCombatActionEligibleForDecision(combat, options);
-  const safetyAction = profitLiveSafetyDecision(input, combat, options);
+  const safetyAction = profitLiveSafetyDecision(input, combat, stateful, options, opportunity.action);
   const staminaBudgetExitAction = (profitLive || nonCombatProfit) ? buildStaminaBudgetExitDecision(input, options) : null;
   const recoveryAction = (profitLive || nonCombatProfit) ? buildRecoveryDecision(input, opportunity, options) : null;
   const dailyFinalCoinAction = (profitLive || nonCombatProfit) && !recoveryAction
@@ -1137,7 +1161,10 @@ function decisionStatePatch(decision) {
 function createBrowserlessDecisionAdapter(options = {}) {
   const stateful = {
     currentOpportunity: options.currentOpportunity || null,
-    switchLock: options.switchLock || null
+    switchLock: options.switchLock || null,
+    fleeLock: options.fleeLock || null,
+    returnBlockLock: options.returnBlockLock || null,
+    returnBlockScan: options.returnBlockScan || null
   };
   return {
     decide(state, nextOptions = {}) {

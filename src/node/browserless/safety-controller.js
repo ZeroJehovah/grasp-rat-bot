@@ -79,7 +79,10 @@ function evaluateBrowserlessSafety(state = {}, context = {}, options = {}) {
   }
 
   const decisionAction = context.decision?.action || context.decision || null;
-  if (decisionAction && String(decisionAction.band || '') === 'safety') {
+  const decisionSafetyKind = String(decisionAction?.kind || context.decision?.kind || '');
+  if (decisionAction
+    && String(decisionAction.band || '') === 'safety'
+    && (decisionSafetyKind === 'safety-exit' || decisionAction.shouldLeave === true)) {
     return createSafetyEvent(decisionAction.reason || 'decision-safety', {
       decision: decisionSafetyDetail(context.decision)
     }, {
