@@ -43,6 +43,11 @@ function entityDropValue(entity) {
   return Number(entity?.drop ?? entity?.Drop ?? entity?.reward ?? entity?.coin_reward ?? 0) || 0;
 }
 
+function hpValue(entity) {
+  const hp = Number(entity?.hp ?? entity?.knownHp ?? entity?.displayHp);
+  return Number.isFinite(hp) ? hp : null;
+}
+
 function isActiveCombatEntity(entity) {
   const mode = String(entity?.current_join_mode || entity?.mode || entity?.joined || '').toLowerCase();
   return mode === 'active';
@@ -212,7 +217,16 @@ function estimateAim(self, target, options = {}) {
   const x = moving ? tx + vx * leadTicks : tx;
   const y = moving ? ty + vy * leadTicks : ty;
   const leadDistance = distanceBetween({ x: tx, y: ty }, { x, y });
-  const confidence = Math.max(0.2, Math.min(1, moving ? 0.7 : 1));
+  const combatTargetState = options.combatTargetState || null;
+  const noDamageMs = Math.max(0, Number(combatTargetState?.noDamageMs || 0));
+  const noDamageStartMs = Math.max(0, Number(options.combatAimNoDamageMs ?? 1000));
+  const noDamageStepMs = Math.max(1, Number(options.combatAimNoDamageStepMs ?? 800));
+  const noDamageLevel = noDamageStartMs > 0 && noDamageMs > noDamageStartMs
+    ? Math.floor((noDamageMs - noDamageStartMs) / noDamageStepMs) + 1
+    : 0;
+  const noDamageWidened = noDamageLevel > 0;
+  const motionScale = Math.max(0, Math.min(1, speed / Math.max(1, Number(options.combatTargetDodgeSpeedPerTick || 50))));
+  const confidence = Math.max(0.2, Math.min(1, (moving ? 0.7 : 1) - Math.min(0.25, noDamageLevel * 0.04)));
   return {
     ok: true,
     x: Math.round(x),
@@ -222,28 +236,109 @@ function estimateAim(self, target, options = {}) {
     intercept: moving,
     flightTicks: Math.round(flightTicks * 10) / 10,
     leadDistance: Math.round(leadDistance),
-    confidence
+    confidence,
+    motionScale: Math.round(motionScale * 1000) / 1000,
+    noDamageMs: Math.round(noDamageMs),
+    noDamageLevel,
+    noDamageWidened,
+    spreadScale: noDamageWidened ? Math.round((1 + Math.min(1, noDamageLevel * 0.2)) * 100) / 100 : 1
+  };
+}
+
+function targetRecedingFromSelf(self, target) {
+  const vx = Number(target?.vx || 0);
+  const vy = Number(target?.vy || 0);
+  if (!self || !target || (!vx && !vy)) return false;
+  const rx = Number(target.x) - Number(self.x);
+  const ry = Number(target.y) - Number(self.y);
+  return (rx * vx + ry * vy) > 0;
+}
+
+function movementTangentPreference(self, target) {
+  if (!self || !target) return null;
+  const baseX = Number(target.x) - Number(self.x);
+  const baseY = Number(target.y) - Number(self.y);
+  if (!baseX && !baseY) return null;
+  const sign = Number(target.vx || 0) || Number(target.vy || 0) ? 1 : -1;
+  return {
+    dx: Math.sign(-baseY * sign),
+    dy: Math.sign(baseX * sign)
+  };
+}
+
+function passiveRunnerState(self, target, combatTargetState = {}, options = {}) {
+  if (!self || !target) return { active: false };
+  const selfHp = hpValue(self) ?? 100;
+  const engagedMs = Math.max(0, Number(options.nowMs || Date.now()) - Number(combatTargetState?.firstSeenAt || combatTargetState?.at || options.nowMs || Date.now()));
+  const confirmMs = Math.max(0, Number(options.combatPassiveRunnerConfirmMs ?? COMBAT_CONSTANTS.PASSIVE_RUNNER_CONFIRM_MS));
+  const seenTargetRealBulletMs = combatTargetState?.seenTargetRealBulletAt
+    ? Math.max(0, Number(options.nowMs || Date.now()) - Number(combatTargetState.seenTargetRealBulletAt))
+    : 0;
+  const active = Boolean(
+    entityDropValue(target) > 0
+      && target.moving
+      && !target.firing
+      && selfHp >= Math.max(1, Number(options.combatPassiveRunnerMinSelfHp || 80))
+      && !seenTargetRealBulletMs
+      && engagedMs >= confirmMs
+  );
+  return {
+    active,
+    engagedMs: Math.round(engagedMs),
+    confirmMs,
+    seenTargetRealBulletMs,
+    reason: 'passive-runner'
   };
 }
 
 function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
   if (!self || !target) return { dx: 0, dy: 0, reason: 'missing-target', spacing: null, dodge: null, modifiers: [] };
-  const spacing = calculateCombatSpacing(self, target, {});
-  const dodge = calculateDodgeDirection(self, bullets, {});
+  const combatTargetState = options.combatTargetState || null;
+  const noDamageMs = Math.max(0, Number(combatTargetState?.noDamageMs || 0));
+  const targetPressure = (bullets || []).some(bullet => Number(bullet.ownerId) === Number(target.user_id));
+  const passiveRunner = passiveRunnerState(self, target, combatTargetState, options);
+  const finishingTarget = Number(target.hp ?? 100) <= Number(options.combatFinishLowThreatHp ?? COMBAT_CONSTANTS.FINISH_LOW_THREAT_HP);
+  const spacing = calculateCombatSpacing(self, target, { targetPressure, finishingTarget });
+  const dodge = calculateDodgeDirection(self, bullets, { tangentPreference: movementTangentPreference(self, target) });
   const backAway = shouldBackAwayFromTarget(self, target);
-  const closeIn = Number(target.distance || Infinity) > spacing;
+  const closeRange = Math.max(0, Number(options.combatPressureCloseRange || options.combatPassiveRunnerCloseRange || COMBAT_CONSTANTS.NO_DAMAGE_PRESS_CLOSE_RANGE));
+  const pressureClose = Boolean(
+    targetPressure
+      && noDamageMs >= Math.max(0, Number(options.combatNoDamagePressCloseMs ?? COMBAT_CONSTANTS.NO_DAMAGE_PRESS_CLOSE_MS))
+      && (hpValue(self) ?? 100) >= Math.max(0, Number(options.combatNoDamagePressCloseMinHp ?? COMBAT_CONSTANTS.NO_DAMAGE_PRESS_CLOSE_MIN_HP))
+      && Number(target.distance || Infinity) > closeRange
+  );
+  const retreatingClose = Boolean(
+    !pressureClose
+      && targetRecedingFromSelf(self, target)
+      && noDamageMs >= Math.max(0, Number(options.combatRetreatingCloseNoDamageMs || 2000))
+      && Number(target.distance || Infinity) > spacing
+  );
+  const passiveRunnerClose = Boolean(
+    !pressureClose
+      && !retreatingClose
+      && passiveRunner.active
+      && Number(target.distance || Infinity) > Math.max(0, Number(options.combatPassiveRunnerCloseRange || 5500))
+  );
+  const closeIn = pressureClose || retreatingClose || passiveRunnerClose || Number(target.distance || Infinity) > spacing;
   const base = { dx: 0, dy: 0 };
   const movement = applyCombatMovementModifiers(base, self, target, { dodge, backAway, closeIn });
+  const closeReason = pressureClose
+    ? 'combat-pressure-close'
+    : (retreatingClose ? 'combat-retreating-fighter-close' : (passiveRunnerClose ? 'passive-runner-close' : 'close-in'));
   const reason = movement.modifiers.includes('dodge')
     ? dodge.reason
-    : (movement.modifiers.includes('back-away') || movement.modifiers.includes('back-away-mixed') ? 'back-away' : (movement.modifiers.includes('close-in') ? 'close-in' : 'hold-spacing'));
+    : (movement.modifiers.includes('back-away') || movement.modifiers.includes('back-away-mixed') ? 'back-away' : (movement.modifiers.includes('close-in') ? closeReason : 'hold-spacing'));
   return {
     dx: Number(movement.dx || 0),
     dy: Number(movement.dy || 0),
     reason,
     spacing: Math.round(spacing),
     dodge: dodge ? { dx: dodge.dx, dy: dodge.dy, reason: dodge.reason } : null,
-    modifiers: movement.modifiers || []
+    modifiers: movement.modifiers || [],
+    pressureClose: pressureClose ? { active: true, noDamageMs: Math.round(noDamageMs), closeRange } : null,
+    passiveRunner: passiveRunner.active ? passiveRunner : null,
+    retreatingClose: retreatingClose ? { active: true, noDamageMs: Math.round(noDamageMs), receding: true } : null
   };
 }
 
@@ -280,6 +375,20 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
       && incomingOwnerId !== undefined
       && String(incomingOwnerId) === String(id)
   );
+  const previousSamples = same && Array.isArray(previous.motionSamples) ? previous.motionSamples : [];
+  const sampleWindowMs = Math.max(250, Number(options.combatMotionHistoryWindowMs || 6000));
+  const motionSamples = previousSamples
+    .concat([{
+      at: nowMs,
+      x: Math.round(Number(target.x) || 0),
+      y: Math.round(Number(target.y) || 0),
+      vx: numberOrNull(target.vx),
+      vy: numberOrNull(target.vy),
+      selfHp: hpValue(self),
+      targetHp: hp
+    }])
+    .filter(sample => nowMs - Number(sample.at || 0) <= sampleWindowMs)
+    .slice(-20);
   stateful.combatTarget = {
     id,
     at: nowMs,
@@ -300,6 +409,7 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
     seenTargetRealBulletAt: targetOwnsRealBullet ? nowMs : (same ? Number(previous.seenTargetRealBulletAt || 0) : 0),
     lastDamageAmount: damaged ? Math.max(0, previousHp - hp) : Number(previous?.lastDamageAmount || 0),
     noDamageMs: Math.max(0, nowMs - (damaged ? nowMs : (same ? Number(previous.lastDamageAt || previous.at || nowMs) : nowMs))),
+    motionSamples,
     self: summarizeCombatTarget(self)
   };
 }
@@ -360,11 +470,33 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     ...options,
     reason: liveCombatEnabled ? 'combat-live-realtime' : (options.controlMode === 'combat-dry-run' ? 'combat-dry-run-realtime' : 'realtime-visible-threat')
   });
-  const aim = estimateAim(self, target, options);
+  const combatTargetState = stateful?.combatTarget || null;
+  const aim = estimateAim(self, target, {
+    ...options,
+    combatTargetState
+  });
   if (!aim.ok) dataGaps.push(aim.reason);
-  const movement = buildCombatMovementPlan(self, target, bullets, options);
+  if (stateful && typeof stateful === 'object' && aim.ok) {
+    stateful.combatAim = {
+      targetId: combatTargetId(target),
+      x: aim.x,
+      y: aim.y,
+      mode: aim.mode,
+      confidence: aim.confidence,
+      motionScale: aim.motionScale,
+      noDamageMs: aim.noDamageMs,
+      noDamageWidened: aim.noDamageWidened,
+      noDamageLevel: aim.noDamageLevel,
+      at: Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now()
+    };
+  }
+  const movement = buildCombatMovementPlan(self, target, bullets, {
+    ...options,
+    combatTargetState
+  });
   const fireState = target ? determineCombatFireState(self || {}, target, {
-    targetPressureFire: bullets.some(bullet => Number(bullet.ownerId) === Number(target.user_id))
+    targetPressureFire: bullets.some(bullet => Number(bullet.ownerId) === Number(target.user_id)),
+    passiveRunner: Boolean(movement.passiveRunner?.active)
   }) : { state: 'disabled', cadenceMs: Infinity, reserve: null, reason: 'no-target' };
   const lowConfidence = aim.ok ? checkLowConfidenceThrottle({ confidence: aim.confidence, distance: aim.distance }) : { throttle: false, cadenceMs: null };
   const inRange = target ? Number(target.distance || Infinity) <= Number(options.attackRange || COMBAT_CONSTANTS.ATTACK_RANGE) : false;

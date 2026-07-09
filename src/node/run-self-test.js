@@ -7969,6 +7969,149 @@ async function runSelfTest() {
       want: '|true|true'
     },
     {
+      name: 'browserless combat movement keeps dodge priority over spacing',
+      got: (() => {
+        const combat = buildBrowserlessCombatDryRun({
+          userId: 7,
+          realtime: {
+            tick: 62,
+            self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
+            entities: [
+              { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
+              { entity_id: 2, user_id: 8, name: 'close-firing', x: 1000, y: 0, hp: 80, current_join_mode: 'Active', firing: true, drop: 10 }
+            ],
+            bullets: [
+              { bullet_id: 4, owner_user_id: 8, x: 1000, y: 0, target_x: 0, target_y: 0, speed_per_tick: 500 }
+            ]
+          }
+        }, { nowMs: 1500, combatAttackRange: 11000 });
+        return [
+          combat.target.userId,
+          combat.movement.reason,
+          combat.movement.modifiers.includes('dodge'),
+          combat.movement.modifiers.includes('back-away-mixed'),
+          combat.shooting.reason
+        ].join('|');
+      })(),
+      want: '8|direct-threat-dodge|true|true|target-pressure-fire'
+    },
+    {
+      name: 'browserless combat movement closes passive runner engagement',
+      got: (() => {
+        const stateful = {
+          combatTarget: { id: 8, at: 1000, firstSeenAt: 1000, lastInRangeAt: 1000, lastDamageAt: 1000, hp: 80, intent: 'profit' }
+        };
+        const combat = buildBrowserlessCombatDryRun({
+          userId: 7,
+          realtime: {
+            tick: 62,
+            self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
+            entities: [
+              { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
+              { entity_id: 2, user_id: 8, name: 'runner', x: 10000, y: 0, vx: 0, vy: 80, hp: 80, current_join_mode: 'Active', drop: 12 }
+            ],
+            bullets: []
+          }
+        }, {
+          nowMs: 5000,
+          decisionState: stateful,
+          combatAttackRange: 11000,
+          targetStickMs: 7000,
+          combatEngageStickMs: 7000,
+          combatPassiveRunnerConfirmMs: 2500,
+          combatPassiveRunnerCloseRange: 5500
+        });
+        return [
+          combat.target.userId,
+          combat.movement.reason,
+          combat.movement.passiveRunner.active,
+          combat.movement.dx,
+          combat.movement.dy,
+          combat.shooting.reason
+        ].join('|');
+      })(),
+      want: '8|passive-runner-close|true|1|0|passive-runner'
+    },
+    {
+      name: 'browserless combat aim widens after no target damage',
+      got: (() => {
+        const stateful = {
+          combatTarget: { id: 8, at: 1000, firstSeenAt: 1000, lastInRangeAt: 1000, lastDamageAt: 1000, hp: 80, intent: 'engaged' }
+        };
+        const combat = buildBrowserlessCombatDryRun({
+          userId: 7,
+          realtime: {
+            tick: 62,
+            self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
+            entities: [
+              { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
+              { entity_id: 2, user_id: 8, name: 'moving-active', x: 8000, y: 0, vx: 80, vy: 0, hp: 80, current_join_mode: 'Active', firing: true, drop: 12 }
+            ],
+            bullets: []
+          }
+        }, {
+          nowMs: 5000,
+          decisionState: stateful,
+          combatAttackRange: 11000,
+          targetStickMs: 7000,
+          combatEngageStickMs: 7000,
+          combatAimNoDamageMs: 1000,
+          combatAimNoDamageStepMs: 800
+        });
+        return [
+          combat.aim.mode,
+          combat.aim.noDamageWidened,
+          combat.aim.noDamageLevel,
+          combat.aim.confidence < 0.7,
+          stateful.combatAim.noDamageWidened
+        ].join('|');
+      })(),
+      want: 'linear-intercept|true|4|true|true'
+    },
+    {
+      name: 'browserless combat engagement records motion samples for aim confidence',
+      got: (() => {
+        const stateful = {
+          combatTarget: { id: 8, at: 1000, firstSeenAt: 1000, lastInRangeAt: 1000, lastDamageAt: 1000, hp: 80, intent: 'engaged' }
+        };
+        const base = {
+          userId: 7,
+          realtime: {
+            tick: 62,
+            self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
+            entities: [
+              { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
+              { entity_id: 2, user_id: 8, name: 'moving-active', x: 8000, y: 0, vx: 60, vy: 0, hp: 80, current_join_mode: 'Active', firing: true, drop: 12 }
+            ],
+            bullets: []
+          }
+        };
+        buildBrowserlessCombatDryRun(base, {
+          nowMs: 2000,
+          decisionState: stateful,
+          combatAttackRange: 11000,
+          targetStickMs: 7000,
+          combatEngageStickMs: 7000
+        });
+        base.realtime.tick = 63;
+        base.realtime.entities[1] = { ...base.realtime.entities[1], x: 8300, vx: 60 };
+        const combat = buildBrowserlessCombatDryRun(base, {
+          nowMs: 2500,
+          decisionState: stateful,
+          combatAttackRange: 11000,
+          targetStickMs: 7000,
+          combatEngageStickMs: 7000
+        });
+        return [
+          stateful.combatTarget.motionSamples.length,
+          combat.aim.intercept,
+          combat.aim.motionScale > 0,
+          stateful.combatAim.targetId
+        ].join('|');
+      })(),
+      want: '2|true|true|8'
+    },
+    {
       name: 'browserless combat dry-run computes linear intercept and reserve suppression',
       got: (() => {
         const aim = estimateAim(
