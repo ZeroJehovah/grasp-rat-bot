@@ -542,6 +542,9 @@ async function runReadOnlyCanary(config, options = {}) {
   }
   if (!result.error && leaveFailed) result.error = 'leave not confirmed';
   result.state = stateStore.getState(now());
+  if (typeof decisionAdapter.getStatusSummary === 'function') {
+    result.decisionState = decisionAdapter.getStatusSummary();
+  }
   if (actionAdapter) {
     const adapterState = actionAdapter.getState();
     result.actions.sentCount = Number(adapterState.sentCount || 0);

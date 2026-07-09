@@ -48,6 +48,7 @@ function defaultBrowserlessState() {
       profit: null,
       combatSummary: null,
       decision: null,
+      decisionState: null,
       action: null
     },
     recentExits: [],
@@ -73,7 +74,8 @@ function shouldReplaceStateObject(pathParts) {
   const pathKey = pathParts.join('.');
   return pathKey === 'runner.currentAction'
     || pathKey === 'current.action'
-    || pathKey === 'current.decision';
+    || pathKey === 'current.decision'
+    || pathKey === 'current.decisionState';
 }
 
 function mergeState(base, patch, pathParts = []) {

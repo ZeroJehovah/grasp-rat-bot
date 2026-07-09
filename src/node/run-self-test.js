@@ -57,6 +57,10 @@ const {
   createBrowserlessDecisionAdapter
 } = require('./browserless/decision-adapter');
 const {
+  createBrowserlessDecisionState,
+  summarizeBrowserlessDecisionState
+} = require('./browserless/decision-state');
+const {
   createCanaryRunId,
   runReadOnlyCanary
 } = require('./browserless/canary');
@@ -5899,6 +5903,103 @@ async function runSelfTest() {
       want: 'profit-candidate|coin|6|snapshot|100|true|false'
     },
     {
+      name: 'browserless decision state survives consecutive decisions in one run',
+      got: (() => {
+        const adapter = createBrowserlessDecisionAdapter({ userId: 7, controlMode: 'non-combat-profit' });
+        const store = createBrowserlessStateStore({ userId: 7 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 52,
+          entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 }],
+          bullets: [],
+          coin_drops: [{ drop_id: 'persist-coin', amount: 2, x: 1000, y: 0 }]
+        }, { receivedAtMs: 1000 });
+        const first = adapter.decide(store.getState(1200), { nowMs: 1200 });
+        const second = adapter.decide(store.getState(1600), { nowMs: 1600 });
+        const state = adapter.getState();
+        const summary = adapter.getStatusSummary();
+        return [
+          first.action.target.id,
+          second.action.target.id,
+          state.opportunityChoice?.id || '',
+          state.currentOpportunity?.id || '',
+          summary.opportunity.choice?.id || '',
+          Object.prototype.hasOwnProperty.call(state, 'currentOpportunity'),
+          state.opportunitySwitchLock === null
+        ].join('|');
+      })(),
+      want: 'persist-coin|persist-coin|persist-coin|persist-coin|persist-coin|true|true'
+    },
+    {
+      name: 'browserless decision state resets between adapter runs',
+      got: (() => {
+        const firstAdapter = createBrowserlessDecisionAdapter({ userId: 7, controlMode: 'non-combat-profit' });
+        const secondAdapter = createBrowserlessDecisionAdapter({ userId: 7, controlMode: 'non-combat-profit' });
+        const store = createBrowserlessStateStore({ userId: 7 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 53,
+          entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 }],
+          bullets: [],
+          coin_drops: [{ drop_id: 'run-one-coin', amount: 2, x: 1000, y: 0 }]
+        }, { receivedAtMs: 1000 });
+        firstAdapter.decide(store.getState(1200), { nowMs: 1200 });
+        const firstState = firstAdapter.getState();
+        const secondState = secondAdapter.getState();
+        return [
+          Boolean(firstState.opportunityChoice),
+          secondState.opportunityChoice === null,
+          secondState.currentOpportunity === null,
+          secondState.fleeLock === null,
+          secondState.returnBlockLock === null
+        ].join('|');
+      })(),
+      want: 'true|true|true|true|true'
+    },
+    {
+      name: 'browserless decision state summary is bounded and redacted',
+      got: (() => {
+        const state = createBrowserlessDecisionState();
+        state.lastTarget = { userId: 9, name: 'target', sessionToken: 'target-secret-token' };
+        state.attackHistory = Array.from({ length: 9 }, (_, index) => ({
+          id: index,
+          sessionToken: `attack-secret-token-${index}`
+        }));
+        state.killHistory = Array.from({ length: 7 }, (_, index) => ({
+          id: index,
+          token: `kill-secret-token-${index}`
+        }));
+        state.targetSwitchDiagnostics = Array.from({ length: 6 }, (_, index) => ({
+          target: index,
+          authorization: `Bearer switch-secret-token-${index}`
+        }));
+        state.ignoredCoins = {};
+        for (let index = 0; index < 8; index += 1) {
+          state.ignoredCoins[`coin-${index}`] = {
+            reason: 'stale',
+            cookie: `coin-secret-token-${index}`
+          };
+        }
+        const summary = summarizeBrowserlessDecisionState(state, { recentLimit: 3 });
+        const text = JSON.stringify(summary);
+        return [
+          summary.attackHistory.count,
+          summary.attackHistory.recent.length,
+          summary.attackHistory.recent[0].sessionToken,
+          summary.killHistory.count,
+          summary.killHistory.recent[0].token,
+          summary.targetSwitchDiagnostics.count,
+          summary.targetSwitchDiagnostics.recent.length,
+          summary.coin.ignoredCount,
+          summary.coin.recentIgnored.length,
+          text.includes('secret-token'),
+          text.includes('"sessionToken":"[redacted]"'),
+          text.includes('"cookie":"[redacted]"')
+        ].join('|');
+      })(),
+      want: '9|3|[redacted]|7|[redacted]|6|3|8|3|false|true|true'
+    },
+    {
       name: 'browserless non-combat profit prefers realtime coin over snapshot and combat',
       got: (() => {
         const store = createBrowserlessStateStore({ userId: 7 });
@@ -8973,6 +9074,15 @@ async function runSelfTest() {
               input: {
                 dataGaps: ['snapshot-active-threat-visible']
               }
+            },
+            decisionState: {
+              attackHistory: {
+                count: 12,
+                recent: [{ id: 'old-attack' }]
+              },
+              safety: {
+                fleeLock: { dx: 1, dy: 0 }
+              }
             }
           }
         }, { updatedAt: '2026-07-08T00:00:01.000Z' });
@@ -9003,6 +9113,12 @@ async function runSelfTest() {
               input: {
                 dataGaps: ['snapshot-fallback-blocked:snapshot-fallback-disabled']
               }
+            },
+            decisionState: {
+              attackHistory: {
+                count: 0,
+                recent: []
+              }
             }
           }
         }, { updatedAt: '2026-07-08T00:00:02.000Z' });
@@ -9020,10 +9136,12 @@ async function runSelfTest() {
           stored.current.decision.action.kind,
           stored.current.decision.action.shouldLeave === undefined,
           stored.current.decision.action.target === undefined,
-          stored.current.decision.input.dataGaps.join(',')
+          stored.current.decision.input.dataGaps.join(','),
+          stored.current.decisionState.attackHistory.count,
+          stored.current.decisionState.safety === undefined
         ].join('|');
       }),
-      want: 'stop|true|true|true|1|stop|true|true|wait|wait|true|true|snapshot-fallback-blocked:snapshot-fallback-disabled'
+      want: 'stop|true|true|true|1|stop|true|true|wait|wait|true|true|snapshot-fallback-blocked:snapshot-fallback-disabled|0|true'
     },
     {
       name: 'browserless status server gates status and redacts payload',

@@ -29,6 +29,10 @@ const {
   buildReturnBlockActionCore,
   lockedFleeDirectionCore
 } = require('../../strategy/active-threat-avoidance');
+const {
+  createBrowserlessDecisionState,
+  summarizeBrowserlessDecisionState
+} = require('./decision-state');
 
 const BROWSER_RUNTIME_DEFAULTS = buildRuntimeDefaults({}, false);
 const DEFAULT_STALE_SELF_MS = 2500;
@@ -1153,31 +1157,30 @@ function decisionStatePatch(decision) {
       stamina: summary.input?.stamina || null,
       profit: summary.profit || null,
       combatSummary: summary.combat || null,
-      decision: summary
+      decision: summary,
+      decisionState: decision.stateful?.decisionState || null
     }
   };
 }
 
 function createBrowserlessDecisionAdapter(options = {}) {
-  const stateful = {
-    currentOpportunity: options.currentOpportunity || null,
-    switchLock: options.switchLock || null,
-    fleeLock: options.fleeLock || null,
-    returnBlockLock: options.returnBlockLock || null,
-    returnBlockScan: options.returnBlockScan || null
-  };
+  const decisionState = createBrowserlessDecisionState(options);
   return {
     decide(state, nextOptions = {}) {
-      const decision = buildBrowserlessDecision(state, stateful, {
+      const decision = buildBrowserlessDecision(state, decisionState, {
         ...options,
         ...nextOptions
       });
-      stateful.currentOpportunity = decision.stateful?.opportunityChoice || stateful.currentOpportunity || null;
-      stateful.switchLock = decision.stateful?.switchLock || null;
+      decisionState.opportunityChoice = decision.stateful?.opportunityChoice || decisionState.opportunityChoice || null;
+      decisionState.opportunitySwitchLock = decision.stateful?.switchLock || null;
+      decision.stateful.decisionState = summarizeBrowserlessDecisionState(decisionState);
       return decision;
     },
     getState() {
-      return cloneJson(stateful);
+      return cloneJson(decisionState);
+    },
+    getStatusSummary() {
+      return summarizeBrowserlessDecisionState(decisionState);
     }
   };
 }
@@ -1192,5 +1195,6 @@ module.exports = {
   distanceBetween,
   normalizeCoinForDecision,
   normalizeEntityForDecision,
-  summarizeBrowserlessDecision
+  summarizeBrowserlessDecision,
+  summarizeBrowserlessDecisionState
 };
