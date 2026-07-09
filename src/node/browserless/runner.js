@@ -141,7 +141,15 @@ function browserlessLoopPlan(result, config = {}) {
   if (safetyReason === 'stamina-budget-coin-leave') {
     return resume(safetyReason, Number.isFinite(decisionDelayMs) ? decisionDelayMs : 0);
   }
-  if (['profit-live-snapshot-active-threat', 'frame-gap', 'stale-self', 'ws-closed', 'ws-error'].includes(safetyReason)) {
+  if ([
+    'profit-live-snapshot-active-threat',
+    'injury-leave',
+    'pursuit-leave',
+    'frame-gap',
+    'stale-self',
+    'ws-closed',
+    'ws-error'
+  ].includes(safetyReason)) {
     return resume(safetyReason);
   }
   if (/^websocket connect timeout$/i.test(error)) return resume('ws-connect-timeout');

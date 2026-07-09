@@ -10796,6 +10796,22 @@ async function runSelfTest() {
             }
           }
         }, config);
+        const injuryLeave = browserlessLoopPlan({
+          ok: false,
+          canary: {
+            runId: 'injury-leave-test',
+            error: 'injury-leave',
+            safety: { event: { reason: 'injury-leave' } }
+          }
+        }, config);
+        const pursuitLeave = browserlessLoopPlan({
+          ok: false,
+          canary: {
+            runId: 'pursuit-leave-test',
+            error: 'pursuit-leave',
+            safety: { event: { reason: 'pursuit-leave' } }
+          }
+        }, config);
         const explicitStop = browserlessLoopPlan({
           ok: false,
           canary: {
@@ -10840,6 +10856,12 @@ async function runSelfTest() {
           staminaBudget.continue,
           staminaBudget.reason,
           staminaBudget.delayMs,
+          injuryLeave.continue,
+          injuryLeave.reason,
+          injuryLeave.delayMs,
+          pursuitLeave.continue,
+          pursuitLeave.reason,
+          pursuitLeave.delayMs,
           explicitStop.continue,
           noSelf.continue,
           auth403.continue,
@@ -10850,7 +10872,7 @@ async function runSelfTest() {
           connectTimeout.delayMs
         ].join('|');
       })(),
-      want: 'true|1234|true|stamina-budget-coin-leave|1800000|false|false|false|true|60000|true|ws-connect-timeout|1234'
+      want: 'true|1234|true|stamina-budget-coin-leave|1800000|true|injury-leave|1234|true|pursuit-leave|1234|false|false|false|true|60000|true|ws-connect-timeout|1234'
     },
     {
       name: 'browserless runner dry-run and fake read-only path write redacted logs',
