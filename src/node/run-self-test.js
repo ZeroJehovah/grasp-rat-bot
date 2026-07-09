@@ -10960,7 +10960,7 @@ async function runSelfTest() {
       want: '403|10.0.0.101|false|false'
     },
     {
-      name: 'browserless runner loop plan resumes only recoverable exits',
+      name: 'browserless runner loop plan retries non-explicit failures',
       got: (() => {
         const config = { once: false, loopDelayMs: 1234 };
         const activeThreat = browserlessLoopPlan({
@@ -11113,7 +11113,7 @@ async function runSelfTest() {
           connectTimeout.delayMs
         ].join('|');
       })(),
-      want: 'true|1234|true|stamina-budget-coin-leave|1800000|true|injury-leave|1234|true|pursuit-leave|1234|true|combat-hp-disadvantage-leave|1234|true|ws-closed|1000|true|ws-closed|1000|false|false|false|true|ws-auth-blocked-self-present|1000|true|60000|true|ws-connect-timeout|1000'
+      want: 'true|1234|true|stamina-budget-coin-leave|1800000|true|injury-leave|1234|true|pursuit-leave|1234|true|combat-hp-disadvantage-leave|1234|true|ws-closed|1000|true|ws-closed|1000|false|true|true|true|ws-auth-blocked-self-present|1000|true|60000|true|ws-connect-timeout|1000'
     },
     {
       name: 'browserless runner dry-run and fake read-only path write redacted logs',
@@ -11158,6 +11158,99 @@ async function runSelfTest() {
         ].join('|');
       }),
       want: 'true|dry-run|true|read-only|true|true|true'
+    },
+    {
+      name: 'browserless runner catches canary throw and waits for explicit stop',
+      got: withTempDirForTest(async dir => {
+        let t = Date.UTC(2026, 6, 8, 1, 1, 0);
+        let calls = 0;
+        let sleeps = 0;
+        const safetyController = createBrowserlessSafetyController({ now: () => t });
+        const config = parseBrowserlessRunnerArgs([
+          '--live',
+          '--data-dir',
+          dir,
+          '--loop-delay-ms',
+          '1000',
+          '--user-id',
+          '7',
+          '--session-token',
+          'runner-secret-token',
+          '--login-point-x',
+          '1',
+          '--login-point-y',
+          '2',
+          '--login-point-hp',
+          '100'
+        ], {});
+        const result = await runBrowserlessRunner(config, {
+          now: () => t,
+          safetyController,
+          startStatusServer: false,
+          sleep: async ms => {
+            sleeps += 1;
+            t += ms;
+            safetyController.requestStop('explicit-stop', { source: 'self-test' });
+          },
+          runReadOnlyOnce: async () => {
+            calls += 1;
+            throw new Error('synthetic canary failure');
+          }
+        });
+        const logFile = path.join(dir, 'logs', '2026-07-08', 'runner.jsonl');
+        const text = fs.readFileSync(logFile, 'utf8');
+        const state = readBrowserlessStateFile(stateFilePath(config));
+        return [
+          result.reason,
+          calls,
+          sleeps,
+          /runner-canary-error/.test(text),
+          /runner-loop-wait/.test(text),
+          state.runner.running
+        ].join('|');
+      }),
+      want: 'explicit-stop|1|1|true|true|false'
+    },
+    {
+      name: 'browserless runner returns explicit stop reason from canary event',
+      got: withTempDirForTest(async dir => {
+        const config = parseBrowserlessRunnerArgs([
+          '--live',
+          '--data-dir',
+          dir,
+          '--user-id',
+          '7',
+          '--session-token',
+          'runner-secret-token',
+          '--login-point-x',
+          '1',
+          '--login-point-y',
+          '2',
+          '--login-point-hp',
+          '100'
+        ], {});
+        const result = await runBrowserlessRunner(config, {
+          now: () => Date.UTC(2026, 6, 8, 1, 1, 0),
+          startStatusServer: false,
+          runReadOnlyOnce: async () => ({
+            ok: false,
+            runId: 'explicit-stop-self-test',
+            error: 'explicit-stop',
+            safety: {
+              event: { reason: 'explicit-stop', at: '2026-07-08T01:01:00.000Z' }
+            }
+          })
+        });
+        const logFile = path.join(dir, 'logs', '2026-07-08', 'runner.jsonl');
+        const text = fs.readFileSync(logFile, 'utf8');
+        const state = readBrowserlessStateFile(stateFilePath(config));
+        return [
+          result.reason,
+          state.runner.running,
+          /runner-loop-stop/.test(text)
+        ].join('|');
+      }),
+      want: 'explicit-stop|false|true'
     },
     {
       name: 'browserless runner imports legacy state and hydrates live config',

@@ -132,13 +132,34 @@ function createSourceIpController(options = {}) {
   const persist = patch => {
     if (!stateFile) return;
     const updatedAt = new Date(now()).toISOString();
-    state = updateBrowserlessStateFile(stateFile, {
-      network: {
-        sourceIp: currentSourceIp,
-        sourceIps: candidates,
-        ...patch
+    const network = {
+      sourceIp: currentSourceIp,
+      sourceIps: candidates,
+      ...patch
+    };
+    try {
+      state = updateBrowserlessStateFile(stateFile, {
+        network
+      }, { updatedAt });
+    } catch (err) {
+      state = {
+        ...(state || {}),
+        updatedAt,
+        network: {
+          ...(state?.network || {}),
+          ...network
+        }
+      };
+      if (logStore) {
+        try {
+          logStore.append('runner', 'source-ip-state-persist-error', {
+            error: err?.message || String(err),
+            sourceIp: currentSourceIp,
+            sourceIps: candidates
+          });
+        } catch (_) {}
       }
-    }, { updatedAt });
+    }
   };
   const log = (type, detail) => {
     if (logStore) logStore.append('runner', type, {

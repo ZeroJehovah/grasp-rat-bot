@@ -67,6 +67,52 @@ function hasConfigNumber(value) {
   return value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value));
 }
 
+function errorMessage(error) {
+  return error?.message || String(error || 'unknown error');
+}
+
+function createNoThrowLogStore(logStore, onError = () => {}) {
+  if (!logStore || typeof logStore !== 'object') return logStore;
+  return {
+    ...logStore,
+    append(stream, type, detail = {}, options = {}) {
+      try {
+        return logStore.append(stream, type, detail, options);
+      } catch (err) {
+        onError(err, { operation: 'log-append', stream, type });
+        return { error: errorMessage(err) };
+      }
+    },
+    dayDirFor(ms) {
+      try {
+        return logStore.dayDirFor(ms);
+      } catch (err) {
+        onError(err, { operation: 'log-day-dir' });
+        return '';
+      }
+    }
+  };
+}
+
+function buildRunnerErrorCanary(error, config = {}, options = {}) {
+  const now = typeof options.now === 'function' ? options.now : Date.now;
+  const message = errorMessage(error);
+  const startedAt = options.startedAt || now();
+  return {
+    ok: false,
+    runId: String(options.runId || `${config.controlMode || 'runner'}-error-${new Date(startedAt).toISOString().replace(/[-:.]/g, '')}`),
+    mode: config.controlMode || 'read-only',
+    startedAt: new Date(startedAt).toISOString(),
+    completedAt: new Date(now()).toISOString(),
+    error: message,
+    safety: {
+      event: null,
+      exit: null,
+      leaveFailure: null
+    }
+  };
+}
+
 function hydrateConfigFromState(config, state) {
   const session = sessionFromAnyState(state);
   const loginPoint = loginPointFromAnyState(state);
@@ -145,8 +191,8 @@ function browserlessLoopPlan(result, config = {}) {
   ]);
 
   if (config.once) return stop('once');
-  if (!result) return stop('missing-result');
-  if (result.reason === 'missing-manual-session') return stop('missing-manual-session');
+  if (!result) return resume('missing-result');
+  if (result.reason === 'missing-manual-session') return resume('missing-manual-session');
   if (safetyReason === 'explicit-stop') return stop('explicit-stop');
   if (fastRecoverableTransportReasons.has(safetyReason)) {
     return resumeFast(safetyReason);
@@ -154,10 +200,10 @@ function browserlessLoopPlan(result, config = {}) {
   if (/websocket unexpected response 403|http 403|not logged in/i.test(error) && snapshotSelfPresent) {
     return resumeFast('ws-auth-blocked-self-present');
   }
-  if (safetyReason === 'direct-leave-failed' || canary?.safety?.leaveFailure) return stop('direct-leave-failed');
-  if (safetyReason === 'no-self') return stop('no-self');
+  if (safetyReason === 'direct-leave-failed' || canary?.safety?.leaveFailure) return resumeFast('direct-leave-failed');
+  if (safetyReason === 'no-self') return resume('no-self');
   if (/websocket unexpected response 403|http 403|missing-manual-session|login-point-bootstrap-failed/i.test(error)) {
-    return stop(error || 'non-recoverable-error');
+    return resume(error || 'auth-or-bootstrap-retry');
   }
   if (result.ok) return resume('cycle-complete');
   if (safetyReason === 'stamina-budget-coin-leave') {
@@ -173,7 +219,7 @@ function browserlessLoopPlan(result, config = {}) {
   }
   if (/^websocket connect timeout$/i.test(error)) return resumeFast('ws-connect-timeout');
   if (/^snapshot safety not confirmed:/i.test(error)) return resume('snapshot-safety-retry');
-  return stop(error || safetyReason || 'unknown-error');
+  return resume(error || safetyReason || 'unknown-error');
 }
 
 async function runBrowserlessRunner(config, deps = {}) {
@@ -181,7 +227,17 @@ async function runBrowserlessRunner(config, deps = {}) {
   const sleep = typeof deps.sleep === 'function'
     ? deps.sleep
     : ms => new Promise(resolve => setTimeout(resolve, ms));
-  const logStore = deps.logStore || createLocalLogStore({ logDir: config.logDir, now });
+  const supervisorErrors = [];
+  const recordSupervisorError = (err, detail = {}) => {
+    supervisorErrors.push({
+      at: new Date(now()).toISOString(),
+      error: errorMessage(err),
+      detail
+    });
+    if (supervisorErrors.length > 20) supervisorErrors.splice(0, supervisorErrors.length - 20);
+  };
+  const rawLogStore = deps.logStore || createLocalLogStore({ logDir: config.logDir, now });
+  const logStore = createNoThrowLogStore(rawLogStore, recordSupervisorError);
   const safetyController = deps.safetyController || createBrowserlessSafetyController({
     now,
     frameGapAlertMs: config.frameGapAlertMs,
@@ -190,18 +246,46 @@ async function runBrowserlessRunner(config, deps = {}) {
     staminaExhaustedBelowMs: config.staminaExhaustedBelowMs
   });
   const stateFile = config.stateFile || stateFilePath(config);
-  fs.mkdirSync(config.dataDir, { recursive: true });
-  const retention = cleanupOldLogDays(config.logDir, {
-    nowMs: now(),
-    keepDays: config.logRetentionDays
-  });
+  const updateState = (patch, options = {}) => {
+    try {
+      return updateBrowserlessStateFile(stateFile, patch, options);
+    } catch (err) {
+      recordSupervisorError(err, { operation: 'state-update' });
+      logStore.append('runner', 'state-update-error', { error: errorMessage(err) });
+      return readBrowserlessStateFile(stateFile);
+    }
+  };
+  const writeState = state => {
+    try {
+      return writeBrowserlessStateFile(stateFile, state);
+    } catch (err) {
+      recordSupervisorError(err, { operation: 'state-write' });
+      logStore.append('runner', 'state-write-error', { error: errorMessage(err) });
+      return readBrowserlessStateFile(stateFile);
+    }
+  };
+  try {
+    fs.mkdirSync(config.dataDir, { recursive: true });
+  } catch (err) {
+    recordSupervisorError(err, { operation: 'data-dir-create', dataDir: config.dataDir });
+  }
+  let retention = null;
+  try {
+    retention = cleanupOldLogDays(config.logDir, {
+      nowMs: now(),
+      keepDays: config.logRetentionDays
+    });
+  } catch (err) {
+    recordSupervisorError(err, { operation: 'log-retention' });
+    retention = { ok: false, error: errorMessage(err) };
+  }
   let persisted = readBrowserlessStateFile(stateFile);
   const envSessionTokenProvided = Boolean(config.sessionToken);
   const envLoginPointProvided = hasConfigNumber(config.loginPointX) && hasConfigNumber(config.loginPointY);
   const persistedLoginPoint = loginPointFromAnyState(persisted);
   config = hydrateConfigFromState(config, persisted);
   let loginPointProvided = hasConfigNumber(config.loginPointX) && hasConfigNumber(config.loginPointY);
-  persisted = writeBrowserlessStateFile(stateFile, {
+  persisted = writeState({
     ...persisted,
     updatedAt: new Date(now()).toISOString(),
     session: {
@@ -260,70 +344,176 @@ async function runBrowserlessRunner(config, deps = {}) {
   config.sourceIps = sourceIpController.sourceIps();
   persisted = readBrowserlessStateFile(stateFile);
 
+  const refreshFromPersistedState = () => {
+    persisted = readBrowserlessStateFile(stateFile);
+    config = hydrateConfigFromState(config, persisted);
+    try {
+      sourceIpController.refreshFromState(persisted);
+      config.sourceIp = sourceIpController.currentSourceIp();
+      config.sourceIps = sourceIpController.sourceIps();
+    } catch (err) {
+      recordSupervisorError(err, { operation: 'source-ip-refresh' });
+      logStore.append('runner', 'source-ip-refresh-error', { error: errorMessage(err) });
+    }
+  };
+
+  const waitForLoopPlan = async (loopPlan, resultForStop = null) => {
+    if (!loopPlan.continue) {
+      if (!config.once) {
+        updateState({
+          runner: {
+            running: false,
+            currentAction: {
+              kind: 'stopped',
+              band: 'recover',
+              reason: loopPlan.reason,
+              previousRunId: loopPlan.previousRunId || ''
+            }
+          }
+        }, { updatedAt: new Date(now()).toISOString() });
+        logStore.append('runner', 'runner-loop-stop', loopPlan);
+      }
+      if (resultForStop && loopPlan.reason === 'once') return resultForStop;
+      return {
+        ...(resultForStop || {
+          ok: false,
+          mode: config.controlMode || 'read-only'
+        }),
+        reason: loopPlan.reason || resultForStop?.reason || 'runner-loop-stop'
+      };
+    }
+
+    const nextRunAtMs = now() + loopPlan.delayMs;
+    const nextRunAt = new Date(nextRunAtMs).toISOString();
+    const waitDetail = {
+      ...loopPlan,
+      nextRunAt,
+      supervisorErrors: supervisorErrors.slice(-5)
+    };
+    updateState({
+      runner: {
+        running: true,
+        mode: config.controlMode || 'read-only',
+        lastError: '',
+        currentAction: {
+          kind: 'loop-wait',
+          band: 'recover',
+          reason: loopPlan.reason,
+          delayMs: loopPlan.delayMs,
+          nextRunAt,
+          previousRunId: loopPlan.previousRunId || ''
+        }
+      }
+    }, { updatedAt: new Date(now()).toISOString() });
+    logStore.append('runner', 'runner-loop-wait', waitDetail);
+    try {
+      await sleep(loopPlan.delayMs);
+    } catch (err) {
+      recordSupervisorError(err, { operation: 'loop-sleep', delayMs: loopPlan.delayMs });
+      logStore.append('runner', 'loop-sleep-error', { error: errorMessage(err), delayMs: loopPlan.delayMs });
+    }
+    const requestedStop = safetyController.getStopEvent();
+    if (requestedStop) {
+      const stopped = {
+        ok: false,
+        mode: config.controlMode || 'read-only',
+        reason: requestedStop.reason || 'explicit-stop',
+        event: requestedStop
+      };
+      updateState({
+        runner: {
+          running: false,
+          lastRun: stopped,
+          lastError: stopped.reason,
+          currentAction: {
+            kind: 'stopped',
+            band: 'recover',
+            reason: stopped.reason,
+            previousRunId: loopPlan.previousRunId || ''
+          }
+        }
+      }, { updatedAt: new Date(now()).toISOString() });
+      logStore.append('runner', 'runner-loop-stop', {
+        ...loopPlan,
+        reason: stopped.reason,
+        requestedStop
+      });
+      return stopped;
+    }
+    safetyController.clearStop();
+    refreshFromPersistedState();
+    return null;
+  };
+
   let statusHandle = null;
   if (!config.once && Number(config.statusPort || 0) > 0 && deps.startStatusServer !== false) {
     const starter = deps.startStatusServer || startStatusServer;
-    statusHandle = await starter({
-      host: config.statusHost,
-      port: config.statusPort,
-      webToken: config.webToken,
-      getStatus: () => buildPublicBrowserlessStatus(readBrowserlessStateFile(stateFile), config),
-      onStop: async () => {
-        const event = safetyController.requestStop('explicit-stop', { source: 'status-api' });
-        const currentState = readBrowserlessStateFile(stateFile);
-        updateBrowserlessStateFile(stateFile, {
-          runner: {
-            lastError: event.reason,
-            currentAction: { kind: 'stop', band: 'safety', reason: event.reason }
-          },
-          recentExits: [...(currentState.recentExits || []), event].slice(-20)
-        }, { updatedAt: new Date(now()).toISOString() });
-        logStore.append('exits', 'stop-request', event);
-        return { ok: true, event };
-      },
-      onAuthUrl: async () => {
-        const authUrl = await sourceIpController.requestAuthUrl({
-          gameOrigin: config.gameOrigin,
-          timeoutMs: config.httpTimeoutMs
-        });
-        updateBrowserlessStateFile(stateFile, {
-          session: {
-            lastAuthUrl: authUrl,
-            lastAuthUrlAt: new Date(now()).toISOString()
-          }
-        }, { updatedAt: new Date(now()).toISOString() });
-        logStore.append('runner', 'auth-url', { authUrlPresent: Boolean(authUrl) });
-        return { ok: true, authUrl };
-      },
-      onCallback: async input => {
-        const result = await sourceIpController.submitCallbackInput(input, {
-          gameOrigin: config.gameOrigin,
-          timeoutMs: config.httpTimeoutMs
-        });
-        updateBrowserlessStateFile(stateFile, {
-          session: {
+    try {
+      statusHandle = await starter({
+        host: config.statusHost,
+        port: config.statusPort,
+        webToken: config.webToken,
+        getStatus: () => buildPublicBrowserlessStatus(readBrowserlessStateFile(stateFile), config),
+        onStop: async () => {
+          const event = safetyController.requestStop('explicit-stop', { source: 'status-api' });
+          const currentState = readBrowserlessStateFile(stateFile);
+          updateState({
+            runner: {
+              lastError: event.reason,
+              currentAction: { kind: 'stop', band: 'safety', reason: event.reason }
+            },
+            recentExits: [...(currentState.recentExits || []), event].slice(-20)
+          }, { updatedAt: new Date(now()).toISOString() });
+          logStore.append('exits', 'stop-request', event);
+          return { ok: true, event };
+        },
+        onAuthUrl: async () => {
+          const authUrl = await sourceIpController.requestAuthUrl({
+            gameOrigin: config.gameOrigin,
+            timeoutMs: config.httpTimeoutMs
+          });
+          updateState({
+            session: {
+              lastAuthUrl: authUrl,
+              lastAuthUrlAt: new Date(now()).toISOString()
+            }
+          }, { updatedAt: new Date(now()).toISOString() });
+          logStore.append('runner', 'auth-url', { authUrlPresent: Boolean(authUrl) });
+          return { ok: true, authUrl };
+        },
+        onCallback: async input => {
+          const result = await sourceIpController.submitCallbackInput(input, {
+            gameOrigin: config.gameOrigin,
+            timeoutMs: config.httpTimeoutMs
+          });
+          updateState({
+            session: {
+              userId: result.login.userId,
+              sessionToken: result.login.sessionToken,
+              tokenUpdatedAt: new Date(now()).toISOString(),
+              lastLoginSource: result.source || '',
+              lastLoginSummary: result.summary || null
+            }
+          }, { updatedAt: new Date(now()).toISOString() });
+          logStore.append('runner', 'login-ok', {
             userId: result.login.userId,
-            sessionToken: result.login.sessionToken,
-            tokenUpdatedAt: new Date(now()).toISOString(),
-            lastLoginSource: result.source || '',
-            lastLoginSummary: result.summary || null
-          }
-        }, { updatedAt: new Date(now()).toISOString() });
-        logStore.append('runner', 'login-ok', {
-          userId: result.login.userId,
-          tokenPresent: true,
-          source: result.source || '',
-          summary: result.summary || null
-        });
-        return {
-          ok: true,
-          userId: result.login.userId,
-          tokenPresent: true,
-          source: result.source || '',
-          summary: result.summary || null
-        };
-      }
-    });
+            tokenPresent: true,
+            source: result.source || '',
+            summary: result.summary || null
+          });
+          return {
+            ok: true,
+            userId: result.login.userId,
+            tokenPresent: true,
+            source: result.source || '',
+            summary: result.summary || null
+          };
+        }
+      });
+    } catch (err) {
+      recordSupervisorError(err, { operation: 'status-server-start', host: config.statusHost, port: config.statusPort });
+      logStore.append('runner', 'status-server-error', { error: errorMessage(err), host: config.statusHost, port: config.statusPort });
+    }
   }
 
   logStore.append('runner', 'runner-start', {
@@ -334,7 +524,7 @@ async function runBrowserlessRunner(config, deps = {}) {
 
   if (!['read-only', 'movement-only', 'non-combat-profit', 'profit-live', 'combat-dry-run', 'combat-live'].includes(String(config.controlMode || ''))) {
     const result = { ok: false, reason: 'unsupported-control-mode' };
-    updateBrowserlessStateFile(stateFile, {
+    updateState({
       runner: {
         running: false,
         lastRun: result,
@@ -354,7 +544,7 @@ async function runBrowserlessRunner(config, deps = {}) {
       statusPort: config.statusPort,
       message: 'browserless runner skeleton initialized without live transport'
     };
-    updateBrowserlessStateFile(stateFile, {
+    updateState({
       runner: {
         running: !config.once,
         mode: 'dry-run',
@@ -366,9 +556,9 @@ async function runBrowserlessRunner(config, deps = {}) {
     return result;
   }
 
-  if (!config.userId || !config.sessionToken) {
+  if (config.once && (!config.userId || !config.sessionToken)) {
     const result = { ok: false, reason: 'missing-manual-session' };
-    updateBrowserlessStateFile(stateFile, {
+    updateState({
       runner: {
         running: false,
         lastRun: result,
@@ -381,21 +571,48 @@ async function runBrowserlessRunner(config, deps = {}) {
 
   const readOnlyCanary = deps.runReadOnlyOnce || runReadOnlyCanary;
   while (true) {
+    if (!config.userId || !config.sessionToken) {
+      const result = { ok: false, mode: config.controlMode || 'read-only', reason: 'missing-manual-session' };
+      updateState({
+        runner: {
+          running: true,
+          mode: config.controlMode || 'read-only',
+          lastRun: result,
+          lastError: result.reason,
+          currentAction: {
+            kind: 'loop-wait',
+            band: 'recover',
+            reason: result.reason
+          }
+        }
+      }, { updatedAt: new Date(now()).toISOString() });
+      logStore.append('runner', 'runner-session-wait', result);
+      const stopped = await waitForLoopPlan(browserlessLoopPlan(result, config), result);
+      if (stopped) return stopped;
+      continue;
+    }
     loginPointProvided = hasConfigNumber(config.loginPointX) && hasConfigNumber(config.loginPointY);
     if (!loginPointProvided && config.controlMode === 'read-only') {
-      const bootstrap = await readOnlyCanary(config, {
-        logStore,
-        now,
-        persistedState: readBrowserlessStateFile(stateFile),
-        safetyController,
-        allowMissingLoginPointBootstrap: true,
-        fetchWithTimeout: sourceIpController.fetchWithTimeout,
-        openBrowserlessWs: sourceIpController.openBrowserlessWs,
-        leaveWithVerification: sourceIpController.leaveWithVerification
-      });
+      let bootstrap;
+      try {
+        bootstrap = await readOnlyCanary(config, {
+          logStore,
+          now,
+          persistedState: readBrowserlessStateFile(stateFile),
+          safetyController,
+          allowMissingLoginPointBootstrap: true,
+          fetchWithTimeout: sourceIpController.fetchWithTimeout,
+          openBrowserlessWs: sourceIpController.openBrowserlessWs,
+          leaveWithVerification: sourceIpController.leaveWithVerification
+        });
+      } catch (err) {
+        recordSupervisorError(err, { operation: 'login-point-bootstrap-canary' });
+        bootstrap = buildRunnerErrorCanary(err, config, { now, runId: 'login-point-bootstrap-error' });
+        logStore.append('runner', 'runner-canary-error', bootstrap);
+      }
       const learned = learnedLoginPointFromCanary(bootstrap);
       if (learned.loginPoint) {
-        updateBrowserlessStateFile(stateFile, {
+        updateState({
           loginPointSafety: {
             ok: false,
             reason: 'learned-login-point-pending-snapshot-safety',
@@ -417,9 +634,9 @@ async function runBrowserlessRunner(config, deps = {}) {
         });
       } else {
         const result = { ok: false, mode: config.controlMode || 'read-only', reason: 'login-point-bootstrap-failed', canary: bootstrap };
-        updateBrowserlessStateFile(stateFile, {
+        updateState({
           runner: {
-            running: false,
+            running: !config.once,
             mode: config.controlMode || 'read-only',
             lastRun: result,
             lastError: result.reason
@@ -428,48 +645,57 @@ async function runBrowserlessRunner(config, deps = {}) {
             lastReadOnlyProbe: bootstrap
           }
         }, { updatedAt: new Date(now()).toISOString() });
-        logStore.append('runner', 'runner-stop', result);
-        return result;
+        logStore.append('runner', 'runner-bootstrap-failed', result);
+        const stopped = await waitForLoopPlan(browserlessLoopPlan(result, config), result);
+        if (stopped) return stopped;
+        continue;
       }
     }
-    const canary = await readOnlyCanary(config, {
-      logStore,
-      now,
-      persistedState: readBrowserlessStateFile(stateFile),
-      safetyController,
-      fetchWithTimeout: sourceIpController.fetchWithTimeout,
-      openBrowserlessWs: sourceIpController.openBrowserlessWs,
-      leaveWithVerification: sourceIpController.leaveWithVerification,
-      onDecision: decision => {
-        updateBrowserlessStateFile(stateFile, decisionStatePatch(decision), {
-          updatedAt: new Date(now()).toISOString()
-        });
-      },
-      onAction: (action, context = {}) => {
-        updateBrowserlessStateFile(stateFile, {
-          runner: {
-            currentAction: {
-              ...(action || {}),
-              actionState: context.actionState || null
+    let canary;
+    try {
+      canary = await readOnlyCanary(config, {
+        logStore,
+        now,
+        persistedState: readBrowserlessStateFile(stateFile),
+        safetyController,
+        fetchWithTimeout: sourceIpController.fetchWithTimeout,
+        openBrowserlessWs: sourceIpController.openBrowserlessWs,
+        leaveWithVerification: sourceIpController.leaveWithVerification,
+        onDecision: decision => {
+          updateState(decisionStatePatch(decision), {
+            updatedAt: new Date(now()).toISOString()
+          });
+        },
+        onAction: (action, context = {}) => {
+          updateState({
+            runner: {
+              currentAction: {
+                ...(action || {}),
+                actionState: context.actionState || null
+              }
+            },
+            current: {
+              action: {
+                ...(action || {}),
+                actionState: context.actionState || null
+              }
             }
-          },
-          current: {
-            action: {
-              ...(action || {}),
-              actionState: context.actionState || null
-            }
-          }
-        }, {
-          updatedAt: new Date(now()).toISOString()
-        });
-      }
-    });
+          }, {
+            updatedAt: new Date(now()).toISOString()
+          });
+        }
+      });
+    } catch (err) {
+      recordSupervisorError(err, { operation: 'canary' });
+      canary = buildRunnerErrorCanary(err, config, { now });
+      logStore.append('runner', 'runner-canary-error', canary);
+    }
     const { finalSelf, loginPoint: learnedLoginPoint } = learnedLoginPointFromCanary(canary);
     const result = { ok: Boolean(canary?.ok), mode: config.controlMode || 'read-only', canary: canary || null };
     const finalDecisionPatch = canary?.decisions?.last ? decisionStatePatch(canary.decisions.last) : {};
     const safetyEvents = [canary?.safety?.event, canary?.safety?.leaveFailure].filter(Boolean);
     const currentStateBeforeFinish = readBrowserlessStateFile(stateFile);
-    updateBrowserlessStateFile(stateFile, {
+    updateState({
       ...finalDecisionPatch,
       ...(safetyEvents.length ? {
         recentExits: [...(currentStateBeforeFinish.recentExits || []), ...safetyEvents].slice(-20)
@@ -500,81 +726,8 @@ async function runBrowserlessRunner(config, deps = {}) {
     logStore.append('runner', result.ok ? 'runner-finish' : 'runner-stop', result);
 
     const loopPlan = browserlessLoopPlan(result, config);
-    if (!loopPlan.continue) {
-      if (!config.once) {
-        updateBrowserlessStateFile(stateFile, {
-          runner: {
-            running: false,
-            currentAction: {
-              kind: 'stopped',
-              band: 'recover',
-              reason: loopPlan.reason,
-              previousRunId: loopPlan.previousRunId || ''
-            }
-          }
-        }, { updatedAt: new Date(now()).toISOString() });
-        logStore.append('runner', 'runner-loop-stop', loopPlan);
-      }
-      return result;
-    }
-
-    const nextRunAtMs = now() + loopPlan.delayMs;
-    const nextRunAt = new Date(nextRunAtMs).toISOString();
-    const waitDetail = {
-      ...loopPlan,
-      nextRunAt
-    };
-    updateBrowserlessStateFile(stateFile, {
-      runner: {
-        running: true,
-        mode: config.controlMode || 'read-only',
-        lastError: '',
-        currentAction: {
-          kind: 'loop-wait',
-          band: 'recover',
-          reason: loopPlan.reason,
-          delayMs: loopPlan.delayMs,
-          nextRunAt,
-          previousRunId: loopPlan.previousRunId || ''
-        }
-      }
-    }, { updatedAt: new Date(now()).toISOString() });
-    logStore.append('runner', 'runner-loop-wait', waitDetail);
-    await sleep(loopPlan.delayMs);
-    const requestedStop = safetyController.getStopEvent();
-    if (requestedStop) {
-      const stopped = {
-        ok: false,
-        mode: config.controlMode || 'read-only',
-        reason: requestedStop.reason || 'explicit-stop',
-        event: requestedStop
-      };
-      updateBrowserlessStateFile(stateFile, {
-        runner: {
-          running: false,
-          lastRun: stopped,
-          lastError: stopped.reason,
-          currentAction: {
-            kind: 'stopped',
-            band: 'recover',
-            reason: stopped.reason,
-            previousRunId: loopPlan.previousRunId || ''
-          }
-        }
-      }, { updatedAt: new Date(now()).toISOString() });
-      logStore.append('runner', 'runner-loop-stop', {
-        ...loopPlan,
-        reason: stopped.reason,
-        requestedStop
-      });
-      return stopped;
-    }
-    safetyController.clearStop();
-    persisted = readBrowserlessStateFile(stateFile);
-    config = hydrateConfigFromState(config, persisted);
-    sourceIpController.refreshFromState(persisted);
-    config.sourceIp = sourceIpController.currentSourceIp();
-    config.sourceIps = sourceIpController.sourceIps();
+    const stopped = await waitForLoopPlan(loopPlan, result);
+    if (stopped) return stopped;
   }
 }
 

@@ -31,6 +31,10 @@ function snapshotSafetySelfPresent(snapshotSafety) {
   return Boolean(snapshotSafety?.response?.summary?.selfPresent);
 }
 
+function errorMessage(error) {
+  return error?.message || String(error || 'unknown error');
+}
+
 function createCanaryRunId(mode, startedAtMs) {
   const stamp = new Date(startedAtMs).toISOString().replace(/[-:.]/g, '');
   return `${String(mode || 'canary')}-${stamp}`;
@@ -320,7 +324,17 @@ async function runReadOnlyCanary(config, options = {}) {
     return true;
   };
 
-  result.snapshotSafety = await (options.runPreLoginSnapshotSafety || runPreLoginSnapshotSafety)(config, options.persistedState || {}, options);
+  try {
+    result.snapshotSafety = await (options.runPreLoginSnapshotSafety || runPreLoginSnapshotSafety)(config, options.persistedState || {}, options);
+  } catch (err) {
+    const message = errorMessage(err);
+    result.snapshotSafety = {
+      ok: false,
+      reason: 'snapshot-error',
+      error: message
+    };
+    log('canary-snapshot-safety-error', { error: message });
+  }
   log('canary-snapshot-safety', result.snapshotSafety);
   if (!result.snapshotSafety.ok) {
     if (options.allowMissingLoginPointBootstrap && result.snapshotSafety.reason === 'missing-login-point') {
@@ -537,28 +551,52 @@ async function runReadOnlyCanary(config, options = {}) {
   );
 
   if (transport || !result.error || shouldVerifyExitAfterOpenFailure) {
-    if (result.safety.event) {
-      result.safety.exit = await executeSafetyExit(result.safety.event, config, {
-        transport,
-        allowStopMotion: actionEnabled,
-        leaveWithVerification: options.leaveWithVerification,
-        now,
-        sleep
+    try {
+      if (result.safety.event) {
+        result.safety.exit = await executeSafetyExit(result.safety.event, config, {
+          transport,
+          allowStopMotion: actionEnabled,
+          leaveWithVerification: options.leaveWithVerification,
+          now,
+          sleep
+        });
+        result.leave = result.safety.exit.leave;
+      } else {
+        if (actionAdapter) updateActionResult(actionAdapter.stop('normal-complete'));
+        if (shouldVerifyExitAfterOpenFailure) log('canary-open-failed-leave', { error: result.error });
+        const leave = options.leaveWithVerification || leaveWithVerification;
+        result.leave = await leave({
+          gameOrigin: config.gameOrigin,
+          userId: config.userId,
+          sessionToken: config.sessionToken,
+          localAddress: config.sourceIp,
+          timeoutMs: config.httpTimeoutMs || 10000,
+          retryMax: config.leaveRetryMax ?? 3,
+          retryDelayMs: config.leaveRetryMs ?? 1200
+        });
+      }
+    } catch (err) {
+      const message = errorMessage(err);
+      result.leave = { ok: false, error: message, attempts: [] };
+      if (result.safety.event) {
+        result.safety.exit = {
+          ok: false,
+          event: result.safety.event,
+          stopMotion: null,
+          leave: result.leave,
+          error: message
+        };
+      }
+      const leaveFailure = safetyController.evaluate(null, {
+        leaveResult: result.leave,
+        nowMs: now()
       });
-      result.leave = result.safety.exit.leave;
-    } else {
-      if (actionAdapter) updateActionResult(actionAdapter.stop('normal-complete'));
-      if (shouldVerifyExitAfterOpenFailure) log('canary-open-failed-leave', { error: result.error });
-      const leave = options.leaveWithVerification || leaveWithVerification;
-      result.leave = await leave({
-        gameOrigin: config.gameOrigin,
-        userId: config.userId,
-        sessionToken: config.sessionToken,
-        localAddress: config.sourceIp,
-        timeoutMs: config.httpTimeoutMs || 10000,
-        retryMax: config.leaveRetryMax ?? 3,
-        retryDelayMs: config.leaveRetryMs ?? 1200
-      });
+      if (!leaveFailure.ok) {
+        result.safety.leaveFailure = leaveFailure;
+        logSafety(leaveFailure);
+      }
+      if (!result.error) result.error = `leave failed: ${message}`;
+      log('canary-leave-error', { error: message });
     }
   }
 
