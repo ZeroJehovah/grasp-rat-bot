@@ -13,6 +13,7 @@ const {
 const DEFAULT_GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
 const DEFAULT_LEAVE_RETRY_MAX = 3;
 const DEFAULT_LEAVE_RETRY_MS = 1200;
+const MAX_RESPONSE_RETRY_DELAY_MS = 120000;
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -69,13 +70,27 @@ async function leaveWithVerification(options = {}) {
     });
     attempts.push(result);
     if (result.ok) return { ok: true, attempts };
-    if (index < retryMax) await sleepImpl(retryDelayMs);
+    if (index < retryMax) await sleepImpl(retryDelayMsForAttempt(result, retryDelayMs));
   }
   return {
     ok: false,
     attempts,
     alert: buildLeaveFailureAlert(attempts)
   };
+}
+
+function retryDelayMsForAttempt(attempt, fallbackMs = DEFAULT_LEAVE_RETRY_MS) {
+  const fallback = Math.max(0, Number(fallbackMs) || 0);
+  const response = attempt?.response && typeof attempt.response === 'object' ? attempt.response : {};
+  const retryAfterSeconds = Number(
+    response.retry_after
+      ?? response.retryAfter
+      ?? response.retryAfterSeconds
+  );
+  if (!response.retryable || !Number.isFinite(retryAfterSeconds) || retryAfterSeconds <= 0) {
+    return fallback;
+  }
+  return Math.min(MAX_RESPONSE_RETRY_DELAY_MS, Math.max(fallback, retryAfterSeconds * 1000));
 }
 
 function buildLeaveFailureAlert(attempts = []) {
@@ -111,6 +126,7 @@ module.exports = {
   buildLeaveUrl,
   leaveOnce,
   leaveWithVerification,
+  retryDelayMsForAttempt,
   summarizeLeaveAttemptForPublic,
   summarizeLeaveResultForPublic
 };

@@ -36,7 +36,8 @@ const {
 } = require('./browserless/session-client');
 const {
   leaveOnce: browserlessLeaveOnce,
-  leaveWithVerification: browserlessLeaveWithVerification
+  leaveWithVerification: browserlessLeaveWithVerification,
+  retryDelayMsForAttempt: browserlessRetryDelayMsForLeaveAttempt
 } = require('./browserless/leave-client');
 const {
   createFrameStats,
@@ -5459,6 +5460,40 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'true|2|initial,retry-1'
+    },
+    {
+      name: 'browserless leave client honors retryable response delay',
+      got: (async () => {
+        let calls = 0;
+        const sleeps = [];
+        const direct = browserlessRetryDelayMsForLeaveAttempt({
+          response: { retryable: true, retry_after: 60 }
+        }, 1200);
+        const result = await browserlessLeaveWithVerification({
+          retryMax: 1,
+          retryDelayMs: 1200,
+          sleep: async ms => { sleeps.push(ms); },
+          leaveOnceImpl: async ({ stage }) => {
+            calls += 1;
+            return calls < 2
+              ? {
+                  stage,
+                  ok: false,
+                  status: 502,
+                  summary: { leaveConfirmed: false },
+                  response: { retryable: true, retry_after: 60 }
+                }
+              : { stage, ok: true, status: 200, summary: { leaveConfirmed: true } };
+          }
+        });
+        return [
+          direct,
+          result.ok,
+          calls,
+          sleeps.join(',')
+        ].join('|');
+      })(),
+      want: '60000|true|2|60000'
     },
     {
       name: 'browserless fetch timeout aborts stalled requests',
