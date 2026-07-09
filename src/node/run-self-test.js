@@ -5964,6 +5964,39 @@ async function runSelfTest() {
       want: 'profit-candidate|attack|enemy|8|false|safety-exit|safety|profit-live-active-threat|true|9|true'
     },
     {
+      name: 'browserless profit live disables snapshot-only coin fallback',
+      got: (() => {
+        const store = createBrowserlessStateStore({ userId: 7 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 59,
+          entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 100, y: 100, hp: 100 }],
+          bullets: []
+        }, { receivedAtMs: 1000 });
+        store.ingestFrame({
+          type: 'snapshot',
+          tick: 60,
+          entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 100, y: 100, hp: 100, coins: 1000 }],
+          bullets: [],
+          coin_drops: [{ drop_id: 2602, amount: 1, x: 120, y: 100 }],
+          messages: []
+        }, { receivedAtMs: 1100 });
+        const decision = buildBrowserlessDecision(store.getState(1200), {}, {
+          nowMs: 1200,
+          controlMode: 'profit-live'
+        });
+        return [
+          decision.kind,
+          decision.reason,
+          decision.input.profitCoinSource,
+          decision.input.fallback.snapshotCoinFallbackAllowed,
+          decision.input.fallback.snapshotFallbackBlockedReasons.join(','),
+          decision.profit.best === null
+        ].join('|');
+      })(),
+      want: 'wait|no-profitable-candidate|none|false|snapshot-fallback-disabled|true'
+    },
+    {
       name: 'browserless profit live exits instead of chasing coin under combat threat',
       got: (() => {
         const store = createBrowserlessStateStore({ userId: 7 });
@@ -5996,10 +6029,11 @@ async function runSelfTest() {
           decision.action.target.authority,
           decision.profit.best?.type,
           decision.profit.best?.coin?.id,
+          decision.input.fallback.snapshotFallbackBlockedReasons.includes('snapshot-fallback-disabled'),
           decision.combat.target.userId
         ].join('|');
       })(),
-      want: 'safety-exit|safety|profit-live-active-threat|31361|realtime|coin|709|31361'
+      want: 'safety-exit|safety|profit-live-active-threat|31361|realtime|||true|31361'
     },
     {
       name: 'browserless combat dry-run uses realtime target and ignores snapshot target',
