@@ -4,14 +4,13 @@ Keep this file short. It is the current live-observation handoff for the Oracle 
 
 ## Latest Baseline
 
-- Updated: 2026-07-09 10:36 CST / 2026-07-09 02:36 UTC.
-- VPS service: `grasp-rat-browserless-runner` is active on the VPS, checkout `9614b24`. The running service process was started after deploying code commit `25c69db`; later commits are documentation-only.
+- Updated: 2026-07-09 11:02 CST / 2026-07-09 03:02 UTC.
+- VPS service: `grasp-rat-browserless-runner` is active on the VPS, checkout `6142c2a`. The running service process was started after deploying the browserless AFK Drop threshold fix.
 - Production env: `GRASP_RAT_BROWSERLESS_DRY_RUN=false`, `GRASP_RAT_BROWSERLESS_CONTROL_MODE=profit-live`, `GRASP_RAT_BROWSERLESS_COMBAT_ENABLED=true`.
-- Current run: `profit-live-20260709T022052916Z`, started after deploying the loop fix and restarting the service at 2026-07-09 10:20 CST.
-- Current fresh snapshot evidence at tick `760807`: HP 100, Drop 30, coins 1000, 1d stamina remaining 19,542,915, death count 2, Active enemies within 170m: 0.
-- Baseline for this run: previous verified leave from `profit-live-20260709T015902559Z` ended with HP 100, Drop 16, 1d stamina remaining 19,937,260, death count 2, and `joined=UserRecordOnly/current_join_mode=None/life=Alive/visible=Hidden`.
-- Current delta since previous verified leave: Drop +14, 1d stamina spent 394,345, death count +0. Drop is counted only from self Drop / `death_drop_coins`, not kill messages.
-- Recent behavior evidence: current run has sent movement and shoot commands, killed several Passive/AFK targets, and then moved on to the next target. Kill messages remain supporting evidence only; realized income is self Drop.
+- Current run: `profit-live-20260709T030155471Z`, started after pulling `6142c2a` and restarting the service.
+- Latest verified leave before this fixed run: `profit-live-20260709T025717918Z` completed at `2026-07-09T02:59:01Z` by explicit stop with verified `leave`, HP 100, Drop 65, coins 1000, 1d stamina remaining 19,037,928, death count 2, and `joined=UserRecordOnly/current_join_mode=None/life=Alive/visible=Hidden`.
+- Current fixed-run decision evidence at `2026-07-09T03:02:24Z..03:02:44Z`: best target `#226` with Drop 12; visible AFK candidates in sampled rows were Drop 12/5/4/3 and `hasLowDropAfkCandidate=false`.
+- Current delta since the fixed-run leave baseline is not yet measured by a new verified leave response. Drop is counted only from self Drop / `death_drop_coins`, not kill messages or in-game target lists.
 
 ## Known Issues
 
@@ -22,7 +21,7 @@ Keep this file short. It is the current live-observation handoff for the Oracle 
 
 ## Fixed Or Mitigated
 
-- Browserless AFK-profit admission now matches the browser runtime default `attackMinAfkDrop=3`. VPS decisions in `profit-live-20260709T022052916Z` showed `lopoincare`/`#19369` selected as `attack` with Drop 1 from `2026-07-09T02:32:53Z` to `02:33:23Z`; that low-Drop AFK target is now filtered out before opportunity scoring.
+- Browserless AFK-profit admission now matches the browser runtime default `attackMinAfkDrop=3`. VPS decisions in `profit-live-20260709T022052916Z` showed `lopoincare`/`#19369` selected as `attack` with Drop 1 from `2026-07-09T02:32:53Z` to `02:33:23Z`; after deploying `6142c2a`, sampled fixed-run decisions have no Drop 1/2 AFK candidates.
 - Snapshot Active metadata is now used as profit/safety veto metadata so realtime targets without mode are not attacked as AFK when fresh snapshot evidence says Active.
 - Passive/non-firing moving targets no longer take over `profit-live` combat action selection ahead of AFK profit or player-drop pickup.
 - Snapshot self-kill player drops are eligible for pickup only when tied to fresh self kill evidence; unrelated system/player drops remain blocked as ordinary snapshot fallback.
