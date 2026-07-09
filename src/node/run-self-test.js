@@ -9149,10 +9149,18 @@ async function runSelfTest() {
           reason: 'best-opportunity-visible-coin',
           target: { type: 'coin', id: 'snapshot-coin', authority: 'snapshot', snapshotOnly: true, amount: 1 }
         });
+        decision('2026-07-08T01:00:09.000Z', {
+          kind: 'safety-exit',
+          band: 'safety',
+          reason: 'profit-live-snapshot-active-threat',
+          shouldLeave: true,
+          target: { type: 'enemy', userId: 46, authority: 'realtime', active: true, moving: false, firing: false }
+        });
         const summary = summarizeBrowserlessActionParityAudit({ logDir: dir, day: '2026-07-08' });
         const combat = summary.records.find(record => record.kind === 'combat-live');
         const activeExit = summary.missing.find(record => record.targetId === '45');
         const snapshot = summary.knownTransportExceptions.find(record => record.targetId === 'snapshot-coin');
+        const snapshotActive = summary.knownTransportExceptions.find(record => record.targetId === '46');
         return [
           summary.ok,
           summary.counts.actions,
@@ -9164,10 +9172,11 @@ async function runSelfTest() {
           combat?.dy,
           combat?.authority,
           activeExit?.classification?.key,
-          snapshot?.classification?.key
+          snapshot?.classification?.key,
+          snapshotActive?.classification?.key
         ].join('|');
       }),
-      want: 'false|9|6|2|1|true|1|-1|realtime|browserless-safety-exit|snapshot-coin-fallback'
+      want: 'false|10|6|2|2|true|1|-1|realtime|browserless-safety-exit|snapshot-coin-fallback|snapshot-active-threat-safety-exit'
     },
     {
       name: 'browserless canary audit validates finish and forced stop evidence',

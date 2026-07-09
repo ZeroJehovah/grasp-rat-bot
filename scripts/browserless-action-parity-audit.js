@@ -161,7 +161,14 @@ function classifyNormalizedAction(action) {
       message: 'direct pos frames do not currently expose realtime coins; guarded pushed snapshot coin is a transport fallback'
     };
   }
-  if (kind === 'safety-exit' && /^profit-live-(?:(?:snapshot-)?active-threat|injury-threat|combat-injury-threat)$/.test(reason)) {
+  if (kind === 'safety-exit' && reason === 'profit-live-snapshot-active-threat') {
+    return {
+      status: GAP_TRANSPORT,
+      key: 'snapshot-active-threat-safety-exit',
+      message: 'snapshot Active metadata remains a safety veto because direct realtime pos frames do not provide enough mode authority for combat/flee control'
+    };
+  }
+  if (kind === 'safety-exit' && /^profit-live-(?:active-threat|injury-threat|combat-injury-threat)$/.test(reason)) {
     return {
       status: GAP_MISSING,
       key: 'browserless-safety-exit',
