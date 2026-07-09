@@ -5965,6 +5965,36 @@ async function runSelfTest() {
       want: 'profit-candidate|attack|enemy|8|false|safety-exit|safety|profit-live-active-threat|true|9|true'
     },
     {
+      name: 'browserless profit live rejects low-drop AFK targets by default',
+      got: (() => {
+        const store = createBrowserlessStateStore({ userId: 7 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 59,
+          entities: [
+            { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 90 },
+            { entity_id: 2, user_id: 8, name: 'low-drop-afk', x: 1000, y: 0, hp: 80, current_join_mode: 'None', drop: 1 },
+            { entity_id: 3, user_id: 9, name: 'min-drop-afk', x: 2000, y: 0, hp: 80, current_join_mode: 'None', drop: 3 }
+          ],
+          bullets: []
+        }, { receivedAtMs: 1000 });
+        const decision = buildBrowserlessDecision(store.getState(1200), {}, {
+          nowMs: 1200,
+          controlMode: 'profit-live'
+        });
+        const candidateIds = (decision.profit.candidates || []).map(item => String(item.id)).join(',');
+        return [
+          decision.kind,
+          decision.action.kind,
+          decision.action.target.userId,
+          decision.action.target.drop,
+          candidateIds.includes('8'),
+          candidateIds.includes('9')
+        ].join('|');
+      })(),
+      want: 'profit-candidate|attack|9|3|false|true'
+    },
+    {
       name: 'browserless profit live disables snapshot-only coin fallback',
       got: (() => {
         const store = createBrowserlessStateStore({ userId: 7 });

@@ -309,7 +309,7 @@
 - `directWsVelocityRepeatMs = 50`
 - `directWsVelocityRepeatHoldMs = 220`
 - `directWsStopRepeatCount = 3`
-- `attackMinAfkDrop = 3`
+- `attackMinAfkDrop = 3` for both browser-runtime AFK attacks and browserless `profit-live` AFK-profit admission.
 - `targetWhitelistUrl = ""` by default; when empty, the runtime derives `target-whitelist.json` from the remote script URL directory.
 - `targetWhitelistPollMs = 10000`
 - `targetWhitelistTimeoutMs = 7000`

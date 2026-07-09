@@ -159,4 +159,4 @@
 - Targeting:
   - remote whitelisted target usernames must not be attacked. The whitelist is loaded from `dist/target-whitelist.json` by default, is polled every 10 seconds, matches only exact trimmed usernames, and ignores user IDs. A failed poll keeps the last successfully loaded whitelist; before the first successful load, the effective whitelist is empty;
   - invulnerable targets are not valid opportunity/combat targets;
-  - AFK Drop targets compete by stamina ROI, not raw drop alone.
+  - AFK Drop targets first pass the minimum Drop gate (`attackMinAfkDrop=3` by default in both browser and browserless runtimes), then compete by stamina ROI rather than raw drop alone.

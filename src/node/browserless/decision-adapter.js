@@ -22,7 +22,9 @@ const { buildBrowserlessCombatDryRun } = require('./combat-adapter');
 const DEFAULT_STALE_SELF_MS = 2500;
 const DEFAULT_ATTACK_RANGE = 14500;
 const DEFAULT_ATTACK_ENGAGE_RANGE = 26000;
-const DEFAULT_ATTACK_MIN_DROP = 1;
+const DEFAULT_ATTACK_MIN_DROP = 8;
+const DEFAULT_ATTACK_MIN_AFK_DROP = 3;
+const DEFAULT_ATTACK_MIN_REWARD_RATIO = 0.5;
 const DEFAULT_PROFIT_LIVE_THREAT_EXIT_RANGE = DEFAULT_ATTACK_RANGE;
 const DEFAULT_PROFIT_LIVE_INJURY_EXIT_RANGE = DEFAULT_ATTACK_ENGAGE_RANGE;
 const DEFAULT_PROFIT_LIVE_INJURY_HP = 90;
@@ -304,8 +306,8 @@ function buildBrowserlessStrategyInput(state, options = {}) {
     if (entity.active || entity.profitMetadataActive || entity.alive === false || entity.invulnerable) return false;
     return attackWorthTakingCore(self, entity, {
       attackMinDrop: options.attackMinDrop ?? DEFAULT_ATTACK_MIN_DROP,
-      attackMinAfkDrop: options.attackMinAfkDrop ?? DEFAULT_ATTACK_MIN_DROP,
-      attackMinRewardRatio: options.attackMinRewardRatio ?? 1,
+      attackMinAfkDrop: options.attackMinAfkDrop ?? DEFAULT_ATTACK_MIN_AFK_DROP,
+      attackMinRewardRatio: options.attackMinRewardRatio ?? DEFAULT_ATTACK_MIN_REWARD_RATIO,
       isAfkProfitTarget: () => true,
       dropValue: entityDropValue
     });

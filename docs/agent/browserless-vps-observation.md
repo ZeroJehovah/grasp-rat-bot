@@ -22,6 +22,7 @@ Keep this file short. It is the current live-observation handoff for the Oracle 
 
 ## Fixed Or Mitigated
 
+- Browserless AFK-profit admission now matches the browser runtime default `attackMinAfkDrop=3`. VPS decisions in `profit-live-20260709T022052916Z` showed `lopoincare`/`#19369` selected as `attack` with Drop 1 from `2026-07-09T02:32:53Z` to `02:33:23Z`; that low-Drop AFK target is now filtered out before opportunity scoring.
 - Snapshot Active metadata is now used as profit/safety veto metadata so realtime targets without mode are not attacked as AFK when fresh snapshot evidence says Active.
 - Passive/non-firing moving targets no longer take over `profit-live` combat action selection ahead of AFK profit or player-drop pickup.
 - Snapshot self-kill player drops are eligible for pickup only when tied to fresh self kill evidence; unrelated system/player drops remain blocked as ordinary snapshot fallback.
@@ -34,4 +35,5 @@ Keep this file short. It is the current live-observation handoff for the Oracle 
 - Continue reporting Drop changes from self Drop / `death_drop_coins`; do not count kill messages or visible coin drops as realized income.
 - Watch `death_count`, HP at leave, verified `leave`, and `current_join_mode=None` after every exit. The target remains zero new deaths after the fix.
 - For profit quality, compare 1d stamina spent against Drop delta between consecutive verified leave responses.
+- Watch for any future backend `游戏拾取` rows with amount 1 from self-killed AFK targets; those should no longer come from newly selected Drop=1 AFK attacks after the threshold fix.
 - If repeated `profit-live-snapshot-active-threat` exits happen at the same login point with no damage, inspect whether the target is truly dangerous before relaxing the safety threshold.
