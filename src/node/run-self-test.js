@@ -5923,7 +5923,7 @@ async function runSelfTest() {
       want: 'wait|no-profitable-candidate|none|false|active-threat-visible|8'
     },
     {
-      name: 'browserless profit live targets AFK but blocks AFK profit near active threat',
+      name: 'browserless profit live targets AFK but exits near active threat',
       got: (() => {
         const choose = entities => {
           const store = createBrowserlessStateStore({ userId: 7 });
@@ -5945,7 +5945,7 @@ async function runSelfTest() {
         const activeVisible = choose([
           { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 90 },
           { entity_id: 2, user_id: 8, name: 'afk', x: 1000, y: 0, hp: 80, current_join_mode: 'None', drop: 10 },
-          { entity_id: 3, user_id: 9, name: 'active', x: 500, y: 0, hp: 80, current_join_mode: 'Active', drop: 10 }
+          { entity_id: 3, user_id: 9, name: 'active', x: 500, y: 0, hp: 80, current_join_mode: 'Active', firing: true, drop: 10 }
         ]);
         return [
           afkOnly.kind,
@@ -5954,11 +5954,52 @@ async function runSelfTest() {
           afkOnly.action.target.userId,
           afkOnly.action.target.active,
           activeVisible.kind,
+          activeVisible.band,
           activeVisible.reason,
+          activeVisible.action.shouldLeave,
+          activeVisible.action.target.userId,
           activeVisible.profit.best === null
         ].join('|');
       })(),
-      want: 'profit-candidate|attack|enemy|8|false|wait|no-profitable-candidate|true'
+      want: 'profit-candidate|attack|enemy|8|false|safety-exit|safety|profit-live-active-threat|true|9|true'
+    },
+    {
+      name: 'browserless profit live exits instead of chasing coin under combat threat',
+      got: (() => {
+        const store = createBrowserlessStateStore({ userId: 7 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 60,
+          entities: [
+            { entity_id: 1, user_id: 7, name: 'self', x: 21108, y: 39065, hp: 100, max_hp: 100 },
+            { entity_id: 2, user_id: 31361, name: 'threat', x: 15429, y: 40744, hp: 100, firing: true, drop: 0 }
+          ],
+          bullets: []
+        }, { receivedAtMs: 1000 });
+        store.ingestFrame({
+          type: 'snapshot',
+          tick: 61,
+          entities: [],
+          bullets: [],
+          coin_drops: [{ drop_id: 709, amount: 1, x: 20727, y: 38406 }],
+          messages: []
+        }, { receivedAtMs: 1100 });
+        const decision = buildBrowserlessDecision(store.getState(1200), {}, {
+          nowMs: 1200,
+          controlMode: 'profit-live'
+        });
+        return [
+          decision.kind,
+          decision.band,
+          decision.reason,
+          decision.action.target.userId,
+          decision.action.target.authority,
+          decision.profit.best?.type,
+          decision.profit.best?.coin?.id,
+          decision.combat.target.userId
+        ].join('|');
+      })(),
+      want: 'safety-exit|safety|profit-live-active-threat|31361|realtime|coin|709|31361'
     },
     {
       name: 'browserless combat dry-run uses realtime target and ignores snapshot target',
@@ -6159,6 +6200,30 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'true|1|0|velocity|vel 1 0|1|true|true'
+    },
+    {
+      name: 'browserless action adapter uses tighter dead zone for coins',
+      got: (() => {
+        const coinVector = movementVectorToTarget(
+          { x: 21108, y: 39065 },
+          { type: 'coin', x: 20727, y: 38406 },
+          { targetDeadZoneCm: 900 }
+        );
+        const genericVector = movementVectorToTarget(
+          { x: 21108, y: 39065 },
+          { type: 'enemy', x: 20727, y: 38406 },
+          { targetDeadZoneCm: 900 }
+        );
+        return [
+          coinVector.ok,
+          coinVector.reason,
+          coinVector.distance,
+          genericVector.ok,
+          genericVector.reason,
+          genericVector.distance
+        ].join('|');
+      })(),
+      want: 'true|move-to-target|761|false|target-reached|761'
     },
     {
       name: 'browserless action adapter stops for combat and reached targets',
@@ -6440,6 +6505,77 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'true|movement-only|true|3|2|false|pending|true|vel 0 0|true'
+    },
+    {
+      name: 'browserless profit-live canary leaves before profit action under threat',
+      got: (async () => {
+        let t = Date.UTC(2026, 6, 8, 1, 0, 0);
+        let wsOptions = null;
+        const commands = [];
+        const posFrame = encodeGrzFrameForTest({
+          type: 'pos',
+          tick: 30,
+          entities: [
+            { entity_id: 1, user_id: 7, name: 'self', x: 100, y: 200, hp: 90, max_hp: 100, stamina_5s_remaining_milli: 1000 },
+            { entity_id: 2, user_id: 8, name: 'active', x: 600, y: 200, hp: 100, current_join_mode: 'Active', firing: true }
+          ],
+          bullets: []
+        });
+        const result = await runReadOnlyCanary({
+          gameOrigin: 'https://grasp-rat-game.h-e.top',
+          snapshotPath: '/snapshot',
+          wsPath: '/ws',
+          wsExtraQuery: 'compress=gzip%2Cdeflate',
+          controlMode: 'profit-live',
+          readOnlyProbeMs: 1000,
+          decisionIntervalMs: 1,
+          frameGapAlertMs: 5000,
+          movementCommandIntervalMs: 1,
+          movementTargetDeadZoneCm: 900,
+          userId: 7,
+          sessionToken: 'profit-live-token'
+        }, {
+          now: () => t,
+          sleep: async ms => {
+            t += ms;
+            if (wsOptions && !commands.length) wsOptions.onMessage(posFrame);
+          },
+          persistedState: {
+            loginPointSafety: { point: { x: 100, y: 200, hp: 90, source: 'test' } }
+          },
+          fetchImpl: async () => fakeResponseForTest({
+            body: {
+              type: 'snapshot',
+              tick: 29,
+              entities: [{ entity_id: 1, user_id: 7, x: 100, y: 200, hp: 90 }],
+              bullets: [],
+              coin_drops: [{ drop_id: 3, amount: 10, x: 300, y: 200 }],
+              messages: []
+            }
+          }),
+          openBrowserlessWs: async options => {
+            wsOptions = options;
+            return {
+              isOpen: () => true,
+              close: () => {},
+              sendVelocity: (dx, dy) => commands.push(`vel ${dx} ${dy}`),
+              sendShoot: () => commands.push('shoot')
+            };
+          },
+          leaveWithVerification: async () => ({ ok: true, attempts: [{ ok: true, summary: { leaveConfirmed: true } }] })
+        });
+        return [
+          result.ok,
+          result.error,
+          result.safety.event?.reason,
+          result.safety.exit?.ok,
+          result.actions.sentCount,
+          commands.join(','),
+          result.decisions.last.kind,
+          result.decisions.last.reason
+        ].join('|');
+      })(),
+      want: 'false|profit-live-active-threat|profit-live-active-threat|true|0|vel 0 0|safety-exit|profit-live-active-threat'
     },
     {
       name: 'browserless combat-live canary sends guarded shoot only when enabled',

@@ -336,6 +336,16 @@ async function runReadOnlyCanary(config, options = {}) {
                 log('canary-decision-status-error', { error: err?.message || String(err) });
               }
             }
+            const decisionSafetyEvent = safetyController.evaluate(currentState, {
+              startedAtMs: startedAt,
+              frameGapAlertMs,
+              staleSelfMs: config.staleSelfMs,
+              noSelfGraceMs: config.noSelfGraceMs,
+              staminaExhaustedBelowMs: config.staminaExhaustedBelowMs,
+              decision: summary,
+              nowMs: atMs
+            });
+            if (recordSafetyEvent(decisionSafetyEvent)) return;
             if (actionAdapter) {
               updateActionResult(actionAdapter.applyDecision(currentState, summary));
             }

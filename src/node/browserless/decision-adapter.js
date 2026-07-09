@@ -23,6 +23,9 @@ const DEFAULT_STALE_SELF_MS = 2500;
 const DEFAULT_ATTACK_RANGE = 14500;
 const DEFAULT_ATTACK_ENGAGE_RANGE = 26000;
 const DEFAULT_ATTACK_MIN_DROP = 1;
+const DEFAULT_PROFIT_LIVE_THREAT_EXIT_RANGE = DEFAULT_ATTACK_RANGE;
+const DEFAULT_PROFIT_LIVE_INJURY_EXIT_RANGE = DEFAULT_ATTACK_ENGAGE_RANGE;
+const DEFAULT_PROFIT_LIVE_INJURY_HP = 90;
 
 function cloneJson(value) {
   if (value === null || value === undefined) return value;
@@ -378,6 +381,35 @@ function buildCombatDecision(input, options = {}) {
   };
 }
 
+function profitLiveSafetyDecision(input, combatDecision, options = {}) {
+  if (options.controlMode !== 'profit-live' || !input.self) return null;
+  const target = combatDecision?.dryRun?.target || combatDecision?.target || null;
+  const distance = Number(target?.distance);
+  if (!target || !Number.isFinite(distance)) return null;
+  const threatening = Boolean(target.active || target.firing);
+  if (!threatening) return null;
+  const threatExitRange = Math.max(0, Number(options.profitLiveThreatExitRange || DEFAULT_PROFIT_LIVE_THREAT_EXIT_RANGE));
+  const injuryExitRange = Math.max(threatExitRange, Number(options.profitLiveInjuryExitRange || DEFAULT_PROFIT_LIVE_INJURY_EXIT_RANGE));
+  const hp = Number(input.self.hp);
+  const maxHp = Number(input.self.max_hp);
+  const injuryHp = Math.max(1, Number(options.profitLiveInjuryHp || DEFAULT_PROFIT_LIVE_INJURY_HP));
+  const injured = Number.isFinite(hp)
+    && ((Number.isFinite(maxHp) && hp < maxHp) || hp <= injuryHp);
+  let reason = '';
+  if (distance <= threatExitRange) reason = 'profit-live-active-threat';
+  else if (injured && distance <= injuryExitRange) reason = 'profit-live-injury-threat';
+  if (!reason) return null;
+  return {
+    kind: 'safety-exit',
+    band: 'safety',
+    reason,
+    shouldLeave: true,
+    stopMotion: true,
+    target,
+    self: summarizeTarget(input.self)
+  };
+}
+
 function buildBrowserlessDecision(state, stateful = {}, options = {}) {
   const input = buildBrowserlessStrategyInput(state, options);
   const staleSelfMs = Math.max(1000, Number(options.staleSelfMs || DEFAULT_STALE_SELF_MS));
@@ -393,6 +425,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     blockAfkProfitWhenActiveThreatVisible: profitLive ? true : options.blockAfkProfitWhenActiveThreatVisible
   });
   const combat = buildCombatDecision(input, options);
+  const safetyAction = profitLiveSafetyDecision(input, combat, options);
   let kind = 'wait';
   let band = 'wait';
   let reason = '';
@@ -403,6 +436,11 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
   } else if (Number.isFinite(frameAge) && frameAge > staleSelfMs) {
     reason = 'stale-realtime-self';
     action.reason = reason;
+  } else if (safetyAction) {
+    kind = safetyAction.kind;
+    band = safetyAction.band;
+    reason = safetyAction.reason;
+    action = safetyAction;
   } else if (combat.target && combatDecisionEnabled) {
     kind = combatLiveEnabled ? 'combat-live' : (combatDryRun ? 'combat-dry-run' : 'combat-candidate');
     band = 'combat';

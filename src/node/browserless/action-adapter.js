@@ -1,6 +1,7 @@
 'use strict';
 
 const DEFAULT_TARGET_DEAD_ZONE_CM = 900;
+const DEFAULT_COIN_TARGET_DEAD_ZONE_CM = 150;
 const DEFAULT_COMMAND_INTERVAL_MS = 500;
 const DEFAULT_SETTLEMENT_FRAMES = 2;
 const DEFAULT_COMBAT_SHOOT_MIN_INTERVAL_MS = 160;
@@ -29,7 +30,10 @@ function movementVectorToTarget(self, target, options = {}) {
   const rawDx = tx - sx;
   const rawDy = ty - sy;
   const distance = Math.hypot(rawDx, rawDy);
-  const deadZone = Math.max(0, Number(options.targetDeadZoneCm ?? DEFAULT_TARGET_DEAD_ZONE_CM));
+  const generalDeadZone = Math.max(0, Number(options.targetDeadZoneCm ?? DEFAULT_TARGET_DEAD_ZONE_CM));
+  const deadZone = String(target?.type || '') === 'coin'
+    ? Math.max(0, Number(options.coinTargetDeadZoneCm ?? Math.min(generalDeadZone, DEFAULT_COIN_TARGET_DEAD_ZONE_CM)))
+    : generalDeadZone;
   if (!(distance > deadZone)) {
     return { ok: false, reason: 'target-reached', dx: 0, dy: 0, distance: Math.round(distance) };
   }
@@ -430,6 +434,7 @@ function createBrowserlessActionAdapter(options = {}) {
 
 module.exports = {
   DEFAULT_COMMAND_INTERVAL_MS,
+  DEFAULT_COIN_TARGET_DEAD_ZONE_CM,
   DEFAULT_COMBAT_SHOOT_MIN_INTERVAL_MS,
   DEFAULT_SETTLEMENT_FRAMES,
   DEFAULT_TARGET_DEAD_ZONE_CM,
