@@ -259,6 +259,7 @@ function createInitialActionState() {
     stopCount: 0,
     skippedCount: 0,
     velocityRepeatSentCount: 0,
+    shootRepeatSentCount: 0,
     lastCommand: null,
     lastShootCommand: null,
     lastShootAck: null,
@@ -270,7 +271,13 @@ function createInitialActionState() {
     velocityRepeatUntilMs: 0,
     velocityStopRepeatsLeft: 0,
     velocityRepeatTimer: null,
-    lastVelocityRepeatError: ''
+    shootRepeatToken: 0,
+    shootRepeatUntilMs: 0,
+    shootRepeatTimer: null,
+    shootRepeatTargetKey: '',
+    shootRepeat: null,
+    lastVelocityRepeatError: '',
+    lastShootRepeatError: ''
   };
 }
 
@@ -308,6 +315,17 @@ function createBrowserlessActionAdapter(options = {}) {
   const velocityStopRepeatCount = Math.max(0, Math.round(Number(options.velocityStopRepeatCount ?? options.directWsStopRepeatCount ?? BROWSER_RUNTIME_DEFAULTS.directWsStopRepeatCount ?? 0)));
   const settlementFrames = Math.max(1, Number(options.settlementFrames ?? DEFAULT_SETTLEMENT_FRAMES));
   const combatShootMinIntervalMs = Math.max(1, Number(options.combatShootMinIntervalMs ?? DEFAULT_COMBAT_SHOOT_MIN_INTERVAL_MS));
+  const shootRepeatEnabled = options.shootRepeatEnabled === true;
+  const shootRepeatMs = Math.max(
+    combatShootMinIntervalMs,
+    Number(options.shootRepeatMs ?? options.opportunisticShootEveryMs ?? options.combatShootMinIntervalMs ?? combatShootMinIntervalMs) || 0
+  );
+  const configuredShootRepeatHoldMs = Math.max(0, Number(options.shootRepeatHoldMs ?? options.opportunisticShootRepeatHoldMs ?? 0) || 0);
+  const shootRepeatHoldMs = Math.max(
+    shootRepeatMs,
+    configuredShootRepeatHoldMs,
+    decisionIntervalMs + shootRepeatMs
+  );
   const setTimeoutFn = typeof options.setTimeout === 'function' ? options.setTimeout : setTimeout;
   const clearTimeoutFn = typeof options.clearTimeout === 'function' ? options.clearTimeout : clearTimeout;
   const state = createInitialActionState();
@@ -329,11 +347,26 @@ function createBrowserlessActionAdapter(options = {}) {
     state.velocityRepeatTimer = null;
   }
 
+  function clearShootRepeatTimer() {
+    if (!state.shootRepeatTimer) return;
+    clearTimeoutFn(state.shootRepeatTimer);
+    state.shootRepeatTimer = null;
+  }
+
   function cancelVelocityRepeat() {
     state.velocityRepeatToken += 1;
     state.velocityRepeatUntilMs = 0;
     state.velocityStopRepeatsLeft = 0;
     clearVelocityRepeatTimer();
+  }
+
+  function cancelShootRepeat(reason = '', options = {}) {
+    state.shootRepeatToken += 1;
+    state.shootRepeatUntilMs = 0;
+    state.shootRepeatTargetKey = '';
+    state.shootRepeat = null;
+    if (reason && options.error) state.lastShootRepeatError = reason;
+    clearShootRepeatTimer();
   }
 
   function scheduleVelocityRepeat(dx, dy) {
@@ -376,6 +409,103 @@ function createBrowserlessActionAdapter(options = {}) {
       repeatMs: velocityRepeatMs,
       holdMs: moving ? velocityRepeatHoldMs : 0,
       stopRepeats: moving ? 0 : velocityStopRepeatCount
+    };
+  }
+
+  function targetRepeatKey(target) {
+    const id = target?.userId ?? target?.user_id ?? target?.entityId ?? target?.entity_id ?? target?.id;
+    return id === null || id === undefined || id === '' ? '' : String(id);
+  }
+
+  function entityActiveLike(entity) {
+    const mode = String(entity?.current_join_mode || entity?.mode || entity?.joined || '').toLowerCase();
+    return Boolean(entity?.active === true || entity?.firing || entity?.shooting || entity?.is_firing || mode === 'active');
+  }
+
+  function findRealtimeEntity(stateSnapshot, key) {
+    if (!key) return null;
+    const entities = stateSnapshot?.realtime?.entities;
+    if (!Array.isArray(entities)) return null;
+    return entities.find(entity => targetRepeatKey(entity) === key) || null;
+  }
+
+  function validateShootRepeatState(stateSnapshot) {
+    const repeat = state.shootRepeat;
+    if (!repeat) return true;
+    const realtime = stateSnapshot?.realtime || {};
+    if (!realtime.self) {
+      cancelShootRepeat('shoot-repeat-no-self', { error: true });
+      return false;
+    }
+    if (repeat.targetKey && Array.isArray(realtime.entities)) {
+      const entity = findRealtimeEntity(stateSnapshot, repeat.targetKey);
+      if (!entity) {
+        cancelShootRepeat('shoot-repeat-target-missing', { error: true });
+        return false;
+      }
+      if (entityActiveLike(entity)) {
+        cancelShootRepeat('shoot-repeat-target-active', { error: true });
+        return false;
+      }
+    }
+    return true;
+  }
+
+  function scheduleShootRepeat(self, target, reason, cadenceMs = shootRepeatMs) {
+    cancelShootRepeat();
+    if (!shootRepeatEnabled) return null;
+    if (!transport || typeof transport.sendShoot !== 'function') return null;
+    const startX = numberOrNull(self?.x);
+    const startY = numberOrNull(self?.y);
+    const targetX = numberOrNull(target?.x);
+    const targetY = numberOrNull(target?.y);
+    if (startX === null || startY === null || targetX === null || targetY === null) return null;
+    const targetKey = targetRepeatKey(target);
+    const repeatCadenceMs = Math.max(combatShootMinIntervalMs, Number(cadenceMs || 0), shootRepeatMs);
+    const repeat = {
+      targetX,
+      targetY,
+      startX,
+      startY,
+      reason,
+      target,
+      targetKey,
+      cadenceMs: repeatCadenceMs
+    };
+    const token = state.shootRepeatToken + 1;
+    state.shootRepeatToken = token;
+    state.shootRepeat = repeat;
+    state.shootRepeatTargetKey = targetKey;
+    state.shootRepeatUntilMs = now() + shootRepeatHoldMs;
+    state.lastShootRepeatError = '';
+    const run = () => {
+      if (state.shootRepeatToken !== token) return;
+      state.shootRepeatTimer = null;
+      const current = state.shootRepeat;
+      if (!current || now() > Number(state.shootRepeatUntilMs || 0)) return;
+      const sent = sendShoot(
+        current.targetX,
+        current.targetY,
+        current.startX,
+        current.startY,
+        current.reason,
+        current.target,
+        current.cadenceMs
+      );
+      if (!sent.ok) {
+        cancelShootRepeat(sent.error || sent.reason || 'shoot-repeat-failed', { error: true });
+        return;
+      }
+      if (!sent.skipped) state.shootRepeatSentCount += 1;
+      state.shootRepeatTimer = setTimeoutFn(run, current.cadenceMs);
+      unrefTimer(state.shootRepeatTimer);
+    };
+    state.shootRepeatTimer = setTimeoutFn(run, repeatCadenceMs);
+    unrefTimer(state.shootRepeatTimer);
+    return {
+      repeatMs: repeatCadenceMs,
+      holdMs: shootRepeatHoldMs,
+      targetKey
     };
   }
 
@@ -503,6 +633,7 @@ function createBrowserlessActionAdapter(options = {}) {
   }
 
   function stop(reason = 'stop') {
+    cancelShootRepeat('stop');
     return sendVelocity(0, 0, reason);
   }
 
@@ -515,6 +646,7 @@ function createBrowserlessActionAdapter(options = {}) {
   }
 
   function applyDecision(stateSnapshot, decision) {
+    cancelShootRepeat('new-decision');
     if (combatSummaryFromDecision(decision)) {
       return applyCombatDecision(stateSnapshot, decision);
     }
@@ -619,10 +751,17 @@ function createBrowserlessActionAdapter(options = {}) {
     );
   }
 
+  function canScheduleShootRepeat(shoot) {
+    return Boolean(shoot?.ok && shoot.command && (!shoot.skipped || shoot.reason === 'shoot-command-throttled'));
+  }
+
   function applyOpportunisticShotDecision(stateSnapshot, target, decision) {
     const self = stateSnapshot?.realtime?.self || decision?.input?.self || null;
     const stopped = stop('opportunistic-shot-hold');
     const shoot = sendOpportunisticShot(self, target, decision);
+    const repeat = canScheduleShootRepeat(shoot)
+      ? scheduleShootRepeat(self, target, target?.reason || decision?.reason || 'opportunistic-afk-drop-shot', shoot.cadenceMs)
+      : null;
     return {
       ok: Boolean(stopped.ok && shoot.ok),
       kind: 'opportunistic-shot',
@@ -640,6 +779,7 @@ function createBrowserlessActionAdapter(options = {}) {
         reason: shoot.reason,
         command: shoot.command || null,
         cadenceMs: shoot.cadenceMs || null,
+        repeat,
         ...transportFailure(shoot)
       },
       target,
@@ -800,6 +940,9 @@ function createBrowserlessActionAdapter(options = {}) {
     } else {
       state.skippedCount += 1;
     }
+    const repeat = canScheduleShootRepeat(shoot)
+      ? scheduleShootRepeat(self, target, decision?.action?.reason || decision?.reason || 'profit-afk-attack', shoot.cadenceMs)
+      : null;
     return {
       ok: Boolean(hold.ok && shoot.ok),
       kind: 'profit-attack',
@@ -817,6 +960,7 @@ function createBrowserlessActionAdapter(options = {}) {
         reason: shoot.reason,
         command: shoot.command || null,
         cadenceMs: shoot.cadenceMs || null,
+        repeat,
         ...transportFailure(shoot)
       },
       target,
@@ -825,6 +969,7 @@ function createBrowserlessActionAdapter(options = {}) {
   }
 
   function applyCombatDecision(stateSnapshot, decision) {
+    cancelShootRepeat('combat-decision');
     const combat = combatSummaryFromDecision(decision);
     const self = stateSnapshot?.realtime?.self || combat?.self || null;
     if (!combat?.target) {
@@ -897,6 +1042,7 @@ function createBrowserlessActionAdapter(options = {}) {
   }
 
   function observeState(stateSnapshot) {
+    validateShootRepeatState(stateSnapshot);
     const ack = stateSnapshot?.command?.lastAck || null;
     if (ack && (!state.lastShootAck || Number(ack.receivedAtMs || 0) !== Number(state.lastShootAck.receivedAtMs || 0) || ack.bullet_id !== state.lastShootAck.bullet_id)) {
       state.lastShootAck = ack;
@@ -935,9 +1081,13 @@ function createBrowserlessActionAdapter(options = {}) {
       stopCount: state.stopCount,
       skippedCount: state.skippedCount,
       velocityRepeatSentCount: state.velocityRepeatSentCount,
+      shootRepeatSentCount: state.shootRepeatSentCount,
       velocityRepeatUntilMs: state.velocityRepeatUntilMs,
       velocityStopRepeatsLeft: state.velocityStopRepeatsLeft,
+      shootRepeatUntilMs: state.shootRepeatUntilMs,
+      shootRepeatTargetKey: state.shootRepeatTargetKey,
       lastVelocityRepeatError: state.lastVelocityRepeatError,
+      lastShootRepeatError: state.lastShootRepeatError,
       lastCommand: summarizeCommand(state.lastCommand),
       lastShootCommand: summarizeCommand(state.lastShootCommand),
       lastShootAck: state.lastShootAck,

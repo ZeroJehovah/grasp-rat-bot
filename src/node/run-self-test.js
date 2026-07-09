@@ -9046,6 +9046,211 @@ async function runSelfTest() {
       want: 'profit-attack|velocity|shoot|vel 0 0,shoot 1000 0 0 0|1|1'
     },
     {
+      name: 'browserless action adapter repeats AFK profit shots through decision gap',
+      got: (() => {
+        let t = 1000;
+        const commands = [];
+        const timers = [];
+        const adapter = createBrowserlessActionAdapter({
+          now: () => t,
+          commandIntervalMs: 1,
+          decisionIntervalMs: 1000,
+          combatShootMinIntervalMs: 160,
+          shootRepeatEnabled: true,
+          attackRangeCm: 14500,
+          setTimeout: (fn, ms) => {
+            const timer = { fn, ms, canceled: false };
+            timers.push(timer);
+            return timer;
+          },
+          clearTimeout: timer => {
+            if (timer) timer.canceled = true;
+          },
+          transport: {
+            sendVelocity: (dx, dy) => commands.push(`vel ${dx} ${dy}`),
+            sendShoot: (targetX, targetY, startX, startY) => commands.push(`shoot ${targetX} ${targetY} ${startX} ${startY}`)
+          }
+        });
+        const action = adapter.applyDecision({
+          realtime: { self: { x: 0, y: 0 }, tick: 1 }
+        }, {
+          kind: 'profit-candidate',
+          band: 'profit',
+          action: {
+            kind: 'attack',
+            band: 'profit',
+            target: { type: 'enemy', userId: 8, x: 1000, y: 0, active: false }
+          }
+        });
+        let guard = 0;
+        while (timers.length && guard < 20) {
+          guard += 1;
+          const timer = timers.shift();
+          if (!timer || timer.canceled) continue;
+          t += timer.ms;
+          timer.fn();
+        }
+        const state = adapter.getState();
+        return [
+          action.kind,
+          state.shootSentCount,
+          state.shootRepeatSentCount,
+          commands.length,
+          state.shootRepeatUntilMs - 1000,
+          state.lastShootRepeatError || 'none',
+          commands[0],
+          commands[1],
+          commands[commands.length - 1]
+        ].join('|');
+      })(),
+      want: 'profit-attack|8|7|9|1160|none|vel 0 0|shoot 1000 0 0 0|shoot 1000 0 0 0'
+    },
+    {
+      name: 'browserless action adapter keeps AFK shot repeat across throttled decision boundary',
+      got: (() => {
+        let t = 1000;
+        const commands = [];
+        const timers = [];
+        const adapter = createBrowserlessActionAdapter({
+          now: () => t,
+          commandIntervalMs: 1,
+          decisionIntervalMs: 1000,
+          combatShootMinIntervalMs: 160,
+          shootRepeatEnabled: true,
+          attackRangeCm: 14500,
+          setTimeout: (fn, ms) => {
+            const timer = { fn, ms, canceled: false };
+            timers.push(timer);
+            return timer;
+          },
+          clearTimeout: timer => {
+            if (timer) timer.canceled = true;
+          },
+          transport: {
+            sendVelocity: (dx, dy) => commands.push(`vel ${dx} ${dy}`),
+            sendShoot: (targetX, targetY, startX, startY) => commands.push(`shoot ${targetX} ${targetY} ${startX} ${startY}`)
+          }
+        });
+        const decision = {
+          kind: 'profit-candidate',
+          band: 'profit',
+          action: {
+            kind: 'attack',
+            band: 'profit',
+            target: { type: 'enemy', userId: 8, x: 1000, y: 0, active: false }
+          }
+        };
+        adapter.applyDecision({
+          realtime: { self: { x: 0, y: 0 }, tick: 1 }
+        }, decision);
+        let guard = 0;
+        while (timers.length && guard < 20) {
+          guard += 1;
+          const timer = timers[0];
+          if (!timer || timer.canceled) {
+            timers.shift();
+            continue;
+          }
+          if (t + timer.ms > 2000) break;
+          timers.shift();
+          t += timer.ms;
+          timer.fn();
+        }
+        t = 2000;
+        const second = adapter.applyDecision({
+          realtime: { self: { x: 0, y: 0 }, tick: 2 }
+        }, decision);
+        guard = 0;
+        while (timers.length && guard < 20) {
+          guard += 1;
+          const timer = timers.shift();
+          if (!timer || timer.canceled) continue;
+          t += timer.ms;
+          timer.fn();
+          break;
+        }
+        const state = adapter.getState();
+        return [
+          second.kind,
+          second.shoot.reason,
+          second.shoot.repeat ? 'repeat' : 'no-repeat',
+          state.shootSentCount,
+          state.shootRepeatSentCount,
+          commands.length,
+          state.lastShootRepeatError || 'none',
+          commands[commands.length - 1]
+        ].join('|');
+      })(),
+      want: 'profit-attack|shoot-command-throttled|repeat|8|7|10|none|shoot 1000 0 0 0'
+    },
+    {
+      name: 'browserless action adapter cancels AFK shot repeat when target turns active',
+      got: (() => {
+        let t = 1000;
+        const commands = [];
+        const timers = [];
+        const adapter = createBrowserlessActionAdapter({
+          now: () => t,
+          commandIntervalMs: 1,
+          decisionIntervalMs: 1000,
+          combatShootMinIntervalMs: 160,
+          shootRepeatEnabled: true,
+          attackRangeCm: 14500,
+          setTimeout: (fn, ms) => {
+            const timer = { fn, ms, canceled: false };
+            timers.push(timer);
+            return timer;
+          },
+          clearTimeout: timer => {
+            if (timer) timer.canceled = true;
+          },
+          transport: {
+            sendVelocity: (dx, dy) => commands.push(`vel ${dx} ${dy}`),
+            sendShoot: (targetX, targetY, startX, startY) => commands.push(`shoot ${targetX} ${targetY} ${startX} ${startY}`)
+          }
+        });
+        const action = adapter.applyDecision({
+          realtime: { self: { x: 0, y: 0 }, tick: 1 }
+        }, {
+          kind: 'profit-candidate',
+          band: 'profit',
+          action: {
+            kind: 'attack',
+            band: 'profit',
+            target: { type: 'enemy', userId: 8, x: 1000, y: 0, active: false }
+          }
+        });
+        adapter.observeState({
+          realtime: {
+            self: { x: 0, y: 0 },
+            tick: 2,
+            entities: [
+              { user_id: 8, x: 1000, y: 0, current_join_mode: 'Active' }
+            ]
+          }
+        });
+        let guard = 0;
+        while (timers.length && guard < 20) {
+          guard += 1;
+          const timer = timers.shift();
+          if (!timer || timer.canceled) continue;
+          t += timer.ms;
+          timer.fn();
+        }
+        const state = adapter.getState();
+        return [
+          action.kind,
+          state.shootSentCount,
+          state.shootRepeatSentCount,
+          commands.length,
+          state.shootRepeatUntilMs,
+          state.lastShootRepeatError || 'none',
+          commands.join(',')
+        ].join('|');
+      })(),
+      want: 'profit-attack|1|0|2|0|shoot-repeat-target-active|vel 0 0,shoot 1000 0 0 0'
+    },
+    {
       name: 'browserless opportunistic shot attaches to coin action',
       got: (() => {
         const decision = buildBrowserlessDecision({
@@ -9137,6 +9342,66 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'opportunistic-shot|opportunistic-afk-drop-shot|opportunistic-shot|shoot|vel 0 0,shoot 1000 0 0 0'
+    },
+    {
+      name: 'browserless opportunistic shot hold repeats static shot',
+      got: (() => {
+        let t = 1000;
+        const commands = [];
+        const timers = [];
+        const adapter = createBrowserlessActionAdapter({
+          now: () => t,
+          commandIntervalMs: 1,
+          decisionIntervalMs: 1000,
+          combatShootMinIntervalMs: 160,
+          shootRepeatEnabled: true,
+          setTimeout: (fn, ms) => {
+            const timer = { fn, ms, canceled: false };
+            timers.push(timer);
+            return timer;
+          },
+          clearTimeout: timer => {
+            if (timer) timer.canceled = true;
+          },
+          transport: {
+            sendVelocity: (dx, dy) => commands.push(`vel ${dx} ${dy}`),
+            sendShoot: (targetX, targetY, startX, startY) => commands.push(`shoot ${targetX} ${targetY} ${startX} ${startY}`)
+          }
+        });
+        const target = { type: 'enemy', userId: 8, x: 1000, y: 0, active: false, reason: 'opportunistic-afk-drop-shot' };
+        const action = adapter.applyDecision({
+          realtime: { self: { x: 0, y: 0 }, tick: 70 }
+        }, {
+          kind: 'opportunistic-shot',
+          band: 'profit',
+          reason: 'opportunistic-afk-drop-shot',
+          action: {
+            kind: 'opportunistic-shot',
+            band: 'profit',
+            target,
+            opportunisticShot: target
+          }
+        });
+        let guard = 0;
+        while (timers.length && guard < 20) {
+          guard += 1;
+          const timer = timers.shift();
+          if (!timer || timer.canceled) continue;
+          t += timer.ms;
+          timer.fn();
+        }
+        const state = adapter.getState();
+        return [
+          action.kind,
+          state.shootSentCount,
+          state.shootRepeatSentCount,
+          commands.length,
+          action.shoot.repeat.repeatMs,
+          commands[0],
+          commands[commands.length - 1]
+        ].join('|');
+      })(),
+      want: 'opportunistic-shot|8|7|9|160|vel 0 0|shoot 1000 0 0 0'
     },
     {
       name: 'browserless opportunistic shot is suppressed during recovery',
