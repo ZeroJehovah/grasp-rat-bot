@@ -10900,6 +10900,15 @@ async function runSelfTest() {
             error: 'websocket unexpected response 403'
           }
         }, config);
+        const auth403SelfPresent = browserlessLoopPlan({
+          ok: false,
+          canary: {
+            runId: 'auth-self-present-test',
+            error: 'websocket unexpected response 403',
+            snapshotSafety: { response: { summary: { selfPresent: true } } },
+            safety: { leaveFailure: { reason: 'direct-leave-failed' } }
+          }
+        }, config);
         const snapshotRetry = browserlessLoopPlan({
           ok: false,
           canary: {
@@ -10939,6 +10948,9 @@ async function runSelfTest() {
           explicitStop.continue,
           noSelf.continue,
           auth403.continue,
+          auth403SelfPresent.continue,
+          auth403SelfPresent.reason,
+          auth403SelfPresent.delayMs,
           snapshotRetry.continue,
           snapshotRetry.delayMs,
           connectTimeout.continue,
@@ -10946,7 +10958,7 @@ async function runSelfTest() {
           connectTimeout.delayMs
         ].join('|');
       })(),
-      want: 'true|1234|true|stamina-budget-coin-leave|1800000|true|injury-leave|1234|true|pursuit-leave|1234|true|combat-hp-disadvantage-leave|1234|true|ws-closed|1000|true|ws-closed|1000|false|false|false|true|60000|true|ws-connect-timeout|1000'
+      want: 'true|1234|true|stamina-budget-coin-leave|1800000|true|injury-leave|1234|true|pursuit-leave|1234|true|combat-hp-disadvantage-leave|1234|true|ws-closed|1000|true|ws-closed|1000|false|false|false|true|ws-auth-blocked-self-present|1000|true|60000|true|ws-connect-timeout|1000'
     },
     {
       name: 'browserless runner dry-run and fake read-only path write redacted logs',

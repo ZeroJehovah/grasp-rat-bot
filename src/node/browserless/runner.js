@@ -103,6 +103,7 @@ function browserlessLoopPlan(result, config = {}) {
   const safetyReason = safetyEvent?.reason || canary?.safety?.leaveFailure?.reason || '';
   const error = String(canary?.error || result?.reason || result?.error || '');
   const runId = canary?.runId || '';
+  const snapshotSelfPresent = Boolean(canary?.snapshotSafety?.response?.summary?.selfPresent);
   const delayMs = Math.max(1000, Number(config.loopDelayMs || 30000));
   const fastDelayMs = 1000;
   const stop = reason => ({
@@ -150,6 +151,9 @@ function browserlessLoopPlan(result, config = {}) {
   if (safetyReason === 'explicit-stop') return stop('explicit-stop');
   if (fastRecoverableTransportReasons.has(safetyReason)) {
     return resumeFast(safetyReason);
+  }
+  if (/websocket unexpected response 403|http 403|not logged in/i.test(error) && snapshotSelfPresent) {
+    return resumeFast('ws-auth-blocked-self-present');
   }
   if (safetyReason === 'direct-leave-failed' || canary?.safety?.leaveFailure) return stop('direct-leave-failed');
   if (safetyReason === 'no-self') return stop('no-self');

@@ -27,6 +27,10 @@ const { createBrowserlessActionAdapter } = require('./action-adapter');
 const DEFAULT_READONLY_PROBE_MS = 30000;
 const DEFAULT_FRAME_GAP_ALERT_MS = 5000;
 
+function snapshotSafetySelfPresent(snapshotSafety) {
+  return Boolean(snapshotSafety?.response?.summary?.selfPresent);
+}
+
 function createCanaryRunId(mode, startedAtMs) {
   const stamp = new Date(startedAtMs).toISOString().replace(/[-:.]/g, '');
   return `${String(mode || 'canary')}-${stamp}`;
@@ -520,12 +524,13 @@ async function runReadOnlyCanary(config, options = {}) {
     log('canary-error', { error: result.error });
   }
 
+  const authOpenFailure = /websocket unexpected response 403|http 403|not logged in/i.test(result.error || '');
   const shouldVerifyExitAfterOpenFailure = Boolean(
     openFailedBeforeTransport
       && result.snapshotSafety?.ok
       && config.userId
       && config.sessionToken
-      && !/websocket unexpected response 403|http 403|not logged in/i.test(result.error || '')
+      && (!authOpenFailure || snapshotSafetySelfPresent(result.snapshotSafety))
   );
 
   if (transport || !result.error || shouldVerifyExitAfterOpenFailure) {
