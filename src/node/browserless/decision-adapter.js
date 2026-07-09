@@ -26,6 +26,8 @@ const DEFAULT_ATTACK_MIN_DROP = 1;
 const DEFAULT_PROFIT_LIVE_THREAT_EXIT_RANGE = DEFAULT_ATTACK_RANGE;
 const DEFAULT_PROFIT_LIVE_INJURY_EXIT_RANGE = DEFAULT_ATTACK_ENGAGE_RANGE;
 const DEFAULT_PROFIT_LIVE_INJURY_HP = 90;
+const DEFAULT_PROFIT_LIVE_PLAYER_DROP_MAX_DISTANCE = 22000;
+const DEFAULT_PROFIT_LIVE_PLAYER_DROP_MAX_AGE_TICKS = 8000;
 
 function cloneJson(value) {
   if (value === null || value === undefined) return value;
@@ -144,6 +146,61 @@ function normalizeCoinForDecision(drop, self, authority = 'snapshot') {
   };
 }
 
+function messageUserId(message) {
+  return numberOrNull(message?.user_id ?? message?.userId ?? message?.source_user_id ?? message?.sourceUserId);
+}
+
+function messageTargetUserId(message) {
+  return numberOrNull(message?.target_user_id ?? message?.targetUserId ?? message?.target_id ?? message?.targetId);
+}
+
+function messageTick(message) {
+  return numberOrNull(message?.tick ?? message?.created_tick ?? message?.createdTick);
+}
+
+function selfKillTargetTicksFromMessages(messages, userId) {
+  const selfUserId = Number(userId || 0);
+  const byTarget = new Map();
+  if (!selfUserId) return byTarget;
+  for (const message of messages || []) {
+    if (!message || typeof message !== 'object') continue;
+    const kind = String(message.kind || message.type || '').toLowerCase();
+    if (kind && kind !== 'kill') continue;
+    if (messageUserId(message) !== selfUserId) continue;
+    const targetUserId = messageTargetUserId(message);
+    if (!targetUserId) continue;
+    const tick = messageTick(message);
+    const previous = byTarget.get(targetUserId);
+    if (!previous || (tick !== null && tick > previous.tick)) {
+      byTarget.set(targetUserId, { tick: tick ?? 0, message });
+    }
+  }
+  return byTarget;
+}
+
+function coinSourceUserId(coin) {
+  return numberOrNull(coin?.source_user_id ?? coin?.sourceUserId ?? coin?.owner_user_id ?? coin?.ownerUserId);
+}
+
+function coinCreatedTick(coin) {
+  return numberOrNull(coin?.created_tick ?? coin?.createdTick ?? coin?.tick);
+}
+
+function isSelfKilledPlayerDropCoin(coin, selfKillTargetTicks, options = {}) {
+  const sourceUserId = coinSourceUserId(coin);
+  if (!sourceUserId || !selfKillTargetTicks.has(sourceUserId)) return false;
+  if (coin.system_spawned === true || coin.systemSpawned === true) return false;
+  if (!(Number(coin?.amount || 0) > 0)) return false;
+  const maxDistance = Math.max(0, Number(options.profitLivePlayerDropMaxDistanceCm ?? DEFAULT_PROFIT_LIVE_PLAYER_DROP_MAX_DISTANCE));
+  if (maxDistance > 0 && Number(coin?.distance) > maxDistance) return false;
+  const maxAgeTicks = Math.max(0, Number(options.profitLivePlayerDropMaxAgeTicks ?? DEFAULT_PROFIT_LIVE_PLAYER_DROP_MAX_AGE_TICKS));
+  const kill = selfKillTargetTicks.get(sourceUserId);
+  const killTick = Number(kill?.tick || 0);
+  const createdTick = Number(coinCreatedTick(coin) || 0);
+  if (maxAgeTicks > 0 && killTick > 0 && createdTick > 0 && Math.abs(createdTick - killTick) > maxAgeTicks) return false;
+  return true;
+}
+
 function summarizeTarget(target) {
   if (!target) return null;
   return {
@@ -210,6 +267,7 @@ function buildBrowserlessStrategyInput(state, options = {}) {
   const snapshotEntitiesByUserId = snapshotFreshForMetadata ? snapshotEntityByUserId(fallback) : new Map();
   const self = normalizeEntityForDecision(realtime.self, null, 'realtime');
   if (!self) dataGaps.push('missing-realtime-self');
+  const selfUserId = Number(self?.user_id ?? state?.userId ?? options.userId ?? 0);
   const realtimeEntities = (Array.isArray(realtime.entities) ? realtime.entities : [])
     .map(entity => enrichRealtimeEntityWithSnapshotProfitMetadata(
       entity,
@@ -218,7 +276,6 @@ function buildBrowserlessStrategyInput(state, options = {}) {
     ))
     .map(entity => normalizeEntityForDecision(entity, self, 'realtime'))
     .filter(Boolean);
-  const selfUserId = Number(self?.user_id ?? state?.userId ?? options.userId ?? 0);
   const visibleTargets = realtimeEntities
     .filter(entity => Number(entity.user_id) !== selfUserId)
     .filter(entity => Number.isFinite(Number(entity.x)) && Number.isFinite(Number(entity.y)));
@@ -241,6 +298,11 @@ function buildBrowserlessStrategyInput(state, options = {}) {
     .map(drop => normalizeCoinForDecision(drop, self, 'snapshot'))
     .filter(Boolean)
     .filter(coin => Number(coin.amount || 0) > 0);
+  const selfKillTargetTicks = selfKillTargetTicksFromMessages(Array.isArray(fallback.messages) ? fallback.messages : [], selfUserId);
+  const selfKilledPlayerDropFallbackEnabled = options.controlMode === 'profit-live';
+  const selfKilledPlayerDropCoins = selfKilledPlayerDropFallbackEnabled
+    ? snapshotCoins.filter(coin => isSelfKilledPlayerDropCoin(coin, selfKillTargetTicks, options))
+    : [];
   const snapshotFallbackEnabledOption = options.snapshotCoinFallbackEnabled ?? options.allowSnapshotCoinFallback;
   const snapshotFallbackEnabled = snapshotFallbackEnabledOption === undefined
     ? options.controlMode !== 'profit-live'
@@ -253,8 +315,15 @@ function buildBrowserlessStrategyInput(state, options = {}) {
   const snapshotFallbackAllowed = Boolean(snapshotFallbackEnabled && snapshotCoins.length && !snapshotFallbackBlockedReasons.length);
   if (!realtimeCoins.length && !snapshotCoins.length) dataGaps.push('no-coin-frame-type-observed');
   if (!realtimeCoins.length && snapshotCoins.length) dataGaps.push('snapshot-coin-fallback-only');
+  if (selfKilledPlayerDropCoins.length) dataGaps.push('self-killed-player-drop-visible');
   if (snapshotFallbackBlockedReasons.length) dataGaps.push(...snapshotFallbackBlockedReasons.map(reason => `snapshot-fallback-blocked:${reason}`));
   if (!realtime.frameAgeMs && realtime.receivedAtMs) dataGaps.push('unknown-realtime-frame-age');
+  const profitCoins = realtimeCoins.length
+    ? realtimeCoins
+    : (selfKilledPlayerDropCoins.length ? selfKilledPlayerDropCoins : (snapshotFallbackAllowed ? snapshotCoins : []));
+  const profitCoinSource = realtimeCoins.length
+    ? 'realtime'
+    : (selfKilledPlayerDropCoins.length ? 'snapshot-player-drop' : (snapshotFallbackAllowed ? 'snapshot-fallback' : 'none'));
   return {
     userId: Number(state?.userId || options.userId || 0),
     nowMs: Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now(),
@@ -272,6 +341,7 @@ function buildBrowserlessStrategyInput(state, options = {}) {
       tick: fallback.tick ?? null,
       frameAgeMs: numberOrNull(fallback.frameAgeMs),
       coinDropCount: snapshotCoins.length,
+      selfKilledPlayerDropCount: selfKilledPlayerDropCoins.length,
       authority: 'snapshot',
       snapshotCoinFallbackAllowed: snapshotFallbackAllowed,
       snapshotFallbackBlockedReasons
@@ -281,8 +351,9 @@ function buildBrowserlessStrategyInput(state, options = {}) {
     afkTargets,
     realtimeCoins,
     snapshotCoins,
-    profitCoins: realtimeCoins.length ? realtimeCoins : (snapshotFallbackAllowed ? snapshotCoins : []),
-    profitCoinSource: realtimeCoins.length ? 'realtime' : (snapshotFallbackAllowed ? 'snapshot-fallback' : 'none'),
+    selfKilledPlayerDropCoins,
+    profitCoins,
+    profitCoinSource,
     bullets: Array.isArray(realtime.bullets) ? cloneJson(realtime.bullets) : [],
     dataGaps
   };
@@ -395,7 +466,7 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
 }
 
 function buildCombatDecision(input, options = {}) {
-  const combatLiveEnabled = options.controlMode === 'combat-live' && options.combatEnabled === true;
+  const combatLiveEnabled = (options.controlMode === 'combat-live' || options.controlMode === 'profit-live') && options.combatEnabled === true;
   const combat = buildBrowserlessCombatDryRun({
     userId: input.userId,
     realtime: input.rawRealtime || {}
@@ -439,6 +510,20 @@ function profitLiveSafetyDecision(input, combatDecision, options = {}) {
   const injuryHp = Math.max(1, Number(options.profitLiveInjuryHp || DEFAULT_PROFIT_LIVE_INJURY_HP));
   const injured = Number.isFinite(hp)
     && ((Number.isFinite(maxHp) && hp < maxHp) || hp <= injuryHp);
+  if (options.combatEnabled === true) {
+    if (injured && distance <= threatExitRange) {
+      return {
+        kind: 'safety-exit',
+        band: 'safety',
+        reason: 'profit-live-combat-injury-threat',
+        shouldLeave: true,
+        stopMotion: true,
+        target,
+        self: summarizeTarget(input.self)
+      };
+    }
+    return null;
+  }
   let reason = '';
   if (distance <= threatExitRange) reason = 'profit-live-active-threat';
   else if (injured && distance <= injuryExitRange) reason = 'profit-live-injury-threat';
@@ -460,8 +545,8 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
   const nonCombatProfit = options.controlMode === 'non-combat-profit' || options.nonCombatProfit === true;
   const profitLive = options.controlMode === 'profit-live';
   const combatDryRun = options.controlMode === 'combat-dry-run';
-  const combatLiveEnabled = options.controlMode === 'combat-live' && options.combatEnabled === true;
-  const combatDecisionEnabled = options.combatDecisionEnabled !== false && !nonCombatProfit && !profitLive;
+  const combatLiveEnabled = (options.controlMode === 'combat-live' || profitLive) && options.combatEnabled === true;
+  const combatDecisionEnabled = options.combatDecisionEnabled !== false && !nonCombatProfit && (!profitLive || options.combatEnabled === true);
   const frameAge = Number(input.realtime.frameAgeMs);
   const opportunity = buildOpportunityDecision(input, stateful, {
     ...options,
