@@ -283,8 +283,8 @@ function summarizeTarget(target) {
   if (!target) return null;
   return {
     type: 'enemy',
-    userId: numberOrNull(target.user_id),
-    entityId: numberOrNull(target.entity_id),
+    userId: numberOrNull(target.user_id ?? target.userId),
+    entityId: numberOrNull(target.entity_id ?? target.entityId),
     name: target.name || '',
     authority: target.authority || '',
     x: numberOrNull(target.x),
@@ -452,6 +452,7 @@ function buildBrowserlessStrategyInput(state, options = {}) {
     },
     visibleTargets,
     activeThreats,
+    firingThreats,
     snapshotActiveThreats,
     snapshotFallbackThreats,
     afkTargets,
@@ -716,11 +717,27 @@ function isCombatActionEligibleForDecision(combatDecision, options = {}) {
 function profitLiveSafetyDecision(input, combatDecision, options = {}) {
   if (options.controlMode !== 'profit-live' || !input.self) return null;
   const realtimeTarget = combatDecision?.dryRun?.target || combatDecision?.target || null;
+  const realtimeThreatsById = new Map();
+  for (const target of [
+    ...(realtimeTarget && (realtimeTarget.active || realtimeTarget.firing) ? [realtimeTarget] : []),
+    ...(input.activeThreats || []),
+    ...(input.firingThreats || [])
+  ]) {
+    const id = target?.userId ?? target?.user_id ?? target?.entityId ?? target?.entity_id ?? `${target?.x}:${target?.y}`;
+    if (!target || id === null || id === undefined) continue;
+    if (target.alive === false) continue;
+    const distance = Number(target.distance);
+    if (!Number.isFinite(distance)) continue;
+    if (!realtimeThreatsById.has(String(id)) || distance < Number(realtimeThreatsById.get(String(id)).distance || Infinity)) {
+      realtimeThreatsById.set(String(id), target);
+    }
+  }
+  const realtimeThreat = Array.from(realtimeThreatsById.values())
+    .sort((a, b) => Number(a.distance || Infinity) - Number(b.distance || Infinity))[0] || null;
   const snapshotThreat = (input.snapshotActiveThreats || [])
     .slice()
     .sort((a, b) => Number(a.distance || Infinity) - Number(b.distance || Infinity))[0] || null;
-  const realtimeThreatening = Boolean(realtimeTarget?.active || realtimeTarget?.firing);
-  const target = realtimeThreatening ? realtimeTarget : (snapshotThreat || realtimeTarget);
+  const target = realtimeThreat || snapshotThreat || realtimeTarget;
   const distance = Number(target?.distance);
   if (!target || !Number.isFinite(distance)) return null;
   const snapshotThreatening = Boolean(target.profitMetadataActive && !target.active);
@@ -730,11 +747,29 @@ function profitLiveSafetyDecision(input, combatDecision, options = {}) {
   const injuryExitRange = Math.max(threatExitRange, Number(options.profitLiveInjuryExitRange || DEFAULT_PROFIT_LIVE_INJURY_EXIT_RANGE));
   const injured = isInjuredSelf(input.self, options);
   if (options.combatEnabled === true) {
+    const combatTargetId = realtimeTarget?.userId ?? realtimeTarget?.user_id ?? realtimeTarget?.entityId ?? realtimeTarget?.entity_id ?? null;
+    const threatId = target?.userId ?? target?.user_id ?? target?.entityId ?? target?.entity_id ?? null;
+    const combatHandlesThreat = combatTargetId !== null
+      && combatTargetId !== undefined
+      && threatId !== null
+      && threatId !== undefined
+      && String(combatTargetId) === String(threatId);
     if (snapshotThreatening && distance <= threatExitRange) {
       return {
         kind: 'safety-exit',
         band: 'safety',
         reason: 'profit-live-snapshot-active-threat',
+        shouldLeave: true,
+        stopMotion: true,
+        target: summarizeTarget(target),
+        self: summarizeTarget(input.self)
+      };
+    }
+    if (!combatHandlesThreat && (target.active || target.firing) && distance <= threatExitRange) {
+      return {
+        kind: 'safety-exit',
+        band: 'safety',
+        reason: 'profit-live-active-threat',
         shouldLeave: true,
         stopMotion: true,
         target: summarizeTarget(target),
@@ -764,7 +799,7 @@ function profitLiveSafetyDecision(input, combatDecision, options = {}) {
     reason,
     shouldLeave: true,
     stopMotion: true,
-    target,
+    target: summarizeTarget(target),
     self: summarizeTarget(input.self)
   };
 }

@@ -1,5 +1,7 @@
 'use strict';
 
+const { COMBAT_CONSTANTS } = require('./combat-constants');
+
 /**
  * Combat Target Classification and Selection
  *
@@ -14,6 +16,66 @@
  * @param {Object} options - Selection options
  * @returns {boolean}
  */
+function isActiveCombatMode(entity) {
+  if (!entity) return false;
+  if (entity.active === true) return true;
+  const mode = String(entity.current_join_mode || entity.mode || entity.joined || '').toLowerCase();
+  return mode === 'active';
+}
+
+function isFiringCombatEntity(entity) {
+  return Boolean(entity?.firing || entity?.is_firing || entity?.shooting);
+}
+
+function combatDropValue(entity) {
+  return Number(entity?.drop ?? entity?.Drop ?? entity?.reward ?? entity?.coin_reward ?? entity?.death_reward_preview ?? entity?.death_drop_coins ?? 0) || 0;
+}
+
+function targetId(entity) {
+  const id = entity?.user_id ?? entity?.userId ?? entity?.id;
+  return id === null || id === undefined ? '' : String(id);
+}
+
+function incomingOwnerMatchesTarget(entity, context = {}) {
+  const ownerId = context.incomingBulletOwnerId ?? context.incomingOwnerId ?? context.incomingBullet?.ownerId;
+  if (ownerId === null || ownerId === undefined) return false;
+  const id = targetId(entity);
+  return id !== '' && String(ownerId) === id;
+}
+
+function recentInjuryMatchesTarget(entity, context = {}) {
+  const injury = context.recentInjury || null;
+  if (!injury) return false;
+  const suspectId = injury.suspectId ?? injury.userId ?? injury.user_id ?? injury.targetId ?? injury.target_id;
+  if (suspectId === null || suspectId === undefined) return false;
+  const id = targetId(entity);
+  return id !== '' && String(suspectId) === id;
+}
+
+function lowValueActiveDropMax(context = {}) {
+  const value = Number(context.lowValueActiveDropMax ?? context.combatLowValueActiveDropMax ?? COMBAT_CONSTANTS.LOW_VALUE_ACTIVE_DROP_MAX);
+  return Number.isFinite(value) ? Math.max(0, value) : COMBAT_CONSTANTS.LOW_VALUE_ACTIVE_DROP_MAX;
+}
+
+function proactiveActiveCombatBudgetBlocked(context = {}) {
+  const required = Number(context.proactiveActiveKillStaminaBudgetMs ?? COMBAT_CONSTANTS.PROACTIVE_ACTIVE_KILL_STAMINA_BUDGET_MS);
+  if (!(Number.isFinite(required) && required > 0)) return false;
+  const budget = Number(context.opportunityStaminaBudget);
+  return Number.isFinite(budget) && budget < required;
+}
+
+function activeCombatRequiresThreatEvidence(entity, context = {}) {
+  if (!isActiveCombatMode(entity)) return false;
+  return combatDropValue(entity) <= lowValueActiveDropMax(context) || proactiveActiveCombatBudgetBlocked(context);
+}
+
+function combatTargetThreatensSelf(entity, context = {}) {
+  if (incomingOwnerMatchesTarget(entity, context)) return true;
+  if (recentInjuryMatchesTarget(entity, context)) return true;
+  if (context.unknownIncoming && isActiveCombatMode(entity) && isFiringCombatEntity(entity)) return true;
+  return isFiringCombatEntity(entity);
+}
+
 function isCombatEligibleThreat(entity, options = {}) {
   if (!entity) return false;
 
@@ -23,22 +85,18 @@ function isCombatEligibleThreat(entity, options = {}) {
   // Whitelisted targets are protected
   if (options.whitelistCheck && options.whitelistCheck(entity)) return false;
 
-  // Active mode is a threat indicator
-  const isActiveMode = entity.current_join_mode === 'Active' || entity.mode === 'Active';
+  if (incomingOwnerMatchesTarget(entity, options) || recentInjuryMatchesTarget(entity, options)) return true;
 
-  // Check for activity evidence for Active mode
-  if (isActiveMode) {
-    const hasActivityEvidence =
-      entity.firing ||
-      entity.moving ||
-      (entity.speed && entity.speed > 500) ||
-      (entity.stamina_5s_remaining_milli && entity.stamina_5s_remaining_milli < 10000);
-
-    return hasActivityEvidence;
+  // Match the browser runtime's split between defensive/proactive Active combat
+  // and ordinary Passive/AFK profit. Moving or Drop value alone should not make
+  // a Passive target a combat target; those belong to profit arbitration.
+  if (isActiveCombatMode(entity)) {
+    return activeCombatRequiresThreatEvidence(entity, options)
+      ? combatTargetThreatensSelf(entity, options)
+      : true;
   }
 
-  // Non-active entities must have threat indicators
-  return entity.firing || entity.moving || (entity.drop && entity.drop > 0);
+  return isFiringCombatEntity(entity);
 }
 
 /**
@@ -69,48 +127,15 @@ function isInvulnerableEntity(entity) {
  * @returns {number} Priority score
  */
 function calculateCombatTargetPriority(self, target, context = {}) {
-  if (!target) return 0;
-
-  let score = 0;
-
-  // Distance factor (closer is higher priority)
-  const distance = target.distance || 0;
-  if (distance > 0) {
-    score += 10000 / distance;  // Inverse distance score
-  }
-
-  // Incoming bullet ownership (highest priority)
-  if (context.incomingBulletOwnerId && String(target.user_id) === String(context.incomingBulletOwnerId)) {
-    score += 10000;
-  }
-
-  // Firing entities are higher priority
-  if (target.firing) {
-    score += 5000;
-  }
-
-  // Recent injury evidence
-  if (context.recentInjury && context.recentInjury.suspectId === target.user_id) {
-    score += 3000;
-  }
-
-  // Moving targets are higher priority than stationary
-  if (target.moving) {
-    score += 1000;
-  }
-
-  // HP consideration (low HP targets can be finished)
-  const targetHp = Number(target.hp || 100);
-  if (targetHp < 50) {
-    score += (50 - targetHp) * 20;  // Bonus for low HP targets
-  }
-
-  // Drop value for AFK targets
-  if (target.drop && target.drop > 0) {
-    score += target.drop * 10;
-  }
-
-  return score;
+  if (!target) return -Infinity;
+  const distance = Number(target.distance || 0);
+  return (incomingOwnerMatchesTarget(target, context) ? 1000000000 : 0)
+    + (isFiringCombatEntity(target) ? 500000000 : 0)
+    + (context.unknownIncoming && isActiveCombatMode(target) ? 200000000 : 0)
+    + (recentInjuryMatchesTarget(target, context) ? 100000000 : 0)
+    + (isActiveCombatMode(target) ? 50000000 : 0)
+    + combatDropValue(target) * 1000000
+    - (Number.isFinite(distance) ? distance : 0);
 }
 
 /**
@@ -122,36 +147,19 @@ function calculateCombatTargetPriority(self, target, context = {}) {
  * @returns {Object} { allowed, reason }
  */
 function checkProactiveActiveCombatGates(self, target, context = {}) {
-  const { COMBAT_CONSTANTS } = require('./combat-constants');
-
   if (!target) return { allowed: false, reason: 'no-target' };
 
   // Check Drop threshold
-  const drop = Number(target.drop || 0);
-  if (drop <= COMBAT_CONSTANTS.LOW_VALUE_ACTIVE_DROP_MAX) {
-    // Low Drop Active requires threat evidence
-    const hasIncomingBullet = context.incomingBulletOwnerId &&
-      String(target.user_id) === String(context.incomingBulletOwnerId);
-    const hasRecentInjury = context.recentInjury &&
-      context.recentInjury.suspectId === target.user_id;
-
-    if (!hasIncomingBullet && !hasRecentInjury && !target.firing) {
+  const drop = combatDropValue(target);
+  if (drop <= lowValueActiveDropMax(context)) {
+    if (!combatTargetThreatensSelf(target, context)) {
       return { allowed: false, reason: 'low-drop-no-threat-evidence' };
     }
   }
 
   // Check stamina budget for proactive combat
-  const opportunityBudget = context.opportunityStaminaBudget || 0;
-  const requiredBudget = COMBAT_CONSTANTS.PROACTIVE_ACTIVE_KILL_STAMINA_BUDGET_MS;
-
-  if (opportunityBudget < requiredBudget) {
-    // Low budget still allows defensive combat with threat evidence
-    const hasIncomingBullet = context.incomingBulletOwnerId &&
-      String(target.user_id) === String(context.incomingBulletOwnerId);
-    const hasRecentInjury = context.recentInjury &&
-      context.recentInjury.suspectId === target.user_id;
-
-    if (!hasIncomingBullet && !hasRecentInjury && !target.firing) {
+  if (proactiveActiveCombatBudgetBlocked(context)) {
+    if (!combatTargetThreatensSelf(target, context)) {
       return { allowed: false, reason: 'insufficient-stamina-budget' };
     }
   }
@@ -170,6 +178,9 @@ function checkProactiveActiveCombatGates(self, target, context = {}) {
 function selectBestCombatTarget(self, candidates, context = {}) {
   if (!candidates || !candidates.length) return null;
 
+  const incomingShooter = candidates.find(target => isCombatEligibleThreat(target, context) && incomingOwnerMatchesTarget(target, context));
+  if (incomingShooter) return incomingShooter;
+
   // Filter and score candidates
   const scored = candidates
     .filter(target => isCombatEligibleThreat(target, context))
@@ -177,7 +188,7 @@ function selectBestCombatTarget(self, candidates, context = {}) {
       target,
       score: calculateCombatTargetPriority(self, target, context)
     }))
-    .filter(item => item.score > 0);
+    .filter(item => Number.isFinite(item.score));
 
   if (!scored.length) return null;
 
@@ -209,6 +220,8 @@ module.exports = {
   isInvulnerableEntity,
   calculateCombatTargetPriority,
   checkProactiveActiveCombatGates,
+  isActiveCombatMode,
+  isFiringCombatEntity,
   selectBestCombatTarget,
   isIdleInvulnerable
 };

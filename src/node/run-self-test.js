@@ -6556,13 +6556,43 @@ async function runSelfTest() {
           decision.band,
           decision.action.kind,
           decision.action.target.userId,
-          decision.combat.target.userId,
-          decision.combat.target.active,
-          decision.combat.target.firing,
+          decision.combat.target?.userId || '',
+          (decision.combat.candidates || []).length,
           decision.combat.actionEligible
         ].join('|');
       })(),
-      want: 'profit-candidate|profit|attack|10|8|false|false|false'
+      want: 'profit-candidate|profit|attack|10||0|false'
+    },
+    {
+      name: 'browserless profit live exits for low-drop active moving threat without combat promotion',
+      got: (() => {
+        const store = createBrowserlessStateStore({ userId: 7 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 60,
+          entities: [
+            { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+            { entity_id: 2, user_id: 8, name: 'low-drop-active', x: 500, y: 0, vx: 120, vy: 0, hp: 80, current_join_mode: 'Active', drop: 0 },
+            { entity_id: 3, user_id: 10, name: 'afk-profit', x: 1000, y: 0, hp: 80, current_join_mode: 'Passive', drop: 20 }
+          ],
+          bullets: []
+        }, { receivedAtMs: 1000 });
+        const decision = buildBrowserlessDecision(store.getState(1200), {}, {
+          nowMs: 1200,
+          controlMode: 'profit-live',
+          combatEnabled: true
+        });
+        return [
+          decision.kind,
+          decision.band,
+          decision.reason,
+          decision.action.target.userId,
+          decision.combat.target?.userId || '',
+          decision.combat.actionEligible,
+          decision.action.shouldLeave
+        ].join('|');
+      })(),
+      want: 'safety-exit|safety|profit-live-active-threat|8||false|true'
     },
     {
       name: 'browserless profit live can fight firing passive players when enabled',
