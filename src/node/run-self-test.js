@@ -7154,6 +7154,56 @@ async function runSelfTest() {
       want: 'true|true|2|1|1|2|2|profit-candidate|true|self|2|0'
     },
     {
+      name: 'browserless canary verifies leave after ws connect timeout',
+      got: (async () => {
+        let leaveCalls = 0;
+        const result = await runReadOnlyCanary({
+          gameOrigin: 'https://grasp-rat-game.h-e.top',
+          snapshotPath: '/snapshot',
+          wsPath: '/ws',
+          wsExtraQuery: 'compress=gzip%2Cdeflate',
+          userId: 7,
+          sessionToken: 'connect-timeout-token',
+          readOnlyProbeMs: 1000,
+          wsConnectTimeoutMs: 1000,
+          httpTimeoutMs: 1000
+        }, {
+          now: () => Date.UTC(2026, 6, 8, 1, 0, 0),
+          persistedState: {
+            loginPointSafety: { point: { x: 100, y: 200, hp: 90, source: 'test' } }
+          },
+          fetchImpl: async () => fakeResponseForTest({
+            body: {
+              type: 'snapshot',
+              tick: 9,
+              entities: [{ entity_id: 1, user_id: 7, x: 100, y: 200, hp: 90 }],
+              bullets: [],
+              coin_drops: [],
+              messages: []
+            }
+          }),
+          openBrowserlessWs: async () => {
+            throw new Error('websocket connect timeout');
+          },
+          leaveWithVerification: async options => {
+            leaveCalls += 1;
+            return { ok: true, attempts: [{ ok: true, userId: options.userId, summary: { leaveConfirmed: true } }] };
+          }
+        });
+        return [
+          result.ok,
+          result.error,
+          result.snapshotSafety.ok,
+          result.stats.decodedFrameCount,
+          Boolean(result.leave?.ok),
+          leaveCalls,
+          result.leave?.attempts?.[0]?.userId,
+          result.safety.leaveFailure === null
+        ].join('|');
+      })(),
+      want: 'false|websocket connect timeout|true|0|true|1|7|true'
+    },
+    {
       name: 'browserless movement-only canary sends velocity without shooting',
       got: (async () => {
         let t = Date.UTC(2026, 6, 8, 1, 0, 0);
@@ -8379,6 +8429,14 @@ async function runSelfTest() {
             error: 'snapshot safety not confirmed: unsafe'
           }
         }, config);
+        const connectTimeout = browserlessLoopPlan({
+          ok: false,
+          canary: {
+            runId: 'connect-timeout-test',
+            error: 'websocket connect timeout',
+            leave: { ok: true }
+          }
+        }, config);
         return [
           activeThreat.continue,
           activeThreat.delayMs,
@@ -8386,10 +8444,13 @@ async function runSelfTest() {
           noSelf.continue,
           auth403.continue,
           snapshotRetry.continue,
-          snapshotRetry.delayMs
+          snapshotRetry.delayMs,
+          connectTimeout.continue,
+          connectTimeout.reason,
+          connectTimeout.delayMs
         ].join('|');
       })(),
-      want: 'true|1234|false|false|false|true|60000'
+      want: 'true|1234|false|false|false|true|60000|true|ws-connect-timeout|1234'
     },
     {
       name: 'browserless runner dry-run and fake read-only path write redacted logs',

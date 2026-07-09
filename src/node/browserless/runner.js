@@ -132,6 +132,7 @@ function browserlessLoopPlan(result, config = {}) {
   if (['profit-live-snapshot-active-threat', 'frame-gap', 'stale-self', 'ws-closed', 'ws-error'].includes(safetyReason)) {
     return resume(safetyReason);
   }
+  if (/^websocket connect timeout$/i.test(error)) return resume('ws-connect-timeout');
   if (/^snapshot safety not confirmed:/i.test(error)) return resume('snapshot-safety-retry');
   return stop(error || safetyReason || 'unknown-error');
 }

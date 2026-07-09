@@ -251,6 +251,7 @@ async function runReadOnlyCanary(config, options = {}) {
   let ending = false;
   let deadlineAtMs = 0;
   let actionAdapter = null;
+  let openFailedBeforeTransport = false;
   const addRunMeta = detail => {
     const base = detail && typeof detail === 'object' && !Array.isArray(detail)
       ? detail
@@ -479,11 +480,20 @@ async function runReadOnlyCanary(config, options = {}) {
       recordSafetyEvent(safetyEvent);
     }
   } catch (err) {
+    openFailedBeforeTransport = !transport;
     result.error = err?.message || String(err);
     log('canary-error', { error: result.error });
   }
 
-  if (transport || !result.error) {
+  const shouldVerifyExitAfterOpenFailure = Boolean(
+    openFailedBeforeTransport
+      && result.snapshotSafety?.ok
+      && config.userId
+      && config.sessionToken
+      && !/websocket unexpected response 403|http 403|not logged in/i.test(result.error || '')
+  );
+
+  if (transport || !result.error || shouldVerifyExitAfterOpenFailure) {
     if (result.safety.event) {
       result.safety.exit = await executeSafetyExit(result.safety.event, config, {
         transport,
@@ -495,6 +505,7 @@ async function runReadOnlyCanary(config, options = {}) {
       result.leave = result.safety.exit.leave;
     } else {
       if (actionAdapter) updateActionResult(actionAdapter.stop('normal-complete'));
+      if (shouldVerifyExitAfterOpenFailure) log('canary-open-failed-leave', { error: result.error });
       const leave = options.leaveWithVerification || leaveWithVerification;
       result.leave = await leave({
         gameOrigin: config.gameOrigin,
