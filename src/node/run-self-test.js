@@ -7633,6 +7633,35 @@ async function runSelfTest() {
       want: 'flee|safety|active-threat-return-block|8||false|'
     },
     {
+      name: 'browserless profit live waits for active outside danger range',
+      got: (() => {
+        const store = createBrowserlessStateStore({ userId: 7 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 60,
+          entities: [
+            { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+            { entity_id: 2, user_id: 8, name: 'active-outside', x: 16000, y: 0, vx: -50, vy: 0, hp: 80, current_join_mode: 'Active', drop: 0 }
+          ],
+          bullets: []
+        }, { receivedAtMs: 1000 });
+        const decision = buildBrowserlessDecision(store.getState(1200), {}, {
+          nowMs: 1200,
+          controlMode: 'profit-live',
+          combatEnabled: false
+        });
+        return [
+          decision.kind,
+          decision.band,
+          decision.reason,
+          decision.action.kind,
+          decision.action.shouldLeave,
+          decision.combat.target?.userId || ''
+        ].join('|');
+      })(),
+      want: 'wait|wait|no-profitable-candidate|wait||'
+    },
+    {
       name: 'browserless profit live can fight firing passive players when enabled',
       got: (() => {
         const store = createBrowserlessStateStore({ userId: 7 });
