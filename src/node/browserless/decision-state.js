@@ -17,6 +17,15 @@ function asRecord(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? cloneJson(value) : {};
 }
 
+function asSwitchDiagnostics(value) {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const diagnostics = cloneJson(value);
+    if (!Array.isArray(diagnostics.events)) diagnostics.events = [];
+    return diagnostics;
+  }
+  return { lastFocus: null, lastTargetFocus: null, lastSwitch: null, events: [] };
+}
+
 function boundedList(value, limit = DEFAULT_RECENT_LIMIT) {
   const array = Array.isArray(value) ? value : [];
   const max = Math.max(0, Number(limit || DEFAULT_RECENT_LIMIT));
@@ -65,7 +74,7 @@ function createInitialDecisionState(options = {}) {
     returnBlockLock: cloneJson(options.returnBlockLock || null),
     returnBlockScan: cloneJson(options.returnBlockScan || null),
     finalActionArbitration: cloneJson(options.finalActionArbitration || null),
-    targetSwitchDiagnostics: asArray(options.targetSwitchDiagnostics),
+    targetSwitchDiagnostics: asSwitchDiagnostics(options.targetSwitchDiagnostics),
     killHistory: asArray(options.killHistory),
     recentSelfKillEvidence: asArray(options.recentSelfKillEvidence)
   };
@@ -132,10 +141,17 @@ function summarizeBrowserlessDecisionState(state, options = {}) {
       returnBlockScan: redactBoundedValue(state.returnBlockScan || null)
     },
     finalActionArbitration: redactBoundedValue(state.finalActionArbitration || null),
-    targetSwitchDiagnostics: {
-      count: Array.isArray(state.targetSwitchDiagnostics) ? state.targetSwitchDiagnostics.length : 0,
-      recent: boundedList(state.targetSwitchDiagnostics, limit)
-    },
+    targetSwitchDiagnostics: (() => {
+      const diagnostics = state.targetSwitchDiagnostics;
+      const events = Array.isArray(diagnostics) ? diagnostics : (Array.isArray(diagnostics?.events) ? diagnostics.events : []);
+      return {
+        count: events.length,
+        recent: boundedList(events, limit),
+        lastFocus: redactBoundedValue(Array.isArray(diagnostics) ? null : diagnostics?.lastFocus || null),
+        lastTargetFocus: redactBoundedValue(Array.isArray(diagnostics) ? null : diagnostics?.lastTargetFocus || null),
+        lastSwitch: redactBoundedValue(Array.isArray(diagnostics) ? null : diagnostics?.lastSwitch || null)
+      };
+    })(),
     killHistory: {
       count: Array.isArray(state.killHistory) ? state.killHistory.length : 0,
       recent: boundedList(state.killHistory, limit)

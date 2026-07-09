@@ -6959,6 +6959,144 @@ async function runSelfTest() {
       want: 'profit-candidate|visible-coin|near-safe|true|false'
     },
     {
+      name: 'browserless final arbitration holds previous profit action',
+      got: (() => {
+        const stateful = {};
+        const baseState = coin => ({
+          userId: 7,
+          realtime: {
+            tick: 60,
+            frameAgeMs: 100,
+            self: { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+            entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 }],
+            bullets: [],
+            coinDrops: [coin]
+          },
+          fallback: { coinDrops: [] }
+        });
+        buildBrowserlessDecision(baseState({ drop_id: 'coin-a', amount: 1, x: 10000, y: 0 }), stateful, {
+          nowMs: 1000,
+          controlMode: 'profit-live',
+          coinMaxDistance: 500,
+          footCoinPriorityDistance: 500,
+          opportunitySwitchHoldMs: 0,
+          finalActionArbitrationHoldMs: 480
+        });
+        const held = buildBrowserlessDecision(baseState({ drop_id: 'coin-b', amount: 10, x: 10000, y: 0 }), stateful, {
+          nowMs: 1200,
+          controlMode: 'profit-live',
+          coinMaxDistance: 500,
+          footCoinPriorityDistance: 500,
+          opportunitySwitchHoldMs: 0,
+          finalActionArbitrationHoldMs: 480
+        });
+        return [
+          held.kind,
+          held.action.target.id,
+          held.action.finalActionArbitration.mode,
+          stateful.finalActionArbitration.history.length,
+          stateful.finalActionArbitration.lastFocus.key
+        ].join('|');
+      })(),
+      want: 'seek-coin|coin-a|hold-previous|1|coin:coin-a'
+    },
+    {
+      name: 'browserless final arbitration does not hold over safety action',
+      got: (() => {
+        const stateful = {};
+        const self = { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 };
+        buildBrowserlessDecision({
+          userId: 7,
+          realtime: {
+            tick: 60,
+            frameAgeMs: 100,
+            self,
+            entities: [self],
+            bullets: [],
+            coinDrops: [{ drop_id: 'coin-a', amount: 1, x: 10000, y: 0 }]
+          },
+          fallback: { coinDrops: [] }
+        }, stateful, {
+          nowMs: 1000,
+          controlMode: 'profit-live',
+          coinMaxDistance: 500,
+          footCoinPriorityDistance: 500,
+          opportunitySwitchHoldMs: 0,
+          finalActionArbitrationHoldMs: 480
+        });
+        const safety = buildBrowserlessDecision({
+          userId: 7,
+          realtime: {
+            tick: 61,
+            frameAgeMs: 100,
+            self,
+            entities: [
+              self,
+              { entity_id: 2, user_id: 8, name: 'active', x: 500, y: 0, hp: 100, current_join_mode: 'Active', firing: true, drop: 10 }
+            ],
+            bullets: [],
+            coinDrops: [{ drop_id: 'coin-b', amount: 10, x: 10000, y: 0 }]
+          },
+          fallback: { coinDrops: [] }
+        }, stateful, {
+          nowMs: 1200,
+          controlMode: 'profit-live',
+          coinMaxDistance: 500,
+          footCoinPriorityDistance: 500,
+          opportunitySwitchHoldMs: 0,
+          finalActionArbitrationHoldMs: 480
+        });
+        return [
+          safety.kind,
+          safety.band,
+          safety.reason,
+          safety.action.finalActionArbitration === undefined,
+          stateful.finalActionArbitration.history.length
+        ].join('|');
+      })(),
+      want: 'flee|safety|active-threat-return-block|true|0'
+    },
+    {
+      name: 'browserless target switch diagnostics stay bounded',
+      got: (() => {
+        const stateful = {};
+        const makeState = (id, x) => ({
+          userId: 7,
+          realtime: {
+            tick: 60,
+            frameAgeMs: 100,
+            self: { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+            entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 }],
+            bullets: [],
+            coinDrops: [{ drop_id: id, amount: 1, x, y: 0 }]
+          },
+          fallback: { coinDrops: [] }
+        });
+        ['a', 'b', 'c', 'd', 'e', 'f'].forEach((id, index) => {
+          buildBrowserlessDecision(makeState(`coin-${id}`, 10000 + index * 1000), stateful, {
+            nowMs: 1000 + index * 1000,
+            controlMode: 'profit-live',
+            coinMaxDistance: 500,
+            footCoinPriorityDistance: 500,
+            opportunitySwitchHoldMs: 0,
+            finalActionArbitrationHoldMs: 0,
+            targetSwitchDiagnosticsHistoryLimit: 4
+          });
+        });
+        const events = stateful.targetSwitchDiagnostics.events || [];
+        const summary = summarizeBrowserlessDecisionState(stateful, { recentLimit: 2 });
+        return [
+          events.length,
+          events[0].to.key,
+          events[events.length - 1].to.key,
+          summary.targetSwitchDiagnostics.count,
+          summary.targetSwitchDiagnostics.recent.length,
+          Boolean(stateful.lastDecisionAction.targetSwitch)
+        ].join('|');
+      })(),
+      want: '4|coin:coin-c|coin:coin-f|4|2|true'
+    },
+    {
       name: 'browserless profit live leaves when nearest allowed coin exceeds 1h stamina budget',
       got: (() => {
         const store = createBrowserlessStateStore({ userId: 7 });

@@ -50,6 +50,8 @@ const {
   coinRouteKey,
   pickCoinRouteOpportunityCore
 } = require('../../strategy/coin-route');
+const { applyFinalActionArbitrationCore } = require('../../strategy/action-arbitration');
+const { recordActionSwitchDiagnosticsCore } = require('../../strategy/action-switch-diagnostics');
 const {
   createBrowserlessDecisionState,
   summarizeBrowserlessDecisionState
@@ -979,6 +981,71 @@ function applyStaleCoinEscape(action, stateful = {}, nowMs = 0) {
   };
 }
 
+function ensureFinalActionArbitrationState(stateful = {}) {
+  if (!stateful.finalActionArbitration || typeof stateful.finalActionArbitration !== 'object') {
+    stateful.finalActionArbitration = {
+      lastAction: null,
+      lastFocus: null,
+      lastSelectedAt: 0,
+      lastOverride: null,
+      history: []
+    };
+  }
+  if (!Array.isArray(stateful.finalActionArbitration.history)) stateful.finalActionArbitration.history = [];
+  return stateful.finalActionArbitration;
+}
+
+function ensureTargetSwitchDiagnosticsState(stateful = {}) {
+  if (!stateful.targetSwitchDiagnostics || typeof stateful.targetSwitchDiagnostics !== 'object' || Array.isArray(stateful.targetSwitchDiagnostics)) {
+    stateful.targetSwitchDiagnostics = {
+      lastFocus: null,
+      lastTargetFocus: null,
+      lastSwitch: null,
+      events: []
+    };
+  }
+  if (!Array.isArray(stateful.targetSwitchDiagnostics.events)) stateful.targetSwitchDiagnostics.events = [];
+  return stateful.targetSwitchDiagnostics;
+}
+
+function finalActionArbitrationHoldMs(options = {}) {
+  return Math.max(0, Math.round(Number(options.finalActionArbitrationHoldMs ?? BROWSER_RUNTIME_DEFAULTS.finalActionArbitrationHoldMs ?? 0) || 0));
+}
+
+function finalActionArbitrationHistoryLimit(options = {}) {
+  return Math.max(4, Math.round(Number(options.finalActionArbitrationHistoryLimit ?? BROWSER_RUNTIME_DEFAULTS.finalActionArbitrationHistoryLimit ?? 24) || 24));
+}
+
+function targetSwitchDiagnosticsHistoryLimit(options = {}) {
+  return Math.max(4, Math.round(Number(options.targetSwitchDiagnosticsHistoryLimit ?? BROWSER_RUNTIME_DEFAULTS.targetSwitchDiagnosticsHistoryLimit ?? 24) || 24));
+}
+
+function targetSwitchOscillationWindowMs(options = {}) {
+  return Math.max(1000, Math.round(Number(options.targetSwitchOscillationWindowMs ?? BROWSER_RUNTIME_DEFAULTS.targetSwitchOscillationWindowMs ?? 10000) || 10000));
+}
+
+function applyBrowserlessFinalActionArbitration(action, stateful = {}, input = {}, options = {}) {
+  return applyFinalActionArbitrationCore(action, ensureFinalActionArbitrationState(stateful), {
+    nowMs: input?.nowMs,
+    source: options.controlMode || 'browserless',
+    holdMs: finalActionArbitrationHoldMs(options),
+    historyLimit: finalActionArbitrationHistoryLimit(options),
+    clone: cloneJson
+  }).action;
+}
+
+function recordBrowserlessActionSwitchDiagnostics(action, stateful = {}, input = {}, options = {}) {
+  return recordActionSwitchDiagnosticsCore(action, ensureTargetSwitchDiagnosticsState(stateful), {
+    nowMs: input?.nowMs,
+    tickCount: input?.realtime?.tick ?? input?.tick,
+    source: options.controlMode || 'browserless',
+    previousDecision: stateful.lastDecisionAction || null,
+    historyLimit: targetSwitchDiagnosticsHistoryLimit(options),
+    oscillationWindowMs: targetSwitchOscillationWindowMs(options),
+    clone: cloneJson
+  }).action;
+}
+
 function safeBudgetCoinCandidates(input, options = {}) {
   if (!input?.self) return [];
   return (input.profitCoins || [])
@@ -1871,6 +1938,17 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       band = action.band || band;
       reason = action.reason || reason;
     }
+    const arbitratedAction = applyBrowserlessFinalActionArbitration(action, stateful, input, options);
+    if (arbitratedAction !== action) {
+      action = arbitratedAction;
+      kind = action.kind || kind;
+      band = action.band || band;
+      reason = action.reason || reason;
+    }
+    const diagnosedAction = recordBrowserlessActionSwitchDiagnostics(action, stateful, input, options);
+    if (diagnosedAction !== action) {
+      action = diagnosedAction;
+    }
   }
   const ignoredActionCoinId = action?.ignoredCoin?.id || '';
   const rememberedOpportunityKey = coinDecisionKey(opportunity.opportunityChoice?.sourceCoin || opportunity.opportunityChoice);
@@ -1878,6 +1956,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     ? null
     : (opportunity.opportunityChoice || null);
   const outputSwitchLock = outputOpportunityChoice ? (opportunity.switchLock || null) : null;
+  stateful.lastDecisionAction = cloneJson(action);
   return {
     ok: true,
     dryRun: true,
