@@ -6032,11 +6032,11 @@ async function runSelfTest() {
           decision.action.target.authority,
           decision.action.target.native,
           decision.input.profitCoinSource,
-          decision.combat.target.userId,
+          decision.combat.target?.userId || '',
           decision.input.dataGaps.includes('snapshot-fallback-blocked:realtime-profit-present')
         ].join('|');
       })(),
-      want: 'coin|profit|native-coin|realtime|true|realtime|8|true'
+      want: 'coin|profit|native-coin|realtime|true|realtime||true'
     },
     {
       name: 'browserless non-combat profit blocks snapshot fallback near active threat',
@@ -7821,6 +7821,152 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'true|realtime|8|realtime|100|exact|true|true|true'
+    },
+    {
+      name: 'browserless combat target selection keeps engaged target sticky',
+      got: (() => {
+        const stateful = {
+          combatTarget: { id: 8, at: 1000, firstSeenAt: 1000, lastInRangeAt: 1000, hp: 80, reason: 'combat-live-realtime' }
+        };
+        const combat = buildBrowserlessCombatDryRun({
+          userId: 7,
+          realtime: {
+            tick: 62,
+            self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100 },
+            entities: [
+              { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100 },
+              { entity_id: 2, user_id: 8, name: 'engaged', x: 1000, y: 0, hp: 80, current_join_mode: 'Active', firing: true, drop: 5 },
+              { entity_id: 3, user_id: 9, name: 'higher-drop', x: 900, y: 0, hp: 80, current_join_mode: 'Active', firing: true, drop: 50 }
+            ],
+            bullets: []
+          }
+        }, {
+          nowMs: 1500,
+          decisionState: stateful,
+          targetStickMs: 7000,
+          combatEngageStickMs: 7000,
+          combatAttackRange: 11000
+        });
+        return [
+          combat.target.userId,
+          combat.target.combatIntent,
+          combat.target.combatEngagement.ageMs,
+          stateful.combatTarget.id,
+          stateful.combatTarget.firstSeenAt
+        ].join('|');
+      })(),
+      want: '8|engaged|500|8|1000'
+    },
+    {
+      name: 'browserless incoming shooter overrides engaged combat target',
+      got: (() => {
+        const stateful = {
+          combatTarget: { id: 8, at: 1000, firstSeenAt: 1000, lastInRangeAt: 1000, hp: 80, reason: 'combat-live-realtime' }
+        };
+        const combat = buildBrowserlessCombatDryRun({
+          userId: 7,
+          realtime: {
+            tick: 62,
+            self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100 },
+            entities: [
+              { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100 },
+              { entity_id: 2, user_id: 8, name: 'engaged', x: 1000, y: 0, hp: 80, current_join_mode: 'Active', firing: true, drop: 40 },
+              { entity_id: 3, user_id: 9, name: 'incoming', x: 1200, y: 0, hp: 80, current_join_mode: 'Active', firing: true, drop: 1 }
+            ],
+            bullets: [
+              { bullet_id: 4, owner_user_id: 9, x: 1000, y: 0, target_x: 0, target_y: 0, speed_per_tick: 500 }
+            ]
+          }
+        }, {
+          nowMs: 1500,
+          decisionState: stateful,
+          targetStickMs: 7000,
+          combatEngageStickMs: 7000,
+          combatAttackRange: 11000,
+          combatTargetSwitchIncomingDistance: 6500
+        });
+        return [
+          combat.target.userId,
+          combat.target.combatIntent,
+          Boolean(combat.target.combatEngagement),
+          stateful.combatTarget.id,
+          stateful.combatTarget.seenTargetRealBulletAt
+        ].join('|');
+      })(),
+      want: '9|defensive|false|9|1500'
+    },
+    {
+      name: 'browserless low-value active combat requires threat evidence',
+      got: (() => {
+        const noThreat = buildBrowserlessCombatDryRun({
+          userId: 7,
+          realtime: {
+            tick: 62,
+            self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100 },
+            entities: [
+              { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100 },
+              { entity_id: 2, user_id: 8, name: 'low-value-active', x: 1000, y: 0, hp: 80, current_join_mode: 'Active', drop: 1 }
+            ],
+            bullets: []
+          }
+        }, { nowMs: 1500, combatAttackRange: 11000 });
+        const withThreat = buildBrowserlessCombatDryRun({
+          userId: 7,
+          realtime: {
+            tick: 62,
+            self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100 },
+            entities: [
+              { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100 },
+              { entity_id: 2, user_id: 8, name: 'low-value-active', x: 1000, y: 0, hp: 80, current_join_mode: 'Active', drop: 1 }
+            ],
+            bullets: [
+              { bullet_id: 4, owner_user_id: 8, x: 1000, y: 0, target_x: 0, target_y: 0, speed_per_tick: 500 }
+            ]
+          }
+        }, { nowMs: 1500, combatAttackRange: 11000, combatTargetSwitchIncomingDistance: 6500 });
+        return [
+          noThreat.target?.userId || '',
+          noThreat.candidates.length,
+          withThreat.target?.userId || '',
+          withThreat.target?.combatIntent || ''
+        ].join('|');
+      })(),
+      want: '|0|8|defensive'
+    },
+    {
+      name: 'browserless engaged combat target expires after out-of-range grace',
+      got: (() => {
+        const stateful = {
+          combatTarget: { id: 8, at: 1000, firstSeenAt: 1000, lastInRangeAt: 1000, hp: 80, reason: 'combat-live-realtime' }
+        };
+        const combat = buildBrowserlessCombatDryRun({
+          userId: 7,
+          realtime: {
+            tick: 62,
+            self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100 },
+            entities: [
+              { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100 },
+              { entity_id: 2, user_id: 8, name: 'far-engaged', x: 40000, y: 0, hp: 80, current_join_mode: 'Active', firing: true, drop: 50 }
+            ],
+            bullets: []
+          }
+        }, {
+          nowMs: 10000,
+          decisionState: stateful,
+          targetStickMs: 7000,
+          combatEngageStickMs: 7000,
+          combatAttackRange: 11000,
+          combatEngageGraceMs: 2000,
+          combatEngageGraceRange: 15000,
+          combatDisengageRange: 15000
+        });
+        return [
+          combat.target?.userId || '',
+          stateful.combatTarget === null,
+          combat.dataGaps.includes('missing-self-or-target')
+        ].join('|');
+      })(),
+      want: '|true|true'
     },
     {
       name: 'browserless combat dry-run computes linear intercept and reserve suppression',

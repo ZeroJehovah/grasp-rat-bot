@@ -2,7 +2,10 @@
 
 const {
   calculateCombatTargetPriority,
+  combatTargetId,
+  defensiveTargetOverridesEngagedCore,
   isCombatEligibleThreat,
+  pickEngagedCombatTargetCore,
   selectBestCombatTarget
 } = require('../../strategy/combat-target-selection');
 const {
@@ -183,7 +186,9 @@ function summarizeCombatTarget(target) {
     active: Boolean(target.active || isActiveCombatEntity(target)),
     firing: Boolean(target.firing || target.is_firing || target.shooting),
     distance: Number.isFinite(Number(target.distance)) ? Math.round(Number(target.distance)) : null,
-    score: Number.isFinite(Number(target.combatScore)) ? Math.round(Number(target.combatScore)) : null
+    score: Number.isFinite(Number(target.combatScore)) ? Math.round(Number(target.combatScore)) : null,
+    combatIntent: target.combatIntent || '',
+    combatEngagement: target.combatEngagement ? cloneJson(target.combatEngagement) : null
   };
 }
 
@@ -242,6 +247,63 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
   };
 }
 
+function pickIncomingBullet(bullets = []) {
+  return (bullets || [])
+    .filter(bullet => bullet?.incoming)
+    .slice()
+    .sort((a, b) => {
+      const timeA = Number(a.timeToImpact ?? Infinity);
+      const timeB = Number(b.timeToImpact ?? Infinity);
+      if (timeA !== timeB) return timeA - timeB;
+      return Number(a.distance ?? Infinity) - Number(b.distance ?? Infinity);
+    })[0] || null;
+}
+
+function rememberBrowserlessCombatEngagement(stateful, self, target, options = {}) {
+  if (!stateful || typeof stateful !== 'object' || !target) return;
+  const id = combatTargetId(target);
+  if (!id) return;
+  const nowMs = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
+  const previous = stateful.combatTarget || null;
+  const same = previous && String(previous.id ?? '') === String(id);
+  const distance = Number.isFinite(Number(target.distance)) ? Number(target.distance) : distanceBetween(self, target);
+  const hp = numberOrNull(target.knownHp ?? target.hp);
+  const previousHp = same && Number.isFinite(Number(previous.hp)) ? Number(previous.hp) : null;
+  const damaged = hp !== null && previousHp !== null && hp < previousHp - 0.01;
+  const inRange = Number.isFinite(distance)
+    && distance <= Math.max(0, Number(options.combatAttackRange || options.attackRange || COMBAT_CONSTANTS.ATTACK_RANGE));
+  const incomingOwnerId = target.incomingBullet?.ownerId ?? target.incomingBullet?.owner_id ?? null;
+  const targetOwnsRealBullet = Boolean(
+    target.incomingBullet
+      && !target.incomingBullet.synthetic
+      && incomingOwnerId !== null
+      && incomingOwnerId !== undefined
+      && String(incomingOwnerId) === String(id)
+  );
+  stateful.combatTarget = {
+    id,
+    at: nowMs,
+    firstSeenAt: same ? Number(previous.firstSeenAt || previous.at || nowMs) : nowMs,
+    name: target.name || '',
+    x: Math.round(Number(target.x) || 0),
+    y: Math.round(Number(target.y) || 0),
+    hp,
+    displayHp: numberOrNull(target.hp),
+    drop: entityDropValue(target),
+    distance,
+    reason: options.reason || target.reason || 'combat-live-realtime',
+    intent: target.combatIntent || (target.incomingBullet ? 'defensive' : 'profit'),
+    originIntent: same ? String(previous.originIntent || previous.intent || target.combatIntent || '') : String(target.combatIntent || ''),
+    originReason: same ? String(previous.originReason || previous.reason || '') : String(options.reason || target.reason || ''),
+    lastDamageAt: damaged ? nowMs : (same ? Number(previous.lastDamageAt || previous.at || nowMs) : nowMs),
+    lastInRangeAt: inRange ? nowMs : (same ? Number(previous.lastInRangeAt || previous.at || nowMs) : nowMs),
+    seenTargetRealBulletAt: targetOwnsRealBullet ? nowMs : (same ? Number(previous.seenTargetRealBulletAt || 0) : 0),
+    lastDamageAmount: damaged ? Math.max(0, previousHp - hp) : Number(previous?.lastDamageAmount || 0),
+    noDamageMs: Math.max(0, nowMs - (damaged ? nowMs : (same ? Number(previous.lastDamageAt || previous.at || nowMs) : nowMs))),
+    self: summarizeCombatTarget(self)
+  };
+}
+
 function buildBrowserlessCombatDryRun(state = {}, options = {}) {
   const realtime = state?.realtime || {};
   const dataGaps = [];
@@ -257,19 +319,47 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     .map(bullet => normalizeCombatBullet(bullet, self, { currentTick: realtime.tick }))
     .filter(Boolean);
   if (!bullets.length) dataGaps.push('no-realtime-bullet-evidence');
+  const incomingBullet = pickIncomingBullet(bullets);
   const context = {
     userId: selfUserId,
     bullets,
+    incomingBullet,
+    incomingBulletOwnerId: incomingBullet?.ownerId,
+    unknownIncoming: Boolean(incomingBullet && (incomingBullet.ownerId === null || incomingBullet.ownerId === undefined)),
     whitelistCheck: typeof options.whitelistCheck === 'function' ? options.whitelistCheck : () => false
   };
+  const combatAttackRange = Math.max(0, Number(options.combatAttackRange || options.attackRange || COMBAT_CONSTANTS.ATTACK_RANGE));
+  const combatDodgeRange = combatAttackRange + Math.max(0, Number(options.combatDodgeRangeBuffer || 0));
   const candidates = targets
     .filter(target => isCombatEligibleThreat(target, context))
+    .filter(target => {
+      const distance = Number(target.distance);
+      if (!Number.isFinite(distance)) return false;
+      if (distance <= combatAttackRange) return true;
+      return incomingBullet
+        && incomingBullet.ownerId !== null
+        && incomingBullet.ownerId !== undefined
+        && String(incomingBullet.ownerId) === String(target.user_id)
+        && distance <= combatDodgeRange;
+    })
     .map(target => ({
       ...target,
       combatScore: calculateCombatTargetPriority(self, target, context)
     }))
     .sort((a, b) => Number(b.combatScore || 0) - Number(a.combatScore || 0));
-  const target = selectBestCombatTarget(self, candidates, context);
+  const stateful = options.decisionState || options.stateful || null;
+  const engagedTarget = pickEngagedCombatTargetCore(self, candidates, targets, bullets, stateful, {
+    ...options,
+    ...context
+  });
+  const defensiveTarget = selectBestCombatTarget(self, candidates, context);
+  const target = defensiveTargetOverridesEngagedCore(engagedTarget, defensiveTarget, options)
+    ? defensiveTarget
+    : (engagedTarget || defensiveTarget);
+  rememberBrowserlessCombatEngagement(stateful, self, target, {
+    ...options,
+    reason: liveCombatEnabled ? 'combat-live-realtime' : (options.controlMode === 'combat-dry-run' ? 'combat-dry-run-realtime' : 'realtime-visible-threat')
+  });
   const aim = estimateAim(self, target, options);
   if (!aim.ok) dataGaps.push(aim.reason);
   const movement = buildCombatMovementPlan(self, target, bullets, options);

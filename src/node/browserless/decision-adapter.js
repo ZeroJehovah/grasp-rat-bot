@@ -1647,13 +1647,14 @@ function recoverySummary(self) {
   };
 }
 
-function buildCombatDecision(input, options = {}) {
+function buildCombatDecision(input, stateful = {}, options = {}) {
   const combatLiveEnabled = (options.controlMode === 'combat-live' || options.controlMode === 'profit-live') && options.combatEnabled === true;
   const combat = buildBrowserlessCombatDryRun({
     userId: input.userId,
     realtime: input.rawRealtime || {}
   }, {
     ...options,
+    decisionState: stateful,
     liveCombatEnabled: combatLiveEnabled
   });
   const target = combat.target || null;
@@ -1827,7 +1828,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     includeAfkProfitTargets: nonCombatProfit ? false : options.includeAfkProfitTargets,
     blockAfkProfitWhenActiveThreatVisible: profitLive ? true : options.blockAfkProfitWhenActiveThreatVisible
   });
-  const combat = buildCombatDecision(input, options);
+  const combat = buildCombatDecision(input, stateful, options);
   const combatActionEligible = isCombatActionEligibleForDecision(combat, options);
   const highValueCoinPriorityAction = (profitLive || nonCombatProfit)
     ? buildHighValueVisibleCoinPriorityDecision(input, combat, options)

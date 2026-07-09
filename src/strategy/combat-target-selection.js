@@ -36,6 +36,10 @@ function targetId(entity) {
   return id === null || id === undefined ? '' : String(id);
 }
 
+function combatTargetId(entity) {
+  return targetId(entity);
+}
+
 function incomingOwnerMatchesTarget(entity, context = {}) {
   const ownerId = context.incomingBulletOwnerId ?? context.incomingOwnerId ?? context.incomingBullet?.ownerId;
   if (ownerId === null || ownerId === undefined) return false;
@@ -179,7 +183,13 @@ function selectBestCombatTarget(self, candidates, context = {}) {
   if (!candidates || !candidates.length) return null;
 
   const incomingShooter = candidates.find(target => isCombatEligibleThreat(target, context) && incomingOwnerMatchesTarget(target, context));
-  if (incomingShooter) return incomingShooter;
+  if (incomingShooter) {
+    return {
+      ...incomingShooter,
+      incomingBullet: context.incomingBullet || null,
+      combatIntent: 'defensive'
+    };
+  }
 
   // Filter and score candidates
   const scored = candidates
@@ -196,7 +206,110 @@ function selectBestCombatTarget(self, candidates, context = {}) {
   scored.sort((a, b) => b.score - a.score);
 
   // Return highest priority target
-  return scored[0].target;
+  return {
+    ...scored[0].target,
+    combatIntent: combatTargetThreatensSelf(scored[0].target, context) ? 'defensive' : 'profit'
+  };
+}
+
+function incomingBulletRequiresTargetSwitchCore(incomingBullet, options = {}) {
+  if (!incomingBullet) return false;
+  const distance = Number(incomingBullet.distance);
+  const timeToImpactMs = Number(incomingBullet.timeToImpactMs ?? incomingBullet.timeToImpact);
+  const switchDistance = Math.max(0, Number(options.combatTargetSwitchIncomingDistance || 0));
+  const switchTime = Math.max(0, Number(options.combatTargetSwitchIncomingTimeMs || 0));
+  if (switchDistance > 0 && Number.isFinite(distance) && distance <= switchDistance) return true;
+  if (switchTime > 0 && Number.isFinite(timeToImpactMs) && timeToImpactMs <= switchTime) return true;
+  return false;
+}
+
+function defensiveTargetOverridesEngagedCore(engagedTarget, defensiveTarget, options = {}) {
+  if (!engagedTarget || !defensiveTarget?.incomingBullet) return false;
+  if (!incomingBulletRequiresTargetSwitchCore(defensiveTarget.incomingBullet, options)) return false;
+  const ownerId = defensiveTarget.incomingBullet.ownerId
+    ?? defensiveTarget.incomingBullet.owner_id
+    ?? defensiveTarget.incomingBullet.source_user_id
+    ?? defensiveTarget.incomingBullet.user_id;
+  if (ownerId === null || ownerId === undefined) return false;
+  const defensiveId = combatTargetId(defensiveTarget);
+  const engagedId = combatTargetId(engagedTarget);
+  return defensiveId !== '' && engagedId !== '' && String(defensiveId) !== String(engagedId);
+}
+
+function pickEngagedCombatTargetCore(self, combatTargets = [], entities = [], bullets = [], state = {}, options = {}) {
+  const engaged = state?.combatTarget || null;
+  if (!engaged?.id) return null;
+  const nowMs = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
+  const maxAgeMs = Math.max(
+    Number(options.targetStickMs || 0),
+    Number(options.combatEngageStickMs || 0)
+  );
+  const ageMs = Math.max(0, nowMs - Number(engaged.at || 0));
+  if (maxAgeMs > 0 && ageMs > maxAgeMs) {
+    if (state && typeof state === 'object') state.combatTarget = null;
+    return null;
+  }
+  const id = String(engaged.id);
+  const target = (combatTargets || []).find(item => combatTargetId(item) === id);
+  const incoming = Array.isArray(bullets)
+    ? bullets.find(bullet => bullet?.incoming)
+    : null;
+  const context = {
+    ...options,
+    incomingBullet: incoming || null,
+    incomingBulletOwnerId: incoming?.ownerId,
+    unknownIncoming: Boolean(incoming && (incoming.ownerId === null || incoming.ownerId === undefined))
+  };
+  if (target && !isInvulnerableEntity(target) && isCombatEligibleThreat(target, context)) {
+    return {
+      ...target,
+      combatIntent: 'engaged',
+      combatEngagement: {
+        ageMs: Math.round(ageMs),
+        outOfRangeMs: 0,
+        lastReason: engaged.reason || '',
+        lastInRangeAt: Number(engaged.lastInRangeAt || engaged.at || 0)
+      }
+    };
+  }
+  const raw = (entities || []).find(item => combatTargetId(item) === id);
+  if (!raw || isInvulnerableEntity(raw)) return null;
+  const distance = Number(raw.distance);
+  const attackRange = Math.max(0, Number(options.combatAttackRange || options.attackRange || 0));
+  const graceRange = Math.max(
+    attackRange,
+    Number(options.combatDisengageRange || 0),
+    Number(options.combatEngageGraceRange || 0)
+  );
+  const lastInRangeAt = Number(engaged.lastInRangeAt || engaged.at || 0);
+  const outOfRangeMs = Math.max(0, nowMs - lastInRangeAt);
+  const graceMs = Math.max(0, Number(options.combatEngageGraceMs || 0));
+  const activeReengage = Boolean(isActiveCombatMode(raw) || isFiringCombatEntity(raw) || raw.moving);
+  const outOfRangeLimitMs = activeReengage
+    ? Math.max(graceMs, Number(options.combatEngageStickMs || 0))
+    : graceMs;
+  if (!outOfRangeLimitMs || outOfRangeMs > outOfRangeLimitMs || (Number.isFinite(distance) && graceRange > 0 && distance > graceRange)) {
+    if (state && typeof state === 'object') state.combatTarget = null;
+    return null;
+  }
+  if (!isCombatEligibleThreat(raw, context)) {
+    if (state && typeof state === 'object') state.combatTarget = null;
+    return null;
+  }
+  return {
+    ...raw,
+    combatIntent: 'reengage',
+    combatEngagement: {
+      ageMs: Math.round(ageMs),
+      outOfRangeMs: Math.round(outOfRangeMs),
+      graceRemainingMs: Math.max(0, Math.round(outOfRangeLimitMs - outOfRangeMs)),
+      graceRange: Math.round(graceRange),
+      activeReengage,
+      outOfRangeLimitMs: Math.round(outOfRangeLimitMs),
+      lastReason: engaged.reason || '',
+      reengage: true
+    }
+  };
 }
 
 /**
@@ -220,8 +333,12 @@ module.exports = {
   isInvulnerableEntity,
   calculateCombatTargetPriority,
   checkProactiveActiveCombatGates,
+  combatTargetId,
+  defensiveTargetOverridesEngagedCore,
+  incomingBulletRequiresTargetSwitchCore,
   isActiveCombatMode,
   isFiringCombatEntity,
+  pickEngagedCombatTargetCore,
   selectBestCombatTarget,
   isIdleInvulnerable
 };
