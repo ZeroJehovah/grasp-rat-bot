@@ -34,6 +34,17 @@ const {
   pickPostAttackDropWaitTargetCore
 } = require('../../strategy/post-attack-drop');
 const {
+  coinFailureIgnoreCore,
+  staleCoinEscapeDirectionCore,
+  coinProgressIntentCore,
+  coinAttemptExpiredCore,
+  updateCoinAttemptCore,
+  updateCoinProgressRecordCore,
+  buildIgnoredCoinProgressCore,
+  buildIgnoredCoinPatrolActionCore,
+  coinIgnoreCleanupIntentCore
+} = require('../../strategy/coin-progress');
+const {
   createBrowserlessDecisionState,
   summarizeBrowserlessDecisionState
 } = require('./decision-state');
@@ -356,6 +367,7 @@ function summarizeCoin(coin) {
     y: numberOrNull(coin.y),
     amount: numberOrNull(coin.amount),
     distance: Number.isFinite(Number(coin.distance)) ? Math.round(Number(coin.distance)) : null,
+    key: coin.key || coinTargetKeyCore(coin),
     native: Boolean(coin.native),
     snapshotOnly: Boolean(coin.snapshotOnly)
   };
@@ -723,6 +735,228 @@ function opportunityStaminaAffordable(self, staminaCost, options = {}) {
   if (!Number.isFinite(cost) || cost <= 0) return true;
   const budget = opportunityLongStaminaBudget(self, options);
   return !Number.isFinite(budget) || cost <= budget;
+}
+
+function coinProgressCoreOptions(options = {}) {
+  return {
+    coinIgnoreMs: options.coinIgnoreMs ?? BROWSER_RUNTIME_DEFAULTS.coinIgnoreMs,
+    coinProgressMinGain: options.coinProgressMinGain ?? BROWSER_RUNTIME_DEFAULTS.coinProgressMinGain,
+    coinNearStuckResetGain: options.coinNearStuckResetGain ?? BROWSER_RUNTIME_DEFAULTS.coinNearStuckResetGain,
+    closeCoinStuckDistance: options.closeCoinStuckDistance ?? BROWSER_RUNTIME_DEFAULTS.closeCoinStuckDistance,
+    nearCoinStuckDistance: options.nearCoinStuckDistance ?? BROWSER_RUNTIME_DEFAULTS.nearCoinStuckDistance,
+    closeCoinStuckMs: options.closeCoinStuckMs ?? BROWSER_RUNTIME_DEFAULTS.closeCoinStuckMs,
+    nearCoinStuckMs: options.nearCoinStuckMs ?? BROWSER_RUNTIME_DEFAULTS.nearCoinStuckMs,
+    coinNoProgressMs: options.coinNoProgressMs ?? BROWSER_RUNTIME_DEFAULTS.coinNoProgressMs,
+    coinFailureDecayMs: options.coinFailureDecayMs ?? BROWSER_RUNTIME_DEFAULTS.coinFailureDecayMs,
+    coinCloseFailureIgnoreMs: options.coinCloseFailureIgnoreMs ?? BROWSER_RUNTIME_DEFAULTS.coinCloseFailureIgnoreMs,
+    coinNearFailureIgnoreMs: options.coinNearFailureIgnoreMs ?? BROWSER_RUNTIME_DEFAULTS.coinNearFailureIgnoreMs,
+    coinNoProgressIgnoreMs: options.coinNoProgressIgnoreMs ?? BROWSER_RUNTIME_DEFAULTS.coinNoProgressIgnoreMs,
+    coinFailureMaxIgnoreMs: options.coinFailureMaxIgnoreMs ?? BROWSER_RUNTIME_DEFAULTS.coinFailureMaxIgnoreMs,
+    staleCoinEscapeMs: options.staleCoinEscapeMs ?? BROWSER_RUNTIME_DEFAULTS.staleCoinEscapeMs
+  };
+}
+
+function coinDecisionKey(target) {
+  if (!target) return '';
+  return target.key || coinTargetKeyCore({
+    ...target,
+    drop_id: target.drop_id ?? target.id
+  });
+}
+
+function coinIgnoredUntil(stateful = {}, coin) {
+  const key = coinDecisionKey(coin);
+  if (!key) return 0;
+  return Number(stateful.ignoredCoins?.[key] || 0);
+}
+
+function cleanupCoinProgressState(stateful = {}, nowMs = 0, options = {}) {
+  const t = Number(nowMs) || 0;
+  stateful.coinProgress = stateful.coinProgress && typeof stateful.coinProgress === 'object' ? stateful.coinProgress : {};
+  stateful.coinAttempts = stateful.coinAttempts && typeof stateful.coinAttempts === 'object' ? stateful.coinAttempts : {};
+  stateful.coinFailures = stateful.coinFailures && typeof stateful.coinFailures === 'object' ? stateful.coinFailures : {};
+  stateful.ignoredCoins = stateful.ignoredCoins && typeof stateful.ignoredCoins === 'object' ? stateful.ignoredCoins : {};
+  const progressOptions = coinProgressCoreOptions(options);
+  for (const [id, until] of Object.entries(stateful.ignoredCoins)) {
+    if (Number(until || 0) <= t) delete stateful.ignoredCoins[id];
+  }
+  for (const [id, attempt] of Object.entries(stateful.coinAttempts)) {
+    if (coinAttemptExpiredCore(attempt, t, progressOptions)) delete stateful.coinAttempts[id];
+  }
+}
+
+function filterIgnoredCoins(coins = [], stateful = {}, nowMs = 0) {
+  const t = Number(nowMs) || 0;
+  return (coins || []).filter(coin => {
+    const until = coinIgnoredUntil(stateful, coin);
+    return !(until && until > t);
+  });
+}
+
+function applyIgnoredCoinFilter(input, stateful = {}) {
+  if (!input) return input;
+  input.realtimeCoins = filterIgnoredCoins(input.realtimeCoins, stateful, input.nowMs);
+  input.snapshotCoins = filterIgnoredCoins(input.snapshotCoins, stateful, input.nowMs);
+  input.selfKilledPlayerDropCoins = filterIgnoredCoins(input.selfKilledPlayerDropCoins, stateful, input.nowMs);
+  input.profitCoins = filterIgnoredCoins(input.profitCoins, stateful, input.nowMs);
+  return input;
+}
+
+function clearIgnoredCoinDecisionState(stateful = {}, progressId = '') {
+  const cleanup = coinIgnoreCleanupIntentCore(stateful.lastTarget, stateful.coinApproachLock, progressId);
+  if (cleanup.clearLastTarget) {
+    stateful.lastTarget = null;
+    stateful.lastTargetAt = 0;
+  }
+  if (cleanup.clearCoinApproachLock) stateful.coinApproachLock = null;
+  const choiceCoin = stateful.opportunityChoice?.type === 'coin' ? stateful.opportunityChoice : null;
+  const choiceKey = coinDecisionKey(choiceCoin?.sourceCoin || choiceCoin);
+  if (choiceKey && choiceKey === progressId) {
+    stateful.opportunityChoice = null;
+    stateful.opportunitySwitchLock = null;
+  }
+}
+
+function progressActionForCoin(action, progressId) {
+  return {
+    ...action,
+    target: {
+      ...(action.target || {}),
+      id: progressId
+    }
+  };
+}
+
+function buildIgnoredCoinAction(action, progressId, distance, source, failure, escape, nowMs, reason, includeAges = false) {
+  const ignored = buildIgnoredCoinPatrolActionCore(
+    progressActionForCoin(action, progressId),
+    progressId,
+    distance,
+    source,
+    failure,
+    escape,
+    nowMs,
+    reason,
+    includeAges
+  );
+  return {
+    ...ignored,
+    band: 'profit',
+    target: action.target
+  };
+}
+
+function applyCoinProgressToAction(action, input, stateful = {}, options = {}) {
+  cleanupCoinProgressState(stateful, input?.nowMs, options);
+  const progressAt = Number(input?.nowMs) || Date.now();
+  const progressOptions = coinProgressCoreOptions(options);
+  if (!coinProgressIntentCore(action)) {
+    if (!stateful.staleCoinEscape || progressAt >= Number(stateful.staleCoinEscape.until || 0)) {
+      stateful.coinApproachLock = null;
+    }
+    return action;
+  }
+  const progressId = coinDecisionKey(action.target);
+  if (!progressId) return action;
+  const progressAction = progressActionForCoin(action, progressId);
+  const attemptResult = updateCoinAttemptCore(stateful.coinAttempts[progressId], progressAction, progressAt, progressOptions);
+  const progressDistance = attemptResult.distance;
+  const attemptRecord = attemptResult.attempt;
+  stateful.coinAttempts[progressId] = attemptRecord;
+
+  if (attemptResult.closeStuck || attemptResult.nearStuck) {
+    const reason = attemptResult.closeStuck ? 'close' : 'near';
+    const failureResult = coinFailureIgnoreCore(stateful.coinFailures[progressId] || {}, reason, progressAt, progressOptions);
+    stateful.coinFailures[progressId] = {
+      count: failureResult.count,
+      reason: failureResult.reason,
+      lastAt: failureResult.lastAt,
+      ignoreUntil: failureResult.ignoreUntil
+    };
+    stateful.ignoredCoins[progressId] = failureResult.ignoreUntil;
+    delete stateful.coinAttempts[progressId];
+    stateful.coinProgress[progressId] = buildIgnoredCoinProgressCore(
+      progressId,
+      attemptRecord,
+      progressDistance,
+      progressAt,
+      failureResult.ignoreUntil,
+      'stuck'
+    );
+    clearIgnoredCoinDecisionState(stateful, progressId);
+    const escapeResult = staleCoinEscapeDirectionCore(progressAction, input?.self, progressAt, progressOptions);
+    stateful.staleCoinEscape = escapeResult.state;
+    return buildIgnoredCoinAction(
+      action,
+      progressId,
+      progressDistance,
+      attemptRecord,
+      { count: failureResult.count, ignoreMs: failureResult.ignoreMs, ignoreUntil: failureResult.ignoreUntil },
+      { dx: escapeResult.dx, dy: escapeResult.dy },
+      progressAt,
+      attemptResult.closeStuck ? 'ignore-close-stale-coin' : 'ignore-near-stale-coin',
+      true
+    );
+  }
+
+  const previousProgress = stateful.coinProgress[progressId] || null;
+  const progressResult = updateCoinProgressRecordCore(previousProgress, attemptRecord, progressDistance, progressAt, progressOptions);
+  stateful.coinProgress[progressId] = progressResult.progress;
+  if (!progressResult.stale) return action;
+
+  const failureResult = coinFailureIgnoreCore(stateful.coinFailures[progressId] || {}, 'progress', progressAt, progressOptions);
+  stateful.coinFailures[progressId] = {
+    count: failureResult.count,
+    reason: failureResult.reason,
+    lastAt: failureResult.lastAt,
+    ignoreUntil: failureResult.ignoreUntil
+  };
+  stateful.ignoredCoins[progressId] = failureResult.ignoreUntil;
+  delete stateful.coinAttempts[progressId];
+  stateful.coinProgress[progressId] = buildIgnoredCoinProgressCore(
+    progressId,
+    stateful.coinProgress[progressId],
+    progressDistance,
+    progressAt,
+    failureResult.ignoreUntil,
+    'progress'
+  );
+  clearIgnoredCoinDecisionState(stateful, progressId);
+  const escapeResult = staleCoinEscapeDirectionCore(progressAction, input?.self, progressAt, progressOptions);
+  stateful.staleCoinEscape = escapeResult.state;
+  return buildIgnoredCoinAction(
+    action,
+    progressId,
+    progressDistance,
+    previousProgress,
+    { count: failureResult.count, ignoreMs: failureResult.ignoreMs, ignoreUntil: failureResult.ignoreUntil },
+    { dx: escapeResult.dx, dy: escapeResult.dy },
+    progressAt,
+    'ignore-stale-coin-no-progress'
+  );
+}
+
+function applyStaleCoinEscape(action, stateful = {}, nowMs = 0) {
+  const escape = stateful.staleCoinEscape || null;
+  const t = Number(nowMs) || 0;
+  const escapeActive = escape && t < Number(escape.until || 0) && (escape.dx || escape.dy);
+  if (!escapeActive) {
+    stateful.staleCoinEscape = null;
+    return action;
+  }
+  if (action?.kind === 'flee') return action;
+  return {
+    ...action,
+    kind: 'patrol',
+    band: action?.band || 'profit',
+    reason: action?.reason && String(action.reason).startsWith('ignore-') ? action.reason : 'leave-stale-coin',
+    dx: escape.dx,
+    dy: escape.dy,
+    staleCoinEscape: {
+      id: escape.id,
+      remainingMs: Math.max(0, Math.round(Number(escape.until || 0) - t))
+    }
+  };
 }
 
 function safeBudgetCoinCandidates(input, options = {}) {
@@ -1300,6 +1534,8 @@ function profitLiveSafetyDecision(input, combatDecision, stateful = {}, options 
 
 function buildBrowserlessDecision(state, stateful = {}, options = {}) {
   const input = buildBrowserlessStrategyInput(state, options);
+  cleanupCoinProgressState(stateful, input.nowMs, options);
+  applyIgnoredCoinFilter(input, stateful);
   const staleSelfMs = Math.max(1000, Number(options.staleSelfMs || DEFAULT_STALE_SELF_MS));
   const nonCombatProfit = options.controlMode === 'non-combat-profit' || options.nonCombatProfit === true;
   const profitLive = options.controlMode === 'profit-live';
@@ -1429,6 +1665,26 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     reason = 'no-profitable-candidate';
     action.reason = reason;
   }
+  if (input.self && !(Number.isFinite(frameAge) && frameAge > staleSelfMs)) {
+    const selectedAction = action;
+    const finalAction = applyStaleCoinEscape(
+      applyCoinProgressToAction(selectedAction, input, stateful, options),
+      stateful,
+      input.nowMs
+    );
+    if (finalAction !== selectedAction) {
+      action = finalAction;
+      kind = action.kind || kind;
+      band = action.band || band;
+      reason = action.reason || reason;
+    }
+  }
+  const ignoredActionCoinId = action?.ignoredCoin?.id || '';
+  const rememberedOpportunityKey = coinDecisionKey(opportunity.opportunityChoice?.sourceCoin || opportunity.opportunityChoice);
+  const outputOpportunityChoice = ignoredActionCoinId && rememberedOpportunityKey === ignoredActionCoinId
+    ? null
+    : (opportunity.opportunityChoice || null);
+  const outputSwitchLock = outputOpportunityChoice ? (opportunity.switchLock || null) : null;
   return {
     ok: true,
     dryRun: true,
@@ -1460,8 +1716,8 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       }))
     },
     stateful: {
-      opportunityChoice: opportunity.opportunityChoice || null,
-      switchLock: opportunity.switchLock || null
+      opportunityChoice: outputOpportunityChoice,
+      switchLock: outputSwitchLock
     }
   };
 }

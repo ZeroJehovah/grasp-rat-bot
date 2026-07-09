@@ -201,6 +201,14 @@ function postAttackWaitFromDecision(decision) {
   return action;
 }
 
+function patrolMotionFromDecision(decision) {
+  const action = decision?.action || decision || {};
+  const kind = String(action.kind || decision?.kind || '');
+  if (kind !== 'patrol') return null;
+  if (!(Number(action.dx || 0) || Number(action.dy || 0))) return null;
+  return action;
+}
+
 function controlActionFromDecision(decision) {
   const action = decision?.action || decision || {};
   const kind = String(action.kind || decision?.kind || '');
@@ -478,6 +486,10 @@ function createBrowserlessActionAdapter(options = {}) {
     if (postAttackWait) {
       return applyPostAttackWaitDecision(stateSnapshot, postAttackWait);
     }
+    const patrolMotion = patrolMotionFromDecision(decision);
+    if (patrolMotion) {
+      return applyPatrolMotionDecision(patrolMotion);
+    }
     const controlAction = controlActionFromDecision(decision);
     if (controlAction) {
       return applyControlDecision(controlAction);
@@ -567,6 +579,25 @@ function createBrowserlessActionAdapter(options = {}) {
       handledBy: controlAction.type === 'leave' ? 'safety-controller' : 'action-adapter-stop',
       shouldLeave: controlAction.type === 'leave',
       target: controlAction.action?.target || null
+    };
+  }
+
+  function applyPatrolMotionDecision(action) {
+    const sent = sendVelocity(
+      roundVelocity(action.dx),
+      roundVelocity(action.dy),
+      action.reason || 'patrol',
+      action.target || null
+    );
+    return {
+      ok: sent.ok,
+      kind: action.kind || 'patrol',
+      reason: action.reason || 'patrol',
+      command: sent.command || null,
+      skipped: Boolean(sent.skipped),
+      target: action.target || null,
+      staleCoinEscape: action.staleCoinEscape || null,
+      ignoredCoin: action.ignoredCoin || null
     };
   }
 

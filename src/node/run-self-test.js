@@ -6747,6 +6747,89 @@ async function runSelfTest() {
       want: 'wait|no-profitable-candidate|true'
     },
     {
+      name: 'browserless profit live ignores no-progress snapshot coin and escapes',
+      got: (() => {
+        const stateful = {};
+        const state = {
+          userId: 7,
+          realtime: {
+            tick: 60,
+            frameAgeMs: 100,
+            self: { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+            entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 }],
+            bullets: [],
+            coinDrops: []
+          },
+          fallback: {
+            frameAgeMs: 100,
+            coinDrops: [{ drop_id: 'stale-snapshot-coin', amount: 1, x: 1000, y: 0 }]
+          }
+        };
+        const options = {
+          controlMode: 'profit-live',
+          coinNoProgressMs: 1000,
+          coinNoProgressIgnoreMs: 5000,
+          coinFailureMaxIgnoreMs: 10000,
+          staleCoinEscapeMs: 200
+        };
+        const first = buildBrowserlessDecision(state, stateful, { ...options, nowMs: 1000 });
+        const second = buildBrowserlessDecision(state, stateful, { ...options, nowMs: 2200 });
+        const third = buildBrowserlessDecision(state, stateful, { ...options, nowMs: 2600 });
+        return [
+          first.kind,
+          first.action.target.id,
+          second.kind,
+          second.reason,
+          second.action.dx,
+          stateful.ignoredCoins['id:stale-snapshot-coin'] > 2200,
+          stateful.coinProgress['id:stale-snapshot-coin'].ignoreUntil,
+          third.kind,
+          third.reason,
+          third.action.target === undefined
+        ].join('|');
+      })(),
+      want: 'coin|stale-snapshot-coin|patrol|ignore-stale-coin-no-progress|-1|true|7200|wait|no-profitable-candidate|true'
+    },
+    {
+      name: 'browserless profit live close stuck coin uses stale escape patrol',
+      got: (() => {
+        const stateful = {};
+        const state = {
+          userId: 7,
+          realtime: {
+            tick: 60,
+            frameAgeMs: 100,
+            self: { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+            entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 }],
+            bullets: [],
+            coinDrops: [{ drop_id: 'close-stuck-coin', amount: 2, x: 1000, y: 0 }]
+          },
+          fallback: { coinDrops: [] }
+        };
+        const options = {
+          controlMode: 'profit-live',
+          closeCoinStuckDistance: 1200,
+          closeCoinStuckMs: 500,
+          coinCloseFailureIgnoreMs: 3000,
+          coinFailureMaxIgnoreMs: 10000,
+          staleCoinEscapeMs: 1000
+        };
+        buildBrowserlessDecision(state, stateful, { ...options, nowMs: 1000 });
+        const decision = buildBrowserlessDecision(state, stateful, { ...options, nowMs: 1600 });
+        return [
+          decision.kind,
+          decision.reason,
+          decision.action.dx,
+          decision.action.ignoredCoin.id,
+          decision.action.ignoredCoin.closeAgeMs,
+          decision.action.ignoredCoin.failureCount,
+          stateful.staleCoinEscape.id,
+          stateful.staleCoinEscape.until
+        ].join('|');
+      })(),
+      want: 'patrol|ignore-close-stale-coin|-1|id:close-stuck-coin|600|1|id:close-stuck-coin|2600'
+    },
+    {
       name: 'browserless profit live leaves when nearest allowed coin exceeds 1h stamina budget',
       got: (() => {
         const store = createBrowserlessStateStore({ userId: 7 });
@@ -7813,6 +7896,44 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'flee|active-threat-return-block|return-block-scan|return-block-lateral-scan|vel -1 0,vel 0 1'
+    },
+    {
+      name: 'browserless action adapter executes stale coin patrol velocity',
+      got: (() => {
+        const commands = [];
+        const adapter = createBrowserlessActionAdapter({
+          now: () => 1000 + commands.length * 600,
+          commandIntervalMs: 1,
+          transport: {
+            sendVelocity: (dx, dy) => commands.push(`vel ${dx} ${dy}`)
+          }
+        });
+        const action = adapter.applyDecision({
+          realtime: { self: { x: 0, y: 0 }, tick: 1 }
+        }, {
+          kind: 'patrol',
+          band: 'profit',
+          action: {
+            kind: 'patrol',
+            band: 'profit',
+            reason: 'ignore-stale-coin-no-progress',
+            dx: -1,
+            dy: 0,
+            staleCoinEscape: { id: 'id:coin', remainingMs: 500 },
+            ignoredCoin: { id: 'id:coin', failureCount: 1 }
+          }
+        });
+        return [
+          action.kind,
+          action.reason,
+          action.command.dx,
+          action.command.dy,
+          action.staleCoinEscape.id,
+          action.ignoredCoin.failureCount,
+          commands.join(',')
+        ].join('|');
+      })(),
+      want: 'patrol|ignore-stale-coin-no-progress|-1|0|id:coin|1|vel -1 0'
     },
     {
       name: 'browserless action adapter attacks visible AFK profit target',

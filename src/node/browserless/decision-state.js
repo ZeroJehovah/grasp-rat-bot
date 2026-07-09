@@ -53,8 +53,10 @@ function createInitialDecisionState(options = {}) {
     opportunitySwitchLock: cloneJson(options.opportunitySwitchLock || options.switchLock || null),
     coinProgress: asRecord(options.coinProgress),
     coinAttempts: asRecord(options.coinAttempts),
+    coinFailures: asRecord(options.coinFailures),
     ignoredCoins: asRecord(options.ignoredCoins),
     coinApproachLock: cloneJson(options.coinApproachLock || null),
+    staleCoinEscape: cloneJson(options.staleCoinEscape || null),
     attackHistory: asArray(options.attackHistory),
     combatTarget: cloneJson(options.combatTarget || null),
     combatAim: cloneJson(options.combatAim || null),
@@ -94,6 +96,7 @@ function summarizeBrowserlessDecisionState(state, options = {}) {
   const limit = Math.max(1, Number(options.recentLimit || DEFAULT_RECENT_LIMIT));
   const coinProgress = state.coinProgress || {};
   const coinAttempts = state.coinAttempts || {};
+  const coinFailures = state.coinFailures || {};
   const ignoredCoins = state.ignoredCoins || {};
   return {
     lastTarget: redactBoundedValue(state.lastTarget || null),
@@ -105,10 +108,13 @@ function summarizeBrowserlessDecisionState(state, options = {}) {
     coin: {
       progressCount: Object.keys(coinProgress).length,
       attemptCount: Object.keys(coinAttempts).length,
+      failureCount: Object.keys(coinFailures).length,
       ignoredCount: Object.keys(ignoredCoins).length,
       approachLock: redactBoundedValue(state.coinApproachLock || null),
+      staleEscape: redactBoundedValue(state.staleCoinEscape || null),
       recentProgress: recordEntries(coinProgress, limit),
       recentAttempts: recordEntries(coinAttempts, limit),
+      recentFailures: recordEntries(coinFailures, limit),
       recentIgnored: recordEntries(ignoredCoins, limit)
     },
     attackHistory: {
