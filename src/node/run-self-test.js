@@ -5904,8 +5904,8 @@ async function runSelfTest() {
           tick: 58,
           entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 100, y: 100, hp: 90 }],
           bullets: [],
-          coin_drops: [{ drop_id: 'snapshot-coin', amount: 99, x: 120, y: 100 }],
-          messages: []
+          coin_drops: [{ drop_id: 'snapshot-coin', source_user_id: 10, system_spawned: false, amount: 99, x: 120, y: 100, created_tick: 58 }],
+          messages: [{ kind: 'kill', user_id: 7, target_user_id: 10, tick: 58 }]
         }, { receivedAtMs: 1100 });
         const decision = buildBrowserlessDecision(store.getState(1200), {}, {
           nowMs: 1200,
@@ -5997,6 +5997,46 @@ async function runSelfTest() {
       want: 'wait|no-profitable-candidate|none|false|snapshot-fallback-disabled|true'
     },
     {
+      name: 'browserless profit live picks self-kill snapshot player drops',
+      got: (() => {
+        const store = createBrowserlessStateStore({ userId: 7 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 61,
+          entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 100, y: 100, hp: 100 }],
+          bullets: []
+        }, { receivedAtMs: 1000 });
+        store.ingestFrame({
+          type: 'snapshot',
+          tick: 62,
+          entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 100, y: 100, hp: 100, coins: 1000 }],
+          bullets: [],
+          coin_drops: [
+            { drop_id: 'system-coin', source_user_id: 0, system_spawned: true, amount: 99, x: 120, y: 100, created_tick: 62 },
+            { drop_id: 'other-player-drop', source_user_id: 9, system_spawned: false, amount: 50, x: 130, y: 100, created_tick: 62 },
+            { drop_id: 'self-kill-drop', source_user_id: 8, system_spawned: false, amount: 6, x: 180, y: 100, created_tick: 62 }
+          ],
+          messages: [{ kind: 'kill', user_id: 7, target_user_id: 8, tick: 62, text: 'self killed afk' }]
+        }, { receivedAtMs: 1100 });
+        const decision = buildBrowserlessDecision(store.getState(1200), {}, {
+          nowMs: 1200,
+          controlMode: 'profit-live'
+        });
+        return [
+          decision.kind,
+          decision.action.kind,
+          decision.action.target.type,
+          decision.action.target.id,
+          decision.action.target.amount,
+          decision.input.profitCoinSource,
+          decision.input.fallback.selfKilledPlayerDropCount,
+          decision.input.fallback.snapshotFallbackBlockedReasons.join(','),
+          decision.input.dataGaps.includes('self-killed-player-drop-visible')
+        ].join('|');
+      })(),
+      want: 'profit-candidate|coin|coin|self-kill-drop|6|snapshot-player-drop|1|snapshot-fallback-disabled|true'
+    },
+    {
       name: 'browserless profit live enriches realtime AFK reward from fresh snapshot metadata',
       got: (() => {
         const store = createBrowserlessStateStore({ userId: 7 });
@@ -6077,6 +6117,37 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'safety-exit|safety|profit-live-active-threat|31361|realtime|||true|31361'
+    },
+    {
+      name: 'browserless profit live can fight active players when enabled',
+      got: (() => {
+        const store = createBrowserlessStateStore({ userId: 7 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 60,
+          entities: [
+            { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+            { entity_id: 2, user_id: 8, name: 'afk', x: 1000, y: 0, hp: 80, current_join_mode: 'Passive', drop: 20 },
+            { entity_id: 3, user_id: 9, name: 'active', x: 5000, y: 0, hp: 80, current_join_mode: 'Active', firing: true, drop: 12 }
+          ],
+          bullets: []
+        }, { receivedAtMs: 1000 });
+        const decision = buildBrowserlessDecision(store.getState(1200), {}, {
+          nowMs: 1200,
+          controlMode: 'profit-live',
+          combatEnabled: true
+        });
+        return [
+          decision.kind,
+          decision.band,
+          decision.reason,
+          decision.action.kind,
+          decision.action.target.userId,
+          decision.action.target.authority,
+          decision.profit.best === null
+        ].join('|');
+      })(),
+      want: 'combat-live|combat|combat-live-realtime|combat-live|9|realtime|true'
     },
     {
       name: 'browserless combat dry-run uses realtime target and ignores snapshot target',

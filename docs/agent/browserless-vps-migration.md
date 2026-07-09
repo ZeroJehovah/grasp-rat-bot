@@ -225,17 +225,19 @@ On 2026-07-08, the VPS one-shot demo succeeded after the Node 18 `ws` fallback a
 - 2026-07-09: The first post-fix VPS rerun `profit-live-20260709T001310156Z` was stopped manually after log review showed it reached snapshot-only 1-coin targets within 44cm and 74cm but snapshot self `coins` stayed at `1000`. This proves the original no-income report was not only the 900cm dead-zone issue; snapshot-only coin navigation is not a confirmed profit source for formal browserless play. Formal `profit-live` now disables snapshot-only coin fallback and waits for realtime/native coin or visible AFK profit evidence instead of chasing unconfirmed global snapshot coins.
 - 2026-07-09: Fresh snapshot reward metadata can now enrich same-user realtime-visible AFK profit targets. This is metadata-only: realtime `pos` remains the authority for target presence, coordinates, mode, aim, and fire; stale or position-divergent snapshot metadata is ignored. This lets browserless `profit-live` use visible AFK reward opportunities even though `pos` frames omit `death_reward_preview`.
 - 2026-07-09 UTC: After pulling `1648e8f`, VPS live env audit and self-test passed, and formal `profit-live` was restarted with run id `profit-live-20260709T002818216Z`. Early monitoring showed snapshot-only coin fallback disabled, AFK profit attacks using realtime target coordinates plus snapshot reward metadata, `shoot_ok` acknowledgements, self HP staying 100, and fresh game messages for five self kills (`29918`, `9393`, `34287`, `21242`, `30582`) while the service remained active.
+- 2026-07-09 UTC: The same run was explicitly stopped at `2026-07-09T01:05:00.582Z` after user-side backend records showed only system 1-coin pickups and log review confirmed 0 coin actions. Snapshot `coin_drops` still held self-kill player drops, so disabling all snapshot-only coin fallback was too broad. `profit-live` now allows snapshot player drops only when `system_spawned:false`, `source_user_id` matches a fresh self kill message, and distance/age limits pass. `profit-live` can also select realtime active combat when `GRASP_RAT_BROWSERLESS_COMBAT_ENABLED=true`; otherwise realtime active threats remain safety exits.
 
 ## Next Plan
 
-1. Monitor the active `profit-live` formal run `profit-live-20260709T002818216Z` through `systemctl`, `runner.jsonl`, `decisions.jsonl`, fresh `/snapshot` messages, and the token-gated status API. Confirm continued self HP safety, `shoot_ok` evidence, self kill messages, and absence of snapshot-only coin targets. The live window remains bounded by `GRASP_RAT_BROWSERLESS_READONLY_PROBE_MS=21600000`; the runner will still call verified `leave` when that window completes or a safety event fires.
-2. Keep `/snapshot` as pre-login safety and non-combat fallback evidence only. Direct WS open with the real user id/token remains the session-validity gate.
-3. Use `GRASP_RAT_BROWSERLESS_CANARY_PROFILE` for future staged revalidations. Use explicit `GRASP_RAT_BROWSERLESS_CONTROL_MODE=profit-live` only for formal profit operation, not for the `profit` canary acceptance audit.
-4. Keep the browserless runtime boundary explicit:
+1. Deploy the self-kill player-drop pickup and opt-in `profit-live` combat fix to the VPS, set the formal service to `GRASP_RAT_BROWSERLESS_CONTROL_MODE=profit-live` with `GRASP_RAT_BROWSERLESS_COMBAT_ENABLED=true`, rerun live deployment audit, and restart the service.
+2. Monitor the new formal run through `systemctl`, `runner.jsonl`, `decisions.jsonl`, fresh `/snapshot`, and the token-gated status API. Confirm self HP safety, `shoot_ok` evidence, realtime combat authority, `snapshot-player-drop` coin actions after self kills, and actual pickup by self Drop/backend balance records instead of kill-message estimates.
+3. Keep `/snapshot` as pre-login safety and guarded profit evidence only. Direct WS open with the real user id/token remains the session-validity gate, and combat target/aim/fire must remain realtime-only.
+4. Use `GRASP_RAT_BROWSERLESS_CANARY_PROFILE` for future staged revalidations. Use explicit `GRASP_RAT_BROWSERLESS_CONTROL_MODE=profit-live` only for formal profit operation, not for the `profit` canary acceptance audit.
+5. Keep the browserless runtime boundary explicit:
    - shared pure strategy remains in `src/strategy/`;
    - browser DOM/CDP integration remains browser-specific;
    - a new Node transport/runtime adapter can own auth/session state, direct WebSocket IO, timers, and verified exit.
-5. Keep `headless-demo/` only as a diagnostic protocol probe; production operation is the `grasp-rat-browserless-runner` service.
+6. Keep `headless-demo/` only as a diagnostic protocol probe; production operation is the `grasp-rat-browserless-runner` service.
 
 ## Evidence To Request From VPS Runs
 

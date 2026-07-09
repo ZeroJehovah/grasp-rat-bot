@@ -135,7 +135,7 @@ async function runReadOnlyCanary(config, options = {}) {
     : ms => new Promise(resolve => setTimeout(resolve, ms));
   const logStore = options.logStore || null;
   const controlMode = config.controlMode || (config.readOnly === false ? 'movement-only' : 'read-only');
-  const combatLiveEnabled = controlMode === 'combat-live' && config.combatEnabled === true;
+  const combatLiveEnabled = (controlMode === 'combat-live' || controlMode === 'profit-live') && config.combatEnabled === true;
   const actionEnabled = controlMode === 'movement-only' || controlMode === 'non-combat-profit' || controlMode === 'profit-live' || combatLiveEnabled;
   const durationMs = Math.max(1000, Number(config.readOnlyProbeMs || DEFAULT_READONLY_PROBE_MS));
   const frameGapAlertMs = Math.max(1000, Number(config.frameGapAlertMs || DEFAULT_FRAME_GAP_ALERT_MS));
@@ -326,7 +326,7 @@ async function runReadOnlyCanary(config, options = {}) {
             lastDecisionAtMs = atMs;
             logDecision(summary);
             result.decisions.loggedCount += 1;
-            if (controlMode === 'combat-dry-run' || controlMode === 'combat-live') {
+            if (controlMode === 'combat-dry-run' || controlMode === 'combat-live' || combatLiveEnabled) {
               logCombat(summary.combat || {});
             }
             if (typeof options.onDecision === 'function') {
