@@ -8096,6 +8096,19 @@ async function runSelfTest() {
               shouldLeave: true,
               stopMotion: true,
               target: { userId: 31361, drop: 44 }
+            },
+            decision: {
+              kind: 'safety-exit',
+              reason: 'profit-live-snapshot-active-threat',
+              action: {
+                kind: 'safety-exit',
+                shouldLeave: true,
+                stopMotion: true,
+                target: { userId: 31361, drop: 44 }
+              },
+              input: {
+                dataGaps: ['snapshot-active-threat-visible']
+              }
             }
           }
         }, { updatedAt: '2026-07-08T00:00:01.000Z' });
@@ -8114,6 +8127,18 @@ async function runSelfTest() {
               reason: 'unsupported-or-wait-decision',
               command: { type: 'velocity', dx: 0, dy: 0 },
               actionState: { sentCount: 1, stopCount: 1 }
+            },
+            decision: {
+              kind: 'wait',
+              reason: 'no-profitable-candidate',
+              action: {
+                kind: 'wait',
+                band: 'wait',
+                reason: 'no-profitable-candidate'
+              },
+              input: {
+                dataGaps: ['snapshot-fallback-blocked:snapshot-fallback-disabled']
+              }
             }
           }
         }, { updatedAt: '2026-07-08T00:00:02.000Z' });
@@ -8126,10 +8151,15 @@ async function runSelfTest() {
           stored.runner.currentAction.actionState.stopCount,
           stored.current.action.kind,
           stored.current.action.shouldLeave === undefined,
-          stored.current.action.target === undefined
+          stored.current.action.target === undefined,
+          stored.current.decision.kind,
+          stored.current.decision.action.kind,
+          stored.current.decision.action.shouldLeave === undefined,
+          stored.current.decision.action.target === undefined,
+          stored.current.decision.input.dataGaps.join(',')
         ].join('|');
       }),
-      want: 'stop|true|true|true|1|stop|true|true'
+      want: 'stop|true|true|true|1|stop|true|true|wait|wait|true|true|snapshot-fallback-blocked:snapshot-fallback-disabled'
     },
     {
       name: 'browserless status server gates status and redacts payload',

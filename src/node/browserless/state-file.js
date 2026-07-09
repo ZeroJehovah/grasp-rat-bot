@@ -71,7 +71,9 @@ function isPlainObject(value) {
 
 function shouldReplaceStateObject(pathParts) {
   const pathKey = pathParts.join('.');
-  return pathKey === 'runner.currentAction' || pathKey === 'current.action';
+  return pathKey === 'runner.currentAction'
+    || pathKey === 'current.action'
+    || pathKey === 'current.decision';
 }
 
 function mergeState(base, patch, pathParts = []) {
