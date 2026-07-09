@@ -1730,6 +1730,30 @@ function recoverySummary(self) {
   };
 }
 
+function combatCriticalHpThreshold(options = {}) {
+  const value = Number(options.combatCriticalHp ?? options.combatCriticalHpLeaveThreshold ?? BROWSER_RUNTIME_DEFAULTS.combatCriticalHpLeaveThreshold ?? 20);
+  return Math.max(0, Number.isFinite(value) ? value : 20);
+}
+
+function criticalUnknownPressureExit(input, options = {}) {
+  const selfHp = hpValue(input?.self);
+  if (selfHp === null || selfHp > combatCriticalHpThreshold(options)) return null;
+  if (!hasLikelyIncomingBullet(input)) return null;
+  return {
+    kind: 'safety-exit',
+    band: 'safety',
+    reason: 'profit-live-critical-unknown-pressure',
+    shouldLeave: true,
+    stopMotion: true,
+    self: summarizeTarget(input.self),
+    criticalPressure: {
+      selfHp,
+      threshold: combatCriticalHpThreshold(options),
+      bulletCount: Number(input?.realtime?.bulletCount || 0)
+    }
+  };
+}
+
 function buildCombatDecision(input, stateful = {}, options = {}) {
   const combatLiveEnabled = (options.controlMode === 'combat-live' || options.controlMode === 'profit-live') && options.combatEnabled === true;
   const combat = buildBrowserlessCombatDryRun({
@@ -1827,16 +1851,21 @@ function profitLiveSafetyDecision(input, combatDecision, stateful = {}, options 
     .sort((a, b) => Number(a.distance || Infinity) - Number(b.distance || Infinity))[0] || null;
   const target = realtimeThreat || snapshotThreat || realtimeTarget;
   const distance = Number(target?.distance);
-  if (!target || !Number.isFinite(distance)) return null;
+  if (!target || !Number.isFinite(distance)) return criticalUnknownPressureExit(input, options);
   const snapshotThreatening = Boolean(target.profitMetadataActive && !target.active);
   const invulnerableThreatening = Boolean(target.invulnerable && !snapshotThreatening);
   const threatening = Boolean(target.active || target.firing || snapshotThreatening || invulnerableThreatening);
-  if (!threatening) return null;
+  if (!threatening) return criticalUnknownPressureExit(input, options);
   const threatExitRange = Math.max(0, Number(options.profitLiveThreatExitRange || DEFAULT_PROFIT_LIVE_THREAT_EXIT_RANGE));
   const invulnerableAvoidRange = Math.max(threatExitRange, Number(options.activeAvoidMaxDistance || BROWSER_RUNTIME_DEFAULTS.activeAvoidMaxDistance || threatExitRange));
   const effectiveThreatExitRange = invulnerableThreatening ? invulnerableAvoidRange : threatExitRange;
   const injuryExitRange = Math.max(threatExitRange, Number(options.profitLiveInjuryExitRange || DEFAULT_PROFIT_LIVE_INJURY_EXIT_RANGE));
   const injured = isInjuredSelf(input.self, options);
+  const selfHp = hpValue(input.self);
+  const criticalHp = combatCriticalHpThreshold(options);
+  const criticalThreat = selfHp !== null
+    && selfHp <= criticalHp
+    && (target.active || target.firing || snapshotThreatening || invulnerableThreatening);
   if (options.combatEnabled === true) {
     const combatTargetId = realtimeTarget?.userId ?? realtimeTarget?.user_id ?? realtimeTarget?.entityId ?? realtimeTarget?.entity_id ?? null;
     const threatId = target?.userId ?? target?.user_id ?? target?.entityId ?? target?.entity_id ?? null;
@@ -1845,6 +1874,22 @@ function profitLiveSafetyDecision(input, combatDecision, stateful = {}, options 
       && threatId !== null
       && threatId !== undefined
       && String(combatTargetId) === String(threatId);
+    if (!combatHandlesThreat && criticalThreat) {
+      return {
+        kind: 'safety-exit',
+        band: 'safety',
+        reason: 'profit-live-critical-threat',
+        shouldLeave: true,
+        stopMotion: true,
+        target: summarizeTarget(target),
+        self: summarizeTarget(input.self),
+        criticalThreat: {
+          selfHp,
+          threshold: criticalHp,
+          distance: Math.round(distance)
+        }
+      };
+    }
     if (snapshotThreatening && distance <= threatExitRange) {
       return {
         kind: 'safety-exit',

@@ -8149,6 +8149,79 @@ async function runSelfTest() {
       want: 'safety-exit|safety|combat-critical-hp-leave|true|8|combat-critical-hp-leave'
     },
     {
+      name: 'browserless profit live critical hp exits on out-of-range firing threat',
+      got: (() => {
+        const decision = buildBrowserlessDecision({
+          userId: 7,
+          realtime: {
+            tick: 62,
+            frameAgeMs: 100,
+            self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 15, stamina_5s_remaining_milli: 10000 },
+            entities: [
+              { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 15, stamina_5s_remaining_milli: 10000 },
+              { entity_id: 2, user_id: 8, name: 'far-firing', x: 20000, y: 0, hp: 80, firing: true, drop: 12 }
+            ],
+            bullets: [
+              { owner_user_id: 8, start_x: 20000, start_y: 0, target_x: 0, target_y: 0, created_tick: 40, expire_tick: 90, speed_per_tick: 500 }
+            ],
+            coinDrops: []
+          },
+          fallback: { coinDrops: [] }
+        }, {}, {
+          nowMs: 1500,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          combatCriticalHp: 20,
+          combatAttackRange: 11000
+        });
+        return [
+          decision.kind,
+          decision.band,
+          decision.reason,
+          decision.action.shouldLeave,
+          decision.action.target.userId,
+          decision.combat.target?.userId || 'no-target'
+        ].join('|');
+      })(),
+      want: 'safety-exit|safety|profit-live-critical-threat|true|8|no-target'
+    },
+    {
+      name: 'browserless profit live critical hp exits on unknown incoming pressure',
+      got: (() => {
+        const decision = buildBrowserlessDecision({
+          userId: 7,
+          realtime: {
+            tick: 62,
+            frameAgeMs: 100,
+            self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 15, stamina_5s_remaining_milli: 10000 },
+            entities: [
+              { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 15, stamina_5s_remaining_milli: 10000 }
+            ],
+            bullets: [
+              { start_x: 1000, start_y: 0, target_x: 0, target_y: 0, created_tick: 40, expire_tick: 90, speed_per_tick: 500 }
+            ],
+            coinDrops: []
+          },
+          fallback: { coinDrops: [] }
+        }, {}, {
+          nowMs: 1500,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          combatCriticalHp: 20,
+          combatAttackRange: 11000
+        });
+        return [
+          decision.kind,
+          decision.band,
+          decision.reason,
+          decision.action.shouldLeave,
+          decision.action.criticalPressure.bulletCount,
+          decision.combat.target?.userId || 'no-target'
+        ].join('|');
+      })(),
+      want: 'safety-exit|safety|profit-live-critical-unknown-pressure|true|1|no-target'
+    },
+    {
       name: 'browserless combat low hp no-damage exits',
       got: (() => {
         const stateful = {
