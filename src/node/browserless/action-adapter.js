@@ -209,6 +209,12 @@ function patrolMotionFromDecision(decision) {
   return action;
 }
 
+function opportunisticShotFromDecision(decision) {
+  const action = decision?.action || decision || {};
+  if (action.kind === 'opportunistic-shot' && action.opportunisticShot) return action.opportunisticShot;
+  return action.opportunisticShot || null;
+}
+
 function controlActionFromDecision(decision) {
   const action = decision?.action || decision || {};
   const kind = String(action.kind || decision?.kind || '');
@@ -490,6 +496,12 @@ function createBrowserlessActionAdapter(options = {}) {
     if (patrolMotion) {
       return applyPatrolMotionDecision(patrolMotion);
     }
+    const standaloneShot = (decision?.action || decision || {}).kind === 'opportunistic-shot'
+      ? opportunisticShotFromDecision(decision)
+      : null;
+    if (standaloneShot) {
+      return applyOpportunisticShotDecision(stateSnapshot, standaloneShot, decision);
+    }
     const controlAction = controlActionFromDecision(decision);
     if (controlAction) {
       return applyControlDecision(controlAction);
@@ -525,15 +537,74 @@ function createBrowserlessActionAdapter(options = {}) {
       };
     }
     const sent = sendVelocity(vector.dx, vector.dy, vector.reason, target);
+    const opportunisticShot = opportunisticShotFromDecision(decision);
+    const shoot = opportunisticShot
+      ? sendOpportunisticShot(self, opportunisticShot, decision)
+      : { ok: true, skipped: true, reason: 'no-opportunistic-shot' };
     const precisionPulseMs = schedulePrecisionPulseStop(sent, vector.precisionPulseMs, profitAction.kind);
     return {
-      ok: sent.ok,
+      ok: Boolean(sent.ok && shoot.ok),
       kind: 'velocity',
       reason: vector.reason,
       vector,
       command: sent.command || null,
+      shoot: {
+        ok: shoot.ok,
+        skipped: Boolean(shoot.skipped),
+        reason: shoot.reason,
+        command: shoot.command || null,
+        cadenceMs: shoot.cadenceMs || null
+      },
+      opportunisticShot: opportunisticShot || null,
+      target: opportunisticShot || target,
       skipped: Boolean(sent.skipped),
       precisionPulseMs
+    };
+  }
+
+  function sendOpportunisticShot(self, target, decision) {
+    const startX = numberOrNull(self?.x);
+    const startY = numberOrNull(self?.y);
+    const targetX = numberOrNull(target?.x);
+    const targetY = numberOrNull(target?.y);
+    if (startX === null || startY === null || targetX === null || targetY === null) {
+      state.skippedCount += 1;
+      return { ok: false, skipped: true, reason: 'missing-shoot-coordinates' };
+    }
+    return sendShoot(
+      targetX,
+      targetY,
+      startX,
+      startY,
+      target?.reason || decision?.action?.reason || decision?.reason || 'opportunistic-afk-drop-shot',
+      target,
+      options.opportunisticShootEveryMs || options.combatShootMinIntervalMs
+    );
+  }
+
+  function applyOpportunisticShotDecision(stateSnapshot, target, decision) {
+    const self = stateSnapshot?.realtime?.self || decision?.input?.self || null;
+    const stopped = stop('opportunistic-shot-hold');
+    const shoot = sendOpportunisticShot(self, target, decision);
+    return {
+      ok: Boolean(stopped.ok && shoot.ok),
+      kind: 'opportunistic-shot',
+      reason: target?.reason || decision?.reason || 'opportunistic-afk-drop-shot',
+      movement: {
+        ok: stopped.ok,
+        skipped: Boolean(stopped.skipped),
+        reason: stopped.reason || 'opportunistic-shot-hold',
+        command: stopped.command || null
+      },
+      shoot: {
+        ok: shoot.ok,
+        skipped: Boolean(shoot.skipped),
+        reason: shoot.reason,
+        command: shoot.command || null,
+        cadenceMs: shoot.cadenceMs || null
+      },
+      target,
+      opportunisticShot: target
     };
   }
 

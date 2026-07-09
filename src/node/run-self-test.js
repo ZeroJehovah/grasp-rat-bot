@@ -8803,6 +8803,130 @@ async function runSelfTest() {
       want: 'profit-attack|velocity|shoot|vel 0 0,shoot 1000 0 0 0|1|1'
     },
     {
+      name: 'browserless opportunistic shot attaches to coin action',
+      got: (() => {
+        const decision = buildBrowserlessDecision({
+          userId: 7,
+          realtime: {
+            tick: 70,
+            frameAgeMs: 100,
+            self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
+            entities: [
+              { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
+              { entity_id: 2, user_id: 8, name: 'afk-shot', x: 1000, y: 0, hp: 80, current_join_mode: 'Passive', drop: 20 }
+            ],
+            bullets: [],
+            coinDrops: [{ drop_id: 'coin-a', amount: 1, x: 5000, y: 0 }]
+          },
+          fallback: { coinDrops: [] }
+        }, {}, {
+          nowMs: 1500,
+          controlMode: 'profit-live',
+          includeAfkProfitTargets: false,
+          opportunisticShotMinScoreRatio: 0.01
+        });
+        const commands = [];
+        const adapter = createBrowserlessActionAdapter({
+          now: () => 2000 + commands.length * 200,
+          commandIntervalMs: 1,
+          opportunisticShootEveryMs: 120,
+          transport: {
+            sendVelocity: (dx, dy) => commands.push(`vel ${dx} ${dy}`),
+            sendShoot: (targetX, targetY, startX, startY) => commands.push(`shoot ${targetX} ${targetY} ${startX} ${startY}`)
+          }
+        });
+        const action = adapter.applyDecision({
+          realtime: { self: { x: 0, y: 0 }, tick: 70 }
+        }, decision);
+        const state = adapter.getState();
+        return [
+          decision.action.kind,
+          decision.action.opportunisticShot.userId,
+          action.kind,
+          action.shoot.command.type,
+          action.target.userId,
+          state.shootSentCount,
+          commands.join(',')
+        ].join('|');
+      })(),
+      want: 'coin|8|velocity|shoot|8|1|vel 1 0,shoot 1000 0 0 0'
+    },
+    {
+      name: 'browserless opportunistic shot wait shoots without movement profit',
+      got: (() => {
+        const decision = buildBrowserlessDecision({
+          userId: 7,
+          realtime: {
+            tick: 70,
+            frameAgeMs: 100,
+            self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
+            entities: [
+              { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
+              { entity_id: 2, user_id: 8, name: 'afk-shot', x: 1000, y: 0, hp: 80, current_join_mode: 'Passive', drop: 20 }
+            ],
+            bullets: [],
+            coinDrops: []
+          },
+          fallback: { coinDrops: [] }
+        }, {}, {
+          nowMs: 1500,
+          controlMode: 'profit-live',
+          includeAfkProfitTargets: false
+        });
+        const commands = [];
+        const adapter = createBrowserlessActionAdapter({
+          now: () => 2000 + commands.length * 200,
+          commandIntervalMs: 1,
+          transport: {
+            sendVelocity: (dx, dy) => commands.push(`vel ${dx} ${dy}`),
+            sendShoot: (targetX, targetY, startX, startY) => commands.push(`shoot ${targetX} ${targetY} ${startX} ${startY}`)
+          }
+        });
+        const action = adapter.applyDecision({
+          realtime: { self: { x: 0, y: 0 }, tick: 70 }
+        }, decision);
+        return [
+          decision.kind,
+          decision.reason,
+          action.kind,
+          action.shoot.command.type,
+          commands.join(',')
+        ].join('|');
+      })(),
+      want: 'opportunistic-shot|opportunistic-afk-drop-shot|opportunistic-shot|shoot|vel 0 0,shoot 1000 0 0 0'
+    },
+    {
+      name: 'browserless opportunistic shot is suppressed during recovery',
+      got: (() => {
+        const decision = buildBrowserlessDecision({
+          userId: 7,
+          realtime: {
+            tick: 70,
+            frameAgeMs: 100,
+            self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 70, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+            entities: [
+              { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 70, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+              { entity_id: 2, user_id: 8, name: 'afk-shot', x: 1000, y: 0, hp: 80, current_join_mode: 'Passive', drop: 20 }
+            ],
+            bullets: [],
+            coinDrops: [{ drop_id: 'coin-a', amount: 1, x: 5000, y: 0 }]
+          },
+          fallback: { coinDrops: [] }
+        }, {}, {
+          nowMs: 1500,
+          controlMode: 'profit-live',
+          includeAfkProfitTargets: false,
+          opportunisticShotMinScoreRatio: 0.01
+        });
+        return [
+          decision.kind,
+          decision.reason,
+          Boolean(decision.action.opportunisticShot)
+        ].join('|');
+      })(),
+      want: 'recover|wait-for-full-stamina-and-hp|false'
+    },
+    {
       name: 'browserless action adapter sends guarded combat movement shoot and records ack',
       got: (() => {
         const commands = [];

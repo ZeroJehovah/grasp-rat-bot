@@ -1629,6 +1629,89 @@ function buildFootCoinPriorityDecision(input, reason, options = {}) {
   return buildPriorityCoinDecision(input, coin, reason, options);
 }
 
+function summarizeOpportunisticShotTarget(target, options = {}) {
+  if (!target) return null;
+  return {
+    ...summarizeTarget(target),
+    id: target.user_id ?? target.userId ?? target.id ?? '',
+    hp: hpValue(target),
+    score: Number.isFinite(Number(target.opportunisticScore)) ? Math.round(Number(target.opportunisticScore)) : null,
+    staminaCost: Number.isFinite(Number(target.opportunisticStaminaCost)) ? Math.round(Number(target.opportunisticStaminaCost)) : null,
+    estimatedShots: Number.isFinite(Number(target.opportunisticEstimatedShots)) ? Math.round(Number(target.opportunisticEstimatedShots)) : null,
+    reason: 'opportunistic-afk-drop-shot',
+    minScoreRatio: Math.max(0, Number(options.opportunisticShotMinScoreRatio ?? BROWSER_RUNTIME_DEFAULTS.opportunisticShotMinScoreRatio ?? 1))
+  };
+}
+
+function pickOpportunisticShotTarget(input, options = {}) {
+  if (!input?.self) return null;
+  const attackRange = Math.max(0, Number(options.attackRange ?? options.combatAttackRange ?? DEFAULT_ATTACK_RANGE));
+  return (input.afkTargets || [])
+    .filter(target => target.alive !== false && !target.invulnerable && !target.active && !target.firing)
+    .filter(target => Number(target.distance || Infinity) <= attackRange)
+    .map(target => {
+      const staminaCost = enemyStaminaCost(target, options);
+      return {
+        ...target,
+        opportunisticScore: scoreEnemyOpportunity(target, options),
+        opportunisticStaminaCost: staminaCost,
+        opportunisticEstimatedShots: estimatedKillShots(target, options)
+      };
+    })
+    .filter(target => opportunityStaminaAffordable(input.self, target.opportunisticStaminaCost, options))
+    .sort((a, b) => Number(b.opportunisticScore || -Infinity) - Number(a.opportunisticScore || -Infinity)
+      || entityDropValue(b) - entityDropValue(a)
+      || Number(a.distance || Infinity) - Number(b.distance || Infinity))[0] || null;
+}
+
+function actionOpportunityScoreForShot(action, options = {}) {
+  const explicit = Number(action?.score ?? action?.opportunityChoice?.score);
+  if (Number.isFinite(explicit)) return explicit;
+  const target = action?.target || {};
+  if ((action?.kind === 'coin' || action?.kind === 'seek-coin') && Number(target.amount || 0) > 0) {
+    return scoreCoinOpportunity({
+      amount: Number(target.amount || 0),
+      distance: Number(target.distance || 0),
+      opportunityStaminaCost: Number.isFinite(Number(action?.staminaCost)) ? Number(action.staminaCost) : undefined
+    }, options);
+  }
+  return -Infinity;
+}
+
+function opportunisticShotBeatsAction(action, shot, options = {}) {
+  const shotScore = Number(shot?.opportunisticScore ?? -Infinity);
+  if (!Number.isFinite(shotScore)) return false;
+  const actionScore = actionOpportunityScoreForShot(action, options);
+  const minRatio = Math.max(0, Number(options.opportunisticShotMinScoreRatio ?? BROWSER_RUNTIME_DEFAULTS.opportunisticShotMinScoreRatio ?? 1));
+  return !Number.isFinite(actionScore) || actionScore <= 0 || shotScore >= actionScore * minRatio;
+}
+
+function attachOpportunisticShotDecision(action, input, options = {}) {
+  if (!action || isRecoveringSelf(input?.self)) return action;
+  if (action.opportunisticShot || action.combat) return action;
+  if (action.kind !== 'coin' && action.kind !== 'seek-coin') return action;
+  const shot = pickOpportunisticShotTarget(input, options);
+  if (!shot || !opportunisticShotBeatsAction(action, shot, options)) return action;
+  return {
+    ...action,
+    opportunisticShot: summarizeOpportunisticShotTarget(shot, options)
+  };
+}
+
+function buildOpportunisticShotWaitDecision(input, options = {}) {
+  if (!input?.self || isRecoveringSelf(input.self)) return null;
+  const shot = pickOpportunisticShotTarget(input, options);
+  if (!shot) return null;
+  const target = summarizeOpportunisticShotTarget(shot, options);
+  return {
+    kind: 'opportunistic-shot',
+    band: 'profit',
+    reason: 'opportunistic-afk-drop-shot',
+    target,
+    opportunisticShot: target
+  };
+}
+
 function safetyActionIsHardLeave(action) {
   return Boolean(action && (action.shouldLeave === true || action.kind === 'safety-exit' || action.kind === 'leave'));
 }
@@ -1874,6 +1957,9 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
   const dailyFinalCoinAction = (profitLive || nonCombatProfit) && !recoveryAction
     ? buildDailyStaminaFinalCoinDecision(input, options)
     : null;
+  const opportunisticShotWaitAction = (profitLive || nonCombatProfit)
+    ? buildOpportunisticShotWaitDecision(input, options)
+    : null;
   const staminaBlockedWaitAction = (profitLive || nonCombatProfit)
     ? buildStaminaBlockedWaitDecision(input, options)
     : null;
@@ -1962,6 +2048,11 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     band = 'profit';
     reason = opportunity.action.reason;
     action = opportunity.action;
+  } else if (opportunisticShotWaitAction) {
+    kind = opportunisticShotWaitAction.kind;
+    band = opportunisticShotWaitAction.band;
+    reason = opportunisticShotWaitAction.reason;
+    action = opportunisticShotWaitAction;
   } else if (staminaBlockedWaitAction) {
     kind = staminaBlockedWaitAction.kind;
     band = staminaBlockedWaitAction.band;
@@ -1972,7 +2063,13 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     action.reason = reason;
   }
   if (input.self && !(Number.isFinite(frameAge) && frameAge > staleSelfMs)) {
-    const selectedAction = action;
+    const selectedAction = attachOpportunisticShotDecision(action, input, options);
+    if (selectedAction !== action) {
+      action = selectedAction;
+      kind = action.kind || kind;
+      band = action.band || band;
+      reason = action.reason || reason;
+    }
     const finalAction = applyStaleCoinEscape(
       applyCoinProgressToAction(selectedAction, input, stateful, options),
       stateful,
