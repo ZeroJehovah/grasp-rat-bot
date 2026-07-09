@@ -4,13 +4,18 @@
 const fs = require('fs');
 const path = require('path');
 const { readJsonlEntries } = require('./browserless-log-summary');
+const {
+  classifyNormalizedAction,
+  normalizeAction
+} = require('./browserless-action-parity-audit');
 
 const PROFILE_MODES = {
   'read-only': 'read-only',
   'movement-only': 'movement-only',
   profit: 'non-combat-profit',
   'combat-dry-run': 'combat-dry-run',
-  'combat-live': 'combat-live'
+  'combat-live': 'combat-live',
+  'profit-live-parity': 'profit-live'
 };
 
 function parseArgs(argv) {
@@ -28,6 +33,7 @@ function parseArgs(argv) {
     if (arg === '--log-dir') out.logDir = argv[++i] || out.logDir;
     else if (arg === '--day') out.day = argv[++i] || out.day;
     else if (arg === '--profile') out.profile = argv[++i] || out.profile;
+    else if (arg === '--parity') out.profile = 'profit-live-parity';
     else if (arg === '--require-stop') out.requireStop = true;
     else if (arg === '--json') out.json = true;
     else if (arg === '--fail-on-incomplete') out.failOnIncomplete = true;
@@ -41,7 +47,7 @@ function parseArgs(argv) {
 function loadStreams(logDir, day) {
   const dayDir = path.join(path.resolve(String(logDir)), String(day));
   const streams = {};
-  for (const stream of ['runner', 'decisions', 'combat', 'exits']) {
+  for (const stream of ['runner', 'decisions', 'actions', 'combat', 'exits']) {
     streams[stream] = readJsonlEntries(path.join(dayDir, `${stream}.jsonl`));
   }
   return { dayDir, streams };
@@ -173,6 +179,60 @@ function hasCombatTarget(entry) {
   return Boolean(entry?.detail?.target);
 }
 
+function increment(map, key) {
+  const normalized = String(key || 'unknown');
+  map[normalized] = Number(map[normalized] || 0) + 1;
+}
+
+function summarizeParityRecords(streams) {
+  const records = [];
+  const counts = {
+    actions: 0,
+    byStatus: {},
+    byKey: {},
+    lowDropAfk: 0,
+    movingOrFiringAfk: 0,
+    postAttackDrop: 0
+  };
+  for (const stream of ['runner', 'decisions', 'actions', 'combat']) {
+    for (const entry of streams?.[stream] || []) {
+      const normalized = normalizeAction(entry, stream);
+      if (!normalized) continue;
+      const classification = classifyNormalizedAction(normalized);
+      const record = { ...normalized, classification };
+      records.push(record);
+      counts.actions += 1;
+      increment(counts.byStatus, classification.status);
+      increment(counts.byKey, classification.key);
+      const target = record.target || {};
+      if (record.targetType === 'enemy'
+        && record.kind === 'attack'
+        && !target.active
+        && !target.moving
+        && !target.firing
+        && Number(target.drop || 0) > 0
+        && Number(target.drop || 0) < 3) {
+        counts.lowDropAfk += 1;
+      }
+      if (record.targetType === 'enemy'
+        && record.band === 'profit'
+        && (record.kind === 'attack' || record.kind === 'opportunistic-shot')
+        && (target.active || target.moving || target.firing)) {
+        counts.movingOrFiringAfk += 1;
+      }
+      if (classification.key === 'post-attack-drop') counts.postAttackDrop += 1;
+    }
+  }
+  const missing = records.filter(record => record.classification.status === 'missing-browser-branch');
+  const knownTransportExceptions = records.filter(record => record.classification.status === 'known-transport-exception');
+  return {
+    ok: missing.length === 0 && counts.lowDropAfk === 0 && counts.movingOrFiringAfk === 0,
+    counts,
+    missing,
+    knownTransportExceptions
+  };
+}
+
 function summarizeAudit(options = {}) {
   const profile = String(options.profile || 'read-only');
   const mode = PROFILE_MODES[profile];
@@ -184,6 +244,7 @@ function summarizeAudit(options = {}) {
   const runScope = selectedRunScope(finalEntry);
   const runWindow = runScope.window;
   const scopedStreams = filterStreamsToRunScope(streams, runScope);
+  const parity = summarizeParityRecords(scopedStreams);
   const decisionCount = countWhere(scopedStreams.decisions, entry => entry?.type === 'decision');
   const movementCommandCount = countWhere(scopedStreams.runner, entry => entry?.type === 'movement-command');
   const shootCommandCount = countWhere(scopedStreams.runner, entry => entry?.type === 'movement-command' && hasShootCommandEvidence(entry));
@@ -240,6 +301,13 @@ function summarizeAudit(options = {}) {
     addCheck(checks, 'combat-realtime-authority', allCombatTargetsRealtime(combatLiveEntries), 'all logged combat targets/candidates use realtime authority');
     addCheck(checks, 'combat-action-logged', Number(final?.actions?.velocitySentCount || 0) > 0 && movementCommandCount > 0, `velocity=${Number(final?.actions?.velocitySentCount || 0)}, movement logs=${movementCommandCount}`);
     addCheck(checks, 'shoot-ack-or-no-shot', (Number(final?.actions?.shootSentCount || 0) === 0 && shootCommandCount === 0) || Boolean(final?.actions?.lastShootAck), `shootSentCount=${Number(final?.actions?.shootSentCount || 0)}, shoot logs=${shootCommandCount}, lastShootAck=${Boolean(final?.actions?.lastShootAck)}`);
+  } else if (profile === 'profit-live-parity') {
+    addCheck(checks, 'parity-actions', parity.counts.actions > 0, `normalized actions=${parity.counts.actions}`);
+    addCheck(checks, 'no-missing-browser-branch', parity.missing.length === 0, `missing=${parity.missing.length}`);
+    addCheck(checks, 'no-low-drop-afk', parity.counts.lowDropAfk === 0, `lowDropAfk=${parity.counts.lowDropAfk}`);
+    addCheck(checks, 'no-moving-firing-afk', parity.counts.movingOrFiringAfk === 0, `movingOrFiringAfk=${parity.counts.movingOrFiringAfk}`);
+    addCheck(checks, 'combat-realtime-authority', allCombatTargetsRealtime([...combatDryRunEntries, ...combatLiveEntries]), 'all logged combat targets/candidates use realtime authority');
+    addCheck(checks, 'post-attack-drop-evidence', true, `postAttackDropRecords=${parity.counts.postAttackDrop}`);
   }
 
   const failed = checks.filter(check => !check.ok);
@@ -271,7 +339,13 @@ function summarizeAudit(options = {}) {
       combatLive: combatLiveEntries.length,
       combatLiveTarget: combatLiveTargetCount,
       safetyEvent: safetyEvents.length,
-      explicitStop: explicitStopEvents.length
+      explicitStop: explicitStopEvents.length,
+      parityActions: parity.counts.actions,
+      parityMissing: parity.missing.length,
+      parityKnownTransportExceptions: parity.knownTransportExceptions.length,
+      parityLowDropAfk: parity.counts.lowDropAfk,
+      parityMovingOrFiringAfk: parity.counts.movingOrFiringAfk,
+      parityPostAttackDrop: parity.counts.postAttackDrop
     },
     rawCounts: {
       runner: streams.runner.length,
@@ -279,6 +353,7 @@ function summarizeAudit(options = {}) {
       combat: streams.combat.length,
       exits: streams.exits.length
     },
+    parity,
     checks,
     failed
   };
@@ -299,14 +374,17 @@ function formatHuman(report) {
   for (const check of report.checks) {
     lines.push(`- ${check.ok ? 'ok' : 'missing'} ${check.key}: ${check.evidence}`);
   }
+  if (report.parity?.counts?.actions) {
+    lines.push(`Parity: actions=${report.parity.counts.actions}, missing=${report.parity.missing.length}, knownTransportExceptions=${report.parity.knownTransportExceptions.length}`);
+  }
   return lines.join('\n');
 }
 
 function usage() {
   return [
-    'Usage: node scripts/browserless-canary-audit.js [--log-dir <dir>] [--day YYYY-MM-DD] [--profile <name>] [--require-stop] [--json] [--fail-on-incomplete]',
+    'Usage: node scripts/browserless-canary-audit.js [--log-dir <dir>] [--day YYYY-MM-DD] [--profile <name>] [--parity] [--require-stop] [--json] [--fail-on-incomplete]',
     '',
-    'Profiles: read-only, movement-only, profit, combat-dry-run, combat-live.',
+    'Profiles: read-only, movement-only, profit, combat-dry-run, combat-live, profit-live-parity.',
     'Use --require-stop for a forced /api/stop validation; otherwise a clean canary finish is required.'
   ].join('\n');
 }
@@ -333,5 +411,6 @@ module.exports = {
   PROFILE_MODES,
   formatHuman,
   parseArgs,
+  summarizeParityRecords,
   summarizeAudit
 };

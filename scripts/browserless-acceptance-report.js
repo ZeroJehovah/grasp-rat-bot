@@ -30,6 +30,7 @@ function parseArgs(argv) {
     else if (arg === '--day') out.day = argv[++i] || out.day;
     else if (arg === '--profiles') out.profiles = String(argv[++i] || '').split(',').map(item => item.trim()).filter(Boolean);
     else if (arg === '--profile') out.profiles.push(argv[++i] || '');
+    else if (arg === '--parity') out.profiles.push('profit-live-parity');
     else if (arg === '--no-stop') out.includeStop = false;
     else if (arg === '--skip-deployment') out.skipDeployment = true;
     else if (arg === '--skip-systemctl') out.skipSystemctl = true;
@@ -76,6 +77,11 @@ function canaryEvidenceSummary(report) {
   }
   if (Number(counts.explicitStop || 0)) {
     parts.push(`explicitStop=${Number(counts.explicitStop || 0)}`);
+  }
+  if (Number(counts.parityActions || 0)) {
+    parts.push(`parityActions=${Number(counts.parityActions || 0)}`);
+    parts.push(`parityMissing=${Number(counts.parityMissing || 0)}`);
+    parts.push(`knownTransportExceptions=${Number(counts.parityKnownTransportExceptions || 0)}`);
   }
   return parts.join(', ');
 }
@@ -179,7 +185,7 @@ function formatHuman(report) {
 
 function usage() {
   return [
-    'Usage: node scripts/browserless-acceptance-report.js [--log-dir <dir>] [--day YYYY-MM-DD] [--profiles a,b] [--no-stop] [--skip-deployment] [--skip-systemctl] [--deployment-env-mode safe|live|any] [--json] [--fail-on-incomplete]',
+    'Usage: node scripts/browserless-acceptance-report.js [--log-dir <dir>] [--day YYYY-MM-DD] [--profiles a,b] [--profile name] [--parity] [--no-stop] [--skip-deployment] [--skip-systemctl] [--deployment-env-mode safe|live|any] [--json] [--fail-on-incomplete]',
     '',
     'Aggregates browserless deployment and staged canary audit results for cutover review.',
     'Defaults require deployment, read-only forced-stop, and all staged canary profiles. Deployment env mode defaults to any so final reports can run after live canary env changes.'

@@ -109,6 +109,7 @@ const {
   writeBrowserlessLogSummary
 } = require('../../scripts/browserless-log-summary');
 const {
+  parseArgs: parseBrowserlessCanaryAuditArgs,
   summarizeAudit: summarizeBrowserlessCanaryAudit
 } = require('../../scripts/browserless-canary-audit');
 const {
@@ -118,7 +119,8 @@ const {
   auditDeployment: auditBrowserlessDeployment
 } = require('../../scripts/browserless-deployment-audit');
 const {
-  buildAcceptanceReport: buildBrowserlessAcceptanceReport
+  buildAcceptanceReport: buildBrowserlessAcceptanceReport,
+  parseArgs: parseBrowserlessAcceptanceReportArgs
 } = require('../../scripts/browserless-acceptance-report');
 const {
   importBrowserlessState
@@ -10052,6 +10054,141 @@ async function runSelfTest() {
       want: 'true|0|true|1|0|false|true|true|1|false|true|true|1|true|1|false|true|false|true|false|true|1|false|true|1|read-only-20260715T010000000Z|true|read-only-20260715T010000000Z|1|0|false|true'
     },
     {
+      name: 'browserless canary parity audit summarizes exceptions and drift',
+      got: withTempDirForTest(async dir => {
+        const write = (day, stream, entry) => {
+          const dayDir = path.join(dir, day);
+          fs.mkdirSync(dayDir, { recursive: true });
+          fs.appendFileSync(path.join(dayDir, `${stream}.jsonl`), `${JSON.stringify(entry)}\n`);
+        };
+        const finalFor = (day, overrides = {}) => ({
+          at: `${day}T01:05:00.000Z`,
+          type: 'canary-finish',
+          detail: {
+            mode: 'profit-live',
+            ok: true,
+            startedAt: `${day}T01:00:00.000Z`,
+            completedAt: `${day}T01:05:00.000Z`,
+            snapshotSafety: { ok: true },
+            stats: { decodedFrameCount: 120, selfPresent: { true: 118, false: 2 } },
+            frameHealth: { decodeErrors: 0 },
+            actions: { sentCount: 2, velocitySentCount: 1, shootSentCount: 0 },
+            leave: { ok: true },
+            ...overrides
+          }
+        });
+        write('2026-07-19', 'runner', finalFor('2026-07-19'));
+        write('2026-07-19', 'decisions', {
+          at: '2026-07-19T01:00:01.000Z',
+          type: 'decision',
+          detail: {
+            kind: 'coin',
+            band: 'profit',
+            reason: 'best-opportunity-coin',
+            action: {
+              kind: 'coin',
+              band: 'profit',
+              reason: 'best-opportunity-coin',
+              target: { type: 'coin', id: 'coin-safe', authority: 'realtime', amount: 1 }
+            }
+          }
+        });
+        write('2026-07-19', 'decisions', {
+          at: '2026-07-19T01:00:02.000Z',
+          type: 'decision',
+          detail: {
+            kind: 'seek-coin',
+            band: 'profit',
+            reason: 'best-opportunity-visible-coin',
+            action: {
+              kind: 'seek-coin',
+              band: 'profit',
+              reason: 'best-opportunity-visible-coin',
+              target: { type: 'coin', id: 'snapshot-coin', authority: 'snapshot', snapshotOnly: true, amount: 1 }
+            }
+          }
+        });
+        write('2026-07-19', 'decisions', {
+          at: '2026-07-19T01:00:03.000Z',
+          type: 'decision',
+          detail: {
+            kind: 'post-attack-drop-wait',
+            band: 'profit',
+            reason: 'post-attack-drop-wait-position',
+            action: {
+              kind: 'post-attack-drop-wait',
+              band: 'profit',
+              reason: 'post-attack-drop-wait-position',
+              target: { type: 'post-attack-target', id: 'target-1', drop: 20 }
+            }
+          }
+        });
+        write('2026-07-19', 'combat', {
+          at: '2026-07-19T01:00:04.000Z',
+          type: 'combat-live',
+          detail: {
+            action: { kind: 'combat-live', band: 'combat', reason: 'combat-live-realtime', target: { type: 'enemy', userId: 44, authority: 'realtime', firing: true } },
+            target: { authority: 'realtime' },
+            candidates: [{ authority: 'realtime' }]
+          }
+        });
+        const clean = summarizeBrowserlessCanaryAudit({ logDir: dir, day: '2026-07-19', profile: 'profit-live-parity' });
+
+        write('2026-07-20', 'runner', finalFor('2026-07-20'));
+        write('2026-07-20', 'decisions', {
+          at: '2026-07-20T01:00:01.000Z',
+          type: 'decision',
+          detail: {
+            kind: 'attack',
+            band: 'profit',
+            reason: 'best-opportunity-enemy',
+            action: {
+              kind: 'attack',
+              band: 'profit',
+              reason: 'best-opportunity-enemy',
+              target: { type: 'enemy', userId: 51, authority: 'realtime', drop: 1, active: false, moving: false, firing: false }
+            }
+          }
+        });
+        write('2026-07-20', 'decisions', {
+          at: '2026-07-20T01:00:02.000Z',
+          type: 'decision',
+          detail: {
+            kind: 'attack',
+            band: 'profit',
+            reason: 'best-opportunity-enemy',
+            action: {
+              kind: 'attack',
+              band: 'profit',
+              reason: 'best-opportunity-enemy',
+              target: { type: 'enemy', userId: 52, authority: 'realtime', drop: 9, active: false, moving: true, firing: false }
+            }
+          }
+        });
+        const drift = summarizeBrowserlessCanaryAudit({ logDir: dir, day: '2026-07-20', profile: 'profit-live-parity' });
+        const args = parseBrowserlessCanaryAuditArgs(['--parity']);
+        return [
+          args.profile,
+          clean.ok,
+          clean.counts.parityActions,
+          clean.counts.parityMissing,
+          clean.counts.parityKnownTransportExceptions,
+          clean.counts.parityLowDropAfk,
+          clean.counts.parityMovingOrFiringAfk,
+          clean.counts.parityPostAttackDrop,
+          clean.parity.knownTransportExceptions.length,
+          drift.ok,
+          drift.failed.some(item => item.key === 'no-low-drop-afk'),
+          drift.failed.some(item => item.key === 'no-moving-firing-afk'),
+          drift.failed.some(item => item.key === 'no-missing-browser-branch'),
+          drift.counts.parityLowDropAfk,
+          drift.counts.parityMovingOrFiringAfk,
+          drift.counts.parityMissing
+        ].join('|');
+      }),
+      want: 'profit-live-parity|true|4|0|1|0|0|1|1|false|true|true|true|1|1|1'
+    },
+    {
       name: 'browserless runner config parses env and cli overrides',
       got: (() => {
         const config = parseBrowserlessRunnerArgs([
@@ -10327,6 +10464,32 @@ async function runSelfTest() {
         write('decisions', { at: '2026-07-08T01:00:01.000Z', type: 'decision', detail: { kind: 'wait' } });
         write('decisions', { at: '2026-07-08T01:01:01.000Z', type: 'decision', detail: { kind: 'stop-requested' } });
         write('decisions', { at: '2026-07-08T01:02:01.000Z', type: 'decision', detail: { kind: 'coin' } });
+        write('runner', {
+          at: '2026-07-08T01:03:30.000Z',
+          type: 'canary-finish',
+          detail: {
+            ...base,
+            mode: 'profit-live',
+            startedAt: '2026-07-08T01:03:00.000Z',
+            completedAt: '2026-07-08T01:03:30.000Z',
+            actions: { velocitySentCount: 1, shootSentCount: 0 }
+          }
+        });
+        write('decisions', {
+          at: '2026-07-08T01:03:01.000Z',
+          type: 'decision',
+          detail: {
+            kind: 'seek-coin',
+            band: 'profit',
+            reason: 'best-opportunity-visible-coin',
+            action: {
+              kind: 'seek-coin',
+              band: 'profit',
+              reason: 'best-opportunity-visible-coin',
+              target: { type: 'coin', id: 'snapshot-coin', authority: 'snapshot', snapshotOnly: true, amount: 1 }
+            }
+          }
+        });
         write('exits', { at: '2026-07-08T01:01:01.000Z', type: 'safety-event', detail: { reason: 'explicit-stop' } });
         let deploymentEnvMode = '';
         const ok = buildBrowserlessAcceptanceReport({
@@ -10350,6 +10513,15 @@ async function runSelfTest() {
           includeStop: false,
           skipDeployment: true
         });
+        const parityArgs = parseBrowserlessAcceptanceReportArgs(['--profiles', '', '--parity', '--no-stop', '--skip-deployment']);
+        const parity = buildBrowserlessAcceptanceReport({
+          logDir: path.join(dir, 'logs'),
+          day: '2026-07-08',
+          profiles: parityArgs.profiles,
+          includeStop: parityArgs.includeStop,
+          skipDeployment: true
+        });
+        const paritySummary = parity.sections.find(section => section.key === 'canary:profit-live-parity')?.summary || '';
         return [
           ok.ok,
           ok.sections.length,
@@ -10360,10 +10532,13 @@ async function runSelfTest() {
           movementSummary.includes('shoot=0'),
           forcedStopSummary.includes('explicitStop=1'),
           missing.ok,
-          missing.failed[0]?.key
+          missing.failed[0]?.key,
+          parity.ok,
+          paritySummary.includes('parityActions=1'),
+          paritySummary.includes('knownTransportExceptions=1')
         ].join('|');
       }),
-      want: 'true|4|0|any|true|true|true|true|false|canary:profit'
+      want: 'true|4|0|any|true|true|true|true|false|canary:profit|true|true|true'
     },
     {
       name: 'browserless runner config maps canary profiles without enabling combat',
