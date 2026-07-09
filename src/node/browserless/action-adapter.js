@@ -194,6 +194,42 @@ function safetyMotionFromDecision(decision) {
   return action;
 }
 
+function controlActionFromDecision(decision) {
+  const action = decision?.action || decision || {};
+  const kind = String(action.kind || decision?.kind || '');
+  const band = String(action.band || decision?.band || '');
+  if (kind === 'leave' || kind === 'safety-exit' || action.shouldLeave === true) {
+    return {
+      type: 'leave',
+      kind: kind || 'leave',
+      band,
+      reason: action.reason || decision?.reason || 'leave-decision',
+      action
+    };
+  }
+  if (kind === 'wait' || kind === 'recover' || kind === 'post-attack-drop-wait') {
+    return {
+      type: 'stop',
+      kind,
+      band,
+      reason: action.reason || decision?.reason || kind || 'wait',
+      action
+    };
+  }
+  return null;
+}
+
+function unsupportedActionDiagnostics(decision) {
+  const action = decision?.action || decision || {};
+  return {
+    kind: String(action.kind || decision?.kind || ''),
+    band: String(action.band || decision?.band || ''),
+    reason: String(action.reason || decision?.reason || ''),
+    targetType: action.target?.type || '',
+    shouldLeave: action.shouldLeave === true
+  };
+}
+
 function createInitialActionState() {
   return {
     sentCount: 0,
@@ -431,16 +467,22 @@ function createBrowserlessActionAdapter(options = {}) {
     if (safetyMotion) {
       return applySafetyMotionDecision(safetyMotion);
     }
+    const controlAction = controlActionFromDecision(decision);
+    if (controlAction) {
+      return applyControlDecision(controlAction);
+    }
     const self = stateSnapshot?.realtime?.self || decision?.input?.self || null;
     const profitAction = profitActionFromDecision(decision);
     if (!profitAction) {
-      const stopped = stop('unsupported-or-wait-decision');
+      const diagnostics = unsupportedActionDiagnostics(decision);
+      const stopped = stop('unsupported-action');
       return {
         ok: stopped.ok,
-        kind: 'stop',
-        reason: 'unsupported-or-wait-decision',
+        kind: 'unsupported-action',
+        reason: 'unsupported-action',
         command: stopped.command || null,
-        skipped: Boolean(stopped.skipped)
+        skipped: Boolean(stopped.skipped),
+        unsupportedAction: diagnostics
       };
     }
     if (profitAction.type === 'enemy') {
@@ -469,6 +511,23 @@ function createBrowserlessActionAdapter(options = {}) {
       command: sent.command || null,
       skipped: Boolean(sent.skipped),
       precisionPulseMs
+    };
+  }
+
+  function applyControlDecision(controlAction) {
+    const stopReason = controlAction.type === 'leave'
+      ? 'leave-decision-safety-controller'
+      : controlAction.reason;
+    const stopped = stop(stopReason);
+    return {
+      ok: stopped.ok,
+      kind: controlAction.kind,
+      reason: controlAction.reason,
+      command: stopped.command || null,
+      skipped: Boolean(stopped.skipped),
+      handledBy: controlAction.type === 'leave' ? 'safety-controller' : 'action-adapter-stop',
+      shouldLeave: controlAction.type === 'leave',
+      target: controlAction.action?.target || null
     };
   }
 
@@ -709,7 +768,9 @@ module.exports = {
   createBrowserlessActionAdapter,
   coinMotionCoreOptions,
   coinMotionVectorToTarget,
+  controlActionFromDecision,
   profitActionFromDecision,
   safetyMotionFromDecision,
+  unsupportedActionDiagnostics,
   movementVectorToTarget
 };

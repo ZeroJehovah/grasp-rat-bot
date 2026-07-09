@@ -7102,6 +7102,41 @@ async function runSelfTest() {
       want: 'true|1|0|velocity|vel 1 0|1|true|true'
     },
     {
+      name: 'browserless action adapter maps seek-coin target to velocity',
+      got: (() => {
+        const commands = [];
+        const adapter = createBrowserlessActionAdapter({
+          now: () => 1000 + commands.length * 600,
+          commandIntervalMs: 1,
+          transport: {
+            sendVelocity: (dx, dy) => commands.push(`vel ${dx} ${dy}`),
+            sendShoot: () => commands.push('shoot')
+          }
+        });
+        const action = adapter.applyDecision({
+          realtime: { self: { x: 0, y: 0 }, tick: 1 }
+        }, {
+          kind: 'profit-candidate',
+          band: 'profit',
+          action: {
+            kind: 'seek-coin',
+            band: 'profit',
+            reason: 'best-opportunity-visible-coin',
+            target: { type: 'coin', id: 'seek-coin', x: 1000, y: 0, snapshotOnly: true }
+          }
+        });
+        return [
+          action.kind,
+          action.reason,
+          action.command.dx,
+          action.command.dy,
+          commands.join(','),
+          !commands.join(',').includes('shoot')
+        ].join('|');
+      })(),
+      want: 'velocity|move-to-target|1|0|vel 1 0|true'
+    },
+    {
       name: 'browserless action adapter repeats velocity through decision gap',
       got: (() => {
         let t = 1000;
@@ -7264,7 +7299,74 @@ async function runSelfTest() {
           commands.join(',')
         ].join('|');
       })(),
-      want: 'stop|unsupported-or-wait-decision|stop|target-reached|vel 0 0,vel 0 0'
+      want: 'unsupported-action|unsupported-action|stop|target-reached|vel 0 0,vel 0 0'
+    },
+    {
+      name: 'browserless action adapter maps wait leave and post-attack control actions explicitly',
+      got: (() => {
+        const commands = [];
+        const adapter = createBrowserlessActionAdapter({
+          now: () => 1000 + commands.length * 600,
+          commandIntervalMs: 1,
+          transport: {
+            sendVelocity: (dx, dy) => commands.push(`vel ${dx} ${dy}`)
+          }
+        });
+        const wait = adapter.applyDecision({
+          realtime: { self: { x: 0, y: 0 }, tick: 1 }
+        }, {
+          kind: 'wait',
+          band: 'wait',
+          reason: 'no-profitable-candidate',
+          action: { kind: 'wait', band: 'wait', reason: 'no-profitable-candidate' }
+        });
+        const postAttackWait = adapter.applyDecision({
+          realtime: { self: { x: 0, y: 0 }, tick: 2 }
+        }, {
+          kind: 'post-attack-drop-wait',
+          band: 'profit',
+          action: {
+            kind: 'post-attack-drop-wait',
+            band: 'profit',
+            reason: 'post-attack-drop-wait-position',
+            target: { type: 'coin', id: 'drop-wait', x: 1000, y: 0 }
+          }
+        });
+        const leave = adapter.applyDecision({
+          realtime: { self: { x: 0, y: 0 }, tick: 3 }
+        }, {
+          kind: 'leave',
+          band: 'safety',
+          action: {
+            kind: 'leave',
+            band: 'safety',
+            reason: 'stamina-budget-coin-leave',
+            shouldLeave: true
+          }
+        });
+        const unsupported = adapter.applyDecision({
+          realtime: { self: { x: 0, y: 0 }, tick: 4 }
+        }, {
+          kind: 'profit-candidate',
+          band: 'profit',
+          action: { kind: 'dance', band: 'profit', reason: 'unknown-action' }
+        });
+        return [
+          wait.kind,
+          wait.reason,
+          wait.handledBy,
+          postAttackWait.kind,
+          postAttackWait.reason,
+          leave.kind,
+          leave.handledBy,
+          leave.shouldLeave,
+          unsupported.kind,
+          unsupported.unsupportedAction.kind,
+          unsupported.unsupportedAction.reason,
+          commands.join(',')
+        ].join('|');
+      })(),
+      want: 'wait|no-profitable-candidate|action-adapter-stop|post-attack-drop-wait|post-attack-drop-wait-position|leave|safety-controller|true|unsupported-action|dance|unknown-action|vel 0 0,vel 0 0,vel 0 0,vel 0 0'
     },
     {
       name: 'browserless action adapter executes flee and return-block scan velocity',
