@@ -7662,6 +7662,98 @@ async function runSelfTest() {
       want: 'wait|wait|no-profitable-candidate|wait||'
     },
     {
+      name: 'browserless profit live avoids visible passive invulnerable target',
+      got: (() => {
+        const store = createBrowserlessStateStore({ userId: 7 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 60,
+          entities: [
+            { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+            { entity_id: 2, user_id: 8, name: 'invulnerable-passive', x: 20000, y: 0, hp: 100, current_join_mode: 'Passive', invulnerable_remaining_ms: 5000 }
+          ],
+          bullets: [],
+          coin_drops: []
+        }, { receivedAtMs: 1000 });
+        const decision = buildBrowserlessDecision(store.getState(1200), {}, {
+          nowMs: 1200,
+          controlMode: 'profit-live',
+          combatEnabled: true
+        });
+        return [
+          decision.kind,
+          decision.band,
+          decision.reason,
+          decision.action.kind,
+          decision.action.target.userId,
+          decision.action.target.authority,
+          decision.combat.target?.userId || ''
+        ].join('|');
+      })(),
+      want: 'flee|safety|avoid-invulnerable-target|flee|8|realtime|'
+    },
+    {
+      name: 'browserless visible invulnerable blocks ordinary coin before avoidance flee',
+      got: (() => {
+        const store = createBrowserlessStateStore({ userId: 7 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 60,
+          entities: [
+            { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+            { entity_id: 2, user_id: 8, name: 'invulnerable-passive', x: 20000, y: 0, hp: 100, current_join_mode: 'Passive', invulnerable_remaining_ms: 5000 }
+          ],
+          bullets: [],
+          coin_drops: [{ drop_id: 'ordinary-coin', amount: 1, x: 22000, y: 0 }]
+        }, { receivedAtMs: 1000 });
+        const decision = buildBrowserlessDecision(store.getState(1200), {}, {
+          nowMs: 1200,
+          controlMode: 'profit-live',
+          combatEnabled: true
+        });
+        return [
+          decision.kind,
+          decision.band,
+          decision.reason,
+          decision.action.target.userId,
+          decision.action.highValueCoinPriority?.source || '',
+          decision.profit.best?.id || ''
+        ].join('|');
+      })(),
+      want: 'flee|safety|avoid-invulnerable-target|8||'
+    },
+    {
+      name: 'browserless healthy high-value coin beats invulnerable avoidance',
+      got: (() => {
+        const store = createBrowserlessStateStore({ userId: 7 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 60,
+          entities: [
+            { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+            { entity_id: 2, user_id: 8, name: 'invulnerable-passive', x: 12000, y: 0, hp: 100, current_join_mode: 'Passive', invulnerable_remaining_ms: 5000 }
+          ],
+          bullets: [],
+          coin_drops: [{ drop_id: 'high-value-coin', amount: 30, x: 10000, y: 0 }]
+        }, { receivedAtMs: 1000 });
+        const decision = buildBrowserlessDecision(store.getState(1200), {}, {
+          nowMs: 1200,
+          controlMode: 'profit-live',
+          combatEnabled: true
+        });
+        return [
+          decision.kind,
+          decision.band,
+          decision.reason,
+          decision.action.target.id,
+          decision.action.target.amount,
+          decision.action.highValueCoinPriority.source,
+          decision.profit.best?.id || ''
+        ].join('|');
+      })(),
+      want: 'coin|profit|high-value-visible-coin-priority|high-value-coin|30|realtime|'
+    },
+    {
       name: 'browserless profit live can fight firing passive players when enabled',
       got: (() => {
         const store = createBrowserlessStateStore({ userId: 7 });

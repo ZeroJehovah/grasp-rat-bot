@@ -431,6 +431,7 @@ function buildBrowserlessStrategyInput(state, options = {}) {
     .filter(entity => Number.isFinite(Number(entity.x)) && Number.isFinite(Number(entity.y)));
   const activeThreats = visibleTargets.filter(entity => entity.active && entity.alive !== false);
   const firingThreats = visibleTargets.filter(entity => entity.firing && entity.alive !== false);
+  const avoidanceThreats = visibleTargets.filter(entity => entity.alive !== false && (entity.active || entity.firing || entity.invulnerable));
   const snapshotActiveThreats = visibleTargets.filter(entity => entity.profitMetadataActive && !entity.active && entity.alive !== false);
   const snapshotFallbackThreats = [
     ...activeThreats,
@@ -524,6 +525,7 @@ function buildBrowserlessStrategyInput(state, options = {}) {
     visibleTargets,
     activeThreats,
     firingThreats,
+    avoidanceThreats,
     snapshotActiveThreats,
     snapshotFallbackThreats,
     afkTargets,
@@ -644,7 +646,7 @@ function pickHighValueVisibleCoin(input, combatDecision, options = {}) {
     ?? options.coinMaxDistance
     ?? DEFAULT_GLOBAL_COIN_MAX_DISTANCE));
   const threats = [
-    ...(input.activeThreats || []),
+    ...(input.avoidanceThreats || input.activeThreats || []),
     ...(input.snapshotActiveThreats || [])
   ];
   if (!healthy) {
@@ -669,7 +671,7 @@ function highValueVisibleCoinPriorityNeeded(input, combatDecision, options = {})
   if (!input?.self) return false;
   if (isRecoveringSelf(input.self)) return true;
   if (combatDecision?.target || combatDecision?.dryRun?.target) return true;
-  if ((input.activeThreats || []).length || (input.snapshotActiveThreats || []).length) return true;
+  if ((input.avoidanceThreats || input.activeThreats || []).length || (input.snapshotActiveThreats || []).length) return true;
   if (hasLikelyIncomingBullet(input)) return true;
   return false;
 }
@@ -1051,7 +1053,7 @@ function safeBudgetCoinCandidates(input, options = {}) {
   return (input.profitCoins || [])
     .filter(coin => Number(coin?.amount || 0) > 0)
     .filter(coin => coinSafeFromThreats(coin, [
-      ...(input.activeThreats || []),
+      ...(input.avoidanceThreats || input.activeThreats || []),
       ...(input.snapshotActiveThreats || [])
     ], options));
 }
@@ -1334,7 +1336,8 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
   const includeAfkProfitTargets = options.includeAfkProfitTargets !== false && !(options.blockAfkProfitWhenActiveThreatVisible && input.activeThreats.length);
   const coinMaxDistance = Math.max(0, Number(options.coinMaxDistance || BROWSER_RUNTIME_DEFAULTS.coinMaxDistance));
   const globalCoinMaxDistance = Math.max(0, Number(options.globalCoinMaxDistance || DEFAULT_GLOBAL_COIN_MAX_DISTANCE));
-  const fieldMigrationCoin = pickFieldMigrationCoin(input, input.activeThreats.concat(input.snapshotActiveThreats || []), options);
+  const opportunityThreats = (input.avoidanceThreats || input.activeThreats || []).concat(input.snapshotActiveThreats || []);
+  const fieldMigrationCoin = pickFieldMigrationCoin(input, opportunityThreats, options);
   const coinGroups = input.profitCoins.length
     ? [
         { coins: input.profitCoins, maxDistance: coinMaxDistance },
@@ -1349,7 +1352,7 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
           isSnapshotOnlyCoin: coin => Boolean(coin?.snapshotOnly && input.profitCoinSource !== 'snapshot-fallback'),
           coinKey: coinRouteKey
         }),
-        input.activeThreats.concat(input.snapshotActiveThreats || []),
+        opportunityThreats,
         coinRouteCoreOptions(input, stateful, options)
       )
     : null;
@@ -1395,7 +1398,7 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
   };
   const opportunities = prioritizeBrowserlessOpportunities(buildOpportunityCandidatesCore(
     input.self,
-    input.activeThreats.concat(input.snapshotActiveThreats || []),
+    opportunityThreats,
     coinGroups,
     includeAfkProfitTargets ? input.afkTargets : [],
     routeCoin,
@@ -1501,7 +1504,7 @@ function browserlessPostAttackDropResolvedAt(attack, input, nowMs) {
 
 function postAttackThreats(input) {
   return [
-    ...(input?.activeThreats || []),
+    ...(input?.avoidanceThreats || input?.activeThreats || []),
     ...(input?.snapshotActiveThreats || [])
   ];
 }
@@ -1584,7 +1587,7 @@ function buildPostAttackDropWaitDecision(input, stateful = {}, options = {}) {
 function pickNearestSafeProfitCoin(input, maxDistance, options = {}) {
   if (!input?.self || !(Number(maxDistance) > 0)) return null;
   const threats = [
-    ...(input.activeThreats || []),
+    ...(input.avoidanceThreats || input.activeThreats || []),
     ...(input.snapshotActiveThreats || [])
   ];
   return (input.profitCoins || [])
@@ -1708,8 +1711,8 @@ function profitLiveSafetyDecision(input, combatDecision, stateful = {}, options 
   const realtimeTarget = combatDecision?.dryRun?.target || combatDecision?.target || null;
   const realtimeThreatsById = new Map();
   for (const target of [
-    ...(realtimeTarget && (realtimeTarget.active || realtimeTarget.firing) ? [realtimeTarget] : []),
-    ...(input.activeThreats || []),
+    ...(realtimeTarget && (realtimeTarget.active || realtimeTarget.firing || realtimeTarget.invulnerable) ? [realtimeTarget] : []),
+    ...(input.avoidanceThreats || input.activeThreats || []),
     ...(input.firingThreats || [])
   ]) {
     const id = target?.userId ?? target?.user_id ?? target?.entityId ?? target?.entity_id ?? `${target?.x}:${target?.y}`;
@@ -1730,9 +1733,12 @@ function profitLiveSafetyDecision(input, combatDecision, stateful = {}, options 
   const distance = Number(target?.distance);
   if (!target || !Number.isFinite(distance)) return null;
   const snapshotThreatening = Boolean(target.profitMetadataActive && !target.active);
-  const threatening = Boolean(target.active || target.firing || snapshotThreatening);
+  const invulnerableThreatening = Boolean(target.invulnerable && !snapshotThreatening);
+  const threatening = Boolean(target.active || target.firing || snapshotThreatening || invulnerableThreatening);
   if (!threatening) return null;
   const threatExitRange = Math.max(0, Number(options.profitLiveThreatExitRange || DEFAULT_PROFIT_LIVE_THREAT_EXIT_RANGE));
+  const invulnerableAvoidRange = Math.max(threatExitRange, Number(options.activeAvoidMaxDistance || BROWSER_RUNTIME_DEFAULTS.activeAvoidMaxDistance || threatExitRange));
+  const effectiveThreatExitRange = invulnerableThreatening ? invulnerableAvoidRange : threatExitRange;
   const injuryExitRange = Math.max(threatExitRange, Number(options.profitLiveInjuryExitRange || DEFAULT_PROFIT_LIVE_INJURY_EXIT_RANGE));
   const injured = isInjuredSelf(input.self, options);
   if (options.combatEnabled === true) {
@@ -1754,7 +1760,13 @@ function profitLiveSafetyDecision(input, combatDecision, stateful = {}, options 
         self: summarizeTarget(input.self)
       };
     }
-    if (!combatHandlesThreat && (target.active || target.firing) && distance <= threatExitRange) {
+    if (!combatHandlesThreat && invulnerableThreatening && distance <= effectiveThreatExitRange) {
+      return buildThreatFleeDecision(stateful, input, target, 'avoid-invulnerable-target', {
+        ...options,
+        dangerRadius: effectiveThreatExitRange
+      });
+    }
+    if (!combatHandlesThreat && (target.active || target.firing) && distance <= effectiveThreatExitRange) {
       const avoidance = buildReturnBlockActionCore(stateful, input.self, [target], blockedAction || { kind: 'wait', reason: 'blocked-by-active-threat' }, {
         ...options,
         nowMs: input.nowMs
@@ -1769,7 +1781,8 @@ function profitLiveSafetyDecision(input, combatDecision, stateful = {}, options 
     return null;
   }
   let reason = '';
-  if (distance <= threatExitRange) reason = 'profit-live-active-threat';
+  if (invulnerableThreatening && distance <= effectiveThreatExitRange) reason = 'avoid-invulnerable-target';
+  else if (distance <= effectiveThreatExitRange) reason = 'profit-live-active-threat';
   else if (injured && distance <= injuryExitRange) reason = 'profit-live-injury-threat';
   if (!reason) return null;
   if (snapshotThreatening) {
@@ -1787,6 +1800,12 @@ function profitLiveSafetyDecision(input, combatDecision, stateful = {}, options 
     ...options,
     nowMs: input.nowMs
   });
+  if (invulnerableThreatening) {
+    return buildThreatFleeDecision(stateful, input, target, reason, {
+      ...options,
+      dangerRadius: effectiveThreatExitRange
+    });
+  }
   return avoidance
     ? { ...avoidance, target: summarizeTarget(target), self: summarizeTarget(input.self) }
     : buildThreatFleeDecision(stateful, input, target, reason, options);
@@ -1810,13 +1829,21 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
   });
   const combat = buildCombatDecision(input, options);
   const combatActionEligible = isCombatActionEligibleForDecision(combat, options);
-  const safetyAction = profitLiveSafetyDecision(input, combat, stateful, options, opportunity.action);
-  const hardSafetyAction = safetyActionIsHardLeave(safetyAction) ? safetyAction : null;
-  const immediateSafetyAction = safetyAction && !hardSafetyAction && !safetyActionCanYieldToInjuredFootCoin(safetyAction)
-    ? safetyAction
-    : null;
   const highValueCoinPriorityAction = (profitLive || nonCombatProfit)
     ? buildHighValueVisibleCoinPriorityDecision(input, combat, options)
+    : null;
+  const safetyAction = profitLiveSafetyDecision(input, combat, stateful, options, opportunity.action);
+  const hardSafetyAction = safetyActionIsHardLeave(safetyAction) ? safetyAction : null;
+  const safetyYieldsToHighValueCoin = Boolean(
+    safetyAction
+      && safetyAction.reason === 'avoid-invulnerable-target'
+      && highValueCoinPriorityAction
+  );
+  const immediateSafetyAction = safetyAction
+    && !hardSafetyAction
+    && !safetyYieldsToHighValueCoin
+    && !safetyActionCanYieldToInjuredFootCoin(safetyAction)
+    ? safetyAction
     : null;
   const staminaBudgetExitAction = (profitLive || nonCombatProfit) ? buildStaminaBudgetExitDecision(input, options) : null;
   const postAttackDropCoinAction = (profitLive || nonCombatProfit) ? buildPostAttackDropCoinDecision(input, stateful, options) : null;
