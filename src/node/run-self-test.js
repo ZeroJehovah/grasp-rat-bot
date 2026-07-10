@@ -12550,8 +12550,57 @@ async function runSelfTest() {
               }
             }
           },
+          loginPointSafety: {
+            ok: false,
+            reason: 'active-near-login-point',
+            checkedAt: '2026-07-08T00:00:00.500Z',
+            point: { x: 5999, y: 66268, hp: 100, source: 'state' }
+          },
           probes: {
             lastReadOnlyProbe: {
+              snapshotSafety: {
+                ok: false,
+                reason: 'active-near-login-point',
+                response: {
+                  httpOk: true,
+                  status: 200,
+                  summary: {
+                    selfPresent: false,
+                    entityCount: 5,
+                    freshness: { ok: true, reason: 'fresh', tick: 123, latestKnownTick: 100, tickDelta: 23 },
+                    safety: {
+                      ok: false,
+                      reason: 'active-near-login-point',
+                      point: { x: 5999, y: 66268, hp: 100, source: 'state' },
+                      radius: 17000,
+                      radiusReason: 'last-self-healthy',
+                      entityCount: 5,
+                      nearbyCount: 2,
+                      activeNearbyCount: 1,
+                      nearestActive: {
+                        entity_id: 'enemy-entity',
+                        user_id: 88,
+                        name: 'enemy',
+                        x: 6100,
+                        y: 66300,
+                        hp: 44,
+                        coins: 9,
+                        distance: 800,
+                        active: true,
+                        alive: true
+                      },
+                      nearest: {
+                        entity_id: 'enemy-entity',
+                        user_id: 88,
+                        name: 'enemy',
+                        distance: 800,
+                        active: true,
+                        alive: true
+                      }
+                    }
+                  }
+                }
+              },
               state: {
                 realtime: { raw: largePayload }
               }
@@ -12662,11 +12711,19 @@ async function runSelfTest() {
           compactWaitingStatus.game.inGame,
           compactWaitingStatus.action.kind,
           compactStatus.self.hp,
+          compactStatus.self.x,
+          compactStatus.self.y,
           compactStatus.stamina.remaining1h,
           compactStatus.action.kind,
           compactStatus.action.target.amount,
           compactStatus.profit.best.target.amount,
           compactStatus.combat.target.name,
+          compactStatus.loginPointSafety.point.x,
+          compactStatus.loginPointSafety.detail.unsafeReason,
+          compactStatus.loginPointSafety.detail.activeNearbyCount,
+          compactStatus.loginPointSafety.detail.nearestActive.userId,
+          compactStatus.loginPointSafety.detail.freshness.tickDelta,
+          compactFromPublic.loginPointSafety.detail.nearestActive.name,
           compactStatus.recentExit.reason,
           compactStatus.recentBlock.reason,
           compactStatus.runner.lastRun.frames,
@@ -12677,7 +12734,7 @@ async function runSelfTest() {
           compactText.length < publicText.length / 10
         ].join('|');
       }),
-      want: 'true|77|true|true|true|true|true|false|loop-wait|88|360000|seek-coin|8|7|enemy|latest|blocked-login|123|false|false|false|false|true'
+      want: 'true|77|true|true|true|true|true|false|loop-wait|88|10|20|360000|seek-coin|8|7|enemy|5999|active-near-login-point|1|88|23|enemy|latest|blocked-login|123|false|false|false|false|true'
     },
     {
       name: 'browserless state file replaces current action snapshots',
@@ -12839,6 +12896,8 @@ async function runSelfTest() {
             !compactText.includes('must-not-leak'),
             panel.status,
             /抓鼠助手/.test(panelText),
+            /位置/.test(panelText),
+            /登录点坐标/.test(panelText),
             !panelText.includes('需要查看日志'),
             stop.status,
             JSON.parse(await stop.text()).stopped,
@@ -12848,7 +12907,7 @@ async function runSelfTest() {
           await handle.close();
         }
       })(),
-      want: '401|200|true|true|200|true|12|true|200|true|true|200|true|1'
+      want: '401|200|true|true|200|true|12|true|200|true|true|true|true|200|true|1'
     },
     {
       name: 'browserless runner self-test passes',

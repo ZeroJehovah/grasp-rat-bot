@@ -40,7 +40,8 @@ function defaultBrowserlessState() {
       ok: false,
       reason: 'unknown',
       point: null,
-      checkedAt: ''
+      checkedAt: '',
+      detail: null
     },
     current: {
       self: null,
@@ -227,6 +228,109 @@ function compactPoint(value) {
     y,
     hp: compactNumber(value.hp),
     source: compactString(value.source, 48)
+  };
+}
+
+function compactSafetyEntity(value) {
+  if (!value || typeof value !== 'object') return null;
+  const target = compactTarget({
+    type: value.type || 'player',
+    id: value.id ?? value.entity_id ?? value.entityId ?? null,
+    userId: value.userId ?? value.user_id,
+    entityId: value.entityId ?? value.entity_id ?? null,
+    name: value.name,
+    authority: value.authority || 'snapshot',
+    hp: value.hp,
+    drop: value.drop ?? value.coins,
+    amount: value.amount ?? value.value,
+    distance: value.distance,
+    active: value.active,
+    moving: value.moving,
+    firing: value.firing
+  });
+  if (!target) return null;
+  return {
+    ...target,
+    x: compactNumber(value.x),
+    y: compactNumber(value.y),
+    alive: value.alive === undefined ? null : Boolean(value.alive),
+    mode: compactString(value.current_join_mode || value.mode || value.joined, 48)
+  };
+}
+
+function compactSafetyFreshness(value) {
+  if (!value || typeof value !== 'object') return null;
+  return {
+    ok: value.ok === undefined ? null : Boolean(value.ok),
+    reason: compactString(value.reason, 120),
+    tick: compactNumber(value.tick),
+    latestKnownTick: compactNumber(value.latestKnownTick),
+    tickDelta: compactNumber(value.tickDelta)
+  };
+}
+
+function latestSnapshotSafetyForLoginPoint(normalized) {
+  const candidates = [
+    normalized?.loginPointSafety?.snapshotSafety,
+    normalized?.probes?.lastSnapshotProbe?.snapshotSafety,
+    normalized?.probes?.lastReadOnlyProbe?.snapshotSafety,
+    normalized?.runner?.lastRun?.canary?.snapshotSafety
+  ];
+  return candidates.find(item => item && typeof item === 'object') || null;
+}
+
+function compactLoginPointSafetyDetail(loginPointSafety, normalized) {
+  const snapshotSafety = latestSnapshotSafetyForLoginPoint(normalized);
+  const response = snapshotSafety?.response && typeof snapshotSafety.response === 'object'
+    ? snapshotSafety.response
+    : {};
+  const summary = response.summary && typeof response.summary === 'object'
+    ? response.summary
+    : {};
+  const snapshotSummarySafety = summary.safety && typeof summary.safety === 'object'
+    ? summary.safety
+    : {};
+  const directDetail = loginPointSafety?.detail && typeof loginPointSafety.detail === 'object'
+    ? loginPointSafety.detail
+    : {};
+  const detail = Object.keys(snapshotSummarySafety).length ? snapshotSummarySafety : directDetail;
+  const okValue = detail.ok ?? snapshotSafety?.ok ?? loginPointSafety?.ok;
+  const reason = detail.reason || snapshotSafety?.reason || loginPointSafety?.reason || '';
+  const unsafeReason = okValue === false
+    ? (reason || snapshotSafety?.originalReason || loginPointSafety?.reason || 'unsafe')
+    : '';
+  const point = compactPoint(
+    detail.point
+      || snapshotSafety?.loginPoint
+      || loginPointSafety?.point
+  );
+  const hasDetail = Boolean(
+    snapshotSafety
+      || Object.keys(directDetail).length
+      || reason
+      || point
+  );
+  if (!hasDetail) return null;
+  return {
+    ok: okValue === undefined ? null : Boolean(okValue),
+    reason: compactString(reason, 120),
+    unsafeReason: compactString(unsafeReason, 120),
+    originalReason: compactString(snapshotSafety?.originalReason || directDetail.originalReason, 120),
+    checkedAt: compactString(loginPointSafety?.checkedAt || directDetail.checkedAt, 48),
+    point,
+    httpOk: response.httpOk === undefined ? null : Boolean(response.httpOk),
+    httpStatus: compactNumber(response.status),
+    selfPresent: summary.selfPresent === undefined ? null : Boolean(summary.selfPresent),
+    bypassedPreLoginSafety: snapshotSafety?.bypassedPreLoginSafety === undefined ? null : Boolean(snapshotSafety.bypassedPreLoginSafety),
+    bootstrapOnly: snapshotSafety?.bootstrapOnly === undefined ? null : Boolean(snapshotSafety.bootstrapOnly),
+    freshness: compactSafetyFreshness(detail.freshness || summary.freshness || directDetail.freshness),
+    radius: compactNumber(detail.radius ?? directDetail.radius),
+    radiusReason: compactString(detail.radiusReason || directDetail.radiusReason, 80),
+    entityCount: compactNumber(detail.entityCount ?? summary.entityCount ?? directDetail.entityCount),
+    nearbyCount: compactNumber(detail.nearbyCount ?? directDetail.nearbyCount),
+    activeNearbyCount: compactNumber(detail.activeNearbyCount ?? directDetail.activeNearbyCount),
+    nearestActive: compactSafetyEntity(detail.nearestActive || directDetail.nearestActive),
+    nearest: compactSafetyEntity(detail.nearest || directDetail.nearest)
   };
 }
 
@@ -521,6 +625,8 @@ function buildCompactBrowserlessStatus(state, config = {}) {
   const recentExits = Array.isArray(normalized.recentExits) ? normalized.recentExits : [];
   const recentActualExit = recentExits.slice().reverse().find(event => event?.shouldLeave !== false) || null;
   const recentBlock = recentExits.slice().reverse().find(event => event?.shouldLeave === false) || null;
+  const loginPointSafetyDetail = compactLoginPointSafetyDetail(normalized.loginPointSafety || {}, normalized);
+  const loginPoint = compactPoint(normalized.loginPointSafety?.point) || loginPointSafetyDetail?.point || null;
   const compactState = {
     schemaVersion: normalized.schemaVersion,
     compact: true,
@@ -554,7 +660,8 @@ function buildCompactBrowserlessStatus(state, config = {}) {
       ok: Boolean(normalized.loginPointSafety?.ok),
       reason: compactString(normalized.loginPointSafety?.reason, 120),
       checkedAt: normalized.loginPointSafety?.checkedAt || '',
-      point: compactPoint(normalized.loginPointSafety?.point)
+      point: loginPoint,
+      detail: loginPointSafetyDetail
     },
     network: {
       sourceIp: normalized.network.sourceIp || '',

@@ -22,7 +22,7 @@ function renderBrowserlessWebPanel() {
     .hero{border:1px solid var(--line);background:var(--panel);border-radius:8px;padding:12px;margin-bottom:10px}
     .botline{font-size:18px;line-height:1.25;font-weight:720;margin-bottom:4px;overflow-wrap:anywhere}
     .reason{color:var(--muted);overflow-wrap:anywhere}
-    .metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-top:10px}
+    .metrics{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin-top:10px}
     .metric{border:1px solid var(--line);background:var(--panel2);border-radius:6px;padding:8px;min-width:0}
     .label{display:block;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px}
     .value{display:block;font-size:14px;min-height:20px;overflow-wrap:anywhere}
@@ -55,6 +55,7 @@ function renderBrowserlessWebPanel() {
         <div class="metric"><span class="label">血量</span><span id="hp" class="value">--</span></div>
         <div class="metric"><span class="label">体力</span><span id="stamina" class="value">--</span></div>
         <div class="metric"><span class="label">身上金币</span><span id="drop" class="value">--</span></div>
+        <div class="metric"><span class="label">位置</span><span id="position" class="value">--</span></div>
         <div class="metric"><span class="label">运行方式</span><span id="mode" class="value">--</span></div>
       </div>
     </section>
@@ -110,6 +111,10 @@ function renderBrowserlessWebPanel() {
       if (n === null) return '--';
       return Math.round(n / 100) + 'm';
     };
+    const coord = v => {
+      const n = number(v);
+      return n === null ? '--' : String(Math.round(n));
+    };
     const bool = v => v === null || v === undefined ? '--' : (v ? '是' : '否');
     const stamp = iso => {
       if (!iso) return '--';
@@ -136,6 +141,17 @@ function renderBrowserlessWebPanel() {
       if (target.drop !== null && target.drop !== undefined) parts.push('掉落 ' + target.drop);
       if (target.amount !== null && target.amount !== undefined) parts.push('金币 ' + target.amount);
       return parts.join(' / ');
+    }
+    function pointText(point) {
+      if (!point || (number(point.x) === null && number(point.y) === null)) return '--';
+      const parts = ['(' + coord(point.x) + ', ' + coord(point.y) + ')'];
+      if (point.hp !== null && point.hp !== undefined) parts.push('血量 ' + point.hp);
+      if (point.source) parts.push(sourceText(point.source) === '--' ? String(point.source) : sourceText(point.source));
+      return parts.join(' / ');
+    }
+    function positionText(status) {
+      if (status.game?.inGame) return pointText(status.self);
+      return pointText(status.loginPointSafety?.point);
     }
     const reasonMap = {
       'best-opportunity-coin': '选择收益最高的金币',
@@ -164,9 +180,16 @@ function renderBrowserlessWebPanel() {
       'missing-target': '没有目标',
       'no-target': '没有目标',
       'manual-login-point-pending-snapshot-safety': '正在检查登录点安全',
+      'learned-login-point-pending-snapshot-safety': '正在检查登录点安全',
+      'imported-login-point-pending-snapshot-safety': '正在检查登录点安全',
       'unsafe-login-point': '登录点不安全',
       'snapshot safety not confirmed: active-near-login-point': '登录点附近有危险玩家，暂不进入',
       'missing-manual-session': '等待登录信息',
+      'missing-login-point': '缺少登录点坐标',
+      'missing-snapshot-tick': '快照缺少时间戳',
+      'stale-snapshot-tick': '快照过期',
+      'no-prior-tick': '没有历史时间戳',
+      safe: '安全',
       'active-near-login-point': '登录点附近有危险玩家',
       'self-present-reentry': '已经在游戏中，继续接管',
       'cycle-complete': '本轮结束，等待下一轮',
@@ -371,6 +394,31 @@ function renderBrowserlessWebPanel() {
       if (/unsafe|active|threat|danger/i.test(reason)) return '不安全';
       return '未确认';
     }
+    function freshnessText(detail) {
+      const fresh = detail?.freshness || null;
+      if (!fresh) return '--';
+      const parts = [reasonText(fresh.reason)];
+      if (fresh.tick !== null && fresh.tick !== undefined) parts.push('tick ' + fresh.tick);
+      if (fresh.tickDelta !== null && fresh.tickDelta !== undefined) parts.push('差值 ' + fresh.tickDelta);
+      return parts.join(' / ');
+    }
+    function loginPointDetailText(status) {
+      const detail = status.loginPointSafety?.detail || null;
+      if (!detail) return '--';
+      const parts = [];
+      if (detail.reason) parts.push(reasonText(detail.reason));
+      if (detail.radius !== null && detail.radius !== undefined) parts.push('范围 ' + distance(detail.radius));
+      if (detail.activeNearbyCount !== null && detail.activeNearbyCount !== undefined) parts.push('Active ' + detail.activeNearbyCount);
+      if (detail.nearbyCount !== null && detail.nearbyCount !== undefined) parts.push('附近 ' + detail.nearbyCount);
+      if (detail.entityCount !== null && detail.entityCount !== undefined) parts.push('实体 ' + detail.entityCount);
+      if (detail.httpStatus !== null && detail.httpStatus !== undefined) parts.push('HTTP ' + detail.httpStatus);
+      return parts.length ? parts.join(' / ') : '--';
+    }
+    function unsafeReasonText(status) {
+      if (status.game?.inGame || status.loginPointSafety?.ok) return '--';
+      const detail = status.loginPointSafety?.detail || {};
+      return reasonText(detail.unsafeReason || detail.reason || status.loginPointSafety?.reason);
+    }
     function actionText(status) {
       const decision = status.decision || {};
       const action = status.action || {};
@@ -402,6 +450,7 @@ function renderBrowserlessWebPanel() {
       setText('hp', s.self?.hp);
       setText('stamina', '5秒 ' + unit(s.stamina?.remaining5s) + ' / 1小时 ' + unit(s.stamina?.remaining1h) + ' / 1天 ' + unit(s.stamina?.remaining1d));
       setText('drop', s.self?.drop);
+      setText('position', positionText(s));
       setText('mode', modeText(s.runner?.controlMode || s.runner?.mode, s.runner?.combatEnabled));
 
       const target = activeTarget(s);
@@ -415,6 +464,7 @@ function renderBrowserlessWebPanel() {
         ['账号', s.session?.userId],
         ['已登录', bool(s.session?.authenticated)],
         ['游戏内', bool(s.game?.inGame)],
+        ['当前位置', s.game?.inGame ? pointText(s.self) : '--'],
         ['登录信息', s.session?.tokenPresent ? '已有' : '缺失'],
         ['出口数量', s.network?.sourceIpCount],
         ['当前出口', s.network?.sourceIp]
@@ -448,7 +498,13 @@ function renderBrowserlessWebPanel() {
       ]);
       rows('safety', [
         ['登录点', loginPointText(s)],
+        ['登录点坐标', s.game?.inGame ? '--' : pointText(s.loginPointSafety?.point)],
         ['原因', s.game?.inGame ? '当前已连入游戏' : reasonText(s.loginPointSafety?.reason)],
+        ['不安全原因', unsafeReasonText(s)],
+        ['检查详情', s.game?.inGame ? '--' : loginPointDetailText(s)],
+        ['快照新鲜度', s.game?.inGame ? '--' : freshnessText(s.loginPointSafety?.detail)],
+        ['最近危险', s.game?.inGame ? '--' : targetLabel(s.loginPointSafety?.detail?.nearestActive)],
+        ['最近实体', s.game?.inGame ? '--' : targetLabel(s.loginPointSafety?.detail?.nearest)],
         ['检查时间', stamp(s.loginPointSafety?.checkedAt)],
         ['最近阻止', reasonText(s.recentBlock?.reason)],
         ['最近退出', reasonText(s.recentExit?.reason)]
