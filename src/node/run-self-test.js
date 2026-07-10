@@ -8987,6 +8987,77 @@ async function runSelfTest() {
       want: 'linear-intercept|1400|true|linear-intercept|direct-threat-dodge|disabled|below-hard-reserve|false|true'
     },
     {
+      name: 'browserless combat fire treats unknown self stamina as unknown not zero',
+      got: (() => {
+        const combat = buildBrowserlessCombatDryRun({
+          userId: 7,
+          realtime: {
+            tick: 63,
+            self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100 },
+            entities: [
+              { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100 },
+              { entity_id: 2, user_id: 8, name: 'active', x: 1000, y: 0, hp: 90, current_join_mode: 'Active', firing: true, drop: 8 }
+            ],
+            bullets: []
+          }
+        }, { nowMs: 1500, combatAttackRange: 11000 });
+        return [
+          combat.shooting.state,
+          combat.shooting.reason,
+          combat.shooting.wouldShoot,
+          combat.shooting.commandSuppressed,
+          combat.shooting.stamina5s === null,
+          combat.self.stamina5s === null
+        ].join('|');
+      })(),
+      want: 'normal|normal-fire|true|true|true|true'
+    },
+    {
+      name: 'browserless combat uses snapshot-enriched self stamina',
+      got: (() => {
+        const decision = buildBrowserlessDecision({
+          userId: 7,
+          realtime: {
+            tick: 64,
+            frameAgeMs: 100,
+            self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 90 },
+            entities: [
+              { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 90 },
+              { entity_id: 2, user_id: 8, name: 'active', x: 1000, y: 0, hp: 90, current_join_mode: 'Active', firing: true, drop: 8 }
+            ],
+            bullets: [],
+            coinDrops: []
+          },
+          fallback: {
+            tick: 64,
+            frameAgeMs: 100,
+            entities: [
+              {
+                entity_id: 1,
+                user_id: 7,
+                x: 0,
+                y: 0,
+                hp: 90,
+                stamina_5s_remaining_milli: 500,
+                stamina_5s_limit_milli: 10000
+              }
+            ],
+            coinDrops: []
+          }
+        }, {}, { nowMs: 1500, controlMode: 'combat-dry-run', combatAttackRange: 11000 });
+        return [
+          decision.input.dataGaps.includes('self-stamina-from-snapshot'),
+          decision.input.stamina.stamina5sRemainingMilli,
+          decision.combat.self.stamina5s,
+          decision.combat.self.staminaMetadataAuthority,
+          decision.combat.shooting.state,
+          decision.combat.shooting.reason,
+          decision.combat.shooting.wouldShoot
+        ].join('|');
+      })(),
+      want: 'true|500|500|snapshot|disabled|below-hard-reserve|false'
+    },
+    {
       name: 'browserless decision adapter exposes combat dry-run action without firing',
       got: (() => {
         const decision = buildBrowserlessDecision({

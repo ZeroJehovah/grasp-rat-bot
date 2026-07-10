@@ -22,6 +22,21 @@ const FIRE_STATE = {
   PRESSURE: 'pressure'           // Under/applying pressure
 };
 
+function numberOrNull(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function stamina5sRemaining(self) {
+  if (!self || typeof self !== 'object') return null;
+  return numberOrNull(
+    self.stamina_5s_remaining_milli
+      ?? self.stamina5sRemainingMilli
+      ?? self.stamina5s
+      ?? self.stamina_5s
+  );
+}
+
 /**
  * Determine combat fire state based on stamina and context
  *
@@ -31,18 +46,20 @@ const FIRE_STATE = {
  * @returns {Object} { state, cadenceMs, reserve, reason }
  */
 function determineCombatFireState(self, target, context = {}) {
-  const stamina5s = Number(self.stamina_5s_remaining_milli || 0);
+  const stamina5s = stamina5sRemaining(self);
   const hardReserve = COMBAT_CONSTANTS.SHOOT_HARD_RESERVE_MS;
   const dodgeReserve = COMBAT_CONSTANTS.SHOOT_DODGE_RESERVE_MS;
+  const result = (state, cadenceMs, reserve, reason) => ({
+    state,
+    cadenceMs,
+    reserve,
+    reason,
+    stamina5s
+  });
 
   // Hard floor - never fire below this
-  if (stamina5s < hardReserve) {
-    return {
-      state: FIRE_STATE.DISABLED,
-      cadenceMs: Infinity,
-      reserve: hardReserve,
-      reason: 'below-hard-reserve'
-    };
+  if (stamina5s !== null && stamina5s < hardReserve) {
+    return result(FIRE_STATE.DISABLED, Infinity, hardReserve, 'below-hard-reserve');
   }
 
   // Check guarded fire windows
@@ -50,106 +67,51 @@ function determineCombatFireState(self, target, context = {}) {
   // Opponent probe (early engagement without target bullet evidence)
   if (context.opponentProbe) {
     const probeReserve = COMBAT_CONSTANTS.OPPONENT_PROBE_RESERVE_MS;
-    if (stamina5s < probeReserve) {
-      return {
-        state: FIRE_STATE.PAUSED,
-        cadenceMs: Infinity,
-        reserve: probeReserve,
-        reason: 'probe-reserve'
-      };
+    if (stamina5s !== null && stamina5s < probeReserve) {
+      return result(FIRE_STATE.PAUSED, Infinity, probeReserve, 'probe-reserve');
     }
-    return {
-      state: FIRE_STATE.PROBE,
-      cadenceMs: COMBAT_CONSTANTS.OPPONENT_PROBE_EVERY_MS,
-      reserve: probeReserve,
-      reason: 'opponent-probe'
-    };
+    return result(FIRE_STATE.PROBE, COMBAT_CONSTANTS.OPPONENT_PROBE_EVERY_MS, probeReserve, 'opponent-probe');
   }
 
   // Finish low threat (low HP target, high HP self, no pressure)
   if (context.finishLowThreat) {
     const finishReserve = COMBAT_CONSTANTS.FINISH_LOW_THREAT_RESERVE_MS;
-    if (stamina5s < finishReserve) {
-      return {
-        state: FIRE_STATE.PAUSED,
-        cadenceMs: Infinity,
-        reserve: finishReserve,
-        reason: 'finish-reserve'
-      };
+    if (stamina5s !== null && stamina5s < finishReserve) {
+      return result(FIRE_STATE.PAUSED, Infinity, finishReserve, 'finish-reserve');
     }
-    return {
-      state: FIRE_STATE.FINISH,
-      cadenceMs: COMBAT_CONSTANTS.SHOOT_EVERY_MS,
-      reserve: finishReserve,
-      reason: 'finish-low-threat'
-    };
+    return result(FIRE_STATE.FINISH, COMBAT_CONSTANTS.SHOOT_EVERY_MS, finishReserve, 'finish-low-threat');
   }
 
   // Passive runner (no threat, safe to fire)
   if (context.passiveRunner) {
     const passiveReserve = COMBAT_CONSTANTS.PASSIVE_RUNNER_DODGE_RESERVE_MS;
-    if (stamina5s < passiveReserve) {
-      return {
-        state: FIRE_STATE.PAUSED,
-        cadenceMs: Infinity,
-        reserve: passiveReserve,
-        reason: 'passive-reserve'
-      };
+    if (stamina5s !== null && stamina5s < passiveReserve) {
+      return result(FIRE_STATE.PAUSED, Infinity, passiveReserve, 'passive-reserve');
     }
-    return {
-      state: FIRE_STATE.NORMAL,
-      cadenceMs: COMBAT_CONSTANTS.SHOOT_EVERY_MS,
-      reserve: passiveReserve,
-      reason: 'passive-runner'
-    };
+    return result(FIRE_STATE.NORMAL, COMBAT_CONSTANTS.SHOOT_EVERY_MS, passiveReserve, 'passive-runner');
   }
 
   // Target pressure fire (real incoming bullets, but winning fight)
   if (context.targetPressureFire) {
-    if (stamina5s < dodgeReserve) {
-      return {
-        state: FIRE_STATE.PAUSED,
-        cadenceMs: Infinity,
-        reserve: dodgeReserve,
-        reason: 'pressure-dodge-reserve'
-      };
+    if (stamina5s !== null && stamina5s < dodgeReserve) {
+      return result(FIRE_STATE.PAUSED, Infinity, dodgeReserve, 'pressure-dodge-reserve');
     }
-    return {
-      state: FIRE_STATE.PRESSURE,
-      cadenceMs: COMBAT_CONSTANTS.SHOOT_EVERY_MS,
-      reserve: dodgeReserve,
-      reason: 'target-pressure-fire'
-    };
+    return result(FIRE_STATE.PRESSURE, COMBAT_CONSTANTS.SHOOT_EVERY_MS, dodgeReserve, 'target-pressure-fire');
   }
 
   // Normal combat fire discipline
-  if (stamina5s < dodgeReserve) {
-    return {
-      state: FIRE_STATE.PAUSED,
-      cadenceMs: Infinity,
-      reserve: dodgeReserve,
-      reason: 'dodge-reserve'
-    };
+  if (stamina5s !== null && stamina5s < dodgeReserve) {
+    return result(FIRE_STATE.PAUSED, Infinity, dodgeReserve, 'dodge-reserve');
   }
 
   // Reserve band (low stamina, throttled fire)
   const reserveBandThreshold = dodgeReserve + 1000;
-  if (stamina5s < reserveBandThreshold) {
-    return {
-      state: FIRE_STATE.RESERVE_BAND,
-      cadenceMs: COMBAT_CONSTANTS.SHOOT_RESERVE_BAND_MS,
-      reserve: dodgeReserve,
-      reason: 'reserve-band'
-    };
+  if (stamina5s !== null && stamina5s < reserveBandThreshold) {
+    return result(FIRE_STATE.RESERVE_BAND, COMBAT_CONSTANTS.SHOOT_RESERVE_BAND_MS, dodgeReserve, 'reserve-band');
   }
 
   // Normal fire
-  return {
-    state: FIRE_STATE.NORMAL,
-    cadenceMs: COMBAT_CONSTANTS.SHOOT_EVERY_MS,
-    reserve: dodgeReserve,
-    reason: 'normal-fire'
-  };
+  return result(FIRE_STATE.NORMAL, COMBAT_CONSTANTS.SHOOT_EVERY_MS, dodgeReserve, 'normal-fire');
 }
 
 /**
@@ -214,6 +176,7 @@ function checkLowConfidenceThrottle(aimContext) {
 module.exports = {
   FIRE_STATE,
   determineCombatFireState,
+  stamina5sRemaining,
   canFireNow,
   shouldSuppressRetreatingEdge,
   checkLowConfidenceThrottle

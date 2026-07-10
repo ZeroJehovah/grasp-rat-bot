@@ -73,6 +73,12 @@ function normalizeCombatEntity(entity, self = null) {
   const vx = numberOrNull(entity.vx);
   const vy = numberOrNull(entity.vy);
   const speed = numberOrNull(entity.speed ?? entity.speed_per_tick ?? entity.speedPerTick);
+  const stamina5s = numberOrNull(entity.stamina_5s_remaining_milli ?? entity.stamina5sRemainingMilli ?? entity.stamina5s ?? entity.stamina_5s);
+  const stamina1h = numberOrNull(entity.stamina_1h_remaining_milli ?? entity.stamina1hRemainingMilli ?? entity.stamina1h ?? entity.stamina_1h);
+  const stamina1d = numberOrNull(entity.stamina_1d_remaining_milli ?? entity.stamina1dRemainingMilli ?? entity.stamina1d ?? entity.stamina_1d);
+  const stamina5sLimit = numberOrNull(entity.stamina_5s_limit_milli ?? entity.stamina5sLimitMilli ?? entity.stamina5sLimit);
+  const stamina1hLimit = numberOrNull(entity.stamina_1h_limit_milli ?? entity.stamina1hLimitMilli ?? entity.stamina1hLimit);
+  const stamina1dLimit = numberOrNull(entity.stamina_1d_limit_milli ?? entity.stamina1dLimitMilli ?? entity.stamina1dLimit);
   const normalized = {
     ...cloneJson(entity),
     user_id: numberOrNull(entity.user_id),
@@ -91,6 +97,31 @@ function normalizeCombatEntity(entity, self = null) {
     firing: Boolean(entity.firing || entity.is_firing || entity.shooting),
     authority: 'realtime'
   };
+  if (stamina5s !== null) {
+    normalized.stamina_5s_remaining_milli = stamina5s;
+    normalized.stamina5sRemainingMilli = stamina5s;
+  }
+  if (stamina1h !== null) {
+    normalized.stamina_1h_remaining_milli = stamina1h;
+    normalized.stamina1hRemainingMilli = stamina1h;
+  }
+  if (stamina1d !== null) {
+    normalized.stamina_1d_remaining_milli = stamina1d;
+    normalized.stamina1dRemainingMilli = stamina1d;
+  }
+  if (stamina5sLimit !== null) {
+    normalized.stamina_5s_limit_milli = stamina5sLimit;
+    normalized.stamina5sLimitMilli = stamina5sLimit;
+  }
+  if (stamina1hLimit !== null) {
+    normalized.stamina_1h_limit_milli = stamina1hLimit;
+    normalized.stamina1hLimitMilli = stamina1hLimit;
+  }
+  if (stamina1dLimit !== null) {
+    normalized.stamina_1d_limit_milli = stamina1dLimit;
+    normalized.stamina1dLimitMilli = stamina1dLimit;
+  }
+  if (entity.staminaMetadataAuthority) normalized.staminaMetadataAuthority = entity.staminaMetadataAuthority;
   normalized.distance = self ? distanceBetween(self, normalized) : numberOrNull(entity.distance);
   return normalized;
 }
@@ -203,6 +234,11 @@ function summarizeCombatTarget(target) {
     vy: numberOrNull(target.vy),
     hp: numberOrNull(target.hp),
     drop: entityDropValue(target),
+    stamina5s: numberOrNull(target.stamina_5s_remaining_milli ?? target.stamina5sRemainingMilli),
+    stamina5sLimit: numberOrNull(target.stamina_5s_limit_milli ?? target.stamina5sLimitMilli),
+    stamina1h: numberOrNull(target.stamina_1h_remaining_milli ?? target.stamina1hRemainingMilli),
+    stamina1d: numberOrNull(target.stamina_1d_remaining_milli ?? target.stamina1dRemainingMilli),
+    staminaMetadataAuthority: target.staminaMetadataAuthority || '',
     active: Boolean(target.active || isActiveCombatEntity(target)),
     firing: Boolean(target.firing || target.is_firing || target.shooting),
     distance: Number.isFinite(Number(target.distance)) ? Math.round(Number(target.distance)) : null,
@@ -607,6 +643,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
       reason: fireState.reason,
       cadenceMs: Number.isFinite(Number(fireState.cadenceMs)) ? Number(fireState.cadenceMs) : null,
       reserve: numberOrNull(fireState.reserve),
+      stamina5s: fireState.stamina5s === null ? null : numberOrNull(fireState.stamina5s),
       lowConfidenceThrottle: Boolean(lowConfidence.throttle),
       effectiveCadenceMs: Number.isFinite(Number(lowConfidence.cadenceMs)) && lowConfidence.throttle ? Number(lowConfidence.cadenceMs) : (Number.isFinite(Number(fireState.cadenceMs)) ? Number(fireState.cadenceMs) : null)
     },

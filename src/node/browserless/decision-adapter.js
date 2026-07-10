@@ -2402,9 +2402,15 @@ function buildBrowserlessPursuitLeaveDecision(input, stateful, combat, options =
 
 function buildCombatDecision(input, stateful = {}, options = {}) {
   const combatLiveEnabled = (options.controlMode === 'combat-live' || options.controlMode === 'profit-live') && options.combatEnabled === true;
+  const combatRealtime = {
+    ...(input.rawRealtime || {}),
+    // Keep targets and bullets realtime-only, but pass the enriched realtime self so
+    // browserless combat sees snapshot-sourced private stamina fields.
+    self: input.self || input.rawRealtime?.self || null
+  };
   const combat = buildBrowserlessCombatDryRun({
     userId: input.userId,
-    realtime: input.rawRealtime || {}
+    realtime: combatRealtime
   }, {
     ...options,
     decisionState: stateful,

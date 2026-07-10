@@ -241,6 +241,8 @@ function compactTarget(value) {
     authority: compactString(value.authority, 48),
     hp: compactNumber(value.hp),
     drop: compactNumber(value.drop),
+    stamina5s: compactNumber(value.stamina5s ?? value.stamina5sRemainingMilli ?? value.stamina_5s_remaining_milli),
+    staminaMetadataAuthority: compactString(value.staminaMetadataAuthority, 48),
     amount: compactNumber(value.amount ?? value.value),
     distance: compactNumber(value.distance ?? value.d),
     active: value.active === undefined ? null : Boolean(value.active),
@@ -394,6 +396,7 @@ function compactCombat(combat) {
     liveEnabled: combat.liveEnabled === undefined ? null : Boolean(combat.liveEnabled),
     authority: compactString(combat.authority, 48),
     tick: compactNumber(combat.tick),
+    self: compactTarget(combat.self),
     target: compactTarget(combat.target),
     candidateCount: candidates.length,
     movement: combat.movement && typeof combat.movement === 'object'
@@ -408,7 +411,8 @@ function compactCombat(combat) {
           wouldShoot: combat.shooting.wouldShoot === undefined ? null : Boolean(combat.shooting.wouldShoot),
           inRange: combat.shooting.inRange === undefined ? null : Boolean(combat.shooting.inRange),
           reason: compactString(combat.shooting.reason, 120),
-          cadenceMs: compactNumber(combat.shooting.cadenceMs ?? combat.shooting.effectiveCadenceMs)
+          cadenceMs: compactNumber(combat.shooting.cadenceMs ?? combat.shooting.effectiveCadenceMs),
+          stamina5s: compactNumber(combat.shooting.stamina5s)
         }
       : null,
     exit: combat.exit && typeof combat.exit === 'object'
