@@ -13409,10 +13409,12 @@ async function runSelfTest() {
           /function offlineBlockerText/.test(panelScript),
           /s\.lastKnown\?\.self/.test(panelScript),
           /上次体力1d/.test(panelScript),
-          /保持离线/.test(panelScript)
+          /保持离线/.test(panelScript),
+          panelScript.includes("if (online) addRow(rowsOut, '数据缺口', dataGapsText(decision));"),
+          panelScript.includes("return '快照金币备用被阻止：快照金币超出可见范围';")
         ].join('|');
       })(),
-      want: 'true|true|true|true|true|true|true|true|true|true|true|true'
+      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless runner self-test passes',
