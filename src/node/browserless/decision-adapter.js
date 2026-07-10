@@ -737,6 +737,30 @@ function uniqueNearbyCoins(input) {
   return Array.from(byKey.values());
 }
 
+function profitCoinKey(coin) {
+  if (!coin) return '';
+  return String(coin.key || coinTargetKeyCore(coin) || coin.drop_id || coin.id || '');
+}
+
+function profitCoinPriorityRank(coin) {
+  return coin?.selfKilledPlayerDrop || coin?.playerDropPriority ? 1 : 0;
+}
+
+function mergeProfitCoinCandidates(...groups) {
+  const byKey = new Map();
+  for (const coins of groups || []) {
+    for (const coin of coins || []) {
+      const key = profitCoinKey(coin);
+      if (!key) continue;
+      const previous = byKey.get(key);
+      if (!previous || profitCoinPriorityRank(coin) > profitCoinPriorityRank(previous)) {
+        byKey.set(key, coin);
+      }
+    }
+  }
+  return Array.from(byKey.values());
+}
+
 function invulnerableRemainingMs(target, options = {}) {
   const msFields = [
     'invulnerable_remaining_ms',
@@ -912,9 +936,22 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
   if (afkTargets.some(target => Number(target.afkStaminaCooldownRemainingMs || 0) > 0)) dataGaps.push('afk-stamina-cooldown-target-visible');
   if (snapshotFallbackBlockedReasons.length) dataGaps.push(...snapshotFallbackBlockedReasons.map(reason => `snapshot-fallback-blocked:${reason}`));
   if (!realtime.frameAgeMs && realtime.receivedAtMs) dataGaps.push('unknown-realtime-frame-age');
+  const selfKilledPlayerDropCoinKeys = new Set(selfKilledPlayerDropCoins.map(profitCoinKey).filter(Boolean));
+  const selfKilledPlayerDropProfitCoins = selfKilledPlayerDropCoins.map(coin => ({
+    ...coin,
+    selfKilledPlayerDrop: true,
+    playerDropPriority: true
+  }));
+  const snapshotFallbackProfitCoins = snapshotFallbackAllowed
+    ? snapshotVisibleCoins.map(coin => (selfKilledPlayerDropCoinKeys.has(profitCoinKey(coin))
+      ? { ...coin, selfKilledPlayerDrop: true, playerDropPriority: true }
+      : coin))
+    : [];
   const profitCoins = realtimeCoins.length
     ? realtimeCoins
-    : (selfKilledPlayerDropCoins.length ? selfKilledPlayerDropCoins : (snapshotFallbackAllowed ? snapshotVisibleCoins : []));
+    : (selfKilledPlayerDropCoins.length
+        ? mergeProfitCoinCandidates(selfKilledPlayerDropProfitCoins, snapshotFallbackProfitCoins)
+        : snapshotFallbackProfitCoins);
   const profitCoinSource = realtimeCoins.length
     ? 'realtime'
     : (selfKilledPlayerDropCoins.length ? 'snapshot-player-drop' : (snapshotFallbackAllowed ? 'snapshot-fallback' : 'none'));
@@ -1009,6 +1046,18 @@ function coinThreatDangerRadius(threat, options = {}) {
 
 function coinBlockedByThreat(_origin, coin, threat, options = {}) {
   return !coinSafeFromThreats(coin, [threat], options);
+}
+
+function targetSafeFromOpportunityThreats(target, threats = [], options = {}) {
+  const dangerRadius = Math.max(0, Number(options.attackDangerRadius ?? BROWSER_RUNTIME_DEFAULTS.attackDangerRadius ?? 0));
+  if (!(dangerRadius > 0)) return true;
+  return !(threats || []).some(threat => {
+    if (!threat || threat.alive === false) return false;
+    const targetId = target?.user_id ?? target?.userId ?? target?.entity_id ?? target?.entityId;
+    const threatId = threat?.user_id ?? threat?.userId ?? threat?.entity_id ?? threat?.entityId;
+    if (targetId !== null && targetId !== undefined && threatId !== null && threatId !== undefined && String(targetId) === String(threatId)) return false;
+    return distanceBetween(target, threat) <= dangerRadius;
+  });
 }
 
 function highValueCoinPriorityAmount(options = {}) {
@@ -1623,6 +1672,7 @@ function browserlessOpportunityPriorityTier(item, options = {}) {
     visibleDistance: opportunityVisibleDistance(options),
     nearbyPriorityDistance: opportunityNearbyPriorityDistance(options)
   });
+  if (String(item?.type || '') === 'coin' && profitCoinPriorityRank(item?.sourceCoin || item) > 0) return Math.max(base, 3);
   const distance = Number(item?.distance ?? Infinity);
   if (!Number.isFinite(distance) || distance > opportunityVisibleDistance(options)) return base;
   if (String(item?.type || '') === 'coin') {
@@ -1810,7 +1860,7 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
       action: null
     };
   }
-  const includeAfkProfitTargets = options.includeAfkProfitTargets !== false && !(options.blockAfkProfitWhenActiveThreatVisible && input.activeThreats.length);
+  const includeAfkProfitTargets = options.includeAfkProfitTargets !== false;
   const coinMaxDistance = Math.max(0, Number(options.coinMaxDistance || BROWSER_RUNTIME_DEFAULTS.coinMaxDistance));
   const globalCoinMaxDistance = Math.max(0, Number(options.globalCoinMaxDistance || DEFAULT_GLOBAL_COIN_MAX_DISTANCE));
   const opportunityThreats = (input.avoidanceThreats || input.activeThreats || []).concat(input.snapshotActiveThreats || []);
@@ -1874,7 +1924,9 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
     nowMs: input.nowMs
   };
   const afkOpportunityTargets = includeAfkProfitTargets
-    ? input.afkTargets.filter(target => !afkOpportunityBlockedByStaminaCooldown(target, opportunityOptions))
+    ? input.afkTargets
+      .filter(target => !afkOpportunityBlockedByStaminaCooldown(target, opportunityOptions))
+      .filter(target => targetSafeFromOpportunityThreats(target, opportunityThreats, options))
     : [];
   const opportunities = prioritizeBrowserlessOpportunities(buildOpportunityCandidatesCore(
     input.self,
@@ -2075,7 +2127,8 @@ function pickNearestSafeProfitCoin(input, maxDistance, options = {}) {
     .filter(coin => Number(coin?.distance || Infinity) <= Number(maxDistance))
     .filter(coin => coinSafeFromThreats(coin, threats, options))
     .filter(coin => opportunityStaminaAffordable(input.self, opportunityCoinStaminaCost(coin, options), options))
-    .sort((a, b) => Number(a.distance || Infinity) - Number(b.distance || Infinity)
+    .sort((a, b) => profitCoinPriorityRank(b) - profitCoinPriorityRank(a)
+      || Number(a.distance || Infinity) - Number(b.distance || Infinity)
       || Number(b.amount || 0) - Number(a.amount || 0))[0] || null;
 }
 
@@ -2764,8 +2817,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
   const realtimeStale = Number.isFinite(frameAge) && frameAge > staleSelfMs;
   const opportunity = buildOpportunityDecision(input, stateful, {
     ...options,
-    includeAfkProfitTargets: nonCombatProfit ? false : options.includeAfkProfitTargets,
-    blockAfkProfitWhenActiveThreatVisible: profitLive ? true : options.blockAfkProfitWhenActiveThreatVisible
+    includeAfkProfitTargets: nonCombatProfit ? false : options.includeAfkProfitTargets
   });
   const combat = buildCombatDecision(input, stateful, options);
   const combatActionEligible = isCombatActionEligibleForDecision(combat, options);

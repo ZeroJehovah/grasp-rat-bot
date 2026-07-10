@@ -8112,6 +8112,79 @@ async function runSelfTest() {
       want: 'combat-live|combat|combat-live-realtime|combat-live|9|realtime|true'
     },
     {
+      name: 'browserless profit live keeps AFK profit when active threat is unrelated',
+      got: (() => {
+        const store = createBrowserlessStateStore({ userId: 7 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 60,
+          entities: [
+            { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+            { entity_id: 2, user_id: 8, name: 'safe-afk', x: 1000, y: 0, hp: 80, current_join_mode: 'Passive', drop: 20 },
+            { entity_id: 3, user_id: 9, name: 'far-active', x: 60000, y: 0, hp: 80, current_join_mode: 'Active', drop: 12 }
+          ],
+          bullets: []
+        }, { receivedAtMs: 1000 });
+        const decision = buildBrowserlessDecision(store.getState(1200), {}, {
+          nowMs: 1200,
+          controlMode: 'profit-live',
+          combatEnabled: true
+        });
+        return [
+          decision.kind,
+          decision.band,
+          decision.action.kind,
+          decision.action.target.userId,
+          decision.profit.best?.type,
+          decision.profit.best === null,
+          decision.combat.target?.userId || ''
+        ].join('|');
+      })(),
+      want: 'profit-candidate|profit|attack|8|enemy|false|'
+    },
+    {
+      name: 'browserless profit live falls back to safe visible coin when player drop is threat-covered',
+      got: (() => {
+        const store = createBrowserlessStateStore({ userId: 7 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 61,
+          entities: [
+            { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+            { entity_id: 3, user_id: 9, name: 'covering-active', x: 20000, y: 0, hp: 80, current_join_mode: 'Active', drop: 0 }
+          ],
+          bullets: []
+        }, { receivedAtMs: 1000 });
+        store.ingestFrame({
+          type: 'snapshot',
+          tick: 62,
+          entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, coins: 1000 }],
+          bullets: [],
+          coin_drops: [
+            { drop_id: 'safe-visible-coin', amount: 3, x: 1200, y: 0, created_tick: 62 },
+            { drop_id: 'covered-player-drop', source_user_id: 8, system_spawned: false, amount: 6, x: 20000, y: 0, created_tick: 62 }
+          ],
+          messages: [{ kind: 'kill', user_id: 7, target_user_id: 8, tick: 62, text: 'self killed afk' }]
+        }, { receivedAtMs: 1100 });
+        const decision = buildBrowserlessDecision(store.getState(1200), {}, {
+          nowMs: 1200,
+          controlMode: 'profit-live',
+          combatEnabled: true
+        });
+        return [
+          decision.kind,
+          decision.reason,
+          decision.action.target.id,
+          decision.action.target.amount,
+          decision.input.profitCoinSource,
+          decision.input.fallback.selfKilledPlayerDropCount,
+          decision.profit.best?.coin?.id,
+          decision.profit.best === null
+        ].join('|');
+      })(),
+      want: 'coin|foot-coin-priority|safe-visible-coin|3|snapshot-player-drop|1|safe-visible-coin|false'
+    },
+    {
       name: 'browserless profit live flees passive moving safety threat',
       got: (() => {
         const store = createBrowserlessStateStore({ userId: 7 });
