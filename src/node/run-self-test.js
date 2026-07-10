@@ -12681,6 +12681,7 @@ async function runSelfTest() {
                         user_id: 88,
                         name: 'enemy',
                         distance: 800,
+                        coins: 1000,
                         active: true,
                         alive: true
                       }
@@ -12809,6 +12810,7 @@ async function runSelfTest() {
           compactStatus.loginPointSafety.detail.unsafeReason,
           compactStatus.loginPointSafety.detail.activeNearbyCount,
           compactStatus.loginPointSafety.detail.nearestActive.userId,
+          compactStatus.loginPointSafety.detail.nearestActive.drop === null,
           compactStatus.loginPointSafety.detail.freshness.tickDelta,
           compactFromPublic.loginPointSafety.detail.nearestActive.name,
           compactStatus.recentExit.reason,
@@ -12824,7 +12826,7 @@ async function runSelfTest() {
           !compactText.includes(largePayload) && compactText.length < publicText.length
         ].join('|');
       }),
-      want: 'true|77|true|true|true|true|true|false|loop-wait|88|10|20|360000|seek-coin|8|7|enemy|5999|active-near-login-point|1|88|23|enemy|latest|blocked-login|2|3|10.0.0.101|123|false|false|false|false|true'
+      want: 'true|77|true|true|true|true|true|false|loop-wait|88|10|20|360000|seek-coin|8|7|enemy|5999|active-near-login-point|1|88|true|23|enemy|latest|blocked-login|2|3|10.0.0.101|123|false|false|false|false|true'
     },
     {
       name: 'browserless compact status exposes session offline and today stats',

@@ -578,7 +578,7 @@ function compactSafetyEntity(value) {
     name: value.name || value.label,
     authority: value.authority || 'snapshot',
     hp: value.hp,
-    drop: value.drop ?? value.coins,
+    drop: value.drop ?? value.Drop ?? value.reward ?? value.coin_reward ?? value.death_reward_preview ?? value.death_drop_coins,
     amount: value.amount ?? value.value,
     distance: value.distance,
     active: value.active,
@@ -648,12 +648,18 @@ function compactLoginPointSafetyDetail(loginPointSafety, normalized) {
       || point
   );
   if (!hasDetail) return null;
+  const required = compactNumber(detail.required ?? snapshotSafety?.required ?? directDetail.required);
+  const effectiveRequired = required !== null ? required : 1;
+  const streak = compactNumber(detail.streak ?? snapshotSafety?.streak ?? directDetail.streak);
+  const effectiveStreak = streak !== null ? streak : (okValue === true ? effectiveRequired : 0);
   return {
     ok: okValue === undefined ? null : Boolean(okValue),
     reason: compactString(reason, 120),
     unsafeReason: compactString(unsafeReason, 120),
     originalReason: compactString(snapshotSafety?.originalReason || directDetail.originalReason, 120),
     checkedAt: compactString(loginPointSafety?.checkedAt || directDetail.checkedAt, 48),
+    streak: effectiveStreak,
+    required: effectiveRequired,
     point,
     httpOk: response.httpOk === undefined ? null : Boolean(response.httpOk),
     httpStatus: compactNumber(response.status),

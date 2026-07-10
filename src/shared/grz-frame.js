@@ -30,6 +30,12 @@ function summarizeGrzEntity(entity) {
     'visible',
     'joined',
     'current_join_mode',
+    'drop',
+    'Drop',
+    'reward',
+    'coin_reward',
+    'death_reward_preview',
+    'death_drop_coins',
     'coins'
   ]) {
     if (entity[key] !== undefined) output[key] = entity[key];

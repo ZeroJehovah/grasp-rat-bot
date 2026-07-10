@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.10.9';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.10.10';
 
 function renderBrowserlessWebPanel() {
   return `<!doctype html>
@@ -24,6 +24,7 @@ function renderBrowserlessWebPanel() {
     .ok{color:var(--green)}.warn{color:var(--amber)}.bad{color:var(--red)}.info{color:var(--blue)}.muted{color:var(--muted)}
     .layout{display:grid;grid-template-columns:minmax(240px,1fr) minmax(0,2fr);gap:10px;align-items:start}
     .stack{display:flex;flex-direction:column;gap:10px;min-width:0}
+    .stats-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;align-items:start}
     section{border:1px solid var(--line);background:var(--panel);border-radius:8px;padding:10px;min-width:0}
     h2{font-size:11px;line-height:1.2;margin:0 0 8px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.05em}
     dl{display:grid;grid-template-columns:minmax(76px,auto) 1fr;gap:5px 9px;margin:0}
@@ -39,7 +40,7 @@ function renderBrowserlessWebPanel() {
     textarea{width:100%;min-height:76px;margin-top:8px;border:1px solid var(--line);border-radius:6px;background:var(--panel2);color:var(--text);font:12px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;padding:8px;resize:vertical}
     pre.auth-url{display:none;white-space:pre-wrap;overflow-wrap:anywhere;margin:8px 0 0;border:1px solid var(--line);border-radius:6px;background:var(--panel2);color:var(--muted);padding:8px;max-height:120px;overflow:auto}
     .auth-message{min-height:18px;overflow-wrap:anywhere}
-    @media (max-width:760px){.layout{grid-template-columns:1fr}}
+    @media (max-width:760px){.layout{grid-template-columns:1fr}.stats-grid{grid-template-columns:1fr}}
     @media (max-width:520px){main{padding:10px}header{align-items:flex-start;flex-direction:column}.toolbar{justify-content:flex-start}}
   </style>
 </head>
@@ -97,14 +98,16 @@ function renderBrowserlessWebPanel() {
           <h2>当前动作</h2>
           <dl id="actionDetails"></dl>
         </section>
-        <section>
-          <h2>本次游戏</h2>
-          <dl id="currentSession"></dl>
-        </section>
-        <section>
-          <h2>今日累计</h2>
-          <dl id="todayStats"></dl>
-        </section>
+        <div class="stats-grid">
+          <section>
+            <h2>本次游戏</h2>
+            <dl id="currentSession"></dl>
+          </section>
+          <section>
+            <h2>今日累计</h2>
+            <dl id="todayStats"></dl>
+          </section>
+        </div>
       </div>
     </div>
   </main>
@@ -116,6 +119,7 @@ function renderBrowserlessWebPanel() {
     const WEB_PANEL_RELOAD_KEY = 'graspRatBrowserlessPanelReloadedVersion';
     const AUTO_REFRESH_MS = 3000;
     let autoRefreshTimer = 0;
+    let countdownTimer = 0;
     let refreshInFlight = null;
 
     const value = v => v === null || v === undefined || v === '' ? '--' : String(v);
@@ -169,6 +173,21 @@ function renderBrowserlessWebPanel() {
       if (!parts.length || seconds) parts.push(seconds + '秒');
       return parts.join('');
     };
+    const durationClock = ms => {
+      const n = number(ms);
+      if (n === null) return '--';
+      const totalSeconds = Math.max(0, Math.floor(n / 1000));
+      const hours = Math.floor(totalSeconds / 3600);
+      const minutes = Math.floor((totalSeconds % 3600) / 60);
+      const seconds = totalSeconds % 60;
+      return [pad2(hours), pad2(minutes), pad2(seconds)].join(':');
+    };
+    const countdownUntil = iso => {
+      if (!iso) return '--';
+      const target = Date.parse(String(iso));
+      if (!Number.isFinite(target)) return '--';
+      return durationClock(target - Date.now());
+    };
     const integer = v => {
       const n = number(v);
       return n === null ? '--' : String(Math.max(0, Math.round(n)));
@@ -198,6 +217,12 @@ function renderBrowserlessWebPanel() {
         const dd = document.createElement('dd');
         dt.textContent = pair[0];
         dd.textContent = value(pair[1]);
+        if (pair[2] && typeof pair[2] === 'object') {
+          for (const [key, attrValue] of Object.entries(pair[2])) {
+            if (attrValue === null || attrValue === undefined || attrValue === false) continue;
+            dd.dataset[key] = String(attrValue);
+          }
+        }
         node.append(dt, dd);
       }
     }
@@ -217,6 +242,10 @@ function renderBrowserlessWebPanel() {
       if (point.hp !== null && point.hp !== undefined) parts.push('血量 ' + point.hp);
       if (point.source) parts.push(sourceText(point.source) === '--' ? String(point.source) : sourceText(point.source));
       return parts.join(' / ');
+    }
+    function pointCoordText(point) {
+      if (!point || (number(point.x) === null && number(point.y) === null)) return '--';
+      return '(' + coord(point.x) + ', ' + coord(point.y) + ')';
     }
     function positionText(status) {
       if (status.game?.inGame) return pointText(status.self);
@@ -260,6 +289,7 @@ function renderBrowserlessWebPanel() {
       'missing-snapshot-tick': '快照缺少时间戳',
       'stale-snapshot-tick': '快照过期',
       'no-prior-tick': '没有历史时间戳',
+      fresh: '快照已更新',
       safe: '安全',
       'active-near-login-point': '登录点附近有危险玩家',
       'self-present-reentry': '已经在游戏中，继续接管',
@@ -277,6 +307,20 @@ function renderBrowserlessWebPanel() {
       'in-game-snapshot-safety-retry': '可能仍在游戏中，快速重连',
       'unsupported-control-mode': '当前方式不支持',
       'unknown-error': '出现异常'
+    };
+    const dataGapMap = {
+      'self-stamina-from-snapshot': '体力数据来自快照补全',
+      'snapshot-coin-fallback-only': '没有实时金币数据，使用快照金币',
+      'unknown-realtime-frame-age': '实时画面更新时间未知',
+      'missing-realtime-self': '实时自身状态缺失',
+      'no-coin-frame-type-observed': '未收到实时金币数据',
+      'self-killed-player-drop-visible': '发现自己击杀后的掉落',
+      'snapshot-active-threat-visible': '快照发现危险玩家',
+      'whitelisted-target-visible': '附近有白名单目标，已跳过',
+      'recently-active-target-visible': '附近目标近期活动，谨慎处理',
+      'afk-stamina-cooldown-target-visible': 'AFK目标体力冷却中',
+      'no-realtime-bullet-evidence': '没有实时子弹证据',
+      'missing-self-or-target': '缺少自己或目标状态'
     };
     const kindMap = {
       coin: '捡金币',
@@ -445,6 +489,26 @@ function renderBrowserlessWebPanel() {
       if (text.includes('state')) return '记录';
       return '--';
     }
+    function dataGapText(gap) {
+      const text = String(gap || '');
+      if (!text) return '';
+      if (dataGapMap[text]) return dataGapMap[text];
+      const blockedPrefix = 'snapshot-fallback-blocked:';
+      if (text.startsWith(blockedPrefix)) {
+        return '快照金币备用被阻止：' + reasonText(text.slice(blockedPrefix.length));
+      }
+      if (/snapshot-coins-out-of-visible-range/i.test(text)) return '快照金币超出可见范围';
+      return reasonText(text);
+    }
+    function dataGapsText(decision) {
+      const gaps = Array.isArray(decision?.dataGaps) ? decision.dataGaps : [];
+      const translated = gaps.map(dataGapText).filter(Boolean);
+      if (translated.length) {
+        const hiddenCount = Math.max(0, Number(decision?.dataGapCount || 0) - gaps.length);
+        return translated.join(' / ') + (hiddenCount ? ' / 另有 ' + hiddenCount + ' 项' : '');
+      }
+      return decision?.dataGapCount ? String(decision.dataGapCount) + ' 项' : '--';
+    }
     function resultText(ok) {
       if (ok === null || ok === undefined) return '--';
       return ok ? '正常' : '异常';
@@ -515,8 +579,14 @@ function renderBrowserlessWebPanel() {
       return null;
     }
     function loginPointText(status) {
-      if (status.game?.inGame) return '已在游戏中';
-      if (status.loginPointSafety?.ok) return '安全';
+      if (status.game?.inGame) return '--';
+      const detail = status.loginPointSafety?.detail || {};
+      const streak = number(detail.streak ?? status.loginPointSafety?.streak);
+      const required = number(detail.required ?? status.loginPointSafety?.required);
+      const progress = required !== null && required > 0
+        ? ' ' + String(streak === null ? (status.loginPointSafety?.ok ? required : 0) : Math.min(required, Math.max(0, Math.round(streak)))) + '/' + String(Math.round(required))
+        : '';
+      if (status.loginPointSafety?.ok) return '安全' + progress;
       const reason = String(status.loginPointSafety?.reason || '');
       if (/pending|retry|snapshot|check/i.test(reason)) return '检查中';
       if (/unsafe|active|threat|danger/i.test(reason)) return '不安全';
@@ -562,9 +632,9 @@ function renderBrowserlessWebPanel() {
       const normalized = value(text);
       return normalized === '--' ? '' : normalized;
     }
-    function addRow(list, label, text, always = false) {
+    function addRow(list, label, text, always = false, attrs = null) {
       const normalized = value(text);
-      if (always || normalized !== '--') list.push([label, normalized]);
+      if (always || normalized !== '--') list.push([label, normalized, attrs]);
     }
     function joinNonBlank(items, separator = ' / ') {
       const parts = items.map(nonBlankText).filter(Boolean);
@@ -612,11 +682,19 @@ function renderBrowserlessWebPanel() {
 
       addRow(rowsOut, '状态', actionText(status), true);
       addRow(rowsOut, '原因', reasonText(reason), true);
-      addRow(rowsOut, '判断', joinNonBlank([kindText(kind), actionReasonText(status)]));
+      const decisionText = joinNonBlank([kindText(kind), actionReasonText(status)]);
+      const statusText = actionText(status);
+      const reasonDisplay = reasonText(reason);
+      if (decisionText !== '--'
+        && decisionText !== statusText
+        && decisionText !== reasonDisplay
+        && decisionText !== joinNonBlank([statusText, reasonDisplay])) {
+        addRow(rowsOut, '判断', decisionText);
+      }
       addRow(rowsOut, '目标', targetLabel(target));
       addRow(rowsOut, '来源', sourceText(target?.authority));
       addRow(rowsOut, '目标状态', targetStateText(target));
-      addRow(rowsOut, '数据缺口', decision.dataGapCount ? decision.dataGaps?.join(' / ') || decision.dataGapCount : '--');
+      addRow(rowsOut, '数据缺口', dataGapsText(decision));
 
       if (isProfitStatus(status, kind, reason)) {
         addRow(rowsOut, '金币目标', targetLabel(status.profit?.best?.target));
@@ -633,9 +711,7 @@ function renderBrowserlessWebPanel() {
         addRow(rowsOut, '停止次数', action.counts?.stop);
       }
 
-      if (action.shoot || status.combat?.shooting || ['attack', 'combat-live'].includes(kind)) {
-        addRow(rowsOut, '能开火', bool(action.shoot?.ok ?? status.combat?.shooting?.wouldShoot));
-        addRow(rowsOut, '已跳过', bool(action.shoot?.skipped));
+      if (online && (action.shoot || status.combat?.shooting || ['attack', 'combat-live'].includes(kind))) {
         addRow(rowsOut, '开火原因', reasonText(action.shoot?.reason || status.combat?.shooting?.reason));
         addRow(rowsOut, '开火次数', action.counts?.shoot);
         addRow(rowsOut, '连发次数', action.counts?.shootRepeat);
@@ -650,25 +726,19 @@ function renderBrowserlessWebPanel() {
         addRow(rowsOut, '战斗候选', status.combat?.candidateCount);
       }
 
-      if (isSafetyStatus(status, kind, reason)) {
+      if (!online && isSafetyStatus(status, kind, reason)) {
         addRow(rowsOut, '登录点', loginPointText(status));
-        addRow(rowsOut, '登录点坐标', status.game?.inGame ? '--' : pointText(status.loginPointSafety?.point));
-        addRow(rowsOut, '登录点原因', status.game?.inGame ? '当前已连入游戏' : reasonText(status.loginPointSafety?.reason));
+        addRow(rowsOut, '登录点坐标', pointCoordText(status.loginPointSafety?.point));
         addRow(rowsOut, '不安全原因', unsafeReasonText(status));
-        addRow(rowsOut, '检查详情', status.game?.inGame ? '--' : loginPointDetailText(status));
-        addRow(rowsOut, '快照新鲜度', status.game?.inGame ? '--' : freshnessText(status.loginPointSafety?.detail));
-        addRow(rowsOut, '最近危险', status.game?.inGame ? '--' : targetLabel(status.loginPointSafety?.detail?.nearestActive));
-        addRow(rowsOut, '最近实体', status.game?.inGame ? '--' : targetLabel(status.loginPointSafety?.detail?.nearest));
-        addRow(rowsOut, '检查时间', stamp(status.loginPointSafety?.checkedAt));
-        addRow(rowsOut, '最近阻止', reasonText(status.recentBlock?.reason));
-        addRow(rowsOut, '最近退出', reasonText(status.recentExit?.reason));
+        addRow(rowsOut, '附近危险', status.loginPointSafety?.ok ? '--' : targetLabel(status.loginPointSafety?.detail?.nearestActive));
+        addRow(rowsOut, '检查时间', fullStamp(status.loginPointSafety?.checkedAt || status.loginPointSafety?.detail?.checkedAt));
+        addRow(rowsOut, '上次退出', reasonText(status.recentExit?.reason));
       }
 
       if (!online) {
         addRow(rowsOut, '退出时间', fullStamp(offlineStats.lastExitAt));
-        addRow(rowsOut, '退出原因', reasonText(offlineStats.lastExitReason));
         addRow(rowsOut, '下次重连', fullStamp(offlineStats.nextReconnectAt));
-        addRow(rowsOut, '剩余时间', duration(offlineStats.reconnectRemainingMs));
+        addRow(rowsOut, '剩余时间', countdownUntil(offlineStats.nextReconnectAt), false, { countdownAt: offlineStats.nextReconnectAt });
       }
 
       return rowsOut;
@@ -792,8 +862,7 @@ function renderBrowserlessWebPanel() {
       const todayStats = s.stats?.today || {};
       const online = Boolean(s.game?.inGame && currentSession.online);
       rows('currentSession', [
-        ['状态', online ? '在线' : '不在线'],
-        ['进入时间', online ? fullStamp(currentSession.enteredAt) : '--'],
+        ['状态/进入', online ? joinNonBlank(['在线', fullStamp(currentSession.enteredAt)]) : '不在线'],
         ['持续时间', online ? duration(currentSession.durationMs) : '--'],
         ['消耗体力', online ? unit(currentSession.staminaSpentMs) : '--'],
         ['拾取金币', online ? integer(currentSession.coinsGained) : '--'],
@@ -806,6 +875,12 @@ function renderBrowserlessWebPanel() {
         ['拾取金币', integer(todayStats.coinsGained)],
         ['击杀敌人', integer(todayStats.kills)]
       ]);
+      updateCountdownNodes();
+    }
+    function updateCountdownNodes() {
+      document.querySelectorAll('[data-countdown-at]').forEach(node => {
+        node.textContent = countdownUntil(node.dataset.countdownAt || '');
+      });
     }
     function isPageVisibleForRefresh() {
       if (document.visibilityState) return document.visibilityState === 'visible';
@@ -830,11 +905,16 @@ function renderBrowserlessWebPanel() {
     function startAutoRefresh() {
       if (autoRefreshTimer || !isPageVisibleForRefresh()) return;
       autoRefreshTimer = setInterval(() => requestStatusRefresh(true), AUTO_REFRESH_MS);
+      if (!countdownTimer) countdownTimer = setInterval(updateCountdownNodes, 1000);
     }
     function stopAutoRefresh() {
       if (!autoRefreshTimer) return;
       clearInterval(autoRefreshTimer);
       autoRefreshTimer = 0;
+      if (countdownTimer) {
+        clearInterval(countdownTimer);
+        countdownTimer = 0;
+      }
     }
     function syncAutoRefreshForVisibility() {
       if (isPageVisibleForRefresh()) {
