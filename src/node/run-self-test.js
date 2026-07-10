@@ -6038,6 +6038,68 @@ async function runSelfTest() {
       want: 'target-label|12|12|snapshot'
     },
     {
+      name: 'browserless nearby players preserve snapshot stamina and invincibility metadata',
+      got: (() => {
+        const state = {
+          userId: 7,
+          realtime: {
+            tick: 48,
+            frameAgeMs: 100,
+            self: { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+            entities: [
+              { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+              { entity_id: 2, user_id: 8, label: 'meta-target', x: 1200, y: 0, hp: 80, firing: true }
+            ],
+            bullets: [],
+            coinDrops: []
+          },
+          fallback: {
+            tick: 49,
+            frameAgeMs: 100,
+            entities: [
+              {
+                entity_id: 22,
+                user_id: 8,
+                label: 'meta-target',
+                x: 1210,
+                y: 0,
+                hp: 80,
+                current_join_mode: 'Passive',
+                death_drop_coins: 2,
+                stamina5sRemainingMilli: 9600,
+                invincible_remaining_ticks: 25
+              }
+            ],
+            coinDrops: [],
+            messages: []
+          }
+        };
+        const decision = buildBrowserlessDecision(state, {}, {
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          nowMs: 1200,
+          tickMs: 100
+        });
+        const row = decision.input.nearby.p.find(item => item[0] === 'meta-target');
+        return [
+          decision.kind,
+          decision.band,
+          decision.reason,
+          decision.combat.target?.userId || '',
+          decision.action.target?.invulnerable,
+          decision.action.target?.invulnerableRemainingMs,
+          decision.action.target?.stamina5s,
+          decision.action.target?.invulnerable,
+          decision.action.target?.invulnerableMetadataAuthority,
+          row?.[2],
+          row?.[4],
+          row?.[6],
+          row?.[7]
+        ].join('|');
+      })(),
+      want: 'flee|safety|avoid-invulnerable-target|8|true|2500|9600|true|snapshot|9600|2500|1|Passive'
+    },
+    {
       name: 'browserless decision adapter emits snapshot fallback profit without commands',
       got: (() => {
         const adapter = createBrowserlessDecisionAdapter({ userId: 7 });

@@ -387,6 +387,7 @@ function renderBrowserlessWebPanel() {
       if (target.hp !== null && target.hp !== undefined) parts.push('血量 ' + target.hp);
       if (target.drop !== null && target.drop !== undefined) parts.push('掉落 ' + target.drop);
       if (target.amount !== null && target.amount !== undefined) parts.push('金币 ' + target.amount);
+      if (target.invulnerable) parts.push('无敌 ' + invulnerableText(target.invulnerableRemainingMs));
       return parts.join(' / ');
     }
     function pointCoordText(point) {

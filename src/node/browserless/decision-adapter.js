@@ -95,6 +95,193 @@ function numberOrNull(value) {
   return Number.isFinite(number) ? number : null;
 }
 
+const STAMINA_REMAINING_FIELDS = {
+  '5s': [
+    'stamina_5s_remaining_milli',
+    'stamina_5s_remaining_ms',
+    'stamina5sRemainingMilli',
+    'stamina5sRemainingMs',
+    'stamina5s',
+    'stamina_5s',
+    'stamina_remaining_ms',
+    'staminaRemainingMs',
+    'stamina'
+  ],
+  '1h': [
+    'stamina_1h_remaining_milli',
+    'stamina_1h_remaining_ms',
+    'stamina1hRemainingMilli',
+    'stamina1hRemainingMs',
+    'stamina1h',
+    'stamina_1h'
+  ],
+  '1d': [
+    'stamina_1d_remaining_milli',
+    'stamina_1d_remaining_ms',
+    'stamina1dRemainingMilli',
+    'stamina1dRemainingMs',
+    'stamina1d',
+    'stamina_1d'
+  ]
+};
+
+const STAMINA_LIMIT_FIELDS = {
+  '5s': [
+    'stamina_5s_limit_milli',
+    'stamina_5s_limit_ms',
+    'stamina5sLimitMilli',
+    'stamina5sLimitMs',
+    'stamina5sLimit',
+    'stamina_5s_limit',
+    'stamina_limit_ms',
+    'staminaLimitMs',
+    'staminaLimit'
+  ],
+  '1h': [
+    'stamina_1h_limit_milli',
+    'stamina_1h_limit_ms',
+    'stamina1hLimitMilli',
+    'stamina1hLimitMs',
+    'stamina1hLimit',
+    'stamina_1h_limit'
+  ],
+  '1d': [
+    'stamina_1d_limit_milli',
+    'stamina_1d_limit_ms',
+    'stamina1dLimitMilli',
+    'stamina1dLimitMs',
+    'stamina1dLimit',
+    'stamina_1d_limit'
+  ]
+};
+
+const STAMINA_SPENT_FIELDS = [
+  'stamina_spent',
+  'staminaSpent',
+  'stamina_spent_ms',
+  'staminaSpentMs'
+];
+
+const INVULNERABLE_MS_FIELDS = [
+  'invulnerable_remaining_ms',
+  'invincible_remaining_ms',
+  'invulnerability_remaining_ms',
+  'invulnerableRemainingMs',
+  'invincibleRemainingMs',
+  'invulnerabilityRemainingMs',
+  'invulnerable_ms',
+  'invincible_ms',
+  'invulnerability_ms',
+  'immune_remaining_ms',
+  'immuneRemainingMs'
+];
+
+const INVULNERABLE_TICK_FIELDS = [
+  'invulnerable_remaining_ticks',
+  'invincible_remaining_ticks',
+  'invulnerability_remaining_ticks',
+  'invulnerableTicks',
+  'invulnerableRemainingTicks',
+  'invincibleRemainingTicks',
+  'invulnerabilityRemainingTicks',
+  'invulnerable_ticks',
+  'invincible_ticks',
+  'invulnerability_ticks',
+  'invulnerable_tick',
+  'invincible_tick',
+  'invulnerability_tick'
+];
+
+const INVULNERABLE_GENERIC_REMAINING_FIELDS = [
+  'invulnerable_remaining',
+  'invincible_remaining',
+  'invulnerability_remaining',
+  'invulnerableRemaining',
+  'invincibleRemaining',
+  'invulnerabilityRemaining'
+];
+
+const INVULNERABLE_FLAG_FIELDS = [
+  'invulnerable',
+  'is_invulnerable',
+  'isInvulnerable',
+  'immune',
+  'is_immune'
+];
+
+function firstNumberFromFields(source, fields) {
+  if (!source || typeof source !== 'object') return null;
+  for (const field of fields || []) {
+    if (!Object.prototype.hasOwnProperty.call(source, field)) continue;
+    if (source[field] === null || source[field] === undefined || source[field] === '') continue;
+    const value = numberOrNull(source[field]);
+    if (value !== null) return value;
+  }
+  return null;
+}
+
+function positiveFieldValue(source, fields) {
+  if (!source || typeof source !== 'object') return null;
+  let picked = null;
+  for (const field of fields || []) {
+    const value = numberOrNull(source[field]);
+    if (value === null || value <= 0) continue;
+    picked = picked === null ? value : Math.max(picked, value);
+  }
+  return picked;
+}
+
+function staminaRemainingValue(entity, windowName) {
+  return firstNumberFromFields(entity, STAMINA_REMAINING_FIELDS[windowName] || []);
+}
+
+function staminaLimitForWindow(entity, windowName) {
+  return firstNumberFromFields(entity, STAMINA_LIMIT_FIELDS[windowName] || []);
+}
+
+function staminaSpentValue(entity) {
+  return firstNumberFromFields(entity, STAMINA_SPENT_FIELDS);
+}
+
+function assignStaminaAliases(target, windowName, remaining, limit) {
+  const cleanRemaining = (remaining === null || remaining === undefined || remaining === '') ? null : numberOrNull(remaining);
+  const cleanLimit = (limit === null || limit === undefined || limit === '') ? null : numberOrNull(limit);
+  if (windowName === '5s') {
+    if (cleanRemaining !== null) {
+      target.stamina_5s_remaining_milli = cleanRemaining;
+      target.stamina5sRemainingMilli = cleanRemaining;
+      target.stamina5s = cleanRemaining;
+    }
+    if (cleanLimit !== null) {
+      target.stamina_5s_limit_milli = cleanLimit;
+      target.stamina5sLimitMilli = cleanLimit;
+      target.stamina5sLimit = cleanLimit;
+    }
+  } else if (windowName === '1h') {
+    if (cleanRemaining !== null) {
+      target.stamina_1h_remaining_milli = cleanRemaining;
+      target.stamina1hRemainingMilli = cleanRemaining;
+      target.stamina1h = cleanRemaining;
+    }
+    if (cleanLimit !== null) {
+      target.stamina_1h_limit_milli = cleanLimit;
+      target.stamina1hLimitMilli = cleanLimit;
+      target.stamina1hLimit = cleanLimit;
+    }
+  } else if (windowName === '1d') {
+    if (cleanRemaining !== null) {
+      target.stamina_1d_remaining_milli = cleanRemaining;
+      target.stamina1dRemainingMilli = cleanRemaining;
+      target.stamina1d = cleanRemaining;
+    }
+    if (cleanLimit !== null) {
+      target.stamina_1d_limit_milli = cleanLimit;
+      target.stamina1dLimitMilli = cleanLimit;
+      target.stamina1dLimit = cleanLimit;
+    }
+  }
+}
+
 function distanceBetween(a, b) {
   const ax = Number(a?.x);
   const ay = Number(a?.y);
@@ -176,10 +363,10 @@ function entityDropValue(entity) {
 function entityStaminaSummary(entity) {
   return {
     stamina: numberOrNull(entity?.stamina),
-    stamina5sRemainingMilli: numberOrNull(entity?.stamina_5s_remaining_milli ?? entity?.stamina5sRemainingMilli),
-    stamina1hRemainingMilli: numberOrNull(entity?.stamina_1h_remaining_milli ?? entity?.stamina1hRemainingMilli),
-    stamina1dRemainingMilli: numberOrNull(entity?.stamina_1d_remaining_milli ?? entity?.stamina1dRemainingMilli),
-    staminaSpent: numberOrNull(entity?.stamina_spent ?? entity?.staminaSpent),
+    stamina5sRemainingMilli: staminaRemainingValue(entity, '5s'),
+    stamina1hRemainingMilli: staminaRemainingValue(entity, '1h'),
+    stamina1dRemainingMilli: staminaRemainingValue(entity, '1d'),
+    staminaSpent: staminaSpentValue(entity),
     staminaMetadataAuthority: entity?.staminaMetadataAuthority || ''
   };
 }
@@ -221,7 +408,7 @@ function annotateBrowserlessRecentActivity(entities = [], stateful = {}, nowMs =
     let motionObservedSpeed = 0;
     const currentSpeed = entitySpeed(entity);
     const firing = isFiringEntity(entity);
-    const stamina5s = numberOrNull(entity?.stamina_5s_remaining_milli ?? entity?.stamina5s ?? entity?.stamina_5s);
+    const stamina5s = staminaRemainingValue(entity, '5s');
     const previousStamina = numberOrNull(previous?.stamina5s);
     if (previous
       && x !== null
@@ -286,7 +473,7 @@ function opportunityAfkTargetId(target) {
 }
 
 function targetStamina5sRemaining(target) {
-  const stamina5s = numberOrNull(target?.stamina_5s_remaining_milli ?? target?.stamina5s ?? target?.stamina_5s);
+  const stamina5s = staminaRemainingValue(target, '5s');
   return stamina5s !== null ? stamina5s : null;
 }
 
@@ -397,6 +584,13 @@ function normalizeEntityForDecision(entity, self = null, authority = 'realtime',
   const y = numberOrNull(entity.y);
   const moving = isMovingEntity(entity, options);
   const firing = isFiringEntity(entity);
+  const stamina5s = staminaRemainingValue(entity, '5s');
+  const stamina1h = staminaRemainingValue(entity, '1h');
+  const stamina1d = staminaRemainingValue(entity, '1d');
+  const stamina5sLimit = staminaLimitForWindow(entity, '5s');
+  const stamina1hLimit = staminaLimitForWindow(entity, '1h');
+  const stamina1dLimit = staminaLimitForWindow(entity, '1d');
+  const invulnerableMs = invulnerableRemainingMs(entity, options);
   const normalized = {
     ...cloneJson(entity),
     user_id: numberOrNull(entity.user_id),
@@ -416,6 +610,10 @@ function normalizeEntityForDecision(entity, self = null, authority = 'realtime',
     alive: isAliveEntity(entity),
     invulnerable: isInvulnerableEntity(entity)
   };
+  assignStaminaAliases(normalized, '5s', stamina5s, stamina5sLimit);
+  assignStaminaAliases(normalized, '1h', stamina1h, stamina1hLimit);
+  assignStaminaAliases(normalized, '1d', stamina1d, stamina1dLimit);
+  if (invulnerableMs !== null && invulnerableMs > 0) normalized.invulnerableRemainingMs = invulnerableMs;
   normalized.distance = self ? distanceBetween(self, normalized) : numberOrNull(entity.distance);
   return normalized;
 }
@@ -446,7 +644,37 @@ const SELF_SNAPSHOT_METADATA_FIELDS = [
   'stamina_1d_remaining_milli',
   'stamina_5s_limit_milli',
   'stamina_1h_limit_milli',
-  'stamina_1d_limit_milli'
+  'stamina_1d_limit_milli',
+  'stamina_5s_remaining_ms',
+  'stamina_1h_remaining_ms',
+  'stamina_1d_remaining_ms',
+  'stamina5sRemainingMilli',
+  'stamina1hRemainingMilli',
+  'stamina1dRemainingMilli',
+  'stamina5sRemainingMs',
+  'stamina1hRemainingMs',
+  'stamina1dRemainingMs',
+  'stamina5s',
+  'stamina1h',
+  'stamina1d',
+  'stamina_5s',
+  'stamina_1h',
+  'stamina_1d',
+  'stamina_5s_limit_ms',
+  'stamina_1h_limit_ms',
+  'stamina_1d_limit_ms',
+  'stamina5sLimitMilli',
+  'stamina1hLimitMilli',
+  'stamina1dLimitMilli',
+  'stamina5sLimitMs',
+  'stamina1hLimitMs',
+  'stamina1dLimitMs',
+  'stamina5sLimit',
+  'stamina1hLimit',
+  'stamina1dLimit',
+  'stamina_5s_limit',
+  'stamina_1h_limit',
+  'stamina_1d_limit'
 ];
 
 const SELF_SNAPSHOT_STAMINA_FIELDS = [
@@ -455,8 +683,61 @@ const SELF_SNAPSHOT_STAMINA_FIELDS = [
   'stamina_1d_remaining_milli',
   'stamina_5s_limit_milli',
   'stamina_1h_limit_milli',
-  'stamina_1d_limit_milli'
+  'stamina_1d_limit_milli',
+  'stamina_5s_remaining_ms',
+  'stamina_1h_remaining_ms',
+  'stamina_1d_remaining_ms',
+  'stamina5sRemainingMilli',
+  'stamina1hRemainingMilli',
+  'stamina1dRemainingMilli',
+  'stamina5sRemainingMs',
+  'stamina1hRemainingMs',
+  'stamina1dRemainingMs',
+  'stamina5s',
+  'stamina1h',
+  'stamina1d',
+  'stamina_5s',
+  'stamina_1h',
+  'stamina_1d',
+  'stamina_5s_limit_ms',
+  'stamina_1h_limit_ms',
+  'stamina_1d_limit_ms',
+  'stamina5sLimitMilli',
+  'stamina1hLimitMilli',
+  'stamina1dLimitMilli',
+  'stamina5sLimitMs',
+  'stamina1hLimitMs',
+  'stamina1dLimitMs',
+  'stamina5sLimit',
+  'stamina1hLimit',
+  'stamina1dLimit',
+  'stamina_5s_limit',
+  'stamina_1h_limit',
+  'stamina_1d_limit'
 ];
+
+const TARGET_SNAPSHOT_STAMINA_FIELDS = Array.from(new Set([
+  ...SELF_SNAPSHOT_STAMINA_FIELDS,
+  'stamina',
+  'stamina_remaining_ms',
+  'staminaRemainingMs',
+  'stamina_limit_ms',
+  'staminaLimitMs',
+  'staminaLimit',
+  ...STAMINA_SPENT_FIELDS
+]));
+
+const TARGET_SNAPSHOT_INVULNERABLE_FIELDS = [
+  ...INVULNERABLE_MS_FIELDS,
+  ...INVULNERABLE_TICK_FIELDS,
+  ...INVULNERABLE_GENERIC_REMAINING_FIELDS,
+  ...INVULNERABLE_FLAG_FIELDS
+];
+
+const TARGET_SNAPSHOT_METADATA_FIELDS = Array.from(new Set([
+  ...TARGET_SNAPSHOT_STAMINA_FIELDS,
+  ...TARGET_SNAPSHOT_INVULNERABLE_FIELDS
+]));
 
 function enrichRealtimeSelfWithSnapshotMetadata(realtimeSelf, snapshotSelf, options = {}) {
   if (!realtimeSelf || !snapshotSelf || typeof realtimeSelf !== 'object' || typeof snapshotSelf !== 'object') {
@@ -518,17 +799,27 @@ function enrichRealtimeEntityWithSnapshotProfitMetadata(entity, snapshotEntity, 
         profitMetadataActive: snapshotActive,
         profitMetadataDistance: Number.isFinite(metadataDistance) ? Math.round(metadataDistance) : null
       };
+  const output = {
+    ...entity,
+    ...modePatch
+  };
+  let staminaMerged = false;
+  let invulnerableMerged = false;
+  for (const field of TARGET_SNAPSHOT_METADATA_FIELDS) {
+    if (hasOwnUsableValue(output, field) || !hasOwnUsableValue(snapshotEntity, field)) continue;
+    output[field] = cloneJson(snapshotEntity[field]);
+    if (TARGET_SNAPSHOT_STAMINA_FIELDS.includes(field)) staminaMerged = true;
+    if (TARGET_SNAPSHOT_INVULNERABLE_FIELDS.includes(field)) invulnerableMerged = true;
+  }
+  if (staminaMerged) output.staminaMetadataAuthority = 'snapshot';
+  if (invulnerableMerged) output.invulnerableMetadataAuthority = 'snapshot';
   const reward = entityDropValue(snapshotEntity);
   if (!(reward > 0)) {
-    return {
-      ...entity,
-      ...modePatch
-    };
+    return output;
   }
   const currentDrop = entityDropValue(entity);
   return {
-    ...entity,
-    ...modePatch,
+    ...output,
     death_reward_preview: snapshotEntity.death_reward_preview,
     death_drop_coins: snapshotEntity.death_drop_coins,
     coins: snapshotEntity.coins,
@@ -640,10 +931,16 @@ function summarizeTarget(target) {
     y: numberOrNull(target.y),
     hp: numberOrNull(target.hp),
     drop: entityDropValue(target),
+    stamina5s: staminaRemainingValue(target, '5s'),
+    stamina5sLimit: staminaLimitForWindow(target, '5s'),
+    staminaMetadataAuthority: target.staminaMetadataAuthority || '',
     distance: Number.isFinite(Number(target.distance)) ? Math.round(Number(target.distance)) : null,
     active: Boolean(target.active || isActiveEntity(target)),
     moving: Boolean(target.moving),
     firing: Boolean(target.firing),
+    invulnerable: Boolean(target.invulnerable || isInvulnerableEntity(target)),
+    invulnerableRemainingMs: invulnerableRemainingMs(target),
+    invulnerableMetadataAuthority: target.invulnerableMetadataAuthority || '',
     recentlyActive: Boolean(target.recentlyActive),
     recentlyMoved: Boolean(target.recentlyMoved),
     whitelisted: Boolean(target.whitelisted),
@@ -762,35 +1059,14 @@ function mergeProfitCoinCandidates(...groups) {
 }
 
 function invulnerableRemainingMs(target, options = {}) {
-  const msFields = [
-    'invulnerable_remaining_ms',
-    'invulnerability_remaining_ms',
-    'invulnerableRemainingMs',
-    'invulnerabilityRemainingMs',
-    'invulnerable_ms',
-    'invulnerability_ms',
-    'immune_remaining_ms',
-    'immuneRemainingMs'
-  ];
-  for (const field of msFields) {
-    const value = numberOrNull(target?.[field]);
-    if (value !== null && value > 0) return Math.round(value);
-  }
-  const tickFields = [
-    'invulnerable_remaining_ticks',
-    'invulnerability_remaining_ticks',
-    'invulnerableTicks',
-    'invulnerableRemainingTicks',
-    'invulnerabilityRemainingTicks',
-    'invulnerable_ticks',
-    'invulnerability_ticks'
-  ];
+  const remainingMs = positiveFieldValue(target, INVULNERABLE_MS_FIELDS);
+  if (remainingMs !== null) return Math.round(remainingMs);
   const tickMs = Math.max(1, Number(options.tickMs ?? BROWSER_RUNTIME_DEFAULTS.tickMs ?? 120) || 120);
-  for (const field of tickFields) {
-    const value = numberOrNull(target?.[field]);
-    if (value !== null && value > 0) return Math.round(value * tickMs);
-  }
-  return target?.invulnerable ? -1 : null;
+  const remainingTicks = positiveFieldValue(target, INVULNERABLE_TICK_FIELDS);
+  const genericRemaining = positiveFieldValue(target, INVULNERABLE_GENERIC_REMAINING_FIELDS);
+  const resolvedTicks = remainingTicks !== null ? remainingTicks : genericRemaining;
+  if (resolvedTicks !== null) return Math.round(resolvedTicks * tickMs);
+  return isInvulnerableEntity(target) ? -1 : null;
 }
 
 function summarizeNearbyForPanel(input, action, combat, options = {}) {
@@ -820,12 +1096,12 @@ function summarizeNearbyForPanel(input, action, combat, options = {}) {
     .map(target => [
       entityDisplayName(target) || (target.user_id ? '#' + target.user_id : ''),
       numberOrNull(target.hp),
-      numberOrNull(target.stamina_5s_remaining_milli ?? target.stamina5sRemainingMilli ?? target.stamina5s),
+      staminaRemainingValue(target, '5s'),
       numberOrNull(entityDropValue(target)),
       invulnerableRemainingMs(target, options),
       Math.round(Number(target.distance)),
       targetPlayerSelected(action, combat, target) ? 1 : 0,
-      String(target.current_join_mode || target.mode || target.joined || '') || null
+      String(target.current_join_mode || target.mode || target.joined || target.profitMetadataMode || '') || null
     ]);
   return {
     ar: Math.round(attackRange),
@@ -2691,7 +2967,10 @@ function profitLiveSafetyDecision(input, combatDecision, stateful = {}, options 
     if (target.alive === false) continue;
     const distance = Number(target.distance);
     if (!Number.isFinite(distance)) continue;
-    if (!realtimeThreatsById.has(String(id)) || distance < Number(realtimeThreatsById.get(String(id)).distance || Infinity)) {
+    const previous = realtimeThreatsById.get(String(id));
+    if (!previous
+      || distance < Number(previous.distance || Infinity)
+      || (target.invulnerable && !previous.invulnerable)) {
       realtimeThreatsById.set(String(id), target);
     }
   }
@@ -2720,7 +2999,8 @@ function profitLiveSafetyDecision(input, combatDecision, stateful = {}, options 
   if (options.combatEnabled === true) {
     const combatTargetId = realtimeTarget?.userId ?? realtimeTarget?.user_id ?? realtimeTarget?.entityId ?? realtimeTarget?.entity_id ?? null;
     const threatId = target?.userId ?? target?.user_id ?? target?.entityId ?? target?.entity_id ?? null;
-    const combatHandlesThreat = combatTargetId !== null
+    const combatHandlesThreat = !invulnerableThreatening
+      && combatTargetId !== null
       && combatTargetId !== undefined
       && threatId !== null
       && threatId !== undefined

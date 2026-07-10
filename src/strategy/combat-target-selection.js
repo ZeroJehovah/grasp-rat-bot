@@ -27,6 +27,14 @@ function isFiringCombatEntity(entity) {
   return Boolean(entity?.firing || entity?.is_firing || entity?.shooting);
 }
 
+function truthyFlag(value) {
+  return value === true || value === 1 || value === '1' || value === 'true';
+}
+
+function anyPositiveNumber(...values) {
+  return values.some(value => Number(value) > 0);
+}
+
 function combatDropValue(entity) {
   return Number(entity?.drop ?? entity?.Drop ?? entity?.reward ?? entity?.coin_reward ?? entity?.death_reward_preview ?? entity?.death_drop_coins ?? 0) || 0;
 }
@@ -109,15 +117,44 @@ function isCombatEligibleThreat(entity, options = {}) {
 function isInvulnerableEntity(entity) {
   if (!entity) return false;
 
-  return Boolean(
-    entity.invulnerable ||
-    entity.invulnerable_tick ||
-    entity.invulnerable_remaining_ms ||
-    entity.invulnerableRemainingMs ||
-    (entity.invulnerable_tick && entity.invulnerable_tick > 0) ||
-    (entity.invulnerable_remaining_ms && entity.invulnerable_remaining_ms > 0) ||
-    (entity.invulnerableRemainingMs && entity.invulnerableRemainingMs > 0)
-  );
+  return anyPositiveNumber(
+    entity.invulnerable_remaining_ticks,
+    entity.invincible_remaining_ticks,
+    entity.invulnerability_remaining_ticks,
+    entity.invulnerableTicks,
+    entity.invulnerableRemainingTicks,
+    entity.invincibleRemainingTicks,
+    entity.invulnerabilityRemainingTicks,
+    entity.invulnerable_ticks,
+    entity.invincible_ticks,
+    entity.invulnerability_ticks,
+    entity.invulnerable_tick,
+    entity.invincible_tick,
+    entity.invulnerability_tick,
+    entity.invulnerable_remaining_ms,
+    entity.invincible_remaining_ms,
+    entity.invulnerability_remaining_ms,
+    entity.invulnerableRemainingMs,
+    entity.invincibleRemainingMs,
+    entity.invulnerabilityRemainingMs,
+    entity.invulnerable_ms,
+    entity.invincible_ms,
+    entity.invulnerability_ms,
+    entity.immune_remaining_ms,
+    entity.immuneRemainingMs,
+    entity.invulnerable_remaining,
+    entity.invincible_remaining,
+    entity.invulnerability_remaining,
+    entity.invulnerableRemaining,
+    entity.invincibleRemaining,
+    entity.invulnerabilityRemaining
+  ) || [
+    'invulnerable',
+    'is_invulnerable',
+    'isInvulnerable',
+    'immune',
+    'is_immune'
+  ].some(field => truthyFlag(entity?.[field]));
 }
 
 /**
