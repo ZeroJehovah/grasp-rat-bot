@@ -6,6 +6,9 @@ const { redactStructuredSecrets } = require('./session-client');
 
 const SCHEMA_VERSION = 1;
 const UTC8_OFFSET_MS = 8 * 60 * 60 * 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
+const DEFAULT_STAMINA_EXHAUSTED_THRESHOLD_MS = 1000;
+const DEFAULT_STAMINA_RESET_GRACE_MS = 10000;
 
 function defaultBrowserlessState() {
   return {
@@ -288,6 +291,10 @@ function browserlessStatsDayStartMs(dayKey) {
   return Number.isFinite(parsed) ? parsed - UTC8_OFFSET_MS : 0;
 }
 
+function nextDailyStaminaResetAt(ms = Date.now()) {
+  return Math.floor((Number(ms) + UTC8_OFFSET_MS) / DAY_MS) * DAY_MS - UTC8_OFFSET_MS + DAY_MS;
+}
+
 function normalizeBrowserlessStats(stats) {
   const normalized = mergeState(defaultBrowserlessStats(), stats || {});
   const session = normalized.currentSession || {};
@@ -524,7 +531,7 @@ function browserlessStatsForOffline(state, detail = {}, options = {}) {
   return finalizeBrowserlessStatsSession(stats, detail, nowMs);
 }
 
-function compactBrowserlessStats(normalized, game, action, options = {}) {
+function compactBrowserlessStats(normalized, game, action, options = {}, lastKnown = null) {
   const nowMs = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
   const stats = normalizeBrowserlessStats(normalized?.stats);
   ensureBrowserlessStatsDay(stats, nowMs);
@@ -535,7 +542,13 @@ function compactBrowserlessStats(normalized, game, action, options = {}) {
   const exitedMs = parseTimeMs(session.exitedAt);
   const durationEndMs = online ? nowMs : (exitedMs || lastSeenMs || nowMs);
   const activeDelta = todayActiveDelta(stats, nowMs);
-  const nextRunAt = action?.nextRunAt || stats.lastExit.nextRunAt || '';
+  const rawNextRunAt = action?.nextRunAt || stats.lastExit.nextRunAt || '';
+  const offlineBlocker = compactOfflineBlocker(normalized, lastKnown, options, nowMs);
+  const rawNextRunAtMs = parseTimeMs(rawNextRunAt);
+  const blockerReadyAtMs = parseTimeMs(offlineBlocker?.nextReadyAt);
+  const nextRunAt = blockerReadyAtMs > rawNextRunAtMs
+    ? offlineBlocker.nextReadyAt
+    : rawNextRunAt;
   const nextRunAtMs = parseTimeMs(nextRunAt);
   return {
     currentSession: {
@@ -550,7 +563,9 @@ function compactBrowserlessStats(normalized, game, action, options = {}) {
       lastExitAt: stats.lastExit.at || session.exitedAt || '',
       lastExitReason: stats.lastExit.reason || session.exitReason || '',
       nextReconnectAt: compactString(nextRunAt, 48),
-      reconnectRemainingMs: nextRunAtMs ? Math.max(0, Math.round(nextRunAtMs - nowMs)) : null
+      reconnectRemainingMs: nextRunAtMs ? Math.max(0, Math.round(nextRunAtMs - nowMs)) : null,
+      scheduledReconnectAt: compactString(rawNextRunAt, 48),
+      blocker: offlineBlocker
     },
     today: {
       day: stats.today.day || browserlessStatsDayKey(nowMs),
@@ -793,18 +808,82 @@ function compactStamina(stamina, self) {
 function compactSelf(self) {
   if (!self || typeof self !== 'object') return null;
   return {
-    userId: compactNumber(self.userId),
-    entityId: self.entityId ?? null,
+    userId: compactNumber(self.userId ?? self.user_id),
+    entityId: self.entityId ?? self.entity_id ?? null,
     name: compactString(self.name || self.label, 80),
     authority: compactString(self.authority, 48),
     x: compactNumber(self.x),
     y: compactNumber(self.y),
     hp: compactNumber(self.hp),
-    drop: compactNumber(self.drop),
+    drop: compactNumber(self.drop ?? self.Drop ?? self.death_drop_coins ?? self.death_reward_preview),
     active: self.active === undefined ? null : Boolean(self.active),
     moving: self.moving === undefined ? null : Boolean(self.moving),
     firing: self.firing === undefined ? null : Boolean(self.firing),
     alive: self.alive === undefined ? null : Boolean(self.alive)
+  };
+}
+
+function latestAttemptResponse(leave) {
+  const attempts = Array.isArray(leave?.attempts) ? leave.attempts : [];
+  for (let i = attempts.length - 1; i >= 0; i -= 1) {
+    const response = attempts[i]?.response;
+    if (response && typeof response === 'object') return response;
+  }
+  return null;
+}
+
+function latestKnownSelfSource(normalized) {
+  const canary = normalized?.runner?.lastRun?.canary || null;
+  const candidates = [
+    normalized?.current?.self,
+    latestAttemptResponse(canary?.leave),
+    latestAttemptResponse(canary?.safety?.exit?.leave),
+    canary?.state?.realtime?.self,
+    canary?.state?.fallback?.self,
+    normalized?.probes?.lastReadOnlyProbe?.state?.realtime?.self,
+    normalized?.probes?.lastReadOnlyProbe?.state?.fallback?.self
+  ];
+  return candidates.find(item => item && typeof item === 'object') || null;
+}
+
+function compactLastKnown(normalized) {
+  const source = latestKnownSelfSource(normalized);
+  const self = compactSelf(source);
+  const stamina = compactStamina(normalized?.current?.stamina, source);
+  const at = compactString(
+    normalized?.runner?.lastRun?.canary?.completedAt
+      || normalized?.runner?.lastRun?.completedAt
+      || normalized?.updatedAt,
+    48
+  );
+  return self || stamina.remaining5s !== null || stamina.remaining1h !== null || stamina.remaining1d !== null
+    ? { self, stamina, at }
+    : null;
+}
+
+function compactOfflineBlocker(normalized, lastKnown, options = {}, nowMs = Date.now()) {
+  const offlineReason = String(
+    normalized?.runner?.currentAction?.reason
+      || normalized?.stats?.lastExit?.reason
+      || normalized?.stats?.currentSession?.exitReason
+      || ''
+  );
+  const stamina = lastKnown?.stamina || compactStamina(normalized?.current?.stamina, normalized?.current?.self);
+  const thresholdMs = Math.max(0, Number(options.staminaExhaustedBelowMs ?? DEFAULT_STAMINA_EXHAUSTED_THRESHOLD_MS));
+  const exhausted = [];
+  if (stamina.remaining1h !== null && stamina.remaining1h < thresholdMs) exhausted.push('1h');
+  if (stamina.remaining1d !== null && stamina.remaining1d < thresholdMs) exhausted.push('1d');
+  if (!exhausted.length && !/stamina-exhausted-leave|体力耗尽/i.test(offlineReason)) return null;
+  const resetGraceMs = Math.max(0, Number(options.staminaResetGraceMs ?? DEFAULT_STAMINA_RESET_GRACE_MS));
+  const resetAt = exhausted.includes('1d') ? nextDailyStaminaResetAt(nowMs) : 0;
+  const nextReadyAt = resetAt ? new Date(resetAt + resetGraceMs).toISOString() : '';
+  return {
+    reason: 'stamina-exhausted-leave',
+    exhausted,
+    thresholdMs,
+    remaining1h: stamina.remaining1h,
+    remaining1d: stamina.remaining1d,
+    nextReadyAt
   };
 }
 
@@ -1039,6 +1118,7 @@ function buildCompactBrowserlessStatus(state, config = {}) {
   const loginPointSafetyDetail = compactLoginPointSafetyDetail(normalized.loginPointSafety || {}, normalized);
   const loginPoint = compactPoint(normalized.loginPointSafety?.point) || loginPointSafetyDetail?.point || null;
   const game = compactGameStatus(normalized);
+  const lastKnown = compactLastKnown(normalized);
   const sourceIp = normalized.network.sourceIp || '';
   const sourceIps = Array.isArray(normalized.network.sourceIps) ? normalized.network.sourceIps : [];
   const sourceIpIndex = sourceIp ? sourceIps.findIndex(item => item === sourceIp) + 1 : 0;
@@ -1066,12 +1146,13 @@ function buildCompactBrowserlessStatus(state, config = {}) {
     game,
     self: compactSelf(current.self),
     stamina: compactStamina(current.stamina, current.self),
+    lastKnown,
     decision: compactDecision(current.decision),
     action,
     profit: compactProfit(current.profit || current.decision?.profit),
     combat: compactCombat(current.combatSummary || current.decision?.combat),
     nearby: compactNearby(current.decision?.input?.nearby),
-    stats: compactBrowserlessStats(normalized, game, action, config),
+    stats: compactBrowserlessStats(normalized, game, action, config, lastKnown),
     loginPointSafety: {
       ok: Boolean(normalized.loginPointSafety?.ok),
       reason: compactString(normalized.loginPointSafety?.reason, 120),

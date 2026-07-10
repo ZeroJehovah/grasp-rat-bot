@@ -19,11 +19,17 @@ const {
 } = require('./state-file');
 const { startStatusServer } = require('./status-server');
 const { runReadOnlyCanary } = require('./canary');
-const { decisionStatePatch } = require('./decision-adapter');
+const {
+  BROWSER_RUNTIME_DEFAULTS,
+  decisionStatePatch
+} = require('./decision-adapter');
 const { createBrowserlessActionAdapter } = require('./action-adapter');
 const { createSourceIpController } = require('./source-ip-controller');
 const { createBrowserlessSafetyController } = require('./safety-controller');
 const { redactSecrets } = require('./session-client');
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+const UTC8_OFFSET_MS = 8 * 60 * 60 * 1000;
 
 function publicConfig(config) {
   return {
@@ -78,6 +84,86 @@ function hasConfigNumber(value) {
 
 function errorMessage(error) {
   return error?.message || String(error || 'unknown error');
+}
+
+function numberOrNull(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function loopPlanNowMs(config = {}) {
+  const configured = Number(config.nowMs);
+  return Number.isFinite(configured) ? configured : Date.now();
+}
+
+function nextDailyStaminaResetAt(t = Date.now()) {
+  return Math.floor((Number(t) + UTC8_OFFSET_MS) / DAY_MS) * DAY_MS - UTC8_OFFSET_MS + DAY_MS;
+}
+
+function staminaExhaustedThresholdMs(config = {}) {
+  return Math.max(0, Number(
+    config.staminaExhaustedBelowMs
+      ?? config.staminaExhaustedThresholdMs
+      ?? BROWSER_RUNTIME_DEFAULTS.staminaExhaustedThresholdMs
+      ?? 1000
+  ));
+}
+
+function staminaBudgetReloginDelayMs(config = {}) {
+  return Math.max(1000, Number(
+    config.staminaBudgetReloginDelayMs
+      ?? BROWSER_RUNTIME_DEFAULTS.staminaBudgetReloginDelayMs
+      ?? 1800000
+  ));
+}
+
+function staminaResetGraceMs(config = {}) {
+  return Math.max(0, Number(
+    config.staminaResetGraceMs
+      ?? BROWSER_RUNTIME_DEFAULTS.staminaResetGraceMs
+      ?? 0
+  ));
+}
+
+function lastLeaveResponseFromCanary(canary) {
+  const leaves = [
+    canary?.leave,
+    canary?.safety?.exit?.leave
+  ];
+  for (const leave of leaves) {
+    const attempts = Array.isArray(leave?.attempts) ? leave.attempts : [];
+    for (let i = attempts.length - 1; i >= 0; i -= 1) {
+      const response = attempts[i]?.response;
+      if (response && typeof response === 'object') return response;
+    }
+  }
+  return null;
+}
+
+function inferredLongStaminaExhaustionFromCanary(canary, config = {}) {
+  const response = lastLeaveResponseFromCanary(canary);
+  if (!response) return null;
+  const thresholdMs = staminaExhaustedThresholdMs(config);
+  const remaining1h = numberOrNull(response.stamina_1h_remaining_milli ?? response.stamina1hRemainingMilli);
+  const remaining1d = numberOrNull(response.stamina_1d_remaining_milli ?? response.stamina1dRemainingMilli);
+  const exhausted = [];
+  if (remaining1h !== null && remaining1h < thresholdMs) exhausted.push('1h');
+  if (remaining1d !== null && remaining1d < thresholdMs) exhausted.push('1d');
+  if (!exhausted.length) return null;
+  const nowMs = loopPlanNowMs(config);
+  const resetAt = exhausted.includes('1d') ? nextDailyStaminaResetAt(nowMs) : 0;
+  const fixedDelayMs = exhausted.includes('1h') ? staminaBudgetReloginDelayMs(config) : 0;
+  const resetDelayMs = resetAt ? Math.max(0, resetAt + staminaResetGraceMs(config) - nowMs) : 0;
+  const reloginDelayMs = Math.max(fixedDelayMs, resetDelayMs, 1000);
+  return {
+    exhausted,
+    thresholdMs,
+    remaining1h,
+    remaining1d,
+    resetAt,
+    fixedDelayMs,
+    reloginDelayMs
+  };
 }
 
 function createNoThrowLogStore(logStore, onError = () => {}) {
@@ -192,7 +278,7 @@ function browserlessLoopPlan(result, config = {}) {
     error,
     safetyReason
   });
-  const resume = (reason, minimumDelayMs = 0) => ({
+  const resume = (reason, minimumDelayMs = 0, extra = null) => ({
     continue: true,
     reason,
     delayMs: /^snapshot safety not confirmed:/i.test(error)
@@ -200,7 +286,8 @@ function browserlessLoopPlan(result, config = {}) {
       : Math.max(delayMs, Number(minimumDelayMs || 0)),
     previousRunId: runId,
     error,
-    safetyReason
+    safetyReason,
+    ...(extra && typeof extra === 'object' ? extra : {})
   });
   const resumeFast = reason => ({
     continue: true,
@@ -216,6 +303,7 @@ function browserlessLoopPlan(result, config = {}) {
     ?? safetyEvent?.detail?.decision?.staminaBudgetExit?.reloginDelayMs
     ?? 0
   );
+  const inferredStaminaExhaustion = inferredLongStaminaExhaustionFromCanary(canary, config);
   const fastRecoverableTransportReasons = new Set([
     'frame-gap',
     'stale-self',
@@ -234,13 +322,26 @@ function browserlessLoopPlan(result, config = {}) {
     return resumeFast('ws-auth-blocked-self-present');
   }
   if (safetyReason === 'direct-leave-failed' || canary?.safety?.leaveFailure) return resumeFast('direct-leave-failed');
+  if (inferredStaminaExhaustion && (safetyReason === 'no-self' || error === 'no-self')) {
+    return resume('stamina-exhausted-leave', inferredStaminaExhaustion.reloginDelayMs, {
+      forceExitReason: true,
+      staminaExhausted: inferredStaminaExhaustion
+    });
+  }
   if (safetyReason === 'no-self') return resume('no-self');
   if (/websocket unexpected response 403|http 403|missing-manual-session|login-point-bootstrap-failed/i.test(error)) {
     return resume(error || 'auth-or-bootstrap-retry');
   }
   if (result.ok) return resume('cycle-complete');
   if (safetyReason === 'stamina-budget-coin-leave' || safetyReason === 'stamina-exhausted-leave') {
-    return resume(safetyReason, Number.isFinite(decisionDelayMs) ? decisionDelayMs : 0);
+    return resume(
+      safetyReason,
+      Math.max(
+        Number.isFinite(decisionDelayMs) ? decisionDelayMs : 0,
+        inferredStaminaExhaustion?.reloginDelayMs || 0
+      ),
+      inferredStaminaExhaustion ? { staminaExhausted: inferredStaminaExhaustion } : null
+    );
   }
   if ([
     'profit-live-snapshot-active-threat',
@@ -446,6 +547,9 @@ async function runBrowserlessRunner(config, deps = {}) {
     };
     const currentBeforeWait = readBrowserlessStateFile(stateFile);
     const waitExitDetail = runnerResultExitDetail(resultForStop, loopPlan.reason);
+    const waitReason = loopPlan.forceExitReason
+      ? loopPlan.reason
+      : (waitExitDetail.reason || loopPlan.reason);
     updateState({
       runner: {
         running: true,
@@ -462,7 +566,7 @@ async function runBrowserlessRunner(config, deps = {}) {
       },
       stats: browserlessStatsForOffline(currentBeforeWait, {
         ...waitExitDetail,
-        reason: waitExitDetail.reason || loopPlan.reason,
+        reason: waitReason,
         nextRunAt,
         delayMs: loopPlan.delayMs
       }, { nowMs: now() })

@@ -12376,6 +12376,44 @@ async function runSelfTest() {
       want: 'true|1234|true|stamina-budget-coin-leave|1800000|true|stamina-exhausted-leave|600000|true|injury-leave|1234|true|pursuit-leave|1234|true|combat-hp-disadvantage-leave|1234|true|ws-closed|1000|true|ws-closed|1000|false|true|true|true|ws-auth-blocked-self-present|1000|true|60000|true|in-game-snapshot-safety-retry|1000|true|ws-connect-timeout|1000'
     },
     {
+      name: 'browserless runner preserves stamina exhausted wait after no-self leave',
+      got: (() => {
+        const plan = browserlessLoopPlan({
+          ok: false,
+          canary: {
+            runId: 'no-self-low-daily-stamina',
+            error: 'no-self',
+            safety: { event: { reason: 'no-self' } },
+            leave: {
+              ok: true,
+              attempts: [
+                {
+                  response: {
+                    stamina_5s_remaining_milli: 10000,
+                    stamina_1h_remaining_milli: 3000000,
+                    stamina_1d_remaining_milli: 31
+                  }
+                }
+              ]
+            }
+          }
+        }, {
+          once: false,
+          loopDelayMs: 1234,
+          nowMs: Date.parse('2026-07-10T15:13:00.000Z')
+        });
+        return [
+          plan.continue,
+          plan.reason,
+          plan.forceExitReason,
+          plan.delayMs,
+          plan.staminaExhausted.exhausted.join(','),
+          plan.staminaExhausted.remaining1d
+        ].join('|');
+      })(),
+      want: 'true|stamina-exhausted-leave|true|2830000|1d|31'
+    },
+    {
       name: 'browserless runner best-effort shutdown leave hydrates persisted session',
       got: withTempDirForTest(async dir => {
         const config = parseBrowserlessRunnerArgs(['--live', '--data-dir', dir], {});
@@ -13039,6 +13077,88 @@ async function runSelfTest() {
       want: 'true|true|2026-07-10T00:00:00.000Z|4|1500|1|4|1500|1|false|false|cycle-complete|2026-07-10T00:03:00.000Z|30000|120000|4|1500|1|2026-07-10T00:02:00.000Z|cycle-complete|2026-07-10T00:04:00.000Z|75000'
     },
     {
+      name: 'browserless compact status exposes offline last known stamina blocker',
+      got: (() => {
+        const compact = buildCompactBrowserlessStatus({
+          updatedAt: '2026-07-10T15:14:16.600Z',
+          session: {
+            userId: 77,
+            tokenPresent: true,
+            authenticated: true
+          },
+          runner: {
+            running: true,
+            currentAction: {
+              kind: 'loop-wait',
+              reason: 'no-self',
+              nextRunAt: '2026-07-10T15:14:46.522Z'
+            },
+            lastRun: {
+              canary: {
+                completedAt: '2026-07-10T15:14:16.396Z',
+                error: 'no-self',
+                leave: {
+                  ok: true,
+                  attempts: [
+                    {
+                      response: {
+                        entity_id: 308,
+                        user_id: 77,
+                        name: 'self',
+                        x: 5999,
+                        y: 66268,
+                        hp: 100,
+                        stamina_5s_remaining_milli: 10000,
+                        stamina_1h_remaining_milli: 3000000,
+                        stamina_1d_remaining_milli: 31,
+                        death_drop_coins: 2316
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          current: {
+            self: null,
+            stamina: {
+              stamina5sRemainingMilli: null,
+              stamina1hRemainingMilli: null,
+              stamina1dRemainingMilli: null
+            }
+          },
+          stats: {
+            currentSession: {
+              online: false,
+              exitReason: 'stamina-exhausted-leave',
+              lastStamina1dRemaining: 31
+            },
+            lastExit: {
+              at: '2026-07-10T09:52:17.017Z',
+              reason: 'stamina-exhausted-leave',
+              nextRunAt: '2026-07-10T15:14:46.522Z'
+            }
+          }
+        }, {
+          nowMs: Date.parse('2026-07-10T15:13:00.000Z')
+        });
+        return [
+          compact.game.inGame,
+          compact.self === null,
+          compact.stamina.remaining1d === null,
+          compact.lastKnown.self.hp,
+          compact.lastKnown.self.drop,
+          compact.lastKnown.stamina.remaining5s,
+          compact.lastKnown.stamina.remaining1d,
+          compact.stats.offline.blocker.reason,
+          compact.stats.offline.blocker.exhausted.join(','),
+          compact.stats.offline.nextReconnectAt,
+          compact.stats.offline.reconnectRemainingMs
+        ].join('|');
+      })(),
+      want: 'false|true|true|100|2316|10000|31|stamina-exhausted-leave|1d|2026-07-10T16:00:10.000Z|2830000'
+    },
+    {
       name: 'browserless state file replaces current action snapshots',
       got: withTempDirForTest(async dir => {
         const config = parseBrowserlessRunnerArgs(['--data-dir', dir], {});
@@ -13285,10 +13405,14 @@ async function runSelfTest() {
           panelScript.includes("return coord(point.x) + ', ' + coord(point.y);"),
           panelScript.includes("translated === '安全'"),
           /loginPointDisplay\(status\)\.state === 'safe'/.test(panelScript),
-          /loginDisplay\.state === 'safe'/.test(panelScript)
+          /loginDisplay\.state === 'safe'/.test(panelScript),
+          /function offlineBlockerText/.test(panelScript),
+          /s\.lastKnown\?\.self/.test(panelScript),
+          /上次体力1d/.test(panelScript),
+          /保持离线/.test(panelScript)
         ].join('|');
       })(),
-      want: 'true|true|true|true|true|true|true|true'
+      want: 'true|true|true|true|true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless runner self-test passes',

@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.10.13';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.10.14';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function renderBrowserlessWebPanel() {
@@ -803,6 +803,22 @@ function renderBrowserlessWebPanel() {
       const translated = reasonText(raw);
       return translated === '安全' ? '--' : translated;
     }
+    function offlineBlockerText(status) {
+      const blocker = status.stats?.offline?.blocker || null;
+      if (!blocker) return '--';
+      if (blocker.reason === 'stamina-exhausted-leave') {
+        const windows = Array.isArray(blocker.exhausted) && blocker.exhausted.length
+          ? blocker.exhausted.join('+')
+          : '长周期';
+        return joinNonBlank([
+          windows + '体力耗尽',
+          blocker.remaining1d === null || blocker.remaining1d === undefined ? '--' : '1d ' + staminaPair(blocker.remaining1d, 20000),
+          blocker.remaining1h === null || blocker.remaining1h === undefined ? '--' : '1h ' + staminaPair(blocker.remaining1h, 3000),
+          blocker.nextReadyAt ? '恢复 ' + fullStamp(blocker.nextReadyAt) : '--'
+        ]);
+      }
+      return reasonText(blocker.reason);
+    }
     function actionText(status) {
       const decision = status.decision || {};
       const action = status.action || {};
@@ -1024,6 +1040,7 @@ function renderBrowserlessWebPanel() {
         addRow(rowsOut, '登录点坐标', pointCoordText(status.loginPointSafety?.point));
         addRow(rowsOut, '不安全原因', unsafeReasonText(status));
         addRow(rowsOut, '附近危险', loginDisplay.state === 'safe' ? '--' : targetLabel(status.loginPointSafety?.detail?.nearestActive));
+        addRow(rowsOut, '保持离线', offlineBlockerText(status), false, status.stats?.offline?.blocker ? classAttrs('warn') : null);
         addRow(rowsOut, '检查时间', fullStamp(status.loginPointSafety?.checkedAt || status.loginPointSafety?.detail?.checkedAt));
       }
 
@@ -1135,9 +1152,12 @@ function renderBrowserlessWebPanel() {
 
       rows('actionDetails', actionDetailRows(s));
       updateNearbyPanels(s);
+      const roleSelf = s.game?.inGame ? s.self : (s.lastKnown?.self || s.self);
+      const roleStamina = s.game?.inGame ? s.stamina : (s.lastKnown?.stamina || s.stamina);
+      const offlineRole = !s.game?.inGame && Boolean(s.lastKnown);
       rows('accountStatus', [
         ['账号', s.session?.userId],
-        ['名称', s.self?.name],
+        ['名称', roleSelf?.name || s.self?.name],
         ['授权', authStatusShortText(s), authStatusAttrs(s)],
         ['登录信息', s.session?.tokenPresent ? '已有' : '缺失', tokenStatusAttrs(s)],
         ['已登录', bool(s.session?.authenticated), boolAttrs(s.session?.authenticated)],
@@ -1146,11 +1166,11 @@ function renderBrowserlessWebPanel() {
       rows('roleStatus', [
         ['游戏内', bool(s.game?.inGame), gameStatusAttrs(s)],
         ['当前位置', s.game?.inGame ? pointText(s.self) : '--'],
-        ['血量', hpText(s.self?.hp), hpAttrs(s.self?.hp)],
-        ['Drop', s.self?.drop, classAttrs('coin')],
-        ['体力5s', staminaPair(s.stamina?.remaining5s, 10)],
-        ['体力1h', staminaPair(s.stamina?.remaining1h, 3000), staminaAttrs(s.stamina?.remaining1h, 3000)],
-        ['体力1d', staminaPair(s.stamina?.remaining1d, 20000), staminaAttrs(s.stamina?.remaining1d, 20000)]
+        [offlineRole ? '上次血量' : '血量', hpText(roleSelf?.hp), hpAttrs(roleSelf?.hp)],
+        [offlineRole ? '上次Drop' : 'Drop', roleSelf?.drop, classAttrs('coin')],
+        [offlineRole ? '上次体力5s' : '体力5s', staminaPair(roleStamina?.remaining5s, 10)],
+        [offlineRole ? '上次体力1h' : '体力1h', staminaPair(roleStamina?.remaining1h, 3000), staminaAttrs(roleStamina?.remaining1h, 3000)],
+        [offlineRole ? '上次体力1d' : '体力1d', staminaPair(roleStamina?.remaining1d, 20000), staminaAttrs(roleStamina?.remaining1d, 20000)]
       ]);
       const currentSession = s.stats?.currentSession || {};
       const todayStats = s.stats?.today || {};
