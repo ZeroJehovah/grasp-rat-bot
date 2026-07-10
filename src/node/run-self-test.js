@@ -13522,6 +13522,130 @@ async function runSelfTest() {
       want: '0|0|4|8'
     },
     {
+      name: 'browserless stats reset v2 polluted kill counters',
+      got: (() => {
+        const compact = buildCompactBrowserlessStatus({
+          session: {
+            userId: 77,
+            sessionToken: 'state-secret-token'
+          },
+          runner: {
+            running: true,
+            mode: 'profit-live',
+            controlMode: 'profit-live'
+          },
+          current: {
+            self: { userId: 77, name: 'self', hp: 100, drop: 12 },
+            stamina: { stamina1dRemainingMilli: 9600 }
+          },
+          stats: {
+            killAccountingVersion: 2,
+            currentSession: {
+              online: true,
+              sessionId: '77:2026-07-10T00:00:00.000Z',
+              userId: 77,
+              enteredAt: '2026-07-10T00:00:00.000Z',
+              enteredTick: 1000,
+              lastSeenAt: '2026-07-10T00:01:00.000Z',
+              baseDrop: 10,
+              lastDrop: 12,
+              coinsGained: 2,
+              staminaSpentMs: 400,
+              killBaselineInitialized: true,
+              killBaselineKeys: ['self-kill:88:900'],
+              killKeys: ['self-kill:88:900', 'self-kill:99:990', 'self-kill:111:1001'],
+              kills: 24
+            },
+            today: {
+              day: '2026-07-10',
+              uptimeMs: 1000,
+              staminaSpentMs: 400,
+              coinsGained: 2,
+              kills: 140,
+              activeSessionId: '77:2026-07-10T00:00:00.000Z',
+              activeEnteredAt: '2026-07-10T00:00:00.000Z',
+              activeBaseKills: 0
+            }
+          }
+        }, {
+          ...parseBrowserlessRunnerArgs([], {}),
+          nowMs: Date.parse('2026-07-10T00:01:00.000Z')
+        });
+        return [
+          compact.stats.currentSession.kills,
+          compact.stats.today.kills,
+          compact.stats.currentSession.coinsGained,
+          compact.stats.today.coinsGained
+        ].join('|');
+      })(),
+      want: '0|0|4|8'
+    },
+    {
+      name: 'browserless stats filter trusted kill keys authoritatively',
+      got: (() => {
+        const compact = buildCompactBrowserlessStatus({
+          session: {
+            userId: 77,
+            sessionToken: 'state-secret-token'
+          },
+          runner: {
+            running: true,
+            mode: 'profit-live',
+            controlMode: 'profit-live'
+          },
+          current: {
+            self: { userId: 77, name: 'self', hp: 100, drop: 12 },
+            stamina: { stamina1dRemainingMilli: 9600 }
+          },
+          stats: {
+            killAccountingVersion: 3,
+            currentSession: {
+              online: true,
+              sessionId: '77:2026-07-10T00:00:00.000Z',
+              userId: 77,
+              enteredAt: '2026-07-10T00:00:00.000Z',
+              enteredTick: 1000,
+              lastSeenAt: '2026-07-10T00:01:00.000Z',
+              baseDrop: 10,
+              lastDrop: 12,
+              coinsGained: 2,
+              staminaSpentMs: 400,
+              killBaselineInitialized: true,
+              killBaselineKeys: ['self-kill:88:900'],
+              killKeys: [
+                'self-kill:66:800',
+                'self-kill:77:unknown',
+                'self-kill:88:900',
+                'self-kill:99:1001',
+                'self-kill:99:1001'
+              ],
+              kills: 24
+            },
+            today: {
+              day: '2026-07-10',
+              uptimeMs: 1000,
+              staminaSpentMs: 400,
+              coinsGained: 2,
+              kills: 5,
+              activeSessionId: '77:2026-07-10T00:00:00.000Z',
+              activeEnteredAt: '2026-07-10T00:00:00.000Z',
+              activeBaseKills: 0
+            }
+          }
+        }, {
+          ...parseBrowserlessRunnerArgs([], {}),
+          nowMs: Date.parse('2026-07-10T00:01:00.000Z')
+        });
+        return [
+          compact.stats.currentSession.kills,
+          compact.stats.today.kills,
+          compact.stats.currentSession.coinsGained,
+          compact.stats.today.coinsGained
+        ].join('|');
+      })(),
+      want: '1|6|4|8'
+    },
+    {
       name: 'browserless compact status exposes offline last known stamina blocker',
       got: (() => {
         const compact = buildCompactBrowserlessStatus({

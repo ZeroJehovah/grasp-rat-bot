@@ -5,7 +5,7 @@ const path = require('path');
 const { redactStructuredSecrets } = require('./session-client');
 
 const SCHEMA_VERSION = 1;
-const KILL_ACCOUNTING_VERSION = 2;
+const KILL_ACCOUNTING_VERSION = 3;
 const UTC8_OFFSET_MS = 8 * 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const PICKED_COINS_PER_SELF_DROP = 2;
@@ -308,6 +308,19 @@ function normalizeBrowserlessStats(stats, rawStats = stats) {
   const session = normalized.currentSession || {};
   const today = normalized.today || {};
   const lastExit = normalized.lastExit || {};
+  const enteredTick = resetUntrustedKills ? null : compactNumber(session.enteredTick);
+  const killBaselineKeys = resetUntrustedKills
+    ? []
+    : (Array.isArray(session.killBaselineKeys)
+        ? session.killBaselineKeys.map(item => compactString(item, 120)).filter(Boolean).slice(-300)
+        : []);
+  const killKeys = resetUntrustedKills
+    ? []
+    : normalizeSessionKillKeys(session.killKeys, {
+        ...session,
+        enteredTick,
+        killBaselineKeys
+      });
   normalized.killAccountingVersion = KILL_ACCOUNTING_VERSION;
   normalized.currentSession = {
     ...session,
@@ -315,7 +328,7 @@ function normalizeBrowserlessStats(stats, rawStats = stats) {
     sessionId: compactString(session.sessionId, 96),
     userId: compactNumber(session.userId) || 0,
     enteredAt: compactString(session.enteredAt, 48),
-    enteredTick: resetUntrustedKills ? null : compactNumber(session.enteredTick),
+    enteredTick,
     lastSeenAt: compactString(session.lastSeenAt, 48),
     exitedAt: compactString(session.exitedAt, 48),
     exitReason: compactString(session.exitReason, 160),
@@ -325,15 +338,9 @@ function normalizeBrowserlessStats(stats, rawStats = stats) {
     lastStamina1dRemaining: compactNumber(session.lastStamina1dRemaining),
     staminaSpentMs: Math.max(0, Math.round(Number(session.staminaSpentMs || 0) || 0)),
     killBaselineInitialized: resetUntrustedKills ? false : Boolean(session.killBaselineInitialized),
-    killBaselineKeys: resetUntrustedKills
-      ? []
-      : (Array.isArray(session.killBaselineKeys)
-          ? session.killBaselineKeys.map(item => compactString(item, 120)).filter(Boolean).slice(-300)
-          : []),
-    killKeys: Array.isArray(session.killKeys)
-      ? (resetUntrustedKills ? [] : session.killKeys.map(item => compactString(item, 120)).filter(Boolean).slice(-200))
-      : [],
-    kills: resetUntrustedKills ? 0 : Math.max(0, Math.round(Number(session.kills || 0) || 0))
+    killBaselineKeys,
+    killKeys,
+    kills: killKeys.length
   };
   normalized.today = {
     ...today,
@@ -416,6 +423,31 @@ function statsKillTick(item) {
   return compactNumber(item?.tick ?? item?.createdTick ?? item?.created_tick);
 }
 
+function statsKillTickFromKey(key) {
+  const match = /^self-kill:[^:]+:(.+)$/.exec(String(key || ''));
+  if (!match || match[1] === 'unknown') return null;
+  return compactNumber(match[1]);
+}
+
+function normalizeSessionKillKeys(keys, session) {
+  if (!Array.isArray(keys)) return [];
+  const baseline = new Set(Array.isArray(session?.killBaselineKeys) ? session.killBaselineKeys : []);
+  const enteredTick = compactNumber(session?.enteredTick);
+  const output = [];
+  const seen = new Set();
+  for (const rawKey of keys) {
+    const key = compactString(rawKey, 120);
+    if (!key || seen.has(key) || baseline.has(key)) continue;
+    const tick = statsKillTickFromKey(key);
+    if (enteredTick !== null) {
+      if (tick === null || tick < enteredTick) continue;
+    }
+    seen.add(key);
+    output.push(key);
+  }
+  return output.slice(-1000);
+}
+
 function statsDecisionTick(decision) {
   return compactNumber(decision?.input?.realtime?.tick ?? decision?.tick ?? decision?.input?.fallback?.tick);
 }
@@ -495,7 +527,7 @@ function updateBrowserlessStatsSession(session, decision, self, stamina, nowMs) 
   }
   const evidence = ensureSessionKillBaseline(session, decision);
   const baselineKeys = new Set(Array.isArray(session.killBaselineKeys) ? session.killBaselineKeys : []);
-  const killKeys = new Set(Array.isArray(session.killKeys) ? session.killKeys : []);
+  const killKeys = new Set(normalizeSessionKillKeys(session.killKeys, session));
   const enteredTick = compactNumber(session.enteredTick);
   for (const item of evidence) {
     if (baselineKeys.has(item.key)) continue;
@@ -509,8 +541,8 @@ function updateBrowserlessStatsSession(session, decision, self, stamina, nowMs) 
     killKeys.add(item.key);
   }
   session.killBaselineKeys = Array.from(baselineKeys).slice(-300);
-  session.killKeys = Array.from(killKeys).slice(-200);
-  session.kills = Math.max(Math.max(0, Number(session.kills || 0) || 0), session.killKeys.length);
+  session.killKeys = Array.from(killKeys).slice(-1000);
+  session.kills = session.killKeys.length;
 }
 
 function browserlessStatsForDecision(state, decision, options = {}) {
