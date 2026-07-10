@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.10.4';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.10.5';
 
 function renderBrowserlessWebPanel() {
   return `<!doctype html>
@@ -135,6 +135,9 @@ function renderBrowserlessWebPanel() {
     if (token) localStorage.graspRatBrowserlessToken = token;
     const WEB_PANEL_VERSION = ${JSON.stringify(BROWSERLESS_WEB_PANEL_VERSION)};
     const WEB_PANEL_RELOAD_KEY = 'graspRatBrowserlessPanelReloadedVersion';
+    const AUTO_REFRESH_MS = 3000;
+    let autoRefreshTimer = 0;
+    let refreshInFlight = null;
 
     const value = v => v === null || v === undefined || v === '' ? '--' : String(v);
     const number = v => v === null || v === undefined || v === '' ? null : (Number.isFinite(Number(v)) ? Number(v) : null);
@@ -684,13 +687,52 @@ function renderBrowserlessWebPanel() {
         ['结束时间', stamp(s.runner?.lastRun?.completedAt)]
       ]);
     }
-    document.getElementById('refreshBtn').onclick = () => refresh().catch(showError);
+    function isPageVisibleForRefresh() {
+      if (document.visibilityState) return document.visibilityState === 'visible';
+      if (typeof document.hidden === 'boolean') return !document.hidden;
+      return true;
+    }
+    function requestStatusRefresh(showFailure = true, force = false) {
+      if (!isPageVisibleForRefresh()) return Promise.resolve(null);
+      if (refreshInFlight && !force) return refreshInFlight;
+      const waitForCurrent = refreshInFlight && force ? refreshInFlight.catch(() => null) : Promise.resolve();
+      const currentRefresh = waitForCurrent
+        .then(() => refresh())
+        .catch(err => {
+          if (showFailure) showError(err);
+        })
+        .finally(() => {
+          if (refreshInFlight === currentRefresh) refreshInFlight = null;
+        });
+      refreshInFlight = currentRefresh;
+      return refreshInFlight;
+    }
+    function startAutoRefresh() {
+      if (autoRefreshTimer || !isPageVisibleForRefresh()) return;
+      autoRefreshTimer = setInterval(() => requestStatusRefresh(true), AUTO_REFRESH_MS);
+    }
+    function stopAutoRefresh() {
+      if (!autoRefreshTimer) return;
+      clearInterval(autoRefreshTimer);
+      autoRefreshTimer = 0;
+    }
+    function syncAutoRefreshForVisibility() {
+      if (isPageVisibleForRefresh()) {
+        startAutoRefresh();
+        requestStatusRefresh(true);
+        return;
+      }
+      stopAutoRefresh();
+      document.getElementById('stamp').textContent = '已暂停刷新';
+      document.getElementById('stamp').className = 'pill muted';
+    }
+    document.getElementById('refreshBtn').onclick = () => requestStatusRefresh(true, true);
     document.getElementById('authBtn').onclick = () => (async () => {
       setAuthMessage('正在获取授权链接', 'info');
       const data = await api('/api/auth-url', { method: 'POST' });
       setAuthUrl(data.authUrl || '');
       setAuthMessage(data.authUrl ? '授权链接已生成' : '授权链接已请求', 'ok');
-      await refresh();
+      await requestStatusRefresh(true, true);
     })().catch(showError);
     document.getElementById('callbackBtn').onclick = () => (async () => {
       const input = document.getElementById('callbackInput').value.trim();
@@ -699,11 +741,11 @@ function renderBrowserlessWebPanel() {
       await api('/api/callback', { method: 'POST', body: JSON.stringify({ callbackUrl: input }) });
       document.getElementById('callbackInput').value = '';
       setAuthMessage('授权已更新', 'ok');
-      await refresh();
+      await requestStatusRefresh(true, true);
     })().catch(showError);
     document.getElementById('stopBtn').onclick = () => (async () => {
       await api('/api/stop', { method: 'POST' });
-      await refresh();
+      await requestStatusRefresh(true, true);
     })().catch(showError);
     function setAuthMessage(text, className) {
       const node = document.getElementById('authMessage');
@@ -718,8 +760,10 @@ function renderBrowserlessWebPanel() {
       document.getElementById('stamp').className = 'pill bad';
       setAuthMessage(message || '请求失败', 'bad');
     }
-    refresh().catch(showError);
-    setInterval(() => refresh().catch(showError), 10000);
+    document.addEventListener('visibilitychange', syncAutoRefreshForVisibility);
+    window.addEventListener('pageshow', syncAutoRefreshForVisibility);
+    window.addEventListener('pagehide', stopAutoRefresh);
+    syncAutoRefreshForVisibility();
   </script>
 </body>
 </html>`;

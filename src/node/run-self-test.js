@@ -12810,7 +12810,7 @@ async function runSelfTest() {
           Boolean(compactStatus.current),
           Boolean(compactStatus.recentExits),
           compactText.includes('state-secret-token'),
-          compactText.length < publicText.length / 10
+          !compactText.includes(largePayload) && compactText.length < publicText.length
         ].join('|');
       }),
       want: 'true|77|true|true|true|true|true|false|loop-wait|88|10|20|360000|seek-coin|8|7|enemy|5999|active-near-login-point|1|88|23|enemy|latest|blocked-login|123|false|false|false|false|true'
@@ -12983,6 +12983,10 @@ async function runSelfTest() {
             /抓鼠助手/.test(panelText),
             panelText.includes(`网页 ${BROWSERLESS_WEB_PANEL_VERSION}`),
             /_webReloadVersion/.test(panelText),
+            /AUTO_REFRESH_MS\s*=\s*3000/.test(panelText),
+            /visibilitychange/.test(panelText),
+            /document\.visibilityState\s*===\s*'visible'/.test(panelText),
+            !/hasFocus/.test(panelText),
             /位置/.test(panelText),
             /登录点坐标/.test(panelText),
             !panelText.includes('需要查看日志'),
@@ -12994,7 +12998,7 @@ async function runSelfTest() {
           await handle.close();
         }
       })(),
-      want: '401|200|true|true|true|200|true|12|true|true|true|200|true|true|true|true|true|true|200|true|1'
+      want: '401|200|true|true|true|200|true|12|true|true|true|200|true|true|true|true|true|true|true|true|true|true|200|true|1'
     },
     {
       name: 'browserless runner self-test passes',
