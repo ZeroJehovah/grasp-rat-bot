@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.10.7';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.10.8';
 
 function renderBrowserlessWebPanel() {
   return `<!doctype html>
@@ -110,10 +110,6 @@ function renderBrowserlessWebPanel() {
       <section>
         <h2>今日累计</h2>
         <dl id="todayStats"></dl>
-      </section>
-      <section class="wide">
-        <h2>上次运行</h2>
-        <dl id="lastRun"></dl>
       </section>
     </div>
   </main>
@@ -780,14 +776,6 @@ function renderBrowserlessWebPanel() {
         ['消耗体力', unit(todayStats.staminaSpentMs)],
         ['拾取金币', integer(todayStats.coinsGained)],
         ['击杀敌人', integer(todayStats.kills)]
-      ]);
-      rows('lastRun', [
-        ['结果', resultText(s.runner?.lastRun?.ok)],
-        ['原因', reasonText(s.runner?.lastRun?.reason || s.runner?.lastRun?.error)],
-        ['收到画面', s.runner?.lastRun?.frames],
-        ['判断次数', s.runner?.lastRun?.decisions],
-        ['动作次数', s.runner?.lastRun?.actions],
-        ['结束时间', stamp(s.runner?.lastRun?.completedAt)]
       ]);
     }
     function isPageVisibleForRefresh() {
