@@ -50,6 +50,8 @@ function publicConfig(config) {
     frameGapAlertMs: Number(config.frameGapAlertMs || 0),
     decisionIntervalMs: Number(config.decisionIntervalMs || 0),
     loopDelayMs: Number(config.loopDelayMs || 0),
+    loginPointSafetySuccessRequired: Number(config.loginPointSafetySuccessRequired || 0),
+    loginPointSafetyProbeIntervalMs: Number(config.loginPointSafetyProbeIntervalMs || 0),
     staleSelfMs: Number(config.staleSelfMs || 0),
     noSelfGraceMs: Number(config.noSelfGraceMs || 0),
     staminaExhaustedBelowMs: Number(config.staminaExhaustedBelowMs || 0),
@@ -512,6 +514,41 @@ async function runBrowserlessRunner(config, deps = {}) {
     return null;
   };
 
+  const loginPointSafetyPatchFromSnapshot = snapshotSafety => {
+    const currentState = readBrowserlessStateFile(stateFile);
+    const summary = snapshotSafety?.response?.summary && typeof snapshotSafety.response.summary === 'object'
+      ? snapshotSafety.response.summary
+      : {};
+    const safety = summary.safety && typeof summary.safety === 'object' ? summary.safety : {};
+    const checkedAt = snapshotSafety?.checkedAt || new Date(now()).toISOString();
+    const point = safety.point || snapshotSafety?.loginPoint || currentState.loginPointSafety?.point || null;
+    const required = Number(snapshotSafety?.required ?? safety.required ?? currentState.loginPointSafety?.detail?.required ?? 1);
+    const streak = Number(snapshotSafety?.streak ?? safety.streak ?? 0);
+    return {
+      ok: Boolean(snapshotSafety?.ok && snapshotSafety?.satisfied !== false),
+      reason: snapshotSafety?.reason || safety.reason || 'snapshot-safety-check',
+      checkedAt,
+      point,
+      detail: {
+        ...safety,
+        ok: Boolean(snapshotSafety?.ok && snapshotSafety?.satisfied !== false),
+        reason: snapshotSafety?.reason || safety.reason || '',
+        originalReason: snapshotSafety?.originalReason || safety.reason || '',
+        checkedAt,
+        required: Number.isFinite(required) ? Math.max(1, Math.round(required)) : 1,
+        streak: Number.isFinite(streak) ? Math.max(0, Math.round(streak)) : 0,
+        selfPresent: summary.selfPresent === undefined ? null : Boolean(summary.selfPresent)
+      }
+    };
+  };
+
+  const recordSnapshotSafetyProgress = snapshotSafety => {
+    if (!snapshotSafety || typeof snapshotSafety !== 'object') return;
+    updateState({
+      loginPointSafety: loginPointSafetyPatchFromSnapshot(snapshotSafety)
+    }, { updatedAt: new Date(now()).toISOString() });
+  };
+
   let statusHandle = null;
   if (!config.once && Number(config.statusPort || 0) > 0 && deps.startStatusServer !== false) {
     const starter = deps.startStatusServer || startStatusServer;
@@ -677,6 +714,7 @@ async function runBrowserlessRunner(config, deps = {}) {
           persistedState: readBrowserlessStateFile(stateFile),
           safetyController,
           allowMissingLoginPointBootstrap: true,
+          onSnapshotSafety: recordSnapshotSafetyProgress,
           fetchWithTimeout: sourceIpController.fetchWithTimeout,
           openBrowserlessWs: sourceIpController.openBrowserlessWs,
           leaveWithVerification: sourceIpController.leaveWithVerification
@@ -734,6 +772,7 @@ async function runBrowserlessRunner(config, deps = {}) {
         now,
         persistedState: readBrowserlessStateFile(stateFile),
         safetyController,
+        onSnapshotSafety: recordSnapshotSafetyProgress,
         fetchWithTimeout: sourceIpController.fetchWithTimeout,
         openBrowserlessWs: sourceIpController.openBrowserlessWs,
         leaveWithVerification: sourceIpController.leaveWithVerification,
@@ -789,10 +828,11 @@ async function runBrowserlessRunner(config, deps = {}) {
       },
       ...(learnedLoginPoint ? {
         loginPointSafety: {
-          ok: Boolean(canary?.snapshotSafety?.ok),
+          ...loginPointSafetyPatchFromSnapshot(canary?.snapshotSafety || {}),
+          ok: Boolean(canary?.snapshotSafety?.ok && canary?.snapshotSafety?.satisfied !== false),
           reason: canary?.snapshotSafety?.reason || 'learned-from-canary-self',
           point: learnedLoginPoint,
-          checkedAt: canary?.completedAt || new Date(now()).toISOString()
+          checkedAt: canary?.completedAt || canary?.snapshotSafety?.checkedAt || new Date(now()).toISOString()
         },
         current: {
           ...(finalDecisionPatch.current || {}),

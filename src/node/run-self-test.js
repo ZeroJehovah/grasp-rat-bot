@@ -10662,6 +10662,84 @@ async function runSelfTest() {
       want: 'true|self-present-reentry|missing-login-point|true|true|300|400|true'
     },
     {
+      name: 'browserless read-only canary requires three safe login point checks before ws',
+      got: (async () => {
+        let t = Date.UTC(2026, 6, 8, 1, 0, 0);
+        let fetchCount = 0;
+        let sleepMs = 0;
+        let opened = false;
+        const progress = [];
+        const posFrame = encodeGrzFrameForTest({
+          type: 'pos',
+          tick: 4,
+          entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 100, y: 200, hp: 90 }],
+          bullets: []
+        });
+        const result = await runReadOnlyCanary({
+          gameOrigin: 'https://grasp-rat-game.h-e.top',
+          snapshotPath: '/snapshot',
+          wsPath: '/ws',
+          wsExtraQuery: 'compress=gzip%2Cdeflate',
+          userId: 7,
+          sessionToken: 'three-check-token',
+          readOnlyProbeMs: 1000,
+          decisionIntervalMs: 1,
+          frameGapAlertMs: 5000,
+          wsConnectTimeoutMs: 1000,
+          httpTimeoutMs: 1000,
+          loginPointSafetySuccessRequired: 3,
+          loginPointSafetyProbeIntervalMs: 30000
+        }, {
+          now: () => t,
+          sleep: async ms => {
+            sleepMs += ms;
+            t += ms;
+          },
+          persistedState: {
+            loginPointSafety: { point: { x: 100, y: 200, hp: 90, source: 'test' } }
+          },
+          onSnapshotSafety: snapshotSafety => {
+            progress.push([snapshotSafety.streak, snapshotSafety.required, snapshotSafety.ok].join('/'));
+          },
+          fetchImpl: async () => {
+            fetchCount += 1;
+            return fakeResponseForTest({
+              body: {
+                type: 'snapshot',
+                tick: fetchCount,
+                entities: [{ entity_id: 2, user_id: 8, name: 'idle', x: 50000, y: 50000, hp: 100 }],
+                bullets: [],
+                coin_drops: [],
+                messages: []
+              }
+            });
+          },
+          openBrowserlessWs: async options => {
+            opened = true;
+            options.onMessage(posFrame);
+            return {
+              isOpen: () => true,
+              close: () => {},
+              send: () => {}
+            };
+          },
+          leaveWithVerification: async () => ({ ok: true, attempts: [{ ok: true, summary: { leaveConfirmed: true } }] })
+        });
+        return [
+          result.ok,
+          opened,
+          fetchCount,
+          sleepMs,
+          result.snapshotSafety.streak,
+          result.snapshotSafety.required,
+          result.snapshotSafety.satisfied,
+          progress.join(','),
+          result.leave.ok
+        ].join('|');
+      })(),
+      want: 'true|true|3|61000|3|3|true|1/3/false,2/3/false,3/3/true|true'
+    },
+    {
       name: 'browserless read-only canary does not fail safety after deadline',
       got: (async () => {
         let t = Date.UTC(2026, 6, 8, 1, 0, 0);
@@ -11525,6 +11603,10 @@ async function runSelfTest() {
           '220',
           '--decision-interval-ms',
           '250',
+          '--login-point-safety-success-required',
+          '4',
+          '--login-point-safety-probe-interval-ms',
+          '15000',
           '--stale-self-ms',
           '3500',
           '--no-self-grace-ms',
@@ -11572,6 +11654,8 @@ async function runSelfTest() {
           config.userId,
           config.sessionToken,
           config.decisionIntervalMs,
+          config.loginPointSafetySuccessRequired,
+          config.loginPointSafetyProbeIntervalMs,
           config.staleSelfMs,
           config.noSelfGraceMs,
           config.staminaExhaustedBelowMs,
@@ -11592,7 +11676,7 @@ async function runSelfTest() {
           config.logDir.endsWith('/tmp/grasp-rat-browserless-logs')
         ].join('|');
       })(),
-      want: 'true|false|false|combat-live|19999|cli-token|true|220|42|env-token|250|3500|4500|150|300|800|3|true|true|4096|https://example.test/target-whitelist.json|true|1234|12|123|456|90|true|true'
+      want: 'true|false|false|combat-live|19999|cli-token|true|220|42|env-token|250|4|15000|3500|4500|150|300|800|3|true|true|4096|https://example.test/target-whitelist.json|true|1234|12|123|456|90|true|true'
     },
     {
       name: 'browserless deployment files define service env and install surface',
@@ -11611,6 +11695,8 @@ async function runSelfTest() {
           env.includes('GRASP_RAT_BROWSERLESS_DRY_RUN=true'),
           env.includes('GRASP_RAT_BROWSERLESS_TARGET_WHITELIST_URL='),
           env.includes('GRASP_RAT_BROWSERLESS_TARGET_WHITELIST_FILE='),
+          env.includes('GRASP_RAT_BROWSERLESS_LOGIN_POINT_SAFETY_SUCCESS_REQUIRED=3'),
+          env.includes('GRASP_RAT_BROWSERLESS_LOGIN_POINT_SAFETY_PROBE_INTERVAL_MS=30000'),
           env.includes('GRASP_RAT_BROWSERLESS_WS_TRACE_ENABLED=false'),
           installer.includes('grasp-rat-browserless-runner'),
           installer.includes('DATA_DIR="/var/lib/grasp-rat-browserless"'),
@@ -11620,7 +11706,7 @@ async function runSelfTest() {
           installer.includes('systemctl daemon-reload')
         ].join('|');
       })(),
-      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
+      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless deployment audit checks installed service evidence',
@@ -12717,6 +12803,18 @@ async function runSelfTest() {
               target: { userId: 88, name: 'enemy', hp: 44, drop: 9, distance: 800 },
               candidates: [{ userId: 88 }]
             },
+            decision: {
+              kind: 'seek-coin',
+              reason: 'best-opportunity-coin',
+              input: {
+                nearby: {
+                  ar: 14500,
+                  vr: 50000,
+                  c: [['coin-1', 8, 450, 1], ['coin-2', 7, 320, 0]],
+                  p: [['enemy', 44, 5000, 9, null, 800, 1]]
+                }
+              }
+            },
             action: {
               kind: 'seek-coin',
               reason: 'best-opportunity-coin',
@@ -12808,17 +12906,18 @@ async function runSelfTest() {
           compactStatus.combat.target.name,
           compactStatus.loginPointSafety.point.x,
           compactStatus.loginPointSafety.detail.unsafeReason,
-          compactStatus.loginPointSafety.detail.activeNearbyCount,
           compactStatus.loginPointSafety.detail.nearestActive.userId,
           compactStatus.loginPointSafety.detail.nearestActive.drop === null,
-          compactStatus.loginPointSafety.detail.freshness.tickDelta,
           compactFromPublic.loginPointSafety.detail.nearestActive.name,
+          compactStatus.nearby.ar,
+          compactStatus.nearby.c[0][0],
+          compactStatus.nearby.c[0][3],
+          compactStatus.nearby.p[0][0],
+          compactStatus.nearby.p[0][6],
           compactStatus.recentExit.reason,
-          compactStatus.recentBlock.reason,
           compactStatus.network.sourceIpIndex,
           compactStatus.network.sourceIpCount,
           compactStatus.network.sourceIp,
-          compactStatus.runner.lastRun.frames,
           Boolean(compactStatus.probes),
           Boolean(compactStatus.current),
           Boolean(compactStatus.recentExits),
@@ -12826,7 +12925,7 @@ async function runSelfTest() {
           !compactText.includes(largePayload) && compactText.length < publicText.length
         ].join('|');
       }),
-      want: 'true|77|true|true|true|true|true|false|loop-wait|88|10|20|360000|seek-coin|8|7|enemy|5999|active-near-login-point|1|88|true|23|enemy|latest|blocked-login|2|3|10.0.0.101|123|false|false|false|false|true'
+      want: 'true|77|true|true|true|true|true|false|loop-wait|88|10|20|360000|seek-coin|8|7|enemy|5999|active-near-login-point|88|true|enemy|14500|coin-1|1|enemy|1|latest|2|3|10.0.0.101|false|false|false|false|true'
     },
     {
       name: 'browserless compact status exposes session offline and today stats',
@@ -12895,6 +12994,22 @@ async function runSelfTest() {
           ...config,
           nowMs: Date.parse('2026-07-10T00:02:30.000Z')
         });
+        const waitingAgainState = JSON.parse(JSON.stringify(offlineState));
+        waitingAgainState.runner.currentAction = {
+          kind: 'loop-wait',
+          reason: 'snapshot-safety-retry',
+          nextRunAt: '2026-07-10T00:04:00.000Z'
+        };
+        waitingAgainState.stats = browserlessStatsForOffline(waitingAgainState, {
+          at: '2026-07-10T00:02:30.000Z',
+          reason: 'snapshot-safety-retry',
+          nextRunAt: '2026-07-10T00:04:00.000Z',
+          delayMs: 90000
+        }, { nowMs: Date.parse('2026-07-10T00:02:30.000Z') });
+        const compactWaitingAgain = buildCompactBrowserlessStatus(waitingAgainState, {
+          ...config,
+          nowMs: Date.parse('2026-07-10T00:02:45.000Z')
+        });
         return [
           compactOnline.game.inGame,
           compactOnline.stats.currentSession.online,
@@ -12913,10 +13028,14 @@ async function runSelfTest() {
           compactOffline.stats.today.inGameDurationMs,
           compactOffline.stats.today.coinsGained,
           compactOffline.stats.today.staminaSpentMs,
-          compactOffline.stats.today.kills
+          compactOffline.stats.today.kills,
+          compactWaitingAgain.stats.offline.lastExitAt,
+          compactWaitingAgain.stats.offline.lastExitReason,
+          compactWaitingAgain.stats.offline.nextReconnectAt,
+          compactWaitingAgain.stats.offline.reconnectRemainingMs
         ].join('|');
       }),
-      want: 'true|true|2026-07-10T00:00:00.000Z|4|1500|1|4|1500|1|false|false|cycle-complete|2026-07-10T00:03:00.000Z|30000|120000|4|1500|1'
+      want: 'true|true|2026-07-10T00:00:00.000Z|4|1500|1|4|1500|1|false|false|cycle-complete|2026-07-10T00:03:00.000Z|30000|120000|4|1500|1|2026-07-10T00:02:00.000Z|cycle-complete|2026-07-10T00:04:00.000Z|75000'
     },
     {
       name: 'browserless state file replaces current action snapshots',
@@ -13094,7 +13213,8 @@ async function runSelfTest() {
             !compactText.includes('must-not-leak'),
             healthBody.webVersion === BROWSERLESS_WEB_PANEL_VERSION,
             panel.status,
-            /抓鼠助手/.test(panelText),
+            /囤囤鼠历险记Bot/.test(panelText),
+            /rel="icon"/.test(panelText),
             panelText.includes(`id="webVersion">${BROWSERLESS_WEB_PANEL_VERSION}</dd>`),
             /_webReloadVersion/.test(panelText),
             /AUTO_REFRESH_MS\s*=\s*3000/.test(panelText),
@@ -13113,6 +13233,12 @@ async function runSelfTest() {
             /id="roleStatus"/.test(panelText),
             /当前动作/.test(panelText),
             /id="actionDetails"/.test(panelText),
+            /附近金币/.test(panelText),
+            /附近玩家/.test(panelText),
+            /id="nearbyCoins"/.test(panelText),
+            /id="nearbyPlayers"/.test(panelText),
+            !/id="refreshBtn"/.test(panelText),
+            !/id="stopBtn"/.test(panelText),
             !/class="hero"/.test(panelText),
             !/id="botLine"/.test(panelText),
             !/id="reason"/.test(panelText),
@@ -13143,7 +13269,7 @@ async function runSelfTest() {
           await handle.close();
         }
       })(),
-      want: '401|200|true|true|true|200|true|12|true|true|true|200|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|200|true|1'
+      want: '401|200|true|true|true|200|true|12|true|true|true|200|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|200|true|1'
     },
     {
       name: 'browserless runner self-test passes',

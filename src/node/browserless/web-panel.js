@@ -1,7 +1,8 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.10.11';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.10.12';
+const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function renderBrowserlessWebPanel() {
   return `<!doctype html>
@@ -9,13 +10,14 @@ function renderBrowserlessWebPanel() {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>抓鼠助手</title>
+  <title>囤囤鼠历险记Bot</title>
+  <link rel="icon" href="${BROWSERLESS_WEB_PANEL_ICON}">
   <style>
     :root{color-scheme:dark;--bg:#101214;--panel:#181b1f;--panel2:#121518;--line:#30363d;--text:#eef2f5;--muted:#9ba7b4;--green:#4ade80;--amber:#fbbf24;--red:#fb7185;--blue:#60a5fa;--coin:#fbbf24}
     *{box-sizing:border-box}
     body{margin:0;background:var(--bg);color:var(--text);font:13px/1.45 system-ui,-apple-system,Segoe UI,sans-serif}
     main{max-width:1180px;margin:0 auto;padding:14px}
-    header{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px}
+    header{display:flex;align-items:center;gap:10px;margin-bottom:10px}
     h1{margin:0;font-size:18px;line-height:1.2;font-weight:680;letter-spacing:0}
     button{font:inherit;min-height:32px;border:1px solid var(--line);background:#20252a;color:var(--text);border-radius:6px;padding:5px 10px;cursor:pointer}
     button:hover{border-color:#58616b}
@@ -30,6 +32,7 @@ function renderBrowserlessWebPanel() {
     .layout{display:grid;grid-template-columns:minmax(240px,1fr) minmax(0,2fr);gap:10px;align-items:start}
     .stack{display:flex;flex-direction:column;gap:10px;min-width:0}
     .stats-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;align-items:start}
+    .nearby-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;align-items:start}
     section{border:1px solid var(--line);background:var(--panel);border-radius:8px;padding:10px;min-width:0}
     h2{font-size:11px;line-height:1.2;margin:0 0 8px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.05em}
     dl{display:grid;grid-template-columns:minmax(76px,auto) 1fr;gap:5px 9px;margin:0}
@@ -45,18 +48,25 @@ function renderBrowserlessWebPanel() {
     textarea{width:100%;min-height:76px;margin-top:8px;border:1px solid var(--line);border-radius:6px;background:var(--panel2);color:var(--text);font:12px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;padding:8px;resize:vertical}
     pre.auth-url{display:none;white-space:pre-wrap;overflow-wrap:anywhere;margin:8px 0 0;border:1px solid var(--line);border-radius:6px;background:var(--panel2);color:var(--muted);padding:8px;max-height:120px;overflow:auto}
     .auth-message{min-height:18px;overflow-wrap:anywhere}
-    @media (max-width:760px){.layout{grid-template-columns:1fr}.stats-grid{grid-template-columns:1fr}}
-    @media (max-width:520px){main{padding:10px}header{align-items:flex-start;flex-direction:column}.toolbar{justify-content:flex-start}}
+    .nearby-list{display:grid;gap:4px;min-width:0}
+    .nearby-row{display:grid;align-items:center;gap:6px;min-height:26px;padding:3px 0;border-bottom:1px solid rgba(255,255,255,.06)}
+    .nearby-row:last-child{border-bottom:0}
+    .nearby-head{color:var(--muted);font-size:11px;font-weight:700}
+    .coin-row{grid-template-columns:minmax(48px,1.2fr) minmax(36px,.6fr) minmax(54px,.75fr) minmax(42px,.55fr)}
+    .player-row{grid-template-columns:minmax(64px,1.3fr) minmax(38px,.55fr) minmax(42px,.65fr) minmax(42px,.55fr) minmax(54px,.8fr) minmax(54px,.75fr) minmax(42px,.55fr)}
+    .nearby-cell{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .distance-badge{font-variant-numeric:tabular-nums}
+    .range-attack{color:var(--green)}
+    .range-view{color:var(--blue)}
+    .selected-mark{color:var(--amber);font-weight:700}
+    @media (max-width:760px){.layout{grid-template-columns:1fr}.stats-grid,.nearby-grid{grid-template-columns:1fr}}
+    @media (max-width:520px){main{padding:10px}header{align-items:flex-start;flex-direction:column}}
   </style>
 </head>
 <body>
   <main>
     <header>
-      <h1>抓鼠助手</h1>
-      <div class="toolbar">
-        <button id="refreshBtn" type="button" title="刷新状态">刷新</button>
-        <button id="stopBtn" type="button" title="停止自动运行">停止</button>
-      </div>
+      <h1>囤囤鼠历险记Bot</h1>
     </header>
 
     <div class="layout">
@@ -103,6 +113,16 @@ function renderBrowserlessWebPanel() {
           <h2>当前动作</h2>
           <dl id="actionDetails"></dl>
         </section>
+        <div id="nearbyGrid" class="nearby-grid" hidden>
+          <section>
+            <h2>附近金币</h2>
+            <div id="nearbyCoins" class="nearby-list"></div>
+          </section>
+          <section>
+            <h2>附近玩家</h2>
+            <div id="nearbyPlayers" class="nearby-list"></div>
+          </section>
+        </div>
         <div class="stats-grid">
           <section>
             <h2>本次游戏</h2>
@@ -776,6 +796,112 @@ function renderBrowserlessWebPanel() {
       const parts = items.map(nonBlankText).filter(Boolean);
       return parts.length ? parts.join(separator) : '--';
     }
+    function appendCell(row, text, className = '') {
+      const cell = document.createElement('div');
+      cell.className = ['nearby-cell', className].filter(Boolean).join(' ');
+      cell.textContent = value(text);
+      row.appendChild(cell);
+      return cell;
+    }
+    function nearbyDistanceClass(status, distanceCm) {
+      const n = number(distanceCm);
+      const attackRange = number(status.nearby?.ar);
+      return n !== null && attackRange !== null && n <= attackRange ? 'range-attack' : 'range-view';
+    }
+    function selectedText(flag) {
+      return flag ? '是' : '--';
+    }
+    function invulnerableText(ms) {
+      const n = number(ms);
+      if (n === null) return '--';
+      if (n < 0) return '是';
+      return durationClock(n);
+    }
+    function createNearbyRow(kind, cells, head = false) {
+      const row = document.createElement('div');
+      row.className = ['nearby-row', kind + '-row', head ? 'nearby-head' : ''].filter(Boolean).join(' ');
+      for (const cell of cells) appendCell(row, cell.text, cell.className);
+      return row;
+    }
+    function renderNearbyCoins(status) {
+      const node = document.getElementById('nearbyCoins');
+      if (!node) return;
+      const items = Array.isArray(status.nearby?.c) ? status.nearby.c : [];
+      const fragment = document.createDocumentFragment();
+      fragment.appendChild(createNearbyRow('coin', [
+        { text: 'ID' },
+        { text: '数额' },
+        { text: '距离' },
+        { text: '选择' }
+      ], true));
+      if (!items.length) {
+        fragment.appendChild(createNearbyRow('coin', [{ text: '无' }, { text: '--' }, { text: '--' }, { text: '--' }]));
+      } else {
+        for (const item of items) {
+          const [id, amount, distanceCm, selected] = item;
+          fragment.appendChild(createNearbyRow('coin', [
+            { text: id },
+            { text: integer(amount), className: 'coin' },
+            { text: distance(distanceCm), className: 'distance-badge ' + nearbyDistanceClass(status, distanceCm) },
+            { text: selectedText(Boolean(selected)), className: selected ? 'selected-mark' : 'muted' }
+          ]));
+        }
+      }
+      node.replaceChildren(fragment);
+    }
+    function renderNearbyPlayers(status) {
+      const node = document.getElementById('nearbyPlayers');
+      if (!node) return;
+      const items = Array.isArray(status.nearby?.p) ? status.nearby.p : [];
+      const fragment = document.createDocumentFragment();
+      fragment.appendChild(createNearbyRow('player', [
+        { text: '名称' },
+        { text: '血量' },
+        { text: '体力' },
+        { text: 'Drop' },
+        { text: '无敌' },
+        { text: '距离' },
+        { text: '选择' }
+      ], true));
+      if (!items.length) {
+        fragment.appendChild(createNearbyRow('player', [
+          { text: '无' },
+          { text: '--' },
+          { text: '--' },
+          { text: '--' },
+          { text: '--' },
+          { text: '--' },
+          { text: '--' }
+        ]));
+      } else {
+        for (const item of items) {
+          const [name, hp, staminaMs, drop, invMs, distanceCm, selected] = item;
+          fragment.appendChild(createNearbyRow('player', [
+            { text: name },
+            { text: integer(hp), className: hpAttrs(hp).className },
+            { text: unit(staminaMs) },
+            { text: integer(drop), className: 'coin' },
+            { text: invulnerableText(invMs), className: invMs ? 'warn' : 'muted' },
+            { text: distance(distanceCm), className: 'distance-badge ' + nearbyDistanceClass(status, distanceCm) },
+            { text: selectedText(Boolean(selected)), className: selected ? 'selected-mark' : 'muted' }
+          ]));
+        }
+      }
+      node.replaceChildren(fragment);
+    }
+    function updateNearbyPanels(status) {
+      const panel = document.getElementById('nearbyGrid');
+      if (!panel) return;
+      const show = Boolean(status.game?.inGame);
+      panel.hidden = !show;
+      if (!show) {
+        document.getElementById('nearbyCoins')?.replaceChildren();
+        document.getElementById('nearbyPlayers')?.replaceChildren();
+        return;
+      }
+      renderNearbyCoins(status);
+      renderNearbyPlayers(status);
+    }
     function targetStateText(target) {
       if (!target) return '--';
       return joinNonBlank([
@@ -868,7 +994,6 @@ function renderBrowserlessWebPanel() {
         addRow(rowsOut, '不安全原因', unsafeReasonText(status));
         addRow(rowsOut, '附近危险', status.loginPointSafety?.ok ? '--' : targetLabel(status.loginPointSafety?.detail?.nearestActive));
         addRow(rowsOut, '检查时间', fullStamp(status.loginPointSafety?.checkedAt || status.loginPointSafety?.detail?.checkedAt));
-        addRow(rowsOut, '上次退出', reasonText(status.recentExit?.reason));
       }
 
       if (!online) {
@@ -978,6 +1103,7 @@ function renderBrowserlessWebPanel() {
       setText('sourceIp', s.network?.sourceIp);
 
       rows('actionDetails', actionDetailRows(s));
+      updateNearbyPanels(s);
       rows('accountStatus', [
         ['账号', s.session?.userId],
         ['名称', s.self?.name],
@@ -1063,7 +1189,6 @@ function renderBrowserlessWebPanel() {
       setText('stamp', '已暂停刷新');
       setClass('stamp', 'muted');
     }
-    document.getElementById('refreshBtn').onclick = () => requestStatusRefresh(true, true);
     document.getElementById('authBtn').onclick = () => (async () => {
       setAuthMessage('正在获取授权链接', 'info');
       const data = await api('/api/auth-url', { method: 'POST' });
@@ -1078,10 +1203,6 @@ function renderBrowserlessWebPanel() {
       await api('/api/callback', { method: 'POST', body: JSON.stringify({ callbackUrl: input }) });
       document.getElementById('callbackInput').value = '';
       setAuthMessage('授权已更新', 'ok');
-      await requestStatusRefresh(true, true);
-    })().catch(showError);
-    document.getElementById('stopBtn').onclick = () => (async () => {
-      await api('/api/stop', { method: 'POST' });
       await requestStatusRefresh(true, true);
     })().catch(showError);
     function setAuthMessage(text, className) {

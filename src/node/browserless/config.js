@@ -34,6 +34,8 @@ const DEFAULTS = {
   httpTimeoutMs: 10000,
   decisionIntervalMs: 1000,
   loopDelayMs: 30000,
+  loginPointSafetySuccessRequired: 3,
+  loginPointSafetyProbeIntervalMs: 30000,
   staleSelfMs: 3000,
   noSelfGraceMs: 3000,
   staminaExhaustedBelowMs: 200,
@@ -122,6 +124,8 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
     httpTimeoutMs: numberEnv(env.GRASP_RAT_BROWSERLESS_HTTP_TIMEOUT_MS, DEFAULTS.httpTimeoutMs),
     decisionIntervalMs: numberEnv(env.GRASP_RAT_BROWSERLESS_DECISION_INTERVAL_MS, DEFAULTS.decisionIntervalMs),
     loopDelayMs: numberEnv(env.GRASP_RAT_BROWSERLESS_LOOP_DELAY_MS, DEFAULTS.loopDelayMs),
+    loginPointSafetySuccessRequired: numberEnv(env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_SAFETY_SUCCESS_REQUIRED, DEFAULTS.loginPointSafetySuccessRequired),
+    loginPointSafetyProbeIntervalMs: numberEnv(env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_SAFETY_PROBE_INTERVAL_MS, DEFAULTS.loginPointSafetyProbeIntervalMs),
     staleSelfMs: numberEnv(env.GRASP_RAT_BROWSERLESS_STALE_SELF_MS, DEFAULTS.staleSelfMs),
     noSelfGraceMs: numberEnv(env.GRASP_RAT_BROWSERLESS_NO_SELF_GRACE_MS, DEFAULTS.noSelfGraceMs),
     staminaExhaustedBelowMs: numberEnv(env.GRASP_RAT_BROWSERLESS_STAMINA_EXHAUSTED_BELOW_MS, DEFAULTS.staminaExhaustedBelowMs),
@@ -220,6 +224,10 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
       config.decisionIntervalMs = numberEnv(argv[++i], config.decisionIntervalMs);
     } else if (arg === '--loop-delay-ms') {
       config.loopDelayMs = numberEnv(argv[++i], config.loopDelayMs);
+    } else if (arg === '--login-point-safety-success-required') {
+      config.loginPointSafetySuccessRequired = numberEnv(argv[++i], config.loginPointSafetySuccessRequired);
+    } else if (arg === '--login-point-safety-probe-interval-ms') {
+      config.loginPointSafetyProbeIntervalMs = numberEnv(argv[++i], config.loginPointSafetyProbeIntervalMs);
     } else if (arg === '--stale-self-ms') {
       config.staleSelfMs = numberEnv(argv[++i], config.staleSelfMs);
     } else if (arg === '--no-self-grace-ms') {
@@ -302,6 +310,8 @@ function usage() {
     '  --target-whitelist-file <file> Local whitelist fallback. Default: ./dist/target-whitelist.json',
     '  --decision-interval-ms <ms>  Dry-run decision log/status interval. Default: 1000',
     '  --loop-delay-ms <ms>    Delay before the next non-once live cycle after recoverable exit. Default: 30000',
+    '  --login-point-safety-success-required <n>  Consecutive safe snapshot checks before entering. Default: 3',
+    '  --login-point-safety-probe-interval-ms <ms>  Delay between those checks. Default: 30000',
     '  --stale-self-ms <ms>      Safety stale-self threshold. Default: 3000',
     '  --no-self-grace-ms <ms>   Safety no-self grace window. Default: 3000',
     '  --stamina-exhausted-below-ms <ms>  Safety stamina floor. Default: 200',

@@ -161,7 +161,7 @@ function loginPointFromState(state) {
   };
 }
 
-async function runPreLoginSnapshotSafety(config, state, deps = {}) {
+async function runSinglePreLoginSnapshotSafetyProbe(config, state, deps = {}, detail = {}) {
   const loginPoint = loginPointFromState(state);
   const url = buildSnapshotProbeUrl({
     gameOrigin: config.gameOrigin,
@@ -178,17 +178,31 @@ async function runPreLoginSnapshotSafety(config, state, deps = {}) {
     cache: 'no-store'
   });
   const body = await readResponseBody(response);
+  const runtimeDefaults = buildBrowserlessRuntimeDefaults(config);
   const summary = summarizeSnapshotPayload(body.json, {
     userId: config.userId,
     loginPoint,
-    latestKnownTick: state?.frameAges?.latestKnownTick || state?.latestKnownTick || 0
+    latestKnownTick: state?.frameAges?.latestKnownTick || state?.latestKnownTick || 0,
+    healthyHpThreshold: config.loginPointSafetyHealthyHpThreshold ?? runtimeDefaults.loginPointSafetyHealthyHpThreshold,
+    healthyRadius: config.loginPointSafetyHealthyRadius ?? runtimeDefaults.loginPointSafetyHealthyRadius,
+    lowRadius: config.loginPointSafetyRadius ?? runtimeDefaults.loginPointSafetyRadius
   });
+  const checkedAt = new Date(typeof deps.now === 'function' ? deps.now() : Date.now()).toISOString();
+  const progress = {
+    required: detail.required ?? 1,
+    streak: detail.streak ?? 0,
+    satisfied: Boolean(detail.satisfied),
+    checkedAt
+  };
   if (response.ok && summary.valid && summary.selfPresent) {
     return {
       ok: true,
       reason: 'self-present-reentry',
       originalReason: summary.safety?.reason || '',
       bypassedPreLoginSafety: true,
+      ...progress,
+      streak: progress.required,
+      satisfied: true,
       request: { url: redactSecrets(url) },
       response: {
         httpOk: response.ok,
@@ -203,6 +217,7 @@ async function runPreLoginSnapshotSafety(config, state, deps = {}) {
     return {
       ok: false,
       reason: 'missing-login-point',
+      ...progress,
       request: { url: redactSecrets(url) },
       response: {
         httpOk: response.ok,
@@ -216,6 +231,7 @@ async function runPreLoginSnapshotSafety(config, state, deps = {}) {
   return {
     ok: Boolean(response.ok && summary.valid && summary.safety?.ok),
     reason: response.ok ? (summary.safety?.reason || 'invalid-payload') : `snapshot-http-${response.status}`,
+    ...progress,
     request: { url: redactSecrets(url) },
     response: {
       httpOk: response.ok,
@@ -224,6 +240,91 @@ async function runPreLoginSnapshotSafety(config, state, deps = {}) {
       summary
     },
     loginPoint
+  };
+}
+
+async function runPreLoginSnapshotSafety(config, state, deps = {}) {
+  const runtimeDefaults = buildBrowserlessRuntimeDefaults(config);
+  const required = Math.max(0, Math.round(Number(
+    config.loginPointSafetySuccessRequired
+      ?? runtimeDefaults.loginPointSafetySuccessRequired
+      ?? 3
+  ) || 0));
+  const effectiveRequired = Math.max(1, required);
+  const intervalMs = Math.max(0, Number(
+    config.loginPointSafetyProbeIntervalMs
+      ?? runtimeDefaults.loginPointSafetyProbeIntervalMs
+      ?? 30000
+  ) || 0);
+  const sleep = typeof deps.sleep === 'function'
+    ? deps.sleep
+    : ms => new Promise(resolve => setTimeout(resolve, ms));
+  let streak = 0;
+  let last = null;
+  for (let attempt = 1; attempt <= effectiveRequired; attempt += 1) {
+    last = await runSinglePreLoginSnapshotSafetyProbe(config, state, deps, {
+      required: effectiveRequired,
+      streak,
+      satisfied: false
+    });
+    if (last.bypassedPreLoginSafety) {
+      last = {
+        ...last,
+        required: effectiveRequired,
+        streak: effectiveRequired,
+        satisfied: true,
+        attempt,
+        probeIntervalMs: intervalMs
+      };
+      if (typeof deps.onSnapshotSafety === 'function') deps.onSnapshotSafety(last);
+      return last;
+    }
+    if (!last.ok) {
+      last = {
+        ...last,
+        required: effectiveRequired,
+        streak: 0,
+        satisfied: false,
+        attempt,
+        probeIntervalMs: intervalMs
+      };
+      if (typeof deps.onSnapshotSafety === 'function') deps.onSnapshotSafety(last);
+      return last;
+    }
+    streak = Math.min(effectiveRequired, streak + 1);
+    last = {
+      ...last,
+      ok: streak >= effectiveRequired,
+      reason: streak >= effectiveRequired ? last.reason : 'snapshot-safety-streak-pending',
+      originalReason: last.reason,
+      required: effectiveRequired,
+      streak,
+      satisfied: streak >= effectiveRequired,
+      attempt,
+      probeIntervalMs: intervalMs,
+      response: {
+        ...(last.response || {}),
+        summary: {
+          ...(last.response?.summary || {}),
+          safety: {
+            ...(last.response?.summary?.safety || {}),
+            required: effectiveRequired,
+            streak,
+            satisfied: streak >= effectiveRequired
+          }
+        }
+      }
+    };
+    if (typeof deps.onSnapshotSafety === 'function') deps.onSnapshotSafety(last);
+    if (last.ok) return last;
+    if (intervalMs > 0) await sleep(intervalMs);
+  }
+  return last || {
+    ok: false,
+    reason: 'snapshot-safety-streak-missing',
+    required: effectiveRequired,
+    streak,
+    satisfied: false
   };
 }
 

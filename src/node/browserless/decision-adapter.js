@@ -692,6 +692,124 @@ function summarizeOpportunity(item) {
   };
 }
 
+function valueKey(value) {
+  if (value === null || value === undefined || value === '') return '';
+  return String(value);
+}
+
+function targetCoinSelected(action, coin) {
+  const target = action?.target || null;
+  if (!target || !coin) return false;
+  const targetIds = new Set([
+    valueKey(target.id),
+    valueKey(target.coinId),
+    valueKey(target.drop_id),
+    valueKey(target.key)
+  ].filter(Boolean));
+  return [
+    coin.id,
+    coin.drop_id,
+    coin.key
+  ].some(item => targetIds.has(valueKey(item)));
+}
+
+function targetPlayerSelected(action, combat, target) {
+  const selected = [action?.target, combat?.target].filter(Boolean);
+  if (!selected.length || !target) return false;
+  const targetUserId = valueKey(target.user_id ?? target.userId);
+  const targetEntityId = valueKey(target.entity_id ?? target.entityId);
+  return selected.some(item => {
+    const userId = valueKey(item.userId ?? item.user_id);
+    const entityId = valueKey(item.entityId ?? item.entity_id);
+    return Boolean((targetUserId && userId === targetUserId) || (targetEntityId && entityId === targetEntityId));
+  });
+}
+
+function uniqueNearbyCoins(input) {
+  const byKey = new Map();
+  const add = coin => {
+    const key = valueKey(coin?.key || coin?.drop_id || coin?.id);
+    if (!key || byKey.has(key)) return;
+    byKey.set(key, coin);
+  };
+  for (const coin of input?.realtimeCoins || []) add(coin);
+  for (const coin of input?.snapshotVisibleCoins || []) add(coin);
+  return Array.from(byKey.values());
+}
+
+function invulnerableRemainingMs(target, options = {}) {
+  const msFields = [
+    'invulnerable_remaining_ms',
+    'invulnerability_remaining_ms',
+    'invulnerableRemainingMs',
+    'invulnerabilityRemainingMs',
+    'invulnerable_ms',
+    'invulnerability_ms',
+    'immune_remaining_ms',
+    'immuneRemainingMs'
+  ];
+  for (const field of msFields) {
+    const value = numberOrNull(target?.[field]);
+    if (value !== null && value > 0) return Math.round(value);
+  }
+  const tickFields = [
+    'invulnerable_remaining_ticks',
+    'invulnerability_remaining_ticks',
+    'invulnerableTicks',
+    'invulnerableRemainingTicks',
+    'invulnerabilityRemainingTicks',
+    'invulnerable_ticks',
+    'invulnerability_ticks'
+  ];
+  const tickMs = Math.max(1, Number(options.tickMs ?? BROWSER_RUNTIME_DEFAULTS.tickMs ?? 120) || 120);
+  for (const field of tickFields) {
+    const value = numberOrNull(target?.[field]);
+    if (value !== null && value > 0) return Math.round(value * tickMs);
+  }
+  return target?.invulnerable ? -1 : null;
+}
+
+function summarizeNearbyForPanel(input, action, combat, options = {}) {
+  if (!input?.self) return null;
+  const attackRange = Math.max(0, Number(options.attackRange ?? options.combatAttackRange ?? DEFAULT_ATTACK_RANGE));
+  const visibleRange = Math.max(0, Number(
+    input.fallback?.snapshotVisibleCoinMaxDistanceCm
+      ?? options.globalCoinMaxDistance
+      ?? options.opportunityVisibleDistance
+      ?? DEFAULT_GLOBAL_COIN_MAX_DISTANCE
+  ));
+  const coins = uniqueNearbyCoins(input)
+    .filter(coin => Number.isFinite(Number(coin?.distance)))
+    .filter(coin => visibleRange <= 0 || Number(coin.distance) <= visibleRange)
+    .sort((a, b) => Number(a.distance) - Number(b.distance)
+      || Number(b.amount || 0) - Number(a.amount || 0))
+    .map(coin => [
+      valueKey(coin.drop_id ?? coin.id),
+      numberOrNull(coin.amount),
+      Math.round(Number(coin.distance)),
+      targetCoinSelected(action, coin) ? 1 : 0
+    ]);
+  const players = (input.visibleTargets || [])
+    .filter(target => Number.isFinite(Number(target?.distance)))
+    .filter(target => visibleRange <= 0 || Number(target.distance) <= visibleRange)
+    .sort((a, b) => Number(a.distance) - Number(b.distance))
+    .map(target => [
+      entityDisplayName(target) || (target.user_id ? '#' + target.user_id : ''),
+      numberOrNull(target.hp),
+      numberOrNull(target.stamina_5s_remaining_milli ?? target.stamina5sRemainingMilli ?? target.stamina5s),
+      numberOrNull(entityDropValue(target)),
+      invulnerableRemainingMs(target, options),
+      Math.round(Number(target.distance)),
+      targetPlayerSelected(action, combat, target) ? 1 : 0
+    ]);
+  return {
+    ar: Math.round(attackRange),
+    vr: Math.round(visibleRange),
+    c: coins,
+    p: players
+  };
+}
+
 function topItems(items, mapper, limit = 5) {
   return (items || []).slice(0, limit).map(mapper).filter(Boolean);
 }
@@ -833,6 +951,7 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
     afkTargets,
     realtimeCoins,
     snapshotCoins,
+    snapshotVisibleCoins,
     selfKilledPlayerDropCoins,
     selfKillTargetIds,
     selfKillEvidence,
@@ -2868,6 +2987,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       fallback: input.fallback,
       profitCoinSource: input.profitCoinSource,
       selfKillEvidence: topItems(input.selfKillEvidence, item => item, 20),
+      nearby: summarizeNearbyForPanel(input, action, combat.dryRun || combat, options),
       dataGaps: input.dataGaps
     },
     profit: {

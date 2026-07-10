@@ -484,6 +484,8 @@ function finalizeBrowserlessStatsSession(stats, detail = {}, nowMs = Date.now())
   const session = stats.currentSession || {};
   const reason = compactString(detail.reason || session.exitReason || 'offline', 160);
   const at = compactString(detail.at || detail.completedAt || isoFromMs(nowMs), 48);
+  let lastExitAt = stats.lastExit.at || '';
+  let lastExitReason = stats.lastExit.reason || '';
   if (session.online && session.sessionId) {
     const delta = todayActiveDelta(stats, eventTimeMs(at, nowMs));
     stats.today.uptimeMs += delta.uptimeMs;
@@ -501,10 +503,15 @@ function finalizeBrowserlessStatsSession(stats, detail = {}, nowMs = Date.now())
     session.online = false;
     session.exitedAt = at;
     session.exitReason = reason;
+    lastExitAt = at || lastExitAt;
+    lastExitReason = reason || lastExitReason;
+  } else if (detail.forceLastExit) {
+    lastExitAt = at || lastExitAt;
+    lastExitReason = reason || lastExitReason;
   }
   stats.lastExit = {
-    at: at || stats.lastExit.at,
-    reason: reason || stats.lastExit.reason,
+    at: lastExitAt,
+    reason: lastExitReason,
     nextRunAt: compactString(detail.nextRunAt || stats.lastExit.nextRunAt, 48),
     reconnectDelayMs: compactNumber(detail.reconnectDelayMs ?? detail.delayMs ?? stats.lastExit.reconnectDelayMs)
   };
@@ -661,19 +668,8 @@ function compactLoginPointSafetyDetail(loginPointSafety, normalized) {
     streak: effectiveStreak,
     required: effectiveRequired,
     point,
-    httpOk: response.httpOk === undefined ? null : Boolean(response.httpOk),
-    httpStatus: compactNumber(response.status),
     selfPresent: summary.selfPresent === undefined ? null : Boolean(summary.selfPresent),
-    bypassedPreLoginSafety: snapshotSafety?.bypassedPreLoginSafety === undefined ? null : Boolean(snapshotSafety.bypassedPreLoginSafety),
-    bootstrapOnly: snapshotSafety?.bootstrapOnly === undefined ? null : Boolean(snapshotSafety.bootstrapOnly),
-    freshness: compactSafetyFreshness(detail.freshness || summary.freshness || directDetail.freshness),
-    radius: compactNumber(detail.radius ?? directDetail.radius),
-    radiusReason: compactString(detail.radiusReason || directDetail.radiusReason, 80),
-    entityCount: compactNumber(detail.entityCount ?? summary.entityCount ?? directDetail.entityCount),
-    nearbyCount: compactNumber(detail.nearbyCount ?? directDetail.nearbyCount),
-    activeNearbyCount: compactNumber(detail.activeNearbyCount ?? directDetail.activeNearbyCount),
-    nearestActive: compactSafetyEntity(detail.nearestActive || directDetail.nearestActive),
-    nearest: compactSafetyEntity(detail.nearest || directDetail.nearest)
+    nearestActive: compactSafetyEntity(detail.nearestActive || directDetail.nearestActive)
   };
 }
 
@@ -873,6 +869,29 @@ function compactCombat(combat) {
   };
 }
 
+function compactNearbyList(list, rowSize, limit = 160) {
+  if (!Array.isArray(list)) return [];
+  return list
+    .filter(item => Array.isArray(item))
+    .map(item => item.slice(0, rowSize).map(value => {
+      if (typeof value === 'number') return compactNumber(value);
+      if (typeof value === 'boolean') return value ? 1 : 0;
+      if (value === null || value === undefined || value === '') return null;
+      return compactString(value, 96);
+    }))
+    .slice(0, limit);
+}
+
+function compactNearby(nearby) {
+  if (!nearby || typeof nearby !== 'object') return null;
+  return {
+    ar: compactNumber(nearby.ar ?? nearby.attackRange),
+    vr: compactNumber(nearby.vr ?? nearby.visibleRange),
+    c: compactNearbyList(nearby.c || nearby.coins, 4),
+    p: compactNearbyList(nearby.p || nearby.players, 7)
+  };
+}
+
 function compactRun(run) {
   if (!run || typeof run !== 'object') return null;
   const canary = run.canary && typeof run.canary === 'object' ? run.canary : null;
@@ -1017,7 +1036,6 @@ function buildCompactBrowserlessStatus(state, config = {}) {
   const action = compactAction(normalized.runner.currentAction) || compactAction(current.action);
   const recentExits = Array.isArray(normalized.recentExits) ? normalized.recentExits : [];
   const recentActualExit = recentExits.slice().reverse().find(event => event?.shouldLeave !== false) || null;
-  const recentBlock = recentExits.slice().reverse().find(event => event?.shouldLeave === false) || null;
   const loginPointSafetyDetail = compactLoginPointSafetyDetail(normalized.loginPointSafety || {}, normalized);
   const loginPoint = compactPoint(normalized.loginPointSafety?.point) || loginPointSafetyDetail?.point || null;
   const game = compactGameStatus(normalized);
@@ -1043,9 +1061,7 @@ function buildCompactBrowserlessStatus(state, config = {}) {
       canaryProfile: normalized.runner.canaryProfile || '',
       dryRun: normalized.runner.dryRun,
       combatEnabled: Boolean(normalized.runner.combatEnabled),
-      lastError: compactString(normalized.runner.lastError, 160),
-      currentAction: compactAction(normalized.runner.currentAction),
-      lastRun: compactRun(normalized.runner.lastRun)
+      lastError: compactString(normalized.runner.lastError, 160)
     },
     game,
     self: compactSelf(current.self),
@@ -1054,6 +1070,7 @@ function buildCompactBrowserlessStatus(state, config = {}) {
     action,
     profit: compactProfit(current.profit || current.decision?.profit),
     combat: compactCombat(current.combatSummary || current.decision?.combat),
+    nearby: compactNearby(current.decision?.input?.nearby),
     stats: compactBrowserlessStats(normalized, game, action, config),
     loginPointSafety: {
       ok: Boolean(normalized.loginPointSafety?.ok),
@@ -1070,7 +1087,6 @@ function buildCompactBrowserlessStatus(state, config = {}) {
       lastSelectionReason: compactString(normalized.network.lastSelectionReason, 120)
     },
     recentExit: compactExit(recentActualExit),
-    recentBlock: compactExit(recentBlock),
     statusServer: {
       host: config.statusHost || '',
       port: Number(config.statusPort || 0),
