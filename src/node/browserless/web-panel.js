@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.10.17';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.11.1';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function renderBrowserlessWebPanel() {
@@ -389,20 +389,9 @@ function renderBrowserlessWebPanel() {
       if (target.amount !== null && target.amount !== undefined) parts.push('金币 ' + target.amount);
       return parts.join(' / ');
     }
-    function pointText(point) {
-      if (!point || (number(point.x) === null && number(point.y) === null)) return '--';
-      const parts = ['(' + coord(point.x) + ', ' + coord(point.y) + ')'];
-      if (point.hp !== null && point.hp !== undefined) parts.push('血量 ' + point.hp);
-      if (point.source) parts.push(sourceText(point.source) === '--' ? String(point.source) : sourceText(point.source));
-      return parts.join(' / ');
-    }
     function pointCoordText(point) {
       if (!point || (number(point.x) === null && number(point.y) === null)) return '--';
       return coord(point.x) + ', ' + coord(point.y);
-    }
-    function positionText(status) {
-      if (status.game?.inGame) return pointText(status.self);
-      return pointText(status.loginPointSafety?.point);
     }
     const reasonMap = {
       'best-opportunity-coin': '选择收益最高的金币',
@@ -665,10 +654,6 @@ function renderBrowserlessWebPanel() {
         return translated.join(' / ') + (hiddenCount ? ' / 另有 ' + hiddenCount + ' 项' : '');
       }
       return decision?.dataGapCount ? String(decision.dataGapCount) + ' 项' : '--';
-    }
-    function resultText(ok) {
-      if (ok === null || ok === undefined) return '--';
-      return ok ? '正常' : '异常';
     }
     function authStatusText(status) {
       const auth = status.auth || {};
@@ -975,17 +960,8 @@ function renderBrowserlessWebPanel() {
         target.firing === null || target.firing === undefined ? '--' : '开火 ' + bool(target.firing)
       ]);
     }
-    function movementDirectionText(action) {
-      const command = action?.movement?.command || {};
-      if (command.dx === null && command.dy === null && command.dx === undefined && command.dy === undefined) return '--';
-      return [command.dx, command.dy].map(value).join(', ');
-    }
     function actionReasonText(status) {
       return reasonText(status.action?.reason || status.decision?.reason || status.recentExit?.reason);
-    }
-    function isProfitStatus(status, kind, reason) {
-      const text = (kind + ' ' + reason).toLowerCase();
-      return /coin|profit|drop|post-attack/.test(text);
     }
     function isCombatStatus(status, kind, reason) {
       const text = (kind + ' ' + reason + ' ' + (status.decision?.band || '')).toLowerCase();
@@ -1023,34 +999,9 @@ function renderBrowserlessWebPanel() {
       addRow(rowsOut, '目标状态', targetStateText(target));
       if (online) addRow(rowsOut, '数据缺口', dataGapsText(decision));
 
-      if (isProfitStatus(status, kind, reason)) {
-        addRow(rowsOut, '金币目标', targetLabel(status.profit?.best?.target));
-        addRow(rowsOut, '金币原因', reasonText(status.profit?.best?.reason));
-        addRow(rowsOut, '金币评分', status.profit?.best?.score);
-        addRow(rowsOut, '金币消耗', unit(status.profit?.best?.staminaCost));
-        addRow(rowsOut, '可选金币', status.profit?.candidateCount);
-      }
-
-      if (action.movement || ['coin', 'seek-coin', 'profit-candidate', 'velocity', 'flee', 'patrol', 'attack', 'combat-live'].includes(kind)) {
-        addRow(rowsOut, '移动原因', reasonText(action.movement?.reason || action.reason));
-        addRow(rowsOut, '移动方向', movementDirectionText(action));
-        addRow(rowsOut, '移动次数', action.counts?.velocity);
-        addRow(rowsOut, '停止次数', action.counts?.stop);
-      }
-
-      if (online && (action.shoot || status.combat?.shooting || ['attack', 'combat-live'].includes(kind))) {
-        addRow(rowsOut, '开火原因', reasonText(action.shoot?.reason || status.combat?.shooting?.reason));
-        addRow(rowsOut, '开火次数', action.counts?.shoot);
-        addRow(rowsOut, '连发次数', action.counts?.shootRepeat);
-        addRow(rowsOut, '开火回执', action.lastShootAck ? resultText(action.lastShootAck.ok) + ' / ' + stamp(action.lastShootAck.at) : '--');
-      }
-
       if (isCombatStatus(status, kind, reason)) {
         addRow(rowsOut, '战斗目标', targetLabel(status.combat?.target));
-        addRow(rowsOut, '战斗移动', reasonText(status.combat?.movement?.reason));
-        addRow(rowsOut, '战斗开火', status.combat?.shooting ? (bool(status.combat.shooting.wouldShoot) + ' / ' + reasonText(status.combat.shooting.reason)) : '--');
         addRow(rowsOut, '战斗退出', reasonText(status.combat?.exit?.reason));
-        addRow(rowsOut, '战斗候选', status.combat?.candidateCount);
       }
 
       if (!online && isSafetyStatus(status, kind, reason)) {
@@ -1184,7 +1135,7 @@ function renderBrowserlessWebPanel() {
       ]);
       rows('roleStatus', [
         ['游戏内', bool(s.game?.inGame), gameStatusAttrs(s)],
-        ['当前位置', s.game?.inGame ? pointText(s.self) : '--'],
+        ['当前位置', s.game?.inGame ? pointCoordText(s.self) : '--'],
         [offlineRole ? '上次血量' : '血量', hpText(roleSelf?.hp), hpAttrs(roleSelf?.hp)],
         [offlineRole ? '上次Drop' : 'Drop', roleSelf?.drop, classAttrs('coin')],
         [offlineRole ? '上次体力5s' : '体力5s', staminaPair(roleStamina?.remaining5s, 10)],

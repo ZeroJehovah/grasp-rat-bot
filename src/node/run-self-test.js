@@ -13148,7 +13148,7 @@ async function runSelfTest() {
           compactWaitingAgain.stats.offline.reconnectRemainingMs
         ].join('|');
       }),
-      want: 'true|true|2026-07-10T00:00:00.000Z|4|1500|1|4|1500|1|false|false|cycle-complete|2026-07-10T00:03:00.000Z|30000|120000|120000|4|1500|1|2026-07-10T00:02:00.000Z|cycle-complete|2026-07-10T00:04:00.000Z|75000'
+      want: 'true|true|2026-07-10T00:00:00.000Z|8|1500|1|8|1500|1|false|false|cycle-complete|2026-07-10T00:03:00.000Z|30000|120000|120000|8|1500|1|2026-07-10T00:02:00.000Z|cycle-complete|2026-07-10T00:04:00.000Z|75000'
     },
     {
       name: 'browserless compact status exposes offline last known stamina blocker',
@@ -13473,6 +13473,21 @@ async function runSelfTest() {
       got: (() => {
         const panelText = renderBrowserlessWebPanel();
         const panelScript = panelText.match(/<script>([\s\S]*?)<\/script>/)?.[1] || '';
+        const hiddenActionLabels = [
+          '金币目标',
+          '金币原因',
+          '金币评分',
+          '金币消耗',
+          '可选金币',
+          '移动原因',
+          '移动方向',
+          '移动次数',
+          '停止次数',
+          '开火原因',
+          '开火次数',
+          '连发次数',
+          '开火回执'
+        ];
         return [
           /function loginPointDisplay/.test(panelScript),
           /return loginPointDisplay\(status\)\.text/.test(panelScript),
@@ -13493,10 +13508,13 @@ async function runSelfTest() {
           !panelScript.includes("'状态/进入'"),
           /function isLowValueAfkNearbyPlayer/.test(panelScript),
           panelScript.includes('const visibleItems = items.filter(item => !isLowValueAfkNearbyPlayer(item));'),
-          panelScript.includes("低收益挂机玩家")
+          panelScript.includes("低收益挂机玩家"),
+          panelScript.includes("['当前位置', s.game?.inGame ? pointCoordText(s.self) : '--']"),
+          !panelScript.includes("pointText(s.self)"),
+          hiddenActionLabels.every(label => !panelScript.includes("addRow(rowsOut, '" + label + "'"))
         ].join('|');
       })(),
-      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
+      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless runner self-test passes',

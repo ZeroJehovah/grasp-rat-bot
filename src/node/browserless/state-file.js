@@ -7,6 +7,7 @@ const { redactStructuredSecrets } = require('./session-client');
 const SCHEMA_VERSION = 1;
 const UTC8_OFFSET_MS = 8 * 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
+const PICKED_COINS_PER_SELF_DROP = 2;
 const DEFAULT_STAMINA_EXHAUSTED_THRESHOLD_MS = 1000;
 const DEFAULT_STAMINA_RESET_GRACE_MS = 10000;
 
@@ -368,6 +369,12 @@ function statsSelfDrop(self) {
   return compactNumber(self?.drop ?? self?.death_drop_coins ?? self?.coinsGained);
 }
 
+function pickedCoinsFromSelfDropDelta(value) {
+  const dropDelta = compactNumber(value);
+  if (dropDelta === null) return null;
+  return Math.max(0, Math.round(dropDelta * PICKED_COINS_PER_SELF_DROP));
+}
+
 function statsSelfUserId(self, state) {
   return compactNumber(self?.userId ?? self?.user_id ?? state?.session?.userId);
 }
@@ -542,6 +549,7 @@ function compactBrowserlessStats(normalized, game, action, options = {}, lastKno
   const exitedMs = parseTimeMs(session.exitedAt);
   const durationEndMs = online ? nowMs : (exitedMs || lastSeenMs || nowMs);
   const activeDelta = todayActiveDelta(stats, nowMs);
+  const todayDropDelta = Math.max(0, Math.round(Number(stats.today.coinsGained || 0) + activeDelta.coinsGained));
   const rawNextRunAt = action?.nextRunAt || stats.lastExit.nextRunAt || '';
   const offlineBlocker = compactOfflineBlocker(normalized, lastKnown, options, nowMs);
   const rawNextRunAtMs = parseTimeMs(rawNextRunAt);
@@ -556,7 +564,7 @@ function compactBrowserlessStats(normalized, game, action, options = {}, lastKno
       enteredAt: session.enteredAt || '',
       durationMs: enteredMs ? Math.max(0, Math.round(durationEndMs - enteredMs)) : 0,
       staminaSpentMs: compactNumber(session.staminaSpentMs),
-      coinsGained: compactNumber(session.coinsGained),
+      coinsGained: pickedCoinsFromSelfDropDelta(session.coinsGained),
       kills: compactNumber(session.kills)
     },
     offline: {
@@ -571,7 +579,7 @@ function compactBrowserlessStats(normalized, game, action, options = {}, lastKno
       day: stats.today.day || browserlessStatsDayKey(nowMs),
       inGameDurationMs: Math.max(0, Math.round(Number(stats.today.uptimeMs || 0) + activeDelta.uptimeMs)),
       staminaSpentMs: Math.max(0, Math.round(Number(stats.today.staminaSpentMs || 0) + activeDelta.staminaSpentMs)),
-      coinsGained: Math.max(0, Math.round(Number(stats.today.coinsGained || 0) + activeDelta.coinsGained)),
+      coinsGained: pickedCoinsFromSelfDropDelta(todayDropDelta),
       kills: Math.max(0, Math.round(Number(stats.today.kills || 0) + activeDelta.kills))
     }
   };
