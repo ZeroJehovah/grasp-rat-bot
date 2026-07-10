@@ -512,7 +512,7 @@ function buildCompactBrowserlessStatus(state, config = {}) {
   const tokenPresent = Boolean(normalized.session.sessionToken || inputSession.tokenPresent);
   const authenticated = Boolean(inputSession.authenticated || (normalized.session.userId && tokenPresent));
   const current = normalized.current || {};
-  const action = compactAction(current.action) || compactAction(normalized.runner.currentAction);
+  const action = compactAction(normalized.runner.currentAction) || compactAction(current.action);
   const recentExits = Array.isArray(normalized.recentExits) ? normalized.recentExits : [];
   const compactState = {
     schemaVersion: normalized.schemaVersion,

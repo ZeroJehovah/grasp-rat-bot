@@ -353,7 +353,8 @@ function renderBrowserlessWebPanel() {
       return ok ? '正常' : '异常';
     }
     function activeTarget(status) {
-      const kind = status.decision?.kind || status.action?.kind || '';
+      if (status.game?.inGame === false) return null;
+      const kind = status.action?.kind || status.decision?.kind || '';
       const targetKinds = new Set(['coin', 'seek-coin', 'profit-candidate', 'attack', 'seek-enemy', 'seek-drop', 'combat-live', 'flee', 'leave', 'safety-exit', 'post-attack-drop-wait']);
       if (status.action?.target) return status.action.target;
       if (targetKinds.has(kind) && status.decision?.target) return status.decision.target;
@@ -370,7 +371,7 @@ function renderBrowserlessWebPanel() {
     function actionText(status) {
       const decision = status.decision || {};
       const action = status.action || {};
-      const kind = decision.kind || action.kind || 'wait';
+      const kind = action.kind || decision.kind || 'wait';
       const target = activeTarget(status);
       if (kind === 'coin') return '捡金币 ' + targetLabel(target);
       if (kind === 'seek-coin') return '去捡金币 ' + targetLabel(target);
@@ -390,7 +391,7 @@ function renderBrowserlessWebPanel() {
     async function refresh() {
       const s = await fetchStatus();
       const statusClass = s.runner?.lastError ? 'bad' : (s.runner?.running ? 'ok' : 'info');
-      const reason = reasonText(s.runner?.lastError || s.decision?.reason || s.action?.reason || s.recentExit?.reason);
+      const reason = reasonText(s.runner?.lastError || s.action?.reason || s.decision?.reason || s.recentExit?.reason);
       document.getElementById('stamp').textContent = stamp(s.updatedAt);
       document.getElementById('stamp').className = 'pill ' + statusClass;
       setText('botLine', '助手：' + actionText(s));
@@ -405,7 +406,7 @@ function renderBrowserlessWebPanel() {
         ['目标', targetLabel(target)],
         ['来源', sourceText(target?.authority)],
         ['状态', target ? ['危险 ' + bool(target.active), '移动 ' + bool(target.moving), '开火 ' + bool(target.firing)].join(' / ') : '--'],
-        ['判断', [kindText(s.decision?.kind), reasonText(s.decision?.reason)].filter(item => item !== '--').join(' / ')]
+        ['判断', [kindText(s.action?.kind || s.decision?.kind), reasonText(s.action?.reason || s.decision?.reason)].filter(item => item !== '--').join(' / ')]
       ]);
       rows('session', [
         ['账号', s.session?.userId],

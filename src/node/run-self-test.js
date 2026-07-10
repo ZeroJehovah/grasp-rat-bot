@@ -12154,6 +12154,28 @@ async function runSelfTest() {
             }
           }
         }, config);
+        const compactWaitingStatus = buildCompactBrowserlessStatus({
+          session: {
+            userId: 77,
+            tokenPresent: true,
+            authenticated: true
+          },
+          runner: {
+            running: true,
+            currentAction: {
+              kind: 'loop-wait',
+              reason: 'snapshot-safety-retry'
+            }
+          },
+          current: {
+            self: { userId: 77, name: 'stale-self', hp: 64 },
+            action: {
+              kind: 'combat-live',
+              reason: 'combat-live-realtime',
+              target: { userId: 88, hp: 90, distance: 1000 }
+            }
+          }
+        }, config);
         const compactText = JSON.stringify(compactStatus);
         const publicText = JSON.stringify(publicStatus);
         return [
@@ -12164,6 +12186,8 @@ async function runSelfTest() {
           compactRecoverStatus.game.inGame,
           compactRecoverStatus.stamina.remaining1h === null,
           compactRecoverStatus.decision.target === null,
+          compactWaitingStatus.game.inGame,
+          compactWaitingStatus.action.kind,
           compactStatus.self.hp,
           compactStatus.stamina.remaining1h,
           compactStatus.action.kind,
@@ -12179,7 +12203,7 @@ async function runSelfTest() {
           compactText.length < publicText.length / 10
         ].join('|');
       }),
-      want: 'true|77|true|true|true|true|true|88|360000|seek-coin|8|7|enemy|latest|123|false|false|false|false|true'
+      want: 'true|77|true|true|true|true|true|false|loop-wait|88|360000|seek-coin|8|7|enemy|latest|123|false|false|false|false|true'
     },
     {
       name: 'browserless state file replaces current action snapshots',
