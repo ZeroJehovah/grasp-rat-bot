@@ -13064,6 +13064,7 @@ async function runSelfTest() {
           compactOffline.stats.offline.lastExitReason,
           compactOffline.stats.offline.nextReconnectAt,
           compactOffline.stats.offline.reconnectRemainingMs,
+          compactOffline.stats.currentSession.durationMs,
           compactOffline.stats.today.inGameDurationMs,
           compactOffline.stats.today.coinsGained,
           compactOffline.stats.today.staminaSpentMs,
@@ -13074,7 +13075,7 @@ async function runSelfTest() {
           compactWaitingAgain.stats.offline.reconnectRemainingMs
         ].join('|');
       }),
-      want: 'true|true|2026-07-10T00:00:00.000Z|4|1500|1|4|1500|1|false|false|cycle-complete|2026-07-10T00:03:00.000Z|30000|120000|4|1500|1|2026-07-10T00:02:00.000Z|cycle-complete|2026-07-10T00:04:00.000Z|75000'
+      want: 'true|true|2026-07-10T00:00:00.000Z|4|1500|1|4|1500|1|false|false|cycle-complete|2026-07-10T00:03:00.000Z|30000|120000|120000|4|1500|1|2026-07-10T00:02:00.000Z|cycle-complete|2026-07-10T00:04:00.000Z|75000'
     },
     {
       name: 'browserless compact status exposes offline last known stamina blocker',
@@ -13358,6 +13359,7 @@ async function runSelfTest() {
             /附近玩家/.test(panelText),
             /id="nearbyCoins"/.test(panelText),
             /id="nearbyPlayers"/.test(panelText),
+            /id="sessionPanelTitle">本次游戏<\/h2>/.test(panelText),
             !/id="refreshBtn"/.test(panelText),
             !/id="stopBtn"/.test(panelText),
             !/class="hero"/.test(panelText),
@@ -13390,7 +13392,7 @@ async function runSelfTest() {
           await handle.close();
         }
       })(),
-      want: '401|200|true|true|true|200|true|12|true|true|true|200|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|200|true|1'
+      want: '401|200|true|true|true|200|true|12|true|true|true|200|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|200|true|1'
     },
     {
       name: 'browserless web panel renders explicit login point safety result',
@@ -13411,10 +13413,13 @@ async function runSelfTest() {
           /上次体力1d/.test(panelScript),
           /保持离线/.test(panelScript),
           panelScript.includes("if (online) addRow(rowsOut, '数据缺口', dataGapsText(decision));"),
-          panelScript.includes("return '快照金币备用被阻止：快照金币超出可见范围';")
+          panelScript.includes("return '快照金币备用被阻止：快照金币超出可见范围';"),
+          panelScript.includes("setText('sessionPanelTitle', online ? '本次游戏' : '上次游戏');"),
+          panelScript.includes("['进入时间', fullStamp(currentSession.enteredAt), true]"),
+          !panelScript.includes("'状态/进入'")
         ].join('|');
       })(),
-      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true'
+      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless runner self-test passes',

@@ -554,7 +554,7 @@ function compactBrowserlessStats(normalized, game, action, options = {}, lastKno
     currentSession: {
       online,
       enteredAt: session.enteredAt || '',
-      durationMs: online && enteredMs ? Math.max(0, Math.round(durationEndMs - enteredMs)) : 0,
+      durationMs: enteredMs ? Math.max(0, Math.round(durationEndMs - enteredMs)) : 0,
       staminaSpentMs: compactNumber(session.staminaSpentMs),
       coinsGained: compactNumber(session.coinsGained),
       kills: compactNumber(session.kills)

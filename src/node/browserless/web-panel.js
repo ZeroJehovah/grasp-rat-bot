@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.10.15';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.10.16';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function renderBrowserlessWebPanel() {
@@ -125,7 +125,7 @@ function renderBrowserlessWebPanel() {
         </div>
         <div class="stats-grid">
           <section>
-            <h2>本次游戏</h2>
+            <h2 id="sessionPanelTitle">本次游戏</h2>
             <dl id="currentSession"></dl>
           </section>
           <section>
@@ -1177,12 +1177,13 @@ function renderBrowserlessWebPanel() {
       const currentSession = s.stats?.currentSession || {};
       const todayStats = s.stats?.today || {};
       const online = Boolean(s.game?.inGame && currentSession.online);
+      setText('sessionPanelTitle', online ? '本次游戏' : '上次游戏');
       rows('currentSession', [
-        ['状态/进入', online ? joinNonBlank(['在线', fullStamp(currentSession.enteredAt)]) : '不在线'],
-        ['持续时间', online ? duration(currentSession.durationMs) : '--'],
-        ['消耗体力', online ? unit(currentSession.staminaSpentMs) : '--'],
-        ['拾取金币', online ? integer(currentSession.coinsGained) : '--'],
-        ['击杀敌人', online ? integer(currentSession.kills) : '--']
+        ['进入时间', fullStamp(currentSession.enteredAt), true],
+        ['持续时间', duration(currentSession.durationMs)],
+        ['消耗体力', unit(currentSession.staminaSpentMs)],
+        ['拾取金币', integer(currentSession.coinsGained)],
+        ['击杀敌人', integer(currentSession.kills)]
       ]);
       rows('todayStats', [
         ['日期', todayStats.day],
