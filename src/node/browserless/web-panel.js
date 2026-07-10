@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.10.6';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.10.7';
 
 function renderBrowserlessWebPanel() {
   return `<!doctype html>
@@ -96,8 +96,8 @@ function renderBrowserlessWebPanel() {
 
     <div class="grid">
       <section class="wide">
-        <h2>当前目标</h2>
-        <dl id="target"></dl>
+        <h2>当前动作</h2>
+        <dl id="actionDetails"></dl>
       </section>
       <section>
         <h2>账号状态</h2>
@@ -108,32 +108,8 @@ function renderBrowserlessWebPanel() {
         <dl id="currentSession"></dl>
       </section>
       <section>
-        <h2>离线等待</h2>
-        <dl id="offlineStats"></dl>
-      </section>
-      <section>
         <h2>今日累计</h2>
         <dl id="todayStats"></dl>
-      </section>
-      <section>
-        <h2>移动</h2>
-        <dl id="motion"></dl>
-      </section>
-      <section>
-        <h2>开火</h2>
-        <dl id="shooting"></dl>
-      </section>
-      <section>
-        <h2>金币</h2>
-        <dl id="profit"></dl>
-      </section>
-      <section>
-        <h2>打架</h2>
-        <dl id="combat"></dl>
-      </section>
-      <section>
-        <h2>安全</h2>
-        <dl id="safety"></dl>
       </section>
       <section class="wide">
         <h2>上次运行</h2>
@@ -560,6 +536,121 @@ function renderBrowserlessWebPanel() {
       if (kind === 'attack' || kind === 'combat-live') return '打目标 ' + targetLabel(target);
       return kindText(kind);
     }
+    function nonBlankText(text) {
+      const normalized = value(text);
+      return normalized === '--' ? '' : normalized;
+    }
+    function addRow(list, label, text, always = false) {
+      const normalized = value(text);
+      if (always || normalized !== '--') list.push([label, normalized]);
+    }
+    function joinNonBlank(items, separator = ' / ') {
+      const parts = items.map(nonBlankText).filter(Boolean);
+      return parts.length ? parts.join(separator) : '--';
+    }
+    function targetStateText(target) {
+      if (!target) return '--';
+      return joinNonBlank([
+        target.active === null || target.active === undefined ? '--' : '危险 ' + bool(target.active),
+        target.moving === null || target.moving === undefined ? '--' : '移动 ' + bool(target.moving),
+        target.firing === null || target.firing === undefined ? '--' : '开火 ' + bool(target.firing)
+      ]);
+    }
+    function movementDirectionText(action) {
+      const command = action?.movement?.command || {};
+      if (command.dx === null && command.dy === null && command.dx === undefined && command.dy === undefined) return '--';
+      return [command.dx, command.dy].map(value).join(', ');
+    }
+    function actionReasonText(status) {
+      return reasonText(status.action?.reason || status.decision?.reason || status.recentExit?.reason);
+    }
+    function isProfitStatus(status, kind, reason) {
+      const text = (kind + ' ' + reason).toLowerCase();
+      return /coin|profit|drop|post-attack/.test(text);
+    }
+    function isCombatStatus(status, kind, reason) {
+      const text = (kind + ' ' + reason + ' ' + (status.decision?.band || '')).toLowerCase();
+      return /combat|fight/.test(text) || status.action?.kind === 'combat-live';
+    }
+    function isSafetyStatus(status, kind, reason) {
+      const text = (kind + ' ' + reason + ' ' + (status.decision?.band || '')).toLowerCase();
+      return !status.game?.inGame
+        || /safety|safe|unsafe|threat|danger|flee|leave|injury|pursuit|stamina|offline|stop/.test(text);
+    }
+    function actionDetailRows(status) {
+      const action = status.action || {};
+      const decision = status.decision || {};
+      const kind = action.kind || decision.kind || 'wait';
+      const reason = action.reason || decision.reason || status.recentExit?.reason || '';
+      const target = activeTarget(status);
+      const currentSession = status.stats?.currentSession || {};
+      const offlineStats = status.stats?.offline || {};
+      const online = Boolean(status.game?.inGame && currentSession.online);
+      const rowsOut = [];
+
+      addRow(rowsOut, '状态', actionText(status), true);
+      addRow(rowsOut, '原因', reasonText(reason), true);
+      addRow(rowsOut, '判断', joinNonBlank([kindText(kind), actionReasonText(status)]));
+      addRow(rowsOut, '目标', targetLabel(target));
+      addRow(rowsOut, '来源', sourceText(target?.authority));
+      addRow(rowsOut, '目标状态', targetStateText(target));
+      addRow(rowsOut, '数据缺口', decision.dataGapCount ? decision.dataGaps?.join(' / ') || decision.dataGapCount : '--');
+
+      if (isProfitStatus(status, kind, reason)) {
+        addRow(rowsOut, '金币目标', targetLabel(status.profit?.best?.target));
+        addRow(rowsOut, '金币原因', reasonText(status.profit?.best?.reason));
+        addRow(rowsOut, '金币评分', status.profit?.best?.score);
+        addRow(rowsOut, '金币消耗', unit(status.profit?.best?.staminaCost));
+        addRow(rowsOut, '可选金币', status.profit?.candidateCount);
+      }
+
+      if (action.movement || ['coin', 'seek-coin', 'profit-candidate', 'velocity', 'flee', 'patrol', 'attack', 'combat-live'].includes(kind)) {
+        addRow(rowsOut, '移动原因', reasonText(action.movement?.reason || action.reason));
+        addRow(rowsOut, '移动方向', movementDirectionText(action));
+        addRow(rowsOut, '移动次数', action.counts?.velocity);
+        addRow(rowsOut, '停止次数', action.counts?.stop);
+      }
+
+      if (action.shoot || status.combat?.shooting || ['attack', 'combat-live'].includes(kind)) {
+        addRow(rowsOut, '能开火', bool(action.shoot?.ok ?? status.combat?.shooting?.wouldShoot));
+        addRow(rowsOut, '已跳过', bool(action.shoot?.skipped));
+        addRow(rowsOut, '开火原因', reasonText(action.shoot?.reason || status.combat?.shooting?.reason));
+        addRow(rowsOut, '开火次数', action.counts?.shoot);
+        addRow(rowsOut, '连发次数', action.counts?.shootRepeat);
+        addRow(rowsOut, '开火回执', action.lastShootAck ? resultText(action.lastShootAck.ok) + ' / ' + stamp(action.lastShootAck.at) : '--');
+      }
+
+      if (isCombatStatus(status, kind, reason)) {
+        addRow(rowsOut, '战斗目标', targetLabel(status.combat?.target));
+        addRow(rowsOut, '战斗移动', reasonText(status.combat?.movement?.reason));
+        addRow(rowsOut, '战斗开火', status.combat?.shooting ? (bool(status.combat.shooting.wouldShoot) + ' / ' + reasonText(status.combat.shooting.reason)) : '--');
+        addRow(rowsOut, '战斗退出', reasonText(status.combat?.exit?.reason));
+        addRow(rowsOut, '战斗候选', status.combat?.candidateCount);
+      }
+
+      if (isSafetyStatus(status, kind, reason)) {
+        addRow(rowsOut, '登录点', loginPointText(status));
+        addRow(rowsOut, '登录点坐标', status.game?.inGame ? '--' : pointText(status.loginPointSafety?.point));
+        addRow(rowsOut, '登录点原因', status.game?.inGame ? '当前已连入游戏' : reasonText(status.loginPointSafety?.reason));
+        addRow(rowsOut, '不安全原因', unsafeReasonText(status));
+        addRow(rowsOut, '检查详情', status.game?.inGame ? '--' : loginPointDetailText(status));
+        addRow(rowsOut, '快照新鲜度', status.game?.inGame ? '--' : freshnessText(status.loginPointSafety?.detail));
+        addRow(rowsOut, '最近危险', status.game?.inGame ? '--' : targetLabel(status.loginPointSafety?.detail?.nearestActive));
+        addRow(rowsOut, '最近实体', status.game?.inGame ? '--' : targetLabel(status.loginPointSafety?.detail?.nearest));
+        addRow(rowsOut, '检查时间', stamp(status.loginPointSafety?.checkedAt));
+        addRow(rowsOut, '最近阻止', reasonText(status.recentBlock?.reason));
+        addRow(rowsOut, '最近退出', reasonText(status.recentExit?.reason));
+      }
+
+      if (!online) {
+        addRow(rowsOut, '退出时间', fullStamp(offlineStats.lastExitAt));
+        addRow(rowsOut, '退出原因', reasonText(offlineStats.lastExitReason));
+        addRow(rowsOut, '下次重连', fullStamp(offlineStats.nextReconnectAt));
+        addRow(rowsOut, '剩余时间', duration(offlineStats.reconnectRemainingMs));
+      }
+
+      return rowsOut;
+    }
     function setText(id, text) {
       document.getElementById(id).textContent = value(text);
     }
@@ -660,13 +751,7 @@ function renderBrowserlessWebPanel() {
       setText('position', positionText(s));
       setText('mode', modeText(s.runner?.controlMode || s.runner?.mode, s.runner?.combatEnabled));
 
-      const target = activeTarget(s);
-      rows('target', [
-        ['目标', targetLabel(target)],
-        ['来源', sourceText(target?.authority)],
-        ['状态', target ? ['危险 ' + bool(target.active), '移动 ' + bool(target.moving), '开火 ' + bool(target.firing)].join(' / ') : '--'],
-        ['判断', [kindText(s.action?.kind || s.decision?.kind), reasonText(s.action?.reason || s.decision?.reason)].filter(item => item !== '--').join(' / ')]
-      ]);
+      rows('actionDetails', actionDetailRows(s));
       rows('session', [
         ['账号', s.session?.userId],
         ['授权', authStatusText(s)],
@@ -679,7 +764,6 @@ function renderBrowserlessWebPanel() {
         ['当前出口', s.network?.sourceIp]
       ]);
       const currentSession = s.stats?.currentSession || {};
-      const offlineStats = s.stats?.offline || {};
       const todayStats = s.stats?.today || {};
       const online = Boolean(s.game?.inGame && currentSession.online);
       rows('currentSession', [
@@ -690,58 +774,12 @@ function renderBrowserlessWebPanel() {
         ['拾取金币', online ? integer(currentSession.coinsGained) : '--'],
         ['击杀敌人', online ? integer(currentSession.kills) : '--']
       ]);
-      rows('offlineStats', [
-        ['退出时间', online ? '--' : fullStamp(offlineStats.lastExitAt)],
-        ['退出原因', online ? '--' : reasonText(offlineStats.lastExitReason)],
-        ['下次重连', online ? '--' : fullStamp(offlineStats.nextReconnectAt)],
-        ['剩余时间', online ? '--' : duration(offlineStats.reconnectRemainingMs)]
-      ]);
       rows('todayStats', [
         ['日期', todayStats.day],
         ['游戏时长', duration(todayStats.inGameDurationMs)],
         ['消耗体力', unit(todayStats.staminaSpentMs)],
         ['拾取金币', integer(todayStats.coinsGained)],
         ['击杀敌人', integer(todayStats.kills)]
-      ]);
-      rows('motion', [
-        ['动作', kindText(s.action?.kind)],
-        ['原因', reasonText(s.action?.movement?.reason || s.action?.reason)],
-        ['方向', [s.action?.movement?.command?.dx, s.action?.movement?.command?.dy].map(value).join(', ')],
-        ['移动次数', s.action?.counts?.velocity],
-        ['停止次数', s.action?.counts?.stop]
-      ]);
-      rows('shooting', [
-        ['能开火', bool(s.action?.shoot?.ok)],
-        ['已跳过', bool(s.action?.shoot?.skipped)],
-        ['原因', reasonText(s.action?.shoot?.reason || s.combat?.shooting?.reason)],
-        ['开火次数', s.action?.counts?.shoot],
-        ['连发次数', s.action?.counts?.shootRepeat]
-      ]);
-      rows('profit', [
-        ['最佳目标', targetLabel(s.profit?.best?.target)],
-        ['原因', reasonText(s.profit?.best?.reason)],
-        ['评分', s.profit?.best?.score],
-        ['可选目标', s.profit?.candidateCount]
-      ]);
-      rows('combat', [
-        ['目标', targetLabel(s.combat?.target)],
-        ['移动', reasonText(s.combat?.movement?.reason)],
-        ['开火', s.combat?.shooting ? (bool(s.combat.shooting.wouldShoot) + ' / ' + reasonText(s.combat.shooting.reason)) : '--'],
-        ['退出', reasonText(s.combat?.exit?.reason)],
-        ['可选目标', s.combat?.candidateCount]
-      ]);
-      rows('safety', [
-        ['登录点', loginPointText(s)],
-        ['登录点坐标', s.game?.inGame ? '--' : pointText(s.loginPointSafety?.point)],
-        ['原因', s.game?.inGame ? '当前已连入游戏' : reasonText(s.loginPointSafety?.reason)],
-        ['不安全原因', unsafeReasonText(s)],
-        ['检查详情', s.game?.inGame ? '--' : loginPointDetailText(s)],
-        ['快照新鲜度', s.game?.inGame ? '--' : freshnessText(s.loginPointSafety?.detail)],
-        ['最近危险', s.game?.inGame ? '--' : targetLabel(s.loginPointSafety?.detail?.nearestActive)],
-        ['最近实体', s.game?.inGame ? '--' : targetLabel(s.loginPointSafety?.detail?.nearest)],
-        ['检查时间', stamp(s.loginPointSafety?.checkedAt)],
-        ['最近阻止', reasonText(s.recentBlock?.reason)],
-        ['最近退出', reasonText(s.recentExit?.reason)]
       ]);
       rows('lastRun', [
         ['结果', resultText(s.runner?.lastRun?.ok)],

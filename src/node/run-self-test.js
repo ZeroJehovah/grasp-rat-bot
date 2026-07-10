@@ -13082,6 +13082,10 @@ async function runSelfTest() {
             /document\.visibilityState\s*===\s*'visible'/.test(panelText),
             !/hasFocus/.test(panelText),
             /位置/.test(panelText),
+            /当前动作/.test(panelText),
+            /id="actionDetails"/.test(panelText),
+            !/<h2>当前目标<\/h2>/.test(panelText),
+            !/id="(?:target|offlineStats|motion|shooting|profit|combat|safety)"/.test(panelText),
             /登录点坐标/.test(panelText),
             !panelText.includes('需要查看日志'),
             stop.status,
@@ -13092,7 +13096,7 @@ async function runSelfTest() {
           await handle.close();
         }
       })(),
-      want: '401|200|true|true|true|200|true|12|true|true|true|200|true|true|true|true|true|true|true|true|true|true|200|true|1'
+      want: '401|200|true|true|true|200|true|12|true|true|true|200|true|true|true|true|true|true|true|true|true|true|true|true|true|true|200|true|1'
     },
     {
       name: 'browserless runner self-test passes',
