@@ -978,7 +978,7 @@ function compactNearby(nearby) {
     ar: compactNumber(nearby.ar ?? nearby.attackRange),
     vr: compactNumber(nearby.vr ?? nearby.visibleRange),
     c: compactNearbyList(nearby.c || nearby.coins, 4, Number.POSITIVE_INFINITY),
-    p: compactNearbyList(nearby.p || nearby.players, 8, Number.POSITIVE_INFINITY)
+    p: compactNearbyList(nearby.p || nearby.players, 11, Number.POSITIVE_INFINITY)
   };
 }
 

@@ -19,6 +19,7 @@ const { COMBAT_CONSTANTS } = require('./combat-constants');
 function isActiveCombatMode(entity) {
   if (!entity) return false;
   if (entity.active === true) return true;
+  if (entity.active === false) return false;
   const mode = String(entity.current_join_mode || entity.mode || entity.joined || '').toLowerCase();
   return mode === 'active';
 }

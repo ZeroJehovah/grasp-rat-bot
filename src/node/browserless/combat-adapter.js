@@ -21,6 +21,8 @@ const {
 const { COMBAT_CONSTANTS } = require('../../strategy/combat-constants');
 const { targetIsWhitelisted, targetWhitelistNameSet } = require('../../shared/target-whitelist');
 
+const DEFAULT_STAMINA_FULL_RATIO = 0.98;
+
 function cloneJson(value) {
   if (value === null || value === undefined) return value;
   return JSON.parse(JSON.stringify(value));
@@ -68,11 +70,26 @@ function isActiveCombatEntity(entity) {
   return mode === 'active';
 }
 
+function combatHasFull5sStamina(stamina5s, stamina5sLimit, options = {}) {
+  const remaining = Number(stamina5s);
+  if (!Number.isFinite(remaining)) return false;
+  const limitValue = Number(stamina5sLimit ?? 10000);
+  const limit = Number.isFinite(limitValue) && limitValue > 0 ? limitValue : 10000;
+  const ratioValue = Number(options.staminaFullRatio ?? DEFAULT_STAMINA_FULL_RATIO);
+  const ratio = Number.isFinite(ratioValue) && ratioValue >= 0 ? ratioValue : DEFAULT_STAMINA_FULL_RATIO;
+  return remaining >= limit * ratio;
+}
+
+function combatEntityActive(entity, moving, firing, stamina5s, stamina5sLimit, options = {}) {
+  if (entity && Object.prototype.hasOwnProperty.call(entity, 'active')) return Boolean(entity.active);
+  return Boolean(moving || firing || (isActiveCombatEntity(entity) && !combatHasFull5sStamina(stamina5s, stamina5sLimit, options)));
+}
+
 function entityDisplayName(entity) {
   return String(entity?.name || entity?.label || entity?.username || entity?.user_name || entity?.displayName || entity?.display_name || '').trim();
 }
 
-function normalizeCombatEntity(entity, self = null) {
+function normalizeCombatEntity(entity, self = null, options = {}) {
   if (!entity || typeof entity !== 'object') return null;
   const vx = numberOrNull(entity.vx);
   const vy = numberOrNull(entity.vy);
@@ -83,6 +100,8 @@ function normalizeCombatEntity(entity, self = null) {
   const stamina5sLimit = numberOrNull(entity.stamina_5s_limit_milli ?? entity.stamina5sLimitMilli ?? entity.stamina5sLimit);
   const stamina1hLimit = numberOrNull(entity.stamina_1h_limit_milli ?? entity.stamina1hLimitMilli ?? entity.stamina1hLimit);
   const stamina1dLimit = numberOrNull(entity.stamina_1d_limit_milli ?? entity.stamina1dLimitMilli ?? entity.stamina1dLimit);
+  const moving = Boolean(entity.moving || Math.hypot(Number(vx || 0), Number(vy || 0)) > 0 || Number(speed || 0) > 0);
+  const firing = Boolean(entity.firing || entity.is_firing || entity.shooting);
   const normalized = {
     ...cloneJson(entity),
     user_id: numberOrNull(entity.user_id),
@@ -93,12 +112,12 @@ function normalizeCombatEntity(entity, self = null) {
     vx,
     vy,
     speed,
-    moving: Boolean(entity.moving || Math.hypot(Number(vx || 0), Number(vy || 0)) > 0 || Number(speed || 0) > 0),
+    moving,
     hp: numberOrNull(entity.hp),
     max_hp: numberOrNull(entity.max_hp),
     drop: entityDropValue(entity),
-    active: isActiveCombatEntity(entity),
-    firing: Boolean(entity.firing || entity.is_firing || entity.shooting),
+    active: combatEntityActive(entity, moving, firing, stamina5s, stamina5sLimit, options),
+    firing,
     authority: 'realtime'
   };
   if (stamina5s !== null) {
@@ -243,7 +262,15 @@ function summarizeCombatTarget(target) {
     stamina1h: numberOrNull(target.stamina_1h_remaining_milli ?? target.stamina1hRemainingMilli),
     stamina1d: numberOrNull(target.stamina_1d_remaining_milli ?? target.stamina1dRemainingMilli),
     staminaMetadataAuthority: target.staminaMetadataAuthority || '',
-    active: Boolean(target.active || isActiveCombatEntity(target)),
+    active: target && Object.prototype.hasOwnProperty.call(target, 'active')
+      ? Boolean(target.active)
+      : combatEntityActive(
+        target,
+        Boolean(target?.moving || Math.hypot(Number(target?.vx || 0), Number(target?.vy || 0)) > 0 || Number(target?.speed || 0) > 0),
+        Boolean(target?.firing || target?.is_firing || target?.shooting),
+        target?.stamina_5s_remaining_milli ?? target?.stamina5sRemainingMilli,
+        target?.stamina_5s_limit_milli ?? target?.stamina5sLimitMilli
+      ),
     firing: Boolean(target.firing || target.is_firing || target.shooting),
     distance: Number.isFinite(Number(target.distance)) ? Math.round(Number(target.distance)) : null,
     score: Number.isFinite(Number(target.combatScore)) ? Math.round(Number(target.combatScore)) : null,
@@ -529,11 +556,11 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
   const realtime = state?.realtime || {};
   const dataGaps = [];
   const liveCombatEnabled = options.liveCombatEnabled === true || options.combatEnabled === true;
-  const self = normalizeCombatEntity(realtime.self, null);
+  const self = normalizeCombatEntity(realtime.self, null, options);
   if (!self) dataGaps.push('missing-realtime-self');
   const selfUserId = Number(self?.user_id ?? state?.userId ?? options.userId ?? 0);
   const entities = (Array.isArray(realtime.entities) ? realtime.entities : [])
-    .map(entity => normalizeCombatEntity(entity, self))
+    .map(entity => normalizeCombatEntity(entity, self, options))
     .filter(Boolean);
   const targets = entities.filter(entity => Number(entity.user_id) !== selfUserId);
   const bullets = (Array.isArray(realtime.bullets) ? realtime.bullets : [])

@@ -555,6 +555,11 @@ async function runSelfTest() {
     finalActionArbitrationHoldMs: 480,
     finalActionArbitrationHistoryLimit: 24,
   };
+  const fullStamina5s = (entity, remaining = 10000, limit = 10000) => ({
+    ...entity,
+    stamina_5s_remaining_milli: remaining,
+    stamina_5s_limit_milli: limit
+  });
   const bot = { lastTarget: null, lastTargetAt: 0, lastDecision: null, combatTarget: null, combatRetreatIgnore: new Map(), combatDisadvantageObservation: null, opportunityChoice: null, opportunitySwitchLock: null, opportunityAfkStamina: new Map(), ignoredCoins: new Map(), coinAttempts: new Map(), coinProgress: null, coinApproachLock: null, currentVisibleCoins: null, finalActionArbitration: null };
   const dist = (a, b) => Math.hypot(Number(a.x) - Number(b.x), Number(a.y) - Number(b.y));
   const dropValue = e => Number(e.death_reward_preview ?? e.death_drop_coins ?? e.drop ?? 0) || 0;
@@ -6321,11 +6326,11 @@ async function runSelfTest() {
         };
         const afkOnly = choose([
           { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
-          { entity_id: 2, user_id: 8, name: 'afk', x: 1000, y: 0, hp: 80, current_join_mode: 'None', drop: 10 }
+          fullStamina5s({ entity_id: 2, user_id: 8, name: 'afk', x: 1000, y: 0, hp: 80, current_join_mode: 'None', drop: 10 })
         ]);
         const activeVisible = choose([
           { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
-          { entity_id: 2, user_id: 8, name: 'afk', x: 1000, y: 0, hp: 80, current_join_mode: 'None', drop: 10 },
+          fullStamina5s({ entity_id: 2, user_id: 8, name: 'afk', x: 1000, y: 0, hp: 80, current_join_mode: 'None', drop: 10 }),
           { entity_id: 3, user_id: 9, name: 'active', x: 500, y: 0, hp: 80, current_join_mode: 'Active', firing: true, drop: 10 }
         ]);
         return [
@@ -6353,8 +6358,8 @@ async function runSelfTest() {
           tick: 59,
           entities: [
             { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
-            { entity_id: 2, user_id: 8, name: 'low-drop-afk', x: 1000, y: 0, hp: 80, current_join_mode: 'None', drop: 1 },
-            { entity_id: 3, user_id: 9, name: 'min-drop-afk', x: 2000, y: 0, hp: 80, current_join_mode: 'None', drop: 3 }
+            fullStamina5s({ entity_id: 2, user_id: 8, name: 'low-drop-afk', x: 1000, y: 0, hp: 80, current_join_mode: 'None', drop: 1 }),
+            fullStamina5s({ entity_id: 3, user_id: 9, name: 'min-drop-afk', x: 2000, y: 0, hp: 80, current_join_mode: 'None', drop: 3 })
           ],
           bullets: []
         }, { receivedAtMs: 1000 });
@@ -6375,6 +6380,76 @@ async function runSelfTest() {
       want: 'profit-candidate|attack|9|3|false|true'
     },
     {
+      name: 'browserless nearby player rows expose decision AFK and low-drop full-stamina flags',
+      got: (() => {
+        const store = createBrowserlessStateStore({ userId: 7 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 59,
+          entities: [
+            { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+            fullStamina5s({ entity_id: 2, user_id: 8, name: 'good-afk', x: 1000, y: 0, hp: 80, current_join_mode: 'Passive', drop: 5 }),
+            fullStamina5s({ entity_id: 3, user_id: 9, name: 'low-full', x: 2000, y: 0, hp: 80, current_join_mode: 'Passive', drop: 1 }),
+            { entity_id: 4, user_id: 10, name: 'unknown-stamina', x: 3000, y: 0, hp: 80, current_join_mode: 'Passive', drop: 20 }
+          ],
+          bullets: []
+        }, { receivedAtMs: 1000 });
+        const decision = buildBrowserlessDecision(store.getState(1200), {}, {
+          nowMs: 1200,
+          controlMode: 'profit-live'
+        });
+        const rows = Object.fromEntries((decision.input.nearby.p || []).map(row => [row[0], row]));
+        return [
+          decision.action.target.userId,
+          rows['good-afk']?.[8],
+          rows['good-afk']?.[9],
+          rows['good-afk']?.[10],
+          rows['low-full']?.[8],
+          rows['low-full']?.[9],
+          rows['low-full']?.[10],
+          rows['unknown-stamina']?.[8],
+          rows['unknown-stamina']?.[9],
+          rows['unknown-stamina']?.[10],
+          rows['good-afk']?.length
+        ].join('|');
+      })(),
+      want: '8|1|1|0|1|0|1|0|0|0|11'
+    },
+    {
+      name: 'browserless stationary full-stamina active can be AFK profit but non-full active stays threat',
+      got: (() => {
+        const choose = target => {
+          const store = createBrowserlessStateStore({ userId: 7 });
+          store.ingestFrame({
+            type: 'pos',
+            tick: 59,
+            entities: [
+              { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+              target
+            ],
+            bullets: []
+          }, { receivedAtMs: 1000 });
+          return buildBrowserlessDecision(store.getState(1200), {}, {
+            nowMs: 1200,
+            controlMode: 'profit-live'
+          });
+        };
+        const fullActive = choose(fullStamina5s({ entity_id: 2, user_id: 8, name: 'full-active', x: 1000, y: 0, hp: 80, current_join_mode: 'Active', drop: 20 }));
+        const nonFullActive = choose(fullStamina5s({ entity_id: 2, user_id: 8, name: 'spent-active', x: 1000, y: 0, hp: 80, current_join_mode: 'Active', drop: 20 }, 5000));
+        return [
+          fullActive.kind,
+          fullActive.action.target.userId,
+          fullActive.action.target.active,
+          fullActive.combat.target?.userId || '',
+          nonFullActive.kind,
+          nonFullActive.band,
+          nonFullActive.action.target.userId,
+          nonFullActive.profit.best === null
+        ].join('|');
+      })(),
+      want: 'profit-candidate|8|false||flee|safety|8|true'
+    },
+    {
       name: 'browserless profit live skips whitelisted AFK targets',
       got: (() => {
         const store = createBrowserlessStateStore({ userId: 7 });
@@ -6383,8 +6458,8 @@ async function runSelfTest() {
           tick: 59,
           entities: [
             { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
-            { entity_id: 2, user_id: 8, name: 'protected', x: 1000, y: 0, hp: 80, current_join_mode: 'None', drop: 99 },
-            { entity_id: 3, user_id: 9, name: 'allowed', x: 2000, y: 0, hp: 80, current_join_mode: 'None', drop: 3 }
+            fullStamina5s({ entity_id: 2, user_id: 8, name: 'protected', x: 1000, y: 0, hp: 80, current_join_mode: 'None', drop: 99 }),
+            fullStamina5s({ entity_id: 3, user_id: 9, name: 'allowed', x: 2000, y: 0, hp: 80, current_join_mode: 'None', drop: 3 })
           ],
           bullets: []
         }, { receivedAtMs: 1000 });
@@ -6415,7 +6490,7 @@ async function runSelfTest() {
           tick: 59,
           entities: [
             { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
-            { entity_id: 2, user_id: 8, name: 'protected', x: 1000, y: 0, hp: 80, current_join_mode: 'None', drop: 99 }
+            fullStamina5s({ entity_id: 2, user_id: 8, name: 'protected', x: 1000, y: 0, hp: 80, current_join_mode: 'None', drop: 99 })
           ],
           bullets: [],
           coin_drops: [{ drop_id: 'coin-a', amount: 1, x: 10000, y: 0 }]
@@ -6468,7 +6543,7 @@ async function runSelfTest() {
       want: 'true|0|no-target|true'
     },
     {
-      name: 'browserless recent activity blocks just-stopped AFK profit target',
+      name: 'browserless out-of-range recent activity blocks just-stopped AFK profit target',
       got: (() => {
         const stateful = {};
         const makeState = (x, stamina5s, tick) => ({
@@ -6488,13 +6563,14 @@ async function runSelfTest() {
         });
         const options = {
           controlMode: 'profit-live',
+          attackRange: 5000,
           afkRecentActivityCooldownMs: 12000,
           activeSeenMs: 1800,
           activeMoveMin: 120
         };
-        buildBrowserlessDecision(makeState(1000, 10000, 60), stateful, { ...options, nowMs: 1000 });
-        buildBrowserlessDecision(makeState(1500, 10000, 61), stateful, { ...options, nowMs: 1500 });
-        const decision = buildBrowserlessDecision(makeState(1500, 10000, 62), stateful, { ...options, nowMs: 4000 });
+        buildBrowserlessDecision(makeState(8000, 10000, 60), stateful, { ...options, nowMs: 1000 });
+        buildBrowserlessDecision(makeState(8500, 10000, 61), stateful, { ...options, nowMs: 1500 });
+        const decision = buildBrowserlessDecision(makeState(8500, 10000, 62), stateful, { ...options, nowMs: 4000 });
         return [
           decision.kind,
           decision.reason,
@@ -6507,7 +6583,7 @@ async function runSelfTest() {
       want: 'wait|no-profitable-candidate|true|true|1500|1500'
     },
     {
-      name: 'browserless recent stamina drop blocks AFK profit target',
+      name: 'browserless out-of-range recent stamina drop blocks AFK profit target',
       got: (() => {
         const stateful = {};
         const makeState = (stamina5s, tick) => ({
@@ -6518,7 +6594,7 @@ async function runSelfTest() {
             self: { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
             entities: [
               { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
-              { entity_id: 2, user_id: 8, name: 'spent-stamina', x: 1000, y: 0, hp: 80, current_join_mode: 'None', drop: 20, stamina_5s_remaining_milli: stamina5s }
+              { entity_id: 2, user_id: 8, name: 'spent-stamina', x: 8000, y: 0, hp: 80, current_join_mode: 'None', drop: 20, stamina_5s_remaining_milli: stamina5s }
             ],
             bullets: [],
             coinDrops: []
@@ -6527,6 +6603,7 @@ async function runSelfTest() {
         });
         const options = {
           controlMode: 'profit-live',
+          attackRange: 5000,
           afkRecentActivityCooldownMs: 12000,
           opportunityAfkStaminaDropThresholdMs: 100
         };
@@ -6541,6 +6618,45 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'wait|no-profitable-candidate|true|true|2500'
+    },
+    {
+      name: 'browserless in-range full-stamina target remains AFK after recent stamina drop',
+      got: (() => {
+        const stateful = {};
+        const makeState = (stamina5s, tick) => ({
+          userId: 7,
+          realtime: {
+            tick,
+            frameAgeMs: 100,
+            self: { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+            entities: [
+              { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+              { entity_id: 2, user_id: 8, name: 'spent-in-range', x: 1000, y: 0, hp: 80, current_join_mode: 'None', drop: 20, stamina_5s_remaining_milli: stamina5s }
+            ],
+            bullets: [],
+            coinDrops: []
+          },
+          fallback: { coinDrops: [] }
+        });
+        const options = {
+          controlMode: 'profit-live',
+          attackRange: 5000,
+          afkRecentActivityCooldownMs: 12000,
+          opportunityAfkStaminaDropThresholdMs: 100
+        };
+        buildBrowserlessDecision(makeState(10000, 60), stateful, { ...options, nowMs: 1000 });
+        const decision = buildBrowserlessDecision(makeState(9800, 61), stateful, { ...options, nowMs: 2500 });
+        const row = (decision.input.nearby.p || []).find(item => item[0] === 'spent-in-range');
+        return [
+          decision.kind,
+          decision.action.kind,
+          decision.action.target.userId,
+          row?.[8],
+          row?.[9],
+          decision.input.dataGaps.includes('recently-active-target-visible')
+        ].join('|');
+      })(),
+      want: 'profit-candidate|attack|8|1|1|true'
     },
     {
       name: 'browserless out-of-range AFK stamina cooldown blocks opportunity chase',
@@ -6609,7 +6725,7 @@ async function runSelfTest() {
           tick: 59,
           entities: [
             { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
-            { entity_id: 2, user_id: 8, name: 'drop-nine-afk', x: 49800, y: 0, hp: 100, current_join_mode: 'Passive', drop: 9 }
+            fullStamina5s({ entity_id: 2, user_id: 8, name: 'drop-nine-afk', x: 49800, y: 0, hp: 100, current_join_mode: 'Passive', drop: 9 })
           ],
           bullets: []
         }, { receivedAtMs: 1000 });
@@ -6747,7 +6863,7 @@ async function runSelfTest() {
           tick: 59,
           entities: [
             { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
-            { entity_id: 2, user_id: 8, name: 'drop-nine-afk', x: 13600, y: 0, hp: 100, current_join_mode: 'Passive', drop: 9 }
+            fullStamina5s({ entity_id: 2, user_id: 8, name: 'drop-nine-afk', x: 13600, y: 0, hp: 100, current_join_mode: 'Passive', drop: 9 })
           ],
           bullets: []
         }, { receivedAtMs: 1000 });
@@ -6782,7 +6898,7 @@ async function runSelfTest() {
           tick: 59,
           entities: [
             { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
-            { entity_id: 2, user_id: 8, name: 'drop-three-afk', x: 14000, y: 0, hp: 100, current_join_mode: 'Passive', drop: 3 }
+            fullStamina5s({ entity_id: 2, user_id: 8, name: 'drop-three-afk', x: 14000, y: 0, hp: 100, current_join_mode: 'Passive', drop: 3 })
           ],
           bullets: []
         }, { receivedAtMs: 1000 });
@@ -6913,7 +7029,7 @@ async function runSelfTest() {
           tick: 59,
           entities: [
             { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
-            { entity_id: 2, user_id: 8, name: 'afk', x: 1000, y: 0, hp: 80, current_join_mode: 'Passive', drop: 20 }
+            fullStamina5s({ entity_id: 2, user_id: 8, name: 'afk', x: 1000, y: 0, hp: 80, current_join_mode: 'Passive', drop: 20 })
           ],
           bullets: []
         }, { receivedAtMs: 1000 });
@@ -7033,7 +7149,7 @@ async function runSelfTest() {
           tick: 59,
           entities: [
             { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
-            { entity_id: 2, user_id: 8, name: 'afk', x: 1000, y: 0, hp: 80, current_join_mode: 'Passive', drop: 12 }
+            fullStamina5s({ entity_id: 2, user_id: 8, name: 'afk', x: 1000, y: 0, hp: 80, current_join_mode: 'Passive', drop: 12 })
           ],
           bullets: []
         }, { receivedAtMs: 1000 });
@@ -8033,7 +8149,7 @@ async function runSelfTest() {
           tick: 60,
           entities: [
             { entity_id: 1, user_id: 7, name: 'self', x: 100, y: 100, hp: 100, coins: 1000 },
-            { entity_id: 22, user_id: 8, name: 'afk', x: 1010, y: 100, hp: 100, current_join_mode: 'Passive', death_reward_preview: 8, death_drop_coins: 8 }
+            fullStamina5s({ entity_id: 22, user_id: 8, name: 'afk', x: 1010, y: 100, hp: 100, current_join_mode: 'Passive', death_reward_preview: 8, death_drop_coins: 8 })
           ],
           bullets: [],
           coin_drops: [],
@@ -8151,7 +8267,7 @@ async function runSelfTest() {
           tick: 60,
           entities: [
             { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
-            { entity_id: 2, user_id: 8, name: 'afk', x: 1000, y: 0, hp: 80, current_join_mode: 'Passive', drop: 20 },
+            fullStamina5s({ entity_id: 2, user_id: 8, name: 'afk', x: 1000, y: 0, hp: 80, current_join_mode: 'Passive', drop: 20 }),
             { entity_id: 3, user_id: 9, name: 'active', x: 5000, y: 0, hp: 80, current_join_mode: 'Active', firing: true, drop: 12 }
           ],
           bullets: []
@@ -8182,7 +8298,7 @@ async function runSelfTest() {
           tick: 60,
           entities: [
             { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
-            { entity_id: 2, user_id: 8, name: 'safe-afk', x: 1000, y: 0, hp: 80, current_join_mode: 'Passive', drop: 20 },
+            fullStamina5s({ entity_id: 2, user_id: 8, name: 'safe-afk', x: 1000, y: 0, hp: 80, current_join_mode: 'Passive', drop: 20 }),
             { entity_id: 3, user_id: 9, name: 'far-active', x: 60000, y: 0, hp: 80, current_join_mode: 'Active', drop: 12 }
           ],
           bullets: []
@@ -8256,7 +8372,7 @@ async function runSelfTest() {
           entities: [
             { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
             { entity_id: 2, user_id: 8, name: 'moving-passive', x: 500, y: 0, vx: 120, vy: 0, hp: 80, current_join_mode: 'Passive', drop: 0 },
-            { entity_id: 3, user_id: 10, name: 'afk-profit', x: 1000, y: 0, hp: 80, current_join_mode: 'Passive', drop: 20 }
+            fullStamina5s({ entity_id: 3, user_id: 10, name: 'afk-profit', x: 1000, y: 0, hp: 80, current_join_mode: 'Passive', drop: 20 })
           ],
           bullets: []
         }, { receivedAtMs: 1000 });
@@ -8288,7 +8404,7 @@ async function runSelfTest() {
           entities: [
             { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
             { entity_id: 2, user_id: 8, name: 'low-drop-active', x: 500, y: 0, vx: 120, vy: 0, hp: 80, current_join_mode: 'Active', drop: 0 },
-            { entity_id: 3, user_id: 10, name: 'afk-profit', x: 1000, y: 0, hp: 80, current_join_mode: 'Passive', drop: 20 }
+            fullStamina5s({ entity_id: 3, user_id: 10, name: 'afk-profit', x: 1000, y: 0, hp: 80, current_join_mode: 'Passive', drop: 20 })
           ],
           bullets: []
         }, { receivedAtMs: 1000 });
@@ -8439,7 +8555,7 @@ async function runSelfTest() {
           tick: 60,
           entities: [
             { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
-            { entity_id: 2, user_id: 8, name: 'afk-profit', x: 1000, y: 0, hp: 80, current_join_mode: 'Passive', drop: 20 },
+            fullStamina5s({ entity_id: 2, user_id: 8, name: 'afk-profit', x: 1000, y: 0, hp: 80, current_join_mode: 'Passive', drop: 20 }),
             { entity_id: 3, user_id: 11, name: 'firing-passive', x: 500, y: 0, hp: 80, current_join_mode: 'Passive', firing: true, drop: 0 }
           ],
           bullets: []
@@ -9984,7 +10100,7 @@ async function runSelfTest() {
             self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
             entities: [
               { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
-              { entity_id: 2, user_id: 8, name: 'afk-shot', x: 1000, y: 0, hp: 80, current_join_mode: 'Passive', drop: 20 }
+              fullStamina5s({ entity_id: 2, user_id: 8, name: 'afk-shot', x: 1000, y: 0, hp: 80, current_join_mode: 'Passive', drop: 20 })
             ],
             bullets: [],
             coinDrops: [{ drop_id: 'coin-a', amount: 1, x: 5000, y: 0 }]
@@ -10033,7 +10149,7 @@ async function runSelfTest() {
             self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
             entities: [
               { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
-              { entity_id: 2, user_id: 8, name: 'afk-shot', x: 1000, y: 0, hp: 80, current_join_mode: 'Passive', drop: 20 }
+              fullStamina5s({ entity_id: 2, user_id: 8, name: 'afk-shot', x: 1000, y: 0, hp: 80, current_join_mode: 'Passive', drop: 20 })
             ],
             bullets: [],
             coinDrops: []
@@ -10137,7 +10253,7 @@ async function runSelfTest() {
             self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 70, max_hp: 100, stamina_5s_remaining_milli: 10000 },
             entities: [
               { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 70, max_hp: 100, stamina_5s_remaining_milli: 10000 },
-              { entity_id: 2, user_id: 8, name: 'afk-shot', x: 1000, y: 0, hp: 80, current_join_mode: 'Passive', drop: 20 }
+              fullStamina5s({ entity_id: 2, user_id: 8, name: 'afk-shot', x: 1000, y: 0, hp: 80, current_join_mode: 'Passive', drop: 20 })
             ],
             bullets: [],
             coinDrops: [{ drop_id: 'coin-a', amount: 1, x: 5000, y: 0 }]
@@ -13641,15 +13757,18 @@ async function runSelfTest() {
           panelScript.includes("setText('sessionPanelTitle', online ? '本次游戏' : '上次游戏');"),
           panelScript.includes("['进入时间', fullStamp(currentSession.enteredAt), true]"),
           !panelScript.includes("'状态/进入'"),
-          /function isLowValueAfkNearbyPlayer/.test(panelScript),
-          panelScript.includes('const visibleItems = items.filter(item => !isLowValueAfkNearbyPlayer(item));'),
-          panelScript.includes("低收益挂机玩家"),
+          /function isLowValueFullStaminaNearbyPlayer/.test(panelScript),
+          panelScript.includes('const visibleItems = items.filter(item => !isLowValueFullStaminaNearbyPlayer(item));'),
+          panelScript.includes("低收益满体力玩家"),
+          /function isAfkProfitNearbyPlayer/.test(panelScript),
+          /function playerHpCell/.test(panelScript),
+          !panelScript.includes("{ text: '无敌' }"),
           panelScript.includes("['当前位置', s.game?.inGame ? pointCoordText(s.self) : '--']"),
           !panelScript.includes("pointText(s.self)"),
           hiddenActionLabels.every(label => !panelScript.includes("addRow(rowsOut, '" + label + "'"))
         ].join('|');
       })(),
-      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
+      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless runner self-test passes',

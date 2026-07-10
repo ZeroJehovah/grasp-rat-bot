@@ -320,6 +320,13 @@ function isMovingEntity(entity, options = {}) {
   return entitySpeed(entity) >= threshold;
 }
 
+function hasFull5sStamina(entity, options = {}) {
+  const remaining = staminaRemainingValue(entity, '5s');
+  const limit = staminaLimitForWindow(entity, '5s') ?? 10000;
+  const ratio = Math.max(0, Number(options.staminaFullRatio ?? BROWSER_RUNTIME_DEFAULTS.staminaFullRatio ?? 0.98) || 0.98);
+  return remaining !== null && Number.isFinite(limit) && limit > 0 && remaining >= limit * ratio;
+}
+
 function targetWhitelistFromOptions(options = {}) {
   if (options.targetWhitelistNameSet instanceof Set) return options.targetWhitelistNameSet;
   if (options.targetWhitelist && typeof options.targetWhitelist === 'object') return options.targetWhitelist;
@@ -339,17 +346,23 @@ function isWhitelistedTargetForOptions(entity, options = {}) {
 function refreshDecisionEntityActivity(entity, options = {}) {
   if (!entity) return entity;
   const moving = isMovingEntity(entity, options);
+  const firing = isFiringEntity(entity);
+  const fullStamina5s = hasFull5sStamina(entity, options);
   return {
     ...entity,
     moving,
-    active: moving || entity.firing || isActiveEntity(entity),
+    firing,
+    fullStamina5s,
+    active: moving || firing || (isActiveEntity(entity) && (!fullStamina5s || isInvulnerableEntity(entity))),
     whitelisted: isWhitelistedTargetForOptions(entity, options)
   };
 }
 
 function isCurrentlyActiveEntity(entity, options = {}) {
   if (!entity) return false;
-  return isMovingEntity(entity, options) || isFiringEntity(entity) || isActiveEntity(entity);
+  return isMovingEntity(entity, options)
+    || isFiringEntity(entity)
+    || (isActiveEntity(entity) && (!hasFull5sStamina(entity, options) || isInvulnerableEntity(entity)));
 }
 
 function entityDisplayName(entity) {
@@ -537,6 +550,13 @@ function afkOpportunityBlockedByStaminaCooldown(target, options = {}) {
   return Number(target?.afkStaminaCooldownRemainingMs || 0) > 0;
 }
 
+function afkTargetBlockedByRecentActivity(target, options = {}) {
+  const distance = Number(target?.distance ?? Infinity);
+  const attackRange = Math.max(0, Number(options.attackRange ?? options.combatAttackRange ?? DEFAULT_ATTACK_RANGE));
+  if (Number.isFinite(distance) && distance <= attackRange) return false;
+  return Boolean(target?.recentlyActive);
+}
+
 function hpValue(entity) {
   const hp = Number(entity?.hp);
   return Number.isFinite(hp) ? hp : null;
@@ -591,6 +611,7 @@ function normalizeEntityForDecision(entity, self = null, authority = 'realtime',
   const stamina1hLimit = staminaLimitForWindow(entity, '1h');
   const stamina1dLimit = staminaLimitForWindow(entity, '1d');
   const invulnerableMs = invulnerableRemainingMs(entity, options);
+  const fullStamina5s = hasFull5sStamina(entity, options);
   const normalized = {
     ...cloneJson(entity),
     user_id: numberOrNull(entity.user_id),
@@ -603,12 +624,13 @@ function normalizeEntityForDecision(entity, self = null, authority = 'realtime',
     drop: entityDropValue(entity),
     authority,
     joinModeActive: isActiveEntity(entity),
-    active: moving || firing || isActiveEntity(entity),
+    active: moving || firing || (isActiveEntity(entity) && (!fullStamina5s || isInvulnerableEntity(entity))),
     moving,
     speed: numberOrNull(entity.speed ?? entity.speed_per_tick ?? entity.speedPerTick) ?? entitySpeed(entity),
     firing,
     alive: isAliveEntity(entity),
-    invulnerable: isInvulnerableEntity(entity)
+    invulnerable: isInvulnerableEntity(entity),
+    fullStamina5s
   };
   assignStaminaAliases(normalized, '5s', stamina5s, stamina5sLimit);
   assignStaminaAliases(normalized, '1h', stamina1h, stamina1hLimit);
@@ -935,7 +957,7 @@ function summarizeTarget(target) {
     stamina5sLimit: staminaLimitForWindow(target, '5s'),
     staminaMetadataAuthority: target.staminaMetadataAuthority || '',
     distance: Number.isFinite(Number(target.distance)) ? Math.round(Number(target.distance)) : null,
-    active: Boolean(target.active || isActiveEntity(target)),
+    active: target.active === undefined ? isCurrentlyActiveEntity(target) : Boolean(target.active),
     moving: Boolean(target.moving),
     firing: Boolean(target.firing),
     invulnerable: Boolean(target.invulnerable || isInvulnerableEntity(target)),
@@ -1069,6 +1091,11 @@ function invulnerableRemainingMs(target, options = {}) {
   return isInvulnerableEntity(target) ? -1 : null;
 }
 
+function panelPlayerTargetKey(target) {
+  const id = target?.user_id ?? target?.userId ?? target?.entity_id ?? target?.entityId ?? target?.id;
+  return id === undefined || id === null || id === '' ? '' : String(id);
+}
+
 function summarizeNearbyForPanel(input, action, combat, options = {}) {
   if (!input?.self) return null;
   const attackRange = Math.max(0, Number(options.attackRange ?? options.combatAttackRange ?? DEFAULT_ATTACK_RANGE));
@@ -1089,20 +1116,34 @@ function summarizeNearbyForPanel(input, action, combat, options = {}) {
       Math.round(Number(coin.distance)),
       targetCoinSelected(action, coin) ? 1 : 0
     ]);
+  const selectableAfkTargetIds = new Set((input.afkTargets || [])
+    .filter(target => !afkOpportunityBlockedByStaminaCooldown(target, options))
+    .map(panelPlayerTargetKey)
+    .filter(Boolean));
+  const lowDropThreshold = Math.max(0, Number(options.attackMinAfkDrop ?? DEFAULT_ATTACK_MIN_AFK_DROP));
   const players = (input.visibleTargets || [])
     .filter(target => Number.isFinite(Number(target?.distance)))
     .filter(target => visibleRange <= 0 || Number(target.distance) <= visibleRange)
     .sort((a, b) => Number(a.distance) - Number(b.distance))
-    .map(target => [
-      entityDisplayName(target) || (target.user_id ? '#' + target.user_id : ''),
-      numberOrNull(target.hp),
-      staminaRemainingValue(target, '5s'),
-      numberOrNull(entityDropValue(target)),
-      invulnerableRemainingMs(target, options),
-      Math.round(Number(target.distance)),
-      targetPlayerSelected(action, combat, target) ? 1 : 0,
-      String(target.current_join_mode || target.mode || target.joined || target.profitMetadataMode || '') || null
-    ]);
+    .map(target => {
+      const drop = numberOrNull(entityDropValue(target));
+      const fullStamina5s = hasFull5sStamina(target, options);
+      const afkSelectable = selectableAfkTargetIds.has(panelPlayerTargetKey(target));
+      const lowValueFullStamina = Boolean(fullStamina5s && drop !== null && drop < lowDropThreshold);
+      return [
+        entityDisplayName(target) || (target.user_id ? '#' + target.user_id : ''),
+        numberOrNull(target.hp),
+        staminaRemainingValue(target, '5s'),
+        drop,
+        invulnerableRemainingMs(target, options),
+        Math.round(Number(target.distance)),
+        targetPlayerSelected(action, combat, target) ? 1 : 0,
+        String(target.current_join_mode || target.mode || target.joined || target.profitMetadataMode || '') || null,
+        fullStamina5s ? 1 : 0,
+        afkSelectable ? 1 : 0,
+        lowValueFullStamina ? 1 : 0
+      ];
+    });
   return {
     ar: Math.round(attackRange),
     vr: Math.round(visibleRange),
@@ -1164,7 +1205,7 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
     });
   });
   updateBrowserlessOpportunityAfkStaminaObservations(afkObservationTargets, stateful, options.nowMs, options);
-  const afkTargets = afkObservationTargets.filter(entity => !entity.recentlyActive);
+  const afkTargets = afkObservationTargets.filter(entity => hasFull5sStamina(entity, options) && !afkTargetBlockedByRecentActivity(entity, options));
   const realtimeCoins = buildNativeCoinSnapshotCore(Array.isArray(realtime.coinDrops) ? realtime.coinDrops : [], { nowMs: options.nowMs })
     .map(drop => normalizeCoinForDecision(drop, self, 'realtime'))
     .filter(Boolean)

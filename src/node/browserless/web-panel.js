@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.11.1';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.11.2';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function renderBrowserlessWebPanel() {
@@ -54,7 +54,7 @@ function renderBrowserlessWebPanel() {
     .nearby-head{color:var(--muted);font-size:11px;font-weight:700}
     .nearby-summary .nearby-cell{grid-column:1/-1;color:var(--muted)}
     .coin-row{grid-template-columns:minmax(48px,1.2fr) minmax(36px,.6fr) minmax(54px,.75fr) minmax(42px,.55fr)}
-    .player-row{grid-template-columns:minmax(64px,1.3fr) minmax(38px,.55fr) minmax(42px,.65fr) minmax(42px,.55fr) minmax(54px,.8fr) minmax(54px,.75fr) minmax(42px,.55fr)}
+    .player-row{grid-template-columns:minmax(64px,1.3fr) minmax(46px,.65fr) minmax(42px,.6fr) minmax(42px,.55fr) minmax(54px,.75fr) minmax(42px,.55fr)}
     .nearby-cell{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     .distance-badge{font-variant-numeric:tabular-nums}
     .range-attack{color:var(--green)}
@@ -890,31 +890,52 @@ function renderBrowserlessWebPanel() {
       }
       node.replaceChildren(fragment);
     }
-    function isLowValueAfkNearbyPlayer(item) {
+    function panelFlag(value) {
+      return value === true || value === 1 || value === '1';
+    }
+    function hasFull5sNearbyPlayer(item) {
+      if (item?.[8] !== null && item?.[8] !== undefined) return panelFlag(item[8]);
+      const staminaMs = number(item?.[2]);
+      return staminaMs !== null && staminaMs >= 9800;
+    }
+    function isLowValueFullStaminaNearbyPlayer(item) {
+      if (item?.[10] !== null && item?.[10] !== undefined) return panelFlag(item[10]);
       const drop = number(item?.[3]);
-      const mode = String(item?.[7] || '').trim().toLowerCase();
-      return drop !== null && drop < 3 && mode && mode !== 'active';
+      return drop !== null && drop < 3 && hasFull5sNearbyPlayer(item);
+    }
+    function isAfkProfitNearbyPlayer(item) {
+      return panelFlag(item?.[9]);
+    }
+    function isInvulnerableNearbyPlayer(invMs) {
+      const n = number(invMs);
+      return n !== null && n !== 0;
+    }
+    function playerHpCell(hp, invMs) {
+      if (isInvulnerableNearbyPlayer(invMs)) return { text: invulnerableText(invMs), className: 'info' };
+      return { text: integer(hp), className: hpAttrs(hp).className };
+    }
+    function playerStaminaCell(staminaMs, afkSelectable) {
+      if (afkSelectable) return { text: 'AFK', className: 'ok' };
+      return { text: unit(staminaMs) };
     }
     function renderNearbyPlayers(status) {
       const node = document.getElementById('nearbyPlayers');
       if (!node) return;
       const items = Array.isArray(status.nearby?.p) ? status.nearby.p : [];
-      const visibleItems = items.filter(item => !isLowValueAfkNearbyPlayer(item));
-      const hiddenLowAfkCount = items.length - visibleItems.length;
+      const visibleItems = items.filter(item => !isLowValueFullStaminaNearbyPlayer(item));
+      const hiddenLowFullStaminaCount = items.length - visibleItems.length;
       const fragment = document.createDocumentFragment();
       fragment.appendChild(createNearbyRow('player', [
         { text: '名称' },
         { text: '血量' },
         { text: '体力' },
         { text: 'Drop' },
-        { text: '无敌' },
         { text: '距离' },
         { text: '选择' }
       ], true));
-      if (!visibleItems.length && hiddenLowAfkCount === 0) {
+      if (!visibleItems.length && hiddenLowFullStaminaCount === 0) {
         fragment.appendChild(createNearbyRow('player', [
           { text: '无' },
-          { text: '--' },
           { text: '--' },
           { text: '--' },
           { text: '--' },
@@ -924,19 +945,20 @@ function renderBrowserlessWebPanel() {
       } else {
         for (const item of visibleItems) {
           const [name, hp, staminaMs, drop, invMs, distanceCm, selected] = item;
+          const hpCell = playerHpCell(hp, invMs);
+          const staminaCell = playerStaminaCell(staminaMs, isAfkProfitNearbyPlayer(item));
           fragment.appendChild(createNearbyRow('player', [
             { text: name },
-            { text: integer(hp), className: hpAttrs(hp).className },
-            { text: unit(staminaMs) },
+            hpCell,
+            staminaCell,
             { text: integer(drop), className: 'coin' },
-            { text: invulnerableText(invMs), className: invMs ? 'warn' : 'muted' },
             { text: distance(distanceCm), className: 'distance-badge ' + nearbyDistanceClass(status, distanceCm) },
             { text: selectedText(Boolean(selected)), className: selected ? 'selected-mark' : 'muted' }
           ]));
         }
       }
-      if (hiddenLowAfkCount > 0) {
-        fragment.appendChild(createNearbySummaryRow('player', '另有 ' + hiddenLowAfkCount + ' 个低收益挂机玩家，详情略'));
+      if (hiddenLowFullStaminaCount > 0) {
+        fragment.appendChild(createNearbySummaryRow('player', '另有 ' + hiddenLowFullStaminaCount + ' 个低收益满体力玩家，详情略'));
       }
       node.replaceChildren(fragment);
     }
