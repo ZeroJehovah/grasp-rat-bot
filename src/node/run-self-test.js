@@ -102,6 +102,8 @@ const {
   gracefulShutdownLeave
 } = require('../../scripts/browserless-runner');
 const {
+  browserlessStatsForDecision,
+  browserlessStatsForOffline,
   buildCompactBrowserlessStatus,
   buildPublicBrowserlessStatus,
   readBrowserlessStateFile,
@@ -7942,11 +7944,13 @@ async function runSelfTest() {
           decision.action.target.amount,
           decision.input.profitCoinSource,
           decision.input.fallback.selfKilledPlayerDropCount,
+          decision.input.selfKillEvidence[0]?.targetUserId,
+          decision.input.selfKillEvidence[0]?.tick,
           decision.input.fallback.snapshotFallbackBlockedReasons.join(','),
           decision.input.dataGaps.includes('self-killed-player-drop-visible')
         ].join('|');
       })(),
-      want: 'coin|coin|coin|self-kill-drop|6|snapshot-player-drop|1||true'
+      want: 'coin|coin|coin|self-kill-drop|6|snapshot-player-drop|1|8|62||true'
     },
     {
       name: 'browserless profit live enriches realtime AFK reward from fresh snapshot metadata',
@@ -12814,6 +12818,96 @@ async function runSelfTest() {
         ].join('|');
       }),
       want: 'true|77|true|true|true|true|true|false|loop-wait|88|10|20|360000|seek-coin|8|7|enemy|5999|active-near-login-point|1|88|23|enemy|latest|blocked-login|123|false|false|false|false|true'
+    },
+    {
+      name: 'browserless compact status exposes session offline and today stats',
+      got: withTempDirForTest(async dir => {
+        const config = parseBrowserlessRunnerArgs(['--data-dir', dir], {});
+        const startedAt = Date.parse('2026-07-10T00:00:00.000Z');
+        const updatedAt = Date.parse('2026-07-10T00:01:05.000Z');
+        const exitedAt = Date.parse('2026-07-10T00:02:00.000Z');
+        const state = {
+          session: {
+            userId: 77,
+            sessionToken: 'state-secret-token'
+          },
+          runner: {
+            running: true,
+            mode: 'profit-live',
+            controlMode: 'profit-live',
+            currentAction: { kind: 'coin', reason: 'best-opportunity-coin' }
+          },
+          current: {
+            self: { userId: 77, name: 'self', hp: 99, drop: 14 },
+            stamina: { stamina1dRemainingMilli: 8500 }
+          }
+        };
+        state.stats = browserlessStatsForDecision(state, {
+          at: new Date(startedAt).toISOString(),
+          input: {
+            self: { userId: 77, name: 'self', drop: 10 },
+            stamina: { stamina1dRemainingMilli: 10000 },
+            selfKillEvidence: []
+          }
+        }, { nowMs: startedAt });
+        state.stats = browserlessStatsForDecision(state, {
+          at: new Date(updatedAt).toISOString(),
+          input: {
+            self: { userId: 77, name: 'self', drop: 14 },
+            stamina: { stamina1dRemainingMilli: 8500 },
+            selfKillEvidence: [
+              { targetUserId: 88, tick: 100 },
+              { targetUserId: 88, tick: 100 }
+            ]
+          }
+        }, { nowMs: updatedAt });
+        const compactOnline = buildCompactBrowserlessStatus(state, {
+          ...config,
+          nowMs: updatedAt
+        });
+        const offlineState = {
+          ...state,
+          runner: {
+            ...state.runner,
+            currentAction: {
+              kind: 'loop-wait',
+              reason: 'cycle-complete',
+              nextRunAt: '2026-07-10T00:03:00.000Z'
+            }
+          }
+        };
+        offlineState.stats = browserlessStatsForOffline(offlineState, {
+          at: new Date(exitedAt).toISOString(),
+          reason: 'cycle-complete',
+          nextRunAt: '2026-07-10T00:03:00.000Z',
+          delayMs: 60000
+        }, { nowMs: exitedAt });
+        const compactOffline = buildCompactBrowserlessStatus(offlineState, {
+          ...config,
+          nowMs: Date.parse('2026-07-10T00:02:30.000Z')
+        });
+        return [
+          compactOnline.game.inGame,
+          compactOnline.stats.currentSession.online,
+          compactOnline.stats.currentSession.enteredAt,
+          compactOnline.stats.currentSession.coinsGained,
+          compactOnline.stats.currentSession.staminaSpentMs,
+          compactOnline.stats.currentSession.kills,
+          compactOnline.stats.today.coinsGained,
+          compactOnline.stats.today.staminaSpentMs,
+          compactOnline.stats.today.kills,
+          compactOffline.game.inGame,
+          compactOffline.stats.currentSession.online,
+          compactOffline.stats.offline.lastExitReason,
+          compactOffline.stats.offline.nextReconnectAt,
+          compactOffline.stats.offline.reconnectRemainingMs,
+          compactOffline.stats.today.inGameDurationMs,
+          compactOffline.stats.today.coinsGained,
+          compactOffline.stats.today.staminaSpentMs,
+          compactOffline.stats.today.kills
+        ].join('|');
+      }),
+      want: 'true|true|2026-07-10T00:00:00.000Z|4|1500|1|4|1500|1|false|false|cycle-complete|2026-07-10T00:03:00.000Z|30000|120000|4|1500|1'
     },
     {
       name: 'browserless state file replaces current action snapshots',

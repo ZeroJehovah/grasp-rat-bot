@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.10.5';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.10.6';
 
 function renderBrowserlessWebPanel() {
   return `<!doctype html>
@@ -104,6 +104,18 @@ function renderBrowserlessWebPanel() {
         <dl id="session"></dl>
       </section>
       <section>
+        <h2>本次游戏</h2>
+        <dl id="currentSession"></dl>
+      </section>
+      <section>
+        <h2>离线等待</h2>
+        <dl id="offlineStats"></dl>
+      </section>
+      <section>
+        <h2>今日累计</h2>
+        <dl id="todayStats"></dl>
+      </section>
+      <section>
         <h2>移动</h2>
         <dl id="motion"></dl>
       </section>
@@ -159,6 +171,34 @@ function renderBrowserlessWebPanel() {
       if (!iso) return '--';
       const date = new Date(iso);
       return Number.isFinite(date.getTime()) ? date.toLocaleTimeString('zh-CN', { hour12: false }) : iso;
+    };
+    const fullStamp = iso => {
+      if (!iso) return '--';
+      const date = new Date(iso);
+      return Number.isFinite(date.getTime())
+        ? date.toLocaleString('zh-CN', { hour12: false })
+        : iso;
+    };
+    const duration = ms => {
+      const n = number(ms);
+      if (n === null) return '--';
+      let seconds = Math.max(0, Math.floor(n / 1000));
+      const days = Math.floor(seconds / 86400);
+      seconds -= days * 86400;
+      const hours = Math.floor(seconds / 3600);
+      seconds -= hours * 3600;
+      const minutes = Math.floor(seconds / 60);
+      seconds -= minutes * 60;
+      const parts = [];
+      if (days) parts.push(days + '天');
+      if (hours) parts.push(hours + '小时');
+      if (minutes) parts.push(minutes + '分');
+      if (!parts.length || seconds) parts.push(seconds + '秒');
+      return parts.join('');
+    };
+    const integer = v => {
+      const n = number(v);
+      return n === null ? '--' : String(Math.max(0, Math.round(n)));
     };
     function rows(id, pairs) {
       const node = document.getElementById(id);
@@ -637,6 +677,31 @@ function renderBrowserlessWebPanel() {
         ['更新时间', stamp(s.auth?.tokenUpdatedAt || s.session?.tokenUpdatedAt)],
         ['出口数量', s.network?.sourceIpCount],
         ['当前出口', s.network?.sourceIp]
+      ]);
+      const currentSession = s.stats?.currentSession || {};
+      const offlineStats = s.stats?.offline || {};
+      const todayStats = s.stats?.today || {};
+      const online = Boolean(s.game?.inGame && currentSession.online);
+      rows('currentSession', [
+        ['状态', online ? '在线' : '不在线'],
+        ['进入时间', online ? fullStamp(currentSession.enteredAt) : '--'],
+        ['持续时间', online ? duration(currentSession.durationMs) : '--'],
+        ['消耗体力', online ? unit(currentSession.staminaSpentMs) : '--'],
+        ['拾取金币', online ? integer(currentSession.coinsGained) : '--'],
+        ['击杀敌人', online ? integer(currentSession.kills) : '--']
+      ]);
+      rows('offlineStats', [
+        ['退出时间', online ? '--' : fullStamp(offlineStats.lastExitAt)],
+        ['退出原因', online ? '--' : reasonText(offlineStats.lastExitReason)],
+        ['下次重连', online ? '--' : fullStamp(offlineStats.nextReconnectAt)],
+        ['剩余时间', online ? '--' : duration(offlineStats.reconnectRemainingMs)]
+      ]);
+      rows('todayStats', [
+        ['日期', todayStats.day],
+        ['游戏时长', duration(todayStats.inGameDurationMs)],
+        ['消耗体力', unit(todayStats.staminaSpentMs)],
+        ['拾取金币', integer(todayStats.coinsGained)],
+        ['击杀敌人', integer(todayStats.kills)]
       ]);
       rows('motion', [
         ['动作', kindText(s.action?.kind)],

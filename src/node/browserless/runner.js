@@ -7,6 +7,8 @@ const { parseBrowserlessRunnerArgs } = require('./config');
 const { cleanupOldLogDays } = require('./log-retention');
 const { createLocalLogStore } = require('./local-log-store');
 const {
+  browserlessStatsForDecision,
+  browserlessStatsForOffline,
   buildPublicBrowserlessStatus,
   loginPointFromAnyState,
   readBrowserlessStateFile,
@@ -254,6 +256,16 @@ function browserlessLoopPlan(result, config = {}) {
   return resume(error || safetyReason || 'unknown-error');
 }
 
+function runnerResultExitDetail(result, fallbackReason = '') {
+  const canary = result?.canary && typeof result.canary === 'object' ? result.canary : {};
+  const safetyReason = canary?.safety?.event?.reason || canary?.safety?.leaveFailure?.reason || '';
+  const reason = safetyReason || result?.reason || canary?.error || result?.error || fallbackReason || '';
+  return {
+    at: canary?.completedAt || result?.completedAt || '',
+    reason
+  };
+}
+
 async function runBrowserlessRunner(config, deps = {}) {
   const now = typeof deps.now === 'function' ? deps.now : Date.now;
   const sleep = typeof deps.sleep === 'function'
@@ -392,6 +404,8 @@ async function runBrowserlessRunner(config, deps = {}) {
   const waitForLoopPlan = async (loopPlan, resultForStop = null) => {
     if (!loopPlan.continue) {
       if (!config.once) {
+        const currentBeforeStop = readBrowserlessStateFile(stateFile);
+        const stopDetail = runnerResultExitDetail(resultForStop, loopPlan.reason);
         updateState({
           runner: {
             running: false,
@@ -401,7 +415,13 @@ async function runBrowserlessRunner(config, deps = {}) {
               reason: loopPlan.reason,
               previousRunId: loopPlan.previousRunId || ''
             }
-          }
+          },
+          stats: browserlessStatsForOffline(currentBeforeStop, {
+            ...stopDetail,
+            reason: stopDetail.reason || loopPlan.reason,
+            nextRunAt: '',
+            delayMs: 0
+          }, { nowMs: now() })
         }, { updatedAt: new Date(now()).toISOString() });
         logStore.append('runner', 'runner-loop-stop', loopPlan);
       }
@@ -422,6 +442,8 @@ async function runBrowserlessRunner(config, deps = {}) {
       nextRunAt,
       supervisorErrors: supervisorErrors.slice(-5)
     };
+    const currentBeforeWait = readBrowserlessStateFile(stateFile);
+    const waitExitDetail = runnerResultExitDetail(resultForStop, loopPlan.reason);
     updateState({
       runner: {
         running: true,
@@ -435,7 +457,13 @@ async function runBrowserlessRunner(config, deps = {}) {
           nextRunAt,
           previousRunId: loopPlan.previousRunId || ''
         }
-      }
+      },
+      stats: browserlessStatsForOffline(currentBeforeWait, {
+        ...waitExitDetail,
+        reason: waitExitDetail.reason || loopPlan.reason,
+        nextRunAt,
+        delayMs: loopPlan.delayMs
+      }, { nowMs: now() })
     }, { updatedAt: new Date(now()).toISOString() });
     logStore.append('runner', 'runner-loop-wait', waitDetail);
     try {
@@ -452,6 +480,7 @@ async function runBrowserlessRunner(config, deps = {}) {
         reason: requestedStop.reason || 'explicit-stop',
         event: requestedStop
       };
+      const currentBeforeStop = readBrowserlessStateFile(stateFile);
       updateState({
         runner: {
           running: false,
@@ -463,7 +492,13 @@ async function runBrowserlessRunner(config, deps = {}) {
             reason: stopped.reason,
             previousRunId: loopPlan.previousRunId || ''
           }
-        }
+        },
+        stats: browserlessStatsForOffline(currentBeforeStop, {
+          at: requestedStop.at,
+          reason: stopped.reason,
+          nextRunAt: '',
+          delayMs: 0
+        }, { nowMs: now() })
       }, { updatedAt: new Date(now()).toISOString() });
       logStore.append('runner', 'runner-loop-stop', {
         ...loopPlan,
@@ -703,7 +738,11 @@ async function runBrowserlessRunner(config, deps = {}) {
         openBrowserlessWs: sourceIpController.openBrowserlessWs,
         leaveWithVerification: sourceIpController.leaveWithVerification,
         onDecision: decision => {
-          updateState(decisionStatePatch(decision), {
+          const currentBeforeDecision = readBrowserlessStateFile(stateFile);
+          updateState({
+            ...decisionStatePatch(decision),
+            stats: browserlessStatsForDecision(currentBeforeDecision, decision, { nowMs: now() })
+          }, {
             updatedAt: new Date(now()).toISOString()
           });
         },

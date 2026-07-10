@@ -593,6 +593,18 @@ function selfKillTargetTicksFromMessages(messages, userId) {
   return byTarget;
 }
 
+function summarizeSelfKillEvidence(selfKillTargetTicks) {
+  return Array.from(selfKillTargetTicks.entries())
+    .map(([targetUserId, item]) => ({
+      targetUserId: numberOrNull(targetUserId),
+      tick: numberOrNull(item?.tick),
+      kind: String(item?.message?.kind || item?.message?.type || 'kill'),
+      at: String(item?.message?.at || item?.message?.time || item?.message?.created_at || ''),
+      targetName: String(item?.message?.target_name || item?.message?.targetName || item?.message?.victim || '')
+    }))
+    .filter(item => item.targetUserId !== null);
+}
+
 function coinSourceUserId(coin) {
   return numberOrNull(coin?.source_user_id ?? coin?.sourceUserId ?? coin?.owner_user_id ?? coin?.ownerUserId);
 }
@@ -756,6 +768,7 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
   ));
   const selfKillTargetTicks = selfKillTargetTicksFromMessages(Array.isArray(fallback.messages) ? fallback.messages : [], selfUserId);
   const selfKillTargetIds = Array.from(selfKillTargetTicks.keys());
+  const selfKillEvidence = summarizeSelfKillEvidence(selfKillTargetTicks);
   const selfKilledPlayerDropFallbackEnabled = options.controlMode === 'profit-live';
   const selfKilledPlayerDropCoins = selfKilledPlayerDropFallbackEnabled
     ? snapshotCoins.filter(coin => isSelfKilledPlayerDropCoin(coin, selfKillTargetTicks, options))
@@ -822,6 +835,7 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
     snapshotCoins,
     selfKilledPlayerDropCoins,
     selfKillTargetIds,
+    selfKillEvidence,
     profitCoins,
     profitCoinSource,
     bullets: Array.isArray(realtime.bullets) ? cloneJson(realtime.bullets) : [],
@@ -2853,6 +2867,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       realtime: input.realtime,
       fallback: input.fallback,
       profitCoinSource: input.profitCoinSource,
+      selfKillEvidence: topItems(input.selfKillEvidence, item => item, 20),
       dataGaps: input.dataGaps
     },
     profit: {

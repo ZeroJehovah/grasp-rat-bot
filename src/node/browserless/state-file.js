@@ -5,6 +5,7 @@ const path = require('path');
 const { redactStructuredSecrets } = require('./session-client');
 
 const SCHEMA_VERSION = 1;
+const UTC8_OFFSET_MS = 8 * 60 * 60 * 1000;
 
 function defaultBrowserlessState() {
   return {
@@ -61,11 +62,52 @@ function defaultBrowserlessState() {
       lastProbe: null,
       lastSwitch: null
     },
+    stats: defaultBrowserlessStats(),
     logs: {
       dataDir: '',
       logDir: '',
       stateFile: '',
       currentDayDir: ''
+    }
+  };
+}
+
+function defaultBrowserlessStats() {
+  return {
+    currentSession: {
+      online: false,
+      sessionId: '',
+      userId: 0,
+      enteredAt: '',
+      lastSeenAt: '',
+      exitedAt: '',
+      exitReason: '',
+      baseDrop: null,
+      lastDrop: null,
+      coinsGained: 0,
+      lastStamina1dRemaining: null,
+      staminaSpentMs: 0,
+      killKeys: [],
+      kills: 0
+    },
+    today: {
+      day: '',
+      uptimeMs: 0,
+      staminaSpentMs: 0,
+      coinsGained: 0,
+      kills: 0,
+      sessionCount: 0,
+      activeSessionId: '',
+      activeEnteredAt: '',
+      activeBaseStaminaSpentMs: 0,
+      activeBaseCoinsGained: 0,
+      activeBaseKills: 0
+    },
+    lastExit: {
+      at: '',
+      reason: '',
+      nextRunAt: '',
+      reconnectDelayMs: null
     }
   };
 }
@@ -143,6 +185,7 @@ function normalizeBrowserlessState(state, file = '') {
   normalized.runner.readOnly = normalized.runner.readOnly !== false;
   normalized.runner.dryRun = normalized.runner.dryRun !== false;
   normalized.recentExits = Array.isArray(normalized.recentExits) ? normalized.recentExits.slice(-20) : [];
+  normalized.stats = normalizeBrowserlessStats(normalized.stats);
   normalized.network.sourceIp = String(normalized.network.sourceIp || '');
   normalized.network.sourceIps = Array.isArray(normalized.network.sourceIps)
     ? normalized.network.sourceIps.map(item => String(item || '').trim()).filter(Boolean)
@@ -216,6 +259,300 @@ function compactString(value, maxLength = 160) {
   const text = String(value || '');
   if (!text) return '';
   return text.length > maxLength ? text.slice(0, maxLength - 1) + '...' : text;
+}
+
+function parseTimeMs(value) {
+  if (Number.isFinite(Number(value)) && Number(value) > 0) return Number(value);
+  const parsed = Date.parse(String(value || ''));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function isoFromMs(ms) {
+  const value = Number(ms);
+  return Number.isFinite(value) && value > 0 ? new Date(value).toISOString() : '';
+}
+
+function eventTimeMs(value, fallbackMs = Date.now()) {
+  const parsed = parseTimeMs(value);
+  if (parsed > 0) return parsed;
+  const fallback = Number(fallbackMs);
+  return Number.isFinite(fallback) && fallback > 0 ? fallback : Date.now();
+}
+
+function browserlessStatsDayKey(ms) {
+  return new Date(eventTimeMs(ms, Date.now()) + UTC8_OFFSET_MS).toISOString().slice(0, 10);
+}
+
+function browserlessStatsDayStartMs(dayKey) {
+  const parsed = Date.parse(String(dayKey || '') + 'T00:00:00.000Z');
+  return Number.isFinite(parsed) ? parsed - UTC8_OFFSET_MS : 0;
+}
+
+function normalizeBrowserlessStats(stats) {
+  const normalized = mergeState(defaultBrowserlessStats(), stats || {});
+  const session = normalized.currentSession || {};
+  const today = normalized.today || {};
+  const lastExit = normalized.lastExit || {};
+  normalized.currentSession = {
+    ...session,
+    online: Boolean(session.online),
+    sessionId: compactString(session.sessionId, 96),
+    userId: compactNumber(session.userId) || 0,
+    enteredAt: compactString(session.enteredAt, 48),
+    lastSeenAt: compactString(session.lastSeenAt, 48),
+    exitedAt: compactString(session.exitedAt, 48),
+    exitReason: compactString(session.exitReason, 160),
+    baseDrop: compactNumber(session.baseDrop),
+    lastDrop: compactNumber(session.lastDrop),
+    coinsGained: Math.max(0, Math.round(Number(session.coinsGained || 0) || 0)),
+    lastStamina1dRemaining: compactNumber(session.lastStamina1dRemaining),
+    staminaSpentMs: Math.max(0, Math.round(Number(session.staminaSpentMs || 0) || 0)),
+    killKeys: Array.isArray(session.killKeys)
+      ? session.killKeys.map(item => compactString(item, 120)).filter(Boolean).slice(-200)
+      : [],
+    kills: Math.max(0, Math.round(Number(session.kills || 0) || 0))
+  };
+  normalized.today = {
+    ...today,
+    day: compactString(today.day, 16),
+    uptimeMs: Math.max(0, Math.round(Number(today.uptimeMs || 0) || 0)),
+    staminaSpentMs: Math.max(0, Math.round(Number(today.staminaSpentMs || 0) || 0)),
+    coinsGained: Math.max(0, Math.round(Number(today.coinsGained || 0) || 0)),
+    kills: Math.max(0, Math.round(Number(today.kills || 0) || 0)),
+    sessionCount: Math.max(0, Math.round(Number(today.sessionCount || 0) || 0)),
+    activeSessionId: compactString(today.activeSessionId, 96),
+    activeEnteredAt: compactString(today.activeEnteredAt, 48),
+    activeBaseStaminaSpentMs: Math.max(0, Math.round(Number(today.activeBaseStaminaSpentMs || 0) || 0)),
+    activeBaseCoinsGained: Math.max(0, Math.round(Number(today.activeBaseCoinsGained || 0) || 0)),
+    activeBaseKills: Math.max(0, Math.round(Number(today.activeBaseKills || 0) || 0))
+  };
+  normalized.lastExit = {
+    at: compactString(lastExit.at, 48),
+    reason: compactString(lastExit.reason, 160),
+    nextRunAt: compactString(lastExit.nextRunAt, 48),
+    reconnectDelayMs: compactNumber(lastExit.reconnectDelayMs)
+  };
+  return normalized;
+}
+
+function resetBrowserlessTodayStats(day) {
+  return {
+    ...defaultBrowserlessStats().today,
+    day
+  };
+}
+
+function ensureBrowserlessStatsDay(stats, nowMs) {
+  const day = browserlessStatsDayKey(nowMs);
+  if (stats.today.day === day) return stats;
+  stats.today = resetBrowserlessTodayStats(day);
+  const session = stats.currentSession || {};
+  if (session.online && session.sessionId) {
+    stats.today.activeSessionId = session.sessionId;
+    stats.today.activeEnteredAt = isoFromMs(Math.max(eventTimeMs(nowMs), browserlessStatsDayStartMs(day)));
+    stats.today.activeBaseStaminaSpentMs = Math.max(0, Number(session.staminaSpentMs || 0) || 0);
+    stats.today.activeBaseCoinsGained = Math.max(0, Number(session.coinsGained || 0) || 0);
+    stats.today.activeBaseKills = Math.max(0, Number(session.kills || 0) || 0);
+  }
+  return stats;
+}
+
+function statsSelfDrop(self) {
+  return compactNumber(self?.drop ?? self?.death_drop_coins ?? self?.coinsGained);
+}
+
+function statsSelfUserId(self, state) {
+  return compactNumber(self?.userId ?? self?.user_id ?? state?.session?.userId);
+}
+
+function statsStamina1dRemaining(stamina, self) {
+  return compactNumber(
+    stamina?.stamina1dRemainingMilli
+      ?? stamina?.remaining1d
+      ?? stamina?.stamina1d
+      ?? self?.stamina1dRemainingMilli
+      ?? self?.stamina_1d_remaining_milli
+      ?? self?.stamina1d
+  );
+}
+
+function statsKillKey(item) {
+  const target = item?.targetUserId ?? item?.target_user_id ?? item?.targetId ?? item?.id;
+  const tick = item?.tick ?? item?.createdTick ?? item?.created_tick ?? item?.at ?? item?.time;
+  if (target === null || target === undefined || target === '') return '';
+  return 'self-kill:' + String(target) + ':' + String(tick || 'unknown');
+}
+
+function startBrowserlessStatsSession(stats, state, self, stamina, nowMs) {
+  const userId = statsSelfUserId(self, state) || 0;
+  const enteredAt = isoFromMs(nowMs);
+  const sessionId = `${userId || 'user'}:${enteredAt}`;
+  const drop = statsSelfDrop(self);
+  const stamina1d = statsStamina1dRemaining(stamina, self);
+  stats.currentSession = {
+    ...defaultBrowserlessStats().currentSession,
+    online: true,
+    sessionId,
+    userId,
+    enteredAt,
+    lastSeenAt: enteredAt,
+    baseDrop: drop,
+    lastDrop: drop,
+    lastStamina1dRemaining: stamina1d
+  };
+  stats.today.activeSessionId = sessionId;
+  stats.today.activeEnteredAt = enteredAt;
+  stats.today.activeBaseStaminaSpentMs = 0;
+  stats.today.activeBaseCoinsGained = 0;
+  stats.today.activeBaseKills = 0;
+  return stats.currentSession;
+}
+
+function updateBrowserlessStatsSession(session, decision, self, stamina, nowMs) {
+  session.lastSeenAt = isoFromMs(nowMs);
+  session.exitedAt = '';
+  session.exitReason = '';
+  const drop = statsSelfDrop(self);
+  if (drop !== null) {
+    if (session.baseDrop === null || Number(drop) < Number(session.baseDrop)) session.baseDrop = drop;
+    session.lastDrop = drop;
+    session.coinsGained = Math.max(
+      Math.max(0, Number(session.coinsGained || 0) || 0),
+      Math.max(0, Math.round(Number(drop) - Number(session.baseDrop || 0)))
+    );
+  }
+  const stamina1d = statsStamina1dRemaining(stamina, self);
+  const previousStamina = compactNumber(session.lastStamina1dRemaining);
+  if (stamina1d !== null) {
+    if (previousStamina !== null && stamina1d < previousStamina) {
+      const previousSpent = Math.max(0, Number(session.staminaSpentMs || 0) || 0);
+      session.staminaSpentMs = Math.max(0, Math.round(previousSpent + previousStamina - stamina1d));
+    }
+    session.lastStamina1dRemaining = stamina1d;
+  }
+  const killKeys = new Set(Array.isArray(session.killKeys) ? session.killKeys : []);
+  for (const item of decision?.input?.selfKillEvidence || []) {
+    const key = statsKillKey(item);
+    if (key) killKeys.add(key);
+  }
+  session.killKeys = Array.from(killKeys).slice(-200);
+  session.kills = Math.max(Math.max(0, Number(session.kills || 0) || 0), session.killKeys.length);
+}
+
+function browserlessStatsForDecision(state, decision, options = {}) {
+  const stats = normalizeBrowserlessStats(state?.stats);
+  const nowMs = eventTimeMs(decision?.at, options.nowMs);
+  ensureBrowserlessStatsDay(stats, nowMs);
+  const self = decision?.input?.self || null;
+  if (!self || typeof self !== 'object') return stats;
+  const stamina = decision?.input?.stamina || null;
+  const userId = statsSelfUserId(self, state) || 0;
+  const session = stats.currentSession || {};
+  if (session.online && session.userId && userId && Number(session.userId) !== Number(userId)) {
+    finalizeBrowserlessStatsSession(stats, {
+      at: isoFromMs(nowMs),
+      reason: 'user-changed'
+    }, nowMs);
+  }
+  const active = stats.currentSession || {};
+  if (!active.online || !active.sessionId) {
+    startBrowserlessStatsSession(stats, state, self, stamina, nowMs);
+  }
+  updateBrowserlessStatsSession(stats.currentSession, decision, self, stamina, nowMs);
+  return normalizeBrowserlessStats(stats);
+}
+
+function todayActiveDelta(stats, nowMs) {
+  const session = stats.currentSession || {};
+  const today = stats.today || {};
+  if (!session.online || !session.sessionId || today.activeSessionId !== session.sessionId) {
+    return { uptimeMs: 0, staminaSpentMs: 0, coinsGained: 0, kills: 0 };
+  }
+  const dayStart = browserlessStatsDayStartMs(today.day || browserlessStatsDayKey(nowMs));
+  const enteredMs = Math.max(parseTimeMs(today.activeEnteredAt || session.enteredAt), dayStart);
+  const endMs = Math.max(enteredMs, nowMs);
+  return {
+    uptimeMs: Math.max(0, Math.round(endMs - enteredMs)),
+    staminaSpentMs: Math.max(0, Math.round(Number(session.staminaSpentMs || 0) - Number(today.activeBaseStaminaSpentMs || 0))),
+    coinsGained: Math.max(0, Math.round(Number(session.coinsGained || 0) - Number(today.activeBaseCoinsGained || 0))),
+    kills: Math.max(0, Math.round(Number(session.kills || 0) - Number(today.activeBaseKills || 0)))
+  };
+}
+
+function finalizeBrowserlessStatsSession(stats, detail = {}, nowMs = Date.now()) {
+  ensureBrowserlessStatsDay(stats, nowMs);
+  const session = stats.currentSession || {};
+  const reason = compactString(detail.reason || session.exitReason || 'offline', 160);
+  const at = compactString(detail.at || detail.completedAt || isoFromMs(nowMs), 48);
+  if (session.online && session.sessionId) {
+    const delta = todayActiveDelta(stats, eventTimeMs(at, nowMs));
+    stats.today.uptimeMs += delta.uptimeMs;
+    stats.today.staminaSpentMs += delta.staminaSpentMs;
+    stats.today.coinsGained += delta.coinsGained;
+    stats.today.kills += delta.kills;
+    stats.today.sessionCount += 1;
+    if (stats.today.activeSessionId === session.sessionId) {
+      stats.today.activeSessionId = '';
+      stats.today.activeEnteredAt = '';
+      stats.today.activeBaseStaminaSpentMs = 0;
+      stats.today.activeBaseCoinsGained = 0;
+      stats.today.activeBaseKills = 0;
+    }
+    session.online = false;
+    session.exitedAt = at;
+    session.exitReason = reason;
+  }
+  stats.lastExit = {
+    at: at || stats.lastExit.at,
+    reason: reason || stats.lastExit.reason,
+    nextRunAt: compactString(detail.nextRunAt || stats.lastExit.nextRunAt, 48),
+    reconnectDelayMs: compactNumber(detail.reconnectDelayMs ?? detail.delayMs ?? stats.lastExit.reconnectDelayMs)
+  };
+  return normalizeBrowserlessStats(stats);
+}
+
+function browserlessStatsForOffline(state, detail = {}, options = {}) {
+  const stats = normalizeBrowserlessStats(state?.stats);
+  const nowMs = eventTimeMs(detail.at || detail.completedAt, options.nowMs);
+  return finalizeBrowserlessStatsSession(stats, detail, nowMs);
+}
+
+function compactBrowserlessStats(normalized, game, action, options = {}) {
+  const nowMs = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
+  const stats = normalizeBrowserlessStats(normalized?.stats);
+  ensureBrowserlessStatsDay(stats, nowMs);
+  const session = stats.currentSession || {};
+  const online = Boolean(game?.inGame && session.online);
+  const enteredMs = parseTimeMs(session.enteredAt);
+  const lastSeenMs = parseTimeMs(session.lastSeenAt);
+  const exitedMs = parseTimeMs(session.exitedAt);
+  const durationEndMs = online ? nowMs : (exitedMs || lastSeenMs || nowMs);
+  const activeDelta = todayActiveDelta(stats, nowMs);
+  const nextRunAt = action?.nextRunAt || stats.lastExit.nextRunAt || '';
+  const nextRunAtMs = parseTimeMs(nextRunAt);
+  return {
+    currentSession: {
+      online,
+      enteredAt: session.enteredAt || '',
+      durationMs: online && enteredMs ? Math.max(0, Math.round(durationEndMs - enteredMs)) : 0,
+      staminaSpentMs: compactNumber(session.staminaSpentMs),
+      coinsGained: compactNumber(session.coinsGained),
+      kills: compactNumber(session.kills)
+    },
+    offline: {
+      lastExitAt: stats.lastExit.at || session.exitedAt || '',
+      lastExitReason: stats.lastExit.reason || session.exitReason || '',
+      nextReconnectAt: compactString(nextRunAt, 48),
+      reconnectRemainingMs: nextRunAtMs ? Math.max(0, Math.round(nextRunAtMs - nowMs)) : null
+    },
+    today: {
+      day: stats.today.day || browserlessStatsDayKey(nowMs),
+      inGameDurationMs: Math.max(0, Math.round(Number(stats.today.uptimeMs || 0) + activeDelta.uptimeMs)),
+      staminaSpentMs: Math.max(0, Math.round(Number(stats.today.staminaSpentMs || 0) + activeDelta.staminaSpentMs)),
+      coinsGained: Math.max(0, Math.round(Number(stats.today.coinsGained || 0) + activeDelta.coinsGained)),
+      kills: Math.max(0, Math.round(Number(stats.today.kills || 0) + activeDelta.kills))
+    }
+  };
 }
 
 function compactPoint(value) {
@@ -647,6 +984,7 @@ function buildPublicBrowserlessStatus(state, config = {}) {
     current: normalized.current,
     recentExits: normalized.recentExits,
     network: normalized.network,
+    stats: normalized.stats,
     logs: {
       dataDir: normalized.logs.dataDir || config.dataDir || '',
       logDir: normalized.logs.logDir || config.logDir || '',
@@ -676,6 +1014,7 @@ function buildCompactBrowserlessStatus(state, config = {}) {
   const recentBlock = recentExits.slice().reverse().find(event => event?.shouldLeave === false) || null;
   const loginPointSafetyDetail = compactLoginPointSafetyDetail(normalized.loginPointSafety || {}, normalized);
   const loginPoint = compactPoint(normalized.loginPointSafety?.point) || loginPointSafetyDetail?.point || null;
+  const game = compactGameStatus(normalized);
   const compactState = {
     schemaVersion: normalized.schemaVersion,
     compact: true,
@@ -699,13 +1038,14 @@ function buildCompactBrowserlessStatus(state, config = {}) {
       currentAction: compactAction(normalized.runner.currentAction),
       lastRun: compactRun(normalized.runner.lastRun)
     },
-    game: compactGameStatus(normalized),
+    game,
     self: compactSelf(current.self),
     stamina: compactStamina(current.stamina, current.self),
     decision: compactDecision(current.decision),
     action,
     profit: compactProfit(current.profit || current.decision?.profit),
     combat: compactCombat(current.combatSummary || current.decision?.combat),
+    stats: compactBrowserlessStats(normalized, game, action, config),
     loginPointSafety: {
       ok: Boolean(normalized.loginPointSafety?.ok),
       reason: compactString(normalized.loginPointSafety?.reason, 120),
@@ -733,6 +1073,8 @@ function buildCompactBrowserlessStatus(state, config = {}) {
 
 module.exports = {
   browserlessPatchFromLegacyState,
+  browserlessStatsForDecision,
+  browserlessStatsForOffline,
   buildCompactBrowserlessStatus,
   buildPublicBrowserlessStatus,
   defaultBrowserlessState,
