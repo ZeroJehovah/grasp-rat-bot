@@ -800,7 +800,8 @@ function summarizeNearbyForPanel(input, action, combat, options = {}) {
       numberOrNull(entityDropValue(target)),
       invulnerableRemainingMs(target, options),
       Math.round(Number(target.distance)),
-      targetPlayerSelected(action, combat, target) ? 1 : 0
+      targetPlayerSelected(action, combat, target) ? 1 : 0,
+      String(target.current_join_mode || target.mode || target.joined || '') || null
     ]);
   return {
     ar: Math.round(attackRange),

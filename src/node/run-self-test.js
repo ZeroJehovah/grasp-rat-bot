@@ -12849,8 +12849,10 @@ async function runSelfTest() {
                 nearby: {
                   ar: 14500,
                   vr: 50000,
-                  c: [['coin-1', 8, 450, 1], ['coin-2', 7, 320, 0]],
-                  p: [['enemy', 44, 5000, 9, null, 800, 1]]
+                  c: Array.from({ length: 165 }, (_, index) => (
+                    index === 0 ? ['coin-1', 8, 450, 1] : ['coin-' + (index + 1), 1, 500 + index, 0]
+                  )),
+                  p: [['enemy', 44, 5000, 9, null, 800, 1, 'Passive']]
                 }
               }
             },
@@ -12951,8 +12953,10 @@ async function runSelfTest() {
           compactStatus.nearby.ar,
           compactStatus.nearby.c[0][0],
           compactStatus.nearby.c[0][3],
+          compactStatus.nearby.c.length,
           compactStatus.nearby.p[0][0],
           compactStatus.nearby.p[0][6],
+          compactStatus.nearby.p[0][7],
           compactStatus.recentExit.reason,
           compactStatus.network.sourceIpIndex,
           compactStatus.network.sourceIpCount,
@@ -12964,7 +12968,7 @@ async function runSelfTest() {
           !compactText.includes(largePayload) && compactText.length < publicText.length
         ].join('|');
       }),
-      want: 'true|77|true|true|true|true|true|false|loop-wait|88|10|20|360000|seek-coin|8|7|enemy|5999|active-near-login-point|88|true|enemy|14500|coin-1|1|enemy|1|latest|2|3|10.0.0.101|false|false|false|false|true'
+      want: 'true|77|true|true|true|true|true|false|loop-wait|88|10|20|360000|seek-coin|8|7|enemy|5999|active-near-login-point|88|true|enemy|14500|coin-1|1|165|enemy|1|Passive|latest|2|3|10.0.0.101|false|false|false|false|true'
     },
     {
       name: 'browserless compact status exposes session offline and today stats',
@@ -13359,6 +13363,7 @@ async function runSelfTest() {
             /附近玩家/.test(panelText),
             /id="nearbyCoins"/.test(panelText),
             /id="nearbyPlayers"/.test(panelText),
+            panelText.indexOf('class="stats-grid"') < panelText.indexOf('id="nearbyGrid"'),
             /id="sessionPanelTitle">本次游戏<\/h2>/.test(panelText),
             !/id="refreshBtn"/.test(panelText),
             !/id="stopBtn"/.test(panelText),
@@ -13392,7 +13397,7 @@ async function runSelfTest() {
           await handle.close();
         }
       })(),
-      want: '401|200|true|true|true|200|true|12|true|true|true|200|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|200|true|1'
+      want: '401|200|true|true|true|200|true|12|true|true|true|200|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|200|true|1'
     },
     {
       name: 'browserless web panel renders explicit login point safety result',
@@ -13416,10 +13421,13 @@ async function runSelfTest() {
           panelScript.includes("return '快照金币备用被阻止：快照金币超出可见范围';"),
           panelScript.includes("setText('sessionPanelTitle', online ? '本次游戏' : '上次游戏');"),
           panelScript.includes("['进入时间', fullStamp(currentSession.enteredAt), true]"),
-          !panelScript.includes("'状态/进入'")
+          !panelScript.includes("'状态/进入'"),
+          /function isLowValueAfkNearbyPlayer/.test(panelScript),
+          panelScript.includes('const visibleItems = items.filter(item => !isLowValueAfkNearbyPlayer(item));'),
+          panelScript.includes("低收益挂机玩家")
         ].join('|');
       })(),
-      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
+      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless runner self-test passes',
