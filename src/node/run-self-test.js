@@ -12301,7 +12301,7 @@ async function runSelfTest() {
             compactBody.self.hp,
             !compactText.includes('must-not-leak'),
             panel.status,
-            /Browserless Runner/.test(await panel.text()),
+            /抓鼠助手/.test(await panel.text()),
             stop.status,
             JSON.parse(await stop.text()).stopped,
             stopCalled

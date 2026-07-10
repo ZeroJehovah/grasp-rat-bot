@@ -2,11 +2,11 @@
 
 function renderBrowserlessWebPanel() {
   return `<!doctype html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Grasp Rat Browserless Runner</title>
+  <title>抓鼠助手</title>
   <style>
     :root{color-scheme:dark;--bg:#101214;--panel:#181b1f;--panel2:#121518;--line:#30363d;--text:#eef2f5;--muted:#9ba7b4;--green:#4ade80;--amber:#fbbf24;--red:#fb7185;--blue:#60a5fa}
     *{box-sizing:border-box}
@@ -40,56 +40,56 @@ function renderBrowserlessWebPanel() {
 <body>
   <main>
     <header>
-      <h1>Grasp Rat Browserless Runner</h1>
+      <h1>抓鼠助手</h1>
       <div class="toolbar">
         <span id="stamp" class="pill">--</span>
-        <button id="refreshBtn" type="button" title="Refresh status">Refresh</button>
-        <button id="stopBtn" type="button" title="Request explicit stop">Stop</button>
+        <button id="refreshBtn" type="button" title="刷新状态">刷新</button>
+        <button id="stopBtn" type="button" title="停止自动运行">停止</button>
       </div>
     </header>
 
     <section class="hero">
-      <div id="botLine" class="botline">BOT --</div>
+      <div id="botLine" class="botline">助手 --</div>
       <div id="reason" class="reason">--</div>
       <div class="metrics">
-        <div class="metric"><span class="label">HP</span><span id="hp" class="value">--</span></div>
-        <div class="metric"><span class="label">Stamina</span><span id="stamina" class="value">--</span></div>
-        <div class="metric"><span class="label">Drop</span><span id="drop" class="value">--</span></div>
-        <div class="metric"><span class="label">Mode</span><span id="mode" class="value">--</span></div>
+        <div class="metric"><span class="label">血量</span><span id="hp" class="value">--</span></div>
+        <div class="metric"><span class="label">体力</span><span id="stamina" class="value">--</span></div>
+        <div class="metric"><span class="label">身上金币</span><span id="drop" class="value">--</span></div>
+        <div class="metric"><span class="label">运行方式</span><span id="mode" class="value">--</span></div>
       </div>
     </section>
 
     <div class="grid">
       <section class="wide">
-        <h2>Target</h2>
+        <h2>当前目标</h2>
         <dl id="target"></dl>
       </section>
       <section>
-        <h2>Session</h2>
+        <h2>账号状态</h2>
         <dl id="session"></dl>
       </section>
       <section>
-        <h2>Motion</h2>
+        <h2>移动</h2>
         <dl id="motion"></dl>
       </section>
       <section>
-        <h2>Shooting</h2>
+        <h2>开火</h2>
         <dl id="shooting"></dl>
       </section>
       <section>
-        <h2>Profit</h2>
+        <h2>金币</h2>
         <dl id="profit"></dl>
       </section>
       <section>
-        <h2>Combat</h2>
+        <h2>打架</h2>
         <dl id="combat"></dl>
       </section>
       <section>
-        <h2>Safety</h2>
+        <h2>安全</h2>
         <dl id="safety"></dl>
       </section>
       <section class="wide">
-        <h2>Last Run</h2>
+        <h2>上次运行</h2>
         <dl id="lastRun"></dl>
       </section>
     </div>
@@ -110,11 +110,11 @@ function renderBrowserlessWebPanel() {
       if (n === null) return '--';
       return Math.round(n / 100) + 'm';
     };
-    const bool = v => v === null || v === undefined ? '--' : (v ? 'yes' : 'no');
+    const bool = v => v === null || v === undefined ? '--' : (v ? '是' : '否');
     const stamp = iso => {
       if (!iso) return '--';
       const date = new Date(iso);
-      return Number.isFinite(date.getTime()) ? date.toLocaleTimeString() : iso;
+      return Number.isFinite(date.getTime()) ? date.toLocaleTimeString('zh-CN', { hour12: false }) : iso;
     };
     function rows(id, pairs) {
       const node = document.getElementById(id);
@@ -129,29 +129,123 @@ function renderBrowserlessWebPanel() {
     }
     function targetLabel(target) {
       if (!target) return '--';
-      const name = target.name || (target.userId ? '#' + target.userId : (target.id ? '#' + target.id : target.type || 'target'));
+      const name = target.name || (target.userId ? '#' + target.userId : (target.id ? '#' + target.id : '目标'));
       const parts = [name];
-      if (target.distance !== null && target.distance !== undefined) parts.push(distance(target.distance));
-      if (target.hp !== null && target.hp !== undefined) parts.push('HP ' + target.hp);
-      if (target.drop !== null && target.drop !== undefined) parts.push('Drop ' + target.drop);
-      if (target.amount !== null && target.amount !== undefined) parts.push('Coin ' + target.amount);
+      if (target.distance !== null && target.distance !== undefined) parts.push('距离 ' + distance(target.distance));
+      if (target.hp !== null && target.hp !== undefined) parts.push('血量 ' + target.hp);
+      if (target.drop !== null && target.drop !== undefined) parts.push('掉落 ' + target.drop);
+      if (target.amount !== null && target.amount !== undefined) parts.push('金币 ' + target.amount);
       return parts.join(' / ');
+    }
+    const reasonMap = {
+      'best-opportunity-coin': '选择收益最高的金币',
+      'best-opportunity-coin-route': '按金币路线移动',
+      'best-opportunity-visible-coin': '去看得见的金币',
+      'high-value-visible-coin-priority': '优先捡高价值金币',
+      'near-coin-priority': '优先捡近处金币',
+      'foot-coin-priority': '先捡脚边金币',
+      'best-opportunity-drop-target': '选择收益最高的目标',
+      'best-opportunity-afk-drop-target': '攻击不动且有掉落的目标',
+      'approach-profitable-drop-target': '靠近高收益目标',
+      'opportunistic-afk-drop-shot': '顺手打不动的目标',
+      'combat-attack': '正在打架',
+      'combat-spacing': '保持距离并开火',
+      'combat-tangent-dodge': '边躲边打',
+      'combat-hp-disadvantage-leave': '血量劣势，退出',
+      'combat-critical-hp-leave': '血量太低，退出',
+      'injury-leave': '受伤后退出',
+      'pursuit-leave': '被持续追击，退出',
+      'profit-live-snapshot-active-threat': '附近有危险玩家，退出',
+      'stamina-budget-coin-leave': '体力不足，退出等待恢复',
+      'missing-manual-session': '等待登录信息',
+      'active-near-login-point': '登录点附近有危险玩家',
+      'self-present-reentry': '已经在游戏中，继续接管',
+      'cycle-complete': '本轮结束，等待下一轮',
+      'ws-closed': '连接断开，准备重连',
+      'ws-error': '连接异常，准备重连',
+      'frame-gap': '画面更新中断，准备重连',
+      'stale-self': '自身状态太久没更新，准备重连',
+      'no-self': '没有看到自己，等待恢复',
+      'direct-leave-failed': '退出确认失败，重试',
+      'explicit-stop': '手动停止',
+      'self-test': '测试',
+      'login-point-bootstrap-failed': '登录点检查失败',
+      'snapshot-safety-retry': '重新检查登录点安全',
+      'unsupported-control-mode': '当前方式不支持',
+      'unknown-error': '出现异常'
+    };
+    const kindMap = {
+      coin: '捡金币',
+      'seek-coin': '去捡金币',
+      attack: '攻击目标',
+      'combat-live': '打架',
+      flee: '避开危险',
+      leave: '退出游戏',
+      'safety-exit': '退出游戏',
+      recover: '恢复',
+      patrol: '巡找',
+      wait: '等待',
+      'loop-wait': '等待下一轮',
+      stop: '停止',
+      stopped: '已停止',
+      'post-attack-drop-wait': '等待掉落',
+      'return-block-scan': '避开危险'
+    };
+    const modeMap = {
+      'read-only': '只观察',
+      'movement-only': '只移动',
+      'non-combat-profit': '只捡金币',
+      'profit-live': '自动捡金币',
+      'combat-dry-run': '模拟打架',
+      'combat-live': '自动打架',
+      'dry-run': '演练',
+      idle: '空闲'
+    };
+    function kindText(kind) {
+      if (!kind) return '--';
+      return kindMap[kind] || '等待';
+    }
+    function reasonText(reason) {
+      const text = String(reason || '');
+      if (!text) return '--';
+      if (reasonMap[text]) return reasonMap[text];
+      if (/stamina/i.test(text)) return '体力不足，等待恢复';
+      if (/coin/i.test(text)) return '正在找金币';
+      if (/combat/i.test(text)) return '正在处理打架';
+      if (/active|threat|danger/i.test(text)) return '附近有危险';
+      if (/leave/i.test(text)) return '正在退出游戏';
+      if (/wait/i.test(text)) return '等待中';
+      if (/stop/i.test(text)) return '已停止';
+      if (/login|session|auth|token/i.test(text)) return '等待登录信息';
+      if (/ws|websocket|connect|frame|transport/i.test(text)) return '连接不稳定';
+      if (/whitelist/i.test(text)) return '目标在白名单，跳过';
+      return '需要查看日志';
+    }
+    function modeText(mode, combatEnabled) {
+      const text = modeMap[mode] || (mode ? '自动运行' : '--');
+      return combatEnabled ? text + ' / 可打架' : text;
+    }
+    function sourceText(source) {
+      const text = String(source || '').toLowerCase();
+      if (!text) return '--';
+      if (text.includes('real') || text.includes('live') || text.includes('native')) return '实时';
+      if (text.includes('snapshot') || text.includes('fallback')) return '快照';
+      if (text.includes('state')) return '记录';
+      return '--';
+    }
+    function resultText(ok) {
+      if (ok === null || ok === undefined) return '--';
+      return ok ? '正常' : '异常';
     }
     function actionText(status) {
       const decision = status.decision || {};
       const action = status.action || {};
       const kind = decision.kind || action.kind || 'wait';
       const target = decision.target || action.target || status.combat?.target || status.profit?.best?.target || null;
-      if (kind === 'coin') return 'pick coin ' + targetLabel(target);
-      if (kind === 'seek-coin') return 'seek coin ' + targetLabel(target);
-      if (kind === 'attack' || kind === 'combat-live') return 'combat ' + targetLabel(target);
-      if (kind === 'flee') return 'avoid threat';
-      if (kind === 'leave' || kind === 'safety-exit') return 'leave game';
-      if (kind === 'recover') return 'recover';
-      if (kind === 'patrol') return 'patrol';
-      if (kind === 'loop-wait') return 'wait for next run';
-      if (kind === 'stop' || kind === 'stopped') return 'stopped';
-      return kind || 'wait';
+      if (kind === 'coin') return '捡金币 ' + targetLabel(target);
+      if (kind === 'seek-coin') return '去捡金币 ' + targetLabel(target);
+      if (kind === 'attack' || kind === 'combat-live') return '打目标 ' + targetLabel(target);
+      return kindText(kind);
     }
     function setText(id, text) {
       document.getElementById(id).textContent = value(text);
@@ -165,71 +259,70 @@ function renderBrowserlessWebPanel() {
     async function refresh() {
       const s = await fetchStatus();
       const statusClass = s.runner?.lastError ? 'bad' : (s.runner?.running ? 'ok' : 'info');
-      const reason = s.runner?.lastError || s.decision?.reason || s.action?.reason || s.recentExit?.reason || '--';
+      const reason = reasonText(s.runner?.lastError || s.decision?.reason || s.action?.reason || s.recentExit?.reason);
       document.getElementById('stamp').textContent = stamp(s.updatedAt);
       document.getElementById('stamp').className = 'pill ' + statusClass;
-      setText('botLine', 'BOT ' + actionText(s));
+      setText('botLine', '助手：' + actionText(s));
       setText('reason', reason);
       setText('hp', s.self?.hp);
-      setText('stamina', '5s ' + unit(s.stamina?.remaining5s) + ' / 1h ' + unit(s.stamina?.remaining1h) + ' / 1d ' + unit(s.stamina?.remaining1d));
+      setText('stamina', '5秒 ' + unit(s.stamina?.remaining5s) + ' / 1小时 ' + unit(s.stamina?.remaining1h) + ' / 1天 ' + unit(s.stamina?.remaining1d));
       setText('drop', s.self?.drop);
-      setText('mode', (s.runner?.controlMode || s.runner?.mode || '--') + (s.runner?.combatEnabled ? ' / combat' : ''));
+      setText('mode', modeText(s.runner?.controlMode || s.runner?.mode, s.runner?.combatEnabled));
 
       const target = s.decision?.target || s.action?.target || s.combat?.target || s.profit?.best?.target || null;
       rows('target', [
-        ['target', targetLabel(target)],
-        ['authority', target?.authority],
-        ['state', target ? ['active ' + bool(target.active), 'moving ' + bool(target.moving), 'firing ' + bool(target.firing)].join(' / ') : '--'],
-        ['decision', [s.decision?.kind, s.decision?.reason].filter(Boolean).join(' / ')]
+        ['目标', targetLabel(target)],
+        ['来源', sourceText(target?.authority)],
+        ['状态', target ? ['危险 ' + bool(target.active), '移动 ' + bool(target.moving), '开火 ' + bool(target.firing)].join(' / ') : '--'],
+        ['判断', [kindText(s.decision?.kind), reasonText(s.decision?.reason)].filter(item => item !== '--').join(' / ')]
       ]);
       rows('session', [
-        ['user', s.session?.userId],
-        ['auth', bool(s.session?.authenticated)],
-        ['token', s.session?.tokenPresent ? 'present' : 'missing'],
-        ['source IPs', s.network?.sourceIpCount],
-        ['source IP', s.network?.sourceIp]
+        ['账号', s.session?.userId],
+        ['已登录', bool(s.session?.authenticated)],
+        ['登录信息', s.session?.tokenPresent ? '已有' : '缺失'],
+        ['出口数量', s.network?.sourceIpCount],
+        ['当前出口', s.network?.sourceIp]
       ]);
       rows('motion', [
-        ['kind', s.action?.kind],
-        ['reason', s.action?.movement?.reason || s.action?.reason],
-        ['vector', [s.action?.movement?.command?.dx, s.action?.movement?.command?.dy].map(value).join(', ')],
-        ['sent', s.action?.counts?.velocity],
-        ['stops', s.action?.counts?.stop]
+        ['动作', kindText(s.action?.kind)],
+        ['原因', reasonText(s.action?.movement?.reason || s.action?.reason)],
+        ['方向', [s.action?.movement?.command?.dx, s.action?.movement?.command?.dy].map(value).join(', ')],
+        ['移动次数', s.action?.counts?.velocity],
+        ['停止次数', s.action?.counts?.stop]
       ]);
       rows('shooting', [
-        ['ok', bool(s.action?.shoot?.ok)],
-        ['skipped', bool(s.action?.shoot?.skipped)],
-        ['reason', s.action?.shoot?.reason || s.combat?.shooting?.reason],
-        ['sent', s.action?.counts?.shoot],
-        ['repeat', s.action?.counts?.shootRepeat]
+        ['能开火', bool(s.action?.shoot?.ok)],
+        ['已跳过', bool(s.action?.shoot?.skipped)],
+        ['原因', reasonText(s.action?.shoot?.reason || s.combat?.shooting?.reason)],
+        ['开火次数', s.action?.counts?.shoot],
+        ['连发次数', s.action?.counts?.shootRepeat]
       ]);
       rows('profit', [
-        ['best', targetLabel(s.profit?.best?.target)],
-        ['reason', s.profit?.best?.reason],
-        ['score', s.profit?.best?.score],
-        ['candidates', s.profit?.candidateCount]
+        ['最佳目标', targetLabel(s.profit?.best?.target)],
+        ['原因', reasonText(s.profit?.best?.reason)],
+        ['评分', s.profit?.best?.score],
+        ['可选目标', s.profit?.candidateCount]
       ]);
       rows('combat', [
-        ['target', targetLabel(s.combat?.target)],
-        ['move', s.combat?.movement?.reason],
-        ['shoot', s.combat?.shooting ? (bool(s.combat.shooting.wouldShoot) + ' / ' + s.combat.shooting.reason) : '--'],
-        ['exit', s.combat?.exit?.reason],
-        ['candidates', s.combat?.candidateCount]
+        ['目标', targetLabel(s.combat?.target)],
+        ['移动', reasonText(s.combat?.movement?.reason)],
+        ['开火', s.combat?.shooting ? (bool(s.combat.shooting.wouldShoot) + ' / ' + reasonText(s.combat.shooting.reason)) : '--'],
+        ['退出', reasonText(s.combat?.exit?.reason)],
+        ['可选目标', s.combat?.candidateCount]
       ]);
       rows('safety', [
-        ['login point', s.loginPointSafety?.ok ? 'ok' : 'blocked'],
-        ['reason', s.loginPointSafety?.reason],
-        ['checked', stamp(s.loginPointSafety?.checkedAt)],
-        ['last exit', s.recentExit?.reason]
+        ['登录点', s.loginPointSafety?.ok ? '安全' : '不安全'],
+        ['原因', reasonText(s.loginPointSafety?.reason)],
+        ['检查时间', stamp(s.loginPointSafety?.checkedAt)],
+        ['最近退出', reasonText(s.recentExit?.reason)]
       ]);
       rows('lastRun', [
-        ['run id', s.runner?.lastRun?.runId],
-        ['ok', bool(s.runner?.lastRun?.ok)],
-        ['reason', s.runner?.lastRun?.reason || s.runner?.lastRun?.error],
-        ['frames', s.runner?.lastRun?.frames],
-        ['decisions', s.runner?.lastRun?.decisions],
-        ['actions', s.runner?.lastRun?.actions],
-        ['completed', stamp(s.runner?.lastRun?.completedAt)]
+        ['结果', resultText(s.runner?.lastRun?.ok)],
+        ['原因', reasonText(s.runner?.lastRun?.reason || s.runner?.lastRun?.error)],
+        ['收到画面', s.runner?.lastRun?.frames],
+        ['判断次数', s.runner?.lastRun?.decisions],
+        ['动作次数', s.runner?.lastRun?.actions],
+        ['结束时间', stamp(s.runner?.lastRun?.completedAt)]
       ]);
     }
     document.getElementById('refreshBtn').onclick = () => refresh().catch(showError);
@@ -239,7 +332,9 @@ function renderBrowserlessWebPanel() {
       await refresh();
     })().catch(showError);
     function showError(err) {
-      document.getElementById('stamp').textContent = err.message;
+      const message = String(err?.message || '');
+      const match = /HTTP\s+(\d+)/i.exec(message);
+      document.getElementById('stamp').textContent = match ? '请求失败：' + match[1] : '请求失败';
       document.getElementById('stamp').className = 'pill bad';
     }
     refresh().catch(showError);
