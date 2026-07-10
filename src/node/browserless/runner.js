@@ -211,7 +211,7 @@ function browserlessLoopPlan(result, config = {}) {
     return resume(error || 'auth-or-bootstrap-retry');
   }
   if (result.ok) return resume('cycle-complete');
-  if (safetyReason === 'stamina-budget-coin-leave') {
+  if (safetyReason === 'stamina-budget-coin-leave' || safetyReason === 'stamina-exhausted-leave') {
     return resume(safetyReason, Number.isFinite(decisionDelayMs) ? decisionDelayMs : 0);
   }
   if ([

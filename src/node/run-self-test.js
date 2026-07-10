@@ -7531,6 +7531,113 @@ async function runSelfTest() {
       want: 'coin|profit|daily-stamina-final-visible-coin|final-realtime-coin|realtime|1000|500'
     },
     {
+      name: 'browserless profit live leaves when 1d stamina is exhausted',
+      got: (() => {
+        const store = createBrowserlessStateStore({ userId: 7 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 59,
+          entities: [{
+            entity_id: 1,
+            user_id: 7,
+            name: 'self',
+            x: 0,
+            y: 0,
+            hp: 100,
+            max_hp: 100,
+            stamina_5s_remaining_milli: 10000,
+            stamina_1h_remaining_milli: 3000000,
+            stamina_1d_remaining_milli: 31
+          }],
+          bullets: []
+        }, { receivedAtMs: 1000 });
+        const decision = buildBrowserlessDecision(store.getState(1200), {}, {
+          nowMs: 1200,
+          controlMode: 'profit-live'
+        });
+        return [
+          decision.kind,
+          decision.band,
+          decision.reason,
+          decision.action.staminaExhausted.exhausted.join(','),
+          decision.action.staminaExhausted.remaining1d,
+          decision.action.reloginDelayMs > 1000
+        ].join('|');
+      })(),
+      want: 'leave|safety|stamina-exhausted-leave|1d|31|true'
+    },
+    {
+      name: 'browserless profit live honors browserless stamina exhausted threshold alias',
+      got: (() => {
+        const store = createBrowserlessStateStore({ userId: 7 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 59,
+          entities: [{
+            entity_id: 1,
+            user_id: 7,
+            name: 'self',
+            x: 0,
+            y: 0,
+            hp: 100,
+            max_hp: 100,
+            stamina_5s_remaining_milli: 10000,
+            stamina_1h_remaining_milli: 3000000,
+            stamina_1d_remaining_milli: 500
+          }],
+          bullets: []
+        }, { receivedAtMs: 1000 });
+        const decision = buildBrowserlessDecision(store.getState(1200), {}, {
+          ...buildBrowserlessRuntimeDefaults({ staminaExhaustedBelowMs: 200 }),
+          nowMs: 1200,
+          controlMode: 'profit-live'
+        });
+        return [
+          decision.kind,
+          decision.band,
+          decision.reason,
+          Boolean(decision.action.staminaExhausted)
+        ].join('|');
+      })(),
+      want: 'wait|wait|no-profitable-candidate|false'
+    },
+    {
+      name: 'browserless profit live leaves when 1h stamina is exhausted',
+      got: (() => {
+        const store = createBrowserlessStateStore({ userId: 7 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 59,
+          entities: [{
+            entity_id: 1,
+            user_id: 7,
+            name: 'self',
+            x: 0,
+            y: 0,
+            hp: 100,
+            max_hp: 100,
+            stamina_5s_remaining_milli: 10000,
+            stamina_1h_remaining_milli: 31,
+            stamina_1d_remaining_milli: 100000
+          }],
+          bullets: []
+        }, { receivedAtMs: 1000 });
+        const decision = buildBrowserlessDecision(store.getState(1200), {}, {
+          nowMs: 1200,
+          controlMode: 'profit-live'
+        });
+        return [
+          decision.kind,
+          decision.band,
+          decision.reason,
+          decision.action.staminaExhausted.exhausted.join(','),
+          decision.action.staminaExhausted.remaining1h,
+          decision.action.reloginDelayMs
+        ].join('|');
+      })(),
+      want: 'leave|safety|stamina-exhausted-leave|1h|31|1800000'
+    },
+    {
       name: 'browserless profit live waits for budget instead of moving to unaffordable snapshot coin',
       got: (() => {
         const store = createBrowserlessStateStore({ userId: 7 });
@@ -11694,6 +11801,24 @@ async function runSelfTest() {
             }
           }
         }, config);
+        const staminaExhausted = browserlessLoopPlan({
+          ok: false,
+          canary: {
+            runId: 'stamina-exhausted-test',
+            error: 'stamina-exhausted-leave',
+            safety: {
+              event: {
+                reason: 'stamina-exhausted-leave',
+                detail: {
+                  decision: {
+                    reloginDelayMs: 600000,
+                    staminaExhausted: { exhausted: ['1d'], reloginDelayMs: 600000 }
+                  }
+                }
+              }
+            }
+          }
+        }, config);
         const injuryLeave = browserlessLoopPlan({
           ok: false,
           canary: {
@@ -11790,6 +11915,9 @@ async function runSelfTest() {
           staminaBudget.continue,
           staminaBudget.reason,
           staminaBudget.delayMs,
+          staminaExhausted.continue,
+          staminaExhausted.reason,
+          staminaExhausted.delayMs,
           injuryLeave.continue,
           injuryLeave.reason,
           injuryLeave.delayMs,
@@ -11818,7 +11946,7 @@ async function runSelfTest() {
           connectTimeout.delayMs
         ].join('|');
       })(),
-      want: 'true|1234|true|stamina-budget-coin-leave|1800000|true|injury-leave|1234|true|pursuit-leave|1234|true|combat-hp-disadvantage-leave|1234|true|ws-closed|1000|true|ws-closed|1000|false|true|true|true|ws-auth-blocked-self-present|1000|true|60000|true|ws-connect-timeout|1000'
+      want: 'true|1234|true|stamina-budget-coin-leave|1800000|true|stamina-exhausted-leave|600000|true|injury-leave|1234|true|pursuit-leave|1234|true|combat-hp-disadvantage-leave|1234|true|ws-closed|1000|true|ws-closed|1000|false|true|true|true|ws-auth-blocked-self-present|1000|true|60000|true|ws-connect-timeout|1000'
     },
     {
       name: 'browserless runner best-effort shutdown leave hydrates persisted session',

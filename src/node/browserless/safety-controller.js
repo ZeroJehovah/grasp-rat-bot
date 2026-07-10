@@ -54,6 +54,7 @@ function decisionSafetyDetail(decision) {
     self: action.self || decision?.input?.self || null,
     target: action.target || decision?.combat?.target || null,
     staminaBudgetExit: action.staminaBudgetExit || null,
+    staminaExhausted: action.staminaExhausted || null,
     reloginDelayMs: action.reloginDelayMs ?? action.staminaBudgetExit?.reloginDelayMs ?? null,
     staminaBlocked: action.staminaBlocked || null,
     combat: decision?.combat ? {

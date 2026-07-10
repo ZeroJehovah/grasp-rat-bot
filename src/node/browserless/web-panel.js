@@ -157,6 +157,7 @@ function renderBrowserlessWebPanel() {
       'pursuit-leave': '被持续追击，退出',
       'profit-live-snapshot-active-threat': '附近有危险玩家，退出',
       'stamina-budget-coin-leave': '体力不足，退出等待恢复',
+      'stamina-exhausted-leave': '体力耗尽，退出等待恢复',
       'wait-for-full-stamina-and-hp': '等待血量和体力恢复',
       'move-to-target': '向目标移动',
       'no-opportunistic-shot': '没有顺手开火目标',

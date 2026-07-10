@@ -78,6 +78,8 @@ const DEFAULT_RECOVERY_COIN_MAX_DISTANCE = BROWSER_RUNTIME_DEFAULTS.recoveryCoin
 const DEFAULT_RECOVERY_PLAYER_DROP_MIN_AMOUNT = 2;
 const DEFAULT_POST_ATTACK_RECOVERY_DROP_MAX_DISTANCE = BROWSER_RUNTIME_DEFAULTS.postAttackRecoveryDropMaxDistance;
 const DEFAULT_STAMINA_BUDGET_RELOGIN_DELAY_MS = BROWSER_RUNTIME_DEFAULTS.staminaBudgetReloginDelayMs;
+const DAY_MS = 24 * 60 * 60 * 1000;
+const UTC8_OFFSET_MS = 8 * 60 * 60 * 1000;
 
 function buildBrowserlessRuntimeDefaults(config = {}) {
   return buildRuntimeDefaults(config, false);
@@ -1012,7 +1014,7 @@ function staminaRemaining(self, windowName) {
 }
 
 function staminaExhaustedThreshold(options = {}) {
-  return Math.max(0, Number(options.staminaExhaustedThresholdMs ?? BROWSER_RUNTIME_DEFAULTS.staminaExhaustedThresholdMs ?? 1000));
+  return Math.max(0, Number(options.staminaExhaustedBelowMs ?? options.staminaExhaustedThresholdMs ?? BROWSER_RUNTIME_DEFAULTS.staminaExhaustedThresholdMs ?? 1000));
 }
 
 function opportunityWindowStaminaBudget(self, windowName, options = {}) {
@@ -1029,6 +1031,22 @@ function opportunityLongStaminaBudget(self, options = {}) {
     .filter(value => Number.isFinite(value));
   if (!values.length) return Infinity;
   return Math.min(...values);
+}
+
+function dailyStaminaWindowStartAt(t = Date.now()) {
+  return Math.floor((Number(t) + UTC8_OFFSET_MS) / DAY_MS) * DAY_MS - UTC8_OFFSET_MS;
+}
+
+function nextDailyStaminaResetAt(t = Date.now()) {
+  return dailyStaminaWindowStartAt(t) + DAY_MS;
+}
+
+function staminaBudgetReloginDelayMs(options = {}) {
+  return Math.max(1000, Number(options.staminaBudgetReloginDelayMs ?? DEFAULT_STAMINA_BUDGET_RELOGIN_DELAY_MS));
+}
+
+function staminaResetGraceMs(options = {}) {
+  return Math.max(0, Number(options.staminaResetGraceMs ?? BROWSER_RUNTIME_DEFAULTS.staminaResetGraceMs ?? 0));
 }
 
 function opportunityStaminaAffordable(self, staminaCost, options = {}) {
@@ -1342,7 +1360,7 @@ function buildStaminaBudgetExitDecision(input, options = {}) {
     budget: opportunityWindowStaminaBudget(input.self, '1h', options),
     dist: distanceBetween,
     coinStaminaCost: coin => opportunityCoinStaminaCost(coin, options),
-    reloginDelayMs: options.staminaBudgetReloginDelayMs ?? DEFAULT_STAMINA_BUDGET_RELOGIN_DELAY_MS
+    reloginDelayMs: staminaBudgetReloginDelayMs(options)
   });
   if (!exit) return null;
   return {
@@ -1352,7 +1370,44 @@ function buildStaminaBudgetExitDecision(input, options = {}) {
     shouldLeave: true,
     stopMotion: true,
     staminaBudgetExit: exit,
-    reloginDelayMs: exit.reloginDelayMs ?? options.staminaBudgetReloginDelayMs ?? DEFAULT_STAMINA_BUDGET_RELOGIN_DELAY_MS,
+    reloginDelayMs: exit.reloginDelayMs ?? staminaBudgetReloginDelayMs(options),
+    self: summarizeTarget(input.self)
+  };
+}
+
+function buildLongStaminaExhaustedLeaveDecision(input, options = {}) {
+  if (!input?.self) return null;
+  const thresholdMs = staminaExhaustedThreshold(options);
+  const remaining = {
+    '1h': staminaRemaining(input.self, '1h'),
+    '1d': staminaRemaining(input.self, '1d')
+  };
+  const exhausted = Object.entries(remaining)
+    .filter(([, value]) => value !== null && value < thresholdMs)
+    .map(([key]) => key);
+  if (!exhausted.length) return null;
+
+  const nowMs = Number.isFinite(Number(input.nowMs)) ? Number(input.nowMs) : Date.now();
+  const resetAt = exhausted.includes('1d') ? nextDailyStaminaResetAt(nowMs) : 0;
+  const fixedDelayMs = exhausted.includes('1h') ? staminaBudgetReloginDelayMs(options) : 0;
+  const resetDelayMs = resetAt ? Math.max(0, resetAt + staminaResetGraceMs(options) - nowMs) : 0;
+  const reloginDelayMs = Math.max(fixedDelayMs, resetDelayMs, 1000);
+  return {
+    kind: 'leave',
+    band: 'safety',
+    reason: 'stamina-exhausted-leave',
+    shouldLeave: true,
+    stopMotion: true,
+    reloginDelayMs,
+    staminaExhausted: {
+      exhausted,
+      thresholdMs,
+      remaining1h: remaining['1h'],
+      remaining1d: remaining['1d'],
+      resetAt,
+      fixedDelayMs,
+      reloginDelayMs
+    },
     self: summarizeTarget(input.self)
   };
 }
@@ -2577,6 +2632,9 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
   const pursuitLeaveAction = input.self && !realtimeStale
     ? buildBrowserlessPursuitLeaveDecision(input, stateful, combat, safetyContextOptions)
     : null;
+  const longStaminaExhaustedLeaveAction = input.self && !realtimeStale
+    ? buildLongStaminaExhaustedLeaveDecision(input, options)
+    : null;
   const hardSafetyAction = safetyActionIsHardLeave(safetyAction) ? safetyAction : null;
   const combatExitAction = combat.exitAction || null;
   const safetyYieldsToHighValueCoin = Boolean(
@@ -2626,6 +2684,11 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     band = hardSafetyAction.band;
     reason = hardSafetyAction.reason;
     action = hardSafetyAction;
+  } else if (longStaminaExhaustedLeaveAction) {
+    kind = longStaminaExhaustedLeaveAction.kind;
+    band = longStaminaExhaustedLeaveAction.band;
+    reason = longStaminaExhaustedLeaveAction.reason;
+    action = longStaminaExhaustedLeaveAction;
   } else if (combatExitAction) {
     kind = combatExitAction.kind;
     band = combatExitAction.band;
