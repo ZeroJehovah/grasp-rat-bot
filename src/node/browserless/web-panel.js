@@ -448,6 +448,7 @@ function renderBrowserlessWebPanel() {
         ['登录点', loginPointText(s)],
         ['原因', s.game?.inGame ? '当前已连入游戏' : reasonText(s.loginPointSafety?.reason)],
         ['检查时间', stamp(s.loginPointSafety?.checkedAt)],
+        ['最近阻止', reasonText(s.recentBlock?.reason)],
         ['最近退出', reasonText(s.recentExit?.reason)]
       ]);
       rows('lastRun', [

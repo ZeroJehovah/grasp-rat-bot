@@ -12113,7 +12113,7 @@ async function runSelfTest() {
               target: { type: 'coin', id: 'coin-1', amount: 8, distance: 450 }
             }
           },
-          recentExits: [{ reason: 'older' }, { reason: 'latest' }]
+          recentExits: [{ reason: 'older' }, { reason: 'latest' }, { reason: 'blocked-login', shouldLeave: false }]
         }, { updatedAt: '2026-07-08T00:00:01.000Z' });
         const stored = readBrowserlessStateFile(file);
         const publicStatus = buildPublicBrowserlessStatus(stored, config);
@@ -12195,6 +12195,7 @@ async function runSelfTest() {
           compactStatus.profit.best.target.amount,
           compactStatus.combat.target.name,
           compactStatus.recentExit.reason,
+          compactStatus.recentBlock.reason,
           compactStatus.runner.lastRun.frames,
           Boolean(compactStatus.probes),
           Boolean(compactStatus.current),
@@ -12203,7 +12204,7 @@ async function runSelfTest() {
           compactText.length < publicText.length / 10
         ].join('|');
       }),
-      want: 'true|77|true|true|true|true|true|false|loop-wait|88|360000|seek-coin|8|7|enemy|latest|123|false|false|false|false|true'
+      want: 'true|77|true|true|true|true|true|false|loop-wait|88|360000|seek-coin|8|7|enemy|latest|blocked-login|123|false|false|false|false|true'
     },
     {
       name: 'browserless state file replaces current action snapshots',

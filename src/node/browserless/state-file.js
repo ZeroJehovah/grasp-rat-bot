@@ -445,7 +445,8 @@ function compactExit(event) {
   return {
     at: compactString(event.at || event.time || event.createdAt, 48),
     reason: compactString(event.reason || event.type, 120),
-    runId: compactString(event.runId || event.detail?.runId, 96)
+    runId: compactString(event.runId || event.detail?.runId, 96),
+    shouldLeave: event.shouldLeave === undefined ? null : Boolean(event.shouldLeave)
   };
 }
 
@@ -514,6 +515,8 @@ function buildCompactBrowserlessStatus(state, config = {}) {
   const current = normalized.current || {};
   const action = compactAction(normalized.runner.currentAction) || compactAction(current.action);
   const recentExits = Array.isArray(normalized.recentExits) ? normalized.recentExits : [];
+  const recentActualExit = recentExits.slice().reverse().find(event => event?.shouldLeave !== false) || null;
+  const recentBlock = recentExits.slice().reverse().find(event => event?.shouldLeave === false) || null;
   const compactState = {
     schemaVersion: normalized.schemaVersion,
     compact: true,
@@ -555,7 +558,8 @@ function buildCompactBrowserlessStatus(state, config = {}) {
       lastSelectedAt: normalized.network.lastSelectedAt || '',
       lastSelectionReason: compactString(normalized.network.lastSelectionReason, 120)
     },
-    recentExit: compactExit(recentExits[recentExits.length - 1]),
+    recentExit: compactExit(recentActualExit),
+    recentBlock: compactExit(recentBlock),
     statusServer: {
       host: config.statusHost || '',
       port: Number(config.statusPort || 0),
