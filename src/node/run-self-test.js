@@ -10045,6 +10045,57 @@ async function runSelfTest() {
       want: 'false|websocket connect timeout|true|0|true|1|7|true'
     },
     {
+      name: 'browserless canary verifies leave after self-present ws 403',
+      got: (async () => {
+        let leaveCalls = 0;
+        const result = await runReadOnlyCanary({
+          gameOrigin: 'https://grasp-rat-game.h-e.top',
+          snapshotPath: '/snapshot',
+          wsPath: '/ws',
+          wsExtraQuery: 'compress=gzip%2Cdeflate',
+          userId: 7,
+          sessionToken: 'self-present-token',
+          readOnlyProbeMs: 1000,
+          wsConnectTimeoutMs: 1000,
+          httpTimeoutMs: 1000
+        }, {
+          now: () => Date.UTC(2026, 6, 8, 1, 0, 0),
+          persistedState: {
+            loginPointSafety: { point: { x: 0, y: 0, hp: 100, source: 'test' } }
+          },
+          fetchImpl: async () => fakeResponseForTest({
+            body: {
+              type: 'snapshot',
+              tick: 9,
+              entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 100, y: 200, hp: 90 }],
+              bullets: [],
+              coin_drops: [],
+              messages: []
+            }
+          }),
+          openBrowserlessWs: async () => {
+            throw new Error('websocket unexpected response 403 Forbidden content-type=text/html; charset=utf-8');
+          },
+          leaveWithVerification: async () => {
+            leaveCalls += 1;
+            return { ok: true, attempts: [{ ok: true, summary: { leaveConfirmed: true } }] };
+          }
+        });
+        return [
+          result.ok,
+          result.error.includes('403'),
+          result.snapshotSafety.ok,
+          result.snapshotSafety.reason,
+          result.snapshotSafety.response.summary.selfPresent,
+          Boolean(result.leave),
+          result.leave?.ok,
+          leaveCalls,
+          result.safety.leaveFailure === null
+        ].join('|');
+      })(),
+      want: 'false|true|true|self-present-reentry|true|true|true|1|true'
+    },
+    {
       name: 'browserless canary opens ws when snapshot self is already present near active login point',
       got: (async () => {
         let t = Date.UTC(2026, 6, 8, 1, 0, 0);
@@ -11845,6 +11896,54 @@ async function runSelfTest() {
       want: '403|10.0.0.101|false|false'
     },
     {
+      name: 'browserless source IP controller switches ws 403 before retrying',
+      got: withTempDirForTest(async dir => {
+        const stateFile = path.join(dir, 'state.json');
+        const opened = [];
+        const controller = createSourceIpController({
+          config: {
+            gameOrigin: 'https://grasp-rat-game.h-e.top',
+            sourceIps: ['10.0.0.101', '10.0.0.20'],
+            sourceIp: '10.0.0.101',
+            httpTimeoutMs: 1000
+          },
+          stateFile,
+          now: () => Date.UTC(2026, 6, 8, 1, 0, 0),
+          fetchWithTimeout: async (url, options = {}) => fakeResponseForTest({
+            status: options.localAddress === '10.0.0.101' ? 403 : 200,
+            body: 'probe'
+          }),
+          openBrowserlessWs: async options => {
+            opened.push(options.localAddress || '');
+            if (options.localAddress === '10.0.0.101') {
+              if (typeof options.onError === 'function') {
+                options.onError({
+                  message: 'websocket unexpected response 403 Forbidden',
+                  statusCode: 403
+                });
+              }
+              throw new Error('websocket unexpected response 403 Forbidden');
+            }
+            return { isOpen: () => true, close: () => {} };
+          }
+        });
+        const transport = await controller.openBrowserlessWs({
+          gameOrigin: 'https://grasp-rat-game.h-e.top',
+          wsPath: '/ws'
+        });
+        const state = readBrowserlessStateFile(stateFile);
+        return [
+          transport.isOpen(),
+          opened.join(','),
+          controller.currentSourceIp(),
+          Boolean(state.network.lastSwitch?.switched),
+          state.network.lastSwitch?.from,
+          state.network.lastSwitch?.to
+        ].join('|');
+      }),
+      want: 'true|10.0.0.101,10.0.0.20|10.0.0.20|true|10.0.0.101|10.0.0.20'
+    },
+    {
       name: 'browserless runner loop plan retries non-explicit failures',
       got: (() => {
         const config = { once: false, loopDelayMs: 1234 };
@@ -11974,6 +12073,17 @@ async function runSelfTest() {
             error: 'snapshot safety not confirmed: unsafe'
           }
         }, config);
+        const inGameSnapshotRetry = browserlessLoopPlan({
+          ok: false,
+          canary: {
+            runId: 'in-game-snapshot-403-test',
+            error: 'snapshot safety not confirmed: snapshot-http-403',
+            recovery: {
+              inGameEvidence: true,
+              reason: 'realtime-self-observed'
+            }
+          }
+        }, config);
         const connectTimeout = browserlessLoopPlan({
           ok: false,
           canary: {
@@ -12014,12 +12124,15 @@ async function runSelfTest() {
           auth403SelfPresent.delayMs,
           snapshotRetry.continue,
           snapshotRetry.delayMs,
+          inGameSnapshotRetry.continue,
+          inGameSnapshotRetry.reason,
+          inGameSnapshotRetry.delayMs,
           connectTimeout.continue,
           connectTimeout.reason,
           connectTimeout.delayMs
         ].join('|');
       })(),
-      want: 'true|1234|true|stamina-budget-coin-leave|1800000|true|stamina-exhausted-leave|600000|true|injury-leave|1234|true|pursuit-leave|1234|true|combat-hp-disadvantage-leave|1234|true|ws-closed|1000|true|ws-closed|1000|false|true|true|true|ws-auth-blocked-self-present|1000|true|60000|true|ws-connect-timeout|1000'
+      want: 'true|1234|true|stamina-budget-coin-leave|1800000|true|stamina-exhausted-leave|600000|true|injury-leave|1234|true|pursuit-leave|1234|true|combat-hp-disadvantage-leave|1234|true|ws-closed|1000|true|ws-closed|1000|false|true|true|true|ws-auth-blocked-self-present|1000|true|60000|true|in-game-snapshot-safety-retry|1000|true|ws-connect-timeout|1000'
     },
     {
       name: 'browserless runner best-effort shutdown leave hydrates persisted session',

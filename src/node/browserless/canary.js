@@ -32,6 +32,11 @@ function snapshotSafetySelfPresent(snapshotSafety) {
   return Boolean(snapshotSafety?.response?.summary?.selfPresent);
 }
 
+function snapshotSafetySelfAbsent(snapshotSafety) {
+  const summary = snapshotSafety?.response?.summary;
+  return Boolean(summary?.valid && summary.selfPresent === false);
+}
+
 function allowSelfPresentSnapshotControl(snapshotSafety) {
   if (!snapshotSafety || snapshotSafety.ok || !snapshotSafetySelfPresent(snapshotSafety)) return snapshotSafety;
   return {
@@ -45,6 +50,69 @@ function allowSelfPresentSnapshotControl(snapshotSafety) {
 
 function errorMessage(error) {
   return error?.message || String(error || 'unknown error');
+}
+
+function canaryLeaveConfirmed(canary) {
+  return Boolean(canary?.leave?.ok || canary?.safety?.exit?.leave?.ok);
+}
+
+function inGameRecoveryEvidenceFromCanary(canary) {
+  if (!canary || canaryLeaveConfirmed(canary)) return null;
+  if (canary.recovery?.inGameEvidence) {
+    return {
+      reason: canary.recovery.reason || 'inherited-in-game-evidence',
+      source: canary.recovery.source || 'previous-canary',
+      previousRunId: canary.recovery.previousRunId || canary.runId || ''
+    };
+  }
+  if (snapshotSafetySelfPresent(canary.snapshotSafety)) {
+    return {
+      reason: 'snapshot-self-present',
+      source: 'snapshot-safety',
+      previousRunId: canary.runId || ''
+    };
+  }
+  if (Number(canary.stats?.selfPresent?.true || 0) > 0) {
+    return {
+      reason: 'realtime-self-observed',
+      source: 'realtime-frames',
+      previousRunId: canary.runId || ''
+    };
+  }
+  if (canary.entry?.firstSelf) {
+    return {
+      reason: 'entry-self-observed',
+      source: 'entry-first-self',
+      previousRunId: canary.runId || ''
+    };
+  }
+  if (canary.safety?.leaveFailure || canary.safety?.event?.reason === 'direct-leave-failed') {
+    return {
+      reason: 'leave-not-confirmed',
+      source: 'leave-failure',
+      previousRunId: canary.runId || ''
+    };
+  }
+  return null;
+}
+
+function canaryEvidenceTimeMs(canary) {
+  const value = canary?.completedAt || canary?.startedAt || '';
+  const time = Date.parse(value);
+  return Number.isFinite(time) ? time : 0;
+}
+
+function inGameRecoveryEvidenceFromState(state) {
+  const candidates = [
+    state?.runner?.lastRun?.canary || null,
+    state?.probes?.lastReadOnlyProbe || null
+  ].filter(Boolean).sort((a, b) => canaryEvidenceTimeMs(b) - canaryEvidenceTimeMs(a));
+  for (const canary of candidates) {
+    const evidence = inGameRecoveryEvidenceFromCanary(canary);
+    if (evidence) return evidence;
+    if (canaryLeaveConfirmed(canary)) break;
+  }
+  return null;
 }
 
 function createCanaryRunId(mode, startedAtMs) {
@@ -280,6 +348,7 @@ async function runReadOnlyCanary(config, options = {}) {
   };
   const startedAt = now();
   const runId = String(options.runId || createCanaryRunId(controlMode, startedAt));
+  const previousInGameEvidence = inGameRecoveryEvidenceFromState(options.persistedState || {});
   const result = {
     ok: false,
     runId,
@@ -318,6 +387,13 @@ async function runReadOnlyCanary(config, options = {}) {
       firstSelf: null,
       firstSelfAt: '',
       firstSelfTick: null
+    },
+    recovery: {
+      inGameEvidence: Boolean(previousInGameEvidence),
+      reason: previousInGameEvidence?.reason || '',
+      source: previousInGameEvidence?.source || '',
+      previousRunId: previousInGameEvidence?.previousRunId || '',
+      clearedBy: ''
     },
     leave: null,
     targetWhitelist: targetWhitelistSummary,
@@ -406,6 +482,16 @@ async function runReadOnlyCanary(config, options = {}) {
   result.snapshotSafety = allowSelfPresentSnapshotControl(result.snapshotSafety);
   if (result.snapshotSafety?.bypassedPreLoginSafety) {
     log('canary-snapshot-self-present-reentry', result.snapshotSafety);
+  }
+  if (snapshotSafetySelfAbsent(result.snapshotSafety) && result.recovery.inGameEvidence) {
+    result.recovery = {
+      ...result.recovery,
+      inGameEvidence: false,
+      clearedBy: 'snapshot-self-absent'
+    };
+    log('canary-recovery-cleared', result.recovery);
+  } else if (result.recovery.inGameEvidence) {
+    log('canary-recovery-in-game-evidence', result.recovery);
   }
   if (!result.snapshotSafety.ok) {
     if (options.allowMissingLoginPointBootstrap && result.snapshotSafety.reason === 'missing-login-point') {

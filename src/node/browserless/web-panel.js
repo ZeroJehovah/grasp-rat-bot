@@ -180,6 +180,7 @@ function renderBrowserlessWebPanel() {
       'self-test': '测试',
       'login-point-bootstrap-failed': '登录点检查失败',
       'snapshot-safety-retry': '重新检查登录点安全',
+      'in-game-snapshot-safety-retry': '可能仍在游戏中，快速重连',
       'unsupported-control-mode': '当前方式不支持',
       'unknown-error': '出现异常'
     };

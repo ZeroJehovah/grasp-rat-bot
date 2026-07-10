@@ -170,6 +170,14 @@ function browserlessLoopPlan(result, config = {}) {
   const error = String(canary?.error || result?.reason || result?.error || '');
   const runId = canary?.runId || '';
   const snapshotSelfPresent = Boolean(canary?.snapshotSafety?.response?.summary?.selfPresent);
+  const inGameRecoveryEvidence = Boolean(
+    canary?.recovery?.inGameEvidence
+      || snapshotSelfPresent
+      || Number(canary?.stats?.selfPresent?.true || 0) > 0
+      || canary?.entry?.firstSelf
+      || safetyReason === 'direct-leave-failed'
+      || canary?.safety?.leaveFailure
+  );
   const delayMs = Math.max(1000, Number(config.loopDelayMs || 30000));
   const fastDelayMs = 1000;
   const stop = reason => ({
@@ -239,7 +247,10 @@ function browserlessLoopPlan(result, config = {}) {
     return resume(safetyReason);
   }
   if (/^websocket connect timeout$/i.test(error)) return resumeFast('ws-connect-timeout');
-  if (/^snapshot safety not confirmed:/i.test(error)) return resume('snapshot-safety-retry');
+  if (/^snapshot safety not confirmed:/i.test(error)) {
+    if (inGameRecoveryEvidence) return resumeFast('in-game-snapshot-safety-retry');
+    return resume('snapshot-safety-retry');
+  }
   return resume(error || safetyReason || 'unknown-error');
 }
 
