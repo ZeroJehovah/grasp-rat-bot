@@ -362,6 +362,7 @@ function renderBrowserlessWebPanel() {
       return null;
     }
     function loginPointText(status) {
+      if (status.game?.inGame) return '已在游戏中';
       if (status.loginPointSafety?.ok) return '安全';
       const reason = String(status.loginPointSafety?.reason || '');
       if (/pending|retry|snapshot|check/i.test(reason)) return '检查中';
@@ -445,7 +446,7 @@ function renderBrowserlessWebPanel() {
       ]);
       rows('safety', [
         ['登录点', loginPointText(s)],
-        ['原因', reasonText(s.loginPointSafety?.reason)],
+        ['原因', s.game?.inGame ? '当前已连入游戏' : reasonText(s.loginPointSafety?.reason)],
         ['检查时间', stamp(s.loginPointSafety?.checkedAt)],
         ['最近退出', reasonText(s.recentExit?.reason)]
       ]);
