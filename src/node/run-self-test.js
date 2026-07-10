@@ -114,7 +114,8 @@ const {
   startStatusServer
 } = require('./browserless/status-server');
 const {
-  BROWSERLESS_WEB_PANEL_VERSION
+  BROWSERLESS_WEB_PANEL_VERSION,
+  renderBrowserlessWebPanel
 } = require('./browserless/web-panel');
 const {
   createSourceIpController
@@ -13270,6 +13271,24 @@ async function runSelfTest() {
         }
       })(),
       want: '401|200|true|true|true|200|true|12|true|true|true|200|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|200|true|1'
+    },
+    {
+      name: 'browserless web panel renders explicit login point safety result',
+      got: (() => {
+        const panelText = renderBrowserlessWebPanel();
+        const panelScript = panelText.match(/<script>([\s\S]*?)<\/script>/)?.[1] || '';
+        return [
+          /function loginPointDisplay/.test(panelScript),
+          /return loginPointDisplay\(status\)\.text/.test(panelScript),
+          !/return '检查中'/.test(panelScript),
+          panelScript.includes("'安全 ' + loginPointProgressText(status, true)"),
+          panelScript.includes("return coord(point.x) + ', ' + coord(point.y);"),
+          panelScript.includes("translated === '安全'"),
+          /loginPointDisplay\(status\)\.state === 'safe'/.test(panelScript),
+          /loginDisplay\.state === 'safe'/.test(panelScript)
+        ].join('|');
+      })(),
+      want: 'true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless runner self-test passes',

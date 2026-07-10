@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.10.12';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.10.13';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function renderBrowserlessWebPanel() {
@@ -373,10 +373,9 @@ function renderBrowserlessWebPanel() {
       return classAttrs('ok');
     }
     function loginPointAttrs(status) {
-      const text = loginPointText(status);
-      if (/^安全/.test(text)) return classAttrs('ok');
-      if (/检查/.test(text)) return classAttrs('info');
-      if (/不安全/.test(text)) return classAttrs('bad');
+      const display = loginPointDisplay(status);
+      if (display.state === 'safe') return classAttrs('ok');
+      if (display.state === 'unsafe') return classAttrs('bad');
       return classAttrs('warn');
     }
     function targetLabel(target) {
@@ -398,7 +397,7 @@ function renderBrowserlessWebPanel() {
     }
     function pointCoordText(point) {
       if (!point || (number(point.x) === null && number(point.y) === null)) return '--';
-      return '(' + coord(point.x) + ', ' + coord(point.y) + ')';
+      return coord(point.x) + ', ' + coord(point.y);
     }
     function positionText(status) {
       if (status.game?.inGame) return pointText(status.self);
@@ -437,6 +436,8 @@ function renderBrowserlessWebPanel() {
       'auth-token-invalid': '登录信息失效，需要重新授权',
       'unsafe-login-point': '登录点不安全',
       'snapshot safety not confirmed: active-near-login-point': '登录点附近有危险玩家，暂不进入',
+      'snapshot-safety-streak-pending': '登录点已安全，等待连续确认',
+      'snapshot-safety-streak-missing': '缺少登录点安全结果',
       'missing-manual-session': '等待登录信息',
       'missing-login-point': '缺少登录点坐标',
       'missing-snapshot-tick': '快照缺少时间戳',
@@ -734,19 +735,45 @@ function renderBrowserlessWebPanel() {
       if ((kind === 'attack' || kind === 'combat-live') && status.combat?.target) return status.combat.target;
       return null;
     }
-    function loginPointText(status) {
-      if (status.game?.inGame) return '--';
+    function loginPointRequired(status) {
       const detail = status.loginPointSafety?.detail || {};
-      const streak = number(detail.streak ?? status.loginPointSafety?.streak);
       const required = number(detail.required ?? status.loginPointSafety?.required);
-      const progress = required !== null && required > 0
-        ? ' ' + String(streak === null ? (status.loginPointSafety?.ok ? required : 0) : Math.min(required, Math.max(0, Math.round(streak)))) + '/' + String(Math.round(required))
-        : '';
-      if (status.loginPointSafety?.ok) return '安全' + progress;
+      return required !== null && required > 0 ? Math.max(1, Math.round(required)) : 3;
+    }
+    function loginPointProgressText(status, safeLike = false) {
+      const detail = status.loginPointSafety?.detail || {};
+      const required = loginPointRequired(status);
+      const rawStreak = number(detail.streak ?? status.loginPointSafety?.streak);
+      let streak = rawStreak === null
+        ? (status.loginPointSafety?.ok ? required : (safeLike ? 1 : 0))
+        : Math.round(rawStreak);
+      if (status.loginPointSafety?.ok) streak = Math.max(streak, required);
+      if (safeLike && streak <= 0) streak = 1;
+      streak = Math.min(required, Math.max(0, streak));
+      return String(streak) + '/' + String(required);
+    }
+    function loginPointDisplay(status) {
+      if (status.game?.inGame) return { state: 'none', text: '--' };
+      const detail = status.loginPointSafety?.detail || {};
       const reason = String(status.loginPointSafety?.reason || '');
-      if (/pending|retry|snapshot|check/i.test(reason)) return '检查中';
-      if (/unsafe|active|threat|danger/i.test(reason)) return '不安全';
-      return '未确认';
+      const detailReason = String(detail.reason || '');
+      const originalReason = String(detail.originalReason || '');
+      const reasonText = [reason, detailReason, originalReason].join(' ');
+      const safeReason = /^safe$/i.test(detailReason) || /^safe$/i.test(originalReason);
+      const streak = number(detail.streak ?? status.loginPointSafety?.streak);
+      const safeLike = Boolean(
+        status.loginPointSafety?.ok === true
+          || detail.ok === true
+          || safeReason
+          || (streak !== null && streak > 0 && /pending|streak/i.test(reasonText))
+      );
+      if (safeLike) {
+        return { state: 'safe', text: '安全 ' + loginPointProgressText(status, true) };
+      }
+      return { state: 'unsafe', text: '不安全' };
+    }
+    function loginPointText(status) {
+      return loginPointDisplay(status).text;
     }
     function freshnessText(detail) {
       const fresh = detail?.freshness || null;
@@ -769,9 +796,12 @@ function renderBrowserlessWebPanel() {
       return parts.length ? parts.join(' / ') : '--';
     }
     function unsafeReasonText(status) {
-      if (status.game?.inGame || status.loginPointSafety?.ok) return '--';
+      if (status.game?.inGame || loginPointDisplay(status).state === 'safe') return '--';
       const detail = status.loginPointSafety?.detail || {};
-      return reasonText(detail.unsafeReason || detail.reason || status.loginPointSafety?.reason);
+      const raw = detail.unsafeReason || detail.reason || status.loginPointSafety?.reason;
+      if (!raw || /^safe$/i.test(String(raw)) || /pending-snapshot-safety|snapshot-safety-streak-pending/i.test(String(raw))) return '--';
+      const translated = reasonText(raw);
+      return translated === '安全' ? '--' : translated;
     }
     function actionText(status) {
       const decision = status.decision || {};
@@ -989,10 +1019,11 @@ function renderBrowserlessWebPanel() {
       }
 
       if (!online && isSafetyStatus(status, kind, reason)) {
+        const loginDisplay = loginPointDisplay(status);
         addRow(rowsOut, '登录点', loginPointText(status), false, loginPointAttrs(status));
         addRow(rowsOut, '登录点坐标', pointCoordText(status.loginPointSafety?.point));
         addRow(rowsOut, '不安全原因', unsafeReasonText(status));
-        addRow(rowsOut, '附近危险', status.loginPointSafety?.ok ? '--' : targetLabel(status.loginPointSafety?.detail?.nearestActive));
+        addRow(rowsOut, '附近危险', loginDisplay.state === 'safe' ? '--' : targetLabel(status.loginPointSafety?.detail?.nearestActive));
         addRow(rowsOut, '检查时间', fullStamp(status.loginPointSafety?.checkedAt || status.loginPointSafety?.detail?.checkedAt));
       }
 
