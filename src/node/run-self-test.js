@@ -12287,6 +12287,7 @@ async function runSelfTest() {
           const compactText = await compact.text();
           const compactBody = JSON.parse(compactText);
           const panel = await fetch(`${base}/?token=test-token`);
+          const panelText = await panel.text();
           const stop = await fetch(`${base}/api/stop`, {
             method: 'POST',
             headers: { authorization: 'Bearer test-token' }
@@ -12301,7 +12302,8 @@ async function runSelfTest() {
             compactBody.self.hp,
             !compactText.includes('must-not-leak'),
             panel.status,
-            /抓鼠助手/.test(await panel.text()),
+            /抓鼠助手/.test(panelText),
+            !panelText.includes('需要查看日志'),
             stop.status,
             JSON.parse(await stop.text()).stopped,
             stopCalled
@@ -12310,7 +12312,7 @@ async function runSelfTest() {
           await handle.close();
         }
       })(),
-      want: '401|200|true|true|200|true|12|true|200|true|200|true|1'
+      want: '401|200|true|true|200|true|12|true|200|true|true|200|true|1'
     },
     {
       name: 'browserless runner self-test passes',
