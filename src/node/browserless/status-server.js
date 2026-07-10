@@ -1,6 +1,7 @@
 'use strict';
 
 const http = require('http');
+const { buildCompactBrowserlessStatus } = require('./state-file');
 const { redactStructuredSecrets } = require('./session-client');
 const { renderBrowserlessWebPanel } = require('./web-panel');
 
@@ -64,7 +65,15 @@ function createStatusServer(options = {}) {
         return;
       }
       if (req.method === 'GET' && parsed.pathname === '/api/status') {
+        if (/^(1|true|yes)$/i.test(parsed.searchParams.get('compact') || '')) {
+          sendJson(res, 200, buildCompactBrowserlessStatus(getStatus()));
+          return;
+        }
         sendJson(res, 200, redactStructuredSecrets(getStatus()));
+        return;
+      }
+      if (req.method === 'GET' && parsed.pathname === '/api/panel-status') {
+        sendJson(res, 200, buildCompactBrowserlessStatus(getStatus()));
         return;
       }
       if (req.method === 'POST' && parsed.pathname === '/api/auth-url') {

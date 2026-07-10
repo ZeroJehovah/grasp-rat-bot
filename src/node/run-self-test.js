@@ -100,6 +100,7 @@ const {
   gracefulShutdownLeave
 } = require('../../scripts/browserless-runner');
 const {
+  buildCompactBrowserlessStatus,
   buildPublicBrowserlessStatus,
   readBrowserlessStateFile,
   stateFilePath,
@@ -12045,6 +12046,104 @@ async function runSelfTest() {
       want: 'state-secret-token|77|true|true|false|self|test-exit'
     },
     {
+      name: 'browserless compact status keeps panel fields and omits large diagnostics',
+      got: withTempDirForTest(async dir => {
+        const config = parseBrowserlessRunnerArgs(['--data-dir', dir, '--web-token', 'web-secret'], {});
+        const file = stateFilePath(config);
+        const largePayload = 'x'.repeat(20000);
+        updateBrowserlessStateFile(file, {
+          session: {
+            userId: 77,
+            sessionToken: 'state-secret-token',
+            tokenUpdatedAt: '2026-07-08T00:00:00.000Z'
+          },
+          runner: {
+            running: true,
+            mode: 'profit-live',
+            controlMode: 'profit-live',
+            currentAction: {
+              kind: 'seek-coin',
+              reason: 'best-opportunity-coin',
+              target: { type: 'coin', id: 'coin-1', amount: 8, distance: 450 }
+            },
+            lastRun: {
+              ok: true,
+              canary: {
+                runId: 'profit-live-test',
+                stats: { frameCount: 123 },
+                decisions: { evaluatedCount: 9 },
+                actions: { sentCount: 8 },
+                snapshotSafety: { response: { raw: largePayload } }
+              }
+            }
+          },
+          probes: {
+            lastReadOnlyProbe: {
+              state: {
+                realtime: { raw: largePayload }
+              }
+            }
+          },
+          current: {
+            self: { name: 'self', hp: 88, x: 10, y: 20, drop: 11 },
+            stamina: {
+              stamina5sRemainingMilli: 5000,
+              stamina1hRemainingMilli: 360000,
+              stamina1dRemainingMilli: 7200000,
+              staminaSpent: 12000
+            },
+            profit: {
+              best: {
+                actionKind: 'seek-coin',
+                reason: 'best-opportunity-coin',
+                score: 1.5,
+                coin: { type: 'coin', id: 'coin-2', amount: 7, distance: 320 }
+              },
+              candidates: [{ id: 1 }, { id: 2 }]
+            },
+            combatSummary: {
+              ok: true,
+              liveEnabled: true,
+              target: { userId: 88, name: 'enemy', hp: 44, drop: 9, distance: 800 },
+              candidates: [{ userId: 88 }]
+            },
+            action: {
+              kind: 'seek-coin',
+              reason: 'best-opportunity-coin',
+              target: { type: 'coin', id: 'coin-1', amount: 8, distance: 450 }
+            }
+          },
+          recentExits: [{ reason: 'older' }, { reason: 'latest' }]
+        }, { updatedAt: '2026-07-08T00:00:01.000Z' });
+        const stored = readBrowserlessStateFile(file);
+        const publicStatus = buildPublicBrowserlessStatus(stored, config);
+        const compactStatus = buildCompactBrowserlessStatus(stored, config);
+        const compactFromPublic = buildCompactBrowserlessStatus(publicStatus, config);
+        const compactText = JSON.stringify(compactStatus);
+        const publicText = JSON.stringify(publicStatus);
+        return [
+          compactStatus.compact,
+          compactStatus.session.userId,
+          compactFromPublic.session.authenticated,
+          compactFromPublic.session.tokenPresent,
+          compactStatus.self.hp,
+          compactStatus.stamina.remaining1h,
+          compactStatus.action.kind,
+          compactStatus.action.target.amount,
+          compactStatus.profit.best.target.amount,
+          compactStatus.combat.target.name,
+          compactStatus.recentExit.reason,
+          compactStatus.runner.lastRun.frames,
+          Boolean(compactStatus.probes),
+          Boolean(compactStatus.current),
+          Boolean(compactStatus.recentExits),
+          compactText.includes('state-secret-token'),
+          compactText.length < publicText.length / 10
+        ].join('|');
+      }),
+      want: 'true|77|true|true|88|360000|seek-coin|8|7|enemy|latest|123|false|false|false|false|true'
+    },
+    {
       name: 'browserless state file replaces current action snapshots',
       got: withTempDirForTest(async dir => {
         const config = parseBrowserlessRunnerArgs(['--data-dir', dir], {});
@@ -12161,8 +12260,17 @@ async function runSelfTest() {
           getStatus: () => ({
             ok: true,
             session: {
+              userId: 77,
               tokenPresent: true,
               sessionToken: 'must-not-leak'
+            },
+            runner: {
+              running: true,
+              currentAction: { kind: 'wait', reason: 'self-test' }
+            },
+            current: {
+              self: { name: 'self', hp: 12 },
+              stamina: { stamina1hRemainingMilli: 123000 }
             }
           }),
           onStop: async () => {
@@ -12175,6 +12283,9 @@ async function runSelfTest() {
           const denied = await fetch(`${base}/api/status`);
           const allowed = await fetch(`${base}/api/status?token=test-token`);
           const allowedText = await allowed.text();
+          const compact = await fetch(`${base}/api/panel-status?token=test-token`);
+          const compactText = await compact.text();
+          const compactBody = JSON.parse(compactText);
           const panel = await fetch(`${base}/?token=test-token`);
           const stop = await fetch(`${base}/api/stop`, {
             method: 'POST',
@@ -12185,6 +12296,10 @@ async function runSelfTest() {
             allowed.status,
             JSON.parse(allowedText).session.tokenPresent,
             !allowedText.includes('must-not-leak'),
+            compact.status,
+            compactBody.compact,
+            compactBody.self.hp,
+            !compactText.includes('must-not-leak'),
             panel.status,
             /Browserless Runner/.test(await panel.text()),
             stop.status,
@@ -12195,7 +12310,7 @@ async function runSelfTest() {
           await handle.close();
         }
       })(),
-      want: '401|200|true|true|200|true|200|true|1'
+      want: '401|200|true|true|200|true|12|true|200|true|200|true|1'
     },
     {
       name: 'browserless runner self-test passes',
