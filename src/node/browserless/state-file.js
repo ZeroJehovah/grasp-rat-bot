@@ -310,6 +310,16 @@ function compactAction(action) {
 function compactDecision(decision) {
   if (!decision || typeof decision !== 'object') return null;
   const dataGaps = Array.isArray(decision.input?.dataGaps) ? decision.input.dataGaps : [];
+  const kind = String(decision.kind || decision.action?.kind || '');
+  const shouldExposeProfitTarget = [
+    'coin',
+    'seek-coin',
+    'profit-candidate',
+    'attack',
+    'seek-enemy',
+    'seek-drop',
+    'post-attack-drop-wait'
+  ].includes(kind);
   return {
     kind: compactString(decision.kind, 48),
     band: compactString(decision.band, 48),
@@ -317,7 +327,7 @@ function compactDecision(decision) {
     at: compactString(decision.at, 48),
     tick: compactNumber(decision.tick),
     actionKind: compactString(decision.action?.kind, 48),
-    target: compactTarget(decision.target || decision.action?.target || decision.profit?.best?.target || decision.profit?.best?.coin),
+    target: compactTarget(decision.target || decision.action?.target || (shouldExposeProfitTarget ? (decision.profit?.best?.target || decision.profit?.best?.coin) : null)),
     dataGaps: dataGaps.slice(0, 5).map(item => compactString(item, 80)),
     dataGapCount: dataGaps.length
   };
@@ -439,6 +449,27 @@ function compactExit(event) {
   };
 }
 
+function compactGameStatus(normalized) {
+  const current = normalized.current || {};
+  const self = current.self && typeof current.self === 'object' ? current.self : null;
+  const action = normalized.runner?.currentAction || current.action || current.decision || {};
+  const kind = String(action.kind || '');
+  const reason = String(action.reason || '');
+  const waiting = ['loop-wait', 'stop', 'stopped'].includes(kind)
+    || [
+      'missing-manual-session',
+      'snapshot-safety-retry',
+      'login-point-bootstrap-failed',
+      'unsupported-control-mode'
+    ].includes(reason);
+  const selfPresent = Boolean(self?.userId || self?.entityId || self?.name);
+  return {
+    inGame: Boolean(selfPresent && !waiting),
+    selfPresent,
+    state: selfPresent && !waiting ? 'in-game' : (waiting ? 'waiting' : 'not-in-game')
+  };
+}
+
 function buildPublicBrowserlessStatus(state, config = {}) {
   const normalized = normalizeBrowserlessState(state, state?.logs?.stateFile || '');
   const publicState = {
@@ -505,6 +536,7 @@ function buildCompactBrowserlessStatus(state, config = {}) {
       currentAction: compactAction(normalized.runner.currentAction),
       lastRun: compactRun(normalized.runner.lastRun)
     },
+    game: compactGameStatus(normalized),
     self: compactSelf(current.self),
     stamina: compactStamina(current.stamina, current.self),
     decision: compactDecision(current.decision),

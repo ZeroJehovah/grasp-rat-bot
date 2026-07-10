@@ -100,7 +100,7 @@ function renderBrowserlessWebPanel() {
     if (token) localStorage.graspRatBrowserlessToken = token;
 
     const value = v => v === null || v === undefined || v === '' ? '--' : String(v);
-    const number = v => Number.isFinite(Number(v)) ? Number(v) : null;
+    const number = v => v === null || v === undefined || v === '' ? null : (Number.isFinite(Number(v)) ? Number(v) : null);
     const unit = v => {
       const n = number(v);
       return n === null ? '--' : String(Math.floor(n / 1000));
@@ -157,6 +157,7 @@ function renderBrowserlessWebPanel() {
       'pursuit-leave': '被持续追击，退出',
       'profit-live-snapshot-active-threat': '附近有危险玩家，退出',
       'stamina-budget-coin-leave': '体力不足，退出等待恢复',
+      'wait-for-full-stamina-and-hp': '等待血量和体力恢复',
       'move-to-target': '向目标移动',
       'no-opportunistic-shot': '没有顺手开火目标',
       'missing-target': '没有目标',
@@ -351,13 +352,29 @@ function renderBrowserlessWebPanel() {
       if (ok === null || ok === undefined) return '--';
       return ok ? '正常' : '异常';
     }
+    function activeTarget(status) {
+      const kind = status.decision?.kind || status.action?.kind || '';
+      const targetKinds = new Set(['coin', 'seek-coin', 'profit-candidate', 'attack', 'seek-enemy', 'seek-drop', 'combat-live', 'flee', 'leave', 'safety-exit', 'post-attack-drop-wait']);
+      if (status.action?.target) return status.action.target;
+      if (targetKinds.has(kind) && status.decision?.target) return status.decision.target;
+      if ((kind === 'attack' || kind === 'combat-live') && status.combat?.target) return status.combat.target;
+      return null;
+    }
+    function loginPointText(status) {
+      if (status.loginPointSafety?.ok) return '安全';
+      const reason = String(status.loginPointSafety?.reason || '');
+      if (/pending|retry|snapshot|check/i.test(reason)) return '检查中';
+      if (/unsafe|active|threat|danger/i.test(reason)) return '不安全';
+      return '未确认';
+    }
     function actionText(status) {
       const decision = status.decision || {};
       const action = status.action || {};
       const kind = decision.kind || action.kind || 'wait';
-      const target = decision.target || action.target || status.combat?.target || status.profit?.best?.target || null;
+      const target = activeTarget(status);
       if (kind === 'coin') return '捡金币 ' + targetLabel(target);
       if (kind === 'seek-coin') return '去捡金币 ' + targetLabel(target);
+      if (kind === 'profit-candidate') return '选择金币目标 ' + targetLabel(target);
       if (kind === 'attack' || kind === 'combat-live') return '打目标 ' + targetLabel(target);
       return kindText(kind);
     }
@@ -383,7 +400,7 @@ function renderBrowserlessWebPanel() {
       setText('drop', s.self?.drop);
       setText('mode', modeText(s.runner?.controlMode || s.runner?.mode, s.runner?.combatEnabled));
 
-      const target = s.decision?.target || s.action?.target || s.combat?.target || s.profit?.best?.target || null;
+      const target = activeTarget(s);
       rows('target', [
         ['目标', targetLabel(target)],
         ['来源', sourceText(target?.authority)],
@@ -393,6 +410,7 @@ function renderBrowserlessWebPanel() {
       rows('session', [
         ['账号', s.session?.userId],
         ['已登录', bool(s.session?.authenticated)],
+        ['游戏内', bool(s.game?.inGame)],
         ['登录信息', s.session?.tokenPresent ? '已有' : '缺失'],
         ['出口数量', s.network?.sourceIpCount],
         ['当前出口', s.network?.sourceIp]
@@ -425,7 +443,7 @@ function renderBrowserlessWebPanel() {
         ['可选目标', s.combat?.candidateCount]
       ]);
       rows('safety', [
-        ['登录点', s.loginPointSafety?.ok ? '安全' : '不安全'],
+        ['登录点', loginPointText(s)],
         ['原因', reasonText(s.loginPointSafety?.reason)],
         ['检查时间', stamp(s.loginPointSafety?.checkedAt)],
         ['最近退出', reasonText(s.recentExit?.reason)]

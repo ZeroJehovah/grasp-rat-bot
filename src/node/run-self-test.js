@@ -12119,6 +12119,41 @@ async function runSelfTest() {
         const publicStatus = buildPublicBrowserlessStatus(stored, config);
         const compactStatus = buildCompactBrowserlessStatus(stored, config);
         const compactFromPublic = buildCompactBrowserlessStatus(publicStatus, config);
+        const compactRecoverStatus = buildCompactBrowserlessStatus({
+          session: {
+            userId: 77,
+            tokenPresent: true,
+            authenticated: true
+          },
+          runner: {
+            running: true,
+            currentAction: {
+              kind: 'recover',
+              reason: 'wait-for-full-stamina-and-hp'
+            }
+          },
+          current: {
+            self: { userId: 77, name: 'self', hp: 64 },
+            stamina: {
+              stamina5sRemainingMilli: null,
+              stamina1hRemainingMilli: null,
+              stamina1dRemainingMilli: null
+            },
+            decision: {
+              kind: 'recover',
+              reason: 'wait-for-full-stamina-and-hp',
+              profit: {
+                best: {
+                  coin: { type: 'coin', id: 'stale-coin', amount: 1, distance: 22000 }
+                }
+              }
+            },
+            action: {
+              kind: 'recover',
+              reason: 'wait-for-full-stamina-and-hp'
+            }
+          }
+        }, config);
         const compactText = JSON.stringify(compactStatus);
         const publicText = JSON.stringify(publicStatus);
         return [
@@ -12126,6 +12161,9 @@ async function runSelfTest() {
           compactStatus.session.userId,
           compactFromPublic.session.authenticated,
           compactFromPublic.session.tokenPresent,
+          compactRecoverStatus.game.inGame,
+          compactRecoverStatus.stamina.remaining1h === null,
+          compactRecoverStatus.decision.target === null,
           compactStatus.self.hp,
           compactStatus.stamina.remaining1h,
           compactStatus.action.kind,
@@ -12141,7 +12179,7 @@ async function runSelfTest() {
           compactText.length < publicText.length / 10
         ].join('|');
       }),
-      want: 'true|77|true|true|88|360000|seek-coin|8|7|enemy|latest|123|false|false|false|false|true'
+      want: 'true|77|true|true|true|true|true|88|360000|seek-coin|8|7|enemy|latest|123|false|false|false|false|true'
     },
     {
       name: 'browserless state file replaces current action snapshots',
