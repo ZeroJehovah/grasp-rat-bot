@@ -505,8 +505,15 @@ async function runReadOnlyCanary(config, options = {}) {
   let wsClosed = null;
   let ending = false;
   let deadlineAtMs = 0;
+  let transportStartedAtMs = 0;
   let actionAdapter = null;
   let openFailedBeforeTransport = false;
+  const noSelfGuardStartedAtMs = fallbackMs => {
+    const fallback = Number(fallbackMs);
+    return transportStartedAtMs
+      || frameHealth.firstFrameAtMs
+      || (Number.isFinite(fallback) ? fallback : now());
+  };
   const addRunMeta = detail => {
     const base = detail && typeof detail === 'object' && !Array.isArray(detail)
       ? detail
@@ -633,6 +640,7 @@ async function runReadOnlyCanary(config, options = {}) {
         });
       },
       onOpen: event => {
+        transportStartedAtMs = now();
         logWs('open', {
           runtime: event?.runtime || ''
         });
@@ -723,7 +731,7 @@ async function runReadOnlyCanary(config, options = {}) {
               }
             }
             const decisionSafetyEvent = safetyController.evaluate(currentState, {
-              startedAtMs: startedAt,
+              startedAtMs: noSelfGuardStartedAtMs(atMs),
               frameGapAlertMs,
               staleSelfMs: config.staleSelfMs,
               noSelfGraceMs: config.noSelfGraceMs,
@@ -767,7 +775,7 @@ async function runReadOnlyCanary(config, options = {}) {
             }
           }
           recordSafetyEvent(safetyController.evaluate(currentState, {
-            startedAtMs: startedAt,
+            startedAtMs: noSelfGuardStartedAtMs(atMs),
             frameGapAlertMs,
             staleSelfMs: config.staleSelfMs,
             noSelfGraceMs: config.noSelfGraceMs,
@@ -777,6 +785,7 @@ async function runReadOnlyCanary(config, options = {}) {
         }
       }
     });
+    if (!transportStartedAtMs) transportStartedAtMs = now();
     if (actionEnabled) {
       actionAdapter = options.actionAdapter || createBrowserlessActionAdapter({
         ...runtimeDefaults,
@@ -800,7 +809,7 @@ async function runReadOnlyCanary(config, options = {}) {
       if (atMs >= deadlineAtMs) break;
       const frameGapMs = frameHealth.lastFrameAtMs ? atMs - frameHealth.lastFrameAtMs : null;
       const safetyEvent = safetyController.evaluate(stateStore.getState(atMs), {
-        startedAtMs: startedAt,
+        startedAtMs: noSelfGuardStartedAtMs(atMs),
         frameGapMs,
         frameGapAlertMs,
         staleSelfMs: config.staleSelfMs,

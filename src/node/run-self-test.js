@@ -10150,6 +10150,75 @@ async function runSelfTest() {
       want: 'true|true|2|1|1|2|2|profit-candidate|true|self|2|0'
     },
     {
+      name: 'browserless no-self grace starts at ws open after slow snapshot safety',
+      got: (async () => {
+        let t = Date.UTC(2026, 6, 8, 1, 0, 0);
+        const snapshotFrame = encodeGrzFrameForTest({
+          type: 'snapshot',
+          tick: 20,
+          entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 100, y: 200, hp: 90 }],
+          bullets: [],
+          coin_drops: [],
+          messages: []
+        });
+        const result = await runReadOnlyCanary({
+          gameOrigin: 'https://grasp-rat-game.h-e.top',
+          snapshotPath: '/snapshot',
+          wsPath: '/ws',
+          wsExtraQuery: 'compress=gzip%2Cdeflate',
+          userId: 7,
+          sessionToken: 'slow-safety-token',
+          readOnlyProbeMs: 1000,
+          decisionIntervalMs: 1,
+          frameGapAlertMs: 5000,
+          noSelfGraceMs: 3000,
+          wsConnectTimeoutMs: 1000,
+          httpTimeoutMs: 1000,
+          loginPointSafetySuccessRequired: 3,
+          loginPointSafetyProbeIntervalMs: 30000
+        }, {
+          now: () => t,
+          sleep: async ms => { t += ms; },
+          persistedState: {
+            loginPointSafety: { point: { x: 100, y: 200, hp: 90, source: 'test' } }
+          },
+          fetchImpl: async () => fakeResponseForTest({
+            body: {
+              type: 'snapshot',
+              tick: 19,
+              entities: [],
+              bullets: [],
+              coin_drops: [],
+              messages: []
+            }
+          }),
+          openBrowserlessWs: async options => {
+            t += 100;
+            options.onMessage(snapshotFrame);
+            return {
+              isOpen: () => true,
+              close: () => {},
+              send: () => {}
+            };
+          },
+          leaveWithVerification: async () => ({ ok: true, attempts: [{ ok: true, summary: { leaveConfirmed: true } }] })
+        });
+        return [
+          result.ok,
+          result.error,
+          result.safety.event?.reason || '',
+          result.snapshotSafety.streak,
+          t - Date.UTC(2026, 6, 8, 1, 0, 0) >= 60000,
+          result.stats.typeCounts.snapshot,
+          result.stats.selfPresent.true,
+          Boolean(result.state.realtime.self),
+          result.decisions.last.reason,
+          result.leave.ok
+        ].join('|');
+      })(),
+      want: 'true|||3|true|1|1|false|missing-realtime-self|true'
+    },
+    {
       name: 'browserless canary verifies leave after ws connect timeout',
       got: (async () => {
         let leaveCalls = 0;
