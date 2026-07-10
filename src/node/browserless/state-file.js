@@ -558,6 +558,53 @@ function compactExit(event) {
   };
 }
 
+function compactAuthReason(normalized) {
+  const runner = normalized?.runner || {};
+  const run = runner.lastRun && typeof runner.lastRun === 'object' ? runner.lastRun : {};
+  const canary = run.canary && typeof run.canary === 'object' ? run.canary : {};
+  const candidates = [
+    runner.lastError,
+    runner.currentAction?.reason,
+    run.error,
+    run.reason,
+    canary.error,
+    canary.safety?.event?.reason,
+    canary.safety?.leaveFailure?.reason
+  ];
+  return compactString(candidates.find(Boolean), 160);
+}
+
+function reasonLooksInvalidSession(reason) {
+  return /websocket unexpected response 403|http 403|not logged in|unauthori[sz]ed|forbidden|invalid.*(?:token|session)|(?:token|session).*(?:expired|invalid)/i.test(String(reason || ''));
+}
+
+function compactAuthStatus(normalized, session = {}) {
+  const tokenPresent = Boolean(session.tokenPresent);
+  const userId = compactNumber(normalized?.session?.userId);
+  const reason = compactAuthReason(normalized);
+  const invalid = Boolean(userId && tokenPresent && reasonLooksInvalidSession(reason));
+  const missing = Boolean(!userId || !tokenPresent || /^missing-manual-session$/i.test(reason));
+  const state = invalid ? 'invalid' : (missing ? 'missing' : 'ready');
+  const needsReauth = invalid || missing;
+  return {
+    state,
+    needsReauth,
+    invalid,
+    missing,
+    authenticated: Boolean(userId && tokenPresent && !invalid),
+    userId,
+    tokenPresent,
+    tokenUpdatedAt: compactString(normalized?.session?.tokenUpdatedAt, 48),
+    authUrl: compactString(normalized?.session?.lastAuthUrl, 4096),
+    authUrlAt: compactString(normalized?.session?.lastAuthUrlAt, 48),
+    lastLoginSource: compactString(normalized?.session?.lastLoginSource, 80),
+    reason,
+    prompt: invalid
+      ? '登录信息可能已经失效，请重新授权'
+      : (missing ? '缺少可用登录信息，请先授权' : '登录信息可用')
+  };
+}
+
 function compactGameStatus(normalized) {
   const current = normalized.current || {};
   const self = current.self && typeof current.self === 'object' ? current.self : null;
@@ -621,6 +668,7 @@ function buildCompactBrowserlessStatus(state, config = {}) {
   const inputSession = state?.session && typeof state.session === 'object' ? state.session : {};
   const tokenPresent = Boolean(normalized.session.sessionToken || inputSession.tokenPresent);
   const authenticated = Boolean(inputSession.authenticated || (normalized.session.userId && tokenPresent));
+  const auth = compactAuthStatus(normalized, { tokenPresent, authenticated });
   const current = normalized.current || {};
   const action = compactAction(normalized.runner.currentAction) || compactAction(current.action);
   const recentExits = Array.isArray(normalized.recentExits) ? normalized.recentExits : [];
@@ -634,10 +682,11 @@ function buildCompactBrowserlessStatus(state, config = {}) {
     updatedAt: normalized.updatedAt || '',
     session: {
       userId: normalized.session.userId,
-      authenticated,
+      authenticated: auth.authenticated,
       tokenPresent,
       tokenUpdatedAt: normalized.session.tokenUpdatedAt || ''
     },
+    auth,
     runner: {
       running: normalized.runner.running,
       mode: normalized.runner.mode || '',

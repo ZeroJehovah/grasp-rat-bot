@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.10.2';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.10.3';
 
 function renderBrowserlessWebPanel() {
   return `<!doctype html>
@@ -21,7 +21,7 @@ function renderBrowserlessWebPanel() {
     button:hover{border-color:#58616b}
     .toolbar{display:flex;align-items:center;gap:7px;flex-wrap:wrap;justify-content:flex-end}
     .pill{display:inline-flex;align-items:center;min-height:28px;border:1px solid var(--line);border-radius:999px;padding:3px 10px;background:var(--panel2);color:var(--muted);white-space:nowrap}
-    .ok{color:var(--green)}.warn{color:var(--amber)}.bad{color:var(--red)}.info{color:var(--blue)}
+    .ok{color:var(--green)}.warn{color:var(--amber)}.bad{color:var(--red)}.info{color:var(--blue)}.muted{color:var(--muted)}
     .hero{border:1px solid var(--line);background:var(--panel);border-radius:8px;padding:12px;margin-bottom:10px}
     .botline{font-size:18px;line-height:1.25;font-weight:720;margin-bottom:4px;overflow-wrap:anywhere}
     .reason{color:var(--muted);overflow-wrap:anywhere}
@@ -36,6 +36,15 @@ function renderBrowserlessWebPanel() {
     dl{display:grid;grid-template-columns:minmax(76px,auto) 1fr;gap:5px 9px;margin:0}
     dt{color:var(--muted);min-width:0}
     dd{margin:0;min-width:0;overflow-wrap:anywhere}
+    .auth-panel{margin-bottom:10px}
+    .auth-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:8px}
+    .auth-prompt{color:var(--muted);overflow-wrap:anywhere}
+    .auth-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px}
+    a{color:var(--blue);text-decoration:none;overflow-wrap:anywhere}
+    a:hover{text-decoration:underline}
+    textarea{width:100%;min-height:76px;margin-top:8px;border:1px solid var(--line);border-radius:6px;background:var(--panel2);color:var(--text);font:12px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;padding:8px;resize:vertical}
+    pre.auth-url{display:none;white-space:pre-wrap;overflow-wrap:anywhere;margin:8px 0 0;border:1px solid var(--line);border-radius:6px;background:var(--panel2);color:var(--muted);padding:8px;max-height:120px;overflow:auto}
+    .auth-message{min-height:18px;overflow-wrap:anywhere}
     @media (max-width:780px){.grid{grid-template-columns:1fr 1fr}.metrics{grid-template-columns:1fr 1fr}section.wide{grid-column:auto}}
     @media (max-width:520px){main{padding:10px}header{align-items:flex-start;flex-direction:column}.toolbar{justify-content:flex-start}.grid,.metrics{grid-template-columns:1fr}.botline{font-size:16px}}
   </style>
@@ -61,6 +70,26 @@ function renderBrowserlessWebPanel() {
         <div class="metric"><span class="label">Drop</span><span id="drop" class="value">--</span></div>
         <div class="metric"><span class="label">位置</span><span id="position" class="value">--</span></div>
         <div class="metric"><span class="label">运行方式</span><span id="mode" class="value">--</span></div>
+      </div>
+    </section>
+
+    <section class="auth-panel">
+      <div class="auth-head">
+        <div>
+          <h2>授权</h2>
+          <div id="authPrompt" class="auth-prompt">--</div>
+        </div>
+        <span id="authState" class="pill">--</span>
+      </div>
+      <div class="auth-actions">
+        <button id="authBtn" type="button">获取授权链接</button>
+        <a id="authLink" href="#" target="_blank" rel="noreferrer"></a>
+      </div>
+      <pre id="authUrl" class="auth-url"></pre>
+      <textarea id="callbackInput" placeholder="粘贴授权后的游戏回调 URL、登录 JSON 或 approve cURL"></textarea>
+      <div class="auth-actions">
+        <button id="callbackBtn" type="button">提交回调</button>
+        <span id="authMessage" class="auth-message"></span>
       </div>
     </section>
 
@@ -188,6 +217,8 @@ function renderBrowserlessWebPanel() {
       'manual-login-point-pending-snapshot-safety': '正在检查登录点安全',
       'learned-login-point-pending-snapshot-safety': '正在检查登录点安全',
       'imported-login-point-pending-snapshot-safety': '正在检查登录点安全',
+      'manual-session-updated': '授权已更新，等待下一轮连接',
+      'auth-token-invalid': '登录信息失效，需要重新授权',
       'unsafe-login-point': '登录点不安全',
       'snapshot safety not confirmed: active-near-login-point': '登录点附近有危险玩家，暂不进入',
       'missing-manual-session': '等待登录信息',
@@ -355,6 +386,7 @@ function renderBrowserlessWebPanel() {
       if (/leave/i.test(text)) return '正在退出游戏';
       if (/wait/i.test(text)) return '等待中';
       if (/stop/i.test(text)) return '已停止';
+      if (/403|forbidden|unauthorized|not logged in/i.test(text)) return '登录信息可能失效，需要重新授权';
       if (/login|session|auth|token/i.test(text)) return '等待登录信息';
       if (/ws|websocket|connect|frame|transport/i.test(text)) return '连接不稳定';
       if (/whitelist/i.test(text)) return '目标在白名单，跳过';
@@ -382,6 +414,48 @@ function renderBrowserlessWebPanel() {
     function resultText(ok) {
       if (ok === null || ok === undefined) return '--';
       return ok ? '正常' : '异常';
+    }
+    function authStatusText(status) {
+      const auth = status.auth || {};
+      if (auth.state === 'invalid' || auth.invalid) return '登录信息失效';
+      if (auth.state === 'missing' || auth.missing) return '等待授权';
+      if (auth.authenticated || status.session?.authenticated) return '授权可用';
+      if (status.session?.tokenPresent) return '登录信息不完整';
+      return '等待授权';
+    }
+    function authPromptText(status) {
+      const auth = status.auth || {};
+      if (auth.prompt) return auth.prompt;
+      if (auth.invalid) return '登录信息可能已经失效，请重新授权';
+      if (auth.missing || !status.session?.tokenPresent) return '缺少可用登录信息，请先授权';
+      return '登录信息可用';
+    }
+    function authClass(status) {
+      const auth = status.auth || {};
+      if (auth.invalid) return 'bad';
+      if (auth.needsReauth || auth.missing) return 'warn';
+      if (auth.authenticated || status.session?.authenticated) return 'ok';
+      return 'warn';
+    }
+    function setAuthUrl(url) {
+      const value = String(url || '');
+      const link = document.getElementById('authLink');
+      const pre = document.getElementById('authUrl');
+      link.href = value || '#';
+      link.textContent = value ? '打开授权页' : '';
+      pre.textContent = value;
+      pre.style.display = value ? 'block' : 'none';
+    }
+    function updateAuthPanel(status) {
+      const auth = status.auth || {};
+      setText('authPrompt', authPromptText(status));
+      setText('authState', authStatusText(status));
+      setClass('authState', 'pill ' + authClass(status));
+      setAuthUrl(auth.authUrl || '');
+      const message = document.getElementById('authMessage');
+      if (message && !message.textContent) {
+        message.className = 'auth-message muted';
+      }
     }
     function activeTarget(status) {
       if (status.game?.inGame === false) return null;
@@ -499,14 +573,36 @@ function renderBrowserlessWebPanel() {
       if (!res.ok) throw new Error('HTTP ' + res.status);
       return res.json();
     }
+    async function api(path, options = {}) {
+      const url = path + (token ? '?token=' + encodeURIComponent(token) : '');
+      const res = await fetch(url, {
+        ...options,
+        headers: {
+          'content-type': 'application/json',
+          ...(options.headers || {})
+        }
+      });
+      let data = null;
+      try {
+        data = await res.json();
+      } catch (_) {
+        data = null;
+      }
+      if (!res.ok) {
+        throw new Error(data?.error || data?.reason || ('HTTP ' + res.status));
+      }
+      return data || { ok: true };
+    }
     async function refresh() {
       const s = await fetchStatus();
       if (maybeReloadForWebVersion(s)) return;
-      const statusClass = s.runner?.lastError ? 'bad' : (s.runner?.running ? 'ok' : 'info');
-      const reason = reasonText(s.runner?.lastError || s.action?.reason || s.decision?.reason || s.recentExit?.reason);
+      updateAuthPanel(s);
+      const authNeeds = Boolean(s.auth?.needsReauth);
+      const statusClass = authNeeds ? authClass(s) : (s.runner?.lastError ? 'bad' : (s.runner?.running ? 'ok' : 'info'));
+      const reason = authNeeds ? authPromptText(s) : reasonText(s.runner?.lastError || s.action?.reason || s.decision?.reason || s.recentExit?.reason);
       document.getElementById('stamp').textContent = stamp(s.updatedAt);
       setClass('stamp', 'pill ' + statusClass);
-      setText('botLine', '助手：' + actionText(s));
+      setText('botLine', '助手：' + (authNeeds ? authStatusText(s) : actionText(s)));
       setText('reason', reason);
       setText('hp', s.self?.hp);
       setText('stamina', '5秒 ' + unit(s.stamina?.remaining5s) + ' / 1小时 ' + unit(s.stamina?.remaining1h) + ' / 1天 ' + unit(s.stamina?.remaining1d));
@@ -523,10 +619,12 @@ function renderBrowserlessWebPanel() {
       ]);
       rows('session', [
         ['账号', s.session?.userId],
+        ['授权', authStatusText(s)],
         ['已登录', bool(s.session?.authenticated)],
         ['游戏内', bool(s.game?.inGame)],
         ['当前位置', s.game?.inGame ? pointText(s.self) : '--'],
         ['登录信息', s.session?.tokenPresent ? '已有' : '缺失'],
+        ['更新时间', stamp(s.auth?.tokenUpdatedAt || s.session?.tokenUpdatedAt)],
         ['出口数量', s.network?.sourceIpCount],
         ['当前出口', s.network?.sourceIp]
       ]);
@@ -580,16 +678,38 @@ function renderBrowserlessWebPanel() {
       ]);
     }
     document.getElementById('refreshBtn').onclick = () => refresh().catch(showError);
-    document.getElementById('stopBtn').onclick = () => (async () => {
-      const res = await fetch('/api/stop' + (token ? '?token=' + encodeURIComponent(token) : ''), { method: 'POST' });
-      if (!res.ok) throw new Error('HTTP ' + res.status);
+    document.getElementById('authBtn').onclick = () => (async () => {
+      setAuthMessage('正在获取授权链接', 'info');
+      const data = await api('/api/auth-url', { method: 'POST' });
+      setAuthUrl(data.authUrl || '');
+      setAuthMessage(data.authUrl ? '授权链接已生成' : '授权链接已请求', 'ok');
       await refresh();
     })().catch(showError);
+    document.getElementById('callbackBtn').onclick = () => (async () => {
+      const input = document.getElementById('callbackInput').value.trim();
+      if (!input) throw new Error('请先粘贴授权后的回调地址');
+      setAuthMessage('正在提交回调', 'info');
+      await api('/api/callback', { method: 'POST', body: JSON.stringify({ callbackUrl: input }) });
+      document.getElementById('callbackInput').value = '';
+      setAuthMessage('授权已更新', 'ok');
+      await refresh();
+    })().catch(showError);
+    document.getElementById('stopBtn').onclick = () => (async () => {
+      await api('/api/stop', { method: 'POST' });
+      await refresh();
+    })().catch(showError);
+    function setAuthMessage(text, className) {
+      const node = document.getElementById('authMessage');
+      if (!node) return;
+      node.textContent = value(text);
+      node.className = 'auth-message ' + (className || 'muted');
+    }
     function showError(err) {
       const message = String(err?.message || '');
       const match = /HTTP\s+(\d+)/i.exec(message);
       document.getElementById('stamp').textContent = match ? '请求失败：' + match[1] : '请求失败';
       document.getElementById('stamp').className = 'pill bad';
+      setAuthMessage(message || '请求失败', 'bad');
     }
     refresh().catch(showError);
     setInterval(() => refresh().catch(showError), 10000);

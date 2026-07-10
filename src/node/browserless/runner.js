@@ -525,8 +525,17 @@ async function runBrowserlessRunner(config, deps = {}) {
               tokenUpdatedAt: new Date(now()).toISOString(),
               lastLoginSource: result.source || '',
               lastLoginSummary: result.summary || null
+            },
+            runner: {
+              lastError: '',
+              currentAction: {
+                kind: 'loop-wait',
+                band: 'recover',
+                reason: 'manual-session-updated'
+              }
             }
           }, { updatedAt: new Date(now()).toISOString() });
+          refreshFromPersistedState();
           logStore.append('runner', 'login-ok', {
             userId: result.login.userId,
             tokenPresent: true,
