@@ -173,7 +173,8 @@ function entityStaminaSummary(entity) {
     stamina5sRemainingMilli: numberOrNull(entity?.stamina_5s_remaining_milli ?? entity?.stamina5sRemainingMilli),
     stamina1hRemainingMilli: numberOrNull(entity?.stamina_1h_remaining_milli ?? entity?.stamina1hRemainingMilli),
     stamina1dRemainingMilli: numberOrNull(entity?.stamina_1d_remaining_milli ?? entity?.stamina1dRemainingMilli),
-    staminaSpent: numberOrNull(entity?.stamina_spent ?? entity?.staminaSpent)
+    staminaSpent: numberOrNull(entity?.stamina_spent ?? entity?.staminaSpent),
+    staminaMetadataAuthority: entity?.staminaMetadataAuthority || ''
   };
 }
 
@@ -413,6 +414,70 @@ function normalizeEntityForDecision(entity, self = null, authority = 'realtime',
   return normalized;
 }
 
+function hasOwnUsableValue(object, field) {
+  if (!object || !Object.prototype.hasOwnProperty.call(object, field)) return false;
+  const value = object[field];
+  return value !== undefined && value !== null && value !== '';
+}
+
+const SELF_SNAPSHOT_METADATA_FIELDS = [
+  'entity_id',
+  'name',
+  'max_hp',
+  'coins',
+  'current_join_mode',
+  'joined',
+  'visible',
+  'stamina_5s_remaining_milli',
+  'stamina_1h_remaining_milli',
+  'stamina_1d_remaining_milli',
+  'stamina_5s_limit_milli',
+  'stamina_1h_limit_milli',
+  'stamina_1d_limit_milli'
+];
+
+const SELF_SNAPSHOT_STAMINA_FIELDS = [
+  'stamina_5s_remaining_milli',
+  'stamina_1h_remaining_milli',
+  'stamina_1d_remaining_milli',
+  'stamina_5s_limit_milli',
+  'stamina_1h_limit_milli',
+  'stamina_1d_limit_milli'
+];
+
+function enrichRealtimeSelfWithSnapshotMetadata(realtimeSelf, snapshotSelf, options = {}) {
+  if (!realtimeSelf || !snapshotSelf || typeof realtimeSelf !== 'object' || typeof snapshotSelf !== 'object') {
+    return { self: realtimeSelf || null, merged: false, staminaMerged: false };
+  }
+  const realtimeUserId = numberOrNull(realtimeSelf.user_id ?? realtimeSelf.userId);
+  const snapshotUserId = numberOrNull(snapshotSelf.user_id ?? snapshotSelf.userId);
+  if (realtimeUserId !== null && snapshotUserId !== null && realtimeUserId !== snapshotUserId) {
+    return { self: realtimeSelf, merged: false, staminaMerged: false };
+  }
+  const maxDistance = Math.max(0, Number(options.snapshotSelfMetadataMaxDistanceCm
+    ?? options.snapshotEntityMetadataMaxDistanceCm
+    ?? 5000));
+  const metadataDistance = distanceBetween(realtimeSelf, snapshotSelf);
+  if (maxDistance > 0 && Number.isFinite(metadataDistance) && metadataDistance > maxDistance) {
+    return { self: realtimeSelf, merged: false, staminaMerged: false, metadataDistance };
+  }
+  const output = cloneJson(realtimeSelf);
+  let merged = false;
+  let staminaMerged = false;
+  for (const field of SELF_SNAPSHOT_METADATA_FIELDS) {
+    if (hasOwnUsableValue(output, field) || !hasOwnUsableValue(snapshotSelf, field)) continue;
+    output[field] = cloneJson(snapshotSelf[field]);
+    merged = true;
+    if (SELF_SNAPSHOT_STAMINA_FIELDS.includes(field)) staminaMerged = true;
+  }
+  if (merged) {
+    output.selfMetadataAuthority = 'snapshot';
+    if (Number.isFinite(metadataDistance)) output.selfMetadataDistance = Math.round(metadataDistance);
+  }
+  if (staminaMerged) output.staminaMetadataAuthority = 'snapshot';
+  return { self: output, merged, staminaMerged, metadataDistance };
+}
+
 function snapshotEntityByUserId(fallback) {
   const entities = Array.isArray(fallback?.entities) ? fallback.entities : [];
   const byUserId = new Map();
@@ -614,7 +679,11 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
   const snapshotMaxAgeMs = Math.max(1000, Number(options.snapshotCoinFallbackMaxAgeMs || 5000));
   const snapshotFreshForMetadata = snapshotFrameAgeMs === null || snapshotFrameAgeMs <= snapshotMaxAgeMs;
   const snapshotEntitiesByUserId = snapshotFreshForMetadata ? snapshotEntityByUserId(fallback) : new Map();
-  const self = normalizeEntityForDecision(realtime.self, null, 'realtime', options);
+  const rawSelfUserId = numberOrNull(realtime.self?.user_id ?? realtime.self?.userId ?? state?.userId ?? options.userId);
+  const snapshotSelf = rawSelfUserId !== null ? snapshotEntitiesByUserId.get(rawSelfUserId) : null;
+  const enrichedSelf = enrichRealtimeSelfWithSnapshotMetadata(realtime.self, snapshotSelf, options);
+  const self = normalizeEntityForDecision(enrichedSelf.self, null, 'realtime', options);
+  if (enrichedSelf.staminaMerged) dataGaps.push('self-stamina-from-snapshot');
   if (!self) dataGaps.push('missing-realtime-self');
   const selfUserId = Number(self?.user_id ?? state?.userId ?? options.userId ?? 0);
   const realtimeEntities = (Array.isArray(realtime.entities) ? realtime.entities : [])

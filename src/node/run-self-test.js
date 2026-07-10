@@ -5904,6 +5904,57 @@ async function runSelfTest() {
       want: 'combat-candidate|combat|8|realtime|true|100|true|true'
     },
     {
+      name: 'browserless decision adapter enriches missing self stamina from fresh snapshot',
+      got: (() => {
+        const store = createBrowserlessStateStore({ userId: 7 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 42,
+          entities: [
+            { entity_id: 1, user_id: 7, x: 100, y: 100, hp: 71, life: 'Alive' },
+            { entity_id: 2, user_id: 8, x: 8000, y: 100, hp: 100, life: 'Alive' }
+          ],
+          bullets: []
+        }, { receivedAtMs: 1000 });
+        store.ingestFrame({
+          type: 'snapshot',
+          tick: 43,
+          entities: [{
+            entity_id: 1,
+            user_id: 7,
+            name: 'self-name',
+            x: 120,
+            y: 100,
+            hp: 90,
+            max_hp: 100,
+            stamina_5s_remaining_milli: 9000,
+            stamina_1h_remaining_milli: 2500000,
+            stamina_1d_remaining_milli: 18000000,
+            stamina_5s_limit_milli: 10000,
+            stamina_1h_limit_milli: 3000000,
+            stamina_1d_limit_milli: 20000000
+          }],
+          bullets: [],
+          coin_drops: [],
+          messages: []
+        }, { receivedAtMs: 1100 });
+        const decision = buildBrowserlessDecision(store.getState(1200), {}, { nowMs: 1200 });
+        return [
+          decision.input.self.x,
+          decision.input.self.hp,
+          decision.input.self.name,
+          decision.input.stamina.stamina5sRemainingMilli,
+          decision.input.stamina.stamina1hRemainingMilli,
+          decision.input.stamina.stamina1dRemainingMilli,
+          decision.input.stamina.stamina,
+          decision.input.stamina.staminaSpent,
+          decision.input.stamina.staminaMetadataAuthority,
+          decision.input.dataGaps.includes('self-stamina-from-snapshot')
+        ].join('|');
+      })(),
+      want: '100|71|self-name|9000|2500000|18000000|||snapshot|true'
+    },
+    {
       name: 'browserless decision adapter emits snapshot fallback profit without commands',
       got: (() => {
         const adapter = createBrowserlessDecisionAdapter({ userId: 7 });
