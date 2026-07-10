@@ -1015,6 +1015,9 @@ function buildCompactBrowserlessStatus(state, config = {}) {
   const loginPointSafetyDetail = compactLoginPointSafetyDetail(normalized.loginPointSafety || {}, normalized);
   const loginPoint = compactPoint(normalized.loginPointSafety?.point) || loginPointSafetyDetail?.point || null;
   const game = compactGameStatus(normalized);
+  const sourceIp = normalized.network.sourceIp || '';
+  const sourceIps = Array.isArray(normalized.network.sourceIps) ? normalized.network.sourceIps : [];
+  const sourceIpIndex = sourceIp ? sourceIps.findIndex(item => item === sourceIp) + 1 : 0;
   const compactState = {
     schemaVersion: normalized.schemaVersion,
     compact: true,
@@ -1054,8 +1057,9 @@ function buildCompactBrowserlessStatus(state, config = {}) {
       detail: loginPointSafetyDetail
     },
     network: {
-      sourceIp: normalized.network.sourceIp || '',
-      sourceIpCount: normalized.network.sourceIps.length,
+      sourceIp,
+      sourceIpIndex: sourceIpIndex > 0 ? sourceIpIndex : null,
+      sourceIpCount: sourceIps.length,
       lastSelectedAt: normalized.network.lastSelectedAt || '',
       lastSelectionReason: compactString(normalized.network.lastSelectionReason, 120)
     },

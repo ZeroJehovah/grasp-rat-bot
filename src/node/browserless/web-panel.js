@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.10.8';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.10.9';
 
 function renderBrowserlessWebPanel() {
   return `<!doctype html>
@@ -14,7 +14,7 @@ function renderBrowserlessWebPanel() {
     :root{color-scheme:dark;--bg:#101214;--panel:#181b1f;--panel2:#121518;--line:#30363d;--text:#eef2f5;--muted:#9ba7b4;--green:#4ade80;--amber:#fbbf24;--red:#fb7185;--blue:#60a5fa}
     *{box-sizing:border-box}
     body{margin:0;background:var(--bg);color:var(--text);font:13px/1.45 system-ui,-apple-system,Segoe UI,sans-serif}
-    main{max-width:980px;margin:0 auto;padding:14px}
+    main{max-width:1180px;margin:0 auto;padding:14px}
     header{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px}
     h1{margin:0;font-size:18px;line-height:1.2;font-weight:680;letter-spacing:0}
     button{font:inherit;min-height:32px;border:1px solid var(--line);background:#20252a;color:var(--text);border-radius:6px;padding:5px 10px;cursor:pointer}
@@ -22,21 +22,14 @@ function renderBrowserlessWebPanel() {
     .toolbar{display:flex;align-items:center;gap:7px;flex-wrap:wrap;justify-content:flex-end}
     .pill{display:inline-flex;align-items:center;min-height:28px;border:1px solid var(--line);border-radius:999px;padding:3px 10px;background:var(--panel2);color:var(--muted);white-space:nowrap}
     .ok{color:var(--green)}.warn{color:var(--amber)}.bad{color:var(--red)}.info{color:var(--blue)}.muted{color:var(--muted)}
-    .hero{border:1px solid var(--line);background:var(--panel);border-radius:8px;padding:12px;margin-bottom:10px}
-    .botline{font-size:18px;line-height:1.25;font-weight:720;margin-bottom:4px;overflow-wrap:anywhere}
-    .reason{color:var(--muted);overflow-wrap:anywhere}
-    .metrics{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin-top:10px}
-    .metric{border:1px solid var(--line);background:var(--panel2);border-radius:6px;padding:8px;min-width:0}
-    .label{display:block;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px}
-    .value{display:block;font-size:14px;min-height:20px;overflow-wrap:anywhere}
-    .grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+    .layout{display:grid;grid-template-columns:minmax(240px,1fr) minmax(0,2fr);gap:10px;align-items:start}
+    .stack{display:flex;flex-direction:column;gap:10px;min-width:0}
     section{border:1px solid var(--line);background:var(--panel);border-radius:8px;padding:10px;min-width:0}
-    section.wide{grid-column:span 2}
     h2{font-size:11px;line-height:1.2;margin:0 0 8px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.05em}
     dl{display:grid;grid-template-columns:minmax(76px,auto) 1fr;gap:5px 9px;margin:0}
     dt{color:var(--muted);min-width:0}
     dd{margin:0;min-width:0;overflow-wrap:anywhere}
-    .auth-panel{margin-bottom:10px}
+    .auth-panel{margin-bottom:0}
     .auth-panel[hidden]{display:none}
     .auth-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:8px}
     .auth-prompt{color:var(--muted);overflow-wrap:anywhere}
@@ -46,8 +39,8 @@ function renderBrowserlessWebPanel() {
     textarea{width:100%;min-height:76px;margin-top:8px;border:1px solid var(--line);border-radius:6px;background:var(--panel2);color:var(--text);font:12px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;padding:8px;resize:vertical}
     pre.auth-url{display:none;white-space:pre-wrap;overflow-wrap:anywhere;margin:8px 0 0;border:1px solid var(--line);border-radius:6px;background:var(--panel2);color:var(--muted);padding:8px;max-height:120px;overflow:auto}
     .auth-message{min-height:18px;overflow-wrap:anywhere}
-    @media (max-width:780px){.grid{grid-template-columns:1fr 1fr}.metrics{grid-template-columns:1fr 1fr}section.wide{grid-column:auto}}
-    @media (max-width:520px){main{padding:10px}header{align-items:flex-start;flex-direction:column}.toolbar{justify-content:flex-start}.grid,.metrics{grid-template-columns:1fr}.botline{font-size:16px}}
+    @media (max-width:760px){.layout{grid-template-columns:1fr}}
+    @media (max-width:520px){main{padding:10px}header{align-items:flex-start;flex-direction:column}.toolbar{justify-content:flex-start}}
   </style>
 </head>
 <body>
@@ -55,62 +48,64 @@ function renderBrowserlessWebPanel() {
     <header>
       <h1>抓鼠助手</h1>
       <div class="toolbar">
-        <span id="webVersion" class="pill">网页 ${BROWSERLESS_WEB_PANEL_VERSION}</span>
-        <span id="stamp" class="pill">--</span>
         <button id="refreshBtn" type="button" title="刷新状态">刷新</button>
         <button id="stopBtn" type="button" title="停止自动运行">停止</button>
       </div>
     </header>
 
-    <section class="hero">
-      <div id="botLine" class="botline">助手 --</div>
-      <div id="reason" class="reason">--</div>
-      <div class="metrics">
-        <div class="metric"><span class="label">血量</span><span id="hp" class="value">--</span></div>
-        <div class="metric"><span class="label">体力</span><span id="stamina" class="value">--</span></div>
-        <div class="metric"><span class="label">Drop</span><span id="drop" class="value">--</span></div>
-        <div class="metric"><span class="label">位置</span><span id="position" class="value">--</span></div>
-        <div class="metric"><span class="label">运行方式</span><span id="mode" class="value">--</span></div>
+    <div class="layout">
+      <div class="stack left-stack">
+        <section>
+          <h2>程序状态</h2>
+          <dl>
+            <dt>网页版本</dt><dd id="webVersion">${BROWSERLESS_WEB_PANEL_VERSION}</dd>
+            <dt>刷新时间</dt><dd id="stamp">--</dd>
+            <dt>出口数量</dt><dd id="sourceIpCount">--</dd>
+            <dt>当前出口</dt><dd id="sourceIp">--</dd>
+          </dl>
+        </section>
+        <section>
+          <h2>账号状态</h2>
+          <dl id="accountStatus"></dl>
+        </section>
+        <section>
+          <h2>角色状态</h2>
+          <dl id="roleStatus"></dl>
+        </section>
       </div>
-    </section>
-
-    <section id="authPanel" class="auth-panel" hidden>
-      <div class="auth-head">
-        <div>
-          <h2>授权</h2>
-          <div id="authPrompt" class="auth-prompt">--</div>
-        </div>
-        <span id="authState" class="pill">--</span>
+      <div class="stack right-stack">
+        <section id="authPanel" class="auth-panel" hidden>
+          <div class="auth-head">
+            <div>
+              <h2>授权</h2>
+              <div id="authPrompt" class="auth-prompt">--</div>
+            </div>
+            <span id="authState" class="pill">--</span>
+          </div>
+          <div class="auth-actions">
+            <button id="authBtn" type="button">获取授权链接</button>
+            <a id="authLink" href="#" target="_blank" rel="noreferrer"></a>
+          </div>
+          <pre id="authUrl" class="auth-url"></pre>
+          <textarea id="callbackInput" placeholder="粘贴授权后的游戏回调 URL、登录 JSON 或 approve cURL"></textarea>
+          <div class="auth-actions">
+            <button id="callbackBtn" type="button">提交回调</button>
+            <span id="authMessage" class="auth-message"></span>
+          </div>
+        </section>
+        <section>
+          <h2>当前动作</h2>
+          <dl id="actionDetails"></dl>
+        </section>
+        <section>
+          <h2>本次游戏</h2>
+          <dl id="currentSession"></dl>
+        </section>
+        <section>
+          <h2>今日累计</h2>
+          <dl id="todayStats"></dl>
+        </section>
       </div>
-      <div class="auth-actions">
-        <button id="authBtn" type="button">获取授权链接</button>
-        <a id="authLink" href="#" target="_blank" rel="noreferrer"></a>
-      </div>
-      <pre id="authUrl" class="auth-url"></pre>
-      <textarea id="callbackInput" placeholder="粘贴授权后的游戏回调 URL、登录 JSON 或 approve cURL"></textarea>
-      <div class="auth-actions">
-        <button id="callbackBtn" type="button">提交回调</button>
-        <span id="authMessage" class="auth-message"></span>
-      </div>
-    </section>
-
-    <div class="grid">
-      <section class="wide">
-        <h2>当前动作</h2>
-        <dl id="actionDetails"></dl>
-      </section>
-      <section>
-        <h2>账号状态</h2>
-        <dl id="session"></dl>
-      </section>
-      <section>
-        <h2>本次游戏</h2>
-        <dl id="currentSession"></dl>
-      </section>
-      <section>
-        <h2>今日累计</h2>
-        <dl id="todayStats"></dl>
-      </section>
     </div>
   </main>
   <script>
@@ -139,16 +134,22 @@ function renderBrowserlessWebPanel() {
       return n === null ? '--' : String(Math.round(n));
     };
     const bool = v => v === null || v === undefined ? '--' : (v ? '是' : '否');
+    const pad2 = v => String(v).padStart(2, '0');
     const stamp = iso => {
       if (!iso) return '--';
       const date = new Date(iso);
-      return Number.isFinite(date.getTime()) ? date.toLocaleTimeString('zh-CN', { hour12: false }) : iso;
+      return Number.isFinite(date.getTime())
+        ? [pad2(date.getHours()), pad2(date.getMinutes()), pad2(date.getSeconds())].join(':')
+        : iso;
     };
     const fullStamp = iso => {
       if (!iso) return '--';
       const date = new Date(iso);
       return Number.isFinite(date.getTime())
-        ? date.toLocaleString('zh-CN', { hour12: false })
+        ? [
+            date.getFullYear() + '-' + pad2(date.getMonth() + 1) + '-' + pad2(date.getDate()),
+            [pad2(date.getHours()), pad2(date.getMinutes()), pad2(date.getSeconds())].join(':')
+          ].join(' ')
         : iso;
     };
     const duration = ms => {
@@ -172,8 +173,25 @@ function renderBrowserlessWebPanel() {
       const n = number(v);
       return n === null ? '--' : String(Math.max(0, Math.round(n)));
     };
+    const hpText = hp => {
+      const n = number(hp);
+      return n === null ? '--' : String(Math.max(0, Math.round(n))) + '/100';
+    };
+    const staminaPair = (remainingMs, maxSeconds) => {
+      const n = number(remainingMs);
+      return n === null ? '--' : String(Math.max(0, Math.floor(n / 1000))) + '/' + maxSeconds;
+    };
+    const sourceIpCountText = network => {
+      const total = number(network?.sourceIpCount);
+      const index = number(network?.sourceIpIndex);
+      if ((total === null || total <= 0) && index === null) return '--';
+      return (index === null || index <= 0 ? '?' : String(Math.round(index)))
+        + '/'
+        + (total === null || total <= 0 ? '?' : String(Math.round(total)));
+    };
     function rows(id, pairs) {
       const node = document.getElementById(id);
+      if (!node) return;
       node.textContent = '';
       for (const pair of pairs) {
         const dt = document.createElement('dt');
@@ -439,6 +457,14 @@ function renderBrowserlessWebPanel() {
       if (status.session?.tokenPresent) return '登录信息不完整';
       return '等待授权';
     }
+    function authStatusShortText(status) {
+      const text = authStatusText(status);
+      if (text === '授权可用') return '可用';
+      if (text === '登录信息失效') return '失效';
+      if (text === '等待授权') return '等待';
+      if (text === '登录信息不完整') return '不完整';
+      return text;
+    }
     function authPromptText(status) {
       const auth = status.auth || {};
       if (auth.prompt) return auth.prompt;
@@ -648,10 +674,14 @@ function renderBrowserlessWebPanel() {
       return rowsOut;
     }
     function setText(id, text) {
-      document.getElementById(id).textContent = value(text);
+      const node = document.getElementById(id);
+      if (!node) return;
+      node.textContent = value(text);
     }
     function setClass(id, className) {
-      document.getElementById(id).className = className;
+      const node = document.getElementById(id);
+      if (!node) return;
+      node.className = className;
     }
     function updateWebVersion(latestVersion) {
       const latest = String(latestVersion || '').trim();
@@ -659,12 +689,12 @@ function renderBrowserlessWebPanel() {
       const node = document.getElementById('webVersion');
       if (!node) return;
       if (latest && current && latest !== current) {
-        node.textContent = '网页 ' + current + ' -> ' + latest;
-        node.className = 'pill warn';
+        node.textContent = current + ' -> ' + latest;
+        node.className = 'warn';
         return;
       }
-      node.textContent = '网页 ' + (latest || current || '--');
-      node.className = 'pill';
+      node.textContent = latest || current || '--';
+      node.className = '';
     }
     function alreadyReloadedForWebVersion(latest) {
       if (!latest) return false;
@@ -699,8 +729,7 @@ function renderBrowserlessWebPanel() {
       const next = new URL(location.href);
       next.searchParams.set('_webReloadVersion', latest);
       next.searchParams.set('_webReloadAt', String(Date.now()));
-      setText('botLine', '网页版本更新，正在刷新');
-      setText('reason', '正在拉取最新网页 ' + latest);
+      setText('stamp', '网页版本更新，正在刷新');
       setTimeout(() => location.replace(next.toString()), 50);
       return true;
     }
@@ -736,28 +765,28 @@ function renderBrowserlessWebPanel() {
       updateAuthPanel(s);
       const authNeeds = Boolean(s.auth?.needsReauth);
       const statusClass = authNeeds ? authClass(s) : (s.runner?.lastError ? 'bad' : (s.runner?.running ? 'ok' : 'info'));
-      const reason = authNeeds ? authPromptText(s) : reasonText(s.runner?.lastError || s.action?.reason || s.decision?.reason || s.recentExit?.reason);
-      document.getElementById('stamp').textContent = stamp(s.updatedAt);
-      setClass('stamp', 'pill ' + statusClass);
-      setText('botLine', '助手：' + (authNeeds ? authStatusText(s) : actionText(s)));
-      setText('reason', reason);
-      setText('hp', s.self?.hp);
-      setText('stamina', '5秒 ' + unit(s.stamina?.remaining5s) + ' / 1小时 ' + unit(s.stamina?.remaining1h) + ' / 1天 ' + unit(s.stamina?.remaining1d));
-      setText('drop', s.self?.drop);
-      setText('position', positionText(s));
-      setText('mode', modeText(s.runner?.controlMode || s.runner?.mode, s.runner?.combatEnabled));
+      setText('stamp', fullStamp(s.updatedAt));
+      setClass('stamp', statusClass);
+      setText('sourceIpCount', sourceIpCountText(s.network));
+      setText('sourceIp', s.network?.sourceIp);
 
       rows('actionDetails', actionDetailRows(s));
-      rows('session', [
+      rows('accountStatus', [
         ['账号', s.session?.userId],
-        ['授权', authStatusText(s)],
+        ['名称', s.self?.name],
+        ['授权', authStatusShortText(s)],
+        ['登录信息', s.session?.tokenPresent ? '已有' : '缺失'],
         ['已登录', bool(s.session?.authenticated)],
+        ['授权时间', fullStamp(s.auth?.tokenUpdatedAt || s.session?.tokenUpdatedAt)]
+      ]);
+      rows('roleStatus', [
         ['游戏内', bool(s.game?.inGame)],
         ['当前位置', s.game?.inGame ? pointText(s.self) : '--'],
-        ['登录信息', s.session?.tokenPresent ? '已有' : '缺失'],
-        ['更新时间', stamp(s.auth?.tokenUpdatedAt || s.session?.tokenUpdatedAt)],
-        ['出口数量', s.network?.sourceIpCount],
-        ['当前出口', s.network?.sourceIp]
+        ['血量', hpText(s.self?.hp)],
+        ['Drop', s.self?.drop],
+        ['体力5s', staminaPair(s.stamina?.remaining5s, 10)],
+        ['体力1h', staminaPair(s.stamina?.remaining1h, 3000)],
+        ['体力1d', staminaPair(s.stamina?.remaining1d, 20000)]
       ]);
       const currentSession = s.stats?.currentSession || {};
       const todayStats = s.stats?.today || {};
@@ -814,8 +843,8 @@ function renderBrowserlessWebPanel() {
         return;
       }
       stopAutoRefresh();
-      document.getElementById('stamp').textContent = '已暂停刷新';
-      document.getElementById('stamp').className = 'pill muted';
+      setText('stamp', '已暂停刷新');
+      setClass('stamp', 'muted');
     }
     document.getElementById('refreshBtn').onclick = () => requestStatusRefresh(true, true);
     document.getElementById('authBtn').onclick = () => (async () => {
@@ -847,8 +876,8 @@ function renderBrowserlessWebPanel() {
     function showError(err) {
       const message = String(err?.message || '');
       const match = /HTTP\s+(\d+)/i.exec(message);
-      document.getElementById('stamp').textContent = match ? '请求失败：' + match[1] : '请求失败';
-      document.getElementById('stamp').className = 'pill bad';
+      setText('stamp', match ? '请求失败：' + match[1] : '请求失败');
+      setClass('stamp', 'bad');
       setAuthMessage(message || '请求失败', 'bad');
     }
     document.addEventListener('visibilitychange', syncAutoRefreshForVisibility);

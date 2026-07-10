@@ -12639,6 +12639,10 @@ async function runSelfTest() {
             checkedAt: '2026-07-08T00:00:00.500Z',
             point: { x: 5999, y: 66268, hp: 100, source: 'state' }
           },
+          network: {
+            sourceIp: '10.0.0.101',
+            sourceIps: ['10.0.0.18', '10.0.0.101', '10.0.0.102']
+          },
           probes: {
             lastReadOnlyProbe: {
               snapshotSafety: {
@@ -12809,6 +12813,9 @@ async function runSelfTest() {
           compactFromPublic.loginPointSafety.detail.nearestActive.name,
           compactStatus.recentExit.reason,
           compactStatus.recentBlock.reason,
+          compactStatus.network.sourceIpIndex,
+          compactStatus.network.sourceIpCount,
+          compactStatus.network.sourceIp,
           compactStatus.runner.lastRun.frames,
           Boolean(compactStatus.probes),
           Boolean(compactStatus.current),
@@ -12817,7 +12824,7 @@ async function runSelfTest() {
           !compactText.includes(largePayload) && compactText.length < publicText.length
         ].join('|');
       }),
-      want: 'true|77|true|true|true|true|true|false|loop-wait|88|10|20|360000|seek-coin|8|7|enemy|5999|active-near-login-point|1|88|23|enemy|latest|blocked-login|123|false|false|false|false|true'
+      want: 'true|77|true|true|true|true|true|false|loop-wait|88|10|20|360000|seek-coin|8|7|enemy|5999|active-near-login-point|1|88|23|enemy|latest|blocked-login|2|3|10.0.0.101|123|false|false|false|false|true'
     },
     {
       name: 'browserless compact status exposes session offline and today stats',
@@ -13075,15 +13082,28 @@ async function runSelfTest() {
             healthBody.webVersion === BROWSERLESS_WEB_PANEL_VERSION,
             panel.status,
             /抓鼠助手/.test(panelText),
-            panelText.includes(`网页 ${BROWSERLESS_WEB_PANEL_VERSION}`),
+            panelText.includes(`id="webVersion">${BROWSERLESS_WEB_PANEL_VERSION}</dd>`),
             /_webReloadVersion/.test(panelText),
             /AUTO_REFRESH_MS\s*=\s*3000/.test(panelText),
             /visibilitychange/.test(panelText),
             /document\.visibilityState\s*===\s*'visible'/.test(panelText),
             !/hasFocus/.test(panelText),
-            /位置/.test(panelText),
+            /class="layout"/.test(panelText),
+            /grid-template-columns:minmax\(240px,1fr\) minmax\(0,2fr\)/.test(panelText),
+            /class="stack left-stack"/.test(panelText),
+            /class="stack right-stack"/.test(panelText),
+            /程序状态/.test(panelText),
+            /账号状态/.test(panelText),
+            /角色状态/.test(panelText),
+            /id="sourceIpCount"/.test(panelText),
+            /id="accountStatus"/.test(panelText),
+            /id="roleStatus"/.test(panelText),
             /当前动作/.test(panelText),
             /id="actionDetails"/.test(panelText),
+            !/class="hero"/.test(panelText),
+            !/id="botLine"/.test(panelText),
+            !/id="reason"/.test(panelText),
+            !/id="session"/.test(panelText),
             !/<h2>当前目标<\/h2>/.test(panelText),
             !/id="(?:target|offlineStats|motion|shooting|profit|combat|safety)"/.test(panelText),
             !/<h2>上次运行<\/h2>/.test(panelText),
@@ -13098,7 +13118,7 @@ async function runSelfTest() {
           await handle.close();
         }
       })(),
-      want: '401|200|true|true|true|200|true|12|true|true|true|200|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|200|true|1'
+      want: '401|200|true|true|true|200|true|12|true|true|true|200|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|200|true|1'
     },
     {
       name: 'browserless runner self-test passes',
