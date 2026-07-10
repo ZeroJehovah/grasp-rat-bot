@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.10.10';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.10.11';
 
 function renderBrowserlessWebPanel() {
   return `<!doctype html>
@@ -11,7 +11,7 @@ function renderBrowserlessWebPanel() {
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>抓鼠助手</title>
   <style>
-    :root{color-scheme:dark;--bg:#101214;--panel:#181b1f;--panel2:#121518;--line:#30363d;--text:#eef2f5;--muted:#9ba7b4;--green:#4ade80;--amber:#fbbf24;--red:#fb7185;--blue:#60a5fa}
+    :root{color-scheme:dark;--bg:#101214;--panel:#181b1f;--panel2:#121518;--line:#30363d;--text:#eef2f5;--muted:#9ba7b4;--green:#4ade80;--amber:#fbbf24;--red:#fb7185;--blue:#60a5fa;--coin:#fbbf24}
     *{box-sizing:border-box}
     body{margin:0;background:var(--bg);color:var(--text);font:13px/1.45 system-ui,-apple-system,Segoe UI,sans-serif}
     main{max-width:1180px;margin:0 auto;padding:14px}
@@ -21,7 +21,12 @@ function renderBrowserlessWebPanel() {
     button:hover{border-color:#58616b}
     .toolbar{display:flex;align-items:center;gap:7px;flex-wrap:wrap;justify-content:flex-end}
     .pill{display:inline-flex;align-items:center;min-height:28px;border:1px solid var(--line);border-radius:999px;padding:3px 10px;background:var(--panel2);color:var(--muted);white-space:nowrap}
-    .ok{color:var(--green)}.warn{color:var(--amber)}.bad{color:var(--red)}.info{color:var(--blue)}.muted{color:var(--muted)}
+    .ok{color:var(--green)}.warn{color:var(--amber)}.bad{color:var(--red)}.info{color:var(--blue)}.coin{color:var(--coin)}.muted{color:var(--muted)}
+    .value-with-dot{display:inline-flex;align-items:center;gap:6px}
+    .field-value-text{min-width:0;overflow-wrap:anywhere}
+    .status-dot{width:8px;height:8px;border-radius:999px;flex:0 0 auto;background:currentColor;box-shadow:0 0 0 1px rgba(255,255,255,.12)}
+    .status-dot.breathe{animation:status-breathe 1.6s ease-in-out infinite}
+    @keyframes status-breathe{0%,100%{opacity:.62;transform:scale(.82);box-shadow:0 0 0 0 rgba(255,255,255,.18)}50%{opacity:1;transform:scale(1);box-shadow:0 0 0 6px rgba(255,255,255,0)}}
     .layout{display:grid;grid-template-columns:minmax(240px,1fr) minmax(0,2fr);gap:10px;align-items:start}
     .stack{display:flex;flex-direction:column;gap:10px;min-width:0}
     .stats-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;align-items:start}
@@ -208,23 +213,151 @@ function renderBrowserlessWebPanel() {
         + '/'
         + (total === null || total <= 0 ? '?' : String(Math.round(total)));
     };
+    function rowKey(pair, index) {
+      return String(pair?.[3] || pair?.[0] || index);
+    }
+    function readExistingRows(node) {
+      const map = new Map();
+      const children = Array.from(node.children);
+      for (let i = 0; i < children.length; i += 2) {
+        const dt = children[i];
+        const dd = children[i + 1];
+        if (!dt || !dd || dt.tagName !== 'DT' || dd.tagName !== 'DD') continue;
+        const key = dt.dataset.rowKey || dd.dataset.rowKey || dt.textContent || String(i / 2);
+        map.set(key, { dt, dd });
+      }
+      return map;
+    }
+    function syncDataset(node, attrs) {
+      const next = {};
+      for (const [key, attrValue] of Object.entries(attrs || {})) {
+        if (['className', 'dot', 'pulse'].includes(key)) continue;
+        if (attrValue === null || attrValue === undefined || attrValue === false) continue;
+        next[key] = String(attrValue);
+      }
+      const previousKeys = String(node.dataset.extraKeys || '').split(',').filter(Boolean);
+      for (const key of previousKeys) {
+        if (!(key in next)) delete node.dataset[key];
+      }
+      for (const [key, attrValue] of Object.entries(next)) {
+        if (node.dataset[key] !== attrValue) node.dataset[key] = attrValue;
+      }
+      const nextKeys = Object.keys(next).join(',');
+      if (nextKeys) {
+        if (node.dataset.extraKeys !== nextKeys) node.dataset.extraKeys = nextKeys;
+      } else {
+        delete node.dataset.extraKeys;
+      }
+    }
+    function setValueText(node, text) {
+      const next = value(text);
+      const target = node.querySelector('.field-value-text') || node;
+      if (target.textContent !== next) target.textContent = next;
+      if (node.dataset.value !== next) node.dataset.value = next;
+    }
+    function syncValueNode(node, text, attrs) {
+      const nextText = value(text);
+      const dotClass = attrs?.dot ? String(attrs.dot) : '';
+      const pulse = Boolean(attrs?.pulse);
+      const classes = [attrs?.className || '', dotClass ? 'value-with-dot' : ''].filter(Boolean).join(' ');
+      if (node.className !== classes) node.className = classes;
+      syncDataset(node, attrs);
+      const signature = JSON.stringify({ text: nextText, dotClass, pulse });
+      if (node.dataset.renderSignature === signature) return;
+      if (dotClass) {
+        const dot = document.createElement('span');
+        dot.className = ['status-dot', dotClass, pulse ? 'breathe' : ''].filter(Boolean).join(' ');
+        dot.setAttribute('aria-hidden', 'true');
+        const textNode = document.createElement('span');
+        textNode.className = 'field-value-text';
+        textNode.textContent = nextText;
+        node.replaceChildren(dot, textNode);
+      } else {
+        node.textContent = nextText;
+      }
+      node.dataset.renderSignature = signature;
+      node.dataset.value = nextText;
+    }
     function rows(id, pairs) {
       const node = document.getElementById(id);
       if (!node) return;
-      node.textContent = '';
-      for (const pair of pairs) {
-        const dt = document.createElement('dt');
-        const dd = document.createElement('dd');
-        dt.textContent = pair[0];
-        dd.textContent = value(pair[1]);
-        if (pair[2] && typeof pair[2] === 'object') {
-          for (const [key, attrValue] of Object.entries(pair[2])) {
-            if (attrValue === null || attrValue === undefined || attrValue === false) continue;
-            dd.dataset[key] = String(attrValue);
-          }
+      const existing = readExistingRows(node);
+      const keep = new Set();
+      let cursor = 0;
+      for (let index = 0; index < pairs.length; index += 1) {
+        const pair = pairs[index];
+        const key = rowKey(pair, index);
+        let record = existing.get(key);
+        if (!record) {
+          record = {
+            dt: document.createElement('dt'),
+            dd: document.createElement('dd')
+          };
+          record.dt.dataset.rowKey = key;
+          record.dd.dataset.rowKey = key;
         }
-        node.append(dt, dd);
+        keep.add(key);
+        if (record.dt.textContent !== value(pair[0])) record.dt.textContent = value(pair[0]);
+        syncValueNode(record.dd, pair[1], pair[2] && typeof pair[2] === 'object' ? pair[2] : null);
+        if (node.children[cursor] !== record.dt) node.insertBefore(record.dt, node.children[cursor] || null);
+        cursor += 1;
+        if (node.children[cursor] !== record.dd) node.insertBefore(record.dd, node.children[cursor] || null);
+        cursor += 1;
       }
+      for (const [key, record] of existing.entries()) {
+        if (keep.has(key)) continue;
+        record.dt.remove();
+        record.dd.remove();
+      }
+    }
+    function classAttrs(className, extra = null) {
+      return {
+        ...(extra && typeof extra === 'object' ? extra : {}),
+        className
+      };
+    }
+    function boolAttrs(flag) {
+      if (flag === null || flag === undefined) return classAttrs('info');
+      return classAttrs(flag ? 'ok' : 'bad');
+    }
+    function authStatusAttrs(status) {
+      const auth = status.auth || {};
+      if (auth.invalid) return classAttrs('bad');
+      if (auth.needsReauth || auth.missing) return classAttrs('warn');
+      if (auth.authenticated || status.session?.authenticated) return classAttrs('ok');
+      return classAttrs('info');
+    }
+    function tokenStatusAttrs(status) {
+      if (status.auth?.invalid) return classAttrs('bad');
+      return classAttrs(status.session?.tokenPresent ? 'ok' : 'bad');
+    }
+    function gameStatusAttrs(status) {
+      const inGame = Boolean(status.game?.inGame);
+      const tone = inGame ? 'ok' : (status.game?.state === 'waiting' ? 'warn' : 'info');
+      return classAttrs(tone, { dot: tone, pulse: inGame });
+    }
+    function hpAttrs(hp) {
+      const n = number(hp);
+      if (n === null) return classAttrs('info');
+      if (n >= 80) return classAttrs('ok');
+      if (n >= 50) return classAttrs('warn');
+      return classAttrs('bad');
+    }
+    function staminaAttrs(remainingMs, maxSeconds) {
+      const n = number(remainingMs);
+      if (n === null) return classAttrs('info');
+      const maxMs = Math.max(1, Number(maxSeconds || 0) * 1000);
+      const ratio = maxMs > 0 ? n / maxMs : 1;
+      if (n <= 0 || ratio <= 0.05) return classAttrs('bad');
+      if (ratio <= 0.2) return classAttrs('warn');
+      return classAttrs('ok');
+    }
+    function loginPointAttrs(status) {
+      const text = loginPointText(status);
+      if (/^安全/.test(text)) return classAttrs('ok');
+      if (/检查/.test(text)) return classAttrs('info');
+      if (/不安全/.test(text)) return classAttrs('bad');
+      return classAttrs('warn');
     }
     function targetLabel(target) {
       if (!target) return '--';
@@ -547,10 +680,13 @@ function renderBrowserlessWebPanel() {
       const value = String(url || '');
       const link = document.getElementById('authLink');
       const pre = document.getElementById('authUrl');
-      link.href = value || '#';
-      link.textContent = value ? '打开授权页' : '';
-      pre.textContent = value;
-      pre.style.display = value ? 'block' : 'none';
+      const nextHref = value || '#';
+      if (link.getAttribute('href') !== nextHref) link.href = nextHref;
+      const nextText = value ? '打开授权页' : '';
+      if (link.textContent !== nextText) link.textContent = nextText;
+      if (pre.textContent !== value) pre.textContent = value;
+      const nextDisplay = value ? 'block' : 'none';
+      if (pre.style.display !== nextDisplay) pre.style.display = nextDisplay;
     }
     function updateAuthPanel(status) {
       const auth = status.auth || {};
@@ -566,7 +702,7 @@ function renderBrowserlessWebPanel() {
       setAuthUrl(auth.authUrl || '');
       const message = document.getElementById('authMessage');
       if (message && !message.textContent) {
-        message.className = 'auth-message muted';
+        if (message.className !== 'auth-message muted') message.className = 'auth-message muted';
       }
     }
     function activeTarget(status) {
@@ -727,7 +863,7 @@ function renderBrowserlessWebPanel() {
       }
 
       if (!online && isSafetyStatus(status, kind, reason)) {
-        addRow(rowsOut, '登录点', loginPointText(status));
+        addRow(rowsOut, '登录点', loginPointText(status), false, loginPointAttrs(status));
         addRow(rowsOut, '登录点坐标', pointCoordText(status.loginPointSafety?.point));
         addRow(rowsOut, '不安全原因', unsafeReasonText(status));
         addRow(rowsOut, '附近危险', status.loginPointSafety?.ok ? '--' : targetLabel(status.loginPointSafety?.detail?.nearestActive));
@@ -746,12 +882,13 @@ function renderBrowserlessWebPanel() {
     function setText(id, text) {
       const node = document.getElementById(id);
       if (!node) return;
-      node.textContent = value(text);
+      const next = value(text);
+      if (node.textContent !== next) node.textContent = next;
     }
     function setClass(id, className) {
       const node = document.getElementById(id);
       if (!node) return;
-      node.className = className;
+      if (node.className !== className) node.className = className;
     }
     function updateWebVersion(latestVersion) {
       const latest = String(latestVersion || '').trim();
@@ -759,12 +896,12 @@ function renderBrowserlessWebPanel() {
       const node = document.getElementById('webVersion');
       if (!node) return;
       if (latest && current && latest !== current) {
-        node.textContent = current + ' -> ' + latest;
-        node.className = 'warn';
+        setText('webVersion', current + ' -> ' + latest);
+        setClass('webVersion', 'warn');
         return;
       }
-      node.textContent = latest || current || '--';
-      node.className = '';
+      setText('webVersion', latest || current || '--');
+      setClass('webVersion', '');
     }
     function alreadyReloadedForWebVersion(latest) {
       if (!latest) return false;
@@ -844,19 +981,19 @@ function renderBrowserlessWebPanel() {
       rows('accountStatus', [
         ['账号', s.session?.userId],
         ['名称', s.self?.name],
-        ['授权', authStatusShortText(s)],
-        ['登录信息', s.session?.tokenPresent ? '已有' : '缺失'],
-        ['已登录', bool(s.session?.authenticated)],
+        ['授权', authStatusShortText(s), authStatusAttrs(s)],
+        ['登录信息', s.session?.tokenPresent ? '已有' : '缺失', tokenStatusAttrs(s)],
+        ['已登录', bool(s.session?.authenticated), boolAttrs(s.session?.authenticated)],
         ['授权时间', fullStamp(s.auth?.tokenUpdatedAt || s.session?.tokenUpdatedAt)]
       ]);
       rows('roleStatus', [
-        ['游戏内', bool(s.game?.inGame)],
+        ['游戏内', bool(s.game?.inGame), gameStatusAttrs(s)],
         ['当前位置', s.game?.inGame ? pointText(s.self) : '--'],
-        ['血量', hpText(s.self?.hp)],
-        ['Drop', s.self?.drop],
+        ['血量', hpText(s.self?.hp), hpAttrs(s.self?.hp)],
+        ['Drop', s.self?.drop, classAttrs('coin')],
         ['体力5s', staminaPair(s.stamina?.remaining5s, 10)],
-        ['体力1h', staminaPair(s.stamina?.remaining1h, 3000)],
-        ['体力1d', staminaPair(s.stamina?.remaining1d, 20000)]
+        ['体力1h', staminaPair(s.stamina?.remaining1h, 3000), staminaAttrs(s.stamina?.remaining1h, 3000)],
+        ['体力1d', staminaPair(s.stamina?.remaining1d, 20000), staminaAttrs(s.stamina?.remaining1d, 20000)]
       ]);
       const currentSession = s.stats?.currentSession || {};
       const todayStats = s.stats?.today || {};
@@ -879,7 +1016,7 @@ function renderBrowserlessWebPanel() {
     }
     function updateCountdownNodes() {
       document.querySelectorAll('[data-countdown-at]').forEach(node => {
-        node.textContent = countdownUntil(node.dataset.countdownAt || '');
+        setValueText(node, countdownUntil(node.dataset.countdownAt || ''));
       });
     }
     function isPageVisibleForRefresh() {
@@ -950,8 +1087,10 @@ function renderBrowserlessWebPanel() {
     function setAuthMessage(text, className) {
       const node = document.getElementById('authMessage');
       if (!node) return;
-      node.textContent = value(text);
-      node.className = 'auth-message ' + (className || 'muted');
+      const nextText = value(text);
+      const nextClass = 'auth-message ' + (className || 'muted');
+      if (node.textContent !== nextText) node.textContent = nextText;
+      if (node.className !== nextClass) node.className = nextClass;
     }
     function showError(err) {
       const message = String(err?.message || '');

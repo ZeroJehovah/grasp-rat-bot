@@ -13066,6 +13066,17 @@ async function runSelfTest() {
           const healthBody = JSON.parse(await health.text());
           const panel = await fetch(`${base}/?token=test-token`);
           const panelText = await panel.text();
+          const panelScript = panelText.match(/<script>([\s\S]*?)<\/script>/);
+          let panelScriptOk = false;
+          try {
+            if (panelScript) {
+              const VmScript = require('vm').Script;
+              new VmScript(panelScript[1]);
+              panelScriptOk = true;
+            }
+          } catch (_) {
+            panelScriptOk = false;
+          }
           const stop = await fetch(`${base}/api/stop`, {
             method: 'POST',
             headers: { authorization: 'Bearer test-token' }
@@ -13112,6 +13123,18 @@ async function runSelfTest() {
             !/id="lastRun"/.test(panelText),
             /登录点坐标/.test(panelText),
             !panelText.includes('需要查看日志'),
+            panelScriptOk,
+            /--coin:#fbbf24/.test(panelText),
+            /\.status-dot/.test(panelText),
+            /@keyframes status-breathe/.test(panelText),
+            /function readExistingRows/.test(panelText),
+            /function syncValueNode/.test(panelText),
+            /dataset\.rowKey/.test(panelText),
+            !/node\.textContent\s*=\s*''/.test(panelText),
+            /authStatusAttrs\(s\)/.test(panelText),
+            /gameStatusAttrs\(s\)/.test(panelText),
+            /loginPointAttrs\(status\)/.test(panelText),
+            /classAttrs\('coin'\)/.test(panelText),
             stop.status,
             JSON.parse(await stop.text()).stopped,
             stopCalled
@@ -13120,7 +13143,7 @@ async function runSelfTest() {
           await handle.close();
         }
       })(),
-      want: '401|200|true|true|true|200|true|12|true|true|true|200|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|200|true|1'
+      want: '401|200|true|true|true|200|true|12|true|true|true|200|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|200|true|1'
     },
     {
       name: 'browserless runner self-test passes',
