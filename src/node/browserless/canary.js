@@ -95,13 +95,6 @@ function loginPointFromState(state) {
 
 async function runPreLoginSnapshotSafety(config, state, deps = {}) {
   const loginPoint = loginPointFromState(state);
-  if (!loginPoint) {
-    return {
-      ok: false,
-      reason: 'missing-login-point',
-      loginPoint: null
-    };
-  }
   const url = buildSnapshotProbeUrl({
     gameOrigin: config.gameOrigin,
     snapshotPath: config.snapshotPath || '/snapshot',
@@ -122,6 +115,36 @@ async function runPreLoginSnapshotSafety(config, state, deps = {}) {
     loginPoint,
     latestKnownTick: state?.frameAges?.latestKnownTick || state?.latestKnownTick || 0
   });
+  if (response.ok && summary.valid && summary.selfPresent) {
+    return {
+      ok: true,
+      reason: 'self-present-reentry',
+      originalReason: summary.safety?.reason || '',
+      bypassedPreLoginSafety: true,
+      request: { url: redactSecrets(url) },
+      response: {
+        httpOk: response.ok,
+        status: response.status,
+        statusText: response.statusText || '',
+        summary
+      },
+      loginPoint
+    };
+  }
+  if (!loginPoint) {
+    return {
+      ok: false,
+      reason: 'missing-login-point',
+      request: { url: redactSecrets(url) },
+      response: {
+        httpOk: response.ok,
+        status: response.status,
+        statusText: response.statusText || '',
+        summary
+      },
+      loginPoint: null
+    };
+  }
   return {
     ok: Boolean(response.ok && summary.valid && summary.safety?.ok),
     reason: response.ok ? (summary.safety?.reason || 'invalid-payload') : `snapshot-http-${response.status}`,
@@ -291,6 +314,11 @@ async function runReadOnlyCanary(config, options = {}) {
       settlement: null,
       lastShootAck: null
     },
+    entry: {
+      firstSelf: null,
+      firstSelfAt: '',
+      firstSelfTick: null
+    },
     leave: null,
     targetWhitelist: targetWhitelistSummary,
     error: ''
@@ -459,6 +487,24 @@ async function runReadOnlyCanary(config, options = {}) {
         if (frame.decodedJson) {
           stateStore.ingestFrame(frame.decodedJson, { receivedAtMs: atMs });
           const currentState = stateStore.getState(atMs);
+          const currentSelf = currentState?.realtime?.self || null;
+          if (
+            !result.entry.firstSelf
+            && currentSelf
+            && Number.isFinite(Number(currentSelf.x))
+            && Number.isFinite(Number(currentSelf.y))
+          ) {
+            result.entry.firstSelf = {
+              userId: Number.isFinite(Number(currentSelf.user_id ?? currentSelf.userId)) ? Number(currentSelf.user_id ?? currentSelf.userId) : null,
+              entityId: Number.isFinite(Number(currentSelf.entity_id ?? currentSelf.entityId)) ? Number(currentSelf.entity_id ?? currentSelf.entityId) : null,
+              name: currentSelf.name || '',
+              x: Number(currentSelf.x),
+              y: Number(currentSelf.y),
+              hp: Number.isFinite(Number(currentSelf.hp)) ? Number(currentSelf.hp) : null
+            };
+            result.entry.firstSelfAt = new Date(atMs).toISOString();
+            result.entry.firstSelfTick = currentState?.realtime?.tick ?? frame.decodedTick ?? null;
+          }
           if (actionAdapter) {
             const settlement = actionAdapter.observeState(currentState);
             if (settlement) {

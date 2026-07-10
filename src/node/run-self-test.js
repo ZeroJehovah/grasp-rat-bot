@@ -93,6 +93,7 @@ const {
 const {
   browserlessLoopPlan,
   publicConfig,
+  learnedLoginPointFromCanary,
   runBrowserlessRunner,
   runBrowserlessRunnerSelfTest
 } = require('./browserless/runner');
@@ -10359,6 +10360,7 @@ async function runSelfTest() {
       name: 'browserless read-only canary blocks before ws without login point',
       got: (async () => {
         let opened = false;
+        let fetched = false;
         const result = await runReadOnlyCanary({
           gameOrigin: 'https://grasp-rat-game.h-e.top',
           userId: 7,
@@ -10367,7 +10369,19 @@ async function runSelfTest() {
         }, {
           now: () => Date.UTC(2026, 6, 8, 1, 0, 0),
           persistedState: {},
-          fetchImpl: async () => { throw new Error('fetch should not run'); },
+          fetchImpl: async () => {
+            fetched = true;
+            return fakeResponseForTest({
+              body: {
+                type: 'snapshot',
+                tick: 1,
+                entities: [{ entity_id: 2, user_id: 8, name: 'other', x: 100, y: 200, hp: 100 }],
+                bullets: [],
+                coin_drops: [],
+                messages: []
+              }
+            });
+          },
           openBrowserlessWs: async () => {
             opened = true;
             throw new Error('ws should not open');
@@ -10378,10 +10392,69 @@ async function runSelfTest() {
           result.ok,
           result.snapshotSafety.reason,
           result.error,
+          fetched,
           opened
         ].join('|');
       })(),
-      want: 'false|missing-login-point|snapshot safety not confirmed: missing-login-point|false'
+      want: 'false|missing-login-point|snapshot safety not confirmed: missing-login-point|true|false'
+    },
+    {
+      name: 'browserless read-only canary reconnects when snapshot already has self without login point',
+      got: (async () => {
+        let t = Date.UTC(2026, 6, 8, 1, 0, 0);
+        let opened = false;
+        const posFrame = encodeGrzFrameForTest({
+          type: 'pos',
+          tick: 2,
+          entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 300, y: 400, hp: 88 }],
+          bullets: []
+        });
+        const result = await runReadOnlyCanary({
+          gameOrigin: 'https://grasp-rat-game.h-e.top',
+          userId: 7,
+          sessionToken: 'canary-token',
+          readOnlyProbeMs: 1000
+        }, {
+          now: () => t,
+          sleep: async ms => { t += ms; },
+          persistedState: {},
+          fetchImpl: async () => fakeResponseForTest({
+            body: {
+              type: 'snapshot',
+              tick: 1,
+              entities: [
+                { entity_id: 1, user_id: 7, name: 'self', x: 300, y: 400, hp: 88 },
+                { entity_id: 2, user_id: 8, name: 'active', x: 320, y: 420, hp: 100, current_join_mode: 'Active', life: 'Alive' }
+              ],
+              bullets: [],
+              coin_drops: [],
+              messages: []
+            }
+          }),
+          openBrowserlessWs: async options => {
+            opened = true;
+            t += 100;
+            options.onMessage(posFrame);
+            return {
+              isOpen: () => true,
+              close: () => {},
+              send: () => {}
+            };
+          },
+          leaveWithVerification: async () => ({ ok: true, attempts: [{ ok: true, summary: { leaveConfirmed: true } }] })
+        });
+        return [
+          result.ok,
+          result.snapshotSafety.reason,
+          result.snapshotSafety.originalReason,
+          result.snapshotSafety.bypassedPreLoginSafety,
+          opened,
+          result.entry.firstSelf.x,
+          result.entry.firstSelf.y,
+          result.leave.ok
+        ].join('|');
+      })(),
+      want: 'true|self-present-reentry|missing-login-point|true|true|300|400|true'
     },
     {
       name: 'browserless read-only canary does not fail safety after deadline',
@@ -12037,6 +12110,43 @@ async function runSelfTest() {
         ].join('|');
       }),
       want: 'true|dry-run|true|read-only|true|true|true'
+    },
+    {
+      name: 'browserless runner learns login point from offline entry self not final self',
+      got: (() => {
+        const offline = learnedLoginPointFromCanary({
+          snapshotSafety: { response: { summary: { selfPresent: false } } },
+          entry: {
+            firstSelf: { x: 5999, y: 66268, hp: 100 }
+          },
+          state: {
+            realtime: {
+              self: { x: 94519, y: 30158, hp: 73 }
+            }
+          }
+        });
+        const reentry = learnedLoginPointFromCanary({
+          snapshotSafety: { response: { summary: { selfPresent: true } } },
+          entry: {
+            firstSelf: { x: -27539, y: 83966, hp: 18 }
+          },
+          state: {
+            realtime: {
+              self: { x: -27539, y: 83966, hp: 18 }
+            }
+          }
+        });
+        return [
+          offline.finalSelf.x,
+          offline.loginPoint.x,
+          offline.loginPoint.y,
+          offline.loginPoint.hp,
+          offline.loginPoint.source,
+          reentry.finalSelf.x,
+          reentry.loginPoint === null
+        ].join('|');
+      })(),
+      want: '94519|5999|66268|73|browserless-entry-self|-27539|true'
     },
     {
       name: 'browserless runner catches canary throw and waits for explicit stop',

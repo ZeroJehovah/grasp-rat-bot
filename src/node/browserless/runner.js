@@ -133,17 +133,33 @@ function hydrateConfigFromState(config, state) {
 
 function learnedLoginPointFromCanary(canary) {
   const finalSelf = canary?.state?.realtime?.self || canary?.decisions?.last?.input?.self || null;
+  const entrySelf = canary?.entry?.firstSelf || null;
   if (!finalSelf || !Number.isFinite(Number(finalSelf.x)) || !Number.isFinite(Number(finalSelf.y))) {
     return { finalSelf: null, loginPoint: null };
   }
+  const snapshotSelfPresent = Boolean(canary?.snapshotSafety?.response?.summary?.selfPresent);
+  const hasEntrySummary = canary && Object.prototype.hasOwnProperty.call(canary, 'entry');
+  let pointSelf = null;
+  if (!snapshotSelfPresent) {
+    if (entrySelf && Number.isFinite(Number(entrySelf.x)) && Number.isFinite(Number(entrySelf.y))) {
+      pointSelf = entrySelf;
+    } else if (!hasEntrySummary) {
+      pointSelf = finalSelf;
+    }
+  }
+  const pointSource = pointSelf === entrySelf ? 'browserless-entry-self' : 'canary-self';
   return {
     finalSelf,
-    loginPoint: {
-      x: Number(finalSelf.x),
-      y: Number(finalSelf.y),
-      hp: Number.isFinite(Number(finalSelf.hp)) ? Number(finalSelf.hp) : null,
-      source: 'canary-self'
-    }
+    loginPoint: pointSelf
+      ? {
+          x: Number(pointSelf.x),
+          y: Number(pointSelf.y),
+          hp: Number.isFinite(Number(finalSelf.hp))
+            ? Number(finalSelf.hp)
+            : (Number.isFinite(Number(pointSelf.hp)) ? Number(pointSelf.hp) : null),
+          source: pointSource
+        }
+      : null
   };
 }
 
