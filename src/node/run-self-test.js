@@ -6102,7 +6102,7 @@ async function runSelfTest() {
           row?.[7]
         ].join('|');
       })(),
-      want: 'flee|safety|avoid-invulnerable-target|8|true|2500|9600|true|snapshot|9600|2500|1|Passive'
+      want: 'flee|safety|avoid-invulnerable-target||true|2500|9600|true|snapshot|9600|2500|1|Passive'
     },
     {
       name: 'browserless decision adapter emits snapshot fallback profit without commands',
@@ -7128,6 +7128,122 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'safety-exit|safety|profit-live-snapshot-active-threat|true|8|true'
+    },
+    {
+      name: 'browserless action adapter pre-approaches AFK target before shooting',
+      got: (() => {
+        const farCommands = [];
+        const farAdapter = createBrowserlessActionAdapter({
+          now: () => 1200 + farCommands.length * 200,
+          commandIntervalMs: 1,
+          attackRangeCm: 14500,
+          transport: {
+            sendVelocity: (dx, dy) => farCommands.push(`vel ${dx} ${dy}`),
+            sendShoot: () => farCommands.push('shoot')
+          }
+        });
+        const far = farAdapter.applyDecision({
+          realtime: { self: { user_id: 7, x: 0, y: 0 }, tick: 1 }
+        }, {
+          kind: 'profit-candidate',
+          band: 'profit',
+          action: {
+            kind: 'attack',
+            band: 'profit',
+            reason: 'best-opportunity-enemy',
+            target: { type: 'enemy', userId: 8, x: 10000, y: 0, active: false, drop: 12 }
+          }
+        });
+        const closeCommands = [];
+        const closeAdapter = createBrowserlessActionAdapter({
+          now: () => 1400 + closeCommands.length * 200,
+          commandIntervalMs: 1,
+          attackRangeCm: 14500,
+          transport: {
+            sendVelocity: (dx, dy) => closeCommands.push(`vel ${dx} ${dy}`),
+            sendShoot: (targetX, targetY, startX, startY) => closeCommands.push(`shoot ${targetX} ${targetY} ${startX} ${startY}`)
+          }
+        });
+        const close = closeAdapter.applyDecision({
+          realtime: { self: { user_id: 7, x: 0, y: 0 }, tick: 2 }
+        }, {
+          kind: 'profit-candidate',
+          band: 'profit',
+          action: {
+            kind: 'attack',
+            band: 'profit',
+            reason: 'best-opportunity-enemy',
+            target: { type: 'enemy', userId: 8, x: 4900, y: 0, active: false, drop: 12 }
+          }
+        });
+        return [
+          far.kind,
+          far.reason,
+          far.afkAttackCommit.commitRangeCm,
+          farCommands.join(','),
+          !farCommands.includes('shoot'),
+          close.kind,
+          close.shoot.ok,
+          closeCommands.some(item => item.startsWith('shoot '))
+        ].join('|');
+      })(),
+      want: 'velocity|profit-afk-preengage|5000|vel 1 0|true|profit-attack|true|true'
+    },
+    {
+      name: 'browserless profit live hands moving AFK attack target to combat',
+      got: (() => {
+        const decisionAdapter = createBrowserlessDecisionAdapter({
+          userId: 7,
+          controlMode: 'profit-live',
+          combatEnabled: true
+        });
+        const commands = [];
+        const actionAdapter = createBrowserlessActionAdapter({
+          now: () => 1200 + commands.length * 200,
+          commandIntervalMs: 1,
+          attackRangeCm: 14500,
+          transport: {
+            sendVelocity: (dx, dy) => commands.push(`vel ${dx} ${dy}`),
+            sendShoot: (targetX, targetY, startX, startY) => commands.push(`shoot ${targetX} ${targetY} ${startX} ${startY}`)
+          }
+        });
+        const store = createBrowserlessStateStore({ userId: 7 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 59,
+          entities: [
+            { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+            fullStamina5s({ entity_id: 2, user_id: 8, name: 'runner-afk', x: 4900, y: 0, hp: 80, current_join_mode: 'Passive', drop: 12 })
+          ],
+          bullets: []
+        }, { receivedAtMs: 1000 });
+        const first = decisionAdapter.decide(store.getState(1200), { nowMs: 1200 });
+        const actionResult = actionAdapter.applyDecision(store.getState(1200), first);
+        decisionAdapter.observeActionResult(actionResult, first, { nowMs: 1300 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 60,
+          entities: [
+            { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+            fullStamina5s({ entity_id: 2, user_id: 8, name: 'runner-afk', x: 6200, y: 0, hp: 80, current_join_mode: 'Passive', drop: 12 }),
+            fullStamina5s({ entity_id: 3, user_id: 9, name: 'other-afk', x: 40000, y: 0, hp: 80, current_join_mode: 'Passive', drop: 99 })
+          ],
+          bullets: []
+        }, { receivedAtMs: 1500 });
+        const second = decisionAdapter.decide(store.getState(1600), { nowMs: 1600 });
+        return [
+          first.kind,
+          actionResult.kind,
+          actionResult.shoot.ok,
+          second.kind,
+          second.band,
+          second.action.target.userId,
+          second.combat.target.combatIntent,
+          second.combat.target.combatEngagement?.reengage,
+          second.profit.best?.target?.userId
+        ].join('|');
+      })(),
+      want: 'profit-candidate|profit-attack|true|combat-live|combat|8|engaged||9'
     },
     {
       name: 'browserless action shoot records attack history for post-attack logic',

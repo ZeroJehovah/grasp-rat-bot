@@ -13,6 +13,7 @@ const DEFAULT_COMMAND_INTERVAL_MS = 500;
 const DEFAULT_SETTLEMENT_FRAMES = 2;
 const DEFAULT_COMBAT_SHOOT_MIN_INTERVAL_MS = 160;
 const DEFAULT_ATTACK_RANGE_CM = BROWSER_RUNTIME_DEFAULTS.attackRange;
+const DEFAULT_AFK_ATTACK_COMMIT_RANGE_CM = 5000;
 
 function numberOrNull(value) {
   const number = Number(value);
@@ -160,6 +161,14 @@ function movementVectorToTarget(self, target, options = {}) {
     dy: roundVelocity(rawDy / distance),
     distance: Math.round(distance)
   };
+}
+
+function afkAttackCommitRangeCm(options = {}) {
+  const value = Number(options.afkAttackCommitRangeCm
+    ?? options.afkAttackCommitRange
+    ?? options.browserlessAfkAttackCommitRangeCm
+    ?? DEFAULT_AFK_ATTACK_COMMIT_RANGE_CM);
+  return Number.isFinite(value) ? Math.max(0, value) : DEFAULT_AFK_ATTACK_COMMIT_RANGE_CM;
 }
 
 function profitActionFromDecision(decision) {
@@ -895,7 +904,9 @@ function createBrowserlessActionAdapter(options = {}) {
       ? Number(vector.distance)
       : Math.hypot(Number(target?.x) - Number(self?.x), Number(target?.y) - Number(self?.y));
     const attackRange = Math.max(0, Number(options.attackRangeCm ?? options.attackRange ?? DEFAULT_ATTACK_RANGE_CM));
-    if (!(Number.isFinite(distance) && distance <= attackRange)) {
+    const commitRange = afkAttackCommitRangeCm(options);
+    const shootRange = commitRange > 0 ? Math.min(attackRange, commitRange) : attackRange;
+    if (!(Number.isFinite(distance) && distance <= shootRange)) {
       if (!vector.ok) {
         const stopped = stop(vector.reason || 'profit-afk-missing-position');
         return {
@@ -909,16 +920,22 @@ function createBrowserlessActionAdapter(options = {}) {
           target
         };
       }
-      const sent = sendVelocity(vector.dx, vector.dy, 'profit-afk-seek', target);
+      const reason = Number.isFinite(distance) && distance <= attackRange ? 'profit-afk-preengage' : 'profit-afk-seek';
+      const sent = sendVelocity(vector.dx, vector.dy, reason, target);
       return {
         ok: sent.ok,
         kind: 'velocity',
-        reason: 'profit-afk-seek',
+        reason,
         vector,
         command: sent.command || null,
         skipped: Boolean(sent.skipped),
         ...transportFailure(sent),
-        target
+        target,
+        afkAttackCommit: {
+          commitRangeCm: Math.round(shootRange),
+          attackRangeCm: Math.round(attackRange),
+          distance: Math.round(distance)
+        }
       };
     }
 
@@ -1106,6 +1123,7 @@ function createBrowserlessActionAdapter(options = {}) {
 
 module.exports = {
   DEFAULT_COMMAND_INTERVAL_MS,
+  DEFAULT_AFK_ATTACK_COMMIT_RANGE_CM,
   DEFAULT_COIN_TARGET_DEAD_ZONE_CM,
   DEFAULT_COMBAT_SHOOT_MIN_INTERVAL_MS,
   DEFAULT_SETTLEMENT_FRAMES,

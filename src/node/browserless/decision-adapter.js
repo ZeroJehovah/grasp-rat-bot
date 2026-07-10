@@ -78,6 +78,7 @@ const DEFAULT_RECOVERY_COIN_MAX_DISTANCE = BROWSER_RUNTIME_DEFAULTS.recoveryCoin
 const DEFAULT_RECOVERY_PLAYER_DROP_MIN_AMOUNT = 2;
 const DEFAULT_POST_ATTACK_RECOVERY_DROP_MAX_DISTANCE = BROWSER_RUNTIME_DEFAULTS.postAttackRecoveryDropMaxDistance;
 const DEFAULT_STAMINA_BUDGET_RELOGIN_DELAY_MS = BROWSER_RUNTIME_DEFAULTS.staminaBudgetReloginDelayMs;
+const DEFAULT_AFK_ATTACK_COMMIT_RANGE_CM = 5000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const UTC8_OFFSET_MS = 8 * 60 * 60 * 1000;
 
@@ -2496,9 +2497,14 @@ function summarizeOpportunisticShotTarget(target, options = {}) {
 function pickOpportunisticShotTarget(input, options = {}) {
   if (!input?.self) return null;
   const attackRange = Math.max(0, Number(options.attackRange ?? options.combatAttackRange ?? DEFAULT_ATTACK_RANGE));
+  const commitRange = Math.max(0, Number(options.afkAttackCommitRangeCm
+    ?? options.afkAttackCommitRange
+    ?? options.browserlessAfkAttackCommitRangeCm
+    ?? DEFAULT_AFK_ATTACK_COMMIT_RANGE_CM));
+  const maxShotRange = commitRange > 0 ? Math.min(attackRange, commitRange) : attackRange;
   return (input.afkTargets || [])
     .filter(target => target.alive !== false && !target.invulnerable && !target.active && !target.firing)
-    .filter(target => Number(target.distance || Infinity) <= attackRange)
+    .filter(target => Number(target.distance || Infinity) <= maxShotRange)
     .map(target => {
       const staminaCost = enemyStaminaCost(target, options);
       return {
@@ -2921,7 +2927,14 @@ function buildCombatDecision(input, stateful = {}, options = {}) {
     ...(input.rawRealtime || {}),
     // Keep targets and bullets realtime-only, but pass the enriched realtime self so
     // browserless combat sees snapshot-sourced private stamina fields.
-    self: input.self || input.rawRealtime?.self || null
+    self: input.self || input.rawRealtime?.self || null,
+    // Visible targets keep realtime coordinates/authority plus browserless recent
+    // motion and snapshot-sourced reward metadata. Snapshot coordinates still do
+    // not enter combat target, aim, or fire decisions.
+    entities: [
+      input.self || input.rawRealtime?.self || null,
+      ...(input.visibleTargets || [])
+    ].filter(Boolean)
   };
   const combat = buildBrowserlessCombatDryRun({
     userId: input.userId,
@@ -3450,6 +3463,31 @@ function recordAttackHistoryFromActionResult(decisionState, actionResult, decisi
     ...(Array.isArray(decisionState.attackHistory) ? decisionState.attackHistory : []),
     entry
   ].slice(-50);
+  if (!combat) {
+    decisionState.combatTarget = {
+      id,
+      at: nowMs,
+      firstSeenAt: nowMs,
+      name: entry.name || '',
+      x: entry.x,
+      y: entry.y,
+      hp: numberOrNull(target?.knownHp ?? target?.hp),
+      displayHp: numberOrNull(target?.hp),
+      drop: entry.drop,
+      distance: entry.distance,
+      reason: decision?.action?.reason || decision?.reason || actionResult.reason || 'profit-afk-attack',
+      intent: 'profit',
+      originIntent: 'afk-profit',
+      originReason: decision?.action?.reason || decision?.reason || actionResult.reason || 'profit-afk-attack',
+      lastDamageAt: nowMs,
+      lastInRangeAt: nowMs,
+      seenTargetRealBulletAt: 0,
+      lastDamageAmount: 0,
+      noDamageMs: 0,
+      motionSamples: [],
+      self: null
+    };
+  }
   return entry;
 }
 
