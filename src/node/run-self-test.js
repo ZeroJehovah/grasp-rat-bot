@@ -111,6 +111,9 @@ const {
   startStatusServer
 } = require('./browserless/status-server');
 const {
+  BROWSERLESS_WEB_PANEL_VERSION
+} = require('./browserless/web-panel');
+const {
   createSourceIpController
 } = require('./browserless/source-ip-controller');
 const {
@@ -12876,9 +12879,12 @@ async function runSelfTest() {
           const denied = await fetch(`${base}/api/status`);
           const allowed = await fetch(`${base}/api/status?token=test-token`);
           const allowedText = await allowed.text();
+          const allowedBody = JSON.parse(allowedText);
           const compact = await fetch(`${base}/api/panel-status?token=test-token`);
           const compactText = await compact.text();
           const compactBody = JSON.parse(compactText);
+          const health = await fetch(`${base}/api/health`);
+          const healthBody = JSON.parse(await health.text());
           const panel = await fetch(`${base}/?token=test-token`);
           const panelText = await panel.text();
           const stop = await fetch(`${base}/api/stop`, {
@@ -12888,14 +12894,19 @@ async function runSelfTest() {
           return [
             denied.status,
             allowed.status,
-            JSON.parse(allowedText).session.tokenPresent,
+            allowedBody.session.tokenPresent,
+            allowedBody.statusServer.webVersion === BROWSERLESS_WEB_PANEL_VERSION,
             !allowedText.includes('must-not-leak'),
             compact.status,
             compactBody.compact,
             compactBody.self.hp,
+            compactBody.statusServer.webVersion === BROWSERLESS_WEB_PANEL_VERSION,
             !compactText.includes('must-not-leak'),
+            healthBody.webVersion === BROWSERLESS_WEB_PANEL_VERSION,
             panel.status,
             /抓鼠助手/.test(panelText),
+            panelText.includes(`网页 ${BROWSERLESS_WEB_PANEL_VERSION}`),
+            /_webReloadVersion/.test(panelText),
             /位置/.test(panelText),
             /登录点坐标/.test(panelText),
             !panelText.includes('需要查看日志'),
@@ -12907,7 +12918,7 @@ async function runSelfTest() {
           await handle.close();
         }
       })(),
-      want: '401|200|true|true|200|true|12|true|200|true|true|true|true|200|true|1'
+      want: '401|200|true|true|true|200|true|12|true|true|true|200|true|true|true|true|true|true|200|true|1'
     },
     {
       name: 'browserless runner self-test passes',

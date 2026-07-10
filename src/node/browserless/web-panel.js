@@ -1,5 +1,8 @@
 'use strict';
 
+// Bump only when this browserless web page or its frontend assets change.
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.10.1';
+
 function renderBrowserlessWebPanel() {
   return `<!doctype html>
 <html lang="zh-CN">
@@ -42,6 +45,7 @@ function renderBrowserlessWebPanel() {
     <header>
       <h1>抓鼠助手</h1>
       <div class="toolbar">
+        <span id="webVersion" class="pill">网页 ${BROWSERLESS_WEB_PANEL_VERSION}</span>
         <span id="stamp" class="pill">--</span>
         <button id="refreshBtn" type="button" title="刷新状态">刷新</button>
         <button id="stopBtn" type="button" title="停止自动运行">停止</button>
@@ -99,6 +103,8 @@ function renderBrowserlessWebPanel() {
     const params = new URLSearchParams(location.search);
     const token = params.get('token') || localStorage.graspRatBrowserlessToken || '';
     if (token) localStorage.graspRatBrowserlessToken = token;
+    const WEB_PANEL_VERSION = ${JSON.stringify(BROWSERLESS_WEB_PANEL_VERSION)};
+    const WEB_PANEL_RELOAD_KEY = 'graspRatBrowserlessPanelReloadedVersion';
 
     const value = v => v === null || v === undefined || v === '' ? '--' : String(v);
     const number = v => v === null || v === undefined || v === '' ? null : (Number.isFinite(Number(v)) ? Number(v) : null);
@@ -433,6 +439,60 @@ function renderBrowserlessWebPanel() {
     function setText(id, text) {
       document.getElementById(id).textContent = value(text);
     }
+    function setClass(id, className) {
+      document.getElementById(id).className = className;
+    }
+    function updateWebVersion(latestVersion) {
+      const latest = String(latestVersion || '').trim();
+      const current = String(WEB_PANEL_VERSION || '').trim();
+      const node = document.getElementById('webVersion');
+      if (!node) return;
+      if (latest && current && latest !== current) {
+        node.textContent = '网页 ' + current + ' -> ' + latest;
+        node.className = 'pill warn';
+        return;
+      }
+      node.textContent = '网页 ' + (latest || current || '--');
+      node.className = 'pill';
+    }
+    function alreadyReloadedForWebVersion(latest) {
+      if (!latest) return false;
+      if (params.get('_webReloadVersion') === latest) return true;
+      try {
+        return sessionStorage.getItem(WEB_PANEL_RELOAD_KEY) === latest;
+      } catch (_) {
+        return false;
+      }
+    }
+    function markReloadedForWebVersion(latest) {
+      try {
+        sessionStorage.setItem(WEB_PANEL_RELOAD_KEY, latest);
+      } catch (_) {}
+    }
+    function clearReloadedForCurrentWebVersion() {
+      try {
+        if (sessionStorage.getItem(WEB_PANEL_RELOAD_KEY) === WEB_PANEL_VERSION) {
+          sessionStorage.removeItem(WEB_PANEL_RELOAD_KEY);
+        }
+      } catch (_) {}
+    }
+    function maybeReloadForWebVersion(status) {
+      const latest = String(status?.statusServer?.webVersion || '').trim();
+      updateWebVersion(latest);
+      if (!latest || latest === WEB_PANEL_VERSION) {
+        clearReloadedForCurrentWebVersion();
+        return false;
+      }
+      if (alreadyReloadedForWebVersion(latest)) return false;
+      markReloadedForWebVersion(latest);
+      const next = new URL(location.href);
+      next.searchParams.set('_webReloadVersion', latest);
+      next.searchParams.set('_webReloadAt', String(Date.now()));
+      setText('botLine', '网页版本更新，正在刷新');
+      setText('reason', '正在拉取最新网页 ' + latest);
+      setTimeout(() => location.replace(next.toString()), 50);
+      return true;
+    }
     async function fetchStatus() {
       const url = '/api/panel-status' + (token ? '?token=' + encodeURIComponent(token) : '');
       const res = await fetch(url, { cache: 'no-store' });
@@ -441,10 +501,11 @@ function renderBrowserlessWebPanel() {
     }
     async function refresh() {
       const s = await fetchStatus();
+      if (maybeReloadForWebVersion(s)) return;
       const statusClass = s.runner?.lastError ? 'bad' : (s.runner?.running ? 'ok' : 'info');
       const reason = reasonText(s.runner?.lastError || s.action?.reason || s.decision?.reason || s.recentExit?.reason);
       document.getElementById('stamp').textContent = stamp(s.updatedAt);
-      document.getElementById('stamp').className = 'pill ' + statusClass;
+      setClass('stamp', 'pill ' + statusClass);
       setText('botLine', '助手：' + actionText(s));
       setText('reason', reason);
       setText('hp', s.self?.hp);
@@ -538,5 +599,6 @@ function renderBrowserlessWebPanel() {
 }
 
 module.exports = {
+  BROWSERLESS_WEB_PANEL_VERSION,
   renderBrowserlessWebPanel
 };

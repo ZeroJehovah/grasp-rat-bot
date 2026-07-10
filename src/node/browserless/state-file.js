@@ -609,7 +609,8 @@ function buildPublicBrowserlessStatus(state, config = {}) {
     statusServer: {
       host: config.statusHost || '',
       port: Number(config.statusPort || 0),
-      webTokenPresent: Boolean(config.webToken)
+      webTokenPresent: Boolean(config.webToken),
+      webVersion: compactString(config.webVersion, 48)
     }
   };
   return redactStructuredSecrets(publicState);
@@ -674,7 +675,8 @@ function buildCompactBrowserlessStatus(state, config = {}) {
     statusServer: {
       host: config.statusHost || '',
       port: Number(config.statusPort || 0),
-      webTokenPresent: Boolean(config.webToken)
+      webTokenPresent: Boolean(config.webToken),
+      webVersion: compactString(config.webVersion, 48)
     }
   };
   return redactStructuredSecrets(compactState);

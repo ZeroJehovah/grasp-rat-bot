@@ -3,7 +3,10 @@
 const http = require('http');
 const { buildCompactBrowserlessStatus } = require('./state-file');
 const { redactStructuredSecrets } = require('./session-client');
-const { renderBrowserlessWebPanel } = require('./web-panel');
+const {
+  BROWSERLESS_WEB_PANEL_VERSION,
+  renderBrowserlessWebPanel
+} = require('./web-panel');
 
 function isLoopbackHost(host) {
   const value = String(host || '').trim().toLowerCase();
@@ -43,6 +46,26 @@ function sendHtml(res, status, html) {
   res.end(html);
 }
 
+function statusServerConfig(options = {}, server = null, webToken = '') {
+  const address = server?.address?.();
+  return {
+    statusHost: options.host || options.statusHost || '',
+    statusPort: typeof address === 'object' && address ? address.port : Number(options.port || options.statusPort || 0),
+    webToken,
+    webVersion: BROWSERLESS_WEB_PANEL_VERSION
+  };
+}
+
+function withStatusServerMeta(status, config) {
+  const output = redactStructuredSecrets(status);
+  if (!output || typeof output !== 'object' || Array.isArray(output)) return output;
+  output.statusServer = {
+    ...(output.statusServer && typeof output.statusServer === 'object' ? output.statusServer : {}),
+    webVersion: config.webVersion
+  };
+  return output;
+}
+
 function createStatusServer(options = {}) {
   const webToken = String(options.webToken || '');
   const getStatus = typeof options.getStatus === 'function' ? options.getStatus : () => ({ ok: true });
@@ -52,12 +75,13 @@ function createStatusServer(options = {}) {
   const server = http.createServer(async (req, res) => {
     const parsed = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
     try {
+      const config = statusServerConfig(options, server, webToken);
       if (req.method === 'GET' && parsed.pathname === '/') {
         sendHtml(res, 200, renderBrowserlessWebPanel());
         return;
       }
       if (req.method === 'GET' && parsed.pathname === '/api/health') {
-        sendJson(res, 200, { ok: true });
+        sendJson(res, 200, { ok: true, webVersion: BROWSERLESS_WEB_PANEL_VERSION });
         return;
       }
       if (!requestAuthorized(req, parsed, webToken)) {
@@ -66,14 +90,14 @@ function createStatusServer(options = {}) {
       }
       if (req.method === 'GET' && parsed.pathname === '/api/status') {
         if (/^(1|true|yes)$/i.test(parsed.searchParams.get('compact') || '')) {
-          sendJson(res, 200, buildCompactBrowserlessStatus(getStatus()));
+          sendJson(res, 200, buildCompactBrowserlessStatus(getStatus(), config));
           return;
         }
-        sendJson(res, 200, redactStructuredSecrets(getStatus()));
+        sendJson(res, 200, withStatusServerMeta(getStatus(), config));
         return;
       }
       if (req.method === 'GET' && parsed.pathname === '/api/panel-status') {
-        sendJson(res, 200, buildCompactBrowserlessStatus(getStatus()));
+        sendJson(res, 200, buildCompactBrowserlessStatus(getStatus(), config));
         return;
       }
       if (req.method === 'POST' && parsed.pathname === '/api/auth-url') {
