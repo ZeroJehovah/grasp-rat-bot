@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.10.1';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.10.2';
 
 function renderBrowserlessWebPanel() {
   return `<!doctype html>
@@ -58,7 +58,7 @@ function renderBrowserlessWebPanel() {
       <div class="metrics">
         <div class="metric"><span class="label">血量</span><span id="hp" class="value">--</span></div>
         <div class="metric"><span class="label">体力</span><span id="stamina" class="value">--</span></div>
-        <div class="metric"><span class="label">身上金币</span><span id="drop" class="value">--</span></div>
+        <div class="metric"><span class="label">Drop</span><span id="drop" class="value">--</span></div>
         <div class="metric"><span class="label">位置</span><span id="position" class="value">--</span></div>
         <div class="metric"><span class="label">运行方式</span><span id="mode" class="value">--</span></div>
       </div>

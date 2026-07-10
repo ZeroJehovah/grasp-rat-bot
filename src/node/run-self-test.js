@@ -54,6 +54,7 @@ const {
 const {
   buildBrowserlessDecision,
   buildBrowserlessRuntimeDefaults,
+  buildBrowserlessStrategyInput,
   createBrowserlessDecisionAdapter
 } = require('./browserless/decision-adapter');
 const {
@@ -5957,6 +5958,81 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: '100|71|self-name|9000|2500000|18000000|||snapshot|true'
+    },
+    {
+      name: 'browserless decision input enriches self Drop and label from fresh snapshot',
+      got: (() => {
+        const store = createBrowserlessStateStore({ userId: 7 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 44,
+          entities: [
+            { entity_id: 1, user_id: 7, x: 100, y: 100, hp: 88, life: 'Alive' }
+          ],
+          bullets: []
+        }, { receivedAtMs: 1000 });
+        store.ingestFrame({
+          type: 'snapshot',
+          tick: 45,
+          entities: [{
+            entity_id: 1,
+            user_id: 7,
+            label: 'snapshot-self-label',
+            x: 120,
+            y: 100,
+            hp: 88,
+            death_drop_coins: 42
+          }],
+          bullets: [],
+          coin_drops: [],
+          messages: []
+        }, { receivedAtMs: 1100 });
+        const input = buildBrowserlessStrategyInput(store.getState(1200), { nowMs: 1200 }, {});
+        return [
+          input.self.name,
+          input.self.drop,
+          input.self.death_drop_coins,
+          input.self.selfMetadataAuthority
+        ].join('|');
+      })(),
+      want: 'snapshot-self-label|42|42|snapshot'
+    },
+    {
+      name: 'browserless decision input keeps player label and snapshot Drop metadata',
+      got: (() => {
+        const state = {
+          userId: 7,
+          realtime: {
+            tick: 46,
+            frameAgeMs: 100,
+            self: { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+            entities: [
+              { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+              { entity_id: 2, user_id: 8, label: 'target-label', x: 2000, y: 0, hp: 80, current_join_mode: 'None' }
+            ],
+            bullets: [],
+            coinDrops: []
+          },
+          fallback: {
+            tick: 47,
+            frameAgeMs: 100,
+            entities: [
+              { entity_id: 2, user_id: 8, label: 'target-label', x: 2000, y: 0, hp: 80, death_drop_coins: 12 }
+            ],
+            coinDrops: [],
+            messages: []
+          }
+        };
+        const input = buildBrowserlessStrategyInput(state, { controlMode: 'profit-live', nowMs: 1200 }, {});
+        const target = input.visibleTargets.find(entity => Number(entity.user_id) === 8);
+        return [
+          target?.name,
+          target?.drop,
+          target?.death_drop_coins,
+          target?.profitMetadataAuthority
+        ].join('|');
+      })(),
+      want: 'target-label|12|12|snapshot'
     },
     {
       name: 'browserless decision adapter emits snapshot fallback profit without commands',

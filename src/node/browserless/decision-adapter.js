@@ -165,6 +165,10 @@ function isCurrentlyActiveEntity(entity, options = {}) {
   return isMovingEntity(entity, options) || isFiringEntity(entity) || isActiveEntity(entity);
 }
 
+function entityDisplayName(entity) {
+  return String(entity?.name || entity?.label || entity?.username || entity?.user_name || entity?.displayName || entity?.display_name || '').trim();
+}
+
 function entityDropValue(entity) {
   return Number(entity?.drop ?? entity?.Drop ?? entity?.reward ?? entity?.coin_reward ?? entity?.death_reward_preview ?? entity?.death_drop_coins ?? 0) || 0;
 }
@@ -397,7 +401,7 @@ function normalizeEntityForDecision(entity, self = null, authority = 'realtime',
     ...cloneJson(entity),
     user_id: numberOrNull(entity.user_id),
     entity_id: numberOrNull(entity.entity_id),
-    name: entity.name || '',
+    name: entityDisplayName(entity),
     x,
     y,
     hp: numberOrNull(entity.hp),
@@ -425,7 +429,14 @@ function hasOwnUsableValue(object, field) {
 const SELF_SNAPSHOT_METADATA_FIELDS = [
   'entity_id',
   'name',
+  'label',
   'max_hp',
+  'drop',
+  'Drop',
+  'death_reward_preview',
+  'death_drop_coins',
+  'reward',
+  'coin_reward',
   'coins',
   'current_join_mode',
   'joined',
@@ -611,7 +622,7 @@ function summarizeTarget(target) {
     type: 'enemy',
     userId: numberOrNull(target.user_id ?? target.userId),
     entityId: numberOrNull(target.entity_id ?? target.entityId),
-    name: target.name || '',
+    name: entityDisplayName(target),
     authority: target.authority || '',
     x: numberOrNull(target.x),
     y: numberOrNull(target.y),

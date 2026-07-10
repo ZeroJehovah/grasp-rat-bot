@@ -41,7 +41,7 @@ function distanceBetween(a, b) {
 }
 
 function entityDropValue(entity) {
-  return Number(entity?.drop ?? entity?.Drop ?? entity?.reward ?? entity?.coin_reward ?? 0) || 0;
+  return Number(entity?.drop ?? entity?.Drop ?? entity?.reward ?? entity?.coin_reward ?? entity?.death_reward_preview ?? entity?.death_drop_coins ?? 0) || 0;
 }
 
 function targetWhitelistFromOptions(options = {}) {
@@ -68,6 +68,10 @@ function isActiveCombatEntity(entity) {
   return mode === 'active';
 }
 
+function entityDisplayName(entity) {
+  return String(entity?.name || entity?.label || entity?.username || entity?.user_name || entity?.displayName || entity?.display_name || '').trim();
+}
+
 function normalizeCombatEntity(entity, self = null) {
   if (!entity || typeof entity !== 'object') return null;
   const vx = numberOrNull(entity.vx);
@@ -83,7 +87,7 @@ function normalizeCombatEntity(entity, self = null) {
     ...cloneJson(entity),
     user_id: numberOrNull(entity.user_id),
     entity_id: numberOrNull(entity.entity_id),
-    name: entity.name || '',
+    name: entityDisplayName(entity),
     x: numberOrNull(entity.x),
     y: numberOrNull(entity.y),
     vx,
@@ -226,7 +230,7 @@ function summarizeCombatTarget(target) {
   return {
     userId: numberOrNull(target.user_id),
     entityId: numberOrNull(target.entity_id),
-    name: target.name || '',
+    name: entityDisplayName(target),
     authority: target.authority || 'realtime',
     x: numberOrNull(target.x),
     y: numberOrNull(target.y),
