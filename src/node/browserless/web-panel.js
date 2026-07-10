@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.10.3';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.10.4';
 
 function renderBrowserlessWebPanel() {
   return `<!doctype html>
@@ -37,6 +37,7 @@ function renderBrowserlessWebPanel() {
     dt{color:var(--muted);min-width:0}
     dd{margin:0;min-width:0;overflow-wrap:anywhere}
     .auth-panel{margin-bottom:10px}
+    .auth-panel[hidden]{display:none}
     .auth-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:8px}
     .auth-prompt{color:var(--muted);overflow-wrap:anywhere}
     .auth-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px}
@@ -73,7 +74,7 @@ function renderBrowserlessWebPanel() {
       </div>
     </section>
 
-    <section class="auth-panel">
+    <section id="authPanel" class="auth-panel" hidden>
       <div class="auth-head">
         <div>
           <h2>授权</h2>
@@ -448,6 +449,12 @@ function renderBrowserlessWebPanel() {
     }
     function updateAuthPanel(status) {
       const auth = status.auth || {};
+      const panel = document.getElementById('authPanel');
+      if (panel) {
+        const authUsable = Boolean(auth.authenticated || status.session?.authenticated);
+        const showAuthPanel = Boolean(auth.needsReauth || auth.invalid || auth.missing || !authUsable);
+        panel.hidden = !showAuthPanel;
+      }
       setText('authPrompt', authPromptText(status));
       setText('authState', authStatusText(status));
       setClass('authState', 'pill ' + authClass(status));
