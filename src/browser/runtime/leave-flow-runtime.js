@@ -88,7 +88,6 @@ function createLeaveFlowRuntime(runtime = {}) {
     speed = () => 0,
     clamp = (value, min, max) => Math.max(min, Math.min(max, value)),
     isAlive = value => Boolean(value),
-    isFullHp = () => true,
     isInvulnerable = () => false,
     threatKey = threat => String(threat?.id ?? threat?.user_id ?? ''),
     returnBlockRadius = () => 0
@@ -276,6 +275,12 @@ function createLeaveFlowRuntime(runtime = {}) {
     return Boolean(action?.combat && pursuitId !== null && pursuitId !== undefined && actionId && String(pursuitId) === actionId);
   }
 
+  function hasPursuitLeaveInjuryHp(self) {
+    const hp = Number(self?.hp);
+    const threshold = Math.max(1, Number(cfg.pursuitLeaveNonFullHpThreshold ?? cfg.profitLiveInjuryHp ?? 90));
+    return Number.isFinite(hp) && hp <= threshold;
+  }
+
   function actionThreatId(action) {
     const threat = Array.isArray(action?.threats) ? action.threats[0] : null;
     return threat ? String(threat.id ?? threat.user_id ?? '') : '';
@@ -328,7 +333,7 @@ function createLeaveFlowRuntime(runtime = {}) {
 
 	  function pursuitLeaveThresholdFor(self, threat) {
 	    const normalMs = Math.max(0, Number(cfg.pursuitLeaveMs || 0));
-	    const nonFullHp = !isFullHp(self);
+	    const nonFullHp = hasPursuitLeaveInjuryHp(self);
 	    const invulnerable = isInvulnerable(threat);
 	    const candidates = [normalMs];
 	    if (nonFullHp) candidates.push(Math.max(0, Number(cfg.pursuitLeaveNonFullHpMs || normalMs)));
@@ -378,7 +383,7 @@ function createLeaveFlowRuntime(runtime = {}) {
 	      closingDistance: picked.closingDistance,
 	      thresholdMs,
 	      invulnerable: isInvulnerable(picked.threat),
-	      nonFullHp: !isFullHp(self),
+	      nonFullHp: hasPursuitLeaveInjuryHp(self),
 	      combatSuppressed
 	    };
     if (bot.lastSafety) bot.lastSafety.pursuit = summarizePursuit(bot.pursuit);

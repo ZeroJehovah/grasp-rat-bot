@@ -12,7 +12,7 @@
   var define_GRASP_RAT_RUNTIME_CONFIG_default;
   var init_define_GRASP_RAT_RUNTIME_CONFIG = __esm({
     "<define:__GRASP_RAT_RUNTIME_CONFIG__>"() {
-      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.613" };
+      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.614" };
     }
   });
 
@@ -593,6 +593,7 @@
           postLoginGraceMs: 45e3,
           fleeLockMs: 1400,
           pursuitLeaveMs: 3e5,
+          pursuitLeaveNonFullHpThreshold: 90,
           pursuitLeaveNonFullHpMs: 9e4,
           pursuitLeaveInvulnerableMs: 6e4,
           pursuitLeaveNonFullHpInvulnerableMs: 45e3,
@@ -11695,7 +11696,6 @@
           speed = () => 0,
           clamp = (value, min, max) => Math.max(min, Math.min(max, value)),
           isAlive = (value) => Boolean(value),
-          isFullHp = () => true,
           isInvulnerable = () => false,
           threatKey = (threat) => String(threat?.id ?? threat?.user_id ?? ""),
           returnBlockRadius = () => 0
@@ -11862,6 +11862,11 @@
           const actionId = actionCombatTargetId(action);
           return Boolean(action?.combat && pursuitId !== null && pursuitId !== void 0 && actionId && String(pursuitId) === actionId);
         }
+        function hasPursuitLeaveInjuryHp(self) {
+          const hp = Number(self?.hp);
+          const threshold = Math.max(1, Number(cfg.pursuitLeaveNonFullHpThreshold ?? cfg.profitLiveInjuryHp ?? 90));
+          return Number.isFinite(hp) && hp <= threshold;
+        }
         function actionThreatId(action) {
           const threat = Array.isArray(action?.threats) ? action.threats[0] : null;
           return threat ? String(threat.id ?? threat.user_id ?? "") : "";
@@ -11900,7 +11905,7 @@
         }
         function pursuitLeaveThresholdFor(self, threat) {
           const normalMs = Math.max(0, Number(cfg.pursuitLeaveMs || 0));
-          const nonFullHp = !isFullHp(self);
+          const nonFullHp = hasPursuitLeaveInjuryHp(self);
           const invulnerable = isInvulnerable(threat);
           const candidates = [normalMs];
           if (nonFullHp) candidates.push(Math.max(0, Number(cfg.pursuitLeaveNonFullHpMs || normalMs)));
@@ -11945,7 +11950,7 @@
             closingDistance: picked.closingDistance,
             thresholdMs,
             invulnerable: isInvulnerable(picked.threat),
-            nonFullHp: !isFullHp(self),
+            nonFullHp: hasPursuitLeaveInjuryHp(self),
             combatSuppressed
           };
           if (bot.lastSafety) bot.lastSafety.pursuit = summarizePursuit(bot.pursuit);

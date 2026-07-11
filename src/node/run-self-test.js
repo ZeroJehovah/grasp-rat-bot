@@ -548,6 +548,7 @@ async function runSelfTest() {
     conserveStaminaThreshold: 6500,
     staminaBudgetReloginDelayMs: 1800000,
     pursuitLeaveMs: 300000,
+    pursuitLeaveNonFullHpThreshold: 90,
     pursuitLeaveNonFullHpMs: 90000,
     pursuitLeaveInvulnerableMs: 60000,
     pursuitLeaveNonFullHpInvulnerableMs: 45000,
@@ -741,7 +742,9 @@ async function runSelfTest() {
   };
   function pursuitLeaveThresholdForTest(self, threat) {
     const normalMs = Math.max(0, Number(cfg.pursuitLeaveMs || 0));
-    const nonFullHp = !isFullHp(self);
+    const hp = Number(self?.hp);
+    const hpThreshold = Math.max(1, Number(cfg.pursuitLeaveNonFullHpThreshold ?? 90));
+    const nonFullHp = Number.isFinite(hp) && hp <= hpThreshold;
     const invulnerable = isInvulnerable(threat);
     const candidates = [normalMs];
     if (nonFullHp) candidates.push(Math.max(0, Number(cfg.pursuitLeaveNonFullHpMs || normalMs)));
@@ -9744,6 +9747,48 @@ async function runSelfTest() {
       want: 'safety-exit|safety|pursuit-leave|true|8|90000|90000|inside-danger-radius'
     },
     {
+      name: 'browserless pursuit leave keeps normal threshold near full hp',
+      got: (() => {
+        const stateful = {};
+        const stateAt = (tick, nowMs) => ({
+          userId: 7,
+          realtime: {
+            tick,
+            frameAgeMs: 100,
+            self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 97, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+            entities: [
+              { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 97, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+              { entity_id: 2, user_id: 8, name: 'pursuer', x: 10000, y: 0, hp: 100, current_join_mode: 'Active', drop: 1 }
+            ],
+            bullets: [],
+            coinDrops: []
+          },
+          fallback: { coinDrops: [] },
+          nowMs
+        });
+        const options = {
+          controlMode: 'profit-live',
+          combatEnabled: false,
+          pursuitLeaveNonFullHpMs: 90000,
+          pursuitLeaveMs: 300000,
+          loopDelayMs: 30000,
+          decisionIntervalMs: 1000,
+          dangerRadius: 17000,
+          activeCautionRadius: 23000
+        };
+        buildBrowserlessDecision(stateAt(62, 1000), stateful, { ...options, nowMs: 1000 });
+        buildBrowserlessDecision(stateAt(63, 31000), stateful, { ...options, nowMs: 31000 });
+        buildBrowserlessDecision(stateAt(64, 61000), stateful, { ...options, nowMs: 61000 });
+        const decision = buildBrowserlessDecision(stateAt(65, 91000), stateful, { ...options, nowMs: 91000 });
+        return [
+          decision.reason === 'pursuit-leave',
+          stateful.browserlessPursuit?.thresholdMs,
+          stateful.browserlessPursuit?.nonFullHp
+        ].join('|');
+      })(),
+      want: 'false|300000|false'
+    },
+    {
       name: 'browserless combat low hp no-damage exits',
       got: (() => {
         const stateful = {
@@ -11739,6 +11784,7 @@ async function runSelfTest() {
           evaluateBrowserlessSafety({ realtime: { self: safeSelf, frameAgeMs: 10 }, frameAges: { latestFrameAgeMs: 6000 } }, { nowMs: 7000, frameGapAlertMs: 5000 }).reason,
           evaluateBrowserlessSafety({ realtime: { self: null, frameAgeMs: null }, frameAges: {} }, { startedAtMs: 1000, nowMs: 5000, noSelfGraceMs: 3000 }).reason,
           evaluateBrowserlessSafety({ realtime: { self: safeSelf, frameAgeMs: 4000 }, frameAges: {} }, { nowMs: 5000, staleSelfMs: 3000 }).reason,
+          evaluateBrowserlessSafety({ realtime: { self: safeSelf, frameAgeMs: 5200 }, frameAges: {} }, { nowMs: 5000, staleSelfMs: 3000 }).reason,
           evaluateBrowserlessSafety({ realtime: { self: { ...safeSelf, stamina_5s_remaining_milli: 100 }, frameAgeMs: 10 }, frameAges: {} }, { nowMs: 5000, staminaExhaustedBelowMs: 200 }).reason,
           evaluateBrowserlessSafety({}, { leaveResult: { ok: false, attempts: [{ status: 500, summary: { leaveConfirmed: false } }] }, nowMs: 5000 }).reason,
           evaluateBrowserlessSafety({ realtime: { self: safeSelf, frameAgeMs: 10 }, frameAges: {} }, {
@@ -11748,7 +11794,7 @@ async function runSelfTest() {
         ];
         return checks.join('|');
       })(),
-      want: 'unsafe-login-point|ws-error|ws-closed|frame-gap|no-self|stale-self|stamina-exhausted|direct-leave-failed|safe'
+      want: 'unsafe-login-point|ws-error|ws-closed|frame-gap|no-self|safe|stale-self|stamina-exhausted|direct-leave-failed|safe'
     },
     {
       name: 'browserless safety controller explicit stop persists until cleared',
@@ -11775,6 +11821,31 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'explicit-stop|test|explicit-stop|true|safe'
+    },
+    {
+      name: 'browserless decision keeps realtime self during stale confirmation window',
+      got: (() => {
+        const decision = buildBrowserlessDecision({
+          userId: 7,
+          realtime: {
+            tick: 62,
+            frameAgeMs: 4000,
+            self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+            entities: [
+              { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000 }
+            ],
+            bullets: [],
+            coinDrops: []
+          },
+          fallback: { coinDrops: [] }
+        }, {}, {
+          nowMs: 5000,
+          controlMode: 'profit-live',
+          staleSelfMs: 3000
+        });
+        return decision.reason;
+      })(),
+      want: 'no-profitable-candidate'
     },
     {
       name: 'browserless safety exit sends stop motion and verified leave',
@@ -12516,6 +12587,8 @@ async function runSelfTest() {
           '15000',
           '--stale-self-ms',
           '3500',
+          '--stale-self-confirm-ms',
+          '2250',
           '--no-self-grace-ms',
           '4500',
           '--stamina-exhausted-below-ms',
@@ -12570,6 +12643,7 @@ async function runSelfTest() {
           config.loginPointSafetySuccessRequired,
           config.loginPointSafetyProbeIntervalMs,
           config.staleSelfMs,
+          config.staleSelfConfirmMs,
           config.noSelfGraceMs,
           config.staminaExhaustedBelowMs,
           config.movementCommandIntervalMs,
@@ -12592,7 +12666,7 @@ async function runSelfTest() {
           config.logDir.endsWith('/tmp/grasp-rat-browserless-logs')
         ].join('|');
       })(),
-      want: 'true|false|false|combat-live|19999|cli-token|true|220|42|env-token|250|4|15000|3500|4500|150|300|800|3|99000|45000|120000|true|true|4096|https://example.test/target-whitelist.json|true|1234|12|123|456|90|true|true'
+      want: 'true|false|false|combat-live|19999|cli-token|true|220|42|env-token|250|4|15000|3500|2250|4500|150|300|800|3|99000|45000|120000|true|true|4096|https://example.test/target-whitelist.json|true|1234|12|123|456|90|true|true'
     },
     {
       name: 'browserless deployment files define service env and install surface',
@@ -12613,6 +12687,7 @@ async function runSelfTest() {
           env.includes('GRASP_RAT_BROWSERLESS_TARGET_WHITELIST_FILE='),
           env.includes('GRASP_RAT_BROWSERLESS_LOGIN_POINT_SAFETY_SUCCESS_REQUIRED=3'),
           env.includes('GRASP_RAT_BROWSERLESS_LOGIN_POINT_SAFETY_PROBE_INTERVAL_MS=30000'),
+          env.includes('GRASP_RAT_BROWSERLESS_STALE_SELF_CONFIRM_MS=2000'),
           env.includes('GRASP_RAT_BROWSERLESS_CENTER_ACTIVITY_RADIUS_CM=100000'),
           env.includes('GRASP_RAT_BROWSERLESS_PROFIT_PURSUIT_MAX_MS=60000'),
           env.includes('GRASP_RAT_BROWSERLESS_PROFIT_PURSUIT_SUPPRESS_MS=60000'),
@@ -12625,7 +12700,7 @@ async function runSelfTest() {
           installer.includes('systemctl daemon-reload')
         ].join('|');
       })(),
-      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
+      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless deployment audit checks installed service evidence',
@@ -17512,11 +17587,12 @@ async function runSelfTest() {
     {
       name: 'pursuit leave threshold shortens for non-full hp and invulnerable chaser',
       got: [
+        pursuitLeaveThresholdForTest({ hp: 97, max_hp: 100 }, { current_join_mode: 'Active' }),
         pursuitLeaveThresholdForTest({ hp: 80, max_hp: 100 }, { current_join_mode: 'Active' }),
         pursuitLeaveThresholdForTest({ hp: 100, max_hp: 100 }, { current_join_mode: 'Active', invulnerable: true }),
         pursuitLeaveThresholdForTest({ hp: 80, max_hp: 100 }, { current_join_mode: 'Active', invulnerable: true })
       ].join(','),
-      want: '90000,60000,45000'
+      want: '300000,90000,60000,45000'
     },
     {
       name: 'combat action suppresses same-target pursuit leave',

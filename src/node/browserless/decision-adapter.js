@@ -60,6 +60,7 @@ const {
 
 const BROWSER_RUNTIME_DEFAULTS = buildRuntimeDefaults({}, false);
 const DEFAULT_STALE_SELF_MS = 2500;
+const DEFAULT_STALE_SELF_CONFIRM_MS = 2000;
 const DEFAULT_ATTACK_RANGE = BROWSER_RUNTIME_DEFAULTS.attackRange;
 const DEFAULT_ATTACK_ENGAGE_RANGE = BROWSER_RUNTIME_DEFAULTS.attackEngageRange;
 const DEFAULT_ATTACK_MIN_DROP = BROWSER_RUNTIME_DEFAULTS.attackMinDrop;
@@ -627,11 +628,9 @@ function isRecoveringSelf(self) {
 }
 
 function isInjuredSelf(self, options = {}) {
-  const hp = Number(self?.hp);
-  const maxHp = Number(self?.max_hp);
+  const hp = hpValue(self);
   const injuryHp = Math.max(1, Number(options.profitLiveInjuryHp || DEFAULT_PROFIT_LIVE_INJURY_HP));
-  return Number.isFinite(hp)
-    && ((Number.isFinite(maxHp) && hp < maxHp) || hp <= injuryHp);
+  return hp !== null && hp <= injuryHp;
 }
 
 function snapshotFallbackThreatBlocks(threat, self, options = {}) {
@@ -3478,13 +3477,15 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
   cleanupCoinProgressState(stateful, input.nowMs, options);
   applyIgnoredCoinFilter(input, stateful);
   const staleSelfMs = Math.max(1000, Number(options.staleSelfMs || DEFAULT_STALE_SELF_MS));
+  const staleSelfConfirmMs = Math.max(0, Number(options.staleSelfConfirmMs ?? DEFAULT_STALE_SELF_CONFIRM_MS));
+  const staleSelfExitMs = staleSelfMs + staleSelfConfirmMs;
   const nonCombatProfit = options.controlMode === 'non-combat-profit' || options.nonCombatProfit === true;
   const profitLive = options.controlMode === 'profit-live';
   const combatDryRun = options.controlMode === 'combat-dry-run';
   const combatLiveEnabled = (options.controlMode === 'combat-live' || profitLive) && options.combatEnabled === true;
   const combatDecisionEnabled = options.combatDecisionEnabled !== false && !nonCombatProfit && (!profitLive || options.combatEnabled === true);
   const frameAge = Number(input.realtime.frameAgeMs);
-  const realtimeStale = Number.isFinite(frameAge) && frameAge > staleSelfMs;
+  const realtimeStale = Number.isFinite(frameAge) && frameAge > staleSelfExitMs;
   const opportunity = buildOpportunityDecision(input, stateful, {
     ...options,
     includeAfkProfitTargets: nonCombatProfit ? false : options.includeAfkProfitTargets

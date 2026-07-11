@@ -6,6 +6,7 @@ const {
 } = require('./leave-client');
 
 const DEFAULT_STALE_SELF_MS = 3000;
+const DEFAULT_STALE_SELF_CONFIRM_MS = 2000;
 const DEFAULT_NO_SELF_GRACE_MS = 3000;
 const DEFAULT_FRAME_GAP_ALERT_MS = 5000;
 const DEFAULT_STAMINA_EXHAUSTED_BELOW_MS = 200;
@@ -71,6 +72,8 @@ function decisionSafetyDetail(decision) {
 function evaluateBrowserlessSafety(state = {}, context = {}, options = {}) {
   const nowMs = numberOrNull(options.nowMs ?? context.nowMs) ?? Date.now();
   const staleSelfMs = Math.max(1000, Number(options.staleSelfMs ?? context.staleSelfMs ?? DEFAULT_STALE_SELF_MS));
+  const staleSelfConfirmMs = Math.max(0, Number(options.staleSelfConfirmMs ?? context.staleSelfConfirmMs ?? DEFAULT_STALE_SELF_CONFIRM_MS));
+  const staleSelfExitMs = staleSelfMs + staleSelfConfirmMs;
   const noSelfGraceMs = Math.max(0, Number(options.noSelfGraceMs ?? context.noSelfGraceMs ?? DEFAULT_NO_SELF_GRACE_MS));
   const frameGapAlertMs = Math.max(1000, Number(options.frameGapAlertMs ?? context.frameGapAlertMs ?? DEFAULT_FRAME_GAP_ALERT_MS));
   const staminaFloor = Math.max(0, Number(options.staminaExhaustedBelowMs ?? context.staminaExhaustedBelowMs ?? DEFAULT_STAMINA_EXHAUSTED_BELOW_MS));
@@ -131,10 +134,12 @@ function evaluateBrowserlessSafety(state = {}, context = {}, options = {}) {
   }
 
   const realtimeAgeMs = numberOrNull(state?.realtime?.frameAgeMs ?? state?.frameAges?.realtimeAgeMs);
-  if (self && realtimeAgeMs !== null && realtimeAgeMs > staleSelfMs) {
+  if (self && realtimeAgeMs !== null && realtimeAgeMs > staleSelfExitMs) {
     return createSafetyEvent('stale-self', {
       realtimeAgeMs,
-      staleSelfMs
+      staleSelfMs,
+      staleSelfConfirmMs,
+      staleSelfExitMs
     }, { nowMs });
   }
 
@@ -234,6 +239,7 @@ async function executeSafetyExit(event, config = {}, deps = {}) {
 module.exports = {
   DEFAULT_FRAME_GAP_ALERT_MS,
   DEFAULT_NO_SELF_GRACE_MS,
+  DEFAULT_STALE_SELF_CONFIRM_MS,
   DEFAULT_STALE_SELF_MS,
   DEFAULT_STAMINA_EXHAUSTED_BELOW_MS,
   createBrowserlessSafetyController,

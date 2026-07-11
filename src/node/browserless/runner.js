@@ -59,6 +59,7 @@ function publicConfig(config) {
     loginPointSafetySuccessRequired: Number(config.loginPointSafetySuccessRequired || 0),
     loginPointSafetyProbeIntervalMs: Number(config.loginPointSafetyProbeIntervalMs || 0),
     staleSelfMs: Number(config.staleSelfMs || 0),
+    staleSelfConfirmMs: Number(config.staleSelfConfirmMs || 0),
     noSelfGraceMs: Number(config.noSelfGraceMs || 0),
     staminaExhaustedBelowMs: Number(config.staminaExhaustedBelowMs || 0),
     movementCommandIntervalMs: Number(config.movementCommandIntervalMs || 0),
@@ -477,6 +478,7 @@ async function runBrowserlessRunner(config, deps = {}) {
     now,
     frameGapAlertMs: config.frameGapAlertMs,
     staleSelfMs: config.staleSelfMs,
+    staleSelfConfirmMs: config.staleSelfConfirmMs,
     noSelfGraceMs: config.noSelfGraceMs,
     staminaExhaustedBelowMs: config.staminaExhaustedBelowMs
   });

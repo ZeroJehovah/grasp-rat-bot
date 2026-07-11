@@ -420,6 +420,7 @@ function buildRuntimeDefaults(config, combatLogEndpointConfigured) {
     postLoginGraceMs: 45000,
     fleeLockMs: 1400,
     pursuitLeaveMs: 300000,
+    pursuitLeaveNonFullHpThreshold: 90,
     pursuitLeaveNonFullHpMs: 90000,
     pursuitLeaveInvulnerableMs: 60000,
     pursuitLeaveNonFullHpInvulnerableMs: 45000,

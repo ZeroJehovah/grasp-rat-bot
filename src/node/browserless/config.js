@@ -37,6 +37,7 @@ const DEFAULTS = {
   loginPointSafetySuccessRequired: 3,
   loginPointSafetyProbeIntervalMs: 30000,
   staleSelfMs: 3000,
+  staleSelfConfirmMs: 2000,
   noSelfGraceMs: 3000,
   staminaExhaustedBelowMs: 200,
   movementCommandIntervalMs: 500,
@@ -130,6 +131,7 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
     loginPointSafetySuccessRequired: numberEnv(env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_SAFETY_SUCCESS_REQUIRED, DEFAULTS.loginPointSafetySuccessRequired),
     loginPointSafetyProbeIntervalMs: numberEnv(env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_SAFETY_PROBE_INTERVAL_MS, DEFAULTS.loginPointSafetyProbeIntervalMs),
     staleSelfMs: numberEnv(env.GRASP_RAT_BROWSERLESS_STALE_SELF_MS, DEFAULTS.staleSelfMs),
+    staleSelfConfirmMs: numberEnv(env.GRASP_RAT_BROWSERLESS_STALE_SELF_CONFIRM_MS, DEFAULTS.staleSelfConfirmMs),
     noSelfGraceMs: numberEnv(env.GRASP_RAT_BROWSERLESS_NO_SELF_GRACE_MS, DEFAULTS.noSelfGraceMs),
     staminaExhaustedBelowMs: numberEnv(env.GRASP_RAT_BROWSERLESS_STAMINA_EXHAUSTED_BELOW_MS, DEFAULTS.staminaExhaustedBelowMs),
     movementCommandIntervalMs: numberEnv(env.GRASP_RAT_BROWSERLESS_MOVEMENT_COMMAND_INTERVAL_MS, DEFAULTS.movementCommandIntervalMs),
@@ -236,6 +238,8 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
       config.loginPointSafetyProbeIntervalMs = numberEnv(argv[++i], config.loginPointSafetyProbeIntervalMs);
     } else if (arg === '--stale-self-ms') {
       config.staleSelfMs = numberEnv(argv[++i], config.staleSelfMs);
+    } else if (arg === '--stale-self-confirm-ms') {
+      config.staleSelfConfirmMs = numberEnv(argv[++i], config.staleSelfConfirmMs);
     } else if (arg === '--no-self-grace-ms') {
       config.noSelfGraceMs = numberEnv(argv[++i], config.noSelfGraceMs);
     } else if (arg === '--stamina-exhausted-below-ms') {
@@ -325,6 +329,7 @@ function usage() {
     '  --login-point-safety-success-required <n>  Consecutive safe snapshot checks before entering. Default: 3',
     '  --login-point-safety-probe-interval-ms <ms>  Delay between those checks. Default: 30000',
     '  --stale-self-ms <ms>      Safety stale-self threshold. Default: 3000',
+    '  --stale-self-confirm-ms <ms>  Extra stale-self confirmation window before leave. Default: 2000',
     '  --no-self-grace-ms <ms>   Safety no-self grace window. Default: 3000',
     '  --stamina-exhausted-below-ms <ms>  Safety stamina floor. Default: 200',
     '  --movement-command-interval-ms <ms>  Movement velocity throttle. Default: 500',

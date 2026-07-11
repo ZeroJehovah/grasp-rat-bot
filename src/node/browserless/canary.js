@@ -429,6 +429,7 @@ async function runReadOnlyCanary(config, options = {}) {
     decisionIntervalMs,
     readOnlyProbeMs: durationMs,
     loopDelayMs: config.loopDelayMs,
+    staleSelfConfirmMs: config.staleSelfConfirmMs,
     targetWhitelistNames: targetWhitelist.names,
     targetWhitelistNameSet: targetWhitelist.nameSet,
     whitelistCheck: target => targetWhitelist.isWhitelistedTarget(target)
@@ -437,6 +438,7 @@ async function runReadOnlyCanary(config, options = {}) {
     now,
     frameGapAlertMs,
     staleSelfMs: config.staleSelfMs,
+    staleSelfConfirmMs: config.staleSelfConfirmMs,
     noSelfGraceMs: config.noSelfGraceMs,
     staminaExhaustedBelowMs: config.staminaExhaustedBelowMs
   });
@@ -734,6 +736,7 @@ async function runReadOnlyCanary(config, options = {}) {
               startedAtMs: noSelfGuardStartedAtMs(atMs),
               frameGapAlertMs,
               staleSelfMs: config.staleSelfMs,
+              staleSelfConfirmMs: config.staleSelfConfirmMs,
               noSelfGraceMs: config.noSelfGraceMs,
               staminaExhaustedBelowMs: config.staminaExhaustedBelowMs,
               decision: summary,
@@ -778,6 +781,7 @@ async function runReadOnlyCanary(config, options = {}) {
             startedAtMs: noSelfGuardStartedAtMs(atMs),
             frameGapAlertMs,
             staleSelfMs: config.staleSelfMs,
+            staleSelfConfirmMs: config.staleSelfConfirmMs,
             noSelfGraceMs: config.noSelfGraceMs,
             staminaExhaustedBelowMs: config.staminaExhaustedBelowMs,
             nowMs: atMs
@@ -813,6 +817,7 @@ async function runReadOnlyCanary(config, options = {}) {
         frameGapMs,
         frameGapAlertMs,
         staleSelfMs: config.staleSelfMs,
+        staleSelfConfirmMs: config.staleSelfConfirmMs,
         noSelfGraceMs: config.noSelfGraceMs,
         staminaExhaustedBelowMs: config.staminaExhaustedBelowMs,
         wsError,
