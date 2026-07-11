@@ -15368,11 +15368,11 @@ async function runSelfTest() {
         return [
           /\.target-current,\.target-route-next\{position:relative;background:var\(--target-bg\);background-clip:padding-box;/.test(panelText),
           /\.nearby-list\{display:grid;gap:0;/.test(panelText),
-          /\.target-current,\.target-route-next\{[^}]*margin:0 -6px/.test(panelText),
+          /\.target-current,\.target-route-next\{[^}]*padding:3px 6px;margin:0\}/.test(panelText),
           !/\.target-current\{border:1px solid/.test(panelText),
           /\.target-flee\{--target-color:rgba\(96,165,250,\.82\)/.test(panelText),
           /\.target-name\{display:inline-flex;align-items:center;[^}]*vertical-align:middle/.test(panelText),
-          /\.target-current::before,\.target-route-next::before\{content:"";position:absolute;left:0;top:-1px;bottom:-1px;width:3px;background:var\(--target-color\)/.test(panelText),
+          /\.target-current::before,\.target-route-next::before\{content:"";position:absolute;right:100%;top:-1px;bottom:-1px;width:3px;background:var\(--target-color\)/.test(panelText),
           /\.target-icon\{display:inline-block;[^}]*align-self:center;[^}]*vertical-align:middle;[^}]*transform:translateY\(1px\);[^}]*color:var\(--target-color\);fill:currentColor/.test(panelText),
           panelScript.includes("coinSingle: ['M512 85.333333"),
           panelScript.includes("coin1: ['M512.048762 0C794.770286"),
