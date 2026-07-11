@@ -95,6 +95,7 @@ const {
   browserlessLoopPlan,
   publicConfig,
   learnedLoginPointFromCanary,
+  persistedReconnectDelayPlan,
   runBrowserlessRunner,
   runBrowserlessRunnerSelfTest
 } = require('./browserless/runner');
@@ -13194,6 +13195,81 @@ async function runSelfTest() {
       want: 'true|stamina-exhausted-leave|true|2830000|1d|31'
     },
     {
+      name: 'browserless runner resumes persisted reconnect wait after restart',
+      got: withTempDirForTest(async dir => {
+        let t = Date.parse('2026-07-11T03:45:54.610Z');
+        let calls = 0;
+        let sleptMs = 0;
+        const config = parseBrowserlessRunnerArgs([
+          '--live',
+          '--data-dir',
+          dir,
+          '--user-id',
+          '7',
+          '--session-token',
+          'runner-secret-token',
+          '--login-point-x',
+          '1',
+          '--login-point-y',
+          '2',
+          '--login-point-hp',
+          '100'
+        ], {});
+        const file = stateFilePath(config);
+        updateBrowserlessStateFile(file, {
+          runner: {
+            running: true,
+            currentAction: {
+              kind: 'loop-wait',
+              reason: 'stamina-budget-coin-leave',
+              nextRunAt: '2026-07-11T03:55:25.402Z',
+              previousRunId: 'profit-live-before-restart'
+            }
+          },
+          stats: {
+            lastExit: {
+              at: '2026-07-11T03:25:25.277Z',
+              reason: 'stamina-budget-coin-leave',
+              nextRunAt: '2026-07-11T03:55:25.402Z',
+              reconnectDelayMs: 1800000
+            }
+          }
+        }, { updatedAt: '2026-07-11T03:25:25.478Z' });
+        const plan = persistedReconnectDelayPlan(readBrowserlessStateFile(file), config, Date.parse('2026-07-11T03:45:54.610Z'));
+        const result = await runBrowserlessRunner(config, {
+          now: () => t,
+          startStatusServer: false,
+          sleep: async ms => {
+            sleptMs += ms;
+            t += ms;
+          },
+          runReadOnlyOnce: async () => {
+            calls += 1;
+            return {
+              ok: false,
+              runId: 'after-persisted-wait',
+              error: 'explicit-stop',
+              safety: {
+                event: { reason: 'explicit-stop', at: '2026-07-11T03:55:25.402Z' }
+              }
+            };
+          }
+        });
+        const logFile = path.join(dir, 'logs', '2026-07-11', 'runner.jsonl');
+        const text = fs.readFileSync(logFile, 'utf8');
+        return [
+          result.reason,
+          calls,
+          sleptMs,
+          plan.reason,
+          plan.delayMs,
+          /runner-persisted-loop-wait/.test(text),
+          text.indexOf('runner-persisted-loop-wait') < text.indexOf('runner-loop-stop')
+        ].join('|');
+      }),
+      want: 'explicit-stop|1|570792|stamina-budget-coin-leave|570792|true|true'
+    },
+    {
       name: 'browserless runner best-effort shutdown leave hydrates persisted session',
       got: withTempDirForTest(async dir => {
         const config = parseBrowserlessRunnerArgs(['--live', '--data-dir', dir], {});
@@ -14640,7 +14716,7 @@ async function runSelfTest() {
           /function loginPointDisplay/.test(panelScript),
           /return loginPointDisplay\(status\)\.text/.test(panelScript),
           !/return '检查中'/.test(panelScript),
-          panelScript.includes("text: '已在线接管'"),
+          panelScript.includes("text: '已在游戏中，直接连接'"),
           panelScript.includes("'安全 ' + loginPointProgressText(status, true)"),
           panelScript.includes("return coord(point.x) + ', ' + coord(point.y);"),
           panelScript.includes("translated === '安全'"),

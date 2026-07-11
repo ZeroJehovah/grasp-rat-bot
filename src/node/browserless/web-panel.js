@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.11.7';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.11.8';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function renderBrowserlessWebPanel() {
@@ -453,7 +453,7 @@ function renderBrowserlessWebPanel() {
       fresh: '快照已更新',
       safe: '安全',
       'active-near-login-point': '登录点附近有危险玩家',
-      'self-present-reentry': '已经在游戏中，继续接管',
+      'self-present-reentry': '已经在游戏中，直接连接',
       'cycle-complete': '本轮结束，等待下一轮',
       'ws-closed': '连接断开，准备重连',
       'ws-error': '连接异常，准备重连',
@@ -765,7 +765,7 @@ function renderBrowserlessWebPanel() {
       const originalReason = String(detail.originalReason || '');
       const reasonText = [reason, detailReason, originalReason].join(' ');
       if (/self-present-reentry/i.test(reasonText) || (detail.selfPresent === true && detail.bypassedPreLoginSafety)) {
-        return { state: 'reentry', text: '已在线接管' };
+        return { state: 'reentry', text: '已在游戏中，直接连接' };
       }
       const safeReason = /^safe$/i.test(detailReason) || /^safe$/i.test(originalReason);
       const streak = number(detail.streak ?? status.loginPointSafety?.streak);

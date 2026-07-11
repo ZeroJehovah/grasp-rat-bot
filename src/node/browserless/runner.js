@@ -221,6 +221,51 @@ function hydrateConfigFromState(config, state) {
   };
 }
 
+function parseIsoTimeMs(value) {
+  const text = String(value || '').trim();
+  if (!text) return 0;
+  const parsed = Date.parse(text);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function persistedReconnectDelayPlan(state, config = {}, nowMs = Date.now()) {
+  const action = state?.runner?.currentAction || {};
+  const stats = state?.stats || {};
+  const lastExit = stats.lastExit || {};
+  const candidates = [
+    action.nextRunAt,
+    lastExit.nextRunAt
+  ];
+  let nextRunAtMs = 0;
+  let nextRunAt = '';
+  for (const candidate of candidates) {
+    const parsed = parseIsoTimeMs(candidate);
+    if (parsed > nextRunAtMs) {
+      nextRunAtMs = parsed;
+      nextRunAt = String(candidate || '');
+    }
+  }
+  const nowValue = Number.isFinite(Number(nowMs)) ? Number(nowMs) : Date.now();
+  const remainingMs = Math.max(0, nextRunAtMs - nowValue);
+  if (remainingMs <= 0) return null;
+  const maxDelayMs = Math.max(
+    1000,
+    Number(config.maxPersistedReconnectDelayMs || 0) || DAY_MS
+  );
+  if (remainingMs > maxDelayMs) return null;
+  const reason = String(action.reason || lastExit.reason || 'persisted-reconnect-wait');
+  return {
+    continue: true,
+    reason: reason || 'persisted-reconnect-wait',
+    delayMs: remainingMs,
+    previousRunId: action.previousRunId || '',
+    error: reason || 'persisted-reconnect-wait',
+    safetyReason: lastExit.reason || reason || '',
+    nextRunAt,
+    persisted: true
+  };
+}
+
 function loginPointSafetyRequiredFromConfig(config = {}) {
   const required = Number(config.loginPointSafetySuccessRequired || 3);
   return Number.isFinite(required) && required > 0 ? Math.max(1, Math.round(required)) : 3;
@@ -787,6 +832,81 @@ async function runBrowserlessRunner(config, deps = {}) {
     statusServer: statusHandle ? { host: config.statusHost, port: statusHandle.port } : null
   });
 
+  const persistedDelayPlan = !config.once && !config.dryRun
+    ? persistedReconnectDelayPlan(readBrowserlessStateFile(stateFile), config, now())
+    : null;
+  if (persistedDelayPlan) {
+    const currentBeforeWait = readBrowserlessStateFile(stateFile);
+    updateState({
+      runner: {
+        running: true,
+        mode: config.controlMode || 'read-only',
+        lastError: '',
+        currentAction: {
+          kind: 'loop-wait',
+          band: 'recover',
+          reason: persistedDelayPlan.reason,
+          delayMs: persistedDelayPlan.delayMs,
+          nextRunAt: persistedDelayPlan.nextRunAt,
+          previousRunId: persistedDelayPlan.previousRunId || '',
+          persisted: true
+        }
+      },
+      stats: browserlessStatsForOffline(currentBeforeWait, {
+        reason: persistedDelayPlan.safetyReason || persistedDelayPlan.reason,
+        nextRunAt: persistedDelayPlan.nextRunAt,
+        delayMs: persistedDelayPlan.delayMs
+      }, { nowMs: now() })
+    }, { updatedAt: new Date(now()).toISOString() });
+    logStore.append('runner', 'runner-persisted-loop-wait', {
+      ...persistedDelayPlan,
+      supervisorErrors: supervisorErrors.slice(-5)
+    });
+    try {
+      await sleep(persistedDelayPlan.delayMs);
+    } catch (err) {
+      recordSupervisorError(err, { operation: 'persisted-loop-sleep', delayMs: persistedDelayPlan.delayMs });
+      logStore.append('runner', 'persisted-loop-sleep-error', { error: errorMessage(err), delayMs: persistedDelayPlan.delayMs });
+    }
+    const requestedStop = safetyController.getStopEvent();
+    if (requestedStop) {
+      const stopped = {
+        ok: false,
+        mode: config.controlMode || 'read-only',
+        reason: requestedStop.reason || 'explicit-stop',
+        event: requestedStop
+      };
+      const currentBeforeStop = readBrowserlessStateFile(stateFile);
+      updateState({
+        runner: {
+          running: false,
+          lastRun: stopped,
+          lastError: stopped.reason,
+          currentAction: {
+            kind: 'stopped',
+            band: 'recover',
+            reason: stopped.reason,
+            previousRunId: persistedDelayPlan.previousRunId || ''
+          }
+        },
+        stats: browserlessStatsForOffline(currentBeforeStop, {
+          at: requestedStop.at,
+          reason: stopped.reason,
+          nextRunAt: '',
+          delayMs: 0
+        }, { nowMs: now() })
+      }, { updatedAt: new Date(now()).toISOString() });
+      logStore.append('runner', 'runner-loop-stop', {
+        ...persistedDelayPlan,
+        reason: stopped.reason,
+        requestedStop
+      });
+      return stopped;
+    }
+    safetyController.clearStop();
+    refreshFromPersistedState();
+  }
+
   if (!['read-only', 'movement-only', 'non-combat-profit', 'profit-live', 'combat-dry-run', 'combat-live'].includes(String(config.controlMode || ''))) {
     const result = { ok: false, reason: 'unsupported-control-mode' };
     updateState({
@@ -1093,6 +1213,7 @@ module.exports = {
   browserlessLoopPlan,
   hydrateConfigFromState,
   learnedLoginPointFromCanary,
+  persistedReconnectDelayPlan,
   publicConfig,
   runBrowserlessRunner,
   runBrowserlessRunnerSelfTest
