@@ -757,7 +757,17 @@ const TARGET_SNAPSHOT_INVULNERABLE_FIELDS = [
   ...INVULNERABLE_FLAG_FIELDS
 ];
 
+const TARGET_SNAPSHOT_DISPLAY_FIELDS = [
+  'name',
+  'label',
+  'username',
+  'user_name',
+  'displayName',
+  'display_name'
+];
+
 const TARGET_SNAPSHOT_METADATA_FIELDS = Array.from(new Set([
+  ...TARGET_SNAPSHOT_DISPLAY_FIELDS,
   ...TARGET_SNAPSHOT_STAMINA_FIELDS,
   ...TARGET_SNAPSHOT_INVULNERABLE_FIELDS
 ]));
@@ -799,7 +809,7 @@ function snapshotEntityByUserId(fallback) {
   const entities = Array.isArray(fallback?.entities) ? fallback.entities : [];
   const byUserId = new Map();
   for (const entity of entities) {
-    const userId = numberOrNull(entity?.user_id);
+    const userId = numberOrNull(entity?.user_id ?? entity?.userId);
     if (userId !== null && !byUserId.has(userId)) byUserId.set(userId, entity);
   }
   return byUserId;
@@ -828,12 +838,15 @@ function enrichRealtimeEntityWithSnapshotProfitMetadata(entity, snapshotEntity, 
   };
   let staminaMerged = false;
   let invulnerableMerged = false;
+  let displayMerged = false;
   for (const field of TARGET_SNAPSHOT_METADATA_FIELDS) {
     if (hasOwnUsableValue(output, field) || !hasOwnUsableValue(snapshotEntity, field)) continue;
     output[field] = cloneJson(snapshotEntity[field]);
+    if (TARGET_SNAPSHOT_DISPLAY_FIELDS.includes(field)) displayMerged = true;
     if (TARGET_SNAPSHOT_STAMINA_FIELDS.includes(field)) staminaMerged = true;
     if (TARGET_SNAPSHOT_INVULNERABLE_FIELDS.includes(field)) invulnerableMerged = true;
   }
+  if (displayMerged) output.displayMetadataAuthority = 'snapshot';
   if (staminaMerged) output.staminaMetadataAuthority = 'snapshot';
   if (invulnerableMerged) output.invulnerableMetadataAuthority = 'snapshot';
   const reward = entityDropValue(snapshotEntity);
@@ -1175,7 +1188,7 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
   const realtimeEntities = (Array.isArray(realtime.entities) ? realtime.entities : [])
     .map(entity => enrichRealtimeEntityWithSnapshotProfitMetadata(
       entity,
-      snapshotEntitiesByUserId.get(numberOrNull(entity?.user_id)),
+      snapshotEntitiesByUserId.get(numberOrNull(entity?.user_id ?? entity?.userId)),
       options
     ))
     .map(entity => normalizeEntityForDecision(entity, self, 'realtime', options))

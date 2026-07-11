@@ -6043,6 +6043,65 @@ async function runSelfTest() {
       want: 'target-label|12|12|snapshot'
     },
     {
+      name: 'browserless decision input fills missing player display name from fresh snapshot',
+      got: (() => {
+        const state = {
+          userId: 7,
+          realtime: {
+            tick: 47,
+            frameAgeMs: 100,
+            self: { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+            entities: [
+              { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+              { entity_id: 2, user_id: 8, x: 2000, y: 0, hp: 80, current_join_mode: 'Passive' }
+            ],
+            bullets: [],
+            coinDrops: []
+          },
+          fallback: {
+            tick: 48,
+            frameAgeMs: 100,
+            entities: [
+              {
+                entity_id: 22,
+                user_id: 8,
+                label: 'snapshot-target-label',
+                x: 2010,
+                y: 0,
+                hp: 80,
+                current_join_mode: 'Passive',
+                death_drop_coins: 12,
+                stamina_5s_remaining_milli: 10000,
+                stamina_5s_limit_milli: 10000
+              }
+            ],
+            coinDrops: [],
+            messages: []
+          }
+        };
+        const input = buildBrowserlessStrategyInput(state, {
+          controlMode: 'profit-live',
+          nowMs: 1200
+        }, {});
+        const decision = buildBrowserlessDecision(state, {}, {
+          controlMode: 'profit-live',
+          nowMs: 1200
+        });
+        const target = input.visibleTargets.find(entity => Number(entity.user_id) === 8);
+        const row = decision.input.nearby.p.find(item => item[0] === 'snapshot-target-label');
+        return [
+          target?.name,
+          target?.displayMetadataAuthority,
+          target?.drop,
+          decision.action?.target?.name,
+          row?.[0],
+          row?.[3],
+          row?.[9]
+        ].join('|');
+      })(),
+      want: 'snapshot-target-label|snapshot|12|snapshot-target-label|snapshot-target-label|12|1'
+    },
+    {
       name: 'browserless nearby players preserve snapshot stamina and invincibility metadata',
       got: (() => {
         const state = {
