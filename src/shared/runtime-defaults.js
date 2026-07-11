@@ -1,5 +1,11 @@
 'use strict';
 
+function numberDefault(value, fallback) {
+  if (value === undefined || value === null || value === '') return fallback;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : fallback;
+}
+
 function buildRuntimeDefaults(config, combatLogEndpointConfigured) {
   return {
     dryRun: Boolean(config.dryRun),
@@ -231,9 +237,12 @@ function buildRuntimeDefaults(config, combatLogEndpointConfigured) {
     opportunitySameCoinRadius: 1200,
     opportunityVisibleDistance: 50000,
     opportunityNearbyPriorityDistance: 50000,
-    browserlessCenterActivityRadiusCm: 100000,
-    browserlessProfitPursuitMaxMs: 60000,
-    browserlessProfitPursuitSuppressMs: 60000,
+    browserlessCenterActivityRadiusCm: numberDefault(config.browserlessCenterActivityRadiusCm, 100000),
+    browserlessProfitPursuitMaxMs: numberDefault(config.browserlessProfitPursuitMaxMs, 60000),
+    browserlessProfitPursuitSuppressMs: numberDefault(config.browserlessProfitPursuitSuppressMs, 60000),
+    browserlessDangerousTargetCooldownMs: numberDefault(config.browserlessDangerousTargetCooldownMs, 900000),
+    browserlessProfitPursuitMinDamageMs: numberDefault(config.browserlessProfitPursuitMinDamageMs, 60000),
+    browserlessProfitPursuitMinDamageHp: numberDefault(config.browserlessProfitPursuitMinDamageHp, 10),
     afkRecentActivityCooldownMs: 12000,
     opportunityAfkStaminaCooldownMs: 60000,
     opportunityAfkStaminaDropThresholdMs: 100,

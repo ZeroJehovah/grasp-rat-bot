@@ -80,8 +80,18 @@ const DEFAULT_RECOVERY_PLAYER_DROP_MIN_AMOUNT = 2;
 const DEFAULT_POST_ATTACK_RECOVERY_DROP_MAX_DISTANCE = BROWSER_RUNTIME_DEFAULTS.postAttackRecoveryDropMaxDistance;
 const DEFAULT_STAMINA_BUDGET_RELOGIN_DELAY_MS = BROWSER_RUNTIME_DEFAULTS.staminaBudgetReloginDelayMs;
 const DEFAULT_AFK_ATTACK_COMMIT_RANGE_CM = 5000;
+const DEFAULT_DANGEROUS_TARGET_COOLDOWN_MS = BROWSER_RUNTIME_DEFAULTS.browserlessDangerousTargetCooldownMs ?? 900000;
+const DEFAULT_PROFIT_PURSUIT_MIN_DAMAGE_MS = BROWSER_RUNTIME_DEFAULTS.browserlessProfitPursuitMinDamageMs ?? 60000;
+const DEFAULT_PROFIT_PURSUIT_MIN_DAMAGE_HP = BROWSER_RUNTIME_DEFAULTS.browserlessProfitPursuitMinDamageHp ?? 10;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const UTC8_OFFSET_MS = 8 * 60 * 60 * 1000;
+const DANGEROUS_COMBAT_EXIT_REASONS = new Set([
+  'combat-critical-hp-leave',
+  'combat-hp-disadvantage-leave',
+  'combat-low-hp-disadvantage-leave',
+  'combat-low-hp-no-damage-leave',
+  'combat-pressure-disadvantage-leave'
+]);
 
 function buildBrowserlessRuntimeDefaults(config = {}) {
   return buildRuntimeDefaults(config, false);
@@ -2375,6 +2385,7 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
   const coinMaxDistance = Math.max(0, Number(options.coinMaxDistance || BROWSER_RUNTIME_DEFAULTS.coinMaxDistance));
   const globalCoinMaxDistance = Math.max(0, Number(options.globalCoinMaxDistance || DEFAULT_GLOBAL_COIN_MAX_DISTANCE));
   const opportunityThreats = (input.avoidanceThreats || input.activeThreats || []).concat(input.snapshotActiveThreats || []);
+  clearDangerousOpportunityState(stateful, input.nowMs);
   const fieldMigrationCoin = pickFieldMigrationCoin(input, opportunityThreats, options);
   const coinGroups = input.profitCoins.length
     ? [
@@ -2436,6 +2447,7 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
   };
   const afkOpportunityTargets = includeAfkProfitTargets
     ? input.afkTargets
+      .filter(target => !targetDangerousCooldownRecord(stateful, target, input.nowMs))
       .filter(target => !afkOpportunityBlockedByStaminaCooldown(target, opportunityOptions))
       .filter(target => targetSafeFromOpportunityThreats(target, opportunityThreats, options))
     : [];
@@ -2687,7 +2699,7 @@ function summarizeOpportunisticShotTarget(target, options = {}) {
   };
 }
 
-function pickOpportunisticShotTarget(input, options = {}) {
+function pickOpportunisticShotTarget(input, stateful = {}, options = {}) {
   if (!input?.self) return null;
   const attackRange = Math.max(0, Number(options.attackRange ?? options.combatAttackRange ?? DEFAULT_ATTACK_RANGE));
   const commitRange = Math.max(0, Number(options.afkAttackCommitRangeCm
@@ -2696,6 +2708,7 @@ function pickOpportunisticShotTarget(input, options = {}) {
     ?? DEFAULT_AFK_ATTACK_COMMIT_RANGE_CM));
   const maxShotRange = commitRange > 0 ? Math.min(attackRange, commitRange) : attackRange;
   return (input.afkTargets || [])
+    .filter(target => !targetDangerousCooldownRecord(stateful, target, input.nowMs))
     .filter(target => target.alive !== false && !target.invulnerable && !target.active && !target.firing)
     .filter(target => Number(target.distance || Infinity) <= maxShotRange)
     .map(target => {
@@ -2735,11 +2748,11 @@ function opportunisticShotBeatsAction(action, shot, options = {}) {
   return !Number.isFinite(actionScore) || actionScore <= 0 || shotScore >= actionScore * minRatio;
 }
 
-function attachOpportunisticShotDecision(action, input, options = {}) {
+function attachOpportunisticShotDecision(action, input, stateful = {}, options = {}) {
   if (!action || isRecoveringSelf(input?.self)) return action;
   if (action.opportunisticShot || action.combat) return action;
   if (action.kind !== 'coin' && action.kind !== 'seek-coin') return action;
-  const shot = pickOpportunisticShotTarget(input, options);
+  const shot = pickOpportunisticShotTarget(input, stateful, options);
   if (!shot || !opportunisticShotBeatsAction(action, shot, options)) return action;
   return {
     ...action,
@@ -2747,9 +2760,9 @@ function attachOpportunisticShotDecision(action, input, options = {}) {
   };
 }
 
-function buildOpportunisticShotWaitDecision(input, options = {}) {
+function buildOpportunisticShotWaitDecision(input, stateful = {}, options = {}) {
   if (!input?.self || isRecoveringSelf(input.self)) return null;
-  const shot = pickOpportunisticShotTarget(input, options);
+  const shot = pickOpportunisticShotTarget(input, stateful, options);
   if (!shot) return null;
   const target = summarizeOpportunisticShotTarget(shot, options);
   return {
@@ -3338,6 +3351,110 @@ function targetIdentity(target) {
   return String(id);
 }
 
+function dangerousTargetCooldownMs(options = {}) {
+  const value = Number(options.browserlessDangerousTargetCooldownMs
+    ?? BROWSER_RUNTIME_DEFAULTS.browserlessDangerousTargetCooldownMs
+    ?? DEFAULT_DANGEROUS_TARGET_COOLDOWN_MS);
+  return Number.isFinite(value) ? Math.max(0, value) : DEFAULT_DANGEROUS_TARGET_COOLDOWN_MS;
+}
+
+function profitPursuitMinDamageMs(options = {}) {
+  const value = Number(options.browserlessProfitPursuitMinDamageMs
+    ?? BROWSER_RUNTIME_DEFAULTS.browserlessProfitPursuitMinDamageMs
+    ?? DEFAULT_PROFIT_PURSUIT_MIN_DAMAGE_MS);
+  return Number.isFinite(value) ? Math.max(0, value) : DEFAULT_PROFIT_PURSUIT_MIN_DAMAGE_MS;
+}
+
+function profitPursuitMinDamageHp(options = {}) {
+  const value = Number(options.browserlessProfitPursuitMinDamageHp
+    ?? BROWSER_RUNTIME_DEFAULTS.browserlessProfitPursuitMinDamageHp
+    ?? DEFAULT_PROFIT_PURSUIT_MIN_DAMAGE_HP);
+  return Number.isFinite(value) ? Math.max(0, value) : DEFAULT_PROFIT_PURSUIT_MIN_DAMAGE_HP;
+}
+
+function dangerousCombatTargetMap(stateful = {}, nowMs = 0) {
+  if (!stateful || typeof stateful !== 'object') return {};
+  if (!stateful.dangerousCombatTargets || typeof stateful.dangerousCombatTargets !== 'object' || Array.isArray(stateful.dangerousCombatTargets)) {
+    stateful.dangerousCombatTargets = {};
+  }
+  const now = Number.isFinite(Number(nowMs)) ? Number(nowMs) : Date.now();
+  for (const [id, item] of Object.entries(stateful.dangerousCombatTargets)) {
+    if (Number(item?.until || 0) <= now) delete stateful.dangerousCombatTargets[id];
+  }
+  return stateful.dangerousCombatTargets;
+}
+
+function dangerousTargetCooldownRecordById(stateful = {}, targetId = '', nowMs = 0) {
+  const id = String(targetId || '');
+  if (!id) return null;
+  const now = Number.isFinite(Number(nowMs)) ? Number(nowMs) : Date.now();
+  const record = dangerousCombatTargetMap(stateful, now)[id] || null;
+  return record && Number(record.until || 0) > now ? record : null;
+}
+
+function targetDangerousCooldownRecord(stateful = {}, target = null, nowMs = 0) {
+  const id = targetIdentity(target);
+  return id ? dangerousTargetCooldownRecordById(stateful, id, nowMs) : null;
+}
+
+function opportunityChoiceTargetId(choice) {
+  if (!choice) return '';
+  if (String(choice.type || '') === 'enemy') {
+    const id = choice.id ?? choice.userId ?? choice.user_id ?? choice.target?.userId ?? choice.target?.user_id;
+    if (id !== null && id !== undefined && id !== '') return String(id);
+  }
+  const key = String(choice.key || '');
+  if (key.startsWith('enemy:')) return key.slice('enemy:'.length);
+  return targetIdentity(choice.sourceTarget || choice.target || choice);
+}
+
+function clearDangerousOpportunityState(stateful = {}, nowMs = 0) {
+  if (!stateful || typeof stateful !== 'object') return;
+  const choice = stateful.currentOpportunity || stateful.opportunityChoice || null;
+  const targetId = opportunityChoiceTargetId(choice);
+  if (!targetId || !dangerousTargetCooldownRecordById(stateful, targetId, nowMs)) return;
+  stateful.opportunityChoice = null;
+  stateful.currentOpportunity = null;
+  stateful.opportunitySwitchLock = null;
+  stateful.switchLock = null;
+}
+
+function rememberDangerousCombatTarget(stateful = {}, target = null, reason = '', input = {}, options = {}, extra = {}) {
+  if (!stateful || typeof stateful !== 'object' || !target) return null;
+  const targetId = targetIdentity(target);
+  if (!targetId) return null;
+  const cooldownMs = dangerousTargetCooldownMs(options);
+  if (!(cooldownMs > 0)) return null;
+  const nowMs = Number.isFinite(Number(input?.nowMs)) ? Number(input.nowMs) : Date.now();
+  const record = {
+    reason: String(reason || 'dangerous-combat-target'),
+    targetId,
+    at: nowMs,
+    until: nowMs + cooldownMs,
+    cooldownMs: Math.round(cooldownMs),
+    selfHp: numberOrNull(input?.self?.hp),
+    targetHp: numberOrNull(target?.hp),
+    targetDrop: entityDropValue(target),
+    target: summarizeTarget(target),
+    ...extra
+  };
+  dangerousCombatTargetMap(stateful, nowMs)[targetId] = cloneJson(record);
+  clearSuppressedCombatTarget(stateful, targetId);
+  return record;
+}
+
+function rememberDangerousCombatExitTarget(input, combatDecision, stateful = {}, options = {}) {
+  const exit = combatDecision?.exitAction || combatDecision?.dryRun?.exit || combatDecision?.exit || null;
+  const reason = String(exit?.reason || '');
+  if (!DANGEROUS_COMBAT_EXIT_REASONS.has(reason)) return null;
+  const target = exit.target || combatDecision?.target || combatDecision?.dryRun?.target || null;
+  return rememberDangerousCombatTarget(stateful, target, reason, input, options, {
+    exit: true,
+    exitSelfHp: numberOrNull(exit?.selfHp ?? exit?.combatExit?.selfHp),
+    exitTargetHp: numberOrNull(exit?.targetHp ?? exit?.combatExit?.targetHp)
+  });
+}
+
 function targetHasRealBulletPressure(input, target, combatState = {}) {
   const id = targetIdentity(target);
   if (!id) return false;
@@ -3389,6 +3506,35 @@ function clearSuppressedCombatTarget(stateful = {}, targetId = '') {
   if (currentId && currentId === String(targetId)) stateful.combatTarget = null;
   const aimId = String(stateful.combatAim?.targetId ?? '');
   if (aimId && aimId === String(targetId)) stateful.combatAim = null;
+  const opportunityId = opportunityChoiceTargetId(stateful.currentOpportunity || stateful.opportunityChoice || null);
+  if (opportunityId && opportunityId === String(targetId)) {
+    stateful.opportunityChoice = null;
+    stateful.currentOpportunity = null;
+    stateful.opportunitySwitchLock = null;
+    stateful.switchLock = null;
+  }
+}
+
+function profitPursuitDamageProgress(combatDecision, stateful = {}) {
+  const combatState = stateful?.combatTarget || null;
+  const target = combatDecision?.target || combatDecision?.dryRun?.target || null;
+  const firstHp = numberOrNull(combatState?.firstHp ?? combatState?.startHp);
+  const minHp = numberOrNull(combatState?.minHp);
+  const targetHp = numberOrNull(target?.hp ?? combatState?.hp);
+  let damageFromStart = numberOrNull(combatState?.damageFromStart);
+  if (firstHp !== null && minHp !== null) {
+    damageFromStart = Math.max(Number(damageFromStart || 0), firstHp - minHp);
+  }
+  if (firstHp !== null && targetHp !== null) {
+    damageFromStart = Math.max(Number(damageFromStart || 0), firstHp - targetHp);
+  }
+  return {
+    firstHp,
+    minHp,
+    targetHp,
+    damageFromStart,
+    known: firstHp !== null && (minHp !== null || targetHp !== null) && damageFromStart !== null
+  };
 }
 
 function buildProfitPursuitSuppression(input, combatDecision, stateful = {}, options = {}) {
@@ -3407,11 +3553,25 @@ function buildProfitPursuitSuppression(input, combatDecision, stateful = {}, opt
       cached: true
     };
   }
+  const dangerous = dangerousTargetCooldownRecordById(stateful, targetId, nowMs);
+  if (dangerous) {
+    clearSuppressedCombatTarget(stateful, targetId);
+    return {
+      ...cloneJson(dangerous),
+      reason: 'profit-pursuit-dangerous-target-cooldown',
+      dangerousReason: dangerous.reason || '',
+      remainingMs: Math.max(0, Math.round(Number(dangerous.until || 0) - nowMs)),
+      dangerousCooldown: true
+    };
+  }
 
   const centerRadius = browserlessCenterActivityRadius(options);
   const selfRadius = pointRadiusFromOrigin(input?.self);
   const targetRadius = pointRadiusFromOrigin(target);
   const engagedMs = profitPursuitEngagedMs(combatDecision, stateful, nowMs);
+  const minDamageMs = profitPursuitMinDamageMs(options);
+  const minDamageHp = profitPursuitMinDamageHp(options);
+  const damageProgress = profitPursuitDamageProgress(combatDecision, stateful);
   const maxMs = Math.max(0, Number(options.browserlessProfitPursuitMaxMs
     ?? BROWSER_RUNTIME_DEFAULTS.browserlessProfitPursuitMaxMs
     ?? 60000));
@@ -3420,6 +3580,12 @@ function buildProfitPursuitSuppression(input, combatDecision, stateful = {}, opt
     reason = 'profit-pursuit-target-outside-center';
   } else if (centerRadius > 0 && Number.isFinite(selfRadius) && selfRadius > centerRadius) {
     reason = 'profit-pursuit-self-outside-center';
+  } else if (minDamageMs > 0
+    && minDamageHp > 0
+    && engagedMs >= minDamageMs
+    && damageProgress.known
+    && Number(damageProgress.damageFromStart || 0) < minDamageHp) {
+    reason = 'profit-pursuit-low-damage';
   } else if (maxMs > 0 && engagedMs >= maxMs) {
     reason = 'profit-pursuit-max-ms';
   }
@@ -3438,9 +3604,22 @@ function buildProfitPursuitSuppression(input, combatDecision, stateful = {}, opt
     centerRadiusCm: Math.round(centerRadius),
     selfRadiusCm: Number.isFinite(selfRadius) ? Math.round(selfRadius) : null,
     targetRadiusCm: Number.isFinite(targetRadius) ? Math.round(targetRadius) : null,
+    firstHp: damageProgress.firstHp,
+    minHp: damageProgress.minHp,
+    targetHp: damageProgress.targetHp,
+    damageFromStart: damageProgress.damageFromStart === null ? null : Math.round(Number(damageProgress.damageFromStart) * 10) / 10,
+    minDamageMs: Math.round(minDamageMs),
+    minDamageHp: Math.round(minDamageHp * 10) / 10,
     target: summarizeTarget(target)
   };
   suppressions[targetId] = cloneJson(suppression);
+  if (reason === 'profit-pursuit-low-damage') {
+    rememberDangerousCombatTarget(stateful, target, reason, input, options, {
+      engagedMs: Math.round(engagedMs),
+      damageFromStart: suppression.damageFromStart,
+      minDamageHp: suppression.minDamageHp
+    });
+  }
   clearSuppressedCombatTarget(stateful, targetId);
   return suppression;
 }
@@ -3491,6 +3670,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     includeAfkProfitTargets: nonCombatProfit ? false : options.includeAfkProfitTargets
   });
   const combat = buildCombatDecision(input, stateful, options);
+  const dangerousCombatExit = rememberDangerousCombatExitTarget(input, combat, stateful, options);
   const combatPursuitSuppression = buildProfitPursuitSuppression(input, combat, stateful, options);
   const combatActionEligible = isCombatActionEligibleForDecision(combat, options) && !combatPursuitSuppression;
   const combatForProfit = combatPursuitSuppression
@@ -3549,7 +3729,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     ? buildDailyStaminaFinalCoinDecision(input, options)
     : null;
   const opportunisticShotWaitAction = (profitLive || nonCombatProfit)
-    ? buildOpportunisticShotWaitDecision(input, options)
+    ? buildOpportunisticShotWaitDecision(input, stateful, options)
     : null;
   const staminaBlockedWaitAction = (profitLive || nonCombatProfit)
     ? buildStaminaBlockedWaitDecision(input, options)
@@ -3674,7 +3854,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     action.reason = reason;
   }
   if (input.self && !realtimeStale) {
-    const selectedAction = attachOpportunisticShotDecision(action, input, options);
+    const selectedAction = attachOpportunisticShotDecision(action, input, stateful, options);
     if (selectedAction !== action) {
       action = selectedAction;
       kind = action.kind || kind;
@@ -3739,6 +3919,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       ...(combat.dryRun || {}),
       target: combat.dryRun?.target || summarizeTarget(combat.target),
       actionEligible: combatActionEligible,
+      dangerousTargetCooldown: dangerousCombatExit,
       profitPursuitSuppression: combatPursuitSuppression,
       candidates: combat.dryRun?.candidates || topItems(combat.candidates, target => ({
         ...summarizeTarget(target),

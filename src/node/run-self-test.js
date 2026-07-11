@@ -6289,6 +6289,13 @@ async function runSelfTest() {
             cookie: `coin-secret-token-${index}`
           };
         }
+        state.dangerousCombatTargets = {
+          8: {
+            reason: 'combat-hp-disadvantage-leave',
+            authorization: 'Bearer danger-secret-token',
+            until: 999999
+          }
+        };
         const summary = summarizeBrowserlessDecisionState(state, { recentLimit: 3 });
         const text = JSON.stringify(summary);
         return [
@@ -6301,12 +6308,14 @@ async function runSelfTest() {
           summary.targetSwitchDiagnostics.recent.length,
           summary.coin.ignoredCount,
           summary.coin.recentIgnored.length,
+          summary.browserlessSafety.dangerousCombatTargets.length,
+          summary.browserlessSafety.dangerousCombatTargets[0].value.authorization,
           text.includes('secret-token'),
           text.includes('"sessionToken":"[redacted]"'),
           text.includes('"cookie":"[redacted]"')
         ].join('|');
       })(),
-      want: '9|3|[redacted]|7|[redacted]|6|3|8|3|false|true|true'
+      want: '9|3|[redacted]|7|[redacted]|6|3|8|3|1|[redacted]|false|true|true'
     },
     {
       name: 'browserless non-combat profit prefers realtime coin over snapshot and combat',
@@ -7489,6 +7498,170 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'flee|active-threat-return-block|false|profit-pursuit-target-outside-center|8|true|profit-pursuit-target-outside-center'
+    },
+    {
+      name: 'browserless combat disadvantage leave marks target dangerous',
+      got: (() => {
+        const stateful = {};
+        const decision = buildBrowserlessDecision({
+          userId: 7,
+          realtime: {
+            tick: 61,
+            frameAgeMs: 100,
+            self: { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 60, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+            entities: [
+              { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 60, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+              { entity_id: 2, user_id: 8, name: 'strong-active', x: 9000, y: 0, hp: 90, current_join_mode: 'Active', firing: true, drop: 30 }
+            ],
+            bullets: []
+          },
+          fallback: { tick: 61, frameAgeMs: 100, entities: [], coinDrops: [], messages: [] }
+        }, stateful, {
+          nowMs: 1200,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          combatAttackRange: 11000,
+          combatLowHpLeaveThreshold: 50,
+          combatHighHpDisadvantageGap: 20,
+          browserlessDangerousTargetCooldownMs: 900000
+        });
+        return [
+          decision.kind,
+          decision.reason,
+          decision.action.shouldLeave,
+          decision.combat.dangerousTargetCooldown.reason,
+          decision.combat.dangerousTargetCooldown.targetId,
+          stateful.dangerousCombatTargets?.['8']?.reason || '',
+          stateful.dangerousCombatTargets?.['8']?.until - 1200
+        ].join('|');
+      })(),
+      want: 'safety-exit|combat-hp-disadvantage-leave|true|combat-hp-disadvantage-leave|8|combat-hp-disadvantage-leave|900000'
+    },
+    {
+      name: 'browserless dangerous target cooldown suppresses ordinary AFK profit but keeps defensive combat',
+      got: (() => {
+        const profitStateful = {
+          dangerousCombatTargets: {
+            8: { reason: 'combat-hp-disadvantage-leave', targetId: '8', at: 1000, until: 601000 }
+          },
+          opportunityChoice: { type: 'enemy', key: 'enemy:8', id: 8, until: 601000 }
+        };
+        const profitDecision = buildBrowserlessDecision({
+          userId: 7,
+          realtime: {
+            tick: 62,
+            frameAgeMs: 100,
+            self: { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+            entities: [
+              { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+              fullStamina5s({ entity_id: 2, user_id: 8, name: 'cooldown-afk', x: 1000, y: 0, hp: 80, current_join_mode: 'Passive', drop: 50 })
+            ],
+            bullets: []
+          },
+          fallback: { tick: 62, frameAgeMs: 100, entities: [], coinDrops: [], messages: [] }
+        }, profitStateful, {
+          nowMs: 2000,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          attackMinAfkDrop: 3
+        });
+        const combatStateful = {
+          dangerousCombatTargets: {
+            8: { reason: 'combat-hp-disadvantage-leave', targetId: '8', at: 1000, until: 601000 }
+          }
+        };
+        const combatDecision = buildBrowserlessDecision({
+          userId: 7,
+          realtime: {
+            tick: 63,
+            frameAgeMs: 100,
+            self: { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+            entities: [
+              { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+              { entity_id: 2, user_id: 8, name: 'cooldown-firing', x: 9000, y: 0, hp: 80, current_join_mode: 'Active', firing: true, drop: 50 }
+            ],
+            bullets: [
+              { bullet_id: 9, owner_user_id: 8, start_x: 9000, start_y: 0, target_x: 0, target_y: 0, created_tick: 62, expire_tick: 92, speed_per_tick: 500 }
+            ]
+          },
+          fallback: { tick: 63, frameAgeMs: 100, entities: [], coinDrops: [], messages: [] }
+        }, combatStateful, {
+          nowMs: 2100,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          combatAttackRange: 11000
+        });
+        return [
+          profitDecision.kind,
+          profitDecision.reason,
+          profitDecision.profit.best === null,
+          profitStateful.opportunityChoice === null,
+          combatDecision.kind,
+          combatDecision.reason,
+          combatDecision.action.target.userId,
+          combatDecision.combat.actionEligible
+        ].join('|');
+      })(),
+      want: 'wait|no-profitable-candidate|true|true|combat-live|combat-live-realtime|8|true'
+    },
+    {
+      name: 'browserless low-damage profit pursuit suppresses and cools target',
+      got: (() => {
+        const stateful = {
+          combatTarget: {
+            id: 8,
+            at: 1000,
+            firstSeenAt: 1000,
+            lastInRangeAt: 61000,
+            lastDamageAt: 1000,
+            hp: 95,
+            firstHp: 100,
+            minHp: 95,
+            damageFromStart: 5,
+            drop: 86,
+            intent: 'profit',
+            originIntent: 'profit'
+          }
+        };
+        const decision = buildBrowserlessDecision({
+          userId: 7,
+          realtime: {
+            tick: 64,
+            frameAgeMs: 100,
+            self: { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+            entities: [
+              { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+              { entity_id: 2, user_id: 8, name: 'slow-damage-runner', x: 9000, y: 0, vx: 80, vy: 0, hp: 95, current_join_mode: 'Active', drop: 86 }
+            ],
+            bullets: []
+          },
+          fallback: { tick: 64, frameAgeMs: 100, entities: [], coinDrops: [], messages: [] }
+        }, stateful, {
+          nowMs: 62000,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          combatAttackRange: 11000,
+          targetStickMs: 120000,
+          combatEngageStickMs: 120000,
+          browserlessCenterActivityRadiusCm: 100000,
+          browserlessProfitPursuitMaxMs: 120000,
+          browserlessProfitPursuitSuppressMs: 60000,
+          browserlessProfitPursuitMinDamageMs: 60000,
+          browserlessProfitPursuitMinDamageHp: 10,
+          browserlessDangerousTargetCooldownMs: 900000
+        });
+        return [
+          decision.kind,
+          decision.combat.actionEligible,
+          decision.combat.profitPursuitSuppression.reason,
+          decision.combat.profitPursuitSuppression.damageFromStart,
+          decision.combat.profitPursuitSuppression.minDamageHp,
+          stateful.combatTarget === null,
+          stateful.profitPursuitSuppressions?.['8']?.reason || '',
+          stateful.dangerousCombatTargets?.['8']?.reason || ''
+        ].join('|');
+      })(),
+      want: 'flee|false|profit-pursuit-low-damage|5|10|true|profit-pursuit-low-damage|profit-pursuit-low-damage'
     },
     {
       name: 'browserless action adapter pre-approaches AFK target before shooting',
@@ -12605,6 +12778,12 @@ async function runSelfTest() {
           '45000',
           '--profit-pursuit-suppress-ms',
           '120000',
+          '--dangerous-target-cooldown-ms',
+          '123000',
+          '--profit-pursuit-min-damage-ms',
+          '30000',
+          '--profit-pursuit-min-damage-hp',
+          '7',
           '--ws-trace',
           '--ws-trace-max-payload-chars',
           '4096',
@@ -12652,6 +12831,9 @@ async function runSelfTest() {
           config.browserlessCenterActivityRadiusCm,
           config.browserlessProfitPursuitMaxMs,
           config.browserlessProfitPursuitSuppressMs,
+          config.browserlessDangerousTargetCooldownMs,
+          config.browserlessProfitPursuitMinDamageMs,
+          config.browserlessProfitPursuitMinDamageHp,
           config.wsTraceEnabled,
           config.wsTracePayload,
           config.wsTraceMaxPayloadChars,
@@ -12666,7 +12848,7 @@ async function runSelfTest() {
           config.logDir.endsWith('/tmp/grasp-rat-browserless-logs')
         ].join('|');
       })(),
-      want: 'true|false|false|combat-live|19999|cli-token|true|220|42|env-token|250|4|15000|3500|2250|4500|150|300|800|3|99000|45000|120000|true|true|4096|https://example.test/target-whitelist.json|true|1234|12|123|456|90|true|true'
+      want: 'true|false|false|combat-live|19999|cli-token|true|220|42|env-token|250|4|15000|3500|2250|4500|150|300|800|3|99000|45000|120000|123000|30000|7|true|true|4096|https://example.test/target-whitelist.json|true|1234|12|123|456|90|true|true'
     },
     {
       name: 'browserless deployment files define service env and install surface',
@@ -12691,6 +12873,9 @@ async function runSelfTest() {
           env.includes('GRASP_RAT_BROWSERLESS_CENTER_ACTIVITY_RADIUS_CM=100000'),
           env.includes('GRASP_RAT_BROWSERLESS_PROFIT_PURSUIT_MAX_MS=60000'),
           env.includes('GRASP_RAT_BROWSERLESS_PROFIT_PURSUIT_SUPPRESS_MS=60000'),
+          env.includes('GRASP_RAT_BROWSERLESS_DANGEROUS_TARGET_COOLDOWN_MS=900000'),
+          env.includes('GRASP_RAT_BROWSERLESS_PROFIT_PURSUIT_MIN_DAMAGE_MS=60000'),
+          env.includes('GRASP_RAT_BROWSERLESS_PROFIT_PURSUIT_MIN_DAMAGE_HP=10'),
           env.includes('GRASP_RAT_BROWSERLESS_WS_TRACE_ENABLED=false'),
           installer.includes('grasp-rat-browserless-runner'),
           installer.includes('DATA_DIR="/var/lib/grasp-rat-browserless"'),
@@ -12700,7 +12885,7 @@ async function runSelfTest() {
           installer.includes('systemctl daemon-reload')
         ].join('|');
       })(),
-      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
+      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless deployment audit checks installed service evidence',

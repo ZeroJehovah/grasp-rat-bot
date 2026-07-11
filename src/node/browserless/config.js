@@ -46,6 +46,9 @@ const DEFAULTS = {
   browserlessCenterActivityRadiusCm: 100000,
   browserlessProfitPursuitMaxMs: 60000,
   browserlessProfitPursuitSuppressMs: 60000,
+  browserlessDangerousTargetCooldownMs: 900000,
+  browserlessProfitPursuitMinDamageMs: 60000,
+  browserlessProfitPursuitMinDamageHp: 10,
   combatEnabled: false,
   combatShootMinIntervalMs: 160,
   wsTraceEnabled: false,
@@ -140,6 +143,9 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
     browserlessCenterActivityRadiusCm: numberEnv(env.GRASP_RAT_BROWSERLESS_CENTER_ACTIVITY_RADIUS_CM, DEFAULTS.browserlessCenterActivityRadiusCm),
     browserlessProfitPursuitMaxMs: numberEnv(env.GRASP_RAT_BROWSERLESS_PROFIT_PURSUIT_MAX_MS, DEFAULTS.browserlessProfitPursuitMaxMs),
     browserlessProfitPursuitSuppressMs: numberEnv(env.GRASP_RAT_BROWSERLESS_PROFIT_PURSUIT_SUPPRESS_MS, DEFAULTS.browserlessProfitPursuitSuppressMs),
+    browserlessDangerousTargetCooldownMs: numberEnv(env.GRASP_RAT_BROWSERLESS_DANGEROUS_TARGET_COOLDOWN_MS, DEFAULTS.browserlessDangerousTargetCooldownMs),
+    browserlessProfitPursuitMinDamageMs: numberEnv(env.GRASP_RAT_BROWSERLESS_PROFIT_PURSUIT_MIN_DAMAGE_MS, DEFAULTS.browserlessProfitPursuitMinDamageMs),
+    browserlessProfitPursuitMinDamageHp: numberEnv(env.GRASP_RAT_BROWSERLESS_PROFIT_PURSUIT_MIN_DAMAGE_HP, DEFAULTS.browserlessProfitPursuitMinDamageHp),
     combatEnabled: boolEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_ENABLED, DEFAULTS.combatEnabled),
     combatShootMinIntervalMs: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_SHOOT_MIN_INTERVAL_MS, DEFAULTS.combatShootMinIntervalMs),
     wsTraceEnabled: boolEnv(env.GRASP_RAT_BROWSERLESS_WS_TRACE_ENABLED ?? env.GRASP_RAT_BROWSERLESS_WS_TRACE, DEFAULTS.wsTraceEnabled),
@@ -256,6 +262,12 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
       config.browserlessProfitPursuitMaxMs = numberEnv(argv[++i], config.browserlessProfitPursuitMaxMs);
     } else if (arg === '--profit-pursuit-suppress-ms') {
       config.browserlessProfitPursuitSuppressMs = numberEnv(argv[++i], config.browserlessProfitPursuitSuppressMs);
+    } else if (arg === '--dangerous-target-cooldown-ms') {
+      config.browserlessDangerousTargetCooldownMs = numberEnv(argv[++i], config.browserlessDangerousTargetCooldownMs);
+    } else if (arg === '--profit-pursuit-min-damage-ms') {
+      config.browserlessProfitPursuitMinDamageMs = numberEnv(argv[++i], config.browserlessProfitPursuitMinDamageMs);
+    } else if (arg === '--profit-pursuit-min-damage-hp') {
+      config.browserlessProfitPursuitMinDamageHp = numberEnv(argv[++i], config.browserlessProfitPursuitMinDamageHp);
     } else if (arg === '--combat-shoot-min-interval-ms') {
       config.combatShootMinIntervalMs = numberEnv(argv[++i], config.combatShootMinIntervalMs);
     } else if (arg === '--ws-trace') {
@@ -338,6 +350,9 @@ function usage() {
     '  --center-activity-radius-cm <cm>  Keep ordinary browserless profit inside this origin radius. Default: 100000',
     '  --profit-pursuit-max-ms <ms>  Max ordinary profit combat pursuit before suppression. Default: 60000',
     '  --profit-pursuit-suppress-ms <ms>  Suppression cooldown after a profit pursuit is stopped. Default: 60000',
+    '  --dangerous-target-cooldown-ms <ms>  Cooldown for ordinary profit against targets that forced a combat leave. Default: 900000',
+    '  --profit-pursuit-min-damage-ms <ms>  Minimum ordinary profit pursuit age before the low-damage gate. Default: 60000',
+    '  --profit-pursuit-min-damage-hp <hp>  Required target HP progress by that age. Default: 10',
     '  --combat-shoot-min-interval-ms <ms>  Minimum live combat shoot interval. Default: 160',
     '  --ws-trace              Write decoded WebSocket frame/command trace to ws.jsonl',
     '  --no-ws-trace           Disable WebSocket trace logging',

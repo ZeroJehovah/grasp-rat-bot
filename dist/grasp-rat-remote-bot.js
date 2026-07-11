@@ -12,7 +12,7 @@
   var define_GRASP_RAT_RUNTIME_CONFIG_default;
   var init_define_GRASP_RAT_RUNTIME_CONFIG = __esm({
     "<define:__GRASP_RAT_RUNTIME_CONFIG__>"() {
-      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.614" };
+      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.615" };
     }
   });
 
@@ -173,6 +173,11 @@
     "src/shared/runtime-defaults.js"(exports, module) {
       "use strict";
       init_define_GRASP_RAT_RUNTIME_CONFIG();
+      function numberDefault(value, fallback) {
+        if (value === void 0 || value === null || value === "") return fallback;
+        const number = Number(value);
+        return Number.isFinite(number) ? number : fallback;
+      }
       function buildRuntimeDefaults(config, combatLogEndpointConfigured) {
         return {
           dryRun: Boolean(config.dryRun),
@@ -404,9 +409,12 @@
           opportunitySameCoinRadius: 1200,
           opportunityVisibleDistance: 5e4,
           opportunityNearbyPriorityDistance: 5e4,
-          browserlessCenterActivityRadiusCm: 1e5,
-          browserlessProfitPursuitMaxMs: 6e4,
-          browserlessProfitPursuitSuppressMs: 6e4,
+          browserlessCenterActivityRadiusCm: numberDefault(config.browserlessCenterActivityRadiusCm, 1e5),
+          browserlessProfitPursuitMaxMs: numberDefault(config.browserlessProfitPursuitMaxMs, 6e4),
+          browserlessProfitPursuitSuppressMs: numberDefault(config.browserlessProfitPursuitSuppressMs, 6e4),
+          browserlessDangerousTargetCooldownMs: numberDefault(config.browserlessDangerousTargetCooldownMs, 9e5),
+          browserlessProfitPursuitMinDamageMs: numberDefault(config.browserlessProfitPursuitMinDamageMs, 6e4),
+          browserlessProfitPursuitMinDamageHp: numberDefault(config.browserlessProfitPursuitMinDamageHp, 10),
           afkRecentActivityCooldownMs: 12e3,
           opportunityAfkStaminaCooldownMs: 6e4,
           opportunityAfkStaminaDropThresholdMs: 100,

@@ -503,6 +503,11 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
   const hp = numberOrNull(target.knownHp ?? target.hp);
   const previousHp = same && Number.isFinite(Number(previous.hp)) ? Number(previous.hp) : null;
   const damaged = hp !== null && previousHp !== null && hp < previousHp - 0.01;
+  const previousFirstHp = same && Number.isFinite(Number(previous.firstHp)) ? Number(previous.firstHp) : null;
+  const firstHp = same ? (previousFirstHp ?? previousHp ?? hp) : hp;
+  const previousMinHp = same && Number.isFinite(Number(previous.minHp)) ? Number(previous.minHp) : null;
+  const minHp = hp !== null ? Math.min(previousMinHp ?? hp, hp) : previousMinHp;
+  const damageFromStart = firstHp !== null && minHp !== null ? Math.max(0, firstHp - minHp) : null;
   const inRange = Number.isFinite(distance)
     && distance <= Math.max(0, Number(options.combatAttackRange || options.attackRange || COMBAT_CONSTANTS.ATTACK_RANGE));
   const incomingOwnerId = target.incomingBullet?.ownerId ?? target.incomingBullet?.owner_id ?? null;
@@ -535,6 +540,9 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
     x: Math.round(Number(target.x) || 0),
     y: Math.round(Number(target.y) || 0),
     hp,
+    firstHp,
+    minHp,
+    damageFromStart,
     displayHp: numberOrNull(target.hp),
     drop: entityDropValue(target),
     distance,
