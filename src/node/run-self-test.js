@@ -6487,7 +6487,7 @@ async function runSelfTest() {
           rows['good-afk']?.length
         ].join('|');
       })(),
-      want: '8|1|1|0|1|0|1|0|0|0|未知玩家|false|11'
+      want: '8|1|1|0||||||||false|11'
     },
     {
       name: 'browserless nearby player rows hide nameless no-stamina no-drop placeholders',
@@ -6518,7 +6518,7 @@ async function runSelfTest() {
           rows.some(row => row[0] === '未知玩家' && row[7] === 'Active')
         ].join('|');
       })(),
-      want: '3|false|true|true|true'
+      want: '1|false|false|false|true'
     },
     {
       name: 'browserless stationary full-stamina active can be AFK profit but non-full active stays threat',
@@ -8478,6 +8478,59 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'coin|coin|coin|self-kill-drop|6|snapshot-player-drop|1|8|62||true'
+    },
+    {
+      name: 'browserless nearby panel uses profit candidates and route nodes',
+      got: (() => {
+        const decision = buildBrowserlessDecision({
+          userId: 7,
+          realtime: {
+            tick: 62,
+            frameAgeMs: 100,
+            self: { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+            entities: [
+              { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+              { entity_id: 2, user_id: 8, name: 'active-threat', x: 1000, y: 0, hp: 90, current_join_mode: 'Active', drop: 1 },
+              { entity_id: 3, user_id: 9, name: 'drop-afk', x: 3000, y: 0, hp: 100, current_join_mode: 'None', drop: 5, stamina_5s_remaining_milli: 10000, stamina_5s_limit_milli: 10000 },
+              { entity_id: 4, user_id: 10, name: 'low-afk', x: 3500, y: 0, hp: 100, current_join_mode: 'None', drop: 1, stamina_5s_remaining_milli: 10000, stamina_5s_limit_milli: 10000 }
+            ],
+            bullets: [],
+            coinDrops: [
+              { drop_id: 'route-a', amount: 4, x: 10000, y: 0 },
+              { drop_id: 'route-b', amount: 4, x: 11200, y: 0 },
+              { drop_id: 'route-c', amount: 4, x: 12400, y: 0 },
+              { drop_id: 'one-a', amount: 1, x: 1600, y: 0 },
+              { drop_id: 'one-b', amount: 1, x: 1700, y: 0 }
+            ]
+          },
+          fallback: { coinDrops: [] }
+        }, {}, {
+          nowMs: 1600,
+          controlMode: 'profit-live',
+          coinMaxDistance: 500,
+          footCoinPriorityDistance: 500,
+          coinRouteMaxDistance: 30000,
+          coinRouteMinRouteValue: 8,
+          coinRouteLinkDistance: 3000,
+          coinRouteMaxLinkDistance: 4000,
+          coinRouteMaxPointsSparse: 3,
+          attackMinAfkDrop: 3,
+          combatEnabled: false,
+          profitLiveThreatExitRange: 500
+        });
+        const coinRows = decision.input.nearby.c;
+        const playerRows = decision.input.nearby.p;
+        return [
+          decision.action.target.id,
+          decision.action.coinRoute.ids.slice(0, 3).join(','),
+          coinRows.map(row => row[0] + ':' + row[3] + ':' + row[4]).join(','),
+          playerRows.map(row => row[0] + ':' + row[6] + ':' + row[9] + ':' + row[10]).join(','),
+          coinRows.some(row => row[0] === 'route-b' && row[4] === 2),
+          coinRows.some(row => row[0] === 'route-c' && row[4] === 3),
+          playerRows.some(row => row[0] === 'low-afk')
+        ].join('|');
+      })(),
+      want: 'route-a|route-a,route-b,route-c|one-a:0:0,one-b:0:0,route-a:1:1,route-b:0:2,route-c:0:3|active-threat:0:0:0,drop-afk:0:1:0|true|true|false'
     },
     {
       name: 'browserless profit live enriches realtime AFK reward from fresh snapshot metadata',
@@ -14526,7 +14579,7 @@ async function runSelfTest() {
             /class="nearby-combined"/.test(panelText),
             /nearby-players-pane\{border-left:1px solid var\(--line\)/.test(panelText),
             /grid-template-columns:minmax\(170px,.55fr\) minmax\(0,1.45fr\)/.test(panelText),
-            /\.player-row\{grid-template-columns:minmax\(132px,2.8fr\)/.test(panelText),
+            /\.player-row\{grid-template-columns:minmax\(150px,2.8fr\)/.test(panelText),
             panelText.indexOf('class="stats-grid"') < panelText.indexOf('id="nearbyGrid"'),
             /id="sessionPanelTitle">本次游戏<\/h2>/.test(panelText),
             !/id="refreshBtn"/.test(panelText),

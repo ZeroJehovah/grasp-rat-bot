@@ -1113,16 +1113,22 @@ function sortCompactNearbyCoins(a, b) {
 }
 
 function compactNearbyCoins(list) {
-  const rows = compactNearbyList(list, 4, Number.POSITIVE_INFINITY)
+  const rows = compactNearbyList(list, 6, Number.POSITIVE_INFINITY)
     .filter(row => compactNumber(row?.[1]) !== null && compactNumber(row?.[2]) !== null);
   const highValueRows = rows.filter(row => Number(row[1]) > 1);
   const lowValueRows = rows
     .filter(row => Number(row[1]) === 1)
     .sort(sortCompactNearbyCoins);
+  const forcedLowValueRows = lowValueRows.filter(row => Boolean(row?.[3]) || Number(row?.[4] || 0) > 0);
   const visibleLowValueRows = lowValueRows.slice(0, 10);
+  const byId = new Map();
+  for (const row of [...highValueRows, ...visibleLowValueRows, ...forcedLowValueRows]) {
+    const key = compactString(row?.[0], 96) || String(byId.size);
+    if (!byId.has(key)) byId.set(key, row);
+  }
   return {
-    rows: [...highValueRows, ...visibleLowValueRows].sort(sortCompactNearbyCoins),
-    lowHiddenCount: Math.max(0, lowValueRows.length - visibleLowValueRows.length)
+    rows: Array.from(byId.values()).sort(sortCompactNearbyCoins),
+    lowHiddenCount: Math.max(0, lowValueRows.length - new Set([...visibleLowValueRows, ...forcedLowValueRows].map(row => compactString(row?.[0], 96))).size)
   };
 }
 

@@ -1056,6 +1056,34 @@ function targetCoinSelected(action, coin) {
   ].some(item => targetIds.has(valueKey(item)));
 }
 
+function coinPanelKeys(coin) {
+  return [
+    coin?.key,
+    coin?.drop_id,
+    coin?.id,
+    coinTargetKeyCore(coin)
+  ].map(valueKey).filter(Boolean);
+}
+
+function coinPanelCanonicalKey(coin) {
+  const direct = valueKey(coin?.drop_id ?? coin?.id);
+  if (direct) return direct;
+  const key = valueKey(coin?.key || coinTargetKeyCore(coin));
+  return key.replace(/^id:/, '');
+}
+
+function coinRouteOrderForAction(action, coin) {
+  if (!action?.coinRoute || !coin) return 0;
+  const keys = new Set(coinPanelKeys(coin));
+  if (!keys.size) return 0;
+  const points = Array.isArray(action.coinRoute.points) ? action.coinRoute.points : [];
+  const pointIndex = points.findIndex(point => keys.has(valueKey(point?.id)));
+  if (pointIndex >= 0) return pointIndex + 1;
+  const ids = Array.isArray(action.coinRoute.ids) ? action.coinRoute.ids : [];
+  const idIndex = ids.findIndex(id => keys.has(valueKey(id)));
+  return idIndex >= 0 ? idIndex + 1 : 0;
+}
+
 function targetPlayerSelected(action, combat, target) {
   const selected = [action?.target, combat?.target].filter(Boolean);
   if (!selected.length || !target) return false;
@@ -1077,6 +1105,68 @@ function uniqueNearbyCoins(input) {
   };
   for (const coin of input?.realtimeCoins || []) add(coin);
   for (const coin of input?.snapshotVisibleCoins || []) add(coin);
+  return Array.from(byKey.values());
+}
+
+function uniquePanelProfitCoins(input) {
+  const byKey = new Map();
+  for (const coin of input?.profitCoins || []) {
+    const key = profitCoinKey(coin);
+    if (!key) continue;
+    const previous = byKey.get(key);
+    if (!previous || profitCoinPriorityRank(coin) > profitCoinPriorityRank(previous)) byKey.set(key, coin);
+  }
+  return Array.from(byKey.values());
+}
+
+function routeDisplayCoinsForAction(input, action) {
+  const points = Array.isArray(action?.coinRoute?.points) ? action.coinRoute.points : [];
+  if (points.length <= 1) return [];
+  const byKey = new Map();
+  for (const coin of input?.profitCoins || []) {
+    for (const key of coinPanelKeys(coin)) byKey.set(key, coin);
+  }
+  return points.slice(1).map(point => {
+    const key = valueKey(point?.id);
+    const source = key ? byKey.get(key) : null;
+    const coin = source || {
+      drop_id: key,
+      id: key,
+      x: point?.x,
+      y: point?.y,
+      amount: point?.amount,
+      authority: action?.target?.authority || 'route'
+    };
+    return {
+      ...coin,
+      key: key || profitCoinKey(coin),
+      distance: Number.isFinite(Number(coin.distance))
+        ? Number(coin.distance)
+        : distanceBetween(input.self, coin),
+      routeDisplayOrder: Number(point?.order || 0) || 0,
+      routeDisplayOnly: !source
+    };
+  }).filter(coin => Number.isFinite(Number(coin.distance)));
+}
+
+function coinPanelCandidates(input, action) {
+  const byKey = new Map();
+  const routeOrderByKey = new Map();
+  for (const point of Array.isArray(action?.coinRoute?.points) ? action.coinRoute.points : []) {
+    const key = valueKey(point?.id);
+    const order = Number(point?.order || 0) || 0;
+    if (key && order > 0) routeOrderByKey.set(key, order);
+  }
+  const add = coin => {
+    const key = coinPanelCanonicalKey(coin) || profitCoinKey(coin);
+    if (!key) return;
+    const routeDisplayOrder = Number(coin.routeDisplayOrder || routeOrderByKey.get(key) || coinRouteOrderForAction(action, coin) || 0) || 0;
+    const enriched = routeDisplayOrder ? { ...coin, routeDisplayOrder } : coin;
+    const previous = byKey.get(key);
+    if (!previous || (routeDisplayOrder > 0 && !Number(previous.routeDisplayOrder || 0))) byKey.set(key, enriched);
+  };
+  for (const coin of uniquePanelProfitCoins(input)) add(coin);
+  for (const coin of routeDisplayCoinsForAction(input, action)) add(coin);
   return Array.from(byKey.values());
 }
 
@@ -1131,6 +1221,18 @@ function shouldShowNearbyPanelPlayer(target, action, combat) {
   return false;
 }
 
+function panelPlayerCandidates(input) {
+  const activeIds = new Set((input.activeThreats || [])
+    .concat(input.firingThreats || [], input.snapshotActiveThreats || [])
+    .map(panelPlayerTargetKey)
+    .filter(Boolean));
+  const afkIds = new Set((input.afkTargets || [])
+    .map(panelPlayerTargetKey)
+    .filter(Boolean));
+  return (input.visibleTargets || [])
+    .filter(target => activeIds.has(panelPlayerTargetKey(target)) || afkIds.has(panelPlayerTargetKey(target)));
+}
+
 function summarizeNearbyForPanel(input, action, combat, options = {}) {
   if (!input?.self) return null;
   const attackRange = Math.max(0, Number(options.attackRange ?? options.combatAttackRange ?? DEFAULT_ATTACK_RANGE));
@@ -1140,7 +1242,7 @@ function summarizeNearbyForPanel(input, action, combat, options = {}) {
       ?? options.opportunityVisibleDistance
       ?? DEFAULT_GLOBAL_COIN_MAX_DISTANCE
   ));
-  const coins = uniqueNearbyCoins(input)
+  const coins = coinPanelCandidates(input, action)
     .filter(coin => Number.isFinite(Number(coin?.distance)))
     .filter(coin => visibleRange <= 0 || Number(coin.distance) <= visibleRange)
     .sort((a, b) => Number(a.distance) - Number(b.distance)
@@ -1149,17 +1251,18 @@ function summarizeNearbyForPanel(input, action, combat, options = {}) {
       valueKey(coin.drop_id ?? coin.id),
       numberOrNull(coin.amount),
       Math.round(Number(coin.distance)),
-      targetCoinSelected(action, coin) ? 1 : 0
+      targetCoinSelected(action, coin) ? 1 : 0,
+      coinRouteOrderForAction(action, coin) || numberOrNull(coin.routeDisplayOrder) || 0,
+      String(coin.authority || '') || null
     ]);
   const selectableAfkTargetIds = new Set((input.afkTargets || [])
     .filter(target => !afkOpportunityBlockedByStaminaCooldown(target, options))
     .map(panelPlayerTargetKey)
     .filter(Boolean));
   const lowDropThreshold = Math.max(0, Number(options.attackMinAfkDrop ?? DEFAULT_ATTACK_MIN_AFK_DROP));
-  const players = (input.visibleTargets || [])
+  const players = panelPlayerCandidates(input)
     .filter(target => Number.isFinite(Number(target?.distance)))
     .filter(target => visibleRange <= 0 || Number(target.distance) <= visibleRange)
-    .filter(target => shouldShowNearbyPanelPlayer(target, action, combat))
     .sort((a, b) => Number(a.distance) - Number(b.distance))
     .map(target => {
       const drop = numberOrNull(entityDropValue(target));
