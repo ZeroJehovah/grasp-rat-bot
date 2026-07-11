@@ -1132,7 +1132,7 @@ function summarizeNearbyForPanel(input, action, combat, options = {}) {
       const afkSelectable = selectableAfkTargetIds.has(panelPlayerTargetKey(target));
       const lowValueFullStamina = Boolean(fullStamina5s && drop !== null && drop < lowDropThreshold);
       return [
-        entityDisplayName(target) || (target.user_id ? '#' + target.user_id : ''),
+        entityDisplayName(target) || '未知玩家',
         numberOrNull(target.hp),
         staminaRemainingValue(target, '5s'),
         drop,

@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.11.2';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.11.3';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function renderBrowserlessWebPanel() {
@@ -32,9 +32,9 @@ function renderBrowserlessWebPanel() {
     .layout{display:grid;grid-template-columns:minmax(240px,1fr) minmax(0,2fr);gap:10px;align-items:start}
     .stack{display:flex;flex-direction:column;gap:10px;min-width:0}
     .stats-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;align-items:start}
-    .nearby-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;align-items:start}
     section{border:1px solid var(--line);background:var(--panel);border-radius:8px;padding:10px;min-width:0}
     h2{font-size:11px;line-height:1.2;margin:0 0 8px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.05em}
+    h3{font-size:11px;line-height:1.2;margin:0 0 6px;color:var(--muted);font-weight:700;letter-spacing:0}
     dl{display:grid;grid-template-columns:minmax(76px,auto) 1fr;gap:5px 9px;margin:0}
     dt{color:var(--muted);min-width:0}
     dd{margin:0;min-width:0;overflow-wrap:anywhere}
@@ -48,19 +48,25 @@ function renderBrowserlessWebPanel() {
     textarea{width:100%;min-height:76px;margin-top:8px;border:1px solid var(--line);border-radius:6px;background:var(--panel2);color:var(--text);font:12px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;padding:8px;resize:vertical}
     pre.auth-url{display:none;white-space:pre-wrap;overflow-wrap:anywhere;margin:8px 0 0;border:1px solid var(--line);border-radius:6px;background:var(--panel2);color:var(--muted);padding:8px;max-height:120px;overflow:auto}
     .auth-message{min-height:18px;overflow-wrap:anywhere}
+    .nearby-panel{min-width:0}
+    .nearby-combined{display:grid;grid-template-columns:minmax(170px,.55fr) minmax(0,1.45fr);gap:10px;align-items:start;min-width:0}
+    .nearby-pane{min-width:0}
+    .nearby-players-pane{border-left:1px solid var(--line);padding-left:10px}
     .nearby-list{display:grid;gap:4px;min-width:0}
     .nearby-row{display:grid;align-items:center;gap:6px;min-height:26px;padding:3px 0;border-bottom:1px solid rgba(255,255,255,.06)}
     .nearby-row:last-child{border-bottom:0}
     .nearby-head{color:var(--muted);font-size:11px;font-weight:700}
     .nearby-summary .nearby-cell{grid-column:1/-1;color:var(--muted)}
-    .coin-row{grid-template-columns:minmax(48px,1.2fr) minmax(36px,.6fr) minmax(54px,.75fr) minmax(42px,.55fr)}
-    .player-row{grid-template-columns:minmax(64px,1.3fr) minmax(46px,.65fr) minmax(42px,.6fr) minmax(42px,.55fr) minmax(54px,.75fr) minmax(42px,.55fr)}
+    .coin-row{grid-template-columns:minmax(36px,1fr) minmax(34px,.5fr) minmax(46px,.65fr) minmax(34px,.45fr)}
+    .player-row{grid-template-columns:minmax(132px,2.8fr) minmax(40px,.55fr) minmax(42px,.55fr) minmax(42px,.5fr) minmax(52px,.65fr) minmax(38px,.45fr)}
     .nearby-cell{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     .distance-badge{font-variant-numeric:tabular-nums}
     .range-attack{color:var(--green)}
     .range-view{color:var(--blue)}
     .selected-mark{color:var(--amber);font-weight:700}
-    @media (max-width:760px){.layout{grid-template-columns:1fr}.stats-grid,.nearby-grid{grid-template-columns:1fr}}
+    @media (max-width:760px){.layout{grid-template-columns:1fr}.stats-grid{grid-template-columns:1fr}}
+    @media (max-width:600px){.nearby-combined{grid-template-columns:1fr}.nearby-players-pane{border-left:0;border-top:1px solid var(--line);padding-left:0;padding-top:10px}}
+    @media (max-width:520px){.player-row{grid-template-columns:minmax(96px,2fr) minmax(34px,.5fr) minmax(38px,.55fr) minmax(36px,.5fr) minmax(44px,.6fr) minmax(32px,.45fr);gap:4px}}
     @media (max-width:520px){main{padding:10px}header{align-items:flex-start;flex-direction:column}}
   </style>
 </head>
@@ -124,16 +130,19 @@ function renderBrowserlessWebPanel() {
             <dl id="todayStats"></dl>
           </section>
         </div>
-        <div id="nearbyGrid" class="nearby-grid" hidden>
-          <section>
-            <h2>附近金币</h2>
-            <div id="nearbyCoins" class="nearby-list"></div>
-          </section>
-          <section>
-            <h2>附近玩家</h2>
-            <div id="nearbyPlayers" class="nearby-list"></div>
-          </section>
-        </div>
+        <section id="nearbyGrid" class="nearby-panel" hidden>
+          <h2>附近信息</h2>
+          <div class="nearby-combined">
+            <div class="nearby-pane nearby-coins-pane">
+              <h3>附近金币</h3>
+              <div id="nearbyCoins" class="nearby-list"></div>
+            </div>
+            <div class="nearby-pane nearby-players-pane">
+              <h3>附近玩家</h3>
+              <div id="nearbyPlayers" class="nearby-list"></div>
+            </div>
+          </div>
+        </section>
       </div>
     </div>
   </main>
@@ -868,6 +877,7 @@ function renderBrowserlessWebPanel() {
       const node = document.getElementById('nearbyCoins');
       if (!node) return;
       const items = Array.isArray(status.nearby?.c) ? status.nearby.c : [];
+      const hiddenLowCoinCount = Math.max(0, Number(status.nearby?.coinLowHiddenCount || 0) || 0);
       const fragment = document.createDocumentFragment();
       fragment.appendChild(createNearbyRow('coin', [
         { text: 'ID' },
@@ -875,7 +885,7 @@ function renderBrowserlessWebPanel() {
         { text: '距离' },
         { text: '选择' }
       ], true));
-      if (!items.length) {
+      if (!items.length && hiddenLowCoinCount === 0) {
         fragment.appendChild(createNearbyRow('coin', [{ text: '无' }, { text: '--' }, { text: '--' }, { text: '--' }]));
       } else {
         for (const item of items) {
@@ -888,20 +898,13 @@ function renderBrowserlessWebPanel() {
           ]));
         }
       }
+      if (hiddenLowCoinCount > 0) {
+        fragment.appendChild(createNearbySummaryRow('coin', '另有 ' + hiddenLowCoinCount + ' 个低额金币，详情略'));
+      }
       node.replaceChildren(fragment);
     }
     function panelFlag(value) {
       return value === true || value === 1 || value === '1';
-    }
-    function hasFull5sNearbyPlayer(item) {
-      if (item?.[8] !== null && item?.[8] !== undefined) return panelFlag(item[8]);
-      const staminaMs = number(item?.[2]);
-      return staminaMs !== null && staminaMs >= 9800;
-    }
-    function isLowValueFullStaminaNearbyPlayer(item) {
-      if (item?.[10] !== null && item?.[10] !== undefined) return panelFlag(item[10]);
-      const drop = number(item?.[3]);
-      return drop !== null && drop < 3 && hasFull5sNearbyPlayer(item);
     }
     function isAfkProfitNearbyPlayer(item) {
       return panelFlag(item?.[9]);
@@ -922,8 +925,7 @@ function renderBrowserlessWebPanel() {
       const node = document.getElementById('nearbyPlayers');
       if (!node) return;
       const items = Array.isArray(status.nearby?.p) ? status.nearby.p : [];
-      const visibleItems = items.filter(item => !isLowValueFullStaminaNearbyPlayer(item));
-      const hiddenLowFullStaminaCount = items.length - visibleItems.length;
+      const hiddenLowFullStaminaCount = Math.max(0, Number(status.nearby?.playerLowHiddenCount || 0) || 0);
       const fragment = document.createDocumentFragment();
       fragment.appendChild(createNearbyRow('player', [
         { text: '名称' },
@@ -933,7 +935,7 @@ function renderBrowserlessWebPanel() {
         { text: '距离' },
         { text: '选择' }
       ], true));
-      if (!visibleItems.length && hiddenLowFullStaminaCount === 0) {
+      if (!items.length && hiddenLowFullStaminaCount === 0) {
         fragment.appendChild(createNearbyRow('player', [
           { text: '无' },
           { text: '--' },
@@ -943,7 +945,7 @@ function renderBrowserlessWebPanel() {
           { text: '--' }
         ]));
       } else {
-        for (const item of visibleItems) {
+        for (const item of items) {
           const [name, hp, staminaMs, drop, invMs, distanceCm, selected] = item;
           const hpCell = playerHpCell(hp, invMs);
           const staminaCell = playerStaminaCell(staminaMs, isAfkProfitNearbyPlayer(item));

@@ -6390,7 +6390,8 @@ async function runSelfTest() {
             { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
             fullStamina5s({ entity_id: 2, user_id: 8, name: 'good-afk', x: 1000, y: 0, hp: 80, current_join_mode: 'Passive', drop: 5 }),
             fullStamina5s({ entity_id: 3, user_id: 9, name: 'low-full', x: 2000, y: 0, hp: 80, current_join_mode: 'Passive', drop: 1 }),
-            { entity_id: 4, user_id: 10, name: 'unknown-stamina', x: 3000, y: 0, hp: 80, current_join_mode: 'Passive', drop: 20 }
+            { entity_id: 4, user_id: 10, name: 'unknown-stamina', x: 3000, y: 0, hp: 80, current_join_mode: 'Passive', drop: 20 },
+            { entity_id: 5, user_id: 11, x: 4000, y: 0, hp: 80, current_join_mode: 'Passive', drop: 20 }
           ],
           bullets: []
         }, { receivedAtMs: 1000 });
@@ -6410,10 +6411,12 @@ async function runSelfTest() {
           rows['unknown-stamina']?.[8],
           rows['unknown-stamina']?.[9],
           rows['unknown-stamina']?.[10],
+          rows['未知玩家']?.[0],
+          String(decision.input.nearby.p || '').includes('#11'),
           rows['good-afk']?.length
         ].join('|');
       })(),
-      want: '8|1|1|0|1|0|1|0|0|0|11'
+      want: '8|1|1|0|1|0|1|0|0|0|未知玩家|false|11'
     },
     {
       name: 'browserless stationary full-stamina active can be AFK profit but non-full active stays threat',
@@ -13329,7 +13332,10 @@ async function runSelfTest() {
                   c: Array.from({ length: 165 }, (_, index) => (
                     index === 0 ? ['coin-1', 8, 450, 1] : ['coin-' + (index + 1), 1, 500 + index, 0]
                   )),
-                  p: [['enemy', 44, 5000, 9, null, 800, 1, 'Passive']]
+                  p: [
+                    ['enemy', 44, 5000, 9, null, 800, 1, 'Passive', 0, 0, 0],
+                    ['low-full', 80, 10000, 1, null, 900, 0, 'Passive', 1, 0, 1]
+                  ]
                 }
               }
             },
@@ -13431,9 +13437,11 @@ async function runSelfTest() {
           compactStatus.nearby.c[0][0],
           compactStatus.nearby.c[0][3],
           compactStatus.nearby.c.length,
+          compactStatus.nearby.coinLowHiddenCount,
           compactStatus.nearby.p[0][0],
           compactStatus.nearby.p[0][6],
           compactStatus.nearby.p[0][7],
+          compactStatus.nearby.playerLowHiddenCount,
           compactStatus.recentExit.reason,
           compactStatus.network.sourceIpIndex,
           compactStatus.network.sourceIpCount,
@@ -13441,11 +13449,13 @@ async function runSelfTest() {
           Boolean(compactStatus.probes),
           Boolean(compactStatus.current),
           Boolean(compactStatus.recentExits),
+          !compactText.includes('coin-165'),
+          !compactText.includes('low-full'),
           compactText.includes('state-secret-token'),
           !compactText.includes(largePayload) && compactText.length < publicText.length
         ].join('|');
       }),
-      want: 'true|77|true|true|true|true|true|false|loop-wait|88|10|20|360000|seek-coin|8|7|enemy|5999|active-near-login-point|88|true|enemy|14500|coin-1|1|165|enemy|1|Passive|latest|2|3|10.0.0.101|false|false|false|false|true'
+      want: 'true|77|true|true|true|true|true|false|loop-wait|88|10|20|360000|seek-coin|8|7|enemy|5999|active-near-login-point|88|true|enemy|14500|coin-1|1|11|154|enemy|1|Passive|1|latest|2|3|10.0.0.101|false|false|false|true|true|false|true'
     },
     {
       name: 'browserless compact status exposes session offline and today stats',
@@ -14080,10 +14090,15 @@ async function runSelfTest() {
             /id="roleStatus"/.test(panelText),
             /当前动作/.test(panelText),
             /id="actionDetails"/.test(panelText),
+            /附近信息/.test(panelText),
             /附近金币/.test(panelText),
             /附近玩家/.test(panelText),
             /id="nearbyCoins"/.test(panelText),
             /id="nearbyPlayers"/.test(panelText),
+            /class="nearby-combined"/.test(panelText),
+            /nearby-players-pane\{border-left:1px solid var\(--line\)/.test(panelText),
+            /grid-template-columns:minmax\(170px,.55fr\) minmax\(0,1.45fr\)/.test(panelText),
+            /\.player-row\{grid-template-columns:minmax\(132px,2.8fr\)/.test(panelText),
             panelText.indexOf('class="stats-grid"') < panelText.indexOf('id="nearbyGrid"'),
             /id="sessionPanelTitle">本次游戏<\/h2>/.test(panelText),
             !/id="refreshBtn"/.test(panelText),
@@ -14118,7 +14133,7 @@ async function runSelfTest() {
           await handle.close();
         }
       })(),
-      want: '401|200|true|true|true|200|true|12|true|true|true|200|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|200|true|1'
+      want: '401|200|true|true|true|200|true|12|true|true|true|200|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|200|true|1'
     },
     {
       name: 'browserless web panel renders explicit login point safety result',
@@ -14158,8 +14173,11 @@ async function runSelfTest() {
           panelScript.includes("setText('sessionPanelTitle', online ? '本次游戏' : '上次游戏');"),
           panelScript.includes("['进入时间', fullStamp(currentSession.enteredAt), true]"),
           !panelScript.includes("'状态/进入'"),
-          /function isLowValueFullStaminaNearbyPlayer/.test(panelScript),
-          panelScript.includes('const visibleItems = items.filter(item => !isLowValueFullStaminaNearbyPlayer(item));'),
+          !/function isLowValueFullStaminaNearbyPlayer/.test(panelScript),
+          !panelScript.includes('const visibleItems = items.filter(item => !isLowValueFullStaminaNearbyPlayer(item));'),
+          panelScript.includes('coinLowHiddenCount'),
+          panelScript.includes('playerLowHiddenCount'),
+          panelScript.includes('低额金币'),
           panelScript.includes("低收益满体力玩家"),
           /function isAfkProfitNearbyPlayer/.test(panelScript),
           /function playerHpCell/.test(panelScript),
@@ -14169,7 +14187,7 @@ async function runSelfTest() {
           hiddenActionLabels.every(label => !panelScript.includes("addRow(rowsOut, '" + label + "'"))
         ].join('|');
       })(),
-      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
+      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless runner self-test passes',

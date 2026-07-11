@@ -1064,13 +1064,57 @@ function compactNearbyList(list, rowSize, limit = 160) {
     .slice(0, limit);
 }
 
+function sortCompactNearbyCoins(a, b) {
+  const distanceA = compactNumber(a?.[2]);
+  const distanceB = compactNumber(b?.[2]);
+  const amountA = compactNumber(a?.[1]);
+  const amountB = compactNumber(b?.[1]);
+  return (distanceA ?? Number.POSITIVE_INFINITY) - (distanceB ?? Number.POSITIVE_INFINITY)
+    || (amountB ?? 0) - (amountA ?? 0);
+}
+
+function compactNearbyCoins(list) {
+  const rows = compactNearbyList(list, 4, Number.POSITIVE_INFINITY)
+    .filter(row => compactNumber(row?.[1]) !== null && compactNumber(row?.[2]) !== null);
+  const highValueRows = rows.filter(row => Number(row[1]) > 1);
+  const lowValueRows = rows
+    .filter(row => Number(row[1]) === 1)
+    .sort(sortCompactNearbyCoins);
+  const visibleLowValueRows = lowValueRows.slice(0, 10);
+  return {
+    rows: [...highValueRows, ...visibleLowValueRows].sort(sortCompactNearbyCoins),
+    lowHiddenCount: Math.max(0, lowValueRows.length - visibleLowValueRows.length)
+  };
+}
+
+function compactNearbyPlayers(list) {
+  const rows = compactNearbyList(list, 11, Number.POSITIVE_INFINITY);
+  const visibleRows = [];
+  let lowHiddenCount = 0;
+  for (const row of rows) {
+    if (row?.[10]) {
+      lowHiddenCount += 1;
+      continue;
+    }
+    visibleRows.push(row.slice(0, 10));
+  }
+  return {
+    rows: visibleRows,
+    lowHiddenCount
+  };
+}
+
 function compactNearby(nearby) {
   if (!nearby || typeof nearby !== 'object') return null;
+  const coins = compactNearbyCoins(nearby.c || nearby.coins);
+  const players = compactNearbyPlayers(nearby.p || nearby.players);
   return {
     ar: compactNumber(nearby.ar ?? nearby.attackRange),
     vr: compactNumber(nearby.vr ?? nearby.visibleRange),
-    c: compactNearbyList(nearby.c || nearby.coins, 4, Number.POSITIVE_INFINITY),
-    p: compactNearbyList(nearby.p || nearby.players, 11, Number.POSITIVE_INFINITY)
+    c: coins.rows,
+    coinLowHiddenCount: coins.lowHiddenCount,
+    p: players.rows,
+    playerLowHiddenCount: players.lowHiddenCount
   };
 }
 
