@@ -8439,6 +8439,65 @@ async function runSelfTest() {
       want: 'safety-exit|safety|profit-live-snapshot-active-threat|8|realtime|true|true||false|true|true'
     },
     {
+      name: 'browserless profit live keeps engaged realtime combat over snapshot-active same target',
+      got: (() => {
+        const stateful = {
+          combatTarget: {
+            id: 8,
+            at: 1000,
+            firstSeenAt: 1000,
+            lastInRangeAt: 1000,
+            hp: 93,
+            reason: 'combat-live-realtime'
+          }
+        };
+        const store = createBrowserlessStateStore({ userId: 7 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 80,
+          entities: [
+            { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 5500 },
+            { entity_id: 2, user_id: 8, name: 'engaged-snapshot-active', x: 9000, y: 0, hp: 93, drop: 24 }
+          ],
+          bullets: [
+            { bullet_id: 11, owner_user_id: 8, start_x: 9000, start_y: 0, target_x: 0, target_y: 0, created_tick: 79, expire_tick: 109, speed_per_tick: 500 }
+          ]
+        }, { receivedAtMs: 2000 });
+        store.ingestFrame({
+          type: 'snapshot',
+          tick: 81,
+          entities: [
+            { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, coins: 1000 },
+            { entity_id: 22, user_id: 8, name: 'engaged-snapshot-active', x: 9000, y: 0, hp: 93, current_join_mode: 'Active', death_reward_preview: 24, death_drop_coins: 24 }
+          ],
+          bullets: [],
+          coin_drops: [],
+          messages: []
+        }, { receivedAtMs: 2050 });
+        const decision = buildBrowserlessDecision(store.getState(2100), stateful, {
+          nowMs: 2100,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          combatAttackRange: 11000,
+          targetStickMs: 7000,
+          combatEngageStickMs: 7000
+        });
+        return [
+          decision.kind,
+          decision.band,
+          decision.reason,
+          decision.action.target.userId,
+          decision.combat.target?.userId || '',
+          decision.combat.target?.combatIntent || '',
+          Boolean(decision.combat.target?.combatEngagement),
+          decision.combat.actionEligible,
+          decision.combat.shooting.wouldShoot,
+          decision.input.dataGaps.includes('snapshot-active-threat-visible')
+        ].join('|');
+      })(),
+      want: 'combat-live|combat|combat-live-realtime|8|8|engaged|true|true|true|true'
+    },
+    {
       name: 'browserless profit live flees instead of chasing coin under combat threat',
       got: (() => {
         const store = createBrowserlessStateStore({ userId: 7 });

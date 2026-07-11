@@ -2999,6 +2999,7 @@ function isCombatActionEligibleForDecision(combatDecision, options = {}) {
   const target = combatDecision?.target || combatDecision?.dryRun?.target || null;
   if (!target) return false;
   if (options.controlMode !== 'profit-live') return true;
+  if (target.combatEngagement) return true;
   if (target.combatIntent === 'defensive') return true;
   return Boolean(target.active || target.firing);
 }
@@ -3092,7 +3093,7 @@ function profitLiveSafetyDecision(input, combatDecision, stateful = {}, options 
         }
       };
     }
-    if (snapshotThreatening && distance <= threatExitRange) {
+    if (!combatHandlesThreat && snapshotThreatening && distance <= threatExitRange) {
       return {
         kind: 'safety-exit',
         band: 'safety',
