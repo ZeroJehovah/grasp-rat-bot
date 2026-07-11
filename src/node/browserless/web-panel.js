@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.12.6';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.12.7';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function renderBrowserlessWebPanel() {
@@ -733,12 +733,15 @@ function renderBrowserlessWebPanel() {
     }
     function dataGapsText(decision) {
       const gaps = Array.isArray(decision?.dataGaps) ? decision.dataGaps : [];
-      const translated = gaps.map(dataGapText).filter(Boolean);
+      const actionable = gaps.filter(gap => [
+        'missing-realtime-self',
+        'unknown-realtime-frame-age'
+      ].includes(String(gap || '')));
+      const translated = actionable.map(dataGapText).filter(Boolean);
       if (translated.length) {
-        const hiddenCount = Math.max(0, Number(decision?.dataGapCount || 0) - gaps.length);
-        return translated.join(' / ') + (hiddenCount ? ' / 另有 ' + hiddenCount + ' 项' : '');
+        return translated.join(' / ');
       }
-      return decision?.dataGapCount ? String(decision.dataGapCount) + ' 项' : '--';
+      return '--';
     }
     function authStatusText(status) {
       const auth = status.auth || {};
@@ -1241,7 +1244,8 @@ function renderBrowserlessWebPanel() {
       addRow(rowsOut, '目标', targetLabel(target));
       addRow(rowsOut, '来源', sourceText(target?.authority));
       addRow(rowsOut, '目标状态', targetStateText(target));
-      if (online) addRow(rowsOut, '数据缺口', dataGapsText(decision));
+      const dataGapSummary = dataGapsText(decision);
+      if (online && dataGapSummary !== '--') addRow(rowsOut, '数据缺口', dataGapSummary);
 
       if (isCombatStatus(status, kind, reason)) {
         addRow(rowsOut, '战斗目标', targetLabel(status.combat?.target));

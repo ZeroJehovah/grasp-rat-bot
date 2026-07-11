@@ -18,7 +18,7 @@ const {
   writeBrowserlessStateFile
 } = require('./state-file');
 const { startStatusServer } = require('./status-server');
-const { runReadOnlyCanary } = require('./canary');
+const { runPreLoginSnapshotSafety, runReadOnlyCanary } = require('./canary');
 const {
   BROWSER_RUNTIME_DEFAULTS,
   decisionStatePatch
@@ -302,6 +302,8 @@ function pendingLoginPointSafetyPatch(config = {}, reason = 'manual-login-point-
       streak: 0,
       satisfied: false,
       selfPresent: null,
+      bypassedPreLoginSafety: false,
+      nearestActive: null,
       ...(options.detail && typeof options.detail === 'object' ? options.detail : {})
     }
   };
@@ -840,9 +842,69 @@ async function runBrowserlessRunner(config, deps = {}) {
     statusServer: statusHandle ? { host: config.statusHost, port: statusHandle.port } : null
   });
 
-  const persistedDelayPlan = !config.once && !config.dryRun
+  let persistedDelayPlan = !config.once && !config.dryRun
     ? persistedReconnectDelayPlan(readBrowserlessStateFile(stateFile), config, now())
     : null;
+  if (persistedDelayPlan) {
+    try {
+      const probe = await (deps.runPreLoginSnapshotSafety || runPreLoginSnapshotSafety)({
+        ...config,
+        loginPointSafetySuccessRequired: 1,
+        loginPointSafetyProbeIntervalMs: 0
+      }, readBrowserlessStateFile(stateFile), {
+        now,
+        sleep,
+        fetchWithTimeout: sourceIpController.fetchWithTimeout
+      });
+      const selfPresent = Boolean(probe?.response?.summary?.selfPresent);
+      logStore.append('runner', 'runner-persisted-wait-self-probe', {
+        checkedAt: probe?.checkedAt || '',
+        ok: Boolean(probe?.ok),
+        reason: probe?.reason || '',
+        selfPresent,
+        tick: probe?.response?.summary?.tick ?? null,
+        nextRunAt: persistedDelayPlan.nextRunAt
+      });
+      if (selfPresent) {
+        recordSnapshotSafetyProgress(probe);
+        const currentBeforeResume = readBrowserlessStateFile(stateFile);
+        updateState({
+          runner: {
+            running: true,
+            mode: config.controlMode || 'read-only',
+            lastError: '',
+            currentAction: {
+              kind: 'loop-wait',
+              band: 'recover',
+              reason: 'self-present-reentry',
+              delayMs: 0,
+              nextRunAt: '',
+              previousRunId: persistedDelayPlan.previousRunId || '',
+              persisted: true
+            }
+          },
+          stats: browserlessStatsForOffline(currentBeforeResume, {
+            reason: persistedDelayPlan.safetyReason || persistedDelayPlan.reason,
+            nextRunAt: '',
+            delayMs: 0
+          }, { nowMs: now() })
+        }, { updatedAt: new Date(now()).toISOString() });
+        logStore.append('runner', 'runner-persisted-wait-self-present-resume', {
+          previousRunId: persistedDelayPlan.previousRunId || '',
+          previousReason: persistedDelayPlan.reason,
+          checkedAt: probe?.checkedAt || '',
+          tick: probe?.response?.summary?.tick ?? null
+        });
+        persistedDelayPlan = null;
+      }
+    } catch (err) {
+      recordSupervisorError(err, { operation: 'persisted-wait-self-probe' });
+      logStore.append('runner', 'runner-persisted-wait-self-probe-error', {
+        error: errorMessage(err),
+        nextRunAt: persistedDelayPlan.nextRunAt
+      });
+    }
+  }
   if (persistedDelayPlan) {
     const currentBeforeWait = readBrowserlessStateFile(stateFile);
     updateState({

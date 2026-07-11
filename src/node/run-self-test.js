@@ -6059,6 +6059,24 @@ async function runSelfTest() {
       want: 'target-label|12|12|snapshot'
     },
     {
+      name: 'browserless decision input accepts a fresh zero-age realtime frame',
+      got: (() => {
+        const store = createBrowserlessStateStore({ userId: 7 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 48,
+          entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100 }],
+          bullets: []
+        }, { receivedAtMs: 1200 });
+        const input = buildBrowserlessStrategyInput(store.getState(1200), { nowMs: 1200 }, {});
+        return [
+          input.realtime.frameAgeMs,
+          input.dataGaps.includes('unknown-realtime-frame-age')
+        ].join('|');
+      })(),
+      want: '0|false'
+    },
+    {
       name: 'browserless decision input fills missing player display name from fresh snapshot',
       got: (() => {
         const state = {
@@ -13770,6 +13788,18 @@ async function runSelfTest() {
               nextRunAt: '2026-07-11T03:55:25.402Z',
               reconnectDelayMs: 1800000
             }
+          },
+          loginPointSafety: {
+            ok: true,
+            reason: 'self-present-reentry',
+            point: { x: 1, y: 2, hp: 100, source: 'state' },
+            detail: {
+              ok: true,
+              reason: 'self-present-reentry',
+              selfPresent: true,
+              bypassedPreLoginSafety: true,
+              nearestActive: { userId: 8, name: 'stale-active' }
+            }
           }
         }, { updatedAt: '2026-07-11T03:25:25.478Z' });
         const plan = persistedReconnectDelayPlan(readBrowserlessStateFile(file), config, Date.parse('2026-07-11T03:45:54.610Z'));
@@ -13780,6 +13810,15 @@ async function runSelfTest() {
             sleptMs += ms;
             t += ms;
           },
+          runPreLoginSnapshotSafety: async () => ({
+            ok: true,
+            reason: 'safe',
+            checkedAt: '2026-07-11T03:45:54.610Z',
+            required: 1,
+            streak: 1,
+            satisfied: true,
+            response: { summary: { valid: true, selfPresent: false, tick: 200 } }
+          }),
           runReadOnlyOnce: async () => {
             calls += 1;
             return {
@@ -13794,17 +13833,107 @@ async function runSelfTest() {
         });
         const logFile = path.join(dir, 'logs', '2026-07-11', 'runner.jsonl');
         const text = fs.readFileSync(logFile, 'utf8');
+        const stored = readBrowserlessStateFile(file);
         return [
           result.reason,
           calls,
           sleptMs,
           plan.reason,
           plan.delayMs,
+          stored.loginPointSafety.detail.selfPresent,
+          stored.loginPointSafety.detail.bypassedPreLoginSafety,
+          stored.loginPointSafety.detail.nearestActive,
+          /runner-persisted-wait-self-probe/.test(text),
           /runner-persisted-loop-wait/.test(text),
           text.indexOf('runner-persisted-loop-wait') < text.indexOf('runner-loop-stop')
         ].join('|');
       }),
-      want: 'explicit-stop|1|570792|stamina-budget-coin-leave|570792|true|true'
+      want: 'explicit-stop|1|570792|stamina-budget-coin-leave|570792||false||true|true|true'
+    },
+    {
+      name: 'browserless runner skips persisted reconnect wait when fresh snapshot still has self',
+      got: withTempDirForTest(async dir => {
+        const t = Date.parse('2026-07-11T03:45:54.610Z');
+        let calls = 0;
+        let sleptMs = 0;
+        const config = parseBrowserlessRunnerArgs([
+          '--live',
+          '--data-dir',
+          dir,
+          '--user-id',
+          '7',
+          '--session-token',
+          'runner-secret-token',
+          '--login-point-x',
+          '1',
+          '--login-point-y',
+          '2'
+        ], {});
+        const file = stateFilePath(config);
+        updateBrowserlessStateFile(file, {
+          runner: {
+            running: true,
+            currentAction: {
+              kind: 'loop-wait',
+              reason: 'stamina-budget-coin-leave',
+              nextRunAt: '2026-07-11T03:55:25.402Z',
+              previousRunId: 'profit-live-before-restart'
+            }
+          },
+          stats: {
+            lastExit: {
+              at: '2026-07-11T03:25:25.277Z',
+              reason: 'stamina-budget-coin-leave',
+              nextRunAt: '2026-07-11T03:55:25.402Z',
+              reconnectDelayMs: 1800000
+            }
+          }
+        }, { updatedAt: '2026-07-11T03:25:25.478Z' });
+        const result = await runBrowserlessRunner(config, {
+          now: () => t,
+          startStatusServer: false,
+          sleep: async ms => {
+            sleptMs += ms;
+          },
+          runPreLoginSnapshotSafety: async () => ({
+            ok: true,
+            reason: 'self-present-reentry',
+            originalReason: 'active-near-login-point',
+            checkedAt: '2026-07-11T03:45:54.610Z',
+            required: 1,
+            streak: 1,
+            satisfied: true,
+            bypassedPreLoginSafety: true,
+            response: {
+              summary: {
+                valid: true,
+                selfPresent: true,
+                tick: 201,
+                safety: { ok: false, reason: 'active-near-login-point' }
+              }
+            }
+          }),
+          runReadOnlyOnce: async () => {
+            calls += 1;
+            return {
+              ok: false,
+              runId: 'reentered-without-wait',
+              error: 'explicit-stop',
+              safety: { event: { reason: 'explicit-stop', at: '2026-07-11T03:45:54.610Z' } }
+            };
+          }
+        });
+        const logFile = path.join(dir, 'logs', '2026-07-11', 'runner.jsonl');
+        const text = fs.readFileSync(logFile, 'utf8');
+        return [
+          result.reason,
+          calls,
+          sleptMs,
+          /runner-persisted-wait-self-present-resume/.test(text),
+          /runner-persisted-loop-wait/.test(text)
+        ].join('|');
+      }),
+      want: 'explicit-stop|1|0|true|false'
     },
     {
       name: 'browserless runner best-effort shutdown leave hydrates persisted session',
@@ -15452,7 +15581,8 @@ async function runSelfTest() {
           /s\.lastKnown\?\.self/.test(panelScript),
           /上次体力1d/.test(panelScript),
           /保持离线/.test(panelScript),
-          panelScript.includes("if (online) addRow(rowsOut, '数据缺口', dataGapsText(decision));"),
+          panelScript.includes("if (online && dataGapSummary !== '--') addRow(rowsOut, '数据缺口', dataGapSummary);"),
+          panelScript.includes("'missing-realtime-self',\n        'unknown-realtime-frame-age'"),
           panelScript.includes("return '快照金币备用被阻止：快照金币超出可见范围';"),
           panelScript.includes("setText('sessionPanelTitle', online ? '本次游戏' : '上次游戏');"),
           panelScript.includes("['进入时间', fullStamp(currentSession.enteredAt), true]"),
@@ -15471,7 +15601,7 @@ async function runSelfTest() {
           hiddenActionLabels.every(label => !panelScript.includes("addRow(rowsOut, '" + label + "'"))
         ].join('|');
       })(),
-      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
+      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless runner self-test passes',

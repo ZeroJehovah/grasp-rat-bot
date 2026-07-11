@@ -1462,7 +1462,9 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
   if (centerFiltered.realtimeCoins) dataGaps.push('center-realtime-coins-filtered');
   if (centerFiltered.snapshotCoins) dataGaps.push('center-snapshot-coins-filtered');
   if (snapshotFallbackBlockedReasons.length) dataGaps.push(...snapshotFallbackBlockedReasons.map(reason => `snapshot-fallback-blocked:${reason}`));
-  if (!realtime.frameAgeMs && realtime.receivedAtMs) dataGaps.push('unknown-realtime-frame-age');
+  if (numberOrNull(realtime.frameAgeMs) === null && Number(realtime.receivedAtMs) > 0) {
+    dataGaps.push('unknown-realtime-frame-age');
+  }
   const selfKilledPlayerDropCoinKeys = new Set(selfKilledPlayerDropCoins.map(profitCoinKey).filter(Boolean));
   const selfKilledPlayerDropProfitCoins = selfKilledPlayerDropCoins.map(coin => ({
     ...coin,
