@@ -520,20 +520,30 @@ function updateBrowserlessOpportunityAfkStaminaObservations(targets = [], statef
     const previousStamina = Number(previous.stamina5s);
     const previousSeenAt = Number(previous.lastSeenAt || 0);
     const continuous = previousSeenAt > 0 && t - previousSeenAt <= observationGapMs;
+    let stableSince = continuous
+      ? Math.max(0, Number(previous.stableSince || previous.observedSince || previousSeenAt || t))
+      : t;
     let cooldownUntil = Math.max(0, Number(previous.cooldownUntil || 0));
-    let consumedAt = Math.max(0, Number(previous.consumedAt || 0));
-    if (stamina5s !== null && continuous && Number.isFinite(previousStamina) && stamina5s + dropThreshold < previousStamina) {
+    let consumedAt = continuous ? Math.max(0, Number(previous.consumedAt || 0)) : 0;
+    const observedDrop = stamina5s !== null && continuous && Number.isFinite(previousStamina) && stamina5s + dropThreshold < previousStamina;
+    const observedNonFull = stamina5s !== null && !hasFull5sStamina(target, options);
+    if (cooldownMs > 0 && (observedDrop || observedNonFull)) {
+      stableSince = t;
       cooldownUntil = Math.max(cooldownUntil, t + cooldownMs);
       consumedAt = t;
+    } else if (cooldownUntil <= t) {
+      cooldownUntil = 0;
     }
     state[id] = {
       stamina5s: stamina5s !== null ? stamina5s : (Number.isFinite(previousStamina) ? previousStamina : null),
       lastSeenAt: t,
+      stableSince,
       cooldownUntil,
       consumedAt
     };
     target.afkStaminaCooldownRemainingMs = Math.max(0, Math.round(cooldownUntil - t));
-    if (target.afkStaminaCooldownRemainingMs > 0) target.afkStaminaConsumedAt = consumedAt;
+    target.afkStaminaObservedMs = Math.max(0, Math.round(t - stableSince));
+    if (target.afkStaminaCooldownRemainingMs > 0 && consumedAt > 0) target.afkStaminaConsumedAt = consumedAt;
   }
   const ttlMs = Math.max(300000, cooldownMs * 5);
   for (const [id, item] of Object.entries(state)) {
@@ -1198,6 +1208,7 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
   const visibleTargets = decisionEntities
     .filter(entity => Number(entity.user_id) !== selfUserId)
     .filter(entity => Number.isFinite(Number(entity.x)) && Number.isFinite(Number(entity.y)));
+  updateBrowserlessOpportunityAfkStaminaObservations(visibleTargets, stateful, options.nowMs, options);
   const activeThreats = visibleTargets.filter(entity => entity.active && entity.alive !== false);
   const firingThreats = visibleTargets.filter(entity => entity.firing && entity.alive !== false);
   const avoidanceThreats = visibleTargets.filter(entity => entity.alive !== false && (entity.active || entity.firing || entity.invulnerable));
@@ -1218,7 +1229,6 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
       dropValue: entityDropValue
     });
   });
-  updateBrowserlessOpportunityAfkStaminaObservations(afkObservationTargets, stateful, options.nowMs, options);
   const afkTargets = afkObservationTargets.filter(entity => hasFull5sStamina(entity, options) && !afkTargetBlockedByRecentActivity(entity, options));
   const realtimeCoins = buildNativeCoinSnapshotCore(Array.isArray(realtime.coinDrops) ? realtime.coinDrops : [], { nowMs: options.nowMs })
     .map(drop => normalizeCoinForDecision(drop, self, 'realtime'))
@@ -1264,7 +1274,7 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
   if (snapshotActiveThreats.length) dataGaps.push('snapshot-active-threat-visible');
   if (visibleTargets.some(target => target.whitelisted)) dataGaps.push('whitelisted-target-visible');
   if (visibleTargets.some(target => target.recentlyActive)) dataGaps.push('recently-active-target-visible');
-  if (afkTargets.some(target => Number(target.afkStaminaCooldownRemainingMs || 0) > 0)) dataGaps.push('afk-stamina-cooldown-target-visible');
+  if (afkTargets.some(target => afkOpportunityBlockedByStaminaCooldown(target, options))) dataGaps.push('afk-stamina-cooldown-target-visible');
   if (snapshotFallbackBlockedReasons.length) dataGaps.push(...snapshotFallbackBlockedReasons.map(reason => `snapshot-fallback-blocked:${reason}`));
   if (!realtime.frameAgeMs && realtime.receivedAtMs) dataGaps.push('unknown-realtime-frame-age');
   const selfKilledPlayerDropCoinKeys = new Set(selfKilledPlayerDropCoins.map(profitCoinKey).filter(Boolean));

@@ -2045,18 +2045,30 @@ async function runSelfTest() {
       const previousStamina = Number(previous.stamina5s);
       const previousSeenAt = Number(previous.lastSeenAt || 0);
       const continuous = previousSeenAt > 0 && t - previousSeenAt <= observationGapMs;
+      let stableSince = continuous
+        ? Math.max(0, Number(previous.stableSince || previous.observedSince || previousSeenAt || t))
+        : t;
       let cooldownUntil = Math.max(0, Number(previous.cooldownUntil || 0));
-      let consumedAt = Math.max(0, Number(previous.consumedAt || 0));
-      if (Number.isFinite(stamina5s) && continuous && Number.isFinite(previousStamina) && stamina5s + dropThreshold < previousStamina) {
+      let consumedAt = continuous ? Math.max(0, Number(previous.consumedAt || 0)) : 0;
+      const observedDrop = Number.isFinite(stamina5s) && continuous && Number.isFinite(previousStamina) && stamina5s + dropThreshold < previousStamina;
+      const observedNonFull = Number.isFinite(stamina5s) && !hasFullStamina(target);
+      if (cooldownMs > 0 && (observedDrop || observedNonFull)) {
+        stableSince = t;
         cooldownUntil = Math.max(cooldownUntil, t + cooldownMs);
         consumedAt = t;
+      } else if (cooldownUntil <= t) {
+        cooldownUntil = 0;
       }
       state.set(id, {
         stamina5s: Number.isFinite(stamina5s) ? stamina5s : (Number.isFinite(previousStamina) ? previousStamina : null),
         lastSeenAt: t,
+        stableSince,
         cooldownUntil,
         consumedAt
       });
+      target.afkStaminaCooldownRemainingMs = Math.max(0, Math.round(cooldownUntil - t));
+      target.afkStaminaObservedMs = Math.max(0, Math.round(t - stableSince));
+      if (target.afkStaminaCooldownRemainingMs > 0 && consumedAt > 0) target.afkStaminaConsumedAt = consumedAt;
     }
     const ttlMs = Math.max(300000, cooldownMs * 5);
     for (const [id, item] of state.entries()) {
@@ -6721,7 +6733,46 @@ async function runSelfTest() {
       want: 'profit-candidate|attack|8|1|1|true'
     },
     {
-      name: 'browserless out-of-range AFK stamina cooldown blocks opportunity chase',
+      name: 'browserless just-seen out-of-range full-stamina AFK target is selectable',
+      got: (() => {
+        const stateful = {};
+        const makeState = tick => ({
+          userId: 7,
+          realtime: {
+            tick,
+            frameAgeMs: 100,
+            self: { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+            entities: [
+              { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+              { entity_id: 2, user_id: 8, name: 'new-full-afk', x: 8000, y: 0, hp: 80, current_join_mode: 'None', drop: 20, stamina_5s_remaining_milli: 10000 }
+            ],
+            bullets: [],
+            coinDrops: []
+          },
+          fallback: { coinDrops: [] }
+        });
+        const options = {
+          controlMode: 'profit-live',
+          attackRange: 5000,
+          afkRecentActivityCooldownMs: 12000,
+          opportunityAfkStaminaCooldownMs: 60000,
+          opportunityAfkStaminaDropThresholdMs: 100
+        };
+        const decision = buildBrowserlessDecision(makeState(60), stateful, { ...options, nowMs: 1000 });
+        const row = decision.input.nearby.p.find(item => item[0] === 'new-full-afk');
+        return [
+          decision.kind,
+          decision.action?.kind,
+          decision.action?.target?.userId,
+          row?.[9],
+          stateful.opportunityAfkStamina['8'].cooldownUntil,
+          decision.input.dataGaps.includes('afk-stamina-cooldown-target-visible')
+        ].join('|');
+      })(),
+      want: 'profit-candidate|seek-enemy|8|1|0|false'
+    },
+    {
+      name: 'browserless recent non-full stamina blocks out-of-range AFK after refill',
       got: (() => {
         const stateful = {};
         const makeState = (stamina5s, tick) => ({
@@ -6746,21 +6797,68 @@ async function runSelfTest() {
           opportunityAfkStaminaCooldownMs: 60000,
           opportunityAfkStaminaDropThresholdMs: 100
         };
-        buildBrowserlessDecision(makeState(10000, 60), stateful, { ...options, nowMs: 1000 });
-        buildBrowserlessDecision(makeState(9800, 61), stateful, { ...options, nowMs: 2500 });
-        const decision = buildBrowserlessDecision(makeState(9800, 62), stateful, { ...options, nowMs: 16000 });
-        const candidates = decision.profit.candidates || [];
+        buildBrowserlessDecision(makeState(9000, 60), stateful, { ...options, nowMs: 1000 });
+        const blocked = buildBrowserlessDecision(makeState(10000, 61), stateful, { ...options, nowMs: 2500 });
+        const blockedCooldownUntil = stateful.opportunityAfkStamina['8'].cooldownUntil;
+        const eligible = buildBrowserlessDecision(makeState(10000, 122), stateful, { ...options, nowMs: 62000 });
+        const blockedRow = blocked.input.nearby.p.find(item => item[0] === 'far-spent-stamina');
+        const eligibleRow = eligible.input.nearby.p.find(item => item[0] === 'far-spent-stamina');
         return [
-          decision.kind,
-          decision.reason,
-          candidates.some(candidate => candidate.type === 'enemy'),
-          stateful.opportunityAfkStamina['8'].cooldownUntil - 16000,
-          stateful.opportunityAfkStamina['8'].cooldownUntil,
-          decision.input.dataGaps.includes('afk-stamina-cooldown-target-visible'),
-          decision.input.dataGaps.includes('recently-active-target-visible')
+          blocked.kind,
+          blocked.reason,
+          blocked.profit.best === null,
+          blockedRow?.[9],
+          blockedCooldownUntil - 2500,
+          blockedCooldownUntil,
+          blocked.input.dataGaps.includes('afk-stamina-cooldown-target-visible'),
+          blocked.input.dataGaps.includes('recently-active-target-visible'),
+          eligible.action?.kind,
+          eligible.action?.target?.userId,
+          eligibleRow?.[9]
         ].join('|');
       })(),
-      want: 'wait|no-profitable-candidate|false|46500|62500|true|false'
+      want: 'wait|no-profitable-candidate|true|0|58500|61000|true|false|seek-enemy|8|1'
+    },
+    {
+      name: 'browserless recent active non-full stamina blocks after refill idle',
+      got: (() => {
+        const stateful = {};
+        const makeState = (stamina5s, mode, tick) => ({
+          userId: 7,
+          realtime: {
+            tick,
+            frameAgeMs: 100,
+            self: { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+            entities: [
+              { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+              { entity_id: 2, user_id: 8, name: 'just-refilled', x: 8000, y: 0, hp: 80, current_join_mode: mode, drop: 20, stamina_5s_remaining_milli: stamina5s }
+            ],
+            bullets: [],
+            coinDrops: []
+          },
+          fallback: { coinDrops: [] }
+        });
+        const options = {
+          controlMode: 'profit-live',
+          attackRange: 5000,
+          afkRecentActivityCooldownMs: 12000,
+          opportunityAfkStaminaCooldownMs: 60000,
+          opportunityAfkStaminaDropThresholdMs: 100
+        };
+        buildBrowserlessDecision(makeState(9000, 'Active', 60), stateful, { ...options, nowMs: 1000 });
+        const blocked = buildBrowserlessDecision(makeState(10000, 'None', 61), stateful, { ...options, nowMs: 2500 });
+        const row = blocked.input.nearby.p.find(item => item[0] === 'just-refilled');
+        return [
+          blocked.kind,
+          blocked.reason,
+          blocked.profit.best === null,
+          row?.[8],
+          row?.[9],
+          stateful.opportunityAfkStamina['8'].cooldownUntil - 2500,
+          blocked.input.dataGaps.includes('afk-stamina-cooldown-target-visible')
+        ].join('|');
+      })(),
+      want: 'wait|no-profitable-candidate|true|1|0|58500|true'
     },
     {
       name: 'browserless strategy defaults track browser runtime defaults',
@@ -6787,7 +6885,7 @@ async function runSelfTest() {
           tick: 59,
           entities: [
             { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
-            fullStamina5s({ entity_id: 2, user_id: 8, name: 'drop-nine-afk', x: 49800, y: 0, hp: 100, current_join_mode: 'Passive', drop: 9 })
+            fullStamina5s({ entity_id: 2, user_id: 8, name: 'drop-nine-afk', x: 4980, y: 0, hp: 100, current_join_mode: 'Passive', drop: 9 })
           ],
           bullets: []
         }, { receivedAtMs: 1000 });
@@ -6813,7 +6911,7 @@ async function runSelfTest() {
           coin?.priorityTier
         ].join('|');
       })(),
-      want: 'profit-candidate|seek-enemy|8|9|2|1'
+      want: 'profit-candidate|attack|8|9|2|1'
     },
     {
       name: 'browserless profit live hard-prioritizes high-value realtime coin while recovering',
@@ -15104,24 +15202,58 @@ async function runSelfTest() {
     {
       name: 'visible high afk drop beats opposite one coin by stamina roi',
       got: (() => {
+        const t = Date.now();
+        bot.opportunityAfkStamina.set('33', {
+          stamina5s: 10000,
+          lastSeenAt: t - 1000,
+          stableSince: t - cfg.opportunityAfkStaminaCooldownMs - 1000,
+          cooldownUntil: t - 1000,
+          consumedAt: 0
+        });
         const action = choose({
           self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
-          global: [{ user_id: 33, x: 49000, y: 0, current_join_mode: 'Passive', death_reward_preview: 20 }],
+          global: [{ user_id: 33, x: 49000, y: 0, current_join_mode: 'Passive', stamina_5s_remaining_milli: 10000, death_reward_preview: 20 }],
           coins: [{ drop_id: 1, x: -5000, y: 0, amount: 1, native: true }]
         });
+        bot.opportunityAfkStamina.clear();
         return action.kind + ':' + action.reason;
       })(),
       want: 'seek-enemy:approach-afk-drop-target'
     },
     {
-      name: 'new out-of-range afk target can be chased before stamina drop observed',
+      name: 'new out-of-range full-stamina afk target can be chased immediately',
       got: (() => {
         bot.opportunityChoice = null;
         bot.opportunitySwitchLock = null;
         bot.opportunityAfkStamina.clear();
         const action = choose({
           self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
-          global: [{ user_id: 8801, x: 49000, y: 0, current_join_mode: 'Passive', stamina_5s_remaining_milli: 5000, death_reward_preview: 20 }],
+          global: [{ user_id: 8801, x: 49000, y: 0, current_join_mode: 'Passive', stamina_5s_remaining_milli: 10000, death_reward_preview: 20 }],
+          coins: [{ drop_id: 1, x: -5000, y: 0, amount: 1, native: true }]
+        });
+        const cooldownUntil = bot.opportunityAfkStamina.get('8801')?.cooldownUntil || 0;
+        bot.opportunityAfkStamina.clear();
+        return action.kind + ':' + action.reason + ':' + cooldownUntil;
+      })(),
+      want: 'seek-enemy:approach-afk-drop-target:0'
+    },
+    {
+      name: 'observed out-of-range afk target can be chased after stamina window',
+      got: (() => {
+        bot.opportunityChoice = null;
+        bot.opportunitySwitchLock = null;
+        bot.opportunityAfkStamina.clear();
+        const t = Date.now();
+        bot.opportunityAfkStamina.set('8804', {
+          stamina5s: 10000,
+          lastSeenAt: t - 1000,
+          stableSince: t - cfg.opportunityAfkStaminaCooldownMs - 1000,
+          cooldownUntil: t - 1000,
+          consumedAt: 0
+        });
+        const action = choose({
+          self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
+          global: [{ user_id: 8804, x: 49000, y: 0, current_join_mode: 'Passive', stamina_5s_remaining_milli: 10000, death_reward_preview: 20 }],
           coins: [{ drop_id: 1, x: -5000, y: 0, amount: 1, native: true }]
         });
         bot.opportunityAfkStamina.clear();

@@ -12,7 +12,7 @@
   var define_GRASP_RAT_RUNTIME_CONFIG_default;
   var init_define_GRASP_RAT_RUNTIME_CONFIG = __esm({
     "<define:__GRASP_RAT_RUNTIME_CONFIG__>"() {
-      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.608" };
+      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.609" };
     }
   });
 
@@ -22814,6 +22814,12 @@
           const value = Number(target?.stamina_5s_remaining_milli ?? target?.stamina5s ?? target?.stamina_5s ?? NaN);
           return Number.isFinite(value) ? value : null;
         }
+        function targetHasFull5sStamina(target) {
+          const remaining = targetStamina5sRemaining(target);
+          const limit = Number(target?.stamina_5s_limit_milli ?? target?.stamina5sLimit ?? target?.stamina_5s_limit ?? 1e4);
+          const ratio = Math.max(0, Number(cfg.staminaFullRatio ?? 0.98) || 0.98);
+          return remaining !== null && Number.isFinite(limit) && limit > 0 && remaining >= limit * ratio;
+        }
         function opportunityAfkStaminaState() {
           if (!(bot.opportunityAfkStamina instanceof Map)) bot.opportunityAfkStamina = /* @__PURE__ */ new Map();
           return bot.opportunityAfkStamina;
@@ -22839,18 +22845,28 @@
             const previousStamina = Number(previous.stamina5s);
             const previousSeenAt = Number(previous.lastSeenAt || 0);
             const continuous = previousSeenAt > 0 && t - previousSeenAt <= observationGapMs;
+            let stableSince = continuous ? Math.max(0, Number(previous.stableSince || previous.observedSince || previousSeenAt || t)) : t;
             let cooldownUntil = Math.max(0, Number(previous.cooldownUntil || 0));
-            let consumedAt = Math.max(0, Number(previous.consumedAt || 0));
-            if (Number.isFinite(stamina5s) && continuous && Number.isFinite(previousStamina) && stamina5s + dropThreshold < previousStamina) {
+            let consumedAt = continuous ? Math.max(0, Number(previous.consumedAt || 0)) : 0;
+            const observedDrop = Number.isFinite(stamina5s) && continuous && Number.isFinite(previousStamina) && stamina5s + dropThreshold < previousStamina;
+            const observedNonFull = Number.isFinite(stamina5s) && !targetHasFull5sStamina(target);
+            if (cooldownMs > 0 && (observedDrop || observedNonFull)) {
+              stableSince = t;
               cooldownUntil = Math.max(cooldownUntil, t + cooldownMs);
               consumedAt = t;
+            } else if (cooldownUntil <= t) {
+              cooldownUntil = 0;
             }
             state2.set(id, {
               stamina5s: Number.isFinite(stamina5s) ? stamina5s : Number.isFinite(previousStamina) ? previousStamina : null,
               lastSeenAt: t,
+              stableSince,
               cooldownUntil,
               consumedAt
             });
+            target.afkStaminaCooldownRemainingMs = Math.max(0, Math.round(cooldownUntil - t));
+            target.afkStaminaObservedMs = Math.max(0, Math.round(t - stableSince));
+            if (target.afkStaminaCooldownRemainingMs > 0 && consumedAt > 0) target.afkStaminaConsumedAt = consumedAt;
           }
           const ttlMs = Math.max(3e5, cooldownMs * 5);
           for (const [id, item] of state2.entries()) {
