@@ -15367,21 +15367,28 @@ async function runSelfTest() {
         const panelScript = panelText.match(/<script>([\s\S]*?)<\/script>/)?.[1] || '';
         return [
           /\.target-current,\.target-route-next\{border-left:3px solid var\(--target-color\);background:var\(--target-bg\)/.test(panelText),
+          /\.nearby-list\{display:grid;gap:0;/.test(panelText),
+          /\.target-current,\.target-route-next\{[^}]*margin:0 -6px/.test(panelText),
           !/\.target-current\{border:1px solid/.test(panelText),
           /\.target-flee\{--target-color:rgba\(96,165,250,\.82\)/.test(panelText),
-          /\.target-icon\{[^}]*color:var\(--target-color\);fill:currentColor/.test(panelText),
-          panelScript.includes("coin1: ['M512 0a512 512"),
-          panelScript.includes("coin9: ['M512 0a512 512"),
-          panelScript.includes("afk: ['M398.48564 190.314185"),
+          /\.target-name\{display:inline-flex;align-items:center;[^}]*vertical-align:middle/.test(panelText),
+          /\.target-icon\{display:inline-block;[^}]*align-self:center;[^}]*vertical-align:middle;[^}]*color:var\(--target-color\);fill:currentColor/.test(panelText),
+          panelScript.includes("coinSingle: ['M512 85.333333"),
+          panelScript.includes("coin1: ['M512.048762 0C794.770286"),
+          panelScript.includes("coin9: [COIN_ROUTE_RING_PATH"),
+          panelScript.includes("afk: ['M139.936 132.48"),
           panelScript.includes("combat: ['M102.771153 78.619592"),
           panelScript.includes("flee: ['M512 482.133333"),
+          panelScript.includes("coinSingle: '85.333333 85.333333 853.333334 853.333334'"),
+          panelScript.includes("svg.setAttribute('preserveAspectRatio', 'xMidYMid meet')"),
           panelScript.includes("document.createElementNS('http://www.w3.org/2000/svg', 'svg')"),
-          panelScript.includes("const iconOrder = selected ? 1"),
+          panelScript.includes("const hasMultipleRouteTargets = items.some"),
+          panelScript.includes("hasMultipleRouteTargets ? 'coin1' : 'coinSingle'"),
           panelScript.includes("const fleeTarget = (actionKind === 'safety-exit' || actionKind === 'leave') && Boolean(status.action?.target);"),
           panelScript.includes("const targetType = fleeTarget ? 'flee' : (afkTarget ? 'afk' : 'combat');")
         ].join('|');
       })(),
-      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true'
+      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless web panel renders live battle card and offline exit reason',
