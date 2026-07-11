@@ -9217,7 +9217,7 @@ async function runSelfTest() {
       want: 'wait|wait|no-profitable-candidate|wait||'
     },
     {
-      name: 'browserless profit live avoids visible passive invulnerable target',
+      name: 'browserless profit live ignores idle passive invulnerable target',
       got: (() => {
         const store = createBrowserlessStateStore({ userId: 7 });
         store.ingestFrame({
@@ -9240,15 +9240,15 @@ async function runSelfTest() {
           decision.band,
           decision.reason,
           decision.action.kind,
-          decision.action.target.userId,
-          decision.action.target.authority,
+          decision.input.fallback.snapshotFallbackThreatCount,
+          (decision.input.nearby.p || []).some(row => row[0] === 'invulnerable-passive'),
           decision.combat.target?.userId || ''
         ].join('|');
       })(),
-      want: 'flee|safety|avoid-invulnerable-target|flee|8|realtime|'
+      want: 'wait|wait|no-profitable-candidate|wait|0|false|'
     },
     {
-      name: 'browserless visible invulnerable blocks ordinary coin before avoidance flee',
+      name: 'browserless idle passive invulnerable does not block ordinary coin',
       got: (() => {
         const store = createBrowserlessStateStore({ userId: 7 });
         store.ingestFrame({
@@ -9270,15 +9270,47 @@ async function runSelfTest() {
           decision.kind,
           decision.band,
           decision.reason,
-          decision.action.target.userId,
+          decision.action.target.id,
           decision.action.highValueCoinPriority?.source || '',
           decision.profit.best?.id || ''
         ].join('|');
       })(),
-      want: 'flee|safety|avoid-invulnerable-target|8||'
+      want: 'profit-candidate|profit|visible-coin|ordinary-coin||ordinary-coin'
     },
     {
-      name: 'browserless healthy high-value coin beats invulnerable avoidance',
+      name: 'browserless profit live avoids active invulnerable target and shows it nearby',
+      got: (() => {
+        const store = createBrowserlessStateStore({ userId: 7 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 60,
+          entities: [
+            { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+            fullStamina5s({ entity_id: 2, user_id: 8, name: 'invulnerable-active', x: 20000, y: 0, hp: 100, current_join_mode: 'Active', invulnerable_remaining_ms: 5000 })
+          ],
+          bullets: [],
+          coin_drops: []
+        }, { receivedAtMs: 1000 });
+        const decision = buildBrowserlessDecision(store.getState(1200), {}, {
+          nowMs: 1200,
+          controlMode: 'profit-live',
+          combatEnabled: true
+        });
+        const row = (decision.input.nearby.p || []).find(item => item[0] === 'invulnerable-active');
+        return [
+          decision.kind,
+          decision.band,
+          decision.reason,
+          decision.action.target.userId,
+          decision.action.target.active,
+          row?.[4],
+          row?.[6]
+        ].join('|');
+      })(),
+      want: 'flee|safety|avoid-invulnerable-target|8|true|5000|1'
+    },
+    {
+      name: 'browserless healthy high-value coin remains available near idle passive invulnerable',
       got: (() => {
         const store = createBrowserlessStateStore({ userId: 7 });
         store.ingestFrame({
@@ -9302,11 +9334,11 @@ async function runSelfTest() {
           decision.reason,
           decision.action.target.id,
           decision.action.target.amount,
-          decision.action.highValueCoinPriority.source,
+          decision.action.highValueCoinPriority?.source || '',
           decision.profit.best?.id || ''
         ].join('|');
       })(),
-      want: 'coin|profit|high-value-visible-coin-priority|high-value-coin|30|realtime|'
+      want: 'profit-candidate|profit|visible-coin|high-value-coin|30||high-value-coin'
     },
     {
       name: 'browserless profit live can fight firing passive players when enabled',
