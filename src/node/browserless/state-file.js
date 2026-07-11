@@ -788,7 +788,8 @@ function compactLoginPointSafetyDetail(loginPointSafety, normalized) {
       || directDetailTimeMs >= snapshotDetailTimeMs
   );
   const detail = useDirectDetail ? directDetail : (hasSnapshotDetail ? snapshotSummarySafety : directDetail);
-  const okValue = detail.ok ?? snapshotSafety?.ok ?? loginPointSafety?.ok;
+  const isolatePendingDetail = Boolean(useDirectDetail && directDetailPending);
+  const okValue = detail.ok ?? (isolatePendingDetail ? loginPointSafety?.ok : snapshotSafety?.ok) ?? loginPointSafety?.ok;
   const reason = detail.reason || (useDirectDetail ? loginPointSafety?.reason : snapshotSafety?.reason) || loginPointSafety?.reason || '';
   const unsafeReason = okValue === false
     ? (reason || (useDirectDetail ? directDetail.originalReason : snapshotSafety?.originalReason) || loginPointSafety?.reason || 'unsafe')
@@ -805,7 +806,7 @@ function compactLoginPointSafetyDetail(loginPointSafety, normalized) {
       || point
   );
   if (!hasDetail) return null;
-  const required = compactNumber(detail.required ?? snapshotSafety?.required ?? directDetail.required);
+  const required = compactNumber(detail.required ?? (isolatePendingDetail ? undefined : snapshotSafety?.required) ?? directDetail.required);
   const effectiveRequired = required !== null ? required : 1;
   const streak = compactNumber(detail.streak ?? snapshotSafety?.streak ?? directDetail.streak);
   const effectiveStreak = streak !== null ? streak : (okValue === true ? effectiveRequired : 0);
@@ -813,17 +814,24 @@ function compactLoginPointSafetyDetail(loginPointSafety, normalized) {
     ok: okValue === undefined ? null : Boolean(okValue),
     reason: compactString(reason, 120),
     unsafeReason: compactString(unsafeReason, 120),
-    originalReason: compactString(snapshotSafety?.originalReason || directDetail.originalReason, 120),
+    originalReason: compactString(isolatePendingDetail
+      ? directDetail.originalReason
+      : (snapshotSafety?.originalReason || directDetail.originalReason), 120),
     checkedAt: compactString(loginPointSafety?.checkedAt || directDetail.checkedAt, 48),
     streak: effectiveStreak,
     required: effectiveRequired,
     satisfied: detail.satisfied === undefined ? null : Boolean(detail.satisfied),
-    bypassedPreLoginSafety: Boolean(detail.bypassedPreLoginSafety ?? snapshotSafety?.bypassedPreLoginSafety ?? directDetail.bypassedPreLoginSafety),
+    bypassedPreLoginSafety: Boolean(detail.bypassedPreLoginSafety
+      ?? (isolatePendingDetail ? undefined : snapshotSafety?.bypassedPreLoginSafety)
+      ?? directDetail.bypassedPreLoginSafety),
     point,
-    selfPresent: summary.selfPresent === undefined
+    selfPresent: isolatePendingDetail
       ? (detail.selfPresent === undefined ? null : Boolean(detail.selfPresent))
-      : Boolean(summary.selfPresent),
-    nearestActive: compactSafetyEntity(detail.nearestActive || directDetail.nearestActive)
+      : (summary.selfPresent === undefined
+      ? (detail.selfPresent === undefined ? null : Boolean(detail.selfPresent))
+      : Boolean(summary.selfPresent)),
+    nearestActive: compactSafetyEntity(detail.nearestActive
+      || (isolatePendingDetail ? null : directDetail.nearestActive))
   };
 }
 
@@ -1320,11 +1328,11 @@ function compactGameStatus(normalized) {
       'login-point-bootstrap-failed',
       'unsupported-control-mode'
     ].includes(reason);
-  const selfPresent = Boolean(self?.userId || self?.entityId || self?.name);
+  const selfPresent = Boolean(self?.userId || self?.entityId || self?.name) && !waiting;
   return {
-    inGame: Boolean(selfPresent && !waiting),
+    inGame: selfPresent,
     selfPresent,
-    state: selfPresent && !waiting ? 'in-game' : (waiting ? 'waiting' : 'not-in-game')
+    state: selfPresent ? 'in-game' : (waiting ? 'waiting' : 'not-in-game')
   };
 }
 

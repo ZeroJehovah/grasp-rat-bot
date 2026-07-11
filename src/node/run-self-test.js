@@ -14635,6 +14635,12 @@ async function runSelfTest() {
           }
         };
         const pending = buildCompactBrowserlessStatus({
+          runner: {
+            currentAction: { kind: 'loop-wait', reason: 'stamina-budget-coin-leave' }
+          },
+          current: {
+            self: { userId: 7, name: 'stale-self' }
+          },
           loginPointSafety: {
             ok: false,
             reason: 'next-login-point-pending-snapshot-safety',
@@ -14648,7 +14654,22 @@ async function runSelfTest() {
               satisfied: false
             }
           },
-          probes: { lastReadOnlyProbe: staleSafeProbe }
+          probes: {
+            lastReadOnlyProbe: {
+              completedAt: '2026-07-08T00:00:30.000Z',
+              snapshotSafety: {
+                ok: true,
+                reason: 'self-present-reentry',
+                bypassedPreLoginSafety: true,
+                response: {
+                  summary: {
+                    selfPresent: true,
+                    safety: { ok: false, reason: 'active-near-login-point' }
+                  }
+                }
+              }
+            }
+          }
         }, config);
         const currentSafe = buildCompactBrowserlessStatus({
           loginPointSafety: {
@@ -14693,6 +14714,9 @@ async function runSelfTest() {
           pending.loginPointSafety.detail.streak,
           pending.loginPointSafety.detail.required,
           pending.loginPointSafety.detail.unsafeReason,
+          pending.loginPointSafety.detail.selfPresent,
+          pending.loginPointSafety.detail.bypassedPreLoginSafety,
+          pending.game.selfPresent,
           currentSafe.loginPointSafety.ok,
           currentSafe.loginPointSafety.detail.reason,
           currentSafe.loginPointSafety.detail.streak,
@@ -14703,7 +14727,7 @@ async function runSelfTest() {
           reentry.loginPointSafety.detail.selfPresent
         ].join('|');
       })(),
-      want: 'false|next-login-point-pending-snapshot-safety|0|3|next-login-point-pending-snapshot-safety|true|safe|3||self-present-reentry|true|true|true'
+      want: 'false|next-login-point-pending-snapshot-safety|0|3|next-login-point-pending-snapshot-safety||false|false|true|safe|3||self-present-reentry|true|true|true'
     },
     {
       name: 'browserless compact status exposes symmetric live battle details',
