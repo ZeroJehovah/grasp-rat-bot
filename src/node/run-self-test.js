@@ -15222,6 +15222,29 @@ async function runSelfTest() {
       want: '401|200|true|true|true|200|true|12|true|true|true|200|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|200|true|1'
     },
     {
+      name: 'browserless web panel renders target bars and svg target icons',
+      got: (() => {
+        const panelText = renderBrowserlessWebPanel();
+        const panelScript = panelText.match(/<script>([\s\S]*?)<\/script>/)?.[1] || '';
+        return [
+          /\.target-current,\.target-route-next\{border-left:3px solid var\(--target-color\);background:var\(--target-bg\)/.test(panelText),
+          !/\.target-current\{border:1px solid/.test(panelText),
+          /\.target-flee\{--target-color:rgba\(96,165,250,\.82\)/.test(panelText),
+          /\.target-icon\{[^}]*color:var\(--target-color\);fill:currentColor/.test(panelText),
+          panelScript.includes("coin1: ['M512 0a512 512"),
+          panelScript.includes("coin9: ['M512 0a512 512"),
+          panelScript.includes("afk: ['M398.48564 190.314185"),
+          panelScript.includes("combat: ['M102.771153 78.619592"),
+          panelScript.includes("flee: ['M512 482.133333"),
+          panelScript.includes("document.createElementNS('http://www.w3.org/2000/svg', 'svg')"),
+          panelScript.includes("const iconOrder = selected ? 1"),
+          panelScript.includes("const fleeTarget = (actionKind === 'safety-exit' || actionKind === 'leave') && Boolean(status.action?.target);"),
+          panelScript.includes("const targetType = fleeTarget ? 'flee' : (afkTarget ? 'afk' : 'combat');")
+        ].join('|');
+      })(),
+      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true'
+    },
+    {
       name: 'browserless web panel renders explicit login point safety result',
       got: (() => {
         const panelText = renderBrowserlessWebPanel();
