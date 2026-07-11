@@ -13114,6 +13114,68 @@ async function runSelfTest() {
       want: 'explicit-stop|false|true'
     },
     {
+      name: 'browserless runner startup clears stale login point safety progress',
+      got: withTempDirForTest(async dir => {
+        const config = parseBrowserlessRunnerArgs([
+          '--once',
+          '--live',
+          '--data-dir',
+          dir,
+          '--user-id',
+          '7',
+          '--session-token',
+          'runner-secret-token',
+          '--login-point-x',
+          '1',
+          '--login-point-y',
+          '2',
+          '--login-point-hp',
+          '100'
+        ], {});
+        const file = stateFilePath(config);
+        updateBrowserlessStateFile(file, {
+          loginPointSafety: {
+            ok: true,
+            reason: 'safe',
+            checkedAt: '2026-07-08T00:00:00.000Z',
+            point: { x: 1, y: 2, hp: 100, source: 'old-state' },
+            detail: {
+              ok: true,
+              reason: 'safe',
+              required: 3,
+              streak: 3,
+              satisfied: true
+            }
+          }
+        });
+        let safetyAtCanaryStart = null;
+        await runBrowserlessRunner(config, {
+          now: () => Date.UTC(2026, 6, 8, 1, 1, 0),
+          startStatusServer: false,
+          runReadOnlyOnce: async () => {
+            safetyAtCanaryStart = readBrowserlessStateFile(file).loginPointSafety;
+            return {
+              ok: false,
+              runId: 'startup-clear-self-test',
+              error: 'explicit-stop',
+              safety: {
+                event: { reason: 'explicit-stop', at: '2026-07-08T01:01:00.000Z' }
+              }
+            };
+          }
+        });
+        return [
+          safetyAtCanaryStart.ok,
+          safetyAtCanaryStart.reason,
+          safetyAtCanaryStart.detail?.streak,
+          safetyAtCanaryStart.detail?.required,
+          safetyAtCanaryStart.detail?.satisfied,
+          safetyAtCanaryStart.checkedAt === ''
+        ].join('|');
+      }),
+      want: 'false|manual-login-point-pending-snapshot-safety|0|3|false|true'
+    },
+    {
       name: 'browserless runner imports legacy state and hydrates live config',
       got: withTempDirForTest(async dir => {
         const legacyPath = path.join(dir, 'legacy-state.json');
@@ -13456,6 +13518,102 @@ async function runSelfTest() {
         ].join('|');
       }),
       want: 'true|77|true|true|true|true|true|false|loop-wait|88|10|20|360000|seek-coin|8|7|enemy|5999|active-near-login-point|88|true|enemy|14500|coin-1|1|11|154|enemy|1|Passive|1|latest|2|3|10.0.0.101|false|false|false|true|true|false|true'
+    },
+    {
+      name: 'browserless compact login point safety prefers current detail over stale probe snapshots',
+      got: (() => {
+        const config = parseBrowserlessRunnerArgs([], {});
+        const staleSafeProbe = {
+          snapshotSafety: {
+            ok: true,
+            reason: 'safe',
+            checkedAt: '2026-07-08T00:00:00.000Z',
+            required: 3,
+            streak: 3,
+            satisfied: true,
+            response: {
+              summary: {
+                selfPresent: false,
+                safety: {
+                  ok: true,
+                  reason: 'safe',
+                  required: 3,
+                  streak: 3,
+                  satisfied: true
+                }
+              }
+            }
+          }
+        };
+        const staleUnsafeProbe = {
+          snapshotSafety: {
+            ok: false,
+            reason: 'active-near-login-point',
+            checkedAt: '2026-07-08T00:00:00.000Z',
+            required: 3,
+            streak: 0,
+            satisfied: false,
+            response: {
+              summary: {
+                selfPresent: false,
+                safety: {
+                  ok: false,
+                  reason: 'active-near-login-point',
+                  required: 3,
+                  streak: 0,
+                  satisfied: false
+                }
+              }
+            }
+          }
+        };
+        const pending = buildCompactBrowserlessStatus({
+          loginPointSafety: {
+            ok: false,
+            reason: 'next-login-point-pending-snapshot-safety',
+            checkedAt: '',
+            point: { x: 5999, y: 66268, hp: 100, source: 'state' },
+            detail: {
+              ok: false,
+              reason: 'next-login-point-pending-snapshot-safety',
+              required: 3,
+              streak: 0,
+              satisfied: false
+            }
+          },
+          probes: { lastReadOnlyProbe: staleSafeProbe }
+        }, config);
+        const currentSafe = buildCompactBrowserlessStatus({
+          loginPointSafety: {
+            ok: true,
+            reason: 'safe',
+            checkedAt: '2026-07-08T00:01:00.000Z',
+            point: { x: 5999, y: 66268, hp: 100, source: 'state' },
+            detail: {
+              ok: true,
+              reason: 'safe',
+              originalReason: 'safe',
+              checkedAt: '2026-07-08T00:01:00.000Z',
+              required: 3,
+              streak: 3,
+              satisfied: true
+            }
+          },
+          probes: { lastReadOnlyProbe: staleUnsafeProbe }
+        }, config);
+        return [
+          pending.loginPointSafety.ok,
+          pending.loginPointSafety.detail.reason,
+          pending.loginPointSafety.detail.streak,
+          pending.loginPointSafety.detail.required,
+          pending.loginPointSafety.detail.unsafeReason,
+          currentSafe.loginPointSafety.ok,
+          currentSafe.loginPointSafety.detail.reason,
+          currentSafe.loginPointSafety.detail.streak,
+          currentSafe.loginPointSafety.detail.unsafeReason
+        ].join('|');
+      })(),
+      want: 'false|next-login-point-pending-snapshot-safety|0|3|next-login-point-pending-snapshot-safety|true|safe|3|'
     },
     {
       name: 'browserless compact status exposes session offline and today stats',

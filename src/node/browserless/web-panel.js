@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.11.3';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.11.4';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function renderBrowserlessWebPanel() {
@@ -432,6 +432,7 @@ function renderBrowserlessWebPanel() {
       'manual-login-point-pending-snapshot-safety': '正在检查登录点安全',
       'learned-login-point-pending-snapshot-safety': '正在检查登录点安全',
       'imported-login-point-pending-snapshot-safety': '正在检查登录点安全',
+      'next-login-point-pending-snapshot-safety': '等待下一轮登录点安全检查',
       'manual-session-updated': '授权已更新，等待下一轮连接',
       'auth-token-invalid': '登录信息失效，需要重新授权',
       'unsafe-login-point': '登录点不安全',
@@ -767,6 +768,9 @@ function renderBrowserlessWebPanel() {
       );
       if (safeLike) {
         return { state: 'safe', text: '安全 ' + loginPointProgressText(status, true) };
+      }
+      if (/pending-snapshot-safety/i.test(reasonText)) {
+        return { state: 'pending', text: '待检查 ' + loginPointProgressText(status, false) };
       }
       return { state: 'unsafe', text: '不安全' };
     }

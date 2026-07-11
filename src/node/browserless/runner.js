@@ -221,6 +221,40 @@ function hydrateConfigFromState(config, state) {
   };
 }
 
+function loginPointSafetyRequiredFromConfig(config = {}) {
+  const required = Number(config.loginPointSafetySuccessRequired || 3);
+  return Number.isFinite(required) && required > 0 ? Math.max(1, Math.round(required)) : 3;
+}
+
+function pendingLoginPointSafetyPatch(config = {}, reason = 'manual-login-point-pending-snapshot-safety', point = null, options = {}) {
+  const currentPoint = point && Number.isFinite(Number(point.x)) && Number.isFinite(Number(point.y))
+    ? {
+        x: Number(point.x),
+        y: Number(point.y),
+        hp: hasConfigNumber(point.hp) ? Number(point.hp) : null,
+        source: point.source || 'state'
+      }
+    : null;
+  return {
+    ok: false,
+    reason,
+    point: currentPoint,
+    checkedAt: '',
+    snapshotSafety: null,
+    detail: {
+      ok: false,
+      reason,
+      originalReason: '',
+      checkedAt: '',
+      required: loginPointSafetyRequiredFromConfig(config),
+      streak: 0,
+      satisfied: false,
+      selfPresent: null,
+      ...(options.detail && typeof options.detail === 'object' ? options.detail : {})
+    }
+  };
+}
+
 function learnedLoginPointFromCanary(canary) {
   const finalSelf = canary?.state?.realtime?.self || canary?.decisions?.last?.input?.self || null;
   const entrySelf = canary?.entry?.firstSelf || null;
@@ -369,6 +403,12 @@ function runnerResultExitDetail(result, fallbackReason = '') {
   };
 }
 
+function runnerResultConfirmedLeave(result) {
+  const canary = result?.canary && typeof result.canary === 'object' ? result.canary : null;
+  if (!canary) return false;
+  return Boolean(canary.leave?.ok || canary.safety?.exit?.leave?.ok);
+}
+
 async function runBrowserlessRunner(config, deps = {}) {
   const now = typeof deps.now === 'function' ? deps.now : Date.now;
   const sleep = typeof deps.sleep === 'function'
@@ -453,18 +493,12 @@ async function runBrowserlessRunner(config, deps = {}) {
       lastError: ''
     },
     loginPointSafety: loginPointProvided
-      ? {
-          ...persisted.loginPointSafety,
-          ok: false,
-          reason: 'manual-login-point-pending-snapshot-safety',
-          point: {
-            x: Number(config.loginPointX),
-            y: Number(config.loginPointY),
-            hp: hasConfigNumber(config.loginPointHp) ? Number(config.loginPointHp) : null,
-            source: envLoginPointProvided ? 'cli' : (persistedLoginPoint?.source || 'state')
-          },
-          checkedAt: ''
-        }
+      ? pendingLoginPointSafetyPatch(config, 'manual-login-point-pending-snapshot-safety', {
+          x: Number(config.loginPointX),
+          y: Number(config.loginPointY),
+          hp: hasConfigNumber(config.loginPointHp) ? Number(config.loginPointHp) : null,
+          source: envLoginPointProvided ? 'cli' : (persistedLoginPoint?.source || 'state')
+        })
       : persisted.loginPointSafety,
     logs: {
       ...persisted.logs,
@@ -550,6 +584,11 @@ async function runBrowserlessRunner(config, deps = {}) {
     const waitReason = loopPlan.forceExitReason
       ? loopPlan.reason
       : (waitExitDetail.reason || loopPlan.reason);
+    const resetLoginPointForNextEntry = Boolean(
+      runnerResultConfirmedLeave(resultForStop)
+        && loopPlan.reason !== 'snapshot-safety-retry'
+        && loopPlan.reason !== 'in-game-snapshot-safety-retry'
+    );
     updateState({
       runner: {
         running: true,
@@ -564,6 +603,13 @@ async function runBrowserlessRunner(config, deps = {}) {
           previousRunId: loopPlan.previousRunId || ''
         }
       },
+      ...(resetLoginPointForNextEntry ? {
+        loginPointSafety: pendingLoginPointSafetyPatch(
+          config,
+          'next-login-point-pending-snapshot-safety',
+          loginPointFromAnyState(currentBeforeWait)
+        )
+      } : {}),
       stats: browserlessStatsForOffline(currentBeforeWait, {
         ...waitExitDetail,
         reason: waitReason,
