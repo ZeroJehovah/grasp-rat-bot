@@ -687,6 +687,8 @@ async function runBrowserlessRunner(config, deps = {}) {
         checkedAt,
         required: Number.isFinite(required) ? Math.max(1, Math.round(required)) : 1,
         streak: Number.isFinite(streak) ? Math.max(0, Math.round(streak)) : 0,
+        satisfied: Boolean(snapshotSafety?.satisfied ?? safety.satisfied ?? (snapshotSafety?.ok && snapshotSafety?.satisfied !== false)),
+        bypassedPreLoginSafety: Boolean(snapshotSafety?.bypassedPreLoginSafety),
         selfPresent: summary.selfPresent === undefined ? null : Boolean(summary.selfPresent)
       }
     };

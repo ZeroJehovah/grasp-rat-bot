@@ -13601,6 +13601,25 @@ async function runSelfTest() {
           },
           probes: { lastReadOnlyProbe: staleUnsafeProbe }
         }, config);
+        const reentry = buildCompactBrowserlessStatus({
+          loginPointSafety: {
+            ok: true,
+            reason: 'self-present-reentry',
+            checkedAt: '2026-07-08T00:02:00.000Z',
+            point: { x: 5999, y: 66268, hp: 100, source: 'state' },
+            detail: {
+              ok: true,
+              reason: 'self-present-reentry',
+              originalReason: 'active-near-login-point',
+              checkedAt: '2026-07-08T00:02:00.000Z',
+              required: 3,
+              streak: 3,
+              satisfied: true,
+              bypassedPreLoginSafety: true,
+              selfPresent: true
+            }
+          }
+        }, config);
         return [
           pending.loginPointSafety.ok,
           pending.loginPointSafety.detail.reason,
@@ -13610,10 +13629,14 @@ async function runSelfTest() {
           currentSafe.loginPointSafety.ok,
           currentSafe.loginPointSafety.detail.reason,
           currentSafe.loginPointSafety.detail.streak,
-          currentSafe.loginPointSafety.detail.unsafeReason
+          currentSafe.loginPointSafety.detail.unsafeReason,
+          reentry.loginPointSafety.detail.reason,
+          reentry.loginPointSafety.detail.bypassedPreLoginSafety,
+          reentry.loginPointSafety.detail.satisfied,
+          reentry.loginPointSafety.detail.selfPresent
         ].join('|');
       })(),
-      want: 'false|next-login-point-pending-snapshot-safety|0|3|next-login-point-pending-snapshot-safety|true|safe|3|'
+      want: 'false|next-login-point-pending-snapshot-safety|0|3|next-login-point-pending-snapshot-safety|true|safe|3||self-present-reentry|true|true|true'
     },
     {
       name: 'browserless compact status exposes session offline and today stats',
@@ -14317,6 +14340,7 @@ async function runSelfTest() {
           /function loginPointDisplay/.test(panelScript),
           /return loginPointDisplay\(status\)\.text/.test(panelScript),
           !/return '检查中'/.test(panelScript),
+          panelScript.includes("text: '已在线接管'"),
           panelScript.includes("'安全 ' + loginPointProgressText(status, true)"),
           panelScript.includes("return coord(point.x) + ', ' + coord(point.y);"),
           panelScript.includes("translated === '安全'"),
@@ -14345,7 +14369,7 @@ async function runSelfTest() {
           hiddenActionLabels.every(label => !panelScript.includes("addRow(rowsOut, '" + label + "'"))
         ].join('|');
       })(),
-      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
+      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless runner self-test passes',

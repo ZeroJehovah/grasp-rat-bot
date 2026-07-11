@@ -817,8 +817,12 @@ function compactLoginPointSafetyDetail(loginPointSafety, normalized) {
     checkedAt: compactString(loginPointSafety?.checkedAt || directDetail.checkedAt, 48),
     streak: effectiveStreak,
     required: effectiveRequired,
+    satisfied: detail.satisfied === undefined ? null : Boolean(detail.satisfied),
+    bypassedPreLoginSafety: Boolean(detail.bypassedPreLoginSafety ?? snapshotSafety?.bypassedPreLoginSafety ?? directDetail.bypassedPreLoginSafety),
     point,
-    selfPresent: summary.selfPresent === undefined ? null : Boolean(summary.selfPresent),
+    selfPresent: summary.selfPresent === undefined
+      ? (detail.selfPresent === undefined ? null : Boolean(detail.selfPresent))
+      : Boolean(summary.selfPresent),
     nearestActive: compactSafetyEntity(detail.nearestActive || directDetail.nearestActive)
   };
 }
