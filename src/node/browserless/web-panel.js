@@ -83,7 +83,8 @@ function renderBrowserlessWebPanel() {
     .distance-badge{font-variant-numeric:tabular-nums}
     .range-attack{color:var(--green)}
     .range-view{color:var(--blue)}
-    .target-current,.target-route-next{border-left:3px solid var(--target-color);background:var(--target-bg);padding:3px 6px;margin:0 -6px}
+    .target-current,.target-route-next{position:relative;background:var(--target-bg);background-clip:padding-box;padding:3px 6px;margin:0 -6px}
+    .target-current::before,.target-route-next::before{content:"";position:absolute;left:0;top:-1px;bottom:-1px;width:3px;background:var(--target-color);pointer-events:none}
     .target-coin{--target-color:rgba(251,191,36,.82);--target-bg:rgba(251,191,36,.13)}
     .target-afk{--target-color:rgba(74,222,128,.8);--target-bg:rgba(74,222,128,.12)}
     .target-combat{--target-color:rgba(251,113,133,.82);--target-bg:rgba(251,113,133,.12)}
@@ -91,7 +92,7 @@ function renderBrowserlessWebPanel() {
     .target-route-next.target-coin{--target-color:rgba(251,191,36,.45);--target-bg:rgba(251,191,36,.07)}
     .target-name{display:inline-flex;align-items:center;min-width:0;vertical-align:middle}
     .target-name-text{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-    .target-icon{display:inline-block;width:16px;height:16px;flex:0 0 16px;align-self:center;margin-right:5px;overflow:visible;vertical-align:middle;color:var(--target-color);fill:currentColor}
+    .target-icon{display:inline-block;width:16px;height:16px;flex:0 0 16px;align-self:center;margin-right:5px;overflow:visible;vertical-align:middle;transform:translateY(1px);color:var(--target-color);fill:currentColor}
     @media (max-width:760px){.layout{grid-template-columns:1fr}.stats-grid{grid-template-columns:1fr}}
     @media (max-width:600px){.nearby-combined{grid-template-columns:1fr}.nearby-players-pane{border-left:0;border-top:1px solid var(--line);padding-left:0;padding-top:10px}}
     @media (max-width:520px){.player-row{grid-template-columns:minmax(112px,2fr) minmax(34px,.5fr) minmax(38px,.55fr) minmax(36px,.5fr) minmax(44px,.6fr);gap:4px}.battle-fighters{grid-template-columns:minmax(0,1fr) 32px minmax(0,1fr);gap:5px}.fighter{padding:7px}.fighter-head{display:block}.fighter.enemy .fighter-head{display:block;text-align:right}.battle-meta{gap:4px;padding:6px 4px}.battle-meta strong{font-size:12px}}
