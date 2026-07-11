@@ -847,7 +847,11 @@ function compactTarget(value) {
     distance: compactNumber(value.distance ?? value.d),
     active: value.active === undefined ? null : Boolean(value.active),
     moving: value.moving === undefined ? null : Boolean(value.moving),
-    firing: value.firing === undefined ? null : Boolean(value.firing)
+    firing: value.firing === undefined ? null : Boolean(value.firing),
+    recentlyActive: value.recentlyActive === undefined ? null : Boolean(value.recentlyActive),
+    recentlyMoved: value.recentlyMoved === undefined ? null : Boolean(value.recentlyMoved),
+    profitMetadataMode: compactString(value.profitMetadataMode, 48),
+    profitMetadataActive: value.profitMetadataActive === undefined ? null : Boolean(value.profitMetadataActive)
   };
 }
 
@@ -1183,11 +1187,14 @@ function compactRun(run) {
 
 function compactExit(event) {
   if (!event || typeof event !== 'object') return null;
+  const detail = event.detail && typeof event.detail === 'object' ? event.detail : {};
+  const decision = detail.decision && typeof detail.decision === 'object' ? detail.decision : {};
   return {
     at: compactString(event.at || event.time || event.createdAt, 48),
     reason: compactString(event.reason || event.type, 120),
     runId: compactString(event.runId || event.detail?.runId, 96),
-    shouldLeave: event.shouldLeave === undefined ? null : Boolean(event.shouldLeave)
+    shouldLeave: event.shouldLeave === undefined ? null : Boolean(event.shouldLeave),
+    target: compactTarget(event.target || detail.target || decision.target)
   };
 }
 

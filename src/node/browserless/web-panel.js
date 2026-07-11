@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.11.8';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.12.1';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function renderBrowserlessWebPanel() {
@@ -427,7 +427,7 @@ function renderBrowserlessWebPanel() {
       'combat-critical-hp-leave': '血量太低，退出',
       'injury-leave': '受伤后退出',
       'pursuit-leave': '被持续追击，退出',
-      'profit-live-snapshot-active-threat': '附近有危险玩家，退出',
+      'profit-live-snapshot-active-threat': '附近玩家有活动威胁证据，退出',
       'stamina-budget-coin-leave': '体力不足，退出等待恢复',
       'stamina-exhausted-leave': '体力耗尽，退出等待恢复',
       'wait-for-full-stamina-and-hp': '等待血量和体力恢复',
@@ -638,6 +638,25 @@ function renderBrowserlessWebPanel() {
       }
       return translated.length ? translated.join('，') : '状态更新中';
     }
+    function dangerousPlayerExitReasonText(status, reason) {
+      const raw = String(reason || '');
+      if (raw !== 'profit-live-snapshot-active-threat') return reasonText(raw);
+      const target = status.action?.target || status.decision?.target || status.recentExit?.target || null;
+      if (!target) return reasonText(raw);
+      const evidence = [];
+      if (target.distance !== null && target.distance !== undefined) evidence.push('距离 ' + distance(target.distance));
+      if (String(target.profitMetadataMode || '').toLowerCase() === 'active' || target.profitMetadataActive) {
+        evidence.push('快照为 Active');
+      } else if (target.active) {
+        evidence.push('实时活动');
+      }
+      if (target.firing) evidence.push('正在开火');
+      if (target.moving) evidence.push('正在移动');
+      else if (target.recentlyMoved || target.recentlyActive) evidence.push('近期有活动');
+      if (target.invulnerable) evidence.push('无敌还剩 ' + invulnerableText(target.invulnerableRemainingMs));
+      const name = target.name || (target.userId !== null && target.userId !== undefined ? '玩家 ' + target.userId : '附近玩家');
+      return '危险玩家 ' + name + (evidence.length ? '（' + evidence.join('、') + '）' : '') + '，退出';
+    }
     function modeText(mode, combatEnabled) {
       const text = modeMap[mode] || (mode ? '自动运行' : '--');
       return combatEnabled ? text + ' / 可打架' : text;
@@ -765,7 +784,7 @@ function renderBrowserlessWebPanel() {
       const originalReason = String(detail.originalReason || '');
       const reasonText = [reason, detailReason, originalReason].join(' ');
       if (/self-present-reentry/i.test(reasonText) || (detail.selfPresent === true && detail.bypassedPreLoginSafety)) {
-        return { state: 'reentry', text: '已在游戏中，直接连接' };
+        return { state: 'reentry', text: '快照确认角色仍在线，正在连接实时状态' };
       }
       const safeReason = /^safe$/i.test(detailReason) || /^safe$/i.test(originalReason);
       const streak = number(detail.streak ?? status.loginPointSafety?.streak);
@@ -1002,7 +1021,8 @@ function renderBrowserlessWebPanel() {
       ]);
     }
     function actionReasonText(status) {
-      return reasonText(status.action?.reason || status.decision?.reason || status.recentExit?.reason);
+      const reason = status.action?.reason || status.decision?.reason || status.recentExit?.reason;
+      return dangerousPlayerExitReasonText(status, reason);
     }
     function isCombatStatus(status, kind, reason) {
       const text = (kind + ' ' + reason + ' ' + (status.decision?.band || '')).toLowerCase();
@@ -1025,10 +1045,10 @@ function renderBrowserlessWebPanel() {
       const rowsOut = [];
 
       addRow(rowsOut, '状态', actionText(status), true);
-      addRow(rowsOut, '原因', reasonText(reason), true);
+      addRow(rowsOut, '原因', dangerousPlayerExitReasonText(status, reason), true);
       const decisionText = joinNonBlank([kindText(kind), actionReasonText(status)]);
       const statusText = actionText(status);
-      const reasonDisplay = reasonText(reason);
+      const reasonDisplay = dangerousPlayerExitReasonText(status, reason);
       if (decisionText !== '--'
         && decisionText !== statusText
         && decisionText !== reasonDisplay

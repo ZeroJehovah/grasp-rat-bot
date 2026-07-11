@@ -14287,7 +14287,28 @@ async function runSelfTest() {
               target: { type: 'coin', id: 'coin-1', amount: 8, distance: 450 }
             }
           },
-          recentExits: [{ reason: 'older' }, { reason: 'latest' }, { reason: 'blocked-login', shouldLeave: false }]
+          recentExits: [
+            { reason: 'older' },
+            {
+              reason: 'latest',
+              detail: {
+                decision: {
+                  target: {
+                    userId: 21756,
+                    name: 'danger-player',
+                    distance: 2903,
+                    invulnerable: true,
+                    invulnerableRemainingMs: 214440,
+                    recentlyActive: true,
+                    recentlyMoved: false,
+                    profitMetadataMode: 'Active',
+                    profitMetadataActive: true
+                  }
+                }
+              }
+            },
+            { reason: 'blocked-login', shouldLeave: false }
+          ]
         }, { updatedAt: '2026-07-08T00:00:01.000Z' });
         const stored = readBrowserlessStateFile(file);
         const publicStatus = buildPublicBrowserlessStatus(stored, config);
@@ -14385,6 +14406,10 @@ async function runSelfTest() {
           compactStatus.nearby.p[0][7],
           compactStatus.nearby.playerLowHiddenCount,
           compactStatus.recentExit.reason,
+          compactStatus.recentExit.target.name,
+          compactStatus.recentExit.target.profitMetadataMode,
+          compactStatus.recentExit.target.recentlyActive,
+          compactStatus.recentExit.target.invulnerableRemainingMs,
           compactStatus.network.sourceIpIndex,
           compactStatus.network.sourceIpCount,
           compactStatus.network.sourceIp,
@@ -14397,7 +14422,7 @@ async function runSelfTest() {
           !compactText.includes(largePayload) && compactText.length < publicText.length
         ].join('|');
       }),
-      want: 'true|77|true|true|true|true|true|false|loop-wait|88|10|20|360000|seek-coin|8|7|enemy|5999|active-near-login-point|88|true|enemy|14500|coin-1|1|11|154|enemy|1|Passive|1|latest|2|3|10.0.0.101|false|false|false|true|true|false|true'
+      want: 'true|77|true|true|true|true|true|false|loop-wait|88|10|20|360000|seek-coin|8|7|enemy|5999|active-near-login-point|88|true|enemy|14500|coin-1|1|11|154|enemy|1|Passive|1|latest|danger-player|Active|true|214440|2|3|10.0.0.101|false|false|false|true|true|false|true'
     },
     {
       name: 'browserless compact login point safety prefers current detail over stale probe snapshots',
@@ -15220,7 +15245,11 @@ async function runSelfTest() {
           /function loginPointDisplay/.test(panelScript),
           /return loginPointDisplay\(status\)\.text/.test(panelScript),
           !/return '检查中'/.test(panelScript),
-          panelScript.includes("text: '已在游戏中，直接连接'"),
+          panelScript.includes("text: '快照确认角色仍在线，正在连接实时状态'"),
+          /function dangerousPlayerExitReasonText/.test(panelScript),
+          panelScript.includes("evidence.push('快照为 Active')"),
+          panelScript.includes("evidence.push('近期有活动')"),
+          panelScript.includes("evidence.push('无敌还剩 ' + invulnerableText"),
           panelScript.includes("'安全 ' + loginPointProgressText(status, true)"),
           panelScript.includes("return coord(point.x) + ', ' + coord(point.y);"),
           panelScript.includes("translated === '安全'"),
@@ -15249,7 +15278,7 @@ async function runSelfTest() {
           hiddenActionLabels.every(label => !panelScript.includes("addRow(rowsOut, '" + label + "'"))
         ].join('|');
       })(),
-      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
+      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless runner self-test passes',
