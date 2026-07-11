@@ -6490,6 +6490,37 @@ async function runSelfTest() {
       want: '8|1|1|0|1|0|1|0|0|0|未知玩家|false|11'
     },
     {
+      name: 'browserless nearby player rows hide nameless no-stamina no-drop placeholders',
+      got: (() => {
+        const store = createBrowserlessStateStore({ userId: 7 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 60,
+          entities: [
+            { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+            { entity_id: 2, user_id: 8, x: 1000, y: 0, hp: 100, current_join_mode: 'Passive' },
+            { entity_id: 3, user_id: 9, x: 2000, y: 0, hp: 100, current_join_mode: 'Passive', death_drop_coins: 3 },
+            { entity_id: 4, user_id: 10, x: 3000, y: 0, hp: 100, current_join_mode: 'Passive', stamina_5s_remaining_milli: 7000 },
+            { entity_id: 5, user_id: 11, x: 4000, y: 0, hp: 100, current_join_mode: 'Active' }
+          ],
+          bullets: []
+        }, { receivedAtMs: 1000 });
+        const decision = buildBrowserlessDecision(store.getState(1200), {}, {
+          nowMs: 1200,
+          controlMode: 'profit-live'
+        });
+        const rows = decision.input.nearby.p || [];
+        return [
+          rows.length,
+          rows.some(row => row[0] === '未知玩家' && row[3] === 0 && row[2] === null && row[7] === 'Passive'),
+          rows.some(row => row[0] === '未知玩家' && row[3] === 3),
+          rows.some(row => row[0] === '未知玩家' && row[2] === 7000),
+          rows.some(row => row[0] === '未知玩家' && row[7] === 'Active')
+        ].join('|');
+      })(),
+      want: '3|false|true|true|true'
+    },
+    {
       name: 'browserless stationary full-stamina active can be AFK profit but non-full active stays threat',
       got: (() => {
         const choose = target => {

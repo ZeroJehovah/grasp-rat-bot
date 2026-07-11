@@ -1120,6 +1120,17 @@ function panelPlayerTargetKey(target) {
   return id === undefined || id === null || id === '' ? '' : String(id);
 }
 
+function shouldShowNearbyPanelPlayer(target, action, combat) {
+  if (!target) return false;
+  if (targetPlayerSelected(action, combat, target)) return true;
+  if (entityDisplayName(target)) return true;
+  if (numberOrNull(entityDropValue(target)) > 0) return true;
+  if (staminaRemainingValue(target, '5s') !== null) return true;
+  if (target.active || target.moving || target.firing || target.invulnerable) return true;
+  if (invulnerableRemainingMs(target) !== null) return true;
+  return false;
+}
+
 function summarizeNearbyForPanel(input, action, combat, options = {}) {
   if (!input?.self) return null;
   const attackRange = Math.max(0, Number(options.attackRange ?? options.combatAttackRange ?? DEFAULT_ATTACK_RANGE));
@@ -1148,6 +1159,7 @@ function summarizeNearbyForPanel(input, action, combat, options = {}) {
   const players = (input.visibleTargets || [])
     .filter(target => Number.isFinite(Number(target?.distance)))
     .filter(target => visibleRange <= 0 || Number(target.distance) <= visibleRange)
+    .filter(target => shouldShowNearbyPanelPlayer(target, action, combat))
     .sort((a, b) => Number(a.distance) - Number(b.distance))
     .map(target => {
       const drop = numberOrNull(entityDropValue(target));
