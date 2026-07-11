@@ -6855,6 +6855,47 @@ async function runSelfTest() {
       want: 'combat-live|combat|combat-live-realtime|8|true|active-threat-visible'
     },
     {
+      name: 'browserless player-drop source still hard-prioritizes higher visible snapshot coin',
+      got: (() => {
+        const store = createBrowserlessStateStore({ userId: 7 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 61,
+          entities: [
+            { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 80, max_hp: 100 }
+          ],
+          bullets: []
+        }, { receivedAtMs: 1000 });
+        store.ingestFrame({
+          type: 'snapshot',
+          tick: 62,
+          entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 80, max_hp: 100, coins: 1000 }],
+          bullets: [],
+          coin_drops: [
+            { drop_id: 'self-kill-drop', source_user_id: 8, system_spawned: false, amount: 6, x: 800, y: 0, created_tick: 62 },
+            { drop_id: 'ordinary-high-value', source_user_id: 0, system_spawned: true, amount: 38, x: 9000, y: 0, created_tick: 62 }
+          ],
+          messages: [{ kind: 'kill', user_id: 7, target_user_id: 8, tick: 62, text: 'self killed afk' }]
+        }, { receivedAtMs: 1100 });
+        const decision = buildBrowserlessDecision(store.getState(1200), {}, {
+          nowMs: 1200,
+          controlMode: 'profit-live'
+        });
+        return [
+          decision.kind,
+          decision.band,
+          decision.reason,
+          decision.action.target.id,
+          decision.action.target.amount,
+          decision.input.profitCoinSource,
+          decision.action.highValueCoinPriority.source,
+          decision.action.highValueCoinPriority.minAmount,
+          decision.input.fallback.selfKilledPlayerDropCount
+        ].join('|');
+      })(),
+      want: 'coin|profit|high-value-visible-coin-priority|ordinary-high-value|38|snapshot-player-drop|snapshot-player-drop|10|1'
+    },
+    {
       name: 'browserless profit live takes foot coin before in-range high-drop AFK',
       got: (() => {
         const store = createBrowserlessStateStore({ userId: 7 });

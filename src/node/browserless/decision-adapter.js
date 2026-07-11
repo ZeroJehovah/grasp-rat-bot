@@ -1421,7 +1421,9 @@ function highValueThreatBlocksLowHpCoin(threat, options = {}) {
 function pickHighValueVisibleCoin(input, combatDecision, options = {}) {
   if (!input?.self) return null;
   const realtimeCandidates = (input.realtimeCoins || []).filter(coin => !coin.snapshotOnly);
-  const snapshotCandidates = !realtimeCandidates.length && input.profitCoinSource === 'snapshot-fallback'
+  const snapshotProfitSource = input.profitCoinSource === 'snapshot-fallback'
+    || input.profitCoinSource === 'snapshot-player-drop';
+  const snapshotCandidates = !realtimeCandidates.length && snapshotProfitSource
     ? (input.profitCoins || []).filter(coin => coin.snapshotOnly)
     : [];
   const usingSnapshotFallback = !realtimeCandidates.length && snapshotCandidates.length > 0;
@@ -1484,7 +1486,9 @@ function buildHighValueVisibleCoinPriorityDecision(input, combatDecision, option
       minAmount: highValueCoinPriorityAmount(options),
       hp: Math.round(hpValue(input.self) ?? 0),
       healthyHp: highValueCoinPriorityHealthyHp(options),
-      source: coin.snapshotOnly ? 'snapshot-fallback' : 'realtime'
+      source: coin.snapshotOnly
+        ? (input.profitCoinSource === 'snapshot-player-drop' ? 'snapshot-player-drop' : 'snapshot-fallback')
+        : 'realtime'
     }
   };
 }
