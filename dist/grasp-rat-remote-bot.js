@@ -12,7 +12,7 @@
   var define_GRASP_RAT_RUNTIME_CONFIG_default;
   var init_define_GRASP_RAT_RUNTIME_CONFIG = __esm({
     "<define:__GRASP_RAT_RUNTIME_CONFIG__>"() {
-      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.612" };
+      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.613" };
     }
   });
 
@@ -404,6 +404,9 @@
           opportunitySameCoinRadius: 1200,
           opportunityVisibleDistance: 5e4,
           opportunityNearbyPriorityDistance: 5e4,
+          browserlessCenterActivityRadiusCm: 1e5,
+          browserlessProfitPursuitMaxMs: 6e4,
+          browserlessProfitPursuitSuppressMs: 6e4,
           afkRecentActivityCooldownMs: 12e3,
           opportunityAfkStaminaCooldownMs: 6e4,
           opportunityAfkStaminaDropThresholdMs: 100,

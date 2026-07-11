@@ -96,6 +96,46 @@ function numberOrNull(value) {
   return Number.isFinite(number) ? number : null;
 }
 
+function pointRadiusFromOrigin(point) {
+  const x = Number(point?.x);
+  const y = Number(point?.y);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return Infinity;
+  return Math.hypot(x, y);
+}
+
+function browserlessCenterActivityRadius(options = {}) {
+  const value = Number(options.browserlessCenterActivityRadiusCm
+    ?? BROWSER_RUNTIME_DEFAULTS.browserlessCenterActivityRadiusCm
+    ?? 0);
+  return Number.isFinite(value) ? Math.max(0, value) : 0;
+}
+
+function insideCenterActivityRadius(point, options = {}) {
+  const radius = browserlessCenterActivityRadius(options);
+  if (!(radius > 0)) return true;
+  return pointRadiusFromOrigin(point) <= radius;
+}
+
+function filterCenterActivityProfitItems(items = [], options = {}) {
+  const radius = browserlessCenterActivityRadius(options);
+  if (!(radius > 0)) return items || [];
+  return (items || []).filter(item => insideCenterActivityRadius(item, options));
+}
+
+function centerActivityInputSummary(self, filtered = {}, options = {}) {
+  const radiusCm = browserlessCenterActivityRadius(options);
+  if (!(radiusCm > 0)) return null;
+  const selfRadius = pointRadiusFromOrigin(self);
+  return {
+    radiusCm: Math.round(radiusCm),
+    selfRadiusCm: Number.isFinite(selfRadius) ? Math.round(selfRadius) : null,
+    selfOutsideCm: Number.isFinite(selfRadius) ? Math.max(0, Math.round(selfRadius - radiusCm)) : null,
+    filteredAfkTargets: Math.max(0, Math.round(Number(filtered.afkTargets || 0))),
+    filteredRealtimeCoins: Math.max(0, Math.round(Number(filtered.realtimeCoins || 0))),
+    filteredSnapshotCoins: Math.max(0, Math.round(Number(filtered.snapshotCoins || 0)))
+  };
+}
+
 const STAMINA_REMAINING_FIELDS = {
   '5s': [
     'stamina_5s_remaining_milli',
@@ -1333,7 +1373,7 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
     ...firingThreats.filter(threat => !activeThreats.includes(threat)),
     ...snapshotActiveThreats
   ].filter(threat => snapshotFallbackThreatBlocks(threat, self, options));
-  const afkObservationTargets = visibleTargets.filter(entity => {
+  const afkObservationTargetsRaw = visibleTargets.filter(entity => {
     if (entity.whitelisted || entity.active || entity.moving || entity.firing || entity.profitMetadataActive || entity.alive === false || entity.invulnerable) return false;
     return attackWorthTakingCore(self, entity, {
       attackMinDrop: options.attackMinDrop ?? DEFAULT_ATTACK_MIN_DROP,
@@ -1344,15 +1384,23 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
       dropValue: entityDropValue
     });
   });
+  const afkObservationTargets = filterCenterActivityProfitItems(afkObservationTargetsRaw, options);
   const afkTargets = afkObservationTargets.filter(entity => hasFull5sStamina(entity, options) && !afkTargetBlockedByRecentActivity(entity, options));
-  const realtimeCoins = buildNativeCoinSnapshotCore(Array.isArray(realtime.coinDrops) ? realtime.coinDrops : [], { nowMs: options.nowMs })
+  const realtimeCoinsRaw = buildNativeCoinSnapshotCore(Array.isArray(realtime.coinDrops) ? realtime.coinDrops : [], { nowMs: options.nowMs })
     .map(drop => normalizeCoinForDecision(drop, self, 'realtime'))
     .filter(Boolean)
     .filter(coin => Number(coin.amount || 0) > 0);
-  const snapshotCoins = (Array.isArray(fallback.coinDrops) ? fallback.coinDrops : [])
+  const realtimeCoins = filterCenterActivityProfitItems(realtimeCoinsRaw, options);
+  const snapshotCoinsRaw = (Array.isArray(fallback.coinDrops) ? fallback.coinDrops : [])
     .map(drop => normalizeCoinForDecision(drop, self, 'snapshot'))
     .filter(Boolean)
     .filter(coin => Number(coin.amount || 0) > 0);
+  const snapshotCoins = filterCenterActivityProfitItems(snapshotCoinsRaw, options);
+  const centerFiltered = {
+    afkTargets: Math.max(0, afkObservationTargetsRaw.length - afkObservationTargets.length),
+    realtimeCoins: Math.max(0, realtimeCoinsRaw.length - realtimeCoins.length),
+    snapshotCoins: Math.max(0, snapshotCoinsRaw.length - snapshotCoins.length)
+  };
   const snapshotVisibleCoinMaxDistanceRaw = Number(options.snapshotVisibleCoinMaxDistanceCm
     ?? options.snapshotCoinFallbackMaxDistanceCm
     ?? options.globalCoinMaxDistance
@@ -1383,13 +1431,16 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
   if (snapshotFrameAgeMs !== null && snapshotFrameAgeMs > snapshotMaxAgeMs) snapshotFallbackBlockedReasons.push('snapshot-stale');
   if (snapshotFallbackEnabled && snapshotCoins.length && !snapshotVisibleCoins.length) snapshotFallbackBlockedReasons.push('snapshot-coins-out-of-visible-range');
   const snapshotFallbackAllowed = Boolean(snapshotFallbackEnabled && snapshotVisibleCoins.length && !snapshotFallbackBlockedReasons.length);
-  if (!realtimeCoins.length && !snapshotCoins.length) dataGaps.push('no-coin-frame-type-observed');
+  if (!realtimeCoinsRaw.length && !snapshotCoinsRaw.length) dataGaps.push('no-coin-frame-type-observed');
   if (!realtimeCoins.length && snapshotCoins.length) dataGaps.push('snapshot-coin-fallback-only');
   if (selfKilledPlayerDropCoins.length) dataGaps.push('self-killed-player-drop-visible');
   if (snapshotActiveThreats.length) dataGaps.push('snapshot-active-threat-visible');
   if (visibleTargets.some(target => target.whitelisted)) dataGaps.push('whitelisted-target-visible');
   if (visibleTargets.some(target => target.recentlyActive)) dataGaps.push('recently-active-target-visible');
   if (afkTargets.some(target => afkOpportunityBlockedByStaminaCooldown(target, options))) dataGaps.push('afk-stamina-cooldown-target-visible');
+  if (centerFiltered.afkTargets) dataGaps.push('center-afk-targets-filtered');
+  if (centerFiltered.realtimeCoins) dataGaps.push('center-realtime-coins-filtered');
+  if (centerFiltered.snapshotCoins) dataGaps.push('center-snapshot-coins-filtered');
   if (snapshotFallbackBlockedReasons.length) dataGaps.push(...snapshotFallbackBlockedReasons.map(reason => `snapshot-fallback-blocked:${reason}`));
   if (!realtime.frameAgeMs && realtime.receivedAtMs) dataGaps.push('unknown-realtime-frame-age');
   const selfKilledPlayerDropCoinKeys = new Set(selfKilledPlayerDropCoins.map(profitCoinKey).filter(Boolean));
@@ -1416,6 +1467,7 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
     nowMs: Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now(),
     rawRealtime: realtime,
     self,
+    centerActivity: centerActivityInputSummary(self, centerFiltered, options),
     stamina: entityStaminaSummary(self || {}),
     frameAges: state?.frameAges || {},
     realtime: {
@@ -3196,7 +3248,8 @@ function profitLiveSafetyDecision(input, combatDecision, stateful = {}, options 
   if (options.combatEnabled === true) {
     const combatTargetId = realtimeTarget?.userId ?? realtimeTarget?.user_id ?? realtimeTarget?.entityId ?? realtimeTarget?.entity_id ?? null;
     const threatId = target?.userId ?? target?.user_id ?? target?.entityId ?? target?.entity_id ?? null;
-    const combatHandlesThreat = !invulnerableThreatening
+    const combatHandlesThreat = options.combatActionEligible !== false
+      && !invulnerableThreatening
       && combatTargetId !== null
       && combatTargetId !== undefined
       && threatId !== null
@@ -3280,6 +3333,146 @@ function profitLiveSafetyDecision(input, combatDecision, stateful = {}, options 
     : buildThreatFleeDecision(stateful, input, target, reason, options);
 }
 
+function targetIdentity(target) {
+  const id = target?.userId ?? target?.user_id ?? target?.entityId ?? target?.entity_id ?? target?.id;
+  if (id === null || id === undefined || id === '') return '';
+  return String(id);
+}
+
+function targetHasRealBulletPressure(input, target, combatState = {}) {
+  const id = targetIdentity(target);
+  if (!id) return false;
+  if (Number(combatState?.seenTargetRealBulletAt || 0) > 0) return true;
+  return (input?.bullets || []).some(bullet => {
+    if (!bullet || bullet.synthetic) return false;
+    const ownerId = bulletOwnerId(bullet);
+    return ownerId !== null && ownerId !== undefined && String(ownerId) === id;
+  });
+}
+
+function profitPursuitSuppressionMap(stateful = {}, nowMs = 0) {
+  if (!stateful || typeof stateful !== 'object') return {};
+  if (!stateful.profitPursuitSuppressions || typeof stateful.profitPursuitSuppressions !== 'object' || Array.isArray(stateful.profitPursuitSuppressions)) {
+    stateful.profitPursuitSuppressions = {};
+  }
+  for (const [id, item] of Object.entries(stateful.profitPursuitSuppressions)) {
+    if (Number(item?.until || 0) <= nowMs) delete stateful.profitPursuitSuppressions[id];
+  }
+  return stateful.profitPursuitSuppressions;
+}
+
+function combatDecisionIsOrdinaryProfitPursuit(combatDecision, input, stateful = {}) {
+  const target = combatDecision?.target || combatDecision?.dryRun?.target || null;
+  if (!target) return false;
+  const combatState = stateful?.combatTarget || null;
+  const intent = String(target.combatIntent || combatState?.intent || '');
+  const originIntent = String(combatState?.originIntent || combatState?.intent || intent || '');
+  if (intent === 'defensive' || originIntent === 'defensive') return false;
+  if (target.firing || targetHasRealBulletPressure(input, target, combatState)) return false;
+  if (intent === 'profit' || intent === 'engaged' || intent === 'reengage') return true;
+  if (originIntent === 'profit' || originIntent === 'engaged' || originIntent === 'reengage') return true;
+  if (combatDecision?.dryRun?.movement?.passiveRunner?.active) return true;
+  return Boolean(entityDropValue(target) > 0 && (target.active || target.combatEngagement));
+}
+
+function profitPursuitEngagedMs(combatDecision, stateful = {}, nowMs = 0) {
+  const target = combatDecision?.target || combatDecision?.dryRun?.target || null;
+  const ageMs = Number(target?.combatEngagement?.ageMs);
+  if (Number.isFinite(ageMs)) return Math.max(0, ageMs);
+  const combatState = stateful?.combatTarget || null;
+  const firstSeenAt = Number(combatState?.firstSeenAt || combatState?.at || nowMs);
+  return Math.max(0, Number(nowMs || 0) - firstSeenAt);
+}
+
+function clearSuppressedCombatTarget(stateful = {}, targetId = '') {
+  if (!stateful || typeof stateful !== 'object' || !targetId) return;
+  const currentId = String(stateful.combatTarget?.id ?? '');
+  if (currentId && currentId === String(targetId)) stateful.combatTarget = null;
+  const aimId = String(stateful.combatAim?.targetId ?? '');
+  if (aimId && aimId === String(targetId)) stateful.combatAim = null;
+}
+
+function buildProfitPursuitSuppression(input, combatDecision, stateful = {}, options = {}) {
+  const target = combatDecision?.target || combatDecision?.dryRun?.target || null;
+  if (!target || !combatDecisionIsOrdinaryProfitPursuit(combatDecision, input, stateful)) return null;
+  const nowMs = Number.isFinite(Number(input?.nowMs)) ? Number(input.nowMs) : Date.now();
+  const targetId = targetIdentity(target);
+  if (!targetId) return null;
+  const suppressions = profitPursuitSuppressionMap(stateful, nowMs);
+  const cached = suppressions[targetId] || null;
+  if (cached && Number(cached.until || 0) > nowMs) {
+    clearSuppressedCombatTarget(stateful, targetId);
+    return {
+      ...cloneJson(cached),
+      remainingMs: Math.max(0, Math.round(Number(cached.until || 0) - nowMs)),
+      cached: true
+    };
+  }
+
+  const centerRadius = browserlessCenterActivityRadius(options);
+  const selfRadius = pointRadiusFromOrigin(input?.self);
+  const targetRadius = pointRadiusFromOrigin(target);
+  const engagedMs = profitPursuitEngagedMs(combatDecision, stateful, nowMs);
+  const maxMs = Math.max(0, Number(options.browserlessProfitPursuitMaxMs
+    ?? BROWSER_RUNTIME_DEFAULTS.browserlessProfitPursuitMaxMs
+    ?? 60000));
+  let reason = '';
+  if (centerRadius > 0 && Number.isFinite(targetRadius) && targetRadius > centerRadius) {
+    reason = 'profit-pursuit-target-outside-center';
+  } else if (centerRadius > 0 && Number.isFinite(selfRadius) && selfRadius > centerRadius) {
+    reason = 'profit-pursuit-self-outside-center';
+  } else if (maxMs > 0 && engagedMs >= maxMs) {
+    reason = 'profit-pursuit-max-ms';
+  }
+  if (!reason) return null;
+
+  const suppressMs = Math.max(0, Number(options.browserlessProfitPursuitSuppressMs
+    ?? BROWSER_RUNTIME_DEFAULTS.browserlessProfitPursuitSuppressMs
+    ?? 60000));
+  const suppression = {
+    reason,
+    targetId,
+    at: nowMs,
+    until: nowMs + suppressMs,
+    suppressMs: Math.round(suppressMs),
+    engagedMs: Math.round(engagedMs),
+    centerRadiusCm: Math.round(centerRadius),
+    selfRadiusCm: Number.isFinite(selfRadius) ? Math.round(selfRadius) : null,
+    targetRadiusCm: Number.isFinite(targetRadius) ? Math.round(targetRadius) : null,
+    target: summarizeTarget(target)
+  };
+  suppressions[targetId] = cloneJson(suppression);
+  clearSuppressedCombatTarget(stateful, targetId);
+  return suppression;
+}
+
+function buildReturnToCenterDecision(input, options = {}) {
+  if (!input?.self) return null;
+  const radius = browserlessCenterActivityRadius(options);
+  if (!(radius > 0)) return null;
+  const selfRadius = pointRadiusFromOrigin(input.self);
+  if (!Number.isFinite(selfRadius) || selfRadius <= radius) return null;
+  const x = Number(input.self.x);
+  const y = Number(input.self.y);
+  const dx = Number.isFinite(x) ? Math.sign(-x) : 0;
+  const dy = Number.isFinite(y) ? Math.sign(-y) : 0;
+  if (!dx && !dy) return null;
+  return {
+    kind: 'patrol',
+    band: 'recover',
+    reason: 'return-to-center-activity-radius',
+    dx,
+    dy,
+    stopMotion: false,
+    self: summarizeTarget(input.self),
+    centerActivity: {
+      radiusCm: Math.round(radius),
+      selfRadiusCm: Math.round(selfRadius),
+      distanceOutsideCm: Math.max(0, Math.round(selfRadius - radius))
+    }
+  };
+}
+
 function buildBrowserlessDecision(state, stateful = {}, options = {}) {
   const input = buildBrowserlessStrategyInput(state, options, stateful);
   cleanupCoinProgressState(stateful, input.nowMs, options);
@@ -3297,15 +3490,23 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     includeAfkProfitTargets: nonCombatProfit ? false : options.includeAfkProfitTargets
   });
   const combat = buildCombatDecision(input, stateful, options);
-  const combatActionEligible = isCombatActionEligibleForDecision(combat, options);
+  const combatPursuitSuppression = buildProfitPursuitSuppression(input, combat, stateful, options);
+  const combatActionEligible = isCombatActionEligibleForDecision(combat, options) && !combatPursuitSuppression;
+  const combatForProfit = combatPursuitSuppression
+    ? {
+        ...combat,
+        target: null,
+        dryRun: combat.dryRun ? { ...combat.dryRun, target: null } : combat.dryRun
+      }
+    : combat;
   const highValueCoinPriorityAction = (profitLive || nonCombatProfit)
-    ? buildHighValueVisibleCoinPriorityDecision(input, combat, options)
+    ? buildHighValueVisibleCoinPriorityDecision(input, combatForProfit, options)
     : null;
-  const safetyAction = profitLiveSafetyDecision(input, combat, stateful, options, opportunity.action);
   const safetyContextOptions = {
     ...options,
     combatActionEligible
   };
+  const safetyAction = profitLiveSafetyDecision(input, combat, stateful, safetyContextOptions, opportunity.action);
   const injuryLeaveAction = input.self && !realtimeStale
     ? buildBrowserlessInjuryLeaveDecision(input, stateful, combat, safetyContextOptions)
     : null;
@@ -3338,6 +3539,9 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     && input.self
     && isInjuredSelf(input.self, options)
     ? buildFootCoinPriorityDecision(input, 'foot-coin-before-active-caution', options)
+    : null;
+  const returnToCenterAction = input.self && !realtimeStale && (profitLive || nonCombatProfit)
+    ? buildReturnToCenterDecision(input, options)
     : null;
   const footCoinPriorityAction = (profitLive || nonCombatProfit) ? buildFootCoinPriorityDecision(input, 'foot-coin-priority', options) : null;
   const dailyFinalCoinAction = (profitLive || nonCombatProfit) && !recoveryAction
@@ -3389,6 +3593,11 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     band = immediateSafetyAction.band;
     reason = immediateSafetyAction.reason;
     action = immediateSafetyAction;
+  } else if (returnToCenterAction) {
+    kind = returnToCenterAction.kind;
+    band = returnToCenterAction.band;
+    reason = returnToCenterAction.reason;
+    action = returnToCenterAction;
   } else if (highValueCoinPriorityAction) {
     kind = highValueCoinPriorityAction.kind;
     band = highValueCoinPriorityAction.band;
@@ -3515,6 +3724,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       stamina: input.stamina,
       realtime: input.realtime,
       fallback: input.fallback,
+      centerActivity: input.centerActivity,
       profitCoinSource: input.profitCoinSource,
       selfKillEvidence: topItems(input.selfKillEvidence, item => item, 20),
       nearby: summarizeNearbyForPanel(input, action, combat.dryRun || combat, options),
@@ -3528,6 +3738,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       ...(combat.dryRun || {}),
       target: combat.dryRun?.target || summarizeTarget(combat.target),
       actionEligible: combatActionEligible,
+      profitPursuitSuppression: combatPursuitSuppression,
       candidates: combat.dryRun?.candidates || topItems(combat.candidates, target => ({
         ...summarizeTarget(target),
         score: Number.isFinite(Number(target.combatScore)) ? Math.round(Number(target.combatScore)) : null

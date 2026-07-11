@@ -42,6 +42,9 @@ const DEFAULTS = {
   movementCommandIntervalMs: 500,
   movementTargetDeadZoneCm: 900,
   movementSettlementFrames: 2,
+  browserlessCenterActivityRadiusCm: 100000,
+  browserlessProfitPursuitMaxMs: 60000,
+  browserlessProfitPursuitSuppressMs: 60000,
   combatEnabled: false,
   combatShootMinIntervalMs: 160,
   wsTraceEnabled: false,
@@ -132,6 +135,9 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
     movementCommandIntervalMs: numberEnv(env.GRASP_RAT_BROWSERLESS_MOVEMENT_COMMAND_INTERVAL_MS, DEFAULTS.movementCommandIntervalMs),
     movementTargetDeadZoneCm: numberEnv(env.GRASP_RAT_BROWSERLESS_MOVEMENT_TARGET_DEAD_ZONE_CM, DEFAULTS.movementTargetDeadZoneCm),
     movementSettlementFrames: numberEnv(env.GRASP_RAT_BROWSERLESS_MOVEMENT_SETTLEMENT_FRAMES, DEFAULTS.movementSettlementFrames),
+    browserlessCenterActivityRadiusCm: numberEnv(env.GRASP_RAT_BROWSERLESS_CENTER_ACTIVITY_RADIUS_CM, DEFAULTS.browserlessCenterActivityRadiusCm),
+    browserlessProfitPursuitMaxMs: numberEnv(env.GRASP_RAT_BROWSERLESS_PROFIT_PURSUIT_MAX_MS, DEFAULTS.browserlessProfitPursuitMaxMs),
+    browserlessProfitPursuitSuppressMs: numberEnv(env.GRASP_RAT_BROWSERLESS_PROFIT_PURSUIT_SUPPRESS_MS, DEFAULTS.browserlessProfitPursuitSuppressMs),
     combatEnabled: boolEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_ENABLED, DEFAULTS.combatEnabled),
     combatShootMinIntervalMs: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_SHOOT_MIN_INTERVAL_MS, DEFAULTS.combatShootMinIntervalMs),
     wsTraceEnabled: boolEnv(env.GRASP_RAT_BROWSERLESS_WS_TRACE_ENABLED ?? env.GRASP_RAT_BROWSERLESS_WS_TRACE, DEFAULTS.wsTraceEnabled),
@@ -240,6 +246,12 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
       config.movementTargetDeadZoneCm = numberEnv(argv[++i], config.movementTargetDeadZoneCm);
     } else if (arg === '--movement-settlement-frames') {
       config.movementSettlementFrames = numberEnv(argv[++i], config.movementSettlementFrames);
+    } else if (arg === '--center-activity-radius-cm') {
+      config.browserlessCenterActivityRadiusCm = numberEnv(argv[++i], config.browserlessCenterActivityRadiusCm);
+    } else if (arg === '--profit-pursuit-max-ms') {
+      config.browserlessProfitPursuitMaxMs = numberEnv(argv[++i], config.browserlessProfitPursuitMaxMs);
+    } else if (arg === '--profit-pursuit-suppress-ms') {
+      config.browserlessProfitPursuitSuppressMs = numberEnv(argv[++i], config.browserlessProfitPursuitSuppressMs);
     } else if (arg === '--combat-shoot-min-interval-ms') {
       config.combatShootMinIntervalMs = numberEnv(argv[++i], config.combatShootMinIntervalMs);
     } else if (arg === '--ws-trace') {
@@ -318,6 +330,9 @@ function usage() {
     '  --movement-command-interval-ms <ms>  Movement velocity throttle. Default: 500',
     '  --movement-target-dead-zone-cm <cm>  Movement target stop radius. Default: 900',
     '  --movement-settlement-frames <n>  Realtime frames needed after command. Default: 2',
+    '  --center-activity-radius-cm <cm>  Keep ordinary browserless profit inside this origin radius. Default: 100000',
+    '  --profit-pursuit-max-ms <ms>  Max ordinary profit combat pursuit before suppression. Default: 60000',
+    '  --profit-pursuit-suppress-ms <ms>  Suppression cooldown after a profit pursuit is stopped. Default: 60000',
     '  --combat-shoot-min-interval-ms <ms>  Minimum live combat shoot interval. Default: 160',
     '  --ws-trace              Write decoded WebSocket frame/command trace to ws.jsonl',
     '  --no-ws-trace           Disable WebSocket trace logging',

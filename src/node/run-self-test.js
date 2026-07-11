@@ -7363,6 +7363,131 @@ async function runSelfTest() {
       want: 'safety-exit|safety|profit-live-snapshot-active-threat|true|8|true'
     },
     {
+      name: 'browserless decision input filters ordinary profit outside center activity radius',
+      got: (() => {
+        const state = {
+          userId: 7,
+          realtime: {
+            tick: 58,
+            frameAgeMs: 100,
+            self: { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+            entities: [
+              { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+              fullStamina5s({ entity_id: 2, user_id: 8, name: 'inside-afk', x: 9000, y: 0, hp: 80, current_join_mode: 'Passive', drop: 12 }),
+              fullStamina5s({ entity_id: 3, user_id: 9, name: 'outside-afk', x: 101000, y: 0, hp: 80, current_join_mode: 'Passive', drop: 99 })
+            ],
+            bullets: [],
+            coinDrops: [
+              { drop_id: 1, amount: 5, x: 8000, y: 0 },
+              { drop_id: 2, amount: 50, x: 101000, y: 0 }
+            ]
+          },
+          fallback: { tick: 58, frameAgeMs: 100, entities: [], coinDrops: [], messages: [] }
+        };
+        const input = buildBrowserlessStrategyInput(state, {
+          controlMode: 'profit-live',
+          nowMs: 1200,
+          browserlessCenterActivityRadiusCm: 100000
+        }, {});
+        return [
+          input.afkTargets.map(target => target.user_id).join(','),
+          input.profitCoins.map(coin => coin.drop_id).join(','),
+          input.centerActivity.filteredAfkTargets,
+          input.centerActivity.filteredRealtimeCoins,
+          input.dataGaps.includes('center-afk-targets-filtered'),
+          input.dataGaps.includes('center-realtime-coins-filtered')
+        ].join('|');
+      })(),
+      want: '8|1|1|1|true|true'
+    },
+    {
+      name: 'browserless decision returns to center before ordinary profit outside center radius',
+      got: (() => {
+        const decision = buildBrowserlessDecision({
+          userId: 7,
+          realtime: {
+            tick: 59,
+            frameAgeMs: 100,
+            self: { entity_id: 1, user_id: 7, name: 'self', x: 120000, y: 40000, hp: 100, max_hp: 100 },
+            entities: [
+              { entity_id: 1, user_id: 7, name: 'self', x: 120000, y: 40000, hp: 100, max_hp: 100 },
+              fullStamina5s({ entity_id: 2, user_id: 8, name: 'outside-afk', x: 125000, y: 40000, hp: 80, current_join_mode: 'Passive', drop: 50 })
+            ],
+            bullets: [],
+            coinDrops: [{ drop_id: 1, amount: 99, x: 121000, y: 40000 }]
+          },
+          fallback: { tick: 59, frameAgeMs: 100, entities: [], coinDrops: [], messages: [] }
+        }, {}, {
+          nowMs: 1200,
+          controlMode: 'profit-live',
+          browserlessCenterActivityRadiusCm: 100000
+        });
+        return [
+          decision.kind,
+          decision.band,
+          decision.reason,
+          decision.action.dx,
+          decision.action.dy,
+          decision.action.centerActivity.distanceOutsideCm > 0,
+          decision.input.dataGaps.includes('center-afk-targets-filtered'),
+          decision.input.dataGaps.includes('center-realtime-coins-filtered')
+        ].join('|');
+      })(),
+      want: 'patrol|recover|return-to-center-activity-radius|-1|-1|true|true|true'
+    },
+    {
+      name: 'browserless profit pursuit suppression stops long outside-center active chase',
+      got: (() => {
+        const stateful = {
+          combatTarget: {
+            id: 8,
+            at: 1000,
+            firstSeenAt: 1000,
+            lastInRangeAt: 1000,
+            lastDamageAt: 1000,
+            hp: 91,
+            drop: 86,
+            intent: 'profit',
+            originIntent: 'profit'
+          }
+        };
+        const decision = buildBrowserlessDecision({
+          userId: 7,
+          realtime: {
+            tick: 60,
+            frameAgeMs: 100,
+            self: { entity_id: 1, user_id: 7, name: 'self', x: 120000, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+            entities: [
+              { entity_id: 1, user_id: 7, name: 'self', x: 120000, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+              { entity_id: 2, user_id: 8, name: 'drop86-runner', x: 132000, y: 0, vx: 80, vy: 0, hp: 91, current_join_mode: 'Active', drop: 86 }
+            ],
+            bullets: []
+          },
+          fallback: { tick: 60, frameAgeMs: 100, entities: [], coinDrops: [], messages: [] }
+        }, stateful, {
+          nowMs: 62000,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          combatAttackRange: 14500,
+          targetStickMs: 120000,
+          combatEngageStickMs: 120000,
+          browserlessCenterActivityRadiusCm: 100000,
+          browserlessProfitPursuitMaxMs: 60000,
+          browserlessProfitPursuitSuppressMs: 60000
+        });
+        return [
+          decision.kind,
+          decision.reason,
+          decision.combat.actionEligible,
+          decision.combat.profitPursuitSuppression.reason,
+          decision.combat.profitPursuitSuppression.targetId,
+          stateful.combatTarget === null,
+          stateful.profitPursuitSuppressions?.['8']?.reason || ''
+        ].join('|');
+      })(),
+      want: 'flee|active-threat-return-block|false|profit-pursuit-target-outside-center|8|true|profit-pursuit-target-outside-center'
+    },
+    {
       name: 'browserless action adapter pre-approaches AFK target before shooting',
       got: (() => {
         const farCommands = [];
@@ -12401,6 +12526,12 @@ async function runSelfTest() {
           '800',
           '--movement-settlement-frames',
           '3',
+          '--center-activity-radius-cm',
+          '99000',
+          '--profit-pursuit-max-ms',
+          '45000',
+          '--profit-pursuit-suppress-ms',
+          '120000',
           '--ws-trace',
           '--ws-trace-max-payload-chars',
           '4096',
@@ -12444,6 +12575,9 @@ async function runSelfTest() {
           config.movementCommandIntervalMs,
           config.movementTargetDeadZoneCm,
           config.movementSettlementFrames,
+          config.browserlessCenterActivityRadiusCm,
+          config.browserlessProfitPursuitMaxMs,
+          config.browserlessProfitPursuitSuppressMs,
           config.wsTraceEnabled,
           config.wsTracePayload,
           config.wsTraceMaxPayloadChars,
@@ -12458,7 +12592,7 @@ async function runSelfTest() {
           config.logDir.endsWith('/tmp/grasp-rat-browserless-logs')
         ].join('|');
       })(),
-      want: 'true|false|false|combat-live|19999|cli-token|true|220|42|env-token|250|4|15000|3500|4500|150|300|800|3|true|true|4096|https://example.test/target-whitelist.json|true|1234|12|123|456|90|true|true'
+      want: 'true|false|false|combat-live|19999|cli-token|true|220|42|env-token|250|4|15000|3500|4500|150|300|800|3|99000|45000|120000|true|true|4096|https://example.test/target-whitelist.json|true|1234|12|123|456|90|true|true'
     },
     {
       name: 'browserless deployment files define service env and install surface',
@@ -12479,6 +12613,9 @@ async function runSelfTest() {
           env.includes('GRASP_RAT_BROWSERLESS_TARGET_WHITELIST_FILE='),
           env.includes('GRASP_RAT_BROWSERLESS_LOGIN_POINT_SAFETY_SUCCESS_REQUIRED=3'),
           env.includes('GRASP_RAT_BROWSERLESS_LOGIN_POINT_SAFETY_PROBE_INTERVAL_MS=30000'),
+          env.includes('GRASP_RAT_BROWSERLESS_CENTER_ACTIVITY_RADIUS_CM=100000'),
+          env.includes('GRASP_RAT_BROWSERLESS_PROFIT_PURSUIT_MAX_MS=60000'),
+          env.includes('GRASP_RAT_BROWSERLESS_PROFIT_PURSUIT_SUPPRESS_MS=60000'),
           env.includes('GRASP_RAT_BROWSERLESS_WS_TRACE_ENABLED=false'),
           installer.includes('grasp-rat-browserless-runner'),
           installer.includes('DATA_DIR="/var/lib/grasp-rat-browserless"'),
@@ -12488,7 +12625,7 @@ async function runSelfTest() {
           installer.includes('systemctl daemon-reload')
         ].join('|');
       })(),
-      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
+      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless deployment audit checks installed service evidence',

@@ -75,6 +75,7 @@ function createInitialDecisionState(options = {}) {
     browserlessLastSelf: cloneJson(options.browserlessLastSelf || null),
     browserlessInjury: cloneJson(options.browserlessInjury || null),
     browserlessPursuit: cloneJson(options.browserlessPursuit || null),
+    profitPursuitSuppressions: asRecord(options.profitPursuitSuppressions),
     fleeLock: cloneJson(options.fleeLock || null),
     returnBlockLock: cloneJson(options.returnBlockLock || null),
     returnBlockScan: cloneJson(options.returnBlockScan || null),
@@ -146,7 +147,8 @@ function summarizeBrowserlessDecisionState(state, options = {}) {
       opportunityAfkStamina: recordEntries(state.opportunityAfkStamina || {}, limit),
       lastSelf: redactBoundedValue(state.browserlessLastSelf || null),
       injury: redactBoundedValue(state.browserlessInjury || null),
-      pursuit: redactBoundedValue(state.browserlessPursuit || null)
+      pursuit: redactBoundedValue(state.browserlessPursuit || null),
+      profitPursuitSuppressions: recordEntries(state.profitPursuitSuppressions || {}, limit)
     },
     safety: {
       fleeLock: redactBoundedValue(state.fleeLock || null),
