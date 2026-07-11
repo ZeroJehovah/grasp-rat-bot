@@ -3,6 +3,7 @@
 const {
   coinMotionNumber,
   coinMotionTolerance,
+  targetLaneAlignmentDirectionCore,
   coinAxisApproachDirectionCore,
   coinPickupPrecisionPulseMsCore,
   coinAxisLockShouldHoldCore,
@@ -14,6 +15,7 @@ const {
 module.exports = {
   coinMotionNumber,
   coinMotionTolerance,
+  targetLaneAlignmentDirectionCore,
   coinAxisApproachDirectionCore,
   coinPickupPrecisionPulseMsCore,
   coinAxisLockShouldHoldCore,

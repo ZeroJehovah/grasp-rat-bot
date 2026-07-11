@@ -10509,6 +10509,81 @@ async function runSelfTest() {
       want: 'true|1|micro|60|velocity|micro|60|60|vel 1 0|vel 1 0,vel 0 0'
     },
     {
+      name: 'browserless close coin waits for position feedback without velocity repeats',
+      got: (() => {
+        let t = 1000;
+        const commands = [];
+        const timers = [];
+        const adapter = createBrowserlessActionAdapter({
+          now: () => t,
+          commandIntervalMs: 1,
+          decisionIntervalMs: 1000,
+          velocityRepeatEnabled: true,
+          velocityRepeatMs: 50,
+          setTimeout: (fn, ms) => {
+            const timer = { fn, ms, canceled: false };
+            timers.push(timer);
+            return timer;
+          },
+          clearTimeout: timer => {
+            if (timer) timer.canceled = true;
+          },
+          transport: {
+            sendVelocity: (dx, dy) => commands.push(`vel ${dx} ${dy}`)
+          }
+        });
+        const decision = {
+          kind: 'profit-candidate',
+          band: 'profit',
+          action: { kind: 'coin', band: 'profit', target: { type: 'coin', id: 'feedback-coin', x: 80, y: 0 } }
+        };
+        const first = adapter.applyDecision({ realtime: { self: { x: 0, y: 0 }, tick: 1 } }, decision);
+        const waiting = adapter.applyDecision({ realtime: { self: { x: 0, y: 0 }, tick: 2 } }, decision);
+        t += 100;
+        const acknowledged = adapter.applyDecision({ realtime: { self: { x: 20, y: 0 }, tick: 3 } }, decision);
+        const state = adapter.getState();
+        return [
+          first.feedbackGuided,
+          first.command.dx,
+          first.command.dy,
+          waiting.kind,
+          waiting.reason,
+          acknowledged.kind,
+          state.velocityRepeatSentCount,
+          state.coinFeedbackWaitCount,
+          state.coinFeedbackAckCount,
+          commands.join(',')
+        ].join('|');
+      })(),
+      want: 'true|1|0|feedback-wait|coin-position-feedback-wait|velocity|0|1|1|vel 1 0,vel 1 0'
+    },
+    {
+      name: 'browserless distant targets align the near axis before following the long lane',
+      got: (() => {
+        const align = movementVectorToTarget(
+          { x: 0, y: 0 },
+          { type: 'enemy', x: 500, y: 15000 },
+          {}
+        );
+        const follow = movementVectorToTarget(
+          { x: 500, y: 0 },
+          { type: 'enemy', x: 500, y: 15000 },
+          {}
+        );
+        return [
+          align.dx,
+          align.dy,
+          align.reason,
+          align.routeMode,
+          follow.dx,
+          follow.dy,
+          follow.reason,
+          follow.routeMode
+        ].join('|');
+      })(),
+      want: '1|0|align-target-x-axis|lane-align-x|0|1|follow-target-x-axis|lane-follow-x'
+    },
+    {
       name: 'browserless action adapter stops for combat and reached targets',
       got: (() => {
         const commands = [];

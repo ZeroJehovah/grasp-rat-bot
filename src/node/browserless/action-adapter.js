@@ -3,7 +3,8 @@
 const { buildRuntimeDefaults } = require('../../shared/runtime-defaults');
 const {
   coinDirectionToCore,
-  coinMotionMetaCore
+  coinMotionMetaCore,
+  targetLaneAlignmentDirectionCore
 } = require('../../strategy/coin-motion');
 
 const BROWSER_RUNTIME_DEFAULTS = buildRuntimeDefaults({}, false);
@@ -51,6 +52,7 @@ function coinMotionCoreOptions(options = {}, extra = {}) {
     coinAxisApproachMinDistance: optionNumber(options, 'coinAxisApproachMinDistance', BROWSER_RUNTIME_DEFAULTS.coinAxisApproachMinDistance),
     coinAxisApproachRatio: optionNumber(options, 'coinAxisApproachRatio', BROWSER_RUNTIME_DEFAULTS.coinAxisApproachRatio),
     coinAxisApproachLaneTolerance: optionNumber(options, 'coinAxisApproachLaneTolerance', BROWSER_RUNTIME_DEFAULTS.coinAxisApproachLaneTolerance),
+    coinAlignNearAxisFirst: options.coinAlignNearAxisFirst !== false,
     coinPickupStopDistance: optionNumber(options, 'coinPickupStopDistance', BROWSER_RUNTIME_DEFAULTS.coinPickupStopDistance),
     coinPickupStopPulseMs: optionNumber(options, 'coinPickupStopPulseMs', BROWSER_RUNTIME_DEFAULTS.coinPickupStopPulseMs),
     coinPickupMicroDistance: optionNumber(options, 'coinPickupMicroDistance', BROWSER_RUNTIME_DEFAULTS.coinPickupMicroDistance),
@@ -153,6 +155,25 @@ function movementVectorToTarget(self, target, options = {}) {
     : generalDeadZone;
   if (!(distance > deadZone)) {
     return { ok: false, reason: 'target-reached', dx: 0, dy: 0, distance: Math.round(distance) };
+  }
+  const laneDirection = targetLaneAlignmentDirectionCore(rawDx, rawDy, distance, {
+    tolerance: optionNumber(options, 'axisAlignmentToleranceCm', BROWSER_RUNTIME_DEFAULTS.coinPrecisionTolerance),
+    axisAlignmentMinDistance: optionNumber(options, 'axisAlignmentMinDistanceCm', BROWSER_RUNTIME_DEFAULTS.coinAxisApproachMinDistance),
+    axisAlignmentLaneTolerance: optionNumber(options, 'axisAlignmentLaneToleranceCm', BROWSER_RUNTIME_DEFAULTS.coinAxisApproachLaneTolerance)
+  });
+  if (laneDirection) {
+    return {
+      ok: true,
+      reason: laneDirection.laneAlignment
+        ? 'align-target-' + laneDirection.laneAlignment + '-axis'
+        : 'follow-target-' + laneDirection.laneAligned + '-axis',
+      dx: laneDirection.dx,
+      dy: laneDirection.dy,
+      distance: Math.round(distance),
+      routeMode: laneDirection.laneAlignment
+        ? 'lane-align-' + laneDirection.laneAlignment
+        : 'lane-follow-' + laneDirection.laneAligned
+    };
   }
   return {
     ok: true,
@@ -274,6 +295,10 @@ function createInitialActionState() {
     lastShootAck: null,
     lastSettlement: null,
     coinApproachLock: null,
+    coinFeedbackGate: null,
+    coinFeedbackWaitCount: 0,
+    coinFeedbackAckCount: 0,
+    coinFeedbackTimeoutCount: 0,
     velocityPulseToken: 0,
     velocityStopTimer: null,
     velocityRepeatToken: 0,
@@ -367,6 +392,39 @@ function createBrowserlessActionAdapter(options = {}) {
     state.velocityRepeatUntilMs = 0;
     state.velocityStopRepeatsLeft = 0;
     clearVelocityRepeatTimer();
+  }
+
+  function coinTargetKey(target) {
+    const id = target?.drop_id ?? target?.dropId ?? target?.id;
+    if (id !== null && id !== undefined && id !== '') return String(id);
+    const x = numberOrNull(target?.x);
+    const y = numberOrNull(target?.y);
+    return x === null || y === null ? '' : x + ':' + y;
+  }
+
+  function clearCoinFeedbackGate() {
+    state.coinFeedbackGate = null;
+  }
+
+  function coinFeedbackPending(self, target, atMs = now()) {
+    const gate = state.coinFeedbackGate;
+    if (!gate || gate.targetKey !== coinTargetKey(target)) return false;
+    const x = numberOrNull(self?.x);
+    const y = numberOrNull(self?.y);
+    const changed = x !== null && y !== null
+      && Math.hypot(x - gate.startX, y - gate.startY) >= gate.minPositionDeltaCm;
+    if (changed) {
+      state.coinFeedbackAckCount += 1;
+      clearCoinFeedbackGate();
+      return false;
+    }
+    if (atMs >= gate.expiresAtMs) {
+      state.coinFeedbackTimeoutCount += 1;
+      clearCoinFeedbackGate();
+      return false;
+    }
+    state.coinFeedbackWaitCount += 1;
+    return true;
   }
 
   function cancelShootRepeat(reason = '', options = {}) {
@@ -535,7 +593,7 @@ function createBrowserlessActionAdapter(options = {}) {
     return delayMs;
   }
 
-  function sendVelocity(dx, dy, reason, target = null) {
+  function sendVelocity(dx, dy, reason, target = null, sendOptions = {}) {
     const atMs = now();
     dx = quantizeVelocity(dx);
     dy = quantizeVelocity(dy);
@@ -568,7 +626,9 @@ function createBrowserlessActionAdapter(options = {}) {
         transportClosed: /websocket is not open|not open|closed/i.test(message)
       };
     }
-    const repeat = scheduleVelocityRepeat(dx, dy);
+    const repeat = sendOptions.suppressRepeat
+      ? (cancelVelocityRepeat(), null)
+      : scheduleVelocityRepeat(dx, dy);
     const command = {
       id: nextCommandId,
       type: 'velocity',
@@ -684,6 +744,7 @@ function createBrowserlessActionAdapter(options = {}) {
     const self = stateSnapshot?.realtime?.self || decision?.input?.self || null;
     const profitAction = profitActionFromDecision(decision);
     if (!profitAction) {
+      clearCoinFeedbackGate();
       const diagnostics = unsupportedActionDiagnostics(decision);
       const stopped = stop('unsupported-action');
       return {
@@ -697,9 +758,20 @@ function createBrowserlessActionAdapter(options = {}) {
       };
     }
     if (profitAction.type === 'enemy') {
+      clearCoinFeedbackGate();
       return applyProfitEnemyDecision(self, profitAction.target, decision);
     }
     const target = profitAction.target;
+    if (coinFeedbackPending(self, target)) {
+      return {
+        ok: true,
+        kind: 'feedback-wait',
+        reason: 'coin-position-feedback-wait',
+        skipped: true,
+        target,
+        feedbackGate: { ...state.coinFeedbackGate }
+      };
+    }
     const vector = coinMotionVectorToTarget(self, target, options, state, now());
     if (!vector.ok) {
       const stopped = stop(vector.reason);
@@ -713,7 +785,33 @@ function createBrowserlessActionAdapter(options = {}) {
         ...transportFailure(stopped)
       };
     }
-    const sent = sendVelocity(vector.dx, vector.dy, vector.reason, target);
+    const feedbackGuided = Number(vector.distance) <= optionNumber(
+      options,
+      'coinFeedbackGuidedDistanceCm',
+      BROWSER_RUNTIME_DEFAULTS.coinPickupSweepDistance
+    );
+    const sent = sendVelocity(vector.dx, vector.dy, vector.reason, target, { suppressRepeat: feedbackGuided });
+    if (feedbackGuided && sent.ok && !sent.skipped && sent.command) {
+      const startX = numberOrNull(self?.x);
+      const startY = numberOrNull(self?.y);
+      if (startX !== null && startY !== null) {
+        const feedbackTimeoutMs = Math.max(250, optionNumber(
+          options,
+          'coinFeedbackTimeoutMs',
+          Math.max(1500, decisionIntervalMs * 2)
+        ));
+        state.coinFeedbackGate = {
+          targetKey: coinTargetKey(target),
+          commandId: sent.command.id,
+          startX,
+          startY,
+          startTick: numberOrNull(stateSnapshot?.realtime?.tick),
+          sentAtMs: now(),
+          expiresAtMs: now() + feedbackTimeoutMs,
+          minPositionDeltaCm: Math.max(1, optionNumber(options, 'coinFeedbackMinPositionDeltaCm', 1))
+        };
+      }
+    }
     const opportunisticShot = opportunisticShotFromDecision(decision);
     const shoot = opportunisticShot
       ? sendOpportunisticShot(self, opportunisticShot, decision)
@@ -736,6 +834,7 @@ function createBrowserlessActionAdapter(options = {}) {
       target: opportunisticShot || target,
       skipped: Boolean(sent.skipped),
       precisionPulseMs,
+      feedbackGuided,
       ...transportFailure(sent, shoot)
     };
   }
@@ -1108,7 +1207,11 @@ function createBrowserlessActionAdapter(options = {}) {
       lastCommand: summarizeCommand(state.lastCommand),
       lastShootCommand: summarizeCommand(state.lastShootCommand),
       lastShootAck: state.lastShootAck,
-      lastSettlement: state.lastSettlement
+      lastSettlement: state.lastSettlement,
+      coinFeedbackGate: state.coinFeedbackGate ? { ...state.coinFeedbackGate } : null,
+      coinFeedbackWaitCount: state.coinFeedbackWaitCount,
+      coinFeedbackAckCount: state.coinFeedbackAckCount,
+      coinFeedbackTimeoutCount: state.coinFeedbackTimeoutCount
     };
   }
 

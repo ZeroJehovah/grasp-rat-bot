@@ -707,6 +707,26 @@ function runStrategyModuleSelfTests() {
       && axisCoinMotion.lockUpdate?.lock?.id === 'axis'
   });
 
+  const laneAlignCoinMotion = coinDirectionToCore(
+    { x: 0, y: 0 },
+    { drop_id: 'lane-align', x: 500, y: 15000 },
+    { ...coinMotionOptions, coinAlignNearAxisFirst: true }
+  );
+  const laneFollowCoinMotion = coinDirectionToCore(
+    { x: 500, y: 0 },
+    { drop_id: 'lane-align', x: 500, y: 15000 },
+    { ...coinMotionOptions, coinAlignNearAxisFirst: true }
+  );
+  results.push({
+    name: 'coin-motion-aligns-near-axis-before-long-lane',
+    passed: laneAlignCoinMotion.direction.dx === 1
+      && laneAlignCoinMotion.direction.dy === 0
+      && laneAlignCoinMotion.direction.laneAlignment === 'x'
+      && laneFollowCoinMotion.direction.dx === 0
+      && laneFollowCoinMotion.direction.dy === 1
+      && laneFollowCoinMotion.direction.laneAligned === 'x'
+  });
+
   const nearCoinMotion = coinDirectionToCore(
     { x: 0, y: 0 },
     { drop_id: 'near-axis', x: 4800, y: 500 },

@@ -9,6 +9,30 @@ function coinMotionTolerance(options = {}) {
   return coinMotionNumber(options.tolerance, coinMotionNumber(options.coinPrecisionTolerance, 250));
 }
 
+function targetLaneAlignmentDirectionCore(dxRaw, dyRaw, distance, options = {}) {
+  const tolerance = Math.max(0, coinMotionNumber(options.axisAlignmentTolerance, coinMotionTolerance(options)));
+  const minDistance = Math.max(0, coinMotionNumber(
+    options.axisAlignmentMinDistance,
+    coinMotionNumber(options.coinAxisApproachMinDistance, options.nearCoinStuckDistance || 0)
+  ));
+  if (!(Number(distance) > minDistance)) return null;
+  const laneTolerance = Math.max(tolerance, coinMotionNumber(
+    options.axisAlignmentLaneTolerance,
+    options.coinAxisApproachLaneTolerance || 0
+  ));
+  const absX = Math.abs(dxRaw);
+  const absY = Math.abs(dyRaw);
+  if (absX <= laneTolerance && absY > laneTolerance) {
+    if (absX > tolerance) return { dx: Math.sign(dxRaw), dy: 0, distance, laneAlignment: 'x' };
+    return { dx: 0, dy: Math.sign(dyRaw), distance, laneAligned: 'x' };
+  }
+  if (absY <= laneTolerance && absX > laneTolerance) {
+    if (absY > tolerance) return { dx: 0, dy: Math.sign(dyRaw), distance, laneAlignment: 'y' };
+    return { dx: Math.sign(dxRaw), dy: 0, distance, laneAligned: 'y' };
+  }
+  return null;
+}
+
 function coinAxisApproachDirectionCore(dxRaw, dyRaw, distance, options = {}, lock = null) {
   const tolerance = coinMotionTolerance(options);
   const absX = Math.abs(dxRaw);
@@ -144,6 +168,12 @@ function coinDirectionToCore(self, target, options = {}) {
   if (distance <= tolerance) {
     return withLockUpdate({ dx: 0, dy: 0, distance }, clearLock(true));
   }
+  if (options.coinAlignNearAxisFirst) {
+    const laneAlignment = targetLaneAlignmentDirectionCore(dxRaw, dyRaw, distance, options);
+    if (laneAlignment) {
+      return withLockUpdate(laneAlignment, setLock(laneAlignment, options.coinApproachLockMs));
+    }
+  }
   const axisApproach = coinAxisApproachDirectionCore(dxRaw, dyRaw, distance, options, sameLock ? lock : null);
   if (axisApproach) {
     return withLockUpdate({ ...axisApproach, locked: Boolean(sameLock) }, setLock(axisApproach, options.coinApproachLockMs));
@@ -181,6 +211,8 @@ function coinMotionMetaCore(dir) {
   if (dir?.pickupMicro) meta.pickupMode = dir.crossSweep ? 'micro-cross-sweep' : 'micro';
   else if (dir?.pickupFine) meta.pickupMode = 'fine';
   else if (dir?.pickupSweep) meta.pickupMode = 'sweep';
+  else if (dir?.laneAlignment) meta.routeMode = 'lane-align-' + dir.laneAlignment;
+  else if (dir?.laneAligned) meta.routeMode = 'lane-follow-' + dir.laneAligned;
   else if (dir?.axisApproach) meta.routeMode = 'axis-approach-' + dir.axisApproach;
   if (dir?.locked) meta.motionLocked = true;
   if (dir?.pushThrough) meta.pushThrough = true;
@@ -191,6 +223,7 @@ function coinMotionMetaCore(dir) {
 module.exports = {
   coinMotionNumber,
   coinMotionTolerance,
+  targetLaneAlignmentDirectionCore,
   coinAxisApproachDirectionCore,
   coinPickupPrecisionPulseMsCore,
   coinAxisLockShouldHoldCore,
