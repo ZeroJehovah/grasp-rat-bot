@@ -256,6 +256,7 @@ function summarizeCombatTarget(target) {
     vx: numberOrNull(target.vx),
     vy: numberOrNull(target.vy),
     hp: numberOrNull(target.hp),
+    maxHp: numberOrNull(target.max_hp ?? target.maxHp),
     drop: entityDropValue(target),
     stamina5s: numberOrNull(target.stamina_5s_remaining_milli ?? target.stamina5sRemainingMilli),
     stamina5sLimit: numberOrNull(target.stamina_5s_limit_milli ?? target.stamina5sLimitMilli),
@@ -617,6 +618,12 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     reason: liveCombatEnabled ? 'combat-live-realtime' : (options.controlMode === 'combat-dry-run' ? 'combat-dry-run-realtime' : 'realtime-visible-threat')
   });
   const combatTargetState = stateful?.combatTarget || null;
+  const combatStartedAtMs = target && Number.isFinite(Number(combatTargetState?.firstSeenAt || combatTargetState?.at))
+    ? Number(combatTargetState.firstSeenAt || combatTargetState.at)
+    : null;
+  const combatDurationMs = combatStartedAtMs === null
+    ? null
+    : Math.max(0, (Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now()) - combatStartedAtMs);
   const aim = estimateAim(self, target, {
     ...options,
     combatTargetState
@@ -662,6 +669,8 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     liveEnabled: liveCombatEnabled,
     authority: 'realtime',
     tick: realtime.tick ?? null,
+    startedAt: combatStartedAtMs === null ? '' : new Date(combatStartedAtMs).toISOString(),
+    durationMs: combatDurationMs === null ? null : Math.round(combatDurationMs),
     self: summarizeCombatTarget(self),
     target: summarizeCombatTarget(target),
     candidates: candidates.slice(0, 5).map(summarizeCombatTarget),

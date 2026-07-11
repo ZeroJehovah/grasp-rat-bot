@@ -9445,6 +9445,39 @@ async function runSelfTest() {
       want: '8|engaged|500|8|1000'
     },
     {
+      name: 'browserless combat summary exposes stable battle start time',
+      got: (() => {
+        const stateful = {
+          combatTarget: { id: 8, at: 1000, firstSeenAt: 1000, lastInRangeAt: 1000, hp: 80, reason: 'combat-live-realtime' }
+        };
+        const combat = buildBrowserlessCombatDryRun({
+          userId: 7,
+          realtime: {
+            tick: 62,
+            self: { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 95, max_hp: 100 },
+            entities: [
+              { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 95, max_hp: 100 },
+              { entity_id: 2, user_id: 8, name: 'enemy', x: 1000, y: 0, hp: 80, max_hp: 120, current_join_mode: 'Active', firing: true, drop: 5 }
+            ],
+            bullets: []
+          }
+        }, {
+          nowMs: 1500,
+          decisionState: stateful,
+          targetStickMs: 7000,
+          combatEngageStickMs: 7000,
+          combatAttackRange: 11000
+        });
+        return [
+          combat.startedAt,
+          combat.durationMs,
+          combat.self.maxHp,
+          combat.target.maxHp
+        ].join('|');
+      })(),
+      want: '1970-01-01T00:00:01.000Z|500|100|120'
+    },
+    {
       name: 'browserless incoming shooter overrides engaged combat target',
       got: (() => {
         const stateful = {
@@ -14544,6 +14577,112 @@ async function runSelfTest() {
       want: 'false|next-login-point-pending-snapshot-safety|0|3|next-login-point-pending-snapshot-safety|true|safe|3||self-present-reentry|true|true|true'
     },
     {
+      name: 'browserless compact status exposes symmetric live battle details',
+      got: (() => {
+        const startedAt = '2026-07-12T01:13:00.000Z';
+        const combatState = {
+          session: { userId: 77, tokenPresent: true, authenticated: true },
+          runner: {
+            running: true,
+            currentAction: {
+              kind: 'combat-live',
+              reason: 'combat-live-realtime',
+              target: { userId: 88, name: 'enemy', hp: 73, distance: 5600 }
+            }
+          },
+          current: {
+            self: { userId: 77, name: 'self', hp: 86, max_hp: 100, drop: 21 },
+            stamina: {
+              stamina5sRemainingMilli: 6400,
+              stamina1hRemainingMilli: 700000,
+              stamina1dRemainingMilli: 17000000
+            },
+            decision: {
+              kind: 'combat-live',
+              band: 'combat',
+              reason: 'combat-live-realtime',
+              at: '2026-07-12T01:13:15.000Z',
+              target: { userId: 88, name: 'enemy', hp: 73, distance: 5600 }
+            },
+            combatSummary: {
+              startedAt,
+              durationMs: 15000,
+              self: {
+                userId: 77,
+                name: 'self',
+                hp: 86,
+                maxHp: 100,
+                drop: 21,
+                stamina5s: 6400,
+                stamina5sLimit: 10000,
+                stamina1h: 700000,
+                stamina1d: 17000000
+              },
+              target: {
+                userId: 88,
+                name: 'enemy',
+                hp: 73,
+                maxHp: 100,
+                drop: 40,
+                stamina5s: 3200,
+                stamina5sLimit: 10000,
+                stamina1h: 400000,
+                stamina1d: 16000000,
+                distance: 5600,
+                active: true,
+                moving: true,
+                firing: true
+              }
+            }
+          }
+        };
+        const compactCombat = buildCompactBrowserlessStatus(combatState, {});
+        const afkStartedAtMs = Date.parse('2026-07-12T01:14:00.000Z');
+        const compactAfk = buildCompactBrowserlessStatus({
+          ...combatState,
+          runner: {
+            ...combatState.runner,
+            currentAction: {
+              kind: 'attack',
+              reason: 'best-opportunity-afk-drop-target',
+              target: { userId: 99, name: 'afk-enemy', hp: 100, drop: 12, distance: 800, active: false }
+            }
+          },
+          current: {
+            ...combatState.current,
+            combatSummary: null,
+            decisionState: { combat: { target: { id: 99, firstSeenAt: afkStartedAtMs } } },
+            decision: {
+              kind: 'attack',
+              band: 'profit',
+              reason: 'best-opportunity-afk-drop-target',
+              at: '2026-07-12T01:14:01.000Z',
+              target: { userId: 99, name: 'afk-enemy', hp: 100, drop: 12, distance: 800, active: false }
+            }
+          }
+        }, {});
+        const compactOffline = buildCompactBrowserlessStatus({
+          ...combatState,
+          runner: { running: true, currentAction: { kind: 'loop-wait', reason: 'snapshot-safety-retry' } }
+        }, {});
+        return [
+          compactCombat.battle.active,
+          compactCombat.battle.startedAt,
+          compactCombat.battle.durationMs,
+          compactCombat.battle.distance,
+          compactCombat.battle.self.name,
+          compactCombat.battle.self.stamina1d,
+          compactCombat.battle.target.name,
+          compactCombat.battle.target.stamina5s,
+          compactCombat.battle.target.firing,
+          compactAfk.battle.targetAfk,
+          compactAfk.battle.startedAt,
+          compactOffline.battle === null
+        ].join('|');
+      })(),
+      want: 'true|2026-07-12T01:13:00.000Z|15000|5600|self|17000000|enemy|3200|true|true|2026-07-12T01:14:00.000Z|true'
+    },
+    {
       name: 'browserless compact status exposes session offline and today stats',
       got: withTempDirForTest(async dir => {
         const config = parseBrowserlessRunnerArgs(['--data-dir', dir], {});
@@ -15240,6 +15379,29 @@ async function runSelfTest() {
           panelScript.includes("const iconOrder = selected ? 1"),
           panelScript.includes("const fleeTarget = (actionKind === 'safety-exit' || actionKind === 'leave') && Boolean(status.action?.target);"),
           panelScript.includes("const targetType = fleeTarget ? 'flee' : (afkTarget ? 'afk' : 'combat');")
+        ].join('|');
+      })(),
+      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true'
+    },
+    {
+      name: 'browserless web panel renders live battle card and offline exit reason',
+      got: (() => {
+        const panelText = renderBrowserlessWebPanel();
+        const panelScript = panelText.match(/<script>([\s\S]*?)<\/script>/)?.[1] || '';
+        return [
+          /id="battlePanel" class="battle-panel" hidden/.test(panelText),
+          /<h2>战斗情况<\/h2>/.test(panelText),
+          /class="battle-fighters"/.test(panelText),
+          /id="battleSelfHpFill"/.test(panelText),
+          /id="battleTargetHpFill"/.test(panelText),
+          /function updateBattlePanel/.test(panelScript),
+          /function updateBattleDuration/.test(panelScript),
+          panelScript.includes("durationNode.dataset.battleStartedAt = battle.startedAt || ''"),
+          panelScript.includes("online ? '原因' : '上次退出原因'"),
+          panelScript.includes('offlineStats.lastExitReason || status.recentExit?.reason || currentReason'),
+          panelScript.includes("'combat-pressure-disadvantage-leave': '遭到持续火力压制，我方血量处于劣势，主动退出'"),
+          panelText.indexOf('id="actionDetails"') < panelText.indexOf('id="battlePanel"'),
+          panelText.indexOf('id="battlePanel"') < panelText.indexOf('class="stats-grid"')
         ].join('|');
       })(),
       want: 'true|true|true|true|true|true|true|true|true|true|true|true|true'

@@ -837,8 +837,12 @@ function compactTarget(value) {
     name: compactString(value.name || value.label, 80),
     authority: compactString(value.authority, 48),
     hp: compactNumber(value.hp),
+    maxHp: compactNumber(value.maxHp ?? value.max_hp),
     drop: compactNumber(value.drop),
     stamina5s: compactNumber(value.stamina5s ?? value.stamina5sRemainingMilli ?? value.stamina_5s_remaining_milli),
+    stamina5sLimit: compactNumber(value.stamina5sLimit ?? value.stamina5sLimitMilli ?? value.stamina_5s_limit_milli),
+    stamina1h: compactNumber(value.stamina1h ?? value.stamina1hRemainingMilli ?? value.stamina_1h_remaining_milli),
+    stamina1d: compactNumber(value.stamina1d ?? value.stamina1dRemainingMilli ?? value.stamina_1d_remaining_milli),
     staminaMetadataAuthority: compactString(value.staminaMetadataAuthority, 48),
     invulnerable: value.invulnerable === undefined ? null : Boolean(value.invulnerable),
     invulnerableRemainingMs: compactNumber(value.invulnerableRemainingMs ?? value.invulnerable_remaining_ms),
@@ -1064,6 +1068,8 @@ function compactCombat(combat) {
     liveEnabled: combat.liveEnabled === undefined ? null : Boolean(combat.liveEnabled),
     authority: compactString(combat.authority, 48),
     tick: compactNumber(combat.tick),
+    startedAt: compactString(combat.startedAt, 48),
+    durationMs: compactNumber(combat.durationMs),
     self: compactTarget(combat.self),
     target: compactTarget(combat.target),
     candidateCount: candidates.length,
@@ -1091,6 +1097,62 @@ function compactCombat(combat) {
       : null,
     dataGaps: dataGaps.slice(0, 5).map(item => compactString(item, 80)),
     dataGapCount: dataGaps.length
+  };
+}
+
+function compactBattleActor(value, fallback = {}) {
+  const source = value && typeof value === 'object' ? value : {};
+  const compact = compactTarget({ ...fallback, ...source }) || {};
+  return {
+    userId: compact.userId ?? compactNumber(fallback.userId ?? fallback.user_id),
+    name: compact.name || compactString(fallback.name || fallback.label, 80),
+    hp: compact.hp ?? compactNumber(fallback.hp),
+    maxHp: compact.maxHp ?? compactNumber(fallback.maxHp ?? fallback.max_hp),
+    drop: compact.drop ?? compactNumber(fallback.drop ?? fallback.Drop),
+    stamina5s: compact.stamina5s ?? compactNumber(fallback.stamina5s ?? fallback.stamina5sRemainingMilli),
+    stamina5sLimit: compact.stamina5sLimit ?? compactNumber(fallback.stamina5sLimit ?? fallback.stamina5sLimitMilli),
+    stamina1h: compact.stamina1h ?? compactNumber(fallback.stamina1h ?? fallback.stamina1hRemainingMilli),
+    stamina1d: compact.stamina1d ?? compactNumber(fallback.stamina1d ?? fallback.stamina1dRemainingMilli),
+    active: compact.active ?? (fallback.active === undefined ? null : Boolean(fallback.active)),
+    moving: compact.moving ?? (fallback.moving === undefined ? null : Boolean(fallback.moving)),
+    firing: compact.firing ?? (fallback.firing === undefined ? null : Boolean(fallback.firing))
+  };
+}
+
+function compactBattleStatus(normalized, game, action, decision, combat) {
+  if (!game?.inGame) return null;
+  const kind = String(action?.kind || decision?.kind || decision?.actionKind || '');
+  const band = String(decision?.band || '');
+  const combatLike = kind === 'attack' || kind === 'combat-live' || band === 'combat';
+  const target = combat?.target || action?.target || decision?.target || null;
+  if (!combatLike || !target || target.type === 'coin') return null;
+
+  const current = normalized?.current || {};
+  const rawCombat = current.combatSummary || current.decision?.combat || {};
+  const stateCombatTarget = current.decisionState?.combat?.target || null;
+  const stateStartedAtMs = compactNumber(stateCombatTarget?.firstSeenAt ?? stateCombatTarget?.at);
+  const startedAt = compactString(
+    combat?.startedAt
+      || rawCombat.startedAt
+      || (stateStartedAtMs !== null ? isoFromMs(stateStartedAtMs) : '')
+      || decision?.at,
+    48
+  );
+  const selfFallback = {
+    ...(current.self && typeof current.self === 'object' ? current.self : {}),
+    stamina5s: current.stamina?.stamina5sRemainingMilli ?? current.stamina?.stamina5s,
+    stamina1h: current.stamina?.stamina1hRemainingMilli ?? current.stamina?.stamina1h,
+    stamina1d: current.stamina?.stamina1dRemainingMilli ?? current.stamina?.stamina1d
+  };
+  return {
+    active: true,
+    kind: compactString(kind, 48),
+    startedAt,
+    durationMs: compactNumber(combat?.durationMs ?? rawCombat.durationMs),
+    distance: compactNumber(target.distance),
+    self: compactBattleActor(combat?.self, selfFallback),
+    target: compactBattleActor(target),
+    targetAfk: kind === 'attack' && target.active !== true
   };
 }
 
@@ -1321,6 +1383,8 @@ function buildCompactBrowserlessStatus(state, config = {}) {
   const sourceIp = normalized.network.sourceIp || '';
   const sourceIps = Array.isArray(normalized.network.sourceIps) ? normalized.network.sourceIps : [];
   const sourceIpIndex = sourceIp ? sourceIps.findIndex(item => item === sourceIp) + 1 : 0;
+  const decision = compactDecision(current.decision);
+  const combat = compactCombat(current.combatSummary || current.decision?.combat);
   const compactState = {
     schemaVersion: normalized.schemaVersion,
     compact: true,
@@ -1346,10 +1410,11 @@ function buildCompactBrowserlessStatus(state, config = {}) {
     self: compactSelf(current.self),
     stamina: compactStamina(current.stamina, current.self),
     lastKnown,
-    decision: compactDecision(current.decision),
+    decision,
     action,
     profit: compactProfit(current.profit || current.decision?.profit),
-    combat: compactCombat(current.combatSummary || current.decision?.combat),
+    combat,
+    battle: compactBattleStatus(normalized, game, action, decision, combat),
     nearby: compactNearby(current.decision?.input?.nearby),
     stats: compactBrowserlessStats(normalized, game, action, config, lastKnown),
     loginPointSafety: {

@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.12.2';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.12.3';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function renderBrowserlessWebPanel() {
@@ -32,6 +32,26 @@ function renderBrowserlessWebPanel() {
     .layout{display:grid;grid-template-columns:minmax(240px,1fr) minmax(0,2fr);gap:10px;align-items:start}
     .stack{display:flex;flex-direction:column;gap:10px;min-width:0}
     .stats-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;align-items:start}
+    .battle-panel[hidden]{display:none}
+    .battle-meta{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:10px;padding:7px 9px;border:1px solid var(--line);border-radius:7px;background:var(--panel2);text-align:center;font-variant-numeric:tabular-nums}
+    .battle-meta span{min-width:0;color:var(--muted)}
+    .battle-meta strong{display:block;margin-top:2px;color:var(--text);font-size:14px;font-weight:700;overflow-wrap:anywhere}
+    .battle-fighters{display:grid;grid-template-columns:minmax(0,1fr) minmax(54px,.18fr) minmax(0,1fr);gap:10px;align-items:stretch}
+    .fighter{min-width:0;border:1px solid var(--line);border-radius:8px;background:var(--panel2);padding:9px}
+    .fighter-head{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:7px}
+    .fighter-side{color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.04em}
+    .fighter-name{min-width:0;font-size:15px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .fighter.enemy .fighter-head{flex-direction:row-reverse}
+    .fighter.enemy dl{direction:rtl}
+    .fighter.enemy dt,.fighter.enemy dd{direction:ltr}
+    .fighter.enemy dt{text-align:right}.fighter.enemy dd{text-align:left}
+    .fighter-vs{display:flex;align-items:center;justify-content:center;color:var(--red);font-size:16px;font-weight:800;letter-spacing:.08em}
+    .hp-label{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:4px;color:var(--muted);font-variant-numeric:tabular-nums}
+    .fighter.enemy .hp-label{flex-direction:row-reverse}
+    .hp-track{height:9px;margin-bottom:8px;overflow:hidden;border-radius:999px;background:#2a3036;box-shadow:inset 0 0 0 1px rgba(255,255,255,.05)}
+    .hp-fill{height:100%;width:0;border-radius:inherit;background:var(--green);transition:width .25s ease,background-color .25s ease}
+    .fighter.enemy .hp-fill{margin-left:auto}
+    .hp-fill.warn{background:var(--amber)}.hp-fill.bad{background:var(--red)}.hp-fill.ok{background:var(--green)}
     section{border:1px solid var(--line);background:var(--panel);border-radius:8px;padding:10px;min-width:0}
     h2{font-size:11px;line-height:1.2;margin:0 0 8px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.05em}
     h3{font-size:11px;line-height:1.2;margin:0 0 6px;color:var(--muted);font-weight:700;letter-spacing:0}
@@ -74,7 +94,7 @@ function renderBrowserlessWebPanel() {
     .target-icon{display:block;width:16px;height:16px;flex:0 0 16px;margin-right:5px;color:var(--target-color);fill:currentColor}
     @media (max-width:760px){.layout{grid-template-columns:1fr}.stats-grid{grid-template-columns:1fr}}
     @media (max-width:600px){.nearby-combined{grid-template-columns:1fr}.nearby-players-pane{border-left:0;border-top:1px solid var(--line);padding-left:0;padding-top:10px}}
-    @media (max-width:520px){.player-row{grid-template-columns:minmax(112px,2fr) minmax(34px,.5fr) minmax(38px,.55fr) minmax(36px,.5fr) minmax(44px,.6fr);gap:4px}}
+    @media (max-width:520px){.player-row{grid-template-columns:minmax(112px,2fr) minmax(34px,.5fr) minmax(38px,.55fr) minmax(36px,.5fr) minmax(44px,.6fr);gap:4px}.battle-fighters{grid-template-columns:minmax(0,1fr) 32px minmax(0,1fr);gap:5px}.fighter{padding:7px}.fighter-head{display:block}.fighter.enemy .fighter-head{display:block;text-align:right}.battle-meta{gap:4px;padding:6px 4px}.battle-meta strong{font-size:12px}}
     @media (max-width:520px){main{padding:10px}header{align-items:flex-start;flex-direction:column}}
   </style>
 </head>
@@ -127,6 +147,29 @@ function renderBrowserlessWebPanel() {
         <section>
           <h2>当前动作</h2>
           <dl id="actionDetails"></dl>
+        </section>
+        <section id="battlePanel" class="battle-panel" hidden>
+          <h2>战斗情况</h2>
+          <div class="battle-meta">
+            <span>双方距离<strong id="battleDistance">--</strong></span>
+            <span>开始时间<strong id="battleStartedAt">--</strong></span>
+            <span>持续时间<strong id="battleDuration">--</strong></span>
+          </div>
+          <div class="battle-fighters">
+            <article class="fighter self">
+              <div class="fighter-head"><span class="fighter-side">我方</span><span id="battleSelfName" class="fighter-name">--</span></div>
+              <div class="hp-label"><span>血量</span><strong id="battleSelfHp">--</strong></div>
+              <div class="hp-track"><div id="battleSelfHpFill" class="hp-fill"></div></div>
+              <dl id="battleSelfStats"></dl>
+            </article>
+            <div class="fighter-vs">VS</div>
+            <article class="fighter enemy">
+              <div class="fighter-head"><span class="fighter-side" id="battleTargetSide">敌方</span><span id="battleTargetName" class="fighter-name">--</span></div>
+              <div class="hp-label"><span>血量</span><strong id="battleTargetHp">--</strong></div>
+              <div class="hp-track"><div id="battleTargetHpFill" class="hp-fill"></div></div>
+              <dl id="battleTargetStats"></dl>
+            </article>
+          </div>
         </section>
         <div class="stats-grid">
           <section>
@@ -425,10 +468,13 @@ function renderBrowserlessWebPanel() {
       'combat-attack': '正在打架',
       'combat-spacing': '保持距离并开火',
       'combat-tangent-dodge': '边躲边打',
-      'combat-hp-disadvantage-leave': '血量劣势，退出',
-      'combat-critical-hp-leave': '血量太低，退出',
-      'injury-leave': '受伤后退出',
-      'pursuit-leave': '被持续追击，退出',
+      'combat-pressure-disadvantage-leave': '遭到持续火力压制，我方血量处于劣势，主动退出',
+      'combat-hp-disadvantage-leave': '与敌人交战时血量差距过大，主动退出',
+      'combat-low-hp-disadvantage-leave': '战斗中我方低血且落后，主动退出',
+      'combat-low-hp-no-damage-leave': '战斗中我方低血且久攻未造成伤害，主动退出',
+      'combat-critical-hp-leave': '战斗中我方血量进入危险线，紧急退出',
+      'injury-leave': '角色受伤后为避免继续掉血，主动退出',
+      'pursuit-leave': '被危险玩家持续追击，主动退出',
       'profit-live-snapshot-active-threat': '附近玩家有活动威胁证据，退出',
       'stamina-budget-coin-leave': '体力不足，退出等待恢复',
       'stamina-exhausted-leave': '体力耗尽，退出等待恢复',
@@ -1051,6 +1097,86 @@ function renderBrowserlessWebPanel() {
       renderNearbyCoins(status);
       renderNearbyPlayers(status);
     }
+    function fighterStateText(actor) {
+      if (!actor) return '--';
+      return joinNonBlank([
+        actor.active === null || actor.active === undefined ? '--' : (actor.active ? '活动' : '静止'),
+        actor.moving ? '移动中' : '--',
+        actor.firing ? '开火中' : '--'
+      ]);
+    }
+    function battleStaminaPair(remainingMs, limitMs, defaultSeconds) {
+      const limit = number(limitMs);
+      const seconds = limit === null ? defaultSeconds : Math.max(0, Math.round(limit / 1000));
+      return staminaPair(remainingMs, seconds);
+    }
+    function syncHpMeter(prefix, actor) {
+      const hp = number(actor?.hp);
+      const maxHpValue = number(actor?.maxHp);
+      const maxHp = maxHpValue !== null && maxHpValue > 0 ? maxHpValue : 100;
+      const ratio = hp === null ? 0 : Math.max(0, Math.min(1, hp / maxHp));
+      setText(prefix + 'Hp', hp === null ? '--' : integer(hp) + '/' + integer(maxHp));
+      const fill = document.getElementById(prefix + 'HpFill');
+      if (!fill) return;
+      const width = (ratio * 100).toFixed(1) + '%';
+      if (fill.style.width !== width) fill.style.width = width;
+      const tone = hpAttrs(hp).className;
+      const className = 'hp-fill ' + tone;
+      if (fill.className !== className) fill.className = className;
+    }
+    function updateBattleDuration() {
+      const node = document.getElementById('battleDuration');
+      const panel = document.getElementById('battlePanel');
+      if (!node || !panel || panel.hidden) return;
+      const startedAt = node.dataset.battleStartedAt || '';
+      const startedMs = Date.parse(startedAt);
+      if (Number.isFinite(startedMs)) {
+        setText('battleDuration', durationClock(Date.now() - startedMs));
+        return;
+      }
+      setText('battleDuration', durationClock(node.dataset.battleDurationMs || 0));
+    }
+    function updateBattlePanel(status) {
+      const panel = document.getElementById('battlePanel');
+      if (!panel) return;
+      const battle = status.battle || null;
+      const show = Boolean(status.game?.inGame && battle?.active && battle.self && battle.target);
+      panel.hidden = !show;
+      const durationNode = document.getElementById('battleDuration');
+      if (!show) {
+        if (durationNode) {
+          delete durationNode.dataset.battleStartedAt;
+          delete durationNode.dataset.battleDurationMs;
+        }
+        return;
+      }
+      setText('battleDistance', distance(battle.distance));
+      setText('battleStartedAt', stamp(battle.startedAt));
+      setText('battleSelfName', battle.self.name || (battle.self.userId ? '#' + battle.self.userId : '我方'));
+      setText('battleTargetName', battle.target.name || (battle.target.userId ? '#' + battle.target.userId : '敌方'));
+      setText('battleTargetSide', battle.targetAfk ? '敌方 · AFK' : '敌方');
+      syncHpMeter('battleSelf', battle.self);
+      syncHpMeter('battleTarget', battle.target);
+      rows('battleSelfStats', [
+        ['体力5s', battleStaminaPair(battle.self.stamina5s, battle.self.stamina5sLimit, 10)],
+        ['体力1h', staminaPair(battle.self.stamina1h, 3000)],
+        ['体力1d', staminaPair(battle.self.stamina1d, 20000)],
+        ['Drop', integer(battle.self.drop), classAttrs('coin')],
+        ['状态', fighterStateText(battle.self)]
+      ]);
+      rows('battleTargetStats', [
+        ['体力5s', battleStaminaPair(battle.target.stamina5s, battle.target.stamina5sLimit, 10)],
+        ['体力1h', staminaPair(battle.target.stamina1h, 3000)],
+        ['体力1d', staminaPair(battle.target.stamina1d, 20000)],
+        ['Drop', integer(battle.target.drop), classAttrs('coin')],
+        ['状态', fighterStateText(battle.target)]
+      ]);
+      if (durationNode) {
+        durationNode.dataset.battleStartedAt = battle.startedAt || '';
+        durationNode.dataset.battleDurationMs = String(Math.max(0, Number(battle.durationMs || 0)));
+      }
+      updateBattleDuration();
+    }
     function targetStateText(target) {
       if (!target) return '--';
       return joinNonBlank([
@@ -1076,19 +1202,23 @@ function renderBrowserlessWebPanel() {
       const action = status.action || {};
       const decision = status.decision || {};
       const kind = action.kind || decision.kind || 'wait';
-      const reason = action.reason || decision.reason || status.recentExit?.reason || '';
+      const currentReason = action.reason || decision.reason || status.recentExit?.reason || '';
       const target = activeTarget(status);
       const currentSession = status.stats?.currentSession || {};
       const offlineStats = status.stats?.offline || {};
       const online = Boolean(status.game?.inGame && currentSession.online);
+      const reason = online
+        ? currentReason
+        : (offlineStats.lastExitReason || status.recentExit?.reason || currentReason);
       const rowsOut = [];
 
       addRow(rowsOut, '状态', actionText(status), true);
-      addRow(rowsOut, '原因', dangerousPlayerExitReasonText(status, reason), true);
+      addRow(rowsOut, online ? '原因' : '上次退出原因', dangerousPlayerExitReasonText(status, reason), true);
       const decisionText = joinNonBlank([kindText(kind), actionReasonText(status)]);
       const statusText = actionText(status);
       const reasonDisplay = dangerousPlayerExitReasonText(status, reason);
-      if (decisionText !== '--'
+      if (online
+        && decisionText !== '--'
         && decisionText !== statusText
         && decisionText !== reasonDisplay
         && decisionText !== joinNonBlank([statusText, reasonDisplay])) {
@@ -1221,6 +1351,7 @@ function renderBrowserlessWebPanel() {
       setText('sourceIp', s.network?.sourceIp);
 
       rows('actionDetails', actionDetailRows(s));
+      updateBattlePanel(s);
       updateNearbyPanels(s);
       const roleSelf = s.game?.inGame ? s.self : (s.lastKnown?.self || s.self);
       const roleStamina = s.game?.inGame ? s.stamina : (s.lastKnown?.stamina || s.stamina);
@@ -1266,6 +1397,7 @@ function renderBrowserlessWebPanel() {
       document.querySelectorAll('[data-countdown-at]').forEach(node => {
         setValueText(node, countdownUntil(node.dataset.countdownAt || ''));
       });
+      updateBattleDuration();
     }
     function isPageVisibleForRefresh() {
       if (document.visibilityState) return document.visibilityState === 'visible';
