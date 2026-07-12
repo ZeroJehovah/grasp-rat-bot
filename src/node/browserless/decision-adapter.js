@@ -1119,6 +1119,16 @@ function profitCoinEligible(coin, thresholdContext, options = {}, rewardOverride
   return profitRewardAndCostEligible(reward, opportunityCoinStaminaCost(coin, options), thresholdContext);
 }
 
+function profitOpportunityThresholdReward(item) {
+  if (String(item?.type || '') === 'enemy') return entityDropValue(item?.sourceTarget || item);
+  const sourceCoin = item?.sourceCoin || item || {};
+  if (sourceCoin.fieldMigration || String(item?.reason || '') === 'migrate-to-known-field') {
+    return Number(item?.amount ?? sourceCoin.amount);
+  }
+  return Number(item?.routeValue ?? sourceCoin.routeValue ?? sourceCoin.coinRoute?.value
+    ?? item?.fieldAmount ?? sourceCoin.fieldAmount ?? item?.amount ?? sourceCoin.amount);
+}
+
 function buildProfitSelectionInput(input, thresholdContext, options = {}) {
   if (!thresholdContext?.active) return input;
   return {
@@ -2107,10 +2117,13 @@ function annotateProfitActionThreshold(action, thresholdContext, options = {}) {
   const target = action.target || action.opportunisticShot || {};
   const enemyAction = action.kind === 'attack' || action.kind === 'seek-enemy' || action.kind === 'opportunistic-shot';
   const reward = Number.isFinite(Number(action.reward))
+    && action.reason !== 'migrate-to-known-field'
     ? Number(action.reward)
     : Number(enemyAction
       ? entityDropValue(target)
-      : (target.coinRoute?.value ?? target.fieldAmount ?? target.amount));
+      : (action.reason === 'migrate-to-known-field'
+          ? target.amount
+          : (target.coinRoute?.value ?? target.fieldAmount ?? target.amount)));
   const staminaCost = Number.isFinite(Number(action.staminaCost))
     ? Number(action.staminaCost)
     : (enemyAction ? opportunityEnemyStaminaCost(target, options) : opportunityCoinStaminaCost(target, options));
@@ -2354,7 +2367,7 @@ function fieldMigrationBlockedByNearbyCoin(self, coins, activeThreats, fieldCoin
   return true;
 }
 
-function pickFieldMigrationCoin(input, activeThreats, options = {}) {
+function pickFieldMigrationCoin(input, activeThreats, thresholdContext, options = {}) {
   const self = input?.self || null;
   if (!self) return null;
   const stamina5s = Number(input?.stamina?.stamina5sRemainingMilli ?? self.stamina_5s_remaining_milli ?? Infinity);
@@ -2371,7 +2384,8 @@ function pickFieldMigrationCoin(input, activeThreats, options = {}) {
       && coin.distance >= minDistance
       && coin.distance <= maxDistance)
     .filter(coin => coinSafeFromThreats(coin, activeThreats, options))
-    .filter(coin => opportunityStaminaAffordable(self, opportunityCoinStaminaCost(coin, options), options));
+    .filter(coin => opportunityStaminaAffordable(self, opportunityCoinStaminaCost(coin, options), options))
+    .filter(coin => profitCoinEligible(coin, thresholdContext, options));
   let best = null;
   for (const coin of candidates) {
     const members = candidates.filter(other => distanceBetween(coin, other) <= clusterRadius);
@@ -2494,7 +2508,7 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
   const globalCoinMaxDistance = Math.max(0, Number(options.globalCoinMaxDistance || DEFAULT_GLOBAL_COIN_MAX_DISTANCE));
   const opportunityThreats = input.avoidanceThreats || input.activeThreats || [];
   clearDangerousOpportunityState(stateful, input.nowMs);
-  const fieldMigrationCoin = pickFieldMigrationCoin(input, opportunityThreats, options);
+  const fieldMigrationCoin = pickFieldMigrationCoin(input, opportunityThreats, thresholdContext, options);
   const coinGroups = input.profitCoins.length
     ? [
         { coins: input.profitCoins, maxDistance: coinMaxDistance },
@@ -2568,10 +2582,7 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
     opportunityOptions
   ), options);
   const filtered = filterProfitCandidatesCore(rawOpportunities, thresholdContext, {
-    reward: item => item.type === 'enemy'
-      ? entityDropValue(item.sourceTarget || item)
-      : Number(item.routeValue ?? item.sourceCoin?.routeValue ?? item.sourceCoin?.coinRoute?.value
-        ?? item.fieldAmount ?? item.sourceCoin?.fieldAmount ?? item.amount ?? item.sourceCoin?.amount),
+    reward: profitOpportunityThresholdReward,
     staminaCost: item => item.staminaCost,
     summaryLimit: 12
   });
@@ -2584,7 +2595,7 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
   }));
   const storedCurrent = stateful.currentOpportunity || null;
   const storedCurrentEligible = storedCurrent && profitTargetEligibleCore(
-    storedCurrent.reward,
+    profitOpportunityThresholdReward(storedCurrent),
     storedCurrent.staminaCost,
     thresholdContext.threshold
   );

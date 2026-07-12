@@ -7026,6 +7026,125 @@ async function runSelfTest() {
       want: 'best-opportunity-coin-route|3|16000|3|2'
     },
     {
+      name: 'browserless dynamic profit threshold rejects low ROI field migration before AFK pursuit',
+      got: (() => {
+        const nowMs = Date.parse('2026-07-12T00:00:00.000Z');
+        const store = createBrowserlessStateStore({ userId: 7 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 57,
+          entities: [
+            { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+            fullStamina5s({ entity_id: 2, user_id: 8, name: 'far-afk', x: 48000, y: 0, hp: 100, max_hp: 100, current_join_mode: 'Passive', drop: 12 })
+          ],
+          bullets: [],
+          coin_drops: [
+            { drop_id: 'field-a', amount: 1, x: 22000, y: 0 },
+            { drop_id: 'field-b', amount: 1, x: 26000, y: 1000 },
+            { drop_id: 'field-c', amount: 1, x: 30000, y: -1000 },
+            { drop_id: 'field-d', amount: 1, x: 34000, y: 1000 },
+            { drop_id: 'field-e', amount: 1, x: 38000, y: -1000 },
+            { drop_id: 'field-f', amount: 1, x: 40000, y: 0 }
+          ]
+        }, { receivedAtMs: nowMs });
+        store.ingestFrame({
+          type: 'snapshot',
+          tick: 58,
+          entities: [{ entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, stamina_1h_remaining_milli: 3000000, stamina_1d_remaining_milli: 20000000 }],
+          bullets: [],
+          coin_drops: [],
+          messages: []
+        }, { receivedAtMs: nowMs + 10 });
+        const state = store.getState(nowMs + 20);
+        const options = {
+          nowMs,
+          controlMode: 'profit-live',
+          coinRouteMaxDistance: 0,
+          fieldMigrationMinDistance: 22000,
+          fieldMigrationMaxDistance: 45000,
+          fieldMigrationClusterRadius: 18000,
+          fieldMigrationMinCoins: 3
+        };
+        const active = buildBrowserlessDecision(state, {}, { ...options, dynamicProfitThresholdEnabled: true });
+        const disabled = buildBrowserlessDecision(state, {}, { ...options, dynamicProfitThresholdEnabled: false });
+        return [
+          active.action.kind,
+          active.action.target?.userId,
+          active.profit.candidates.some(item => item.reason === 'migrate-to-known-field'),
+          disabled.reason,
+          disabled.action.target?.amount,
+          disabled.action.target?.distance > 20000
+        ].join('|');
+      })(),
+      want: 'seek-enemy|8|false|visible-coin|1|true'
+    },
+    {
+      name: 'browserless dynamic profit threshold clears held aggregate field migration',
+      got: (() => {
+        const nowMs = Date.parse('2026-07-12T00:00:00.000Z');
+        const stateful = {
+          currentOpportunity: {
+            key: 'coin:field-a',
+            type: 'coin',
+            id: 'field-a',
+            reason: 'migrate-to-known-field',
+            amount: 1,
+            reward: 6,
+            staminaCost: 22000,
+            x: 22000,
+            y: 0,
+            until: nowMs + 5000,
+            profitThresholdEligible: true
+          },
+          opportunityChoice: {
+            key: 'coin:field-a',
+            type: 'coin',
+            id: 'field-a',
+            reason: 'migrate-to-known-field',
+            amount: 1,
+            reward: 6,
+            staminaCost: 22000,
+            x: 22000,
+            y: 0,
+            until: nowMs + 5000,
+            profitThresholdEligible: true
+          }
+        };
+        const store = createBrowserlessStateStore({ userId: 7 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 57,
+          entities: [
+            { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+            fullStamina5s({ entity_id: 2, user_id: 8, name: 'far-afk', x: 48000, y: 0, hp: 100, max_hp: 100, current_join_mode: 'Passive', drop: 12 })
+          ],
+          bullets: [],
+          coin_drops: [{ drop_id: 'field-a', amount: 1, x: 22000, y: 0 }]
+        }, { receivedAtMs: nowMs });
+        store.ingestFrame({
+          type: 'snapshot',
+          tick: 58,
+          entities: [{ entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, stamina_1h_remaining_milli: 3000000, stamina_1d_remaining_milli: 20000000 }],
+          bullets: [],
+          coin_drops: [],
+          messages: []
+        }, { receivedAtMs: nowMs + 10 });
+        const decision = buildBrowserlessDecision(store.getState(nowMs + 20), stateful, {
+          nowMs,
+          controlMode: 'profit-live',
+          coinRouteMaxDistance: 0,
+          dynamicProfitThresholdEnabled: true
+        });
+        return [
+          decision.action.kind,
+          decision.action.target?.userId,
+          decision.stateful.opportunityChoice?.type,
+          decision.stateful.opportunityChoice?.id
+        ].join('|');
+      })(),
+      want: 'seek-enemy|8|enemy|8'
+    },
+    {
       name: 'browserless dynamic profit threshold blocks new low ROI AFK pursuit',
       got: (() => {
         const nowMs = Date.parse('2026-07-12T00:00:00.000Z');
