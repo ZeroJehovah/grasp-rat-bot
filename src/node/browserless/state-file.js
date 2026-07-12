@@ -1044,10 +1044,14 @@ function compactOfflineBlocker(normalized, lastKnown, options = {}, nowMs = Date
       || ''
   );
   const stamina = lastKnown?.stamina || compactStamina(normalized?.current?.stamina, normalized?.current?.self);
+  const lastKnownAtMs = parseTimeMs(lastKnown?.at);
+  const currentDayStartMs = browserlessStatsDayStartMs(browserlessStatsDayKey(nowMs));
+  const staminaIsFromCurrentDay = !lastKnownAtMs || lastKnownAtMs >= currentDayStartMs;
   const thresholdMs = Math.max(0, Number(options.staminaExhaustedBelowMs ?? DEFAULT_STAMINA_EXHAUSTED_THRESHOLD_MS));
   const exhausted = [];
-  if (stamina.remaining1h !== null && stamina.remaining1h < thresholdMs) exhausted.push('1h');
-  if (stamina.remaining1d !== null && stamina.remaining1d < thresholdMs) exhausted.push('1d');
+  if (staminaIsFromCurrentDay && stamina.remaining1h !== null && stamina.remaining1h < thresholdMs) exhausted.push('1h');
+  if (staminaIsFromCurrentDay && stamina.remaining1d !== null && stamina.remaining1d < thresholdMs) exhausted.push('1d');
+  if (!staminaIsFromCurrentDay) return null;
   if (!exhausted.length && !/stamina-exhausted-leave|体力耗尽/i.test(offlineReason)) return null;
   const resetGraceMs = Math.max(0, Number(options.staminaResetGraceMs ?? DEFAULT_STAMINA_RESET_GRACE_MS));
   const resetAt = exhausted.includes('1d') ? nextDailyStaminaResetAt(nowMs) : 0;

@@ -111,6 +111,26 @@ function nextDailyStaminaResetAt(t = Date.now()) {
   return Math.floor((Number(t) + UTC8_OFFSET_MS) / DAY_MS) * DAY_MS - UTC8_OFFSET_MS + DAY_MS;
 }
 
+function browserlessDayKey(t = Date.now()) {
+  return new Date(Number(t) + UTC8_OFFSET_MS).toISOString().slice(0, 10);
+}
+
+function isFirstBrowserlessLoginOfDay(state, nowMs = Date.now()) {
+  const stats = state?.stats || {};
+  const today = stats.today || {};
+  const session = stats.currentSession || {};
+  if (session.online) return false;
+  const day = browserlessDayKey(nowMs);
+  if (String(today.day || '') !== day) return true;
+  return Math.max(0, Number(today.sessionCount || 0)) <= 0;
+}
+
+function preLoginSafetyLeadMs(config = {}) {
+  const required = loginPointSafetyRequiredFromConfig(config);
+  const intervalMs = Math.max(0, Number(config.loginPointSafetyProbeIntervalMs || 0));
+  return Math.max(0, required - 1) * intervalMs;
+}
+
 function staminaExhaustedThresholdMs(config = {}) {
   return Math.max(0, Number(
     config.staminaExhaustedBelowMs
@@ -597,6 +617,7 @@ async function runBrowserlessRunner(config, deps = {}) {
     }
   };
 
+  let preparedSnapshotSafety = null;
   const waitForLoopPlan = async (loopPlan, resultForStop = null) => {
     if (!loopPlan.continue) {
       if (!config.once) {
@@ -631,13 +652,6 @@ async function runBrowserlessRunner(config, deps = {}) {
       };
     }
 
-    const nextRunAtMs = now() + loopPlan.delayMs;
-    const nextRunAt = new Date(nextRunAtMs).toISOString();
-    const waitDetail = {
-      ...loopPlan,
-      nextRunAt,
-      supervisorErrors: supervisorErrors.slice(-5)
-    };
     const currentBeforeWait = readBrowserlessStateFile(stateFile);
     const waitExitDetail = runnerResultExitDetail(resultForStop, loopPlan.reason);
     const waitReason = loopPlan.forceExitReason
@@ -648,6 +662,23 @@ async function runBrowserlessRunner(config, deps = {}) {
         && loopPlan.reason !== 'snapshot-safety-retry'
         && loopPlan.reason !== 'in-game-snapshot-safety-retry'
     );
+    const plannedNextRunAtMs = now() + loopPlan.delayMs;
+    const firstDailyLoginAtNextRun = isFirstBrowserlessLoginOfDay(currentBeforeWait, plannedNextRunAtMs);
+    const shouldPrepareSnapshotSafety = !firstDailyLoginAtNextRun && Boolean(
+      resetLoginPointForNextEntry
+        || loopPlan.reason === 'snapshot-safety-retry'
+    );
+    const effectiveDelayMs = shouldPrepareSnapshotSafety
+      ? Math.max(loopPlan.delayMs, preLoginSafetyLeadMs(config))
+      : loopPlan.delayMs;
+    const nextRunAtMs = now() + effectiveDelayMs;
+    const nextRunAt = new Date(nextRunAtMs).toISOString();
+    const waitDetail = {
+      ...loopPlan,
+      delayMs: effectiveDelayMs,
+      nextRunAt,
+      supervisorErrors: supervisorErrors.slice(-5)
+    };
     updateState({
       runner: {
         running: true,
@@ -657,7 +688,7 @@ async function runBrowserlessRunner(config, deps = {}) {
           kind: 'loop-wait',
           band: 'recover',
           reason: loopPlan.reason,
-          delayMs: loopPlan.delayMs,
+          delayMs: effectiveDelayMs,
           nextRunAt,
           previousRunId: loopPlan.previousRunId || ''
         }
@@ -673,15 +704,42 @@ async function runBrowserlessRunner(config, deps = {}) {
         ...waitExitDetail,
         reason: waitReason,
         nextRunAt,
-        delayMs: loopPlan.delayMs
+        delayMs: effectiveDelayMs
       }, { nowMs: now() })
     }, { updatedAt: new Date(now()).toISOString() });
     logStore.append('runner', 'runner-loop-wait', waitDetail);
     try {
-      await sleep(loopPlan.delayMs);
+      if (shouldPrepareSnapshotSafety) {
+        const leadMs = preLoginSafetyLeadMs(config);
+        const waitBeforeProbeMs = Math.max(0, effectiveDelayMs - leadMs);
+        if (waitBeforeProbeMs > 0) await sleep(waitBeforeProbeMs);
+        preparedSnapshotSafety = await (deps.runPreLoginSnapshotSafety || runPreLoginSnapshotSafety)(
+          config,
+          readBrowserlessStateFile(stateFile),
+          {
+            now,
+            sleep,
+            fetchWithTimeout: sourceIpController.fetchWithTimeout,
+            onSnapshotSafety: recordSnapshotSafetyProgress
+          }
+        );
+        recordSnapshotSafetyProgress(preparedSnapshotSafety);
+        logStore.append('runner', 'runner-prelogin-safety-prepared', {
+          checkedAt: preparedSnapshotSafety?.checkedAt || '',
+          ok: Boolean(preparedSnapshotSafety?.ok),
+          reason: preparedSnapshotSafety?.reason || '',
+          streak: preparedSnapshotSafety?.streak ?? null,
+          required: preparedSnapshotSafety?.required ?? null,
+          nextRunAt
+        });
+        const remainingMs = Math.max(0, nextRunAtMs - now());
+        if (remainingMs > 0) await sleep(remainingMs);
+      } else {
+        await sleep(effectiveDelayMs);
+      }
     } catch (err) {
-      recordSupervisorError(err, { operation: 'loop-sleep', delayMs: loopPlan.delayMs });
-      logStore.append('runner', 'loop-sleep-error', { error: errorMessage(err), delayMs: loopPlan.delayMs });
+      recordSupervisorError(err, { operation: 'loop-sleep', delayMs: effectiveDelayMs });
+      logStore.append('runner', 'loop-sleep-error', { error: errorMessage(err), delayMs: effectiveDelayMs });
     }
     const requestedStop = safetyController.getStopEvent();
     if (requestedStop) {
@@ -1113,11 +1171,19 @@ async function runBrowserlessRunner(config, deps = {}) {
     }
     let canary;
     try {
+      const stateBeforeCanary = readBrowserlessStateFile(stateFile);
+      const bypassPreLoginSafetyReason = isFirstBrowserlessLoginOfDay(stateBeforeCanary, now())
+        ? 'daily-first-login-invulnerability'
+        : '';
+      const precheckedSnapshotSafety = bypassPreLoginSafetyReason ? null : preparedSnapshotSafety;
+      preparedSnapshotSafety = null;
       canary = await readOnlyCanary(config, {
         logStore,
         now,
-        persistedState: readBrowserlessStateFile(stateFile),
+        persistedState: stateBeforeCanary,
         safetyController,
+        bypassPreLoginSafetyReason,
+        precheckedSnapshotSafety,
         onSnapshotSafety: recordSnapshotSafetyProgress,
         fetchWithTimeout: sourceIpController.fetchWithTimeout,
         openBrowserlessWs: sourceIpController.openBrowserlessWs,
@@ -1284,9 +1350,12 @@ async function runBrowserlessRunnerSelfTest() {
 }
 
 module.exports = {
+  browserlessDayKey,
   browserlessLoopPlan,
   hydrateConfigFromState,
+  isFirstBrowserlessLoginOfDay,
   learnedLoginPointFromCanary,
+  preLoginSafetyLeadMs,
   persistedReconnectDelayPlan,
   publicConfig,
   runBrowserlessRunner,

@@ -94,7 +94,9 @@ const {
   buildRuntimeDefaults
 } = require('../shared/runtime-defaults');
 const {
+  isFirstBrowserlessLoginOfDay,
   browserlessLoopPlan,
+  preLoginSafetyLeadMs,
   publicConfig,
   learnedLoginPointFromCanary,
   persistedReconnectDelayPlan,
@@ -14094,6 +14096,166 @@ async function runSelfTest() {
       want: 'explicit-stop|1|570792|stamina-budget-coin-leave|570792||false||true|true|true'
     },
     {
+      name: 'browserless runner bypasses precheck for first login after daily reset',
+      got: withTempDirForTest(async dir => {
+        let t = Date.parse('2026-07-12T15:59:10.000Z');
+        let precheckCalls = 0;
+        let canaryOptions = null;
+        let sleptMs = 0;
+        const config = parseBrowserlessRunnerArgs([
+          '--live',
+          '--data-dir',
+          dir,
+          '--user-id',
+          '7',
+          '--session-token',
+          'runner-secret-token',
+          '--login-point-x',
+          '1',
+          '--login-point-y',
+          '2'
+        ], {});
+        updateBrowserlessStateFile(stateFilePath(config), {
+          runner: {
+            currentAction: {
+              kind: 'loop-wait',
+              reason: 'stamina-exhausted-leave',
+              nextRunAt: '2026-07-12T16:00:10.000Z'
+            }
+          },
+          stats: {
+            today: { day: '2026-07-12', sessionCount: 4 },
+            currentSession: { online: false },
+            lastExit: {
+              at: '2026-07-12T03:11:09.932Z',
+              reason: 'stamina-exhausted-leave',
+              nextRunAt: '2026-07-12T16:00:10.000Z'
+            }
+          }
+        }, { updatedAt: '2026-07-12T03:11:09.932Z' });
+        const result = await runBrowserlessRunner(config, {
+          now: () => t,
+          startStatusServer: false,
+          sleep: async ms => {
+            sleptMs += ms;
+            t += ms;
+          },
+          runPreLoginSnapshotSafety: async () => {
+            precheckCalls += 1;
+            return {
+              ok: true,
+              reason: 'safe',
+              checkedAt: new Date(t).toISOString(),
+              required: 1,
+              streak: 1,
+              satisfied: true,
+              response: { summary: { valid: true, selfPresent: false } }
+            };
+          },
+          runReadOnlyOnce: async (_config, options) => {
+            canaryOptions = options;
+            return {
+              ok: false,
+              runId: 'daily-first-login-bypass',
+              error: 'explicit-stop',
+              safety: { event: { reason: 'explicit-stop', at: new Date(t).toISOString() } }
+            };
+          }
+        });
+        return [
+          result.reason,
+          precheckCalls,
+          sleptMs,
+          canaryOptions.bypassPreLoginSafetyReason,
+          isFirstBrowserlessLoginOfDay({
+            stats: {
+              today: { day: '2026-07-12', sessionCount: 4 },
+              currentSession: { online: false }
+            }
+          }, Date.parse('2026-07-12T16:00:10.000Z'))
+        ].join('|');
+      }),
+      want: 'explicit-stop|1|60000|daily-first-login-invulnerability|true'
+    },
+    {
+      name: 'browserless runner prepares login point safety during reconnect wait',
+      got: withTempDirForTest(async dir => {
+        let t = Date.parse('2026-07-12T17:00:00.000Z');
+        let canaryCalls = 0;
+        let precheckCalls = 0;
+        let reusedReason = '';
+        let sleptMs = 0;
+        const config = parseBrowserlessRunnerArgs([
+          '--live',
+          '--data-dir',
+          dir,
+          '--user-id',
+          '7',
+          '--session-token',
+          'runner-secret-token',
+          '--login-point-x',
+          '1',
+          '--login-point-y',
+          '2'
+        ], {});
+        updateBrowserlessStateFile(stateFilePath(config), {
+          stats: {
+            today: { day: '2026-07-13', sessionCount: 1 },
+            currentSession: { online: false }
+          }
+        }, { updatedAt: new Date(t).toISOString() });
+        const result = await runBrowserlessRunner(config, {
+          now: () => t,
+          startStatusServer: false,
+          sleep: async ms => {
+            sleptMs += ms;
+            t += ms;
+          },
+          runPreLoginSnapshotSafety: async (_config, _state, options) => {
+            precheckCalls += 1;
+            await options.sleep(30000);
+            await options.sleep(30000);
+            return {
+              ok: true,
+              reason: 'safe',
+              checkedAt: new Date(t).toISOString(),
+              required: 3,
+              streak: 3,
+              satisfied: true,
+              response: { summary: { valid: true, selfPresent: false } }
+            };
+          },
+          runReadOnlyOnce: async (_config, options) => {
+            canaryCalls += 1;
+            if (canaryCalls === 1) {
+              return {
+                ok: false,
+                runId: 'unsafe-before-wait',
+                error: 'snapshot safety not confirmed: active-near-login-point',
+                snapshotSafety: { ok: false, reason: 'active-near-login-point' }
+              };
+            }
+            reusedReason = options.precheckedSnapshotSafety?.reason || '';
+            return {
+              ok: false,
+              runId: 'prepared-safety-reused',
+              error: 'explicit-stop',
+              safety: { event: { reason: 'explicit-stop', at: new Date(t).toISOString() } }
+            };
+          }
+        });
+        return [
+          result.reason,
+          canaryCalls,
+          precheckCalls,
+          sleptMs,
+          reusedReason,
+          preLoginSafetyLeadMs(config)
+        ].join('|');
+      }),
+      want: 'explicit-stop|2|1|60000|safe|60000'
+    },
+    {
       name: 'browserless runner skips persisted reconnect wait when fresh snapshot still has self',
       got: withTempDirForTest(async dir => {
         const t = Date.parse('2026-07-11T03:45:54.610Z');
@@ -15611,6 +15773,48 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'false|true|true|100|2316|10000|31|stamina-exhausted-leave|1d|2026-07-10T16:00:10.000Z|2830000'
+    },
+    {
+      name: 'browserless compact status drops previous-day stamina blocker after reset',
+      got: (() => {
+        const compact = buildCompactBrowserlessStatus({
+          updatedAt: '2026-07-12T15:59:50.000Z',
+          session: { userId: 77, tokenPresent: true, authenticated: true },
+          runner: {
+            running: true,
+            currentAction: {
+              kind: 'loop-wait',
+              reason: 'stamina-exhausted-leave',
+              nextRunAt: '2026-07-12T16:00:10.000Z'
+            },
+            lastRun: {
+              canary: {
+                completedAt: '2026-07-12T03:11:09.932Z',
+                leave: {
+                  ok: true,
+                  attempts: [{ response: { user_id: 77, hp: 100, stamina_1d_remaining_milli: 31 } }]
+                }
+              }
+            }
+          },
+          stats: {
+            currentSession: { online: false, exitReason: 'stamina-exhausted-leave' },
+            lastExit: {
+              at: '2026-07-12T03:11:09.932Z',
+              reason: 'stamina-exhausted-leave',
+              nextRunAt: '2026-07-12T16:00:10.000Z'
+            }
+          }
+        }, {
+          nowMs: Date.parse('2026-07-12T16:00:20.000Z')
+        });
+        return [
+          compact.stats.offline.blocker === null,
+          compact.stats.offline.nextReconnectAt,
+          compact.stats.offline.reconnectRemainingMs
+        ].join('|');
+      })(),
+      want: 'true|2026-07-12T16:00:10.000Z|0'
     },
     {
       name: 'browserless state file replaces current action snapshots',

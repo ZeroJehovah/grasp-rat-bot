@@ -580,7 +580,27 @@ async function runReadOnlyCanary(config, options = {}) {
   };
 
   try {
-    result.snapshotSafety = await (options.runPreLoginSnapshotSafety || runPreLoginSnapshotSafety)(config, options.persistedState || {}, options);
+    if (options.bypassPreLoginSafetyReason) {
+      const required = Math.max(1, Math.round(Number(
+        config.loginPointSafetySuccessRequired
+          ?? runtimeDefaults.loginPointSafetySuccessRequired
+          ?? 3
+      ) || 3));
+      result.snapshotSafety = {
+        ok: true,
+        reason: String(options.bypassPreLoginSafetyReason),
+        bypassedPreLoginSafety: true,
+        bypassKind: 'daily-first-login',
+        required,
+        streak: required,
+        satisfied: true,
+        checkedAt: new Date(now()).toISOString()
+      };
+    } else if (options.precheckedSnapshotSafety && typeof options.precheckedSnapshotSafety === 'object') {
+      result.snapshotSafety = options.precheckedSnapshotSafety;
+    } else {
+      result.snapshotSafety = await (options.runPreLoginSnapshotSafety || runPreLoginSnapshotSafety)(config, options.persistedState || {}, options);
+    }
   } catch (err) {
     const message = errorMessage(err);
     result.snapshotSafety = {
@@ -592,8 +612,10 @@ async function runReadOnlyCanary(config, options = {}) {
   }
   log('canary-snapshot-safety', result.snapshotSafety);
   result.snapshotSafety = allowSelfPresentSnapshotControl(result.snapshotSafety);
-  if (result.snapshotSafety?.bypassedPreLoginSafety) {
+  if (result.snapshotSafety?.bypassedPreLoginSafety && result.snapshotSafety?.bypassKind !== 'daily-first-login') {
     log('canary-snapshot-self-present-reentry', result.snapshotSafety);
+  } else if (result.snapshotSafety?.bypassKind === 'daily-first-login') {
+    log('canary-snapshot-daily-first-login-bypass', result.snapshotSafety);
   }
   if (snapshotSafetySelfAbsent(result.snapshotSafety) && result.recovery.inGameEvidence) {
     result.recovery = {
