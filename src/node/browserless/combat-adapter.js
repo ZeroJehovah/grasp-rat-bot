@@ -391,6 +391,38 @@ function passiveRunnerState(self, target, combatTargetState = {}, options = {}) 
   };
 }
 
+function estimateCombatTrade(self, target, combatTargetState = {}, options = {}) {
+  const nowMs = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
+  const windowMs = Math.max(1000, Number(options.combatTradeEstimateWindowMs || 10000));
+  const samples = (combatTargetState?.motionSamples || [])
+    .filter(sample => nowMs - Number(sample?.at || 0) <= windowMs)
+    .filter(sample => Number.isFinite(Number(sample?.selfHp)) && Number.isFinite(Number(sample?.targetHp)))
+    .sort((a, b) => Number(a.at) - Number(b.at));
+  if (samples.length < 3) return null;
+  const first = samples[0];
+  const last = samples[samples.length - 1];
+  const elapsedMs = Math.max(1, Number(last.at) - Number(first.at));
+  const minWindowMs = Math.max(1000, Number(options.combatTradeEstimateMinWindowMs || 8000));
+  if (elapsedMs < minWindowMs) return null;
+  const selfDamage = Math.max(0, Number(first.selfHp) - Number(last.selfHp));
+  const targetDamage = Math.max(0, Number(first.targetHp) - Number(last.targetHp));
+  const myDps = targetDamage / elapsedMs * 1000;
+  const enemyDps = selfDamage / elapsedMs * 1000;
+  const selfHp = hpValue(self) ?? Number(last.selfHp);
+  const targetHp = hpValue(target) ?? Number(last.targetHp);
+  const tKillMs = myDps > 0.05 ? targetHp / myDps * 1000 : Infinity;
+  const tDeathMs = enemyDps > 0.05 ? selfHp / enemyDps * 1000 : Infinity;
+  const minSelfDamage = Math.max(0, Number(options.combatTradeEstimateMinSelfDamage || 12));
+  const minEnemyDps = Math.max(0, Number(options.combatTradeEstimateMinEnemyDps || 1.5));
+  const safetyFactor = Math.max(1, Number(options.combatTradeEstimateSafetyFactor || 1.15));
+  const zeroOutput = targetDamage <= 0.01;
+  const disadvantaged = selfDamage >= minSelfDamage
+    && enemyDps >= minEnemyDps
+    && tDeathMs < tKillMs * safetyFactor
+    && (zeroOutput || targetHp > selfHp);
+  return { disadvantaged, elapsedMs, selfDamage, targetDamage, myDps, enemyDps, tKillMs, tDeathMs, safetyFactor, zeroOutput };
+}
+
 function buildCombatExitDecision(self, target, combatTargetState = {}, bullets = [], options = {}) {
   if (!self || !target) return null;
   const selfHp = hpValue(self);
@@ -409,6 +441,17 @@ function buildCombatExitDecision(self, target, combatTargetState = {}, bullets =
       targetHp,
       threshold: criticalHp,
       noDamageMs
+    };
+  }
+  const trade = estimateCombatTrade(self, target, combatTargetState, options);
+  if (trade?.disadvantaged) {
+    return {
+      shouldLeave: true,
+      reason: 'combat-trade-disadvantage-leave',
+      selfHp,
+      targetHp,
+      noDamageMs,
+      trade
     };
   }
   if (targetHp !== null && selfHp < lowHp && targetHp > selfHp) {
@@ -775,6 +818,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
 module.exports = {
   buildBrowserlessCombatDryRun,
   buildCombatMovementPlan,
+  estimateCombatTrade,
   estimateAim,
   normalizeCombatBullet,
   normalizeCombatEntity,

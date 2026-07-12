@@ -55,7 +55,8 @@ const {
   buildBrowserlessDecision,
   buildBrowserlessRuntimeDefaults,
   buildBrowserlessStrategyInput,
-  createBrowserlessDecisionAdapter
+  createBrowserlessDecisionAdapter,
+  opportunityEnemyStaminaCost: browserlessOpportunityEnemyStaminaCost
 } = require('./browserless/decision-adapter');
 const {
   createBrowserlessDecisionState,
@@ -72,7 +73,8 @@ const {
 } = require('./browserless/action-adapter');
 const {
   buildBrowserlessCombatDryRun,
-  estimateAim
+  estimateAim,
+  estimateCombatTrade
 } = require('./browserless/combat-adapter');
 const {
   createBrowserlessSafetyController,
@@ -9669,6 +9671,37 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: '8|passive-runner-close|true|1|0|passive-runner'
+    },
+    {
+      name: 'browserless combat trade exits sustained zero-output damage before fixed hp gap',
+      got: (() => {
+        const samples = [0, 2000, 4000, 6000, 8000].map((offset, index) => ({
+          at: 1000 + offset,
+          selfHp: 100 - index * 3,
+          targetHp: 100,
+          x: 5000,
+          y: 0,
+          vx: 0,
+          vy: 0
+        }));
+        const trade = estimateCombatTrade(
+          { hp: 88 },
+          { hp: 100 },
+          { motionSamples: samples },
+          { nowMs: 9000, combatTradeEstimateMinWindowMs: 8000 }
+        );
+        return [trade.disadvantaged, trade.zeroOutput, trade.selfDamage, trade.targetDamage, Math.round(trade.tDeathMs)].join('|');
+      })(),
+      want: 'true|true|12|0|58667'
+    },
+    {
+      name: 'browserless active profit stamina cost includes default miss risk',
+      got: (() => {
+        const passive = browserlessOpportunityEnemyStaminaCost({ user_id: 8, hp: 100, distance: 5000, active: false }, {});
+        const active = browserlessOpportunityEnemyStaminaCost({ user_id: 8, hp: 100, distance: 5000, active: true }, {});
+        return [passive, active, active > passive * 3].join('|');
+      })(),
+      want: '22000|73000|true'
     },
     {
       name: 'browserless quadratic combat aim enters motion probe after no target damage',

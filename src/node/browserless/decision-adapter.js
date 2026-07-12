@@ -1729,9 +1729,23 @@ function estimatedKillShots(target, options = {}) {
 
 function opportunityEnemyStaminaCost(target, options = {}) {
   const moveCost = opportunityMoveStaminaCost(target?.distance, options, 0);
-  const shotCost = estimatedKillShots(target, options)
+  const metrics = options.recentCombatMetrics?.targetId !== undefined
+    && String(options.recentCombatMetrics.targetId) === String(target?.user_id ?? target?.userId ?? '')
+    ? options.recentCombatMetrics
+    : null;
+  const observedShots = Number(metrics?.actualShots || 0);
+  const observedHits = Number(metrics?.confirmedHits || 0);
+  const defaultActiveHitRate = Math.max(0.05, Math.min(1, Number(options.opportunityActiveDefaultHitRate || 0.25)));
+  const hitRate = target?.active
+    ? (observedShots >= 5 ? Math.max(0.05, Math.min(1, observedHits / observedShots)) : defaultActiveHitRate)
+    : 1;
+  const expectedShots = Math.ceil(estimatedKillShots(target, options) / hitRate);
+  const riskScale = target?.active
+    ? 1 + Math.max(0, Number(metrics?.selfDamage || 0)) / Math.max(1, Number(metrics?.targetDamage || 0) + 10)
+    : 1;
+  const shotCost = expectedShots
     * Math.max(0, Number(options.opportunityShotStaminaCostMs ?? BROWSER_RUNTIME_DEFAULTS.opportunityShotStaminaCostMs ?? OPPORTUNITY_CONSTANTS.SHOT_STAMINA_COST_MS));
-  return moveCost + shotCost;
+  return (moveCost + shotCost) * riskScale;
 }
 
 function staminaRemaining(self, windowName) {
@@ -3723,7 +3737,33 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
   const combat = buildCombatDecision(input, stateful, options);
   const dangerousCombatExit = rememberDangerousCombatExitTarget(input, combat, stateful, options);
   const combatPursuitSuppression = buildProfitPursuitSuppression(input, combat, stateful, options);
-  const combatActionEligible = isCombatActionEligibleForDecision(combat, options) && !combatPursuitSuppression;
+  let combatActionEligible = isCombatActionEligibleForDecision(combat, options) && !combatPursuitSuppression;
+  const combatTarget = combat?.target || null;
+  const freshProactiveCombat = Boolean(
+    combatActionEligible
+      && combatTarget
+      && combatTarget.combatIntent !== 'defensive'
+      && !combatTarget.combatEngagement
+  );
+  let activeCombatOpportunity = null;
+  if (freshProactiveCombat && opportunity.choice) {
+    const combatScore = scoreEnemyOpportunity(combatTarget, {
+      ...options,
+      recentCombatMetrics: stateful.combatMetrics,
+      isAfkProfitTarget: () => false
+    });
+    const competingScore = Number(opportunity.choice.score || 0);
+    const switchRatio = 1 + Math.max(0, Number(options.opportunitySwitchRelativeMargin || OPPORTUNITY_CONSTANTS.OPPORTUNITY_SWITCH_RELATIVE_MARGIN || 0));
+    const blocked = Number.isFinite(Number(combatScore)) && competingScore > Number(combatScore) * switchRatio;
+    activeCombatOpportunity = {
+      combatScore: Number.isFinite(Number(combatScore)) ? Math.round(Number(combatScore)) : null,
+      competingScore: Math.round(competingScore),
+      competingType: opportunity.choice.type || '',
+      hitRateSource: stateful.combatMetrics?.targetId === String(combatTarget.userId) ? 'recent-target' : 'active-default',
+      blocked
+    };
+    if (blocked) combatActionEligible = false;
+  }
   const combatForProfit = combatPursuitSuppression
     ? {
         ...combat,
@@ -3989,6 +4029,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       ...(combat.dryRun || {}),
       target: combat.dryRun?.target || summarizeTarget(combat.target),
       actionEligible: combatActionEligible,
+      activeCombatOpportunity,
       dangerousTargetCooldown: dangerousCombatExit,
       profitPursuitSuppression: combatPursuitSuppression,
       candidates: combat.dryRun?.candidates || topItems(combat.candidates, target => ({
@@ -4153,6 +4194,7 @@ module.exports = {
   createBrowserlessDecisionAdapter,
   decisionStatePatch,
   distanceBetween,
+  opportunityEnemyStaminaCost,
   normalizeCoinForDecision,
   normalizeEntityForDecision,
   recordAttackHistoryFromActionResult,
