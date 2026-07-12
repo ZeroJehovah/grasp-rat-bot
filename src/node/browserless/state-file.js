@@ -133,6 +133,9 @@ function isPlainObject(value) {
 function shouldReplaceStateObject(pathParts) {
   const pathKey = pathParts.join('.');
   return pathKey === 'runner.currentAction'
+    || pathKey === 'runner.lastRun'
+    || pathKey === 'probes.lastSnapshotProbe'
+    || pathKey === 'probes.lastReadOnlyProbe'
     || pathKey === 'current.action'
     || pathKey === 'current.decision'
     || pathKey === 'current.decisionState';
@@ -814,7 +817,7 @@ function compactLoginPointSafetyDetail(loginPointSafety, normalized) {
     ok: okValue === undefined ? null : Boolean(okValue),
     reason: compactString(reason, 120),
     unsafeReason: compactString(unsafeReason, 120),
-    originalReason: compactString(isolatePendingDetail
+    originalReason: compactString((isolatePendingDetail || useDirectDetail)
       ? directDetail.originalReason
       : (snapshotSafety?.originalReason || directDetail.originalReason), 120),
     checkedAt: compactString(loginPointSafety?.checkedAt || directDetail.checkedAt, 48),

@@ -14587,6 +14587,54 @@ async function runSelfTest() {
       want: 'true|77|true|true|true|true|true|false|loop-wait|88|10|20|360000|seek-coin|8|7|enemy|5999|active-near-login-point|88|true|enemy|14500|coin-1|1|11|154|enemy|1|Passive|1|latest|danger-player|Active|true|214440|2|3|10.0.0.101|false|false|false|true|true|false|true'
     },
     {
+      name: 'browserless state replaces completed run and probe snapshots instead of retaining stale safety fields',
+      got: withTempDirForTest(async dir => {
+        const config = parseBrowserlessRunnerArgs(['--data-dir', dir], {});
+        const file = stateFilePath(config);
+        updateBrowserlessStateFile(file, {
+          runner: {
+            lastRun: {
+              canary: {
+                snapshotSafety: {
+                  ok: true,
+                  originalReason: 'safe',
+                  response: { summary: { safety: { streak: 3, satisfied: true } } }
+                }
+              }
+            }
+          },
+          probes: {
+            lastReadOnlyProbe: {
+              snapshotSafety: { ok: true, originalReason: 'safe' }
+            }
+          }
+        });
+        updateBrowserlessStateFile(file, {
+          runner: {
+            lastRun: {
+              canary: {
+                snapshotSafety: { ok: false, reason: 'active-near-login-point', streak: 0 }
+              }
+            }
+          },
+          probes: {
+            lastReadOnlyProbe: {
+              snapshotSafety: { ok: false, reason: 'active-near-login-point', streak: 0 }
+            }
+          }
+        });
+        const stored = readBrowserlessStateFile(file);
+        return [
+          stored.runner.lastRun.canary.snapshotSafety.originalReason || '',
+          stored.runner.lastRun.canary.snapshotSafety.response === undefined,
+          stored.runner.lastRun.canary.snapshotSafety.streak,
+          stored.probes.lastReadOnlyProbe.snapshotSafety.originalReason || '',
+          stored.probes.lastReadOnlyProbe.snapshotSafety.streak
+        ].join('|');
+      }),
+      want: '|true|0||0'
+    },
+    {
       name: 'browserless compact login point safety prefers current detail over stale probe snapshots',
       got: (() => {
         const config = parseBrowserlessRunnerArgs([], {});
@@ -14689,6 +14737,51 @@ async function runSelfTest() {
           },
           probes: { lastReadOnlyProbe: staleUnsafeProbe }
         }, config);
+        const currentUnsafeAfterSafe = buildCompactBrowserlessStatus({
+          loginPointSafety: {
+            ok: false,
+            reason: 'active-near-login-point',
+            checkedAt: '2026-07-08T00:03:00.000Z',
+            point: { x: 5999, y: 66268, hp: 39, source: 'state' },
+            detail: {
+              ok: false,
+              reason: 'active-near-login-point',
+              originalReason: 'active-near-login-point',
+              checkedAt: '2026-07-08T00:03:00.000Z',
+              required: 3,
+              streak: 0,
+              satisfied: false
+            }
+          },
+          runner: {
+            lastRun: {
+              completedAt: '2026-07-08T00:03:00.000Z',
+              canary: {
+                snapshotSafety: {
+                  ok: false,
+                  reason: 'active-near-login-point',
+                  originalReason: 'safe',
+                  checkedAt: '2026-07-08T00:03:00.000Z',
+                  required: 3,
+                  streak: 0,
+                  satisfied: false,
+                  response: {
+                    summary: {
+                      selfPresent: false,
+                      safety: {
+                        ok: false,
+                        reason: 'active-near-login-point',
+                        required: 3,
+                        streak: 3,
+                        satisfied: true
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }, config);
         const reentry = buildCompactBrowserlessStatus({
           loginPointSafety: {
             ok: true,
@@ -14721,13 +14814,17 @@ async function runSelfTest() {
           currentSafe.loginPointSafety.detail.reason,
           currentSafe.loginPointSafety.detail.streak,
           currentSafe.loginPointSafety.detail.unsafeReason,
+          currentUnsafeAfterSafe.loginPointSafety.detail.reason,
+          currentUnsafeAfterSafe.loginPointSafety.detail.originalReason,
+          currentUnsafeAfterSafe.loginPointSafety.detail.streak,
+          currentUnsafeAfterSafe.loginPointSafety.detail.unsafeReason,
           reentry.loginPointSafety.detail.reason,
           reentry.loginPointSafety.detail.bypassedPreLoginSafety,
           reentry.loginPointSafety.detail.satisfied,
           reentry.loginPointSafety.detail.selfPresent
         ].join('|');
       })(),
-      want: 'false|next-login-point-pending-snapshot-safety|0|3|next-login-point-pending-snapshot-safety||false|false|true|safe|3||self-present-reentry|true|true|true'
+      want: 'false|next-login-point-pending-snapshot-safety|0|3|next-login-point-pending-snapshot-safety||false|false|true|safe|3||active-near-login-point|active-near-login-point|0|active-near-login-point|self-present-reentry|true|true|true'
     },
     {
       name: 'browserless compact status exposes symmetric live battle details',
@@ -15597,6 +15694,7 @@ async function runSelfTest() {
           panelScript.includes("evidence.push('近期有活动')"),
           panelScript.includes("evidence.push('无敌还剩 ' + invulnerableText"),
           panelScript.includes("'安全 ' + loginPointProgressText(status, true)"),
+          panelScript.includes("const pendingSafeReason = /snapshot-safety-streak-pending/i.test(detailReason)"),
           panelScript.includes("return coord(point.x) + ', ' + coord(point.y);"),
           panelScript.includes("translated === '安全'"),
           /loginPointDisplay\(status\)\.state === 'safe'/.test(panelScript),
@@ -15625,7 +15723,7 @@ async function runSelfTest() {
           hiddenActionLabels.every(label => !panelScript.includes("addRow(rowsOut, '" + label + "'"))
         ].join('|');
       })(),
-      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
+      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless runner self-test passes',
