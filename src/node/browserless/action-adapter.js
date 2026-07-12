@@ -1005,6 +1005,14 @@ function createBrowserlessActionAdapter(options = {}) {
     const attackRange = Math.max(0, Number(options.attackRangeCm ?? options.attackRange ?? DEFAULT_ATTACK_RANGE_CM));
     const commitRange = afkAttackCommitRangeCm(options);
     const shootRange = commitRange > 0 ? Math.min(attackRange, commitRange) : attackRange;
+    if (target?.cachedNavigationOnly) {
+      if (!vector.ok || (Number.isFinite(distance) && distance <= Math.max(300, Number(options.targetDeadZoneCm || DEFAULT_TARGET_DEAD_ZONE_CM)))) {
+        const stopped = stop('cached-enemy-position-reached');
+        return { ok: stopped.ok, kind: 'stop', reason: 'cached-enemy-position-reached', command: stopped.command || null, skipped: Boolean(stopped.skipped), target };
+      }
+      const sent = sendVelocity(vector.dx, vector.dy, 'missing-realtime-enemy-hold', target);
+      return { ok: sent.ok, kind: 'velocity', reason: 'missing-realtime-enemy-hold', vector, command: sent.command || null, skipped: Boolean(sent.skipped), target, cachedNavigationOnly: true, ...transportFailure(sent) };
+    }
     if (!(Number.isFinite(distance) && distance <= shootRange)) {
       if (!vector.ok) {
         const stopped = stop(vector.reason || 'profit-afk-missing-position');

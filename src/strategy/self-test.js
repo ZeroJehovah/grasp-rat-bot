@@ -8,6 +8,8 @@
 
 const { ACTION_PRIORITY_BANDS, getActionPriorityBand, buildActionFocus } = require('./action-priority');
 const { applyFinalActionArbitration } = require('./action-arbitration');
+const { quadraticInterceptCore } = require('./combat-aim');
+const { calculateDodgeDirection } = require('./combat-movement');
 const { recordActionSwitchDiagnosticsCore } = require('./action-switch-diagnostics');
 const { attackWorthTakingCore } = require('./attack-worth');
 const {
@@ -116,6 +118,31 @@ const { OPPORTUNITY_CONSTANTS, calculateOpportunityROI, validateOpportunityConst
 
 function runStrategyModuleSelfTests() {
   const results = [];
+
+  const intercept = quadraticInterceptCore(
+    { x: 0, y: 0 },
+    { x: 1000, y: 0, vx: 100, vy: 0 },
+    { bulletSpeed: 500, renderDelayTicks: 2, bulletRange: 15000 }
+  );
+  results.push({
+    name: 'quadratic-intercept-meets-moving-target',
+    passed: Boolean(intercept
+      && Math.abs(intercept.x - (1000 + 100 * (2 + intercept.flightTicks))) < 0.001
+      && intercept.flightTicks > 0)
+  });
+
+  const dodge = calculateDodgeDirection(
+    { x: 0, y: 0 },
+    [{ incoming: true, x: -5000, y: 0, distance: 5000, cpa: 0, timeToImpact: 500, speed: 500, direction: { dx: 1, dy: 0 } }],
+    { moveSpeedPerTick: 50, tickMs: 50, hitRadius: 200 }
+  );
+  const dodgeMinimumHits = Math.min(...dodge.threatField.map(item => item.directHits));
+  results.push({
+    name: 'future-position-threat-field-improves-old-fixed-cpa-hit',
+    passed: dodge.directHits === undefined
+      ? dodge.threatField.find(item => item.dx === dodge.dx && item.dy === dodge.dy)?.directHits === dodgeMinimumHits && dodgeMinimumHits < 1
+      : false
+  });
 
   // Test action priority bands
   results.push({
@@ -528,6 +555,34 @@ function runStrategyModuleSelfTests() {
   results.push({
     name: 'arbitration-combat-holds-over-profit',
     passed: arb2.held && arb2.action.kind === 'combat'
+  });
+
+  const nonUrgentSafety = { kind: 'flee', band: 'safety', reason: 'active-threat-return-block', threatEvidence: { firing: false } };
+  const combatState = {
+    lastAction: { ...combatAction, band: 'combat' },
+    lastFocus: buildActionFocus({ ...combatAction, band: 'combat' }),
+    lastSelectedAt: Date.now() - 100,
+    lastOverride: null,
+    history: []
+  };
+  const heldCombat = applyFinalActionArbitration(nonUrgentSafety, combatState.lastAction, combatState, { finalActionArbitrationHoldMs: 1800 });
+  results.push({
+    name: 'arbitration-engaged-combat-holds-over-nonurgent-active-evidence',
+    passed: heldCombat.held && heldCombat.action.band === 'combat'
+  });
+
+  const urgentCombatState = {
+    lastAction: { ...combatAction, band: 'combat' },
+    lastFocus: buildActionFocus({ ...combatAction, band: 'combat' }),
+    lastSelectedAt: Date.now() - 100,
+    lastOverride: null,
+    history: []
+  };
+  const urgentSafety = { ...nonUrgentSafety, urgent: true, threatEvidence: { firing: true } };
+  const urgentResult = applyFinalActionArbitration(urgentSafety, urgentCombatState.lastAction, urgentCombatState, { finalActionArbitrationHoldMs: 1800 });
+  results.push({
+    name: 'arbitration-urgent-firing-threat-preempts-combat',
+    passed: !urgentResult.held && urgentResult.action.band === 'safety'
   });
 
   // Test arbitration - profit does not hold over combat

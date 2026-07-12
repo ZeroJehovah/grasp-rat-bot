@@ -51,6 +51,7 @@ const DEFAULTS = {
   browserlessProfitPursuitMinDamageHp: 10,
   combatEnabled: false,
   combatShootMinIntervalMs: 160,
+  combatControlIntervalMs: 160,
   wsTraceEnabled: false,
   wsTracePayload: true,
   wsTraceMaxPayloadChars: 0,
@@ -148,6 +149,7 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
     browserlessProfitPursuitMinDamageHp: numberEnv(env.GRASP_RAT_BROWSERLESS_PROFIT_PURSUIT_MIN_DAMAGE_HP, DEFAULTS.browserlessProfitPursuitMinDamageHp),
     combatEnabled: boolEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_ENABLED, DEFAULTS.combatEnabled),
     combatShootMinIntervalMs: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_SHOOT_MIN_INTERVAL_MS, DEFAULTS.combatShootMinIntervalMs),
+    combatControlIntervalMs: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_CONTROL_INTERVAL_MS, DEFAULTS.combatControlIntervalMs),
     wsTraceEnabled: boolEnv(env.GRASP_RAT_BROWSERLESS_WS_TRACE_ENABLED ?? env.GRASP_RAT_BROWSERLESS_WS_TRACE, DEFAULTS.wsTraceEnabled),
     wsTracePayload: boolEnv(env.GRASP_RAT_BROWSERLESS_WS_TRACE_PAYLOAD, DEFAULTS.wsTracePayload),
     wsTraceMaxPayloadChars: numberEnv(env.GRASP_RAT_BROWSERLESS_WS_TRACE_MAX_PAYLOAD_CHARS, DEFAULTS.wsTraceMaxPayloadChars),
@@ -270,6 +272,8 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
       config.browserlessProfitPursuitMinDamageHp = numberEnv(argv[++i], config.browserlessProfitPursuitMinDamageHp);
     } else if (arg === '--combat-shoot-min-interval-ms') {
       config.combatShootMinIntervalMs = numberEnv(argv[++i], config.combatShootMinIntervalMs);
+    } else if (arg === '--combat-control-interval-ms') {
+      config.combatControlIntervalMs = numberEnv(argv[++i], config.combatControlIntervalMs);
     } else if (arg === '--ws-trace') {
       config.wsTraceEnabled = true;
     } else if (arg === '--no-ws-trace') {
@@ -354,6 +358,7 @@ function usage() {
     '  --profit-pursuit-min-damage-ms <ms>  Minimum ordinary profit pursuit age before the low-damage gate. Default: 60000',
     '  --profit-pursuit-min-damage-hp <hp>  Required target HP progress by that age. Default: 10',
     '  --combat-shoot-min-interval-ms <ms>  Minimum live combat shoot interval. Default: 160',
+    '  --combat-control-interval-ms <ms>     Recompute live combat from fresh realtime frames. Default: 160',
     '  --ws-trace              Write decoded WebSocket frame/command trace to ws.jsonl',
     '  --no-ws-trace           Disable WebSocket trace logging',
     '  --ws-trace-summary-only  Log WebSocket frame summaries without decoded payloads',

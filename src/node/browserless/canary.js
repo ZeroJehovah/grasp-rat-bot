@@ -399,6 +399,7 @@ async function runReadOnlyCanary(config, options = {}) {
   const durationMs = Math.max(1000, Number(config.readOnlyProbeMs || DEFAULT_READONLY_PROBE_MS));
   const frameGapAlertMs = Math.max(1000, Number(config.frameGapAlertMs || DEFAULT_FRAME_GAP_ALERT_MS));
   const decisionIntervalMs = Math.max(250, Number(config.decisionIntervalMs || 1000));
+  const combatControlIntervalMs = Math.max(50, Number(config.combatControlIntervalMs || 160));
   const stateStore = options.stateStore || createBrowserlessStateStore({ userId: config.userId, now });
   const runtimeDefaults = buildBrowserlessRuntimeDefaults(config);
   const targetWhitelist = options.targetWhitelist || createBrowserlessTargetWhitelist({
@@ -503,6 +504,7 @@ async function runReadOnlyCanary(config, options = {}) {
     error: ''
   };
   let lastDecisionAtMs = 0;
+  let lastCombatControlAtMs = 0;
   let wsError = null;
   let wsClosed = null;
   let ending = false;
@@ -775,6 +777,46 @@ async function runReadOnlyCanary(config, options = {}) {
               if (typeof decisionAdapter.observeActionResult === 'function') {
                 decisionAdapter.observeActionResult(actionResult, decision, { nowMs: atMs });
               }
+            }
+          } else if (
+            actionAdapter
+            && combatLiveEnabled
+            && result.decisions.last?.action?.kind === 'combat-live'
+            && atMs - lastCombatControlAtMs >= combatControlIntervalMs
+            && typeof decisionAdapter.evaluateCombat === 'function'
+          ) {
+            const control = decisionAdapter.evaluateCombat(currentState, {
+              ...runtimeDefaults,
+              nowMs: atMs,
+              controlMode,
+              combatEnabled: config.combatEnabled
+            });
+            const combatSummary = {
+              ...control.combat,
+              decisionIntervalMs,
+              combatControlIntervalMs,
+              highFrequencyControl: true
+            };
+            const controlSummary = { action: control.action, combat: combatSummary };
+            lastCombatControlAtMs = atMs;
+            logCombat(combatSummary);
+            let actionResult;
+            try {
+              actionResult = actionAdapter.applyDecision(currentState, controlSummary);
+            } catch (err) {
+              actionResult = { ok: false, kind: 'action-error', reason: 'combat-control-apply-failed', error: err?.message || String(err) };
+            }
+            updateActionResult(actionResult);
+            if (typeof decisionAdapter.observeActionResult === 'function') {
+              decisionAdapter.observeActionResult(actionResult, control, { nowMs: atMs });
+            }
+            if (control.exitAction) {
+              const immediate = safetyController.evaluate(currentState, {
+                startedAtMs: noSelfGuardStartedAtMs(atMs),
+                decision: controlSummary,
+                nowMs: atMs
+              });
+              if (recordSafetyEvent(immediate)) return;
             }
           }
           recordSafetyEvent(safetyController.evaluate(currentState, {

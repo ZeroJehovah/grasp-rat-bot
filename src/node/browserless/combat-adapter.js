@@ -19,6 +19,7 @@ const {
   determineCombatFireState
 } = require('../../strategy/combat-fire-discipline');
 const { COMBAT_CONSTANTS } = require('../../strategy/combat-constants');
+const { opponentMotionProfileCore, quadraticInterceptCore } = require('../../strategy/combat-aim');
 const { targetIsWhitelisted, targetWhitelistNameSet } = require('../../shared/target-whitelist');
 
 const DEFAULT_STAMINA_FULL_RATIO = 0.98;
@@ -293,14 +294,28 @@ function estimateAim(self, target, options = {}) {
   const speed = Number(target.speed ?? Math.hypot(vx, vy));
   const bulletSpeed = Math.max(1, Number(options.bulletSpeedCmPerTick || COMBAT_CONSTANTS.BULLET_SPEED_CM_PER_TICK));
   const renderDelayTicks = Math.max(0, Number(options.renderDelayTicks ?? COMBAT_CONSTANTS.RENDER_DELAY_TICKS));
-  const flightTicks = Math.max(0, distance / bulletSpeed);
-  const leadTicks = flightTicks + renderDelayTicks;
-  const stationarySpeed = Math.max(0, Number(options.stationarySpeed ?? 50));
-  const moving = Boolean(target.moving || speed > stationarySpeed || Math.hypot(vx, vy) > stationarySpeed);
-  const x = moving ? tx + vx * leadTicks : tx;
-  const y = moving ? ty + vy * leadTicks : ty;
-  const leadDistance = distanceBetween({ x: tx, y: ty }, { x, y });
   const combatTargetState = options.combatTargetState || null;
+  const samples = Array.isArray(combatTargetState?.motionSamples) ? combatTargetState.motionSamples : [];
+  const profile = opponentMotionProfileCore(self, target, samples, {
+    stationarySpeed: options.combatStationarySpeed
+  });
+  const motionScale = Math.max(0, Math.min(1, Math.max(speed, profile.avgSpeed) / Math.max(1, Number(options.combatTargetDodgeSpeedPerTick || 50))));
+  const intercept = quadraticInterceptCore(self, target, {
+    bulletSpeed,
+    renderDelayTicks,
+    bulletRange: options.combatBulletRangeCm || options.combatAttackRange || COMBAT_CONSTANTS.ATTACK_RANGE,
+    hitRadius: options.combatBulletHitRadiusCm || 90,
+    maxTicks: options.combatInterceptMaxTicks,
+    maxTargetSpeed: options.combatTargetDodgeSpeedPerTick || 50,
+    motionScale
+  });
+  const flightTicks = intercept?.flightTicks ?? Math.max(0, distance / bulletSpeed);
+  const leadTicks = flightTicks + renderDelayTicks;
+  const stationarySpeed = Math.max(0, Number(options.stationarySpeed ?? options.combatStationarySpeed ?? 5));
+  const moving = Boolean(target.moving || speed >= stationarySpeed || Math.hypot(vx, vy) >= stationarySpeed);
+  let x = moving ? (intercept?.x ?? tx + vx * leadTicks) : tx;
+  let y = moving ? (intercept?.y ?? ty + vy * leadTicks) : ty;
+  const leadDistance = distanceBetween({ x: tx, y: ty }, { x, y });
   const noDamageMs = Math.max(0, Number(combatTargetState?.noDamageMs || 0));
   const noDamageStartMs = Math.max(0, Number(options.combatAimNoDamageMs ?? 1000));
   const noDamageStepMs = Math.max(1, Number(options.combatAimNoDamageStepMs ?? 800));
@@ -308,13 +323,14 @@ function estimateAim(self, target, options = {}) {
     ? Math.floor((noDamageMs - noDamageStartMs) / noDamageStepMs) + 1
     : 0;
   const noDamageWidened = noDamageLevel > 0;
-  const motionScale = Math.max(0, Math.min(1, speed / Math.max(1, Number(options.combatTargetDodgeSpeedPerTick || 50))));
-  const confidence = Math.max(0.2, Math.min(1, (moving ? 0.7 : 1) - Math.min(0.25, noDamageLevel * 0.04)));
+  const confidence = Math.max(0.2, Math.min(1, (moving ? Number(intercept?.confidence || 0.55) * profile.aimConfidenceScale : 1) - Math.min(0.25, noDamageLevel * 0.04)));
   return {
     ok: true,
     x: Math.round(x),
     y: Math.round(y),
-    mode: moving ? 'linear-intercept' : 'exact',
+    mode: moving
+      ? (intercept ? (noDamageWidened ? 'quadratic-intercept-motion-probe' : 'quadratic-intercept') : 'linear-intercept-fallback')
+      : 'exact',
     distance: Math.round(distance),
     intercept: moving,
     flightTicks: Math.round(flightTicks * 10) / 10,
@@ -324,7 +340,8 @@ function estimateAim(self, target, options = {}) {
     noDamageMs: Math.round(noDamageMs),
     noDamageLevel,
     noDamageWidened,
-    spreadScale: noDamageWidened ? Math.round((1 + Math.min(1, noDamageLevel * 0.2)) * 100) / 100 : 1
+    spreadScale: noDamageWidened ? Math.round((1 + Math.min(1, noDamageLevel * 0.2)) * 100) / 100 : 1,
+    opponentProfile: profile
   };
 }
 
@@ -438,7 +455,12 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
   const passiveRunner = passiveRunnerState(self, target, combatTargetState, options);
   const finishingTarget = Number(target.hp ?? 100) <= Number(options.combatFinishLowThreatHp ?? COMBAT_CONSTANTS.FINISH_LOW_THREAT_HP);
   const spacing = calculateCombatSpacing(self, target, { targetPressure, finishingTarget });
-  const dodge = calculateDodgeDirection(self, bullets, { tangentPreference: movementTangentPreference(self, target) });
+  const dodge = calculateDodgeDirection(self, bullets, {
+    tangentPreference: movementTangentPreference(self, target),
+    target,
+    moveSpeedPerTick: options.combatMoveSpeedPerTick || 50,
+    hitRadius: options.combatBulletHitRadiusCm || 200
+  });
   const backAway = shouldBackAwayFromTarget(self, target);
   const closeRange = Math.max(0, Number(options.combatPressureCloseRange || options.combatPassiveRunnerCloseRange || COMBAT_CONSTANTS.NO_DAMAGE_PRESS_CLOSE_RANGE));
   const pressureClose = Boolean(
@@ -473,7 +495,7 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
     dy: Number(movement.dy || 0),
     reason,
     spacing: Math.round(spacing),
-    dodge: dodge ? { dx: dodge.dx, dy: dodge.dy, reason: dodge.reason } : null,
+    dodge: dodge ? { dx: dodge.dx, dy: dodge.dy, reason: dodge.reason, threatField: dodge.threatField } : null,
     modifiers: movement.modifiers || [],
     pressureClose: pressureClose ? { active: true, noDamageMs: Math.round(noDamageMs), closeRange } : null,
     passiveRunner: passiveRunner.active ? passiveRunner : null,
@@ -504,6 +526,9 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
   const hp = numberOrNull(target.knownHp ?? target.hp);
   const previousHp = same && Number.isFinite(Number(previous.hp)) ? Number(previous.hp) : null;
   const damaged = hp !== null && previousHp !== null && hp < previousHp - 0.01;
+  const previousSelfHp = same ? hpValue(previous?.self) : null;
+  const currentSelfHp = hpValue(self);
+  const selfDamaged = previousSelfHp !== null && currentSelfHp !== null && currentSelfHp < previousSelfHp - 0.01;
   const previousFirstHp = same && Number.isFinite(Number(previous.firstHp)) ? Number(previous.firstHp) : null;
   const firstHp = same ? (previousFirstHp ?? previousHp ?? hp) : hp;
   const previousMinHp = same && Number.isFinite(Number(previous.minHp)) ? Number(previous.minHp) : null;
@@ -519,6 +544,10 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
       && incomingOwnerId !== undefined
       && String(incomingOwnerId) === String(id)
   );
+  const targetBulletIds = (options.bullets || [])
+    .filter(bullet => String(bullet?.ownerId ?? '') === String(id))
+    .map(bullet => String(bullet?.bullet_id ?? bullet?.bulletId ?? `${bullet?.createdTick ?? ''}:${bullet?.startX ?? bullet?.x ?? ''}:${bullet?.startY ?? bullet?.y ?? ''}`))
+    .filter(Boolean);
   const previousSamples = same && Array.isArray(previous.motionSamples) ? previous.motionSamples : [];
   const sampleWindowMs = Math.max(250, Number(options.combatMotionHistoryWindowMs || 6000));
   const motionSamples = previousSamples
@@ -558,6 +587,32 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
     noDamageMs: Math.max(0, nowMs - (damaged ? nowMs : (same ? Number(previous.lastDamageAt || previous.at || nowMs) : nowMs))),
     motionSamples,
     self: summarizeCombatTarget(self)
+  };
+  const previousMetrics = same && stateful.combatMetrics?.targetId === String(id) ? stateful.combatMetrics : {};
+  const threatBulletIds = Array.from(new Set([...(previousMetrics.threatBulletIds || []), ...targetBulletIds])).slice(-200);
+  const initialStamina1d = Number(previousMetrics.initialStamina1d);
+  const currentStamina1d = Number(self?.stamina_1d_remaining_milli ?? self?.stamina1dRemainingMilli);
+  const totalStaminaSpent = Number.isFinite(initialStamina1d) && Number.isFinite(currentStamina1d)
+    ? Math.max(0, initialStamina1d - currentStamina1d)
+    : 0;
+  const shootingStaminaSpent = Number(previousMetrics.actualShots || 0)
+    * Math.max(0, Number(options.opportunityShotStaminaCostMs ?? 500));
+  stateful.combatMetrics = {
+    ...previousMetrics,
+    targetId: String(id),
+    startedAt: same ? Number(previousMetrics.startedAt || previous?.firstSeenAt || nowMs) : nowMs,
+    initialStamina1d: Number.isFinite(initialStamina1d) ? initialStamina1d : (Number.isFinite(currentStamina1d) ? currentStamina1d : null),
+    confirmedHits: Number(previousMetrics.confirmedHits || 0) + (damaged ? Math.max(1, Math.round((previousHp - hp) / 3)) : 0),
+    targetDamage: Number(previousMetrics.targetDamage || 0) + (damaged ? previousHp - hp : 0),
+    incomingHits: Number(previousMetrics.incomingHits || 0) + (selfDamaged ? Math.max(1, Math.round((previousSelfHp - currentSelfHp) / 3)) : 0),
+    selfDamage: Number(previousMetrics.selfDamage || 0) + (selfDamaged ? previousSelfHp - currentSelfHp : 0),
+    firstDamageAt: damaged ? (Number(previousMetrics.firstDamageAt || 0) || nowMs) : Number(previousMetrics.firstDamageAt || 0),
+    threatBulletIds,
+    threatBulletCount: threatBulletIds.length,
+    totalStaminaSpent,
+    shootingStaminaSpent,
+    movementStaminaSpent: Math.max(0, totalStaminaSpent - shootingStaminaSpent),
+    lastDodgeThreatField: null
   };
 }
 
@@ -615,6 +670,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     : (engagedTarget || defensiveTarget);
   rememberBrowserlessCombatEngagement(stateful, self, target, {
     ...options,
+    bullets,
     reason: liveCombatEnabled ? 'combat-live-realtime' : (options.controlMode === 'combat-dry-run' ? 'combat-dry-run-realtime' : 'realtime-visible-threat')
   });
   const combatTargetState = stateful?.combatTarget || null;
@@ -645,8 +701,12 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
   }
   const movement = buildCombatMovementPlan(self, target, bullets, {
     ...options,
-    combatTargetState
+    combatTargetState,
+    bullets
   });
+  if (stateful?.combatMetrics && movement.dodge?.threatField) {
+    stateful.combatMetrics.lastDodgeThreatField = cloneJson(movement.dodge.threatField);
+  }
   const exitDecision = buildCombatExitDecision(self, target, combatTargetState, bullets, options);
   const fireState = target ? determineCombatFireState(self || {}, target, {
     targetPressureFire: bullets.some(bullet => Number(bullet.ownerId) === Number(target.user_id)),
@@ -693,8 +753,21 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
       reserve: numberOrNull(fireState.reserve),
       stamina5s: fireState.stamina5s === null ? null : numberOrNull(fireState.stamina5s),
       lowConfidenceThrottle: Boolean(lowConfidence.throttle),
-      effectiveCadenceMs: Number.isFinite(Number(lowConfidence.cadenceMs)) && lowConfidence.throttle ? Number(lowConfidence.cadenceMs) : (Number.isFinite(Number(fireState.cadenceMs)) ? Number(fireState.cadenceMs) : null)
+      effectiveCadenceMs: Number.isFinite(Number(lowConfidence.cadenceMs)) && lowConfidence.throttle ? Number(lowConfidence.cadenceMs) : (Number.isFinite(Number(fireState.cadenceMs)) ? Number(fireState.cadenceMs) : null),
+      decisionIntervalMs: Number.isFinite(Number(options.decisionIntervalMs)) ? Number(options.decisionIntervalMs) : null,
+      combatControlIntervalMs: Number.isFinite(Number(options.combatControlIntervalMs)) ? Number(options.combatControlIntervalMs) : null,
+      actualLastShotAt: Number.isFinite(Number(stateful?.combatMetrics?.actualLastShotAt)) ? Number(stateful.combatMetrics.actualLastShotAt) : null,
+      actualShotIntervalMs: Number.isFinite(Number(stateful?.combatMetrics?.actualShotIntervalMs)) ? Number(stateful.combatMetrics.actualShotIntervalMs) : null
     },
+    metrics: stateful?.combatMetrics ? {
+      ...cloneJson(stateful.combatMetrics),
+      estimatedHitRate: Number(stateful.combatMetrics.actualShots || 0) > 0
+        ? Number((Number(stateful.combatMetrics.confirmedHits || 0) / Number(stateful.combatMetrics.actualShots) * 100).toFixed(1))
+        : null,
+      firstDamageDelayMs: Number(stateful.combatMetrics.firstDamageAt || 0) > 0
+        ? Math.max(0, Number(stateful.combatMetrics.firstDamageAt) - Number(stateful.combatMetrics.startedAt || 0))
+        : null
+    } : null,
     dataGaps
   };
 }

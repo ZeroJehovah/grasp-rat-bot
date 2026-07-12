@@ -1,5 +1,7 @@
 'use strict';
 
+const { quadraticInterceptCore } = require('../../strategy/combat-aim');
+
 function createCombatAimRuntime(runtime = {}) {
   const {
     bot,
@@ -426,69 +428,23 @@ function createCombatAimRuntime(runtime = {}) {
   }
 
   function combatInterceptSolution(self, target, distance = null, motionScale = 1) {
-    const sx = Number(self?.x);
-    const sy = Number(self?.y);
-    const px = Number(target?.x);
-    const py = Number(target?.y);
-    const vx = Number(target?.vx) || 0;
-    const vy = Number(target?.vy) || 0;
-    if (![sx, sy, px, py].every(Number.isFinite)) return null;
-    const bulletSpeed = Math.max(1, Number(cfg.combatBulletSpeedPerTick || 500));
-    const renderDelayTicks = Math.max(0, Number(cfg.combatRenderDelayTicks ?? 2));
-    const compensatedX = px + vx * renderDelayTicks;
-    const compensatedY = py + vy * renderDelayTicks;
-    const dx = compensatedX - sx;
-    const dy = compensatedY - sy;
-    const c = dx * dx + dy * dy;
-    if (!(c > 0)) return null;
-    const targetSpeedSq = vx * vx + vy * vy;
-    const a = targetSpeedSq - bulletSpeed * bulletSpeed;
-    const b = 2 * (dx * vx + dy * vy);
-    const eps = 1e-6;
-    const roots = [];
-    if (Math.abs(a) < eps) {
-      if (Math.abs(b) > eps) roots.push(-c / b);
-    } else {
-      const disc = b * b - 4 * a * c;
-      if (disc < -eps) return null;
-      const sqrtDisc = Math.sqrt(Math.max(0, disc));
-      roots.push((-b - sqrtDisc) / (2 * a), (-b + sqrtDisc) / (2 * a));
-    }
-    const maxByRange = Math.max(1, Number(cfg.combatBulletRangeCm || cfg.combatAttackRange || 15000) / bulletSpeed);
-    const configuredMax = Number(cfg.combatInterceptMaxTicks || 0);
-    const maxTicks = Math.max(1, configuredMax > 0 ? Math.min(configuredMax, maxByRange) : maxByRange);
-    const t = roots
-      .filter(value => Number.isFinite(value) && value > 0 && value <= maxTicks)
-      .sort((aTick, bTick) => aTick - bTick)[0];
-    if (!Number.isFinite(t)) return null;
-    const x = compensatedX + vx * t;
-    const y = compensatedY + vy * t;
-    const travelDistance = Math.hypot(x - sx, y - sy);
-    const bulletRange = Math.max(1, Number(cfg.combatBulletRangeCm || cfg.combatAttackRange || 15000));
-    if (travelDistance > bulletRange + Math.max(0, Number(cfg.combatBulletHitRadiusCm || 90))) return null;
-    const rawDistance = Number.isFinite(Number(distance)) ? Math.max(1, Number(distance)) : Math.hypot(px - sx, py - sy);
-    const targetSpeed = Math.sqrt(targetSpeedSq);
-    const maxTargetSpeed = Math.max(1, Number(cfg.combatTargetDodgeSpeedPerTick || 50));
-    const speedRatio = targetSpeed / maxTargetSpeed;
-    const timeFactor = 1 - Math.min(1, t / maxTicks) * 0.35;
-    const speedPenalty = Math.max(0, speedRatio - 1) * 0.2;
-    const motionPenalty = Math.max(0, Math.min(1, Number(motionScale) || 0)) * 0.08;
-    const confidence = Math.max(0.25, Math.min(1, 0.62 + timeFactor * 0.25 - speedPenalty - motionPenalty));
+    const shared = quadraticInterceptCore(self, target, {
+      bulletSpeed: cfg.combatBulletSpeedPerTick || 500,
+      renderDelayTicks: cfg.combatRenderDelayTicks ?? 2,
+      bulletRange: cfg.combatBulletRangeCm || cfg.combatAttackRange || 15000,
+      hitRadius: cfg.combatBulletHitRadiusCm || 90,
+      maxTicks: cfg.combatInterceptMaxTicks,
+      maxTargetSpeed: cfg.combatTargetDodgeSpeedPerTick || 50,
+      motionScale
+    });
+    if (!shared) return null;
     return {
-      x,
-      y,
-      flightTicks: t,
-      flightMs: t * 50,
-      travelDistance,
-      currentDistance: rawDistance,
-      leadDistance: Math.hypot(x - px, y - py),
-      renderDelayTicks,
-      compensatedX,
-      compensatedY,
-      targetVx: vx,
-      targetVy: vy,
-      targetSpeed,
-      confidence
+      ...shared,
+      currentDistance: Number.isFinite(Number(distance)) ? Number(distance) : dist(self, target),
+      compensatedX: Number(target?.x) + (Number(target?.vx) || 0) * shared.renderDelayTicks,
+      compensatedY: Number(target?.y) + (Number(target?.vy) || 0) * shared.renderDelayTicks,
+      targetVx: Number(target?.vx) || 0,
+      targetVy: Number(target?.vy) || 0
     };
   }
 

@@ -91,33 +91,65 @@ function calculateDodgeDirection(self, bullets, options = {}) {
     { dx: -1, dy: -1 }   // NW
   ];
 
+  const moveSpeedPerTick = Math.max(0, Number(options.moveSpeedPerTick ?? self?.speed_per_tick ?? self?.speedPerTick ?? 50));
+  const tickMs = Math.max(1, Number(options.tickMs || 50));
+  const hitRadius = Math.max(1, Number(options.hitRadius || 200));
   const threatField = directions.map(dir => {
     let directHits = 0;
     let minCPA = Infinity;
     let minTTI = Infinity;
 
     for (const bullet of incoming) {
-      // Check if this direction would result in hit
-      const cpa = bullet.cpa !== undefined ? bullet.cpa : bullet.distance;
-      const tti = bullet.timeToImpact || 1000;
+      const tti = Number(bullet.timeToImpact || 1000);
+      const futureTicks = Math.max(0, tti / tickMs);
+      const diagonalScale = dir.dx && dir.dy ? Math.SQRT1_2 : 1;
+      const futureSelf = {
+        x: Number(self?.x || 0) + dir.dx * diagonalScale * moveSpeedPerTick * futureTicks,
+        y: Number(self?.y || 0) + dir.dy * diagonalScale * moveSpeedPerTick * futureTicks
+      };
+      const bulletX = Number(bullet.x);
+      const bulletY = Number(bullet.y);
+      const directionX = Number(bullet.direction?.dx);
+      const directionY = Number(bullet.direction?.dy);
+      const bulletSpeed = Number(bullet.speed || COMBAT_CONSTANTS.BULLET_SPEED_CM_PER_TICK);
+      let cpa = Number(bullet.cpa ?? bullet.distance ?? Infinity);
+      if ([bulletX, bulletY, directionX, directionY, bulletSpeed].every(Number.isFinite)) {
+        const futureBullet = {
+          x: bulletX + directionX * bulletSpeed * futureTicks,
+          y: bulletY + directionY * bulletSpeed * futureTicks
+        };
+        cpa = Math.hypot(futureSelf.x - futureBullet.x, futureSelf.y - futureBullet.y);
+      }
 
-      if (cpa < 200) directHits++;  // Direct hit threshold
+      if (cpa < hitRadius) directHits++;
       if (cpa < minCPA) minCPA = cpa;
       if (tti < minTTI) minTTI = tti;
     }
 
+    const targetFutureTicks = Number.isFinite(minTTI) ? Math.max(0, minTTI / tickMs) : 0;
+    const targetDiagonalScale = dir.dx && dir.dy ? Math.SQRT1_2 : 1;
+    const candidateFutureSelf = {
+      x: Number(self?.x || 0) + dir.dx * targetDiagonalScale * moveSpeedPerTick * targetFutureTicks,
+      y: Number(self?.y || 0) + dir.dy * targetDiagonalScale * moveSpeedPerTick * targetFutureTicks
+    };
     return {
       dx: dir.dx,
       dy: dir.dy,
       directHits,
       minCPA,
       minTTI,
-      threat: directHits * 1000 + (10000 / Math.max(1, minCPA))
+      targetDistanceChange: Number.isFinite(Number(options.target?.x)) && Number.isFinite(Number(options.target?.y))
+        ? Math.hypot(candidateFutureSelf.x - Number(options.target.x), candidateFutureSelf.y - Number(options.target.y))
+          - Math.hypot(Number(self?.x || 0) - Number(options.target.x), Number(self?.y || 0) - Number(options.target.y))
+        : 0,
+      threat: directHits * 1000000 - Math.min(999999, minCPA)
     };
   });
 
   // Sort by threat ascending (lowest threat = safest)
-  threatField.sort((a, b) => a.threat - b.threat);
+  threatField.sort((a, b) => a.directHits - b.directHits
+    || b.minCPA - a.minCPA
+    || b.minTTI - a.minTTI);
 
   // Prefer tangent movement if safe
   const safest = threatField[0];
@@ -129,7 +161,7 @@ function calculateDodgeDirection(self, bullets, options = {}) {
       d.dx === tangentPreference.dx && d.dy === tangentPreference.dy
     );
 
-    if (tangentDir && tangentDir.directHits === 0 && tangentDir.threat < safest.threat * 2) {
+    if (tangentDir && tangentDir.directHits === safest.directHits && tangentDir.minCPA >= safest.minCPA * 0.92) {
       return {
         dx: tangentDir.dx,
         dy: tangentDir.dy,

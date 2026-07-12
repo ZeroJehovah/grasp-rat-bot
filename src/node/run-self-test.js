@@ -6973,7 +6973,7 @@ async function runSelfTest() {
           coin?.priorityTier
         ].join('|');
       })(),
-      want: 'profit-candidate|attack|8|9|2|1'
+      want: 'profit-candidate|attack|8|9|1|1'
     },
     {
       name: 'browserless profit live hard-prioritizes high-value realtime coin while recovering',
@@ -7150,7 +7150,7 @@ async function runSelfTest() {
           decision.profit.best.priorityTier
         ].join('|');
       })(),
-      want: 'coin|coin|||2'
+      want: 'coin|coin|||1'
     },
     {
       name: 'browserless profit live ranks in-range min-drop AFK over distant one coin',
@@ -7318,7 +7318,7 @@ async function runSelfTest() {
           decision.profit.best?.target?.userId
         ].join('|');
       })(),
-      want: 'coin|profit|foot-coin-priority|foot-coin|1|enemy|8'
+      want: 'coin|profit|foot-coin-priority|foot-coin|1|coin|'
     },
     {
       name: 'browserless profit live injured foot coin can pass return-block scan',
@@ -9671,7 +9671,7 @@ async function runSelfTest() {
       want: '8|passive-runner-close|true|1|0|passive-runner'
     },
     {
-      name: 'browserless combat aim widens after no target damage',
+      name: 'browserless quadratic combat aim enters motion probe after no target damage',
       got: (() => {
         const stateful = {
           combatTarget: { id: 8, at: 1000, firstSeenAt: 1000, lastInRangeAt: 1000, lastDamageAt: 1000, hp: 80, intent: 'engaged' }
@@ -9704,7 +9704,7 @@ async function runSelfTest() {
           stateful.combatAim.noDamageWidened
         ].join('|');
       })(),
-      want: 'linear-intercept|true|4|true|true'
+      want: 'quadratic-intercept-motion-probe|true|4|true|true'
     },
     {
       name: 'browserless combat engagement records motion samples for aim confidence',
@@ -9785,7 +9785,7 @@ async function runSelfTest() {
           decision.combat.shooting.reason
         ].join('|');
       })(),
-      want: 'combat-live|combat|combat-live-realtime|8|defensive|direct-threat-dodge|true|target-pressure-fire'
+      want: 'combat-live|combat|combat-live-realtime|8|defensive|tangent-dodge|true|target-pressure-fire'
     },
     {
       name: 'browserless combat critical hp exits through safety action',
@@ -10163,7 +10163,7 @@ async function runSelfTest() {
       want: 'true|finish|finish-low-threat|true|true'
     },
     {
-      name: 'browserless combat dry-run computes linear intercept and reserve suppression',
+      name: 'browserless combat dry-run computes quadratic intercept and reserve suppression',
       got: (() => {
         const aim = estimateAim(
           { user_id: 7, x: 0, y: 0 },
@@ -10206,7 +10206,7 @@ async function runSelfTest() {
           combat.shooting.commandSuppressed
         ].join('|');
       })(),
-      want: 'linear-intercept|1400|true|linear-intercept|direct-threat-dodge|disabled|below-hard-reserve|false|true'
+      want: 'quadratic-intercept|1500|true|quadratic-intercept|tangent-dodge|disabled|below-hard-reserve|false|true'
     },
     {
       name: 'browserless combat fire treats unknown self stamina as unknown not zero',

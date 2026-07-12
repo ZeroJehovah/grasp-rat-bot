@@ -30,6 +30,12 @@ function shouldHoldPreviousFinalAction(previousAction, previousFocus, currentAct
   const previousBand = String(previousFocus.band || actionPriorityBand(previousAction));
   const currentBand = String(currentFocus.band || actionPriorityBand(currentAction));
   if (currentBand === 'exit') return false;
+  if (previousBand === 'safety' && currentBand !== 'profit') return false;
+  if (currentAction.urgent === true || currentAction.immediate === true || currentAction.realThreatEvidence === true) return false;
+  if (previousBand === 'combat' && currentBand === 'safety') {
+    const evidence = currentAction.threatEvidence || currentAction.safetyEvidence || {};
+    return !(evidence.recentDamage || evidence.realBulletOwner || evidence.firing || evidence.invulnerableClose);
+  }
   const previousRank = finalActionBandRank(previousBand);
   const currentRank = finalActionBandRank(currentBand);
   if (previousRank <= 0 || currentRank <= 0) return false;

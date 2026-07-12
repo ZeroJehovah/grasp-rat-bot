@@ -2215,12 +2215,9 @@ function browserlessOpportunityPriorityTier(item, options = {}) {
     return amount >= highValueAmount ? Math.max(base, 2) : base;
   }
   if (String(item?.type || '') === 'enemy') {
-    const drop = entityDropValue(item?.sourceTarget || item);
-    const priorityDrop = Math.max(
-      Number(options.afkTargetPriorityMinDrop ?? 0) || 0,
-      Number(options.attackMinDrop ?? DEFAULT_ATTACK_MIN_DROP) || DEFAULT_ATTACK_MIN_DROP
-    );
-    return drop >= priorityDrop ? Math.max(base, 2) : base;
+    // Ordinary AFK profit competes with coins on ROI. A Drop threshold is an
+    // eligibility gate, not permission to outrank a better coin unconditionally.
+    return base;
   }
   return base;
 }
@@ -2464,7 +2461,7 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
       .filter(target => !afkOpportunityBlockedByStaminaCooldown(target, opportunityOptions))
       .filter(target => targetSafeFromOpportunityThreats(target, opportunityThreats, options))
     : [];
-  const opportunities = prioritizeBrowserlessOpportunities(buildOpportunityCandidatesCore(
+  let opportunities = prioritizeBrowserlessOpportunities(buildOpportunityCandidatesCore(
     input.self,
     opportunityThreats,
     coinGroups,
@@ -2472,6 +2469,45 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
     routeCoin,
     opportunityOptions
   ), options);
+  const current = stateful.currentOpportunity || null;
+  const currentEnemyPresent = current?.type === 'enemy'
+    && opportunities.some(item => String(item.type) === 'enemy' && String(item.id) === String(current.id));
+  const enemyMissingHoldMs = Math.max(0, Number(options.enemyMissingHoldMs ?? 1800));
+  const enemyLastSeenAt = Number(current?.lastSeenAt || current?.at || 0);
+  if (
+    current?.type === 'enemy'
+    && !currentEnemyPresent
+    && enemyMissingHoldMs > 0
+    && input.nowMs - enemyLastSeenAt <= enemyMissingHoldMs
+    && Number.isFinite(Number(current.x))
+    && Number.isFinite(Number(current.y))
+  ) {
+    const cachedTarget = {
+      type: 'enemy',
+      userId: current.id,
+      id: current.id,
+      x: Number(current.x),
+      y: Number(current.y),
+      distance: distanceBetween(input.self, current),
+      active: false,
+      cachedNavigationOnly: true,
+      authority: 'last-realtime-position'
+    };
+    opportunities = opportunities.concat([{
+      type: 'enemy',
+      id: current.id,
+      x: cachedTarget.x,
+      y: cachedTarget.y,
+      distance: cachedTarget.distance,
+      score: Number(current.score || 0),
+      staminaCost: Number(current.staminaCost || 0),
+      priorityTier: Number(current.priorityTier || 0),
+      actionKind: 'seek-enemy',
+      reason: 'missing-realtime-enemy-hold',
+      missingHold: true,
+      sourceTarget: cachedTarget
+    }]);
+  }
   const choice = chooseStableOpportunityCore(
     opportunities,
     stateful.currentOpportunity || null,
@@ -2484,7 +2520,9 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
         kind: chosen.actionKind || chosen.type,
         band: 'profit',
         reason: chosen.reason || 'best-opportunity',
-        target: chosen.type === 'coin' ? summarizeCoin(chosen.sourceCoin) : summarizeTarget(chosen.sourceTarget),
+        target: chosen.type === 'coin'
+          ? summarizeCoin(chosen.sourceCoin)
+          : { ...summarizeTarget(chosen.sourceTarget), cachedNavigationOnly: Boolean(chosen.sourceTarget?.cachedNavigationOnly) },
         ...(chosen.type === 'coin' && chosen.sourceCoin?.coinRoute
           ? { coinRoute: coinRouteActionMetaCore(chosen.sourceCoin.coinRoute, chosen.sourceCoin.distance) }
           : {})
@@ -3700,7 +3738,26 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     ...options,
     combatActionEligible
   };
-  const safetyAction = profitLiveSafetyDecision(input, combat, stateful, safetyContextOptions, opportunity.action);
+  let safetyAction = profitLiveSafetyDecision(input, combat, stateful, safetyContextOptions, opportunity.action);
+  if (safetyAction) {
+    const threat = safetyAction.target || safetyAction.threats?.[0] || null;
+    const threatId = threat?.userId ?? threat?.user_id ?? threat?.entityId ?? threat?.entity_id ?? null;
+    const realBulletOwner = threatId !== null && threatId !== undefined && (input.bullets || []).some(bullet => {
+      const ownerId = bullet?.owner_user_id ?? bullet?.ownerUserId ?? bullet?.owner_id ?? bullet?.ownerId ?? bullet?.user_id;
+      return ownerId !== null && ownerId !== undefined && String(ownerId) === String(threatId);
+    });
+    const evidence = {
+      realBulletOwner,
+      firing: Boolean(threat?.firing || threat?.shooting || threat?.is_firing),
+      recentDamage: Boolean(input.injury?.active || input.self?.recentlyDamaged),
+      invulnerableClose: Boolean(threat?.invulnerable && Number(threat?.distance || Infinity) <= Number(options.activeAvoidMaxDistance || BROWSER_RUNTIME_DEFAULTS.activeAvoidMaxDistance || 0))
+    };
+    safetyAction = {
+      ...safetyAction,
+      threatEvidence: evidence,
+      urgent: Object.values(evidence).some(Boolean)
+    };
+  }
   const injuryLeaveAction = input.self && !realtimeStale
     ? buildBrowserlessInjuryLeaveDecision(input, stateful, combat, safetyContextOptions)
     : null;
@@ -3991,7 +4048,7 @@ function recordAttackHistoryFromActionResult(decisionState, actionResult, decisi
   const id = targetIdForAttackHistory(target);
   if (id === null || id === undefined || id === '') return null;
   const nowMs = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
-  const combat = actionResult.kind === 'combat-live' || decision?.band === 'combat';
+  const combat = actionResult.kind === 'combat-live' || decision?.band === 'combat' || decision?.action?.band === 'combat';
   const entry = {
     id,
     name: target?.name || '',
@@ -4012,6 +4069,17 @@ function recordAttackHistoryFromActionResult(decisionState, actionResult, decisi
     ...(Array.isArray(decisionState.attackHistory) ? decisionState.attackHistory : []),
     entry
   ].slice(-50);
+  if (combat) {
+    const previousMetrics = decisionState.combatMetrics || {};
+    const previousShotAt = Number(previousMetrics.actualLastShotAt || 0);
+    decisionState.combatMetrics = {
+      ...previousMetrics,
+      targetId: String(id),
+      actualShots: Number(previousMetrics.actualShots || 0) + 1,
+      actualLastShotAt: nowMs,
+      actualShotIntervalMs: previousShotAt > 0 ? Math.max(0, nowMs - previousShotAt) : null
+    };
+  }
   if (!combat) {
     decisionState.combatTarget = {
       id,
@@ -4052,6 +4120,16 @@ function createBrowserlessDecisionAdapter(options = {}) {
       decisionState.opportunitySwitchLock = decision.stateful?.switchLock || null;
       decision.stateful.decisionState = summarizeBrowserlessDecisionState(decisionState);
       return decision;
+    },
+    evaluateCombat(state, nextOptions = {}) {
+      const mergedOptions = { ...options, ...nextOptions };
+      const input = buildBrowserlessStrategyInput(state, mergedOptions, decisionState);
+      const combat = buildCombatDecision(input, decisionState, mergedOptions);
+      return {
+        action: combat.exitAction || combat.action || { kind: 'wait', band: 'wait', reason: 'combat-control-no-target' },
+        combat: combat.dryRun,
+        exitAction: combat.exitAction || null
+      };
     },
     getState() {
       return cloneJson(decisionState);
