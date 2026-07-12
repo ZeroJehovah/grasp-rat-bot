@@ -52,6 +52,11 @@ const {
 } = require('../../strategy/coin-route');
 const { applyFinalActionArbitrationCore } = require('../../strategy/action-arbitration');
 const { recordActionSwitchDiagnosticsCore } = require('../../strategy/action-switch-diagnostics');
+const {
+  buildDynamicProfitThresholdCore,
+  filterProfitCandidatesCore,
+  profitTargetEligibleCore
+} = require('../../strategy/profit-threshold');
 const { targetIsWhitelisted, targetWhitelistNameSet } = require('../../shared/target-whitelist');
 const {
   createBrowserlessDecisionState,
@@ -1086,9 +1091,51 @@ function summarizeOpportunity(item) {
     staminaCost: Number.isFinite(Number(item.staminaCost)) ? Math.round(Number(item.staminaCost)) : null,
     distance: Number.isFinite(Number(item.distance)) ? Math.round(Number(item.distance)) : null,
     amount: numberOrNull(item.amount),
+    reward: numberOrNull(item.reward),
+    profitThresholdEligible: item.profitThresholdEligible === undefined ? null : Boolean(item.profitThresholdEligible),
+    profitThresholdReason: item.profitThresholdReason || '',
     target: item.sourceTarget ? summarizeTarget(item.sourceTarget) : null,
     coin: item.sourceCoin ? summarizeCoin(item.sourceCoin) : null,
     held: Boolean(item.held)
+  };
+}
+
+function buildProfitThresholdContext(input, options = {}) {
+  return buildDynamicProfitThresholdCore({
+    nowMs: input?.nowMs,
+    remaining1dMilli: staminaRemaining(input?.self, '1d')
+  }, {
+    enabled: options.dynamicProfitThresholdEnabled !== false,
+    coinsPer10Stamina: options.profitThresholdCoinsPer10Stamina,
+    hourlyStaminaLimit: options.profitThresholdHourlyStaminaLimit,
+    reserveMs: options.profitThresholdResetReserveMs
+  });
+}
+
+function profitRewardAndCostEligible(reward, staminaCost, thresholdContext) {
+  return !thresholdContext?.active
+    || profitTargetEligibleCore(reward, staminaCost, thresholdContext.threshold);
+}
+
+function profitCoinEligible(coin, thresholdContext, options = {}, rewardOverride = null) {
+  const reward = rewardOverride === null ? Number(coin?.amount) : Number(rewardOverride);
+  return profitRewardAndCostEligible(reward, opportunityCoinStaminaCost(coin, options), thresholdContext);
+}
+
+function buildProfitSelectionInput(input, thresholdContext, options = {}) {
+  if (!thresholdContext?.active) return input;
+  return {
+    ...input,
+    profitCoins: (input.profitCoins || []).filter(coin => profitCoinEligible(coin, thresholdContext, options)),
+    realtimeCoins: (input.realtimeCoins || []).filter(coin => profitCoinEligible(coin, thresholdContext, options)),
+    snapshotCoins: (input.snapshotCoins || []).filter(coin => profitCoinEligible(coin, thresholdContext, options)),
+    snapshotVisibleCoins: (input.snapshotVisibleCoins || []).filter(coin => profitCoinEligible(coin, thresholdContext, options)),
+    selfKilledPlayerDropCoins: (input.selfKilledPlayerDropCoins || []).filter(coin => profitCoinEligible(coin, thresholdContext, options)),
+    afkTargets: (input.afkTargets || []).filter(target => profitRewardAndCostEligible(
+      entityDropValue(target),
+      opportunityEnemyStaminaCost(target, options),
+      thresholdContext
+    ))
   };
 }
 
@@ -1532,7 +1579,8 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
 
 function scoreCoinOpportunity(coin, options = {}) {
   const weight = Number(options.coinOpportunityValue ?? BROWSER_RUNTIME_DEFAULTS.coinOpportunityValue ?? 1);
-  return opportunityValueScoreCore(coin?.amount, opportunityCoinStaminaCost(coin, options), {
+  const reward = Number(coin?.routeValue ?? coin?.coinRoute?.value ?? coin?.fieldAmount ?? coin?.totalAmount ?? coin?.amount);
+  return opportunityValueScoreCore(reward, opportunityCoinStaminaCost(coin, options), {
     distanceFloor: options.opportunityDistanceFloor ?? BROWSER_RUNTIME_DEFAULTS.opportunityDistanceFloor,
     distanceScoreScale: options.distanceScoreScale || options.opportunityDistanceScoreScale || BROWSER_RUNTIME_DEFAULTS.opportunityDistanceScoreScale || 10000,
     weight
@@ -2055,6 +2103,44 @@ function finalActionArbitrationHistoryLimit(options = {}) {
   return Math.max(4, Math.round(Number(options.finalActionArbitrationHistoryLimit ?? BROWSER_RUNTIME_DEFAULTS.finalActionArbitrationHistoryLimit ?? 24) || 24));
 }
 
+function annotateProfitActionThreshold(action, thresholdContext, options = {}) {
+  if (!action || !thresholdContext?.active || String(action.band || '') !== 'profit') return action;
+  if (action.kind === 'post-attack-drop-wait' || action.reason === 'post-attack-drop-wait') {
+    return { ...action, profitThresholdEligible: true, profitThresholdReason: 'wait-exempt' };
+  }
+  const target = action.target || action.opportunisticShot || {};
+  const enemyAction = action.kind === 'attack' || action.kind === 'seek-enemy' || action.kind === 'opportunistic-shot';
+  const reward = Number.isFinite(Number(action.reward))
+    ? Number(action.reward)
+    : Number(enemyAction
+      ? entityDropValue(target)
+      : (target.coinRoute?.value ?? target.fieldAmount ?? target.amount));
+  const staminaCost = Number.isFinite(Number(action.staminaCost))
+    ? Number(action.staminaCost)
+    : (enemyAction ? opportunityEnemyStaminaCost(target, options) : opportunityCoinStaminaCost(target, options));
+  const eligible = profitTargetEligibleCore(reward, staminaCost, thresholdContext.threshold);
+  return {
+    ...action,
+    reward: Number.isFinite(reward) ? reward : null,
+    staminaCost: Number.isFinite(staminaCost) ? staminaCost : null,
+    profitThresholdEligible: eligible,
+    profitThresholdReason: eligible ? 'eligible' : 'below-profit-threshold'
+  };
+}
+
+function clearIneligibleFinalProfitHold(stateful = {}, thresholdContext, options = {}) {
+  if (!thresholdContext?.active) return;
+  const arbitration = ensureFinalActionArbitrationState(stateful);
+  const previous = annotateProfitActionThreshold(arbitration.lastAction, thresholdContext, options);
+  if (previous?.band === 'profit' && previous.profitThresholdEligible !== true) {
+    arbitration.lastAction = null;
+    arbitration.lastFocus = null;
+    arbitration.lastSelectedAt = 0;
+  } else if (previous) {
+    arbitration.lastAction = previous;
+  }
+}
+
 function targetSwitchDiagnosticsHistoryLimit(options = {}) {
   return Math.max(4, Math.round(Number(options.targetSwitchDiagnosticsHistoryLimit ?? BROWSER_RUNTIME_DEFAULTS.targetSwitchDiagnosticsHistoryLimit ?? 24) || 24));
 }
@@ -2395,9 +2481,11 @@ function coinRouteCoreOptions(input, stateful = {}, options = {}) {
 }
 
 function buildOpportunityDecision(input, stateful = {}, options = {}) {
+  const thresholdContext = options.profitThresholdContext || buildProfitThresholdContext(input, options);
   if (!input.self) {
     return {
       opportunities: [],
+      rawChoice: null,
       choice: null,
       sorted: [],
       switchLock: stateful.switchLock || null,
@@ -2475,7 +2563,7 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
       .filter(target => !afkOpportunityBlockedByStaminaCooldown(target, opportunityOptions))
       .filter(target => targetSafeFromOpportunityThreats(target, opportunityThreats, options))
     : [];
-  let opportunities = prioritizeBrowserlessOpportunities(buildOpportunityCandidatesCore(
+  let rawOpportunities = prioritizeBrowserlessOpportunities(buildOpportunityCandidatesCore(
     input.self,
     opportunityThreats,
     coinGroups,
@@ -2483,7 +2571,28 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
     routeCoin,
     opportunityOptions
   ), options);
-  const current = stateful.currentOpportunity || null;
+  const filtered = filterProfitCandidatesCore(rawOpportunities, thresholdContext, {
+    reward: item => item.type === 'enemy'
+      ? entityDropValue(item.sourceTarget || item)
+      : Number(item.routeValue ?? item.sourceCoin?.routeValue ?? item.sourceCoin?.coinRoute?.value
+        ?? item.fieldAmount ?? item.sourceCoin?.fieldAmount ?? item.amount ?? item.sourceCoin?.amount),
+    staminaCost: item => item.staminaCost,
+    summaryLimit: 12
+  });
+  rawOpportunities = filtered.annotated;
+  let opportunities = filtered.candidates.map(item => ({
+    ...item,
+    profitThresholdActive: Boolean(thresholdContext.active),
+    profitThresholdRewardCoins: thresholdContext.threshold?.rewardCoins ?? null,
+    profitThresholdStaminaMilli: thresholdContext.threshold?.staminaMilli ?? null
+  }));
+  const storedCurrent = stateful.currentOpportunity || null;
+  const storedCurrentEligible = storedCurrent && profitTargetEligibleCore(
+    storedCurrent.reward,
+    storedCurrent.staminaCost,
+    thresholdContext.threshold
+  );
+  const current = thresholdContext.active && !storedCurrentEligible ? null : storedCurrent;
   const currentEnemyPresent = current?.type === 'enemy'
     && opportunities.some(item => String(item.type) === 'enemy' && String(item.id) === String(current.id));
   const enemyMissingHoldMs = Math.max(0, Number(options.enemyMissingHoldMs ?? 1800));
@@ -2495,6 +2604,7 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
     && input.nowMs - enemyLastSeenAt <= enemyMissingHoldMs
     && Number.isFinite(Number(current.x))
     && Number.isFinite(Number(current.y))
+    && (!thresholdContext.active || current.profitThresholdEligible === true)
   ) {
     const cachedTarget = {
       type: 'enemy',
@@ -2522,9 +2632,33 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
       sourceTarget: cachedTarget
     }]);
   }
+  const rawChoiceResult = chooseStableOpportunityCore(
+    rawOpportunities,
+    null,
+    null,
+    opportunityOptions
+  );
+  const rawChosen = rawChoiceResult.chosen || null;
+  const rawAction = rawChosen
+    ? {
+        kind: rawChosen.actionKind || rawChosen.type,
+        band: 'profit',
+        reason: rawChosen.reason || 'best-opportunity',
+        target: rawChosen.type === 'coin'
+          ? summarizeCoin(rawChosen.sourceCoin)
+          : { ...summarizeTarget(rawChosen.sourceTarget), cachedNavigationOnly: Boolean(rawChosen.sourceTarget?.cachedNavigationOnly) },
+        reward: rawChosen.reward,
+        staminaCost: rawChosen.staminaCost,
+        profitThresholdEligible: rawChosen.profitThresholdEligible,
+        profitThresholdReason: rawChosen.profitThresholdReason,
+        ...(rawChosen.type === 'coin' && rawChosen.sourceCoin?.coinRoute
+          ? { coinRoute: coinRouteActionMetaCore(rawChosen.sourceCoin.coinRoute, rawChosen.sourceCoin.distance) }
+          : {})
+      }
+    : null;
   const choice = chooseStableOpportunityCore(
     opportunities,
-    stateful.currentOpportunity || null,
+    current,
     stateful.switchLock || null,
     opportunityOptions
   );
@@ -2537,19 +2671,33 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
         target: chosen.type === 'coin'
           ? summarizeCoin(chosen.sourceCoin)
           : { ...summarizeTarget(chosen.sourceTarget), cachedNavigationOnly: Boolean(chosen.sourceTarget?.cachedNavigationOnly) },
+        reward: chosen.reward,
+        staminaCost: chosen.staminaCost,
+        profitThresholdEligible: chosen.profitThresholdEligible,
+        profitThresholdReason: chosen.profitThresholdReason,
         ...(chosen.type === 'coin' && chosen.sourceCoin?.coinRoute
           ? { coinRoute: coinRouteActionMetaCore(chosen.sourceCoin.coinRoute, chosen.sourceCoin.distance) }
           : {})
       }
     : null;
-  const remembered = rememberOpportunityChoiceCore(chosen, action, stateful.currentOpportunity || null, opportunityOptions);
+  const remembered = rememberOpportunityChoiceCore(chosen, action, current, opportunityOptions);
   return {
     opportunities,
+    rawOpportunities,
+    rawChoice: rawChosen,
+    rawAction,
     choice: chosen,
     sorted: choice.sorted || [],
-    switchLock: choice.switchLock || null,
-    opportunityChoice: remembered.choice || stateful.currentOpportunity || null,
-    action: remembered.action || action
+    switchLock: thresholdContext.active && !opportunities.length ? null : (choice.switchLock || null),
+    opportunityChoice: remembered.choice || null,
+    action: remembered.action || action,
+    threshold: {
+      ...thresholdContext,
+      rawCount: filtered.rawCount,
+      eligibleCount: filtered.eligibleCount,
+      filteredCount: filtered.filteredCount,
+      filtered: filtered.filtered
+    }
   };
 }
 
@@ -3730,8 +3878,11 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
   const combatDecisionEnabled = options.combatDecisionEnabled !== false && !nonCombatProfit && (!profitLive || options.combatEnabled === true);
   const frameAge = Number(input.realtime.frameAgeMs);
   const realtimeStale = Number.isFinite(frameAge) && frameAge > staleSelfExitMs;
+  const profitThresholdContext = buildProfitThresholdContext(input, options);
+  const profitSelectionInput = buildProfitSelectionInput(input, profitThresholdContext, options);
   const opportunity = buildOpportunityDecision(input, stateful, {
     ...options,
+    profitThresholdContext,
     includeAfkProfitTargets: nonCombatProfit ? false : options.includeAfkProfitTargets
   });
   const combat = buildCombatDecision(input, stateful, options);
@@ -3746,19 +3897,19 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       && !combatTarget.combatEngagement
   );
   let activeCombatOpportunity = null;
-  if (freshProactiveCombat && opportunity.choice) {
+  if (freshProactiveCombat && opportunity.rawChoice) {
     const combatScore = scoreEnemyOpportunity(combatTarget, {
       ...options,
       recentCombatMetrics: stateful.combatMetrics,
       isAfkProfitTarget: () => false
     });
-    const competingScore = Number(opportunity.choice.score || 0);
+    const competingScore = Number(opportunity.rawChoice.score || 0);
     const switchRatio = 1 + Math.max(0, Number(options.opportunitySwitchRelativeMargin || OPPORTUNITY_CONSTANTS.OPPORTUNITY_SWITCH_RELATIVE_MARGIN || 0));
     const blocked = Number.isFinite(Number(combatScore)) && competingScore > Number(combatScore) * switchRatio;
     activeCombatOpportunity = {
       combatScore: Number.isFinite(Number(combatScore)) ? Math.round(Number(combatScore)) : null,
       competingScore: Math.round(competingScore),
-      competingType: opportunity.choice.type || '',
+      competingType: opportunity.rawChoice.type || '',
       hitRateSource: stateful.combatMetrics?.targetId === String(combatTarget.userId) ? 'recent-target' : 'active-default',
       blocked
     };
@@ -3772,13 +3923,13 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       }
     : combat;
   const highValueCoinPriorityAction = (profitLive || nonCombatProfit)
-    ? buildHighValueVisibleCoinPriorityDecision(input, combatForProfit, options)
+    ? buildHighValueVisibleCoinPriorityDecision(profitSelectionInput, combatForProfit, options)
     : null;
   const safetyContextOptions = {
     ...options,
     combatActionEligible
   };
-  let safetyAction = profitLiveSafetyDecision(input, combat, stateful, safetyContextOptions, opportunity.action);
+  let safetyAction = profitLiveSafetyDecision(input, combat, stateful, safetyContextOptions, opportunity.rawAction);
   if (safetyAction) {
     const threat = safetyAction.target || safetyAction.threats?.[0] || null;
     const threatId = threat?.userId ?? threat?.user_id ?? threat?.entityId ?? threat?.entity_id ?? null;
@@ -3821,28 +3972,28 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     ? safetyAction
     : null;
   const staminaBudgetExitAction = (profitLive || nonCombatProfit) ? buildStaminaBudgetExitDecision(input, options) : null;
-  const postAttackDropCoinAction = (profitLive || nonCombatProfit) ? buildPostAttackDropCoinDecision(input, stateful, options) : null;
+  const postAttackDropCoinAction = (profitLive || nonCombatProfit) ? buildPostAttackDropCoinDecision(profitSelectionInput, stateful, options) : null;
   const postAttackDropWaitAction = (profitLive || nonCombatProfit) ? buildPostAttackDropWaitDecision(input, stateful, options) : null;
-  const recoveryFootCoinAction = (profitLive || nonCombatProfit) ? buildRecoveryFootCoinDecision(input, options) : null;
+  const recoveryFootCoinAction = (profitLive || nonCombatProfit) ? buildRecoveryFootCoinDecision(profitSelectionInput, options) : null;
   const recoveryAction = (profitLive || nonCombatProfit) ? buildRecoveryDecision(input, opportunity, options) : null;
   const injuredCautionFootCoinAction = safetyAction
     && safetyActionCanYieldToInjuredFootCoin(safetyAction)
     && input.self
     && isInjuredSelf(input.self, options)
-    ? buildFootCoinPriorityDecision(input, 'foot-coin-before-active-caution', options)
+    ? buildFootCoinPriorityDecision(profitSelectionInput, 'foot-coin-before-active-caution', options)
     : null;
   const returnToCenterAction = input.self && !realtimeStale && (profitLive || nonCombatProfit)
     ? buildReturnToCenterDecision(input, options)
     : null;
-  const footCoinPriorityAction = (profitLive || nonCombatProfit) ? buildFootCoinPriorityDecision(input, 'foot-coin-priority', options) : null;
+  const footCoinPriorityAction = (profitLive || nonCombatProfit) ? buildFootCoinPriorityDecision(profitSelectionInput, 'foot-coin-priority', options) : null;
   const dailyFinalCoinAction = (profitLive || nonCombatProfit) && !recoveryAction
-    ? buildDailyStaminaFinalCoinDecision(input, options)
+    ? buildDailyStaminaFinalCoinDecision(profitSelectionInput, options)
     : null;
   const opportunisticShotWaitAction = (profitLive || nonCombatProfit)
-    ? buildOpportunisticShotWaitDecision(input, stateful, options)
+    ? buildOpportunisticShotWaitDecision(profitSelectionInput, stateful, options)
     : null;
   const staminaBlockedWaitAction = (profitLive || nonCombatProfit)
-    ? buildStaminaBlockedWaitDecision(input, options)
+    ? buildStaminaBlockedWaitDecision(profitSelectionInput, options)
     : null;
   let kind = 'wait';
   let band = 'wait';
@@ -3964,7 +4115,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     action.reason = reason;
   }
   if (input.self && !realtimeStale) {
-    const selectedAction = attachOpportunisticShotDecision(action, input, stateful, options);
+    const selectedAction = attachOpportunisticShotDecision(action, profitSelectionInput, stateful, options);
     if (selectedAction !== action) {
       action = selectedAction;
       kind = action.kind || kind;
@@ -3982,6 +4133,8 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       band = action.band || band;
       reason = action.reason || reason;
     }
+    action = annotateProfitActionThreshold(action, profitThresholdContext, options);
+    clearIneligibleFinalProfitHold(stateful, profitThresholdContext, options);
     const arbitratedAction = applyBrowserlessFinalActionArbitration(action, stateful, input, options);
     if (arbitratedAction !== action) {
       action = arbitratedAction;
@@ -4023,7 +4176,9 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     },
     profit: {
       best: summarizeOpportunity(opportunity.choice),
-      candidates: topItems(opportunity.sorted, summarizeOpportunity)
+      rawBest: summarizeOpportunity(opportunity.rawChoice),
+      candidates: topItems(opportunity.sorted, summarizeOpportunity),
+      threshold: opportunity.threshold
     },
     combat: {
       ...(combat.dryRun || {}),
@@ -4157,7 +4312,7 @@ function createBrowserlessDecisionAdapter(options = {}) {
         ...options,
         ...nextOptions
       });
-      decisionState.opportunityChoice = decision.stateful?.opportunityChoice || decisionState.opportunityChoice || null;
+      decisionState.opportunityChoice = decision.stateful?.opportunityChoice ?? null;
       decisionState.opportunitySwitchLock = decision.stateful?.switchLock || null;
       decision.stateful.decisionState = summarizeBrowserlessDecisionState(decisionState);
       return decision;

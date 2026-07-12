@@ -949,6 +949,20 @@ function compactDecision(decision) {
     tick: compactNumber(decision.tick),
     actionKind: compactString(decision.action?.kind, 48),
     target: compactTarget(decision.target || decision.action?.target || (shouldExposeProfitTarget ? (decision.profit?.best?.target || decision.profit?.best?.coin) : null)),
+    threshold: decision.profit?.threshold && typeof decision.profit.threshold === 'object'
+      ? {
+          active: decision.profit.threshold.active === undefined ? null : Boolean(decision.profit.threshold.active),
+          reason: compactString(decision.profit.threshold.reason, 48),
+          coinsPer10Stamina: compactNumber(decision.profit.threshold.threshold?.coinsPer10Stamina),
+          remaining1dMilli: compactNumber(decision.profit.threshold.remaining1dMilli),
+          burnCapacityMilli: compactNumber(decision.profit.threshold.burnCapacityMilli),
+          resetAt: compactNumber(decision.profit.threshold.resetAt),
+          reserveMs: compactNumber(decision.profit.threshold.reserveMs),
+          rawCount: compactNumber(decision.profit.threshold.rawCount),
+          eligibleCount: compactNumber(decision.profit.threshold.eligibleCount),
+          filteredCount: compactNumber(decision.profit.threshold.filteredCount)
+        }
+      : null,
     dataGaps: dataGaps.slice(0, 5).map(item => compactString(item, 80)),
     dataGapCount: dataGaps.length
   };
@@ -1065,7 +1079,21 @@ function compactProfit(profit) {
           target: compactTarget(best.target || best.coin)
         }
       : null,
-    candidateCount: candidates.length
+    candidateCount: candidates.length,
+    threshold: profit.threshold && typeof profit.threshold === 'object'
+      ? {
+          active: profit.threshold.active === undefined ? null : Boolean(profit.threshold.active),
+          reason: compactString(profit.threshold.reason, 48),
+          coinsPer10Stamina: compactNumber(profit.threshold.threshold?.coinsPer10Stamina),
+          remaining1dMilli: compactNumber(profit.threshold.remaining1dMilli),
+          burnCapacityMilli: compactNumber(profit.threshold.burnCapacityMilli),
+          resetAt: compactNumber(profit.threshold.resetAt),
+          reserveMs: compactNumber(profit.threshold.reserveMs),
+          rawCount: compactNumber(profit.threshold.rawCount),
+          eligibleCount: compactNumber(profit.threshold.eligibleCount),
+          filteredCount: compactNumber(profit.threshold.filteredCount)
+        }
+      : null
   };
 }
 

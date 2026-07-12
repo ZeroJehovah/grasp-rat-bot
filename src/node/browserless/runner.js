@@ -80,6 +80,10 @@ function publicConfig(config) {
     sourceIps: config.sourceIps || [],
     stateFile: config.stateFile || stateFilePath(config),
     loginPointPresent: hasConfigNumber(config.loginPointX) && hasConfigNumber(config.loginPointY),
+    dynamicProfitThresholdEnabled: Boolean(config.dynamicProfitThresholdEnabled),
+    profitThresholdCoinsPer10Stamina: Number(config.profitThresholdCoinsPer10Stamina || 0),
+    profitThresholdHourlyStaminaLimit: Number(config.profitThresholdHourlyStaminaLimit || 0),
+    profitThresholdResetReserveMs: Number(config.profitThresholdResetReserveMs || 0),
     userId: Number(config.userId || 0),
     sessionTokenPresent: Boolean(config.sessionToken)
   };

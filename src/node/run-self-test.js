@@ -6925,6 +6925,187 @@ async function runSelfTest() {
       want: 'wait|no-profitable-candidate|true|1|0|58500|true'
     },
     {
+      name: 'browserless dynamic profit threshold preserves realtime combat decisions',
+      got: (() => {
+        const nowMs = Date.parse('2026-07-12T00:00:00.000Z');
+        const store = createBrowserlessStateStore({ userId: 7 });
+        store.ingestFrame({
+          type: 'pos', tick: 54,
+          entities: [
+            { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, max_hp: 100 },
+            { entity_id: 2, user_id: 8, name: 'attacker', x: 5000, y: 0, hp: 80, max_hp: 100, current_join_mode: 'Active', firing: true, drop: 6 }
+          ],
+          bullets: [{ bullet_id: 1, owner_user_id: 8, start_x: 5000, start_y: 0, target_x: 0, target_y: 0, speed_per_tick: 500 }],
+          coin_drops: [{ drop_id: 'low-combat-coin', amount: 1, x: 11000, y: 0 }]
+        }, { receivedAtMs: nowMs });
+        store.ingestFrame({
+          type: 'snapshot', tick: 55,
+          entities: [{ entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, stamina_1h_remaining_milli: 3000000, stamina_1d_remaining_milli: 20000000 }],
+          bullets: [], coin_drops: [], messages: []
+        }, { receivedAtMs: nowMs + 10 });
+        const state = store.getState(nowMs + 20);
+        const disabled = buildBrowserlessDecision(state, {}, { nowMs, controlMode: 'profit-live', combatEnabled: true, dynamicProfitThresholdEnabled: false });
+        const active = buildBrowserlessDecision(state, {}, { nowMs, controlMode: 'profit-live', combatEnabled: true, dynamicProfitThresholdEnabled: true });
+        return [disabled.band, active.band, disabled.action.target?.userId, active.action.target?.userId, disabled.reason === active.reason].join('|');
+      })(),
+      want: 'combat|combat|8|8|true'
+    },
+    {
+      name: 'browserless dynamic profit threshold clears held low ROI profit without changing stamina exit',
+      got: (() => {
+        const nowMs = Date.parse('2026-07-12T00:00:00.000Z');
+        const makeState = remaining1h => {
+          const store = createBrowserlessStateStore({ userId: 7 });
+          store.ingestFrame({
+            type: 'pos', tick: 55,
+            entities: [{ entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, max_hp: 100 }],
+            bullets: [], coin_drops: [{ drop_id: 'held-low', amount: 1, x: 11000, y: 0 }]
+          }, { receivedAtMs: nowMs });
+          store.ingestFrame({
+            type: 'snapshot', tick: 56,
+            entities: [{ entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, stamina_1h_remaining_milli: remaining1h, stamina_1d_remaining_milli: 20000000 }],
+            bullets: [], coin_drops: [], messages: []
+          }, { receivedAtMs: nowMs + 10 });
+          return store.getState(nowMs + 20);
+        };
+        const adapter = createBrowserlessDecisionAdapter({ controlMode: 'profit-live' });
+        const before = adapter.decide(makeState(3000000), { nowMs, dynamicProfitThresholdEnabled: false });
+        const after = adapter.decide(makeState(3000000), { nowMs: nowMs + 100, dynamicProfitThresholdEnabled: true });
+        const exitDisabled = buildBrowserlessDecision(makeState(5000), {}, { nowMs, controlMode: 'profit-live', dynamicProfitThresholdEnabled: false });
+        const exitActive = buildBrowserlessDecision(makeState(5000), {}, { nowMs, controlMode: 'profit-live', dynamicProfitThresholdEnabled: true });
+        return [
+          before.action.target?.id,
+          after.kind,
+          after.action.finalActionArbitration === undefined,
+          adapter.getState().opportunityChoice === null,
+          exitDisabled.reason,
+          exitActive.reason,
+          exitDisabled.action.staminaBudgetExit?.id,
+          exitActive.action.staminaBudgetExit?.id
+        ].join('|');
+      })(),
+      want: 'held-low|wait|true|true|stamina-budget-coin-leave|stamina-budget-coin-leave|held-low|held-low'
+    },
+    {
+      name: 'browserless dynamic profit threshold qualifies dense routes by aggregate ROI',
+      got: (() => {
+        const nowMs = Date.parse('2026-07-12T00:00:00.000Z');
+        const store = createBrowserlessStateStore({ userId: 7 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 56,
+          entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 }],
+          bullets: [],
+          coin_drops: [
+            { drop_id: 'route-a', amount: 1, x: 15000, y: 0 },
+            { drop_id: 'route-b', amount: 1, x: 15500, y: 0 },
+            { drop_id: 'route-c', amount: 1, x: 16000, y: 0 }
+          ]
+        }, { receivedAtMs: nowMs });
+        store.ingestFrame({
+          type: 'snapshot',
+          tick: 57,
+          entities: [{ entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, stamina_1h_remaining_milli: 3000000, stamina_1d_remaining_milli: 20000000 }],
+          bullets: [], coin_drops: [], messages: []
+        }, { receivedAtMs: nowMs + 10 });
+        const decision = buildBrowserlessDecision(store.getState(nowMs + 20), {}, {
+          nowMs,
+          controlMode: 'profit-live',
+          dynamicProfitThresholdEnabled: true
+        });
+        return [
+          decision.reason,
+          decision.profit.best?.reward,
+          decision.profit.best?.staminaCost,
+          decision.profit.best?.coin?.coinRoute?.value,
+          decision.profit.threshold.filteredCount
+        ].join('|');
+      })(),
+      want: 'best-opportunity-coin-route|3|16000|3|2'
+    },
+    {
+      name: 'browserless dynamic profit threshold blocks new low ROI AFK pursuit',
+      got: (() => {
+        const nowMs = Date.parse('2026-07-12T00:00:00.000Z');
+        const store = createBrowserlessStateStore({ userId: 7 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 57,
+          entities: [
+            { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+            fullStamina5s({ entity_id: 2, user_id: 8, name: 'far-drop-three', x: 20000, y: 0, hp: 100, max_hp: 100, current_join_mode: 'Passive', drop: 3 })
+          ],
+          bullets: [],
+          coin_drops: []
+        }, { receivedAtMs: nowMs });
+        store.ingestFrame({
+          type: 'snapshot',
+          tick: 58,
+          entities: [{ entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, stamina_1h_remaining_milli: 3000000, stamina_1d_remaining_milli: 20000000 }],
+          bullets: [],
+          coin_drops: [],
+          messages: []
+        }, { receivedAtMs: nowMs + 10 });
+        const state = store.getState(nowMs + 20);
+        const active = buildBrowserlessDecision(state, {}, { nowMs, controlMode: 'profit-live', dynamicProfitThresholdEnabled: true });
+        const disabled = buildBrowserlessDecision(state, {}, { nowMs, controlMode: 'profit-live', dynamicProfitThresholdEnabled: false });
+        return [active.kind, active.profit.threshold.filteredCount, disabled.action.kind, disabled.action.target?.userId].join('|');
+      })(),
+      want: 'wait|1|seek-enemy|8'
+    },
+    {
+      name: 'browserless dynamic profit threshold filters low ROI coins and relaxes near reset',
+      got: (() => {
+        const makeDecision = (nowMs, remaining1dMilli, coinX) => {
+          const store = createBrowserlessStateStore({ userId: 7 });
+          store.ingestFrame({
+            type: 'pos',
+            tick: 58,
+            entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 }],
+            bullets: [],
+            coin_drops: [{ drop_id: `coin-${coinX}`, amount: 1, x: coinX, y: 0 }]
+          }, { receivedAtMs: nowMs });
+          store.ingestFrame({
+            type: 'snapshot',
+            tick: 59,
+            entities: [{
+              entity_id: 1,
+              user_id: 7,
+              name: 'self',
+              x: 0,
+              y: 0,
+              hp: 100,
+              stamina_1h_remaining_milli: 3000000,
+              stamina_1d_remaining_milli: remaining1dMilli
+            }],
+            coin_drops: [],
+            bullets: [],
+            messages: []
+          }, { receivedAtMs: nowMs + 10 });
+          return buildBrowserlessDecision(store.getState(nowMs + 20), {}, {
+            nowMs,
+            controlMode: 'profit-live',
+            dynamicProfitThresholdEnabled: true
+          });
+        };
+        const activePass = makeDecision(Date.parse('2026-07-12T00:00:00.000Z'), 20000000, 9000);
+        const activeBlock = makeDecision(Date.parse('2026-07-12T00:00:00.000Z'), 20000000, 11000);
+        const relaxed = makeDecision(Date.parse('2026-07-12T09:00:00.000Z'), 20000000, 11000);
+        const unknown = makeDecision(Date.parse('2026-07-12T00:00:00.000Z'), null, 11000);
+        return [
+          activePass.action.target?.id,
+          activePass.profit.threshold.active,
+          activeBlock.kind,
+          activeBlock.profit.threshold.filteredCount,
+          relaxed.action.target?.id,
+          relaxed.profit.threshold.reason,
+          unknown.action.target?.id,
+          unknown.profit.threshold.reason
+        ].join('|');
+      })(),
+      want: 'coin-9000|true|wait|1|coin-11000|insufficient-burn-window|coin-11000|daily-stamina-unknown'
+    },
+    {
       name: 'browserless strategy defaults track browser runtime defaults',
       got: (() => {
         const browser = buildRuntimeDefaults({}, false);
@@ -13326,6 +13507,35 @@ async function runSelfTest() {
         ].join('|');
       }),
       want: 'true|4|0|any|true|true|true|true|false|canary:profit|true|true|true'
+    },
+    {
+      name: 'browserless runner config exposes dynamic profit threshold env cli and public values',
+      got: (() => {
+        const envConfig = parseBrowserlessRunnerArgs([], {
+          GRASP_RAT_BROWSERLESS_DYNAMIC_PROFIT_THRESHOLD_ENABLED: 'false',
+          GRASP_RAT_BROWSERLESS_PROFIT_THRESHOLD_COINS_PER_10_STAMINA: '2',
+          GRASP_RAT_BROWSERLESS_PROFIT_THRESHOLD_HOURLY_STAMINA_LIMIT: '2500',
+          GRASP_RAT_BROWSERLESS_PROFIT_THRESHOLD_RESET_RESERVE_MS: '1800000'
+        });
+        const cliConfig = parseBrowserlessRunnerArgs([
+          '--dynamic-profit-threshold',
+          '--profit-threshold-coins-per-10-stamina', '1.5',
+          '--profit-threshold-hourly-stamina-limit', '2800',
+          '--profit-threshold-reset-reserve-ms', '900000'
+        ], {});
+        const exposed = publicConfig(cliConfig);
+        return [
+          envConfig.dynamicProfitThresholdEnabled,
+          envConfig.profitThresholdCoinsPer10Stamina,
+          envConfig.profitThresholdHourlyStaminaLimit,
+          envConfig.profitThresholdResetReserveMs,
+          exposed.dynamicProfitThresholdEnabled,
+          exposed.profitThresholdCoinsPer10Stamina,
+          exposed.profitThresholdHourlyStaminaLimit,
+          exposed.profitThresholdResetReserveMs
+        ].join('|');
+      })(),
+      want: 'false|2|2500|1800000|true|1.5|2800|900000'
     },
     {
       name: 'browserless runner config maps canary profiles without enabling combat',

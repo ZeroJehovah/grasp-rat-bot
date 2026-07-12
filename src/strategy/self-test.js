@@ -115,9 +115,54 @@ const {
 } = require('./chase-mode');
 const { COMBAT_CONSTANTS, validateCombatConstants } = require('./combat-constants');
 const { OPPORTUNITY_CONSTANTS, calculateOpportunityROI, validateOpportunityConstants } = require('./opportunity-constants');
+const {
+  buildDynamicProfitThresholdCore,
+  filterProfitCandidatesCore,
+  nextDailyProfitResetAtCore,
+  profitTargetEligibleCore
+} = require('./profit-threshold');
 
 function runStrategyModuleSelfTests() {
   const results = [];
+
+  const threshold = { rewardCoins: 1, staminaMilli: 10000 };
+  results.push({
+    name: 'profit-threshold-ratio-boundaries-and-invalid-values',
+    passed: profitTargetEligibleCore(1, 9000, threshold) === true
+      && profitTargetEligibleCore(1, 10000, threshold) === true
+      && profitTargetEligibleCore(1, 11000, threshold) === false
+      && profitTargetEligibleCore(1, 0, threshold) === true
+      && profitTargetEligibleCore(0, 0, threshold) === false
+      && profitTargetEligibleCore(1, NaN, threshold) === false
+  });
+  const utc8EightAm = Date.parse('2026-07-12T00:00:00.000Z');
+  const activeThreshold = buildDynamicProfitThresholdCore({ nowMs: utc8EightAm, remaining1dMilli: 20000000 }, {});
+  const relaxedThreshold = buildDynamicProfitThresholdCore({ nowMs: Date.parse('2026-07-12T09:00:00.000Z'), remaining1dMilli: 20000000 }, {});
+  const equalBoundary = buildDynamicProfitThresholdCore({ nowMs: Date.parse('2026-07-12T14:00:00.000Z'), remaining1dMilli: 3000000 }, {});
+  results.push({
+    name: 'profit-threshold-utc8-reset-reserve-and-burn-window',
+    passed: nextDailyProfitResetAtCore(utc8EightAm) === Date.parse('2026-07-12T16:00:00.000Z')
+      && activeThreshold.active === true
+      && Math.round(activeThreshold.burnCapacityMilli) === 45000000
+      && relaxedThreshold.active === false
+      && relaxedThreshold.reason === 'insufficient-burn-window'
+      && equalBoundary.active === true
+  });
+  results.push({
+    name: 'profit-threshold-unknown-daily-stamina-restores-old-selection',
+    passed: buildDynamicProfitThresholdCore({ nowMs: utc8EightAm, remaining1dMilli: null }, {}).reason === 'daily-stamina-unknown'
+      && buildDynamicProfitThresholdCore({ nowMs: utc8EightAm, remaining1dMilli: 1 }, { enabled: false }).reason === 'feature-disabled'
+  });
+  const aggregateRoute = filterProfitCandidatesCore([
+    { type: 'coin', id: 'route', reward: 3, staminaCost: 25000 },
+    { type: 'coin', id: 'single', reward: 1, staminaCost: 11000 }
+  ], activeThreshold);
+  results.push({
+    name: 'profit-threshold-filters-by-aggregate-route-reward',
+    passed: aggregateRoute.rawCount === 2
+      && aggregateRoute.eligibleCount === 1
+      && aggregateRoute.candidates[0]?.id === 'route'
+  });
 
   const intercept = quadraticInterceptCore(
     { x: 0, y: 0 },

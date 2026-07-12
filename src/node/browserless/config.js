@@ -59,7 +59,11 @@ const DEFAULTS = {
   sourceIps: [],
   loginPointX: null,
   loginPointY: null,
-  loginPointHp: null
+  loginPointHp: null,
+  dynamicProfitThresholdEnabled: true,
+  profitThresholdCoinsPer10Stamina: 1,
+  profitThresholdHourlyStaminaLimit: 3000,
+  profitThresholdResetReserveMs: 3600000
 };
 
 const CANARY_PROFILES = {
@@ -160,6 +164,10 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
     loginPointX: numberEnv(env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_X, DEFAULTS.loginPointX),
     loginPointY: numberEnv(env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_Y, DEFAULTS.loginPointY),
     loginPointHp: numberEnv(env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_HP, DEFAULTS.loginPointHp),
+    dynamicProfitThresholdEnabled: boolEnv(env.GRASP_RAT_BROWSERLESS_DYNAMIC_PROFIT_THRESHOLD_ENABLED, DEFAULTS.dynamicProfitThresholdEnabled),
+    profitThresholdCoinsPer10Stamina: numberEnv(env.GRASP_RAT_BROWSERLESS_PROFIT_THRESHOLD_COINS_PER_10_STAMINA, DEFAULTS.profitThresholdCoinsPer10Stamina),
+    profitThresholdHourlyStaminaLimit: numberEnv(env.GRASP_RAT_BROWSERLESS_PROFIT_THRESHOLD_HOURLY_STAMINA_LIMIT, DEFAULTS.profitThresholdHourlyStaminaLimit),
+    profitThresholdResetReserveMs: numberEnv(env.GRASP_RAT_BROWSERLESS_PROFIT_THRESHOLD_RESET_RESERVE_MS, DEFAULTS.profitThresholdResetReserveMs),
     selfTest: false,
     help: false
   };
@@ -292,6 +300,16 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
       config.loginPointY = numberEnv(argv[++i], config.loginPointY);
     } else if (arg === '--login-point-hp') {
       config.loginPointHp = numberEnv(argv[++i], config.loginPointHp);
+    } else if (arg === '--dynamic-profit-threshold') {
+      config.dynamicProfitThresholdEnabled = true;
+    } else if (arg === '--no-dynamic-profit-threshold') {
+      config.dynamicProfitThresholdEnabled = false;
+    } else if (arg === '--profit-threshold-coins-per-10-stamina') {
+      config.profitThresholdCoinsPer10Stamina = numberEnv(argv[++i], config.profitThresholdCoinsPer10Stamina);
+    } else if (arg === '--profit-threshold-hourly-stamina-limit') {
+      config.profitThresholdHourlyStaminaLimit = numberEnv(argv[++i], config.profitThresholdHourlyStaminaLimit);
+    } else if (arg === '--profit-threshold-reset-reserve-ms') {
+      config.profitThresholdResetReserveMs = numberEnv(argv[++i], config.profitThresholdResetReserveMs);
     } else if (arg === '--self-test') {
       config.selfTest = true;
     } else if (arg === '--help' || arg === '-h') {
@@ -368,6 +386,11 @@ function usage() {
     '  --login-point-x <cm>      Manual login point x for canary safety',
     '  --login-point-y <cm>      Manual login point y for canary safety',
     '  --login-point-hp <hp>     Manual login point HP context for canary safety',
+    '  --dynamic-profit-threshold  Enable the dynamic ordinary-profit threshold (default: true)',
+    '  --no-dynamic-profit-threshold  Disable the dynamic ordinary-profit threshold',
+    '  --profit-threshold-coins-per-10-stamina <n>  Reward coins per 10 stamina. Default: 1',
+    '  --profit-threshold-hourly-stamina-limit <n>  Theoretical stamina burn per hour. Default: 3000',
+    '  --profit-threshold-reset-reserve-ms <ms>  UTC+8 reset reserve. Default: 3600000',
     '  --self-test              Run runner skeleton self-test'
   ].join('\n');
 }
