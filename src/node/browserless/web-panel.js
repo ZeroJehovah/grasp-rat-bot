@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.12.8';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.13.1';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function renderBrowserlessWebPanel() {
@@ -836,7 +836,7 @@ function renderBrowserlessWebPanel() {
       const originalReason = String(detail.originalReason || '');
       const reasonText = [reason, detailReason, originalReason].join(' ');
       if (/self-present-reentry/i.test(reasonText) || (detail.selfPresent === true && detail.bypassedPreLoginSafety)) {
-        return { state: 'reentry', text: '快照确认角色仍在线，正在连接实时状态' };
+        return { state: 'reentry', text: '检测到角色仍在线，正在恢复实时连接（不会新登录）' };
       }
       const pendingSafeReason = /snapshot-safety-streak-pending/i.test(detailReason)
         && /^safe$/i.test(originalReason);
@@ -1255,12 +1255,13 @@ function renderBrowserlessWebPanel() {
 
       if (!online && isSafetyStatus(status, kind, reason)) {
         const loginDisplay = loginPointDisplay(status);
-        addRow(rowsOut, '登录点', loginPointText(status), false, loginPointAttrs(status));
-        addRow(rowsOut, '登录点坐标', pointCoordText(status.loginPointSafety?.point));
-        addRow(rowsOut, '不安全原因', unsafeReasonText(status));
-        addRow(rowsOut, '附近危险', loginDisplay.state === 'safe' ? '--' : targetLabel(status.loginPointSafety?.detail?.nearestActive));
+        const reentry = loginDisplay.state === 'reentry';
+        addRow(rowsOut, reentry ? '连接状态' : '登录点', loginPointText(status), false, loginPointAttrs(status));
+        addRow(rowsOut, reentry ? '当前坐标' : '登录点坐标', pointCoordText(status.loginPointSafety?.point));
+        addRow(rowsOut, '不安全原因', reentry ? '--' : unsafeReasonText(status));
+        addRow(rowsOut, '附近危险', reentry ? '--' : (loginDisplay.state === 'safe' ? '--' : targetLabel(status.loginPointSafety?.detail?.nearestActive)));
         addRow(rowsOut, '保持离线', offlineBlockerText(status), false, status.stats?.offline?.blocker ? classAttrs('warn') : null);
-        addRow(rowsOut, '检查时间', fullStamp(status.loginPointSafety?.checkedAt || status.loginPointSafety?.detail?.checkedAt));
+        addRow(rowsOut, reentry ? '状态确认时间' : '检查时间', fullStamp(status.loginPointSafety?.checkedAt || status.loginPointSafety?.detail?.checkedAt));
       }
 
       if (!online) {

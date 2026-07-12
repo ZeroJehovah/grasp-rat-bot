@@ -16369,7 +16369,12 @@ async function runSelfTest() {
           /function loginPointDisplay/.test(panelScript),
           /return loginPointDisplay\(status\)\.text/.test(panelScript),
           !/return '检查中'/.test(panelScript),
-          panelScript.includes("text: '快照确认角色仍在线，正在连接实时状态'"),
+          panelScript.includes("text: '检测到角色仍在线，正在恢复实时连接（不会新登录）'"),
+          panelScript.includes("reentry ? '连接状态' : '登录点'"),
+          panelScript.includes("reentry ? '当前坐标' : '登录点坐标'"),
+          panelScript.includes("reentry ? '--' : unsafeReasonText(status)"),
+          panelScript.includes("reentry ? '--' : (loginDisplay.state === 'safe'"),
+          panelScript.includes("reentry ? '状态确认时间' : '检查时间'"),
           /function dangerousPlayerExitReasonText/.test(panelScript),
           panelScript.includes("evidence.push('快照为 Active')"),
           panelScript.includes("evidence.push('近期有活动')"),
@@ -16404,7 +16409,7 @@ async function runSelfTest() {
           hiddenActionLabels.every(label => !panelScript.includes("addRow(rowsOut, '" + label + "'"))
         ].join('|');
       })(),
-      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
+      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless runner self-test passes',
