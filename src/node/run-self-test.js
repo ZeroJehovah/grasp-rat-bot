@@ -10825,7 +10825,7 @@ async function runSelfTest() {
       want: 'true|1|0|feedback-wait|coin-position-feedback-wait|velocity|0|1|1|vel 1 0,vel 1 0'
     },
     {
-      name: 'browserless distant targets align the near axis before following the long lane',
+      name: 'browserless distant targets follow the long axis without short-axis oscillation',
       got: (() => {
         const align = movementVectorToTarget(
           { x: 0, y: 0 },
@@ -10848,7 +10848,19 @@ async function runSelfTest() {
           follow.routeMode
         ].join('|');
       })(),
-      want: '1|0|align-target-x-axis|lane-align-x|0|1|follow-target-x-axis|lane-follow-x'
+      want: '0|1|follow-target-x-axis|lane-follow-x|0|1|follow-target-x-axis|lane-follow-x'
+    },
+    {
+      name: 'browserless afk pursuit keeps advancing the long axis across short-axis overshoot',
+      got: (() => {
+        const samples = [66318, 66768, 67818, 67368].map(y => movementVectorToTarget(
+          { x: -351, y },
+          { type: 'enemy', x: -24238, y: 67063 },
+          {}
+        ));
+        return samples.map(item => [item.dx, item.dy, item.routeMode].join(':')).join('|');
+      })(),
+      want: '-1:0:lane-follow-y|-1:0:lane-follow-y|-1:0:lane-follow-y|-1:0:lane-follow-y'
     },
     {
       name: 'browserless action adapter stops for combat and reached targets',

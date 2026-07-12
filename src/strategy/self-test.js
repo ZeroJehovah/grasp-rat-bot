@@ -818,10 +818,10 @@ function runStrategyModuleSelfTests() {
     { ...coinMotionOptions, coinAlignNearAxisFirst: true }
   );
   results.push({
-    name: 'coin-motion-aligns-near-axis-before-long-lane',
-    passed: laneAlignCoinMotion.direction.dx === 1
-      && laneAlignCoinMotion.direction.dy === 0
-      && laneAlignCoinMotion.direction.laneAlignment === 'x'
+    name: 'coin-motion-follows-long-lane-without-short-axis-oscillation',
+    passed: laneAlignCoinMotion.direction.dx === 0
+      && laneAlignCoinMotion.direction.dy === 1
+      && laneAlignCoinMotion.direction.laneAligned === 'x'
       && laneFollowCoinMotion.direction.dx === 0
       && laneFollowCoinMotion.direction.dy === 1
       && laneFollowCoinMotion.direction.laneAligned === 'x'

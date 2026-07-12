@@ -23,11 +23,9 @@ function targetLaneAlignmentDirectionCore(dxRaw, dyRaw, distance, options = {}) 
   const absX = Math.abs(dxRaw);
   const absY = Math.abs(dyRaw);
   if (absX <= laneTolerance && absY > laneTolerance) {
-    if (absX > tolerance) return { dx: Math.sign(dxRaw), dy: 0, distance, laneAlignment: 'x' };
     return { dx: 0, dy: Math.sign(dyRaw), distance, laneAligned: 'x' };
   }
   if (absY <= laneTolerance && absX > laneTolerance) {
-    if (absY > tolerance) return { dx: 0, dy: Math.sign(dyRaw), distance, laneAlignment: 'y' };
     return { dx: Math.sign(dxRaw), dy: 0, distance, laneAligned: 'y' };
   }
   return null;
