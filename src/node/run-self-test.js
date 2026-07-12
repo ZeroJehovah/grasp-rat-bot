@@ -7538,7 +7538,7 @@ async function runSelfTest() {
       want: 'coin|profit|foot-coin-before-active-caution|safe-foot-coin|400|'
     },
     {
-      name: 'browserless profit live hard safety leave beats foot coin',
+      name: 'browserless profit live ignores snapshot Active metadata for online safety',
       got: (() => {
         const store = createBrowserlessStateStore({ userId: 7 });
         store.ingestFrame({
@@ -7570,12 +7570,13 @@ async function runSelfTest() {
           decision.kind,
           decision.band,
           decision.reason,
-          decision.action.shouldLeave,
-          decision.action.target.userId,
-          decision.action.target.profitMetadataActive
+          Boolean(decision.action.shouldLeave),
+          decision.action.target.id,
+          (decision.input.snapshotActiveThreats || []).length,
+          decision.input.dataGaps.includes('snapshot-active-threat-visible')
         ].join('|');
       })(),
-      want: 'safety-exit|safety|profit-live-snapshot-active-threat|true|8|true'
+      want: 'coin|profit|foot-coin-priority|false|foot-coin|0|false'
     },
     {
       name: 'browserless decision input filters ordinary profit outside center activity radius',
@@ -8866,7 +8867,7 @@ async function runSelfTest() {
       want: 'wait|no-profitable-candidate|none|false|0|snapshot-coins-out-of-visible-range|true'
     },
     {
-      name: 'browserless profit live allows visible snapshot coin when snapshot-active threat is distant',
+      name: 'browserless profit live ignores snapshot Active metadata while using visible fallback coin',
       got: (() => {
         const store = createBrowserlessStateStore({ userId: 7 });
         store.ingestFrame({
@@ -8906,7 +8907,7 @@ async function runSelfTest() {
           decision.action.target.id
         ].join('|');
       })(),
-      want: 'profit-candidate|best-opportunity-coin|snapshot-fallback|true|0|true|false|coin|near-visible-coin'
+      want: 'profit-candidate|best-opportunity-coin|snapshot-fallback|true|0|false|false|coin|near-visible-coin'
     },
     {
       name: 'browserless profit live can explicitly disable snapshot coin fallback',
@@ -9081,7 +9082,7 @@ async function runSelfTest() {
       want: 'profit-candidate|attack|enemy|8|realtime|1000|8|snapshot|none|false'
     },
     {
-      name: 'browserless profit live treats snapshot-active realtime target as safety threat',
+      name: 'browserless profit live does not turn snapshot Active metadata into an online threat',
       got: (() => {
         const store = createBrowserlessStateStore({ userId: 7 });
         store.ingestFrame({
@@ -9113,9 +9114,7 @@ async function runSelfTest() {
           decision.kind,
           decision.band,
           decision.reason,
-          decision.action.target.userId,
-          decision.action.target.authority,
-          decision.action.target.profitMetadataActive,
+          Boolean(decision.action.shouldLeave),
           decision.profit.best === null,
           decision.combat.target?.userId || '',
           Boolean(decision.combat.actionEligible),
@@ -9123,7 +9122,111 @@ async function runSelfTest() {
           decision.input.dataGaps.includes('snapshot-fallback-blocked:active-threat-visible')
         ].join('|');
       })(),
-      want: 'safety-exit|safety|profit-live-snapshot-active-threat|8|realtime|true|true||false|true|true'
+      want: 'wait|wait|no-profitable-candidate|false|true||false|false|false'
+    },
+    {
+      name: 'browserless profit live fights realtime moving target regardless of snapshot mode metadata',
+      got: (() => {
+        const store = createBrowserlessStateStore({ userId: 7 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 59,
+          entities: [
+            { entity_id: 1, user_id: 7, name: 'self', x: 100, y: 100, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 8000 },
+            { entity_id: 2, user_id: 8, name: 'moving-target', x: 9000, y: 100, hp: 100, vx: 100, vy: 0, drop: 24 }
+          ],
+          bullets: []
+        }, { receivedAtMs: 1000 });
+        store.ingestFrame({
+          type: 'snapshot',
+          tick: 60,
+          entities: [
+            { entity_id: 1, user_id: 7, name: 'self', x: 100, y: 100, hp: 100 },
+            { entity_id: 22, user_id: 8, name: 'moving-target', x: 9010, y: 100, hp: 100, current_join_mode: 'Active', death_reward_preview: 24, death_drop_coins: 24 }
+          ],
+          bullets: [],
+          coin_drops: [],
+          messages: []
+        }, { receivedAtMs: 1100 });
+        const decision = buildBrowserlessDecision(store.getState(1200), {}, {
+          nowMs: 1200,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          combatAttackRange: 14500
+        });
+        return [
+          decision.kind,
+          decision.band,
+          decision.reason,
+          decision.action.target.userId,
+          decision.combat.target?.userId || '',
+          decision.combat.actionEligible,
+          Boolean(decision.action.shouldLeave),
+          decision.input.dataGaps.includes('snapshot-active-threat-visible')
+        ].join('|');
+      })(),
+      want: 'combat-live|combat|combat-live-realtime|8|8|true|false|false'
+    },
+    {
+      name: 'browserless profit live keeps the logged Wbh engagement through a stationary realtime frame',
+      got: (() => {
+        const stateful = {
+          combatTarget: {
+            id: 2889,
+            at: 2000,
+            firstSeenAt: 1000,
+            lastInRangeAt: 2000,
+            hp: 100,
+            drop: 32,
+            reason: 'combat-live-realtime',
+            intent: 'profit',
+            originIntent: 'profit'
+          }
+        };
+        const store = createBrowserlessStateStore({ userId: 28886 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 20820,
+          entities: [
+            { entity_id: 207, user_id: 28886, name: '文月', x: 6495, y: 65644, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 7311 },
+            { entity_id: 0, user_id: 2889, name: 'Wbh', x: 18279, y: 57726, hp: 100, vx: 0, vy: 0, drop: 32 }
+          ],
+          bullets: []
+        }, { receivedAtMs: 2000 });
+        store.ingestFrame({
+          type: 'snapshot',
+          tick: 20821,
+          entities: [
+            { entity_id: 207, user_id: 28886, name: '文月', x: 6495, y: 65644, hp: 100 },
+            { entity_id: 99, user_id: 2889, name: 'Wbh', x: 18279, y: 57726, hp: 100, current_join_mode: 'Active', death_drop_coins: 32 }
+          ],
+          bullets: [],
+          coin_drops: [],
+          messages: []
+        }, { receivedAtMs: 2050 });
+        const decision = buildBrowserlessDecision(store.getState(2100), stateful, {
+          nowMs: 2100,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          combatAttackRange: 14500,
+          targetStickMs: 7000,
+          combatEngageStickMs: 7000,
+          combatEngageGraceMs: 30000,
+          combatEngageGraceRange: 17000
+        });
+        return [
+          decision.kind,
+          decision.band,
+          decision.reason,
+          decision.action.target.userId,
+          decision.combat.target?.combatIntent || '',
+          Boolean(decision.combat.target?.combatEngagement?.realtimeHold),
+          decision.combat.actionEligible,
+          decision.combat.shooting.wouldShoot,
+          Boolean(decision.action.shouldLeave)
+        ].join('|');
+      })(),
+      want: 'combat-live|combat|combat-live-realtime|2889|engaged|true|true|true|false'
     },
     {
       name: 'browserless profit live keeps engaged realtime combat over snapshot-active same target',
@@ -9182,7 +9285,7 @@ async function runSelfTest() {
           decision.input.dataGaps.includes('snapshot-active-threat-visible')
         ].join('|');
       })(),
-      want: 'combat-live|combat|combat-live-realtime|8|8|engaged|true|true|true|true'
+      want: 'combat-live|combat|combat-live-realtime|8|8|engaged|true|true|true|false'
     },
     {
       name: 'browserless profit live flees instead of chasing coin under combat threat',

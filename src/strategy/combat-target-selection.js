@@ -330,13 +330,18 @@ function pickEngagedCombatTargetCore(self, combatTargets = [], entities = [], bu
     if (state && typeof state === 'object') state.combatTarget = null;
     return null;
   }
-  if (!isCombatEligibleThreat(raw, context)) {
+  const engagedRealtimeHold = Number.isFinite(distance)
+    && attackRange > 0
+    && distance <= attackRange
+    && maxAgeMs > 0
+    && ageMs <= maxAgeMs;
+  if (!isCombatEligibleThreat(raw, context) && !engagedRealtimeHold) {
     if (state && typeof state === 'object') state.combatTarget = null;
     return null;
   }
   return {
     ...raw,
-    combatIntent: 'reengage',
+    combatIntent: engagedRealtimeHold ? 'engaged' : 'reengage',
     combatEngagement: {
       ageMs: Math.round(ageMs),
       outOfRangeMs: Math.round(outOfRangeMs),
@@ -345,6 +350,7 @@ function pickEngagedCombatTargetCore(self, combatTargets = [], entities = [], bu
       activeReengage,
       outOfRangeLimitMs: Math.round(outOfRangeLimitMs),
       lastReason: engaged.reason || '',
+      realtimeHold: engagedRealtimeHold,
       reengage: true
     }
   };

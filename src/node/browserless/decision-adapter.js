@@ -626,7 +626,7 @@ function afkTargetBlockedByRecentActivity(target, options = {}) {
 
 function isBrowserlessAvoidanceThreat(target) {
   if (!target || target.alive === false) return false;
-  return Boolean(target.active || target.firing || target.profitMetadataActive || (target.invulnerable && target.recentlyActive));
+  return Boolean(target.active || target.firing || (target.invulnerable && target.recentlyActive));
 }
 
 function hpValue(entity) {
@@ -890,15 +890,12 @@ function enrichRealtimeEntityWithSnapshotProfitMetadata(entity, snapshotEntity, 
   const metadataDistance = distanceBetween(entity, snapshotEntity);
   if (Number.isFinite(metadataDistance) && maxDistance > 0 && metadataDistance > maxDistance) return entity;
   const snapshotJoinMode = String(snapshotEntity.current_join_mode || snapshotEntity.mode || snapshotEntity.joined || '');
-  const snapshotActive = isCurrentlyActiveEntity(snapshotEntity, options);
   const modePatch = snapshotJoinMode
     ? {
         profitMetadataMode: snapshotJoinMode,
-        profitMetadataActive: snapshotActive,
         profitMetadataDistance: Number.isFinite(metadataDistance) ? Math.round(metadataDistance) : null
       }
     : {
-        profitMetadataActive: snapshotActive,
         profitMetadataDistance: Number.isFinite(metadataDistance) ? Math.round(metadataDistance) : null
       };
   const output = {
@@ -1434,14 +1431,13 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
   const activeThreats = visibleTargets.filter(entity => entity.active && entity.alive !== false);
   const firingThreats = visibleTargets.filter(entity => entity.firing && entity.alive !== false);
   const avoidanceThreats = visibleTargets.filter(isBrowserlessAvoidanceThreat);
-  const snapshotActiveThreats = visibleTargets.filter(entity => entity.profitMetadataActive && !entity.active && entity.alive !== false);
+  const snapshotActiveThreats = [];
   const snapshotFallbackThreats = [
     ...activeThreats,
-    ...firingThreats.filter(threat => !activeThreats.includes(threat)),
-    ...snapshotActiveThreats
+    ...firingThreats.filter(threat => !activeThreats.includes(threat))
   ].filter(threat => snapshotFallbackThreatBlocks(threat, self, options));
   const afkObservationTargetsRaw = visibleTargets.filter(entity => {
-    if (entity.whitelisted || entity.active || entity.moving || entity.firing || entity.profitMetadataActive || entity.alive === false || entity.invulnerable) return false;
+    if (entity.whitelisted || entity.active || entity.moving || entity.firing || entity.alive === false || entity.invulnerable) return false;
     return attackWorthTakingCore(self, entity, {
       attackMinDrop: options.attackMinDrop ?? DEFAULT_ATTACK_MIN_DROP,
       attackMinAfkDrop: options.attackMinAfkDrop ?? DEFAULT_ATTACK_MIN_AFK_DROP,
@@ -1675,7 +1671,7 @@ function highValueThreatBlocksLowHpCoin(threat, options = {}) {
     cautionRadius + Math.max(0, Number(options.activeCautionExitMargin || 0))
   );
   if (distance > radius) return false;
-  return Boolean(threat.active || threat.firing || threat.profitMetadataActive || isCurrentlyActiveEntity(threat, options));
+  return Boolean(threat.active || threat.firing || isCurrentlyActiveEntity(threat, options));
 }
 
 function pickHighValueVisibleCoin(input, combatDecision, options = {}) {
@@ -2496,7 +2492,7 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
   const includeAfkProfitTargets = options.includeAfkProfitTargets !== false;
   const coinMaxDistance = Math.max(0, Number(options.coinMaxDistance || BROWSER_RUNTIME_DEFAULTS.coinMaxDistance));
   const globalCoinMaxDistance = Math.max(0, Number(options.globalCoinMaxDistance || DEFAULT_GLOBAL_COIN_MAX_DISTANCE));
-  const opportunityThreats = (input.avoidanceThreats || input.activeThreats || []).concat(input.snapshotActiveThreats || []);
+  const opportunityThreats = input.avoidanceThreats || input.activeThreats || [];
   clearDangerousOpportunityState(stateful, input.nowMs);
   const fieldMigrationCoin = pickFieldMigrationCoin(input, opportunityThreats, options);
   const coinGroups = input.profitCoins.length
@@ -3090,7 +3086,7 @@ function pickBrowserlessInjuryPressure(input, options = {}) {
       const distance = Number(target.distance);
       if (key && bulletPressure.ownerIds.has(key)) return true;
       if (!Number.isFinite(distance) || distance > maxDistance) return false;
-      return Boolean(target.active || target.firing || target.recentlyActive || target.profitMetadataActive);
+      return Boolean(target.active || target.firing || target.recentlyActive);
     })
     .map(target => {
       const key = targetKey(target);
@@ -3101,7 +3097,7 @@ function pickBrowserlessInjuryPressure(input, options = {}) {
         + (unknownFiring ? 700000000 : 0)
         + (target.firing ? 500000000 : 0)
         + (target.invulnerable ? 200000000 : 0)
-        + ((target.active || target.profitMetadataActive) ? 100000000 : 0)
+        + (target.active ? 100000000 : 0)
         - (Number.isFinite(distance) ? distance : 0);
       return { target, score };
     })
@@ -3450,15 +3446,11 @@ function profitLiveSafetyDecision(input, combatDecision, stateful = {}, options 
   }
   const realtimeThreat = Array.from(realtimeThreatsById.values())
     .sort((a, b) => Number(a.distance || Infinity) - Number(b.distance || Infinity))[0] || null;
-  const snapshotThreat = (input.snapshotActiveThreats || [])
-    .slice()
-    .sort((a, b) => Number(a.distance || Infinity) - Number(b.distance || Infinity))[0] || null;
-  const target = realtimeThreat || snapshotThreat || realtimeTarget;
+  const target = realtimeThreat || realtimeTarget;
   const distance = Number(target?.distance);
   if (!target || !Number.isFinite(distance)) return criticalUnknownPressureExit(input, options);
-  const snapshotThreatening = Boolean(target.profitMetadataActive && !target.active);
-  const invulnerableThreatening = Boolean(target.invulnerable && !snapshotThreatening && isBrowserlessAvoidanceThreat(target));
-  const threatening = Boolean(target.active || target.firing || snapshotThreatening || invulnerableThreatening);
+  const invulnerableThreatening = Boolean(target.invulnerable && isBrowserlessAvoidanceThreat(target));
+  const threatening = Boolean(target.active || target.firing || invulnerableThreatening);
   if (!threatening) return criticalUnknownPressureExit(input, options);
   const threatExitRange = Math.max(0, Number(options.profitLiveThreatExitRange || DEFAULT_PROFIT_LIVE_THREAT_EXIT_RANGE));
   const invulnerableAvoidRange = Math.max(threatExitRange, Number(options.activeAvoidMaxDistance || BROWSER_RUNTIME_DEFAULTS.activeAvoidMaxDistance || threatExitRange));
@@ -3469,7 +3461,7 @@ function profitLiveSafetyDecision(input, combatDecision, stateful = {}, options 
   const criticalHp = combatCriticalHpThreshold(options);
   const criticalThreat = selfHp !== null
     && selfHp <= criticalHp
-    && (target.active || target.firing || snapshotThreatening || invulnerableThreatening);
+    && (target.active || target.firing || invulnerableThreatening);
   if (options.combatEnabled === true) {
     const combatTargetId = realtimeTarget?.userId ?? realtimeTarget?.user_id ?? realtimeTarget?.entityId ?? realtimeTarget?.entity_id ?? null;
     const threatId = target?.userId ?? target?.user_id ?? target?.entityId ?? target?.entity_id ?? null;
@@ -3494,17 +3486,6 @@ function profitLiveSafetyDecision(input, combatDecision, stateful = {}, options 
           threshold: criticalHp,
           distance: Math.round(distance)
         }
-      };
-    }
-    if (!combatHandlesThreat && snapshotThreatening && distance <= threatExitRange) {
-      return {
-        kind: 'safety-exit',
-        band: 'safety',
-        reason: 'profit-live-snapshot-active-threat',
-        shouldLeave: true,
-        stopMotion: true,
-        target: summarizeTarget(target),
-        self: summarizeTarget(input.self)
       };
     }
     if (!combatHandlesThreat && invulnerableThreatening && distance <= effectiveThreatExitRange) {
@@ -3532,17 +3513,6 @@ function profitLiveSafetyDecision(input, combatDecision, stateful = {}, options 
   else if (distance <= effectiveThreatExitRange) reason = 'profit-live-active-threat';
   else if (injured && distance <= injuryExitRange) reason = 'profit-live-injury-threat';
   if (!reason) return null;
-  if (snapshotThreatening) {
-    return {
-      kind: 'safety-exit',
-      band: 'safety',
-      reason: 'profit-live-snapshot-active-threat',
-      shouldLeave: true,
-      stopMotion: true,
-      target: summarizeTarget(target),
-      self: summarizeTarget(input.self)
-    };
-  }
   const avoidance = buildReturnBlockActionCore(stateful, input.self, [target], blockedAction || { kind: 'wait', reason: 'blocked-by-active-threat' }, {
     ...options,
     nowMs: input.nowMs
