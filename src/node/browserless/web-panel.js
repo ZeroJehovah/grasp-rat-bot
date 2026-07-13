@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.14.1';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.14.2';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function renderBrowserlessWebPanel() {
@@ -79,6 +79,12 @@ function renderBrowserlessWebPanel() {
     .nearby-summary .nearby-cell{grid-column:1/-1;color:var(--muted)}
     .coin-row{grid-template-columns:minmax(48px,1fr) minmax(34px,.5fr) minmax(46px,.65fr)}
     .player-row{grid-template-columns:minmax(150px,2.8fr) minmax(40px,.55fr) minmax(42px,.55fr) minmax(42px,.5fr) minmax(52px,.65fr)}
+    .high-drop-list{display:grid;gap:0;min-width:0}
+    .high-drop-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.35fr);gap:10px;align-items:center;min-height:26px;padding:3px 0;border-bottom:1px solid rgba(255,255,255,.06)}
+    .high-drop-row:last-child{border-bottom:0}
+    .high-drop-head{color:var(--muted);font-size:11px;font-weight:700}
+    .high-drop-cell{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .high-drop-values{color:var(--coin);font-variant-numeric:tabular-nums}
     .nearby-cell{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     .distance-badge{font-variant-numeric:tabular-nums}
     .range-attack{color:var(--green)}
@@ -182,6 +188,10 @@ function renderBrowserlessWebPanel() {
             <dl id="todayStats"></dl>
           </section>
         </div>
+        <section>
+          <h2>今日高收益玩家</h2>
+          <div id="highDropPlayers" class="high-drop-list"></div>
+        </section>
         <section id="nearbyGrid" class="nearby-panel" hidden>
           <h2>附近信息</h2>
           <div class="nearby-combined">
@@ -1192,6 +1202,41 @@ function renderBrowserlessWebPanel() {
       }
       node.replaceChildren(fragment);
     }
+    function highDropValueText(item) {
+      const values = [item?.[1], item?.[2], item?.[3]];
+      const merged = [];
+      for (const current of values) {
+        const next = number(current);
+        if (next === null) continue;
+        if (!merged.length || merged[merged.length - 1] !== next) merged.push(next);
+      }
+      return merged.length ? merged.map(integer).join(' -> ') : '--';
+    }
+    function createHighDropRow(name, drops, head = false) {
+      const row = document.createElement('div');
+      row.className = 'high-drop-row' + (head ? ' high-drop-head' : '');
+      const nameCell = document.createElement('div');
+      nameCell.className = 'high-drop-cell';
+      nameCell.textContent = value(name);
+      const dropCell = document.createElement('div');
+      dropCell.className = 'high-drop-cell' + (head ? '' : ' high-drop-values');
+      dropCell.textContent = value(drops);
+      row.append(nameCell, dropCell);
+      return row;
+    }
+    function renderHighDropPlayers(status) {
+      const node = document.getElementById('highDropPlayers');
+      if (!node) return;
+      const items = Array.isArray(status.highDropPlayers?.p) ? status.highDropPlayers.p : [];
+      const fragment = document.createDocumentFragment();
+      fragment.appendChild(createHighDropRow('玩家名称', 'Drop', true));
+      if (!items.length) {
+        fragment.appendChild(createHighDropRow('无', '--'));
+      } else {
+        for (const item of items) fragment.appendChild(createHighDropRow(item?.[0], highDropValueText(item)));
+      }
+      node.replaceChildren(fragment);
+    }
     function updateNearbyPanels(status) {
       const panel = document.getElementById('nearbyGrid');
       if (!panel) return;
@@ -1473,6 +1518,7 @@ function renderBrowserlessWebPanel() {
       rows('actionDetails', actionDetailRows(s));
       updateBattlePanel(s);
       updateNearbyPanels(s);
+      renderHighDropPlayers(s);
       const roleSelf = s.game?.inGame ? s.self : (s.lastKnown?.self || s.self);
       const roleStamina = s.game?.inGame ? s.stamina : (s.lastKnown?.stamina || s.stamina);
       const offlineRole = !s.game?.inGame && Boolean(s.lastKnown);

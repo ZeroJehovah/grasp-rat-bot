@@ -129,6 +129,10 @@ const {
   cleanupOldLogDays
 } = require('./browserless/log-retention');
 const {
+  createHighDropPlayerTracker,
+  createSnapshotGapPoller
+} = require('./browserless/high-drop-player-tracker');
+const {
   summarizeBrowserlessLogDay,
   writeBrowserlessLogSummary
 } = require('../../scripts/browserless-log-summary');
@@ -12296,6 +12300,7 @@ async function runSelfTest() {
       got: (async () => {
         let t = Date.UTC(2026, 6, 8, 1, 0, 0);
         let commandCount = 0;
+        const snapshotSources = [];
         const posFrame = encodeGrzFrameForTest({
           type: 'pos',
           tick: 10,
@@ -12328,6 +12333,7 @@ async function runSelfTest() {
           persistedState: {
             loginPointSafety: { point: { x: 100, y: 200, hp: 90, source: 'test' } }
           },
+          onSnapshotPayload: (_payload, detail) => snapshotSources.push(detail.source),
           fetchImpl: async () => fakeResponseForTest({
             body: {
               type: 'snapshot',
@@ -12363,10 +12369,11 @@ async function runSelfTest() {
           result.leave.ok,
           result.state.realtime.self.name,
           result.state.fallback.coinDrops[0].amount,
-          commandCount
+          commandCount,
+          snapshotSources.join(',')
         ].join('|');
       })(),
-      want: 'true|true|2|1|1|2|2|profit-candidate|true|self|2|0'
+      want: 'true|true|2|1|1|2|2|profit-candidate|true|self|2|0|prelogin-http,ws'
     },
     {
       name: 'browserless no-self grace starts at ws open after slow snapshot safety',
@@ -15688,6 +15695,91 @@ async function runSelfTest() {
       want: 'true|28886|true|self-test|5999|true|28886|true|6001|canary-self|true'
     },
     {
+      name: 'browserless high drop tracker keeps first max and latest values for the UTC+8 day',
+      got: withTempDirForTest(async dir => {
+        let t = Date.UTC(2026, 6, 14, 1, 0, 0);
+        const file = path.join(dir, 'high-drop-players.json');
+        const tracker = createHighDropPlayerTracker({ file, now: () => t });
+        tracker.observeSnapshot({
+          entities: [
+            { user_id: 7, name: 'self', drop: 900 },
+            { user_id: 8, name: 'alice', drop: 499 },
+            { user_id: 9, name: 'bob', death_drop_coins: 500 }
+          ]
+        }, { source: 'prelogin-http', selfUserId: 7, observedAtMs: t });
+        t += 60000;
+        tracker.observeSnapshot({
+          entities: [
+            { user_id: 8, name: 'alice', drop: 520 },
+            { user_id: 9, name: 'bob', drop: 450 }
+          ]
+        }, { source: 'ws', selfUserId: 7, observedAtMs: t });
+        t += 60000;
+        tracker.observeSnapshot({ entities: [{ user_id: 8, name: 'alice', drop: 700 }] }, {
+          source: 'ws', selfUserId: 7, observedAtMs: t
+        });
+        t += 60000;
+        tracker.observeSnapshot({ entities: [{ user_id: 8, name: 'alice', drop: 600 }] }, {
+          source: 'gap-http', selfUserId: 7, observedAtMs: t
+        });
+        const current = createHighDropPlayerTracker({ file, now: () => t }).status();
+        t = Date.UTC(2026, 6, 14, 16, 0, 0);
+        const nextDay = tracker.status();
+        return [
+          current.day,
+          current.players.length,
+          current.players[0].name,
+          current.players[0].initialDrop,
+          current.players[0].maxDrop,
+          current.players[0].latestDrop,
+          current.players[1].name,
+          current.players[1].initialDrop,
+          current.players[1].maxDrop,
+          current.players[1].latestDrop,
+          current.players.some(player => player.userId === 7),
+          current.lastSnapshotSource,
+          nextDay.day,
+          nextDay.players.length
+        ].join('|');
+      }),
+      want: '2026-07-14|2|alice|520|700|600|bob|500|500|450|false|gap-http|2026-07-15|0'
+    },
+    {
+      name: 'browserless snapshot gap poller waits three minutes after any observed snapshot',
+      got: (async () => {
+        let t = 10000;
+        let scheduled = null;
+        let fetchCount = 0;
+        let poller = null;
+        const setTimer = (fn, delay) => {
+          scheduled = { fn, delay };
+          return { unref() {} };
+        };
+        poller = createSnapshotGapPoller({
+          now: () => t,
+          intervalMs: 180000,
+          setTimeout: setTimer,
+          clearTimeout: () => {},
+          isReady: () => true,
+          fetchSnapshot: async () => {
+            fetchCount += 1;
+            return { entities: [] };
+          },
+          onSnapshot: async (_payload, detail) => poller.noteSnapshot(detail.observedAtMs)
+        });
+        poller.start();
+        const startupDelay = scheduled.delay;
+        t += 500;
+        poller.noteSnapshot(t);
+        const observedDelay = scheduled.delay;
+        t += 180000;
+        await scheduled.fn();
+        const afterPollDelay = scheduled.delay;
+        return [startupDelay, observedDelay, fetchCount, afterPollDelay].join('|');
+      })(),
+      want: '1000|180000|1|180000'
+    },
+    {
       name: 'browserless state file public status redacts session token',
       got: withTempDirForTest(async dir => {
         const config = parseBrowserlessRunnerArgs(['--data-dir', dir, '--web-token', 'web-secret'], {});
@@ -17131,6 +17223,40 @@ async function runSelfTest() {
         }
       })(),
       want: '401|200|true|true|true|200|true|12|true|true|true|200|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|200|true|1'
+    },
+    {
+      name: 'browserless compact status and web panel expose the high drop player list',
+      got: (() => {
+        const compact = buildCompactBrowserlessStatus({
+          highDropPlayers: {
+            day: '2026-07-14',
+            updatedAt: '2026-07-14T01:02:03.000Z',
+            lastSnapshotAt: '2026-07-14T01:02:03.000Z',
+            lastSnapshotSource: 'ws',
+            file: '/tmp/should-not-leak.json',
+            players: [
+              { name: 'alice', initialDrop: 520, maxDrop: 700, latestDrop: 600 },
+              { name: 'bob', initialDrop: 500, maxDrop: 500, latestDrop: 450 }
+            ]
+          }
+        });
+        const panelText = renderBrowserlessWebPanel();
+        const panelScript = panelText.match(/<script>([\s\S]*?)<\/script>/)?.[1] || '';
+        return [
+          compact.highDropPlayers.day,
+          compact.highDropPlayers.source,
+          compact.highDropPlayers.p[0].join(','),
+          compact.highDropPlayers.p[1].join(','),
+          JSON.stringify(compact).includes('should-not-leak'),
+          /<h2>今日高收益玩家<\/h2>/.test(panelText),
+          /id="highDropPlayers"/.test(panelText),
+          /function highDropValueText/.test(panelScript),
+          /merged\[merged.length - 1\] !== next/.test(panelScript),
+          /join\('\s*->\s*'\)/.test(panelScript),
+          panelText.indexOf('id="highDropPlayers"') < panelText.indexOf('id="nearbyGrid"')
+        ].join('|');
+      })(),
+      want: '2026-07-14|ws|alice,520,700,600|bob,500,500,450|false|true|true|true|true|true|true'
     },
     {
       name: 'browserless web panel renders target bars and svg target icons',

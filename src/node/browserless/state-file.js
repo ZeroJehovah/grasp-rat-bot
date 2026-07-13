@@ -1331,6 +1331,23 @@ function compactNearby(nearby) {
   };
 }
 
+function compactHighDropPlayers(value) {
+  if (!value || typeof value !== 'object') return null;
+  const players = Array.isArray(value.players) ? value.players : [];
+  return {
+    day: compactString(value.day, 10),
+    updatedAt: value.updatedAt || '',
+    lastSnapshotAt: value.lastSnapshotAt || '',
+    source: compactString(value.lastSnapshotSource, 32),
+    p: players.map(player => [
+      compactString(player?.name, 96),
+      compactNumber(player?.initialDrop),
+      compactNumber(player?.maxDrop),
+      compactNumber(player?.latestDrop)
+    ]).filter(row => row[0] && row.slice(1).every(item => item !== null)).slice(0, 160)
+  };
+}
+
 function compactRun(run) {
   if (!run || typeof run !== 'object') return null;
   const canary = run.canary && typeof run.canary === 'object' ? run.canary : null;
@@ -1602,6 +1619,7 @@ function buildCompactBrowserlessStatus(state, config = {}) {
     combat,
     battle: compactBattleStatus(normalized, game, action, decision, combat),
     nearby: compactNearby(current.decision?.input?.nearby),
+    highDropPlayers: compactHighDropPlayers(normalized.highDropPlayers),
     stats: compactBrowserlessStats(normalized, game, action, config, lastKnown),
     loginPointSafety: {
       ok: Boolean(normalized.loginPointSafety?.ok),

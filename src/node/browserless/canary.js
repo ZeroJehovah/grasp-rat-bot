@@ -179,6 +179,14 @@ async function runSinglePreLoginSnapshotSafetyProbe(config, state, deps = {}, de
     cache: 'no-store'
   });
   const body = await readResponseBody(response);
+  if (body.json && typeof deps.onSnapshotPayload === 'function') {
+    try {
+      await deps.onSnapshotPayload(body.json, {
+        source: 'prelogin-http',
+        observedAtMs: typeof deps.now === 'function' ? deps.now() : Date.now()
+      });
+    } catch (_) {}
+  }
   const runtimeDefaults = buildBrowserlessRuntimeDefaults(config);
   const summary = summarizeSnapshotPayload(body.json, {
     userId: config.userId,
@@ -709,6 +717,16 @@ async function runReadOnlyCanary(config, options = {}) {
           ...frame
         });
         if (frame.decodedJson) {
+          if (frame.decodedJson.type === 'snapshot' && typeof options.onSnapshotPayload === 'function') {
+            try {
+              options.onSnapshotPayload(frame.decodedJson, {
+                source: 'ws',
+                observedAtMs: atMs
+              });
+            } catch (err) {
+              log('canary-snapshot-observer-error', { error: err?.message || String(err) });
+            }
+          }
           stateStore.ingestFrame(frame.decodedJson, { receivedAtMs: atMs });
           const currentState = stateStore.getState(atMs);
           const currentSelf = currentState?.realtime?.self || null;

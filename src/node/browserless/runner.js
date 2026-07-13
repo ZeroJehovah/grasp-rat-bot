@@ -20,13 +20,21 @@ const {
 const { startStatusServer } = require('./status-server');
 const { runPreLoginSnapshotSafety, runReadOnlyCanary } = require('./canary');
 const {
+  createHighDropPlayerTracker,
+  createSnapshotGapPoller
+} = require('./high-drop-player-tracker');
+const {
   BROWSER_RUNTIME_DEFAULTS,
   decisionStatePatch
 } = require('./decision-adapter');
 const { createBrowserlessActionAdapter } = require('./action-adapter');
 const { createSourceIpController } = require('./source-ip-controller');
 const { createBrowserlessSafetyController } = require('./safety-controller');
-const { redactSecrets } = require('./session-client');
+const {
+  buildSnapshotProbeUrl,
+  readResponseBody,
+  redactSecrets
+} = require('./session-client');
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const UTC8_OFFSET_MS = 8 * 60 * 60 * 1000;
@@ -545,6 +553,38 @@ async function runBrowserlessRunner(config, deps = {}) {
   } catch (err) {
     recordSupervisorError(err, { operation: 'data-dir-create', dataDir: config.dataDir });
   }
+  const highDropPlayerTracker = deps.highDropPlayerTracker || createHighDropPlayerTracker({
+    file: path.join(config.dataDir, 'high-drop-players.json'),
+    now
+  });
+  let snapshotGapPoller = null;
+  const observeSnapshotPayload = (payload, detail = {}) => {
+    try {
+      const observedAtMs = Number(detail.observedAtMs ?? now());
+      const result = highDropPlayerTracker.observeSnapshot(payload, {
+        ...detail,
+        observedAtMs,
+        selfUserId: config.userId
+      });
+      snapshotGapPoller?.noteSnapshot(observedAtMs);
+      if (result.updated > 0) {
+        logStore.append('runner', 'high-drop-player-observation', {
+          source: detail.source || 'snapshot',
+          observed: result.observed,
+          updated: result.updated,
+          playerCount: result.playerCount
+        });
+      }
+      return result;
+    } catch (err) {
+      recordSupervisorError(err, { operation: 'high-drop-player-observe', source: detail.source || 'snapshot' });
+      logStore.append('runner', 'high-drop-player-observation-error', {
+        source: detail.source || 'snapshot',
+        error: errorMessage(err)
+      });
+      return { ok: false, error: errorMessage(err) };
+    }
+  };
   let retention = null;
   try {
     retention = cleanupOldLogDays(config.logDir, {
@@ -613,6 +653,38 @@ async function runBrowserlessRunner(config, deps = {}) {
   config.sourceIp = sourceIpController.currentSourceIp();
   config.sourceIps = sourceIpController.sourceIps();
   persisted = readBrowserlessStateFile(stateFile);
+
+  const highDropStatusAtStart = highDropPlayerTracker.status(now());
+  const lastHighDropSnapshotAtMs = Date.parse(highDropStatusAtStart.lastSnapshotAt || '');
+  snapshotGapPoller = deps.snapshotGapPoller || createSnapshotGapPoller({
+    now,
+    intervalMs: 3 * 60 * 1000,
+    lastSnapshotAtMs: Number.isFinite(lastHighDropSnapshotAtMs) ? lastHighDropSnapshotAtMs : 0,
+    isReady: () => Boolean(config.userId && config.sessionToken),
+    fetchSnapshot: async () => {
+      const url = buildSnapshotProbeUrl({
+        gameOrigin: config.gameOrigin,
+        snapshotPath: config.snapshotPath || '/snapshot',
+        userId: config.userId,
+        sessionToken: config.sessionToken,
+        nowMs: now()
+      });
+      const response = await sourceIpController.fetchWithTimeout(url, {
+        timeoutMs: config.httpTimeoutMs || config.wsConnectTimeoutMs || 10000,
+        method: 'GET',
+        cache: 'no-store'
+      });
+      const body = await readResponseBody(response);
+      if (!response.ok) throw new Error(`snapshot HTTP ${response.status}`);
+      if (!body.json || typeof body.json !== 'object') throw new Error('snapshot returned no JSON payload');
+      return body.json;
+    },
+    onSnapshot: observeSnapshotPayload,
+    onError: err => {
+      recordSupervisorError(err, { operation: 'high-drop-player-gap-snapshot' });
+      logStore.append('runner', 'high-drop-player-gap-snapshot-error', { error: errorMessage(err) });
+    }
+  });
 
   const refreshFromPersistedState = () => {
     persisted = readBrowserlessStateFile(stateFile);
@@ -730,6 +802,7 @@ async function runBrowserlessRunner(config, deps = {}) {
             now,
             sleep,
             fetchWithTimeout: sourceIpController.fetchWithTimeout,
+            onSnapshotPayload: observeSnapshotPayload,
             onSnapshotSafety: recordSnapshotSafetyProgress
           }
         );
@@ -921,7 +994,10 @@ async function runBrowserlessRunner(config, deps = {}) {
         host: config.statusHost,
         port: config.statusPort,
         webToken: config.webToken,
-        getStatus: () => buildPublicBrowserlessStatus(readBrowserlessStateFile(stateFile), config),
+        getStatus: () => ({
+          ...buildPublicBrowserlessStatus(readBrowserlessStateFile(stateFile), config),
+          highDropPlayers: highDropPlayerTracker.status(now())
+        }),
         onStop: async () => {
           const event = safetyController.requestStop('explicit-stop', { source: 'status-api' });
           const currentState = readBrowserlessStateFile(stateFile);
@@ -993,6 +1069,8 @@ async function runBrowserlessRunner(config, deps = {}) {
     }
   }
 
+  if (!config.once && !config.dryRun) snapshotGapPoller.start();
+
   logStore.append('runner', 'runner-start', {
     config: publicConfig(config),
     retention,
@@ -1011,7 +1089,8 @@ async function runBrowserlessRunner(config, deps = {}) {
       }, readBrowserlessStateFile(stateFile), {
         now,
         sleep,
-        fetchWithTimeout: sourceIpController.fetchWithTimeout
+        fetchWithTimeout: sourceIpController.fetchWithTimeout,
+        onSnapshotPayload: observeSnapshotPayload
       });
       const selfPresent = Boolean(probe?.response?.summary?.selfPresent);
       logStore.append('runner', 'runner-persisted-wait-self-probe', {
@@ -1214,6 +1293,7 @@ async function runBrowserlessRunner(config, deps = {}) {
           safetyController,
           allowMissingLoginPointBootstrap: true,
           onSnapshotSafety: recordSnapshotSafetyProgress,
+          onSnapshotPayload: observeSnapshotPayload,
           fetchWithTimeout: sourceIpController.fetchWithTimeout,
           openBrowserlessWs: sourceIpController.openBrowserlessWs,
           leaveWithVerification: sourceIpController.leaveWithVerification
@@ -1280,6 +1360,7 @@ async function runBrowserlessRunner(config, deps = {}) {
         bypassPreLoginSafetyReason,
         precheckedSnapshotSafety,
         onSnapshotSafety: recordSnapshotSafetyProgress,
+        onSnapshotPayload: observeSnapshotPayload,
         fetchWithTimeout: sourceIpController.fetchWithTimeout,
         openBrowserlessWs: sourceIpController.openBrowserlessWs,
         leaveWithVerification: sourceIpController.leaveWithVerification,
