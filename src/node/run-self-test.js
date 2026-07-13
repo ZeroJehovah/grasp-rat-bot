@@ -13975,6 +13975,7 @@ async function runSelfTest() {
     {
       name: 'browserless runner config exposes dynamic profit threshold env cli and public values',
       got: (() => {
+        const defaultConfig = parseBrowserlessRunnerArgs([], {});
         const envConfig = parseBrowserlessRunnerArgs([], {
           GRASP_RAT_BROWSERLESS_DYNAMIC_PROFIT_THRESHOLD_ENABLED: 'false',
           GRASP_RAT_BROWSERLESS_PROFIT_THRESHOLD_COINS_PER_10_STAMINA: '2',
@@ -13989,6 +13990,7 @@ async function runSelfTest() {
         ], {});
         const exposed = publicConfig(cliConfig);
         return [
+          defaultConfig.profitThresholdResetReserveMs,
           envConfig.dynamicProfitThresholdEnabled,
           envConfig.profitThresholdCoinsPer10Stamina,
           envConfig.profitThresholdHourlyStaminaLimit,
@@ -13999,7 +14001,7 @@ async function runSelfTest() {
           exposed.profitThresholdResetReserveMs
         ].join('|');
       })(),
-      want: 'false|2|2500|1800000|true|1.5|2800|900000'
+      want: '14400000|false|2|2500|1800000|true|1.5|2800|900000'
     },
     {
       name: 'browserless runner config maps canary profiles without enabling combat',

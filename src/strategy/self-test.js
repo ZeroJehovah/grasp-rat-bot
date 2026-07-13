@@ -138,12 +138,13 @@ function runStrategyModuleSelfTests() {
   const utc8EightAm = Date.parse('2026-07-12T00:00:00.000Z');
   const activeThreshold = buildDynamicProfitThresholdCore({ nowMs: utc8EightAm, remaining1dMilli: 20000000 }, {});
   const relaxedThreshold = buildDynamicProfitThresholdCore({ nowMs: Date.parse('2026-07-12T09:00:00.000Z'), remaining1dMilli: 20000000 }, {});
-  const equalBoundary = buildDynamicProfitThresholdCore({ nowMs: Date.parse('2026-07-12T14:00:00.000Z'), remaining1dMilli: 3000000 }, {});
+  const equalBoundary = buildDynamicProfitThresholdCore({ nowMs: Date.parse('2026-07-12T11:00:00.000Z'), remaining1dMilli: 3000000 }, {});
   results.push({
     name: 'profit-threshold-utc8-reset-reserve-and-burn-window',
     passed: nextDailyProfitResetAtCore(utc8EightAm) === Date.parse('2026-07-12T16:00:00.000Z')
       && activeThreshold.active === true
-      && Math.round(activeThreshold.burnCapacityMilli) === 45000000
+      && activeThreshold.reserveMs === 14400000
+      && Math.round(activeThreshold.burnCapacityMilli) === 36000000
       && relaxedThreshold.active === false
       && relaxedThreshold.reason === 'insufficient-burn-window'
       && equalBoundary.active === true

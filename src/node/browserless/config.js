@@ -63,7 +63,7 @@ const DEFAULTS = {
   dynamicProfitThresholdEnabled: true,
   profitThresholdCoinsPer10Stamina: 1,
   profitThresholdHourlyStaminaLimit: 3000,
-  profitThresholdResetReserveMs: 3600000
+  profitThresholdResetReserveMs: 14400000
 };
 
 const CANARY_PROFILES = {
@@ -390,7 +390,7 @@ function usage() {
     '  --no-dynamic-profit-threshold  Disable the dynamic ordinary-profit threshold',
     '  --profit-threshold-coins-per-10-stamina <n>  Reward coins per 10 stamina. Default: 1',
     '  --profit-threshold-hourly-stamina-limit <n>  Theoretical stamina burn per hour. Default: 3000',
-    '  --profit-threshold-reset-reserve-ms <ms>  UTC+8 reset reserve. Default: 3600000',
+    '  --profit-threshold-reset-reserve-ms <ms>  UTC+8 reset reserve. Default: 14400000',
     '  --self-test              Run runner skeleton self-test'
   ].join('\n');
 }
