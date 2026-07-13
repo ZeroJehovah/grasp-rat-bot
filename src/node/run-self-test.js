@@ -73,8 +73,7 @@ const {
 } = require('./browserless/action-adapter');
 const {
   buildBrowserlessCombatDryRun,
-  estimateAim,
-  estimateCombatTrade
+  estimateAim
 } = require('./browserless/combat-adapter');
 const {
   createBrowserlessSafetyController,
@@ -10302,52 +10301,44 @@ async function runSelfTest() {
       want: '8|passive-runner-close|true|1|0|passive-runner'
     },
     {
-      name: 'browserless combat trade exits sustained zero-output damage before fixed hp gap',
+      name: 'browserless combat ignores trailing trade estimates while static hp rules are safe',
       got: (() => {
-        const samples = [0, 7500, 15000, 22500, 30000].map((offset, index) => ({
-          at: 1000 + offset,
-          selfHp: 100 - index * 15,
-          targetHp: 100,
-          x: 5000,
-          y: 0,
-          vx: 0,
-          vy: 0
-        }));
-        const trade = estimateCombatTrade(
-          { hp: 88 },
-          { hp: 100 },
-          { motionSamples: samples },
-          { nowMs: 31000, combatTradeEstimateWindowMs: 30000, combatTradeEstimateMinWindowMs: 8000 }
-        );
-        return [trade.disadvantaged, trade.zeroOutput, trade.selfDamage, trade.targetDamage, Math.round(trade.tDeathMs)].join('|');
-      })(),
-      want: 'true|true|60|0|44000'
-    },
-    {
-      name: 'browserless combat trade keeps favorable fight through short zero-output exchange',
-      got: (() => {
-        const samples = [0, 900, 1883].map((offset, index) => ({
-          at: 1000 + offset,
-          selfHp: 100 - index * 3,
-          targetHp: 64,
-          x: 4500,
-          y: 0,
-          vx: 0,
-          vy: 0
-        }));
-        const trade = estimateCombatTrade(
-          { hp: 94 },
-          { hp: 64 },
-          {
-            noDamageMs: 4640,
-            motionSamples: samples,
-            combatMetrics: { selfDamage: 6, targetDamage: 36 }
+        const stateful = {
+          combatTarget: {
+            id: 8,
+            at: 1000,
+            firstSeenAt: 1000,
+            lastInRangeAt: 4500,
+            lastDamageAt: 4500,
+            hp: 95,
+            intent: 'engaged',
+            motionSamples: [
+              { at: 1000, x: 5000, y: 0, vx: 0, vy: 0, selfHp: 100, targetHp: 100 },
+              { at: 3000, x: 5000, y: 0, vx: 0, vy: 0, selfHp: 90, targetHp: 98 },
+              { at: 4500, x: 5000, y: 0, vx: 0, vy: 0, selfHp: 82, targetHp: 95 }
+            ]
           },
-          { nowMs: 2883, combatTradeEstimateMinWindowMs: 1800 }
-        );
-        return [trade.disadvantaged, trade.zeroOutputConfirmedUnsafe, trade.cumulativeTradeFavorable, trade.noDamageMs].join('|');
+          combatMetrics: { targetId: '8', selfDamage: 20, targetDamage: 5 }
+        };
+        const combat = buildBrowserlessCombatDryRun({
+          userId: 7,
+          realtime: {
+            tick: 62,
+            self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 80, stamina_5s_remaining_milli: 10000 },
+            entities: [
+              { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 80, stamina_5s_remaining_milli: 10000 },
+              { entity_id: 2, user_id: 8, name: 'active', x: 5000, y: 0, hp: 90, current_join_mode: 'Active', firing: true, drop: 12 }
+            ],
+            bullets: []
+          }
+        }, {
+          nowMs: 5000,
+          decisionState: stateful,
+          combatAttackRange: 11000
+        });
+        return [combat.exit === null, combat.self.hp, combat.target.hp, stateful.combatMetrics.selfDamage].join('|');
       })(),
-      want: 'false|false|true|4640'
+      want: 'true|80|90|20'
     },
     {
       name: 'browserless active profit stamina cost includes default miss risk',
@@ -10545,7 +10536,7 @@ async function runSelfTest() {
           decision.combat.target?.userId || 'no-target'
         ].join('|');
       })(),
-      want: 'safety-exit|safety|profit-live-critical-threat|true|8|no-target'
+      want: 'safety-exit|safety|combat-critical-hp-leave|true|8|no-target'
     },
     {
       name: 'browserless profit live critical hp exits on unknown incoming pressure',
@@ -10581,10 +10572,10 @@ async function runSelfTest() {
           decision.combat.target?.userId || 'no-target'
         ].join('|');
       })(),
-      want: 'safety-exit|safety|profit-live-critical-unknown-pressure|true|1|no-target'
+      want: 'safety-exit|safety|combat-critical-hp-leave|true|1|no-target'
     },
     {
-      name: 'browserless profit live exits after injury under unattributed combat pressure',
+      name: 'browserless profit live keeps fighting after healthy unattributed injury',
       got: (() => {
         const stateful = {};
         const base = {
@@ -10631,17 +10622,113 @@ async function runSelfTest() {
           combatCriticalHp: 20
         });
         return [
-          decision.kind,
-          decision.band,
-          decision.reason,
-          decision.action.shouldLeave,
-          decision.action.target.userId,
-          decision.action.injury.previousHp,
-          decision.action.injury.currentHp,
+          decision.kind !== 'safety-exit',
+          decision.reason !== 'injury-leave',
+          stateful.browserlessInjury.targetKey,
+          stateful.browserlessInjury.currentHp,
           decision.combat.target?.userId || 'no-target'
         ].join('|');
       })(),
-      want: 'safety-exit|safety|injury-leave|true|8|100|73|no-target'
+      want: 'true|true|8|73|no-target'
+    },
+    {
+      name: 'browserless recent injury fallback preserves clearly winning Eason-shaped fight',
+      got: (() => {
+        const stateful = {
+          browserlessLastSelf: { key: '7', hp: 97, at: 1000 },
+          combatMetrics: {
+            targetId: '8',
+            targetName: 'Eason',
+            lastObservedAt: 1900,
+            lastTargetHp: 46,
+            selfDamage: 6,
+            targetDamage: 54
+          }
+        };
+        const decision = buildBrowserlessDecision({
+          userId: 7,
+          realtime: {
+            tick: 63,
+            frameAgeMs: 100,
+            self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 94, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+            entities: [
+              { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 94, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+              { entity_id: 2, user_id: 8, name: 'Eason', x: 20000, y: 0, hp: 64, current_join_mode: 'Active', firing: true, drop: 836 }
+            ],
+            bullets: [
+              { owner_user_id: 8, start_x: 20000, start_y: 0, target_x: 0, target_y: 0, created_tick: 40, expire_tick: 90, speed_per_tick: 500 }
+            ],
+            coinDrops: []
+          },
+          fallback: { coinDrops: [] }
+        }, stateful, {
+          nowMs: 2000,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          combatAttackRange: 11000,
+          combatCriticalHp: 20
+        });
+        return [
+          decision.kind !== 'safety-exit',
+          stateful.browserlessInjury.currentHp,
+          stateful.combatMetrics.lastTargetHp,
+          decision.combat.target?.userId || 'no-target'
+        ].join('|');
+      })(),
+      want: 'true|94|46|no-target'
+    },
+    {
+      name: 'browserless recent injury fallback still exits on clear hp gap',
+      got: (() => {
+        const stateful = {
+          browserlessLastSelf: { key: '7', hp: 80, at: 1000 },
+          combatMetrics: {
+            targetId: '8',
+            targetName: 'far-pressure',
+            lastObservedAt: 1900,
+            lastTargetHp: 100,
+            selfDamage: 35,
+            targetDamage: 0
+          }
+        };
+        const decision = buildBrowserlessDecision({
+          userId: 7,
+          realtime: {
+            tick: 63,
+            frameAgeMs: 100,
+            self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 65, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+            entities: [
+              { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 65, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+              { entity_id: 2, user_id: 8, name: 'far-pressure', x: 20000, y: 0, hp: 95, current_join_mode: 'Active', firing: true, drop: 12 }
+            ],
+            bullets: [
+              { owner_user_id: 8, start_x: 20000, start_y: 0, target_x: 0, target_y: 0, created_tick: 40, expire_tick: 90, speed_per_tick: 500 }
+            ],
+            coinDrops: []
+          },
+          fallback: { coinDrops: [] }
+        }, stateful, {
+          nowMs: 2000,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          combatAttackRange: 11000,
+          combatCriticalHp: 20,
+          combatHighHpDisadvantageGap: 20
+        });
+        const safety = evaluateBrowserlessSafety({}, { decision, nowMs: 2000 });
+        return [
+          decision.kind,
+          decision.reason,
+          decision.action.combatExit.rule,
+          decision.action.combatExit.selfHp,
+          decision.action.combatExit.targetHp,
+          decision.action.combatExit.targetHpSource,
+          safety.detail.decision.combat.exit.rule,
+          safety.detail.decision.combat.exit.targetHp,
+          decision.combat.target?.userId || 'no-target'
+        ].join('|');
+      })(),
+      want: 'safety-exit|combat-hp-disadvantage-leave|clear-hp-gap|65|100|recent-realtime-combat-metrics|clear-hp-gap|100|no-target'
     },
     {
       name: 'browserless profit live exits after sustained active invulnerable pursuit',
@@ -10733,7 +10820,7 @@ async function runSelfTest() {
       want: 'true|60000|false'
     },
     {
-      name: 'browserless combat low hp no-damage exits',
+      name: 'browserless combat low hp behind exits regardless no-damage window',
       got: (() => {
         const stateful = {
           combatTarget: { id: 8, at: 1000, firstSeenAt: 1000, lastInRangeAt: 1000, lastDamageAt: 1000, hp: 90, intent: 'engaged' }
@@ -10765,10 +10852,10 @@ async function runSelfTest() {
           combat.exit.noDamageMs >= 8000
         ].join('|');
       })(),
-      want: 'combat-low-hp-no-damage-leave|40|90|true'
+      want: 'combat-low-hp-disadvantage-leave|40|90|true'
     },
     {
-      name: 'browserless combat high hp gap exits',
+      name: 'browserless combat exits at exact 20 hp disadvantage boundary',
       got: (() => {
         const combat = buildBrowserlessCombatDryRun({
           userId: 7,
@@ -10777,7 +10864,7 @@ async function runSelfTest() {
             self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 70, stamina_5s_remaining_milli: 10000 },
             entities: [
               { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 70, stamina_5s_remaining_milli: 10000 },
-              { entity_id: 2, user_id: 8, name: 'active', x: 1000, y: 0, hp: 96, current_join_mode: 'Active', firing: true, drop: 12 }
+              { entity_id: 2, user_id: 8, name: 'active', x: 1000, y: 0, hp: 90, current_join_mode: 'Active', firing: true, drop: 12 }
             ],
             bullets: []
           }
@@ -10788,10 +10875,10 @@ async function runSelfTest() {
           combat.shooting.wouldShoot
         ].join('|');
       })(),
-      want: 'combat-hp-disadvantage-leave|26|true'
+      want: 'combat-hp-disadvantage-leave|20|true'
     },
     {
-      name: 'browserless low hp disadvantage requires configured hp gap',
+      name: 'browserless low hp disadvantage exits on any real deficit',
       got: (() => {
         const combatAt = (selfHp, targetHp) => buildBrowserlessCombatDryRun({
           userId: 7,
@@ -10807,87 +10894,49 @@ async function runSelfTest() {
         }, {
           nowMs: 5000,
           combatAttackRange: 11000,
-          combatLowHpLeaveThreshold: 50,
-          combatLowHpDisadvantageMinGap: 5
+          combatLowHpLeaveThreshold: 50
         });
-        const narrow = combatAt(44, 46);
-        const clear = combatAt(41, 46);
+        const narrow = combatAt(44, 45);
+        const equal = combatAt(44, 44);
         return [
-          narrow.exit === null,
-          clear.exit.reason,
-          clear.exit.hpGap,
-          clear.exit.minHpGap
+          narrow.exit.reason,
+          narrow.exit.hpGap,
+          equal.exit === null
         ].join('|');
       })(),
-      want: 'true|combat-low-hp-disadvantage-leave|5|5'
+      want: 'combat-low-hp-disadvantage-leave|1|true'
     },
     {
-      name: 'browserless trade disadvantage requires sustained confirmation',
+      name: 'browserless combat critical threshold is strict below 20 hp',
       got: (() => {
-        const nowMs = 5000;
-        const baseTarget = {
-          id: 8,
-          at: 1000,
-          firstSeenAt: 1000,
-          lastInRangeAt: 1000,
-          lastDamageAt: 4500,
-          hp: 95,
-          intent: 'engaged',
-          motionSamples: [
-            { at: 1000, x: 5000, y: 0, vx: 0, vy: 0, selfHp: 100, targetHp: 100 },
-            { at: 3000, x: 5000, y: 0, vx: 0, vy: 0, selfHp: 90, targetHp: 98 },
-            { at: 4500, x: 5000, y: 0, vx: 0, vy: 0, selfHp: 82, targetHp: 95 }
-          ]
-        };
-        const stateAt = observation => ({
-          combatTarget: { ...baseTarget, motionSamples: baseTarget.motionSamples.map(item => ({ ...item })) },
-          combatDisadvantageObservation: observation,
-          combatMetrics: { targetId: '8', selfDamage: 18, targetDamage: 5 }
-        });
-        const input = {
+        const combatAt = selfHp => buildBrowserlessCombatDryRun({
           userId: 7,
           realtime: {
             tick: 62,
-            self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 80, stamina_5s_remaining_milli: 10000 },
+            self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: selfHp, stamina_5s_remaining_milli: 10000 },
             entities: [
-              { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 80, stamina_5s_remaining_milli: 10000 },
-              { entity_id: 2, user_id: 8, name: 'active', x: 5000, y: 0, hp: 90, current_join_mode: 'Active', firing: true, drop: 12 }
+              { entity_id: 1, user_id: 7, x: 0, y: 0, hp: selfHp, stamina_5s_remaining_milli: 10000 },
+              { entity_id: 2, user_id: 8, name: 'active', x: 5000, y: 0, hp: selfHp, current_join_mode: 'Active', firing: true, drop: 12 }
             ],
             bullets: []
           }
-        };
-        const observingState = stateAt(null);
-        const observing = buildBrowserlessCombatDryRun(input, {
-          nowMs,
-          decisionState: observingState,
+        }, {
+          nowMs: 5000,
           combatAttackRange: 11000,
-          combatTradeEstimateMinWindowMs: 1800,
-          combatDisadvantageConfirmMs: 2500,
-          combatDisadvantageMinEngageMs: 3500,
-          combatDisadvantageMinSamples: 4
+          combatCriticalHp: 20
         });
-        const confirmedState = stateAt({ id: '8', kind: 'trade-estimate', firstAt: 2000, at: 4800, count: 4 });
-        const confirmed = buildBrowserlessCombatDryRun(input, {
-          nowMs,
-          decisionState: confirmedState,
-          combatAttackRange: 11000,
-          combatTradeEstimateMinWindowMs: 1800,
-          combatDisadvantageConfirmMs: 2500,
-          combatDisadvantageMinEngageMs: 3500,
-          combatDisadvantageMinSamples: 4
-        });
+        const boundary = combatAt(20);
+        const critical = combatAt(19);
         return [
-          observing.exit === null,
-          observingState.combatDisadvantageObservation.kind,
-          observingState.combatDisadvantageObservation.ready,
-          confirmed.exit.reason,
-          confirmed.exit.disadvantageObservation.ready
+          boundary.exit === null,
+          critical.exit.reason,
+          critical.exit.selfHp
         ].join('|');
       })(),
-      want: 'true|trade-estimate|false|combat-trade-disadvantage-leave|true'
+      want: 'true|combat-critical-hp-leave|19'
     },
     {
-      name: 'browserless combat pressure disadvantage exits',
+      name: 'browserless combat pressure no-damage does not override static hp rules',
       got: (() => {
         const stateful = {
           combatTarget: { id: 8, at: 1000, firstSeenAt: 1000, lastInRangeAt: 1000, lastDamageAt: 1000, hp: 90, intent: 'engaged' }
@@ -10914,12 +10963,12 @@ async function runSelfTest() {
           combatPressureDisadvantageNoDamageMs: 10000
         });
         return [
-          combat.exit.reason,
-          combat.exit.hpGap,
-          combat.exit.noDamageMs >= 10000
+          combat.exit === null,
+          combat.shooting.wouldShoot,
+          stateful.combatTarget.noDamageMs >= 10000
         ].join('|');
       })(),
-      want: 'combat-pressure-disadvantage-leave|12|true'
+      want: 'true|true|true'
     },
     {
       name: 'browserless combat finish pressure can shoot with reserve',

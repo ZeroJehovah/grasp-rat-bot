@@ -30,6 +30,7 @@ const {
   buildReturnBlockActionCore,
   lockedFleeDirectionCore
 } = require('../../strategy/active-threat-avoidance');
+const { evaluateCombatHpExitCore } = require('../../strategy/combat-exit');
 const {
   pickPostAttackDropCoinCore,
   pickPostAttackDropWaitTargetCore
@@ -96,9 +97,7 @@ const UTC8_OFFSET_MS = 8 * 60 * 60 * 1000;
 const DANGEROUS_COMBAT_EXIT_REASONS = new Set([
   'combat-critical-hp-leave',
   'combat-hp-disadvantage-leave',
-  'combat-low-hp-disadvantage-leave',
-  'combat-low-hp-no-damage-leave',
-  'combat-pressure-disadvantage-leave'
+  'combat-low-hp-disadvantage-leave'
 ]);
 
 function buildBrowserlessRuntimeDefaults(config = {}) {
@@ -3128,25 +3127,25 @@ function recoverySummary(self) {
   };
 }
 
-function combatCriticalHpThreshold(options = {}) {
-  const value = Number(options.combatCriticalHp ?? options.combatCriticalHpLeaveThreshold ?? BROWSER_RUNTIME_DEFAULTS.combatCriticalHpLeaveThreshold ?? 20);
-  return Math.max(0, Number.isFinite(value) ? value : 20);
-}
-
 function criticalUnknownPressureExit(input, options = {}) {
   const selfHp = hpValue(input?.self);
-  if (selfHp === null || selfHp > combatCriticalHpThreshold(options)) return null;
+  const combatExit = evaluateCombatHpExitCore({ selfHp, targetHp: null }, options);
+  if (combatExit?.rule !== 'critical-hp') return null;
   if (!hasLikelyIncomingBullet(input)) return null;
   return {
     kind: 'safety-exit',
     band: 'safety',
-    reason: 'profit-live-critical-unknown-pressure',
+    reason: combatExit.reason,
     shouldLeave: true,
     stopMotion: true,
     self: summarizeTarget(input.self),
+    combatExit: {
+      ...combatExit,
+      triggerSource: 'unknown-incoming-pressure'
+    },
     criticalPressure: {
       selfHp,
-      threshold: combatCriticalHpThreshold(options),
+      threshold: combatExit.threshold,
       bulletCount: Number(input?.realtime?.bulletCount || 0)
     }
   };
@@ -3235,6 +3234,10 @@ function pickBrowserlessInjuryPressure(input, options = {}) {
   };
 }
 
+function browserlessInjuryRecentMs(options = {}) {
+  return Math.max(1000, Number(options.browserlessInjuryLeaveRecentMs || 6000));
+}
+
 function rememberBrowserlessInjury(input, stateful, options = {}) {
   if (!stateful || typeof stateful !== 'object') return null;
   const nowMs = Number(input?.nowMs || Date.now());
@@ -3242,7 +3245,7 @@ function rememberBrowserlessInjury(input, stateful, options = {}) {
   const hp = hpValue(self);
   const key = targetKey(self);
   const previous = stateful.browserlessLastSelf || null;
-  const recentMs = Math.max(1000, Number(options.browserlessInjuryLeaveRecentMs || 6000));
+  const recentMs = browserlessInjuryRecentMs(options);
   const minDrop = Math.max(0.1, Number(options.browserlessInjuryLeaveMinHpDrop || 1));
   if (!self || hp === null || !key) {
     stateful.browserlessLastSelf = null;
@@ -3282,30 +3285,83 @@ function rememberBrowserlessInjury(input, stateful, options = {}) {
   return stateful.browserlessInjury || null;
 }
 
-function buildBrowserlessInjuryLeaveDecision(input, stateful, combat, options = {}) {
+function browserlessInjuryTarget(injury, currentPressure) {
+  const rememberedTarget = injury?.target || null;
+  const rememberedKey = String(injury?.targetKey || targetKey(rememberedTarget) || '');
+  const currentTarget = currentPressure?.target || null;
+  const currentKey = targetKey(currentTarget);
+  if (currentTarget && (!rememberedKey || currentKey === rememberedKey)) return currentTarget;
+  return rememberedTarget || currentTarget;
+}
+
+function browserlessInjuryTargetHpEvidence(stateful, target, injury, nowMs, options = {}) {
+  const targetId = targetKey(target) || String(injury?.targetKey || '');
+  const metrics = stateful?.combatMetrics || null;
+  const metricsId = String(metrics?.targetId ?? '');
+  const lastObservedAt = Number(metrics?.lastObservedAt || 0);
+  const metricsRecent = Boolean(
+    targetId
+      && metricsId === targetId
+      && lastObservedAt > 0
+      && lastObservedAt <= nowMs
+      && nowMs - lastObservedAt <= browserlessInjuryRecentMs(options)
+  );
+  const metricsHp = metricsRecent ? numberOrNull(metrics?.lastTargetHp) : null;
+  if (metricsHp !== null) {
+    return {
+      targetHp: metricsHp,
+      source: 'recent-realtime-combat-metrics',
+      ageMs: Math.max(0, Math.round(nowMs - lastObservedAt))
+    };
+  }
+  return {
+    targetHp: hpValue(target) ?? hpValue(injury?.target),
+    source: target ? 'current-pressure-target' : (injury?.target ? 'remembered-pressure-target' : 'unknown'),
+    ageMs: null
+  };
+}
+
+function buildBrowserlessInjuryHpExitDecision(input, stateful, combat, options = {}) {
   const injury = rememberBrowserlessInjury(input, stateful, options);
   if (options.browserlessInjuryLeaveEnabled === false) return null;
   if (!browserlessSafetyExitModeEnabled(options) || !input?.self || !injury) return null;
   const currentPressure = pickBrowserlessInjuryPressure(input, options);
-  const target = currentPressure.target || null;
   if (combat?.target && options.combatActionEligible !== false) return null;
+  const target = browserlessInjuryTarget(injury, currentPressure);
   if (!target && !injury.hasIncoming && !currentPressure.hasIncoming) return null;
+  const nowMs = Number(input.nowMs || Date.now());
+  const targetHpEvidence = browserlessInjuryTargetHpEvidence(stateful, target, injury, nowMs, options);
+  const combatExit = evaluateCombatHpExitCore({
+    selfHp: hpValue(input.self),
+    targetHp: targetHpEvidence.targetHp
+  }, options);
+  if (!combatExit) return null;
   return {
     kind: 'safety-exit',
     band: 'safety',
-    reason: 'injury-leave',
+    reason: combatExit.reason,
     shouldLeave: true,
     stopMotion: true,
     self: summarizeTarget(input.self),
     target: summarizeTarget(target) || injury.target || null,
+    combatExit: {
+      ...combatExit,
+      target: summarizeTarget(target) || injury.target || null,
+      triggerSource: 'recent-injury-pressure',
+      targetHpSource: targetHpEvidence.source,
+      targetHpAgeMs: targetHpEvidence.ageMs
+    },
     injury: {
       previousHp: numberOrNull(injury.previousHp),
       currentHp: hpValue(input.self),
       hpDrop: numberOrNull(injury.hpDrop),
-      ageMs: Math.max(0, Math.round(Number(input.nowMs || Date.now()) - Number(injury.at || input.nowMs || Date.now()))),
+      ageMs: Math.max(0, Math.round(nowMs - Number(injury.at || nowMs))),
       hasIncoming: Boolean(injury.hasIncoming || currentPressure.hasIncoming),
       unknownIncoming: Boolean(injury.unknownIncoming || currentPressure.unknownIncoming),
-      incomingCount: Number(currentPressure.incomingCount || injury.incomingCount || 0)
+      incomingCount: Number(currentPressure.incomingCount || injury.incomingCount || 0),
+      exitRule: combatExit.rule,
+      evaluatedTargetHp: targetHpEvidence.targetHp,
+      targetHpSource: targetHpEvidence.source
     }
   };
 }
@@ -3554,7 +3610,7 @@ function profitLiveSafetyDecision(input, combatDecision, stateful = {}, options 
   if (options.controlMode !== 'profit-live' || !input.self) return null;
   const realtimeTarget = combatDecision?.dryRun?.target || combatDecision?.target || null;
   const selfHp = hpValue(input.self);
-  const criticalHp = combatCriticalHpThreshold(options);
+  const criticalExit = evaluateCombatHpExitCore({ selfHp, targetHp: null }, options);
   const criticalTarget = [
     ...(realtimeTarget ? [realtimeTarget] : []),
     ...(input.firingThreats || []),
@@ -3562,7 +3618,7 @@ function profitLiveSafetyDecision(input, combatDecision, stateful = {}, options 
   ]
     .filter(target => target && target.alive !== false && (target.active || target.firing || isBrowserlessAvoidanceThreat(target)))
     .sort((a, b) => Number(a.distance || Infinity) - Number(b.distance || Infinity))[0] || null;
-  if (selfHp !== null && selfHp <= criticalHp && criticalTarget) {
+  if (criticalExit?.rule === 'critical-hp' && criticalTarget) {
     const combatTargetId = realtimeTarget?.userId ?? realtimeTarget?.user_id ?? realtimeTarget?.entityId ?? realtimeTarget?.entity_id ?? null;
     const criticalTargetId = criticalTarget?.userId ?? criticalTarget?.user_id ?? criticalTarget?.entityId ?? criticalTarget?.entity_id ?? null;
     const combatHandlesCriticalTarget = options.combatActionEligible !== false
@@ -3576,14 +3632,20 @@ function profitLiveSafetyDecision(input, combatDecision, stateful = {}, options 
       return {
         kind: 'safety-exit',
         band: 'safety',
-        reason: 'profit-live-critical-threat',
+        reason: criticalExit.reason,
         shouldLeave: true,
         stopMotion: true,
         target: summarizeTarget(criticalTarget),
         self: summarizeTarget(input.self),
+        combatExit: {
+          ...criticalExit,
+          targetHp: hpValue(criticalTarget),
+          hpGap: hpValue(criticalTarget) === null ? null : hpValue(criticalTarget) - selfHp,
+          triggerSource: 'unhandled-visible-pressure'
+        },
         criticalThreat: {
           selfHp,
-          threshold: criticalHp,
+          threshold: criticalExit.threshold,
           distance: Math.round(Number(criticalTarget.distance || 0))
         }
       };
@@ -3931,7 +3993,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     includeAfkProfitTargets: nonCombatProfit ? false : options.includeAfkProfitTargets
   });
   const combat = buildCombatDecision(input, stateful, options);
-  const dangerousCombatExit = rememberDangerousCombatExitTarget(input, combat, stateful, options);
+  let dangerousCombatExit = rememberDangerousCombatExitTarget(input, combat, stateful, options);
   const combatPursuitSuppression = buildProfitPursuitSuppression(input, combat, stateful, options);
   let combatActionEligible = isCombatActionEligibleForDecision(combat, options) && !combatPursuitSuppression;
   const combatTarget = combat?.target || null;
@@ -3994,9 +4056,26 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       urgent: Object.values(evidence).some(Boolean)
     };
   }
-  const injuryLeaveAction = input.self && !realtimeStale
-    ? buildBrowserlessInjuryLeaveDecision(input, stateful, combat, safetyContextOptions)
+  const injuryHpExitAction = input.self && !realtimeStale
+    ? buildBrowserlessInjuryHpExitDecision(input, stateful, combat, safetyContextOptions)
     : null;
+  if (!dangerousCombatExit
+    && injuryHpExitAction?.target
+    && DANGEROUS_COMBAT_EXIT_REASONS.has(String(injuryHpExitAction.reason || ''))) {
+    dangerousCombatExit = rememberDangerousCombatTarget(
+      stateful,
+      injuryHpExitAction.target,
+      injuryHpExitAction.reason,
+      input,
+      options,
+      {
+        exit: true,
+        exitSelfHp: numberOrNull(injuryHpExitAction.combatExit?.selfHp),
+        exitTargetHp: numberOrNull(injuryHpExitAction.combatExit?.targetHp),
+        triggerSource: 'recent-injury-pressure'
+      }
+    );
+  }
   const pursuitLeaveAction = input.self && !realtimeStale
     ? buildBrowserlessPursuitLeaveDecision(input, stateful, combat, safetyContextOptions)
     : null;
@@ -4046,7 +4125,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       && !hardSafetyAction
       && !longStaminaExhaustedLeaveAction
       && !combatExitAction
-      && !injuryLeaveAction
+      && !injuryHpExitAction
       && !pursuitLeaveAction
       && !immediateSafetyAction
       && !returnToCenterAction
@@ -4095,11 +4174,11 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     band = combatExitAction.band;
     reason = combatExitAction.reason;
     action = combatExitAction;
-  } else if (injuryLeaveAction) {
-    kind = injuryLeaveAction.kind;
-    band = injuryLeaveAction.band;
-    reason = injuryLeaveAction.reason;
-    action = injuryLeaveAction;
+  } else if (injuryHpExitAction) {
+    kind = injuryHpExitAction.kind;
+    band = injuryHpExitAction.band;
+    reason = injuryHpExitAction.reason;
+    action = injuryHpExitAction;
   } else if (pursuitLeaveAction) {
     kind = pursuitLeaveAction.kind;
     band = pursuitLeaveAction.band;

@@ -459,7 +459,9 @@ function browserlessLoopPlan(result, config = {}) {
   }
   if ([
     'profit-live-snapshot-active-threat',
+    'combat-critical-hp-leave',
     'combat-hp-disadvantage-leave',
+    'combat-low-hp-disadvantage-leave',
     'injury-leave',
     'pursuit-leave'
   ].includes(safetyReason)) {

@@ -21,11 +21,8 @@ const COMBAT_CONSTANTS = {
 
   // HP and disadvantage gates
   CRITICAL_HP: 20,                        // combatCriticalHp - immediate exit threshold
-  LOW_HP_THRESHOLD: 60,                   // combatLowHpThreshold - low HP behavior changes
+  LOW_HP_THRESHOLD: 50,                   // combatLowHpLeaveThreshold - low HP exit threshold
   DISADVANTAGE_HP_GAP: 20,                // combatDisadvantageHpGap - HP gap for disadvantage
-  DISADVANTAGE_CONFIRM_MS: 2500,          // combatDisadvantageConfirmMs - confirmation window
-  DISADVANTAGE_MIN_ENGAGE_MS: 3500,       // combatDisadvantageMinEngageMs - minimum engagement time
-  DISADVANTAGE_MIN_SAMPLES: 4,            // combatDisadvantageMinSamples - minimum HP samples
 
   // Fire discipline and stamina
   SHOOT_EVERY_MS: 160,                    // shootEveryMs - normal fire cadence

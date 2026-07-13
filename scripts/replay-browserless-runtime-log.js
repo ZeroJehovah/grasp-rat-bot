@@ -3,6 +3,7 @@
 
 const fs = require('fs');
 const { estimateAim } = require('../src/node/browserless/combat-adapter');
+const { evaluateCombatHpExitCore } = require('../src/strategy/combat-exit');
 
 function parseArgs(argv) {
   const options = { file: '', startLine: 1, endLine: Infinity, targetId: '', mode: 'combat', hitRadius: 90, controlIntervalMs: 160 };
@@ -127,7 +128,79 @@ function replayOpportunity(options) {
   };
 }
 
+function replayExit(options) {
+  const rows = selectedEntries(options);
+  const evaluated = [];
+  for (const row of rows) {
+    const decision = row.detail?.decision || row.detail || {};
+    const action = decision.action || decision;
+    const combat = decision.combat || {};
+    const metrics = combat.metrics || {};
+    const target = action.target || combat.target || null;
+    const targetId = String(target?.userId ?? target?.user_id ?? metrics.targetId ?? '');
+    if (options.targetId && targetId !== options.targetId) continue;
+    const selfHp = Number(action.combatExit?.selfHp ?? combat.exit?.selfHp ?? action.self?.hp ?? combat.self?.hp ?? decision.input?.self?.hp);
+    const metricsTargetMatches = targetId && String(metrics.targetId ?? '') === targetId;
+    const targetHp = Number(
+      action.combatExit?.targetHp
+        ?? combat.exit?.targetHp
+        ?? (metricsTargetMatches ? metrics.lastTargetHp : null)
+        ?? target?.hp
+    );
+    if (!Number.isFinite(selfHp)) continue;
+    const policyExit = evaluateCombatHpExitCore({
+      selfHp,
+      targetHp: Number.isFinite(targetHp) ? targetHp : null
+    });
+    const loggedExit = action.shouldLeave === true || combat.exit?.shouldLeave === true;
+    const selfDamage = Number(metrics.selfDamage);
+    const targetDamage = Number(metrics.targetDamage);
+    const favorable = Number.isFinite(selfDamage)
+      && Number.isFinite(targetDamage)
+      && targetDamage > selfDamage
+      && (!Number.isFinite(targetHp) || selfHp > targetHp);
+    evaluated.push({
+      line: row.line,
+      at: row.entry.at || '',
+      targetId: targetId || null,
+      targetName: String(target?.name || metrics.targetName || ''),
+      loggedReason: String(action.reason || decision.reason || ''),
+      loggedExit,
+      selfHp,
+      targetHp: Number.isFinite(targetHp) ? targetHp : null,
+      selfDamage: Number.isFinite(selfDamage) ? selfDamage : null,
+      targetDamage: Number.isFinite(targetDamage) ? targetDamage : null,
+      favorable,
+      policyExit
+    });
+  }
+  const preventedLoggedExits = evaluated.filter(item => item.loggedExit && !item.policyExit);
+  const preservedRequiredExits = evaluated.filter(item => item.loggedExit && item.policyExit);
+  const newlyRequiredExits = evaluated.filter(item => !item.loggedExit && item.policyExit);
+  const favorablePreventedExits = preventedLoggedExits.filter(item => item.favorable);
+  const result = {
+    mode: 'exit',
+    targetId: options.targetId || '',
+    lines: `${options.startLine}-${options.endLine}`,
+    evaluatedFrames: evaluated.length,
+    loggedExitFrames: evaluated.filter(item => item.loggedExit).length,
+    policyExitFrames: evaluated.filter(item => item.policyExit).length,
+    preventedLoggedExitFrames: preventedLoggedExits.length,
+    favorablePreventedExitFrames: favorablePreventedExits.length,
+    preservedRequiredExitFrames: preservedRequiredExits.length,
+    newlyRequiredExitFrames: newlyRequiredExits.length,
+    samples: evaluated.slice(0, 10)
+  };
+  result.accepted = result.evaluatedFrames > 0
+    && result.preventedLoggedExitFrames > 0
+    && result.favorablePreventedExitFrames === result.preventedLoggedExitFrames
+    && result.newlyRequiredExitFrames === 0;
+  return result;
+}
+
 const options = parseArgs(process.argv.slice(2));
-const result = options.mode === 'opportunity' ? replayOpportunity(options) : replayCombat(options);
+const result = options.mode === 'opportunity'
+  ? replayOpportunity(options)
+  : (options.mode === 'exit' ? replayExit(options) : replayCombat(options));
 console.log(JSON.stringify(result, null, 2));
 if (!result.accepted && !result.improved?.accepted) process.exitCode = 1;

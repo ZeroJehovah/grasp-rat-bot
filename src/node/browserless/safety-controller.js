@@ -71,6 +71,7 @@ function decisionSafetyCombatMetrics(metrics) {
 
 function decisionSafetyDetail(decision) {
   const action = decision?.action || decision || {};
+  const combat = decision?.combat || null;
   return {
     kind: action.kind || decision?.kind || '',
     band: action.band || decision?.band || '',
@@ -83,15 +84,15 @@ function decisionSafetyDetail(decision) {
     staminaExhausted: action.staminaExhausted || null,
     reloginDelayMs: action.reloginDelayMs ?? action.staminaBudgetExit?.reloginDelayMs ?? null,
     staminaBlocked: action.staminaBlocked || null,
-    combat: decision?.combat ? {
-      startedAt: decision.combat.startedAt || '',
-      durationMs: decision.combat.durationMs ?? null,
-      self: decision.combat.self || null,
-      target: decision.combat.target || null,
-      movement: decision.combat.movement || null,
-      shooting: decision.combat.shooting || null,
-      exit: decision.combat.exit || null,
-      metrics: decisionSafetyCombatMetrics(decision.combat.metrics)
+    combat: (combat || action.combatExit) ? {
+      startedAt: combat?.startedAt || '',
+      durationMs: combat?.durationMs ?? null,
+      self: combat?.self || action.self || null,
+      target: combat?.target || action.target || null,
+      movement: combat?.movement || null,
+      shooting: combat?.shooting || null,
+      exit: combat?.exit || action.combatExit || null,
+      metrics: decisionSafetyCombatMetrics(combat?.metrics)
     } : null,
     profit: decision?.profit ? {
       best: decision.profit.best || null

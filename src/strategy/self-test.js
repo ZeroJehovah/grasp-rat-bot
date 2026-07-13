@@ -118,6 +118,10 @@ const {
   selectPanelCandidates
 } = require('./chase-mode');
 const { COMBAT_CONSTANTS, validateCombatConstants } = require('./combat-constants');
+const {
+  combatHpExitThresholdsCore,
+  evaluateCombatHpExitCore
+} = require('./combat-exit');
 const { OPPORTUNITY_CONSTANTS, calculateOpportunityROI, validateOpportunityConstants } = require('./opportunity-constants');
 const {
   buildDynamicProfitThresholdCore,
@@ -2413,6 +2417,27 @@ function runStrategyModuleSelfTests() {
     name: 'combat-constants-valid',
     passed: combatErrors.length === 0,
     errors: combatErrors
+  });
+
+  const hpExitThresholds = combatHpExitThresholdsCore();
+  results.push({
+    name: 'combat-exit-static-hp-boundaries',
+    passed: hpExitThresholds.criticalHp === 20
+      && hpExitThresholds.lowHp === 50
+      && hpExitThresholds.disadvantageHpGap === 20
+      && evaluateCombatHpExitCore({ selfHp: 19, targetHp: 10 })?.rule === 'critical-hp'
+      && evaluateCombatHpExitCore({ selfHp: 20, targetHp: 20 }) === null
+      && evaluateCombatHpExitCore({ selfHp: 49, targetHp: 50 })?.rule === 'low-hp-behind'
+      && evaluateCombatHpExitCore({ selfHp: 49, targetHp: 49 }) === null
+      && evaluateCombatHpExitCore({ selfHp: 80, targetHp: 100 })?.rule === 'clear-hp-gap'
+      && evaluateCombatHpExitCore({ selfHp: 80, targetHp: 99 }) === null
+  });
+
+  results.push({
+    name: 'combat-exit-does-not-leave-winning-or-unattributed-healthy-fight',
+    passed: evaluateCombatHpExitCore({ selfHp: 94, targetHp: 46 }) === null
+      && evaluateCombatHpExitCore({ selfHp: 65, targetHp: null }) === null
+      && evaluateCombatHpExitCore({ selfHp: 19, targetHp: null })?.reason === 'combat-critical-hp-leave'
   });
 
   // Test opportunity constants validation

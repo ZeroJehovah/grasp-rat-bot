@@ -19,6 +19,7 @@ const {
   determineCombatFireState
 } = require('../../strategy/combat-fire-discipline');
 const { COMBAT_CONSTANTS } = require('../../strategy/combat-constants');
+const { evaluateCombatHpExitCore } = require('../../strategy/combat-exit');
 const { opponentMotionProfileCore, quadraticInterceptCore } = require('../../strategy/combat-aim');
 const { targetIsWhitelisted, targetWhitelistNameSet } = require('../../shared/target-whitelist');
 
@@ -391,216 +392,11 @@ function passiveRunnerState(self, target, combatTargetState = {}, options = {}) 
   };
 }
 
-function estimateCombatTrade(self, target, combatTargetState = {}, options = {}) {
-  const nowMs = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
-  const windowMs = Math.max(1000, Number(options.combatTradeEstimateWindowMs || 10000));
-  const samples = (combatTargetState?.motionSamples || [])
-    .filter(sample => nowMs - Number(sample?.at || 0) <= windowMs)
-    .filter(sample => Number.isFinite(Number(sample?.selfHp)) && Number.isFinite(Number(sample?.targetHp)))
-    .sort((a, b) => Number(a.at) - Number(b.at));
-  if (samples.length < 3) return null;
-  const first = samples[0];
-  const last = samples[samples.length - 1];
-  const elapsedMs = Math.max(1, Number(last.at) - Number(first.at));
-  const minWindowMs = Math.max(1000, Number(options.combatTradeEstimateMinWindowMs || 8000));
-  if (elapsedMs < minWindowMs) return null;
-  const selfDamage = Math.max(0, Number(first.selfHp) - Number(last.selfHp));
-  const targetDamage = Math.max(0, Number(first.targetHp) - Number(last.targetHp));
-  const myDps = targetDamage / elapsedMs * 1000;
-  const enemyDps = selfDamage / elapsedMs * 1000;
-  const selfHp = hpValue(self) ?? Number(last.selfHp);
-  const targetHp = hpValue(target) ?? Number(last.targetHp);
-  const tKillMs = myDps > 0.05 ? targetHp / myDps * 1000 : Infinity;
-  const tDeathMs = enemyDps > 0.05 ? selfHp / enemyDps * 1000 : Infinity;
-  const minSelfDamage = Math.max(0, Number(options.combatTradeEstimateMinSelfDamage || 12));
-  const minEnemyDps = Math.max(0, Number(options.combatTradeEstimateMinEnemyDps || 1.5));
-  const safetyFactor = Math.max(1, Number(options.combatTradeEstimateSafetyFactor || 1.15));
-  const zeroOutput = targetDamage <= 0.01;
-  const zeroOutputConfirmMs = Math.max(minWindowMs, Number(options.combatTradeEstimateZeroOutputConfirmMs || 30000));
-  const noDamageMs = Math.max(0, Number(combatTargetState?.noDamageMs ?? elapsedMs));
-  const cumulativeSelfDamage = Math.max(selfDamage, Number(combatTargetState?.combatMetrics?.selfDamage || 0));
-  const cumulativeTargetDamage = Math.max(targetDamage, Number(combatTargetState?.combatMetrics?.targetDamage || 0));
-  const safeSelfHp = Math.max(0, Number(options.combatTradeEstimateNoDamageSafeSelfHp || 75));
-  const urgentTDeathMs = Math.max(1000, Number(options.combatTradeEstimateNoDamageUrgentTDeathMs || 15000));
-  const cumulativeTradeFavorable = cumulativeTargetDamage > cumulativeSelfDamage * safetyFactor;
-  const zeroOutputConfirmedUnsafe = zeroOutput
-    && noDamageMs >= zeroOutputConfirmMs
-    && (selfHp <= safeSelfHp || tDeathMs <= urgentTDeathMs || !cumulativeTradeFavorable);
-  const disadvantaged = selfDamage >= minSelfDamage
-    && enemyDps >= minEnemyDps
-    && tDeathMs < tKillMs * safetyFactor
-    && (zeroOutput ? zeroOutputConfirmedUnsafe : targetHp > selfHp);
-  return {
-    disadvantaged,
-    elapsedMs,
-    selfDamage,
-    targetDamage,
-    myDps,
-    enemyDps,
-    tKillMs,
-    tDeathMs,
-    safetyFactor,
-    zeroOutput,
-    zeroOutputConfirmMs,
-    noDamageMs,
-    cumulativeSelfDamage,
-    cumulativeTargetDamage,
-    cumulativeTradeFavorable,
-    zeroOutputConfirmedUnsafe
-  };
-}
-
-function combatDisadvantageObservation(stateful, target, kind, evidence = {}, combatTargetState = {}, options = {}) {
-  if (!stateful || typeof stateful !== 'object' || !target || !kind) return null;
-  const nowMs = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
-  const id = String(combatTargetId(target) || '');
-  if (!id) return null;
-  const previous = stateful.combatDisadvantageObservation || null;
-  const same = previous && String(previous.id || '') === id && String(previous.kind || '') === String(kind);
-  const firstAt = same ? Number(previous.firstAt || previous.at || nowMs) : nowMs;
-  const count = same ? Math.max(1, Number(previous.count || 1) + 1) : 1;
-  const engagedAt = Number(combatTargetState?.firstSeenAt || combatTargetState?.at || nowMs);
-  const observedMs = Math.max(0, nowMs - firstAt);
-  const engagedMs = Math.max(0, nowMs - engagedAt);
-  const confirmMs = Math.max(0, Number(options.combatDisadvantageConfirmMs ?? 2500));
-  const minEngageMs = Math.max(0, Number(options.combatDisadvantageMinEngageMs ?? 3500));
-  const minSamples = Math.max(1, Math.round(Number(options.combatDisadvantageMinSamples ?? 4)));
-  const sampleCount = Math.max(
-    count,
-    Math.round(Number(evidence?.sampleCount || 0)),
-    Array.isArray(combatTargetState?.motionSamples) ? combatTargetState.motionSamples.length : 0
-  );
-  const remainingMs = Math.max(0, confirmMs - observedMs, minEngageMs - engagedMs);
-  const samplesRemaining = Math.max(0, minSamples - sampleCount);
-  const observation = {
-    active: true,
-    id,
-    kind: String(kind),
-    firstAt,
-    at: nowMs,
-    observedMs: Math.round(observedMs),
-    engagedMs: Math.round(engagedMs),
-    count,
-    sampleCount,
-    confirmMs,
-    minEngageMs,
-    minSamples,
-    remainingMs: Math.round(remainingMs),
-    samplesRemaining,
-    ready: remainingMs <= 0 && samplesRemaining <= 0,
-    evidence
-  };
-  stateful.combatDisadvantageObservation = observation;
-  return observation;
-}
-
-function clearCombatDisadvantageObservation(stateful, kind = '') {
-  if (!stateful || typeof stateful !== 'object') return;
-  const previous = stateful.combatDisadvantageObservation;
-  if (!previous) return;
-  if (kind && String(previous.kind || '') !== String(kind)) return;
-  stateful.combatDisadvantageObservation = null;
-}
-
-function buildCombatExitDecision(self, target, combatTargetState = {}, bullets = [], options = {}) {
+function buildCombatExitDecision(self, target, combatTargetState = {}, options = {}) {
   if (!self || !target) return null;
-  const selfHp = hpValue(self);
-  const targetHp = hpValue(target);
-  if (selfHp === null) return null;
-  const criticalHp = Math.max(0, Number(options.combatCriticalHp ?? COMBAT_CONSTANTS.CRITICAL_HP));
-  const lowHp = Math.max(0, Number(options.combatLowHpLeaveThreshold ?? options.combatLowHpThreshold ?? COMBAT_CONSTANTS.LOW_HP_THRESHOLD));
-  const highHpGap = Math.max(0, Number(options.combatHighHpDisadvantageGap ?? COMBAT_CONSTANTS.DISADVANTAGE_HP_GAP));
   const noDamageMs = Math.max(0, Number(combatTargetState?.noDamageMs || 0));
-  const targetPressure = (bullets || []).some(bullet => Number(bullet.ownerId) === Number(target.user_id));
-  const stateful = options.decisionState || options.stateful || null;
-  if (selfHp <= criticalHp) {
-    return {
-      shouldLeave: true,
-      reason: 'combat-critical-hp-leave',
-      selfHp,
-      targetHp,
-      threshold: criticalHp,
-      noDamageMs
-    };
-  }
-  const trade = estimateCombatTrade(self, target, combatTargetState, options);
-  if (trade?.disadvantaged) {
-    const disadvantageObservation = combatDisadvantageObservation(
-      stateful,
-      target,
-      'trade-estimate',
-      { ...trade, sampleCount: combatTargetState?.motionSamples?.length || 0 },
-      combatTargetState,
-      options
-    );
-    if (!disadvantageObservation || disadvantageObservation.ready) {
-      return {
-        shouldLeave: true,
-        reason: 'combat-trade-disadvantage-leave',
-        selfHp,
-        targetHp,
-        noDamageMs,
-        trade,
-        disadvantageObservation
-      };
-    }
-  } else {
-    clearCombatDisadvantageObservation(stateful, 'trade-estimate');
-  }
-  const lowHpMinGap = Math.max(0, Number(
-    options.combatLowHpDisadvantageMinGap
-      ?? options.combatLowHpCloseRiskMargin
-      ?? 5
-  ));
-  if (targetHp !== null && selfHp < lowHp && targetHp - selfHp >= lowHpMinGap) {
-    const lowHpNoDamageMs = Math.max(0, Number(options.combatLowHpNoDamageLeaveMs || 8000));
-    return {
-      shouldLeave: true,
-      reason: noDamageMs >= lowHpNoDamageMs ? 'combat-low-hp-no-damage-leave' : 'combat-low-hp-disadvantage-leave',
-      selfHp,
-      targetHp,
-      threshold: lowHp,
-      hpGap: targetHp - selfHp,
-      minHpGap: lowHpMinGap,
-      noDamageMs
-    };
-  }
-  if (!trade?.disadvantaged && targetHp !== null && selfHp >= lowHp && targetHp - selfHp > highHpGap) {
-    const disadvantageObservation = combatDisadvantageObservation(
-      stateful,
-      target,
-      'hp-gap',
-      { selfHp, targetHp, hpGap: targetHp - selfHp, sampleCount: combatTargetState?.motionSamples?.length || 0 },
-      combatTargetState,
-      options
-    );
-    if (!disadvantageObservation || disadvantageObservation.ready) {
-      return {
-        shouldLeave: true,
-        reason: 'combat-hp-disadvantage-leave',
-        selfHp,
-        targetHp,
-        hpGap: Math.round(targetHp - selfHp),
-        threshold: highHpGap,
-        noDamageMs,
-        disadvantageObservation
-      };
-    }
-  } else {
-    clearCombatDisadvantageObservation(stateful, 'hp-gap');
-  }
-  const pressureNoDamageMs = Math.max(0, Number(options.combatPressureDisadvantageNoDamageMs || 10000));
-  if (targetPressure && targetHp !== null && noDamageMs >= pressureNoDamageMs && selfHp <= 80 && targetHp - selfHp >= 10) {
-    return {
-      shouldLeave: true,
-      reason: 'combat-pressure-disadvantage-leave',
-      selfHp,
-      targetHp,
-      hpGap: Math.round(targetHp - selfHp),
-      noDamageMs
-    };
-  }
-  return null;
+  const exit = evaluateCombatHpExitCore({ self, target }, options);
+  return exit ? { ...exit, noDamageMs } : null;
 }
 
 function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
@@ -882,7 +678,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
   const exitDecision = buildCombatExitDecision(self, target, {
     ...combatTargetState,
     combatMetrics: stateful?.combatMetrics || combatTargetState?.combatMetrics || null
-  }, bullets, options);
+  }, options);
   const fireState = target ? determineCombatFireState(self || {}, target, {
     targetPressureFire: bullets.some(bullet => Number(bullet.ownerId) === Number(target.user_id)),
     passiveRunner: Boolean(movement.passiveRunner?.active),
@@ -950,7 +746,6 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
 module.exports = {
   buildBrowserlessCombatDryRun,
   buildCombatMovementPlan,
-  estimateCombatTrade,
   estimateAim,
   normalizeCombatBullet,
   normalizeCombatEntity,
