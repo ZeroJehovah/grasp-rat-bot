@@ -416,11 +416,38 @@ function estimateCombatTrade(self, target, combatTargetState = {}, options = {})
   const minEnemyDps = Math.max(0, Number(options.combatTradeEstimateMinEnemyDps || 1.5));
   const safetyFactor = Math.max(1, Number(options.combatTradeEstimateSafetyFactor || 1.15));
   const zeroOutput = targetDamage <= 0.01;
+  const zeroOutputConfirmMs = Math.max(minWindowMs, Number(options.combatTradeEstimateZeroOutputConfirmMs || 8000));
+  const noDamageMs = Math.max(0, Number(combatTargetState?.noDamageMs ?? elapsedMs));
+  const cumulativeSelfDamage = Math.max(selfDamage, Number(combatTargetState?.combatMetrics?.selfDamage || 0));
+  const cumulativeTargetDamage = Math.max(targetDamage, Number(combatTargetState?.combatMetrics?.targetDamage || 0));
+  const safeSelfHp = Math.max(0, Number(options.combatTradeEstimateNoDamageSafeSelfHp || 75));
+  const urgentTDeathMs = Math.max(1000, Number(options.combatTradeEstimateNoDamageUrgentTDeathMs || 15000));
+  const cumulativeTradeFavorable = cumulativeTargetDamage > cumulativeSelfDamage * safetyFactor;
+  const zeroOutputConfirmedUnsafe = zeroOutput
+    && noDamageMs >= zeroOutputConfirmMs
+    && (selfHp <= safeSelfHp || tDeathMs <= urgentTDeathMs || !cumulativeTradeFavorable);
   const disadvantaged = selfDamage >= minSelfDamage
     && enemyDps >= minEnemyDps
     && tDeathMs < tKillMs * safetyFactor
-    && (zeroOutput || targetHp > selfHp);
-  return { disadvantaged, elapsedMs, selfDamage, targetDamage, myDps, enemyDps, tKillMs, tDeathMs, safetyFactor, zeroOutput };
+    && (zeroOutput ? zeroOutputConfirmedUnsafe : targetHp > selfHp);
+  return {
+    disadvantaged,
+    elapsedMs,
+    selfDamage,
+    targetDamage,
+    myDps,
+    enemyDps,
+    tKillMs,
+    tDeathMs,
+    safetyFactor,
+    zeroOutput,
+    zeroOutputConfirmMs,
+    noDamageMs,
+    cumulativeSelfDamage,
+    cumulativeTargetDamage,
+    cumulativeTradeFavorable,
+    zeroOutputConfirmedUnsafe
+  };
 }
 
 function buildCombatExitDecision(self, target, combatTargetState = {}, bullets = [], options = {}) {
@@ -750,7 +777,10 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
   if (stateful?.combatMetrics && movement.dodge?.threatField) {
     stateful.combatMetrics.lastDodgeThreatField = cloneJson(movement.dodge.threatField);
   }
-  const exitDecision = buildCombatExitDecision(self, target, combatTargetState, bullets, options);
+  const exitDecision = buildCombatExitDecision(self, target, {
+    ...combatTargetState,
+    combatMetrics: stateful?.combatMetrics || combatTargetState?.combatMetrics || null
+  }, bullets, options);
   const fireState = target ? determineCombatFireState(self || {}, target, {
     targetPressureFire: bullets.some(bullet => Number(bullet.ownerId) === Number(target.user_id)),
     passiveRunner: Boolean(movement.passiveRunner?.active),

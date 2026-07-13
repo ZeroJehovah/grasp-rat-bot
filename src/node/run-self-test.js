@@ -10100,6 +10100,32 @@ async function runSelfTest() {
       want: 'true|true|12|0|58667'
     },
     {
+      name: 'browserless combat trade keeps favorable fight through short zero-output exchange',
+      got: (() => {
+        const samples = [0, 900, 1883].map((offset, index) => ({
+          at: 1000 + offset,
+          selfHp: 100 - index * 3,
+          targetHp: 64,
+          x: 4500,
+          y: 0,
+          vx: 0,
+          vy: 0
+        }));
+        const trade = estimateCombatTrade(
+          { hp: 94 },
+          { hp: 64 },
+          {
+            noDamageMs: 4640,
+            motionSamples: samples,
+            combatMetrics: { selfDamage: 6, targetDamage: 36 }
+          },
+          { nowMs: 2883, combatTradeEstimateMinWindowMs: 1800 }
+        );
+        return [trade.disadvantaged, trade.zeroOutputConfirmedUnsafe, trade.cumulativeTradeFavorable, trade.noDamageMs].join('|');
+      })(),
+      want: 'false|false|true|4640'
+    },
+    {
       name: 'browserless active profit stamina cost includes default miss risk',
       got: (() => {
         const passive = browserlessOpportunityEnemyStaminaCost({ user_id: 8, hp: 100, distance: 5000, active: false }, {});
@@ -16338,12 +16364,13 @@ async function runSelfTest() {
           panelScript.includes("durationNode.dataset.battleStartedAt = battle.startedAt || ''"),
           panelScript.includes("online ? '原因' : '上次退出原因'"),
           panelScript.includes('offlineStats.lastExitReason || status.recentExit?.reason || currentReason'),
+          panelScript.includes("'combat-trade-disadvantage-leave': '战斗交换持续不利，预计继续交战风险过高，主动退出'"),
           panelScript.includes("'combat-pressure-disadvantage-leave': '遭到持续火力压制，我方血量处于劣势，主动退出'"),
           panelText.indexOf('id="actionDetails"') < panelText.indexOf('id="battlePanel"'),
           panelText.indexOf('id="battlePanel"') < panelText.indexOf('class="stats-grid"')
         ].join('|');
       })(),
-      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true'
+      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless web panel renders explicit login point safety result',

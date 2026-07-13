@@ -469,6 +469,7 @@ function renderBrowserlessWebPanel() {
       'combat-attack': '正在打架',
       'combat-spacing': '保持距离并开火',
       'combat-tangent-dodge': '边躲边打',
+      'combat-trade-disadvantage-leave': '战斗交换持续不利，预计继续交战风险过高，主动退出',
       'combat-pressure-disadvantage-leave': '遭到持续火力压制，我方血量处于劣势，主动退出',
       'combat-hp-disadvantage-leave': '与敌人交战时血量差距过大，主动退出',
       'combat-low-hp-disadvantage-leave': '战斗中我方低血且落后，主动退出',
