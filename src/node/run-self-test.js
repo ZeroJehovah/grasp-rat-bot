@@ -16705,6 +16705,21 @@ async function runSelfTest() {
       want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
     },
     {
+      name: 'browserless web panel rounds reconciled daily stamina to match remaining display',
+      got: (() => {
+        const panelText = renderBrowserlessWebPanel();
+        const panelScript = panelText.match(/<script>([\s\S]*?)<\/script>/)?.[1] || '';
+        return [
+          panelScript.includes('const dailyStaminaUnit = v =>'),
+          panelScript.includes('Math.ceil(n / 1000)'),
+          panelScript.includes("['消耗体力', unit(currentSession.staminaSpentMs)]"),
+          panelScript.includes("['消耗体力', dailyStaminaUnit(todayStats.staminaSpentMs)]"),
+          Math.ceil(17069959 / 1000) + Math.floor(2930041 / 1000) === 20000
+        ].join('|');
+      })(),
+      want: 'true|true|true|true|true'
+    },
+    {
       name: 'browserless web panel renders live battle card and offline exit reason',
       got: (() => {
         const panelText = renderBrowserlessWebPanel();
