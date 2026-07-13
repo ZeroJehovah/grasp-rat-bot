@@ -180,6 +180,26 @@ function calculateDodgeDirection(self, bullets, options = {}) {
   };
 }
 
+function pickSafeClosingDodgeCore(threatField = [], options = {}) {
+  const candidates = (threatField || []).filter(Boolean);
+  if (!candidates.length) return null;
+  const minimumDirectHits = Math.min(...candidates.map(item => Number(item.directHits ?? Infinity)));
+  if (minimumDirectHits > 0) return null;
+  const safestCpa = Math.max(...candidates
+    .filter(item => Number(item.directHits || 0) === minimumDirectHits)
+    .map(item => Number(item.minCPA || 0)));
+  const hitRadius = Math.max(1, Number(options.hitRadius || 200));
+  const cpaRatio = Math.max(0, Math.min(1, Number(options.minimumCpaRatio ?? 0.75)));
+  const minimumCpa = Math.max(hitRadius * 1.25, safestCpa * cpaRatio);
+  const minimumClosing = Math.max(0, Number(options.minimumClosingCm ?? 25));
+  return candidates
+    .filter(item => Number(item.directHits || 0) === 0)
+    .filter(item => Number(item.targetDistanceChange || 0) <= -minimumClosing)
+    .filter(item => Number(item.minCPA || 0) >= minimumCpa)
+    .sort((a, b) => Number(a.targetDistanceChange || 0) - Number(b.targetDistanceChange || 0)
+      || Number(b.minCPA || 0) - Number(a.minCPA || 0))[0] || null;
+}
+
 /**
  * Apply combat movement modifiers
  *
@@ -269,6 +289,7 @@ module.exports = {
   calculateCombatSpacing,
   shouldBackAwayFromTarget,
   calculateDodgeDirection,
+  pickSafeClosingDodgeCore,
   applyCombatMovementModifiers,
   isRecoverableOutOfRangeTarget
 };

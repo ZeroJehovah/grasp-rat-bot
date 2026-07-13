@@ -8,8 +8,9 @@
 
 const { ACTION_PRIORITY_BANDS, getActionPriorityBand, buildActionFocus } = require('./action-priority');
 const { applyFinalActionArbitration } = require('./action-arbitration');
+const { buildFinalActionCandidate, selectFinalActionCandidateCore } = require('./final-candidate-selection');
 const { quadraticInterceptCore } = require('./combat-aim');
-const { calculateDodgeDirection } = require('./combat-movement');
+const { calculateDodgeDirection, pickSafeClosingDodgeCore } = require('./combat-movement');
 const { recordActionSwitchDiagnosticsCore } = require('./action-switch-diagnostics');
 const { attackWorthTakingCore } = require('./attack-worth');
 const {
@@ -83,6 +84,10 @@ const {
   buildMissingHeldOpportunityCore,
   rememberOpportunityChoiceCore
 } = require('./opportunity-choice');
+const {
+  opponentResponsePolicyCore,
+  updateOpponentBehaviorStateCore
+} = require('./opponent-behavior');
 const {
   opportunityPriorityTierCore,
   buildOpportunityCandidatesCore,
@@ -197,6 +202,18 @@ function runStrategyModuleSelfTests() {
       ? dodge.threatField.find(item => item.dx === dodge.dx && item.dy === dodge.dy)?.directHits === dodgeMinimumHits && dodgeMinimumHits < 1
       : false
   });
+  const safeClosingDodge = pickSafeClosingDodgeCore([
+    { dx: 0, dy: 1, directHits: 0, minCPA: 800, targetDistanceChange: 150 },
+    { dx: -1, dy: 1, directHits: 0, minCPA: 760, targetDistanceChange: -350 },
+    { dx: -1, dy: 0, directHits: 0, minCPA: 500, targetDistanceChange: -650 }
+  ], { hitRadius: 200, minimumCpaRatio: 0.75 });
+  results.push({
+    name: 'safe-closing-dodge-preserves-zero-hit-cpa-margin-while-reducing-distance',
+    passed: safeClosingDodge?.dx === -1
+      && safeClosingDodge?.dy === 1
+      && safeClosingDodge?.directHits === 0
+      && safeClosingDodge?.targetDistanceChange < 0
+  });
 
   // Test action priority bands
   results.push({
@@ -217,6 +234,78 @@ function runStrategyModuleSelfTests() {
   results.push({
     name: 'action-priority-profit',
     passed: getActionPriorityBand({ kind: 'coin' }) === ACTION_PRIORITY_BANDS.profit
+  });
+
+  const combatFocus = buildActionFocus({ kind: 'combat-live', band: 'combat', target: { user_id: 8, name: 'target' } }, { nowMs: 1000 });
+  const returnFocus = buildActionFocus({ kind: 'patrol', band: 'recover', reason: 'return-to-center-activity-radius' }, { nowMs: 1000 });
+  results.push({
+    name: 'action-priority-prefers-standard-explicit-band-and-normalizes-legacy-kinds',
+    passed: combatFocus.band === 'combat'
+      && returnFocus.band === 'recover'
+      && getActionPriorityBand({ kind: 'combat-live' }) === 'combat'
+      && getActionPriorityBand({ kind: 'combat-candidate' }) === 'combat'
+      && getActionPriorityBand({ kind: 'safety-exit' }) === 'safety'
+      && getActionPriorityBand({ kind: 'patrol', reason: 'return-to-center-activity-radius' }) === 'recover'
+      && [combatFocus.band, returnFocus.band].every(value => Object.values(ACTION_PRIORITY_BANDS).includes(value))
+  });
+
+  const selectedCombatCandidate = selectFinalActionCandidateCore([
+    buildFinalActionCandidate({ kind: 'patrol', band: 'recover', reason: 'return-to-center-activity-radius' }, { order: 190 }),
+    buildFinalActionCandidate({ kind: 'combat-live', band: 'combat', reason: 'combat-live-realtime', target: { user_id: 8 } }, { order: 60 })
+  ]);
+  const selectedHardSafetyCandidate = selectFinalActionCandidateCore([
+    buildFinalActionCandidate({ kind: 'combat-live', band: 'combat', target: { user_id: 8 } }, { order: 60 }),
+    buildFinalActionCandidate({ kind: 'safety-exit', band: 'safety', reason: 'combat-critical-hp-leave' }, { order: 30, hardGate: true })
+  ]);
+  results.push({
+    name: 'final-candidate-selection-keeps-combat-over-recovery-but-never-blocks-hard-safety',
+    passed: selectedCombatCandidate?.action?.kind === 'combat-live'
+      && selectedCombatCandidate?.action?.finalCandidate?.priorityBand === 'combat'
+      && selectedHardSafetyCandidate?.action?.reason === 'combat-critical-hp-leave'
+      && selectedHardSafetyCandidate?.hardGate === true
+  });
+
+  const switchOpportunities = [
+    { type: 'coin', id: 'new', x: -1000, y: 0, reward: 3, staminaCost: 1000, score: 1400, priorityTier: 1 },
+    { type: 'coin', id: 'old', x: 1000, y: 0, reward: 1, staminaCost: 1000, score: 1000, priorityTier: 1 }
+  ];
+  const switchCurrent = { key: 'coin:old', type: 'coin', id: 'old', x: 1000, y: 0, until: 0 };
+  const switch1 = chooseStableOpportunityCore(switchOpportunities, switchCurrent, null, { self: { x: 0, y: 0 }, switchConfirmFrames: 3, switchMargin: 0, switchRelativeMargin: 0, nowMs: 1000 });
+  const switch2 = chooseStableOpportunityCore(switchOpportunities, switchCurrent, switch1.switchLock, { self: { x: 0, y: 0 }, switchConfirmFrames: 3, switchMargin: 0, switchRelativeMargin: 0, nowMs: 1100 });
+  const switch3 = chooseStableOpportunityCore(switchOpportunities, switchCurrent, switch2.switchLock, { self: { x: 0, y: 0 }, switchConfirmFrames: 3, switchMargin: 0, switchRelativeMargin: 0, nowMs: 1200 });
+  results.push({
+    name: 'opportunity-switch-cost-requires-sustained-net-advantage',
+    passed: switch1.chosen?.id === 'old'
+      && switch1.switchDiagnostics?.bestRejectedReason === 'confirmation'
+      && switch2.chosen?.id === 'old'
+      && switch3.chosen?.id === 'new'
+      && Number(switch1.switchDiagnostics?.switchCost) > 0
+  });
+
+  let behavior = null;
+  for (let index = 0; index < 8; index += 1) {
+    behavior = updateOpponentBehaviorStateCore(behavior, {
+      at: 1000 + index * 200,
+      selfX: index * 20,
+      selfY: 0,
+      x: 8000 + index * 120,
+      y: 0,
+      vx: 50,
+      vy: 0,
+      distance: 8000 + index * 100,
+      firing: false,
+      realBulletPressure: false,
+      hitRate: 0.05
+    });
+  }
+  const retreatPolicy = opponentResponsePolicyCore('retreat-kite', { distance: 9000, hitRate: 0.05, targetPressure: false, noProgressMs: 11000, nowMs: 3000 });
+  results.push({
+    name: 'opponent-behavior-hysteresis-enters-retreat-kite-and-pauses-inefficient-fire',
+    passed: behavior?.mode === 'retreat-kite'
+      && behavior?.confidence > 0.4
+      && behavior?.responsePolicy?.name === 'retreat-kite-close-first'
+      && retreatPolicy.suppressFire === true
+      && retreatPolicy.reassessProfit === true
   });
 
   const attackWorthOptions = {

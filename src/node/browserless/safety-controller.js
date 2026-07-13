@@ -19,11 +19,16 @@ function numberOrNull(value) {
 function createSafetyEvent(reason, detail = {}, options = {}) {
   const now = typeof options.now === 'function' ? options.now : Date.now;
   const severity = options.severity || 'stop';
+  const shouldLeave = options.shouldLeave !== false;
   return {
     ok: false,
     reason,
     severity,
-    shouldLeave: options.shouldLeave !== false,
+    classification: String(options.classification || (shouldLeave ? 'exit' : 'safety')),
+    shouldLeave,
+    leaveAttempted: options.leaveAttempted === undefined ? shouldLeave : Boolean(options.leaveAttempted),
+    exitConfirmationRequired: options.exitConfirmationRequired === undefined ? shouldLeave : Boolean(options.exitConfirmationRequired),
+    selfAuthorityMissing: Boolean(options.selfAuthorityMissing),
     stopMotion: options.stopMotion !== false,
     at: new Date(numberOrNull(options.nowMs) ?? now()).toISOString(),
     detail
@@ -161,7 +166,15 @@ function evaluateBrowserlessSafety(state = {}, context = {}, options = {}) {
     return createSafetyEvent('no-self', {
       noSelfGraceMs,
       elapsedMs: nowMs - startedAtMs
-    }, { nowMs });
+    }, {
+      nowMs,
+      shouldLeave: false,
+      stopMotion: false,
+      classification: 'session-recovery',
+      leaveAttempted: false,
+      exitConfirmationRequired: false,
+      selfAuthorityMissing: true
+    });
   }
 
   const realtimeAgeMs = numberOrNull(state?.realtime?.frameAgeMs ?? state?.frameAges?.realtimeAgeMs);

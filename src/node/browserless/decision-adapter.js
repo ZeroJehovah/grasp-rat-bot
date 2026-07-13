@@ -25,7 +25,11 @@ const {
   summarizeNearestCoinStaminaBudgetExitCore
 } = require('../../strategy/stamina-budget');
 const { buildRuntimeDefaults } = require('../../shared/runtime-defaults');
-const { buildBrowserlessCombatDryRun } = require('./combat-adapter');
+const { buildBrowserlessCombatDryRun, recordCombatShotLearning } = require('./combat-adapter');
+const {
+  buildFinalActionCandidate,
+  selectFinalActionCandidateCore
+} = require('../../strategy/final-candidate-selection');
 const {
   buildReturnBlockActionCore,
   lockedFleeDirectionCore
@@ -1795,8 +1799,13 @@ function opportunityEnemyStaminaCost(target, options = {}) {
   const observedShots = Number(metrics?.actualShots || 0);
   const observedHits = Number(metrics?.confirmedHits || 0);
   const defaultActiveHitRate = Math.max(0.05, Math.min(1, Number(options.opportunityActiveDefaultHitRate || 0.25)));
+  const learnedBehaviorHitRate = options.behaviorHitRate === null || options.behaviorHitRate === undefined
+    ? NaN
+    : Number(options.behaviorHitRate);
   const hitRate = target?.active
-    ? (observedShots >= 5 ? Math.max(0.05, Math.min(1, observedHits / observedShots)) : defaultActiveHitRate)
+    ? (Number.isFinite(learnedBehaviorHitRate)
+        ? Math.max(0.05, Math.min(1, learnedBehaviorHitRate))
+        : (observedShots >= 5 ? Math.max(0.05, Math.min(1, observedHits / observedShots)) : defaultActiveHitRate))
     : 1;
   const expectedShots = Math.ceil(estimatedKillShots(target, options) / hitRate);
   const riskScale = target?.active
@@ -2680,6 +2689,10 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
       visibleDistance: opportunityVisibleDistance(options),
       nearbyPriorityDistance: opportunityNearbyPriorityDistance(options)
     }),
+    self: input.self,
+    moveStaminaPerCm: options.opportunityMoveStaminaPerCm ?? BROWSER_RUNTIME_DEFAULTS.opportunityMoveStaminaPerCm ?? 1,
+    switchConfirmFrames: options.opportunitySwitchConfirmFrames ?? 3,
+    switchRelativeMargin: options.opportunitySwitchRelativeMargin ?? BROWSER_RUNTIME_DEFAULTS.opportunitySwitchRelativeMargin ?? 0,
     nowMs: input.nowMs
   };
   const afkOpportunityTargets = includeAfkProfitTargets
@@ -2797,6 +2810,7 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
         staminaCost: chosen.staminaCost,
         profitThresholdEligible: chosen.profitThresholdEligible,
         profitThresholdReason: chosen.profitThresholdReason,
+        opportunitySwitch: choice.switchDiagnostics || null,
         ...(chosen.type === 'coin' && chosen.sourceCoin?.coinRoute
           ? { coinRoute: coinRouteActionMetaCore(chosen.sourceCoin.coinRoute, chosen.sourceCoin.distance) }
           : {})
@@ -2811,6 +2825,7 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
     choice: chosen,
     sorted: choice.sorted || [],
     switchLock: thresholdContext.active && !opportunities.length ? null : (choice.switchLock || null),
+    switchDiagnostics: choice.switchDiagnostics || null,
     opportunityChoice: remembered.choice || null,
     action: remembered.action || action,
     threshold: {
@@ -4004,10 +4019,12 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       && !combatTarget.combatEngagement
   );
   let activeCombatOpportunity = null;
+  let kiteReassessment = null;
   if (freshProactiveCombat && opportunity.rawChoice) {
     const combatScore = scoreEnemyOpportunity(combatTarget, {
       ...options,
       recentCombatMetrics: stateful.combatMetrics,
+      behaviorHitRate: combat.dryRun?.behavior?.recentHitRate ?? undefined,
       isAfkProfitTarget: () => false
     });
     const competingScore = Number(opportunity.rawChoice.score || 0);
@@ -4017,8 +4034,38 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       combatScore: Number.isFinite(Number(combatScore)) ? Math.round(Number(combatScore)) : null,
       competingScore: Math.round(competingScore),
       competingType: opportunity.rawChoice.type || '',
-      hitRateSource: stateful.combatMetrics?.targetId === String(combatTarget.userId) ? 'recent-target' : 'active-default',
+      hitRateSource: combat.dryRun?.behavior?.recentHitRate !== null
+        && combat.dryRun?.behavior?.recentHitRate !== undefined
+        && Number.isFinite(Number(combat.dryRun.behavior.recentHitRate))
+        ? 'behavior-mode-distance'
+        : (stateful.combatMetrics?.targetId === String(combatTarget.userId) ? 'recent-target' : 'active-default'),
       blocked
+    };
+    if (blocked) combatActionEligible = false;
+  }
+  if (combatActionEligible
+    && combat.dryRun?.behavior?.mode === 'retreat-kite'
+    && combat.dryRun?.behavior?.responsePolicy?.reassessProfit
+    && combatDecisionIsOrdinaryProfitPursuit(combat, input, stateful)) {
+    const combatScore = scoreEnemyOpportunity(combatTarget, {
+      ...options,
+      recentCombatMetrics: stateful.combatMetrics,
+      behaviorHitRate: combat.dryRun.behavior.recentHitRate ?? undefined,
+      isAfkProfitTarget: () => false
+    });
+    const competingScore = Number(opportunity.rawChoice?.score || 0);
+    const switchRatio = 1 + Math.max(0, Number(options.opportunitySwitchRelativeMargin || OPPORTUNITY_CONSTANTS.OPPORTUNITY_SWITCH_RELATIVE_MARGIN || 0));
+    const blocked = Boolean(opportunity.rawChoice && competingScore > Number(combatScore || 0) * switchRatio);
+    kiteReassessment = {
+      triggered: true,
+      noProgressMs: combat.dryRun.behavior.noProgressMs,
+      combatScore: Number.isFinite(Number(combatScore)) ? Math.round(Number(combatScore)) : null,
+      competingScore: opportunity.rawChoice ? Math.round(competingScore) : null,
+      competingType: opportunity.rawChoice?.type || '',
+      aimConfidence: numberOrNull(combat.dryRun?.aim?.confidence),
+      targetDrop: entityDropValue(combatTarget),
+      blocked,
+      reason: blocked ? 'retreat-kite-better-profit' : 'retreat-kite-high-value-or-no-better-profit'
     };
     if (blocked) combatActionEligible = false;
   }
@@ -4153,125 +4200,71 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
   let band = 'wait';
   let reason = '';
   let action = { kind: 'wait', band: 'wait', reason: '' };
+  let finalSelection = null;
   if (!input.self) {
     reason = 'missing-realtime-self';
     action.reason = reason;
   } else if (realtimeStale) {
     reason = 'stale-realtime-self';
     action.reason = reason;
-  } else if (hardSafetyAction) {
-    kind = hardSafetyAction.kind;
-    band = hardSafetyAction.band;
-    reason = hardSafetyAction.reason;
-    action = hardSafetyAction;
-  } else if (longStaminaExhaustedLeaveAction) {
-    kind = longStaminaExhaustedLeaveAction.kind;
-    band = longStaminaExhaustedLeaveAction.band;
-    reason = longStaminaExhaustedLeaveAction.reason;
-    action = longStaminaExhaustedLeaveAction;
-  } else if (combatExitAction) {
-    kind = combatExitAction.kind;
-    band = combatExitAction.band;
-    reason = combatExitAction.reason;
-    action = combatExitAction;
-  } else if (injuryHpExitAction) {
-    kind = injuryHpExitAction.kind;
-    band = injuryHpExitAction.band;
-    reason = injuryHpExitAction.reason;
-    action = injuryHpExitAction;
-  } else if (pursuitLeaveAction) {
-    kind = pursuitLeaveAction.kind;
-    band = pursuitLeaveAction.band;
-    reason = pursuitLeaveAction.reason;
-    action = pursuitLeaveAction;
-  } else if (immediateSafetyAction) {
-    kind = immediateSafetyAction.kind;
-    band = immediateSafetyAction.band;
-    reason = immediateSafetyAction.reason;
-    action = immediateSafetyAction;
-  } else if (returnToCenterAction) {
-    kind = returnToCenterAction.kind;
-    band = returnToCenterAction.band;
-    reason = returnToCenterAction.reason;
-    action = returnToCenterAction;
-  } else if (highValueCoinPriorityAction && !singleCoinBaitReleaseAction) {
-    kind = highValueCoinPriorityAction.kind;
-    band = highValueCoinPriorityAction.band;
-    reason = highValueCoinPriorityAction.reason;
-    action = highValueCoinPriorityAction;
-  } else if (combat.target && combatDecisionEnabled && combatActionEligible) {
-    kind = combatLiveEnabled ? 'combat-live' : (combatDryRun ? 'combat-dry-run' : 'combat-candidate');
-    band = 'combat';
-    reason = combat.action.reason;
-    action = combat.action;
-  } else if (postAttackDropCoinAction) {
-    kind = postAttackDropCoinAction.kind;
-    band = postAttackDropCoinAction.band;
-    reason = postAttackDropCoinAction.reason;
-    action = postAttackDropCoinAction;
-  } else if (postAttackDropWaitAction) {
-    kind = postAttackDropWaitAction.kind;
-    band = postAttackDropWaitAction.band;
-    reason = postAttackDropWaitAction.reason;
-    action = postAttackDropWaitAction;
-  } else if (staminaBudgetExitAction) {
-    kind = staminaBudgetExitAction.kind;
-    band = staminaBudgetExitAction.band;
-    reason = staminaBudgetExitAction.reason;
-    action = staminaBudgetExitAction;
-  } else if (recoveryFootCoinAction) {
-    kind = recoveryFootCoinAction.kind;
-    band = recoveryFootCoinAction.band;
-    reason = recoveryFootCoinAction.reason;
-    action = recoveryFootCoinAction;
-  } else if (recoveryAction) {
-    kind = recoveryAction.kind;
-    band = recoveryAction.band;
-    reason = recoveryAction.reason;
-    action = recoveryAction;
-  } else if (injuredCautionFootCoinAction) {
-    kind = injuredCautionFootCoinAction.kind;
-    band = injuredCautionFootCoinAction.band;
-    reason = injuredCautionFootCoinAction.reason;
-    action = injuredCautionFootCoinAction;
-  } else if (safetyAction) {
-    kind = safetyAction.kind;
-    band = safetyAction.band;
-    reason = safetyAction.reason;
-    action = safetyAction;
-  } else if (singleCoinBaitAction) {
-    kind = singleCoinBaitAction.kind;
-    band = singleCoinBaitAction.band;
-    reason = singleCoinBaitAction.reason;
-    action = singleCoinBaitAction;
-  } else if (footCoinPriorityAction) {
-    kind = footCoinPriorityAction.kind;
-    band = footCoinPriorityAction.band;
-    reason = footCoinPriorityAction.reason;
-    action = footCoinPriorityAction;
-  } else if (dailyFinalCoinAction) {
-    kind = dailyFinalCoinAction.kind;
-    band = dailyFinalCoinAction.band;
-    reason = dailyFinalCoinAction.reason;
-    action = dailyFinalCoinAction;
-  } else if (opportunity.choice) {
-    kind = 'profit-candidate';
-    band = 'profit';
-    reason = opportunity.action.reason;
-    action = opportunity.action;
-  } else if (opportunisticShotWaitAction) {
-    kind = opportunisticShotWaitAction.kind;
-    band = opportunisticShotWaitAction.band;
-    reason = opportunisticShotWaitAction.reason;
-    action = opportunisticShotWaitAction;
-  } else if (staminaBlockedWaitAction) {
-    kind = staminaBlockedWaitAction.kind;
-    band = staminaBlockedWaitAction.band;
-    reason = staminaBlockedWaitAction.reason;
-    action = staminaBlockedWaitAction;
   } else {
-    reason = 'no-profitable-candidate';
-    action.reason = reason;
+    const combatAction = combat.target && combatDecisionEnabled && combatActionEligible ? combat.action : null;
+    const validUntil = input.nowMs + Math.max(250, Number(options.decisionIntervalMs || 1000));
+    const candidate = (candidateAction, order, switchReason, hardGate = false, extra = {}) => buildFinalActionCandidate(candidateAction, {
+      nowMs: input.nowMs,
+      order,
+      switchReason,
+      hardGate,
+      validUntil,
+      ...extra
+    });
+    const candidates = [
+      candidate(hardSafetyAction, 10, 'hard-safety', true, { riskScore: 100 }),
+      candidate(longStaminaExhaustedLeaveAction, 20, 'stamina-exhausted-hard-gate', true, { riskScore: 100 }),
+      candidate(combatExitAction, 30, 'combat-exit-hard-gate', true, { riskScore: 100 }),
+      candidate(injuryHpExitAction, 40, 'injury-hp-hard-gate', true, { riskScore: 100 }),
+      candidate(pursuitLeaveAction, 50, 'pursuit-hard-gate', true, { riskScore: 90 }),
+      candidate(immediateSafetyAction, 55, 'realtime-safety-hard-gate', true, { riskScore: immediateSafetyAction?.urgent ? 100 : 80 }),
+      candidate(combatAction, 60, 'engaged-defensive-combat-stick', false, {
+        roiScore: activeCombatOpportunity?.combatScore,
+        staminaCost: combat.dryRun?.metrics?.totalStaminaSpent,
+        riskScore: combat.dryRun?.behavior?.mode === 'pressure-shooter' ? 70 : 40
+      }),
+      candidate(highValueCoinPriorityAction && !singleCoinBaitReleaseAction ? highValueCoinPriorityAction : null, 70, 'high-value-visible-coin'),
+      candidate(postAttackDropCoinAction, 80, 'post-attack-drop-coin'),
+      candidate(postAttackDropWaitAction, 90, 'post-attack-drop-wait'),
+      candidate(staminaBudgetExitAction, 100, 'stamina-budget-exit'),
+      candidate(recoveryFootCoinAction, 110, 'recovery-foot-coin'),
+      candidate(recoveryAction, 120, 'ordinary-recovery'),
+      candidate(injuredCautionFootCoinAction, 130, 'injured-caution-foot-coin'),
+      candidate(safetyAction, 140, 'yieldable-safety'),
+      candidate(singleCoinBaitAction, 150, 'single-coin-bait'),
+      candidate(footCoinPriorityAction, 160, 'foot-coin-priority'),
+      candidate(dailyFinalCoinAction, 170, 'daily-final-coin'),
+      candidate(opportunity.choice ? opportunity.action : null, 180, 'best-eligible-profit', false, {
+        roiScore: opportunity.choice?.score,
+        staminaCost: opportunity.choice?.staminaCost
+      }),
+      candidate(returnToCenterAction, 190, 'return-to-center-fallback'),
+      candidate(opportunisticShotWaitAction, 200, 'opportunistic-shot-wait'),
+      candidate(staminaBlockedWaitAction, 210, 'stamina-blocked-wait'),
+      candidate({ kind: 'wait', band: 'wait', reason: 'no-profitable-candidate' }, 999, 'no-candidate-wait')
+    ].filter(Boolean);
+    finalSelection = selectFinalActionCandidateCore(candidates);
+    action = finalSelection?.action || action;
+    kind = action.finalCandidate?.switchReason === 'best-eligible-profit'
+      ? 'profit-candidate'
+      : (action.kind || 'wait');
+    band = action.band || 'wait';
+    reason = action.reason || 'no-profitable-candidate';
+    finalSelection = {
+      selected: action.finalCandidate || null,
+      candidates: candidates.map(item => ({
+        kind: item.action.kind || '',
+        reason: item.action.reason || '',
+        ...item.action.finalCandidate
+      }))
+    };
   }
   if (input.self && !realtimeStale) {
     const selectedAction = attachOpportunisticShotDecision(action, profitSelectionInput, stateful, options);
@@ -4312,6 +4305,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     ? null
     : (opportunity.opportunityChoice || null);
   const outputSwitchLock = outputOpportunityChoice ? (opportunity.switchLock || null) : null;
+  if (finalSelection) finalSelection.selected = action?.finalCandidate || null;
   stateful.lastDecisionAction = cloneJson(action);
   return {
     ok: true,
@@ -4322,6 +4316,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     at: new Date(input.nowMs).toISOString(),
     tick: input.realtime.tick,
     action,
+    finalSelection,
     input: {
       self: summarizeTarget(input.self),
       stamina: input.stamina,
@@ -4338,6 +4333,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       rawBest: summarizeOpportunity(opportunity.rawChoice),
       candidates: topItems(opportunity.sorted, summarizeOpportunity),
       threshold: opportunity.threshold,
+      switch: opportunity.switchDiagnostics || null,
       singleCoinBait: singleCoinBait.summary
     },
     combat: {
@@ -4345,6 +4341,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       target: combat.dryRun?.target || summarizeTarget(combat.target),
       actionEligible: combatActionEligible,
       activeCombatOpportunity,
+      kiteReassessment,
       dangerousTargetCooldown: dangerousCombatExit,
       profitPursuitSuppression: combatPursuitSuppression,
       candidates: combat.dryRun?.candidates || topItems(combat.candidates, target => ({
@@ -4369,6 +4366,7 @@ function summarizeBrowserlessDecision(decision) {
     at: decision.at || '',
     tick: decision.tick ?? null,
     action: decision.action || null,
+    finalSelection: decision.finalSelection || null,
     input: decision.input || null,
     profit: decision.profit || null,
     combat: decision.combat || null
@@ -4436,6 +4434,7 @@ function recordAttackHistoryFromActionResult(decisionState, actionResult, decisi
       actualLastShotAt: nowMs,
       actualShotIntervalMs: previousShotAt > 0 ? Math.max(0, nowMs - previousShotAt) : null
     };
+    recordCombatShotLearning(decisionState, target, decision?.combat || {}, { nowMs });
   }
   if (!combat) {
     decisionState.combatTarget = {

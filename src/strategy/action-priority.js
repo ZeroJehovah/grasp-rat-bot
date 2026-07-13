@@ -16,9 +16,13 @@ function roundedNullable(value) {
 
 function actionPriorityBand(action) {
   const kind = String(action?.kind || '');
+  const explicitBand = String(action?.band || '');
+  if (Object.prototype.hasOwnProperty.call(ACTION_PRIORITY_BANDS, explicitBand)) return explicitBand;
   if (kind === 'leave') return 'exit';
-  if (kind === 'flee') return 'safety';
+  if (kind === 'flee' || kind === 'safety-exit') return 'safety';
   if (kind === 'recover') return 'recover';
+  if (kind === 'combat-live' || kind === 'combat-candidate' || kind === 'combat-dry-run') return 'combat';
+  if (kind === 'patrol' && !action?.target && String(action?.reason || '') === 'return-to-center-activity-radius') return 'recover';
   if (action?.combat || (kind === 'wait' && action?.target && action?.combat)) return 'combat';
   if (kind === 'attack' || kind === 'seek-enemy' || kind === 'seek-drop' || kind === 'coin' || kind === 'seek-coin') return 'profit';
   if (kind === 'patrol' && (action?.target || String(action?.reason || '').includes('coin'))) return 'profit';

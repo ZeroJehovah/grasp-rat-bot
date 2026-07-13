@@ -39,6 +39,121 @@ function opportunityByKey(opportunities, key) {
   return (opportunities || []).find(item => opportunityKey(item) === key) || null;
 }
 
+function opportunityPoint(item) {
+  const source = item?.sourceCoin || item?.sourceTarget || item || {};
+  const x = Number(source.x ?? item?.x);
+  const y = Number(source.y ?? item?.y);
+  return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null;
+}
+
+function opportunityReward(item) {
+  const source = item?.sourceCoin || item?.sourceTarget || item || {};
+  const value = Number(item?.reward ?? source.amount ?? source.drop ?? source.Drop ?? 0);
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function opportunityNetRoiCore(item, extraStaminaCost = 0) {
+  if (!item) return null;
+  const reward = opportunityReward(item);
+  const staminaCost = Number(item.staminaCost);
+  if (reward !== null && Number.isFinite(staminaCost) && staminaCost + extraStaminaCost > 0) {
+    return reward / (staminaCost + Math.max(0, Number(extraStaminaCost || 0)));
+  }
+  const score = Number(item.score);
+  if (!Number.isFinite(score)) return null;
+  if (!(extraStaminaCost > 0) || !(staminaCost > 0)) return score;
+  return score * staminaCost / (staminaCost + extraStaminaCost);
+}
+
+function opportunitySwitchCostCore(current, next, options = {}) {
+  const self = options.self || null;
+  const currentPoint = opportunityPoint(current);
+  const nextPoint = opportunityPoint(next);
+  if (!self || !currentPoint || !nextPoint) return 0;
+  const ax = Number(currentPoint.x) - Number(self.x);
+  const ay = Number(currentPoint.y) - Number(self.y);
+  const bx = Number(nextPoint.x) - Number(self.x);
+  const by = Number(nextPoint.y) - Number(self.y);
+  const aLength = Math.hypot(ax, ay);
+  const bLength = Math.hypot(bx, by);
+  if (!(aLength > 0) || !(bLength > 0)) return 0;
+  const cosine = Math.max(-1, Math.min(1, (ax * bx + ay * by) / (aLength * bLength)));
+  const reversalFactor = (1 - cosine) / 2;
+  const turnDistance = Math.min(aLength, bLength) * reversalFactor;
+  const staminaPerCm = Math.max(0, Number(options.moveStaminaPerCm ?? 1));
+  const fixedCost = Math.max(0, Number(options.switchFixedStaminaCost ?? 0));
+  return turnDistance * staminaPerCm + fixedCost;
+}
+
+function applyOpportunitySwitchConfirmationCore(best, held, chosen, switchLock, options = {}) {
+  const bestKey = opportunityKey(best);
+  const heldKey = opportunityKey(held);
+  const chosenKey = opportunityKey(chosen);
+  const switchCost = bestKey && heldKey && bestKey !== heldKey
+    ? opportunitySwitchCostCore(held, best, options)
+    : 0;
+  const selectedNetROI = opportunityNetRoiCore(held, 0);
+  const bestEligibleNetROI = opportunityNetRoiCore(best, switchCost);
+  const diagnostics = {
+    selectedNetROI,
+    bestEligibleNetROI,
+    switchCost,
+    netBenefit: selectedNetROI !== null && bestEligibleNetROI !== null ? bestEligibleNetROI - selectedNetROI : null,
+    switchAllowed: chosenKey && chosenKey !== heldKey,
+    switchBlocked: false,
+    bestRejectedReason: ''
+  };
+  if (!best || !held || bestKey === heldKey || chosenKey === heldKey) {
+    if (bestKey && heldKey && bestKey !== heldKey && chosenKey === heldKey) {
+      diagnostics.switchAllowed = false;
+      diagnostics.switchBlocked = true;
+      diagnostics.bestRejectedReason = chosen?.held ? 'hold-or-margin' : 'current-held';
+    }
+    return {
+      chosen,
+      switchLock: bestKey === heldKey ? switchLock : { ...(switchLock || {}), pendingKey: '', pendingCount: 0 },
+      diagnostics
+    };
+  }
+  if (Number(best.priorityTier || 0) > Number(held.priorityTier || 0)) {
+    return { chosen, switchLock: { ...(switchLock || {}), pendingKey: '', pendingCount: 0 }, diagnostics };
+  }
+  const relativeMargin = Math.max(0, Number(options.switchNetRoiRelativeMargin ?? options.switchRelativeMargin ?? 0));
+  if (selectedNetROI !== null && bestEligibleNetROI !== null && bestEligibleNetROI <= selectedNetROI * (1 + relativeMargin)) {
+    diagnostics.switchAllowed = false;
+    diagnostics.switchBlocked = true;
+    diagnostics.bestRejectedReason = 'switch-cost';
+    return {
+      chosen: { ...held, held: true, switchBlocked: true, competingScore: best.score },
+      switchLock: { ...(switchLock || {}), pendingKey: '', pendingCount: 0 },
+      diagnostics
+    };
+  }
+  const requiredFrames = Math.max(1, Math.round(Number(options.switchConfirmFrames ?? 1)));
+  if (requiredFrames <= 1) return { chosen, switchLock, diagnostics };
+  const previous = switchLock || {};
+  const pendingCount = previous.pendingKey === bestKey ? Number(previous.pendingCount || 0) + 1 : 1;
+  if (pendingCount < requiredFrames) {
+    diagnostics.switchAllowed = false;
+    diagnostics.switchBlocked = true;
+    diagnostics.bestRejectedReason = 'confirmation';
+    diagnostics.confirmationFrames = pendingCount;
+    diagnostics.confirmationRequired = requiredFrames;
+    return {
+      chosen: { ...held, held: true, switchBlocked: true, competingScore: best.score },
+      switchLock: { ...previous, pendingKey: bestKey, pendingCount, pendingAt: Number(options.nowMs || Date.now()) },
+      diagnostics
+    };
+  }
+  diagnostics.confirmationFrames = pendingCount;
+  diagnostics.confirmationRequired = requiredFrames;
+  return {
+    chosen,
+    switchLock: { ...previous, pendingKey: '', pendingCount: 0 },
+    diagnostics
+  };
+}
+
 function opportunityMatchesChoiceCore(item, choice, options = {}) {
   if (!item || !choice) return false;
   const key = opportunityKey(item);
@@ -147,8 +262,15 @@ function chooseStableOpportunityCore(opportunities, current, switchLock, options
       }
     }
   }
-  const locked = applyOpportunityOscillationLockCore(sorted, current, chosen, switchLock, options);
-  return { chosen: locked.chosen, switchLock: locked.switchLock, sorted };
+  const held = current ? sorted.find(item => opportunityMatchesChoiceCore(item, current, options)) || null : null;
+  const confirmed = applyOpportunitySwitchConfirmationCore(best, held, chosen, switchLock, options);
+  const locked = applyOpportunityOscillationLockCore(sorted, current, confirmed.chosen, confirmed.switchLock, options);
+  if (locked.chosen?.oscillationLocked) {
+    confirmed.diagnostics.switchAllowed = false;
+    confirmed.diagnostics.switchBlocked = true;
+    confirmed.diagnostics.bestRejectedReason = 'oscillation-lock';
+  }
+  return { chosen: locked.chosen, switchLock: locked.switchLock, sorted, switchDiagnostics: confirmed.diagnostics };
 }
 
 function opportunityMissingHoldUntilCore(choice, options = {}) {
@@ -313,7 +435,16 @@ function rememberOpportunityChoiceCore(item, action, previous = null, options = 
         coinRouteValue: Number.isFinite(Number(routeMeta?.value)) ? Math.round(Number(routeMeta.value)) : null,
         coinRouteLegs: Number.isFinite(Number(routeMeta?.legCount)) ? Math.round(Number(routeMeta.legCount)) : null,
         routeHeld: Boolean(item.routeHeld),
-        competingRouteScore: Number.isFinite(Number(item.competingRouteScore)) ? Math.round(Number(item.competingRouteScore)) : null
+        competingRouteScore: Number.isFinite(Number(item.competingRouteScore)) ? Math.round(Number(item.competingRouteScore)) : null,
+        selectedNetROI: Number.isFinite(Number(action?.opportunitySwitch?.selectedNetROI)) ? Number(action.opportunitySwitch.selectedNetROI) : null,
+        bestEligibleNetROI: Number.isFinite(Number(action?.opportunitySwitch?.bestEligibleNetROI)) ? Number(action.opportunitySwitch.bestEligibleNetROI) : null,
+        switchCost: Number.isFinite(Number(action?.opportunitySwitch?.switchCost)) ? Math.round(Number(action.opportunitySwitch.switchCost)) : 0,
+        netBenefit: Number.isFinite(Number(action?.opportunitySwitch?.netBenefit)) ? Number(action.opportunitySwitch.netBenefit) : null,
+        switchAllowed: action?.opportunitySwitch?.switchAllowed !== false,
+        switchBlocked: Boolean(action?.opportunitySwitch?.switchBlocked),
+        bestRejectedReason: String(action?.opportunitySwitch?.bestRejectedReason || ''),
+        confirmationFrames: Number.isFinite(Number(action?.opportunitySwitch?.confirmationFrames)) ? Number(action.opportunitySwitch.confirmationFrames) : null,
+        confirmationRequired: Number.isFinite(Number(action?.opportunitySwitch?.confirmationRequired)) ? Number(action.opportunitySwitch.confirmationRequired) : null
       }
     }
   };
@@ -327,6 +458,11 @@ module.exports = {
   opportunityChoiceKey,
   opportunityPairKey,
   opportunityByKey,
+  opportunityPoint,
+  opportunityReward,
+  opportunityNetRoiCore,
+  opportunitySwitchCostCore,
+  applyOpportunitySwitchConfirmationCore,
   opportunityMatchesChoiceCore,
   isHighValueCoinOpportunityCore,
   highValueCoinHoldBlocksEnemySwitchCore,

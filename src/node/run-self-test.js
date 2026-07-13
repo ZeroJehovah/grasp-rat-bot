@@ -8107,7 +8107,7 @@ async function runSelfTest() {
           second.profit.best?.target?.userId
         ].join('|');
       })(),
-      want: 'profit-candidate|profit-attack|true|combat-live|combat|8|engaged||9'
+      want: 'profit-candidate|profit-attack|true|combat-live|combat|8|engaged||8'
     },
     {
       name: 'browserless action shoot records attack history for post-attack logic',
@@ -12997,6 +12997,26 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'explicit-stop|test|explicit-stop|true|safe'
+    },
+    {
+      name: 'browserless no-self is session recovery without leave confirmation',
+      got: (() => {
+        const event = evaluateBrowserlessSafety({ realtime: { self: null }, frameAges: {} }, {
+          startedAtMs: 1000,
+          nowMs: 5000,
+          noSelfGraceMs: 3000
+        });
+        return [
+          event.reason,
+          event.classification,
+          event.shouldLeave,
+          event.leaveAttempted,
+          event.exitConfirmationRequired,
+          event.selfAuthorityMissing,
+          event.stopMotion
+        ].join('|');
+      })(),
+      want: 'no-self|session-recovery|false|false|false|true|false'
     },
     {
       name: 'browserless decision keeps realtime self during stale confirmation window',

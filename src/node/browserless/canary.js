@@ -24,6 +24,7 @@ const {
 } = require('./safety-controller');
 const { createBrowserlessActionAdapter } = require('./action-adapter');
 const { createBrowserlessTargetWhitelist } = require('./target-whitelist');
+const { browserlessRuntimeRevision } = require('./runtime-revision');
 
 const DEFAULT_READONLY_PROBE_MS = 30000;
 const DEFAULT_FRAME_GAP_ALERT_MS = 5000;
@@ -452,6 +453,7 @@ async function runReadOnlyCanary(config, options = {}) {
   };
   const startedAt = now();
   const runId = String(options.runId || createCanaryRunId(controlMode, startedAt));
+  const runtimeRevision = browserlessRuntimeRevision(options);
   const previousInGameEvidence = inGameRecoveryEvidenceFromState(options.persistedState || {});
   const result = {
     ok: false,
@@ -525,6 +527,7 @@ async function runReadOnlyCanary(config, options = {}) {
     return {
       ...base,
       runId,
+      runtimeRevision,
       canaryMode: controlMode,
       canaryStartedAt: result.startedAt
     };

@@ -84,6 +84,7 @@ function applyFinalActionArbitrationCore(action, state, options = {}) {
       mode: 'hold-previous',
       ageMs: Math.round(ageMs),
       holdMs,
+      holdRemainingMs: Math.max(0, Math.round(holdMs - ageMs)),
       from: currentFocus,
       to: previousFocus,
       reason: 'higher-priority-band-stick'

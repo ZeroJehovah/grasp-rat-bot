@@ -30,6 +30,22 @@ function buildPreviousDecisionSummary(decision) {
   } : null;
 }
 
+function buildCandidateSwitchSummary(action) {
+  const candidate = action?.finalCandidate || {};
+  const arbitration = action?.finalActionArbitration || {};
+  return {
+    switchAllowed: action?.opportunityChoice?.switchAllowed !== false
+      && !action?.switchBlocked
+      && arbitration?.mode !== 'hold-previous',
+    switchBlocked: Boolean(action?.switchBlocked || action?.opportunityChoice?.switchBlocked || arbitration?.mode === 'hold-previous'),
+    oldBand: String(arbitration?.to?.band || ''),
+    newBand: String(candidate.priorityBand || arbitration?.from?.band || ''),
+    netBenefit: roundedNullable(action?.switchNetBenefit ?? action?.opportunityChoice?.netBenefit),
+    switchCost: roundedNullable(action?.switchCost ?? action?.opportunityChoice?.switchCost),
+    holdRemainingMs: roundedNullable(action?.opportunityChoice?.holdRemainingMs ?? arbitration?.holdRemainingMs)
+  };
+}
+
 function recordActionSwitchDiagnosticsCore(action, state, options = {}) {
   if (!state || typeof state !== 'object') {
     state = { lastFocus: null, lastTargetFocus: null, lastSwitch: null, events: [] };
@@ -70,6 +86,7 @@ function recordActionSwitchDiagnosticsCore(action, state, options = {}) {
       pairKey,
       pairSwitchCount: recentPair.length + 1,
       oscillating: Boolean(reversed || recentPair.length + 1 >= 3),
+      switchDecision: buildCandidateSwitchSummary(action),
       previousDecision: buildPreviousDecisionSummary(options.previousDecision || null)
     };
     const snapshot = clone(event) || event;
@@ -94,5 +111,6 @@ function recordActionSwitchDiagnosticsCore(action, state, options = {}) {
 module.exports = {
   actionSwitchPairKey,
   buildPreviousDecisionSummary,
+  buildCandidateSwitchSummary,
   recordActionSwitchDiagnosticsCore
 };

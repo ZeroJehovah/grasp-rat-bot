@@ -72,6 +72,8 @@ function createInitialDecisionState(options = {}) {
     combatTarget: cloneJson(options.combatTarget || null),
     combatAim: cloneJson(options.combatAim || null),
     combatMetrics: cloneJson(options.combatMetrics || null),
+    opponentBehaviorStates: asRecord(options.opponentBehaviorStates),
+    combatLearning: cloneJson(options.combatLearning || null),
     seenEntities: asRecord(options.seenEntities),
     browserlessLastSelf: cloneJson(options.browserlessLastSelf || null),
     browserlessInjury: cloneJson(options.browserlessInjury || null),
@@ -142,7 +144,9 @@ function summarizeBrowserlessDecisionState(state, options = {}) {
     combat: {
       target: redactBoundedValue(state.combatTarget || null),
       aim: redactBoundedValue(state.combatAim || null),
-      metrics: redactBoundedValue(state.combatMetrics || null)
+      metrics: redactBoundedValue(state.combatMetrics || null),
+      opponentBehaviorStates: recordEntries(state.opponentBehaviorStates || {}, limit),
+      learning: redactBoundedValue(state.combatLearning || null)
     },
     browserlessSafety: {
       seenEntityCount: Object.keys(state.seenEntities || {}).length,
