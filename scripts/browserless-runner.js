@@ -11,7 +11,9 @@ const {
   runBrowserlessRunnerSelfTest
 } = require('../src/node/browserless/runner');
 const {
-  readBrowserlessStateFile
+  browserlessStatsForOffline,
+  readBrowserlessStateFile,
+  updateBrowserlessStateFile
 } = require('../src/node/browserless/state-file');
 const {
   leaveWithVerification,
@@ -20,6 +22,24 @@ const {
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function lastLeaveResponse(result) {
+  const attempts = Array.isArray(result?.attempts) ? result.attempts : [];
+  for (let i = attempts.length - 1; i >= 0; i -= 1) {
+    const response = attempts[i]?.response;
+    if (response && typeof response === 'object') return response;
+  }
+  return null;
+}
+
+function shutdownStaminaDetail(result) {
+  const response = lastLeaveResponse(result);
+  if (!response) return null;
+  return {
+    stamina1dRemainingMilli: response.stamina_1d_remaining_milli ?? response.stamina1dRemainingMilli ?? null,
+    stamina1dLimitMilli: response.stamina_1d_limit_milli ?? response.stamina1dLimitMilli ?? null
+  };
 }
 
 async function gracefulShutdownLeave(config, options = {}) {
@@ -41,9 +61,32 @@ async function gracefulShutdownLeave(config, options = {}) {
     retryMax: Math.min(Math.max(0, Number(hydrated.leaveRetryMax ?? 3)), 2),
     retryDelayMs: Math.min(Math.max(0, Number(hydrated.leaveRetryMs ?? 1200)), 800)
   });
+  let statsFinalized = false;
+  let statsFinalizeError = '';
+  if (result?.ok) {
+    try {
+      const now = typeof options.now === 'function' ? options.now : Date.now;
+      const nowMs = now();
+      const at = new Date(nowMs).toISOString();
+      const latestState = readState(config.stateFile);
+      const updateState = options.updateState || updateBrowserlessStateFile;
+      updateState(config.stateFile, {
+        stats: browserlessStatsForOffline(latestState, {
+          at,
+          reason: 'shutdown-leave',
+          stamina: shutdownStaminaDetail(result)
+        }, { nowMs })
+      }, { updatedAt: at });
+      statsFinalized = true;
+    } catch (err) {
+      statsFinalizeError = err?.message || String(err);
+    }
+  }
   return {
     ok: Boolean(result?.ok),
     skipped: false,
+    statsFinalized,
+    statsFinalizeError,
     leave: summarizeLeaveResultForPublic(result)
   };
 }

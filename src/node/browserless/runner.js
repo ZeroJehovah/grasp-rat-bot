@@ -475,9 +475,15 @@ function runnerResultExitDetail(result, fallbackReason = '') {
   const canary = result?.canary && typeof result.canary === 'object' ? result.canary : {};
   const safetyReason = canary?.safety?.event?.reason || canary?.safety?.leaveFailure?.reason || '';
   const reason = safetyReason || result?.reason || canary?.error || result?.error || fallbackReason || '';
+  const finalSelf = lastLeaveResponseFromCanary(canary);
+  const stamina1dRemainingMilli = numberOrNull(finalSelf?.stamina_1d_remaining_milli ?? finalSelf?.stamina1dRemainingMilli);
+  const stamina1dLimitMilli = numberOrNull(finalSelf?.stamina_1d_limit_milli ?? finalSelf?.stamina1dLimitMilli);
   return {
     at: canary?.completedAt || result?.completedAt || '',
-    reason
+    reason,
+    stamina: stamina1dRemainingMilli !== null || stamina1dLimitMilli !== null
+      ? { stamina1dRemainingMilli, stamina1dLimitMilli }
+      : null
   };
 }
 
@@ -1443,6 +1449,7 @@ module.exports = {
   preLoginSafetyLeadMs,
   persistedReconnectDelayPlan,
   publicConfig,
+  runnerResultExitDetail,
   runBrowserlessRunner,
   runBrowserlessRunnerSelfTest
 };

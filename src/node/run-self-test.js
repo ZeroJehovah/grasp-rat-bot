@@ -100,6 +100,7 @@ const {
   publicConfig,
   learnedLoginPointFromCanary,
   persistedReconnectDelayPlan,
+  runnerResultExitDetail,
   runBrowserlessRunner,
   runBrowserlessRunnerSelfTest
 } = require('./browserless/runner');
@@ -14907,10 +14908,28 @@ async function runSelfTest() {
           },
           network: {
             sourceIp: '10.0.0.101'
+          },
+          stats: {
+            currentSession: {
+              online: true,
+              sessionId: '7:2026-07-08T00:00:00.000Z',
+              userId: 7,
+              enteredAt: '2026-07-08T00:00:00.000Z',
+              lastSeenAt: '2026-07-08T00:00:01.000Z',
+              lastStamina1dRemaining: 19000000,
+              lastStamina1dLimit: 20000000,
+              staminaSpentMs: 1000000
+            },
+            today: {
+              day: '2026-07-08',
+              activeSessionId: '7:2026-07-08T00:00:00.000Z',
+              activeEnteredAt: '2026-07-08T00:00:00.000Z'
+            }
           }
         }, { updatedAt: '2026-07-08T00:00:00.000Z' });
         let optionsSeen = null;
         const result = await gracefulShutdownLeave(config, {
+          now: () => Date.parse('2026-07-08T00:00:02.000Z'),
           leaveWithVerification: async options => {
             optionsSeen = options;
             return {
@@ -14923,24 +14942,35 @@ async function runSelfTest() {
                   statusText: 'OK',
                   durationMs: 12,
                   ok: true,
+                  response: {
+                    stamina_1d_remaining_milli: 18950000,
+                    stamina_1d_limit_milli: 20000000
+                  },
                   summary: { leaveConfirmed: true }
                 }
               ]
             };
           }
         });
+        const stored = readBrowserlessStateFile(config.stateFile);
         return [
           result.ok,
           result.skipped,
+          result.statsFinalized,
+          result.statsFinalizeError,
           result.leave.attempts.length,
           optionsSeen.userId,
           optionsSeen.sessionToken,
           optionsSeen.localAddress,
           optionsSeen.retryMax,
-          optionsSeen.timeoutMs
+          optionsSeen.timeoutMs,
+          stored.stats.currentSession.online,
+          stored.stats.currentSession.staminaSpentMs,
+          stored.stats.currentSession.lastStamina1dRemaining,
+          stored.stats.today.staminaSpentMs
         ].join('|');
       }),
-      want: 'true|false|1|7|persisted-secret|10.0.0.101|2|5000'
+      want: 'true|false|true||1|7|persisted-secret|10.0.0.101|2|5000|false|1050000|18950000|1050000'
     },
     {
       name: 'browserless runner dry-run and fake read-only path write redacted logs',
@@ -16037,11 +16067,23 @@ async function runSelfTest() {
         state.stats = browserlessStatsForDecision(state, decisionAt(firstStartedAt, 20000000), { nowMs: firstStartedAt });
         state.stats = browserlessStatsForDecision(state, decisionAt(firstUpdatedAt, 19000000), { nowMs: firstUpdatedAt });
         state.current.stamina = { stamina1dRemainingMilli: 19000000, stamina1dLimitMilli: 20000000 };
-        state.stats = browserlessStatsForOffline(state, {
-          at: new Date(firstExitedAt).toISOString(),
-          reason: 'cycle-complete'
-        }, { nowMs: firstExitedAt });
+        const firstExitDetail = runnerResultExitDetail({
+          canary: {
+            completedAt: new Date(firstExitedAt).toISOString(),
+            leave: {
+              ok: true,
+              attempts: [{
+                response: {
+                  stamina_1d_remaining_milli: 18950000,
+                  stamina_1d_limit_milli: 20000000
+                }
+              }]
+            }
+          }
+        }, 'cycle-complete');
+        state.stats = browserlessStatsForOffline(state, firstExitDetail, { nowMs: firstExitedAt });
         const firstStored = state.stats.today.staminaSpentMs;
+        const firstSessionSpent = state.stats.currentSession.staminaSpentMs;
 
         state.stats = browserlessStatsForDecision(state, decisionAt(secondStartedAt, 18950000), { nowMs: secondStartedAt });
         state.current.stamina = { stamina1dRemainingMilli: 18950000, stamina1dLimitMilli: 20000000 };
@@ -16055,6 +16097,7 @@ async function runSelfTest() {
         }, { nowMs: secondExitedAt });
         return [
           firstStored,
+          firstSessionSpent,
           compactSecondStart.stats.currentSession.staminaSpentMs,
           compactSecondStart.stats.today.staminaSpentMs,
           compactSecondUpdated.stats.currentSession.staminaSpentMs,
@@ -16062,7 +16105,7 @@ async function runSelfTest() {
           state.stats.today.staminaSpentMs
         ].join('|');
       })(),
-      want: '1000000|0|1050000|950000|2000000|2000000'
+      want: '1050000|1050000|0|1050000|950000|2000000|2000000'
     },
     {
       name: 'browserless stats ignore kill messages already present at session entry',

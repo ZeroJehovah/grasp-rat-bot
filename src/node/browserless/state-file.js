@@ -534,6 +534,21 @@ function startBrowserlessStatsSession(stats, state, self, stamina, nowMs, decisi
   return stats.currentSession;
 }
 
+function updateBrowserlessStatsSessionStamina(session, stamina, self) {
+  const stamina1d = statsStamina1dRemaining(stamina, self);
+  const stamina1dLimit = statsStamina1dLimit(stamina, self);
+  const previousStamina = compactNumber(session.lastStamina1dRemaining);
+  if (stamina1d !== null) {
+    if (previousStamina !== null && stamina1d < previousStamina) {
+      const previousSpent = Math.max(0, Number(session.staminaSpentMs || 0) || 0);
+      session.staminaSpentMs = Math.max(0, Math.round(previousSpent + previousStamina - stamina1d));
+    }
+    session.lastStamina1dRemaining = stamina1d;
+  }
+  if (stamina1dLimit !== null && stamina1dLimit > 0) session.lastStamina1dLimit = stamina1dLimit;
+  return stamina1d !== null;
+}
+
 function updateBrowserlessStatsSession(session, decision, self, stamina, nowMs) {
   session.lastSeenAt = isoFromMs(nowMs);
   session.exitedAt = '';
@@ -547,17 +562,7 @@ function updateBrowserlessStatsSession(session, decision, self, stamina, nowMs) 
       Math.max(0, Math.round(Number(drop) - Number(session.baseDrop || 0)))
     );
   }
-  const stamina1d = statsStamina1dRemaining(stamina, self);
-  const stamina1dLimit = statsStamina1dLimit(stamina, self);
-  const previousStamina = compactNumber(session.lastStamina1dRemaining);
-  if (stamina1d !== null) {
-    if (previousStamina !== null && stamina1d < previousStamina) {
-      const previousSpent = Math.max(0, Number(session.staminaSpentMs || 0) || 0);
-      session.staminaSpentMs = Math.max(0, Math.round(previousSpent + previousStamina - stamina1d));
-    }
-    session.lastStamina1dRemaining = stamina1d;
-  }
-  if (stamina1dLimit !== null && stamina1dLimit > 0) session.lastStamina1dLimit = stamina1dLimit;
+  updateBrowserlessStatsSessionStamina(session, stamina, self);
   const evidence = ensureSessionKillBaseline(session, decision);
   const baselineKeys = new Set(Array.isArray(session.killBaselineKeys) ? session.killBaselineKeys : []);
   const killKeys = new Set(normalizeSessionKillKeys(session.killKeys, session));
@@ -626,6 +631,9 @@ function finalizeBrowserlessStatsSession(stats, detail = {}, nowMs = Date.now())
   let lastExitAt = stats.lastExit.at || '';
   let lastExitReason = stats.lastExit.reason || '';
   if (session.online && session.sessionId) {
+    if (updateBrowserlessStatsSessionStamina(session, detail.stamina, detail.self) && at) {
+      session.lastSeenAt = at;
+    }
     const delta = todayActiveDelta(stats, eventTimeMs(at, nowMs));
     stats.today.uptimeMs += delta.uptimeMs;
     stats.today.staminaSpentMs += delta.staminaSpentMs;
