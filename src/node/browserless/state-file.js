@@ -1293,15 +1293,23 @@ function compactNearbyCoins(list) {
 }
 
 function compactNearbyPlayers(list) {
-  const rows = compactNearbyList(list, 11, Number.POSITIVE_INFINITY);
+  const rows = compactNearbyList(list, 13, Number.POSITIVE_INFINITY);
   const visibleRows = [];
   let lowHiddenCount = 0;
   for (const row of rows) {
-    if (row?.[10]) {
+    const currentShape = row.length >= 13;
+    const lowValueFullStamina = currentShape ? row?.[12] : row?.[10];
+    if (lowValueFullStamina) {
       lowHiddenCount += 1;
       continue;
     }
-    visibleRows.push(row.slice(0, 10));
+    if (currentShape) {
+      visibleRows.push(row.slice(0, 12));
+      continue;
+    }
+    const legacy = row.slice(0, 10);
+    legacy.push(Boolean(row?.[9]) ? 1 : 0, Boolean(row?.[9]) ? 1 : 0);
+    visibleRows.push(legacy);
   }
   return {
     rows: visibleRows,

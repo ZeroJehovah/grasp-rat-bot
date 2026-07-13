@@ -6515,9 +6515,13 @@ async function runSelfTest() {
           rows['good-afk']?.[8],
           rows['good-afk']?.[9],
           rows['good-afk']?.[10],
+          rows['good-afk']?.[11],
+          rows['good-afk']?.[12],
           rows['low-full']?.[8],
           rows['low-full']?.[9],
           rows['low-full']?.[10],
+          rows['low-full']?.[11],
+          rows['low-full']?.[12],
           rows['unknown-stamina']?.[8],
           rows['unknown-stamina']?.[9],
           rows['unknown-stamina']?.[10],
@@ -6526,7 +6530,7 @@ async function runSelfTest() {
           rows['good-afk']?.length
         ].join('|');
       })(),
-      want: '8|1|1|0||||||||false|11'
+      want: '8|1|1|1|1|0||||||||||false|13'
     },
     {
       name: 'browserless nearby player rows hide nameless no-stamina no-drop placeholders',
@@ -6801,6 +6805,104 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'profit-candidate|attack|8|1|1|true'
+    },
+    {
+      name: 'browserless AFK display stays white until sixty seconds without activity',
+      got: (() => {
+        const stateful = {};
+        const makeState = (x, tick) => ({
+          userId: 7,
+          realtime: {
+            tick,
+            frameAgeMs: 100,
+            self: { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+            entities: [
+              { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+              fullStamina5s({ entity_id: 2, user_id: 8, name: 'afk-color', x, y: 0, hp: 80, current_join_mode: 'Passive', drop: 20 })
+            ],
+            bullets: [],
+            coinDrops: []
+          },
+          fallback: { coinDrops: [] }
+        });
+        const options = {
+          controlMode: 'profit-live',
+          attackRange: 5000,
+          afkRecentActivityCooldownMs: 12000,
+          afkDisplayInactiveMs: 60000,
+          activeMoveMin: 120
+        };
+        buildBrowserlessDecision(makeState(1000, 60), stateful, { ...options, nowMs: 1000 });
+        buildBrowserlessDecision(makeState(1500, 61), stateful, { ...options, nowMs: 2000 });
+        const white = buildBrowserlessDecision(makeState(1500, 62), stateful, { ...options, nowMs: 4000 });
+        const green = buildBrowserlessDecision(makeState(1500, 122), stateful, { ...options, nowMs: 62000 });
+        const whiteRow = white.input.nearby.p.find(item => item[0] === 'afk-color');
+        const greenRow = green.input.nearby.p.find(item => item[0] === 'afk-color');
+        return [
+          white.action.kind,
+          white.action.target.userId,
+          whiteRow?.[9],
+          whiteRow?.[10],
+          whiteRow?.[11],
+          green.action.kind,
+          green.action.target.userId,
+          greenRow?.[9],
+          greenRow?.[10],
+          greenRow?.[11]
+        ].join('|');
+      })(),
+      want: 'attack|8|1|1|0|attack|8|1|1|1'
+    },
+    {
+      name: 'browserless profit admits invulnerable AFK only when approach outlasts protection',
+      got: (() => {
+        const choose = (distance, remainingMs) => buildBrowserlessDecision({
+          userId: 7,
+          realtime: {
+            tick: 60,
+            frameAgeMs: 100,
+            self: { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+            entities: [
+              { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+              fullStamina5s({
+                entity_id: 2,
+                user_id: 8,
+                name: 'invulnerable-afk',
+                x: distance,
+                y: 0,
+                hp: 80,
+                current_join_mode: 'Passive',
+                drop: 20,
+                invulnerable_remaining_ms: remainingMs
+              })
+            ],
+            bullets: [],
+            coinDrops: []
+          },
+          fallback: { coinDrops: [] }
+        }, {}, {
+          nowMs: 1200,
+          controlMode: 'profit-live',
+          attackRange: 14500,
+          afkAttackCommitRangeCm: 5000,
+          invulnerableProfitMoveSpeedCmPerSec: 1000
+        });
+        const eligible = choose(20000, 14000);
+        const tooLong = choose(20000, 16000);
+        const alreadyClose = choose(5000, 1);
+        return [
+          eligible.kind,
+          eligible.action.kind,
+          eligible.action.target.userId,
+          eligible.action.target.invulnerable,
+          eligible.action.target.invulnerableRemainingMs,
+          tooLong.kind,
+          tooLong.profit.best === null,
+          alreadyClose.kind,
+          alreadyClose.profit.best === null
+        ].join('|');
+      })(),
+      want: 'profit-candidate|seek-enemy|8|true|14000|wait|true|wait|true'
     },
     {
       name: 'browserless just-seen out-of-range full-stamina AFK target is selectable',
@@ -8052,6 +8154,65 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'velocity|profit-afk-preengage|5000|vel 1 0|true|profit-attack|true|true'
+    },
+    {
+      name: 'browserless action adapter never fires while profit target remains invulnerable',
+      got: (() => {
+        const approachCommands = [];
+        const approachAdapter = createBrowserlessActionAdapter({
+          now: () => 1200 + approachCommands.length * 200,
+          commandIntervalMs: 1,
+          attackRangeCm: 14500,
+          afkAttackCommitRangeCm: 5000,
+          transport: {
+            sendVelocity: (dx, dy) => approachCommands.push(`vel ${dx} ${dy}`),
+            sendShoot: () => approachCommands.push('shoot')
+          }
+        });
+        const approach = approachAdapter.applyDecision({
+          realtime: { self: { user_id: 7, x: 0, y: 0 }, tick: 1 }
+        }, {
+          kind: 'profit-candidate',
+          band: 'profit',
+          action: {
+            kind: 'attack',
+            band: 'profit',
+            target: { type: 'enemy', userId: 8, x: 6000, y: 0, active: false, invulnerable: true }
+          }
+        });
+        const waitCommands = [];
+        const waitAdapter = createBrowserlessActionAdapter({
+          now: () => 1600 + waitCommands.length * 200,
+          commandIntervalMs: 1,
+          attackRangeCm: 14500,
+          afkAttackCommitRangeCm: 5000,
+          transport: {
+            sendVelocity: (dx, dy) => waitCommands.push(`vel ${dx} ${dy}`),
+            sendShoot: () => waitCommands.push('shoot')
+          }
+        });
+        const wait = waitAdapter.applyDecision({
+          realtime: { self: { user_id: 7, x: 0, y: 0 }, tick: 2 }
+        }, {
+          kind: 'profit-candidate',
+          band: 'profit',
+          action: {
+            kind: 'attack',
+            band: 'profit',
+            target: { type: 'enemy', userId: 8, x: 5000, y: 0, active: false, invulnerable: true }
+          }
+        });
+        return [
+          approach.kind,
+          approach.reason,
+          approachCommands.join(','),
+          wait.kind,
+          wait.reason,
+          waitCommands.join(','),
+          !approachCommands.includes('shoot') && !waitCommands.includes('shoot')
+        ].join('|');
+      })(),
+      want: 'velocity|profit-afk-preengage|vel 1 0|stop|profit-invulnerable-target-wait|vel 0 0|true'
     },
     {
       name: 'browserless profit live hands moving AFK attack target to combat',
@@ -9315,13 +9476,13 @@ async function runSelfTest() {
           decision.action.target.id,
           (decision.action.coinRoute?.ids || []).slice(0, 3).join(','),
           coinRows.map(row => row[0] + ':' + row[3] + ':' + row[4]).join(','),
-          playerRows.map(row => row[0] + ':' + row[6] + ':' + row[9] + ':' + row[10]).join(','),
+          playerRows.map(row => row[0] + ':' + row[6] + ':' + row[9] + ':' + row[10] + ':' + row[11] + ':' + row[12]).join(','),
           coinRows.some(row => row[0] === 'route-b' && row[4] === 2),
           coinRows.some(row => row[0] === 'route-c' && row[4] === 3),
           playerRows.some(row => row[0] === 'low-afk')
         ].join('|');
       })(),
-      want: 'one-a||one-a:1:0,one-b:0:0,route-a:0:0,route-b:0:0,route-c:0:0|active-threat:0:0:0,drop-afk:0:1:0|false|false|false'
+      want: 'one-a||one-a:1:0,one-b:0:0,route-a:0:0,route-b:0:0,route-c:0:0|active-threat:0:0:0:0:0,drop-afk:0:1:1:1:0|false|false|false'
     },
     {
       name: 'browserless profit live enriches realtime AFK reward from fresh snapshot metadata',
@@ -15683,7 +15844,7 @@ async function runSelfTest() {
                     index === 0 ? ['coin-1', 8, 450, 1] : ['coin-' + (index + 1), 1, 500 + index, 0]
                   )),
                   p: [
-                    ['enemy', 44, 5000, 9, null, 800, 1, 'Passive', 0, 0, 0],
+                    ['enemy', 44, 5000, 9, null, 800, 1, 'Passive', 0, 0, 0, 0, 0],
                     ['low-full', 80, 10000, 1, null, 900, 0, 'Passive', 1, 0, 1]
                   ]
                 }
@@ -17192,7 +17353,9 @@ async function runSelfTest() {
           panelScript.includes('playerLowHiddenCount'),
           panelScript.includes('低额金币'),
           panelScript.includes("低收益满体力玩家"),
-          /function isAfkProfitNearbyPlayer/.test(panelScript),
+          /function isAfkNearbyPlayer/.test(panelScript),
+          /function isGreenAfkNearbyPlayer/.test(panelScript),
+          panelScript.includes("if (afk) return { text: 'AFK', className: greenAfk ? 'ok' : '' }"),
           /function playerHpCell/.test(panelScript),
           !panelScript.includes("{ text: '无敌' }"),
           panelScript.includes("['当前位置', s.game?.inGame ? pointCoordText(s.self) : '--']"),
@@ -17200,7 +17363,7 @@ async function runSelfTest() {
           hiddenActionLabels.every(label => !panelScript.includes("addRow(rowsOut, '" + label + "'"))
         ].join('|');
       })(),
-      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
+      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless runner self-test passes',

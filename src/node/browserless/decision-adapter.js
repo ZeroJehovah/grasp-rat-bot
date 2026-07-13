@@ -93,6 +93,9 @@ const DEFAULT_RECOVERY_PLAYER_DROP_MIN_AMOUNT = 2;
 const DEFAULT_POST_ATTACK_RECOVERY_DROP_MAX_DISTANCE = BROWSER_RUNTIME_DEFAULTS.postAttackRecoveryDropMaxDistance;
 const DEFAULT_STAMINA_BUDGET_RELOGIN_DELAY_MS = BROWSER_RUNTIME_DEFAULTS.staminaBudgetReloginDelayMs;
 const DEFAULT_AFK_ATTACK_COMMIT_RANGE_CM = 5000;
+const DEFAULT_AFK_DISPLAY_INACTIVE_MS = 60000;
+const DEFAULT_INVULNERABLE_PROFIT_APPROACH_DISTANCE_CM = 5000;
+const DEFAULT_INVULNERABLE_PROFIT_MOVE_SPEED_CM_PER_SEC = 1000;
 const DEFAULT_DANGEROUS_TARGET_COOLDOWN_MS = BROWSER_RUNTIME_DEFAULTS.browserlessDangerousTargetCooldownMs ?? 900000;
 const DEFAULT_PROFIT_PURSUIT_MIN_DAMAGE_MS = BROWSER_RUNTIME_DEFAULTS.browserlessProfitPursuitMinDamageMs ?? 60000;
 const DEFAULT_PROFIT_PURSUIT_MIN_DAMAGE_HP = BROWSER_RUNTIME_DEFAULTS.browserlessProfitPursuitMinDamageHp ?? 10;
@@ -1325,6 +1328,37 @@ function invulnerableRemainingMs(target, options = {}) {
   return isInvulnerableEntity(target) ? -1 : null;
 }
 
+function invulnerableProfitTargetReadyOnApproach(target, options = {}) {
+  if (!target?.invulnerable) return true;
+  const remainingMs = invulnerableRemainingMs(target, options);
+  if (!(remainingMs > 0)) return false;
+  const distance = Number(target.distance ?? Infinity);
+  if (!Number.isFinite(distance)) return false;
+  const approachDistance = Math.max(0, Number(
+    options.invulnerableProfitApproachDistanceCm
+      ?? options.afkAttackCommitRangeCm
+      ?? options.afkAttackCommitRange
+      ?? options.browserlessAfkAttackCommitRangeCm
+      ?? DEFAULT_INVULNERABLE_PROFIT_APPROACH_DISTANCE_CM
+  ));
+  const moveSpeed = Math.max(1, Number(
+    options.invulnerableProfitMoveSpeedCmPerSec
+      ?? DEFAULT_INVULNERABLE_PROFIT_MOVE_SPEED_CM_PER_SEC
+  ));
+  const travelMs = Math.max(0, distance - approachDistance) * 1000 / moveSpeed;
+  return travelMs > 0 && remainingMs <= travelMs;
+}
+
+function afkDisplayGreen(target, options = {}) {
+  const inactiveMs = Math.max(0, Number(options.afkDisplayInactiveMs ?? DEFAULT_AFK_DISPLAY_INACTIVE_MS));
+  const rawActivityAgeMs = target?.recentActivityAgeMs;
+  const activityAgeMs = rawActivityAgeMs === null || rawActivityAgeMs === undefined || rawActivityAgeMs === ''
+    ? null
+    : numberOrNull(rawActivityAgeMs);
+  if (Number(target?.afkStaminaCooldownRemainingMs || 0) > 0) return false;
+  return activityAgeMs === null || activityAgeMs >= inactiveMs;
+}
+
 function panelPlayerTargetKey(target) {
   const id = target?.user_id ?? target?.userId ?? target?.entity_id ?? target?.entityId ?? target?.id;
   return id === undefined || id === null || id === '' ? '' : String(id);
@@ -1347,6 +1381,7 @@ function panelPlayerCandidates(input) {
     .map(panelPlayerTargetKey)
     .filter(Boolean));
   const afkIds = new Set((input.afkTargets || [])
+    .concat(input.afkPanelTargets || [])
     .map(panelPlayerTargetKey)
     .filter(Boolean));
   return (input.visibleTargets || [])
@@ -1382,6 +1417,9 @@ function summarizeNearbyForPanel(input, action, combat, options = {}) {
     .filter(target => !afkOpportunityBlockedByStaminaCooldown(target, options))
     .map(panelPlayerTargetKey)
     .filter(Boolean));
+  const afkTargetIds = new Set((input.afkPanelTargets || input.afkTargets || [])
+    .map(panelPlayerTargetKey)
+    .filter(Boolean));
   const lowDropThreshold = Math.max(0, Number(options.attackMinAfkDrop ?? DEFAULT_ATTACK_MIN_AFK_DROP));
   const players = panelPlayerCandidates(panelInput)
     .filter(target => Number.isFinite(Number(target?.distance)))
@@ -1391,6 +1429,7 @@ function summarizeNearbyForPanel(input, action, combat, options = {}) {
       const drop = numberOrNull(entityDropValue(target));
       const fullStamina5s = hasFull5sStamina(target, options);
       const afkSelectable = selectableAfkTargetIds.has(panelPlayerTargetKey(target));
+      const afk = afkTargetIds.has(panelPlayerTargetKey(target));
       const lowValueFullStamina = Boolean(fullStamina5s && drop !== null && drop < lowDropThreshold);
       return [
         entityDisplayName(target) || '未知玩家',
@@ -1403,6 +1442,8 @@ function summarizeNearbyForPanel(input, action, combat, options = {}) {
         String(target.current_join_mode || target.mode || target.joined || target.profitMetadataMode || '') || null,
         fullStamina5s ? 1 : 0,
         afkSelectable ? 1 : 0,
+        afk ? 1 : 0,
+        afk && afkDisplayGreen(target, options) ? 1 : 0,
         lowValueFullStamina ? 1 : 0
       ];
     });
@@ -1456,7 +1497,8 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
     ...firingThreats.filter(threat => !avoidanceThreats.includes(threat))
   ].filter(threat => snapshotFallbackThreatBlocks(threat, self, options));
   const afkObservationTargetsRaw = visibleTargets.filter(entity => {
-    if (entity.whitelisted || entity.active || entity.moving || entity.firing || entity.alive === false || entity.invulnerable) return false;
+    if (entity.whitelisted || entity.active || entity.moving || entity.firing || entity.alive === false) return false;
+    if (entity.invulnerable && !invulnerableProfitTargetReadyOnApproach(entity, options)) return false;
     return attackWorthTakingCore(self, entity, {
       attackMinDrop: options.attackMinDrop ?? DEFAULT_ATTACK_MIN_DROP,
       attackMinAfkDrop: options.attackMinAfkDrop ?? DEFAULT_ATTACK_MIN_AFK_DROP,
@@ -1467,7 +1509,8 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
     });
   });
   const afkObservationTargets = filterCenterActivityProfitItems(afkObservationTargetsRaw, options);
-  const afkTargets = afkObservationTargets.filter(entity => hasFull5sStamina(entity, options) && !afkTargetBlockedByRecentActivity(entity, options));
+  const afkPanelTargets = afkObservationTargets.filter(entity => hasFull5sStamina(entity, options));
+  const afkTargets = afkPanelTargets.filter(entity => !afkTargetBlockedByRecentActivity(entity, options));
   const realtimeCoinsRaw = buildNativeCoinSnapshotCore(Array.isArray(realtime.coinDrops) ? realtime.coinDrops : [], { nowMs: options.nowMs })
     .map(drop => normalizeCoinForDecision(drop, self, 'realtime'))
     .filter(Boolean)
@@ -1578,6 +1621,7 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
     avoidanceThreats,
     snapshotActiveThreats,
     snapshotFallbackThreats,
+    afkPanelTargets,
     afkTargets,
     realtimeCoins,
     snapshotCoins,

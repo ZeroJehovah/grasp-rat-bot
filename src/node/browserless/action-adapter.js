@@ -1081,6 +1081,24 @@ function createBrowserlessActionAdapter(options = {}) {
       };
     }
 
+    if (target?.invulnerable) {
+      const stopped = stop('profit-invulnerable-target-wait');
+      return {
+        ok: stopped.ok,
+        kind: 'stop',
+        reason: 'profit-invulnerable-target-wait',
+        command: stopped.command || null,
+        skipped: Boolean(stopped.skipped),
+        target,
+        afkAttackCommit: {
+          commitRangeCm: Math.round(shootRange),
+          attackRangeCm: Math.round(attackRange),
+          distance: Math.round(distance)
+        },
+        ...transportFailure(stopped)
+      };
+    }
+
     const hold = sendVelocity(0, 0, 'profit-afk-attack-hold', target);
     const startX = numberOrNull(self?.x);
     const startY = numberOrNull(self?.y);
