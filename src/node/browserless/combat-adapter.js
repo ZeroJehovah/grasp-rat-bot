@@ -416,7 +416,7 @@ function estimateCombatTrade(self, target, combatTargetState = {}, options = {})
   const minEnemyDps = Math.max(0, Number(options.combatTradeEstimateMinEnemyDps || 1.5));
   const safetyFactor = Math.max(1, Number(options.combatTradeEstimateSafetyFactor || 1.15));
   const zeroOutput = targetDamage <= 0.01;
-  const zeroOutputConfirmMs = Math.max(minWindowMs, Number(options.combatTradeEstimateZeroOutputConfirmMs || 8000));
+  const zeroOutputConfirmMs = Math.max(minWindowMs, Number(options.combatTradeEstimateZeroOutputConfirmMs || 30000));
   const noDamageMs = Math.max(0, Number(combatTargetState?.noDamageMs ?? elapsedMs));
   const cumulativeSelfDamage = Math.max(selfDamage, Number(combatTargetState?.combatMetrics?.selfDamage || 0));
   const cumulativeTargetDamage = Math.max(targetDamage, Number(combatTargetState?.combatMetrics?.targetDamage || 0));

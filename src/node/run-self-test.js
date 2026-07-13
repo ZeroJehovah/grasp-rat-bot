@@ -10080,9 +10080,9 @@ async function runSelfTest() {
     {
       name: 'browserless combat trade exits sustained zero-output damage before fixed hp gap',
       got: (() => {
-        const samples = [0, 2000, 4000, 6000, 8000].map((offset, index) => ({
+        const samples = [0, 7500, 15000, 22500, 30000].map((offset, index) => ({
           at: 1000 + offset,
-          selfHp: 100 - index * 3,
+          selfHp: 100 - index * 15,
           targetHp: 100,
           x: 5000,
           y: 0,
@@ -10093,11 +10093,11 @@ async function runSelfTest() {
           { hp: 88 },
           { hp: 100 },
           { motionSamples: samples },
-          { nowMs: 9000, combatTradeEstimateMinWindowMs: 8000 }
+          { nowMs: 31000, combatTradeEstimateWindowMs: 30000, combatTradeEstimateMinWindowMs: 8000 }
         );
         return [trade.disadvantaged, trade.zeroOutput, trade.selfDamage, trade.targetDamage, Math.round(trade.tDeathMs)].join('|');
       })(),
-      want: 'true|true|12|0|58667'
+      want: 'true|true|60|0|44000'
     },
     {
       name: 'browserless combat trade keeps favorable fight through short zero-output exchange',
