@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.13.1';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.13.2';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function renderBrowserlessWebPanel() {
@@ -449,6 +449,18 @@ function renderBrowserlessWebPanel() {
       if (target.drop !== null && target.drop !== undefined) parts.push('掉落 ' + target.drop);
       if (target.amount !== null && target.amount !== undefined) parts.push('金币 ' + target.amount);
       if (target.invulnerable) parts.push('无敌 ' + invulnerableText(target.invulnerableRemainingMs));
+      return parts.join(' / ');
+    }
+    function combatExitHpText(status) {
+      const exit = status.recentExit || status.combat?.exit || {};
+      const selfHp = number(exit.selfHp);
+      const targetHp = number(exit.targetHp);
+      if (selfHp === null && targetHp === null) return '--';
+      const parts = [];
+      if (selfHp !== null) parts.push('我方 ' + selfHp);
+      if (targetHp !== null) parts.push('敌方 ' + targetHp);
+      const hpGap = number(exit.hpGap);
+      if (hpGap !== null) parts.push('血差 ' + hpGap);
       return parts.join(' / ');
     }
     function pointCoordText(point) {
@@ -1252,6 +1264,7 @@ function renderBrowserlessWebPanel() {
       if (isCombatStatus(status, kind, reason)) {
         addRow(rowsOut, '战斗目标', targetLabel(status.combat?.target));
         addRow(rowsOut, '战斗退出', reasonText(status.combat?.exit?.reason));
+        addRow(rowsOut, '退出触发血量', combatExitHpText(status));
       }
 
       if (!online && isSafetyStatus(status, kind, reason)) {

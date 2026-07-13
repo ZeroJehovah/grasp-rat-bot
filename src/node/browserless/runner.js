@@ -724,14 +724,72 @@ async function runBrowserlessRunner(config, deps = {}) {
           }
         );
         recordSnapshotSafetyProgress(preparedSnapshotSafety);
+        const preparedSummary = preparedSnapshotSafety?.response?.summary || {};
+        const preparedFreshness = preparedSummary?.freshness || {};
         logStore.append('runner', 'runner-prelogin-safety-prepared', {
           checkedAt: preparedSnapshotSafety?.checkedAt || '',
           ok: Boolean(preparedSnapshotSafety?.ok),
           reason: preparedSnapshotSafety?.reason || '',
+          originalReason: preparedSnapshotSafety?.originalReason || preparedSummary?.safety?.reason || '',
+          selfPresent: preparedSummary.selfPresent === undefined ? null : Boolean(preparedSummary.selfPresent),
+          tick: preparedSummary.tick ?? null,
+          freshness: {
+            ok: preparedFreshness.ok === undefined ? null : Boolean(preparedFreshness.ok),
+            reason: preparedFreshness.reason || '',
+            latestKnownTick: preparedFreshness.latestKnownTick ?? null,
+            tickDelta: preparedFreshness.tickDelta ?? null
+          },
+          self: preparedSummary.self ? {
+            userId: preparedSummary.self.user_id ?? preparedSummary.self.userId ?? null,
+            x: preparedSummary.self.x ?? null,
+            y: preparedSummary.self.y ?? null,
+            hp: preparedSummary.self.hp ?? null,
+            joined: preparedSummary.self.joined || '',
+            mode: preparedSummary.self.current_join_mode || ''
+          } : null,
           streak: preparedSnapshotSafety?.streak ?? null,
           required: preparedSnapshotSafety?.required ?? null,
           nextRunAt
         });
+        if (preparedSummary.selfPresent === true) {
+          const currentBeforeResume = readBrowserlessStateFile(stateFile);
+          updateState({
+            runner: {
+              running: true,
+              mode: config.controlMode || 'read-only',
+              lastError: '',
+              currentAction: {
+                kind: 'loop-wait',
+                band: 'recover',
+                reason: 'self-present-reentry',
+                delayMs: 0,
+                nextRunAt: '',
+                previousRunId: loopPlan.previousRunId || ''
+              }
+            },
+            stats: browserlessStatsForOffline(currentBeforeResume, {
+              ...waitExitDetail,
+              reason: waitReason,
+              nextRunAt: '',
+              delayMs: 0
+            }, { nowMs: now() })
+          }, { updatedAt: new Date(now()).toISOString() });
+          logStore.append('runner', 'runner-loop-wait-self-present-resume', {
+            previousRunId: loopPlan.previousRunId || '',
+            previousReason: loopPlan.reason,
+            checkedAt: preparedSnapshotSafety?.checkedAt || '',
+            tick: preparedSummary.tick ?? null,
+            self: preparedSummary.self ? {
+              x: preparedSummary.self.x ?? null,
+              y: preparedSummary.self.y ?? null,
+              hp: preparedSummary.self.hp ?? null,
+              joined: preparedSummary.self.joined || '',
+              mode: preparedSummary.self.current_join_mode || ''
+            } : null
+          });
+          refreshFromPersistedState();
+          return null;
+        }
         const remainingMs = Math.max(0, nextRunAtMs - now());
         if (remainingMs > 0) await sleep(remainingMs);
       } else {
@@ -816,6 +874,33 @@ async function runBrowserlessRunner(config, deps = {}) {
     updateState({
       loginPointSafety: loginPointSafetyPatchFromSnapshot(snapshotSafety)
     }, { updatedAt: new Date(now()).toISOString() });
+    const summary = snapshotSafety?.response?.summary || {};
+    const freshness = summary?.freshness || {};
+    logStore.append('runner', 'snapshot-safety-observation', {
+      checkedAt: snapshotSafety?.checkedAt || '',
+      ok: Boolean(snapshotSafety?.ok),
+      reason: snapshotSafety?.reason || '',
+      originalReason: snapshotSafety?.originalReason || summary?.safety?.reason || '',
+      attempt: snapshotSafety?.attempt ?? null,
+      streak: snapshotSafety?.streak ?? null,
+      required: snapshotSafety?.required ?? null,
+      selfPresent: summary.selfPresent === undefined ? null : Boolean(summary.selfPresent),
+      tick: summary.tick ?? null,
+      freshness: {
+        ok: freshness.ok === undefined ? null : Boolean(freshness.ok),
+        reason: freshness.reason || '',
+        latestKnownTick: freshness.latestKnownTick ?? null,
+        tickDelta: freshness.tickDelta ?? null
+      },
+      self: summary.self ? {
+        userId: summary.self.user_id ?? summary.self.userId ?? null,
+        x: summary.self.x ?? null,
+        y: summary.self.y ?? null,
+        hp: summary.self.hp ?? null,
+        joined: summary.self.joined || '',
+        mode: summary.self.current_join_mode || ''
+      } : null
+    });
   };
 
   let statusHandle = null;

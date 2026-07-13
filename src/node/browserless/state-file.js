@@ -1135,7 +1135,12 @@ function compactCombat(combat) {
     exit: combat.exit && typeof combat.exit === 'object'
       ? {
           kind: compactString(combat.exit.kind, 48),
-          reason: compactString(combat.exit.reason, 120)
+          reason: compactString(combat.exit.reason, 120),
+          selfHp: compactNumber(combat.exit.selfHp),
+          targetHp: compactNumber(combat.exit.targetHp),
+          hpGap: compactNumber(combat.exit.hpGap),
+          threshold: compactNumber(combat.exit.threshold),
+          minHpGap: compactNumber(combat.exit.minHpGap)
         }
       : null,
     dataGaps: dataGaps.slice(0, 5).map(item => compactString(item, 80)),
@@ -1294,12 +1299,20 @@ function compactExit(event) {
   if (!event || typeof event !== 'object') return null;
   const detail = event.detail && typeof event.detail === 'object' ? event.detail : {};
   const decision = detail.decision && typeof detail.decision === 'object' ? detail.decision : {};
+  const combatExit = decision.combat?.exit && typeof decision.combat.exit === 'object'
+    ? decision.combat.exit
+    : (detail.combat?.exit && typeof detail.combat.exit === 'object' ? detail.combat.exit : {});
   return {
     at: compactString(event.at || event.time || event.createdAt, 48),
     reason: compactString(event.reason || event.type, 120),
     runId: compactString(event.runId || event.detail?.runId, 96),
     shouldLeave: event.shouldLeave === undefined ? null : Boolean(event.shouldLeave),
-    target: compactTarget(event.target || detail.target || decision.target)
+    target: compactTarget(event.target || detail.target || decision.target),
+    selfHp: compactNumber(event.selfHp ?? detail.selfHp ?? combatExit.selfHp),
+    targetHp: compactNumber(event.targetHp ?? detail.targetHp ?? combatExit.targetHp),
+    hpGap: compactNumber(event.hpGap ?? detail.hpGap ?? combatExit.hpGap),
+    threshold: compactNumber(event.threshold ?? detail.threshold ?? combatExit.threshold),
+    minHpGap: compactNumber(event.minHpGap ?? detail.minHpGap ?? combatExit.minHpGap)
   };
 }
 

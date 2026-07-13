@@ -211,8 +211,18 @@ function combatSummaryFromDecision(decision) {
   const action = decision?.action || decision || {};
   const kind = String(action.kind || decision?.kind || '');
   const band = String(action.band || decision?.band || '');
-  if (band !== 'combat' || kind !== 'combat-live') return null;
-  return decision?.combat || null;
+  const combat = decision?.combat || null;
+  if (!combat) return null;
+  if (band === 'combat' && kind === 'combat-live') return combat;
+  if (
+    band === 'safety'
+    && (kind === 'leave' || kind === 'safety-exit' || action.shouldLeave === true)
+    && combat.target
+    && combat.movement
+  ) {
+    return combat;
+  }
+  return null;
 }
 
 function safetyMotionFromDecision(decision) {
@@ -311,7 +321,9 @@ function createInitialActionState() {
     shootRepeatTargetKey: '',
     shootRepeat: null,
     lastVelocityRepeatError: '',
-    lastShootRepeatError: ''
+    lastShootRepeatError: '',
+    transportSealed: false,
+    transportSealReason: ''
   };
 }
 
@@ -597,6 +609,10 @@ function createBrowserlessActionAdapter(options = {}) {
     const atMs = now();
     dx = quantizeVelocity(dx);
     dy = quantizeVelocity(dy);
+    if (state.transportSealed) {
+      state.skippedCount += 1;
+      return { ok: false, skipped: true, reason: state.transportSealReason || 'transport-sealed' };
+    }
     if (!transport || typeof transport.sendVelocity !== 'function') {
       cancelVelocityRepeat();
       state.skippedCount += 1;
@@ -658,6 +674,10 @@ function createBrowserlessActionAdapter(options = {}) {
 
   function sendShoot(targetX, targetY, startX, startY, reason, target = null, cadenceMs = combatShootMinIntervalMs) {
     const atMs = now();
+    if (state.transportSealed) {
+      state.skippedCount += 1;
+      return { ok: false, skipped: true, reason: state.transportSealReason || 'transport-sealed' };
+    }
     if (!transport || typeof transport.sendShoot !== 'function') {
       state.skippedCount += 1;
       return { ok: false, skipped: true, reason: 'missing-transport' };
@@ -704,6 +724,21 @@ function createBrowserlessActionAdapter(options = {}) {
   function stop(reason = 'stop') {
     cancelShootRepeat('stop');
     return sendVelocity(0, 0, reason);
+  }
+
+  function sealTransport(reason = 'transport-sealed') {
+    state.transportSealed = true;
+    state.transportSealReason = String(reason || 'transport-sealed');
+    clearPrecisionPulseStop();
+    cancelVelocityRepeat();
+    cancelShootRepeat(state.transportSealReason);
+    clearCoinFeedbackGate();
+    return {
+      sealed: true,
+      reason: state.transportSealReason,
+      lastCommand: summarizeCommand(state.lastCommand),
+      lastShootCommand: summarizeCommand(state.lastShootCommand)
+    };
   }
 
   function transportFailure(...results) {
@@ -1212,6 +1247,8 @@ function createBrowserlessActionAdapter(options = {}) {
       shootRepeatTargetKey: state.shootRepeatTargetKey,
       lastVelocityRepeatError: state.lastVelocityRepeatError,
       lastShootRepeatError: state.lastShootRepeatError,
+      transportSealed: state.transportSealed,
+      transportSealReason: state.transportSealReason,
       lastCommand: summarizeCommand(state.lastCommand),
       lastShootCommand: summarizeCommand(state.lastShootCommand),
       lastShootAck: state.lastShootAck,
@@ -1228,6 +1265,7 @@ function createBrowserlessActionAdapter(options = {}) {
     applyCombatDecision,
     getState,
     observeState,
+    sealTransport,
     stop
   };
 }

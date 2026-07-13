@@ -55,6 +55,7 @@ function buildRuntimeDefaults(config, combatLogEndpointConfigured) {
     combatCriticalHpLeaveThreshold: 20,
     combatLowHpLeaveThreshold: 50,
     combatLowHpCloseRiskMargin: 5,
+    combatLowHpDisadvantageMinGap: 5,
     combatHighHpDisadvantageGap: 20,
     combatDisadvantageConfirmMs: 2500,
     combatDisadvantageMinEngageMs: 3500,

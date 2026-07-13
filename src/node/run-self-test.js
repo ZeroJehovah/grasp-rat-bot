@@ -7846,6 +7846,9 @@ async function runSelfTest() {
           combatAttackRange: 11000,
           combatLowHpLeaveThreshold: 50,
           combatHighHpDisadvantageGap: 20,
+          combatDisadvantageConfirmMs: 0,
+          combatDisadvantageMinEngageMs: 0,
+          combatDisadvantageMinSamples: 1,
           browserlessDangerousTargetCooldownMs: 900000
         });
         return [
@@ -10564,7 +10567,103 @@ async function runSelfTest() {
           combat.shooting.wouldShoot
         ].join('|');
       })(),
-      want: 'combat-hp-disadvantage-leave|26|false'
+      want: 'combat-hp-disadvantage-leave|26|true'
+    },
+    {
+      name: 'browserless low hp disadvantage requires configured hp gap',
+      got: (() => {
+        const combatAt = (selfHp, targetHp) => buildBrowserlessCombatDryRun({
+          userId: 7,
+          realtime: {
+            tick: 62,
+            self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: selfHp, stamina_5s_remaining_milli: 10000 },
+            entities: [
+              { entity_id: 1, user_id: 7, x: 0, y: 0, hp: selfHp, stamina_5s_remaining_milli: 10000 },
+              { entity_id: 2, user_id: 8, name: 'active', x: 4000, y: 0, hp: targetHp, current_join_mode: 'Active', firing: true, drop: 12 }
+            ],
+            bullets: []
+          }
+        }, {
+          nowMs: 5000,
+          combatAttackRange: 11000,
+          combatLowHpLeaveThreshold: 50,
+          combatLowHpDisadvantageMinGap: 5
+        });
+        const narrow = combatAt(44, 46);
+        const clear = combatAt(41, 46);
+        return [
+          narrow.exit === null,
+          clear.exit.reason,
+          clear.exit.hpGap,
+          clear.exit.minHpGap
+        ].join('|');
+      })(),
+      want: 'true|combat-low-hp-disadvantage-leave|5|5'
+    },
+    {
+      name: 'browserless trade disadvantage requires sustained confirmation',
+      got: (() => {
+        const nowMs = 5000;
+        const baseTarget = {
+          id: 8,
+          at: 1000,
+          firstSeenAt: 1000,
+          lastInRangeAt: 1000,
+          lastDamageAt: 4500,
+          hp: 95,
+          intent: 'engaged',
+          motionSamples: [
+            { at: 1000, x: 5000, y: 0, vx: 0, vy: 0, selfHp: 100, targetHp: 100 },
+            { at: 3000, x: 5000, y: 0, vx: 0, vy: 0, selfHp: 90, targetHp: 98 },
+            { at: 4500, x: 5000, y: 0, vx: 0, vy: 0, selfHp: 82, targetHp: 95 }
+          ]
+        };
+        const stateAt = observation => ({
+          combatTarget: { ...baseTarget, motionSamples: baseTarget.motionSamples.map(item => ({ ...item })) },
+          combatDisadvantageObservation: observation,
+          combatMetrics: { targetId: '8', selfDamage: 18, targetDamage: 5 }
+        });
+        const input = {
+          userId: 7,
+          realtime: {
+            tick: 62,
+            self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 80, stamina_5s_remaining_milli: 10000 },
+            entities: [
+              { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 80, stamina_5s_remaining_milli: 10000 },
+              { entity_id: 2, user_id: 8, name: 'active', x: 5000, y: 0, hp: 90, current_join_mode: 'Active', firing: true, drop: 12 }
+            ],
+            bullets: []
+          }
+        };
+        const observingState = stateAt(null);
+        const observing = buildBrowserlessCombatDryRun(input, {
+          nowMs,
+          decisionState: observingState,
+          combatAttackRange: 11000,
+          combatTradeEstimateMinWindowMs: 1800,
+          combatDisadvantageConfirmMs: 2500,
+          combatDisadvantageMinEngageMs: 3500,
+          combatDisadvantageMinSamples: 4
+        });
+        const confirmedState = stateAt({ id: '8', kind: 'trade-estimate', firstAt: 2000, at: 4800, count: 4 });
+        const confirmed = buildBrowserlessCombatDryRun(input, {
+          nowMs,
+          decisionState: confirmedState,
+          combatAttackRange: 11000,
+          combatTradeEstimateMinWindowMs: 1800,
+          combatDisadvantageConfirmMs: 2500,
+          combatDisadvantageMinEngageMs: 3500,
+          combatDisadvantageMinSamples: 4
+        });
+        return [
+          observing.exit === null,
+          observingState.combatDisadvantageObservation.kind,
+          observingState.combatDisadvantageObservation.ready,
+          confirmed.exit.reason,
+          confirmed.exit.disadvantageObservation.ready
+        ].join('|');
+      })(),
+      want: 'true|trade-estimate|false|combat-trade-disadvantage-leave|true'
     },
     {
       name: 'browserless combat pressure disadvantage exits',
@@ -11729,7 +11828,7 @@ async function runSelfTest() {
         }, {
           kind: 'combat-live',
           band: 'combat',
-          action: { kind: 'combat-live', band: 'combat', reason: 'combat-live-realtime' },
+          action: { kind: 'safety-exit', band: 'safety', reason: 'combat-trade-disadvantage-leave', shouldLeave: true },
           combat: {
             self: { x: 0, y: 0 },
             target: { userId: 8, x: 1000, y: 0, authority: 'realtime' },
@@ -12655,9 +12754,10 @@ async function runSelfTest() {
       want: 'no-profitable-candidate'
     },
     {
-      name: 'browserless safety exit sends stop motion and verified leave',
+      name: 'browserless safety exit preserves control until verified leave callback',
       got: (async () => {
         const sent = [];
+        const confirmed = [];
         const result = await executeSafetyExit({
           reason: 'frame-gap',
           shouldLeave: true,
@@ -12674,18 +12774,63 @@ async function runSelfTest() {
           leaveWithVerification: async options => ({
             ok: true,
             attempts: [{ ok: true, userId: options.userId, summary: { leaveConfirmed: true } }]
-          })
+          }),
+          onLeaveConfirmed: async leave => {
+            confirmed.push(Boolean(leave.ok));
+            return { ok: true, sealed: true, closed: true };
+          }
         });
         return [
           result.ok,
           result.stopMotion.sent,
+          result.stopMotion.reason,
           sent.join(';'),
           result.leave.ok,
           result.leave.attempts[0].userId,
+          confirmed.join(','),
+          result.confirmedControlClose.closed,
           result.leaveFailure === null
         ].join('|');
       })(),
-      want: 'true|true|0,0|true|7|true'
+      want: 'true|false|preserve-control-until-leave-confirmed||true|7|true|true|true'
+    },
+    {
+      name: 'browserless action adapter seals repeats and rejects post-leave sends',
+      got: (() => {
+        const sent = [];
+        const adapter = createBrowserlessActionAdapter({
+          transport: {
+            sendVelocity: (dx, dy) => sent.push(`v:${dx},${dy}`),
+            sendShoot: (x, y) => sent.push(`s:${x},${y}`)
+          },
+          now: () => 1000,
+          velocityRepeatEnabled: false,
+          shootRepeatEnabled: false,
+          commandIntervalMs: 0
+        });
+        const before = adapter.applyDecision({ realtime: { self: { x: 0, y: 0 } } }, {
+          action: { kind: 'combat-live', band: 'combat', reason: 'combat-live-realtime' },
+          combat: {
+            target: { userId: 8, x: 1000, y: 0 },
+            movement: { dx: 1, dy: 0, reason: 'safe-dodge' },
+            aim: { x: 1000, y: 0 },
+            shooting: { wouldShoot: true, commandSuppressed: false, reason: 'target-pressure-fire', cadenceMs: 160 }
+          }
+        });
+        const seal = adapter.sealTransport('leave-confirmed');
+        const after = adapter.stop('after-leave');
+        const state = adapter.getState();
+        return [
+          before.ok,
+          seal.sealed,
+          after.ok,
+          after.reason,
+          state.transportSealed,
+          state.transportSealReason,
+          sent.join(';')
+        ].join('|');
+      })(),
+      want: 'true|true|false|leave-confirmed|true|leave-confirmed|v:1,0;s:1000,0'
     },
     {
       name: 'browserless combat selector source does not reference snapshot state',
@@ -14514,6 +14659,101 @@ async function runSelfTest() {
         ].join('|');
       }),
       want: 'explicit-stop|2|1|60000|safe|60000'
+    },
+    {
+      name: 'browserless runner resumes immediately when reconnect-wait probe finds self present',
+      got: withTempDirForTest(async dir => {
+        let t = Date.parse('2026-07-12T17:00:00.000Z');
+        let canaryCalls = 0;
+        let precheckCalls = 0;
+        let sleptMs = 0;
+        const config = parseBrowserlessRunnerArgs([
+          '--live',
+          '--data-dir',
+          dir,
+          '--user-id',
+          '7',
+          '--session-token',
+          'runner-secret-token',
+          '--login-point-x',
+          '1',
+          '--login-point-y',
+          '2'
+        ], {});
+        config.loopDelayMs = 60000;
+        updateBrowserlessStateFile(stateFilePath(config), {
+          stats: {
+            today: { day: '2026-07-13', sessionCount: 1 },
+            currentSession: { online: false }
+          }
+        }, { updatedAt: new Date(t).toISOString() });
+        const result = await runBrowserlessRunner(config, {
+          now: () => t,
+          startStatusServer: false,
+          sleep: async ms => {
+            sleptMs += ms;
+            t += ms;
+          },
+          runPreLoginSnapshotSafety: async () => {
+            precheckCalls += 1;
+            return {
+              ok: true,
+              reason: 'self-present-reentry',
+              originalReason: 'active-near-login-point',
+              checkedAt: new Date(t).toISOString(),
+              required: 3,
+              streak: 3,
+              satisfied: true,
+              bypassedPreLoginSafety: true,
+              response: {
+                summary: {
+                  valid: true,
+                  tick: 300,
+                  selfPresent: true,
+                  self: { user_id: 7, x: 5999, y: 66268, hp: 79, joined: 'InGame', current_join_mode: 'Active' },
+                  safety: { ok: false, reason: 'active-near-login-point' },
+                  freshness: { ok: true, reason: 'fresh', tick: 300, latestKnownTick: 299, tickDelta: 1 }
+                }
+              }
+            };
+          },
+          runReadOnlyOnce: async () => {
+            canaryCalls += 1;
+            if (canaryCalls === 1) {
+              return {
+                ok: false,
+                runId: 'confirmed-exit-before-self-present-probe',
+                completedAt: new Date(t).toISOString(),
+                error: 'combat-trade-disadvantage-leave',
+                safety: {
+                  event: { reason: 'combat-trade-disadvantage-leave', at: new Date(t).toISOString() },
+                  exit: { leave: { ok: true } }
+                },
+                leave: { ok: true }
+              };
+            }
+            return {
+              ok: false,
+              runId: 'immediate-self-present-resume',
+              error: 'explicit-stop',
+              safety: { event: { reason: 'explicit-stop', at: new Date(t).toISOString() } }
+            };
+          }
+        });
+        const logFile = path.join(dir, 'logs', '2026-07-12', 'runner.jsonl');
+        const text = fs.readFileSync(logFile, 'utf8');
+        return [
+          result.reason,
+          canaryCalls,
+          precheckCalls,
+          sleptMs,
+          /runner-loop-wait-self-present-resume/.test(text),
+          /snapshot-safety-observation/.test(text),
+          /\"selfPresent\":true/.test(text),
+          /\"tick\":300/.test(text)
+        ].join('|');
+      }),
+      want: 'explicit-stop|2|1|0|true|true|true|true'
     },
     {
       name: 'browserless runner skips persisted reconnect wait when fresh snapshot still has self',
@@ -16366,11 +16606,41 @@ async function runSelfTest() {
           panelScript.includes('offlineStats.lastExitReason || status.recentExit?.reason || currentReason'),
           panelScript.includes("'combat-trade-disadvantage-leave': '战斗交换持续不利，预计继续交战风险过高，主动退出'"),
           panelScript.includes("'combat-pressure-disadvantage-leave': '遭到持续火力压制，我方血量处于劣势，主动退出'"),
+          panelScript.includes("addRow(rowsOut, '退出触发血量', combatExitHpText(status))"),
           panelText.indexOf('id="actionDetails"') < panelText.indexOf('id="battlePanel"'),
           panelText.indexOf('id="battlePanel"') < panelText.indexOf('class="stats-grid"')
         ].join('|');
       })(),
-      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true'
+      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
+    },
+    {
+      name: 'browserless compact exit preserves trigger hp evidence',
+      got: (() => {
+        const status = buildCompactBrowserlessStatus({
+          recentExits: [{
+            at: '2026-07-13T02:36:08.815Z',
+            reason: 'combat-low-hp-disadvantage-leave',
+            shouldLeave: true,
+            detail: {
+              decision: {
+                target: { userId: 8, name: 'enemy', hp: 46 },
+                combat: {
+                  exit: { selfHp: 41, targetHp: 46, hpGap: 5, threshold: 50, minHpGap: 5 }
+                }
+              }
+            }
+          }]
+        }, parseBrowserlessRunnerArgs([], {}));
+        return [
+          status.recentExit.reason,
+          status.recentExit.selfHp,
+          status.recentExit.targetHp,
+          status.recentExit.hpGap,
+          status.recentExit.threshold,
+          status.recentExit.minHpGap
+        ].join('|');
+      })(),
+      want: 'combat-low-hp-disadvantage-leave|41|46|5|50|5'
     },
     {
       name: 'browserless web panel renders explicit login point safety result',

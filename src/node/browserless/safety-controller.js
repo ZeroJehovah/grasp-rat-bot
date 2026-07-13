@@ -61,7 +61,8 @@ function decisionSafetyDetail(decision) {
     combat: decision?.combat ? {
       target: decision.combat.target || null,
       movement: decision.combat.movement || null,
-      shooting: decision.combat.shooting || null
+      shooting: decision.combat.shooting || null,
+      exit: decision.combat.exit || null
     } : null,
     profit: decision?.profit ? {
       best: decision.profit.best || null
@@ -206,9 +207,11 @@ function sendStopMotion(transport, options = {}) {
 }
 
 async function executeSafetyExit(event, config = {}, deps = {}) {
-  const stopMotion = event?.stopMotion
-    ? sendStopMotion(deps.transport, { allowStopMotion: deps.allowStopMotion })
-    : { attempted: false, sent: false, reason: 'not-required' };
+  const stopMotion = event?.shouldLeave
+    ? { attempted: false, sent: false, reason: 'preserve-control-until-leave-confirmed' }
+    : (event?.stopMotion
+        ? sendStopMotion(deps.transport, { allowStopMotion: deps.allowStopMotion })
+        : { attempted: false, sent: false, reason: 'not-required' });
   if (!event?.shouldLeave) {
     return { ok: true, event, stopMotion, leave: null };
   }
@@ -224,6 +227,17 @@ async function executeSafetyExit(event, config = {}, deps = {}) {
     sleep: deps.sleep,
     now: deps.now
   });
+  let confirmedControlClose = null;
+  if (leave?.ok && typeof deps.onLeaveConfirmed === 'function') {
+    try {
+      confirmedControlClose = await deps.onLeaveConfirmed(leave);
+    } catch (err) {
+      confirmedControlClose = {
+        ok: false,
+        error: err?.message || String(err)
+      };
+    }
+  }
   const leaveFailure = leave?.ok === false
     ? evaluateBrowserlessSafety({}, { leaveResult: leave, nowMs: typeof deps.now === 'function' ? deps.now() : Date.now() })
     : null;
@@ -232,6 +246,7 @@ async function executeSafetyExit(event, config = {}, deps = {}) {
     event,
     stopMotion,
     leave,
+    confirmedControlClose,
     leaveFailure
   };
 }

@@ -913,7 +913,24 @@ async function runReadOnlyCanary(config, options = {}) {
           allowStopMotion: actionEnabled,
           leaveWithVerification: options.leaveWithVerification,
           now,
-          sleep
+          sleep,
+          onLeaveConfirmed: async leave => {
+            ending = true;
+            const actionSeal = actionAdapter?.sealTransport
+              ? actionAdapter.sealTransport('leave-confirmed')
+              : null;
+            let transportClose = { attempted: false, closed: false, reason: 'missing-transport' };
+            if (transport && (transport.isOpen?.() || isWsOpen(transport.ws))) {
+              transport.close();
+              transportClose = { attempted: true, closed: true, reason: 'leave-confirmed' };
+            }
+            log('canary-leave-confirmed-control-close', {
+              leaveConfirmed: Boolean(leave?.ok),
+              actionSeal,
+              transportClose
+            });
+            return { ok: true, actionSeal, transportClose };
+          }
         });
         result.leave = result.safety.exit.leave;
       } else {
