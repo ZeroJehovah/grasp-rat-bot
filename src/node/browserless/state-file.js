@@ -1345,20 +1345,96 @@ function compactExit(event) {
   if (!event || typeof event !== 'object') return null;
   const detail = event.detail && typeof event.detail === 'object' ? event.detail : {};
   const decision = detail.decision && typeof detail.decision === 'object' ? detail.decision : {};
+  const combat = decision.combat && typeof decision.combat === 'object'
+    ? decision.combat
+    : (detail.combat && typeof detail.combat === 'object' ? detail.combat : {});
   const combatExit = decision.combat?.exit && typeof decision.combat.exit === 'object'
     ? decision.combat.exit
     : (detail.combat?.exit && typeof detail.combat.exit === 'object' ? detail.combat.exit : {});
+  const metrics = combat.metrics && typeof combat.metrics === 'object' ? combat.metrics : {};
+  const injury = decision.injury && typeof decision.injury === 'object'
+    ? decision.injury
+    : (detail.injury && typeof detail.injury === 'object' ? detail.injury : {});
+  const sourceSelf = decision.self || detail.self || decision.input?.self || combat.self || null;
+  const sourceTarget = event.target || detail.target || decision.target || combatExit.target || combat.target || null;
+  const at = compactString(event.at || event.time || event.createdAt, 48);
+  const metricStartedAtMs = compactNumber(metrics.startedAt);
+  const combatStartedAtMs = parseTimeMs(combat.startedAt);
+  const startedAtMs = metricStartedAtMs !== null && metricStartedAtMs > 0
+    ? metricStartedAtMs
+    : (combatStartedAtMs > 0 ? combatStartedAtMs : null);
+  const endedAtMs = parseTimeMs(at) || compactNumber(metrics.lastObservedAt) || parseTimeMs(decision.at);
+  const durationMs = compactNumber(combat.durationMs)
+    ?? (startedAtMs !== null && endedAtMs > 0 ? Math.max(0, endedAtMs - startedAtMs) : null);
+  const selfDamage = compactNumber(metrics.selfDamage) ?? compactNumber(injury.hpDrop);
+  const targetDamage = compactNumber(metrics.targetDamage);
+  const selfHpEnd = compactNumber(metrics.lastSelfHp)
+    ?? compactNumber(combatExit.selfHp)
+    ?? compactNumber(sourceSelf?.hp)
+    ?? compactNumber(injury.currentHp);
+  const selfHpStart = compactNumber(metrics.initialSelfHp)
+    ?? compactNumber(injury.previousHp)
+    ?? (selfHpEnd !== null && selfDamage !== null ? selfHpEnd + selfDamage : null);
+  const targetHpEnd = compactNumber(metrics.lastTargetHp) ?? compactNumber(combatExit.targetHp);
+  const targetHpStart = compactNumber(metrics.initialTargetHp)
+    ?? (targetHpEnd !== null && targetDamage !== null ? targetHpEnd + targetDamage : null);
+  const target = compactTarget({
+    ...(sourceTarget && typeof sourceTarget === 'object' ? sourceTarget : {}),
+    userId: sourceTarget?.userId ?? sourceTarget?.user_id ?? metrics.targetId,
+    name: sourceTarget?.name || metrics.targetName || '',
+    hp: targetHpEnd
+  });
+  const hasBattleEvidence = Boolean(
+    target
+      && (
+        startedAtMs !== null
+        || compactNumber(metrics.actualShots) !== null
+        || compactNumber(metrics.confirmedHits) !== null
+        || selfDamage !== null
+        || targetDamage !== null
+        || Object.keys(combatExit).length
+        || String(event.reason || '').startsWith('combat-')
+        || String(event.reason || '') === 'injury-leave'
+      )
+  );
+  let outcome = '';
+  if (hasBattleEvidence) {
+    if (targetHpEnd !== null && targetHpEnd <= 0) outcome = 'victory';
+    else if (selfHpEnd !== null && selfHpEnd <= 0) outcome = 'defeat';
+    else if (event.shouldLeave !== false) outcome = 'self-left';
+    else outcome = 'ended';
+  }
   return {
-    at: compactString(event.at || event.time || event.createdAt, 48),
+    at,
     reason: compactString(event.reason || event.type, 120),
     runId: compactString(event.runId || event.detail?.runId, 96),
     shouldLeave: event.shouldLeave === undefined ? null : Boolean(event.shouldLeave),
-    target: compactTarget(event.target || detail.target || decision.target),
+    target: compactTarget(sourceTarget),
     selfHp: compactNumber(event.selfHp ?? detail.selfHp ?? combatExit.selfHp),
     targetHp: compactNumber(event.targetHp ?? detail.targetHp ?? combatExit.targetHp),
     hpGap: compactNumber(event.hpGap ?? detail.hpGap ?? combatExit.hpGap),
     threshold: compactNumber(event.threshold ?? detail.threshold ?? combatExit.threshold),
-    minHpGap: compactNumber(event.minHpGap ?? detail.minHpGap ?? combatExit.minHpGap)
+    minHpGap: compactNumber(event.minHpGap ?? detail.minHpGap ?? combatExit.minHpGap),
+    battle: hasBattleEvidence
+      ? {
+          outcome,
+          outcomeReason: compactString(event.reason || event.type, 120),
+          startedAt: startedAtMs === null ? '' : isoFromMs(startedAtMs),
+          endedAt: at || (endedAtMs > 0 ? isoFromMs(endedAtMs) : ''),
+          durationMs,
+          target,
+          selfHpStart,
+          selfHpEnd,
+          targetHpStart,
+          targetHpEnd,
+          selfDamage,
+          targetDamage,
+          actualShots: compactNumber(metrics.actualShots),
+          confirmedHits: compactNumber(metrics.confirmedHits),
+          estimatedHitRate: compactNumber(metrics.estimatedHitRate),
+          staminaSpentMs: compactNumber(metrics.totalStaminaSpent)
+        }
+      : null
   };
 }
 

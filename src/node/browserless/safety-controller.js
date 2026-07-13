@@ -46,23 +46,52 @@ function selfStaminaRemainingMs(self) {
   return null;
 }
 
+function decisionSafetyCombatMetrics(metrics) {
+  if (!metrics || typeof metrics !== 'object') return null;
+  return {
+    targetId: metrics.targetId ?? null,
+    targetName: String(metrics.targetName || ''),
+    startedAt: numberOrNull(metrics.startedAt),
+    lastObservedAt: numberOrNull(metrics.lastObservedAt),
+    initialSelfHp: numberOrNull(metrics.initialSelfHp),
+    lastSelfHp: numberOrNull(metrics.lastSelfHp),
+    minSelfHp: numberOrNull(metrics.minSelfHp),
+    initialTargetHp: numberOrNull(metrics.initialTargetHp),
+    lastTargetHp: numberOrNull(metrics.lastTargetHp),
+    minTargetHp: numberOrNull(metrics.minTargetHp),
+    selfDamage: numberOrNull(metrics.selfDamage),
+    targetDamage: numberOrNull(metrics.targetDamage),
+    actualShots: numberOrNull(metrics.actualShots),
+    confirmedHits: numberOrNull(metrics.confirmedHits),
+    incomingHits: numberOrNull(metrics.incomingHits),
+    estimatedHitRate: numberOrNull(metrics.estimatedHitRate),
+    totalStaminaSpent: numberOrNull(metrics.totalStaminaSpent)
+  };
+}
+
 function decisionSafetyDetail(decision) {
   const action = decision?.action || decision || {};
   return {
     kind: action.kind || decision?.kind || '',
     band: action.band || decision?.band || '',
     reason: action.reason || decision?.reason || '',
+    at: decision?.at || '',
     self: action.self || decision?.input?.self || null,
     target: action.target || decision?.combat?.target || null,
+    injury: action.injury || null,
     staminaBudgetExit: action.staminaBudgetExit || null,
     staminaExhausted: action.staminaExhausted || null,
     reloginDelayMs: action.reloginDelayMs ?? action.staminaBudgetExit?.reloginDelayMs ?? null,
     staminaBlocked: action.staminaBlocked || null,
     combat: decision?.combat ? {
+      startedAt: decision.combat.startedAt || '',
+      durationMs: decision.combat.durationMs ?? null,
+      self: decision.combat.self || null,
       target: decision.combat.target || null,
       movement: decision.combat.movement || null,
       shooting: decision.combat.shooting || null,
-      exit: decision.combat.exit || null
+      exit: decision.combat.exit || null,
+      metrics: decisionSafetyCombatMetrics(decision.combat.metrics)
     } : null,
     profit: decision?.profit ? {
       best: decision.profit.best || null

@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.13.3';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.13.4';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function renderBrowserlessWebPanel() {
@@ -467,6 +467,64 @@ function renderBrowserlessWebPanel() {
       if (hpGap !== null) parts.push('血差 ' + hpGap);
       return parts.join(' / ');
     }
+    function recentBattle(status) {
+      return status.recentExit?.battle || null;
+    }
+    function recentBattleOutcomeText(status) {
+      const battle = recentBattle(status);
+      if (!battle) return '--';
+      if (battle.outcome === 'victory') return '胜利，目标已被击败';
+      if (battle.outcome === 'defeat') return '失败，角色已被击败';
+      if (battle.outcome === 'self-left') return '未击杀，我方主动退出';
+      return '战斗结束，未确认击杀';
+    }
+    function recentBattleTimeText(status) {
+      const battle = recentBattle(status);
+      if (!battle) return '--';
+      const windowText = battle.startedAt
+        ? stamp(battle.startedAt) + (battle.endedAt ? ' - ' + stamp(battle.endedAt) : '')
+        : (battle.endedAt ? stamp(battle.endedAt) : '--');
+      const durationValue = number(battle.durationMs);
+      return joinNonBlank([windowText, durationValue === null ? '' : '持续 ' + durationClock(durationValue)]);
+    }
+    function recentBattleHpText(status) {
+      const battle = recentBattle(status);
+      if (!battle) return '--';
+      const targetName = battle.target?.name || '敌方';
+      const sideText = (label, startHp, endHp) => {
+        const start = number(startHp);
+        const end = number(endHp);
+        if (start !== null && end !== null) return label + ' ' + start + ' → ' + end;
+        if (end !== null) return label + ' ' + end;
+        return '';
+      };
+      return joinNonBlank([
+        sideText('我方', battle.selfHpStart, battle.selfHpEnd),
+        sideText(targetName, battle.targetHpStart, battle.targetHpEnd)
+      ]);
+    }
+    function recentBattleDamageText(status) {
+      const battle = recentBattle(status);
+      if (!battle) return '--';
+      const selfDamage = number(battle.selfDamage);
+      const targetDamage = number(battle.targetDamage);
+      return joinNonBlank([
+        selfDamage === null ? '' : '我方承伤 ' + selfDamage,
+        targetDamage === null ? '' : '对敌造成 ' + targetDamage
+      ]);
+    }
+    function recentBattleShootingText(status) {
+      const battle = recentBattle(status);
+      if (!battle) return '--';
+      const shots = number(battle.actualShots);
+      const hits = number(battle.confirmedHits);
+      const hitRate = number(battle.estimatedHitRate);
+      return joinNonBlank([
+        shots === null ? '' : shots + ' 发',
+        hits === null ? '' : hits + ' 中',
+        hitRate === null ? '' : '命中率 ' + hitRate + '%'
+      ]);
+    }
     function pointCoordText(point) {
       if (!point || (number(point.x) === null && number(point.y) === null)) return '--';
       return coord(point.x) + ', ' + coord(point.y);
@@ -706,6 +764,15 @@ function renderBrowserlessWebPanel() {
     }
     function dangerousPlayerExitReasonText(status, reason) {
       const raw = String(reason || '');
+      if (raw === 'injury-leave') {
+        const battle = status.game?.inGame ? null : recentBattle(status);
+        const target = status.decision?.target || status.action?.target || battle?.target || status.recentExit?.target || null;
+        if (target) {
+          const damage = battle ? recentBattleDamageText(status) : '--';
+          const name = target.name || (target.userId !== null && target.userId !== undefined ? '玩家 ' + target.userId : '附近玩家');
+          return '与 ' + name + ' 交战后受伤' + (damage === '--' ? '' : '（' + damage + '）') + '，主动退出';
+        }
+      }
       if (raw !== 'profit-live-snapshot-active-threat') return reasonText(raw);
       const target = status.action?.target || status.decision?.target || status.recentExit?.target || null;
       if (!target) return reasonText(raw);
@@ -1249,6 +1316,15 @@ function renderBrowserlessWebPanel() {
 
       addRow(rowsOut, '状态', actionText(status), true);
       addRow(rowsOut, online ? '原因' : '上次退出原因', dangerousPlayerExitReasonText(status, reason), true);
+      const battle = !online ? recentBattle(status) : null;
+      if (battle) {
+        addRow(rowsOut, '交战对手', targetLabel(battle.target), true);
+        addRow(rowsOut, '战斗结果', recentBattleOutcomeText(status), true);
+        addRow(rowsOut, '战斗时间', recentBattleTimeText(status));
+        addRow(rowsOut, '血量变化', recentBattleHpText(status));
+        addRow(rowsOut, '输出承伤', recentBattleDamageText(status));
+        addRow(rowsOut, '射击命中', recentBattleShootingText(status));
+      }
       const decisionText = joinNonBlank([kindText(kind), actionReasonText(status)]);
       const statusText = actionText(status);
       const reasonDisplay = dangerousPlayerExitReasonText(status, reason);

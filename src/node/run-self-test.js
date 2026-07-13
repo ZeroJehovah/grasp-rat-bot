@@ -9957,10 +9957,15 @@ async function runSelfTest() {
           combat.startedAt,
           combat.durationMs,
           combat.self.maxHp,
-          combat.target.maxHp
+          combat.target.maxHp,
+          combat.metrics.initialSelfHp,
+          combat.metrics.lastSelfHp,
+          combat.metrics.initialTargetHp,
+          combat.metrics.lastTargetHp,
+          combat.metrics.targetName
         ].join('|');
       })(),
-      want: '1970-01-01T00:00:01.000Z|500|100|120'
+      want: '1970-01-01T00:00:01.000Z|500|100|120|95|95|80|80|enemy'
     },
     {
       name: 'browserless incoming shooter overrides engaged combat target',
@@ -16783,11 +16788,16 @@ async function runSelfTest() {
           panelScript.includes("'combat-trade-disadvantage-leave': '战斗交换持续不利，预计继续交战风险过高，主动退出'"),
           panelScript.includes("'combat-pressure-disadvantage-leave': '遭到持续火力压制，我方血量处于劣势，主动退出'"),
           panelScript.includes("addRow(rowsOut, '退出触发血量', combatExitHpText(status))"),
+          panelScript.includes("return '与 ' + name + ' 交战后受伤'"),
+          panelScript.includes("addRow(rowsOut, '交战对手', targetLabel(battle.target), true)"),
+          panelScript.includes("addRow(rowsOut, '战斗结果', recentBattleOutcomeText(status), true)"),
+          panelScript.includes("addRow(rowsOut, '输出承伤', recentBattleDamageText(status))"),
+          panelScript.includes("addRow(rowsOut, '射击命中', recentBattleShootingText(status))"),
           panelText.indexOf('id="actionDetails"') < panelText.indexOf('id="battlePanel"'),
           panelText.indexOf('id="battlePanel"') < panelText.indexOf('class="stats-grid"')
         ].join('|');
       })(),
-      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
+      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless compact exit preserves trigger hp evidence',
@@ -16817,6 +16827,66 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'combat-low-hp-disadvantage-leave|41|46|5|50|5'
+    },
+    {
+      name: 'browserless compact injury exit preserves recent battle summary',
+      got: (() => {
+        const event = evaluateBrowserlessSafety({}, {
+          nowMs: Date.parse('2026-07-13T08:04:46.324Z'),
+          decision: {
+            kind: 'safety-exit',
+            band: 'safety',
+            reason: 'injury-leave',
+            at: '2026-07-13T08:04:46.324Z',
+            action: {
+              kind: 'safety-exit',
+              band: 'safety',
+              reason: 'injury-leave',
+              shouldLeave: true,
+              self: { userId: 28886, name: 'self', hp: 73, maxHp: 100 },
+              target: { userId: 19677, name: 'Eason', hp: 61, drop: 690, distance: 4930 }
+            },
+            input: {
+              self: { userId: 28886, name: 'self', hp: 73, maxHp: 100 }
+            },
+            combat: {
+              target: null,
+              metrics: {
+                targetId: '19677',
+                targetName: 'Eason',
+                startedAt: Date.parse('2026-07-13T08:04:31.844Z'),
+                actualShots: 42,
+                confirmedHits: 17,
+                targetDamage: 51,
+                incomingHits: 9,
+                selfDamage: 27,
+                estimatedHitRate: 40.5,
+                totalStaminaSpent: 24403
+              }
+            }
+          }
+        });
+        const status = buildCompactBrowserlessStatus({
+          recentExits: [event]
+        }, parseBrowserlessRunnerArgs([], {}));
+        const battle = status.recentExit.battle;
+        return [
+          status.recentExit.reason,
+          battle.outcome,
+          battle.target.name,
+          battle.startedAt,
+          battle.durationMs,
+          battle.selfHpStart,
+          battle.selfHpEnd,
+          battle.targetHpEnd ?? 'unknown',
+          battle.selfDamage,
+          battle.targetDamage,
+          battle.actualShots,
+          battle.confirmedHits,
+          battle.estimatedHitRate
+        ].join('|');
+      })(),
+      want: 'injury-leave|self-left|Eason|2026-07-13T08:04:31.844Z|14480|100|73|unknown|27|51|42|17|40.5'
     },
     {
       name: 'browserless web panel renders explicit login point safety result',

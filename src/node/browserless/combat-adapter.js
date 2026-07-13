@@ -756,7 +756,23 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
   stateful.combatMetrics = {
     ...previousMetrics,
     targetId: String(id),
+    targetName: target.name || previousMetrics.targetName || '',
     startedAt: same ? Number(previousMetrics.startedAt || previous?.firstSeenAt || nowMs) : nowMs,
+    lastObservedAt: nowMs,
+    initialSelfHp: same
+      ? (numberOrNull(previousMetrics.initialSelfHp) ?? previousSelfHp ?? currentSelfHp)
+      : currentSelfHp,
+    lastSelfHp: currentSelfHp,
+    minSelfHp: currentSelfHp === null
+      ? numberOrNull(previousMetrics.minSelfHp)
+      : Math.min(numberOrNull(previousMetrics.minSelfHp) ?? currentSelfHp, currentSelfHp),
+    initialTargetHp: same
+      ? (numberOrNull(previousMetrics.initialTargetHp) ?? previousHp ?? hp)
+      : hp,
+    lastTargetHp: hp,
+    minTargetHp: hp === null
+      ? numberOrNull(previousMetrics.minTargetHp)
+      : Math.min(numberOrNull(previousMetrics.minTargetHp) ?? hp, hp),
     initialStamina1d: Number.isFinite(initialStamina1d) ? initialStamina1d : (Number.isFinite(currentStamina1d) ? currentStamina1d : null),
     confirmedHits: Number(previousMetrics.confirmedHits || 0) + (damaged ? Math.max(1, Math.round((previousHp - hp) / 3)) : 0),
     targetDamage: Number(previousMetrics.targetDamage || 0) + (damaged ? previousHp - hp : 0),
