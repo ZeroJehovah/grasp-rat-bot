@@ -6415,7 +6415,7 @@ async function runSelfTest() {
       want: 'wait|no-profitable-candidate|none|false|active-threat-visible|8'
     },
     {
-      name: 'browserless profit live targets AFK but flees near active threat',
+      name: 'browserless profit live targets AFK but fights an active attacker when combat is enabled',
       got: (() => {
         const choose = entities => {
           const store = createBrowserlessStateStore({ userId: 7 });
@@ -6427,7 +6427,8 @@ async function runSelfTest() {
           }, { receivedAtMs: 1000 });
           return buildBrowserlessDecision(store.getState(1200), {}, {
             nowMs: 1200,
-            controlMode: 'profit-live'
+            controlMode: 'profit-live',
+            combatEnabled: true
           });
         };
         const afkOnly = choose([
@@ -6453,7 +6454,7 @@ async function runSelfTest() {
           activeVisible.profit.best === null
         ].join('|');
       })(),
-      want: 'profit-candidate|attack|enemy|8|false|flee|safety|active-threat-return-block||9|true'
+      want: 'profit-candidate|attack|enemy|8|false|combat-live|combat|combat-live-realtime||9|false'
     },
     {
       name: 'browserless profit live rejects low-drop AFK targets by default',
@@ -6556,7 +6557,7 @@ async function runSelfTest() {
       want: '1|false|false|false|true'
     },
     {
-      name: 'browserless stationary full-stamina active can be AFK profit but non-full active stays threat',
+      name: 'browserless stationary full-stamina active can be AFK profit but non-full active is ignored when not attacking',
       got: (() => {
         const choose = target => {
           const store = createBrowserlessStateStore({ userId: 7 });
@@ -6583,11 +6584,11 @@ async function runSelfTest() {
           fullActive.combat.target?.userId || '',
           nonFullActive.kind,
           nonFullActive.band,
-          nonFullActive.action.target.userId,
+          nonFullActive.action.target?.userId || '',
           nonFullActive.profit.best === null
         ].join('|');
       })(),
-      want: 'profit-candidate|8|false||flee|safety|8|true'
+      want: 'profit-candidate|8|false||wait|wait||true'
     },
     {
       name: 'browserless profit live skips whitelisted AFK targets',
@@ -7625,7 +7626,7 @@ async function runSelfTest() {
       want: 'coin|profit|foot-coin-priority|foot-coin|1|coin|'
     },
     {
-      name: 'browserless profit live injured foot coin can pass return-block scan',
+      name: 'browserless profit live injured foot coin ignores ordinary active players',
       got: (() => {
         const store = createBrowserlessStateStore({ userId: 7 });
         store.ingestFrame({
@@ -7654,7 +7655,7 @@ async function runSelfTest() {
           decision.combat.target?.userId || ''
         ].join('|');
       })(),
-      want: 'coin|profit|foot-coin-before-active-caution|safe-foot-coin|400|'
+      want: 'coin|profit|foot-coin-priority|safe-foot-coin|400|'
     },
     {
       name: 'browserless profit live ignores snapshot Active metadata for online safety',
@@ -7820,7 +7821,7 @@ async function runSelfTest() {
           stateful.profitPursuitSuppressions?.['8']?.reason || ''
         ].join('|');
       })(),
-      want: 'flee|active-threat-return-block|false|profit-pursuit-target-outside-center|8|true|profit-pursuit-target-outside-center'
+      want: 'patrol|return-to-center-activity-radius|false|profit-pursuit-target-outside-center|8|true|profit-pursuit-target-outside-center'
     },
     {
       name: 'browserless combat disadvantage leave marks target dangerous',
@@ -7987,7 +7988,7 @@ async function runSelfTest() {
           stateful.dangerousCombatTargets?.['8']?.reason || ''
         ].join('|');
       })(),
-      want: 'flee|false|profit-pursuit-low-damage|5|10|true|profit-pursuit-low-damage|profit-pursuit-low-damage'
+      want: 'wait|false|profit-pursuit-low-damage|5|10|true|profit-pursuit-low-damage|profit-pursuit-low-damage'
     },
     {
       name: 'browserless action adapter pre-approaches AFK target before shooting',
@@ -8442,7 +8443,7 @@ async function runSelfTest() {
         return [
           decision.kind,
           decision.action.target.id,
-          decision.action.coinRoute.ids.slice(0, 3).join(','),
+          (decision.action.coinRoute?.ids || []).slice(0, 3).join(','),
           decision.action.coinRoute.legCount >= 3,
           decision.stateful.opportunityChoice.id
         ].join('|');
@@ -8563,7 +8564,7 @@ async function runSelfTest() {
             self,
             entities: [
               self,
-              { entity_id: 2, user_id: 8, name: 'active', x: 500, y: 0, hp: 100, current_join_mode: 'Active', firing: true, drop: 10 }
+              { entity_id: 2, user_id: 8, name: 'active-invulnerable', x: 500, y: 0, hp: 100, current_join_mode: 'Active', firing: true, invulnerable_remaining_ms: 5000, drop: 10 }
             ],
             bullets: [],
             coinDrops: [{ drop_id: 'coin-b', amount: 10, x: 10000, y: 0 }]
@@ -8585,7 +8586,7 @@ async function runSelfTest() {
           stateful.finalActionArbitration.history.length
         ].join('|');
       })(),
-      want: 'flee|safety|active-threat-return-block|true|0'
+      want: 'flee|safety|avoid-invulnerable-target|true|0'
     },
     {
       name: 'browserless target switch diagnostics stay bounded',
@@ -9150,7 +9151,7 @@ async function runSelfTest() {
         const playerRows = decision.input.nearby.p;
         return [
           decision.action.target.id,
-          decision.action.coinRoute.ids.slice(0, 3).join(','),
+          (decision.action.coinRoute?.ids || []).slice(0, 3).join(','),
           coinRows.map(row => row[0] + ':' + row[3] + ':' + row[4]).join(','),
           playerRows.map(row => row[0] + ':' + row[6] + ':' + row[9] + ':' + row[10]).join(','),
           coinRows.some(row => row[0] === 'route-b' && row[4] === 2),
@@ -9158,7 +9159,7 @@ async function runSelfTest() {
           playerRows.some(row => row[0] === 'low-afk')
         ].join('|');
       })(),
-      want: 'route-a|route-a,route-b,route-c|one-a:0:0,one-b:0:0,route-a:1:1,route-b:0:2,route-c:0:3|active-threat:0:0:0,drop-afk:0:1:0|true|true|false'
+      want: 'one-a||one-a:1:0,one-b:0:0,route-a:0:0,route-b:0:0,route-c:0:0|active-threat:0:0:0,drop-afk:0:1:0|false|false|false'
     },
     {
       name: 'browserless profit live enriches realtime AFK reward from fresh snapshot metadata',
@@ -9410,7 +9411,7 @@ async function runSelfTest() {
       want: 'combat-live|combat|combat-live-realtime|8|8|engaged|true|true|true|false'
     },
     {
-      name: 'browserless profit live flees instead of chasing coin under combat threat',
+      name: 'browserless profit live enters combat instead of fleeing from an attacking low-drop player',
       got: (() => {
         const store = createBrowserlessStateStore({ userId: 7 });
         store.ingestFrame({
@@ -9432,7 +9433,8 @@ async function runSelfTest() {
         }, { receivedAtMs: 1100 });
         const decision = buildBrowserlessDecision(store.getState(1200), {}, {
           nowMs: 1200,
-          controlMode: 'profit-live'
+          controlMode: 'profit-live',
+          combatEnabled: true
         });
         return [
           decision.kind,
@@ -9446,7 +9448,7 @@ async function runSelfTest() {
           decision.combat.target.userId
         ].join('|');
       })(),
-      want: 'flee|safety|active-threat-return-block|31361|realtime|||false|31361'
+      want: 'combat-live|combat|combat-live-realtime|31361|realtime|||false|31361'
     },
     {
       name: 'browserless profit live can fight active players when enabled',
@@ -9477,7 +9479,58 @@ async function runSelfTest() {
           decision.profit.best === null
         ].join('|');
       })(),
-      want: 'combat-live|combat|combat-live-realtime|combat-live|9|realtime|true'
+      want: 'combat-live|combat|combat-live-realtime|combat-live|9|realtime|false'
+    },
+    {
+      name: 'browserless engaged combat keeps its target when another active attacker enters range',
+      got: (() => {
+        const store = createBrowserlessStateStore({ userId: 7 });
+        const stateful = {};
+        store.ingestFrame({
+          type: 'pos',
+          tick: 60,
+          entities: [
+            { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+            { entity_id: 2, user_id: 8, name: 'engaged', x: 5000, y: 0, hp: 90, current_join_mode: 'Active', firing: true, drop: 12 }
+          ],
+          bullets: []
+        }, { receivedAtMs: 1000 });
+        const first = buildBrowserlessDecision(store.getState(1200), stateful, {
+          nowMs: 1200,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          targetStickMs: 7000,
+          combatEngageStickMs: 7000
+        });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 61,
+          entities: [
+            { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+            { entity_id: 2, user_id: 8, name: 'engaged', x: 5000, y: 0, hp: 84, current_join_mode: 'Active', firing: true, drop: 12 },
+            { entity_id: 3, user_id: 9, name: 'second-attacker', x: 1000, y: 0, hp: 100, current_join_mode: 'Active', firing: true, drop: 50 }
+          ],
+          bullets: []
+        }, { receivedAtMs: 2000 });
+        const second = buildBrowserlessDecision(store.getState(2200), stateful, {
+          nowMs: 2200,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          targetStickMs: 7000,
+          combatEngageStickMs: 7000
+        });
+        return [
+          first.kind,
+          first.action.target.userId,
+          second.kind,
+          second.reason,
+          second.action.target.userId,
+          second.action.kind,
+          second.action.reason,
+          second.action.kind === 'flee'
+        ].join('|');
+      })(),
+      want: 'combat-live|8|combat-live|combat-live-realtime|8|combat-live|combat-live-realtime|false'
     },
     {
       name: 'browserless profit live keeps AFK profit when active threat is unrelated',
@@ -9550,10 +9603,10 @@ async function runSelfTest() {
           decision.profit.best === null
         ].join('|');
       })(),
-      want: 'coin|foot-coin-priority|safe-visible-coin|3|snapshot-player-drop|1|safe-visible-coin|false'
+      want: 'coin|foot-coin-priority|safe-visible-coin|3|snapshot-player-drop|1|covered-player-drop|false'
     },
     {
-      name: 'browserless profit live flees passive moving safety threat',
+      name: 'browserless profit live ignores passive moving player and keeps AFK profit',
       got: (() => {
         const store = createBrowserlessStateStore({ userId: 7 });
         store.ingestFrame({
@@ -9582,10 +9635,10 @@ async function runSelfTest() {
           decision.combat.actionEligible
         ].join('|');
       })(),
-      want: 'flee|safety|active-threat-return-block|flee|8||0|false'
+      want: 'profit-candidate|profit|best-opportunity|attack|10||0|false'
     },
     {
-      name: 'browserless profit live flees low-drop active moving threat without combat promotion',
+      name: 'browserless profit live ignores low-drop active moving player without attack evidence',
       got: (() => {
         const store = createBrowserlessStateStore({ userId: 7 });
         store.ingestFrame({
@@ -9613,7 +9666,7 @@ async function runSelfTest() {
           decision.action.shouldLeave
         ].join('|');
       })(),
-      want: 'flee|safety|active-threat-return-block|8||false|'
+      want: 'profit-candidate|profit|best-opportunity|10||false|'
     },
     {
       name: 'browserless profit live waits for active outside danger range',
@@ -10423,7 +10476,7 @@ async function runSelfTest() {
       want: 'safety-exit|safety|injury-leave|true|8|100|73|no-target'
     },
     {
-      name: 'browserless profit live exits after sustained pursuit',
+      name: 'browserless profit live exits after sustained active invulnerable pursuit',
       got: (() => {
         const stateful = {};
         const stateAt = (tick, nowMs) => ({
@@ -10434,7 +10487,7 @@ async function runSelfTest() {
             self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 90, max_hp: 100, stamina_5s_remaining_milli: 10000 },
             entities: [
               { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 90, max_hp: 100, stamina_5s_remaining_milli: 10000 },
-              { entity_id: 2, user_id: 8, name: 'pursuer', x: 10000, y: 0, hp: 100, current_join_mode: 'Active', drop: 1 }
+              { entity_id: 2, user_id: 8, name: 'pursuer', x: 10000, y: 0, hp: 100, current_join_mode: 'Active', invulnerable_remaining_ms: 300000, drop: 1 }
             ],
             bullets: [],
             coinDrops: []
@@ -10467,10 +10520,10 @@ async function runSelfTest() {
           stateful.browserlessPursuit.reason
         ].join('|');
       })(),
-      want: 'safety-exit|safety|pursuit-leave|true|8|90000|90000|inside-danger-radius'
+      want: 'safety-exit|safety|pursuit-leave|true|8|90000|45000|inside-danger-radius'
     },
     {
-      name: 'browserless pursuit leave keeps normal threshold near full hp',
+      name: 'browserless active invulnerable pursuit leave keeps normal threshold near full hp',
       got: (() => {
         const stateful = {};
         const stateAt = (tick, nowMs) => ({
@@ -10481,7 +10534,7 @@ async function runSelfTest() {
             self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 97, max_hp: 100, stamina_5s_remaining_milli: 10000 },
             entities: [
               { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 97, max_hp: 100, stamina_5s_remaining_milli: 10000 },
-              { entity_id: 2, user_id: 8, name: 'pursuer', x: 10000, y: 0, hp: 100, current_join_mode: 'Active', drop: 1 }
+              { entity_id: 2, user_id: 8, name: 'pursuer', x: 10000, y: 0, hp: 100, current_join_mode: 'Active', invulnerable_remaining_ms: 300000, drop: 1 }
             ],
             bullets: [],
             coinDrops: []
@@ -10509,7 +10562,7 @@ async function runSelfTest() {
           stateful.browserlessPursuit?.nonFullHp
         ].join('|');
       })(),
-      want: 'false|300000|false'
+      want: 'true|60000|false'
     },
     {
       name: 'browserless combat low hp no-damage exits',
@@ -12269,7 +12322,7 @@ async function runSelfTest() {
           tick: 30,
           entities: [
             { entity_id: 1, user_id: 7, name: 'self', x: 100, y: 200, hp: 90, max_hp: 100, stamina_5s_remaining_milli: 1000 },
-            { entity_id: 2, user_id: 8, name: 'active', x: 600, y: 200, hp: 100, current_join_mode: 'Active', firing: true }
+            { entity_id: 2, user_id: 8, name: 'active-invulnerable', x: 600, y: 200, hp: 100, current_join_mode: 'Active', firing: true, invulnerable_remaining_ms: 5000 }
           ],
           bullets: []
         });
@@ -12327,7 +12380,7 @@ async function runSelfTest() {
           result.decisions.last.reason
         ].join('|');
       })(),
-      want: 'true||||2|vel -1 0,vel 0 0|flee|active-threat-return-block'
+      want: 'true||||2|vel -1 0,vel 0 0|flee|avoid-invulnerable-target'
     },
     {
       name: 'browserless combat-live canary sends guarded shoot only when enabled',

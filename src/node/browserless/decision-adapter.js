@@ -626,7 +626,7 @@ function afkTargetBlockedByRecentActivity(target, options = {}) {
 
 function isBrowserlessAvoidanceThreat(target) {
   if (!target || target.alive === false) return false;
-  return Boolean(target.active || target.firing || (target.invulnerable && target.recentlyActive));
+  return Boolean(target.active && target.invulnerable);
 }
 
 function hpValue(entity) {
@@ -1443,8 +1443,8 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
   const avoidanceThreats = visibleTargets.filter(isBrowserlessAvoidanceThreat);
   const snapshotActiveThreats = [];
   const snapshotFallbackThreats = [
-    ...activeThreats,
-    ...firingThreats.filter(threat => !activeThreats.includes(threat))
+    ...avoidanceThreats,
+    ...firingThreats.filter(threat => !avoidanceThreats.includes(threat))
   ].filter(threat => snapshotFallbackThreatBlocks(threat, self, options));
   const afkObservationTargetsRaw = visibleTargets.filter(entity => {
     if (entity.whitelisted || entity.active || entity.moving || entity.firing || entity.alive === false || entity.invulnerable) return false;
@@ -3437,106 +3437,54 @@ function buildThreatFleeDecision(stateful, input, target, reason, options = {}, 
 function profitLiveSafetyDecision(input, combatDecision, stateful = {}, options = {}, blockedAction = null) {
   if (options.controlMode !== 'profit-live' || !input.self) return null;
   const realtimeTarget = combatDecision?.dryRun?.target || combatDecision?.target || null;
-  const realtimeThreatsById = new Map();
-  for (const target of [
-    ...(realtimeTarget && isBrowserlessAvoidanceThreat(realtimeTarget) ? [realtimeTarget] : []),
-    ...(input.avoidanceThreats || input.activeThreats || []),
-    ...(input.firingThreats || [])
-  ]) {
-    const id = target?.userId ?? target?.user_id ?? target?.entityId ?? target?.entity_id ?? `${target?.x}:${target?.y}`;
-    if (!target || id === null || id === undefined) continue;
-    if (target.alive === false) continue;
-    const distance = Number(target.distance);
-    if (!Number.isFinite(distance)) continue;
-    const previous = realtimeThreatsById.get(String(id));
-    if (!previous
-      || distance < Number(previous.distance || Infinity)
-      || (target.invulnerable && !previous.invulnerable)) {
-      realtimeThreatsById.set(String(id), target);
-    }
-  }
-  const realtimeThreat = Array.from(realtimeThreatsById.values())
-    .sort((a, b) => Number(a.distance || Infinity) - Number(b.distance || Infinity))[0] || null;
-  const target = realtimeThreat || realtimeTarget;
-  const distance = Number(target?.distance);
-  if (!target || !Number.isFinite(distance)) return criticalUnknownPressureExit(input, options);
-  const invulnerableThreatening = Boolean(target.invulnerable && isBrowserlessAvoidanceThreat(target));
-  const threatening = Boolean(target.active || target.firing || invulnerableThreatening);
-  if (!threatening) return criticalUnknownPressureExit(input, options);
-  const threatExitRange = Math.max(0, Number(options.profitLiveThreatExitRange || DEFAULT_PROFIT_LIVE_THREAT_EXIT_RANGE));
-  const invulnerableAvoidRange = Math.max(threatExitRange, Number(options.activeAvoidMaxDistance || BROWSER_RUNTIME_DEFAULTS.activeAvoidMaxDistance || threatExitRange));
-  const effectiveThreatExitRange = invulnerableThreatening ? invulnerableAvoidRange : threatExitRange;
-  const injuryExitRange = Math.max(threatExitRange, Number(options.profitLiveInjuryExitRange || DEFAULT_PROFIT_LIVE_INJURY_EXIT_RANGE));
-  const injured = isInjuredSelf(input.self, options);
   const selfHp = hpValue(input.self);
   const criticalHp = combatCriticalHpThreshold(options);
-  const criticalThreat = selfHp !== null
-    && selfHp <= criticalHp
-    && (target.active || target.firing || invulnerableThreatening);
-  if (options.combatEnabled === true) {
+  const criticalTarget = [
+    ...(realtimeTarget ? [realtimeTarget] : []),
+    ...(input.firingThreats || []),
+    ...(input.avoidanceThreats || [])
+  ]
+    .filter(target => target && target.alive !== false && (target.active || target.firing || isBrowserlessAvoidanceThreat(target)))
+    .sort((a, b) => Number(a.distance || Infinity) - Number(b.distance || Infinity))[0] || null;
+  if (selfHp !== null && selfHp <= criticalHp && criticalTarget) {
     const combatTargetId = realtimeTarget?.userId ?? realtimeTarget?.user_id ?? realtimeTarget?.entityId ?? realtimeTarget?.entity_id ?? null;
-    const threatId = target?.userId ?? target?.user_id ?? target?.entityId ?? target?.entity_id ?? null;
-    const combatHandlesThreat = options.combatActionEligible !== false
-      && !invulnerableThreatening
+    const criticalTargetId = criticalTarget?.userId ?? criticalTarget?.user_id ?? criticalTarget?.entityId ?? criticalTarget?.entity_id ?? null;
+    const combatHandlesCriticalTarget = options.combatActionEligible !== false
+      && !criticalTarget.invulnerable
       && combatTargetId !== null
       && combatTargetId !== undefined
-      && threatId !== null
-      && threatId !== undefined
-      && String(combatTargetId) === String(threatId);
-    if (!combatHandlesThreat && criticalThreat) {
+      && criticalTargetId !== null
+      && criticalTargetId !== undefined
+      && String(combatTargetId) === String(criticalTargetId);
+    if (!combatHandlesCriticalTarget) {
       return {
         kind: 'safety-exit',
         band: 'safety',
         reason: 'profit-live-critical-threat',
         shouldLeave: true,
         stopMotion: true,
-        target: summarizeTarget(target),
+        target: summarizeTarget(criticalTarget),
         self: summarizeTarget(input.self),
         criticalThreat: {
           selfHp,
           threshold: criticalHp,
-          distance: Math.round(distance)
+          distance: Math.round(Number(criticalTarget.distance || 0))
         }
       };
     }
-    if (!combatHandlesThreat && invulnerableThreatening && distance <= effectiveThreatExitRange) {
-      return buildThreatFleeDecision(stateful, input, target, 'avoid-invulnerable-target', {
-        ...options,
-        dangerRadius: effectiveThreatExitRange
-      });
-    }
-    if (!combatHandlesThreat && (target.active || target.firing) && distance <= effectiveThreatExitRange) {
-      const avoidance = buildReturnBlockActionCore(stateful, input.self, [target], blockedAction || { kind: 'wait', reason: 'blocked-by-active-threat' }, {
-        ...options,
-        nowMs: input.nowMs
-      });
-      return avoidance
-        ? { ...avoidance, target: summarizeTarget(target), self: summarizeTarget(input.self) }
-        : buildThreatFleeDecision(stateful, input, target, 'profit-live-active-threat', options);
-    }
-    if (!combatHandlesThreat && injured && distance <= threatExitRange) {
-      return buildThreatFleeDecision(stateful, input, target, 'profit-live-combat-injury-threat', options);
-    }
-    return null;
   }
-  let reason = '';
-  if (invulnerableThreatening && distance <= effectiveThreatExitRange) reason = 'avoid-invulnerable-target';
-  else if (distance <= effectiveThreatExitRange) reason = 'profit-live-active-threat';
-  else if (injured && distance <= injuryExitRange) reason = 'profit-live-injury-threat';
-  if (!reason) return null;
-  const avoidance = buildReturnBlockActionCore(stateful, input.self, [target], blockedAction || { kind: 'wait', reason: 'blocked-by-active-threat' }, {
+  const target = (input.avoidanceThreats || [])
+    .filter(isBrowserlessAvoidanceThreat)
+    .sort((a, b) => Number(a.distance || Infinity) - Number(b.distance || Infinity))[0] || null;
+  const distance = Number(target?.distance);
+  if (!target || !Number.isFinite(distance)) return criticalUnknownPressureExit(input, options);
+  const threatExitRange = Math.max(0, Number(options.profitLiveThreatExitRange || DEFAULT_PROFIT_LIVE_THREAT_EXIT_RANGE));
+  const invulnerableAvoidRange = Math.max(threatExitRange, Number(options.activeAvoidMaxDistance || BROWSER_RUNTIME_DEFAULTS.activeAvoidMaxDistance || threatExitRange));
+  if (distance > invulnerableAvoidRange) return null;
+  return buildThreatFleeDecision(stateful, input, target, 'avoid-invulnerable-target', {
     ...options,
-    nowMs: input.nowMs
+    dangerRadius: invulnerableAvoidRange
   });
-  if (invulnerableThreatening) {
-    return buildThreatFleeDecision(stateful, input, target, reason, {
-      ...options,
-      dangerRadius: effectiveThreatExitRange
-    });
-  }
-  return avoidance
-    ? { ...avoidance, target: summarizeTarget(target), self: summarizeTarget(input.self) }
-    : buildThreatFleeDecision(stateful, input, target, reason, options);
 }
 
 function targetIdentity(target) {
