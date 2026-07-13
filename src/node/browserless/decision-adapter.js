@@ -434,8 +434,11 @@ function entityStaminaSummary(entity) {
   return {
     stamina: numberOrNull(entity?.stamina),
     stamina5sRemainingMilli: staminaRemainingValue(entity, '5s'),
+    stamina5sLimitMilli: staminaLimitForWindow(entity, '5s'),
     stamina1hRemainingMilli: staminaRemainingValue(entity, '1h'),
+    stamina1hLimitMilli: staminaLimitForWindow(entity, '1h'),
     stamina1dRemainingMilli: staminaRemainingValue(entity, '1d'),
+    stamina1dLimitMilli: staminaLimitForWindow(entity, '1d'),
     staminaSpent: staminaSpentValue(entity),
     staminaMetadataAuthority: entity?.staminaMetadataAuthority || ''
   };

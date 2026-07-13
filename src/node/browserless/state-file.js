@@ -93,6 +93,7 @@ function defaultBrowserlessStats() {
       lastDrop: null,
       coinsGained: 0,
       lastStamina1dRemaining: null,
+      lastStamina1dLimit: null,
       staminaSpentMs: 0,
       killBaselineInitialized: false,
       killBaselineKeys: [],
@@ -339,6 +340,7 @@ function normalizeBrowserlessStats(stats, rawStats = stats) {
     lastDrop: compactNumber(session.lastDrop),
     coinsGained: Math.max(0, Math.round(Number(session.coinsGained || 0) || 0)),
     lastStamina1dRemaining: compactNumber(session.lastStamina1dRemaining),
+    lastStamina1dLimit: compactNumber(session.lastStamina1dLimit),
     staminaSpentMs: Math.max(0, Math.round(Number(session.staminaSpentMs || 0) || 0)),
     killBaselineInitialized: resetUntrustedKills ? false : Boolean(session.killBaselineInitialized),
     killBaselineKeys,
@@ -415,6 +417,30 @@ function statsStamina1dRemaining(stamina, self) {
   );
 }
 
+function statsStamina1dLimit(stamina, self) {
+  return compactNumber(
+    stamina?.stamina1dLimitMilli
+      ?? stamina?.stamina1dLimitMs
+      ?? stamina?.stamina1dLimit
+      ?? stamina?.limit1d
+      ?? self?.stamina1dLimitMilli
+      ?? self?.stamina_1d_limit_milli
+      ?? self?.stamina1dLimit
+      ?? self?.stamina_1d_limit
+  );
+}
+
+function actualBrowserlessDailyStaminaSpentMs(stats) {
+  const today = stats?.today || {};
+  const session = stats?.currentSession || {};
+  const observedAt = parseTimeMs(session.lastSeenAt);
+  if (!today.day || !observedAt || browserlessStatsDayKey(observedAt) !== today.day) return null;
+  const remaining = compactNumber(session.lastStamina1dRemaining);
+  const limit = compactNumber(session.lastStamina1dLimit);
+  if (remaining === null || limit === null || limit <= 0) return null;
+  return Math.max(0, Math.round(limit - remaining));
+}
+
 function statsKillKey(item) {
   const target = item?.targetUserId ?? item?.target_user_id ?? item?.targetId ?? item?.id;
   const tick = statsKillTick(item);
@@ -483,6 +509,7 @@ function startBrowserlessStatsSession(stats, state, self, stamina, nowMs, decisi
   const sessionId = `${userId || 'user'}:${enteredAt}`;
   const drop = statsSelfDrop(self);
   const stamina1d = statsStamina1dRemaining(stamina, self);
+  const stamina1dLimit = statsStamina1dLimit(stamina, self);
   const killEvidence = statsKillEvidenceFromDecision(decision);
   stats.currentSession = {
     ...defaultBrowserlessStats().currentSession,
@@ -495,6 +522,7 @@ function startBrowserlessStatsSession(stats, state, self, stamina, nowMs, decisi
     baseDrop: drop,
     lastDrop: drop,
     lastStamina1dRemaining: stamina1d,
+    lastStamina1dLimit: stamina1dLimit,
     killBaselineInitialized: true,
     killBaselineKeys: killEvidence.map(item => item.key).slice(-300)
   };
@@ -520,6 +548,7 @@ function updateBrowserlessStatsSession(session, decision, self, stamina, nowMs) 
     );
   }
   const stamina1d = statsStamina1dRemaining(stamina, self);
+  const stamina1dLimit = statsStamina1dLimit(stamina, self);
   const previousStamina = compactNumber(session.lastStamina1dRemaining);
   if (stamina1d !== null) {
     if (previousStamina !== null && stamina1d < previousStamina) {
@@ -528,6 +557,7 @@ function updateBrowserlessStatsSession(session, decision, self, stamina, nowMs) 
     }
     session.lastStamina1dRemaining = stamina1d;
   }
+  if (stamina1dLimit !== null && stamina1dLimit > 0) session.lastStamina1dLimit = stamina1dLimit;
   const evidence = ensureSessionKillBaseline(session, decision);
   const baselineKeys = new Set(Array.isArray(session.killBaselineKeys) ? session.killBaselineKeys : []);
   const killKeys = new Set(normalizeSessionKillKeys(session.killKeys, session));
@@ -599,6 +629,10 @@ function finalizeBrowserlessStatsSession(stats, detail = {}, nowMs = Date.now())
     const delta = todayActiveDelta(stats, eventTimeMs(at, nowMs));
     stats.today.uptimeMs += delta.uptimeMs;
     stats.today.staminaSpentMs += delta.staminaSpentMs;
+    const actualStaminaSpentMs = actualBrowserlessDailyStaminaSpentMs(stats);
+    if (actualStaminaSpentMs !== null) {
+      stats.today.staminaSpentMs = Math.max(stats.today.staminaSpentMs, actualStaminaSpentMs);
+    }
     stats.today.coinsGained += delta.coinsGained;
     stats.today.kills += delta.kills;
     stats.today.sessionCount += 1;
@@ -644,6 +678,8 @@ function compactBrowserlessStats(normalized, game, action, options = {}, lastKno
   const exitedMs = parseTimeMs(session.exitedAt);
   const durationEndMs = online ? nowMs : (exitedMs || lastSeenMs || nowMs);
   const activeDelta = todayActiveDelta(stats, nowMs);
+  const summedTodayStaminaSpentMs = Math.max(0, Math.round(Number(stats.today.staminaSpentMs || 0) + activeDelta.staminaSpentMs));
+  const actualTodayStaminaSpentMs = actualBrowserlessDailyStaminaSpentMs(stats);
   const todayDropDelta = Math.max(0, Math.round(Number(stats.today.coinsGained || 0) + activeDelta.coinsGained));
   const rawNextRunAt = action?.nextRunAt || stats.lastExit.nextRunAt || '';
   const offlineBlocker = compactOfflineBlocker(normalized, lastKnown, options, nowMs);
@@ -673,7 +709,9 @@ function compactBrowserlessStats(normalized, game, action, options = {}, lastKno
     today: {
       day: stats.today.day || browserlessStatsDayKey(nowMs),
       inGameDurationMs: Math.max(0, Math.round(Number(stats.today.uptimeMs || 0) + activeDelta.uptimeMs)),
-      staminaSpentMs: Math.max(0, Math.round(Number(stats.today.staminaSpentMs || 0) + activeDelta.staminaSpentMs)),
+      staminaSpentMs: actualTodayStaminaSpentMs === null
+        ? summedTodayStaminaSpentMs
+        : Math.max(summedTodayStaminaSpentMs, actualTodayStaminaSpentMs),
       coinsGained: pickedCoinsFromSelfDropDelta(todayDropDelta),
       kills: Math.max(0, Math.round(Number(stats.today.kills || 0) + activeDelta.kills))
     }

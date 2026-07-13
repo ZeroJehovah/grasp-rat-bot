@@ -5977,15 +5977,18 @@ async function runSelfTest() {
           decision.input.self.hp,
           decision.input.self.name,
           decision.input.stamina.stamina5sRemainingMilli,
+          decision.input.stamina.stamina5sLimitMilli,
           decision.input.stamina.stamina1hRemainingMilli,
+          decision.input.stamina.stamina1hLimitMilli,
           decision.input.stamina.stamina1dRemainingMilli,
+          decision.input.stamina.stamina1dLimitMilli,
           decision.input.stamina.stamina,
           decision.input.stamina.staminaSpent,
           decision.input.stamina.staminaMetadataAuthority,
           decision.input.dataGaps.includes('self-stamina-from-snapshot')
         ].join('|');
       })(),
-      want: '100|71|self-name|9000|2500000|18000000|||snapshot|true'
+      want: '100|71|self-name|9000|10000|2500000|3000000|18000000|20000000|||snapshot|true'
     },
     {
       name: 'browserless decision input enriches self Drop and label from fresh snapshot',
@@ -16000,6 +16003,66 @@ async function runSelfTest() {
         ].join('|');
       }),
       want: 'true|true|2026-07-10T00:00:00.000Z|8|1500|1|8|1500|1|false|false|cycle-complete|2026-07-10T00:03:00.000Z|30000|120000|120000|8|1500|1|2026-07-10T00:02:00.000Z|cycle-complete|2026-07-10T00:04:00.000Z|75000'
+    },
+    {
+      name: 'browserless today stamina reconciles cross-session gaps from 1d remaining',
+      got: (() => {
+        const firstStartedAt = Date.parse('2026-07-10T00:00:00.000Z');
+        const firstUpdatedAt = Date.parse('2026-07-10T00:01:00.000Z');
+        const firstExitedAt = Date.parse('2026-07-10T00:01:05.000Z');
+        const secondStartedAt = Date.parse('2026-07-10T00:02:00.000Z');
+        const secondUpdatedAt = Date.parse('2026-07-10T00:03:00.000Z');
+        const secondExitedAt = Date.parse('2026-07-10T00:03:05.000Z');
+        const state = {
+          session: { userId: 77, sessionToken: 'state-secret-token' },
+          runner: {
+            running: true,
+            mode: 'profit-live',
+            controlMode: 'profit-live',
+            currentAction: { kind: 'wait', reason: 'no-profitable-candidate' }
+          },
+          current: {
+            self: { userId: 77, name: 'self', hp: 100, drop: 10 },
+            stamina: { stamina1dRemainingMilli: 20000000, stamina1dLimitMilli: 20000000 }
+          }
+        };
+        const decisionAt = (at, remaining) => ({
+          at: new Date(at).toISOString(),
+          input: {
+            self: { userId: 77, name: 'self', drop: 10 },
+            stamina: { stamina1dRemainingMilli: remaining, stamina1dLimitMilli: 20000000 },
+            selfKillEvidence: []
+          }
+        });
+        state.stats = browserlessStatsForDecision(state, decisionAt(firstStartedAt, 20000000), { nowMs: firstStartedAt });
+        state.stats = browserlessStatsForDecision(state, decisionAt(firstUpdatedAt, 19000000), { nowMs: firstUpdatedAt });
+        state.current.stamina = { stamina1dRemainingMilli: 19000000, stamina1dLimitMilli: 20000000 };
+        state.stats = browserlessStatsForOffline(state, {
+          at: new Date(firstExitedAt).toISOString(),
+          reason: 'cycle-complete'
+        }, { nowMs: firstExitedAt });
+        const firstStored = state.stats.today.staminaSpentMs;
+
+        state.stats = browserlessStatsForDecision(state, decisionAt(secondStartedAt, 18950000), { nowMs: secondStartedAt });
+        state.current.stamina = { stamina1dRemainingMilli: 18950000, stamina1dLimitMilli: 20000000 };
+        const compactSecondStart = buildCompactBrowserlessStatus(state, { nowMs: secondStartedAt });
+        state.stats = browserlessStatsForDecision(state, decisionAt(secondUpdatedAt, 18000000), { nowMs: secondUpdatedAt });
+        state.current.stamina = { stamina1dRemainingMilli: 18000000, stamina1dLimitMilli: 20000000 };
+        const compactSecondUpdated = buildCompactBrowserlessStatus(state, { nowMs: secondUpdatedAt });
+        state.stats = browserlessStatsForOffline(state, {
+          at: new Date(secondExitedAt).toISOString(),
+          reason: 'cycle-complete'
+        }, { nowMs: secondExitedAt });
+        return [
+          firstStored,
+          compactSecondStart.stats.currentSession.staminaSpentMs,
+          compactSecondStart.stats.today.staminaSpentMs,
+          compactSecondUpdated.stats.currentSession.staminaSpentMs,
+          compactSecondUpdated.stats.today.staminaSpentMs,
+          state.stats.today.staminaSpentMs
+        ].join('|');
+      })(),
+      want: '1000000|0|1050000|950000|2000000|2000000'
     },
     {
       name: 'browserless stats ignore kill messages already present at session entry',
