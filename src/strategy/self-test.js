@@ -89,6 +89,10 @@ const {
   bestCoinOpportunityScoreCore
 } = require('./opportunity-candidates');
 const { pickBestOpportunityCore } = require('./opportunity-pick');
+const {
+  singleCoinBaitOtherOpportunityCore,
+  singleCoinBaitPolicyCore
+} = require('./single-coin-bait');
 const { patrolDirectionCore } = require('./patrol');
 const {
   postAttackVisibleCoinExistsCore,
@@ -1787,6 +1791,107 @@ function runStrategyModuleSelfTests() {
   results.push({
     name: 'opportunity-candidates-best-coin-score-includes-route',
     passed: bestCoinRouteScore === 9
+  });
+
+  const baitCoin = { drop_id: 'bait', key: 'id:bait', amount: 1, x: 900, y: 0, distance: 900, native: true, authority: 'realtime' };
+  const baitOpportunity = { type: 'coin', id: 'bait', amount: 1, sourceCoin: baitCoin, profitThresholdEligible: true };
+  const baitEntered = singleCoinBaitPolicyCore({
+    self: { x: 0, y: 0 },
+    nowMs: 1000,
+    previous: null,
+    selectedOpportunity: baitOpportunity,
+    opportunities: [baitOpportunity],
+    realtimeCoins: [baitCoin]
+  }, { enabled: true, holdRadiusCm: 1000, sameCoinRadiusCm: 1200 });
+  results.push({
+    name: 'single-coin-bait-enters-hold-only-for-lone-realtime-one-coin',
+    passed: baitEntered.phase === 'hold'
+      && baitEntered.entered === true
+      && baitEntered.state?.id === 'bait'
+      && baitEntered.state?.amount === 1
+      && baitEntered.state?.distance === 900
+  });
+
+  const baitFar = singleCoinBaitPolicyCore({
+    self: { x: 0, y: 0 },
+    nowMs: 1000,
+    previous: null,
+    selectedOpportunity: { ...baitOpportunity, sourceCoin: { ...baitCoin, x: 1001, distance: 1001 } },
+    opportunities: [{ ...baitOpportunity, sourceCoin: { ...baitCoin, x: 1001, distance: 1001 } }],
+    realtimeCoins: [{ ...baitCoin, x: 1001, distance: 1001 }]
+  }, { enabled: true, holdRadiusCm: 1000, sameCoinRadiusCm: 1200 });
+  const baitRoute = singleCoinBaitPolicyCore({
+    self: { x: 0, y: 0 },
+    nowMs: 1000,
+    previous: null,
+    selectedOpportunity: {
+      ...baitOpportunity,
+      sourceCoin: {
+        ...baitCoin,
+        coinRoute: { ids: ['bait', 'next'], value: 2, legCount: 2 }
+      }
+    },
+    opportunities: [baitOpportunity],
+    realtimeCoins: [baitCoin]
+  }, { enabled: true, holdRadiusCm: 1000, sameCoinRadiusCm: 1200 });
+  results.push({
+    name: 'single-coin-bait-rejects-far-coins-and-multi-coin-routes',
+    passed: baitFar.state === null && baitRoute.state === null
+  });
+
+  const nextCoinOpportunity = {
+    type: 'coin',
+    id: 'next',
+    amount: 3,
+    sourceCoin: { drop_id: 'next', key: 'id:next', amount: 3, x: 950, y: 0, distance: 950, native: true },
+    profitThresholdEligible: true,
+    reason: 'visible-coin'
+  };
+  const baitReleased = singleCoinBaitPolicyCore({
+    self: { x: 0, y: 0 },
+    nowMs: 2000,
+    previous: baitEntered.state,
+    selectedOpportunity: baitOpportunity,
+    opportunities: [baitOpportunity, nextCoinOpportunity],
+    realtimeCoins: [baitCoin, nextCoinOpportunity.sourceCoin]
+  }, { enabled: true, holdRadiusCm: 1000, sameCoinRadiusCm: 1200 });
+  const baitAfkOpportunity = {
+    type: 'enemy',
+    id: 'afk-profit',
+    sourceTarget: { user_id: 'afk-profit', drop: 10, distance: 5000, active: false },
+    profitThresholdEligible: true
+  };
+  results.push({
+    name: 'single-coin-bait-commits-release-when-other-profit-appears',
+    passed: baitReleased.phase === 'release'
+      && baitReleased.transitioned === true
+      && baitReleased.state?.trigger?.id === 'next'
+      && singleCoinBaitOtherOpportunityCore([baitOpportunity, nextCoinOpportunity], baitCoin, { sameCoinRadiusCm: 1200 })?.id === 'next'
+      && singleCoinBaitOtherOpportunityCore([baitOpportunity, baitAfkOpportunity], baitCoin, { sameCoinRadiusCm: 1200 })?.id === 'afk-profit'
+  });
+
+  const baitReturn = singleCoinBaitPolicyCore({
+    self: { x: -700, y: 0 },
+    nowMs: 3000,
+    previous: baitEntered.state,
+    selectedOpportunity: baitOpportunity,
+    opportunities: [baitOpportunity],
+    realtimeCoins: [{ ...baitCoin, distance: 1600 }]
+  }, { enabled: true, holdRadiusCm: 1000, sameCoinRadiusCm: 1200 });
+  const baitMissing = singleCoinBaitPolicyCore({
+    self: { x: 0, y: 0 },
+    nowMs: 3000,
+    previous: baitReleased.state,
+    selectedOpportunity: nextCoinOpportunity,
+    opportunities: [nextCoinOpportunity],
+    realtimeCoins: [nextCoinOpportunity.sourceCoin]
+  }, { enabled: true, holdRadiusCm: 1000, sameCoinRadiusCm: 1200 });
+  results.push({
+    name: 'single-coin-bait-returns-after-combat-displacement-and-clears-when-taken',
+    passed: baitReturn.phase === 'return'
+      && baitReturn.state?.distance === 1600
+      && baitMissing.state === null
+      && baitMissing.clearReason === 'bait-missing'
   });
 
   let flattenedEnemyCount = 0;

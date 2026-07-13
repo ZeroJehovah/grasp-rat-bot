@@ -65,6 +65,8 @@ function publicConfig(config) {
     movementCommandIntervalMs: Number(config.movementCommandIntervalMs || 0),
     movementTargetDeadZoneCm: Number(config.movementTargetDeadZoneCm || 0),
     movementSettlementFrames: Number(config.movementSettlementFrames || 0),
+    singleCoinBaitEnabled: config.singleCoinBaitEnabled !== false,
+    singleCoinBaitHoldRadiusCm: Number(config.singleCoinBaitHoldRadiusCm || 0),
     browserlessCenterActivityRadiusCm: Number(config.browserlessCenterActivityRadiusCm || 0),
     browserlessProfitPursuitMaxMs: Number(config.browserlessProfitPursuitMaxMs || 0),
     browserlessProfitPursuitSuppressMs: Number(config.browserlessProfitPursuitSuppressMs || 0),

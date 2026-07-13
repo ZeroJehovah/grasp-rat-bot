@@ -8495,6 +8495,165 @@ async function runSelfTest() {
       want: 'profit-candidate|visible-coin|near-safe|true|false'
     },
     {
+      name: 'browserless single coin bait holds only a lone realtime one coin within ten meters',
+      got: (() => {
+        const makeState = (coinDrops, snapshotCoinDrops = []) => ({
+          userId: 7,
+          realtime: {
+            tick: 60,
+            frameAgeMs: 100,
+            self: { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+            entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 }],
+            bullets: [],
+            coinDrops
+          },
+          fallback: { frameAgeMs: 100, coinDrops: snapshotCoinDrops }
+        });
+        const options = {
+          nowMs: 1200,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          dynamicProfitThresholdEnabled: false,
+          singleCoinBaitHoldRadiusCm: 1000,
+          finalActionArbitrationHoldMs: 0
+        };
+        const held = buildBrowserlessDecision(makeState([
+          { drop_id: 'bait', amount: 1, x: 900, y: 0 }
+        ]), {}, options);
+        const tooFar = buildBrowserlessDecision(makeState([
+          { drop_id: 'far-one', amount: 1, x: 1001, y: 0 }
+        ]), {}, options);
+        const amountTwo = buildBrowserlessDecision(makeState([
+          { drop_id: 'two', amount: 2, x: 900, y: 0 }
+        ]), {}, options);
+        const combatDisabled = buildBrowserlessDecision(makeState([
+          { drop_id: 'disabled', amount: 1, x: 900, y: 0 }
+        ]), {}, { ...options, combatEnabled: false });
+        const snapshotOnly = buildBrowserlessDecision(makeState([], [
+          { drop_id: 'snapshot-one', amount: 1, x: 900, y: 0 }
+        ]), {}, options);
+        return [
+          held.kind,
+          held.band,
+          held.reason,
+          held.action.target.id,
+          held.profit.singleCoinBait.phase,
+          tooFar.reason,
+          amountTwo.reason,
+          combatDisabled.reason,
+          snapshotOnly.reason,
+          snapshotOnly.action.target.authority
+        ].join('|');
+      })(),
+      want: 'wait|wait|single-coin-bait-hold|bait|hold|foot-coin-priority|foot-coin-priority|foot-coin-priority|foot-coin-priority|snapshot'
+    },
+    {
+      name: 'browserless single coin bait releases itself before newly visible ordinary profit',
+      got: (() => {
+        const adapter = createBrowserlessDecisionAdapter({
+          userId: 7,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          dynamicProfitThresholdEnabled: false,
+          singleCoinBaitHoldRadiusCm: 1000,
+          finalActionArbitrationHoldMs: 0
+        });
+        const makeState = (tick, coinDrops) => ({
+          userId: 7,
+          realtime: {
+            tick,
+            frameAgeMs: 100,
+            self: { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+            entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 }],
+            bullets: [],
+            coinDrops
+          },
+          fallback: { frameAgeMs: 100, coinDrops: [] }
+        });
+        const first = adapter.decide(makeState(60, [
+          { drop_id: 'bait', amount: 1, x: 900, y: 0 }
+        ]), { nowMs: 1000 });
+        const second = adapter.decide(makeState(61, [
+          { drop_id: 'bait', amount: 1, x: 900, y: 0 },
+          { drop_id: 'next', amount: 3, x: 5000, y: 0 }
+        ]), { nowMs: 2000 });
+        const releaseState = adapter.getState().singleCoinBait;
+        const third = adapter.decide(makeState(62, [
+          { drop_id: 'next', amount: 3, x: 5000, y: 0 }
+        ]), { nowMs: 3000 });
+        return [
+          first.reason,
+          first.stateful.decisionState.coin.bait.phase,
+          second.kind,
+          second.reason,
+          second.action.target.id,
+          releaseState.phase,
+          releaseState.trigger.id,
+          third.action.target.id,
+          adapter.getState().singleCoinBait === null
+        ].join('|');
+      })(),
+      want: 'single-coin-bait-hold|hold|coin|single-coin-bait-release|bait|release|next|next|true'
+    },
+    {
+      name: 'browserless single coin bait preserves current active-player combat rules',
+      got: (() => {
+        const options = {
+          userId: 7,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          dynamicProfitThresholdEnabled: false,
+          singleCoinBaitHoldRadiusCm: 1000,
+          finalActionArbitrationHoldMs: 0
+        };
+        const makeState = (tick, extraEntities = []) => ({
+          userId: 7,
+          realtime: {
+            tick,
+            frameAgeMs: 100,
+            self: { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+            entities: [
+              { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+              ...extraEntities
+            ],
+            bullets: [],
+            coinDrops: [{ drop_id: 'bait', amount: 1, x: 900, y: 0 }]
+          },
+          fallback: { frameAgeMs: 100, coinDrops: [] }
+        });
+        const attackerAdapter = createBrowserlessDecisionAdapter(options);
+        attackerAdapter.decide(makeState(60), { nowMs: 1000 });
+        const attacker = attackerAdapter.decide(makeState(61, [
+          { entity_id: 2, user_id: 9, name: 'attacker', x: 5000, y: 0, hp: 80, current_join_mode: 'Active', firing: true, drop: 0 }
+        ]), { nowMs: 2000 });
+        const lowValueAdapter = createBrowserlessDecisionAdapter(options);
+        lowValueAdapter.decide(makeState(60), { nowMs: 1000 });
+        const lowValue = lowValueAdapter.decide(makeState(61, [
+          { entity_id: 3, user_id: 10, name: 'low-value', x: 500, y: 0, vx: 120, vy: 0, hp: 80, current_join_mode: 'Active', drop: 0 }
+        ]), { nowMs: 2000 });
+        const highValueAdapter = createBrowserlessDecisionAdapter(options);
+        highValueAdapter.decide(makeState(60), { nowMs: 1000 });
+        const highValue = highValueAdapter.decide(makeState(61, [
+          { entity_id: 4, user_id: 11, name: 'high-value', x: 5000, y: 0, vx: 120, vy: 0, hp: 80, current_join_mode: 'Active', drop: 70 }
+        ]), { nowMs: 2000 });
+        return [
+          attacker.kind,
+          attacker.band,
+          attacker.action.target.userId,
+          attackerAdapter.getState().singleCoinBait.phase,
+          lowValue.kind,
+          lowValue.reason,
+          lowValue.action.target.id,
+          lowValue.combat.target === null,
+          lowValueAdapter.getState().singleCoinBait.phase,
+          highValue.kind,
+          highValue.action.target.userId,
+          highValueAdapter.getState().singleCoinBait.phase
+        ].join('|');
+      })(),
+      want: 'combat-live|combat|9|hold|wait|single-coin-bait-hold|bait|true|hold|combat-live|11|hold'
+    },
+    {
       name: 'browserless final arbitration holds previous profit action',
       got: (() => {
         const stateful = {};
@@ -14007,6 +14166,26 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: '14400000|false|2|2500|1800000|true|1.5|2800|900000'
+    },
+    {
+      name: 'browserless runner config exposes single coin bait env and public values',
+      got: (() => {
+        const defaultConfig = parseBrowserlessRunnerArgs([], {});
+        const envConfig = parseBrowserlessRunnerArgs([], {
+          GRASP_RAT_BROWSERLESS_SINGLE_COIN_BAIT_ENABLED: 'false',
+          GRASP_RAT_BROWSERLESS_SINGLE_COIN_BAIT_HOLD_RADIUS_CM: '750'
+        });
+        const exposed = publicConfig(envConfig);
+        return [
+          defaultConfig.singleCoinBaitEnabled,
+          defaultConfig.singleCoinBaitHoldRadiusCm,
+          envConfig.singleCoinBaitEnabled,
+          envConfig.singleCoinBaitHoldRadiusCm,
+          exposed.singleCoinBaitEnabled,
+          exposed.singleCoinBaitHoldRadiusCm
+        ].join('|');
+      })(),
+      want: 'true|1000|false|750|false|750'
     },
     {
       name: 'browserless runner config maps canary profiles without enabling combat',

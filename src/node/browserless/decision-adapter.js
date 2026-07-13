@@ -57,6 +57,9 @@ const {
   filterProfitCandidatesCore,
   profitTargetEligibleCore
 } = require('../../strategy/profit-threshold');
+const {
+  singleCoinBaitPolicyCore
+} = require('../../strategy/single-coin-bait');
 const { targetIsWhitelisted, targetWhitelistNameSet } = require('../../shared/target-whitelist');
 const {
   createBrowserlessDecisionState,
@@ -1882,6 +1885,116 @@ function coinDecisionKey(target) {
   });
 }
 
+function singleCoinBaitEnabled(options = {}) {
+  return options.singleCoinBaitEnabled !== false
+    && String(options.controlMode || '') === 'profit-live'
+    && options.combatEnabled === true;
+}
+
+function singleCoinBaitCoreOptions(options = {}) {
+  return {
+    enabled: singleCoinBaitEnabled(options),
+    holdRadiusCm: Math.max(0, Number(options.singleCoinBaitHoldRadiusCm ?? BROWSER_RUNTIME_DEFAULTS.singleCoinBaitHoldRadiusCm ?? 1000)),
+    sameCoinRadiusCm: Math.max(0, Number(options.singleCoinBaitSameCoinRadiusCm ?? BROWSER_RUNTIME_DEFAULTS.singleCoinBaitSameCoinRadiusCm ?? 1200))
+  };
+}
+
+function actionMatchesSingleCoinBait(action, bait) {
+  const actionKey = coinDecisionKey(action?.target);
+  const baitKey = String(bait?.key || coinDecisionKey(bait));
+  return Boolean(actionKey && baitKey && actionKey === baitKey);
+}
+
+function clearSingleCoinBaitTracking(stateful = {}, bait = null, options = {}) {
+  const keys = new Set([
+    String(bait?.key || ''),
+    coinDecisionKey(bait)
+  ].filter(Boolean));
+  for (const key of keys) {
+    if (stateful.coinAttempts) delete stateful.coinAttempts[key];
+    if (stateful.coinProgress) delete stateful.coinProgress[key];
+  }
+  if (stateful.coinApproachLock && keys.has(String(stateful.coinApproachLock.id || ''))) {
+    stateful.coinApproachLock = null;
+  }
+  if (options.clearFinalAction && actionMatchesSingleCoinBait(stateful.finalActionArbitration?.lastAction, bait)) {
+    stateful.finalActionArbitration.lastAction = null;
+    stateful.finalActionArbitration.lastFocus = null;
+    stateful.finalActionArbitration.lastSelectedAt = 0;
+  }
+}
+
+function singleCoinBaitActionSummary(state, input, options = {}) {
+  if (!state) return null;
+  return {
+    ...cloneJson(state),
+    holdRadiusCm: Math.max(0, Math.round(Number(options.singleCoinBaitHoldRadiusCm ?? BROWSER_RUNTIME_DEFAULTS.singleCoinBaitHoldRadiusCm ?? 1000))),
+    ageMs: Math.max(0, Math.round(Number(input?.nowMs || 0) - Number(state.startedAt || input?.nowMs || 0))),
+    holdAgeMs: state.holdStartedAt
+      ? Math.max(0, Math.round(Number(input?.nowMs || 0) - Number(state.holdStartedAt)))
+      : 0
+  };
+}
+
+function buildSingleCoinBaitDecision(input, opportunity, stateful = {}, options = {}, allowEnter = true) {
+  const previous = stateful.singleCoinBait || null;
+  const policy = singleCoinBaitPolicyCore({
+    self: input?.self || null,
+    nowMs: input?.nowMs,
+    previous,
+    selectedOpportunity: opportunity?.choice || null,
+    opportunities: opportunity?.opportunities || [],
+    realtimeCoins: input?.realtimeCoins || [],
+    allowEnter
+  }, singleCoinBaitCoreOptions(options));
+
+  if (previous && !policy.state) {
+    clearSingleCoinBaitTracking(stateful, previous, { clearFinalAction: true });
+  }
+  stateful.singleCoinBait = policy.state ? cloneJson(policy.state) : null;
+  if (!policy.state || !policy.coin) {
+    return { ...policy, action: null, summary: null };
+  }
+
+  if (policy.phase === 'hold') {
+    clearSingleCoinBaitTracking(stateful, policy.state);
+  } else if (policy.phase === 'release' && policy.transitioned) {
+    clearSingleCoinBaitTracking(stateful, policy.state);
+  }
+
+  const summary = singleCoinBaitActionSummary(policy.state, input, options);
+  const target = summarizeCoin(policy.coin);
+  if (policy.phase === 'hold') {
+    return {
+      ...policy,
+      summary,
+      action: {
+        kind: 'wait',
+        band: 'wait',
+        reason: 'single-coin-bait-hold',
+        target,
+        singleCoinBait: summary
+      }
+    };
+  }
+
+  const coinMaxDistance = Math.max(0, Number(options.coinMaxDistance || BROWSER_RUNTIME_DEFAULTS.coinMaxDistance));
+  const actionKind = Number(policy.coin.distance || Infinity) <= coinMaxDistance ? 'coin' : 'seek-coin';
+  return {
+    ...policy,
+    summary,
+    action: {
+      kind: actionKind,
+      band: 'profit',
+      reason: policy.phase === 'release' ? 'single-coin-bait-release' : 'single-coin-bait-return',
+      target,
+      reward: 1,
+      staminaCost: opportunityCoinStaminaCost(policy.coin, options),
+      singleCoinBait: summary
+    }
+  };
+}
+
 function coinIgnoredUntil(stateful = {}, coin) {
   const key = coinDecisionKey(coin);
   if (!key) return 0;
@@ -2062,7 +2175,7 @@ function applyStaleCoinEscape(action, stateful = {}, nowMs = 0) {
     stateful.staleCoinEscape = null;
     return action;
   }
-  if (action?.kind === 'flee') return action;
+  if (action?.kind === 'flee' || action?.reason === 'single-coin-bait-hold') return action;
   return {
     ...action,
     kind: 'patrol',
@@ -3927,6 +4040,36 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
   const staminaBlockedWaitAction = (profitLive || nonCombatProfit)
     ? buildStaminaBlockedWaitDecision(profitSelectionInput, options)
     : null;
+  const singleCoinBaitEntryAllowed = Boolean(
+    input.self
+      && !realtimeStale
+      && !hardSafetyAction
+      && !longStaminaExhaustedLeaveAction
+      && !combatExitAction
+      && !injuryLeaveAction
+      && !pursuitLeaveAction
+      && !immediateSafetyAction
+      && !returnToCenterAction
+      && !highValueCoinPriorityAction
+      && !(combat.target && combatDecisionEnabled && combatActionEligible)
+      && !postAttackDropCoinAction
+      && !postAttackDropWaitAction
+      && !staminaBudgetExitAction
+      && !recoveryFootCoinAction
+      && !recoveryAction
+      && !injuredCautionFootCoinAction
+      && !safetyAction
+      && !dailyFinalCoinAction
+  );
+  const singleCoinBait = buildSingleCoinBaitDecision(
+    input,
+    opportunity,
+    stateful,
+    options,
+    singleCoinBaitEntryAllowed
+  );
+  const singleCoinBaitAction = dailyFinalCoinAction ? null : singleCoinBait.action;
+  const singleCoinBaitReleaseAction = singleCoinBait.phase === 'release' ? singleCoinBaitAction : null;
   let kind = 'wait';
   let band = 'wait';
   let reason = '';
@@ -3972,7 +4115,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     band = returnToCenterAction.band;
     reason = returnToCenterAction.reason;
     action = returnToCenterAction;
-  } else if (highValueCoinPriorityAction) {
+  } else if (highValueCoinPriorityAction && !singleCoinBaitReleaseAction) {
     kind = highValueCoinPriorityAction.kind;
     band = highValueCoinPriorityAction.band;
     reason = highValueCoinPriorityAction.reason;
@@ -4017,6 +4160,11 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     band = safetyAction.band;
     reason = safetyAction.reason;
     action = safetyAction;
+  } else if (singleCoinBaitAction) {
+    kind = singleCoinBaitAction.kind;
+    band = singleCoinBaitAction.band;
+    reason = singleCoinBaitAction.reason;
+    action = singleCoinBaitAction;
   } else if (footCoinPriorityAction) {
     kind = footCoinPriorityAction.kind;
     band = footCoinPriorityAction.band;
@@ -4110,7 +4258,8 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       best: summarizeOpportunity(opportunity.choice),
       rawBest: summarizeOpportunity(opportunity.rawChoice),
       candidates: topItems(opportunity.sorted, summarizeOpportunity),
-      threshold: opportunity.threshold
+      threshold: opportunity.threshold,
+      singleCoinBait: singleCoinBait.summary
     },
     combat: {
       ...(combat.dryRun || {}),
@@ -4126,7 +4275,8 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     },
     stateful: {
       opportunityChoice: outputOpportunityChoice,
-      switchLock: outputSwitchLock
+      switchLock: outputSwitchLock,
+      singleCoinBait: cloneJson(stateful.singleCoinBait || null)
     }
   };
 }
