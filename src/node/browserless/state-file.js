@@ -1344,7 +1344,8 @@ function compactHighDropPlayers(value) {
       compactString(player?.name, 96),
       compactNumber(player?.initialDrop),
       compactNumber(player?.maxDrop),
-      compactNumber(player?.latestDrop)
+      compactNumber(player?.latestDrop),
+      compactNumber(player?.userId)
     ]).filter(row => row[0] && row.slice(1).every(item => item !== null)).slice(0, 160)
   };
 }

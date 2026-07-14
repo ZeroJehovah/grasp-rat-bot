@@ -27,7 +27,11 @@ const {
   opponentResponsePolicyCore,
   updateOpponentBehaviorStateCore
 } = require('../../strategy/opponent-behavior');
-const { targetIsWhitelisted, targetWhitelistNameSet } = require('../../shared/target-whitelist');
+const {
+  targetIsWhitelisted,
+  targetWhitelistNameSet,
+  targetWhitelistUserIdSet
+} = require('../../shared/target-whitelist');
 
 const DEFAULT_STAMINA_FULL_RATIO = 0.98;
 
@@ -163,10 +167,18 @@ function entityDropValue(entity) {
 }
 
 function targetWhitelistFromOptions(options = {}) {
-  if (options.targetWhitelistNameSet instanceof Set) return options.targetWhitelistNameSet;
   if (options.targetWhitelist && typeof options.targetWhitelist === 'object') return options.targetWhitelist;
-  if (Array.isArray(options.targetWhitelistNames)) return targetWhitelistNameSet(options.targetWhitelistNames, options.targetWhitelistMaxNames);
-  return null;
+  const nameSet = options.targetWhitelistNameSet instanceof Set
+    ? options.targetWhitelistNameSet
+    : (Array.isArray(options.targetWhitelistNames)
+        ? targetWhitelistNameSet(options.targetWhitelistNames, options.targetWhitelistMaxNames)
+        : null);
+  const userIdSet = options.targetWhitelistUserIdSet instanceof Set
+    ? options.targetWhitelistUserIdSet
+    : (Array.isArray(options.targetWhitelistUserIds)
+        ? targetWhitelistUserIdSet(options.targetWhitelistUserIds, options.targetWhitelistMaxNames)
+        : null);
+  return nameSet || userIdSet ? { nameSet, userIdSet } : null;
 }
 
 function isWhitelistedTargetForOptions(entity, options = {}) {

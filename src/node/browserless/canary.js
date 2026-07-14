@@ -486,6 +486,8 @@ async function runReadOnlyCanary(config, options = {}) {
     easyKillPlayerTracker: options.easyKillPlayerTracker,
     targetWhitelistNames: targetWhitelist.names,
     targetWhitelistNameSet: targetWhitelist.nameSet,
+    targetWhitelistUserIds: targetWhitelist.userIds,
+    targetWhitelistUserIdSet: targetWhitelist.userIdSet,
     whitelistCheck: target => targetWhitelist.isWhitelistedTarget(target)
   });
   const safetyController = options.safetyController || createBrowserlessSafetyController({

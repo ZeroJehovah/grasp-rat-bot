@@ -6677,7 +6677,7 @@ async function runSelfTest() {
         const decision = buildBrowserlessDecision(store.getState(1200), {}, {
           nowMs: 1200,
           controlMode: 'profit-live',
-          targetWhitelistNames: ['protected']
+          targetWhitelistUserIds: [8]
         });
         const candidateIds = (decision.profit.candidates || []).map(item => String(item.id)).join(',');
         return [
@@ -6711,7 +6711,7 @@ async function runSelfTest() {
           controlMode: 'profit-live',
           coinMaxDistance: 500,
           footCoinPriorityDistance: 500,
-          targetWhitelistNames: ['protected']
+          targetWhitelistUserIds: [8]
         });
         return [
           decision.kind,
@@ -6742,7 +6742,7 @@ async function runSelfTest() {
           controlMode: 'profit-live',
           combatEnabled: true,
           liveCombatEnabled: true,
-          targetWhitelistNames: ['protected']
+          targetWhitelistUserIds: [8]
         });
         return [
           combat.target === null,
@@ -14109,7 +14109,7 @@ async function runSelfTest() {
       name: 'browserless target whitelist loads local fallback and remote override',
       got: withTempDirForTest(async dir => {
         const file = path.join(dir, 'target-whitelist.json');
-        fs.writeFileSync(file, JSON.stringify({ names: ['Local Protected'] }));
+        fs.writeFileSync(file, JSON.stringify({ userIds: [77], names: ['Local Protected'] }));
         const whitelist = createBrowserlessTargetWhitelist({
           file,
           url: 'https://example.test/target-whitelist.json?token=secret-token',
@@ -14118,15 +14118,19 @@ async function runSelfTest() {
             ok: true,
             status: 200,
             statusText: 'OK',
-            text: async () => JSON.stringify({ names: ['Remote Protected'] })
+            text: async () => JSON.stringify({ userIds: ['28886'], names: ['Remote Protected'] })
           })
         });
         const summary = await whitelist.refresh('self-test');
         return [
           summary.loaded,
           summary.count,
+          summary.userIdCount,
+          summary.nameCount,
           summary.lastSource,
+          whitelist.isWhitelistedTarget({ user_id: 28886, name: 'Renamed Self' }),
           whitelist.isWhitelistedTarget({ name: 'Remote Protected' }),
+          whitelist.isWhitelistedTarget({ user_id: 77, name: 'Renamed Local' }),
           whitelist.isWhitelistedTarget({ name: 'Local Protected' }),
           summary.sources.length,
           summary.sources[0].source,
@@ -14135,7 +14139,18 @@ async function runSelfTest() {
           summary.url.includes('[redacted]')
         ].join('|');
       }),
-      want: 'true|1|remote-url|true|false|2|local-file|remote-url|false|true'
+      want: 'true|2|1|1|remote-url|true|true|false|false|2|local-file|remote-url|false|true'
+    },
+    {
+      name: 'shipped browserless whitelist contains only the self user id',
+      got: (() => {
+        const payload = JSON.parse(fs.readFileSync(path.join(__dirname, '../../dist/target-whitelist.json'), 'utf8'));
+        return [
+          Array.isArray(payload.userIds) ? payload.userIds.join(',') : '',
+          !Array.isArray(payload.names) || payload.names.length === 0
+        ].join('|');
+      })(),
+      want: '28886|true'
     },
     {
       name: 'browserless runner config parses env and cli overrides',
@@ -16044,25 +16059,32 @@ async function runSelfTest() {
         const file = path.join(dir, 'high-drop-players.json');
         const tracker = createHighDropPlayerTracker({ file, now: () => t });
         tracker.observeSnapshot({
+          tick: 10,
           entities: [
             { user_id: 7, name: 'self', drop: 900 },
             { user_id: 8, name: 'alice', drop: 499 },
-            { user_id: 9, name: 'bob', death_drop_coins: 500 }
+            { user_id: 9, name: 'bob', death_drop_coins: 500 },
+            { entity_id: 10, name: 'name-only', drop: 999 }
           ]
         }, { source: 'prelogin-http', selfUserId: 7, observedAtMs: t });
         t += 60000;
         tracker.observeSnapshot({
+          tick: 20,
           entities: [
             { user_id: 8, name: 'alice', drop: 520 },
             { user_id: 9, name: 'bob', drop: 450 }
           ]
         }, { source: 'ws', selfUserId: 7, observedAtMs: t });
         t += 60000;
-        tracker.observeSnapshot({ entities: [{ user_id: 8, name: 'alice', drop: 700 }] }, {
+        tracker.observeSnapshot({ tick: 30, entities: [{ user_id: 8, name: 'alice', drop: 700 }] }, {
           source: 'ws', selfUserId: 7, observedAtMs: t
         });
         t += 60000;
-        tracker.observeSnapshot({ entities: [{ user_id: 8, name: 'alice', drop: 600 }] }, {
+        tracker.observeSnapshot({ tick: 40, entities: [{ user_id: 8, name: 'alice-renamed', drop: 600 }] }, {
+          source: 'ws', selfUserId: 7, observedAtMs: t
+        });
+        t += 60000;
+        tracker.observeSnapshot({ tick: 35, entities: [{ user_id: 8, name: 'stale-old-name', drop: 800 }] }, {
           source: 'gap-http', selfUserId: 7, observedAtMs: t
         });
         const current = createHighDropPlayerTracker({ file, now: () => t }).status();
@@ -16072,6 +16094,7 @@ async function runSelfTest() {
           current.day,
           current.players.length,
           current.players[0].name,
+          current.players[0].userId,
           current.players[0].initialDrop,
           current.players[0].maxDrop,
           current.players[0].latestDrop,
@@ -16085,7 +16108,7 @@ async function runSelfTest() {
           nextDay.players.length
         ].join('|');
       }),
-      want: '2026-07-14|2|alice|520|700|600|bob|500|500|450|false|gap-http|2026-07-15|0'
+      want: '2026-07-14|2|alice-renamed|8|520|800|600|bob|500|500|450|false|gap-http|2026-07-15|0'
     },
     {
       name: 'browserless snapshot gap poller waits three minutes after any observed snapshot',
@@ -17583,8 +17606,8 @@ async function runSelfTest() {
             lastSnapshotSource: 'ws',
             file: '/tmp/should-not-leak.json',
             players: [
-              { name: 'alice', initialDrop: 520, maxDrop: 700, latestDrop: 600 },
-              { name: 'bob', initialDrop: 500, maxDrop: 500, latestDrop: 450 }
+              { userId: 8, name: 'alice-renamed', initialDrop: 520, maxDrop: 700, latestDrop: 600 },
+              { userId: 9, name: 'bob', initialDrop: 500, maxDrop: 500, latestDrop: 450 }
             ]
           }
         });
@@ -17604,7 +17627,7 @@ async function runSelfTest() {
           panelText.indexOf('id="highDropPlayers"') < panelText.indexOf('id="nearbyGrid"')
         ].join('|');
       })(),
-      want: '2026-07-14|ws|alice,520,700,600|bob,500,500,450|false|true|true|true|true|true|true'
+      want: '2026-07-14|ws|alice-renamed,520,700,600,8|bob,500,500,450,9|false|true|true|true|true|true|true'
     },
     {
       name: 'browserless web panel renders target bars and svg target icons',
@@ -24244,6 +24267,42 @@ async function runSelfTest() {
 	        }
 	      })(),
 	      want: 'true|1|runner|8|1|0|0'
+	    },
+	    {
+	      name: 'browserless easy-kill tracker keeps user id while refreshing the latest observed name',
+	      got: (() => {
+	        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'grasp-rat-easy-kill-name-'));
+	        try {
+	          const file = path.join(dir, 'easy-kill-players.json');
+	          const tracker = createEasyKillPlayerTracker({ file, now: () => 1000 });
+	          tracker.observeCombatShot({ userId: 8, name: 'old-name', active: true, drop: 20 }, { atMs: 1000, tick: 10 });
+	          tracker.observeKillEvidence([{ targetUserId: 8, targetName: 'old-name', tick: 12 }], { atMs: 2000 });
+	          const renamed = tracker.observePlayerNames([{ user_id: 8, name: 'new-name' }], {
+	            atMs: 3000,
+	            source: 'realtime-visible',
+	            tick: 30
+	          });
+	          const stale = tracker.observePlayerNames([{ user_id: 8, name: 'old-name' }], {
+	            atMs: 3500,
+	            source: 'snapshot',
+	            tick: 20
+	          });
+	          const current = tracker.status();
+	          const reloaded = createEasyKillPlayerTracker({ file, now: () => 4000 }).status();
+	          return [
+	            renamed.updated,
+	            stale.updated,
+	            current.playerCount,
+	            current.players[0]?.userId,
+	            current.players[0]?.name,
+	            reloaded.players[0]?.userId,
+	            reloaded.players[0]?.name
+	          ].join('|');
+	        } finally {
+	          fs.rmSync(dir, { recursive: true, force: true });
+	        }
+	      })(),
+	      want: '1|0|1|8|new-name|8|new-name'
 	    },
 	    {
 	      name: 'browserless known easy active player competes as distance and shot-cost ROI profit',

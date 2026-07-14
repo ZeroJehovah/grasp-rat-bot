@@ -618,8 +618,22 @@ async function runBrowserlessRunner(config, deps = {}) {
   };
   let snapshotGapPoller = null;
   const observeSnapshotPayload = (payload, detail = {}) => {
+    const observedAtMs = Number(detail.observedAtMs ?? now());
+    let easyKillNameResult = null;
     try {
-      const observedAtMs = Number(detail.observedAtMs ?? now());
+      easyKillNameResult = easyKillPlayerTracker.observePlayerNames?.(payload?.entities || [], {
+        atMs: observedAtMs,
+        source: detail.source || 'snapshot',
+        tick: payload?.tick
+      }) || null;
+    } catch (err) {
+      recordSupervisorError(err, { operation: 'easy-kill-player-name-observe', source: detail.source || 'snapshot' });
+      logStore.append('runner', 'easy-kill-player-name-observation-error', {
+        source: detail.source || 'snapshot',
+        error: errorMessage(err)
+      });
+    }
+    try {
       const result = highDropPlayerTracker.observeSnapshot(payload, {
         ...detail,
         observedAtMs,
@@ -634,7 +648,10 @@ async function runBrowserlessRunner(config, deps = {}) {
           playerCount: result.playerCount
         });
       }
-      return result;
+      return {
+        ...result,
+        easyKillNamesUpdated: Number(easyKillNameResult?.updated || 0)
+      };
     } catch (err) {
       recordSupervisorError(err, { operation: 'high-drop-player-observe', source: detail.source || 'snapshot' });
       logStore.append('runner', 'high-drop-player-observation-error', {

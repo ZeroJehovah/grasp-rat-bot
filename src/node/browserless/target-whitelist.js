@@ -4,8 +4,10 @@ const fs = require('fs');
 const path = require('path');
 const {
   parseTargetWhitelistNames,
+  parseTargetWhitelistUserIds,
   targetIsWhitelisted,
-  targetWhitelistNameSet
+  targetWhitelistNameSet,
+  targetWhitelistUserIdSet
 } = require('../../shared/target-whitelist');
 const {
   fetchWithTimeout,
@@ -24,13 +26,24 @@ function readJsonFile(file) {
 
 function summarizeSource(result) {
   if (!result) return null;
+  const nameCount = Array.isArray(result.names) ? result.names.length : 0;
+  const userIdCount = Array.isArray(result.userIds) ? result.userIds.length : 0;
   return {
     source: result.source || '',
     url: result.url || '',
     file: result.file || '',
-    count: Array.isArray(result.names) ? result.names.length : 0,
+    count: nameCount + userIdCount,
+    nameCount,
+    userIdCount,
     ok: result.ok !== false,
     error: result.error || ''
+  };
+}
+
+function parseWhitelistEntries(payload, maxEntries) {
+  return {
+    names: parseTargetWhitelistNames(payload, maxEntries),
+    userIds: parseTargetWhitelistUserIds(payload, maxEntries)
   };
 }
 
@@ -49,6 +62,8 @@ function createBrowserlessTargetWhitelist(options = {}) {
     file,
     names: [],
     nameSet: new Set(),
+    userIds: [],
+    userIdSet: new Set(),
     loaded: false,
     lastFetchAt: 0,
     lastOkAt: 0,
@@ -59,9 +74,11 @@ function createBrowserlessTargetWhitelist(options = {}) {
     sources: []
   };
 
-  function applyNames(names, source, detail = {}) {
-    state.names = names.slice();
-    state.nameSet = targetWhitelistNameSet(names, maxNames);
+  function applyEntries(entries, source, detail = {}) {
+    state.names = entries.names.slice();
+    state.nameSet = targetWhitelistNameSet(entries.names, maxNames);
+    state.userIds = entries.userIds.slice();
+    state.userIdSet = targetWhitelistUserIdSet(entries.userIds, maxNames);
     state.loaded = true;
     state.lastOkAt = now();
     state.lastError = '';
@@ -88,10 +105,10 @@ function createBrowserlessTargetWhitelist(options = {}) {
     if (!file) return null;
     try {
       const payload = readJsonFile(file);
-      const names = parseTargetWhitelistNames(payload.json, maxNames);
-      const result = { ok: true, source: 'local-file', file: payload.file, names };
+      const entries = parseWhitelistEntries(payload.json, maxNames);
+      const result = { ok: true, source: 'local-file', file: payload.file, ...entries };
       state.sources.push(summarizeSource(result));
-      if (names.length || !state.loaded) applyNames(names, 'local-file', { reason });
+      if (entries.names.length || entries.userIds.length || !state.loaded) applyEntries(entries, 'local-file', { reason });
       return result;
     } catch (err) {
       recordFailure('local-file', err, { file, reason: `${reason}-failed` });
@@ -112,10 +129,10 @@ function createBrowserlessTargetWhitelist(options = {}) {
       if (!response.ok) {
         throw new Error(`target whitelist HTTP ${response.status}: ${String(body.text || '').slice(0, 160)}`);
       }
-      const names = parseTargetWhitelistNames(body.json, maxNames);
-      const result = { ok: true, source: 'remote-url', url: redactSecrets(url), names };
+      const entries = parseWhitelistEntries(body.json, maxNames);
+      const result = { ok: true, source: 'remote-url', url: redactSecrets(url), ...entries };
       state.sources.push(summarizeSource(result));
-      applyNames(names, 'remote-url', { reason });
+      applyEntries(entries, 'remote-url', { reason });
       return result;
     } catch (err) {
       recordFailure('remote-url', err, { url: redactSecrets(url), reason: `${reason}-failed` });
@@ -135,7 +152,10 @@ function createBrowserlessTargetWhitelist(options = {}) {
   }
 
   function isWhitelistedTarget(target) {
-    return targetIsWhitelisted(target, state.nameSet);
+    return targetIsWhitelisted(target, {
+      nameSet: state.nameSet,
+      userIdSet: state.userIdSet
+    });
   }
 
   function summarize() {
@@ -143,7 +163,10 @@ function createBrowserlessTargetWhitelist(options = {}) {
       url: redactSecrets(url),
       file,
       names: state.names.slice(),
-      count: state.names.length,
+      userIds: state.userIds.slice(),
+      count: state.names.length + state.userIds.length,
+      nameCount: state.names.length,
+      userIdCount: state.userIds.length,
       loaded: state.loaded,
       lastFetchAt: state.lastFetchAt,
       lastOkAt: state.lastOkAt,
@@ -164,6 +187,12 @@ function createBrowserlessTargetWhitelist(options = {}) {
     },
     get nameSet() {
       return state.nameSet;
+    },
+    get userIds() {
+      return state.userIds.slice();
+    },
+    get userIdSet() {
+      return state.userIdSet;
     }
   };
 }

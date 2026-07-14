@@ -3,7 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 const UTC8_OFFSET_MS = 8 * 60 * 60 * 1000;
 const DEFAULT_THRESHOLD = 500;
 const DEFAULT_SNAPSHOT_GAP_MS = 3 * 60 * 1000;
@@ -50,13 +50,13 @@ function entityName(entity, fallback = '') {
 
 function entityIdentity(entity) {
   const userId = numberOrNull(entity?.user_id ?? entity?.userId);
-  if (userId !== null) return { key: `user:${userId}`, userId, entityId: null };
+  if (userId === null) return null;
   const entityId = entity?.entity_id ?? entity?.entityId ?? entity?.id;
-  if (entityId !== null && entityId !== undefined && entityId !== '') {
-    return { key: `entity:${String(entityId)}`, userId: null, entityId: String(entityId) };
-  }
-  const name = entityName(entity);
-  return name ? { key: `name:${name}`, userId: null, entityId: null } : null;
+  return {
+    key: `user:${userId}`,
+    userId,
+    entityId: entityId === null || entityId === undefined || entityId === '' ? null : String(entityId)
+  };
 }
 
 function emptyStore(day = '') {
@@ -78,20 +78,56 @@ function normalizeStore(value, expectedDay) {
   output.lastSnapshotSource = String(value.lastSnapshotSource || '');
   for (const [key, player] of Object.entries(value.players || {})) {
     if (!player || typeof player !== 'object') continue;
+    const userId = numberOrNull(player.userId ?? String(key || '').replace(/^user:/, ''));
+    if (userId === null) continue;
     const initialDrop = numberOrNull(player.initialDrop);
     const maxDrop = numberOrNull(player.maxDrop);
     const latestDrop = numberOrNull(player.latestDrop);
     if (initialDrop === null || maxDrop === null || latestDrop === null) continue;
-    output.players[key] = {
-      key,
-      userId: numberOrNull(player.userId),
+    const normalizedKey = `user:${userId}`;
+    const candidate = {
+      key: normalizedKey,
+      userId,
       entityId: player.entityId === null || player.entityId === undefined ? null : String(player.entityId),
       name: String(player.name || ''),
       initialDrop,
       maxDrop,
       latestDrop,
       firstObservedAt: String(player.firstObservedAt || ''),
-      lastObservedAt: String(player.lastObservedAt || '')
+      lastObservedAt: String(player.lastObservedAt || ''),
+      lastObservedTick: numberOrNull(player.lastObservedTick)
+    };
+    const existing = output.players[normalizedKey] || null;
+    if (!existing) {
+      output.players[normalizedKey] = candidate;
+      continue;
+    }
+    const existingFirstMs = Date.parse(existing.firstObservedAt || '');
+    const candidateFirstMs = Date.parse(candidate.firstObservedAt || '');
+    const candidateIsEarlier = !Number.isFinite(existingFirstMs)
+      || (Number.isFinite(candidateFirstMs) && candidateFirstMs < existingFirstMs);
+    const existingLastMs = Date.parse(existing.lastObservedAt || '');
+    const candidateLastMs = Date.parse(candidate.lastObservedAt || '');
+    const existingLastTick = numberOrNull(existing.lastObservedTick);
+    const candidateLastTick = numberOrNull(candidate.lastObservedTick);
+    const candidateIsLater = existingLastTick !== null && candidateLastTick !== null
+      ? candidateLastTick >= existingLastTick
+      : (!Number.isFinite(existingLastMs)
+        || (Number.isFinite(candidateLastMs) && candidateLastMs >= existingLastMs));
+    const first = candidateIsEarlier ? candidate : existing;
+    const latest = candidateIsLater ? candidate : existing;
+    output.players[normalizedKey] = {
+      ...existing,
+      key: normalizedKey,
+      userId,
+      entityId: latest.entityId ?? existing.entityId ?? candidate.entityId,
+      name: latest.name || existing.name || candidate.name,
+      initialDrop: first.initialDrop,
+      maxDrop: Math.max(existing.maxDrop, candidate.maxDrop),
+      latestDrop: latest.latestDrop,
+      firstObservedAt: first.firstObservedAt,
+      lastObservedAt: latest.lastObservedAt,
+      lastObservedTick: latest.lastObservedTick
     };
   }
   return output;
@@ -137,6 +173,7 @@ function createHighDropPlayerTracker(options = {}) {
       return { ok: false, reason: 'invalid-snapshot-payload', observed: 0, updated: 0 };
     }
     const at = new Date(atMs).toISOString();
+    const snapshotTick = numberOrNull(payload.tick);
     const selfUserId = numberOrNull(detail.selfUserId);
     let observed = 0;
     let updated = 0;
@@ -161,21 +198,33 @@ function createHighDropPlayerTracker(options = {}) {
           maxDrop: drop,
           latestDrop: drop,
           firstObservedAt: at,
-          lastObservedAt: at
+          lastObservedAt: at,
+          lastObservedTick: snapshotTick
         };
         updated += 1;
         continue;
       }
       const nextMax = Math.max(Number(existing.maxDrop), drop);
-      if (existing.name !== name || existing.maxDrop !== nextMax || existing.latestDrop !== drop) {
+      const existingTick = numberOrNull(existing.lastObservedTick);
+      const staleObservation = snapshotTick !== null && existingTick !== null && snapshotTick < existingTick;
+      const displayChanged = existing.maxDrop !== nextMax
+        || (!staleObservation && (existing.name !== name
+          || existing.entityId !== identity.entityId
+          || existing.latestDrop !== drop));
+      const observationAdvanced = !staleObservation && existing.lastObservedTick !== snapshotTick;
+      if (displayChanged || observationAdvanced) {
         store.players[identity.key] = {
           ...existing,
-          name,
           maxDrop: nextMax,
-          latestDrop: drop,
-          lastObservedAt: at
+          ...(staleObservation ? {} : {
+            entityId: identity.entityId,
+            name,
+            latestDrop: drop,
+            lastObservedAt: at,
+            lastObservedTick: snapshotTick
+          })
         };
-        updated += 1;
+        if (displayChanged) updated += 1;
       }
     }
     const shouldPersist = updated > 0

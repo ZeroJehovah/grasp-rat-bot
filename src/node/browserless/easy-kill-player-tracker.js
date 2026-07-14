@@ -28,6 +28,10 @@ function targetName(target, fallback = '') {
       || target?.targetName
       || target?.target_name
       || target?.label
+      || target?.username
+      || target?.user_name
+      || target?.displayName
+      || target?.display_name
       || fallback
       || ''
   ).trim();
@@ -66,6 +70,8 @@ function normalizePlayer(key, player) {
     key: playerKey(userId),
     userId,
     name: targetName(player, `#${userId}`),
+    nameUpdatedAt: String(player.nameUpdatedAt || player.lastKilledAt || player.firstKilledAt || ''),
+    nameObservedTick: numberOrNull(player.nameObservedTick ?? player.lastKillTick),
     killCount: Math.max(1, Math.round(Number(player.killCount || 1))),
     firstKilledAt: String(player.firstKilledAt || player.lastKilledAt || ''),
     lastKilledAt: String(player.lastKilledAt || player.firstKilledAt || ''),
@@ -82,6 +88,8 @@ function normalizeEngagement(key, engagement) {
     key: playerKey(userId),
     userId,
     name: targetName(engagement, `#${userId}`),
+    nameUpdatedAt: String(engagement.nameUpdatedAt || engagement.lastShotAt || engagement.startedAt || ''),
+    nameObservedTick: numberOrNull(engagement.nameObservedTick ?? engagement.lastShotTick ?? engagement.startedTick),
     active: engagement.active !== false && !engagement.endedAt,
     startedAt: String(engagement.startedAt || ''),
     startedAtMs: Math.max(0, Number(engagement.startedAtMs || Date.parse(engagement.startedAt || '') || 0)),
@@ -188,6 +196,67 @@ function createEasyKillPlayerTracker(options = {}) {
     };
   }
 
+  function updateNamesFromTargets(targets = [], atMs = now(), source = 'observation', observedTick = null) {
+    const at = new Date(atMs).toISOString();
+    const sourceTick = numberOrNull(observedTick);
+    const updates = new Map();
+    for (const target of targets || []) {
+      const userId = targetUserId(target);
+      if (userId === null) continue;
+      const name = targetName(target);
+      if (!name) continue;
+      const key = playerKey(userId);
+      const player = store.players[key] || null;
+      const engagement = store.engagements[key] || null;
+      const tick = numberOrNull(target?.tick) ?? sourceTick;
+      let oldName = '';
+      let playerUpdated = false;
+      let engagementUpdated = false;
+      const playerTick = numberOrNull(player?.nameObservedTick);
+      if (player && (tick === null || playerTick === null || tick >= playerTick)) {
+        if (tick !== null) player.nameObservedTick = tick;
+      }
+      if (player && player.name !== name && (tick === null || playerTick === null || tick >= playerTick)) {
+        oldName = player.name || oldName;
+        player.name = name;
+        player.nameUpdatedAt = at;
+        playerUpdated = true;
+      }
+      const engagementTick = numberOrNull(engagement?.nameObservedTick);
+      if (engagement && (tick === null || engagementTick === null || tick >= engagementTick)) {
+        if (tick !== null) engagement.nameObservedTick = tick;
+      }
+      if (engagement && engagement.name !== name && (tick === null || engagementTick === null || tick >= engagementTick)) {
+        oldName = oldName || engagement.name;
+        engagement.name = name;
+        engagement.nameUpdatedAt = at;
+        engagementUpdated = true;
+      }
+      if (!playerUpdated && !engagementUpdated) continue;
+      updates.set(key, {
+        type: 'name-updated',
+        at,
+        source: String(source || 'observation'),
+        userId,
+        oldName,
+        name,
+        playerUpdated,
+        engagementUpdated
+      });
+    }
+    return Array.from(updates.values());
+  }
+
+  function observePlayerNames(targets = [], detail = {}) {
+    const atMs = Number.isFinite(Number(detail.atMs)) ? Number(detail.atMs) : now();
+    const updates = updateNamesFromTargets(targets, atMs, detail.source || 'snapshot', detail.tick);
+    if (updates.length) {
+      persist(atMs);
+      for (const event of updates) emit(event);
+    }
+    return { ok: true, updated: updates.length, updates: cloneJson(updates) };
+  }
+
   function observeCombatShot(target, detail = {}) {
     if (!target || target.active !== true) return { ok: false, reason: 'non-active-target' };
     const userId = targetUserId(target);
@@ -199,7 +268,8 @@ function createEasyKillPlayerTracker(options = {}) {
     const reopened = Boolean(previous && !previous.active);
     const created = !previous || reopened;
     const engagementOnly = detail.engagementOnly === true;
-    const name = targetName(target, previous?.name || store.players[key]?.name || `#${userId}`);
+    const nameUpdates = updateNamesFromTargets([target], atMs, detail.source || 'realtime-combat', detail.tick);
+    const name = previous?.name || store.players[key]?.name || targetName(target, `#${userId}`);
     const startedAtMs = created ? atMs : Number(previous.startedAtMs || atMs);
     const startedTick = created
       ? numberOrNull(detail.tick)
@@ -208,6 +278,8 @@ function createEasyKillPlayerTracker(options = {}) {
       key,
       userId,
       name,
+      nameUpdatedAt: previous?.name === name ? String(previous?.nameUpdatedAt || '') : at,
+      nameObservedTick: numberOrNull(detail.tick) ?? numberOrNull(previous?.nameObservedTick),
       active: true,
       startedAt: new Date(startedAtMs).toISOString(),
       startedAtMs,
@@ -225,7 +297,8 @@ function createEasyKillPlayerTracker(options = {}) {
       endReason: '',
       lastDrop: targetDrop(target) ?? targetDrop(previous)
     };
-    if (created || !lastWriteAtMs || atMs - lastWriteAtMs >= persistIntervalMs) persist(atMs);
+    if (created || nameUpdates.length || !lastWriteAtMs || atMs - lastWriteAtMs >= persistIntervalMs) persist(atMs);
+    for (const event of nameUpdates) emit(event);
     if (created) {
       emit({
         type: 'engagement-started',
@@ -246,6 +319,7 @@ function createEasyKillPlayerTracker(options = {}) {
   function observeVisibleTargets(targets = [], detail = {}) {
     const atMs = Number.isFinite(Number(detail.atMs)) ? Number(detail.atMs) : now();
     const missingGraceMs = Math.max(0, Number(detail.missingGraceMs || 0));
+    const nameUpdates = updateNamesFromTargets(targets, atMs, detail.source || 'realtime-visible', detail.tick);
     const visibleByUserId = new Map();
     for (const target of targets || []) {
       const userId = targetUserId(target);
@@ -258,7 +332,7 @@ function createEasyKillPlayerTracker(options = {}) {
       if (target) {
         engagement.lastSeenAtMs = atMs;
         engagement.missingSinceMs = 0;
-        engagement.name = targetName(target, engagement.name);
+        if (!engagement.name) engagement.name = targetName(target, `#${engagement.userId}`);
         engagement.lastDrop = targetDrop(target) ?? engagement.lastDrop;
         continue;
       }
@@ -267,7 +341,11 @@ function createEasyKillPlayerTracker(options = {}) {
       const result = finishEngagement(engagement.userId, detail.reason || 'active-target-missing', { atMs });
       if (result.ok) ended.push(result.engagement);
     }
-    return { ok: true, ended };
+    if (nameUpdates.length) {
+      persist(atMs);
+      for (const event of nameUpdates) emit(event);
+    }
+    return { ok: true, ended, renamed: cloneJson(nameUpdates) };
   }
 
   function finishEngagement(userIdValue, reason = 'not-killed', detail = {}) {
@@ -320,12 +398,22 @@ function createEasyKillPlayerTracker(options = {}) {
       const tick = numberOrNull(item?.tick);
       if (tick !== null && engagement.startedTick !== null && tick < engagement.startedTick) continue;
       const existing = store.players[key] || null;
-      const name = targetName(item, engagement.name || existing?.name || `#${userId}`);
+      const currentName = engagement.name || existing?.name || `#${userId}`;
+      const currentNameTick = numberOrNull(engagement.nameObservedTick) ?? numberOrNull(existing?.nameObservedTick);
+      const evidenceName = targetName(item);
+      const name = tick !== null && currentNameTick !== null && tick < currentNameTick
+        ? currentName
+        : (evidenceName || currentName);
+      const observedNameTicks = [tick, currentNameTick, numberOrNull(existing?.nameObservedTick)]
+        .filter(value => value !== null);
+      const nameObservedTick = observedNameTicks.length ? Math.max(...observedNameTicks) : null;
       const killedAt = String(item?.at || '') || new Date(atMs).toISOString();
       store.players[key] = {
         key,
         userId,
         name,
+        nameUpdatedAt: killedAt,
+        nameObservedTick,
         killCount: Math.max(1, Number(existing?.killCount || 0) + 1),
         firstKilledAt: existing?.firstKilledAt || killedAt,
         lastKilledAt: killedAt,
@@ -405,6 +493,7 @@ function createEasyKillPlayerTracker(options = {}) {
     observeCombatEngagement,
     observeCombatShot,
     observeKillEvidence,
+    observePlayerNames,
     observeVisibleTargets,
     recordImmediateFailure,
     status

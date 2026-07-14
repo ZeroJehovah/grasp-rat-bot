@@ -66,7 +66,11 @@ const {
   singleCoinBaitMatchesCore,
   singleCoinBaitPolicyCore
 } = require('../../strategy/single-coin-bait');
-const { targetIsWhitelisted, targetWhitelistNameSet } = require('../../shared/target-whitelist');
+const {
+  targetIsWhitelisted,
+  targetWhitelistNameSet,
+  targetWhitelistUserIdSet
+} = require('../../shared/target-whitelist');
 const {
   createBrowserlessDecisionState,
   summarizeBrowserlessDecisionState
@@ -397,12 +401,19 @@ function hasFull5sStamina(entity, options = {}) {
 }
 
 function targetWhitelistFromOptions(options = {}) {
-  if (options.targetWhitelistNameSet instanceof Set) return options.targetWhitelistNameSet;
   if (options.targetWhitelist && typeof options.targetWhitelist === 'object') return options.targetWhitelist;
-  if (Array.isArray(options.targetWhitelistNames)) {
-    return targetWhitelistNameSet(options.targetWhitelistNames, options.targetWhitelistMaxNames ?? BROWSER_RUNTIME_DEFAULTS.targetWhitelistMaxNames);
-  }
-  return null;
+  const maxEntries = options.targetWhitelistMaxNames ?? BROWSER_RUNTIME_DEFAULTS.targetWhitelistMaxNames;
+  const nameSet = options.targetWhitelistNameSet instanceof Set
+    ? options.targetWhitelistNameSet
+    : (Array.isArray(options.targetWhitelistNames)
+        ? targetWhitelistNameSet(options.targetWhitelistNames, maxEntries)
+        : null);
+  const userIdSet = options.targetWhitelistUserIdSet instanceof Set
+    ? options.targetWhitelistUserIdSet
+    : (Array.isArray(options.targetWhitelistUserIds)
+        ? targetWhitelistUserIdSet(options.targetWhitelistUserIds, maxEntries)
+        : null);
+  return nameSet || userIdSet ? { nameSet, userIdSet } : null;
 }
 
 function isWhitelistedTargetForOptions(entity, options = {}) {
@@ -4176,6 +4187,7 @@ function reconcileEasyKillTracker(input, stateful = {}, options = {}) {
   callEasyKillPlayerTracker(options, 'expirePendingOutcomes', input.nowMs);
   callEasyKillPlayerTracker(options, 'observeVisibleTargets', input.visibleTargets || [], {
     atMs: input.nowMs,
+    tick: input.realtime?.tick,
     missingGraceMs: Math.max(2500, Number(options.enemyMissingHoldMs || 0)),
     reason: 'active-target-missing'
   });
