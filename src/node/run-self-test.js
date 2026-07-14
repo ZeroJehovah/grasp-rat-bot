@@ -6755,6 +6755,51 @@ async function runSelfTest() {
       want: 'profit-candidate|coin|6|snapshot|100|true|false'
     },
     {
+      name: 'browserless decision summary distinguishes unknown self drop from zero',
+      got: (() => {
+        const adapter = createBrowserlessDecisionAdapter({ userId: 7, controlMode: 'profit-live' });
+        const store = createBrowserlessStateStore({ userId: 7 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 50,
+          entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 100, y: 100, hp: 90 }],
+          bullets: []
+        }, { receivedAtMs: 1000 });
+        store.ingestFrame({
+          type: 'snapshot',
+          tick: 51,
+          entities: [{
+            entity_id: 1,
+            user_id: 7,
+            name: 'self',
+            x: 100,
+            y: 100,
+            hp: 90,
+            death_drop_coins: 1843
+          }],
+          bullets: [],
+          coin_drops: [],
+          messages: []
+        }, { receivedAtMs: 1100 });
+        const known = adapter.decide(store.getState(1200), { nowMs: 1200 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 52,
+          entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 100, y: 100, hp: 90 }],
+          bullets: []
+        }, { receivedAtMs: 7200 });
+        const unknown = adapter.decide(store.getState(7200), { nowMs: 7200 });
+        return [
+          known.input.self.drop,
+          known.input.self.dropKnown,
+          unknown.input.self.drop,
+          unknown.input.self.dropKnown,
+          unknown.input.dataGaps.includes('snapshot-fallback-blocked:snapshot-stale')
+        ].join('|');
+      })(),
+      want: '1843|true|0|false|true'
+    },
+    {
       name: 'browserless decision state survives consecutive decisions in one run',
       got: (() => {
         const adapter = createBrowserlessDecisionAdapter({ userId: 7, controlMode: 'non-combat-profit' });
@@ -18615,6 +18660,48 @@ async function runSelfTest() {
         ].join('|');
       }),
       want: 'true|true|2026-07-10T00:00:00.000Z|8|1500|1|8|1500|1|false|false|cycle-complete|2026-07-10T00:03:00.000Z|30000|120000|120000|8|1500|1|2026-07-10T00:02:00.000Z|cycle-complete|2026-07-10T00:04:00.000Z|75000'
+    },
+    {
+      name: 'browserless stats ignore transient unknown self drop during stale snapshot gap',
+      got: (() => {
+        const enteredAt = Date.parse('2026-07-14T16:00:21.844Z');
+        const beforeGapAt = Date.parse('2026-07-14T16:14:31.451Z');
+        const gapAt = Date.parse('2026-07-14T16:15:11.218Z');
+        const restoredAt = Date.parse('2026-07-14T16:15:23.496Z');
+        const state = {
+          session: { userId: 7, sessionToken: 'state-secret-token' },
+          runner: {
+            running: true,
+            mode: 'profit-live',
+            controlMode: 'profit-live',
+            currentAction: { kind: 'coin', reason: 'post-attack-drop-coin' }
+          },
+          current: {
+            self: { userId: 7, name: 'self', hp: 100, drop: 1843, dropKnown: true }
+          }
+        };
+        const decision = (at, drop, dropKnown) => ({
+          at: new Date(at).toISOString(),
+          input: {
+            self: { userId: 7, name: 'self', hp: 100, drop, dropKnown },
+            stamina: {},
+            selfKillEvidence: []
+          }
+        });
+        state.stats = browserlessStatsForDecision(state, decision(enteredAt, 1843, true), { nowMs: enteredAt });
+        state.stats = browserlessStatsForDecision(state, decision(beforeGapAt, 2149, true), { nowMs: beforeGapAt });
+        state.stats = browserlessStatsForDecision(state, decision(gapAt, 0, false), { nowMs: gapAt });
+        state.stats = browserlessStatsForDecision(state, decision(restoredAt, 2149, true), { nowMs: restoredAt });
+        const compact = buildCompactBrowserlessStatus(state, { nowMs: restoredAt });
+        return [
+          state.stats.currentSession.baseDrop,
+          state.stats.currentSession.lastDrop,
+          state.stats.currentSession.coinsGained,
+          compact.stats.currentSession.coinsGained,
+          compact.stats.today.coinsGained
+        ].join('|');
+      })(),
+      want: '1843|2149|306|612|612'
     },
     {
       name: 'browserless today stamina reconciles cross-session gaps from 1d remaining',

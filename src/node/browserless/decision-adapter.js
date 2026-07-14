@@ -1226,6 +1226,7 @@ function summarizeTarget(target) {
     hp: numberOrNull(target.hp),
     maxHp: numberOrNull(target.max_hp ?? target.maxHp),
     drop: entityDropValue(target),
+    dropKnown: entityDropKnown(target),
     stamina5s: staminaRemainingValue(target, '5s'),
     stamina5sLimit: staminaLimitForWindow(target, '5s'),
     stamina1h: staminaRemainingValue(target, '1h'),

@@ -406,6 +406,7 @@ function ensureBrowserlessStatsDay(stats, nowMs) {
 }
 
 function statsSelfDrop(self) {
+  if (self?.dropKnown === false) return null;
   return compactNumber(self?.drop ?? self?.death_drop_coins ?? self?.coinsGained);
 }
 
