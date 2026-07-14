@@ -377,7 +377,12 @@ function pickEngagedCombatTargetCore(self, combatTargets = [], entities = [], bu
     && distance <= attackRange
     && maxAgeMs > 0
     && ageMs <= maxAgeMs;
-  if (!isCombatEligibleThreat(raw, context) && !engagedRealtimeHold) {
+  const establishedEasyKillProfitHold = Boolean(
+    raw.easyKillProfitTarget === true
+      && raw.easyKillThreatExempt === true
+      && ['profit', 'engaged', 'reengage'].includes(String(engaged.originIntent || engaged.intent || ''))
+  );
+  if (!isCombatEligibleThreat(raw, context) && !engagedRealtimeHold && !establishedEasyKillProfitHold) {
     if (state && typeof state === 'object') state.combatTarget = null;
     return null;
   }

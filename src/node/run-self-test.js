@@ -11076,6 +11076,68 @@ async function runSelfTest() {
       want: '8|engaged|500|8|1000'
     },
     {
+      name: 'browserless easy-kill profit engagement survives attack-range overshoot',
+      got: (() => {
+        const stateful = {
+          combatTarget: {
+            id: 8,
+            at: 1500,
+            firstSeenAt: 1000,
+            lastInRangeAt: 1500,
+            hp: 55,
+            reason: 'combat-live-realtime',
+            intent: 'engaged',
+            originIntent: 'profit',
+            easyKillKnown: true,
+            easyKillThreatExempt: true
+          }
+        };
+        const combat = buildBrowserlessCombatDryRun({
+          userId: 7,
+          realtime: {
+            tick: 21456,
+            self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 9942 },
+            entities: [
+              { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 9942 },
+              {
+                entity_id: 2,
+                user_id: 8,
+                name: 'easy-runner',
+                x: 14640,
+                y: 0,
+                vx: 50,
+                vy: 0,
+                hp: 55,
+                current_join_mode: 'Active',
+                drop: 186,
+                easyKillKnown: true,
+                easyKillDamagedToday: false,
+                easyKillThreatExempt: true,
+                easyKillProfitTarget: true
+              }
+            ],
+            bullets: []
+          }
+        }, {
+          nowMs: 2000,
+          decisionState: stateful,
+          targetStickMs: 5000,
+          combatEngageStickMs: 30000,
+          combatEngageGraceMs: 30000,
+          combatAttackRange: 14500,
+          combatDisengageRange: 17000
+        });
+        return [
+          combat.target?.userId || '',
+          combat.target?.combatIntent || '',
+          combat.target?.distance || '',
+          Boolean(combat.target?.combatEngagement?.reengage),
+          stateful.combatTarget?.id || ''
+        ].join('|');
+      })(),
+      want: '8|reengage|14640|true|8'
+    },
+    {
       name: 'browserless combat summary exposes stable battle start time',
       got: (() => {
         const stateful = {
