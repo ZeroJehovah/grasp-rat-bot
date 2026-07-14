@@ -17562,19 +17562,20 @@ async function runSelfTest() {
       want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
     },
     {
-      name: 'browserless web panel rounds reconciled daily stamina to match remaining display',
+      name: 'browserless web panel rounds session and daily stamina spent consistently',
       got: (() => {
         const panelText = renderBrowserlessWebPanel();
         const panelScript = panelText.match(/<script>([\s\S]*?)<\/script>/)?.[1] || '';
         return [
-          panelScript.includes('const dailyStaminaUnit = v =>'),
+          panelScript.includes('const spentStaminaUnit = v =>'),
           panelScript.includes('Math.ceil(n / 1000)'),
-          panelScript.includes("['消耗体力', unit(currentSession.staminaSpentMs)]"),
-          panelScript.includes("['消耗体力', dailyStaminaUnit(todayStats.staminaSpentMs)]"),
+          panelScript.includes("['消耗体力', spentStaminaUnit(currentSession.staminaSpentMs)]"),
+          panelScript.includes("['消耗体力', spentStaminaUnit(todayStats.staminaSpentMs)]"),
+          Math.floor(1234567 / 1000) + 1 === Math.ceil(1234567 / 1000),
           Math.ceil(17069959 / 1000) + Math.floor(2930041 / 1000) === 20000
         ].join('|');
       })(),
-      want: 'true|true|true|true|true'
+      want: 'true|true|true|true|true|true'
     },
     {
       name: 'browserless web panel renders live battle card and offline exit reason',
