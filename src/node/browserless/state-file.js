@@ -881,7 +881,15 @@ function compactLoginPointSafetyDetail(loginPointSafety, normalized) {
       ? (detail.selfPresent === undefined ? null : Boolean(detail.selfPresent))
       : Boolean(summary.selfPresent)),
     nearestActive: compactSafetyEntity(detail.nearestActive
-      || (isolatePendingDetail ? null : directDetail.nearestActive))
+      || (isolatePendingDetail ? null : directDetail.nearestActive)),
+    nearestDamageActor: compactSafetyEntity(detail.nearestDamageActor
+      || (isolatePendingDetail ? null : directDetail.nearestDamageActor)),
+    nearestDangerous: compactSafetyEntity(detail.nearestDangerous
+      || (isolatePendingDetail ? null : directDetail.nearestDangerous)
+      || detail.nearestDamageActor
+      || detail.nearestActive),
+    damageActorNearbyCount: compactNumber(detail.damageActorNearbyCount),
+    dangerousNearbyCount: compactNumber(detail.dangerousNearbyCount)
   };
 }
 
@@ -1350,6 +1358,30 @@ function compactHighDropPlayers(value) {
   };
 }
 
+function compactEasyKillPlayers(value) {
+  if (!value || typeof value !== 'object') return null;
+  const players = Array.isArray(value.players) ? value.players : [];
+  return {
+    updatedAt: value.updatedAt || '',
+    p: players.map(player => {
+      const scoreValue = compactNumber(player?.score ?? player?.killScore ?? player?.killCount);
+      const rounded = scoreValue === null ? null : Math.round(scoreValue);
+      const score = rounded === null || rounded <= 0 ? null : Math.min(3, rounded);
+      return [compactString(player?.name, 96), score];
+    }).filter(row => row[0] && row[1] !== null).slice(0, 160)
+  };
+}
+
+function compactDailyDamagePlayers(value) {
+  if (!value || typeof value !== 'object') return null;
+  const players = Array.isArray(value.players) ? value.players : [];
+  return {
+    day: compactString(value.day, 10),
+    updatedAt: value.updatedAt || '',
+    p: players.map(player => compactString(player?.name, 96)).filter(Boolean).slice(0, 160)
+  };
+}
+
 function compactRun(run) {
   if (!run || typeof run !== 'object') return null;
   const canary = run.canary && typeof run.canary === 'object' ? run.canary : null;
@@ -1622,6 +1654,8 @@ function buildCompactBrowserlessStatus(state, config = {}) {
     battle: compactBattleStatus(normalized, game, action, decision, combat),
     nearby: compactNearby(current.decision?.input?.nearby),
     highDropPlayers: compactHighDropPlayers(normalized.highDropPlayers),
+    easyKillPlayers: compactEasyKillPlayers(normalized.easyKillPlayers),
+    dailyDamagePlayers: compactDailyDamagePlayers(normalized.dailyDamagePlayers),
     stats: compactBrowserlessStats(normalized, game, action, config, lastKnown),
     loginPointSafety: {
       ok: Boolean(normalized.loginPointSafety?.ok),

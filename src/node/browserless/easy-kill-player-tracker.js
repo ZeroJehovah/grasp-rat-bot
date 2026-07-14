@@ -3,7 +3,9 @@
 const fs = require('fs');
 const path = require('path');
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
+const INITIAL_SCORE = 1;
+const MAX_SCORE = 3;
 const DEFAULT_OUTCOME_GRACE_MS = 40000;
 const DEFAULT_PERSIST_INTERVAL_MS = 5000;
 
@@ -53,6 +55,12 @@ function playerKey(userId) {
   return id === null ? '' : `user:${id}`;
 }
 
+function normalizedScore(value, fallback = INITIAL_SCORE) {
+  const number = Number(value);
+  const score = Number.isFinite(number) ? Math.round(number) : fallback;
+  return Math.min(MAX_SCORE, Math.max(0, score));
+}
+
 function emptyStore() {
   return {
     schemaVersion: SCHEMA_VERSION,
@@ -66,12 +74,15 @@ function normalizePlayer(key, player) {
   if (!player || typeof player !== 'object') return null;
   const userId = targetUserId(player) ?? numberOrNull(String(key || '').replace(/^user:/, ''));
   if (userId === null) return null;
+  const score = normalizedScore(player.score ?? player.killScore ?? player.killCount, INITIAL_SCORE);
+  if (score <= 0) return null;
   return {
     key: playerKey(userId),
     userId,
     name: targetName(player, `#${userId}`),
     nameUpdatedAt: String(player.nameUpdatedAt || player.lastKilledAt || player.firstKilledAt || ''),
     nameObservedTick: numberOrNull(player.nameObservedTick ?? player.lastKillTick),
+    score,
     killCount: Math.max(1, Math.round(Number(player.killCount || 1))),
     firstKilledAt: String(player.firstKilledAt || player.lastKilledAt || ''),
     lastKilledAt: String(player.lastKilledAt || player.firstKilledAt || ''),
@@ -172,7 +183,7 @@ function createEasyKillPlayerTracker(options = {}) {
   function playerStatus() {
     return Object.values(store.players)
       .map(player => cloneJson(player))
-      .sort((a, b) => Number(b.killCount || 0) - Number(a.killCount || 0)
+      .sort((a, b) => Number(b.score || 0) - Number(a.score || 0)
         || String(b.lastKilledAt || '').localeCompare(String(a.lastKilledAt || ''))
         || String(a.name || '').localeCompare(String(b.name || '')));
   }
@@ -408,12 +419,15 @@ function createEasyKillPlayerTracker(options = {}) {
         .filter(value => value !== null);
       const nameObservedTick = observedNameTicks.length ? Math.max(...observedNameTicks) : null;
       const killedAt = String(item?.at || '') || new Date(atMs).toISOString();
+      const previousScore = existing ? normalizedScore(existing.score, INITIAL_SCORE) : 0;
+      const score = existing ? Math.min(MAX_SCORE, previousScore + 1) : INITIAL_SCORE;
       store.players[key] = {
         key,
         userId,
         name,
         nameUpdatedAt: killedAt,
         nameObservedTick,
+        score,
         killCount: Math.max(1, Number(existing?.killCount || 0) + 1),
         firstKilledAt: existing?.firstKilledAt || killedAt,
         lastKilledAt: killedAt,
@@ -428,6 +442,8 @@ function createEasyKillPlayerTracker(options = {}) {
         name,
         tick,
         added: !existing,
+        previousScore,
+        score,
         killCount: store.players[key].killCount
       };
       confirmed.push(event);
@@ -444,7 +460,10 @@ function createEasyKillPlayerTracker(options = {}) {
     for (const [key, engagement] of Object.entries(store.engagements)) {
       if (engagement.active || !(Number(engagement.outcomeDueAtMs || 0) > 0) || atMs < Number(engagement.outcomeDueAtMs)) continue;
       const existing = store.players[key] || null;
-      if (existing) delete store.players[key];
+      const previousScore = existing ? normalizedScore(existing.score, INITIAL_SCORE) : 0;
+      const score = Math.max(0, previousScore - 1);
+      if (existing && score > 0) existing.score = score;
+      if (existing && score <= 0) delete store.players[key];
       delete store.engagements[key];
       changed = true;
       const event = {
@@ -453,7 +472,10 @@ function createEasyKillPlayerTracker(options = {}) {
         userId: engagement.userId,
         name: engagement.name,
         reason: engagement.endReason || 'outcome-timeout',
-        removed: Boolean(existing)
+        previousScore,
+        score,
+        decremented: Boolean(existing),
+        removed: Boolean(existing && score <= 0)
       };
       expired.push(event);
       emit(event);
@@ -469,7 +491,10 @@ function createEasyKillPlayerTracker(options = {}) {
     const key = playerKey(userId);
     const existing = store.players[key] || null;
     const engagement = store.engagements[key] || null;
-    if (existing) delete store.players[key];
+    const previousScore = existing ? normalizedScore(existing.score, INITIAL_SCORE) : 0;
+    const score = Math.max(0, previousScore - 1);
+    if (existing && score > 0) existing.score = score;
+    if (existing && score <= 0) delete store.players[key];
     if (engagement) delete store.engagements[key];
     if (existing || engagement) persist(atMs);
     const event = {
@@ -478,7 +503,10 @@ function createEasyKillPlayerTracker(options = {}) {
       userId,
       name: targetName(target, existing?.name || engagement?.name || `#${userId}`),
       reason: String(reason || 'approach-stop-loss'),
-      removed: Boolean(existing),
+      previousScore,
+      score,
+      decremented: Boolean(existing),
+      removed: Boolean(existing && score <= 0),
       immediate: true
     };
     emit(event);
@@ -502,6 +530,8 @@ function createEasyKillPlayerTracker(options = {}) {
 
 module.exports = {
   DEFAULT_OUTCOME_GRACE_MS,
+  INITIAL_SCORE,
+  MAX_SCORE,
   createEasyKillPlayerTracker,
   playerKey,
   targetUserId

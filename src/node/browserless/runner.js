@@ -24,6 +24,7 @@ const {
   createSnapshotGapPoller
 } = require('./high-drop-player-tracker');
 const { createEasyKillPlayerTracker } = require('./easy-kill-player-tracker');
+const { createDailyDamagePlayerTracker } = require('./daily-damage-player-tracker');
 const {
   BROWSER_RUNTIME_DEFAULTS,
   decisionStatePatch
@@ -612,6 +613,11 @@ async function runBrowserlessRunner(config, deps = {}) {
     now,
     onEvent: event => logStore.append('runner', 'easy-kill-player-outcome', event)
   });
+  const damagePlayerTracker = deps.damagePlayerTracker || createDailyDamagePlayerTracker({
+    file: path.join(config.dataDir, 'daily-damage-players.json'),
+    now,
+    onEvent: event => logStore.append('runner', 'daily-damage-player', event)
+  });
   const easyKillPlayerStatus = () => {
     easyKillPlayerTracker.expirePendingOutcomes?.(now());
     return easyKillPlayerTracker.status();
@@ -620,6 +626,7 @@ async function runBrowserlessRunner(config, deps = {}) {
   const observeSnapshotPayload = (payload, detail = {}) => {
     const observedAtMs = Number(detail.observedAtMs ?? now());
     let easyKillNameResult = null;
+    let damageNameResult = null;
     try {
       easyKillNameResult = easyKillPlayerTracker.observePlayerNames?.(payload?.entities || [], {
         atMs: observedAtMs,
@@ -629,6 +636,19 @@ async function runBrowserlessRunner(config, deps = {}) {
     } catch (err) {
       recordSupervisorError(err, { operation: 'easy-kill-player-name-observe', source: detail.source || 'snapshot' });
       logStore.append('runner', 'easy-kill-player-name-observation-error', {
+        source: detail.source || 'snapshot',
+        error: errorMessage(err)
+      });
+    }
+    try {
+      damageNameResult = damagePlayerTracker.observePlayerNames?.(payload?.entities || [], {
+        atMs: observedAtMs,
+        source: detail.source || 'snapshot',
+        tick: payload?.tick
+      }) || null;
+    } catch (err) {
+      recordSupervisorError(err, { operation: 'daily-damage-player-name-observe', source: detail.source || 'snapshot' });
+      logStore.append('runner', 'daily-damage-player-name-observation-error', {
         source: detail.source || 'snapshot',
         error: errorMessage(err)
       });
@@ -650,7 +670,8 @@ async function runBrowserlessRunner(config, deps = {}) {
       }
       return {
         ...result,
-        easyKillNamesUpdated: Number(easyKillNameResult?.updated || 0)
+        easyKillNamesUpdated: Number(easyKillNameResult?.updated || 0),
+        damageNamesUpdated: Number(damageNameResult?.updated || 0)
       };
     } catch (err) {
       recordSupervisorError(err, { operation: 'high-drop-player-observe', source: detail.source || 'snapshot' });
@@ -895,7 +916,8 @@ async function runBrowserlessRunner(config, deps = {}) {
             sleep,
             fetchWithTimeout: sourceIpController.fetchWithTimeout,
             onSnapshotPayload: observeSnapshotPayload,
-            onSnapshotSafety: recordSnapshotSafetyProgress
+            onSnapshotSafety: recordSnapshotSafetyProgress,
+            damagePlayerTracker
           }
         );
         recordSnapshotSafetyProgress(preparedSnapshotSafety);
@@ -1110,7 +1132,8 @@ async function runBrowserlessRunner(config, deps = {}) {
         getStatus: () => ({
           ...buildPublicBrowserlessStatus(readBrowserlessStateFile(stateFile), config),
           highDropPlayers: highDropPlayerTracker.status(now()),
-          easyKillPlayers: easyKillPlayerStatus()
+          easyKillPlayers: easyKillPlayerStatus(),
+          dailyDamagePlayers: damagePlayerTracker.status(now())
         }),
         onStop: async () => {
           const event = safetyController.requestStop('explicit-stop', { source: 'status-api' });
@@ -1216,7 +1239,8 @@ async function runBrowserlessRunner(config, deps = {}) {
           now,
           sleep,
           fetchWithTimeout: sourceIpController.fetchWithTimeout,
-          onSnapshotPayload: observeSnapshotPayload
+          onSnapshotPayload: observeSnapshotPayload,
+          damagePlayerTracker
         });
         const selfPresent = snapshotSafetyAllowsImmediateResume(probe);
         logStore.append('runner', 'runner-persisted-wait-self-probe', {
@@ -1418,6 +1442,7 @@ async function runBrowserlessRunner(config, deps = {}) {
           now,
           persistedState: readBrowserlessStateFile(stateFile),
           safetyController,
+          damagePlayerTracker,
           allowMissingLoginPointBootstrap: true,
           onSnapshotSafety: recordSnapshotSafetyProgress,
           onSnapshotPayload: observeSnapshotPayload,
@@ -1486,6 +1511,7 @@ async function runBrowserlessRunner(config, deps = {}) {
         persistedState: stateBeforeCanary,
         safetyController,
         easyKillPlayerTracker,
+        damagePlayerTracker,
         bypassPreLoginSafetyReason,
         precheckedSnapshotSafety,
         onSnapshotSafety: recordSnapshotSafetyProgress,

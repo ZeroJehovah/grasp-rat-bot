@@ -583,6 +583,22 @@ function isActiveEntity(entity) {
   return mode === 'active';
 }
 
+function entityUserId(entity) {
+  const value = entity?.user_id ?? entity?.userId;
+  if (value === null || value === undefined || value === '') return null;
+  return Number.isFinite(Number(value)) ? Number(value) : null;
+}
+
+function userIdSet(values) {
+  const output = new Set();
+  const list = values instanceof Set ? Array.from(values) : (Array.isArray(values) ? values : []);
+  for (const value of list) {
+    const userId = Number(value?.userId ?? value?.user_id ?? value);
+    if (Number.isFinite(userId)) output.add(String(userId));
+  }
+  return output;
+}
+
 function summarizeSnapshotFreshness(payload, latestKnownTick = 0, options = {}) {
   const tick = Number(payload?.tick);
   const latest = Number(latestKnownTick || 0);
@@ -618,6 +634,7 @@ function summarizeSnapshotFreshness(payload, latestKnownTick = 0, options = {}) 
 
 function summarizeSnapshotSafety(payload, loginPoint, options = {}) {
   const entities = Array.isArray(payload?.entities) ? payload.entities : [];
+  const damageActorUserIds = userIdSet(options.damageActorUserIds ?? options.dangerousUserIds);
   const point = loginPoint
     && Number.isFinite(Number(loginPoint.x))
     && Number.isFinite(Number(loginPoint.y))
@@ -642,9 +659,12 @@ function summarizeSnapshotSafety(payload, loginPoint, options = {}) {
   const radius = healthy ? healthyRadius : lowRadius;
   const nearby = [];
   const activeNearby = [];
+  const damageActorNearby = [];
+  const dangerousNearby = [];
   for (const entity of entities) {
     if (!entity || typeof entity !== 'object') continue;
-    if (Number(entity.user_id) === Number(options.userId || 0)) continue;
+    const userId = entityUserId(entity);
+    if (userId !== null && userId === Number(options.userId || 0)) continue;
     const x = Number(entity.x);
     const y = Number(entity.y);
     if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
@@ -655,19 +675,28 @@ function summarizeSnapshotSafety(payload, loginPoint, options = {}) {
       ...base,
       distance: Math.round(distance),
       active: isActiveEntity(entity),
+      knownDamageActor: userId !== null && damageActorUserIds.has(String(userId)),
       alive: isAliveEntity(entity)
     };
     nearby.push(item);
     if (item.active && item.alive) activeNearby.push(item);
+    if (item.knownDamageActor && item.alive) damageActorNearby.push(item);
+    if ((item.active || item.knownDamageActor) && item.alive) dangerousNearby.push(item);
   }
   activeNearby.sort((a, b) => a.distance - b.distance);
+  damageActorNearby.sort((a, b) => a.distance - b.distance);
+  dangerousNearby.sort((a, b) => a.distance - b.distance);
   nearby.sort((a, b) => a.distance - b.distance);
   const fresh = options.freshness || summarizeSnapshotFreshness(payload, options.latestKnownTick);
-  const activeSafe = activeNearby.length === 0;
-  const ok = Boolean(fresh.ok && activeSafe);
+  const dangerousSafe = dangerousNearby.length === 0;
+  const ok = Boolean(fresh.ok && dangerousSafe);
   return {
     ok,
-    reason: fresh.ok ? (activeSafe ? 'safe' : 'active-near-login-point') : fresh.reason,
+    reason: fresh.ok
+      ? (dangerousSafe
+          ? 'safe'
+          : (damageActorNearby.length ? 'damage-actor-near-login-point' : 'active-near-login-point'))
+      : fresh.reason,
     freshness: fresh,
     point,
     radius,
@@ -675,7 +704,11 @@ function summarizeSnapshotSafety(payload, loginPoint, options = {}) {
     entityCount: entities.length,
     nearbyCount: nearby.length,
     activeNearbyCount: activeNearby.length,
+    damageActorNearbyCount: damageActorNearby.length,
+    dangerousNearbyCount: dangerousNearby.length,
     nearestActive: activeNearby[0] || null,
+    nearestDamageActor: damageActorNearby[0] || null,
+    nearestDangerous: dangerousNearby[0] || null,
     nearest: nearby[0] || null
   };
 }

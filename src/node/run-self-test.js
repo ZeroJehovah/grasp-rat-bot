@@ -138,6 +138,9 @@ const {
   createEasyKillPlayerTracker
 } = require('./browserless/easy-kill-player-tracker');
 const {
+  createDailyDamagePlayerTracker
+} = require('./browserless/daily-damage-player-tracker');
+const {
   summarizeBrowserlessLogDay,
   writeBrowserlessLogSummary
 } = require('../../scripts/browserless-log-summary');
@@ -5605,6 +5608,80 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'true|false|stale-snapshot-tick|stale-snapshot-tick|1'
+    },
+    {
+      name: 'browserless snapshot safety blocks passive same-day damage actors by stable user id',
+      got: (() => {
+        const payload = {
+          type: 'snapshot',
+          tick: 101,
+          entities: [
+            { user_id: 8, name: 'known-damager', x: 100, y: 0, current_join_mode: 'Passive', life: 'Alive' }
+          ],
+          bullets: [],
+          coin_drops: [],
+          messages: []
+        };
+        const options = {
+          userId: 7,
+          loginPoint: { x: 0, y: 0, hp: 100, source: 'test' },
+          latestKnownTick: 100,
+          healthyHpThreshold: 80,
+          healthyRadius: 17000,
+          lowRadius: 30000
+        };
+        const known = summarizeSnapshotPayload(payload, { ...options, damageActorUserIds: [8] });
+        const unknown = summarizeSnapshotPayload(payload, options);
+        return [
+          known.safety.ok,
+          known.safety.reason,
+          known.safety.activeNearbyCount,
+          known.safety.damageActorNearbyCount,
+          known.safety.nearestDangerous?.user_id,
+          known.safety.nearestDangerous?.knownDamageActor,
+          unknown.safety.ok,
+          unknown.safety.reason
+        ].join('|');
+      })(),
+      want: 'false|damage-actor-near-login-point|0|1|8|true|true|safe'
+    },
+    {
+      name: 'browserless prelogin safety consumes the persisted daily damage tracker ids',
+      got: (async () => {
+        const nowMs = Date.parse('2026-07-14T01:00:00.000Z');
+        const result = await runPreLoginSnapshotSafety({
+          gameOrigin: 'https://example.test',
+          snapshotPath: '/snapshot',
+          userId: 7,
+          sessionToken: 'secret',
+          httpTimeoutMs: 1000,
+          loginPointSafetySuccessRequired: 1,
+          loginPointSafetyProbeIntervalMs: 0
+        }, {
+          loginPointSafety: { point: { x: 0, y: 0, hp: 100, source: 'test' } }
+        }, {
+          now: () => nowMs,
+          damagePlayerTracker: { status: () => ({ players: [{ userId: 8, name: 'known-damager' }] }) },
+          fetchWithTimeout: async () => fakeResponseForTest({
+            status: 200,
+            body: {
+              type: 'snapshot',
+              tick: 101,
+              entities: [{ user_id: 8, name: 'known-damager', x: 100, y: 0, current_join_mode: 'Passive', life: 'Alive' }],
+              bullets: [],
+              coin_drops: [],
+              messages: []
+            }
+          })
+        });
+        return [
+          result.ok,
+          result.reason,
+          result.response.summary.safety.damageActorNearbyCount,
+          result.response.summary.safety.nearestDangerous?.user_id
+        ].join('|');
+      })(),
+      want: 'false|damage-actor-near-login-point|1|8'
     },
     {
       name: 'browserless confirmed leave quarantines cached self and requires a newer tick',
@@ -17683,6 +17760,49 @@ async function runSelfTest() {
       want: '2026-07-14|ws|alice-renamed,520,700,600,8|bob,500,500,450,9|false|true|true|true|true|true|true'
     },
     {
+      name: 'browserless compact status and web panel expose id-backed score and daily damage name lists',
+      got: (() => {
+        const compact = buildCompactBrowserlessStatus({
+          easyKillPlayers: {
+            file: '/tmp/easy-kill-should-not-leak.json',
+            players: [
+              { userId: 8, name: 'score-one', score: 1 },
+              { userId: 9, name: 'score-two', score: 2 },
+              { userId: 10, name: 'score-three', score: 3 }
+            ]
+          },
+          dailyDamagePlayers: {
+            day: '2026-07-14',
+            file: '/tmp/damage-should-not-leak.json',
+            players: [{ userId: 11, name: 'damager' }]
+          }
+        });
+        const panelText = renderBrowserlessWebPanel();
+        const panelScript = panelText.match(/<script>([\s\S]*?)<\/script>/)?.[1] || '';
+        return [
+          compact.easyKillPlayers.p.map(item => item.join(',')).join(';'),
+          compact.dailyDamagePlayers.day,
+          compact.dailyDamagePlayers.p.join(','),
+          JSON.stringify(compact.easyKillPlayers).includes('userId'),
+          JSON.stringify(compact.dailyDamagePlayers).includes('userId'),
+          JSON.stringify(compact).includes('should-not-leak'),
+          /<h2>玩家记录<\/h2>/.test(panelText),
+          /<h3>近期击杀缓冲<\/h3>/.test(panelText),
+          /<h3>今日伤害玩家<\/h3>/.test(panelText),
+          /id="easyKillPlayers"/.test(panelText),
+          /id="dailyDamagePlayers"/.test(panelText),
+          /\.easy-kill-score-1\{/.test(panelText),
+          /\.easy-kill-score-2\{/.test(panelText),
+          /\.easy-kill-score-3\{/.test(panelText),
+          /function renderPlayerMemory/.test(panelScript),
+          panelScript.includes("createPlayerMemoryName(item?.[0], 'easy-kill-score-' + score)"),
+          panelText.indexOf('id="highDropPlayers"') < panelText.indexOf('id="easyKillPlayers"'),
+          panelText.indexOf('id="easyKillPlayers"') < panelText.indexOf('id="nearbyGrid"')
+        ].join('|');
+      })(),
+      want: 'score-one,1;score-two,2;score-three,3|2026-07-14|damager|false|false|false|true|true|true|true|true|true|true|true|true|true|true|true'
+    },
+    {
       name: 'browserless web panel renders target bars and svg target icons',
       got: (() => {
         const panelText = renderBrowserlessWebPanel();
@@ -24356,6 +24476,95 @@ async function runSelfTest() {
 	        }
 	      })(),
 	      want: '1|0|1|8|new-name|8|new-name'
+	    },
+	    {
+	      name: 'browserless easy-kill tracker caps score at three and decrements failures to removal',
+	      got: (() => {
+	        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'grasp-rat-easy-kill-score-'));
+	        try {
+	          const tracker = createEasyKillPlayerTracker({ file: path.join(dir, 'easy-kill-players.json'), now: () => 0 });
+	          const confirmKill = (atMs, tick) => {
+	            tracker.observeCombatEngagement({ userId: 8, name: 'buffered', active: true }, { atMs, tick });
+	            tracker.observeKillEvidence([{ targetUserId: 8, targetName: 'buffered', tick: tick + 1 }], { atMs: atMs + 1 });
+	            return tracker.status().players[0]?.score ?? 0;
+	          };
+	          const scores = [
+	            confirmKill(100, 10),
+	            confirmKill(200, 20),
+	            confirmKill(300, 30),
+	            confirmKill(400, 40)
+	          ];
+	          const capped = tracker.status();
+	          tracker.observeCombatEngagement({ userId: 8, name: 'buffered', active: true }, { atMs: 500, tick: 50 });
+	          tracker.finishEngagement(8, 'combat-exit', { atMs: 600, outcomeGraceMs: 0 });
+	          tracker.expirePendingOutcomes(600);
+	          const afterCombatFailure = tracker.status().players[0]?.score ?? 0;
+	          tracker.recordImmediateFailure({ userId: 8, name: 'buffered' }, 'approach-no-progress', { atMs: 700 });
+	          const afterApproachFailure = tracker.status().players[0]?.score ?? 0;
+	          tracker.recordImmediateFailure({ userId: 8, name: 'buffered' }, 'approach-no-progress', { atMs: 800 });
+	          const removed = tracker.status();
+	          return [
+	            scores.join(','),
+	            capped.players[0]?.score,
+	            capped.players[0]?.killCount,
+	            afterCombatFailure,
+	            afterApproachFailure,
+	            removed.playerCount
+	          ].join('|');
+	        } finally {
+	          fs.rmSync(dir, { recursive: true, force: true });
+	        }
+	      })(),
+	      want: '1,2,3,3|3|4|2|1|0'
+	    },
+	    {
+	      name: 'browserless daily damage tracker records stable player ids and resets on UTC+8 day change',
+	      got: (() => {
+	        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'grasp-rat-daily-damage-'));
+	        const baseMs = Date.parse('2026-07-14T01:00:00.000Z');
+	        try {
+	          const file = path.join(dir, 'daily-damage-players.json');
+	          const tracker = createDailyDamagePlayerTracker({ file, now: () => baseMs });
+	          const state = (hp, tick, bullets = []) => ({
+	            userId: 7,
+	            realtime: {
+	              tick,
+	              self: { user_id: 7, name: 'self', x: 0, y: 0, hp },
+	              entities: [
+	                { user_id: 7, name: 'self', x: 0, y: 0, hp },
+	                { user_id: 8, name: 'old-attacker', x: 1000, y: 0, hp: 100, firing: true }
+	              ],
+	              bullets
+	            }
+	          });
+	          tracker.observeDecision(state(100, 10), { band: 'wait', action: { band: 'wait' } }, { atMs: baseMs, tick: 10 });
+	          const observed = tracker.observeDecision(state(88, 11, [{ owner_user_id: 8 }]), {
+	            band: 'combat',
+	            action: { band: 'combat', kind: 'combat-live', target: { userId: 8, name: 'old-attacker' } }
+	          }, { atMs: baseMs + 1000, tick: 11 });
+	          tracker.observePlayerNames([{ user_id: 8, name: 'renamed-attacker' }], {
+	            atMs: baseMs + 2000,
+	            tick: 12,
+	            source: 'snapshot'
+	          });
+	          const current = tracker.status(baseMs + 2000);
+	          const stored = JSON.parse(fs.readFileSync(file, 'utf8'));
+	          const nextDay = tracker.status(baseMs + 24 * 60 * 60 * 1000);
+	          return [
+	            observed.recorded,
+	            current.day,
+	            current.playerCount,
+	            current.players[0]?.userId,
+	            current.players[0]?.name,
+	            current.players[0]?.totalHpLost,
+	            Object.keys(stored.players).join(','),
+	            nextDay.playerCount
+	          ].join('|');
+	        } finally {
+	          fs.rmSync(dir, { recursive: true, force: true });
+	        }
+	      })(),
+	      want: 'true|2026-07-14|1|8|renamed-attacker|12|user:8|0'
 	    },
 	    {
 	      name: 'browserless known easy active player competes as distance and shot-cost ROI profit',

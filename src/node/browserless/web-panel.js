@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.14.5';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.14.6';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function renderBrowserlessWebPanel() {
@@ -85,6 +85,16 @@ function renderBrowserlessWebPanel() {
     .high-drop-head{color:var(--muted);font-size:11px;font-weight:700}
     .high-drop-cell{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     .high-drop-values{color:var(--coin);font-variant-numeric:tabular-nums}
+    .player-memory-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;align-items:start}
+    .player-memory-pane{min-width:0}
+    .player-memory-pane+.player-memory-pane{border-left:1px solid var(--line);padding-left:10px}
+    .player-memory-list{display:flex;flex-wrap:wrap;gap:7px;min-height:28px;align-items:flex-start}
+    .player-memory-name{display:inline-flex;align-items:center;max-width:100%;min-height:28px;padding:4px 9px;border:1px solid var(--line);border-radius:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .player-memory-empty{color:var(--muted);background:var(--panel2)}
+    .easy-kill-score-1{color:#86efac;background:rgba(34,197,94,.12);border-color:rgba(74,222,128,.38)}
+    .easy-kill-score-2{color:#ecfdf5;background:rgba(22,163,74,.42);border-color:rgba(74,222,128,.78)}
+    .easy-kill-score-3{color:#fff;background:#15803d;border-color:#4ade80;box-shadow:inset 0 0 0 1px rgba(255,255,255,.16)}
+    .damage-player-name{color:#fecdd3;background:rgba(251,113,133,.14);border-color:rgba(251,113,133,.46)}
     .nearby-cell{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     .distance-badge{font-variant-numeric:tabular-nums}
     .range-attack{color:var(--green)}
@@ -101,7 +111,7 @@ function renderBrowserlessWebPanel() {
     .target-name-text{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     .target-icon{display:inline-block;width:16px;height:16px;flex:0 0 16px;align-self:center;margin-right:5px;overflow:visible;vertical-align:middle;transform:translateY(1px);color:var(--target-color);fill:currentColor}
     @media (max-width:760px){.layout{grid-template-columns:1fr}.stats-grid{grid-template-columns:1fr}}
-    @media (max-width:600px){.nearby-combined{grid-template-columns:1fr}.nearby-players-pane{border-left:0;border-top:1px solid var(--line);padding-left:0;padding-top:10px}}
+    @media (max-width:600px){.nearby-combined,.player-memory-grid{grid-template-columns:1fr}.nearby-players-pane,.player-memory-pane+.player-memory-pane{border-left:0;border-top:1px solid var(--line);padding-left:0;padding-top:10px}}
     @media (max-width:520px){.player-row{grid-template-columns:minmax(112px,2fr) minmax(34px,.5fr) minmax(38px,.55fr) minmax(36px,.5fr) minmax(44px,.6fr);gap:4px}.battle-fighters{grid-template-columns:minmax(0,1fr) 32px minmax(0,1fr);gap:5px}.fighter{padding:7px}.fighter-head{display:block}.fighter.enemy .fighter-head{display:block;text-align:right}.battle-meta{gap:4px;padding:6px 4px}.battle-meta strong{font-size:12px}}
     @media (max-width:520px){main{padding:10px}header{align-items:flex-start;flex-direction:column}}
   </style>
@@ -192,6 +202,19 @@ function renderBrowserlessWebPanel() {
         <section>
           <h2>今日高收益玩家</h2>
           <div id="highDropPlayers" class="high-drop-list"></div>
+        </section>
+        <section>
+          <h2>玩家记录</h2>
+          <div class="player-memory-grid">
+            <div class="player-memory-pane">
+              <h3>近期击杀缓冲</h3>
+              <div id="easyKillPlayers" class="player-memory-list"></div>
+            </div>
+            <div class="player-memory-pane">
+              <h3>今日伤害玩家</h3>
+              <div id="dailyDamagePlayers" class="player-memory-list"></div>
+            </div>
+          </div>
         </section>
         <section id="nearbyGrid" class="nearby-panel" hidden>
           <h2>附近信息</h2>
@@ -582,6 +605,7 @@ function renderBrowserlessWebPanel() {
       'auth-token-invalid': '登录信息失效，需要重新授权',
       'unsafe-login-point': '登录点不安全',
       'snapshot safety not confirmed: active-near-login-point': '登录点附近有危险玩家，暂不进入',
+      'snapshot safety not confirmed: damage-actor-near-login-point': '今日伤害过我的玩家在登录点附近，暂不进入',
       'snapshot-safety-streak-pending': '登录点已安全，等待连续确认',
       'snapshot-safety-streak-missing': '缺少登录点安全结果',
       'missing-manual-session': '等待登录信息',
@@ -592,6 +616,7 @@ function renderBrowserlessWebPanel() {
       fresh: '快照已更新',
       safe: '安全',
       'active-near-login-point': '登录点附近有危险玩家',
+      'damage-actor-near-login-point': '今日伤害过我的玩家在登录点附近',
       'self-present-reentry': '已经在游戏中，直接连接',
       'cycle-complete': '本轮结束，等待下一轮',
       'ws-closed': '连接断开，准备重连',
@@ -1246,6 +1271,39 @@ function renderBrowserlessWebPanel() {
       }
       node.replaceChildren(fragment);
     }
+    function createPlayerMemoryName(name, className = '') {
+      const node = document.createElement('span');
+      node.className = ['player-memory-name', className].filter(Boolean).join(' ');
+      node.textContent = value(name);
+      return node;
+    }
+    function renderPlayerMemory(status) {
+      const easyNode = document.getElementById('easyKillPlayers');
+      const damageNode = document.getElementById('dailyDamagePlayers');
+      if (easyNode) {
+        const items = Array.isArray(status.easyKillPlayers?.p) ? status.easyKillPlayers.p : [];
+        const fragment = document.createDocumentFragment();
+        if (!items.length) {
+          fragment.appendChild(createPlayerMemoryName('无', 'player-memory-empty'));
+        } else {
+          for (const item of items) {
+            const score = Math.min(3, Math.max(1, Math.round(number(item?.[1]) || 1)));
+            fragment.appendChild(createPlayerMemoryName(item?.[0], 'easy-kill-score-' + score));
+          }
+        }
+        easyNode.replaceChildren(fragment);
+      }
+      if (damageNode) {
+        const items = Array.isArray(status.dailyDamagePlayers?.p) ? status.dailyDamagePlayers.p : [];
+        const fragment = document.createDocumentFragment();
+        if (!items.length) {
+          fragment.appendChild(createPlayerMemoryName('无', 'player-memory-empty'));
+        } else {
+          for (const item of items) fragment.appendChild(createPlayerMemoryName(Array.isArray(item) ? item?.[0] : item, 'damage-player-name'));
+        }
+        damageNode.replaceChildren(fragment);
+      }
+    }
     function updateNearbyPanels(status) {
       const panel = document.getElementById('nearbyGrid');
       if (!panel) return;
@@ -1413,7 +1471,7 @@ function renderBrowserlessWebPanel() {
         addRow(rowsOut, reentry ? '连接状态' : '登录点', loginPointText(status), false, loginPointAttrs(status));
         addRow(rowsOut, reentry ? '当前坐标' : '登录点坐标', pointCoordText(status.loginPointSafety?.point));
         addRow(rowsOut, '不安全原因', reentry ? '--' : unsafeReasonText(status));
-        addRow(rowsOut, '附近危险', reentry ? '--' : (loginDisplay.state === 'safe' ? '--' : targetLabel(status.loginPointSafety?.detail?.nearestActive)));
+        addRow(rowsOut, '附近危险', reentry ? '--' : (loginDisplay.state === 'safe' ? '--' : targetLabel(status.loginPointSafety?.detail?.nearestDangerous || status.loginPointSafety?.detail?.nearestDamageActor || status.loginPointSafety?.detail?.nearestActive)));
         addRow(rowsOut, '保持离线', offlineBlockerText(status), false, status.stats?.offline?.blocker ? classAttrs('warn') : null);
         addRow(rowsOut, reentry ? '状态确认时间' : '检查时间', fullStamp(status.loginPointSafety?.checkedAt || status.loginPointSafety?.detail?.checkedAt));
       }
@@ -1528,6 +1586,7 @@ function renderBrowserlessWebPanel() {
       updateBattlePanel(s);
       updateNearbyPanels(s);
       renderHighDropPlayers(s);
+      renderPlayerMemory(s);
       const roleSelf = s.game?.inGame ? s.self : (s.lastKnown?.self || s.self);
       const roleStamina = s.game?.inGame ? s.stamina : (s.lastKnown?.stamina || s.stamina);
       const offlineRole = !s.game?.inGame && Boolean(s.lastKnown);

@@ -69,6 +69,28 @@ function errorMessage(error) {
   return error?.message || String(error || 'unknown error');
 }
 
+function snapshotSafetyDamageActorUserIds(options = {}, atMs = Date.now()) {
+  const ids = new Set();
+  const explicit = options.damageActorUserIds instanceof Set
+    ? Array.from(options.damageActorUserIds)
+    : (Array.isArray(options.damageActorUserIds) ? options.damageActorUserIds : []);
+  for (const value of explicit) {
+    const userId = Number(value?.userId ?? value?.user_id ?? value);
+    if (Number.isFinite(userId)) ids.add(userId);
+  }
+  const tracker = options.damagePlayerTracker;
+  if (tracker && typeof tracker.status === 'function') {
+    try {
+      const status = tracker.status(atMs);
+      for (const player of status?.players || []) {
+        const userId = Number(player?.userId ?? player?.user_id);
+        if (Number.isFinite(userId)) ids.add(userId);
+      }
+    } catch (_) {}
+  }
+  return Array.from(ids);
+}
+
 function canaryLeaveConfirmed(canary) {
   return Boolean(canary?.leave?.ok || canary?.safety?.exit?.leave?.ok);
 }
@@ -205,6 +227,7 @@ async function runSinglePreLoginSnapshotSafetyProbe(config, state, deps = {}, de
   }
   const runtimeDefaults = buildBrowserlessRuntimeDefaults(config);
   const observedAtMs = typeof deps.now === 'function' ? deps.now() : Date.now();
+  const damageActorUserIds = snapshotSafetyDamageActorUserIds(deps, observedAtMs);
   const confirmedLeave = confirmedLeaveSnapshotGuard(state, observedAtMs);
   const ordinaryLatestKnownTick = Number(state?.frameAges?.latestKnownTick || state?.latestKnownTick || 0);
   const latestKnownTick = Math.max(
@@ -218,7 +241,8 @@ async function runSinglePreLoginSnapshotSafetyProbe(config, state, deps = {}, de
     requireTickAdvance: Boolean(confirmedLeave?.lastRealtimeTick),
     healthyHpThreshold: config.loginPointSafetyHealthyHpThreshold ?? runtimeDefaults.loginPointSafetyHealthyHpThreshold,
     healthyRadius: config.loginPointSafetyHealthyRadius ?? runtimeDefaults.loginPointSafetyHealthyRadius,
-    lowRadius: config.loginPointSafetyRadius ?? runtimeDefaults.loginPointSafetyRadius
+    lowRadius: config.loginPointSafetyRadius ?? runtimeDefaults.loginPointSafetyRadius,
+    damageActorUserIds
   });
   const checkedAt = new Date(typeof deps.now === 'function' ? deps.now() : Date.now()).toISOString();
   const progress = {
@@ -445,6 +469,12 @@ async function runReadOnlyCanary(config, options = {}) {
     ? options.sleep
     : ms => new Promise(resolve => setTimeout(resolve, ms));
   const logStore = options.logStore || null;
+  const damagePlayerTracker = options.damagePlayerTracker && typeof options.damagePlayerTracker === 'object'
+    ? options.damagePlayerTracker
+    : null;
+  try {
+    damagePlayerTracker?.resetObservation?.();
+  } catch (_) {}
   const controlMode = config.controlMode || (config.readOnly === false ? 'movement-only' : 'read-only');
   const combatLiveEnabled = (controlMode === 'combat-live' || controlMode === 'profit-live') && config.combatEnabled === true;
   const actionEnabled = controlMode === 'movement-only' || controlMode === 'non-combat-profit' || controlMode === 'profit-live' || combatLiveEnabled;
@@ -813,6 +843,17 @@ async function runReadOnlyCanary(config, options = {}) {
             lastDecisionAtMs = atMs;
             logDecision(summary);
             result.decisions.loggedCount += 1;
+            if (damagePlayerTracker && typeof damagePlayerTracker.observeDecision === 'function') {
+              try {
+                damagePlayerTracker.observeDecision(currentState, decision, {
+                  atMs,
+                  tick: currentState?.realtime?.tick,
+                  source: 'realtime-decision'
+                });
+              } catch (err) {
+                log('canary-damage-player-observation-error', { error: errorMessage(err) });
+              }
+            }
             if (controlMode === 'combat-dry-run' || controlMode === 'combat-live' || combatLiveEnabled) {
               logCombat(summary.combat || {});
             }
