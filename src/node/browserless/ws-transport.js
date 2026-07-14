@@ -4,6 +4,7 @@ const DEFAULT_GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
 const DEFAULT_WS_PATH = '/ws';
 const DEFAULT_WS_EXTRA_QUERY = 'compress=gzip%2Cdeflate';
 const DEFAULT_CONNECT_TIMEOUT_MS = 10000;
+const MAX_CHAT_TEXT_LENGTH = 240;
 
 let cachedWebSocketRuntime = null;
 
@@ -94,6 +95,26 @@ function createWebSocket(runtime, wsUrl, options = {}) {
   });
 }
 
+function normalizeChatText(value) {
+  const text = String(value ?? '').trim();
+  if (!text) {
+    const error = new Error('chat message is empty');
+    error.code = 'chat-empty';
+    throw error;
+  }
+  if (/[\r\n\0]/.test(text)) {
+    const error = new Error('chat message contains a control character');
+    error.code = 'chat-control-character';
+    throw error;
+  }
+  if (text.length > MAX_CHAT_TEXT_LENGTH) {
+    const error = new Error(`chat message exceeds ${MAX_CHAT_TEXT_LENGTH} characters`);
+    error.code = 'chat-too-long';
+    throw error;
+  }
+  return text;
+}
+
 function createTransportHandle(ws, runtime, wsUrl, hooks = {}) {
   const commandNumber = value => {
     const number = Number(value);
@@ -121,6 +142,9 @@ function createTransportHandle(ws, runtime, wsUrl, hooks = {}) {
     },
     sendShoot(targetX, targetY, startX, startY) {
       return handle.send(`shoot ${commandNumber(targetX)} ${commandNumber(targetY)} ${commandNumber(startX)} ${commandNumber(startY)}`);
+    },
+    sendChat(text) {
+      return handle.send(`chat ${normalizeChatText(text)}`);
     },
     close(code, reason) {
       if (typeof ws.close === 'function') return ws.close(code, reason);
@@ -210,6 +234,7 @@ function resetWebSocketRuntimeForTest() {
 }
 
 module.exports = {
+  MAX_CHAT_TEXT_LENGTH,
   addWsHandler,
   buildWsUrl,
   closeReasonText,
@@ -217,6 +242,7 @@ module.exports = {
   createWebSocket,
   getWebSocketRuntime,
   isWsOpen,
+  normalizeChatText,
   openBrowserlessWs,
   resetWebSocketRuntimeForTest,
   wsOpenState

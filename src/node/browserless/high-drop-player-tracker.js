@@ -269,7 +269,8 @@ function createSnapshotGapPoller(options = {}) {
   const now = typeof options.now === 'function' ? options.now : Date.now;
   const setTimer = typeof options.setTimeout === 'function' ? options.setTimeout : setTimeout;
   const clearTimer = typeof options.clearTimeout === 'function' ? options.clearTimeout : clearTimeout;
-  const intervalMs = Math.max(1000, Number(options.intervalMs || DEFAULT_SNAPSHOT_GAP_MS));
+  const minimumIntervalMs = Math.max(1000, Number(options.minimumIntervalMs || 1000));
+  const intervalMs = Math.max(minimumIntervalMs, Number(options.intervalMs || DEFAULT_SNAPSHOT_GAP_MS));
   const notReadyRetryMs = Math.min(intervalMs, Math.max(1000, Number(options.notReadyRetryMs || 30000)));
   let timer = null;
   let stopped = true;
@@ -277,12 +278,24 @@ function createSnapshotGapPoller(options = {}) {
   let lastSnapshotAtMs = Math.max(0, Number(options.lastSnapshotAtMs || 0));
   let lastAttemptAtMs = 0;
 
+  function currentIntervalMs() {
+    if (typeof options.getIntervalMs !== 'function') return intervalMs;
+    const dynamic = Number(options.getIntervalMs({
+      nowMs: now(),
+      lastSnapshotAtMs,
+      lastAttemptAtMs,
+      inFlight,
+      stopped
+    }));
+    return Math.max(minimumIntervalMs, Number.isFinite(dynamic) ? dynamic : intervalMs);
+  }
+
   function schedule(delayMs = null) {
     if (stopped) return;
     if (timer) clearTimer(timer);
     const base = Math.max(lastSnapshotAtMs, lastAttemptAtMs);
     const delay = delayMs === null
-      ? Math.max(1000, intervalMs - Math.max(0, now() - base))
+      ? Math.max(1000, currentIntervalMs() - Math.max(0, now() - base))
       : Math.max(0, Number(delayMs));
     timer = setTimer(run, delay);
     timer?.unref?.();
@@ -294,6 +307,10 @@ function createSnapshotGapPoller(options = {}) {
     schedule();
   }
 
+  function refreshSchedule() {
+    schedule();
+  }
+
   async function run() {
     timer = null;
     if (stopped || inFlight) return;
@@ -302,7 +319,7 @@ function createSnapshotGapPoller(options = {}) {
       return;
     }
     const base = Math.max(lastSnapshotAtMs, lastAttemptAtMs);
-    if (base && now() - base < intervalMs) {
+    if (base && now() - base < currentIntervalMs()) {
       schedule();
       return;
     }
@@ -335,10 +352,19 @@ function createSnapshotGapPoller(options = {}) {
 
   return {
     noteSnapshot,
+    refreshSchedule,
     start,
     stop,
     status() {
-      return { intervalMs, lastSnapshotAtMs, lastAttemptAtMs, inFlight, stopped };
+      return {
+        intervalMs,
+        minimumIntervalMs,
+        currentIntervalMs: currentIntervalMs(),
+        lastSnapshotAtMs,
+        lastAttemptAtMs,
+        inFlight,
+        stopped
+      };
     }
   };
 }

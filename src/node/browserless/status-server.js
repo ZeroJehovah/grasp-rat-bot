@@ -72,6 +72,9 @@ function createStatusServer(options = {}) {
   const onStop = typeof options.onStop === 'function' ? options.onStop : null;
   const onAuthUrl = typeof options.onAuthUrl === 'function' ? options.onAuthUrl : null;
   const onCallback = typeof options.onCallback === 'function' ? options.onCallback : null;
+  const getChat = typeof options.getChat === 'function' ? options.getChat : () => ({ ok: true, messages: [] });
+  const onChatActivity = typeof options.onChatActivity === 'function' ? options.onChatActivity : null;
+  const onChatSend = typeof options.onChatSend === 'function' ? options.onChatSend : null;
   const server = http.createServer(async (req, res) => {
     const parsed = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
     try {
@@ -100,6 +103,11 @@ function createStatusServer(options = {}) {
         sendJson(res, 200, buildCompactBrowserlessStatus(getStatus(), config));
         return;
       }
+      if (req.method === 'GET' && parsed.pathname === '/api/chat') {
+        if (onChatActivity) await onChatActivity();
+        sendJson(res, 200, getChat());
+        return;
+      }
       if (req.method === 'POST' && parsed.pathname === '/api/auth-url') {
         const result = onAuthUrl ? await onAuthUrl() : { ok: false, reason: 'auth-not-implemented' };
         sendJson(res, result?.ok === false ? 409 : 200, redactStructuredSecrets(result || { ok: true }));
@@ -109,6 +117,21 @@ function createStatusServer(options = {}) {
         const body = await readRequestJson(req);
         const result = onCallback ? await onCallback(body.callbackUrl || body.input || '') : { ok: false, reason: 'auth-not-implemented' };
         sendJson(res, result?.ok === false ? 409 : 200, redactStructuredSecrets(result || { ok: true }));
+        return;
+      }
+      if (req.method === 'POST' && parsed.pathname === '/api/chat/send') {
+        const body = await readRequestJson(req);
+        const result = onChatSend
+          ? await onChatSend(body.text ?? body.message ?? '')
+          : { ok: false, statusCode: 409, reason: 'chat-not-implemented', error: 'chat sending is unavailable' };
+        const responseBody = {
+          ...(result || { ok: true }),
+          chat: getChat()
+        };
+        const statusCode = result?.ok === false
+          ? Math.max(400, Math.min(599, Number(result.statusCode || 409)))
+          : 200;
+        sendJson(res, statusCode, responseBody);
         return;
       }
       if (req.method === 'POST' && parsed.pathname === '/api/stop') {

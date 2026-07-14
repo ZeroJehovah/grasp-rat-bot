@@ -487,6 +487,12 @@ function buildWsFrameTrace(frame, config = {}) {
   };
 }
 
+function wsTraceOutboundMessage(message) {
+  const text = String(message || '');
+  if (!text.startsWith('chat ')) return text;
+  return `chat <redacted:${Math.max(0, text.length - 5)} chars>`;
+}
+
 async function runReadOnlyCanary(config, options = {}) {
   const now = typeof options.now === 'function' ? options.now : Date.now;
   const sleep = typeof options.sleep === 'function'
@@ -623,6 +629,7 @@ async function runReadOnlyCanary(config, options = {}) {
   let transportStartedAtMs = 0;
   let actionAdapter = null;
   let openFailedBeforeTransport = false;
+  let transportPublished = false;
   const noSelfGuardStartedAtMs = fallbackMs => {
     const fallback = Number(fallbackMs);
     return transportStartedAtMs
@@ -659,6 +666,36 @@ async function runReadOnlyCanary(config, options = {}) {
   };
   const logWs = (type, detail) => {
     if (config.wsTraceEnabled && logStore) logStore.append('ws', type, addRunMeta(detail));
+  };
+  const publishTransport = currentTransport => {
+    if (!currentTransport || transportPublished || typeof options.onTransportOpen !== 'function') return;
+    try {
+      options.onTransportOpen(currentTransport, {
+        runId,
+        runtimeRevision,
+        mode: controlMode,
+        openedAt: new Date(now()).toISOString()
+      });
+      transportPublished = true;
+    } catch (err) {
+      log('canary-transport-open-hook-error', { error: err?.message || String(err) });
+    }
+  };
+  const clearPublishedTransport = (currentTransport, reason = 'closed') => {
+    if (!transportPublished) return;
+    transportPublished = false;
+    if (typeof options.onTransportClose !== 'function') return;
+    try {
+      options.onTransportClose(currentTransport, {
+        runId,
+        runtimeRevision,
+        mode: controlMode,
+        reason,
+        closedAt: new Date(now()).toISOString()
+      });
+    } catch (err) {
+      log('canary-transport-close-hook-error', { error: err?.message || String(err), reason });
+    }
   };
   log('canary-target-whitelist', targetWhitelistSummary || {});
   const updateActionResult = actionResult => {
@@ -796,12 +833,13 @@ async function runReadOnlyCanary(config, options = {}) {
       },
       onClose: event => {
         if (!ending) wsClosed = event;
+        clearPublishedTransport(transport, 'websocket-close');
         logWs('close', event || {});
       },
       onSend: event => {
         logWs('send', {
           direction: 'out',
-          message: event?.message || ''
+          message: wsTraceOutboundMessage(event?.message || '')
         });
       },
       onMessage: data => {
@@ -986,6 +1024,7 @@ async function runReadOnlyCanary(config, options = {}) {
         }
       }
     });
+    publishTransport(transport);
     if (!transportStartedAtMs) transportStartedAtMs = now();
     if (actionEnabled) {
       actionAdapter = options.actionAdapter || createBrowserlessActionAdapter({
@@ -1041,6 +1080,7 @@ async function runReadOnlyCanary(config, options = {}) {
   if (transport || !result.error || shouldVerifyExitAfterOpenFailure) {
     try {
       if (result.safety.event) {
+        clearPublishedTransport(transport, 'leave-start');
         result.safety.exit = await executeSafetyExit(result.safety.event, config, {
           transport,
           allowStopMotion: actionEnabled,
@@ -1049,6 +1089,7 @@ async function runReadOnlyCanary(config, options = {}) {
           sleep,
           onLeaveConfirmed: async leave => {
             ending = true;
+            clearPublishedTransport(transport, 'leave-confirmed');
             const actionSeal = actionAdapter?.sealTransport
               ? actionAdapter.sealTransport('leave-confirmed')
               : null;
@@ -1067,6 +1108,7 @@ async function runReadOnlyCanary(config, options = {}) {
         });
         result.leave = result.safety.exit.leave;
       } else {
+        clearPublishedTransport(transport, 'leave-start');
         if (actionAdapter) updateActionResult(actionAdapter.stop('normal-complete'));
         if (shouldVerifyExitAfterOpenFailure) log('canary-open-failed-leave', { error: result.error });
         const leave = options.leaveWithVerification || leaveWithVerification;
@@ -1108,6 +1150,7 @@ async function runReadOnlyCanary(config, options = {}) {
 
   try {
     ending = true;
+    clearPublishedTransport(transport, 'canary-finish');
     if (transport && (transport.isOpen?.() || isWsOpen(transport.ws))) transport.close();
   } catch (_) {}
 

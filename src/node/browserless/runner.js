@@ -26,6 +26,12 @@ const {
 const { createEasyKillPlayerTracker } = require('./easy-kill-player-tracker');
 const { createDailyDamagePlayerTracker } = require('./daily-damage-player-tracker');
 const {
+  DEFAULT_CHAT_ACTIVE_INTERVAL_MS,
+  DEFAULT_CHAT_IDLE_INTERVAL_MS,
+  createChatService,
+  runChatServiceSelfTest
+} = require('./chat-service');
+const {
   BROWSER_RUNTIME_DEFAULTS,
   decisionStatePatch
 } = require('./decision-adapter');
@@ -608,6 +614,12 @@ async function runBrowserlessRunner(config, deps = {}) {
   } catch (err) {
     recordSupervisorError(err, { operation: 'data-dir-create', dataDir: config.dataDir });
   }
+  let snapshotGapPoller = null;
+  const chatService = deps.chatService || createChatService({
+    now,
+    getSelfUserId: () => config.userId,
+    onPollingDemandChange: () => snapshotGapPoller?.refreshSchedule?.()
+  });
   const highDropPlayerTracker = deps.highDropPlayerTracker || createHighDropPlayerTracker({
     file: path.join(config.dataDir, 'high-drop-players.json'),
     now
@@ -626,11 +638,24 @@ async function runBrowserlessRunner(config, deps = {}) {
     easyKillPlayerTracker.expirePendingOutcomes?.(now());
     return easyKillPlayerTracker.status();
   };
-  let snapshotGapPoller = null;
   const observeSnapshotPayload = (payload, detail = {}) => {
     const observedAtMs = Number(detail.observedAtMs ?? now());
+    snapshotGapPoller?.noteSnapshot(observedAtMs);
+    let chatResult = null;
     let easyKillNameResult = null;
     let damageNameResult = null;
+    try {
+      chatResult = chatService.observeSnapshot?.(payload, {
+        ...detail,
+        observedAtMs
+      }) || null;
+    } catch (err) {
+      recordSupervisorError(err, { operation: 'chat-snapshot-observe', source: detail.source || 'snapshot' });
+      logStore.append('runner', 'chat-snapshot-observation-error', {
+        source: detail.source || 'snapshot',
+        error: errorMessage(err)
+      });
+    }
     try {
       easyKillNameResult = easyKillPlayerTracker.observePlayerNames?.(payload?.entities || [], {
         atMs: observedAtMs,
@@ -663,7 +688,6 @@ async function runBrowserlessRunner(config, deps = {}) {
         observedAtMs,
         selfUserId: config.userId
       });
-      snapshotGapPoller?.noteSnapshot(observedAtMs);
       if (result.updated > 0) {
         logStore.append('runner', 'high-drop-player-observation', {
           source: detail.source || 'snapshot',
@@ -674,6 +698,9 @@ async function runBrowserlessRunner(config, deps = {}) {
       }
       return {
         ...result,
+        chatMessagesObserved: Number(chatResult?.observed || 0),
+        chatMessagesUpdated: Number(chatResult?.updated || 0),
+        chatSendConfirmed: Boolean(chatResult?.confirmed),
         easyKillNamesUpdated: Number(easyKillNameResult?.updated || 0),
         damageNamesUpdated: Number(damageNameResult?.updated || 0)
       };
@@ -683,7 +710,13 @@ async function runBrowserlessRunner(config, deps = {}) {
         source: detail.source || 'snapshot',
         error: errorMessage(err)
       });
-      return { ok: false, error: errorMessage(err) };
+      return {
+        ok: false,
+        error: errorMessage(err),
+        chatMessagesObserved: Number(chatResult?.observed || 0),
+        chatMessagesUpdated: Number(chatResult?.updated || 0),
+        chatSendConfirmed: Boolean(chatResult?.confirmed)
+      };
     }
   };
   let retention = null;
@@ -759,7 +792,9 @@ async function runBrowserlessRunner(config, deps = {}) {
   const lastHighDropSnapshotAtMs = Date.parse(highDropStatusAtStart.lastSnapshotAt || '');
   snapshotGapPoller = deps.snapshotGapPoller || createSnapshotGapPoller({
     now,
-    intervalMs: 3 * 60 * 1000,
+    intervalMs: DEFAULT_CHAT_IDLE_INTERVAL_MS,
+    minimumIntervalMs: DEFAULT_CHAT_ACTIVE_INTERVAL_MS,
+    getIntervalMs: () => chatService.desiredSnapshotIntervalMs?.(now()) || DEFAULT_CHAT_IDLE_INTERVAL_MS,
     lastSnapshotAtMs: Number.isFinite(lastHighDropSnapshotAtMs) ? lastHighDropSnapshotAtMs : 0,
     isReady: () => Boolean(config.userId && config.sessionToken),
     fetchSnapshot: async () => {
@@ -782,8 +817,8 @@ async function runBrowserlessRunner(config, deps = {}) {
     },
     onSnapshot: observeSnapshotPayload,
     onError: err => {
-      recordSupervisorError(err, { operation: 'high-drop-player-gap-snapshot' });
-      logStore.append('runner', 'high-drop-player-gap-snapshot-error', { error: errorMessage(err) });
+      recordSupervisorError(err, { operation: 'shared-gap-snapshot' });
+      logStore.append('runner', 'shared-gap-snapshot-error', { error: errorMessage(err) });
     }
   });
 
@@ -1126,6 +1161,23 @@ async function runBrowserlessRunner(config, deps = {}) {
     });
   };
 
+  const onTransportOpen = (transport, detail = {}) => {
+    chatService.attachTransport?.(transport, detail);
+    logStore.append('runner', 'chat-transport-online', {
+      runId: detail.runId || '',
+      mode: detail.mode || ''
+    });
+  };
+  const onTransportClose = (transport, detail = {}) => {
+    const detached = chatService.detachTransport?.(transport);
+    if (detached === false) return;
+    logStore.append('runner', 'chat-transport-offline', {
+      runId: detail.runId || '',
+      mode: detail.mode || '',
+      reason: detail.reason || ''
+    });
+  };
+
   let statusHandle = null;
   if (!config.once && Number(config.statusPort || 0) > 0 && deps.startStatusServer !== false) {
     const starter = deps.startStatusServer || startStatusServer;
@@ -1138,8 +1190,26 @@ async function runBrowserlessRunner(config, deps = {}) {
           ...buildPublicBrowserlessStatus(readBrowserlessStateFile(stateFile), config),
           highDropPlayers: highDropPlayerTracker.status(now()),
           easyKillPlayers: easyKillPlayerStatus(),
-          dailyDamagePlayers: damagePlayerTracker.status(now())
+          dailyDamagePlayers: damagePlayerTracker.status(now()),
+          chat: chatService.status?.(now()) || null
         }),
+        getChat: () => chatService.status?.(now()) || { ok: true, messages: [] },
+        onChatActivity: () => chatService.notePageActivity?.(now()),
+        onChatSend: text => {
+          const result = chatService.sendChat?.(text) || {
+            ok: false,
+            statusCode: 409,
+            reason: 'chat-unavailable',
+            error: '聊天服务不可用'
+          };
+          logStore.append('runner', result.ok ? 'chat-send' : 'chat-send-rejected', {
+            ok: Boolean(result.ok),
+            reason: result.reason || '',
+            textLength: Number(result.textLength || String(text ?? '').length),
+            statusCode: Number(result.statusCode || (result.ok ? 200 : 409))
+          });
+          return result;
+        },
         onStop: async () => {
           const event = safetyController.requestStop('explicit-stop', { source: 'status-api' });
           const currentState = readBrowserlessStateFile(stateFile);
@@ -1455,6 +1525,8 @@ async function runBrowserlessRunner(config, deps = {}) {
           onSnapshotPayload: observeSnapshotPayload,
           fetchWithTimeout: sourceIpController.fetchWithTimeout,
           openBrowserlessWs: sourceIpController.openBrowserlessWs,
+          onTransportOpen,
+          onTransportClose,
           leaveWithVerification: sourceIpController.leaveWithVerification
         });
       } catch (err) {
@@ -1525,6 +1597,8 @@ async function runBrowserlessRunner(config, deps = {}) {
         onSnapshotPayload: observeSnapshotPayload,
         fetchWithTimeout: sourceIpController.fetchWithTimeout,
         openBrowserlessWs: sourceIpController.openBrowserlessWs,
+        onTransportOpen,
+        onTransportClose,
         leaveWithVerification: sourceIpController.leaveWithVerification,
         onDecision: decision => {
           const currentBeforeDecision = readBrowserlessStateFile(stateFile);
@@ -1664,6 +1738,62 @@ async function runBrowserlessRunnerSelfTest() {
       reason: 'missing-realtime-self',
       action: { kind: 'wait', band: 'wait', reason: 'missing-realtime-self' }
     });
+    const chatService = runChatServiceSelfTest();
+    const dynamicSnapshotPoller = createSnapshotGapPoller({
+      now: () => Date.UTC(2026, 6, 8, 1, 3, 0),
+      intervalMs: DEFAULT_CHAT_IDLE_INTERVAL_MS,
+      minimumIntervalMs: DEFAULT_CHAT_ACTIVE_INTERVAL_MS,
+      getIntervalMs: () => 1000,
+      fetchSnapshot: async () => ({})
+    });
+    const dynamicSnapshotPollerStatus = dynamicSnapshotPoller.status();
+    let chatActivityCount = 0;
+    const chatSendInputs = [];
+    const statusTestHandle = await startStatusServer({
+      host: '127.0.0.1',
+      port: 0,
+      webToken: 'status-self-test-token',
+      getChat: () => ({ ok: true, sendAvailable: true, activityCount: chatActivityCount, messages: [] }),
+      onChatActivity: () => { chatActivityCount += 1; },
+      onChatSend: text => {
+        chatSendInputs.push(text);
+        return { ok: true, reason: 'self-test-chat-sent', textLength: String(text).length };
+      }
+    });
+    let statusServerChatTest;
+    try {
+      const base = `http://127.0.0.1:${statusTestHandle.port}`;
+      const pageResponse = await fetch(`${base}/`);
+      const pageHtml = await pageResponse.text();
+      const unauthorizedResponse = await fetch(`${base}/api/chat`);
+      const chatResponse = await fetch(`${base}/api/chat?token=status-self-test-token`);
+      const chatBody = await chatResponse.json();
+      const sendResponse = await fetch(`${base}/api/chat/send?token=status-self-test-token`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ text: 'hello' })
+      });
+      const sendBody = await sendResponse.json();
+      statusServerChatTest = {
+        ok: Boolean(
+          pageResponse.ok
+          && pageHtml.includes('id="chatPanel"')
+          && pageHtml.includes('/api/chat/send')
+          && unauthorizedResponse.status === 401
+          && chatResponse.ok
+          && chatBody.activityCount === 1
+          && sendResponse.ok
+          && sendBody.reason === 'self-test-chat-sent'
+          && chatSendInputs[0] === 'hello'
+        ),
+        unauthorizedStatus: unauthorizedResponse.status,
+        activityCount: chatActivityCount,
+        sendInputs: chatSendInputs.slice(),
+        webChatPanelPresent: pageHtml.includes('id="chatPanel"')
+      };
+    } finally {
+      await statusTestHandle.close();
+    }
     const runnerLog = path.join(tmp, 'logs', '2026-07-08', 'runner.jsonl');
     const text = fs.readFileSync(runnerLog, 'utf8');
     return {
@@ -1679,12 +1809,18 @@ async function runBrowserlessRunnerSelfTest() {
         && combatExitPlan.delayMs === 30000
         && closedTransportAction.ok === false
         && closedTransportAction.transportClosed === true
+        && chatService.ok
+        && dynamicSnapshotPollerStatus.currentIntervalMs === DEFAULT_CHAT_ACTIVE_INTERVAL_MS
+        && statusServerChatTest.ok
       ),
       dryRun,
       liveRun,
       wsClosedPlan,
       combatExitPlan,
       closedTransportAction,
+      chatService,
+      dynamicSnapshotPollerStatus,
+      statusServerChatTest,
       logFile: runnerLog
     };
   } finally {
