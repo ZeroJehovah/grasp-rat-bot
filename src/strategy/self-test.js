@@ -1905,6 +1905,36 @@ function runStrategyModuleSelfTests() {
       && baitEntered.state?.distance === 900
   });
 
+  const snapshotBaitCoin = {
+    ...baitCoin,
+    drop_id: 'snapshot-bait',
+    key: 'id:snapshot-bait',
+    authority: 'snapshot',
+    native: false,
+    snapshotOnly: true
+  };
+  const snapshotBaitOpportunity = {
+    ...baitOpportunity,
+    id: 'snapshot-bait',
+    sourceCoin: snapshotBaitCoin
+  };
+  const snapshotBaitEntered = singleCoinBaitPolicyCore({
+    self: { x: 0, y: 0 },
+    nowMs: 1000,
+    previous: null,
+    selectedOpportunity: snapshotBaitOpportunity,
+    opportunities: [snapshotBaitOpportunity],
+    entryCoins: [snapshotBaitCoin],
+    visibleCoins: [snapshotBaitCoin]
+  }, { enabled: true, holdRadiusCm: 1000, sameCoinRadiusCm: 1200 });
+  results.push({
+    name: 'single-coin-bait-allows-selected-snapshot-fallback-coin',
+    passed: snapshotBaitEntered.phase === 'hold'
+      && snapshotBaitEntered.entered === true
+      && snapshotBaitEntered.state?.id === 'snapshot-bait'
+      && snapshotBaitEntered.state?.authority === 'snapshot'
+  });
+
   const baitFar = singleCoinBaitPolicyCore({
     self: { x: 0, y: 0 },
     nowMs: 1000,

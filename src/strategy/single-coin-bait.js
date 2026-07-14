@@ -101,13 +101,12 @@ function findSingleCoinBaitCoinCore(coins, bait, options = {}) {
   )) || null;
 }
 
-function selectedSingleCoinBaitCandidateCore(selectedOpportunity, realtimeCoins, options = {}) {
+function selectedSingleCoinBaitCandidateCore(selectedOpportunity, entryCoins, options = {}) {
   if (!selectedOpportunity || String(selectedOpportunity.type || '') !== 'coin') return null;
   const selected = selectedOpportunity.sourceCoin || selectedOpportunity.coin || selectedOpportunity;
   if (Number(selected?.amount) !== SINGLE_COIN_BAIT_AMOUNT) return null;
-  if (selected?.snapshotOnly || selected?.snapshot || selected?.native === false) return null;
-  const coin = findSingleCoinBaitCoinCore(realtimeCoins, selected, options);
-  if (!coin || coin.snapshotOnly || coin.snapshot || coin.native === false) return null;
+  const coin = findSingleCoinBaitCoinCore(entryCoins, selected, options);
+  if (!coin) return null;
   if (singleCoinBaitSameCoinHasOtherProfitCore(selectedOpportunity, coin, options)) return null;
   return coin;
 }
@@ -168,11 +167,12 @@ function singleCoinBaitPolicyCore(input = {}, options = {}) {
   };
   const holdRadiusCm = Math.max(0, Number(options.holdRadiusCm || 0));
   const nowMs = Number.isFinite(Number(input.nowMs)) ? Number(input.nowMs) : Date.now();
-  const realtimeCoins = input.realtimeCoins || [];
+  const visibleCoins = input.visibleCoins || input.realtimeCoins || [];
+  const entryCoins = input.entryCoins || input.realtimeCoins || visibleCoins;
   const opportunities = input.opportunities || [];
 
   if (previous) {
-    const coin = findSingleCoinBaitCoinCore(realtimeCoins, previous, matchOptions);
+    const coin = findSingleCoinBaitCoinCore(visibleCoins, previous, matchOptions);
     if (!coin) {
       return {
         state: null,
@@ -211,7 +211,7 @@ function singleCoinBaitPolicyCore(input = {}, options = {}) {
       clearReason: ''
     };
   }
-  const coin = selectedSingleCoinBaitCandidateCore(input.selectedOpportunity, realtimeCoins, matchOptions);
+  const coin = selectedSingleCoinBaitCandidateCore(input.selectedOpportunity, entryCoins, matchOptions);
   if (!coin) {
     return {
       state: null,

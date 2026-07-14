@@ -63,6 +63,7 @@ const {
   profitTargetEligibleCore
 } = require('../../strategy/profit-threshold');
 const {
+  singleCoinBaitMatchesCore,
   singleCoinBaitPolicyCore
 } = require('../../strategy/single-coin-bait');
 const { targetIsWhitelisted, targetWhitelistNameSet } = require('../../shared/target-whitelist');
@@ -1272,7 +1273,7 @@ function routeDisplayCoinsForAction(input, action) {
   }).filter(coin => Number.isFinite(Number(coin.distance)));
 }
 
-function coinPanelCandidates(input, action) {
+function coinPanelCandidates(input, action, bait = null) {
   const byKey = new Map();
   const routeOrderByKey = new Map();
   for (const point of Array.isArray(action?.coinRoute?.points) ? action.coinRoute.points : []) {
@@ -1290,6 +1291,7 @@ function coinPanelCandidates(input, action) {
   };
   for (const coin of uniquePanelProfitCoins(input)) add(coin);
   for (const coin of routeDisplayCoinsForAction(input, action)) add(coin);
+  if (bait) add(bait);
   return Array.from(byKey.values());
 }
 
@@ -1390,7 +1392,7 @@ function panelPlayerCandidates(input) {
       || targetPlayerSelected(input.currentAction, input.currentCombat, target));
 }
 
-function summarizeNearbyForPanel(input, action, combat, options = {}) {
+function summarizeNearbyForPanel(input, action, combat, options = {}, singleCoinBait = null) {
   if (!input?.self) return null;
   const panelInput = { ...input, currentAction: action, currentCombat: combat };
   const attackRange = Math.max(0, Number(options.attackRange ?? options.combatAttackRange ?? DEFAULT_ATTACK_RANGE));
@@ -1400,7 +1402,7 @@ function summarizeNearbyForPanel(input, action, combat, options = {}) {
       ?? options.opportunityVisibleDistance
       ?? DEFAULT_GLOBAL_COIN_MAX_DISTANCE
   ));
-  const coins = coinPanelCandidates(input, action)
+  const coins = coinPanelCandidates(input, action, singleCoinBait)
     .filter(coin => Number.isFinite(Number(coin?.distance)))
     .filter(coin => visibleRange <= 0 || Number(coin.distance) <= visibleRange)
     .sort((a, b) => Number(a.distance) - Number(b.distance)
@@ -1411,7 +1413,10 @@ function summarizeNearbyForPanel(input, action, combat, options = {}) {
       Math.round(Number(coin.distance)),
       targetCoinSelected(action, coin) ? 1 : 0,
       coinRouteOrderForAction(action, coin) || numberOrNull(coin.routeDisplayOrder) || 0,
-      String(coin.authority || '') || null
+      String(coin.authority || '') || null,
+      singleCoinBaitMatchesCore(coin, singleCoinBait, {
+        sameCoinRadiusCm: options.singleCoinBaitSameCoinRadiusCm ?? BROWSER_RUNTIME_DEFAULTS.singleCoinBaitSameCoinRadiusCm
+      }) ? 1 : 0
     ]);
   const selectableAfkTargetIds = new Set((input.afkTargets || [])
     .filter(target => !afkOpportunityBlockedByStaminaCooldown(target, options))
@@ -1988,6 +1993,16 @@ function singleCoinBaitActionSummary(state, input, options = {}) {
   };
 }
 
+function singleCoinBaitVisibleCoins(input, previous = null) {
+  const coins = [...(input?.realtimeCoins || [])];
+  const snapshotBlockedReasons = input?.fallback?.snapshotFallbackBlockedReasons || [];
+  const snapshotFresh = !snapshotBlockedReasons.includes('snapshot-stale');
+  if (previous?.authority === 'snapshot' && snapshotFresh) {
+    coins.push(...(input?.snapshotVisibleCoins || []));
+  }
+  return mergeProfitCoinCandidates(coins);
+}
+
 function buildSingleCoinBaitDecision(input, opportunity, stateful = {}, options = {}, allowEnter = true) {
   const previous = stateful.singleCoinBait || null;
   const policy = singleCoinBaitPolicyCore({
@@ -1996,7 +2011,8 @@ function buildSingleCoinBaitDecision(input, opportunity, stateful = {}, options 
     previous,
     selectedOpportunity: opportunity?.choice || null,
     opportunities: opportunity?.opportunities || [],
-    realtimeCoins: input?.realtimeCoins || [],
+    visibleCoins: singleCoinBaitVisibleCoins(input, previous),
+    entryCoins: input?.profitCoins || [],
     allowEnter
   }, singleCoinBaitCoreOptions(options));
 
@@ -4374,7 +4390,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       centerActivity: input.centerActivity,
       profitCoinSource: input.profitCoinSource,
       selfKillEvidence: topItems(input.selfKillEvidence, item => item, 20),
-      nearby: summarizeNearbyForPanel(input, action, combat.dryRun || combat, options),
+      nearby: summarizeNearbyForPanel(input, action, combat.dryRun || combat, options, stateful.singleCoinBait),
       dataGaps: input.dataGaps
     },
     profit: {

@@ -7851,7 +7851,8 @@ async function runSelfTest() {
         const decision = buildBrowserlessDecision(store.getState(1200), {}, {
           nowMs: 1200,
           controlMode: 'profit-live',
-          combatEnabled: true
+          combatEnabled: true,
+          singleCoinBaitEnabled: false
         });
         return [
           decision.kind,
@@ -8717,7 +8718,7 @@ async function runSelfTest() {
       want: 'profit-candidate|visible-coin|near-safe|true|false'
     },
     {
-      name: 'browserless single coin bait holds only a lone realtime one coin within ten meters',
+      name: 'browserless single coin bait holds a lone selected one coin within ten meters',
       got: (() => {
         const makeState = (coinDrops, snapshotCoinDrops = []) => ({
           userId: 7,
@@ -8754,20 +8755,30 @@ async function runSelfTest() {
         const snapshotOnly = buildBrowserlessDecision(makeState([], [
           { drop_id: 'snapshot-one', amount: 1, x: 900, y: 0 }
         ]), {}, options);
+        const realtimePreferred = buildBrowserlessDecision(makeState([
+          { drop_id: 'native-two', amount: 2, x: 900, y: 0 }
+        ], [
+          { drop_id: 'snapshot-one', amount: 1, x: 800, y: 0 }
+        ]), {}, options);
         return [
           held.kind,
           held.band,
           held.reason,
           held.action.target.id,
           held.profit.singleCoinBait.phase,
+          held.input.nearby.c.find(item => item[0] === 'bait')?.[6],
           tooFar.reason,
           amountTwo.reason,
           combatDisabled.reason,
           snapshotOnly.reason,
-          snapshotOnly.action.target.authority
+          snapshotOnly.action.target.authority,
+          snapshotOnly.input.nearby.c.find(item => item[0] === 'snapshot-one')?.[6],
+          realtimePreferred.reason,
+          realtimePreferred.action.target.id,
+          realtimePreferred.action.target.authority
         ].join('|');
       })(),
-      want: 'wait|wait|single-coin-bait-hold|bait|hold|foot-coin-priority|foot-coin-priority|foot-coin-priority|foot-coin-priority|snapshot'
+      want: 'wait|wait|single-coin-bait-hold|bait|hold|1|foot-coin-priority|foot-coin-priority|foot-coin-priority|single-coin-bait-hold|snapshot|1|foot-coin-priority|native-two|realtime'
     },
     {
       name: 'browserless single coin bait releases itself before newly visible ordinary profit',
@@ -8816,6 +8827,61 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'single-coin-bait-hold|hold|coin|single-coin-bait-release|bait|release|next|next|true'
+    },
+    {
+      name: 'browserless snapshot fallback bait survives a realtime profit arrival until committed release',
+      got: (() => {
+        const adapter = createBrowserlessDecisionAdapter({
+          userId: 7,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          dynamicProfitThresholdEnabled: false,
+          singleCoinBaitHoldRadiusCm: 1000,
+          finalActionArbitrationHoldMs: 0
+        });
+        const makeState = (tick, realtimeCoinDrops, snapshotCoinDrops, snapshotFrameAgeMs = 100) => ({
+          userId: 7,
+          realtime: {
+            tick,
+            frameAgeMs: 100,
+            self: { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+            entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 }],
+            bullets: [],
+            coinDrops: realtimeCoinDrops
+          },
+          fallback: { frameAgeMs: snapshotFrameAgeMs, coinDrops: snapshotCoinDrops }
+        });
+        const bait = { drop_id: 'snapshot-bait', amount: 1, x: 900, y: 0 };
+        const next = { drop_id: 'next-native', amount: 3, x: 5000, y: 0 };
+        const first = adapter.decide(makeState(60, [], [bait]), { nowMs: 1000 });
+        const second = adapter.decide(makeState(61, [next], [bait]), { nowMs: 2000 });
+        const releaseState = adapter.getState().singleCoinBait;
+        const baitRow = second.input.nearby.c.find(item => item[0] === 'snapshot-bait');
+        const third = adapter.decide(makeState(62, [next], []), { nowMs: 3000 });
+        const staleAdapter = createBrowserlessDecisionAdapter({
+          userId: 7,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          dynamicProfitThresholdEnabled: false,
+          singleCoinBaitHoldRadiusCm: 1000,
+          finalActionArbitrationHoldMs: 0
+        });
+        staleAdapter.decide(makeState(70, [], [bait]), { nowMs: 4000 });
+        staleAdapter.decide(makeState(71, [], [bait], 6000), { nowMs: 5000 });
+        return [
+          first.reason,
+          first.action.target.authority,
+          second.reason,
+          second.action.target.id,
+          releaseState.phase,
+          releaseState.trigger.id,
+          baitRow?.[6],
+          third.action.target.id,
+          adapter.getState().singleCoinBait === null,
+          staleAdapter.getState().singleCoinBait === null
+        ].join('|');
+      })(),
+      want: 'single-coin-bait-hold|snapshot|single-coin-bait-release|snapshot-bait|release|next-native|1|next-native|true|true'
     },
     {
       name: 'browserless single coin bait preserves current active-player combat rules',
@@ -16207,7 +16273,11 @@ async function runSelfTest() {
                   ar: 14500,
                   vr: 50000,
                   c: Array.from({ length: 165 }, (_, index) => (
-                    index === 0 ? ['coin-1', 8, 450, 1] : ['coin-' + (index + 1), 1, 500 + index, 0]
+                    index === 0
+                      ? ['coin-1', 8, 450, 1]
+                      : (index === 164
+                          ? ['coin-165', 1, 664, 0, 0, 'snapshot', 1]
+                          : ['coin-' + (index + 1), 1, 500 + index, 0])
                   )),
                   p: [
                     ['enemy', 44, 5000, 9, null, 800, 1, 'Passive', 0, 0, 0, 0, 0],
@@ -16336,6 +16406,7 @@ async function runSelfTest() {
           compactStatus.nearby.c[0][3],
           compactStatus.nearby.c.length,
           compactStatus.nearby.coinLowHiddenCount,
+          compactStatus.nearby.c.find(item => item[0] === 'coin-165')?.[6],
           compactStatus.nearby.p[0][0],
           compactStatus.nearby.p[0][6],
           compactStatus.nearby.p[0][7],
@@ -16351,13 +16422,13 @@ async function runSelfTest() {
           Boolean(compactStatus.probes),
           Boolean(compactStatus.current),
           Boolean(compactStatus.recentExits),
-          !compactText.includes('coin-165'),
+          compactText.includes('coin-165'),
           !compactText.includes('low-full'),
           compactText.includes('state-secret-token'),
           !compactText.includes(largePayload) && compactText.length < publicText.length
         ].join('|');
       }),
-      want: 'true|77|true|true|true|true|true|false|loop-wait|88|10|20|360000|seek-coin|8|7|enemy|5999|active-near-login-point|88|true|enemy|14500|coin-1|1|11|154|enemy|1|Passive|1|latest|danger-player|Active|true|214440|2|3|10.0.0.101|false|false|false|true|true|false|true'
+      want: 'true|77|true|true|true|true|true|false|loop-wait|88|10|20|360000|seek-coin|8|7|enemy|5999|active-near-login-point|88|true|enemy|14500|coin-1|1|12|153|1|enemy|1|Passive|1|latest|danger-player|Active|true|214440|2|3|10.0.0.101|false|false|false|true|true|false|true'
     },
     {
       name: 'browserless state replaces completed run and probe snapshots instead of retaining stale safety fields',
@@ -17543,9 +17614,11 @@ async function runSelfTest() {
           /\.target-current,\.target-route-next\{[^}]*padding:3px 6px;margin:0\}/.test(panelText),
           !/\.target-current\{border:1px solid/.test(panelText),
           /\.target-flee\{--target-color:rgba\(96,165,250,\.82\)/.test(panelText),
+          /\.target-bait\{--target-color:rgba\(251,191,36,\.95\)/.test(panelText),
           /\.target-name\{display:inline-flex;align-items:center;[^}]*vertical-align:middle/.test(panelText),
           /\.target-current::before,\.target-route-next::before\{content:"";position:absolute;right:100%;top:-1px;bottom:-1px;width:3px;background:var\(--target-color\)/.test(panelText),
           /\.target-icon\{display:inline-block;[^}]*align-self:center;[^}]*vertical-align:middle;[^}]*transform:translateY\(1px\);[^}]*color:var\(--target-color\);fill:currentColor/.test(panelText),
+          panelScript.includes("coinBait: ['M617.130667 654.229333"),
           panelScript.includes("coinSingle: ['M512 85.333333"),
           panelScript.includes("coin1: ['M512.048762 0C794.770286"),
           panelScript.includes("coin9: [COIN_ROUTE_RING_PATH"),
@@ -17556,12 +17629,13 @@ async function runSelfTest() {
           panelScript.includes("svg.setAttribute('preserveAspectRatio', 'xMidYMid meet')"),
           panelScript.includes("document.createElementNS('http://www.w3.org/2000/svg', 'svg')"),
           panelScript.includes("const hasMultipleRouteTargets = items.some"),
+          panelScript.includes("? 'coinBait'"),
           panelScript.includes("hasMultipleRouteTargets ? 'coin1' : 'coinSingle'"),
           panelScript.includes("const fleeTarget = (actionKind === 'safety-exit' || actionKind === 'leave') && Boolean(status.action?.target);"),
           panelScript.includes("const targetType = fleeTarget ? 'flee' : (afkTarget ? 'afk' : 'combat');")
         ].join('|');
       })(),
-      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
+      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless web panel rounds session and daily stamina spent consistently',

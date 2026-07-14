@@ -1274,13 +1274,13 @@ function sortCompactNearbyCoins(a, b) {
 }
 
 function compactNearbyCoins(list) {
-  const rows = compactNearbyList(list, 6, Number.POSITIVE_INFINITY)
+  const rows = compactNearbyList(list, 7, Number.POSITIVE_INFINITY)
     .filter(row => compactNumber(row?.[1]) !== null && compactNumber(row?.[2]) !== null);
   const highValueRows = rows.filter(row => Number(row[1]) > 1);
   const lowValueRows = rows
     .filter(row => Number(row[1]) === 1)
     .sort(sortCompactNearbyCoins);
-  const forcedLowValueRows = lowValueRows.filter(row => Boolean(row?.[3]) || Number(row?.[4] || 0) > 0);
+  const forcedLowValueRows = lowValueRows.filter(row => Boolean(row?.[3]) || Number(row?.[4] || 0) > 0 || Boolean(row?.[6]));
   const visibleLowValueRows = lowValueRows.slice(0, 10);
   const byId = new Map();
   for (const row of [...highValueRows, ...visibleLowValueRows, ...forcedLowValueRows]) {
