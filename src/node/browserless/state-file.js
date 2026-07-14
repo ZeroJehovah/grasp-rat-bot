@@ -1429,14 +1429,27 @@ function compactExit(event) {
     : (detail.injury && typeof detail.injury === 'object' ? detail.injury : {});
   const sourceSelf = decision.self || detail.self || decision.input?.self || combat.self || null;
   const sourceTarget = event.target || detail.target || decision.target || combatExit.target || combat.target || null;
+  const sourceTargetId = compactNumber(sourceTarget?.userId ?? sourceTarget?.user_id);
+  const metricsTargetId = compactNumber(metrics.targetId);
+  const sourceTargetName = compactString(sourceTarget?.name || sourceTarget?.label, 80);
+  const metricsTargetName = compactString(metrics.targetName, 80);
+  const hasMetricsTarget = metricsTargetId !== null || Boolean(metricsTargetName);
+  const metricsMatchSourceTarget = Boolean(sourceTarget && (
+    (sourceTargetId !== null && metricsTargetId !== null && sourceTargetId === metricsTargetId)
+      || ((sourceTargetId === null || metricsTargetId === null)
+        && sourceTargetName
+        && metricsTargetName
+        && sourceTargetName === metricsTargetName)
+  ));
+  const combatFieldsMatchMetrics = !hasMetricsTarget || metricsMatchSourceTarget;
   const at = compactString(event.at || event.time || event.createdAt, 48);
   const metricStartedAtMs = compactNumber(metrics.startedAt);
-  const combatStartedAtMs = parseTimeMs(combat.startedAt);
+  const combatStartedAtMs = combatFieldsMatchMetrics ? parseTimeMs(combat.startedAt) : 0;
   const startedAtMs = metricStartedAtMs !== null && metricStartedAtMs > 0
     ? metricStartedAtMs
     : (combatStartedAtMs > 0 ? combatStartedAtMs : null);
-  const endedAtMs = parseTimeMs(at) || compactNumber(metrics.lastObservedAt) || parseTimeMs(decision.at);
-  const durationMs = compactNumber(combat.durationMs)
+  const endedAtMs = compactNumber(metrics.lastObservedAt) || parseTimeMs(at) || parseTimeMs(decision.at);
+  const durationMs = (combatFieldsMatchMetrics ? compactNumber(combat.durationMs) : null)
     ?? (startedAtMs !== null && endedAtMs > 0 ? Math.max(0, endedAtMs - startedAtMs) : null);
   const selfDamage = compactNumber(metrics.selfDamage) ?? compactNumber(injury.hpDrop);
   const targetDamage = compactNumber(metrics.targetDamage);
@@ -1447,15 +1460,28 @@ function compactExit(event) {
   const selfHpStart = compactNumber(metrics.initialSelfHp)
     ?? compactNumber(injury.previousHp)
     ?? (selfHpEnd !== null && selfDamage !== null ? selfHpEnd + selfDamage : null);
-  const targetHpEnd = compactNumber(metrics.lastTargetHp) ?? compactNumber(combatExit.targetHp);
+  const targetHpEnd = compactNumber(metrics.lastTargetHp)
+    ?? (combatFieldsMatchMetrics ? compactNumber(combatExit.targetHp) : null);
   const targetHpStart = compactNumber(metrics.initialTargetHp)
     ?? (targetHpEnd !== null && targetDamage !== null ? targetHpEnd + targetDamage : null);
+  const battleTargetSource = hasMetricsTarget && !metricsMatchSourceTarget
+    ? { userId: metricsTargetId, name: metricsTargetName }
+    : (sourceTarget || { userId: metricsTargetId, name: metricsTargetName });
   const target = compactTarget({
-    ...(sourceTarget && typeof sourceTarget === 'object' ? sourceTarget : {}),
-    userId: sourceTarget?.userId ?? sourceTarget?.user_id ?? metrics.targetId,
-    name: sourceTarget?.name || metrics.targetName || '',
-    hp: targetHpEnd
+    ...(battleTargetSource && typeof battleTargetSource === 'object' ? battleTargetSource : {}),
+    userId: battleTargetSource?.userId ?? battleTargetSource?.user_id ?? metricsTargetId,
+    name: battleTargetSource?.name || metricsTargetName || '',
+    hp: targetHpEnd ?? battleTargetSource?.hp
   });
+  const rawActualShots = compactNumber(metrics.actualShots);
+  const actualShots = rawActualShots === null ? null : Math.max(0, rawActualShots);
+  const rawConfirmedHits = compactNumber(metrics.confirmedHits);
+  const confirmedHits = rawConfirmedHits === null || actualShots === null
+    ? null
+    : Math.min(actualShots, Math.max(0, rawConfirmedHits));
+  const estimatedHitRate = actualShots !== null && actualShots > 0 && confirmedHits !== null
+    ? Number((confirmedHits / actualShots * 100).toFixed(1))
+    : null;
   const hasBattleEvidence = Boolean(
     target
       && (
@@ -1473,7 +1499,7 @@ function compactExit(event) {
   if (hasBattleEvidence) {
     if (targetHpEnd !== null && targetHpEnd <= 0) outcome = 'victory';
     else if (selfHpEnd !== null && selfHpEnd <= 0) outcome = 'defeat';
-    else if (event.shouldLeave !== false) outcome = 'self-left';
+    else if (event.shouldLeave !== false && (!hasMetricsTarget || metricsMatchSourceTarget)) outcome = 'self-left';
     else outcome = 'ended';
   }
   return {
@@ -1492,7 +1518,7 @@ function compactExit(event) {
           outcome,
           outcomeReason: compactString(event.reason || event.type, 120),
           startedAt: startedAtMs === null ? '' : isoFromMs(startedAtMs),
-          endedAt: at || (endedAtMs > 0 ? isoFromMs(endedAtMs) : ''),
+          endedAt: endedAtMs > 0 ? isoFromMs(endedAtMs) : at,
           durationMs,
           target,
           selfHpStart,
@@ -1501,9 +1527,9 @@ function compactExit(event) {
           targetHpEnd,
           selfDamage,
           targetDamage,
-          actualShots: compactNumber(metrics.actualShots),
-          confirmedHits: compactNumber(metrics.confirmedHits),
-          estimatedHitRate: compactNumber(metrics.estimatedHitRate),
+          actualShots,
+          confirmedHits,
+          estimatedHitRate,
           staminaSpentMs: compactNumber(metrics.totalStaminaSpent)
         }
       : null

@@ -74,7 +74,8 @@ const {
 } = require('./browserless/action-adapter');
 const {
   buildBrowserlessCombatDryRun,
-  estimateAim
+  estimateAim,
+  recordCombatShotLearning
 } = require('./browserless/combat-adapter');
 const {
   createBrowserlessSafetyController,
@@ -10599,6 +10600,52 @@ async function runSelfTest() {
       want: '1970-01-01T00:00:01.000Z|500|100|120|95|95|80|80|enemy'
     },
     {
+      name: 'browserless combat hit metrics credit only recorded shots',
+      got: (() => {
+        const stateful = {};
+        const stateAt = hp => ({
+          userId: 7,
+          realtime: {
+            tick: hp,
+            self: { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100 },
+            entities: [
+              { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100 },
+              { entity_id: 2, user_id: 8, name: 'enemy', x: 1000, y: 0, hp, current_join_mode: 'Active', firing: true }
+            ],
+            bullets: []
+          }
+        });
+        const first = buildBrowserlessCombatDryRun(stateAt(100), {
+          nowMs: 1000,
+          decisionState: stateful,
+          combatEnabled: true
+        });
+        stateful.combatMetrics = {
+          ...stateful.combatMetrics,
+          actualShots: 1,
+          actualLastShotAt: 1100
+        };
+        recordCombatShotLearning(stateful, first.target, first, { nowMs: 1100 });
+        buildBrowserlessCombatDryRun(stateAt(94), {
+          nowMs: 1200,
+          decisionState: stateful,
+          combatEnabled: true
+        });
+        const afterUnattributedDamage = buildBrowserlessCombatDryRun(stateAt(91), {
+          nowMs: 1300,
+          decisionState: stateful,
+          combatEnabled: true
+        });
+        return [
+          afterUnattributedDamage.metrics.actualShots,
+          afterUnattributedDamage.metrics.confirmedHits,
+          afterUnattributedDamage.metrics.estimatedHitRate,
+          afterUnattributedDamage.metrics.targetDamage
+        ].join('|');
+      })(),
+      want: '1|1|100|9'
+    },
+    {
       name: 'browserless incoming shooter overrides engaged combat target',
       got: (() => {
         const stateful = {
@@ -18152,6 +18199,76 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'injury-leave|self-left|Eason|2026-07-13T08:04:31.844Z|14480|100|73|unknown|27|51|42|17|40.5'
+    },
+    {
+      name: 'browserless compact pursuit exit keeps stale combat metrics with their own target',
+      got: (() => {
+        const status = buildCompactBrowserlessStatus({
+          recentExits: [{
+            at: '2026-07-14T05:16:59.753Z',
+            reason: 'pursuit-leave',
+            shouldLeave: true,
+            detail: {
+              decision: {
+                self: { userId: 28886, name: 'self', hp: 100 },
+                target: {
+                  userId: 4700,
+                  name: '没头脑和不高兴',
+                  hp: 100,
+                  distance: 16806,
+                  drop: 23,
+                  invulnerable: true,
+                  invulnerableRemainingMs: 35880
+                },
+                combat: {
+                  target: {
+                    userId: 4700,
+                    name: '没头脑和不高兴',
+                    hp: 100,
+                    distance: 16806,
+                    drop: 23,
+                    invulnerable: true,
+                    invulnerableRemainingMs: 35880
+                  },
+                  metrics: {
+                    targetId: '1079',
+                    targetName: 'Joeyzhou',
+                    startedAt: Date.parse('2026-07-14T05:16:10.387Z'),
+                    lastObservedAt: Date.parse('2026-07-14T05:16:29.273Z'),
+                    initialSelfHp: 100,
+                    lastSelfHp: 100,
+                    initialTargetHp: 100,
+                    lastTargetHp: 2,
+                    selfDamage: 0,
+                    targetDamage: 99,
+                    actualShots: 31,
+                    confirmedHits: 34,
+                    estimatedHitRate: 109.7
+                  }
+                }
+              }
+            }
+          }]
+        }, parseBrowserlessRunnerArgs([], {}));
+        const exit = status.recentExit;
+        const battle = exit.battle;
+        return [
+          exit.target.name,
+          exit.target.hp,
+          exit.target.invulnerable,
+          battle.target.userId,
+          battle.target.name,
+          battle.target.hp,
+          battle.target.invulnerable ?? 'none',
+          battle.outcome,
+          battle.endedAt,
+          battle.durationMs,
+          battle.actualShots,
+          battle.confirmedHits,
+          battle.estimatedHitRate
+        ].join('|');
+      })(),
+      want: '没头脑和不高兴|100|true|1079|Joeyzhou|2|none|ended|2026-07-14T05:16:29.273Z|18886|31|31|100'
     },
     {
       name: 'browserless web panel renders explicit login point safety result',

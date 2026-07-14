@@ -139,6 +139,7 @@ function creditCombatHitLearning(stateful, targetId, hitCount, nowMs) {
     .filter(item => !item.credited && String(item.targetId) === String(targetId) && nowMs - Number(item.at || 0) <= 2500)
     .sort((a, b) => Number(b.at || 0) - Number(a.at || 0));
   let remaining = Math.max(0, Math.round(Number(hitCount || 0)));
+  let credited = 0;
   const behavior = ensureOpponentBehaviorMap(stateful)[String(targetId)] || null;
   for (const shot of shots) {
     if (!remaining) break;
@@ -153,8 +154,10 @@ function creditCombatHitLearning(stateful, targetId, hitCount, nowMs) {
       if (!behavior.probeWeights || typeof behavior.probeWeights !== 'object') behavior.probeWeights = { center: 0.6, short: 0.45, long: 0.45 };
       behavior.probeWeights[shot.hypothesis] = Math.min(1, Number(behavior.probeWeights[shot.hypothesis] || 0.5) * 0.75 + 0.25);
     }
+    credited += 1;
     remaining -= 1;
   }
+  return credited;
 }
 
 function distanceBetween(a, b) {
@@ -738,7 +741,9 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
     .map(bullet => String(bullet?.bullet_id ?? bullet?.bulletId ?? `${bullet?.createdTick ?? ''}:${bullet?.startX ?? bullet?.x ?? ''}:${bullet?.startY ?? bullet?.y ?? ''}`))
     .filter(Boolean);
   const previousMetrics = same && stateful.combatMetrics?.targetId === String(id) ? stateful.combatMetrics : {};
-  if (damaged) creditCombatHitLearning(stateful, id, Math.max(1, Math.round((previousHp - hp) / 3)), nowMs);
+  const creditedHits = damaged
+    ? creditCombatHitLearning(stateful, id, Math.max(1, Math.round((previousHp - hp) / 3)), nowMs)
+    : 0;
   const previousSamples = same && Array.isArray(previous.motionSamples) ? previous.motionSamples : [];
   const sampleWindowMs = Math.max(250, Number(options.combatMotionHistoryWindowMs || 6000));
   const motionSamples = previousSamples
@@ -852,6 +857,8 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
       ? Math.round(modeMetrics.firstDamageDelayTotalMs / modeMetrics.firstDamageSamples)
       : null
   };
+  const actualShots = Math.max(0, Number(previousMetrics.actualShots || 0));
+  const previousConfirmedHits = Math.min(actualShots, Math.max(0, Number(previousMetrics.confirmedHits || 0)));
   stateful.combatMetrics = {
     ...previousMetrics,
     targetId: String(id),
@@ -873,7 +880,7 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
       ? numberOrNull(previousMetrics.minTargetHp)
       : Math.min(numberOrNull(previousMetrics.minTargetHp) ?? hp, hp),
     initialStamina1d: Number.isFinite(initialStamina1d) ? initialStamina1d : (Number.isFinite(currentStamina1d) ? currentStamina1d : null),
-    confirmedHits: Number(previousMetrics.confirmedHits || 0) + (damaged ? Math.max(1, Math.round((previousHp - hp) / 3)) : 0),
+    confirmedHits: Math.min(actualShots, previousConfirmedHits + creditedHits),
     targetDamage: Number(previousMetrics.targetDamage || 0) + (damaged ? previousHp - hp : 0),
     incomingHits: Number(previousMetrics.incomingHits || 0) + (selfDamaged ? Math.max(1, Math.round((previousSelfHp - currentSelfHp) / 3)) : 0),
     selfDamage: Number(previousMetrics.selfDamage || 0) + (selfDamaged ? previousSelfHp - currentSelfHp : 0),
@@ -1086,15 +1093,22 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
       actualLastShotAt: Number.isFinite(Number(stateful?.combatMetrics?.actualLastShotAt)) ? Number(stateful.combatMetrics.actualLastShotAt) : null,
       actualShotIntervalMs: Number.isFinite(Number(stateful?.combatMetrics?.actualShotIntervalMs)) ? Number(stateful.combatMetrics.actualShotIntervalMs) : null
     },
-    metrics: stateful?.combatMetrics ? {
-      ...cloneJson(stateful.combatMetrics),
-      estimatedHitRate: Number(stateful.combatMetrics.actualShots || 0) > 0
-        ? Number((Number(stateful.combatMetrics.confirmedHits || 0) / Number(stateful.combatMetrics.actualShots) * 100).toFixed(1))
-        : null,
-      firstDamageDelayMs: Number(stateful.combatMetrics.firstDamageAt || 0) > 0
-        ? Math.max(0, Number(stateful.combatMetrics.firstDamageAt) - Number(stateful.combatMetrics.startedAt || 0))
-        : null
-    } : null,
+    metrics: stateful?.combatMetrics ? (() => {
+      const metrics = cloneJson(stateful.combatMetrics);
+      const actualShots = Math.max(0, Number(metrics.actualShots || 0));
+      const confirmedHits = Math.min(actualShots, Math.max(0, Number(metrics.confirmedHits || 0)));
+      return {
+        ...metrics,
+        actualShots,
+        confirmedHits,
+        estimatedHitRate: actualShots > 0
+          ? Number((confirmedHits / actualShots * 100).toFixed(1))
+          : null,
+        firstDamageDelayMs: Number(stateful.combatMetrics.firstDamageAt || 0) > 0
+          ? Math.max(0, Number(stateful.combatMetrics.firstDamageAt) - Number(stateful.combatMetrics.startedAt || 0))
+          : null
+      };
+    })() : null,
     dataGaps
   };
 }
