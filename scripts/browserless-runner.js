@@ -97,13 +97,15 @@ async function gracefulShutdownLeave(config, options = {}) {
       const at = new Date(nowMs).toISOString();
       const latestState = readState(config.stateFile);
       const updateState = options.updateState || updateBrowserlessStateFile;
+      const confirmedLeave = shutdownConfirmedLeaveState(latestState, nowMs);
       updateState(config.stateFile, {
         runner: {
-          confirmedLeave: shutdownConfirmedLeaveState(latestState, nowMs)
+          confirmedLeave
         },
         stats: browserlessStatsForOffline(latestState, {
           at,
           reason: 'shutdown-leave',
+          runId: confirmedLeave.runId,
           stamina: shutdownStaminaDetail(result)
         }, { nowMs })
       }, { updatedAt: at });

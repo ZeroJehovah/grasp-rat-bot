@@ -56,6 +56,7 @@ const {
   buildBrowserlessRuntimeDefaults,
   buildBrowserlessStrategyInput,
   createBrowserlessDecisionAdapter,
+  decisionStatePatch,
   opportunityEnemyStaminaCost: browserlessOpportunityEnemyStaminaCost
 } = require('./browserless/decision-adapter');
 const {
@@ -16383,6 +16384,14 @@ async function runSelfTest() {
               }
             }
           },
+          current: {
+            self: { userId: 7, entityId: 106, name: 'self', hp: 79, drop: 740 },
+            stamina: {
+              stamina5sRemainingMilli: 8765,
+              stamina1hRemainingMilli: 1023423,
+              stamina1dRemainingMilli: 19000000
+            }
+          },
           stats: {
             currentSession: {
               online: true,
@@ -16447,10 +16456,15 @@ async function runSelfTest() {
           stored.runner.confirmedLeave.confirmedAt,
           stored.runner.confirmedLeave.snapshotIgnoreUntil,
           stored.runner.confirmedLeave.lastRealtimeTick,
-          stored.runner.confirmedLeave.runId
+          stored.runner.confirmedLeave.runId,
+          stored.stats.lastExit.runId,
+          stored.lastKnown.self.hp,
+          stored.lastKnown.self.drop,
+          stored.lastKnown.stamina.remaining5s,
+          stored.lastKnown.stamina.remaining1d
         ].join('|');
       }),
-      want: 'true|false|true||1|7|persisted-secret|10.0.0.101|2|200|1000|5000|false|1050000|18950000|1050000|2026-07-08T00:00:02.000Z|2026-07-08T00:00:42.000Z|321|shutdown-confirmed-leave-run'
+      want: 'true|false|true||1|7|persisted-secret|10.0.0.101|2|200|1000|5000|false|1050000|18950000|1050000|2026-07-08T00:00:02.000Z|2026-07-08T00:00:42.000Z|321|shutdown-confirmed-leave-run|shutdown-confirmed-leave-run|79|740|8765|19000000'
     },
     {
       name: 'browserless runner dry-run and fake read-only path write redacted logs',
@@ -18012,6 +18026,87 @@ async function runSelfTest() {
       want: 'false|true|true|100|2316|10000|31|stamina-exhausted-leave|1d|2026-07-10T16:00:10.000Z|2830000'
     },
     {
+      name: 'browserless persisted last known survives missing realtime self and blocked restart',
+      got: withTempDirForTest(async dir => {
+        const config = parseBrowserlessRunnerArgs(['--data-dir', dir], {});
+        const file = stateFilePath(config);
+        updateBrowserlessStateFile(file, decisionStatePatch({
+          kind: 'combat-live',
+          reason: 'combat-live-realtime',
+          at: '2026-07-14T08:54:15.423Z',
+          tick: 1213361,
+          action: { kind: 'combat-live', reason: 'combat-live-realtime' },
+          input: {
+            self: { userId: 28886, entityId: 106, name: '文月', hp: 79, drop: 740, x: -9121, y: 60938 },
+            stamina: {
+              stamina5sRemainingMilli: 8765,
+              stamina1hRemainingMilli: 1023423,
+              stamina1dRemainingMilli: 17279017
+            }
+          }
+        }), { updatedAt: '2026-07-14T08:54:15.423Z' });
+        updateBrowserlessStateFile(file, decisionStatePatch({
+          kind: 'wait',
+          reason: 'missing-realtime-self',
+          at: '2026-07-14T08:54:17.414Z',
+          tick: null,
+          action: { kind: 'wait', reason: 'missing-realtime-self' },
+          input: { self: null, stamina: null }
+        }), { updatedAt: '2026-07-14T08:54:17.414Z' });
+        updateBrowserlessStateFile(file, {
+          runner: {
+            currentAction: {
+              kind: 'loop-wait',
+              reason: 'snapshot-safety-retry',
+              nextRunAt: '2026-07-14T08:55:19.336Z'
+            },
+            lastRun: {
+              canary: {
+                runId: 'profit-live-20260714T085418578Z',
+                completedAt: '2026-07-14T08:54:19.325Z',
+                error: 'snapshot safety not confirmed: damage-actor-near-login-point',
+                state: { realtime: { self: null }, fallback: { self: null } }
+              }
+            }
+          },
+          probes: {
+            lastReadOnlyProbe: {
+              runId: 'profit-live-20260714T085418578Z',
+              state: { realtime: { self: null }, fallback: { self: null } }
+            }
+          },
+          stats: {
+            currentSession: { online: false },
+            lastExit: {
+              at: '2026-07-14T08:54:15.000Z',
+              reason: 'shutdown-leave',
+              runId: 'profit-live-20260714T085103157Z'
+            }
+          }
+        }, { updatedAt: '2026-07-14T08:54:19.348Z' });
+        const stored = readBrowserlessStateFile(file);
+        const compact = buildCompactBrowserlessStatus(stored, {
+          nowMs: Date.parse('2026-07-14T08:54:19.348Z')
+        });
+        return [
+          stored.current.self === null,
+          stored.current.stamina === null,
+          stored.lastKnown.self.hp,
+          stored.lastKnown.self.drop,
+          stored.lastKnown.stamina.remaining5s,
+          stored.lastKnown.stamina.remaining1h,
+          stored.lastKnown.stamina.remaining1d,
+          stored.lastKnown.at,
+          stored.lastKnown.tick,
+          compact.game.inGame,
+          compact.lastKnown.self.hp,
+          compact.lastKnown.self.drop,
+          compact.lastKnown.stamina.remaining1d
+        ].join('|');
+      }),
+      want: 'true|true|79|740|8765|1023423|17279017|2026-07-14T08:54:15.423Z|1213361|false|79|740|17279017'
+    },
+    {
       name: 'browserless compact status drops previous-day stamina blocker after reset',
       got: (() => {
         const compact = buildCompactBrowserlessStatus({
@@ -18482,6 +18577,58 @@ async function runSelfTest() {
       want: 'combat-low-hp-disadvantage-leave|41|46|5|50|5'
     },
     {
+      name: 'browserless shutdown exit does not reuse an older combat battle summary',
+      got: (() => {
+        const status = buildCompactBrowserlessStatus({
+          runner: {
+            currentAction: { kind: 'loop-wait', reason: 'snapshot-safety-retry' }
+          },
+          stats: {
+            currentSession: { online: false },
+            lastExit: {
+              at: '2026-07-14T08:54:15.000Z',
+              reason: 'shutdown-leave',
+              runId: 'profit-live-20260714T085103157Z'
+            }
+          },
+          recentExits: [{
+            at: '2026-07-14T08:37:47.767Z',
+            reason: 'combat-hp-disadvantage-leave',
+            runId: 'profit-live-20260714T083706754Z',
+            shouldLeave: true,
+            detail: {
+              decision: {
+                target: { userId: 34683, name: 'colloq168', hp: 88, drop: 1894 },
+                combat: {
+                  metrics: {
+                    targetId: '34683',
+                    targetName: 'colloq168',
+                    startedAt: Date.parse('2026-07-14T08:37:08.098Z'),
+                    lastObservedAt: Date.parse('2026-07-14T08:37:47.711Z'),
+                    initialSelfHp: 100,
+                    lastSelfHp: 67,
+                    initialTargetHp: 100,
+                    lastTargetHp: 88,
+                    selfDamage: 33,
+                    targetDamage: 12,
+                    actualShots: 78,
+                    confirmedHits: 4
+                  }
+                }
+              }
+            }
+          }]
+        }, parseBrowserlessRunnerArgs([], {}));
+        return [
+          status.recentExit === null,
+          status.stats.offline.lastExitReason,
+          status.stats.offline.lastExitAt,
+          status.stats.offline.lastExitRunId
+        ].join('|');
+      })(),
+      want: 'true|shutdown-leave|2026-07-14T08:54:15.000Z|profit-live-20260714T085103157Z'
+    },
+    {
       name: 'browserless offline combat target matches the exit battle target',
       got: (() => {
         const status = buildCompactBrowserlessStatus({
@@ -18494,9 +18641,18 @@ async function runSelfTest() {
               target: { userId: 8, name: 'Hanhua153', hp: 59, distance: 12813, drop: 13 }
             }
           },
+          stats: {
+            currentSession: { online: false },
+            lastExit: {
+              at: '2026-07-14T03:11:47.600Z',
+              reason: 'combat-hp-disadvantage-leave',
+              runId: 'profit-live-pboy-exit'
+            }
+          },
           recentExits: [{
             at: '2026-07-14T03:11:46.974Z',
             reason: 'combat-hp-disadvantage-leave',
+            runId: 'profit-live-pboy-exit',
             shouldLeave: true,
             detail: {
               decision: {

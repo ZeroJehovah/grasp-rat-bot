@@ -11,6 +11,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const PICKED_COINS_PER_SELF_DROP = 2;
 const DEFAULT_STAMINA_EXHAUSTED_THRESHOLD_MS = 1000;
 const DEFAULT_STAMINA_RESET_GRACE_MS = 10000;
+const RECENT_EXIT_MATCH_WINDOW_MS = 60000;
 
 function defaultBrowserlessState() {
   return {
@@ -59,6 +60,7 @@ function defaultBrowserlessState() {
       decisionState: null,
       action: null
     },
+    lastKnown: null,
     recentExits: [],
     network: {
       sourceIp: '',
@@ -117,6 +119,7 @@ function defaultBrowserlessStats() {
     lastExit: {
       at: '',
       reason: '',
+      runId: '',
       nextRunAt: '',
       reconnectDelayMs: null
     }
@@ -140,7 +143,9 @@ function shouldReplaceStateObject(pathParts) {
     || pathKey === 'probes.lastReadOnlyProbe'
     || pathKey === 'current.action'
     || pathKey === 'current.decision'
-    || pathKey === 'current.decisionState';
+    || pathKey === 'current.decisionState'
+    || pathKey === 'lastKnown.self'
+    || pathKey === 'lastKnown.stamina';
 }
 
 function mergeState(base, patch, pathParts = []) {
@@ -198,6 +203,11 @@ function normalizeBrowserlessState(state, file = '') {
   normalized.runner.running = Boolean(normalized.runner.running);
   normalized.runner.readOnly = normalized.runner.readOnly !== false;
   normalized.runner.dryRun = normalized.runner.dryRun !== false;
+  normalized.lastKnown = normalizeBrowserlessLastKnown(
+    normalized.lastKnown,
+    normalized.current,
+    normalized.updatedAt
+  );
   normalized.recentExits = Array.isArray(normalized.recentExits) ? normalized.recentExits.slice(-20) : [];
   normalized.stats = normalizeBrowserlessStats(normalized.stats, state?.stats);
   normalized.network.sourceIp = String(normalized.network.sourceIp || '');
@@ -365,6 +375,7 @@ function normalizeBrowserlessStats(stats, rawStats = stats) {
   normalized.lastExit = {
     at: compactString(lastExit.at, 48),
     reason: compactString(lastExit.reason, 160),
+    runId: compactString(lastExit.runId, 96),
     nextRunAt: compactString(lastExit.nextRunAt, 48),
     reconnectDelayMs: compactNumber(lastExit.reconnectDelayMs)
   };
@@ -631,6 +642,7 @@ function finalizeBrowserlessStatsSession(stats, detail = {}, nowMs = Date.now())
   const at = compactString(detail.at || detail.completedAt || isoFromMs(nowMs), 48);
   let lastExitAt = stats.lastExit.at || '';
   let lastExitReason = stats.lastExit.reason || '';
+  let lastExitRunId = stats.lastExit.runId || '';
   if (session.online && session.sessionId) {
     if (updateBrowserlessStatsSessionStamina(session, detail.stamina, detail.self) && at) {
       session.lastSeenAt = at;
@@ -657,13 +669,16 @@ function finalizeBrowserlessStatsSession(stats, detail = {}, nowMs = Date.now())
     session.exitReason = reason;
     lastExitAt = at || lastExitAt;
     lastExitReason = reason || lastExitReason;
+    lastExitRunId = compactString(detail.runId || lastExitRunId, 96);
   } else if (detail.forceLastExit) {
     lastExitAt = at || lastExitAt;
     lastExitReason = reason || lastExitReason;
+    lastExitRunId = compactString(detail.runId || lastExitRunId, 96);
   }
   stats.lastExit = {
     at: lastExitAt,
     reason: lastExitReason,
+    runId: lastExitRunId,
     nextRunAt: compactString(detail.nextRunAt || stats.lastExit.nextRunAt, 48),
     reconnectDelayMs: compactNumber(detail.reconnectDelayMs ?? detail.delayMs ?? stats.lastExit.reconnectDelayMs)
   };
@@ -710,6 +725,7 @@ function compactBrowserlessStats(normalized, game, action, options = {}, lastKno
     offline: {
       lastExitAt: stats.lastExit.at || session.exitedAt || '',
       lastExitReason: stats.lastExit.reason || session.exitReason || '',
+      lastExitRunId: stats.lastExit.runId || '',
       nextReconnectAt: compactString(nextRunAt, 48),
       reconnectRemainingMs: nextRunAtMs ? Math.max(0, Math.round(nextRunAtMs - nowMs)) : null,
       scheduledReconnectAt: compactString(rawNextRunAt, 48),
@@ -1042,9 +1058,9 @@ function compactStamina(stamina, self) {
   return {
     current: compactNumber(source.stamina ?? selfSource.stamina),
     spent: compactNumber(source.staminaSpent),
-    remaining5s: compactNumber(source.stamina5sRemainingMilli ?? source.stamina5s ?? selfSource.stamina5s ?? selfSource.stamina_5s_remaining_milli),
-    remaining1h: compactNumber(source.stamina1hRemainingMilli ?? source.stamina1h ?? selfSource.stamina1h ?? selfSource.stamina_1h_remaining_milli),
-    remaining1d: compactNumber(source.stamina1dRemainingMilli ?? source.stamina1d ?? selfSource.stamina1d ?? selfSource.stamina_1d_remaining_milli)
+    remaining5s: compactNumber(source.remaining5s ?? source.stamina5sRemainingMilli ?? source.stamina5s ?? selfSource.stamina5s ?? selfSource.stamina_5s_remaining_milli),
+    remaining1h: compactNumber(source.remaining1h ?? source.stamina1hRemainingMilli ?? source.stamina1h ?? selfSource.stamina1h ?? selfSource.stamina_1h_remaining_milli),
+    remaining1d: compactNumber(source.remaining1d ?? source.stamina1dRemainingMilli ?? source.stamina1d ?? selfSource.stamina1d ?? selfSource.stamina_1d_remaining_milli)
   };
 }
 
@@ -1063,6 +1079,32 @@ function compactSelf(self) {
     moving: self.moving === undefined ? null : Boolean(self.moving),
     firing: self.firing === undefined ? null : Boolean(self.firing),
     alive: self.alive === undefined ? null : Boolean(self.alive)
+  };
+}
+
+function normalizeBrowserlessLastKnown(value, current = {}, updatedAt = '') {
+  const source = value && typeof value === 'object' ? value : {};
+  const hasStoredSelf = Boolean(source.self && typeof source.self === 'object');
+  const fallbackSelf = current?.self && typeof current.self === 'object' ? current.self : null;
+  const rawSelf = hasStoredSelf ? source.self : fallbackSelf;
+  const rawStamina = source.stamina && typeof source.stamina === 'object'
+    ? source.stamina
+    : (!hasStoredSelf ? current?.stamina : null);
+  const self = compactSelf(rawSelf);
+  const stamina = compactStamina(rawStamina, rawSelf);
+  const hasStamina = stamina.remaining5s !== null
+    || stamina.remaining1h !== null
+    || stamina.remaining1d !== null;
+  if (!self && !hasStamina) return null;
+  const fallbackDecisionAt = !hasStoredSelf ? current?.decision?.at : '';
+  const fallbackTick = !hasStoredSelf
+    ? current?.decision?.tick ?? current?.decision?.input?.realtime?.tick
+    : null;
+  return {
+    self,
+    stamina,
+    at: compactString(source.at || fallbackDecisionAt || updatedAt, 48),
+    tick: compactNumber(source.tick ?? fallbackTick)
   };
 }
 
@@ -1090,11 +1132,15 @@ function latestKnownSelfSource(normalized) {
 }
 
 function compactLastKnown(normalized) {
-  const source = latestKnownSelfSource(normalized);
+  const persisted = normalized?.lastKnown && typeof normalized.lastKnown === 'object'
+    ? normalized.lastKnown
+    : null;
+  const source = persisted?.self || latestKnownSelfSource(normalized);
   const self = compactSelf(source);
-  const stamina = compactStamina(normalized?.current?.stamina, source);
+  const stamina = compactStamina(persisted?.stamina || normalized?.current?.stamina, source);
   const at = compactString(
-    normalized?.runner?.lastRun?.canary?.completedAt
+    persisted?.at
+      || normalized?.runner?.lastRun?.canary?.completedAt
       || normalized?.runner?.lastRun?.completedAt
       || normalized?.updatedAt,
     48
@@ -1536,6 +1582,38 @@ function compactExit(event) {
   };
 }
 
+function recentExitRunId(event) {
+  return compactString(event?.runId || event?.detail?.runId, 96);
+}
+
+function recentExitMatchesLastExit(event, lastExit = {}) {
+  if (!event || typeof event !== 'object') return false;
+  const lastReason = compactString(lastExit.reason, 160);
+  const eventReason = compactString(event.reason || event.type, 160);
+  if (lastReason && eventReason && lastReason !== eventReason) return false;
+
+  const lastRunId = compactString(lastExit.runId, 96);
+  const eventRunId = recentExitRunId(event);
+  if (lastRunId && eventRunId) return lastRunId === eventRunId;
+
+  const lastAtMs = parseTimeMs(lastExit.at);
+  const eventAtMs = parseTimeMs(event.at || event.time || event.createdAt);
+  if (lastAtMs > 0 && eventAtMs > 0) {
+    return Math.abs(lastAtMs - eventAtMs) <= RECENT_EXIT_MATCH_WINDOW_MS;
+  }
+  return Boolean(lastReason && eventReason && lastReason === eventReason);
+}
+
+function latestMatchingRecentActualExit(recentExits, lastExit = {}) {
+  const actualExits = (Array.isArray(recentExits) ? recentExits : [])
+    .filter(event => event?.shouldLeave !== false)
+    .reverse();
+  if (!actualExits.length) return null;
+  const hasLastExitIdentity = Boolean(lastExit?.at || lastExit?.reason || lastExit?.runId);
+  if (!hasLastExitIdentity) return actualExits[0];
+  return actualExits.find(event => recentExitMatchesLastExit(event, lastExit)) || null;
+}
+
 function compactAuthReason(normalized) {
   const runner = normalized?.runner || {};
   const run = runner.lastRun && typeof runner.lastRun === 'object' ? runner.lastRun : {};
@@ -1623,6 +1701,7 @@ function buildPublicBrowserlessStatus(state, config = {}) {
     probes: normalized.probes,
     loginPointSafety: normalized.loginPointSafety,
     current: normalized.current,
+    lastKnown: normalized.lastKnown,
     recentExits: normalized.recentExits,
     network: normalized.network,
     stats: normalized.stats,
@@ -1651,7 +1730,7 @@ function buildCompactBrowserlessStatus(state, config = {}) {
   const current = normalized.current || {};
   const action = compactAction(normalized.runner.currentAction) || compactAction(current.action);
   const recentExits = Array.isArray(normalized.recentExits) ? normalized.recentExits : [];
-  const recentActualExit = recentExits.slice().reverse().find(event => event?.shouldLeave !== false) || null;
+  const recentActualExit = latestMatchingRecentActualExit(recentExits, normalized.stats?.lastExit);
   const loginPointSafetyDetail = compactLoginPointSafetyDetail(normalized.loginPointSafety || {}, normalized);
   const loginPoint = compactPoint(normalized.loginPointSafety?.point) || loginPointSafetyDetail?.point || null;
   const game = compactGameStatus(normalized);

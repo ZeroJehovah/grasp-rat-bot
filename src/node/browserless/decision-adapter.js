@@ -5006,6 +5006,26 @@ function summarizeBrowserlessDecision(decision) {
 function decisionStatePatch(decision) {
   const summary = summarizeBrowserlessDecision(decision);
   if (!summary) return {};
+  const observedSelf = summary.input?.self && typeof summary.input.self === 'object'
+    ? summary.input.self
+    : null;
+  const observedStamina = summary.input?.stamina && typeof summary.input.stamina === 'object'
+    ? summary.input.stamina
+    : null;
+  const hasObservedStamina = Boolean(observedStamina && Object.values(observedStamina).some(value => (
+    value !== null && value !== undefined && value !== ''
+  )));
+  const observedTick = summary.tick ?? summary.input?.realtime?.tick;
+  const lastKnown = observedSelf
+    ? {
+        self: observedSelf,
+        ...(hasObservedStamina ? { stamina: observedStamina } : {}),
+        ...(summary.at ? { at: summary.at } : {}),
+        ...(observedTick !== null && observedTick !== undefined && observedTick !== '' && Number.isFinite(Number(observedTick))
+          ? { tick: Number(observedTick) }
+          : {})
+      }
+    : null;
   return {
     runner: {
       currentAction: summary.action
@@ -5017,7 +5037,8 @@ function decisionStatePatch(decision) {
       combatSummary: summary.combat || null,
       decision: summary,
       decisionState: decision.stateful?.decisionState || null
-    }
+    },
+    ...(lastKnown ? { lastKnown } : {})
   };
 }
 

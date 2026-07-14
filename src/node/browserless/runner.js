@@ -499,6 +499,7 @@ function runnerResultExitDetail(result, fallbackReason = '') {
   return {
     at: canary?.completedAt || result?.completedAt || '',
     reason,
+    runId: String(canary?.runId || result?.runId || ''),
     stamina: stamina1dRemainingMilli !== null || stamina1dLimitMilli !== null
       ? { stamina1dRemainingMilli, stamina1dLimitMilli }
       : null
@@ -1561,7 +1562,12 @@ async function runBrowserlessRunner(config, deps = {}) {
     const { finalSelf, loginPoint: learnedLoginPoint } = learnedLoginPointFromCanary(canary);
     const result = { ok: Boolean(canary?.ok), mode: config.controlMode || 'read-only', canary: canary || null };
     const finalDecisionPatch = canary?.decisions?.last ? decisionStatePatch(canary.decisions.last) : {};
-    const safetyEvents = [canary?.safety?.event, canary?.safety?.leaveFailure].filter(Boolean);
+    const safetyEvents = [canary?.safety?.event, canary?.safety?.leaveFailure]
+      .filter(Boolean)
+      .map(event => ({
+        ...event,
+        runId: event.runId || canary?.runId || ''
+      }));
     const currentStateBeforeFinish = readBrowserlessStateFile(stateFile);
     updateState({
       ...finalDecisionPatch,
