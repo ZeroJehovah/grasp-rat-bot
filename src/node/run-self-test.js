@@ -7428,11 +7428,11 @@ async function runSelfTest() {
           bullets: [],
           coin_drops: [
             { drop_id: 'field-a', amount: 1, x: 22000, y: 0 },
-            { drop_id: 'field-b', amount: 1, x: 26000, y: 1000 },
-            { drop_id: 'field-c', amount: 1, x: 30000, y: -1000 },
-            { drop_id: 'field-d', amount: 1, x: 34000, y: 1000 },
-            { drop_id: 'field-e', amount: 1, x: 38000, y: -1000 },
-            { drop_id: 'field-f', amount: 1, x: 40000, y: 0 }
+            { drop_id: 'field-b', amount: 1, x: 22500, y: 500 },
+            { drop_id: 'field-c', amount: 1, x: 23000, y: -500 },
+            { drop_id: 'field-d', amount: 1, x: 23500, y: 500 },
+            { drop_id: 'field-e', amount: 1, x: 24000, y: -500 },
+            { drop_id: 'field-f', amount: 1, x: 24500, y: 0 }
           ]
         }, { receivedAtMs: nowMs });
         store.ingestFrame({
@@ -8206,11 +8206,67 @@ async function runSelfTest() {
           decision.combat.actionEligible,
           decision.combat.profitPursuitSuppression.reason,
           decision.combat.profitPursuitSuppression.targetId,
+          decision.combat.profitPursuitSuppression.centerExtensionCm,
+          decision.combat.profitPursuitSuppression.pursuitRadiusCm,
           stateful.combatTarget === null,
           stateful.profitPursuitSuppressions?.['8']?.reason || ''
         ].join('|');
       })(),
-      want: 'patrol|return-to-center-activity-radius|false|profit-pursuit-target-outside-center|8|true|profit-pursuit-target-outside-center'
+      want: 'patrol|return-to-center-activity-radius|false|profit-pursuit-target-outside-center|8|14500|114500|true|profit-pursuit-target-outside-center'
+    },
+    {
+      name: 'browserless profit pursuit keeps finishing within one attack range beyond center',
+      got: (() => {
+        const stateful = {
+          combatTarget: {
+            id: 8,
+            at: 1000,
+            firstSeenAt: 1000,
+            lastInRangeAt: 1000,
+            lastDamageAt: 1000,
+            hp: 10,
+            firstHp: 100,
+            minHp: 10,
+            damageFromStart: 90,
+            drop: 12,
+            intent: 'profit',
+            originIntent: 'profit'
+          }
+        };
+        const decision = buildBrowserlessDecision({
+          userId: 7,
+          realtime: {
+            tick: 61,
+            frameAgeMs: 100,
+            self: { entity_id: 1, user_id: 7, name: 'self', x: -16289, y: 93350, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 825 },
+            entities: [
+              { entity_id: 1, user_id: 7, name: 'self', x: -16289, y: 93350, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 825 },
+              { entity_id: 2, user_id: 8, name: 'edge-runner', x: -16257, y: 98714, vx: 0, vy: 0, hp: 10, current_join_mode: 'Active', drop: 12 }
+            ],
+            bullets: []
+          },
+          fallback: { tick: 61, frameAgeMs: 100, entities: [], coinDrops: [], messages: [] }
+        }, stateful, {
+          nowMs: 2000,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          combatAttackRange: 14500,
+          targetStickMs: 120000,
+          combatEngageStickMs: 120000,
+          browserlessCenterActivityRadiusCm: 100000,
+          browserlessProfitPursuitMaxMs: 60000,
+          browserlessProfitPursuitSuppressMs: 60000
+        });
+        return [
+          decision.kind,
+          decision.reason,
+          decision.combat.actionEligible,
+          decision.combat.profitPursuitSuppression === null,
+          decision.action.target?.userId,
+          !stateful.profitPursuitSuppressions?.['8']
+        ].join('|');
+      })(),
+      want: 'combat-live|combat-live-realtime|true|true|8|true'
     },
     {
       name: 'browserless combat disadvantage leave marks target dangerous',
@@ -8937,6 +8993,110 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'profit-candidate|visible-coin|near-safe|true|false'
+    },
+    {
+      name: 'browserless field migration charges the planned collection route',
+      got: (() => {
+        const decision = buildBrowserlessDecision({
+          userId: 7,
+          realtime: {
+            tick: 61,
+            frameAgeMs: 100,
+            self: { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+            entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 }],
+            bullets: [],
+            coinDrops: []
+          },
+          fallback: {
+            tick: 61,
+            frameAgeMs: 100,
+            entities: [],
+            messages: [],
+            coinDrops: [
+              { drop_id: 'field-a', amount: 1, x: 22000, y: 0 },
+              { drop_id: 'field-b', amount: 1, x: 23000, y: 1000 },
+              { drop_id: 'field-c', amount: 1, x: 24000, y: -1000 },
+              { drop_id: 'field-d', amount: 1, x: 25000, y: 1000 },
+              { drop_id: 'field-e', amount: 1, x: 26000, y: -1000 },
+              { drop_id: 'field-f', amount: 1, x: 27000, y: 0 }
+            ]
+          }
+        }, {}, {
+          nowMs: 1600,
+          controlMode: 'profit-live',
+          coinMaxDistance: 500,
+          footCoinPriorityDistance: 500,
+          coinRouteMaxDistance: 0,
+          fieldMigrationMinDistance: 22000,
+          fieldMigrationMaxDistance: 45000,
+          fieldMigrationClusterRadius: 18000,
+          fieldMigrationMinCoins: 3,
+          fieldMigrationNearbyCoinBlockDistance: 30000,
+          dynamicProfitThresholdEnabled: false
+        });
+        return [
+          decision.reason,
+          decision.action.target.id,
+          decision.action.target.fieldMembers,
+          decision.action.target.fieldAmount,
+          decision.action.staminaCost > decision.action.target.distance,
+          decision.profit.best.score < 160000
+        ].join('|');
+      })(),
+      want: 'migrate-to-known-field|field-a|6|6|true|true'
+    },
+    {
+      name: 'browserless snapshot fallback near route blocks distant field migration',
+      got: (() => {
+        const decision = buildBrowserlessDecision({
+          userId: 7,
+          realtime: {
+            tick: 62,
+            frameAgeMs: 100,
+            self: { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+            entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 }],
+            bullets: [],
+            coinDrops: []
+          },
+          fallback: {
+            tick: 62,
+            frameAgeMs: 100,
+            entities: [],
+            messages: [],
+            coinDrops: [
+              { drop_id: 'near-a', amount: 1, x: 3311, y: -3553 },
+              { drop_id: 'near-b', amount: 1, x: 785, y: -7410 },
+              { drop_id: 'near-c', amount: 1, x: -4023, y: -5386 },
+              { drop_id: 'field-a', amount: 1, x: 22406, y: 0 },
+              { drop_id: 'field-b', amount: 1, x: 22506, y: 0 },
+              { drop_id: 'field-c', amount: 1, x: 22606, y: 0 },
+              { drop_id: 'field-d', amount: 1, x: 22706, y: 0 },
+              { drop_id: 'field-e', amount: 1, x: 22806, y: 0 },
+              { drop_id: 'field-f', amount: 1, x: 22906, y: 0 }
+            ]
+          }
+        }, {}, {
+          nowMs: 1600,
+          controlMode: 'profit-live',
+          coinMaxDistance: 18000,
+          footCoinPriorityDistance: 500,
+          fieldMigrationMinDistance: 22000,
+          fieldMigrationMaxDistance: 45000,
+          fieldMigrationClusterRadius: 18000,
+          fieldMigrationMinCoins: 3,
+          fieldMigrationNearbyCoinBlockDistance: 30000,
+          dynamicProfitThresholdEnabled: false
+        });
+        return [
+          decision.input.profitCoinSource,
+          decision.reason,
+          decision.action.target.id,
+          decision.action.coinRoute.value,
+          decision.action.target.distance < 5000,
+          decision.profit.candidates.some(item => item.reason === 'migrate-to-known-field')
+        ].join('|');
+      })(),
+      want: 'snapshot-fallback|best-opportunity-coin-route|near-a|3|true|false'
     },
     {
       name: 'browserless single coin bait holds a lone selected one coin within ten meters',

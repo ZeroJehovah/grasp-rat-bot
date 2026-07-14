@@ -51,6 +51,7 @@ const {
   coinIgnoreCleanupIntentCore
 } = require('../../strategy/coin-progress');
 const {
+  buildCoinRouteFromAnchorCore,
   coinRouteActionMetaCore,
   coinRouteKey,
   pickCoinRouteOpportunityCore
@@ -2729,10 +2730,12 @@ function prioritizeBrowserlessOpportunities(opportunities, options = {}) {
   }));
 }
 
-function nearestRealtimeCoinWithin(self, coins, activeThreats, maxDistance, options = {}) {
+function nearestProfitCoinWithin(self, coins, activeThreats, maxDistance, options = {}) {
   if (!(Number(maxDistance) > 0)) return null;
+  // `profitCoins` has already selected one usable authority. When realtime
+  // coins are absent, fresh visible-range snapshot fallback is the active
+  // profit source and must block a needless long-distance field migration.
   return (coins || [])
-    .filter(coin => !coin.snapshotOnly)
     .filter(coin => Number(coin?.amount || 0) > 0)
     .map(coin => ({ ...coin, distance: Number.isFinite(Number(coin.distance)) ? Number(coin.distance) : distanceBetween(self, coin) }))
     .filter(coin => Number.isFinite(Number(coin.distance)) && Number(coin.distance) <= Number(maxDistance))
@@ -2745,7 +2748,7 @@ function nearestRealtimeCoinWithin(self, coins, activeThreats, maxDistance, opti
 function fieldMigrationBlockedByNearbyCoin(self, coins, activeThreats, fieldCoin = null, options = {}) {
   const blockDistance = Math.max(0, Number(options.fieldMigrationNearbyCoinBlockDistance ?? BROWSER_RUNTIME_DEFAULTS.fieldMigrationNearbyCoinBlockDistance));
   if (!(blockDistance > 0)) return false;
-  const nearby = nearestRealtimeCoinWithin(self, coins, activeThreats, blockDistance, options);
+  const nearby = nearestProfitCoinWithin(self, coins, activeThreats, blockDistance, options);
   if (!nearby) return false;
   if (fieldCoin) {
     const nearbyId = nearby.drop_id ?? nearby.id;
@@ -2781,13 +2784,20 @@ function pickFieldMigrationCoin(input, activeThreats, thresholdContext, options 
   for (const coin of candidates) {
     const members = candidates.filter(other => distanceBetween(coin, other) <= clusterRadius);
     if (members.length < minCoins) continue;
-    const totalAmount = members.reduce((sum, item) => sum + Number(item.amount || 0), 0);
-    const staminaCost = opportunityCoinStaminaCost(coin, options);
-    const score = opportunityValueScoreCore(totalAmount, staminaCost, {
-      weight: options.coinOpportunityValue ?? BROWSER_RUNTIME_DEFAULTS.coinOpportunityValue,
-      distanceFloor: options.opportunityDistanceFloor ?? BROWSER_RUNTIME_DEFAULTS.opportunityDistanceFloor,
-      distanceScoreScale: options.opportunityDistanceScoreScale ?? BROWSER_RUNTIME_DEFAULTS.opportunityDistanceScoreScale
+    const fieldRoute = buildCoinRouteFromAnchorCore(self, coin, members, activeThreats, {
+      ...coinRouteCoreOptions(input, {}, options),
+      clusterRadius
     });
+    if (!fieldRoute) continue;
+    // Compare the field using an actually collectable multi-coin route. The
+    // old anchor-only cost credited the whole cluster while charging only the
+    // trip to its first coin, which systematically overstated distant fields.
+    const totalAmount = members.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+    const plannedAmount = Math.max(0, Number(fieldRoute.routeValue ?? fieldRoute.coinRoute?.value ?? 0));
+    const plannedMembers = Math.max(0, Number(fieldRoute.routeLegs ?? fieldRoute.coinRoute?.legCount ?? 0));
+    const staminaCost = Math.max(0, Number(fieldRoute.opportunityStaminaCost ?? fieldRoute.coinRoute?.staminaCost ?? 0));
+    const score = Number(fieldRoute.opportunityScore);
+    if (!(plannedAmount > 0) || plannedMembers < minCoins || !Number.isFinite(staminaCost) || !Number.isFinite(score)) continue;
     if (!best || score > Number(best.score || -Infinity)) {
       best = {
         ...coin,
@@ -2796,10 +2806,13 @@ function pickFieldMigrationCoin(input, activeThreats, thresholdContext, options 
         opportunityScore: score,
         opportunityStaminaCost: staminaCost,
         fieldMigration: true,
-        fieldMembers: members.length,
-        fieldAmount: totalAmount,
-        members: members.length,
-        totalAmount
+        fieldMembers: plannedMembers,
+        fieldAmount: plannedAmount,
+        fieldClusterMembers: members.length,
+        fieldClusterAmount: totalAmount,
+        fieldRoute: fieldRoute.coinRoute || null,
+        members: plannedMembers,
+        totalAmount: plannedAmount
       };
     }
   }
@@ -4307,6 +4320,11 @@ function buildProfitPursuitSuppression(input, combatDecision, stateful = {}, opt
   }
 
   const centerRadius = browserlessCenterActivityRadius(options);
+  const centerExtension = Math.max(0, Number(options.combatAttackRange ?? options.attackRange ?? DEFAULT_ATTACK_RANGE));
+  // New ordinary-profit targets remain constrained to the dense center. An
+  // already engaged target gets one attack-range of hysteresis so crossing
+  // the exact circle edge cannot cancel a close finishing opportunity.
+  const pursuitRadius = centerRadius > 0 ? centerRadius + centerExtension : 0;
   const selfRadius = pointRadiusFromOrigin(input?.self);
   const targetRadius = pointRadiusFromOrigin(target);
   const engagedMs = profitPursuitEngagedMs(combatDecision, stateful, nowMs);
@@ -4317,9 +4335,9 @@ function buildProfitPursuitSuppression(input, combatDecision, stateful = {}, opt
     ?? BROWSER_RUNTIME_DEFAULTS.browserlessProfitPursuitMaxMs
     ?? 60000));
   let reason = '';
-  if (centerRadius > 0 && Number.isFinite(targetRadius) && targetRadius > centerRadius) {
+  if (pursuitRadius > 0 && Number.isFinite(targetRadius) && targetRadius > pursuitRadius) {
     reason = 'profit-pursuit-target-outside-center';
-  } else if (centerRadius > 0 && Number.isFinite(selfRadius) && selfRadius > centerRadius) {
+  } else if (pursuitRadius > 0 && Number.isFinite(selfRadius) && selfRadius > pursuitRadius) {
     reason = 'profit-pursuit-self-outside-center';
   } else if (minDamageMs > 0
     && minDamageHp > 0
@@ -4343,6 +4361,8 @@ function buildProfitPursuitSuppression(input, combatDecision, stateful = {}, opt
     suppressMs: Math.round(suppressMs),
     engagedMs: Math.round(engagedMs),
     centerRadiusCm: Math.round(centerRadius),
+    centerExtensionCm: Math.round(centerExtension),
+    pursuitRadiusCm: Math.round(pursuitRadius),
     selfRadiusCm: Number.isFinite(selfRadius) ? Math.round(selfRadius) : null,
     targetRadiusCm: Number.isFinite(targetRadius) ? Math.round(targetRadius) : null,
     firstHp: damageProgress.firstHp,
