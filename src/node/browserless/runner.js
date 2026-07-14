@@ -1687,6 +1687,7 @@ async function runBrowserlessRunnerSelfTest() {
 }
 
 module.exports = {
+  CONFIRMED_LEAVE_SNAPSHOT_IGNORE_MS,
   browserlessDayKey,
   browserlessLoopPlan,
   confirmedLeaveStateFromResult,

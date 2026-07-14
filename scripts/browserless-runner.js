@@ -6,6 +6,7 @@ const {
   usage
 } = require('../src/node/browserless/config');
 const {
+  CONFIRMED_LEAVE_SNAPSHOT_IGNORE_MS,
   runBrowserlessRunner,
   hydrateConfigFromState,
   runBrowserlessRunnerSelfTest
@@ -45,6 +46,28 @@ function shutdownStaminaDetail(result) {
   };
 }
 
+function shutdownLastRealtimeTick(state = {}) {
+  const canary = state?.runner?.lastRun?.canary || {};
+  const candidates = [
+    canary?.state?.realtime?.tick,
+    canary?.stats?.tick?.last,
+    canary?.decisions?.last?.tick,
+    canary?.decisions?.last?.input?.realtime?.tick
+  ].map(Number).filter(value => Number.isFinite(value) && value > 0);
+  return candidates.length ? Math.max(...candidates) : 0;
+}
+
+function shutdownConfirmedLeaveState(state = {}, nowMs = Date.now()) {
+  const confirmedAtMs = Number.isFinite(Number(nowMs)) ? Number(nowMs) : Date.now();
+  const canary = state?.runner?.lastRun?.canary || {};
+  return {
+    confirmedAt: new Date(confirmedAtMs).toISOString(),
+    snapshotIgnoreUntil: new Date(confirmedAtMs + CONFIRMED_LEAVE_SNAPSHOT_IGNORE_MS).toISOString(),
+    lastRealtimeTick: shutdownLastRealtimeTick(state),
+    runId: String(canary.runId || '')
+  };
+}
+
 async function gracefulShutdownLeave(config, options = {}) {
   const readState = options.readState || readBrowserlessStateFile;
   const state = readState(config.stateFile);
@@ -75,6 +98,9 @@ async function gracefulShutdownLeave(config, options = {}) {
       const latestState = readState(config.stateFile);
       const updateState = options.updateState || updateBrowserlessStateFile;
       updateState(config.stateFile, {
+        runner: {
+          confirmedLeave: shutdownConfirmedLeaveState(latestState, nowMs)
+        },
         stats: browserlessStatsForOffline(latestState, {
           at,
           reason: 'shutdown-leave',
@@ -183,5 +209,7 @@ if (require.main === module) {
 module.exports = {
   gracefulShutdownLeave,
   installGracefulShutdownHandlers,
-  main
+  main,
+  shutdownConfirmedLeaveState,
+  shutdownLastRealtimeTick
 };

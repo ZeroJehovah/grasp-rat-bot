@@ -16155,6 +16155,15 @@ async function runSelfTest() {
           network: {
             sourceIp: '10.0.0.101'
           },
+          runner: {
+            lastRun: {
+              canary: {
+                runId: 'shutdown-confirmed-leave-run',
+                state: { realtime: { tick: 321 } },
+                stats: { tick: { last: 320 } }
+              }
+            }
+          },
           stats: {
             currentSession: {
               online: true,
@@ -16215,10 +16224,14 @@ async function runSelfTest() {
           stored.stats.currentSession.online,
           stored.stats.currentSession.staminaSpentMs,
           stored.stats.currentSession.lastStamina1dRemaining,
-          stored.stats.today.staminaSpentMs
+          stored.stats.today.staminaSpentMs,
+          stored.runner.confirmedLeave.confirmedAt,
+          stored.runner.confirmedLeave.snapshotIgnoreUntil,
+          stored.runner.confirmedLeave.lastRealtimeTick,
+          stored.runner.confirmedLeave.runId
         ].join('|');
       }),
-      want: 'true|false|true||1|7|persisted-secret|10.0.0.101|2|200|1000|5000|false|1050000|18950000|1050000'
+      want: 'true|false|true||1|7|persisted-secret|10.0.0.101|2|200|1000|5000|false|1050000|18950000|1050000|2026-07-08T00:00:02.000Z|2026-07-08T00:00:42.000Z|321|shutdown-confirmed-leave-run'
     },
     {
       name: 'browserless runner dry-run and fake read-only path write redacted logs',
