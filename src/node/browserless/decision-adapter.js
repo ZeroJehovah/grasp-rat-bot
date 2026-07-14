@@ -1606,6 +1606,7 @@ function summarizeNearbyForPanel(input, action, combat, options = {}, singleCoin
     .filter(target => visibleRange <= 0 || Number(target.distance) <= visibleRange)
     .sort((a, b) => Number(a.distance) - Number(b.distance))
     .map(target => {
+      const displayName = entityDisplayName(target);
       const dropKnown = entityDropKnown(target);
       const drop = dropKnown ? numberOrNull(entityDropValue(target)) : null;
       const fullStamina5s = hasFull5sStamina(target, options);
@@ -1620,16 +1621,19 @@ function summarizeNearbyForPanel(input, action, combat, options = {}, singleCoin
           && !target.firing
           && !threatTargetIds.has(targetKey)
       );
-      const lowValueAfk = Boolean(
-        afk
-          && dropKnown
-          && drop !== null
-          && drop < lowDropThreshold
-          && !selected
-          && !decisionTargetIds.has(targetKey)
+      const foldAsLowValueAfk = Boolean(
+        !displayName
+          || (
+            afk
+              && dropKnown
+              && drop !== null
+              && drop < lowDropThreshold
+              && !selected
+              && !decisionTargetIds.has(targetKey)
+          )
       );
       return [
-        entityDisplayName(target) || '未知玩家',
+        displayName || '未知玩家',
         numberOrNull(target.hp),
         staminaRemainingValue(target, '5s'),
         drop,
@@ -1641,7 +1645,7 @@ function summarizeNearbyForPanel(input, action, combat, options = {}, singleCoin
         afkSelectable ? 1 : 0,
         afk ? 1 : 0,
         afk && afkDisplayGreen(target, options) ? 1 : 0,
-        lowValueAfk ? 1 : 0
+        foldAsLowValueAfk ? 1 : 0
       ];
     });
   return {

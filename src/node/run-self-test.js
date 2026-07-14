@@ -6797,7 +6797,8 @@ async function runSelfTest() {
             fullStamina5s({ entity_id: 3, user_id: 9, name: 'invulnerable-high', x: 2000, y: 0, hp: 100, current_join_mode: 'Passive', drop: 99, invulnerable_remaining_ms: 60000 }),
             fullStamina5s({ entity_id: 4, user_id: 10, name: 'active-low', x: 3000, y: 0, hp: 100, current_join_mode: 'Active', drop: 1 }, 7000),
             fullStamina5s({ entity_id: 5, user_id: 11, name: 'low-afk', x: 4000, y: 0, hp: 100, current_join_mode: 'Passive', drop: 1 }),
-            { entity_id: 6, user_id: 12, x: 5000, y: 0, hp: 100, current_join_mode: 'Passive' }
+            { entity_id: 6, user_id: 12, x: 5000, y: 0, hp: 100, current_join_mode: 'Passive' },
+            { entity_id: 7, user_id: 13, name: 'named-missing-drop', x: 6000, y: 0, hp: 100, current_join_mode: 'Passive' }
           ],
           bullets: []
         }, { receivedAtMs: 1000 });
@@ -6825,13 +6826,15 @@ async function runSelfTest() {
         const compactRows = compactStatus.nearby.p || [];
         return [
           rows.length,
-          rows.some(row => row[0] === '未知玩家' && row[3] === null && row[2] === null && row[7] === 'Passive'),
+          rows.some(row => row[0] === '未知玩家' && row[3] === null && row[2] === null && row[7] === 'Passive' && row[12] === 1),
+          rows.some(row => row[0] === 'named-missing-drop' && row[3] === null && row[12] === 0),
           rows.some(row => row[0] === 'snapshot-zero' && row[3] === 0),
           rows.some(row => row[0] === 'invulnerable-high' && row[3] === 99 && row[4] === 60000),
           rows.some(row => row[0] === 'active-low' && row[3] === 1 && row[10] === 0 && row[12] === 0),
           rows.some(row => row[0] === 'low-afk' && row[3] === 1 && row[10] === 1 && row[12] === 1),
           compactRows.length,
           compactRows.some(row => row[0] === '未知玩家'),
+          compactRows.some(row => row[0] === 'named-missing-drop' && row[3] === null),
           compactRows.some(row => row[0] === 'snapshot-zero' && row[3] === 0),
           compactRows.some(row => row[0] === 'invulnerable-high'),
           compactRows.some(row => row[0] === 'active-low'),
@@ -6839,7 +6842,7 @@ async function runSelfTest() {
           compactStatus.nearby.playerLowHiddenCount
         ].join('|');
       })(),
-      want: '5|true|true|true|true|true|4|true|true|true|true|false|1'
+      want: '6|true|true|true|true|true|true|4|false|true|true|true|true|false|2'
     },
     {
       name: 'browserless stationary full-stamina active can be AFK profit but non-full active is ignored when not attacking',

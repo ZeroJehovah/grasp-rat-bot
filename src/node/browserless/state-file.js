@@ -1367,8 +1367,8 @@ function compactNearbyPlayers(list) {
   let lowHiddenCount = 0;
   for (const row of rows) {
     const currentShape = row.length >= 13;
-    const lowValueAfk = currentShape ? row?.[12] : row?.[10];
-    if (lowValueAfk) {
+    const foldAsLowValueAfk = currentShape ? row?.[12] : row?.[10];
+    if (foldAsLowValueAfk) {
       lowHiddenCount += 1;
       continue;
     }
