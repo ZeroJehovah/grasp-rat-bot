@@ -483,6 +483,7 @@ async function runReadOnlyCanary(config, options = {}) {
     readOnlyProbeMs: durationMs,
     loopDelayMs: config.loopDelayMs,
     staleSelfConfirmMs: config.staleSelfConfirmMs,
+    easyKillPlayerTracker: options.easyKillPlayerTracker,
     targetWhitelistNames: targetWhitelist.names,
     targetWhitelistNameSet: targetWhitelist.nameSet,
     whitelistCheck: target => targetWhitelist.isWhitelistedTarget(target)
@@ -1059,6 +1060,12 @@ async function runReadOnlyCanary(config, options = {}) {
     }
   }
   if (!result.error && leaveFailed) result.error = 'leave not confirmed';
+  if (typeof decisionAdapter.finalizeEasyKillEngagements === 'function') {
+    decisionAdapter.finalizeEasyKillEngagements(
+      result.safety.event?.reason || result.error || 'canary-complete-without-kill',
+      { nowMs: now() }
+    );
+  }
   result.state = stateStore.getState(now());
   if (typeof decisionAdapter.getStatusSummary === 'function') {
     result.decisionState = decisionAdapter.getStatusSummary();

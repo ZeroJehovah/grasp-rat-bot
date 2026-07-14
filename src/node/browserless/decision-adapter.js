@@ -100,6 +100,8 @@ const DEFAULT_INVULNERABLE_PROFIT_MOVE_SPEED_CM_PER_SEC = 1000;
 const DEFAULT_DANGEROUS_TARGET_COOLDOWN_MS = BROWSER_RUNTIME_DEFAULTS.browserlessDangerousTargetCooldownMs ?? 900000;
 const DEFAULT_PROFIT_PURSUIT_MIN_DAMAGE_MS = BROWSER_RUNTIME_DEFAULTS.browserlessProfitPursuitMinDamageMs ?? 60000;
 const DEFAULT_PROFIT_PURSUIT_MIN_DAMAGE_HP = BROWSER_RUNTIME_DEFAULTS.browserlessProfitPursuitMinDamageHp ?? 10;
+const DEFAULT_EASY_KILL_APPROACH_WINDOW_MS = BROWSER_RUNTIME_DEFAULTS.browserlessEasyKillApproachWindowMs ?? 8000;
+const DEFAULT_EASY_KILL_APPROACH_MIN_CLOSING_CM = BROWSER_RUNTIME_DEFAULTS.browserlessEasyKillApproachMinClosingCm ?? 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const UTC8_OFFSET_MS = 8 * 60 * 60 * 1000;
 const DANGEROUS_COMBAT_EXIT_REASONS = new Set([
@@ -438,6 +440,97 @@ function entityDisplayName(entity) {
 
 function entityDropValue(entity) {
   return Number(entity?.drop ?? entity?.Drop ?? entity?.reward ?? entity?.coin_reward ?? entity?.death_reward_preview ?? entity?.death_drop_coins ?? 0) || 0;
+}
+
+function easyKillTargetUserId(target) {
+  return numberOrNull(target?.userId ?? target?.user_id ?? target?.targetUserId ?? target?.target_user_id);
+}
+
+function easyKillPlayerTracker(options = {}) {
+  const tracker = options.easyKillPlayerTracker;
+  return tracker && typeof tracker === 'object' ? tracker : null;
+}
+
+function callEasyKillPlayerTracker(options, method, ...args) {
+  const tracker = easyKillPlayerTracker(options);
+  if (!tracker || typeof tracker[method] !== 'function') return null;
+  try {
+    return tracker[method](...args);
+  } catch (_) {
+    return null;
+  }
+}
+
+function easyKillTrackerStatus(options = {}) {
+  const tracked = callEasyKillPlayerTracker(options, 'status');
+  if (tracked && typeof tracked === 'object') return tracked;
+  const players = Array.isArray(options.easyKillPlayers) ? cloneJson(options.easyKillPlayers) : [];
+  return {
+    file: String(options.easyKillPlayersFile || ''),
+    updatedAt: '',
+    playerCount: players.length,
+    players,
+    blockedUserIds: Array.isArray(options.easyKillBlockedUserIds) ? cloneJson(options.easyKillBlockedUserIds) : [],
+    engagements: []
+  };
+}
+
+function ensureEasyKillTargetSuppressionMap(stateful = {}, nowMs = 0) {
+  if (!stateful || typeof stateful !== 'object') return {};
+  if (!stateful.easyKillTargetSuppressions
+    || typeof stateful.easyKillTargetSuppressions !== 'object'
+    || Array.isArray(stateful.easyKillTargetSuppressions)) {
+    stateful.easyKillTargetSuppressions = {};
+  }
+  for (const [id, item] of Object.entries(stateful.easyKillTargetSuppressions)) {
+    if (Number(item?.until || 0) <= Number(nowMs || 0)) delete stateful.easyKillTargetSuppressions[id];
+  }
+  return stateful.easyKillTargetSuppressions;
+}
+
+function easyKillTargetSuppressed(stateful = {}, target = null, nowMs = 0) {
+  const userId = easyKillTargetUserId(target);
+  if (userId === null) return false;
+  return Number(ensureEasyKillTargetSuppressionMap(stateful, nowMs)[String(userId)]?.until || 0) > Number(nowMs || 0);
+}
+
+function refreshEasyKillTargetAnnotations(input, stateful = {}, options = {}, statusOverride = null) {
+  if (!input || typeof input !== 'object') return null;
+  const status = statusOverride || easyKillTrackerStatus(options);
+  const knownIds = new Set((status.players || []).map(easyKillTargetUserId).filter(value => value !== null).map(String));
+  const blockedIds = new Set((status.blockedUserIds || []).map(numberOrNull).filter(value => value !== null).map(String));
+  const liveProfitEnabled = options.controlMode === 'profit-live' && options.combatEnabled === true;
+  const visibleDistance = opportunityVisibleDistance(options);
+  const targets = input.visibleTargets || [];
+  for (const target of targets) {
+    const userId = easyKillTargetUserId(target);
+    const known = userId !== null && knownIds.has(String(userId));
+    const suppressed = known && (
+      blockedIds.has(String(userId))
+      || easyKillTargetSuppressed(stateful, target, input.nowMs)
+    );
+    target.easyKillKnown = known;
+    target.easyKillProfitTarget = Boolean(
+      known
+        && !suppressed
+        && liveProfitEnabled
+        && target.active
+        && target.alive !== false
+        && !target.whitelisted
+        && !target.invulnerable
+        && Number.isFinite(Number(target.distance))
+        && (visibleDistance <= 0 || Number(target.distance) <= visibleDistance)
+    );
+  }
+  input.easyKillTargets = targets.filter(target => target.easyKillProfitTarget);
+  input.easyKill = {
+    file: status.file || '',
+    updatedAt: status.updatedAt || '',
+    playerCount: Number(status.playerCount ?? status.players?.length ?? 0),
+    blockedCount: blockedIds.size,
+    visibleEligibleCount: input.easyKillTargets.length
+  };
+  return status;
 }
 
 function entityStaminaSummary(entity) {
@@ -1063,6 +1156,8 @@ function summarizeTarget(target) {
     recentlyMoved: Boolean(target.recentlyMoved),
     whitelisted: Boolean(target.whitelisted),
     alive: target.alive !== false,
+    easyKillKnown: Boolean(target.easyKillKnown),
+    easyKillProfitTarget: Boolean(target.easyKillProfitTarget),
     profitMetadataAuthority: target.profitMetadataAuthority || '',
     profitMetadataMode: target.profitMetadataMode || '',
     profitMetadataActive: Boolean(target.profitMetadataActive)
@@ -1152,6 +1247,11 @@ function buildProfitSelectionInput(input, thresholdContext, options = {}) {
     snapshotVisibleCoins: (input.snapshotVisibleCoins || []).filter(coin => profitCoinEligible(coin, thresholdContext, options)),
     selfKilledPlayerDropCoins: (input.selfKilledPlayerDropCoins || []).filter(coin => profitCoinEligible(coin, thresholdContext, options)),
     afkTargets: (input.afkTargets || []).filter(target => profitRewardAndCostEligible(
+      entityDropValue(target),
+      opportunityEnemyStaminaCost(target, options),
+      thresholdContext
+    )),
+    easyKillTargets: (input.easyKillTargets || []).filter(target => profitRewardAndCostEligible(
       entityDropValue(target),
       opportunityEnemyStaminaCost(target, options),
       thresholdContext
@@ -1467,6 +1567,7 @@ function topItems(items, mapper, limit = 5) {
 function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
   const realtime = state?.realtime || {};
   const fallback = state?.fallback || state?.snapshot || {};
+  const nowMs = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
   const dataGaps = [];
   const snapshotFrameAgeMs = numberOrNull(fallback.frameAgeMs);
   const snapshotMaxAgeMs = Math.max(1000, Number(options.snapshotCoinFallbackMaxAgeMs || 5000));
@@ -1487,12 +1588,14 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
     ))
     .map(entity => normalizeEntityForDecision(entity, self, 'realtime', options))
     .filter(Boolean);
-  annotateBrowserlessRecentActivity(realtimeEntities, stateful, options.nowMs, options);
+  annotateBrowserlessRecentActivity(realtimeEntities, stateful, nowMs, options);
   const decisionEntities = realtimeEntities.map(entity => refreshDecisionEntityActivity(entity, options));
   const visibleTargets = decisionEntities
     .filter(entity => Number(entity.user_id) !== selfUserId)
     .filter(entity => Number.isFinite(Number(entity.x)) && Number.isFinite(Number(entity.y)));
-  updateBrowserlessOpportunityAfkStaminaObservations(visibleTargets, stateful, options.nowMs, options);
+  const easyKillInput = { visibleTargets, nowMs, easyKillTargets: [], easyKill: null };
+  refreshEasyKillTargetAnnotations(easyKillInput, stateful, options);
+  updateBrowserlessOpportunityAfkStaminaObservations(visibleTargets, stateful, nowMs, options);
   const activeThreats = visibleTargets.filter(entity => entity.active && entity.alive !== false);
   const firingThreats = visibleTargets.filter(entity => entity.firing && entity.alive !== false);
   const avoidanceThreats = visibleTargets.filter(isBrowserlessAvoidanceThreat);
@@ -1516,7 +1619,7 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
   const afkObservationTargets = filterCenterActivityProfitItems(afkObservationTargetsRaw, options);
   const afkPanelTargets = afkObservationTargets.filter(entity => hasFull5sStamina(entity, options));
   const afkTargets = afkPanelTargets.filter(entity => !afkTargetBlockedByRecentActivity(entity, options));
-  const realtimeCoinsRaw = buildNativeCoinSnapshotCore(Array.isArray(realtime.coinDrops) ? realtime.coinDrops : [], { nowMs: options.nowMs })
+  const realtimeCoinsRaw = buildNativeCoinSnapshotCore(Array.isArray(realtime.coinDrops) ? realtime.coinDrops : [], { nowMs })
     .map(drop => normalizeCoinForDecision(drop, self, 'realtime'))
     .filter(Boolean)
     .filter(coin => Number(coin.amount || 0) > 0);
@@ -1596,7 +1699,7 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
     : (selfKilledPlayerDropCoins.length ? 'snapshot-player-drop' : (snapshotFallbackAllowed ? 'snapshot-fallback' : 'none'));
   return {
     userId: Number(state?.userId || options.userId || 0),
-    nowMs: Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now(),
+    nowMs,
     rawRealtime: realtime,
     self,
     centerActivity: centerActivityInputSummary(self, centerFiltered, options),
@@ -1628,6 +1731,8 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
     snapshotFallbackThreats,
     afkPanelTargets,
     afkTargets,
+    easyKill: easyKillInput.easyKill,
+    easyKillTargets: easyKillInput.easyKillTargets,
     realtimeCoins,
     snapshotCoins,
     snapshotVisibleCoins,
@@ -2740,9 +2845,13 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
       : 'visible-coin',
     scoreEnemyOpportunity: target => scoreEnemyOpportunity(target, {
       ...options,
+      recentCombatMetrics: stateful.combatMetrics,
       isAfkProfitTarget: item => input.afkTargets.includes(item)
     }),
-    enemyStaminaCost: target => enemyStaminaCost(target, options),
+    enemyStaminaCost: target => enemyStaminaCost(target, {
+      ...options,
+      recentCombatMetrics: stateful.combatMetrics
+    }),
     opportunityStaminaAffordable: staminaCost => opportunityStaminaAffordable(input.self, staminaCost, options),
     isAfkProfitTarget: target => input.afkTargets.includes(target),
     priorityTier: item => opportunityPriorityTierCore(item, {
@@ -2761,14 +2870,27 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
       .filter(target => !afkOpportunityBlockedByStaminaCooldown(target, opportunityOptions))
       .filter(target => targetSafeFromOpportunityThreats(target, opportunityThreats, options))
     : [];
+  const easyKillOpportunityTargets = (input.easyKillTargets || [])
+    .filter(target => !targetDangerousCooldownRecord(stateful, target, input.nowMs))
+    .filter(target => !easyKillTargetSuppressed(stateful, target, input.nowMs))
+    .filter(target => targetSafeFromOpportunityThreats(target, opportunityThreats, options));
+  const enemyOpportunityTargets = Array.from(new Map(
+    [...afkOpportunityTargets, ...easyKillOpportunityTargets]
+      .map(target => [String(target.user_id ?? target.userId ?? target.entity_id ?? target.entityId ?? ''), target])
+      .filter(([id]) => id)
+  ).values());
   let rawOpportunities = prioritizeBrowserlessOpportunities(buildOpportunityCandidatesCore(
     input.self,
     opportunityThreats,
     coinGroups,
-    afkOpportunityTargets,
+    enemyOpportunityTargets,
     routeCoin,
     opportunityOptions
-  ), options);
+  ), options).map(item => (
+    item.type === 'enemy' && item.sourceTarget?.easyKillProfitTarget
+      ? { ...item, reason: 'easy-kill-active-profit' }
+      : item
+  ));
   const filtered = filterProfitCandidatesCore(rawOpportunities, thresholdContext, {
     reward: profitOpportunityThresholdReward,
     staminaCost: item => item.staminaCost,
@@ -2896,6 +3018,20 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
       filtered: filtered.filtered
     }
   };
+}
+
+function easyKillPreferredTargetIdFromOpportunity(opportunity = null, stateful = {}) {
+  const choice = opportunity?.choice || null;
+  if (choice?.type === 'enemy' && choice.sourceTarget?.easyKillProfitTarget === true) {
+    return easyKillTargetUserId(choice.sourceTarget) ?? choice.id ?? null;
+  }
+  const stored = stateful.opportunityChoice || stateful.currentOpportunity || null;
+  if (stored?.type === 'enemy'
+    && stored.profitThresholdEligible !== false
+    && String(stored.reason || '') === 'easy-kill-active-profit') {
+    return stored.id ?? null;
+  }
+  return null;
 }
 
 function buildRecoveryDecision(input, opportunity, options = {}) {
@@ -4019,6 +4155,229 @@ function buildProfitPursuitSuppression(input, combatDecision, stateful = {}, opt
   return suppression;
 }
 
+function easyKillApproachWindowMs(options = {}) {
+  const value = Number(options.browserlessEasyKillApproachWindowMs
+    ?? BROWSER_RUNTIME_DEFAULTS.browserlessEasyKillApproachWindowMs
+    ?? DEFAULT_EASY_KILL_APPROACH_WINDOW_MS);
+  return Number.isFinite(value) ? Math.max(1000, value) : DEFAULT_EASY_KILL_APPROACH_WINDOW_MS;
+}
+
+function easyKillApproachMinClosingCm(options = {}) {
+  const value = Number(options.browserlessEasyKillApproachMinClosingCm
+    ?? BROWSER_RUNTIME_DEFAULTS.browserlessEasyKillApproachMinClosingCm
+    ?? DEFAULT_EASY_KILL_APPROACH_MIN_CLOSING_CM);
+  return Number.isFinite(value) ? Math.max(0, value) : DEFAULT_EASY_KILL_APPROACH_MIN_CLOSING_CM;
+}
+
+function reconcileEasyKillTracker(input, stateful = {}, options = {}) {
+  const tracker = easyKillPlayerTracker(options);
+  if (!tracker) return refreshEasyKillTargetAnnotations(input, stateful, options);
+  callEasyKillPlayerTracker(options, 'observeKillEvidence', input.selfKillEvidence || [], { atMs: input.nowMs });
+  callEasyKillPlayerTracker(options, 'expirePendingOutcomes', input.nowMs);
+  callEasyKillPlayerTracker(options, 'observeVisibleTargets', input.visibleTargets || [], {
+    atMs: input.nowMs,
+    missingGraceMs: Math.max(2500, Number(options.enemyMissingHoldMs || 0)),
+    reason: 'active-target-missing'
+  });
+  return refreshEasyKillTargetAnnotations(input, stateful, options, easyKillTrackerStatus(options));
+}
+
+function easyKillApproachTarget(input, approach) {
+  if (!approach) return null;
+  const id = String(approach.targetId ?? '');
+  if (!id) return null;
+  return (input?.visibleTargets || []).find(target => String(easyKillTargetUserId(target) ?? '') === id) || null;
+}
+
+function clearEasyKillOpportunityTarget(stateful = {}, targetId = '') {
+  if (!targetId) return;
+  clearSuppressedCombatTarget(stateful, targetId);
+  const choiceId = opportunityChoiceTargetId(stateful.opportunityChoice || stateful.currentOpportunity || null);
+  if (choiceId === String(targetId)) {
+    stateful.opportunityChoice = null;
+    stateful.currentOpportunity = null;
+    stateful.opportunitySwitchLock = null;
+    stateful.switchLock = null;
+  }
+}
+
+function suppressEasyKillTarget(stateful = {}, target = null, input = {}, options = {}, reason = '') {
+  const userId = easyKillTargetUserId(target);
+  if (userId === null) return null;
+  const nowMs = Number(input?.nowMs || Date.now());
+  const suppressMs = Math.max(0, Number(options.browserlessProfitPursuitSuppressMs
+    ?? BROWSER_RUNTIME_DEFAULTS.browserlessProfitPursuitSuppressMs
+    ?? 60000));
+  const record = {
+    reason: String(reason || 'easy-kill-stop-loss'),
+    at: nowMs,
+    until: nowMs + suppressMs,
+    target: summarizeTarget(target)
+  };
+  ensureEasyKillTargetSuppressionMap(stateful, nowMs)[String(userId)] = record;
+  clearEasyKillOpportunityTarget(stateful, String(userId));
+  return record;
+}
+
+function recordEasyKillApproachFailure(input, stateful = {}, target = null, options = {}, reason = '', detail = {}) {
+  if (!target) return null;
+  const userId = easyKillTargetUserId(target);
+  if (userId === null) return null;
+  const suppression = suppressEasyKillTarget(stateful, target, input, options, reason);
+  callEasyKillPlayerTracker(options, 'recordImmediateFailure', target, reason, { atMs: input.nowMs });
+  for (const visible of input.visibleTargets || []) {
+    if (String(easyKillTargetUserId(visible) ?? '') !== String(userId)) continue;
+    visible.easyKillKnown = false;
+    visible.easyKillProfitTarget = false;
+  }
+  input.easyKillTargets = (input.easyKillTargets || []).filter(item => String(easyKillTargetUserId(item) ?? '') !== String(userId));
+  if (input.easyKill) input.easyKill.visibleEligibleCount = input.easyKillTargets.length;
+  stateful.easyKillApproach = null;
+  return {
+    reason: String(reason || 'easy-kill-approach-stop-loss'),
+    targetId: String(userId),
+    at: input.nowMs,
+    windowMs: easyKillApproachWindowMs(options),
+    minClosingCm: easyKillApproachMinClosingCm(options),
+    suppression,
+    target: summarizeTarget(target),
+    ...detail
+  };
+}
+
+function reconcileEasyKillApproach(input, stateful = {}, options = {}) {
+  const approach = stateful.easyKillApproach || null;
+  if (!approach) return null;
+  const nowMs = Number(input?.nowMs || Date.now());
+  const target = easyKillApproachTarget(input, approach);
+  if (!target) {
+    const missingSince = Number(approach.missingSince || 0) || nowMs;
+    approach.missingSince = missingSince;
+    const missingHoldMs = Math.max(1000, Number(options.enemyMissingHoldMs || 1800));
+    if (nowMs - missingSince >= missingHoldMs) {
+      return recordEasyKillApproachFailure(input, stateful, {
+        userId: approach.targetId,
+        name: approach.name || '',
+        x: approach.x,
+        y: approach.y,
+        distance: approach.lastDistance,
+        active: true,
+        easyKillKnown: true,
+        easyKillProfitTarget: true
+      }, options, 'easy-kill-approach-target-missing', {
+        missingMs: Math.max(0, nowMs - missingSince)
+      });
+    }
+    stateful.easyKillApproach = approach;
+    return null;
+  }
+  approach.missingSince = 0;
+  approach.name = entityDisplayName(target) || approach.name || '';
+  approach.x = numberOrNull(target.x);
+  approach.y = numberOrNull(target.y);
+  const distance = Number(target.distance);
+  approach.lastDistance = Number.isFinite(distance) ? distance : approach.lastDistance;
+  if (!target.easyKillKnown || !target.active || target.alive === false || target.invulnerable) {
+    return recordEasyKillApproachFailure(input, stateful, target, options, 'easy-kill-approach-target-unavailable');
+  }
+  const combatRange = Math.max(0, Number(options.combatAttackRange || options.attackRange || DEFAULT_ATTACK_RANGE));
+  if (Number.isFinite(distance) && distance <= combatRange) {
+    stateful.easyKillApproach = null;
+    return null;
+  }
+  const windowMs = easyKillApproachWindowMs(options);
+  const minClosingCm = easyKillApproachMinClosingCm(options);
+  if (!Number.isFinite(Number(approach.windowStartDistance))) approach.windowStartDistance = distance;
+  if (!Number.isFinite(Number(approach.windowStartedAt))) approach.windowStartedAt = nowMs;
+  const elapsedMs = Math.max(0, nowMs - Number(approach.windowStartedAt || nowMs));
+  if (Number.isFinite(distance) && elapsedMs >= windowMs) {
+    const closingCm = Number(approach.windowStartDistance) - distance;
+    if (closingCm < minClosingCm) {
+      return recordEasyKillApproachFailure(input, stateful, target, options, 'easy-kill-approach-no-progress', {
+        elapsedMs: Math.round(elapsedMs),
+        windowStartDistance: Math.round(Number(approach.windowStartDistance)),
+        currentDistance: Math.round(distance),
+        closingCm: Math.round(closingCm)
+      });
+    }
+    approach.windowStartedAt = nowMs;
+    approach.windowStartDistance = distance;
+  }
+  stateful.easyKillApproach = approach;
+  return null;
+}
+
+function rememberEasyKillApproach(action, input, stateful = {}, options = {}) {
+  if (!stateful || typeof stateful !== 'object') return null;
+  const target = action?.target || null;
+  const eligible = action?.band === 'profit'
+    && (action?.kind === 'seek-enemy' || action?.kind === 'attack')
+    && target?.easyKillProfitTarget === true;
+  if (!eligible) {
+    if (Number(stateful.easyKillApproach?.missingSince || 0) > 0) return stateful.easyKillApproach;
+    stateful.easyKillApproach = null;
+    return null;
+  }
+  const userId = easyKillTargetUserId(target);
+  const distance = Number(target?.distance);
+  const combatRange = Math.max(0, Number(options.combatAttackRange || options.attackRange || DEFAULT_ATTACK_RANGE));
+  if (userId === null || !Number.isFinite(distance) || distance <= combatRange) {
+    stateful.easyKillApproach = null;
+    return null;
+  }
+  const previous = stateful.easyKillApproach || null;
+  if (previous && String(previous.targetId ?? '') === String(userId)) return previous;
+  stateful.easyKillApproach = {
+    targetId: String(userId),
+    name: target.name || '',
+    startedAt: input.nowMs,
+    windowStartedAt: input.nowMs,
+    windowStartDistance: distance,
+    lastDistance: distance,
+    missingSince: 0,
+    x: numberOrNull(target.x),
+    y: numberOrNull(target.y)
+  };
+  return stateful.easyKillApproach;
+}
+
+function reconcileEasyKillCombatOutcome(decision, input, options = {}) {
+  const tracker = easyKillPlayerTracker(options);
+  if (!tracker || !decision) return null;
+  const action = decision.action || {};
+  const combatTarget = decision.combat?.target || null;
+  const combatTargetId = easyKillTargetUserId(combatTarget);
+  const activeCombatEngaged = action.kind === 'combat-live'
+    || ((action.kind === 'leave' || action.kind === 'safety-exit' || action.shouldLeave) && decision.combat?.exit);
+  if (activeCombatEngaged && combatTarget?.active === true) {
+    callEasyKillPlayerTracker(options, 'observeCombatEngagement', combatTarget, {
+      atMs: input.nowMs,
+      tick: decision.tick ?? decision.combat?.tick ?? null
+    });
+  }
+  const pursuitSuppression = decision.combat?.profitPursuitSuppression || null;
+  if (pursuitSuppression?.targetId) {
+    callEasyKillPlayerTracker(options, 'finishEngagement', pursuitSuppression.targetId, pursuitSuppression.reason || 'profit-pursuit-stopped', { atMs: input.nowMs });
+  }
+  if (action.shouldLeave || action.kind === 'leave' || action.kind === 'safety-exit') {
+    return callEasyKillPlayerTracker(options, 'finishActiveEngagements', action.reason || 'combat-exit', { atMs: input.nowMs });
+  }
+  const status = easyKillTrackerStatus(options);
+  const active = (status.engagements || []).filter(item => item.active);
+  const selectedCombatTargetId = action.kind === 'combat-live' ? easyKillTargetUserId(action.target || combatTarget) : null;
+  for (const engagement of active) {
+    if (selectedCombatTargetId !== null && String(engagement.userId) === String(selectedCombatTargetId)) continue;
+    const stillVisible = (input.visibleTargets || []).some(target => String(easyKillTargetUserId(target) ?? '') === String(engagement.userId));
+    if (selectedCombatTargetId === null && !stillVisible) continue;
+    let reason = selectedCombatTargetId !== null ? 'combat-target-switched' : 'combat-action-released';
+    if (combatTargetId !== null && String(engagement.userId) === String(combatTargetId) && decision.combat?.kiteReassessment?.blocked) {
+      reason = 'retreat-kite-better-profit';
+    }
+    callEasyKillPlayerTracker(options, 'finishEngagement', engagement.userId, reason, { atMs: input.nowMs });
+  }
+  return null;
+}
+
 function buildReturnToCenterDecision(input, options = {}) {
   if (!input?.self) return null;
   const radius = browserlessCenterActivityRadius(options);
@@ -4050,6 +4409,8 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
   const input = buildBrowserlessStrategyInput(state, options, stateful);
   cleanupCoinProgressState(stateful, input.nowMs, options);
   applyIgnoredCoinFilter(input, stateful);
+  const easyKillTrackerState = reconcileEasyKillTracker(input, stateful, options);
+  const easyKillApproachStopLoss = reconcileEasyKillApproach(input, stateful, options);
   const staleSelfMs = Math.max(1000, Number(options.staleSelfMs || DEFAULT_STALE_SELF_MS));
   const staleSelfConfirmMs = Math.max(0, Number(options.staleSelfConfirmMs ?? DEFAULT_STALE_SELF_CONFIRM_MS));
   const staleSelfExitMs = staleSelfMs + staleSelfConfirmMs;
@@ -4067,7 +4428,11 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     profitThresholdContext,
     includeAfkProfitTargets: nonCombatProfit ? false : options.includeAfkProfitTargets
   });
-  const combat = buildCombatDecision(input, stateful, options);
+  const easyKillPreferredTargetId = easyKillPreferredTargetIdFromOpportunity(opportunity, stateful);
+  const combat = buildCombatDecision(input, stateful, {
+    ...options,
+    easyKillPreferredTargetId
+  });
   let dangerousCombatExit = rememberDangerousCombatExitTarget(input, combat, stateful, options);
   const combatPursuitSuppression = buildProfitPursuitSuppression(input, combat, stateful, options);
   let combatActionEligible = isCombatActionEligibleForDecision(combat, options) && !combatPursuitSuppression;
@@ -4371,8 +4736,9 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     : (opportunity.opportunityChoice || null);
   const outputSwitchLock = outputOpportunityChoice ? (opportunity.switchLock || null) : null;
   if (finalSelection) finalSelection.selected = action?.finalCandidate || null;
+  rememberEasyKillApproach(action, input, stateful, options);
   stateful.lastDecisionAction = cloneJson(action);
-  return {
+  const decision = {
     ok: true,
     dryRun: true,
     kind,
@@ -4399,7 +4765,17 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       candidates: topItems(opportunity.sorted, summarizeOpportunity),
       threshold: opportunity.threshold,
       switch: opportunity.switchDiagnostics || null,
-      singleCoinBait: singleCoinBait.summary
+      singleCoinBait: singleCoinBait.summary,
+      easyKill: {
+        ...cloneJson(input.easyKill || {}),
+        tracker: easyKillTrackerState ? {
+          file: easyKillTrackerState.file || '',
+          playerCount: Number(easyKillTrackerState.playerCount ?? easyKillTrackerState.players?.length ?? 0),
+          blockedCount: Array.isArray(easyKillTrackerState.blockedUserIds) ? easyKillTrackerState.blockedUserIds.length : 0
+        } : null,
+        approach: cloneJson(stateful.easyKillApproach || null),
+        stopLoss: easyKillApproachStopLoss
+      }
     },
     combat: {
       ...(combat.dryRun || {}),
@@ -4420,6 +4796,8 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       singleCoinBait: cloneJson(stateful.singleCoinBait || null)
     }
   };
+  reconcileEasyKillCombatOutcome(decision, input, options);
+  return decision;
 }
 
 function summarizeBrowserlessDecision(decision) {
@@ -4500,6 +4878,12 @@ function recordAttackHistoryFromActionResult(decisionState, actionResult, decisi
       actualShotIntervalMs: previousShotAt > 0 ? Math.max(0, nowMs - previousShotAt) : null
     };
     recordCombatShotLearning(decisionState, target, decision?.combat || {}, { nowMs });
+    if (entry.active) {
+      callEasyKillPlayerTracker(options, 'observeCombatShot', target, {
+        atMs: nowMs,
+        tick: decision?.tick ?? decision?.combat?.tick ?? null
+      });
+    }
   }
   if (!combat) {
     decisionState.combatTarget = {
@@ -4545,12 +4929,18 @@ function createBrowserlessDecisionAdapter(options = {}) {
     evaluateCombat(state, nextOptions = {}) {
       const mergedOptions = { ...options, ...nextOptions };
       const input = buildBrowserlessStrategyInput(state, mergedOptions, decisionState);
-      const combat = buildCombatDecision(input, decisionState, mergedOptions);
-      return {
+      reconcileEasyKillTracker(input, decisionState, mergedOptions);
+      const combat = buildCombatDecision(input, decisionState, {
+        ...mergedOptions,
+        easyKillPreferredTargetId: easyKillPreferredTargetIdFromOpportunity(null, decisionState)
+      });
+      const output = {
         action: combat.exitAction || combat.action || { kind: 'wait', band: 'wait', reason: 'combat-control-no-target' },
         combat: combat.dryRun,
         exitAction: combat.exitAction || null
       };
+      reconcileEasyKillCombatOutcome(output, input, mergedOptions);
+      return output;
     },
     getState() {
       return cloneJson(decisionState);
@@ -4560,7 +4950,17 @@ function createBrowserlessDecisionAdapter(options = {}) {
     },
     observeActionResult(actionResult, decision, eventOptions = {}) {
       return recordAttackHistoryFromActionResult(decisionState, actionResult, decision, {
+        ...options,
+        ...eventOptions,
         nowMs: eventOptions.nowMs ?? eventOptions.atMs ?? options.now?.() ?? Date.now()
+      });
+    },
+    finalizeEasyKillEngagements(reason = 'canary-ended', eventOptions = {}) {
+      return callEasyKillPlayerTracker({
+        ...options,
+        ...eventOptions
+      }, 'finishActiveEngagements', reason, {
+        atMs: eventOptions.nowMs ?? eventOptions.atMs ?? options.now?.() ?? Date.now()
       });
     }
   };

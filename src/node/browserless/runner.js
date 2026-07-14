@@ -23,6 +23,7 @@ const {
   createHighDropPlayerTracker,
   createSnapshotGapPoller
 } = require('./high-drop-player-tracker');
+const { createEasyKillPlayerTracker } = require('./easy-kill-player-tracker');
 const {
   BROWSER_RUNTIME_DEFAULTS,
   decisionStatePatch
@@ -606,6 +607,15 @@ async function runBrowserlessRunner(config, deps = {}) {
     file: path.join(config.dataDir, 'high-drop-players.json'),
     now
   });
+  const easyKillPlayerTracker = deps.easyKillPlayerTracker || createEasyKillPlayerTracker({
+    file: path.join(config.dataDir, 'easy-kill-players.json'),
+    now,
+    onEvent: event => logStore.append('runner', 'easy-kill-player-outcome', event)
+  });
+  const easyKillPlayerStatus = () => {
+    easyKillPlayerTracker.expirePendingOutcomes?.(now());
+    return easyKillPlayerTracker.status();
+  };
   let snapshotGapPoller = null;
   const observeSnapshotPayload = (payload, detail = {}) => {
     try {
@@ -1082,7 +1092,8 @@ async function runBrowserlessRunner(config, deps = {}) {
         webToken: config.webToken,
         getStatus: () => ({
           ...buildPublicBrowserlessStatus(readBrowserlessStateFile(stateFile), config),
-          highDropPlayers: highDropPlayerTracker.status(now())
+          highDropPlayers: highDropPlayerTracker.status(now()),
+          easyKillPlayers: easyKillPlayerStatus()
         }),
         onStop: async () => {
           const event = safetyController.requestStop('explicit-stop', { source: 'status-api' });
@@ -1457,6 +1468,7 @@ async function runBrowserlessRunner(config, deps = {}) {
         now,
         persistedState: stateBeforeCanary,
         safetyController,
+        easyKillPlayerTracker,
         bypassPreLoginSafetyReason,
         precheckedSnapshotSafety,
         onSnapshotSafety: recordSnapshotSafetyProgress,

@@ -389,6 +389,8 @@ function summarizeCombatTarget(target) {
         target?.stamina_5s_limit_milli ?? target?.stamina5sLimitMilli
       ),
     firing: Boolean(target.firing || target.is_firing || target.shooting),
+    easyKillKnown: Boolean(target.easyKillKnown),
+    easyKillProfitTarget: Boolean(target.easyKillProfitTarget),
     distance: Number.isFinite(Number(target.distance)) ? Math.round(Number(target.distance)) : null,
     score: Number.isFinite(Number(target.combatScore)) ? Math.round(Number(target.combatScore)) : null,
     combatIntent: target.combatIntent || '',
@@ -862,6 +864,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     incomingBullet,
     incomingBulletOwnerId: incomingBullet?.ownerId,
     unknownIncoming: Boolean(incomingBullet && (incomingBullet.ownerId === null || incomingBullet.ownerId === undefined)),
+    easyKillPreferredTargetId: options.easyKillPreferredTargetId,
     whitelistCheck: target => isWhitelistedTargetForOptions(target, options)
   };
   const combatAttackRange = Math.max(0, Number(options.combatAttackRange || options.attackRange || COMBAT_CONSTANTS.ATTACK_RANGE));
@@ -889,9 +892,17 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     ...context
   });
   const defensiveTarget = selectBestCombatTarget(self, candidates, context);
+  const preferredEasyTargetId = options.easyKillPreferredTargetId;
+  const preferredEasyTarget = preferredEasyTargetId === null || preferredEasyTargetId === undefined || preferredEasyTargetId === ''
+    ? null
+    : candidates.find(candidate => candidate.easyKillProfitTarget === true
+      && String(combatTargetId(candidate)) === String(preferredEasyTargetId)) || null;
   const target = defensiveTargetOverridesEngagedCore(engagedTarget, defensiveTarget, options)
     ? defensiveTarget
-    : (engagedTarget || defensiveTarget);
+    : (engagedTarget
+        || (defensiveTarget?.combatIntent === 'defensive' ? defensiveTarget : null)
+        || (preferredEasyTarget ? { ...preferredEasyTarget, combatIntent: 'profit' } : null)
+        || defensiveTarget);
   rememberBrowserlessCombatEngagement(stateful, self, target, {
     ...options,
     bullets,

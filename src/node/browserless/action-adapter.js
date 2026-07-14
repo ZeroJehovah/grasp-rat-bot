@@ -1021,6 +1021,62 @@ function createBrowserlessActionAdapter(options = {}) {
   }
 
   function applyProfitEnemyDecision(self, target, decision) {
+    if (target?.active && target?.easyKillProfitTarget) {
+      const vector = movementVectorToTarget(self, target, options);
+      const distance = Number.isFinite(Number(vector.distance))
+        ? Number(vector.distance)
+        : Math.hypot(Number(target?.x) - Number(self?.x), Number(target?.y) - Number(self?.y));
+      const attackRange = Math.max(0, Number(options.combatAttackRange ?? options.attackRangeCm ?? options.attackRange ?? DEFAULT_ATTACK_RANGE_CM));
+      if (target?.invulnerable) {
+        const stopped = stop('profit-easy-kill-target-invulnerable');
+        return {
+          ok: stopped.ok,
+          kind: 'stop',
+          reason: 'profit-easy-kill-target-invulnerable',
+          command: stopped.command || null,
+          skipped: Boolean(stopped.skipped),
+          ...transportFailure(stopped),
+          target
+        };
+      }
+      if (Number.isFinite(distance) && distance <= attackRange) {
+        const stopped = stop('profit-easy-kill-combat-handoff');
+        return {
+          ok: stopped.ok,
+          kind: 'stop',
+          reason: 'profit-easy-kill-combat-handoff',
+          command: stopped.command || null,
+          skipped: Boolean(stopped.skipped),
+          ...transportFailure(stopped),
+          target
+        };
+      }
+      if (!vector.ok) {
+        const stopped = stop(vector.reason || 'profit-easy-kill-missing-position');
+        return {
+          ok: stopped.ok,
+          kind: 'stop',
+          reason: vector.reason || 'profit-easy-kill-missing-position',
+          vector,
+          command: stopped.command || null,
+          skipped: Boolean(stopped.skipped),
+          ...transportFailure(stopped),
+          target
+        };
+      }
+      const sent = sendVelocity(vector.dx, vector.dy, 'profit-easy-kill-seek', target);
+      return {
+        ok: sent.ok,
+        kind: 'velocity',
+        reason: 'profit-easy-kill-seek',
+        vector,
+        command: sent.command || null,
+        skipped: Boolean(sent.skipped),
+        ...transportFailure(sent),
+        target,
+        easyKillApproach: true
+      };
+    }
     if (target?.active) {
       const stopped = stop('profit-active-target-blocked');
       return {

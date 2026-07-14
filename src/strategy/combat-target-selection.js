@@ -45,6 +45,15 @@ function targetId(entity) {
   return id === null || id === undefined ? '' : String(id);
 }
 
+function isPreferredEasyKillTarget(entity, context = {}) {
+  if (entity?.easyKillProfitTarget !== true) return false;
+  const preferredId = context.easyKillPreferredTargetId;
+  return preferredId !== null
+    && preferredId !== undefined
+    && preferredId !== ''
+    && targetId(entity) === String(preferredId);
+}
+
 function combatTargetId(entity) {
   return targetId(entity);
 }
@@ -79,6 +88,7 @@ function proactiveActiveCombatBudgetBlocked(context = {}) {
 
 function activeCombatRequiresThreatEvidence(entity, context = {}) {
   if (!isActiveCombatMode(entity)) return false;
+  if (isPreferredEasyKillTarget(entity, context)) return false;
   return combatDropValue(entity) <= lowValueActiveDropMax(context) || proactiveActiveCombatBudgetBlocked(context);
 }
 
@@ -190,6 +200,10 @@ function calculateCombatTargetPriority(self, target, context = {}) {
  */
 function checkProactiveActiveCombatGates(self, target, context = {}) {
   if (!target) return { allowed: false, reason: 'no-target' };
+
+  if (isPreferredEasyKillTarget(target, context)) {
+    return { allowed: true, reason: 'known-easy-kill-profit-target' };
+  }
 
   // Check Drop threshold
   const drop = combatDropValue(target);

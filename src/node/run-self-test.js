@@ -135,6 +135,9 @@ const {
   createSnapshotGapPoller
 } = require('./browserless/high-drop-player-tracker');
 const {
+  createEasyKillPlayerTracker
+} = require('./browserless/easy-kill-player-tracker');
+const {
   summarizeBrowserlessLogDay,
   writeBrowserlessLogSummary
 } = require('../../scripts/browserless-log-summary');
@@ -24206,11 +24209,343 @@ async function runSelfTest() {
 	          exit?.holdRemainingMs,
 	          exit?.reloginDelayMs
 	        ].join('|');
-		      })(),
-		      want: 'offline-leave-wait|offline hold active|61000|120000'
-		    },
-		    {
-		      name: 'safeStringify handles bigint and circular references',
+	      })(),
+	      want: 'offline-leave-wait|offline hold active|61000|120000'
+	    },
+	    {
+	      name: 'browserless easy-kill tracker confirms kills and removes failed rematches after grace',
+	      got: (() => {
+	        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'grasp-rat-easy-kill-tracker-'));
+	        try {
+	          const file = path.join(dir, 'easy-kill-players.json');
+	          const tracker = createEasyKillPlayerTracker({ file, now: () => 1000 });
+	          const created = fs.existsSync(file);
+	          tracker.observeCombatShot({ userId: 8, name: 'runner', active: true, drop: 20 }, { atMs: 1000, tick: 10 });
+	          tracker.observeKillEvidence([{ targetUserId: 8, targetName: 'runner', tick: 12 }], { atMs: 2000 });
+	          const killed = tracker.status();
+	          tracker.observeCombatShot({ userId: 8, name: 'runner', active: true, drop: 22 }, { atMs: 3000, tick: 20 });
+	          tracker.finishEngagement(8, 'combat-exit', { atMs: 4000 });
+	          const pending = tracker.status();
+	          tracker.expirePendingOutcomes(43999);
+	          const beforeDue = tracker.status();
+	          tracker.expirePendingOutcomes(44000);
+	          const expired = tracker.status();
+	          return [
+	            created,
+	            killed.playerCount,
+	            killed.players[0]?.name,
+	            pending.blockedUserIds.join(','),
+	            beforeDue.playerCount,
+	            expired.playerCount,
+	            expired.engagements.length
+	          ].join('|');
+	        } finally {
+	          fs.rmSync(dir, { recursive: true, force: true });
+	        }
+	      })(),
+	      want: 'true|1|runner|8|1|0|0'
+	    },
+	    {
+	      name: 'browserless known easy active player competes as distance and shot-cost ROI profit',
+	      got: (() => {
+	        const state = {
+	          userId: 7,
+	          realtime: {
+	            tick: 100,
+	            frameAgeMs: 0,
+	            self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+	            entities: [
+	              { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+	              { entity_id: 2, user_id: 8, name: 'known-runner', x: 30000, y: 0, vx: 20, vy: 0, hp: 30, max_hp: 100, current_join_mode: 'Active', drop: 30 }
+	            ],
+	            bullets: [],
+	            coinDrops: []
+	          },
+	          fallback: { tick: 100, frameAgeMs: 0, entities: [], coinDrops: [], messages: [] }
+	        };
+	        const decision = buildBrowserlessDecision(state, {}, {
+	          nowMs: 1000,
+	          controlMode: 'profit-live',
+	          combatEnabled: true,
+	          dynamicProfitThresholdEnabled: false,
+	          easyKillPlayers: [{ userId: 8, name: 'known-runner' }]
+	        });
+	        return [
+	          decision.kind,
+	          decision.action.kind,
+	          decision.action.reason,
+	          decision.action.target?.easyKillProfitTarget,
+	          decision.profit.best?.staminaCost,
+	          browserlessOpportunityEnemyStaminaCost({ user_id: 8, active: true, hp: 30, distance: 30000 })
+	        ].join('|');
+	      })(),
+	      want: 'profit-candidate|seek-enemy|easy-kill-active-profit|true|50000|50000'
+	    },
+	    {
+	      name: 'browserless selected low-drop easy active target bypasses ordinary proactive combat gate',
+	      got: (() => {
+	        const decision = buildBrowserlessDecision({
+	          userId: 7,
+	          realtime: {
+	            tick: 100,
+	            frameAgeMs: 0,
+	            self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+	            entities: [
+	              { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+	              { entity_id: 2, user_id: 8, name: 'easy-low-drop', x: 5000, y: 0, vx: 20, hp: 30, current_join_mode: 'Active', drop: 2 }
+	            ],
+	            bullets: [],
+	            coinDrops: []
+	          },
+	          fallback: { tick: 100, frameAgeMs: 0, entities: [], coinDrops: [], messages: [] }
+	        }, {}, {
+	          nowMs: 1000,
+	          controlMode: 'profit-live',
+	          combatEnabled: true,
+	          dynamicProfitThresholdEnabled: false,
+	          easyKillPlayers: [{ userId: 8, name: 'easy-low-drop' }]
+	        });
+	        return [decision.action.kind, decision.combat.target?.userId, decision.combat.target?.easyKillProfitTarget, decision.combat.actionEligible].join('|');
+	      })(),
+	      want: 'combat-live|8|true|true'
+	    },
+	    {
+	      name: 'browserless better coin ROI prevents low-drop easy active combat takeover',
+	      got: (() => {
+	        const decision = buildBrowserlessDecision({
+	          userId: 7,
+	          realtime: {
+	            tick: 100,
+	            frameAgeMs: 0,
+	            self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+	            entities: [
+	              { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+	              { entity_id: 2, user_id: 8, name: 'easy-low-drop', x: 5000, y: 0, vx: 20, hp: 30, current_join_mode: 'Active', drop: 2 }
+	            ],
+	            bullets: [],
+	            coinDrops: [{ drop_id: 'better-coin', x: 1000, y: 0, amount: 5 }]
+	          },
+	          fallback: { tick: 100, frameAgeMs: 0, entities: [], coinDrops: [], messages: [] }
+	        }, {}, {
+	          nowMs: 1000,
+	          controlMode: 'profit-live',
+	          combatEnabled: true,
+	          dynamicProfitThresholdEnabled: false,
+	          easyKillPlayers: [{ userId: 8, name: 'easy-low-drop' }]
+	        });
+	        return [decision.action.target?.type, decision.action.target?.id, decision.combat.target === null, decision.profit.best?.type].join('|');
+	      })(),
+	      want: 'coin|better-coin|true|coin'
+	    },
+	    {
+	      name: 'browserless action adapter approaches known easy active player without profit-layer firing',
+	      got: (() => {
+	        const commands = [];
+	        const adapter = createBrowserlessActionAdapter({
+	          now: () => 1000 + commands.length * 100,
+	          commandIntervalMs: 1,
+	          attackRangeCm: 14500,
+	          transport: {
+	            sendVelocity: (dx, dy) => commands.push(`vel ${dx} ${dy}`),
+	            sendShoot: () => commands.push('shoot')
+	          }
+	        });
+	        const result = adapter.applyDecision({
+	          realtime: { self: { user_id: 7, x: 0, y: 0 }, tick: 1 }
+	        }, {
+	          kind: 'profit-candidate',
+	          band: 'profit',
+	          action: {
+	            kind: 'seek-enemy',
+	            band: 'profit',
+	            reason: 'easy-kill-active-profit',
+	            target: { type: 'enemy', userId: 8, x: 30000, y: 0, active: true, easyKillKnown: true, easyKillProfitTarget: true }
+	          }
+	        });
+	        return [result.kind, result.reason, result.easyKillApproach, commands.join(','), commands.includes('shoot')].join('|');
+	      })(),
+	      want: 'velocity|profit-easy-kill-seek|true|vel 1 0|false'
+	    },
+	    {
+	      name: 'browserless easy-kill approach stops after eight-second low-closing window',
+	      got: (() => {
+	        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'grasp-rat-easy-kill-approach-'));
+	        try {
+	          const tracker = createEasyKillPlayerTracker({ file: path.join(dir, 'easy-kill-players.json'), now: () => 0 });
+	          tracker.observeCombatShot({ userId: 8, name: 'runner', active: true, drop: 30 }, { atMs: 100, tick: 1 });
+	          tracker.observeKillEvidence([{ targetUserId: 8, targetName: 'runner', tick: 2 }], { atMs: 200 });
+	          const adapter = createBrowserlessDecisionAdapter({
+	            userId: 7,
+	            controlMode: 'profit-live',
+	            combatEnabled: true,
+	            dynamicProfitThresholdEnabled: false,
+	            easyKillPlayerTracker: tracker
+	          });
+	          const stateAt = (tick, x) => ({
+	            userId: 7,
+	            realtime: {
+	              tick,
+	              frameAgeMs: 0,
+	              self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+	              entities: [
+	                { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+	                { entity_id: 2, user_id: 8, name: 'runner', x, y: 0, vx: 20, vy: 0, hp: 30, max_hp: 100, current_join_mode: 'Active', drop: 30 }
+	              ],
+	              bullets: [],
+	              coinDrops: []
+	            },
+	            fallback: { tick, frameAgeMs: 0, entities: [], coinDrops: [], messages: [] }
+	          });
+	          const first = adapter.decide(stateAt(10, 30000), { nowMs: 1000 });
+	          const second = adapter.decide(stateAt(11, 30500), { nowMs: 10000 });
+	          return [
+	            first.action.reason,
+	            second.profit.easyKill.stopLoss?.reason,
+	            second.profit.easyKill.stopLoss?.closingCm,
+	            tracker.status().playerCount,
+	            adapter.getState().easyKillApproach === null
+	          ].join('|');
+	        } finally {
+	          fs.rmSync(dir, { recursive: true, force: true });
+	        }
+	      })(),
+	      want: 'easy-kill-active-profit|easy-kill-approach-no-progress|-500|0|true'
+	    },
+	    {
+	      name: 'browserless easy-kill approach removes target after realtime disappearance hold',
+	      got: (() => {
+	        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'grasp-rat-easy-kill-missing-'));
+	        try {
+	          const tracker = createEasyKillPlayerTracker({ file: path.join(dir, 'easy-kill-players.json'), now: () => 0 });
+	          tracker.observeCombatShot({ userId: 8, name: 'runner', active: true }, { atMs: 100, tick: 1 });
+	          tracker.observeKillEvidence([{ targetUserId: 8, targetName: 'runner', tick: 2 }], { atMs: 200 });
+	          const adapter = createBrowserlessDecisionAdapter({
+	            userId: 7,
+	            controlMode: 'profit-live',
+	            combatEnabled: true,
+	            dynamicProfitThresholdEnabled: false,
+	            easyKillPlayerTracker: tracker,
+	            enemyMissingHoldMs: 1800
+	          });
+	          const stateAt = (tick, includeTarget) => ({
+	            userId: 7,
+	            realtime: {
+	              tick,
+	              frameAgeMs: 0,
+	              self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+	              entities: [
+	                { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+	                ...(includeTarget ? [{ entity_id: 2, user_id: 8, name: 'runner', x: 30000, y: 0, vx: 20, hp: 30, current_join_mode: 'Active', drop: 30 }] : [])
+	              ],
+	              bullets: [],
+	              coinDrops: []
+	            },
+	            fallback: { tick, frameAgeMs: 0, entities: [], coinDrops: [], messages: [] }
+	          });
+	          adapter.decide(stateAt(10, true), { nowMs: 1000 });
+	          const firstMissing = adapter.decide(stateAt(11, false), { nowMs: 2000 });
+	          const expiredMissing = adapter.decide(stateAt(12, false), { nowMs: 4000 });
+	          return [
+	            firstMissing.profit.easyKill.stopLoss === null,
+	            expiredMissing.profit.easyKill.stopLoss?.reason,
+	            tracker.status().playerCount
+	          ].join('|');
+	        } finally {
+	          fs.rmSync(dir, { recursive: true, force: true });
+	        }
+	      })(),
+	      want: 'true|easy-kill-approach-target-missing|0'
+	    },
+	    {
+	      name: 'browserless easy-kill combat exit without a shot still records failed engagement',
+	      got: (() => {
+	        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'grasp-rat-easy-kill-exit-'));
+	        try {
+	          const tracker = createEasyKillPlayerTracker({ file: path.join(dir, 'easy-kill-players.json'), now: () => 0 });
+	          tracker.observeCombatShot({ userId: 8, name: 'runner', active: true }, { atMs: 100, tick: 1 });
+	          tracker.observeKillEvidence([{ targetUserId: 8, targetName: 'runner', tick: 2 }], { atMs: 200 });
+	          const decision = buildBrowserlessDecision({
+	            userId: 7,
+	            realtime: {
+	              tick: 10,
+	              frameAgeMs: 0,
+	              self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 10, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+	              entities: [
+	                { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 10, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+	                { entity_id: 2, user_id: 8, name: 'runner', x: 5000, y: 0, vx: 20, hp: 100, max_hp: 100, current_join_mode: 'Active', drop: 30 }
+	              ],
+	              bullets: [],
+	              coinDrops: []
+	            },
+	            fallback: { tick: 10, frameAgeMs: 0, entities: [], coinDrops: [], messages: [] }
+	          }, {}, {
+	            nowMs: 1000,
+	            controlMode: 'profit-live',
+	            combatEnabled: true,
+	            dynamicProfitThresholdEnabled: false,
+	            easyKillPlayerTracker: tracker
+	          });
+	          const pending = tracker.status();
+	          tracker.expirePendingOutcomes(41000);
+	          return [decision.action.reason, pending.blockedUserIds.join(','), pending.engagements[0]?.shotCount, tracker.status().playerCount].join('|');
+	        } finally {
+	          fs.rmSync(dir, { recursive: true, force: true });
+	        }
+	      })(),
+	      want: 'combat-critical-hp-leave|8|0|0'
+	    },
+	    {
+	      name: 'browserless successful active combat shot plus kill evidence adds easy-kill player',
+	      got: (() => {
+	        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'grasp-rat-easy-kill-integration-'));
+	        try {
+	          const tracker = createEasyKillPlayerTracker({ file: path.join(dir, 'easy-kill-players.json'), now: () => 1000 });
+	          const adapter = createBrowserlessDecisionAdapter({
+	            userId: 7,
+	            controlMode: 'profit-live',
+	            combatEnabled: true,
+	            dynamicProfitThresholdEnabled: false,
+	            easyKillPlayerTracker: tracker
+	          });
+	          const target = { type: 'enemy', userId: 8, name: 'new-easy', x: 5000, y: 0, hp: 40, active: true, drop: 18 };
+	          adapter.observeActionResult({
+	            kind: 'combat-live',
+	            target,
+	            shoot: { ok: true, skipped: false, command: { type: 'shoot' } }
+	          }, {
+	            tick: 100,
+	            band: 'combat',
+	            action: { kind: 'combat-live', band: 'combat', target },
+	            combat: { tick: 100, target }
+	          }, { nowMs: 1000 });
+	          adapter.decide({
+	            userId: 7,
+	            realtime: {
+	              tick: 102,
+	              frameAgeMs: 0,
+	              self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+	              entities: [{ entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000 }],
+	              bullets: [],
+	              coinDrops: []
+	            },
+	            fallback: {
+	              tick: 102,
+	              frameAgeMs: 0,
+	              entities: [],
+	              coinDrops: [],
+	              messages: [{ kind: 'kill', user_id: 7, target_user_id: 8, target_name: 'new-easy', tick: 101 }]
+	            }
+	          }, { nowMs: 2000 });
+	          const status = tracker.status();
+	          return [status.playerCount, status.players[0]?.userId, status.players[0]?.name, status.engagements.length].join('|');
+	        } finally {
+	          fs.rmSync(dir, { recursive: true, force: true });
+	        }
+	      })(),
+	      want: '1|8|new-easy|0'
+	    },
+	    {
+	      name: 'safeStringify handles bigint and circular references',
 		      got: (() => {
 		        const value = { id: 7n };
 		        value.self = value;

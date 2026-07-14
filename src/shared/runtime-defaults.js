@@ -251,6 +251,8 @@ function buildRuntimeDefaults(config, combatLogEndpointConfigured) {
     browserlessDangerousTargetCooldownMs: numberDefault(config.browserlessDangerousTargetCooldownMs, 900000),
     browserlessProfitPursuitMinDamageMs: numberDefault(config.browserlessProfitPursuitMinDamageMs, 60000),
     browserlessProfitPursuitMinDamageHp: numberDefault(config.browserlessProfitPursuitMinDamageHp, 10),
+    browserlessEasyKillApproachWindowMs: numberDefault(config.browserlessEasyKillApproachWindowMs, 8000),
+    browserlessEasyKillApproachMinClosingCm: numberDefault(config.browserlessEasyKillApproachMinClosingCm, 1000),
     afkRecentActivityCooldownMs: 12000,
     opportunityAfkStaminaCooldownMs: 60000,
     opportunityAfkStaminaDropThresholdMs: 100,
