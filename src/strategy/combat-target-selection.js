@@ -54,6 +54,12 @@ function isPreferredEasyKillTarget(entity, context = {}) {
     && targetId(entity) === String(preferredId);
 }
 
+function easyKillThreatExempt(entity, context = {}) {
+  if (entity?.easyKillThreatExempt !== true) return false;
+  if (!isPreferredEasyKillTarget(entity, context)) return true;
+  return context.recoveringSelf === true;
+}
+
 function combatTargetId(entity) {
   return targetId(entity);
 }
@@ -107,6 +113,11 @@ function isCombatEligibleThreat(entity, options = {}) {
 
   // Whitelisted targets are protected
   if (options.whitelistCheck && options.whitelistCheck(entity)) return false;
+
+  // A recently killed player stays outside ordinary defensive combat until it
+  // has actually damaged self. A deliberately selected easy-kill profit target
+  // may still be fought while healthy, but it cannot take over HP recovery.
+  if (easyKillThreatExempt(entity, options)) return false;
 
   if (incomingOwnerMatchesTarget(entity, options) || recentInjuryMatchesTarget(entity, options)) return true;
 

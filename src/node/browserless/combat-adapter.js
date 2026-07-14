@@ -402,6 +402,8 @@ function summarizeCombatTarget(target) {
       ),
     firing: Boolean(target.firing || target.is_firing || target.shooting),
     easyKillKnown: Boolean(target.easyKillKnown),
+    easyKillDamagedToday: Boolean(target.easyKillDamagedToday),
+    easyKillThreatExempt: Boolean(target.easyKillThreatExempt),
     easyKillProfitTarget: Boolean(target.easyKillProfitTarget),
     distance: Number.isFinite(Number(target.distance)) ? Math.round(Number(target.distance)) : null,
     score: Number.isFinite(Number(target.combatScore)) ? Math.round(Number(target.combatScore)) : null,
@@ -574,6 +576,7 @@ function passiveRunnerState(self, target, combatTargetState = {}, options = {}) 
 
 function buildCombatExitDecision(self, target, combatTargetState = {}, options = {}) {
   if (!self || !target) return null;
+  if (target.easyKillThreatExempt) return null;
   const noDamageMs = Math.max(0, Number(combatTargetState?.noDamageMs || 0));
   const exit = evaluateCombatHpExitCore({ self, target }, options);
   return exit ? { ...exit, noDamageMs } : null;
@@ -877,6 +880,11 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     incomingBulletOwnerId: incomingBullet?.ownerId,
     unknownIncoming: Boolean(incomingBullet && (incomingBullet.ownerId === null || incomingBullet.ownerId === undefined)),
     easyKillPreferredTargetId: options.easyKillPreferredTargetId,
+    recoveringSelf: Boolean(
+      self
+        && hpValue(self) !== null
+        && hpValue(self) < (numberOrNull(self.max_hp ?? self.maxHp) ?? 100)
+    ),
     whitelistCheck: target => isWhitelistedTargetForOptions(target, options)
   };
   const combatAttackRange = Math.max(0, Number(options.combatAttackRange || options.attackRange || COMBAT_CONSTANTS.ATTACK_RANGE));

@@ -635,6 +635,7 @@ function summarizeSnapshotFreshness(payload, latestKnownTick = 0, options = {}) 
 function summarizeSnapshotSafety(payload, loginPoint, options = {}) {
   const entities = Array.isArray(payload?.entities) ? payload.entities : [];
   const damageActorUserIds = userIdSet(options.damageActorUserIds ?? options.dangerousUserIds);
+  const easyKillUserIds = userIdSet(options.easyKillUserIds ?? options.recentKillUserIds);
   const point = loginPoint
     && Number.isFinite(Number(loginPoint.x))
     && Number.isFinite(Number(loginPoint.y))
@@ -660,6 +661,7 @@ function summarizeSnapshotSafety(payload, loginPoint, options = {}) {
   const nearby = [];
   const activeNearby = [];
   const damageActorNearby = [];
+  const trustedEasyKillNearby = [];
   const dangerousNearby = [];
   for (const entity of entities) {
     if (!entity || typeof entity !== 'object') continue;
@@ -675,16 +677,20 @@ function summarizeSnapshotSafety(payload, loginPoint, options = {}) {
       ...base,
       distance: Math.round(distance),
       active: isActiveEntity(entity),
+      knownEasyKill: userId !== null && easyKillUserIds.has(String(userId)),
       knownDamageActor: userId !== null && damageActorUserIds.has(String(userId)),
       alive: isAliveEntity(entity)
     };
+    item.trustedEasyKill = Boolean(item.knownEasyKill && !item.knownDamageActor);
     nearby.push(item);
     if (item.active && item.alive) activeNearby.push(item);
     if (item.knownDamageActor && item.alive) damageActorNearby.push(item);
-    if ((item.active || item.knownDamageActor) && item.alive) dangerousNearby.push(item);
+    if (item.trustedEasyKill && item.alive) trustedEasyKillNearby.push(item);
+    if (((item.active && !item.trustedEasyKill) || item.knownDamageActor) && item.alive) dangerousNearby.push(item);
   }
   activeNearby.sort((a, b) => a.distance - b.distance);
   damageActorNearby.sort((a, b) => a.distance - b.distance);
+  trustedEasyKillNearby.sort((a, b) => a.distance - b.distance);
   dangerousNearby.sort((a, b) => a.distance - b.distance);
   nearby.sort((a, b) => a.distance - b.distance);
   const fresh = options.freshness || summarizeSnapshotFreshness(payload, options.latestKnownTick);
@@ -705,9 +711,11 @@ function summarizeSnapshotSafety(payload, loginPoint, options = {}) {
     nearbyCount: nearby.length,
     activeNearbyCount: activeNearby.length,
     damageActorNearbyCount: damageActorNearby.length,
+    trustedEasyKillNearbyCount: trustedEasyKillNearby.length,
     dangerousNearbyCount: dangerousNearby.length,
     nearestActive: activeNearby[0] || null,
     nearestDamageActor: damageActorNearby[0] || null,
+    nearestTrustedEasyKill: trustedEasyKillNearby[0] || null,
     nearestDangerous: dangerousNearby[0] || null,
     nearest: nearby[0] || null
   };

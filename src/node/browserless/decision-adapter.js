@@ -462,6 +462,11 @@ function easyKillPlayerTracker(options = {}) {
   return tracker && typeof tracker === 'object' ? tracker : null;
 }
 
+function dailyDamagePlayerTracker(options = {}) {
+  const tracker = options.damagePlayerTracker;
+  return tracker && typeof tracker === 'object' ? tracker : null;
+}
+
 function callEasyKillPlayerTracker(options, method, ...args) {
   const tracker = easyKillPlayerTracker(options);
   if (!tracker || typeof tracker[method] !== 'function') return null;
@@ -483,6 +488,47 @@ function easyKillTrackerStatus(options = {}) {
     players,
     blockedUserIds: Array.isArray(options.easyKillBlockedUserIds) ? cloneJson(options.easyKillBlockedUserIds) : [],
     engagements: []
+  };
+}
+
+function dailyDamageTrackerStatus(options = {}, nowMs = Date.now()) {
+  const explicit = options.damageActorUserIds instanceof Set
+    ? Array.from(options.damageActorUserIds)
+    : (Array.isArray(options.damageActorUserIds) ? options.damageActorUserIds : []);
+  const explicitUserIds = explicit
+    .map(value => Number(value?.userId ?? value?.user_id ?? value))
+    .filter(Number.isFinite);
+  const tracker = dailyDamagePlayerTracker(options);
+  if (tracker && typeof tracker.status === 'function') {
+    try {
+      const tracked = tracker.status(nowMs);
+      if (tracked && typeof tracked === 'object') {
+        const players = Array.isArray(tracked.players) ? tracked.players : [];
+        const userIds = Array.from(new Set([
+          ...explicitUserIds,
+          ...(tracked.userIds || []),
+          ...players.map(value => value?.userId ?? value?.user_id)
+        ].map(Number).filter(Number.isFinite)));
+        return {
+          ...tracked,
+          playerCount: userIds.length,
+          userIds,
+          players: [
+            ...players,
+            ...userIds
+              .filter(userId => !players.some(player => Number(player?.userId ?? player?.user_id) === userId))
+              .map(userId => ({ userId }))
+          ]
+        };
+      }
+    } catch (_) {}
+  }
+  return {
+    day: '',
+    updatedAt: '',
+    playerCount: explicitUserIds.length,
+    userIds: explicitUserIds,
+    players: explicitUserIds.map(userId => ({ userId }))
   };
 }
 
@@ -508,19 +554,27 @@ function easyKillTargetSuppressed(stateful = {}, target = null, nowMs = 0) {
 function refreshEasyKillTargetAnnotations(input, stateful = {}, options = {}, statusOverride = null) {
   if (!input || typeof input !== 'object') return null;
   const status = statusOverride || easyKillTrackerStatus(options);
+  const damageStatus = dailyDamageTrackerStatus(options, input.nowMs);
   const knownIds = new Set((status.players || []).map(easyKillTargetUserId).filter(value => value !== null).map(String));
   const blockedIds = new Set((status.blockedUserIds || []).map(numberOrNull).filter(value => value !== null).map(String));
+  const damagedIds = new Set([
+    ...(damageStatus.userIds || []),
+    ...(damageStatus.players || [])
+  ].map(value => Number(value?.userId ?? value?.user_id ?? value)).filter(Number.isFinite).map(String));
   const liveProfitEnabled = options.controlMode === 'profit-live' && options.combatEnabled === true;
   const visibleDistance = opportunityVisibleDistance(options);
   const targets = input.visibleTargets || [];
   for (const target of targets) {
     const userId = easyKillTargetUserId(target);
     const known = userId !== null && knownIds.has(String(userId));
+    const damagedToday = known && damagedIds.has(String(userId));
     const suppressed = known && (
       blockedIds.has(String(userId))
       || easyKillTargetSuppressed(stateful, target, input.nowMs)
     );
     target.easyKillKnown = known;
+    target.easyKillDamagedToday = damagedToday;
+    target.easyKillThreatExempt = Boolean(known && !damagedToday);
     target.easyKillProfitTarget = Boolean(
       known
         && !suppressed
@@ -539,6 +593,8 @@ function refreshEasyKillTargetAnnotations(input, stateful = {}, options = {}, st
     updatedAt: status.updatedAt || '',
     playerCount: Number(status.playerCount ?? status.players?.length ?? 0),
     blockedCount: blockedIds.size,
+    damagedKnownCount: Array.from(knownIds).filter(userId => damagedIds.has(userId)).length,
+    trustedVisibleCount: targets.filter(target => target.easyKillThreatExempt).length,
     visibleEligibleCount: input.easyKillTargets.length
   };
   return status;
@@ -743,6 +799,7 @@ function afkTargetBlockedByRecentActivity(target, options = {}) {
 
 function isBrowserlessAvoidanceThreat(target) {
   if (!target || target.alive === false) return false;
+  if (target.easyKillThreatExempt) return false;
   return Boolean(target.active && target.invulnerable);
 }
 
@@ -772,6 +829,7 @@ function isInjuredSelf(self, options = {}) {
 
 function snapshotFallbackThreatBlocks(threat, self, options = {}) {
   if (!threat || threat.alive === false) return false;
+  if (threat.easyKillThreatExempt) return false;
   if (threat.firing) return true;
   const distance = Number(threat.distance ?? distanceBetween(self, threat));
   if (!Number.isFinite(distance)) return false;
@@ -1168,6 +1226,8 @@ function summarizeTarget(target) {
     whitelisted: Boolean(target.whitelisted),
     alive: target.alive !== false,
     easyKillKnown: Boolean(target.easyKillKnown),
+    easyKillDamagedToday: Boolean(target.easyKillDamagedToday),
+    easyKillThreatExempt: Boolean(target.easyKillThreatExempt),
     easyKillProfitTarget: Boolean(target.easyKillProfitTarget),
     profitMetadataAuthority: target.profitMetadataAuthority || '',
     profitMetadataMode: target.profitMetadataMode || '',
@@ -1500,6 +1560,7 @@ function panelPlayerCandidates(input) {
   return (input.visibleTargets || [])
     .filter(target => activeIds.has(panelPlayerTargetKey(target))
       || afkIds.has(panelPlayerTargetKey(target))
+      || target.easyKillKnown
       || targetPlayerSelected(input.currentAction, input.currentCombat, target));
 }
 
@@ -1607,8 +1668,8 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
   const easyKillInput = { visibleTargets, nowMs, easyKillTargets: [], easyKill: null };
   refreshEasyKillTargetAnnotations(easyKillInput, stateful, options);
   updateBrowserlessOpportunityAfkStaminaObservations(visibleTargets, stateful, nowMs, options);
-  const activeThreats = visibleTargets.filter(entity => entity.active && entity.alive !== false);
-  const firingThreats = visibleTargets.filter(entity => entity.firing && entity.alive !== false);
+  const activeThreats = visibleTargets.filter(entity => entity.active && entity.alive !== false && !entity.easyKillThreatExempt);
+  const firingThreats = visibleTargets.filter(entity => entity.firing && entity.alive !== false && !entity.easyKillThreatExempt);
   const avoidanceThreats = visibleTargets.filter(isBrowserlessAvoidanceThreat);
   const snapshotActiveThreats = [];
   const snapshotFallbackThreats = [
@@ -1836,16 +1897,22 @@ function bulletOwnerId(bullet) {
 
 function hasLikelyIncomingBullet(input) {
   const selfId = input?.self?.user_id ?? input?.self?.userId ?? input?.userId ?? null;
+  const exemptOwnerIds = new Set((input?.visibleTargets || [])
+    .filter(target => target?.easyKillThreatExempt)
+    .map(targetKey)
+    .filter(Boolean));
   return (input?.bullets || []).some(bullet => {
     const ownerId = bulletOwnerId(bullet);
     if (ownerId === null || ownerId === undefined || ownerId === '') return true;
     if (selfId === null || selfId === undefined || selfId === '') return true;
+    if (exemptOwnerIds.has(String(ownerId))) return false;
     return String(ownerId) !== String(selfId);
   });
 }
 
 function highValueThreatBlocksLowHpCoin(threat, options = {}) {
   if (!threat || threat.alive === false || threat.invulnerable) return false;
+  if (threat.easyKillThreatExempt) return false;
   const distance = Number(threat.distance ?? Infinity);
   if (!Number.isFinite(distance)) return false;
   const cautionRadius = Math.max(0, Number(threat.cautionRadius || options.activeCautionRadius || 0));

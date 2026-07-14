@@ -917,6 +917,7 @@ async function runBrowserlessRunner(config, deps = {}) {
             fetchWithTimeout: sourceIpController.fetchWithTimeout,
             onSnapshotPayload: observeSnapshotPayload,
             onSnapshotSafety: recordSnapshotSafetyProgress,
+            easyKillPlayerTracker,
             damagePlayerTracker
           }
         );
@@ -1240,6 +1241,7 @@ async function runBrowserlessRunner(config, deps = {}) {
           sleep,
           fetchWithTimeout: sourceIpController.fetchWithTimeout,
           onSnapshotPayload: observeSnapshotPayload,
+          easyKillPlayerTracker,
           damagePlayerTracker
         });
         const selfPresent = snapshotSafetyAllowsImmediateResume(probe);
@@ -1442,6 +1444,7 @@ async function runBrowserlessRunner(config, deps = {}) {
           now,
           persistedState: readBrowserlessStateFile(stateFile),
           safetyController,
+          easyKillPlayerTracker,
           damagePlayerTracker,
           allowMissingLoginPointBootstrap: true,
           onSnapshotSafety: recordSnapshotSafetyProgress,

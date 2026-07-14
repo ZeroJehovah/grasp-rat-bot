@@ -2,6 +2,7 @@
 'use strict';
 
 const fs = require('fs');
+const { StringDecoder } = require('string_decoder');
 const { estimateAim } = require('../src/node/browserless/combat-adapter');
 const { actionPriorityBand } = require('../src/strategy/action-priority');
 const { evaluateCombatHpExitCore } = require('../src/strategy/combat-exit');
@@ -9,7 +10,18 @@ const { pickSafeClosingDodgeCore } = require('../src/strategy/combat-movement');
 const { updateOpponentBehaviorStateCore } = require('../src/strategy/opponent-behavior');
 
 function parseArgs(argv) {
-  const options = { file: '', startLine: 1, endLine: Infinity, targetId: '', mode: 'combat', hitRadius: 90, controlIntervalMs: 160, minImprovementPct: 0, expectNewExit: false };
+  const options = {
+    file: '',
+    startLine: 1,
+    endLine: Infinity,
+    targetId: '',
+    mode: 'combat',
+    hitRadius: 90,
+    controlIntervalMs: 160,
+    minImprovementPct: 0,
+    expectNewExit: false,
+    trustEasyKillBeforeDamage: false
+  };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--file') options.file = argv[++index] || '';
@@ -21,6 +33,7 @@ function parseArgs(argv) {
     else if (arg === '--control-interval-ms') options.controlIntervalMs = Number(argv[++index] || 160);
     else if (arg === '--min-improvement-pct') options.minImprovementPct = Number(argv[++index] || 0);
     else if (arg === '--expect-new-exit') options.expectNewExit = true;
+    else if (arg === '--trust-easy-kill-before-damage') options.trustEasyKillBeforeDamage = true;
     else throw new Error(`unknown argument: ${arg}`);
   }
   if (!options.file) throw new Error('--file is required');
@@ -28,12 +41,43 @@ function parseArgs(argv) {
 }
 
 function selectedEntries(options) {
-  return fs.readFileSync(options.file, 'utf8').split('\n').flatMap((raw, index) => {
-    const line = index + 1;
-    if (!raw || line < options.startLine || line > options.endLine) return [];
+  const entries = [];
+  const descriptor = fs.openSync(options.file, 'r');
+  const decoder = new StringDecoder('utf8');
+  const buffer = Buffer.allocUnsafe(64 * 1024);
+  let carry = '';
+  let line = 0;
+  let finished = false;
+  const consume = raw => {
+    line += 1;
+    if (line > options.endLine) {
+      finished = true;
+      return;
+    }
+    if (!raw || line < options.startLine) return;
     const entry = JSON.parse(raw);
-    return [{ line, entry, detail: entry.detail || {} }];
-  });
+    entries.push({ line, entry, detail: entry.detail || {} });
+  };
+  try {
+    while (!finished) {
+      const bytesRead = fs.readSync(descriptor, buffer, 0, buffer.length, null);
+      if (!bytesRead) break;
+      carry += decoder.write(buffer.subarray(0, bytesRead));
+      let newline = carry.indexOf('\n');
+      while (newline >= 0 && !finished) {
+        consume(carry.slice(0, newline));
+        carry = carry.slice(newline + 1);
+        newline = carry.indexOf('\n');
+      }
+    }
+    if (!finished) {
+      carry += decoder.end();
+      if (carry) consume(carry);
+    }
+  } finally {
+    fs.closeSync(descriptor);
+  }
+  return entries;
 }
 
 function aimMiss(self, target, aim) {
@@ -475,7 +519,7 @@ function replayExit(options) {
   const rows = selectedEntries(options);
   const evaluated = [];
   for (const row of rows) {
-    const decision = row.detail?.decision || row.detail || {};
+    const decision = row.detail?.detail?.decision || row.detail?.decision || row.detail || {};
     const action = decision.action || decision;
     const combat = decision.combat || {};
     const metrics = combat.metrics || {};
@@ -491,7 +535,7 @@ function replayExit(options) {
         ?? target?.hp
     );
     if (!Number.isFinite(selfHp)) continue;
-    const policyExit = evaluateCombatHpExitCore({
+    const baselinePolicyExit = evaluateCombatHpExitCore({
       selfHp,
       targetHp: Number.isFinite(targetHp) ? targetHp : null
     });
@@ -502,6 +546,13 @@ function replayExit(options) {
       && Number.isFinite(targetDamage)
       && targetDamage > selfDamage
       && (!Number.isFinite(targetHp) || selfHp > targetHp);
+    const trustedEasyKillBeforeDamage = Boolean(
+      options.trustEasyKillBeforeDamage
+        && targetId
+        && (!options.targetId || targetId === options.targetId)
+        && (!Number.isFinite(selfDamage) || selfDamage <= 0)
+    );
+    const policyExit = trustedEasyKillBeforeDamage ? null : baselinePolicyExit;
     evaluated.push({
       line: row.line,
       at: row.entry.at || '',
@@ -514,6 +565,8 @@ function replayExit(options) {
       selfDamage: Number.isFinite(selfDamage) ? selfDamage : null,
       targetDamage: Number.isFinite(targetDamage) ? targetDamage : null,
       favorable,
+      trustedEasyKillBeforeDamage,
+      baselinePolicyExit,
       policyExit
     });
   }
@@ -521,6 +574,7 @@ function replayExit(options) {
   const preservedRequiredExits = evaluated.filter(item => item.loggedExit && item.policyExit);
   const newlyRequiredExits = evaluated.filter(item => !item.loggedExit && item.policyExit);
   const favorablePreventedExits = preventedLoggedExits.filter(item => item.favorable);
+  const trustedNoDamagePreventedExits = preventedLoggedExits.filter(item => item.trustedEasyKillBeforeDamage);
   const result = {
     mode: 'exit',
     targetId: options.targetId || '',
@@ -530,19 +584,26 @@ function replayExit(options) {
     policyExitFrames: evaluated.filter(item => item.policyExit).length,
     preventedLoggedExitFrames: preventedLoggedExits.length,
     favorablePreventedExitFrames: favorablePreventedExits.length,
+    trustedNoDamagePreventedExitFrames: trustedNoDamagePreventedExits.length,
     preservedRequiredExitFrames: preservedRequiredExits.length,
     newlyRequiredExitFrames: newlyRequiredExits.length,
     samples: evaluated.slice(0, 10)
   };
   result.expectNewExit = Boolean(options.expectNewExit);
-  result.accepted = options.expectNewExit
+  result.trustEasyKillBeforeDamage = Boolean(options.trustEasyKillBeforeDamage);
+  result.accepted = options.trustEasyKillBeforeDamage
+    ? result.evaluatedFrames > 0
+      && result.preventedLoggedExitFrames > 0
+      && result.trustedNoDamagePreventedExitFrames === result.preventedLoggedExitFrames
+      && result.newlyRequiredExitFrames === 0
+    : (options.expectNewExit
     ? result.evaluatedFrames > 0
       && result.newlyRequiredExitFrames > 0
       && evaluated[0]?.policyExit?.reason === 'combat-hp-disadvantage-leave'
     : result.evaluatedFrames > 0
       && result.preventedLoggedExitFrames > 0
       && result.favorablePreventedExitFrames === result.preventedLoggedExitFrames
-      && result.newlyRequiredExitFrames === 0;
+      && result.newlyRequiredExitFrames === 0);
   return result;
 }
 

@@ -763,7 +763,10 @@ function compactSafetyEntity(value) {
     x: compactNumber(value.x),
     y: compactNumber(value.y),
     alive: value.alive === undefined ? null : Boolean(value.alive),
-    mode: compactString(value.current_join_mode || value.mode || value.joined, 48)
+    mode: compactString(value.current_join_mode || value.mode || value.joined, 48),
+    knownEasyKill: value.knownEasyKill === undefined ? null : Boolean(value.knownEasyKill),
+    knownDamageActor: value.knownDamageActor === undefined ? null : Boolean(value.knownDamageActor),
+    trustedEasyKill: value.trustedEasyKill === undefined ? null : Boolean(value.trustedEasyKill)
   };
 }
 
@@ -860,6 +863,16 @@ function compactLoginPointSafetyDetail(loginPointSafety, normalized) {
   const effectiveRequired = required !== null ? required : 1;
   const streak = compactNumber(detail.streak ?? snapshotSafety?.streak ?? directDetail.streak);
   const effectiveStreak = streak !== null ? streak : (okValue === true ? effectiveRequired : 0);
+  const nearestActive = detail.nearestActive
+    || (isolatePendingDetail ? null : directDetail.nearestActive);
+  const nearestDamageActor = detail.nearestDamageActor
+    || (isolatePendingDetail ? null : directDetail.nearestDamageActor);
+  const nearestTrustedEasyKill = detail.nearestTrustedEasyKill
+    || (isolatePendingDetail ? null : directDetail.nearestTrustedEasyKill);
+  const nearestDangerous = detail.nearestDangerous
+    || (isolatePendingDetail ? null : directDetail.nearestDangerous)
+    || nearestDamageActor
+    || (nearestActive?.trustedEasyKill ? null : nearestActive);
   return {
     ok: okValue === undefined ? null : Boolean(okValue),
     reason: compactString(reason, 120),
@@ -880,15 +893,12 @@ function compactLoginPointSafetyDetail(loginPointSafety, normalized) {
       : (summary.selfPresent === undefined
       ? (detail.selfPresent === undefined ? null : Boolean(detail.selfPresent))
       : Boolean(summary.selfPresent)),
-    nearestActive: compactSafetyEntity(detail.nearestActive
-      || (isolatePendingDetail ? null : directDetail.nearestActive)),
-    nearestDamageActor: compactSafetyEntity(detail.nearestDamageActor
-      || (isolatePendingDetail ? null : directDetail.nearestDamageActor)),
-    nearestDangerous: compactSafetyEntity(detail.nearestDangerous
-      || (isolatePendingDetail ? null : directDetail.nearestDangerous)
-      || detail.nearestDamageActor
-      || detail.nearestActive),
+    nearestActive: compactSafetyEntity(nearestActive),
+    nearestDamageActor: compactSafetyEntity(nearestDamageActor),
+    nearestTrustedEasyKill: compactSafetyEntity(nearestTrustedEasyKill),
+    nearestDangerous: compactSafetyEntity(nearestDangerous),
     damageActorNearbyCount: compactNumber(detail.damageActorNearbyCount),
+    trustedEasyKillNearbyCount: compactNumber(detail.trustedEasyKillNearbyCount),
     dangerousNearbyCount: compactNumber(detail.dangerousNearbyCount)
   };
 }
@@ -920,6 +930,9 @@ function compactTarget(value) {
     firing: value.firing === undefined ? null : Boolean(value.firing),
     recentlyActive: value.recentlyActive === undefined ? null : Boolean(value.recentlyActive),
     recentlyMoved: value.recentlyMoved === undefined ? null : Boolean(value.recentlyMoved),
+    easyKillKnown: value.easyKillKnown === undefined ? null : Boolean(value.easyKillKnown),
+    easyKillDamagedToday: value.easyKillDamagedToday === undefined ? null : Boolean(value.easyKillDamagedToday),
+    easyKillThreatExempt: value.easyKillThreatExempt === undefined ? null : Boolean(value.easyKillThreatExempt),
     profitMetadataMode: compactString(value.profitMetadataMode, 48),
     profitMetadataActive: value.profitMetadataActive === undefined ? null : Boolean(value.profitMetadataActive)
   };

@@ -5684,6 +5684,57 @@ async function runSelfTest() {
       want: 'false|damage-actor-near-login-point|1|8'
     },
     {
+      name: 'browserless prelogin safety wires easy-kill trust ahead of damage actors',
+      got: (async () => {
+        const nowMs = Date.parse('2026-07-14T01:00:00.000Z');
+        const config = {
+          gameOrigin: 'https://example.test',
+          snapshotPath: '/snapshot',
+          userId: 7,
+          sessionToken: 'secret',
+          httpTimeoutMs: 1000,
+          loginPointSafetySuccessRequired: 1,
+          loginPointSafetyProbeIntervalMs: 0
+        };
+        const state = {
+          loginPointSafety: { point: { x: 0, y: 0, hp: 79, source: 'test' } }
+        };
+        const fetchWithTimeout = async () => fakeResponseForTest({
+          status: 200,
+          body: {
+            type: 'snapshot',
+            tick: 101,
+            entities: [{ user_id: 8, name: 'xuanze00', x: 100, y: 0, current_join_mode: 'Active', life: 'Alive' }],
+            bullets: [],
+            coin_drops: [],
+            messages: []
+          }
+        });
+        const easyKillPlayerTracker = { status: () => ({ players: [{ userId: 8, name: 'xuanze00' }] }) };
+        const trusted = await runPreLoginSnapshotSafety(config, state, {
+          now: () => nowMs,
+          easyKillPlayerTracker,
+          damagePlayerTracker: { status: () => ({ players: [] }) },
+          fetchWithTimeout
+        });
+        const damaged = await runPreLoginSnapshotSafety(config, state, {
+          now: () => nowMs,
+          easyKillPlayerTracker,
+          damagePlayerTracker: { status: () => ({ players: [{ userId: 8, name: 'xuanze00' }] }) },
+          fetchWithTimeout
+        });
+        return [
+          trusted.ok,
+          trusted.reason,
+          trusted.response.summary.safety.trustedEasyKillNearbyCount,
+          damaged.ok,
+          damaged.reason,
+          damaged.response.summary.safety.nearestDamageActor?.user_id
+        ].join('|');
+      })(),
+      want: 'true|safe|1|false|damage-actor-near-login-point|8'
+    },
+    {
       name: 'browserless confirmed leave quarantines cached self and requires a newer tick',
       got: (async () => {
         const baseMs = Date.parse('2026-07-14T01:00:00.000Z');
@@ -24597,6 +24648,176 @@ async function runSelfTest() {
 	      want: 'true|2026-07-14|1|8|renamed-attacker|12|user:8|0'
 	    },
 	    {
+	      name: 'browserless easy-kill players stay out of recovery combat and HP exits until damage',
+	      got: (() => {
+	        const state = {
+	          userId: 7,
+	          realtime: {
+	            tick: 100,
+	            frameAgeMs: 0,
+	            self: { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 79, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+	            entities: [
+	              { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 79, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+	              { entity_id: 2, user_id: 8, name: 'xuanze00', x: 6108, y: 0, vx: 20, hp: 100, max_hp: 100, current_join_mode: 'Active', drop: 5 }
+	            ],
+	            bullets: [],
+	            coinDrops: []
+	          },
+	          fallback: { tick: 100, frameAgeMs: 0, entities: [], coinDrops: [], messages: [] }
+	        };
+	        const options = {
+	          nowMs: 1000,
+	          controlMode: 'profit-live',
+	          combatEnabled: true,
+	          dynamicProfitThresholdEnabled: false,
+	          easyKillPlayers: [{ userId: 8, name: 'xuanze00' }]
+	        };
+	        const trusted = buildBrowserlessDecision(state, {}, options);
+	        const damaged = buildBrowserlessDecision(state, {}, { ...options, damageActorUserIds: [8] });
+	        return [
+	          trusted.action.kind,
+	          trusted.action.reason,
+	          trusted.combat.target === null,
+	          trusted.profit.best?.target?.easyKillThreatExempt,
+	          damaged.action.reason,
+	          damaged.action.combatExit?.rule,
+	          damaged.combat.target?.easyKillThreatExempt
+	        ].join('|');
+	      })(),
+	      want: 'recover|wait-for-full-stamina-and-hp|true|true|combat-hp-disadvantage-leave|clear-hp-gap|false'
+	    },
+	    {
+	      name: 'browserless easy-kill invulnerability avoidance starts only after damage',
+	      got: (() => {
+	        const state = {
+	          userId: 7,
+	          realtime: {
+	            tick: 100,
+	            frameAgeMs: 0,
+	            self: { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+	            entities: [
+	              { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+	              { entity_id: 2, user_id: 8, name: 'known-invulnerable', x: 6108, y: 0, vx: 20, hp: 100, current_join_mode: 'Active', firing: true, invulnerable_remaining_ms: 5000, drop: 5 }
+	            ],
+	            bullets: [],
+	            coinDrops: []
+	          },
+	          fallback: { tick: 100, frameAgeMs: 0, entities: [], coinDrops: [], messages: [] }
+	        };
+	        const options = {
+	          nowMs: 1000,
+	          controlMode: 'profit-live',
+	          combatEnabled: true,
+	          dynamicProfitThresholdEnabled: false,
+	          easyKillPlayers: [{ userId: 8, name: 'known-invulnerable' }]
+	        };
+	        const trusted = buildBrowserlessDecision(state, {}, options);
+	        const damaged = buildBrowserlessDecision(state, {}, { ...options, damageActorUserIds: [8] });
+	        return [
+	          trusted.action.kind,
+	          trusted.action.reason,
+	          trusted.profit.easyKill.trustedVisibleCount,
+	          damaged.action.kind,
+	          damaged.action.reason,
+	          damaged.profit.easyKill.trustedVisibleCount
+	        ].join('|');
+	      })(),
+	      want: 'wait|no-profitable-candidate|1|flee|avoid-invulnerable-target|0'
+	    },
+	    {
+	      name: 'browserless login safety ignores undamaging easy-kill players and restores damage actors',
+	      got: (() => {
+	        const payload = {
+	          type: 'snapshot',
+	          tick: 10,
+	          entities: [{ user_id: 8, name: 'xuanze00', x: 1000, y: 0, hp: 100, current_join_mode: 'Active' }],
+	          bullets: [],
+	          coin_drops: [],
+	          messages: []
+	        };
+	        const options = {
+	          userId: 7,
+	          loginPoint: { x: 0, y: 0, hp: 79 },
+	          latestKnownTick: 9,
+	          easyKillUserIds: [8]
+	        };
+	        const trusted = summarizeSnapshotPayload(payload, options).safety;
+	        const damaged = summarizeSnapshotPayload(payload, { ...options, damageActorUserIds: [8] }).safety;
+	        const compact = buildCompactBrowserlessStatus({
+	          loginPointSafety: {
+	            ok: true,
+	            reason: 'safe',
+	            checkedAt: '2026-07-14T01:00:00.000Z',
+	            detail: trusted
+	          }
+	        }, {});
+	        return [
+	          trusted.reason,
+	          trusted.ok,
+	          trusted.trustedEasyKillNearbyCount,
+	          damaged.reason,
+	          damaged.ok,
+	          damaged.nearestDamageActor?.user_id,
+	          compact.loginPointSafety.detail.nearestDangerous === null,
+	          compact.loginPointSafety.detail.nearestTrustedEasyKill?.userId
+	        ].join('|');
+	      })(),
+	      want: 'safe|true|1|damage-actor-near-login-point|false|8|true|8'
+	    },
+	    {
+	      name: 'browserless realtime damage observation promotes easy-kill player before the next decision',
+	      got: (() => {
+	        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'grasp-rat-easy-kill-damage-promotion-'));
+	        const baseMs = Date.parse('2026-07-14T01:00:00.000Z');
+	        try {
+	          const easyTracker = createEasyKillPlayerTracker({ file: path.join(dir, 'easy-kill-players.json'), now: () => baseMs });
+	          easyTracker.observeCombatShot({ userId: 8, name: 'xuanze00', active: true }, { atMs: baseMs, tick: 1 });
+	          easyTracker.observeKillEvidence([{ targetUserId: 8, targetName: 'xuanze00', tick: 2 }], { atMs: baseMs + 1 });
+	          const damageTracker = createDailyDamagePlayerTracker({ file: path.join(dir, 'daily-damage-players.json'), now: () => baseMs });
+	          const adapter = createBrowserlessDecisionAdapter({
+	            userId: 7,
+	            controlMode: 'profit-live',
+	            combatEnabled: true,
+	            dynamicProfitThresholdEnabled: false,
+	            easyKillPlayerTracker: easyTracker,
+	            damagePlayerTracker: damageTracker
+	          });
+	          const stateAt = (hp, tick, bullets = []) => ({
+	            userId: 7,
+	            realtime: {
+	              tick,
+	              frameAgeMs: 0,
+	              self: { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+	              entities: [
+	                { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+	                { entity_id: 2, user_id: 8, name: 'xuanze00', x: 6108, y: 0, vx: 20, hp: 100, current_join_mode: 'Active', firing: bullets.length > 0, drop: 5 }
+	              ],
+	              bullets,
+	              coinDrops: []
+	            },
+	            fallback: { tick, frameAgeMs: 0, entities: [], coinDrops: [], messages: [] }
+	          });
+	          const firstState = stateAt(79, 10);
+	          damageTracker.observeDecision(firstState, null, { atMs: baseMs, tick: 10, source: 'realtime-frame' });
+	          const first = adapter.decide(firstState, { nowMs: baseMs });
+	          const damagedState = stateAt(76, 11, [{ owner_user_id: 8 }]);
+	          const observed = damageTracker.observeDecision(damagedState, first, { atMs: baseMs + 1000, tick: 11, source: 'realtime-frame' });
+	          const second = adapter.decide(damagedState, { nowMs: baseMs + 1000 });
+	          return [
+	            first.action.kind,
+	            first.profit.best?.target?.easyKillThreatExempt,
+	            observed.recorded,
+	            damageTracker.status(baseMs + 1000).players[0]?.userId,
+	            second.action.reason,
+	            second.combat.target?.easyKillDamagedToday
+	          ].join('|');
+	        } finally {
+	          fs.rmSync(dir, { recursive: true, force: true });
+	        }
+	      })(),
+	      want: 'recover|true|true|8|combat-hp-disadvantage-leave|true'
+	    },
+	    {
 	      name: 'browserless known easy active player competes as distance and shot-cost ROI profit',
 	      got: (() => {
 	        const state = {
@@ -24834,7 +25055,8 @@ async function runSelfTest() {
 	            controlMode: 'profit-live',
 	            combatEnabled: true,
 	            dynamicProfitThresholdEnabled: false,
-	            easyKillPlayerTracker: tracker
+	            easyKillPlayerTracker: tracker,
+	            damageActorUserIds: [8]
 	          });
 	          const pending = tracker.status();
 	          tracker.expirePendingOutcomes(41000);
