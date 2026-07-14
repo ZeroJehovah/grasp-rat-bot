@@ -1,12 +1,17 @@
 *.log
 *.pid
-*-state.json
-AGENTS.md
-grasp-rat-debug-events.log
-debug-artifacts/
-headless-demo/data/
 node_modules/
 .DS_Store
+combat-log-service/
+debug-artifacts/
+
 .env
 .env.*
 !.env.example
+
+# Generated monthly reports remain local and are synced to Obsidian separately.
+docs/reports/
+
+# Local agent instructions and archived project rules.
+AGENTS.md
+AGENTS.md.archive-*

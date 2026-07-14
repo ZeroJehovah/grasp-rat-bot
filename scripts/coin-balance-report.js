@@ -12,8 +12,7 @@ const DEFAULT_REPORT_ROOT = path.join(ROOT, 'docs', 'reports');
 const DEFAULT_PAGE_SIZE = 100;
 const DEFAULT_DELAY_MS = 4000;
 const DEFAULT_TIMEOUT_MS = 20000;
-// Full log type keeps death-loss records; type=1 is useful only for pickup-only debugging.
-const DEFAULT_LOG_TYPE = '0';
+const BALANCE_LOG_TYPE = '1';
 const COIN_QUOTA_UNIT = 500000;
 
 function parseArgs(args) {
@@ -26,7 +25,6 @@ function parseArgs(args) {
     pageSize: DEFAULT_PAGE_SIZE,
     delayMs: DEFAULT_DELAY_MS,
     timeoutMs: DEFAULT_TIMEOUT_MS,
-    logType: DEFAULT_LOG_TYPE,
     selfTest: false
   };
   for (let i = 0; i < args.length; i += 1) {
@@ -39,7 +37,6 @@ function parseArgs(args) {
     else if (arg === '--page-size') out.pageSize = positiveInt(args[++i], out.pageSize);
     else if (arg === '--delay-ms') out.delayMs = Math.max(0, Number(args[++i] || out.delayMs) || 0);
     else if (arg === '--timeout-ms') out.timeoutMs = positiveInt(args[++i], out.timeoutMs);
-    else if (arg === '--type') out.logType = String(args[++i] || '');
     else if (arg === '--self-test') out.selfTest = true;
     else if (arg === '--help' || arg === '-h') {
       printHelp();
@@ -78,7 +75,6 @@ Options:
   --page-size <n>          API page size. Default: ${DEFAULT_PAGE_SIZE}
   --delay-ms <ms>          Delay between API requests. Default: ${DEFAULT_DELAY_MS}
   --timeout-ms <ms>        Per-request timeout. Default: ${DEFAULT_TIMEOUT_MS}
-  --type <value>           API type filter. Default: ${DEFAULT_LOG_TYPE}
   --self-test              Run local parser/report regression checks.
 `);
 }
@@ -159,7 +155,7 @@ class ApiClient {
     const url = new URL(this.options.apiUrl);
     url.searchParams.set('p', String(page));
     url.searchParams.set('page_size', String(this.options.pageSize));
-    url.searchParams.set('type', String(this.options.logType));
+    url.searchParams.set('type', BALANCE_LOG_TYPE);
     url.searchParams.set('token_name', '');
     url.searchParams.set('model_name', '');
     url.searchParams.set('start_timestamp', String(startTimestamp));
@@ -195,13 +191,19 @@ function requestHeaders(auth) {
     pragma: 'no-cache',
     priority: 'u=1, i',
     referer: 'https://elysiver.h-e.top/console/log',
-    'sec-ch-ua': '"Google Chrome";v="149", "Chromium";v="149", "Not)A;Brand";v="24"',
+    'sec-ch-ua': '"Not;A=Brand";v="8", "Chromium";v="150", "Google Chrome";v="150"',
+    'sec-ch-ua-arch': '"x86"',
+    'sec-ch-ua-bitness': '"64"',
+    'sec-ch-ua-full-version': '"150.0.7871.114"',
+    'sec-ch-ua-full-version-list': '"Not;A=Brand";v="8.0.0.0", "Chromium";v="150.0.7871.114", "Google Chrome";v="150.0.7871.114"',
     'sec-ch-ua-mobile': '?0',
+    'sec-ch-ua-model': '""',
     'sec-ch-ua-platform': '"Windows"',
+    'sec-ch-ua-platform-version': '"19.0.0"',
     'sec-fetch-dest': 'empty',
     'sec-fetch-mode': 'cors',
     'sec-fetch-site': 'same-origin',
-    'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36'
+    'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36'
   };
 }
 
@@ -238,7 +240,7 @@ async function fetchPageWithCurlRetry(url, auth, timeoutMs, day, page) {
 }
 
 function isTransientCurlError(err) {
-  return /Just a moment|cloudflare|SSL_ERROR_SYSCALL|timed out|connection|transfer/i.test(String(err && err.message || err));
+  return /Just a moment|cloudflare|error code:\s*50[234]|HTTP\s+50[234]|SSL_ERROR_SYSCALL|timed out|connection|transfer/i.test(String(err && err.message || err));
 }
 
 function fetchPageWithCurl(url, auth, timeoutMs) {

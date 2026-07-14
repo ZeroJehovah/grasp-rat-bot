@@ -1,22 +1,27 @@
 # Coin Balance API Reporting
 
-This document records the known-good way to fetch Elysiver game coin balance logs. Use this instead of re-deriving the method from old Codex sessions.
+This document records the stable method for generating Elysiver natural-month
+actual-revenue reports.
 
 ## Standard Command
-
-Generate or refresh the natural-month report:
 
 ```bash
 node scripts/coin-balance-report.js --month YYYY-MM --timeout-ms 60000
 ```
 
-The default output is `docs/reports/YYYY-MM/monthly-YYYY-MM.md`. For today's daily report workflow, also run the same command for the matching Beijing natural month after generating `docs/reports/YYYY-MM/daily-YYYY-MM-DD.md`.
+The default output is:
 
-For a current month, the script intentionally fetches only days up to Beijing today. It does not query future days.
+```text
+docs/reports/YYYY-MM/monthly-YYYY-MM.md
+```
+
+For the current month, the script queries only Beijing calendar days up to today.
+It does not query future days.
 
 ## Authentication
 
-The script auto-loads a local `.env` from the repo root. Keep this file local and ignored.
+The script automatically loads the repository-local `.env` file. Keep this file
+local and ignored.
 
 Required variables:
 
@@ -25,7 +30,7 @@ ELYSIVER_COOKIE='session=...; elysiver_style_jwt=...; cf_clearance=...'
 ELYSIVER_NEW_API_USER=28886
 ```
 
-Alternative split-cookie variables are supported:
+The Cookie can instead be supplied in parts:
 
 ```dotenv
 ELYSIVER_SESSION='...'
@@ -34,47 +39,56 @@ ELYSIVER_CF_CLEARANCE='...'
 ELYSIVER_NEW_API_USER=28886
 ```
 
-Optional:
+Optional API endpoint override:
 
 ```dotenv
 ELYSIVER_LOG_API_URL='https://elysiver.h-e.top/api/log/self'
 ```
 
-Do not print or commit `.env`, cookies, JWTs, or Cloudflare clearance values. If auth starts failing, refresh these values from the browser's working console request and keep the file permission restrictive, for example `chmod 600 .env`.
+Never print or commit `.env`, cookies, JWTs, Cloudflare clearance values, or
+generated reports.
 
-## Settled Fetch Method
-
-The stable implementation is `scripts/coin-balance-report.js`:
+## Stable Fetch Method
 
 - Endpoint: `https://elysiver.h-e.top/api/log/self`.
-- Query shape: `p`, `page_size=100`, `type=0`, empty `token_name`, `model_name`, `group`, and `request_id`, with Beijing-day `start_timestamp` and `end_timestamp`.
-- Keep `type=0` as the default for balance reports. Earlier manual pickup checks used `type=1`, but full balance accounting needs death-loss records too.
-- Request headers mirror the successful browser request: `accept`, `accept-language`, `cache-control`, `dnt`, `new-api-user`, `pragma`, `priority`, `referer`, `sec-ch-ua*`, `sec-fetch-*`, `user-agent`, and Cookie.
-- Requests are paginated from page 1 using API `total` and `page_size`.
-- Requests are rate limited by default with a 4s delay between API calls. Keep this in the requested 3-5s range unless debugging.
-- The script fetches pages directly through `curl` with the same browser-like headers, `--location`, `--max-time`, `--connect-timeout`, `--retry 2`, and `--retry-all-errors`. Node `fetch` is intentionally not used because the API currently returns Cloudflare challenge HTML to Node while curl can receive JSON with the same auth. If curl returns a transient Cloudflare challenge or TLS/connection error, the page-level request retries before failing the monthly report.
-- Progress goes to stderr as `[coin-report] YYYY-MM-DD page N curl request M`, so long monthly pulls are not silent.
+- Query parameters: `p`, `page_size=100`, fixed `type=1`, empty
+  `token_name`, `model_name`, `group`, and `request_id`, plus Beijing-day
+  `start_timestamp` and `end_timestamp`.
+- The `type=1` filter is fixed in the script and has no command-line override.
+- Requests paginate from page 1 using the API `total` and `page_size`.
+- Requests have a default four-second interval.
+- The script uses `curl` with browser-like headers, redirect handling, timeouts,
+  and retries. Node `fetch` is intentionally not used because Cloudflare may
+  challenge it while the same authenticated curl request succeeds.
+- Progress is written to stderr as
+  `[coin-report] YYYY-MM-DD page N curl request M`.
 
-The report parser uses the JSON `other` payload and content text to classify:
+The API balance-change records are the authoritative source for the report.
+Monthly Markdown contains per-day totals, whole-month totals, API record counts,
+and classified detail rows.
 
-- system coin pickup,
-- player drop pickup,
-- death loss,
-- ignored non-game quota records,
-- unknown game-like records that need review.
+## Obsidian Synchronization
 
-Use the Elysiver balance API as the authoritative source for natural-day coin totals. The in-game panel and combat-log daily summary are local session estimates; versions before `bootstrap-0.4.274` could undercount incidental system-coin pickups when the bot collected a coin that was not the tracked coin target. From `bootstrap-0.4.274`, the runtime also records native visible coins that disappear near the self path as `incidental-coin-disappeared`, so future local session estimates should reconcile more closely. Player drop pickups are usually timestamped and reconcile more directly with combat-log kill rewards.
+After successfully generating or updating a report, copy:
 
-Monthly Markdown includes daily totals, whole-month totals, API record counts, and sorted detail rows for player-drop pickup and death loss.
+```text
+docs/reports/YYYY-MM/monthly-YYYY-MM.md
+```
+
+to:
+
+```text
+/mnt/d/同步/软件数据/Obsidian/瞎折腾/PC/游戏/囤囤鼠大战/YYYY-MM/monthly-YYYY-MM.md
+```
+
+Verify that source and destination are byte-for-byte identical. If `/mnt/d` is
+read-only, use Windows PowerShell `Copy-Item -Force` with the source path
+converted by `wslpath -w`, then verify the destination through `/mnt/d`.
 
 ## Validation
-
-After changing the script or generated report behavior, run:
 
 ```bash
 node scripts/coin-balance-report.js --self-test
 node --check scripts/coin-balance-report.js
 git diff --check
 ```
-
-When the daily report path is also touched, run the daily-summary checks from `combat-log-service` as appropriate.
