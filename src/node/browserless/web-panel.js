@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.14.6';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.14.7';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function renderBrowserlessWebPanel() {
@@ -625,6 +625,9 @@ function renderBrowserlessWebPanel() {
       'stale-self': '自身状态太久没更新，准备重连',
       'no-self': '没有看到自己，等待恢复',
       'direct-leave-failed': '退出确认失败，重试',
+      'shutdown-leave': '程序停止或重启前安全退出',
+      'confirmed-leave-snapshot-quarantine': '已确认退出，等待快照刷新',
+      'stale-confirmed-leave-snapshot-tick': '已确认退出，等待更新后的快照',
       'explicit-stop': '手动停止',
       'self-test': '测试',
       'login-point-bootstrap-failed': '登录点检查失败',
@@ -959,6 +962,9 @@ function renderBrowserlessWebPanel() {
       const detailReason = String(detail.reason || '');
       const originalReason = String(detail.originalReason || '');
       const reasonText = [reason, detailReason, originalReason].join(' ');
+      if (/confirmed-leave-snapshot-quarantine|stale-confirmed-leave-snapshot-tick/i.test(reasonText)) {
+        return { state: 'pending', text: '等待退出后的快照刷新' };
+      }
       if (/self-present-reentry/i.test(reasonText) || (detail.selfPresent === true && detail.bypassedPreLoginSafety)) {
         return { state: 'reentry', text: '检测到角色仍在线，正在恢复实时连接（不会新登录）' };
       }
@@ -1003,12 +1009,18 @@ function renderBrowserlessWebPanel() {
       return parts.length ? parts.join(' / ') : '--';
     }
     function unsafeReasonText(status) {
-      if (status.game?.inGame || loginPointDisplay(status).state === 'safe') return '--';
+      if (status.game?.inGame || loginPointDisplay(status).state !== 'unsafe') return '--';
       const detail = status.loginPointSafety?.detail || {};
       const raw = detail.unsafeReason || detail.reason || status.loginPointSafety?.reason;
       if (!raw || /^safe$/i.test(String(raw)) || /pending-snapshot-safety|snapshot-safety-streak-pending/i.test(String(raw))) return '--';
       const translated = reasonText(raw);
       return translated === '安全' ? '--' : translated;
+    }
+    function loginPointPendingReasonText(status) {
+      if (status.game?.inGame || loginPointDisplay(status).state !== 'pending') return '--';
+      const detail = status.loginPointSafety?.detail || {};
+      const raw = detail.reason || status.loginPointSafety?.reason || detail.originalReason;
+      return raw ? reasonText(raw) : '--';
     }
     function offlineBlockerText(status) {
       const blocker = status.stats?.offline?.blocker || null;
@@ -1470,8 +1482,12 @@ function renderBrowserlessWebPanel() {
         const reentry = loginDisplay.state === 'reentry';
         addRow(rowsOut, reentry ? '连接状态' : '登录点', loginPointText(status), false, loginPointAttrs(status));
         addRow(rowsOut, reentry ? '当前坐标' : '登录点坐标', pointCoordText(status.loginPointSafety?.point));
-        addRow(rowsOut, '不安全原因', reentry ? '--' : unsafeReasonText(status));
-        addRow(rowsOut, '附近危险', reentry ? '--' : (loginDisplay.state === 'safe' ? '--' : targetLabel(status.loginPointSafety?.detail?.nearestDangerous || status.loginPointSafety?.detail?.nearestDamageActor || status.loginPointSafety?.detail?.nearestActive)));
+        if (loginDisplay.state === 'unsafe') {
+          addRow(rowsOut, '不安全原因', unsafeReasonText(status));
+          addRow(rowsOut, '附近危险', targetLabel(status.loginPointSafety?.detail?.nearestDangerous || status.loginPointSafety?.detail?.nearestDamageActor || status.loginPointSafety?.detail?.nearestActive));
+        } else if (loginDisplay.state === 'pending') {
+          addRow(rowsOut, '等待原因', loginPointPendingReasonText(status));
+        }
         addRow(rowsOut, '保持离线', offlineBlockerText(status), false, status.stats?.offline?.blocker ? classAttrs('warn') : null);
         addRow(rowsOut, reentry ? '状态确认时间' : '检查时间', fullStamp(status.loginPointSafety?.checkedAt || status.loginPointSafety?.detail?.checkedAt));
       }

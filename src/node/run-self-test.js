@@ -18856,8 +18856,8 @@ async function runSelfTest() {
           panelScript.includes("text: '检测到角色仍在线，正在恢复实时连接（不会新登录）'"),
           panelScript.includes("reentry ? '连接状态' : '登录点'"),
           panelScript.includes("reentry ? '当前坐标' : '登录点坐标'"),
-          panelScript.includes("reentry ? '--' : unsafeReasonText(status)"),
-          panelScript.includes("reentry ? '--' : (loginDisplay.state === 'safe'"),
+          panelScript.includes("if (loginDisplay.state === 'unsafe') {"),
+          panelScript.includes("addRow(rowsOut, '等待原因', loginPointPendingReasonText(status));"),
           panelScript.includes("reentry ? '状态确认时间' : '检查时间'"),
           /function dangerousPlayerExitReasonText/.test(panelScript),
           panelScript.includes("evidence.push('快照为 Active')"),
@@ -18867,8 +18867,8 @@ async function runSelfTest() {
           panelScript.includes("const pendingSafeReason = /snapshot-safety-streak-pending/i.test(detailReason)"),
           panelScript.includes("return coord(point.x) + ', ' + coord(point.y);"),
           panelScript.includes("translated === '安全'"),
-          /loginPointDisplay\(status\)\.state === 'safe'/.test(panelScript),
-          /loginDisplay\.state === 'safe'/.test(panelScript),
+          /loginPointDisplay\(status\)\.state !== 'unsafe'/.test(panelScript),
+          /loginDisplay\.state === 'unsafe'/.test(panelScript),
           /function offlineBlockerText/.test(panelScript),
           /s\.lastKnown\?\.self/.test(panelScript),
           /上次体力1d/.test(panelScript),
@@ -18896,6 +18896,25 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
+    },
+    {
+      name: 'browserless web panel explains shutdown exits and confirmed leave snapshot waits',
+      got: (() => {
+        const panelText = renderBrowserlessWebPanel();
+        const panelScript = panelText.match(/<script>([\s\S]*?)<\/script>/)?.[1] || '';
+        return [
+          panelScript.includes("'shutdown-leave': '程序停止或重启前安全退出'"),
+          panelScript.includes("'confirmed-leave-snapshot-quarantine': '已确认退出，等待快照刷新'"),
+          panelScript.includes("'stale-confirmed-leave-snapshot-tick': '已确认退出，等待更新后的快照'"),
+          panelScript.includes('/confirmed-leave-snapshot-quarantine|stale-confirmed-leave-snapshot-tick/i.test(reasonText)'),
+          panelScript.includes("return { state: 'pending', text: '等待退出后的快照刷新' };"),
+          /function loginPointPendingReasonText/.test(panelScript),
+          panelScript.includes("loginPointDisplay(status).state !== 'unsafe'"),
+          panelScript.includes("addRow(rowsOut, '不安全原因', unsafeReasonText(status));"),
+          panelScript.includes("addRow(rowsOut, '等待原因', loginPointPendingReasonText(status));")
+        ].join('|');
+      })(),
+      want: 'true|true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless runner self-test passes',
