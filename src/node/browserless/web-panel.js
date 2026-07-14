@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.14.7';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.14.8';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function renderBrowserlessWebPanel() {
@@ -1207,7 +1207,7 @@ function renderBrowserlessWebPanel() {
       const node = document.getElementById('nearbyPlayers');
       if (!node) return;
       const items = Array.isArray(status.nearby?.p) ? status.nearby.p : [];
-      const hiddenLowFullStaminaCount = Math.max(0, Number(status.nearby?.playerLowHiddenCount || 0) || 0);
+      const hiddenLowAfkCount = Math.max(0, Number(status.nearby?.playerLowHiddenCount || 0) || 0);
       const fragment = document.createDocumentFragment();
       fragment.appendChild(createNearbyRow('player', [
         { text: '名称' },
@@ -1216,7 +1216,7 @@ function renderBrowserlessWebPanel() {
         { text: 'Drop' },
         { text: '距离' }
       ], true));
-      if (!items.length && hiddenLowFullStaminaCount === 0) {
+      if (!items.length && hiddenLowAfkCount === 0) {
         fragment.appendChild(createNearbyRow('player', [
           { text: '无' },
           { text: '--' },
@@ -1243,8 +1243,8 @@ function renderBrowserlessWebPanel() {
           ], false, rowClass));
         }
       }
-      if (hiddenLowFullStaminaCount > 0) {
-        fragment.appendChild(createNearbySummaryRow('player', '另有 ' + hiddenLowFullStaminaCount + ' 个低收益满体力玩家，详情略'));
+      if (hiddenLowAfkCount > 0) {
+        fragment.appendChild(createNearbySummaryRow('player', '另有 ' + hiddenLowAfkCount + ' 个低收益挂机玩家，详情略'));
       }
       node.replaceChildren(fragment);
     }

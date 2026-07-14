@@ -6782,10 +6782,10 @@ async function runSelfTest() {
           rows['good-afk']?.length
         ].join('|');
       })(),
-      want: '8|1|1|1|1|0||||||||||false|13'
+      want: '8|1|1|1|1|0|1|0|1|1|1|0|0|0|未知玩家|false|13'
     },
     {
-      name: 'browserless nearby player rows hide nameless no-stamina no-drop placeholders',
+      name: 'browserless nearby player rows include all visible categories and fold only low-drop AFK',
       got: (() => {
         const store = createBrowserlessStateStore({ userId: 7 });
         store.ingestFrame({
@@ -6794,9 +6794,9 @@ async function runSelfTest() {
           entities: [
             { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
             { entity_id: 2, user_id: 8, x: 1000, y: 0, hp: 100, current_join_mode: 'Passive' },
-            { entity_id: 3, user_id: 9, x: 2000, y: 0, hp: 100, current_join_mode: 'Passive', death_drop_coins: 3 },
-            { entity_id: 4, user_id: 10, x: 3000, y: 0, hp: 100, current_join_mode: 'Passive', stamina_5s_remaining_milli: 7000 },
-            { entity_id: 5, user_id: 11, x: 4000, y: 0, hp: 100, current_join_mode: 'Active' }
+            fullStamina5s({ entity_id: 3, user_id: 9, name: 'invulnerable-high', x: 2000, y: 0, hp: 100, current_join_mode: 'Passive', drop: 99, invulnerable_remaining_ms: 60000 }),
+            fullStamina5s({ entity_id: 4, user_id: 10, name: 'active-low', x: 3000, y: 0, hp: 100, current_join_mode: 'Active', drop: 1 }, 7000),
+            fullStamina5s({ entity_id: 5, user_id: 11, name: 'low-afk', x: 4000, y: 0, hp: 100, current_join_mode: 'Passive', drop: 1 })
           ],
           bullets: []
         }, { receivedAtMs: 1000 });
@@ -6805,15 +6805,27 @@ async function runSelfTest() {
           controlMode: 'profit-live'
         });
         const rows = decision.input.nearby.p || [];
+        const compactStatus = buildCompactBrowserlessStatus({
+          session: { userId: 7, sessionToken: 'test-token' },
+          runner: { running: true, currentAction: decision.action },
+          current: { self: decision.input.self, decision }
+        }, {});
+        const compactRows = compactStatus.nearby.p || [];
         return [
           rows.length,
-          rows.some(row => row[0] === '未知玩家' && row[3] === 0 && row[2] === null && row[7] === 'Passive'),
-          rows.some(row => row[0] === '未知玩家' && row[3] === 3),
-          rows.some(row => row[0] === '未知玩家' && row[2] === 7000),
-          rows.some(row => row[0] === '未知玩家' && row[7] === 'Active')
+          rows.some(row => row[0] === '未知玩家' && row[3] === null && row[2] === null && row[7] === 'Passive'),
+          rows.some(row => row[0] === 'invulnerable-high' && row[3] === 99 && row[4] === 60000),
+          rows.some(row => row[0] === 'active-low' && row[3] === 1 && row[10] === 0 && row[12] === 0),
+          rows.some(row => row[0] === 'low-afk' && row[3] === 1 && row[10] === 1 && row[12] === 1),
+          compactRows.length,
+          compactRows.some(row => row[0] === '未知玩家'),
+          compactRows.some(row => row[0] === 'invulnerable-high'),
+          compactRows.some(row => row[0] === 'active-low'),
+          compactRows.some(row => row[0] === 'low-afk'),
+          compactStatus.nearby.playerLowHiddenCount
         ].join('|');
       })(),
-      want: '1|false|false|false|true'
+      want: '4|true|true|true|true|3|true|true|true|false|1'
     },
     {
       name: 'browserless stationary full-stamina active can be AFK profit but non-full active is ignored when not attacking',
@@ -9805,7 +9817,7 @@ async function runSelfTest() {
       want: 'coin|coin|coin|self-kill-drop|6|snapshot-player-drop|1|8|62||true'
     },
     {
-      name: 'browserless nearby panel uses profit candidates and route nodes',
+      name: 'browserless nearby panel uses all visible players and profit coin route nodes',
       got: (() => {
         const decision = buildBrowserlessDecision({
           userId: 7,
@@ -9855,7 +9867,7 @@ async function runSelfTest() {
           playerRows.some(row => row[0] === 'low-afk')
         ].join('|');
       })(),
-      want: 'one-a||one-a:1:0,one-b:0:0,route-a:0:0,route-b:0:0,route-c:0:0|active-threat:0:0:0:0:0,drop-afk:0:1:1:1:0|false|false|false'
+      want: 'one-a||one-a:1:0,one-b:0:0,route-a:0:0,route-b:0:0,route-c:0:0|active-threat:0:0:0:0:0,drop-afk:0:1:1:1:0,low-afk:0:0:1:1:1|false|false|true'
     },
     {
       name: 'browserless profit live enriches realtime AFK reward from fresh snapshot metadata',
@@ -10394,7 +10406,7 @@ async function runSelfTest() {
       want: 'wait|wait|no-profitable-candidate|wait||'
     },
     {
-      name: 'browserless profit live ignores idle passive invulnerable target',
+      name: 'browserless profit live ignores idle passive invulnerable target for decisions but displays it nearby',
       got: (() => {
         const store = createBrowserlessStateStore({ userId: 7 });
         store.ingestFrame({
@@ -10422,7 +10434,7 @@ async function runSelfTest() {
           decision.combat.target?.userId || ''
         ].join('|');
       })(),
-      want: 'wait|wait|no-profitable-candidate|wait|0|false|'
+      want: 'wait|wait|no-profitable-candidate|wait|0|true|'
     },
     {
       name: 'browserless idle passive invulnerable does not block ordinary coin',
@@ -17029,7 +17041,7 @@ async function runSelfTest() {
                   )),
                   p: [
                     ['enemy', 44, 5000, 9, null, 800, 1, 'Passive', 0, 0, 0, 0, 0],
-                    ['low-full', 80, 10000, 1, null, 900, 0, 'Passive', 1, 0, 1]
+                    ['low-afk', 80, 10000, 1, null, 900, 0, 'Passive', 1, 0, 1, 1, 1]
                   ]
                 }
               }
@@ -17171,7 +17183,7 @@ async function runSelfTest() {
           Boolean(compactStatus.current),
           Boolean(compactStatus.recentExits),
           compactText.includes('coin-165'),
-          !compactText.includes('low-full'),
+          !compactText.includes('low-afk'),
           compactText.includes('state-secret-token'),
           !compactText.includes(largePayload) && compactText.length < publicText.length
         ].join('|');
@@ -18884,7 +18896,7 @@ async function runSelfTest() {
           panelScript.includes('coinLowHiddenCount'),
           panelScript.includes('playerLowHiddenCount'),
           panelScript.includes('低额金币'),
-          panelScript.includes("低收益满体力玩家"),
+          panelScript.includes("低收益挂机玩家"),
           /function isAfkNearbyPlayer/.test(panelScript),
           /function isGreenAfkNearbyPlayer/.test(panelScript),
           panelScript.includes("if (afk) return { text: 'AFK', className: greenAfk ? 'ok' : '' }"),

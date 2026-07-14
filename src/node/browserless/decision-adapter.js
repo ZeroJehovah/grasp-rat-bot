@@ -449,6 +449,18 @@ function entityDisplayName(entity) {
   return String(entity?.name || entity?.label || entity?.username || entity?.user_name || entity?.displayName || entity?.display_name || '').trim();
 }
 
+function entityDropKnown(entity) {
+  if (typeof entity?.dropKnown === 'boolean') return entity.dropKnown;
+  return [
+    entity?.drop,
+    entity?.Drop,
+    entity?.reward,
+    entity?.coin_reward,
+    entity?.death_reward_preview,
+    entity?.death_drop_coins
+  ].some(value => value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value)));
+}
+
 function entityDropValue(entity) {
   return Number(entity?.drop ?? entity?.Drop ?? entity?.reward ?? entity?.coin_reward ?? entity?.death_reward_preview ?? entity?.death_drop_coins ?? 0) || 0;
 }
@@ -857,6 +869,7 @@ function normalizeEntityForDecision(entity, self = null, authority = 'realtime',
   const stamina1dLimit = staminaLimitForWindow(entity, '1d');
   const invulnerableMs = invulnerableRemainingMs(entity, options);
   const fullStamina5s = hasFull5sStamina(entity, options);
+  const dropKnown = entityDropKnown(entity);
   const normalized = {
     ...cloneJson(entity),
     user_id: numberOrNull(entity.user_id),
@@ -867,6 +880,7 @@ function normalizeEntityForDecision(entity, self = null, authority = 'realtime',
     hp: numberOrNull(entity.hp),
     max_hp: numberOrNull(entity.max_hp),
     drop: entityDropValue(entity),
+    dropKnown,
     authority,
     joinModeActive: isActiveEntity(entity),
     active: moving || firing || (isActiveEntity(entity) && (!fullStamina5s || isInvulnerableEntity(entity))),
@@ -1537,36 +1551,12 @@ function panelPlayerTargetKey(target) {
   return id === undefined || id === null || id === '' ? '' : String(id);
 }
 
-function shouldShowNearbyPanelPlayer(target, action, combat) {
-  if (!target) return false;
-  if (targetPlayerSelected(action, combat, target)) return true;
-  if (entityDisplayName(target)) return true;
-  if (numberOrNull(entityDropValue(target)) > 0) return true;
-  if (staminaRemainingValue(target, '5s') !== null) return true;
-  if (target.active || target.moving || target.firing || target.invulnerable) return true;
-  if (invulnerableRemainingMs(target) !== null) return true;
-  return false;
-}
-
 function panelPlayerCandidates(input) {
-  const activeIds = new Set((input.activeThreats || [])
-    .concat(input.firingThreats || [], input.avoidanceThreats || [], input.snapshotActiveThreats || [])
-    .map(panelPlayerTargetKey)
-    .filter(Boolean));
-  const afkIds = new Set((input.afkTargets || [])
-    .concat(input.afkPanelTargets || [])
-    .map(panelPlayerTargetKey)
-    .filter(Boolean));
-  return (input.visibleTargets || [])
-    .filter(target => activeIds.has(panelPlayerTargetKey(target))
-      || afkIds.has(panelPlayerTargetKey(target))
-      || target.easyKillKnown
-      || targetPlayerSelected(input.currentAction, input.currentCombat, target));
+  return Array.isArray(input?.visibleTargets) ? input.visibleTargets : [];
 }
 
 function summarizeNearbyForPanel(input, action, combat, options = {}, singleCoinBait = null) {
   if (!input?.self) return null;
-  const panelInput = { ...input, currentAction: action, currentCombat: combat };
   const attackRange = Math.max(0, Number(options.attackRange ?? options.combatAttackRange ?? DEFAULT_ATTACK_RANGE));
   const visibleRange = Math.max(0, Number(
     input.fallback?.snapshotVisibleCoinMaxDistanceCm
@@ -1594,20 +1584,48 @@ function summarizeNearbyForPanel(input, action, combat, options = {}, singleCoin
     .filter(target => !afkOpportunityBlockedByStaminaCooldown(target, options))
     .map(panelPlayerTargetKey)
     .filter(Boolean));
-  const afkTargetIds = new Set((input.afkPanelTargets || input.afkTargets || [])
+  const threatTargetIds = new Set((input.activeThreats || [])
+    .concat(input.firingThreats || [], input.avoidanceThreats || [], input.snapshotActiveThreats || [])
     .map(panelPlayerTargetKey)
     .filter(Boolean));
+  const decisionTargetIds = new Set([
+    ...(input.activeThreats || []),
+    ...(input.firingThreats || []),
+    ...(input.avoidanceThreats || []),
+    ...(input.snapshotActiveThreats || []),
+    ...(input.afkTargets || []),
+    ...(input.easyKillTargets || []),
+    ...(Array.isArray(combat?.candidates) ? combat.candidates : []),
+    combat?.target
+  ].filter(Boolean).map(panelPlayerTargetKey).filter(Boolean));
   const lowDropThreshold = Math.max(0, Number(options.attackMinAfkDrop ?? DEFAULT_ATTACK_MIN_AFK_DROP));
-  const players = panelPlayerCandidates(panelInput)
+  const players = panelPlayerCandidates(input)
     .filter(target => Number.isFinite(Number(target?.distance)))
     .filter(target => visibleRange <= 0 || Number(target.distance) <= visibleRange)
     .sort((a, b) => Number(a.distance) - Number(b.distance))
     .map(target => {
-      const drop = numberOrNull(entityDropValue(target));
+      const dropKnown = entityDropKnown(target);
+      const drop = dropKnown ? numberOrNull(entityDropValue(target)) : null;
       const fullStamina5s = hasFull5sStamina(target, options);
-      const afkSelectable = selectableAfkTargetIds.has(panelPlayerTargetKey(target));
-      const afk = afkTargetIds.has(panelPlayerTargetKey(target));
-      const lowValueFullStamina = Boolean(fullStamina5s && drop !== null && drop < lowDropThreshold);
+      const targetKey = panelPlayerTargetKey(target);
+      const selected = targetPlayerSelected(action, combat, target);
+      const afkSelectable = selectableAfkTargetIds.has(targetKey);
+      const afk = Boolean(
+        fullStamina5s
+          && target.alive !== false
+          && !target.active
+          && !target.moving
+          && !target.firing
+          && !threatTargetIds.has(targetKey)
+      );
+      const lowValueAfk = Boolean(
+        afk
+          && dropKnown
+          && drop !== null
+          && drop < lowDropThreshold
+          && !selected
+          && !decisionTargetIds.has(targetKey)
+      );
       return [
         entityDisplayName(target) || '未知玩家',
         numberOrNull(target.hp),
@@ -1615,13 +1633,13 @@ function summarizeNearbyForPanel(input, action, combat, options = {}, singleCoin
         drop,
         invulnerableRemainingMs(target, options),
         Math.round(Number(target.distance)),
-        targetPlayerSelected(action, combat, target) ? 1 : 0,
+        selected ? 1 : 0,
         String(target.current_join_mode || target.mode || target.joined || target.profitMetadataMode || '') || null,
         fullStamina5s ? 1 : 0,
         afkSelectable ? 1 : 0,
         afk ? 1 : 0,
         afk && afkDisplayGreen(target, options) ? 1 : 0,
-        lowValueFullStamina ? 1 : 0
+        lowValueAfk ? 1 : 0
       ];
     });
   return {
