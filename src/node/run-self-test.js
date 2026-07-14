@@ -104,6 +104,7 @@ const {
   publicConfig,
   learnedLoginPointFromCanary,
   persistedReconnectDelayPlan,
+  preserveOnlineSessionForLoopWait,
   runnerResultExitDetail,
   runBrowserlessRunner,
   runBrowserlessRunnerSelfTest
@@ -12767,6 +12768,82 @@ async function runSelfTest() {
       want: 'velocity|move-to-target|1|0|vel 1 0|true'
     },
     {
+      name: 'browserless action adapter detects coordinate settlement stall',
+      got: (() => {
+        let t = 1000;
+        const commands = [];
+        const adapter = createBrowserlessActionAdapter({
+          now: () => t,
+          commandIntervalMs: 1,
+          settlementFrames: 2,
+          movementSettlementStallMs: 5000,
+          movementSettlementMinDistanceCm: 80,
+          transport: {
+            sendVelocity: (dx, dy) => commands.push(`vel ${dx} ${dy}`)
+          }
+        });
+        adapter.observeState({ realtime: { tick: 1, receivedAtMs: t, self: { x: 0, y: 0 } } });
+        adapter.applyDecision({ realtime: { tick: 1, self: { x: 0, y: 0 } } }, {
+          kind: 'patrol',
+          band: 'profit',
+          action: { kind: 'patrol', band: 'profit', reason: 'test-move', dx: 1, dy: 0 }
+        });
+        t = 5999;
+        adapter.observeState({ realtime: { tick: 100, receivedAtMs: t, self: { x: 0, y: 0 } } });
+        const before = adapter.getState().movementStall;
+        t = 6000;
+        adapter.observeState({ realtime: { tick: 101, receivedAtMs: t, self: { x: 0, y: 0 } } });
+        const stalled = adapter.getState().movementStall;
+        const event = evaluateBrowserlessSafety({
+          realtime: { tick: 101, receivedAtMs: t, self: { user_id: 7, x: 0, y: 0, stamina_5s_remaining_milli: 9000 } }
+        }, {
+          actionSettlementStall: stalled,
+          lastDecision: { action: { kind: 'patrol', band: 'profit', reason: 'test-move' } },
+          nowMs: t
+        });
+        adapter.stop('action-settlement-stalled');
+        const stopped = adapter.getState();
+
+        let progressAt = 1000;
+        const progress = createBrowserlessActionAdapter({
+          now: () => progressAt,
+          commandIntervalMs: 1,
+          settlementFrames: 2,
+          movementSettlementStallMs: 5000,
+          movementSettlementMinDistanceCm: 80,
+          transport: { sendVelocity() {} }
+        });
+        progress.observeState({ realtime: { tick: 1, receivedAtMs: progressAt, self: { x: 0, y: 0 } } });
+        progress.applyDecision({ realtime: { tick: 1, self: { x: 0, y: 0 } } }, {
+          kind: 'patrol',
+          band: 'profit',
+          action: { kind: 'patrol', band: 'profit', reason: 'test-progress', dx: 1, dy: 0 }
+        });
+        progressAt = 5000;
+        progress.observeState({ realtime: { tick: 80, receivedAtMs: progressAt, self: { x: 100, y: 0 } } });
+        progressAt = 9999;
+        progress.observeState({ realtime: { tick: 160, receivedAtMs: progressAt, self: { x: 100, y: 0 } } });
+        const progressed = progress.getState().movementStall;
+        return [
+          before.stalled,
+          before.noProgressMs,
+          stalled.stalled,
+          stalled.reason,
+          stalled.noProgressMs,
+          event.reason,
+          event.shouldLeave,
+          event.classification,
+          stopped.movementStall.active,
+          stopped.lastMovementStall.stalled,
+          progressed.stalled,
+          progressed.progressCount,
+          progressed.noProgressMs,
+          commands[commands.length - 1]
+        ].join('|');
+      })(),
+      want: 'false|4999|true|action-settlement-stalled|5000|action-settlement-stalled|false|transport-recovery|false|true|false|1|4999|vel 0 0'
+    },
+    {
       name: 'browserless action adapter repeats velocity through decision gap',
       got: (() => {
         let t = 1000;
@@ -15437,6 +15514,10 @@ async function runSelfTest() {
           '800',
           '--movement-settlement-frames',
           '3',
+          '--movement-settlement-stall-ms',
+          '4500',
+          '--movement-settlement-min-distance-cm',
+          '90',
           '--center-activity-radius-cm',
           '99000',
           '--profit-pursuit-max-ms',
@@ -15493,6 +15574,10 @@ async function runSelfTest() {
           config.movementCommandIntervalMs,
           config.movementTargetDeadZoneCm,
           config.movementSettlementFrames,
+          config.movementSettlementStallMs,
+          config.movementSettlementMinDistanceCm,
+          publicConfig(config).movementSettlementStallMs,
+          publicConfig(config).movementSettlementMinDistanceCm,
           config.browserlessCenterActivityRadiusCm,
           config.browserlessProfitPursuitMaxMs,
           config.browserlessProfitPursuitSuppressMs,
@@ -15513,7 +15598,7 @@ async function runSelfTest() {
           config.logDir.endsWith('/tmp/grasp-rat-browserless-logs')
         ].join('|');
       })(),
-      want: 'true|false|false|combat-live|19999|cli-token|true|220|42|env-token|250|4|15000|3500|2250|4500|150|300|800|3|99000|45000|120000|123000|30000|7|true|true|4096|https://example.test/target-whitelist.json|true|1234|12|123|456|90|true|true'
+      want: 'true|false|false|combat-live|19999|cli-token|true|220|42|env-token|250|4|15000|3500|2250|4500|150|300|800|3|4500|90|4500|90|99000|45000|120000|123000|30000|7|true|true|4096|https://example.test/target-whitelist.json|true|1234|12|123|456|90|true|true'
     },
     {
       name: 'browserless deployment files define service env and install surface',
@@ -16256,6 +16341,29 @@ async function runSelfTest() {
             safety: { event: { reason: 'ws-closed' } }
           }
         }, config);
+        const actionSettlementStalled = browserlessLoopPlan({
+          ok: false,
+          canary: {
+            runId: 'action-settlement-stalled-test',
+            error: 'action-settlement-stalled',
+            safety: {
+              event: {
+                reason: 'action-settlement-stalled',
+                shouldLeave: false,
+                classification: 'transport-recovery'
+              }
+            }
+          }
+        }, config);
+        const actionSettlementStalledWithLeave = {
+          ok: false,
+          canary: {
+            runId: 'action-settlement-stalled-left-test',
+            error: 'action-settlement-stalled',
+            safety: { event: { reason: 'action-settlement-stalled' } },
+            leave: { ok: true }
+          }
+        };
         const wsClosedLeaveFailure = browserlessLoopPlan({
           ok: false,
           canary: {
@@ -16346,6 +16454,21 @@ async function runSelfTest() {
           wsClosed.continue,
           wsClosed.reason,
           wsClosed.delayMs,
+          actionSettlementStalled.continue,
+          actionSettlementStalled.reason,
+          actionSettlementStalled.delayMs,
+          preserveOnlineSessionForLoopWait({
+            ok: false,
+            canary: {
+              error: 'action-settlement-stalled',
+              safety: { event: { reason: 'action-settlement-stalled' } }
+            }
+          }, actionSettlementStalled),
+          preserveOnlineSessionForLoopWait(actionSettlementStalledWithLeave, actionSettlementStalled),
+          preserveOnlineSessionForLoopWait({
+            ok: false,
+            canary: { safety: { event: { reason: 'ws-closed' } } }
+          }, wsClosed),
           wsClosedLeaveFailure.continue,
           wsClosedLeaveFailure.reason,
           wsClosedLeaveFailure.delayMs,
@@ -16365,7 +16488,102 @@ async function runSelfTest() {
           connectTimeout.delayMs
         ].join('|');
       })(),
-      want: 'true|1234|true|stamina-budget-coin-leave|1800000|true|stamina-exhausted-leave|600000|true|injury-leave|1234|true|pursuit-leave|1234|true|combat-hp-disadvantage-leave|1234|true|ws-closed|1000|true|ws-closed|1000|false|true|true|true|ws-auth-blocked-self-present|1000|true|60000|true|in-game-snapshot-safety-retry|1000|true|ws-connect-timeout|1000'
+      want: 'true|1234|true|stamina-budget-coin-leave|1800000|true|stamina-exhausted-leave|600000|true|injury-leave|1234|true|pursuit-leave|1234|true|combat-hp-disadvantage-leave|1234|true|ws-closed|1000|true|action-settlement-stalled|1000|true|false|false|true|ws-closed|1000|false|true|true|true|ws-auth-blocked-self-present|1000|true|60000|true|in-game-snapshot-safety-retry|1000|true|ws-connect-timeout|1000'
+    },
+    {
+      name: 'browserless runner preserves one online session across movement stall reconnect',
+      got: withTempDirForTest(async dir => {
+        const enteredAtMs = Date.parse('2026-07-14T16:17:52.114Z');
+        let t = enteredAtMs + 10000;
+        let calls = 0;
+        let sleptMs = 0;
+        const config = parseBrowserlessRunnerArgs([
+          '--live',
+          '--data-dir',
+          dir,
+          '--user-id',
+          '7',
+          '--session-token',
+          'runner-secret-token',
+          '--login-point-x',
+          '1',
+          '--login-point-y',
+          '2'
+        ], {});
+        const file = stateFilePath(config);
+        const initialState = {
+          session: { userId: 7, sessionToken: 'runner-secret-token' },
+          runner: { running: true, mode: 'profit-live', controlMode: 'profit-live' },
+          current: {
+            self: { userId: 7, name: 'self', hp: 100, drop: 20 },
+            stamina: { stamina1dRemainingMilli: 20000000, stamina1dLimitMilli: 20000000 }
+          }
+        };
+        initialState.stats = browserlessStatsForDecision(initialState, {
+          at: new Date(enteredAtMs).toISOString(),
+          input: {
+            self: { userId: 7, name: 'self', hp: 100, drop: 20 },
+            stamina: { stamina1dRemainingMilli: 20000000, stamina1dLimitMilli: 20000000 },
+            selfKillEvidence: []
+          }
+        }, { nowMs: enteredAtMs });
+        updateBrowserlessStateFile(file, initialState, {
+          updatedAt: new Date(enteredAtMs).toISOString()
+        });
+        const result = await runBrowserlessRunner(config, {
+          now: () => t,
+          startStatusServer: false,
+          sleep: async ms => {
+            sleptMs += ms;
+            t += ms;
+          },
+          runReadOnlyOnce: async (_config, options) => {
+            calls += 1;
+            if (calls === 1) {
+              return {
+                ok: false,
+                runId: 'movement-stall-reconnect',
+                completedAt: new Date(t).toISOString(),
+                error: 'action-settlement-stalled',
+                safety: {
+                  event: {
+                    reason: 'action-settlement-stalled',
+                    shouldLeave: false,
+                    classification: 'transport-recovery'
+                  }
+                }
+              };
+            }
+            options.onDecision({
+              at: new Date(t).toISOString(),
+              input: {
+                self: { userId: 7, name: 'self', hp: 100, drop: 20 },
+                stamina: { stamina1dRemainingMilli: 19999500, stamina1dLimitMilli: 20000000 },
+                selfKillEvidence: []
+              }
+            });
+            return {
+              ok: false,
+              runId: 'stop-after-movement-stall-reconnect',
+              completedAt: new Date(t).toISOString(),
+              error: 'explicit-stop',
+              safety: { event: { reason: 'explicit-stop', at: new Date(t).toISOString() } }
+            };
+          }
+        });
+        const stored = readBrowserlessStateFile(file);
+        return [
+          result.reason,
+          calls,
+          sleptMs,
+          stored.stats.today.sessionCount,
+          stored.stats.currentSession.enteredAt,
+          Date.parse(stored.stats.currentSession.exitedAt) - Date.parse(stored.stats.currentSession.enteredAt),
+          stored.stats.currentSession.staminaSpentMs,
+          stored.stats.lastExit.reason
+        ].join('|');
+      }),
+      want: 'explicit-stop|2|1000|1|2026-07-14T16:17:52.114Z|11000|500|explicit-stop'
     },
     {
       name: 'browserless runner preserves stamina exhausted wait after no-self leave',
@@ -16505,6 +16723,109 @@ async function runSelfTest() {
         ].join('|');
       }),
       want: 'explicit-stop|1|570792|stamina-budget-coin-leave|570792||false||true|true|true'
+    },
+    {
+      name: 'browserless runner preserves online session across persisted movement stall wait',
+      got: withTempDirForTest(async dir => {
+        const enteredAtMs = Date.parse('2026-07-14T16:18:00.000Z');
+        let t = enteredAtMs + 2500;
+        let calls = 0;
+        let precheckCalls = 0;
+        let sleptMs = 0;
+        const config = parseBrowserlessRunnerArgs([
+          '--live',
+          '--data-dir',
+          dir,
+          '--user-id',
+          '7',
+          '--session-token',
+          'runner-secret-token',
+          '--login-point-x',
+          '1',
+          '--login-point-y',
+          '2'
+        ], {});
+        const file = stateFilePath(config);
+        const initialState = {
+          session: { userId: 7, sessionToken: 'runner-secret-token' },
+          runner: {
+            running: true,
+            mode: 'profit-live',
+            controlMode: 'profit-live',
+            currentAction: {
+              kind: 'loop-wait',
+              reason: 'action-settlement-stalled',
+              nextRunAt: '2026-07-14T16:18:03.000Z',
+              previousRunId: 'movement-stall-before-restart'
+            }
+          },
+          current: {
+            self: { userId: 7, name: 'self', hp: 100, drop: 20 },
+            stamina: { stamina1dRemainingMilli: 20000000, stamina1dLimitMilli: 20000000 }
+          }
+        };
+        initialState.stats = browserlessStatsForDecision(initialState, {
+          at: new Date(enteredAtMs).toISOString(),
+          input: {
+            self: { userId: 7, name: 'self', hp: 100, drop: 20 },
+            stamina: { stamina1dRemainingMilli: 20000000, stamina1dLimitMilli: 20000000 },
+            selfKillEvidence: []
+          }
+        }, { nowMs: enteredAtMs });
+        updateBrowserlessStateFile(file, initialState, {
+          updatedAt: new Date(enteredAtMs).toISOString()
+        });
+        const result = await runBrowserlessRunner(config, {
+          now: () => t,
+          startStatusServer: false,
+          sleep: async ms => {
+            sleptMs += ms;
+            t += ms;
+          },
+          runPreLoginSnapshotSafety: async () => {
+            precheckCalls += 1;
+            return {
+              ok: true,
+              reason: 'safe',
+              checkedAt: new Date(t).toISOString(),
+              required: 1,
+              streak: 1,
+              satisfied: true,
+              response: { summary: { valid: true, selfPresent: false, tick: 200 } }
+            };
+          },
+          runReadOnlyOnce: async (_config, options) => {
+            calls += 1;
+            options.onDecision({
+              at: new Date(t).toISOString(),
+              input: {
+                self: { userId: 7, name: 'self', hp: 100, drop: 20 },
+                stamina: { stamina1dRemainingMilli: 19999500, stamina1dLimitMilli: 20000000 },
+                selfKillEvidence: []
+              }
+            });
+            return {
+              ok: false,
+              runId: 'stop-after-persisted-movement-stall',
+              completedAt: new Date(t).toISOString(),
+              error: 'explicit-stop',
+              safety: { event: { reason: 'explicit-stop', at: new Date(t).toISOString() } }
+            };
+          }
+        });
+        const stored = readBrowserlessStateFile(file);
+        return [
+          result.reason,
+          calls,
+          precheckCalls,
+          sleptMs,
+          stored.stats.today.sessionCount,
+          Date.parse(stored.stats.currentSession.exitedAt) - Date.parse(stored.stats.currentSession.enteredAt),
+          stored.stats.currentSession.staminaSpentMs,
+          stored.stats.lastExit.reason
+        ].join('|');
+      }),
+      want: 'explicit-stop|1|1|500|1|3000|500|explicit-stop'
     },
     {
       name: 'browserless runner bypasses precheck for first login after daily reset',

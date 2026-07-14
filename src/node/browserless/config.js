@@ -44,6 +44,8 @@ const DEFAULTS = {
   movementCommandIntervalMs: 500,
   movementTargetDeadZoneCm: 900,
   movementSettlementFrames: 2,
+  movementSettlementStallMs: 5000,
+  movementSettlementMinDistanceCm: 80,
   singleCoinBaitEnabled: true,
   singleCoinBaitHoldRadiusCm: 1000,
   browserlessCenterActivityRadiusCm: 100000,
@@ -149,6 +151,8 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
     movementCommandIntervalMs: numberEnv(env.GRASP_RAT_BROWSERLESS_MOVEMENT_COMMAND_INTERVAL_MS, DEFAULTS.movementCommandIntervalMs),
     movementTargetDeadZoneCm: numberEnv(env.GRASP_RAT_BROWSERLESS_MOVEMENT_TARGET_DEAD_ZONE_CM, DEFAULTS.movementTargetDeadZoneCm),
     movementSettlementFrames: numberEnv(env.GRASP_RAT_BROWSERLESS_MOVEMENT_SETTLEMENT_FRAMES, DEFAULTS.movementSettlementFrames),
+    movementSettlementStallMs: numberEnv(env.GRASP_RAT_BROWSERLESS_MOVEMENT_SETTLEMENT_STALL_MS, DEFAULTS.movementSettlementStallMs),
+    movementSettlementMinDistanceCm: numberEnv(env.GRASP_RAT_BROWSERLESS_MOVEMENT_SETTLEMENT_MIN_DISTANCE_CM, DEFAULTS.movementSettlementMinDistanceCm),
     singleCoinBaitEnabled: boolEnv(env.GRASP_RAT_BROWSERLESS_SINGLE_COIN_BAIT_ENABLED, DEFAULTS.singleCoinBaitEnabled),
     singleCoinBaitHoldRadiusCm: numberEnv(env.GRASP_RAT_BROWSERLESS_SINGLE_COIN_BAIT_HOLD_RADIUS_CM, DEFAULTS.singleCoinBaitHoldRadiusCm),
     browserlessCenterActivityRadiusCm: numberEnv(env.GRASP_RAT_BROWSERLESS_CENTER_ACTIVITY_RADIUS_CM, DEFAULTS.browserlessCenterActivityRadiusCm),
@@ -272,6 +276,10 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
       config.movementTargetDeadZoneCm = numberEnv(argv[++i], config.movementTargetDeadZoneCm);
     } else if (arg === '--movement-settlement-frames') {
       config.movementSettlementFrames = numberEnv(argv[++i], config.movementSettlementFrames);
+    } else if (arg === '--movement-settlement-stall-ms') {
+      config.movementSettlementStallMs = numberEnv(argv[++i], config.movementSettlementStallMs);
+    } else if (arg === '--movement-settlement-min-distance-cm') {
+      config.movementSettlementMinDistanceCm = numberEnv(argv[++i], config.movementSettlementMinDistanceCm);
     } else if (arg === '--center-activity-radius-cm') {
       config.browserlessCenterActivityRadiusCm = numberEnv(argv[++i], config.browserlessCenterActivityRadiusCm);
     } else if (arg === '--profit-pursuit-max-ms') {
@@ -375,6 +383,8 @@ function usage() {
     '  --movement-command-interval-ms <ms>  Movement velocity throttle. Default: 500',
     '  --movement-target-dead-zone-cm <cm>  Movement target stop radius. Default: 900',
     '  --movement-settlement-frames <n>  Realtime frames needed after command. Default: 2',
+    '  --movement-settlement-stall-ms <ms>  Reconnect when nonzero movement makes no coordinate progress. Default: 5000',
+    '  --movement-settlement-min-distance-cm <cm>  Coordinate progress needed to reset the stall timer. Default: 80',
     '  --center-activity-radius-cm <cm>  Keep ordinary browserless profit inside this origin radius. Default: 100000',
     '  --profit-pursuit-max-ms <ms>  Max ordinary profit combat pursuit before suppression. Default: 60000',
     '  --profit-pursuit-suppress-ms <ms>  Suppression cooldown after a profit pursuit is stopped. Default: 60000',

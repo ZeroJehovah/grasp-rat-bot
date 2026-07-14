@@ -220,6 +220,25 @@ function evaluateBrowserlessSafety(state = {}, context = {}, options = {}) {
     }, { nowMs });
   }
 
+  if (context.actionSettlementStall?.stalled) {
+    return createSafetyEvent('action-settlement-stalled', {
+      movement: context.actionSettlementStall,
+      lastDecision: context.lastDecision ? decisionSafetyDetail(context.lastDecision) : null,
+      realtime: {
+        tick: state?.realtime?.tick ?? null,
+        receivedAtMs: state?.realtime?.receivedAtMs ?? null,
+        self: state?.realtime?.self || null
+      }
+    }, {
+      nowMs,
+      shouldLeave: false,
+      stopMotion: true,
+      classification: 'transport-recovery',
+      leaveAttempted: false,
+      exitConfirmationRequired: false
+    });
+  }
+
   if (context.leaveResult && context.leaveResult.ok === false) {
     return createSafetyEvent('direct-leave-failed', {
       alert: context.leaveResult.alert || buildLeaveFailureAlert(context.leaveResult.attempts || []),

@@ -661,6 +661,8 @@ async function runReadOnlyCanary(config, options = {}) {
       skippedCount: 0,
       last: null,
       settlement: null,
+      movementStall: null,
+      lastMovementStall: null,
       lastShootAck: null
     },
     entry: {
@@ -775,6 +777,8 @@ async function runReadOnlyCanary(config, options = {}) {
     result.actions.skippedCount = Number(adapterState.skippedCount || 0);
     result.actions.last = actionResult;
     result.actions.settlement = adapterState.lastSettlement || result.actions.settlement;
+    result.actions.movementStall = adapterState.movementStall || result.actions.movementStall;
+    result.actions.lastMovementStall = adapterState.lastMovementStall || result.actions.lastMovementStall;
     result.actions.lastShootAck = adapterState.lastShootAck || result.actions.lastShootAck;
     logAction({ action: actionResult, state: adapterState });
     if (typeof options.onAction === 'function') {
@@ -956,6 +960,9 @@ async function runReadOnlyCanary(config, options = {}) {
             if (settlement) {
               result.actions.settlement = settlement;
             }
+            const adapterState = actionAdapter.getState?.() || {};
+            result.actions.movementStall = adapterState.movementStall || result.actions.movementStall;
+            result.actions.lastMovementStall = adapterState.lastMovementStall || result.actions.lastMovementStall;
           }
           if (damagePlayerTracker && typeof damagePlayerTracker.observeDecision === 'function') {
             try {
@@ -1000,6 +1007,7 @@ async function runReadOnlyCanary(config, options = {}) {
               staleSelfConfirmMs: config.staleSelfConfirmMs,
               noSelfGraceMs: config.noSelfGraceMs,
               staminaExhaustedBelowMs: config.staminaExhaustedBelowMs,
+              actionSettlementStall: result.actions.movementStall,
               decision: summary,
               nowMs: atMs
             });
@@ -1086,6 +1094,7 @@ async function runReadOnlyCanary(config, options = {}) {
             staleSelfConfirmMs: config.staleSelfConfirmMs,
             noSelfGraceMs: config.noSelfGraceMs,
             staminaExhaustedBelowMs: config.staminaExhaustedBelowMs,
+            actionSettlementStall: result.actions.movementStall,
             lastDecision: result.decisions.last,
             wsOpen: isWsOpen(transport),
             wsError,
@@ -1108,6 +1117,8 @@ async function runReadOnlyCanary(config, options = {}) {
         shootRepeatEnabled: true,
         targetDeadZoneCm: config.movementTargetDeadZoneCm,
         settlementFrames: config.movementSettlementFrames,
+        movementSettlementStallMs: config.movementSettlementStallMs,
+        movementSettlementMinDistanceCm: config.movementSettlementMinDistanceCm,
         combatShootMinIntervalMs: config.combatShootMinIntervalMs,
         onShootRequest: request => stateStore.recordShootRequest(request)
       });
@@ -1128,6 +1139,7 @@ async function runReadOnlyCanary(config, options = {}) {
         staleSelfConfirmMs: config.staleSelfConfirmMs,
         noSelfGraceMs: config.noSelfGraceMs,
         staminaExhaustedBelowMs: config.staminaExhaustedBelowMs,
+        actionSettlementStall: result.actions.movementStall,
         wsError,
         wsClosed,
         wsOpen: isWsOpen(transport),
@@ -1154,6 +1166,9 @@ async function runReadOnlyCanary(config, options = {}) {
   if (transport || !result.error || shouldVerifyExitAfterOpenFailure) {
     try {
       if (result.safety.event) {
+        if (result.safety.event.shouldLeave === false && actionAdapter) {
+          updateActionResult(actionAdapter.stop(result.safety.event.reason || 'transport-recovery'));
+        }
         clearPublishedTransport(transport, 'leave-start');
         result.safety.exit = await executeSafetyExit(result.safety.event, config, {
           transport,
@@ -1266,6 +1281,8 @@ async function runReadOnlyCanary(config, options = {}) {
     result.actions.stopCount = Number(adapterState.stopCount || 0);
     result.actions.skippedCount = Number(adapterState.skippedCount || 0);
     result.actions.settlement = adapterState.lastSettlement || result.actions.settlement;
+    result.actions.movementStall = adapterState.movementStall || result.actions.movementStall;
+    result.actions.lastMovementStall = adapterState.lastMovementStall || result.actions.lastMovementStall;
     result.actions.lastShootAck = adapterState.lastShootAck || result.actions.lastShootAck;
   }
   result.ok = Boolean(!result.error);

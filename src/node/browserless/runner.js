@@ -87,6 +87,8 @@ function publicConfig(config) {
     movementCommandIntervalMs: Number(config.movementCommandIntervalMs || 0),
     movementTargetDeadZoneCm: Number(config.movementTargetDeadZoneCm || 0),
     movementSettlementFrames: Number(config.movementSettlementFrames || 0),
+    movementSettlementStallMs: Number(config.movementSettlementStallMs || 0),
+    movementSettlementMinDistanceCm: Number(config.movementSettlementMinDistanceCm || 0),
     singleCoinBaitEnabled: config.singleCoinBaitEnabled !== false,
     singleCoinBaitHoldRadiusCm: Number(config.singleCoinBaitHoldRadiusCm || 0),
     browserlessCenterActivityRadiusCm: Number(config.browserlessCenterActivityRadiusCm || 0),
@@ -441,6 +443,7 @@ function browserlessLoopPlan(result, config = {}) {
   );
   const inferredStaminaExhaustion = inferredLongStaminaExhaustionFromCanary(canary, config);
   const fastRecoverableTransportReasons = new Set([
+    'action-settlement-stalled',
     'frame-gap',
     'stale-self',
     'ws-closed',
@@ -518,6 +521,14 @@ function runnerResultConfirmedLeave(result) {
   const canary = result?.canary && typeof result.canary === 'object' ? result.canary : null;
   if (!canary) return false;
   return Boolean(canary.leave?.ok || canary.safety?.exit?.leave?.ok);
+}
+
+function preserveOnlineSessionForLoopWait(result, loopPlan = {}) {
+  return Boolean(
+    loopPlan?.continue
+      && String(loopPlan.reason || '') === 'action-settlement-stalled'
+      && !runnerResultConfirmedLeave(result)
+  );
 }
 
 function latestRealtimeTickFromResult(result) {
@@ -882,6 +893,8 @@ async function runBrowserlessRunner(config, deps = {}) {
     const currentBeforeWait = readBrowserlessStateFile(stateFile);
     const newConfirmedLeave = confirmedLeaveStateFromResult(resultForStop, now());
     const confirmedLeave = newConfirmedLeave || activeConfirmedLeaveState(currentBeforeWait, now());
+    const preserveOnlineSession = preserveOnlineSessionForLoopWait(resultForStop, loopPlan)
+      && !confirmedLeave;
     const waitExitDetail = runnerResultExitDetail(resultForStop, loopPlan.reason);
     const waitReason = loopPlan.forceExitReason
       ? loopPlan.reason
@@ -943,12 +956,14 @@ async function runBrowserlessRunner(config, deps = {}) {
           loginPointFromAnyState(currentBeforeWait)
         )
       } : {}),
-      stats: browserlessStatsForOffline(currentBeforeWait, {
-        ...waitExitDetail,
-        reason: waitReason,
-        nextRunAt,
-        delayMs: effectiveDelayMs
-      }, { nowMs: now() })
+      stats: preserveOnlineSession
+        ? currentBeforeWait.stats
+        : browserlessStatsForOffline(currentBeforeWait, {
+            ...waitExitDetail,
+            reason: waitReason,
+            nextRunAt,
+            delayMs: effectiveDelayMs
+          }, { nowMs: now() })
     }, { updatedAt: new Date(now()).toISOString() });
     logStore.append('runner', 'runner-loop-wait', waitDetail);
     try {
@@ -1304,9 +1319,12 @@ async function runBrowserlessRunner(config, deps = {}) {
   let persistedDelayPlan = !config.once && !config.dryRun
     ? persistedReconnectDelayPlan(readBrowserlessStateFile(stateFile), config, now())
     : null;
+  let preservePersistedOnlineSession = false;
   if (persistedDelayPlan) {
     const persistedStateBeforeProbe = readBrowserlessStateFile(stateFile);
     const persistedConfirmedLeave = activeConfirmedLeaveState(persistedStateBeforeProbe, now());
+    preservePersistedOnlineSession = preserveOnlineSessionForLoopWait(null, persistedDelayPlan)
+      && !persistedConfirmedLeave;
     if (persistedConfirmedLeave?.quarantineRemainingMs > 0) {
       logStore.append('runner', 'runner-persisted-wait-confirmed-leave-quarantine', {
         previousRunId: persistedDelayPlan.previousRunId || '',
@@ -1357,11 +1375,13 @@ async function runBrowserlessRunner(config, deps = {}) {
                 persisted: true
               }
             },
-            stats: browserlessStatsForOffline(currentBeforeResume, {
-              reason: persistedDelayPlan.safetyReason || persistedDelayPlan.reason,
-              nextRunAt: '',
-              delayMs: 0
-            }, { nowMs: now() })
+            stats: preservePersistedOnlineSession
+              ? currentBeforeResume.stats
+              : browserlessStatsForOffline(currentBeforeResume, {
+                  reason: persistedDelayPlan.safetyReason || persistedDelayPlan.reason,
+                  nextRunAt: '',
+                  delayMs: 0
+                }, { nowMs: now() })
           }, { updatedAt: new Date(now()).toISOString() });
           logStore.append('runner', 'runner-persisted-wait-self-present-resume', {
             previousRunId: persistedDelayPlan.previousRunId || '',
@@ -1397,11 +1417,13 @@ async function runBrowserlessRunner(config, deps = {}) {
           persisted: true
         }
       },
-      stats: browserlessStatsForOffline(currentBeforeWait, {
-        reason: persistedDelayPlan.safetyReason || persistedDelayPlan.reason,
-        nextRunAt: persistedDelayPlan.nextRunAt,
-        delayMs: persistedDelayPlan.delayMs
-      }, { nowMs: now() })
+      stats: preservePersistedOnlineSession
+        ? currentBeforeWait.stats
+        : browserlessStatsForOffline(currentBeforeWait, {
+            reason: persistedDelayPlan.safetyReason || persistedDelayPlan.reason,
+            nextRunAt: persistedDelayPlan.nextRunAt,
+            delayMs: persistedDelayPlan.delayMs
+          }, { nowMs: now() })
     }, { updatedAt: new Date(now()).toISOString() });
     logStore.append('runner', 'runner-persisted-loop-wait', {
       ...persistedDelayPlan,
@@ -1853,6 +1875,7 @@ module.exports = {
   preLoginSafetyLeadMs,
   snapshotSafetyAllowsImmediateResume,
   persistedReconnectDelayPlan,
+  preserveOnlineSessionForLoopWait,
   publicConfig,
   runnerResultExitDetail,
   runBrowserlessRunner,

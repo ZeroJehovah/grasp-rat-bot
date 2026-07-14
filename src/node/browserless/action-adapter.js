@@ -12,6 +12,8 @@ const DEFAULT_TARGET_DEAD_ZONE_CM = 900;
 const DEFAULT_COIN_TARGET_DEAD_ZONE_CM = 150;
 const DEFAULT_COMMAND_INTERVAL_MS = 500;
 const DEFAULT_SETTLEMENT_FRAMES = 2;
+const DEFAULT_MOVEMENT_SETTLEMENT_STALL_MS = 5000;
+const DEFAULT_MOVEMENT_SETTLEMENT_MIN_DISTANCE_CM = 80;
 const DEFAULT_COMBAT_SHOOT_MIN_INTERVAL_MS = 160;
 const DEFAULT_ATTACK_RANGE_CM = BROWSER_RUNTIME_DEFAULTS.attackRange;
 const DEFAULT_AFK_ATTACK_COMMIT_RANGE_CM = 5000;
@@ -309,6 +311,28 @@ function createInitialActionState() {
     lastShootCommand: null,
     lastShootAck: null,
     lastSettlement: null,
+    latestSelfSample: null,
+    movementStall: {
+      active: false,
+      stalled: false,
+      reason: 'idle',
+      startedAtMs: 0,
+      lastProgressAtMs: 0,
+      stalledAtMs: 0,
+      observedFrames: 0,
+      progressCount: 0,
+      commandId: null,
+      dx: 0,
+      dy: 0,
+      actionReason: '',
+      origin: null,
+      latest: null,
+      movedCm: 0,
+      noProgressMs: 0,
+      stallMs: DEFAULT_MOVEMENT_SETTLEMENT_STALL_MS,
+      minDistanceCm: DEFAULT_MOVEMENT_SETTLEMENT_MIN_DISTANCE_CM
+    },
+    lastMovementStall: null,
     coinApproachLock: null,
     coinFeedbackGate: null,
     coinFeedbackWaitCount: 0,
@@ -365,6 +389,12 @@ function createBrowserlessActionAdapter(options = {}) {
   );
   const velocityStopRepeatCount = Math.max(0, Math.round(Number(options.velocityStopRepeatCount ?? options.directWsStopRepeatCount ?? BROWSER_RUNTIME_DEFAULTS.directWsStopRepeatCount ?? 0)));
   const settlementFrames = Math.max(1, Number(options.settlementFrames ?? DEFAULT_SETTLEMENT_FRAMES));
+  const movementSettlementStallMs = Math.max(1000, Number(
+    options.movementSettlementStallMs ?? DEFAULT_MOVEMENT_SETTLEMENT_STALL_MS
+  ));
+  const movementSettlementMinDistanceCm = Math.max(1, Number(
+    options.movementSettlementMinDistanceCm ?? DEFAULT_MOVEMENT_SETTLEMENT_MIN_DISTANCE_CM
+  ));
   const combatShootMinIntervalMs = Math.max(1, Number(options.combatShootMinIntervalMs ?? DEFAULT_COMBAT_SHOOT_MIN_INTERVAL_MS));
   const maxPendingShootCommands = Math.max(1, Math.round(Number(options.maxPendingShootCommands ?? 3)));
   const initialShootAckTimeoutMs = Math.max(500, Number(options.shootAckTimeoutMs ?? 3000));
@@ -393,6 +423,152 @@ function createBrowserlessActionAdapter(options = {}) {
     if (!state.velocityStopTimer) return;
     clearTimeoutFn(state.velocityStopTimer);
     state.velocityStopTimer = null;
+  }
+
+  function movementSelfSample(stateSnapshot) {
+    const self = stateSnapshot?.realtime?.self || null;
+    const x = numberOrNull(self?.x);
+    const y = numberOrNull(self?.y);
+    if (x === null || y === null) return null;
+    return {
+      x,
+      y,
+      tick: numberOrNull(stateSnapshot?.realtime?.tick),
+      atMs: numberOrNull(stateSnapshot?.realtime?.receivedAtMs) ?? now()
+    };
+  }
+
+  function movementStallSummary(value = state.movementStall) {
+    if (!value) return null;
+    return {
+      active: Boolean(value.active),
+      stalled: Boolean(value.stalled),
+      reason: String(value.reason || ''),
+      startedAtMs: Number(value.startedAtMs || 0),
+      lastProgressAtMs: Number(value.lastProgressAtMs || 0),
+      stalledAtMs: Number(value.stalledAtMs || 0),
+      observedFrames: Math.max(0, Number(value.observedFrames || 0)),
+      progressCount: Math.max(0, Number(value.progressCount || 0)),
+      commandId: value.commandId ?? null,
+      dx: Number(value.dx || 0),
+      dy: Number(value.dy || 0),
+      actionReason: String(value.actionReason || ''),
+      origin: value.origin ? { ...value.origin } : null,
+      latest: value.latest ? { ...value.latest } : null,
+      movedCm: Math.max(0, Math.round(Number(value.movedCm || 0))),
+      noProgressMs: Math.max(0, Math.round(Number(value.noProgressMs || 0))),
+      stallMs: movementSettlementStallMs,
+      minDistanceCm: movementSettlementMinDistanceCm
+    };
+  }
+
+  function resetMovementStall(reason = 'idle') {
+    state.movementStall = {
+      active: false,
+      stalled: false,
+      reason,
+      startedAtMs: 0,
+      lastProgressAtMs: 0,
+      stalledAtMs: 0,
+      observedFrames: 0,
+      progressCount: 0,
+      commandId: null,
+      dx: 0,
+      dy: 0,
+      actionReason: '',
+      origin: null,
+      latest: state.latestSelfSample ? { ...state.latestSelfSample } : null,
+      movedCm: 0,
+      noProgressMs: 0,
+      stallMs: movementSettlementStallMs,
+      minDistanceCm: movementSettlementMinDistanceCm
+    };
+    return movementStallSummary();
+  }
+
+  function updateMovementStallIntent(command) {
+    const moving = Boolean(Number(command?.dx || 0) || Number(command?.dy || 0));
+    if (!moving) return resetMovementStall('stop-command');
+    const atMs = Number(command.sentAtMs || now());
+    if (!state.movementStall?.active) {
+      const origin = state.latestSelfSample ? { ...state.latestSelfSample } : null;
+      state.movementStall = {
+        active: true,
+        stalled: false,
+        reason: origin ? 'tracking' : 'waiting-for-self',
+        startedAtMs: atMs,
+        lastProgressAtMs: atMs,
+        stalledAtMs: 0,
+        observedFrames: 0,
+        progressCount: 0,
+        commandId: command.id ?? null,
+        dx: Number(command.dx || 0),
+        dy: Number(command.dy || 0),
+        actionReason: String(command.reason || ''),
+        origin,
+        latest: origin,
+        movedCm: 0,
+        noProgressMs: 0,
+        stallMs: movementSettlementStallMs,
+        minDistanceCm: movementSettlementMinDistanceCm
+      };
+    } else {
+      Object.assign(state.movementStall, {
+        commandId: command.id ?? state.movementStall.commandId,
+        dx: Number(command.dx || 0),
+        dy: Number(command.dy || 0),
+        actionReason: String(command.reason || '')
+      });
+    }
+    return movementStallSummary();
+  }
+
+  function observeMovementStall(stateSnapshot) {
+    const sample = movementSelfSample(stateSnapshot);
+    if (sample) state.latestSelfSample = sample;
+    const stall = state.movementStall;
+    if (!stall?.active) return movementStallSummary(stall);
+    if (!sample) {
+      stall.reason = 'waiting-for-self';
+      return movementStallSummary(stall);
+    }
+    if (!stall.origin) {
+      stall.origin = { ...sample };
+      stall.latest = { ...sample };
+      stall.startedAtMs = Number(stall.startedAtMs || sample.atMs);
+      stall.lastProgressAtMs = Number(stall.lastProgressAtMs || sample.atMs);
+      stall.reason = 'tracking';
+      return movementStallSummary(stall);
+    }
+    const previousSample = stall.latest;
+    const frameAdvanced = sample.tick !== null && previousSample?.tick !== null
+      ? Number(sample.tick) > Number(previousSample.tick)
+      : Number(sample.atMs) > Number(previousSample?.atMs || 0);
+    if (frameAdvanced) stall.observedFrames = Math.max(0, Number(stall.observedFrames || 0)) + 1;
+    stall.latest = { ...sample };
+    const movedCm = Math.hypot(Number(sample.x) - Number(stall.origin.x), Number(sample.y) - Number(stall.origin.y));
+    if (movedCm >= movementSettlementMinDistanceCm) {
+      stall.stalled = false;
+      stall.reason = 'self-progress';
+      stall.stalledAtMs = 0;
+      stall.origin = { ...sample };
+      stall.lastProgressAtMs = sample.atMs;
+      stall.progressCount = Math.max(0, Number(stall.progressCount || 0)) + 1;
+      stall.movedCm = movedCm;
+      stall.noProgressMs = 0;
+      stall.observedFrames = 0;
+      return movementStallSummary(stall);
+    }
+    const noProgressMs = Math.max(0, Number(sample.atMs) - Number(stall.lastProgressAtMs || stall.startedAtMs || sample.atMs));
+    const stalled = noProgressMs >= movementSettlementStallMs
+      && Number(stall.observedFrames || 0) >= settlementFrames;
+    stall.stalled = stalled;
+    stall.reason = stalled ? 'action-settlement-stalled' : 'tracking';
+    stall.stalledAtMs = stalled ? Number(stall.stalledAtMs || sample.atMs) : 0;
+    stall.movedCm = movedCm;
+    stall.noProgressMs = noProgressMs;
+    if (stalled) state.lastMovementStall = movementStallSummary(stall);
+    return movementStallSummary(stall);
   }
 
   function clearVelocityRepeatTimer() {
@@ -677,6 +853,7 @@ function createBrowserlessActionAdapter(options = {}) {
       observedFrames: 0,
       tick: null
     };
+    updateMovementStallIntent(command);
     return { ok: true, skipped: false, command: summarizeCommand(command), pulseToken, repeat };
   }
 
@@ -1332,6 +1509,7 @@ function createBrowserlessActionAdapter(options = {}) {
 
   function observeState(stateSnapshot) {
     validateShootRepeatState(stateSnapshot);
+    observeMovementStall(stateSnapshot);
     state.latestObservedTick = numberOrNull(stateSnapshot?.realtime?.tick);
     state.shootAckTimeoutMs = Math.max(500, Number(
       stateSnapshot?.command?.shooting?.ackTimeoutMs ?? state.shootAckTimeoutMs ?? initialShootAckTimeoutMs
@@ -1400,6 +1578,8 @@ function createBrowserlessActionAdapter(options = {}) {
       lastShootCommand: summarizeCommand(state.lastShootCommand),
       lastShootAck: state.lastShootAck,
       lastSettlement: state.lastSettlement,
+      movementStall: movementStallSummary(),
+      lastMovementStall: state.lastMovementStall ? { ...state.lastMovementStall } : null,
       coinFeedbackGate: state.coinFeedbackGate ? { ...state.coinFeedbackGate } : null,
       coinFeedbackWaitCount: state.coinFeedbackWaitCount,
       coinFeedbackAckCount: state.coinFeedbackAckCount,
@@ -1422,6 +1602,8 @@ module.exports = {
   DEFAULT_AFK_ATTACK_COMMIT_RANGE_CM,
   DEFAULT_COIN_TARGET_DEAD_ZONE_CM,
   DEFAULT_COMBAT_SHOOT_MIN_INTERVAL_MS,
+  DEFAULT_MOVEMENT_SETTLEMENT_MIN_DISTANCE_CM,
+  DEFAULT_MOVEMENT_SETTLEMENT_STALL_MS,
   DEFAULT_SETTLEMENT_FRAMES,
   DEFAULT_TARGET_DEAD_ZONE_CM,
   combatSummaryFromDecision,
