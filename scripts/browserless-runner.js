@@ -19,6 +19,9 @@ const {
   leaveWithVerification,
   summarizeLeaveResultForPublic
 } = require('../src/node/browserless/leave-client');
+const {
+  startLogRetentionScheduler
+} = require('../src/node/browserless/log-retention');
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -132,22 +135,40 @@ async function main() {
     if (!result.ok) process.exitCode = 1;
     return;
   }
-  while (true) {
-    try {
-      const result = await runBrowserlessRunner(config);
-      console.log(JSON.stringify(result, null, 2));
-      if (config.once || config.dryRun || result?.reason === 'explicit-stop' || result?.reason === 'unsupported-control-mode') {
-        if (!result?.ok && result?.reason !== 'explicit-stop') process.exitCode = 1;
-        return;
+  const retentionScheduler = startLogRetentionScheduler(config.logDir, {
+    keepDays: config.logRetentionDays,
+    onResult(result) {
+      if (result.removed?.length) {
+        console.log(JSON.stringify({ type: 'scheduled-log-retention', ...result }));
       }
-    } catch (err) {
-      console.error(err?.stack || err?.message || String(err));
-      if (config.once) {
-        process.exitCode = 1;
-        return;
-      }
+    },
+    onError(err) {
+      console.error(JSON.stringify({
+        type: 'scheduled-log-retention-error',
+        error: err?.message || String(err)
+      }));
     }
-    await sleep(Math.max(1000, Number(config.loopDelayMs || 30000)));
+  });
+  try {
+    while (true) {
+      try {
+        const result = await runBrowserlessRunner(config);
+        console.log(JSON.stringify(result, null, 2));
+        if (config.once || config.dryRun || result?.reason === 'explicit-stop' || result?.reason === 'unsupported-control-mode') {
+          if (!result?.ok && result?.reason !== 'explicit-stop') process.exitCode = 1;
+          return;
+        }
+      } catch (err) {
+        console.error(err?.stack || err?.message || String(err));
+        if (config.once) {
+          process.exitCode = 1;
+          return;
+        }
+      }
+      await sleep(Math.max(1000, Number(config.loopDelayMs || 30000)));
+    }
+  } finally {
+    retentionScheduler.stop();
   }
 }
 

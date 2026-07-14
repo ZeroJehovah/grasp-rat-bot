@@ -127,7 +127,8 @@ const {
   createSourceIpController
 } = require('./browserless/source-ip-controller');
 const {
-  cleanupOldLogDays
+  cleanupOldLogDays,
+  startLogRetentionScheduler
 } = require('./browserless/log-retention');
 const {
   createHighDropPlayerTracker,
@@ -13406,6 +13407,45 @@ async function runSelfTest() {
         ].join('|');
       }),
       want: '2026-07-06|2026-07-04,2026-07-05|2026-07-06,2026-07-07,2026-07-08|false|true|true'
+    },
+    {
+      name: 'browserless scheduled log retention cleans while process remains alive',
+      got: withTempDirForTest(async dir => {
+        for (const day of ['2026-07-06', '2026-07-07', '2026-07-08', '2026-07-09']) {
+          fs.mkdirSync(path.join(dir, day), { recursive: true });
+          fs.writeFileSync(path.join(dir, day, 'runner.jsonl'), '');
+        }
+        let scheduled = null;
+        let cleared = false;
+        let unrefed = false;
+        let latestResult = null;
+        const scheduler = startLogRetentionScheduler(dir, {
+          keepDays: 3,
+          intervalMs: 5000,
+          now: () => Date.UTC(2026, 6, 9, 12, 0, 0),
+          setInterval(fn) {
+            scheduled = fn;
+            return { unref() { unrefed = true; } };
+          },
+          clearInterval() {
+            cleared = true;
+          },
+          onResult(result) {
+            latestResult = result;
+          }
+        });
+        scheduled();
+        scheduler.stop();
+        return [
+          scheduler.intervalMs,
+          unrefed,
+          cleared,
+          latestResult?.removed.join(','),
+          fs.existsSync(path.join(dir, '2026-07-06')),
+          fs.existsSync(path.join(dir, '2026-07-07'))
+        ].join('|');
+      }),
+      want: '5000|true|true|2026-07-06|false|true'
     },
     {
       name: 'browserless log summary counts streams and writes summary file',
