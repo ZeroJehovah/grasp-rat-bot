@@ -150,16 +150,33 @@ function writeStore(file, store) {
   fs.renameSync(temporary, file);
 }
 
+function storeNeedsMigration(file) {
+  try {
+    const value = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (Number(value?.schemaVersion) !== SCHEMA_VERSION) return true;
+    for (const player of Object.values(value?.players || {})) {
+      const rawScore = Number(player?.score);
+      const score = normalizedScore(rawScore, 0);
+      if (!Number.isFinite(rawScore) || rawScore !== score || score <= 0) return true;
+    }
+    return false;
+  } catch (_) {
+    return true;
+  }
+}
+
 function createEasyKillPlayerTracker(options = {}) {
   const now = typeof options.now === 'function' ? options.now : Date.now;
   const onEvent = typeof options.onEvent === 'function' ? options.onEvent : null;
   const file = path.resolve(options.file || path.join(process.cwd(), 'data', 'browserless-runner', 'easy-kill-players.json'));
   const outcomeGraceMs = Math.max(0, Number(options.outcomeGraceMs ?? DEFAULT_OUTCOME_GRACE_MS));
   const persistIntervalMs = Math.max(0, Number(options.persistIntervalMs ?? DEFAULT_PERSIST_INTERVAL_MS));
+  const fileExists = fs.existsSync(file);
+  const migrateOnStart = fileExists && storeNeedsMigration(file);
   let store = readStore(file);
   let lastWriteAtMs = Date.parse(store.updatedAt || '');
   if (!Number.isFinite(lastWriteAtMs)) lastWriteAtMs = 0;
-  if (!fs.existsSync(file)) {
+  if (!fileExists || migrateOnStart) {
     const createdAtMs = now();
     store.updatedAt = new Date(createdAtMs).toISOString();
     writeStore(file, store);

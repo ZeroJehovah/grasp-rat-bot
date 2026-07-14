@@ -24478,6 +24478,36 @@ async function runSelfTest() {
 	      want: '1|0|1|8|new-name|8|new-name'
 	    },
 	    {
+	      name: 'browserless easy-kill tracker immediately persists legacy kill counts as capped scores',
+	      got: (() => {
+	        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'grasp-rat-easy-kill-migrate-'));
+	        try {
+	          const file = path.join(dir, 'easy-kill-players.json');
+	          fs.writeFileSync(file, JSON.stringify({
+	            schemaVersion: 1,
+	            updatedAt: '2026-07-14T00:00:00.000Z',
+	            players: {
+	              'user:8': { userId: 8, name: 'legacy-two', killCount: 2 },
+	              'user:9': { userId: 9, name: 'legacy-capped', killCount: 8 }
+	            },
+	            engagements: {}
+	          }));
+	          const tracker = createEasyKillPlayerTracker({ file, now: () => 1000 });
+	          const status = tracker.status();
+	          const stored = JSON.parse(fs.readFileSync(file, 'utf8'));
+	          return [
+	            stored.schemaVersion,
+	            stored.players['user:8']?.score,
+	            stored.players['user:9']?.score,
+	            status.players.map(player => player.userId + ':' + player.score).join(',')
+	          ].join('|');
+	        } finally {
+	          fs.rmSync(dir, { recursive: true, force: true });
+	        }
+	      })(),
+	      want: '2|2|3|9:3,8:2'
+	    },
+	    {
 	      name: 'browserless easy-kill tracker caps score at three and decrements failures to removal',
 	      got: (() => {
 	        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'grasp-rat-easy-kill-score-'));
