@@ -382,6 +382,7 @@ function createSourceIpController(options = {}) {
             localAddress: currentSourceIp || undefined
           });
           if (Number(attempt.status || 0) !== 403) return attempt;
+          if (onceOptions.deferForbiddenRecovery) return attempt;
           const decision = await handleForbidden({
             kind: 'leave',
             status: attempt.status,

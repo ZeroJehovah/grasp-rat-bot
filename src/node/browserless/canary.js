@@ -27,7 +27,7 @@ const { createBrowserlessTargetWhitelist } = require('./target-whitelist');
 const { browserlessRuntimeRevision } = require('./runtime-revision');
 
 const DEFAULT_READONLY_PROBE_MS = 30000;
-const DEFAULT_FRAME_GAP_ALERT_MS = 5000;
+const DEFAULT_FRAME_GAP_ALERT_MS = 2000;
 
 function snapshotSafetySelfPresent(snapshotSafety) {
   return Boolean(snapshotSafety?.response?.summary?.selfPresent);
@@ -1077,7 +1077,8 @@ async function runReadOnlyCanary(config, options = {}) {
           localAddress: config.sourceIp,
           timeoutMs: config.httpTimeoutMs || 10000,
           retryMax: config.leaveRetryMax ?? 3,
-          retryDelayMs: config.leaveRetryMs ?? 1200
+          retryDelayMs: config.leaveRetryMs ?? 200,
+          hedgeDelayMs: config.leaveHedgeMs ?? 1000
         });
       }
     } catch (err) {

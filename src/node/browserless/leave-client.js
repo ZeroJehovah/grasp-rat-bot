@@ -12,7 +12,8 @@ const {
 
 const DEFAULT_GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
 const DEFAULT_LEAVE_RETRY_MAX = 3;
-const DEFAULT_LEAVE_RETRY_MS = 1200;
+const DEFAULT_LEAVE_RETRY_MS = 200;
+const DEFAULT_LEAVE_HEDGE_MS = 1000;
 const MAX_RESPONSE_RETRY_DELAY_MS = 120000;
 
 function sleep(ms) {
@@ -62,20 +63,94 @@ async function leaveWithVerification(options = {}) {
   const attempts = [];
   const retryMax = Math.max(0, Number(options.retryMax ?? DEFAULT_LEAVE_RETRY_MAX));
   const retryDelayMs = Math.max(0, Number(options.retryDelayMs ?? DEFAULT_LEAVE_RETRY_MS));
+  const hedgeDelayMs = Math.max(0, Number(options.hedgeDelayMs ?? DEFAULT_LEAVE_HEDGE_MS));
   const sleepImpl = typeof options.sleep === 'function' ? options.sleep : sleep;
+  const setTimeoutImpl = typeof options.setTimeout === 'function' ? options.setTimeout : setTimeout;
+  const clearTimeoutImpl = typeof options.clearTimeout === 'function' ? options.clearTimeout : clearTimeout;
   const leaveOnceImpl = typeof options.leaveOnceImpl === 'function' ? options.leaveOnceImpl : leaveOnce;
-  for (let index = 0; index <= retryMax; index += 1) {
-    const result = await leaveOnceImpl({
-      ...options,
-      stage: index === 0 ? 'initial' : `retry-${index}`
+  const now = typeof options.now === 'function' ? options.now : Date.now;
+  const verificationState = { confirmed: false };
+  const runAttempt = (index, attemptOptions = {}) => {
+    const stage = attemptOptions.hedged ? `hedge-${index}` : (index === 0 ? 'initial' : `retry-${index}`);
+    const startedAt = now();
+    return Promise.resolve()
+      .then(() => leaveOnceImpl({
+        ...options,
+        ...attemptOptions,
+        stage,
+        verificationState
+      }))
+      .catch(err => ({
+        stage,
+        httpOk: false,
+        status: 0,
+        statusText: '',
+        durationMs: Math.max(0, now() - startedAt),
+        response: {},
+        ok: false,
+        summary: { leaveConfirmed: false },
+        error: err?.message || String(err)
+      }))
+      .then(result => {
+        attempts.push(result);
+        if (result?.ok) verificationState.confirmed = true;
+        return result;
+      });
+  };
+  const success = () => ({ ok: true, attempts: attempts.slice() });
+  let nextIndex = 0;
+
+  if (retryMax >= 1 && hedgeDelayMs > 0) {
+    const initialPromise = runAttempt(0, { deferForbiddenRecovery: true });
+    let hedgeTimerId = null;
+    const hedgeTimerPromise = new Promise(resolve => {
+      hedgeTimerId = setTimeoutImpl(() => resolve({ kind: 'timer' }), hedgeDelayMs);
     });
-    attempts.push(result);
-    if (result.ok) return { ok: true, attempts };
+    const first = await Promise.race([
+      initialPromise.then(result => ({ kind: 'result', result })),
+      hedgeTimerPromise
+    ]);
+    if (first.kind === 'result') {
+      if (hedgeTimerId !== null) clearTimeoutImpl(hedgeTimerId);
+      if (first.result?.ok) return success();
+      nextIndex = 1;
+      await sleepImpl(retryDelayMsForAttempt(first.result, retryDelayMs));
+    } else {
+      const hedgePromise = runAttempt(1, {
+        hedged: true,
+        deferForbiddenRecovery: true
+      });
+      const pending = [
+        initialPromise.then(result => ({ source: 'initial', result })),
+        hedgePromise.then(result => ({ source: 'hedge', result }))
+      ];
+      const firstSettled = await Promise.race(pending);
+      if (firstSettled.result?.ok) {
+        pending.forEach(promise => promise.catch(() => {}));
+        return success();
+      }
+      const remaining = firstSettled.source === 'initial' ? pending[1] : pending[0];
+      const secondSettled = await remaining;
+      if (secondSettled.result?.ok) return success();
+      nextIndex = 2;
+      if (nextIndex <= retryMax) {
+        const delayMs = Math.max(
+          retryDelayMsForAttempt(firstSettled.result, retryDelayMs),
+          retryDelayMsForAttempt(secondSettled.result, retryDelayMs)
+        );
+        await sleepImpl(delayMs);
+      }
+    }
+  }
+
+  for (let index = nextIndex; index <= retryMax; index += 1) {
+    const result = await runAttempt(index);
+    if (result?.ok) return success();
     if (index < retryMax) await sleepImpl(retryDelayMsForAttempt(result, retryDelayMs));
   }
   return {
     ok: false,
-    attempts,
+    attempts: attempts.slice(),
     alert: buildLeaveFailureAlert(attempts)
   };
 }

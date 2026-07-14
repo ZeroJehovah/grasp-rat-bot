@@ -5564,6 +5564,65 @@ async function runSelfTest() {
       want: '60000|true|2|60000'
     },
     {
+      name: 'browserless leave client retries unconfirmed responses after short default delay',
+      got: (async () => {
+        let calls = 0;
+        const sleeps = [];
+        const result = await browserlessLeaveWithVerification({
+          retryMax: 1,
+          sleep: async ms => { sleeps.push(ms); },
+          leaveOnceImpl: async ({ stage }) => {
+            calls += 1;
+            return calls < 2
+              ? { stage, ok: false, status: 502, summary: { leaveConfirmed: false } }
+              : { stage, ok: true, status: 200, summary: { leaveConfirmed: true } };
+          }
+        });
+        return [result.ok, calls, sleeps.join(',')].join('|');
+      })(),
+      want: 'true|2|200'
+    },
+    {
+      name: 'browserless leave client hedges a pending initial request without losing its result',
+      got: (async () => {
+        let resolveInitial = null;
+        const started = [];
+        const result = await browserlessLeaveWithVerification({
+          retryMax: 1,
+          hedgeDelayMs: 1000,
+          setTimeout: fn => {
+            fn();
+            return 1;
+          },
+          clearTimeout: () => {},
+          leaveOnceImpl: async options => {
+            started.push(`${options.stage}:${Boolean(options.deferForbiddenRecovery)}:${Boolean(options.hedged)}`);
+            if (options.stage === 'initial') {
+              return new Promise(resolve => { resolveInitial = resolve; });
+            }
+            resolveInitial({
+              stage: 'initial',
+              ok: false,
+              status: 403,
+              summary: { leaveConfirmed: false }
+            });
+            return {
+              stage: options.stage,
+              ok: true,
+              status: 200,
+              summary: { leaveConfirmed: true }
+            };
+          }
+        });
+        return [
+          result.ok,
+          started.join(','),
+          result.attempts.map(item => `${item.stage}:${item.status}:${item.ok}`).sort().join(',')
+        ].join('|');
+      })(),
+      want: 'true|initial:true:false,hedge-1:true:true|hedge-1:200:true,initial:403:false'
+    },
+    {
       name: 'browserless fetch timeout aborts stalled requests',
       got: (async () => {
         try {
@@ -14595,6 +14654,9 @@ async function runSelfTest() {
           env.includes('GRASP_RAT_BROWSERLESS_TARGET_WHITELIST_FILE='),
           env.includes('GRASP_RAT_BROWSERLESS_LOGIN_POINT_SAFETY_SUCCESS_REQUIRED=3'),
           env.includes('GRASP_RAT_BROWSERLESS_LOGIN_POINT_SAFETY_PROBE_INTERVAL_MS=30000'),
+          env.includes('GRASP_RAT_BROWSERLESS_FRAME_GAP_ALERT_MS=2000'),
+          env.includes('GRASP_RAT_BROWSERLESS_LEAVE_RETRY_MS=200'),
+          env.includes('GRASP_RAT_BROWSERLESS_LEAVE_HEDGE_MS=1000'),
           env.includes('GRASP_RAT_BROWSERLESS_STALE_SELF_CONFIRM_MS=2000'),
           env.includes('GRASP_RAT_BROWSERLESS_CENTER_ACTIVITY_RADIUS_CM=100000'),
           env.includes('GRASP_RAT_BROWSERLESS_PROFIT_PURSUIT_MAX_MS=60000'),
@@ -14611,7 +14673,7 @@ async function runSelfTest() {
           installer.includes('systemctl daemon-reload')
         ].join('|');
       })(),
-      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
+      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless deployment audit checks installed service evidence',
@@ -14894,6 +14956,40 @@ async function runSelfTest() {
       want: '14400000|false|2|2500|1800000|true|1.5|2800|900000'
     },
     {
+      name: 'browserless frame gap safety defaults to strictly over two seconds',
+      got: (() => {
+        const defaultConfig = parseBrowserlessRunnerArgs([], {});
+        const envConfig = parseBrowserlessRunnerArgs([], {
+          GRASP_RAT_BROWSERLESS_FRAME_GAP_ALERT_MS: '2500',
+          GRASP_RAT_BROWSERLESS_LEAVE_HEDGE_MS: '1500'
+        });
+        const cliConfig = parseBrowserlessRunnerArgs([
+          '--frame-gap-alert-ms', '3000'
+        ], {});
+        const safeSelf = { user_id: 7, x: 1, y: 2, hp: 100, stamina_5s_remaining_milli: 10000 };
+        const atBoundary = evaluateBrowserlessSafety({
+          realtime: { self: safeSelf, frameAgeMs: 2000 },
+          frameAges: { latestFrameAgeMs: 2000 }
+        }, { nowMs: 3000 });
+        const overBoundary = evaluateBrowserlessSafety({
+          realtime: { self: safeSelf, frameAgeMs: 2001 },
+          frameAges: { latestFrameAgeMs: 2001 }
+        }, { nowMs: 3001 });
+        return [
+          defaultConfig.frameGapAlertMs,
+          publicConfig(defaultConfig).frameGapAlertMs,
+          envConfig.frameGapAlertMs,
+          defaultConfig.leaveHedgeMs,
+          envConfig.leaveHedgeMs,
+          cliConfig.frameGapAlertMs,
+          atBoundary.reason,
+          overBoundary.reason,
+          overBoundary.detail.frameGapAlertMs
+        ].join('|');
+      })(),
+      want: '2000|2000|2500|1000|1500|3000|safe|frame-gap|2000'
+    },
+    {
       name: 'browserless runner config exposes single coin bait env and public values',
       got: (() => {
         const defaultConfig = parseBrowserlessRunnerArgs([], {});
@@ -15138,6 +15234,67 @@ async function runSelfTest() {
         ].join('|');
       }),
       want: 'true|10.0.0.101,10.0.0.20|10.0.0.20|true|10.0.0.101|10.0.0.20'
+    },
+    {
+      name: 'browserless hedged leave 403 does not trigger source IP switching',
+      got: withTempDirForTest(async dir => {
+        const stateFile = path.join(dir, 'state.json');
+        let requestCount = 0;
+        let probeCount = 0;
+        let resolveInitial = null;
+        const controller = createSourceIpController({
+          config: {
+            gameOrigin: 'https://grasp-rat-game.h-e.top',
+            sourceIp: '10.0.0.101',
+            sourceIps: ['10.0.0.101', '10.0.0.145'],
+            httpTimeoutMs: 1000
+          },
+          stateFile,
+          now: () => Date.UTC(2026, 6, 14, 8, 0, 0),
+          fetchWithTimeout: async () => {
+            probeCount += 1;
+            return fakeResponseForTest({ status: 403, body: 'forbidden' });
+          }
+        });
+        const result = await controller.leaveWithVerification({
+          gameOrigin: 'https://grasp-rat-game.h-e.top',
+          userId: 7,
+          sessionToken: 'test-token',
+          retryMax: 1,
+          hedgeDelayMs: 1000,
+          setTimeout: fn => {
+            fn();
+            return 1;
+          },
+          clearTimeout: () => {},
+          fetchImpl: async () => {
+            requestCount += 1;
+            if (requestCount === 1) {
+              return new Promise(resolve => { resolveInitial = resolve; });
+            }
+            resolveInitial(fakeResponseForTest({
+              status: 200,
+              body: {
+                ok: true,
+                event: 'left',
+                joined: 'UserRecordOnly',
+                current_join_mode: 'None'
+              }
+            }));
+            return fakeResponseForTest({ status: 403, body: 'not in game' });
+          }
+        });
+        const state = readBrowserlessStateFile(stateFile);
+        return [
+          result.ok,
+          requestCount,
+          probeCount,
+          controller.currentSourceIp(),
+          Boolean(state.network.lastSwitch?.switched),
+          result.attempts.map(item => `${item.status}:${item.ok}`).sort().join(',')
+        ].join('|');
+      }),
+      want: 'true|2|0|10.0.0.101|false|200:true,403:false'
     },
     {
       name: 'browserless runner loop plan retries non-explicit failures',
@@ -16052,6 +16209,8 @@ async function runSelfTest() {
           optionsSeen.sessionToken,
           optionsSeen.localAddress,
           optionsSeen.retryMax,
+          optionsSeen.retryDelayMs,
+          optionsSeen.hedgeDelayMs,
           optionsSeen.timeoutMs,
           stored.stats.currentSession.online,
           stored.stats.currentSession.staminaSpentMs,
@@ -16059,7 +16218,7 @@ async function runSelfTest() {
           stored.stats.today.staminaSpentMs
         ].join('|');
       }),
-      want: 'true|false|true||1|7|persisted-secret|10.0.0.101|2|5000|false|1050000|18950000|1050000'
+      want: 'true|false|true||1|7|persisted-secret|10.0.0.101|2|200|1000|5000|false|1050000|18950000|1050000'
     },
     {
       name: 'browserless runner dry-run and fake read-only path write redacted logs',

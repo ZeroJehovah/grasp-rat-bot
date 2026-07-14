@@ -8,7 +8,7 @@ const {
 const DEFAULT_STALE_SELF_MS = 3000;
 const DEFAULT_STALE_SELF_CONFIRM_MS = 2000;
 const DEFAULT_NO_SELF_GRACE_MS = 3000;
-const DEFAULT_FRAME_GAP_ALERT_MS = 5000;
+const DEFAULT_FRAME_GAP_ALERT_MS = 2000;
 const DEFAULT_STAMINA_EXHAUSTED_BELOW_MS = 200;
 
 function numberOrNull(value) {
@@ -265,7 +265,8 @@ async function executeSafetyExit(event, config = {}, deps = {}) {
     timeoutMs: config.httpTimeoutMs || 10000,
     localAddress: config.sourceIp,
     retryMax: config.leaveRetryMax ?? 3,
-    retryDelayMs: config.leaveRetryMs ?? 1200,
+    retryDelayMs: config.leaveRetryMs ?? 200,
+    hedgeDelayMs: config.leaveHedgeMs ?? 1000,
     fetchImpl: deps.fetchImpl,
     sleep: deps.sleep,
     now: deps.now

@@ -62,7 +62,8 @@ async function gracefulShutdownLeave(config, options = {}) {
     localAddress: state?.network?.sourceIp || hydrated.sourceIp || '',
     timeoutMs: Math.min(Math.max(1000, Number(hydrated.httpTimeoutMs || 10000)), 5000),
     retryMax: Math.min(Math.max(0, Number(hydrated.leaveRetryMax ?? 3)), 2),
-    retryDelayMs: Math.min(Math.max(0, Number(hydrated.leaveRetryMs ?? 1200)), 800)
+    retryDelayMs: Math.min(Math.max(0, Number(hydrated.leaveRetryMs ?? 200)), 800),
+    hedgeDelayMs: Math.min(Math.max(0, Number(hydrated.leaveHedgeMs ?? 1000)), 2000)
   });
   let statsFinalized = false;
   let statsFinalizeError = '';
