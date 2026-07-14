@@ -1957,9 +1957,31 @@ function runStrategyModuleSelfTests() {
     opportunities: [baitOpportunity],
     realtimeCoins: [baitCoin]
   }, { enabled: true, holdRadiusCm: 1000, sameCoinRadiusCm: 1200 });
+  const baitDisplayRouteOpportunity = {
+    ...baitOpportunity,
+    sourceCoin: {
+      ...baitCoin,
+      routeDisplayOnly: true,
+      coinRoute: { ids: ['bait', 'filtered-next'], value: 2, legCount: 2 }
+    }
+  };
+  const baitDisplayRoute = singleCoinBaitPolicyCore({
+    self: { x: 0, y: 0 },
+    nowMs: 1000,
+    previous: null,
+    selectedOpportunity: baitDisplayRouteOpportunity,
+    opportunities: [baitDisplayRouteOpportunity],
+    realtimeCoins: [baitCoin]
+  }, { enabled: true, holdRadiusCm: 1000, sameCoinRadiusCm: 1200 });
   results.push({
     name: 'single-coin-bait-rejects-far-coins-and-multi-coin-routes',
     passed: baitFar.state === null && baitRoute.state === null
+  });
+  results.push({
+    name: 'single-coin-bait-ignores-display-only-route-decoration',
+    passed: baitDisplayRoute.phase === 'hold'
+      && baitDisplayRoute.entered === true
+      && baitDisplayRoute.state?.id === 'bait'
   });
 
   const nextCoinOpportunity = {

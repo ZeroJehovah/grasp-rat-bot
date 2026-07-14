@@ -64,20 +64,25 @@ function singleCoinBaitRouteIdsCore(opportunity) {
 function singleCoinBaitSameCoinHasOtherProfitCore(opportunity, bait, options = {}) {
   const source = opportunity?.sourceCoin || opportunity?.coin || opportunity || {};
   const baitId = singleCoinBaitIdCore(bait);
-  const routeIds = singleCoinBaitRouteIdsCore(opportunity);
-  if (routeIds.some(id => id !== baitId)) return true;
-  const routeLegs = finiteNumber(source?.coinRoute?.legCount ?? opportunity?.coinRoute?.legCount ?? source?.routeLegs ?? opportunity?.routeLegs);
-  if (routeLegs !== null && routeLegs > 1) return true;
   const baitAmount = Math.max(0, Number(bait?.amount || SINGLE_COIN_BAIT_AMOUNT));
-  const aggregateValue = finiteNumber(
-    source?.coinRoute?.value
-      ?? opportunity?.coinRoute?.value
-      ?? source?.routeValue
-      ?? opportunity?.routeValue
-      ?? source?.fieldAmount
-      ?? opportunity?.fieldAmount
-  );
-  if (aggregateValue !== null && aggregateValue > baitAmount) return true;
+  // A lower-scoring route may be attached only for panel/next-leg display. It is
+  // not another selected profit opportunity and must not veto the bait anchor.
+  const routeDisplayOnly = source?.routeDisplayOnly === true || opportunity?.routeDisplayOnly === true;
+  if (!routeDisplayOnly) {
+    const routeIds = singleCoinBaitRouteIdsCore(opportunity);
+    if (routeIds.some(id => id !== baitId)) return true;
+    const routeLegs = finiteNumber(source?.coinRoute?.legCount ?? opportunity?.coinRoute?.legCount ?? source?.routeLegs ?? opportunity?.routeLegs);
+    if (routeLegs !== null && routeLegs > 1) return true;
+    const routeValue = finiteNumber(
+      source?.coinRoute?.value
+        ?? opportunity?.coinRoute?.value
+        ?? source?.routeValue
+        ?? opportunity?.routeValue
+    );
+    if (routeValue !== null && routeValue > baitAmount) return true;
+  }
+  const fieldAmount = finiteNumber(source?.fieldAmount ?? opportunity?.fieldAmount);
+  if (fieldAmount !== null && fieldAmount > baitAmount) return true;
   const fieldMembers = finiteNumber(source?.fieldMembers ?? source?.snapshotMembers ?? opportunity?.fieldMembers);
   return fieldMembers !== null && fieldMembers > 1;
 }

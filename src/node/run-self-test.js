@@ -8784,6 +8784,59 @@ async function runSelfTest() {
       want: 'wait|wait|single-coin-bait-hold|bait|hold|1|foot-coin-priority|foot-coin-priority|foot-coin-priority|single-coin-bait-hold|snapshot|1|foot-coin-priority|native-two|realtime'
     },
     {
+      name: 'browserless single coin bait ignores filtered display-only route legs',
+      got: (() => {
+        const nowMs = Date.parse('2026-07-12T00:00:00.000Z');
+        const store = createBrowserlessStateStore({ userId: 7 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 56,
+          entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 }],
+          bullets: [],
+          coin_drops: []
+        }, { receivedAtMs: nowMs });
+        store.ingestFrame({
+          type: 'snapshot',
+          tick: 57,
+          entities: [{
+            entity_id: 1,
+            user_id: 7,
+            x: 0,
+            y: 0,
+            hp: 100,
+            stamina_1h_remaining_milli: 3000000,
+            stamina_1d_remaining_milli: 20000000
+          }],
+          bullets: [],
+          messages: [],
+          coin_drops: [
+            { drop_id: 'bait', amount: 1, x: 650, y: 0 },
+            { drop_id: 'route-b', amount: 1, x: 11500, y: 0 },
+            { drop_id: 'route-c', amount: 1, x: 20000, y: 0 }
+          ]
+        }, { receivedAtMs: nowMs + 10 });
+        const decision = buildBrowserlessDecision(store.getState(nowMs + 20), {}, {
+          nowMs,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          dynamicProfitThresholdEnabled: true,
+          singleCoinBaitHoldRadiusCm: 1000,
+          finalActionArbitrationHoldMs: 0
+        });
+        return [
+          decision.reason,
+          decision.action.target?.id,
+          decision.profit.singleCoinBait?.phase,
+          decision.profit.best?.reason,
+          decision.profit.best?.reward,
+          decision.profit.threshold.eligibleCount,
+          decision.profit.threshold.filteredCount,
+          decision.input.profitCoinSource
+        ].join('|');
+      })(),
+      want: 'single-coin-bait-hold|bait|hold|best-opportunity-coin-route|3|1|2|snapshot-fallback'
+    },
+    {
       name: 'browserless single coin bait releases itself before newly visible ordinary profit',
       got: (() => {
         const adapter = createBrowserlessDecisionAdapter({
