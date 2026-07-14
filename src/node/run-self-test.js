@@ -6796,10 +6796,22 @@ async function runSelfTest() {
             { entity_id: 2, user_id: 8, x: 1000, y: 0, hp: 100, current_join_mode: 'Passive' },
             fullStamina5s({ entity_id: 3, user_id: 9, name: 'invulnerable-high', x: 2000, y: 0, hp: 100, current_join_mode: 'Passive', drop: 99, invulnerable_remaining_ms: 60000 }),
             fullStamina5s({ entity_id: 4, user_id: 10, name: 'active-low', x: 3000, y: 0, hp: 100, current_join_mode: 'Active', drop: 1 }, 7000),
-            fullStamina5s({ entity_id: 5, user_id: 11, name: 'low-afk', x: 4000, y: 0, hp: 100, current_join_mode: 'Passive', drop: 1 })
+            fullStamina5s({ entity_id: 5, user_id: 11, name: 'low-afk', x: 4000, y: 0, hp: 100, current_join_mode: 'Passive', drop: 1 }),
+            { entity_id: 6, user_id: 12, x: 5000, y: 0, hp: 100, current_join_mode: 'Passive' }
           ],
           bullets: []
         }, { receivedAtMs: 1000 });
+        store.ingestFrame({
+          type: 'snapshot',
+          tick: 61,
+          entities: [
+            { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+            { entity_id: 22, user_id: 8, name: 'snapshot-zero', x: 1000, y: 0, hp: 100, current_join_mode: 'Passive', death_reward_preview: 0, death_drop_coins: 0 }
+          ],
+          bullets: [],
+          coin_drops: [],
+          messages: []
+        }, { receivedAtMs: 1100 });
         const decision = buildBrowserlessDecision(store.getState(1200), {}, {
           nowMs: 1200,
           controlMode: 'profit-live'
@@ -6814,18 +6826,20 @@ async function runSelfTest() {
         return [
           rows.length,
           rows.some(row => row[0] === '未知玩家' && row[3] === null && row[2] === null && row[7] === 'Passive'),
+          rows.some(row => row[0] === 'snapshot-zero' && row[3] === 0),
           rows.some(row => row[0] === 'invulnerable-high' && row[3] === 99 && row[4] === 60000),
           rows.some(row => row[0] === 'active-low' && row[3] === 1 && row[10] === 0 && row[12] === 0),
           rows.some(row => row[0] === 'low-afk' && row[3] === 1 && row[10] === 1 && row[12] === 1),
           compactRows.length,
           compactRows.some(row => row[0] === '未知玩家'),
+          compactRows.some(row => row[0] === 'snapshot-zero' && row[3] === 0),
           compactRows.some(row => row[0] === 'invulnerable-high'),
           compactRows.some(row => row[0] === 'active-low'),
           compactRows.some(row => row[0] === 'low-afk'),
           compactStatus.nearby.playerLowHiddenCount
         ].join('|');
       })(),
-      want: '4|true|true|true|true|3|true|true|true|false|1'
+      want: '5|true|true|true|true|true|4|true|true|true|true|false|1'
     },
     {
       name: 'browserless stationary full-stamina active can be AFK profit but non-full active is ignored when not attacking',

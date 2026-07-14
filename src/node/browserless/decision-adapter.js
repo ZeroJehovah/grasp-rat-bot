@@ -1104,19 +1104,21 @@ function enrichRealtimeEntityWithSnapshotProfitMetadata(entity, snapshotEntity, 
   if (displayMerged) output.displayMetadataAuthority = 'snapshot';
   if (staminaMerged) output.staminaMetadataAuthority = 'snapshot';
   if (invulnerableMerged) output.invulnerableMetadataAuthority = 'snapshot';
-  const reward = entityDropValue(snapshotEntity);
-  if (!(reward > 0)) {
+  const snapshotDropKnown = entityDropKnown(snapshotEntity);
+  if (!snapshotDropKnown) {
     return output;
   }
-  const currentDrop = entityDropValue(entity);
+  const reward = entityDropValue(snapshotEntity);
+  const currentDropKnown = entityDropKnown(entity);
   return {
     ...output,
     death_reward_preview: snapshotEntity.death_reward_preview,
     death_drop_coins: snapshotEntity.death_drop_coins,
     coins: snapshotEntity.coins,
-    reward: currentDrop > 0 ? entity.reward : reward,
-    coin_reward: currentDrop > 0 ? entity.coin_reward : reward,
-    drop: currentDrop > 0 ? entity.drop : reward,
+    reward: currentDropKnown ? entity.reward : reward,
+    coin_reward: currentDropKnown ? entity.coin_reward : reward,
+    drop: currentDropKnown ? entity.drop : reward,
+    dropKnown: true,
     profitMetadataAuthority: 'snapshot'
   };
 }
