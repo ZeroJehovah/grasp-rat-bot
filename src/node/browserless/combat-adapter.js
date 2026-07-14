@@ -28,6 +28,7 @@ const {
 } = require('../../strategy/combat-exit');
 const { opponentMotionProfileCore, quadraticInterceptCore } = require('../../strategy/combat-aim');
 const {
+  behaviorLearningBaseKey,
   behaviorLearningKey,
   movementDirectionState,
   opponentResponsePolicyCore,
@@ -86,11 +87,18 @@ function combatModeMetricsCell(stateful, key) {
   return learning.modeMetrics[key];
 }
 
-function learnedBehaviorHitRate(stateful, mode, distance) {
+function learnedBehaviorHitRate(stateful, behavior, distance) {
   const learning = ensureCombatLearningState(stateful);
-  const cell = learning.hitRateByModeDistance[behaviorLearningKey(mode, distance)] || null;
-  if (!cell) return null;
-  return Math.max(0.03, Math.min(0.95, (Number(cell.hits || 0) + 1) / (Number(cell.shots || 0) + 4)));
+  const base = behaviorLearningBaseKey(behavior, distance);
+  const cells = Object.entries(learning.hitRateByModeDistance)
+    .filter(([key]) => key.startsWith(`${base}|aim=`))
+    .map(([, cell]) => cell);
+  if (!cells.length) return null;
+  const totals = cells.reduce((sum, cell) => ({
+    shots: sum.shots + Number(cell?.shots || 0),
+    hits: sum.hits + Number(cell?.hits || 0)
+  }), { shots: 0, hits: 0 });
+  return Math.max(0.03, Math.min(0.95, (totals.hits + 1) / (totals.shots + 4)));
 }
 
 function ensureOpponentBehaviorMap(stateful = {}) {
@@ -108,7 +116,8 @@ function recordCombatShotLearning(stateful, target, combat = {}, options = {}) {
   const behavior = combat.behavior || stateful.opponentBehaviorStates?.[id] || stateful.combatTarget?.opponentBehaviorState || null;
   const mode = String(behavior?.mode || 'mixed/unknown');
   const distance = Number(target.distance ?? combat.target?.distance ?? stateful.combatTarget?.distance);
-  const key = behaviorLearningKey(mode, distance);
+  const hypothesis = String(options.hypothesis || combat.aim?.motionProbe?.hypothesis || 'center');
+  const key = behaviorLearningKey(behavior || mode, distance, hypothesis);
   const learning = ensureCombatLearningState(stateful);
   const previous = learning.hitRateByModeDistance[key] || { shots: 0, hits: 0 };
   const cell = {
@@ -121,7 +130,6 @@ function recordCombatShotLearning(stateful, target, combat = {}, options = {}) {
   modeMetrics.shots += 1;
   modeMetrics.shootingStamina += Math.max(0, Number(options.shotStaminaCost ?? 500));
   modeMetrics.updatedAt = nowMs;
-  const hypothesis = String(options.hypothesis || combat.aim?.motionProbe?.hypothesis || 'center');
   const createdTick = numberOrNull(options.createdTick);
   const flightTicks = numberOrNull(options.flightTicks);
   learning.recentShots.push({
@@ -146,10 +154,10 @@ function recordCombatShotLearning(stateful, target, combat = {}, options = {}) {
     }
     targetBehavior.probeWeights[hypothesis] = Math.max(0.1, Number(targetBehavior.probeWeights[hypothesis] || 0.5) * 0.98);
   }
-  return { key, mode, hypothesis, hitRate: learnedBehaviorHitRate(stateful, mode, distance) };
+  return { key, mode, hypothesis, hitRate: learnedBehaviorHitRate(stateful, behavior || mode, distance) };
 }
 
-function creditCombatHitLearning(stateful, targetId, hitCount, nowMs) {
+function creditCombatHitLearning(stateful, targetId, hitCount, nowMs, currentTick = null) {
   const learning = ensureCombatLearningState(stateful);
   const targetState = String(stateful?.combatTarget?.id ?? '') === String(targetId)
     ? stateful.combatTarget
@@ -160,15 +168,19 @@ function creditCombatHitLearning(stateful, targetId, hitCount, nowMs) {
   const shots = learning.recentShots
     .filter(item => !item.credited && String(item.targetId) === String(targetId) && nowMs - Number(item.at || 0) <= 2500)
     .map(item => {
-      const arrivalMs = Number(item.at || 0) + Math.max(0, Number(item.flightTicks || 0)) * 50;
-      const arrivalOffsetTicks = Math.abs(arrivalMs - nowMs) / 50;
+      const expectedArrivalTick = numberOrNull(item.expectedArrivalTick);
+      const observedTick = numberOrNull(currentTick);
+      const arrivalOffsetTicks = expectedArrivalTick !== null && observedTick !== null
+        ? Math.abs(expectedArrivalTick - observedTick)
+        : Math.abs(Number(item.at || 0) + Math.max(0, Number(item.flightTicks || 0)) * 50 - nowMs) / 50;
       const reachableRadius = 90 + targetSpeed * arrivalOffsetTicks;
       const aimDistance = targetX === null || targetY === null || item.aimX === null || item.aimY === null
         ? null
         : Math.hypot(Number(item.aimX) - targetX, Number(item.aimY) - targetY);
       return {
         ...item,
-        arrivalMs,
+        expectedArrivalTick,
+        arrivalOffsetTicks,
         trajectoryReachable: aimDistance === null || aimDistance <= reachableRadius,
         aimDistance,
         reachableRadius
@@ -176,7 +188,7 @@ function creditCombatHitLearning(stateful, targetId, hitCount, nowMs) {
     })
     .sort((a, b) => {
       return Number(b.trajectoryReachable) - Number(a.trajectoryReachable)
-        || Math.abs(a.arrivalMs - nowMs) - Math.abs(b.arrivalMs - nowMs)
+        || Number(a.arrivalOffsetTicks ?? Infinity) - Number(b.arrivalOffsetTicks ?? Infinity)
         || Number(a.aimDistance ?? Infinity) - Number(b.aimDistance ?? Infinity);
     });
   let remaining = Math.max(0, Math.round(Number(hitCount || 0)));
@@ -433,7 +445,9 @@ function estimateBulletKinematics(bullet, self, options = {}) {
     cpa,
     timeToImpact,
     createdTick,
-    expireTick
+    expireTick,
+    currentTick,
+    remainingTicks: currentTick !== null && expireTick !== null ? Math.max(0, expireTick - currentTick) : null
   };
 }
 
@@ -457,6 +471,8 @@ function normalizeCombatBullet(bullet, self = null, options = {}) {
     timeToImpact: kinematics.timeToImpact,
     createdTick: kinematics.createdTick,
     expireTick: kinematics.expireTick,
+    currentTick: kinematics.currentTick,
+    remainingTicks: kinematics.remainingTicks,
     incoming: Boolean(self && ownerId !== null && Number(ownerId) !== Number(self.user_id)),
     authority: 'realtime'
   };
@@ -879,12 +895,19 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
   const behaviorSamples = Array.isArray(opponentBehavior?.samples) ? opponentBehavior.samples : [];
   const lastObservedShot = behaviorSamples.slice().reverse().find(sample => Number(sample.newBulletCount || 0) > 0) || null;
   const shotIntervalMeanMs = numberOrNull(opponentBehavior?.metrics?.shotIntervalMeanMs);
+  const shotIntervalCv = numberOrNull(opponentBehavior?.metrics?.shotIntervalCv);
+  const lowVariationCadence = Boolean(
+    (opponentBehavior?.metrics?.shotIntervals || []).length >= 3
+      && shotIntervalCv !== null
+      && shotIntervalCv <= Math.max(0.05, Number(options.combatPreDodgeMaxShotIntervalCv ?? 0.35))
+  );
   const nextShotInMs = lastObservedShot && shotIntervalMeanMs !== null
     ? Number(lastObservedShot.at || 0) + shotIntervalMeanMs - Number(options.nowMs || Date.now())
     : null;
   const selfStamina5s = numberOrNull(self.stamina_5s_remaining_milli ?? self.stamina5sRemainingMilli);
   const preDodge = Boolean(
     !(bullets || []).length
+      && lowVariationCadence
       && nextShotInMs !== null
       && nextShotInMs >= 300
       && nextShotInMs <= 600
@@ -925,7 +948,8 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
         dy: Math.sign(Number(self.vy || 0)),
         reason: 'pre-dodge-induce-hold',
         threatField: dodge?.threatField || null,
-        nextShotInMs: Math.round(nextShotInMs)
+        nextShotInMs: Math.round(nextShotInMs),
+        shotIntervalCv
       }
     : (safeClosingDodge
     ? { ...dodge, dx: safeClosingDodge.dx, dy: safeClosingDodge.dy, reason: 'retreat-kite-safe-close' }
@@ -966,6 +990,7 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
     preDodge: preDodge ? {
       phase: 'induce-hold',
       nextShotInMs: Math.round(nextShotInMs),
+      shotIntervalCv,
       reserveMs: COMBAT_CONSTANTS.SHOOT_DODGE_RESERVE_MS
     } : null
   };
@@ -1027,7 +1052,13 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
     .filter(Boolean);
   const previousMetrics = same && stateful.combatMetrics?.targetId === String(id) ? stateful.combatMetrics : {};
   const creditedHits = damaged
-    ? creditCombatHitLearning(stateful, id, Math.max(1, Math.round((previousHp - hp) / 3)), nowMs)
+    ? creditCombatHitLearning(
+        stateful,
+        id,
+        Math.max(1, Math.round((previousHp - hp) / 3)),
+        nowMs,
+        options.currentTick
+      )
     : 0;
   const previousSamples = same && Array.isArray(previous.motionSamples) ? previous.motionSamples : [];
   const sampleWindowMs = Math.max(20000, Number(options.combatMotionHistoryWindowMs || 20000));
@@ -1055,7 +1086,7 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
     .slice(-160);
   const behaviorMap = ensureOpponentBehaviorMap(stateful);
   const previousBehavior = behaviorMap[String(id)] || null;
-  const observedHitRate = learnedBehaviorHitRate(stateful, previousBehavior?.mode || 'mixed/unknown', distance)
+  const observedHitRate = learnedBehaviorHitRate(stateful, previousBehavior || { mode: 'mixed/unknown' }, distance)
     ?? (Number(previousMetrics.acceptedShots || 0) >= 5
       ? Number(previousMetrics.confirmedHits || 0) / Math.max(1, Number(previousMetrics.acceptedShots || 0))
       : null);
@@ -1122,12 +1153,12 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
   const shootingStaminaSpent = Number(previousMetrics.acceptedShots || 0)
     * Math.max(0, Number(options.opportunityShotStaminaCostMs ?? 500));
   const learning = ensureCombatLearningState(stateful);
-  const modeKey = behaviorLearningKey(opponentBehaviorState.mode, distance);
+  const modeKey = behaviorLearningKey(opponentBehaviorState, distance, 'all');
   const modeMetrics = combatModeMetricsCell(stateful, modeKey);
   const lastTotals = learning.lastTotalsByTarget[String(id)] || null;
   if (!same) modeMetrics.engagements += 1;
   if (previous && !same) {
-    const previousKey = behaviorLearningKey(previous.opponentBehaviorState?.mode || 'mixed/unknown', previous.distance);
+    const previousKey = behaviorLearningKey(previous.opponentBehaviorState || { mode: 'mixed/unknown' }, previous.distance, 'all');
     combatModeMetricsCell(stateful, previousKey).disengagements += 1;
   }
   if (selfDamaged) modeMetrics.selfDamage += Math.max(0, previousSelfHp - currentSelfHp);
@@ -1266,6 +1297,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
   rememberBrowserlessCombatEngagement(stateful, self, target, {
     ...options,
     bullets,
+    currentTick: realtime.tick,
     reason: liveCombatEnabled ? 'combat-live-realtime' : (options.controlMode === 'combat-dry-run' ? 'combat-dry-run-realtime' : 'realtime-visible-threat')
   });
   syncConfirmedCombatShots(stateful, state, target, {

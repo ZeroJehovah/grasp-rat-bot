@@ -25,24 +25,9 @@ function parseArgs(argv) {
 }
 
 function readJsonlEntries(file) {
-  if (!fs.existsSync(file)) return [];
-  return fs.readFileSync(file, 'utf8')
-    .split(/\r?\n/)
-    .filter(Boolean)
-    .map((line, index) => {
-      try {
-        return JSON.parse(line);
-      } catch (err) {
-        return {
-          at: '',
-          type: 'parse-error',
-          detail: {
-            line: index + 1,
-            message: err?.message || String(err)
-          }
-        };
-      }
-    });
+  const entries = [];
+  forEachJsonlEntry(file, entry => entries.push(entry));
+  return entries;
 }
 
 function forEachJsonlEntry(file, visitor, options = {}) {

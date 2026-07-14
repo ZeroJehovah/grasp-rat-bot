@@ -28,8 +28,25 @@ function behaviorDistanceBand(distance) {
   return 'edge';
 }
 
-function behaviorLearningKey(mode, distance) {
-  return `${OPPONENT_BEHAVIOR_MODES.includes(String(mode)) ? String(mode) : 'mixed/unknown'}:${behaviorDistanceBand(distance)}`;
+function behaviorLearningBaseKey(behavior, distance) {
+  const object = behavior && typeof behavior === 'object' ? behavior : null;
+  const mode = String(object?.mode || behavior || 'mixed/unknown');
+  const dimensions = object?.dimensions || {};
+  const movement = String(dimensions.movementIntent?.state || mode || 'erratic');
+  const shooting = String(dimensions.shootingPhase?.state || 'unknown');
+  const stamina = String(dimensions.staminaPhase?.state || 'unknown');
+  const style = String(dimensions.controlStyle?.state || 'unknown');
+  return [
+    `movement=${movement}`,
+    `shooting=${shooting}`,
+    `stamina=${stamina}`,
+    `style=${style}`,
+    `distance=${behaviorDistanceBand(distance)}`
+  ].join('|');
+}
+
+function behaviorLearningKey(behavior, distance, aimStrategy = 'all') {
+  return `${behaviorLearningBaseKey(behavior, distance)}|aim=${String(aimStrategy || 'all')}`;
 }
 
 function sampleDistance(sample) {
@@ -112,6 +129,9 @@ function movementTransitionModelCore(samples = [], options = {}) {
   const entropy = next.length
     ? -next.reduce((sum, item) => sum + (item.probability > 0 ? item.probability * Math.log2(item.probability) : 0), 0)
     : null;
+  const rowPredictabilities = Object.values(matrix)
+    .map(row => Math.max(0, ...Object.values(row).map(Number).filter(Number.isFinite)))
+    .filter(Number.isFinite);
   return {
     states: MOVEMENT_DIRECTION_STATES,
     currentState,
@@ -119,6 +139,9 @@ function movementTransitionModelCore(samples = [], options = {}) {
     matrix,
     next,
     entropy,
+    predictability: rowPredictabilities.length
+      ? rowPredictabilities.reduce((sum, value) => sum + value, 0) / rowPredictabilities.length
+      : 0.5,
     confidence: clamp(transitionCount / Math.max(4, Number(options.fullConfidenceTransitions ?? 12)), 0, 1)
   };
 }
@@ -143,7 +166,17 @@ function opponentBehaviorMetricsCore(samples = [], options = {}) {
   let previousMoving = null;
   let lastLateralFlipAt = 0;
   const shotIntervals = [];
+  const directionDwells = [];
+  const reactionLatencies = [];
+  const staminaCycleIntervals = [];
   let previousShotAt = 0;
+  let previousDirection = '';
+  let directionSinceAt = 0;
+  let previousTargetHp = null;
+  let pendingStimulusAt = 0;
+  let previousStamina = null;
+  let previousStaminaTrend = 0;
+  let lastStaminaRecoveryAt = 0;
   for (let index = 0; index < history.length; index += 1) {
     const sample = history[index];
     const dx = Number(sample.x) - Number(sample.selfX || 0);
@@ -154,6 +187,16 @@ function opponentBehaviorMetricsCore(samples = [], options = {}) {
     const radial = dx / distance * vx + dy / distance * vy;
     const lateral = dx / distance * vy - dy / distance * vx;
     const speed = Math.hypot(vx, vy);
+    const at = Number(sample.at || nowMs);
+    const directionState = movementDirectionState(vx, vy, stationarySpeed);
+    if (!previousDirection) {
+      previousDirection = directionState;
+      directionSinceAt = at;
+    } else if (directionState !== previousDirection) {
+      directionDwells.push(Math.max(0, at - directionSinceAt));
+      previousDirection = directionState;
+      directionSinceAt = at;
+    }
     radialSum += radial;
     lateralSum += Math.abs(lateral);
     speedSum += speed;
@@ -169,9 +212,28 @@ function opponentBehaviorMetricsCore(samples = [], options = {}) {
     if (sample.firing) firingSamples += 1;
     if (sample.firing || sample.realBulletPressure) pressureSamples += 1;
     if (Number(sample.newBulletCount || 0) > 0) {
-      if (previousShotAt) shotIntervals.push(Number(sample.at || nowMs) - previousShotAt);
-      previousShotAt = Number(sample.at || nowMs);
+      if (previousShotAt) shotIntervals.push(at - previousShotAt);
+      previousShotAt = at;
     }
+    const targetHp = numberOrNull(sample.targetHp);
+    if (targetHp !== null && previousTargetHp !== null && targetHp < previousTargetHp) pendingStimulusAt = at;
+    const directionChanged = index > 0 && directionState !== movementDirectionState(history[index - 1]?.vx, history[index - 1]?.vy, stationarySpeed);
+    if (pendingStimulusAt && at > pendingStimulusAt && at - pendingStimulusAt <= 2500
+      && (directionChanged || Number(sample.newBulletCount || 0) > 0)) {
+      reactionLatencies.push(at - pendingStimulusAt);
+      pendingStimulusAt = 0;
+    }
+    if (targetHp !== null) previousTargetHp = targetHp;
+    const stamina = numberOrNull(sample.targetStamina5s);
+    if (stamina !== null && previousStamina !== null) {
+      const trend = Math.sign(stamina - previousStamina);
+      if (trend > 0 && previousStaminaTrend < 0) {
+        if (lastStaminaRecoveryAt) staminaCycleIntervals.push(at - lastStaminaRecoveryAt);
+        lastStaminaRecoveryAt = at;
+      }
+      if (trend) previousStaminaTrend = trend;
+    }
+    if (stamina !== null) previousStamina = stamina;
     if (index > 0) {
       const previous = history[index - 1];
       const previousSpeed = Math.hypot(Number(previous.vx) || 0, Number(previous.vy) || 0);
@@ -195,6 +257,13 @@ function opponentBehaviorMetricsCore(samples = [], options = {}) {
     : null;
   const intervalVariance = intervalMean === null ? null : shotIntervals.reduce((sum, value) => sum + (value - intervalMean) ** 2, 0) / shotIntervals.length;
   const shotIntervalCv = intervalMean && intervalVariance !== null ? Math.sqrt(intervalVariance) / intervalMean : null;
+  const coefficientOfVariation = values => {
+    if (!values.length) return null;
+    const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
+    if (!(mean > 0)) return null;
+    const variance = values.reduce((sum, value) => sum + (value - mean) ** 2, 0) / values.length;
+    return Math.sqrt(variance) / mean;
+  };
   const movementTransitions = movementTransitionModelCore(history, { stationarySpeed });
   return {
     sampleCount,
@@ -215,6 +284,12 @@ function opponentBehaviorMetricsCore(samples = [], options = {}) {
     shotIntervals,
     shotIntervalMeanMs: intervalMean,
     shotIntervalCv,
+    directionDwells,
+    directionDwellCv: coefficientOfVariation(directionDwells),
+    reactionLatencies,
+    reactionLatencyCv: coefficientOfVariation(reactionLatencies),
+    staminaCycleIntervals,
+    staminaCycleCv: coefficientOfVariation(staminaCycleIntervals),
     movementTransitions
   };
 }
@@ -253,13 +328,23 @@ function behaviorDimensionsCore(previous, classified, metrics, sample, nowMs, op
   };
   const pressure = Boolean(sample.firing || sample.realBulletPressure || Number(sample.newBulletCount || 0) > 0);
   const previousShooting = previousDimensions.shootingPhase || null;
+  const lastShotAt = [...(previous?.samples || []), sample]
+    .slice().reverse().find(item => Number(item.newBulletCount || 0) > 0)?.at || 0;
+  const nextShotInMs = lastShotAt && Number.isFinite(Number(metrics.shotIntervalMeanMs))
+    ? Number(lastShotAt) + Number(metrics.shotIntervalMeanMs) - nowMs
+    : null;
   const shootingState = Number(sample.newBulletCount || 0) > 0
-    ? (pressure ? 'burst' : 'preparing')
-    : (pressure ? 'sustained' : (previousShooting?.state === 'sustained' ? 'cooldown' : 'idle'));
+    ? 'burst'
+    : (pressure
+        ? 'sustained'
+        : (nextShotInMs !== null && nextShotInMs >= 0 && nextShotInMs <= 600
+            ? 'preparing'
+            : (['burst', 'sustained'].includes(previousShooting?.state) ? 'cooldown' : 'idle')));
   const shootingPhase = {
     state: shootingState,
     confidence: pressure ? Math.max(0.7, metrics.pressureRatio) : Math.max(0.55, 1 - metrics.pressureRatio),
-    updatedAt: nowMs
+    updatedAt: nowMs,
+    nextShotInMs: nextShotInMs === null ? null : Math.round(nextShotInMs)
   };
   const stamina = numberOrNull(sample.targetStamina5s);
   const previousStamina = numberOrNull(previous?.samples?.[Math.max(0, (previous.samples?.length || 1) - 1)]?.targetStamina5s);
@@ -284,15 +369,52 @@ function behaviorDimensionsCore(previous, classified, metrics, sample, nowMs, op
     upperBound: inferredUpper
   };
   const automationEvidenceReady = metrics.durationMs >= Math.max(8000, Number(options.controlStyleMinMs || 8000));
-  const regularFire = metrics.shotIntervalCv !== null ? clamp(1 - metrics.shotIntervalCv, 0, 1) : 0.4;
-  const regularMotion = clamp(metrics.velocityStability * 0.65 + Math.min(1, metrics.lateralFlips / 4) * 0.35, 0, 1);
-  const automationLikelihood = clamp(regularFire * 0.55 + regularMotion * 0.45, 0, 1);
-  const styleCandidate = automationLikelihood >= 0.72
+  const evidence = [];
+  const addEvidence = (value, weight) => {
+    if (Number.isFinite(Number(value))) evidence.push({ value: clamp(Number(value), 0, 1), weight });
+  };
+  const regularFire = metrics.shotIntervals?.length >= 3 && metrics.shotIntervalCv !== null
+    ? clamp(1 - metrics.shotIntervalCv, 0, 1)
+    : null;
+  const transitionPredictability = Number(metrics.movementTransitions?.predictability ?? 0.5);
+  const dwellRegularity = metrics.directionDwells?.length >= 2 && metrics.directionDwellCv !== null
+    ? clamp(1 - metrics.directionDwellCv, 0, 1)
+    : null;
+  const reactionRegularity = metrics.reactionLatencies?.length >= 2 && metrics.reactionLatencyCv !== null
+    ? clamp(1 - metrics.reactionLatencyCv, 0, 1)
+    : null;
+  const staminaRegularity = metrics.staminaCycleIntervals?.length >= 2 && metrics.staminaCycleCv !== null
+    ? clamp(1 - metrics.staminaCycleCv, 0, 1)
+    : null;
+  addEvidence(regularFire, 0.3);
+  addEvidence(transitionPredictability, 0.3);
+  addEvidence(dwellRegularity, 0.15);
+  addEvidence(reactionRegularity, 0.15);
+  addEvidence(staminaRegularity, 0.1);
+  const evidenceWeight = evidence.reduce((sum, item) => sum + item.weight, 0);
+  const automationLikelihood = evidenceWeight > 0
+    ? clamp(evidence.reduce((sum, item) => sum + item.value * item.weight, 0) / evidenceWeight, 0, 1)
+    : 0.35;
+  const styleCandidate = regularFire !== null && regularFire >= 0.7 && transitionPredictability >= 0.65
     ? 'periodic-script'
-    : (automationLikelihood >= 0.55 ? 'reactive-script' : 'human-like');
+    : (reactionRegularity !== null && reactionRegularity >= 0.65 && transitionPredictability >= 0.55
+        ? 'reactive-script'
+        : (automationLikelihood >= 0.68 ? 'reactive-script' : 'human-like'));
   const controlStyle = automationEvidenceReady
-    ? { state: styleCandidate, confidence: clamp(Math.abs(automationLikelihood - 0.5) * 2, 0.35, 0.95), sampleMs: metrics.durationMs }
-    : { state: previousDimensions.controlStyle?.state || 'unknown', confidence: 0.25, sampleMs: metrics.durationMs };
+    ? {
+        state: styleCandidate,
+        confidence: clamp(Math.abs(automationLikelihood - 0.5) * 2 * Math.min(1, evidenceWeight / 0.6), 0.35, 0.95),
+        sampleMs: metrics.durationMs,
+        evidenceWeight,
+        provisional: false
+      }
+    : {
+        state: 'human-like',
+        confidence: 0.25,
+        sampleMs: metrics.durationMs,
+        evidenceWeight,
+        provisional: true
+      };
   return {
     movementIntent,
     shootingPhase,
@@ -484,6 +606,7 @@ module.exports = {
   OPPONENT_BEHAVIOR_MODES,
   behaviorDistanceBand,
   behaviorDimensionsCore,
+  behaviorLearningBaseKey,
   behaviorLearningKey,
   classifyOpponentBehaviorCore,
   movementDirectionState,

@@ -208,6 +208,28 @@ function runStrategyModuleSelfTests() {
       ? dodge.threatField.find(item => item.dx === dodge.dx && item.dy === dodge.dy)?.directHits === dodgeMinimumHits && dodgeMinimumHits < 1
       : false
   });
+  const fullFlightDodge = calculateDodgeDirection(
+    { x: 0, y: 0, vx: 0, vy: 0 },
+    [{
+      incoming: true,
+      x: -5000,
+      y: 0,
+      distance: 5000,
+      cpa: 0,
+      timeToImpact: 100,
+      speed: 500,
+      direction: { dx: 1, dy: 0 },
+      remainingTicks: 20
+    }],
+    { moveSpeedPerTick: 50, tickMs: 50, hitRadius: 200, commandDelayTicks: 5 }
+  );
+  const fullFlightStop = fullFlightDodge.threatField.find(item => item.dx === 0 && item.dy === 0);
+  results.push({
+    name: 'dodge-full-flight-cpa-continues-beyond-old-static-tti-until-bullet-expiry',
+    passed: fullFlightStop?.directHits === 1
+      && fullFlightStop?.minCPA === 0
+      && fullFlightStop?.commandDelayTicks === 5
+  });
   const safeClosingDodge = pickSafeClosingDodgeCore([
     { dx: 0, dy: 1, directHits: 0, minCPA: 800, targetDistanceChange: 150 },
     { dx: -1, dy: 1, directHits: 0, minCPA: 760, targetDistanceChange: -350 },
@@ -318,6 +340,8 @@ function runStrategyModuleSelfTests() {
     name: 'opponent-behavior-hysteresis-enters-retreat-kite-and-pauses-inefficient-fire',
     passed: behavior?.mode === 'retreat-kite'
       && behavior?.confidence > 0.4
+      && behavior?.dimensions?.controlStyle?.state === 'human-like'
+      && behavior?.dimensions?.controlStyle?.provisional === true
       && behavior?.responsePolicy?.name === 'retreat-kite-close-first'
       && retreatPolicy.suppressFire === true
       && retreatPolicy.reassessProfit === true
@@ -345,6 +369,8 @@ function runStrategyModuleSelfTests() {
       && ['burst', 'sustained'].includes(composite?.dimensions?.shootingPhase?.state)
       && Boolean(composite?.dimensions?.staminaPhase?.state)
       && composite?.dimensions?.controlStyle?.sampleMs >= 8000
+      && composite?.dimensions?.controlStyle?.state === 'periodic-script'
+      && composite?.dimensions?.controlStyle?.evidenceWeight >= 0.6
       && Number.isFinite(composite?.automationLikelihood)
       && composite?.metrics?.movementTransitions?.currentState === 'east'
       && composite?.metrics?.movementTransitions?.next?.[0]?.state === 'east'

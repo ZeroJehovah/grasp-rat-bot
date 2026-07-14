@@ -1874,6 +1874,14 @@ function activeTargetCompletionEstimate(target, options = {}) {
     } catch (_) {}
   }
   const baseProbability = Math.max(0.05, Math.min(0.95, Number(completion.probability || 1 / 3)));
+  const historicalEscapeRate = numberOrNull(completion.escapeRate);
+  const historicalDamageExchange = numberOrNull(completion.damageExchangeRatio);
+  const historyEscapeFactor = historicalEscapeRate === null
+    ? 1
+    : Math.max(0.45, Math.min(1, 1 - historicalEscapeRate * 0.55));
+  const historyExchangeFactor = historicalDamageExchange === null
+    ? 1
+    : Math.max(0.55, Math.min(1.1, 0.55 + Math.min(1.25, historicalDamageExchange) * 0.4));
   const hpFactor = Math.max(0.35, Math.min(1.35, 100 / Math.max(25, Number(target.hp || 100))));
   const metrics = options.recentCombatMetrics || {};
   const metricsMatch = targetId !== null && targetId !== undefined
@@ -1918,7 +1926,13 @@ function activeTargetCompletionEstimate(target, options = {}) {
     }
   }
   const probability = Math.max(0.03, Math.min(0.95,
-    baseProbability * hpFactor * hitFactor * escapeFactor * exchangeFactor));
+    baseProbability
+      * hpFactor
+      * hitFactor
+      * escapeFactor
+      * exchangeFactor
+      * historyEscapeFactor
+      * historyExchangeFactor));
   return {
     probability,
     baseProbability,
@@ -1927,6 +1941,10 @@ function activeTargetCompletionEstimate(target, options = {}) {
     acceptedHitRate,
     escapeFactor,
     exchangeFactor,
+    historicalEscapeRate,
+    historicalDamageExchange,
+    historyEscapeFactor,
+    historyExchangeFactor,
     source: completion.source || 'conservative-prior'
   };
 }

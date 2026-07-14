@@ -123,7 +123,12 @@ function calculateDodgeDirection(self, bullets, options = {}) {
       let cpa = Number(bullet.cpa ?? bullet.distance ?? Infinity);
       if ([bulletX, bulletY, directionX, directionY, bulletSpeed].every(Number.isFinite)) {
         cpa = Infinity;
-        const endTick = Math.max(1, Math.ceil(tti / tickMs));
+        const ttiTicks = Math.max(1, Math.ceil(tti / tickMs));
+        const remainingTicks = Number(bullet.remainingTicks);
+        const trajectoryTicks = Number.isFinite(remainingTicks) && remainingTicks > 0
+          ? Math.ceil(remainingTicks)
+          : ttiTicks;
+        const endTick = Math.max(1, Math.min(Math.max(1, Number(options.maxTrajectoryTicks || 60)), trajectoryTicks));
         let selfX = Number(self?.x || 0);
         let selfY = Number(self?.y || 0);
         for (let tick = 0; tick <= endTick; tick += 1) {
@@ -152,9 +157,15 @@ function calculateDodgeDirection(self, bullets, options = {}) {
 
     const targetFutureTicks = Number.isFinite(minTTI) ? Math.max(0, minTTI / tickMs - commandDelayTicks) : 0;
     const targetDiagonalScale = dir.dx && dir.dy ? Math.SQRT1_2 : 1;
+    const delayedTicks = Math.min(commandDelayTicks, targetFutureTicks);
+    const controlledTicks = Math.max(0, targetFutureTicks - delayedTicks);
     const candidateFutureSelf = {
-      x: Number(self?.x || 0) + dir.dx * targetDiagonalScale * moveSpeedPerTick * targetFutureTicks,
-      y: Number(self?.y || 0) + dir.dy * targetDiagonalScale * moveSpeedPerTick * targetFutureTicks
+      x: Number(self?.x || 0)
+        + currentVx * delayedTicks
+        + (dir.holdCurrent ? currentVx * controlledTicks : (dir.stop ? 0 : dir.dx * targetDiagonalScale * moveSpeedPerTick * controlledTicks)),
+      y: Number(self?.y || 0)
+        + currentVy * delayedTicks
+        + (dir.holdCurrent ? currentVy * controlledTicks : (dir.stop ? 0 : dir.dy * targetDiagonalScale * moveSpeedPerTick * controlledTicks))
     };
     return {
       dx: dir.dx,

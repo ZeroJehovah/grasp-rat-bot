@@ -593,6 +593,21 @@ async function runReadOnlyCanary(config, options = {}) {
     targetWhitelistUserIdSet: targetWhitelist.userIdSet,
     whitelistCheck: target => targetWhitelist.isWhitelistedTarget(target)
   });
+  const persistCombatLearning = atMs => {
+    const decisionState = decisionAdapter.getState?.() || {};
+    const metrics = decisionState.combatMetrics || null;
+    if (metrics?.targetId !== null && metrics?.targetId !== undefined && metrics?.targetId !== '') {
+      options.combatCompletionTracker?.observeCombatSample?.({
+        userId: metrics.targetId,
+        name: metrics.targetName || decisionState.combatTarget?.name || '',
+        startedAt: metrics.startedAt,
+        targetDamage: metrics.targetDamage,
+        selfDamage: metrics.selfDamage,
+        atMs
+      });
+    }
+    options.combatCompletionTracker?.updateStrategyLearning?.(decisionState.combatLearning, atMs);
+  };
   const safetyController = options.safetyController || createBrowserlessSafetyController({
     now,
     frameGapAlertMs,
@@ -964,10 +979,7 @@ async function runReadOnlyCanary(config, options = {}) {
             const summary = summarizeBrowserlessDecision(decision);
             result.decisions.evaluatedCount += 1;
             result.decisions.last = summary;
-            options.combatCompletionTracker?.updateStrategyLearning?.(
-              decisionAdapter.getState?.().combatLearning,
-              atMs
-            );
+            persistCombatLearning(atMs);
             lastDecisionAtMs = atMs;
             logDecision(summary);
             result.decisions.loggedCount += 1;
@@ -1045,10 +1057,7 @@ async function runReadOnlyCanary(config, options = {}) {
               highFrequencyControl: true
             };
             const controlSummary = { action: control.action, combat: combatSummary };
-            options.combatCompletionTracker?.updateStrategyLearning?.(
-              decisionAdapter.getState?.().combatLearning,
-              atMs
-            );
+            persistCombatLearning(atMs);
             lastCombatControlAtMs = atMs;
             logCombat(combatSummary);
             let actionResult;

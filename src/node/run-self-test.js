@@ -76,6 +76,7 @@ const {
 } = require('./browserless/action-adapter');
 const {
   buildBrowserlessCombatDryRun,
+  buildCombatMovementPlan,
   estimateAim,
   recordCombatShotLearning
 } = require('./browserless/combat-adapter');
@@ -146,6 +147,8 @@ const {
   createDailyDamagePlayerTracker
 } = require('./browserless/daily-damage-player-tracker');
 const {
+  forEachJsonlEntry,
+  readJsonlEntries,
   summarizeBrowserlessLogDay,
   writeBrowserlessLogSummary
 } = require('../../scripts/browserless-log-summary');
@@ -6274,27 +6277,69 @@ async function runSelfTest() {
       got: (() => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'grasp-rat-completion-'));
         const file = path.join(dir, 'combat-learning.json');
+        fs.writeFileSync(file, JSON.stringify({
+          schemaVersion: 1,
+          updatedAt: new Date(500).toISOString(),
+          players: { 'user:8': { userId: 8, name: 'legacy-failed', attempts: 2, failures: 2, updatedAt: new Date(500).toISOString() } },
+          strategyLearning: {
+            hitRateByModeDistance: { 'retreat:edge': { shots: 99, hits: 9, targetId: 8 } },
+            modeMetrics: { 'retreat:edge': { shots: 99, targetId: 8 } },
+            lastTotalsByTarget: { 8: { targetId: 8 } },
+            recentShots: [{ targetId: 8, bulletId: 99 }],
+            acceptedBulletIds: ['99']
+          }
+        }));
         const tracker = createCombatCompletionTracker({ file, now: () => 1000 });
+        const migrated = JSON.parse(fs.readFileSync(file, 'utf8'));
         for (let index = 0; index < 6; index += 1) {
           tracker.observe({ type: 'engagement-started', userId: 8, name: 'failed', at: new Date(1000 + index * 10).toISOString() });
           tracker.observe({ type: 'not-killed', userId: 8, name: 'failed', at: new Date(1005 + index * 10).toISOString(), reason: 'active-target-missing' });
           tracker.observe({ type: 'engagement-started', userId: 9, name: 'successful', at: new Date(2000 + index * 10).toISOString() });
           tracker.observe({ type: 'killed', userId: 9, name: 'successful', at: new Date(2005 + index * 10).toISOString() });
         }
-        tracker.updateStrategyLearning({ modeMetrics: { 'retreat:edge': { shots: 12, hits: 1, updatedAt: 3000 } } }, 7000);
+        tracker.observeCombatSample({ userId: 8, name: 'failed', startedAt: 500, targetDamage: 3, selfDamage: 30, atMs: 4000 });
+        tracker.observeCombatSample({ userId: 9, name: 'successful', startedAt: 600, targetDamage: 30, selfDamage: 3, atMs: 4000 });
+        const beforeRepeatedSample = tracker.probability(8, 4000);
+        tracker.observe({ type: 'not-killed', userId: 8, name: 'failed', reason: 'manual-stop', at: new Date(4000).toISOString() });
+        tracker.observeCombatSample({ userId: 8, name: 'failed', startedAt: 500, targetDamage: 3, selfDamage: 30, atMs: 4000 });
+        const afterRepeatedSample = tracker.probability(8, 4000);
+        tracker.updateStrategyLearning({
+          hitRateByModeDistance: { 'movement=retreat|shooting=burst|stamina=high|style=human-like|distance=edge|aim=continue': { shots: 12, hits: 1, updatedAt: 3000 } },
+          modeMetrics: {
+            'movement=retreat|shooting=burst|stamina=high|style=human-like|distance=edge|aim=all': { shots: 12, hits: 1, targetId: 8, updatedAt: 3000 },
+            'retreat:edge': { shots: 99, targetId: 8, updatedAt: 4000 }
+          },
+          lastTotalsByTarget: { 8: { targetId: 8 } },
+          recentShots: [{ targetId: 8, bulletId: 99 }],
+          acceptedBulletIds: ['99']
+        }, 7000);
         const failed = tracker.probability(8, 8000);
         const successful = tracker.probability(9, 8000);
         const reloaded = createCombatCompletionTracker({ file, now: () => 8000 });
+        const failedEstimate = activeTargetCompletionEstimate({ active: true, user_id: 8, hp: 60, distance: 6000 }, { combatCompletionTracker: reloaded });
+        const successfulEstimate = activeTargetCompletionEstimate({ active: true, user_id: 9, hp: 60, distance: 6000 }, { combatCompletionTracker: reloaded });
         return [
+          migrated.schemaVersion === 2,
+          migrated.players['user:8']?.failures === 2,
+          Object.keys(migrated.strategyLearning || {}).sort().join(','),
+          migrated.strategyLearning?.modeMetrics?.['retreat:edge'] === undefined,
           failed.probability < 1 / 3,
           successful.probability > 1 / 3,
           successful.probability > failed.probability,
+          failed.escapeRate > successful.escapeRate,
+          successful.damageExchangeRatio > failed.damageExchangeRatio,
+          successfulEstimate.probability > failedEstimate.probability,
+          afterRepeatedSample.targetDamage === beforeRepeatedSample.targetDamage,
+          afterRepeatedSample.selfDamage === beforeRepeatedSample.selfDamage,
           reloaded.probability(8).source,
-          reloaded.strategyLearning()?.modeMetrics?.['retreat:edge']?.shots,
+          reloaded.strategyLearning()?.modeMetrics?.['movement=retreat|shooting=burst|stamina=high|style=human-like|distance=edge|aim=all']?.shots,
+          reloaded.strategyLearning()?.modeMetrics?.['movement=retreat|shooting=burst|stamina=high|style=human-like|distance=edge|aim=all']?.targetId === undefined,
+          reloaded.strategyLearning()?.modeMetrics?.['retreat:edge'] === undefined,
+          Object.keys(reloaded.strategyLearning() || {}).sort().join(','),
           reloaded.status().schemaVersion
         ].join('|');
       })(),
-      want: 'true|true|true|stable-user-completion-history|12|1'
+      want: 'true|true|hitRateByModeDistance,modeMetrics|true|true|true|true|true|true|true|true|true|stable-user-completion-history|12|true|true|hitRateByModeDistance,modeMetrics|2'
     },
     {
       name: 'browserless runtime revision resolves directly from Git metadata without repository trust',
@@ -11115,6 +11160,41 @@ async function runSelfTest() {
       want: '1|0||9'
     },
     {
+      name: 'browserless combat hit learning credits confirmed bullet nearest created-tick arrival',
+      got: (() => {
+        const stateful = {};
+        const confirmed = [
+          {
+            targetId: '8', bullet_id: 101, acceptedAtMs: 1000, createdTick: 100,
+            flightTicks: 20, targetX: 1000, targetY: 0, hypothesis: 'continue'
+          },
+          {
+            targetId: '8', bullet_id: 102, acceptedAtMs: 1100, createdTick: 110,
+            flightTicks: 2, targetX: 1000, targetY: 0, hypothesis: 'stop'
+          }
+        ];
+        const stateAt = (tick, hp, shots) => ({
+          userId: 7,
+          realtime: {
+            tick,
+            self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100 },
+            entities: [
+              { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100 },
+              { entity_id: 2, user_id: 8, name: 'enemy', x: 1000, y: 0, hp, current_join_mode: 'Active', firing: true }
+            ],
+            bullets: []
+          },
+          command: { shooting: { confirmedShots: shots } }
+        });
+        buildBrowserlessCombatDryRun(stateAt(100, 100, confirmed.slice(0, 1)), { nowMs: 1000, decisionState: stateful, combatEnabled: true });
+        buildBrowserlessCombatDryRun(stateAt(110, 100, confirmed), { nowMs: 1100, decisionState: stateful, combatEnabled: true });
+        const after = buildBrowserlessCombatDryRun(stateAt(112, 97, confirmed), { nowMs: 1200, decisionState: stateful, combatEnabled: true });
+        const credited = stateful.combatLearning.recentShots.filter(item => item.credited).map(item => item.bulletId).join(',');
+        return [credited, after.metrics.acceptedShots, after.metrics.confirmedHits, after.metrics.targetDamage].join('|');
+      })(),
+      want: '102|2|1|3'
+    },
+    {
       name: 'browserless incoming shooter overrides engaged combat target',
       got: (() => {
         const stateful = {
@@ -11461,6 +11541,31 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'script-transition-matrix|right-turn|east|north'
+    },
+    {
+      name: 'browserless pre-dodge requires low-variation firing cadence before induce hold',
+      got: (() => {
+        const self = { user_id: 7, x: 0, y: 0, vx: 50, vy: 0, hp: 100, stamina_5s_remaining_milli: 10000 };
+        const target = { user_id: 8, x: 9500, y: 0, vx: 0, vy: 0, hp: 80, distance: 9500 };
+        const samples = [1000, 1400, 1800, 2200].map(at => ({ at, newBulletCount: 1 }));
+        const plan = cv => buildCombatMovementPlan(self, target, [], {
+          nowMs: 2200,
+          combatTargetState: {
+            opponentBehaviorState: {
+              mode: 'pressure-shooter',
+              samples,
+              metrics: { shotIntervals: [400, 400, 400], shotIntervalMeanMs: 400, shotIntervalCv: cv },
+              dimensions: { controlStyle: { state: 'periodic-script', confidence: 0.8 } },
+              responsePolicy: { closeIn: false }
+            }
+          },
+          executionTiming: { p90Ticks: 9 }
+        });
+        const regular = plan(0.05);
+        const irregular = plan(0.8);
+        return [regular.preDodge?.phase, regular.preDodge?.nextShotInMs, irregular.preDodge === null].join('|');
+      })(),
+      want: 'induce-hold|400|true'
     },
     {
       name: 'browserless combat engagement records motion samples for aim confidence',
@@ -14615,6 +14720,28 @@ async function runSelfTest() {
         ].join('|');
       }),
       want: '5|2|1|1|1|2|1|1|1|1|summary.json|5'
+    },
+    {
+      name: 'browserless log reader preserves utf8 and parse diagnostics across tiny chunks',
+      got: withTempDirForTest(async dir => {
+        const file = path.join(dir, 'chunked.jsonl');
+        fs.writeFileSync(file, [
+          JSON.stringify({ at: '2026-07-14T00:00:00Z', type: '消息', detail: { text: '跨块读取' } }),
+          '{bad-json',
+          JSON.stringify({ at: '2026-07-14T00:00:01Z', type: 'tail' })
+        ].join('\n'));
+        const streamed = [];
+        const lines = forEachJsonlEntry(file, (entry, line) => streamed.push([line, entry.type, entry.detail?.text || entry.detail?.line || '']), { chunkBytes: 7 });
+        const collected = readJsonlEntries(file);
+        return [
+          lines,
+          streamed.map(item => item.join(':')).join(','),
+          collected.length,
+          collected[1].type,
+          /readFileSync/.test(readJsonlEntries.toString())
+        ].join('|');
+      }),
+      want: '3|1:消息:跨块读取,2:parse-error:2,3:tail:|3|parse-error|false'
     },
     {
       name: 'browserless action parity audit normalizes known decision cases',

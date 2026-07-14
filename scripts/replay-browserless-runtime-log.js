@@ -11,7 +11,7 @@ const {
   evaluateConfirmedCombatHpExitCore,
   evaluateCombatHpExitCore
 } = require('../src/strategy/combat-exit');
-const { pickSafeClosingDodgeCore } = require('../src/strategy/combat-movement');
+const { calculateDodgeDirection, pickSafeClosingDodgeCore } = require('../src/strategy/combat-movement');
 const { opponentResponsePolicyCore, updateOpponentBehaviorStateCore } = require('../src/strategy/opponent-behavior');
 
 function parseArgs(argv) {
@@ -400,15 +400,162 @@ function replayCombat(options) {
   return result;
 }
 
+function fitLegacyThreatImpactPoint(detail, threatField, tickMs = 50, moveSpeedPerTick = 50) {
+  const self = detail?.self;
+  if (!self || !Array.isArray(threatField) || threatField.length < 3) return null;
+  const usable = threatField
+    .map(item => {
+      const minTTI = Number(item?.minTTI);
+      const radius = Number(item?.minCPA);
+      const dx = Number(item?.dx);
+      const dy = Number(item?.dy);
+      if (![minTTI, radius, dx, dy].every(Number.isFinite) || minTTI <= 0 || radius < 0) return null;
+      const futureTicks = minTTI / tickMs;
+      const diagonalScale = dx && dy ? Math.SQRT1_2 : 1;
+      return {
+        item,
+        x: Number(self.x || 0) + dx * diagonalScale * moveSpeedPerTick * futureTicks,
+        y: Number(self.y || 0) + dy * diagonalScale * moveSpeedPerTick * futureTicks,
+        radius
+      };
+    })
+    .filter(Boolean);
+  if (usable.length < 3) return null;
+  const reference = usable[0];
+  let aa = 0;
+  let ab = 0;
+  let bb = 0;
+  let ac = 0;
+  let bc = 0;
+  for (let index = 1; index < usable.length; index += 1) {
+    const point = usable[index];
+    const a = 2 * (point.x - reference.x);
+    const b = 2 * (point.y - reference.y);
+    const c = point.x * point.x + point.y * point.y
+      - reference.x * reference.x - reference.y * reference.y
+      - point.radius * point.radius + reference.radius * reference.radius;
+    aa += a * a;
+    ab += a * b;
+    bb += b * b;
+    ac += a * c;
+    bc += b * c;
+  }
+  const determinant = aa * bb - ab * ab;
+  if (!Number.isFinite(determinant) || Math.abs(determinant) < 1e-6) return null;
+  const x = (ac * bb - bc * ab) / determinant;
+  const y = (bc * aa - ac * ab) / determinant;
+  if (![x, y].every(Number.isFinite)) return null;
+  const residuals = usable.map(point => Math.abs(Math.hypot(x - point.x, y - point.y) - point.radius));
+  return {
+    x,
+    y,
+    fitRmsCm: Math.sqrt(residuals.reduce((sum, value) => sum + value * value, 0) / residuals.length),
+    fitMaxCm: Math.max(...residuals),
+    sampleCount: usable.length
+  };
+}
+
+function reconstructDodgeHit(rows, hitIndex, options = {}) {
+  const tickMs = 50;
+  const bulletSpeed = 500;
+  const hitRow = rows[hitIndex];
+  const hitAt = Date.parse(hitRow.entry.at);
+  const hitSelf = hitRow.detail?.self;
+  if (!hitSelf || !Number.isFinite(hitAt)) return null;
+  const candidates = [];
+  for (let cursor = hitIndex - 1; cursor >= 0; cursor -= 1) {
+    const row = rows[cursor];
+    const observedAt = Date.parse(row.entry.at);
+    const elapsedMs = hitAt - observedAt;
+    if (elapsedMs > 1600) break;
+    if (elapsedMs <= 0 || row.detail?.runId !== hitRow.detail?.runId) continue;
+    const field = row.detail?.movement?.dodge?.threatField;
+    if (!Array.isArray(field) || field.length < 3 || !row.detail?.self) continue;
+    const selectedDx = Number(row.detail.movement?.dx || 0);
+    const selectedDy = Number(row.detail.movement?.dy || 0);
+    const legacySelected = field.find(item => Number(item.dx) === selectedDx && Number(item.dy) === selectedDy) || null;
+    if (!legacySelected || Number(legacySelected.directHits || 0) !== 0) continue;
+    const fit = fitLegacyThreatImpactPoint(row.detail, field, tickMs, 50);
+    if (!fit || fit.fitRmsCm > 120 || fit.fitMaxCm > 260) continue;
+    const minTTIMs = Number(legacySelected.minTTI);
+    if (!Number.isFinite(minTTIMs) || minTTIMs <= 0) continue;
+    const elapsedTicks = elapsedMs / tickMs;
+    const staticImpactTicks = minTTIMs / tickMs;
+    const postStaticTicks = elapsedTicks - staticImpactTicks;
+    if (Math.abs(postStaticTicks) < 0.25) continue;
+    const impactDeltaX = Number(hitSelf.x) - fit.x;
+    const impactDeltaY = Number(hitSelf.y) - fit.y;
+    const impactDelta = Math.hypot(impactDeltaX, impactDeltaY);
+    if (!Number.isFinite(impactDelta) || impactDelta <= 0) continue;
+    const expectedTravel = Math.abs(postStaticTicks) * bulletSpeed;
+    const kinematicErrorCm = Math.abs(impactDelta - expectedTravel);
+    if (kinematicErrorCm > 260) continue;
+    const sign = Math.sign(postStaticTicks);
+    const direction = {
+      dx: sign * impactDeltaX / impactDelta,
+      dy: sign * impactDeltaY / impactDelta
+    };
+    const bullet = {
+      incoming: true,
+      x: fit.x - direction.dx * bulletSpeed * staticImpactTicks,
+      y: fit.y - direction.dy * bulletSpeed * staticImpactTicks,
+      distance: Math.hypot(
+        Number(row.detail.self.x) - (fit.x - direction.dx * bulletSpeed * staticImpactTicks),
+        Number(row.detail.self.y) - (fit.y - direction.dy * bulletSpeed * staticImpactTicks)
+      ),
+      cpa: Number(legacySelected.minCPA),
+      timeToImpact: minTTIMs,
+      speed: bulletSpeed,
+      direction,
+      remainingTicks: Math.max(1, Math.ceil(elapsedTicks))
+    };
+    const replayed = calculateDodgeDirection(row.detail.self, [bullet], {
+      moveSpeedPerTick: 50,
+      tickMs,
+      hitRadius: 200,
+      commandDelayTicks: Number(options.executionDelayTicks || 5),
+      maxTrajectoryTicks: 60,
+      target: row.detail.target
+    });
+    const replayedSelected = replayed.threatField?.find(item => Number(item.dx) === selectedDx && Number(item.dy) === selectedDy) || null;
+    if (!replayedSelected) continue;
+    candidates.push({
+      row,
+      elapsedMs,
+      minTTIMs,
+      postStaticMs: elapsedMs - minTTIMs,
+      legacySelected,
+      replayedSelected,
+      replayed,
+      fit,
+      kinematicErrorCm,
+      qualityScore: fit.fitRmsCm + kinematicErrorCm
+    });
+  }
+  if (!candidates.length) return null;
+  const reliable = candidates.filter(candidate => candidate.elapsedMs >= candidate.minTTIMs - tickMs);
+  const pool = reliable.length ? reliable : candidates;
+  return pool.sort((a, b) => Date.parse(a.row.entry.at) - Date.parse(b.row.entry.at)
+    || a.qualityScore - b.qualityScore)[0];
+}
+
 function replayDodge(options) {
   const rows = selectedEntries(options).filter(({ detail }) => !options.targetId
     || String(detail.target?.userId ?? '') === options.targetId);
   const reactionBudgetMs = Math.max(0, Number(options.executionDelayTicks || 5) * 50 + 50 + 100);
   let hitEvents = 0;
+  let eventsWithThreatEvidence = 0;
+  let reconstructedEvents = 0;
   let oldFalseSafe = 0;
   let newFalseSafe = 0;
   let unavoidable = 0;
+  let oldFalseSafeUnavoidable = 0;
+  let recoveredByFullTrajectory = 0;
+  let recoveredAfterStaticTti = 0;
+  let recoveredBeforeStaticTti = 0;
+  let reconstructedOldFalseSafe = 0;
   const samples = [];
+  const fullTrajectorySamples = [];
   for (let index = 1; index < rows.length; index += 1) {
     const previousHp = Number(rows[index - 1].detail.self?.hp);
     const currentHp = Number(rows[index].detail.self?.hp);
@@ -426,18 +573,60 @@ function replayDodge(options) {
       if (threat) break;
     }
     if (!threat) continue;
+    eventsWithThreatEvidence += 1;
     const oldSafe = Number(threat.directHits || 0) === 0;
     const currentUnavoidable = Number(threat.minTTI || Infinity) < reactionBudgetMs;
     if (oldSafe) oldFalseSafe += 1;
     if (currentUnavoidable) unavoidable += 1;
-    if (oldSafe && !currentUnavoidable) newFalseSafe += 1;
+    const reconstruction = oldSafe ? reconstructDodgeHit(rows, index, options) : null;
+    const effectiveUnavoidable = oldSafe && Number(
+      reconstruction?.minTTIMs ?? threat.minTTI ?? Infinity
+    ) < reactionBudgetMs;
+    const recovered = Boolean(reconstruction && Number(reconstruction.replayedSelected.directHits || 0) > 0);
+    if (effectiveUnavoidable) oldFalseSafeUnavoidable += 1;
+    if (reconstruction) {
+      reconstructedEvents += 1;
+      reconstructedOldFalseSafe += 1;
+      if (recovered) {
+        recoveredByFullTrajectory += 1;
+        if (reconstruction.postStaticMs > 0) recoveredAfterStaticTti += 1;
+        else recoveredBeforeStaticTti += 1;
+        if (fullTrajectorySamples.length < 12) fullTrajectorySamples.push({
+          hitAt: rows[index].entry.at,
+          observedAt: reconstruction.row.entry.at,
+          hpLoss: previousHp - currentHp,
+          observedTtiMs: reconstruction.minTTIMs,
+          hitAfterObservationMs: reconstruction.elapsedMs,
+          postStaticTtiMs: reconstruction.postStaticMs,
+          legacyMinCpaCm: Number(reconstruction.legacySelected.minCPA),
+          replayedMinCpaCm: Number(reconstruction.replayedSelected.minCPA),
+          replayedDirectHits: Number(reconstruction.replayedSelected.directHits || 0),
+          fieldFitRmsCm: reconstruction.fit.fitRmsCm,
+          kinematicErrorCm: reconstruction.kinematicErrorCm
+        });
+      }
+    }
+    if (oldSafe && !effectiveUnavoidable && !recovered) newFalseSafe += 1;
     if (samples.length < 12) samples.push({
       at: rows[index].entry.at,
       hpLoss: previousHp - currentHp,
       oldDirectHits: Number(threat.directHits || 0),
       minTTI: Number(threat.minTTI || 0),
       reactionBudgetMs,
-      classification: currentUnavoidable ? 'unavoidable-current-shot' : (oldSafe ? 'false-safe-remains' : 'predicted-threat')
+      classification: reconstruction
+        ? (recovered ? 'recovered-by-full-trajectory' : (effectiveUnavoidable ? 'unavoidable-current-shot' : 'reconstructed-false-safe-remains'))
+        : (currentUnavoidable ? 'unavoidable-current-shot' : (oldSafe ? 'false-safe-remains' : 'predicted-threat')),
+      reconstruction: reconstruction ? {
+        observedAt: reconstruction.row.entry.at,
+        observedTtiMs: reconstruction.minTTIMs,
+        hitAfterObservationMs: reconstruction.elapsedMs,
+        postStaticTtiMs: reconstruction.postStaticMs,
+        legacyMinCpaCm: Number(reconstruction.legacySelected.minCPA),
+        replayedMinCpaCm: Number(reconstruction.replayedSelected.minCPA),
+        replayedDirectHits: Number(reconstruction.replayedSelected.directHits || 0),
+        fieldFitRmsCm: reconstruction.fit.fitRmsCm,
+        kinematicErrorCm: reconstruction.kinematicErrorCm
+      } : null
     });
   }
   const oldRatio = hitEvents ? oldFalseSafe / hitEvents : null;
@@ -447,14 +636,35 @@ function replayDodge(options) {
     targetId: options.targetId || '',
     lines: `${options.startLine}-${options.endLine}`,
     hitEvents,
+    eventsWithThreatEvidence,
     reactionBudgetMs,
     oldFalseSafe,
     newFalseSafe,
     unavoidableCurrentShot: unavoidable,
+    oldFalseSafeUnavoidable,
+    reconstructedEvents,
+    reconstructedOldFalseSafe,
+    recoveredByFullTrajectory,
+    recoveredAfterStaticTti,
+    recoveredBeforeStaticTti,
+    reclassifiedOldFalseSafe: Math.max(0, oldFalseSafe - newFalseSafe),
+    reconstructionCriteria: {
+      lookbackMs: 1600,
+      bulletSpeedCmPerTick: 500,
+      hitRadiusCm: 200,
+      maximumFieldFitRmsCm: 120,
+      maximumFieldFitErrorCm: 260,
+      maximumKinematicErrorCm: 260
+    },
     oldFalseSafeRatio: oldRatio,
     newFalseSafeRatio: newRatio,
     samples,
-    accepted: hitEvents > 0 && newFalseSafe < oldFalseSafe
+    fullTrajectorySamples,
+    accepted: hitEvents > 0
+      && reconstructedEvents > 0
+      && recoveredByFullTrajectory > 0
+      && recoveredAfterStaticTti > 0
+      && newFalseSafe < oldFalseSafe
   };
 }
 
