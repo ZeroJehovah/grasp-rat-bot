@@ -41,6 +41,17 @@ function shouldHoldPreviousFinalAction(previousAction, previousFocus, currentAct
   if (previousRank <= 0 || currentRank <= 0) return false;
   if (currentRank > previousRank) return false;
   if (previousBand === currentBand && previousBand !== 'profit') return false;
+  if (previousBand === 'profit' && currentBand === 'profit') {
+    const previousRoi = Number(previousAction.finalCandidate?.netROI ?? previousAction.netROI ?? previousAction.roiScore ?? previousAction.score);
+    const currentRoi = Number(currentAction.finalCandidate?.netROI ?? currentAction.netROI ?? currentAction.roiScore ?? currentAction.score);
+    const switchCost = Math.max(0, Number(currentAction.finalCandidate?.switchCost ?? currentAction.switchCost ?? 0));
+    if (Number.isFinite(previousRoi) && Number.isFinite(currentRoi)) {
+      const requiredRatio = Math.max(1.05, Number(options.profitSwitchRoiRatio || 1.15));
+      const effectiveCurrent = currentRoi / Math.max(1, 1 + switchCost / 1000);
+      return effectiveCurrent < previousRoi * requiredRatio;
+    }
+    return true;
+  }
   if (previousBand === 'profit' && currentBand !== 'profit') return false;
   if (previousBand === 'safety' && currentBand === 'combat') return false;
   return true;

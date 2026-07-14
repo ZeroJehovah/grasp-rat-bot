@@ -40,7 +40,8 @@ function actionFocusTargetType(action, target) {
 }
 
 function actionFocusId(target, fallback = '') {
-  const id = target?.id ?? target?.user_id ?? target?.drop_id ?? target?.coin_id ?? target?.targetId;
+  const id = target?.userId ?? target?.id ?? target?.user_id ?? target?.drop_id ?? target?.dropId
+    ?? target?.coin_id ?? target?.coinId ?? target?.targetId;
   if (id !== undefined && id !== null && id !== '') return String(id);
   const name = target?.name || target?.label;
   if (name) return 'name:' + String(name);

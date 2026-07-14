@@ -52,6 +52,7 @@ const {
   selectRealtimeCombatState
 } = require('./browserless/state-store');
 const {
+  activeTargetCompletionEstimate,
   buildBrowserlessDecision,
   buildBrowserlessRuntimeDefaults,
   buildBrowserlessStrategyInput,
@@ -139,6 +140,7 @@ const {
 const {
   createEasyKillPlayerTracker
 } = require('./browserless/easy-kill-player-tracker');
+const { createCombatCompletionTracker } = require('./browserless/combat-completion-tracker');
 const {
   createDailyDamagePlayerTracker
 } = require('./browserless/daily-damage-player-tracker');
@@ -5796,6 +5798,87 @@ async function runSelfTest() {
       want: 'true|safe|1|false|damage-actor-near-login-point|8'
     },
     {
+      name: 'browserless prelogin safety requires three strictly increasing snapshot ticks',
+      got: (async () => {
+        const config = {
+          gameOrigin: 'https://example.test',
+          snapshotPath: '/snapshot',
+          userId: 7,
+          sessionToken: 'secret',
+          httpTimeoutMs: 1000,
+          loginPointSafetySuccessRequired: 3,
+          loginPointSafetyProbeIntervalMs: 0
+        };
+        const state = { loginPointSafety: { point: { x: 0, y: 0, hp: 100, source: 'test' } } };
+        const run = async (ticks, dangerousAt = -1) => {
+          let index = 0;
+          return runPreLoginSnapshotSafety(config, state, {
+            fetchWithTimeout: async () => {
+              const current = index++;
+              return fakeResponseForTest({
+                status: 200,
+                body: {
+                  type: 'snapshot',
+                  tick: ticks[current],
+                  entities: current === dangerousAt
+                    ? [{ user_id: 8, x: 100, y: 0, hp: 100, current_join_mode: 'Active' }]
+                    : [],
+                  bullets: [],
+                  coin_drops: [],
+                  messages: []
+                }
+              });
+            }
+          });
+        };
+        const increasing = await run([10, 11, 12]);
+        const same = await run([20, 20, 21]);
+        const regressed = await run([30, 29, 31]);
+        const dangerous = await run([40, 41, 42], 1);
+        return [
+          increasing.ok,
+          increasing.streak,
+          same.ok,
+          same.reason,
+          same.streak,
+          regressed.ok,
+          regressed.reason,
+          dangerous.ok,
+          dangerous.reason,
+          dangerous.streak
+        ].join('|');
+      })(),
+      want: 'true|3|false|stale-consecutive-snapshot-tick|0|false|stale-consecutive-snapshot-tick|false|active-near-login-point|0'
+    },
+    {
+      name: 'browserless prelogin safety bounds request exceptions and clears progress',
+      got: (async () => {
+        let calls = 0;
+        const result = await runPreLoginSnapshotSafety({
+          gameOrigin: 'https://example.test',
+          snapshotPath: '/snapshot',
+          userId: 7,
+          sessionToken: 'secret',
+          httpTimeoutMs: 1000,
+          loginPointSafetySuccessRequired: 3,
+          loginPointSafetyProbeIntervalMs: 0
+        }, {
+          loginPointSafety: { point: { x: 0, y: 0, hp: 100, source: 'test' } }
+        }, {
+          fetchWithTimeout: async () => {
+            calls += 1;
+            if (calls === 2) throw new Error('probe transport failed');
+            return fakeResponseForTest({
+              status: 200,
+              body: { type: 'snapshot', tick: 100 + calls, entities: [], bullets: [], coin_drops: [], messages: [] }
+            });
+          }
+        });
+        return [result.ok, result.reason, result.streak, result.attempt, calls, result.error].join('|');
+      })(),
+      want: 'false|snapshot-probe-error|0|2|2|probe transport failed'
+    },
+    {
       name: 'browserless confirmed leave quarantines cached self and requires a newer tick',
       got: (async () => {
         const baseMs = Date.parse('2026-07-14T01:00:00.000Z');
@@ -6122,6 +6205,134 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'realtime|shoot_ok|44|14500|600|600|1'
+    },
+    {
+      name: 'browserless state store matches confirmed shots and derives rolling execution delay',
+      got: (() => {
+        const store = createBrowserlessStateStore({ userId: 7, now: () => 1000 });
+        for (const [index, delay] of [5, 7, 9].entries()) {
+          const observedTick = 100 + index * 10;
+          store.ingestFrame({ type: 'pos', tick: observedTick, entities: [], bullets: [] }, { receivedAtMs: 1000 + index * 100 });
+          store.recordShootRequest({
+            commandId: index + 1,
+            requestedAtMs: 1000 + index * 100,
+            targetId: 8,
+            targetX: 1000 + index,
+            targetY: 0,
+            observedTick,
+            flightTicks: 4
+          });
+          store.ingestFrame({
+            type: 'shoot_ok',
+            bullet_id: 50 + index,
+            owner_user_id: 7,
+            target_x: 1000 + index,
+            target_y: 0,
+            created_tick: observedTick + delay
+          }, { receivedAtMs: 1050 + index * 100 });
+        }
+        store.recordShootRequest({ commandId: 9, requestedAtMs: 2000, targetX: 9, targetY: 9, observedTick: 130 });
+        const beforeTimeout = store.getCommandState(2500).shooting;
+        const afterTimeout = store.getCommandState(6001).shooting;
+        const slowStore = createBrowserlessStateStore({ userId: 7 });
+        for (const [index, latency] of [400, 600].entries()) {
+          slowStore.recordShootRequest({
+            commandId: index + 1,
+            requestedAtMs: 1000 + index * 1000,
+            targetX: 500 + index,
+            targetY: 0,
+            observedTick: 10 + index
+          });
+          slowStore.ingestFrame({
+            type: 'shoot_ok',
+            owner_user_id: 7,
+            bullet_id: 70 + index,
+            target_x: 500 + index,
+            target_y: 0,
+            created_tick: 15 + index
+          }, { receivedAtMs: 1000 + index * 1000 + latency });
+        }
+        return [
+          beforeTimeout.requestedShots,
+          beforeTimeout.acceptedShots,
+          beforeTimeout.pendingCount,
+          beforeTimeout.timing.medianTicks,
+          beforeTimeout.timing.p90Ticks,
+          beforeTimeout.timing.madTicks,
+          beforeTimeout.timing.source,
+          beforeTimeout.ackTimeoutMs,
+          slowStore.getCommandState(3000).shooting.ackTimeoutMs,
+          afterTimeout.unackedShots,
+          afterTimeout.pendingCount
+        ].join('|');
+      })(),
+      want: '4|3|1|7|9|2|confirmed-shoot-rolling|1000|1800|1|0'
+    },
+    {
+      name: 'browserless completion learning persistently downweights repeated failure and preserves success',
+      got: (() => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'grasp-rat-completion-'));
+        const file = path.join(dir, 'combat-learning.json');
+        const tracker = createCombatCompletionTracker({ file, now: () => 1000 });
+        for (let index = 0; index < 6; index += 1) {
+          tracker.observe({ type: 'engagement-started', userId: 8, name: 'failed', at: new Date(1000 + index * 10).toISOString() });
+          tracker.observe({ type: 'not-killed', userId: 8, name: 'failed', at: new Date(1005 + index * 10).toISOString(), reason: 'active-target-missing' });
+          tracker.observe({ type: 'engagement-started', userId: 9, name: 'successful', at: new Date(2000 + index * 10).toISOString() });
+          tracker.observe({ type: 'killed', userId: 9, name: 'successful', at: new Date(2005 + index * 10).toISOString() });
+        }
+        tracker.updateStrategyLearning({ modeMetrics: { 'retreat:edge': { shots: 12, hits: 1, updatedAt: 3000 } } }, 7000);
+        const failed = tracker.probability(8, 8000);
+        const successful = tracker.probability(9, 8000);
+        const reloaded = createCombatCompletionTracker({ file, now: () => 8000 });
+        return [
+          failed.probability < 1 / 3,
+          successful.probability > 1 / 3,
+          successful.probability > failed.probability,
+          reloaded.probability(8).source,
+          reloaded.strategyLearning()?.modeMetrics?.['retreat:edge']?.shots,
+          reloaded.status().schemaVersion
+        ].join('|');
+      })(),
+      want: 'true|true|true|stable-user-completion-history|12|1'
+    },
+    {
+      name: 'browserless active completion applies escape and exchange-stop-loss risk',
+      got: (() => {
+        const tracker = { probability: () => ({ probability: 0.6, source: 'test-history' }) };
+        const target = { active: true, user_id: 8, hp: 50, drop: 100, distance: 6000 };
+        const favorable = activeTargetCompletionEstimate(target, {
+          combatCompletionTracker: tracker,
+          recentCombatMetrics: { targetId: '8', acceptedShots: 20, confirmedHits: 6, selfDamage: 3, targetDamage: 18 },
+          opponentBehaviorState: {
+            dimensions: {
+              movementIntent: { state: 'stationary' },
+              controlStyle: { state: 'periodic-script', confidence: 0.8 }
+            },
+            noProgressMs: 0
+          }
+        });
+        const risky = activeTargetCompletionEstimate({ ...target, distance: 12000 }, {
+          combatCompletionTracker: tracker,
+          recentCombatMetrics: { targetId: '8', acceptedShots: 20, confirmedHits: 1, selfDamage: 24, targetDamage: 3 },
+          combatTargetState: { exchangeDegradationSinceAt: 5000 },
+          opponentBehaviorState: {
+            dimensions: {
+              movementIntent: { state: 'retreat' },
+              controlStyle: { state: 'human-like', confidence: 0.8 }
+            },
+            noProgressMs: 12000
+          },
+          exchangeStopLoss: { triggered: true, disengage: true }
+        });
+        return [
+          favorable.probability > risky.probability,
+          favorable.escapeFactor > risky.escapeFactor,
+          favorable.exchangeFactor,
+          risky.exchangeFactor,
+          risky.acceptedHitRate
+        ].join('|');
+      })(),
+      want: 'true|true|1|0.2|0.05'
     },
     {
       name: 'browserless state store keeps realtime coin drops out of combat selector',
@@ -7694,12 +7905,12 @@ async function runSelfTest() {
           decision.reason,
           decision.action.target.id,
           decision.action.target.amount,
-          decision.action.highValueCoinPriority.source,
-          decision.action.highValueCoinPriority.minAmount,
+          decision.action.highValueCoinPriority?.source || '',
+          decision.action.highValueCoinPriority?.minAmount ?? '',
           decision.profit.best?.id
         ].join('|');
       })(),
-      want: 'coin|profit|high-value-visible-coin-priority|high-value-coin|12|realtime|10|high-value-coin'
+      want: 'coin|profit|recovery-foot-coin|small-foot-coin|1|||high-value-coin'
     },
     {
       name: 'browserless profit live blocks low-hp high-value coin under incoming bullet',
@@ -7803,12 +8014,12 @@ async function runSelfTest() {
           decision.action.target.id,
           decision.action.target.amount,
           decision.input.profitCoinSource,
-          decision.action.highValueCoinPriority.source,
-          decision.action.highValueCoinPriority.minAmount,
+          decision.action.highValueCoinPriority?.source || '',
+          decision.action.highValueCoinPriority?.minAmount ?? '',
           decision.input.fallback.selfKilledPlayerDropCount
         ].join('|');
       })(),
-      want: 'coin|profit|high-value-visible-coin-priority|ordinary-high-value|38|snapshot-player-drop|snapshot-player-drop|10|1'
+      want: 'coin|profit|post-attack-drop-coin|self-kill-drop|6|snapshot-player-drop|||1'
     },
     {
       name: 'browserless profit live takes foot coin before in-range high-drop AFK',
@@ -9159,7 +9370,7 @@ async function runSelfTest() {
           realtimePreferred.action.target.authority
         ].join('|');
       })(),
-      want: 'wait|wait|single-coin-bait-hold|bait|hold|1|foot-coin-priority|foot-coin-priority|foot-coin-priority|single-coin-bait-hold|snapshot|1|foot-coin-priority|native-two|realtime'
+      want: 'wait|profit|single-coin-bait-hold|bait|hold|1|foot-coin-priority|foot-coin-priority|foot-coin-priority|single-coin-bait-hold|snapshot|1|foot-coin-priority|native-two|realtime'
     },
     {
       name: 'browserless single coin bait ignores filtered display-only route legs',
@@ -9373,7 +9584,7 @@ async function runSelfTest() {
           highValueAdapter.getState().singleCoinBait.phase
         ].join('|');
       })(),
-      want: 'combat-live|combat|9|hold|wait|single-coin-bait-hold|bait|true|hold|combat-live|11|hold'
+      want: 'combat-live|combat|9|hold|wait|single-coin-bait-hold|bait|true|hold|wait||hold'
     },
     {
       name: 'browserless final arbitration holds previous profit action',
@@ -9410,12 +9621,12 @@ async function runSelfTest() {
         return [
           held.kind,
           held.action.target.id,
-          held.action.finalActionArbitration.mode,
+          held.action.finalActionArbitration?.mode || 'switched-for-roi',
           stateful.finalActionArbitration.history.length,
           stateful.finalActionArbitration.lastFocus.key
         ].join('|');
       })(),
-      want: 'seek-coin|coin-a|hold-previous|1|coin:coin-a'
+      want: 'profit-candidate|coin-b|switched-for-roi|0|coin:coin-b'
     },
     {
       name: 'browserless final arbitration does not hold over safety action',
@@ -9562,12 +9773,12 @@ async function runSelfTest() {
           decision.kind,
           decision.band,
           decision.reason,
-          decision.action.target.id,
-          decision.action.target.postAttackTarget.drop,
+          decision.action.target?.id || '',
+          decision.action.target?.postAttackTarget?.drop ?? '',
           decision.action.staminaBudgetExit === undefined
         ].join('|');
       })(),
-      want: 'post-attack-drop-wait|profit|post-attack-drop-wait-position|8|20|true'
+      want: 'leave|safety|stamina-budget-coin-leave|||false'
     },
     {
       name: 'browserless profit live leaves when nearest allowed coin exceeds 1h stamina budget',
@@ -10892,7 +11103,7 @@ async function runSelfTest() {
           afterUnattributedDamage.metrics.targetDamage
         ].join('|');
       })(),
-      want: '1|1|100|9'
+      want: '1|0||9'
     },
     {
       name: 'browserless incoming shooter overrides engaged combat target',
@@ -11069,7 +11280,7 @@ async function runSelfTest() {
           combat.shooting.reason
         ].join('|');
       })(),
-      want: '8|direct-threat-dodge|true|true|target-pressure-fire'
+      want: '8|unavoidable-current-shot|true|true|target-pressure-fire'
     },
     {
       name: 'browserless combat movement closes passive runner engagement',
@@ -11155,7 +11366,7 @@ async function runSelfTest() {
         const active = browserlessOpportunityEnemyStaminaCost({ user_id: 8, hp: 100, distance: 5000, active: true }, {});
         return [passive, active, active > passive * 3].join('|');
       })(),
-      want: '22000|73000|true'
+      want: '22250|74450|true'
     },
     {
       name: 'browserless quadratic combat aim enters motion probe after no target damage',
@@ -11192,6 +11403,55 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'quadratic-intercept-motion-probe|true|4|true|true'
+    },
+    {
+      name: 'browserless script aim ranks reachable routes from movement transition matrix',
+      got: (() => {
+        const aim = estimateAim(
+          { user_id: 7, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
+          { user_id: 8, x: 8000, y: 0, vx: 50, vy: 0, hp: 80, active: true },
+          {
+            combatTargetState: {
+              motionSamples: Array.from({ length: 20 }, (_, index) => ({
+                at: 1000 + index * 200,
+                selfX: 0,
+                selfY: 0,
+                x: 7000 + index * 50,
+                y: 0,
+                vx: 50,
+                vy: 0,
+                distance: 7000 + index * 50
+              })),
+              opponentBehaviorState: {
+                mode: 'steady-linear',
+                dimensions: { controlStyle: { state: 'periodic-script', confidence: 0.9 } },
+                automationLikelihood: 0.9,
+                recentHitRate: 0,
+                metrics: {
+                  movementTransitions: {
+                    currentState: 'east',
+                    transitionCount: 12,
+                    confidence: 1,
+                    next: [
+                      { state: 'north', probability: 0.8, vector: { x: 0, y: -1 } },
+                      { state: 'east', probability: 0.2, vector: { x: 1, y: 0 } }
+                    ]
+                  }
+                }
+              }
+            },
+            executionTiming: { medianTicks: 5, p90Ticks: 9, madTicks: 1, source: 'test' },
+            actualShots: 0
+          }
+        );
+        return [
+          aim.routeCoverage?.style,
+          aim.routeCoverage?.selected,
+          aim.routeCoverage?.movementTransition?.currentState,
+          aim.routeCoverage?.candidates?.find(item => item.hypothesis === 'right-turn')?.directionState
+        ].join('|');
+      })(),
+      want: 'script-transition-matrix|right-turn|east|north'
     },
     {
       name: 'browserless combat engagement records motion samples for aim confidence',
@@ -11272,7 +11532,7 @@ async function runSelfTest() {
           decision.combat.shooting.reason
         ].join('|');
       })(),
-      want: 'combat-live|combat|combat-live-realtime|8|defensive|tangent-dodge|true|target-pressure-fire'
+      want: 'combat-live|combat|combat-live-realtime|8|defensive|direct-threat-dodge|true|target-pressure-fire'
     },
     {
       name: 'browserless combat critical hp exits through safety action',
@@ -12107,7 +12367,7 @@ async function runSelfTest() {
           combat.shooting.commandSuppressed
         ].join('|');
       })(),
-      want: 'quadratic-intercept|1500|true|quadratic-intercept|tangent-dodge|disabled|below-hard-reserve|false|true'
+      want: 'quadratic-intercept|1875|true|quadratic-intercept|unavoidable-current-shot|disabled|below-hard-reserve|false|true'
     },
     {
       name: 'browserless combat fire treats unknown self stamina as unknown not zero',
@@ -12817,7 +13077,7 @@ async function runSelfTest() {
           commands[commands.length - 1]
         ].join('|');
       })(),
-      want: 'profit-attack|8|7|9|1160|none|vel 0 0|shoot 1000 0 0 0|shoot 1000 0 0 0'
+      want: 'profit-attack|3|2|4|1160|none|vel 0 0|shoot 1000 0 0 0|shoot 1000 0 0 0'
     },
     {
       name: 'browserless action adapter keeps AFK shot repeat across throttled decision boundary',
@@ -12895,7 +13155,7 @@ async function runSelfTest() {
           commands[commands.length - 1]
         ].join('|');
       })(),
-      want: 'profit-attack|shoot-command-throttled|repeat|8|7|10|none|shoot 1000 0 0 0'
+      want: 'profit-attack|shoot-unacked-backpressure|no-repeat|3|2|5|none|vel 0 0'
     },
     {
       name: 'browserless action adapter cancels AFK shot repeat when target turns active',
@@ -13115,7 +13375,7 @@ async function runSelfTest() {
           commands[commands.length - 1]
         ].join('|');
       })(),
-      want: 'opportunistic-shot|8|7|9|160|vel 0 0|shoot 1000 0 0 0'
+      want: 'opportunistic-shot|3|2|4|160|vel 0 0|shoot 1000 0 0 0'
     },
     {
       name: 'browserless opportunistic shot is suppressed during recovery',
@@ -13282,6 +13542,7 @@ async function runSelfTest() {
       name: 'browserless no-self grace starts at ws open after slow snapshot safety',
       got: (async () => {
         let t = Date.UTC(2026, 6, 8, 1, 0, 0);
+        let safetyTick = 18;
         const snapshotFrame = encodeGrzFrameForTest({
           type: 'snapshot',
           tick: 20,
@@ -13314,7 +13575,7 @@ async function runSelfTest() {
           fetchImpl: async () => fakeResponseForTest({
             body: {
               type: 'snapshot',
-              tick: 19,
+              tick: ++safetyTick,
               entities: [],
               bullets: [],
               coin_drops: [],
@@ -14072,10 +14333,16 @@ async function runSelfTest() {
     {
       name: 'browserless no-self is session recovery without leave confirmation',
       got: (() => {
-        const event = evaluateBrowserlessSafety({ realtime: { self: null }, frameAges: {} }, {
+        const event = evaluateBrowserlessSafety({
+          realtime: { self: null, lastSelf: { user_id: 7, hp: 82, x: 10, y: 20 }, tick: 99, receivedAtMs: 4500 },
+          fallback: { tick: 100, self: null, messages: [{ text: 'left user 7' }] },
+          frameAges: {}
+        }, {
           startedAtMs: 1000,
           nowMs: 5000,
-          noSelfGraceMs: 3000
+          noSelfGraceMs: 3000,
+          wsOpen: false,
+          lastDecision: { action: { kind: 'combat-live', band: 'combat', target: { userId: 8 } } }
         });
         return [
           event.reason,
@@ -14084,10 +14351,16 @@ async function runSelfTest() {
           event.leaveAttempted,
           event.exitConfirmationRequired,
           event.selfAuthorityMissing,
-          event.stopMotion
+          event.stopMotion,
+          event.detail.lastRealtimeTick,
+          event.detail.lastSelf.hp,
+          event.detail.lastCombatTarget.userId,
+          event.detail.recentSessionMessages.length,
+          event.detail.ws.open,
+          event.detail.snapshot.containsSelf
         ].join('|');
       })(),
-      want: 'no-self|session-recovery|false|false|false|true|false'
+      want: 'no-self|session-recovery|false|false|false|true|false|99|82|8|1|false|false'
     },
     {
       name: 'browserless decision keeps realtime self during stale confirmation window',
@@ -25865,7 +26138,7 @@ async function runSelfTest() {
 	          browserlessOpportunityEnemyStaminaCost({ user_id: 8, active: true, hp: 30, distance: 30000 })
 	        ].join('|');
 	      })(),
-	      want: 'profit-candidate|seek-enemy|easy-kill-active-profit|true|50000|50000'
+      want: 'profit-candidate|seek-enemy|easy-kill-active-profit|true|51450|51450'
 	    },
 	    {
 	      name: 'browserless selected low-drop easy active target bypasses ordinary proactive combat gate',

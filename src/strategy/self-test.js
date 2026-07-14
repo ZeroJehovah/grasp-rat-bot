@@ -129,6 +129,7 @@ const {
 } = require('./combat-target-selection');
 const {
   combatHpExitThresholdsCore,
+  evaluateCombatExchangeStopLossCore,
   evaluateConfirmedCombatHpExitCore,
   evaluateCombatHpExitCore
 } = require('./combat-exit');
@@ -269,6 +270,15 @@ function runStrategyModuleSelfTests() {
       && selectedHardSafetyCandidate?.action?.reason === 'combat-critical-hp-leave'
       && selectedHardSafetyCandidate?.hardGate === true
   });
+  const selectedProfitRoi = selectFinalActionCandidateCore([
+    buildFinalActionCandidate({ kind: 'coin', band: 'profit', target: { id: 'near' }, reward: 2, staminaCost: 1000 }, { order: 10 }),
+    buildFinalActionCandidate({ kind: 'seek-enemy', band: 'profit', target: { userId: 88 }, expectedReward: 20, staminaCost: 20000, riskScore: 50 }, { order: 1 })
+  ]);
+  results.push({
+    name: 'final-candidate-profit-band-uses-risk-adjusted-net-roi-and-camelcase-user-id',
+    passed: selectedProfitRoi?.targetKey === 'coin:near'
+      && buildActionFocus({ kind: 'seek-enemy', band: 'profit', target: { userId: 88 } }).key === 'enemy:88'
+  });
 
   const switchOpportunities = [
     { type: 'coin', id: 'new', x: -1000, y: 0, reward: 3, staminaCost: 1000, score: 1400, priorityTier: 1 },
@@ -311,6 +321,104 @@ function runStrategyModuleSelfTests() {
       && behavior?.responsePolicy?.name === 'retreat-kite-close-first'
       && retreatPolicy.suppressFire === true
       && retreatPolicy.reassessProfit === true
+  });
+  let composite = null;
+  for (let index = 0; index < 50; index += 1) {
+    composite = updateOpponentBehaviorStateCore(composite, {
+      at: 1000 + index * 200,
+      selfX: 0,
+      selfY: 0,
+      x: 8000 + index * 20,
+      y: 0,
+      vx: 50,
+      vy: 0,
+      distance: 8000 + index * 20,
+      firing: true,
+      realBulletPressure: true,
+      newBulletCount: index % 2 === 0 ? 1 : 0,
+      targetStamina5s: 6000 - index * 50
+    });
+  }
+  results.push({
+    name: 'opponent-behavior-exposes-simultaneous-movement-shooting-stamina-and-control-dimensions',
+    passed: Boolean(composite?.dimensions?.movementIntent?.state)
+      && ['burst', 'sustained'].includes(composite?.dimensions?.shootingPhase?.state)
+      && Boolean(composite?.dimensions?.staminaPhase?.state)
+      && composite?.dimensions?.controlStyle?.sampleMs >= 8000
+      && Number.isFinite(composite?.automationLikelihood)
+      && composite?.metrics?.movementTransitions?.currentState === 'east'
+      && composite?.metrics?.movementTransitions?.next?.[0]?.state === 'east'
+      && composite?.metrics?.movementTransitions?.transitionCount >= 40
+  });
+  const exhausted = updateOpponentBehaviorStateCore(composite, {
+    at: 11200,
+    selfX: 0,
+    selfY: 0,
+    x: 9000,
+    y: 0,
+    vx: 50,
+    vy: 0,
+    distance: 9000,
+    firing: false,
+    realBulletPressure: false,
+    hasThreateningBullet: false,
+    newBulletCount: 0,
+    targetStamina5s: 1000
+  });
+  results.push({
+    name: 'opponent-behavior-enters-exhausted-window-only-after-old-bullets-clear',
+    passed: exhausted?.dimensions?.staminaPhase?.state === 'exhausted-likely'
+      && exhausted?.responsePolicy?.name === 'opponent-exhausted-window'
+      && exhausted?.responsePolicy?.closeIn === true
+      && exhausted?.responsePolicy?.maximumCadenceMs === 160
+  });
+
+  const exchangeFirst = evaluateCombatExchangeStopLossCore({
+    nowMs: 10000,
+    engagedMs: 10000,
+    acceptedShots: 12,
+    damageObservations: 5,
+    selfHp: 60,
+    targetHp: 80,
+    windowMs: 10000,
+    windowSelfDamage: 18,
+    windowTargetDamage: 3,
+    longWindowSelfDamage: 18,
+    longWindowTargetDamage: 3,
+    recentTargetDamage: 0
+  });
+  const exchangeConfirmed = evaluateCombatExchangeStopLossCore({
+    nowMs: 13000,
+    engagedMs: 13000,
+    acceptedShots: 16,
+    damageObservations: 6,
+    selfHp: 55,
+    targetHp: 79,
+    windowMs: 10000,
+    windowSelfDamage: 21,
+    windowTargetDamage: 4,
+    longWindowSelfDamage: 21,
+    longWindowTargetDamage: 4,
+    degradationSinceAt: exchangeFirst.degradationSinceAt
+  });
+  const protectedFinish = evaluateCombatExchangeStopLossCore({
+    nowMs: 13000,
+    engagedMs: 13000,
+    acceptedShots: 16,
+    damageObservations: 6,
+    selfHp: 45,
+    targetHp: 15,
+    windowSelfDamage: 21,
+    windowTargetDamage: 4,
+    recentTargetDamage: 3
+  });
+  results.push({
+    name: 'combat-exchange-stop-loss-confirms-degradation-but-protects-low-hp-finish',
+    passed: exchangeFirst.active === true
+      && exchangeFirst.triggered === false
+      && exchangeConfirmed.triggered === true
+      && protectedFinish.lowHpFinishProtected === true
+      && protectedFinish.triggered === false
   });
 
   const attackWorthOptions = {

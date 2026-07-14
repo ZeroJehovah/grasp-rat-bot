@@ -67,9 +67,11 @@ function quadraticInterceptCore(self, target, options = {}) {
   const vy = Number(target?.vy) || 0;
   if (![sx, sy, px, py].every(Number.isFinite)) return null;
   const bulletSpeed = Math.max(1, Number(options.bulletSpeed || 500));
-  const renderDelayTicks = Math.max(0, Number(options.renderDelayTicks ?? 2));
-  const compensatedX = px + vx * renderDelayTicks;
-  const compensatedY = py + vy * renderDelayTicks;
+  const observationToExecutionTicks = Math.max(0, Number(
+    options.observationToExecutionTicks ?? options.renderDelayTicks ?? 5
+  ));
+  const compensatedX = px + vx * observationToExecutionTicks;
+  const compensatedY = py + vy * observationToExecutionTicks;
   const dx = compensatedX - sx;
   const dy = compensatedY - sy;
   const c = dx * dx + dy * dy;
@@ -107,7 +109,8 @@ function quadraticInterceptCore(self, target, options = {}) {
     flightMs: flightTicks * 50,
     travelDistance,
     leadDistance: Math.hypot(x - px, y - py),
-    renderDelayTicks,
+    observationToExecutionTicks,
+    renderDelayTicks: observationToExecutionTicks,
     targetSpeed,
     confidence: clamp(0.62 + timeFactor * 0.25 - speedPenalty - motionPenalty, 0.25, 1)
   };

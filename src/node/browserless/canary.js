@@ -24,7 +24,7 @@ const {
 } = require('./safety-controller');
 const { createBrowserlessActionAdapter } = require('./action-adapter');
 const { createBrowserlessTargetWhitelist } = require('./target-whitelist');
-const { browserlessRuntimeRevision } = require('./runtime-revision');
+const { browserlessRuntimeRevision, browserlessRuntimeRevisionStatus } = require('./runtime-revision');
 
 const DEFAULT_READONLY_PROBE_MS = 30000;
 const DEFAULT_FRAME_GAP_ALERT_MS = 2000;
@@ -255,13 +255,14 @@ async function runSinglePreLoginSnapshotSafetyProbe(config, state, deps = {}, de
   const ordinaryLatestKnownTick = Number(state?.frameAges?.latestKnownTick || state?.latestKnownTick || 0);
   const latestKnownTick = Math.max(
     Number.isFinite(ordinaryLatestKnownTick) ? ordinaryLatestKnownTick : 0,
-    Number(confirmedLeave?.lastRealtimeTick || 0)
+    Number(confirmedLeave?.lastRealtimeTick || 0),
+    Number(detail.lastProbeTick || 0)
   );
   const summary = summarizeSnapshotPayload(body.json, {
     userId: config.userId,
     loginPoint,
     latestKnownTick,
-    requireTickAdvance: Boolean(confirmedLeave?.lastRealtimeTick),
+    requireTickAdvance: Boolean(confirmedLeave?.lastRealtimeTick || detail.lastProbeTick),
     healthyHpThreshold: config.loginPointSafetyHealthyHpThreshold ?? runtimeDefaults.loginPointSafetyHealthyHpThreshold,
     healthyRadius: config.loginPointSafetyHealthyRadius ?? runtimeDefaults.loginPointSafetyHealthyRadius,
     lowRadius: config.loginPointSafetyRadius ?? runtimeDefaults.loginPointSafetyRadius,
@@ -361,12 +362,30 @@ async function runPreLoginSnapshotSafety(config, state, deps = {}) {
     : ms => new Promise(resolve => setTimeout(resolve, ms));
   let streak = 0;
   let last = null;
+  let lastProbeTick = null;
   for (let attempt = 1; attempt <= effectiveRequired; attempt += 1) {
-    last = await runSinglePreLoginSnapshotSafetyProbe(config, state, deps, {
-      required: effectiveRequired,
-      streak,
-      satisfied: false
-    });
+    try {
+      last = await runSinglePreLoginSnapshotSafetyProbe(config, state, deps, {
+        required: effectiveRequired,
+        streak,
+        satisfied: false,
+        lastProbeTick
+      });
+    } catch (err) {
+      last = {
+        ok: false,
+        reason: 'snapshot-probe-error',
+        error: errorMessage(err),
+        required: effectiveRequired,
+        streak: 0,
+        satisfied: false,
+        attempt,
+        probeIntervalMs: intervalMs,
+        checkedAt: new Date(typeof deps.now === 'function' ? deps.now() : Date.now()).toISOString()
+      };
+      if (typeof deps.onSnapshotSafety === 'function') deps.onSnapshotSafety(last);
+      return last;
+    }
     if (last.bypassedPreLoginSafety) {
       last = {
         ...last,
@@ -380,6 +399,10 @@ async function runPreLoginSnapshotSafety(config, state, deps = {}) {
       return last;
     }
     if (!last.ok) {
+      const freshness = last.response?.summary?.freshness || null;
+      if (attempt > 1 && freshness?.ok === false && /stale|tick|advance/i.test(String(freshness.reason || ''))) {
+        last.reason = 'stale-consecutive-snapshot-tick';
+      }
       last = {
         ...last,
         required: effectiveRequired,
@@ -391,6 +414,23 @@ async function runPreLoginSnapshotSafety(config, state, deps = {}) {
       if (typeof deps.onSnapshotSafety === 'function') deps.onSnapshotSafety(last);
       return last;
     }
+    const probeTick = Number(last.response?.summary?.tick);
+    if (attempt > 1 && (!Number.isFinite(probeTick) || probeTick <= Number(lastProbeTick))) {
+      last = {
+        ...last,
+        ok: false,
+        reason: 'stale-consecutive-snapshot-tick',
+        originalReason: last.reason || '',
+        required: effectiveRequired,
+        streak: 0,
+        satisfied: false,
+        attempt,
+        probeIntervalMs: intervalMs
+      };
+      if (typeof deps.onSnapshotSafety === 'function') deps.onSnapshotSafety(last);
+      return last;
+    }
+    if (Number.isFinite(probeTick)) lastProbeTick = probeTick;
     streak = Math.min(effectiveRequired, streak + 1);
     last = {
       ...last,
@@ -544,6 +584,8 @@ async function runReadOnlyCanary(config, options = {}) {
     loopDelayMs: config.loopDelayMs,
     staleSelfConfirmMs: config.staleSelfConfirmMs,
     easyKillPlayerTracker: options.easyKillPlayerTracker,
+    combatCompletionTracker: options.combatCompletionTracker,
+    combatLearning: options.combatCompletionTracker?.strategyLearning?.() || null,
     damagePlayerTracker,
     targetWhitelistNames: targetWhitelist.names,
     targetWhitelistNameSet: targetWhitelist.nameSet,
@@ -597,6 +639,8 @@ async function runReadOnlyCanary(config, options = {}) {
       velocitySentCount: 0,
       velocityRepeatSentCount: 0,
       shootSentCount: 0,
+      shootAcceptedCount: 0,
+      shootUnackedCount: 0,
       shootRepeatSentCount: 0,
       stopCount: 0,
       skippedCount: 0,
@@ -644,6 +688,7 @@ async function runReadOnlyCanary(config, options = {}) {
       ...base,
       runId,
       runtimeRevision,
+      strategySchemaVersion: 2,
       canaryMode: controlMode,
       canaryStartedAt: result.startedAt
     };
@@ -697,7 +742,10 @@ async function runReadOnlyCanary(config, options = {}) {
       log('canary-transport-close-hook-error', { error: err?.message || String(err), reason });
     }
   };
-  log('canary-target-whitelist', targetWhitelistSummary || {});
+  log('canary-target-whitelist', {
+    ...(targetWhitelistSummary || {}),
+    runtimeRevisionResolution: browserlessRuntimeRevisionStatus()
+  });
   const updateActionResult = actionResult => {
     if (!actionResult) return;
     const adapterState = actionAdapter?.getState?.() || {};
@@ -705,6 +753,8 @@ async function runReadOnlyCanary(config, options = {}) {
     result.actions.velocitySentCount = Number(adapterState.velocitySentCount || 0);
     result.actions.velocityRepeatSentCount = Number(adapterState.velocityRepeatSentCount || 0);
     result.actions.shootSentCount = Number(adapterState.shootSentCount || 0);
+    result.actions.shootAcceptedCount = Number(adapterState.shootAcceptedCount || 0);
+    result.actions.shootUnackedCount = Number(adapterState.shootUnackedCount || 0);
     result.actions.shootRepeatSentCount = Number(adapterState.shootRepeatSentCount || 0);
     result.actions.stopCount = Number(adapterState.stopCount || 0);
     result.actions.skippedCount = Number(adapterState.skippedCount || 0);
@@ -914,6 +964,10 @@ async function runReadOnlyCanary(config, options = {}) {
             const summary = summarizeBrowserlessDecision(decision);
             result.decisions.evaluatedCount += 1;
             result.decisions.last = summary;
+            options.combatCompletionTracker?.updateStrategyLearning?.(
+              decisionAdapter.getState?.().combatLearning,
+              atMs
+            );
             lastDecisionAtMs = atMs;
             logDecision(summary);
             result.decisions.loggedCount += 1;
@@ -991,6 +1045,10 @@ async function runReadOnlyCanary(config, options = {}) {
               highFrequencyControl: true
             };
             const controlSummary = { action: control.action, combat: combatSummary };
+            options.combatCompletionTracker?.updateStrategyLearning?.(
+              decisionAdapter.getState?.().combatLearning,
+              atMs
+            );
             lastCombatControlAtMs = atMs;
             logCombat(combatSummary);
             let actionResult;
@@ -1019,6 +1077,10 @@ async function runReadOnlyCanary(config, options = {}) {
             staleSelfConfirmMs: config.staleSelfConfirmMs,
             noSelfGraceMs: config.noSelfGraceMs,
             staminaExhaustedBelowMs: config.staminaExhaustedBelowMs,
+            lastDecision: result.decisions.last,
+            wsOpen: isWsOpen(transport),
+            wsError,
+            wsClosed,
             nowMs: atMs
           }));
         }
@@ -1037,7 +1099,8 @@ async function runReadOnlyCanary(config, options = {}) {
         shootRepeatEnabled: true,
         targetDeadZoneCm: config.movementTargetDeadZoneCm,
         settlementFrames: config.movementSettlementFrames,
-        combatShootMinIntervalMs: config.combatShootMinIntervalMs
+        combatShootMinIntervalMs: config.combatShootMinIntervalMs,
+        onShootRequest: request => stateStore.recordShootRequest(request)
       });
     }
     log('canary-ws-open', { durationMs });
@@ -1058,6 +1121,8 @@ async function runReadOnlyCanary(config, options = {}) {
         staminaExhaustedBelowMs: config.staminaExhaustedBelowMs,
         wsError,
         wsClosed,
+        wsOpen: isWsOpen(transport),
+        lastDecision: result.decisions.last,
         nowMs: atMs
       });
       recordSafetyEvent(safetyEvent);

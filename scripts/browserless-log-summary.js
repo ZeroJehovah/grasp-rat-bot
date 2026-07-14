@@ -3,6 +3,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { StringDecoder } = require('string_decoder');
 
 function parseArgs(argv) {
   const out = {
@@ -42,6 +43,46 @@ function readJsonlEntries(file) {
         };
       }
     });
+}
+
+function forEachJsonlEntry(file, visitor, options = {}) {
+  if (!fs.existsSync(file)) return 0;
+  const descriptor = fs.openSync(file, 'r');
+  const decoder = new StringDecoder('utf8');
+  const buffer = Buffer.allocUnsafe(Math.max(1024, Number(options.chunkBytes || 1024 * 1024)));
+  let carry = '';
+  let lineNumber = 0;
+  const consume = raw => {
+    lineNumber += 1;
+    if (!raw) return;
+    try {
+      visitor(JSON.parse(raw), lineNumber);
+    } catch (err) {
+      visitor({
+        at: '',
+        type: 'parse-error',
+        detail: { line: lineNumber, message: err?.message || String(err) }
+      }, lineNumber);
+    }
+  };
+  try {
+    while (true) {
+      const bytesRead = fs.readSync(descriptor, buffer, 0, buffer.length, null);
+      if (!bytesRead) break;
+      carry += decoder.write(buffer.subarray(0, bytesRead));
+      let newline = carry.indexOf('\n');
+      while (newline >= 0) {
+        consume(carry.slice(0, newline).replace(/\r$/, ''));
+        carry = carry.slice(newline + 1);
+        newline = carry.indexOf('\n');
+      }
+    }
+    carry += decoder.end();
+    if (carry) consume(carry.replace(/\r$/, ''));
+  } finally {
+    fs.closeSync(descriptor);
+  }
+  return lineNumber;
 }
 
 function increment(map, key) {
@@ -98,6 +139,51 @@ function summarizeWsDiagnostics(entries) {
   return diagnostics;
 }
 
+function createWsDiagnostics() {
+  return summarizeWsDiagnostics([]);
+}
+
+function observeWsDiagnostic(diagnostics, entry) {
+  if (entry?.type !== 'message') return;
+  diagnostics.messageEntries += 1;
+  const detail = entry.detail || {};
+  const decodedType = String(detail.decodedType || detail.decodedSummary?.type || '');
+  const keys = Array.isArray(detail.decodedJsonKeys) ? detail.decodedJsonKeys.slice().sort() : [];
+  if (!decodedType && !keys.length) return;
+  diagnostics.decodedEntries += 1;
+  const keySet = keys.join(',');
+  if (keySet) {
+    increment(diagnostics.keySetCounts, keySet);
+    increment(diagnostics.frameTypeKeySetCounts, `${decodedType || 'unknown'}|${keySet}`);
+  }
+  const coinLikeFields = coinLikeFieldsFromKeys(keys);
+  for (const field of coinLikeFields) increment(diagnostics.coinLikeFieldCounts, field);
+  const coinDropCount = Number(detail.decodedSummary?.coinDropCount || 0);
+  if (decodedType === 'pos') {
+    for (const field of coinLikeFields) increment(diagnostics.realtimeCoinLikeFieldCounts, field);
+    diagnostics.lastRealtimeCoinLikeFields = coinLikeFields;
+    if (coinDropCount > 0) diagnostics.realtimeCoinDropFrames += 1;
+  } else if (decodedType === 'snapshot') {
+    for (const field of coinLikeFields) increment(diagnostics.snapshotCoinLikeFieldCounts, field);
+    diagnostics.lastSnapshotCoinLikeFields = coinLikeFields;
+    if (coinDropCount > 0) diagnostics.snapshotCoinDropFrames += 1;
+  }
+}
+
+function summarizeJsonlFile(file, options = {}) {
+  const summary = { entries: 0, firstAt: '', lastAt: '', typeCounts: {} };
+  const wsDiagnostics = options.ws ? createWsDiagnostics() : null;
+  forEachJsonlEntry(file, entry => {
+    summary.entries += 1;
+    if (entry?.at && (!summary.firstAt || entry.at < summary.firstAt)) summary.firstAt = entry.at;
+    if (entry?.at && (!summary.lastAt || entry.at > summary.lastAt)) summary.lastAt = entry.at;
+    increment(summary.typeCounts, entry?.type || 'unknown');
+    if (wsDiagnostics) observeWsDiagnostic(wsDiagnostics, entry);
+  }, options);
+  if (wsDiagnostics) summary.wsDiagnostics = wsDiagnostics;
+  return summary;
+}
+
 function summarizeEntries(entries) {
   const summary = {
     entries: entries.length,
@@ -126,9 +212,7 @@ function summarizeBrowserlessLogDay(options = {}) {
     for (const dirent of fs.readdirSync(dayDir, { withFileTypes: true })) {
       if (!dirent.isFile() || !dirent.name.endsWith('.jsonl')) continue;
       const stream = dirent.name.replace(/\.jsonl$/, '');
-      const entries = readJsonlEntries(path.join(dayDir, dirent.name));
-      const streamSummary = summarizeEntries(entries);
-      if (stream === 'ws') streamSummary.wsDiagnostics = summarizeWsDiagnostics(entries);
+      const streamSummary = summarizeJsonlFile(path.join(dayDir, dirent.name), { ws: stream === 'ws' });
       streams[stream] = streamSummary;
       totals.entries += streamSummary.entries;
       for (const [type, count] of Object.entries(streamSummary.typeCounts)) {
@@ -186,9 +270,11 @@ if (require.main === module) {
 
 module.exports = {
   parseArgs,
+  forEachJsonlEntry,
   readJsonlEntries,
   summarizeBrowserlessLogDay,
   summarizeEntries,
+  summarizeJsonlFile,
   summarizeWsDiagnostics,
   writeBrowserlessLogSummary
 };

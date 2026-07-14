@@ -42,9 +42,90 @@ function sampleDistance(sample) {
   return [sx, sy, tx, ty].every(Number.isFinite) ? Math.hypot(tx - sx, ty - sy) : null;
 }
 
+const MOVEMENT_DIRECTION_STATES = Object.freeze([
+  'stop',
+  'east',
+  'south-east',
+  'south',
+  'south-west',
+  'west',
+  'north-west',
+  'north',
+  'north-east'
+]);
+
+function movementDirectionState(vx, vy, stationarySpeed = 5) {
+  const dx = Number(vx) || 0;
+  const dy = Number(vy) || 0;
+  if (Math.hypot(dx, dy) < Math.max(0, Number(stationarySpeed) || 0)) return 'stop';
+  const octant = Math.round(Math.atan2(dy, dx) / (Math.PI / 4));
+  return ({
+    '-4': 'west',
+    '-3': 'north-west',
+    '-2': 'north',
+    '-1': 'north-east',
+    0: 'east',
+    1: 'south-east',
+    2: 'south',
+    3: 'south-west',
+    4: 'west'
+  })[octant] || 'stop';
+}
+
+function movementDirectionVector(state) {
+  return ({
+    east: { x: 1, y: 0 },
+    'south-east': { x: Math.SQRT1_2, y: Math.SQRT1_2 },
+    south: { x: 0, y: 1 },
+    'south-west': { x: -Math.SQRT1_2, y: Math.SQRT1_2 },
+    west: { x: -1, y: 0 },
+    'north-west': { x: -Math.SQRT1_2, y: -Math.SQRT1_2 },
+    north: { x: 0, y: -1 },
+    'north-east': { x: Math.SQRT1_2, y: -Math.SQRT1_2 },
+    stop: { x: 0, y: 0 }
+  })[String(state)] || { x: 0, y: 0 };
+}
+
+function movementTransitionModelCore(samples = [], options = {}) {
+  const stationarySpeed = Math.max(0, Number(options.stationarySpeed ?? 5));
+  const states = (samples || []).map(sample => movementDirectionState(sample?.vx, sample?.vy, stationarySpeed));
+  const counts = {};
+  let transitionCount = 0;
+  for (let index = 1; index < states.length; index += 1) {
+    const from = states[index - 1];
+    const to = states[index];
+    if (!counts[from]) counts[from] = {};
+    counts[from][to] = Number(counts[from][to] || 0) + 1;
+    transitionCount += 1;
+  }
+  const matrix = {};
+  for (const [from, row] of Object.entries(counts)) {
+    const total = Object.values(row).reduce((sum, value) => sum + Number(value || 0), 0);
+    matrix[from] = Object.fromEntries(Object.entries(row)
+      .map(([to, value]) => [to, total > 0 ? Number(value) / total : 0])
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])));
+  }
+  const currentState = states[states.length - 1] || 'stop';
+  const next = Object.entries(matrix[currentState] || {})
+    .map(([state, probability]) => ({ state, probability, vector: movementDirectionVector(state) }))
+    .sort((a, b) => b.probability - a.probability || a.state.localeCompare(b.state));
+  const entropy = next.length
+    ? -next.reduce((sum, item) => sum + (item.probability > 0 ? item.probability * Math.log2(item.probability) : 0), 0)
+    : null;
+  return {
+    states: MOVEMENT_DIRECTION_STATES,
+    currentState,
+    transitionCount,
+    matrix,
+    next,
+    entropy,
+    confidence: clamp(transitionCount / Math.max(4, Number(options.fullConfidenceTransitions ?? 12)), 0, 1)
+  };
+}
+
 function opponentBehaviorMetricsCore(samples = [], options = {}) {
   const nowMs = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
-  const windowMs = Math.max(2000, Number(options.windowMs ?? 5000));
+  const windowMs = Math.max(2000, Number(options.windowMs ?? 12000));
   const stationarySpeed = Math.max(1, Number(options.stationarySpeed ?? 5));
   const history = (samples || [])
     .filter(sample => sample && nowMs - Number(sample.at || 0) <= windowMs)
@@ -61,6 +142,8 @@ function opponentBehaviorMetricsCore(samples = [], options = {}) {
   let previousLateralSign = 0;
   let previousMoving = null;
   let lastLateralFlipAt = 0;
+  const shotIntervals = [];
+  let previousShotAt = 0;
   for (let index = 0; index < history.length; index += 1) {
     const sample = history[index];
     const dx = Number(sample.x) - Number(sample.selfX || 0);
@@ -85,6 +168,10 @@ function opponentBehaviorMetricsCore(samples = [], options = {}) {
     previousMoving = moving;
     if (sample.firing) firingSamples += 1;
     if (sample.firing || sample.realBulletPressure) pressureSamples += 1;
+    if (Number(sample.newBulletCount || 0) > 0) {
+      if (previousShotAt) shotIntervals.push(Number(sample.at || nowMs) - previousShotAt);
+      previousShotAt = Number(sample.at || nowMs);
+    }
     if (index > 0) {
       const previous = history[index - 1];
       const previousSpeed = Math.hypot(Number(previous.vx) || 0, Number(previous.vy) || 0);
@@ -103,6 +190,12 @@ function opponentBehaviorMetricsCore(samples = [], options = {}) {
   const distanceChangeRate = durationMs > 0 ? netDistanceChange / (durationMs / 1000) : 0;
   const sampleCount = history.length;
   const velocityStability = velocityDotCount ? clamp((velocityDotSum / velocityDotCount + 1) / 2, 0, 1) : 0.5;
+  const intervalMean = shotIntervals.length
+    ? shotIntervals.reduce((sum, value) => sum + value, 0) / shotIntervals.length
+    : null;
+  const intervalVariance = intervalMean === null ? null : shotIntervals.reduce((sum, value) => sum + (value - intervalMean) ** 2, 0) / shotIntervals.length;
+  const shotIntervalCv = intervalMean && intervalVariance !== null ? Math.sqrt(intervalVariance) / intervalMean : null;
+  const movementTransitions = movementTransitionModelCore(history, { stationarySpeed });
   return {
     sampleCount,
     durationMs,
@@ -118,7 +211,95 @@ function opponentBehaviorMetricsCore(samples = [], options = {}) {
     lastDistance,
     netDistanceChange,
     distanceChangeRate,
-    lastLateralFlipAt
+    lastLateralFlipAt,
+    shotIntervals,
+    shotIntervalMeanMs: intervalMean,
+    shotIntervalCv,
+    movementTransitions
+  };
+}
+
+function behaviorDimensionsCore(previous, classified, metrics, sample, nowMs, options = {}) {
+  const previousDimensions = previous?.dimensions || {};
+  const movementCandidate = classified.mode === 'pressure-shooter' ? 'erratic' : ({
+    'steady-linear': 'approach',
+    'retreat-kite': 'retreat',
+    'charge-close': 'approach',
+    'zigzag-strafe': 'zigzag',
+    stationary: 'stationary'
+  }[classified.mode] || 'erratic');
+  const previousMovement = previousDimensions.movementIntent || null;
+  const explicitReverse = (previousMovement?.state === 'retreat' && movementCandidate === 'approach')
+    || (previousMovement?.state === 'approach' && movementCandidate === 'retreat');
+  const movementCandidateSince = previousMovement?.candidate === movementCandidate
+    ? Number(previousMovement.candidateSince || nowMs)
+    : nowMs;
+  const movementConfirmed = !previousMovement
+    || previousMovement.state === movementCandidate
+    || explicitReverse
+    || nowMs - movementCandidateSince >= Math.max(3000, Number(options.movementConfirmMs || 3000));
+  const movementIntent = {
+    state: movementConfirmed ? movementCandidate : previousMovement.state,
+    confidence: classified.confidence,
+    candidate: movementConfirmed ? '' : movementCandidate,
+    candidateSince: movementConfirmed ? 0 : movementCandidateSince,
+    probabilities: {
+      [movementCandidate]: classified.confidence,
+      [movementConfirmed ? movementCandidate : previousMovement.state]: Math.max(
+        Number(previousMovement?.confidence || 0),
+        1 - classified.confidence
+      )
+    }
+  };
+  const pressure = Boolean(sample.firing || sample.realBulletPressure || Number(sample.newBulletCount || 0) > 0);
+  const previousShooting = previousDimensions.shootingPhase || null;
+  const shootingState = Number(sample.newBulletCount || 0) > 0
+    ? (pressure ? 'burst' : 'preparing')
+    : (pressure ? 'sustained' : (previousShooting?.state === 'sustained' ? 'cooldown' : 'idle'));
+  const shootingPhase = {
+    state: shootingState,
+    confidence: pressure ? Math.max(0.7, metrics.pressureRatio) : Math.max(0.55, 1 - metrics.pressureRatio),
+    updatedAt: nowMs
+  };
+  const stamina = numberOrNull(sample.targetStamina5s);
+  const previousStamina = numberOrNull(previous?.samples?.[Math.max(0, (previous.samples?.length || 1) - 1)]?.targetStamina5s);
+  const elapsedMs = Math.max(0, nowMs - Number(previous?.lastAt || nowMs));
+  const inferredUpper = stamina === null && previousDimensions.staminaPhase
+    ? clamp(Number(previousDimensions.staminaPhase.upperBound ?? 10000)
+      - Number(sample.newBulletCount || 0) * 500
+      - (Math.hypot(Number(sample.vx || 0), Number(sample.vy || 0)) > 5 ? elapsedMs : -elapsedMs), 0, 10000)
+    : stamina;
+  const inferredLower = stamina === null && inferredUpper !== null
+    ? Math.max(0, inferredUpper - 1000)
+    : stamina;
+  const staminaState = inferredUpper !== null && inferredUpper <= 1200
+    ? 'exhausted-likely'
+    : (stamina !== null && previousStamina !== null && stamina < previousStamina - 250
+        ? 'depleting'
+        : (stamina !== null && previousStamina !== null && stamina > previousStamina + 250 ? 'recovering' : 'high'));
+  const staminaPhase = {
+    state: staminaState,
+    confidence: stamina === null ? (inferredUpper === null ? 0.25 : 0.5) : 0.8,
+    lowerBound: inferredLower,
+    upperBound: inferredUpper
+  };
+  const automationEvidenceReady = metrics.durationMs >= Math.max(8000, Number(options.controlStyleMinMs || 8000));
+  const regularFire = metrics.shotIntervalCv !== null ? clamp(1 - metrics.shotIntervalCv, 0, 1) : 0.4;
+  const regularMotion = clamp(metrics.velocityStability * 0.65 + Math.min(1, metrics.lateralFlips / 4) * 0.35, 0, 1);
+  const automationLikelihood = clamp(regularFire * 0.55 + regularMotion * 0.45, 0, 1);
+  const styleCandidate = automationLikelihood >= 0.72
+    ? 'periodic-script'
+    : (automationLikelihood >= 0.55 ? 'reactive-script' : 'human-like');
+  const controlStyle = automationEvidenceReady
+    ? { state: styleCandidate, confidence: clamp(Math.abs(automationLikelihood - 0.5) * 2, 0.35, 0.95), sampleMs: metrics.durationMs }
+    : { state: previousDimensions.controlStyle?.state || 'unknown', confidence: 0.25, sampleMs: metrics.durationMs };
+  return {
+    movementIntent,
+    shootingPhase,
+    staminaPhase,
+    controlStyle,
+    automationLikelihood,
+    automationConfidence: controlStyle.confidence
   };
 }
 
@@ -156,6 +337,22 @@ function opponentResponsePolicyCore(mode, context = {}) {
   const sinceFlipMs = Number(context.lastLateralFlipAt || 0) > 0
     ? Math.max(0, Number(context.nowMs || Date.now()) - Number(context.lastLateralFlipAt))
     : Infinity;
+  const staminaUpperBound = numberOrNull(context.staminaUpperBound);
+  if (staminaUpperBound !== null
+    && staminaUpperBound <= Number(context.exhaustedUpperBound ?? 1200)
+    && context.noThreateningBullets === true) {
+    return {
+      name: 'opponent-exhausted-window',
+      closeIn: true,
+      aimLeadScale: 0.9,
+      suppressFire: false,
+      minimumCadenceMs: 0,
+      maximumCadenceMs: Math.max(120, Number(context.exhaustedCadenceMs ?? 160)),
+      reassessProfit: false,
+      reason: 'opponent-exhausted-window',
+      staminaUpperBound
+    };
+  }
   if (mode === 'retreat-kite') {
     const inefficient = hitRate !== null && hitRate < Number(context.minHitRate ?? 0.12);
     const far = Number.isFinite(distance) && distance > Number(context.fireRangeCm ?? 7500);
@@ -194,7 +391,7 @@ function opponentResponsePolicyCore(mode, context = {}) {
     return { name: 'steady-quadratic-intercept', closeIn: false, aimLeadScale: 1, suppressFire: false, minimumCadenceMs: 0, reason: 'stable-linear-motion' };
   }
   if (mode === 'pressure-shooter') {
-    return { name: 'pressure-dodge-intercept', closeIn: false, aimLeadScale: 1, suppressFire: false, minimumCadenceMs: 0, reason: 'preserve-pressure-response' };
+    return { name: 'pressure-dodge-intercept', closeIn: false, aimLeadScale: 0.88, suppressFire: false, minimumCadenceMs: 0, reason: 'latency-adjusted-pressure-response' };
   }
   return { name: 'mixed-baseline', closeIn: false, aimLeadScale: 1, suppressFire: false, minimumCadenceMs: 0, reason: 'insufficient-mode-confidence' };
 }
@@ -203,12 +400,13 @@ function updateOpponentBehaviorStateCore(previous = null, sample = {}, options =
   const nowMs = Number.isFinite(Number(sample.at ?? options.nowMs)) ? Number(sample.at ?? options.nowMs) : Date.now();
   const resetGapMs = Math.max(2000, Number(options.resetGapMs ?? 15000));
   const prior = previous && nowMs - Number(previous.lastAt || 0) <= resetGapMs ? previous : null;
-  const windowMs = Math.max(2000, Number(options.windowMs ?? 5000));
+  const windowMs = Math.max(2000, Number(options.windowMs ?? 12000));
   const samples = [...(Array.isArray(prior?.samples) ? prior.samples : []), { ...sample, at: nowMs }]
     .filter(item => nowMs - Number(item.at || 0) <= windowMs)
     .slice(-80);
   const metrics = opponentBehaviorMetricsCore(samples, { ...options, nowMs, windowMs });
   const classified = classifyOpponentBehaviorCore(metrics, options);
+  const dimensions = behaviorDimensionsCore(prior, classified, metrics, sample, nowMs, options);
   const currentMode = OPPONENT_BEHAVIOR_MODES.includes(String(prior?.mode)) ? String(prior.mode) : 'mixed/unknown';
   let mode = currentMode;
   let since = Number(prior?.since || nowMs);
@@ -247,6 +445,9 @@ function updateOpponentBehaviorStateCore(previous = null, sample = {}, options =
     distance,
     hitRate: sample.hitRate,
     targetPressure: sample.realBulletPressure || sample.firing,
+    noThreateningBullets: sample.hasThreateningBullet === false
+      || (!sample.realBulletPressure && Number(sample.newBulletCount || 0) <= 0),
+    staminaUpperBound: dimensions.staminaPhase?.upperBound,
     lastLateralFlipAt: metrics.lastLateralFlipAt || prior?.lastLateralFlipAt,
     noProgressMs,
     nowMs
@@ -266,15 +467,28 @@ function updateOpponentBehaviorStateCore(previous = null, sample = {}, options =
     lastLateralFlipAt: metrics.lastLateralFlipAt || Number(prior?.lastLateralFlipAt || 0),
     progressAt,
     progressDistance,
-    noProgressMs
+    noProgressMs,
+    dimensions: {
+      movementIntent: dimensions.movementIntent,
+      shootingPhase: dimensions.shootingPhase,
+      staminaPhase: dimensions.staminaPhase,
+      controlStyle: dimensions.controlStyle
+    },
+    automationLikelihood: dimensions.automationLikelihood,
+    automationConfidence: dimensions.automationConfidence
   };
 }
 
 module.exports = {
+  MOVEMENT_DIRECTION_STATES,
   OPPONENT_BEHAVIOR_MODES,
   behaviorDistanceBand,
+  behaviorDimensionsCore,
   behaviorLearningKey,
   classifyOpponentBehaviorCore,
+  movementDirectionState,
+  movementDirectionVector,
+  movementTransitionModelCore,
   opponentBehaviorMetricsCore,
   opponentResponsePolicyCore,
   updateOpponentBehaviorStateCore

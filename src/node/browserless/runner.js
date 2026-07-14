@@ -24,6 +24,7 @@ const {
   createSnapshotGapPoller
 } = require('./high-drop-player-tracker');
 const { createEasyKillPlayerTracker } = require('./easy-kill-player-tracker');
+const { createCombatCompletionTracker } = require('./combat-completion-tracker');
 const { createDailyDamagePlayerTracker } = require('./daily-damage-player-tracker');
 const {
   DEFAULT_CHAT_ACTIVE_INTERVAL_MS,
@@ -38,6 +39,7 @@ const {
 const { createBrowserlessActionAdapter } = require('./action-adapter');
 const { createSourceIpController } = require('./source-ip-controller');
 const { createBrowserlessSafetyController } = require('./safety-controller');
+const { browserlessRuntimeRevision, browserlessRuntimeRevisionStatus } = require('./runtime-revision');
 const {
   buildSnapshotProbeUrl,
   readResponseBody,
@@ -624,10 +626,17 @@ async function runBrowserlessRunner(config, deps = {}) {
     file: path.join(config.dataDir, 'high-drop-players.json'),
     now
   });
+  const combatCompletionTracker = deps.combatCompletionTracker || createCombatCompletionTracker({
+    file: path.join(config.dataDir, 'combat-learning.json'),
+    now
+  });
   const easyKillPlayerTracker = deps.easyKillPlayerTracker || createEasyKillPlayerTracker({
     file: path.join(config.dataDir, 'easy-kill-players.json'),
     now,
-    onEvent: event => logStore.append('runner', 'easy-kill-player-outcome', event)
+    onEvent: event => {
+      combatCompletionTracker.observe(event);
+      logStore.append('runner', 'easy-kill-player-outcome', event);
+    }
   });
   const damagePlayerTracker = deps.damagePlayerTracker || createDailyDamagePlayerTracker({
     file: path.join(config.dataDir, 'daily-damage-players.json'),
@@ -1284,6 +1293,9 @@ async function runBrowserlessRunner(config, deps = {}) {
   if (!config.once && !config.dryRun) snapshotGapPoller.start();
 
   logStore.append('runner', 'runner-start', {
+    runtimeRevision: browserlessRuntimeRevision(),
+    runtimeRevisionResolution: browserlessRuntimeRevisionStatus(),
+    strategySchemaVersion: 2,
     config: publicConfig(config),
     retention,
     statusServer: statusHandle ? { host: config.statusHost, port: statusHandle.port } : null
@@ -1519,6 +1531,7 @@ async function runBrowserlessRunner(config, deps = {}) {
           persistedState: readBrowserlessStateFile(stateFile),
           safetyController,
           easyKillPlayerTracker,
+          combatCompletionTracker,
           damagePlayerTracker,
           allowMissingLoginPointBootstrap: true,
           onSnapshotSafety: recordSnapshotSafetyProgress,
@@ -1590,6 +1603,7 @@ async function runBrowserlessRunner(config, deps = {}) {
         persistedState: stateBeforeCanary,
         safetyController,
         easyKillPlayerTracker,
+        combatCompletionTracker,
         damagePlayerTracker,
         bypassPreLoginSafetyReason,
         precheckedSnapshotSafety,

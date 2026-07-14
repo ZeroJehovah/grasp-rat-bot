@@ -96,6 +96,32 @@ function frameAge(nowMs, atMs) {
   return Math.max(0, now - at);
 }
 
+function percentile(values, ratio) {
+  const sorted = (values || []).map(Number).filter(Number.isFinite).sort((a, b) => a - b);
+  if (!sorted.length) return null;
+  const index = Math.max(0, Math.min(sorted.length - 1, Math.ceil(sorted.length * ratio) - 1));
+  return sorted[index];
+}
+
+function shotTimingSummary(samples = []) {
+  const values = samples.map(item => Number(item.executionDelayTicks)).filter(Number.isFinite).slice(-64);
+  const median = percentile(values, 0.5);
+  const deviations = median === null ? [] : values.map(value => Math.abs(value - median));
+  return {
+    sampleCount: values.length,
+    medianTicks: median === null ? 5 : median,
+    p90Ticks: percentile(values, 0.9) ?? 5,
+    madTicks: percentile(deviations, 0.5) ?? 0,
+    source: values.length ? 'confirmed-shoot-rolling' : 'startup-default'
+  };
+}
+
+function shotAckTimeoutMs(samples = []) {
+  const values = samples.map(Number).filter(Number.isFinite).slice(-64);
+  const p90 = percentile(values, 0.9);
+  return Math.max(1000, Math.min(5000, Math.round((p90 ?? 1000) * 3)));
+}
+
 function createInitialState(userId = 0) {
   return {
     userId: Number(userId || 0),
@@ -108,6 +134,7 @@ function createInitialState(userId = 0) {
       tick: null,
       receivedAtMs: 0,
       self: null,
+      lastSelf: null,
       entities: [],
       entitiesByKey: {},
       bullets: [],
@@ -132,7 +159,15 @@ function createInitialState(userId = 0) {
       }
     },
     command: {
-      lastAck: null
+      lastAck: null,
+      nextShotSequence: 1,
+      requestedShots: 0,
+      acceptedShots: 0,
+      unackedShots: 0,
+      pendingShots: [],
+      confirmedShots: [],
+      delaySamples: [],
+      ackLatencySamples: []
     },
     transportDiagnostics: {
       frameKeySetCounts: {},
@@ -221,6 +256,7 @@ function createBrowserlessStateStore(options = {}) {
       .map(drop => normalizeCoinDrop(drop, { ...meta, authority: 'realtime', source: 'pos' }))
       .filter(Boolean);
     state.realtime.self = normalizedEntities.find(entity => Number(entity.user_id) === Number(state.userId)) || null;
+    if (state.realtime.self) state.realtime.lastSelf = cloneJson(state.realtime.self);
   }
 
   function ingestSnapshotFrame(frame, meta) {
@@ -256,13 +292,82 @@ function createBrowserlessStateStore(options = {}) {
   }
 
   function ingestShootOk(frame, meta) {
-    state.command.lastAck = {
+    const ack = {
       ...summarizeGrzShotAck(frame),
       authority: 'realtime',
       source: 'shoot_ok',
       tick: meta.tick,
       receivedAtMs: meta.receivedAtMs
     };
+    expirePendingShots(meta.receivedAtMs);
+    const targetX = numericOrNull(ack.target_x);
+    const targetY = numericOrNull(ack.target_y);
+    const pending = state.command.pendingShots
+      .map((item, index) => ({ item, index, distance: targetX === null || targetY === null
+        ? index
+        : Math.hypot(Number(item.targetX) - targetX, Number(item.targetY) - targetY) }))
+      .sort((a, b) => a.distance - b.distance || a.index - b.index)[0] || null;
+    let confirmed = null;
+    if (pending) {
+      state.command.pendingShots.splice(pending.index, 1);
+      const observedTick = numericOrNull(pending.item.observedTick);
+      const createdTick = numericOrNull(ack.created_tick);
+      confirmed = {
+        ...pending.item,
+        ...ack,
+        acceptedAtMs: meta.receivedAtMs,
+        requestToAckMs: Math.max(0, meta.receivedAtMs - Number(pending.item.requestedAtMs || 0)),
+        observedTick,
+        createdTick,
+        executionDelayTicks: observedTick !== null && createdTick !== null ? createdTick - observedTick : null
+      };
+      state.command.acceptedShots += 1;
+      state.command.ackLatencySamples.push(confirmed.requestToAckMs);
+      state.command.ackLatencySamples = state.command.ackLatencySamples.slice(-64);
+      state.command.confirmedShots.push(confirmed);
+      state.command.confirmedShots = state.command.confirmedShots.slice(-64);
+      if (Number.isFinite(confirmed.executionDelayTicks) && confirmed.executionDelayTicks >= 0) {
+        state.command.delaySamples.push({
+          at: meta.receivedAtMs,
+          executionDelayTicks: confirmed.executionDelayTicks
+        });
+        state.command.delaySamples = state.command.delaySamples.slice(-64);
+      }
+    }
+    state.command.lastAck = { ...ack, matchedShot: confirmed };
+  }
+
+  function expirePendingShots(atMs = now()) {
+    const timeoutMs = shotAckTimeoutMs(state.command.ackLatencySamples);
+    const retained = [];
+    for (const shot of state.command.pendingShots) {
+      if (Number(atMs) - Number(shot.requestedAtMs || 0) > timeoutMs) state.command.unackedShots += 1;
+      else retained.push(shot);
+    }
+    state.command.pendingShots = retained;
+  }
+
+  function recordShootRequest(request = {}) {
+    const requestedAtMs = Number(request.requestedAtMs || now());
+    expirePendingShots(requestedAtMs);
+    const shot = {
+      sequence: state.command.nextShotSequence++,
+      commandId: request.commandId ?? null,
+      requestedAtMs,
+      targetId: request.targetId ?? null,
+      targetX: numericOrNull(request.targetX),
+      targetY: numericOrNull(request.targetY),
+      startX: numericOrNull(request.startX),
+      startY: numericOrNull(request.startY),
+      observedTick: numericOrNull(request.observedTick),
+      aimMode: String(request.aimMode || ''),
+      hypothesis: String(request.hypothesis || ''),
+      flightTicks: numericOrNull(request.flightTicks)
+    };
+    state.command.requestedShots += 1;
+    state.command.pendingShots.push(shot);
+    state.command.pendingShots = state.command.pendingShots.slice(-16);
+    return cloneJson(shot);
   }
 
   function getFrameAges(nowMs = now()) {
@@ -282,6 +387,7 @@ function createBrowserlessStateStore(options = {}) {
       receivedAtMs: state.realtime.receivedAtMs,
       frameAgeMs: frameAge(nowMs, state.realtime.receivedAtMs),
       self: cloneJson(state.realtime.self),
+      lastSelf: cloneJson(state.realtime.lastSelf),
       entities: cloneJson(state.realtime.entities),
       bullets: cloneJson(state.realtime.bullets),
       coinDrops: cloneJson(state.realtime.coinDrops)
@@ -305,9 +411,25 @@ function createBrowserlessStateStore(options = {}) {
   }
 
   function getCommandState(nowMs = now()) {
+    expirePendingShots(nowMs);
+    const timing = shotTimingSummary(state.command.delaySamples);
+    const ackTimeoutMs = shotAckTimeoutMs(state.command.ackLatencySamples);
     return {
       lastAck: cloneJson(state.command.lastAck),
-      ackAgeMs: frameAge(nowMs, state.command.lastAck?.receivedAtMs)
+      ackAgeMs: frameAge(nowMs, state.command.lastAck?.receivedAtMs),
+      shooting: {
+        requestedShots: state.command.requestedShots,
+        acceptedShots: state.command.acceptedShots,
+        unackedShots: state.command.unackedShots,
+        pendingCount: state.command.pendingShots.length,
+        acceptanceRate: state.command.requestedShots > 0
+          ? state.command.acceptedShots / state.command.requestedShots
+          : null,
+        ackTimeoutMs,
+        timing,
+        pendingShots: cloneJson(state.command.pendingShots.slice(-8)),
+        confirmedShots: cloneJson(state.command.confirmedShots.slice(-16))
+      }
     };
   }
 
@@ -333,6 +455,7 @@ function createBrowserlessStateStore(options = {}) {
     getState,
     ingestDecodedFrame: ingestFrame,
     ingestFrame,
+    recordShootRequest,
     reset,
     setUserId
   };

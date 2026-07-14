@@ -29,6 +29,10 @@ function calculateCombatSpacing(self, target, context = {}) {
     spacing = maxSpacing;
   }
 
+  if (context.highEntropyOpponent && !context.finishingTarget) {
+    spacing = Math.max(8500, Math.min(10500, Number(context.safeReactionSpacingCm || 9500)));
+  }
+
   if (context.finishingTarget) {
     // Finishing low HP target, close in
     spacing = minSpacing;
@@ -79,7 +83,7 @@ function calculateDodgeDirection(self, bullets, options = {}) {
     return { dx: 0, dy: 0, reason: 'no-incoming-bullets', threatField: null };
   }
 
-  // Evaluate threat field for 8 directions
+  // Evaluate new directions plus holding the current velocity and stopping.
   const directions = [
     { dx: 0, dy: -1 },   // North
     { dx: 1, dy: -1 },   // NE
@@ -88,25 +92,29 @@ function calculateDodgeDirection(self, bullets, options = {}) {
     { dx: 0, dy: 1 },    // South
     { dx: -1, dy: 1 },   // SW
     { dx: -1, dy: 0 },   // West
-    { dx: -1, dy: -1 }   // NW
+    { dx: -1, dy: -1 },  // NW
+    { dx: Math.sign(Number(self?.vx || 0)), dy: Math.sign(Number(self?.vy || 0)), holdCurrent: true },
+    { dx: 0, dy: 0, stop: true }
   ];
 
   const moveSpeedPerTick = Math.max(0, Number(options.moveSpeedPerTick ?? self?.speed_per_tick ?? self?.speedPerTick ?? 50));
   const tickMs = Math.max(1, Number(options.tickMs || 50));
   const hitRadius = Math.max(1, Number(options.hitRadius || 200));
+  const commandDelayTicks = Math.max(0, Number(options.commandDelayTicks ?? options.commandDelayP90Ticks ?? 5));
+  const reactionBudgetMs = Math.max(0, Number(options.reactionBudgetMs
+    ?? (commandDelayTicks * tickMs + tickMs + Math.max(0, Number(options.reactionSafetyMarginMs ?? 100)))));
+  const currentVx = Number(self?.vx || 0);
+  const currentVy = Number(self?.vy || 0);
   const threatField = directions.map(dir => {
     let directHits = 0;
+    let avoidableHits = 0;
+    let unavoidableHits = 0;
     let minCPA = Infinity;
     let minTTI = Infinity;
 
     for (const bullet of incoming) {
       const tti = Number(bullet.timeToImpact || 1000);
-      const futureTicks = Math.max(0, tti / tickMs);
       const diagonalScale = dir.dx && dir.dy ? Math.SQRT1_2 : 1;
-      const futureSelf = {
-        x: Number(self?.x || 0) + dir.dx * diagonalScale * moveSpeedPerTick * futureTicks,
-        y: Number(self?.y || 0) + dir.dy * diagonalScale * moveSpeedPerTick * futureTicks
-      };
       const bulletX = Number(bullet.x);
       const bulletY = Number(bullet.y);
       const directionX = Number(bullet.direction?.dx);
@@ -114,19 +122,35 @@ function calculateDodgeDirection(self, bullets, options = {}) {
       const bulletSpeed = Number(bullet.speed || COMBAT_CONSTANTS.BULLET_SPEED_CM_PER_TICK);
       let cpa = Number(bullet.cpa ?? bullet.distance ?? Infinity);
       if ([bulletX, bulletY, directionX, directionY, bulletSpeed].every(Number.isFinite)) {
-        const futureBullet = {
-          x: bulletX + directionX * bulletSpeed * futureTicks,
-          y: bulletY + directionY * bulletSpeed * futureTicks
-        };
-        cpa = Math.hypot(futureSelf.x - futureBullet.x, futureSelf.y - futureBullet.y);
+        cpa = Infinity;
+        const endTick = Math.max(1, Math.ceil(tti / tickMs));
+        let selfX = Number(self?.x || 0);
+        let selfY = Number(self?.y || 0);
+        for (let tick = 0; tick <= endTick; tick += 1) {
+          const bulletAtX = bulletX + directionX * bulletSpeed * tick;
+          const bulletAtY = bulletY + directionY * bulletSpeed * tick;
+          cpa = Math.min(cpa, Math.hypot(selfX - bulletAtX, selfY - bulletAtY));
+          if (tick >= endTick) break;
+          if (tick < commandDelayTicks || dir.holdCurrent) {
+            selfX += currentVx;
+            selfY += currentVy;
+          } else if (!dir.stop) {
+            selfX += dir.dx * diagonalScale * moveSpeedPerTick;
+            selfY += dir.dy * diagonalScale * moveSpeedPerTick;
+          }
+        }
       }
 
-      if (cpa < hitRadius) directHits++;
+      if (cpa < hitRadius) {
+        directHits++;
+        if (tti < reactionBudgetMs) unavoidableHits++;
+        else avoidableHits++;
+      }
       if (cpa < minCPA) minCPA = cpa;
       if (tti < minTTI) minTTI = tti;
     }
 
-    const targetFutureTicks = Number.isFinite(minTTI) ? Math.max(0, minTTI / tickMs) : 0;
+    const targetFutureTicks = Number.isFinite(minTTI) ? Math.max(0, minTTI / tickMs - commandDelayTicks) : 0;
     const targetDiagonalScale = dir.dx && dir.dy ? Math.SQRT1_2 : 1;
     const candidateFutureSelf = {
       x: Number(self?.x || 0) + dir.dx * targetDiagonalScale * moveSpeedPerTick * targetFutureTicks,
@@ -136,8 +160,12 @@ function calculateDodgeDirection(self, bullets, options = {}) {
       dx: dir.dx,
       dy: dir.dy,
       directHits,
+      avoidableHits,
+      unavoidableHits,
       minCPA,
       minTTI,
+      commandDelayTicks,
+      reactionBudgetMs,
       targetDistanceChange: Number.isFinite(Number(options.target?.x)) && Number.isFinite(Number(options.target?.y))
         ? Math.hypot(candidateFutureSelf.x - Number(options.target.x), candidateFutureSelf.y - Number(options.target.y))
           - Math.hypot(Number(self?.x || 0) - Number(options.target.x), Number(self?.y || 0) - Number(options.target.y))
@@ -147,7 +175,8 @@ function calculateDodgeDirection(self, bullets, options = {}) {
   });
 
   // Sort by threat ascending (lowest threat = safest)
-  threatField.sort((a, b) => a.directHits - b.directHits
+  threatField.sort((a, b) => a.avoidableHits - b.avoidableHits
+    || a.directHits - b.directHits
     || b.minCPA - a.minCPA
     || b.minTTI - a.minTTI);
 
@@ -175,7 +204,11 @@ function calculateDodgeDirection(self, bullets, options = {}) {
   return {
     dx: safest.dx,
     dy: safest.dy,
-    reason: safest.directHits > 0 ? 'direct-threat-dodge' : 'safe-dodge',
+    reason: safest.unavoidableHits > 0 && safest.avoidableHits === 0
+      ? 'unavoidable-current-shot'
+      : (safest.directHits > 0 ? 'direct-threat-dodge' : 'safe-dodge'),
+    reactionBudgetMs,
+    unavoidableCurrentShot: safest.unavoidableHits > 0,
     threatField
   };
 }

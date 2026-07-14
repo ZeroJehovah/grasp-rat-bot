@@ -67,6 +67,9 @@ function decisionSafetyCombatMetrics(metrics) {
     selfDamage: numberOrNull(metrics.selfDamage),
     targetDamage: numberOrNull(metrics.targetDamage),
     actualShots: numberOrNull(metrics.actualShots),
+    requestedShots: numberOrNull(metrics.requestedShots),
+    acceptedShots: numberOrNull(metrics.acceptedShots),
+    unackedShots: numberOrNull(metrics.unackedShots),
     confirmedHits: numberOrNull(metrics.confirmedHits),
     incomingHits: numberOrNull(metrics.incomingHits),
     estimatedHitRate: numberOrNull(metrics.estimatedHitRate),
@@ -163,9 +166,31 @@ function evaluateBrowserlessSafety(state = {}, context = {}, options = {}) {
   const startedAtMs = numberOrNull(context.startedAtMs) ?? nowMs;
   const requireSelf = context.requireSelf !== false;
   if (requireSelf && !self && nowMs - startedAtMs >= noSelfGraceMs) {
+    const lastDecision = context.lastDecision || context.decision || null;
+    const messages = Array.isArray(state?.fallback?.messages) ? state.fallback.messages : [];
+    const recentSessionMessages = messages.filter(message => /left user|killed|kill/i.test(String(
+      message?.message ?? message?.text ?? message?.content ?? message
+    ))).slice(-6);
     return createSafetyEvent('no-self', {
       noSelfGraceMs,
-      elapsedMs: nowMs - startedAtMs
+      elapsedMs: nowMs - startedAtMs,
+      lastRealtimeTick: state?.realtime?.tick ?? null,
+      lastRealtimeAtMs: state?.realtime?.receivedAtMs ?? null,
+      lastRealtimeAgeMs: state?.realtime?.frameAgeMs ?? state?.frameAges?.realtimeAgeMs ?? null,
+      lastSelf: state?.realtime?.lastSelf || context.lastSelf || null,
+      lastDecision: lastDecision ? decisionSafetyDetail(lastDecision) : null,
+      lastCombatTarget: lastDecision?.combat?.target || lastDecision?.action?.target || null,
+      recentSessionMessages,
+      ws: {
+        open: context.wsOpen === undefined ? null : Boolean(context.wsOpen),
+        closed: context.wsClosed || null,
+        error: context.wsError ? (context.wsError.message || String(context.wsError)) : ''
+      },
+      snapshot: {
+        tick: state?.fallback?.tick ?? null,
+        receivedAtMs: state?.fallback?.receivedAtMs ?? null,
+        containsSelf: Boolean(state?.fallback?.self)
+      }
     }, {
       nowMs,
       shouldLeave: false,

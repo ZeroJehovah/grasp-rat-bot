@@ -13,12 +13,23 @@ function finalCandidateMeta(action, options = {}) {
   const roiScore = numberOrNull(options.roiScore ?? action.roiScore ?? action.score ?? action.opportunityChoice?.score);
   const staminaCost = numberOrNull(options.staminaCost ?? action.staminaCost ?? action.opportunityChoice?.staminaCost);
   const riskScore = numberOrNull(options.riskScore ?? action.riskScore);
+  const expectedReward = numberOrNull(options.expectedReward ?? action.expectedReward ?? action.reward
+    ?? action.target?.coinRoute?.value ?? action.target?.fieldAmount ?? action.target?.amount);
+  const switchCost = Math.max(0, numberOrNull(options.switchCost ?? action.switchCost) ?? 0);
+  const riskMultiplier = riskScore === null ? 1 : Math.max(0.05, 1 - Math.max(0, riskScore) / 100);
+  const netROI = numberOrNull(options.netROI ?? action.netROI)
+    ?? (expectedReward !== null && staminaCost !== null
+      ? expectedReward * riskMultiplier / Math.max(1, staminaCost + switchCost)
+      : roiScore);
   return {
     priorityBand: String(options.priorityBand || actionPriorityBand(action)),
     hardGate: Boolean(options.hardGate),
     targetKey: String(options.targetKey || focus?.key || ''),
     roiScore,
     riskScore,
+    expectedReward,
+    switchCost,
+    netROI,
     staminaCost,
     validUntil: numberOrNull(options.validUntil),
     switchReason: String(options.switchReason || action.reason || action.kind || ''),
@@ -43,7 +54,13 @@ function selectFinalActionCandidateCore(candidates = []) {
   if (!valid.length) return null;
   const hardGate = valid.find(candidate => candidate.hardGate);
   if (hardGate) return hardGate;
-  return valid.slice().sort((a, b) => Number(a.order || 0) - Number(b.order || 0))[0] || null;
+  const rank = band => ({ exit: 600, safety: 500, combat: 400, profit: 300, recover: 200, wait: 100 }[band] || 0);
+  return valid.slice().sort((a, b) => rank(b.priorityBand) - rank(a.priorityBand)
+    || (a.priorityBand === 'profit' && b.priorityBand === 'profit'
+      ? Number(b.netROI ?? -Infinity) - Number(a.netROI ?? -Infinity)
+      : 0)
+    || Number(a.riskScore ?? 0) - Number(b.riskScore ?? 0)
+    || Number(a.order || 0) - Number(b.order || 0))[0] || null;
 }
 
 module.exports = {

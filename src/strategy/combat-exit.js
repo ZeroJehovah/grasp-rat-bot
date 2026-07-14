@@ -153,9 +153,72 @@ function evaluateConfirmedCombatHpExitCore(input = {}, options = {}) {
   };
 }
 
+function evaluateCombatExchangeStopLossCore(input = {}, options = {}) {
+  const engagedMs = Math.max(0, Number(input.engagedMs || 0));
+  const acceptedShots = Math.max(0, Number(input.acceptedShots || 0));
+  const damageObservations = Math.max(0, Number(input.damageObservations || 0));
+  const selfHp = numberOrNull(input.selfHp);
+  const targetHp = numberOrNull(input.targetHp);
+  const selfDamage = Math.max(0, Number(input.windowSelfDamage || 0));
+  const targetDamage = Math.max(0, Number(input.windowTargetDamage || 0));
+  const longSelfDamage = Math.max(0, Number(input.longWindowSelfDamage ?? selfDamage));
+  const longTargetDamage = Math.max(0, Number(input.longWindowTargetDamage ?? targetDamage));
+  const distanceProgressCm = Number(input.distanceProgressCm || 0);
+  const ready = engagedMs >= Math.max(8000, Number(options.exchangeMinEngageMs || 8000))
+    && acceptedShots >= Math.max(10, Number(options.exchangeMinAcceptedShots || 10))
+    && damageObservations >= Math.max(4, Number(options.exchangeMinDamageObservations || 4));
+  const targetDps = targetDamage / Math.max(1, Number(input.windowMs || 10000) / 1000);
+  const selfDps = selfDamage / Math.max(1, Number(input.windowMs || 10000) / 1000);
+  const ttkMs = targetHp !== null && targetDps > 0 ? targetHp / targetDps * 1000 : Infinity;
+  const ttdMs = selfHp !== null && selfDps > 0 ? selfHp / selfDps * 1000 : Infinity;
+  const lowHpFinishProtected = targetHp !== null && selfHp !== null
+    && targetHp <= 20
+    && selfHp >= targetHp + 10
+    && Number(input.recentTargetDamage || 0) > 0;
+  let rule = '';
+  if (ready && !lowHpFinishProtected) {
+    if (selfDamage - targetDamage >= 12 && targetHp !== null && selfHp !== null && targetHp >= selfHp) {
+      rule = 'negative-damage-exchange';
+    } else if (Number.isFinite(ttdMs) && ttdMs * 1.25 < ttkMs && targetHp !== null && targetHp > 25) {
+      rule = 'ttd-below-ttk';
+    } else if (engagedMs >= 20000 && longTargetDamage < 6 && longSelfDamage >= 9 && distanceProgressCm < 500) {
+      rule = 'long-no-progress-loss';
+    }
+  }
+  const nowMs = Number(input.nowMs || Date.now());
+  const previousSince = Number(input.degradationSinceAt || 0);
+  const degradationSinceAt = rule ? (previousSince || nowMs) : 0;
+  const confirmMs = Math.max(2500, Number(options.exchangeConfirmMs || 2750));
+  const triggered = Boolean(rule && nowMs - degradationSinceAt >= confirmMs);
+  return {
+    ready,
+    active: Boolean(rule),
+    triggered,
+    rule,
+    reason: triggered ? `combat-exchange-stop-loss-${rule}` : (rule ? 'combat-exchange-degrading' : 'combat-exchange-acceptable'),
+    degradationSinceAt,
+    confirmMs,
+    exchangeWindow: {
+      windowMs: Number(input.windowMs || 10000),
+      selfDamage,
+      targetDamage,
+      longSelfDamage,
+      longTargetDamage,
+      distanceProgressCm
+    },
+    ttdMs: Number.isFinite(ttdMs) ? Math.round(ttdMs) : null,
+    ttkMs: Number.isFinite(ttkMs) ? Math.round(ttkMs) : null,
+    damageRatio: targetDamage > 0 ? Number((selfDamage / targetDamage).toFixed(3)) : (selfDamage > 0 ? null : 0),
+    confirmedShotCount: acceptedShots,
+    damageObservations,
+    lowHpFinishProtected
+  };
+}
+
 module.exports = {
   combatDisadvantageConfirmationCore,
   combatHpExitThresholdsCore,
   evaluateConfirmedCombatHpExitCore,
+  evaluateCombatExchangeStopLossCore,
   evaluateCombatHpExitCore
 };

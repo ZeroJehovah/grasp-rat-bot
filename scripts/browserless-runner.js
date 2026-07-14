@@ -1,6 +1,22 @@
 #!/usr/bin/env node
 'use strict';
 
+// Resolve the deployed commit before loading the runtime so every stream can
+// bind its records to one immutable revision. Failure remains non-fatal and is
+// reported by runtime-revision.js in runner-start diagnostics.
+if (!process.env.GRASP_RAT_BROWSERLESS_REVISION) {
+  try {
+    process.env.GRASP_RAT_BROWSERLESS_REVISION = require('child_process').execFileSync(
+      'git', ['rev-parse', '--short=12', 'HEAD'], {
+        cwd: require('path').resolve(__dirname, '..'),
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+        timeout: 2000
+      }
+    ).trim();
+  } catch (_) {}
+}
+
 const {
   parseBrowserlessRunnerArgs,
   usage

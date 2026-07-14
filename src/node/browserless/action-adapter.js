@@ -296,6 +296,11 @@ function createInitialActionState() {
     sentCount: 0,
     velocitySentCount: 0,
     shootSentCount: 0,
+    shootAcceptedCount: 0,
+    shootUnackedCount: 0,
+    pendingShootCommands: [],
+    latestObservedTick: null,
+    shootAckTimeoutMs: 3000,
     stopCount: 0,
     skippedCount: 0,
     velocityRepeatSentCount: 0,
@@ -361,6 +366,9 @@ function createBrowserlessActionAdapter(options = {}) {
   const velocityStopRepeatCount = Math.max(0, Math.round(Number(options.velocityStopRepeatCount ?? options.directWsStopRepeatCount ?? BROWSER_RUNTIME_DEFAULTS.directWsStopRepeatCount ?? 0)));
   const settlementFrames = Math.max(1, Number(options.settlementFrames ?? DEFAULT_SETTLEMENT_FRAMES));
   const combatShootMinIntervalMs = Math.max(1, Number(options.combatShootMinIntervalMs ?? DEFAULT_COMBAT_SHOOT_MIN_INTERVAL_MS));
+  const maxPendingShootCommands = Math.max(1, Math.round(Number(options.maxPendingShootCommands ?? 3)));
+  const initialShootAckTimeoutMs = Math.max(500, Number(options.shootAckTimeoutMs ?? 3000));
+  const onShootRequest = typeof options.onShootRequest === 'function' ? options.onShootRequest : null;
   const shootRepeatEnabled = options.shootRepeatEnabled === true;
   const shootRepeatMs = Math.max(
     combatShootMinIntervalMs,
@@ -672,8 +680,18 @@ function createBrowserlessActionAdapter(options = {}) {
     return { ok: true, skipped: false, command: summarizeCommand(command), pulseToken, repeat };
   }
 
-  function sendShoot(targetX, targetY, startX, startY, reason, target = null, cadenceMs = combatShootMinIntervalMs) {
+  function expirePendingShootCommands(atMs = now()) {
+    const retained = [];
+    for (const command of state.pendingShootCommands) {
+      if (Number(atMs) - Number(command.sentAtMs || 0) > Number(state.shootAckTimeoutMs || initialShootAckTimeoutMs)) state.shootUnackedCount += 1;
+      else retained.push(command);
+    }
+    state.pendingShootCommands = retained;
+  }
+
+  function sendShoot(targetX, targetY, startX, startY, reason, target = null, cadenceMs = combatShootMinIntervalMs, shotMeta = {}) {
     const atMs = now();
+    expirePendingShootCommands(atMs);
     if (state.transportSealed) {
       state.skippedCount += 1;
       return { ok: false, skipped: true, reason: state.transportSealReason || 'transport-sealed' };
@@ -681,6 +699,16 @@ function createBrowserlessActionAdapter(options = {}) {
     if (!transport || typeof transport.sendShoot !== 'function') {
       state.skippedCount += 1;
       return { ok: false, skipped: true, reason: 'missing-transport' };
+    }
+    if (state.pendingShootCommands.length >= maxPendingShootCommands) {
+      state.skippedCount += 1;
+      return {
+        ok: true,
+        skipped: true,
+        reason: 'shoot-unacked-backpressure',
+        pendingCount: state.pendingShootCommands.length,
+        maxPendingShootCommands
+      };
     }
     const last = state.lastShootCommand;
     const intervalMs = Math.max(combatShootMinIntervalMs, Number(cadenceMs || 0));
@@ -712,12 +740,34 @@ function createBrowserlessActionAdapter(options = {}) {
       sentAtMs: atMs,
       sentAt: new Date(atMs).toISOString(),
       target,
-      cadenceMs: intervalMs
+      cadenceMs: intervalMs,
+      observedTick: numberOrNull(shotMeta.observedTick ?? state.latestObservedTick),
+      aimMode: String(shotMeta.aimMode || ''),
+      hypothesis: String(shotMeta.hypothesis || ''),
+      flightTicks: numberOrNull(shotMeta.flightTicks)
     };
     nextCommandId += 1;
     state.sentCount += 1;
     state.shootSentCount += 1;
     state.lastShootCommand = command;
+    state.pendingShootCommands.push(command);
+    if (onShootRequest) {
+      try {
+        onShootRequest({
+          commandId: command.id,
+          requestedAtMs: command.sentAtMs,
+          targetId: targetRepeatKey(target),
+          targetX: command.targetX,
+          targetY: command.targetY,
+          startX: command.startX,
+          startY: command.startY,
+          observedTick: command.observedTick,
+          aimMode: command.aimMode,
+          hypothesis: command.hypothesis,
+          flightTicks: command.flightTicks
+        });
+      } catch (_) {}
+    }
     return { ok: true, skipped: false, command: summarizeCommand(command), cadenceMs: intervalMs };
   }
 
@@ -1246,7 +1296,13 @@ function createBrowserlessActionAdapter(options = {}) {
           startY,
           shooting.reason || 'combat-live-shoot',
           combat.target,
-          shooting.effectiveCadenceMs || shooting.cadenceMs
+          shooting.effectiveCadenceMs || shooting.cadenceMs,
+          {
+            observedTick: combat.timing?.observedTick ?? combat.tick,
+            aimMode: combat.aim?.mode,
+            hypothesis: combat.aim?.motionProbe?.hypothesis,
+            flightTicks: combat.aim?.flightTicks
+          }
         );
       }
     }
@@ -1276,9 +1332,22 @@ function createBrowserlessActionAdapter(options = {}) {
 
   function observeState(stateSnapshot) {
     validateShootRepeatState(stateSnapshot);
+    state.latestObservedTick = numberOrNull(stateSnapshot?.realtime?.tick);
+    state.shootAckTimeoutMs = Math.max(500, Number(
+      stateSnapshot?.command?.shooting?.ackTimeoutMs ?? state.shootAckTimeoutMs ?? initialShootAckTimeoutMs
+    ));
+    expirePendingShootCommands();
     const ack = stateSnapshot?.command?.lastAck || null;
     if (ack && (!state.lastShootAck || Number(ack.receivedAtMs || 0) !== Number(state.lastShootAck.receivedAtMs || 0) || ack.bullet_id !== state.lastShootAck.bullet_id)) {
       state.lastShootAck = ack;
+      const matchedId = ack.matchedShot?.commandId;
+      const index = matchedId === null || matchedId === undefined
+        ? 0
+        : state.pendingShootCommands.findIndex(command => Number(command.id) === Number(matchedId));
+      if (state.pendingShootCommands.length && index >= 0) {
+        state.pendingShootCommands.splice(index, 1);
+        state.shootAcceptedCount += 1;
+      }
     }
     const command = state.lastCommand;
     if (!command) return null;
@@ -1311,6 +1380,10 @@ function createBrowserlessActionAdapter(options = {}) {
       sentCount: state.sentCount,
       velocitySentCount: state.velocitySentCount,
       shootSentCount: state.shootSentCount,
+      shootAcceptedCount: state.shootAcceptedCount,
+      shootUnackedCount: state.shootUnackedCount,
+      pendingShootCount: state.pendingShootCommands.length,
+      shootAckTimeoutMs: state.shootAckTimeoutMs,
       stopCount: state.stopCount,
       skippedCount: state.skippedCount,
       velocityRepeatSentCount: state.velocityRepeatSentCount,

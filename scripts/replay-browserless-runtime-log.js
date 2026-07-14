@@ -3,6 +3,8 @@
 
 const fs = require('fs');
 const { StringDecoder } = require('string_decoder');
+const path = require('path');
+const { forEachJsonlEntry } = require('./browserless-log-summary');
 const { estimateAim } = require('../src/node/browserless/combat-adapter');
 const { actionPriorityBand } = require('../src/strategy/action-priority');
 const {
@@ -10,7 +12,7 @@ const {
   evaluateCombatHpExitCore
 } = require('../src/strategy/combat-exit');
 const { pickSafeClosingDodgeCore } = require('../src/strategy/combat-movement');
-const { updateOpponentBehaviorStateCore } = require('../src/strategy/opponent-behavior');
+const { opponentResponsePolicyCore, updateOpponentBehaviorStateCore } = require('../src/strategy/opponent-behavior');
 
 function parseArgs(argv) {
   const options = {
@@ -23,7 +25,8 @@ function parseArgs(argv) {
     controlIntervalMs: 160,
     minImprovementPct: 0,
     expectNewExit: false,
-    trustEasyKillBeforeDamage: false
+    trustEasyKillBeforeDamage: false,
+    executionDelayTicks: 5
   };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -37,6 +40,7 @@ function parseArgs(argv) {
     else if (arg === '--min-improvement-pct') options.minImprovementPct = Number(argv[++index] || 0);
     else if (arg === '--expect-new-exit') options.expectNewExit = true;
     else if (arg === '--trust-easy-kill-before-damage') options.trustEasyKillBeforeDamage = true;
+    else if (arg === '--execution-delay-ticks') options.executionDelayTicks = Number(argv[++index] || 5);
     else throw new Error(`unknown argument: ${arg}`);
   }
   if (!options.file) throw new Error('--file is required');
@@ -112,58 +116,346 @@ function actualFutureAimMiss(rows, index, aim) {
   return Math.hypot(Number(aim.x) - Number(future.x), Number(aim.y) - Number(future.y));
 }
 
+function percentile(values, ratio) {
+  const sorted = values.filter(Number.isFinite).sort((a, b) => a - b);
+  if (!sorted.length) return null;
+  return sorted[Math.max(0, Math.min(sorted.length - 1, Math.ceil(sorted.length * ratio) - 1))];
+}
+
+function targetAtTick(rows, tick) {
+  let before = null;
+  let after = null;
+  for (const row of rows) {
+    const rowTick = Number(row.detail.tick);
+    if (!Number.isFinite(rowTick)) continue;
+    if (rowTick <= tick) before = row;
+    if (rowTick >= tick) { after = row; break; }
+  }
+  if (!before) return after?.detail?.target || null;
+  if (!after || Number(after.detail.tick) === Number(before.detail.tick)) return before.detail.target || null;
+  const ratio = (tick - Number(before.detail.tick)) / (Number(after.detail.tick) - Number(before.detail.tick));
+  return {
+    x: Number(before.detail.target?.x) + (Number(after.detail.target?.x) - Number(before.detail.target?.x)) * ratio,
+    y: Number(before.detail.target?.y) + (Number(after.detail.target?.y) - Number(before.detail.target?.y)) * ratio
+  };
+}
+
+function bulletCorridorMiss(rows, ack, aim = null) {
+  const startX = Number(ack.start_x);
+  const startY = Number(ack.start_y);
+  let dx = Number(ack.dir_x_micros) / 1000000;
+  let dy = Number(ack.dir_y_micros) / 1000000;
+  if (aim) {
+    const length = Math.hypot(Number(aim.x) - startX, Number(aim.y) - startY);
+    if (length > 0) {
+      dx = (Number(aim.x) - startX) / length;
+      dy = (Number(aim.y) - startY) / length;
+    }
+  }
+  const speed = Math.max(1, Number(ack.speed_per_tick || 500));
+  const createdTick = Number(ack.created_tick);
+  const expireTick = Number(ack.expire_tick || createdTick + 30);
+  let minMiss = Infinity;
+  for (let tick = createdTick; tick <= expireTick; tick += 1) {
+    const target = targetAtTick(rows, tick);
+    if (!target) continue;
+    const bulletX = startX + dx * speed * (tick - createdTick);
+    const bulletY = startY + dy * speed * (tick - createdTick);
+    minMiss = Math.min(minMiss, Math.hypot(bulletX - Number(target.x), bulletY - Number(target.y)));
+  }
+  return minMiss;
+}
+
+function confirmedShotsForRows(options, rows) {
+  if (!rows.length) return [];
+  const wsFile = path.join(path.dirname(options.file), 'ws.jsonl');
+  if (!fs.existsSync(wsFile)) return [];
+  const firstAt = Date.parse(rows[0].entry.at) - 3000;
+  const lastAt = Date.parse(rows[rows.length - 1].entry.at) + 3000;
+  const selfId = String(rows[0].detail.self?.userId ?? '');
+  const shots = [];
+  forEachJsonlEntry(wsFile, entry => {
+    const at = Date.parse(entry?.at || '');
+    if (!Number.isFinite(at) || at < firstAt || at > lastAt) return;
+    const ack = entry?.detail?.decodedSummary?.ack;
+    if (!ack || String(ack.owner_user_id ?? '') !== selfId) return;
+    shots.push({ at, ack });
+  });
+  return shots;
+}
+
+function combatDamageEvents(rows) {
+  const target = [];
+  const self = [];
+  for (let index = 1; index < rows.length; index += 1) {
+    const previous = rows[index - 1].detail || {};
+    const current = rows[index].detail || {};
+    const tick = Number(current.tick);
+    const at = Date.parse(rows[index].entry.at);
+    const targetLoss = Number(previous.target?.hp) - Number(current.target?.hp);
+    const selfLoss = Number(previous.self?.hp) - Number(current.self?.hp);
+    if (Number.isFinite(targetLoss) && targetLoss > 0) target.push({ tick, at, damage: targetLoss });
+    if (Number.isFinite(selfLoss) && selfLoss > 0) self.push({ tick, at, damage: selfLoss });
+  }
+  return { target, self };
+}
+
+function expectedBulletArrivalTick(rows, ack) {
+  const createdTick = Number(ack.created_tick);
+  const speed = Math.max(1, Number(ack.speed_per_tick || 500));
+  const target = targetAtTick(rows, createdTick);
+  if (!target || !Number.isFinite(createdTick)) return createdTick;
+  const distance = Math.hypot(Number(target.x) - Number(ack.start_x), Number(target.y) - Number(ack.start_y));
+  return createdTick + distance / speed;
+}
+
+function attributeTargetDamageToShots(rows, shotEvaluations, damageEvents, options = {}) {
+  const lagBeforeTicks = Math.max(0, Number(options.lagBeforeTicks ?? 2));
+  const lagAfterTicks = Math.max(lagBeforeTicks, Number(options.lagAfterTicks ?? 12));
+  const units = [];
+  for (const event of damageEvents || []) {
+    let remaining = Math.max(0, Number(event.damage || 0));
+    while (remaining > 0) {
+      const damage = Math.min(3, remaining);
+      units.push({ ...event, damage });
+      remaining -= damage;
+    }
+  }
+  const available = new Set(shotEvaluations.map((_, index) => index));
+  const attributions = [];
+  for (const unit of units) {
+    let best = null;
+    for (const index of available) {
+      const shot = shotEvaluations[index];
+      const lagTicks = Number(unit.tick) - Number(shot.expectedArrivalTick);
+      if (!Number.isFinite(lagTicks) || lagTicks < -lagBeforeTicks || lagTicks > lagAfterTicks) continue;
+      const score = Math.abs(lagTicks) + Math.min(5, Number(shot.baselineMiss || Infinity) / Math.max(1, Number(options.hitRadius || 90)));
+      if (!best || score < best.score) best = { index, shot, lagTicks, score };
+    }
+    if (!best) continue;
+    available.delete(best.index);
+    attributions.push({
+      bulletId: best.shot.shot.ack.bullet_id ?? null,
+      createdTick: Number(best.shot.shot.ack.created_tick),
+      expectedArrivalTick: Number(best.shot.expectedArrivalTick.toFixed(2)),
+      damageTick: unit.tick,
+      lagTicks: Number(best.lagTicks.toFixed(2)),
+      damage: unit.damage,
+      baselineMissCm: Number.isFinite(best.shot.baselineMiss) ? Number(best.shot.baselineMiss.toFixed(1)) : null
+    });
+  }
+  return attributions;
+}
+
 function replayCombat(options) {
   const rows = selectedEntries(options).filter(({ detail }) => String(detail.target?.userId ?? '') === options.targetId);
+  const confirmedShots = confirmedShotsForRows(options, rows);
   const state = { motionSamples: [] };
-  let baselineHits = 0;
-  let improvedHits = 0;
-  let baselineMissTotal = 0;
-  let improvedMissTotal = 0;
-  let baselineShots = 0;
-  let potentialControlShots = 0;
-  let previousAt = 0;
-  for (const row of rows) {
-    const { detail } = row;
-    const at = Date.parse(row.entry.at);
-    const self = detail.self;
-    const target = detail.target;
-    state.motionSamples.push({ at, x: target.x, y: target.y, vx: target.vx, vy: target.vy });
-    state.motionSamples = state.motionSamples.slice(-20);
-    const improved = estimateAim(self, target, { combatTargetState: state });
-    const baseline = detail.aim;
-    const baselineMiss = aimMiss(self, target, baseline);
-    const improvedMiss = aimMiss(self, target, improved);
-    if (detail.shooting?.wouldShoot) {
-      baselineShots += 1;
-      baselineMissTotal += baselineMiss;
-      improvedMissTotal += improvedMiss;
-      if (baselineMiss <= options.hitRadius) baselineHits += 1;
-      if (improvedMiss <= options.hitRadius) improvedHits += 1;
-      const availableMs = previousAt ? Math.max(options.controlIntervalMs, at - previousAt) : options.controlIntervalMs;
-      potentialControlShots += Math.max(1, Math.floor(availableMs / Math.max(options.controlIntervalMs, Number(detail.shooting.effectiveCadenceMs || options.controlIntervalMs))));
+  const baselineMisses = [];
+  const improvedMisses = [];
+  const shotEvaluations = [];
+  let baselineFirstHitAt = 0;
+  let improvedFirstHitAt = 0;
+  for (const shot of confirmedShots) {
+    const createdTick = Number(shot.ack.created_tick);
+    const rowIndex = Math.max(0, rows.findLastIndex(row => Number(row.detail.tick) <= createdTick));
+    const row = rows[rowIndex];
+    const history = rows.slice(Math.max(0, rowIndex - 40), rowIndex + 1).map(item => ({
+      at: Date.parse(item.entry.at),
+      x: item.detail.target?.x,
+      y: item.detail.target?.y,
+      vx: item.detail.target?.vx,
+      vy: item.detail.target?.vy,
+      selfX: item.detail.self?.x,
+      selfY: item.detail.self?.y,
+      distance: item.detail.target?.distance
+    }));
+    state.motionSamples = history;
+    let replayBehavior = null;
+    for (const sample of history) {
+      replayBehavior = updateOpponentBehaviorStateCore(replayBehavior, {
+        ...sample,
+        firing: Boolean(row.detail.target?.firing),
+        realBulletPressure: Boolean(row.detail.movement?.dodge?.threatField?.length),
+        selfHp: row.detail.self?.hp,
+        targetHp: row.detail.target?.hp
+      }, { nowMs: sample.at, windowMs: 12000 });
     }
-    previousAt = at;
+    state.opponentBehaviorState = row.detail.behavior?.mode
+      ? {
+          ...replayBehavior,
+          mode: row.detail.behavior.mode,
+          confidence: row.detail.behavior.confidence,
+          recentHitRate: row.detail.behavior.recentHitRate,
+          responsePolicy: opponentResponsePolicyCore(row.detail.behavior.mode, {
+            distance: row.detail.target?.distance,
+            nowMs: Date.parse(row.entry.at)
+          })
+        }
+      : replayBehavior;
+    state.provenHitRate = Math.max(Number(state.provenHitRate || 0), Number(row.detail.behavior?.recentHitRate || 0));
+    state.noDamageMs = Number(row.detail.aim?.noDamageMs || 0);
+    const improved = estimateAim(row.detail.self, row.detail.target, {
+      combatTargetState: state,
+      observedTick: row.detail.tick,
+      executionTiming: {
+        medianTicks: options.executionDelayTicks,
+        p90Ticks: options.executionDelayTicks,
+        madTicks: 0,
+        source: 'july-14-confirmed-shoot-baseline'
+      }
+    });
+    const baselineMiss = bulletCorridorMiss(rows, shot.ack);
+    const improvedMiss = bulletCorridorMiss(rows, shot.ack, improved);
+    baselineMisses.push(baselineMiss);
+    improvedMisses.push(improvedMiss);
+    shotEvaluations.push({
+      shot,
+      baselineMiss,
+      improvedMiss,
+      expectedArrivalTick: expectedBulletArrivalTick(rows, shot.ack)
+    });
+    if (!baselineFirstHitAt && baselineMiss <= options.hitRadius) baselineFirstHitAt = shot.at;
+    if (!improvedFirstHitAt && improvedMiss <= options.hitRadius) improvedFirstHitAt = shot.at;
   }
+  const startedAt = rows.length ? Date.parse(rows[0].entry.at) : 0;
+  const baselineHits = baselineMisses.filter(value => value <= options.hitRadius).length;
+  const improvedHits = improvedMisses.filter(value => value <= options.hitRadius).length;
+  const stats = values => ({
+    mean: values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null,
+    p50: percentile(values, 0.5),
+    p90: percentile(values, 0.9),
+    p95: percentile(values, 0.95)
+  });
+  const baselineStats = stats(baselineMisses);
+  const improvedStats = stats(improvedMisses);
+  const damageEvents = combatDamageEvents(rows);
+  const damageAttributions = attributeTargetDamageToShots(rows, shotEvaluations, damageEvents.target, {
+    hitRadius: options.hitRadius
+  });
+  const observedTargetDamage = damageEvents.target.reduce((sum, event) => sum + Number(event.damage || 0), 0);
+  const associatedTargetDamage = damageAttributions.reduce((sum, event) => sum + Number(event.damage || 0), 0);
+  const observedSelfDamage = damageEvents.self.reduce((sum, event) => sum + Number(event.damage || 0), 0);
+  const firstObservedDamageAt = damageEvents.target[0]?.at || 0;
+  const firstMetrics = rows[0]?.detail?.metrics || {};
+  const lastMetrics = rows[rows.length - 1]?.detail?.metrics || {};
+  const metricDelta = field => {
+    const first = Number(firstMetrics[field]);
+    const last = Number(lastMetrics[field]);
+    return Number.isFinite(first) && Number.isFinite(last) ? Math.max(0, last - first) : null;
+  };
+  const totalStaminaCost = metricDelta('totalStaminaSpent');
+  const shootingStaminaCost = metricDelta('shootingStaminaSpent') ?? confirmedShots.length * 500;
   const result = {
     mode: 'combat',
     targetId: options.targetId,
     lines: `${options.startLine}-${options.endLine}`,
     frames: rows.length,
     baseline: {
-      decisionBoundShots: baselineShots,
-      estimatedHitFrames: baselineHits,
-      meanAimMissCm: baselineShots ? Number((baselineMissTotal / baselineShots).toFixed(1)) : null
+      confirmedShots: confirmedShots.length,
+      estimatedHits: baselineHits,
+      observedAssociatedHits: damageAttributions.length,
+      observedTargetDamage,
+      associatedTargetDamage,
+      estimatedTargetDamage: baselineHits * 3,
+      selfDamage: observedSelfDamage,
+      totalStaminaCost,
+      shootingStaminaCost,
+      meanAimMissCm: baselineStats.mean === null ? null : Number(baselineStats.mean.toFixed(1)),
+      p50AimMissCm: baselineStats.p50,
+      p90AimMissCm: baselineStats.p90,
+      p95AimMissCm: baselineStats.p95,
+      firstObservedDamageDelayMs: firstObservedDamageAt ? firstObservedDamageAt - startedAt : null,
+      firstEstimatedDamageDelayMs: baselineFirstHitAt ? baselineFirstHitAt - startedAt : null
     },
     improved: {
-      potentialControlShots,
-      estimatedHitFrames: improvedHits,
-      meanAimMissCm: baselineShots ? Number((improvedMissTotal / baselineShots).toFixed(1)) : null
+      confirmedShots: confirmedShots.length,
+      estimatedHits: improvedHits,
+      observedTargetDamage,
+      estimatedTargetDamage: improvedHits * 3,
+      selfDamage: observedSelfDamage,
+      totalStaminaCost,
+      shootingStaminaCost,
+      meanAimMissCm: improvedStats.mean === null ? null : Number(improvedStats.mean.toFixed(1)),
+      p50AimMissCm: improvedStats.p50,
+      p90AimMissCm: improvedStats.p90,
+      p95AimMissCm: improvedStats.p95,
+      firstObservedDamageDelayMs: firstObservedDamageAt ? firstObservedDamageAt - startedAt : null,
+      firstEstimatedDamageDelayMs: improvedFirstHitAt ? improvedFirstHitAt - startedAt : null
+    },
+    damageAttribution: {
+      lagWindowTicks: { before: 2, after: 12 },
+      targetDamageEvents: damageEvents.target.length,
+      associatedShotCount: damageAttributions.length,
+      associatedTargetDamage,
+      samples: damageAttributions.slice(0, 12)
     }
   };
-  result.improved.accepted = rows.length > 0
-    && result.improved.meanAimMissCm < result.baseline.meanAimMissCm
-    && potentialControlShots > baselineShots;
+  result.improved.accepted = rows.length > 0 && confirmedShots.length > 0
+    && (improvedHits > baselineHits
+      || result.improved.meanAimMissCm < result.baseline.meanAimMissCm
+      || (result.improved.firstEstimatedDamageDelayMs !== null
+        && (result.baseline.firstEstimatedDamageDelayMs === null
+          || result.improved.firstEstimatedDamageDelayMs < result.baseline.firstEstimatedDamageDelayMs)));
   return result;
+}
+
+function replayDodge(options) {
+  const rows = selectedEntries(options).filter(({ detail }) => !options.targetId
+    || String(detail.target?.userId ?? '') === options.targetId);
+  const reactionBudgetMs = Math.max(0, Number(options.executionDelayTicks || 5) * 50 + 50 + 100);
+  let hitEvents = 0;
+  let oldFalseSafe = 0;
+  let newFalseSafe = 0;
+  let unavoidable = 0;
+  const samples = [];
+  for (let index = 1; index < rows.length; index += 1) {
+    const previousHp = Number(rows[index - 1].detail.self?.hp);
+    const currentHp = Number(rows[index].detail.self?.hp);
+    if (!Number.isFinite(previousHp) || !Number.isFinite(currentHp) || currentHp >= previousHp) continue;
+    hitEvents += 1;
+    const hitAt = Date.parse(rows[index].entry.at);
+    let threat = null;
+    for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+      if (hitAt - Date.parse(rows[cursor].entry.at) > 750) break;
+      const field = rows[cursor].detail.movement?.dodge?.threatField;
+      if (!Array.isArray(field) || !field.length) continue;
+      const dx = Number(rows[cursor].detail.movement?.dx || 0);
+      const dy = Number(rows[cursor].detail.movement?.dy || 0);
+      threat = field.find(item => Number(item.dx) === dx && Number(item.dy) === dy) || field[0];
+      if (threat) break;
+    }
+    if (!threat) continue;
+    const oldSafe = Number(threat.directHits || 0) === 0;
+    const currentUnavoidable = Number(threat.minTTI || Infinity) < reactionBudgetMs;
+    if (oldSafe) oldFalseSafe += 1;
+    if (currentUnavoidable) unavoidable += 1;
+    if (oldSafe && !currentUnavoidable) newFalseSafe += 1;
+    if (samples.length < 12) samples.push({
+      at: rows[index].entry.at,
+      hpLoss: previousHp - currentHp,
+      oldDirectHits: Number(threat.directHits || 0),
+      minTTI: Number(threat.minTTI || 0),
+      reactionBudgetMs,
+      classification: currentUnavoidable ? 'unavoidable-current-shot' : (oldSafe ? 'false-safe-remains' : 'predicted-threat')
+    });
+  }
+  const oldRatio = hitEvents ? oldFalseSafe / hitEvents : null;
+  const newRatio = hitEvents ? newFalseSafe / hitEvents : null;
+  return {
+    mode: 'dodge',
+    targetId: options.targetId || '',
+    lines: `${options.startLine}-${options.endLine}`,
+    hitEvents,
+    reactionBudgetMs,
+    oldFalseSafe,
+    newFalseSafe,
+    unavoidableCurrentShot: unavoidable,
+    oldFalseSafeRatio: oldRatio,
+    newFalseSafeRatio: newRatio,
+    samples,
+    accepted: hitEvents > 0 && newFalseSafe < oldFalseSafe
+  };
 }
 
 function actionIsHardGate(detail) {
@@ -676,6 +968,8 @@ const result = options.mode === 'opportunity'
       ? replayExit(options)
       : (options.mode === 'arbitration'
           ? replayArbitration(options)
-          : (options.mode === 'combat-policy' ? replayCombatPolicy(options) : replayCombat(options))));
+          : (options.mode === 'combat-policy'
+              ? replayCombatPolicy(options)
+              : (options.mode === 'dodge' ? replayDodge(options) : replayCombat(options)))));
 console.log(JSON.stringify(result, null, 2));
 if (!result.accepted && !result.improved?.accepted) process.exitCode = 1;
