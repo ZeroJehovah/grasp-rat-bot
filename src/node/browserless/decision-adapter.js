@@ -2716,6 +2716,39 @@ function buildStaminaBudgetExitDecision(input, options = {}) {
   };
 }
 
+function buildEligibleProfitStaminaBudgetExitDecision(input, options = {}) {
+  if (!input?.self) return null;
+  const oneHourBudget = opportunityWindowStaminaBudget(input.self, '1h', options);
+  const oneDayBudget = opportunityWindowStaminaBudget(input.self, '1d', options);
+  const blocked = summarizeBlockedStaminaOpportunityCore(
+    safeBudgetCoinCandidates(input, options),
+    input.afkTargets || [],
+    {
+      budget: oneHourBudget,
+      coinStaminaCost: coin => opportunityCoinStaminaCost(coin, options),
+      enemyStaminaCost: target => opportunityEnemyStaminaCost(target, options),
+      targetDrop: entityDropValue
+    }
+  );
+  if (!blocked) return null;
+  if (Number.isFinite(Number(oneDayBudget)) && Number(blocked.requiredMs) > Number(oneDayBudget)) return null;
+  const exit = {
+    ...blocked,
+    window: '1h',
+    reloginDelayMs: staminaBudgetReloginDelayMs(options)
+  };
+  return {
+    kind: 'leave',
+    band: 'safety',
+    reason: 'stamina-budget-coin-leave',
+    shouldLeave: true,
+    stopMotion: true,
+    staminaBudgetExit: exit,
+    reloginDelayMs: exit.reloginDelayMs,
+    self: summarizeTarget(input.self)
+  };
+}
+
 function buildLongStaminaExhaustedLeaveDecision(input, options = {}) {
   if (!input?.self) return null;
   const thresholdMs = staminaExhaustedThreshold(options);
@@ -4951,7 +4984,15 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     && !safetyActionCanYieldToInjuredFootCoin(safetyAction)
     ? safetyAction
     : null;
-  const staminaBudgetExitAction = (profitLive || nonCombatProfit) ? buildStaminaBudgetExitDecision(input, options) : null;
+  const rawCoinStaminaBudgetExitAction = (profitLive || nonCombatProfit)
+    ? buildStaminaBudgetExitDecision(input, options)
+    : null;
+  const eligibleProfitStaminaBudgetExitAction = (profitLive || nonCombatProfit)
+    && !rawCoinStaminaBudgetExitAction
+    && !opportunity.choice
+    ? buildEligibleProfitStaminaBudgetExitDecision(profitSelectionInput, options)
+    : null;
+  const staminaBudgetExitAction = rawCoinStaminaBudgetExitAction || eligibleProfitStaminaBudgetExitAction;
   const postAttackDropCoinAction = (profitLive || nonCombatProfit) ? buildPostAttackDropCoinDecision(profitSelectionInput, stateful, options) : null;
   const postAttackDropWaitAction = (profitLive || nonCombatProfit) ? buildPostAttackDropWaitDecision(input, stateful, options) : null;
   const recoveryFootCoinAction = (profitLive || nonCombatProfit) ? buildRecoveryFootCoinDecision(profitSelectionInput, options) : null;

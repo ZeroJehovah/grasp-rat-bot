@@ -9927,6 +9927,94 @@ async function runSelfTest() {
       want: 'leave|safety|stamina-budget-coin-leave|leave|true|budget-coin|4500|1800000'
     },
     {
+      name: 'browserless profit live exits instead of waiting for eligible afk 1h budget recovery',
+      got: (() => {
+        const nowMs = Date.parse('2026-07-14T16:51:24.000Z');
+        const store = createBrowserlessStateStore({ userId: 7 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 61315,
+          entities: [
+            {
+              entity_id: 1,
+              user_id: 7,
+              name: 'self',
+              x: 0,
+              y: 0,
+              hp: 100,
+              max_hp: 100
+            },
+            {
+              entity_id: 2,
+              user_id: 27165,
+              name: 'iShareOne',
+              x: 11295,
+              y: 0,
+              hp: 100,
+              max_hp: 100
+            }
+          ],
+          bullets: []
+        }, { receivedAtMs: nowMs });
+        store.ingestFrame({
+          type: 'snapshot',
+          tick: 61316,
+          entities: [
+            {
+              entity_id: 1,
+              user_id: 7,
+              name: 'self',
+              x: 0,
+              y: 0,
+              hp: 100,
+              max_hp: 100,
+              stamina_5s_remaining_milli: 10000,
+              stamina_1h_remaining_milli: 14478,
+              stamina_1d_remaining_milli: 17014478
+            },
+            {
+              entity_id: 2,
+              user_id: 27165,
+              name: 'iShareOne',
+              x: 11295,
+              y: 0,
+              hp: 100,
+              max_hp: 100,
+              death_drop_coins: 4,
+              stamina_5s_remaining_milli: 10000,
+              current_join_mode: 'Passive'
+            }
+          ],
+          bullets: [],
+          coin_drops: [{ drop_id: 526, amount: 1, x: 12512, y: 0 }],
+          messages: []
+        }, { receivedAtMs: nowMs + 10 });
+        const decision = buildBrowserlessDecision(store.getState(nowMs + 20), {}, {
+          ...buildBrowserlessRuntimeDefaults({ staminaExhaustedBelowMs: 200 }),
+          nowMs: nowMs + 20,
+          controlMode: 'profit-live',
+          dynamicProfitThresholdEnabled: true,
+          opportunityExpectedSwitchCostMs: 0
+        });
+        return [
+          decision.kind,
+          decision.band,
+          decision.reason,
+          decision.action.shouldLeave,
+          decision.action.staminaBudgetExit.type,
+          decision.action.staminaBudgetExit.id,
+          decision.action.staminaBudgetExit.name,
+          decision.action.staminaBudgetExit.budgetMs,
+          decision.action.staminaBudgetExit.requiredMs,
+          decision.action.staminaBudgetExit.shortageMs,
+          decision.action.reloginDelayMs,
+          decision.profit.rawBest?.id,
+          decision.profit.best === null
+        ].join('|');
+      })(),
+      want: 'leave|safety|stamina-budget-coin-leave|true|enemy|27165|iShareOne|12778|28295|15517|1800000|526|true'
+    },
+    {
       name: 'browserless profit live takes realtime final coin under 1d stamina limit',
       got: (() => {
         const store = createBrowserlessStateStore({ userId: 7 });
