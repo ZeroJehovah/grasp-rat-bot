@@ -16775,8 +16775,10 @@ async function runSelfTest() {
           tick: 10,
           entities: [
             { user_id: 7, name: 'self', drop: 900 },
-            { user_id: 8, name: 'alice', drop: 499 },
+            { user_id: 8, name: 'alice', drop: 49 },
             { user_id: 9, name: 'bob', death_drop_coins: 500 },
+            { user_id: 10, name: 'carol-low', drop: 50 },
+            { user_id: 11, name: 'below-record-threshold', drop: 49 },
             { entity_id: 10, name: 'name-only', drop: 999 }
           ]
         }, { source: 'prelogin-http', selfUserId: 7, observedAtMs: t });
@@ -16785,7 +16787,8 @@ async function runSelfTest() {
           tick: 20,
           entities: [
             { user_id: 8, name: 'alice', drop: 520 },
-            { user_id: 9, name: 'bob', drop: 450 }
+            { user_id: 9, name: 'bob', drop: 450 },
+            { user_id: 10, name: 'carol-low', drop: 40 }
           ]
         }, { source: 'ws', selfUserId: 7, observedAtMs: t });
         t += 60000;
@@ -16815,13 +16818,19 @@ async function runSelfTest() {
           current.players[1].initialDrop,
           current.players[1].maxDrop,
           current.players[1].latestDrop,
+          current.players[2].name,
+          current.players[2].initialDrop,
+          current.players[2].maxDrop,
+          current.players[2].latestDrop,
+          current.players.some(player => player.userId === 11),
           current.players.some(player => player.userId === 7),
+          current.threshold,
           current.lastSnapshotSource,
           nextDay.day,
           nextDay.players.length
         ].join('|');
       }),
-      want: '2026-07-14|2|alice-renamed|8|520|800|600|bob|500|500|450|false|gap-http|2026-07-15|0'
+      want: '2026-07-14|3|alice-renamed|8|520|800|600|bob|500|500|450|carol-low|50|50|40|false|false|50|gap-http|2026-07-15|0'
     },
     {
       name: 'browserless snapshot gap poller waits three minutes after any observed snapshot',
@@ -18401,7 +18410,8 @@ async function runSelfTest() {
             file: '/tmp/should-not-leak.json',
             players: [
               { userId: 8, name: 'alice-renamed', initialDrop: 520, maxDrop: 700, latestDrop: 600 },
-              { userId: 9, name: 'bob', initialDrop: 500, maxDrop: 500, latestDrop: 450 }
+              { userId: 9, name: 'bob', initialDrop: 500, maxDrop: 500, latestDrop: 450 },
+              { userId: 10, name: 'carol-low', initialDrop: 50, maxDrop: 499, latestDrop: 499 }
             ]
           }
         });
@@ -18412,6 +18422,8 @@ async function runSelfTest() {
           compact.highDropPlayers.source,
           compact.highDropPlayers.p[0].join(','),
           compact.highDropPlayers.p[1].join(','),
+          compact.highDropPlayers.p.length,
+          JSON.stringify(compact.highDropPlayers).includes('carol-low'),
           JSON.stringify(compact).includes('should-not-leak'),
           /<h2>今日高收益玩家<\/h2>/.test(panelText),
           /id="highDropPlayers"/.test(panelText),
@@ -18421,7 +18433,7 @@ async function runSelfTest() {
           panelText.indexOf('id="highDropPlayers"') < panelText.indexOf('id="nearbyGrid"')
         ].join('|');
       })(),
-      want: '2026-07-14|ws|alice-renamed,520,700,600,8|bob,500,500,450,9|false|true|true|true|true|true|true'
+      want: '2026-07-14|ws|alice-renamed,520,700,600,8|bob,500,500,450,9|2|false|false|true|true|true|true|true|true'
     },
     {
       name: 'browserless compact status and web panel expose id-backed score and daily damage name lists',

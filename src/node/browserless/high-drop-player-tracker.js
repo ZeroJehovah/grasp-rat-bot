@@ -5,7 +5,7 @@ const path = require('path');
 
 const SCHEMA_VERSION = 2;
 const UTC8_OFFSET_MS = 8 * 60 * 60 * 1000;
-const DEFAULT_THRESHOLD = 500;
+const DEFAULT_RECORD_THRESHOLD = 50;
 const DEFAULT_SNAPSHOT_GAP_MS = 3 * 60 * 1000;
 
 function cloneJson(value) {
@@ -151,7 +151,7 @@ function writeStore(file, store) {
 function createHighDropPlayerTracker(options = {}) {
   const now = typeof options.now === 'function' ? options.now : Date.now;
   const file = path.resolve(options.file || path.join(process.cwd(), 'data', 'browserless-runner', 'high-drop-players.json'));
-  const threshold = Math.max(0, Number(options.threshold ?? DEFAULT_THRESHOLD));
+  const threshold = Math.max(0, Number(options.threshold ?? DEFAULT_RECORD_THRESHOLD));
   let store = readStore(file, dayKey(now()));
   let lastWriteAtMs = Date.parse(store.updatedAt || '');
   if (!Number.isFinite(lastWriteAtMs)) lastWriteAtMs = 0;

@@ -12,6 +12,7 @@ const PICKED_COINS_PER_SELF_DROP = 2;
 const DEFAULT_STAMINA_EXHAUSTED_THRESHOLD_MS = 1000;
 const DEFAULT_STAMINA_RESET_GRACE_MS = 10000;
 const RECENT_EXIT_MATCH_WINDOW_MS = 60000;
+const HIGH_DROP_PANEL_THRESHOLD = 500;
 
 function defaultBrowserlessState() {
   return {
@@ -1402,18 +1403,21 @@ function compactNearby(nearby) {
 function compactHighDropPlayers(value) {
   if (!value || typeof value !== 'object') return null;
   const players = Array.isArray(value.players) ? value.players : [];
+  const rows = players.map(player => [
+    compactString(player?.name, 96),
+    compactNumber(player?.initialDrop),
+    compactNumber(player?.maxDrop),
+    compactNumber(player?.latestDrop),
+    compactNumber(player?.userId)
+  ]).filter(row => row[0] && row.slice(1).every(item => item !== null))
+    .filter(row => row.slice(1, 4).some(item => item >= HIGH_DROP_PANEL_THRESHOLD))
+    .slice(0, 160);
   return {
     day: compactString(value.day, 10),
     updatedAt: value.updatedAt || '',
     lastSnapshotAt: value.lastSnapshotAt || '',
     source: compactString(value.lastSnapshotSource, 32),
-    p: players.map(player => [
-      compactString(player?.name, 96),
-      compactNumber(player?.initialDrop),
-      compactNumber(player?.maxDrop),
-      compactNumber(player?.latestDrop),
-      compactNumber(player?.userId)
-    ]).filter(row => row[0] && row.slice(1).every(item => item !== null)).slice(0, 160)
+    p: rows
   };
 }
 
