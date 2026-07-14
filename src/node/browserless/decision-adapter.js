@@ -4240,6 +4240,11 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
   );
   const singleCoinBaitAction = dailyFinalCoinAction ? null : singleCoinBait.action;
   const singleCoinBaitReleaseAction = singleCoinBait.phase === 'release' ? singleCoinBaitAction : null;
+  const noCandidateWaitReason = profitThresholdContext.active
+    && Number(opportunity.threshold?.filteredCount || 0) > 0
+    && Number(opportunity.threshold?.eligibleCount || 0) === 0
+    ? 'dynamic-profit-threshold-wait'
+    : 'no-profitable-candidate';
   let kind = 'wait';
   let band = 'wait';
   let reason = '';
@@ -4292,7 +4297,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       candidate(returnToCenterAction, 190, 'return-to-center-fallback'),
       candidate(opportunisticShotWaitAction, 200, 'opportunistic-shot-wait'),
       candidate(staminaBlockedWaitAction, 210, 'stamina-blocked-wait'),
-      candidate({ kind: 'wait', band: 'wait', reason: 'no-profitable-candidate' }, 999, 'no-candidate-wait')
+      candidate({ kind: 'wait', band: 'wait', reason: noCandidateWaitReason }, 999, 'no-candidate-wait')
     ].filter(Boolean);
     finalSelection = selectFinalActionCandidateCore(candidates);
     action = finalSelection?.action || action;

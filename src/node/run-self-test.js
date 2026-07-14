@@ -7144,6 +7144,7 @@ async function runSelfTest() {
         return [
           before.action.target?.id,
           after.kind,
+          after.reason,
           after.action.finalActionArbitration === undefined,
           adapter.getState().opportunityChoice === null,
           exitDisabled.reason,
@@ -7152,7 +7153,7 @@ async function runSelfTest() {
           exitActive.action.staminaBudgetExit?.id
         ].join('|');
       })(),
-      want: 'held-low|wait|true|true|stamina-budget-coin-leave|stamina-budget-coin-leave|held-low|held-low'
+      want: 'held-low|wait|dynamic-profit-threshold-wait|true|true|stamina-budget-coin-leave|stamina-budget-coin-leave|held-low|held-low'
     },
     {
       name: 'browserless dynamic profit threshold qualifies dense routes by aggregate ROI',
@@ -7336,9 +7337,9 @@ async function runSelfTest() {
         const state = store.getState(nowMs + 20);
         const active = buildBrowserlessDecision(state, {}, { nowMs, controlMode: 'profit-live', dynamicProfitThresholdEnabled: true });
         const disabled = buildBrowserlessDecision(state, {}, { nowMs, controlMode: 'profit-live', dynamicProfitThresholdEnabled: false });
-        return [active.kind, active.profit.threshold.filteredCount, disabled.action.kind, disabled.action.target?.userId].join('|');
+        return [active.kind, active.reason, active.profit.threshold.filteredCount, disabled.action.kind, disabled.action.target?.userId].join('|');
       })(),
-      want: 'wait|1|seek-enemy|8'
+      want: 'wait|dynamic-profit-threshold-wait|1|seek-enemy|8'
     },
     {
       name: 'browserless dynamic profit threshold filters low ROI coins and relaxes near reset',
@@ -7383,6 +7384,7 @@ async function runSelfTest() {
           activePass.action.target?.id,
           activePass.profit.threshold.active,
           activeBlock.kind,
+          activeBlock.reason,
           activeBlock.profit.threshold.filteredCount,
           relaxed.action.target?.id,
           relaxed.profit.threshold.reason,
@@ -7390,7 +7392,7 @@ async function runSelfTest() {
           unknown.profit.threshold.reason
         ].join('|');
       })(),
-      want: 'coin-9000|true|wait|1|coin-11000|insufficient-burn-window|coin-11000|daily-stamina-unknown'
+      want: 'coin-9000|true|wait|dynamic-profit-threshold-wait|1|coin-11000|insufficient-burn-window|coin-11000|daily-stamina-unknown'
     },
     {
       name: 'browserless strategy defaults track browser runtime defaults',
@@ -17595,6 +17597,7 @@ async function runSelfTest() {
           panelScript.includes('offlineStats.lastExitReason || status.recentExit?.reason || currentReason'),
           panelScript.includes("'combat-trade-disadvantage-leave': '战斗交换持续不利，预计继续交战风险过高，主动退出'"),
           panelScript.includes("'combat-pressure-disadvantage-leave': '遭到持续火力压制，我方血量处于劣势，主动退出'"),
+          panelScript.includes("'dynamic-profit-threshold-wait': '当日时间充裕，动态收益门槛生效，等待更高收益目标'"),
           panelScript.includes("addRow(rowsOut, '退出触发血量', combatExitHpText(status))"),
           panelScript.includes("return '与 ' + name + ' 交战后受伤'"),
           panelScript.includes("addRow(rowsOut, '交战对手', targetLabel(battle.target), true)"),
@@ -17605,7 +17608,7 @@ async function runSelfTest() {
           panelText.indexOf('id="battlePanel"') < panelText.indexOf('class="stats-grid"')
         ].join('|');
       })(),
-      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
+      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless compact exit preserves trigger hp evidence',
