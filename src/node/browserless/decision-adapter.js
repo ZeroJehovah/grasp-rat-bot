@@ -3485,7 +3485,80 @@ function incomingBulletPressure(input) {
   };
 }
 
-function pickBrowserlessInjuryPressure(input, options = {}) {
+function recentBrowserlessCombatPressure(input, stateful, options = {}) {
+  const nowMs = Number(input?.nowMs || Date.now());
+  const recentMs = browserlessInjuryRecentMs(options);
+  const metrics = stateful?.combatMetrics || null;
+  const combatTarget = stateful?.combatTarget || null;
+  const metricsId = String(metrics?.targetId ?? '');
+  const combatTargetId = String(combatTarget?.id ?? '');
+  const candidates = [];
+  const addCandidate = (id, observedAt, source, fields = {}) => {
+    if (!id || !(observedAt > 0) || observedAt > nowMs || nowMs - observedAt > recentMs) return;
+    const visible = (input?.visibleTargets || []).find(target => targetKey(target) === id) || null;
+    const target = visible || {
+      type: 'enemy',
+      id,
+      userId: numberOrNull(id),
+      name: fields.name || '',
+      authority: 'realtime-history',
+      x: numberOrNull(fields.x),
+      y: numberOrNull(fields.y),
+      hp: numberOrNull(fields.hp),
+      maxHp: numberOrNull(fields.maxHp),
+      drop: numberOrNull(fields.drop),
+      distance: numberOrNull(fields.distance),
+      active: Boolean(fields.active),
+      moving: Boolean(fields.moving),
+      firing: Boolean(fields.firing),
+      alive: true,
+      easyKillKnown: Boolean(fields.easyKillKnown),
+      easyKillDamagedToday: Boolean(fields.easyKillDamagedToday),
+      easyKillThreatExempt: Boolean(fields.easyKillThreatExempt)
+    };
+    candidates.push({
+      key: id,
+      target,
+      observedAt,
+      ageMs: Math.max(0, Math.round(nowMs - observedAt)),
+      source
+    });
+  };
+  const metricsObservedAt = Number(metrics?.lastObservedAt || 0);
+  const metricsCombatTarget = metricsId && combatTargetId === metricsId ? combatTarget : null;
+  addCandidate(metricsId, metricsObservedAt, 'recent-combat-metrics', {
+    name: metrics?.targetName || metricsCombatTarget?.name || '',
+    x: metricsCombatTarget?.x,
+    y: metricsCombatTarget?.y,
+    hp: numberOrNull(metrics?.lastTargetHp) ?? numberOrNull(metricsCombatTarget?.hp ?? metricsCombatTarget?.displayHp),
+    drop: metricsCombatTarget?.drop,
+    distance: metricsCombatTarget?.distance,
+    active: metricsCombatTarget?.active,
+    moving: metricsCombatTarget?.moving,
+    firing: metricsCombatTarget?.firing,
+    easyKillKnown: metricsCombatTarget?.easyKillKnown,
+    easyKillDamagedToday: metricsCombatTarget?.easyKillDamagedToday,
+    easyKillThreatExempt: metricsCombatTarget?.easyKillThreatExempt
+  });
+  addCandidate(combatTargetId, Number(combatTarget?.at || 0), 'recent-combat-target', {
+    name: combatTarget?.name || '',
+    x: combatTarget?.x,
+    y: combatTarget?.y,
+    hp: numberOrNull(combatTarget?.hp ?? combatTarget?.displayHp),
+    drop: combatTarget?.drop,
+    distance: combatTarget?.distance,
+    active: combatTarget?.active,
+    moving: combatTarget?.moving,
+    firing: combatTarget?.firing,
+    easyKillKnown: combatTarget?.easyKillKnown,
+    easyKillDamagedToday: combatTarget?.easyKillDamagedToday,
+    easyKillThreatExempt: combatTarget?.easyKillThreatExempt
+  });
+  candidates.sort((a, b) => b.observedAt - a.observedAt || Number(b.source === 'recent-combat-metrics') - Number(a.source === 'recent-combat-metrics'));
+  return candidates[0] || null;
+}
+
+function pickBrowserlessInjuryPressure(input, stateful, options = {}) {
   const bulletPressure = incomingBulletPressure(input);
   const maxDistance = Math.max(
     Number(options.browserlessInjuryThreatRangeCm || 0),
@@ -3494,31 +3567,53 @@ function pickBrowserlessInjuryPressure(input, options = {}) {
     Number(BROWSER_RUNTIME_DEFAULTS.activeAvoidMaxDistance || 0),
     DEFAULT_PROFIT_LIVE_INJURY_EXIT_RANGE
   );
+  const recentCombat = recentBrowserlessCombatPressure(input, stateful, options);
   const candidates = (input?.visibleTargets || [])
     .filter(target => target?.alive !== false)
-    .filter(target => {
-      const key = targetKey(target);
-      const distance = Number(target.distance);
-      if (key && bulletPressure.ownerIds.has(key)) return true;
-      if (!Number.isFinite(distance) || distance > maxDistance) return false;
-      return Boolean(target.active || target.firing || target.recentlyActive);
-    })
     .map(target => {
       const key = targetKey(target);
       const distance = Number(target.distance);
-      const bulletOwner = key && bulletPressure.ownerIds.has(key);
-      const unknownFiring = bulletPressure.unknownIncoming && target.firing;
+      const bulletOwner = Boolean(key && bulletPressure.ownerIds.has(key));
+      const recentCombatTarget = Boolean(key && recentCombat?.key === key);
+      const inRange = Number.isFinite(distance) && distance <= maxDistance;
       const score = (bulletOwner ? 1000000000 : 0)
-        + (unknownFiring ? 700000000 : 0)
+        + (recentCombatTarget ? 700000000 : 0)
         + (target.firing ? 500000000 : 0)
-        + (target.invulnerable ? 200000000 : 0)
         + (target.active ? 100000000 : 0)
         - (Number.isFinite(distance) ? distance : 0);
-      return { target, score };
+      return { target, key, distance, bulletOwner, recentCombatTarget, inRange, score };
     })
     .sort((a, b) => b.score - a.score);
+  const bulletOwnerCandidate = candidates.find(candidate => candidate.bulletOwner) || null;
+  const recentVisibleCandidate = recentCombat
+    ? candidates.find(candidate => candidate.key === recentCombat.key && candidate.inRange) || null
+    : null;
+  const firingCandidates = candidates.filter(candidate => candidate.inRange && candidate.target.firing);
+  let selected = null;
+  let targetSource = 'none';
+  let attributable = false;
+  if (bulletOwnerCandidate) {
+    selected = bulletOwnerCandidate.target;
+    targetSource = 'incoming-bullet-owner';
+    attributable = true;
+  } else if (recentVisibleCandidate?.target?.firing) {
+    selected = recentVisibleCandidate.target;
+    targetSource = 'recent-combat-firing-target';
+    attributable = true;
+  } else if (firingCandidates.length === 1) {
+    selected = firingCandidates[0].target;
+    targetSource = 'single-firing-target';
+    attributable = true;
+  } else if (recentCombat && !recentCombat.target?.easyKillThreatExempt) {
+    selected = recentVisibleCandidate?.target || recentCombat.target;
+    targetSource = recentCombat.source;
+  }
   return {
-    target: candidates[0]?.target || null,
+    target: selected,
+    targetSource,
+    attributable,
+    recentCombatTargetKey: recentCombat?.key || '',
+    recentCombatAgeMs: recentCombat?.ageMs ?? null,
     ...bulletPressure
   };
 }
@@ -3544,7 +3639,7 @@ function rememberBrowserlessInjury(input, stateful, options = {}) {
     const previousHp = Number(previous.hp);
     const hpDrop = previousHp - hp;
     if (Number.isFinite(previousHp) && hpDrop >= minDrop) {
-      const pressure = pickBrowserlessInjuryPressure(input, options);
+      const pressure = pickBrowserlessInjuryPressure(input, stateful, options);
       stateful.browserlessInjury = {
         at: nowMs,
         previousHp,
@@ -3552,6 +3647,10 @@ function rememberBrowserlessInjury(input, stateful, options = {}) {
         hpDrop: Math.round(hpDrop * 10) / 10,
         targetKey: targetKey(pressure.target),
         target: summarizeTarget(pressure.target),
+        targetSource: pressure.targetSource,
+        attributable: pressure.attributable,
+        recentCombatTargetKey: pressure.recentCombatTargetKey,
+        recentCombatAgeMs: pressure.recentCombatAgeMs,
         hasIncoming: pressure.hasIncoming,
         unknownIncoming: pressure.unknownIncoming,
         incomingCount: pressure.incomingCount,
@@ -3614,12 +3713,16 @@ function buildBrowserlessInjuryHpExitDecision(input, stateful, combat, options =
   const injury = rememberBrowserlessInjury(input, stateful, options);
   if (options.browserlessInjuryLeaveEnabled === false) return null;
   if (!browserlessSafetyExitModeEnabled(options) || !input?.self || !injury) return null;
-  const currentPressure = pickBrowserlessInjuryPressure(input, options);
+  const currentPressure = pickBrowserlessInjuryPressure(input, stateful, options);
   if (combat?.target && options.combatActionEligible !== false) return null;
   const target = browserlessInjuryTarget(injury, currentPressure);
   if (!target && !injury.hasIncoming && !currentPressure.hasIncoming) return null;
   const nowMs = Number(input.nowMs || Date.now());
   const targetHpEvidence = browserlessInjuryTargetHpEvidence(stateful, target, injury, nowMs, options);
+  const currentPressureMatches = targetKey(currentPressure.target) === targetKey(target);
+  const pressureTargetSource = currentPressureMatches
+    ? currentPressure.targetSource
+    : (injury.targetSource || 'unknown');
   const combatExit = evaluateCombatHpExitCore({
     selfHp: hpValue(input.self),
     targetHp: targetHpEvidence.targetHp
@@ -3637,6 +3740,7 @@ function buildBrowserlessInjuryHpExitDecision(input, stateful, combat, options =
       ...combatExit,
       target: summarizeTarget(target) || injury.target || null,
       triggerSource: 'recent-injury-pressure',
+      pressureTargetSource,
       targetHpSource: targetHpEvidence.source,
       targetHpAgeMs: targetHpEvidence.ageMs
     },
@@ -3648,6 +3752,10 @@ function buildBrowserlessInjuryHpExitDecision(input, stateful, combat, options =
       hasIncoming: Boolean(injury.hasIncoming || currentPressure.hasIncoming),
       unknownIncoming: Boolean(injury.unknownIncoming || currentPressure.unknownIncoming),
       incomingCount: Number(currentPressure.incomingCount || injury.incomingCount || 0),
+      targetSource: pressureTargetSource,
+      attributable: Boolean(currentPressureMatches ? currentPressure.attributable : injury.attributable),
+      recentCombatTargetKey: String(injury.recentCombatTargetKey || currentPressure.recentCombatTargetKey || ''),
+      recentCombatAgeMs: numberOrNull(injury.recentCombatAgeMs ?? currentPressure.recentCombatAgeMs),
       exitRule: combatExit.rule,
       evaluatedTargetHp: targetHpEvidence.targetHp,
       targetHpSource: targetHpEvidence.source

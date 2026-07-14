@@ -530,7 +530,8 @@ function replayExit(options) {
     const targetId = String(target?.userId ?? target?.user_id ?? metrics.targetId ?? '');
     if (options.targetId && targetId !== options.targetId) continue;
     const selfHp = Number(action.combatExit?.selfHp ?? combat.exit?.selfHp ?? action.self?.hp ?? combat.self?.hp ?? decision.input?.self?.hp);
-    const metricsTargetMatches = targetId && String(metrics.targetId ?? '') === targetId;
+    const metricsTargetId = String(metrics.targetId ?? '');
+    const metricsTargetMatches = Boolean(targetId && metricsTargetId && metricsTargetId === targetId);
     const targetHp = Number(
       action.combatExit?.targetHp
         ?? combat.exit?.targetHp
@@ -548,6 +549,18 @@ function replayExit(options) {
       || atMs;
     const engagedMs = Math.max(0, atMs - combatStartedAt);
     const estimatedSamples = Math.max(1, Math.floor(engagedMs / Math.max(1, options.controlIntervalMs)) + 1);
+    const targetSelfDamage = metricsTargetMatches ? Number(metrics.selfDamage) : 0;
+    const targetDamage = metricsTargetMatches ? Number(metrics.targetDamage) : null;
+    const injury = action.injury || decision.injury || {};
+    const unattributedPressureTarget = Boolean(
+      (action.combatExit?.triggerSource === 'recent-injury-pressure' || combat.exit?.triggerSource === 'recent-injury-pressure')
+        && metricsTargetId
+        && !metricsTargetMatches
+        && injury.hasIncoming !== true
+        && Number(injury.incomingCount || 0) <= 0
+        && injury.attributable !== true
+    );
+    const targetThreatExempt = target?.easyKillThreatExempt === true;
     const confirmedEvaluation = evaluateConfirmedCombatHpExitCore({
       selfHp,
       targetHp: Number.isFinite(targetHp) ? targetHp : null,
@@ -555,27 +568,42 @@ function replayExit(options) {
       disadvantageSinceAt: combatStartedAt,
       combatStartedAt,
       sampleCount: estimatedSamples,
-      confirmedSelfDamage: metrics.selfDamage
+      confirmedSelfDamage: Number.isFinite(targetSelfDamage) ? targetSelfDamage : 0
     });
     const loggedExit = action.shouldLeave === true || combat.exit?.shouldLeave === true;
-    const selfDamage = Number(metrics.selfDamage);
-    const targetDamage = Number(metrics.targetDamage);
+    const selfDamage = metricsTargetMatches ? Number(metrics.selfDamage) : null;
     const favorable = Number.isFinite(selfDamage)
       && Number.isFinite(targetDamage)
-      && targetDamage > selfDamage
-      && (!Number.isFinite(targetHp) || selfHp > targetHp);
+        && targetDamage > selfDamage
+        && (!Number.isFinite(targetHp) || selfHp > targetHp);
+    const priorBattleSelfDamage = Number(metrics.selfDamage);
+    const priorBattleTargetDamage = Number(metrics.targetDamage);
+    const priorBattleSelfHp = Number(metrics.lastSelfHp);
+    const priorBattleTargetHp = Number(metrics.lastTargetHp);
+    const priorBattleFavorable = Boolean(
+      !metricsTargetMatches
+        && Number.isFinite(priorBattleSelfDamage)
+        && Number.isFinite(priorBattleTargetDamage)
+        && priorBattleTargetDamage > priorBattleSelfDamage
+        && (!Number.isFinite(priorBattleSelfHp) || !Number.isFinite(priorBattleTargetHp) || priorBattleSelfHp > priorBattleTargetHp)
+    );
     const trustedEasyKillBeforeDamage = Boolean(
       options.trustEasyKillBeforeDamage
         && targetId
         && (!options.targetId || targetId === options.targetId)
         && (!Number.isFinite(selfDamage) || selfDamage <= 0)
     );
-    const policyExit = trustedEasyKillBeforeDamage ? null : confirmedEvaluation.exit;
+    const policyExit = trustedEasyKillBeforeDamage || targetThreatExempt || unattributedPressureTarget
+      ? null
+      : confirmedEvaluation.exit;
     evaluated.push({
       line: row.line,
       at: row.entry.at || '',
       targetId: targetId || null,
       targetName: String(target?.name || metrics.targetName || ''),
+      metricsTargetId: metricsTargetId || null,
+      metricsTargetName: String(metrics.targetName || ''),
+      metricsTargetMatches,
       loggedReason: String(action.reason || decision.reason || ''),
       loggedExit,
       selfHp,
@@ -583,6 +611,9 @@ function replayExit(options) {
       selfDamage: Number.isFinite(selfDamage) ? selfDamage : null,
       targetDamage: Number.isFinite(targetDamage) ? targetDamage : null,
       favorable,
+      priorBattleFavorable,
+      unattributedPressureTarget,
+      targetThreatExempt,
       trustedEasyKillBeforeDamage,
       baselinePolicyExit,
       disadvantageObservation: confirmedEvaluation.disadvantageObservation,
@@ -594,7 +625,13 @@ function replayExit(options) {
   const newlyRequiredExits = evaluated.filter(item => !item.loggedExit && item.policyExit);
   const favorablePreventedExits = preventedLoggedExits.filter(item => item.favorable);
   const confirmationPreventedExits = preventedLoggedExits.filter(item => item.disadvantageObservation?.ready === false);
-  const justifiedPreventedExits = preventedLoggedExits.filter(item => item.favorable || item.disadvantageObservation?.ready === false);
+  const identityMismatchPreventedExits = preventedLoggedExits.filter(item => item.unattributedPressureTarget);
+  const threatExemptPreventedExits = preventedLoggedExits.filter(item => item.targetThreatExempt);
+  const justifiedPreventedExits = preventedLoggedExits.filter(item => item.favorable
+    || item.priorBattleFavorable
+    || item.disadvantageObservation?.ready === false
+    || item.unattributedPressureTarget
+    || item.targetThreatExempt);
   const trustedNoDamagePreventedExits = preventedLoggedExits.filter(item => item.trustedEasyKillBeforeDamage);
   const result = {
     mode: 'exit',
@@ -606,6 +643,8 @@ function replayExit(options) {
     preventedLoggedExitFrames: preventedLoggedExits.length,
     favorablePreventedExitFrames: favorablePreventedExits.length,
     confirmationPreventedExitFrames: confirmationPreventedExits.length,
+    identityMismatchPreventedExitFrames: identityMismatchPreventedExits.length,
+    threatExemptPreventedExitFrames: threatExemptPreventedExits.length,
     justifiedPreventedExitFrames: justifiedPreventedExits.length,
     trustedNoDamagePreventedExitFrames: trustedNoDamagePreventedExits.length,
     preservedRequiredExitFrames: preservedRequiredExits.length,

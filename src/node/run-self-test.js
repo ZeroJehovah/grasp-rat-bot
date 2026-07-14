@@ -11296,6 +11296,225 @@ async function runSelfTest() {
       want: 'true|94|46|no-target'
     },
     {
+      name: 'browserless recent injury keeps Eason metrics instead of switching to unrelated mango',
+      got: (() => {
+        const stateful = {
+          browserlessLastSelf: { key: '28886', hp: 73, at: 1000 },
+          combatTarget: {
+            id: '19677',
+            at: 1900,
+            firstSeenAt: 100,
+            name: 'Eason',
+            x: -12790,
+            y: 26939,
+            hp: 49,
+            displayHp: 52,
+            drop: 580,
+            distance: 5683,
+            active: true,
+            moving: false,
+            firing: false,
+            easyKillThreatExempt: false
+          },
+          combatMetrics: {
+            targetId: '19677',
+            targetName: 'Eason',
+            startedAt: 100,
+            lastObservedAt: 1900,
+            initialSelfHp: 88,
+            lastSelfHp: 73,
+            initialTargetHp: 100,
+            lastTargetHp: 49,
+            selfDamage: 15,
+            targetDamage: 51,
+            actualShots: 45,
+            confirmedHits: 17
+          }
+        };
+        const self = {
+          entity_id: 106,
+          user_id: 28886,
+          name: '文月',
+          x: -13321,
+          y: 31898,
+          hp: 70,
+          max_hp: 100,
+          stamina_5s_remaining_milli: 3390
+        };
+        const decision = buildBrowserlessDecision({
+          userId: 28886,
+          realtime: {
+            tick: 1060847,
+            frameAgeMs: 0,
+            self,
+            entities: [
+              self,
+              {
+                entity_id: 1280,
+                user_id: 31361,
+                name: 'mango',
+                x: -328,
+                y: 17602,
+                hp: 100,
+                max_hp: 100,
+                current_join_mode: 'Active',
+                vx: 50,
+                drop: 7
+              }
+            ],
+            bullets: [],
+            coinDrops: []
+          },
+          fallback: { coinDrops: [] }
+        }, stateful, {
+          nowMs: 2000,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          dynamicProfitThresholdEnabled: false,
+          easyKillPlayers: [{ userId: 31361, name: 'mango' }]
+        });
+        return [
+          decision.kind,
+          decision.reason,
+          stateful.browserlessInjury.targetKey,
+          stateful.browserlessInjury.target?.name,
+          stateful.browserlessInjury.target?.hp,
+          stateful.browserlessInjury.targetSource,
+          stateful.browserlessInjury.hasIncoming,
+          decision.profit.best?.target?.name,
+          decision.profit.best?.target?.easyKillThreatExempt,
+          decision.combat.metrics?.targetName,
+          decision.combat.metrics?.lastTargetHp
+        ].join('|');
+      })(),
+      want: 'recover|wait-for-full-stamina-and-hp|19677|Eason|49|recent-combat-metrics|false|mango|true|Eason|49'
+    },
+    {
+      name: 'browserless unattributed injury ignores unrelated ordinary active bystander',
+      got: (() => {
+        const stateful = {
+          browserlessLastSelf: { key: '7', hp: 73, at: 1000 }
+        };
+        const self = {
+          entity_id: 1,
+          user_id: 7,
+          name: 'self',
+          x: 0,
+          y: 0,
+          hp: 70,
+          max_hp: 100,
+          stamina_5s_remaining_milli: 10000
+        };
+        const decision = buildBrowserlessDecision({
+          userId: 7,
+          realtime: {
+            tick: 63,
+            frameAgeMs: 0,
+            self,
+            entities: [
+              self,
+              {
+                entity_id: 2,
+                user_id: 8,
+                name: 'bystander',
+                x: 19000,
+                y: 0,
+                hp: 100,
+                current_join_mode: 'Active',
+                vx: 50,
+                drop: 7
+              }
+            ],
+            bullets: [],
+            coinDrops: []
+          },
+          fallback: { coinDrops: [] }
+        }, stateful, {
+          nowMs: 2000,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          dynamicProfitThresholdEnabled: false
+        });
+        return [
+          decision.kind,
+          decision.reason,
+          stateful.browserlessInjury.targetKey || 'no-target',
+          stateful.browserlessInjury.targetSource,
+          stateful.browserlessInjury.attributable,
+          stateful.browserlessInjury.hasIncoming
+        ].join('|');
+      })(),
+      want: 'recover|wait-for-full-stamina-and-hp|no-target|none|false|false'
+    },
+    {
+      name: 'browserless recent injury still exits against the same briefly missing losing target',
+      got: (() => {
+        const stateful = {
+          browserlessLastSelf: { key: '7', hp: 80, at: 1000 },
+          combatTarget: {
+            id: '8',
+            at: 1900,
+            firstSeenAt: 1000,
+            name: 'far-pressure',
+            x: 20000,
+            y: 0,
+            hp: 100,
+            drop: 12,
+            distance: 20000,
+            active: true,
+            firing: false,
+            easyKillThreatExempt: false
+          },
+          combatMetrics: {
+            targetId: '8',
+            targetName: 'far-pressure',
+            startedAt: 1000,
+            lastObservedAt: 1900,
+            lastTargetHp: 100,
+            selfDamage: 35,
+            targetDamage: 0
+          }
+        };
+        const self = {
+          entity_id: 1,
+          user_id: 7,
+          name: 'self',
+          x: 0,
+          y: 0,
+          hp: 65,
+          max_hp: 100,
+          stamina_5s_remaining_milli: 10000
+        };
+        const decision = buildBrowserlessDecision({
+          userId: 7,
+          realtime: {
+            tick: 63,
+            frameAgeMs: 0,
+            self,
+            entities: [self],
+            bullets: [],
+            coinDrops: []
+          },
+          fallback: { coinDrops: [] }
+        }, stateful, {
+          nowMs: 2000,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          combatHighHpDisadvantageGap: 20
+        });
+        return [
+          decision.kind,
+          decision.reason,
+          decision.action.target?.name,
+          decision.action.combatExit?.targetHp,
+          decision.action.combatExit?.targetHpSource,
+          decision.action.combatExit?.pressureTargetSource,
+          decision.action.injury?.hasIncoming
+        ].join('|');
+      })(),
+      want: 'safety-exit|combat-hp-disadvantage-leave|far-pressure|100|recent-realtime-combat-metrics|recent-combat-metrics|false'
+    },
+    {
       name: 'browserless recent injury fallback still exits on clear hp gap',
       got: (() => {
         const stateful = {
