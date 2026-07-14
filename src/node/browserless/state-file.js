@@ -34,6 +34,7 @@ function defaultBrowserlessState() {
       canaryProfile: '',
       dryRun: true,
       combatEnabled: false,
+      confirmedLeave: null,
       currentAction: null,
       lastRun: null,
       lastError: ''

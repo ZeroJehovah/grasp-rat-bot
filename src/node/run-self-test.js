@@ -64,6 +64,7 @@ const {
 } = require('./browserless/decision-state');
 const {
   createCanaryRunId,
+  runPreLoginSnapshotSafety,
   runReadOnlyCanary
 } = require('./browserless/canary');
 const {
@@ -5600,6 +5601,60 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'true|false|stale-snapshot-tick|stale-snapshot-tick|1'
+    },
+    {
+      name: 'browserless confirmed leave quarantines cached self and requires a newer tick',
+      got: (async () => {
+        const baseMs = Date.parse('2026-07-14T01:00:00.000Z');
+        const config = {
+          gameOrigin: 'https://example.test',
+          snapshotPath: '/snapshot',
+          userId: 7,
+          sessionToken: 'secret',
+          httpTimeoutMs: 1000,
+          loginPointSafetySuccessRequired: 1,
+          loginPointSafetyProbeIntervalMs: 0
+        };
+        const state = {
+          loginPointSafety: { point: { x: 0, y: 0, hp: 100, source: 'test' } },
+          runner: {
+            confirmedLeave: {
+              confirmedAt: new Date(baseMs).toISOString(),
+              snapshotIgnoreUntil: new Date(baseMs + 40000).toISOString(),
+              lastRealtimeTick: 100,
+              runId: 'confirmed-leave-test'
+            }
+          }
+        };
+        const probe = async (nowMs, tick) => runPreLoginSnapshotSafety(config, state, {
+          now: () => nowMs,
+          fetchWithTimeout: async () => fakeResponseForTest({
+            status: 200,
+            body: {
+              type: 'snapshot',
+              tick,
+              entities: [{ user_id: 7, x: 0, y: 0, hp: 79, life: 'Alive', joined: 'InGame', current_join_mode: 'Active' }],
+              bullets: [],
+              coin_drops: [],
+              messages: []
+            }
+          })
+        });
+        const quarantined = await probe(baseMs + 10000, 101);
+        const stale = await probe(baseMs + 41000, 100);
+        const current = await probe(baseMs + 41000, 101);
+        return [
+          quarantined.ok,
+          quarantined.reason,
+          stale.ok,
+          stale.reason,
+          stale.response.summary.freshness.reason,
+          current.ok,
+          current.reason,
+          current.response.summary.freshness.reason
+        ].join('|');
+      })(),
+      want: 'false|confirmed-leave-snapshot-quarantine|false|stale-confirmed-leave-snapshot-tick|stale-confirmed-leave-snapshot-tick|true|self-present-reentry|fresh-after-confirmed-leave'
     },
     {
       name: 'browserless websocket transport builds direct game URL',
@@ -15141,7 +15196,7 @@ async function runSelfTest() {
       want: 'explicit-stop|2|1|60000|safe|60000'
     },
     {
-      name: 'browserless runner resumes immediately when reconnect-wait probe finds self present',
+      name: 'browserless runner waits through confirmed-leave quarantine before newer self reentry',
       got: withTempDirForTest(async dir => {
         let t = Date.parse('2026-07-12T17:00:00.000Z');
         let canaryCalls = 0;
@@ -15209,7 +15264,11 @@ async function runSelfTest() {
                   event: { reason: 'combat-trade-disadvantage-leave', at: new Date(t).toISOString() },
                   exit: { leave: { ok: true } }
                 },
-                leave: { ok: true }
+                leave: { ok: true },
+                state: {
+                  realtime: { tick: 299 },
+                  fallback: { tick: 298 }
+                }
               };
             }
             return {
@@ -15233,7 +15292,101 @@ async function runSelfTest() {
           /\"tick\":300/.test(text)
         ].join('|');
       }),
-      want: 'explicit-stop|2|1|0|true|true|true|true'
+      want: 'explicit-stop|2|1|40000|true|true|true|true'
+    },
+    {
+      name: 'browserless runner does not resume from stale self after confirmed leave',
+      got: withTempDirForTest(async dir => {
+        let t = Date.parse('2026-07-12T17:00:00.000Z');
+        let canaryCalls = 0;
+        let precheckCalls = 0;
+        let sleptMs = 0;
+        let reusedReason = '';
+        const config = parseBrowserlessRunnerArgs([
+          '--live',
+          '--data-dir',
+          dir,
+          '--user-id',
+          '7',
+          '--session-token',
+          'runner-secret-token',
+          '--login-point-x',
+          '1',
+          '--login-point-y',
+          '2'
+        ], {});
+        config.loopDelayMs = 60000;
+        updateBrowserlessStateFile(stateFilePath(config), {
+          stats: {
+            today: { day: '2026-07-13', sessionCount: 1 },
+            currentSession: { online: false }
+          }
+        }, { updatedAt: new Date(t).toISOString() });
+        const result = await runBrowserlessRunner(config, {
+          now: () => t,
+          startStatusServer: false,
+          sleep: async ms => {
+            sleptMs += ms;
+            t += ms;
+          },
+          runPreLoginSnapshotSafety: async () => {
+            precheckCalls += 1;
+            return {
+              ok: false,
+              reason: 'stale-confirmed-leave-snapshot-tick',
+              checkedAt: new Date(t).toISOString(),
+              required: 3,
+              streak: 0,
+              satisfied: false,
+              response: {
+                summary: {
+                  valid: true,
+                  tick: 299,
+                  selfPresent: true,
+                  self: { user_id: 7, x: 5999, y: 66268, hp: 79, joined: 'InGame', current_join_mode: 'Active' },
+                  freshness: { ok: false, reason: 'stale-confirmed-leave-snapshot-tick', tick: 299, latestKnownTick: 299, tickDelta: 0 }
+                }
+              }
+            };
+          },
+          runReadOnlyOnce: async (_config, options) => {
+            canaryCalls += 1;
+            if (canaryCalls === 1) {
+              return {
+                ok: false,
+                runId: 'confirmed-exit-before-stale-self-probe',
+                completedAt: new Date(t).toISOString(),
+                error: 'combat-hp-disadvantage-leave',
+                safety: {
+                  event: { reason: 'combat-hp-disadvantage-leave', at: new Date(t).toISOString() },
+                  exit: { leave: { ok: true } }
+                },
+                leave: { ok: true },
+                state: { realtime: { tick: 299 }, fallback: { tick: 298 } }
+              };
+            }
+            reusedReason = options.precheckedSnapshotSafety?.reason || '';
+            return {
+              ok: false,
+              runId: 'stale-self-wait-complete',
+              error: 'explicit-stop',
+              safety: { event: { reason: 'explicit-stop', at: new Date(t).toISOString() } }
+            };
+          }
+        });
+        const logFile = path.join(dir, 'logs', '2026-07-12', 'runner.jsonl');
+        const text = fs.readFileSync(logFile, 'utf8');
+        return [
+          result.reason,
+          canaryCalls,
+          precheckCalls,
+          sleptMs,
+          reusedReason,
+          /runner-loop-wait-self-present-resume/.test(text),
+          /stale-confirmed-leave-snapshot-tick/.test(text)
+        ].join('|');
+      }),
+      want: 'explicit-stop|2|1|100000|stale-confirmed-leave-snapshot-tick|false|true'
     },
     {
       name: 'browserless runner skips persisted reconnect wait when fresh snapshot still has self',
@@ -15319,6 +15472,85 @@ async function runSelfTest() {
         ].join('|');
       }),
       want: 'explicit-stop|1|0|true|false'
+    },
+    {
+      name: 'browserless runner preserves confirmed-leave snapshot quarantine across restart',
+      got: withTempDirForTest(async dir => {
+        const t = Date.parse('2026-07-11T03:45:54.610Z');
+        let calls = 0;
+        let precheckCalls = 0;
+        let sleptMs = 0;
+        const config = parseBrowserlessRunnerArgs([
+          '--live',
+          '--data-dir',
+          dir,
+          '--user-id',
+          '7',
+          '--session-token',
+          'runner-secret-token',
+          '--login-point-x',
+          '1',
+          '--login-point-y',
+          '2'
+        ], {});
+        const file = stateFilePath(config);
+        updateBrowserlessStateFile(file, {
+          runner: {
+            running: true,
+            confirmedLeave: {
+              confirmedAt: '2026-07-11T03:45:54.000Z',
+              snapshotIgnoreUntil: '2026-07-11T03:46:34.610Z',
+              lastRealtimeTick: 200,
+              runId: 'confirmed-leave-before-restart'
+            },
+            currentAction: {
+              kind: 'loop-wait',
+              reason: 'combat-hp-disadvantage-leave',
+              nextRunAt: '2026-07-11T03:55:25.402Z',
+              previousRunId: 'confirmed-leave-before-restart'
+            }
+          },
+          stats: {
+            lastExit: {
+              at: '2026-07-11T03:45:54.000Z',
+              reason: 'combat-hp-disadvantage-leave',
+              nextRunAt: '2026-07-11T03:55:25.402Z',
+              reconnectDelayMs: 571402
+            }
+          }
+        }, { updatedAt: '2026-07-11T03:45:54.100Z' });
+        const result = await runBrowserlessRunner(config, {
+          now: () => t,
+          startStatusServer: false,
+          sleep: async ms => {
+            sleptMs += ms;
+          },
+          runPreLoginSnapshotSafety: async () => {
+            precheckCalls += 1;
+            return { ok: false, reason: 'unexpected-probe' };
+          },
+          runReadOnlyOnce: async () => {
+            calls += 1;
+            return {
+              ok: false,
+              runId: 'post-quarantine-wait-run',
+              error: 'explicit-stop',
+              safety: { event: { reason: 'explicit-stop', at: new Date(t).toISOString() } }
+            };
+          }
+        });
+        const logFile = path.join(dir, 'logs', '2026-07-11', 'runner.jsonl');
+        const text = fs.readFileSync(logFile, 'utf8');
+        return [
+          result.reason,
+          calls,
+          precheckCalls,
+          sleptMs,
+          /runner-persisted-wait-confirmed-leave-quarantine/.test(text),
+          /runner-persisted-wait-self-present-resume/.test(text)
+        ].join('|');
+      }),
+      want: 'explicit-stop|1|0|570792|true|false'
     },
     {
       name: 'browserless runner best-effort shutdown leave hydrates persisted session',

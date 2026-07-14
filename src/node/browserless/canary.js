@@ -40,12 +40,28 @@ function snapshotSafetySelfAbsent(snapshotSafety) {
 
 function allowSelfPresentSnapshotControl(snapshotSafety) {
   if (!snapshotSafety || snapshotSafety.ok || !snapshotSafetySelfPresent(snapshotSafety)) return snapshotSafety;
+  if (snapshotSafety?.response?.summary?.freshness?.ok === false) return snapshotSafety;
+  if (/confirmed-leave-snapshot-quarantine/i.test(String(snapshotSafety.reason || ''))) return snapshotSafety;
   return {
     ...snapshotSafety,
     ok: true,
     reason: 'self-present-reentry',
     originalReason: snapshotSafety.reason || '',
     bypassedPreLoginSafety: true
+  };
+}
+
+function confirmedLeaveSnapshotGuard(state, nowMs = Date.now()) {
+  const value = state?.runner?.confirmedLeave;
+  if (!value || typeof value !== 'object') return null;
+  const ignoreUntilMs = Date.parse(String(value.snapshotIgnoreUntil || ''));
+  const lastRealtimeTick = Number(value.lastRealtimeTick || 0);
+  return {
+    confirmedAt: String(value.confirmedAt || ''),
+    snapshotIgnoreUntil: String(value.snapshotIgnoreUntil || ''),
+    ignoreUntilMs: Number.isFinite(ignoreUntilMs) ? ignoreUntilMs : 0,
+    lastRealtimeTick: Number.isFinite(lastRealtimeTick) && lastRealtimeTick > 0 ? lastRealtimeTick : 0,
+    quarantined: Number.isFinite(ignoreUntilMs) && nowMs < ignoreUntilMs
   };
 }
 
@@ -188,10 +204,18 @@ async function runSinglePreLoginSnapshotSafetyProbe(config, state, deps = {}, de
     } catch (_) {}
   }
   const runtimeDefaults = buildBrowserlessRuntimeDefaults(config);
+  const observedAtMs = typeof deps.now === 'function' ? deps.now() : Date.now();
+  const confirmedLeave = confirmedLeaveSnapshotGuard(state, observedAtMs);
+  const ordinaryLatestKnownTick = Number(state?.frameAges?.latestKnownTick || state?.latestKnownTick || 0);
+  const latestKnownTick = Math.max(
+    Number.isFinite(ordinaryLatestKnownTick) ? ordinaryLatestKnownTick : 0,
+    Number(confirmedLeave?.lastRealtimeTick || 0)
+  );
   const summary = summarizeSnapshotPayload(body.json, {
     userId: config.userId,
     loginPoint,
-    latestKnownTick: state?.frameAges?.latestKnownTick || state?.latestKnownTick || 0,
+    latestKnownTick,
+    requireTickAdvance: Boolean(confirmedLeave?.lastRealtimeTick),
     healthyHpThreshold: config.loginPointSafetyHealthyHpThreshold ?? runtimeDefaults.loginPointSafetyHealthyHpThreshold,
     healthyRadius: config.loginPointSafetyHealthyRadius ?? runtimeDefaults.loginPointSafetyHealthyRadius,
     lowRadius: config.loginPointSafetyRadius ?? runtimeDefaults.loginPointSafetyRadius
@@ -203,12 +227,30 @@ async function runSinglePreLoginSnapshotSafetyProbe(config, state, deps = {}, de
     satisfied: Boolean(detail.satisfied),
     checkedAt
   };
-  if (response.ok && summary.valid && summary.selfPresent) {
+  if (response.ok && summary.valid && summary.selfPresent && confirmedLeave?.quarantined) {
+    return {
+      ok: false,
+      reason: 'confirmed-leave-snapshot-quarantine',
+      originalReason: summary.safety?.reason || '',
+      confirmedLeave,
+      ...progress,
+      request: { url: redactSecrets(url) },
+      response: {
+        httpOk: response.ok,
+        status: response.status,
+        statusText: response.statusText || '',
+        summary
+      },
+      loginPoint
+    };
+  }
+  if (response.ok && summary.valid && summary.selfPresent && summary.freshness?.ok) {
     return {
       ok: true,
       reason: 'self-present-reentry',
       originalReason: summary.safety?.reason || '',
       bypassedPreLoginSafety: true,
+      confirmedLeave,
       ...progress,
       streak: progress.required,
       satisfied: true,
@@ -248,7 +290,8 @@ async function runSinglePreLoginSnapshotSafetyProbe(config, state, deps = {}, de
       statusText: response.statusText || '',
       summary
     },
-    loginPoint
+    loginPoint,
+    confirmedLeave
   };
 }
 

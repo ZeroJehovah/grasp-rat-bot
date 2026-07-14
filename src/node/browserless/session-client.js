@@ -583,10 +583,11 @@ function isActiveEntity(entity) {
   return mode === 'active';
 }
 
-function summarizeSnapshotFreshness(payload, latestKnownTick = 0) {
+function summarizeSnapshotFreshness(payload, latestKnownTick = 0, options = {}) {
   const tick = Number(payload?.tick);
   const latest = Number(latestKnownTick || 0);
   const latestKnown = Number.isFinite(latest) && latest > 0 ? latest : 0;
+  const requireAdvance = Boolean(options.requireAdvance);
   if (!Number.isFinite(tick)) {
     return {
       ok: false,
@@ -603,9 +604,12 @@ function summarizeSnapshotFreshness(payload, latestKnownTick = 0) {
       latestKnownTick: null
     };
   }
+  const fresh = requireAdvance ? tick > latestKnown : tick >= latestKnown;
   return {
-    ok: tick >= latestKnown,
-    reason: tick >= latestKnown ? 'fresh' : 'stale-snapshot-tick',
+    ok: fresh,
+    reason: fresh
+      ? (requireAdvance ? 'fresh-after-confirmed-leave' : 'fresh')
+      : (requireAdvance ? 'stale-confirmed-leave-snapshot-tick' : 'stale-snapshot-tick'),
     tick,
     latestKnownTick: latestKnown,
     tickDelta: tick - latestKnown
@@ -685,7 +689,9 @@ function summarizeSnapshotPayload(payload, options = {}) {
   const coinDrops = Array.isArray(payload.coin_drops) ? payload.coin_drops : [];
   const messages = Array.isArray(payload.messages) ? payload.messages : [];
   const self = entities.find(entity => Number(entity?.user_id) === Number(options.userId || 0));
-  const freshness = summarizeSnapshotFreshness(payload, options.latestKnownTick);
+  const freshness = summarizeSnapshotFreshness(payload, options.latestKnownTick, {
+    requireAdvance: options.requireTickAdvance
+  });
   return {
     valid: Array.isArray(payload.entities),
     jsonKeys: Object.keys(payload).slice(0, 20),

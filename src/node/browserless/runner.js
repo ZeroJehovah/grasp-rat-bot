@@ -38,6 +38,7 @@ const {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const UTC8_OFFSET_MS = 8 * 60 * 60 * 1000;
+const CONFIRMED_LEAVE_SNAPSHOT_IGNORE_MS = 40000;
 
 function publicConfig(config) {
   return {
@@ -505,6 +506,54 @@ function runnerResultConfirmedLeave(result) {
   return Boolean(canary.leave?.ok || canary.safety?.exit?.leave?.ok);
 }
 
+function latestRealtimeTickFromResult(result) {
+  const canary = result?.canary && typeof result.canary === 'object' ? result.canary : {};
+  const candidates = [
+    canary?.state?.realtime?.tick,
+    canary?.decisions?.last?.input?.realtime?.tick,
+    canary?.decisions?.last?.tick
+  ].map(Number).filter(value => Number.isFinite(value) && value > 0);
+  return candidates.length ? Math.max(...candidates) : 0;
+}
+
+function confirmedLeaveStateFromResult(result, nowMs = Date.now()) {
+  if (!runnerResultConfirmedLeave(result)) return null;
+  const confirmedAtMs = Number.isFinite(Number(nowMs)) ? Number(nowMs) : Date.now();
+  const ignoreUntilMs = confirmedAtMs + CONFIRMED_LEAVE_SNAPSHOT_IGNORE_MS;
+  return {
+    confirmedAt: new Date(confirmedAtMs).toISOString(),
+    snapshotIgnoreUntil: new Date(ignoreUntilMs).toISOString(),
+    lastRealtimeTick: latestRealtimeTickFromResult(result),
+    runId: String(result?.canary?.runId || ''),
+    ignoreUntilMs,
+    quarantineRemainingMs: CONFIRMED_LEAVE_SNAPSHOT_IGNORE_MS
+  };
+}
+
+function activeConfirmedLeaveState(state, nowMs = Date.now()) {
+  const value = state?.runner?.confirmedLeave;
+  if (!value || typeof value !== 'object') return null;
+  const ignoreUntilMs = Date.parse(String(value.snapshotIgnoreUntil || ''));
+  return {
+    ...value,
+    ignoreUntilMs: Number.isFinite(ignoreUntilMs) ? ignoreUntilMs : 0,
+    quarantineRemainingMs: Number.isFinite(ignoreUntilMs)
+      ? Math.max(0, ignoreUntilMs - Number(nowMs || Date.now()))
+      : 0
+  };
+}
+
+function snapshotSafetyAllowsImmediateResume(snapshotSafety) {
+  const summary = snapshotSafety?.response?.summary || {};
+  return Boolean(
+    snapshotSafety?.ok
+      && snapshotSafety?.reason === 'self-present-reentry'
+      && snapshotSafety?.bypassedPreLoginSafety
+      && summary.selfPresent === true
+      && summary.freshness?.ok !== false
+  );
+}
+
 async function runBrowserlessRunner(config, deps = {}) {
   const now = typeof deps.now === 'function' ? deps.now : Date.now;
   const sleep = typeof deps.sleep === 'function'
@@ -735,6 +784,8 @@ async function runBrowserlessRunner(config, deps = {}) {
     }
 
     const currentBeforeWait = readBrowserlessStateFile(stateFile);
+    const newConfirmedLeave = confirmedLeaveStateFromResult(resultForStop, now());
+    const confirmedLeave = newConfirmedLeave || activeConfirmedLeaveState(currentBeforeWait, now());
     const waitExitDetail = runnerResultExitDetail(resultForStop, loopPlan.reason);
     const waitReason = loopPlan.forceExitReason
       ? loopPlan.reason
@@ -746,12 +797,18 @@ async function runBrowserlessRunner(config, deps = {}) {
     );
     const plannedNextRunAtMs = now() + loopPlan.delayMs;
     const firstDailyLoginAtNextRun = isFirstBrowserlessLoginOfDay(currentBeforeWait, plannedNextRunAtMs);
-    const shouldPrepareSnapshotSafety = !firstDailyLoginAtNextRun && Boolean(
-      resetLoginPointForNextEntry
-        || loopPlan.reason === 'snapshot-safety-retry'
+    const shouldPrepareSnapshotSafety = Boolean(
+      confirmedLeave
+        || (!firstDailyLoginAtNextRun && (
+          resetLoginPointForNextEntry
+            || loopPlan.reason === 'snapshot-safety-retry'
+        ))
     );
     const effectiveDelayMs = shouldPrepareSnapshotSafety
-      ? Math.max(loopPlan.delayMs, preLoginSafetyLeadMs(config))
+      ? Math.max(
+          loopPlan.delayMs,
+          preLoginSafetyLeadMs(config) + Number(confirmedLeave?.quarantineRemainingMs || 0)
+        )
       : loopPlan.delayMs;
     const nextRunAtMs = now() + effectiveDelayMs;
     const nextRunAt = new Date(nextRunAtMs).toISOString();
@@ -773,7 +830,15 @@ async function runBrowserlessRunner(config, deps = {}) {
           delayMs: effectiveDelayMs,
           nextRunAt,
           previousRunId: loopPlan.previousRunId || ''
-        }
+        },
+        confirmedLeave: confirmedLeave
+          ? {
+              confirmedAt: confirmedLeave.confirmedAt || '',
+              snapshotIgnoreUntil: confirmedLeave.snapshotIgnoreUntil || '',
+              lastRealtimeTick: Number(confirmedLeave.lastRealtimeTick || 0),
+              runId: confirmedLeave.runId || loopPlan.previousRunId || ''
+            }
+          : null
       },
       ...(resetLoginPointForNextEntry ? {
         loginPointSafety: pendingLoginPointSafetyPatch(
@@ -832,9 +897,17 @@ async function runBrowserlessRunner(config, deps = {}) {
           } : null,
           streak: preparedSnapshotSafety?.streak ?? null,
           required: preparedSnapshotSafety?.required ?? null,
-          nextRunAt
+          nextRunAt,
+          confirmedLeave: preparedSnapshotSafety?.confirmedLeave
+            ? {
+                confirmedAt: preparedSnapshotSafety.confirmedLeave.confirmedAt || '',
+                snapshotIgnoreUntil: preparedSnapshotSafety.confirmedLeave.snapshotIgnoreUntil || '',
+                lastRealtimeTick: Number(preparedSnapshotSafety.confirmedLeave.lastRealtimeTick || 0),
+                quarantined: Boolean(preparedSnapshotSafety.confirmedLeave.quarantined)
+              }
+            : null
         });
-        if (preparedSummary.selfPresent === true) {
+        if (snapshotSafetyAllowsImmediateResume(preparedSnapshotSafety)) {
           const currentBeforeResume = readBrowserlessStateFile(stateFile);
           updateState({
             runner: {
@@ -954,11 +1027,16 @@ async function runBrowserlessRunner(config, deps = {}) {
 
   const recordSnapshotSafetyProgress = snapshotSafety => {
     if (!snapshotSafety || typeof snapshotSafety !== 'object') return;
-    updateState({
-      loginPointSafety: loginPointSafetyPatchFromSnapshot(snapshotSafety)
-    }, { updatedAt: new Date(now()).toISOString() });
     const summary = snapshotSafety?.response?.summary || {};
     const freshness = summary?.freshness || {};
+    const clearsConfirmedLeave = Boolean(
+      freshness.ok
+        && (summary.selfPresent === false || snapshotSafetyAllowsImmediateResume(snapshotSafety))
+    );
+    updateState({
+      loginPointSafety: loginPointSafetyPatchFromSnapshot(snapshotSafety),
+      ...(clearsConfirmedLeave ? { runner: { confirmedLeave: null } } : {})
+    }, { updatedAt: new Date(now()).toISOString() });
     logStore.append('runner', 'snapshot-safety-observation', {
       checkedAt: snapshotSafety?.checkedAt || '',
       ok: Boolean(snapshotSafety?.ok),
@@ -982,7 +1060,15 @@ async function runBrowserlessRunner(config, deps = {}) {
         hp: summary.self.hp ?? null,
         joined: summary.self.joined || '',
         mode: summary.self.current_join_mode || ''
-      } : null
+      } : null,
+      confirmedLeave: snapshotSafety?.confirmedLeave
+        ? {
+            confirmedAt: snapshotSafety.confirmedLeave.confirmedAt || '',
+            snapshotIgnoreUntil: snapshotSafety.confirmedLeave.snapshotIgnoreUntil || '',
+            lastRealtimeTick: Number(snapshotSafety.confirmedLeave.lastRealtimeTick || 0),
+            quarantined: Boolean(snapshotSafety.confirmedLeave.quarantined)
+          }
+        : null
     });
   };
 
@@ -1081,64 +1167,77 @@ async function runBrowserlessRunner(config, deps = {}) {
     ? persistedReconnectDelayPlan(readBrowserlessStateFile(stateFile), config, now())
     : null;
   if (persistedDelayPlan) {
-    try {
-      const probe = await (deps.runPreLoginSnapshotSafety || runPreLoginSnapshotSafety)({
-        ...config,
-        loginPointSafetySuccessRequired: 1,
-        loginPointSafetyProbeIntervalMs: 0
-      }, readBrowserlessStateFile(stateFile), {
-        now,
-        sleep,
-        fetchWithTimeout: sourceIpController.fetchWithTimeout,
-        onSnapshotPayload: observeSnapshotPayload
+    const persistedStateBeforeProbe = readBrowserlessStateFile(stateFile);
+    const persistedConfirmedLeave = activeConfirmedLeaveState(persistedStateBeforeProbe, now());
+    if (persistedConfirmedLeave?.quarantineRemainingMs > 0) {
+      logStore.append('runner', 'runner-persisted-wait-confirmed-leave-quarantine', {
+        previousRunId: persistedDelayPlan.previousRunId || '',
+        previousReason: persistedDelayPlan.reason,
+        confirmedAt: persistedConfirmedLeave.confirmedAt || '',
+        snapshotIgnoreUntil: persistedConfirmedLeave.snapshotIgnoreUntil || '',
+        lastRealtimeTick: Number(persistedConfirmedLeave.lastRealtimeTick || 0),
+        remainingMs: persistedConfirmedLeave.quarantineRemainingMs
       });
-      const selfPresent = Boolean(probe?.response?.summary?.selfPresent);
-      logStore.append('runner', 'runner-persisted-wait-self-probe', {
-        checkedAt: probe?.checkedAt || '',
-        ok: Boolean(probe?.ok),
-        reason: probe?.reason || '',
-        selfPresent,
-        tick: probe?.response?.summary?.tick ?? null,
-        nextRunAt: persistedDelayPlan.nextRunAt
-      });
-      if (selfPresent) {
-        recordSnapshotSafetyProgress(probe);
-        const currentBeforeResume = readBrowserlessStateFile(stateFile);
-        updateState({
-          runner: {
-            running: true,
-            mode: config.controlMode || 'read-only',
-            lastError: '',
-            currentAction: {
-              kind: 'loop-wait',
-              band: 'recover',
-              reason: 'self-present-reentry',
-              delayMs: 0,
-              nextRunAt: '',
-              previousRunId: persistedDelayPlan.previousRunId || '',
-              persisted: true
-            }
-          },
-          stats: browserlessStatsForOffline(currentBeforeResume, {
-            reason: persistedDelayPlan.safetyReason || persistedDelayPlan.reason,
-            nextRunAt: '',
-            delayMs: 0
-          }, { nowMs: now() })
-        }, { updatedAt: new Date(now()).toISOString() });
-        logStore.append('runner', 'runner-persisted-wait-self-present-resume', {
-          previousRunId: persistedDelayPlan.previousRunId || '',
-          previousReason: persistedDelayPlan.reason,
-          checkedAt: probe?.checkedAt || '',
-          tick: probe?.response?.summary?.tick ?? null
+    } else {
+      try {
+        const probe = await (deps.runPreLoginSnapshotSafety || runPreLoginSnapshotSafety)({
+          ...config,
+          loginPointSafetySuccessRequired: 1,
+          loginPointSafetyProbeIntervalMs: 0
+        }, persistedStateBeforeProbe, {
+          now,
+          sleep,
+          fetchWithTimeout: sourceIpController.fetchWithTimeout,
+          onSnapshotPayload: observeSnapshotPayload
         });
-        persistedDelayPlan = null;
+        const selfPresent = snapshotSafetyAllowsImmediateResume(probe);
+        logStore.append('runner', 'runner-persisted-wait-self-probe', {
+          checkedAt: probe?.checkedAt || '',
+          ok: Boolean(probe?.ok),
+          reason: probe?.reason || '',
+          selfPresent,
+          tick: probe?.response?.summary?.tick ?? null,
+          nextRunAt: persistedDelayPlan.nextRunAt
+        });
+        if (selfPresent) {
+          recordSnapshotSafetyProgress(probe);
+          const currentBeforeResume = readBrowserlessStateFile(stateFile);
+          updateState({
+            runner: {
+              running: true,
+              mode: config.controlMode || 'read-only',
+              lastError: '',
+              currentAction: {
+                kind: 'loop-wait',
+                band: 'recover',
+                reason: 'self-present-reentry',
+                delayMs: 0,
+                nextRunAt: '',
+                previousRunId: persistedDelayPlan.previousRunId || '',
+                persisted: true
+              }
+            },
+            stats: browserlessStatsForOffline(currentBeforeResume, {
+              reason: persistedDelayPlan.safetyReason || persistedDelayPlan.reason,
+              nextRunAt: '',
+              delayMs: 0
+            }, { nowMs: now() })
+          }, { updatedAt: new Date(now()).toISOString() });
+          logStore.append('runner', 'runner-persisted-wait-self-present-resume', {
+            previousRunId: persistedDelayPlan.previousRunId || '',
+            previousReason: persistedDelayPlan.reason,
+            checkedAt: probe?.checkedAt || '',
+            tick: probe?.response?.summary?.tick ?? null
+          });
+          persistedDelayPlan = null;
+        }
+      } catch (err) {
+        recordSupervisorError(err, { operation: 'persisted-wait-self-probe' });
+        logStore.append('runner', 'runner-persisted-wait-self-probe-error', {
+          error: errorMessage(err),
+          nextRunAt: persistedDelayPlan.nextRunAt
+        });
       }
-    } catch (err) {
-      recordSupervisorError(err, { operation: 'persisted-wait-self-probe' });
-      logStore.append('runner', 'runner-persisted-wait-self-probe-error', {
-        error: errorMessage(err),
-        nextRunAt: persistedDelayPlan.nextRunAt
-      });
     }
   }
   if (persistedDelayPlan) {
@@ -1347,7 +1446,8 @@ async function runBrowserlessRunner(config, deps = {}) {
     let canary;
     try {
       const stateBeforeCanary = readBrowserlessStateFile(stateFile);
-      const bypassPreLoginSafetyReason = isFirstBrowserlessLoginOfDay(stateBeforeCanary, now())
+      const hasConfirmedLeaveRecovery = Boolean(activeConfirmedLeaveState(stateBeforeCanary, now()));
+      const bypassPreLoginSafetyReason = !hasConfirmedLeaveRecovery && isFirstBrowserlessLoginOfDay(stateBeforeCanary, now())
         ? 'daily-first-login-invulnerability'
         : '';
       const precheckedSnapshotSafety = bypassPreLoginSafetyReason ? null : preparedSnapshotSafety;
@@ -1528,10 +1628,12 @@ async function runBrowserlessRunnerSelfTest() {
 module.exports = {
   browserlessDayKey,
   browserlessLoopPlan,
+  confirmedLeaveStateFromResult,
   hydrateConfigFromState,
   isFirstBrowserlessLoginOfDay,
   learnedLoginPointFromCanary,
   preLoginSafetyLeadMs,
+  snapshotSafetyAllowsImmediateResume,
   persistedReconnectDelayPlan,
   publicConfig,
   runnerResultExitDetail,
