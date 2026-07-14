@@ -141,6 +141,7 @@ const {
   createEasyKillPlayerTracker
 } = require('./browserless/easy-kill-player-tracker');
 const { createCombatCompletionTracker } = require('./browserless/combat-completion-tracker');
+const { resolveRepositoryRevision } = require('./browserless/runtime-revision');
 const {
   createDailyDamagePlayerTracker
 } = require('./browserless/daily-damage-player-tracker');
@@ -6294,6 +6295,14 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'true|true|true|stable-user-completion-history|12|1'
+    },
+    {
+      name: 'browserless runtime revision resolves directly from Git metadata without repository trust',
+      got: (() => {
+        const resolved = resolveRepositoryRevision({ root: path.resolve(__dirname, '../..') });
+        return [resolved.revision !== 'unknown', resolved.revision.length, resolved.source, resolved.error].join('|');
+      })(),
+      want: 'true|12|git-metadata|'
     },
     {
       name: 'browserless active completion applies escape and exchange-stop-loss risk',
