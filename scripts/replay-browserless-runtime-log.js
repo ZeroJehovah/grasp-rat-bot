@@ -5,7 +5,10 @@ const fs = require('fs');
 const { StringDecoder } = require('string_decoder');
 const { estimateAim } = require('../src/node/browserless/combat-adapter');
 const { actionPriorityBand } = require('../src/strategy/action-priority');
-const { evaluateCombatHpExitCore } = require('../src/strategy/combat-exit');
+const {
+  evaluateConfirmedCombatHpExitCore,
+  evaluateCombatHpExitCore
+} = require('../src/strategy/combat-exit');
 const { pickSafeClosingDodgeCore } = require('../src/strategy/combat-movement');
 const { updateOpponentBehaviorStateCore } = require('../src/strategy/opponent-behavior');
 
@@ -539,6 +542,21 @@ function replayExit(options) {
       selfHp,
       targetHp: Number.isFinite(targetHp) ? targetHp : null
     });
+    const atMs = Date.parse(row.entry.at || '') || Number(metrics.lastObservedAt || 0);
+    const combatStartedAt = Number(metrics.startedAt || 0)
+      || Date.parse(combat.startedAt || '')
+      || atMs;
+    const engagedMs = Math.max(0, atMs - combatStartedAt);
+    const estimatedSamples = Math.max(1, Math.floor(engagedMs / Math.max(1, options.controlIntervalMs)) + 1);
+    const confirmedEvaluation = evaluateConfirmedCombatHpExitCore({
+      selfHp,
+      targetHp: Number.isFinite(targetHp) ? targetHp : null,
+      nowMs: atMs,
+      disadvantageSinceAt: combatStartedAt,
+      combatStartedAt,
+      sampleCount: estimatedSamples,
+      confirmedSelfDamage: metrics.selfDamage
+    });
     const loggedExit = action.shouldLeave === true || combat.exit?.shouldLeave === true;
     const selfDamage = Number(metrics.selfDamage);
     const targetDamage = Number(metrics.targetDamage);
@@ -552,7 +570,7 @@ function replayExit(options) {
         && (!options.targetId || targetId === options.targetId)
         && (!Number.isFinite(selfDamage) || selfDamage <= 0)
     );
-    const policyExit = trustedEasyKillBeforeDamage ? null : baselinePolicyExit;
+    const policyExit = trustedEasyKillBeforeDamage ? null : confirmedEvaluation.exit;
     evaluated.push({
       line: row.line,
       at: row.entry.at || '',
@@ -567,6 +585,7 @@ function replayExit(options) {
       favorable,
       trustedEasyKillBeforeDamage,
       baselinePolicyExit,
+      disadvantageObservation: confirmedEvaluation.disadvantageObservation,
       policyExit
     });
   }
@@ -574,6 +593,8 @@ function replayExit(options) {
   const preservedRequiredExits = evaluated.filter(item => item.loggedExit && item.policyExit);
   const newlyRequiredExits = evaluated.filter(item => !item.loggedExit && item.policyExit);
   const favorablePreventedExits = preventedLoggedExits.filter(item => item.favorable);
+  const confirmationPreventedExits = preventedLoggedExits.filter(item => item.disadvantageObservation?.ready === false);
+  const justifiedPreventedExits = preventedLoggedExits.filter(item => item.favorable || item.disadvantageObservation?.ready === false);
   const trustedNoDamagePreventedExits = preventedLoggedExits.filter(item => item.trustedEasyKillBeforeDamage);
   const result = {
     mode: 'exit',
@@ -584,6 +605,8 @@ function replayExit(options) {
     policyExitFrames: evaluated.filter(item => item.policyExit).length,
     preventedLoggedExitFrames: preventedLoggedExits.length,
     favorablePreventedExitFrames: favorablePreventedExits.length,
+    confirmationPreventedExitFrames: confirmationPreventedExits.length,
+    justifiedPreventedExitFrames: justifiedPreventedExits.length,
     trustedNoDamagePreventedExitFrames: trustedNoDamagePreventedExits.length,
     preservedRequiredExitFrames: preservedRequiredExits.length,
     newlyRequiredExitFrames: newlyRequiredExits.length,
@@ -602,7 +625,7 @@ function replayExit(options) {
       && evaluated[0]?.policyExit?.reason === 'combat-hp-disadvantage-leave'
     : result.evaluatedFrames > 0
       && result.preventedLoggedExitFrames > 0
-      && result.favorablePreventedExitFrames === result.preventedLoggedExitFrames
+      && result.justifiedPreventedExitFrames === result.preventedLoggedExitFrames
       && result.newlyRequiredExitFrames === 0);
   return result;
 }

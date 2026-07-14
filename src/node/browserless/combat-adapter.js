@@ -4,6 +4,7 @@ const {
   calculateCombatTargetPriority,
   combatTargetId,
   defensiveTargetOverridesEngagedCore,
+  incomingBulletHasCollisionRiskCore,
   isCombatEligibleThreat,
   pickEngagedCombatTargetCore,
   selectBestCombatTarget
@@ -20,7 +21,10 @@ const {
   determineCombatFireState
 } = require('../../strategy/combat-fire-discipline');
 const { COMBAT_CONSTANTS } = require('../../strategy/combat-constants');
-const { evaluateCombatHpExitCore } = require('../../strategy/combat-exit');
+const {
+  evaluateConfirmedCombatHpExitCore,
+  evaluateCombatHpExitCore
+} = require('../../strategy/combat-exit');
 const { opponentMotionProfileCore, quadraticInterceptCore } = require('../../strategy/combat-aim');
 const {
   behaviorLearningKey,
@@ -574,12 +578,27 @@ function passiveRunnerState(self, target, combatTargetState = {}, options = {}) 
   };
 }
 
-function buildCombatExitDecision(self, target, combatTargetState = {}, options = {}) {
-  if (!self || !target) return null;
-  if (target.easyKillThreatExempt) return null;
+function buildCombatExitEvaluation(self, target, combatTargetState = {}, options = {}) {
+  if (!self || !target || target.easyKillThreatExempt) {
+    return { exit: null, baselineExit: null, disadvantageObservation: null };
+  }
   const noDamageMs = Math.max(0, Number(combatTargetState?.noDamageMs || 0));
-  const exit = evaluateCombatHpExitCore({ self, target }, options);
-  return exit ? { ...exit, noDamageMs } : null;
+  const evaluation = evaluateConfirmedCombatHpExitCore({
+    self,
+    target,
+    nowMs: options.nowMs,
+    disadvantageSinceAt: combatTargetState?.disadvantageSinceAt,
+    combatStartedAt: combatTargetState?.firstSeenAt ?? combatTargetState?.at,
+    sampleCount: combatTargetState?.disadvantageSamples,
+    confirmedSelfDamage: Math.max(
+      Number(combatTargetState?.combatMetrics?.selfDamage || 0),
+      target.easyKillDamagedToday ? 1 : 0
+    )
+  }, options);
+  return {
+    ...evaluation,
+    exit: evaluation.exit ? { ...evaluation.exit, noDamageMs } : null
+  };
 }
 
 function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
@@ -664,9 +683,10 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
   };
 }
 
-function pickIncomingBullet(bullets = []) {
+function pickIncomingBullet(bullets = [], options = {}) {
   return (bullets || [])
     .filter(bullet => bullet?.incoming)
+    .filter(bullet => incomingBulletHasCollisionRiskCore(bullet, options))
     .slice()
     .sort((a, b) => {
       const timeA = Number(a.timeToImpact ?? Infinity);
@@ -690,6 +710,14 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
   const previousSelfHp = same ? hpValue(previous?.self) : null;
   const currentSelfHp = hpValue(self);
   const selfDamaged = previousSelfHp !== null && currentSelfHp !== null && currentSelfHp < previousSelfHp - 0.01;
+  const baselineExit = evaluateCombatHpExitCore({ self, target }, options);
+  const disadvantaged = baselineExit?.rule === 'clear-hp-gap';
+  const disadvantageSinceAt = disadvantaged
+    ? (same && Number(previous?.disadvantageSinceAt || 0) > 0 ? Number(previous.disadvantageSinceAt) : nowMs)
+    : 0;
+  const disadvantageSamples = disadvantaged
+    ? (same ? Math.max(0, Number(previous?.disadvantageSamples || 0)) + 1 : 1)
+    : 0;
   const previousFirstHp = same && Number.isFinite(Number(previous.firstHp)) ? Number(previous.firstHp) : null;
   const firstHp = same ? (previousFirstHp ?? previousHp ?? hp) : hp;
   const previousMinHp = same && Number.isFinite(Number(previous.minHp)) ? Number(previous.minHp) : null;
@@ -774,6 +802,8 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
     lastDamageAt: damaged ? nowMs : (same ? Number(previous.lastDamageAt || previous.at || nowMs) : nowMs),
     lastInRangeAt: inRange ? nowMs : (same ? Number(previous.lastInRangeAt || previous.at || nowMs) : nowMs),
     seenTargetRealBulletAt: targetOwnsRealBullet ? nowMs : (same ? Number(previous.seenTargetRealBulletAt || 0) : 0),
+    disadvantageSinceAt,
+    disadvantageSamples,
     lastDamageAmount: damaged ? Math.max(0, previousHp - hp) : Number(previous?.lastDamageAmount || 0),
     noDamageMs: Math.max(0, nowMs - (damaged ? nowMs : (same ? Number(previous.lastDamageAt || previous.at || nowMs) : nowMs))),
     motionSamples,
@@ -872,7 +902,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     .map(bullet => normalizeCombatBullet(bullet, self, { currentTick: realtime.tick }))
     .filter(Boolean);
   if (!bullets.length) dataGaps.push('no-realtime-bullet-evidence');
-  const incomingBullet = pickIncomingBullet(bullets);
+  const incomingBullet = pickIncomingBullet(bullets, options);
   const context = {
     userId: selfUserId,
     bullets,
@@ -965,10 +995,11 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
   if (stateful?.combatMetrics && movement.dodge?.threatField) {
     stateful.combatMetrics.lastDodgeThreatField = cloneJson(movement.dodge.threatField);
   }
-  const exitDecision = buildCombatExitDecision(self, target, {
+  const exitEvaluation = buildCombatExitEvaluation(self, target, {
     ...combatTargetState,
     combatMetrics: stateful?.combatMetrics || combatTargetState?.combatMetrics || null
   }, options);
+  const exitDecision = exitEvaluation.exit;
   const fireState = target ? determineCombatFireState(self || {}, target, {
     targetPressureFire: bullets.some(bullet => Number(bullet.ownerId) === Number(target.user_id)),
     passiveRunner: Boolean(movement.passiveRunner?.active),
@@ -1028,6 +1059,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
       recentHitRate: behaviorState.recentHitRate,
       metrics: behaviorState.metrics
     } : null,
+    disadvantageObservation: exitEvaluation.disadvantageObservation,
     exit: exitDecision
       ? {
           ...exitDecision,

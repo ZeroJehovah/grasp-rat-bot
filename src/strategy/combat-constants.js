@@ -23,6 +23,9 @@ const COMBAT_CONSTANTS = {
   CRITICAL_HP: 20,                        // combatCriticalHp - immediate exit threshold
   LOW_HP_THRESHOLD: 50,                   // combatLowHpLeaveThreshold - low HP exit threshold
   DISADVANTAGE_HP_GAP: 20,                // combatDisadvantageHpGap - HP gap for disadvantage
+  DISADVANTAGE_CONFIRM_MS: 2500,           // combatDisadvantageConfirmMs - sustained gap window
+  DISADVANTAGE_MIN_ENGAGE_MS: 3500,        // combatDisadvantageMinEngageMs - minimum target age
+  DISADVANTAGE_MIN_SAMPLES: 4,             // combatDisadvantageMinSamples - minimum observations
 
   // Fire discipline and stamina
   SHOOT_EVERY_MS: 160,                    // shootEveryMs - normal fire cadence
@@ -57,6 +60,7 @@ const COMBAT_CONSTANTS = {
   // Aim and intercept
   AIM_SPREAD_MAX: 0.14,                   // combatAimSpreadMax - aim jitter cap (radians)
   BULLET_SPEED_CM_PER_TICK: 500,          // Measured bullet speed
+  BULLET_HIT_RADIUS_CM: 90,               // Measured server hit radius
   RENDER_DELAY_TICKS: 2,                  // combatInterceptRenderDelayTicks
   INTERCEPT_LOW_CONFIDENCE_THRESHOLD: 0.6, // combatInterceptLowConfidenceThreshold
   INTERCEPT_LOW_CONFIDENCE_FIRE_MS: 520,  // combatInterceptLowConfidenceFireMs

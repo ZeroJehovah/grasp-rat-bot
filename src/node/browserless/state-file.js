@@ -1635,6 +1635,13 @@ function buildCompactBrowserlessStatus(state, config = {}) {
   const sourceIpIndex = sourceIp ? sourceIps.findIndex(item => item === sourceIp) + 1 : 0;
   const decision = compactDecision(current.decision);
   const combat = compactCombat(current.combatSummary || current.decision?.combat);
+  const recentExit = compactExit(recentActualExit);
+  const displayCombat = !game.inGame && recentExit?.battle?.target
+    ? {
+        ...(combat || {}),
+        target: recentExit.battle.target
+      }
+    : combat;
   const compactState = {
     schemaVersion: normalized.schemaVersion,
     compact: true,
@@ -1663,8 +1670,8 @@ function buildCompactBrowserlessStatus(state, config = {}) {
     decision,
     action,
     profit: compactProfit(current.profit || current.decision?.profit),
-    combat,
-    battle: compactBattleStatus(normalized, game, action, decision, combat),
+    combat: displayCombat,
+    battle: compactBattleStatus(normalized, game, action, decision, displayCombat),
     nearby: compactNearby(current.decision?.input?.nearby),
     highDropPlayers: compactHighDropPlayers(normalized.highDropPlayers),
     easyKillPlayers: compactEasyKillPlayers(normalized.easyKillPlayers),
@@ -1684,7 +1691,7 @@ function buildCompactBrowserlessStatus(state, config = {}) {
       lastSelectedAt: normalized.network.lastSelectedAt || '',
       lastSelectionReason: compactString(normalized.network.lastSelectionReason, 120)
     },
-    recentExit: compactExit(recentActualExit),
+    recentExit,
     statusServer: {
       host: config.statusHost || '',
       port: Number(config.statusPort || 0),

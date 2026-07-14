@@ -10637,6 +10637,45 @@ async function runSelfTest() {
       want: '9|defensive|false|9|1500'
     },
     {
+      name: 'browserless off-lane enemy bullet does not override engaged combat target',
+      got: (() => {
+        const stateful = {
+          combatTarget: { id: 8, at: 1000, firstSeenAt: 1000, lastInRangeAt: 1000, hp: 80, reason: 'combat-live-realtime' }
+        };
+        const combat = buildBrowserlessCombatDryRun({
+          userId: 7,
+          realtime: {
+            tick: 62,
+            self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 64 },
+            entities: [
+              { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 64 },
+              { entity_id: 2, user_id: 8, name: 'engaged', x: 1000, y: 0, hp: 59, current_join_mode: 'Active', firing: true, drop: 13 },
+              { entity_id: 3, user_id: 9, name: 'off-lane', x: 1200, y: 1000, hp: 100, current_join_mode: 'Active', firing: true, drop: 11 }
+            ],
+            bullets: [
+              { bullet_id: 4, owner_user_id: 9, x: 1000, y: 1000, target_x: 0, target_y: 1000, speed_per_tick: 500 }
+            ]
+          }
+        }, {
+          nowMs: 1500,
+          decisionState: stateful,
+          targetStickMs: 7000,
+          combatEngageStickMs: 7000,
+          combatAttackRange: 11000,
+          combatBulletHitRadiusCm: 90,
+          combatTargetSwitchIncomingDistance: 6500,
+          combatTargetSwitchIncomingTimeMs: 900
+        });
+        return [
+          combat.target.userId,
+          combat.target.combatIntent,
+          Boolean(combat.target.combatEngagement),
+          stateful.combatTarget.id
+        ].join('|');
+      })(),
+      want: '8|engaged|true|8'
+    },
+    {
       name: 'browserless low-value active combat requires threat evidence',
       got: (() => {
         const noThreat = buildBrowserlessCombatDryRun({
@@ -11328,12 +11367,38 @@ async function runSelfTest() {
       want: 'combat-low-hp-disadvantage-leave|40|90|true'
     },
     {
-      name: 'browserless combat exits at exact 20 hp disadvantage boundary',
+      name: 'browserless new high-hp-gap target waits for disadvantage confirmation',
       got: (() => {
         const combat = buildBrowserlessCombatDryRun({
           userId: 7,
           realtime: {
             tick: 62,
+            self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 64, stamina_5s_remaining_milli: 10000 },
+            entities: [
+              { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 64, stamina_5s_remaining_milli: 10000 },
+              { entity_id: 2, user_id: 8, name: 'new-defensive', x: 1000, y: 0, hp: 100, current_join_mode: 'Active', firing: true, drop: 11 }
+            ],
+            bullets: []
+          }
+        }, { nowMs: 1500, decisionState: {}, combatAttackRange: 11000, combatHighHpDisadvantageGap: 20 });
+        return [
+          combat.exit === null,
+          combat.disadvantageObservation.ready,
+          combat.disadvantageObservation.sampleCount,
+          combat.disadvantageObservation.engagedMs,
+          combat.shooting.wouldShoot
+        ].join('|');
+      })(),
+      want: 'true|false|1|0|true'
+    },
+    {
+      name: 'browserless combat exits after confirmed exact 20 hp disadvantage boundary',
+      got: (() => {
+        const stateful = {};
+        const stateAt = nowMs => ({
+          userId: 7,
+          realtime: {
+            tick: 62 + Math.round(nowMs / 1000),
             self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 70, stamina_5s_remaining_milli: 10000 },
             entities: [
               { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 70, stamina_5s_remaining_milli: 10000 },
@@ -11341,14 +11406,29 @@ async function runSelfTest() {
             ],
             bullets: []
           }
-        }, { nowMs: 1500, combatAttackRange: 11000, combatLowHpLeaveThreshold: 60, combatHighHpDisadvantageGap: 20 });
+        });
+        const options = {
+          decisionState: stateful,
+          combatAttackRange: 11000,
+          combatLowHpLeaveThreshold: 60,
+          combatHighHpDisadvantageGap: 20,
+          combatDisadvantageConfirmMs: 2500,
+          combatDisadvantageMinEngageMs: 3500,
+          combatDisadvantageMinSamples: 4
+        };
+        buildBrowserlessCombatDryRun(stateAt(1000), { ...options, nowMs: 1000 });
+        buildBrowserlessCombatDryRun(stateAt(2000), { ...options, nowMs: 2000 });
+        buildBrowserlessCombatDryRun(stateAt(3000), { ...options, nowMs: 3000 });
+        const combat = buildBrowserlessCombatDryRun(stateAt(4500), { ...options, nowMs: 4500 });
         return [
           combat.exit.reason,
           combat.exit.hpGap,
+          combat.exit.disadvantageObservation.ready,
+          combat.exit.disadvantageObservation.sampleCount,
           combat.shooting.wouldShoot
         ].join('|');
       })(),
-      want: 'combat-hp-disadvantage-leave|20|true'
+      want: 'combat-hp-disadvantage-leave|20|true|4|true'
     },
     {
       name: 'browserless low hp disadvantage exits on any real deficit',
@@ -17962,6 +18042,56 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'combat-low-hp-disadvantage-leave|41|46|5|50|5'
+    },
+    {
+      name: 'browserless offline combat target matches the exit battle target',
+      got: (() => {
+        const status = buildCompactBrowserlessStatus({
+          runner: {
+            currentAction: { kind: 'loop-wait', reason: 'combat-hp-disadvantage-leave' }
+          },
+          current: {
+            self: { userId: 7, name: 'self', hp: 64 },
+            combatSummary: {
+              target: { userId: 8, name: 'Hanhua153', hp: 59, distance: 12813, drop: 13 }
+            }
+          },
+          recentExits: [{
+            at: '2026-07-14T03:11:46.974Z',
+            reason: 'combat-hp-disadvantage-leave',
+            shouldLeave: true,
+            detail: {
+              decision: {
+                target: { userId: 9, name: 'Pboy', hp: 100, distance: 11218, drop: 11 },
+                combat: {
+                  startedAt: '2026-07-14T03:11:46.917Z',
+                  target: { userId: 9, name: 'Pboy', hp: 100, distance: 11218, drop: 11 },
+                  exit: { selfHp: 64, targetHp: 100, hpGap: 36, threshold: 20 },
+                  metrics: {
+                    targetId: '9',
+                    targetName: 'Pboy',
+                    startedAt: Date.parse('2026-07-14T03:11:46.917Z'),
+                    lastObservedAt: Date.parse('2026-07-14T03:11:46.917Z'),
+                    initialSelfHp: 64,
+                    lastSelfHp: 64,
+                    initialTargetHp: 100,
+                    lastTargetHp: 100,
+                    selfDamage: 0,
+                    targetDamage: 0
+                  }
+                }
+              }
+            }
+          }]
+        }, parseBrowserlessRunnerArgs([], {}));
+        return [
+          status.game.inGame,
+          status.combat.target.name,
+          status.recentExit.battle.target.name,
+          status.combat.target.userId === status.recentExit.battle.target.userId
+        ].join('|');
+      })(),
+      want: 'false|Pboy|Pboy|true'
     },
     {
       name: 'browserless compact injury exit preserves recent battle summary',

@@ -275,10 +275,27 @@ function selectBestCombatTarget(self, candidates, context = {}) {
   };
 }
 
-function incomingBulletRequiresTargetSwitchCore(incomingBullet, options = {}) {
+function incomingBulletHasCollisionRiskCore(incomingBullet, options = {}) {
   if (!incomingBullet) return false;
-  const distance = Number(incomingBullet.distance);
-  const timeToImpactMs = Number(incomingBullet.timeToImpactMs ?? incomingBullet.timeToImpact);
+  const cpaValue = incomingBullet.cpa;
+  if (cpaValue === null || cpaValue === undefined || cpaValue === '') return false;
+  const cpa = Number(cpaValue);
+  const hitRadius = Math.max(1, Number(
+    options.combatTargetSwitchIncomingCpaCm
+      ?? options.combatBulletHitRadiusCm
+      ?? COMBAT_CONSTANTS.BULLET_HIT_RADIUS_CM
+  ));
+  return Number.isFinite(cpa) && cpa >= 0 && cpa <= hitRadius;
+}
+
+function incomingBulletRequiresTargetSwitchCore(incomingBullet, options = {}) {
+  if (!incomingBulletHasCollisionRiskCore(incomingBullet, options)) return false;
+  const distanceValue = incomingBullet.distance;
+  const timeToImpactValue = incomingBullet.timeToImpactMs ?? incomingBullet.timeToImpact;
+  const distance = distanceValue === null || distanceValue === undefined || distanceValue === '' ? NaN : Number(distanceValue);
+  const timeToImpactMs = timeToImpactValue === null || timeToImpactValue === undefined || timeToImpactValue === ''
+    ? NaN
+    : Number(timeToImpactValue);
   const switchDistance = Math.max(0, Number(options.combatTargetSwitchIncomingDistance || 0));
   const switchTime = Math.max(0, Number(options.combatTargetSwitchIncomingTimeMs || 0));
   if (switchDistance > 0 && Number.isFinite(distance) && distance <= switchDistance) return true;
@@ -314,9 +331,9 @@ function pickEngagedCombatTargetCore(self, combatTargets = [], entities = [], bu
   }
   const id = String(engaged.id);
   const target = (combatTargets || []).find(item => combatTargetId(item) === id);
-  const incoming = Array.isArray(bullets)
-    ? bullets.find(bullet => bullet?.incoming)
-    : null;
+  const incoming = Object.prototype.hasOwnProperty.call(options, 'incomingBullet')
+    ? options.incomingBullet
+    : (Array.isArray(bullets) ? bullets.find(bullet => bullet?.incoming) : null);
   const context = {
     ...options,
     incomingBullet: incoming || null,
@@ -404,6 +421,7 @@ module.exports = {
   checkProactiveActiveCombatGates,
   combatTargetId,
   defensiveTargetOverridesEngagedCore,
+  incomingBulletHasCollisionRiskCore,
   incomingBulletRequiresTargetSwitchCore,
   isActiveCombatMode,
   isFiringCombatEntity,

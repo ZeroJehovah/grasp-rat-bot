@@ -124,7 +124,12 @@ const {
 } = require('./chase-mode');
 const { COMBAT_CONSTANTS, validateCombatConstants } = require('./combat-constants');
 const {
+  incomingBulletHasCollisionRiskCore,
+  incomingBulletRequiresTargetSwitchCore
+} = require('./combat-target-selection');
+const {
   combatHpExitThresholdsCore,
+  evaluateConfirmedCombatHpExitCore,
   evaluateCombatHpExitCore
 } = require('./combat-exit');
 const { OPPORTUNITY_CONSTANTS, calculateOpportunityROI, validateOpportunityConstants } = require('./opportunity-constants');
@@ -2579,6 +2584,56 @@ function runStrategyModuleSelfTests() {
     passed: evaluateCombatHpExitCore({ selfHp: 94, targetHp: 46 }) === null
       && evaluateCombatHpExitCore({ selfHp: 65, targetHp: null }) === null
       && evaluateCombatHpExitCore({ selfHp: 19, targetHp: null })?.reason === 'combat-critical-hp-leave'
+  });
+
+  results.push({
+    name: 'combat-incoming-shooter-switch-requires-hit-corridor-and-urgency',
+    passed: incomingBulletHasCollisionRiskCore({ cpa: 90 })
+      && !incomingBulletHasCollisionRiskCore({ cpa: 91 })
+      && !incomingBulletHasCollisionRiskCore({ cpa: null })
+      && incomingBulletRequiresTargetSwitchCore({ cpa: 50, distance: 6500, timeToImpact: 1200 }, {
+        combatTargetSwitchIncomingDistance: 6500,
+        combatTargetSwitchIncomingTimeMs: 900
+      })
+      && !incomingBulletRequiresTargetSwitchCore({ cpa: 1000, distance: 1000, timeToImpact: 100 }, {
+        combatTargetSwitchIncomingDistance: 6500,
+        combatTargetSwitchIncomingTimeMs: 900
+      })
+  });
+
+  const pendingDisadvantage = evaluateConfirmedCombatHpExitCore({
+    selfHp: 64,
+    targetHp: 100,
+    nowMs: 1057,
+    disadvantageSinceAt: 1000,
+    combatStartedAt: 1000,
+    sampleCount: 1
+  });
+  const confirmedDisadvantage = evaluateConfirmedCombatHpExitCore({
+    selfHp: 70,
+    targetHp: 90,
+    nowMs: 4500,
+    disadvantageSinceAt: 1000,
+    combatStartedAt: 1000,
+    sampleCount: 4
+  });
+  const damageConfirmedDisadvantage = evaluateConfirmedCombatHpExitCore({
+    selfHp: 64,
+    targetHp: 100,
+    nowMs: 1057,
+    disadvantageSinceAt: 1000,
+    combatStartedAt: 1000,
+    sampleCount: 1,
+    confirmedSelfDamage: 3
+  });
+  results.push({
+    name: 'combat-clear-hp-gap-confirms-new-target-but-preserves-immediate-damage-exit',
+    passed: pendingDisadvantage.exit === null
+      && pendingDisadvantage.disadvantageObservation?.ready === false
+      && confirmedDisadvantage.exit?.reason === 'combat-hp-disadvantage-leave'
+      && confirmedDisadvantage.disadvantageObservation?.ready === true
+      && damageConfirmedDisadvantage.exit?.reason === 'combat-hp-disadvantage-leave'
+      && damageConfirmedDisadvantage.disadvantageObservation?.kind === 'confirmed-target-damage'
   });
 
   // Test opportunity constants validation
