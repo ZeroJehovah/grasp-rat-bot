@@ -1404,7 +1404,10 @@ function compactNearby(nearby) {
     c: coins.rows,
     coinLowHiddenCount: coins.lowHiddenCount,
     p: players.rows,
-    playerLowHiddenCount: players.lowHiddenCount
+    playerLowHiddenCount: players.lowHiddenCount,
+    observedAt: nearby.observedAt || '',
+    tick: compactNumber(nearby.tick),
+    ageMs: compactNumber(nearby.ageMs)
   };
 }
 

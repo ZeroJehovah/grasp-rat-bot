@@ -643,6 +643,8 @@ function renderBrowserlessWebPanel() {
       'best-opportunity-coin-route': '按金币路线移动',
       'best-opportunity-visible-coin': '去看得见的金币',
       'high-value-visible-coin-priority': '优先捡高价值金币',
+      'post-kill-drop-priority': '优先捡刚击杀目标的掉币',
+      'post-kill-loot-safe-dodge': '安全闪避并接近大额掉币',
       'near-coin-priority': '优先捡近处金币',
       'foot-coin-priority': '先捡脚边金币',
       'single-coin-bait-hold': '当日时间充裕，动态收益门槛生效，守着 1 金币等待捡币脚本',
@@ -1400,6 +1402,8 @@ function renderBrowserlessWebPanel() {
       if (!panel) return;
       const show = Boolean(status.game?.inGame);
       panel.hidden = !show;
+      const nearbyAgeMs = Number(status.nearby?.ageMs);
+      panel.title = Number.isFinite(nearbyAgeMs) ? '附近观察数据年龄 ' + duration(nearbyAgeMs) : '';
       if (!show) {
         document.getElementById('nearbyCoins')?.replaceChildren();
         document.getElementById('nearbyPlayers')?.replaceChildren();

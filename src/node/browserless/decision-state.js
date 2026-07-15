@@ -107,7 +107,9 @@ function createInitialDecisionState(options = {}) {
     finalActionArbitration: cloneJson(options.finalActionArbitration || null),
     targetSwitchDiagnostics: asSwitchDiagnostics(options.targetSwitchDiagnostics),
     killHistory: asArray(options.killHistory),
-    recentSelfKillEvidence: asArray(options.recentSelfKillEvidence)
+    recentSelfKillEvidence: asArray(options.recentSelfKillEvidence),
+    realtimeSnapshotObservation: cloneJson(options.realtimeSnapshotObservation || null),
+    realtimeLootIntent: cloneJson(options.realtimeLootIntent || null)
   };
 }
 
@@ -198,6 +200,10 @@ function summarizeBrowserlessDecisionState(state, options = {}) {
         lastSwitch: redactBoundedValue(Array.isArray(diagnostics) ? null : diagnostics?.lastSwitch || null)
       };
     })(),
+    realtimeObservation: {
+      snapshot: redactBoundedValue(state.realtimeSnapshotObservation || null),
+      lootIntent: redactBoundedValue(state.realtimeLootIntent || null)
+    },
     killHistory: {
       count: Array.isArray(state.killHistory) ? state.killHistory.length : 0,
       recent: boundedList(state.killHistory, limit)

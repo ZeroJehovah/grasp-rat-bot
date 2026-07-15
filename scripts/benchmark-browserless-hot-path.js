@@ -711,6 +711,20 @@ async function runBenchmark(options) {
       nowMs: fixture.now()
     });
   });
+  const snapshotRefreshFixture = createFixture(options, combatLearning);
+  const snapshotRefreshAdapter = createBrowserlessDecisionAdapter(snapshotRefreshFixture.adapterOptions);
+  const refreshSnapshot = () => {
+    const nowMs = snapshotRefreshFixture.advance(160);
+    snapshotRefreshFixture.state.fallback.tick = snapshotRefreshFixture.state.realtime.tick;
+    snapshotRefreshFixture.state.fallback.receivedAtMs = nowMs;
+    snapshotRefreshFixture.state.fallback.frameAgeMs = 0;
+    return snapshotRefreshAdapter.evaluateRealtime(snapshotRefreshFixture.state, {
+      ...snapshotRefreshFixture.adapterOptions,
+      nowMs
+    });
+  };
+  for (let index = 0; index < options.warmup; index += 1) refreshSnapshot();
+  const realtimeSnapshotRefresh = measure(options.iterations, refreshSnapshot);
   const decisionStateClone = measure(options.iterations, () => decisionAdapter.getState());
   const stateStore = createBrowserlessStateStore({ userId: fixture.self.user_id, now: fixture.now });
   const frameIngest = measure(options.iterations, index => {
@@ -780,6 +794,7 @@ async function runBenchmark(options) {
     compactStatusDispatch: statusRendering?.compactDispatch || null,
     compactStatusResponse: statusRendering?.compactResponse || null,
     realtimeControl: realtimeControl.summary,
+    realtimeSnapshotRefresh: realtimeSnapshotRefresh.summary,
     realtimeFrameIngestView: frameIngest.summary,
     actionApply: actionApply.summary
   };

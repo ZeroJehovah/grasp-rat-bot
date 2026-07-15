@@ -42,7 +42,8 @@ const {
 } = require('./chat-service');
 const {
   BROWSER_RUNTIME_DEFAULTS,
-  decisionStatePatch
+  decisionStatePatch,
+  snapshotSelfKillEvidence
 } = require('./decision-adapter');
 const { createBrowserlessActionAdapter } = require('./action-adapter');
 const { createSourceIpController } = require('./source-ip-controller');
@@ -728,6 +729,7 @@ async function runBrowserlessRunner(config, deps = {}) {
     });
     let chatResult = null;
     let easyKillNameResult = null;
+    let easyKillEvidenceResult = null;
     let damageNameResult = null;
     try {
       chatResult = chatService.observeSnapshot?.(payload, {
@@ -750,6 +752,20 @@ async function runBrowserlessRunner(config, deps = {}) {
     } catch (err) {
       recordSupervisorError(err, { operation: 'easy-kill-player-name-observe', source: detail.source || 'snapshot' });
       logStore.append('runner', 'easy-kill-player-name-observation-error', {
+        source: detail.source || 'snapshot',
+        error: errorMessage(err)
+      });
+    }
+    try {
+      const evidence = snapshotSelfKillEvidence(payload, config.userId);
+      easyKillEvidenceResult = easyKillPlayerTracker.observeKillEvidence?.(evidence, {
+        atMs: observedAtMs,
+        source: detail.source || 'snapshot',
+        tick: payload?.tick
+      }) || null;
+    } catch (err) {
+      recordSupervisorError(err, { operation: 'easy-kill-snapshot-kill-observe', source: detail.source || 'snapshot' });
+      logStore.append('runner', 'easy-kill-snapshot-kill-observation-error', {
         source: detail.source || 'snapshot',
         error: errorMessage(err)
       });
@@ -787,6 +803,7 @@ async function runBrowserlessRunner(config, deps = {}) {
         chatMessagesUpdated: Number(chatResult?.updated || 0),
         chatSendConfirmed: Boolean(chatResult?.confirmed),
         easyKillNamesUpdated: Number(easyKillNameResult?.updated || 0),
+        easyKillKillsConfirmed: Number(easyKillEvidenceResult?.confirmed?.length || 0),
         damageNamesUpdated: Number(damageNameResult?.updated || 0)
       };
     } catch (err) {

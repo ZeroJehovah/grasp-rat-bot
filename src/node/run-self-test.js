@@ -61,7 +61,8 @@ const {
   buildLowHpRecoveryThreatExitDecision,
   createBrowserlessDecisionAdapter,
   decisionStatePatch,
-  opportunityEnemyStaminaCost: browserlessOpportunityEnemyStaminaCost
+  opportunityEnemyStaminaCost: browserlessOpportunityEnemyStaminaCost,
+  snapshotSelfKillEvidence
 } = require('./browserless/decision-adapter');
 const {
   createBrowserlessDecisionState,
@@ -16092,6 +16093,179 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'flee|avoid-invulnerable-target|flee|avoid-invulnerable-target|-1|combat-live|combat-live-realtime|true'
+    },
+    {
+      name: 'browserless realtime control prioritizes fresh high-value self-kill drops with safe combat-aware movement',
+      got: (() => {
+        const self = {
+          entity_id: 106,
+          user_id: 7,
+          name: 'self',
+          x: 25114,
+          y: 65814,
+          hp: 100,
+          max_hp: 100,
+          current_join_mode: 'Active',
+          stamina_5s_remaining_milli: 5000,
+          stamina_5s_limit_milli: 10000
+        };
+        const threat = {
+          entity_id: 5,
+          user_id: 36440,
+          name: 'huaming song',
+          x: 14043,
+          y: 65763,
+          vx: 0,
+          vy: 50,
+          hp: 82,
+          current_join_mode: 'Active',
+          death_drop_coins: 369,
+          stamina_5s_remaining_milli: 5000,
+          stamina_5s_limit_milli: 10000
+        };
+        const coin = {
+          drop_id: 'drop-57',
+          source_user_id: 34711,
+          system_spawned: false,
+          amount: 57,
+          x: 23034,
+          y: 71555,
+          created_tick: 1287800
+        };
+        const kill = { kind: 'kill', user_id: 7, target_user_id: 34711, tick: 1287800 };
+        const stateFor = (bullets = [], frameAgeMs = 0, tick = 1287809) => ({
+          userId: 7,
+          realtime: { tick, receivedAtMs: 2000, frameAgeMs: 0, self, entities: [self, threat], bullets },
+          fallback: {
+            tick,
+            receivedAtMs: frameAgeMs ? 0 : 2000,
+            frameAgeMs,
+            self,
+            entities: [self, threat],
+            coinDrops: [coin],
+            messages: [kill]
+          },
+          command: null
+        });
+        const options = {
+          ...buildBrowserlessRuntimeDefaults({}),
+          userId: 7,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          nowMs: 2050
+        };
+        const direct = buildBrowserlessRealtimeControlDecision(
+          stateFor(),
+          createBrowserlessDecisionState(),
+          options
+        );
+        const bullet = {
+          bullet_id: 1,
+          owner_user_id: 36440,
+          start_x: 14043,
+          start_y: 65763,
+          target_x: 25114,
+          target_y: 70000,
+          speed_per_tick: 500,
+          created_tick: 1287808,
+          expire_tick: 1287838
+        };
+        const dodge = buildBrowserlessRealtimeControlDecision(
+          stateFor([bullet]),
+          createBrowserlessDecisionState(),
+          options
+        );
+        const stale = buildBrowserlessRealtimeControlDecision(
+          stateFor([], 3000, 1287810),
+          createBrowserlessDecisionState(),
+          { ...options, nowMs: 5000 }
+        );
+        const coinVectorX = coin.x - self.x;
+        const coinVectorY = coin.y - self.y;
+        const dodgeProgress = Number(dodge.combat?.movement?.dx || 0) * coinVectorX
+          + Number(dodge.combat?.movement?.dy || 0) * coinVectorY;
+        return [
+          direct.action.kind,
+          direct.action.reason,
+          direct.action.target.amount,
+          direct.input.loot.candidate.selfKilledPlayerDrop,
+          direct.input.nearby.c[0][1],
+          direct.input.nearby.p[0][0],
+          dodge.action.kind,
+          dodge.action.reason,
+          dodge.combat.shooting.commandSuppressed,
+          dodgeProgress > 0,
+          stale.input.loot.blockedReason || stale.input.loot.reason,
+          stale.action.reason
+        ].join('|');
+      })(),
+      want: 'coin|post-kill-drop-priority|57|true|57|huaming song|combat-live|post-kill-loot-safe-dodge|true|true|snapshot-stale|combat-live-realtime'
+    },
+    {
+      name: 'browserless realtime high-value loot yields to low hp and fresh injury',
+      got: (() => {
+        const self = {
+          entity_id: 1,
+          user_id: 7,
+          x: 0,
+          y: 0,
+          hp: 100,
+          max_hp: 100,
+          current_join_mode: 'Active',
+          stamina_5s_remaining_milli: 6000,
+          stamina_5s_limit_milli: 10000
+        };
+        const threat = {
+          entity_id: 2,
+          user_id: 8,
+          name: 'active',
+          x: 1000,
+          y: 0,
+          hp: 82,
+          current_join_mode: 'Active',
+          stamina_5s_remaining_milli: 5000,
+          stamina_5s_limit_milli: 10000
+        };
+        const coin = { drop_id: 'high', amount: 30, x: 500, y: 0 };
+        const stateFor = (tick, includeCoin = true) => ({
+          userId: 7,
+          realtime: { tick, receivedAtMs: tick * 10, frameAgeMs: 0, self, entities: [self, threat], bullets: [] },
+          fallback: { tick, receivedAtMs: tick * 10, frameAgeMs: 0, self, entities: [self, threat], coinDrops: includeCoin ? [coin] : [], messages: [] }
+        });
+        const options = {
+          ...buildBrowserlessRuntimeDefaults({}),
+          userId: 7,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          nowMs: 1000
+        };
+        const injuryState = createBrowserlessDecisionState();
+        buildBrowserlessRealtimeControlDecision(stateFor(100, false), injuryState, options);
+        self.hp = 95;
+        const injured = buildBrowserlessRealtimeControlDecision(stateFor(101, true), injuryState, { ...options, nowMs: 1010 });
+        self.hp = 40;
+        const lowHp = buildBrowserlessRealtimeControlDecision(stateFor(102, true), createBrowserlessDecisionState(), { ...options, nowMs: 1020 });
+        return [
+          injured.input.loot.blockedReason,
+          injured.action?.reason || 'none',
+          lowHp.input.loot.blockedReason,
+          lowHp.action.reason
+        ].join('|');
+      })(),
+      want: 'recent-self-injury|none|self-hp-below-loot-threshold|recovery-low-hp-active-threat-leave'
+    },
+    {
+      name: 'browserless snapshot self-kill evidence uses stable ids and kill ticks',
+      got: (() => {
+        const evidence = snapshotSelfKillEvidence({
+          messages: [
+            { kind: 'kill', user_id: 7, target_user_id: 34711, tick: 1287800, target_name: 'xuanze00' },
+            { kind: 'kill', user_id: 9, target_user_id: 10, tick: 1287801 }
+          ]
+        }, 7);
+        return [evidence.length, evidence[0].targetUserId, evidence[0].tick, evidence[0].targetName].join('|');
+      })(),
+      want: '1|34711|1287800|xuanze00'
     },
     {
       name: 'browserless combat input filters passive profit population but retains realtime evidence',

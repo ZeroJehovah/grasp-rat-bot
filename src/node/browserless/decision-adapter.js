@@ -97,6 +97,8 @@ const DEFAULT_PROFIT_LIVE_INJURY_EXIT_RANGE = DEFAULT_ATTACK_ENGAGE_RANGE;
 const DEFAULT_PROFIT_LIVE_INJURY_HP = 90;
 const DEFAULT_PROFIT_LIVE_PLAYER_DROP_MAX_DISTANCE = BROWSER_RUNTIME_DEFAULTS.postAttackDropCoinMaxDistance;
 const DEFAULT_PROFIT_LIVE_PLAYER_DROP_MAX_AGE_TICKS = 8000;
+const DEFAULT_REALTIME_LOOT_MAX_AGE_MS = 2500;
+const DEFAULT_REALTIME_LOOT_INJURY_BLOCK_MS = 2000;
 const DEFAULT_SNAPSHOT_VISIBLE_COIN_MAX_DISTANCE = BROWSER_RUNTIME_DEFAULTS.globalCoinMaxDistance;
 const DEFAULT_OPPORTUNITY_VISIBLE_DISTANCE = BROWSER_RUNTIME_DEFAULTS.opportunityVisibleDistance;
 const DEFAULT_OPPORTUNITY_NEARBY_PRIORITY_DISTANCE = BROWSER_RUNTIME_DEFAULTS.opportunityNearbyPriorityDistance;
@@ -1139,6 +1141,13 @@ function summarizeSelfKillEvidence(selfKillTargetTicks) {
     .filter(item => item.targetUserId !== null);
 }
 
+function snapshotSelfKillEvidence(snapshot, userId) {
+  return summarizeSelfKillEvidence(selfKillTargetTicksFromMessages(
+    Array.isArray(snapshot?.messages) ? snapshot.messages : [],
+    userId
+  ));
+}
+
 function coinSourceUserId(coin) {
   return numberOrNull(coin?.source_user_id ?? coin?.sourceUserId ?? coin?.owner_user_id ?? coin?.ownerUserId);
 }
@@ -1160,6 +1169,310 @@ function isSelfKilledPlayerDropCoin(coin, selfKillTargetTicks, options = {}) {
   const createdTick = Number(coinCreatedTick(coin) || 0);
   if (maxAgeTicks > 0 && killTick > 0 && createdTick > 0 && Math.abs(createdTick - killTick) > maxAgeTicks) return false;
   return true;
+}
+
+function realtimeObservationIdentity(fallback) {
+  const tick = fallback?.tick;
+  if (tick !== null && tick !== undefined && tick !== '') return `tick:${tick}`;
+  return `at:${Number(fallback?.receivedAtMs || 0)}`;
+}
+
+function refreshRealtimeSnapshotObservation(state, self, stateful = {}, options = {}, nowMs = Date.now()) {
+  const fallback = state?.fallback || state?.snapshot || {};
+  const identity = realtimeObservationIdentity(fallback);
+  const previous = stateful.realtimeSnapshotObservation || null;
+  if (previous?.identity === identity) return previous;
+  const selfUserId = Number(self?.user_id ?? state?.userId ?? options.userId ?? 0);
+  const visibleRange = Math.max(0, Number(options.globalCoinMaxDistance ?? DEFAULT_GLOBAL_COIN_MAX_DISTANCE));
+  const highValueAmount = Math.max(1, highValueCoinPriorityAmount(options));
+  const selfKillTargetTicks = selfKillTargetTicksFromMessages(
+    Array.isArray(fallback.messages) ? fallback.messages : [],
+    selfUserId
+  );
+  const nearbyCoins = [];
+  const coins = [];
+  for (const drop of Array.isArray(fallback.coinDrops) ? fallback.coinDrops : []) {
+    if (!drop || typeof drop !== 'object') continue;
+    const x = numberOrNull(drop.x);
+    const y = numberOrNull(drop.y);
+    if (x === null || y === null) continue;
+    const amount = Math.max(0, Number(drop.amount || 0));
+    if (!(amount > 0)) continue;
+    const id = drop.drop_id ?? drop.id ?? `${Math.round(x)}:${Math.round(y)}:${amount}`;
+    const distance = self ? Math.hypot(Number(self.x) - x, Number(self.y) - y) : Infinity;
+    const coin = {
+      drop_id: id,
+      id,
+      key: coinTargetKeyCore({ id, x, y, amount }),
+      x,
+      y,
+      amount,
+      distance,
+      source_user_id: coinSourceUserId(drop),
+      created_tick: coinCreatedTick(drop),
+      system_spawned: drop.system_spawned === true || drop.systemSpawned === true,
+      authority: 'snapshot',
+      snapshotOnly: true
+    };
+    coin.selfKilledPlayerDrop = isSelfKilledPlayerDropCoin(coin, selfKillTargetTicks, options);
+    if (!visibleRange || distance <= visibleRange) nearbyCoins.push(coin);
+    if (amount >= highValueAmount) coins.push(coin);
+  }
+  nearbyCoins.sort((a, b) => Number(a.distance) - Number(b.distance) || Number(b.amount) - Number(a.amount));
+  const coinKeys = nearbyCoins.map(coin => coin.key);
+  const coinRows = nearbyCoins.map(coin => [
+    valueKey(coin.id),
+    numberOrNull(coin.amount),
+    Math.round(Number(coin.distance)),
+    0,
+    0,
+    'snapshot',
+    0
+  ]);
+  const realtimeByUserId = new Map();
+  for (const entity of Array.isArray(state?.realtime?.entities) ? state.realtime.entities : []) {
+    const userId = numberOrNull(entity?.user_id ?? entity?.userId);
+    if (userId !== null) realtimeByUserId.set(String(userId), entity);
+  }
+  const snapshotByUserId = new Map();
+  for (const entity of Array.isArray(fallback.entities) ? fallback.entities : []) {
+    const userId = numberOrNull(entity?.user_id ?? entity?.userId);
+    if (userId !== null) snapshotByUserId.set(String(userId), entity);
+  }
+  const playerIds = new Set([...snapshotByUserId.keys(), ...realtimeByUserId.keys()]);
+  const nearbyPlayers = [];
+  for (const userId of playerIds) {
+    if (Number(userId) === selfUserId) continue;
+    const realtimeEntity = realtimeByUserId.get(userId) || null;
+    const snapshotEntity = snapshotByUserId.get(userId) || null;
+    const activitySource = realtimeEntity || snapshotEntity;
+    const metadataSource = snapshotEntity || realtimeEntity;
+    const x = numberOrNull(realtimeEntity?.x) ?? numberOrNull(snapshotEntity?.x);
+    const y = numberOrNull(realtimeEntity?.y) ?? numberOrNull(snapshotEntity?.y);
+    if (x === null || y === null || !self) continue;
+    const distance = Math.hypot(Number(self.x) - x, Number(self.y) - y);
+    if (!Number.isFinite(distance) || (visibleRange && distance > visibleRange)) continue;
+    const moving = isMovingEntity(activitySource, options);
+    const firing = isFiringEntity(activitySource);
+    const stamina5s = staminaRemainingValue(realtimeEntity, '5s') ?? staminaRemainingValue(metadataSource, '5s');
+    const stamina5sLimit = staminaLimitForWindow(realtimeEntity, '5s')
+      ?? staminaLimitForWindow(metadataSource, '5s')
+      ?? 10000;
+    const fullRatio = Math.max(0, Number(options.staminaFullRatio ?? options.fullRatio ?? 0.98) || 0.98);
+    const fullStamina5s = Boolean(stamina5s !== null && stamina5sLimit > 0 && stamina5s >= stamina5sLimit * fullRatio);
+    const invulnerable = isInvulnerableEntity(realtimeEntity) || isInvulnerableEntity(metadataSource);
+    const active = moving || firing || (isActiveEntity(activitySource) && (!fullStamina5s || invulnerable));
+    const alive = isAliveEntity(activitySource);
+    const dropSource = entityDropKnown(realtimeEntity) ? realtimeEntity : metadataSource;
+    const dropKnown = entityDropKnown(dropSource);
+    const drop = dropKnown ? numberOrNull(entityDropValue(dropSource)) : null;
+    const realtimeInvulnerableMs = realtimeEntity ? invulnerableRemainingMs(realtimeEntity, options) : null;
+    const invulnerableMs = realtimeInvulnerableMs !== null
+      ? realtimeInvulnerableMs
+      : invulnerableRemainingMs(metadataSource, options);
+    const activityAgeRaw = realtimeEntity?.recentActivityAgeMs ?? metadataSource?.recentActivityAgeMs;
+    const activityAgeMs = activityAgeRaw === null || activityAgeRaw === undefined || activityAgeRaw === ''
+      ? null
+      : numberOrNull(activityAgeRaw);
+    const inactiveMs = Math.max(0, Number(options.afkDisplayInactiveMs ?? DEFAULT_AFK_DISPLAY_INACTIVE_MS));
+    const afkStaminaCooldownRemainingMs = Number(
+      realtimeEntity?.afkStaminaCooldownRemainingMs ?? metadataSource?.afkStaminaCooldownRemainingMs ?? 0
+    );
+    nearbyPlayers.push({
+      key: String(userId),
+      name: entityDisplayName(realtimeEntity) || entityDisplayName(metadataSource) || '未知玩家',
+      hp: numberOrNull(realtimeEntity?.hp) ?? numberOrNull(metadataSource?.hp),
+      stamina5s,
+      drop,
+      dropKnown,
+      invulnerableMs,
+      distance,
+      mode: String(
+        realtimeEntity?.current_join_mode || realtimeEntity?.mode || realtimeEntity?.joined
+        || metadataSource?.current_join_mode || metadataSource?.mode || metadataSource?.joined || ''
+      ) || null,
+      fullStamina5s,
+      afk: Boolean(fullStamina5s && !active && !moving && !firing && alive),
+      afkGreen: !(afkStaminaCooldownRemainingMs > 0) && (activityAgeMs === null || activityAgeMs >= inactiveMs)
+    });
+  }
+  nearbyPlayers.sort((a, b) => Number(a.distance) - Number(b.distance));
+  const playerKeys = nearbyPlayers.map(player => player.key);
+  const playerRows = nearbyPlayers.map(player => {
+    const foldAsLowValueAfk = Boolean(player.afk && player.dropKnown && player.drop !== null
+      && player.drop < Math.max(0, Number(options.attackMinAfkDrop ?? DEFAULT_ATTACK_MIN_AFK_DROP)));
+    return [
+      player.name,
+      player.hp,
+      player.stamina5s,
+      player.drop,
+      player.invulnerableMs,
+      Math.round(Number(player.distance)),
+      0,
+      player.mode,
+      player.fullStamina5s ? 1 : 0,
+      0,
+      player.afk ? 1 : 0,
+      player.afk && player.afkGreen ? 1 : 0,
+      foldAsLowValueAfk ? 1 : 0
+    ];
+  });
+  const observedAtMs = Number(fallback.receivedAtMs || 0)
+    || Math.max(0, nowMs - Math.max(0, Number(fallback.frameAgeMs || 0)));
+  const observation = {
+    identity,
+    tick: numberOrNull(fallback.tick),
+    observedAtMs,
+    coins,
+    nearby: {
+      ar: Math.round(Number(options.attackRange ?? DEFAULT_ATTACK_RANGE)),
+      vr: Math.round(visibleRange),
+      c: coinRows,
+      p: playerRows,
+      observedAt: observedAtMs ? new Date(observedAtMs).toISOString() : '',
+      tick: numberOrNull(fallback.tick)
+    },
+    selfKillEvidence: summarizeSelfKillEvidence(selfKillTargetTicks)
+  };
+  Object.defineProperty(observation, '_nearbyKeys', {
+    value: { coinKeys, playerKeys },
+    writable: true,
+    configurable: true
+  });
+  stateful.realtimeSnapshotObservation = observation;
+  return observation;
+}
+
+function realtimeObservationAgeMs(observation, input) {
+  const observedAtMs = Number(observation?.observedAtMs || 0);
+  if (observedAtMs > 0) return Math.max(0, Number(input?.nowMs || Date.now()) - observedAtMs);
+  return Math.max(0, Number(input?.frameAges?.snapshotMs || 0));
+}
+
+function realtimeObservationCoins(observation, self) {
+  return (observation?.coins || []).map(coin => ({
+    ...coin,
+    distance: self ? distanceBetween(self, coin) : Infinity
+  }));
+}
+
+function selectRealtimeLootCandidate(input, stateful = {}, options = {}) {
+  const observation = input?.realtimeSnapshotObservation || null;
+  const maxAgeMs = Math.max(250, Number(options.realtimeLootMaxAgeMs ?? DEFAULT_REALTIME_LOOT_MAX_AGE_MS));
+  const ageMs = realtimeObservationAgeMs(observation, input);
+  const minAmount = Math.max(1, highValueCoinPriorityAmount(options));
+  const maxDistance = Math.max(0, Number(
+    options.realtimeLootMaxDistanceCm
+      ?? options.postAttackDropCoinMaxDistance
+      ?? DEFAULT_PROFIT_LIVE_PLAYER_DROP_MAX_DISTANCE
+  ));
+  const candidates = ageMs <= maxAgeMs
+    ? realtimeObservationCoins(observation, input?.self)
+      .filter(coin => Number(coin.amount || 0) >= minAmount)
+      .filter(coin => Number.isFinite(Number(coin.distance)) && (!maxDistance || Number(coin.distance) <= maxDistance))
+      .filter(coin => insideCenterActivityRadius(coin, options))
+      .filter(coin => opportunityStaminaAffordable(input?.self, opportunityCoinStaminaCost(coin, options), options))
+      .sort((a, b) => Number(Boolean(b.selfKilledPlayerDrop)) - Number(Boolean(a.selfKilledPlayerDrop))
+        || Number(b.amount || 0) - Number(a.amount || 0)
+        || Number(a.distance || Infinity) - Number(b.distance || Infinity))
+    : [];
+  const selected = candidates[0] || null;
+  if (!selected) {
+    stateful.realtimeLootIntent = null;
+    return {
+      selected: null,
+      ageMs: Math.round(ageMs),
+      maxAgeMs,
+      minAmount,
+      maxDistance,
+      candidateCount: candidates.length,
+      reason: ageMs > maxAgeMs ? 'snapshot-stale' : 'no-high-value-coin'
+    };
+  }
+  const same = stateful.realtimeLootIntent?.key === selected.key;
+  stateful.realtimeLootIntent = {
+    key: selected.key,
+    id: selected.id,
+    amount: selected.amount,
+    x: selected.x,
+    y: selected.y,
+    sourceUserId: selected.source_user_id,
+    selfKilledPlayerDrop: Boolean(selected.selfKilledPlayerDrop),
+    startedAt: same ? Number(stateful.realtimeLootIntent.startedAt || input.nowMs) : input.nowMs,
+    lastSeenAt: input.nowMs,
+    snapshotTick: observation?.tick ?? null
+  };
+  return {
+    selected,
+    ageMs: Math.round(ageMs),
+    maxAgeMs,
+    minAmount,
+    maxDistance,
+    candidateCount: candidates.length,
+    reason: selected.selfKilledPlayerDrop ? 'confirmed-self-kill-drop' : 'high-value-visible-coin'
+  };
+}
+
+function safeLootDodgeDirection(combat, self, coin) {
+  const threatField = Array.isArray(combat?.dryRun?.movement?.dodge?.threatField)
+    ? combat.dryRun.movement.dodge.threatField
+    : [];
+  if (!threatField.length || !self || !coin) return null;
+  const coinDx = Number(coin.x) - Number(self.x);
+  const coinDy = Number(coin.y) - Number(self.y);
+  const coinDistance = Math.hypot(coinDx, coinDy);
+  if (!(coinDistance > 0)) return null;
+  return threatField
+    .filter(item => Number(item?.directHits || 0) === 0
+      && Number(item?.avoidableHits || 0) === 0
+      && Number(item?.unavoidableHits || 0) === 0)
+    .map(item => {
+      const dx = Number(item?.dx || 0);
+      const dy = Number(item?.dy || 0);
+      const magnitude = Math.hypot(dx, dy);
+      const progress = magnitude > 0 ? (dx * coinDx + dy * coinDy) / (magnitude * coinDistance) : -1;
+      return { item, progress };
+    })
+    .filter(item => item.progress > 0)
+    .sort((a, b) => b.progress - a.progress
+      || Number(b.item?.minCPA ?? -Infinity) - Number(a.item?.minCPA ?? -Infinity))[0]?.item || null;
+}
+
+function realtimeNearbyObservationSummary(input, combat, lootAssessment, options = {}) {
+  if (!input?.self) return null;
+  const observation = input.realtimeSnapshotObservation || null;
+  if (!observation?.nearby) return null;
+  const selectedCoinKey = lootAssessment?.selected?.key || '';
+  const combatTargetKey = targetKey(combat?.target || combat?.dryRun?.target);
+  let selection = observation._nearbySelection || null;
+  if (selection?.selectedCoinKey !== selectedCoinKey || selection?.combatTargetKey !== combatTargetKey) {
+    const coinKeys = observation._nearbyKeys?.coinKeys || [];
+    const playerKeys = observation._nearbyKeys?.playerKeys || [];
+    selection = {
+      selectedCoinKey,
+      combatTargetKey,
+      nearby: {
+        ...observation.nearby,
+        c: observation.nearby.c.map((row, index) => {
+          const selected = Boolean(selectedCoinKey && coinKeys[index] === selectedCoinKey);
+          return selected ? [...row.slice(0, 3), 1, ...row.slice(4)] : row;
+        }),
+        p: observation.nearby.p.map((row, index) => {
+          const selected = Boolean(combatTargetKey && playerKeys[index] === combatTargetKey);
+          return selected ? [...row.slice(0, 6), 1, ...row.slice(7, 12), 0] : row;
+        })
+      }
+    };
+    Object.defineProperty(observation, '_nearbySelection', {
+      value: selection,
+      writable: true,
+      configurable: true
+    });
+  }
+  return {
+    ...selection.nearby,
+    ageMs: Math.round(realtimeObservationAgeMs(observation, input))
+  };
 }
 
 function summarizeTarget(target) {
@@ -1925,6 +2238,7 @@ function buildBrowserlessCombatStrategyInput(state, options = {}, stateful = {})
   const activeThreats = visibleTargets.filter(entity => entity.active && entity.alive !== false && !entity.easyKillThreatExempt);
   const firingThreats = visibleTargets.filter(entity => entity.firing && entity.alive !== false && !entity.easyKillThreatExempt);
   const avoidanceThreats = visibleTargets.filter(isBrowserlessAvoidanceThreat);
+  const realtimeSnapshotObservation = refreshRealtimeSnapshotObservation(state, self, stateful, options, nowMs);
   return {
     userId: Number(state?.userId || options.userId || 0),
     nowMs,
@@ -1948,6 +2262,7 @@ function buildBrowserlessCombatStrategyInput(state, options = {}, stateful = {})
     easyKill: easyKillInput.easyKill,
     easyKillTargets: easyKillInput.easyKillTargets,
     selfKillEvidence: [],
+    realtimeSnapshotObservation,
     bullets: Array.isArray(realtime.bullets) ? realtime.bullets : [],
     dataGaps: enrichedSelf.staminaMerged ? ['self-stamina-from-snapshot'] : []
   };
@@ -4444,6 +4759,8 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
   });
   stageTimings.combat = performance.now() - stageStarted;
   stageStarted = performance.now();
+  rememberBrowserlessInjury(input, stateful, options);
+  const lootControl = buildRealtimeLootControl(input, combat, stateful, options);
   const combatActionEligible = isCombatActionEligibleForDecision(combat, options);
   const controlOptions = {
     ...options,
@@ -4462,6 +4779,7 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
     || pursuitLeaveAction
     || lowHpRecoveryThreatExitAction
     || safetyAction
+    || lootControl.action
     || combatAction
     || null;
   rememberDangerousCombatExitTarget(input, combat, stateful, options);
@@ -4472,7 +4790,7 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
     band: action?.band || '',
     reason: action?.reason || '',
     action,
-    combat: combat.dryRun,
+    combat: lootControl.combat || combat.dryRun,
     exitAction: action?.shouldLeave ? action : null,
     realtimeControl: true,
     tick: input.realtime.tick,
@@ -4481,6 +4799,9 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
       self: summarizeTarget(input.self),
       stamina: input.stamina,
       realtime: input.realtime,
+      nearby: realtimeNearbyObservationSummary(input, combat, lootControl.assessment, options),
+      selfKillEvidence: input.realtimeSnapshotObservation?.selfKillEvidence || [],
+      loot: lootControl.summary,
       dataGaps: input.dataGaps
     }
   };
@@ -4490,6 +4811,158 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
     options.onRealtimeStageTimings(stageTimings);
   }
   return output;
+}
+
+function buildRealtimeLootControl(input, combat, stateful = {}, options = {}) {
+  const assessment = selectRealtimeLootCandidate(input, stateful, options);
+  const coin = assessment.selected || null;
+  const summaryBase = {
+    active: false,
+    eligible: false,
+    reason: assessment.reason,
+    blockedReason: '',
+    ageMs: assessment.ageMs,
+    maxAgeMs: assessment.maxAgeMs,
+    minAmount: assessment.minAmount,
+    maxDistance: assessment.maxDistance,
+    candidateCount: assessment.candidateCount,
+    candidate: coin ? {
+      id: coin.id,
+      amount: Math.round(Number(coin.amount || 0)),
+      distance: Math.round(Number(coin.distance || 0)),
+      sourceUserId: numberOrNull(coin.source_user_id),
+      selfKilledPlayerDrop: Boolean(coin.selfKilledPlayerDrop),
+      authority: 'snapshot'
+    } : null
+  };
+  if (!coin || !input?.self) return { action: null, combat: null, assessment, summary: summaryBase };
+  const selfHp = hpValue(input.self);
+  const healthyHp = highValueCoinPriorityHealthyHp(options);
+  if (selfHp === null || selfHp < healthyHp) {
+    return {
+      action: null,
+      combat: null,
+      assessment,
+      summary: { ...summaryBase, blockedReason: 'self-hp-below-loot-threshold', healthyHp, selfHp }
+    };
+  }
+  const injury = stateful.browserlessInjury || null;
+  const injuryBlockMs = Math.max(0, Number(options.realtimeLootInjuryBlockMs ?? DEFAULT_REALTIME_LOOT_INJURY_BLOCK_MS));
+  const injuryAgeMs = injury?.at ? Math.max(0, input.nowMs - Number(injury.at || 0)) : null;
+  if (injuryAgeMs !== null && injuryAgeMs <= injuryBlockMs) {
+    return {
+      action: null,
+      combat: null,
+      assessment,
+      summary: { ...summaryBase, blockedReason: 'recent-self-injury', healthyHp, selfHp, injuryAgeMs }
+    };
+  }
+  if (combat?.exitAction || combat?.dryRun?.exit?.shouldLeave) {
+    return {
+      action: null,
+      combat: null,
+      assessment,
+      summary: { ...summaryBase, blockedReason: 'combat-exit-required', healthyHp, selfHp }
+    };
+  }
+  const incoming = incomingBulletPressure(input);
+  const reason = coin.selfKilledPlayerDrop
+    ? 'post-kill-drop-priority'
+    : 'high-value-visible-coin-priority';
+  if (!incoming.hasIncoming) {
+    const directCombatSummary = combat?.dryRun ? {
+      ...combat.dryRun,
+      shooting: {
+        ...(combat.dryRun.shooting || {}),
+        wouldShoot: false,
+        commandSuppressed: true,
+        state: 'loot-priority',
+        reason: 'post-kill-loot-priority'
+      },
+      realtimeLoot: {
+        reason,
+        target: summarizeCoin(coin),
+        incomingCount: 0,
+        mode: 'direct-coin'
+      }
+    } : null;
+    return {
+      action: {
+        kind: Number(coin.distance || Infinity) <= Number(options.coinMaxDistance ?? BROWSER_RUNTIME_DEFAULTS.coinMaxDistance)
+          ? 'coin'
+          : 'seek-coin',
+        band: 'profit',
+        reason,
+        reward: Number(coin.amount || 0),
+        staminaCost: opportunityCoinStaminaCost(coin, options),
+        target: summarizeCoin(coin),
+        realtimeLootPriority: true
+      },
+      combat: directCombatSummary,
+      assessment,
+      summary: { ...summaryBase, active: true, eligible: true, mode: 'direct-coin', healthyHp, selfHp }
+    };
+  }
+  const safeDirection = safeLootDodgeDirection(combat, input.self, coin);
+  if (!combat?.target || !safeDirection) {
+    return {
+      action: null,
+      combat: null,
+      assessment,
+      summary: {
+        ...summaryBase,
+        blockedReason: combat?.target ? 'no-safe-loot-progress-vector' : 'incoming-bullet-without-target',
+        healthyHp,
+        selfHp,
+        incomingCount: incoming.incomingCount
+      }
+    };
+  }
+  const combatSummary = {
+    ...combat.dryRun,
+    movement: {
+      ...(combat.dryRun?.movement || {}),
+      dx: Number(safeDirection.dx || 0),
+      dy: Number(safeDirection.dy || 0),
+      reason: 'post-kill-loot-safe-dodge',
+      modifiers: Array.from(new Set([...(combat.dryRun?.movement?.modifiers || []), 'post-kill-loot']))
+    },
+    shooting: {
+      ...(combat.dryRun?.shooting || {}),
+      wouldShoot: false,
+      commandSuppressed: true,
+      state: 'loot-priority',
+      reason: 'post-kill-loot-priority'
+    },
+    realtimeLoot: {
+      reason,
+      target: summarizeCoin(coin),
+      incomingCount: incoming.incomingCount,
+      safeDirection: { dx: Number(safeDirection.dx || 0), dy: Number(safeDirection.dy || 0) }
+    }
+  };
+  return {
+    action: {
+      kind: 'combat-live',
+      band: 'combat',
+      reason: 'post-kill-loot-safe-dodge',
+      target: combat.target,
+      lootTarget: summarizeCoin(coin),
+      realtimeLootPriority: true
+    },
+    combat: combatSummary,
+    assessment,
+    summary: {
+      ...summaryBase,
+      active: true,
+      eligible: true,
+      mode: 'safe-dodge-toward-coin',
+      healthyHp,
+      selfHp,
+      incomingCount: incoming.incomingCount,
+      safeDirection: { dx: Number(safeDirection.dx || 0), dy: Number(safeDirection.dy || 0) }
+    }
+  };
 }
 
 function isCombatActionEligibleForDecision(combatDecision, options = {}) {
@@ -5860,5 +6333,6 @@ module.exports = {
   normalizeEntityForDecision,
   recordAttackHistoryFromActionResult,
   summarizeBrowserlessDecision,
+  snapshotSelfKillEvidence,
   summarizeBrowserlessDecisionState
 };
