@@ -99,4 +99,3 @@ parentPort.on('message', message => {
 });
 
 parentPort.postMessage({ kind: 'ready' });
-
