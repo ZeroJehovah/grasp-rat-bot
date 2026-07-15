@@ -2,6 +2,7 @@
 
 const {
   calculateCombatTargetPriority,
+  combatEscapeDecisionCore,
   combatTargetId,
   defensiveTargetOverridesEngagedCore,
   incomingBulletHasCollisionRiskCore,
@@ -878,6 +879,14 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
   const opponentBehavior = combatTargetState?.opponentBehaviorState || null;
   const noDamageMs = Math.max(0, Number(combatTargetState?.noDamageMs || 0));
   const targetPressure = (bullets || []).some(bullet => Number(bullet.ownerId) === Number(target.user_id));
+  const attackRange = Math.max(0, Number(options.combatAttackRange || options.attackRange || COMBAT_CONSTANTS.ATTACK_RANGE));
+  const outOfRange = Number(target.distance || Infinity) > attackRange;
+  const edgePressure = target?.combatEngagement?.edgePressure || null;
+  const escapeDecision = combatTargetState?.escapeDecision || target?.combatEngagement?.escapeDecision || null;
+  const closeAllowed = Boolean(
+    escapeDecision?.confirmed !== true
+      && (!outOfRange || edgePressure?.active === true || targetPressure)
+  );
   const passiveRunner = passiveRunnerState(self, target, combatTargetState, options);
   const finishingTarget = Number(target.hp ?? 100) <= Number(options.combatFinishLowThreatHp ?? COMBAT_CONSTANTS.FINISH_LOW_THREAT_HP);
   const highEntropyOpponent = opponentBehavior?.dimensions?.controlStyle?.state === 'human-like'
@@ -917,24 +926,27 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
   const backAway = shouldBackAwayFromTarget(self, target);
   const closeRange = Math.max(0, Number(options.combatPressureCloseRange || options.combatPassiveRunnerCloseRange || COMBAT_CONSTANTS.NO_DAMAGE_PRESS_CLOSE_RANGE));
   const pressureClose = Boolean(
-    targetPressure
+    closeAllowed
+      && targetPressure
       && noDamageMs >= Math.max(0, Number(options.combatNoDamagePressCloseMs ?? COMBAT_CONSTANTS.NO_DAMAGE_PRESS_CLOSE_MS))
       && (hpValue(self) ?? 100) >= Math.max(0, Number(options.combatNoDamagePressCloseMinHp ?? COMBAT_CONSTANTS.NO_DAMAGE_PRESS_CLOSE_MIN_HP))
       && Number(target.distance || Infinity) > closeRange
   );
   const retreatingClose = Boolean(
-    !pressureClose
+    closeAllowed
+      && !pressureClose
       && (opponentBehavior?.mode === 'retreat-kite' || targetRecedingFromSelf(self, target))
       && noDamageMs >= Math.max(0, Number(options.combatRetreatingCloseNoDamageMs || 2000))
       && Number(target.distance || Infinity) > spacing
   );
   const passiveRunnerClose = Boolean(
-    !pressureClose
+    closeAllowed
+      && !pressureClose
       && !retreatingClose
       && passiveRunner.active
       && Number(target.distance || Infinity) > Math.max(0, Number(options.combatPassiveRunnerCloseRange || 5500))
   );
-  const behaviorClose = Boolean(opponentBehavior?.responsePolicy?.closeIn && Number(target.distance || Infinity) > spacing);
+  const behaviorClose = Boolean(closeAllowed && opponentBehavior?.responsePolicy?.closeIn && Number(target.distance || Infinity) > spacing);
   const safeClosingDodge = behaviorClose && targetPressure
     ? pickSafeClosingDodgeCore(dodge?.threatField, {
         hitRadius: options.combatBulletHitRadiusCm || 200,
@@ -954,7 +966,8 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
     : (safeClosingDodge
     ? { ...dodge, dx: safeClosingDodge.dx, dy: safeClosingDodge.dy, reason: 'retreat-kite-safe-close' }
     : dodge);
-  const closeIn = pressureClose || retreatingClose || passiveRunnerClose || behaviorClose || Number(target.distance || Infinity) > spacing;
+  const closeIn = closeAllowed
+    && (pressureClose || retreatingClose || passiveRunnerClose || behaviorClose || Number(target.distance || Infinity) > spacing);
   const base = { dx: 0, dy: 0 };
   const movement = applyCombatMovementModifiers(base, self, target, { dodge: effectiveDodge, backAway, closeIn });
   const closeReason = pressureClose
@@ -964,7 +977,13 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
         : (passiveRunnerClose ? 'passive-runner-close' : (behaviorClose ? `combat-${opponentBehavior.mode}-response` : 'close-in')));
   const reason = movement.modifiers.includes('dodge')
     ? effectiveDodge.reason
-    : (movement.modifiers.includes('back-away') || movement.modifiers.includes('back-away-mixed') ? 'back-away' : (movement.modifiers.includes('close-in') ? closeReason : 'hold-spacing'));
+    : (movement.modifiers.includes('back-away') || movement.modifiers.includes('back-away-mixed')
+        ? 'back-away'
+        : (movement.modifiers.includes('close-in')
+            ? (edgePressure?.active ? 'combat-advantage-reengage' : closeReason)
+            : (escapeDecision?.confirmed
+                ? 'combat-escape-confirmed-hold'
+                : (outOfRange ? 'combat-out-of-range-hold' : 'hold-spacing'))));
   return {
     dx: Number(movement.dx || 0),
     dy: Number(movement.dy || 0),
@@ -980,6 +999,8 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
       confidence: opponentBehavior.confidence,
       responsePolicy: opponentBehavior.responsePolicy
     } : null,
+    edgePressure: edgePressure?.active ? edgePressure : null,
+    escapeDecision: escapeDecision || null,
     safeCloseOverride: safeClosingDodge ? {
       dx: safeClosingDodge.dx,
       dy: safeClosingDodge.dy,
@@ -1105,6 +1126,13 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
   };
   opponentBehaviorState.recentHitRate = observedHitRate;
   behaviorMap[String(id)] = opponentBehaviorState;
+  const escapeDecision = combatEscapeDecisionCore(self, target, {
+    ...(same ? previous : null),
+    opponentBehaviorState
+  }, {
+    ...options,
+    nowMs
+  });
   stateful.combatTarget = {
     id,
     at: nowMs,
@@ -1138,6 +1166,7 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
     noDamageMs: Math.max(0, nowMs - (damaged ? nowMs : (same ? Number(previous.lastDamageAt || previous.at || nowMs) : nowMs))),
     motionSamples,
     opponentBehaviorState,
+    escapeDecision,
     provenHitRate: Math.max(
       Number(same ? previous.provenHitRate || 0 : 0),
       Number(observedHitRate || 0)
@@ -1425,6 +1454,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
       automationConfidence: behaviorState.automationConfidence,
       metrics: behaviorState.metrics
     } : null,
+    escapeDecision: combatTargetState?.escapeDecision || null,
     disadvantageObservation: exitEvaluation.disadvantageObservation,
     exchangeStopLoss: exitEvaluation.exchangeStopLoss,
     exit: exitDecision

@@ -124,6 +124,7 @@ const {
   gracefulShutdownLeave
 } = require('../../scripts/browserless-runner');
 const {
+  replayCombatPursuit,
   replayMovementStallExit,
   replayRecoveryThreatExit
 } = require('../../scripts/replay-browserless-runtime-log');
@@ -11852,6 +11853,157 @@ async function runSelfTest() {
       want: '8|reengage|14640|true|8'
     },
     {
+      name: 'browserless hp-advantage edge engagement closes back into range without firing',
+      got: (() => {
+        const stateful = {
+          combatTarget: {
+            id: 19677,
+            at: 9500,
+            firstSeenAt: 1000,
+            lastInRangeAt: 8000,
+            hp: 88,
+            reason: 'combat-live-realtime',
+            intent: 'reengage',
+            originIntent: 'engaged',
+            opponentBehaviorState: {
+              mode: 'retreat-kite',
+              confidence: 0.83,
+              noProgressMs: 5226,
+              metrics: { netDistanceChange: 1676 }
+            }
+          }
+        };
+        const combat = buildBrowserlessCombatDryRun({
+          userId: 28886,
+          realtime: {
+            tick: 795448,
+            self: { entity_id: 106, user_id: 28886, name: '文月', x: 0, y: 0, hp: 94, max_hp: 100 },
+            entities: [
+              { entity_id: 106, user_id: 28886, name: '文月', x: 0, y: 0, hp: 94, max_hp: 100 },
+              {
+                entity_id: 0,
+                user_id: 19677,
+                name: 'Eason',
+                x: 15178,
+                y: 0,
+                vx: 0,
+                vy: 0,
+                hp: 88,
+                active: false,
+                current_join_mode: 'Active',
+                drop: 200
+              }
+            ],
+            bullets: []
+          }
+        }, {
+          nowMs: 10000,
+          decisionState: stateful,
+          liveCombatEnabled: true,
+          targetStickMs: 30000,
+          combatEngageStickMs: 30000,
+          combatEngageGraceMs: 5000,
+          combatEngageGraceRange: 17000,
+          combatDisengageRange: 17000,
+          combatAttackRange: 14500,
+          combatAdvantageReengageRange: 16000,
+          combatAdvantageReengageRecentInRangeMs: 3000
+        });
+        return [
+          combat.target?.userId || '',
+          combat.target?.combatIntent || '',
+          combat.movement.reason,
+          combat.movement.dx,
+          combat.movement.dy,
+          Boolean(combat.movement.edgePressure?.active),
+          combat.shooting.inRange,
+          combat.shooting.wouldShoot
+        ].join('|');
+      })(),
+      want: '19677|reengage|combat-advantage-reengage|1|0|true|false|false'
+    },
+    {
+      name: 'browserless confirmed retreat escape stops proactive close while preserving in-range fire',
+      got: (() => {
+        const stateful = {
+          combatTarget: {
+            id: 19677,
+            at: 10000,
+            firstSeenAt: 1000,
+            lastInRangeAt: 10000,
+            lastDamageAt: 9000,
+            hp: 40,
+            reason: 'combat-live-realtime',
+            intent: 'engaged',
+            originIntent: 'engaged',
+            escapeDecision: {
+              confirmed: true,
+              confirmedAt: 9000,
+              reason: 'sustained-outward-no-progress'
+            },
+            opponentBehaviorState: {
+              mode: 'retreat-kite',
+              confidence: 1,
+              noProgressMs: 10317,
+              metrics: { netDistanceChange: 7665 }
+            }
+          },
+          opponentBehaviorStates: {
+            19677: {
+              mode: 'retreat-kite',
+              confidence: 1,
+              since: 1000,
+              noProgressMs: 10317,
+              progressAt: 0,
+              progressDistance: 4412,
+              metrics: { netDistanceChange: 7665 },
+              samples: []
+            }
+          }
+        };
+        const combat = buildBrowserlessCombatDryRun({
+          userId: 28886,
+          realtime: {
+            tick: 797000,
+            self: { entity_id: 106, user_id: 28886, name: '文月', x: 0, y: 0, hp: 91, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+            entities: [
+              { entity_id: 106, user_id: 28886, name: '文月', x: 0, y: 0, hp: 91, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+              {
+                entity_id: 0,
+                user_id: 19677,
+                name: 'Eason',
+                x: 12077,
+                y: 0,
+                vx: 50,
+                vy: 0,
+                hp: 40,
+                current_join_mode: 'Active',
+                drop: 200
+              }
+            ],
+            bullets: []
+          }
+        }, {
+          nowMs: 11000,
+          decisionState: stateful,
+          liveCombatEnabled: true,
+          targetStickMs: 30000,
+          combatEngageStickMs: 30000,
+          combatAttackRange: 14500
+        });
+        return [
+          combat.target?.userId || '',
+          combat.movement.reason,
+          combat.movement.dx,
+          combat.movement.dy,
+          Boolean(combat.escapeDecision?.confirmed),
+          combat.shooting.inRange,
+          combat.shooting.wouldShoot
+        ].join('|');
+      })(),
+      want: '19677|combat-escape-confirmed-hold|0|0|true|true|true'
+    },
+    {
       name: 'browserless combat summary exposes stable battle start time',
       got: (() => {
         const stateful = {
@@ -13818,6 +13970,125 @@ async function runSelfTest() {
         }
       })(),
       want: 'true|1|24035|14376|recovery-low-hp-active-threat-leave|31000'
+    },
+    {
+      name: 'browserless combat-pursuit replay preserves hp-advantage edge pressure and stops confirmed escape close',
+      got: (() => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'grasp-rat-pursuit-replay-'));
+        try {
+          const rows = [
+            {
+              at: '2026-07-15T03:04:46.443Z',
+              type: 'decision',
+              detail: {
+                kind: 'combat-live',
+                reason: 'combat-live-realtime',
+                input: {
+                  self: { userId: 28886, x: 0, y: 0, hp: 94, maxHp: 100 },
+                  nearby: { p: [['Eason', 88, 8657, 200, null, 15178, 1, 'Active', 0, 0, 0, 0, 0]] }
+                },
+                combat: {
+                  target: null,
+                  behavior: {
+                    mode: 'retreat-kite',
+                    confidence: 0.83,
+                    noProgressMs: 5226,
+                    metrics: { netDistanceChange: 1676 }
+                  },
+                  movement: { reason: 'missing-target' },
+                  shooting: { wouldShoot: false }
+                },
+                action: {
+                  target: { combatEngagement: { outOfRangeMs: 1133 } }
+                },
+                finalSelection: {
+                  candidates: [{ reason: 'wait-for-full-stamina-and-hp' }]
+                }
+              }
+            },
+            {
+              at: '2026-07-15T03:06:38.635Z',
+              type: 'decision',
+              detail: {
+                kind: 'combat-live',
+                reason: 'combat-live-realtime',
+                input: { self: { userId: 28886, x: 0, y: 0, hp: 91, maxHp: 100 }, nearby: { p: [] } },
+                combat: {
+                  target: {
+                    userId: 19677,
+                    name: 'Eason',
+                    x: 12077,
+                    y: 0,
+                    vx: 50,
+                    vy: 0,
+                    hp: 40,
+                    distance: 12077,
+                    combatEngagement: { outOfRangeMs: 0 }
+                  },
+                  behavior: {
+                    mode: 'retreat-kite',
+                    confidence: 1,
+                    noProgressMs: 10317,
+                    metrics: { netDistanceChange: 7665 }
+                  },
+                  movement: { reason: 'passive-runner-close' },
+                  shooting: { wouldShoot: true }
+                }
+              }
+            },
+            {
+              at: '2026-07-15T03:06:39.634Z',
+              type: 'decision',
+              detail: {
+                kind: 'combat-live',
+                reason: 'combat-live-realtime',
+                input: { self: { userId: 28886, x: 0, y: 0, hp: 91, maxHp: 100 }, nearby: { p: [] } },
+                combat: {
+                  target: {
+                    userId: 19677,
+                    name: 'Eason',
+                    x: 13169,
+                    y: 0,
+                    vx: 50,
+                    vy: 0,
+                    hp: 37,
+                    distance: 13169,
+                    combatEngagement: { outOfRangeMs: 0 }
+                  },
+                  behavior: {
+                    mode: 'retreat-kite',
+                    confidence: 1,
+                    noProgressMs: 11318,
+                    metrics: { netDistanceChange: 7700 }
+                  },
+                  movement: { reason: 'combat-retreating-fighter-close' },
+                  shooting: { wouldShoot: true }
+                }
+              }
+            }
+          ];
+          fs.writeFileSync(path.join(dir, 'decisions.jsonl'), rows.map(item => JSON.stringify(item)).join('\n') + '\n');
+          const replay = replayCombatPursuit({
+            file: path.join(dir, 'decisions.jsonl'),
+            startLine: 1,
+            endLine: 3,
+            targetId: '19677',
+            targetName: 'Eason'
+          });
+          return [
+            replay.accepted,
+            replay.edgePressureFrames,
+            replay.preventedRecoveryTakeoverFrames,
+            replay.baselinePostEscapeCombatFrames,
+            replay.baselinePostEscapeCloseFrames,
+            replay.correctedPostEscapeCloseFrames,
+            replay.correctedOutOfRangeShootFrames
+          ].join('|');
+        } finally {
+          fs.rmSync(dir, { recursive: true, force: true });
+        }
+      })(),
+      want: 'true|1|1|2|2|0|0'
     },
     {
       name: 'browserless action adapter repeats velocity through decision gap',

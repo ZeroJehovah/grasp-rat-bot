@@ -14,6 +14,10 @@ const {
   evaluateCombatHpExitCore
 } = require('../src/strategy/combat-exit');
 const { calculateDodgeDirection, pickSafeClosingDodgeCore } = require('../src/strategy/combat-movement');
+const {
+  combatEdgePressureDecisionCore,
+  combatEscapeDecisionCore
+} = require('../src/strategy/combat-target-selection');
 const { opponentResponsePolicyCore, updateOpponentBehaviorStateCore } = require('../src/strategy/opponent-behavior');
 
 function parseArgs(argv) {
@@ -1364,11 +1368,164 @@ function replayRecoveryThreatExit(options) {
   return result;
 }
 
+function pursuitReplayTargetMatches(target, options = {}) {
+  if (!target) return false;
+  const id = String(target.userId ?? target.user_id ?? target.entityId ?? target.entity_id ?? '');
+  if (options.targetId && id !== options.targetId) return false;
+  if (options.targetName && String(target.name || '') !== options.targetName) return false;
+  return true;
+}
+
+function pursuitReplayNearbyTarget(decision, options = {}) {
+  const row = (decision.input?.nearby?.p || []).find(item => Array.isArray(item)
+    && (!options.targetName || String(item[0] || '') === options.targetName));
+  if (!row) return null;
+  const hp = Number(row[1]);
+  const stamina5s = Number(row[2]);
+  const distance = Number(row[5]);
+  const mode = String(row[7] || '');
+  if (!Number.isFinite(distance)) return null;
+  return {
+    userId: options.targetId ? Number(options.targetId) : null,
+    name: String(row[0] || ''),
+    authority: 'realtime',
+    x: distance,
+    y: 0,
+    vx: 0,
+    vy: 0,
+    hp: Number.isFinite(hp) ? hp : null,
+    stamina5s: Number.isFinite(stamina5s) ? stamina5s : null,
+    distance,
+    current_join_mode: mode,
+    active: /^active$/i.test(mode) && Number(row[8]) !== 1,
+    firing: false
+  };
+}
+
+function replayCombatPursuit(options) {
+  const rows = selectedEntries(options);
+  const evaluated = [];
+  let engaged = null;
+  let lastTargetAt = 0;
+  let firstEscapeConfirmedAt = '';
+  for (const row of rows) {
+    const decision = row.detail || {};
+    const atMs = Date.parse(row.entry.at || '');
+    if (!Number.isFinite(atMs)) continue;
+    const self = decision.input?.self || decision.combat?.self || decision.action?.self || null;
+    if (!self) continue;
+    const combatTarget = pursuitReplayTargetMatches(decision.combat?.target, options)
+      ? decision.combat.target
+      : null;
+    const nearbyTarget = pursuitReplayNearbyTarget(decision, options);
+    const target = combatTarget || nearbyTarget;
+    if (!target) {
+      if (lastTargetAt > 0 && atMs - lastTargetAt > 30000) engaged = null;
+      continue;
+    }
+    lastTargetAt = atMs;
+    const replaySelf = combatTarget ? self : { ...self, x: 0, y: 0 };
+    const replayTarget = combatTarget ? target : { ...target, x: Number(target.distance), y: 0 };
+    const loggedEngagement = combatTarget?.combatEngagement || decision.action?.target?.combatEngagement || null;
+    const loggedOutOfRangeMs = Number(loggedEngagement?.outOfRangeMs);
+    const lastInRangeAt = Number.isFinite(loggedOutOfRangeMs)
+      ? atMs - Math.max(0, loggedOutOfRangeMs)
+      : Number(engaged?.lastInRangeAt || atMs);
+    const behavior = decision.combat?.behavior || engaged?.opponentBehaviorState || null;
+    const replayEngaged = {
+      ...(engaged || {}),
+      id: options.targetId || String(target.userId ?? target.user_id ?? ''),
+      at: atMs,
+      lastInRangeAt,
+      opponentBehaviorState: behavior,
+      escapeDecision: engaged?.escapeDecision || null
+    };
+    const escapeDecision = combatEscapeDecisionCore(replaySelf, replayTarget, replayEngaged, {
+      nowMs: atMs,
+      combatAttackRange: 14500,
+      combatEscapeConfirmConfidence: 0.8,
+      combatEscapeConfirmNoProgressMs: 5000,
+      combatEscapeConfirmNetDistanceCm: 2000,
+      combatEscapeConfirmRadialSpeedMin: 5
+    });
+    const edgePressure = combatEdgePressureDecisionCore(replaySelf, replayTarget, replayEngaged, escapeDecision, {
+      nowMs: atMs,
+      combatAttackRange: 14500,
+      combatAdvantageReengageRange: 16000,
+      combatAdvantageReengageMinHp: 60,
+      combatAdvantageReengageMinHpLead: 5,
+      combatAdvantageReengageRecentInRangeMs: 3000
+    });
+    engaged = {
+      ...replayEngaged,
+      lastInRangeAt,
+      opponentBehaviorState: behavior,
+      escapeDecision
+    };
+    if (escapeDecision.confirmed && !firstEscapeConfirmedAt) firstEscapeConfirmedAt = row.entry.at || '';
+    const loggedMovementReason = String(decision.combat?.movement?.reason || '');
+    const baselineClose = /close|reengage|response/.test(loggedMovementReason);
+    const recoveryCandidate = (decision.finalSelection?.candidates || [])
+      .some(candidate => String(candidate?.reason || '') === 'wait-for-full-stamina-and-hp');
+    const correctedReason = escapeDecision.confirmed
+      ? 'combat-escape-confirmed-hold'
+      : (edgePressure.active ? 'combat-advantage-reengage' : loggedMovementReason);
+    evaluated.push({
+      line: row.line,
+      at: row.entry.at || '',
+      loggedKind: String(decision.kind || decision.action?.kind || ''),
+      loggedReason: String(decision.reason || decision.action?.reason || ''),
+      selfHp: Number.isFinite(Number(self.hp)) ? Number(self.hp) : null,
+      targetHp: Number.isFinite(Number(target.hp)) ? Number(target.hp) : null,
+      distance: Number.isFinite(Number(target.distance)) ? Math.round(Number(target.distance)) : null,
+      loggedMovementReason,
+      baselineClose,
+      recoveryCandidate,
+      edgePressure,
+      escapeDecision,
+      correctedReason,
+      correctedClose: Boolean(!escapeDecision.confirmed && edgePressure.active),
+      correctedShoot: Boolean(Number(target.distance) <= 14500 && decision.combat?.shooting?.wouldShoot)
+    });
+  }
+  const escapeAtMs = Date.parse(firstEscapeConfirmedAt || '');
+  const afterEscape = Number.isFinite(escapeAtMs)
+    ? evaluated.filter(item => Date.parse(item.at) >= escapeAtMs)
+    : [];
+  const edgeFrames = evaluated.filter(item => item.edgePressure?.active);
+  const result = {
+    mode: 'combat-pursuit',
+    targetId: options.targetId || '',
+    targetName: options.targetName || '',
+    lines: `${options.startLine}-${options.endLine}`,
+    evaluatedFrames: evaluated.length,
+    edgePressureFrames: edgeFrames.length,
+    preventedRecoveryTakeoverFrames: edgeFrames.filter(item => item.recoveryCandidate).length,
+    firstEdgePressureAt: edgeFrames[0]?.at || '',
+    firstEscapeConfirmedAt,
+    baselinePostEscapeCombatFrames: afterEscape.filter(item => item.loggedKind === 'combat-live').length,
+    baselinePostEscapeCloseFrames: afterEscape.filter(item => item.baselineClose).length,
+    correctedPostEscapeCloseFrames: afterEscape.filter(item => item.correctedClose).length,
+    correctedOutOfRangeShootFrames: evaluated.filter(item => item.correctedShoot && Number(item.distance) > 14500).length,
+    samples: evaluated.filter(item => item.edgePressure?.active || item.escapeDecision?.freshConfirmed || item.recoveryCandidate).slice(0, 16)
+  };
+  result.accepted = result.evaluatedFrames > 0
+    && result.edgePressureFrames > 0
+    && result.preventedRecoveryTakeoverFrames > 0
+    && Boolean(result.firstEscapeConfirmedAt)
+    && result.baselinePostEscapeCombatFrames > 0
+    && result.baselinePostEscapeCloseFrames > 0
+    && result.correctedPostEscapeCloseFrames === 0
+    && result.correctedOutOfRangeShootFrames === 0;
+  return result;
+}
+
 function runReplay(options) {
   if (options.mode === 'opportunity') return replayOpportunity(options);
   if (options.mode === 'exit') return replayExit(options);
   if (options.mode === 'movement-stall-exit') return replayMovementStallExit(options);
   if (options.mode === 'recovery-threat-exit') return replayRecoveryThreatExit(options);
+  if (options.mode === 'combat-pursuit') return replayCombatPursuit(options);
   if (options.mode === 'arbitration') return replayArbitration(options);
   if (options.mode === 'combat-policy') return replayCombatPolicy(options);
   if (options.mode === 'dodge') return replayDodge(options);
@@ -1384,6 +1541,7 @@ if (require.main === module) {
 
 module.exports = {
   parseArgs,
+  replayCombatPursuit,
   replayMovementStallExit,
   replayRecoveryThreatExit,
   runReplay

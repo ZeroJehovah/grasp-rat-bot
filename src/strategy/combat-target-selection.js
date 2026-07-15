@@ -64,6 +64,131 @@ function combatTargetId(entity) {
   return targetId(entity);
 }
 
+function numberOrNull(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function combatHpValue(entity) {
+  return numberOrNull(entity?.hp ?? entity?.knownHp ?? entity?.displayHp);
+}
+
+function combatDistanceValue(entity) {
+  return numberOrNull(entity?.distance);
+}
+
+function targetRadialAwaySpeedCore(self, target) {
+  const sx = numberOrNull(self?.x);
+  const sy = numberOrNull(self?.y);
+  const tx = numberOrNull(target?.x);
+  const ty = numberOrNull(target?.y);
+  const tvx = numberOrNull(target?.vx) ?? 0;
+  const tvy = numberOrNull(target?.vy) ?? 0;
+  if ([sx, sy, tx, ty].some(value => value === null)) return null;
+  const dx = tx - sx;
+  const dy = ty - sy;
+  const distance = Math.hypot(dx, dy);
+  if (!(distance > 0)) return 0;
+  return (tvx * dx + tvy * dy) / distance;
+}
+
+function combatEscapeDecisionCore(self, target, engaged = {}, options = {}) {
+  const behavior = engaged?.opponentBehaviorState || target?.opponentBehaviorState || null;
+  const previous = engaged?.escapeDecision || null;
+  const mode = String(behavior?.mode || '');
+  const confidence = Math.max(0, Number(behavior?.confidence || 0));
+  const noProgressMs = Math.max(0, Number(behavior?.noProgressMs || 0));
+  const netDistanceChangeCm = Number(behavior?.metrics?.netDistanceChange || 0);
+  const radialAwaySpeed = targetRadialAwaySpeedCore(self, target);
+  const minConfidence = Math.max(0, Number(options.combatEscapeConfirmConfidence ?? 0.8));
+  const minNoProgressMs = Math.max(0, Number(options.combatEscapeConfirmNoProgressMs ?? 5000));
+  const minNetDistanceCm = Math.max(0, Number(options.combatEscapeConfirmNetDistanceCm ?? 2000));
+  const minRadialSpeed = Math.max(0, Number(options.combatEscapeConfirmRadialSpeedMin ?? 5));
+  const freshConfirmed = mode === 'retreat-kite'
+    && confidence >= minConfidence
+    && noProgressMs >= minNoProgressMs
+    && netDistanceChangeCm >= minNetDistanceCm
+    && radialAwaySpeed !== null
+    && radialAwaySpeed >= minRadialSpeed;
+  const attackRange = Math.max(0, Number(options.combatAttackRange || options.attackRange || 0));
+  const distance = combatDistanceValue(target);
+  const clearlyApproaching = radialAwaySpeed !== null
+    && radialAwaySpeed <= -minRadialSpeed
+    && distance !== null
+    && attackRange > 0
+    && distance <= attackRange;
+  const latched = Boolean(previous?.confirmed && !clearlyApproaching);
+  const confirmed = Boolean(freshConfirmed || latched);
+  const nowMs = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
+  return {
+    confirmed,
+    freshConfirmed,
+    latched,
+    released: Boolean(previous?.confirmed && clearlyApproaching),
+    reason: confirmed
+      ? (freshConfirmed ? 'sustained-outward-no-progress' : 'latched-sustained-escape')
+      : (clearlyApproaching ? 'target-clearly-reapproaching' : 'escape-not-confirmed'),
+    mode,
+    confidence,
+    noProgressMs,
+    netDistanceChangeCm: Number.isFinite(netDistanceChangeCm) ? Math.round(netDistanceChangeCm) : null,
+    radialAwaySpeed: radialAwaySpeed === null ? null : Number(radialAwaySpeed.toFixed(2)),
+    confirmedAt: confirmed
+      ? (freshConfirmed ? nowMs : Number(previous?.confirmedAt || nowMs))
+      : 0,
+    observedAt: nowMs
+  };
+}
+
+function combatEdgePressureDecisionCore(self, target, engaged = {}, escapeDecision = null, options = {}) {
+  const distance = combatDistanceValue(target);
+  const selfHp = combatHpValue(self);
+  const targetHp = combatHpValue(target);
+  const attackRange = Math.max(0, Number(options.combatAttackRange || options.attackRange || 0));
+  const maxRange = Math.max(attackRange, Number(options.combatAdvantageReengageRange ?? 16000));
+  const minSelfHp = Math.max(0, Number(options.combatAdvantageReengageMinHp ?? 60));
+  const minHpLead = Math.max(0, Number(options.combatAdvantageReengageMinHpLead ?? 5));
+  const recentInRangeMs = Math.max(0, Number(options.combatAdvantageReengageRecentInRangeMs ?? 3000));
+  const nowMs = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
+  const lastInRangeAt = Number(engaged?.lastInRangeAt || engaged?.at || 0);
+  const outOfRangeMs = Math.max(0, nowMs - lastInRangeAt);
+  const hpLead = selfHp === null || targetHp === null ? null : selfHp - targetHp;
+  const active = Boolean(
+    distance !== null
+      && attackRange > 0
+      && distance > attackRange
+      && distance <= maxRange
+      && selfHp !== null
+      && targetHp !== null
+      && selfHp >= minSelfHp
+      && hpLead >= minHpLead
+      && outOfRangeMs <= recentInRangeMs
+      && escapeDecision?.confirmed !== true
+  );
+  return {
+    active,
+    reason: active
+      ? 'healthy-hp-advantage-reengage'
+      : (escapeDecision?.confirmed
+          ? 'confirmed-escape-blocks-reengage'
+          : (distance !== null && distance > maxRange
+              ? 'outside-advantage-reengage-range'
+              : (hpLead !== null && hpLead < minHpLead
+                  ? 'insufficient-hp-lead'
+                  : (outOfRangeMs > recentInRangeMs ? 'reengage-window-expired' : 'advantage-reengage-inactive')))),
+    distance: distance === null ? null : Math.round(distance),
+    attackRange: Math.round(attackRange),
+    maxRange: Math.round(maxRange),
+    selfHp,
+    targetHp,
+    hpLead,
+    minSelfHp,
+    minHpLead,
+    outOfRangeMs: Math.round(outOfRangeMs),
+    recentInRangeMs: Math.round(recentInRangeMs)
+  };
+}
+
 function incomingOwnerMatchesTarget(entity, context = {}) {
   const ownerId = context.incomingBulletOwnerId ?? context.incomingOwnerId ?? context.incomingBullet?.ownerId;
   if (ownerId === null || ownerId === undefined) return false;
@@ -364,10 +489,30 @@ function pickEngagedCombatTargetCore(self, combatTargets = [], entities = [], bu
   const lastInRangeAt = Number(engaged.lastInRangeAt || engaged.at || 0);
   const outOfRangeMs = Math.max(0, nowMs - lastInRangeAt);
   const graceMs = Math.max(0, Number(options.combatEngageGraceMs || 0));
+  const escapeDecision = combatEscapeDecisionCore(self, raw, engaged, {
+    ...options,
+    nowMs
+  });
+  const edgePressure = combatEdgePressureDecisionCore(self, raw, engaged, escapeDecision, {
+    ...options,
+    nowMs
+  });
   const activeReengage = Boolean(isActiveCombatMode(raw) || isFiringCombatEntity(raw) || raw.moving);
-  const outOfRangeLimitMs = activeReengage
+  const ordinaryOutOfRangeLimitMs = activeReengage
     ? Math.max(graceMs, Number(options.combatEngageStickMs || 0))
     : graceMs;
+  const escapeHoldMs = Math.max(0, Number(options.combatEscapeHoldMs ?? 1500));
+  const escapeHold = Boolean(
+    escapeDecision.confirmed
+      && Number.isFinite(distance)
+      && attackRange > 0
+      && distance > attackRange
+      && !isFiringCombatEntity(raw)
+      && !incomingOwnerMatchesTarget(raw, context)
+  );
+  const outOfRangeLimitMs = escapeHold
+    ? Math.min(ordinaryOutOfRangeLimitMs || escapeHoldMs, escapeHoldMs)
+    : ordinaryOutOfRangeLimitMs;
   if (!outOfRangeLimitMs || outOfRangeMs > outOfRangeLimitMs || (Number.isFinite(distance) && graceRange > 0 && distance > graceRange)) {
     if (state && typeof state === 'object') state.combatTarget = null;
     return null;
@@ -383,8 +528,10 @@ function pickEngagedCombatTargetCore(self, combatTargets = [], entities = [], bu
       && ['profit', 'engaged', 'reengage'].includes(String(engaged.originIntent || engaged.intent || ''))
   );
   if (!isCombatEligibleThreat(raw, context) && !engagedRealtimeHold && !establishedEasyKillProfitHold) {
-    if (state && typeof state === 'object') state.combatTarget = null;
-    return null;
+    if (!edgePressure.active && !escapeHold) {
+      if (state && typeof state === 'object') state.combatTarget = null;
+      return null;
+    }
   }
   return {
     ...raw,
@@ -396,6 +543,9 @@ function pickEngagedCombatTargetCore(self, combatTargets = [], entities = [], bu
       graceRange: Math.round(graceRange),
       activeReengage,
       outOfRangeLimitMs: Math.round(outOfRangeLimitMs),
+      edgePressure,
+      escapeDecision,
+      escapeHold,
       lastReason: engaged.reason || '',
       realtimeHold: engagedRealtimeHold,
       reengage: true
@@ -420,6 +570,8 @@ function isIdleInvulnerable(entity) {
 }
 
 module.exports = {
+  combatEdgePressureDecisionCore,
+  combatEscapeDecisionCore,
   isCombatEligibleThreat,
   isInvulnerableEntity,
   calculateCombatTargetPriority,

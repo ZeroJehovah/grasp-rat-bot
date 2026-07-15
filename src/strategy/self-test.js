@@ -125,8 +125,11 @@ const {
 } = require('./chase-mode');
 const { COMBAT_CONSTANTS, validateCombatConstants } = require('./combat-constants');
 const {
+  combatEdgePressureDecisionCore,
+  combatEscapeDecisionCore,
   incomingBulletHasCollisionRiskCore,
-  incomingBulletRequiresTargetSwitchCore
+  incomingBulletRequiresTargetSwitchCore,
+  pickEngagedCombatTargetCore
 } = require('./combat-target-selection');
 const {
   combatHpExitThresholdsCore,
@@ -391,6 +394,113 @@ function runStrategyModuleSelfTests() {
       && behavior?.responsePolicy?.name === 'retreat-kite-close-first'
       && retreatPolicy.suppressFire === true
       && retreatPolicy.reassessProfit === true
+  });
+  const edgeSelf = { user_id: 1, x: 0, y: 0, hp: 94 };
+  const edgeTarget = {
+    user_id: 2,
+    x: 15178,
+    y: 0,
+    vx: 0,
+    vy: 0,
+    hp: 88,
+    distance: 15178,
+    active: false,
+    current_join_mode: 'Active'
+  };
+  const edgeEngaged = {
+    id: 2,
+    at: 9500,
+    lastInRangeAt: 8000,
+    opponentBehaviorState: {
+      mode: 'retreat-kite',
+      confidence: 0.83,
+      noProgressMs: 5200,
+      metrics: { netDistanceChange: 1676 }
+    }
+  };
+  const edgeEscape = combatEscapeDecisionCore(edgeSelf, edgeTarget, edgeEngaged, {
+    nowMs: 10000,
+    combatAttackRange: 14500
+  });
+  const edgePressure = combatEdgePressureDecisionCore(edgeSelf, edgeTarget, edgeEngaged, edgeEscape, {
+    nowMs: 10000,
+    combatAttackRange: 14500,
+    combatAdvantageReengageRange: 16000,
+    combatAdvantageReengageRecentInRangeMs: 3000
+  });
+  const edgeState = { combatTarget: { ...edgeEngaged } };
+  const retainedEdgeTarget = pickEngagedCombatTargetCore(edgeSelf, [], [edgeTarget], [], edgeState, {
+    nowMs: 10000,
+    targetStickMs: 30000,
+    combatEngageStickMs: 30000,
+    combatEngageGraceMs: 5000,
+    combatEngageGraceRange: 17000,
+    combatDisengageRange: 17000,
+    combatAttackRange: 14500,
+    combatAdvantageReengageRange: 16000,
+    combatAdvantageReengageRecentInRangeMs: 3000
+  });
+  results.push({
+    name: 'engaged-edge-hp-advantage-reengages-when-escape-is-not-confirmed',
+    passed: edgeEscape.confirmed === false
+      && edgePressure.active === true
+      && retainedEdgeTarget?.user_id === 2
+      && retainedEdgeTarget?.combatIntent === 'reengage'
+      && retainedEdgeTarget?.combatEngagement?.edgePressure?.active === true
+  });
+  const escapingTarget = {
+    ...edgeTarget,
+    x: 15000,
+    vx: 50,
+    hp: 31,
+    distance: 15000,
+    active: true
+  };
+  const escapingEngaged = {
+    ...edgeEngaged,
+    at: 10500,
+    lastInRangeAt: 10000,
+    opponentBehaviorState: {
+      mode: 'retreat-kite',
+      confidence: 1,
+      noProgressMs: 13368,
+      metrics: { netDistanceChange: 7727 }
+    }
+  };
+  const confirmedEscape = combatEscapeDecisionCore({ ...edgeSelf, hp: 91 }, escapingTarget, escapingEngaged, {
+    nowMs: 11000,
+    combatAttackRange: 14500
+  });
+  const escapeState = { combatTarget: { ...escapingEngaged, escapeDecision: confirmedEscape } };
+  const heldEscapeTarget = pickEngagedCombatTargetCore({ ...edgeSelf, hp: 91 }, [], [escapingTarget], [], escapeState, {
+    nowMs: 11000,
+    targetStickMs: 30000,
+    combatEngageStickMs: 30000,
+    combatEngageGraceMs: 5000,
+    combatEngageGraceRange: 17000,
+    combatDisengageRange: 17000,
+    combatAttackRange: 14500,
+    combatEscapeHoldMs: 1500
+  });
+  const expiredEscapeState = { combatTarget: { ...escapingEngaged, escapeDecision: confirmedEscape } };
+  const expiredEscapeTarget = pickEngagedCombatTargetCore({ ...edgeSelf, hp: 91 }, [], [escapingTarget], [], expiredEscapeState, {
+    nowMs: 12000,
+    targetStickMs: 30000,
+    combatEngageStickMs: 30000,
+    combatEngageGraceMs: 5000,
+    combatEngageGraceRange: 17000,
+    combatDisengageRange: 17000,
+    combatAttackRange: 14500,
+    combatEscapeHoldMs: 1500
+  });
+  results.push({
+    name: 'confirmed-escape-holds-briefly-without-reengage-then-releases-target',
+    passed: confirmedEscape.confirmed === true
+      && confirmedEscape.radialAwaySpeed === 50
+      && heldEscapeTarget?.combatEngagement?.escapeHold === true
+      && heldEscapeTarget?.combatEngagement?.edgePressure?.active === false
+      && expiredEscapeTarget === null
+      && expiredEscapeState.combatTarget === null
   });
   let composite = null;
   for (let index = 0; index < 50; index += 1) {
