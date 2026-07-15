@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.15.2';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.15.3';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function renderBrowserlessWebPanel() {
@@ -119,6 +119,7 @@ function renderBrowserlessWebPanel() {
     .target-name{display:inline-flex;align-items:center;min-width:0;vertical-align:middle}
     .target-name-text{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     .target-icon{display:inline-block;width:16px;height:16px;flex:0 0 16px;align-self:center;margin-right:5px;overflow:visible;vertical-align:middle;transform:translateY(1px);color:var(--target-color);fill:currentColor}
+    .target-icon-coin{transform:translateY(0)}
     @media (max-width:760px){.layout{grid-template-columns:1fr}.stats-grid{grid-template-columns:1fr}}
     @media (max-width:600px){.nearby-combined,.player-memory-grid{grid-template-columns:1fr}.nearby-players-pane,.player-memory-pane+.player-memory-pane{border-left:0;border-top:1px solid var(--line);padding-left:0;padding-top:10px}}
     @media (max-width:520px){.player-row{grid-template-columns:minmax(112px,2fr) minmax(34px,.5fr) minmax(38px,.55fr) minmax(36px,.5fr) minmax(44px,.6fr);gap:4px}.battle-fighters{grid-template-columns:minmax(0,1fr) 32px minmax(0,1fr);gap:5px}.fighter{padding:7px}.fighter-head{display:block}.fighter.enemy .fighter-head{display:block;text-align:right}.battle-meta{gap:4px;padding:6px 4px}.battle-meta strong{font-size:12px}.chat-row{grid-template-columns:minmax(68px,.48fr) minmax(0,1.52fr)}.chat-id{display:none}}
@@ -1112,7 +1113,7 @@ function renderBrowserlessWebPanel() {
       const paths = TARGET_ICON_PATHS[name];
       if (!paths) return null;
       const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-      svg.setAttribute('class', 'target-icon');
+      svg.setAttribute('class', name.startsWith('coin') ? 'target-icon target-icon-coin' : 'target-icon');
       svg.setAttribute('viewBox', TARGET_ICON_VIEWBOX[name] || '0 0 1024 1024');
       svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
       svg.setAttribute('aria-hidden', 'true');
@@ -1251,7 +1252,7 @@ function renderBrowserlessWebPanel() {
         ]));
       } else {
         const actionKind = String(status.action?.kind || status.decision?.actionKind || status.decision?.kind || '');
-        const fleeTarget = (actionKind === 'safety-exit' || actionKind === 'leave') && Boolean(status.action?.target);
+        const fleeTarget = (actionKind === 'flee' || actionKind === 'safety-exit' || actionKind === 'leave') && Boolean(status.action?.target);
         for (const item of items) {
           const [name, hp, staminaMs, drop, invMs, distanceCm, selected] = item;
           const hpCell = playerHpCell(hp, invMs);

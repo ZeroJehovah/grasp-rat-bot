@@ -19693,6 +19693,7 @@ async function runSelfTest() {
           /\.target-name\{display:inline-flex;align-items:center;[^}]*vertical-align:middle/.test(panelText),
           /\.target-current::before,\.target-route-next::before\{content:"";position:absolute;right:100%;top:-1px;bottom:-1px;width:3px;background:var\(--target-color\)/.test(panelText),
           /\.target-icon\{display:inline-block;[^}]*align-self:center;[^}]*vertical-align:middle;[^}]*transform:translateY\(1px\);[^}]*color:var\(--target-color\);fill:currentColor/.test(panelText),
+          /\.target-icon-coin\{transform:translateY\(0\)\}/.test(panelText),
           panelScript.includes("coinBait: ['M617.130667 654.229333"),
           panelScript.includes("coinSingle: ['M512 85.333333"),
           panelScript.includes("coin1: ['M512.048762 0C794.770286"),
@@ -19702,15 +19703,16 @@ async function runSelfTest() {
           panelScript.includes("flee: ['M512 482.133333"),
           panelScript.includes("coinSingle: '85.333333 85.333333 853.333334 853.333334'"),
           panelScript.includes("svg.setAttribute('preserveAspectRatio', 'xMidYMid meet')"),
+          panelScript.includes("name.startsWith('coin') ? 'target-icon target-icon-coin' : 'target-icon'"),
           panelScript.includes("document.createElementNS('http://www.w3.org/2000/svg', 'svg')"),
           panelScript.includes("const hasMultipleRouteTargets = items.some"),
           panelScript.includes("? 'coinBait'"),
           panelScript.includes("hasMultipleRouteTargets ? 'coin1' : 'coinSingle'"),
-          panelScript.includes("const fleeTarget = (actionKind === 'safety-exit' || actionKind === 'leave') && Boolean(status.action?.target);"),
+          panelScript.includes("const fleeTarget = (actionKind === 'flee' || actionKind === 'safety-exit' || actionKind === 'leave') && Boolean(status.action?.target);"),
           panelScript.includes("const targetType = fleeTarget ? 'flee' : (afkTarget ? 'afk' : 'combat');")
         ].join('|');
       })(),
-      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
+      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless web panel rounds session and daily stamina spent consistently',
