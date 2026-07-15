@@ -7875,6 +7875,70 @@ async function runSelfTest() {
       want: 'wait|dynamic-profit-threshold-wait|1|seek-enemy|8'
     },
     {
+      name: 'browserless dynamic profit threshold charges passive combat movement',
+      got: (() => {
+        const nowMs = Date.parse('2026-07-12T00:00:00.000Z');
+        const makeDecision = (distance, dynamicProfitThresholdEnabled = true) => {
+          const store = createBrowserlessStateStore({ userId: 7 });
+          store.ingestFrame({
+            type: 'pos',
+            tick: 58,
+            entities: [
+              { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+              fullStamina5s({
+                entity_id: 2,
+                user_id: 8,
+                name: 'passive-drop-six',
+                x: distance,
+                y: 0,
+                hp: 100,
+                max_hp: 100,
+                current_join_mode: 'Passive',
+                drop: 6
+              })
+            ],
+            bullets: [],
+            coin_drops: []
+          }, { receivedAtMs: nowMs });
+          store.ingestFrame({
+            type: 'snapshot',
+            tick: 59,
+            entities: [{
+              entity_id: 1,
+              user_id: 7,
+              x: 0,
+              y: 0,
+              hp: 100,
+              stamina_1h_remaining_milli: 3000000,
+              stamina_1d_remaining_milli: 20000000
+            }],
+            bullets: [],
+            coin_drops: [],
+            messages: []
+          }, { receivedAtMs: nowMs + 10 });
+          return buildBrowserlessDecision(store.getState(nowMs + 20), {}, {
+            nowMs,
+            controlMode: 'profit-live',
+            dynamicProfitThresholdEnabled
+          });
+        };
+        const far = makeDecision(30257, true);
+        const near = makeDecision(28000, true);
+        const disabled = makeDecision(30257, false);
+        const filtered = far.profit.threshold.filtered.find(item => String(item.id) === '8');
+        return [
+          browserlessOpportunityEnemyStaminaCost({ user_id: 8, hp: 100, distance: 30257, active: false }),
+          far.kind,
+          far.reason,
+          filtered?.staminaCost,
+          near.action.kind,
+          near.action.staminaCost,
+          disabled.action.kind
+        ].join('|');
+      })(),
+      want: '61957|wait|dynamic-profit-threshold-wait|61957|seek-enemy|59700|seek-enemy'
+    },
+    {
       name: 'browserless dynamic profit threshold filters low ROI coins and relaxes near reset',
       got: (() => {
         const makeDecision = (nowMs, remaining1dMilli, coinX) => {
@@ -7944,7 +8008,7 @@ async function runSelfTest() {
       want: 'true|true|true|true|true|11000'
     },
     {
-      name: 'browserless profit live prioritizes visible high-drop AFK over ordinary one coin',
+      name: 'browserless profit live ranks a closer coin above costlier high-drop AFK',
       got: (() => {
         const store = createBrowserlessStateStore({ userId: 7 });
         store.ingestFrame({
@@ -7968,17 +8032,18 @@ async function runSelfTest() {
           nowMs: 1200,
           controlMode: 'profit-live'
         });
-        const coin = (decision.profit.candidates || []).find(item => item.type === 'coin');
+        const enemy = (decision.profit.candidates || []).find(item => item.type === 'enemy');
         return [
           decision.kind,
           decision.action.kind,
-          decision.action.target.userId,
-          decision.action.target.drop,
-          decision.profit.best.priorityTier,
-          coin?.priorityTier
+          decision.action.target.id,
+          decision.action.target.amount,
+          Math.round(decision.profit.best.score / 1000),
+          Math.round((enemy?.score || 0) / 1000),
+          decision.profit.best.score > Number(enemy?.score || 0)
         ].join('|');
       })(),
-      want: 'profit-candidate|attack|8|9|1|1'
+      want: 'profit-candidate|coin|one-coin|1|171|147|true'
     },
     {
       name: 'browserless profit live hard-prioritizes high-value realtime coin while recovering',
@@ -8242,7 +8307,7 @@ async function runSelfTest() {
       want: 'coin|coin|||1'
     },
     {
-      name: 'browserless profit live ranks in-range min-drop AFK over distant one coin',
+      name: 'browserless profit live ranks a distant coin above min-drop AFK after combat movement cost',
       got: (() => {
         const store = createBrowserlessStateStore({ userId: 7 });
         store.ingestFrame({
@@ -8266,17 +8331,18 @@ async function runSelfTest() {
           nowMs: 1200,
           controlMode: 'profit-live'
         });
-        const coin = (decision.profit.candidates || []).find(item => item.type === 'coin');
+        const enemy = (decision.profit.candidates || []).find(item => item.type === 'enemy');
         return [
           decision.kind,
           decision.action.kind,
-          decision.action.target.userId,
-          decision.action.target.drop,
+          decision.action.target.id,
+          decision.action.target.amount,
           Math.round(decision.profit.best.score / 1000),
-          Math.round((coin?.score || 0) / 1000)
+          Math.round((enemy?.score || 0) / 1000),
+          decision.profit.best.score > Number(enemy?.score || 0)
         ].join('|');
       })(),
-      want: 'profit-candidate|attack|8|3|58|57'
+      want: 'profit-candidate|coin|distant-one-coin|1|57|39|true'
     },
     {
       name: 'browserless profit live damaged self recovers instead of ordinary coin',
@@ -10065,7 +10131,7 @@ async function runSelfTest() {
               y: 0,
               hp: 100,
               max_hp: 100,
-              death_drop_coins: 4,
+              death_drop_coins: 5,
               stamina_5s_remaining_milli: 10000,
               current_join_mode: 'Passive'
             }
@@ -10097,7 +10163,7 @@ async function runSelfTest() {
           decision.profit.best === null
         ].join('|');
       })(),
-      want: 'leave|safety|stamina-budget-coin-leave|true|enemy|27165|iShareOne|12778|28295|15517|1800000|526|true'
+      want: 'leave|safety|stamina-budget-coin-leave|true|enemy|27165|iShareOne|12778|42745|29967|1800000|526|true'
     },
     {
       name: 'browserless profit live takes realtime final coin under 1d stamina limit',
@@ -11730,13 +11796,17 @@ async function runSelfTest() {
       want: 'true|80|90|20'
     },
     {
-      name: 'browserless active profit stamina cost includes default miss risk',
+      name: 'browserless profit stamina cost includes passive movement and active miss risk',
       got: (() => {
         const passive = browserlessOpportunityEnemyStaminaCost({ user_id: 8, hp: 100, distance: 5000, active: false }, {});
+        const passiveWithoutMovement = browserlessOpportunityEnemyStaminaCost(
+          { user_id: 8, hp: 100, distance: 5000, active: false },
+          { opportunityAfkCombatMovementStaminaPerShotMs: 0 }
+        );
         const active = browserlessOpportunityEnemyStaminaCost({ user_id: 8, hp: 100, distance: 5000, active: true }, {});
-        return [passive, active, active > passive * 3].join('|');
+        return [passive, passiveWithoutMovement, active, active > passive * 2].join('|');
       })(),
-      want: '22250|74450|true'
+      want: '36700|22250|74450|true'
     },
     {
       name: 'browserless quadratic combat aim enters motion probe after no target damage',

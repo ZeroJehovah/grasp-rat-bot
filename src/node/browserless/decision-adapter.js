@@ -100,6 +100,7 @@ const DEFAULT_RECOVERY_PLAYER_DROP_MIN_AMOUNT = 2;
 const DEFAULT_POST_ATTACK_RECOVERY_DROP_MAX_DISTANCE = BROWSER_RUNTIME_DEFAULTS.postAttackRecoveryDropMaxDistance;
 const DEFAULT_STAMINA_BUDGET_RELOGIN_DELAY_MS = BROWSER_RUNTIME_DEFAULTS.staminaBudgetReloginDelayMs;
 const DEFAULT_AFK_ATTACK_COMMIT_RANGE_CM = 5000;
+const DEFAULT_AFK_COMBAT_MOVEMENT_STAMINA_PER_SHOT_MS = 425;
 const DEFAULT_AFK_DISPLAY_INACTIVE_MS = 60000;
 const DEFAULT_INVULNERABLE_PROFIT_APPROACH_DISTANCE_CM = 5000;
 const DEFAULT_INVULNERABLE_PROFIT_MOVE_SPEED_CM_PER_SEC = 1000;
@@ -2240,11 +2241,15 @@ function opportunityEnemyStaminaCost(target, options = {}) {
     : 1;
   const shotCost = expectedShots
     * Math.max(0, Number(options.opportunityShotStaminaCostMs ?? BROWSER_RUNTIME_DEFAULTS.opportunityShotStaminaCostMs ?? OPPORTUNITY_CONSTANTS.SHOT_STAMINA_COST_MS));
+  const expectedCombatMovementCost = target?.active
+    ? 0
+    : expectedShots * Math.max(0, Number(options.opportunityAfkCombatMovementStaminaPerShotMs
+      ?? DEFAULT_AFK_COMBAT_MOVEMENT_STAMINA_PER_SHOT_MS));
   const expectedDodgeCost = target?.active
     ? Math.max(0, Number(options.opportunityExpectedDodgeCostMs ?? 1200)) * Math.max(0.5, riskScale)
     : 0;
   const expectedSwitchCost = Math.max(0, Number(options.opportunityExpectedSwitchCostMs ?? 250));
-  return (moveCost + shotCost + expectedDodgeCost + expectedSwitchCost) * riskScale;
+  return (moveCost + shotCost + expectedCombatMovementCost + expectedDodgeCost + expectedSwitchCost) * riskScale;
 }
 
 function staminaRemaining(self, windowName) {
