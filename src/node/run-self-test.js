@@ -98,6 +98,7 @@ const {
   buildRuntimeDefaults
 } = require('../shared/runtime-defaults');
 const {
+  browserlessDailyFirstLoginDelayPlan,
   isFirstBrowserlessLoginOfDay,
   browserlessLoopPlan,
   preLoginSafetyLeadMs,
@@ -15629,6 +15630,8 @@ async function runSelfTest() {
           '220',
           '--decision-interval-ms',
           '250',
+          '--daily-first-login-delay-ms',
+          '90000',
           '--login-point-safety-success-required',
           '4',
           '--login-point-safety-probe-interval-ms',
@@ -15698,6 +15701,8 @@ async function runSelfTest() {
           config.userId,
           config.sessionToken,
           config.decisionIntervalMs,
+          config.dailyFirstLoginDelayMs,
+          publicConfig(config).dailyFirstLoginDelayMs,
           config.loginPointSafetySuccessRequired,
           config.loginPointSafetyProbeIntervalMs,
           config.staleSelfMs,
@@ -15731,7 +15736,7 @@ async function runSelfTest() {
           config.logDir.endsWith('/tmp/grasp-rat-browserless-logs')
         ].join('|');
       })(),
-      want: 'true|false|false|combat-live|19999|cli-token|true|220|42|env-token|250|4|15000|3500|2250|4500|150|300|800|3|4500|90|4500|90|99000|45000|120000|123000|30000|7|true|true|4096|https://example.test/target-whitelist.json|true|1234|12|123|456|90|true|true'
+      want: 'true|false|false|combat-live|19999|cli-token|true|220|42|env-token|250|90000|90000|4|15000|3500|2250|4500|150|300|800|3|4500|90|4500|90|99000|45000|120000|123000|30000|7|true|true|4096|https://example.test/target-whitelist.json|true|1234|12|123|456|90|true|true'
     },
     {
       name: 'browserless deployment files define service env and install surface',
@@ -15752,6 +15757,7 @@ async function runSelfTest() {
           env.includes('GRASP_RAT_BROWSERLESS_TARGET_WHITELIST_FILE='),
           env.includes('GRASP_RAT_BROWSERLESS_LOGIN_POINT_SAFETY_SUCCESS_REQUIRED=3'),
           env.includes('GRASP_RAT_BROWSERLESS_LOGIN_POINT_SAFETY_PROBE_INTERVAL_MS=30000'),
+          env.includes('GRASP_RAT_BROWSERLESS_DAILY_FIRST_LOGIN_DELAY_MS=120000'),
           env.includes('GRASP_RAT_BROWSERLESS_FRAME_GAP_ALERT_MS=2000'),
           env.includes('GRASP_RAT_BROWSERLESS_LEAVE_RETRY_MS=200'),
           env.includes('GRASP_RAT_BROWSERLESS_LEAVE_HEDGE_MS=1000'),
@@ -15771,7 +15777,7 @@ async function runSelfTest() {
           installer.includes('systemctl daemon-reload')
         ].join('|');
       })(),
-      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
+      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless deployment audit checks installed service evidence',
@@ -16757,6 +16763,44 @@ async function runSelfTest() {
       want: 'true|stamina-exhausted-leave|true|2830000|1d|31'
     },
     {
+      name: 'browserless runner delays only the utc8 daily first login until 00:02',
+      got: (() => {
+        const before = browserlessDailyFirstLoginDelayPlan({
+          stats: {
+            today: { day: '2026-07-14', sessionCount: 7 },
+            currentSession: { online: false }
+          }
+        }, { dailyFirstLoginDelayMs: 120000 }, Date.parse('2026-07-14T16:01:10.000Z'));
+        const ready = browserlessDailyFirstLoginDelayPlan({
+          stats: {
+            today: { day: '2026-07-14', sessionCount: 7 },
+            currentSession: { online: false }
+          }
+        }, { dailyFirstLoginDelayMs: 120000 }, Date.parse('2026-07-14T16:02:00.000Z'));
+        const alreadyLogged = browserlessDailyFirstLoginDelayPlan({
+          stats: {
+            today: { day: '2026-07-15', sessionCount: 1 },
+            currentSession: { online: false }
+          }
+        }, { dailyFirstLoginDelayMs: 120000 }, Date.parse('2026-07-14T16:01:10.000Z'));
+        const alreadyOnline = browserlessDailyFirstLoginDelayPlan({
+          stats: {
+            today: { day: '2026-07-14', sessionCount: 7 },
+            currentSession: { online: true }
+          }
+        }, { dailyFirstLoginDelayMs: 120000 }, Date.parse('2026-07-14T16:01:10.000Z'));
+        return [
+          before.reason,
+          before.delayMs,
+          before.notBeforeAt,
+          ready === null,
+          alreadyLogged === null,
+          alreadyOnline === null
+        ].join('|');
+      })(),
+      want: 'daily-first-login-delay|50000|2026-07-14T16:02:00.000Z|true|true|true'
+    },
+    {
       name: 'browserless runner resumes persisted reconnect wait after restart',
       got: withTempDirForTest(async dir => {
         let t = Date.parse('2026-07-11T03:45:54.610Z');
@@ -17040,7 +17084,7 @@ async function runSelfTest() {
           }, Date.parse('2026-07-12T16:00:10.000Z'))
         ].join('|');
       }),
-      want: 'explicit-stop|1|60000|daily-first-login-invulnerability|true'
+      want: 'explicit-stop|1|170000|daily-first-login-invulnerability|true'
     },
     {
       name: 'browserless runner prepares login point safety during reconnect wait',

@@ -78,6 +78,7 @@ function publicConfig(config) {
     leaveHedgeMs: Number(config.leaveHedgeMs || 0),
     decisionIntervalMs: Number(config.decisionIntervalMs || 0),
     loopDelayMs: Number(config.loopDelayMs || 0),
+    dailyFirstLoginDelayMs: Number(config.dailyFirstLoginDelayMs || 0),
     loginPointSafetySuccessRequired: Number(config.loginPointSafetySuccessRequired || 0),
     loginPointSafetyProbeIntervalMs: Number(config.loginPointSafetyProbeIntervalMs || 0),
     staleSelfMs: Number(config.staleSelfMs || 0),
@@ -141,6 +142,10 @@ function browserlessDayKey(t = Date.now()) {
   return new Date(Number(t) + UTC8_OFFSET_MS).toISOString().slice(0, 10);
 }
 
+function browserlessDayStartMs(t = Date.now()) {
+  return Math.floor((Number(t) + UTC8_OFFSET_MS) / DAY_MS) * DAY_MS - UTC8_OFFSET_MS;
+}
+
 function isFirstBrowserlessLoginOfDay(state, nowMs = Date.now()) {
   const stats = state?.stats || {};
   const today = stats.today || {};
@@ -149,6 +154,24 @@ function isFirstBrowserlessLoginOfDay(state, nowMs = Date.now()) {
   const day = browserlessDayKey(nowMs);
   if (String(today.day || '') !== day) return true;
   return Math.max(0, Number(today.sessionCount || 0)) <= 0;
+}
+
+function browserlessDailyFirstLoginDelayPlan(state, config = {}, nowMs = Date.now()) {
+  const nowValue = Number.isFinite(Number(nowMs)) ? Number(nowMs) : Date.now();
+  if (!isFirstBrowserlessLoginOfDay(state, nowValue)) return null;
+  const delayAfterMidnightMs = Math.max(0, Number(config.dailyFirstLoginDelayMs ?? 120000));
+  const notBeforeMs = browserlessDayStartMs(nowValue) + delayAfterMidnightMs;
+  const delayMs = Math.max(0, notBeforeMs - nowValue);
+  if (delayMs <= 0) return null;
+  return {
+    continue: true,
+    reason: 'daily-first-login-delay',
+    delayMs,
+    previousRunId: '',
+    error: 'daily-first-login-delay',
+    safetyReason: '',
+    notBeforeAt: new Date(notBeforeMs).toISOString()
+  };
 }
 
 function preLoginSafetyLeadMs(config = {}) {
@@ -1543,6 +1566,16 @@ async function runBrowserlessRunner(config, deps = {}) {
       if (stopped) return stopped;
       continue;
     }
+    const dailyFirstLoginPlan = browserlessDailyFirstLoginDelayPlan(
+      readBrowserlessStateFile(stateFile),
+      config,
+      now()
+    );
+    if (dailyFirstLoginPlan) {
+      const stopped = await waitForLoopPlan(dailyFirstLoginPlan);
+      if (stopped) return stopped;
+      continue;
+    }
     loginPointProvided = hasConfigNumber(config.loginPointX) && hasConfigNumber(config.loginPointY);
     if (!loginPointProvided && config.controlMode === 'read-only') {
       let bootstrap;
@@ -1867,6 +1900,7 @@ async function runBrowserlessRunnerSelfTest() {
 module.exports = {
   CONFIRMED_LEAVE_SNAPSHOT_IGNORE_MS,
   browserlessDayKey,
+  browserlessDailyFirstLoginDelayPlan,
   browserlessLoopPlan,
   confirmedLeaveStateFromResult,
   hydrateConfigFromState,
