@@ -6,7 +6,7 @@ const {
   normalizeChatText
 } = require('./ws-transport');
 
-const DEFAULT_CHAT_MESSAGE_LIMIT = 80;
+const DEFAULT_CHAT_MESSAGE_LIMIT = 200;
 const DEFAULT_CHAT_ACTIVE_INTERVAL_MS = 30000;
 const DEFAULT_CHAT_IDLE_INTERVAL_MS = 3 * 60 * 1000;
 const DEFAULT_CHAT_PAGE_ACTIVE_WINDOW_MS = 45000;
@@ -432,6 +432,28 @@ function runChatServiceSelfTest() {
     ]
   }, { source: 'test', observedAtMs: nowMs });
   const onlineStatus = service.status(nowMs);
+  const retentionService = createChatService({
+    now: () => nowMs,
+    selfUserId: 7
+  });
+  retentionService.observeSnapshot({
+    tick: 500,
+    messages: Array.from({ length: DEFAULT_CHAT_MESSAGE_LIMIT + 5 }, (_, index) => ({
+      id: index + 1,
+      tick: index + 1,
+      kind: 'chat',
+      user_id: 8,
+      target_user_id: 0,
+      text: `message-${index + 1}`
+    }))
+  }, { source: 'retention-test', observedAtMs: nowMs });
+  const retentionStatus = retentionService.status(nowMs);
+  const retentionSummary = {
+    limit: retentionStatus.limits.retainedMessages,
+    count: retentionStatus.messages.length,
+    firstId: retentionStatus.messages[0]?.id,
+    lastId: retentionStatus.messages.at(-1)?.id
+  };
   service.detachTransport(transport);
   const offlineSend = service.sendChat('offline');
   const invalidSend = service.sendChat('bad\nmessage');
@@ -450,6 +472,10 @@ function runChatServiceSelfTest() {
       && onlineStatus.messages[1]?.mine === true
       && onlineStatus.messages[1]?.occurredAt === '2026-07-14T04:00:01.000Z'
       && onlineStatus.snapshot.desiredIntervalMs === DEFAULT_CHAT_ACTIVE_INTERVAL_MS
+      && retentionSummary.limit === 200
+      && retentionSummary.count === 200
+      && retentionSummary.firstId === 6
+      && retentionSummary.lastId === 205
       && offlineSend.reason === 'game-offline'
       && invalidSend.reason === 'chat-control-character'
       && tooLongSend.reason === 'chat-too-long'
@@ -458,6 +484,7 @@ function runChatServiceSelfTest() {
     send,
     second,
     onlineStatus,
+    retentionSummary,
     offlineSend,
     invalidSend,
     tooLongSend,

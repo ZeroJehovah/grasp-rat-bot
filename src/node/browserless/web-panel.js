@@ -1,8 +1,36 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.15.4';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.15.5';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
+
+function groupChatMessagesForDisplay(messages = [], collapseOtherKills = true) {
+  const source = Array.isArray(messages) ? messages : [];
+  if (!collapseOtherKills) {
+    return source.map(message => ({ type: 'message', message }));
+  }
+  const grouped = [];
+  for (let index = 0; index < source.length;) {
+    const message = source[index];
+    const isOtherKill = String(message?.kind || '') === 'kill' && !message?.mine;
+    if (!isOtherKill) {
+      grouped.push({ type: 'message', message });
+      index += 1;
+      continue;
+    }
+    let end = index + 1;
+    while (
+      end < source.length
+      && String(source[end]?.kind || '') === 'kill'
+      && !source[end]?.mine
+    ) {
+      end += 1;
+    }
+    grouped.push({ type: 'other-kill-group', messages: source.slice(index, end) });
+    index = end;
+  }
+  return grouped;
+}
 
 function renderBrowserlessWebPanel() {
   return `<!doctype html>
@@ -96,13 +124,17 @@ function renderBrowserlessWebPanel() {
     .easy-kill-score-2{color:#ecfdf5;background:rgba(22,163,74,.42);border-color:rgba(74,222,128,.78)}
     .easy-kill-score-3{color:#fff;background:#15803d;border-color:#4ade80;box-shadow:inset 0 0 0 1px rgba(255,255,255,.16)}
     .damage-player-name{color:#fecdd3;background:rgba(251,113,133,.14);border-color:rgba(251,113,133,.46)}
+    .chat-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px}
+    .chat-head h2{margin:0}.chat-title-meta{display:inline-flex;align-items:center;gap:7px;min-width:0}.chat-refresh-at{font-weight:500;letter-spacing:0;text-transform:none;white-space:nowrap}
+    .chat-kill-toggle{min-height:24px;padding:2px 8px;font-size:11px;line-height:1.2}
     .chat-log{height:300px;overflow:auto;scrollbar-gutter:stable}
     .chat-row{display:grid;grid-template-columns:38px minmax(64px,.62fr) minmax(0,1.38fr);gap:6px;align-items:start;padding:5px 0;border-bottom:1px solid rgba(255,255,255,.06)}
     .chat-row:last-child{border-bottom:0}.chat-time{color:var(--muted);font-size:11px;font-variant-numeric:tabular-nums}.chat-author{min-width:0;color:var(--blue);font-weight:650;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.chat-text{min-width:0;overflow-wrap:anywhere;white-space:pre-wrap}
     .chat-row.chat-kill .chat-author,.chat-row.chat-kill .chat-text{color:var(--red)}.chat-row.chat-system .chat-author,.chat-row.chat-system .chat-text{color:var(--blue)}.chat-row.mine .chat-author{color:var(--green)}
+    .chat-row.chat-kill-summary .chat-text{font-weight:650}
     .chat-empty{display:flex;height:100%;align-items:center;justify-content:center;color:var(--muted)}
     .chat-compose{display:flex;gap:7px;margin-top:8px}.chat-compose[hidden]{display:none}.chat-compose input{flex:1;min-width:0;min-height:34px;border:1px solid var(--line);border-radius:6px;background:var(--panel2);color:var(--text);padding:6px 9px}.chat-compose input:disabled{opacity:.6}.chat-compose button{flex:0 0 auto}
-    .chat-hint{min-height:18px;margin-top:6px;color:var(--muted);overflow-wrap:anywhere}
+    .chat-hint{margin-top:6px;color:var(--muted);overflow-wrap:anywhere}.chat-hint:empty{display:none}
     .nearby-cell{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     .distance-badge{font-variant-numeric:tabular-nums}
     .range-attack{color:var(--green)}
@@ -151,13 +183,16 @@ function renderBrowserlessWebPanel() {
           <dl id="roleStatus"></dl>
         </section>
         <section id="chatPanel">
-          <h2>游戏聊天</h2>
+          <div class="chat-head">
+            <h2 class="chat-title-meta"><span>游戏聊天</span><span id="chatRefreshAt" class="chat-refresh-at">--</span></h2>
+            <button id="chatKillToggle" class="chat-kill-toggle" type="button" aria-expanded="false">展开</button>
+          </div>
           <div id="chatLog" class="chat-log"><div class="chat-empty">等待聊天快照</div></div>
           <form id="chatForm" class="chat-compose" hidden>
             <input id="chatInput" maxlength="240" autocomplete="off" placeholder="输入游戏聊天消息">
             <button id="chatSendBtn" type="submit" disabled>发送</button>
           </form>
-          <div id="chatHint" class="chat-hint muted">刷新时间 --</div>
+          <div id="chatHint" class="chat-hint muted" aria-live="polite"></div>
         </section>
       </div>
       <div class="stack right-stack">
@@ -256,12 +291,16 @@ function renderBrowserlessWebPanel() {
     if (token) localStorage.graspRatBrowserlessToken = token;
     const WEB_PANEL_VERSION = ${JSON.stringify(BROWSERLESS_WEB_PANEL_VERSION)};
     const WEB_PANEL_RELOAD_KEY = 'graspRatBrowserlessPanelReloadedVersion';
+    const CHAT_KILL_COLLAPSE_KEY = 'graspRatBrowserlessChatKillCollapsed';
     const AUTO_REFRESH_MS = 3000;
     let autoRefreshTimer = 0;
     let countdownTimer = 0;
     let refreshInFlight = null;
     let chatSendInFlight = false;
     let latestChatStatus = null;
+    let chatKillsCollapsed = readChatKillsCollapsed();
+
+    const groupChatMessagesForDisplay = ${groupChatMessagesForDisplay.toString()};
 
     const value = v => v === null || v === undefined || v === '' ? '--' : String(v);
     const number = v => v === null || v === undefined || v === '' ? null : (Number.isFinite(Number(v)) ? Number(v) : null);
@@ -1598,6 +1637,26 @@ function renderBrowserlessWebPanel() {
       if (node.textContent !== nextText) node.textContent = nextText;
       if (node.className !== nextClass) node.className = nextClass;
     }
+    function readChatKillsCollapsed() {
+      try {
+        const stored = localStorage.getItem(CHAT_KILL_COLLAPSE_KEY);
+        return stored === null ? true : stored !== 'false';
+      } catch (_) {
+        return true;
+      }
+    }
+    function persistChatKillsCollapsed() {
+      try {
+        localStorage.setItem(CHAT_KILL_COLLAPSE_KEY, String(chatKillsCollapsed));
+      } catch (_) {}
+    }
+    function syncChatKillToggle() {
+      const button = document.getElementById('chatKillToggle');
+      if (!button) return;
+      button.textContent = chatKillsCollapsed ? '展开' : '折叠';
+      button.setAttribute('aria-expanded', String(!chatKillsCollapsed));
+      button.title = chatKillsCollapsed ? '展开别人的击杀记录' : '折叠别人的击杀记录';
+    }
     function syncChatCompose(chat) {
       const current = chat || latestChatStatus || {};
       const online = Boolean(current.sendAvailable);
@@ -1631,12 +1690,16 @@ function renderBrowserlessWebPanel() {
           empty.textContent = current.snapshot?.lastAt ? '当前快照没有聊天消息' : '等待聊天快照';
           fragment.append(empty);
         } else {
-          for (const message of messages) {
+          for (const item of groupChatMessagesForDisplay(messages, chatKillsCollapsed)) {
+            const group = item.type === 'other-kill-group' ? item.messages : null;
+            const message = group ? group[group.length - 1] : item.message;
             const kind = ['kill', 'system', 'chat'].includes(String(message?.kind || ''))
               ? String(message.kind)
               : 'chat';
             const row = document.createElement('div');
-            row.className = 'chat-row chat-' + kind + (message?.mine ? ' mine' : '');
+            row.className = 'chat-row chat-' + kind
+              + (message?.mine ? ' mine' : '')
+              + (group ? ' chat-kill-summary' : '');
             const time = document.createElement('span');
             time.className = 'chat-time';
             time.textContent = minuteStamp(message?.occurredAt || message?.firstObservedAt);
@@ -1649,7 +1712,9 @@ function renderBrowserlessWebPanel() {
                   : (message?.name || (message?.userId ? 'User ' + message.userId : 'Unknown')));
             const textNode = document.createElement('span');
             textNode.className = 'chat-text';
-            textNode.textContent = value(message?.text);
+            textNode.textContent = group
+              ? group.length + '条别人的击杀记录'
+              : value(message?.text);
             row.append(time, author, textNode);
             fragment.append(row);
           }
@@ -1661,8 +1726,10 @@ function renderBrowserlessWebPanel() {
           logNode.scrollTop = Math.max(0, previousTop + (logNode.scrollHeight - previousHeight));
         }
       }
+      syncChatKillToggle();
+      setText('chatRefreshAt', stamp(current.snapshot?.lastAt));
       syncChatCompose(current);
-      setChatHint('刷新时间 ' + stamp(current.snapshot?.lastAt), 'muted');
+      setChatHint('', 'muted');
     }
     async function fetchStatus() {
       const url = '/api/panel-status' + (token ? '?token=' + encodeURIComponent(token) : '');
@@ -1853,6 +1920,12 @@ function renderBrowserlessWebPanel() {
         input?.focus();
       });
     });
+    document.getElementById('chatKillToggle').addEventListener('click', () => {
+      chatKillsCollapsed = !chatKillsCollapsed;
+      persistChatKillsCollapsed();
+      syncChatKillToggle();
+      renderChat(latestChatStatus);
+    });
     function setAuthMessage(text, className) {
       const node = document.getElementById('authMessage');
       if (!node) return;
@@ -1879,5 +1952,6 @@ function renderBrowserlessWebPanel() {
 
 module.exports = {
   BROWSERLESS_WEB_PANEL_VERSION,
+  groupChatMessagesForDisplay,
   renderBrowserlessWebPanel
 };

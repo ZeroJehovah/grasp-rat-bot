@@ -127,6 +127,7 @@ const {
 } = require('./browserless/status-server');
 const {
   BROWSERLESS_WEB_PANEL_VERSION,
+  groupChatMessagesForDisplay,
   renderBrowserlessWebPanel
 } = require('./browserless/web-panel');
 const {
@@ -20005,6 +20006,17 @@ async function runSelfTest() {
       name: 'browserless web panel keeps compact timestamped chat below role status',
       got: (() => {
         const panelText = renderBrowserlessWebPanel();
+        const groupedChat = groupChatMessagesForDisplay([
+          { id: 1, kind: 'kill', mine: false },
+          { id: 2, kind: 'kill', mine: false },
+          { id: 3, kind: 'kill', mine: true },
+          { id: 4, kind: 'chat', mine: false },
+          { id: 5, kind: 'kill', mine: false }
+        ], true);
+        const expandedChat = groupChatMessagesForDisplay([
+          { id: 1, kind: 'kill', mine: false },
+          { id: 2, kind: 'kill', mine: false }
+        ], false);
         const leftIndex = panelText.indexOf('class="stack left-stack"');
         const roleIndex = panelText.indexOf('id="roleStatus"');
         const chatIndex = panelText.indexOf('id="chatPanel"');
@@ -20023,12 +20035,24 @@ async function runSelfTest() {
           !/message\?\.id|message\.id/.test(panelText),
           /<form id="chatForm" class="chat-compose" hidden>/.test(panelText),
           /if \(form\) form\.hidden = !online;/.test(panelText),
-          /<div id="chatHint" class="chat-hint muted">刷新时间 --<\/div>/.test(panelText),
-          /setChatHint\('刷新时间 ' \+ stamp\(current\.snapshot\?\.lastAt\), 'muted'\)/.test(panelText),
+          /id="chatRefreshAt" class="chat-refresh-at">--<\/span>/.test(panelText),
+          /id="chatKillToggle"[^>]*aria-expanded="false">展开<\/button>/.test(panelText),
+          /CHAT_KILL_COLLAPSE_KEY\s*=\s*'graspRatBrowserlessChatKillCollapsed'/.test(panelText),
+          /return stored === null \? true : stored !== 'false';/.test(panelText),
+          /group\.length \+ '条别人的击杀记录'/.test(panelText),
+          /button\.textContent = chatKillsCollapsed \? '展开' : '折叠'/.test(panelText),
+          /setText\('chatRefreshAt', stamp\(current\.snapshot\?\.lastAt\)\)/.test(panelText),
+          /<div id="chatHint" class="chat-hint muted" aria-live="polite"><\/div>/.test(panelText),
+          !/刷新时间 --<\/div>|setChatHint\('刷新时间 /.test(panelText),
+          groupedChat.length === 4,
+          groupedChat[0]?.type === 'other-kill-group' && groupedChat[0]?.messages.length === 2,
+          groupedChat[1]?.type === 'message' && groupedChat[1]?.message?.mine === true,
+          groupedChat[3]?.type === 'other-kill-group' && groupedChat[3]?.messages.length === 1,
+          expandedChat.length === 2 && expandedChat.every(item => item.type === 'message'),
           !/在线 WS 快照|定时 HTTP 快照|共享快照拉取间隔|离线发送未启用|离线时仍可接收快照消息|角色离线：仅接收消息/.test(panelText)
         ].join('|');
       })(),
-      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
+      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless compact status and web panel expose id-backed score and daily damage name lists',
