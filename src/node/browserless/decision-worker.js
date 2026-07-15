@@ -109,7 +109,9 @@ function createBrowserlessDecisionWorker(options = {}) {
       maxComputeMs = Math.max(maxComputeMs, Number(message.computeMs || 0));
       request.resolve({
         decision: message.decision,
+        summary: message.summary || null,
         effects: message.effects || [],
+        responseScale: message.responseScale || null,
         computeMs: Number(message.computeMs || 0),
         postMs: request.postMs,
         roundTripMs: performance.now() - request.started,

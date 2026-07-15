@@ -2,7 +2,10 @@
 
 const { parentPort, workerData } = require('worker_threads');
 const { performance } = require('perf_hooks');
-const { createBrowserlessDecisionAdapter } = require('./decision-adapter');
+const {
+  createBrowserlessDecisionAdapter,
+  summarizeBrowserlessDecision
+} = require('./decision-adapter');
 
 const adapter = createBrowserlessDecisionAdapter(workerData?.options || {});
 
@@ -68,12 +71,28 @@ parentPort.on('message', message => {
       const started = performance.now();
       if (message.statePatch) adapter.patchState?.(message.statePatch);
       const effects = [];
-      const decision = adapter.decide(message.state, dynamicOptions(message, effects));
+      const decision = adapter.decide(message.state, {
+        ...dynamicOptions(message, effects),
+        includeDecisionStateSummary: false
+      });
+      const summary = summarizeBrowserlessDecision(decision);
+      const decisionJsonBytes = Buffer.byteLength(JSON.stringify(decision));
+      const summaryJsonBytes = Buffer.byteLength(JSON.stringify(summary));
       parentPort.postMessage({
         kind: 'decision',
         id: message.id,
         decision,
+        summary,
         effects,
+        responseScale: {
+          effectCount: effects.length,
+          decisionJsonBytes,
+          summaryJsonBytes,
+          applyPatchItemCount: Object.keys(decision?.stateful || {}).length + effects.length,
+          visibleTargetCount: Number(summary?.input?.visibleTargetCount ?? summary?.input?.nearby?.visibleTargetCount ?? 0),
+          profitCandidateCount: Number(summary?.profit?.candidates?.length || 0),
+          combatCandidateCount: Number(summary?.combat?.candidates?.length || 0)
+        },
         computeMs: performance.now() - started,
         requestAtMs: message.requestAtMs || 0
       });

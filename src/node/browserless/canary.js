@@ -669,7 +669,8 @@ function inspectCanaryFrame(data, options = {}) {
   };
   Object.assign(frame, parseGrzFrame(buffer, {
     userId: options.userId,
-    includeJson: true
+    includeJson: true,
+    now: () => performance.now()
   }));
   return frame;
 }
@@ -821,6 +822,7 @@ async function runReadOnlyCanary(config, options = {}) {
     staminaExhaustedBelowMs: config.staminaExhaustedBelowMs,
     movementSettlementFrames: config.movementSettlementFrames
   });
+  safetyController.clearFrameGapSoftStop?.();
   const stats = createFrameStats(durationMs);
   const frameHealth = {
     firstFrameAtMs: 0,
@@ -855,7 +857,9 @@ async function runReadOnlyCanary(config, options = {}) {
     safety: {
       event: null,
       exit: null,
-      leaveFailure: null
+      leaveFailure: null,
+      frameGapSoftStops: [],
+      lastFrameGapRecovery: null
     },
     actions: {
       enabled: actionEnabled,
@@ -894,6 +898,7 @@ async function runReadOnlyCanary(config, options = {}) {
   let lastCombatControlAtMs = 0;
   let lastRealtimeControlLogAtMs = 0;
   let lastRealtimeControlKey = '';
+  let lastRealtimeControlScale = null;
   let realtimeControlActive = false;
   let plannerInFlight = false;
   let combatPersistenceScheduled = false;
@@ -904,6 +909,7 @@ async function runReadOnlyCanary(config, options = {}) {
   let deadlineAtMs = 0;
   let transportStartedAtMs = 0;
   let actionAdapter = null;
+  let frameGapSoftStopActive = false;
   let openFailedBeforeTransport = false;
   let transportPublished = false;
   const flushScheduledCombatPersistence = () => {
@@ -1041,6 +1047,26 @@ async function runReadOnlyCanary(config, options = {}) {
     logSafety(event);
     return true;
   };
+  const handleSafetyAssessment = event => {
+    if (event?.softStop) {
+      if (!frameGapSoftStopActive) {
+        frameGapSoftStopActive = true;
+        result.safety.frameGapSoftStops.push(event.detail || null);
+        result.safety.frameGapSoftStops = result.safety.frameGapSoftStops.slice(-20);
+        log('frame-gap-soft-stop', event.detail || {});
+        if (actionAdapter) updateActionResult(actionAdapter.stop('frame-gap-soft-stop'));
+      }
+      return true;
+    }
+    if (event?.recovered) {
+      frameGapSoftStopActive = false;
+      result.safety.lastFrameGapRecovery = event.detail || null;
+      lastDecisionAtMs = 0;
+      log('frame-gap-soft-recovered', event.detail || {});
+      return false;
+    }
+    return recordSafetyEvent(event);
+  };
 
   const completionContext = (currentState, atMs) => {
     const output = {};
@@ -1120,7 +1146,7 @@ async function runReadOnlyCanary(config, options = {}) {
     return actionResult;
   };
   const publishFullDecision = (decision, currentState, atMs, detail = {}) => {
-    const summary = summarizeBrowserlessDecision(decision);
+    const summary = detail.summary || summarizeBrowserlessDecision(decision);
     result.decisions.evaluatedCount += 1;
     result.decisions.last = summary;
     scheduleCombatPersistence(atMs);
@@ -1147,7 +1173,7 @@ async function runReadOnlyCanary(config, options = {}) {
       decision: summary,
       nowMs: atMs
     });
-    if (recordSafetyEvent(decisionSafetyEvent)) return summary;
+    if (handleSafetyAssessment(decisionSafetyEvent)) return summary;
     applyDecisionAction(currentState, summary, decision, atMs, {
       notifyDecisionWorker: detail.notifyDecisionWorker,
       errorReason: 'action-apply-failed'
@@ -1226,7 +1252,7 @@ async function runReadOnlyCanary(config, options = {}) {
       decision: summary,
       nowMs: atMs
     });
-    if (recordSafetyEvent(immediate)) return true;
+    if (handleSafetyAssessment(immediate)) return true;
     applyDecisionAction(currentState, summary, control, atMs, { errorReason: 'realtime-control-apply-failed' });
     return true;
   };
@@ -1240,8 +1266,9 @@ async function runReadOnlyCanary(config, options = {}) {
           nowMs: atMs,
           controlMode,
           combatEnabled: config.combatEnabled,
-          onRealtimeStageTimings: stages => {
+          onRealtimeStageTimings: (stages, scale) => {
             realtimeStages = stages;
+            lastRealtimeControlScale = scale || null;
           }
         })
       : decisionAdapter.evaluateCombat?.(currentState, {
@@ -1323,12 +1350,16 @@ async function runReadOnlyCanary(config, options = {}) {
           applyDecisionWorkerEffects(workerResult.effects);
           publishFullDecision(workerResult.decision, latestState, responseAtMs, {
             worker: result.decisions.worker,
+            summary: workerResult.summary,
             notifyDecisionWorker: true
           });
           stages['planner-response-apply'] = performance.now() - stageStarted;
         } finally {
           const entry = recordMainThreadTask(result.hotPath, 'planner-response', performance.now() - taskStarted, stages, {
-            tick: workerResult.decision?.tick ?? null
+            tick: workerResult.decision?.tick ?? null,
+            responseScale: workerResult.responseScale || {
+              effectCount: workerResult.effects?.length || 0
+            }
           });
           if (entry && entry.durationMs >= result.hotPath.budgetMs) {
             log('main-thread-budget-exceeded', entry);
@@ -1479,13 +1510,19 @@ async function runReadOnlyCanary(config, options = {}) {
           frameHealth.lastFrameAtMs = atMs;
           let stageStarted = performance.now();
           frame = inspectCanaryFrame(data, { userId: config.userId });
-          logWs('message', buildWsFrameTrace(frame, config));
+          if (config.wsTraceEnabled) logWs('message', buildWsFrameTrace(frame, config));
           if (frame.decodeError || frame.jsonParseError) frameHealth.decodeErrors += 1;
           updateFrameStats(stats, {
             at: new Date(atMs).toISOString(),
             ...frame
           });
           stageDurations['frame-decode-log'] = performance.now() - stageStarted;
+          if (frame.decodeTimings) {
+            stageDurations['frame-gzip'] = Number(frame.decodeTimings.gzipMs || 0);
+            stageDurations['frame-utf8'] = Number(frame.decodeTimings.utf8Ms || 0);
+            stageDurations['frame-json-decode'] = Number(frame.decodeTimings.jsonDecodeMs || 0);
+            stageDurations['frame-summary'] = Number(frame.decodeTimings.summaryMs || 0);
+          }
           if (frame.decodedJson) {
             stageStarted = performance.now();
             if (frame.decodedJson.type === 'snapshot' && typeof options.onSnapshotPayload === 'function') {
@@ -1560,7 +1597,7 @@ async function runReadOnlyCanary(config, options = {}) {
             }
             stageDurations['realtime-control-dispatch'] = performance.now() - stageStarted;
             stageStarted = performance.now();
-            recordSafetyEvent(safetyController.evaluate(currentState, {
+            handleSafetyAssessment(safetyController.evaluate(currentState, {
               startedAtMs: noSelfGuardStartedAtMs(atMs),
               frameGapAlertMs,
               staleSelfMs: config.staleSelfMs,
@@ -1579,7 +1616,15 @@ async function runReadOnlyCanary(config, options = {}) {
         } finally {
           const entry = recordMainThreadTask(result.hotPath, 'ws-message', performance.now() - taskStarted, stageDurations, {
             frameType: frame?.decodedType || frame?.decodedJson?.type || '',
-            tick: frame?.decodedTick ?? frame?.decodedJson?.tick ?? null
+            tick: frame?.decodedTick ?? frame?.decodedJson?.tick ?? null,
+            inputScale: {
+              compressedBytes: frame?.payloadByteLength ?? frame?.byteLength ?? null,
+              decodedBytes: frame?.decodedByteLength ?? null,
+              entityCount: frame?.decodedSummary?.entityCount ?? null,
+              bulletCount: frame?.decodedSummary?.bulletCount ?? null,
+              coinCount: frame?.decodedSummary?.coinDropCount ?? null,
+              realtime: lastRealtimeControlScale
+            }
           });
           if (entry && entry.durationMs >= result.hotPath.budgetMs) {
             log('main-thread-budget-exceeded', entry);
@@ -1629,7 +1674,7 @@ async function runReadOnlyCanary(config, options = {}) {
         lastDecision: result.decisions.last,
         nowMs: atMs
       });
-      recordSafetyEvent(safetyEvent);
+      handleSafetyAssessment(safetyEvent);
     }
   } catch (err) {
     openFailedBeforeTransport = !transport;

@@ -666,17 +666,23 @@ function estimateAim(self, target, options = {}) {
       });
     }
     const shotIndex = Math.max(0, Math.round(Number(options.actualShots || 0)));
+    const rankedCandidates = candidates.slice().sort((a, b) => b.probability - a.probability);
+    const stopCandidate = candidates.find(item => item.hypothesis === 'stop') || rankedCandidates[0];
+    const explorationCandidate = rankedCandidates.find(item => item.hypothesis !== stopCandidate?.hypothesis) || null;
+    const highEntropyExplore = Boolean(highEntropyCoverage && noDamageLevel >= 12 && shotIndex % 5 === 4 && explorationCandidate);
     const coverageSequence = highEntropyCoverage
-      ? candidates.slice().sort((a, b) => b.probability - a.probability).slice(0, 3)
-      : candidates.slice().sort((a, b) => b.probability - a.probability).slice(0, 2);
-    const selected = coverageSequence[shotIndex % coverageSequence.length];
+      ? [stopCandidate, ...(highEntropyExplore ? [explorationCandidate] : [])].filter(Boolean)
+      : rankedCandidates.slice(0, 2);
+    const selected = highEntropyCoverage
+      ? (highEntropyExplore ? explorationCandidate : stopCandidate)
+      : coverageSequence[shotIndex % coverageSequence.length];
     if (selected && (highEntropyCoverage || noDamageWidened || scriptTransitionCoverage)) {
       x = selected.x;
       y = selected.y;
       routeCoverage = {
         enabled: true,
         style: highEntropyCoverage
-          ? 'high-entropy-short-sequence'
+          ? (highEntropyExplore ? 'high-entropy-bounded-exploration' : 'high-entropy-robust-stop')
           : (scriptTransitionCoverage ? 'script-transition-matrix' : 'predictable-top-routes'),
         selected: selected.hypothesis,
         sequence: coverageSequence.map(item => item.hypothesis),
@@ -902,26 +908,54 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
     reactionSafetyMarginMs: options.combatReactionSafetyMarginMs ?? 100
   });
   const behaviorSamples = Array.isArray(opponentBehavior?.samples) ? opponentBehavior.samples : [];
+  const shootingPhase = opponentBehavior?.dimensions?.shootingPhase || null;
   const lastObservedShot = behaviorSamples.slice().reverse().find(sample => Number(sample.newBulletCount || 0) > 0) || null;
-  const shotIntervalMeanMs = numberOrNull(opponentBehavior?.metrics?.shotIntervalMeanMs);
+  const legacyShotIntervalMeanMs = numberOrNull(opponentBehavior?.metrics?.shotIntervalMeanMs);
   const shotIntervalCv = numberOrNull(opponentBehavior?.metrics?.shotIntervalCv);
   const lowVariationCadence = Boolean(
-    (opponentBehavior?.metrics?.shotIntervals || []).length >= 3
+    ((opponentBehavior?.metrics?.shotIntervalTicks || []).length >= 3
+      || (opponentBehavior?.metrics?.shotIntervals || []).length >= 3)
       && shotIntervalCv !== null
       && shotIntervalCv <= Math.max(0.05, Number(options.combatPreDodgeMaxShotIntervalCv ?? 0.35))
   );
-  const nextShotInMs = lastObservedShot && shotIntervalMeanMs !== null
-    ? Number(lastObservedShot.at || 0) + shotIntervalMeanMs - Number(options.nowMs || Date.now())
-    : null;
+  const nextShotInMs = numberOrNull(shootingPhase?.nextShotInMs)
+    ?? (lastObservedShot && legacyShotIntervalMeanMs !== null
+      ? Number(lastObservedShot.at || 0) + legacyShotIntervalMeanMs - Number(options.nowMs || Date.now())
+      : null);
+  const shootingPhaseState = shootingPhase?.state || (nextShotInMs !== null && nextShotInMs >= 0 ? 'preparing' : 'idle');
   const selfStamina5s = numberOrNull(self.stamina_5s_remaining_milli ?? self.stamina5sRemainingMilli);
+  const moving = Boolean(Number(self.vx || 0) || Number(self.vy || 0));
+  const currentDirection = {
+    dx: Math.sign(Number(self.vx || 0)),
+    dy: Math.sign(Number(self.vy || 0))
+  };
+  const currentDirectionThreats = Array.isArray(dodge?.threatField)
+    ? dodge.threatField.filter(item => Number(item?.dx) === currentDirection.dx && Number(item?.dy) === currentDirection.dy)
+    : [];
+  const urgentOldBulletThreat = Boolean(
+    (bullets || []).length
+      && (dodge?.unavoidableCurrentShot === true
+        || currentDirectionThreats.some(item => Number(item?.directHits || 0) > 0))
+  );
+  const commandDelayP90Ticks = Math.max(0, Number(commandTiming.p90Ticks || 5));
+  const flightTicks = numberOrNull(shootingPhase?.flightTicks);
+  const predictedCreatedTick = numberOrNull(shootingPhase?.predictedCreatedTick);
+  const currentTick = numberOrNull(options.currentTick ?? bullets?.[0]?.currentTick);
+  const latestSafeCommandTick = predictedCreatedTick !== null && flightTicks !== null
+    ? predictedCreatedTick + flightTicks - commandDelayP90Ticks - 1 - 2
+    : null;
+  let preDodgeBlockedReason = '';
+  if (shootingPhaseState !== 'preparing') preDodgeBlockedReason = 'shooting-phase-not-preparing';
+  else if (!lowVariationCadence) preDodgeBlockedReason = 'cycle-unstable';
+  else if (selfStamina5s !== null && selfStamina5s < COMBAT_CONSTANTS.SHOOT_DODGE_RESERVE_MS + 1000) preDodgeBlockedReason = 'stamina-insufficient';
+  else if (!moving) preDodgeBlockedReason = 'self-stationary';
+  else if (urgentOldBulletThreat) preDodgeBlockedReason = 'old-bullet-threat';
+  else if (latestSafeCommandTick !== null && currentTick !== null && currentTick > latestSafeCommandTick) preDodgeBlockedReason = 'flight-time-insufficient';
+  else if (numberOrNull(shootingPhase?.intervalMedianTicks) !== null
+    && commandDelayP90Ticks >= Number(shootingPhase.intervalMedianTicks)) preDodgeBlockedReason = 'command-delay-too-high';
   const preDodge = Boolean(
-    !(bullets || []).length
-      && lowVariationCadence
+    !preDodgeBlockedReason
       && nextShotInMs !== null
-      && nextShotInMs >= 300
-      && nextShotInMs <= 600
-      && (selfStamina5s === null || selfStamina5s >= COMBAT_CONSTANTS.SHOOT_DODGE_RESERVE_MS + 1000)
-      && (Number(self.vx || 0) || Number(self.vy || 0))
   );
   const backAway = shouldBackAwayFromTarget(self, target);
   const closeRange = Math.max(0, Number(options.combatPressureCloseRange || options.combatPassiveRunnerCloseRange || COMBAT_CONSTANTS.NO_DAMAGE_PRESS_CLOSE_RANGE));
@@ -1012,8 +1046,13 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
       phase: 'induce-hold',
       nextShotInMs: Math.round(nextShotInMs),
       shotIntervalCv,
-      reserveMs: COMBAT_CONSTANTS.SHOOT_DODGE_RESERVE_MS
-    } : null
+      reserveMs: COMBAT_CONSTANTS.SHOOT_DODGE_RESERVE_MS,
+      predictedCreatedTick,
+      latestSafeCommandTick
+    } : null,
+    preDodgeBlockedReason: preDodge ? '' : preDodgeBlockedReason,
+    shootingPhaseSource: shootingPhase?.shootingPhaseSource || '',
+    oldBulletPressure: Boolean((bullets || []).length)
   };
 }
 
@@ -1067,11 +1106,19 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
       && incomingOwnerId !== undefined
       && String(incomingOwnerId) === String(id)
   );
-  const targetBulletIds = (options.bullets || [])
-    .filter(bullet => String(bullet?.ownerId ?? '') === String(id))
+  const targetBullets = (options.bullets || [])
+    .filter(bullet => String(bullet?.ownerId ?? '') === String(id));
+  const targetBulletIds = targetBullets
     .map(bullet => String(bullet?.bullet_id ?? bullet?.bulletId ?? `${bullet?.createdTick ?? ''}:${bullet?.startX ?? bullet?.x ?? ''}:${bullet?.startY ?? bullet?.y ?? ''}`))
     .filter(Boolean);
   const previousMetrics = same && stateful.combatMetrics?.targetId === String(id) ? stateful.combatMetrics : {};
+  const behaviorMap = ensureOpponentBehaviorMap(stateful);
+  const previousBehavior = behaviorMap[String(id)] || null;
+  const seenShotEventIds = new Set((previousBehavior?.seenShotEventIds || []).map(String));
+  const newShotEvents = targetBullets.map(bullet => ({
+    bulletId: String(bullet?.bullet_id ?? bullet?.bulletId ?? `${bullet?.createdTick ?? ''}:${bullet?.startX ?? bullet?.x ?? ''}:${bullet?.startY ?? bullet?.y ?? ''}`),
+    createdTick: numberOrNull(bullet?.createdTick ?? bullet?.created_tick)
+  })).filter(event => event.bulletId && event.createdTick !== null && !seenShotEventIds.has(event.bulletId));
   const creditedHits = damaged
     ? creditCombatHitLearning(
         stateful,
@@ -1099,14 +1146,15 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
       realBulletPressure: Boolean(targetOwnsRealBullet || targetBulletIds.length),
       hasThreateningBullet: Boolean(targetOwnsRealBullet || targetBulletIds.length),
       newBulletCount: Math.max(0, targetBulletIds.filter(id => !(previousMetrics.threatBulletIds || []).includes(id)).length),
+      newShotEvents,
+      currentTick: numberOrNull(options.currentTick),
+      commandDelayP90Ticks: numberOrNull(options.executionTiming?.p90Ticks),
       targetStamina5s: numberOrNull(target.stamina_5s_remaining_milli ?? target.stamina5sRemainingMilli),
       selfHp: hpValue(self),
       targetHp: hp
     }])
     .filter(sample => nowMs - Number(sample.at || 0) <= sampleWindowMs)
     .slice(-160);
-  const behaviorMap = ensureOpponentBehaviorMap(stateful);
-  const previousBehavior = behaviorMap[String(id)] || null;
   const observedHitRate = learnedBehaviorHitRate(stateful, previousBehavior || { mode: 'mixed/unknown' }, distance)
     ?? (Number(previousMetrics.acceptedShots || 0) >= 5
       ? Number(previousMetrics.confirmedHits || 0) / Math.max(1, Number(previousMetrics.acceptedShots || 0))
@@ -1124,6 +1172,10 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
     short: Number(previousBehavior?.probeWeights?.short || 0.45),
     long: Number(previousBehavior?.probeWeights?.long || 0.45)
   };
+  opponentBehaviorState.seenShotEventIds = Array.from(new Set([
+    ...(previousBehavior?.seenShotEventIds || []),
+    ...targetBulletIds
+  ].map(String))).slice(-256);
   opponentBehaviorState.recentHitRate = observedHitRate;
   behaviorMap[String(id)] = opponentBehaviorState;
   const escapeDecision = combatEscapeDecisionCore(self, target, {
@@ -1327,6 +1379,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     ...options,
     bullets,
     currentTick: realtime.tick,
+    executionTiming: state?.command?.shooting?.timing || options.executionTiming,
     reason: liveCombatEnabled ? 'combat-live-realtime' : (options.controlMode === 'combat-dry-run' ? 'combat-dry-run-realtime' : 'realtime-visible-threat')
   });
   syncConfirmedCombatShots(stateful, state, target, {
@@ -1367,6 +1420,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     ...options,
     combatTargetState,
     executionTiming: state?.command?.shooting?.timing || options.executionTiming,
+    currentTick: realtime.tick,
     bullets
   });
   if (stateful?.combatMetrics && movement.dodge?.threatField) {

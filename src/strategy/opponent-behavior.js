@@ -19,6 +19,13 @@ function numberOrNull(value) {
   return Number.isFinite(number) ? number : null;
 }
 
+function percentile(values = [], ratio = 0.5) {
+  const sorted = values.map(Number).filter(Number.isFinite).sort((a, b) => a - b);
+  if (!sorted.length) return null;
+  const index = Math.max(0, Math.min(sorted.length - 1, Math.ceil(sorted.length * ratio) - 1));
+  return sorted[index];
+}
+
 function behaviorDistanceBand(distance) {
   const value = Number(distance);
   if (!Number.isFinite(value)) return 'unknown';
@@ -170,6 +177,8 @@ function opponentBehaviorMetricsCore(samples = [], options = {}) {
   const reactionLatencies = [];
   const staminaCycleIntervals = [];
   let previousShotAt = 0;
+  const shotEvents = [];
+  const seenShotEvents = new Set();
   let previousDirection = '';
   let directionSinceAt = 0;
   let previousTargetHp = null;
@@ -211,7 +220,20 @@ function opponentBehaviorMetricsCore(samples = [], options = {}) {
     previousMoving = moving;
     if (sample.firing) firingSamples += 1;
     if (sample.firing || sample.realBulletPressure) pressureSamples += 1;
-    if (Number(sample.newBulletCount || 0) > 0) {
+    const sampleShotEvents = Array.isArray(sample.newShotEvents) ? sample.newShotEvents : [];
+    for (const event of sampleShotEvents) {
+      const createdTick = numberOrNull(event?.createdTick ?? event?.created_tick);
+      if (createdTick === null) continue;
+      const key = String(event?.bulletId ?? event?.bullet_id ?? createdTick);
+      if (seenShotEvents.has(key)) continue;
+      seenShotEvents.add(key);
+      shotEvents.push({
+        bulletId: key,
+        createdTick,
+        observedAt: at
+      });
+    }
+    if (!sampleShotEvents.length && Number(sample.newBulletCount || 0) > 0) {
       if (previousShotAt) shotIntervals.push(at - previousShotAt);
       previousShotAt = at;
     }
@@ -257,6 +279,30 @@ function opponentBehaviorMetricsCore(samples = [], options = {}) {
     : null;
   const intervalVariance = intervalMean === null ? null : shotIntervals.reduce((sum, value) => sum + (value - intervalMean) ** 2, 0) / shotIntervals.length;
   const shotIntervalCv = intervalMean && intervalVariance !== null ? Math.sqrt(intervalVariance) / intervalMean : null;
+  const orderedShotEvents = shotEvents
+    .slice()
+    .sort((a, b) => a.createdTick - b.createdTick || a.observedAt - b.observedAt)
+    .slice(-32);
+  const shotIntervalTicks = [];
+  for (let index = 1; index < orderedShotEvents.length; index += 1) {
+    const interval = orderedShotEvents[index].createdTick - orderedShotEvents[index - 1].createdTick;
+    if (interval > 0) shotIntervalTicks.push(interval);
+  }
+  const intervalMedianTicks = percentile(shotIntervalTicks, 0.5);
+  const intervalMadTicks = intervalMedianTicks === null
+    ? null
+    : percentile(shotIntervalTicks.map(value => Math.abs(value - intervalMedianTicks)), 0.5);
+  const intervalP90Ticks = percentile(shotIntervalTicks, 0.9);
+  const intervalTickMean = shotIntervalTicks.length
+    ? shotIntervalTicks.reduce((sum, value) => sum + value, 0) / shotIntervalTicks.length
+    : null;
+  const intervalTickVariance = intervalTickMean === null
+    ? null
+    : shotIntervalTicks.reduce((sum, value) => sum + (value - intervalTickMean) ** 2, 0) / shotIntervalTicks.length;
+  const shotIntervalTickCv = intervalTickMean && intervalTickVariance !== null
+    ? Math.sqrt(intervalTickVariance) / intervalTickMean
+    : null;
+  const serverTickMs = Math.max(1, Number(options.serverTickMs ?? 50));
   const coefficientOfVariation = values => {
     if (!values.length) return null;
     const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
@@ -282,8 +328,14 @@ function opponentBehaviorMetricsCore(samples = [], options = {}) {
     distanceChangeRate,
     lastLateralFlipAt,
     shotIntervals,
-    shotIntervalMeanMs: intervalMean,
-    shotIntervalCv,
+    shotEvents: orderedShotEvents,
+    shotIntervalTicks,
+    shotIntervalMeanMs: intervalMedianTicks === null ? intervalMean : intervalMedianTicks * serverTickMs,
+    shotIntervalCv: shotIntervalTickCv === null ? shotIntervalCv : shotIntervalTickCv,
+    intervalMedianTicks,
+    intervalMadTicks,
+    intervalP90Ticks,
+    lastCreatedTick: orderedShotEvents.at(-1)?.createdTick ?? null,
     directionDwells,
     directionDwellCv: coefficientOfVariation(directionDwells),
     reactionLatencies,
@@ -326,25 +378,88 @@ function behaviorDimensionsCore(previous, classified, metrics, sample, nowMs, op
       )
     }
   };
-  const pressure = Boolean(sample.firing || sample.realBulletPressure || Number(sample.newBulletCount || 0) > 0);
   const previousShooting = previousDimensions.shootingPhase || null;
-  const lastShotAt = [...(previous?.samples || []), sample]
-    .slice().reverse().find(item => Number(item.newBulletCount || 0) > 0)?.at || 0;
-  const nextShotInMs = lastShotAt && Number.isFinite(Number(metrics.shotIntervalMeanMs))
-    ? Number(lastShotAt) + Number(metrics.shotIntervalMeanMs) - nowMs
+  const serverTickMs = Math.max(1, Number(options.serverTickMs ?? 50));
+  const currentTick = numberOrNull(sample.currentTick ?? sample.tick);
+  const lastCreatedTick = numberOrNull(metrics.lastCreatedTick);
+  const intervalMedianTicks = numberOrNull(metrics.intervalMedianTicks);
+  const intervalMadTicks = numberOrNull(metrics.intervalMadTicks);
+  const intervalP90Ticks = numberOrNull(metrics.intervalP90Ticks);
+  const predictedCreatedTick = lastCreatedTick !== null && intervalMedianTicks !== null
+    ? lastCreatedTick + intervalMedianTicks
     : null;
-  const shootingState = Number(sample.newBulletCount || 0) > 0
-    ? 'burst'
-    : (pressure
-        ? 'sustained'
-        : (nextShotInMs !== null && nextShotInMs >= 0 && nextShotInMs <= 600
-            ? 'preparing'
-            : (['burst', 'sustained'].includes(previousShooting?.state) ? 'cooldown' : 'idle')));
+  const commandDelayP90Ticks = Math.max(0, Number(sample.commandDelayP90Ticks ?? options.commandDelayP90Ticks ?? 5));
+  const bulletSpeedCmPerTick = Math.max(1, Number(options.bulletSpeedCmPerTick ?? 500));
+  const distance = sampleDistance(sample);
+  const flightTicks = distance === null ? null : distance / bulletSpeedCmPerTick;
+  const safetyMarginTicks = Math.max(1, Number(options.preDodgeSafetyMarginTicks ?? 2));
+  const reactionNeedTicks = commandDelayP90Ticks + 1 + safetyMarginTicks;
+  const uncertaintyTicks = Math.max(
+    1,
+    Number(intervalMadTicks || 0) * 2,
+    intervalP90Ticks !== null && intervalMedianTicks !== null ? intervalP90Ticks - intervalMedianTicks : 0
+  );
+  const prepareLeadTicks = intervalMedianTicks === null
+    ? null
+    : Math.max(1, Math.min(intervalMedianTicks * 0.8, uncertaintyTicks + Math.max(1, reactionNeedTicks - Number(flightTicks || 0))));
+  const nextShotInTicks = predictedCreatedTick !== null && currentTick !== null
+    ? predictedCreatedTick - currentTick
+    : null;
+  const nextShotInMs = nextShotInTicks === null ? null : nextShotInTicks * serverTickMs;
+  const newShotCount = Array.isArray(sample.newShotEvents)
+    ? sample.newShotEvents.length
+    : Math.max(0, Number(sample.newBulletCount || 0));
+  const lastLocalShotAt = [...(previous?.samples || []), sample]
+    .slice().reverse().find(item => Number(item.newBulletCount || 0) > 0)?.at || 0;
+  const legacyRecentShot = lastCreatedTick === null
+    && lastLocalShotAt > 0
+    && Number.isFinite(Number(metrics.shotIntervalMeanMs))
+    && nowMs - Number(lastLocalShotAt) <= Number(metrics.shotIntervalMeanMs) * 0.6;
+  const sinceLastCreatedTicks = lastCreatedTick !== null && currentTick !== null
+    ? Math.max(0, currentTick - lastCreatedTick)
+    : null;
+  const densityWindowTicks = intervalMedianTicks === null ? 4 : Math.max(2, Math.round(intervalMedianTicks * 0.35));
+  const recentCreatedEvent = sinceLastCreatedTicks !== null && sinceLastCreatedTicks <= densityWindowTicks;
+  let shootingState = 'idle';
+  let shootingPhaseSource = 'no-created-tick-cadence';
+  if (newShotCount > 0) {
+    shootingState = 'burst';
+    shootingPhaseSource = 'new-created-tick-event';
+  } else if (recentCreatedEvent && (metrics.shotEvents || []).length >= 2) {
+    shootingState = 'sustained';
+    shootingPhaseSource = 'recent-created-tick-density';
+  } else if (legacyRecentShot) {
+    shootingState = 'sustained';
+    shootingPhaseSource = 'local-observation-fallback';
+  } else if (nextShotInTicks !== null && prepareLeadTicks !== null
+    && nextShotInTicks >= -uncertaintyTicks && nextShotInTicks <= prepareLeadTicks) {
+    shootingState = 'preparing';
+    shootingPhaseSource = 'predicted-created-tick-window';
+  } else if (sinceLastCreatedTicks !== null && intervalMedianTicks !== null
+    && sinceLastCreatedTicks <= intervalMedianTicks + uncertaintyTicks) {
+    shootingState = 'cooldown';
+    shootingPhaseSource = 'post-created-tick-cooldown';
+  } else if (['burst', 'sustained', 'preparing'].includes(previousShooting?.state)) {
+    shootingState = 'cooldown';
+    shootingPhaseSource = 'phase-transition-cooldown';
+  }
   const shootingPhase = {
     state: shootingState,
-    confidence: pressure ? Math.max(0.7, metrics.pressureRatio) : Math.max(0.55, 1 - metrics.pressureRatio),
+    confidence: intervalMedianTicks === null
+      ? 0.35
+      : clamp(1 - Number(metrics.shotIntervalCv ?? 0.75), 0.35, 0.95),
     updatedAt: nowMs,
-    nextShotInMs: nextShotInMs === null ? null : Math.round(nextShotInMs)
+    nextShotInMs: nextShotInMs === null ? null : Math.round(nextShotInMs),
+    shootingPhaseSource,
+    lastCreatedTick,
+    intervalMedianTicks,
+    intervalMadTicks,
+    intervalP90Ticks,
+    predictedCreatedTick,
+    prepareLeadTicks: prepareLeadTicks === null ? null : Math.round(prepareLeadTicks * 10) / 10,
+    commandDelayP90Ticks,
+    flightTicks: flightTicks === null ? null : Math.round(flightTicks * 10) / 10,
+    oldBulletPressure: Boolean(sample.realBulletPressure)
   };
   const stamina = numberOrNull(sample.targetStamina5s);
   const previousStamina = numberOrNull(previous?.samples?.[Math.max(0, (previous.samples?.length || 1) - 1)]?.targetStamina5s);
@@ -373,7 +488,8 @@ function behaviorDimensionsCore(previous, classified, metrics, sample, nowMs, op
   const addEvidence = (value, weight) => {
     if (Number.isFinite(Number(value))) evidence.push({ value: clamp(Number(value), 0, 1), weight });
   };
-  const regularFire = metrics.shotIntervals?.length >= 3 && metrics.shotIntervalCv !== null
+  const regularFire = ((metrics.shotIntervalTicks?.length || 0) >= 3 || (metrics.shotIntervals?.length || 0) >= 3)
+    && metrics.shotIntervalCv !== null
     ? clamp(1 - metrics.shotIntervalCv, 0, 1)
     : null;
   const transitionPredictability = Number(metrics.movementTransitions?.predictability ?? 0.5);
@@ -460,6 +576,15 @@ function opponentResponsePolicyCore(mode, context = {}) {
     ? Math.max(0, Number(context.nowMs || Date.now()) - Number(context.lastLateralFlipAt))
     : Infinity;
   const staminaUpperBound = numberOrNull(context.staminaUpperBound);
+  const movementIntent = String(context.movementIntent || '');
+  const shootingPhase = String(context.shootingPhase || '');
+  const combinedPressure = ['burst', 'sustained', 'preparing'].includes(shootingPhase);
+  const combinedRetreat = mode === 'retreat-kite'
+    || movementIntent === 'retreat'
+    || (movementIntent === 'zigzag' && Number(context.distanceChangeRate || 0) > Number(context.combinedRetreatRate ?? 4));
+  const combinedZigzag = mode === 'zigzag-strafe'
+    || movementIntent === 'zigzag'
+    || Number(context.lateralFlips || 0) >= 2;
   if (staminaUpperBound !== null
     && staminaUpperBound <= Number(context.exhaustedUpperBound ?? 1200)
     && context.noThreateningBullets === true) {
@@ -473,6 +598,23 @@ function opponentResponsePolicyCore(mode, context = {}) {
       reassessProfit: false,
       reason: 'opponent-exhausted-window',
       staminaUpperBound
+    };
+  }
+  if (combinedPressure && combinedRetreat && combinedZigzag) {
+    const inefficient = hitRate !== null && hitRate < Number(context.minHitRate ?? 0.12);
+    const edge = Number.isFinite(distance) && distance > Number(context.edgeRangeCm ?? 10500);
+    return {
+      name: 'zigzag-retreat-pressure',
+      closeIn: true,
+      aimLeadScale: 0.9,
+      suppressFire: Boolean((edge || inefficient) && !targetPressure),
+      minimumCadenceMs: edge || inefficient ? (targetPressure ? 800 : 0) : 160,
+      reassessProfit: Number(context.noProgressMs || 0) >= Number(context.reassessMs ?? 8000),
+      preferredMinDistanceCm: 4500,
+      preferredMaxDistanceCm: 10500,
+      reason: edge
+        ? 'zigzag-retreat-pressure-edge-close'
+        : (inefficient ? 'zigzag-retreat-pressure-low-hit-close' : 'zigzag-retreat-pressure-track')
     };
   }
   if (mode === 'retreat-kite') {
@@ -570,6 +712,10 @@ function updateOpponentBehaviorStateCore(previous = null, sample = {}, options =
     noThreateningBullets: sample.hasThreateningBullet === false
       || (!sample.realBulletPressure && Number(sample.newBulletCount || 0) <= 0),
     staminaUpperBound: dimensions.staminaPhase?.upperBound,
+    movementIntent: dimensions.movementIntent?.state,
+    shootingPhase: dimensions.shootingPhase?.state,
+    distanceChangeRate: metrics.distanceChangeRate,
+    lateralFlips: metrics.lateralFlips,
     lastLateralFlipAt: metrics.lastLateralFlipAt || prior?.lastLateralFlipAt,
     noProgressMs,
     nowMs

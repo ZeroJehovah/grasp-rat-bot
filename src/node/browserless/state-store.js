@@ -137,6 +137,7 @@ function createInitialState(userId = 0) {
       lastSelf: null,
       entities: [],
       entitiesByKey: {},
+      entitiesByUserId: {},
       bullets: [],
       coinDrops: []
     },
@@ -148,6 +149,7 @@ function createInitialState(userId = 0) {
       self: null,
       entities: [],
       entitiesByKey: {},
+      entitiesByUserId: {},
       bullets: [],
       coinDrops: [],
       messages: [],
@@ -241,14 +243,18 @@ function createBrowserlessStateStore(options = {}) {
       .map(entity => normalizeEntity(entity, { ...meta, authority: 'realtime', source: 'pos' }))
       .filter(Boolean);
     const entitiesByKey = {};
+    const entitiesByUserId = {};
     for (const entity of normalizedEntities) {
       const key = entityKey(entity);
       if (key) entitiesByKey[key] = entity;
+      const userId = entity?.user_id ?? entity?.userId;
+      if (userId !== null && userId !== undefined && userId !== '') entitiesByUserId[String(userId)] = entity;
     }
     state.realtime.tick = meta.tick;
     state.realtime.receivedAtMs = meta.receivedAtMs;
     state.realtime.entities = normalizedEntities;
     state.realtime.entitiesByKey = entitiesByKey;
+    state.realtime.entitiesByUserId = entitiesByUserId;
     state.realtime.bullets = bullets
       .map(bullet => normalizeBullet(bullet, { ...meta, authority: 'realtime', source: 'pos' }))
       .filter(Boolean);
@@ -267,14 +273,18 @@ function createBrowserlessStateStore(options = {}) {
       .map(entity => normalizeEntity(entity, { ...meta, authority: 'snapshot', source: 'snapshot' }))
       .filter(Boolean);
     const entitiesByKey = {};
+    const entitiesByUserId = {};
     for (const entity of normalizedEntities) {
       const key = entityKey(entity);
       if (key) entitiesByKey[key] = entity;
+      const userId = entity?.user_id ?? entity?.userId;
+      if (userId !== null && userId !== undefined && userId !== '') entitiesByUserId[String(userId)] = entity;
     }
     state.snapshot.tick = meta.tick;
     state.snapshot.receivedAtMs = meta.receivedAtMs;
     state.snapshot.entities = normalizedEntities;
     state.snapshot.entitiesByKey = entitiesByKey;
+    state.snapshot.entitiesByUserId = entitiesByUserId;
     state.snapshot.bullets = bullets
       .map(bullet => normalizeBullet(bullet, { ...meta, authority: 'snapshot', source: 'snapshot' }))
       .filter(Boolean);
@@ -389,6 +399,7 @@ function createBrowserlessStateStore(options = {}) {
       self: cloneJson(state.realtime.self),
       lastSelf: cloneJson(state.realtime.lastSelf),
       entities: cloneJson(state.realtime.entities),
+      entitiesByUserId: cloneJson(state.realtime.entitiesByUserId),
       bullets: cloneJson(state.realtime.bullets),
       coinDrops: cloneJson(state.realtime.coinDrops)
     };
@@ -403,6 +414,7 @@ function createBrowserlessStateStore(options = {}) {
       frameAgeMs: frameAge(nowMs, state.snapshot.receivedAtMs),
       self: cloneJson(state.snapshot.self),
       entities: cloneJson(state.snapshot.entities),
+      entitiesByUserId: cloneJson(state.snapshot.entitiesByUserId),
       bullets: cloneJson(state.snapshot.bullets),
       coinDrops: cloneJson(state.snapshot.coinDrops),
       messages: cloneJson(state.snapshot.messages),
@@ -466,6 +478,7 @@ function createBrowserlessStateStore(options = {}) {
         self: state.realtime.self,
         lastSelf: state.realtime.lastSelf,
         entities: state.realtime.entities,
+        entitiesByUserId: state.realtime.entitiesByUserId,
         bullets: state.realtime.bullets,
         coinDrops: state.realtime.coinDrops
       },
@@ -477,6 +490,7 @@ function createBrowserlessStateStore(options = {}) {
         frameAgeMs: frameAge(nowMs, state.snapshot.receivedAtMs),
         self: state.snapshot.self,
         entities: state.snapshot.entities,
+        entitiesByUserId: state.snapshot.entitiesByUserId,
         bullets: state.snapshot.bullets,
         coinDrops: state.snapshot.coinDrops,
         messages: state.snapshot.messages,

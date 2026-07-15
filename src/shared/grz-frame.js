@@ -99,6 +99,8 @@ function summarizeGrzJson(json, userId = 0) {
 function parseGrzFrame(buffer, options = {}) {
   const decodedTextSampleBytes = Math.max(0, Number(options.decodedTextSampleBytes || 0));
   const userId = Number(options.userId || 0);
+  const now = typeof options.now === 'function' ? options.now : null;
+  const timings = {};
   if (!Buffer.isBuffer(buffer)) {
     throw new TypeError('parseGrzFrame requires a Buffer');
   }
@@ -112,19 +114,27 @@ function parseGrzFrame(buffer, options = {}) {
   if (payload.length >= 2 && payload[0] === 0x1f && payload[1] === 0x8b) {
     frame.compression = 'gzip';
     try {
+      let started = now ? now() : 0;
       const decoded = zlib.gunzipSync(payload);
+      if (now) timings.gzipMs = now() - started;
+      started = now ? now() : 0;
       const decodedText = decoded.toString('utf8');
+      if (now) timings.utf8Ms = now() - started;
       frame.decodedByteLength = decoded.length;
       if (decodedTextSampleBytes > 0) {
         frame.decodedTextSample = decodedText.slice(0, decodedTextSampleBytes);
       }
       try {
+        started = now ? now() : 0;
         const json = JSON.parse(decodedText);
+        if (now) timings.jsonDecodeMs = now() - started;
         if (options.includeJson) frame.decodedJson = json;
         frame.decodedJsonKeys = json && typeof json === 'object' ? Object.keys(json).slice(0, 20) : [];
         frame.decodedType = typeof json?.type === 'string' ? json.type : '';
         if (Number.isFinite(Number(json?.tick))) frame.decodedTick = Number(json.tick);
+        started = now ? now() : 0;
         frame.decodedSummary = summarizeGrzJson(json, userId);
+        if (now) timings.summaryMs = now() - started;
       } catch (err) {
         frame.jsonParseError = err?.message || String(err);
       }
@@ -134,6 +144,7 @@ function parseGrzFrame(buffer, options = {}) {
   } else {
     frame.compression = 'unknown';
   }
+  if (now) frame.decodeTimings = timings;
   return frame;
 }
 

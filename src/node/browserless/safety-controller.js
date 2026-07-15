@@ -125,6 +125,56 @@ function bulletOwnerId(bullet) {
   return value === null || value === undefined || value === '' ? '' : String(value);
 }
 
+function frameGapRiskAssessment(state = {}, context = {}) {
+  const self = state?.realtime?.self || null;
+  const decision = context.lastDecision || context.decision || null;
+  const action = decision?.action || decision || {};
+  const band = String(action.band || decision?.band || '');
+  const kind = String(action.kind || decision?.kind || '');
+  const selfHp = numberOrNull(self?.hp);
+  const selfMaxHp = numberOrNull(self?.max_hp ?? self?.maxHp) ?? 100;
+  const selfId = String(self?.user_id ?? self?.userId ?? '');
+  const bullets = (Array.isArray(state?.realtime?.bullets) ? state.realtime.bullets : [])
+    .filter(bullet => !selfId || bulletOwnerId(bullet) !== selfId);
+  const visibleTargets = Array.isArray(state?.realtime?.entities) ? state.realtime.entities : [];
+  const activeThreats = visibleTargets.filter(entity => {
+    if (!entity || entity.alive === false || Number(entity.user_id ?? entity.userId) === Number(self?.user_id ?? self?.userId)) return false;
+    return String(entity.current_join_mode || entity.mode || '').toLowerCase() === 'active'
+      || entity.active === true
+      || entity.firing === true;
+  });
+  const combatTarget = action.target || decision?.combat?.target || null;
+  const injury = action.injury || decision?.injury || null;
+  const recovery = band === 'recover'
+    || /recover|stamina|wait-for-full/i.test(`${kind}|${action.reason || decision?.reason || ''}`);
+  const combat = band === 'combat'
+    || kind === 'combat-live'
+    || Boolean(decision?.combat?.target?.userId ?? decision?.combat?.target?.user_id);
+  const safety = band === 'safety';
+  const lowHp = selfHp !== null && selfHp < selfMaxHp;
+  const risky = Boolean(combat || safety || recovery || injury?.active || bullets.length || activeThreats.length || lowHp || !self);
+  return {
+    risky,
+    decisionKind: kind,
+    decisionBand: band,
+    selfHp,
+    selfMaxHp,
+    lowHp,
+    combat,
+    safety,
+    recovery,
+    recentInjury: Boolean(injury?.active),
+    target: combatTarget ? {
+      userId: combatTarget.userId ?? combatTarget.user_id ?? null,
+      name: String(combatTarget.name || ''),
+      hp: numberOrNull(combatTarget.hp),
+      distance: numberOrNull(combatTarget.distance)
+    } : null,
+    bulletCount: bullets.length,
+    activeThreatCount: activeThreats.length
+  };
+}
+
 function actionSettlementStallAssessment(state = {}, context = {}, options = {}) {
   const movement = context.actionSettlementStall || null;
   const decision = context.lastDecision || context.decision || null;
@@ -358,6 +408,8 @@ function evaluateBrowserlessSafety(state = {}, context = {}, options = {}) {
 
 function createBrowserlessSafetyController(options = {}) {
   let stopEvent = null;
+  let frameGapSoftStop = null;
+  let lastRealtimeTick = null;
   return {
     requestStop(reason = 'explicit-stop', detail = {}) {
       stopEvent = createSafetyEvent(reason, detail, {
@@ -369,15 +421,126 @@ function createBrowserlessSafetyController(options = {}) {
     clearStop() {
       stopEvent = null;
     },
+    clearFrameGapSoftStop() {
+      frameGapSoftStop = null;
+      lastRealtimeTick = null;
+    },
     getStopEvent() {
       return stopEvent;
     },
     evaluate(state, context = {}) {
-      return evaluateBrowserlessSafety(state, {
+      const mergedContext = {
         ...context,
         stopRequested: Boolean(stopEvent),
         stopDetail: stopEvent?.detail || context.stopDetail
-      }, options);
+      };
+      if (stopEvent || context.wsError || context.wsClosed || context.snapshotSafety?.ok === false) {
+        frameGapSoftStop = null;
+        return evaluateBrowserlessSafety(state, mergedContext, options);
+      }
+      const nowMs = numberOrNull(context.nowMs) ?? (typeof options.now === 'function' ? options.now() : Date.now());
+      const currentTick = numberOrNull(state?.realtime?.tick);
+      if (currentTick !== null && (lastRealtimeTick === null || currentTick > lastRealtimeTick)) {
+        const recovered = frameGapSoftStop
+          ? {
+              ...frameGapSoftStop,
+              recoveredAt: nowMs,
+              recoveredTick: currentTick,
+              recoveryMs: Math.max(0, nowMs - Number(frameGapSoftStop.startedAt || nowMs))
+            }
+          : null;
+        frameGapSoftStop = null;
+        lastRealtimeTick = currentTick;
+        const base = evaluateBrowserlessSafety(state, mergedContext, options);
+        if (!base.ok || !recovered) return base;
+        return {
+          ok: true,
+          reason: 'frame-gap-soft-recovered',
+          recovered: true,
+          at: new Date(nowMs).toISOString(),
+          detail: recovered
+        };
+      }
+      if (frameGapSoftStop) {
+        const risk = frameGapRiskAssessment(state, mergedContext);
+        const effectiveFrameGapMs = Number(frameGapSoftStop.initialFrameGapMs || frameGapSoftStop.frameGapAlertMs)
+          + Math.max(0, nowMs - Number(frameGapSoftStop.startedAt || nowMs));
+        if (risk.risky || effectiveFrameGapMs >= Number(frameGapSoftStop.hardDeadlineMs || 5000)) {
+          const soft = frameGapSoftStop;
+          frameGapSoftStop = null;
+          return createSafetyEvent('frame-gap', {
+            frameGapMs: effectiveFrameGapMs,
+            frameGapAlertMs: soft.frameGapAlertMs,
+            hardDeadlineMs: soft.hardDeadlineMs,
+            risk,
+            softStop: {
+              startedAt: soft.startedAt,
+              startTick: soft.startTick,
+              elapsedMs: Math.max(0, nowMs - Number(soft.startedAt || nowMs)),
+              result: risk.risky ? 'risk-escalated' : 'hard-deadline'
+            }
+          }, { nowMs });
+        }
+        return {
+          ok: true,
+          reason: 'frame-gap-soft-stop',
+          softStop: true,
+          at: new Date(nowMs).toISOString(),
+          detail: {
+            ...frameGapSoftStop,
+            frameGapMs: effectiveFrameGapMs,
+            expiresInMs: Math.max(0, Number(frameGapSoftStop.hardDeadlineMs || 5000) - effectiveFrameGapMs)
+          }
+        };
+      }
+      const frameGapMs = numberOrNull(context.frameGapMs)
+        ?? numberOrNull(state?.frameAges?.latestFrameAgeMs)
+        ?? null;
+      const frameGapAlertMs = Math.max(1000, Number(context.frameGapAlertMs ?? options.frameGapAlertMs ?? DEFAULT_FRAME_GAP_ALERT_MS));
+      if (frameGapMs !== null && frameGapMs > frameGapAlertMs) {
+        const risk = frameGapRiskAssessment(state, mergedContext);
+        const hardDeadlineMs = Math.max(frameGapAlertMs + 1000, Number(
+          context.frameGapHardDeadlineMs ?? options.frameGapHardDeadlineMs ?? 5000
+        ));
+        if (risk.risky || frameGapMs >= hardDeadlineMs) {
+          const soft = frameGapSoftStop;
+          frameGapSoftStop = null;
+          return createSafetyEvent('frame-gap', {
+            frameGapMs,
+            frameGapAlertMs,
+            hardDeadlineMs,
+            risk,
+            softStop: soft ? {
+              startedAt: soft.startedAt,
+              startTick: soft.startTick,
+              elapsedMs: Math.max(0, nowMs - Number(soft.startedAt || nowMs)),
+              result: 'hard-deadline'
+            } : null
+          }, { nowMs });
+        }
+        if (!frameGapSoftStop) {
+          frameGapSoftStop = {
+            startedAt: nowMs,
+            startTick: currentTick,
+            initialFrameGapMs: frameGapMs,
+            frameGapAlertMs,
+            hardDeadlineMs,
+            risk
+          };
+        }
+        return {
+          ok: true,
+          reason: 'frame-gap-soft-stop',
+          softStop: true,
+          at: new Date(nowMs).toISOString(),
+          detail: {
+            ...frameGapSoftStop,
+            frameGapMs,
+            expiresInMs: Math.max(0, hardDeadlineMs - frameGapMs)
+          }
+        };
+      }
+      return evaluateBrowserlessSafety(state, mergedContext, options);
     }
   };
 }
@@ -458,6 +621,7 @@ module.exports = {
   createSafetyEvent,
   evaluateBrowserlessSafety,
   executeSafetyExit,
+  frameGapRiskAssessment,
   selfStaminaRemainingMs,
   sendStopMotion
 };

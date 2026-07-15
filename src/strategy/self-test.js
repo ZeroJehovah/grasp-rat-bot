@@ -515,7 +515,10 @@ function runStrategyModuleSelfTests() {
       distance: 8000 + index * 20,
       firing: true,
       realBulletPressure: true,
-      newBulletCount: index % 2 === 0 ? 1 : 0,
+      newBulletCount: 1,
+      newShotEvents: [{ bulletId: `shot-${index}`, createdTick: 100 + index * 4 }],
+      currentTick: 100 + index * 4,
+      commandDelayP90Ticks: 5,
       targetStamina5s: 6000 - index * 50
     });
   }
@@ -531,6 +534,61 @@ function runStrategyModuleSelfTests() {
       && composite?.metrics?.movementTransitions?.currentState === 'east'
       && composite?.metrics?.movementTransitions?.next?.[0]?.state === 'east'
       && composite?.metrics?.movementTransitions?.transitionCount >= 40
+  });
+  let createdTickCadence = null;
+  for (let index = 0; index < 4; index += 1) {
+    createdTickCadence = updateOpponentBehaviorStateCore(createdTickCadence, {
+      at: 1000 + index * 400,
+      selfX: 0,
+      selfY: 0,
+      x: 9000,
+      y: 0,
+      vx: 0,
+      vy: 0,
+      distance: 9000,
+      firing: true,
+      realBulletPressure: true,
+      newBulletCount: 1,
+      newShotEvents: [{ bulletId: `cadence-${index}`, createdTick: 100 + index * 8 }],
+      currentTick: 100 + index * 8,
+      commandDelayP90Ticks: 5
+    });
+  }
+  createdTickCadence = updateOpponentBehaviorStateCore(createdTickCadence, {
+    at: 2650,
+    selfX: 0,
+    selfY: 0,
+    x: 9000,
+    y: 0,
+    vx: 0,
+    vy: 0,
+    distance: 9000,
+    firing: false,
+    realBulletPressure: true,
+    newBulletCount: 0,
+    newShotEvents: [],
+    currentTick: 131,
+    commandDelayP90Ticks: 5
+  });
+  const combinedPolicy = opponentResponsePolicyCore('retreat-kite', {
+    movementIntent: 'zigzag',
+    shootingPhase: 'preparing',
+    lateralFlips: 4,
+    distanceChangeRate: 12,
+    distance: 11000,
+    hitRate: 0.05,
+    targetPressure: false
+  });
+  results.push({
+    name: 'opponent-created-tick-phase-separates-old-bullets-and-detects-combined-pressure',
+    passed: createdTickCadence?.dimensions?.shootingPhase?.state === 'preparing'
+      && createdTickCadence?.dimensions?.shootingPhase?.shootingPhaseSource === 'predicted-created-tick-window'
+      && createdTickCadence?.dimensions?.shootingPhase?.lastCreatedTick === 124
+      && createdTickCadence?.dimensions?.shootingPhase?.intervalMedianTicks === 8
+      && createdTickCadence?.dimensions?.shootingPhase?.oldBulletPressure === true
+      && combinedPolicy.name === 'zigzag-retreat-pressure'
+      && combinedPolicy.suppressFire === true
+      && combinedPolicy.closeIn === true
   });
   const exhausted = updateOpponentBehaviorStateCore(composite, {
     at: 11200,

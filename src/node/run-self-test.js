@@ -61,6 +61,7 @@ const {
   buildLowHpRecoveryThreatExitDecision,
   createBrowserlessDecisionAdapter,
   decisionStatePatch,
+  evaluateProactiveCombatMarginalRoi,
   opportunityEnemyStaminaCost: browserlessOpportunityEnemyStaminaCost,
   snapshotSelfKillEvidence
 } = require('./browserless/decision-adapter');
@@ -12603,6 +12604,44 @@ async function runSelfTest() {
       want: 'script-transition-matrix|right-turn|east|north'
     },
     {
+      name: 'browserless high-entropy aim uses robust stop with bounded exploration',
+      got: (() => {
+        const self = { user_id: 7, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 };
+        const target = { user_id: 8, x: 8000, y: 0, vx: 50, vy: 0, hp: 80, active: true };
+        const combatTargetState = {
+          noDamageMs: 11000,
+          motionSamples: Array.from({ length: 30 }, (_, index) => ({
+            at: 1000 + index * 200,
+            selfX: 0,
+            selfY: 0,
+            x: 7000 + index * 30,
+            y: index % 2 ? 100 : -100,
+            vx: 50,
+            vy: index % 2 ? 50 : -50,
+            distance: 7000 + index * 30
+          })),
+          opponentBehaviorState: {
+            mode: 'zigzag-strafe',
+            dimensions: { controlStyle: { state: 'human-like', confidence: 0.9 } },
+            automationLikelihood: 0.2,
+            recentHitRate: 0.05,
+            metrics: { movementTransitions: { transitionCount: 20, next: [] } }
+          }
+        };
+        const robust = estimateAim(self, target, { combatTargetState, actualShots: 0 });
+        const exploration = estimateAim(self, target, { combatTargetState, actualShots: 14 });
+        return [
+          robust.routeCoverage?.style,
+          robust.routeCoverage?.selected,
+          robust.routeCoverage?.sequence?.join(','),
+          exploration.routeCoverage?.style,
+          exploration.routeCoverage?.selected,
+          exploration.routeCoverage?.sequence?.length
+        ].join('|');
+      })(),
+      want: 'high-entropy-robust-stop|stop|stop|high-entropy-bounded-exploration|continue|2'
+    },
+    {
       name: 'browserless pre-dodge requires low-variation firing cadence before induce hold',
       got: (() => {
         const self = { user_id: 7, x: 0, y: 0, vx: 50, vy: 0, hp: 100, stamina_5s_remaining_milli: 10000 };
@@ -12626,6 +12665,213 @@ async function runSelfTest() {
         return [regular.preDodge?.phase, regular.preDodge?.nextShotInMs, irregular.preDodge === null].join('|');
       })(),
       want: 'induce-hold|400|true'
+    },
+    {
+      name: 'browserless pre-dodge reports dynamic phase blockers instead of requiring an empty bullet field',
+      got: (() => {
+        const self = { user_id: 7, x: 0, y: 0, vx: 50, vy: 0, hp: 100, stamina_5s_remaining_milli: 10000 };
+        const target = { user_id: 8, x: 9000, y: 0, hp: 80, distance: 9000 };
+        const behavior = {
+          mode: 'pressure-shooter',
+          metrics: { shotIntervalTicks: [8, 8, 8], shotIntervalCv: 0, intervalMedianTicks: 8 },
+          dimensions: {
+            shootingPhase: {
+              state: 'preparing',
+              nextShotInMs: 50,
+              predictedCreatedTick: 132,
+              intervalMedianTicks: 8,
+              flightTicks: 18,
+              shootingPhaseSource: 'predicted-created-tick-window'
+            }
+          },
+          responsePolicy: { closeIn: false }
+        };
+        const harmlessOldBullet = { ownerId: 8, currentTick: 131, incoming: false, distance: 5000, cpa: 5000 };
+        const allowed = buildCombatMovementPlan(self, target, [harmlessOldBullet], {
+          currentTick: 131,
+          combatTargetState: { opponentBehaviorState: behavior },
+          executionTiming: { p90Ticks: 5 }
+        });
+        const stationary = buildCombatMovementPlan({ ...self, vx: 0 }, target, [], {
+          currentTick: 131,
+          combatTargetState: { opponentBehaviorState: behavior },
+          executionTiming: { p90Ticks: 5 }
+        });
+        return [
+          allowed.preDodge?.phase,
+          allowed.oldBulletPressure,
+          allowed.shootingPhaseSource,
+          stationary.preDodgeBlockedReason
+        ].join('|');
+      })(),
+      want: 'induce-hold|true|predicted-created-tick-window|self-stationary'
+    },
+    {
+      name: 'browserless pre-dodge yields to threatening old bullets on the current movement path',
+      got: (() => {
+        const self = { user_id: 7, x: 0, y: 0, vx: 50, vy: 0, hp: 100, stamina_5s_remaining_milli: 10000 };
+        const target = { user_id: 8, x: 9000, y: 0, hp: 80, distance: 9000 };
+        const behavior = {
+          mode: 'pressure-shooter',
+          metrics: { shotIntervalTicks: [8, 8, 8], shotIntervalCv: 0, intervalMedianTicks: 8 },
+          dimensions: {
+            shootingPhase: {
+              state: 'preparing',
+              nextShotInMs: 50,
+              predictedCreatedTick: 132,
+              intervalMedianTicks: 8,
+              flightTicks: 18
+            }
+          },
+          responsePolicy: { closeIn: false }
+        };
+        const oldBullet = {
+          ownerId: 8,
+          currentTick: 131,
+          incoming: true,
+          distance: 5000,
+          timeToImpact: 500,
+          x: 5000,
+          y: 0,
+          direction: { dx: -1, dy: 0 },
+          speed: 500,
+          remainingTicks: 12,
+          cpa: 0
+        };
+        const plan = buildCombatMovementPlan(self, target, [oldBullet], {
+          currentTick: 131,
+          combatTargetState: { opponentBehaviorState: behavior },
+          executionTiming: { p90Ticks: 5 }
+        });
+        return [plan.preDodge === null, plan.preDodgeBlockedReason, plan.dodge?.reason].join('|');
+      })(),
+      want: 'true|old-bullet-threat|tangent-dodge'
+    },
+    {
+      name: 'browserless proactive combat marginal roi confirms only sustained low-return pursuit',
+      got: (() => {
+        const target = { user_id: 8, userId: 8, name: 'low-return', x: 10000, y: 0, distance: 10000, hp: 100, drop: 38, active: true, combatIntent: 'profit' };
+        const stateful = {
+          combatTarget: { id: 8, firstSeenAt: 1000, intent: 'profit', originIntent: 'profit', hp: 100, lastDamageAt: 0 },
+          combatMetrics: { targetId: '8', acceptedShots: 100, confirmedHits: 5, selfDamage: 0, targetDamage: 15 }
+        };
+        const combat = { target, dryRun: { target, behavior: { recentHitRate: 0.05, dimensions: { shootingPhase: { state: 'idle' } } }, exchangeStopLoss: {} } };
+        const input = { nowMs: 10000, self: { user_id: 7, hp: 100 }, bullets: [] };
+        const opportunity = { rawChoice: { type: 'coin', reward: 2, staminaCost: 1000 } };
+        const first = evaluateProactiveCombatMarginalRoi(input, combat, opportunity, stateful, { threshold: { coinsPer10Stamina: 1 } });
+        input.nowMs = 13000;
+        const confirmed = evaluateProactiveCombatMarginalRoi(input, combat, opportunity, stateful, { threshold: { coinsPer10Stamina: 1 } });
+        const finishTarget = { ...target, hp: 15 };
+        const finishState = {
+          combatTarget: { id: 8, firstSeenAt: 1000, intent: 'profit', originIntent: 'profit', hp: 15, lastDamageAt: 12500, lastDamageAmount: 3 },
+          combatMetrics: { targetId: '8', acceptedShots: 100, confirmedHits: 5, selfDamage: 0, targetDamage: 85 }
+        };
+        const finish = evaluateProactiveCombatMarginalRoi(
+          input,
+          { target: finishTarget, dryRun: { target: finishTarget, behavior: { recentHitRate: 0.05 }, exchangeStopLoss: {} } },
+          opportunity,
+          finishState,
+          { threshold: { coinsPer10Stamina: 1 } }
+        );
+        const inactiveThreshold = evaluateProactiveCombatMarginalRoi(input, combat, {}, {
+          combatTarget: { ...stateful.combatTarget },
+          combatMetrics: { ...stateful.combatMetrics }
+        }, { active: false, threshold: { coinsPer10Stamina: 1 } });
+        const sameTargetAlternative = evaluateProactiveCombatMarginalRoi(input, combat, {
+          rawChoice: { type: 'enemy', id: 8, reward: 1000, staminaCost: 1 }
+        }, {
+          combatTarget: { ...stateful.combatTarget },
+          combatMetrics: { ...stateful.combatMetrics }
+        }, { active: false });
+        const stableFallbackAlternative = evaluateProactiveCombatMarginalRoi(input, combat, {
+          rawChoice: { type: 'enemy', id: 8, reward: 1000, staminaCost: 1 },
+          choice: { type: 'coin', id: 99, reward: 2, staminaCost: 1000 }
+        }, {
+          combatTarget: { ...stateful.combatTarget },
+          combatMetrics: { ...stateful.combatMetrics }
+        }, { active: false });
+        return [
+          first.active,
+          first.triggered,
+          confirmed.triggered,
+          confirmed.remainingAcceptedShots > 500,
+          confirmed.bestAlternativeNetROI > confirmed.marginalNetROI,
+          finish.lowHpFinishProtected,
+          finish.triggered,
+          inactiveThreshold.requiredRoi,
+          inactiveThreshold.active,
+          sameTargetAlternative.bestAlternativeNetROI === null,
+          sameTargetAlternative.requiredRoi,
+          stableFallbackAlternative.bestAlternativeNetROI,
+          stableFallbackAlternative.requiredRoi
+        ].join('|');
+      })(),
+      want: 'true|false|true|true|true|true|false|0|false|true|0|20|17'
+    },
+    {
+      name: 'browserless coin competition holds through missing frames and releases after fresh confirmations',
+      got: (() => {
+        const stateful = {};
+        const self = { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, max_hp: 100, current_join_mode: 'Active' };
+        const coin = { drop_id: 9611, amount: 1, x: 40000, y: 0 };
+        const competitor = { entity_id: 2, user_id: 28315, x: 30000, y: 0, vx: 50, vy: 0, hp: 100, current_join_mode: 'Active' };
+        const build = (nowMs, entities, coins = [coin], tick = nowMs) => buildBrowserlessStrategyInput({
+          userId: 7,
+          realtime: { tick, receivedAtMs: nowMs, frameAgeMs: 0, self, entities: [self, ...entities], bullets: [], coinDrops: coins },
+          fallback: { tick: nowMs, receivedAtMs: nowMs, frameAgeMs: 0, self, entities: [], bullets: [], coinDrops: [], messages: [] },
+          frameAges: { latestFrameAgeMs: 0, realtimeAgeMs: 0 }
+        }, { nowMs }, stateful);
+        const contested = build(1000, [competitor]);
+        const missing = build(2000, []);
+        const missingAgain = build(3000, []);
+        const clearCompetitor = { ...competitor, x: 0, vx: -50 };
+        const clearOne = build(3500, [clearCompetitor]);
+        const repeatedSameTick = build(4000, [clearCompetitor], [coin], 3500);
+        const clearTwo = build(4500, [clearCompetitor]);
+        const released = build(5500, [clearCompetitor]);
+        build(5800, [competitor]);
+        const disappeared = build(6000, [competitor], []);
+        return [
+          contested.profitCoins.length,
+          contested.activeCoinCompetition.contested[0]?.contestHeld,
+          missing.profitCoins.length,
+          missing.activeCoinCompetition.contested[0]?.contestHeld,
+          missingAgain.profitCoins.length,
+          clearOne.activeCoinCompetition.contested[0]?.confirmationCount,
+          repeatedSameTick.activeCoinCompetition.contested[0]?.confirmationCount,
+          clearTwo.activeCoinCompetition.contested[0]?.confirmationCount,
+          released.profitCoins.length,
+          released.activeCoinCompetition.released[0]?.releaseReason,
+          disappeared.activeCoinCompetition.released[0]?.releaseReason,
+          stateful.coinCompetitionReleases.length
+        ].join('|');
+      })(),
+      want: '0|false|0|true|0|1|1|2|1|competitor-confirmed-clear|coin-disappeared|2'
+    },
+    {
+      name: 'browserless coin competition audits a stronger replacement for the same coin',
+      got: (() => {
+        const stateful = {};
+        const self = { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, max_hp: 100, current_join_mode: 'Active' };
+        const coin = { drop_id: 9611, amount: 1, x: 40000, y: 0 };
+        const first = { entity_id: 2, user_id: 28315, x: 30000, y: 0, vx: 50, vy: 0, hp: 100, current_join_mode: 'Active' };
+        const stronger = { entity_id: 3, user_id: 28316, x: 35000, y: 0, vx: 50, vy: 0, hp: 100, current_join_mode: 'Active' };
+        const build = (nowMs, competitors) => buildBrowserlessStrategyInput({
+          userId: 7,
+          realtime: { tick: nowMs, receivedAtMs: nowMs, frameAgeMs: 0, self, entities: [self, ...competitors], bullets: [], coinDrops: [coin] },
+          fallback: { tick: nowMs, receivedAtMs: nowMs, frameAgeMs: 0, self, entities: [], bullets: [], coinDrops: [], messages: [] },
+          frameAges: { latestFrameAgeMs: 0, realtimeAgeMs: 0 }
+        }, { nowMs }, stateful);
+        build(1000, [first]);
+        const replaced = build(2000, [first, stronger]);
+        return [
+          replaced.activeCoinCompetition.contested[0]?.competitorId,
+          replaced.activeCoinCompetition.released[0]?.releaseReason,
+          Object.keys(stateful.coinCompetitionState || {}).length,
+          stateful.coinCompetitionReleases.length
+        ].join('|');
+      })(),
+      want: '28316|competitor-replaced-by-stronger|1|1'
     },
     {
       name: 'browserless combat engagement records motion samples for aim confidence',
@@ -15131,7 +15377,14 @@ async function runSelfTest() {
       got: (async () => {
         let t = Date.UTC(2026, 6, 8, 1, 0, 0);
         let commandCount = 0;
+        let frameGapClearCount = 0;
         const snapshotSources = [];
+        const safetyController = createBrowserlessSafetyController({ now: () => t, frameGapAlertMs: 5000 });
+        const clearFrameGapSoftStop = safetyController.clearFrameGapSoftStop.bind(safetyController);
+        safetyController.clearFrameGapSoftStop = () => {
+          frameGapClearCount += 1;
+          clearFrameGapSoftStop();
+        };
         const posFrame = encodeGrzFrameForTest({
           type: 'pos',
           tick: 10,
@@ -15161,6 +15414,7 @@ async function runSelfTest() {
         }, {
           now: () => t,
           sleep: async ms => { t += ms; },
+          safetyController,
           persistedState: {
             loginPointSafety: { point: { x: 100, y: 200, hp: 90, source: 'test' } }
           },
@@ -15201,10 +15455,11 @@ async function runSelfTest() {
           result.state.realtime.self.name,
           result.state.fallback.coinDrops[0].amount,
           commandCount,
-          snapshotSources.join(',')
+          snapshotSources.join(','),
+          frameGapClearCount
         ].join('|');
       })(),
-      want: 'true|true|2|1|1|2|2|profit-candidate|true|self|2|0|prelogin-http,ws'
+      want: 'true|true|2|1|1|2|2|profit-candidate|true|self|2|0|prelogin-http,ws|1'
     },
     {
       name: 'browserless no-self grace starts at ws open after slow snapshot safety',
@@ -15982,6 +16237,98 @@ async function runSelfTest() {
         return checks.join('|');
       })(),
       want: 'unsafe-login-point|ws-error|ws-closed|frame-gap|no-self|safe|stale-self|stamina-exhausted|direct-leave-failed|safe'
+    },
+    {
+      name: 'browserless frame-gap uses quiet soft-stop but keeps combat and low-hp hard exits',
+      got: (() => {
+        let t = 1000;
+        const quietState = tick => ({
+          realtime: {
+            tick,
+            self: { user_id: 7, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 8000 },
+            entities: [{ user_id: 7, x: 0, y: 0, hp: 100, max_hp: 100 }],
+            bullets: []
+          },
+          frameAges: { latestFrameAgeMs: 0, realtimeAgeMs: 0 }
+        });
+        const quiet = createBrowserlessSafetyController({ now: () => t, frameGapAlertMs: 2000, frameGapHardDeadlineMs: 5000 });
+        quiet.evaluate(quietState(100), { nowMs: t, lastDecision: { action: { kind: 'seek-coin', band: 'profit', reason: 'test' } } });
+        t = 3100;
+        const soft = quiet.evaluate({ ...quietState(100), frameAges: { latestFrameAgeMs: 2100 } }, {
+          nowMs: t,
+          frameGapMs: 2100,
+          lastDecision: { action: { kind: 'seek-coin', band: 'profit', reason: 'test' } }
+        });
+        t = 3300;
+        const oldTick = quiet.evaluate({ ...quietState(100), frameAges: { latestFrameAgeMs: 2300 } }, {
+          nowMs: t,
+          frameGapMs: 2300,
+          lastDecision: { action: { kind: 'seek-coin', band: 'profit', reason: 'test' } }
+        });
+        t = 3500;
+        const recovered = quiet.evaluate(quietState(101), {
+          nowMs: t,
+          frameGapMs: 0,
+          lastDecision: { action: { kind: 'seek-coin', band: 'profit', reason: 'test' } }
+        });
+        const hardQuiet = createBrowserlessSafetyController({ now: () => t, frameGapAlertMs: 2000, frameGapHardDeadlineMs: 5000 });
+        hardQuiet.evaluate(quietState(200), { nowMs: 1000 });
+        hardQuiet.evaluate({ ...quietState(200), frameAges: { latestFrameAgeMs: 2100 } }, {
+          nowMs: 3100,
+          frameGapMs: 2100,
+          lastDecision: { action: { kind: 'wait', band: 'wait', reason: 'test' } }
+        });
+        const deadline = hardQuiet.evaluate({ ...quietState(200), frameAges: { latestFrameAgeMs: 5100 } }, {
+          nowMs: 6100,
+          frameGapMs: 5100,
+          lastDecision: { action: { kind: 'wait', band: 'wait', reason: 'test' } }
+        });
+        const combat = createBrowserlessSafetyController({ now: () => 3100, frameGapAlertMs: 2000 });
+        combat.evaluate(quietState(300), { nowMs: 1000 });
+        const combatHard = combat.evaluate({ ...quietState(300), frameAges: { latestFrameAgeMs: 2100 } }, {
+          nowMs: 3100,
+          frameGapMs: 2100,
+          lastDecision: { action: { kind: 'combat-live', band: 'combat', target: { userId: 8 } } }
+        });
+        const lowHpState = quietState(400);
+        lowHpState.realtime.self = { ...lowHpState.realtime.self, hp: 82 };
+        lowHpState.realtime.entities[0] = { ...lowHpState.realtime.entities[0], hp: 82 };
+        const lowHp = createBrowserlessSafetyController({ now: () => 3100, frameGapAlertMs: 2000 });
+        lowHp.evaluate(lowHpState, { nowMs: 1000 });
+        const lowHpHard = lowHp.evaluate({ ...lowHpState, frameAges: { latestFrameAgeMs: 2100 } }, {
+          nowMs: 3100,
+          frameGapMs: 2100,
+          lastDecision: { action: { kind: 'wait', band: 'wait', reason: 'test' } }
+        });
+        const reusable = createBrowserlessSafetyController({ now: () => t, frameGapAlertMs: 2000 });
+        reusable.evaluate(quietState(500), { nowMs: 1000 });
+        reusable.evaluate({ ...quietState(500), frameAges: { latestFrameAgeMs: 2100 } }, {
+          nowMs: 3100,
+          frameGapMs: 2100,
+          lastDecision: { action: { kind: 'wait', band: 'wait', reason: 'test' } }
+        });
+        reusable.clearFrameGapSoftStop();
+        const clearedCycle = reusable.evaluate(quietState(1), {
+          nowMs: 3200,
+          frameGapMs: 0,
+          lastDecision: { action: { kind: 'wait', band: 'wait', reason: 'test' } }
+        });
+        return [
+          soft.reason,
+          soft.softStop,
+          oldTick.reason,
+          recovered.reason,
+          recovered.recovered,
+          deadline.reason,
+          deadline.detail.softStop?.result,
+          combatHard.reason,
+          combatHard.detail.risk.combat,
+          lowHpHard.reason,
+          lowHpHard.detail.risk.lowHp,
+          clearedCycle.reason
+        ].join('|');
+      })(),
+      want: 'frame-gap-soft-stop|true|frame-gap-soft-stop|frame-gap-soft-recovered|true|frame-gap|hard-deadline|frame-gap|true|frame-gap|true|safe'
     },
     {
       name: 'browserless safety controller explicit stop persists until cleared',

@@ -311,16 +311,25 @@ function replayCombat(options) {
         p90Ticks: options.executionDelayTicks,
         madTicks: 0,
         source: 'july-14-confirmed-shoot-baseline'
-      }
+      },
+      actualShots: shotEvaluations.length
     });
     const baselineMiss = bulletCorridorMiss(rows, shot.ack);
     const improvedMiss = bulletCorridorMiss(rows, shot.ack, improved);
+    const routeCandidateMisses = Object.fromEntries((improved.routeCoverage?.candidates || []).map(candidate => [
+      candidate.hypothesis,
+      bulletCorridorMiss(rows, shot.ack, candidate)
+    ]));
     baselineMisses.push(baselineMiss);
     improvedMisses.push(improvedMiss);
     shotEvaluations.push({
       shot,
       baselineMiss,
       improvedMiss,
+      aimMode: improved.mode || '',
+      hypothesis: improved.motionProbe?.hypothesis || 'baseline',
+      routeStyle: improved.routeCoverage?.style || '',
+      routeCandidateMisses,
       expectedArrivalTick: expectedBulletArrivalTick(rows, shot.ack)
     });
     if (!baselineFirstHitAt && baselineMiss <= options.hitRadius) baselineFirstHitAt = shot.at;
@@ -337,6 +346,33 @@ function replayCombat(options) {
   });
   const baselineStats = stats(baselineMisses);
   const improvedStats = stats(improvedMisses);
+  const aimDiagnostics = {};
+  for (const item of shotEvaluations) {
+    const key = `${item.routeStyle || item.aimMode || 'unknown'}|${item.hypothesis || 'baseline'}`;
+    const cell = aimDiagnostics[key] || { shots: 0, estimatedHits: 0, missTotalCm: 0 };
+    cell.shots += 1;
+    cell.estimatedHits += item.improvedMiss <= options.hitRadius ? 1 : 0;
+    cell.missTotalCm += Number(item.improvedMiss || 0);
+    aimDiagnostics[key] = cell;
+  }
+  for (const cell of Object.values(aimDiagnostics)) {
+    cell.meanAimMissCm = cell.shots ? Number((cell.missTotalCm / cell.shots).toFixed(1)) : null;
+    delete cell.missTotalCm;
+  }
+  const routeCandidateOracle = {};
+  for (const item of shotEvaluations) {
+    for (const [hypothesis, miss] of Object.entries(item.routeCandidateMisses || {})) {
+      const cell = routeCandidateOracle[hypothesis] || { shots: 0, estimatedHits: 0, missTotalCm: 0 };
+      cell.shots += 1;
+      cell.estimatedHits += miss <= options.hitRadius ? 1 : 0;
+      cell.missTotalCm += Number(miss || 0);
+      routeCandidateOracle[hypothesis] = cell;
+    }
+  }
+  for (const cell of Object.values(routeCandidateOracle)) {
+    cell.meanAimMissCm = cell.shots ? Number((cell.missTotalCm / cell.shots).toFixed(1)) : null;
+    delete cell.missTotalCm;
+  }
   const damageEvents = combatDamageEvents(rows);
   const damageAttributions = attributeTargetDamageToShots(rows, shotEvaluations, damageEvents.target, {
     hitRadius: options.hitRadius
@@ -397,7 +433,9 @@ function replayCombat(options) {
       associatedShotCount: damageAttributions.length,
       associatedTargetDamage,
       samples: damageAttributions.slice(0, 12)
-    }
+    },
+    aimDiagnostics,
+    routeCandidateOracle
   };
   result.improved.accepted = rows.length > 0 && confirmedShots.length > 0
     && (improvedHits > baselineHits

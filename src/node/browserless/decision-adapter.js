@@ -1998,32 +1998,164 @@ function activeCoinCompetitionOptions(options = {}) {
   };
 }
 
-function partitionActiveCoinCompetition(self, coins = [], visibleTargets = [], options = {}) {
+function coinCompetitionStateMap(stateful = {}) {
+  if (!stateful || typeof stateful !== 'object') return {};
+  if (!stateful.coinCompetitionState || typeof stateful.coinCompetitionState !== 'object' || Array.isArray(stateful.coinCompetitionState)) {
+    stateful.coinCompetitionState = {};
+  }
+  if (!Array.isArray(stateful.coinCompetitionReleases)) stateful.coinCompetitionReleases = [];
+  return stateful.coinCompetitionState;
+}
+
+function coinCompetitionRelease(stateful, key, record, reason, nowMs, releases) {
+  if (stateful?.coinCompetitionState) delete stateful.coinCompetitionState[key];
+  const release = {
+    coinKey: record?.coinKey || '',
+    competitorId: record?.competitorId || '',
+    releaseReason: reason,
+    at: nowMs,
+    heldMs: Math.max(0, nowMs - Number(record?.contestedSinceAt || nowMs))
+  };
+  releases.push(release);
+  if (stateful && typeof stateful === 'object') {
+    stateful.coinCompetitionReleases = [
+      ...(Array.isArray(stateful.coinCompetitionReleases) ? stateful.coinCompetitionReleases : []),
+      release
+    ].slice(-20);
+  }
+}
+
+function partitionActiveCoinCompetition(self, coins = [], visibleTargets = [], options = {}, stateful = {}) {
   const activeCompetitors = (visibleTargets || []).filter(target => target?.active === true && target.alive !== false);
-  if (options.activeCoinCompetitionEnabled === false || !self || !activeCompetitors.length) {
-    return { available: coins || [], panel: coins || [], activeCompetitorCount: activeCompetitors.length, contested: [] };
+  if (options.activeCoinCompetitionEnabled === false || !self) {
+    return { available: coins || [], panel: coins || [], activeCompetitorCount: activeCompetitors.length, contested: [], released: [] };
+  }
+  const nowMs = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
+  const currentTick = numberOrNull(options.currentTick ?? options.realtimeTick);
+  const holdTtlMs = Math.max(1000, Number(options.activeCoinCompetitionHoldTtlMs ?? 4000));
+  const clearConfirmations = Math.max(2, Math.round(Number(options.activeCoinCompetitionClearConfirmations ?? 3)));
+  const clearConfirmMs = Math.max(1000, Number(options.activeCoinCompetitionClearConfirmMs ?? 2000));
+  const state = coinCompetitionStateMap(stateful);
+  const releases = [];
+  const liveCoinKeys = new Set((coins || []).map(coin => coinDecisionKey(coin)).filter(Boolean));
+  const visibleById = new Map((visibleTargets || []).map(target => [String(target?.user_id ?? target?.userId ?? target?.entity_id ?? target?.entityId ?? target?.id ?? ''), target]));
+  for (const [key, record] of Object.entries(state)) {
+    if (!liveCoinKeys.has(String(record?.coinKey || ''))) {
+      coinCompetitionRelease(stateful, key, record, 'coin-disappeared', nowMs, releases);
+    }
   }
   const available = [];
   const panel = [];
   const contested = [];
   const competitionOptions = activeCoinCompetitionOptions(options);
   for (const coin of coins || []) {
+    const coinKey = coinDecisionKey(coin);
     const competition = activeCoinCompetitionCore(self, coin, activeCompetitors, competitionOptions);
-    if (!competition) {
-      available.push(coin);
-      panel.push(coin);
+    if (competition) {
+      const pairKey = `${coinKey}|${competition.competitorId}`;
+      for (const [existingKey, existingRecord] of Object.entries(state)) {
+        if (existingKey === pairKey || String(existingRecord?.coinKey || '') !== coinKey) continue;
+        coinCompetitionRelease(stateful, existingKey, existingRecord, 'competitor-replaced-by-stronger', nowMs, releases);
+      }
+      const previous = state[pairKey] || null;
+      const record = {
+        ...competition,
+        coinKey,
+        competitorId: String(competition.competitorId || ''),
+        contestedSinceAt: Number(previous?.contestedSinceAt || nowMs),
+        lastStrongEvidenceAt: nowMs,
+        lastSeenAt: nowMs,
+        clearSinceAt: 0,
+        confirmationCount: 0,
+        lastConfirmationTick: currentTick,
+        expiresAt: nowMs + holdTtlMs,
+        releaseReason: ''
+      };
+      state[pairKey] = record;
+      const summary = {
+        ...competition,
+        coinKey,
+        authority: String(coin?.authority || ''),
+        snapshotOnly: Boolean(coin?.snapshotOnly),
+        contestHeld: false,
+        confirmationCount: 0,
+        clearSinceAt: 0,
+        lastConfirmationTick: currentTick,
+        expiresAt: record.expiresAt,
+        releaseReason: ''
+      };
+      contested.push(summary);
+      panel.push({ ...coin, activeCoinCompetition: summary });
       continue;
     }
-    const summary = {
-      ...competition,
-      coinKey: coinDecisionKey(coin),
-      authority: String(coin?.authority || ''),
-      snapshotOnly: Boolean(coin?.snapshotOnly)
-    };
-    contested.push(summary);
-    panel.push({ ...coin, activeCoinCompetition: summary });
+    let held = null;
+    for (const [pairKey, record] of Object.entries(state)) {
+      if (String(record?.coinKey || '') !== coinKey) continue;
+      const competitor = visibleById.get(String(record.competitorId || '')) || null;
+      if (competitor?.alive === false) {
+        coinCompetitionRelease(stateful, pairKey, record, 'competitor-dead-or-left', nowMs, releases);
+        continue;
+      }
+      const selfDistance = distanceBetween(self, coin);
+      const competitorDistance = competitor ? distanceBetween(competitor, coin) : Infinity;
+      if (competitor && Number.isFinite(selfDistance) && Number.isFinite(competitorDistance)
+        && selfDistance + Number(competitionOptions.minLeadDistanceCm || 0) <= competitorDistance) {
+        coinCompetitionRelease(stateful, pairKey, record, 'self-overtook-competitor', nowMs, releases);
+        continue;
+      }
+      if (!competitor) {
+        if (nowMs > Number(record.expiresAt || 0)) {
+          coinCompetitionRelease(stateful, pairKey, record, 'competitor-missing-ttl-expired', nowMs, releases);
+          continue;
+        }
+        held = {
+          ...record,
+          contestHeld: true,
+          releaseReason: '',
+          authority: String(coin?.authority || ''),
+          snapshotOnly: Boolean(coin?.snapshotOnly)
+        };
+        break;
+      }
+      const lastConfirmationTick = numberOrNull(record.lastConfirmationTick);
+      const freshConfirmation = currentTick !== null
+        && (lastConfirmationTick === null || currentTick > lastConfirmationTick);
+      const clearSinceAt = freshConfirmation
+        ? Number(record.clearSinceAt || nowMs)
+        : Number(record.clearSinceAt || 0);
+      const confirmationCount = Math.max(0, Number(record.confirmationCount || 0)) + (freshConfirmation ? 1 : 0);
+      const updated = {
+        ...record,
+        lastSeenAt: nowMs,
+        clearSinceAt,
+        confirmationCount,
+        lastConfirmationTick: freshConfirmation ? currentTick : lastConfirmationTick,
+        expiresAt: nowMs + holdTtlMs
+      };
+      state[pairKey] = updated;
+      if (freshConfirmation
+        && (confirmationCount >= clearConfirmations || (clearSinceAt > 0 && nowMs - clearSinceAt >= clearConfirmMs))) {
+        coinCompetitionRelease(stateful, pairKey, updated, 'competitor-confirmed-clear', nowMs, releases);
+        continue;
+      }
+      held = {
+        ...updated,
+        contestHeld: true,
+        releaseReason: '',
+        authority: String(coin?.authority || ''),
+        snapshotOnly: Boolean(coin?.snapshotOnly)
+      };
+      break;
+    }
+    if (held) {
+      contested.push(held);
+      panel.push({ ...coin, activeCoinCompetition: held });
+    } else {
+      available.push(coin);
+      panel.push(coin);
+    }
   }
-  return { available, panel, activeCompetitorCount: activeCompetitors.length, contested };
+  return { available, panel, activeCompetitorCount: activeCompetitors.length, contested, released: releases };
 }
 
 function invulnerableRemainingMs(target, options = {}) {
@@ -2324,7 +2456,11 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
   const profitCoinSource = realtimeCoins.length
     ? 'realtime'
     : (selfKilledPlayerDropCoins.length ? 'snapshot-player-drop' : (snapshotFallbackAllowed ? 'snapshot-fallback' : 'none'));
-  const activeCoinCompetition = partitionActiveCoinCompetition(self, rawProfitCoins, visibleTargets, options);
+  const activeCoinCompetition = partitionActiveCoinCompetition(self, rawProfitCoins, visibleTargets, {
+    ...options,
+    nowMs,
+    currentTick: realtime.tick
+  }, stateful);
   const profitCoins = activeCoinCompetition.available;
   const panelProfitCoins = activeCoinCompetition.panel;
   if (activeCoinCompetition.contested.length) dataGaps.push('active-player-coin-competition');
@@ -2378,7 +2514,8 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
       enabled: options.activeCoinCompetitionEnabled !== false,
       activeCompetitorCount: activeCoinCompetition.activeCompetitorCount,
       contestedCoinCount: activeCoinCompetition.contested.length,
-      contested: activeCoinCompetition.contested.slice(0, 8)
+      contested: activeCoinCompetition.contested.slice(0, 8),
+      released: activeCoinCompetition.released.slice(0, 8)
     },
     bullets: Array.isArray(realtime.bullets) ? realtime.bullets : [],
     dataGaps
@@ -2421,9 +2558,19 @@ function buildBrowserlessCombatStrategyInput(state, options = {}, stateful = {})
   if (rawSelfUserId !== null) metadataUserIds.add(String(rawSelfUserId));
   const snapshotEntitiesByUserId = new Map();
   if (snapshotFreshForMetadata) {
-    for (const entity of Array.isArray(fallback.entities) ? fallback.entities : []) {
-      const userId = numberOrNull(entity?.user_id ?? entity?.userId);
-      if (userId !== null && metadataUserIds.has(String(userId))) snapshotEntitiesByUserId.set(userId, entity);
+    const indexed = fallback.entitiesByUserId && typeof fallback.entitiesByUserId === 'object'
+      ? fallback.entitiesByUserId
+      : null;
+    if (indexed) {
+      for (const userId of metadataUserIds) {
+        const entity = indexed[String(userId)];
+        if (entity) snapshotEntitiesByUserId.set(Number(userId), entity);
+      }
+    } else {
+      for (const entity of Array.isArray(fallback.entities) ? fallback.entities : []) {
+        const userId = numberOrNull(entity?.user_id ?? entity?.userId);
+        if (userId !== null && metadataUserIds.has(String(userId))) snapshotEntitiesByUserId.set(userId, entity);
+      }
     }
   }
   const snapshotSelf = rawSelfUserId !== null ? snapshotEntitiesByUserId.get(rawSelfUserId) : null;
@@ -5035,7 +5182,17 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
   if (action) reconcileEasyKillCombatOutcome(output, input, options);
   stageTimings.output = performance.now() - stageStarted;
   if (typeof options.onRealtimeStageTimings === 'function') {
-    options.onRealtimeStageTimings(stageTimings);
+    const behavior = combat?.dryRun?.behavior || null;
+    options.onRealtimeStageTimings(stageTimings, {
+      rawEntityCount: Array.isArray(state?.realtime?.entities) ? state.realtime.entities.length : 0,
+      visibleTargetCount: input.visibleTargets.length,
+      activeThreatCount: input.activeThreats.length,
+      bulletCount: input.bullets.length,
+      combatCandidateCount: combat?.candidates?.length || 0,
+      behaviorSampleCount: behavior?.metrics?.sampleCount || 0,
+      routeCandidateCount: combat?.dryRun?.aim?.routeCoverage?.candidates?.length || 0,
+      learningCellCount: Object.keys(stateful?.combatLearning?.hitRateByModeDistance || {}).length
+    });
   }
   return output;
 }
@@ -5473,6 +5630,129 @@ function profitPursuitDamageProgress(combatDecision, stateful = {}) {
   };
 }
 
+function rewardPerTenStamina(reward, staminaCost) {
+  const value = Number(reward);
+  const cost = Number(staminaCost);
+  if (!(value >= 0) || !(cost > 0)) return null;
+  return value * 10000 / cost;
+}
+
+function evaluateProactiveCombatMarginalRoi(input, combatDecision, opportunity = {}, stateful = {}, thresholdContext = {}, options = {}) {
+  const target = combatDecision?.target || combatDecision?.dryRun?.target || null;
+  if (!target || !combatDecisionIsOrdinaryProfitPursuit(combatDecision, input, stateful)) return null;
+  if (!stateful.proactiveCombatMarginalRoiState || typeof stateful.proactiveCombatMarginalRoiState !== 'object') {
+    stateful.proactiveCombatMarginalRoiState = {};
+  }
+  const nowMs = Number.isFinite(Number(input?.nowMs)) ? Number(input.nowMs) : Date.now();
+  const targetId = targetIdentity(target);
+  if (!targetId) return null;
+  const engagedMs = profitPursuitEngagedMs(combatDecision, stateful, nowMs);
+  const metrics = stateful.combatMetrics || {};
+  const metricsMatch = String(metrics.targetId ?? '') === targetId;
+  const acceptedShots = metricsMatch ? Math.max(0, Number(metrics.acceptedShots || 0)) : 0;
+  const confirmedHits = metricsMatch ? Math.max(0, Number(metrics.confirmedHits || 0)) : 0;
+  const behaviorHitRate = numberOrNull(combatDecision?.dryRun?.behavior?.recentHitRate);
+  const observedHitRate = acceptedShots > 0 ? confirmedHits / acceptedShots : null;
+  const acceptedHitRateEWMA = Math.max(0.03, Math.min(0.95,
+    observedHitRate === null
+      ? (behaviorHitRate ?? 0.18)
+      : ((confirmedHits + Math.max(1, Number(behaviorHitRate ?? 0.18) * 6)) / (acceptedShots + 6))
+  ));
+  const targetHp = numberOrNull(target.hp ?? stateful.combatTarget?.hp);
+  const selfHp = numberOrNull(input?.self?.hp);
+  const remainingAcceptedShots = targetHp === null
+    ? null
+    : Math.ceil(Math.ceil(Math.max(0, targetHp) / 3) / acceptedHitRateEWMA);
+  const distance = Number(target.distance ?? stateful.combatTarget?.distance);
+  const approachStamina = Number.isFinite(distance)
+    ? Math.max(0, distance - 7500) * Math.max(0, Number(options.movementCostMsPerCm ?? 1))
+    : 0;
+  const preDodgeStamina = ['burst', 'sustained', 'preparing'].includes(String(
+    combatDecision?.dryRun?.behavior?.dimensions?.shootingPhase?.state || ''
+  )) ? Math.max(0, Number(options.combatShootDodgeReserveMs || 1800)) : 0;
+  const shootingStamina = remainingAcceptedShots === null
+    ? Infinity
+    : remainingAcceptedShots * Math.max(1, Number(options.combatShotStaminaCostMs ?? 500));
+  const switchCost = Math.max(0, Number(options.opportunitySwitchCostStaminaMs ?? 500));
+  const completion = activeTargetCompletionEstimate(target, {
+    ...options,
+    recentCombatMetrics: metrics,
+    behaviorHitRate: acceptedHitRateEWMA,
+    combatTargetState: stateful.combatTarget,
+    opponentBehaviorState: stateful.combatTarget?.opponentBehaviorState || null,
+    exchangeStopLoss: combatDecision?.dryRun?.exchangeStopLoss || null
+  });
+  const completionProbability = Math.max(0.03, Math.min(0.95, Number(completion.probability || 0)));
+  const escapeHazard = Math.max(0, Math.min(0.97, 1 - completionProbability));
+  const expectedRemainingReward = entityDropValue(target) * completionProbability * 0.9;
+  const expectedRemainingStamina = shootingStamina + approachStamina + preDodgeStamina + switchCost;
+  const marginalNetROI = rewardPerTenStamina(expectedRemainingReward, expectedRemainingStamina);
+  const isCurrentTargetChoice = choice => String(choice?.type || '') === 'enemy'
+    && opportunityChoiceTargetId(choice) === targetId;
+  const rawAlternative = opportunity.rawChoice || null;
+  const stableAlternative = opportunity.choice || null;
+  const alternative = rawAlternative && !isCurrentTargetChoice(rawAlternative)
+    ? rawAlternative
+    : (stableAlternative && !isCurrentTargetChoice(stableAlternative) ? stableAlternative : null);
+  const alternativeReward = numberOrNull(alternative?.reward ?? alternative?.expectedReward ?? alternative?.amount);
+  const alternativeStamina = numberOrNull(alternative?.staminaCost ?? alternative?.estimatedStaminaCost);
+  const bestAlternativeNetROI = alternativeReward === null || alternativeStamina === null
+    ? null
+    : rewardPerTenStamina(alternativeReward, alternativeStamina);
+  const threshold = thresholdContext?.active
+    ? Math.max(0, Number(thresholdContext?.threshold?.coinsPer10Stamina ?? 0))
+    : 0;
+  const requiredRoi = Math.max(threshold, Number(bestAlternativeNetROI || 0) * 0.85);
+  const ready = engagedMs >= Math.max(8000, Number(options.proactiveCombatMarginalRoiMinEngageMs ?? 8000))
+    && acceptedShots >= Math.max(10, Number(options.proactiveCombatMarginalRoiMinAcceptedShots ?? 10))
+    && marginalNetROI !== null;
+  const damageProgress = profitPursuitDamageProgress(combatDecision, stateful);
+  const recentDamage = nowMs - Number(stateful.combatTarget?.lastDamageAt || 0) <= 3000
+    ? Math.max(0, Number(stateful.combatTarget?.lastDamageAmount || 0))
+    : 0;
+  const lowHpFinishProtected = targetHp !== null && selfHp !== null
+    && targetHp <= 20
+    && selfHp >= targetHp + 10
+    && (recentDamage > 0 || Number(damageProgress.damageFromStart || 0) > 0);
+  const disadvantaged = Boolean(ready && !lowHpFinishProtected && marginalNetROI < requiredRoi);
+  const previous = stateful.proactiveCombatMarginalRoiState[targetId] || null;
+  const disadvantageSinceAt = disadvantaged
+    ? Number(previous?.disadvantageSinceAt || nowMs)
+    : 0;
+  const confirmMs = Math.max(2000, Number(options.proactiveCombatMarginalRoiConfirmMs ?? 2500));
+  const triggered = Boolean(disadvantaged && nowMs - disadvantageSinceAt >= confirmMs);
+  const result = {
+    ready,
+    active: disadvantaged,
+    triggered,
+    disengage: triggered,
+    reason: triggered ? 'proactive-combat-marginal-roi-stop-loss' : (disadvantaged ? 'proactive-combat-marginal-roi-disadvantage' : 'proactive-combat-marginal-roi-acceptable'),
+    acceptedHitRateEWMA,
+    completionProbability,
+    escapeHazard,
+    remainingAcceptedShots,
+    expectedRemainingReward,
+    expectedRemainingStamina: Number.isFinite(expectedRemainingStamina) ? Math.round(expectedRemainingStamina) : null,
+    marginalNetROI,
+    bestAlternativeNetROI,
+    bestAlternativeType: String(alternative?.type || ''),
+    bestAlternativeTargetId: opportunityChoiceTargetId(alternative),
+    thresholdActive: Boolean(thresholdContext?.active),
+    thresholdRoi: threshold,
+    requiredRoi,
+    disadvantageSinceAt,
+    confirmMs,
+    engagedMs,
+    acceptedShots,
+    lowHpFinishProtected
+  };
+  stateful.proactiveCombatMarginalRoiState[targetId] = {
+    ...result,
+    updatedAt: nowMs
+  };
+  return result;
+}
+
 function buildProfitPursuitSuppression(input, combatDecision, stateful = {}, options = {}) {
   const target = combatDecision?.target || combatDecision?.dryRun?.target || null;
   if (!target || !combatDecisionIsOrdinaryProfitPursuit(combatDecision, input, stateful)) return null;
@@ -5511,6 +5791,22 @@ function buildProfitPursuitSuppression(input, combatDecision, stateful = {}, opt
       until: nowMs + suppressMs,
       suppressMs: Math.round(suppressMs),
       exchangeStopLoss: cloneJson(exchangeStopLoss)
+    };
+    suppressions[targetId] = suppression;
+    clearSuppressedCombatTarget(stateful, targetId);
+    return suppression;
+  }
+
+  const marginalRoiStopLoss = combatDecision?.dryRun?.marginalRoiStopLoss || null;
+  if (marginalRoiStopLoss?.disengage) {
+    const suppressMs = Math.max(30000, Number(options.proactiveCombatMarginalRoiSuppressMs || 120000));
+    const suppression = {
+      reason: marginalRoiStopLoss.reason || 'proactive-combat-marginal-roi-stop-loss',
+      targetId,
+      at: nowMs,
+      until: nowMs + suppressMs,
+      suppressMs: Math.round(suppressMs),
+      marginalRoiStopLoss: cloneJson(marginalRoiStopLoss)
     };
     suppressions[targetId] = suppression;
     clearSuppressedCombatTarget(stateful, targetId);
@@ -5866,6 +6162,15 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     ...options,
     easyKillPreferredTargetId
   });
+  const marginalRoiStopLoss = evaluateProactiveCombatMarginalRoi(
+    input,
+    combat,
+    opportunity,
+    stateful,
+    profitThresholdContext,
+    options
+  );
+  if (combat?.dryRun && marginalRoiStopLoss) combat.dryRun.marginalRoiStopLoss = marginalRoiStopLoss;
   let dangerousCombatExit = rememberDangerousCombatExitTarget(input, combat, stateful, options);
   const combatPursuitSuppression = buildProfitPursuitSuppression(input, combat, stateful, options);
   let combatActionEligible = isCombatActionEligibleForDecision(combat, options) && !combatPursuitSuppression;
@@ -6447,7 +6752,9 @@ function createBrowserlessDecisionAdapter(options = {}) {
       });
       decisionState.opportunityChoice = decision.stateful?.opportunityChoice ?? null;
       decisionState.opportunitySwitchLock = decision.stateful?.switchLock || null;
-      decision.stateful.decisionState = summarizeBrowserlessDecisionState(decisionState);
+      if (nextOptions.includeDecisionStateSummary !== false) {
+        decision.stateful.decisionState = summarizeBrowserlessDecisionState(decisionState);
+      }
       return decision;
     },
     evaluateCombat(state, nextOptions = {}) {
@@ -6563,6 +6870,7 @@ module.exports = {
   createBrowserlessDecisionAdapter,
   decisionStatePatch,
   distanceBetween,
+  evaluateProactiveCombatMarginalRoi,
   lowHpRecoveryThreatRadiusForHp,
   opportunityEnemyStaminaCost,
   normalizeCoinForDecision,
