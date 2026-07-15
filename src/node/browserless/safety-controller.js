@@ -147,7 +147,18 @@ function actionSettlementStallAssessment(state = {}, context = {}, options = {})
     && Boolean(target)
     && (kind === 'flee' || kind === 'safety-exit' || action.urgent === true);
   const injuryPressure = Boolean(action.injury || decision?.injury || action.threatEvidence?.recentDamage);
-  const hostilePressure = Boolean(combatAction || safetyMotion || injuryPressure || targetOwnedBulletCount > 0);
+  const targetFiring = Boolean(target?.firing || target?.shooting || target?.is_firing);
+  const easyKillThreatExempt = Boolean(target?.easyKillThreatExempt);
+  const easyKillProfitTarget = Boolean(target?.easyKillProfitTarget);
+  const exemptProfitCombat = Boolean(combatAction && easyKillThreatExempt && easyKillProfitTarget);
+  const directThreatPressure = Boolean(
+    safetyMotion
+      || injuryPressure
+      || targetFiring
+      || targetOwnedBulletCount > 0
+  );
+  const combatPressure = Boolean(combatAction && (!exemptProfitCombat || directThreatPressure));
+  const hostilePressure = Boolean(combatPressure || directThreatPressure);
   const adapterThresholdMs = Math.max(1000, Number(movement?.stallMs || 5000));
   const configuredCombatThresholdMs = numberOrNull(
     context.combatMovementSettlementStallMs ?? options.combatMovementSettlementStallMs
@@ -171,10 +182,18 @@ function actionSettlementStallAssessment(state = {}, context = {}, options = {})
     adapterStalled,
     combatStalled,
     hostilePressure,
+    combatAction,
+    combatPressure,
+    easyKillThreatExempt,
+    easyKillProfitTarget,
+    exemptProfitCombat,
+    targetFiring,
+    suppressedEarlyCombatExit: Boolean(exemptProfitCombat && !directThreatPressure),
     pressureSources: [
-      combatAction ? 'combat-action' : '',
+      combatPressure ? 'combat-action' : '',
       safetyMotion ? 'safety-motion' : '',
       injuryPressure ? 'recent-injury' : '',
+      targetFiring ? 'target-firing' : '',
       targetOwnedBulletCount > 0 ? 'target-owned-bullet' : ''
     ].filter(Boolean),
     decisionKind: kind,

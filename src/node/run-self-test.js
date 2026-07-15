@@ -84,6 +84,7 @@ const {
   recordCombatShotLearning
 } = require('./browserless/combat-adapter');
 const {
+  actionSettlementStallAssessment,
   createBrowserlessSafetyController,
   evaluateBrowserlessSafety,
   executeSafetyExit
@@ -13606,6 +13607,104 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'combat-action-settlement-stalled|true|exit|false|true|2500|combat-action|action-settlement-stalled|false|transport-recovery|5000'
+    },
+    {
+      name: 'browserless trusted easy-kill stall uses ordinary recovery until direct threat evidence appears',
+      got: (() => {
+        const quietState = {
+          realtime: {
+            self: { user_id: 7, hp: 100, stamina_5s_remaining_milli: 6000 },
+            bullets: []
+          },
+          frameAges: {}
+        };
+        const movement = {
+          active: true,
+          stalled: false,
+          stallMs: 5000,
+          noProgressMs: 2576,
+          observedFrames: 12,
+          lastProgressAtMs: 1000
+        };
+        const quietDecision = {
+          kind: 'combat-live',
+          band: 'combat',
+          target: {
+            userId: 8,
+            name: 'trusted-profit-target',
+            easyKillThreatExempt: true,
+            easyKillProfitTarget: true,
+            firing: false
+          }
+        };
+        const quietAssessment = actionSettlementStallAssessment(quietState, {
+          actionSettlementStall: movement,
+          lastDecision: quietDecision
+        });
+        const quietEarly = evaluateBrowserlessSafety(quietState, {
+          actionSettlementStall: movement,
+          lastDecision: quietDecision,
+          nowMs: 3576
+        });
+        const quietFull = evaluateBrowserlessSafety(quietState, {
+          actionSettlementStall: { ...movement, stalled: true, noProgressMs: 5000 },
+          lastDecision: quietDecision,
+          nowMs: 6000
+        });
+        const firing = evaluateBrowserlessSafety(quietState, {
+          actionSettlementStall: movement,
+          lastDecision: {
+            ...quietDecision,
+            target: { ...quietDecision.target, firing: true }
+          },
+          nowMs: 3576
+        });
+        const incoming = evaluateBrowserlessSafety({
+          ...quietState,
+          realtime: {
+            ...quietState.realtime,
+            bullets: [{ owner_user_id: 8 }]
+          }
+        }, {
+          actionSettlementStall: movement,
+          lastDecision: quietDecision,
+          nowMs: 3576
+        });
+        const injured = evaluateBrowserlessSafety(quietState, {
+          actionSettlementStall: movement,
+          lastDecision: { ...quietDecision, injury: { active: true } },
+          nowMs: 3576
+        });
+        const exemptButNotProfit = evaluateBrowserlessSafety(quietState, {
+          actionSettlementStall: movement,
+          lastDecision: {
+            ...quietDecision,
+            target: { ...quietDecision.target, easyKillProfitTarget: false }
+          },
+          nowMs: 3576
+        });
+        return [
+          quietAssessment.hostilePressure,
+          quietAssessment.suppressedEarlyCombatExit,
+          quietAssessment.thresholdMs,
+          quietEarly.reason,
+          quietEarly.ok,
+          quietFull.reason,
+          quietFull.shouldLeave,
+          quietFull.classification,
+          quietFull.detail.movementSafety.suppressedEarlyCombatExit,
+          firing.reason,
+          firing.detail.movementSafety.pressureSources.join(','),
+          incoming.reason,
+          incoming.detail.movementSafety.targetOwnedBulletCount,
+          incoming.detail.movementSafety.pressureSources.join(','),
+          injured.reason,
+          injured.detail.movementSafety.pressureSources.join(','),
+          exemptButNotProfit.reason,
+          exemptButNotProfit.detail.movementSafety.pressureSources.join(',')
+        ].join('|');
+      })(),
+      want: 'false|true|5000|safe|true|action-settlement-stalled|false|transport-recovery|true|combat-action-settlement-stalled|combat-action,target-firing|combat-action-settlement-stalled|1|combat-action,target-owned-bullet|combat-action-settlement-stalled|combat-action,recent-injury|combat-action-settlement-stalled|combat-action'
     },
     {
       name: 'browserless movement-stall replay proves earlier verified exit before observed hp collapse',
