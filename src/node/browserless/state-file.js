@@ -698,7 +698,8 @@ function compactBrowserlessStats(normalized, game, action, options = {}, lastKno
   const stats = normalizeBrowserlessStats(normalized?.stats);
   ensureBrowserlessStatsDay(stats, nowMs);
   const session = stats.currentSession || {};
-  const online = Boolean(game?.inGame && session.online);
+  const online = Boolean(session.online);
+  const realtimeOnline = Boolean(game?.inGame && online);
   const enteredMs = parseTimeMs(session.enteredAt);
   const lastSeenMs = parseTimeMs(session.lastSeenAt);
   const exitedMs = parseTimeMs(session.exitedAt);
@@ -718,6 +719,7 @@ function compactBrowserlessStats(normalized, game, action, options = {}, lastKno
   return {
     currentSession: {
       online,
+      realtimeOnline,
       enteredAt: session.enteredAt || '',
       durationMs: enteredMs ? Math.max(0, Math.round(durationEndMs - enteredMs)) : 0,
       staminaSpentMs: compactNumber(session.staminaSpentMs),

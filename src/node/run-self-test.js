@@ -128,6 +128,7 @@ const {
 const {
   BROWSERLESS_WEB_PANEL_VERSION,
   groupChatMessagesForDisplay,
+  panelSessionFlagsCore,
   renderBrowserlessWebPanel
 } = require('./browserless/web-panel');
 const {
@@ -19234,6 +19235,7 @@ async function runSelfTest() {
         return [
           compactOnline.game.inGame,
           compactOnline.stats.currentSession.online,
+          compactOnline.stats.currentSession.realtimeOnline,
           compactOnline.stats.currentSession.enteredAt,
           compactOnline.stats.currentSession.coinsGained,
           compactOnline.stats.currentSession.staminaSpentMs,
@@ -19243,6 +19245,7 @@ async function runSelfTest() {
           compactOnline.stats.today.kills,
           compactOffline.game.inGame,
           compactOffline.stats.currentSession.online,
+          compactOffline.stats.currentSession.realtimeOnline,
           compactOffline.stats.offline.lastExitReason,
           compactOffline.stats.offline.nextReconnectAt,
           compactOffline.stats.offline.reconnectRemainingMs,
@@ -19257,7 +19260,66 @@ async function runSelfTest() {
           compactWaitingAgain.stats.offline.reconnectRemainingMs
         ].join('|');
       }),
-      want: 'true|true|2026-07-10T00:00:00.000Z|8|1500|1|8|1500|1|false|false|cycle-complete|2026-07-10T00:03:00.000Z|30000|120000|120000|8|1500|1|2026-07-10T00:02:00.000Z|cycle-complete|2026-07-10T00:04:00.000Z|75000'
+      want: 'true|true|true|2026-07-10T00:00:00.000Z|8|1500|1|8|1500|1|false|false|false|cycle-complete|2026-07-10T00:03:00.000Z|30000|120000|120000|8|1500|1|2026-07-10T00:02:00.000Z|cycle-complete|2026-07-10T00:04:00.000Z|75000'
+    },
+    {
+      name: 'browserless compact status preserves active session during transport recovery',
+      got: (() => {
+        const compact = buildCompactBrowserlessStatus({
+          runner: {
+            running: true,
+            mode: 'profit-live',
+            currentAction: {
+              kind: 'loop-wait',
+              reason: 'action-settlement-stalled',
+              nextRunAt: '2026-07-15T04:08:09.235Z'
+            }
+          },
+          stats: {
+            currentSession: {
+              online: true,
+              sessionId: 'session-live',
+              enteredAt: '2026-07-15T04:01:47.540Z',
+              lastSeenAt: '2026-07-15T04:08:08.034Z',
+              staminaSpentMs: 1200,
+              coinsGained: 3,
+              kills: 1
+            },
+            lastExit: {
+              at: '2026-07-15T04:00:03.655Z',
+              reason: 'combat-low-hp-disadvantage-leave',
+              runId: 'profit-live-old-exit',
+              nextRunAt: '2026-07-15T04:01:43.818Z',
+              reconnectDelayMs: 100000
+            }
+          },
+          lastKnown: {
+            self: { userId: 7, name: 'self', x: 5999, y: 66268, hp: 100 }
+          },
+          loginPointSafety: {
+            ok: true,
+            reason: 'self-present-reentry',
+            checkedAt: '2026-07-15T04:08:10.357Z',
+            point: { x: 5999, y: 66268, hp: 100 },
+            detail: { selfPresent: true, reason: 'self-present-reentry' }
+          }
+        }, {
+          ...parseBrowserlessRunnerArgs([], {}),
+          nowMs: Date.parse('2026-07-15T04:08:10.357Z')
+        });
+        return [
+          compact.game.inGame,
+          compact.stats.currentSession.online,
+          compact.stats.currentSession.realtimeOnline,
+          panelSessionFlagsCore(compact).online,
+          panelSessionFlagsCore(compact).realtimeOnline,
+          compact.action.reason,
+          compact.loginPointSafety.reason,
+          compact.stats.offline.lastExitReason,
+          compact.stats.offline.nextReconnectAt
+        ].join('|');
+      })(),
+      want: 'false|true|false|true|false|action-settlement-stalled|self-present-reentry|combat-low-hp-disadvantage-leave|2026-07-15T04:08:09.235Z'
     },
     {
       name: 'browserless stats ignore transient unknown self drop during stale snapshot gap',
@@ -20262,8 +20324,13 @@ async function runSelfTest() {
           /function updateBattlePanel/.test(panelScript),
           /function updateBattleDuration/.test(panelScript),
           panelScript.includes("durationNode.dataset.battleStartedAt = battle.startedAt || ''"),
+          panelScript.includes('const panelSessionFlags = '),
+          panelScript.includes('const { online, realtimeOnline } = panelSessionFlags(status);'),
           panelScript.includes("online ? '原因' : '上次退出原因'"),
           panelScript.includes('offlineStats.lastExitReason || status.recentExit?.reason || currentReason'),
+          panelScript.includes('const battle = !online ? recentBattle(status) : null;'),
+          panelScript.includes('if ((realtimeOnline || !online) && isCombatStatus(status, kind, reason))'),
+          panelScript.includes('if (!realtimeOnline && isSafetyStatus(status, kind, reason))'),
           panelScript.includes("'combat-trade-disadvantage-leave': '战斗交换持续不利，预计继续交战风险过高，主动退出'"),
           panelScript.includes("'combat-pressure-disadvantage-leave': '遭到持续火力压制，我方血量处于劣势，主动退出'"),
           panelScript.includes("'dynamic-profit-threshold-wait': '当日时间充裕，动态收益门槛生效，等待更高收益目标'"),
@@ -20278,7 +20345,7 @@ async function runSelfTest() {
           panelText.indexOf('id="battlePanel"') < panelText.indexOf('class="stats-grid"')
         ].join('|');
       })(),
-      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
+      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless compact exit preserves trigger hp evidence',

@@ -1,8 +1,16 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.15.6';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.15.7';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
+
+function panelSessionFlagsCore(status = {}) {
+  const online = Boolean(status?.stats?.currentSession?.online);
+  return {
+    online,
+    realtimeOnline: Boolean(status?.game?.inGame && online)
+  };
+}
 
 function groupChatMessagesForDisplay(messages = [], collapseOtherKills = true) {
   const source = Array.isArray(messages) ? messages : [];
@@ -301,6 +309,7 @@ function renderBrowserlessWebPanel() {
     let chatKillsCollapsed = readChatKillsCollapsed();
 
     const groupChatMessagesForDisplay = ${groupChatMessagesForDisplay.toString()};
+    const panelSessionFlags = ${panelSessionFlagsCore.toString()};
 
     const value = v => v === null || v === undefined || v === '' ? '--' : String(v);
     const number = v => v === null || v === undefined || v === '' ? null : (Number.isFinite(Number(v)) ? Number(v) : null);
@@ -1506,7 +1515,7 @@ function renderBrowserlessWebPanel() {
       const target = activeTarget(status);
       const currentSession = status.stats?.currentSession || {};
       const offlineStats = status.stats?.offline || {};
-      const online = Boolean(status.game?.inGame && currentSession.online);
+      const { online, realtimeOnline } = panelSessionFlags(status);
       const reason = online
         ? currentReason
         : (offlineStats.lastExitReason || status.recentExit?.reason || currentReason);
@@ -1539,13 +1548,13 @@ function renderBrowserlessWebPanel() {
       const dataGapSummary = dataGapsText(decision);
       if (online && dataGapSummary !== '--') addRow(rowsOut, '数据缺口', dataGapSummary);
 
-      if (isCombatStatus(status, kind, reason)) {
+      if ((realtimeOnline || !online) && isCombatStatus(status, kind, reason)) {
         addRow(rowsOut, '战斗目标', targetLabel(status.combat?.target));
         addRow(rowsOut, '战斗退出', reasonText(status.combat?.exit?.reason));
         addRow(rowsOut, '退出触发血量', combatExitHpText(status));
       }
 
-      if (!online && isSafetyStatus(status, kind, reason)) {
+      if (!realtimeOnline && isSafetyStatus(status, kind, reason)) {
         const loginDisplay = loginPointDisplay(status);
         const reentry = loginDisplay.state === 'reentry';
         addRow(rowsOut, reentry ? '连接状态' : '登录点', loginPointText(status), false, loginPointAttrs(status));
@@ -1806,7 +1815,7 @@ function renderBrowserlessWebPanel() {
       ]);
       const currentSession = s.stats?.currentSession || {};
       const todayStats = s.stats?.today || {};
-      const online = Boolean(s.game?.inGame && currentSession.online);
+      const { online } = panelSessionFlags(s);
       setText('sessionPanelTitle', online ? '本次游戏' : '上次游戏');
       rows('currentSession', [
         ['进入时间', fullStamp(currentSession.enteredAt), true],
@@ -1953,5 +1962,6 @@ function renderBrowserlessWebPanel() {
 module.exports = {
   BROWSERLESS_WEB_PANEL_VERSION,
   groupChatMessagesForDisplay,
+  panelSessionFlagsCore,
   renderBrowserlessWebPanel
 };
