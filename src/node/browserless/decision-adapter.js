@@ -2382,6 +2382,24 @@ function buildSingleCoinBaitDecision(input, opportunity, stateful = {}, options 
   };
 }
 
+function clearIgnoredSingleCoinBait(action, stateful = {}, options = {}) {
+  const bait = stateful.singleCoinBait || null;
+  if (!bait || !action?.ignoredCoin) return { action, cleared: false };
+  const ignoredKey = String(action.ignoredCoin.id || '');
+  const baitKey = String(bait.key || coinDecisionKey(bait));
+  const targetMatches = singleCoinBaitMatchesCore(action.target, bait, {
+    sameCoinRadiusCm: options.singleCoinBaitSameCoinRadiusCm ?? BROWSER_RUNTIME_DEFAULTS.singleCoinBaitSameCoinRadiusCm
+  });
+  if (!(ignoredKey && baitKey && ignoredKey === baitKey) && !targetMatches) {
+    return { action, cleared: false };
+  }
+  clearSingleCoinBaitTracking(stateful, bait, { clearFinalAction: true });
+  stateful.singleCoinBait = null;
+  const cleanedAction = { ...action };
+  delete cleanedAction.singleCoinBait;
+  return { action: cleanedAction, cleared: true };
+}
+
 function coinIgnoredUntil(stateful = {}, coin) {
   const key = coinDecisionKey(coin);
   if (!key) return 0;
@@ -5127,14 +5145,14 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
         riskScore: combat.dryRun?.behavior?.mode === 'pressure-shooter' ? 70 : 40
       }),
       candidate(highValueCoinPriorityAction && !singleCoinBaitReleaseAction ? highValueCoinPriorityAction : null, 70, 'high-value-visible-coin'),
-      candidate(postAttackDropCoinAction, 80, 'post-attack-drop-coin'),
-      candidate(postAttackDropWaitAction, 90, 'post-attack-drop-wait'),
+      candidate(postAttackDropCoinAction, 80, 'post-attack-drop-coin', false, { commitmentRank: 20 }),
+      candidate(postAttackDropWaitAction, 90, 'post-attack-drop-wait', false, { commitmentRank: 20 }),
       candidate(staminaBudgetExitAction, 100, 'stamina-budget-exit', true, { riskScore: 100 }),
       candidate(recoveryFootCoinAction, 110, 'recovery-foot-coin', true),
       candidate(recoveryAction, 120, 'ordinary-recovery', true),
       candidate(injuredCautionFootCoinAction, 130, 'injured-caution-foot-coin'),
       candidate(safetyAction, 140, 'yieldable-safety'),
-      candidate(singleCoinBaitAction, 150, 'single-coin-bait'),
+      candidate(singleCoinBaitAction, 150, 'single-coin-bait', false, { commitmentRank: 10 }),
       candidate(footCoinPriorityAction, 160, 'foot-coin-priority'),
       candidate(dailyFinalCoinAction, 170, 'daily-final-coin'),
       candidate(opportunity.choice ? opportunity.action : null, 180, 'best-eligible-profit', false, {
@@ -5170,11 +5188,20 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       band = action.band || band;
       reason = action.reason || reason;
     }
-    const finalAction = applyStaleCoinEscape(
+    let finalAction = applyStaleCoinEscape(
       applyCoinProgressToAction(selectedAction, input, stateful, options),
       stateful,
       input.nowMs
     );
+    const ignoredBait = clearIgnoredSingleCoinBait(finalAction, stateful, options);
+    finalAction = ignoredBait.action;
+    if (ignoredBait.cleared) {
+      singleCoinBait.state = null;
+      singleCoinBait.phase = '';
+      singleCoinBait.coin = null;
+      singleCoinBait.action = null;
+      singleCoinBait.summary = null;
+    }
     if (finalAction !== selectedAction) {
       action = finalAction;
       kind = action.kind || kind;

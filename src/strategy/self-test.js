@@ -332,6 +332,21 @@ function runStrategyModuleSelfTests() {
     passed: selectedProfitRoi?.targetKey === 'coin:near'
       && buildActionFocus({ kind: 'seek-enemy', band: 'profit', target: { userId: 88 } }).key === 'enemy:88'
   });
+  const selectedCommittedProfit = selectFinalActionCandidateCore([
+    buildFinalActionCandidate({ kind: 'coin', band: 'profit', reason: 'single-coin-bait-release', target: { id: 'bait' }, reward: 1, staminaCost: 900 }, { order: 150, commitmentRank: 10 }),
+    buildFinalActionCandidate({ kind: 'seek-enemy', band: 'profit', target: { userId: 88 }, expectedReward: 1703, staminaCost: 28000 }, { order: 180 })
+  ]);
+  const selectedPostAttackCommitment = selectFinalActionCandidateCore([
+    buildFinalActionCandidate({ kind: 'coin', band: 'profit', reason: 'post-attack-drop-coin', target: { id: 'drop' }, reward: 6, staminaCost: 1000 }, { order: 80, commitmentRank: 20 }),
+    buildFinalActionCandidate({ kind: 'coin', band: 'profit', reason: 'single-coin-bait-release', target: { id: 'bait' }, reward: 1, staminaCost: 900 }, { order: 150, commitmentRank: 10 })
+  ]);
+  results.push({
+    name: 'final-candidate-profit-commitment-beats-roi-without-bypassing-stronger-profit-commitments',
+    passed: selectedCommittedProfit?.action?.reason === 'single-coin-bait-release'
+      && selectedCommittedProfit?.commitmentRank === 10
+      && selectedPostAttackCommitment?.action?.reason === 'post-attack-drop-coin'
+      && selectedPostAttackCommitment?.commitmentRank === 20
+  });
 
   const switchOpportunities = [
     { type: 'coin', id: 'new', x: -1000, y: 0, reward: 3, staminaCost: 1000, score: 1400, priorityTier: 1 },
@@ -917,6 +932,61 @@ function runStrategyModuleSelfTests() {
   results.push({
     name: 'arbitration-profit-does-not-hold-over-combat',
     passed: !arb3.held && arb3.action.kind === 'combat'
+  });
+
+  const ordinaryProfitAction = {
+    kind: 'seek-enemy',
+    band: 'profit',
+    reason: 'best-opportunity',
+    target: { userId: 88 },
+    finalCandidate: { commitmentRank: 0, netROI: 0.05 }
+  };
+  const baitReleaseAction = {
+    kind: 'coin',
+    band: 'profit',
+    reason: 'single-coin-bait-release',
+    target: { id: 'bait' },
+    finalCandidate: { commitmentRank: 10, netROI: 0.001 }
+  };
+  const postAttackAction = {
+    kind: 'coin',
+    band: 'profit',
+    reason: 'post-attack-drop-coin',
+    target: { id: 'drop' },
+    finalCandidate: { commitmentRank: 20, netROI: 0.002 }
+  };
+  const ordinaryProfitState = {
+    lastAction: ordinaryProfitAction,
+    lastFocus: buildActionFocus(ordinaryProfitAction),
+    lastSelectedAt: Date.now() - 100,
+    lastOverride: null,
+    history: []
+  };
+  const postAttackState = {
+    lastAction: postAttackAction,
+    lastFocus: buildActionFocus(postAttackAction),
+    lastSelectedAt: Date.now() - 100,
+    lastOverride: null,
+    history: []
+  };
+  const committedProfitResult = applyFinalActionArbitration(
+    baitReleaseAction,
+    ordinaryProfitAction,
+    ordinaryProfitState,
+    { finalActionArbitrationHoldMs: 480 }
+  );
+  const strongerCommitmentResult = applyFinalActionArbitration(
+    baitReleaseAction,
+    postAttackAction,
+    postAttackState,
+    { finalActionArbitrationHoldMs: 480 }
+  );
+  results.push({
+    name: 'arbitration-profit-commitment-preempts-ordinary-roi-but-keeps-stronger-commitment',
+    passed: !committedProfitResult.held
+      && committedProfitResult.action.reason === 'single-coin-bait-release'
+      && strongerCommitmentResult.held
+      && strongerCommitmentResult.action.reason === 'post-attack-drop-coin'
   });
 
   // Test arbitration - exit never held

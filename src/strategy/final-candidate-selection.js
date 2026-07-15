@@ -16,6 +16,7 @@ function finalCandidateMeta(action, options = {}) {
   const expectedReward = numberOrNull(options.expectedReward ?? action.expectedReward ?? action.reward
     ?? action.target?.coinRoute?.value ?? action.target?.fieldAmount ?? action.target?.amount);
   const switchCost = Math.max(0, numberOrNull(options.switchCost ?? action.switchCost) ?? 0);
+  const commitmentRank = Math.min(100, Math.max(0, numberOrNull(options.commitmentRank ?? action.commitmentRank) ?? 0));
   const riskMultiplier = riskScore === null ? 1 : Math.max(0.05, 1 - Math.max(0, riskScore) / 100);
   const netROI = numberOrNull(options.netROI ?? action.netROI)
     ?? (expectedReward !== null && staminaCost !== null
@@ -29,6 +30,7 @@ function finalCandidateMeta(action, options = {}) {
     riskScore,
     expectedReward,
     switchCost,
+    commitmentRank,
     netROI,
     staminaCost,
     validUntil: numberOrNull(options.validUntil),
@@ -56,6 +58,9 @@ function selectFinalActionCandidateCore(candidates = []) {
   if (hardGate) return hardGate;
   const rank = band => ({ exit: 600, safety: 500, combat: 400, profit: 300, recover: 200, wait: 100 }[band] || 0);
   return valid.slice().sort((a, b) => rank(b.priorityBand) - rank(a.priorityBand)
+    || (a.priorityBand === 'profit' && b.priorityBand === 'profit'
+      ? Number(b.commitmentRank || 0) - Number(a.commitmentRank || 0)
+      : 0)
     || (a.priorityBand === 'profit' && b.priorityBand === 'profit'
       ? Number(b.netROI ?? -Infinity) - Number(a.netROI ?? -Infinity)
       : 0)

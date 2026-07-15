@@ -9834,7 +9834,7 @@ async function runSelfTest() {
       want: 'single-coin-bait-hold|hold|coin|single-coin-bait-release|bait|release|next|next|true'
     },
     {
-      name: 'browserless snapshot fallback bait survives a realtime profit arrival until committed release',
+      name: 'browserless snapshot fallback bait survives a higher ROI AFK arrival until committed release',
       got: (() => {
         const adapter = createBrowserlessDecisionAdapter({
           userId: 7,
@@ -9842,27 +9842,44 @@ async function runSelfTest() {
           combatEnabled: true,
           dynamicProfitThresholdEnabled: false,
           singleCoinBaitHoldRadiusCm: 1000,
-          finalActionArbitrationHoldMs: 0
+          finalActionArbitrationHoldMs: 0,
+          opportunitySwitchHoldMs: 1,
+          opportunitySwitchConfirmFrames: 1,
+          opportunitySwitchMargin: 0,
+          opportunitySwitchRelativeMargin: 0
         });
-        const makeState = (tick, realtimeCoinDrops, snapshotCoinDrops, snapshotFrameAgeMs = 100) => ({
+        const makeState = (tick, realtimeCoinDrops, snapshotCoinDrops, snapshotFrameAgeMs = 100, extraEntities = []) => ({
           userId: 7,
           realtime: {
             tick,
             frameAgeMs: 100,
             self: { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
-            entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 }],
+            entities: [
+              { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+              ...extraEntities
+            ],
             bullets: [],
             coinDrops: realtimeCoinDrops
           },
           fallback: { frameAgeMs: snapshotFrameAgeMs, coinDrops: snapshotCoinDrops }
         });
         const bait = { drop_id: 'snapshot-bait', amount: 1, x: 900, y: 0 };
-        const next = { drop_id: 'next-native', amount: 3, x: 5000, y: 0 };
+        const nextAfk = fullStamina5s({
+          entity_id: 2,
+          user_id: 8,
+          name: 'next-afk',
+          x: 28000,
+          y: 0,
+          hp: 100,
+          max_hp: 100,
+          current_join_mode: 'Passive',
+          drop: 1703
+        });
         const first = adapter.decide(makeState(60, [], [bait]), { nowMs: 1000 });
-        const second = adapter.decide(makeState(61, [next], [bait]), { nowMs: 2000 });
+        const second = adapter.decide(makeState(61, [], [bait], 100, [nextAfk]), { nowMs: 2000 });
         const releaseState = adapter.getState().singleCoinBait;
         const baitRow = second.input.nearby.c.find(item => item[0] === 'snapshot-bait');
-        const third = adapter.decide(makeState(62, [next], []), { nowMs: 3000 });
+        const third = adapter.decide(makeState(62, [], [], 100, [nextAfk]), { nowMs: 3000 });
         const staleAdapter = createBrowserlessDecisionAdapter({
           userId: 7,
           controlMode: 'profit-live',
@@ -9880,13 +9897,61 @@ async function runSelfTest() {
           second.action.target.id,
           releaseState.phase,
           releaseState.trigger.id,
+          second.finalSelection.selected.commitmentRank,
+          second.profit.best.id,
           baitRow?.[6],
-          third.action.target.id,
+          third.action.target.userId,
           adapter.getState().singleCoinBait === null,
           staleAdapter.getState().singleCoinBait === null
         ].join('|');
       })(),
-      want: 'single-coin-bait-hold|snapshot|single-coin-bait-release|snapshot-bait|release|next-native|1|next-native|true|true'
+      want: 'single-coin-bait-hold|snapshot|single-coin-bait-release|snapshot-bait|release|8|10|8|1|8|true|true'
+    },
+    {
+      name: 'browserless stale coin rejection clears bait state and panel marker immediately',
+      got: (() => {
+        const adapter = createBrowserlessDecisionAdapter({
+          userId: 7,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          dynamicProfitThresholdEnabled: false,
+          singleCoinBaitHoldRadiusCm: 1000,
+          finalActionArbitrationHoldMs: 0,
+          nearCoinStuckMs: 500,
+          coinNoProgressMs: 500
+        });
+        const makeState = tick => ({
+          userId: 7,
+          realtime: {
+            tick,
+            frameAgeMs: 100,
+            self: { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+            entities: [
+              { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+              fullStamina5s({ entity_id: 2, user_id: 8, name: 'next-afk', x: 28000, y: 0, hp: 100, max_hp: 100, current_join_mode: 'Passive', drop: 1703 })
+            ],
+            bullets: [],
+            coinDrops: []
+          },
+          fallback: { frameAgeMs: 100, coinDrops: [{ drop_id: 'stale-bait', amount: 1, x: 900, y: 0 }] }
+        });
+        const initial = makeState(70);
+        initial.realtime.entities = [initial.realtime.self];
+        adapter.decide(initial, { nowMs: 1000 });
+        const released = adapter.decide(makeState(71), { nowMs: 2000 });
+        const ignored = adapter.decide(makeState(72), { nowMs: 3000 });
+        const baitRow = ignored.input.nearby.c.find(item => item[0] === 'stale-bait');
+        return [
+          released.reason,
+          ignored.reason,
+          ignored.action.ignoredCoin.id,
+          ignored.profit.singleCoinBait === null,
+          adapter.getState().singleCoinBait === null,
+          ignored.action.singleCoinBait === undefined,
+          baitRow?.[6] || 0
+        ].join('|');
+      })(),
+      want: 'single-coin-bait-release|ignore-near-stale-coin|id:stale-bait|true|true|true|0'
     },
     {
       name: 'browserless single coin bait preserves current active-player combat rules',

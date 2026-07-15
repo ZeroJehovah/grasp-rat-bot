@@ -22,6 +22,11 @@ function finalActionReusable(action) {
   return band === 'safety' || band === 'combat' || band === 'profit';
 }
 
+function finalActionCommitmentRank(action) {
+  const value = Number(action?.finalCandidate?.commitmentRank ?? action?.commitmentRank ?? 0);
+  return Number.isFinite(value) ? Math.min(100, Math.max(0, value)) : 0;
+}
+
 function shouldHoldPreviousFinalAction(previousAction, previousFocus, currentAction, currentFocus, ageMs, options = {}) {
   const holdMs = Math.max(0, Math.round(Number(options.holdMs || 0) || 0));
   if (!(holdMs > 0) || ageMs > holdMs) return false;
@@ -42,6 +47,10 @@ function shouldHoldPreviousFinalAction(previousAction, previousFocus, currentAct
   if (currentRank > previousRank) return false;
   if (previousBand === currentBand && previousBand !== 'profit') return false;
   if (previousBand === 'profit' && currentBand === 'profit') {
+    const previousCommitment = finalActionCommitmentRank(previousAction);
+    const currentCommitment = finalActionCommitmentRank(currentAction);
+    if (currentCommitment > previousCommitment) return false;
+    if (previousCommitment > currentCommitment) return true;
     const previousRoi = Number(previousAction.finalCandidate?.netROI ?? previousAction.netROI ?? previousAction.roiScore ?? previousAction.score);
     const currentRoi = Number(currentAction.finalCandidate?.netROI ?? currentAction.netROI ?? currentAction.roiScore ?? currentAction.score);
     const switchCost = Math.max(0, Number(currentAction.finalCandidate?.switchCost ?? currentAction.switchCost ?? 0));
@@ -161,6 +170,7 @@ function applyFinalActionArbitration(currentAction, previousFinalAction, state, 
 module.exports = {
   finalActionBandRank,
   finalActionReusable,
+  finalActionCommitmentRank,
   shouldHoldPreviousFinalAction,
   applyFinalActionArbitrationCore,
   applyFinalActionArbitration,
