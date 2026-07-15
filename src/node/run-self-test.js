@@ -8123,6 +8123,90 @@ async function runSelfTest() {
       want: 'coin|profit|post-attack-drop-coin|self-kill-drop|6|snapshot-player-drop|||1'
     },
     {
+      name: 'browserless releases far high-value coin when realtime active player has decisive pickup lead',
+      got: (() => {
+        const adapter = createBrowserlessDecisionAdapter({
+          controlMode: 'profit-live',
+          finalActionArbitrationHoldMs: 1800
+        });
+        const makeState = (tick, competitor = null) => {
+          const self = { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 };
+          return {
+            userId: 7,
+            realtime: {
+              tick,
+              frameAgeMs: 100,
+              self,
+              entities: competitor ? [self, competitor] : [self],
+              bullets: [],
+              coinDrops: [
+                { drop_id: 'far-high-value', amount: 10, x: 40000, y: 0 },
+                { drop_id: 'local-alternative', amount: 2, x: -10000, y: 0 }
+              ]
+            },
+            fallback: { coinDrops: [] }
+          };
+        };
+        const first = adapter.decide(makeState(60), { nowMs: 1000 });
+        const second = adapter.decide(makeState(61, {
+          entity_id: 2,
+          user_id: 8,
+          name: 'coin-runner',
+          x: 30000,
+          y: 0,
+          vx: 50,
+          vy: 0,
+          hp: 100,
+          current_join_mode: 'Active',
+          drop: 1
+        }), { nowMs: 1500 });
+        const farPanel = second.input.nearby.c.find(item => item[0] === 'far-high-value');
+        return [
+          first.action.target.id,
+          second.kind,
+          second.action.target.id,
+          second.profit.competition.activeCompetitorCount,
+          second.profit.competition.contestedCoinCount,
+          second.profit.competition.contested[0].reason,
+          second.profit.competition.contested[0].distanceLeadCm,
+          second.input.dataGaps.includes('active-player-coin-competition'),
+          farPanel?.[1],
+          farPanel?.[3],
+          second.action.finalActionArbitration === undefined
+        ].join('|');
+      })(),
+      want: 'far-high-value|profit-candidate|local-alternative|1|1|active-player-heading-to-coin|30000|true|10|0|true'
+    },
+    {
+      name: 'browserless keeps near high-value coin despite closer active player',
+      got: (() => {
+        const store = createBrowserlessStateStore({ userId: 7 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 63,
+          entities: [
+            { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+            { entity_id: 2, user_id: 8, name: 'near-runner', x: 14000, y: 0, vx: 50, vy: 0, hp: 100, current_join_mode: 'Active', drop: 1 }
+          ],
+          bullets: [],
+          coin_drops: [{ drop_id: 'near-high-value', amount: 10, x: 15000, y: 0 }]
+        }, { receivedAtMs: 1000 });
+        const decision = buildBrowserlessDecision(store.getState(1200), {}, {
+          nowMs: 1200,
+          controlMode: 'profit-live'
+        });
+        return [
+          decision.kind,
+          decision.reason,
+          decision.action.target.id,
+          decision.action.highValueCoinPriority?.amount,
+          decision.profit.competition.activeCompetitorCount,
+          decision.profit.competition.contestedCoinCount
+        ].join('|');
+      })(),
+      want: 'profit-candidate|visible-coin|near-high-value||1|0'
+    },
+    {
       name: 'browserless profit live takes foot coin before in-range high-drop AFK',
       got: (() => {
         const store = createBrowserlessStateStore({ userId: 7 });
@@ -10888,7 +10972,7 @@ async function runSelfTest() {
           decision.profit.best === null
         ].join('|');
       })(),
-      want: 'coin|foot-coin-priority|safe-visible-coin|3|snapshot-player-drop|1|covered-player-drop|false'
+      want: 'coin|foot-coin-priority|safe-visible-coin|3|snapshot-player-drop|1|safe-visible-coin|false'
     },
     {
       name: 'browserless profit live ignores passive moving player and keeps AFK profit',

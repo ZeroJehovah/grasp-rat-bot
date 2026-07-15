@@ -40,6 +40,7 @@ const {
   resetClashLeaveRescueRoundCore
 } = require('./leave-command');
 const { buildCoinDiagnostics, addCoinFilterDiagnostic } = require('./coin-diagnostics');
+const { activeCoinCompetitionCore } = require('./coin-competition');
 const {
   coinAxisLockShouldHoldCore,
   coinDirectionToCore,
@@ -143,6 +144,36 @@ const {
 
 function runStrategyModuleSelfTests() {
   const results = [];
+
+  const headingCompetition = activeCoinCompetitionCore(
+    { user_id: 1, x: 0, y: 0 },
+    { drop_id: 'far', amount: 10, x: 40000, y: 0, distance: 40000 },
+    [{ user_id: 2, name: 'runner', x: 30000, y: 0, vx: 50, vy: 0, active: true, alive: true }]
+  );
+  const uncertainCompetition = activeCoinCompetitionCore(
+    { user_id: 1, x: 0, y: 0 },
+    { drop_id: 'far', amount: 10, x: 40000, y: 0, distance: 40000 },
+    [{ user_id: 3, name: 'stationary', x: 29000, y: 0, vx: 0, vy: 0, active: true, alive: true }]
+  );
+  const weakAwayCompetition = activeCoinCompetitionCore(
+    { user_id: 1, x: 0, y: 0 },
+    { drop_id: 'far', amount: 10, x: 40000, y: 0, distance: 40000 },
+    [{ user_id: 4, name: 'away', x: 6000, y: 0, vx: -50, vy: 0, active: true, alive: true }]
+  );
+  const nearCoinCompetition = activeCoinCompetitionCore(
+    { user_id: 1, x: 0, y: 0 },
+    { drop_id: 'near', amount: 10, x: 15000, y: 0, distance: 15000 },
+    [{ user_id: 5, name: 'nearer', x: 14000, y: 0, vx: 50, vy: 0, active: true, alive: true }]
+  );
+  results.push({
+    name: 'active-player-far-coin-competition-requires-credible-arrival-lead',
+    passed: headingCompetition?.reason === 'active-player-heading-to-coin'
+      && headingCompetition.competitorDistanceCm === 10000
+      && headingCompetition.distanceLeadCm === 30000
+      && uncertainCompetition?.reason === 'active-player-large-distance-lead'
+      && weakAwayCompetition === null
+      && nearCoinCompetition === null
+  });
 
   const threshold = { rewardCoins: 1, staminaMilli: 10000 };
   results.push({

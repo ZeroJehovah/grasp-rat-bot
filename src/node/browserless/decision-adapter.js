@@ -67,6 +67,7 @@ const {
   singleCoinBaitMatchesCore,
   singleCoinBaitPolicyCore
 } = require('../../strategy/single-coin-bait');
+const { activeCoinCompetitionCore } = require('../../strategy/coin-competition');
 const {
   targetIsWhitelisted,
   targetWhitelistNameSet,
@@ -107,6 +108,12 @@ const DEFAULT_PROFIT_PURSUIT_MIN_DAMAGE_MS = BROWSER_RUNTIME_DEFAULTS.browserles
 const DEFAULT_PROFIT_PURSUIT_MIN_DAMAGE_HP = BROWSER_RUNTIME_DEFAULTS.browserlessProfitPursuitMinDamageHp ?? 10;
 const DEFAULT_EASY_KILL_APPROACH_WINDOW_MS = BROWSER_RUNTIME_DEFAULTS.browserlessEasyKillApproachWindowMs ?? 8000;
 const DEFAULT_EASY_KILL_APPROACH_MIN_CLOSING_CM = BROWSER_RUNTIME_DEFAULTS.browserlessEasyKillApproachMinClosingCm ?? 1000;
+const DEFAULT_ACTIVE_COIN_COMPETITION_MIN_SELF_DISTANCE_CM = BROWSER_RUNTIME_DEFAULTS.activeCoinCompetitionMinSelfDistanceCm ?? 18000;
+const DEFAULT_ACTIVE_COIN_COMPETITION_NEAR_COIN_DISTANCE_CM = BROWSER_RUNTIME_DEFAULTS.activeCoinCompetitionNearCoinDistanceCm ?? 8000;
+const DEFAULT_ACTIVE_COIN_COMPETITION_MIN_LEAD_DISTANCE_CM = BROWSER_RUNTIME_DEFAULTS.activeCoinCompetitionMinLeadDistanceCm ?? 4000;
+const DEFAULT_ACTIVE_COIN_COMPETITION_UNCERTAIN_LEAD_DISTANCE_CM = BROWSER_RUNTIME_DEFAULTS.activeCoinCompetitionUncertainLeadDistanceCm ?? 12000;
+const DEFAULT_ACTIVE_COIN_COMPETITION_HEADING_COS_MIN = BROWSER_RUNTIME_DEFAULTS.activeCoinCompetitionHeadingCosMin ?? 0.35;
+const DEFAULT_ACTIVE_COIN_COMPETITION_MOVING_SPEED_MIN = BROWSER_RUNTIME_DEFAULTS.activeCoinCompetitionMovingSpeedMin ?? 5;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const UTC8_OFFSET_MS = 8 * 60 * 60 * 1000;
 const DANGEROUS_COMBAT_EXIT_REASONS = new Set([
@@ -1423,7 +1430,7 @@ function uniqueNearbyCoins(input) {
 
 function uniquePanelProfitCoins(input) {
   const byKey = new Map();
-  for (const coin of input?.profitCoins || []) {
+  for (const coin of input?.panelProfitCoins || input?.profitCoins || []) {
     const key = profitCoinKey(coin);
     if (!key) continue;
     const previous = byKey.get(key);
@@ -1506,6 +1513,52 @@ function mergeProfitCoinCandidates(...groups) {
     }
   }
   return Array.from(byKey.values());
+}
+
+function activeCoinCompetitionOptions(options = {}) {
+  return {
+    minSelfDistanceCm: options.activeCoinCompetitionMinSelfDistanceCm
+      ?? options.coinMaxDistance
+      ?? DEFAULT_ACTIVE_COIN_COMPETITION_MIN_SELF_DISTANCE_CM,
+    nearCoinDistanceCm: options.activeCoinCompetitionNearCoinDistanceCm
+      ?? DEFAULT_ACTIVE_COIN_COMPETITION_NEAR_COIN_DISTANCE_CM,
+    minLeadDistanceCm: options.activeCoinCompetitionMinLeadDistanceCm
+      ?? DEFAULT_ACTIVE_COIN_COMPETITION_MIN_LEAD_DISTANCE_CM,
+    uncertainLeadDistanceCm: options.activeCoinCompetitionUncertainLeadDistanceCm
+      ?? DEFAULT_ACTIVE_COIN_COMPETITION_UNCERTAIN_LEAD_DISTANCE_CM,
+    headingCosMin: options.activeCoinCompetitionHeadingCosMin
+      ?? DEFAULT_ACTIVE_COIN_COMPETITION_HEADING_COS_MIN,
+    movingSpeedMin: options.activeCoinCompetitionMovingSpeedMin
+      ?? DEFAULT_ACTIVE_COIN_COMPETITION_MOVING_SPEED_MIN
+  };
+}
+
+function partitionActiveCoinCompetition(self, coins = [], visibleTargets = [], options = {}) {
+  const activeCompetitors = (visibleTargets || []).filter(target => target?.active === true && target.alive !== false);
+  if (options.activeCoinCompetitionEnabled === false || !self || !activeCompetitors.length) {
+    return { available: coins || [], panel: coins || [], activeCompetitorCount: activeCompetitors.length, contested: [] };
+  }
+  const available = [];
+  const panel = [];
+  const contested = [];
+  const competitionOptions = activeCoinCompetitionOptions(options);
+  for (const coin of coins || []) {
+    const competition = activeCoinCompetitionCore(self, coin, activeCompetitors, competitionOptions);
+    if (!competition) {
+      available.push(coin);
+      panel.push(coin);
+      continue;
+    }
+    const summary = {
+      ...competition,
+      coinKey: coinDecisionKey(coin),
+      authority: String(coin?.authority || ''),
+      snapshotOnly: Boolean(coin?.snapshotOnly)
+    };
+    contested.push(summary);
+    panel.push({ ...coin, activeCoinCompetition: summary });
+  }
+  return { available, panel, activeCompetitorCount: activeCompetitors.length, contested };
 }
 
 function invulnerableRemainingMs(target, options = {}) {
@@ -1787,7 +1840,7 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
       ? { ...coin, selfKilledPlayerDrop: true, playerDropPriority: true }
       : coin))
     : [];
-  const profitCoins = realtimeCoins.length
+  const rawProfitCoins = realtimeCoins.length
     ? realtimeCoins
     : (selfKilledPlayerDropCoins.length
         ? mergeProfitCoinCandidates(selfKilledPlayerDropProfitCoins, snapshotFallbackProfitCoins)
@@ -1795,6 +1848,10 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
   const profitCoinSource = realtimeCoins.length
     ? 'realtime'
     : (selfKilledPlayerDropCoins.length ? 'snapshot-player-drop' : (snapshotFallbackAllowed ? 'snapshot-fallback' : 'none'));
+  const activeCoinCompetition = partitionActiveCoinCompetition(self, rawProfitCoins, visibleTargets, options);
+  const profitCoins = activeCoinCompetition.available;
+  const panelProfitCoins = activeCoinCompetition.panel;
+  if (activeCoinCompetition.contested.length) dataGaps.push('active-player-coin-competition');
   return {
     userId: Number(state?.userId || options.userId || 0),
     nowMs,
@@ -1839,7 +1896,14 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
     selfKillTargetIds,
     selfKillEvidence,
     profitCoins,
+    panelProfitCoins,
     profitCoinSource,
+    activeCoinCompetition: {
+      enabled: options.activeCoinCompetitionEnabled !== false,
+      activeCompetitorCount: activeCoinCompetition.activeCompetitorCount,
+      contestedCoinCount: activeCoinCompetition.contested.length,
+      contested: activeCoinCompetition.contested.slice(0, 8)
+    },
     bullets: Array.isArray(realtime.bullets) ? cloneJson(realtime.bullets) : [],
     dataGaps
   };
@@ -2056,7 +2120,7 @@ function highValueThreatBlocksLowHpCoin(threat, options = {}) {
 
 function pickHighValueVisibleCoin(input, combatDecision, options = {}) {
   if (!input?.self) return null;
-  const realtimeCandidates = (input.realtimeCoins || []).filter(coin => !coin.snapshotOnly);
+  const realtimeCandidates = (input.profitCoins || []).filter(coin => !coin.snapshotOnly);
   const snapshotProfitSource = input.profitCoinSource === 'snapshot-fallback'
     || input.profitCoinSource === 'snapshot-player-drop';
   const snapshotCandidates = !realtimeCandidates.length && snapshotProfitSource
@@ -2417,6 +2481,7 @@ function applyIgnoredCoinFilter(input, stateful = {}) {
   input.realtimeCoins = filterIgnoredCoins(input.realtimeCoins, stateful, input.nowMs);
   input.snapshotCoins = filterIgnoredCoins(input.snapshotCoins, stateful, input.nowMs);
   input.selfKilledPlayerDropCoins = filterIgnoredCoins(input.selfKilledPlayerDropCoins, stateful, input.nowMs);
+  input.panelProfitCoins = filterIgnoredCoins(input.panelProfitCoins, stateful, input.nowMs);
   input.profitCoins = filterIgnoredCoins(input.profitCoins, stateful, input.nowMs);
   return input;
 }
@@ -2433,6 +2498,21 @@ function clearIgnoredCoinDecisionState(stateful = {}, progressId = '') {
   if (choiceKey && choiceKey === progressId) {
     stateful.opportunityChoice = null;
     stateful.opportunitySwitchLock = null;
+  }
+}
+
+function clearActiveCoinCompetitionDecisionState(input, stateful = {}) {
+  const contestedKeys = new Set((input?.activeCoinCompetition?.contested || [])
+    .map(item => String(item?.coinKey || ''))
+    .filter(Boolean));
+  if (!contestedKeys.size) return;
+  for (const key of contestedKeys) clearIgnoredCoinDecisionState(stateful, key);
+  const arbitration = stateful.finalActionArbitration;
+  const previousCoinKey = coinDecisionKey(arbitration?.lastAction?.target);
+  if (previousCoinKey && contestedKeys.has(previousCoinKey)) {
+    arbitration.lastAction = null;
+    arbitration.lastFocus = null;
+    arbitration.lastSelectedAt = 0;
   }
 }
 
@@ -4814,6 +4894,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
   const input = buildBrowserlessStrategyInput(state, options, stateful);
   cleanupCoinProgressState(stateful, input.nowMs, options);
   applyIgnoredCoinFilter(input, stateful);
+  clearActiveCoinCompetitionDecisionState(input, stateful);
   const easyKillTrackerState = reconcileEasyKillTracker(input, stateful, options);
   const easyKillApproachStopLoss = reconcileEasyKillApproach(input, stateful, options);
   const staleSelfMs = Math.max(1000, Number(options.staleSelfMs || DEFAULT_STALE_SELF_MS));
@@ -5185,6 +5266,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       fallback: input.fallback,
       centerActivity: input.centerActivity,
       profitCoinSource: input.profitCoinSource,
+      activeCoinCompetition: cloneJson(input.activeCoinCompetition),
       selfKillEvidence: topItems(input.selfKillEvidence, item => item, 20),
       nearby: summarizeNearbyForPanel(input, action, combat.dryRun || combat, options, stateful.singleCoinBait),
       dataGaps: input.dataGaps
@@ -5195,6 +5277,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       candidates: topItems(opportunity.sorted, summarizeOpportunity),
       threshold: opportunity.threshold,
       switch: opportunity.switchDiagnostics || null,
+      competition: cloneJson(input.activeCoinCompetition),
       singleCoinBait: singleCoinBait.summary,
       easyKill: {
         ...cloneJson(input.easyKill || {}),
