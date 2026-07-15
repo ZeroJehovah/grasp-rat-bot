@@ -639,6 +639,9 @@ async function runBrowserlessRunner(config, deps = {}) {
   const publishBackgroundIo = typeof deps.onBackgroundIoReady === 'function'
     ? deps.onBackgroundIoReady
     : null;
+  const publishLiveState = typeof deps.onLiveStateReady === 'function'
+    ? deps.onLiveStateReady
+    : null;
   if (publishBackgroundIo && backgroundIo) {
     try {
       publishBackgroundIo(backgroundIo);
@@ -648,6 +651,13 @@ async function runBrowserlessRunner(config, deps = {}) {
   }
   try {
   let liveState = null;
+  if (publishLiveState) {
+    try {
+      publishLiveState(() => liveState);
+    } catch (err) {
+      recordSupervisorError(err, { operation: 'live-state-publish' });
+    }
+  }
   const patchLiveState = (patch, options = {}) => {
     const updatedAt = options.updatedAt || new Date(now()).toISOString();
     const base = liveState || readBrowserlessStateFile(config.stateFile || stateFilePath(config));
@@ -687,11 +697,6 @@ async function runBrowserlessRunner(config, deps = {}) {
     recordSupervisorError(err, { operation: 'data-dir-create', dataDir: config.dataDir });
   }
   let snapshotGapPoller = null;
-  const chatService = deps.chatService || createChatService({
-    now,
-    getSelfUserId: () => config.userId,
-    onPollingDemandChange: () => snapshotGapPoller?.refreshSchedule?.()
-  });
   const highDropPlayerTracker = deps.highDropPlayerTracker || createHighDropPlayerTracker({
     file: path.join(config.dataDir, 'high-drop-players.json'),
     now,
@@ -721,6 +726,19 @@ async function runBrowserlessRunner(config, deps = {}) {
     easyKillPlayerTracker.expirePendingOutcomes?.(now());
     return easyKillPlayerTracker.status();
   };
+  const chatSeedPlayers = [
+    ...(highDropPlayerTracker.status?.(now())?.players || []),
+    ...(easyKillPlayerTracker.status?.(now())?.players || []),
+    ...(damagePlayerTracker.status?.(now())?.players || [])
+  ];
+  const chatService = deps.chatService || createChatService({
+    now,
+    getSelfUserId: () => config.userId,
+    nameCacheFile: path.join(config.dataDir, 'chat-player-names.json'),
+    backgroundIo,
+    seedPlayers: chatSeedPlayers,
+    onPollingDemandChange: () => snapshotGapPoller?.refreshSchedule?.()
+  });
   const observeSnapshotPayload = (payload, detail = {}) => {
     const observedAtMs = Number(detail.observedAtMs ?? now());
     const snapshotSource = String(detail.source || 'snapshot');
@@ -1899,6 +1917,11 @@ async function runBrowserlessRunner(config, deps = {}) {
       if (publishBackgroundIo) {
         try {
           publishBackgroundIo(null);
+        } catch (_) {}
+      }
+      if (publishLiveState) {
+        try {
+          publishLiveState(null);
         } catch (_) {}
       }
     }

@@ -19319,9 +19319,16 @@ async function runSelfTest() {
               userId: 7,
               enteredAt: '2026-07-08T00:00:00.000Z',
               lastSeenAt: '2026-07-08T00:00:01.000Z',
+              baseDrop: 740,
+              lastDrop: 740,
+              coinsGained: 0,
               lastStamina1dRemaining: 19000000,
               lastStamina1dLimit: 20000000,
-              staminaSpentMs: 1000000
+              staminaSpentMs: 1000000,
+              enteredTick: 300,
+              killBaselineInitialized: true,
+              killBaselineKeys: [],
+              killKeys: []
             },
             today: {
               day: '2026-07-08',
@@ -19330,9 +19337,39 @@ async function runSelfTest() {
             }
           }
         }, { updatedAt: '2026-07-08T00:00:00.000Z' });
+        const liveState = readBrowserlessStateFile(config.stateFile);
+        liveState.current.self = { userId: 7, entityId: 106, name: 'self', hp: 81, drop: 745 };
+        liveState.lastKnown = {
+          self: liveState.current.self,
+          stamina: {
+            stamina5sRemainingMilli: 8500,
+            stamina1hRemainingMilli: 1010000,
+            stamina1dRemainingMilli: 18980000,
+            stamina1dLimitMilli: 20000000
+          },
+          at: '2026-07-08T00:00:01.500Z',
+          tick: 330
+        };
+        liveState.current.stamina = liveState.lastKnown.stamina;
+        liveState.current.decision = {
+          runId: 'shutdown-live-state-run',
+          tick: 330,
+          input: { realtime: { tick: 330 } }
+        };
+        liveState.stats = browserlessStatsForDecision(liveState, {
+          at: '2026-07-08T00:00:01.500Z',
+          runId: 'shutdown-live-state-run',
+          input: {
+            self: liveState.current.self,
+            stamina: liveState.lastKnown.stamina,
+            realtime: { tick: 330 },
+            selfKillEvidence: [{ targetUserId: 8, tick: 329 }]
+          }
+        }, { nowMs: Date.parse('2026-07-08T00:00:01.500Z') });
         let optionsSeen = null;
         const result = await gracefulShutdownLeave(config, {
           now: () => Date.parse('2026-07-08T00:00:02.000Z'),
+          getLiveState: () => liveState,
           leaveWithVerification: async options => {
             optionsSeen = options;
             return {
@@ -19346,6 +19383,9 @@ async function runSelfTest() {
                   durationMs: 12,
                   ok: true,
                   response: {
+                    user_id: 7,
+                    hp: 88,
+                    death_drop_coins: 748,
                     stamina_1d_remaining_milli: 18950000,
                     stamina_1d_limit_milli: 20000000
                   },
@@ -19360,6 +19400,7 @@ async function runSelfTest() {
           result.ok,
           result.skipped,
           result.statsFinalized,
+          result.statePersisted,
           result.statsFinalizeError,
           result.leave.attempts.length,
           optionsSeen.userId,
@@ -19372,7 +19413,10 @@ async function runSelfTest() {
           stored.stats.currentSession.online,
           stored.stats.currentSession.staminaSpentMs,
           stored.stats.currentSession.lastStamina1dRemaining,
+          stored.stats.currentSession.coinsGained,
           stored.stats.today.staminaSpentMs,
+          stored.stats.today.coinsGained,
+          stored.stats.today.kills,
           stored.runner.confirmedLeave.confirmedAt,
           stored.runner.confirmedLeave.snapshotIgnoreUntil,
           stored.runner.confirmedLeave.lastRealtimeTick,
@@ -19384,7 +19428,7 @@ async function runSelfTest() {
           stored.lastKnown.stamina.remaining1d
         ].join('|');
       }),
-      want: 'true|false|true||1|7|persisted-secret|10.0.0.101|2|200|1000|5000|false|1050000|18950000|1050000|2026-07-08T00:00:02.000Z|2026-07-08T00:00:42.000Z|321|shutdown-confirmed-leave-run|shutdown-confirmed-leave-run|79|740|8765|19000000'
+      want: 'true|false|true|true||1|7|persisted-secret|10.0.0.101|2|200|1000|5000|false|1050000|18950000|8|1050000|8|1|2026-07-08T00:00:02.000Z|2026-07-08T00:00:42.000Z|330|shutdown-live-state-run|shutdown-live-state-run|88|748|8500|18950000'
     },
     {
       name: 'browserless runner dry-run and fake read-only path write redacted logs',
@@ -20763,6 +20807,38 @@ async function runSelfTest() {
       want: '1843|2149|306|612|612'
     },
     {
+      name: 'browserless stats preserve positive Drop gains across a death reset',
+      got: (() => {
+        const state = {
+          session: { userId: 7, sessionToken: 'state-secret-token' },
+          runner: { running: true, mode: 'profit-live', controlMode: 'profit-live' }
+        };
+        const decision = (at, drop) => ({
+          at: new Date(at).toISOString(),
+          input: {
+            self: { userId: 7, name: 'self', drop, dropKnown: true },
+            stamina: {},
+            selfKillEvidence: []
+          }
+        });
+        const start = Date.parse('2026-07-15T04:00:00.000Z');
+        state.stats = browserlessStatsForDecision(state, decision(start, 100), { nowMs: start });
+        state.stats = browserlessStatsForDecision(state, decision(start + 1000, 110), { nowMs: start + 1000 });
+        state.stats = browserlessStatsForDecision(state, decision(start + 2000, 10), { nowMs: start + 2000 });
+        state.stats = browserlessStatsForDecision(state, decision(start + 3000, 20), { nowMs: start + 3000 });
+        const compact = buildCompactBrowserlessStatus(state, { nowMs: start + 3000 });
+        return [
+          state.stats.currentSession.baseDrop,
+          state.stats.currentSession.lastDrop,
+          state.stats.currentSession.coinsGained,
+          state.stats.currentSession.dropResetCount,
+          compact.stats.currentSession.coinsGained,
+          compact.stats.today.coinsGained
+        ].join('|');
+      })(),
+      want: '10|20|20|1|40|40'
+    },
+    {
       name: 'browserless today stamina reconciles cross-session gaps from 1d remaining',
       got: (() => {
         const firstStartedAt = Date.parse('2026-07-10T00:00:00.000Z');
@@ -20834,6 +20910,37 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: '1050000|1050000|0|1050000|950000|2000000|2000000'
+    },
+    {
+      name: 'browserless today stamina uses the latest valid daily remaining instead of oscillating segment sums',
+      got: (() => {
+        const state = { session: { userId: 77, sessionToken: 'state-secret-token' } };
+        const at = Date.parse('2026-07-15T05:00:00.000Z');
+        const decision = (offset, remaining) => ({
+          at: new Date(at + offset).toISOString(),
+          input: {
+            self: { userId: 77, name: 'self', drop: 10 },
+            stamina: { stamina1dRemainingMilli: remaining, stamina1dLimitMilli: 20000000 },
+            selfKillEvidence: []
+          }
+        });
+        state.stats = browserlessStatsForDecision(state, decision(0, 20000000), { nowMs: at });
+        state.stats = browserlessStatsForDecision(state, decision(1000, 19000000), { nowMs: at + 1000 });
+        state.stats = browserlessStatsForDecision(state, decision(2000, 19500000), { nowMs: at + 2000 });
+        state.stats = browserlessStatsForDecision(state, decision(3000, 18800000), { nowMs: at + 3000 });
+        const compact = buildCompactBrowserlessStatus(state, { nowMs: at + 3000 });
+        state.stats = browserlessStatsForOffline(state, {
+          at: new Date(at + 4000).toISOString(),
+          reason: 'cycle-complete',
+          stamina: { stamina1dRemainingMilli: 18800000, stamina1dLimitMilli: 20000000 }
+        }, { nowMs: at + 4000 });
+        return [
+          state.stats.currentSession.staminaSpentMs,
+          compact.stats.today.staminaSpentMs,
+          state.stats.today.staminaSpentMs
+        ].join('|');
+      })(),
+      want: '1700000|1200000|1200000'
     },
     {
       name: 'browserless stats ignore kill messages already present at session entry',

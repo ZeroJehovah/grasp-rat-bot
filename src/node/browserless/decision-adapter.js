@@ -6303,6 +6303,7 @@ function summarizeBrowserlessDecision(decision) {
     kind: decision.kind || '',
     band: decision.band || '',
     reason: decision.reason || '',
+    runId: decision.runId || '',
     at: decision.at || '',
     tick: decision.tick ?? null,
     action: decision.action || null,

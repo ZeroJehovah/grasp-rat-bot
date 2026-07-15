@@ -1,16 +1,23 @@
 'use strict';
 
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const {
   MAX_CHAT_TEXT_LENGTH,
   createTransportHandle,
   normalizeChatText
 } = require('./ws-transport');
 
+const CHAT_NAME_CACHE_SCHEMA_VERSION = 1;
 const DEFAULT_CHAT_MESSAGE_LIMIT = 200;
 const DEFAULT_CHAT_ACTIVE_INTERVAL_MS = 30000;
 const DEFAULT_CHAT_IDLE_INTERVAL_MS = 3 * 60 * 1000;
 const DEFAULT_CHAT_PAGE_ACTIVE_WINDOW_MS = 45000;
 const DEFAULT_CHAT_SEND_BOOST_MS = 2 * 60 * 1000;
+const DEFAULT_CHAT_NAME_CACHE_TTL_MS = 48 * 60 * 60 * 1000;
+const DEFAULT_CHAT_NAME_CACHE_LIMIT = 5000;
+const DEFAULT_CHAT_NAME_CACHE_PERSIST_INTERVAL_MS = 3 * 60 * 1000;
 const SERVER_TICK_MS = 50;
 const MAX_MESSAGE_TICK_AGE = 2 * 24 * 60 * 60 * 1000 / SERVER_TICK_MS;
 
@@ -75,6 +82,77 @@ function chatValidationError(error) {
   return error?.message || String(error || '消息格式无效');
 }
 
+function playerName(entity) {
+  return String(
+    entity?.name
+      || entity?.label
+      || entity?.username
+      || entity?.user_name
+      || entity?.displayName
+      || entity?.display_name
+      || ''
+  ).trim();
+}
+
+function emptyNameCache() {
+  return {
+    schemaVersion: CHAT_NAME_CACHE_SCHEMA_VERSION,
+    updatedAt: '',
+    players: {}
+  };
+}
+
+function normalizeNameCache(value, nowMs, ttlMs, limit) {
+  const output = emptyNameCache();
+  if (!value || typeof value !== 'object') return output;
+  output.updatedAt = String(value.updatedAt || '');
+  const cutoffMs = Number(nowMs) - ttlMs;
+  const players = Object.entries(value.players || {})
+    .map(([key, record]) => {
+      if (!record || typeof record !== 'object') return null;
+      const userId = numberOrNull(record.userId ?? String(key).replace(/^user:/, ''));
+      const name = playerName(record);
+      const lastObservedAt = String(record.lastObservedAt || '');
+      const lastObservedMs = Date.parse(lastObservedAt);
+      if (userId === null || !name || !Number.isFinite(lastObservedMs) || lastObservedMs < cutoffMs) return null;
+      return {
+        key: `user:${userId}`,
+        userId,
+        name,
+        lastObservedAt,
+        lastObservedTick: numberOrNull(record.lastObservedTick),
+        source: String(record.source || '')
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => Date.parse(b.lastObservedAt) - Date.parse(a.lastObservedAt))
+    .slice(0, limit);
+  for (const record of players) output.players[record.key] = record;
+  return output;
+}
+
+function readNameCache(file, nowMs, ttlMs, limit) {
+  if (!file) return emptyNameCache();
+  try {
+    return normalizeNameCache(JSON.parse(fs.readFileSync(file, 'utf8')), nowMs, ttlMs, limit);
+  } catch (_) {
+    return emptyNameCache();
+  }
+}
+
+function writeNameCache(file, cache, backgroundIo = null) {
+  if (!file) return false;
+  if (backgroundIo?.writeJsonAtomic) {
+    if (!backgroundIo.writeJsonAtomic(file, cache)) throw new Error('background chat name-cache persistence unavailable');
+    return true;
+  }
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const temporary = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(temporary, JSON.stringify(cache, null, 2) + '\n');
+  fs.renameSync(temporary, file);
+  return true;
+}
+
 function createChatService(options = {}) {
   const now = typeof options.now === 'function' ? options.now : Date.now;
   const getSelfUserId = typeof options.getSelfUserId === 'function'
@@ -88,8 +166,16 @@ function createChatService(options = {}) {
   const idleIntervalMs = Math.max(activeIntervalMs, Number(options.idleIntervalMs || DEFAULT_CHAT_IDLE_INTERVAL_MS));
   const pageActiveWindowMs = Math.max(activeIntervalMs, Number(options.pageActiveWindowMs || DEFAULT_CHAT_PAGE_ACTIVE_WINDOW_MS));
   const sendBoostMs = Math.max(activeIntervalMs, Number(options.sendBoostMs || DEFAULT_CHAT_SEND_BOOST_MS));
+  const nameCacheFile = options.nameCacheFile ? path.resolve(options.nameCacheFile) : '';
+  const nameCacheTtlMs = Math.max(60 * 60 * 1000, Number(options.nameCacheTtlMs || DEFAULT_CHAT_NAME_CACHE_TTL_MS));
+  const nameCacheLimit = Math.max(100, Math.round(Number(options.nameCacheLimit || DEFAULT_CHAT_NAME_CACHE_LIMIT)));
+  const nameCachePersistIntervalMs = Math.max(30000, Number(
+    options.nameCachePersistIntervalMs || DEFAULT_CHAT_NAME_CACHE_PERSIST_INTERVAL_MS
+  ));
+  const backgroundIo = options.backgroundIo && typeof options.backgroundIo === 'object' ? options.backgroundIo : null;
 
-  const names = new Map();
+  const nameCache = readNameCache(nameCacheFile, now(), nameCacheTtlMs, nameCacheLimit);
+  const names = new Map(Object.values(nameCache.players).map(record => [record.userId, record]));
   const messages = new Map();
   let transport = null;
   let transportAttachedAtMs = 0;
@@ -99,6 +185,8 @@ function createChatService(options = {}) {
   let lastSnapshotTick = null;
   let pageActiveUntilMs = 0;
   let sendBoostUntilMs = 0;
+  let lastNameCachePersistAtMs = Date.parse(nameCache.updatedAt || '');
+  if (!Number.isFinite(lastNameCachePersistAtMs)) lastNameCachePersistAtMs = 0;
   let pendingSend = null;
   let lastSend = {
     state: 'idle',
@@ -140,13 +228,76 @@ function createChatService(options = {}) {
     return sendBoostUntilMs;
   }
 
-  function rememberNames(entities = []) {
+  function trimNameCache(atMs = now()) {
+    const cutoffMs = Number(atMs) - nameCacheTtlMs;
+    const retained = Array.from(names.values())
+      .filter(record => Date.parse(record.lastObservedAt || '') >= cutoffMs)
+      .sort((a, b) => Date.parse(b.lastObservedAt) - Date.parse(a.lastObservedAt))
+      .slice(0, nameCacheLimit);
+    names.clear();
+    nameCache.players = {};
+    for (const record of retained) {
+      names.set(record.userId, record);
+      nameCache.players[record.key] = record;
+    }
+  }
+
+  function persistNameCache(atMs = now()) {
+    if (!nameCacheFile) return false;
+    trimNameCache(atMs);
+    nameCache.updatedAt = new Date(atMs).toISOString();
+    const written = writeNameCache(nameCacheFile, nameCache, backgroundIo);
+    if (written) lastNameCachePersistAtMs = Number(atMs);
+    return written;
+  }
+
+  function rememberNames(entities = [], detail = {}) {
+    const observedAtMs = Number.isFinite(Number(detail.observedAtMs)) ? Number(detail.observedAtMs) : now();
+    const at = new Date(observedAtMs).toISOString();
+    const observedTick = numberOrNull(detail.tick);
+    const source = String(detail.source || 'snapshot');
+    let updated = 0;
+    let nameChanged = false;
     for (const entity of entities) {
       const userId = numberOrNull(entity?.user_id ?? entity?.userId);
-      const name = String(entity?.name || entity?.display_name || entity?.displayName || '').trim();
+      const name = playerName(entity);
       if (userId === null || !name) continue;
-      names.set(userId, name);
+      const existing = names.get(userId) || null;
+      const entityObservedAt = String(entity?.lastObservedAt || entity?.nameUpdatedAt || at);
+      const entityObservedMs = Date.parse(entityObservedAt);
+      const recordAt = Number.isFinite(entityObservedMs) ? entityObservedAt : at;
+      const record = {
+        key: `user:${userId}`,
+        userId,
+        name,
+        lastObservedAt: recordAt,
+        lastObservedTick: numberOrNull(entity?.lastObservedTick ?? entity?.nameObservedTick ?? observedTick),
+        source
+      };
+      if (!existing || existing.name !== name) {
+        updated += 1;
+        nameChanged = true;
+      }
+      const existingAtMs = Date.parse(existing?.lastObservedAt || '');
+      if (!existing || !Number.isFinite(existingAtMs) || Date.parse(record.lastObservedAt) >= existingAtMs) {
+        names.set(userId, record);
+        nameCache.players[record.key] = record;
+      }
     }
+    if (
+      nameCacheFile
+      && (nameChanged || !lastNameCachePersistAtMs || observedAtMs - lastNameCachePersistAtMs >= nameCachePersistIntervalMs)
+    ) {
+      persistNameCache(observedAtMs);
+    }
+    return { updated, playerCount: names.size };
+  }
+
+  if (Array.isArray(options.seedPlayers) && options.seedPlayers.length) {
+    rememberNames(options.seedPlayers, {
+      observedAtMs: now(),
+      source: 'persisted-tracker-seed'
+    });
   }
 
   function normalizeMessage(item, observedAtMs, snapshotTickValue = null) {
@@ -168,7 +319,7 @@ function createChatService(options = {}) {
     );
     const name = userId === null
       ? ''
-      : (names.get(userId) || existing?.name || `User ${userId}`);
+      : (names.get(userId)?.name || existing?.name || `User ${userId}`);
     return {
       key,
       id,
@@ -230,7 +381,11 @@ function createChatService(options = {}) {
     if (!payload || typeof payload !== 'object') {
       return { ok: false, reason: 'invalid-snapshot-payload', observed: 0, updated: 0 };
     }
-    rememberNames(Array.isArray(payload.entities) ? payload.entities : []);
+    const nameResult = rememberNames(Array.isArray(payload.entities) ? payload.entities : [], {
+      observedAtMs,
+      tick: payload.tick,
+      source: detail.source || 'snapshot'
+    });
     const sourceMessages = Array.isArray(payload.messages) ? payload.messages : [];
     const snapshotTick = numberOrNull(payload.tick);
     const normalized = [];
@@ -245,7 +400,7 @@ function createChatService(options = {}) {
     }
     for (const message of messages.values()) {
       if (message.userId === null || !names.has(message.userId)) continue;
-      message.name = names.get(message.userId);
+      message.name = names.get(message.userId).name;
       message.mine = message.userId === selfUserId();
     }
     const ordered = trimMessages();
@@ -258,7 +413,8 @@ function createChatService(options = {}) {
       observed: normalized.length,
       updated,
       confirmed,
-      messageCount: ordered.length
+      messageCount: ordered.length,
+      namesUpdated: nameResult.updated
     };
   }
 
@@ -383,7 +539,14 @@ function createChatService(options = {}) {
       },
       limits: {
         messageLength: MAX_CHAT_TEXT_LENGTH,
-        retainedMessages: messageLimit
+        retainedMessages: messageLimit,
+        retainedNames: nameCacheLimit,
+        nameTtlMs: nameCacheTtlMs
+      },
+      nameCache: {
+        enabled: Boolean(nameCacheFile),
+        playerCount: names.size,
+        updatedAt: nameCache.updatedAt
       },
       lastSend: { ...lastSend },
       messages: ordered.map(publicMessage)
@@ -396,12 +559,15 @@ function createChatService(options = {}) {
     detachTransport,
     notePageActivity,
     observeSnapshot,
+    rememberNames,
     sendChat,
     status
   };
 }
 
 function runChatServiceSelfTest() {
+  const cacheRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'grasp-rat-chat-names-'));
+  const nameCacheFile = path.join(cacheRoot, 'player-names.json');
   let nowMs = Date.UTC(2026, 6, 14, 4, 0, 0);
   const sent = [];
   const transport = createTransportHandle({
@@ -412,7 +578,10 @@ function runChatServiceSelfTest() {
   }, { WebSocket: { OPEN: 1 } }, 'ws://self-test');
   const service = createChatService({
     now: () => nowMs,
-    selfUserId: 7
+    selfUserId: 7,
+    nameCacheFile,
+    nameCacheTtlMs: 60 * 60 * 1000,
+    nameCachePersistIntervalMs: 30000
   });
   const first = service.observeSnapshot({
     tick: 100,
@@ -454,11 +623,36 @@ function runChatServiceSelfTest() {
     firstId: retentionStatus.messages[0]?.id,
     lastId: retentionStatus.messages.at(-1)?.id
   };
+  const restartedService = createChatService({
+    now: () => nowMs,
+    selfUserId: 7,
+    nameCacheFile,
+    nameCacheTtlMs: 60 * 60 * 1000
+  });
+  restartedService.observeSnapshot({
+    tick: 510,
+    entities: [],
+    messages: [{ id: 12, tick: 509, kind: 'chat', user_id: 8, target_user_id: 0, text: 'after restart' }]
+  }, { source: 'restart-test', observedAtMs: nowMs });
+  const restartedStatus = restartedService.status(nowMs);
+  nowMs += 2 * 60 * 60 * 1000;
+  const expiredService = createChatService({
+    now: () => nowMs,
+    selfUserId: 7,
+    nameCacheFile,
+    nameCacheTtlMs: 60 * 60 * 1000
+  });
+  expiredService.observeSnapshot({
+    tick: 520,
+    entities: [],
+    messages: [{ id: 13, tick: 519, kind: 'chat', user_id: 8, target_user_id: 0, text: 'expired' }]
+  }, { source: 'expiry-test', observedAtMs: nowMs });
+  const expiredStatus = expiredService.status(nowMs);
   service.detachTransport(transport);
   const offlineSend = service.sendChat('offline');
   const invalidSend = service.sendChat('bad\nmessage');
   const tooLongSend = service.sendChat('x'.repeat(MAX_CHAT_TEXT_LENGTH + 1));
-  return {
+  const result = {
     ok: Boolean(
       first.ok
       && second.ok
@@ -476,6 +670,8 @@ function runChatServiceSelfTest() {
       && retentionSummary.count === 200
       && retentionSummary.firstId === 6
       && retentionSummary.lastId === 205
+      && restartedStatus.messages[0]?.name === 'Alice'
+      && expiredStatus.messages[0]?.name === 'User 8'
       && offlineSend.reason === 'game-offline'
       && invalidSend.reason === 'chat-control-character'
       && tooLongSend.reason === 'chat-too-long'
@@ -485,11 +681,15 @@ function runChatServiceSelfTest() {
     second,
     onlineStatus,
     retentionSummary,
+    restartedStatus,
+    expiredStatus,
     offlineSend,
     invalidSend,
     tooLongSend,
     sent
   };
+  fs.rmSync(cacheRoot, { recursive: true, force: true });
+  return result;
 }
 
 module.exports = {

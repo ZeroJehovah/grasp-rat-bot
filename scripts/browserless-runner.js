@@ -23,8 +23,9 @@ const {
 } = require('../src/node/browserless/runner');
 const {
   browserlessStatsForOffline,
+  mergeState,
   readBrowserlessStateFile,
-  updateBrowserlessStateFile
+  writeBrowserlessStateFile
 } = require('../src/node/browserless/state-file');
 const {
   leaveWithVerification,
@@ -50,10 +51,50 @@ function lastLeaveResponse(result) {
 function shutdownStaminaDetail(result) {
   const response = lastLeaveResponse(result);
   if (!response) return null;
-  return {
+  const raw = {
+    stamina5sRemainingMilli: response.stamina_5s_remaining_milli ?? response.stamina5sRemainingMilli ?? null,
+    stamina5sLimitMilli: response.stamina_5s_limit_milli ?? response.stamina5sLimitMilli ?? null,
+    stamina1hRemainingMilli: response.stamina_1h_remaining_milli ?? response.stamina1hRemainingMilli ?? null,
+    stamina1hLimitMilli: response.stamina_1h_limit_milli ?? response.stamina1hLimitMilli ?? null,
     stamina1dRemainingMilli: response.stamina_1d_remaining_milli ?? response.stamina1dRemainingMilli ?? null,
     stamina1dLimitMilli: response.stamina_1d_limit_milli ?? response.stamina1dLimitMilli ?? null
   };
+  const detail = Object.fromEntries(Object.entries(raw).filter(([, value]) => value !== null && value !== undefined));
+  return Object.keys(detail).length ? detail : null;
+}
+
+function shutdownSelfDetail(result, state = {}, userId = 0) {
+  const response = lastLeaveResponse(result) || {};
+  const current = state?.current?.self && typeof state.current.self === 'object' ? state.current.self : {};
+  const lastKnown = state?.lastKnown?.self && typeof state.lastKnown.self === 'object' ? state.lastKnown.self : {};
+  const drop = response.death_drop_coins ?? response.death_reward_preview ?? response.drop ?? current.drop ?? lastKnown.drop;
+  return {
+    ...lastKnown,
+    ...current,
+    userId: Number(response.user_id ?? response.userId ?? current.userId ?? lastKnown.userId ?? userId) || 0,
+    entityId: response.entity_id ?? response.entityId ?? current.entityId ?? lastKnown.entityId ?? null,
+    name: response.name || current.name || lastKnown.name || '',
+    x: response.x ?? current.x ?? lastKnown.x ?? null,
+    y: response.y ?? current.y ?? lastKnown.y ?? null,
+    hp: response.hp ?? current.hp ?? lastKnown.hp ?? null,
+    drop: drop === null || drop === undefined || drop === '' ? null : Number(drop),
+    dropKnown: drop !== null && drop !== undefined && drop !== '',
+    deathCount: response.death_count ?? response.deathCount ?? current.deathCount ?? null,
+    life: response.life || current.life || '',
+    alive: String(response.life || current.life || '').toLowerCase() !== 'dead',
+    authority: result?.ok ? 'verified-leave' : (current.authority || lastKnown.authority || '')
+  };
+}
+
+function snapshotLiveState(options, persistedState) {
+  if (typeof options.getLiveState !== 'function') return persistedState;
+  try {
+    const live = options.getLiveState();
+    if (!live || typeof live !== 'object') return persistedState;
+    return mergeState(persistedState, JSON.parse(JSON.stringify(live)));
+  } catch (_) {
+    return persistedState;
+  }
 }
 
 function shutdownLastRealtimeTick(state = {}) {
@@ -62,7 +103,9 @@ function shutdownLastRealtimeTick(state = {}) {
     canary?.state?.realtime?.tick,
     canary?.stats?.tick?.last,
     canary?.decisions?.last?.tick,
-    canary?.decisions?.last?.input?.realtime?.tick
+    canary?.decisions?.last?.input?.realtime?.tick,
+    state?.current?.decision?.tick,
+    state?.current?.decision?.input?.realtime?.tick
   ].map(Number).filter(value => Number.isFinite(value) && value > 0);
   return candidates.length ? Math.max(...candidates) : 0;
 }
@@ -74,13 +117,14 @@ function shutdownConfirmedLeaveState(state = {}, nowMs = Date.now()) {
     confirmedAt: new Date(confirmedAtMs).toISOString(),
     snapshotIgnoreUntil: new Date(confirmedAtMs + CONFIRMED_LEAVE_SNAPSHOT_IGNORE_MS).toISOString(),
     lastRealtimeTick: shutdownLastRealtimeTick(state),
-    runId: String(canary.runId || '')
+    runId: String(state?.current?.decision?.runId || canary.runId || '')
   };
 }
 
 async function gracefulShutdownLeave(config, options = {}) {
   const readState = options.readState || readBrowserlessStateFile;
-  const state = readState(config.stateFile);
+  const persistedState = readState(config.stateFile);
+  const state = snapshotLiveState(options, persistedState);
   const hydrated = hydrateConfigFromState(config, state);
   const userId = Number(hydrated.userId || 0);
   const sessionToken = String(hydrated.sessionToken || '');
@@ -100,34 +144,56 @@ async function gracefulShutdownLeave(config, options = {}) {
   });
   let statsFinalized = false;
   let statsFinalizeError = '';
-  if (result?.ok) {
-    try {
-      const now = typeof options.now === 'function' ? options.now : Date.now;
-      const nowMs = now();
-      const at = new Date(nowMs).toISOString();
-      const latestState = readState(config.stateFile);
-      const updateState = options.updateState || updateBrowserlessStateFile;
-      const confirmedLeave = shutdownConfirmedLeaveState(latestState, nowMs);
-      updateState(config.stateFile, {
-        runner: {
-          confirmedLeave
-        },
-        stats: browserlessStatsForOffline(latestState, {
+  let statePersisted = false;
+  try {
+    const now = typeof options.now === 'function' ? options.now : Date.now;
+    const nowMs = now();
+    const at = new Date(nowMs).toISOString();
+    const writeState = options.writeState || writeBrowserlessStateFile;
+    const self = shutdownSelfDetail(result, state, userId);
+    const knownStamina = state?.current?.stamina || state?.lastKnown?.stamina || null;
+    const leaveStamina = shutdownStaminaDetail(result);
+    const stamina = leaveStamina ? { ...(knownStamina || {}), ...leaveStamina } : knownStamina;
+    const confirmedLeave = result?.ok ? shutdownConfirmedLeaveState(state, nowMs) : null;
+    const stats = result?.ok
+      ? browserlessStatsForOffline(state, {
           at,
           reason: 'shutdown-leave',
           runId: confirmedLeave.runId,
-          stamina: shutdownStaminaDetail(result)
+          self,
+          stamina
         }, { nowMs })
-      }, { updatedAt: at });
-      statsFinalized = true;
-    } catch (err) {
-      statsFinalizeError = err?.message || String(err);
-    }
+      : state.stats;
+    const finalState = mergeState(state, {
+      updatedAt: at,
+      ...(result?.ok ? {
+        runner: {
+          confirmedLeave
+        }
+      } : {}),
+      current: {
+        self,
+        ...(stamina ? { stamina } : {})
+      },
+      lastKnown: {
+        self,
+        ...(stamina ? { stamina } : {}),
+        at,
+        tick: shutdownLastRealtimeTick(state) || null
+      },
+      stats
+    });
+    writeState(config.stateFile, finalState);
+    statePersisted = true;
+    statsFinalized = Boolean(result?.ok);
+  } catch (err) {
+    statsFinalizeError = err?.message || String(err);
   }
   return {
     ok: Boolean(result?.ok),
     skipped: false,
     statsFinalized,
+    statePersisted,
     statsFinalizeError,
     leave: summarizeLeaveResultForPublic(result)
   };
@@ -185,7 +251,9 @@ async function main() {
     return;
   }
   let activeBackgroundIo = null;
+  let activeLiveStateProvider = null;
   installGracefulShutdownHandlers(config, {
+    getLiveState: () => activeLiveStateProvider?.() || null,
     flushBackgroundIo: async () => {
       const current = activeBackgroundIo;
       activeBackgroundIo = null;
@@ -212,6 +280,9 @@ async function main() {
         const result = await runBrowserlessRunner(config, {
           onBackgroundIoReady: backgroundIo => {
             activeBackgroundIo = backgroundIo || null;
+          },
+          onLiveStateReady: provider => {
+            activeLiveStateProvider = typeof provider === 'function' ? provider : null;
           }
         });
         console.log(JSON.stringify(result, null, 2));
