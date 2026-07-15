@@ -19307,6 +19307,31 @@ async function runSelfTest() {
           ...parseBrowserlessRunnerArgs([], {}),
           nowMs: Date.parse('2026-07-15T04:08:10.357Z')
         });
+        const finalizedWithStaleSelf = buildCompactBrowserlessStatus({
+          runner: {
+            running: true,
+            mode: 'profit-live',
+            currentAction: { kind: 'recover', reason: 'wait-for-full-stamina-and-hp' }
+          },
+          current: {
+            self: { userId: 7, name: 'self', hp: 73 },
+            action: { kind: 'recover', reason: 'wait-for-full-stamina-and-hp' }
+          },
+          stats: {
+            currentSession: {
+              online: false,
+              exitedAt: '2026-07-15T04:24:35.160Z',
+              exitReason: 'shutdown-leave'
+            },
+            lastExit: {
+              at: '2026-07-15T04:24:35.160Z',
+              reason: 'shutdown-leave'
+            }
+          }
+        }, {
+          ...parseBrowserlessRunnerArgs([], {}),
+          nowMs: Date.parse('2026-07-15T04:25:07.256Z')
+        });
         return [
           compact.game.inGame,
           compact.stats.currentSession.online,
@@ -19316,10 +19341,13 @@ async function runSelfTest() {
           compact.action.reason,
           compact.loginPointSafety.reason,
           compact.stats.offline.lastExitReason,
-          compact.stats.offline.nextReconnectAt
+          compact.stats.offline.nextReconnectAt,
+          finalizedWithStaleSelf.game.inGame,
+          finalizedWithStaleSelf.stats.currentSession.online,
+          finalizedWithStaleSelf.stats.currentSession.realtimeOnline
         ].join('|');
       })(),
-      want: 'false|true|false|true|false|action-settlement-stalled|self-present-reentry|combat-low-hp-disadvantage-leave|2026-07-15T04:08:09.235Z'
+      want: 'false|true|false|true|false|action-settlement-stalled|self-present-reentry|combat-low-hp-disadvantage-leave|2026-07-15T04:08:09.235Z|false|false|false'
     },
     {
       name: 'browserless stats ignore transient unknown self drop during stale snapshot gap',

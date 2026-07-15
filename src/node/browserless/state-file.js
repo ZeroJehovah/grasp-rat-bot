@@ -1676,6 +1676,8 @@ function compactAuthStatus(normalized, session = {}) {
 function compactGameStatus(normalized) {
   const current = normalized.current || {};
   const self = current.self && typeof current.self === 'object' ? current.self : null;
+  const currentSession = normalized.stats?.currentSession || {};
+  const lastExit = normalized.stats?.lastExit || {};
   const action = normalized.runner?.currentAction || current.action || current.decision || {};
   const kind = String(action.kind || '');
   const reason = String(action.reason || '');
@@ -1686,7 +1688,13 @@ function compactGameStatus(normalized) {
       'login-point-bootstrap-failed',
       'unsupported-control-mode'
     ].includes(reason);
-  const selfPresent = Boolean(self?.userId || self?.entityId || self?.name) && !waiting;
+  const finalizedSession = Boolean(
+    currentSession.online === false
+      && (currentSession.exitedAt || lastExit.at)
+  );
+  const selfPresent = Boolean(self?.userId || self?.entityId || self?.name)
+    && !waiting
+    && !finalizedSession;
   return {
     inGame: selfPresent,
     selfPresent,
