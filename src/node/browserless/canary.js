@@ -266,6 +266,7 @@ async function runSinglePreLoginSnapshotSafetyProbe(config, state, deps = {}, de
     healthyHpThreshold: config.loginPointSafetyHealthyHpThreshold ?? runtimeDefaults.loginPointSafetyHealthyHpThreshold,
     healthyRadius: config.loginPointSafetyHealthyRadius ?? runtimeDefaults.loginPointSafetyHealthyRadius,
     lowRadius: config.loginPointSafetyRadius ?? runtimeDefaults.loginPointSafetyRadius,
+    staminaFullRatio: config.staminaFullRatio ?? runtimeDefaults.staminaFullRatio,
     damageActorUserIds,
     easyKillUserIds
   });

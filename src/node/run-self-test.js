@@ -5649,13 +5649,22 @@ async function runSelfTest() {
       want: true
     },
     {
-      name: 'browserless snapshot safety rejects stale active login-point evidence',
+      name: 'browserless snapshot safety rejects stale non-full-stamina login-point evidence',
       got: (() => {
         const summary = summarizeSnapshotPayload({
           type: 'snapshot',
           tick: 90,
           entities: [
-            { user_id: 8, name: 'near-active', x: 100, y: 0, current_join_mode: 'Active', life: 'Alive' }
+            {
+              user_id: 8,
+              name: 'near-active',
+              x: 100,
+              y: 0,
+              current_join_mode: 'Active',
+              life: 'Alive',
+              stamina_5s_remaining_milli: 5000,
+              stamina_5s_limit_milli: 10000
+            }
           ],
           bullets: [],
           coin_drops: [],
@@ -5677,6 +5686,88 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'true|false|stale-snapshot-tick|stale-snapshot-tick|1'
+    },
+    {
+      name: 'browserless snapshot safety classifies activity from 5s stamina instead of snapshot mode',
+      got: (() => {
+        const options = {
+          userId: 7,
+          loginPoint: { x: 0, y: 0, hp: 79, source: 'test' },
+          latestKnownTick: 100,
+          healthyHpThreshold: 80,
+          healthyRadius: 17000,
+          lowRadius: 30000,
+          staminaFullRatio: 0.98
+        };
+        const safetyFor = entity => summarizeSnapshotPayload({
+          type: 'snapshot',
+          tick: 101,
+          entities: [entity],
+          bullets: [],
+          coin_drops: [],
+          messages: []
+        }, options).safety;
+        const fullActive = safetyFor({
+          user_id: 8,
+          name: 'full-active',
+          x: 100,
+          y: 0,
+          current_join_mode: 'Active',
+          life: 'Alive',
+          stamina_5s_remaining_milli: 10000,
+          stamina_5s_limit_milli: 10000
+        });
+        const spentPassive = safetyFor({
+          user_id: 9,
+          name: 'spent-passive',
+          x: 200,
+          y: 0,
+          current_join_mode: 'Passive',
+          life: 'Alive',
+          stamina_5s_remaining_milli: 7000,
+          stamina_5s_limit_milli: 10000
+        });
+        const unknownActive = safetyFor({
+          user_id: 10,
+          name: 'unknown-active',
+          x: 300,
+          y: 0,
+          current_join_mode: 'Active',
+          life: 'Alive'
+        });
+        const compact = buildCompactBrowserlessStatus({
+          loginPointSafety: {
+            ok: false,
+            reason: spentPassive.reason,
+            checkedAt: '2026-07-15T02:00:00.000Z',
+            point: options.loginPoint,
+            detail: {
+              ...spentPassive,
+              checkedAt: '2026-07-15T02:00:00.000Z'
+            }
+          }
+        }, {});
+        return [
+          fullActive.ok,
+          fullActive.activeNearbyCount,
+          fullActive.nearest?.joinModeActive,
+          fullActive.nearest?.fullStamina5s,
+          spentPassive.ok,
+          spentPassive.reason,
+          spentPassive.activeNearbyCount,
+          spentPassive.nearestActive?.user_id,
+          spentPassive.nearestActive?.joinModeActive,
+          spentPassive.nearestActive?.stamina5sRemainingMilli,
+          unknownActive.ok,
+          unknownActive.activeNearbyCount,
+          unknownActive.nearest?.stamina5sKnown,
+          compact.loginPointSafety.detail.nearestDangerous?.stamina5s,
+          compact.loginPointSafety.detail.nearestDangerous?.stamina5sLimit,
+          compact.loginPointSafety.detail.nearestDangerous?.joinModeActive,
+          compact.loginPointSafety.detail.nearestDangerous?.fullStamina5s
+        ].join('|');
+      })(),
+      want: 'true|0|true|true|false|active-near-login-point|1|9|false|7000|true|0|false|7000|10000|false|false'
     },
     {
       name: 'browserless snapshot safety blocks passive same-day damage actors by stable user id',
@@ -5773,7 +5864,16 @@ async function runSelfTest() {
           body: {
             type: 'snapshot',
             tick: 101,
-            entities: [{ user_id: 8, name: 'xuanze00', x: 100, y: 0, current_join_mode: 'Active', life: 'Alive' }],
+            entities: [{
+              user_id: 8,
+              name: 'xuanze00',
+              x: 100,
+              y: 0,
+              current_join_mode: 'Active',
+              life: 'Alive',
+              stamina_5s_remaining_milli: 5000,
+              stamina_5s_limit_milli: 10000
+            }],
             bullets: [],
             coin_drops: [],
             messages: []
@@ -5827,7 +5927,15 @@ async function runSelfTest() {
                   type: 'snapshot',
                   tick: ticks[current],
                   entities: current === dangerousAt
-                    ? [{ user_id: 8, x: 100, y: 0, hp: 100, current_join_mode: 'Active' }]
+                    ? [{
+                        user_id: 8,
+                        x: 100,
+                        y: 0,
+                        hp: 100,
+                        current_join_mode: 'Active',
+                        stamina_5s_remaining_milli: 5000,
+                        stamina_5s_limit_milli: 10000
+                      }]
                     : [],
                   bullets: [],
                   coin_drops: [],
@@ -14325,7 +14433,18 @@ async function runSelfTest() {
               tick: 19,
               entities: [
                 { entity_id: 1, user_id: 7, name: 'self', x: 100, y: 200, hp: 90 },
-                { entity_id: 2, user_id: 8, name: 'active', x: 500, y: 0, hp: 100, current_join_mode: 'Active', life: 'Alive' }
+                {
+                  entity_id: 2,
+                  user_id: 8,
+                  name: 'active',
+                  x: 500,
+                  y: 0,
+                  hp: 100,
+                  current_join_mode: 'Active',
+                  life: 'Alive',
+                  stamina_5s_remaining_milli: 5000,
+                  stamina_5s_limit_milli: 10000
+                }
               ],
               bullets: [],
               coin_drops: [],
@@ -27033,7 +27152,16 @@ async function runSelfTest() {
 	        const payload = {
 	          type: 'snapshot',
 	          tick: 10,
-	          entities: [{ user_id: 8, name: 'xuanze00', x: 1000, y: 0, hp: 100, current_join_mode: 'Active' }],
+	          entities: [{
+	            user_id: 8,
+	            name: 'xuanze00',
+	            x: 1000,
+	            y: 0,
+	            hp: 100,
+	            current_join_mode: 'Active',
+	            stamina_5s_remaining_milli: 5000,
+	            stamina_5s_limit_milli: 10000
+	          }],
 	          bullets: [],
 	          coin_drops: [],
 	          messages: []

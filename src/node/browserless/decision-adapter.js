@@ -77,6 +77,11 @@ const {
   createBrowserlessDecisionState,
   summarizeBrowserlessDecisionState
 } = require('./decision-state');
+const {
+  hasFull5sStamina,
+  staminaLimitForWindow,
+  staminaRemainingValue
+} = require('./stamina-metadata');
 
 const BROWSER_RUNTIME_DEFAULTS = buildRuntimeDefaults({}, false);
 const DEFAULT_STALE_SELF_MS = 2500;
@@ -177,66 +182,6 @@ function centerActivityInputSummary(self, filtered = {}, options = {}) {
   };
 }
 
-const STAMINA_REMAINING_FIELDS = {
-  '5s': [
-    'stamina_5s_remaining_milli',
-    'stamina_5s_remaining_ms',
-    'stamina5sRemainingMilli',
-    'stamina5sRemainingMs',
-    'stamina5s',
-    'stamina_5s',
-    'stamina_remaining_ms',
-    'staminaRemainingMs',
-    'stamina'
-  ],
-  '1h': [
-    'stamina_1h_remaining_milli',
-    'stamina_1h_remaining_ms',
-    'stamina1hRemainingMilli',
-    'stamina1hRemainingMs',
-    'stamina1h',
-    'stamina_1h'
-  ],
-  '1d': [
-    'stamina_1d_remaining_milli',
-    'stamina_1d_remaining_ms',
-    'stamina1dRemainingMilli',
-    'stamina1dRemainingMs',
-    'stamina1d',
-    'stamina_1d'
-  ]
-};
-
-const STAMINA_LIMIT_FIELDS = {
-  '5s': [
-    'stamina_5s_limit_milli',
-    'stamina_5s_limit_ms',
-    'stamina5sLimitMilli',
-    'stamina5sLimitMs',
-    'stamina5sLimit',
-    'stamina_5s_limit',
-    'stamina_limit_ms',
-    'staminaLimitMs',
-    'staminaLimit'
-  ],
-  '1h': [
-    'stamina_1h_limit_milli',
-    'stamina_1h_limit_ms',
-    'stamina1hLimitMilli',
-    'stamina1hLimitMs',
-    'stamina1hLimit',
-    'stamina_1h_limit'
-  ],
-  '1d': [
-    'stamina_1d_limit_milli',
-    'stamina_1d_limit_ms',
-    'stamina1dLimitMilli',
-    'stamina1dLimitMs',
-    'stamina1dLimit',
-    'stamina_1d_limit'
-  ]
-};
-
 const STAMINA_SPENT_FIELDS = [
   'stamina_spent',
   'staminaSpent',
@@ -311,14 +256,6 @@ function positiveFieldValue(source, fields) {
     picked = picked === null ? value : Math.max(picked, value);
   }
   return picked;
-}
-
-function staminaRemainingValue(entity, windowName) {
-  return firstNumberFromFields(entity, STAMINA_REMAINING_FIELDS[windowName] || []);
-}
-
-function staminaLimitForWindow(entity, windowName) {
-  return firstNumberFromFields(entity, STAMINA_LIMIT_FIELDS[windowName] || []);
 }
 
 function staminaSpentValue(entity) {
@@ -400,13 +337,6 @@ function isMovingEntity(entity, options = {}) {
   if (entity.moving === true || entity.recentlyMoved === true) return true;
   const threshold = Math.max(0, Number(options.activeSpeedMin ?? BROWSER_RUNTIME_DEFAULTS.activeSpeedMin));
   return entitySpeed(entity) >= threshold;
-}
-
-function hasFull5sStamina(entity, options = {}) {
-  const remaining = staminaRemainingValue(entity, '5s');
-  const limit = staminaLimitForWindow(entity, '5s') ?? 10000;
-  const ratio = Math.max(0, Number(options.staminaFullRatio ?? BROWSER_RUNTIME_DEFAULTS.staminaFullRatio ?? 0.98) || 0.98);
-  return remaining !== null && Number.isFinite(limit) && limit > 0 && remaining >= limit * ratio;
 }
 
 function targetWhitelistFromOptions(options = {}) {

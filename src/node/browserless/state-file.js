@@ -769,6 +769,8 @@ function compactSafetyEntity(value) {
     authority: value.authority || 'snapshot',
     hp: value.hp,
     drop: value.drop ?? value.Drop ?? value.reward ?? value.coin_reward ?? value.death_reward_preview ?? value.death_drop_coins,
+    stamina5s: value.stamina5s ?? value.stamina5sRemainingMilli ?? value.stamina_5s_remaining_milli,
+    stamina5sLimit: value.stamina5sLimit ?? value.stamina5sLimitMilli ?? value.stamina_5s_limit_milli,
     amount: value.amount ?? value.value,
     distance: value.distance,
     active: value.active,
@@ -782,6 +784,9 @@ function compactSafetyEntity(value) {
     y: compactNumber(value.y),
     alive: value.alive === undefined ? null : Boolean(value.alive),
     mode: compactString(value.current_join_mode || value.mode || value.joined, 48),
+    joinModeActive: value.joinModeActive === undefined ? null : Boolean(value.joinModeActive),
+    stamina5sKnown: value.stamina5sKnown === undefined ? null : Boolean(value.stamina5sKnown),
+    fullStamina5s: value.fullStamina5s === undefined ? null : Boolean(value.fullStamina5s),
     knownEasyKill: value.knownEasyKill === undefined ? null : Boolean(value.knownEasyKill),
     knownDamageActor: value.knownDamageActor === undefined ? null : Boolean(value.knownDamageActor),
     trustedEasyKill: value.trustedEasyKill === undefined ? null : Boolean(value.trustedEasyKill)

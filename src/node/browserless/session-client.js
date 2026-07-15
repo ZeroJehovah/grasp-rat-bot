@@ -3,6 +3,7 @@
 const http = require('http');
 const https = require('https');
 const { summarizeGrzEntity } = require('../../shared/grz-frame');
+const { summarizeStaminaWindow } = require('./stamina-metadata');
 
 const DEFAULT_GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
 const DEFAULT_HTTP_TIMEOUT_MS = 10000;
@@ -673,10 +674,19 @@ function summarizeSnapshotSafety(payload, loginPoint, options = {}) {
     const distance = Math.hypot(x - point.x, y - point.y);
     if (distance > radius) continue;
     const base = summarizeGrzEntity(entity) || {};
+    const stamina5s = summarizeStaminaWindow(entity, '5s', {
+      staminaFullRatio: options.staminaFullRatio,
+      defaultLimit: 10000
+    });
     const item = {
       ...base,
       distance: Math.round(distance),
-      active: isActiveEntity(entity),
+      active: Boolean(stamina5s.known && !stamina5s.full),
+      joinModeActive: isActiveEntity(entity),
+      stamina5sKnown: stamina5s.known,
+      stamina5sRemainingMilli: stamina5s.remaining,
+      stamina5sLimitMilli: stamina5s.limit,
+      fullStamina5s: stamina5s.full,
       knownEasyKill: userId !== null && easyKillUserIds.has(String(userId)),
       knownDamageActor: userId !== null && damageActorUserIds.has(String(userId)),
       alive: isAliveEntity(entity)
