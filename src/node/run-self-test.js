@@ -28388,6 +28388,259 @@ async function runSelfTest() {
 	      want: 'coin|better-coin|true|coin'
 	    },
 	    {
+	      name: 'browserless stable easy-kill choice beats a new raw competitor at combat handoff',
+	      got: (() => {
+	        const adapter = createBrowserlessDecisionAdapter({
+	          userId: 28886,
+	          controlMode: 'profit-live',
+	          combatEnabled: true,
+	          dynamicProfitThresholdEnabled: false,
+	          easyKillPlayers: [{ userId: 34711, name: 'xuanze00' }]
+	        });
+	        const stateAt = (tick, targetDistance, includeCompetitor) => {
+	          const self = {
+	            entity_id: 1,
+	            user_id: 28886,
+	            x: 0,
+	            y: 0,
+	            hp: 100,
+	            max_hp: 100,
+	            stamina_5s_remaining_milli: 10000,
+	            stamina_1h_remaining_milli: 1000000,
+	            stamina_1d_remaining_milli: 10000000
+	          };
+	          return {
+	            userId: 28886,
+	            realtime: {
+	              tick,
+	              frameAgeMs: 0,
+	              self,
+	              entities: [
+	                self,
+	                { entity_id: 2, user_id: 34711, name: 'xuanze00', x: targetDistance, y: 0, vx: 20, hp: 100, max_hp: 100, current_join_mode: 'Active', drop: 83 },
+	                ...(includeCompetitor ? [{ entity_id: 3, user_id: 99, name: 'haha1', x: 41186, y: 0, hp: 100, max_hp: 100, current_join_mode: 'Passive', drop: 13, stamina_5s_remaining_milli: 10000, stamina_5s_limit_milli: 10000 }] : [])
+	              ],
+	              bullets: [],
+	              coinDrops: []
+	            },
+	            fallback: { tick, frameAgeMs: 0, entities: [], coinDrops: [], messages: [] }
+	          };
+	        };
+	        adapter.decide(stateAt(1, 25257, false), { nowMs: 1000 });
+	        adapter.patchState({
+	          combatMetrics: {
+	            targetId: '34711',
+	            targetName: 'xuanze00',
+	            acceptedShots: 5,
+	            confirmedHits: 0,
+	            actualShots: 5,
+	            requestedShots: 5,
+	            startedAt: 1000
+	          }
+	        });
+	        const decision = adapter.decide(stateAt(2, 6312, true), { nowMs: 2000 });
+	        return [
+	          decision.action.kind,
+	          decision.action.target?.userId,
+	          decision.profit.best?.id,
+	          decision.profit.rawBest?.id,
+	          decision.combat.activeCombatOpportunity?.competingSource,
+	          decision.combat.activeCombatOpportunity?.sameCombatTarget,
+	          decision.combat.activeCombatOpportunity?.blocked
+	        ].join('|');
+	      })(),
+	      want: 'combat-live|34711|34711|99|stable-choice|true|false'
+	    },
+	    {
+	      name: 'browserless engaged easy-kill target survives a stationary realtime frame',
+	      got: (() => {
+	        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'grasp-rat-easy-kill-stationary-engagement-'));
+	        try {
+	          const tracker = createEasyKillPlayerTracker({ file: path.join(dir, 'easy-kill-players.json'), now: () => 0 });
+	          tracker.observeCombatShot({ userId: 34711, name: 'xuanze00', active: true }, { atMs: 100, tick: 1 });
+	          tracker.observeKillEvidence([{ targetUserId: 34711, targetName: 'xuanze00', tick: 2 }], { atMs: 200 });
+	          const adapter = createBrowserlessDecisionAdapter({
+	            userId: 28886,
+	            controlMode: 'profit-live',
+	            combatEnabled: true,
+	            dynamicProfitThresholdEnabled: false,
+	            easyKillPlayerTracker: tracker,
+	            combatAttackRange: 14500,
+	            targetStickMs: 7000,
+	            combatEngageStickMs: 7000,
+	            combatEngageGraceMs: 30000,
+	            combatEngageGraceRange: 17000
+	          });
+	          const stateAt = (tick, moving) => {
+	            const self = { entity_id: 1, user_id: 28886, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000 };
+	            return {
+	              userId: 28886,
+	              realtime: {
+	                tick,
+	                frameAgeMs: 0,
+	                self,
+	                entities: [
+	                  self,
+	                  { entity_id: 2, user_id: 34711, name: 'xuanze00', x: 5887, y: 0, ...(moving ? { vx: 20, vy: 0 } : {}), hp: 82, max_hp: 100, drop: 83 }
+	                ],
+	                bullets: [],
+	                coinDrops: []
+	              },
+	              fallback: {
+	                tick,
+	                frameAgeMs: 0,
+	                entities: [{ entity_id: 22, user_id: 34711, name: 'xuanze00', x: 5887, y: 0, hp: 82, current_join_mode: 'Active', death_drop_coins: 83 }],
+	                coinDrops: [],
+	                messages: []
+	              }
+	            };
+	          };
+	          const first = adapter.decide(stateAt(10, true), { nowMs: 1000 });
+	          const stationary = adapter.evaluateRealtime(stateAt(11, false), { nowMs: 3001 });
+	          const status = tracker.status();
+	          return [
+	            first.action.kind,
+	            stationary.action?.kind,
+	            stationary.combat.target?.combatIntent,
+	            stationary.combat.target?.combatEngagement?.realtimeHold,
+	            status.blockedUserIds.length,
+	            status.engagements[0]?.active
+	          ].join('|');
+	        } finally {
+	          fs.rmSync(dir, { recursive: true, force: true });
+	        }
+	      })(),
+	      want: 'combat-live|combat-live|engaged|true|0|true'
+	    },
+	    {
+	      name: 'browserless same-target easy-kill approach keeps the active engagement open',
+	      got: (() => {
+	        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'grasp-rat-easy-kill-approach-continuation-'));
+	        try {
+	          const tracker = createEasyKillPlayerTracker({ file: path.join(dir, 'easy-kill-players.json'), now: () => 0 });
+	          tracker.observeCombatShot({ userId: 34711, name: 'xuanze00', active: true }, { atMs: 100, tick: 1 });
+	          tracker.observeKillEvidence([{ targetUserId: 34711, targetName: 'xuanze00', tick: 2 }], { atMs: 200 });
+	          tracker.observeCombatEngagement({ userId: 34711, name: 'xuanze00', active: true, drop: 83 }, { atMs: 900, tick: 9 });
+	          const decision = buildBrowserlessDecision({
+	            userId: 28886,
+	            realtime: {
+	              tick: 10,
+	              frameAgeMs: 0,
+	              self: { entity_id: 1, user_id: 28886, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+	              entities: [
+	                { entity_id: 1, user_id: 28886, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+	                { entity_id: 2, user_id: 34711, name: 'xuanze00', x: 30000, y: 0, vx: 20, hp: 100, max_hp: 100, current_join_mode: 'Active', drop: 83 }
+	              ],
+	              bullets: [],
+	              coinDrops: []
+	            },
+	            fallback: { tick: 10, frameAgeMs: 0, entities: [], coinDrops: [], messages: [] }
+	          }, {}, {
+	            nowMs: 1000,
+	            userId: 28886,
+	            controlMode: 'profit-live',
+	            combatEnabled: true,
+	            dynamicProfitThresholdEnabled: false,
+	            easyKillPlayerTracker: tracker
+	          });
+	          const status = tracker.status();
+	          return [decision.action.kind, decision.action.target?.userId, status.blockedUserIds.length, status.engagements[0]?.active].join('|');
+	        } finally {
+	          fs.rmSync(dir, { recursive: true, force: true });
+	        }
+	      })(),
+	      want: 'seek-enemy|34711|0|true'
+	    },
+	    {
+	      name: 'browserless worker planner handoff seeds realtime easy-kill control',
+	      got: (async () => {
+	        const options = {
+	          ...buildBrowserlessRuntimeDefaults({}),
+	          userId: 28886,
+	          controlMode: 'profit-live',
+	          combatEnabled: true,
+	          dynamicProfitThresholdEnabled: false,
+	          easyKillPlayers: [{ userId: 34711, name: 'xuanze00' }]
+	        };
+	        const worker = createBrowserlessDecisionWorker(options);
+	        try {
+	          await worker.ready();
+	          const self = { entity_id: 1, user_id: 28886, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000 };
+	          const state = {
+	            userId: 28886,
+	            realtime: {
+	              tick: 10,
+	              frameAgeMs: 0,
+	              self,
+	              entities: [self, { entity_id: 2, user_id: 34711, name: 'xuanze00', x: 5887, y: 0, hp: 82, max_hp: 100, current_join_mode: 'Active', drop: 83 }],
+	              bullets: [],
+	              coinDrops: []
+	            },
+	            fallback: { tick: 10, frameAgeMs: 0, entities: [], coinDrops: [], messages: [] }
+	          };
+	          const result = await worker.decide(state, { ...options, nowMs: 1000 }, {
+	            easyKillStatus: { players: [{ userId: 34711, name: 'xuanze00' }], blockedUserIds: [], engagements: [] }
+	          }, null);
+	          const adapter = createBrowserlessDecisionAdapter(options);
+	          const before = adapter.evaluateRealtime(state, { nowMs: 1000 });
+	          const synced = adapter.syncPlannerDecision(result.decision);
+	          const after = adapter.evaluateRealtime(state, { nowMs: 1100 });
+	          return [
+	            result.decision.stateful.opportunityChoice?.id,
+	            before.action === null,
+	            synced,
+	            after.action?.kind,
+	            after.action?.target?.userId
+	          ].join('|');
+	        } finally {
+	          await worker.close();
+	        }
+	      })(),
+	      want: '34711|true|true|combat-live|34711'
+	    },
+	    {
+	      name: 'browserless combat metrics reset atomically when target identity changes',
+	      got: (() => {
+	        const adapter = createBrowserlessDecisionAdapter({ userId: 28886 });
+	        adapter.patchState({
+	          combatMetrics: {
+	            targetId: 'old-target',
+	            targetName: 'old-name',
+	            startedAt: 1000,
+	            requestedShots: 12,
+	            actualShots: 12,
+	            acceptedShots: 10,
+	            confirmedHits: 9,
+	            targetDamage: 99,
+	            selfDamage: 12
+	          }
+	        });
+	        const target = { userId: 34711, name: 'xuanze00', active: true, x: 5000, y: 0 };
+	        adapter.observeActionResult({
+	          kind: 'combat-live',
+	          target,
+	          shoot: { ok: true, skipped: false, command: { type: 'shoot' } }
+	        }, {
+	          tick: 10,
+	          band: 'combat',
+	          action: { kind: 'combat-live', band: 'combat', target },
+	          combat: { tick: 10, target }
+	        }, { nowMs: 5000 });
+	        const metrics = adapter.getState().combatMetrics;
+	        return [
+	          metrics.targetId,
+	          metrics.targetName,
+	          metrics.startedAt,
+	          metrics.requestedShots,
+	          metrics.actualShots,
+	          metrics.targetDamage === undefined,
+	          metrics.selfDamage === undefined,
+	          metrics.confirmedHits === undefined
+	        ].join('|');
+	      })(),
+	      want: '34711|xuanze00|5000|1|1|true|true|true'
+	    },
+	    {
 	      name: 'browserless action adapter approaches known easy active player without profit-layer firing',
 	      got: (() => {
 	        const commands = [];

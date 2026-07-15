@@ -1294,6 +1294,21 @@ async function runReadOnlyCanary(config, options = {}) {
           const latestState = stateStore.getDecisionState?.(responseAtMs) || stateStore.getState(responseAtMs);
           stages['planner-response-state'] = performance.now() - stageStarted;
           stageStarted = performance.now();
+          if (responseAtMs - Number(workerResult.requestAtMs || atMs) > Math.max(1000, decisionIntervalMs)) {
+            lastDecisionAtMs = 0;
+            log('canary-decision-worker-stale', {
+              requestAtMs: workerResult.requestAtMs || atMs,
+              responseAtMs,
+              roundTripMs: workerResult.roundTripMs
+            });
+            stages['planner-response-stale'] = performance.now() - stageStarted;
+            return;
+          }
+          stages['planner-response-stale'] = performance.now() - stageStarted;
+          stageStarted = performance.now();
+          decisionAdapter.syncPlannerDecision?.(workerResult.decision);
+          stages['planner-response-sync'] = performance.now() - stageStarted;
+          stageStarted = performance.now();
           if (evaluateRealtimeControl(latestState, responseAtMs, true, stages)) {
             stages['planner-response-realtime'] = performance.now() - stageStarted;
             return;
@@ -1302,15 +1317,6 @@ async function runReadOnlyCanary(config, options = {}) {
           if (latestState?.realtime?.self && !workerResult.decision?.input?.self) {
             lastDecisionAtMs = 0;
             dispatchWorkerDecision(latestState, responseAtMs);
-            return;
-          }
-          if (responseAtMs - Number(workerResult.requestAtMs || atMs) > Math.max(1000, decisionIntervalMs)) {
-            lastDecisionAtMs = 0;
-            log('canary-decision-worker-stale', {
-              requestAtMs: workerResult.requestAtMs || atMs,
-              responseAtMs,
-              roundTripMs: workerResult.roundTripMs
-            });
             return;
           }
           stageStarted = performance.now();

@@ -132,6 +132,12 @@ const DANGEROUS_COMBAT_EXIT_REASONS = new Set([
   'combat-hp-disadvantage-leave',
   'combat-low-hp-disadvantage-leave'
 ]);
+const EASY_KILL_ENGAGEMENT_CONTINUATION_ACTIONS = new Set([
+  'combat-live',
+  'attack',
+  'seek-enemy',
+  'opportunistic-shot'
+]);
 
 function buildBrowserlessRuntimeDefaults(config = {}) {
   return buildRuntimeDefaults(config, false);
@@ -4432,7 +4438,10 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
   reconcileEasyKillTracker(input, stateful, options);
   stageTimings.easyKill = performance.now() - stageStarted;
   stageStarted = performance.now();
-  const combat = buildCombatDecision(input, stateful, options);
+  const combat = buildCombatDecision(input, stateful, {
+    ...options,
+    easyKillPreferredTargetId: easyKillPreferredTargetIdFromOpportunity(null, stateful)
+  });
   stageTimings.combat = performance.now() - stageStarted;
   stageStarted = performance.now();
   const combatActionEligible = isCombatActionEligibleForDecision(combat, options);
@@ -5084,7 +5093,9 @@ function reconcileEasyKillCombatOutcome(decision, input, options = {}) {
   }
   const status = easyKillTrackerStatus(options);
   const active = (status.engagements || []).filter(item => item.active);
-  const selectedCombatTargetId = action.kind === 'combat-live' ? easyKillTargetUserId(action.target || combatTarget) : null;
+  const selectedCombatTargetId = EASY_KILL_ENGAGEMENT_CONTINUATION_ACTIONS.has(action.kind)
+    ? easyKillTargetUserId(action.target || combatTarget)
+    : null;
   for (const engagement of active) {
     if (selectedCombatTargetId !== null && String(engagement.userId) === String(selectedCombatTargetId)) continue;
     const stillVisible = (input.visibleTargets || []).some(target => String(easyKillTargetUserId(target) ?? '') === String(engagement.userId));
@@ -5150,6 +5161,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     includeAfkProfitTargets: nonCombatProfit ? false : options.includeAfkProfitTargets
   });
   const easyKillPreferredTargetId = easyKillPreferredTargetIdFromOpportunity(opportunity, stateful);
+  const previousCombatTargetId = targetIdForAttackHistory(stateful.combatTarget);
   const combat = buildCombatDecision(input, stateful, {
     ...options,
     easyKillPreferredTargetId
@@ -5158,15 +5170,25 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
   const combatPursuitSuppression = buildProfitPursuitSuppression(input, combat, stateful, options);
   let combatActionEligible = isCombatActionEligibleForDecision(combat, options) && !combatPursuitSuppression;
   const combatTarget = combat?.target || null;
+  const combatTargetId = targetIdForAttackHistory(combatTarget);
+  const continuingPreviousCombatTarget = previousCombatTargetId !== null
+    && previousCombatTargetId !== undefined
+    && previousCombatTargetId !== ''
+    && combatTargetId !== null
+    && combatTargetId !== undefined
+    && combatTargetId !== ''
+    && String(previousCombatTargetId) === String(combatTargetId);
   const freshProactiveCombat = Boolean(
     combatActionEligible
       && combatTarget
       && combatTarget.combatIntent !== 'defensive'
       && !combatTarget.combatEngagement
+      && !continuingPreviousCombatTarget
   );
   let activeCombatOpportunity = null;
   let kiteReassessment = null;
-  if (freshProactiveCombat && opportunity.rawChoice) {
+  const competingOpportunity = opportunity.choice || opportunity.rawChoice || null;
+  if (freshProactiveCombat && competingOpportunity) {
     const combatScore = scoreEnemyOpportunity(combatTarget, {
       ...options,
       recentCombatMetrics: stateful.combatMetrics,
@@ -5176,8 +5198,8 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       exchangeStopLoss: combat.dryRun?.exchangeStopLoss || null,
       isAfkProfitTarget: () => false
     });
-    const competingScore = Number(opportunity.rawChoice.score || 0);
-    const competingTargetId = opportunityChoiceTargetId(opportunity.rawChoice);
+    const competingScore = Number(competingOpportunity.score || 0);
+    const competingTargetId = opportunityChoiceTargetId(competingOpportunity);
     const sameCombatTarget = Boolean(competingTargetId
       && String(competingTargetId) === String(combatTarget?.userId ?? combatTarget?.user_id ?? ''));
     const switchRatio = 1 + Math.max(0, Number(options.opportunitySwitchRelativeMargin || OPPORTUNITY_CONSTANTS.OPPORTUNITY_SWITCH_RELATIVE_MARGIN || 0));
@@ -5187,7 +5209,8 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     activeCombatOpportunity = {
       combatScore: Number.isFinite(Number(combatScore)) ? Math.round(Number(combatScore)) : null,
       competingScore: Math.round(competingScore),
-      competingType: opportunity.rawChoice.type || '',
+      competingType: competingOpportunity.type || '',
+      competingSource: opportunity.choice ? 'stable-choice' : 'raw-choice',
       sameCombatTarget,
       hitRateSource: combat.dryRun?.behavior?.recentHitRate !== null
         && combat.dryRun?.behavior?.recentHitRate !== undefined
@@ -5656,12 +5679,17 @@ function recordAttackHistoryFromActionResult(decisionState, actionResult, decisi
   ].slice(-50);
   if (combat) {
     const previousMetrics = decisionState.combatMetrics || {};
-    const previousShotAt = Number(previousMetrics.actualLastShotAt || 0);
+    const sameTarget = String(previousMetrics.targetId ?? '') === String(id);
+    const baseMetrics = sameTarget ? previousMetrics : {};
+    const previousShotAt = Number(baseMetrics.actualLastShotAt || 0);
+    const previousStartedAt = Number(baseMetrics.startedAt);
     decisionState.combatMetrics = {
-      ...previousMetrics,
+      ...baseMetrics,
       targetId: String(id),
-      requestedShots: Number(previousMetrics.requestedShots ?? previousMetrics.actualShots ?? 0) + 1,
-      actualShots: Number(previousMetrics.requestedShots ?? previousMetrics.actualShots ?? 0) + 1,
+      targetName: target?.name || baseMetrics.targetName || '',
+      startedAt: sameTarget && Number.isFinite(previousStartedAt) ? previousStartedAt : nowMs,
+      requestedShots: Number(baseMetrics.requestedShots ?? baseMetrics.actualShots ?? 0) + 1,
+      actualShots: Number(baseMetrics.requestedShots ?? baseMetrics.actualShots ?? 0) + 1,
       actualLastShotAt: nowMs,
       actualShotIntervalMs: previousShotAt > 0 ? Math.max(0, nowMs - previousShotAt) : null
     };
@@ -5734,6 +5762,25 @@ function createBrowserlessDecisionAdapter(options = {}) {
         ...options,
         ...nextOptions
       });
+    },
+    syncPlannerDecision(decision) {
+      const plannerState = decision?.stateful || null;
+      if (!plannerState || typeof plannerState !== 'object') return false;
+      const proposedChoice = plannerState.opportunityChoice ?? null;
+      const currentCombatTargetId = targetIdForAttackHistory(decisionState.combatTarget);
+      const proposedTargetId = opportunityChoiceTargetId(proposedChoice);
+      if (currentCombatTargetId !== null
+        && currentCombatTargetId !== undefined
+        && currentCombatTargetId !== ''
+        && (proposedTargetId === null
+          || proposedTargetId === undefined
+          || proposedTargetId === ''
+          || String(proposedTargetId) !== String(currentCombatTargetId))) {
+        return false;
+      }
+      decisionState.opportunityChoice = cloneJson(proposedChoice);
+      decisionState.opportunitySwitchLock = cloneJson(plannerState.switchLock || null);
+      return true;
     },
     patchState(patch = {}) {
       for (const [key, value] of Object.entries(patch || {})) {
