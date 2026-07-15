@@ -10,6 +10,7 @@ const DEFAULT_STALE_SELF_CONFIRM_MS = 2000;
 const DEFAULT_NO_SELF_GRACE_MS = 3000;
 const DEFAULT_FRAME_GAP_ALERT_MS = 2000;
 const DEFAULT_STAMINA_EXHAUSTED_BELOW_MS = 200;
+const DEFAULT_COMBAT_MOVEMENT_SETTLEMENT_STALL_MS = 2500;
 
 function numberOrNull(value) {
   const number = Number(value);
@@ -92,6 +93,7 @@ function decisionSafetyDetail(decision) {
     staminaExhausted: action.staminaExhausted || null,
     reloginDelayMs: action.reloginDelayMs ?? action.staminaBudgetExit?.reloginDelayMs ?? null,
     staminaBlocked: action.staminaBlocked || null,
+    recoverySafety: action.recoverySafety || null,
     combat: (combat || action.combatExit) ? {
       startedAt: combat?.startedAt || '',
       durationMs: combat?.durationMs ?? null,
@@ -105,6 +107,87 @@ function decisionSafetyDetail(decision) {
     profit: decision?.profit ? {
       best: decision.profit.best || null
     } : null
+  };
+}
+
+function actionTargetId(target) {
+  const value = target?.userId ?? target?.user_id ?? target?.entityId ?? target?.entity_id ?? target?.id;
+  return value === null || value === undefined || value === '' ? '' : String(value);
+}
+
+function bulletOwnerId(bullet) {
+  const value = bullet?.owner_user_id
+    ?? bullet?.ownerUserId
+    ?? bullet?.owner_id
+    ?? bullet?.ownerId
+    ?? bullet?.user_id
+    ?? bullet?.userId;
+  return value === null || value === undefined || value === '' ? '' : String(value);
+}
+
+function actionSettlementStallAssessment(state = {}, context = {}, options = {}) {
+  const movement = context.actionSettlementStall || null;
+  const decision = context.lastDecision || context.decision || null;
+  const action = decision?.action || decision || {};
+  const combat = decision?.combat || null;
+  const target = action.target || combat?.target || null;
+  const kind = String(action.kind || decision?.kind || '');
+  const band = String(action.band || decision?.band || '');
+  const targetId = actionTargetId(target);
+  const selfId = actionTargetId(state?.realtime?.self);
+  const bullets = Array.isArray(state?.realtime?.bullets) ? state.realtime.bullets : [];
+  const targetOwnedBulletCount = targetId
+    ? bullets.filter(bullet => bulletOwnerId(bullet) === targetId && bulletOwnerId(bullet) !== selfId).length
+    : 0;
+  const combatAction = band === 'combat'
+    || kind === 'combat-live'
+    || kind === 'combat-candidate'
+    || Boolean(combat?.target);
+  const safetyMotion = band === 'safety'
+    && Boolean(target)
+    && (kind === 'flee' || kind === 'safety-exit' || action.urgent === true);
+  const injuryPressure = Boolean(action.injury || decision?.injury || action.threatEvidence?.recentDamage);
+  const hostilePressure = Boolean(combatAction || safetyMotion || injuryPressure || targetOwnedBulletCount > 0);
+  const adapterThresholdMs = Math.max(1000, Number(movement?.stallMs || 5000));
+  const configuredCombatThresholdMs = numberOrNull(
+    context.combatMovementSettlementStallMs ?? options.combatMovementSettlementStallMs
+  );
+  const combatThresholdMs = Math.max(1000, configuredCombatThresholdMs === null
+    ? Math.min(adapterThresholdMs, DEFAULT_COMBAT_MOVEMENT_SETTLEMENT_STALL_MS)
+    : configuredCombatThresholdMs);
+  const observedFrames = Math.max(0, Number(movement?.observedFrames || 0));
+  const minimumFrames = Math.max(1, Number(context.movementSettlementFrames ?? options.movementSettlementFrames ?? 2));
+  const noProgressMs = Math.max(0, Number(movement?.noProgressMs || 0));
+  const adapterStalled = Boolean(movement?.stalled);
+  const combatStalled = Boolean(
+    movement?.active
+      && hostilePressure
+      && observedFrames >= minimumFrames
+      && noProgressMs >= combatThresholdMs
+  );
+  return {
+    active: Boolean(movement?.active),
+    triggered: Boolean(adapterStalled || combatStalled),
+    adapterStalled,
+    combatStalled,
+    hostilePressure,
+    pressureSources: [
+      combatAction ? 'combat-action' : '',
+      safetyMotion ? 'safety-motion' : '',
+      injuryPressure ? 'recent-injury' : '',
+      targetOwnedBulletCount > 0 ? 'target-owned-bullet' : ''
+    ].filter(Boolean),
+    decisionKind: kind,
+    decisionBand: band,
+    targetId: targetId || null,
+    targetName: String(target?.name || ''),
+    targetOwnedBulletCount,
+    observedFrames,
+    minimumFrames,
+    noProgressMs,
+    thresholdMs: hostilePressure ? combatThresholdMs : adapterThresholdMs,
+    combatThresholdMs,
+    adapterThresholdMs
   };
 }
 
@@ -220,10 +303,15 @@ function evaluateBrowserlessSafety(state = {}, context = {}, options = {}) {
     }, { nowMs });
   }
 
-  if (context.actionSettlementStall?.stalled) {
-    return createSafetyEvent('action-settlement-stalled', {
+  const movementStallAssessment = actionSettlementStallAssessment(state, context, options);
+  if (movementStallAssessment.triggered) {
+    const combatStall = movementStallAssessment.hostilePressure;
+    return createSafetyEvent(combatStall ? 'combat-action-settlement-stalled' : 'action-settlement-stalled', {
       movement: context.actionSettlementStall,
-      lastDecision: context.lastDecision ? decisionSafetyDetail(context.lastDecision) : null,
+      movementSafety: movementStallAssessment,
+      lastDecision: (context.lastDecision || context.decision)
+        ? decisionSafetyDetail(context.lastDecision || context.decision)
+        : null,
       realtime: {
         tick: state?.realtime?.tick ?? null,
         receivedAtMs: state?.realtime?.receivedAtMs ?? null,
@@ -231,11 +319,11 @@ function evaluateBrowserlessSafety(state = {}, context = {}, options = {}) {
       }
     }, {
       nowMs,
-      shouldLeave: false,
+      shouldLeave: combatStall,
       stopMotion: true,
-      classification: 'transport-recovery',
-      leaveAttempted: false,
-      exitConfirmationRequired: false
+      classification: combatStall ? 'exit' : 'transport-recovery',
+      leaveAttempted: combatStall,
+      exitConfirmationRequired: combatStall
     });
   }
 
@@ -340,11 +428,13 @@ async function executeSafetyExit(event, config = {}, deps = {}) {
 }
 
 module.exports = {
+  DEFAULT_COMBAT_MOVEMENT_SETTLEMENT_STALL_MS,
   DEFAULT_FRAME_GAP_ALERT_MS,
   DEFAULT_NO_SELF_GRACE_MS,
   DEFAULT_STALE_SELF_CONFIRM_MS,
   DEFAULT_STALE_SELF_MS,
   DEFAULT_STAMINA_EXHAUSTED_BELOW_MS,
+  actionSettlementStallAssessment,
   createBrowserlessSafetyController,
   createSafetyEvent,
   evaluateBrowserlessSafety,

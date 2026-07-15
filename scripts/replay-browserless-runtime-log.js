@@ -6,6 +6,8 @@ const { StringDecoder } = require('string_decoder');
 const path = require('path');
 const { forEachJsonlEntry } = require('./browserless-log-summary');
 const { estimateAim } = require('../src/node/browserless/combat-adapter');
+const { buildLowHpRecoveryThreatExitDecision } = require('../src/node/browserless/decision-adapter');
+const { evaluateBrowserlessSafety } = require('../src/node/browserless/safety-controller');
 const { actionPriorityBand } = require('../src/strategy/action-priority');
 const {
   evaluateConfirmedCombatHpExitCore,
@@ -20,6 +22,7 @@ function parseArgs(argv) {
     startLine: 1,
     endLine: Infinity,
     targetId: '',
+    targetName: '',
     mode: 'combat',
     hitRadius: 90,
     controlIntervalMs: 160,
@@ -34,6 +37,7 @@ function parseArgs(argv) {
     else if (arg === '--start-line') options.startLine = Number(argv[++index] || 1);
     else if (arg === '--end-line') options.endLine = Number(argv[++index] || Infinity);
     else if (arg === '--target-id') options.targetId = String(argv[++index] || '');
+    else if (arg === '--target-name') options.targetName = String(argv[++index] || '');
     else if (arg === '--mode') options.mode = String(argv[++index] || 'combat');
     else if (arg === '--hit-radius') options.hitRadius = Number(argv[++index] || 90);
     else if (arg === '--control-interval-ms') options.controlIntervalMs = Number(argv[++index] || 160);
@@ -1171,15 +1175,216 @@ function replayExit(options) {
   return result;
 }
 
-const options = parseArgs(process.argv.slice(2));
-const result = options.mode === 'opportunity'
-  ? replayOpportunity(options)
-  : (options.mode === 'exit'
-      ? replayExit(options)
-      : (options.mode === 'arbitration'
-          ? replayArbitration(options)
-          : (options.mode === 'combat-policy'
-              ? replayCombatPolicy(options)
-              : (options.mode === 'dodge' ? replayDodge(options) : replayCombat(options)))));
-console.log(JSON.stringify(result, null, 2));
-if (!result.accepted && !result.improved?.accepted) process.exitCode = 1;
+function replayMovementStallExit(options) {
+  const rows = selectedEntries(options);
+  const decisionsFile = path.join(path.dirname(options.file), 'decisions.jsonl');
+  const laterDecisions = [];
+  if (fs.existsSync(decisionsFile)) {
+    forEachJsonlEntry(decisionsFile, entry => {
+      const at = Date.parse(entry?.at || '');
+      const self = entry?.detail?.input?.self || entry?.detail?.action?.self || null;
+      if (Number.isFinite(at) && self) laterDecisions.push({ at, self });
+    });
+  }
+  const evaluated = [];
+  for (const row of rows) {
+    const event = row.detail || {};
+    if (String(event.reason || '') !== 'action-settlement-stalled') continue;
+    const decision = event.detail?.lastDecision || {};
+    const target = decision.target || decision.combat?.target || null;
+    const targetId = String(target?.userId ?? target?.user_id ?? target?.entityId ?? target?.entity_id ?? '');
+    if (options.targetId && targetId !== options.targetId) continue;
+    if (options.targetName && String(target?.name || '') !== options.targetName) continue;
+    const atMs = Date.parse(row.entry.at || '');
+    const realtime = event.detail?.realtime || {};
+    const self = realtime.self || decision.self || decision.combat?.self || null;
+    const replayed = evaluateBrowserlessSafety({
+      realtime: {
+        ...realtime,
+        self,
+        bullets: Array.isArray(realtime.bullets) ? realtime.bullets : []
+      },
+      frameAges: {}
+    }, {
+      actionSettlementStall: event.detail?.movement || null,
+      lastDecision: decision,
+      nowMs: atMs
+    });
+    const next = laterDecisions.find(item => item.at > atMs && item.at <= atMs + 15000) || null;
+    const baselineHp = Number(self?.hp);
+    const nextHp = Number(next?.self?.hp);
+    const thresholdMs = Number(replayed.detail?.movementSafety?.thresholdMs);
+    const lastProgressAtMs = Number(event.detail?.movement?.lastProgressAtMs || 0);
+    const replayTriggerAtMs = Number.isFinite(thresholdMs) && lastProgressAtMs > 0
+      ? lastProgressAtMs + thresholdMs
+      : atMs;
+    evaluated.push({
+      line: row.line,
+      at: row.entry.at || '',
+      targetId: targetId || null,
+      targetName: String(target?.name || ''),
+      decisionKind: String(decision.kind || decision.action?.kind || ''),
+      decisionBand: String(decision.band || decision.action?.band || ''),
+      movementReason: String(event.detail?.movement?.actionReason || decision.combat?.movement?.reason || ''),
+      noProgressMs: Number(event.detail?.movement?.noProgressMs || 0),
+      loggedExit: event.shouldLeave === true,
+      replayedExit: replayed.shouldLeave === true,
+      replayedReason: String(replayed.reason || ''),
+      replayedClassification: String(replayed.classification || ''),
+      pressureSources: replayed.detail?.movementSafety?.pressureSources || [],
+      thresholdMs: Number.isFinite(thresholdMs) ? thresholdMs : null,
+      detectionLeadMs: Number.isFinite(atMs) ? Math.max(0, atMs - replayTriggerAtMs) : null,
+      selfHp: Number.isFinite(baselineHp) ? baselineHp : null,
+      nextObservedAt: next ? new Date(next.at).toISOString() : '',
+      nextObservedSelfHp: Number.isFinite(nextHp) ? nextHp : null,
+      observedHpLossAfterReconnect: Number.isFinite(baselineHp) && Number.isFinite(nextHp)
+        ? Math.max(0, baselineHp - nextHp)
+        : null
+    });
+  }
+  const newlyRequired = evaluated.filter(item => !item.loggedExit && item.replayedExit);
+  const result = {
+    mode: 'movement-stall-exit',
+    targetId: options.targetId || '',
+    targetName: options.targetName || '',
+    lines: `${options.startLine}-${options.endLine}`,
+    evaluatedFrames: evaluated.length,
+    loggedExitFrames: evaluated.filter(item => item.loggedExit).length,
+    replayedExitFrames: evaluated.filter(item => item.replayedExit).length,
+    newlyRequiredExitFrames: newlyRequired.length,
+    maximumDetectionLeadMs: Math.max(0, ...evaluated.map(item => Number(item.detectionLeadMs || 0))),
+    maximumObservedHpLossAfterReconnect: Math.max(0, ...evaluated.map(item => Number(item.observedHpLossAfterReconnect || 0))),
+    samples: evaluated.slice(0, 10)
+  };
+  result.accepted = result.evaluatedFrames > 0
+    && result.newlyRequiredExitFrames > 0
+    && newlyRequired.every(item => item.replayedReason === 'combat-action-settlement-stalled')
+    && result.maximumDetectionLeadMs > 0
+    && result.maximumObservedHpLossAfterReconnect > 0;
+  return result;
+}
+
+function recoveryThreatFromNearbyRow(row, options = {}) {
+  if (!Array.isArray(row)) return null;
+  const name = String(row[0] || '');
+  if (options.targetName && name !== options.targetName) return null;
+  const hp = Number(row[1]);
+  const stamina5s = Number(row[2]);
+  const distance = Number(row[5]);
+  const mode = String(row[7] || '');
+  const fullStamina5s = Number(row[8]) === 1;
+  const active = /^active$/i.test(mode) && !fullStamina5s;
+  if (!active || !Number.isFinite(distance)) return null;
+  return {
+    type: 'enemy',
+    userId: options.targetId ? Number(options.targetId) : null,
+    name,
+    authority: 'realtime',
+    x: distance,
+    y: 0,
+    hp: Number.isFinite(hp) ? hp : null,
+    stamina_5s_remaining_milli: Number.isFinite(stamina5s) ? stamina5s : null,
+    stamina_5s_limit_milli: 10000,
+    distance,
+    current_join_mode: mode,
+    active: true,
+    firing: false,
+    alive: true,
+    whitelisted: false,
+    easyKillThreatExempt: false
+  };
+}
+
+function replayRecoveryThreatExit(options) {
+  const rows = selectedEntries(options);
+  const evaluated = [];
+  for (const row of rows) {
+    const decision = row.detail || {};
+    const action = decision.action || decision;
+    const self = decision.input?.self || action.self || null;
+    if (!self) continue;
+    const visibleTargets = (decision.input?.nearby?.p || [])
+      .map(item => recoveryThreatFromNearbyRow(item, options))
+      .filter(Boolean);
+    const replayed = buildLowHpRecoveryThreatExitDecision({ self, visibleTargets }, {
+      controlMode: 'profit-live',
+      loginPointSafetyRadius: 30000,
+      combatLowHpLeaveThreshold: 50
+    });
+    const loggedTarget = action.target || decision.combat?.target || null;
+    const replayTarget = replayed?.target || null;
+    evaluated.push({
+      line: row.line,
+      at: row.entry.at || '',
+      loggedKind: String(action.kind || decision.kind || ''),
+      loggedReason: String(action.reason || decision.reason || ''),
+      loggedExit: action.shouldLeave === true,
+      selfHp: Number.isFinite(Number(self.hp)) ? Number(self.hp) : null,
+      visibleActiveThreats: visibleTargets.length,
+      replayedExit: replayed?.shouldLeave === true,
+      replayedReason: String(replayed?.reason || ''),
+      replayedTargetName: String(replayTarget?.name || ''),
+      replayedTargetDistance: Number.isFinite(Number(replayTarget?.distance)) ? Number(replayTarget.distance) : null,
+      loggedTargetDistance: Number.isFinite(Number(loggedTarget?.distance)) ? Number(loggedTarget.distance) : null,
+      recoverySafety: replayed?.recoverySafety || null
+    });
+  }
+  const firstLoggedExit = evaluated.find(item => item.loggedExit) || null;
+  const firstReplayedExit = evaluated.find(item => item.replayedExit) || null;
+  const firstLoggedExitAt = firstLoggedExit ? Date.parse(firstLoggedExit.at) : null;
+  const firstReplayedExitAt = firstReplayedExit ? Date.parse(firstReplayedExit.at) : null;
+  const earlierByMs = Number.isFinite(firstLoggedExitAt) && Number.isFinite(firstReplayedExitAt)
+    ? Math.max(0, firstLoggedExitAt - firstReplayedExitAt)
+    : null;
+  const distanceMarginCm = firstReplayedExit && firstLoggedExit
+    && Number.isFinite(Number(firstReplayedExit.replayedTargetDistance))
+    && Number.isFinite(Number(firstLoggedExit.loggedTargetDistance))
+    ? Number(firstReplayedExit.replayedTargetDistance) - Number(firstLoggedExit.loggedTargetDistance)
+    : null;
+  const result = {
+    mode: 'recovery-threat-exit',
+    targetId: options.targetId || '',
+    targetName: options.targetName || '',
+    lines: `${options.startLine}-${options.endLine}`,
+    evaluatedFrames: evaluated.length,
+    baselineRecoveryHoldFrames: evaluated.filter(item => item.loggedReason === 'wait-for-full-stamina-and-hp').length,
+    loggedExitFrames: evaluated.filter(item => item.loggedExit).length,
+    replayedExitFrames: evaluated.filter(item => item.replayedExit).length,
+    firstLoggedExitAt: firstLoggedExit?.at || '',
+    firstReplayedExitAt: firstReplayedExit?.at || '',
+    earlierByMs,
+    distanceMarginCm,
+    samples: evaluated.slice(0, 12)
+  };
+  result.accepted = result.evaluatedFrames > 0
+    && result.baselineRecoveryHoldFrames > 0
+    && firstReplayedExit?.replayedReason === 'recovery-low-hp-active-threat-leave'
+    && Number(earlierByMs) > 0
+    && Number(distanceMarginCm) > 0;
+  return result;
+}
+
+function runReplay(options) {
+  if (options.mode === 'opportunity') return replayOpportunity(options);
+  if (options.mode === 'exit') return replayExit(options);
+  if (options.mode === 'movement-stall-exit') return replayMovementStallExit(options);
+  if (options.mode === 'recovery-threat-exit') return replayRecoveryThreatExit(options);
+  if (options.mode === 'arbitration') return replayArbitration(options);
+  if (options.mode === 'combat-policy') return replayCombatPolicy(options);
+  if (options.mode === 'dodge') return replayDodge(options);
+  return replayCombat(options);
+}
+
+if (require.main === module) {
+  const options = parseArgs(process.argv.slice(2));
+  const result = runReplay(options);
+  console.log(JSON.stringify(result, null, 2));
+  if (!result.accepted && !result.improved?.accepted) process.exitCode = 1;
+}
+
+module.exports = {
+  parseArgs,
+  replayMovementStallExit,
+  replayRecoveryThreatExit,
+  runReplay
+};

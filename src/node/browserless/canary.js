@@ -615,7 +615,8 @@ async function runReadOnlyCanary(config, options = {}) {
     staleSelfMs: config.staleSelfMs,
     staleSelfConfirmMs: config.staleSelfConfirmMs,
     noSelfGraceMs: config.noSelfGraceMs,
-    staminaExhaustedBelowMs: config.staminaExhaustedBelowMs
+    staminaExhaustedBelowMs: config.staminaExhaustedBelowMs,
+    movementSettlementFrames: config.movementSettlementFrames
   });
   const stats = createFrameStats(durationMs);
   const frameHealth = {

@@ -507,10 +507,12 @@ function browserlessLoopPlan(result, config = {}) {
     );
   }
   if ([
+    'combat-action-settlement-stalled',
     'profit-live-snapshot-active-threat',
     'combat-critical-hp-leave',
     'combat-hp-disadvantage-leave',
     'combat-low-hp-disadvantage-leave',
+    'recovery-low-hp-active-threat-leave',
     'injury-leave',
     'pursuit-leave'
   ].includes(safetyReason)) {

@@ -103,6 +103,8 @@ const DEFAULT_GLOBAL_COIN_MAX_DISTANCE = BROWSER_RUNTIME_DEFAULTS.globalCoinMaxD
 const DEFAULT_RECOVERY_COIN_MAX_DISTANCE = BROWSER_RUNTIME_DEFAULTS.recoveryCoinMaxDistance;
 const DEFAULT_RECOVERY_PLAYER_DROP_MIN_AMOUNT = 2;
 const DEFAULT_POST_ATTACK_RECOVERY_DROP_MAX_DISTANCE = BROWSER_RUNTIME_DEFAULTS.postAttackRecoveryDropMaxDistance;
+const DEFAULT_LOW_HP_RECOVERY_THREAT_RADIUS = BROWSER_RUNTIME_DEFAULTS.loginPointSafetyRadius;
+const DEFAULT_LOW_HP_RECOVERY_THREAT_HP = BROWSER_RUNTIME_DEFAULTS.combatLowHpLeaveThreshold;
 const DEFAULT_STAMINA_BUDGET_RELOGIN_DELAY_MS = BROWSER_RUNTIME_DEFAULTS.staminaBudgetReloginDelayMs;
 const DEFAULT_AFK_ATTACK_COMMIT_RANGE_CM = 5000;
 const DEFAULT_AFK_COMBAT_MOVEMENT_STAMINA_PER_SHOT_MS = 425;
@@ -3380,6 +3382,61 @@ function buildRecoveryDecision(input, opportunity, options = {}) {
   };
 }
 
+function buildLowHpRecoveryThreatExitDecision(input, options = {}) {
+  if (!browserlessSafetyExitModeEnabled(options) || !input?.self || !isRecoveringSelf(input.self)) return null;
+  const selfHp = hpValue(input.self);
+  const hpThreshold = Math.max(0, Number(
+    options.lowHpRecoveryThreatHp
+      ?? options.recoveryThreatExitHpThreshold
+      ?? options.combatLowHpLeaveThreshold
+      ?? DEFAULT_LOW_HP_RECOVERY_THREAT_HP
+  ));
+  if (selfHp === null || hpThreshold <= 0 || selfHp >= hpThreshold) return null;
+  const radius = Math.max(0, Number(
+    options.lowHpRecoveryThreatRadius
+      ?? options.recoveryThreatExitRadius
+      ?? options.loginPointSafetyRadius
+      ?? DEFAULT_LOW_HP_RECOVERY_THREAT_RADIUS
+  ));
+  if (radius <= 0) return null;
+  const threats = [];
+  const seen = new Set();
+  for (const target of input.visibleTargets || []) {
+    if (!target || target.alive === false || target.whitelisted || target.easyKillThreatExempt) continue;
+    if (target.authority && target.authority !== 'realtime') continue;
+    if (!(target.active || target.firing || isCurrentlyActiveEntity(target, options))) continue;
+    const distance = Number(target.distance ?? distanceBetween(input.self, target));
+    if (!Number.isFinite(distance) || distance > radius) continue;
+    const key = targetKey(target) || `${Number(target.x)}:${Number(target.y)}:${String(target.name || '')}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    threats.push({ target, distance });
+  }
+  threats.sort((a, b) => a.distance - b.distance);
+  const nearest = threats[0] || null;
+  if (!nearest) return null;
+  return {
+    kind: 'safety-exit',
+    band: 'safety',
+    reason: 'recovery-low-hp-active-threat-leave',
+    shouldLeave: true,
+    stopMotion: true,
+    self: summarizeTarget(input.self),
+    target: summarizeTarget(nearest.target),
+    threats: threats.slice(0, 5).map(item => summarizeTarget(item.target)),
+    recovery: recoverySummary(input.self),
+    recoverySafety: {
+      authority: 'realtime',
+      selfHp,
+      hpThreshold,
+      radius,
+      threatCount: threats.length,
+      nearestDistance: Math.round(nearest.distance),
+      trigger: 'active-threat-inside-low-hp-recovery-radius'
+    }
+  };
+}
+
 function entityMatchesAttack(entity, attack) {
   if (!entity || !attack) return false;
   const entityId = entity.user_id ?? entity.userId ?? entity.entity_id ?? entity.entityId;
@@ -4979,6 +5036,9 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     ...options,
     combatActionEligible
   };
+  const lowHpRecoveryThreatExitAction = input.self && !realtimeStale
+    ? buildLowHpRecoveryThreatExitDecision(input, safetyContextOptions)
+    : null;
   let safetyAction = profitLiveSafetyDecision(input, combat, stateful, safetyContextOptions, opportunity.rawAction);
   if (safetyAction) {
     const threat = safetyAction.target || safetyAction.threats?.[0] || null;
@@ -5075,6 +5135,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       && input.self
       && !realtimeStale
       && !hardSafetyAction
+      && !lowHpRecoveryThreatExitAction
       && !longStaminaExhaustedLeaveAction
       && !combatExitAction
       && !injuryHpExitAction
@@ -5142,6 +5203,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       candidate(combatExitAction, 30, 'combat-exit-hard-gate', true, { riskScore: 100 }),
       candidate(injuryHpExitAction, 40, 'injury-hp-hard-gate', true, { riskScore: 100 }),
       candidate(pursuitLeaveAction, 50, 'pursuit-hard-gate', true, { riskScore: 90 }),
+      candidate(lowHpRecoveryThreatExitAction, 52, 'low-hp-recovery-threat-hard-gate', true, { riskScore: 100 }),
       candidate(immediateSafetyAction, 55, 'realtime-safety-hard-gate', true, { riskScore: immediateSafetyAction?.urgent ? 100 : 80 }),
       candidate(combatAction, 60, 'engaged-defensive-combat-stick', combatHardGate, {
         roiScore: activeCombatOpportunity?.combatScore,
@@ -5493,6 +5555,7 @@ module.exports = {
   buildBrowserlessDecision,
   buildBrowserlessRuntimeDefaults,
   buildBrowserlessStrategyInput,
+  buildLowHpRecoveryThreatExitDecision,
   createBrowserlessDecisionAdapter,
   decisionStatePatch,
   distanceBetween,

@@ -114,6 +114,10 @@ const {
   gracefulShutdownLeave
 } = require('../../scripts/browserless-runner');
 const {
+  replayMovementStallExit,
+  replayRecoveryThreatExit
+} = require('../../scripts/replay-browserless-runtime-log');
+const {
   browserlessStatsForDecision,
   browserlessStatsForOffline,
   buildCompactBrowserlessStatus,
@@ -8488,6 +8492,124 @@ async function runSelfTest() {
       want: 'recover|recover|wait-for-full-stamina-and-hp|true|coin|100'
     },
     {
+      name: 'browserless low-hp recovery exits while realtime Active threat is inside login safety radius',
+      got: (() => {
+        const self = {
+          entity_id: 1,
+          user_id: 7,
+          name: 'self',
+          x: 0,
+          y: 0,
+          hp: 18,
+          max_hp: 100,
+          stamina_5s_remaining_milli: 10000,
+          stamina_5s_limit_milli: 10000
+        };
+        const decision = buildBrowserlessDecision({
+          userId: 7,
+          realtime: {
+            tick: 59,
+            frameAgeMs: 0,
+            self,
+            entities: [
+              self,
+              {
+                entity_id: 2,
+                user_id: 8,
+                name: 'closing-active',
+                x: 28703,
+                y: 0,
+                vx: -50,
+                vy: 0,
+                hp: 87,
+                current_join_mode: 'Active',
+                stamina_5s_remaining_milli: 6000,
+                stamina_5s_limit_milli: 10000,
+                drop: 3086
+              }
+            ],
+            bullets: [],
+            coinDrops: []
+          },
+          fallback: { coinDrops: [] }
+        }, {}, {
+          nowMs: 1200,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          dynamicProfitThresholdEnabled: false
+        });
+        return [
+          decision.kind,
+          decision.band,
+          decision.reason,
+          decision.action.shouldLeave,
+          decision.action.target.userId,
+          decision.action.recoverySafety.selfHp,
+          decision.action.recoverySafety.hpThreshold,
+          decision.action.recoverySafety.radius,
+          decision.action.recoverySafety.nearestDistance,
+          decision.action.finalCandidate.hardGate
+        ].join('|');
+      })(),
+      want: 'safety-exit|safety|recovery-low-hp-active-threat-leave|true|8|18|50|30000|28703|true'
+    },
+    {
+      name: 'browserless low-hp recovery radius keeps whitelist and undamaged easy-kill exemptions',
+      got: (() => {
+        const decide = extra => {
+          const self = {
+            entity_id: 1,
+            user_id: 7,
+            x: 0,
+            y: 0,
+            hp: 18,
+            max_hp: 100,
+            stamina_5s_remaining_milli: 10000
+          };
+          return buildBrowserlessDecision({
+            userId: 7,
+            realtime: {
+              tick: 59,
+              frameAgeMs: 0,
+              self,
+              entities: [
+                self,
+                {
+                  entity_id: 2,
+                  user_id: 8,
+                  name: 'trusted-active',
+                  x: 10000,
+                  y: 0,
+                  vx: -50,
+                  hp: 100,
+                  current_join_mode: 'Active',
+                  stamina_5s_remaining_milli: 6000
+                }
+              ],
+              bullets: [],
+              coinDrops: []
+            },
+            fallback: { coinDrops: [] }
+          }, {}, {
+            nowMs: 1200,
+            controlMode: 'profit-live',
+            combatEnabled: true,
+            dynamicProfitThresholdEnabled: false,
+            ...extra
+          });
+        };
+        const whitelisted = decide({ targetWhitelistUserIds: [8] });
+        const easyKill = decide({ easyKillPlayers: [{ userId: 8, score: 1 }] });
+        return [
+          whitelisted.kind,
+          whitelisted.reason,
+          easyKill.kind,
+          easyKill.reason
+        ].join('|');
+      })(),
+      want: 'recover|wait-for-full-stamina-and-hp|recover|wait-for-full-stamina-and-hp'
+    },
+    {
       name: 'browserless profit live damaged self can take recovery foot coin',
       got: (() => {
         const store = createBrowserlessStateStore({ userId: 7 });
@@ -13341,6 +13463,166 @@ async function runSelfTest() {
       want: 'false|4999|true|action-settlement-stalled|5000|action-settlement-stalled|false|transport-recovery|false|true|false|1|4999|vel 0 0'
     },
     {
+      name: 'browserless safety exits combat movement stall early but keeps ordinary stall transport-only',
+      got: (() => {
+        const state = {
+          realtime: {
+            self: { user_id: 7, hp: 100, stamina_5s_remaining_milli: 6000 },
+            bullets: []
+          },
+          frameAges: {}
+        };
+        const movement = {
+          active: true,
+          stalled: false,
+          stallMs: 5000,
+          noProgressMs: 2500,
+          observedFrames: 12,
+          lastProgressAtMs: 1000
+        };
+        const combat = evaluateBrowserlessSafety(state, {
+          actionSettlementStall: movement,
+          lastDecision: {
+            kind: 'combat-live',
+            band: 'combat',
+            target: { userId: 8, name: 'enemy' }
+          },
+          nowMs: 3500
+        });
+        const ordinary = evaluateBrowserlessSafety(state, {
+          actionSettlementStall: { ...movement, stalled: true, noProgressMs: 5000 },
+          lastDecision: { kind: 'patrol', band: 'profit', reason: 'test-move' },
+          nowMs: 6000
+        });
+        return [
+          combat.reason,
+          combat.shouldLeave,
+          combat.classification,
+          combat.detail.movementSafety.adapterStalled,
+          combat.detail.movementSafety.combatStalled,
+          combat.detail.movementSafety.thresholdMs,
+          combat.detail.movementSafety.pressureSources.join(','),
+          ordinary.reason,
+          ordinary.shouldLeave,
+          ordinary.classification,
+          ordinary.detail.movementSafety.thresholdMs
+        ].join('|');
+      })(),
+      want: 'combat-action-settlement-stalled|true|exit|false|true|2500|combat-action|action-settlement-stalled|false|transport-recovery|5000'
+    },
+    {
+      name: 'browserless movement-stall replay proves earlier verified exit before observed hp collapse',
+      got: (() => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'grasp-rat-stall-replay-'));
+        try {
+          fs.writeFileSync(path.join(dir, 'exits.jsonl'), JSON.stringify({
+            at: '2026-07-15T03:45:49.287Z',
+            type: 'safety-event',
+            detail: {
+              reason: 'action-settlement-stalled',
+              shouldLeave: false,
+              classification: 'transport-recovery',
+              detail: {
+                movement: {
+                  active: true,
+                  stalled: true,
+                  stallMs: 5000,
+                  noProgressMs: 5040,
+                  observedFrames: 28,
+                  lastProgressAtMs: Date.parse('2026-07-15T03:45:44.084Z'),
+                  actionReason: 'passive-runner-close'
+                },
+                lastDecision: {
+                  kind: 'combat-live',
+                  band: 'combat',
+                  self: { userId: 7, hp: 100, stamina5s: 6170 },
+                  target: { userId: 8, name: 'runner', hp: 97, distance: 10191 },
+                  combat: { target: { userId: 8, name: 'runner', hp: 97, distance: 10191 } }
+                },
+                realtime: {
+                  tick: 100,
+                  self: { user_id: 7, hp: 100, stamina_5s_remaining_milli: 6170 }
+                }
+              }
+            }
+          }) + '\n');
+          fs.writeFileSync(path.join(dir, 'decisions.jsonl'), JSON.stringify({
+            at: '2026-07-15T03:45:53.581Z',
+            type: 'decision',
+            detail: { input: { self: { userId: 7, hp: 22 } } }
+          }) + '\n');
+          const replay = replayMovementStallExit({
+            file: path.join(dir, 'exits.jsonl'),
+            startLine: 1,
+            endLine: 1,
+            targetId: '8',
+            targetName: 'runner'
+          });
+          return [
+            replay.accepted,
+            replay.newlyRequiredExitFrames,
+            replay.maximumDetectionLeadMs,
+            replay.maximumObservedHpLossAfterReconnect,
+            replay.samples[0].replayedReason
+          ].join('|');
+        } finally {
+          fs.rmSync(dir, { recursive: true, force: true });
+        }
+      })(),
+      want: 'true|1|2703|78|combat-action-settlement-stalled'
+    },
+    {
+      name: 'browserless recovery-threat replay exits at 287m instead of waiting until attack range',
+      got: (() => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'grasp-rat-recovery-replay-'));
+        try {
+          const playerRow = distance => ['Chrome', 87, 6000, 3086, null, distance, 0, 'Active', 0, 0, 0, 0, 0];
+          const rows = [
+            {
+              at: '2026-07-15T04:15:09.678Z',
+              type: 'decision',
+              detail: {
+                action: { kind: 'recover', band: 'recover', reason: 'wait-for-full-stamina-and-hp' },
+                input: { self: { userId: 7, hp: 18, maxHp: 100 }, nearby: { p: [playerRow(28703)] } }
+              }
+            },
+            {
+              at: '2026-07-15T04:15:33.713Z',
+              type: 'decision',
+              detail: {
+                action: {
+                  kind: 'safety-exit',
+                  band: 'safety',
+                  reason: 'combat-low-hp-disadvantage-leave',
+                  shouldLeave: true,
+                  target: { userId: 8, name: 'Chrome', distance: 14327 }
+                },
+                input: { self: { userId: 7, hp: 21, maxHp: 100 }, nearby: { p: [playerRow(14327)] } }
+              }
+            }
+          ];
+          fs.writeFileSync(path.join(dir, 'decisions.jsonl'), rows.map(item => JSON.stringify(item)).join('\n') + '\n');
+          const replay = replayRecoveryThreatExit({
+            file: path.join(dir, 'decisions.jsonl'),
+            startLine: 1,
+            endLine: 2,
+            targetId: '8',
+            targetName: 'Chrome'
+          });
+          return [
+            replay.accepted,
+            replay.baselineRecoveryHoldFrames,
+            replay.earlierByMs,
+            replay.distanceMarginCm,
+            replay.samples[0].replayedReason
+          ].join('|');
+        } finally {
+          fs.rmSync(dir, { recursive: true, force: true });
+        }
+      })(),
+      want: 'true|1|24035|14376|recovery-low-hp-active-threat-leave'
+    },
+    {
       name: 'browserless action adapter repeats velocity through decision gap',
       got: (() => {
         let t = 1000;
@@ -17044,6 +17326,42 @@ async function runSelfTest() {
       want: 'true|1234|true|stamina-budget-coin-leave|1800000|true|stamina-exhausted-leave|600000|true|injury-leave|1234|true|pursuit-leave|1234|true|combat-hp-disadvantage-leave|1234|true|ws-closed|1000|true|action-settlement-stalled|1000|true|false|false|true|ws-closed|1000|false|true|true|true|ws-auth-blocked-self-present|1000|true|60000|true|in-game-snapshot-safety-retry|1000|true|ws-connect-timeout|1000'
     },
     {
+      name: 'browserless runner treats combat stall and low-hp recovery threat as normal confirmed exits',
+      got: (() => {
+        const config = { once: false, loopDelayMs: 1234 };
+        const combatStallResult = {
+          ok: false,
+          canary: {
+            runId: 'combat-stall-exit',
+            error: 'combat-action-settlement-stalled',
+            safety: { event: { reason: 'combat-action-settlement-stalled', shouldLeave: true } },
+            leave: { ok: true }
+          }
+        };
+        const recoveryThreatResult = {
+          ok: false,
+          canary: {
+            runId: 'recovery-threat-exit',
+            error: 'recovery-low-hp-active-threat-leave',
+            safety: { event: { reason: 'recovery-low-hp-active-threat-leave', shouldLeave: true } },
+            leave: { ok: true }
+          }
+        };
+        const combatStall = browserlessLoopPlan(combatStallResult, config);
+        const recoveryThreat = browserlessLoopPlan(recoveryThreatResult, config);
+        return [
+          combatStall.continue,
+          combatStall.reason,
+          combatStall.delayMs,
+          preserveOnlineSessionForLoopWait(combatStallResult, combatStall),
+          recoveryThreat.continue,
+          recoveryThreat.reason,
+          recoveryThreat.delayMs
+        ].join('|');
+      })(),
+      want: 'true|combat-action-settlement-stalled|1234|false|true|recovery-low-hp-active-threat-leave|1234'
+    },
+    {
       name: 'browserless runner preserves one online session across movement stall reconnect',
       got: withTempDirForTest(async dir => {
         const enteredAtMs = Date.parse('2026-07-14T16:17:52.114Z');
@@ -20374,6 +20692,19 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
+    },
+    {
+      name: 'browserless web panel explains combat movement failure and low-hp recovery threat exits',
+      got: (() => {
+        const panelText = renderBrowserlessWebPanel();
+        return [
+          panelText.includes("'combat-action-settlement-stalled': '战斗中移动指令失效，为避免原地承伤，主动退出'"),
+          panelText.includes("'recovery-low-hp-active-threat-leave': '低血恢复时活动玩家进入安全半径，主动退出'"),
+          panelText.includes("'action-settlement-stalled': '非战斗移动指令未产生位置变化，正在重连'"),
+          panelText.includes('2026.07.15.8')
+        ].join('|');
+      })(),
+      want: 'true|true|true|true'
     },
     {
       name: 'browserless compact exit preserves trigger hp evidence',
