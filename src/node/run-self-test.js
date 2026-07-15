@@ -28983,6 +28983,104 @@ async function runSelfTest() {
 	      want: 'coin|better-coin|true|coin'
 	    },
 	    {
+	      name: 'browserless logs a visible easy-kill candidate below the top-five opportunity summary',
+	      got: (() => {
+	        const self = {
+	          entity_id: 1,
+	          user_id: 7,
+	          name: 'self',
+	          x: 0,
+	          y: 0,
+	          hp: 100,
+	          max_hp: 100,
+	          stamina_5s_remaining_milli: 10000,
+	          stamina_1h_remaining_milli: 3000000,
+	          stamina_1d_remaining_milli: 20000000
+	        };
+	        const decision = buildBrowserlessDecision({
+	          userId: 7,
+	          realtime: {
+	            tick: 100,
+	            frameAgeMs: 0,
+	            self,
+	            entities: [
+	              self,
+	              { entity_id: 2, user_id: 8, name: 'xuanze00', x: 48661, y: 0, vx: 20, hp: 100, max_hp: 100, current_join_mode: 'Active', drop: 13 },
+	              { entity_id: 3, user_id: 9, name: 'colloq168', x: 48068, y: 0, hp: 100, max_hp: 100, current_join_mode: 'Passive', drop: 1797, stamina_5s_remaining_milli: 10000, stamina_5s_limit_milli: 10000 }
+	            ],
+	            bullets: [],
+	            coinDrops: [
+	              { drop_id: 'c1', x: 1000, y: 0, amount: 1 },
+	              { drop_id: 'c2', x: 3000, y: 0, amount: 1 },
+	              { drop_id: 'c3', x: 5000, y: 0, amount: 1 },
+	              { drop_id: 'c4', x: 7000, y: 0, amount: 1 },
+	              { drop_id: 'c5', x: 9000, y: 0, amount: 1 }
+	            ]
+	          },
+	          fallback: { tick: 100, frameAgeMs: 0, entities: [], coinDrops: [], messages: [] }
+	        }, {}, {
+	          nowMs: 1000,
+	          controlMode: 'profit-live',
+	          combatEnabled: true,
+	          dynamicProfitThresholdEnabled: false,
+	          easyKillPlayers: [{ userId: 8, name: 'xuanze00' }]
+	        });
+	        const diagnostic = decision.profit.easyKill.candidates[0];
+	        const topFiveFloor = decision.profit.candidates.at(-1)?.score;
+	        return [
+	          decision.action.target?.name,
+	          decision.profit.easyKill.candidateCount,
+	          decision.profit.easyKill.candidates.length,
+	          diagnostic.rank > 5,
+	          diagnostic.eligible,
+	          diagnostic.rejectedReason,
+	          diagnostic.topCandidateLogged,
+	          diagnostic.score < topFiveFloor,
+	          diagnostic.staminaCost === browserlessOpportunityEnemyStaminaCost({ user_id: 8, active: true, hp: 100, distance: 48661 }),
+	          diagnostic.expectedReward < diagnostic.drop,
+	          Buffer.byteLength(JSON.stringify(decision.profit.easyKill)) < 4096
+	        ].join('|');
+	      })(),
+	      want: 'colloq168|1|1|true|true|lower-score|false|true|true|true|true'
+	    },
+	    {
+	      name: 'browserless easy-kill candidate diagnostics stay bounded at eight rows',
+	      got: (() => {
+	        const self = { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000 };
+	        const targets = Array.from({ length: 10 }, (_, index) => ({
+	          entity_id: index + 2,
+	          user_id: 100 + index,
+	          name: `easy-${index}`,
+	          x: 1000 + index * 900,
+	          y: 0,
+	          vx: 20,
+	          hp: 100,
+	          max_hp: 100,
+	          current_join_mode: 'Active',
+	          drop: 10 + index
+	        }));
+	        const decision = buildBrowserlessDecision({
+	          userId: 7,
+	          realtime: { tick: 100, frameAgeMs: 0, self, entities: [self, ...targets], bullets: [], coinDrops: [] },
+	          fallback: { tick: 100, frameAgeMs: 0, entities: [], coinDrops: [], messages: [] }
+	        }, {}, {
+	          nowMs: 1000,
+	          controlMode: 'profit-live',
+	          combatEnabled: true,
+	          dynamicProfitThresholdEnabled: false,
+	          easyKillPlayers: targets.map(target => ({ userId: target.user_id, name: target.name }))
+	        });
+	        return [
+	          decision.profit.easyKill.candidateCount,
+	          decision.profit.easyKill.candidates.length,
+	          decision.profit.easyKill.candidateOmittedCount,
+	          decision.profit.easyKill.candidates.some(item => item.finalSelected),
+	          Buffer.byteLength(JSON.stringify(decision.profit.easyKill.candidates)) < 4096
+	        ].join('|');
+	      })(),
+	      want: '10|8|2|true|true'
+	    },
+	    {
 	      name: 'browserless stable easy-kill choice beats a new raw competitor at combat handoff',
 	      got: (() => {
 	        const adapter = createBrowserlessDecisionAdapter({

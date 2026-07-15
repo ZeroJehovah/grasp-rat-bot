@@ -114,6 +114,7 @@ const DEFAULT_STAMINA_BUDGET_RELOGIN_DELAY_MS = BROWSER_RUNTIME_DEFAULTS.stamina
 const DEFAULT_AFK_ATTACK_COMMIT_RANGE_CM = 5000;
 const DEFAULT_AFK_COMBAT_MOVEMENT_STAMINA_PER_SHOT_MS = 425;
 const DEFAULT_AFK_DISPLAY_INACTIVE_MS = 60000;
+const EASY_KILL_CANDIDATE_DIAGNOSTIC_LIMIT = 8;
 const DEFAULT_INVULNERABLE_PROFIT_APPROACH_DISTANCE_CM = 5000;
 const DEFAULT_INVULNERABLE_PROFIT_MOVE_SPEED_CM_PER_SEC = 1000;
 const DEFAULT_DANGEROUS_TARGET_COOLDOWN_MS = BROWSER_RUNTIME_DEFAULTS.browserlessDangerousTargetCooldownMs ?? 900000;
@@ -1629,6 +1630,139 @@ function summarizeOpportunity(item) {
     target: item.sourceTarget ? summarizeTarget(item.sourceTarget) : null,
     coin: item.sourceCoin ? summarizeCoin(item.sourceCoin) : null,
     held: Boolean(item.held)
+  };
+}
+
+function roundedDiagnosticNumber(value, digits = 3) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return null;
+  const scale = 10 ** Math.max(0, Math.round(Number(digits) || 0));
+  return Math.round(number * scale) / scale;
+}
+
+function easyKillOpportunityScoringOptions(target, stateful = {}, options = {}) {
+  const targetId = easyKillTargetUserId(target);
+  const combatTargetId = easyKillTargetUserId(stateful.combatTarget);
+  return {
+    ...options,
+    recentCombatMetrics: stateful.combatMetrics,
+    combatTargetState: targetId !== null
+      && combatTargetId !== null
+      && String(targetId) === String(combatTargetId)
+      ? stateful.combatTarget
+      : null,
+    opponentBehaviorState: targetId === null
+      ? null
+      : (stateful.opponentBehaviorStates?.[String(targetId)] || null),
+    isAfkProfitTarget: () => false
+  };
+}
+
+function easyKillCandidateBaseRejectionReason(target, stateful = {}, input = {}, options = {}) {
+  if (target?.alive === false) return 'not-alive';
+  if (target?.whitelisted) return 'whitelisted';
+  if (target?.invulnerable) return 'invulnerable';
+  if (!target?.active) return 'not-active';
+  if (options.controlMode !== 'profit-live' || options.combatEnabled !== true) return 'profit-live-disabled';
+  const visibleDistance = opportunityVisibleDistance(options);
+  if (!Number.isFinite(Number(target?.distance))) return 'distance-unknown';
+  if (visibleDistance > 0 && Number(target.distance) > visibleDistance) return 'out-of-range';
+  if (easyKillTargetSuppressed(stateful, target, input.nowMs)) return 'easy-kill-suppressed';
+  if (target.easyKillProfitTarget !== true) return 'not-profit-eligible';
+  if (targetDangerousCooldownRecord(stateful, target, input.nowMs)) return 'dangerous-target-cooldown';
+  const opportunityThreats = input.avoidanceThreats || input.activeThreats || [];
+  if (!targetSafeFromOpportunityThreats(target, opportunityThreats, options)) return 'threat-blocked';
+  return '';
+}
+
+function summarizeEasyKillCandidateDiagnostics(input, opportunity, stateful = {}, options = {}, finalAction = null) {
+  const visibleTargets = (input?.visibleTargets || []).filter(target => target?.easyKillKnown === true);
+  const rawById = new Map((opportunity?.rawOpportunities || [])
+    .filter(item => String(item?.type || '') === 'enemy')
+    .map(item => [opportunityChoiceTargetId(item), item])
+    .filter(([id]) => id));
+  const rankById = new Map();
+  for (const [index, item] of (opportunity?.sorted || []).entries()) {
+    const id = opportunityChoiceTargetId(item);
+    if (id && !rankById.has(id)) rankById.set(id, index + 1);
+  }
+  const profitSelectedId = opportunityChoiceTargetId(opportunity?.choice);
+  const finalSelectedId = easyKillTargetUserId(finalAction?.target);
+  const rows = visibleTargets.map(target => {
+    const idValue = easyKillTargetUserId(target);
+    const id = idValue === null ? '' : String(idValue);
+    const raw = id ? rawById.get(id) || null : null;
+    const rank = id ? rankById.get(id) || null : null;
+    return {
+      target,
+      id,
+      raw,
+      rank,
+      profitSelected: Boolean(id && id === profitSelectedId),
+      finalSelected: Boolean(id && finalSelectedId !== null && id === String(finalSelectedId))
+    };
+  }).sort((a, b) => Number(b.finalSelected) - Number(a.finalSelected)
+    || Number(b.profitSelected) - Number(a.profitSelected)
+    || (a.rank ?? Infinity) - (b.rank ?? Infinity)
+    || Number(b.raw?.score ?? entityDropValue(b.target)) - Number(a.raw?.score ?? entityDropValue(a.target))
+    || Number(a.target?.distance ?? Infinity) - Number(b.target?.distance ?? Infinity));
+  const limited = rows.slice(0, EASY_KILL_CANDIDATE_DIAGNOSTIC_LIMIT).map(row => {
+    const scoringOptions = easyKillOpportunityScoringOptions(row.target, stateful, options);
+    const completion = activeTargetCompletionEstimate(row.target, scoringOptions);
+    const staminaCost = Number.isFinite(Number(row.raw?.staminaCost))
+      ? Number(row.raw.staminaCost)
+      : enemyStaminaCost(row.target, {
+          ...options,
+          recentCombatMetrics: stateful.combatMetrics
+        });
+    const score = Number.isFinite(Number(row.raw?.score))
+      ? Number(row.raw.score)
+      : scoreEnemyOpportunity(row.target, scoringOptions);
+    const expectedReward = activeTargetExpectedReward(row.target, scoringOptions);
+    const thresholdEligible = row.raw?.profitThresholdEligible === undefined
+      ? profitRewardAndCostEligible(entityDropValue(row.target), staminaCost, opportunity?.threshold)
+      : Boolean(row.raw.profitThresholdEligible);
+    let rejectedReason = easyKillCandidateBaseRejectionReason(row.target, stateful, input, options);
+    const staminaAffordable = opportunityStaminaAffordable(input.self, staminaCost, options);
+    if (!rejectedReason && !staminaAffordable) {
+      rejectedReason = 'stamina-unaffordable';
+    }
+    if (!rejectedReason && !thresholdEligible) rejectedReason = 'below-profit-threshold';
+    const eligible = Boolean(!rejectedReason && row.rank !== null);
+    if (!rejectedReason && !row.profitSelected) {
+      rejectedReason = row.rank === 1
+        ? (opportunity?.switchDiagnostics?.bestRejectedReason || 'current-opportunity-held')
+        : (row.rank ? 'lower-score' : 'candidate-unavailable');
+    }
+    if (!rejectedReason && row.profitSelected && !row.finalSelected) {
+      rejectedReason = `preempted-by-${String(finalAction?.band || finalAction?.kind || 'higher-priority-action')}`;
+    }
+    return {
+      userId: numberOrNull(row.id),
+      name: entityDisplayName(row.target),
+      rank: row.rank,
+      selected: row.profitSelected,
+      finalSelected: row.finalSelected,
+      eligible,
+      rejectedReason,
+      active: Boolean(row.target?.active),
+      firing: Boolean(row.target?.firing),
+      hp: numberOrNull(row.target?.hp),
+      drop: entityDropValue(row.target),
+      distance: Number.isFinite(Number(row.target?.distance)) ? Math.round(Number(row.target.distance)) : null,
+      expectedReward: roundedDiagnosticNumber(expectedReward),
+      completionProbability: roundedDiagnosticNumber(completion?.probability, 6),
+      staminaCost: Number.isFinite(Number(staminaCost)) ? Math.round(Number(staminaCost)) : null,
+      score: Number.isFinite(Number(score)) ? Math.round(Number(score)) : null,
+      profitThresholdEligible: thresholdEligible,
+      topCandidateLogged: row.rank !== null && row.rank <= 5
+    };
+  });
+  return {
+    candidateLimit: EASY_KILL_CANDIDATE_DIAGNOSTIC_LIMIT,
+    candidateCount: visibleTargets.length,
+    candidateOmittedCount: Math.max(0, visibleTargets.length - limited.length),
+    candidates: limited
   };
 }
 
@@ -6091,6 +6225,13 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
   if (finalSelection) finalSelection.selected = action?.finalCandidate || null;
   rememberEasyKillApproach(action, input, stateful, options);
   stateful.lastDecisionAction = cloneJson(action);
+  const easyKillCandidateDiagnostics = summarizeEasyKillCandidateDiagnostics(
+    input,
+    opportunity,
+    stateful,
+    options,
+    action
+  );
   const decision = {
     ok: true,
     dryRun: true,
@@ -6123,6 +6264,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       singleCoinBait: singleCoinBait.summary,
       easyKill: {
         ...cloneJson(input.easyKill || {}),
+        ...easyKillCandidateDiagnostics,
         tracker: easyKillTrackerState ? {
           file: easyKillTrackerState.file || '',
           playerCount: Number(easyKillTrackerState.playerCount ?? easyKillTrackerState.players?.length ?? 0),
