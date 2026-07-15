@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.15.3';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.15.4';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function renderBrowserlessWebPanel() {
@@ -96,13 +96,12 @@ function renderBrowserlessWebPanel() {
     .easy-kill-score-2{color:#ecfdf5;background:rgba(22,163,74,.42);border-color:rgba(74,222,128,.78)}
     .easy-kill-score-3{color:#fff;background:#15803d;border-color:#4ade80;box-shadow:inset 0 0 0 1px rgba(255,255,255,.16)}
     .damage-player-name{color:#fecdd3;background:rgba(251,113,133,.14);border-color:rgba(251,113,133,.46)}
-    .chat-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px}.chat-head h2{margin:0}
-    .chat-log{height:260px;overflow:auto;border:1px solid var(--line);border-radius:7px;background:var(--panel2);padding:5px 8px;scrollbar-gutter:stable}
-    .chat-row{display:grid;grid-template-columns:minmax(76px,.42fr) minmax(0,1.58fr) auto;gap:8px;align-items:start;padding:5px 0;border-bottom:1px solid rgba(255,255,255,.06)}
-    .chat-row:last-child{border-bottom:0}.chat-author{min-width:0;color:var(--blue);font-weight:650;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.chat-text{min-width:0;overflow-wrap:anywhere;white-space:pre-wrap}.chat-id{color:var(--muted);font-size:10px;font-variant-numeric:tabular-nums}
+    .chat-log{height:300px;overflow:auto;scrollbar-gutter:stable}
+    .chat-row{display:grid;grid-template-columns:38px minmax(64px,.62fr) minmax(0,1.38fr);gap:6px;align-items:start;padding:5px 0;border-bottom:1px solid rgba(255,255,255,.06)}
+    .chat-row:last-child{border-bottom:0}.chat-time{color:var(--muted);font-size:11px;font-variant-numeric:tabular-nums}.chat-author{min-width:0;color:var(--blue);font-weight:650;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.chat-text{min-width:0;overflow-wrap:anywhere;white-space:pre-wrap}
     .chat-row.chat-kill .chat-author,.chat-row.chat-kill .chat-text{color:var(--red)}.chat-row.chat-system .chat-author,.chat-row.chat-system .chat-text{color:var(--blue)}.chat-row.mine .chat-author{color:var(--green)}
     .chat-empty{display:flex;height:100%;align-items:center;justify-content:center;color:var(--muted)}
-    .chat-compose{display:flex;gap:7px;margin-top:8px}.chat-compose input{flex:1;min-width:0;min-height:34px;border:1px solid var(--line);border-radius:6px;background:var(--panel2);color:var(--text);padding:6px 9px}.chat-compose input:disabled{opacity:.6}.chat-compose button{flex:0 0 auto}
+    .chat-compose{display:flex;gap:7px;margin-top:8px}.chat-compose[hidden]{display:none}.chat-compose input{flex:1;min-width:0;min-height:34px;border:1px solid var(--line);border-radius:6px;background:var(--panel2);color:var(--text);padding:6px 9px}.chat-compose input:disabled{opacity:.6}.chat-compose button{flex:0 0 auto}
     .chat-hint{min-height:18px;margin-top:6px;color:var(--muted);overflow-wrap:anywhere}
     .nearby-cell{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     .distance-badge{font-variant-numeric:tabular-nums}
@@ -122,7 +121,7 @@ function renderBrowserlessWebPanel() {
     .target-icon-coin{transform:translateY(0)}
     @media (max-width:760px){.layout{grid-template-columns:1fr}.stats-grid{grid-template-columns:1fr}}
     @media (max-width:600px){.nearby-combined,.player-memory-grid{grid-template-columns:1fr}.nearby-players-pane,.player-memory-pane+.player-memory-pane{border-left:0;border-top:1px solid var(--line);padding-left:0;padding-top:10px}}
-    @media (max-width:520px){.player-row{grid-template-columns:minmax(112px,2fr) minmax(34px,.5fr) minmax(38px,.55fr) minmax(36px,.5fr) minmax(44px,.6fr);gap:4px}.battle-fighters{grid-template-columns:minmax(0,1fr) 32px minmax(0,1fr);gap:5px}.fighter{padding:7px}.fighter-head{display:block}.fighter.enemy .fighter-head{display:block;text-align:right}.battle-meta{gap:4px;padding:6px 4px}.battle-meta strong{font-size:12px}.chat-row{grid-template-columns:minmax(68px,.48fr) minmax(0,1.52fr)}.chat-id{display:none}}
+    @media (max-width:520px){.player-row{grid-template-columns:minmax(112px,2fr) minmax(34px,.5fr) minmax(38px,.55fr) minmax(36px,.5fr) minmax(44px,.6fr);gap:4px}.battle-fighters{grid-template-columns:minmax(0,1fr) 32px minmax(0,1fr);gap:5px}.fighter{padding:7px}.fighter-head{display:block}.fighter.enemy .fighter-head{display:block;text-align:right}.battle-meta{gap:4px;padding:6px 4px}.battle-meta strong{font-size:12px}}
     @media (max-width:520px){main{padding:10px}header{align-items:flex-start;flex-direction:column}}
   </style>
 </head>
@@ -151,6 +150,15 @@ function renderBrowserlessWebPanel() {
           <h2>角色状态</h2>
           <dl id="roleStatus"></dl>
         </section>
+        <section id="chatPanel">
+          <h2>游戏聊天</h2>
+          <div id="chatLog" class="chat-log"><div class="chat-empty">等待聊天快照</div></div>
+          <form id="chatForm" class="chat-compose" hidden>
+            <input id="chatInput" maxlength="240" autocomplete="off" placeholder="输入游戏聊天消息">
+            <button id="chatSendBtn" type="submit" disabled>发送</button>
+          </form>
+          <div id="chatHint" class="chat-hint muted">刷新时间 --</div>
+        </section>
       </div>
       <div class="stack right-stack">
         <section id="authPanel" class="auth-panel" hidden>
@@ -175,18 +183,6 @@ function renderBrowserlessWebPanel() {
         <section>
           <h2>当前动作</h2>
           <dl id="actionDetails"></dl>
-        </section>
-        <section id="chatPanel">
-          <div class="chat-head">
-            <h2>游戏聊天</h2>
-            <span id="chatState" class="pill">等待快照</span>
-          </div>
-          <div id="chatLog" class="chat-log"><div class="chat-empty">等待聊天快照</div></div>
-          <form id="chatForm" class="chat-compose">
-            <input id="chatInput" maxlength="240" autocomplete="off" placeholder="角色在线时可发送消息">
-            <button id="chatSendBtn" type="submit" disabled>发送</button>
-          </form>
-          <div id="chatHint" class="chat-hint muted">离线时仍可接收快照消息</div>
         </section>
         <section id="battlePanel" class="battle-panel" hidden>
           <h2>战斗情况</h2>
@@ -294,6 +290,13 @@ function renderBrowserlessWebPanel() {
       return Number.isFinite(date.getTime())
         ? [pad2(date.getHours()), pad2(date.getMinutes()), pad2(date.getSeconds())].join(':')
         : iso;
+    };
+    const minuteStamp = iso => {
+      if (!iso) return '--:--';
+      const date = new Date(iso);
+      return Number.isFinite(date.getTime())
+        ? [pad2(date.getHours()), pad2(date.getMinutes())].join(':')
+        : '--:--';
     };
     const fullStamp = iso => {
       if (!iso) return '--';
@@ -1597,33 +1600,20 @@ function renderBrowserlessWebPanel() {
     }
     function syncChatCompose(chat) {
       const current = chat || latestChatStatus || {};
-      const available = Boolean(current.sendAvailable) && !chatSendInFlight;
+      const online = Boolean(current.sendAvailable);
+      const available = online && !chatSendInFlight;
+      const form = document.getElementById('chatForm');
       const input = document.getElementById('chatInput');
       const button = document.getElementById('chatSendBtn');
+      if (form) form.hidden = !online;
       if (input) {
         input.disabled = !available;
-        input.placeholder = current.sendAvailable
-          ? '输入游戏聊天消息'
-          : '角色离线：仅接收消息';
+        input.placeholder = '输入游戏聊天消息';
       }
       if (button) {
         button.disabled = !available;
         button.textContent = chatSendInFlight ? '发送中' : '发送';
       }
-    }
-    function chatLastSendText(lastSend) {
-      const state = String(lastSend?.state || 'idle');
-      if (state === 'confirmed') return '上一条消息已由快照确认';
-      if (state === 'sent') return '消息已写入在线 WS，等待快照确认';
-      if (state === 'failed') return '发送失败：' + value(lastSend?.error);
-      return '';
-    }
-    function chatSnapshotSourceText(source) {
-      const key = String(source || '');
-      if (key === 'ws') return '在线 WS 快照';
-      if (key === 'gap-http') return '定时 HTTP 快照';
-      if (/snapshot/i.test(key)) return 'HTTP 快照';
-      return key || '快照';
     }
     function renderChat(chat) {
       latestChatStatus = chat && typeof chat === 'object' ? chat : {};
@@ -1647,6 +1637,9 @@ function renderBrowserlessWebPanel() {
               : 'chat';
             const row = document.createElement('div');
             row.className = 'chat-row chat-' + kind + (message?.mine ? ' mine' : '');
+            const time = document.createElement('span');
+            time.className = 'chat-time';
+            time.textContent = minuteStamp(message?.occurredAt || message?.firstObservedAt);
             const author = document.createElement('span');
             author.className = 'chat-author';
             author.textContent = kind === 'kill'
@@ -1657,10 +1650,7 @@ function renderBrowserlessWebPanel() {
             const textNode = document.createElement('span');
             textNode.className = 'chat-text';
             textNode.textContent = value(message?.text);
-            const id = document.createElement('span');
-            id.className = 'chat-id';
-            id.textContent = message?.id === null || message?.id === undefined ? '' : '#' + message.id;
-            row.append(author, textNode, id);
+            row.append(time, author, textNode);
             fragment.append(row);
           }
         }
@@ -1671,25 +1661,8 @@ function renderBrowserlessWebPanel() {
           logNode.scrollTop = Math.max(0, previousTop + (logNode.scrollHeight - previousHeight));
         }
       }
-      const stateNode = document.getElementById('chatState');
-      if (stateNode) {
-        stateNode.textContent = current.sendAvailable ? '在线可发送' : '离线只读';
-        stateNode.className = 'pill ' + (current.sendAvailable ? 'ok' : 'warn');
-      }
       syncChatCompose(current);
-      const details = [];
-      const lastSendText = chatLastSendText(current.lastSend);
-      if (lastSendText) details.push(lastSendText);
-      if (current.snapshot?.lastAt) {
-        details.push(chatSnapshotSourceText(current.snapshot.source) + ' ' + fullStamp(current.snapshot.lastAt));
-      }
-      const intervalMs = number(current.snapshot?.desiredIntervalMs);
-      if (intervalMs !== null) details.push('共享快照拉取间隔 ' + Math.round(intervalMs / 1000) + '秒');
-      if (!current.sendAvailable) details.push('离线发送未启用：认证 WS 会使角色进入游戏');
-      setChatHint(
-        details.join('；') || '离线时仍可接收快照消息',
-        current.lastSend?.state === 'failed' ? 'bad' : (current.sendAvailable ? 'ok' : 'muted')
-      );
+      setChatHint('刷新时间 ' + stamp(current.snapshot?.lastAt), 'muted');
     }
     async function fetchStatus() {
       const url = '/api/panel-status' + (token ? '?token=' + encodeURIComponent(token) : '');

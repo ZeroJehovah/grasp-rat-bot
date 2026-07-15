@@ -19773,6 +19773,35 @@ async function runSelfTest() {
       want: '2026-07-14|ws|alice-renamed,520,700,600,8|bob,500,500,450,9|2|false|false|true|true|true|true|true|true'
     },
     {
+      name: 'browserless web panel keeps compact timestamped chat below role status',
+      got: (() => {
+        const panelText = renderBrowserlessWebPanel();
+        const leftIndex = panelText.indexOf('class="stack left-stack"');
+        const roleIndex = panelText.indexOf('id="roleStatus"');
+        const chatIndex = panelText.indexOf('id="chatPanel"');
+        const rightIndex = panelText.indexOf('class="stack right-stack"');
+        return [
+          leftIndex >= 0 && leftIndex < chatIndex,
+          roleIndex >= 0 && roleIndex < chatIndex,
+          chatIndex >= 0 && chatIndex < rightIndex,
+          /\.chat-log\{height:300px;overflow:auto;scrollbar-gutter:stable\}/.test(panelText),
+          !/\.chat-log\{[^}]*\b(?:border|background|padding):/.test(panelText),
+          /\.chat-row\{display:grid;grid-template-columns:38px minmax\(64px,.62fr\) minmax\(0,1.38fr\)/.test(panelText),
+          /\.chat-time\{/.test(panelText),
+          /minuteStamp\(message\?\.occurredAt \|\| message\?\.firstObservedAt\)/.test(panelText),
+          !/\.chat-id\b/.test(panelText),
+          !/id="chatState"/.test(panelText),
+          !/message\?\.id|message\.id/.test(panelText),
+          /<form id="chatForm" class="chat-compose" hidden>/.test(panelText),
+          /if \(form\) form\.hidden = !online;/.test(panelText),
+          /<div id="chatHint" class="chat-hint muted">刷新时间 --<\/div>/.test(panelText),
+          /setChatHint\('刷新时间 ' \+ stamp\(current\.snapshot\?\.lastAt\), 'muted'\)/.test(panelText),
+          !/在线 WS 快照|定时 HTTP 快照|共享快照拉取间隔|离线发送未启用|离线时仍可接收快照消息|角色离线：仅接收消息/.test(panelText)
+        ].join('|');
+      })(),
+      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
+    },
+    {
       name: 'browserless compact status and web panel expose id-backed score and daily damage name lists',
       got: (() => {
         const compact = buildCompactBrowserlessStatus({

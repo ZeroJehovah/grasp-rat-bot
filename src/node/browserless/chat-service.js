@@ -11,6 +11,8 @@ const DEFAULT_CHAT_ACTIVE_INTERVAL_MS = 30000;
 const DEFAULT_CHAT_IDLE_INTERVAL_MS = 3 * 60 * 1000;
 const DEFAULT_CHAT_PAGE_ACTIVE_WINDOW_MS = 45000;
 const DEFAULT_CHAT_SEND_BOOST_MS = 2 * 60 * 1000;
+const SERVER_TICK_MS = 50;
+const MAX_MESSAGE_TICK_AGE = 2 * 24 * 60 * 60 * 1000 / SERVER_TICK_MS;
 
 function numberOrNull(value) {
   if (value === null || value === undefined || value === '') return null;
@@ -48,6 +50,7 @@ function publicMessage(message = {}) {
     name: message.name,
     text: message.text,
     mine: Boolean(message.mine),
+    occurredAt: message.occurredAt,
     firstObservedAt: message.firstObservedAt,
     lastObservedAt: message.lastObservedAt
   };
@@ -146,7 +149,7 @@ function createChatService(options = {}) {
     }
   }
 
-  function normalizeMessage(item, observedAtMs) {
+  function normalizeMessage(item, observedAtMs, snapshotTickValue = null) {
     if (!item || typeof item !== 'object') return null;
     const id = numberOrNull(item.id);
     const tick = numberOrNull(item.tick);
@@ -156,6 +159,13 @@ function createChatService(options = {}) {
     const key = messageKey(item);
     const existing = messages.get(key) || null;
     const at = new Date(observedAtMs).toISOString();
+    const snapshotTick = numberOrNull(snapshotTickValue);
+    const tickAge = tick !== null && snapshotTick !== null ? snapshotTick - tick : null;
+    const occurredAt = existing?.occurredAt || (
+      tickAge !== null && tickAge >= 0 && tickAge <= MAX_MESSAGE_TICK_AGE
+        ? new Date(observedAtMs - tickAge * SERVER_TICK_MS).toISOString()
+        : (existing?.firstObservedAt || at)
+    );
     const name = userId === null
       ? ''
       : (names.get(userId) || existing?.name || `User ${userId}`);
@@ -169,6 +179,7 @@ function createChatService(options = {}) {
       name,
       text,
       mine: userId !== null && userId === selfUserId(),
+      occurredAt,
       firstObservedAt: existing?.firstObservedAt || at,
       lastObservedAt: at
     };
@@ -221,10 +232,11 @@ function createChatService(options = {}) {
     }
     rememberNames(Array.isArray(payload.entities) ? payload.entities : []);
     const sourceMessages = Array.isArray(payload.messages) ? payload.messages : [];
+    const snapshotTick = numberOrNull(payload.tick);
     const normalized = [];
     let updated = 0;
     for (const item of sourceMessages) {
-      const message = normalizeMessage(item, observedAtMs);
+      const message = normalizeMessage(item, observedAtMs, snapshotTick);
       if (!message) continue;
       const existing = messages.get(message.key);
       if (!existing || !sameMessageContent(existing, message)) updated += 1;
@@ -434,7 +446,9 @@ function runChatServiceSelfTest() {
       && onlineStatus.sendAvailable
       && onlineStatus.lastSend.state === 'confirmed'
       && onlineStatus.messages[0]?.name === 'Alice'
+      && onlineStatus.messages[0]?.occurredAt === '2026-07-14T03:59:59.500Z'
       && onlineStatus.messages[1]?.mine === true
+      && onlineStatus.messages[1]?.occurredAt === '2026-07-14T04:00:01.000Z'
       && onlineStatus.snapshot.desiredIntervalMs === DEFAULT_CHAT_ACTIVE_INTERVAL_MS
       && offlineSend.reason === 'game-offline'
       && invalidSend.reason === 'chat-control-character'
