@@ -22,6 +22,9 @@ function createLocalLogStore(options = {}) {
   const allowedStreams = options.allowedStreams
     ? new Set(Array.from(options.allowedStreams).map(sanitizeStreamName))
     : DEFAULT_STREAMS;
+  const backgroundIo = options.backgroundIo && typeof options.backgroundIo === 'object'
+    ? options.backgroundIo
+    : null;
 
   function dayDirFor(ms = now()) {
     return path.join(logDir, utcDay(ms));
@@ -36,6 +39,11 @@ function createLocalLogStore(options = {}) {
   function append(stream, type, detail = {}, optionsForEntry = {}) {
     const atMs = Number(optionsForEntry.atMs || now());
     const file = fileFor(stream, atMs);
+    if (backgroundIo?.appendLog) {
+      const queued = backgroundIo.appendLog({ file, atMs, type, detail });
+      if (!queued) throw new Error('background log queue unavailable');
+      return { file, queued: true };
+    }
     fs.mkdirSync(path.dirname(file), { recursive: true });
     const entry = {
       at: new Date(atMs).toISOString(),
@@ -57,10 +65,13 @@ function createLocalLogStore(options = {}) {
 
   return {
     append,
+    close: () => backgroundIo?.close?.() || Promise.resolve({ ok: true }),
     dayDirFor,
     fileFor,
+    flush: () => backgroundIo?.flush?.() || Promise.resolve({ ok: true }),
     logDir,
-    readEntries
+    readEntries,
+    status: () => backgroundIo?.status?.() || { ok: true, synchronous: true }
   };
 }
 

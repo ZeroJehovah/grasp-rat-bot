@@ -41,6 +41,25 @@ function recordEntries(record, limit = DEFAULT_RECENT_LIMIT) {
   }));
 }
 
+function summarizeCombatLearning(value, limit = DEFAULT_RECENT_LIMIT) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const hitRateByModeDistance = value.hitRateByModeDistance || {};
+  const modeMetrics = value.modeMetrics || {};
+  const recentEntries = record => Object.entries(record || {})
+    .sort((a, b) => Number(b[1]?.updatedAt || 0) - Number(a[1]?.updatedAt || 0))
+    .slice(0, limit)
+    .map(([key, cell]) => ({ key, value: redactBoundedValue(cell) }));
+  return {
+    hitRateCellCount: Object.keys(hitRateByModeDistance).length,
+    modeMetricCellCount: Object.keys(modeMetrics).length,
+    lastTargetCount: Object.keys(value.lastTotalsByTarget || {}).length,
+    recentShotCount: Array.isArray(value.recentShots) ? value.recentShots.length : 0,
+    recentHitRateCells: recentEntries(hitRateByModeDistance),
+    recentModeMetrics: recentEntries(modeMetrics),
+    recentShots: boundedList(value.recentShots, limit)
+  };
+}
+
 function redactBoundedValue(value, depth = 0) {
   if (value === null || value === undefined) return value;
   if (typeof value === 'string') return value.length > 180 ? `${value.slice(0, 177)}...` : value;
@@ -148,7 +167,7 @@ function summarizeBrowserlessDecisionState(state, options = {}) {
       aim: redactBoundedValue(state.combatAim || null),
       metrics: redactBoundedValue(state.combatMetrics || null),
       opponentBehaviorStates: recordEntries(state.opponentBehaviorStates || {}, limit),
-      learning: redactBoundedValue(state.combatLearning || null)
+      learning: summarizeCombatLearning(state.combatLearning, limit)
     },
     browserlessSafety: {
       seenEntityCount: Object.keys(state.seenEntities || {}).length,

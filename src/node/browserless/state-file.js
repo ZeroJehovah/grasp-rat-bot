@@ -150,7 +150,7 @@ function shouldReplaceStateObject(pathParts) {
 }
 
 function mergeState(base, patch, pathParts = []) {
-  const output = cloneJson(base || {});
+  const output = isPlainObject(base) ? { ...base } : {};
   for (const [key, value] of Object.entries(patch || {})) {
     const nextPath = [...pathParts, key];
     if (shouldReplaceStateObject(nextPath)) {
@@ -1741,6 +1741,83 @@ function buildPublicBrowserlessStatus(state, config = {}) {
   return redactStructuredSecrets(publicState);
 }
 
+function compactSnapshotProbeSource(value) {
+  if (!value || typeof value !== 'object') return null;
+  return {
+    startedAt: value.startedAt || '',
+    completedAt: value.completedAt || '',
+    checkedAt: value.checkedAt || '',
+    updatedAt: value.updatedAt || '',
+    at: value.at || '',
+    snapshotSafety: value.snapshotSafety || null
+  };
+}
+
+function compactLastRunSource(value) {
+  if (!value || typeof value !== 'object') return null;
+  const canary = value.canary && typeof value.canary === 'object' ? value.canary : {};
+  return {
+    error: value.error || '',
+    reason: value.reason || '',
+    canary: {
+      error: canary.error || '',
+      startedAt: canary.startedAt || '',
+      completedAt: canary.completedAt || '',
+      updatedAt: canary.updatedAt || '',
+      at: canary.at || '',
+      snapshotSafety: canary.snapshotSafety || null,
+      safety: {
+        event: canary.safety?.event ? { reason: canary.safety.event.reason || '' } : null,
+        leaveFailure: canary.safety?.leaveFailure ? { reason: canary.safety.leaveFailure.reason || '' } : null
+      }
+    }
+  };
+}
+
+function browserlessCompactStatusSource(state = {}) {
+  const runner = state.runner && typeof state.runner === 'object' ? state.runner : {};
+  const probes = state.probes && typeof state.probes === 'object' ? state.probes : {};
+  const current = state.current && typeof state.current === 'object' ? state.current : {};
+  return {
+    schemaVersion: state.schemaVersion,
+    updatedAt: state.updatedAt || '',
+    session: state.session || {},
+    runner: {
+      running: Boolean(runner.running),
+      mode: runner.mode || '',
+      readOnly: runner.readOnly !== false,
+      controlMode: runner.controlMode || 'read-only',
+      canaryProfile: runner.canaryProfile || '',
+      dryRun: runner.dryRun !== false,
+      combatEnabled: Boolean(runner.combatEnabled),
+      lastError: runner.lastError || '',
+      currentAction: runner.currentAction || null,
+      lastRun: compactLastRunSource(runner.lastRun)
+    },
+    probes: {
+      lastSnapshotProbe: compactSnapshotProbeSource(probes.lastSnapshotProbe),
+      lastReadOnlyProbe: compactSnapshotProbeSource(probes.lastReadOnlyProbe)
+    },
+    loginPointSafety: state.loginPointSafety || {},
+    current: {
+      self: current.self || null,
+      stamina: current.stamina || null,
+      action: current.action || null,
+      decision: current.decision || null,
+      profit: current.profit || null,
+      combatSummary: current.combatSummary || null
+    },
+    lastKnown: state.lastKnown || {},
+    recentExits: Array.isArray(state.recentExits) ? state.recentExits : [],
+    network: state.network || {},
+    stats: state.stats || {},
+    logs: { stateFile: state.logs?.stateFile || '' },
+    highDropPlayers: state.highDropPlayers || null,
+    easyKillPlayers: state.easyKillPlayers || null,
+    dailyDamagePlayers: state.dailyDamagePlayers || null
+  };
+}
+
 function buildCompactBrowserlessStatus(state, config = {}) {
   const normalized = normalizeBrowserlessState(state, state?.logs?.stateFile || '');
   const inputSession = state?.session && typeof state.session === 'object' ? state.session : {};
@@ -1831,6 +1908,7 @@ module.exports = {
   browserlessPatchFromLegacyState,
   browserlessStatsForDecision,
   browserlessStatsForOffline,
+  browserlessCompactStatusSource,
   buildCompactBrowserlessStatus,
   buildPublicBrowserlessStatus,
   defaultBrowserlessState,

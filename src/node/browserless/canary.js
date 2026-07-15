@@ -1,5 +1,6 @@
 'use strict';
 
+const { performance } = require('perf_hooks');
 const { parseGrzFrame } = require('../../shared/grz-frame');
 const {
   buildSnapshotProbeUrl,
@@ -25,9 +26,198 @@ const {
 const { createBrowserlessActionAdapter } = require('./action-adapter');
 const { createBrowserlessTargetWhitelist } = require('./target-whitelist');
 const { browserlessRuntimeRevision, browserlessRuntimeRevisionStatus } = require('./runtime-revision');
+const { createBrowserlessDecisionWorker } = require('./decision-worker');
 
 const DEFAULT_READONLY_PROBE_MS = 30000;
 const DEFAULT_FRAME_GAP_ALERT_MS = 2000;
+const DEFAULT_MAIN_THREAD_BUDGET_MS = 50;
+const DEFAULT_REALTIME_CONTROL_WARMUP_ITERATIONS = 6;
+
+function createTimingAggregate() {
+  return { count: 0, totalMs: 0, maxMs: 0, overBudgetCount: 0 };
+}
+
+function recordTimingAggregate(aggregate, durationMs, budgetMs = Infinity) {
+  const duration = Math.max(0, Number(durationMs || 0));
+  aggregate.count += 1;
+  aggregate.totalMs += duration;
+  aggregate.maxMs = Math.max(aggregate.maxMs, duration);
+  if (duration >= budgetMs) aggregate.overBudgetCount += 1;
+  aggregate.meanMs = aggregate.totalMs / aggregate.count;
+  return duration;
+}
+
+function createMainThreadTimingStats(budgetMs = DEFAULT_MAIN_THREAD_BUDGET_MS) {
+  return {
+    budgetMs: Math.max(1, Number(budgetMs || DEFAULT_MAIN_THREAD_BUDGET_MS)),
+    accepted: true,
+    tasks: {},
+    stages: {},
+    maxTask: null,
+    violationCount: 0,
+    lastViolation: null
+  };
+}
+
+function recordMainThreadTask(stats, taskName, durationMs, stageDurations = {}, detail = {}) {
+  if (!stats) return null;
+  const name = String(taskName || 'task');
+  const duration = recordTimingAggregate(
+    stats.tasks[name] || (stats.tasks[name] = createTimingAggregate()),
+    durationMs,
+    stats.budgetMs
+  );
+  for (const [stage, value] of Object.entries(stageDurations || {})) {
+    recordTimingAggregate(stats.stages[stage] || (stats.stages[stage] = createTimingAggregate()), value);
+  }
+  const entry = {
+    task: name,
+    durationMs: Math.round(duration * 1000) / 1000,
+    stages: Object.fromEntries(Object.entries(stageDurations || {}).map(([key, value]) => [key, Math.round(Number(value || 0) * 1000) / 1000])),
+    ...detail
+  };
+  if (!stats.maxTask || duration > Number(stats.maxTask.durationMs || 0)) stats.maxTask = entry;
+  if (duration >= stats.budgetMs) {
+    stats.accepted = false;
+    stats.violationCount += 1;
+    stats.lastViolation = entry;
+  }
+  return entry;
+}
+
+function createRealtimeControlWarmupState(userId = 0, nowMs = Date.now()) {
+  const self = {
+    entity_id: 1,
+    user_id: Number(userId || 1),
+    name: 'realtime-warmup-self',
+    x: 0,
+    y: 0,
+    vx: 20,
+    vy: 0,
+    hp: 82,
+    max_hp: 100,
+    current_join_mode: 'Active',
+    stamina_5s_remaining_milli: 6400,
+    stamina_5s_limit_milli: 10000,
+    stamina_1h_remaining_milli: 2400000,
+    stamina_1h_limit_milli: 3000000,
+    stamina_1d_remaining_milli: 16000000,
+    stamina_1d_limit_milli: 20000000
+  };
+  const activeTargets = Array.from({ length: 8 }, (_, index) => ({
+    entity_id: 10 + index,
+    user_id: 100 + index,
+    name: `realtime-warmup-active-${index}`,
+    x: 6500 + index * 900,
+    y: 800 + index * 550,
+    vx: index % 2 ? 35 : -35,
+    vy: index % 3 ? 25 : -25,
+    hp: index === 0 ? 68 : 90 - index,
+    max_hp: 100,
+    current_join_mode: 'Active',
+    firing: index < 4,
+    stamina_5s_remaining_milli: 4200 + index * 250,
+    stamina_5s_limit_milli: 10000,
+    death_drop_coins: index === 0 ? 1800 : 80 + index * 10
+  }));
+  const passives = Array.from({ length: 64 }, (_, index) => ({
+    entity_id: 1000 + index,
+    user_id: 2000 + index,
+    name: `realtime-warmup-passive-${index}`,
+    x: 18000 + index * 400,
+    y: 12000 + index * 300,
+    vx: 0,
+    vy: 0,
+    hp: 100,
+    max_hp: 100,
+    current_join_mode: 'Passive',
+    stamina_5s_remaining_milli: 10000,
+    stamina_5s_limit_milli: 10000,
+    death_drop_coins: index % 5
+  }));
+  const bullets = activeTargets.slice(0, 6).map((target, index) => ({
+    bullet_id: index + 1,
+    owner_user_id: target.user_id,
+    start_x: target.x,
+    start_y: target.y,
+    target_x: self.x,
+    target_y: self.y,
+    range_cm: 15000,
+    speed_per_tick: 500,
+    created_tick: 499998,
+    expire_tick: 500028
+  }));
+  const entities = [self, ...activeTargets, ...passives];
+  return {
+    userId: self.user_id,
+    frameAges: { realtimeMs: 0, snapshotMs: 0 },
+    realtime: {
+      tick: 500000,
+      receivedAtMs: nowMs,
+      frameAgeMs: 0,
+      self,
+      entities,
+      bullets,
+      coinDrops: []
+    },
+    fallback: {
+      tick: 499999,
+      receivedAtMs: nowMs,
+      frameAgeMs: 0,
+      self,
+      entities,
+      bullets: [],
+      coinDrops: [],
+      messages: []
+    },
+    command: {
+      shooting: {
+        acceptedShots: [],
+        executionDelay: { medianTicks: 5, p90Ticks: 5, madTicks: 0 }
+      }
+    }
+  };
+}
+
+function warmBrowserlessRealtimeControl(decisionAdapterOptions = {}, options = {}) {
+  const requested = Number(options.realtimeControlWarmupIterations ?? DEFAULT_REALTIME_CONTROL_WARMUP_ITERATIONS);
+  const iterations = Math.max(0, Math.min(20, Math.round(Number.isFinite(requested) ? requested : 0)));
+  if (!iterations) return { ok: true, skipped: true, iterations: 0, durationMs: 0, maxIterationMs: 0 };
+  const started = performance.now();
+  const adapter = createBrowserlessDecisionAdapter({
+    ...decisionAdapterOptions,
+    easyKillPlayerTracker: null,
+    damagePlayerTracker: null,
+    combatCompletionTracker: null
+  });
+  const baseNowMs = Number(decisionAdapterOptions.now?.() || Date.now());
+  const state = createRealtimeControlWarmupState(decisionAdapterOptions.userId, baseNowMs);
+  let maxIterationMs = 0;
+  for (let index = 0; index < iterations; index += 1) {
+    const iterationStarted = performance.now();
+    const nowMs = baseNowMs + index * 160;
+    state.realtime.tick += 1;
+    state.realtime.receivedAtMs = nowMs;
+    state.fallback.receivedAtMs = nowMs;
+    adapter.evaluateRealtime(state, {
+      ...decisionAdapterOptions,
+      nowMs,
+      controlMode: decisionAdapterOptions.controlMode || 'profit-live',
+      combatEnabled: true,
+      easyKillPlayerTracker: null,
+      damagePlayerTracker: null,
+      combatCompletionTracker: null
+    });
+    maxIterationMs = Math.max(maxIterationMs, performance.now() - iterationStarted);
+  }
+  return {
+    ok: true,
+    skipped: false,
+    iterations,
+    durationMs: Math.round((performance.now() - started) * 1000) / 1000,
+    maxIterationMs: Math.round(maxIterationMs * 1000) / 1000
+  };
+}
 
 function snapshotSafetySelfPresent(snapshotSafety) {
   return Boolean(snapshotSafety?.response?.summary?.selfPresent);
@@ -575,7 +765,7 @@ async function runReadOnlyCanary(config, options = {}) {
       lastError: errorMessage(err)
     };
   }
-  const decisionAdapter = options.decisionAdapter || createBrowserlessDecisionAdapter({
+  const decisionAdapterOptions = {
     ...runtimeDefaults,
     userId: config.userId,
     now,
@@ -593,9 +783,22 @@ async function runReadOnlyCanary(config, options = {}) {
     targetWhitelistUserIds: targetWhitelist.userIds,
     targetWhitelistUserIdSet: targetWhitelist.userIdSet,
     whitelistCheck: target => targetWhitelist.isWhitelistedTarget(target)
-  });
+  };
+  const decisionAdapter = options.decisionAdapter || createBrowserlessDecisionAdapter(decisionAdapterOptions);
+  const realtimeControlWarmup = options.useDecisionWorker || options.decisionWorker
+    ? warmBrowserlessRealtimeControl(decisionAdapterOptions, options)
+    : { ok: true, skipped: true, iterations: 0, durationMs: 0, maxIterationMs: 0 };
+  const decisionWorker = options.decisionWorker || (options.useDecisionWorker
+    ? createBrowserlessDecisionWorker({
+        ...decisionAdapterOptions,
+        targetWhitelistNames: targetWhitelist.names,
+        targetWhitelistUserIds: targetWhitelist.userIds
+      })
+    : null);
   const persistCombatLearning = atMs => {
-    const decisionState = decisionAdapter.getState?.() || {};
+    const decisionState = decisionAdapter.getCombatPersistenceState?.()
+      || decisionAdapter.getState?.()
+      || {};
     const metrics = decisionState.combatMetrics || null;
     if (metrics?.targetId !== null && metrics?.targetId !== undefined && metrics?.targetId !== '') {
       options.combatCompletionTracker?.observeCombatSample?.({
@@ -639,11 +842,15 @@ async function runReadOnlyCanary(config, options = {}) {
     snapshotSafety: null,
     stats,
     frameHealth,
+    hotPath: createMainThreadTimingStats(options.mainThreadBudgetMs || DEFAULT_MAIN_THREAD_BUDGET_MS),
     decisions: {
       intervalMs: decisionIntervalMs,
       evaluatedCount: 0,
+      realtimeControlCount: 0,
       loggedCount: 0,
-      last: null
+      last: null,
+      worker: null,
+      realtimeControlWarmup
     },
     safety: {
       event: null,
@@ -685,6 +892,12 @@ async function runReadOnlyCanary(config, options = {}) {
   };
   let lastDecisionAtMs = 0;
   let lastCombatControlAtMs = 0;
+  let lastRealtimeControlLogAtMs = 0;
+  let lastRealtimeControlKey = '';
+  let realtimeControlActive = false;
+  let plannerInFlight = false;
+  let combatPersistenceScheduled = false;
+  let combatPersistenceAtMs = 0;
   let wsError = null;
   let wsClosed = null;
   let ending = false;
@@ -693,6 +906,35 @@ async function runReadOnlyCanary(config, options = {}) {
   let actionAdapter = null;
   let openFailedBeforeTransport = false;
   let transportPublished = false;
+  const flushScheduledCombatPersistence = () => {
+    if (!combatPersistenceScheduled && !combatPersistenceAtMs) return;
+    const started = performance.now();
+    combatPersistenceScheduled = false;
+    const atMs = combatPersistenceAtMs || now();
+    combatPersistenceAtMs = 0;
+    try {
+      persistCombatLearning(atMs);
+    } finally {
+      const entry = recordMainThreadTask(
+        result.hotPath,
+        'combat-persistence-schedule',
+        performance.now() - started
+      );
+      if (entry && entry.durationMs >= result.hotPath.budgetMs) {
+        log('main-thread-budget-exceeded', entry);
+      }
+    }
+  };
+  const scheduleCombatPersistence = atMs => {
+    combatPersistenceAtMs = Math.max(combatPersistenceAtMs, Number(atMs || 0));
+    if (!decisionWorker) {
+      flushScheduledCombatPersistence();
+      return;
+    }
+    if (combatPersistenceScheduled) return;
+    combatPersistenceScheduled = true;
+    setImmediate(flushScheduledCombatPersistence);
+  };
   const noSelfGuardStartedAtMs = fallbackMs => {
     const fallback = Number(fallbackMs);
     return transportStartedAtMs
@@ -765,6 +1007,7 @@ async function runReadOnlyCanary(config, options = {}) {
     ...(targetWhitelistSummary || {}),
     runtimeRevisionResolution: browserlessRuntimeRevisionStatus()
   });
+  log('canary-realtime-control-warmup', realtimeControlWarmup);
   const updateActionResult = actionResult => {
     if (!actionResult) return;
     const adapterState = actionAdapter?.getState?.() || {};
@@ -796,6 +1039,307 @@ async function runReadOnlyCanary(config, options = {}) {
     result.safety.event = event;
     result.error = event.reason;
     logSafety(event);
+    return true;
+  };
+
+  const completionContext = (currentState, atMs) => {
+    const output = {};
+    const tracker = options.combatCompletionTracker;
+    if (!tracker || typeof tracker.probability !== 'function') return output;
+    for (const entity of currentState?.realtime?.entities || []) {
+      const userId = entity?.user_id ?? entity?.userId;
+      if (userId === null || userId === undefined || userId === '') continue;
+      try {
+        output[String(userId)] = tracker.probability(userId, atMs);
+      } catch (_) {}
+    }
+    return output;
+  };
+  const buildDecisionWorkerContext = (currentState, atMs) => {
+    let easyKillStatus = null;
+    let damageStatus = null;
+    try {
+      easyKillStatus = options.easyKillPlayerTracker?.status?.(atMs) || null;
+    } catch (_) {}
+    try {
+      damageStatus = options.damagePlayerTracker?.status?.(atMs) || null;
+    } catch (_) {}
+    return {
+      easyKillStatus,
+      damageStatus,
+      combatCompletionByUserId: completionContext(currentState, atMs)
+    };
+  };
+  const applyDecisionWorkerEffects = effects => {
+    for (const effect of effects || []) {
+      if (effect?.tracker !== 'easy-kill') continue;
+      const method = String(effect.method || '');
+      const tracker = options.easyKillPlayerTracker;
+      if (!tracker || typeof tracker[method] !== 'function') continue;
+      try {
+        tracker[method](...(Array.isArray(effect.args) ? effect.args : []));
+      } catch (err) {
+        log('canary-decision-worker-effect-error', { method, error: errorMessage(err) });
+      }
+    }
+  };
+  const applyDecisionAction = (currentState, summary, decision, atMs, detail = {}) => {
+    if (!actionAdapter) return null;
+    let actionResult;
+    try {
+      actionResult = actionAdapter.applyDecision(currentState, summary);
+    } catch (err) {
+      const message = err?.message || String(err);
+      actionResult = {
+        ok: false,
+        kind: 'action-error',
+        reason: detail.errorReason || 'action-apply-failed',
+        error: message,
+        transportClosed: /websocket is not open|not open|closed/i.test(message)
+      };
+    }
+    updateActionResult(actionResult);
+    if (actionResult?.transportClosed) {
+      recordSafetyEvent(createSafetyEvent('ws-closed', {
+        source: 'action-send',
+        action: actionResult
+      }, { nowMs: atMs, stopMotion: false }));
+      return actionResult;
+    }
+    if (actionResult?.ok === false && actionResult?.error) {
+      recordSafetyEvent(createSafetyEvent('ws-error', {
+        source: actionResult.reason === 'action-apply-failed' ? 'action-apply' : 'action-send',
+        error: actionResult.error || 'action failed'
+      }, { nowMs: atMs, stopMotion: false }));
+      return actionResult;
+    }
+    decisionAdapter.observeActionResult?.(actionResult, decision, { nowMs: atMs });
+    if (detail.notifyDecisionWorker) {
+      decisionWorker?.observeActionResult?.(actionResult, decision, { nowMs: atMs });
+    }
+    return actionResult;
+  };
+  const publishFullDecision = (decision, currentState, atMs, detail = {}) => {
+    const summary = summarizeBrowserlessDecision(decision);
+    result.decisions.evaluatedCount += 1;
+    result.decisions.last = summary;
+    scheduleCombatPersistence(atMs);
+    logDecision(summary);
+    result.decisions.loggedCount += 1;
+    if (controlMode === 'combat-dry-run' || controlMode === 'combat-live' || combatLiveEnabled) {
+      logCombat(summary.combat || {});
+    }
+    if (typeof options.onDecision === 'function') {
+      try {
+        options.onDecision(summary, { state: currentState, decision, worker: detail.worker || null });
+      } catch (err) {
+        log('canary-decision-status-error', { error: err?.message || String(err) });
+      }
+    }
+    const decisionSafetyEvent = safetyController.evaluate(currentState, {
+      startedAtMs: noSelfGuardStartedAtMs(atMs),
+      frameGapAlertMs,
+      staleSelfMs: config.staleSelfMs,
+      staleSelfConfirmMs: config.staleSelfConfirmMs,
+      noSelfGraceMs: config.noSelfGraceMs,
+      staminaExhaustedBelowMs: config.staminaExhaustedBelowMs,
+      actionSettlementStall: result.actions.movementStall,
+      decision: summary,
+      nowMs: atMs
+    });
+    if (recordSafetyEvent(decisionSafetyEvent)) return summary;
+    applyDecisionAction(currentState, summary, decision, atMs, {
+      notifyDecisionWorker: detail.notifyDecisionWorker,
+      errorReason: 'action-apply-failed'
+    });
+    return summary;
+  };
+  const realtimeControlKey = summary => [
+    summary?.action?.kind || '',
+    summary?.action?.reason || '',
+    summary?.action?.target?.userId ?? summary?.action?.target?.user_id ?? summary?.combat?.target?.userId ?? ''
+  ].join('|');
+  const publishRealtimeControl = (control, currentState, atMs) => {
+    const action = control?.action || null;
+    if (!action) {
+      if (!realtimeControlActive) return false;
+      realtimeControlActive = false;
+      lastDecisionAtMs = 0;
+      const release = {
+        kind: 'wait',
+        band: 'wait',
+        reason: 'realtime-control-released',
+        at: new Date(atMs).toISOString(),
+        tick: currentState?.realtime?.tick ?? null,
+        action: { kind: 'wait', band: 'wait', reason: 'realtime-control-released' },
+        combat: control?.combat || null,
+        input: control?.input || null
+      };
+      result.decisions.last = release;
+      if (typeof options.onCombatControl === 'function') {
+        try {
+          options.onCombatControl(release, { state: currentState, control });
+        } catch (err) {
+          log('canary-combat-status-error', { error: errorMessage(err) });
+        }
+      }
+      applyDecisionAction(currentState, release, control, atMs, { errorReason: 'realtime-control-release-failed' });
+      return true;
+    }
+    realtimeControlActive = true;
+    const combatSummary = {
+      ...(control.combat || {}),
+      decisionIntervalMs,
+      combatControlIntervalMs,
+      highFrequencyControl: true
+    };
+    const summary = {
+      kind: action.kind || control.kind || '',
+      band: action.band || control.band || '',
+      reason: action.reason || control.reason || '',
+      at: control.at || new Date(atMs).toISOString(),
+      tick: control.tick ?? currentState?.realtime?.tick ?? null,
+      action,
+      combat: combatSummary,
+      input: control.input || null
+    };
+    result.decisions.realtimeControlCount += 1;
+    result.decisions.last = summary;
+    scheduleCombatPersistence(atMs);
+    logCombat(combatSummary);
+    const key = realtimeControlKey(summary);
+    if (key !== lastRealtimeControlKey || atMs - lastRealtimeControlLogAtMs >= decisionIntervalMs) {
+      logDecision(summary);
+      result.decisions.loggedCount += 1;
+      lastRealtimeControlKey = key;
+      lastRealtimeControlLogAtMs = atMs;
+    }
+    if (typeof options.onCombatControl === 'function') {
+      try {
+        options.onCombatControl(summary, { state: currentState, control });
+      } catch (err) {
+        log('canary-combat-status-error', { error: errorMessage(err) });
+      }
+    }
+    const immediate = safetyController.evaluate(currentState, {
+      startedAtMs: noSelfGuardStartedAtMs(atMs),
+      decision: summary,
+      nowMs: atMs
+    });
+    if (recordSafetyEvent(immediate)) return true;
+    applyDecisionAction(currentState, summary, control, atMs, { errorReason: 'realtime-control-apply-failed' });
+    return true;
+  };
+  const evaluateRealtimeControl = (currentState, atMs, force = false, outerStages = null) => {
+    if (!actionAdapter || !combatLiveEnabled) return false;
+    if (!force && atMs - lastCombatControlAtMs < combatControlIntervalMs) return realtimeControlActive;
+    let realtimeStages = null;
+    const control = typeof decisionAdapter.evaluateRealtime === 'function'
+      ? decisionAdapter.evaluateRealtime(currentState, {
+          ...runtimeDefaults,
+          nowMs: atMs,
+          controlMode,
+          combatEnabled: config.combatEnabled,
+          onRealtimeStageTimings: stages => {
+            realtimeStages = stages;
+          }
+        })
+      : decisionAdapter.evaluateCombat?.(currentState, {
+          ...runtimeDefaults,
+          nowMs: atMs,
+          controlMode,
+          combatEnabled: config.combatEnabled
+        });
+    if (outerStages && realtimeStages) {
+      for (const [name, durationMs] of Object.entries(realtimeStages)) {
+        outerStages[`realtime-${name}`] = durationMs;
+      }
+    }
+    lastCombatControlAtMs = atMs;
+    if (control?.action?.kind === 'wait' && !realtimeControlActive) return false;
+    const publishStarted = performance.now();
+    const handled = publishRealtimeControl(control || {}, currentState, atMs);
+    if (outerStages) outerStages['realtime-publish'] = performance.now() - publishStarted;
+    return handled;
+  };
+  const dispatchWorkerDecision = (currentState, atMs) => {
+    if (!decisionWorker || plannerInFlight || ending || result.safety.event) return false;
+    if (!currentState?.realtime?.self) return false;
+    plannerInFlight = true;
+    lastDecisionAtMs = atMs;
+    const workerOptions = {
+      ...runtimeDefaults,
+      nowMs: atMs,
+      controlMode,
+      combatEnabled: config.combatEnabled
+    };
+    const context = buildDecisionWorkerContext(currentState, atMs);
+    const statePatch = decisionAdapter.getRealtimePersistenceState?.() || null;
+    decisionWorker.decide(currentState, workerOptions, context, statePatch)
+      .then(workerResult => {
+        const taskStarted = performance.now();
+        const stages = {};
+        try {
+          plannerInFlight = false;
+          result.decisions.worker = {
+            computeMs: Math.round(Number(workerResult.computeMs || 0) * 1000) / 1000,
+            postMs: Math.round(Number(workerResult.postMs || 0) * 1000) / 1000,
+            roundTripMs: Math.round(Number(workerResult.roundTripMs || 0) * 1000) / 1000,
+            requestAtMs: workerResult.requestAtMs || atMs,
+            completedAt: new Date(now()).toISOString()
+          };
+          if (ending || result.safety.event) return;
+          const responseAtMs = now();
+          let stageStarted = performance.now();
+          const latestState = stateStore.getDecisionState?.(responseAtMs) || stateStore.getState(responseAtMs);
+          stages['planner-response-state'] = performance.now() - stageStarted;
+          stageStarted = performance.now();
+          if (evaluateRealtimeControl(latestState, responseAtMs, true, stages)) {
+            stages['planner-response-realtime'] = performance.now() - stageStarted;
+            return;
+          }
+          stages['planner-response-realtime'] = performance.now() - stageStarted;
+          if (latestState?.realtime?.self && !workerResult.decision?.input?.self) {
+            lastDecisionAtMs = 0;
+            dispatchWorkerDecision(latestState, responseAtMs);
+            return;
+          }
+          if (responseAtMs - Number(workerResult.requestAtMs || atMs) > Math.max(1000, decisionIntervalMs)) {
+            lastDecisionAtMs = 0;
+            log('canary-decision-worker-stale', {
+              requestAtMs: workerResult.requestAtMs || atMs,
+              responseAtMs,
+              roundTripMs: workerResult.roundTripMs
+            });
+            return;
+          }
+          stageStarted = performance.now();
+          applyDecisionWorkerEffects(workerResult.effects);
+          publishFullDecision(workerResult.decision, latestState, responseAtMs, {
+            worker: result.decisions.worker,
+            notifyDecisionWorker: true
+          });
+          stages['planner-response-apply'] = performance.now() - stageStarted;
+        } finally {
+          const entry = recordMainThreadTask(result.hotPath, 'planner-response', performance.now() - taskStarted, stages, {
+            tick: workerResult.decision?.tick ?? null
+          });
+          if (entry && entry.durationMs >= result.hotPath.budgetMs) {
+            log('main-thread-budget-exceeded', entry);
+          }
+        }
+      })
+      .catch(err => {
+        plannerInFlight = false;
+        if (ending || result.safety.event) return;
+        const at = now();
+        const event = createSafetyEvent('decision-worker-failed', {
+          source: 'decision-worker',
+          error: errorMessage(err)
+        }, { nowMs: at, stopMotion: true });
+        recordSafetyEvent(event);
+        if (actionAdapter) updateActionResult(actionAdapter.stop('decision-worker-failed'));
+      });
     return true;
   };
 
@@ -864,12 +1408,16 @@ async function runReadOnlyCanary(config, options = {}) {
       result.error = `snapshot safety not confirmed: ${result.snapshotSafety.reason}`;
       result.completedAt = new Date(now()).toISOString();
       log('canary-blocked', { error: result.error });
+      try {
+        await decisionWorker?.close?.();
+      } catch (_) {}
       return result;
     }
   }
 
   let transport = null;
   try {
+    if (decisionWorker) await decisionWorker.ready();
     const open = options.openBrowserlessWs || openBrowserlessWs;
     transport = await open({
       gameOrigin: config.gameOrigin,
@@ -915,94 +1463,98 @@ async function runReadOnlyCanary(config, options = {}) {
       },
       onMessage: data => {
         if (ending || result.safety.event) return;
+        const taskStarted = performance.now();
+        const stageDurations = {};
         const atMs = now();
-        if (!frameHealth.firstFrameAtMs) frameHealth.firstFrameAtMs = atMs;
-        if (frameHealth.lastFrameAtMs) frameHealth.maxFrameGapMs = Math.max(frameHealth.maxFrameGapMs, atMs - frameHealth.lastFrameAtMs);
-        frameHealth.lastFrameAtMs = atMs;
-        const frame = inspectCanaryFrame(data, { userId: config.userId });
-        logWs('message', buildWsFrameTrace(frame, config));
-        if (frame.decodeError || frame.jsonParseError) frameHealth.decodeErrors += 1;
-        updateFrameStats(stats, {
-          at: new Date(atMs).toISOString(),
-          ...frame
-        });
-        if (frame.decodedJson) {
-          if (frame.decodedJson.type === 'snapshot' && typeof options.onSnapshotPayload === 'function') {
-            try {
-              options.onSnapshotPayload(frame.decodedJson, {
-                source: 'ws',
-                observedAtMs: atMs
-              });
-            } catch (err) {
-              log('canary-snapshot-observer-error', { error: err?.message || String(err) });
-            }
-          }
-          stateStore.ingestFrame(frame.decodedJson, { receivedAtMs: atMs });
-          const currentState = stateStore.getState(atMs);
-          const currentSelf = currentState?.realtime?.self || null;
-          if (
-            !result.entry.firstSelf
-            && currentSelf
-            && Number.isFinite(Number(currentSelf.x))
-            && Number.isFinite(Number(currentSelf.y))
-          ) {
-            result.entry.firstSelf = {
-              userId: Number.isFinite(Number(currentSelf.user_id ?? currentSelf.userId)) ? Number(currentSelf.user_id ?? currentSelf.userId) : null,
-              entityId: Number.isFinite(Number(currentSelf.entity_id ?? currentSelf.entityId)) ? Number(currentSelf.entity_id ?? currentSelf.entityId) : null,
-              name: currentSelf.name || '',
-              x: Number(currentSelf.x),
-              y: Number(currentSelf.y),
-              hp: Number.isFinite(Number(currentSelf.hp)) ? Number(currentSelf.hp) : null
-            };
-            result.entry.firstSelfAt = new Date(atMs).toISOString();
-            result.entry.firstSelfTick = currentState?.realtime?.tick ?? frame.decodedTick ?? null;
-          }
-          if (actionAdapter) {
-            const settlement = actionAdapter.observeState(currentState);
-            if (settlement) {
-              result.actions.settlement = settlement;
-            }
-            const adapterState = actionAdapter.getState?.() || {};
-            result.actions.movementStall = adapterState.movementStall || result.actions.movementStall;
-            result.actions.lastMovementStall = adapterState.lastMovementStall || result.actions.lastMovementStall;
-          }
-          if (damagePlayerTracker && typeof damagePlayerTracker.observeDecision === 'function') {
-            try {
-              damagePlayerTracker.observeDecision(currentState, result.decisions.last, {
-                atMs,
-                tick: currentState?.realtime?.tick,
-                source: 'realtime-frame'
-              });
-            } catch (err) {
-              log('canary-damage-player-observation-error', { error: errorMessage(err) });
-            }
-          }
-          if (deadlineAtMs && atMs >= deadlineAtMs) return;
-          if (!lastDecisionAtMs || atMs - lastDecisionAtMs >= decisionIntervalMs) {
-            const decision = decisionAdapter.decide(currentState, {
-              ...runtimeDefaults,
-              nowMs: atMs,
-              controlMode,
-              combatEnabled: config.combatEnabled
-            });
-            const summary = summarizeBrowserlessDecision(decision);
-            result.decisions.evaluatedCount += 1;
-            result.decisions.last = summary;
-            persistCombatLearning(atMs);
-            lastDecisionAtMs = atMs;
-            logDecision(summary);
-            result.decisions.loggedCount += 1;
-            if (controlMode === 'combat-dry-run' || controlMode === 'combat-live' || combatLiveEnabled) {
-              logCombat(summary.combat || {});
-            }
-            if (typeof options.onDecision === 'function') {
+        let frame = null;
+        try {
+          if (!frameHealth.firstFrameAtMs) frameHealth.firstFrameAtMs = atMs;
+          if (frameHealth.lastFrameAtMs) frameHealth.maxFrameGapMs = Math.max(frameHealth.maxFrameGapMs, atMs - frameHealth.lastFrameAtMs);
+          frameHealth.lastFrameAtMs = atMs;
+          let stageStarted = performance.now();
+          frame = inspectCanaryFrame(data, { userId: config.userId });
+          logWs('message', buildWsFrameTrace(frame, config));
+          if (frame.decodeError || frame.jsonParseError) frameHealth.decodeErrors += 1;
+          updateFrameStats(stats, {
+            at: new Date(atMs).toISOString(),
+            ...frame
+          });
+          stageDurations['frame-decode-log'] = performance.now() - stageStarted;
+          if (frame.decodedJson) {
+            stageStarted = performance.now();
+            if (frame.decodedJson.type === 'snapshot' && typeof options.onSnapshotPayload === 'function') {
               try {
-                options.onDecision(summary, { state: currentState, decision });
+                options.onSnapshotPayload(frame.decodedJson, {
+                  source: 'ws',
+                  observedAtMs: atMs
+                });
               } catch (err) {
-                log('canary-decision-status-error', { error: err?.message || String(err) });
+                log('canary-snapshot-observer-error', { error: err?.message || String(err) });
               }
             }
-            const decisionSafetyEvent = safetyController.evaluate(currentState, {
+            stageDurations['snapshot-observers'] = performance.now() - stageStarted;
+            stageStarted = performance.now();
+            stateStore.ingestFrame(frame.decodedJson, { receivedAtMs: atMs });
+            const currentState = stateStore.getDecisionState?.(atMs) || stateStore.getState(atMs);
+            stageDurations['state-ingest-view'] = performance.now() - stageStarted;
+            stageStarted = performance.now();
+            const currentSelf = currentState?.realtime?.self || null;
+            if (
+              !result.entry.firstSelf
+              && currentSelf
+              && Number.isFinite(Number(currentSelf.x))
+              && Number.isFinite(Number(currentSelf.y))
+            ) {
+              result.entry.firstSelf = {
+                userId: Number.isFinite(Number(currentSelf.user_id ?? currentSelf.userId)) ? Number(currentSelf.user_id ?? currentSelf.userId) : null,
+                entityId: Number.isFinite(Number(currentSelf.entity_id ?? currentSelf.entityId)) ? Number(currentSelf.entity_id ?? currentSelf.entityId) : null,
+                name: currentSelf.name || '',
+                x: Number(currentSelf.x),
+                y: Number(currentSelf.y),
+                hp: Number.isFinite(Number(currentSelf.hp)) ? Number(currentSelf.hp) : null
+              };
+              result.entry.firstSelfAt = new Date(atMs).toISOString();
+              result.entry.firstSelfTick = currentState?.realtime?.tick ?? frame.decodedTick ?? null;
+            }
+            if (actionAdapter) {
+              const settlement = actionAdapter.observeState(currentState);
+              if (settlement) result.actions.settlement = settlement;
+              const adapterState = actionAdapter.getState?.() || {};
+              result.actions.movementStall = adapterState.movementStall || result.actions.movementStall;
+              result.actions.lastMovementStall = adapterState.lastMovementStall || result.actions.lastMovementStall;
+            }
+            if (damagePlayerTracker && typeof damagePlayerTracker.observeDecision === 'function') {
+              try {
+                damagePlayerTracker.observeDecision(currentState, result.decisions.last, {
+                  atMs,
+                  tick: currentState?.realtime?.tick,
+                  source: 'realtime-frame'
+                });
+              } catch (err) {
+                log('canary-damage-player-observation-error', { error: errorMessage(err) });
+              }
+            }
+            stageDurations['frame-observers'] = performance.now() - stageStarted;
+            if (deadlineAtMs && atMs >= deadlineAtMs) return;
+            stageStarted = performance.now();
+            const realtimeHandled = evaluateRealtimeControl(currentState, atMs, false, stageDurations);
+            if (!realtimeHandled && !plannerInFlight && (!lastDecisionAtMs || atMs - lastDecisionAtMs >= decisionIntervalMs)) {
+              if (decisionWorker) {
+                dispatchWorkerDecision(currentState, atMs);
+              } else {
+                const decision = decisionAdapter.decide(currentState, {
+                  ...runtimeDefaults,
+                  nowMs: atMs,
+                  controlMode,
+                  combatEnabled: config.combatEnabled
+                });
+                lastDecisionAtMs = atMs;
+                publishFullDecision(decision, currentState, atMs);
+              }
+            }
+            stageDurations['realtime-control-dispatch'] = performance.now() - stageStarted;
+            stageStarted = performance.now();
+            recordSafetyEvent(safetyController.evaluate(currentState, {
               startedAtMs: noSelfGuardStartedAtMs(atMs),
               frameGapAlertMs,
               staleSelfMs: config.staleSelfMs,
@@ -1010,99 +1562,22 @@ async function runReadOnlyCanary(config, options = {}) {
               noSelfGraceMs: config.noSelfGraceMs,
               staminaExhaustedBelowMs: config.staminaExhaustedBelowMs,
               actionSettlementStall: result.actions.movementStall,
-              decision: summary,
+              lastDecision: result.decisions.last,
+              wsOpen: isWsOpen(transport),
+              wsError,
+              wsClosed,
               nowMs: atMs
-            });
-            if (recordSafetyEvent(decisionSafetyEvent)) return;
-            if (actionAdapter) {
-              let actionResult;
-              try {
-                actionResult = actionAdapter.applyDecision(currentState, summary);
-              } catch (err) {
-                const message = err?.message || String(err);
-                actionResult = {
-                  ok: false,
-                  kind: 'action-error',
-                  reason: 'action-apply-failed',
-                  error: message,
-                  transportClosed: /websocket is not open|not open|closed/i.test(message)
-                };
-              }
-              updateActionResult(actionResult);
-              if (actionResult?.transportClosed) {
-                recordSafetyEvent(createSafetyEvent('ws-closed', {
-                  source: 'action-send',
-                  action: actionResult
-                }, { nowMs: atMs, stopMotion: false }));
-                return;
-              }
-              if (actionResult?.ok === false && actionResult?.error) {
-                recordSafetyEvent(createSafetyEvent('ws-error', {
-                  source: actionResult.reason === 'action-apply-failed' ? 'action-apply' : 'action-send',
-                  error: actionResult.error || 'action failed'
-                }, { nowMs: atMs, stopMotion: false }));
-                return;
-              }
-              if (typeof decisionAdapter.observeActionResult === 'function') {
-                decisionAdapter.observeActionResult(actionResult, decision, { nowMs: atMs });
-              }
-            }
-          } else if (
-            actionAdapter
-            && combatLiveEnabled
-            && result.decisions.last?.action?.kind === 'combat-live'
-            && atMs - lastCombatControlAtMs >= combatControlIntervalMs
-            && typeof decisionAdapter.evaluateCombat === 'function'
-          ) {
-            const control = decisionAdapter.evaluateCombat(currentState, {
-              ...runtimeDefaults,
-              nowMs: atMs,
-              controlMode,
-              combatEnabled: config.combatEnabled
-            });
-            const combatSummary = {
-              ...control.combat,
-              decisionIntervalMs,
-              combatControlIntervalMs,
-              highFrequencyControl: true
-            };
-            const controlSummary = { action: control.action, combat: combatSummary };
-            persistCombatLearning(atMs);
-            lastCombatControlAtMs = atMs;
-            logCombat(combatSummary);
-            let actionResult;
-            try {
-              actionResult = actionAdapter.applyDecision(currentState, controlSummary);
-            } catch (err) {
-              actionResult = { ok: false, kind: 'action-error', reason: 'combat-control-apply-failed', error: err?.message || String(err) };
-            }
-            updateActionResult(actionResult);
-            if (typeof decisionAdapter.observeActionResult === 'function') {
-              decisionAdapter.observeActionResult(actionResult, control, { nowMs: atMs });
-            }
-            if (control.exitAction) {
-              const immediate = safetyController.evaluate(currentState, {
-                startedAtMs: noSelfGuardStartedAtMs(atMs),
-                decision: controlSummary,
-                nowMs: atMs
-              });
-              if (recordSafetyEvent(immediate)) return;
-            }
+            }));
+            stageDurations.safety = performance.now() - stageStarted;
           }
-          recordSafetyEvent(safetyController.evaluate(currentState, {
-            startedAtMs: noSelfGuardStartedAtMs(atMs),
-            frameGapAlertMs,
-            staleSelfMs: config.staleSelfMs,
-            staleSelfConfirmMs: config.staleSelfConfirmMs,
-            noSelfGraceMs: config.noSelfGraceMs,
-            staminaExhaustedBelowMs: config.staminaExhaustedBelowMs,
-            actionSettlementStall: result.actions.movementStall,
-            lastDecision: result.decisions.last,
-            wsOpen: isWsOpen(transport),
-            wsError,
-            wsClosed,
-            nowMs: atMs
-          }));
+        } finally {
+          const entry = recordMainThreadTask(result.hotPath, 'ws-message', performance.now() - taskStarted, stageDurations, {
+            frameType: frame?.decodedType || frame?.decodedJson?.type || '',
+            tick: frame?.decodedTick ?? frame?.decodedJson?.tick ?? null
+          });
+          if (entry && entry.durationMs >= result.hotPath.budgetMs) {
+            log('main-thread-budget-exceeded', entry);
+          }
         }
       }
     });
@@ -1269,6 +1744,14 @@ async function runReadOnlyCanary(config, options = {}) {
       { nowMs: now() }
     );
   }
+  flushScheduledCombatPersistence();
+  if (decisionWorker) {
+    try {
+      await decisionWorker.close();
+    } catch (err) {
+      log('canary-decision-worker-close-error', { error: errorMessage(err) });
+    }
+  }
   result.state = stateStore.getState(now());
   if (typeof decisionAdapter.getStatusSummary === 'function') {
     result.decisionState = decisionAdapter.getStatusSummary();
@@ -1294,6 +1777,9 @@ async function runReadOnlyCanary(config, options = {}) {
   }
   result.completedAt = new Date(now()).toISOString();
   log(result.ok ? 'canary-finish' : 'canary-failed', result);
+  try {
+    await logStore?.flush?.();
+  } catch (_) {}
   return result;
 }
 

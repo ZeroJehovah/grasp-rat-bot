@@ -143,7 +143,11 @@ function readStore(file) {
   }
 }
 
-function writeStore(file, store) {
+function writeStore(file, store, backgroundIo = null) {
+  if (backgroundIo?.writeJsonAtomic) {
+    if (!backgroundIo.writeJsonAtomic(file, store)) throw new Error('background easy-kill persistence unavailable');
+    return;
+  }
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const temporary = `${file}.${process.pid}.tmp`;
   fs.writeFileSync(temporary, JSON.stringify(store, null, 2) + '\n');
@@ -171,6 +175,7 @@ function createEasyKillPlayerTracker(options = {}) {
   const file = path.resolve(options.file || path.join(process.cwd(), 'data', 'browserless-runner', 'easy-kill-players.json'));
   const outcomeGraceMs = Math.max(0, Number(options.outcomeGraceMs ?? DEFAULT_OUTCOME_GRACE_MS));
   const persistIntervalMs = Math.max(0, Number(options.persistIntervalMs ?? DEFAULT_PERSIST_INTERVAL_MS));
+  const backgroundIo = options.backgroundIo && typeof options.backgroundIo === 'object' ? options.backgroundIo : null;
   const fileExists = fs.existsSync(file);
   const migrateOnStart = fileExists && storeNeedsMigration(file);
   let store = readStore(file);
@@ -193,7 +198,7 @@ function createEasyKillPlayerTracker(options = {}) {
   function persist(atMs = now()) {
     const timestamp = Number.isFinite(Number(atMs)) ? Number(atMs) : now();
     store.updatedAt = new Date(timestamp).toISOString();
-    writeStore(file, store);
+    writeStore(file, store, backgroundIo);
     lastWriteAtMs = timestamp;
   }
 

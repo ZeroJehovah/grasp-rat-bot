@@ -129,6 +129,10 @@ function coinRouteActionMetaCore(route, fallbackFirstDistance = 0) {
 function buildCoinRouteFromAnchorCore(self, anchor, candidates, activeThreats, options = {}) {
   if (!self || !anchor) return null;
   const dist = typeof options.dist === 'function' ? options.dist : defaultDist;
+  const routeKey = typeof options.routeKey === 'function' ? options.routeKey : coinRouteKey;
+  const legClear = typeof options.legClear === 'function'
+    ? options.legClear
+    : (from, to) => coinRouteLegClearCore(from, to, activeThreats, options);
   const valueScore = typeof options.valueScore === 'function' ? options.valueScore : (value, cost) => cost > 0 ? value / cost : Infinity;
   const staminaAffordable = typeof options.staminaAffordable === 'function' ? options.staminaAffordable : () => true;
   const recordDiagnostic = typeof options.recordDiagnostic === 'function' ? options.recordDiagnostic : () => {};
@@ -138,7 +142,7 @@ function buildCoinRouteFromAnchorCore(self, anchor, candidates, activeThreats, o
     recordDiagnostic(anchor, 'route-stamina-unaffordable', { staminaCost: Math.round(firstStaminaCost) });
     return null;
   }
-  const anchorKey = coinRouteKey(anchor);
+  const anchorKey = routeKey(anchor);
   const anchorAmount = Math.max(0, Number(anchor.amount || 0));
   const initialState = {
     route: [anchor],
@@ -152,7 +156,9 @@ function buildCoinRouteFromAnchorCore(self, anchor, candidates, activeThreats, o
   let states = [initialState];
   let bestState = null;
   let bestScore = -Infinity;
-  const pointLimit = coinRoutePointLimitCore(anchor, candidates, options);
+  const pointLimit = typeof options.pointLimitForAnchor === 'function'
+    ? options.pointLimitForAnchor(anchor)
+    : coinRoutePointLimitCore(anchor, candidates, options);
   const linkDistance = Math.max(0, Number(options.linkDistance || 0));
   const maxLinkDistance = Math.max(linkDistance, Number(options.maxLinkDistance || linkDistance || 0));
   const beamWidth = Math.max(1, Math.round(Number(options.beamWidth || 4)));
@@ -169,25 +175,25 @@ function buildCoinRouteFromAnchorCore(self, anchor, candidates, activeThreats, o
   while (states.length && states[0].route.length < pointLimit) {
     const expanded = [];
     for (const state of states) {
-      const nextCoins = (candidates || [])
-        .filter(coin => !state.used.has(coinRouteKey(coin)))
-        .map(coin => ({ ...coin, routeLegDistance: dist(state.current, coin) }))
-        .filter(coin => Number.isFinite(coin.routeLegDistance) && coin.routeLegDistance <= maxLinkDistance)
-        .filter(coin => coinRouteLegClearCore(state.current, coin, activeThreats, options));
-      for (const coin of nextCoins) {
+      for (const coin of candidates || []) {
+        const coinKey = routeKey(coin);
+        if (state.used.has(coinKey)) continue;
+        const routeLegDistance = dist(state.current, coin);
+        if (!Number.isFinite(routeLegDistance) || routeLegDistance > maxLinkDistance) continue;
+        if (!legClear(state.current, coin)) continue;
         const legCost = coinRouteLegStaminaCostCore(state.current, coin, options);
-        const linkPenalty = linkDistance > 0 && coin.routeLegDistance > linkDistance ? 0.85 : 1;
+        const linkPenalty = linkDistance > 0 && routeLegDistance > linkDistance ? 0.85 : 1;
         const nextStaminaCost = state.totalStaminaCost + legCost;
         if (!staminaAffordable(nextStaminaCost)) {
           recordDiagnostic(coin, 'route-stamina-unaffordable', { staminaCost: Math.round(nextStaminaCost) });
           continue;
         }
         const nextValue = state.totalValue + Math.max(0, Number(coin.amount || 0));
-        const nextDistance = state.totalDistance + coin.routeLegDistance;
+        const nextDistance = state.totalDistance + routeLegDistance;
         const prefixScore = valueScore(nextValue, nextStaminaCost, options.coinOpportunityValue);
         if (!Number.isFinite(prefixScore)) continue;
         const nextUsed = new Set(state.used);
-        nextUsed.add(coinRouteKey(coin));
+        nextUsed.add(coinKey);
         const nextState = {
           route: state.route.concat([coin]),
           used: nextUsed,
@@ -379,7 +385,34 @@ function heldCoinRouteBeatsSwitchCore(heldRoute, bestRoute, options = {}) {
 
 function pickCoinRouteOpportunityCore(self, coins, activeThreats, options = {}) {
   if (!self) return null;
-  const dist = typeof options.dist === 'function' ? options.dist : defaultDist;
+  const baseDist = typeof options.dist === 'function' ? options.dist : defaultDist;
+  const routeKeyCache = new WeakMap();
+  const routeKey = value => {
+    if (!value || typeof value !== 'object') return coinRouteKey(value);
+    if (routeKeyCache.has(value)) return routeKeyCache.get(value);
+    const key = coinRouteKey(value);
+    routeKeyCache.set(value, key);
+    return key;
+  };
+  const distanceCache = new WeakMap();
+  const dist = (from, to) => {
+    if (!from || !to || typeof from !== 'object' || typeof to !== 'object') return baseDist(from, to);
+    let fromCache = distanceCache.get(from);
+    if (!fromCache) {
+      fromCache = new WeakMap();
+      distanceCache.set(from, fromCache);
+    }
+    if (fromCache.has(to)) return fromCache.get(to);
+    const distance = baseDist(from, to);
+    fromCache.set(to, distance);
+    let toCache = distanceCache.get(to);
+    if (!toCache) {
+      toCache = new WeakMap();
+      distanceCache.set(to, toCache);
+    }
+    toCache.set(from, distance);
+    return distance;
+  };
   const safeCoinCandidates = typeof options.safeCoinCandidates === 'function' ? options.safeCoinCandidates : value => value || [];
   const isSnapshotOnlyCoin = typeof options.isSnapshotOnlyCoin === 'function' ? options.isSnapshotOnlyCoin : () => false;
   const choiceId = typeof options.choiceId === 'function' ? options.choiceId : choice => String(choice?.id ?? '');
@@ -390,11 +423,41 @@ function pickCoinRouteOpportunityCore(self, coins, activeThreats, options = {}) 
     .filter(coin => Number(coin.amount || 0) > 0)
     .slice(0, poolLimit);
   if (candidates.length < 2) return null;
+  const legClearOptions = { ...options, dist };
+  const legClearCache = new WeakMap();
+  const legClear = (from, to) => {
+    let fromCache = legClearCache.get(from);
+    if (!fromCache) {
+      fromCache = new WeakMap();
+      legClearCache.set(from, fromCache);
+    }
+    if (fromCache.has(to)) return fromCache.get(to);
+    const clear = coinRouteLegClearCore(from, to, activeThreats, legClearOptions);
+    fromCache.set(to, clear);
+    return clear;
+  };
+  const clusterRadius = Math.max(0, Number(options.clusterRadius || 0));
+  const clusterCounts = new WeakMap(candidates.map(coin => [coin, 0]));
+  for (let left = 0; left < candidates.length; left += 1) {
+    clusterCounts.set(candidates[left], Number(clusterCounts.get(candidates[left]) || 0) + 1);
+    for (let right = left + 1; right < candidates.length; right += 1) {
+      if (dist(candidates[left], candidates[right]) > clusterRadius) continue;
+      clusterCounts.set(candidates[left], Number(clusterCounts.get(candidates[left]) || 0) + 1);
+      clusterCounts.set(candidates[right], Number(clusterCounts.get(candidates[right]) || 0) + 1);
+    }
+  }
+  const pointLimitForAnchor = anchor => {
+    const count = Number(clusterCounts.get(anchor) || 0);
+    if (count >= 5) return Math.max(2, Number(options.maxPointsDense || 6));
+    if (count >= 3) return Math.max(2, Number(options.maxPointsMid || 4));
+    return Math.max(3, Number(options.maxPointsSparse || 2));
+  };
+  const routeOptions = { ...options, dist, routeKey, legClear, pointLimitForAnchor };
   const anchors = [];
   const addAnchor = coin => {
     if (!coin) return;
-    const key = coinRouteKey(coin);
-    if (!anchors.some(item => coinRouteKey(item) === key)) anchors.push(coin);
+    const key = routeKey(coin);
+    if (!anchors.some(item => routeKey(item) === key)) anchors.push(coin);
   };
   const heldChoice = options.heldChoice || null;
   const heldRouteChoice = options.heldRouteChoice || null;
@@ -403,22 +466,21 @@ function pickCoinRouteOpportunityCore(self, coins, activeThreats, options = {}) 
   candidates.slice(0, Math.max(1, Number(options.anchorLimit || 22))).forEach(addAnchor);
   candidates.slice().sort((a, b) => Number(a.distance || Infinity) - Number(b.distance || Infinity)).slice(0, 8).forEach(addAnchor);
   candidates.slice().sort((a, b) => Number(b.amount || 0) - Number(a.amount || 0) || Number(a.distance || Infinity) - Number(b.distance || Infinity)).slice(0, 8).forEach(addAnchor);
-  const clusterRadius = Math.max(0, Number(options.clusterRadius || 0));
   candidates.slice().sort((a, b) => {
-    const aCount = candidates.filter(coin => dist(a, coin) <= clusterRadius).length;
-    const bCount = candidates.filter(coin => dist(b, coin) <= clusterRadius).length;
+    const aCount = Number(clusterCounts.get(a) || 0);
+    const bCount = Number(clusterCounts.get(b) || 0);
     return bCount - aCount || Number(a.distance || Infinity) - Number(b.distance || Infinity);
   }).slice(0, 8).forEach(addAnchor);
   let best = null;
   let heldRoute = null;
   const viableRoutes = [];
   for (const anchor of anchors.slice(0, Math.max(1, Number(options.anchorLimit || 22)))) {
-    if (!coinRouteLegClearCore(self, anchor, activeThreats, options)) continue;
-    const route = buildCoinRouteFromAnchorCore(self, anchor, candidates, activeThreats, options);
+    if (!legClear(self, anchor)) continue;
+    const route = buildCoinRouteFromAnchorCore(self, anchor, candidates, activeThreats, routeOptions);
     if (!route) continue;
-    if (coinRouteSkipsCloserFirstCoinCore(self, route, candidates, options)) continue;
-    if (coinRouteSkipsCloserRoutePointCore(self, route, options)) continue;
-    if (coinRouteSkipsHeldSingleCoinCore(self, route, heldChoice, options)) continue;
+    if (coinRouteSkipsCloserFirstCoinCore(self, route, candidates, routeOptions)) continue;
+    if (coinRouteSkipsCloserRoutePointCore(self, route, routeOptions)) continue;
+    if (coinRouteSkipsHeldSingleCoinCore(self, route, heldChoice, routeOptions)) continue;
     viableRoutes.push(route);
     if (coinRouteMatchesHeldChoiceCore(route, heldRouteChoice || heldChoice, options)) heldRoute = route;
     const score = Number(route.opportunityScore || -Infinity);
@@ -429,7 +491,7 @@ function pickCoinRouteOpportunityCore(self, coins, activeThreats, options = {}) 
       best = route;
     }
   }
-  const closerRoute = closerCoinRouteForFirstTargetCore(best, viableRoutes, options);
+  const closerRoute = closerCoinRouteForFirstTargetCore(best, viableRoutes, routeOptions);
   if (closerRoute) {
     if (heldRoute && coinRouteKey(heldRoute) === coinRouteKey(closerRoute)) {
       return {
@@ -440,7 +502,7 @@ function pickCoinRouteOpportunityCore(self, coins, activeThreats, options = {}) 
     }
     return closerRoute;
   }
-  if (heldCoinRouteBeatsSwitchCore(heldRoute, best, options)) {
+  if (heldCoinRouteBeatsSwitchCore(heldRoute, best, routeOptions)) {
     return {
       ...heldRoute,
       routeHeld: true,

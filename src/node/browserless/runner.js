@@ -3,14 +3,20 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const zlib = require('zlib');
+const { performance } = require('perf_hooks');
 const { parseBrowserlessRunnerArgs } = require('./config');
 const { cleanupOldLogDays } = require('./log-retention');
 const { createLocalLogStore } = require('./local-log-store');
+const { createBrowserlessBackgroundIo } = require('./background-io');
 const {
   browserlessStatsForDecision,
   browserlessStatsForOffline,
+  browserlessCompactStatusSource,
+  buildCompactBrowserlessStatus,
   buildPublicBrowserlessStatus,
   loginPointFromAnyState,
+  mergeState,
   readBrowserlessStateFile,
   sessionFromAnyState,
   stateFilePath,
@@ -18,6 +24,7 @@ const {
   writeBrowserlessStateFile
 } = require('./state-file');
 const { startStatusServer } = require('./status-server');
+const { BROWSERLESS_WEB_PANEL_VERSION } = require('./web-panel');
 const { runPreLoginSnapshotSafety, runReadOnlyCanary } = require('./canary');
 const {
   DEFAULT_SNAPSHOT_GAP_MS,
@@ -50,6 +57,7 @@ const {
 const DAY_MS = 24 * 60 * 60 * 1000;
 const UTC8_OFFSET_MS = 8 * 60 * 60 * 1000;
 const CONFIRMED_LEAVE_SNAPSHOT_IGNORE_MS = 40000;
+const SELF_TEST_MAIN_THREAD_BUDGET_MS = 50;
 
 function publicConfig(config) {
   return {
@@ -619,8 +627,32 @@ async function runBrowserlessRunner(config, deps = {}) {
     });
     if (supervisorErrors.length > 20) supervisorErrors.splice(0, supervisorErrors.length - 20);
   };
-  const rawLogStore = deps.logStore || createLocalLogStore({ logDir: config.logDir, now });
+  const ownsBackgroundIo = !deps.backgroundIo && !deps.disableBackgroundIo;
+  const backgroundIo = deps.backgroundIo || (deps.disableBackgroundIo
+    ? null
+    : createBrowserlessBackgroundIo({
+        onError: (err, detail) => recordSupervisorError(err, { operation: 'background-io', ...detail })
+      }));
+  const rawLogStore = deps.logStore || createLocalLogStore({ logDir: config.logDir, now, backgroundIo });
   const logStore = createNoThrowLogStore(rawLogStore, recordSupervisorError);
+  const publishBackgroundIo = typeof deps.onBackgroundIoReady === 'function'
+    ? deps.onBackgroundIoReady
+    : null;
+  if (publishBackgroundIo && backgroundIo) {
+    try {
+      publishBackgroundIo(backgroundIo);
+    } catch (err) {
+      recordSupervisorError(err, { operation: 'background-io-publish' });
+    }
+  }
+  try {
+  let liveState = null;
+  const patchLiveState = (patch, options = {}) => {
+    const updatedAt = options.updatedAt || new Date(now()).toISOString();
+    const base = liveState || readBrowserlessStateFile(config.stateFile || stateFilePath(config));
+    liveState = mergeState(base, { ...patch, updatedAt });
+    return liveState;
+  };
   const safetyController = deps.safetyController || createBrowserlessSafetyController({
     now,
     frameGapAlertMs: config.frameGapAlertMs,
@@ -661,15 +693,18 @@ async function runBrowserlessRunner(config, deps = {}) {
   });
   const highDropPlayerTracker = deps.highDropPlayerTracker || createHighDropPlayerTracker({
     file: path.join(config.dataDir, 'high-drop-players.json'),
-    now
+    now,
+    backgroundIo
   });
   const combatCompletionTracker = deps.combatCompletionTracker || createCombatCompletionTracker({
     file: path.join(config.dataDir, 'combat-learning.json'),
-    now
+    now,
+    backgroundIo
   });
   const easyKillPlayerTracker = deps.easyKillPlayerTracker || createEasyKillPlayerTracker({
     file: path.join(config.dataDir, 'easy-kill-players.json'),
     now,
+    backgroundIo,
     onEvent: event => {
       combatCompletionTracker.observe(event);
       logStore.append('runner', 'easy-kill-player-outcome', event);
@@ -678,6 +713,7 @@ async function runBrowserlessRunner(config, deps = {}) {
   const damagePlayerTracker = deps.damagePlayerTracker || createDailyDamagePlayerTracker({
     file: path.join(config.dataDir, 'daily-damage-players.json'),
     now,
+    backgroundIo,
     onEvent: event => logStore.append('runner', 'daily-damage-player', event)
   });
   const easyKillPlayerStatus = () => {
@@ -1183,10 +1219,13 @@ async function runBrowserlessRunner(config, deps = {}) {
       freshness.ok
         && (summary.selfPresent === false || snapshotSafetyAllowsImmediateResume(snapshotSafety))
     );
-    updateState({
+    const patch = {
       loginPointSafety: loginPointSafetyPatchFromSnapshot(snapshotSafety),
       ...(clearsConfirmedLeave ? { runner: { confirmedLeave: null } } : {})
-    }, { updatedAt: new Date(now()).toISOString() });
+    };
+    const updatedAt = new Date(now()).toISOString();
+    updateState(patch, { updatedAt });
+    if (liveState) patchLiveState(patch, { updatedAt });
     logStore.append('runner', 'snapshot-safety-observation', {
       checkedAt: snapshotSafety?.checkedAt || '',
       ok: Boolean(snapshotSafety?.ok),
@@ -1239,6 +1278,60 @@ async function runBrowserlessRunner(config, deps = {}) {
     });
   };
 
+  const buildStatusSource = compact => {
+    const source = {
+      ...(liveState || readBrowserlessStateFile(stateFile)),
+      highDropPlayers: highDropPlayerTracker.status(now()),
+      easyKillPlayers: easyKillPlayerStatus(),
+      dailyDamagePlayers: damagePlayerTracker.status(now()),
+      chat: chatService.status?.(now()) || null
+    };
+    return compact ? browserlessCompactStatusSource(source) : source;
+  };
+  const statusRenderConfig = {
+    ...publicConfig(config),
+    webToken: config.webToken ? 'present' : '',
+    webVersion: BROWSERLESS_WEB_PANEL_VERSION
+  };
+  let fullStatusCacheText = '';
+  let fullStatusCacheAtMs = 0;
+  let fullStatusInFlight = null;
+  const renderStatusTextNow = async compact => {
+    const source = buildStatusSource(compact);
+    if (backgroundIo?.renderStatus) {
+      const rendered = await backgroundIo.renderStatus(source, statusRenderConfig, compact);
+      return rendered.text;
+    }
+    const status = compact
+      ? buildCompactBrowserlessStatus(source, statusRenderConfig)
+      : {
+          ...buildPublicBrowserlessStatus(source, statusRenderConfig),
+          highDropPlayers: source.highDropPlayers,
+          easyKillPlayers: source.easyKillPlayers,
+          dailyDamagePlayers: source.dailyDamagePlayers,
+          chat: source.chat
+        };
+    return JSON.stringify(status, null, 2);
+  };
+  const renderStatusText = compact => {
+    if (compact) return renderStatusTextNow(true);
+    const atMs = performance.now();
+    if (fullStatusCacheText && atMs - fullStatusCacheAtMs < 1000) {
+      return Promise.resolve(fullStatusCacheText);
+    }
+    if (fullStatusInFlight) return fullStatusInFlight;
+    fullStatusInFlight = renderStatusTextNow(false)
+      .then(text => {
+        fullStatusCacheText = text;
+        fullStatusCacheAtMs = performance.now();
+        return text;
+      })
+      .finally(() => {
+        fullStatusInFlight = null;
+      });
+    return fullStatusInFlight;
+  };
+
   let statusHandle = null;
   if (!config.once && Number(config.statusPort || 0) > 0 && deps.startStatusServer !== false) {
     const starter = deps.startStatusServer || startStatusServer;
@@ -1247,13 +1340,16 @@ async function runBrowserlessRunner(config, deps = {}) {
         host: config.statusHost,
         port: config.statusPort,
         webToken: config.webToken,
-        getStatus: () => ({
-          ...buildPublicBrowserlessStatus(readBrowserlessStateFile(stateFile), config),
-          highDropPlayers: highDropPlayerTracker.status(now()),
-          easyKillPlayers: easyKillPlayerStatus(),
-          dailyDamagePlayers: damagePlayerTracker.status(now()),
-          chat: chatService.status?.(now()) || null
-        }),
+        getStatusText: () => renderStatusText(false),
+        getCompactStatusText: () => renderStatusText(true),
+        onMainThreadTask: (task, durationMs, detail = {}) => {
+          if (Number(durationMs) < 50) return;
+          logStore.append('runner', 'main-thread-budget-exceeded', {
+            task,
+            durationMs: Math.round(Number(durationMs) * 1000) / 1000,
+            ...detail
+          });
+        },
         getChat: () => chatService.status?.(now()) || { ok: true, messages: [] },
         onChatActivity: () => chatService.notePageActivity?.(now()),
         onChatSend: text => {
@@ -1273,14 +1369,17 @@ async function runBrowserlessRunner(config, deps = {}) {
         },
         onStop: async () => {
           const event = safetyController.requestStop('explicit-stop', { source: 'status-api' });
-          const currentState = readBrowserlessStateFile(stateFile);
-          updateState({
+          const currentState = liveState || readBrowserlessStateFile(stateFile);
+          const patch = {
             runner: {
               lastError: event.reason,
               currentAction: { kind: 'stop', band: 'safety', reason: event.reason }
             },
             recentExits: [...(currentState.recentExits || []), event].slice(-20)
-          }, { updatedAt: new Date(now()).toISOString() });
+          };
+          const updatedAt = new Date(now()).toISOString();
+          if (liveState) patchLiveState(patch, { updatedAt });
+          else updateState(patch, { updatedAt });
           logStore.append('exits', 'stop-request', event);
           return { ok: true, event };
         },
@@ -1660,6 +1759,7 @@ async function runBrowserlessRunner(config, deps = {}) {
     let canary;
     try {
       const stateBeforeCanary = readBrowserlessStateFile(stateFile);
+      liveState = stateBeforeCanary;
       const hasConfirmedLeaveRecovery = Boolean(activeConfirmedLeaveState(stateBeforeCanary, now()));
       const bypassPreLoginSafetyReason = !hasConfirmedLeaveRecovery && isFirstBrowserlessLoginOfDay(stateBeforeCanary, now())
         ? 'daily-first-login-invulnerability'
@@ -1683,9 +1783,19 @@ async function runBrowserlessRunner(config, deps = {}) {
         onTransportOpen,
         onTransportClose,
         leaveWithVerification: sourceIpController.leaveWithVerification,
+        useDecisionWorker: deps.useDecisionWorker !== false,
         onDecision: decision => {
-          const currentBeforeDecision = readBrowserlessStateFile(stateFile);
-          updateState({
+          const currentBeforeDecision = liveState || stateBeforeCanary;
+          patchLiveState({
+            ...decisionStatePatch(decision),
+            stats: browserlessStatsForDecision(currentBeforeDecision, decision, { nowMs: now() })
+          }, {
+            updatedAt: new Date(now()).toISOString()
+          });
+        },
+        onCombatControl: decision => {
+          const currentBeforeDecision = liveState || stateBeforeCanary;
+          patchLiveState({
             ...decisionStatePatch(decision),
             stats: browserlessStatsForDecision(currentBeforeDecision, decision, { nowMs: now() })
           }, {
@@ -1693,7 +1803,7 @@ async function runBrowserlessRunner(config, deps = {}) {
           });
         },
         onAction: (action, context = {}) => {
-          updateState({
+          patchLiveState({
             runner: {
               currentAction: {
                 ...(action || {}),
@@ -1726,10 +1836,11 @@ async function runBrowserlessRunner(config, deps = {}) {
         runId: event.runId || canary?.runId || ''
       }));
     const currentStateBeforeFinish = readBrowserlessStateFile(stateFile);
-    updateState({
+    const finalStateBase = liveState || currentStateBeforeFinish;
+    const finalState = mergeState(finalStateBase, {
       ...finalDecisionPatch,
       ...(safetyEvents.length ? {
-        recentExits: [...(currentStateBeforeFinish.recentExits || []), ...safetyEvents].slice(-20)
+        recentExits: [...(finalStateBase.recentExits || []), ...safetyEvents].slice(-20)
       } : {}),
       runner: {
         ...(finalDecisionPatch.runner || {}),
@@ -1754,12 +1865,259 @@ async function runBrowserlessRunner(config, deps = {}) {
       probes: {
         lastReadOnlyProbe: canary || null
       }
-    }, { updatedAt: new Date(now()).toISOString() });
+    });
+    finalState.updatedAt = new Date(now()).toISOString();
+    writeState(finalState);
+    liveState = null;
     logStore.append('runner', result.ok ? 'runner-finish' : 'runner-stop', result);
 
     const loopPlan = browserlessLoopPlan(result, config);
     const stopped = await waitForLoopPlan(loopPlan, result);
     if (stopped) return stopped;
+  }
+  } finally {
+    try {
+      if (ownsBackgroundIo) await backgroundIo.close();
+    } finally {
+      if (publishBackgroundIo) {
+        try {
+          publishBackgroundIo(null);
+        } catch (_) {}
+      }
+    }
+  }
+}
+
+function encodeBrowserlessSelfTestFrame(value) {
+  return Buffer.concat([
+    Buffer.from('GRZ1', 'ascii'),
+    Buffer.from([1]),
+    zlib.gzipSync(Buffer.from(JSON.stringify(value), 'utf8'))
+  ]);
+}
+
+function currentMainThreadCpuMs() {
+  try {
+    const text = fs.readFileSync(`/proc/self/task/${process.pid}/schedstat`, 'utf8').trim();
+    const runtimeNs = Number(text.split(/\s+/)[0]);
+    return Number.isFinite(runtimeNs) ? runtimeNs / 1e6 : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function complexCombatSelfTestFrames(userId = 7, frameCount = 120) {
+  const passiveCount = 68;
+  const snapshotCoins = Array.from({ length: 88 }, (_, index) => ({
+    drop_id: 5000 + index,
+    x: 2000 + (index % 11) * 3600,
+    y: 1500 + Math.floor(index / 11) * 4200,
+    amount: index % 17 === 0 ? 10 : 1
+  }));
+  const frameAt = index => {
+    const tick = 500000 + index;
+    const self = {
+      entity_id: 1,
+      user_id: userId,
+      name: 'self-test-self',
+      x: index * 20,
+      y: index % 4 < 2 ? 0 : 20,
+      vx: 20,
+      vy: index % 4 < 2 ? 0 : 20,
+      hp: 82,
+      max_hp: 100,
+      current_join_mode: 'Active',
+      stamina_5s_remaining_milli: 6400,
+      stamina_5s_limit_milli: 10000,
+      stamina_1h_remaining_milli: 2400000,
+      stamina_1h_limit_milli: 3000000,
+      stamina_1d_remaining_milli: 16000000,
+      stamina_1d_limit_milli: 20000000,
+      death_drop_coins: 900
+    };
+    const activeTargets = Array.from({ length: 8 }, (_, targetIndex) => {
+      const primary = targetIndex === 0;
+      const direction = (index + targetIndex) % 6 < 3 ? -1 : 1;
+      return {
+        entity_id: 10 + targetIndex,
+        user_id: 20 + targetIndex,
+        name: primary ? 'complex-primary' : `complex-active-${targetIndex}`,
+        x: 6500 + targetIndex * 900 + direction * index * 15,
+        y: 800 + targetIndex * 550 + direction * index * 10,
+        vx: direction * 35,
+        vy: direction * 25,
+        hp: primary ? 68 : 90 - targetIndex,
+        max_hp: 100,
+        current_join_mode: 'Active',
+        firing: primary || targetIndex < 4,
+        stamina_5s_remaining_milli: 4200 + targetIndex * 250,
+        stamina_5s_limit_milli: 10000,
+        death_drop_coins: primary ? 1800 : 80 + targetIndex * 10
+      };
+    });
+    const passives = Array.from({ length: passiveCount }, (_, passiveIndex) => {
+      const angle = passiveIndex / passiveCount * Math.PI * 2;
+      const distance = 18000 + passiveIndex * 450;
+      return {
+        entity_id: 100 + passiveIndex,
+        user_id: 1000 + passiveIndex,
+        name: `complex-passive-${passiveIndex}`,
+        x: Math.round(self.x + Math.cos(angle) * distance),
+        y: Math.round(self.y + Math.sin(angle) * distance),
+        vx: 0,
+        vy: 0,
+        hp: 100,
+        max_hp: 100,
+        current_join_mode: 'Passive',
+        stamina_5s_remaining_milli: 10000,
+        stamina_5s_limit_milli: 10000,
+        death_drop_coins: passiveIndex % 5
+      };
+    });
+    const bullets = activeTargets.slice(0, 6).map((target, bulletIndex) => ({
+      bullet_id: index * 10 + bulletIndex + 1,
+      owner_user_id: target.user_id,
+      start_x: target.x,
+      start_y: target.y,
+      target_x: self.x,
+      target_y: self.y,
+      range_cm: 15000,
+      speed_per_tick: 500,
+      created_tick: tick - 2,
+      expire_tick: tick + 28
+    }));
+    return { tick, self, entities: [self, ...activeTargets, ...passives], bullets };
+  };
+  const first = frameAt(0);
+  const frames = [encodeBrowserlessSelfTestFrame({
+    type: 'snapshot',
+    tick: first.tick,
+    entities: first.entities,
+    bullets: first.bullets,
+    coin_drops: snapshotCoins,
+    messages: []
+  })];
+  for (let index = 1; index < frameCount; index += 1) {
+    const frame = frameAt(index);
+    frames.push(encodeBrowserlessSelfTestFrame({
+      type: 'pos',
+      tick: frame.tick,
+      entities: frame.entities,
+      bullets: frame.bullets
+    }));
+  }
+  return frames;
+}
+
+async function runComplexCombatMainThreadBudgetSelfTest(tmp) {
+  const frames = complexCombatSelfTestFrames();
+  let nowMs = Date.UTC(2026, 6, 15, 9, 0, 0);
+  let frameIndex = 0;
+  let receiveFrame = null;
+  let transportOpen = true;
+  const frameCpuDurations = [];
+  const backgroundIo = createBrowserlessBackgroundIo();
+  const logStore = createLocalLogStore({
+    logDir: path.join(tmp, 'frame-budget-logs'),
+    now: () => nowMs,
+    backgroundIo
+  });
+  const targetWhitelist = {
+    names: [],
+    userIds: [],
+    nameSet: new Set(),
+    userIdSet: new Set(),
+    refresh: async () => ({ loaded: true, count: 0 }),
+    isWhitelistedTarget: () => false
+  };
+  try {
+    const result = await runReadOnlyCanary({
+      gameOrigin: 'https://self-test.invalid',
+      userId: 7,
+      sessionToken: 'complex-combat-self-test-token',
+      readOnly: false,
+      controlMode: 'profit-live',
+      combatEnabled: true,
+      readOnlyProbeMs: 1200,
+      decisionIntervalMs: 1000,
+      combatControlIntervalMs: 160,
+      movementCommandIntervalMs: 500,
+      frameGapAlertMs: 5000,
+      wsTraceEnabled: true,
+      wsTracePayload: false
+    }, {
+      now: () => nowMs,
+      sleep: async ms => {
+        const deadline = nowMs + Number(ms || 0);
+        while (receiveFrame && frameIndex < frames.length && nowMs + 10 <= deadline) {
+          nowMs += 10;
+          const wallStarted = performance.now();
+          const cpuStarted = currentMainThreadCpuMs();
+          receiveFrame(frames[frameIndex]);
+          const cpuFinished = currentMainThreadCpuMs();
+          frameCpuDurations.push(
+            cpuStarted !== null && cpuFinished !== null
+              ? Math.max(0, cpuFinished - cpuStarted)
+              : performance.now() - wallStarted
+          );
+          frameIndex += 1;
+          await new Promise(resolve => setImmediate(resolve));
+        }
+        nowMs = deadline;
+        await new Promise(resolve => setImmediate(resolve));
+      },
+      logStore,
+      mainThreadBudgetMs: SELF_TEST_MAIN_THREAD_BUDGET_MS,
+      useDecisionWorker: true,
+      targetWhitelist,
+      precheckedSnapshotSafety: { ok: true, reason: 'self-test-prechecked', satisfied: true },
+      persistedState: {
+        loginPointSafety: { point: { x: 0, y: 0, hp: 100, source: 'self-test' } }
+      },
+      openBrowserlessWs: async options => {
+        receiveFrame = options.onMessage;
+        return {
+          isOpen: () => transportOpen,
+          close() { transportOpen = false; },
+          sendVelocity() {},
+          sendShoot() {}
+        };
+      },
+      leaveWithVerification: async () => ({ ok: true, attempts: [{ ok: true }] })
+    });
+    const frameTiming = result.hotPath?.tasks?.['ws-message'] || {};
+    const maxFrameMs = Number(frameTiming.maxMs || 0);
+    const wallOverBudgetCount = Number(frameTiming.overBudgetCount || 0);
+    const measuredFrameCount = Number(frameTiming.count || 0);
+    const maxFrameCpuMs = frameCpuDurations.length ? Math.max(...frameCpuDurations) : Infinity;
+    const cpuOverBudgetCount = frameCpuDurations.filter(durationMs => durationMs >= SELF_TEST_MAIN_THREAD_BUDGET_MS).length;
+    const warmup = result.decisions?.realtimeControlWarmup || null;
+    return {
+      ok: Boolean(
+        result.ok
+        && warmup?.ok
+        && warmup?.iterations === 6
+        && measuredFrameCount >= 100
+        && Number(result.decisions?.realtimeControlCount || 0) > 0
+        && frameCpuDurations.length === measuredFrameCount
+        && cpuOverBudgetCount === 0
+        && maxFrameCpuMs < SELF_TEST_MAIN_THREAD_BUDGET_MS
+      ),
+      budgetMs: SELF_TEST_MAIN_THREAD_BUDGET_MS,
+      frameCount: measuredFrameCount,
+      realtimeControlCount: Number(result.decisions?.realtimeControlCount || 0),
+      maxFrameCpuMs: Math.round(maxFrameCpuMs * 1000) / 1000,
+      cpuOverBudgetCount,
+      maxFrameWallMs: Math.round(maxFrameMs * 1000) / 1000,
+      wallOverBudgetCount,
+      timingSource: currentMainThreadCpuMs() === null ? 'performance-now-fallback' : 'linux-main-thread-schedstat',
+      warmup,
+      maxTask: result.hotPath?.maxTask || null,
+      canaryOk: Boolean(result.ok),
+      canaryError: result.error || ''
+    };
+  } finally {
+    await backgroundIo.close();
   }
 }
 
@@ -1768,7 +2126,8 @@ async function runBrowserlessRunnerSelfTest() {
   try {
     const dryConfig = parseBrowserlessRunnerArgs(['--once', '--dry-run', '--data-dir', tmp], {});
     const dryRun = await runBrowserlessRunner(dryConfig, {
-      now: () => Date.UTC(2026, 6, 8, 1, 0, 0)
+      now: () => Date.UTC(2026, 6, 8, 1, 0, 0),
+      disableBackgroundIo: true
     });
     const liveConfig = parseBrowserlessRunnerArgs([
       '--once',
@@ -1788,6 +2147,7 @@ async function runBrowserlessRunnerSelfTest() {
     ], {});
     const liveRun = await runBrowserlessRunner(liveConfig, {
       now: () => Date.UTC(2026, 6, 8, 1, 1, 0),
+      disableBackgroundIo: true,
       runReadOnlyOnce: async () => ({ ok: true, frames: 0, fake: true })
     });
     const wsClosedPlan = browserlessLoopPlan({
@@ -1877,6 +2237,7 @@ async function runBrowserlessRunnerSelfTest() {
     } finally {
       await statusTestHandle.close();
     }
+    const complexCombatMainThreadBudget = await runComplexCombatMainThreadBudgetSelfTest(tmp);
     const runnerLog = path.join(tmp, 'logs', '2026-07-08', 'runner.jsonl');
     const text = fs.readFileSync(runnerLog, 'utf8');
     return {
@@ -1895,6 +2256,7 @@ async function runBrowserlessRunnerSelfTest() {
         && chatService.ok
         && dynamicSnapshotPollerStatus.currentIntervalMs === DEFAULT_CHAT_ACTIVE_INTERVAL_MS
         && statusServerChatTest.ok
+        && complexCombatMainThreadBudget.ok
       ),
       dryRun,
       liveRun,
@@ -1904,6 +2266,7 @@ async function runBrowserlessRunnerSelfTest() {
       chatService,
       dynamicSnapshotPollerStatus,
       statusServerChatTest,
+      complexCombatMainThreadBudget,
       logFile: runnerLog
     };
   } finally {

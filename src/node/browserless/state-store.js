@@ -50,7 +50,7 @@ function coinDropArraysFromFrame(frame) {
 function normalizeEntity(entity, meta) {
   if (!entity || typeof entity !== 'object') return null;
   return {
-    ...cloneJson(entity),
+    ...entity,
     x: numericOrNull(entity.x),
     y: numericOrNull(entity.y),
     vx: numericOrNull(entity.vx),
@@ -67,7 +67,7 @@ function normalizeEntity(entity, meta) {
 function normalizeBullet(bullet, meta) {
   if (!bullet || typeof bullet !== 'object') return null;
   return {
-    ...cloneJson(bullet),
+    ...bullet,
     authority: meta.authority,
     source: meta.source,
     tick: meta.tick,
@@ -78,7 +78,7 @@ function normalizeBullet(bullet, meta) {
 function normalizeCoinDrop(drop, meta) {
   if (!drop || typeof drop !== 'object') return null;
   return {
-    ...cloneJson(drop),
+    ...drop,
     x: numericOrNull(drop.x),
     y: numericOrNull(drop.y),
     amount: numericOrNull(drop.amount),
@@ -447,8 +447,65 @@ function createBrowserlessStateStore(options = {}) {
     };
   }
 
+  function getDecisionState(nowMs = now()) {
+    expirePendingShots(nowMs);
+    const timing = shotTimingSummary(state.command.delaySamples);
+    const ackTimeoutMs = shotAckTimeoutMs(state.command.ackLatencySamples);
+    return {
+      userId: state.userId,
+      latestFrameAtMs: state.latestFrameAtMs,
+      latestFrameType: state.latestFrameType,
+      frameCounts: state.frameCounts,
+      frameAges: getFrameAges(nowMs),
+      realtime: {
+        authority: 'realtime',
+        source: 'pos',
+        tick: state.realtime.tick,
+        receivedAtMs: state.realtime.receivedAtMs,
+        frameAgeMs: frameAge(nowMs, state.realtime.receivedAtMs),
+        self: state.realtime.self,
+        lastSelf: state.realtime.lastSelf,
+        entities: state.realtime.entities,
+        bullets: state.realtime.bullets,
+        coinDrops: state.realtime.coinDrops
+      },
+      fallback: {
+        authority: 'snapshot',
+        source: 'snapshot',
+        tick: state.snapshot.tick,
+        receivedAtMs: state.snapshot.receivedAtMs,
+        frameAgeMs: frameAge(nowMs, state.snapshot.receivedAtMs),
+        self: state.snapshot.self,
+        entities: state.snapshot.entities,
+        bullets: state.snapshot.bullets,
+        coinDrops: state.snapshot.coinDrops,
+        messages: state.snapshot.messages,
+        counts: state.snapshot.counts
+      },
+      command: {
+        lastAck: state.command.lastAck,
+        ackAgeMs: frameAge(nowMs, state.command.lastAck?.receivedAtMs),
+        shooting: {
+          requestedShots: state.command.requestedShots,
+          acceptedShots: state.command.acceptedShots,
+          unackedShots: state.command.unackedShots,
+          pendingCount: state.command.pendingShots.length,
+          acceptanceRate: state.command.requestedShots > 0
+            ? state.command.acceptedShots / state.command.requestedShots
+            : null,
+          ackTimeoutMs,
+          timing,
+          pendingShots: state.command.pendingShots.slice(-8),
+          confirmedShots: state.command.confirmedShots.slice(-16)
+        }
+      },
+      transportDiagnostics: state.transportDiagnostics
+    };
+  }
+
   return {
     getCommandState,
+    getDecisionState,
     getFallbackState,
     getFrameAges,
     getRealtimeState,

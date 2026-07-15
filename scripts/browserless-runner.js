@@ -138,6 +138,9 @@ function installGracefulShutdownHandlers(config, options = {}) {
   let shuttingDown = false;
   const log = typeof options.log === 'function' ? options.log : message => console.error(message);
   const exit = typeof options.exit === 'function' ? options.exit : code => process.exit(code);
+  const flushBackgroundIo = typeof options.flushBackgroundIo === 'function'
+    ? options.flushBackgroundIo
+    : async () => null;
   const signals = options.signals || ['SIGINT', 'SIGTERM'];
   const signalExitCode = signal => signal === 'SIGTERM' ? 143 : 130;
   const onSignal = signal => {
@@ -154,7 +157,15 @@ function installGracefulShutdownHandlers(config, options = {}) {
       .catch(err => {
         log(JSON.stringify({ type: 'shutdown-leave-error', signal, error: err?.message || String(err) }));
       })
-      .finally(() => exit(0));
+      .finally(async () => {
+        try {
+          const result = await flushBackgroundIo();
+          if (result) log(JSON.stringify({ type: 'shutdown-background-io-flush', signal, result }));
+        } catch (err) {
+          log(JSON.stringify({ type: 'shutdown-background-io-error', signal, error: err?.message || String(err) }));
+        }
+        exit(0);
+      });
   };
   for (const signal of signals) {
     process.once(signal, () => onSignal(signal));
@@ -163,7 +174,6 @@ function installGracefulShutdownHandlers(config, options = {}) {
 
 async function main() {
   const config = parseBrowserlessRunnerArgs(process.argv.slice(2), process.env);
-  installGracefulShutdownHandlers(config);
   if (config.help) {
     console.log(usage());
     return;
@@ -174,6 +184,14 @@ async function main() {
     if (!result.ok) process.exitCode = 1;
     return;
   }
+  let activeBackgroundIo = null;
+  installGracefulShutdownHandlers(config, {
+    flushBackgroundIo: async () => {
+      const current = activeBackgroundIo;
+      activeBackgroundIo = null;
+      return current?.close?.() || null;
+    }
+  });
   const retentionScheduler = startLogRetentionScheduler(config.logDir, {
     keepDays: config.logRetentionDays,
     onResult(result) {
@@ -191,7 +209,11 @@ async function main() {
   try {
     while (true) {
       try {
-        const result = await runBrowserlessRunner(config);
+        const result = await runBrowserlessRunner(config, {
+          onBackgroundIoReady: backgroundIo => {
+            activeBackgroundIo = backgroundIo || null;
+          }
+        });
         console.log(JSON.stringify(result, null, 2));
         if (config.once || config.dryRun || result?.reason === 'explicit-stop' || result?.reason === 'unsupported-control-mode') {
           if (!result?.ok && result?.reason !== 'explicit-stop') process.exitCode = 1;
@@ -208,6 +230,9 @@ async function main() {
     }
   } finally {
     retentionScheduler.stop();
+    const current = activeBackgroundIo;
+    activeBackgroundIo = null;
+    if (current?.close) await current.close();
   }
 }
 

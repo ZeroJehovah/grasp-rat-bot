@@ -1,5 +1,6 @@
 'use strict';
 
+const { performance } = require('perf_hooks');
 const { attackWorthTakingCore } = require('../../strategy/attack-worth');
 const { isInvulnerableEntity } = require('../../strategy/combat-target-selection');
 const {
@@ -812,7 +813,7 @@ function normalizeEntityForDecision(entity, self = null, authority = 'realtime',
   const fullStamina5s = hasFull5sStamina(entity, options);
   const dropKnown = entityDropKnown(entity);
   const normalized = {
-    ...cloneJson(entity),
+    ...entity,
     user_id: numberOrNull(entity.user_id),
     entity_id: numberOrNull(entity.entity_id),
     name: entityDisplayName(entity),
@@ -987,7 +988,7 @@ function enrichRealtimeSelfWithSnapshotMetadata(realtimeSelf, snapshotSelf, opti
   if (maxDistance > 0 && Number.isFinite(metadataDistance) && metadataDistance > maxDistance) {
     return { self: realtimeSelf, merged: false, staminaMerged: false, metadataDistance };
   }
-  const output = cloneJson(realtimeSelf);
+  const output = { ...realtimeSelf };
   let merged = false;
   let staminaMerged = false;
   for (const field of SELF_SNAPSHOT_METADATA_FIELDS) {
@@ -1071,7 +1072,7 @@ function normalizeCoinForDecision(drop, self, authority = 'snapshot') {
   if (!Number.isFinite(Number(x)) || !Number.isFinite(Number(y))) return null;
   const id = drop.drop_id ?? drop.id ?? `${Math.round(x)}:${Math.round(y)}:${drop.amount ?? 0}`;
   return {
-    ...cloneJson(drop),
+    ...drop,
     drop_id: id,
     id,
     x,
@@ -1789,7 +1790,7 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
     userId: Number(state?.userId || options.userId || 0),
     nowMs,
     rawRealtime: realtime,
-    command: cloneJson(state?.command || null),
+    command: state?.command || null,
     self,
     centerActivity: centerActivityInputSummary(self, centerFiltered, options),
     stamina: entityStaminaSummary(self || {}),
@@ -1837,8 +1838,110 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
       contestedCoinCount: activeCoinCompetition.contested.length,
       contested: activeCoinCompetition.contested.slice(0, 8)
     },
-    bullets: Array.isArray(realtime.bullets) ? cloneJson(realtime.bullets) : [],
+    bullets: Array.isArray(realtime.bullets) ? realtime.bullets : [],
     dataGaps
+  };
+}
+
+function buildBrowserlessCombatStrategyInput(state, options = {}, stateful = {}) {
+  const realtime = state?.realtime || {};
+  const fallback = state?.fallback || state?.snapshot || {};
+  const nowMs = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
+  const snapshotFrameAgeMs = numberOrNull(fallback.frameAgeMs);
+  const snapshotMaxAgeMs = Math.max(1000, Number(options.snapshotCoinFallbackMaxAgeMs || 5000));
+  const snapshotFreshForMetadata = snapshotFrameAgeMs === null || snapshotFrameAgeMs <= snapshotMaxAgeMs;
+  const rawSelfUserId = numberOrNull(realtime.self?.user_id ?? realtime.self?.userId ?? state?.userId ?? options.userId);
+  const priorityUserIds = new Set();
+  if (rawSelfUserId !== null) priorityUserIds.add(String(rawSelfUserId));
+  const currentTargetId = stateful?.combatTarget?.id ?? stateful?.combatTarget?.userId ?? stateful?.combatTarget?.user_id;
+  if (currentTargetId !== null && currentTargetId !== undefined && currentTargetId !== '') {
+    priorityUserIds.add(String(currentTargetId));
+  }
+  for (const bullet of Array.isArray(realtime.bullets) ? realtime.bullets : []) {
+    const ownerId = bulletOwnerId(bullet);
+    if (ownerId !== null && ownerId !== undefined && ownerId !== '') priorityUserIds.add(String(ownerId));
+  }
+  const rawRealtimeEntities = (Array.isArray(realtime.entities) ? realtime.entities : []).filter(entity => {
+    const userId = entity?.user_id ?? entity?.userId;
+    if (userId !== null && userId !== undefined && priorityUserIds.has(String(userId))) return true;
+    if (entity?.firing || entity?.shooting || entity?.is_firing) return true;
+    if (Math.abs(Number(entity?.vx || 0)) > 0 || Math.abs(Number(entity?.vy || 0)) > 0) return true;
+    const mode = String(entity?.current_join_mode || entity?.mode || entity?.joined || '').toLowerCase();
+    if (mode === 'active') return true;
+    const remaining = numberOrNull(entity?.stamina_5s_remaining_milli ?? entity?.stamina5sRemainingMilli ?? entity?.stamina5s);
+    const limit = numberOrNull(entity?.stamina_5s_limit_milli ?? entity?.stamina5sLimitMilli ?? entity?.stamina5sLimit);
+    return remaining !== null && limit !== null && limit > 0 && remaining < limit * 0.98;
+  });
+  const metadataUserIds = new Set(rawRealtimeEntities
+    .map(entity => numberOrNull(entity?.user_id ?? entity?.userId))
+    .filter(value => value !== null)
+    .map(String));
+  if (rawSelfUserId !== null) metadataUserIds.add(String(rawSelfUserId));
+  const snapshotEntitiesByUserId = new Map();
+  if (snapshotFreshForMetadata) {
+    for (const entity of Array.isArray(fallback.entities) ? fallback.entities : []) {
+      const userId = numberOrNull(entity?.user_id ?? entity?.userId);
+      if (userId !== null && metadataUserIds.has(String(userId))) snapshotEntitiesByUserId.set(userId, entity);
+    }
+  }
+  const snapshotSelf = rawSelfUserId !== null ? snapshotEntitiesByUserId.get(rawSelfUserId) : null;
+  const enrichedSelf = enrichRealtimeSelfWithSnapshotMetadata(realtime.self, snapshotSelf, options);
+  const self = normalizeEntityForDecision(enrichedSelf.self, null, 'realtime', options);
+  const selfUserId = Number(self?.user_id ?? state?.userId ?? options.userId ?? 0);
+  const realtimeEntities = [];
+  for (const entity of rawRealtimeEntities) {
+    const userId = numberOrNull(entity?.user_id ?? entity?.userId);
+    const enriched = enrichRealtimeEntityWithSnapshotProfitMetadata(
+      entity,
+      userId === null ? null : snapshotEntitiesByUserId.get(userId),
+      options
+    );
+    const normalized = normalizeEntityForDecision(enriched, self, 'realtime', options);
+    if (normalized) realtimeEntities.push(normalized);
+  }
+  annotateBrowserlessRecentActivity(realtimeEntities, stateful, nowMs, options);
+  const visibleTargets = [];
+  for (const entity of realtimeEntities) {
+    const refreshed = refreshDecisionEntityActivity(entity, options);
+    if (Number(refreshed.user_id) === selfUserId) continue;
+    if (!Number.isFinite(Number(refreshed.x)) || !Number.isFinite(Number(refreshed.y))) continue;
+    visibleTargets.push(refreshed);
+  }
+  const easyKillInput = {
+    visibleTargets,
+    nowMs,
+    easyKillTargets: [],
+    easyKill: null
+  };
+  refreshEasyKillTargetAnnotations(easyKillInput, stateful, options);
+  const activeThreats = visibleTargets.filter(entity => entity.active && entity.alive !== false && !entity.easyKillThreatExempt);
+  const firingThreats = visibleTargets.filter(entity => entity.firing && entity.alive !== false && !entity.easyKillThreatExempt);
+  const avoidanceThreats = visibleTargets.filter(isBrowserlessAvoidanceThreat);
+  return {
+    userId: Number(state?.userId || options.userId || 0),
+    nowMs,
+    rawRealtime: realtime,
+    command: state?.command || null,
+    self,
+    frameAges: state?.frameAges || {},
+    stamina: entityStaminaSummary(self || {}),
+    realtime: {
+      tick: realtime.tick ?? null,
+      frameAgeMs: numberOrNull(realtime.frameAgeMs),
+      entityCount: realtimeEntities.length,
+      bulletCount: Array.isArray(realtime.bullets) ? realtime.bullets.length : 0
+    },
+    visibleTargets,
+    activeThreats,
+    firingThreats,
+    avoidanceThreats,
+    snapshotActiveThreats: [],
+    snapshotFallbackThreats: [],
+    easyKill: easyKillInput.easyKill,
+    easyKillTargets: easyKillInput.easyKillTargets,
+    selfKillEvidence: [],
+    bullets: Array.isArray(realtime.bullets) ? realtime.bullets : [],
+    dataGaps: enrichedSelf.staminaMerged ? ['self-stamina-from-snapshot'] : []
   };
 }
 
@@ -1866,7 +1969,12 @@ function activeTargetCompletionEstimate(target, options = {}) {
   }
   const targetId = target?.user_id ?? target?.userId;
   let completion = { probability: 1 / 3 };
-  if (options.combatCompletionTracker?.probability && targetId !== null && targetId !== undefined) {
+  const completionByUserId = options.combatCompletionByUserId && typeof options.combatCompletionByUserId === 'object'
+    ? options.combatCompletionByUserId
+    : null;
+  if (completionByUserId && targetId !== null && targetId !== undefined && completionByUserId[String(targetId)]) {
+    completion = completionByUserId[String(targetId)];
+  } else if (options.combatCompletionTracker?.probability && targetId !== null && targetId !== undefined) {
     try {
       completion = options.combatCompletionTracker.probability(targetId, options.nowMs);
     } catch (_) {}
@@ -4278,6 +4386,66 @@ function buildCombatDecision(input, stateful = {}, options = {}) {
   };
 }
 
+function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options = {}) {
+  const stageTimings = {};
+  let stageStarted = performance.now();
+  const input = buildBrowserlessCombatStrategyInput(state, options, stateful);
+  stageTimings.input = performance.now() - stageStarted;
+  stageStarted = performance.now();
+  reconcileEasyKillTracker(input, stateful, options);
+  stageTimings.easyKill = performance.now() - stageStarted;
+  stageStarted = performance.now();
+  const combat = buildCombatDecision(input, stateful, options);
+  stageTimings.combat = performance.now() - stageStarted;
+  stageStarted = performance.now();
+  const combatActionEligible = isCombatActionEligibleForDecision(combat, options);
+  const controlOptions = {
+    ...options,
+    combatActionEligible
+  };
+  const longStaminaExhaustedLeaveAction = buildLongStaminaExhaustedLeaveDecision(input, controlOptions);
+  const combatExitAction = combat.exitAction || null;
+  const injuryHpExitAction = buildBrowserlessInjuryHpExitDecision(input, stateful, combat, controlOptions);
+  const pursuitLeaveAction = buildBrowserlessPursuitLeaveDecision(input, stateful, combat, controlOptions);
+  const lowHpRecoveryThreatExitAction = buildLowHpRecoveryThreatExitDecision(input, controlOptions);
+  const safetyAction = profitLiveSafetyDecision(input, combat, stateful, controlOptions, null);
+  const combatAction = combat.target && combatActionEligible ? combat.action : null;
+  const action = longStaminaExhaustedLeaveAction
+    || combatExitAction
+    || injuryHpExitAction
+    || pursuitLeaveAction
+    || lowHpRecoveryThreatExitAction
+    || safetyAction
+    || combatAction
+    || null;
+  rememberDangerousCombatExitTarget(input, combat, stateful, options);
+  stageTimings.gates = performance.now() - stageStarted;
+  stageStarted = performance.now();
+  const output = {
+    kind: action?.kind || '',
+    band: action?.band || '',
+    reason: action?.reason || '',
+    action,
+    combat: combat.dryRun,
+    exitAction: action?.shouldLeave ? action : null,
+    realtimeControl: true,
+    tick: input.realtime.tick,
+    at: new Date(input.nowMs).toISOString(),
+    input: {
+      self: summarizeTarget(input.self),
+      stamina: input.stamina,
+      realtime: input.realtime,
+      dataGaps: input.dataGaps
+    }
+  };
+  if (action) reconcileEasyKillCombatOutcome(output, input, options);
+  stageTimings.output = performance.now() - stageStarted;
+  if (typeof options.onRealtimeStageTimings === 'function') {
+    options.onRealtimeStageTimings(stageTimings);
+  }
+  return output;
+}
+
 function isCombatActionEligibleForDecision(combatDecision, options = {}) {
   const target = combatDecision?.target || combatDecision?.dryRun?.target || null;
   if (!target) return false;
@@ -5510,7 +5678,7 @@ function createBrowserlessDecisionAdapter(options = {}) {
     },
     evaluateCombat(state, nextOptions = {}) {
       const mergedOptions = { ...options, ...nextOptions };
-      const input = buildBrowserlessStrategyInput(state, mergedOptions, decisionState);
+      const input = buildBrowserlessCombatStrategyInput(state, mergedOptions, decisionState);
       reconcileEasyKillTracker(input, decisionState, mergedOptions);
       const combat = buildCombatDecision(input, decisionState, {
         ...mergedOptions,
@@ -5524,8 +5692,49 @@ function createBrowserlessDecisionAdapter(options = {}) {
       reconcileEasyKillCombatOutcome(output, input, mergedOptions);
       return output;
     },
+    evaluateRealtime(state, nextOptions = {}) {
+      return buildBrowserlessRealtimeControlDecision(state, decisionState, {
+        ...options,
+        ...nextOptions
+      });
+    },
+    patchState(patch = {}) {
+      for (const [key, value] of Object.entries(patch || {})) {
+        if (key === 'currentOpportunity' || key === 'switchLock') continue;
+        decisionState[key] = cloneJson(value);
+      }
+      return true;
+    },
     getState() {
       return cloneJson(decisionState);
+    },
+    getCombatPersistenceState() {
+      return {
+        combatMetrics: decisionState.combatMetrics || null,
+        combatTarget: decisionState.combatTarget || null,
+        combatLearning: decisionState.combatLearning || null
+      };
+    },
+    getRealtimePersistenceState() {
+      return {
+        attackHistory: decisionState.attackHistory || [],
+        combatTarget: decisionState.combatTarget || null,
+        combatAim: decisionState.combatAim || null,
+        combatMetrics: decisionState.combatMetrics || null,
+        opponentBehaviorStates: decisionState.opponentBehaviorStates || {},
+        combatLearning: decisionState.combatLearning || null,
+        seenEntities: decisionState.seenEntities || {},
+        browserlessLastSelf: decisionState.browserlessLastSelf || null,
+        browserlessInjury: decisionState.browserlessInjury || null,
+        browserlessPursuit: decisionState.browserlessPursuit || null,
+        profitPursuitSuppressions: decisionState.profitPursuitSuppressions || {},
+        dangerousCombatTargets: decisionState.dangerousCombatTargets || {},
+        easyKillApproach: decisionState.easyKillApproach || null,
+        easyKillTargetSuppressions: decisionState.easyKillTargetSuppressions || {},
+        fleeLock: decisionState.fleeLock || null,
+        returnBlockLock: decisionState.returnBlockLock || null,
+        returnBlockScan: decisionState.returnBlockScan || null
+      };
     },
     getStatusSummary() {
       return summarizeBrowserlessDecisionState(decisionState);
@@ -5553,6 +5762,8 @@ module.exports = {
   activeTargetCompletionEstimate,
   activeTargetExpectedReward,
   buildBrowserlessDecision,
+  buildBrowserlessCombatStrategyInput,
+  buildBrowserlessRealtimeControlDecision,
   buildBrowserlessRuntimeDefaults,
   buildBrowserlessStrategyInput,
   buildLowHpRecoveryThreatExitDecision,

@@ -115,7 +115,11 @@ function readStore(file, expectedDay) {
   }
 }
 
-function writeStore(file, store) {
+function writeStore(file, store, backgroundIo = null) {
+  if (backgroundIo?.writeJsonAtomic) {
+    if (!backgroundIo.writeJsonAtomic(file, store)) throw new Error('background damage-player persistence unavailable');
+    return;
+  }
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const temporary = `${file}.${process.pid}.tmp`;
   fs.writeFileSync(temporary, JSON.stringify(store, null, 2) + '\n');
@@ -137,6 +141,7 @@ function createDailyDamagePlayerTracker(options = {}) {
   const now = typeof options.now === 'function' ? options.now : Date.now;
   const onEvent = typeof options.onEvent === 'function' ? options.onEvent : null;
   const file = path.resolve(options.file || path.join(process.cwd(), 'data', 'browserless-runner', 'daily-damage-players.json'));
+  const backgroundIo = options.backgroundIo && typeof options.backgroundIo === 'object' ? options.backgroundIo : null;
   const combatMemoryMs = Math.max(0, Number(options.combatMemoryMs ?? DEFAULT_COMBAT_MEMORY_MS));
   let store = readStore(file, dayKey(now()));
   let lastSelf = null;
@@ -154,14 +159,14 @@ function createDailyDamagePlayerTracker(options = {}) {
     const today = dayKey(atMs);
     if (store.day === today) return false;
     store = emptyStore(today);
-    writeStore(file, store);
+    writeStore(file, store, backgroundIo);
     return true;
   }
 
   function persist(atMs = now()) {
     ensureToday(atMs);
     store.updatedAt = new Date(atMs).toISOString();
-    writeStore(file, store);
+    writeStore(file, store, backgroundIo);
   }
 
   function status(atMs = now()) {

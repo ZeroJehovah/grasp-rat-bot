@@ -99,7 +99,11 @@ function readStore(file) {
   }
 }
 
-function writeStore(file, store) {
+function writeStore(file, store, backgroundIo = null) {
+  if (backgroundIo?.writeJsonAtomic) {
+    if (!backgroundIo.writeJsonAtomic(file, store)) throw new Error('background combat-learning persistence unavailable');
+    return;
+  }
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const temporary = `${file}.${process.pid}.tmp`;
   fs.writeFileSync(temporary, JSON.stringify(store, null, 2) + '\n');
@@ -115,6 +119,7 @@ function createCombatCompletionTracker(options = {}) {
   const file = path.resolve(options.file || path.join(process.cwd(), 'data', 'browserless-runner', 'combat-learning.json'));
   const decayDays = Math.max(1, Number(options.decayDays || 30));
   const maxPlayers = Math.max(32, Number(options.maxPlayers || 512));
+  const backgroundIo = options.backgroundIo && typeof options.backgroundIo === 'object' ? options.backgroundIo : null;
   let store = readStore(file);
   let lastStrategyWriteAt = 0;
 
@@ -143,7 +148,7 @@ function createCombatCompletionTracker(options = {}) {
     trimPlayers();
     store.schemaVersion = SCHEMA_VERSION;
     store.updatedAt = new Date(atMs).toISOString();
-    writeStore(file, store);
+    writeStore(file, store, backgroundIo);
   }
 
   function observe(event = {}) {

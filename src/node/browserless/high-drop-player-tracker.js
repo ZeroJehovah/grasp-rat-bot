@@ -141,7 +141,11 @@ function readStore(file, expectedDay) {
   }
 }
 
-function writeStore(file, store) {
+function writeStore(file, store, backgroundIo = null) {
+  if (backgroundIo?.writeJsonAtomic) {
+    if (!backgroundIo.writeJsonAtomic(file, store)) throw new Error('background high-drop persistence unavailable');
+    return;
+  }
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const temporary = `${file}.${process.pid}.tmp`;
   fs.writeFileSync(temporary, JSON.stringify(store, null, 2) + '\n');
@@ -152,6 +156,7 @@ function createHighDropPlayerTracker(options = {}) {
   const now = typeof options.now === 'function' ? options.now : Date.now;
   const file = path.resolve(options.file || path.join(process.cwd(), 'data', 'browserless-runner', 'high-drop-players.json'));
   const threshold = Math.max(0, Number(options.threshold ?? DEFAULT_RECORD_THRESHOLD));
+  const backgroundIo = options.backgroundIo && typeof options.backgroundIo === 'object' ? options.backgroundIo : null;
   let store = readStore(file, dayKey(now()));
   let lastWriteAtMs = Date.parse(store.updatedAt || '');
   if (!Number.isFinite(lastWriteAtMs)) lastWriteAtMs = 0;
@@ -160,7 +165,7 @@ function createHighDropPlayerTracker(options = {}) {
     const today = dayKey(atMs);
     if (store.day === today) return false;
     store = emptyStore(today);
-    writeStore(file, store);
+    writeStore(file, store, backgroundIo);
     lastWriteAtMs = Number(atMs);
     return true;
   }
@@ -234,7 +239,7 @@ function createHighDropPlayerTracker(options = {}) {
     store.lastSnapshotAt = at;
     store.lastSnapshotSource = String(detail.source || 'snapshot');
     if (shouldPersist) {
-      writeStore(file, store);
+      writeStore(file, store, backgroundIo);
       lastWriteAtMs = atMs;
     }
     return { ok: true, observed, updated, playerCount: Object.keys(store.players).length };

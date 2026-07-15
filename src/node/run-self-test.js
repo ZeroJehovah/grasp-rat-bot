@@ -54,6 +54,8 @@ const {
 const {
   activeTargetCompletionEstimate,
   buildBrowserlessDecision,
+  buildBrowserlessCombatStrategyInput,
+  buildBrowserlessRealtimeControlDecision,
   buildBrowserlessRuntimeDefaults,
   buildBrowserlessStrategyInput,
   createBrowserlessDecisionAdapter,
@@ -89,6 +91,12 @@ const {
   createLocalLogStore
 } = require('./browserless/local-log-store');
 const {
+  createBrowserlessBackgroundIo
+} = require('./browserless/background-io');
+const {
+  createBrowserlessDecisionWorker
+} = require('./browserless/decision-worker');
+const {
   parseBrowserlessRunnerArgs
 } = require('./browserless/config');
 const {
@@ -120,6 +128,7 @@ const {
 const {
   browserlessStatsForDecision,
   browserlessStatsForOffline,
+  browserlessCompactStatusSource,
   buildCompactBrowserlessStatus,
   buildPublicBrowserlessStatus,
   readBrowserlessStateFile,
@@ -15555,6 +15564,149 @@ async function runSelfTest() {
       want: false
     },
     {
+      name: 'browserless realtime control preserves urgent safety and combat priorities',
+      got: (() => {
+        const self = {
+          entity_id: 1,
+          user_id: 7,
+          x: 100,
+          y: 200,
+          hp: 90,
+          max_hp: 100,
+          current_join_mode: 'Active',
+          stamina_5s_remaining_milli: 6000,
+          stamina_5s_limit_milli: 10000,
+          stamina_1h_remaining_milli: 2000000,
+          stamina_1h_limit_milli: 3000000,
+          stamina_1d_remaining_milli: 10000000,
+          stamina_1d_limit_milli: 20000000
+        };
+        const stateFor = target => ({
+          userId: 7,
+          realtime: { tick: 30, frameAgeMs: 0, self, entities: [self, ...(target ? [target] : [])], bullets: [] },
+          fallback: { tick: 29, frameAgeMs: 0, self, entities: [self, ...(target ? [target] : [])], coinDrops: [], messages: [] },
+          command: null
+        });
+        const options = {
+          ...buildBrowserlessRuntimeDefaults({}),
+          userId: 7,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          nowMs: 1000
+        };
+        const invulnerable = {
+          entity_id: 2,
+          user_id: 8,
+          x: 600,
+          y: 200,
+          hp: 100,
+          max_hp: 100,
+          current_join_mode: 'Active',
+          firing: true,
+          invulnerable_remaining_ms: 5000
+        };
+        const shooter = {
+          entity_id: 3,
+          user_id: 9,
+          x: 1600,
+          y: 200,
+          hp: 80,
+          max_hp: 100,
+          current_join_mode: 'Active',
+          firing: true,
+          stamina_5s_remaining_milli: 5000,
+          stamina_5s_limit_milli: 10000
+        };
+        const full = buildBrowserlessDecision(stateFor(invulnerable), createBrowserlessDecisionState(), options);
+        const fastSafety = buildBrowserlessRealtimeControlDecision(stateFor(invulnerable), createBrowserlessDecisionState(), options);
+        const fastCombat = buildBrowserlessRealtimeControlDecision(stateFor(shooter), createBrowserlessDecisionState(), options);
+        const idle = buildBrowserlessRealtimeControlDecision(stateFor(null), createBrowserlessDecisionState(), options);
+        return [
+          full.action.kind,
+          full.action.reason,
+          fastSafety.action.kind,
+          fastSafety.action.reason,
+          fastSafety.action.dx,
+          fastCombat.action.kind,
+          fastCombat.action.reason,
+          idle.action === null
+        ].join('|');
+      })(),
+      want: 'flee|avoid-invulnerable-target|flee|avoid-invulnerable-target|-1|combat-live|combat-live-realtime|true'
+    },
+    {
+      name: 'browserless combat input filters passive profit population but retains realtime evidence',
+      got: (() => {
+        const self = { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, current_join_mode: 'Active' };
+        const passive = Array.from({ length: 40 }, (_, index) => ({
+          entity_id: 100 + index,
+          user_id: 1000 + index,
+          x: 10000 + index,
+          y: 10000,
+          hp: 100,
+          current_join_mode: 'Passive',
+          stamina_5s_remaining_milli: 10000,
+          stamina_5s_limit_milli: 10000
+        }));
+        const threat = { entity_id: 2, user_id: 8, x: 1000, y: 0, hp: 100, current_join_mode: 'Active', firing: true };
+        const held = { entity_id: 3, user_id: 88, x: 2000, y: 0, hp: 100, current_join_mode: 'Passive' };
+        const bulletOwner = { entity_id: 4, user_id: 99, x: 3000, y: 0, hp: 100, current_join_mode: 'Passive' };
+        const input = buildBrowserlessCombatStrategyInput({
+          userId: 7,
+          realtime: {
+            tick: 1,
+            frameAgeMs: 0,
+            self,
+            entities: [self, ...passive, threat, held, bulletOwner],
+            bullets: [{ owner_user_id: 99 }]
+          },
+          fallback: { frameAgeMs: 0, entities: [], coinDrops: [] }
+        }, { userId: 7, nowMs: 1000 }, { combatTarget: { id: 88 } });
+        return input.visibleTargets.map(item => item.user_id).sort((a, b) => a - b).join(',');
+      })(),
+      want: '8,88,99'
+    },
+    {
+      name: 'browserless decision worker keeps full planning off the caller thread',
+      got: (async () => {
+        const self = {
+          entity_id: 1,
+          user_id: 7,
+          x: 0,
+          y: 0,
+          hp: 100,
+          max_hp: 100,
+          current_join_mode: 'Active',
+          stamina_5s_remaining_milli: 10000,
+          stamina_5s_limit_milli: 10000
+        };
+        const worker = createBrowserlessDecisionWorker({
+          ...buildBrowserlessRuntimeDefaults({}),
+          userId: 7,
+          controlMode: 'profit-live',
+          combatEnabled: true
+        });
+        try {
+          await worker.ready();
+          const result = await worker.decide({
+            userId: 7,
+            realtime: { tick: 1, frameAgeMs: 0, self, entities: [self], bullets: [], coinDrops: [] },
+            fallback: { tick: 1, frameAgeMs: 0, self, entities: [self], bullets: [], coinDrops: [], messages: [] },
+            command: null
+          }, { nowMs: 1000, controlMode: 'profit-live', combatEnabled: true }, {}, null);
+          return [
+            result.decision.ok,
+            Number.isFinite(result.computeMs),
+            result.postMs < 50,
+            worker.status().completed === 1
+          ].join('|');
+        } finally {
+          await worker.close();
+        }
+      })(),
+      want: 'true|true|true|true'
+    },
+    {
       name: 'browserless local log store appends redacted UTC day files',
       got: withTempDirForTest(async dir => {
         let current = Date.UTC(2026, 6, 8, 1, 0, 0);
@@ -15587,6 +15739,124 @@ async function runSelfTest() {
         ].join('|');
       }),
       want: '2026-07-08/runner.jsonl|2026-07-09/exits.jsonl|2026-07-09/ws.jsonl|true|true|true|true|session-start'
+    },
+    {
+      name: 'browserless background IO flushes redacted logs and atomic JSON',
+      got: withTempDirForTest(async dir => {
+        const backgroundIo = createBrowserlessBackgroundIo();
+        try {
+          const store = createLocalLogStore({
+            logDir: path.join(dir, 'logs'),
+            now: () => Date.UTC(2026, 6, 8, 1, 0, 0),
+            backgroundIo
+          });
+          const queued = store.append('runner', 'background-test', { token: 'secret-token', ok: true });
+          const jsonFile = path.join(dir, 'state', 'test.json');
+          backgroundIo.writeJsonAtomic(jsonFile, { value: 7 });
+          const rendered = await backgroundIo.renderStatus({
+            session: { userId: 7, sessionToken: 'status-secret-token' },
+            runner: { running: true },
+            current: { self: { userId: 7, hp: 100 } }
+          }, { statusHost: '127.0.0.1', statusPort: 18767, webToken: 'present' }, true);
+          const flushed = await store.flush();
+          const logText = fs.readFileSync(queued.file, 'utf8');
+          const json = JSON.parse(fs.readFileSync(jsonFile, 'utf8'));
+          const renderedStatus = JSON.parse(rendered.text);
+          const renderedText = rendered.text;
+          return [
+            flushed.ok,
+            flushed.pending,
+            logText.includes('[redacted]'),
+            !logText.includes('secret-token'),
+            json.value,
+            renderedStatus.compact,
+            renderedStatus.session.tokenPresent,
+            !renderedText.includes('status-secret-token'),
+            rendered.postMs < 50
+          ].join('|');
+        } finally {
+          await backgroundIo.close();
+        }
+      }),
+      want: 'true|0|true|true|7|true|true|true|true'
+    },
+    {
+      name: 'browserless background IO continues after one operation failure',
+      got: withTempDirForTest(async dir => {
+        const errors = [];
+        const backgroundIo = createBrowserlessBackgroundIo({
+          onError: error => errors.push(error?.message || String(error))
+        });
+        try {
+          const blockingFile = path.join(dir, 'not-a-directory');
+          fs.writeFileSync(blockingFile, 'block');
+          backgroundIo.writeJsonAtomic(path.join(blockingFile, 'bad.json'), { value: 1 });
+          const store = createLocalLogStore({
+            logDir: path.join(dir, 'logs'),
+            now: () => Date.UTC(2026, 6, 8, 1, 0, 0),
+            backgroundIo
+          });
+          const queued = store.append('runner', 'after-operation-error', { ok: true });
+          const flushed = await backgroundIo.flush();
+          return [
+            flushed.ok,
+            flushed.operationErrorCount,
+            errors.length,
+            fs.existsSync(queued.file),
+            backgroundIo.status().ok
+          ].join('|');
+        } finally {
+          await backgroundIo.close();
+        }
+      }),
+      want: 'true|1|1|true|true'
+    },
+    {
+      name: 'browserless compact status source removes heavy history without changing output',
+      got: (() => {
+        const snapshotSafety = {
+          ok: true,
+          checkedAt: '2026-07-15T04:00:00.000Z',
+          response: { summary: { selfPresent: false, tick: 10, safety: { ok: true, dangerCount: 0 } } }
+        };
+        const state = {
+          session: { userId: 7, sessionToken: 'compact-source-secret' },
+          runner: {
+            running: true,
+            mode: 'profit-live',
+            currentAction: { kind: 'wait', reason: 'self-test' },
+            lastRun: {
+              reason: 'previous-run',
+              canary: {
+                snapshotSafety,
+                state: { entities: Array.from({ length: 500 }, (_, index) => ({ id: index, payload: 'x'.repeat(80) })) },
+                decisionState: { learning: 'y'.repeat(50000) }
+              }
+            }
+          },
+          probes: {
+            lastReadOnlyProbe: { completedAt: '2026-07-15T04:00:00.000Z', snapshotSafety }
+          },
+          loginPointSafety: { ok: true, checkedAt: '2026-07-15T04:00:00.000Z', point: { x: 1, y: 2, hp: 100 } },
+          current: {
+            self: { userId: 7, name: 'self', hp: 100 },
+            action: { kind: 'wait', reason: 'self-test' },
+            decision: { kind: 'wait', reason: 'self-test', action: { kind: 'wait', reason: 'self-test' } }
+          },
+          stats: { currentSession: { online: true } }
+        };
+        const config = { statusHost: '127.0.0.1', statusPort: 18767, webToken: 'present' };
+        const source = browserlessCompactStatusSource(state);
+        const direct = buildCompactBrowserlessStatus(state, config);
+        const reduced = buildCompactBrowserlessStatus(source, config);
+        return [
+          JSON.stringify(direct) === JSON.stringify(reduced),
+          JSON.stringify(source).length < JSON.stringify(state).length / 4,
+          source.runner.lastRun.canary.state === undefined,
+          source.runner.lastRun.canary.decisionState === undefined
+        ].join('|');
+      })(),
+      want: 'true|true|true|true'
     },
     {
       name: 'browserless log retention deletes day directories outside keep window',
@@ -20471,6 +20741,45 @@ async function runSelfTest() {
         }
       })(),
       want: '401|200|true|true|true|200|true|12|true|true|true|200|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|200|true|1'
+    },
+    {
+      name: 'browserless status server accepts async pre-rendered full and compact JSON text',
+      got: (async () => {
+        let fullCalls = 0;
+        let compactCalls = 0;
+        const tasks = [];
+        const handle = await startStatusServer({
+          host: '127.0.0.1',
+          port: 0,
+          webToken: 'test-token',
+          getStatusText: async config => {
+            fullCalls += 1;
+            return JSON.stringify({ ok: true, marker: 'full', statusServer: { webVersion: config.webVersion } });
+          },
+          getCompactStatusText: async config => {
+            compactCalls += 1;
+            return JSON.stringify({ ok: true, compact: true, marker: 'compact', statusServer: { webVersion: config.webVersion } });
+          },
+          onMainThreadTask: task => tasks.push(task)
+        });
+        try {
+          const base = `http://127.0.0.1:${handle.port}`;
+          const full = await fetch(`${base}/api/status?token=test-token`).then(response => response.json());
+          const compact = await fetch(`${base}/api/panel-status?token=test-token`).then(response => response.json());
+          return [
+            full.marker,
+            compact.marker,
+            full.statusServer.webVersion === BROWSERLESS_WEB_PANEL_VERSION,
+            compact.statusServer.webVersion === BROWSERLESS_WEB_PANEL_VERSION,
+            fullCalls,
+            compactCalls,
+            tasks.join(',')
+          ].join('|');
+        } finally {
+          await handle.close();
+        }
+      })(),
+      want: 'full|compact|true|true|1|1|status-full-dispatch,status-response,status-compact-dispatch,status-response'
     },
     {
       name: 'browserless compact status and web panel expose the high drop player list',

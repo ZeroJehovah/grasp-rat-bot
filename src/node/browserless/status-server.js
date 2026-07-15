@@ -1,6 +1,7 @@
 'use strict';
 
 const http = require('http');
+const { performance } = require('perf_hooks');
 const { buildCompactBrowserlessStatus } = require('./state-file');
 const { redactStructuredSecrets } = require('./session-client');
 const {
@@ -31,6 +32,10 @@ function requestAuthorized(req, parsedUrl, webToken) {
 
 function sendJson(res, status, body) {
   const text = JSON.stringify(body, null, 2);
+  sendJsonText(res, status, text);
+}
+
+function sendJsonText(res, status, text) {
   res.writeHead(status, {
     'content-type': 'application/json; charset=utf-8',
     'cache-control': 'no-store'
@@ -56,8 +61,10 @@ function statusServerConfig(options = {}, server = null, webToken = '') {
   };
 }
 
-function withStatusServerMeta(status, config) {
-  const output = redactStructuredSecrets(status);
+function withStatusServerMeta(status, config, preRedacted = false) {
+  const output = preRedacted
+    ? { ...(status && typeof status === 'object' && !Array.isArray(status) ? status : {}) }
+    : redactStructuredSecrets(status);
   if (!output || typeof output !== 'object' || Array.isArray(output)) return output;
   output.statusServer = {
     ...(output.statusServer && typeof output.statusServer === 'object' ? output.statusServer : {}),
@@ -69,12 +76,51 @@ function withStatusServerMeta(status, config) {
 function createStatusServer(options = {}) {
   const webToken = String(options.webToken || '');
   const getStatus = typeof options.getStatus === 'function' ? options.getStatus : () => ({ ok: true });
+  const getCompactStatus = typeof options.getCompactStatus === 'function' ? options.getCompactStatus : null;
+  const getStatusText = typeof options.getStatusText === 'function' ? options.getStatusText : null;
+  const getCompactStatusText = typeof options.getCompactStatusText === 'function' ? options.getCompactStatusText : null;
+  const statusPreRedacted = options.statusPreRedacted === true;
+  const onMainThreadTask = typeof options.onMainThreadTask === 'function'
+    ? options.onMainThreadTask
+    : null;
   const onStop = typeof options.onStop === 'function' ? options.onStop : null;
   const onAuthUrl = typeof options.onAuthUrl === 'function' ? options.onAuthUrl : null;
   const onCallback = typeof options.onCallback === 'function' ? options.onCallback : null;
   const getChat = typeof options.getChat === 'function' ? options.getChat : () => ({ ok: true, messages: [] });
   const onChatActivity = typeof options.onChatActivity === 'function' ? options.onChatActivity : null;
   const onChatSend = typeof options.onChatSend === 'function' ? options.onChatSend : null;
+  const recordTask = (task, started, detail = {}) => {
+    if (!onMainThreadTask) return;
+    try {
+      onMainThreadTask(task, performance.now() - started, detail);
+    } catch (_) {}
+  };
+  const dispatchStatus = async (getter, task, detail = {}) => {
+    const started = performance.now();
+    let pending;
+    try {
+      pending = getter();
+    } finally {
+      recordTask(task, started, detail);
+    }
+    return await pending;
+  };
+  const sendStatusJson = (res, body, detail = {}) => {
+    const started = performance.now();
+    try {
+      sendJson(res, 200, body);
+    } finally {
+      recordTask('status-response', started, detail);
+    }
+  };
+  const sendStatusText = (res, text, detail = {}) => {
+    const started = performance.now();
+    try {
+      sendJsonText(res, 200, String(text || '{}'));
+    } finally {
+      recordTask('status-response', started, detail);
+    }
+  };
   const server = http.createServer(async (req, res) => {
     const parsed = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
     try {
@@ -93,14 +139,54 @@ function createStatusServer(options = {}) {
       }
       if (req.method === 'GET' && parsed.pathname === '/api/status') {
         if (/^(1|true|yes)$/i.test(parsed.searchParams.get('compact') || '')) {
-          sendJson(res, 200, buildCompactBrowserlessStatus(getStatus(), config));
+          if (getCompactStatusText) {
+            const text = await dispatchStatus(
+              () => getCompactStatusText(config),
+              'status-compact-dispatch',
+              { path: parsed.pathname }
+            );
+            sendStatusText(res, text, { path: parsed.pathname, compact: true });
+            return;
+          }
+          const status = getCompactStatus
+            ? await dispatchStatus(getCompactStatus, 'status-compact-dispatch', { path: parsed.pathname })
+            : buildCompactBrowserlessStatus(
+                await dispatchStatus(getStatus, 'status-full-dispatch', { path: parsed.pathname }),
+                config
+              );
+          sendStatusJson(res, withStatusServerMeta(status, config, true), { path: parsed.pathname, compact: true });
           return;
         }
-        sendJson(res, 200, withStatusServerMeta(getStatus(), config));
+        if (getStatusText) {
+          const text = await dispatchStatus(
+            () => getStatusText(config),
+            'status-full-dispatch',
+            { path: parsed.pathname }
+          );
+          sendStatusText(res, text, { path: parsed.pathname, compact: false });
+          return;
+        }
+        const status = await dispatchStatus(getStatus, 'status-full-dispatch', { path: parsed.pathname });
+        sendStatusJson(res, withStatusServerMeta(status, config, statusPreRedacted), { path: parsed.pathname, compact: false });
         return;
       }
       if (req.method === 'GET' && parsed.pathname === '/api/panel-status') {
-        sendJson(res, 200, buildCompactBrowserlessStatus(getStatus(), config));
+        if (getCompactStatusText) {
+          const text = await dispatchStatus(
+            () => getCompactStatusText(config),
+            'status-compact-dispatch',
+            { path: parsed.pathname }
+          );
+          sendStatusText(res, text, { path: parsed.pathname, compact: true });
+          return;
+        }
+        const status = getCompactStatus
+          ? await dispatchStatus(getCompactStatus, 'status-compact-dispatch', { path: parsed.pathname })
+          : buildCompactBrowserlessStatus(
+              await dispatchStatus(getStatus, 'status-full-dispatch', { path: parsed.pathname }),
+              config
+            );
+        sendStatusJson(res, withStatusServerMeta(status, config, true), { path: parsed.pathname, compact: true });
         return;
       }
       if (req.method === 'GET' && parsed.pathname === '/api/chat') {
