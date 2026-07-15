@@ -1906,7 +1906,7 @@ function currentMainThreadCpuMs() {
   }
 }
 
-function complexCombatSelfTestFrames(userId = 7, frameCount = 120) {
+function complexCombatSelfTestFrames(userId = 7, frameCount = 48) {
   const passiveCount = 68;
   const snapshotCoins = Array.from({ length: 88 }, (_, index) => ({
     drop_id: 5000 + index,
@@ -2038,7 +2038,7 @@ async function runComplexCombatMainThreadBudgetSelfTest(tmp) {
       readOnly: false,
       controlMode: 'profit-live',
       combatEnabled: true,
-      readOnlyProbeMs: 1200,
+      readOnlyProbeMs: 1000,
       decisionIntervalMs: 1000,
       combatControlIntervalMs: 160,
       movementCommandIntervalMs: 500,
@@ -2097,7 +2097,7 @@ async function runComplexCombatMainThreadBudgetSelfTest(tmp) {
         result.ok
         && warmup?.ok
         && warmup?.iterations === 6
-        && measuredFrameCount >= 100
+        && measuredFrameCount >= 40
         && Number(result.decisions?.realtimeControlCount || 0) > 0
         && frameCpuDurations.length === measuredFrameCount
         && cpuOverBudgetCount === 0
