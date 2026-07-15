@@ -58,6 +58,7 @@ const {
   buildBrowserlessRealtimeControlDecision,
   buildBrowserlessRuntimeDefaults,
   buildBrowserlessStrategyInput,
+  buildLowHpRecoveryThreatExitDecision,
   createBrowserlessDecisionAdapter,
   decisionStatePatch,
   opportunityEnemyStaminaCost: browserlessOpportunityEnemyStaminaCost
@@ -8501,7 +8502,7 @@ async function runSelfTest() {
       want: 'recover|recover|wait-for-full-stamina-and-hp|true|coin|100'
     },
     {
-      name: 'browserless low-hp recovery exits while realtime Active threat is inside login safety radius',
+      name: 'browserless injured recovery exits while realtime Active threat is inside health-scaled radius',
       got: (() => {
         const self = {
           entity_id: 1,
@@ -8557,10 +8558,97 @@ async function runSelfTest() {
           decision.action.recoverySafety.hpThreshold,
           decision.action.recoverySafety.radius,
           decision.action.recoverySafety.nearestDistance,
+          decision.action.recoverySafety.radiusModel.lowHpAnchor,
+          decision.action.recoverySafety.radiusModel.lowHpRadius,
+          decision.action.recoverySafety.radiusModel.highHpAnchor,
+          decision.action.recoverySafety.radiusModel.highHpRadius,
+          decision.action.recoverySafety.radiusModel.slopeCmPerHp,
           decision.action.finalCandidate.hardGate
         ].join('|');
       })(),
-      want: 'safety-exit|safety|recovery-low-hp-active-threat-leave|true|8|18|50|30000|28703|true'
+      want: 'safety-exit|safety|recovery-low-hp-active-threat-leave|true|8|18|50|31000|28703|20|30000|50|15000|-500|true'
+    },
+    {
+      name: 'browserless recovery threat radius interpolates and extrapolates from 20hp 300m to 50hp 150m',
+      got: (() => {
+        const decide = (hp, distance) => buildLowHpRecoveryThreatExitDecision({
+          self: { userId: 7, hp, maxHp: 100 },
+          visibleTargets: [{
+            userId: 8,
+            name: 'closing-active',
+            authority: 'realtime',
+            active: true,
+            alive: true,
+            distance
+          }]
+        }, {
+          controlMode: 'profit-live'
+        });
+        const summarize = decision => decision
+          ? `${decision.recoverySafety.radius}:${decision.shouldLeave}`
+          : 'none';
+        const integratedState = (hp, distance) => {
+          const self = {
+            entity_id: 1,
+            user_id: 7,
+            name: 'self',
+            x: 0,
+            y: 0,
+            hp,
+            max_hp: 100,
+            stamina_5s_remaining_milli: 10000,
+            stamina_5s_limit_milli: 10000
+          };
+          return {
+            userId: 7,
+            realtime: {
+              tick: 59,
+              frameAgeMs: 0,
+              self,
+              entities: [self, {
+                entity_id: 2,
+                user_id: 8,
+                name: 'closing-active',
+                x: distance,
+                y: 0,
+                vx: -50,
+                vy: 0,
+                hp: 100,
+                current_join_mode: 'Active',
+                stamina_5s_remaining_milli: 6000,
+                stamina_5s_limit_milli: 10000
+              }],
+              bullets: [],
+              coinDrops: []
+            },
+            fallback: { coinDrops: [] }
+          };
+        };
+        const integratedOptions = {
+          nowMs: 1200,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          dynamicProfitThresholdEnabled: false
+        };
+        const integratedFull = buildBrowserlessDecision(integratedState(60, 10000), {}, integratedOptions);
+        const integratedRealtime = buildBrowserlessRealtimeControlDecision(integratedState(60, 10000), {}, integratedOptions);
+        const integratedOutside = buildBrowserlessDecision(integratedState(60, 10001), {}, integratedOptions);
+        return [
+          summarize(decide(20, 30000)),
+          summarize(decide(20, 30001)),
+          summarize(decide(50, 15000)),
+          summarize(decide(50, 15001)),
+          summarize(decide(60, 10000)),
+          summarize(decide(60, 10001)),
+          summarize(decide(18, 31000)),
+          summarize(decide(18, 31001)),
+          summarize(decide(80, 0)),
+          `${integratedFull.kind}:${integratedFull.reason}:${integratedFull.action.recoverySafety.radius}`,
+          `${integratedRealtime.kind}:${integratedRealtime.reason}:${integratedRealtime.action.recoverySafety.radius}`,
+          `${integratedOutside.kind}:${integratedOutside.reason}`
+        ].join('|');
+      })(),
+      want: '30000:true|none|15000:true|none|10000:true|none|31000:true|none|none|safety-exit:recovery-low-hp-active-threat-leave:10000|safety-exit:recovery-low-hp-active-threat-leave:10000|recover:wait-for-full-stamina-and-hp'
     },
     {
       name: 'browserless low-hp recovery radius keeps whitelist and undamaged easy-kill exemptions',
@@ -13623,13 +13711,14 @@ async function runSelfTest() {
             replay.baselineRecoveryHoldFrames,
             replay.earlierByMs,
             replay.distanceMarginCm,
-            replay.samples[0].replayedReason
+            replay.samples[0].replayedReason,
+            replay.samples[0].recoverySafety.radius
           ].join('|');
         } finally {
           fs.rmSync(dir, { recursive: true, force: true });
         }
       })(),
-      want: 'true|1|24035|14376|recovery-low-hp-active-threat-leave'
+      want: 'true|1|24035|14376|recovery-low-hp-active-threat-leave|31000'
     },
     {
       name: 'browserless action adapter repeats velocity through decision gap',
@@ -21008,9 +21097,9 @@ async function runSelfTest() {
         const panelText = renderBrowserlessWebPanel();
         return [
           panelText.includes("'combat-action-settlement-stalled': '战斗中移动指令失效，为避免原地承伤，主动退出'"),
-          panelText.includes("'recovery-low-hp-active-threat-leave': '低血恢复时活动玩家进入安全半径，主动退出'"),
+          panelText.includes("'recovery-low-hp-active-threat-leave': '恢复时活动玩家进入随血量变化的安全半径，主动退出'"),
           panelText.includes("'action-settlement-stalled': '非战斗移动指令未产生位置变化，正在重连'"),
-          panelText.includes('2026.07.15.8')
+          panelText.includes('2026.07.15.9')
         ].join('|');
       })(),
       want: 'true|true|true|true'

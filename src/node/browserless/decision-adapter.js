@@ -106,6 +106,8 @@ const DEFAULT_RECOVERY_PLAYER_DROP_MIN_AMOUNT = 2;
 const DEFAULT_POST_ATTACK_RECOVERY_DROP_MAX_DISTANCE = BROWSER_RUNTIME_DEFAULTS.postAttackRecoveryDropMaxDistance;
 const DEFAULT_LOW_HP_RECOVERY_THREAT_RADIUS = BROWSER_RUNTIME_DEFAULTS.loginPointSafetyRadius;
 const DEFAULT_LOW_HP_RECOVERY_THREAT_HP = BROWSER_RUNTIME_DEFAULTS.combatLowHpLeaveThreshold;
+const DEFAULT_LOW_HP_RECOVERY_THREAT_LOW_HP_ANCHOR = 20;
+const DEFAULT_LOW_HP_RECOVERY_THREAT_HIGH_HP_RADIUS = 15000;
 const DEFAULT_STAMINA_BUDGET_RELOGIN_DELAY_MS = BROWSER_RUNTIME_DEFAULTS.staminaBudgetReloginDelayMs;
 const DEFAULT_AFK_ATTACK_COMMIT_RANGE_CM = 5000;
 const DEFAULT_AFK_COMBAT_MOVEMENT_STAMINA_PER_SHOT_MS = 425;
@@ -3490,22 +3492,50 @@ function buildRecoveryDecision(input, opportunity, options = {}) {
   };
 }
 
-function buildLowHpRecoveryThreatExitDecision(input, options = {}) {
-  if (!browserlessSafetyExitModeEnabled(options) || !input?.self || !isRecoveringSelf(input.self)) return null;
-  const selfHp = hpValue(input.self);
-  const hpThreshold = Math.max(0, Number(
-    options.lowHpRecoveryThreatHp
+function lowHpRecoveryThreatRadiusForHp(selfHp, options = {}) {
+  const hp = numberOrNull(selfHp);
+  if (hp === null) return null;
+  const lowHpAnchor = Math.max(0, numberOrNull(
+    options.lowHpRecoveryThreatLowHpAnchor
+      ?? options.recoveryThreatExitLowHpAnchor
+  ) ?? DEFAULT_LOW_HP_RECOVERY_THREAT_LOW_HP_ANCHOR);
+  const requestedHighHpAnchor = numberOrNull(
+    options.lowHpRecoveryThreatHighHpAnchor
+      ?? options.recoveryThreatExitHighHpAnchor
+      ?? options.lowHpRecoveryThreatHp
       ?? options.recoveryThreatExitHpThreshold
       ?? options.combatLowHpLeaveThreshold
-      ?? DEFAULT_LOW_HP_RECOVERY_THREAT_HP
-  ));
-  if (selfHp === null || hpThreshold <= 0 || selfHp >= hpThreshold) return null;
-  const radius = Math.max(0, Number(
+  );
+  const highHpAnchor = requestedHighHpAnchor !== null && requestedHighHpAnchor > lowHpAnchor
+    ? requestedHighHpAnchor
+    : Math.max(lowHpAnchor + 1, DEFAULT_LOW_HP_RECOVERY_THREAT_HP);
+  const lowHpRadius = Math.max(0, numberOrNull(
     options.lowHpRecoveryThreatRadius
       ?? options.recoveryThreatExitRadius
       ?? options.loginPointSafetyRadius
-      ?? DEFAULT_LOW_HP_RECOVERY_THREAT_RADIUS
-  ));
+  ) ?? DEFAULT_LOW_HP_RECOVERY_THREAT_RADIUS);
+  const highHpRadius = Math.max(0, numberOrNull(
+    options.lowHpRecoveryThreatHighHpRadius
+      ?? options.recoveryThreatExitHighHpRadius
+  ) ?? DEFAULT_LOW_HP_RECOVERY_THREAT_HIGH_HP_RADIUS);
+  const slopeCmPerHp = (highHpRadius - lowHpRadius) / (highHpAnchor - lowHpAnchor);
+  const unclampedRadius = lowHpRadius + (hp - lowHpAnchor) * slopeCmPerHp;
+  return {
+    radius: Math.max(0, Math.round(unclampedRadius)),
+    unclampedRadius,
+    lowHpAnchor,
+    lowHpRadius,
+    highHpAnchor,
+    highHpRadius,
+    slopeCmPerHp
+  };
+}
+
+function buildLowHpRecoveryThreatExitDecision(input, options = {}) {
+  if (!browserlessSafetyExitModeEnabled(options) || !input?.self || !isRecoveringSelf(input.self)) return null;
+  const selfHp = hpValue(input.self);
+  const radiusModel = lowHpRecoveryThreatRadiusForHp(selfHp, options);
+  const radius = Number(radiusModel?.radius || 0);
   if (radius <= 0) return null;
   const threats = [];
   const seen = new Set();
@@ -3536,11 +3566,18 @@ function buildLowHpRecoveryThreatExitDecision(input, options = {}) {
     recoverySafety: {
       authority: 'realtime',
       selfHp,
-      hpThreshold,
+      hpThreshold: radiusModel.highHpAnchor,
       radius,
+      radiusModel: {
+        lowHpAnchor: radiusModel.lowHpAnchor,
+        lowHpRadius: radiusModel.lowHpRadius,
+        highHpAnchor: radiusModel.highHpAnchor,
+        highHpRadius: radiusModel.highHpRadius,
+        slopeCmPerHp: radiusModel.slopeCmPerHp
+      },
       threatCount: threats.length,
       nearestDistance: Math.round(nearest.distance),
-      trigger: 'active-threat-inside-low-hp-recovery-radius'
+      trigger: 'active-threat-inside-health-scaled-recovery-radius'
     }
   };
 }
@@ -5770,6 +5807,7 @@ module.exports = {
   createBrowserlessDecisionAdapter,
   decisionStatePatch,
   distanceBetween,
+  lowHpRecoveryThreatRadiusForHp,
   opportunityEnemyStaminaCost,
   normalizeCoinForDecision,
   normalizeEntityForDecision,

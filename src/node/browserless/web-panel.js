@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.15.8';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.15.9';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function panelSessionFlagsCore(status = {}) {
@@ -665,7 +665,7 @@ function renderBrowserlessWebPanel() {
       'injury-leave': '角色受伤后为避免继续掉血，主动退出',
       'pursuit-leave': '被危险玩家持续追击，主动退出',
       'profit-live-snapshot-active-threat': '附近玩家有活动威胁证据，退出',
-      'recovery-low-hp-active-threat-leave': '低血恢复时活动玩家进入安全半径，主动退出',
+      'recovery-low-hp-active-threat-leave': '恢复时活动玩家进入随血量变化的安全半径，主动退出',
       'stamina-budget-coin-leave': '体力不足，退出等待恢复',
       'stamina-exhausted-leave': '体力耗尽，退出等待恢复',
       'dynamic-profit-threshold-wait': '当日时间充裕，动态收益门槛生效，等待更高收益目标',
