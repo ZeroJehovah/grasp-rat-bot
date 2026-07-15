@@ -20,6 +20,7 @@ const {
 const { startStatusServer } = require('./status-server');
 const { runPreLoginSnapshotSafety, runReadOnlyCanary } = require('./canary');
 const {
+  DEFAULT_SNAPSHOT_GAP_MS,
   createHighDropPlayerTracker,
   createSnapshotGapPoller
 } = require('./high-drop-player-tracker');
@@ -683,7 +684,10 @@ async function runBrowserlessRunner(config, deps = {}) {
   };
   const observeSnapshotPayload = (payload, detail = {}) => {
     const observedAtMs = Number(detail.observedAtMs ?? now());
-    snapshotGapPoller?.noteSnapshot(observedAtMs);
+    const snapshotSource = String(detail.source || 'snapshot');
+    snapshotGapPoller?.noteSnapshot(observedAtMs, {
+      global: detail.global === true || snapshotSource !== 'ws'
+    });
     let chatResult = null;
     let easyKillNameResult = null;
     let damageNameResult = null;
@@ -833,12 +837,20 @@ async function runBrowserlessRunner(config, deps = {}) {
 
   const highDropStatusAtStart = highDropPlayerTracker.status(now());
   const lastHighDropSnapshotAtMs = Date.parse(highDropStatusAtStart.lastSnapshotAt || '');
+  const lastHighDropSnapshotWasGlobal = Boolean(
+    highDropStatusAtStart.lastSnapshotSource
+      && highDropStatusAtStart.lastSnapshotSource !== 'ws'
+  );
   snapshotGapPoller = deps.snapshotGapPoller || createSnapshotGapPoller({
     now,
     intervalMs: DEFAULT_CHAT_IDLE_INTERVAL_MS,
     minimumIntervalMs: DEFAULT_CHAT_ACTIVE_INTERVAL_MS,
     getIntervalMs: () => chatService.desiredSnapshotIntervalMs?.(now()) || DEFAULT_CHAT_IDLE_INTERVAL_MS,
     lastSnapshotAtMs: Number.isFinite(lastHighDropSnapshotAtMs) ? lastHighDropSnapshotAtMs : 0,
+    globalIntervalMs: DEFAULT_SNAPSHOT_GAP_MS,
+    lastGlobalSnapshotAtMs: lastHighDropSnapshotWasGlobal && Number.isFinite(lastHighDropSnapshotAtMs)
+      ? lastHighDropSnapshotAtMs
+      : 0,
     isReady: () => Boolean(config.userId && config.sessionToken),
     fetchSnapshot: async () => {
       const url = buildSnapshotProbeUrl({

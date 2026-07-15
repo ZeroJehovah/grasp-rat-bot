@@ -271,11 +271,15 @@ function createSnapshotGapPoller(options = {}) {
   const clearTimer = typeof options.clearTimeout === 'function' ? options.clearTimeout : clearTimeout;
   const minimumIntervalMs = Math.max(1000, Number(options.minimumIntervalMs || 1000));
   const intervalMs = Math.max(minimumIntervalMs, Number(options.intervalMs || DEFAULT_SNAPSHOT_GAP_MS));
+  const globalIntervalMs = Number(options.globalIntervalMs) > 0
+    ? Math.max(minimumIntervalMs, Number(options.globalIntervalMs))
+    : 0;
   const notReadyRetryMs = Math.min(intervalMs, Math.max(1000, Number(options.notReadyRetryMs || 30000)));
   let timer = null;
   let stopped = true;
   let inFlight = false;
   let lastSnapshotAtMs = Math.max(0, Number(options.lastSnapshotAtMs || 0));
+  let lastGlobalSnapshotAtMs = Math.max(0, Number(options.lastGlobalSnapshotAtMs || 0));
   let lastAttemptAtMs = 0;
 
   function currentIntervalMs() {
@@ -293,17 +297,28 @@ function createSnapshotGapPoller(options = {}) {
   function schedule(delayMs = null) {
     if (stopped) return;
     if (timer) clearTimer(timer);
-    const base = Math.max(lastSnapshotAtMs, lastAttemptAtMs);
+    const t = now();
+    const snapshotBase = Math.max(lastSnapshotAtMs, lastAttemptAtMs);
+    const snapshotDelay = snapshotBase
+      ? Math.max(0, currentIntervalMs() - Math.max(0, t - snapshotBase))
+      : 0;
+    const globalBase = Math.max(lastGlobalSnapshotAtMs, lastAttemptAtMs);
+    const globalDelay = globalIntervalMs > 0
+      ? (globalBase ? Math.max(0, globalIntervalMs - Math.max(0, t - globalBase)) : 0)
+      : Infinity;
     const delay = delayMs === null
-      ? Math.max(1000, currentIntervalMs() - Math.max(0, now() - base))
+      ? Math.min(snapshotDelay, globalDelay)
       : Math.max(0, Number(delayMs));
     timer = setTimer(run, delay);
     timer?.unref?.();
   }
 
-  function noteSnapshot(observedAtMs = now()) {
+  function noteSnapshot(observedAtMs = now(), detail = {}) {
     const value = Number(observedAtMs);
-    if (Number.isFinite(value)) lastSnapshotAtMs = Math.max(lastSnapshotAtMs, value);
+    if (Number.isFinite(value)) {
+      lastSnapshotAtMs = Math.max(lastSnapshotAtMs, value);
+      if (detail.global === true) lastGlobalSnapshotAtMs = Math.max(lastGlobalSnapshotAtMs, value);
+    }
     schedule();
   }
 
@@ -318,8 +333,12 @@ function createSnapshotGapPoller(options = {}) {
       schedule(notReadyRetryMs);
       return;
     }
-    const base = Math.max(lastSnapshotAtMs, lastAttemptAtMs);
-    if (base && now() - base < currentIntervalMs()) {
+    const t = now();
+    const snapshotBase = Math.max(lastSnapshotAtMs, lastAttemptAtMs);
+    const globalBase = Math.max(lastGlobalSnapshotAtMs, lastAttemptAtMs);
+    const snapshotDue = !snapshotBase || t - snapshotBase >= currentIntervalMs();
+    const globalDue = globalIntervalMs > 0 && (!globalBase || t - globalBase >= globalIntervalMs);
+    if (!snapshotDue && !globalDue) {
       schedule();
       return;
     }
@@ -328,7 +347,7 @@ function createSnapshotGapPoller(options = {}) {
     try {
       const payload = await options.fetchSnapshot();
       if (payload && typeof options.onSnapshot === 'function') {
-        await options.onSnapshot(payload, { source: 'gap-http', observedAtMs: now() });
+        await options.onSnapshot(payload, { source: 'gap-http', observedAtMs: now(), global: true });
       }
     } catch (err) {
       if (typeof options.onError === 'function') options.onError(err);
@@ -358,9 +377,11 @@ function createSnapshotGapPoller(options = {}) {
     status() {
       return {
         intervalMs,
+        globalIntervalMs,
         minimumIntervalMs,
         currentIntervalMs: currentIntervalMs(),
         lastSnapshotAtMs,
+        lastGlobalSnapshotAtMs,
         lastAttemptAtMs,
         inFlight,
         stopped

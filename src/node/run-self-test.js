@@ -18095,7 +18095,7 @@ async function runSelfTest() {
             fetchCount += 1;
             return { entities: [] };
           },
-          onSnapshot: async (_payload, detail) => poller.noteSnapshot(detail.observedAtMs)
+          onSnapshot: async (_payload, detail) => poller.noteSnapshot(detail.observedAtMs, detail)
         });
         poller.start();
         const startupDelay = scheduled.delay;
@@ -18108,6 +18108,59 @@ async function runSelfTest() {
         return [startupDelay, observedDelay, fetchCount, afterPollDelay].join('|');
       })(),
       want: '1000|180000|1|180000'
+    },
+    {
+      name: 'browserless snapshot gap poller keeps global HTTP refresh due after local WS snapshots',
+      got: (async () => {
+        let t = 10000;
+        let scheduled = null;
+        let fetchCount = 0;
+        let poller = null;
+        const setTimer = (fn, delay) => {
+          scheduled = { fn, delay };
+          return { unref() {} };
+        };
+        poller = createSnapshotGapPoller({
+          now: () => t,
+          intervalMs: 180000,
+          minimumIntervalMs: 30000,
+          getIntervalMs: () => 30000,
+          globalIntervalMs: 180000,
+          lastSnapshotAtMs: t,
+          lastGlobalSnapshotAtMs: t,
+          setTimeout: setTimer,
+          clearTimeout: () => {},
+          isReady: () => true,
+          fetchSnapshot: async () => {
+            fetchCount += 1;
+            return { entities: [] };
+          },
+          onSnapshot: async (_payload, detail) => poller.noteSnapshot(detail.observedAtMs, detail)
+        });
+        poller.start();
+        const startupDelay = scheduled.delay;
+        for (let index = 0; index < 5; index += 1) {
+          t += 30000;
+          poller.noteSnapshot(t, { global: false });
+        }
+        const localWsDelay = scheduled.delay;
+        const beforeFetch = poller.status();
+        const fetchCountBeforeGlobalDue = fetchCount;
+        t += localWsDelay;
+        await scheduled.fn();
+        const afterFetch = poller.status();
+        return [
+          startupDelay,
+          localWsDelay,
+          beforeFetch.lastSnapshotAtMs,
+          beforeFetch.lastGlobalSnapshotAtMs,
+          fetchCountBeforeGlobalDue,
+          fetchCount,
+          afterFetch.lastGlobalSnapshotAtMs,
+          scheduled.delay
+        ].join('|');
+      })(),
+      want: '30000|30000|160000|10000|0|1|190000|30000'
     },
     {
       name: 'browserless state file public status redacts session token',
