@@ -8920,6 +8920,133 @@ async function runSelfTest() {
       want: '8|1|1|1|true|true'
     },
     {
+      name: 'browserless realtime AFK edge belt admits July 15 Eason with return cost',
+      got: (() => {
+        const nowMs = Date.UTC(2026, 6, 15, 3, 9, 0);
+        const decision = buildBrowserlessDecision({
+          userId: 7,
+          realtime: {
+            tick: 800490,
+            frameAgeMs: 100,
+            self: fullStamina5s({
+              entity_id: 1,
+              user_id: 7,
+              name: 'self',
+              x: 24287,
+              y: 63556,
+              hp: 100,
+              max_hp: 100,
+              drop: 2759,
+              stamina_1h_remaining_milli: 2752313,
+              stamina_1h_limit_milli: 3000000,
+              stamina_1d_remaining_milli: 12143125,
+              stamina_1d_limit_milli: 20000000
+            }),
+            entities: [
+              fullStamina5s({
+                entity_id: 1,
+                user_id: 7,
+                name: 'self',
+                x: 24287,
+                y: 63556,
+                hp: 100,
+                max_hp: 100,
+                drop: 2759,
+                stamina_1h_remaining_milli: 2752313,
+                stamina_1h_limit_milli: 3000000,
+                stamina_1d_remaining_milli: 12143125,
+                stamina_1d_limit_milli: 20000000
+              }),
+              fullStamina5s({
+                entity_id: 1478,
+                user_id: 19677,
+                name: 'Eason',
+                x: 31442,
+                y: 97820,
+                vx: 0,
+                vy: 0,
+                hp: 56,
+                max_hp: 100,
+                current_join_mode: 'Active',
+                drop: 200
+              })
+            ],
+            bullets: [],
+            coinDrops: [{ drop_id: 4546, amount: 1, x: 18820, y: 68523 }]
+          },
+          fallback: { tick: 800490, frameAgeMs: 100, entities: [], coinDrops: [], messages: [] }
+        }, {}, {
+          nowMs,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          combatAttackRange: 14500,
+          browserlessCenterActivityRadiusCm: 100000,
+          singleCoinBaitEnabled: false
+        });
+        const edge = decision.action.target?.centerActivityEdge || {};
+        const nearbyEason = decision.input.nearby.p.find(row => row[0] === 'Eason') || [];
+        return [
+          decision.action.kind,
+          decision.action.reason,
+          decision.action.target?.userId,
+          decision.action.target?.name,
+          decision.action.target?.active,
+          edge.centerRadiusCm,
+          edge.edgeRadiusCm,
+          edge.targetRadiusCm,
+          edge.outsideByCm,
+          Math.round(decision.action.staminaCost),
+          decision.input.centerActivity.edgeAdmittedAfkTargets,
+          decision.input.centerActivity.filteredAfkTargets,
+          decision.input.dataGaps.includes('center-afk-edge-target-admitted'),
+          nearbyEason[9]
+        ].join('|');
+      })(),
+      want: 'seek-enemy|best-opportunity|19677|Eason|false|100000|114500|102749|2749|55577|1|0|true|1'
+    },
+    {
+      name: 'browserless AFK edge belt keeps hard outer self and coin boundaries',
+      got: (() => {
+        const inputFor = (selfX, targetX) => buildBrowserlessStrategyInput({
+          userId: 7,
+          realtime: {
+            tick: 60,
+            frameAgeMs: 100,
+            self: fullStamina5s({ entity_id: 1, user_id: 7, name: 'self', x: selfX, y: 0, hp: 100, max_hp: 100 }),
+            entities: [
+              fullStamina5s({ entity_id: 1, user_id: 7, name: 'self', x: selfX, y: 0, hp: 100, max_hp: 100 }),
+              fullStamina5s({ entity_id: 2, user_id: 8, name: 'edge-afk', x: targetX, y: 0, hp: 80, current_join_mode: 'Passive', drop: 20 })
+            ],
+            bullets: [],
+            coinDrops: [{ drop_id: 9, amount: 50, x: 110000, y: 0 }]
+          },
+          fallback: { tick: 60, frameAgeMs: 100, entities: [], coinDrops: [], messages: [] }
+        }, {
+          nowMs: 1200,
+          controlMode: 'profit-live',
+          combatAttackRange: 14500,
+          browserlessCenterActivityRadiusCm: 100000
+        }, {});
+        const atOuter = inputFor(70000, 114500);
+        const beyondOuter = inputFor(70000, 114501);
+        const selfOutside = inputFor(105000, 110000);
+        return [
+          atOuter.afkTargets.map(target => target.user_id).join(','),
+          atOuter.centerActivity.edgeAdmittedAfkTargets,
+          atOuter.centerActivity.edgeAfkTargets[0]?.outsideByCm,
+          atOuter.profitCoins.length,
+          atOuter.centerActivity.filteredRealtimeCoins,
+          beyondOuter.afkTargets.length,
+          beyondOuter.centerActivity.filteredAfkTargets,
+          beyondOuter.centerActivity.filteredAfkTargetDetails[0]?.reason,
+          selfOutside.afkTargets.length,
+          selfOutside.centerActivity.filteredAfkTargets,
+          selfOutside.centerActivity.filteredAfkTargetDetails[0]?.reason
+        ].join('|');
+      })(),
+      want: '8|1|14500|0|1|0|1|outside-afk-edge-radius|0|1|self-outside-center'
+    },
+    {
       name: 'browserless decision returns to center before ordinary profit outside center radius',
       got: (() => {
         const decision = buildBrowserlessDecision({
@@ -19863,6 +19990,26 @@ async function runSelfTest() {
               kind: 'seek-coin',
               reason: 'best-opportunity-coin',
               input: {
+                centerActivity: {
+                  radiusCm: 100000,
+                  afkEdgeRadiusCm: 114500,
+                  selfRadiusCm: 68038,
+                  selfOutsideCm: 0,
+                  filteredAfkTargets: 0,
+                  edgeAdmittedAfkTargets: 1,
+                  filteredRealtimeCoins: 0,
+                  filteredSnapshotCoins: 0,
+                  edgeAfkTargets: [{
+                    userId: 19677,
+                    name: 'Eason',
+                    drop: 200,
+                    distanceCm: 35003,
+                    targetRadiusCm: 102749,
+                    outsideByCm: 2749,
+                    reason: 'center-afk-edge-admitted'
+                  }],
+                  filteredAfkTargetDetails: []
+                },
                 nearby: {
                   ar: 14500,
                   vr: 50000,
@@ -20019,10 +20166,13 @@ async function runSelfTest() {
           compactText.includes('coin-165'),
           !compactText.includes('low-afk'),
           compactText.includes('state-secret-token'),
-          !compactText.includes(largePayload) && compactText.length < publicText.length
+          !compactText.includes(largePayload) && compactText.length < publicText.length,
+          compactStatus.decision.centerActivity.edgeAdmittedAfkTargets,
+          compactStatus.decision.centerActivity.edgeAfkTargets[0].outsideByCm,
+          compactStatus.decision.centerActivity.edgeAfkTargets[0].reason
         ].join('|');
       }),
-      want: 'true|77|true|true|true|true|true|false|loop-wait|88|10|20|360000|seek-coin|8|7|enemy|5999|active-near-login-point|88|true|enemy|14500|coin-1|1|12|153|1|enemy|1|Passive|1|latest|danger-player|Active|true|214440|2|3|10.0.0.101|false|false|false|true|true|false|true'
+      want: 'true|77|true|true|true|true|true|false|loop-wait|88|10|20|360000|seek-coin|8|7|enemy|5999|active-near-login-point|88|true|enemy|14500|coin-1|1|12|153|1|enemy|1|Passive|1|latest|danger-player|Active|true|214440|2|3|10.0.0.101|false|false|false|true|true|false|true|1|2749|center-afk-edge-admitted'
     },
     {
       name: 'browserless state replaces completed run and probe snapshots instead of retaining stale safety fields',

@@ -1021,6 +1021,31 @@ function compactAction(action) {
   };
 }
 
+function compactCenterActivity(centerActivity) {
+  if (!centerActivity || typeof centerActivity !== 'object') return null;
+  const compactAfkTarget = item => ({
+    userId: compactNumber(item?.userId),
+    name: compactString(item?.name, 96),
+    drop: compactNumber(item?.drop),
+    distanceCm: compactNumber(item?.distanceCm),
+    targetRadiusCm: compactNumber(item?.targetRadiusCm),
+    outsideByCm: compactNumber(item?.outsideByCm),
+    reason: compactString(item?.reason, 80)
+  });
+  return {
+    radiusCm: compactNumber(centerActivity.radiusCm),
+    afkEdgeRadiusCm: compactNumber(centerActivity.afkEdgeRadiusCm),
+    selfRadiusCm: compactNumber(centerActivity.selfRadiusCm),
+    selfOutsideCm: compactNumber(centerActivity.selfOutsideCm),
+    filteredAfkTargets: compactNumber(centerActivity.filteredAfkTargets),
+    edgeAdmittedAfkTargets: compactNumber(centerActivity.edgeAdmittedAfkTargets),
+    filteredRealtimeCoins: compactNumber(centerActivity.filteredRealtimeCoins),
+    filteredSnapshotCoins: compactNumber(centerActivity.filteredSnapshotCoins),
+    edgeAfkTargets: (centerActivity.edgeAfkTargets || []).slice(0, 8).map(compactAfkTarget),
+    filteredAfkTargetDetails: (centerActivity.filteredAfkTargetDetails || []).slice(0, 8).map(compactAfkTarget)
+  };
+}
+
 function compactDecision(decision) {
   if (!decision || typeof decision !== 'object') return null;
   const dataGaps = Array.isArray(decision.input?.dataGaps) ? decision.input.dataGaps : [];
@@ -1056,6 +1081,7 @@ function compactDecision(decision) {
           filteredCount: compactNumber(decision.profit.threshold.filteredCount)
         }
       : null,
+    centerActivity: compactCenterActivity(decision.input?.centerActivity),
     dataGaps: dataGaps.slice(0, 5).map(item => compactString(item, 80)),
     dataGapCount: dataGaps.length
   };
