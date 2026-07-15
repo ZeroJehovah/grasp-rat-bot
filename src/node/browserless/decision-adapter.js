@@ -3643,20 +3643,40 @@ function actionOpportunityScoreForShot(action, options = {}) {
   return -Infinity;
 }
 
-function opportunisticShotBeatsAction(action, shot, options = {}) {
+function bestCompetingEnemyOpportunityScore(opportunity, shot) {
+  const shotId = shot?.user_id ?? shot?.userId ?? shot?.id ?? null;
+  return (opportunity?.opportunities || [])
+    .filter(candidate => String(candidate?.type || '') === 'enemy')
+    .filter(candidate => {
+      if (shotId === null || shotId === undefined || shotId === '') return true;
+      const candidateId = candidate?.id
+        ?? candidate?.sourceTarget?.user_id
+        ?? candidate?.sourceTarget?.userId
+        ?? null;
+      return candidateId === null || candidateId === undefined || String(candidateId) !== String(shotId);
+    })
+    .reduce((best, candidate) => {
+      const score = Number(candidate?.score);
+      return Number.isFinite(score) ? Math.max(best, score) : best;
+    }, -Infinity);
+}
+
+function opportunisticShotBeatsAction(action, shot, opportunity = null, options = {}) {
   const shotScore = Number(shot?.opportunisticScore ?? -Infinity);
   if (!Number.isFinite(shotScore)) return false;
   const actionScore = actionOpportunityScoreForShot(action, options);
+  const competingEnemyScore = bestCompetingEnemyOpportunityScore(opportunity, shot);
+  const comparisonScore = Math.max(actionScore, competingEnemyScore);
   const minRatio = Math.max(0, Number(options.opportunisticShotMinScoreRatio ?? BROWSER_RUNTIME_DEFAULTS.opportunisticShotMinScoreRatio ?? 1));
-  return !Number.isFinite(actionScore) || actionScore <= 0 || shotScore >= actionScore * minRatio;
+  return !Number.isFinite(comparisonScore) || comparisonScore <= 0 || shotScore >= comparisonScore * minRatio;
 }
 
-function attachOpportunisticShotDecision(action, input, stateful = {}, options = {}) {
+function attachOpportunisticShotDecision(action, input, stateful = {}, options = {}, opportunity = null) {
   if (!action || isRecoveringSelf(input?.self)) return action;
   if (action.opportunisticShot || action.combat) return action;
   if (action.kind !== 'coin' && action.kind !== 'seek-coin') return action;
   const shot = pickOpportunisticShotTarget(input, stateful, options);
-  if (!shot || !opportunisticShotBeatsAction(action, shot, options)) return action;
+  if (!shot || !opportunisticShotBeatsAction(action, shot, opportunity, options)) return action;
   return {
     ...action,
     opportunisticShot: summarizeOpportunisticShotTarget(shot, options)
@@ -5213,7 +5233,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     };
   }
   if (input.self && !realtimeStale) {
-    const selectedAction = attachOpportunisticShotDecision(action, profitSelectionInput, stateful, options);
+    const selectedAction = attachOpportunisticShotDecision(action, profitSelectionInput, stateful, options, opportunity);
     if (selectedAction !== action) {
       action = selectedAction;
       kind = action.kind || kind;

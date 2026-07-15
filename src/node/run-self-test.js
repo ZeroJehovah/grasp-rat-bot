@@ -13815,6 +13815,46 @@ async function runSelfTest() {
       want: 'coin|8|velocity|shoot|8|1|vel 1 0,shoot 1000 0 0 0'
     },
     {
+      name: 'browserless opportunistic shot cannot seed worse combat than another eligible enemy',
+      got: (() => {
+        const decision = buildBrowserlessDecision({
+          userId: 7,
+          realtime: {
+            tick: 70,
+            frameAgeMs: 100,
+            self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
+            entities: [
+              { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
+              fullStamina5s({ entity_id: 2, user_id: 29759, name: 'Bfwinxp', x: 621, y: 1947, hp: 100, current_join_mode: 'Passive', drop: 5 }),
+              fullStamina5s({ entity_id: 3, user_id: 12576, name: 'isedu', x: 8560, y: -5626, hp: 100, current_join_mode: 'Passive', drop: 10 })
+            ],
+            bullets: [],
+            coinDrops: [{ drop_id: 'coin-300', amount: 10, x: 25561, y: 41046 }]
+          },
+          fallback: { coinDrops: [] }
+        }, {}, {
+          nowMs: 1500,
+          controlMode: 'profit-live',
+          opportunityAfkCombatMovementStaminaPerShotMs: 0,
+          opportunityExpectedSwitchCostMs: 0
+        });
+        const candidates = decision.profit?.candidates || [];
+        const coin = candidates.find(candidate => candidate.type === 'coin' && String(candidate.id) === 'coin-300');
+        const drop5 = candidates.find(candidate => candidate.type === 'enemy' && String(candidate.id) === '29759');
+        const drop10 = candidates.find(candidate => candidate.type === 'enemy' && String(candidate.id) === '12576');
+        return [
+          decision.action.kind,
+          decision.action.target.amount,
+          Boolean(decision.action.opportunisticShot),
+          Math.round(Number(coin?.score || 0)),
+          Math.round(Number(drop5?.score || 0)),
+          Math.round(Number(drop10?.score || 0)),
+          Number(drop10?.score || 0) > Number(drop5?.score || 0)
+        ].join('|');
+      })(),
+      want: 'seek-coin|10|false|124084|157533|220238|true'
+    },
+    {
       name: 'browserless opportunistic shot wait shoots without movement profit',
       got: (() => {
         const decision = buildBrowserlessDecision({
