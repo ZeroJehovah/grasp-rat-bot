@@ -9672,23 +9672,35 @@ async function runSelfTest() {
     {
       name: 'browserless single coin bait holds a lone selected one coin within ten meters',
       got: (() => {
-        const makeState = (coinDrops, snapshotCoinDrops = []) => ({
-          userId: 7,
-          realtime: {
-            tick: 60,
-            frameAgeMs: 100,
-            self: { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
-            entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 }],
-            bullets: [],
-            coinDrops
-          },
-          fallback: { frameAgeMs: 100, coinDrops: snapshotCoinDrops }
-        });
+        const makeState = (coinDrops, snapshotCoinDrops = []) => {
+          const self = {
+            entity_id: 1,
+            user_id: 7,
+            name: 'self',
+            x: 0,
+            y: 0,
+            hp: 100,
+            max_hp: 100,
+            stamina_1d_remaining_milli: 20000000
+          };
+          return {
+            userId: 7,
+            realtime: {
+              tick: 60,
+              frameAgeMs: 100,
+              self,
+              entities: [self],
+              bullets: [],
+              coinDrops
+            },
+            fallback: { frameAgeMs: 100, coinDrops: snapshotCoinDrops }
+          };
+        };
         const options = {
           nowMs: 1200,
           controlMode: 'profit-live',
           combatEnabled: true,
-          dynamicProfitThresholdEnabled: false,
+          dynamicProfitThresholdEnabled: true,
           singleCoinBaitHoldRadiusCm: 1000,
           finalActionArbitrationHoldMs: 0
         };
@@ -9712,6 +9724,19 @@ async function runSelfTest() {
         ], [
           { drop_id: 'snapshot-one', amount: 1, x: 800, y: 0 }
         ]), {}, options);
+        const thresholdDisabled = buildBrowserlessDecision(makeState([
+          { drop_id: 'disabled-threshold', amount: 1, x: 900, y: 0 }
+        ]), {}, { ...options, dynamicProfitThresholdEnabled: false });
+        const inactiveWindow = buildBrowserlessDecision(makeState([
+          { drop_id: 'inactive-window', amount: 1, x: 900, y: 0 }
+        ]), {}, { ...options, nowMs: Date.parse('2026-07-12T15:30:00.000Z') });
+        const thresholdAdapter = createBrowserlessDecisionAdapter(options);
+        thresholdAdapter.decide(makeState([
+          { drop_id: 'clear-on-inactive', amount: 1, x: 900, y: 0 }
+        ]), { nowMs: 1200 });
+        const clearedAfterDisable = thresholdAdapter.decide(makeState([
+          { drop_id: 'clear-on-inactive', amount: 1, x: 900, y: 0 }
+        ]), { nowMs: 2200, dynamicProfitThresholdEnabled: false });
         return [
           held.kind,
           held.band,
@@ -9727,10 +9752,19 @@ async function runSelfTest() {
           snapshotOnly.input.nearby.c.find(item => item[0] === 'snapshot-one')?.[6],
           realtimePreferred.reason,
           realtimePreferred.action.target.id,
-          realtimePreferred.action.target.authority
+          realtimePreferred.action.target.authority,
+          thresholdDisabled.reason,
+          thresholdDisabled.profit.threshold.reason,
+          thresholdDisabled.profit.singleCoinBait === null,
+          inactiveWindow.reason,
+          inactiveWindow.profit.threshold.reason,
+          inactiveWindow.profit.singleCoinBait === null,
+          clearedAfterDisable.reason,
+          thresholdAdapter.getState().singleCoinBait === null,
+          clearedAfterDisable.input.nearby.c.find(item => item[0] === 'clear-on-inactive')?.[6] || 0
         ].join('|');
       })(),
-      want: 'wait|profit|single-coin-bait-hold|bait|hold|1|foot-coin-priority|foot-coin-priority|foot-coin-priority|single-coin-bait-hold|snapshot|1|foot-coin-priority|native-two|realtime'
+      want: 'wait|profit|single-coin-bait-hold|bait|hold|1|foot-coin-priority|foot-coin-priority|foot-coin-priority|single-coin-bait-hold|snapshot|1|foot-coin-priority|native-two|realtime|foot-coin-priority|feature-disabled|true|foot-coin-priority|insufficient-burn-window|true|foot-coin-priority|true|0'
     },
     {
       name: 'browserless single coin bait ignores filtered display-only route legs',
@@ -9792,7 +9826,7 @@ async function runSelfTest() {
           userId: 7,
           controlMode: 'profit-live',
           combatEnabled: true,
-          dynamicProfitThresholdEnabled: false,
+          dynamicProfitThresholdEnabled: true,
           singleCoinBaitHoldRadiusCm: 1000,
           finalActionArbitrationHoldMs: 0
         });
@@ -9801,8 +9835,8 @@ async function runSelfTest() {
           realtime: {
             tick,
             frameAgeMs: 100,
-            self: { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
-            entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 }],
+            self: { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100, stamina_1d_remaining_milli: 20000000 },
+            entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100, stamina_1d_remaining_milli: 20000000 }],
             bullets: [],
             coinDrops
           },
@@ -9840,7 +9874,7 @@ async function runSelfTest() {
           userId: 7,
           controlMode: 'profit-live',
           combatEnabled: true,
-          dynamicProfitThresholdEnabled: false,
+          dynamicProfitThresholdEnabled: true,
           singleCoinBaitHoldRadiusCm: 1000,
           finalActionArbitrationHoldMs: 0,
           opportunitySwitchHoldMs: 1,
@@ -9853,9 +9887,9 @@ async function runSelfTest() {
           realtime: {
             tick,
             frameAgeMs: 100,
-            self: { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+            self: { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100, stamina_1d_remaining_milli: 20000000 },
             entities: [
-              { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+              { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100, stamina_1d_remaining_milli: 20000000 },
               ...extraEntities
             ],
             bullets: [],
@@ -9884,7 +9918,7 @@ async function runSelfTest() {
           userId: 7,
           controlMode: 'profit-live',
           combatEnabled: true,
-          dynamicProfitThresholdEnabled: false,
+          dynamicProfitThresholdEnabled: true,
           singleCoinBaitHoldRadiusCm: 1000,
           finalActionArbitrationHoldMs: 0
         });
@@ -9914,7 +9948,7 @@ async function runSelfTest() {
           userId: 7,
           controlMode: 'profit-live',
           combatEnabled: true,
-          dynamicProfitThresholdEnabled: false,
+          dynamicProfitThresholdEnabled: true,
           singleCoinBaitHoldRadiusCm: 1000,
           finalActionArbitrationHoldMs: 0,
           nearCoinStuckMs: 500,
@@ -9925,9 +9959,9 @@ async function runSelfTest() {
           realtime: {
             tick,
             frameAgeMs: 100,
-            self: { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+            self: { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100, stamina_1d_remaining_milli: 20000000 },
             entities: [
-              { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+              { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100, stamina_1d_remaining_milli: 20000000 },
               fullStamina5s({ entity_id: 2, user_id: 8, name: 'next-afk', x: 28000, y: 0, hp: 100, max_hp: 100, current_join_mode: 'Passive', drop: 1703 })
             ],
             bullets: [],
@@ -9960,7 +9994,7 @@ async function runSelfTest() {
           userId: 7,
           controlMode: 'profit-live',
           combatEnabled: true,
-          dynamicProfitThresholdEnabled: false,
+          dynamicProfitThresholdEnabled: true,
           singleCoinBaitHoldRadiusCm: 1000,
           finalActionArbitrationHoldMs: 0
         };
@@ -9969,9 +10003,9 @@ async function runSelfTest() {
           realtime: {
             tick,
             frameAgeMs: 100,
-            self: { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+            self: { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100, stamina_1d_remaining_milli: 20000000 },
             entities: [
-              { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+              { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100, stamina_1d_remaining_milli: 20000000 },
               ...extraEntities
             ],
             bullets: [],
@@ -20233,6 +20267,7 @@ async function runSelfTest() {
           panelScript.includes("'combat-trade-disadvantage-leave': '战斗交换持续不利，预计继续交战风险过高，主动退出'"),
           panelScript.includes("'combat-pressure-disadvantage-leave': '遭到持续火力压制，我方血量处于劣势，主动退出'"),
           panelScript.includes("'dynamic-profit-threshold-wait': '当日时间充裕，动态收益门槛生效，等待更高收益目标'"),
+          panelScript.includes("'single-coin-bait-hold': '当日时间充裕，动态收益门槛生效，守着 1 金币等待捡币脚本'"),
           panelScript.includes("addRow(rowsOut, '退出触发血量', combatExitHpText(status))"),
           panelScript.includes("return '与 ' + name + ' 交战后受伤'"),
           panelScript.includes("addRow(rowsOut, '交战对手', targetLabel(battle.target), true)"),
@@ -20243,7 +20278,7 @@ async function runSelfTest() {
           panelText.indexOf('id="battlePanel"') < panelText.indexOf('class="stats-grid"')
         ].join('|');
       })(),
-      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
+      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless compact exit preserves trigger hp evidence',

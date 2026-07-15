@@ -5071,7 +5071,8 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     ? buildStaminaBlockedWaitDecision(profitSelectionInput, options)
     : null;
   const singleCoinBaitEntryAllowed = Boolean(
-    input.self
+    profitThresholdContext.active
+      && input.self
       && !realtimeStale
       && !hardSafetyAction
       && !longStaminaExhaustedLeaveAction
@@ -5095,7 +5096,10 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     input,
     opportunity,
     stateful,
-    options,
+    {
+      ...options,
+      singleCoinBaitEnabled: options.singleCoinBaitEnabled !== false && profitThresholdContext.active
+    },
     singleCoinBaitEntryAllowed
   );
   const singleCoinBaitAction = dailyFinalCoinAction ? null : singleCoinBait.action;
