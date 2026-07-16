@@ -89,6 +89,7 @@ const {
   estimateAim,
   recordCombatShotLearning
 } = require('./browserless/combat-adapter');
+const { updateOpponentBehaviorStateCore } = require('../strategy/opponent-behavior');
 const {
   actionSettlementStallAssessment,
   createBrowserlessSafetyController,
@@ -13125,6 +13126,72 @@ async function runSelfTest() {
         return [regular.preDodge?.phase, regular.preDodge?.nextShotInMs, irregular.preDodge === null].join('|');
       })(),
       want: 'induce-hold|400|true'
+    },
+    {
+      name: 'browserless pre-dodge uses burst cadence and keeps command stamina irregular and target-switch gates',
+      got: (() => {
+        const behaviorFor = (ticks, currentTick) => {
+          let behavior = null;
+          ticks.forEach((createdTick, index) => {
+            behavior = updateOpponentBehaviorStateCore(behavior, {
+              at: 1000 + index * 300,
+              selfX: 0,
+              selfY: 0,
+              x: 9000,
+              y: 0,
+              vx: 0,
+              vy: 0,
+              distance: 9000,
+              firing: true,
+              realBulletPressure: true,
+              newBulletCount: 1,
+              newShotEvents: [{ bulletId: `burst-plan-${createdTick}`, createdTick }],
+              currentTick: createdTick,
+              commandDelayP90Ticks: 5
+            });
+          });
+          return updateOpponentBehaviorStateCore(behavior, {
+            at: 1000 + ticks.length * 300,
+            selfX: 0,
+            selfY: 0,
+            x: 9000,
+            y: 0,
+            vx: 0,
+            vy: 0,
+            distance: 9000,
+            firing: false,
+            realBulletPressure: false,
+            newBulletCount: 0,
+            newShotEvents: [],
+            currentTick,
+            commandDelayP90Ticks: 5
+          });
+        };
+        const regular = behaviorFor([100, 106, 112, 118, 142, 148, 154], 159);
+        const irregular = behaviorFor([100, 104, 113, 130, 136], 141);
+        const self = { user_id: 7, x: 0, y: 0, vx: 50, vy: 0, hp: 100, stamina_5s_remaining_milli: 10000 };
+        const target = { user_id: 8, x: 9000, y: 0, hp: 80, distance: 9000 };
+        const plan = (behavior, nextSelf = self, p90Ticks = 5) => buildCombatMovementPlan(nextSelf, target, [], {
+          currentTick: 159,
+          combatTargetState: behavior ? { opponentBehaviorState: behavior } : {},
+          executionTiming: { p90Ticks }
+        });
+        const allowed = plan(regular);
+        const slowCommand = plan(regular, self, 6);
+        const lowStamina = plan(regular, { ...self, stamina_5s_remaining_milli: 3000 });
+        const irregularPlan = plan(irregular);
+        const switchedTarget = plan(null);
+        return [
+          allowed.preDodge?.phase,
+          allowed.preDodge?.burstSampleCount,
+          allowed.preDodge?.currentBurstShotCount,
+          slowCommand.preDodgeBlockedReason,
+          lowStamina.preDodgeBlockedReason,
+          irregularPlan.preDodge === null,
+          switchedTarget.preDodgeBlockedReason
+        ].join('|');
+      })(),
+      want: 'induce-hold|5|3|command-delay-too-high|stamina-insufficient|true|shooting-phase-not-preparing'
     },
     {
       name: 'browserless pre-dodge reports dynamic phase blockers instead of requiring an empty bullet field',

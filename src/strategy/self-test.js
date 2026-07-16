@@ -86,6 +86,7 @@ const {
   rememberOpportunityChoiceCore
 } = require('./opportunity-choice');
 const {
+  burstCadenceMetricsCore,
   opponentResponsePolicyCore,
   updateOpponentBehaviorStateCore
 } = require('./opponent-behavior');
@@ -537,6 +538,23 @@ function runStrategyModuleSelfTests() {
       && composite?.metrics?.movementTransitions?.next?.[0]?.state === 'east'
       && composite?.metrics?.movementTransitions?.transitionCount >= 40
   });
+  const splitBurstCadence = burstCadenceMetricsCore([6, 6, 6, 24, 6, 6, 6]);
+  const irregularCadence = burstCadenceMetricsCore([4, 9, 17, 6]);
+  const droppedFrameCadence = burstCadenceMetricsCore([6, 6, 12, 6]);
+  results.push({
+    name: 'opponent-burst-cadence-separates-gaps-rejects-irregular-and-tolerates-dropped-events',
+    passed: splitBurstCadence.burstIntervalMedianTicks === 6
+      && splitBurstCadence.burstIntervalMadTicks === 0
+      && splitBurstCadence.burstSampleCount === 6
+      && splitBurstCadence.interBurstGapMedianTicks === 24
+      && splitBurstCadence.currentBurstShotCount === 4
+      && splitBurstCadence.burstPredictable === true
+      && irregularCadence.burstPredictable === false
+      && irregularCadence.burstConfidence < 0.55
+      && droppedFrameCadence.burstIntervalMedianTicks === 6
+      && droppedFrameCadence.interBurstGaps.length === 0
+      && droppedFrameCadence.burstPredictable === true
+  });
   let createdTickCadence = null;
   for (let index = 0; index < 4; index += 1) {
     createdTickCadence = updateOpponentBehaviorStateCore(createdTickCadence, {
@@ -587,10 +605,78 @@ function runStrategyModuleSelfTests() {
       && createdTickCadence?.dimensions?.shootingPhase?.shootingPhaseSource === 'predicted-created-tick-window'
       && createdTickCadence?.dimensions?.shootingPhase?.lastCreatedTick === 124
       && createdTickCadence?.dimensions?.shootingPhase?.intervalMedianTicks === 8
+      && createdTickCadence?.dimensions?.shootingPhase?.burstIntervalMedianTicks === 8
+      && createdTickCadence?.dimensions?.shootingPhase?.burstSampleCount === 3
+      && createdTickCadence?.dimensions?.shootingPhase?.currentBurstShotCount === 4
+      && createdTickCadence?.dimensions?.shootingPhase?.burstPredictable === true
       && createdTickCadence?.dimensions?.shootingPhase?.oldBulletPressure === true
       && combinedPolicy.name === 'zigzag-retreat-pressure'
       && combinedPolicy.suppressFire === true
       && combinedPolicy.closeIn === true
+  });
+  let burstWarmup = null;
+  const burstEvent = (index, createdTick) => {
+    burstWarmup = updateOpponentBehaviorStateCore(burstWarmup, {
+      at: 1000 + index * 300,
+      selfX: 0,
+      selfY: 0,
+      x: 9000,
+      y: 0,
+      vx: 0,
+      vy: 0,
+      distance: 9000,
+      firing: true,
+      realBulletPressure: true,
+      newBulletCount: 1,
+      newShotEvents: [{ bulletId: `burst-warmup-${index}`, createdTick }],
+      currentTick: createdTick,
+      commandDelayP90Ticks: 5
+    });
+  };
+  [100, 106, 112, 118, 142].forEach((tick, index) => burstEvent(index, tick));
+  const afterFirstBurstShot = updateOpponentBehaviorStateCore(burstWarmup, {
+    at: 2250,
+    selfX: 0,
+    selfY: 0,
+    x: 9000,
+    y: 0,
+    vx: 0,
+    vy: 0,
+    distance: 9000,
+    firing: false,
+    realBulletPressure: false,
+    newBulletCount: 0,
+    newShotEvents: [],
+    currentTick: 143,
+    commandDelayP90Ticks: 5
+  });
+  burstWarmup = afterFirstBurstShot;
+  burstEvent(6, 148);
+  burstEvent(7, 154);
+  const afterThirdBurstShot = updateOpponentBehaviorStateCore(burstWarmup, {
+    at: 3450,
+    selfX: 0,
+    selfY: 0,
+    x: 9000,
+    y: 0,
+    vx: 0,
+    vy: 0,
+    distance: 9000,
+    firing: false,
+    realBulletPressure: false,
+    newBulletCount: 0,
+    newShotEvents: [],
+    currentTick: 159,
+    commandDelayP90Ticks: 5
+  });
+  results.push({
+    name: 'opponent-burst-prediction-waits-for-two-current-burst-intervals',
+    passed: afterFirstBurstShot?.dimensions?.shootingPhase?.state !== 'preparing'
+      && afterFirstBurstShot?.dimensions?.shootingPhase?.predictedCreatedTick === null
+      && afterFirstBurstShot?.dimensions?.shootingPhase?.currentBurstShotCount === 1
+      && afterThirdBurstShot?.dimensions?.shootingPhase?.state === 'preparing'
+      && afterThirdBurstShot?.dimensions?.shootingPhase?.predictedCreatedTick === 160
+      && afterThirdBurstShot?.dimensions?.shootingPhase?.currentBurstShotCount === 3
   });
   const exhausted = updateOpponentBehaviorStateCore(composite, {
     at: 11200,

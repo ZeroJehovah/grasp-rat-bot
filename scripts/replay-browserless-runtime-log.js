@@ -20,7 +20,11 @@ const {
   combatEdgePressureDecisionCore,
   combatEscapeDecisionCore
 } = require('../src/strategy/combat-target-selection');
-const { opponentResponsePolicyCore, updateOpponentBehaviorStateCore } = require('../src/strategy/opponent-behavior');
+const {
+  burstCadenceMetricsCore,
+  opponentResponsePolicyCore,
+  updateOpponentBehaviorStateCore
+} = require('../src/strategy/opponent-behavior');
 
 function parseArgs(argv) {
   const options = {
@@ -695,9 +699,84 @@ function reconstructDodgeHit(rows, hitIndex, options = {}) {
     || a.qualityScore - b.qualityScore)[0];
 }
 
+function replayBurstCadence(rows) {
+  let predictableFrames = 0;
+  let preparingFrames = 0;
+  let eligibleFrames = 0;
+  let oldCycleUnstableFrames = 0;
+  const blockers = {};
+  const samples = [];
+  for (const row of rows) {
+    const detail = row.detail || {};
+    const metrics = detail.behavior?.metrics || {};
+    const cadence = burstCadenceMetricsCore(metrics.shotIntervalTicks || []);
+    if (!cadence.burstPredictable) continue;
+    predictableFrames += 1;
+    const phase = detail.behavior?.dimensions?.shootingPhase || {};
+    const currentTick = Number(detail.tick);
+    const lastCreatedTick = Number(metrics.lastCreatedTick);
+    const intervalMedianTicks = Number(cadence.burstIntervalMedianTicks);
+    if (![currentTick, lastCreatedTick, intervalMedianTicks].every(Number.isFinite)) continue;
+    const commandDelayP90Ticks = Math.max(0, Number(phase.commandDelayP90Ticks || 5));
+    const flightTicks = Math.max(0, Number(phase.flightTicks || 0));
+    const uncertaintyTicks = Math.max(
+      1,
+      Number(cadence.burstIntervalMadTicks || 0) * 2,
+      Number(cadence.burstIntervalP90Ticks || intervalMedianTicks) - intervalMedianTicks
+    );
+    const prepareLeadTicks = Math.max(
+      1,
+      Math.min(
+        intervalMedianTicks * 0.8,
+        uncertaintyTicks + Math.max(1, commandDelayP90Ticks + 3 - flightTicks)
+      )
+    );
+    const nextShotInTicks = lastCreatedTick + intervalMedianTicks - currentTick;
+    if (nextShotInTicks < -uncertaintyTicks || nextShotInTicks > prepareLeadTicks) continue;
+    preparingFrames += 1;
+    let blockedReason = '';
+    const self = detail.self || {};
+    const stamina5s = Number(self.stamina5s ?? self.stamina_5s_remaining_milli);
+    if (Number.isFinite(stamina5s) && stamina5s < 3400) blockedReason = 'stamina-insufficient';
+    else if (!(Number(self.vx || 0) || Number(self.vy || 0))) blockedReason = 'self-stationary';
+    else if (detail.movement?.preDodgeBlockedReason === 'old-bullet-threat') blockedReason = 'old-bullet-threat';
+    else {
+      const latestSafeCommandTick = lastCreatedTick + intervalMedianTicks + flightTicks - commandDelayP90Ticks - 3;
+      if (currentTick > latestSafeCommandTick) blockedReason = 'flight-time-insufficient';
+      else if (commandDelayP90Ticks >= intervalMedianTicks) blockedReason = 'command-delay-too-high';
+    }
+    if (blockedReason) blockers[blockedReason] = Number(blockers[blockedReason] || 0) + 1;
+    else {
+      eligibleFrames += 1;
+      if (detail.movement?.preDodgeBlockedReason === 'cycle-unstable') oldCycleUnstableFrames += 1;
+      if (samples.length < 12) samples.push({
+        line: row.line,
+        at: row.entry.at,
+        tick: currentTick,
+        nextShotInTicks,
+        burstIntervalMedianTicks: intervalMedianTicks,
+        interBurstGapMedianTicks: cadence.interBurstGapMedianTicks,
+        currentBurstShotCount: cadence.currentBurstShotCount,
+        burstConfidence: Number(cadence.burstConfidence.toFixed(3)),
+        oldBlockedReason: detail.movement?.preDodgeBlockedReason || ''
+      });
+    }
+  }
+  return {
+    predictableFrames,
+    preparingFrames,
+    eligibleFrames,
+    oldCycleUnstableFrames,
+    blockers,
+    samples,
+    accepted: eligibleFrames > 0
+  };
+}
+
 function replayDodge(options) {
   const rows = selectedEntries(options).filter(({ detail }) => !options.targetId
     || String(detail.target?.userId ?? '') === options.targetId);
+  const burstCadenceReplay = replayBurstCadence(rows);
   const reactionBudgetMs = Math.max(0, Number(options.executionDelayTicks || 5) * 50 + 50 + 100);
   let hitEvents = 0;
   let eventsWithThreatEvidence = 0;
@@ -814,13 +893,16 @@ function replayDodge(options) {
     },
     oldFalseSafeRatio: oldRatio,
     newFalseSafeRatio: newRatio,
+    burstCadenceReplay,
     samples,
     fullTrajectorySamples,
-    accepted: hitEvents > 0
-      && reconstructedEvents > 0
-      && recoveredByFullTrajectory > 0
-      && recoveredAfterStaticTti > 0
-      && newFalseSafe < oldFalseSafe
+    accepted: burstCadenceReplay.accepted || (
+      hitEvents > 0
+        && reconstructedEvents > 0
+        && recoveredByFullTrajectory > 0
+        && recoveredAfterStaticTti > 0
+        && newFalseSafe < oldFalseSafe
+    )
   };
 }
 

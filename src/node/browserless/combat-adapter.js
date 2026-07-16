@@ -912,12 +912,24 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
   const lastObservedShot = behaviorSamples.slice().reverse().find(sample => Number(sample.newBulletCount || 0) > 0) || null;
   const legacyShotIntervalMeanMs = numberOrNull(opponentBehavior?.metrics?.shotIntervalMeanMs);
   const shotIntervalCv = numberOrNull(opponentBehavior?.metrics?.shotIntervalCv);
-  const lowVariationCadence = Boolean(
-    ((opponentBehavior?.metrics?.shotIntervalTicks || []).length >= 3
-      || (opponentBehavior?.metrics?.shotIntervals || []).length >= 3)
-      && shotIntervalCv !== null
-      && shotIntervalCv <= Math.max(0.05, Number(options.combatPreDodgeMaxShotIntervalCv ?? 0.35))
-  );
+  const burstSampleCount = numberOrNull(opponentBehavior?.metrics?.burstSampleCount);
+  const currentBurstIntervalCount = numberOrNull(opponentBehavior?.metrics?.currentBurstIntervalCount);
+  const burstConfidence = numberOrNull(opponentBehavior?.metrics?.burstConfidence);
+  const hasBurstCadence = burstSampleCount !== null;
+  const lowVariationCadence = hasBurstCadence
+    ? Boolean(
+        burstSampleCount >= 3
+          && Number(currentBurstIntervalCount || 0) >= 2
+          && Number(burstConfidence || 0) >= 0.55
+          && shotIntervalCv !== null
+          && shotIntervalCv <= Math.max(0.05, Number(options.combatPreDodgeMaxShotIntervalCv ?? 0.35))
+      )
+    : Boolean(
+        ((opponentBehavior?.metrics?.shotIntervalTicks || []).length >= 3
+          || (opponentBehavior?.metrics?.shotIntervals || []).length >= 3)
+          && shotIntervalCv !== null
+          && shotIntervalCv <= Math.max(0.05, Number(options.combatPreDodgeMaxShotIntervalCv ?? 0.35))
+      );
   const nextShotInMs = numberOrNull(shootingPhase?.nextShotInMs)
     ?? (lastObservedShot && legacyShotIntervalMeanMs !== null
       ? Number(lastObservedShot.at || 0) + legacyShotIntervalMeanMs - Number(options.nowMs || Date.now())
@@ -1048,7 +1060,10 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
       shotIntervalCv,
       reserveMs: COMBAT_CONSTANTS.SHOOT_DODGE_RESERVE_MS,
       predictedCreatedTick,
-      latestSafeCommandTick
+      latestSafeCommandTick,
+      burstSampleCount,
+      currentBurstShotCount: numberOrNull(opponentBehavior?.metrics?.currentBurstShotCount),
+      burstConfidence
     } : null,
     preDodgeBlockedReason: preDodge ? '' : preDodgeBlockedReason,
     shootingPhaseSource: shootingPhase?.shootingPhaseSource || '',

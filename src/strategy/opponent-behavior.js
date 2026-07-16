@@ -26,6 +26,92 @@ function percentile(values = [], ratio = 0.5) {
   return sorted[index];
 }
 
+function burstCadenceMetricsCore(intervals = []) {
+  const positive = (intervals || []).map(Number).filter(value => Number.isFinite(value) && value > 0);
+  const baseMedian = percentile(positive, 0.5);
+  const baseMad = baseMedian === null
+    ? null
+    : percentile(positive.map(value => Math.abs(value - baseMedian)), 0.5);
+  if (baseMedian === null) {
+    return {
+      burstIntervals: [],
+      interBurstGaps: [],
+      burstIntervalMedianTicks: null,
+      burstIntervalMadTicks: null,
+      burstIntervalP90Ticks: null,
+      burstIntervalCv: null,
+      burstSampleCount: 0,
+      interBurstGapMedianTicks: null,
+      currentBurstIntervalCount: 0,
+      currentBurstShotCount: 0,
+      burstConfidence: 0,
+      burstPredictable: false,
+      splitThresholdTicks: null
+    };
+  }
+  const splitThresholdTicks = Math.max(
+    baseMedian * 1.8,
+    baseMedian + Math.max(0, Number(baseMad || 0)) * 3,
+    baseMedian + 3
+  );
+  const normalized = positive.map(interval => {
+    if (interval <= splitThresholdTicks) return { kind: 'burst', value: interval, multiple: 1 };
+    const multiple = Math.round(interval / baseMedian);
+    const normalizedValue = multiple > 0 ? interval / multiple : interval;
+    const multipleTolerance = Math.max(1, Number(baseMad || 0) * 2);
+    if (Number(baseMad || 0) <= baseMedian * 0.2
+      && multiple >= 2
+      && multiple <= 3
+      && Math.abs(normalizedValue - baseMedian) <= multipleTolerance) {
+      return { kind: 'burst', value: normalizedValue, multiple };
+    }
+    return { kind: 'gap', value: interval, multiple: 1 };
+  });
+  const burstIntervals = normalized.filter(item => item.kind === 'burst').map(item => item.value);
+  const interBurstGaps = normalized.filter(item => item.kind === 'gap').map(item => item.value);
+  const burstIntervalMedianTicks = percentile(burstIntervals, 0.5);
+  const burstIntervalMadTicks = burstIntervalMedianTicks === null
+    ? null
+    : percentile(burstIntervals.map(value => Math.abs(value - burstIntervalMedianTicks)), 0.5);
+  const burstIntervalP90Ticks = percentile(burstIntervals, 0.9);
+  const mean = burstIntervals.length
+    ? burstIntervals.reduce((sum, value) => sum + value, 0) / burstIntervals.length
+    : null;
+  const variance = mean === null
+    ? null
+    : burstIntervals.reduce((sum, value) => sum + (value - mean) ** 2, 0) / burstIntervals.length;
+  const burstIntervalCv = mean && variance !== null ? Math.sqrt(variance) / mean : null;
+  let currentBurstIntervalCount = 0;
+  for (let index = normalized.length - 1; index >= 0; index -= 1) {
+    if (normalized[index].kind === 'gap') break;
+    currentBurstIntervalCount += 1;
+  }
+  const burstSampleCount = burstIntervals.length;
+  const sampleConfidence = clamp(burstSampleCount / 4, 0, 1);
+  const currentConfidence = clamp(currentBurstIntervalCount / 2, 0, 1);
+  const variationConfidence = burstIntervalCv === null ? 0 : clamp(1 - burstIntervalCv * 1.5, 0, 1);
+  const burstConfidence = sampleConfidence * currentConfidence * variationConfidence;
+  return {
+    burstIntervals,
+    interBurstGaps,
+    burstIntervalMedianTicks,
+    burstIntervalMadTicks,
+    burstIntervalP90Ticks,
+    burstIntervalCv,
+    burstSampleCount,
+    interBurstGapMedianTicks: percentile(interBurstGaps, 0.5),
+    currentBurstIntervalCount,
+    currentBurstShotCount: positive.length ? currentBurstIntervalCount + 1 : 0,
+    burstConfidence,
+    burstPredictable: Boolean(
+      burstSampleCount >= 3
+        && currentBurstIntervalCount >= 2
+        && burstConfidence >= 0.55
+    ),
+    splitThresholdTicks
+  };
+}
+
 function behaviorDistanceBand(distance) {
   const value = Number(distance);
   if (!Number.isFinite(value)) return 'unknown';
@@ -288,11 +374,10 @@ function opponentBehaviorMetricsCore(samples = [], options = {}) {
     const interval = orderedShotEvents[index].createdTick - orderedShotEvents[index - 1].createdTick;
     if (interval > 0) shotIntervalTicks.push(interval);
   }
-  const intervalMedianTicks = percentile(shotIntervalTicks, 0.5);
-  const intervalMadTicks = intervalMedianTicks === null
-    ? null
-    : percentile(shotIntervalTicks.map(value => Math.abs(value - intervalMedianTicks)), 0.5);
-  const intervalP90Ticks = percentile(shotIntervalTicks, 0.9);
+  const burstCadence = burstCadenceMetricsCore(shotIntervalTicks);
+  const intervalMedianTicks = burstCadence.burstIntervalMedianTicks;
+  const intervalMadTicks = burstCadence.burstIntervalMadTicks;
+  const intervalP90Ticks = burstCadence.burstIntervalP90Ticks;
   const intervalTickMean = shotIntervalTicks.length
     ? shotIntervalTicks.reduce((sum, value) => sum + value, 0) / shotIntervalTicks.length
     : null;
@@ -331,10 +416,24 @@ function opponentBehaviorMetricsCore(samples = [], options = {}) {
     shotEvents: orderedShotEvents,
     shotIntervalTicks,
     shotIntervalMeanMs: intervalMedianTicks === null ? intervalMean : intervalMedianTicks * serverTickMs,
-    shotIntervalCv: shotIntervalTickCv === null ? shotIntervalCv : shotIntervalTickCv,
+    shotIntervalCv: burstCadence.burstIntervalCv === null ? shotIntervalCv : burstCadence.burstIntervalCv,
+    overallShotIntervalCv: shotIntervalTickCv,
+    overallIntervalMedianTicks: percentile(shotIntervalTicks, 0.5),
     intervalMedianTicks,
     intervalMadTicks,
     intervalP90Ticks,
+    burstIntervalMedianTicks: burstCadence.burstIntervalMedianTicks,
+    burstIntervalMadTicks: burstCadence.burstIntervalMadTicks,
+    burstIntervalP90Ticks: burstCadence.burstIntervalP90Ticks,
+    burstSampleCount: burstCadence.burstSampleCount,
+    interBurstGapMedianTicks: burstCadence.interBurstGapMedianTicks,
+    currentBurstIntervalCount: burstCadence.currentBurstIntervalCount,
+    currentBurstShotCount: orderedShotEvents.length
+      ? Math.max(1, burstCadence.currentBurstShotCount)
+      : 0,
+    burstConfidence: burstCadence.burstConfidence,
+    burstPredictable: burstCadence.burstPredictable,
+    burstSplitThresholdTicks: burstCadence.splitThresholdTicks,
     lastCreatedTick: orderedShotEvents.at(-1)?.createdTick ?? null,
     directionDwells,
     directionDwellCv: coefficientOfVariation(directionDwells),
@@ -385,7 +484,10 @@ function behaviorDimensionsCore(previous, classified, metrics, sample, nowMs, op
   const intervalMedianTicks = numberOrNull(metrics.intervalMedianTicks);
   const intervalMadTicks = numberOrNull(metrics.intervalMadTicks);
   const intervalP90Ticks = numberOrNull(metrics.intervalP90Ticks);
-  const predictedCreatedTick = lastCreatedTick !== null && intervalMedianTicks !== null
+  const burstPredictable = metrics.burstPredictable === undefined
+    ? intervalMedianTicks !== null
+    : Boolean(metrics.burstPredictable);
+  const predictedCreatedTick = lastCreatedTick !== null && intervalMedianTicks !== null && burstPredictable
     ? lastCreatedTick + intervalMedianTicks
     : null;
   const commandDelayP90Ticks = Math.max(0, Number(sample.commandDelayP90Ticks ?? options.commandDelayP90Ticks ?? 5));
@@ -447,7 +549,7 @@ function behaviorDimensionsCore(previous, classified, metrics, sample, nowMs, op
     state: shootingState,
     confidence: intervalMedianTicks === null
       ? 0.35
-      : clamp(1 - Number(metrics.shotIntervalCv ?? 0.75), 0.35, 0.95),
+      : clamp(Number(metrics.burstConfidence ?? (1 - Number(metrics.shotIntervalCv ?? 0.75))), 0.35, 0.95),
     updatedAt: nowMs,
     nextShotInMs: nextShotInMs === null ? null : Math.round(nextShotInMs),
     shootingPhaseSource,
@@ -455,6 +557,14 @@ function behaviorDimensionsCore(previous, classified, metrics, sample, nowMs, op
     intervalMedianTicks,
     intervalMadTicks,
     intervalP90Ticks,
+    burstIntervalMedianTicks: numberOrNull(metrics.burstIntervalMedianTicks),
+    burstIntervalMadTicks: numberOrNull(metrics.burstIntervalMadTicks),
+    burstSampleCount: Math.max(0, Number(metrics.burstSampleCount || 0)),
+    interBurstGapMedianTicks: numberOrNull(metrics.interBurstGapMedianTicks),
+    currentBurstIntervalCount: Math.max(0, Number(metrics.currentBurstIntervalCount || 0)),
+    currentBurstShotCount: Math.max(0, Number(metrics.currentBurstShotCount || 0)),
+    burstConfidence: Number(metrics.burstConfidence || 0),
+    burstPredictable,
     predictedCreatedTick,
     prepareLeadTicks: prepareLeadTicks === null ? null : Math.round(prepareLeadTicks * 10) / 10,
     commandDelayP90Ticks,
@@ -754,6 +864,7 @@ module.exports = {
   behaviorDimensionsCore,
   behaviorLearningBaseKey,
   behaviorLearningKey,
+  burstCadenceMetricsCore,
   classifyOpponentBehaviorCore,
   movementDirectionState,
   movementDirectionVector,
