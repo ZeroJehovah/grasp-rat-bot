@@ -96,6 +96,12 @@ const {
   executeSafetyExit
 } = require('./browserless/safety-controller');
 const {
+  actionTargetKey,
+  createRestartDrainCoordinator,
+  evaluateRestartReadiness,
+  restartDrainAllowsDecision
+} = require('./browserless/restart-readiness');
+const {
   createLocalLogStore
 } = require('./browserless/local-log-store');
 const {
@@ -127,7 +133,8 @@ const {
   runBrowserlessRunnerSelfTest
 } = require('./browserless/runner');
 const {
-  gracefulShutdownLeave
+  gracefulShutdownLeave,
+  installGracefulShutdownHandlers
 } = require('../../scripts/browserless-runner');
 const {
   replayCombatPursuit,
@@ -9760,6 +9767,142 @@ async function runSelfTest() {
       want: 'post-attack-drop-wait|profit|post-attack-drop-wait-position|8|5000|20'
     },
     {
+      name: 'browserless combat-live kill tail blocks transient one-coin route',
+      got: (() => {
+        const stateful = {
+          attackHistory: [{
+            id: 9667,
+            name: 'target',
+            x: 4500,
+            y: 0,
+            drop: 32,
+            at: 1200,
+            action: 'opportunistic-shot',
+            afk: false,
+            combat: true
+          }]
+        };
+        const decision = buildBrowserlessDecision({
+          userId: 7,
+          realtime: {
+            tick: 1101447,
+            frameAgeMs: 0,
+            self: { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+            entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 }],
+            bullets: [],
+            coinDrops: []
+          },
+          fallback: {
+            tick: 1101435,
+            frameAgeMs: 581,
+            coinDrops: [{ drop_id: 7293, amount: 1, x: 12000, y: 0 }],
+            messages: []
+          }
+        }, stateful, {
+          nowMs: 1600,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          postAttackDropWaitMs: 1000,
+          postAttackDropResolveMaxMs: 5000,
+          postAttackDropWaitMinDrop: 8,
+          postAttackDropWaitStopDistance: 900
+        });
+        return [decision.kind, decision.reason, decision.action.target.id, decision.action.target.postAttackTarget.drop].join('|');
+      })(),
+      want: 'post-attack-drop-wait|post-attack-drop-wait-position|9667|32'
+    },
+    {
+      name: 'browserless realtime post-kill settlement suppresses ordinary profit gap',
+      got: (() => {
+        const stateful = {
+          combatTarget: { id: 9667, name: 'target', drop: 32, hp: 1, at: 1000, lastInRangeAt: 1200 },
+          combatMetrics: { targetId: '9667', targetName: 'target', acceptedShots: 35, actualLastShotAt: 1200 }
+        };
+        const decision = buildBrowserlessRealtimeControlDecision({
+          userId: 7,
+          realtime: {
+            tick: 1101447,
+            frameAgeMs: 0,
+            self: { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+            entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 }],
+            bullets: []
+          },
+          fallback: {
+            tick: 1101435,
+            frameAgeMs: 581,
+            coinDrops: [{ drop_id: 7293, amount: 1, x: 12000, y: 0 }],
+            messages: []
+          }
+        }, stateful, {
+          nowMs: 1600,
+          userId: 7,
+          controlMode: 'profit-live',
+          combatEnabled: true
+        });
+        return [decision.action.kind, decision.action.reason, decision.input.postKillSettlement.phase, decision.input.postKillSettlement.targetId].join('|');
+      })(),
+      want: 'post-attack-drop-wait|post-kill-settlement-wait|unconfirmed-tail|9667'
+    },
+    {
+      name: 'browserless restart readiness preserves commitments and admits idle work',
+      got: (() => {
+        let nowMs = 1000;
+        const coordinator = createRestartDrainCoordinator({ now: () => nowMs, idleStableMs: 500 });
+        const commitmentKey = actionTargetKey({ kind: 'combat-live', target: { userId: 9667 } });
+        coordinator.requestDrain('restart-drain', { commitmentKey });
+        const combat = evaluateRestartReadiness({ online: true, decision: { action: { kind: 'combat-live', band: 'combat', target: { userId: 9667 } } } });
+        coordinator.observe(combat);
+        const singleCoin = evaluateRestartReadiness({ online: true, decision: { action: { kind: 'coin', band: 'profit', target: { id: 7293, amount: 1 } } } });
+        coordinator.observe(singleCoin);
+        nowMs = 1500;
+        coordinator.observe(singleCoin);
+        const status = coordinator.status();
+        return [
+          combat.ready,
+          singleCoin.ready,
+          status.ready,
+          restartDrainAllowsDecision({ action: { kind: 'post-attack-drop-wait', band: 'profit', reason: 'post-kill-settlement-wait', target: { id: 9667 } } }, status),
+          restartDrainAllowsDecision({ action: { kind: 'post-attack-drop-wait', band: 'profit', reason: 'post-kill-settlement-wait', target: { id: 9555 } } }, status),
+          restartDrainAllowsDecision({ action: { kind: 'coin', band: 'profit', target: { id: 9000, amount: 10 } } }, status)
+        ].join('|');
+      })(),
+      want: 'false|true|true|true|false|false'
+    },
+    {
+      name: 'browserless restart drain interrupts offline loop wait',
+      got: (async () => {
+        const coordinator = createRestartDrainCoordinator({ now: () => 1000 });
+        const waiting = coordinator.wait(30000, () => new Promise(() => {}));
+        coordinator.requestDrain('restart-drain', { commitmentKey: '' });
+        const result = await waiting;
+        return [result.interrupted, result.reason].join('|');
+      })(),
+      want: 'true|restart-drain'
+    },
+    {
+      name: 'browserless shutdown signals escalate from drain to verified stop to emergency exit',
+      got: (() => {
+        const signal = 'browserless-self-test-signal';
+        const calls = [];
+        process.removeAllListeners(signal);
+        installGracefulShutdownHandlers({}, {
+          signals: [signal],
+          getLifecycleControl: () => ({
+            requestDrain: reason => calls.push(`drain:${reason}`),
+            forceStop: reason => calls.push(`stop:${reason}`)
+          }),
+          log: () => {},
+          exit: code => calls.push(`exit:${code}`)
+        });
+        process.emit(signal, signal);
+        process.emit(signal, signal);
+        process.emit(signal, signal);
+        process.removeAllListeners(signal);
+        return calls.join('|');
+      })(),
+      want: 'drain:restart-drain|stop:explicit-stop|exit:130'
+    },
+    {
       name: 'browserless profit live picks matched post-attack player drop',
       got: (() => {
         const stateful = {
@@ -17400,6 +17543,7 @@ async function runSelfTest() {
     {
       name: 'browserless compact status source removes heavy history without changing output',
       got: (() => {
+        const largePayload = 'z'.repeat(20000);
         const snapshotSafety = {
           ok: true,
           checkedAt: '2026-07-15T04:00:00.000Z',
@@ -17410,6 +17554,16 @@ async function runSelfTest() {
           runner: {
             running: true,
             mode: 'profit-live',
+            restartDrain: {
+              requested: true,
+              reason: 'restart-drain',
+              requestedAt: '2026-07-15T04:00:00.000Z',
+              commitmentKey: 'player:9667',
+              waitMs: 1200,
+              stableMs: 500,
+              ready: false,
+              assessment: { ready: false, reason: 'post-kill-settlement', blocker: { payload: largePayload } }
+            },
             currentAction: { kind: 'wait', reason: 'self-test' },
             lastRun: {
               reason: 'previous-run',
@@ -17439,10 +17593,13 @@ async function runSelfTest() {
           JSON.stringify(direct) === JSON.stringify(reduced),
           JSON.stringify(source).length < JSON.stringify(state).length / 4,
           source.runner.lastRun.canary.state === undefined,
-          source.runner.lastRun.canary.decisionState === undefined
+          source.runner.lastRun.canary.decisionState === undefined,
+          direct.runner.restartDrain.commitmentKey,
+          direct.runner.restartDrain.assessment.reason,
+          JSON.stringify(direct.runner.restartDrain).includes(largePayload)
         ].join('|');
       })(),
-      want: 'true|true|true|true'
+      want: 'true|true|true|true|player:9667|post-kill-settlement|false'
     },
     {
       name: 'browserless log retention deletes day directories outside keep window',
@@ -18300,6 +18457,7 @@ async function runSelfTest() {
           unit.includes('Description=Grasp Rat Browserless Runner'),
           unit.includes('EnvironmentFile=/etc/grasp-rat/browserless-runner.env'),
           unit.includes('ExecStart=/usr/bin/env node scripts/browserless-runner.js'),
+          unit.includes('TimeoutStopSec=infinity'),
           unit.includes('ReadWritePaths=/var/lib/grasp-rat-browserless /var/log/grasp-rat-browserless'),
           env.includes('GRASP_RAT_BROWSERLESS_DATA_DIR=/var/lib/grasp-rat-browserless'),
           env.includes('GRASP_RAT_BROWSERLESS_LOG_DIR=/var/log/grasp-rat-browserless'),
@@ -18329,7 +18487,7 @@ async function runSelfTest() {
           installer.includes('systemctl daemon-reload')
         ].join('|');
       })(),
-      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
+      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless deployment audit checks installed service evidence',
@@ -18350,6 +18508,7 @@ async function runSelfTest() {
           `EnvironmentFile=${envPath}`,
           'ExecStart=/usr/bin/env node scripts/browserless-runner.js',
           'Restart=on-failure',
+          'TimeoutStopSec=infinity',
           `ReadWritePaths=${dataDir} ${logDir}`,
           ''
         ].join('\n'));

@@ -199,6 +199,7 @@ function auditDeployment(options = {}, deps = {}) {
   addCheck(checks, 'environment-file-reference', environmentFile === envPath, `EnvironmentFile=${environmentFile || 'missing'}`);
   addCheck(checks, 'exec-start', execStart.includes('node scripts/browserless-runner.js'), `ExecStart=${execStart || 'missing'}`);
   addCheck(checks, 'restart-policy', unitValue(unit.text, 'Restart') === 'on-failure', `Restart=${unitValue(unit.text, 'Restart') || 'missing'}`);
+  addCheck(checks, 'graceful-stop-timeout', unitValue(unit.text, 'TimeoutStopSec') === 'infinity', `TimeoutStopSec=${unitValue(unit.text, 'TimeoutStopSec') || 'missing'}`);
   addCheck(checks, 'read-write-paths', readWritePaths.includes(dataDir) && readWritePaths.includes(logDir), `ReadWritePaths=${readWritePaths || 'missing'}`);
 
   addCheck(checks, 'env-data-dir', env.GRASP_RAT_BROWSERLESS_DATA_DIR === dataDir, `GRASP_RAT_BROWSERLESS_DATA_DIR=${env.GRASP_RAT_BROWSERLESS_DATA_DIR || 'missing'}`);

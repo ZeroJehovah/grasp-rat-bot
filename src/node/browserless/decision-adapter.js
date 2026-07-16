@@ -51,6 +51,10 @@ const {
   pickPostAttackDropWaitTargetCore
 } = require('../../strategy/post-attack-drop');
 const {
+  settlementSummary,
+  updatePostKillSettlementCore
+} = require('../../strategy/post-kill-settlement');
+const {
   coinFailureIgnoreCore,
   staleCoinEscapeDirectionCore,
   coinProgressIntentCore,
@@ -4328,6 +4332,51 @@ function postAttackThreats(input) {
   ];
 }
 
+function reconcilePostKillSettlement(input, stateful = {}, combat = {}, previousCombatTarget = null, options = {}) {
+  const observation = stateful.realtimeSnapshotObservation || null;
+  const result = updatePostKillSettlementCore(stateful.postKillSettlement || null, {
+    nowMs: input?.nowMs,
+    previousCombatTarget,
+    currentCombatTarget: combat?.target || combat?.dryRun?.target || null,
+    combatMetrics: stateful.combatMetrics || null,
+    visibleTargets: input?.visibleTargets || [],
+    selfKillEvidence: input?.selfKillEvidence?.length ? input.selfKillEvidence : (observation?.selfKillEvidence || []),
+    playerDropCoins: input?.selfKilledPlayerDropCoins?.length ? input.selfKilledPlayerDropCoins : (observation?.coins || []),
+    snapshotTick: input?.fallback?.tick ?? observation?.tick ?? null
+  }, {
+    unconfirmedMs: options.postKillUnconfirmedTailMs ?? options.postAttackDropWaitMs ?? BROWSER_RUNTIME_DEFAULTS.postAttackDropWaitMs,
+    confirmedMs: options.postAttackDropResolveMaxMs ?? BROWSER_RUNTIME_DEFAULTS.postAttackDropResolveMaxMs,
+    pickupMs: options.postAttackDropCoinPriorityMs ?? BROWSER_RUNTIME_DEFAULTS.postAttackDropCoinPriorityMs,
+    recentShotMs: options.postKillRecentShotMs ?? 1500
+  });
+  stateful.postKillSettlement = result.state || null;
+  return settlementSummary(stateful.postKillSettlement, input?.nowMs);
+}
+
+function buildPostKillSettlementWaitDecision(input, stateful = {}) {
+  const settlement = stateful.postKillSettlement || null;
+  if (!input?.self || !settlement || settlement.phase === 'drop-visible') return null;
+  return {
+    kind: 'post-attack-drop-wait',
+    band: 'profit',
+    reason: 'post-kill-settlement-wait',
+    target: {
+      type: 'post-attack-target',
+      id: settlement.targetId,
+      name: settlement.targetName || '',
+      drop: numberOrNull(settlement.targetDrop),
+      postAttackTarget: {
+        id: settlement.targetId,
+        name: settlement.targetName || '',
+        drop: numberOrNull(settlement.targetDrop),
+        phase: settlement.phase || 'unconfirmed-tail',
+        ageMs: Math.max(0, Math.round(input.nowMs - Number(settlement.startedAt || input.nowMs)))
+      }
+    },
+    postKillSettlement: settlementSummary(settlement, input.nowMs)
+  };
+}
+
 function safePostAttackCoinCandidates(input, maxDistance, options = {}) {
   if (!input?.self) return [];
   const threats = postAttackThreats(input);
@@ -5325,6 +5374,7 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
   reconcileEasyKillTracker(input, stateful, options);
   stageTimings.easyKill = performance.now() - stageStarted;
   stageStarted = performance.now();
+  const previousCombatTarget = cloneJson(stateful.combatTarget || null);
   const combat = buildCombatDecision(input, stateful, {
     ...options,
     easyKillPreferredTargetId: easyKillPreferredTargetIdFromOpportunity(null, stateful)
@@ -5332,6 +5382,8 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
   stageTimings.combat = performance.now() - stageStarted;
   stageStarted = performance.now();
   rememberBrowserlessInjury(input, stateful, options);
+  const postKillSettlement = reconcilePostKillSettlement(input, stateful, combat, previousCombatTarget, options);
+  const postKillSettlementWaitAction = buildPostKillSettlementWaitDecision(input, stateful);
   const lootControl = buildRealtimeLootControl(input, combat, stateful, options);
   const combatActionEligible = isCombatActionEligibleForDecision(combat, options);
   const controlOptions = {
@@ -5346,6 +5398,11 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
   const lowHpRecoveryThreatExitAction = buildLowHpRecoveryThreatExitDecision(input, controlOptions);
   const safetyAction = profitLiveSafetyDecision(input, combat, stateful, controlOptions, null);
   const combatAction = combat.target && combatActionEligible ? combat.action : null;
+  const defensiveCombatAction = combatAction && (
+    combat.target?.combatIntent === 'defensive'
+      || combat.target?.firing
+      || targetHasRealBulletPressure(input, combat.target, stateful.combatTarget)
+  ) ? combatAction : null;
   const action = longStaminaExhaustedLeaveAction
     || combatExitAction
     || injuryHpExitAction
@@ -5354,6 +5411,8 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
     || lowHpRecoveryThreatExitAction
     || safetyAction
     || lootControl.action
+    || defensiveCombatAction
+    || postKillSettlementWaitAction
     || combatAction
     || null;
   let dangerousCombatExit = rememberDangerousCombatExitTarget(input, combat, stateful, options);
@@ -5396,6 +5455,7 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
       realtime: input.realtime,
       nearby: realtimeNearbyObservationSummary(input, combat, lootControl.assessment, options),
       selfKillEvidence: input.realtimeSnapshotObservation?.selfKillEvidence || [],
+      postKillSettlement,
       loot: lootControl.summary,
       dataGaps: input.dataGaps
     }
@@ -6389,7 +6449,8 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     includeAfkProfitTargets: nonCombatProfit ? false : options.includeAfkProfitTargets
   });
   const easyKillPreferredTargetId = easyKillPreferredTargetIdFromOpportunity(opportunity, stateful);
-  const previousCombatTargetId = targetIdForAttackHistory(stateful.combatTarget);
+  const previousCombatTarget = cloneJson(stateful.combatTarget || null);
+  const previousCombatTargetId = targetIdForAttackHistory(previousCombatTarget);
   const combat = buildCombatDecision(input, stateful, {
     ...options,
     easyKillPreferredTargetId
@@ -6407,6 +6468,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
   const combatPursuitSuppression = buildProfitPursuitSuppression(input, combat, stateful, options);
   let combatActionEligible = isCombatActionEligibleForDecision(combat, options) && !combatPursuitSuppression;
   const combatTarget = combat?.target || null;
+  const postKillSettlement = reconcilePostKillSettlement(input, stateful, combat, previousCombatTarget, options);
   const combatTargetId = targetIdForAttackHistory(combatTarget);
   const continuingPreviousCombatTarget = previousCombatTargetId !== null
     && previousCombatTargetId !== undefined
@@ -6577,7 +6639,9 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     : null;
   const staminaBudgetExitAction = rawCoinStaminaBudgetExitAction || eligibleProfitStaminaBudgetExitAction;
   const postAttackDropCoinAction = (profitLive || nonCombatProfit) ? buildPostAttackDropCoinDecision(profitSelectionInput, stateful, options) : null;
-  const postAttackDropWaitAction = (profitLive || nonCombatProfit) ? buildPostAttackDropWaitDecision(input, stateful, options) : null;
+  const postAttackDropWaitAction = (profitLive || nonCombatProfit)
+    ? (buildPostAttackDropWaitDecision(input, stateful, options) || buildPostKillSettlementWaitDecision(input, stateful))
+    : null;
   const recoveryFootCoinAction = (profitLive || nonCombatProfit) ? buildRecoveryFootCoinDecision(profitSelectionInput, options) : null;
   const recoveryAction = (profitLive || nonCombatProfit) ? buildRecoveryDecision(input, opportunity, options) : null;
   const injuredCautionFootCoinAction = safetyAction
@@ -6794,6 +6858,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       profitCoinSource: input.profitCoinSource,
       activeCoinCompetition: cloneJson(input.activeCoinCompetition),
       selfKillEvidence: topItems(input.selfKillEvidence, item => item, 20),
+      postKillSettlement,
       nearby: summarizeNearbyForPanel(input, action, combat.dryRun || combat, options, stateful.singleCoinBait),
       dataGaps: input.dataGaps
     },
@@ -7056,6 +7121,7 @@ function createBrowserlessDecisionAdapter(options = {}) {
     getRealtimePersistenceState() {
       return {
         attackHistory: decisionState.attackHistory || [],
+        postKillSettlement: decisionState.postKillSettlement || null,
         combatTarget: decisionState.combatTarget || null,
         combatAim: decisionState.combatAim || null,
         combatMetrics: decisionState.combatMetrics || null,

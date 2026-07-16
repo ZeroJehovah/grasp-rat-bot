@@ -105,6 +105,7 @@ const {
   pickPostAttackDropCoinCore,
   pickPostAttackDropWaitTargetCore
 } = require('./post-attack-drop');
+const { updatePostKillSettlementCore } = require('./post-kill-settlement');
 const { buildDropMatchedKillCore } = require('./drop-matched-kill');
 const {
   dailyStaminaBudgetIsLimitingCore,
@@ -2666,6 +2667,47 @@ function runStrategyModuleSelfTests() {
   results.push({
     name: 'post-attack-drop-wait-allows-active-chase-targets',
     passed: postAttackChaseActivePicked?.id === 'active-chase'
+  });
+
+  const postAttackCombatPicked = pickPostAttackDropWaitTargetCore([
+    { id: 'combat-target', x: 1900, y: 0, at: 9000, resolvedAt: 9700, drop: 32, afk: false, combat: true, action: 'opportunistic-shot' }
+  ], [], [], postAttackWaitOptions);
+  results.push({
+    name: 'post-attack-drop-wait-allows-combat-live-targets',
+    passed: postAttackCombatPicked?.id === 'combat-target'
+  });
+
+  const postKillTail = updatePostKillSettlementCore(null, {
+    nowMs: 1600,
+    previousCombatTarget: { id: 9667, name: 'target', drop: 32 },
+    currentCombatTarget: null,
+    combatMetrics: { targetId: '9667', targetName: 'target', acceptedShots: 35, actualLastShotAt: 1200 },
+    visibleTargets: [],
+    selfKillEvidence: [],
+    playerDropCoins: [],
+    snapshotTick: 1101435
+  });
+  const postKillDrop = updatePostKillSettlementCore(postKillTail.state, {
+    nowMs: 2000,
+    visibleTargets: [],
+    selfKillEvidence: [{ targetUserId: 9667, tick: 1101443 }],
+    playerDropCoins: [{ drop_id: 7336, source_user_id: 9667, amount: 32 }],
+    snapshotTick: 1101455
+  });
+  const postKillPicked = updatePostKillSettlementCore(postKillDrop.state, {
+    nowMs: 2400,
+    visibleTargets: [],
+    selfKillEvidence: [{ targetUserId: 9667, tick: 1101443 }],
+    playerDropCoins: [],
+    snapshotTick: 1101470
+  });
+  results.push({
+    name: 'post-kill-settlement-tail-confirm-drop-and-clear',
+    passed: postKillTail.state?.phase === 'unconfirmed-tail'
+      && postKillDrop.state?.phase === 'drop-visible'
+      && postKillDrop.state?.matchedCoinAmount === 32
+      && postKillPicked.state === null
+      && postKillPicked.reason === 'matched-player-drop-disappeared'
   });
 
   const postAttackCovered = pickPostAttackDropWaitTargetCore([

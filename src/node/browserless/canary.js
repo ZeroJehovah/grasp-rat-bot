@@ -29,6 +29,11 @@ const { buildLeavePendingCover } = require('./leave-pending-control');
 const { createBrowserlessTargetWhitelist } = require('./target-whitelist');
 const { browserlessRuntimeRevision, browserlessRuntimeRevisionStatus } = require('./runtime-revision');
 const { createBrowserlessDecisionWorker } = require('./decision-worker');
+const {
+  actionTargetKey,
+  evaluateRestartReadiness,
+  restartDrainAllowsDecision
+} = require('./restart-readiness');
 
 const DEFAULT_READONLY_PROBE_MS = 30000;
 const DEFAULT_FRAME_GAP_ALERT_MS = 2000;
@@ -918,6 +923,44 @@ async function runReadOnlyCanary(config, options = {}) {
   let transportPublished = false;
   let transport = null;
   let leavePending = null;
+  const restartDrain = options.restartDrainCoordinator || null;
+  let lastRestartDrainPublishKey = '';
+  const publishRestartDrainStatus = status => {
+    if (!status?.requested || typeof options.onRestartDrainStatus !== 'function') return;
+    const key = JSON.stringify({
+      ready: Boolean(status.ready),
+      reason: status.assessment?.reason || '',
+      commitmentKey: status.commitmentKey || ''
+    });
+    if (key === lastRestartDrainPublishKey) return;
+    lastRestartDrainPublishKey = key;
+    options.onRestartDrainStatus(status);
+  };
+  const applyRestartDrainDecisionGate = decision => {
+    const status = restartDrain?.status?.() || null;
+    if (!status?.requested || restartDrainAllowsDecision(decision, status)) return decision;
+    const state = decisionAdapter.getState?.() || {};
+    const combatTargetKey = state.combatTarget?.id ? `player:${state.combatTarget.id}` : '';
+    if (combatTargetKey && combatTargetKey !== status.commitmentKey) {
+      decisionAdapter.patchState?.({ combatTarget: null, combatAim: null });
+    }
+    return {
+      ...(decision || {}),
+      kind: 'wait',
+      band: 'wait',
+      reason: 'restart-drain-new-commitment-blocked',
+      action: {
+        kind: 'wait',
+        band: 'wait',
+        reason: 'restart-drain-new-commitment-blocked',
+        blockedAction: {
+          kind: decision?.action?.kind || decision?.kind || '',
+          reason: decision?.action?.reason || decision?.reason || '',
+          targetKey: actionTargetKey(decision?.action || decision || {})
+        }
+      }
+    };
+  };
   let leavePrewarmInFlight = null;
   let lastLeavePrewarmAtMs = 0;
   const flushScheduledCombatPersistence = () => {
@@ -1413,7 +1456,8 @@ async function runReadOnlyCanary(config, options = {}) {
     return actionResult;
   };
   const publishFullDecision = (decision, currentState, atMs, detail = {}) => {
-    const summary = detail.summary || summarizeBrowserlessDecision(decision);
+    const appliedDecision = applyRestartDrainDecisionGate(decision);
+    const summary = summarizeBrowserlessDecision(appliedDecision);
     result.decisions.evaluatedCount += 1;
     result.decisions.last = summary;
     scheduleCombatPersistence(atMs);
@@ -1441,7 +1485,7 @@ async function runReadOnlyCanary(config, options = {}) {
       nowMs: atMs
     });
     if (handleSafetyAssessment(decisionSafetyEvent, { state: currentState, decision: summary, atMs })) return summary;
-    applyDecisionAction(currentState, summary, decision, atMs, {
+    applyDecisionAction(currentState, summary, appliedDecision, atMs, {
       notifyDecisionWorker: detail.notifyDecisionWorker,
       errorReason: 'action-apply-failed'
     });
@@ -1453,6 +1497,7 @@ async function runReadOnlyCanary(config, options = {}) {
     summary?.action?.target?.userId ?? summary?.action?.target?.user_id ?? summary?.combat?.target?.userId ?? ''
   ].join('|');
   const publishRealtimeControl = (control, currentState, atMs) => {
+    control = applyRestartDrainDecisionGate(control || {});
     const action = control?.action || null;
     if (!action) {
       if (!realtimeControlActive) return false;
@@ -1555,6 +1600,34 @@ async function runReadOnlyCanary(config, options = {}) {
     const handled = publishRealtimeControl(control || {}, currentState, atMs);
     if (outerStages) outerStages['realtime-publish'] = performance.now() - publishStarted;
     return handled;
+  };
+  const assessRestartDrain = (currentState, atMs) => {
+    if (!restartDrain?.isRequested?.()) return false;
+    const assessment = evaluateRestartReadiness({
+      online: true,
+      decision: result.decisions.last,
+      decisionState: decisionAdapter.getState?.() || null,
+      realtime: currentState?.realtime || null,
+      leavePending: publicLeavePending(leavePending)
+    }, runtimeDefaults);
+    const status = restartDrain.observe(assessment);
+    publishRestartDrainStatus(status);
+    if (!status.ready || result.safety.event) return false;
+    const event = safetyController.requestStop('restart-drain-ready', {
+      source: 'restart-drain',
+      drain: {
+        requestedAt: status.requestedAt || '',
+        waitMs: Number(status.waitMs || 0),
+        commitmentKey: status.commitmentKey || '',
+        assessment
+      }
+    });
+    return handleSafetyAssessment(safetyController.evaluate(currentState, {
+      decision: result.decisions.last,
+      nowMs: atMs,
+      stopRequested: true,
+      stopDetail: event.detail
+    }), { state: currentState, decision: result.decisions.last, atMs });
   };
   const dispatchWorkerDecision = (currentState, atMs) => {
     if (!decisionWorker || plannerInFlight || ending || result.safety.event) return false;
@@ -1883,6 +1956,7 @@ async function runReadOnlyCanary(config, options = {}) {
               }
             }
             stageDurations['realtime-control-dispatch'] = performance.now() - stageStarted;
+            if (assessRestartDrain(currentState, atMs)) return;
             stageStarted = performance.now();
             handleSafetyAssessment(safetyController.evaluate(currentState, {
               startedAtMs: noSelfGuardStartedAtMs(atMs),
@@ -1966,6 +2040,7 @@ async function runReadOnlyCanary(config, options = {}) {
         decision: result.decisions.last,
         atMs
       });
+      assessRestartDrain(stateStore.getDecisionState?.(atMs) || stateStore.getState(atMs), atMs);
     }
   } catch (err) {
     openFailedBeforeTransport = !transport;

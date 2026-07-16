@@ -116,7 +116,7 @@ function pickPostAttackDropWaitTargetCore(attacks, coins, activeThreats, options
     .filter(item => t - Number(item?.at || 0) <= resolveMaxMs)
     .filter(item => Number(item?.drop || 0) >= minDrop)
     .filter(item => Number.isFinite(Number(item?.x)) && Number.isFinite(Number(item?.y)))
-    .filter(item => item.afk !== false || item.chase || item.chaseMode)
+    .filter(item => item.afk !== false || item.combat || item.chase || item.chaseMode)
     .filter(item => item.action === 'attack' || item.action === 'opportunistic-shot')
     .map(item => {
       const resolvedAt = resolveAttack(item);

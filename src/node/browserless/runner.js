@@ -48,6 +48,11 @@ const {
 const { createBrowserlessActionAdapter } = require('./action-adapter');
 const { createSourceIpController } = require('./source-ip-controller');
 const { createBrowserlessSafetyController } = require('./safety-controller');
+const {
+  actionTargetKey,
+  createRestartDrainCoordinator,
+  evaluateRestartReadiness
+} = require('./restart-readiness');
 const { browserlessRuntimeRevision, browserlessRuntimeRevisionStatus } = require('./runtime-revision');
 const {
   buildSnapshotProbeUrl,
@@ -488,7 +493,7 @@ function browserlessLoopPlan(result, config = {}) {
   if (config.once) return stop('once');
   if (!result) return resume('missing-result');
   if (result.reason === 'missing-manual-session') return resume('missing-manual-session');
-  if (safetyReason === 'explicit-stop') return stop('explicit-stop');
+  if (safetyReason === 'explicit-stop' || safetyReason === 'restart-drain-ready') return stop(safetyReason);
   if (fastRecoverableTransportReasons.has(safetyReason)) {
     return resumeFast(safetyReason);
   }
@@ -644,6 +649,9 @@ async function runBrowserlessRunner(config, deps = {}) {
   const publishLiveState = typeof deps.onLiveStateReady === 'function'
     ? deps.onLiveStateReady
     : null;
+  const publishLifecycleControl = typeof deps.onLifecycleControlReady === 'function'
+    ? deps.onLifecycleControlReady
+    : null;
   if (publishBackgroundIo && backgroundIo) {
     try {
       publishBackgroundIo(backgroundIo);
@@ -675,6 +683,7 @@ async function runBrowserlessRunner(config, deps = {}) {
     staminaExhaustedBelowMs: config.staminaExhaustedBelowMs
   });
   const stateFile = config.stateFile || stateFilePath(config);
+  const restartDrain = deps.restartDrainCoordinator || createRestartDrainCoordinator({ now });
   const updateState = (patch, options = {}) => {
     try {
       return updateBrowserlessStateFile(stateFile, patch, options);
@@ -693,6 +702,72 @@ async function runBrowserlessRunner(config, deps = {}) {
       return readBrowserlessStateFile(stateFile);
     }
   };
+  let lastRestartDrainLogKey = '';
+  const publishRestartDrainStatus = (status, eventType = 'restart-drain-status') => {
+    if (!status?.requested) return status;
+    const publicStatus = {
+      requested: true,
+      reason: status.reason || 'restart-drain',
+      requestedAt: status.requestedAt || '',
+      requestedAtMs: Number(status.requestedAtMs || 0),
+      commitmentKey: status.commitmentKey || '',
+      waitMs: Number(status.waitMs || 0),
+      readySince: Number(status.readySince || 0),
+      stableMs: Number(status.stableMs || 0),
+      ready: Boolean(status.ready),
+      assessment: status.assessment || null
+    };
+    const key = JSON.stringify({
+      eventType,
+      ready: publicStatus.ready,
+      assessment: publicStatus.assessment?.reason || '',
+      commitmentKey: publicStatus.commitmentKey
+    });
+    const updatedAt = new Date(now()).toISOString();
+    if (liveState) patchLiveState({ runner: { restartDrain: publicStatus } }, { updatedAt });
+    else updateState({ runner: { restartDrain: publicStatus } }, { updatedAt });
+    if (key !== lastRestartDrainLogKey) {
+      lastRestartDrainLogKey = key;
+      logStore.append('runner', eventType, publicStatus);
+    }
+    return publicStatus;
+  };
+  const lifecycleControl = {
+    requestDrain(reason = 'restart-drain', detail = {}) {
+      const currentState = liveState || readBrowserlessStateFile(stateFile);
+      const action = currentState?.current?.decision?.action || currentState?.runner?.currentAction || {};
+      const status = restartDrain.requestDrain(reason, {
+        ...detail,
+        commitmentKey: detail.commitmentKey || actionTargetKey(action)
+      });
+      const kind = String(currentState?.runner?.currentAction?.kind || action.kind || '');
+      if (['loop-wait', 'stopped'].includes(kind) || currentState?.runner?.running === false) {
+        restartDrain.observe(evaluateRestartReadiness({ online: false }));
+        safetyController.requestStop('restart-drain-ready', {
+          source: detail.source || 'lifecycle-control',
+          offline: true,
+          drain: restartDrain.status()
+        });
+      }
+      return publishRestartDrainStatus(restartDrain.status(), 'restart-drain-requested');
+    },
+    forceStop(reason = 'explicit-stop', detail = {}) {
+      const event = safetyController.requestStop(reason, {
+        ...detail,
+        source: detail.source || 'lifecycle-force-stop'
+      });
+      logStore.append('exits', 'stop-request', event);
+      return { ok: true, event };
+    },
+    status: () => restartDrain.status()
+  };
+  if (publishLifecycleControl) {
+    try {
+      publishLifecycleControl(lifecycleControl);
+    } catch (err) {
+      recordSupervisorError(err, { operation: 'lifecycle-control-publish' });
+    }
+  }
   try {
     fs.mkdirSync(config.dataDir, { recursive: true });
   } catch (err) {
@@ -1172,7 +1247,7 @@ async function runBrowserlessRunner(config, deps = {}) {
         const remainingMs = Math.max(0, nextRunAtMs - now());
         if (remainingMs > 0) await sleep(remainingMs);
       } else {
-        await sleep(effectiveDelayMs);
+        await restartDrain.wait(effectiveDelayMs, sleep);
       }
     } catch (err) {
       recordSupervisorError(err, { operation: 'loop-sleep', delayMs: effectiveDelayMs });
@@ -1603,7 +1678,7 @@ async function runBrowserlessRunner(config, deps = {}) {
       supervisorErrors: supervisorErrors.slice(-5)
     });
     try {
-      await sleep(persistedDelayPlan.delayMs);
+      await restartDrain.wait(persistedDelayPlan.delayMs, sleep);
     } catch (err) {
       recordSupervisorError(err, { operation: 'persisted-loop-sleep', delayMs: persistedDelayPlan.delayMs });
       logStore.append('runner', 'persisted-loop-sleep-error', { error: errorMessage(err), delayMs: persistedDelayPlan.delayMs });
@@ -1820,6 +1895,8 @@ async function runBrowserlessRunner(config, deps = {}) {
         onTransportOpen,
         onTransportClose,
         leaveWithVerification: sourceIpController.leaveWithVerification,
+        restartDrainCoordinator: restartDrain,
+        onRestartDrainStatus: status => publishRestartDrainStatus(status),
         useDecisionWorker: deps.useDecisionWorker !== false,
         onDecision: decision => {
           const currentBeforeDecision = liveState || stateBeforeCanary;
@@ -1924,6 +2001,11 @@ async function runBrowserlessRunner(config, deps = {}) {
       if (publishLiveState) {
         try {
           publishLiveState(null);
+        } catch (_) {}
+      }
+      if (publishLifecycleControl) {
+        try {
+          publishLifecycleControl(null);
         } catch (_) {}
       }
     }
@@ -2208,6 +2290,30 @@ async function runBrowserlessRunnerSelfTest() {
         safety: { event: { reason: 'combat-hp-disadvantage-leave' } }
       }
     }, { loopDelayMs: 30000 });
+    const restartDrainPlan = browserlessLoopPlan({
+      ok: false,
+      canary: {
+        runId: 'self-test-restart-drain',
+        error: 'restart-drain-ready',
+        safety: { event: { reason: 'restart-drain-ready' } }
+      }
+    }, { loopDelayMs: 30000 });
+    let drainNowMs = 1000;
+    const restartDrain = createRestartDrainCoordinator({ now: () => drainNowMs, idleStableMs: 500 });
+    restartDrain.requestDrain('restart-drain', { commitmentKey: 'player:9667' });
+    const restartDrainCombat = evaluateRestartReadiness({
+      online: true,
+      decision: { action: { kind: 'combat-live', band: 'combat', target: { userId: 9667 } } }
+    });
+    restartDrain.observe(restartDrainCombat);
+    const restartDrainIdle = evaluateRestartReadiness({
+      online: true,
+      decision: { action: { kind: 'coin', band: 'profit', target: { id: 7293, amount: 1 } } }
+    });
+    restartDrain.observe(restartDrainIdle);
+    drainNowMs = 1500;
+    restartDrain.observe(restartDrainIdle);
+    const restartDrainStatus = restartDrain.status();
     const closedTransportAdapter = createBrowserlessActionAdapter({
       transport: {
         sendVelocity() {
@@ -2293,6 +2399,11 @@ async function runBrowserlessRunnerSelfTest() {
         && wsClosedPlan.delayMs === 1000
         && combatExitPlan.continue
         && combatExitPlan.delayMs === 30000
+        && restartDrainPlan.continue === false
+        && restartDrainPlan.reason === 'restart-drain-ready'
+        && restartDrainCombat.ready === false
+        && restartDrainIdle.ready === true
+        && restartDrainStatus.ready === true
         && closedTransportAction.ok === false
         && closedTransportAction.transportClosed === true
         && chatService.ok
@@ -2304,6 +2415,8 @@ async function runBrowserlessRunnerSelfTest() {
       liveRun,
       wsClosedPlan,
       combatExitPlan,
+      restartDrainPlan,
+      restartDrainStatus,
       closedTransportAction,
       chatService,
       dynamicSnapshotPollerStatus,

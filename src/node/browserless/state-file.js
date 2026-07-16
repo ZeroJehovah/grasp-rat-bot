@@ -39,6 +39,7 @@ function defaultBrowserlessState() {
       dryRun: true,
       combatEnabled: false,
       confirmedLeave: null,
+      restartDrain: null,
       currentAction: null,
       lastRun: null,
       lastError: ''
@@ -1863,6 +1864,27 @@ function compactLastRunSource(value) {
   };
 }
 
+function compactRestartDrain(value) {
+  if (!value || typeof value !== 'object' || !value.requested) return null;
+  const assessment = value.assessment && typeof value.assessment === 'object'
+    ? {
+        ready: Boolean(value.assessment.ready),
+        exiting: Boolean(value.assessment.exiting),
+        reason: compactString(value.assessment.reason, 120)
+      }
+    : null;
+  return {
+    requested: true,
+    reason: compactString(value.reason, 80),
+    requestedAt: compactString(value.requestedAt, 48),
+    commitmentKey: compactString(value.commitmentKey, 96),
+    waitMs: compactNumber(value.waitMs),
+    stableMs: compactNumber(value.stableMs),
+    ready: Boolean(value.ready),
+    assessment
+  };
+}
+
 function browserlessCompactStatusSource(state = {}) {
   const runner = state.runner && typeof state.runner === 'object' ? state.runner : {};
   const probes = state.probes && typeof state.probes === 'object' ? state.probes : {};
@@ -1880,6 +1902,7 @@ function browserlessCompactStatusSource(state = {}) {
       dryRun: runner.dryRun !== false,
       combatEnabled: Boolean(runner.combatEnabled),
       lastError: runner.lastError || '',
+      restartDrain: runner.restartDrain || null,
       currentAction: runner.currentAction || null,
       lastRun: compactLastRunSource(runner.lastRun)
     },
@@ -1952,6 +1975,7 @@ function buildCompactBrowserlessStatus(state, config = {}) {
       canaryProfile: normalized.runner.canaryProfile || '',
       dryRun: normalized.runner.dryRun,
       combatEnabled: Boolean(normalized.runner.combatEnabled),
+      restartDrain: compactRestartDrain(normalized.runner.restartDrain),
       lastError: compactString(normalized.runner.lastError, 160)
     },
     game,

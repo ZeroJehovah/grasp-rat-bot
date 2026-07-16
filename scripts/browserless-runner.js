@@ -201,7 +201,7 @@ async function gracefulShutdownLeave(config, options = {}) {
 
 function installGracefulShutdownHandlers(config, options = {}) {
   if (config.selfTest || config.help) return;
-  let shuttingDown = false;
+  let signalCount = 0;
   const log = typeof options.log === 'function' ? options.log : message => console.error(message);
   const exit = typeof options.exit === 'function' ? options.exit : code => process.exit(code);
   const flushBackgroundIo = typeof options.flushBackgroundIo === 'function'
@@ -210,11 +210,24 @@ function installGracefulShutdownHandlers(config, options = {}) {
   const signals = options.signals || ['SIGINT', 'SIGTERM'];
   const signalExitCode = signal => signal === 'SIGTERM' ? 143 : 130;
   const onSignal = signal => {
-    if (shuttingDown) {
+    signalCount += 1;
+    const lifecycleControl = typeof options.getLifecycleControl === 'function'
+      ? options.getLifecycleControl()
+      : null;
+    if (lifecycleControl?.requestDrain && signalCount === 1) {
+      const result = lifecycleControl.requestDrain('restart-drain', { source: 'signal', signal });
+      log(JSON.stringify({ type: 'shutdown-drain-requested', signal, result }));
+      return;
+    }
+    if (lifecycleControl?.forceStop && signalCount === 2) {
+      const result = lifecycleControl.forceStop('explicit-stop', { source: 'signal-force', signal });
+      log(JSON.stringify({ type: 'shutdown-force-stop-requested', signal, result }));
+      return;
+    }
+    if (signalCount >= 3) {
       exit(signalExitCode(signal));
       return;
     }
-    shuttingDown = true;
     log(JSON.stringify({ type: 'shutdown-leave-start', signal }));
     gracefulShutdownLeave(config, options)
       .then(result => {
@@ -234,7 +247,7 @@ function installGracefulShutdownHandlers(config, options = {}) {
       });
   };
   for (const signal of signals) {
-    process.once(signal, () => onSignal(signal));
+    process.on(signal, () => onSignal(signal));
   }
 }
 
@@ -252,8 +265,10 @@ async function main() {
   }
   let activeBackgroundIo = null;
   let activeLiveStateProvider = null;
+  let activeLifecycleControl = null;
   installGracefulShutdownHandlers(config, {
     getLiveState: () => activeLiveStateProvider?.() || null,
+    getLifecycleControl: () => activeLifecycleControl,
     flushBackgroundIo: async () => {
       const current = activeBackgroundIo;
       activeBackgroundIo = null;
@@ -283,11 +298,14 @@ async function main() {
           },
           onLiveStateReady: provider => {
             activeLiveStateProvider = typeof provider === 'function' ? provider : null;
+          },
+          onLifecycleControlReady: control => {
+            activeLifecycleControl = control || null;
           }
         });
         console.log(JSON.stringify(result, null, 2));
-        if (config.once || config.dryRun || result?.reason === 'explicit-stop' || result?.reason === 'unsupported-control-mode') {
-          if (!result?.ok && result?.reason !== 'explicit-stop') process.exitCode = 1;
+        if (config.once || config.dryRun || result?.reason === 'explicit-stop' || result?.reason === 'restart-drain-ready' || result?.reason === 'unsupported-control-mode') {
+          if (!result?.ok && !['explicit-stop', 'restart-drain-ready'].includes(result?.reason)) process.exitCode = 1;
           return;
         }
       } catch (err) {
