@@ -1260,7 +1260,14 @@ async function runBrowserlessRunner(config, deps = {}) {
       if (shouldPrepareSnapshotSafety) {
         const leadMs = preLoginSafetyLeadMs(config);
         const waitBeforeProbeMs = Math.max(0, effectiveDelayMs - leadMs);
-        if (waitBeforeProbeMs > 0) await sleep(waitBeforeProbeMs);
+        if (waitBeforeProbeMs > 0) {
+          const waitResult = await restartDrain.wait(waitBeforeProbeMs, sleep);
+          if (waitResult?.interrupted) {
+            const interrupted = new Error('restart drain interrupted pre-login wait');
+            interrupted.code = 'RESTART_DRAIN_WAIT_INTERRUPTED';
+            throw interrupted;
+          }
+        }
         preparedSnapshotSafety = await (deps.runPreLoginSnapshotSafety || runPreLoginSnapshotSafety)(
           config,
           readBrowserlessStateFile(stateFile),
@@ -1352,13 +1359,22 @@ async function runBrowserlessRunner(config, deps = {}) {
           return null;
         }
         const remainingMs = Math.max(0, nextRunAtMs - now());
-        if (remainingMs > 0) await sleep(remainingMs);
+        if (remainingMs > 0) {
+          const waitResult = await restartDrain.wait(remainingMs, sleep);
+          if (waitResult?.interrupted) {
+            const interrupted = new Error('restart drain interrupted post-probe wait');
+            interrupted.code = 'RESTART_DRAIN_WAIT_INTERRUPTED';
+            throw interrupted;
+          }
+        }
       } else {
         await restartDrain.wait(effectiveDelayMs, sleep);
       }
     } catch (err) {
-      recordSupervisorError(err, { operation: 'loop-sleep', delayMs: effectiveDelayMs });
-      logStore.append('runner', 'loop-sleep-error', { error: errorMessage(err), delayMs: effectiveDelayMs });
+      if (err?.code !== 'RESTART_DRAIN_WAIT_INTERRUPTED') {
+        recordSupervisorError(err, { operation: 'loop-sleep', delayMs: effectiveDelayMs });
+        logStore.append('runner', 'loop-sleep-error', { error: errorMessage(err), delayMs: effectiveDelayMs });
+      }
     }
     const requestedStop = safetyController.getStopEvent();
     if (requestedStop) {

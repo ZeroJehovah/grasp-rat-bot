@@ -20065,6 +20065,89 @@ async function runSelfTest() {
       want: 'explicit-stop|0|60000|stamina-exhausted-leave|true|stamina-reset|stamina-exhausted-leave||true'
     },
     {
+      name: 'browserless restart drain interrupts an in-process explicit stamina wait',
+      got: withTempDirForTest(async dir => {
+        const initialTime = Date.parse('2026-07-12T15:59:10.000Z');
+        let t = initialTime;
+        let lifecycleControl = null;
+        let canaryCalls = 0;
+        let precheckCalls = 0;
+        let sleepCalls = 0;
+        const config = parseBrowserlessRunnerArgs([
+          '--live',
+          '--data-dir',
+          dir,
+          '--user-id',
+          '7',
+          '--session-token',
+          'runner-secret-token',
+          '--login-point-x',
+          '1',
+          '--login-point-y',
+          '2'
+        ], {});
+        config.snapshotEdgeEnabled = true;
+        const result = await runBrowserlessRunner(config, {
+          now: () => t,
+          startStatusServer: false,
+          onLifecycleControlReady: control => { lifecycleControl = control; },
+          sleep: ms => {
+            sleepCalls += 1;
+            return new Promise(resolve => {
+              queueMicrotask(() => lifecycleControl.requestDrain('restart-drain', { source: 'self-test' }));
+              if (!(ms > 0)) resolve();
+            });
+          },
+          runPreLoginSnapshotSafety: async () => {
+            precheckCalls += 1;
+            return {
+              ok: true,
+              reason: 'safe',
+              checkedAt: new Date(t).toISOString(),
+              required: 1,
+              streak: 1,
+              satisfied: true,
+              response: { summary: { valid: true, selfPresent: false, tick: 200 } }
+            };
+          },
+          runReadOnlyOnce: async () => {
+            canaryCalls += 1;
+            return {
+              ok: false,
+              runId: 'stamina-before-interruptible-drain',
+              completedAt: new Date(t).toISOString(),
+              error: 'stamina-exhausted-leave',
+              safety: {
+                event: { reason: 'stamina-exhausted-leave', at: new Date(t).toISOString() },
+                exit: { leave: { ok: true } }
+              },
+              leave: {
+                ok: true,
+                attempts: [{ response: {
+                  stamina_5s_remaining_milli: 10000,
+                  stamina_1h_remaining_milli: 3000000,
+                  stamina_1d_remaining_milli: 31
+                } }]
+              },
+              state: { realtime: { tick: 200 }, fallback: { tick: 199 } }
+            };
+          }
+        });
+        const stored = readBrowserlessStateFile(stateFilePath(config));
+        return [
+          result.reason,
+          canaryCalls,
+          precheckCalls,
+          sleepCalls,
+          t === initialTime,
+          stored.runner.currentAction.reason,
+          stored.runner.gameplayDeadline?.reason,
+          stored.runner.processStop?.reason
+        ].join('|');
+      }),
+      want: 'restart-drain-ready|1|0|1|true|restart-drain-ready|stamina-exhausted-leave|restart-drain'
+    },
+    {
       name: 'browserless runner prepares login point safety during reconnect wait',
       got: withTempDirForTest(async dir => {
         let t = Date.parse('2026-07-12T17:00:00.000Z');
