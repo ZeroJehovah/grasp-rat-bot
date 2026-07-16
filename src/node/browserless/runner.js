@@ -549,6 +549,14 @@ function browserlessTerminalStopRequestsRuntimeClose(result, reason = '') {
   return reason === 'explicit-stop' && /^signal(?:-|$)/.test(source);
 }
 
+async function closeBrowserlessStatusHandle(statusHandle) {
+  if (!statusHandle?.close) return false;
+  const pending = statusHandle.close();
+  statusHandle.server?.closeAllConnections?.();
+  await pending;
+  return true;
+}
+
 function runnerResultExitDetail(result, fallbackReason = '') {
   const canary = result?.canary && typeof result.canary === 'object' ? result.canary : {};
   const safetyReason = canary?.safety?.event?.reason || canary?.safety?.leaveFailure?.reason || '';
@@ -2012,7 +2020,7 @@ async function runBrowserlessRunner(config, deps = {}) {
           recordSupervisorError(err, { operation: 'snapshot-gap-poller-stop' });
         }
         try {
-          if (statusHandle?.close) await statusHandle.close();
+          await closeBrowserlessStatusHandle(statusHandle);
         } catch (err) {
           recordSupervisorError(err, { operation: 'status-server-close' });
         }
@@ -2343,6 +2351,18 @@ async function runBrowserlessRunnerSelfTest() {
     const apiStopKeepsRuntime = browserlessTerminalStopRequestsRuntimeClose({
       event: { reason: 'explicit-stop', detail: { source: 'status-api' } }
     }, 'explicit-stop');
+    let statusCloseResolved = null;
+    const statusCloseHandle = {
+      close: () => new Promise(resolve => {
+        statusCloseResolved = resolve;
+      }),
+      server: {
+        closeAllConnections() {
+          statusCloseResolved?.();
+        }
+      }
+    };
+    const forcedStatusConnectionsClosed = await closeBrowserlessStatusHandle(statusCloseHandle);
     let drainNowMs = 1000;
     const restartDrain = createRestartDrainCoordinator({ now: () => drainNowMs, idleStableMs: 500 });
     restartDrain.requestDrain('restart-drain', { commitmentKey: 'player:9667' });
@@ -2450,6 +2470,7 @@ async function runBrowserlessRunnerSelfTest() {
         && restartDrainClosesRuntime
         && signalForceClosesRuntime
         && !apiStopKeepsRuntime
+        && forcedStatusConnectionsClosed
         && restartDrainCombat.ready === false
         && restartDrainIdle.ready === true
         && restartDrainStatus.ready === true
@@ -2469,6 +2490,7 @@ async function runBrowserlessRunnerSelfTest() {
       restartDrainClosesRuntime,
       signalForceClosesRuntime,
       apiStopKeepsRuntime,
+      forcedStatusConnectionsClosed,
       restartDrainStatus,
       closedTransportAction,
       chatService,
@@ -2488,6 +2510,7 @@ module.exports = {
   browserlessDailyFirstLoginDelayPlan,
   browserlessLoopPlan,
   browserlessTerminalStopRequestsRuntimeClose,
+  closeBrowserlessStatusHandle,
   confirmedLeaveStateFromResult,
   hydrateConfigFromState,
   isFirstBrowserlessLoginOfDay,
