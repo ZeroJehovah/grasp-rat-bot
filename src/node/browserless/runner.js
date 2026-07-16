@@ -1576,6 +1576,7 @@ async function runBrowserlessRunner(config, deps = {}) {
     retention,
     statusServer: statusHandle ? { host: config.statusHost, port: statusHandle.port } : null
   });
+  updateState({ runner: { restartDrain: null } }, { updatedAt: new Date(now()).toISOString() });
 
   let persistedDelayPlan = !config.once && !config.dryRun
     ? persistedReconnectDelayPlan(readBrowserlessStateFile(stateFile), config, now())
@@ -2294,11 +2295,21 @@ async function runBrowserlessRunnerSelfTest() {
       '--login-point-hp',
       '100'
     ], {});
+    updateBrowserlessStateFile(stateFilePath(liveConfig), {
+      runner: {
+        restartDrain: {
+          requested: true,
+          reason: 'stale-previous-process',
+          requestedAt: '2026-07-08T00:00:00.000Z'
+        }
+      }
+    }, { updatedAt: '2026-07-08T00:00:00.000Z' });
     const liveRun = await runBrowserlessRunner(liveConfig, {
       now: () => Date.UTC(2026, 6, 8, 1, 1, 0),
       disableBackgroundIo: true,
       runReadOnlyOnce: async () => ({ ok: true, frames: 0, fake: true })
     });
+    const staleRestartDrainCleared = readBrowserlessStateFile(stateFilePath(liveConfig)).runner.restartDrain === null;
     const wsClosedPlan = browserlessLoopPlan({
       ok: false,
       canary: {
@@ -2426,6 +2437,7 @@ async function runBrowserlessRunnerSelfTest() {
       ok: Boolean(
         dryRun.ok
         && liveRun.ok
+        && staleRestartDrainCleared
         && /runner-dry-run/.test(text)
         && /runner-finish/.test(text)
         && !/self-test-token/.test(text)
@@ -2450,6 +2462,7 @@ async function runBrowserlessRunnerSelfTest() {
       ),
       dryRun,
       liveRun,
+      staleRestartDrainCleared,
       wsClosedPlan,
       combatExitPlan,
       restartDrainPlan,
