@@ -1738,6 +1738,8 @@ async function runBrowserlessRunner(config, deps = {}) {
         reason: stopped.reason,
         requestedStop
       });
+      closeRuntimeHandlesOnReturn = closeRuntimeHandlesOnReturn
+        || browserlessTerminalStopRequestsRuntimeClose(stopped, stopped.reason);
       return stopped;
     }
     safetyController.clearStop();

@@ -17,6 +17,7 @@ const {
 } = require('../src/node/browserless/config');
 const {
   CONFIRMED_LEAVE_SNAPSHOT_IGNORE_MS,
+  browserlessTerminalStopRequestsRuntimeClose,
   runBrowserlessRunner,
   hydrateConfigFromState,
   runBrowserlessRunnerSelfTest
@@ -266,6 +267,7 @@ async function main() {
   let activeBackgroundIo = null;
   let activeLiveStateProvider = null;
   let activeLifecycleControl = null;
+  let exitAfterSignalStop = false;
   installGracefulShutdownHandlers(config, {
     getLiveState: () => activeLiveStateProvider?.() || null,
     getLifecycleControl: () => activeLifecycleControl,
@@ -304,6 +306,8 @@ async function main() {
           }
         });
         console.log(JSON.stringify(result, null, 2));
+        exitAfterSignalStop = exitAfterSignalStop
+          || browserlessTerminalStopRequestsRuntimeClose(result, result?.reason);
         if (config.once || config.dryRun || result?.reason === 'explicit-stop' || result?.reason === 'restart-drain-ready' || result?.reason === 'unsupported-control-mode') {
           if (!result?.ok && !['explicit-stop', 'restart-drain-ready'].includes(result?.reason)) process.exitCode = 1;
           return;
@@ -322,6 +326,7 @@ async function main() {
     const current = activeBackgroundIo;
     activeBackgroundIo = null;
     if (current?.close) await current.close();
+    if (exitAfterSignalStop) process.exit(process.exitCode || 0);
   }
 }
 
