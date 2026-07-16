@@ -333,21 +333,53 @@ function parseIsoTimeMs(value) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+const STAMINA_GAMEPLAY_DEADLINE_REASONS = new Set([
+  'stamina-budget-coin-leave',
+  'stamina-exhausted-leave'
+]);
+
+function staminaGameplayDeadlineReason(value) {
+  const reason = String(value || '');
+  return STAMINA_GAMEPLAY_DEADLINE_REASONS.has(reason) ? reason : '';
+}
+
+function gameplayDeadlineFromLoopPlan(loopPlan = {}, until = '', sourceRunId = '') {
+  const untilMs = parseIsoTimeMs(until);
+  if (!untilMs) return null;
+  const reason = String(loopPlan.reason || 'persisted-reconnect-wait');
+  const staminaReason = staminaGameplayDeadlineReason(reason);
+  return {
+    type: staminaReason ? 'stamina-reset' : (loopPlan.explicitDelay ? 'explicit-delay' : 'reconnect-wait'),
+    reason,
+    until: new Date(untilMs).toISOString(),
+    explicit: Boolean(loopPlan.explicitDelay || staminaReason),
+    snapshotEdgeReplaceable: Boolean(!loopPlan.explicitDelay && !staminaReason),
+    sourceRunId: String(sourceRunId || loopPlan.previousRunId || '')
+  };
+}
+
 function persistedReconnectDelayPlan(state, config = {}, nowMs = Date.now()) {
+  const runner = state?.runner || {};
   const action = state?.runner?.currentAction || {};
   const stats = state?.stats || {};
   const lastExit = stats.lastExit || {};
+  const gameplayDeadline = runner.gameplayDeadline && typeof runner.gameplayDeadline === 'object'
+    ? runner.gameplayDeadline
+    : null;
   const candidates = [
-    action.nextRunAt,
-    lastExit.nextRunAt
+    { until: gameplayDeadline?.until, source: 'gameplay-deadline', reason: gameplayDeadline?.reason, explicit: gameplayDeadline?.explicit },
+    { until: action.nextRunAt, source: 'current-action', reason: action.reason, explicit: action.explicitDelay },
+    { until: lastExit.nextRunAt, source: 'last-exit', reason: lastExit.reason, explicit: false }
   ];
   let nextRunAtMs = 0;
   let nextRunAt = '';
+  let selected = null;
   for (const candidate of candidates) {
-    const parsed = parseIsoTimeMs(candidate);
+    const parsed = parseIsoTimeMs(candidate.until);
     if (parsed > nextRunAtMs) {
       nextRunAtMs = parsed;
-      nextRunAt = String(candidate || '');
+      nextRunAt = String(candidate.until || '');
+      selected = candidate;
     }
   }
   const nowValue = Number.isFinite(Number(nowMs)) ? Number(nowMs) : Date.now();
@@ -358,17 +390,48 @@ function persistedReconnectDelayPlan(state, config = {}, nowMs = Date.now()) {
     Number(config.maxPersistedReconnectDelayMs || 0) || DAY_MS
   );
   if (remainingMs > maxDelayMs) return null;
-  const reason = String(action.reason || lastExit.reason || 'persisted-reconnect-wait');
+  const actionSafetyReason = String(action.safetyReason || '');
+  const deadlineReason = String(gameplayDeadline?.reason || '');
+  const lastExitReason = String(lastExit.reason || '');
+  const selectedReason = String(selected?.reason || '');
+  const staminaReason = [
+    deadlineReason,
+    actionSafetyReason,
+    lastExitReason,
+    action.reason,
+    selectedReason
+  ].map(staminaGameplayDeadlineReason).find(Boolean) || '';
+  const reason = staminaReason || selectedReason || deadlineReason || actionSafetyReason || lastExitReason
+    || String(action.reason || 'persisted-reconnect-wait');
+  const explicitCooldown = Boolean(
+    staminaReason
+      || gameplayDeadline?.type === 'stamina-reset'
+      || gameplayDeadline?.explicit
+      || action.explicitDelay
+      || selected?.explicit
+  );
   return {
     continue: true,
     reason: reason || 'persisted-reconnect-wait',
     delayMs: remainingMs,
     previousRunId: action.previousRunId || '',
     error: reason || 'persisted-reconnect-wait',
-    safetyReason: lastExit.reason || reason || '',
+    safetyReason: staminaReason || actionSafetyReason || lastExitReason || reason || '',
     nextRunAt,
     persisted: true,
-    explicitDelay: Boolean(action.explicitDelay)
+    explicitDelay: Boolean(gameplayDeadline?.explicit || action.explicitDelay || selected?.explicit),
+    explicitCooldown,
+    deadlineType: String(gameplayDeadline?.type || (staminaReason ? 'stamina-reset' : 'legacy-reconnect-wait')),
+    deadlineSource: String(selected?.source || ''),
+    gameplayDeadline: gameplayDeadline || (staminaReason ? {
+      type: 'stamina-reset',
+      reason: staminaReason,
+      until: nextRunAt,
+      explicit: true,
+      snapshotEdgeReplaceable: false,
+      sourceRunId: String(action.previousRunId || lastExit.runId || '')
+    } : null),
+    processStop: runner.processStop || null
   };
 }
 
@@ -760,8 +823,13 @@ async function runBrowserlessRunner(config, deps = {}) {
       commitmentKey: publicStatus.commitmentKey
     });
     const updatedAt = new Date(now()).toISOString();
-    if (liveState) patchLiveState({ runner: { restartDrain: publicStatus } }, { updatedAt });
-    else updateState({ runner: { restartDrain: publicStatus } }, { updatedAt });
+    const processStop = {
+      reason: publicStatus.reason,
+      source: 'restart-drain',
+      requestedAt: publicStatus.requestedAt || updatedAt
+    };
+    if (liveState) patchLiveState({ runner: { restartDrain: publicStatus, processStop } }, { updatedAt });
+    else updateState({ runner: { restartDrain: publicStatus, processStop } }, { updatedAt });
     if (key !== lastRestartDrainLogKey) {
       lastRestartDrainLogKey = key;
       logStore.append('runner', eventType, publicStatus);
@@ -1161,6 +1229,7 @@ async function runBrowserlessRunner(config, deps = {}) {
           explicitDelay: Boolean(loopPlan.explicitDelay),
           previousRunId: loopPlan.previousRunId || ''
         },
+        gameplayDeadline: gameplayDeadlineFromLoopPlan(loopPlan, nextRunAt, loopPlan.previousRunId),
         confirmedLeave: confirmedLeave
           ? {
               confirmedAt: confirmedLeave.confirmedAt || '',
@@ -1256,7 +1325,8 @@ async function runBrowserlessRunner(config, deps = {}) {
                 delayMs: 0,
                 nextRunAt: '',
                 previousRunId: loopPlan.previousRunId || ''
-              }
+              },
+              gameplayDeadline: null
             },
             stats: browserlessStatsForOffline(currentBeforeResume, {
               ...waitExitDetail,
@@ -1328,6 +1398,7 @@ async function runBrowserlessRunner(config, deps = {}) {
       return stopped;
     }
     safetyController.clearStop();
+    updateState({ runner: { gameplayDeadline: null } }, { updatedAt: new Date(now()).toISOString() });
     refreshFromPersistedState();
     return null;
   };
@@ -1601,16 +1672,18 @@ async function runBrowserlessRunner(config, deps = {}) {
     retention,
     statusServer: statusHandle ? { host: config.statusHost, port: statusHandle.port } : null
   });
-  updateState({ runner: { restartDrain: null } }, { updatedAt: new Date(now()).toISOString() });
+  updateState({ runner: { restartDrain: null, processStop: null } }, { updatedAt: new Date(now()).toISOString() });
 
   let persistedDelayPlan = !config.once && !config.dryRun
     ? persistedReconnectDelayPlan(readBrowserlessStateFile(stateFile), config, now())
     : null;
+  if (!persistedDelayPlan) {
+    updateState({ runner: { gameplayDeadline: null } }, { updatedAt: new Date(now()).toISOString() });
+  }
   if (persistedDelayPlan && config.snapshotEdgeEnabled === true) {
     const persistedState = readBrowserlessStateFile(stateFile);
     const confirmed = activeConfirmedLeaveState(persistedState, now());
-    const explicitCooldown = Boolean(persistedDelayPlan.explicitDelay)
-      || ['stamina-budget-coin-leave', 'stamina-exhausted-leave'].includes(String(persistedDelayPlan.reason || ''));
+    const explicitCooldown = Boolean(persistedDelayPlan.explicitCooldown || persistedDelayPlan.explicitDelay);
     if (confirmed && !explicitCooldown) {
       logStore.append('runner', 'runner-persisted-delay-replaced-by-snapshot-edge', {
         previousReason: persistedDelayPlan.reason || '',
@@ -1618,6 +1691,7 @@ async function runBrowserlessRunner(config, deps = {}) {
         confirmedAt: confirmed.confirmedAt || ''
       });
       persistedDelayPlan = null;
+      updateState({ runner: { gameplayDeadline: null } }, { updatedAt: new Date(now()).toISOString() });
     }
   }
   let preservePersistedOnlineSession = false;
@@ -1675,7 +1749,8 @@ async function runBrowserlessRunner(config, deps = {}) {
                 nextRunAt: '',
                 previousRunId: persistedDelayPlan.previousRunId || '',
                 persisted: true
-              }
+              },
+              gameplayDeadline: null
             },
             stats: preservePersistedOnlineSession
               ? currentBeforeResume.stats
@@ -1717,7 +1792,12 @@ async function runBrowserlessRunner(config, deps = {}) {
           nextRunAt: persistedDelayPlan.nextRunAt,
           previousRunId: persistedDelayPlan.previousRunId || '',
           persisted: true
-        }
+        },
+        gameplayDeadline: persistedDelayPlan.gameplayDeadline || gameplayDeadlineFromLoopPlan(
+          persistedDelayPlan,
+          persistedDelayPlan.nextRunAt,
+          persistedDelayPlan.previousRunId
+        )
       },
       stats: preservePersistedOnlineSession
         ? currentBeforeWait.stats
@@ -1775,6 +1855,7 @@ async function runBrowserlessRunner(config, deps = {}) {
       return stopped;
     }
     safetyController.clearStop();
+    updateState({ runner: { gameplayDeadline: null } }, { updatedAt: new Date(now()).toISOString() });
     refreshFromPersistedState();
   }
 

@@ -3429,6 +3429,8 @@ function applyStaleCoinEscape(action, stateful = {}, nowMs = 0) {
     reason: action?.reason && String(action.reason).startsWith('ignore-') ? action.reason : 'leave-stale-coin',
     dx: escape.dx,
     dy: escape.dy,
+    target: null,
+    immediate: true,
     staleCoinEscape: {
       id: escape.id,
       remainingMs: Math.max(0, Math.round(Number(escape.until || 0) - t))

@@ -33,9 +33,24 @@ function actionPriorityBand(action) {
 function actionFocusTargetType(action, target) {
   const kind = String(action?.kind || '');
   const reason = String(action?.reason || '');
+  const playerIdentity = target?.userId !== undefined
+    || target?.user_id !== undefined
+    || target?.hp !== undefined
+    || target?.knownHp !== undefined
+    || target?.drop !== undefined
+    || target?.Drop !== undefined
+    || target?.death_drop_coins !== undefined;
+  const coinIdentity = target?.drop_id !== undefined
+    || target?.dropId !== undefined
+    || target?.coin_id !== undefined
+    || target?.coinId !== undefined
+    || target?.amount !== undefined
+    || target?.fieldAmount !== undefined
+    || target?.coinRoute;
+  if (playerIdentity) return 'enemy';
+  if (coinIdentity) return 'coin';
   if (kind === 'coin' || kind === 'seek-coin') return 'coin';
-  if (kind === 'patrol' && (String(reason).includes('coin') || target?.amount !== undefined)) return 'coin';
-  if (target?.coinRoute || target?.amount !== undefined || target?.fieldAmount !== undefined) return 'coin';
+  if (kind === 'patrol' && String(reason).includes('coin')) return 'coin';
   return 'enemy';
 }
 
@@ -66,6 +81,10 @@ function actionFocusSummary(action, options = {}) {
     id = actionFocusId(target, type);
     label = String(target.name || target.label || id || '');
     targeted = type === 'coin' || type === 'enemy';
+  } else if (action.staleCoinEscape?.id) {
+    type = 'escape';
+    id = String(action.staleCoinEscape.id);
+    label = id;
   } else if (kind === 'flee') {
     const threat = Array.isArray(action.threats) ? action.threats[0] : null;
     type = 'safety';

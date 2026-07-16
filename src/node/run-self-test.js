@@ -10114,6 +10114,7 @@ async function runSelfTest() {
           second.kind,
           second.reason,
           second.action.dx,
+          second.action.target === null,
           stateful.ignoredCoins['id:stale-snapshot-coin'] > 2200,
           stateful.coinProgress['id:stale-snapshot-coin'].ignoreUntil,
           third.kind,
@@ -10121,7 +10122,7 @@ async function runSelfTest() {
           third.action.target === undefined
         ].join('|');
       })(),
-      want: 'coin|stale-snapshot-coin|patrol|ignore-stale-coin-no-progress|-1|true|7200|wait|no-profitable-candidate|true'
+      want: 'coin|stale-snapshot-coin|patrol|ignore-stale-coin-no-progress|-1|true|true|7200|wait|no-profitable-candidate|true'
     },
     {
       name: 'browserless profit live close stuck coin uses stale escape patrol',
@@ -14055,6 +14056,102 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'true|60000|false'
+    },
+    {
+      name: 'browserless exchange stop loss state survives high-frequency engagement rebuild',
+      got: (() => {
+        const stateful = {};
+        const options = {
+          decisionState: stateful,
+          liveCombatEnabled: true,
+          combatAttackRange: 14500,
+          combatCriticalHp: 0,
+          combatLowHpLeaveThreshold: 0,
+          combatHighHpDisadvantageGap: 200,
+          exchangeMinEngageMs: 8000,
+          exchangeMinAcceptedShots: 10,
+          exchangeMinDamageObservations: 4,
+          exchangeConfirmMs: 2750
+        };
+        let firstActiveAt = 0;
+        let triggeredAt = 0;
+        let triggeredReason = '';
+        for (let index = 0; index < 90; index += 1) {
+          const nowMs = 1000 + index * 160;
+          const damageSteps = Math.max(0, Math.min(15, index - 38));
+          const selfHp = 100 - damageSteps;
+          const self = {
+            entity_id: 1,
+            user_id: 7,
+            x: 0,
+            y: 0,
+            hp: selfHp,
+            max_hp: 100,
+            stamina_5s_remaining_milli: 10000
+          };
+          const target = {
+            entity_id: 2,
+            user_id: 8,
+            name: 'active',
+            x: 1000,
+            y: 0,
+            hp: 100,
+            max_hp: 100,
+            current_join_mode: 'Active',
+            active: true,
+            firing: true,
+            drop: 50
+          };
+          const combat = buildBrowserlessCombatDryRun({
+            userId: 7,
+            realtime: { tick: 100 + index, self, entities: [self, target], bullets: [] }
+          }, { ...options, nowMs });
+          if (stateful.combatMetrics) stateful.combatMetrics.acceptedShots = 30;
+          if (!firstActiveAt && combat.exchangeStopLoss?.active) firstActiveAt = nowMs;
+          if (!triggeredAt && combat.exchangeStopLoss?.triggered) {
+            triggeredAt = nowMs;
+            triggeredReason = combat.exit?.reason || '';
+          }
+        }
+        const replacementSelf = {
+          entity_id: 1,
+          user_id: 7,
+          x: 0,
+          y: 0,
+          hp: 85,
+          max_hp: 100,
+          stamina_5s_remaining_milli: 10000
+        };
+        const replacementTarget = {
+          entity_id: 3,
+          user_id: 9,
+          name: 'replacement',
+          x: 1000,
+          y: 0,
+          hp: 85,
+          current_join_mode: 'Active',
+          firing: true,
+          drop: 20
+        };
+        buildBrowserlessCombatDryRun({
+          userId: 7,
+          realtime: {
+            tick: 200,
+            self: replacementSelf,
+            entities: [replacementSelf, replacementTarget],
+            bullets: []
+          }
+        }, { ...options, nowMs: 16000, targetStickMs: 0, combatEngageStickMs: 0 });
+        return [
+          firstActiveAt,
+          triggeredAt,
+          triggeredAt - firstActiveAt,
+          triggeredReason,
+          stateful.combatTarget.id,
+          stateful.combatTarget.exchangeDegradationSinceAt
+        ].join('|');
+      })(),
+      want: '9000|11880|2880|combat-exchange-stop-loss-negative-damage-exchange|9|0'
     },
     {
       name: 'browserless combat low hp behind exits regardless no-damage window',
@@ -19863,7 +19960,7 @@ async function runSelfTest() {
       want: 'explicit-stop|1|1|500|1|3000|500|explicit-stop'
     },
     {
-      name: 'browserless runner keeps explicit stamina delay and checks first login after daily reset',
+      name: 'browserless runner migrates restart drain overlay back to explicit stamina deadline',
       got: withTempDirForTest(async dir => {
         let t = Date.parse('2026-07-12T15:59:10.000Z');
         let precheckCalls = 0;
@@ -19884,10 +19981,23 @@ async function runSelfTest() {
         ], {});
         updateBrowserlessStateFile(stateFilePath(config), {
           runner: {
+            confirmedLeave: {
+              confirmedAt: '2026-07-12T15:59:09.000Z',
+              snapshotIgnoreUntil: '2026-07-12T15:59:49.000Z',
+              lastRealtimeTick: 200,
+              runId: 'stamina-before-drain'
+            },
             currentAction: {
               kind: 'loop-wait',
-              reason: 'stamina-exhausted-leave',
-              nextRunAt: '2026-07-12T16:00:10.000Z'
+              reason: 'restart-drain-ready',
+              safetyReason: 'stamina-exhausted-leave',
+              nextRunAt: '2026-07-12T16:00:10.000Z',
+              previousRunId: 'stamina-before-drain'
+            },
+            processStop: {
+              reason: 'restart-drain-ready',
+              source: 'restart-drain',
+              requestedAt: '2026-07-12T15:59:05.000Z'
             }
           },
           stats: {
@@ -19895,11 +20005,17 @@ async function runSelfTest() {
             currentSession: { online: false },
             lastExit: {
               at: '2026-07-12T03:11:09.932Z',
-              reason: 'stamina-exhausted-leave',
+              reason: 'restart-drain-ready',
               nextRunAt: '2026-07-12T16:00:10.000Z'
             }
           }
         }, { updatedAt: '2026-07-12T03:11:09.932Z' });
+        config.snapshotEdgeEnabled = true;
+        const migratedPlan = persistedReconnectDelayPlan(
+          readBrowserlessStateFile(stateFilePath(config)),
+          config,
+          t
+        );
         const result = await runBrowserlessRunner(config, {
           now: () => t,
           startStatusServer: false,
@@ -19933,6 +20049,10 @@ async function runSelfTest() {
           result.reason,
           precheckCalls,
           sleptMs,
+          migratedPlan.reason,
+          migratedPlan.explicitCooldown,
+          migratedPlan.deadlineType,
+          migratedPlan.gameplayDeadline.reason,
           canaryOptions.bypassPreLoginSafetyReason,
           isFirstBrowserlessLoginOfDay({
             stats: {
@@ -19942,7 +20062,7 @@ async function runSelfTest() {
           }, Date.parse('2026-07-12T16:00:10.000Z'))
         ].join('|');
       }),
-      want: 'explicit-stop|1|60000||true'
+      want: 'explicit-stop|0|60000|stamina-exhausted-leave|true|stamina-reset|stamina-exhausted-leave||true'
     },
     {
       name: 'browserless runner prepares login point safety during reconnect wait',

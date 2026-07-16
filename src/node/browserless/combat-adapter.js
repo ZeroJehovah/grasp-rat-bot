@@ -1093,6 +1093,9 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
   const disadvantageSamples = disadvantaged
     ? (same ? Math.max(0, Number(previous?.disadvantageSamples || 0)) + 1 : 1)
     : 0;
+  const exchangeDegradationSinceAt = same
+    ? Math.max(0, Number(previous?.exchangeDegradationSinceAt || 0))
+    : 0;
   const previousFirstHp = same && Number.isFinite(Number(previous.firstHp)) ? Number(previous.firstHp) : null;
   const firstHp = same ? (previousFirstHp ?? previousHp ?? hp) : hp;
   const previousMinHp = same && Number.isFinite(Number(previous.minHp)) ? Number(previous.minHp) : null;
@@ -1216,6 +1219,7 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
     seenTargetRealBulletAt: targetOwnsRealBullet ? nowMs : (same ? Number(previous.seenTargetRealBulletAt || 0) : 0),
     disadvantageSinceAt,
     disadvantageSamples,
+    exchangeDegradationSinceAt,
     lastDamageAmount: damaged ? Math.max(0, previousHp - hp) : Number(previous?.lastDamageAmount || 0),
     noDamageMs: Math.max(0, nowMs - (damaged ? nowMs : (same ? Number(previous.lastDamageAt || previous.at || nowMs) : nowMs))),
     motionSamples,

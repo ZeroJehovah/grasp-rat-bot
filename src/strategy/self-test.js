@@ -1008,6 +1008,31 @@ function runStrategyModuleSelfTests() {
     name: 'action-focus-build',
     passed: focus && focus.kind === 'coin' && focus.targetKey === 'test123'
   });
+  const stalePlayerFocus = buildActionFocus({
+    kind: 'patrol',
+    reason: 'leave-stale-coin',
+    target: { userId: 27821, hp: 100, drop: 5 }
+  });
+  const staleCoinFocus = buildActionFocus({
+    kind: 'patrol',
+    reason: 'leave-stale-coin',
+    target: { drop_id: 27821, amount: 1 }
+  });
+  results.push({
+    name: 'action-focus-prefers-structured-identity-over-patrol-reason',
+    passed: stalePlayerFocus?.key === 'enemy:27821'
+      && staleCoinFocus?.key === 'coin:27821'
+  });
+  const staleEscapeFocus = buildActionFocus({
+    kind: 'patrol',
+    reason: 'leave-stale-coin',
+    staleCoinEscape: { id: 'id:27821' }
+  });
+  results.push({
+    name: 'action-focus-uses-dedicated-stale-coin-escape-key',
+    passed: staleEscapeFocus?.key === 'escape:id:27821'
+      && staleEscapeFocus?.targeted === false
+  });
 
   // Test arbitration - safety over profit
   const safetyAction = { kind: 'flee', reason: 'test-flee' };

@@ -11,6 +11,7 @@ const { evaluateBrowserlessSafety } = require('../src/node/browserless/safety-co
 const { actionPriorityBand } = require('../src/strategy/action-priority');
 const {
   evaluateConfirmedCombatHpExitCore,
+  evaluateCombatExchangeStopLossCore,
   evaluateCombatHpExitCore,
   evaluatePredictedLeaveHpCore
 } = require('../src/strategy/combat-exit');
@@ -266,6 +267,98 @@ function attributeTargetDamageToShots(rows, shotEvaluations, damageEvents, optio
   return attributions;
 }
 
+function replayCombatExchangeStopLoss(rows) {
+  if (!rows.length) return null;
+  const startedAt = Date.parse(rows[0].entry.at);
+  let degradationSinceAt = 0;
+  let firstActive = null;
+  let firstTriggered = null;
+  let baselineTriggered = false;
+  const damageWindow = (endIndex, windowMs) => {
+    const nowMs = Date.parse(rows[endIndex].entry.at);
+    let startIndex = endIndex;
+    while (startIndex > 0 && nowMs - Date.parse(rows[startIndex - 1].entry.at) <= windowMs) startIndex -= 1;
+    const windowRows = rows.slice(startIndex, endIndex + 1);
+    const first = windowRows[0]?.detail || {};
+    const last = windowRows[windowRows.length - 1]?.detail || {};
+    let damageObservations = 0;
+    for (let index = 1; index < windowRows.length; index += 1) {
+      const previous = windowRows[index - 1].detail || {};
+      const current = windowRows[index].detail || {};
+      if (Number(current.self?.hp) < Number(previous.self?.hp)
+        || Number(current.target?.hp) < Number(previous.target?.hp)) damageObservations += 1;
+    }
+    return {
+      selfDamage: Math.max(0, Number(first.self?.hp || 0) - Number(last.self?.hp || 0)),
+      targetDamage: Math.max(0, Number(first.target?.hp || 0) - Number(last.target?.hp || 0)),
+      distanceProgressCm: Number(first.target?.distance || 0) - Number(last.target?.distance || 0),
+      damageObservations
+    };
+  };
+  for (let index = 0; index < rows.length; index += 1) {
+    const row = rows[index];
+    const nowMs = Date.parse(row.entry.at);
+    const short = damageWindow(index, 10000);
+    const long = damageWindow(index, 20000);
+    const recent = damageWindow(index, 3000);
+    const input = {
+      nowMs,
+      engagedMs: Math.max(0, nowMs - startedAt),
+      acceptedShots: Number(row.detail.metrics?.acceptedShots || 0),
+      damageObservations: Math.max(short.damageObservations, long.damageObservations),
+      selfHp: Number(row.detail.self?.hp),
+      targetHp: Number(row.detail.target?.hp),
+      windowMs: 10000,
+      windowSelfDamage: short.selfDamage,
+      windowTargetDamage: short.targetDamage,
+      longWindowSelfDamage: long.selfDamage,
+      longWindowTargetDamage: long.targetDamage,
+      distanceProgressCm: long.distanceProgressCm,
+      recentTargetDamage: recent.targetDamage
+    };
+    const baseline = evaluateCombatExchangeStopLossCore({ ...input, degradationSinceAt: 0 });
+    const improved = evaluateCombatExchangeStopLossCore({ ...input, degradationSinceAt });
+    degradationSinceAt = improved.degradationSinceAt;
+    if (baseline.triggered) baselineTriggered = true;
+    if (!firstActive && improved.active) {
+      firstActive = {
+        line: row.line,
+        at: row.entry.at,
+        elapsedMs: nowMs - startedAt,
+        rule: improved.rule,
+        selfHp: Number(row.detail.self?.hp),
+        targetHp: Number(row.detail.target?.hp)
+      };
+    }
+    if (!firstTriggered && improved.triggered) {
+      firstTriggered = {
+        line: row.line,
+        at: row.entry.at,
+        elapsedMs: nowMs - startedAt,
+        confirmationMs: firstActive ? nowMs - Date.parse(firstActive.at) : null,
+        rule: improved.rule,
+        reason: improved.reason,
+        selfHp: Number(row.detail.self?.hp),
+        targetHp: Number(row.detail.target?.hp)
+      };
+    }
+  }
+  const initialSelfHp = Number(rows[0].detail.self?.hp);
+  const finalSelfHp = Number(rows[rows.length - 1].detail.self?.hp);
+  return {
+    baselineTriggered,
+    firstActive,
+    firstTriggered,
+    selfDamageBeforeTrigger: firstTriggered && Number.isFinite(initialSelfHp)
+      ? Math.max(0, initialSelfHp - Number(firstTriggered.selfHp))
+      : null,
+    observedWindowSelfDamage: Number.isFinite(initialSelfHp) && Number.isFinite(finalSelfHp)
+      ? Math.max(0, initialSelfHp - finalSelfHp)
+      : null,
+    accepted: Boolean(!baselineTriggered && firstTriggered)
+  };
+}
+
 function replayCombat(options) {
   const rows = selectedEntries(options).filter(({ detail }) => String(detail.target?.userId ?? '') === options.targetId);
   const confirmedShots = confirmedShotsForRows(options, rows);
@@ -388,6 +481,7 @@ function replayCombat(options) {
   const damageAttributions = attributeTargetDamageToShots(rows, shotEvaluations, damageEvents.target, {
     hitRadius: options.hitRadius
   });
+  const exchangeStopLossReplay = replayCombatExchangeStopLoss(rows);
   const observedTargetDamage = damageEvents.target.reduce((sum, event) => sum + Number(event.damage || 0), 0);
   const associatedTargetDamage = damageAttributions.reduce((sum, event) => sum + Number(event.damage || 0), 0);
   const observedSelfDamage = damageEvents.self.reduce((sum, event) => sum + Number(event.damage || 0), 0);
@@ -445,15 +539,20 @@ function replayCombat(options) {
       associatedTargetDamage,
       samples: damageAttributions.slice(0, 12)
     },
+    exchangeStopLossReplay,
     aimDiagnostics,
     routeCandidateOracle
   };
-  result.improved.accepted = rows.length > 0 && confirmedShots.length > 0
-    && (improvedHits > baselineHits
-      || result.improved.meanAimMissCm < result.baseline.meanAimMissCm
-      || (result.improved.firstEstimatedDamageDelayMs !== null
-        && (result.baseline.firstEstimatedDamageDelayMs === null
-          || result.improved.firstEstimatedDamageDelayMs < result.baseline.firstEstimatedDamageDelayMs)));
+  result.improved.accepted = rows.length > 0 && (
+    Boolean(exchangeStopLossReplay?.accepted)
+      || (confirmedShots.length > 0 && (
+        improvedHits > baselineHits
+        || result.improved.meanAimMissCm < result.baseline.meanAimMissCm
+        || (result.improved.firstEstimatedDamageDelayMs !== null
+          && (result.baseline.firstEstimatedDamageDelayMs === null
+            || result.improved.firstEstimatedDamageDelayMs < result.baseline.firstEstimatedDamageDelayMs))
+      ))
+  );
   return result;
 }
 
