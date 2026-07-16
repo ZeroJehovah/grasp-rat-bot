@@ -1929,7 +1929,7 @@ function routeDisplayCoinsForAction(input, action) {
   for (const coin of input?.profitCoins || []) {
     for (const key of coinPanelKeys(coin)) byKey.set(key, coin);
   }
-  return points.slice(1).map(point => {
+  return points.map(point => {
     const key = valueKey(point?.id);
     const source = key ? byKey.get(key) : null;
     const coin = source || {
@@ -7183,5 +7183,6 @@ module.exports = {
   recordAttackHistoryFromActionResult,
   summarizeBrowserlessDecision,
   snapshotSelfKillEvidence,
+  summarizeNearbyForPanel,
   summarizeBrowserlessDecisionState
 };

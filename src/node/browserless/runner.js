@@ -43,7 +43,8 @@ const {
 const {
   BROWSER_RUNTIME_DEFAULTS,
   decisionStatePatch,
-  snapshotSelfKillEvidence
+  snapshotSelfKillEvidence,
+  summarizeNearbyForPanel
 } = require('./decision-adapter');
 const { createBrowserlessActionAdapter } = require('./action-adapter');
 const { createSourceIpController } = require('./source-ip-controller');
@@ -2405,6 +2406,48 @@ async function runBrowserlessRunnerSelfTest() {
       fetchSnapshot: async () => ({})
     });
     const dynamicSnapshotPollerStatus = dynamicSnapshotPoller.status();
+    const routeAction = {
+      kind: 'coin',
+      target: { id: 'route-a', x: 20, y: 0, amount: 4 },
+      coinRoute: {
+        points: [
+          { id: 'route-a', x: 20, y: 0, amount: 4, order: 1 },
+          { id: 'route-b', x: 40, y: 0, amount: 4, order: 2 },
+          { id: 'route-c', x: 60, y: 0, amount: 4, order: 3 }
+        ]
+      }
+    };
+    const routePanelInput = firstCoinPresent => ({
+      self: { x: 0, y: 0 },
+      profitCoins: [
+        ...(firstCoinPresent ? [{ drop_id: 'route-a', id: 'route-a', x: 20, y: 0, amount: 4, distance: 20, authority: 'realtime' }] : []),
+        { drop_id: 'route-b', id: 'route-b', x: 40, y: 0, amount: 4, distance: 40, authority: 'realtime' },
+        { drop_id: 'route-c', id: 'route-c', x: 60, y: 0, amount: 4, distance: 60, authority: 'realtime' }
+      ],
+      visibleTargets: []
+    });
+    const routeRowsWhenFirstMissing = summarizeNearbyForPanel(
+      routePanelInput(false),
+      routeAction,
+      {},
+      { globalCoinMaxDistance: 50000 }
+    ).c;
+    const routeRowsWhenFirstPresent = summarizeNearbyForPanel(
+      routePanelInput(true),
+      routeAction,
+      {},
+      { globalCoinMaxDistance: 50000 }
+    ).c;
+    const expectedRouteRows = 'route-a:1:1,route-b:0:2,route-c:0:3';
+    const routeRowsText = rows => rows.map(row => `${row[0]}:${row[3]}:${row[4]}`).join(',');
+    const nearbyCoinRoutePanelTest = {
+      ok: routeRowsText(routeRowsWhenFirstMissing) === expectedRouteRows
+        && routeRowsText(routeRowsWhenFirstPresent) === expectedRouteRows
+        && new Set(routeRowsWhenFirstMissing.map(row => row[0])).size === routeRowsWhenFirstMissing.length
+        && new Set(routeRowsWhenFirstPresent.map(row => row[0])).size === routeRowsWhenFirstPresent.length,
+      missingFirst: routeRowsText(routeRowsWhenFirstMissing),
+      presentFirst: routeRowsText(routeRowsWhenFirstPresent)
+    };
     let chatActivityCount = 0;
     const chatSendInputs = [];
     const statusTestHandle = await startStatusServer({
@@ -2432,6 +2475,8 @@ async function runBrowserlessRunnerSelfTest() {
         body: JSON.stringify({ text: 'hello' })
       });
       const sendBody = await sendResponse.json();
+      const targetMarkerOwnsRow = pageHtml.includes('right:100%;top:0;bottom:0;width:3px')
+        && !pageHtml.includes('right:100%;top:-1px;bottom:-1px;width:3px');
       statusServerChatTest = {
         ok: Boolean(
           pageResponse.ok
@@ -2443,11 +2488,13 @@ async function runBrowserlessRunnerSelfTest() {
           && sendResponse.ok
           && sendBody.reason === 'self-test-chat-sent'
           && chatSendInputs[0] === 'hello'
+          && targetMarkerOwnsRow
         ),
         unauthorizedStatus: unauthorizedResponse.status,
         activityCount: chatActivityCount,
         sendInputs: chatSendInputs.slice(),
-        webChatPanelPresent: pageHtml.includes('id="chatPanel"')
+        webChatPanelPresent: pageHtml.includes('id="chatPanel"'),
+        targetMarkerOwnsRow
       };
     } finally {
       await statusTestHandle.close();
@@ -2480,6 +2527,7 @@ async function runBrowserlessRunnerSelfTest() {
         && closedTransportAction.transportClosed === true
         && chatService.ok
         && dynamicSnapshotPollerStatus.currentIntervalMs === DEFAULT_CHAT_ACTIVE_INTERVAL_MS
+        && nearbyCoinRoutePanelTest.ok
         && statusServerChatTest.ok
         && complexCombatMainThreadBudget.ok
       ),
@@ -2497,6 +2545,7 @@ async function runBrowserlessRunnerSelfTest() {
       closedTransportAction,
       chatService,
       dynamicSnapshotPollerStatus,
+      nearbyCoinRoutePanelTest,
       statusServerChatTest,
       complexCombatMainThreadBudget,
       logFile: runnerLog
