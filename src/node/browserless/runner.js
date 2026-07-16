@@ -2475,8 +2475,9 @@ async function runBrowserlessRunnerSelfTest() {
         body: JSON.stringify({ text: 'hello' })
       });
       const sendBody = await sendResponse.json();
-      const targetMarkerOwnsRow = pageHtml.includes('right:100%;top:0;bottom:0;width:3px')
-        && !pageHtml.includes('right:100%;top:-1px;bottom:-1px;width:3px');
+      const targetMarkerCoversOuterBorders = pageHtml.includes('right:100%;top:-1px;bottom:-1px;width:3px');
+      const targetMarkerAvoidsAdjacentOverlap = pageHtml.includes('.target-current+.target-current::before,.target-current+.target-route-next::before,.target-route-next+.target-current::before,.target-route-next+.target-route-next::before{top:0}');
+      const targetMarkerBoundaryOwnership = targetMarkerCoversOuterBorders && targetMarkerAvoidsAdjacentOverlap;
       statusServerChatTest = {
         ok: Boolean(
           pageResponse.ok
@@ -2488,13 +2489,15 @@ async function runBrowserlessRunnerSelfTest() {
           && sendResponse.ok
           && sendBody.reason === 'self-test-chat-sent'
           && chatSendInputs[0] === 'hello'
-          && targetMarkerOwnsRow
+          && targetMarkerBoundaryOwnership
         ),
         unauthorizedStatus: unauthorizedResponse.status,
         activityCount: chatActivityCount,
         sendInputs: chatSendInputs.slice(),
         webChatPanelPresent: pageHtml.includes('id="chatPanel"'),
-        targetMarkerOwnsRow
+        targetMarkerCoversOuterBorders,
+        targetMarkerAvoidsAdjacentOverlap,
+        targetMarkerBoundaryOwnership
       };
     } finally {
       await statusTestHandle.close();
