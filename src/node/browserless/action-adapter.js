@@ -232,7 +232,7 @@ function safetyMotionFromDecision(decision) {
   const kind = String(action.kind || decision?.kind || '');
   const band = String(action.band || decision?.band || '');
   if (band !== 'safety') return null;
-  if (kind !== 'flee' && kind !== 'return-block-scan') return null;
+  if (kind !== 'flee' && kind !== 'return-block-scan' && kind !== 'leave-pending-cover') return null;
   return action;
 }
 

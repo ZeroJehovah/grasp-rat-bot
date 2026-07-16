@@ -135,7 +135,8 @@ const {
   combatHpExitThresholdsCore,
   evaluateCombatExchangeStopLossCore,
   evaluateConfirmedCombatHpExitCore,
-  evaluateCombatHpExitCore
+  evaluateCombatHpExitCore,
+  evaluatePredictedLeaveHpCore
 } = require('./combat-exit');
 const { OPPORTUNITY_CONSTANTS, calculateOpportunityROI, validateOpportunityConstants } = require('./opportunity-constants');
 const {
@@ -2987,6 +2988,41 @@ function runStrategyModuleSelfTests() {
     passed: evaluateCombatHpExitCore({ selfHp: 94, targetHp: 46 }) === null
       && evaluateCombatHpExitCore({ selfHp: 65, targetHp: null }) === null
       && evaluateCombatHpExitCore({ selfHp: 19, targetHp: null })?.reason === 'combat-critical-hp-leave'
+  });
+
+  const predictedCritical = evaluatePredictedLeaveHpCore({
+    selfHp: 21,
+    directHits: 1,
+    unavoidableHits: 1,
+    recentDamage: 0,
+    recentDamageWindowMs: 0,
+    commandDelayMs: 250
+  });
+  const predictedRateLoss = evaluatePredictedLeaveHpCore({
+    selfHp: 73,
+    directHits: 0,
+    unavoidableHits: 0,
+    recentDamage: 27,
+    recentDamageWindowMs: 600,
+    commandDelayMs: 250
+  });
+  const predictedSafe = evaluatePredictedLeaveHpCore({
+    selfHp: 94,
+    directHits: 0,
+    unavoidableHits: 0,
+    recentDamage: 3,
+    recentDamageWindowMs: 1000,
+    commandDelayMs: 250
+  });
+  results.push({
+    name: 'combat-exit-predicts-leave-window-damage-with-one-hit-uncertainty',
+    passed: predictedCritical.shouldLeave === true
+      && predictedCritical.windowMs === 1250
+      && predictedCritical.predictedDamage === 3
+      && predictedCritical.riskAdjustedHp === 15
+      && predictedRateLoss.shouldLeave === true
+      && predictedRateLoss.predictedDamage >= 56
+      && predictedSafe.shouldLeave === false
   });
 
   results.push({

@@ -91,6 +91,76 @@ function evaluateCombatHpExitCore(input = {}, options = {}) {
   return null;
 }
 
+function evaluatePredictedLeaveHpCore(input = {}, options = {}) {
+  const selfHp = numberOrNull(input.selfHp ?? input.self?.hp);
+  if (selfHp === null) return null;
+  const baseWindowMs = Math.max(1000, firstConfiguredNumber(options, [
+    'leavePredictionWindowMs',
+    'combatLeavePredictionWindowMs'
+  ], 1000));
+  const commandDelayMs = Math.max(0, numberOrNull(
+    input.commandDelayMs
+      ?? options.leavePredictionCommandDelayMs
+      ?? options.combatLeavePredictionCommandDelayMs
+  ) ?? 250);
+  const windowMs = baseWindowMs + commandDelayMs;
+  const damagePerHit = Math.max(0.1, firstConfiguredNumber(options, [
+    'leavePredictionDamagePerHit',
+    'combatLeavePredictionDamagePerHit',
+    'opportunityEstimatedDamagePerShot'
+  ], 3));
+  const directHits = Math.max(0, Math.round(numberOrNull(input.directHits) ?? 0));
+  const unavoidableHits = Math.max(0, Math.round(numberOrNull(input.unavoidableHits) ?? 0));
+  const collisionHits = Math.max(directHits, unavoidableHits);
+  const collisionDamage = collisionHits * damagePerHit;
+  const recentDamage = Math.max(0, numberOrNull(input.recentDamage) ?? 0);
+  const recentDamageWindowMs = Math.max(0, numberOrNull(input.recentDamageWindowMs) ?? 0);
+  const damageRateHpPerMs = recentDamage > 0 && recentDamageWindowMs >= 100
+    ? recentDamage / recentDamageWindowMs
+    : 0;
+  const rateDamage = damageRateHpPerMs > 0
+    ? Math.ceil(damageRateHpPerMs * windowMs * 10) / 10
+    : 0;
+  const predictedDamage = Math.min(selfHp, Math.max(collisionDamage, rateDamage));
+  const uncertaintyDamage = Math.max(0, firstConfiguredNumber(options, [
+    'leavePredictionUncertaintyDamage',
+    'combatLeavePredictionUncertaintyDamage'
+  ], damagePerHit));
+  const predictedHp = selfHp - predictedDamage;
+  const riskAdjustedHp = predictedHp - uncertaintyDamage;
+  const survivalMarginHp = Math.max(0, firstConfiguredNumber(options, [
+    'leavePredictionSurvivalMarginHp',
+    'combatLeavePredictionSurvivalMarginHp',
+    'criticalHp',
+    'combatCriticalHp',
+    'combatCriticalHpLeaveThreshold'
+  ], COMBAT_CONSTANTS.CRITICAL_HP));
+  const shouldLeave = predictedDamage > 0 && riskAdjustedHp <= survivalMarginHp;
+  return {
+    shouldLeave,
+    policy: 'predicted-leave-hp',
+    rule: shouldLeave ? 'predicted-survival-margin' : 'predicted-survivable',
+    reason: shouldLeave ? 'combat-predicted-leave-hp' : 'combat-predicted-hp-acceptable',
+    selfHp,
+    predictedHp: Math.round(predictedHp * 10) / 10,
+    riskAdjustedHp: Math.round(riskAdjustedHp * 10) / 10,
+    predictedDamage: Math.round(predictedDamage * 10) / 10,
+    collisionDamage: Math.round(collisionDamage * 10) / 10,
+    rateDamage: Math.round(rateDamage * 10) / 10,
+    directHits,
+    unavoidableHits,
+    damagePerHit,
+    recentDamage: Math.round(recentDamage * 10) / 10,
+    recentDamageWindowMs: Math.round(recentDamageWindowMs),
+    damageRateHpPerSecond: Math.round(damageRateHpPerMs * 1000 * 10) / 10,
+    baseWindowMs,
+    commandDelayMs,
+    windowMs,
+    uncertaintyDamage,
+    survivalMarginHp
+  };
+}
+
 function combatDisadvantageConfirmationCore(input = {}, options = {}) {
   const nowMsValue = numberOrNull(input.nowMs ?? input.at);
   const nowMs = nowMsValue === null ? Date.now() : nowMsValue;
@@ -220,5 +290,6 @@ module.exports = {
   combatHpExitThresholdsCore,
   evaluateConfirmedCombatHpExitCore,
   evaluateCombatExchangeStopLossCore,
-  evaluateCombatHpExitCore
+  evaluateCombatHpExitCore,
+  evaluatePredictedLeaveHpCore
 };

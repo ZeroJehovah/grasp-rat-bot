@@ -1,6 +1,7 @@
 'use strict';
 
 const fs = require('fs');
+const http = require('http');
 const os = require('os');
 const path = require('path');
 const zlib = require('zlib');
@@ -29,6 +30,8 @@ const {
 } = require('../shared/grz-frame');
 const {
   fetchWithTimeout: browserlessFetchWithTimeout,
+  localAddressAgentStatus,
+  prewarmGameConnection,
   redactSecrets,
   redactStructuredSecrets,
   submitGameCallbackUrl,
@@ -79,6 +82,7 @@ const {
   coinMotionVectorToTarget,
   movementVectorToTarget
 } = require('./browserless/action-adapter');
+const { buildLeavePendingCover } = require('./browserless/leave-pending-control');
 const {
   buildBrowserlessCombatDryRun,
   buildCombatMovementPlan,
@@ -5612,6 +5616,28 @@ async function runSelfTest() {
       want: 'true|2|200'
     },
     {
+      name: 'browserless leave client creates the initial request before yielding the safety callback stack',
+      got: (async () => {
+        let requested = false;
+        const pending = browserlessLeaveWithVerification({
+          retryMax: 0,
+          leaveOnceImpl: options => {
+            requested = true;
+            return Promise.resolve({
+              stage: options.stage,
+              ok: true,
+              status: 200,
+              summary: { leaveConfirmed: true }
+            });
+          }
+        });
+        const requestedBeforeAwait = requested;
+        const result = await pending;
+        return [requestedBeforeAwait, result.ok, result.attempts[0].stage].join('|');
+      })(),
+      want: 'true|true|initial'
+    },
+    {
       name: 'browserless leave client hedges a pending initial request without losing its result',
       got: (async () => {
         let resolveInitial = null;
@@ -5650,6 +5676,47 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'true|initial:true:false,hedge-1:true:true|hedge-1:200:true,initial:403:false'
+    },
+    {
+      name: 'browserless source-ip HTTP client reuses a keep-alive socket after prewarm',
+      got: (async () => {
+        const server = http.createServer((request, response) => {
+          response.statusCode = 200;
+          response.setHeader('content-type', 'application/json');
+          response.end(request.method === 'HEAD' ? '' : '{"ok":true}');
+        });
+        server.keepAliveTimeout = 5000;
+        await new Promise((resolve, reject) => {
+          server.once('error', reject);
+          server.listen(0, '127.0.0.1', resolve);
+        });
+        const address = server.address();
+        const origin = `http://127.0.0.1:${address.port}`;
+        try {
+          const warm = await prewarmGameConnection({
+            gameOrigin: origin,
+            localAddress: '127.0.0.1',
+            timeoutMs: 1000
+          });
+          const response = await browserlessFetchWithTimeout(`${origin}/leave`, {
+            localAddress: '127.0.0.1',
+            timeoutMs: 1000
+          });
+          await response.text();
+          const pool = localAddressAgentStatus().find(item => item.key === 'http:|127.0.0.1');
+          return [
+            warm.ok,
+            response.ok,
+            response.connectionReused,
+            pool?.keepAlive,
+            Number(pool?.requestCount || 0) >= 2,
+            Number(pool?.reusedCount || 0) >= 1
+          ].join('|');
+        } finally {
+          await new Promise(resolve => server.close(resolve));
+        }
+      })(),
+      want: 'true|true|true|true|true|true'
     },
     {
       name: 'browserless fetch timeout aborts stalled requests',
@@ -8207,7 +8274,7 @@ async function runSelfTest() {
       want: 'coin|profit|recovery-foot-coin|small-foot-coin|1|||high-value-coin'
     },
     {
-      name: 'browserless profit live blocks low-hp high-value coin under incoming bullet',
+      name: 'browserless profit live exits before low-hp high-value coin under attributable incoming bullet',
       got: (() => {
         const store = createBrowserlessStateStore({ userId: 7 });
         store.ingestFrame({
@@ -8235,7 +8302,7 @@ async function runSelfTest() {
           decision.profit.best?.id
         ].join('|');
       })(),
-      want: 'recover|recover|wait-for-full-stamina-and-hp|true|high-value-coin'
+      want: 'safety-exit|safety|incoming-bullet-early-leave|true|high-value-coin'
     },
     {
       name: 'browserless snapshot high-value coin cannot bypass realtime combat',
@@ -13066,6 +13133,123 @@ async function runSelfTest() {
       want: 'combat-live|combat|combat-live-realtime|8|defensive|direct-threat-dodge|true|target-pressure-fire'
     },
     {
+      name: 'browserless recovery exits on attributable incoming bullet before resuming combat',
+      got: (() => {
+        const stateful = {
+          lastDecisionAction: { kind: 'recover', band: 'recover', reason: 'wait-for-full-stamina-and-hp' }
+        };
+        const decision = buildBrowserlessDecision({
+          userId: 7,
+          realtime: {
+            tick: 62,
+            frameAgeMs: 0,
+            self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 88, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+            entities: [
+              { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 88, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+              { entity_id: 2, user_id: 8, name: 'recovery-attacker', x: 5000, y: 0, hp: 100, current_join_mode: 'Active', firing: true, drop: 5 }
+            ],
+            bullets: [
+              { bullet_id: 21, owner_user_id: 8, start_x: 5000, start_y: 0, target_x: 0, target_y: 0, created_tick: 61, expire_tick: 91, speed_per_tick: 500 }
+            ],
+            coinDrops: []
+          },
+          fallback: { coinDrops: [] }
+        }, stateful, {
+          nowMs: 2000,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          combatAttackRange: 11000
+        });
+        return [
+          decision.kind,
+          decision.band,
+          decision.reason,
+          decision.action.shouldLeave,
+          decision.action.target.userId,
+          decision.action.leaveRisk.recovering,
+          decision.action.leaveRisk.attributableIncoming
+        ].join('|');
+      })(),
+      want: 'safety-exit|safety|incoming-bullet-early-leave|true|8|true|true'
+    },
+    {
+      name: 'browserless realtime early leave remembers the attributable attacker as dangerous',
+      got: (() => {
+        const stateful = createBrowserlessDecisionState({
+          lastDecisionAction: { kind: 'recover', band: 'recover', reason: 'wait-for-full-stamina-and-hp' }
+        });
+        const decision = buildBrowserlessRealtimeControlDecision({
+          userId: 7,
+          realtime: {
+            tick: 62,
+            receivedAtMs: 2000,
+            self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 88, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+            entities: [
+              { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 88, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+              { entity_id: 2, user_id: 8, name: 'far-ambusher', x: 20000, y: 0, hp: 100, current_join_mode: 'Active', stamina_5s_remaining_milli: 8500 }
+            ],
+            bullets: [
+              { bullet_id: 21, owner_user_id: 8, start_x: 5000, start_y: 0, target_x: 0, target_y: 0, created_tick: 61, expire_tick: 91, speed_per_tick: 500 }
+            ],
+            coinDrops: []
+          },
+          fallback: { coinDrops: [] }
+        }, stateful, {
+          nowMs: 2000,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          combatAttackRange: 14500
+        });
+        const remembered = stateful.dangerousCombatTargets['8'];
+        return [
+          decision.reason,
+          decision.action.target.userId,
+          remembered.reason,
+          remembered.triggerSource,
+          decision.combat.dangerousTargetCooldown.targetId
+        ].join('|');
+      })(),
+      want: 'incoming-bullet-early-leave|8|incoming-bullet-early-leave|realtime-leave-risk|8'
+    },
+    {
+      name: 'browserless recovery attributes an incoming bullet even after its owner leaves the entity frame',
+      got: (() => {
+        const stateful = createBrowserlessDecisionState({
+          lastDecisionAction: { kind: 'recover', band: 'recover', reason: 'wait-for-full-stamina-and-hp' }
+        });
+        const decision = buildBrowserlessRealtimeControlDecision({
+          userId: 7,
+          realtime: {
+            tick: 63,
+            receivedAtMs: 2050,
+            self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 88, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+            entities: [
+              { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 88, max_hp: 100, stamina_5s_remaining_milli: 10000 }
+            ],
+            bullets: [
+              { bullet_id: 22, owner_user_id: 8, start_x: 4500, start_y: 0, target_x: 0, target_y: 0, created_tick: 62, expire_tick: 92, speed_per_tick: 500 }
+            ],
+            coinDrops: []
+          },
+          fallback: { coinDrops: [] }
+        }, stateful, {
+          nowMs: 2050,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          combatAttackRange: 14500
+        });
+        const remembered = stateful.dangerousCombatTargets['8'];
+        return [
+          decision.reason,
+          decision.action.target.userId,
+          decision.action.leaveRisk.attributableIncoming,
+          remembered.targetId,
+          remembered.triggerSource
+        ].join('|');
+      })(),
+      want: 'incoming-bullet-early-leave|8|true|8|realtime-leave-risk'
+    },
+    {
       name: 'browserless combat critical hp exits through safety action',
       got: (() => {
         const decision = buildBrowserlessDecision({
@@ -13174,7 +13358,7 @@ async function runSelfTest() {
       want: 'safety-exit|safety|combat-critical-hp-leave|true|1|no-target'
     },
     {
-      name: 'browserless profit live keeps fighting after healthy unattributed injury',
+      name: 'browserless profit live exits early when injury and attributable bullet cannot establish combat',
       got: (() => {
         const stateful = {};
         const base = {
@@ -13221,17 +13405,17 @@ async function runSelfTest() {
           combatCriticalHp: 20
         });
         return [
-          decision.kind !== 'safety-exit',
-          decision.reason !== 'injury-leave',
+          decision.kind,
+          decision.reason,
           stateful.browserlessInjury.targetKey,
           stateful.browserlessInjury.currentHp,
           decision.combat.target?.userId || 'no-target'
         ].join('|');
       })(),
-      want: 'true|true|8|73|no-target'
+      want: 'safety-exit|rapid-damage-early-leave|8|73|no-target'
     },
     {
-      name: 'browserless recent injury fallback preserves clearly winning Eason-shaped fight',
+      name: 'browserless recent injury exits before resuming a winning but out-of-range fight',
       got: (() => {
         const stateful = {
           browserlessLastSelf: { key: '7', hp: 97, at: 1000 },
@@ -13268,13 +13452,14 @@ async function runSelfTest() {
           combatCriticalHp: 20
         });
         return [
-          decision.kind !== 'safety-exit',
+          decision.kind,
+          decision.reason,
           stateful.browserlessInjury.currentHp,
           stateful.combatMetrics.lastTargetHp,
           decision.combat.target?.userId || 'no-target'
         ].join('|');
       })(),
-      want: 'true|94|46|no-target'
+      want: 'safety-exit|incoming-bullet-early-leave|94|46|no-target'
     },
     {
       name: 'browserless recent injury keeps Eason metrics instead of switching to unrelated mango',
@@ -15482,6 +15667,189 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'combat-live|velocity|shoot|vel 1 0,shoot 1000 0 0 0|2|1|1|44'
+    },
+    {
+      name: 'browserless leave pending cover avoids a trajectory that only hits the old movement direction',
+      got: (() => {
+        const built = buildLeavePendingCover({
+          realtime: {
+            tick: 0,
+            self: { user_id: 7, x: 0, y: 0, vx: 50, vy: 0, hp: 80, max_hp: 100 },
+            entities: [],
+            bullets: [
+              {
+                bullet_id: 1,
+                owner_user_id: 8,
+                start_x: 500,
+                start_y: -5000,
+                target_x: 500,
+                target_y: 5000,
+                created_tick: 0,
+                expire_tick: 30,
+                speed_per_tick: 500
+              }
+            ]
+          },
+          command: { shooting: { timing: { p90Ticks: 5 } } }
+        }, {
+          lastCover: { dx: 1, dy: 0 }
+        }, {
+          nowMs: 1,
+          combatBulletHitRadiusCm: 90,
+          combatMoveSpeedPerTick: 50
+        });
+        const oldDirection = built.cover.threatField.find(item => item.dx === 1 && item.dy === 0);
+        return [
+          built.cover.incomingBulletCount,
+          oldDirection.directHits,
+          built.cover.directHits,
+          `${built.cover.dx},${built.cover.dy}`,
+          built.cover.changed
+        ].join('|');
+      })(),
+      want: '1|1|0|-1,0|true'
+    },
+    {
+      name: 'browserless initial leave cover reuses the trigger frame dodge before recomputing later frames',
+      got: (() => {
+        const built = buildLeavePendingCover({
+          realtime: {
+            tick: 50,
+            self: { user_id: 7, x: 0, y: 0, vx: 0, vy: 0, hp: 45, max_hp: 100 },
+            entities: [],
+            bullets: []
+          }
+        }, {
+          triggerDecision: {
+            tick: 50,
+            combat: {
+              movement: {
+                dx: 0,
+                dy: 1,
+                reason: 'current-frame-dodge',
+                dodge: {
+                  threatField: [
+                    { dx: 0, dy: 1, directHits: 0, avoidableHits: 0, unavoidableHits: 0, minCPA: 300, minTTI: 200 }
+                  ]
+                }
+              }
+            }
+          }
+        }, {
+          nowMs: 50,
+          preferTriggerCover: true
+        });
+        return [
+          `${built.cover.dx},${built.cover.dy}`,
+          built.cover.reason,
+          built.cover.directHits,
+          built.cover.tick
+        ].join('|');
+      })(),
+      want: '0,1|current-frame-dodge|0|50'
+    },
+    {
+      name: 'browserless leave pending cover moves away from an overlapping locked threat without bullets',
+      got: (() => {
+        const built = buildLeavePendingCover({
+          realtime: {
+            tick: 10,
+            self: { user_id: 7, x: 100, y: 200, vx: 0, vy: 0, hp: 21, max_hp: 100 },
+            entities: [
+              { user_id: 7, x: 100, y: 200, vx: 0, vy: 0, hp: 21, max_hp: 100 },
+              { user_id: 8, name: 'overlap-threat', x: 100, y: 200, vx: 0, vy: 0, hp: 100, max_hp: 100 }
+            ],
+            bullets: []
+          }
+        }, {
+          target: { userId: 8, name: 'overlap-threat' }
+        }, { nowMs: 10 });
+        return [
+          `${built.cover.dx},${built.cover.dy}`,
+          built.cover.reason,
+          built.cover.targetLocked,
+          built.cover.incomingBulletCount
+        ].join('|');
+      })(),
+      want: '1,0|leave-pending-overlap-escape|true|0'
+    },
+    {
+      name: 'browserless leave pending starts immediately and keeps dynamic cover across ws frames',
+      got: (async () => {
+        let t = Date.UTC(2026, 6, 16, 0, 23, 0);
+        let wsOptions = null;
+        let resolveLeave = null;
+        let sleepStep = 0;
+        const commands = [];
+        const makeFrame = (tick, hp, bullet) => encodeGrzFrameForTest({
+          type: 'pos',
+          tick,
+          entities: [
+            { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, vx: 0, vy: 0, hp, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+            { entity_id: 2, user_id: 8, name: 'ambusher', x: 20000, y: 0, vx: 0, vy: 0, hp: 100, current_join_mode: 'Active', firing: true, drop: 20 }
+          ],
+          bullets: [bullet]
+        });
+        const frames = [
+          makeFrame(62, 73, { bullet_id: 101, owner_user_id: 8, start_x: 5000, start_y: 0, target_x: 0, target_y: 0, created_tick: 61, expire_tick: 91, speed_per_tick: 500 }),
+          makeFrame(63, 70, { bullet_id: 102, owner_user_id: 8, start_x: 0, start_y: 5000, target_x: 0, target_y: 0, created_tick: 62, expire_tick: 92, speed_per_tick: 500 }),
+          makeFrame(64, 70, { bullet_id: 103, owner_user_id: 8, start_x: 0, start_y: 4500, target_x: 0, target_y: 0, created_tick: 63, expire_tick: 93, speed_per_tick: 500 })
+        ];
+        const result = await runReadOnlyCanary({
+          gameOrigin: 'https://grasp-rat-game.h-e.top',
+          userId: 7,
+          sessionToken: 'leave-pending-token',
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          readOnlyProbeMs: 1000,
+          decisionIntervalMs: 1000,
+          combatControlIntervalMs: 50,
+          movementCommandIntervalMs: 0,
+          frameGapAlertMs: 5000,
+          httpTimeoutMs: 1000
+        }, {
+          now: () => t,
+          precheckedSnapshotSafety: { ok: true, reason: 'self-test-prechecked', satisfied: true },
+          prewarmGameConnection: async () => ({ ok: true, status: 200, durationMs: 1, connectionReused: false }),
+          sleep: async ms => {
+            t += ms;
+            if (sleepStep < frames.length) wsOptions.onMessage(frames[sleepStep]);
+            sleepStep += 1;
+            if (sleepStep === 3 && resolveLeave) {
+              resolveLeave({ ok: true, attempts: [{ stage: 'initial', ok: true, status: 200, connectionReused: true, summary: { leaveConfirmed: true } }] });
+            }
+          },
+          openBrowserlessWs: async options => {
+            wsOptions = options;
+            return {
+              isOpen: () => true,
+              close: () => {},
+              sendVelocity: (dx, dy) => commands.push(`${dx},${dy}`),
+              send: message => commands.push(message)
+            };
+          },
+          leaveWithVerification: async options => {
+            options.onRequest?.({ stage: 'initial', startedAtMs: t, hedged: false });
+            return new Promise(resolve => { resolveLeave = resolve; });
+          }
+        });
+        const pending = result.safety.leavePending;
+        return [
+          result.safety.event.reason,
+          result.leave.ok,
+          pending.firstRequestDelayMs <= 20,
+          pending.frameCount >= 2,
+          pending.realtimeFrameCount >= 2,
+          pending.coverRecomputeCount >= 2,
+          pending.dynamicCoverCount >= 1,
+          pending.observedHpLoss,
+          commands.length >= 3,
+          commands.every(command => command !== '0,0' && command !== 'vel 0 0'),
+          result.decisions.realtimeControlCount,
+          result.hotPath.tasks['ws-message'].maxMs < 50
+        ].join('|');
+      })(),
+      want: 'incoming-bullet-early-leave|true|true|true|true|true|true|3|true|true|1|true'
     },
     {
       name: 'browserless read-only canary runs snapshot ws frames and verified leave',
@@ -18276,6 +18644,26 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: '2000|2000|2500|1000|1500|3000|safe|frame-gap|2000'
+    },
+    {
+      name: 'browserless dangerous leave hedge and connection prewarm defaults are configurable',
+      got: (() => {
+        const defaults = parseBrowserlessRunnerArgs([], {});
+        const configured = parseBrowserlessRunnerArgs([], {
+          GRASP_RAT_BROWSERLESS_LEAVE_DANGER_HEDGE_MS: '275',
+          GRASP_RAT_BROWSERLESS_LEAVE_PREWARM_INTERVAL_MS: '2200'
+        });
+        const exposed = publicConfig(configured);
+        return [
+          defaults.leaveDangerHedgeMs,
+          defaults.leavePrewarmIntervalMs,
+          configured.leaveDangerHedgeMs,
+          configured.leavePrewarmIntervalMs,
+          exposed.leaveDangerHedgeMs,
+          exposed.leavePrewarmIntervalMs
+        ].join('|');
+      })(),
+      want: '350|3000|275|2200|275|2200'
     },
     {
       name: 'browserless runner config exposes single coin bait env and public values',

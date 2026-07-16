@@ -2,7 +2,10 @@
 
 const { performance } = require('perf_hooks');
 const { attackWorthTakingCore } = require('../../strategy/attack-worth');
-const { isInvulnerableEntity } = require('../../strategy/combat-target-selection');
+const {
+  incomingBulletHasCollisionRiskCore,
+  isInvulnerableEntity
+} = require('../../strategy/combat-target-selection');
 const {
   buildOpportunityCandidatesCore,
   opportunityPriorityTierCore,
@@ -28,6 +31,10 @@ const {
 const { buildRuntimeDefaults } = require('../../shared/runtime-defaults');
 const { buildBrowserlessCombatDryRun, recordCombatShotLearning } = require('./combat-adapter');
 const {
+  buildLeavePendingCover,
+  normalizedIncomingBullets
+} = require('./leave-pending-control');
+const {
   buildFinalActionCandidate,
   selectFinalActionCandidateCore
 } = require('../../strategy/final-candidate-selection');
@@ -35,7 +42,10 @@ const {
   buildReturnBlockActionCore,
   lockedFleeDirectionCore
 } = require('../../strategy/active-threat-avoidance');
-const { evaluateCombatHpExitCore } = require('../../strategy/combat-exit');
+const {
+  evaluateCombatHpExitCore,
+  evaluatePredictedLeaveHpCore
+} = require('../../strategy/combat-exit');
 const {
   pickPostAttackDropCoinCore,
   pickPostAttackDropWaitTargetCore
@@ -133,7 +143,11 @@ const UTC8_OFFSET_MS = 8 * 60 * 60 * 1000;
 const DANGEROUS_COMBAT_EXIT_REASONS = new Set([
   'combat-critical-hp-leave',
   'combat-hp-disadvantage-leave',
-  'combat-low-hp-disadvantage-leave'
+  'combat-low-hp-disadvantage-leave',
+  'combat-predicted-leave-hp',
+  'incoming-bullet-early-leave',
+  'continuous-incoming-bullets-leave',
+  'rapid-damage-early-leave'
 ]);
 const EASY_KILL_ENGAGEMENT_CONTINUATION_ACTIONS = new Set([
   'combat-live',
@@ -4911,6 +4925,186 @@ function buildBrowserlessInjuryHpExitDecision(input, stateful, combat, options =
   };
 }
 
+function leaveRiskBulletId(bullet) {
+  return String(
+    bullet?.bullet_id
+      ?? bullet?.bulletId
+      ?? `${bullet?.createdTick ?? bullet?.created_tick ?? ''}:${bullet?.startX ?? bullet?.start_x ?? bullet?.x ?? ''}:${bullet?.startY ?? bullet?.start_y ?? bullet?.y ?? ''}`
+  );
+}
+
+function compactLeaveCover(cover) {
+  if (!cover) return null;
+  const { threatField: _threatField, ...summary } = cover;
+  return summary;
+}
+
+function buildBrowserlessPredictedThreatExitDecision(state, input, stateful, combat, options = {}) {
+  if (!browserlessSafetyExitModeEnabled(options) || !input?.self) return null;
+  const nowMs = Number(input.nowMs || Date.now());
+  const selfHp = hpValue(input.self);
+  if (selfHp === null) return null;
+  const maxHp = maxHpValue(input.self) ?? 100;
+  const pendingCover = buildLeavePendingCover(state, {
+    triggerDecision: {
+      action: combat?.exitAction || combat?.action || null,
+      combat: combat?.dryRun || null
+    },
+    target: combat?.target || null,
+    lastCover: stateful?.browserlessLeaveRisk?.lastCover || null
+  }, {
+    ...options,
+    nowMs
+  })?.cover || null;
+  const incoming = normalizedIncomingBullets(state, input.self, options)
+    .filter(bullet => incomingBulletHasCollisionRiskCore(bullet, options))
+    .filter(bullet => {
+      const ownerId = String(bullet?.ownerId ?? '');
+      if (!ownerId) return true;
+      const target = (input.visibleTargets || []).find(item => targetKey(item) === ownerId) || null;
+      return !target?.easyKillThreatExempt;
+    });
+  const ownerIds = Array.from(new Set(incoming
+    .map(bullet => String(bullet?.ownerId ?? ''))
+    .filter(Boolean)));
+  const previous = stateful.browserlessLeaveRisk && typeof stateful.browserlessLeaveRisk === 'object'
+    ? stateful.browserlessLeaveRisk
+    : {};
+  const hpSamples = (Array.isArray(previous.hpSamples) ? previous.hpSamples : [])
+    .filter(sample => nowMs - Number(sample.at || 0) <= 2500);
+  const lastHpSample = hpSamples[hpSamples.length - 1] || null;
+  if (!lastHpSample
+    || Number(lastHpSample.hp) !== selfHp
+    || Number(lastHpSample.tick) !== Number(input.realtime?.tick)) {
+    hpSamples.push({ at: nowMs, tick: input.realtime?.tick ?? null, hp: selfHp });
+  }
+  const recentHpSamples = hpSamples.filter(sample => nowMs - Number(sample.at || 0) <= 1250);
+  const peakSample = recentHpSamples.slice().sort((a, b) => Number(b.hp) - Number(a.hp) || Number(a.at) - Number(b.at))[0] || null;
+  const recentDamage = peakSample ? Math.max(0, Number(peakSample.hp) - selfHp) : 0;
+  const recentDamageWindowMs = recentDamage > 0 && peakSample
+    ? Math.max(0, nowMs - Number(peakSample.at || nowMs))
+    : 0;
+  const bulletObservations = (Array.isArray(previous.bulletObservations) ? previous.bulletObservations : [])
+    .filter(item => nowMs - Number(item.at || 0) <= 1500);
+  const observedIds = new Set(bulletObservations.map(item => item.id));
+  for (const bullet of incoming) {
+    const id = leaveRiskBulletId(bullet);
+    if (!id || observedIds.has(id)) continue;
+    observedIds.add(id);
+    bulletObservations.push({
+      id,
+      ownerId: String(bullet.ownerId ?? ''),
+      at: nowMs,
+      timeToImpact: numberOrNull(bullet.timeToImpact),
+      cpa: numberOrNull(bullet.cpa)
+    });
+  }
+  const commandDelayTicks = Math.max(0, Number(
+    state?.command?.shooting?.timing?.p90Ticks
+      ?? state?.command?.shooting?.executionDelay?.p90Ticks
+      ?? 5
+  ));
+  const prediction = evaluatePredictedLeaveHpCore({
+    selfHp,
+    directHits: pendingCover?.directHits,
+    unavoidableHits: pendingCover?.unavoidableHits,
+    recentDamage,
+    recentDamageWindowMs,
+    commandDelayMs: commandDelayTicks * 50
+  }, options);
+  const previousAction = stateful.lastDecisionAction || null;
+  const previousBand = String(previousAction?.band || '');
+  const previousReason = String(previousAction?.reason || '');
+  const combatDurationMs = Math.max(0, Number(combat?.dryRun?.durationMs || 0));
+  const combatEstablished = Boolean(combat?.target && options.combatActionEligible !== false);
+  const recovering = previousBand === 'recover'
+    || /recover|wait-for-full-stamina-and-hp/i.test(previousReason);
+  const unestablished = !combatEstablished;
+  const ownerTarget = ownerIds.length === 1
+    ? (input.visibleTargets || []).find(target => targetKey(target) === ownerIds[0] && !target.easyKillThreatExempt) || null
+    : null;
+  const attributableIncoming = ownerIds.length === 1 && incoming.length > 0;
+  const attributedOwnerTarget = ownerTarget || (attributableIncoming
+    ? { userId: numberOrNull(ownerIds[0]) ?? ownerIds[0] }
+    : null);
+  const sameOwnerDistinctBullets = ownerIds.length === 1
+    ? new Set(bulletObservations.filter(item => item.ownerId === ownerIds[0]).map(item => item.id)).size
+    : 0;
+  const continuousIncoming = attributableIncoming && sameOwnerDistinctBullets >= 2;
+  const injury = stateful.browserlessInjury || null;
+  const rapidDamage = recentDamage >= Math.max(3, Number(options.leavePredictionRapidDamageHp || 6))
+    && recentDamageWindowMs > 0
+    && recentDamageWindowMs <= Math.max(500, Number(options.leavePredictionRapidDamageWindowMs || 1000))
+    && Boolean(attributableIncoming || injury?.attributable || injury?.hasIncoming);
+  let reason = '';
+  let rule = '';
+  if (prediction?.shouldLeave) {
+    reason = prediction.reason;
+    rule = prediction.rule;
+  } else if ((recovering || unestablished) && continuousIncoming) {
+    reason = 'continuous-incoming-bullets-leave';
+    rule = 'continuous-attributable-bullets';
+  } else if ((recovering || unestablished) && rapidDamage) {
+    reason = 'rapid-damage-early-leave';
+    rule = 'rapid-attributable-damage';
+  } else if ((recovering || unestablished) && attributableIncoming) {
+    reason = 'incoming-bullet-early-leave';
+    rule = 'attributable-incoming-before-established-combat';
+  }
+  const target = attributedOwnerTarget
+    || combat?.target
+    || browserlessInjuryTarget(injury, pickBrowserlessInjuryPressure(input, stateful, options));
+  const assessment = {
+    at: nowMs,
+    tick: input.realtime?.tick ?? null,
+    selfHp,
+    maxHp,
+    recovering,
+    combatEstablished,
+    combatDurationMs,
+    incomingCount: incoming.length,
+    ownerIds,
+    attributableIncoming,
+    sameOwnerDistinctBullets,
+    continuousIncoming,
+    recentDamage,
+    recentDamageWindowMs,
+    rapidDamage,
+    prediction,
+    lastCover: compactLeaveCover(pendingCover),
+    hpSamples: hpSamples.slice(-32),
+    bulletObservations: bulletObservations.slice(-32),
+    rule,
+    reason
+  };
+  stateful.browserlessLeaveRisk = assessment;
+  if (!reason) return null;
+  return {
+    kind: 'safety-exit',
+    band: 'safety',
+    reason,
+    shouldLeave: true,
+    stopMotion: false,
+    self: summarizeTarget(input.self),
+    target: summarizeTarget(target),
+    combatExit: {
+      shouldLeave: true,
+      policy: prediction?.shouldLeave ? prediction.policy : 'early-threat-pressure',
+      rule,
+      reason,
+      selfHp,
+      targetHp: hpValue(target),
+      predictedLeave: prediction,
+      triggerSource: 'realtime-leave-risk'
+    },
+    leaveRisk: {
+      ...assessment,
+      hpSamples: undefined,
+      bulletObservations: undefined
+    }
+  };
+}
+
 function browserlessPursuitThresholdMs(self, threat, options = {}) {
   const normalMs = Math.max(0, Number(options.pursuitLeaveMs ?? BROWSER_RUNTIME_DEFAULTS.pursuitLeaveMs ?? 300000));
   const nonFullHp = isInjuredSelf(self, options);
@@ -5147,6 +5341,7 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
   const longStaminaExhaustedLeaveAction = buildLongStaminaExhaustedLeaveDecision(input, controlOptions);
   const combatExitAction = combat.exitAction || null;
   const injuryHpExitAction = buildBrowserlessInjuryHpExitDecision(input, stateful, combat, controlOptions);
+  const predictedThreatExitAction = buildBrowserlessPredictedThreatExitDecision(state, input, stateful, combat, controlOptions);
   const pursuitLeaveAction = buildBrowserlessPursuitLeaveDecision(input, stateful, combat, controlOptions);
   const lowHpRecoveryThreatExitAction = buildLowHpRecoveryThreatExitDecision(input, controlOptions);
   const safetyAction = profitLiveSafetyDecision(input, combat, stateful, controlOptions, null);
@@ -5154,13 +5349,32 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
   const action = longStaminaExhaustedLeaveAction
     || combatExitAction
     || injuryHpExitAction
+    || predictedThreatExitAction
     || pursuitLeaveAction
     || lowHpRecoveryThreatExitAction
     || safetyAction
     || lootControl.action
     || combatAction
     || null;
-  rememberDangerousCombatExitTarget(input, combat, stateful, options);
+  let dangerousCombatExit = rememberDangerousCombatExitTarget(input, combat, stateful, options);
+  if (!dangerousCombatExit) {
+    dangerousCombatExit = rememberDangerousSafetyExitTarget(
+      input,
+      injuryHpExitAction,
+      stateful,
+      options,
+      'recent-injury-pressure'
+    );
+  }
+  if (!dangerousCombatExit) {
+    dangerousCombatExit = rememberDangerousSafetyExitTarget(
+      input,
+      predictedThreatExitAction,
+      stateful,
+      options,
+      'realtime-leave-risk'
+    );
+  }
   stageTimings.gates = performance.now() - stageStarted;
   stageStarted = performance.now();
   const output = {
@@ -5168,7 +5382,10 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
     band: action?.band || '',
     reason: action?.reason || '',
     action,
-    combat: lootControl.combat || combat.dryRun,
+    combat: {
+      ...(lootControl.combat || combat.dryRun || {}),
+      dangerousTargetCooldown: dangerousCombatExit
+    },
     exitAction: action?.shouldLeave ? action : null,
     realtimeControl: true,
     tick: input.realtime.tick,
@@ -5549,6 +5766,17 @@ function rememberDangerousCombatExitTarget(input, combatDecision, stateful = {},
     exit: true,
     exitSelfHp: numberOrNull(exit?.selfHp ?? exit?.combatExit?.selfHp),
     exitTargetHp: numberOrNull(exit?.targetHp ?? exit?.combatExit?.targetHp)
+  });
+}
+
+function rememberDangerousSafetyExitTarget(input, action, stateful = {}, options = {}, triggerSource = 'realtime-leave-risk') {
+  const reason = String(action?.reason || '');
+  if (!action?.target || !DANGEROUS_COMBAT_EXIT_REASONS.has(reason)) return null;
+  return rememberDangerousCombatTarget(stateful, action.target, reason, input, options, {
+    exit: true,
+    exitSelfHp: numberOrNull(action.combatExit?.selfHp),
+    exitTargetHp: numberOrNull(action.combatExit?.targetHp),
+    triggerSource
   });
 }
 
@@ -6273,6 +6501,9 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     ...options,
     combatActionEligible
   };
+  const predictedThreatExitAction = input.self && !realtimeStale
+    ? buildBrowserlessPredictedThreatExitDecision(state, input, stateful, combat, safetyContextOptions)
+    : null;
   const lowHpRecoveryThreatExitAction = input.self && !realtimeStale
     ? buildLowHpRecoveryThreatExitDecision(input, safetyContextOptions)
     : null;
@@ -6299,21 +6530,22 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
   const injuryHpExitAction = input.self && !realtimeStale
     ? buildBrowserlessInjuryHpExitDecision(input, stateful, combat, safetyContextOptions)
     : null;
-  if (!dangerousCombatExit
-    && injuryHpExitAction?.target
-    && DANGEROUS_COMBAT_EXIT_REASONS.has(String(injuryHpExitAction.reason || ''))) {
-    dangerousCombatExit = rememberDangerousCombatTarget(
-      stateful,
-      injuryHpExitAction.target,
-      injuryHpExitAction.reason,
+  if (!dangerousCombatExit) {
+    dangerousCombatExit = rememberDangerousSafetyExitTarget(
       input,
+      injuryHpExitAction,
+      stateful,
       options,
-      {
-        exit: true,
-        exitSelfHp: numberOrNull(injuryHpExitAction.combatExit?.selfHp),
-        exitTargetHp: numberOrNull(injuryHpExitAction.combatExit?.targetHp),
-        triggerSource: 'recent-injury-pressure'
-      }
+      'recent-injury-pressure'
+    );
+  }
+  if (!dangerousCombatExit) {
+    dangerousCombatExit = rememberDangerousSafetyExitTarget(
+      input,
+      predictedThreatExitAction,
+      stateful,
+      options,
+      'realtime-leave-risk'
     );
   }
   const pursuitLeaveAction = input.self && !realtimeStale
@@ -6374,6 +6606,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       && !hardSafetyAction
       && !lowHpRecoveryThreatExitAction
       && !longStaminaExhaustedLeaveAction
+      && !predictedThreatExitAction
       && !combatExitAction
       && !injuryHpExitAction
       && !pursuitLeaveAction
@@ -6438,7 +6671,8 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       candidate(hardSafetyAction, 10, 'hard-safety', true, { riskScore: 100 }),
       candidate(longStaminaExhaustedLeaveAction, 20, 'stamina-exhausted-hard-gate', true, { riskScore: 100 }),
       candidate(combatExitAction, 30, 'combat-exit-hard-gate', true, { riskScore: 100 }),
-      candidate(injuryHpExitAction, 40, 'injury-hp-hard-gate', true, { riskScore: 100 }),
+      candidate(injuryHpExitAction, 35, 'injury-hp-hard-gate', true, { riskScore: 100 }),
+      candidate(predictedThreatExitAction, 40, 'predicted-threat-hard-gate', true, { riskScore: 100 }),
       candidate(pursuitLeaveAction, 50, 'pursuit-hard-gate', true, { riskScore: 90 }),
       candidate(lowHpRecoveryThreatExitAction, 52, 'low-hp-recovery-threat-hard-gate', true, { riskScore: 100 }),
       candidate(immediateSafetyAction, 55, 'realtime-safety-hard-gate', true, { riskScore: immediateSafetyAction?.urgent ? 100 : 80 }),
@@ -6830,6 +7064,7 @@ function createBrowserlessDecisionAdapter(options = {}) {
         seenEntities: decisionState.seenEntities || {},
         browserlessLastSelf: decisionState.browserlessLastSelf || null,
         browserlessInjury: decisionState.browserlessInjury || null,
+        browserlessLeaveRisk: decisionState.browserlessLeaveRisk || null,
         browserlessPursuit: decisionState.browserlessPursuit || null,
         profitPursuitSuppressions: decisionState.profitPursuitSuppressions || {},
         dangerousCombatTargets: decisionState.dangerousCombatTargets || {},

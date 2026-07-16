@@ -35,7 +35,12 @@ async function leaveOnce(options = {}) {
   const now = typeof options.now === 'function' ? options.now : Date.now;
   const startedAt = now();
   if (typeof options.onRequest === 'function') {
-    options.onRequest({ stage: options.stage || 'initial', url: redactSecrets(url) });
+    options.onRequest({
+      stage: options.stage || 'initial',
+      url: redactSecrets(url),
+      startedAtMs: startedAt,
+      hedged: Boolean(options.hedged)
+    });
   }
   const response = await fetchWithTimeout(url, {
     fetchImpl: options.fetchImpl,
@@ -51,6 +56,7 @@ async function leaveOnce(options = {}) {
     status: response.status,
     statusText: response.statusText || '',
     durationMs: now() - startedAt,
+    connectionReused: Boolean(response.connectionReused),
     response: body.json || { textSample: body.text.slice(0, 1000) }
   };
   result.ok = leaveResponseConfirmsExitCore(result.response);
@@ -73,13 +79,18 @@ async function leaveWithVerification(options = {}) {
   const runAttempt = (index, attemptOptions = {}) => {
     const stage = attemptOptions.hedged ? `hedge-${index}` : (index === 0 ? 'initial' : `retry-${index}`);
     const startedAt = now();
-    return Promise.resolve()
-      .then(() => leaveOnceImpl({
+    let attemptPromise;
+    try {
+      attemptPromise = Promise.resolve(leaveOnceImpl({
         ...options,
         ...attemptOptions,
         stage,
         verificationState
-      }))
+      }));
+    } catch (err) {
+      attemptPromise = Promise.reject(err);
+    }
+    return attemptPromise
       .catch(err => ({
         stage,
         httpOk: false,
@@ -182,6 +193,7 @@ function summarizeLeaveAttemptForPublic(attempt) {
     status: Number(attempt.status || 0),
     statusText: attempt.statusText || '',
     durationMs: Number(attempt.durationMs || 0),
+    connectionReused: Boolean(attempt.connectionReused),
     ok: Boolean(attempt.ok),
     summary: attempt.summary || null
   };

@@ -583,10 +583,14 @@ async function executeSafetyExit(event, config = {}, deps = {}) {
     localAddress: config.sourceIp,
     retryMax: config.leaveRetryMax ?? 3,
     retryDelayMs: config.leaveRetryMs ?? 200,
-    hedgeDelayMs: config.leaveHedgeMs ?? 1000,
+    hedgeDelayMs: deps.hedgeDelayMs
+      ?? config.leaveDangerHedgeMs
+      ?? 350,
     fetchImpl: deps.fetchImpl,
     sleep: deps.sleep,
-    now: deps.now
+    now: deps.now,
+    onRequest: deps.onLeaveRequest,
+    onResult: deps.onLeaveResult
   });
   let confirmedControlClose = null;
   if (leave?.ok && typeof deps.onLeaveConfirmed === 'function') {

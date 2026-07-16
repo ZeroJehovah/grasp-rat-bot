@@ -5,6 +5,7 @@ const { parseGrzFrame } = require('../../shared/grz-frame');
 const {
   buildSnapshotProbeUrl,
   fetchWithTimeout,
+  prewarmGameConnection,
   readResponseBody,
   redactSecrets,
   summarizeSnapshotPayload
@@ -24,6 +25,7 @@ const {
   executeSafetyExit
 } = require('./safety-controller');
 const { createBrowserlessActionAdapter } = require('./action-adapter');
+const { buildLeavePendingCover } = require('./leave-pending-control');
 const { createBrowserlessTargetWhitelist } = require('./target-whitelist');
 const { browserlessRuntimeRevision, browserlessRuntimeRevisionStatus } = require('./runtime-revision');
 const { createBrowserlessDecisionWorker } = require('./decision-worker');
@@ -857,6 +859,8 @@ async function runReadOnlyCanary(config, options = {}) {
     safety: {
       event: null,
       exit: null,
+      leavePending: null,
+      leavePrewarm: null,
       leaveFailure: null,
       frameGapSoftStops: [],
       lastFrameGapRecovery: null
@@ -912,6 +916,10 @@ async function runReadOnlyCanary(config, options = {}) {
   let frameGapSoftStopActive = false;
   let openFailedBeforeTransport = false;
   let transportPublished = false;
+  let transport = null;
+  let leavePending = null;
+  let leavePrewarmInFlight = null;
+  let lastLeavePrewarmAtMs = 0;
   const flushScheduledCombatPersistence = () => {
     if (!combatPersistenceScheduled && !combatPersistenceAtMs) return;
     const started = performance.now();
@@ -969,6 +977,72 @@ async function runReadOnlyCanary(config, options = {}) {
   };
   const logSafety = detail => {
     if (logStore) logStore.append('exits', 'safety-event', addRunMeta(detail));
+  };
+  const logExit = (type, detail) => {
+    if (logStore) logStore.append('exits', type, addRunMeta(detail));
+  };
+  const maybePrewarmLeaveConnection = (currentState, atMs, reason = 'risk', force = false) => {
+    if (options.fetchImpl && !options.prewarmGameConnection) return null;
+    if (leavePending || leavePrewarmInFlight) return leavePrewarmInFlight;
+    const intervalMs = Math.max(1000, Number(config.leavePrewarmIntervalMs || 3000));
+    if (!force && atMs - lastLeavePrewarmAtMs < intervalMs) return null;
+    const self = currentState?.realtime?.self || null;
+    const selfHp = Number(self?.hp);
+    const maxHp = Number(self?.max_hp ?? self?.maxHp ?? 100);
+    const action = result.decisions.last?.action || result.decisions.last || {};
+    const bulletCount = Number(currentState?.realtime?.bullets?.length || 0);
+    const risk = force
+      || bulletCount > 0
+      || (Number.isFinite(selfHp) && Number.isFinite(maxHp) && selfHp < maxHp)
+      || ['combat', 'recover', 'safety'].includes(String(action.band || ''));
+    if (!risk) return null;
+    lastLeavePrewarmAtMs = atMs;
+    result.safety.leavePrewarm = {
+      active: true,
+      reason,
+      startedAtMs: atMs,
+      completedAtMs: 0,
+      ok: null,
+      status: null,
+      durationMs: null,
+      connectionReused: false,
+      error: ''
+    };
+    logExit('leave-connection-prewarm-start', result.safety.leavePrewarm);
+    const prewarm = options.prewarmGameConnection || prewarmGameConnection;
+    leavePrewarmInFlight = Promise.resolve(prewarm({
+      gameOrigin: config.gameOrigin,
+      localAddress: config.sourceIp,
+      timeoutMs: Math.min(3000, Math.max(500, Number(config.httpTimeoutMs || 3000))),
+      fetchImpl: options.fetchImpl,
+      now
+    })).then(warm => {
+      result.safety.leavePrewarm = {
+        ...result.safety.leavePrewarm,
+        active: false,
+        completedAtMs: now(),
+        ok: Boolean(warm?.ok),
+        status: Number(warm?.status || 0),
+        durationMs: Number(warm?.durationMs || 0),
+        connectionReused: Boolean(warm?.connectionReused),
+        error: ''
+      };
+      logExit('leave-connection-prewarm-result', result.safety.leavePrewarm);
+      return warm;
+    }).catch(err => {
+      result.safety.leavePrewarm = {
+        ...result.safety.leavePrewarm,
+        active: false,
+        completedAtMs: now(),
+        ok: false,
+        error: errorMessage(err)
+      };
+      logExit('leave-connection-prewarm-result', result.safety.leavePrewarm);
+      return result.safety.leavePrewarm;
+    }).finally(() => {
+      leavePrewarmInFlight = null;
+    });
+    return leavePrewarmInFlight;
   };
   const logAction = detail => {
     if (logStore) logStore.append('runner', 'movement-command', addRunMeta(detail));
@@ -1040,14 +1114,207 @@ async function runReadOnlyCanary(config, options = {}) {
       }
     }
   };
-  const recordSafetyEvent = event => {
+  const compactLeavePendingCover = cover => {
+    if (!cover) return null;
+    const { threatField: _threatField, ...summary } = cover;
+    return summary;
+  };
+  const publicLeavePending = pending => pending ? {
+    active: Boolean(!pending.settled),
+    startedAt: new Date(pending.startedAtMs).toISOString(),
+    startedAtMs: pending.startedAtMs,
+    eventAtMs: pending.eventAtMs,
+    dispatchDelayMs: Math.max(0, pending.dispatchedAtMs - pending.eventAtMs),
+    firstRequestAtMs: pending.firstRequestAtMs || 0,
+    firstRequestDelayMs: pending.firstRequestAtMs
+      ? Math.max(0, pending.firstRequestAtMs - pending.eventAtMs)
+      : null,
+    completedAtMs: pending.completedAtMs || 0,
+    durationMs: (pending.completedAtMs || now()) - pending.startedAtMs,
+    frameCount: pending.frameCount,
+    realtimeFrameCount: pending.realtimeFrameCount,
+    coverRecomputeCount: pending.coverRecomputeCount,
+    dynamicCoverCount: pending.dynamicCoverCount,
+    directionChangeCount: pending.directionChangeCount,
+    startHp: pending.startHp,
+    lastHp: pending.lastHp,
+    minHp: pending.minHp,
+    observedHpLoss: pending.startHp === null || pending.minHp === null
+      ? null
+      : Math.max(0, pending.startHp - pending.minHp),
+    targetId: pending.targetId || '',
+    lastCover: compactLeavePendingCover(pending.lastCover),
+    settled: Boolean(pending.settled),
+    ok: pending.ok === null ? null : Boolean(pending.ok),
+    error: pending.error || ''
+  } : null;
+  const applyLeavePendingCover = (currentState, atMs, detail = {}) => {
+    if (!actionAdapter || !currentState?.realtime?.self) return null;
+    const pending = leavePending || {
+      event: detail.event || null,
+      triggerDecision: detail.decision || result.decisions.last,
+      target: detail.decision?.action?.target || detail.decision?.combat?.target || null,
+      lastCover: null
+    };
+    const built = buildLeavePendingCover(currentState, pending, {
+      ...runtimeDefaults,
+      nowMs: atMs,
+      preferTriggerCover: detail.preferTriggerCover === true
+    });
+    if (!built) return null;
+    const cover = compactLeavePendingCover(built.cover);
+    let actionResult;
+    try {
+      actionResult = actionAdapter.applyDecision(currentState, built.decision);
+    } catch (err) {
+      actionResult = {
+        ok: false,
+        kind: 'leave-pending-cover-error',
+        reason: 'leave-pending-cover-apply-failed',
+        error: errorMessage(err)
+      };
+    }
+    if (typeof detail.onApplied === 'function') {
+      try {
+        detail.onApplied(cover, actionResult);
+      } catch (err) {
+        log('leave-pending-cover-applied-hook-error', { error: errorMessage(err) });
+      }
+    }
+    updateActionResult(actionResult);
+    if (leavePending) {
+      leavePending.coverRecomputeCount += 1;
+      leavePending.dynamicCoverCount += 1;
+      if (built.cover.changed) leavePending.directionChangeCount += 1;
+      leavePending.lastCover = cover;
+      result.safety.leavePending = publicLeavePending(leavePending);
+    }
+    logExit('leave-pending-cover', {
+      trigger: detail.trigger || 'frame',
+      cover,
+      action: actionResult
+    });
+    return cover;
+  };
+  const startLeavePending = (event, currentState, atMs, detail = {}) => {
+    if (!event?.shouldLeave || leavePending) return leavePending;
+    const selfHp = Number(currentState?.realtime?.self?.hp);
+    const eventAtMs = Date.parse(String(event.at || ''));
+    leavePending = {
+      event,
+      triggerDecision: detail.decision || result.decisions.last,
+      target: detail.decision?.action?.target || detail.decision?.combat?.target || null,
+      targetId: String(detail.decision?.action?.target?.userId ?? detail.decision?.combat?.target?.userId ?? ''),
+      startedAtMs: atMs,
+      eventAtMs: Number.isFinite(eventAtMs) ? eventAtMs : atMs,
+      dispatchedAtMs: now(),
+      firstRequestAtMs: 0,
+      completedAtMs: 0,
+      frameCount: 0,
+      realtimeFrameCount: 0,
+      coverRecomputeCount: 0,
+      dynamicCoverCount: 0,
+      directionChangeCount: 0,
+      startHp: Number.isFinite(selfHp) ? selfHp : null,
+      lastHp: Number.isFinite(selfHp) ? selfHp : null,
+      minHp: Number.isFinite(selfHp) ? selfHp : null,
+      lastCover: detail.cover || null,
+      settled: false,
+      ok: null,
+      error: '',
+      promise: null
+    };
+    result.safety.leavePending = publicLeavePending(leavePending);
+    logExit('leave-pending-start', result.safety.leavePending);
+    leavePending.promise = executeSafetyExit(event, config, {
+      transport,
+      allowStopMotion: actionEnabled,
+      leaveWithVerification: options.leaveWithVerification,
+      now,
+      sleep,
+      onLeaveRequest: request => {
+        if (!leavePending.firstRequestAtMs) leavePending.firstRequestAtMs = now();
+        result.safety.leavePending = publicLeavePending(leavePending);
+        logExit('leave-request-start', {
+          ...request,
+          firstRequestDelayMs: result.safety.leavePending.firstRequestDelayMs
+        });
+      },
+      onLeaveResult: attempt => {
+        logExit('leave-request-result', attempt);
+      },
+      onLeaveConfirmed: async leave => {
+        ending = true;
+        clearPublishedTransport(transport, 'leave-confirmed');
+        const actionSeal = actionAdapter?.sealTransport
+          ? actionAdapter.sealTransport('leave-confirmed')
+          : null;
+        let transportClose = { attempted: false, closed: false, reason: 'missing-transport' };
+        if (transport && (transport.isOpen?.() || isWsOpen(transport.ws))) {
+          transport.close();
+          transportClose = { attempted: true, closed: true, reason: 'leave-confirmed' };
+        }
+        log('canary-leave-confirmed-control-close', {
+          leaveConfirmed: Boolean(leave?.ok),
+          actionSeal,
+          transportClose
+        });
+        return { ok: true, actionSeal, transportClose };
+      }
+    }).then(exit => {
+      leavePending.settled = true;
+      leavePending.ok = Boolean(exit?.ok);
+      leavePending.completedAtMs = now();
+      result.safety.exit = exit;
+      result.leave = exit?.leave || null;
+      result.safety.leavePending = publicLeavePending(leavePending);
+      logExit('leave-pending-finish', result.safety.leavePending);
+      return exit;
+    }).catch(err => {
+      leavePending.settled = true;
+      leavePending.ok = false;
+      leavePending.error = errorMessage(err);
+      leavePending.completedAtMs = now();
+      result.safety.leavePending = publicLeavePending(leavePending);
+      logExit('leave-pending-finish', result.safety.leavePending);
+      throw err;
+    });
+    return leavePending;
+  };
+  const recordSafetyEvent = (event, context = {}) => {
     if (!event || event.ok || result.safety.event) return false;
-    result.safety.event = event;
-    result.error = event.reason;
+    const atMs = Number(context.atMs || now());
+    const currentState = context.state || stateStore.getDecisionState?.(atMs) || stateStore.getState(atMs);
+    let leaveStarted = false;
+    const lockAndStartLeave = cover => {
+      if (leaveStarted) return;
+      leaveStarted = true;
+      result.safety.event = event;
+      result.error = event.reason;
+      startLeavePending(event, currentState, atMs, {
+        decision: context.decision || result.decisions.last,
+        cover
+      });
+    };
+    let cover = null;
+    if (event.shouldLeave) {
+      cover = applyLeavePendingCover(currentState, atMs, {
+        event,
+        decision: context.decision || result.decisions.last,
+        trigger: 'safety-event',
+        preferTriggerCover: true,
+        onApplied: appliedCover => lockAndStartLeave(appliedCover)
+      });
+    }
+    if (event.shouldLeave && !leaveStarted) lockAndStartLeave(cover);
+    if (!event.shouldLeave) {
+      result.safety.event = event;
+      result.error = event.reason;
+    }
     logSafety(event);
     return true;
   };
-  const handleSafetyAssessment = event => {
+  const handleSafetyAssessment = (event, context = {}) => {
     if (event?.softStop) {
       if (!frameGapSoftStopActive) {
         frameGapSoftStopActive = true;
@@ -1065,7 +1332,7 @@ async function runReadOnlyCanary(config, options = {}) {
       log('frame-gap-soft-recovered', event.detail || {});
       return false;
     }
-    return recordSafetyEvent(event);
+    return recordSafetyEvent(event, context);
   };
 
   const completionContext = (currentState, atMs) => {
@@ -1173,7 +1440,7 @@ async function runReadOnlyCanary(config, options = {}) {
       decision: summary,
       nowMs: atMs
     });
-    if (handleSafetyAssessment(decisionSafetyEvent)) return summary;
+    if (handleSafetyAssessment(decisionSafetyEvent, { state: currentState, decision: summary, atMs })) return summary;
     applyDecisionAction(currentState, summary, decision, atMs, {
       notifyDecisionWorker: detail.notifyDecisionWorker,
       errorReason: 'action-apply-failed'
@@ -1252,7 +1519,7 @@ async function runReadOnlyCanary(config, options = {}) {
       decision: summary,
       nowMs: atMs
     });
-    if (handleSafetyAssessment(immediate)) return true;
+    if (handleSafetyAssessment(immediate, { state: currentState, decision: summary, atMs })) return true;
     applyDecisionAction(currentState, summary, control, atMs, { errorReason: 'realtime-control-apply-failed' });
     return true;
   };
@@ -1452,9 +1719,9 @@ async function runReadOnlyCanary(config, options = {}) {
     }
   }
 
-  let transport = null;
   try {
     if (decisionWorker) await decisionWorker.ready();
+    maybePrewarmLeaveConnection(stateStore.getState(now()), now(), 'ws-connect', true);
     const open = options.openBrowserlessWs || openBrowserlessWs;
     transport = await open({
       gameOrigin: config.gameOrigin,
@@ -1499,7 +1766,7 @@ async function runReadOnlyCanary(config, options = {}) {
         });
       },
       onMessage: data => {
-        if (ending || result.safety.event) return;
+        if (ending) return;
         const taskStarted = performance.now();
         const stageDurations = {};
         const atMs = now();
@@ -1578,6 +1845,26 @@ async function runReadOnlyCanary(config, options = {}) {
               }
             }
             stageDurations['frame-observers'] = performance.now() - stageStarted;
+            if (leavePending && !leavePending.settled) {
+              leavePending.frameCount += 1;
+              if (frame.decodedJson.type === 'pos') leavePending.realtimeFrameCount += 1;
+              const hp = Number(currentSelf?.hp);
+              if (Number.isFinite(hp)) {
+                leavePending.lastHp = hp;
+                leavePending.minHp = leavePending.minHp === null ? hp : Math.min(leavePending.minHp, hp);
+              }
+              stageStarted = performance.now();
+              applyLeavePendingCover(currentState, atMs, { trigger: 'pending-frame' });
+              stageDurations['leave-pending-cover'] = performance.now() - stageStarted;
+              result.safety.leavePending = publicLeavePending(leavePending);
+              logExit('leave-pending-frame', {
+                frameType: frame.decodedJson.type,
+                tick: currentState?.realtime?.tick ?? frame.decodedTick ?? null,
+                pending: result.safety.leavePending
+              });
+              return;
+            }
+            maybePrewarmLeaveConnection(currentState, atMs, 'realtime-risk');
             if (deadlineAtMs && atMs >= deadlineAtMs) return;
             stageStarted = performance.now();
             const realtimeHandled = evaluateRealtimeControl(currentState, atMs, false, stageDurations);
@@ -1610,7 +1897,7 @@ async function runReadOnlyCanary(config, options = {}) {
               wsError,
               wsClosed,
               nowMs: atMs
-            }));
+            }), { state: currentState, decision: result.decisions.last, atMs });
             stageDurations.safety = performance.now() - stageStarted;
           }
         } finally {
@@ -1653,7 +1940,7 @@ async function runReadOnlyCanary(config, options = {}) {
     }
     log('canary-ws-open', { durationMs });
     deadlineAtMs = now() + durationMs;
-    while (now() < deadlineAtMs && !result.safety.event) {
+    while (now() < deadlineAtMs && !ending && (!result.safety.event || (leavePending && !leavePending.settled))) {
       const waitMs = Math.min(250, Math.max(0, deadlineAtMs - now()));
       if (waitMs > 0) await sleep(waitMs);
       const atMs = now();
@@ -1674,7 +1961,11 @@ async function runReadOnlyCanary(config, options = {}) {
         lastDecision: result.decisions.last,
         nowMs: atMs
       });
-      handleSafetyAssessment(safetyEvent);
+      handleSafetyAssessment(safetyEvent, {
+        state: stateStore.getDecisionState?.(atMs) || stateStore.getState(atMs),
+        decision: result.decisions.last,
+        atMs
+      });
     }
   } catch (err) {
     openFailedBeforeTransport = !transport;
@@ -1697,33 +1988,19 @@ async function runReadOnlyCanary(config, options = {}) {
         if (result.safety.event.shouldLeave === false && actionAdapter) {
           updateActionResult(actionAdapter.stop(result.safety.event.reason || 'transport-recovery'));
         }
-        clearPublishedTransport(transport, 'leave-start');
-        result.safety.exit = await executeSafetyExit(result.safety.event, config, {
-          transport,
-          allowStopMotion: actionEnabled,
-          leaveWithVerification: options.leaveWithVerification,
-          now,
-          sleep,
-          onLeaveConfirmed: async leave => {
-            ending = true;
-            clearPublishedTransport(transport, 'leave-confirmed');
-            const actionSeal = actionAdapter?.sealTransport
-              ? actionAdapter.sealTransport('leave-confirmed')
-              : null;
-            let transportClose = { attempted: false, closed: false, reason: 'missing-transport' };
-            if (transport && (transport.isOpen?.() || isWsOpen(transport.ws))) {
-              transport.close();
-              transportClose = { attempted: true, closed: true, reason: 'leave-confirmed' };
-            }
-            log('canary-leave-confirmed-control-close', {
-              leaveConfirmed: Boolean(leave?.ok),
-              actionSeal,
-              transportClose
-            });
-            return { ok: true, actionSeal, transportClose };
-          }
-        });
-        result.leave = result.safety.exit.leave;
+        if (leavePending?.promise) {
+          result.safety.exit = await leavePending.promise;
+          result.leave = result.safety.exit?.leave || null;
+        } else {
+          result.safety.exit = await executeSafetyExit(result.safety.event, config, {
+            transport,
+            allowStopMotion: actionEnabled,
+            leaveWithVerification: options.leaveWithVerification,
+            now,
+            sleep
+          });
+          result.leave = result.safety.exit.leave;
+        }
       } else {
         clearPublishedTransport(transport, 'leave-start');
         if (actionAdapter) updateActionResult(actionAdapter.stop('normal-complete'));

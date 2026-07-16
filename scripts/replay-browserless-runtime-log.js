@@ -11,7 +11,8 @@ const { evaluateBrowserlessSafety } = require('../src/node/browserless/safety-co
 const { actionPriorityBand } = require('../src/strategy/action-priority');
 const {
   evaluateConfirmedCombatHpExitCore,
-  evaluateCombatHpExitCore
+  evaluateCombatHpExitCore,
+  evaluatePredictedLeaveHpCore
 } = require('../src/strategy/combat-exit');
 const { calculateDodgeDirection, pickSafeClosingDodgeCore } = require('../src/strategy/combat-movement');
 const {
@@ -33,7 +34,12 @@ function parseArgs(argv) {
     minImprovementPct: 0,
     expectNewExit: false,
     trustEasyKillBeforeDamage: false,
-    executionDelayTicks: 5
+    executionDelayTicks: 5,
+    cutoffAt: '',
+    expectCases: 0,
+    expectTailLoss: null,
+    projectedLeaveP50Ms: 400,
+    projectedLeaveP95Ms: 700
   };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -49,6 +55,11 @@ function parseArgs(argv) {
     else if (arg === '--expect-new-exit') options.expectNewExit = true;
     else if (arg === '--trust-easy-kill-before-damage') options.trustEasyKillBeforeDamage = true;
     else if (arg === '--execution-delay-ticks') options.executionDelayTicks = Number(argv[++index] || 5);
+    else if (arg === '--cutoff-at') options.cutoffAt = String(argv[++index] || '');
+    else if (arg === '--expect-cases') options.expectCases = Number(argv[++index] || 0);
+    else if (arg === '--expect-tail-loss') options.expectTailLoss = Number(argv[++index]);
+    else if (arg === '--projected-leave-p50-ms') options.projectedLeaveP50Ms = Number(argv[++index] || 400);
+    else if (arg === '--projected-leave-p95-ms') options.projectedLeaveP95Ms = Number(argv[++index] || 700);
     else throw new Error(`unknown argument: ${arg}`);
   }
   if (!options.file) throw new Error('--file is required');
@@ -1066,6 +1077,361 @@ function replayOpportunity(options) {
   };
 }
 
+function replayEntryRunId(entry) {
+  return String(entry?.detail?.runId || entry?.runId || '');
+}
+
+function firstFiniteNumber(values = []) {
+  for (const value of values) {
+    if (value === null || value === undefined || value === '') continue;
+    const number = Number(value);
+    if (Number.isFinite(number)) return number;
+  }
+  return null;
+}
+
+function leaveTailEventDecision(event = {}) {
+  return event?.detail?.decision || event?.decision || {};
+}
+
+function leaveTailEventSelfHp(event = {}) {
+  const decision = leaveTailEventDecision(event);
+  const action = decision.action || decision;
+  return firstFiniteNumber([
+    action?.combatExit?.selfHp,
+    decision?.combat?.exit?.selfHp,
+    decision?.combat?.self?.hp,
+    action?.self?.hp,
+    decision?.input?.self?.hp,
+    event?.detail?.realtime?.self?.hp
+  ]);
+}
+
+function leaveTailEventTarget(event = {}) {
+  const decision = leaveTailEventDecision(event);
+  const action = decision.action || decision;
+  return action?.target
+    || decision?.target
+    || decision?.combat?.target
+    || decision?.combat?.exit?.target
+    || null;
+}
+
+function leaveTailAttributableEvidence(event = {}) {
+  const decision = leaveTailEventDecision(event);
+  const action = decision.action || decision;
+  const injury = action?.injury || decision?.injury || {};
+  const leaveRisk = action?.leaveRisk || decision?.leaveRisk || {};
+  const combatExit = action?.combatExit || decision?.combat?.exit || {};
+  return Boolean(
+    injury.attributable === true
+      || /incoming-bullet-owner/i.test(String(injury.targetSource || combatExit.pressureTargetSource || ''))
+      || leaveRisk.attributableIncoming === true
+  );
+}
+
+function successfulLeaveAttempt(leave = {}) {
+  const attempts = Array.isArray(leave?.attempts) ? leave.attempts : [];
+  return attempts.find(attempt => attempt?.ok) || attempts[attempts.length - 1] || null;
+}
+
+function parsedArray(value) {
+  if (Array.isArray(value)) return value;
+  if (typeof value !== 'string' || !value.trim()) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+function loggedSelectedThreat(decision = {}) {
+  const movement = decision?.combat?.movement || decision?.movement || null;
+  const field = parsedArray(movement?.dodge?.threatField);
+  if (!field.length) return null;
+  const dx = Number(movement?.dx || 0);
+  const dy = Number(movement?.dy || 0);
+  return field.find(item => Number(item?.dx) === dx && Number(item?.dy) === dy) || field[0] || null;
+}
+
+function nearbyContainsTarget(decision = {}, target = null) {
+  const targetName = String(target?.name || '').trim();
+  if (!targetName) return true;
+  return (decision?.input?.nearby?.p || []).some(row => Array.isArray(row) && String(row[0] || '').trim() === targetName);
+}
+
+function projectedTailLoss(historicalTailLoss, historicalConfirmMs, projectedConfirmMs, damagePerHit = 3) {
+  if (!(historicalTailLoss > 0) || !(historicalConfirmMs > 0) || !(projectedConfirmMs > 0)) return 0;
+  const continuousDamage = historicalTailLoss * projectedConfirmMs / historicalConfirmMs;
+  return Math.max(damagePerHit, Math.ceil((continuousDamage - 1e-9) / damagePerHit) * damagePerHit);
+}
+
+function replayLeaveTail(options) {
+  const directory = path.dirname(options.file);
+  const runnerFile = path.join(directory, 'runner.jsonl');
+  const wsFile = path.join(directory, 'ws.jsonl');
+  const decisionsFile = path.join(directory, 'decisions.jsonl');
+  const cutoffMs = options.cutoffAt ? Date.parse(options.cutoffAt) : Infinity;
+  if (options.cutoffAt && !Number.isFinite(cutoffMs)) throw new Error(`invalid --cutoff-at: ${options.cutoffAt}`);
+
+  const events = new Map();
+  for (const row of selectedEntries(options)) {
+    const event = row.detail || {};
+    if (row.entry.type !== 'safety-event' || event.shouldLeave !== true) continue;
+    const eventAtMs = Date.parse(event.at || row.entry.at || '');
+    if (!Number.isFinite(eventAtMs) || eventAtMs > cutoffMs) continue;
+    const runId = String(event.runId || row.entry.runId || '');
+    const eventHp = leaveTailEventSelfHp(event);
+    if (!runId || eventHp === null) continue;
+    const target = leaveTailEventTarget(event);
+    events.set(runId, {
+      runId,
+      line: row.line,
+      event,
+      eventAt: new Date(eventAtMs).toISOString(),
+      eventAtMs,
+      eventLogAt: row.entry.at || '',
+      reason: String(event.reason || ''),
+      eventHp,
+      target,
+      attributableEvidence: leaveTailAttributableEvidence(event),
+      confirmAt: '',
+      confirmAtMs: null,
+      finalAt: '',
+      leaveHp: null,
+      leaveLife: '',
+      leaveDurationMs: null,
+      lastWsHp: null,
+      lastWsAt: '',
+      decisions: []
+    });
+  }
+
+  if (fs.existsSync(runnerFile) && events.size) {
+    forEachJsonlEntry(runnerFile, entry => {
+      const item = events.get(replayEntryRunId(entry));
+      if (!item) return;
+      if (entry.type === 'canary-leave-confirmed-control-close') {
+        const atMs = Date.parse(entry.at || '');
+        if (Number.isFinite(atMs)) {
+          item.confirmAt = entry.at;
+          item.confirmAtMs = atMs;
+        }
+        return;
+      }
+      if (entry.type !== 'canary-finish' && entry.type !== 'canary-failed') return;
+      const attempt = successfulLeaveAttempt(entry?.detail?.leave);
+      const leaveHp = firstFiniteNumber([attempt?.response?.hp]);
+      if (!attempt || leaveHp === null) return;
+      item.finalAt = entry.at || '';
+      item.leaveHp = leaveHp;
+      item.leaveLife = String(attempt?.response?.life || '');
+      item.leaveDurationMs = firstFiniteNumber([attempt?.durationMs]);
+      if (!Number.isFinite(item.confirmAtMs)) {
+        const finalAtMs = Date.parse(entry.at || '');
+        if (Number.isFinite(finalAtMs)) {
+          item.confirmAt = entry.at;
+          item.confirmAtMs = finalAtMs;
+        }
+      }
+    });
+  }
+
+  const tailCases = Array.from(events.values())
+    .filter(item => item.leaveHp !== null && item.eventHp > item.leaveHp)
+    .sort((a, b) => a.eventAtMs - b.eventAtMs);
+  const tailByRunId = new Map(tailCases.map(item => [item.runId, item]));
+
+  if (fs.existsSync(wsFile) && tailByRunId.size) {
+    forEachJsonlEntry(wsFile, entry => {
+      const item = tailByRunId.get(replayEntryRunId(entry));
+      if (!item || entry.type !== 'message') return;
+      const atMs = Date.parse(entry.at || '');
+      const hp = firstFiniteNumber([entry?.detail?.decodedSummary?.self?.hp]);
+      if (!Number.isFinite(atMs) || hp === null || atMs > Number(item.confirmAtMs || Infinity)) return;
+      item.lastWsHp = hp;
+      item.lastWsAt = entry.at || '';
+    });
+  }
+
+  if (fs.existsSync(decisionsFile) && tailByRunId.size) {
+    forEachJsonlEntry(decisionsFile, (entry, line) => {
+      const item = tailByRunId.get(replayEntryRunId(entry));
+      if (!item) return;
+      const atMs = Date.parse(entry.at || '');
+      if (!Number.isFinite(atMs) || atMs < item.eventAtMs - 5000 || atMs > item.eventAtMs + 300) return;
+      const decision = entry.detail || {};
+      const selfHp = firstFiniteNumber([decision?.input?.self?.hp, decision?.action?.self?.hp, decision?.combat?.self?.hp]);
+      if (selfHp === null) return;
+      item.decisions.push({ line, at: entry.at || '', atMs, decision, selfHp });
+    });
+  }
+
+  const evaluated = tailCases.map(item => {
+    item.decisions.sort((a, b) => a.atMs - b.atMs || a.line - b.line);
+    const hpSamples = [];
+    let replayTrigger = null;
+    let previousAction = null;
+    for (const row of item.decisions) {
+      hpSamples.push({ at: row.atMs, hp: row.selfHp });
+      while (hpSamples.length && row.atMs - hpSamples[0].at > 1250) hpSamples.shift();
+      const peak = hpSamples.slice().sort((a, b) => b.hp - a.hp || a.at - b.at)[0] || null;
+      const recentDamage = peak ? Math.max(0, peak.hp - row.selfHp) : 0;
+      const recentDamageWindowMs = recentDamage > 0 && peak ? Math.max(0, row.atMs - peak.at) : 0;
+      const threat = loggedSelectedThreat(row.decision);
+      const commandDelayTicks = firstFiniteNumber([
+        row.decision?.combat?.timing?.rollingP90Ticks,
+        row.decision?.combat?.timing?.executionDelayTicks,
+        options.executionDelayTicks
+      ]) ?? 5;
+      const prediction = evaluatePredictedLeaveHpCore({
+        selfHp: row.selfHp,
+        directHits: threat?.directHits,
+        unavoidableHits: threat?.unavoidableHits,
+        recentDamage,
+        recentDamageWindowMs,
+        commandDelayMs: Math.max(0, commandDelayTicks * 50)
+      });
+      const action = row.decision.action || row.decision;
+      const combatTarget = row.decision?.combat?.target || null;
+      const combatEstablished = Boolean(combatTarget && row.decision?.combat?.actionEligible !== false);
+      const recovering = String(previousAction?.band || '') === 'recover'
+        || /recover|wait-for-full-stamina-and-hp/i.test(String(previousAction?.reason || ''));
+      const bulletCount = Math.max(0, Number(row.decision?.input?.realtime?.bulletCount || 0));
+      const attributableIncoming = Boolean(
+        bulletCount > 0
+          && item.attributableEvidence
+          && nearbyContainsTarget(row.decision, item.target)
+      );
+      const rapidDamage = recentDamage >= 6
+        && recentDamageWindowMs > 0
+        && recentDamageWindowMs <= 1000
+        && attributableIncoming;
+      let reason = '';
+      let source = '';
+      if (prediction?.shouldLeave) {
+        reason = prediction.reason;
+        source = 'predicted-leave-hp';
+      } else if ((recovering || !combatEstablished) && attributableIncoming && bulletCount >= 2) {
+        reason = 'continuous-incoming-bullets-leave';
+        source = 'event-confirmed-bullet-owner';
+      } else if ((recovering || !combatEstablished) && rapidDamage) {
+        reason = 'rapid-damage-early-leave';
+        source = 'event-confirmed-bullet-owner';
+      } else if ((recovering || !combatEstablished) && attributableIncoming) {
+        reason = 'incoming-bullet-early-leave';
+        source = 'event-confirmed-bullet-owner';
+      } else if (action.shouldLeave === true) {
+        reason = String(action.reason || row.decision.reason || item.reason);
+        source = 'logged-safety-gate';
+      }
+      if (!replayTrigger && reason) {
+        const effectiveAtMs = action.shouldLeave === true
+          ? Math.min(row.atMs, item.eventAtMs)
+          : row.atMs;
+        replayTrigger = {
+          at: new Date(effectiveAtMs).toISOString(),
+          atMs: effectiveAtMs,
+          line: row.line,
+          hp: row.selfHp,
+          reason,
+          source,
+          bulletCount,
+          combatEstablished,
+          recovering,
+          recentDamage,
+          recentDamageWindowMs,
+          prediction
+        };
+      }
+      previousAction = action;
+    }
+    if (!replayTrigger) {
+      replayTrigger = {
+        at: item.eventAt,
+        atMs: item.eventAtMs,
+        line: item.line,
+        hp: item.eventHp,
+        reason: item.reason,
+        source: 'logged-safety-event',
+        bulletCount: null,
+        combatEstablished: null,
+        recovering: null,
+        recentDamage: null,
+        recentDamageWindowMs: null,
+        prediction: null
+      };
+    }
+    const historicalConfirmMs = Number.isFinite(item.confirmAtMs)
+      ? Math.max(1, item.confirmAtMs - item.eventAtMs)
+      : Math.max(1, Number(item.leaveDurationMs || 1));
+    const tailLoss = Math.max(0, item.eventHp - item.leaveHp);
+    const p50Loss = projectedTailLoss(tailLoss, historicalConfirmMs, Math.max(1, Number(options.projectedLeaveP50Ms || 400)));
+    const p95Loss = projectedTailLoss(tailLoss, historicalConfirmMs, Math.max(1, Number(options.projectedLeaveP95Ms || 700)));
+    const targetId = String(item.target?.userId ?? item.target?.user_id ?? item.target?.entityId ?? item.target?.entity_id ?? '');
+    return {
+      runId: item.runId,
+      line: item.line,
+      targetId: targetId || null,
+      targetName: String(item.target?.name || ''),
+      loggedReason: item.reason,
+      eventAt: item.eventAt,
+      eventHp: item.eventHp,
+      lastRealtimeHp: item.lastWsHp,
+      lastRealtimeAt: item.lastWsAt,
+      leaveHp: item.leaveHp,
+      leaveLife: item.leaveLife,
+      tailLoss,
+      historicalConfirmMs,
+      replayTriggerAt: replayTrigger.at,
+      replayTriggerHp: replayTrigger.hp,
+      replayReason: replayTrigger.reason,
+      replaySource: replayTrigger.source,
+      detectionLeadMs: Math.max(0, item.eventAtMs - replayTrigger.atMs),
+      projectedP50Loss: p50Loss,
+      projectedP50Hp: Math.max(0, replayTrigger.hp - p50Loss),
+      projectedP95Loss: p95Loss,
+      projectedP95Hp: Math.max(0, replayTrigger.hp - p95Loss),
+      deathCase: item.leaveLife.toLowerCase() === 'dead' || item.leaveHp <= 0,
+      replay: replayTrigger
+    };
+  });
+
+  const expectedCaseCount = Math.max(0, Number(options.expectCases || 0));
+  const expectedTailLoss = Number.isFinite(Number(options.expectTailLoss)) ? Number(options.expectTailLoss) : null;
+  const totalTailLoss = evaluated.reduce((sum, item) => sum + item.tailLoss, 0);
+  const deathCases = evaluated.filter(item => item.deathCase);
+  const result = {
+    mode: 'leave-tail',
+    file: options.file,
+    lines: `${options.startLine}-${options.endLine}`,
+    cutoffAt: options.cutoffAt || '',
+    evaluatedCases: evaluated.length,
+    totalTailLoss,
+    expectedCaseCount: expectedCaseCount || null,
+    expectedTailLoss,
+    replayedNoLaterCases: evaluated.filter(item => item.detectionLeadMs >= 0).length,
+    replayedEarlierCases: evaluated.filter(item => item.detectionLeadMs > 0).length,
+    predictedHpCases: evaluated.filter(item => item.replaySource === 'predicted-leave-hp').length,
+    earlyThreatCases: evaluated.filter(item => item.replaySource === 'event-confirmed-bullet-owner').length,
+    deathCases: deathCases.length,
+    deathCasesSurvivingProjectedP95: deathCases.filter(item => item.projectedP95Hp > 0).length,
+    maximumDetectionLeadMs: Math.max(0, ...evaluated.map(item => item.detectionLeadMs)),
+    projectedLeaveP50Ms: Math.max(1, Number(options.projectedLeaveP50Ms || 400)),
+    projectedLeaveP95Ms: Math.max(1, Number(options.projectedLeaveP95Ms || 700)),
+    trajectoryBoundEvaluated: false,
+    trajectoryBoundNote: 'Historical WS payload tracing was disabled; post-trigger per-bullet unavoidable-loss bounds require new leave-pending telemetry.',
+    cases: evaluated
+  };
+  result.accepted = result.evaluatedCases > 0
+    && (!expectedCaseCount || result.evaluatedCases === expectedCaseCount)
+    && (expectedTailLoss === null || result.totalTailLoss === expectedTailLoss)
+    && result.replayedNoLaterCases === result.evaluatedCases
+    && result.deathCasesSurvivingProjectedP95 === result.deathCases;
+  return result;
+}
+
 function replayExit(options) {
   const rows = selectedEntries(options);
   const evaluated = [];
@@ -1576,6 +1942,7 @@ function replayCombatPursuit(options) {
 
 function runReplay(options) {
   if (options.mode === 'opportunity') return replayOpportunity(options);
+  if (options.mode === 'leave-tail') return replayLeaveTail(options);
   if (options.mode === 'exit') return replayExit(options);
   if (options.mode === 'movement-stall-exit') return replayMovementStallExit(options);
   if (options.mode === 'recovery-threat-exit') return replayRecoveryThreatExit(options);
@@ -1596,6 +1963,7 @@ if (require.main === module) {
 module.exports = {
   parseArgs,
   replayCombatPursuit,
+  replayLeaveTail,
   replayMovementStallExit,
   replayRecoveryThreatExit,
   runReplay

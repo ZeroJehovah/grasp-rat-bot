@@ -12,6 +12,7 @@ const DEFAULT_ACCEPT_HEADER = 'application/json,text/plain,*/*';
 let undiciAgentConstructor = null;
 let undiciAgentLoaded = false;
 const localAddressDispatchers = new Map();
+const localAddressAgents = new Map();
 
 function getUndiciAgentConstructor() {
   if (undiciAgentLoaded) return undiciAgentConstructor;
@@ -35,6 +36,45 @@ function dispatcherForLocalAddress(localAddress) {
   const dispatcher = new Agent({ connect: { localAddress: value } });
   localAddressDispatchers.set(value, dispatcher);
   return dispatcher;
+}
+
+function agentForLocalAddress(protocol, localAddress) {
+  const value = String(localAddress || '').trim();
+  if (!value) return null;
+  const normalizedProtocol = protocol === 'http:' ? 'http:' : 'https:';
+  const key = `${normalizedProtocol}|${value}`;
+  if (localAddressAgents.has(key)) return localAddressAgents.get(key).agent;
+  const Agent = normalizedProtocol === 'http:' ? http.Agent : https.Agent;
+  const agent = new Agent({
+    keepAlive: true,
+    keepAliveMsecs: 1000,
+    maxSockets: 4,
+    maxFreeSockets: 2,
+    scheduling: 'lifo'
+  });
+  localAddressAgents.set(key, {
+    key,
+    protocol: normalizedProtocol,
+    localAddress: value,
+    createdAtMs: Date.now(),
+    requestCount: 0,
+    reusedCount: 0,
+    agent
+  });
+  return agent;
+}
+
+function localAddressAgentStatus() {
+  return Array.from(localAddressAgents.values()).map(entry => ({
+    key: entry.key,
+    protocol: entry.protocol,
+    localAddress: entry.localAddress,
+    createdAtMs: entry.createdAtMs,
+    requestCount: entry.requestCount,
+    reusedCount: entry.reusedCount,
+    reuseRate: entry.requestCount > 0 ? entry.reusedCount / entry.requestCount : 0,
+    keepAlive: Boolean(entry.agent?.options?.keepAlive)
+  }));
 }
 
 function redactSecrets(value) {
@@ -102,14 +142,23 @@ function fetchWithLocalAddress(url, options = {}) {
   };
   const method = String(options.method || 'GET').toUpperCase();
   const body = options.body === undefined || options.body === null ? null : options.body;
+  const localAddress = String(options.localAddress || '');
+  const agent = agentForLocalAddress(parsed.protocol, localAddress);
+  const agentEntry = localAddressAgents.get(`${parsed.protocol === 'http:' ? 'http:' : 'https:'}|${localAddress}`) || null;
   return new Promise((resolve, reject) => {
     const request = client.request(parsed, {
       method,
       headers,
-      localAddress: String(options.localAddress || ''),
-      family: String(options.localAddress || '').includes(':') ? 6 : 4,
-      timeout: timeoutMs
+      localAddress,
+      family: localAddress.includes(':') ? 6 : 4,
+      timeout: timeoutMs,
+      agent
     }, response => {
+      const connectionReused = Boolean(request.reusedSocket);
+      if (agentEntry) {
+        agentEntry.requestCount += 1;
+        if (connectionReused) agentEntry.reusedCount += 1;
+      }
       const chunks = [];
       response.on('data', chunk => chunks.push(Buffer.from(chunk)));
       response.on('end', () => {
@@ -120,6 +169,8 @@ function fetchWithLocalAddress(url, options = {}) {
           status: Number(response.statusCode || 0),
           statusText: response.statusMessage || '',
           url: String(url),
+          connectionReused,
+          socketLocalAddress: response.socket?.localAddress || localAddress,
           headers: {
             get(name) {
               const value = responseHeaders[String(name || '').toLowerCase()];
@@ -135,6 +186,32 @@ function fetchWithLocalAddress(url, options = {}) {
     if (body !== null) request.write(body);
     request.end();
   });
+}
+
+async function prewarmGameConnection(options = {}) {
+  const gameOrigin = String(options.gameOrigin || DEFAULT_GAME_ORIGIN).replace(/\/$/, '');
+  const now = typeof options.now === 'function' ? options.now : Date.now;
+  const startedAtMs = now();
+  const response = await fetchWithTimeout(`${gameOrigin}/favicon.ico`, {
+    fetchImpl: options.fetchImpl,
+    timeoutMs: Math.max(250, Number(options.timeoutMs || 3000)),
+    localAddress: options.localAddress,
+    method: 'GET',
+    cache: 'no-store',
+    headers: {
+      connection: 'keep-alive',
+      range: 'bytes=0-0'
+    }
+  });
+  await response.text();
+  await new Promise(resolve => setImmediate(resolve));
+  return {
+    ok: true,
+    status: Number(response.status || 0),
+    durationMs: Math.max(0, now() - startedAtMs),
+    connectionReused: Boolean(response.connectionReused),
+    localAddress: response.socketLocalAddress || String(options.localAddress || '')
+  };
 }
 
 async function readResponseBody(response) {
@@ -771,8 +848,10 @@ module.exports = {
   extractLoginDataFromUrl,
   extractMetaRefreshUrl,
   fetchWithTimeout,
+  localAddressAgentStatus,
   normalizeCallbackUrl,
   parseCurlCommand,
+  prewarmGameConnection,
   readResponseBody,
   redactSecrets,
   redactStructuredSecrets,

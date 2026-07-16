@@ -86,6 +86,8 @@ function publicConfig(config) {
     leaveRetryMax: Number(config.leaveRetryMax || 0),
     leaveRetryMs: Number(config.leaveRetryMs || 0),
     leaveHedgeMs: Number(config.leaveHedgeMs || 0),
+    leaveDangerHedgeMs: Number(config.leaveDangerHedgeMs || 0),
+    leavePrewarmIntervalMs: Number(config.leavePrewarmIntervalMs || 0),
     decisionIntervalMs: Number(config.decisionIntervalMs || 0),
     loopDelayMs: Number(config.loopDelayMs || 0),
     dailyFirstLoginDelayMs: Number(config.dailyFirstLoginDelayMs || 0),
