@@ -21,6 +21,7 @@ const {
   browserlessStatsForDecision,
   browserlessCompactStatusSource,
   defaultBrowserlessState,
+  mergeLiveState,
   mergeState,
   updateBrowserlessStateFile
 } = require('../src/node/browserless/state-file');
@@ -391,7 +392,7 @@ async function runCompleteCallbackScenario(options, combatLearning, activeCombat
     ? JSON.parse(fs.readFileSync(path.resolve(options.stateFile), 'utf8'))
     : defaultBrowserlessState();
   const patchLiveState = patch => {
-    liveState = mergeState(liveState, { ...patch, updatedAt: new Date().toISOString() });
+    liveState = mergeLiveState(liveState, { ...patch, updatedAt: new Date().toISOString() });
   };
   const observeDecision = decision => {
     const before = liveState;
@@ -417,10 +418,13 @@ async function runCompleteCallbackScenario(options, combatLearning, activeCombat
     statusPort: 18767,
     webToken: 'present'
   };
-  const scheduleStatusRender = () => {
-    const compact = statusSequence % 4 !== 0;
-    statusSequence += 1;
-    const dispatchStarted = performance.now();
+  const statusCache = {
+    full: { text: '', at: 0, inFlight: null },
+    compact: { text: '', at: 0, inFlight: null }
+  };
+  const refreshStatusCache = compact => {
+    const cache = compact ? statusCache.compact : statusCache.full;
+    if (cache.inFlight) return cache.inFlight;
     const rawSource = {
       ...liveState,
       highDropPlayers: highDropPlayerTracker.status(fixture.now()),
@@ -429,14 +433,34 @@ async function runCompleteCallbackScenario(options, combatLearning, activeCombat
       chat: chatService.status(fixture.now())
     };
     const source = compact ? browserlessCompactStatusSource(rawSource) : rawSource;
-    const pending = backgroundIo.renderStatus(source, statusConfig, compact);
+    cache.inFlight = backgroundIo.renderStatus(source, statusConfig, compact)
+      .then(rendered => {
+        cache.text = rendered.text;
+        cache.at = performance.now();
+        return rendered.text;
+      })
+      .finally(() => {
+        cache.inFlight = null;
+      });
+    return cache.inFlight;
+  };
+  const scheduleStatusRender = () => {
+    const compact = statusSequence % 4 !== 0;
+    statusSequence += 1;
+    const dispatchStarted = performance.now();
+    const cache = compact ? statusCache.compact : statusCache.full;
+    const text = cache.text;
+    const ttlMs = compact ? 500 : 1000;
+    if (performance.now() - cache.at >= ttlMs && !cache.inFlight) {
+      setImmediate(() => refreshStatusCache(compact).catch(() => {}));
+    }
     const dispatchMs = performance.now() - dispatchStarted;
     concurrentStatus[compact ? 'compactDispatch' : 'fullDispatch'].push(dispatchMs);
-    const tracked = pending.then(rendered => {
+    const tracked = Promise.resolve().then(() => {
       const responseStarted = performance.now();
-      Buffer.byteLength(rendered.text);
+      Buffer.byteLength(text);
       concurrentStatus[compact ? 'compactResponse' : 'fullResponse'].push(performance.now() - responseStarted);
-    }).catch(() => {});
+    });
     statusRequests.add(tracked);
     tracked.finally(() => statusRequests.delete(tracked));
   };
@@ -455,6 +479,7 @@ async function runCompleteCallbackScenario(options, combatLearning, activeCombat
     bullets: fixture.bullets
   });
   try {
+    await Promise.all([refreshStatusCache(false), refreshStatusCache(true)]);
     scheduleStatusRender();
     statusTimer = setInterval(scheduleStatusRender, 250);
     statusTimer.unref?.();
@@ -606,7 +631,9 @@ async function benchmarkStatusRendering(options) {
     },
     chat: { ok: true, messages: [] }
   };
+  const projectionStarted = performance.now();
   const compactSource = browserlessCompactStatusSource(source);
+  const compactProjectionMs = performance.now() - projectionStarted;
   const config = {
     dataDir,
     logDir: '/var/log/grasp-rat-browserless',
@@ -631,32 +658,24 @@ async function benchmarkStatusRendering(options) {
   let compactBytes = 0;
   let secretsRedacted = true;
   try {
+    const fullRendered = await backgroundIo.renderStatus(source, config, false);
+    const compactRendered = await backgroundIo.renderStatus(compactSource, config, true);
+    fullPost.push(fullRendered.postMs);
+    fullCompute.push(fullRendered.computeMs);
+    fullRoundTrip.push(fullRendered.roundTripMs);
+    compactPost.push(compactRendered.postMs);
+    compactCompute.push(compactRendered.computeMs);
+    compactRoundTrip.push(compactRendered.roundTripMs);
+    fullBytes = fullRendered.bytes || Buffer.byteLength(fullRendered.text);
+    compactBytes = compactRendered.bytes || Buffer.byteLength(compactRendered.text);
+    if (state?.session?.sessionToken && (fullRendered.text.includes(String(state.session.sessionToken))
+      || compactRendered.text.includes(String(state.session.sessionToken)))) secretsRedacted = false;
     statusHandle = await startStatusServer({
       host: '127.0.0.1',
       port: 0,
       webToken: 'benchmark-token',
-      getStatusText: async serverConfig => {
-        const rendered = await backgroundIo.renderStatus(source, { ...config, ...serverConfig }, false);
-        fullPost.push(rendered.postMs);
-        fullCompute.push(rendered.computeMs);
-        fullRoundTrip.push(rendered.roundTripMs);
-        fullBytes = rendered.bytes || Buffer.byteLength(rendered.text);
-        if (state?.session?.sessionToken && rendered.text.includes(String(state.session.sessionToken))) {
-          secretsRedacted = false;
-        }
-        return rendered.text;
-      },
-      getCompactStatusText: async serverConfig => {
-        const rendered = await backgroundIo.renderStatus(compactSource, { ...config, ...serverConfig }, true);
-        compactPost.push(rendered.postMs);
-        compactCompute.push(rendered.computeMs);
-        compactRoundTrip.push(rendered.roundTripMs);
-        compactBytes = rendered.bytes || Buffer.byteLength(rendered.text);
-        if (state?.session?.sessionToken && rendered.text.includes(String(state.session.sessionToken))) {
-          secretsRedacted = false;
-        }
-        return rendered.text;
-      },
+      getStatusText: async () => fullRendered.text,
+      getCompactStatusText: async () => compactRendered.text,
       onMainThreadTask(task, durationMs, detail = {}) {
         if (task === 'status-full-dispatch') fullDispatch.push(durationMs);
         else if (task === 'status-compact-dispatch') compactDispatch.push(durationMs);
@@ -679,6 +698,7 @@ async function benchmarkStatusRendering(options) {
     iterations,
     fullBytes,
     compactBytes,
+    compactProjectionMs,
     secretsRedacted,
     fullDispatch: timingSummary(fullDispatch),
     fullResponse: timingSummary(fullResponse),

@@ -64,6 +64,7 @@ const {
   buildLowHpRecoveryThreatExitDecision,
   createBrowserlessDecisionAdapter,
   decisionStatePatch,
+  effectiveProfitReward,
   evaluateProactiveCombatMarginalRoi,
   opportunityEnemyStaminaCost: browserlessOpportunityEnemyStaminaCost,
   snapshotSelfKillEvidence
@@ -90,6 +91,7 @@ const {
   recordCombatShotLearning
 } = require('./browserless/combat-adapter');
 const { updateOpponentBehaviorStateCore } = require('../strategy/opponent-behavior');
+const { evaluateHighEntropyFireGateCore } = require('../strategy/combat-fire-discipline');
 const {
   actionSettlementStallAssessment,
   createBrowserlessSafetyController,
@@ -148,6 +150,7 @@ const {
   browserlessCompactStatusSource,
   buildCompactBrowserlessStatus,
   buildPublicBrowserlessStatus,
+  mergeLiveState,
   readBrowserlessStateFile,
   stateFilePath,
   updateBrowserlessStateFile
@@ -12209,6 +12212,66 @@ async function runSelfTest() {
       want: 'flee|safety|avoid-invulnerable-target|8|true|5000|1'
     },
     {
+      name: 'browserless invulnerable threat memory prevents safety profit oscillation and releases within ttl',
+      got: (() => {
+        const stateful = createBrowserlessDecisionState();
+        const self = { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 };
+        const threat = fullStamina5s({
+          entity_id: 2,
+          user_id: 8,
+          name: 'blink-threat',
+          x: 24000,
+          y: 0,
+          vx: 0,
+          vy: 0,
+          hp: 100,
+          current_join_mode: 'Active',
+          invulnerable_remaining_ms: 5000
+        });
+        const coin = { drop_id: 'one-coin', amount: 1, x: 1000, y: 0 };
+        const stateAt = (tick, includeThreat, visibleClear = false) => ({
+          userId: 7,
+          realtime: {
+            tick,
+            frameAgeMs: 0,
+            self,
+            entities: [
+              self,
+              ...(includeThreat ? [threat] : []),
+              ...(visibleClear ? [{ ...threat, current_join_mode: 'Passive', invulnerable_remaining_ms: 0 }] : [])
+            ],
+            bullets: [],
+            coinDrops: [coin]
+          },
+          fallback: { tick, frameAgeMs: 0, entities: [], bullets: [], coinDrops: [], messages: [] }
+        });
+        const options = { controlMode: 'profit-live', combatEnabled: true, invulnerableThreatMemoryMs: 2500 };
+        const seen = buildBrowserlessDecision(stateAt(1, true), stateful, { ...options, nowMs: 1000 });
+        const missingOne = buildBrowserlessDecision(stateAt(2, false), stateful, { ...options, nowMs: 1600 });
+        const missingTwo = buildBrowserlessDecision(stateAt(3, false), stateful, { ...options, nowMs: 2600 });
+        const expired = buildBrowserlessDecision(stateAt(4, false), stateful, { ...options, nowMs: 3600 });
+
+        const clearState = createBrowserlessDecisionState();
+        buildBrowserlessDecision(stateAt(10, true), clearState, { ...options, nowMs: 1000 });
+        const clearOne = buildBrowserlessDecision(stateAt(11, false, true), clearState, { ...options, nowMs: 1400 });
+        const clearTwo = buildBrowserlessDecision(stateAt(12, false, true), clearState, { ...options, nowMs: 1800 });
+        return [
+          seen.reason,
+          missingOne.reason,
+          missingOne.action.target?.safetyMemoryOnly,
+          missingOne.action.target?.safetyMemory?.remainingMs,
+          missingTwo.reason,
+          expired.action.target?.id,
+          Object.keys(stateful.recentInvulnerableThreats).length,
+          clearOne.reason,
+          clearOne.action.target?.safetyMemory?.clearConfirmations,
+          clearTwo.action.target?.id,
+          Object.keys(clearState.recentInvulnerableThreats).length
+        ].join('|');
+      })(),
+      want: 'avoid-invulnerable-target|avoid-invulnerable-target|true|1900|avoid-invulnerable-target|one-coin|0|avoid-invulnerable-target|1|one-coin|0'
+    },
+    {
       name: 'browserless healthy high-value coin remains available near idle passive invulnerable',
       got: (() => {
         const store = createBrowserlessStateStore({ userId: 7 });
@@ -13103,6 +13166,157 @@ async function runSelfTest() {
       want: 'high-entropy-robust-stop|stop|stop|high-entropy-bounded-exploration|continue|2'
     },
     {
+      name: 'browserless high-entropy fire gate bounds exploration and preserves defense and finishing',
+      got: (() => {
+        const exploring = evaluateHighEntropyFireGateCore({
+          expectedHitProbability: 0.04,
+          recentHitRate: 0,
+          recentShotCount: 12,
+          noProgressAcceptedShots: 12,
+          noDamageMs: 9000,
+          selfHp: 100,
+          targetHp: 80,
+          highEntropy: true
+        });
+        const reacquire = evaluateHighEntropyFireGateCore({
+          expectedHitProbability: 0.04,
+          recentHitRate: 0,
+          recentShotCount: 15,
+          noProgressAcceptedShots: 15,
+          noDamageMs: 12000,
+          selfHp: 100,
+          targetHp: 80,
+          highEntropy: true
+        });
+        const defensive = evaluateHighEntropyFireGateCore({
+          expectedHitProbability: 0.04,
+          recentHitRate: 0,
+          recentShotCount: 15,
+          noProgressAcceptedShots: 15,
+          noDamageMs: 12000,
+          selfHp: 70,
+          targetHp: 80,
+          highEntropy: true,
+          defensivePressure: true
+        });
+        const finishing = evaluateHighEntropyFireGateCore({
+          expectedHitProbability: 0.02,
+          recentHitRate: 0,
+          recentShotCount: 15,
+          noProgressAcceptedShots: 15,
+          noDamageMs: 12000,
+          selfHp: 70,
+          targetHp: 18,
+          highEntropy: true
+        });
+        return [
+          exploring.reason,
+          exploring.minimumCadenceMs,
+          reacquire.reason,
+          reacquire.suppressFire,
+          defensive.reason,
+          defensive.minimumCadenceMs,
+          finishing.reason,
+          finishing.suppressFire
+        ].join('|');
+      })(),
+      want: 'high-entropy-bounded-exploration|800|high-entropy-reacquire|true|high-entropy-defensive-throttle|1000|high-entropy-finish-protected|false'
+    },
+    {
+      name: 'browserless high-entropy combat suppresses proactive fire after accepted-shot budget',
+      got: (() => {
+        const nowMs = 20000;
+        const targetId = 8;
+        const motionSamples = Array.from({ length: 30 }, (_, index) => ({
+          at: 1000 + index * 400,
+          selfX: 0,
+          selfY: 0,
+          x: 7000 + index * 30,
+          y: index % 2 ? 100 : -100,
+          vx: 50,
+          vy: index % 2 ? 50 : -50,
+          distance: 7000 + index * 30,
+          selfHp: 100,
+          targetHp: 80
+        }));
+        const behavior = {
+          mode: 'zigzag-strafe',
+          dimensions: { controlStyle: { state: 'human-like', confidence: 0.9 } },
+          automationLikelihood: 0.2,
+          recentHitRate: 0,
+          metrics: { movementTransitions: { transitionCount: 20, next: [] } },
+          samples: motionSamples
+        };
+        const stateful = {
+          combatTarget: {
+            id: targetId,
+            at: nowMs - 12000,
+            firstSeenAt: nowMs - 12000,
+            lastDamageAt: nowMs - 12000,
+            acceptedShotsAtLastDamage: 0,
+            hp: 80,
+            minHp: 80,
+            firstHp: 80,
+            originIntent: 'profit',
+            intent: 'profit',
+            motionSamples,
+            opponentBehaviorState: behavior
+          },
+          opponentBehaviorStates: { [targetId]: behavior },
+          combatLearning: {
+            hitRateByModeDistance: {},
+            modeMetrics: {},
+            lastTotalsByTarget: {},
+            recentShots: Array.from({ length: 15 }, (_, index) => ({
+              at: nowMs - 14000 + index * 800,
+              targetId: String(targetId),
+              credited: false
+            }))
+          },
+          combatMetrics: {
+            targetId: String(targetId),
+            startedAt: nowMs - 12000,
+            acceptedShots: 15,
+            confirmedHits: 0,
+            actualShots: 15,
+            lastTargetHp: 80,
+            initialTargetHp: 80,
+            lastSelfHp: 100,
+            initialSelfHp: 100,
+            threatBulletIds: []
+          }
+        };
+        const combat = buildBrowserlessCombatDryRun({
+          userId: 7,
+          realtime: {
+            tick: 400,
+            self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
+            entities: [
+              { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
+              { entity_id: 2, user_id: targetId, name: 'entropy', x: 8000, y: 100, vx: 50, vy: -50, hp: 80, current_join_mode: 'Active', drop: 20 }
+            ],
+            bullets: []
+          }
+        }, {
+          nowMs,
+          decisionState: stateful,
+          combatEnabled: true,
+          combatAttackRange: 11000,
+          attackRange: 11000
+        });
+        return [
+          combat.aim.routeCoverage.style,
+          combat.shooting.highEntropyFireGate.reason,
+          combat.shooting.recentAcceptedShotCount,
+          combat.shooting.noProgressAcceptedShots,
+          combat.shooting.wouldShoot,
+          combat.shooting.commandSuppressed,
+          combat.movement.dx !== 0 || combat.movement.dy !== 0
+        ].join('|');
+      })(),
+      want: 'high-entropy-robust-stop|high-entropy-reacquire|15|15|false|true|true'
+    },
+    {
       name: 'browserless pre-dodge requires low-variation firing cadence before induce hold',
       got: (() => {
         const self = { user_id: 7, x: 0, y: 0, vx: 50, vy: 0, hp: 100, stamina_5s_remaining_milli: 10000 };
@@ -13334,6 +13548,80 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'true|false|true|true|true|true|false|0|false|true|0|20|17'
+    },
+    {
+      name: 'browserless proactive marginal roi excludes only current defensive risk evidence',
+      got: (() => {
+        const target = { user_id: 8, userId: 8, name: 'transitioning', distance: 9000, hp: 90, drop: 40, active: true, combatIntent: 'defensive' };
+        const combat = { target, dryRun: { target, behavior: { recentHitRate: 0.05, dimensions: { shootingPhase: { state: 'idle' } } }, exchangeStopLoss: {} } };
+        const baseState = {
+          combatTarget: {
+            id: 8,
+            firstSeenAt: 1000,
+            intent: 'defensive',
+            originIntent: 'profit',
+            hp: 90,
+            lastDamageAt: 0,
+            lastFiringAt: 1000,
+            motionSamples: [{ at: 8000, distance: 9000 }, { at: 10000, distance: 9000 }]
+          },
+          combatMetrics: { targetId: '8', acceptedShots: 20, confirmedHits: 1, selfDamage: 0, targetDamage: 3 }
+        };
+        const run = (bullets, patch = {}) => evaluateProactiveCombatMarginalRoi(
+          { nowMs: 10000, self: { user_id: 7, hp: 100 }, bullets },
+          combat,
+          {},
+          { ...JSON.parse(JSON.stringify(baseState)), ...patch },
+          { active: false }
+        );
+        const oldDistant = run([{ ownerId: 8, cpa: 5000 }]);
+        const collision = run([{ ownerId: 8, cpa: 0 }]);
+        const injured = run([], { browserlessInjury: { at: 9000, targetKey: '8', attributable: true } });
+        const firingClosing = run([], {
+          combatTarget: {
+            ...baseState.combatTarget,
+            lastFiringAt: 9500,
+            motionSamples: [{ at: 8000, distance: 10000 }, { at: 10000, distance: 9000 }]
+          }
+        });
+        const stopped = run([]);
+        return [
+          oldDistant.excluded,
+          oldDistant.defensiveRisk.targetBulletCount,
+          oldDistant.defensiveRisk.collisionRiskBulletCount,
+          collision.exclusionReason,
+          injured.defensiveRisk.reasons.join(','),
+          firingClosing.defensiveRisk.reasons.join(','),
+          stopped.excluded,
+          stopped.ready
+        ].join('|');
+      })(),
+      want: '|1|0|defensive-risk-evidence|recent-attributed-injury|recent-firing-while-closing||true'
+    },
+    {
+      name: 'browserless effective active reward shares completion cost and confidence model',
+      got: (() => {
+        const target = { active: true, user_id: 8, hp: 60, drop: 100, distance: 6000 };
+        const low = effectiveProfitReward(target, {
+          combatCompletionByUserId: { 8: { probability: 0.2, source: 'test-low' } },
+          recentCombatMetrics: { targetId: '8', acceptedShots: 12, confirmedHits: 0 }
+        });
+        const high = effectiveProfitReward(target, {
+          combatCompletionByUserId: { 8: { probability: 0.8, source: 'test-high' } },
+          recentCombatMetrics: { targetId: '8', acceptedShots: 12, confirmedHits: 6 }
+        });
+        return [
+          low.rawDrop,
+          low.collectionProbability,
+          low.expectedReward < high.expectedReward,
+          low.netROI < high.netROI,
+          low.modelSource,
+          low.confidence.lowerExpectedReward < low.expectedReward,
+          low.confidence.upperExpectedReward > low.expectedReward,
+          low.staminaCost > 0
+        ].join('|');
+      })(),
+      want: '100|0.9|true|true|test-low|true|true|true'
     },
     {
       name: 'browserless coin competition holds through missing frames and releases after fresh confirmations',
@@ -17902,6 +18190,34 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'true|true|true|true|player:9667|post-kill-settlement|false'
+    },
+    {
+      name: 'browserless live-state merge replaces decision without deep cloning stable branches',
+      got: (() => {
+        const session = { userId: 7, authenticated: true };
+        const action = { kind: 'wait', reason: 'old' };
+        const decision = { kind: 'profit-candidate', action: { kind: 'seek-coin' } };
+        const base = {
+          session,
+          current: { action, decision: { kind: 'wait' } },
+          stats: { currentSession: { online: true, coinsGained: 3 } }
+        };
+        const merged = mergeLiveState(base, {
+          current: { decision },
+          stats: { currentSession: { coinsGained: 4 } }
+        });
+        return [
+          merged !== base,
+          merged.session === session,
+          merged.current !== base.current,
+          merged.current.action === action,
+          merged.current.decision === decision,
+          merged.stats.currentSession.online,
+          merged.stats.currentSession.coinsGained,
+          base.stats.currentSession.coinsGained
+        ].join('|');
+      })(),
+      want: 'true|true|true|true|true|true|4|3'
     },
     {
       name: 'browserless log retention deletes day directories outside keep window',
@@ -30614,7 +30930,62 @@ async function runSelfTest() {
 	          browserlessOpportunityEnemyStaminaCost({ user_id: 8, active: true, hp: 30, distance: 30000 })
 	        ].join('|');
 	      })(),
-      want: 'profit-candidate|seek-enemy|easy-kill-active-profit|true|51450|51450'
+	      want: 'profit-candidate|seek-enemy|easy-kill-active-profit|true|51450|51450'
+	    },
+	    {
+	      name: 'browserless active profit threshold uses effective reward and bounded exploration admission',
+	      got: (() => {
+	        const nowMs = Date.parse('2026-07-16T00:00:00.000Z');
+	        const stateFor = (coins = []) => ({
+	          userId: 7,
+	          realtime: {
+	            tick: 100,
+	            frameAgeMs: 0,
+	            self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000, stamina_1h_remaining_milli: 3000000, stamina_1d_remaining_milli: 20000000 },
+	            entities: [
+	              { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000, stamina_1h_remaining_milli: 3000000, stamina_1d_remaining_milli: 20000000 },
+	              { entity_id: 2, user_id: 8, name: 'unknown-return', x: 30000, y: 0, vx: 20, vy: 0, hp: 30, max_hp: 100, current_join_mode: 'Active', drop: 5 }
+	            ],
+	            bullets: [],
+	            coinDrops: coins
+	          },
+	          fallback: {
+	            tick: 100,
+	            frameAgeMs: 0,
+	            self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, stamina_1h_remaining_milli: 3000000, stamina_1d_remaining_milli: 20000000 },
+	            entities: [],
+	            bullets: [],
+	            coinDrops: [],
+	            messages: []
+	          }
+	        });
+	        const options = {
+	          nowMs,
+	          controlMode: 'profit-live',
+	          combatEnabled: true,
+	          dynamicProfitThresholdEnabled: true,
+	          easyKillPlayers: [{ userId: 8, name: 'unknown-return' }]
+	        };
+	        const exploration = buildBrowserlessDecision(stateFor(), {}, options);
+	        const betterCoin = buildBrowserlessDecision(stateFor([{ drop_id: 'better', amount: 2, x: 1000, y: 0 }]), {}, options);
+	        const capped = buildBrowserlessDecision(stateFor(), {
+	          combatTarget: { id: 8, firstSeenAt: nowMs - 9000, at: nowMs - 9000, intent: 'profit', originIntent: 'profit' },
+	          combatMetrics: { targetId: '8', acceptedShots: 10, totalStaminaSpent: 5000 }
+	        }, options);
+	        return [
+	          exploration.action.reason,
+	          exploration.profit.best?.eligibleByExpectedROI,
+	          exploration.profit.best?.explorationAdmitted,
+	          exploration.profit.best?.effectiveProfitReward?.rawDrop,
+	          exploration.profit.best?.reward < 5,
+	          exploration.profit.threshold.explorationAdmission?.maxAcceptedShots,
+	          betterCoin.action.target?.id,
+	          betterCoin.profit.threshold.explorationAdmission === null,
+	          capped.reason,
+	          capped.profit.threshold.explorationAdmission === null
+	        ].join('|');
+	      })(),
+	      want: 'easy-kill-active-profit|false|true|5|true|10|better|true|dynamic-profit-threshold-wait|true'
 	    },
 	    {
 	      name: 'browserless selected low-drop easy active target bypasses ordinary proactive combat gate',

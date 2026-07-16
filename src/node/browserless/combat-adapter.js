@@ -19,7 +19,8 @@ const {
 } = require('../../strategy/combat-movement');
 const {
   checkLowConfidenceThrottle,
-  determineCombatFireState
+  determineCombatFireState,
+  evaluateHighEntropyFireGateCore
 } = require('../../strategy/combat-fire-discipline');
 const { COMBAT_CONSTANTS } = require('../../strategy/combat-constants');
 const {
@@ -54,6 +55,7 @@ function numberOrNull(value) {
 }
 
 function ensureCombatLearningState(stateful = {}) {
+  if (!stateful || typeof stateful !== 'object' || Array.isArray(stateful)) stateful = {};
   if (!stateful.combatLearning || typeof stateful.combatLearning !== 'object' || Array.isArray(stateful.combatLearning)) {
     stateful.combatLearning = { hitRateByModeDistance: {}, modeMetrics: {}, lastTotalsByTarget: {}, recentShots: [] };
   }
@@ -146,7 +148,7 @@ function recordCombatShotLearning(stateful, target, combat = {}, options = {}) {
     aimX: numberOrNull(options.aimX),
     aimY: numberOrNull(options.aimY)
   });
-  learning.recentShots = learning.recentShots.filter(item => nowMs - Number(item.at || 0) <= 6000).slice(-80);
+  learning.recentShots = learning.recentShots.filter(item => nowMs - Number(item.at || 0) <= 30000).slice(-80);
   const behaviorMap = ensureOpponentBehaviorMap(stateful);
   const targetBehavior = behaviorMap[id];
   if (targetBehavior) {
@@ -219,6 +221,18 @@ function creditCombatHitLearning(stateful, targetId, hitCount, nowMs, currentTic
     remaining -= 1;
   }
   return credited;
+}
+
+function recentAcceptedShotHitSummary(stateful, targetId, limit = 15) {
+  const shots = ensureCombatLearningState(stateful).recentShots
+    .filter(item => String(item.targetId) === String(targetId))
+    .slice(-Math.max(1, Math.round(Number(limit || 15))));
+  const hits = shots.reduce((total, shot) => total + Number(shot.credited === true), 0);
+  return {
+    shotCount: shots.length,
+    hits,
+    hitRate: shots.length ? hits / shots.length : 0
+  };
 }
 
 function syncConfirmedCombatShots(stateful, state = {}, target = null, combat = {}, options = {}) {
@@ -1222,6 +1236,7 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
     active: Boolean(target.active),
     moving: Boolean(target.moving),
     firing: Boolean(target.firing),
+    lastFiringAt: target.firing ? nowMs : (same ? Number(previous.lastFiringAt || 0) : 0),
     easyKillKnown: Boolean(target.easyKillKnown),
     easyKillDamagedToday: Boolean(target.easyKillDamagedToday),
     easyKillThreatExempt: Boolean(target.easyKillThreatExempt),
@@ -1230,6 +1245,10 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
     originIntent: same ? String(previous.originIntent || previous.intent || target.combatIntent || '') : String(target.combatIntent || ''),
     originReason: same ? String(previous.originReason || previous.reason || '') : String(options.reason || target.reason || ''),
     lastDamageAt: damaged ? nowMs : (same ? Number(previous.lastDamageAt || previous.at || nowMs) : nowMs),
+    acceptedShotsAtLastDamage: damaged
+      ? Number(previousMetrics.acceptedShots || 0)
+      : (same ? Number(previous.acceptedShotsAtLastDamage || 0) : 0),
+    lastSelfDamageAt: selfDamaged ? nowMs : (same ? Number(previous.lastSelfDamageAt || 0) : 0),
     lastInRangeAt: inRange ? nowMs : (same ? Number(previous.lastInRangeAt || previous.at || nowMs) : nowMs),
     seenTargetRealBulletAt: targetOwnsRealBullet ? nowMs : (same ? Number(previous.seenTargetRealBulletAt || 0) : 0),
     disadvantageSinceAt,
@@ -1477,6 +1496,38 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     distance: target?.distance,
     nowMs: options.nowMs
   });
+  const selectedRouteProbability = aim.ok && aim.routeCoverage?.selected
+    ? numberOrNull(aim.routeCoverage.candidates?.find(candidate => candidate.hypothesis === aim.routeCoverage.selected)?.probability)
+    : null;
+  const expectedHitProbability = selectedRouteProbability === null
+    ? 0
+    : Math.max(0, Math.min(1, selectedRouteProbability * Math.max(0, Math.min(1, Number(aim.confidence || 0)))));
+  const recentHitSummary = recentAcceptedShotHitSummary(stateful, combatTargetId(target), 15);
+  const noProgressAcceptedShots = Math.max(
+    0,
+    Number(stateful?.combatMetrics?.acceptedShots || 0) - Number(combatTargetState?.acceptedShotsAtLastDamage || 0)
+  );
+  const targetCollisionBullet = target
+    ? bullets.find(bullet => Number(bullet.ownerId) === Number(target.user_id)
+        && incomingBulletHasCollisionRiskCore(bullet, options)) || null
+    : null;
+  const defensivePressure = Boolean(
+    targetCollisionBullet
+      || String(combatTargetState?.originIntent || '') === 'defensive'
+      || (Number(combatTargetState?.lastSelfDamageAt || 0) > 0
+        && Number(options.nowMs || Date.now()) - Number(combatTargetState.lastSelfDamageAt) <= 3000)
+  );
+  const highEntropyFireGate = evaluateHighEntropyFireGateCore({
+    expectedHitProbability,
+    recentHitRate: recentHitSummary.hitRate,
+    recentShotCount: recentHitSummary.shotCount,
+    noProgressAcceptedShots,
+    noDamageMs: combatTargetState?.noDamageMs,
+    targetHp: hpValue(target),
+    selfHp: hpValue(self),
+    highEntropy: Boolean(aim.ok && String(aim.routeCoverage?.style || '').startsWith('high-entropy-')),
+    defensivePressure
+  }, options.highEntropyFireGate);
   const baseCadenceMs = Number.isFinite(Number(lowConfidence.cadenceMs)) && lowConfidence.throttle
     ? Number(lowConfidence.cadenceMs)
     : (Number.isFinite(Number(fireState.cadenceMs)) ? Number(fireState.cadenceMs) : null);
@@ -1484,11 +1535,14 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     ? null
     : Math.max(baseCadenceMs, Math.max(0, Number(behaviorPolicy?.minimumCadenceMs || 0)));
   const maximumCadenceMs = Number(behaviorPolicy?.maximumCadenceMs);
-  const boundedCadenceMs = effectiveCadenceMs === null
+  const behaviorBoundedCadenceMs = effectiveCadenceMs === null
     ? null
     : (Number.isFinite(maximumCadenceMs) && maximumCadenceMs > 0
         ? Math.min(effectiveCadenceMs, maximumCadenceMs)
         : effectiveCadenceMs);
+  const boundedCadenceMs = behaviorBoundedCadenceMs === null
+    ? null
+    : Math.max(behaviorBoundedCadenceMs, Math.max(0, Number(highEntropyFireGate.minimumCadenceMs || 0)));
   const wouldShoot = Boolean(
     target
       && aim.ok
@@ -1496,6 +1550,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
       && fireState.state !== 'disabled'
       && fireState.state !== 'paused'
       && !behaviorPolicy?.suppressFire
+      && !highEntropyFireGate.suppressFire
   );
   const commandSuppressed = Boolean(!liveCombatEnabled || !wouldShoot);
   return {
@@ -1556,6 +1611,18 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
       behaviorSuppressed: Boolean(behaviorPolicy?.suppressFire),
       behaviorPolicy: behaviorPolicy?.name || '',
       behaviorReason: behaviorPolicy?.reason || '',
+      highEntropyFireGate,
+      expectedHitProbability,
+      selectedRouteProbability,
+      recentAcceptedHitRate: recentHitSummary.hitRate,
+      recentAcceptedShotCount: recentHitSummary.shotCount,
+      noProgressAcceptedShots,
+      defensivePressure,
+      defensivePressureReason: targetCollisionBullet
+        ? 'collision-risk-target-bullet'
+        : (String(combatTargetState?.originIntent || '') === 'defensive'
+            ? 'defensive-origin'
+            : (defensivePressure ? 'recent-attributed-injury' : 'none')),
       effectiveCadenceMs: boundedCadenceMs,
       decisionIntervalMs: Number.isFinite(Number(options.decisionIntervalMs)) ? Number(options.decisionIntervalMs) : null,
       combatControlIntervalMs: Number.isFinite(Number(options.combatControlIntervalMs)) ? Number(options.combatControlIntervalMs) : null,

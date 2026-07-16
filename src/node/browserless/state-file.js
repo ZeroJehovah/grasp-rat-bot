@@ -168,6 +168,21 @@ function mergeState(base, patch, pathParts = []) {
   return output;
 }
 
+function mergeLiveState(base, patch, pathParts = []) {
+  const output = isPlainObject(base) ? { ...base } : {};
+  for (const [key, value] of Object.entries(patch || {})) {
+    const nextPath = [...pathParts, key];
+    if (shouldReplaceStateObject(nextPath)) {
+      output[key] = value;
+    } else if (isPlainObject(value) && isPlainObject(output[key])) {
+      output[key] = mergeLiveState(output[key], value, nextPath);
+    } else {
+      output[key] = value;
+    }
+  }
+  return output;
+}
+
 function stateFilePath(config) {
   if (config?.stateFile) return path.resolve(config.stateFile);
   return path.join(path.resolve(config?.dataDir || path.join(process.cwd(), 'data', 'browserless-runner')), 'state.json');
@@ -292,6 +307,10 @@ function compactNumber(value) {
   if (value === null || value === undefined || value === '') return null;
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
+}
+
+function compactBoolean(value) {
+  return value === null || value === undefined ? null : Boolean(value);
 }
 
 function compactString(value, maxLength = 160) {
@@ -980,16 +999,16 @@ function compactTarget(value) {
     invulnerableMetadataAuthority: compactString(value.invulnerableMetadataAuthority, 48),
     amount: compactNumber(value.amount ?? value.value),
     distance: compactNumber(value.distance ?? value.d),
-    active: value.active === undefined ? null : Boolean(value.active),
-    moving: value.moving === undefined ? null : Boolean(value.moving),
-    firing: value.firing === undefined ? null : Boolean(value.firing),
-    recentlyActive: value.recentlyActive === undefined ? null : Boolean(value.recentlyActive),
-    recentlyMoved: value.recentlyMoved === undefined ? null : Boolean(value.recentlyMoved),
-    easyKillKnown: value.easyKillKnown === undefined ? null : Boolean(value.easyKillKnown),
-    easyKillDamagedToday: value.easyKillDamagedToday === undefined ? null : Boolean(value.easyKillDamagedToday),
-    easyKillThreatExempt: value.easyKillThreatExempt === undefined ? null : Boolean(value.easyKillThreatExempt),
+    active: compactBoolean(value.active),
+    moving: compactBoolean(value.moving),
+    firing: compactBoolean(value.firing),
+    recentlyActive: compactBoolean(value.recentlyActive),
+    recentlyMoved: compactBoolean(value.recentlyMoved),
+    easyKillKnown: compactBoolean(value.easyKillKnown),
+    easyKillDamagedToday: compactBoolean(value.easyKillDamagedToday),
+    easyKillThreatExempt: compactBoolean(value.easyKillThreatExempt),
     profitMetadataMode: compactString(value.profitMetadataMode, 48),
-    profitMetadataActive: value.profitMetadataActive === undefined ? null : Boolean(value.profitMetadataActive)
+    profitMetadataActive: compactBoolean(value.profitMetadataActive)
   };
 }
 
@@ -1010,7 +1029,7 @@ function compactAction(action) {
   if (!action || typeof action !== 'object') return null;
   const state = action.actionState && typeof action.actionState === 'object' ? action.actionState : {};
   return {
-    ok: action.ok === undefined ? null : Boolean(action.ok),
+    ok: compactBoolean(action.ok),
     kind: compactString(action.kind, 48),
     reason: compactString(action.reason, 120),
     delayMs: compactNumber(action.delayMs),
@@ -1018,16 +1037,16 @@ function compactAction(action) {
     target: compactTarget(action.target),
     movement: action.movement && typeof action.movement === 'object'
       ? {
-          ok: action.movement.ok === undefined ? null : Boolean(action.movement.ok),
-          skipped: action.movement.skipped === undefined ? null : Boolean(action.movement.skipped),
+          ok: compactBoolean(action.movement.ok),
+          skipped: compactBoolean(action.movement.skipped),
           reason: compactString(action.movement.reason, 120),
           command: compactCommand(action.movement.command)
         }
       : null,
     shoot: action.shoot && typeof action.shoot === 'object'
       ? {
-          ok: action.shoot.ok === undefined ? null : Boolean(action.shoot.ok),
-          skipped: action.shoot.skipped === undefined ? null : Boolean(action.shoot.skipped),
+          ok: compactBoolean(action.shoot.ok),
+          skipped: compactBoolean(action.shoot.skipped),
           reason: compactString(action.shoot.reason, 120),
           cadenceMs: compactNumber(action.shoot.cadenceMs),
           command: compactCommand(action.shoot.command)
@@ -1043,7 +1062,7 @@ function compactAction(action) {
     },
     lastShootAck: state.lastShootAck && typeof state.lastShootAck === 'object'
       ? {
-          ok: state.lastShootAck.ok === undefined ? null : Boolean(state.lastShootAck.ok),
+          ok: compactBoolean(state.lastShootAck.ok),
           type: compactString(state.lastShootAck.type || state.lastShootAck.kind, 48),
           at: compactString(state.lastShootAck.at, 48)
         }
@@ -1099,7 +1118,7 @@ function compactDecision(decision) {
     target: compactTarget(decision.target || decision.action?.target || (shouldExposeProfitTarget ? (decision.profit?.best?.target || decision.profit?.best?.coin) : null)),
     threshold: decision.profit?.threshold && typeof decision.profit.threshold === 'object'
       ? {
-          active: decision.profit.threshold.active === undefined ? null : Boolean(decision.profit.threshold.active),
+          active: compactBoolean(decision.profit.threshold.active),
           reason: compactString(decision.profit.threshold.reason, 48),
           coinsPer10Stamina: compactNumber(decision.profit.threshold.threshold?.coinsPer10Stamina),
           remaining1dMilli: compactNumber(decision.profit.threshold.remaining1dMilli),
@@ -1113,7 +1132,7 @@ function compactDecision(decision) {
       : null,
     centerActivity: compactCenterActivity(decision.input?.centerActivity),
     dataGaps: dataGaps.slice(0, 5).map(item => compactString(item, 80)),
-    dataGapCount: dataGaps.length
+    dataGapCount: compactNumber(decision.input?.dataGapCount) ?? dataGaps.length
   };
 }
 
@@ -1140,10 +1159,10 @@ function compactSelf(self) {
     y: compactNumber(self.y),
     hp: compactNumber(self.hp),
     drop: compactNumber(self.drop ?? self.Drop ?? self.death_drop_coins ?? self.death_reward_preview),
-    active: self.active === undefined ? null : Boolean(self.active),
-    moving: self.moving === undefined ? null : Boolean(self.moving),
-    firing: self.firing === undefined ? null : Boolean(self.firing),
-    alive: self.alive === undefined ? null : Boolean(self.alive)
+    active: compactBoolean(self.active),
+    moving: compactBoolean(self.moving),
+    firing: compactBoolean(self.firing),
+    alive: compactBoolean(self.alive)
   };
 }
 
@@ -1262,10 +1281,10 @@ function compactProfit(profit) {
           target: compactTarget(best.target || best.coin)
         }
       : null,
-    candidateCount: candidates.length,
+    candidateCount: compactNumber(profit.candidateCount) ?? candidates.length,
     threshold: profit.threshold && typeof profit.threshold === 'object'
       ? {
-          active: profit.threshold.active === undefined ? null : Boolean(profit.threshold.active),
+          active: compactBoolean(profit.threshold.active),
           reason: compactString(profit.threshold.reason, 48),
           coinsPer10Stamina: compactNumber(profit.threshold.threshold?.coinsPer10Stamina),
           remaining1dMilli: compactNumber(profit.threshold.remaining1dMilli),
@@ -1285,16 +1304,16 @@ function compactCombat(combat) {
   const candidates = Array.isArray(combat.candidates) ? combat.candidates : [];
   const dataGaps = Array.isArray(combat.dataGaps) ? combat.dataGaps : [];
   return {
-    ok: combat.ok === undefined ? null : Boolean(combat.ok),
-    dryRun: combat.dryRun === undefined ? null : Boolean(combat.dryRun),
-    liveEnabled: combat.liveEnabled === undefined ? null : Boolean(combat.liveEnabled),
+    ok: compactBoolean(combat.ok),
+    dryRun: compactBoolean(combat.dryRun),
+    liveEnabled: compactBoolean(combat.liveEnabled),
     authority: compactString(combat.authority, 48),
     tick: compactNumber(combat.tick),
     startedAt: compactString(combat.startedAt, 48),
     durationMs: compactNumber(combat.durationMs),
     self: compactTarget(combat.self),
     target: compactTarget(combat.target),
-    candidateCount: candidates.length,
+    candidateCount: compactNumber(combat.candidateCount) ?? candidates.length,
     movement: combat.movement && typeof combat.movement === 'object'
       ? {
           dx: compactNumber(combat.movement.dx),
@@ -1304,8 +1323,8 @@ function compactCombat(combat) {
       : null,
     shooting: combat.shooting && typeof combat.shooting === 'object'
       ? {
-          wouldShoot: combat.shooting.wouldShoot === undefined ? null : Boolean(combat.shooting.wouldShoot),
-          inRange: combat.shooting.inRange === undefined ? null : Boolean(combat.shooting.inRange),
+          wouldShoot: compactBoolean(combat.shooting.wouldShoot),
+          inRange: compactBoolean(combat.shooting.inRange),
           reason: compactString(combat.shooting.reason, 120),
           cadenceMs: compactNumber(combat.shooting.cadenceMs ?? combat.shooting.effectiveCadenceMs),
           stamina5s: compactNumber(combat.shooting.stamina5s)
@@ -1469,6 +1488,17 @@ function compactNearby(nearby) {
 
 function compactHighDropPlayers(value) {
   if (!value || typeof value !== 'object') return null;
+  if (Array.isArray(value.p)) {
+    return {
+      day: compactString(value.day, 10),
+      updatedAt: value.updatedAt || '',
+      lastSnapshotAt: value.lastSnapshotAt || '',
+      lastGlobalSnapshotAt: value.lastGlobalSnapshotAt || '',
+      source: compactString(value.source, 32),
+      globalSource: compactString(value.globalSource, 32),
+      p: value.p.slice(0, 160).map(row => Array.isArray(row) ? row.slice(0, 6) : row)
+    };
+  }
   const players = Array.isArray(value.players) ? value.players : [];
   const rows = players.map(player => [
     compactString(player?.name, 96),
@@ -1493,6 +1523,7 @@ function compactHighDropPlayers(value) {
 
 function compactEasyKillPlayers(value) {
   if (!value || typeof value !== 'object') return null;
+  if (Array.isArray(value.p)) return { updatedAt: value.updatedAt || '', p: value.p.slice(0, 160) };
   const players = Array.isArray(value.players) ? value.players : [];
   return {
     updatedAt: value.updatedAt || '',
@@ -1507,6 +1538,7 @@ function compactEasyKillPlayers(value) {
 
 function compactDailyDamagePlayers(value) {
   if (!value || typeof value !== 'object') return null;
+  if (Array.isArray(value.p)) return { day: compactString(value.day, 10), updatedAt: value.updatedAt || '', p: value.p.slice(0, 160) };
   const players = Array.isArray(value.players) ? value.players : [];
   return {
     day: compactString(value.day, 10),
@@ -1888,6 +1920,57 @@ function compactRestartDrain(value) {
   };
 }
 
+function compactProfitSource(profit) {
+  if (!profit || typeof profit !== 'object') return null;
+  const compact = compactProfit(profit);
+  const threshold = profit.threshold && typeof profit.threshold === 'object' ? profit.threshold : null;
+  return compact ? {
+    best: compact.best,
+    candidateCount: compact.candidateCount,
+    threshold: threshold ? {
+      active: threshold.active,
+      reason: threshold.reason || '',
+      threshold: {
+        coinsPer10Stamina: threshold.threshold?.coinsPer10Stamina
+      },
+      remaining1dMilli: threshold.remaining1dMilli,
+      burnCapacityMilli: threshold.burnCapacityMilli,
+      resetAt: threshold.resetAt,
+      reserveMs: threshold.reserveMs,
+      rawCount: threshold.rawCount,
+      eligibleCount: threshold.eligibleCount,
+      filteredCount: threshold.filteredCount
+    } : null
+  } : null;
+}
+
+function compactDecisionSource(decision) {
+  if (!decision || typeof decision !== 'object') return null;
+  const compact = compactDecision(decision);
+  const dataGaps = Array.isArray(decision.input?.dataGaps) ? decision.input.dataGaps : [];
+  return {
+    kind: compact?.kind || '',
+    band: compact?.band || '',
+    reason: compact?.reason || '',
+    at: compact?.at || '',
+    tick: compact?.tick,
+    target: compact?.target || null,
+    action: {
+      kind: compact?.actionKind || '',
+      target: compact?.target || null
+    },
+    profit: compactProfitSource(decision.profit),
+    combat: compactCombat(decision.combat),
+    input: {
+      centerActivity: compactCenterActivity(decision.input?.centerActivity),
+      nearby: compactNearby(decision.input?.nearby),
+      dataGaps: dataGaps.slice(0, 5),
+      dataGapCount: dataGaps.length,
+      realtime: { tick: decision.input?.realtime?.tick ?? decision.tick ?? null }
+    }
+  };
+}
+
 function browserlessCompactStatusSource(state = {}) {
   const runner = state.runner && typeof state.runner === 'object' ? state.runner : {};
   const probes = state.probes && typeof state.probes === 'object' ? state.probes : {};
@@ -1895,7 +1978,12 @@ function browserlessCompactStatusSource(state = {}) {
   return {
     schemaVersion: state.schemaVersion,
     updatedAt: state.updatedAt || '',
-    session: state.session || {},
+    session: {
+      userId: state.session?.userId ?? null,
+      authenticated: Boolean(state.session?.authenticated),
+      tokenPresent: Boolean(state.session?.tokenPresent || state.session?.sessionToken),
+      tokenUpdatedAt: state.session?.tokenUpdatedAt || ''
+    },
     runner: {
       running: Boolean(runner.running),
       mode: runner.mode || '',
@@ -1906,7 +1994,7 @@ function browserlessCompactStatusSource(state = {}) {
       combatEnabled: Boolean(runner.combatEnabled),
       lastError: runner.lastError || '',
       restartDrain: runner.restartDrain || null,
-      currentAction: runner.currentAction || null,
+      currentAction: compactAction(runner.currentAction),
       lastRun: compactLastRunSource(runner.lastRun)
     },
     probes: {
@@ -1915,21 +2003,22 @@ function browserlessCompactStatusSource(state = {}) {
     },
     loginPointSafety: state.loginPointSafety || {},
     current: {
-      self: current.self || null,
-      stamina: current.stamina || null,
-      action: current.action || null,
-      decision: current.decision || null,
-      profit: current.profit || null,
-      combatSummary: current.combatSummary || null
+      self: compactSelf(current.self),
+      stamina: compactStamina(current.stamina, current.self),
+      action: compactAction(current.action),
+      decision: compactDecisionSource(current.decision),
+      profit: compactProfitSource(current.profit || current.decision?.profit),
+      combatSummary: compactCombat(current.combatSummary || current.decision?.combat)
     },
     lastKnown: state.lastKnown || {},
     recentExits: Array.isArray(state.recentExits) ? state.recentExits : [],
     network: state.network || {},
     stats: state.stats || {},
     logs: { stateFile: state.logs?.stateFile || '' },
-    highDropPlayers: state.highDropPlayers || null,
-    easyKillPlayers: state.easyKillPlayers || null,
-    dailyDamagePlayers: state.dailyDamagePlayers || null
+    highDropPlayers: compactHighDropPlayers(state.highDropPlayers),
+    easyKillPlayers: compactEasyKillPlayers(state.easyKillPlayers),
+    dailyDamagePlayers: compactDailyDamagePlayers(state.dailyDamagePlayers),
+    statusRender: state.statusRender || null
   };
 }
 
@@ -2014,7 +2103,19 @@ function buildCompactBrowserlessStatus(state, config = {}) {
       host: config.statusHost || '',
       port: Number(config.statusPort || 0),
       webTokenPresent: Boolean(config.webToken),
-      webVersion: compactString(config.webVersion, 48)
+      webVersion: compactString(config.webVersion, 48),
+      renderTiming: normalized.statusRender && typeof normalized.statusRender === 'object'
+        ? {
+            sourceBuildMs: compactNumber(normalized.statusRender.sourceBuildMs),
+            compactProjectionMs: compactNumber(normalized.statusRender.compactProjectionMs),
+            postMessageMs: compactNumber(normalized.statusRender.postMessageMs),
+            workerComputeMs: compactNumber(normalized.statusRender.workerComputeMs),
+            roundTripMs: compactNumber(normalized.statusRender.roundTripMs),
+            responseSendMs: compactNumber(normalized.statusRender.responseSendMs),
+            bytes: compactNumber(normalized.statusRender.bytes),
+            renderedAt: compactString(normalized.statusRender.renderedAt, 48)
+          }
+        : null
     }
   };
   return redactStructuredSecrets(compactState);
@@ -2029,6 +2130,7 @@ module.exports = {
   buildPublicBrowserlessStatus,
   defaultBrowserlessState,
   loginPointFromAnyState,
+  mergeLiveState,
   mergeState,
   readBrowserlessStateFile,
   sessionFromAnyState,

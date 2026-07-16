@@ -23,6 +23,7 @@ const FIRE_STATE = {
 };
 
 function numberOrNull(value) {
+  if (value === null || value === undefined || value === '') return null;
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
 }
@@ -173,11 +174,73 @@ function checkLowConfidenceThrottle(aimContext) {
   return { throttle: false, cadenceMs: COMBAT_CONSTANTS.SHOOT_EVERY_MS };
 }
 
+function evaluateHighEntropyFireGateCore(input = {}, options = {}) {
+  const expectedHitProbability = Math.max(0, Math.min(1, Number(input.expectedHitProbability || 0)));
+  const recentHitRate = Math.max(0, Math.min(1, Number(input.recentHitRate || 0)));
+  const recentShotCount = Math.max(0, Math.round(Number(input.recentShotCount || 0)));
+  const noProgressAcceptedShots = Math.max(0, Math.round(Number(input.noProgressAcceptedShots || 0)));
+  const noDamageMs = Math.max(0, Number(input.noDamageMs || 0));
+  const targetHp = numberOrNull(input.targetHp);
+  const selfHp = numberOrNull(input.selfHp);
+  const minimumSamples = Math.max(3, Math.round(Number(options.minimumSamples ?? 10)));
+  const explorationMaxShots = Math.max(minimumSamples, Math.round(Number(options.explorationMaxShots ?? 15)));
+  const minimumExpectedHitProbability = Math.max(0.01, Number(options.minimumExpectedHitProbability ?? 0.08));
+  const minimumRecentHitRate = Math.max(0.01, Number(options.minimumRecentHitRate ?? 0.08));
+  const finishProtected = targetHp !== null && selfHp !== null
+    && targetHp <= Math.max(1, Number(options.finishHp ?? 20))
+    && selfHp >= targetHp + Math.max(0, Number(options.finishSelfLeadHp ?? 10));
+  const lowExpectedHit = expectedHitProbability < minimumExpectedHitProbability;
+  const lowRecentHit = recentShotCount >= minimumSamples && recentHitRate < minimumRecentHitRate;
+  const active = Boolean(input.highEntropy && !finishProtected && lowExpectedHit && lowRecentHit);
+  const explorationBudgetRemaining = Math.max(0, explorationMaxShots - noProgressAcceptedShots);
+  if (!active) {
+    return {
+      active: false,
+      suppressFire: false,
+      minimumCadenceMs: 0,
+      reason: finishProtected ? 'high-entropy-finish-protected' : 'high-entropy-fire-gate-inactive',
+      expectedHitProbability,
+      recentHitRate,
+      recentShotCount,
+      noProgressAcceptedShots,
+      noDamageMs,
+      explorationMaxShots,
+      explorationBudgetRemaining,
+      finishProtected,
+      defensivePressure: Boolean(input.defensivePressure)
+    };
+  }
+  const explorationActive = explorationBudgetRemaining > 0
+    && noDamageMs < Math.max(1000, Number(options.maximumExplorationNoDamageMs ?? 12000));
+  const defensivePressure = Boolean(input.defensivePressure);
+  return {
+    active: true,
+    suppressFire: Boolean(!explorationActive && !defensivePressure),
+    minimumCadenceMs: explorationActive
+      ? Math.max(320, Number(options.explorationCadenceMs ?? 800))
+      : (defensivePressure ? Math.max(500, Number(options.defensiveCadenceMs ?? 1000)) : 0),
+    reason: explorationActive
+      ? 'high-entropy-bounded-exploration'
+      : (defensivePressure ? 'high-entropy-defensive-throttle' : 'high-entropy-reacquire'),
+    expectedHitProbability,
+    recentHitRate,
+    recentShotCount,
+    noProgressAcceptedShots,
+    noDamageMs,
+    explorationMaxShots,
+    explorationBudgetRemaining,
+    explorationActive,
+    finishProtected,
+    defensivePressure
+  };
+}
+
 module.exports = {
   FIRE_STATE,
   determineCombatFireState,
   stamina5sRemaining,
   canFireNow,
   shouldSuppressRetreatingEdge,
-  checkLowConfidenceThrottle
+  checkLowConfidenceThrottle,
+  evaluateHighEntropyFireGateCore
 };

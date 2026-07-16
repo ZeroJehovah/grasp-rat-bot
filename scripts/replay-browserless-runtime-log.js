@@ -25,6 +25,7 @@ const {
   opponentResponsePolicyCore,
   updateOpponentBehaviorStateCore
 } = require('../src/strategy/opponent-behavior');
+const { evaluateHighEntropyFireGateCore } = require('../src/strategy/combat-fire-discipline');
 
 function parseArgs(argv) {
   const options = {
@@ -437,6 +438,15 @@ function replayCombat(options) {
       aimMode: improved.mode || '',
       hypothesis: improved.motionProbe?.hypothesis || 'baseline',
       routeStyle: improved.routeCoverage?.style || '',
+      aimConfidence: Number(improved.confidence || 0),
+      selectedRouteProbability: Number(improved.routeCoverage?.candidates?.find(candidate => candidate.hypothesis === improved.routeCoverage?.selected)?.probability || 0),
+      selfHp: Number(row.detail.self?.hp),
+      targetHp: Number(row.detail.target?.hp),
+      defensivePressure: Boolean(
+        row.detail.shooting?.defensivePressure
+          || row.detail.target?.firing
+          || row.detail.movement?.dodge?.threatField?.some(item => Number(item?.directHits || 0) > 0)
+      ),
       routeCandidateMisses,
       expectedArrivalTick: expectedBulletArrivalTick(rows, shot.ack)
     });
@@ -485,6 +495,106 @@ function replayCombat(options) {
   const damageAttributions = attributeTargetDamageToShots(rows, shotEvaluations, damageEvents.target, {
     hitRadius: options.hitRadius
   });
+  const attributedBulletIds = new Set(damageAttributions.map(item => String(item.bulletId ?? '')).filter(Boolean));
+  const fireDisciplineReasons = {};
+  const allowedShots = [];
+  const recentAllowed = [];
+  let noProgressAcceptedShots = 0;
+  let lastProgressAt = startedAt;
+  let lastAllowedAt = 0;
+  let cadenceSuppressedShots = 0;
+  let gateSuppressedShots = 0;
+  let firstSuppressed = null;
+  for (const item of shotEvaluations) {
+    const recent = recentAllowed.slice(-15);
+    const recentHits = recent.filter(shot => shot.credited).length;
+    const expectedHitProbability = Math.max(0, Math.min(1,
+      Number(item.selectedRouteProbability || 0) * Math.max(0, Math.min(1, Number(item.aimConfidence || 0)))
+    ));
+    const gate = evaluateHighEntropyFireGateCore({
+      expectedHitProbability,
+      recentHitRate: recent.length ? recentHits / recent.length : 0,
+      recentShotCount: recent.length,
+      noProgressAcceptedShots,
+      noDamageMs: Math.max(0, Number(item.shot.at || 0) - lastProgressAt),
+      selfHp: item.selfHp,
+      targetHp: item.targetHp,
+      highEntropy: String(item.routeStyle || '').startsWith('high-entropy-'),
+      defensivePressure: item.defensivePressure
+    });
+    const cadenceBlocked = !gate.suppressFire
+      && gate.minimumCadenceMs > 0
+      && lastAllowedAt > 0
+      && Number(item.shot.at || 0) - lastAllowedAt < gate.minimumCadenceMs;
+    fireDisciplineReasons[gate.reason] = Number(fireDisciplineReasons[gate.reason] || 0) + 1;
+    if (gate.suppressFire || cadenceBlocked) {
+      if (gate.suppressFire) gateSuppressedShots += 1;
+      else cadenceSuppressedShots += 1;
+      if (!firstSuppressed) {
+        firstSuppressed = {
+          line: rows[Math.max(0, rows.findLastIndex(row => Number(row.detail.tick) <= Number(item.shot.ack.created_tick)))]?.line ?? null,
+          at: new Date(Number(item.shot.at || 0)).toISOString(),
+          reason: gate.suppressFire ? gate.reason : 'high-entropy-cadence',
+          noProgressAcceptedShots,
+          recentHitRate: recent.length ? recentHits / recent.length : 0,
+          expectedHitProbability
+        };
+      }
+      continue;
+    }
+    const bulletId = String(item.shot.ack.bullet_id ?? '');
+    const credited = attributedBulletIds.has(bulletId);
+    allowedShots.push(item);
+    recentAllowed.push({ credited });
+    lastAllowedAt = Number(item.shot.at || 0);
+    if (credited) {
+      noProgressAcceptedShots = 0;
+      lastProgressAt = lastAllowedAt;
+    } else {
+      noProgressAcceptedShots += 1;
+    }
+  }
+  const allowedEstimatedHits = allowedShots.filter(item => item.improvedMiss <= options.hitRadius).length;
+  const allowedAttributedHits = allowedShots.filter(item => attributedBulletIds.has(String(item.shot.ack.bullet_id ?? ''))).length;
+  const baselineEvidenceHits = damageAttributions.length > 0 ? damageAttributions.length : improvedHits;
+  const allowedEvidenceHits = damageAttributions.length > 0 ? allowedAttributedHits : allowedEstimatedHits;
+  const baselineEvidenceRate = confirmedShots.length > 0 ? baselineEvidenceHits / confirmedShots.length : 0;
+  const allowedEvidenceRate = allowedShots.length > 0 ? allowedEvidenceHits / allowedShots.length : 0;
+  const positiveControlPreserved = allowedShots.length === confirmedShots.length
+    && allowedEstimatedHits >= improvedHits
+    && allowedAttributedHits >= damageAttributions.length;
+  const emptyWasteReduced = allowedShots.length < confirmedShots.length
+    && improvedHits === 0
+    && damageAttributions.length === 0;
+  const efficientSuppression = allowedShots.length < confirmedShots.length
+    && allowedEvidenceHits > 0
+    && allowedEvidenceRate >= baselineEvidenceRate
+    && allowedEvidenceHits >= Math.ceil(baselineEvidenceHits * 0.4);
+  const fireDisciplineReplay = {
+    baselineConfirmedShots: confirmedShots.length,
+    allowedConfirmedShots: allowedShots.length,
+    suppressedShots: confirmedShots.length - allowedShots.length,
+    cadenceSuppressedShots,
+    gateSuppressedShots,
+    baselineEstimatedHits: improvedHits,
+    allowedEstimatedHits,
+    baselineAttributedHits: damageAttributions.length,
+    allowedAttributedHits,
+    estimatedTargetDamage: allowedEstimatedHits * 3,
+    shootingStaminaCost: allowedShots.length * 500,
+    staminaSaved: Math.max(0, confirmedShots.length - allowedShots.length) * 500,
+    estimatedHitRate: confirmedShots.length > 0 ? improvedHits / confirmedShots.length : 0,
+    allowedEstimatedHitRate: allowedShots.length > 0 ? allowedEstimatedHits / allowedShots.length : 0,
+    attributedHitRate: confirmedShots.length > 0 ? damageAttributions.length / confirmedShots.length : 0,
+    allowedAttributedHitRate: allowedShots.length > 0 ? allowedAttributedHits / allowedShots.length : 0,
+    evidenceSource: damageAttributions.length > 0 ? 'attributed-hit' : 'estimated-hit',
+    evidenceRetention: baselineEvidenceHits > 0 ? allowedEvidenceHits / baselineEvidenceHits : 1,
+    evidenceRateChange: baselineEvidenceRate > 0 ? allowedEvidenceRate / baselineEvidenceRate - 1 : 0,
+    firstSuppressed,
+    reasons: fireDisciplineReasons,
+    accepted: Boolean(confirmedShots.length > 0
+      && (positiveControlPreserved || emptyWasteReduced || efficientSuppression))
+  };
   const exchangeStopLossReplay = replayCombatExchangeStopLoss(rows);
   const observedTargetDamage = damageEvents.target.reduce((sum, event) => sum + Number(event.damage || 0), 0);
   const associatedTargetDamage = damageAttributions.reduce((sum, event) => sum + Number(event.damage || 0), 0);
@@ -544,6 +654,7 @@ function replayCombat(options) {
       samples: damageAttributions.slice(0, 12)
     },
     exchangeStopLossReplay,
+    fireDisciplineReplay,
     aimDiagnostics,
     routeCandidateOracle
   };

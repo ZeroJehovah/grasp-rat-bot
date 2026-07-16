@@ -861,6 +861,94 @@ function isBrowserlessAvoidanceThreat(target) {
   return Boolean(target.active && target.invulnerable);
 }
 
+function mergeRecentInvulnerableThreats(visibleTargets, liveThreats, self, stateful = {}, options = {}) {
+  if (!stateful || typeof stateful !== 'object') return liveThreats || [];
+  if (!stateful.recentInvulnerableThreats || typeof stateful.recentInvulnerableThreats !== 'object' || Array.isArray(stateful.recentInvulnerableThreats)) {
+    stateful.recentInvulnerableThreats = {};
+  }
+  const memory = stateful.recentInvulnerableThreats;
+  const nowMs = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
+  const currentTick = numberOrNull(options.currentTick ?? options.realtimeTick);
+  const ttlMs = Math.max(1000, Number(options.invulnerableThreatMemoryMs ?? 2500));
+  const clearConfirmationsRequired = Math.max(2, Math.round(Number(options.invulnerableThreatClearConfirmations ?? 2)));
+  const visibleById = new Map((visibleTargets || [])
+    .map(target => [targetIdentity(target), target])
+    .filter(([id]) => id));
+  const liveById = new Map((liveThreats || [])
+    .map(target => [targetIdentity(target), target])
+    .filter(([id]) => id));
+  for (const [id, threat] of liveById) {
+    memory[id] = {
+      id,
+      name: threat.name || '',
+      x: numberOrNull(threat.x),
+      y: numberOrNull(threat.y),
+      vx: numberOrNull(threat.vx) ?? 0,
+      vy: numberOrNull(threat.vy) ?? 0,
+      distance: numberOrNull(threat.distance ?? distanceBetween(self, threat)),
+      lastSeenAt: nowMs,
+      holdUntil: nowMs + ttlMs,
+      lastConfirmationTick: currentTick,
+      clearConfirmations: 0
+    };
+  }
+  const remembered = [];
+  for (const [id, record] of Object.entries(memory)) {
+    if (liveById.has(id)) continue;
+    const visible = visibleById.get(id) || null;
+    if (visible) {
+      const lastTick = numberOrNull(record.lastConfirmationTick);
+      const fresh = currentTick !== null && (lastTick === null || currentTick > lastTick);
+      if (fresh) {
+        record.clearConfirmations = Math.max(0, Number(record.clearConfirmations || 0)) + 1;
+        record.lastConfirmationTick = currentTick;
+      }
+      if (record.clearConfirmations >= clearConfirmationsRequired) {
+        delete memory[id];
+        continue;
+      }
+    }
+    if (nowMs > Number(record.holdUntil || 0)) {
+      delete memory[id];
+      continue;
+    }
+    const ageMs = Math.max(0, nowMs - Number(record.lastSeenAt || nowMs));
+    const tickMs = Math.max(1, Number(options.tickMs || 50));
+    const projectedX = numberOrNull(record.x) === null ? null : Number(record.x) + Number(record.vx || 0) * ageMs / tickMs;
+    const projectedY = numberOrNull(record.y) === null ? null : Number(record.y) + Number(record.vy || 0) * ageMs / tickMs;
+    const speed = Math.hypot(Number(record.vx || 0), Number(record.vy || 0));
+    const uncertaintyCm = Math.round(500 + speed * ageMs / tickMs);
+    const measuredDistance = projectedX === null || projectedY === null
+      ? numberOrNull(record.distance)
+      : distanceBetween(self, { x: projectedX, y: projectedY });
+    remembered.push({
+      user_id: numberOrNull(id),
+      userId: numberOrNull(id),
+      name: record.name || '',
+      x: projectedX,
+      y: projectedY,
+      vx: Number(record.vx || 0),
+      vy: Number(record.vy || 0),
+      distance: measuredDistance === null ? null : Math.max(0, measuredDistance - uncertaintyCm),
+      active: true,
+      invulnerable: true,
+      alive: true,
+      authority: 'last-realtime-safety-memory',
+      safetyMemoryOnly: true,
+      safetyMemory: {
+        lastSeenAt: Number(record.lastSeenAt || 0),
+        ageMs,
+        holdUntil: Number(record.holdUntil || 0),
+        remainingMs: Math.max(0, Number(record.holdUntil || 0) - nowMs),
+        uncertaintyCm,
+        clearConfirmations: Number(record.clearConfirmations || 0),
+        clearConfirmationsRequired
+      }
+    });
+  }
+  return [...(liveThreats || []), ...remembered];
+}
+
 function hpValue(entity) {
   const hp = Number(entity?.hp);
   return Number.isFinite(hp) ? hp : null;
@@ -1603,6 +1691,8 @@ function summarizeTarget(target) {
     easyKillDamagedToday: Boolean(target.easyKillDamagedToday),
     easyKillThreatExempt: Boolean(target.easyKillThreatExempt),
     easyKillProfitTarget: Boolean(target.easyKillProfitTarget),
+    safetyMemoryOnly: Boolean(target.safetyMemoryOnly),
+    safetyMemory: target.safetyMemory ? cloneJson(target.safetyMemory) : null,
     profitMetadataAuthority: target.profitMetadataAuthority || '',
     profitMetadataMode: target.profitMetadataMode || '',
     profitMetadataActive: Boolean(target.profitMetadataActive),
@@ -1643,6 +1733,10 @@ function summarizeOpportunity(item) {
     distance: Number.isFinite(Number(item.distance)) ? Math.round(Number(item.distance)) : null,
     amount: numberOrNull(item.amount),
     reward: numberOrNull(item.reward),
+    expectedReward: numberOrNull(item.expectedReward),
+    effectiveProfitReward: item.effectiveProfitReward ? cloneJson(item.effectiveProfitReward) : null,
+    eligibleByExpectedROI: item.eligibleByExpectedROI === undefined ? null : Boolean(item.eligibleByExpectedROI),
+    explorationAdmitted: Boolean(item.explorationAdmitted),
     profitThresholdEligible: item.profitThresholdEligible === undefined ? null : Boolean(item.profitThresholdEligible),
     profitThresholdReason: item.profitThresholdReason || '',
     target: item.sourceTarget ? summarizeTarget(item.sourceTarget) : null,
@@ -1726,7 +1820,8 @@ function summarizeEasyKillCandidateDiagnostics(input, opportunity, stateful = {}
     || Number(a.target?.distance ?? Infinity) - Number(b.target?.distance ?? Infinity));
   const limited = rows.slice(0, EASY_KILL_CANDIDATE_DIAGNOSTIC_LIMIT).map(row => {
     const scoringOptions = easyKillOpportunityScoringOptions(row.target, stateful, options);
-    const completion = activeTargetCompletionEstimate(row.target, scoringOptions);
+    const effective = row.raw?.effectiveProfitReward || effectiveProfitReward(row.target, scoringOptions);
+    const completion = effective.completion || activeTargetCompletionEstimate(row.target, scoringOptions);
     const staminaCost = Number.isFinite(Number(row.raw?.staminaCost))
       ? Number(row.raw.staminaCost)
       : enemyStaminaCost(row.target, {
@@ -1736,9 +1831,9 @@ function summarizeEasyKillCandidateDiagnostics(input, opportunity, stateful = {}
     const score = Number.isFinite(Number(row.raw?.score))
       ? Number(row.raw.score)
       : scoreEnemyOpportunity(row.target, scoringOptions);
-    const expectedReward = activeTargetExpectedReward(row.target, scoringOptions);
+    const expectedReward = effective.expectedReward;
     const thresholdEligible = row.raw?.profitThresholdEligible === undefined
-      ? profitRewardAndCostEligible(entityDropValue(row.target), staminaCost, opportunity?.threshold)
+      ? profitRewardAndCostEligible(expectedReward, staminaCost, opportunity?.threshold)
       : Boolean(row.raw.profitThresholdEligible);
     let rejectedReason = easyKillCandidateBaseRejectionReason(row.target, stateful, input, options);
     const staminaAffordable = opportunityStaminaAffordable(input.self, staminaCost, options);
@@ -1769,10 +1864,17 @@ function summarizeEasyKillCandidateDiagnostics(input, opportunity, stateful = {}
       drop: entityDropValue(row.target),
       distance: Number.isFinite(Number(row.target?.distance)) ? Math.round(Number(row.target.distance)) : null,
       expectedReward: roundedDiagnosticNumber(expectedReward),
+      collectionProbability: roundedDiagnosticNumber(effective.collectionProbability, 6),
+      netROI: roundedDiagnosticNumber(effective.netROI, 6),
+      rewardModelSource: String(effective.modelSource || ''),
       completionProbability: roundedDiagnosticNumber(completion?.probability, 6),
       staminaCost: Number.isFinite(Number(staminaCost)) ? Math.round(Number(staminaCost)) : null,
       score: Number.isFinite(Number(score)) ? Math.round(Number(score)) : null,
       profitThresholdEligible: thresholdEligible,
+      eligibleByExpectedROI: row.raw?.eligibleByExpectedROI === undefined
+        ? thresholdEligible
+        : Boolean(row.raw.eligibleByExpectedROI),
+      explorationAdmitted: Boolean(row.raw?.explorationAdmitted),
       topCandidateLogged: row.rank !== null && row.rank <= 5
     };
   });
@@ -1807,7 +1909,9 @@ function profitCoinEligible(coin, thresholdContext, options = {}, rewardOverride
 }
 
 function profitOpportunityThresholdReward(item) {
-  if (String(item?.type || '') === 'enemy') return entityDropValue(item?.sourceTarget || item);
+  if (String(item?.type || '') === 'enemy') {
+    return Number(item?.effectiveProfitReward?.expectedReward ?? item?.expectedReward ?? item?.reward);
+  }
   const sourceCoin = item?.sourceCoin || item || {};
   if (sourceCoin.fieldMigration || String(item?.reason || '') === 'migrate-to-known-field') {
     return Number(item?.amount ?? sourceCoin.amount);
@@ -1816,7 +1920,7 @@ function profitOpportunityThresholdReward(item) {
     ?? item?.fieldAmount ?? sourceCoin.fieldAmount ?? item?.amount ?? sourceCoin.amount);
 }
 
-function buildProfitSelectionInput(input, thresholdContext, options = {}) {
+function buildProfitSelectionInput(input, thresholdContext, options = {}, stateful = {}) {
   if (!thresholdContext?.active) return input;
   return {
     ...input,
@@ -1830,11 +1934,10 @@ function buildProfitSelectionInput(input, thresholdContext, options = {}) {
       opportunityEnemyStaminaCost(target, options),
       thresholdContext
     )),
-    easyKillTargets: (input.easyKillTargets || []).filter(target => profitRewardAndCostEligible(
-      entityDropValue(target),
-      opportunityEnemyStaminaCost(target, options),
-      thresholdContext
-    ))
+    easyKillTargets: (input.easyKillTargets || []).filter(target => {
+      const effective = effectiveProfitReward(target, easyKillOpportunityScoringOptions(target, stateful, options));
+      return profitRewardAndCostEligible(effective.expectedReward, effective.staminaCost, thresholdContext);
+    })
   };
 }
 
@@ -2364,7 +2467,13 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
   updateBrowserlessOpportunityAfkStaminaObservations(visibleTargets, stateful, nowMs, options);
   const activeThreats = visibleTargets.filter(entity => entity.active && entity.alive !== false && !entity.easyKillThreatExempt);
   const firingThreats = visibleTargets.filter(entity => entity.firing && entity.alive !== false && !entity.easyKillThreatExempt);
-  const avoidanceThreats = visibleTargets.filter(isBrowserlessAvoidanceThreat);
+  const avoidanceThreats = mergeRecentInvulnerableThreats(
+    visibleTargets,
+    visibleTargets.filter(isBrowserlessAvoidanceThreat),
+    self,
+    stateful,
+    { ...options, nowMs, currentTick: realtime.tick }
+  );
   const snapshotActiveThreats = [];
   const snapshotFallbackThreats = [
     ...avoidanceThreats,
@@ -2623,7 +2732,13 @@ function buildBrowserlessCombatStrategyInput(state, options = {}, stateful = {})
   refreshEasyKillTargetAnnotations(easyKillInput, stateful, options);
   const activeThreats = visibleTargets.filter(entity => entity.active && entity.alive !== false && !entity.easyKillThreatExempt);
   const firingThreats = visibleTargets.filter(entity => entity.firing && entity.alive !== false && !entity.easyKillThreatExempt);
-  const avoidanceThreats = visibleTargets.filter(isBrowserlessAvoidanceThreat);
+  const avoidanceThreats = mergeRecentInvulnerableThreats(
+    visibleTargets,
+    visibleTargets.filter(isBrowserlessAvoidanceThreat),
+    self,
+    stateful,
+    { ...options, nowMs, currentTick: realtime.tick }
+  );
   const realtimeSnapshotObservation = refreshRealtimeSnapshotObservation(state, self, stateful, options, nowMs);
   return {
     userId: Number(state?.userId || options.userId || 0),
@@ -2765,9 +2880,42 @@ function activeTargetCompletionEstimate(target, options = {}) {
 }
 
 function activeTargetExpectedReward(target, options = {}) {
-  if (!target?.active) return entityDropValue(target);
-  const completion = activeTargetCompletionEstimate(target, options);
-  return entityDropValue(target) * completion.probability * 0.9;
+  return effectiveProfitReward(target, options).expectedReward;
+}
+
+function effectiveProfitReward(target, options = {}) {
+  const rawDrop = Math.max(0, entityDropValue(target));
+  const active = Boolean(target?.active);
+  const completion = active
+    ? activeTargetCompletionEstimate(target, options)
+    : { probability: 1, source: 'deterministic-afk-target' };
+  const completionProbability = Math.max(0, Math.min(1, Number(completion.probability ?? (active ? 1 / 3 : 1))));
+  const collectionProbability = active
+    ? Math.max(0, Math.min(1, Number(options.activeTargetCollectionProbability ?? 0.9)))
+    : 1;
+  const expectedReward = rawDrop * completionProbability * collectionProbability;
+  const staminaCostValue = options.staminaCostOverride ?? opportunityEnemyStaminaCost(target, options);
+  const staminaCost = Number.isFinite(Number(staminaCostValue)) ? Math.max(0, Number(staminaCostValue)) : Infinity;
+  const acceptedShots = Math.max(0, Number(options.recentCombatMetrics?.acceptedShots || 0));
+  const uncertainty = active ? Math.max(0.08, 0.22 / Math.sqrt(1 + acceptedShots / 4)) : 0;
+  const lowerProbability = Math.max(0, completionProbability - uncertainty);
+  const upperProbability = Math.min(1, completionProbability + uncertainty);
+  return {
+    rawDrop,
+    completionProbability,
+    collectionProbability,
+    expectedReward,
+    staminaCost: Number.isFinite(staminaCost) ? staminaCost : null,
+    netROI: Number.isFinite(staminaCost) ? rewardPerTenStamina(expectedReward, staminaCost) : null,
+    modelSource: active ? String(completion.source || 'conservative-prior') : 'deterministic-afk-target',
+    confidence: {
+      lowerProbability,
+      upperProbability,
+      lowerExpectedReward: rawDrop * lowerProbability * collectionProbability,
+      upperExpectedReward: rawDrop * upperProbability * collectionProbability
+    },
+    completion
+  };
 }
 
 function scoreEnemyOpportunity(target, options = {}) {
@@ -2782,8 +2930,8 @@ function scoreEnemyOpportunity(target, options = {}) {
       ? coinWeight
       : dropWeight
   ) ?? 1);
-  const expectedReward = activeTargetExpectedReward(target, options);
-  return opportunityValueScoreCore(expectedReward, opportunityEnemyStaminaCost(target, options), {
+  const effective = effectiveProfitReward(target, options);
+  return opportunityValueScoreCore(effective.expectedReward, effective.staminaCost, {
     distanceFloor: options.opportunityDistanceFloor ?? BROWSER_RUNTIME_DEFAULTS.opportunityDistanceFloor,
     distanceScoreScale: options.distanceScoreScale || options.opportunityDistanceScoreScale || BROWSER_RUNTIME_DEFAULTS.opportunityDistanceScoreScale || 10000,
     weight
@@ -3523,7 +3671,14 @@ function targetSwitchOscillationWindowMs(options = {}) {
 }
 
 function applyBrowserlessFinalActionArbitration(action, stateful = {}, input = {}, options = {}) {
-  return applyFinalActionArbitrationCore(action, ensureFinalActionArbitrationState(stateful), {
+  const arbitration = ensureFinalActionArbitrationState(stateful);
+  const rememberedThreatCount = Object.keys(stateful.recentInvulnerableThreats || {}).length;
+  if (arbitration.lastAction?.target?.safetyMemoryOnly && rememberedThreatCount === 0) {
+    arbitration.lastAction = null;
+    arbitration.lastFocus = null;
+    arbitration.lastSelectedAt = 0;
+  }
+  return applyFinalActionArbitrationCore(action, arbitration, {
     nowMs: input?.nowMs,
     source: options.controlMode || 'browserless',
     holdMs: finalActionArbitrationHoldMs(options),
@@ -4010,23 +4165,79 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
     enemyOpportunityTargets,
     routeCoin,
     opportunityOptions
-  ), options).map(item => (
-    item.type === 'enemy' && item.sourceTarget?.easyKillProfitTarget
-      ? { ...item, reason: 'easy-kill-active-profit' }
-      : item
-  ));
+  ), options).map(item => {
+    if (item.type !== 'enemy') return item;
+    const effective = effectiveProfitReward(item.sourceTarget, easyKillOpportunityScoringOptions(item.sourceTarget, stateful, options));
+    return {
+      ...item,
+      reason: item.sourceTarget?.easyKillProfitTarget ? 'easy-kill-active-profit' : item.reason,
+      reward: effective.expectedReward,
+      expectedReward: effective.expectedReward,
+      effectiveProfitReward: effective
+    };
+  });
   const filtered = filterProfitCandidatesCore(rawOpportunities, thresholdContext, {
     reward: profitOpportunityThresholdReward,
     staminaCost: item => item.staminaCost,
     summaryLimit: 12
   });
   rawOpportunities = filtered.annotated;
-  let opportunities = filtered.candidates.map(item => ({
+  let eligibleOpportunities = filtered.candidates.map(item => ({
     ...item,
+    eligibleByExpectedROI: true,
+    explorationAdmitted: false,
     profitThresholdActive: Boolean(thresholdContext.active),
     profitThresholdRewardCoins: thresholdContext.threshold?.rewardCoins ?? null,
     profitThresholdStaminaMilli: thresholdContext.threshold?.staminaMilli ?? null
   }));
+  let explorationAdmission = null;
+  if (thresholdContext.active && eligibleOpportunities.length === 0) {
+    const maxShots = Math.max(1, Number(options.activeProfitExplorationMaxAcceptedShots ?? 10));
+    const maxDurationMs = Math.max(1000, Number(options.activeProfitExplorationMaxDurationMs ?? 8000));
+    const maxStaminaMs = Math.max(500, Number(options.activeProfitExplorationMaxStaminaMs ?? 5000));
+    const injury = stateful.browserlessInjury || null;
+    const candidates = rawOpportunities
+      .filter(item => item.type === 'enemy' && item.sourceTarget?.active && item.sourceTarget?.easyKillProfitTarget)
+      .filter(item => item.profitThresholdEligible === false)
+      .filter(item => !item.sourceTarget?.firing)
+      .filter(item => !(input.bullets || []).some(bullet => String(bulletOwnerId(bullet) ?? '') === String(item.id)))
+      .filter(item => !injury || String(injury.targetKey || '') !== String(item.id) || input.nowMs - Number(injury.at || 0) > 3000)
+      .map(item => {
+        const sameCombat = String(stateful.combatMetrics?.targetId ?? '') === String(item.id);
+        const acceptedShots = sameCombat ? Math.max(0, Number(stateful.combatMetrics?.acceptedShots || 0)) : 0;
+        const staminaSpent = sameCombat ? Math.max(0, Number(stateful.combatMetrics?.totalStaminaSpent || 0)) : 0;
+        const firstSeenAt = sameCombat ? Number(stateful.combatTarget?.firstSeenAt || stateful.combatTarget?.at || input.nowMs) : input.nowMs;
+        const durationMs = Math.max(0, input.nowMs - firstSeenAt);
+        return { item, acceptedShots, staminaSpent, durationMs };
+      })
+      .filter(row => row.acceptedShots < maxShots && row.staminaSpent < maxStaminaMs && row.durationMs < maxDurationMs)
+      .sort((a, b) => Number(b.item.score || -Infinity) - Number(a.item.score || -Infinity));
+    const selected = candidates[0] || null;
+    if (selected) {
+      explorationAdmission = {
+        targetId: String(selected.item.id),
+        acceptedShots: selected.acceptedShots,
+        maxAcceptedShots: maxShots,
+        durationMs: selected.durationMs,
+        maxDurationMs,
+        staminaSpent: selected.staminaSpent,
+        maxStaminaMs,
+        reason: 'no-eligible-visible-profit'
+      };
+      eligibleOpportunities = [{
+        ...selected.item,
+        eligibleByExpectedROI: false,
+        explorationAdmitted: true,
+        profitThresholdEligible: true,
+        profitThresholdReason: 'controlled-exploration',
+        profitThresholdActive: true,
+        profitThresholdRewardCoins: thresholdContext.threshold?.rewardCoins ?? null,
+        profitThresholdStaminaMilli: thresholdContext.threshold?.staminaMilli ?? null,
+        explorationAdmission
+      }];
+    }
+  }
+  let opportunities = eligibleOpportunities;
   const storedCurrent = stateful.currentOpportunity || null;
   const storedCurrentEligible = storedCurrent && profitTargetEligibleCore(
     profitOpportunityThresholdReward(storedCurrent),
@@ -4089,9 +4300,13 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
           ? summarizeCoin(rawChosen.sourceCoin)
           : { ...summarizeTarget(rawChosen.sourceTarget), cachedNavigationOnly: Boolean(rawChosen.sourceTarget?.cachedNavigationOnly) },
         reward: rawChosen.reward,
-        expectedReward: rawChosen.type === 'enemy'
-          ? activeTargetExpectedReward(rawChosen.sourceTarget, options)
-          : rawChosen.reward,
+        expectedReward: rawChosen.expectedReward ?? rawChosen.reward,
+        effectiveProfitReward: rawChosen.effectiveProfitReward || null,
+        eligibleByExpectedROI: rawChosen.eligibleByExpectedROI === undefined
+          ? rawChosen.profitThresholdEligible !== false
+          : Boolean(rawChosen.eligibleByExpectedROI),
+        explorationAdmitted: Boolean(rawChosen.explorationAdmitted),
+        explorationAdmission: rawChosen.explorationAdmission || null,
         staminaCost: rawChosen.staminaCost,
         profitThresholdEligible: rawChosen.profitThresholdEligible,
         profitThresholdReason: rawChosen.profitThresholdReason,
@@ -4116,9 +4331,11 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
           ? summarizeCoin(chosen.sourceCoin)
           : { ...summarizeTarget(chosen.sourceTarget), cachedNavigationOnly: Boolean(chosen.sourceTarget?.cachedNavigationOnly) },
         reward: chosen.reward,
-        expectedReward: chosen.type === 'enemy'
-          ? activeTargetExpectedReward(chosen.sourceTarget, options)
-          : chosen.reward,
+        expectedReward: chosen.expectedReward ?? chosen.reward,
+        effectiveProfitReward: chosen.effectiveProfitReward || null,
+        eligibleByExpectedROI: chosen.eligibleByExpectedROI !== false,
+        explorationAdmitted: Boolean(chosen.explorationAdmitted),
+        explorationAdmission: chosen.explorationAdmission || null,
         staminaCost: chosen.staminaCost,
         profitThresholdEligible: chosen.profitThresholdEligible,
         profitThresholdReason: chosen.profitThresholdReason,
@@ -4145,7 +4362,8 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
       rawCount: filtered.rawCount,
       eligibleCount: filtered.eligibleCount,
       filteredCount: filtered.filteredCount,
-      filtered: filtered.filtered
+      filtered: filtered.filtered,
+      explorationAdmission
     }
   };
 }
@@ -5853,6 +6071,63 @@ function targetHasRealBulletPressure(input, target, combatState = {}) {
   });
 }
 
+function proactiveCombatDefensiveRiskAssessment(combatDecision, input, stateful = {}, options = {}) {
+  const target = combatDecision?.target || combatDecision?.dryRun?.target || null;
+  const targetId = targetIdentity(target);
+  const combatState = stateful?.combatTarget || null;
+  const nowMs = Number.isFinite(Number(input?.nowMs)) ? Number(input.nowMs) : Date.now();
+  const targetBullets = targetId
+    ? (input?.bullets || []).filter(bullet => !bullet?.synthetic && String(bulletOwnerId(bullet) ?? '') === targetId)
+    : [];
+  const collisionRiskBullets = targetBullets.filter(bullet => incomingBulletHasCollisionRiskCore(bullet, options));
+  const injury = stateful?.browserlessInjury || null;
+  const injuryAgeMs = injury?.at ? Math.max(0, nowMs - Number(injury.at || 0)) : null;
+  const recentAttributedInjury = Boolean(
+    injury
+      && injuryAgeMs <= Math.max(1000, Number(options.proactiveCombatDefensiveInjuryMs ?? 3000))
+      && injury.attributable !== false
+      && String(injury.targetKey || injury.recentCombatTargetKey || '') === targetId
+  );
+  const samples = (combatState?.motionSamples || []).filter(sample => nowMs - Number(sample.at || 0) <= 2500);
+  const firstDistance = numberOrNull(samples[0]?.distance);
+  const lastDistance = numberOrNull(samples.at(-1)?.distance ?? target?.distance);
+  const closingDistanceCm = firstDistance !== null && lastDistance !== null ? firstDistance - lastDistance : 0;
+  const firingAgeMs = Number(combatState?.lastFiringAt || 0) > 0
+    ? Math.max(0, nowMs - Number(combatState.lastFiringAt))
+    : null;
+  const recentFiringWhileClosing = Boolean(
+    (target?.firing || (firingAgeMs !== null && firingAgeMs <= Math.max(500, Number(options.proactiveCombatRecentFiringMs ?? 1500))))
+      && closingDistanceCm >= Math.max(50, Number(options.proactiveCombatClosingRiskCm ?? 200))
+  );
+  const originIntent = String(combatState?.originIntent || combatState?.intent || target?.combatIntent || '');
+  const originReason = String(combatState?.originReason || '');
+  const engagedMs = profitPursuitEngagedMs(combatDecision, stateful, nowMs);
+  const explicitDefensiveOrigin = originIntent === 'defensive' && Boolean(
+    /safety|injury|incoming|defensive|threat/i.test(originReason)
+      || engagedMs <= Math.max(1000, Number(options.proactiveCombatDefensiveOriginHoldMs ?? 3000))
+  );
+  const reasons = [];
+  if (recentAttributedInjury) reasons.push('recent-attributed-injury');
+  if (collisionRiskBullets.length) reasons.push('collision-risk-target-bullet');
+  if (recentFiringWhileClosing) reasons.push('recent-firing-while-closing');
+  if (explicitDefensiveOrigin) reasons.push('explicit-defensive-origin');
+  return {
+    defensive: reasons.length > 0,
+    reasons,
+    targetBulletCount: targetBullets.length,
+    collisionRiskBulletCount: collisionRiskBullets.length,
+    recentAttributedInjury,
+    injuryAgeMs,
+    recentFiringWhileClosing,
+    firingAgeMs,
+    closingDistanceCm: Math.round(closingDistanceCm),
+    explicitDefensiveOrigin,
+    originIntent,
+    originReason,
+    engagedMs
+  };
+}
+
 function profitPursuitSuppressionMap(stateful = {}, nowMs = 0) {
   if (!stateful || typeof stateful !== 'object') return {};
   if (!stateful.profitPursuitSuppressions || typeof stateful.profitPursuitSuppressions !== 'object' || Array.isArray(stateful.profitPursuitSuppressions)) {
@@ -5870,8 +6145,7 @@ function combatDecisionIsOrdinaryProfitPursuit(combatDecision, input, stateful =
   const combatState = stateful?.combatTarget || null;
   const intent = String(target.combatIntent || combatState?.intent || '');
   const originIntent = String(combatState?.originIntent || combatState?.intent || intent || '');
-  if (intent === 'defensive' || originIntent === 'defensive') return false;
-  if (target.firing || targetHasRealBulletPressure(input, target, combatState)) return false;
+  if (proactiveCombatDefensiveRiskAssessment(combatDecision, input, stateful).defensive) return false;
   if (intent === 'profit' || intent === 'engaged' || intent === 'reengage') return true;
   if (originIntent === 'profit' || originIntent === 'engaged' || originIntent === 'reengage') return true;
   if (combatDecision?.dryRun?.movement?.passiveRunner?.active) return true;
@@ -5933,7 +6207,31 @@ function rewardPerTenStamina(reward, staminaCost) {
 
 function evaluateProactiveCombatMarginalRoi(input, combatDecision, opportunity = {}, stateful = {}, thresholdContext = {}, options = {}) {
   const target = combatDecision?.target || combatDecision?.dryRun?.target || null;
-  if (!target || !combatDecisionIsOrdinaryProfitPursuit(combatDecision, input, stateful)) return null;
+  if (!target) return null;
+  const combatState = stateful?.combatTarget || null;
+  const intent = String(target.combatIntent || combatState?.intent || '');
+  const originIntent = String(combatState?.originIntent || combatState?.intent || intent || '');
+  const profitPursuit = Boolean(
+    ['profit', 'engaged', 'reengage'].includes(intent)
+      || ['profit', 'engaged', 'reengage'].includes(originIntent)
+      || combatDecision?.dryRun?.movement?.passiveRunner?.active
+      || (entityDropValue(target) > 0 && (target.active || target.combatEngagement))
+  );
+  if (!profitPursuit) return null;
+  const defensiveRisk = proactiveCombatDefensiveRiskAssessment(combatDecision, input, stateful, options);
+  if (defensiveRisk.defensive) {
+    return {
+      ready: false,
+      active: false,
+      triggered: false,
+      disengage: false,
+      excluded: true,
+      exclusionReason: 'defensive-risk-evidence',
+      reason: 'proactive-combat-marginal-roi-defensive-excluded',
+      defensiveRisk,
+      engagedMs: defensiveRisk.engagedMs
+    };
+  }
   if (!stateful.proactiveCombatMarginalRoiState || typeof stateful.proactiveCombatMarginalRoiState !== 'object') {
     stateful.proactiveCombatMarginalRoiState = {};
   }
@@ -5968,19 +6266,24 @@ function evaluateProactiveCombatMarginalRoi(input, combatDecision, opportunity =
     ? Infinity
     : remainingAcceptedShots * Math.max(1, Number(options.combatShotStaminaCostMs ?? 500));
   const switchCost = Math.max(0, Number(options.opportunitySwitchCostStaminaMs ?? 500));
-  const completion = activeTargetCompletionEstimate(target, {
+  const completionOptions = {
     ...options,
     recentCombatMetrics: metrics,
     behaviorHitRate: acceptedHitRateEWMA,
     combatTargetState: stateful.combatTarget,
     opponentBehaviorState: stateful.combatTarget?.opponentBehaviorState || null,
     exchangeStopLoss: combatDecision?.dryRun?.exchangeStopLoss || null
-  });
+  };
+  const completion = activeTargetCompletionEstimate(target, completionOptions);
   const completionProbability = Math.max(0.03, Math.min(0.95, Number(completion.probability || 0)));
   const escapeHazard = Math.max(0, Math.min(0.97, 1 - completionProbability));
-  const expectedRemainingReward = entityDropValue(target) * completionProbability * 0.9;
   const expectedRemainingStamina = shootingStamina + approachStamina + preDodgeStamina + switchCost;
-  const marginalNetROI = rewardPerTenStamina(expectedRemainingReward, expectedRemainingStamina);
+  const effectiveReward = effectiveProfitReward(target, {
+    ...completionOptions,
+    staminaCostOverride: expectedRemainingStamina
+  });
+  const expectedRemainingReward = effectiveReward.expectedReward;
+  const marginalNetROI = effectiveReward.netROI;
   const isCurrentTargetChoice = choice => String(choice?.type || '') === 'enemy'
     && opportunityChoiceTargetId(choice) === targetId;
   const rawAlternative = opportunity.rawChoice || null;
@@ -6038,7 +6341,9 @@ function evaluateProactiveCombatMarginalRoi(input, combatDecision, opportunity =
     confirmMs,
     engagedMs,
     acceptedShots,
-    lowHpFinishProtected
+    lowHpFinishProtected,
+    effectiveProfitReward: effectiveReward,
+    defensiveRisk
   };
   stateful.proactiveCombatMarginalRoiState[targetId] = {
     ...result,
@@ -6444,7 +6749,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
   const frameAge = Number(input.realtime.frameAgeMs);
   const realtimeStale = Number.isFinite(frameAge) && frameAge > staleSelfExitMs;
   const profitThresholdContext = buildProfitThresholdContext(input, options);
-  const profitSelectionInput = buildProfitSelectionInput(input, profitThresholdContext, options);
+  const profitSelectionInput = buildProfitSelectionInput(input, profitThresholdContext, options, stateful);
   const opportunity = buildOpportunityDecision(input, stateful, {
     ...options,
     profitThresholdContext,
@@ -7136,6 +7441,7 @@ function createBrowserlessDecisionAdapter(options = {}) {
         browserlessPursuit: decisionState.browserlessPursuit || null,
         profitPursuitSuppressions: decisionState.profitPursuitSuppressions || {},
         dangerousCombatTargets: decisionState.dangerousCombatTargets || {},
+        recentInvulnerableThreats: decisionState.recentInvulnerableThreats || {},
         easyKillApproach: decisionState.easyKillApproach || null,
         easyKillTargetSuppressions: decisionState.easyKillTargetSuppressions || {},
         fleeLock: decisionState.fleeLock || null,
@@ -7168,6 +7474,7 @@ module.exports = {
   BROWSER_RUNTIME_DEFAULTS,
   activeTargetCompletionEstimate,
   activeTargetExpectedReward,
+  effectiveProfitReward,
   buildBrowserlessDecision,
   buildBrowserlessCombatStrategyInput,
   buildBrowserlessRealtimeControlDecision,

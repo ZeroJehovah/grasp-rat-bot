@@ -104,6 +104,7 @@ function createInitialDecisionState(options = {}) {
     profitPursuitSuppressions: asRecord(options.profitPursuitSuppressions),
     proactiveCombatMarginalRoiState: asRecord(options.proactiveCombatMarginalRoiState),
     dangerousCombatTargets: asRecord(options.dangerousCombatTargets),
+    recentInvulnerableThreats: asRecord(options.recentInvulnerableThreats),
     easyKillApproach: cloneJson(options.easyKillApproach || null),
     easyKillTargetSuppressions: asRecord(options.easyKillTargetSuppressions),
     fleeLock: cloneJson(options.fleeLock || null),
@@ -190,6 +191,7 @@ function summarizeBrowserlessDecisionState(state, options = {}) {
       profitPursuitSuppressions: recordEntries(state.profitPursuitSuppressions || {}, limit),
       proactiveCombatMarginalRoi: recordEntries(state.proactiveCombatMarginalRoiState || {}, limit),
       dangerousCombatTargets: recordEntries(state.dangerousCombatTargets || {}, limit),
+      recentInvulnerableThreats: recordEntries(state.recentInvulnerableThreats || {}, limit),
       easyKillApproach: redactBoundedValue(state.easyKillApproach || null),
       easyKillTargetSuppressions: recordEntries(state.easyKillTargetSuppressions || {}, limit)
     },

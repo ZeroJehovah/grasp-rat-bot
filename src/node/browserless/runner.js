@@ -16,6 +16,7 @@ const {
   buildCompactBrowserlessStatus,
   buildPublicBrowserlessStatus,
   loginPointFromAnyState,
+  mergeLiveState,
   mergeState,
   readBrowserlessStateFile,
   sessionFromAnyState,
@@ -770,7 +771,7 @@ async function runBrowserlessRunner(config, deps = {}) {
   const patchLiveState = (patch, options = {}) => {
     const updatedAt = options.updatedAt || new Date(now()).toISOString();
     const base = liveState || readBrowserlessStateFile(config.stateFile || stateFilePath(config));
-    liveState = mergeState(base, { ...patch, updatedAt });
+    liveState = mergeLiveState(base, { ...patch, updatedAt });
     return liveState;
   };
   const safetyController = deps.safetyController || createBrowserlessSafetyController({
@@ -1516,15 +1517,26 @@ async function runBrowserlessRunner(config, deps = {}) {
     });
   };
 
+  let statusRenderDiagnostics = null;
   const buildStatusSource = compact => {
+    const sourceStarted = performance.now();
     const source = {
       ...(liveState || readBrowserlessStateFile(stateFile)),
       highDropPlayers: highDropPlayerTracker.status(now()),
       easyKillPlayers: easyKillPlayerStatus(),
       dailyDamagePlayers: damagePlayerTracker.status(now()),
-      chat: chatService.status?.(now()) || null
+      chat: chatService.status?.(now()) || null,
+      statusRender: statusRenderDiagnostics
     };
-    return compact ? browserlessCompactStatusSource(source) : source;
+    const sourceBuildMs = performance.now() - sourceStarted;
+    if (!compact) return { source, sourceBuildMs, compactProjectionMs: 0 };
+    const projectionStarted = performance.now();
+    const projected = browserlessCompactStatusSource(source);
+    return {
+      source: projected,
+      sourceBuildMs,
+      compactProjectionMs: performance.now() - projectionStarted
+    };
   };
   const statusRenderConfig = {
     ...publicConfig(config),
@@ -1534,10 +1546,26 @@ async function runBrowserlessRunner(config, deps = {}) {
   let fullStatusCacheText = '';
   let fullStatusCacheAtMs = 0;
   let fullStatusInFlight = null;
+  let compactStatusCacheText = '';
+  let compactStatusCacheAtMs = 0;
+  let compactStatusInFlight = null;
   const renderStatusTextNow = async compact => {
-    const source = buildStatusSource(compact);
+    const built = buildStatusSource(compact);
+    const source = built.source;
     if (backgroundIo?.renderStatus) {
       const rendered = await backgroundIo.renderStatus(source, statusRenderConfig, compact);
+      if (compact) {
+        statusRenderDiagnostics = {
+          sourceBuildMs: Math.round(built.sourceBuildMs * 1000) / 1000,
+          compactProjectionMs: Math.round(built.compactProjectionMs * 1000) / 1000,
+          postMessageMs: Math.round(Number(rendered.postMs || 0) * 1000) / 1000,
+          workerComputeMs: Math.round(Number(rendered.computeMs || 0) * 1000) / 1000,
+          roundTripMs: Math.round(Number(rendered.roundTripMs || 0) * 1000) / 1000,
+          responseSendMs: numberOrNull(statusRenderDiagnostics?.responseSendMs),
+          bytes: Number(rendered.bytes || 0),
+          renderedAt: new Date(now()).toISOString()
+        };
+      }
       return rendered.text;
     }
     const status = compact
@@ -1551,8 +1579,32 @@ async function runBrowserlessRunner(config, deps = {}) {
         };
     return JSON.stringify(status, null, 2);
   };
+  const refreshCompactStatusText = () => {
+    if (compactStatusInFlight) return compactStatusInFlight;
+    compactStatusInFlight = renderStatusTextNow(true)
+      .then(text => {
+        compactStatusCacheText = text;
+        compactStatusCacheAtMs = performance.now();
+        return text;
+      })
+      .finally(() => {
+        compactStatusInFlight = null;
+      });
+    return compactStatusInFlight;
+  };
   const renderStatusText = compact => {
-    if (compact) return renderStatusTextNow(true);
+    if (compact) {
+      const atMs = performance.now();
+      if (compactStatusCacheText) {
+        if (atMs - compactStatusCacheAtMs >= 500 && !compactStatusInFlight) {
+          setImmediate(() => refreshCompactStatusText().catch(err => {
+            recordSupervisorError(err, { operation: 'compact-status-refresh' });
+          }));
+        }
+        return Promise.resolve(compactStatusCacheText);
+      }
+      return refreshCompactStatusText();
+    }
     const atMs = performance.now();
     if (fullStatusCacheText && atMs - fullStatusCacheAtMs < 1000) {
       return Promise.resolve(fullStatusCacheText);
@@ -1573,6 +1625,7 @@ async function runBrowserlessRunner(config, deps = {}) {
   if (!config.once && Number(config.statusPort || 0) > 0 && deps.startStatusServer !== false) {
     const starter = deps.startStatusServer || startStatusServer;
     try {
+      await refreshCompactStatusText();
       statusHandle = await starter({
         host: config.statusHost,
         port: config.statusPort,
@@ -1580,6 +1633,12 @@ async function runBrowserlessRunner(config, deps = {}) {
         getStatusText: () => renderStatusText(false),
         getCompactStatusText: () => renderStatusText(true),
         onMainThreadTask: (task, durationMs, detail = {}) => {
+          if (task === 'status-response' && detail.compact) {
+            statusRenderDiagnostics = {
+              ...(statusRenderDiagnostics || {}),
+              responseSendMs: Math.round(Number(durationMs || 0) * 1000) / 1000
+            };
+          }
           if (Number(durationMs) < 50) return;
           logStore.append('runner', 'main-thread-budget-exceeded', {
             task,
