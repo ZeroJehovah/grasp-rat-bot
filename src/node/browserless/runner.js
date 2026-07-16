@@ -1005,10 +1005,7 @@ async function runBrowserlessRunner(config, deps = {}) {
 
   const highDropStatusAtStart = highDropPlayerTracker.status(now());
   const lastHighDropSnapshotAtMs = Date.parse(highDropStatusAtStart.lastSnapshotAt || '');
-  const lastHighDropSnapshotWasGlobal = Boolean(
-    highDropStatusAtStart.lastSnapshotSource
-      && highDropStatusAtStart.lastSnapshotSource !== 'ws'
-  );
+  const lastHighDropGlobalSnapshotAtMs = Date.parse(highDropStatusAtStart.lastGlobalSnapshotAt || '');
   snapshotGapPoller = deps.snapshotGapPoller || createSnapshotGapPoller({
     now,
     intervalMs: DEFAULT_CHAT_IDLE_INTERVAL_MS,
@@ -1016,9 +1013,7 @@ async function runBrowserlessRunner(config, deps = {}) {
     getIntervalMs: () => chatService.desiredSnapshotIntervalMs?.(now()) || DEFAULT_CHAT_IDLE_INTERVAL_MS,
     lastSnapshotAtMs: Number.isFinite(lastHighDropSnapshotAtMs) ? lastHighDropSnapshotAtMs : 0,
     globalIntervalMs: DEFAULT_SNAPSHOT_GAP_MS,
-    lastGlobalSnapshotAtMs: lastHighDropSnapshotWasGlobal && Number.isFinite(lastHighDropSnapshotAtMs)
-      ? lastHighDropSnapshotAtMs
-      : 0,
+    lastGlobalSnapshotAtMs: Number.isFinite(lastHighDropGlobalSnapshotAtMs) ? lastHighDropGlobalSnapshotAtMs : 0,
     isReady: () => Boolean(config.userId && config.sessionToken),
     fetchSnapshot: async () => {
       const url = buildSnapshotProbeUrl({

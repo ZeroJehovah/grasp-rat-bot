@@ -3,7 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 const UTC8_OFFSET_MS = 8 * 60 * 60 * 1000;
 const DEFAULT_RECORD_THRESHOLD = 50;
 const DEFAULT_SNAPSHOT_GAP_MS = 3 * 60 * 1000;
@@ -66,6 +66,8 @@ function emptyStore(day = '') {
     updatedAt: '',
     lastSnapshotAt: '',
     lastSnapshotSource: '',
+    lastGlobalSnapshotAt: '',
+    lastGlobalSnapshotSource: '',
     players: {}
   };
 }
@@ -76,6 +78,8 @@ function normalizeStore(value, expectedDay) {
   output.updatedAt = String(value.updatedAt || '');
   output.lastSnapshotAt = String(value.lastSnapshotAt || '');
   output.lastSnapshotSource = String(value.lastSnapshotSource || '');
+  output.lastGlobalSnapshotAt = String(value.lastGlobalSnapshotAt || '');
+  output.lastGlobalSnapshotSource = String(value.lastGlobalSnapshotSource || '');
   for (const [key, player] of Object.entries(value.players || {})) {
     if (!player || typeof player !== 'object') continue;
     const userId = numberOrNull(player.userId ?? String(key || '').replace(/^user:/, ''));
@@ -95,7 +99,10 @@ function normalizeStore(value, expectedDay) {
       latestDrop,
       firstObservedAt: String(player.firstObservedAt || ''),
       lastObservedAt: String(player.lastObservedAt || ''),
-      lastObservedTick: numberOrNull(player.lastObservedTick)
+      lastObservedTick: numberOrNull(player.lastObservedTick),
+      online: player.online === true ? true : (player.online === false ? false : null),
+      onlineObservedAt: String(player.onlineObservedAt || ''),
+      onlineCheckedAt: String(player.onlineCheckedAt || '')
     };
     const existing = output.players[normalizedKey] || null;
     if (!existing) {
@@ -127,7 +134,10 @@ function normalizeStore(value, expectedDay) {
       latestDrop: latest.latestDrop,
       firstObservedAt: first.firstObservedAt,
       lastObservedAt: latest.lastObservedAt,
-      lastObservedTick: latest.lastObservedTick
+      lastObservedTick: latest.lastObservedTick,
+      online: latest.online ?? existing.online ?? candidate.online ?? null,
+      onlineObservedAt: latest.onlineObservedAt || existing.onlineObservedAt || candidate.onlineObservedAt,
+      onlineCheckedAt: latest.onlineCheckedAt || existing.onlineCheckedAt || candidate.onlineCheckedAt
     };
   }
   return output;
@@ -180,6 +190,15 @@ function createHighDropPlayerTracker(options = {}) {
     const at = new Date(atMs).toISOString();
     const snapshotTick = numberOrNull(payload.tick);
     const selfUserId = numberOrNull(detail.selfUserId);
+    const source = String(detail.source || 'snapshot');
+    const globalSnapshot = detail.global === true || (detail.global !== false && source !== 'ws');
+    const presentUserIds = new Set();
+    for (const entity of payload.entities) {
+      const identity = entityIdentity(entity);
+      if (identity && (selfUserId === null || identity.userId !== selfUserId)) {
+        presentUserIds.add(identity.userId);
+      }
+    }
     let observed = 0;
     let updated = 0;
     for (const entity of payload.entities) {
@@ -204,7 +223,10 @@ function createHighDropPlayerTracker(options = {}) {
           latestDrop: drop,
           firstObservedAt: at,
           lastObservedAt: at,
-          lastObservedTick: snapshotTick
+          lastObservedTick: snapshotTick,
+          online: true,
+          onlineObservedAt: at,
+          onlineCheckedAt: globalSnapshot ? at : ''
         };
         updated += 1;
         continue;
@@ -215,7 +237,8 @@ function createHighDropPlayerTracker(options = {}) {
       const displayChanged = existing.maxDrop !== nextMax
         || (!staleObservation && (existing.name !== name
           || existing.entityId !== identity.entityId
-          || existing.latestDrop !== drop));
+          || existing.latestDrop !== drop
+          || existing.online !== true));
       const observationAdvanced = !staleObservation && existing.lastObservedTick !== snapshotTick;
       if (displayChanged || observationAdvanced) {
         store.players[identity.key] = {
@@ -226,18 +249,36 @@ function createHighDropPlayerTracker(options = {}) {
             name,
             latestDrop: drop,
             lastObservedAt: at,
-            lastObservedTick: snapshotTick
+            lastObservedTick: snapshotTick,
+            online: true,
+            onlineObservedAt: at,
+            ...(globalSnapshot ? { onlineCheckedAt: at } : {})
           })
         };
         if (displayChanged) updated += 1;
       }
     }
+    if (globalSnapshot) {
+      for (const [key, player] of Object.entries(store.players)) {
+        const online = presentUserIds.has(player.userId);
+        if (player.online !== online) updated += 1;
+        store.players[key] = {
+          ...player,
+          online,
+          onlineCheckedAt: at,
+          ...(online ? { onlineObservedAt: at } : {})
+        };
+      }
+      store.lastGlobalSnapshotAt = at;
+      store.lastGlobalSnapshotSource = source;
+    }
     const shouldPersist = updated > 0
+      || globalSnapshot
       || !lastWriteAtMs
       || atMs - lastWriteAtMs >= DEFAULT_SNAPSHOT_GAP_MS;
     store.updatedAt = at;
     store.lastSnapshotAt = at;
-    store.lastSnapshotSource = String(detail.source || 'snapshot');
+    store.lastSnapshotSource = source;
     if (shouldPersist) {
       writeStore(file, store, backgroundIo);
       lastWriteAtMs = atMs;
@@ -257,6 +298,8 @@ function createHighDropPlayerTracker(options = {}) {
       updatedAt: store.updatedAt,
       lastSnapshotAt: store.lastSnapshotAt,
       lastSnapshotSource: store.lastSnapshotSource,
+      lastGlobalSnapshotAt: store.lastGlobalSnapshotAt,
+      lastGlobalSnapshotSource: store.lastGlobalSnapshotSource,
       threshold,
       file,
       players

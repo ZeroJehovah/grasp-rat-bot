@@ -1475,15 +1475,18 @@ function compactHighDropPlayers(value) {
     compactNumber(player?.initialDrop),
     compactNumber(player?.maxDrop),
     compactNumber(player?.latestDrop),
-    compactNumber(player?.userId)
-  ]).filter(row => row[0] && row.slice(1).every(item => item !== null))
+    compactNumber(player?.userId),
+    player?.online === true ? true : (player?.online === false ? false : null)
+  ]).filter(row => row[0] && row.slice(1, 5).every(item => item !== null))
     .filter(row => row.slice(1, 4).some(item => item >= HIGH_DROP_PANEL_THRESHOLD))
     .slice(0, 160);
   return {
     day: compactString(value.day, 10),
     updatedAt: value.updatedAt || '',
     lastSnapshotAt: value.lastSnapshotAt || '',
+    lastGlobalSnapshotAt: value.lastGlobalSnapshotAt || '',
     source: compactString(value.lastSnapshotSource, 32),
+    globalSource: compactString(value.lastGlobalSnapshotSource, 32),
     p: rows
   };
 }

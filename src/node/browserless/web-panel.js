@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.16.3';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.16.4';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function panelSessionFlagsCore(status = {}) {
@@ -34,10 +34,29 @@ function groupChatMessagesForDisplay(messages = [], collapseOtherKills = true) {
     ) {
       end += 1;
     }
-    grouped.push({ type: 'other-kill-group', messages: source.slice(index, end) });
+    const run = source.slice(index, end);
+    if (run.length < 3) {
+      grouped.push(...run.map(item => ({ type: 'message', message: item })));
+    } else {
+      grouped.push(
+        { type: 'message', message: run[0] },
+        { type: 'other-kill-fold', count: run.length - 2 },
+        { type: 'message', message: run[run.length - 1] }
+      );
+    }
     index = end;
   }
   return grouped;
+}
+
+function formatSpentStaminaCore(input) {
+  if (input === null || input === undefined || input === '') return '--';
+  const number = Number(input);
+  if (!Number.isFinite(number)) return '--';
+  const spent = Math.max(0, number);
+  if (spent === 0) return '0';
+  if (spent < 1000) return '<1';
+  return String(Math.ceil(spent / 1000));
 }
 
 function renderBrowserlessWebPanel() {
@@ -67,7 +86,7 @@ function renderBrowserlessWebPanel() {
     @keyframes status-breathe{0%,100%{opacity:.62;transform:scale(.82);box-shadow:0 0 0 0 rgba(255,255,255,.18)}50%{opacity:1;transform:scale(1);box-shadow:0 0 0 6px rgba(255,255,255,0)}}
     .layout{display:grid;grid-template-columns:minmax(240px,1fr) minmax(0,2fr);gap:10px;align-items:start}
     .stack{display:flex;flex-direction:column;gap:10px;min-width:0}
-    .stats-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;align-items:start}
+    .stats-grid,.player-insights-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;align-items:start}
     .battle-panel[hidden]{display:none}
     .battle-meta{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:10px;padding:7px 9px;border:1px solid var(--line);border-radius:7px;background:var(--panel2);text-align:center;font-variant-numeric:tabular-nums}
     .battle-meta span{min-width:0;color:var(--muted)}
@@ -89,6 +108,13 @@ function renderBrowserlessWebPanel() {
     .fighter.enemy .hp-fill{margin-left:auto}
     .hp-fill.warn{background:var(--amber)}.hp-fill.bad{background:var(--red)}.hp-fill.ok{background:var(--green)}
     section{border:1px solid var(--line);background:var(--panel);border-radius:8px;padding:10px;min-width:0}
+    .panel-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;min-width:0}
+    .panel-head h2{margin:0}
+    .panel-title{cursor:pointer;user-select:none;min-width:0}
+    .panel-title:focus-visible{outline:1px solid var(--blue);outline-offset:3px;border-radius:2px}
+    .panel-head-meta{display:flex;align-items:center;gap:8px;min-width:0}
+    .panel-collapsed .panel-head{margin-bottom:0}
+    .panel-collapsed .panel-head-meta,.panel-collapsed>.panel-body{display:none}
     h2{font-size:11px;line-height:1.2;margin:0 0 8px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.05em}
     h3{font-size:11px;line-height:1.2;margin:0 0 6px;color:var(--muted);font-weight:700;letter-spacing:0}
     dl{display:grid;grid-template-columns:minmax(76px,auto) 1fr;gap:5px 9px;margin:0}
@@ -96,7 +122,6 @@ function renderBrowserlessWebPanel() {
     dd{margin:0;min-width:0;overflow-wrap:anywhere}
     .auth-panel{margin-bottom:0}
     .auth-panel[hidden]{display:none}
-    .auth-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:8px}
     .auth-prompt{color:var(--muted);overflow-wrap:anywhere}
     .auth-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px}
     a{color:var(--blue);text-decoration:none;overflow-wrap:anywhere}
@@ -119,9 +144,14 @@ function renderBrowserlessWebPanel() {
     .high-drop-list{display:grid;gap:0;min-width:0}
     .high-drop-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.35fr);gap:10px;align-items:center;min-height:26px;padding:3px 0;border-bottom:1px solid rgba(255,255,255,.06)}
     .high-drop-row:last-child{border-bottom:0}
-    .high-drop-head{color:var(--muted);font-size:11px;font-weight:700}
+    .high-drop-head{position:sticky;top:0;z-index:1;color:var(--muted);font-size:11px;font-weight:700;background:var(--panel)}
     .high-drop-cell{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .high-drop-name{display:flex;align-items:center;gap:6px}
+    .high-drop-name.online{color:var(--blue)}
+    .high-drop-name.offline,.high-drop-name.unknown{color:var(--muted)}
     .high-drop-values{color:var(--coin);font-variant-numeric:tabular-nums}
+    .high-drop-values.offline,.high-drop-values.unknown{color:var(--muted)}
+    .player-insights-body{height:164px;overflow-y:auto;scrollbar-gutter:stable}
     .player-memory-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;align-items:start}
     .player-memory-pane{min-width:0}
     .player-memory-pane+.player-memory-pane{border-left:1px solid var(--line);padding-left:10px}
@@ -132,22 +162,23 @@ function renderBrowserlessWebPanel() {
     .easy-kill-score-2{color:#ecfdf5;background:rgba(22,163,74,.42);border-color:rgba(74,222,128,.78)}
     .easy-kill-score-3{color:#fff;background:#15803d;border-color:#4ade80;box-shadow:inset 0 0 0 1px rgba(255,255,255,.16)}
     .damage-player-name{color:#fecdd3;background:rgba(251,113,133,.14);border-color:rgba(251,113,133,.46)}
-    .chat-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px}
-    .chat-head h2{margin:0}.chat-title-meta{display:inline-flex;align-items:center;gap:7px;min-width:0}.chat-refresh-at{font-weight:500;letter-spacing:0;text-transform:none;white-space:nowrap}
+    .chat-title-meta{display:inline-flex;align-items:center;gap:7px;min-width:0}.chat-refresh-at{font-weight:500;letter-spacing:0;text-transform:none;white-space:nowrap}
     .chat-kill-toggle{min-height:24px;padding:2px 8px;font-size:11px;line-height:1.2}
     .chat-log{height:300px;overflow:auto;scrollbar-gutter:stable}
     .chat-row{display:grid;grid-template-columns:38px minmax(64px,.62fr) minmax(0,1.38fr);gap:6px;align-items:start;padding:5px 0;border-bottom:1px solid rgba(255,255,255,.06)}
     .chat-row:last-child{border-bottom:0}.chat-time{color:var(--muted);font-size:11px;font-variant-numeric:tabular-nums}.chat-author{min-width:0;color:var(--blue);font-weight:650;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.chat-text{min-width:0;overflow-wrap:anywhere;white-space:pre-wrap}
     .chat-row.chat-kill .chat-author,.chat-row.chat-kill .chat-text{color:var(--red)}.chat-row.chat-system .chat-author,.chat-row.chat-system .chat-text{color:var(--blue)}.chat-row.mine .chat-author{color:var(--green)}
-    .chat-row.chat-kill-summary .chat-text{font-weight:650}
+    .chat-row.chat-fold-summary{display:flex;align-items:center;justify-content:center;color:var(--muted);text-align:center}
+    .chat-fold-text{width:100%;color:var(--muted);font-weight:500;text-align:center}
     .chat-empty{display:flex;height:100%;align-items:center;justify-content:center;color:var(--muted)}
     .chat-compose{display:flex;gap:7px;margin-top:8px}.chat-compose[hidden]{display:none}.chat-compose input{flex:1;min-width:0;min-height:34px;border:1px solid var(--line);border-radius:6px;background:var(--panel2);color:var(--text);padding:6px 9px}.chat-compose input:disabled{opacity:.6}.chat-compose button{flex:0 0 auto}
     .chat-hint{margin-top:6px;color:var(--muted);overflow-wrap:anywhere}.chat-hint:empty{display:none}
     .nearby-cell{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .coin-row .nearby-cell:last-child,.player-row .nearby-cell:last-child{text-align:right}
     .distance-badge{font-variant-numeric:tabular-nums}
     .range-attack{color:var(--green)}
     .range-view{color:var(--blue)}
-    .target-current,.target-route-next{position:relative;background:var(--target-bg);background-clip:padding-box;padding:3px 6px;margin:0}
+    .target-current,.target-route-next{position:relative;background:var(--target-bg);background-clip:padding-box;padding:3px 0;margin:0}
     .target-current::before,.target-route-next::before{content:"";position:absolute;right:100%;top:-1px;bottom:-1px;width:3px;background:var(--target-color);pointer-events:none}
     .target-current+.target-current::before,.target-current+.target-route-next::before,.target-route-next+.target-current::before,.target-route-next+.target-route-next::before{top:0}
     .target-coin{--target-color:rgba(251,191,36,.82);--target-bg:rgba(251,191,36,.13)}
@@ -161,6 +192,7 @@ function renderBrowserlessWebPanel() {
     .target-icon{display:inline-block;width:16px;height:16px;flex:0 0 16px;align-self:center;margin-right:5px;overflow:visible;vertical-align:middle;transform:translateY(1px);color:var(--target-color);fill:currentColor}
     .target-icon-coin{transform:translateY(0)}
     @media (max-width:760px){.layout{grid-template-columns:1fr}.stats-grid{grid-template-columns:1fr}}
+    @media (max-width:600px){.player-insights-grid{grid-template-columns:1fr}}
     @media (max-width:600px){.nearby-combined,.player-memory-grid{grid-template-columns:1fr}.nearby-players-pane,.player-memory-pane+.player-memory-pane{border-left:0;border-top:1px solid var(--line);padding-left:0;padding-top:10px}}
     @media (max-width:520px){.player-row{grid-template-columns:minmax(112px,2fr) minmax(34px,.5fr) minmax(38px,.55fr) minmax(36px,.5fr) minmax(44px,.6fr);gap:4px}.battle-fighters{grid-template-columns:minmax(0,1fr) 32px minmax(0,1fr);gap:5px}.fighter{padding:7px}.fighter-head{display:block}.fighter.enemy .fighter-head{display:block;text-align:right}.battle-meta{gap:4px;padding:6px 4px}.battle-meta strong{font-size:12px}}
     @media (max-width:520px){main{padding:10px}header{align-items:flex-start;flex-direction:column}}
@@ -174,120 +206,135 @@ function renderBrowserlessWebPanel() {
 
     <div class="layout">
       <div class="stack left-stack">
-        <section>
-          <h2>程序状态</h2>
-          <dl>
-            <dt>网页版本</dt><dd id="webVersion">${BROWSERLESS_WEB_PANEL_VERSION}</dd>
-            <dt>刷新时间</dt><dd id="stamp">--</dd>
-            <dt>出口数量</dt><dd id="sourceIpCount">--</dd>
-            <dt>当前出口</dt><dd id="sourceIp">--</dd>
-          </dl>
-        </section>
-        <section>
-          <h2>账号状态</h2>
-          <dl id="accountStatus"></dl>
-        </section>
-        <section>
-          <h2>角色状态</h2>
-          <dl id="roleStatus"></dl>
-        </section>
-        <section id="chatPanel">
-          <div class="chat-head">
-            <h2 class="chat-title-meta"><span>游戏聊天</span><span id="chatRefreshAt" class="chat-refresh-at">--</span></h2>
-            <button id="chatKillToggle" class="chat-kill-toggle" type="button" aria-expanded="false">展开</button>
+        <section data-panel-key="program-status">
+          <div class="panel-head"><h2 class="panel-title" data-panel-title role="button" tabindex="0" aria-expanded="true">程序状态</h2></div>
+          <div class="panel-body">
+            <dl>
+              <dt>网页版本</dt><dd id="webVersion">${BROWSERLESS_WEB_PANEL_VERSION}</dd>
+              <dt>刷新时间</dt><dd id="stamp">--</dd>
+              <dt>出口数量</dt><dd id="sourceIpCount">--</dd>
+              <dt>当前出口</dt><dd id="sourceIp">--</dd>
+            </dl>
           </div>
-          <div id="chatLog" class="chat-log"><div class="chat-empty">等待聊天快照</div></div>
-          <form id="chatForm" class="chat-compose" hidden>
-            <input id="chatInput" maxlength="240" autocomplete="off" placeholder="输入游戏聊天消息">
-            <button id="chatSendBtn" type="submit" disabled>发送</button>
-          </form>
-          <div id="chatHint" class="chat-hint muted" aria-live="polite"></div>
+        </section>
+        <section data-panel-key="account-status">
+          <div class="panel-head"><h2 class="panel-title" data-panel-title role="button" tabindex="0" aria-expanded="true">账号状态</h2></div>
+          <div class="panel-body"><dl id="accountStatus"></dl></div>
+        </section>
+        <section data-panel-key="role-status">
+          <div class="panel-head"><h2 class="panel-title" data-panel-title role="button" tabindex="0" aria-expanded="true">角色状态</h2></div>
+          <div class="panel-body"><dl id="roleStatus"></dl></div>
+        </section>
+        <section id="chatPanel" data-panel-key="game-chat">
+          <div class="panel-head chat-head">
+            <h2 class="panel-title" data-panel-title role="button" tabindex="0" aria-expanded="true">游戏聊天</h2>
+            <div class="panel-head-meta">
+              <span id="chatRefreshAt" class="chat-refresh-at muted">--</span>
+              <button id="chatKillToggle" class="chat-kill-toggle" type="button" aria-expanded="false">展开</button>
+            </div>
+          </div>
+          <div class="panel-body">
+            <div id="chatLog" class="chat-log"><div class="chat-empty">等待聊天快照</div></div>
+            <form id="chatForm" class="chat-compose" hidden>
+              <input id="chatInput" maxlength="240" autocomplete="off" placeholder="输入游戏聊天消息">
+              <button id="chatSendBtn" type="submit" disabled>发送</button>
+            </form>
+            <div id="chatHint" class="chat-hint muted" aria-live="polite"></div>
+          </div>
         </section>
       </div>
       <div class="stack right-stack">
-        <section id="authPanel" class="auth-panel" hidden>
-          <div class="auth-head">
-            <div>
-              <h2>授权</h2>
-              <div id="authPrompt" class="auth-prompt">--</div>
+        <section id="authPanel" class="auth-panel" data-panel-key="authorization" hidden>
+          <div class="panel-head">
+            <h2 class="panel-title" data-panel-title role="button" tabindex="0" aria-expanded="true">授权</h2>
+            <div class="panel-head-meta"><span id="authState" class="pill">--</span></div>
+          </div>
+          <div class="panel-body">
+            <div id="authPrompt" class="auth-prompt">--</div>
+            <div class="auth-actions">
+              <button id="authBtn" type="button">获取授权链接</button>
+              <a id="authLink" href="#" target="_blank" rel="noreferrer"></a>
             </div>
-            <span id="authState" class="pill">--</span>
-          </div>
-          <div class="auth-actions">
-            <button id="authBtn" type="button">获取授权链接</button>
-            <a id="authLink" href="#" target="_blank" rel="noreferrer"></a>
-          </div>
-          <pre id="authUrl" class="auth-url"></pre>
-          <textarea id="callbackInput" placeholder="粘贴授权后的游戏回调 URL、登录 JSON 或 approve cURL"></textarea>
-          <div class="auth-actions">
-            <button id="callbackBtn" type="button">提交回调</button>
-            <span id="authMessage" class="auth-message"></span>
+            <pre id="authUrl" class="auth-url"></pre>
+            <textarea id="callbackInput" placeholder="粘贴授权后的游戏回调 URL、登录 JSON 或 approve cURL"></textarea>
+            <div class="auth-actions">
+              <button id="callbackBtn" type="button">提交回调</button>
+              <span id="authMessage" class="auth-message"></span>
+            </div>
           </div>
         </section>
-        <section>
-          <h2>当前动作</h2>
-          <dl id="actionDetails"></dl>
+        <section data-panel-key="current-action">
+          <div class="panel-head"><h2 class="panel-title" data-panel-title role="button" tabindex="0" aria-expanded="true">当前动作</h2></div>
+          <div class="panel-body"><dl id="actionDetails"></dl></div>
         </section>
-        <section id="battlePanel" class="battle-panel" hidden>
-          <h2>战斗情况</h2>
-          <div class="battle-meta">
-            <span>双方距离<strong id="battleDistance">--</strong></span>
-            <span>开始时间<strong id="battleStartedAt">--</strong></span>
-            <span>持续时间<strong id="battleDuration">--</strong></span>
-          </div>
-          <div class="battle-fighters">
-            <article class="fighter self">
-              <div class="fighter-head"><span class="fighter-side">我方</span><span id="battleSelfName" class="fighter-name">--</span></div>
-              <div class="hp-label"><span>血量</span><strong id="battleSelfHp">--</strong></div>
-              <div class="hp-track"><div id="battleSelfHpFill" class="hp-fill"></div></div>
-              <dl id="battleSelfStats"></dl>
-            </article>
-            <div class="fighter-vs">VS</div>
-            <article class="fighter enemy">
-              <div class="fighter-head"><span class="fighter-side" id="battleTargetSide">敌方</span><span id="battleTargetName" class="fighter-name">--</span></div>
-              <div class="hp-label"><span>血量</span><strong id="battleTargetHp">--</strong></div>
-              <div class="hp-track"><div id="battleTargetHpFill" class="hp-fill"></div></div>
-              <dl id="battleTargetStats"></dl>
-            </article>
+        <section id="battlePanel" class="battle-panel" data-panel-key="battle-status" hidden>
+          <div class="panel-head"><h2 class="panel-title" data-panel-title role="button" tabindex="0" aria-expanded="true">战斗情况</h2></div>
+          <div class="panel-body">
+            <div class="battle-meta">
+              <span>双方距离<strong id="battleDistance">--</strong></span>
+              <span>开始时间<strong id="battleStartedAt">--</strong></span>
+              <span>持续时间<strong id="battleDuration">--</strong></span>
+            </div>
+            <div class="battle-fighters">
+              <article class="fighter self">
+                <div class="fighter-head"><span class="fighter-side">我方</span><span id="battleSelfName" class="fighter-name">--</span></div>
+                <div class="hp-label"><span>血量</span><strong id="battleSelfHp">--</strong></div>
+                <div class="hp-track"><div id="battleSelfHpFill" class="hp-fill"></div></div>
+                <dl id="battleSelfStats"></dl>
+              </article>
+              <div class="fighter-vs">VS</div>
+              <article class="fighter enemy">
+                <div class="fighter-head"><span class="fighter-side" id="battleTargetSide">敌方</span><span id="battleTargetName" class="fighter-name">--</span></div>
+                <div class="hp-label"><span>血量</span><strong id="battleTargetHp">--</strong></div>
+                <div class="hp-track"><div id="battleTargetHpFill" class="hp-fill"></div></div>
+                <dl id="battleTargetStats"></dl>
+              </article>
+            </div>
           </div>
         </section>
         <div class="stats-grid">
-          <section>
-            <h2 id="sessionPanelTitle">本次游戏</h2>
-            <dl id="currentSession"></dl>
+          <section data-panel-key="current-session">
+            <div class="panel-head"><h2 id="sessionPanelTitle" class="panel-title" data-panel-title role="button" tabindex="0" aria-expanded="true">本次游戏</h2></div>
+            <div class="panel-body"><dl id="currentSession"></dl></div>
           </section>
-          <section>
-            <h2>今日累计</h2>
-            <dl id="todayStats"></dl>
+          <section data-panel-key="today-stats">
+            <div class="panel-head"><h2 class="panel-title" data-panel-title role="button" tabindex="0" aria-expanded="true">今日累计</h2></div>
+            <div class="panel-body"><dl id="todayStats"></dl></div>
           </section>
         </div>
-        <section>
-          <h2>今日高收益玩家</h2>
-          <div id="highDropPlayers" class="high-drop-list"></div>
-        </section>
-        <section>
-          <h2>玩家记录</h2>
-          <div class="player-memory-grid">
-            <div class="player-memory-pane">
-              <h3>近期击杀缓冲</h3>
-              <div id="easyKillPlayers" class="player-memory-list"></div>
+        <div class="player-insights-grid">
+          <section data-panel-key="high-drop-players">
+            <div class="panel-head"><h2 class="panel-title" data-panel-title role="button" tabindex="0" aria-expanded="true">今日高收益玩家</h2></div>
+            <div class="panel-body player-insights-body"><div id="highDropPlayers" class="high-drop-list"></div></div>
+          </section>
+          <section data-panel-key="player-memory">
+            <div class="panel-head"><h2 class="panel-title" data-panel-title role="button" tabindex="0" aria-expanded="true">玩家记录</h2></div>
+            <div class="panel-body player-insights-body">
+              <div class="player-memory-grid">
+                <div class="player-memory-pane">
+                  <h3>近期击杀缓冲</h3>
+                  <div id="easyKillPlayers" class="player-memory-list"></div>
+                </div>
+                <div class="player-memory-pane">
+                  <h3>今日伤害玩家</h3>
+                  <div id="dailyDamagePlayers" class="player-memory-list"></div>
+                </div>
+              </div>
             </div>
-            <div class="player-memory-pane">
-              <h3>今日伤害玩家</h3>
-              <div id="dailyDamagePlayers" class="player-memory-list"></div>
-            </div>
-          </div>
-        </section>
-        <section id="nearbyGrid" class="nearby-panel" hidden>
-          <h2>附近信息</h2>
-          <div class="nearby-combined">
-            <div class="nearby-pane nearby-coins-pane">
-              <h3>附近金币</h3>
-              <div id="nearbyCoins" class="nearby-list"></div>
-            </div>
-            <div class="nearby-pane nearby-players-pane">
-              <h3>附近玩家</h3>
-              <div id="nearbyPlayers" class="nearby-list"></div>
+          </section>
+        </div>
+        <section id="nearbyGrid" class="nearby-panel" data-panel-key="nearby-info" hidden>
+          <div class="panel-head"><h2 class="panel-title" data-panel-title role="button" tabindex="0" aria-expanded="true">附近信息</h2></div>
+          <div class="panel-body">
+            <div class="nearby-combined">
+              <div class="nearby-pane nearby-coins-pane">
+                <h3>附近金币</h3>
+                <div id="nearbyCoins" class="nearby-list"></div>
+              </div>
+              <div class="nearby-pane nearby-players-pane">
+                <h3>附近玩家</h3>
+                <div id="nearbyPlayers" class="nearby-list"></div>
+              </div>
             </div>
           </div>
         </section>
@@ -300,6 +347,7 @@ function renderBrowserlessWebPanel() {
     if (token) localStorage.graspRatBrowserlessToken = token;
     const WEB_PANEL_VERSION = ${JSON.stringify(BROWSERLESS_WEB_PANEL_VERSION)};
     const WEB_PANEL_RELOAD_KEY = 'graspRatBrowserlessPanelReloadedVersion';
+    const PANEL_COLLAPSE_KEY = 'graspRatBrowserlessPanelCollapsedV1';
     const CHAT_KILL_COLLAPSE_KEY = 'graspRatBrowserlessChatKillCollapsed';
     const AUTO_REFRESH_MS = 3000;
     let autoRefreshTimer = 0;
@@ -308,8 +356,10 @@ function renderBrowserlessWebPanel() {
     let chatSendInFlight = false;
     let latestChatStatus = null;
     let chatKillsCollapsed = readChatKillsCollapsed();
+    let panelCollapseState = readPanelCollapseState();
 
     const groupChatMessagesForDisplay = ${groupChatMessagesForDisplay.toString()};
+    const spentStaminaUnit = ${formatSpentStaminaCore.toString()};
     const panelSessionFlags = ${panelSessionFlagsCore.toString()};
 
     const value = v => v === null || v === undefined || v === '' ? '--' : String(v);
@@ -317,10 +367,6 @@ function renderBrowserlessWebPanel() {
     const unit = v => {
       const n = number(v);
       return n === null ? '--' : String(Math.floor(n / 1000));
-    };
-    const spentStaminaUnit = v => {
-      const n = number(v);
-      return n === null ? '--' : String(Math.ceil(n / 1000));
     };
     const distance = v => {
       const n = number(v);
@@ -1354,14 +1400,26 @@ function renderBrowserlessWebPanel() {
       }
       return merged.length ? merged.map(integer).join(' -> ') : '--';
     }
-    function createHighDropRow(name, drops, head = false) {
+    function createHighDropRow(name, drops, head = false, online = undefined) {
       const row = document.createElement('div');
       row.className = 'high-drop-row' + (head ? ' high-drop-head' : '');
       const nameCell = document.createElement('div');
-      nameCell.className = 'high-drop-cell';
-      nameCell.textContent = value(name);
+      const onlineClass = online === true ? 'online' : (online === false ? 'offline' : 'unknown');
+      const showPresence = online !== undefined;
+      nameCell.className = 'high-drop-cell' + (!head && showPresence ? ' high-drop-name ' + onlineClass : '');
+      if (head || !showPresence) {
+        nameCell.textContent = value(name);
+      } else {
+        const dot = document.createElement('span');
+        dot.className = 'status-dot';
+        const text = document.createElement('span');
+        text.className = 'high-drop-cell';
+        text.textContent = value(name);
+        nameCell.title = online === true ? '在线' : (online === false ? '离线' : '等待全局快照确认');
+        nameCell.append(dot, text);
+      }
       const dropCell = document.createElement('div');
-      dropCell.className = 'high-drop-cell' + (head ? '' : ' high-drop-values');
+      dropCell.className = 'high-drop-cell' + (head ? '' : (showPresence ? ' high-drop-values ' + onlineClass : ' muted'));
       dropCell.textContent = value(drops);
       row.append(nameCell, dropCell);
       return row;
@@ -1375,7 +1433,7 @@ function renderBrowserlessWebPanel() {
       if (!items.length) {
         fragment.appendChild(createHighDropRow('无', '--'));
       } else {
-        for (const item of items) fragment.appendChild(createHighDropRow(item?.[0], highDropValueText(item)));
+        for (const item of items) fragment.appendChild(createHighDropRow(item?.[0], highDropValueText(item), false, item?.[5]));
       }
       node.replaceChildren(fragment);
     }
@@ -1657,14 +1715,59 @@ function renderBrowserlessWebPanel() {
       const next = new URL(location.href);
       next.searchParams.set('_webReloadVersion', latest);
       next.searchParams.set('_webReloadAt', String(Date.now()));
-      setText('stamp', '网页版本更新，正在刷新');
       setTimeout(() => location.replace(next.toString()), 50);
       return true;
+    }
+    function readPanelCollapseState() {
+      try {
+        const parsed = JSON.parse(localStorage.getItem(PANEL_COLLAPSE_KEY) || '{}');
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+        return Object.fromEntries(Object.entries(parsed).filter(([, collapsed]) => collapsed === true));
+      } catch (_) {
+        return {};
+      }
+    }
+    function persistPanelCollapseState() {
+      try {
+        localStorage.setItem(PANEL_COLLAPSE_KEY, JSON.stringify(panelCollapseState));
+      } catch (_) {}
+    }
+    function syncPanelCollapse(panel) {
+      const key = String(panel?.dataset?.panelKey || '');
+      if (!key) return;
+      const collapsed = panelCollapseState[key] === true;
+      const title = panel.querySelector('[data-panel-title]');
+      panel.classList.toggle('panel-collapsed', collapsed);
+      if (title) {
+        title.setAttribute('aria-expanded', String(!collapsed));
+        title.title = collapsed ? '点击展开面板' : '点击折叠面板';
+      }
+    }
+    function togglePanelCollapse(panel) {
+      const key = String(panel?.dataset?.panelKey || '');
+      if (!key) return;
+      if (panelCollapseState[key] === true) delete panelCollapseState[key];
+      else panelCollapseState[key] = true;
+      persistPanelCollapseState();
+      syncPanelCollapse(panel);
+    }
+    function initPanelCollapse() {
+      document.querySelectorAll('section[data-panel-key]').forEach(panel => {
+        const title = panel.querySelector('[data-panel-title]');
+        if (!title) return;
+        syncPanelCollapse(panel);
+        title.addEventListener('click', () => togglePanelCollapse(panel));
+        title.addEventListener('keydown', event => {
+          if (event.key !== 'Enter' && event.key !== ' ') return;
+          event.preventDefault();
+          togglePanelCollapse(panel);
+        });
+      });
     }
     function setChatHint(text, className) {
       const node = document.getElementById('chatHint');
       if (!node) return;
-      const nextText = value(text);
+      const nextText = text === null || text === undefined ? '' : String(text);
       const nextClass = 'chat-hint ' + (className || 'muted');
       if (node.textContent !== nextText) node.textContent = nextText;
       if (node.className !== nextClass) node.className = nextClass;
@@ -1723,15 +1826,23 @@ function renderBrowserlessWebPanel() {
           fragment.append(empty);
         } else {
           for (const item of groupChatMessagesForDisplay(messages, chatKillsCollapsed)) {
-            const group = item.type === 'other-kill-group' ? item.messages : null;
-            const message = group ? group[group.length - 1] : item.message;
+            if (item.type === 'other-kill-fold') {
+              const row = document.createElement('div');
+              row.className = 'chat-row chat-fold-summary';
+              const textNode = document.createElement('span');
+              textNode.className = 'chat-fold-text';
+              textNode.textContent = item.count + '条击杀记录已折叠';
+              row.append(textNode);
+              fragment.append(row);
+              continue;
+            }
+            const message = item.message;
             const kind = ['kill', 'system', 'chat'].includes(String(message?.kind || ''))
               ? String(message.kind)
               : 'chat';
             const row = document.createElement('div');
             row.className = 'chat-row chat-' + kind
-              + (message?.mine ? ' mine' : '')
-              + (group ? ' chat-kill-summary' : '');
+              + (message?.mine ? ' mine' : '');
             const time = document.createElement('span');
             time.className = 'chat-time';
             time.textContent = minuteStamp(message?.occurredAt || message?.firstObservedAt);
@@ -1744,9 +1855,7 @@ function renderBrowserlessWebPanel() {
                   : (message?.name || (message?.userId ? 'User ' + message.userId : 'Unknown')));
             const textNode = document.createElement('span');
             textNode.className = 'chat-text';
-            textNode.textContent = group
-              ? group.length + '条别人的击杀记录'
-              : value(message?.text);
+            textNode.textContent = value(message?.text);
             row.append(time, author, textNode);
             fragment.append(row);
           }
@@ -1764,6 +1873,11 @@ function renderBrowserlessWebPanel() {
       setChatHint('', 'muted');
     }
     async function fetchStatus() {
+      const requestedAt = new Date().toISOString();
+      setText('stamp', fullStamp(requestedAt));
+      setClass('stamp', 'info');
+      const stampNode = document.getElementById('stamp');
+      if (stampNode) stampNode.title = '正在调用状态接口';
       const url = '/api/panel-status' + (token ? '?token=' + encodeURIComponent(token) : '');
       const res = await fetch(url, { cache: 'no-store' });
       if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -1806,8 +1920,9 @@ function renderBrowserlessWebPanel() {
       updateAuthPanel(s);
       const authNeeds = Boolean(s.auth?.needsReauth);
       const statusClass = authNeeds ? authClass(s) : (s.runner?.lastError ? 'bad' : (s.runner?.running ? 'ok' : 'info'));
-      setText('stamp', fullStamp(s.updatedAt));
       setClass('stamp', statusClass);
+      const stampNode = document.getElementById('stamp');
+      if (stampNode) stampNode.title = '';
       setText('sourceIpCount', sourceIpCountText(s.network));
       setText('sourceIp', s.network?.sourceIp);
 
@@ -1874,7 +1989,7 @@ function renderBrowserlessWebPanel() {
       const currentRefresh = waitForCurrent
         .then(() => refresh())
         .catch(err => {
-          if (showFailure) showError(err);
+          if (showFailure) showStatusError(err);
         })
         .finally(() => {
           if (refreshInFlight === currentRefresh) refreshInFlight = null;
@@ -1903,8 +2018,9 @@ function renderBrowserlessWebPanel() {
         return;
       }
       stopAutoRefresh();
-      setText('stamp', '已暂停刷新');
       setClass('stamp', 'muted');
+      const stampNode = document.getElementById('stamp');
+      if (stampNode) stampNode.title = '页面不可见，自动刷新已暂停';
     }
     document.getElementById('authBtn').onclick = () => (async () => {
       setAuthMessage('正在获取授权链接', 'info');
@@ -1968,14 +2084,18 @@ function renderBrowserlessWebPanel() {
     }
     function showError(err) {
       const message = String(err?.message || '');
-      const match = /HTTP\s+(\d+)/i.exec(message);
-      setText('stamp', match ? '请求失败：' + match[1] : '请求失败');
-      setClass('stamp', 'bad');
       setAuthMessage(message || '请求失败', 'bad');
+    }
+    function showStatusError(err) {
+      const message = String(err?.message || '请求失败');
+      setClass('stamp', 'bad');
+      const stampNode = document.getElementById('stamp');
+      if (stampNode) stampNode.title = message;
     }
     document.addEventListener('visibilitychange', syncAutoRefreshForVisibility);
     window.addEventListener('pageshow', syncAutoRefreshForVisibility);
     window.addEventListener('pagehide', stopAutoRefresh);
+    initPanelCollapse();
     syncAutoRefreshForVisibility();
   </script>
 </body>
@@ -1984,6 +2104,7 @@ function renderBrowserlessWebPanel() {
 
 module.exports = {
   BROWSERLESS_WEB_PANEL_VERSION,
+  formatSpentStaminaCore,
   groupChatMessagesForDisplay,
   panelSessionFlagsCore,
   renderBrowserlessWebPanel

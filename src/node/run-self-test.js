@@ -156,6 +156,7 @@ const {
 } = require('./browserless/status-server');
 const {
   BROWSERLESS_WEB_PANEL_VERSION,
+  formatSpentStaminaCore,
   groupChatMessagesForDisplay,
   panelSessionFlagsCore,
   renderBrowserlessWebPanel
@@ -20772,6 +20773,10 @@ async function runSelfTest() {
         tracker.observeSnapshot({ tick: 35, entities: [{ user_id: 8, name: 'stale-old-name', drop: 800 }] }, {
           source: 'gap-http', selfUserId: 7, observedAtMs: t
         });
+        t += 60000;
+        tracker.observeSnapshot({ tick: 50, entities: [{ user_id: 9, name: 'bob', drop: 450 }] }, {
+          source: 'ws', global: false, selfUserId: 7, observedAtMs: t
+        });
         const current = createHighDropPlayerTracker({ file, now: () => t }).status();
         t = Date.UTC(2026, 6, 14, 16, 0, 0);
         const nextDay = tracker.status();
@@ -20791,15 +20796,19 @@ async function runSelfTest() {
           current.players[2].initialDrop,
           current.players[2].maxDrop,
           current.players[2].latestDrop,
+          current.players[0].online,
+          current.players[1].online,
+          current.players[2].online,
           current.players.some(player => player.userId === 11),
           current.players.some(player => player.userId === 7),
           current.threshold,
           current.lastSnapshotSource,
+          current.lastGlobalSnapshotSource,
           nextDay.day,
           nextDay.players.length
         ].join('|');
       }),
-      want: '2026-07-14|3|alice-renamed|8|520|800|600|bob|500|500|450|carol-low|50|50|40|false|false|50|gap-http|2026-07-15|0'
+      want: '2026-07-14|3|alice-renamed|8|520|800|600|bob|500|500|450|carol-low|50|50|40|true|true|false|false|false|50|ws|gap-http|2026-07-15|0'
     },
     {
       name: 'browserless snapshot gap poller waits three minutes after any observed snapshot',
@@ -22602,7 +22611,7 @@ async function runSelfTest() {
             /grid-template-columns:minmax\(170px,.55fr\) minmax\(0,1.45fr\)/.test(panelText),
             /\.player-row\{grid-template-columns:minmax\(150px,2.8fr\)/.test(panelText),
             panelText.indexOf('class="stats-grid"') < panelText.indexOf('id="nearbyGrid"'),
-            /id="sessionPanelTitle">本次游戏<\/h2>/.test(panelText),
+            /id="sessionPanelTitle"[^>]*>本次游戏<\/h2>/.test(panelText),
             !/id="refreshBtn"/.test(panelText),
             !/id="stopBtn"/.test(panelText),
             !/class="hero"/.test(panelText),
@@ -22684,11 +22693,13 @@ async function runSelfTest() {
             day: '2026-07-14',
             updatedAt: '2026-07-14T01:02:03.000Z',
             lastSnapshotAt: '2026-07-14T01:02:03.000Z',
+            lastGlobalSnapshotAt: '2026-07-14T01:00:03.000Z',
             lastSnapshotSource: 'ws',
+            lastGlobalSnapshotSource: 'gap-http',
             file: '/tmp/should-not-leak.json',
             players: [
-              { userId: 8, name: 'alice-renamed', initialDrop: 520, maxDrop: 700, latestDrop: 600 },
-              { userId: 9, name: 'bob', initialDrop: 500, maxDrop: 500, latestDrop: 450 },
+              { userId: 8, name: 'alice-renamed', initialDrop: 520, maxDrop: 700, latestDrop: 600, online: true },
+              { userId: 9, name: 'bob', initialDrop: 500, maxDrop: 500, latestDrop: 450, online: false },
               { userId: 10, name: 'carol-low', initialDrop: 50, maxDrop: 499, latestDrop: 499 }
             ]
           }
@@ -22698,41 +22709,54 @@ async function runSelfTest() {
         return [
           compact.highDropPlayers.day,
           compact.highDropPlayers.source,
+          compact.highDropPlayers.globalSource,
           compact.highDropPlayers.p[0].join(','),
           compact.highDropPlayers.p[1].join(','),
           compact.highDropPlayers.p.length,
           JSON.stringify(compact.highDropPlayers).includes('carol-low'),
           JSON.stringify(compact).includes('should-not-leak'),
-          /<h2>今日高收益玩家<\/h2>/.test(panelText),
+          /<h2[^>]*>今日高收益玩家<\/h2>/.test(panelText),
           /id="highDropPlayers"/.test(panelText),
+          /\.high-drop-name\.online\{color:var\(--blue\)\}/.test(panelText),
+          /\.high-drop-values\.offline,\.high-drop-values\.unknown\{color:var\(--muted\)\}/.test(panelText),
+          /class="player-insights-grid"/.test(panelText),
+          /\.player-insights-body\{height:164px;overflow-y:auto;scrollbar-gutter:stable\}/.test(panelText),
           /function highDropValueText/.test(panelScript),
           /merged\[merged.length - 1\] !== next/.test(panelScript),
           /join\('\s*->\s*'\)/.test(panelScript),
           panelText.indexOf('id="highDropPlayers"') < panelText.indexOf('id="nearbyGrid"')
         ].join('|');
       })(),
-      want: '2026-07-14|ws|alice-renamed,520,700,600,8|bob,500,500,450,9|2|false|false|true|true|true|true|true|true'
+      want: '2026-07-14|ws|gap-http|alice-renamed,520,700,600,8,true|bob,500,500,450,9,false|2|false|false|true|true|true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless web panel keeps compact timestamped chat below role status',
       got: (() => {
         const panelText = renderBrowserlessWebPanel();
-        const groupedChat = groupChatMessagesForDisplay([
+        const shortChat = groupChatMessagesForDisplay([
+          { id: 1, kind: 'kill', mine: false },
+          { id: 2, kind: 'kill', mine: false }
+        ], true);
+        const foldedChat = groupChatMessagesForDisplay(
+          Array.from({ length: 5 }, (_, index) => ({ id: index + 1, kind: 'kill', mine: false })),
+          true
+        );
+        const splitChat = groupChatMessagesForDisplay([
           { id: 1, kind: 'kill', mine: false },
           { id: 2, kind: 'kill', mine: false },
           { id: 3, kind: 'kill', mine: true },
-          { id: 4, kind: 'chat', mine: false },
+          { id: 4, kind: 'kill', mine: false },
           { id: 5, kind: 'kill', mine: false }
         ], true);
-        const expandedChat = groupChatMessagesForDisplay([
-          { id: 1, kind: 'kill', mine: false },
-          { id: 2, kind: 'kill', mine: false }
-        ], false);
+        const expandedChat = groupChatMessagesForDisplay(
+          Array.from({ length: 5 }, (_, index) => ({ id: index + 1, kind: 'kill', mine: false })),
+          false
+        );
         const leftIndex = panelText.indexOf('class="stack left-stack"');
         const roleIndex = panelText.indexOf('id="roleStatus"');
         const chatIndex = panelText.indexOf('id="chatPanel"');
         const rightIndex = panelText.indexOf('class="stack right-stack"');
-        return [
+        return String([
           leftIndex >= 0 && leftIndex < chatIndex,
           roleIndex >= 0 && roleIndex < chatIndex,
           chatIndex >= 0 && chatIndex < rightIndex,
@@ -22746,24 +22770,60 @@ async function runSelfTest() {
           !/message\?\.id|message\.id/.test(panelText),
           /<form id="chatForm" class="chat-compose" hidden>/.test(panelText),
           /if \(form\) form\.hidden = !online;/.test(panelText),
-          /id="chatRefreshAt" class="chat-refresh-at">--<\/span>/.test(panelText),
+          /id="chatRefreshAt" class="chat-refresh-at muted">--<\/span>/.test(panelText),
           /id="chatKillToggle"[^>]*aria-expanded="false">展开<\/button>/.test(panelText),
           /CHAT_KILL_COLLAPSE_KEY\s*=\s*'graspRatBrowserlessChatKillCollapsed'/.test(panelText),
           /return stored === null \? true : stored !== 'false';/.test(panelText),
-          /group\.length \+ '条别人的击杀记录'/.test(panelText),
+          /item\.count \+ '条击杀记录已折叠'/.test(panelText),
+          /\.chat-row\.chat-fold-summary\{display:flex;align-items:center;justify-content:center;color:var\(--muted\);text-align:center\}/.test(panelText),
           /button\.textContent = chatKillsCollapsed \? '展开' : '折叠'/.test(panelText),
           /setText\('chatRefreshAt', stamp\(current\.snapshot\?\.lastAt\)\)/.test(panelText),
           /<div id="chatHint" class="chat-hint muted" aria-live="polite"><\/div>/.test(panelText),
+          /const nextText = text === null \|\| text === undefined \? '' : String\(text\);/.test(panelText),
           !/刷新时间 --<\/div>|setChatHint\('刷新时间 /.test(panelText),
-          groupedChat.length === 4,
-          groupedChat[0]?.type === 'other-kill-group' && groupedChat[0]?.messages.length === 2,
-          groupedChat[1]?.type === 'message' && groupedChat[1]?.message?.mine === true,
-          groupedChat[3]?.type === 'other-kill-group' && groupedChat[3]?.messages.length === 1,
-          expandedChat.length === 2 && expandedChat.every(item => item.type === 'message'),
+          shortChat.length === 2 && shortChat.every(item => item.type === 'message'),
+          foldedChat.length === 3,
+          foldedChat[0]?.type === 'message' && foldedChat[0]?.message?.id === 1,
+          foldedChat[1]?.type === 'other-kill-fold' && foldedChat[1]?.count === 3,
+          foldedChat[2]?.type === 'message' && foldedChat[2]?.message?.id === 5,
+          splitChat.length === 5 && splitChat.every(item => item.type === 'message'),
+          expandedChat.length === 5 && expandedChat.every(item => item.type === 'message'),
           !/在线 WS 快照|定时 HTTP 快照|共享快照拉取间隔|离线发送未启用|离线时仍可接收快照消息|角色离线：仅接收消息/.test(panelText)
-        ].join('|');
+        ].every(Boolean));
       })(),
-      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
+      want: 'true'
+    },
+    {
+      name: 'browserless web panel persists title-driven collapse state without changing panel widths',
+      got: (() => {
+        const panelText = renderBrowserlessWebPanel();
+        const panelKeys = Array.from(panelText.matchAll(/<section[^>]*data-panel-key="([^"]+)"/g), match => match[1]);
+        return String([
+          panelKeys.length === 12,
+          new Set(panelKeys).size === panelKeys.length,
+          panelKeys.includes('program-status'),
+          panelKeys.includes('game-chat'),
+          panelKeys.includes('authorization'),
+          panelKeys.includes('battle-status'),
+          panelKeys.includes('high-drop-players'),
+          panelKeys.includes('player-memory'),
+          panelKeys.includes('nearby-info'),
+          (panelText.match(/<h2[^>]*data-panel-title/g) || []).length === 12,
+          (panelText.match(/class="panel-body/g) || []).length === 12,
+          /PANEL_COLLAPSE_KEY\s*=\s*'graspRatBrowserlessPanelCollapsedV1'/.test(panelText),
+          /localStorage\.setItem\(PANEL_COLLAPSE_KEY, JSON\.stringify\(panelCollapseState\)\)/.test(panelText),
+          /panel\.classList\.toggle\('panel-collapsed', collapsed\)/.test(panelText),
+          /title\.addEventListener\('click', \(\) => togglePanelCollapse\(panel\)\)/.test(panelText),
+          /event\.key !== 'Enter' && event\.key !== ' '/.test(panelText),
+          /\.panel-collapsed \.panel-head-meta,\.panel-collapsed>\.panel-body\{display:none\}/.test(panelText),
+          /\.panel-collapsed \.panel-head\{margin-bottom:0\}/.test(panelText),
+          /\.stats-grid,\.player-insights-grid\{display:grid;grid-template-columns:repeat\(2,minmax\(0,1fr\)\)/.test(panelText),
+          /setText\('stamp', fullStamp\(requestedAt\)\)/.test(panelText),
+          !/setText\('stamp', fullStamp\(s\.updatedAt\)\)/.test(panelText),
+          !/setText\('stamp', '已暂停刷新'\)/.test(panelText)
+        ].every(Boolean));
+      })(),
+      want: 'true'
     },
     {
       name: 'browserless compact status and web panel expose id-backed score and daily damage name lists',
@@ -22792,7 +22852,7 @@ async function runSelfTest() {
           JSON.stringify(compact.easyKillPlayers).includes('userId'),
           JSON.stringify(compact.dailyDamagePlayers).includes('userId'),
           JSON.stringify(compact).includes('should-not-leak'),
-          /<h2>玩家记录<\/h2>/.test(panelText),
+          /<h2[^>]*>玩家记录<\/h2>/.test(panelText),
           /<h3>近期击杀缓冲<\/h3>/.test(panelText),
           /<h3>今日伤害玩家<\/h3>/.test(panelText),
           /id="easyKillPlayers"/.test(panelText),
@@ -22816,7 +22876,8 @@ async function runSelfTest() {
         return [
           /\.target-current,\.target-route-next\{position:relative;background:var\(--target-bg\);background-clip:padding-box;/.test(panelText),
           /\.nearby-list\{display:grid;gap:0;/.test(panelText),
-          /\.target-current,\.target-route-next\{[^}]*padding:3px 6px;margin:0\}/.test(panelText),
+          /\.target-current,\.target-route-next\{[^}]*padding:3px 0;margin:0\}/.test(panelText),
+          /\.coin-row \.nearby-cell:last-child,\.player-row \.nearby-cell:last-child\{text-align:right\}/.test(panelText),
           !/\.target-current\{border:1px solid/.test(panelText),
           /\.target-flee\{--target-color:rgba\(96,165,250,\.82\)/.test(panelText),
           /\.target-bait\{--target-color:rgba\(251,191,36,\.95\)/.test(panelText),
@@ -22842,23 +22903,25 @@ async function runSelfTest() {
           panelScript.includes("const targetType = fleeTarget ? 'flee' : (afkTarget ? 'afk' : 'combat');")
         ].join('|');
       })(),
-      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
+      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
     },
     {
-      name: 'browserless web panel rounds session and daily stamina spent consistently',
+      name: 'browserless web panel reports subunit session stamina without rounding it to one',
       got: (() => {
         const panelText = renderBrowserlessWebPanel();
         const panelScript = panelText.match(/<script>([\s\S]*?)<\/script>/)?.[1] || '';
         return [
-          panelScript.includes('const spentStaminaUnit = v =>'),
-          panelScript.includes('Math.ceil(n / 1000)'),
+          panelScript.includes('const spentStaminaUnit = function formatSpentStaminaCore'),
+          formatSpentStaminaCore(0) === '0',
+          formatSpentStaminaCore(92) === '<1',
+          formatSpentStaminaCore(999) === '<1',
+          formatSpentStaminaCore(1000) === '1',
+          formatSpentStaminaCore(1001) === '2',
           panelScript.includes("['消耗体力', spentStaminaUnit(currentSession.staminaSpentMs)]"),
-          panelScript.includes("['消耗体力', spentStaminaUnit(todayStats.staminaSpentMs)]"),
-          Math.floor(1234567 / 1000) + 1 === Math.ceil(1234567 / 1000),
-          Math.ceil(17069959 / 1000) + Math.floor(2930041 / 1000) === 20000
+          panelScript.includes("['消耗体力', spentStaminaUnit(todayStats.staminaSpentMs)]")
         ].join('|');
       })(),
-      want: 'true|true|true|true|true|true'
+      want: 'true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless web panel renders live battle card and offline exit reason',
@@ -22866,8 +22929,8 @@ async function runSelfTest() {
         const panelText = renderBrowserlessWebPanel();
         const panelScript = panelText.match(/<script>([\s\S]*?)<\/script>/)?.[1] || '';
         return [
-          /id="battlePanel" class="battle-panel" hidden/.test(panelText),
-          /<h2>战斗情况<\/h2>/.test(panelText),
+          /id="battlePanel" class="battle-panel" data-panel-key="battle-status" hidden/.test(panelText),
+          /<h2[^>]*>战斗情况<\/h2>/.test(panelText),
           /class="battle-fighters"/.test(panelText),
           /id="battleSelfHpFill"/.test(panelText),
           /id="battleTargetHpFill"/.test(panelText),
@@ -22908,7 +22971,7 @@ async function runSelfTest() {
           panelText.includes("'combat-action-settlement-stalled': '战斗中移动指令失效，为避免原地承伤，主动退出'"),
           panelText.includes("'recovery-low-hp-active-threat-leave': '恢复时活动玩家进入攻击射程外的血量安全预警区，主动退出'"),
           panelText.includes("'action-settlement-stalled': '非战斗移动指令未产生位置变化，正在重连'"),
-          panelText.includes('2026.07.16.1')
+          panelText.includes(BROWSERLESS_WEB_PANEL_VERSION)
         ].join('|');
       })(),
       want: 'true|true|true|true'
