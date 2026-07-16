@@ -542,6 +542,13 @@ function browserlessLoopPlan(result, config = {}) {
   return resume(error || safetyReason || 'unknown-error');
 }
 
+function browserlessTerminalStopRequestsRuntimeClose(result, reason = '') {
+  if (reason === 'restart-drain-ready') return true;
+  const event = result?.event || result?.canary?.safety?.event || null;
+  const source = String(event?.detail?.source || '');
+  return reason === 'explicit-stop' && /^signal(?:-|$)/.test(source);
+}
+
 function runnerResultExitDetail(result, fallbackReason = '') {
   const canary = result?.canary && typeof result.canary === 'object' ? result.canary : {};
   const safetyReason = canary?.safety?.event?.reason || canary?.safety?.leaveFailure?.reason || '';
@@ -659,6 +666,9 @@ async function runBrowserlessRunner(config, deps = {}) {
       recordSupervisorError(err, { operation: 'background-io-publish' });
     }
   }
+  let snapshotGapPoller = null;
+  let statusHandle = null;
+  let closeRuntimeHandlesOnReturn = false;
   try {
   let liveState = null;
   if (publishLiveState) {
@@ -773,7 +783,6 @@ async function runBrowserlessRunner(config, deps = {}) {
   } catch (err) {
     recordSupervisorError(err, { operation: 'data-dir-create', dataDir: config.dataDir });
   }
-  let snapshotGapPoller = null;
   const highDropPlayerTracker = deps.highDropPlayerTracker || createHighDropPlayerTracker({
     file: path.join(config.dataDir, 'high-drop-players.json'),
     now,
@@ -1066,13 +1075,16 @@ async function runBrowserlessRunner(config, deps = {}) {
         logStore.append('runner', 'runner-loop-stop', loopPlan);
       }
       if (resultForStop && loopPlan.reason === 'once') return resultForStop;
-      return {
+      const stopped = {
         ...(resultForStop || {
           ok: false,
           mode: config.controlMode || 'read-only'
         }),
         reason: loopPlan.reason || resultForStop?.reason || 'runner-loop-stop'
       };
+      closeRuntimeHandlesOnReturn = closeRuntimeHandlesOnReturn
+        || browserlessTerminalStopRequestsRuntimeClose(stopped, stopped.reason);
+      return stopped;
     }
 
     const currentBeforeWait = readBrowserlessStateFile(stateFile);
@@ -1286,6 +1298,8 @@ async function runBrowserlessRunner(config, deps = {}) {
         reason: stopped.reason,
         requestedStop
       });
+      closeRuntimeHandlesOnReturn = closeRuntimeHandlesOnReturn
+        || browserlessTerminalStopRequestsRuntimeClose(stopped, stopped.reason);
       return stopped;
     }
     safetyController.clearStop();
@@ -1444,7 +1458,6 @@ async function runBrowserlessRunner(config, deps = {}) {
     return fullStatusInFlight;
   };
 
-  let statusHandle = null;
   if (!config.once && Number(config.statusPort || 0) > 0 && deps.startStatusServer !== false) {
     const starter = deps.startStatusServer || startStatusServer;
     try {
@@ -1991,6 +2004,18 @@ async function runBrowserlessRunner(config, deps = {}) {
   }
   } finally {
     try {
+      if (closeRuntimeHandlesOnReturn) {
+        try {
+          snapshotGapPoller?.stop?.();
+        } catch (err) {
+          recordSupervisorError(err, { operation: 'snapshot-gap-poller-stop' });
+        }
+        try {
+          if (statusHandle?.close) await statusHandle.close();
+        } catch (err) {
+          recordSupervisorError(err, { operation: 'status-server-close' });
+        }
+      }
       if (ownsBackgroundIo) await backgroundIo.close();
     } finally {
       if (publishBackgroundIo) {
@@ -2298,6 +2323,15 @@ async function runBrowserlessRunnerSelfTest() {
         safety: { event: { reason: 'restart-drain-ready' } }
       }
     }, { loopDelayMs: 30000 });
+    const restartDrainClosesRuntime = browserlessTerminalStopRequestsRuntimeClose({
+      canary: { safety: { event: { reason: 'restart-drain-ready', detail: { source: 'restart-drain' } } } }
+    }, 'restart-drain-ready');
+    const signalForceClosesRuntime = browserlessTerminalStopRequestsRuntimeClose({
+      event: { reason: 'explicit-stop', detail: { source: 'signal-force' } }
+    }, 'explicit-stop');
+    const apiStopKeepsRuntime = browserlessTerminalStopRequestsRuntimeClose({
+      event: { reason: 'explicit-stop', detail: { source: 'status-api' } }
+    }, 'explicit-stop');
     let drainNowMs = 1000;
     const restartDrain = createRestartDrainCoordinator({ now: () => drainNowMs, idleStableMs: 500 });
     restartDrain.requestDrain('restart-drain', { commitmentKey: 'player:9667' });
@@ -2401,6 +2435,9 @@ async function runBrowserlessRunnerSelfTest() {
         && combatExitPlan.delayMs === 30000
         && restartDrainPlan.continue === false
         && restartDrainPlan.reason === 'restart-drain-ready'
+        && restartDrainClosesRuntime
+        && signalForceClosesRuntime
+        && !apiStopKeepsRuntime
         && restartDrainCombat.ready === false
         && restartDrainIdle.ready === true
         && restartDrainStatus.ready === true
@@ -2416,6 +2453,9 @@ async function runBrowserlessRunnerSelfTest() {
       wsClosedPlan,
       combatExitPlan,
       restartDrainPlan,
+      restartDrainClosesRuntime,
+      signalForceClosesRuntime,
+      apiStopKeepsRuntime,
       restartDrainStatus,
       closedTransportAction,
       chatService,
@@ -2434,6 +2474,7 @@ module.exports = {
   browserlessDayKey,
   browserlessDailyFirstLoginDelayPlan,
   browserlessLoopPlan,
+  browserlessTerminalStopRequestsRuntimeClose,
   confirmedLeaveStateFromResult,
   hydrateConfigFromState,
   isFirstBrowserlessLoginOfDay,
