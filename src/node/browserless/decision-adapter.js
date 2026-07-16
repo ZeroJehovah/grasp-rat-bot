@@ -4231,7 +4231,9 @@ function buildLowHpRecoveryThreatExitDecision(input, options = {}) {
   const selfHp = hpValue(input.self);
   const radiusModel = lowHpRecoveryThreatRadiusForHp(selfHp, options);
   const radius = Number(radiusModel?.radius || 0);
-  if (radius <= 0) return null;
+  const attackRange = Math.max(0, Number(options.combatAttackRange ?? options.attackRange ?? DEFAULT_ATTACK_RANGE));
+  const effectiveAvoidanceWidth = Math.max(0, radius - attackRange);
+  if (radius <= attackRange) return null;
   const threats = [];
   const seen = new Set();
   for (const target of input.visibleTargets || []) {
@@ -4239,7 +4241,7 @@ function buildLowHpRecoveryThreatExitDecision(input, options = {}) {
     if (target.authority && target.authority !== 'realtime') continue;
     if (!(target.active || target.firing || isCurrentlyActiveEntity(target, options))) continue;
     const distance = Number(target.distance ?? distanceBetween(input.self, target));
-    if (!Number.isFinite(distance) || distance > radius) continue;
+    if (!Number.isFinite(distance) || distance <= attackRange || distance > radius) continue;
     const key = targetKey(target) || `${Number(target.x)}:${Number(target.y)}:${String(target.name || '')}`;
     if (seen.has(key)) continue;
     seen.add(key);
@@ -4263,6 +4265,8 @@ function buildLowHpRecoveryThreatExitDecision(input, options = {}) {
       selfHp,
       hpThreshold: radiusModel.highHpAnchor,
       radius,
+      attackRange,
+      effectiveAvoidanceWidth,
       radiusModel: {
         lowHpAnchor: radiusModel.lowHpAnchor,
         lowHpRadius: radiusModel.lowHpRadius,
@@ -4272,7 +4276,7 @@ function buildLowHpRecoveryThreatExitDecision(input, options = {}) {
       },
       threatCount: threats.length,
       nearestDistance: Math.round(nearest.distance),
-      trigger: 'active-threat-inside-health-scaled-recovery-radius'
+      trigger: 'active-threat-entered-precombat-recovery-annulus'
     }
   };
 }

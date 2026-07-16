@@ -1368,6 +1368,7 @@ function replayRecoveryThreatExit(options) {
       replayedTargetName: String(replayTarget?.name || ''),
       replayedTargetDistance: Number.isFinite(Number(replayTarget?.distance)) ? Number(replayTarget.distance) : null,
       loggedTargetDistance: Number.isFinite(Number(loggedTarget?.distance)) ? Number(loggedTarget.distance) : null,
+      loggedRecoverySafety: action.recoverySafety || null,
       recoverySafety: replayed?.recoverySafety || null
     });
   }
@@ -1383,6 +1384,17 @@ function replayRecoveryThreatExit(options) {
     && Number.isFinite(Number(firstLoggedExit.loggedTargetDistance))
     ? Number(firstReplayedExit.replayedTargetDistance) - Number(firstLoggedExit.loggedTargetDistance)
     : null;
+  const loggedRecoveryRadius = Number(firstLoggedExit?.loggedRecoverySafety?.radius);
+  const loggedAttackRange = Number(firstLoggedExit?.loggedRecoverySafety?.attackRange || 14500);
+  const preventedInRangeExit = Boolean(
+    firstLoggedExit
+      && !firstReplayedExit
+      && firstLoggedExit.loggedReason === 'recovery-low-hp-active-threat-leave'
+      && firstLoggedExit.loggedRecoverySafety
+      && Number.isFinite(Number(firstLoggedExit.loggedTargetDistance))
+      && Number(firstLoggedExit.loggedTargetDistance) <= loggedAttackRange
+      && (!Number.isFinite(loggedRecoveryRadius) || loggedRecoveryRadius <= loggedAttackRange)
+  );
   const result = {
     mode: 'recovery-threat-exit',
     targetId: options.targetId || '',
@@ -1396,13 +1408,17 @@ function replayRecoveryThreatExit(options) {
     firstReplayedExitAt: firstReplayedExit?.at || '',
     earlierByMs,
     distanceMarginCm,
+    preventedInRangeExit,
+    loggedRecoveryRadius: Number.isFinite(loggedRecoveryRadius) ? loggedRecoveryRadius : null,
+    attackRange: loggedAttackRange,
     samples: evaluated.slice(0, 12)
   };
-  result.accepted = result.evaluatedFrames > 0
+  const acceptedEarlyProtection = result.evaluatedFrames > 0
     && result.baselineRecoveryHoldFrames > 0
     && firstReplayedExit?.replayedReason === 'recovery-low-hp-active-threat-leave'
     && Number(earlierByMs) > 0
     && Number(distanceMarginCm) > 0;
+  result.accepted = acceptedEarlyProtection || preventedInRangeExit;
   return result;
 }
 

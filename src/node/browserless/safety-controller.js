@@ -55,6 +55,7 @@ function selfStaminaRemainingMs(self) {
 function decisionSafetyCombatMetrics(metrics) {
   if (!metrics || typeof metrics !== 'object') return null;
   return {
+    engagementId: String(metrics.engagementId || ''),
     targetId: metrics.targetId ?? null,
     targetName: String(metrics.targetName || ''),
     startedAt: numberOrNull(metrics.startedAt),
@@ -67,6 +68,8 @@ function decisionSafetyCombatMetrics(metrics) {
     minTargetHp: numberOrNull(metrics.minTargetHp),
     selfDamage: numberOrNull(metrics.selfDamage),
     targetDamage: numberOrNull(metrics.targetDamage),
+    selfHealing: numberOrNull(metrics.selfHealing),
+    targetHealing: numberOrNull(metrics.targetHealing),
     actualShots: numberOrNull(metrics.actualShots),
     requestedShots: numberOrNull(metrics.requestedShots),
     acceptedShots: numberOrNull(metrics.acceptedShots),

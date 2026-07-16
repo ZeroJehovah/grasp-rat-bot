@@ -1080,9 +1080,11 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
   const hp = numberOrNull(target.knownHp ?? target.hp);
   const previousHp = same && Number.isFinite(Number(previous.hp)) ? Number(previous.hp) : null;
   const damaged = hp !== null && previousHp !== null && hp < previousHp - 0.01;
+  const healed = hp !== null && previousHp !== null && hp > previousHp + 0.01;
   const previousSelfHp = same ? hpValue(previous?.self) : null;
   const currentSelfHp = hpValue(self);
   const selfDamaged = previousSelfHp !== null && currentSelfHp !== null && currentSelfHp < previousSelfHp - 0.01;
+  const selfHealed = previousSelfHp !== null && currentSelfHp !== null && currentSelfHp > previousSelfHp + 0.01;
   const baselineExit = evaluateCombatHpExitCore({ self, target }, options);
   const disadvantaged = baselineExit?.rule === 'clear-hp-gap';
   const disadvantageSinceAt = disadvantaged
@@ -1271,11 +1273,13 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
   const actualShots = Math.max(0, Number(previousMetrics.actualShots || 0));
   const acceptedShots = Math.max(0, Number(previousMetrics.acceptedShots || 0));
   const previousConfirmedHits = Math.min(acceptedShots, Math.max(0, Number(previousMetrics.confirmedHits || 0)));
+  const engagementStartedAt = same ? Number(previousMetrics.startedAt || previous?.firstSeenAt || nowMs) : nowMs;
   stateful.combatMetrics = {
     ...previousMetrics,
     targetId: String(id),
     targetName: target.name || previousMetrics.targetName || '',
-    startedAt: same ? Number(previousMetrics.startedAt || previous?.firstSeenAt || nowMs) : nowMs,
+    engagementId: `${String(id)}:${engagementStartedAt}`,
+    startedAt: engagementStartedAt,
     lastObservedAt: nowMs,
     initialSelfHp: same
       ? (numberOrNull(previousMetrics.initialSelfHp) ?? previousSelfHp ?? currentSelfHp)
@@ -1297,8 +1301,10 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
     unackedShots: Math.max(0, actualShots - acceptedShots),
     confirmedHits: Math.min(acceptedShots, previousConfirmedHits + creditedHits),
     targetDamage: Number(previousMetrics.targetDamage || 0) + (damaged ? previousHp - hp : 0),
+    targetHealing: Number(previousMetrics.targetHealing || 0) + (healed ? hp - previousHp : 0),
     incomingHits: Number(previousMetrics.incomingHits || 0) + (selfDamaged ? Math.max(1, Math.round((previousSelfHp - currentSelfHp) / 3)) : 0),
     selfDamage: Number(previousMetrics.selfDamage || 0) + (selfDamaged ? previousSelfHp - currentSelfHp : 0),
+    selfHealing: Number(previousMetrics.selfHealing || 0) + (selfHealed ? currentSelfHp - previousSelfHp : 0),
     firstDamageAt: damaged ? (Number(previousMetrics.firstDamageAt || 0) || nowMs) : Number(previousMetrics.firstDamageAt || 0),
     threatBulletIds,
     threatBulletCount: threatBulletIds.length,

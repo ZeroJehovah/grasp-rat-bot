@@ -8506,7 +8506,7 @@ async function runSelfTest() {
       want: 'recover|recover|wait-for-full-stamina-and-hp|true|coin|100'
     },
     {
-      name: 'browserless injured recovery exits while realtime Active threat is inside health-scaled radius',
+      name: 'browserless injured recovery exits while realtime Active threat is inside outer recovery annulus',
       got: (() => {
         const self = {
           entity_id: 1,
@@ -8647,12 +8647,86 @@ async function runSelfTest() {
           summarize(decide(18, 31000)),
           summarize(decide(18, 31001)),
           summarize(decide(80, 0)),
-          `${integratedFull.kind}:${integratedFull.reason}:${integratedFull.action.recoverySafety.radius}`,
-          `${integratedRealtime.kind}:${integratedRealtime.reason}:${integratedRealtime.action.recoverySafety.radius}`,
+          `${integratedFull.kind}:${integratedFull.reason}:${integratedFull.action.recoverySafety?.radius ?? 'none'}`,
+          `${integratedRealtime.kind || 'none'}:${integratedRealtime.reason || 'none'}:${integratedRealtime.action?.recoverySafety?.radius ?? 'none'}`,
           `${integratedOutside.kind}:${integratedOutside.reason}`
         ].join('|');
       })(),
-      want: '30000:true|none|15000:true|none|10000:true|none|31000:true|none|none|safety-exit:recovery-low-hp-active-threat-leave:10000|safety-exit:recovery-low-hp-active-threat-leave:10000|recover:wait-for-full-stamina-and-hp'
+      want: '30000:true|none|15000:true|none|none|none|31000:true|none|none|recover:wait-for-full-stamina-and-hp:none|none:none:none|recover:wait-for-full-stamina-and-hp'
+    },
+    {
+      name: 'browserless recovery threat annulus yields in-range incidents to combat policy',
+      got: (() => {
+        const state = (hp, distance, targetHp) => {
+          const self = {
+            entity_id: 1,
+            user_id: 7,
+            name: 'self',
+            x: 0,
+            y: 0,
+            hp,
+            max_hp: 100,
+            stamina_5s_remaining_milli: 10000,
+            stamina_5s_limit_milli: 10000
+          };
+          return {
+            userId: 7,
+            realtime: {
+              tick: 59,
+              frameAgeMs: 0,
+              self,
+              entities: [self, {
+                entity_id: 2,
+                user_id: 8,
+                name: 'active-enemy',
+                x: distance,
+                y: 0,
+                vx: -50,
+                vy: 0,
+                hp: targetHp,
+                current_join_mode: 'Active',
+                active: true,
+                firing: true,
+                stamina_5s_remaining_milli: 6000,
+                stamina_5s_limit_milli: 10000,
+                drop: 71
+              }],
+              bullets: [],
+              coinDrops: []
+            },
+            fallback: { coinDrops: [] }
+          };
+        };
+        const options = {
+          nowMs: 1200,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          dynamicProfitThresholdEnabled: false
+        };
+        const summarize = (hp, distance, targetHp) => {
+          const full = buildBrowserlessDecision(state(hp, distance, targetHp), {}, options);
+          const realtime = buildBrowserlessRealtimeControlDecision(state(hp, distance, targetHp), {}, options);
+          return `${full.reason}:${realtime.reason}`;
+        };
+        const outer = buildLowHpRecoveryThreatExitDecision({
+          self: { userId: 7, hp: 18, maxHp: 100 },
+          visibleTargets: [{
+            userId: 8,
+            authority: 'realtime',
+            active: true,
+            alive: true,
+            distance: 28703
+          }]
+        }, { controlMode: 'profit-live' });
+        return [
+          summarize(56, 11928, 50),
+          summarize(67, 5088, 47),
+          summarize(70, 4223, 23),
+          summarize(18, 10000, 87),
+          `${outer.reason}:${outer.recoverySafety.attackRange}:${outer.recoverySafety.effectiveAvoidanceWidth}`
+        ].join('|');
+      })(),
+      want: 'combat-live-realtime:combat-live-realtime|combat-live-realtime:combat-live-realtime|combat-live-realtime:combat-live-realtime|combat-critical-hp-leave:combat-critical-hp-leave|recovery-low-hp-active-threat-leave:14500:16500'
     },
     {
       name: 'browserless low-hp recovery radius keeps whitelist and undamaged easy-kill exemptions',
@@ -12169,6 +12243,43 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: '1970-01-01T00:00:01.000Z|500|100|120|95|95|80|80|enemy'
+    },
+    {
+      name: 'browserless combat metrics retain engagement id and cumulative healing',
+      got: (() => {
+        const stateful = {};
+        const run = (nowMs, selfHp, targetHp) => buildBrowserlessCombatDryRun({
+          userId: 7,
+          realtime: {
+            tick: Math.round(nowMs / 10),
+            self: { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: selfHp, max_hp: 100 },
+            entities: [
+              { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: selfHp, max_hp: 100 },
+              { entity_id: 2, user_id: 8, name: 'enemy', x: 1000, y: 0, hp: targetHp, current_join_mode: 'Active', active: true, firing: true }
+            ],
+            bullets: []
+          }
+        }, {
+          nowMs,
+          decisionState: stateful,
+          liveCombatEnabled: true,
+          combatAttackRange: 14500
+        });
+        run(1000, 80, 70);
+        const healed = run(1200, 85, 75);
+        return [
+          healed.metrics.engagementId,
+          healed.metrics.startedAt,
+          healed.metrics.lastObservedAt,
+          healed.metrics.initialSelfHp,
+          healed.metrics.lastSelfHp,
+          healed.metrics.selfHealing,
+          healed.metrics.initialTargetHp,
+          healed.metrics.lastTargetHp,
+          healed.metrics.targetHealing
+        ].join('|');
+      })(),
+      want: '8:1000|1000|1200|80|85|5|70|75|5'
     },
     {
       name: 'browserless combat hit metrics credit only recorded shots',
@@ -16723,10 +16834,10 @@ async function runSelfTest() {
           injured.input.loot.blockedReason,
           injured.action?.reason || 'none',
           lowHp.input.loot.blockedReason,
-          lowHp.action.reason
+          lowHp.action?.reason || 'none'
         ].join('|');
       })(),
-      want: 'recent-self-injury|none|self-hp-below-loot-threshold|recovery-low-hp-active-threat-leave'
+      want: 'recent-self-injury|none|self-hp-below-loot-threshold|none'
     },
     {
       name: 'browserless snapshot self-kill evidence uses stable ids and kill ticks',
@@ -22232,12 +22343,15 @@ async function runSelfTest() {
           panelScript.includes("addRow(rowsOut, '交战对手', targetLabel(battle.target), true)"),
           panelScript.includes("addRow(rowsOut, '战斗结果', recentBattleOutcomeText(status), true)"),
           panelScript.includes("addRow(rowsOut, '输出承伤', recentBattleDamageText(status))"),
+          panelScript.includes("if (healingText) addRow(rowsOut, '战斗恢复', healingText)"),
+          panelScript.includes("'请求 ' + requestedShots + ' 发 / 确认 ' + acceptedShots + ' 发'"),
+          panelScript.includes("'确认命中率 ' + hitRate + '%'"),
           panelScript.includes("addRow(rowsOut, '射击命中', recentBattleShootingText(status))"),
           panelText.indexOf('id="actionDetails"') < panelText.indexOf('id="battlePanel"'),
           panelText.indexOf('id="battlePanel"') < panelText.indexOf('class="stats-grid"')
         ].join('|');
       })(),
-      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
+      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless web panel explains combat movement failure and low-hp recovery threat exits',
@@ -22245,9 +22359,9 @@ async function runSelfTest() {
         const panelText = renderBrowserlessWebPanel();
         return [
           panelText.includes("'combat-action-settlement-stalled': '战斗中移动指令失效，为避免原地承伤，主动退出'"),
-          panelText.includes("'recovery-low-hp-active-threat-leave': '恢复时活动玩家进入随血量变化的安全半径，主动退出'"),
+          panelText.includes("'recovery-low-hp-active-threat-leave': '恢复时活动玩家进入攻击射程外的血量安全预警区，主动退出'"),
           panelText.includes("'action-settlement-stalled': '非战斗移动指令未产生位置变化，正在重连'"),
-          panelText.includes('2026.07.15.9')
+          panelText.includes('2026.07.16.1')
         ].join('|');
       })(),
       want: 'true|true|true|true'
@@ -22453,7 +22567,7 @@ async function runSelfTest() {
       want: 'injury-leave|self-left|Eason|2026-07-13T08:04:31.844Z|14480|100|73|unknown|27|51|42|17|40.5'
     },
     {
-      name: 'browserless compact pursuit exit keeps stale combat metrics with their own target',
+      name: 'browserless compact pursuit exit rejects stale unrelated combat metrics',
       got: (() => {
         const status = buildCompactBrowserlessStatus({
           recentExits: [{
@@ -22503,24 +22617,124 @@ async function runSelfTest() {
           }]
         }, parseBrowserlessRunnerArgs([], {}));
         const exit = status.recentExit;
-        const battle = exit.battle;
         return [
           exit.target.name,
           exit.target.hp,
           exit.target.invulnerable,
-          battle.target.userId,
-          battle.target.name,
-          battle.target.hp,
-          battle.target.invulnerable ?? 'none',
-          battle.outcome,
-          battle.endedAt,
-          battle.durationMs,
+          exit.battle === null
+        ].join('|');
+      })(),
+      want: '没头脑和不高兴|100|true|true'
+    },
+    {
+      name: 'browserless compact pursuit exit rejects stale same-player prior engagement after respawn',
+      got: (() => {
+        const status = buildCompactBrowserlessStatus({
+          stats: {
+            currentSession: { online: false },
+            lastExit: {
+              at: '2026-07-16T00:19:49.014Z',
+              reason: 'pursuit-leave',
+              runId: 'profit-live-20260715T230817676Z'
+            }
+          },
+          recentExits: [{
+            at: '2026-07-16T00:19:49.014Z',
+            reason: 'pursuit-leave',
+            runId: 'profit-live-20260715T230817676Z',
+            shouldLeave: true,
+            detail: {
+              decision: {
+                self: { userId: 28886, name: 'self', hp: 100 },
+                target: { userId: 30672, name: '颓废咸鱼1号', hp: 100, invulnerable: true },
+                combat: {
+                  target: { userId: 30672, name: '颓废咸鱼1号', hp: 100, invulnerable: true },
+                  metrics: {
+                    engagementId: '30672:1784160830306',
+                    targetId: '30672',
+                    targetName: '颓废咸鱼1号',
+                    startedAt: 1784160830306,
+                    lastObservedAt: 1784161059835,
+                    initialSelfHp: 100,
+                    lastSelfHp: 100,
+                    initialTargetHp: 100,
+                    lastTargetHp: 3,
+                    selfDamage: 0,
+                    targetDamage: 96,
+                    requestedShots: 71,
+                    acceptedShots: 62,
+                    confirmedHits: 31
+                  }
+                }
+              }
+            }
+          }]
+        }, parseBrowserlessRunnerArgs([], {}));
+        return [
+          status.recentExit.reason,
+          status.recentExit.target.name,
+          status.recentExit.battle === null
+        ].join('|');
+      })(),
+      want: 'pursuit-leave|颓废咸鱼1号|true'
+    },
+    {
+      name: 'browserless compact exit uses accepted shots and preserves combat healing',
+      got: (() => {
+        const at = '2026-07-16T01:25:25.539Z';
+        const status = buildCompactBrowserlessStatus({
+          recentExits: [{
+            at,
+            reason: 'recovery-low-hp-active-threat-leave',
+            shouldLeave: true,
+            detail: {
+              decision: {
+                self: { userId: 28886, name: 'self', hp: 70 },
+                target: { userId: 31361, name: 'mango', hp: 23 },
+                combat: {
+                  target: { userId: 31361, name: 'mango', hp: 23 },
+                  metrics: {
+                    engagementId: '31361:1784165045105',
+                    targetId: '31361',
+                    targetName: 'mango',
+                    startedAt: 1784165045105,
+                    lastObservedAt: 1784165125526,
+                    initialSelfHp: 100,
+                    lastSelfHp: 70,
+                    initialTargetHp: 92,
+                    lastTargetHp: 23,
+                    selfDamage: 36,
+                    selfHealing: 6,
+                    targetDamage: 72,
+                    targetHealing: 3,
+                    actualShots: 133,
+                    requestedShots: 133,
+                    acceptedShots: 130,
+                    confirmedHits: 23
+                  }
+                }
+              }
+            }
+          }]
+        }, parseBrowserlessRunnerArgs([], {}));
+        const battle = status.recentExit.battle;
+        return [
+          battle.selfHpStart,
+          battle.selfHpEnd,
+          battle.selfDamage,
+          battle.selfHealing,
+          battle.targetHpStart,
+          battle.targetHpEnd,
+          battle.targetDamage,
+          battle.targetHealing,
+          battle.requestedShots,
+          battle.acceptedShots,
           battle.actualShots,
           battle.confirmedHits,
           battle.estimatedHitRate
         ].join('|');
       })(),
-      want: '没头脑和不高兴|100|true|1079|Joeyzhou|2|none|ended|2026-07-14T05:16:29.273Z|18886|31|31|100'
+      want: '100|70|36|6|92|23|72|3|133|130|130|23|17.7'
     },
     {
       name: 'browserless web panel renders explicit login point safety result',
