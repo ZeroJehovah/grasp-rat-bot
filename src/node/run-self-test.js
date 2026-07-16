@@ -6232,6 +6232,53 @@ async function runSelfTest() {
       want: 'false|confirmed-leave-snapshot-quarantine|false|stale-confirmed-leave-snapshot-tick|stale-confirmed-leave-snapshot-tick|true|self-present-reentry|fresh-after-confirmed-leave'
     },
     {
+      name: 'browserless confirmed leave accepts the next UTC+8 day tick reset',
+      got: (async () => {
+        const confirmedAtMs = Date.parse('2026-07-16T15:59:00.000Z');
+        const observedAtMs = Date.parse('2026-07-16T16:01:00.000Z');
+        const result = await runPreLoginSnapshotSafety({
+          gameOrigin: 'https://example.test',
+          snapshotPath: '/snapshot',
+          userId: 7,
+          sessionToken: 'secret',
+          httpTimeoutMs: 1000,
+          loginPointSafetySuccessRequired: 1,
+          loginPointSafetyProbeIntervalMs: 0
+        }, {
+          loginPointSafety: { point: { x: 0, y: 0, hp: 100, source: 'test' } },
+          runner: {
+            confirmedLeave: {
+              confirmedAt: new Date(confirmedAtMs).toISOString(),
+              snapshotIgnoreUntil: new Date(confirmedAtMs + 40000).toISOString(),
+              lastRealtimeTick: 1544724,
+              runId: 'confirmed-leave-midnight-test'
+            }
+          }
+        }, {
+          now: () => observedAtMs,
+          fetchWithTimeout: async () => fakeResponseForTest({
+            status: 200,
+            body: {
+              type: 'snapshot',
+              tick: 8610,
+              entities: [],
+              bullets: [],
+              coin_drops: [],
+              messages: []
+            }
+          })
+        });
+        return [
+          result.ok,
+          result.reason,
+          result.response.summary.selfPresent,
+          result.response.summary.freshness.reason,
+          result.response.summary.freshness.latestKnownTick
+        ].join('|');
+      })(),
+      want: 'true|safe|false|no-prior-tick|'
+    },
+    {
       name: 'browserless websocket transport builds direct game URL',
       got: buildWsUrl({
         gameOrigin: 'https://grasp-rat-game.h-e.top',

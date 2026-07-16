@@ -34,7 +34,7 @@ const {
   evaluateRestartReadiness,
   restartDrainAllowsDecision
 } = require('./restart-readiness');
-const { waitForSnapshotEdge } = require('./snapshot-edge-wait');
+const { utc8DayKey, waitForSnapshotEdge } = require('./snapshot-edge-wait');
 
 const DEFAULT_READONLY_PROBE_MS = 30000;
 const DEFAULT_FRAME_GAP_ALERT_MS = 2000;
@@ -466,16 +466,22 @@ async function runSinglePreLoginSnapshotSafetyProbe(config, state, deps = {}, de
   const easyKillUserIds = snapshotSafetyEasyKillUserIds(deps, observedAtMs);
   const confirmedLeave = confirmedLeaveSnapshotGuard(state, observedAtMs);
   const ordinaryLatestKnownTick = Number(state?.frameAges?.latestKnownTick || state?.latestKnownTick || 0);
+  const confirmedAtMs = Date.parse(String(confirmedLeave?.confirmedAt || ''));
+  const confirmedLeaveTick = confirmedLeave
+    && Number.isFinite(confirmedAtMs)
+    && utc8DayKey(confirmedAtMs) === utc8DayKey(observedAtMs)
+    ? Number(confirmedLeave.lastRealtimeTick || 0)
+    : 0;
   const latestKnownTick = Math.max(
     Number.isFinite(ordinaryLatestKnownTick) ? ordinaryLatestKnownTick : 0,
-    Number(confirmedLeave?.lastRealtimeTick || 0),
+    confirmedLeaveTick,
     Number(detail.lastProbeTick || 0)
   );
   const summary = summarizeSnapshotPayload(body.json, {
     userId: config.userId,
     loginPoint,
     latestKnownTick,
-    requireTickAdvance: Boolean(confirmedLeave?.lastRealtimeTick || detail.lastProbeTick),
+    requireTickAdvance: Boolean(confirmedLeaveTick || detail.lastProbeTick),
     healthyHpThreshold: config.loginPointSafetyHealthyHpThreshold ?? runtimeDefaults.loginPointSafetyHealthyHpThreshold,
     healthyRadius: config.loginPointSafetyHealthyRadius ?? runtimeDefaults.loginPointSafetyHealthyRadius,
     lowRadius: config.loginPointSafetyRadius ?? runtimeDefaults.loginPointSafetyRadius,
