@@ -19854,7 +19854,7 @@ async function runSelfTest() {
           text.indexOf('runner-persisted-loop-wait') < text.indexOf('runner-loop-stop')
         ].join('|');
       }),
-      want: 'explicit-stop|1|570792|stamina-budget-coin-leave|570792||false||true|true|true'
+      want: 'explicit-stop|1|570792|stamina-budget-coin-leave|570792||false||false|true|true'
     },
     {
       name: 'browserless runner preserves online session across persisted movement stall wait',
@@ -19982,8 +19982,8 @@ async function runSelfTest() {
         updateBrowserlessStateFile(stateFilePath(config), {
           runner: {
             confirmedLeave: {
-              confirmedAt: '2026-07-12T15:59:09.000Z',
-              snapshotIgnoreUntil: '2026-07-12T15:59:49.000Z',
+              confirmedAt: '2026-07-12T15:57:09.000Z',
+              snapshotIgnoreUntil: '2026-07-12T15:57:49.000Z',
               lastRealtimeTick: 200,
               runId: 'stamina-before-drain'
             },
@@ -20419,10 +20419,11 @@ async function runSelfTest() {
       want: 'explicit-stop|2|1|0|stale-confirmed-leave-snapshot-tick|false|true'
     },
     {
-      name: 'browserless runner skips persisted reconnect wait when fresh snapshot still has self',
+      name: 'browserless runner does not probe self during persisted explicit stamina cooldown',
       got: withTempDirForTest(async dir => {
         const t = Date.parse('2026-07-11T03:45:54.610Z');
         let calls = 0;
+        let precheckCalls = 0;
         let sleptMs = 0;
         const config = parseBrowserlessRunnerArgs([
           '--live',
@@ -20463,24 +20464,27 @@ async function runSelfTest() {
           sleep: async ms => {
             sleptMs += ms;
           },
-          runPreLoginSnapshotSafety: async () => ({
-            ok: true,
-            reason: 'self-present-reentry',
-            originalReason: 'active-near-login-point',
-            checkedAt: '2026-07-11T03:45:54.610Z',
-            required: 1,
-            streak: 1,
-            satisfied: true,
-            bypassedPreLoginSafety: true,
-            response: {
-              summary: {
-                valid: true,
-                selfPresent: true,
-                tick: 201,
-                safety: { ok: false, reason: 'active-near-login-point' }
+          runPreLoginSnapshotSafety: async () => {
+            precheckCalls += 1;
+            return {
+              ok: true,
+              reason: 'self-present-reentry',
+              originalReason: 'active-near-login-point',
+              checkedAt: '2026-07-11T03:45:54.610Z',
+              required: 1,
+              streak: 1,
+              satisfied: true,
+              bypassedPreLoginSafety: true,
+              response: {
+                summary: {
+                  valid: true,
+                  selfPresent: true,
+                  tick: 201,
+                  safety: { ok: false, reason: 'active-near-login-point' }
+                }
               }
-            }
-          }),
+            };
+          },
           runReadOnlyOnce: async () => {
             calls += 1;
             return {
@@ -20496,12 +20500,13 @@ async function runSelfTest() {
         return [
           result.reason,
           calls,
+          precheckCalls,
           sleptMs,
           /runner-persisted-wait-self-present-resume/.test(text),
           /runner-persisted-loop-wait/.test(text)
         ].join('|');
       }),
-      want: 'explicit-stop|1|0|true|false'
+      want: 'explicit-stop|1|0|570792|false|true'
     },
     {
       name: 'browserless runner replaces persisted ordinary confirmed-leave wait with snapshot edge',

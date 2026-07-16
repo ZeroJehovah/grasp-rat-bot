@@ -1714,9 +1714,17 @@ async function runBrowserlessRunner(config, deps = {}) {
   if (persistedDelayPlan) {
     const persistedStateBeforeProbe = readBrowserlessStateFile(stateFile);
     const persistedConfirmedLeave = activeConfirmedLeaveState(persistedStateBeforeProbe, now());
+    const explicitCooldown = Boolean(persistedDelayPlan.explicitCooldown || persistedDelayPlan.explicitDelay);
     preservePersistedOnlineSession = preserveOnlineSessionForLoopWait(null, persistedDelayPlan)
       && !persistedConfirmedLeave;
-    if (persistedConfirmedLeave?.quarantineRemainingMs > 0) {
+    if (explicitCooldown) {
+      logStore.append('runner', 'runner-persisted-explicit-cooldown-self-probe-skipped', {
+        previousRunId: persistedDelayPlan.previousRunId || '',
+        previousReason: persistedDelayPlan.reason,
+        deadlineType: persistedDelayPlan.deadlineType || '',
+        nextRunAt: persistedDelayPlan.nextRunAt || ''
+      });
+    } else if (persistedConfirmedLeave?.quarantineRemainingMs > 0) {
       logStore.append('runner', 'runner-persisted-wait-confirmed-leave-quarantine', {
         previousRunId: persistedDelayPlan.previousRunId || '',
         previousReason: persistedDelayPlan.reason,
