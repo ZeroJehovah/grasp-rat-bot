@@ -33,6 +33,8 @@ const {
   behaviorLearningBaseKey,
   behaviorLearningKey,
   movementDirectionState,
+  movementDirectionVector,
+  movementRouteContextKeyCore,
   opponentResponsePolicyCore,
   updateOpponentBehaviorStateCore
 } = require('../../strategy/opponent-behavior');
@@ -65,7 +67,114 @@ function ensureCombatLearningState(stateful = {}) {
   if (!Array.isArray(stateful.combatLearning.recentShots)) stateful.combatLearning.recentShots = [];
   if (!stateful.combatLearning.modeMetrics || typeof stateful.combatLearning.modeMetrics !== 'object') stateful.combatLearning.modeMetrics = {};
   if (!stateful.combatLearning.lastTotalsByTarget || typeof stateful.combatLearning.lastTotalsByTarget !== 'object') stateful.combatLearning.lastTotalsByTarget = {};
+  if (!stateful.combatLearning.routeTransitions || typeof stateful.combatLearning.routeTransitions !== 'object') stateful.combatLearning.routeTransitions = {};
+  if (!stateful.combatLearning.routeAimFeedback || typeof stateful.combatLearning.routeAimFeedback !== 'object') stateful.combatLearning.routeAimFeedback = {};
+  if (!stateful.combatLearning.lastRouteObservationByTarget || typeof stateful.combatLearning.lastRouteObservationByTarget !== 'object') {
+    stateful.combatLearning.lastRouteObservationByTarget = {};
+  }
   return stateful.combatLearning;
+}
+
+function routeFeedbackKey(contextKey, candidate) {
+  return `${String(contextKey || '')}|candidate=${String(candidate || 'unknown')}`;
+}
+
+function normalizedOutcomeDistribution(cell, minimumSamples = 1) {
+  const samples = Math.max(0, Number(cell?.samples || 0));
+  if (samples < minimumSamples) return [];
+  const outcomes = Object.entries(cell?.outcomes || {})
+    .map(([state, count]) => ({ state, count: Math.max(0, Number(count || 0)) }))
+    .filter(item => item.count > 0);
+  const total = outcomes.reduce((sum, item) => sum + item.count, 0);
+  if (!(total > 0)) return [];
+  return outcomes
+    .map(item => ({ ...item, probability: item.count / total, vector: movementDirectionVector(item.state) }))
+    .sort((a, b) => b.probability - a.probability || a.state.localeCompare(b.state));
+}
+
+function recordRouteTransitionObservation(stateful, targetId, behavior, nowMs) {
+  const learning = ensureCombatLearningState(stateful);
+  const transition = behavior?.metrics?.movementTransitions || null;
+  const phase = behavior?.metrics?.movementPhase || transition?.phase || null;
+  const contextKey = transition?.contextKey
+    || movementRouteContextKeyCore(behavior, behavior?.metrics?.lastDistance, phase || {});
+  const directionState = String(phase?.currentDirection || transition?.currentState || 'stop');
+  if (!contextKey || !directionState) return null;
+  const key = String(targetId || '');
+  const previous = learning.lastRouteObservationByTarget[key] || null;
+  const observationIntervalMs = 400;
+  if (previous && Number(nowMs) > Number(previous.at || 0)
+    && (directionState !== previous.directionState || Number(nowMs) - Number(previous.at || 0) >= observationIntervalMs)) {
+    const prior = learning.routeTransitions[previous.contextKey] || { samples: 0, outcomes: {}, updatedAt: 0 };
+    const decay = 0.995;
+    const outcomes = Object.fromEntries(Object.entries(prior.outcomes || {})
+      .map(([state, count]) => [state, Math.max(0, Number(count || 0)) * decay]));
+    outcomes[directionState] = Math.min(200, Number(outcomes[directionState] || 0) + 1);
+    learning.routeTransitions[previous.contextKey] = {
+      samples: Math.min(200, Number(prior.samples || 0) * decay + 1),
+      outcomes,
+      updatedAt: nowMs
+    };
+  }
+  learning.lastRouteObservationByTarget[key] = {
+    contextKey,
+    directionState,
+    at: nowMs
+  };
+  return {
+    contextKey,
+    directionState,
+    learned: normalizedOutcomeDistribution(learning.routeTransitions[contextKey], 1)
+  };
+}
+
+function finalizeCombatRouteFeedback(stateful, targetId, targetState, currentTick, nowMs, options = {}) {
+  const tick = numberOrNull(currentTick);
+  if (tick === null || !targetState) return 0;
+  const learning = ensureCombatLearningState(stateful);
+  const graceTicks = Math.max(2, Number(options.routeFeedbackGraceTicks ?? 12));
+  const samples = Array.isArray(targetState.motionSamples) ? targetState.motionSamples : [];
+  let finalized = 0;
+  for (const shot of learning.recentShots) {
+    if (shot.routeFeedbackFinalized || String(shot.targetId) !== String(targetId) || !shot.routeContextKey) continue;
+    const arrivalTick = numberOrNull(shot.expectedArrivalTick);
+    if (arrivalTick === null || tick < arrivalTick + graceTicks) continue;
+    let arrivalSample = null;
+    let arrivalTickDistance = Infinity;
+    for (const sample of samples) {
+      const sampleTick = numberOrNull(sample?.tick);
+      if (sampleTick === null) continue;
+      const tickDistance = Math.abs(sampleTick - arrivalTick);
+      if (tickDistance >= arrivalTickDistance) continue;
+      arrivalSample = sample;
+      arrivalTickDistance = tickDistance;
+    }
+    const targetX = numberOrNull(arrivalSample?.x ?? targetState.x);
+    const targetY = numberOrNull(arrivalSample?.y ?? targetState.y);
+    const arrivalMissCm = targetX === null || targetY === null || shot.aimX === null || shot.aimY === null
+      ? null
+      : Math.hypot(Number(shot.aimX) - targetX, Number(shot.aimY) - targetY);
+    const actualDirectionState = movementDirectionState(
+      arrivalSample?.vx ?? targetState.motionSamples?.at(-1)?.vx,
+      arrivalSample?.vy ?? targetState.motionSamples?.at(-1)?.vy,
+      options.stationarySpeed ?? 5
+    );
+    const key = routeFeedbackKey(shot.routeContextKey, shot.routeCandidate || shot.hypothesis);
+    const prior = learning.routeAimFeedback[key] || { samples: 0, hits: 0, missTotalCm: 0, updatedAt: 0 };
+    const decay = 0.995;
+    learning.routeAimFeedback[key] = {
+      samples: Math.min(200, Number(prior.samples || 0) * decay + 1),
+      hits: Math.min(200, Number(prior.hits || 0) * decay + Number(shot.credited === true)),
+      missTotalCm: Math.min(200000, Number(prior.missTotalCm || 0) * decay + Math.max(0, Number(arrivalMissCm || 0))),
+      updatedAt: nowMs
+    };
+    shot.routeFeedbackFinalized = true;
+    shot.actualDirectionState = actualDirectionState;
+    shot.arrivalMissCm = arrivalMissCm;
+    shot.routeFeedbackAt = nowMs;
+    finalized += 1;
+  }
+  return finalized;
 }
 
 function combatModeMetricsCell(stateful, key) {
@@ -120,6 +229,9 @@ function recordCombatShotLearning(stateful, target, combat = {}, options = {}) {
   const mode = String(behavior?.mode || 'mixed/unknown');
   const distance = Number(target.distance ?? combat.target?.distance ?? stateful.combatTarget?.distance);
   const hypothesis = String(options.hypothesis || combat.aim?.motionProbe?.hypothesis || 'center');
+  const selectedRoute = combat.aim?.routeCoverage?.candidates?.find(candidate => candidate.hypothesis === combat.aim?.routeCoverage?.selected) || null;
+  const routeContextKey = String(options.routeContextKey || combat.aim?.routeCoverage?.contextKey || '');
+  const routeCandidate = String(options.routeCandidate || selectedRoute?.hypothesis || hypothesis);
   const key = behaviorLearningKey(behavior || mode, distance, hypothesis);
   const learning = ensureCombatLearningState(stateful);
   const previous = learning.hitRateByModeDistance[key] || { shots: 0, hits: 0 };
@@ -140,6 +252,12 @@ function recordCombatShotLearning(stateful, target, combat = {}, options = {}) {
     targetId: id,
     key,
     hypothesis,
+    routeContextKey,
+    routeCandidate,
+    routeProbability: numberOrNull(options.routeProbability ?? selectedRoute?.probability),
+    predictedDirectionState: String(options.predictedDirectionState || selectedRoute?.directionState || ''),
+    aimConfidence: numberOrNull(options.aimConfidence ?? combat.aim?.confidence),
+    expectedHitProbability: numberOrNull(options.expectedHitProbability ?? selectedRoute?.expectedHitProbability),
     credited: false,
     bulletId: options.bulletId ?? null,
     createdTick,
@@ -256,7 +374,13 @@ function syncConfirmedCombatShots(stateful, state = {}, target = null, combat = 
       createdTick: shot.createdTick ?? shot.created_tick,
       flightTicks: shot.flightTicks,
       aimX: shot.targetX,
-      aimY: shot.targetY
+      aimY: shot.targetY,
+      routeContextKey: shot.routeContextKey,
+      routeCandidate: shot.routeCandidate,
+      routeProbability: shot.routeProbability,
+      predictedDirectionState: shot.predictedDirectionState,
+      aimConfidence: shot.aimConfidence,
+      expectedHitProbability: shot.expectedHitProbability
     });
   }
   learning.acceptedBulletIds = Array.from(seen).slice(-256);
@@ -646,6 +770,10 @@ function estimateAim(self, target, options = {}) {
     && controlStyleConfidence >= 0.35)
     || (profile.maneuverScale >= 0.45 && noDamageWidened);
   const transitionModel = behavior?.metrics?.movementTransitions || null;
+  const routePhase = behavior?.metrics?.movementPhase || transitionModel?.phase || null;
+  const routeContextKey = transitionModel?.contextKey
+    || movementRouteContextKeyCore(behavior || { mode: 'mixed/unknown' }, distance, routePhase || {});
+  const routeLearning = options.decisionState?.combatLearning || options.stateful?.combatLearning || null;
   const scriptTransitionCoverage = Boolean(
     ['periodic-script', 'reactive-script'].includes(controlStyle)
       && controlStyleConfidence >= 0.35
@@ -656,39 +784,88 @@ function estimateAim(self, target, options = {}) {
     const ux = vx / targetSpeed;
     const uy = vy / targetSpeed;
     const reachable = targetSpeed * leadTicks;
-    let candidates = [
-      { hypothesis: 'continue', x: tx + ux * reachable, y: ty + uy * reachable, probability: highEntropyCoverage ? 0.34 : 0.58 },
-      { hypothesis: 'stop', x: tx + vx * observationToExecutionTicks, y: ty + vy * observationToExecutionTicks, probability: highEntropyCoverage ? 0.2 : 0.14 },
-      { hypothesis: 'left-turn', x: tx - uy * reachable, y: ty + ux * reachable, probability: highEntropyCoverage ? 0.18 : 0.09 },
-      { hypothesis: 'right-turn', x: tx + uy * reachable, y: ty - ux * reachable, probability: highEntropyCoverage ? 0.18 : 0.09 },
-      { hypothesis: 'reverse', x: tx - ux * reachable, y: ty - uy * reachable, probability: 0.1 }
-    ];
-    if (scriptTransitionCoverage) {
-      const transitionProbability = new Map((transitionModel.next || []).map(item => [String(item.state), Number(item.probability || 0)]));
-      candidates = candidates.map(candidate => {
-        const vectorX = candidate.hypothesis === 'stop' ? 0 : Number(candidate.x) - tx;
-        const vectorY = candidate.hypothesis === 'stop' ? 0 : Number(candidate.y) - ty;
-        const state = movementDirectionState(vectorX, vectorY, 0.001);
-        const learnedProbability = Number(transitionProbability.get(state) || 0);
-        return {
-          ...candidate,
-          directionState: state,
-          priorProbability: candidate.probability,
-          transitionProbability: learnedProbability,
-          probability: learnedProbability * 0.8 + candidate.probability * 0.2
-        };
+    const staticCandidates = [
+      { hypothesis: 'continue', x: tx + ux * reachable, y: ty + uy * reachable, probability: highEntropyCoverage ? 0.27 : 0.58 },
+      { hypothesis: 'stop', x: tx + vx * observationToExecutionTicks, y: ty + vy * observationToExecutionTicks, probability: highEntropyCoverage ? 0.29 : 0.14 },
+      { hypothesis: 'left-turn', x: tx - uy * reachable, y: ty + ux * reachable, probability: highEntropyCoverage ? 0.16 : 0.09 },
+      { hypothesis: 'right-turn', x: tx + uy * reachable, y: ty - ux * reachable, probability: highEntropyCoverage ? 0.16 : 0.09 },
+      { hypothesis: 'reverse', x: tx - ux * reachable, y: ty - uy * reachable, probability: 0.12 }
+    ].map(candidate => ({
+      ...candidate,
+      directionState: movementDirectionState(
+        candidate.hypothesis === 'stop' ? 0 : Number(candidate.x) - tx,
+        candidate.hypothesis === 'stop' ? 0 : Number(candidate.y) - ty,
+        0.001
+      )
+    }));
+    const conditionalSamples = Math.max(0, Number(transitionModel?.conditionalSampleCount || 0));
+    const conditionalEvidenceReady = conditionalSamples >= (highEntropyCoverage ? 12 : 3);
+    const localSource = conditionalEvidenceReady
+      ? transitionModel.conditionalNext
+      : (highEntropyCoverage ? [] : transitionModel?.next);
+    const localSamples = conditionalEvidenceReady
+      ? conditionalSamples
+      : (highEntropyCoverage ? 0 : Math.max(0, Number(transitionModel?.transitionCount || 0)));
+    const localDistribution = new Map((localSource || []).map(item => [String(item.state), Number(item.probability || 0)]));
+    const globalCell = routeLearning?.routeTransitions?.[routeContextKey] || null;
+    const globalRows = normalizedOutcomeDistribution(globalCell, 8);
+    const globalDistribution = new Map(globalRows.map(item => [String(item.state), Number(item.probability || 0)]));
+    const candidateByDirection = new Map(staticCandidates.map(candidate => [candidate.directionState, candidate]));
+    for (const learned of [...(localSource || []), ...globalRows]) {
+      const state = String(learned.state || '');
+      if (!state || candidateByDirection.has(state)) continue;
+      const vector = movementDirectionVector(state);
+      candidateByDirection.set(state, {
+        hypothesis: `route-${state}`,
+        directionState: state,
+        x: state === 'stop' ? tx + vx * observationToExecutionTicks : tx + vector.x * reachable,
+        y: state === 'stop' ? ty + vy * observationToExecutionTicks : ty + vector.y * reachable,
+        probability: 0.04
       });
     }
+    const localWeight = Math.min(3, localSamples / 4);
+    const globalWeight = Math.min(4, Math.max(0, Number(globalCell?.samples || 0)) / 12);
+    let candidates = Array.from(candidateByDirection.values()).map(candidate => {
+      const localProbability = Number(localDistribution.get(candidate.directionState) || 0);
+      const globalProbability = Number(globalDistribution.get(candidate.directionState) || 0);
+      const priorProbability = Number(candidate.probability || 0);
+      const rawProbability = (priorProbability + localProbability * localWeight + globalProbability * globalWeight)
+        / Math.max(1, 1 + localWeight + globalWeight);
+      const feedback = routeLearning?.routeAimFeedback?.[routeFeedbackKey(routeContextKey, candidate.hypothesis)] || null;
+      const feedbackSamples = Math.max(0, Number(feedback?.samples || 0));
+      return {
+        ...candidate,
+        priorProbability,
+        localTransitionProbability: localProbability,
+        globalTransitionProbability: globalProbability,
+        localTransitionSamples: localSamples,
+        globalTransitionSamples: Math.max(0, Number(globalCell?.samples || 0)),
+        learnedHitRate: feedbackSamples >= 4
+          ? Math.max(0.02, Math.min(0.98, (Number(feedback?.hits || 0) + 1) / (feedbackSamples + 3)))
+          : null,
+        learnedMeanMissCm: feedbackSamples >= 4
+          ? Number(feedback?.missTotalCm || 0) / Math.max(1, feedbackSamples)
+          : null,
+        probability: Math.max(0.001, rawProbability),
+        shotStaminaCost: Math.max(1, Number(options.combatShotStaminaCostMs ?? 500)),
+        uncertaintyCm: Math.round(targetSpeed * leadTicks * Math.max(0.1, 1 - rawProbability))
+      };
+    });
+    const probabilityTotal = candidates.reduce((sum, candidate) => sum + Number(candidate.probability || 0), 0);
+    candidates = candidates.map(candidate => ({
+      ...candidate,
+      probability: probabilityTotal > 0 ? Number(candidate.probability || 0) / probabilityTotal : 0
+    }));
     const shotIndex = Math.max(0, Math.round(Number(options.actualShots || 0)));
     const rankedCandidates = candidates.slice().sort((a, b) => b.probability - a.probability);
-    const stopCandidate = candidates.find(item => item.hypothesis === 'stop') || rankedCandidates[0];
-    const explorationCandidate = rankedCandidates.find(item => item.hypothesis !== stopCandidate?.hypothesis) || null;
+    const primaryCandidate = rankedCandidates[0] || null;
+    const explorationCandidate = rankedCandidates[1] || null;
     const highEntropyExplore = Boolean(highEntropyCoverage && noDamageLevel >= 12 && shotIndex % 5 === 4 && explorationCandidate);
     const coverageSequence = highEntropyCoverage
-      ? [stopCandidate, ...(highEntropyExplore ? [explorationCandidate] : [])].filter(Boolean)
+      ? [primaryCandidate, ...(highEntropyExplore ? [explorationCandidate] : [])].filter(Boolean)
       : rankedCandidates.slice(0, 2);
     const selected = highEntropyCoverage
-      ? (highEntropyExplore ? explorationCandidate : stopCandidate)
+      ? (highEntropyExplore ? explorationCandidate : primaryCandidate)
       : coverageSequence[shotIndex % coverageSequence.length];
     if (selected && (highEntropyCoverage || noDamageWidened || scriptTransitionCoverage)) {
       x = selected.x;
@@ -700,21 +877,36 @@ function estimateAim(self, target, options = {}) {
           : (scriptTransitionCoverage ? 'script-transition-matrix' : 'predictable-top-routes'),
         selected: selected.hypothesis,
         sequence: coverageSequence.map(item => item.hypothesis),
-        candidates: candidates.map(item => ({
+        contextKey: routeContextKey,
+        phase: routePhase,
+        candidates: rankedCandidates.slice(0, 4).map(item => ({
           hypothesis: item.hypothesis,
           probability: item.probability,
           directionState: item.directionState || null,
-          transitionProbability: numberOrNull(item.transitionProbability),
+          priorProbability: item.priorProbability,
+          localTransitionProbability: item.localTransitionProbability,
+          globalTransitionProbability: item.globalTransitionProbability,
+          localTransitionSamples: item.localTransitionSamples,
+          globalTransitionSamples: item.globalTransitionSamples,
+          learnedHitRate: item.learnedHitRate,
+          learnedMeanMissCm: item.learnedMeanMissCm,
+          shotStaminaCost: item.shotStaminaCost,
+          uncertaintyCm: item.uncertaintyCm,
           x: Math.round(item.x),
           y: Math.round(item.y),
           physicallyReachable: Math.hypot(item.x - tx, item.y - ty) <= reachable + 1
         })),
-        movementTransition: scriptTransitionCoverage ? {
+        movementTransition: {
           currentState: transitionModel.currentState,
+          contextKey: routeContextKey,
+          phase: routePhase,
           transitionCount: transitionModel.transitionCount,
           confidence: transitionModel.confidence,
-          next: transitionModel.next.slice(0, 4)
-        } : null
+          conditionalSampleCount: transitionModel.conditionalSampleCount,
+          next: (localSource || []).slice(0, 4),
+          globalSamples: Math.max(0, Number(globalCell?.samples || 0)),
+          globalNext: globalRows.slice(0, 4)
+        }
       };
       motionProbe = {
         ...(motionProbe || {}),
@@ -726,6 +918,18 @@ function estimateAim(self, target, options = {}) {
   }
   const leadDistance = distanceBetween({ x: tx, y: ty }, { x, y });
   const confidence = Math.max(0.2, Math.min(1, (moving ? Number(intercept?.confidence || 0.55) * profile.aimConfidenceScale : 1) - Math.min(0.25, noDamageLevel * 0.04)));
+  if (routeCoverage?.candidates?.length) {
+    routeCoverage.candidates = routeCoverage.candidates.map(candidate => {
+      const calibratedAimConfidence = candidate.learnedHitRate === null
+        ? confidence
+        : Math.max(0.02, Math.min(1, confidence * 0.5 + Number(candidate.learnedHitRate) * 0.5));
+      return {
+        ...candidate,
+        aimConfidence: calibratedAimConfidence,
+        expectedHitProbability: Math.max(0, Math.min(1, Number(candidate.probability || 0) * calibratedAimConfidence))
+      };
+    });
+  }
   return {
     ok: true,
     x: Math.round(x),
@@ -1167,6 +1371,7 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
   const motionSamples = previousSamples
     .concat([{
       at: nowMs,
+      tick: numberOrNull(options.currentTick),
       x: Math.round(Number(target.x) || 0),
       y: Math.round(Number(target.y) || 0),
       vx: numberOrNull(target.vx),
@@ -1265,6 +1470,8 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
     ),
     self: summarizeCombatTarget(self)
   };
+  recordRouteTransitionObservation(stateful, id, opponentBehaviorState, nowMs);
+  finalizeCombatRouteFeedback(stateful, id, stateful.combatTarget, options.currentTick, nowMs, options);
   const threatBulletIds = Array.from(new Set([...(previousMetrics.threatBulletIds || []), ...targetBulletIds])).slice(-200);
   const initialStamina1d = Number(previousMetrics.initialStamina1d);
   const currentStamina1d = Number(self?.stamina_1d_remaining_milli ?? self?.stamina1dRemainingMilli);
@@ -1496,12 +1703,14 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     distance: target?.distance,
     nowMs: options.nowMs
   });
-  const selectedRouteProbability = aim.ok && aim.routeCoverage?.selected
-    ? numberOrNull(aim.routeCoverage.candidates?.find(candidate => candidate.hypothesis === aim.routeCoverage.selected)?.probability)
+  const selectedRoute = aim.ok && aim.routeCoverage?.selected
+    ? aim.routeCoverage.candidates?.find(candidate => candidate.hypothesis === aim.routeCoverage.selected) || null
     : null;
+  const selectedRouteProbability = numberOrNull(selectedRoute?.probability);
   const expectedHitProbability = selectedRouteProbability === null
     ? 0
-    : Math.max(0, Math.min(1, selectedRouteProbability * Math.max(0, Math.min(1, Number(aim.confidence || 0)))));
+    : Math.max(0, Math.min(1, Number(selectedRoute?.expectedHitProbability
+      ?? (selectedRouteProbability * Math.max(0, Math.min(1, Number(aim.confidence || 0)))))));
   const recentHitSummary = recentAcceptedShotHitSummary(stateful, combatTargetId(target), 15);
   const noProgressAcceptedShots = Math.max(
     0,

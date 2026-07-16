@@ -42,6 +42,18 @@ function validGenericLearningKey(key) {
   return /^movement=[^|]+\|shooting=[^|]+\|stamina=[^|]+\|style=[^|]+\|distance=[^|]+\|aim=[^|]+$/.test(String(key || ''));
 }
 
+function validRouteContextKey(key) {
+  return /^mode=[^|]+\|distance=[^|]+\|direction=[^|]+\|dwell=[^|]+\|speed=[^|]+\|radial=[^|]+\|lateral=[^|]+$/.test(String(key || ''));
+}
+
+function validRouteFeedbackKey(key) {
+  const text = String(key || '');
+  const marker = text.lastIndexOf('|candidate=');
+  return marker > 0
+    && validRouteContextKey(text.slice(0, marker))
+    && Boolean(text.slice(marker + '|candidate='.length));
+}
+
 function sanitizeStrategyLearning(value) {
   if (!value || typeof value !== 'object') return null;
   const hitRateByModeDistance = value.hitRateByModeDistance && typeof value.hitRateByModeDistance === 'object'
@@ -76,7 +88,38 @@ function sanitizeStrategyLearning(value) {
         updatedAt: numeric(cell.updatedAt)
       }]))
     : {};
-  return { hitRateByModeDistance, modeMetrics };
+  const routeTransitions = value.routeTransitions && typeof value.routeTransitions === 'object'
+    ? Object.fromEntries(Object.entries(value.routeTransitions)
+      .filter(([key, cell]) => validRouteContextKey(key)
+        && cell && typeof cell === 'object'
+        && numeric(cell.samples) >= 4)
+      .sort((a, b) => Number(b[1]?.updatedAt || 0) - Number(a[1]?.updatedAt || 0))
+      .slice(0, 256)
+      .map(([key, cell]) => [String(key), {
+        samples: numeric(cell.samples),
+        outcomes: Object.fromEntries(Object.entries(cell.outcomes || {})
+          .filter(([state, count]) => /^[a-z-]+$/.test(String(state)) && numeric(count) > 0)
+          .sort((a, b) => Number(b[1]) - Number(a[1]))
+          .slice(0, 9)
+          .map(([state, count]) => [String(state), numeric(count)])),
+        updatedAt: numeric(cell.updatedAt)
+      }]))
+    : {};
+  const routeAimFeedback = value.routeAimFeedback && typeof value.routeAimFeedback === 'object'
+    ? Object.fromEntries(Object.entries(value.routeAimFeedback)
+      .filter(([key, cell]) => validRouteFeedbackKey(key)
+        && cell && typeof cell === 'object'
+        && numeric(cell.samples) >= 4)
+      .sort((a, b) => Number(b[1]?.updatedAt || 0) - Number(a[1]?.updatedAt || 0))
+      .slice(0, 512)
+      .map(([key, cell]) => [String(key), {
+        samples: numeric(cell.samples),
+        hits: Math.min(numeric(cell.hits), numeric(cell.samples)),
+        missTotalCm: numeric(cell.missTotalCm),
+        updatedAt: numeric(cell.updatedAt)
+      }]))
+    : {};
+  return { hitRateByModeDistance, modeMetrics, routeTransitions, routeAimFeedback };
 }
 
 function readStore(file) {
@@ -277,5 +320,7 @@ module.exports = {
   SCHEMA_VERSION,
   createCombatCompletionTracker,
   sanitizeStrategyLearning,
-  validGenericLearningKey
+  validGenericLearningKey,
+  validRouteContextKey,
+  validRouteFeedbackKey
 };

@@ -921,7 +921,13 @@ function createBrowserlessActionAdapter(options = {}) {
       observedTick: numberOrNull(shotMeta.observedTick ?? state.latestObservedTick),
       aimMode: String(shotMeta.aimMode || ''),
       hypothesis: String(shotMeta.hypothesis || ''),
-      flightTicks: numberOrNull(shotMeta.flightTicks)
+      flightTicks: numberOrNull(shotMeta.flightTicks),
+      routeContextKey: String(shotMeta.routeContextKey || ''),
+      routeCandidate: String(shotMeta.routeCandidate || ''),
+      routeProbability: numberOrNull(shotMeta.routeProbability),
+      predictedDirectionState: String(shotMeta.predictedDirectionState || ''),
+      aimConfidence: numberOrNull(shotMeta.aimConfidence),
+      expectedHitProbability: numberOrNull(shotMeta.expectedHitProbability)
     };
     nextCommandId += 1;
     state.sentCount += 1;
@@ -941,7 +947,13 @@ function createBrowserlessActionAdapter(options = {}) {
           observedTick: command.observedTick,
           aimMode: command.aimMode,
           hypothesis: command.hypothesis,
-          flightTicks: command.flightTicks
+          flightTicks: command.flightTicks,
+          routeContextKey: command.routeContextKey,
+          routeCandidate: command.routeCandidate,
+          routeProbability: command.routeProbability,
+          predictedDirectionState: command.predictedDirectionState,
+          aimConfidence: command.aimConfidence,
+          expectedHitProbability: command.expectedHitProbability
         });
       } catch (_) {}
     }
@@ -1478,7 +1490,13 @@ function createBrowserlessActionAdapter(options = {}) {
             observedTick: combat.timing?.observedTick ?? combat.tick,
             aimMode: combat.aim?.mode,
             hypothesis: combat.aim?.motionProbe?.hypothesis,
-            flightTicks: combat.aim?.flightTicks
+            flightTicks: combat.aim?.flightTicks,
+            routeContextKey: combat.aim?.routeCoverage?.contextKey,
+            routeCandidate: combat.aim?.routeCoverage?.selected,
+            routeProbability: combat.shooting?.selectedRouteProbability,
+            predictedDirectionState: combat.aim?.routeCoverage?.candidates?.find(candidate => candidate.hypothesis === combat.aim?.routeCoverage?.selected)?.directionState,
+            aimConfidence: combat.aim?.confidence,
+            expectedHitProbability: combat.shooting?.expectedHitProbability
           }
         );
       }

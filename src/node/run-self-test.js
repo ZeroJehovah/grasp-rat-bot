@@ -90,7 +90,10 @@ const {
   estimateAim,
   recordCombatShotLearning
 } = require('./browserless/combat-adapter');
-const { updateOpponentBehaviorStateCore } = require('../strategy/opponent-behavior');
+const {
+  movementTransitionModelCore,
+  updateOpponentBehaviorStateCore
+} = require('../strategy/opponent-behavior');
 const { evaluateHighEntropyFireGateCore } = require('../strategy/combat-fire-discipline');
 const {
   actionSettlementStallAssessment,
@@ -6655,6 +6658,28 @@ async function runSelfTest() {
             'movement=retreat|shooting=burst|stamina=high|style=human-like|distance=edge|aim=all': { shots: 12, hits: 1, targetId: 8, updatedAt: 3000 },
             'retreat:edge': { shots: 99, targetId: 8, updatedAt: 4000 }
           },
+          routeTransitions: {
+            'mode=zigzag-strafe|distance=far|direction=east|dwell=settled|speed=fast|radial=stable|lateral=right': {
+              samples: 5,
+              outcomes: { north: 4, east: 1 },
+              targetId: 8,
+              updatedAt: 5000
+            },
+            'mode=zigzag-strafe|distance=far|direction=west|dwell=new|speed=fast|radial=stable|lateral=left': {
+              samples: 3,
+              outcomes: { south: 3 },
+              updatedAt: 5000
+            }
+          },
+          routeAimFeedback: {
+            'mode=zigzag-strafe|distance=far|direction=east|dwell=settled|speed=fast|radial=stable|lateral=right|candidate=right-turn': {
+              samples: 6,
+              hits: 2,
+              missTotalCm: 900,
+              targetId: 8,
+              updatedAt: 5000
+            }
+          },
           lastTotalsByTarget: { 8: { targetId: 8 } },
           recentShots: [{ targetId: 8, bulletId: 99 }],
           acceptedBulletIds: ['99']
@@ -6681,11 +6706,15 @@ async function runSelfTest() {
           reloaded.strategyLearning()?.modeMetrics?.['movement=retreat|shooting=burst|stamina=high|style=human-like|distance=edge|aim=all']?.shots,
           reloaded.strategyLearning()?.modeMetrics?.['movement=retreat|shooting=burst|stamina=high|style=human-like|distance=edge|aim=all']?.targetId === undefined,
           reloaded.strategyLearning()?.modeMetrics?.['retreat:edge'] === undefined,
+          reloaded.strategyLearning()?.routeTransitions?.['mode=zigzag-strafe|distance=far|direction=east|dwell=settled|speed=fast|radial=stable|lateral=right']?.samples,
+          reloaded.strategyLearning()?.routeTransitions?.['mode=zigzag-strafe|distance=far|direction=east|dwell=settled|speed=fast|radial=stable|lateral=right']?.targetId === undefined,
+          reloaded.strategyLearning()?.routeTransitions?.['mode=zigzag-strafe|distance=far|direction=west|dwell=new|speed=fast|radial=stable|lateral=left'] === undefined,
+          reloaded.strategyLearning()?.routeAimFeedback?.['mode=zigzag-strafe|distance=far|direction=east|dwell=settled|speed=fast|radial=stable|lateral=right|candidate=right-turn']?.hits,
           Object.keys(reloaded.strategyLearning() || {}).sort().join(','),
           reloaded.status().schemaVersion
         ].join('|');
       })(),
-      want: 'true|true|hitRateByModeDistance,modeMetrics|true|true|true|true|true|true|true|true|true|stable-user-completion-history|12|true|true|hitRateByModeDistance,modeMetrics|2'
+      want: 'true|true|hitRateByModeDistance,modeMetrics,routeAimFeedback,routeTransitions|true|true|true|true|true|true|true|true|true|stable-user-completion-history|12|true|true|5|true|true|2|hitRateByModeDistance,modeMetrics,routeAimFeedback,routeTransitions|2'
     },
     {
       name: 'browserless runtime revision resolves directly from Git metadata without repository trust',
@@ -12776,6 +12805,61 @@ async function runSelfTest() {
       want: '102|2|1|3'
     },
     {
+      name: 'browserless confirmed route shot records actual direction arrival miss and generic feedback',
+      got: (() => {
+        const stateful = {};
+        const contextKey = 'mode=zigzag-strafe|distance=far|direction=east|dwell=settled|speed=fast|radial=stable|lateral=center';
+        const confirmed = [{
+          targetId: '8',
+          bullet_id: 201,
+          acceptedAtMs: 1000,
+          createdTick: 100,
+          flightTicks: 5,
+          targetX: 8000,
+          targetY: -100,
+          hypothesis: 'right-turn',
+          routeContextKey: contextKey,
+          routeCandidate: 'right-turn',
+          routeProbability: 0.7,
+          predictedDirectionState: 'north',
+          aimConfidence: 0.6,
+          expectedHitProbability: 0.42
+        }];
+        const stateAt = (tick, nowMs, x, y, vx, vy, hp) => ({
+          userId: 7,
+          realtime: {
+            tick,
+            self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
+            entities: [
+              { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
+              { entity_id: 2, user_id: 8, name: 'route-target', x, y, vx, vy, hp, current_join_mode: 'Active', firing: true }
+            ],
+            bullets: []
+          },
+          command: { shooting: { confirmedShots: confirmed } },
+          nowMs
+        });
+        buildBrowserlessCombatDryRun(stateAt(100, 1000, 8000, 0, 50, 0, 100), { nowMs: 1000, decisionState: stateful, combatEnabled: true });
+        buildBrowserlessCombatDryRun(stateAt(105, 1250, 8000, -100, 0, -50, 100), { nowMs: 1250, decisionState: stateful, combatEnabled: true });
+        buildBrowserlessCombatDryRun(stateAt(117, 1850, 8000, -700, 0, -50, 97), { nowMs: 1850, decisionState: stateful, combatEnabled: true });
+        const shot = stateful.combatLearning.recentShots.find(item => item.bulletId === '201');
+        const feedback = stateful.combatLearning.routeAimFeedback[`${contextKey}|candidate=right-turn`];
+        return [
+          shot.routeFeedbackFinalized,
+          shot.predictedDirectionState,
+          shot.actualDirectionState,
+          Math.round(shot.arrivalMissCm),
+          shot.routeProbability,
+          shot.expectedHitProbability,
+          feedback.samples,
+          feedback.hits,
+          Object.keys(stateful.combatLearning.routeTransitions).length > 0,
+          Object.keys(stateful.combatLearning.routeTransitions).every(key => !key.includes('route-target') && !key.includes('user:8'))
+        ].join('|');
+      })(),
+      want: 'true|north|north|0|0.7|0.42|1|1|true|true'
+    },
+    {
       name: 'browserless incoming shooter overrides engaged combat target',
       got: (() => {
         const stateful = {
@@ -13126,6 +13210,104 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'script-transition-matrix|right-turn|east|north'
+    },
+    {
+      name: 'browserless movement route model conditions next direction on current action phase',
+      got: (() => {
+        const samples = [
+          { at: 1000, selfX: 0, selfY: 0, x: 7000, y: 0, vx: 50, vy: 0, distance: 7000 },
+          { at: 1200, selfX: 0, selfY: 0, x: 7050, y: 0, vx: 50, vy: 0, distance: 7050 },
+          { at: 1400, selfX: 0, selfY: 0, x: 7100, y: 0, vx: 0, vy: -50, distance: 7100 },
+          { at: 1600, selfX: 0, selfY: 0, x: 7100, y: -50, vx: 0, vy: -50, distance: 7100 },
+          { at: 1800, selfX: 0, selfY: 0, x: 7100, y: -100, vx: 50, vy: 0, distance: 7101 },
+          { at: 2000, selfX: 0, selfY: 0, x: 7150, y: -100, vx: 50, vy: 0, distance: 7151 }
+        ];
+        const model = movementTransitionModelCore(samples, { mode: 'zigzag-strafe', serverTickMs: 50 });
+        return [
+          model.phase.currentDirection,
+          model.phase.dwellTicks,
+          model.phase.dwellBand,
+          model.phase.speedBand,
+          model.phase.radialRelation,
+          model.contextKey.includes('mode=zigzag-strafe'),
+          model.contextKey.includes('direction=east'),
+          model.conditionalSampleCount,
+          model.conditionalNext[0]?.state,
+          model.conditionalNext.some(item => item.state === 'north' && item.probability > 0)
+        ].join('|');
+      })(),
+      want: 'east|4|new|fast|receding|true|true|3|east|true'
+    },
+    {
+      name: 'browserless shared route learning selects a bounded conditional route with calibrated hit probability',
+      got: (() => {
+        const contextKey = 'mode=zigzag-strafe|distance=far|direction=east|dwell=settled|speed=fast|radial=stable|lateral=center';
+        const aim = estimateAim(
+          { user_id: 7, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
+          { user_id: 8, x: 8000, y: 0, vx: 50, vy: 0, hp: 80, active: true },
+          {
+            decisionState: {
+              combatLearning: {
+                routeTransitions: {
+                  [contextKey]: { samples: 20, outcomes: { north: 18, east: 2 }, updatedAt: 1000 }
+                },
+                routeAimFeedback: {
+                  [`${contextKey}|candidate=right-turn`]: { samples: 8, hits: 4, missTotalCm: 800, updatedAt: 1000 }
+                }
+              }
+            },
+            combatTargetState: {
+              noDamageMs: 12000,
+              motionSamples: Array.from({ length: 24 }, (_, index) => ({
+                at: 1000 + index * 200,
+                selfX: 0,
+                selfY: 0,
+                x: 7000 + index * 50,
+                y: 0,
+                vx: 50,
+                vy: 0,
+                distance: 7000 + index * 50
+              })),
+              opponentBehaviorState: {
+                mode: 'zigzag-strafe',
+                dimensions: { controlStyle: { state: 'human-like', confidence: 0.9 } },
+                metrics: {
+                  movementPhase: {
+                    currentDirection: 'east',
+                    dwellBand: 'settled',
+                    speedBand: 'fast',
+                    radialRelation: 'stable',
+                    lateralRelation: 'center',
+                    distanceBand: 'far'
+                  },
+                  movementTransitions: {
+                    currentState: 'east',
+                    contextKey,
+                    conditionalSampleCount: 0,
+                    conditionalNext: [],
+                    transitionCount: 0,
+                    next: []
+                  }
+                }
+              }
+            },
+            executionTiming: { medianTicks: 5, p90Ticks: 9, madTicks: 1, source: 'test' },
+            actualShots: 0
+          }
+        );
+        const selected = aim.routeCoverage?.candidates?.find(item => item.hypothesis === aim.routeCoverage?.selected);
+        return [
+          aim.routeCoverage?.selected,
+          aim.routeCoverage?.candidates?.length,
+          aim.routeCoverage?.contextKey === contextKey,
+          selected?.directionState,
+          selected?.globalTransitionSamples,
+          selected?.learnedHitRate > 0,
+          selected?.expectedHitProbability > 0,
+          selected?.shotStaminaCost
+        ].join('|');
+      })(),
+      want: 'right-turn|4|true|north|20|true|true|500'
     },
     {
       name: 'browserless high-entropy aim uses robust stop with bounded exploration',

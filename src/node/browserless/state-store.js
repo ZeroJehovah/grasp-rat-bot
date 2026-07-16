@@ -372,7 +372,13 @@ function createBrowserlessStateStore(options = {}) {
       observedTick: numericOrNull(request.observedTick),
       aimMode: String(request.aimMode || ''),
       hypothesis: String(request.hypothesis || ''),
-      flightTicks: numericOrNull(request.flightTicks)
+      flightTicks: numericOrNull(request.flightTicks),
+      routeContextKey: String(request.routeContextKey || ''),
+      routeCandidate: String(request.routeCandidate || ''),
+      routeProbability: numericOrNull(request.routeProbability),
+      predictedDirectionState: String(request.predictedDirectionState || ''),
+      aimConfidence: numericOrNull(request.aimConfidence),
+      expectedHitProbability: numericOrNull(request.expectedHitProbability)
     };
     state.command.requestedShots += 1;
     state.command.pendingShots.push(shot);

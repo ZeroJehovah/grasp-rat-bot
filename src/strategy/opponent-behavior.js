@@ -196,16 +196,112 @@ function movementDirectionVector(state) {
   })[String(state)] || { x: 0, y: 0 };
 }
 
+function movementSpeedBand(speed, options = {}) {
+  const value = Math.max(0, Number(speed) || 0);
+  const stationarySpeed = Math.max(0, Number(options.stationarySpeed ?? 5));
+  const referenceSpeed = Math.max(stationarySpeed + 1, Number(options.referenceSpeed ?? 50));
+  if (value < stationarySpeed) return 'stopped';
+  if (value < referenceSpeed * 0.45) return 'slow';
+  if (value < referenceSpeed * 0.85) return 'cruise';
+  return 'fast';
+}
+
+function movementDwellBand(dwellTicks) {
+  const value = Math.max(0, Number(dwellTicks) || 0);
+  if (value < 6) return 'new';
+  if (value < 20) return 'settled';
+  return 'long';
+}
+
+function movementActionPhaseFromSample(sample = {}, dwellMs = 0, options = {}) {
+  const stationarySpeed = Math.max(0, Number(options.stationarySpeed ?? 5));
+  const serverTickMs = Math.max(1, Number(options.serverTickMs ?? 50));
+  const vx = Number(sample.vx) || 0;
+  const vy = Number(sample.vy) || 0;
+  const speed = Math.hypot(vx, vy);
+  const dx = Number(sample.x) - Number(sample.selfX || 0);
+  const dy = Number(sample.y) - Number(sample.selfY || 0);
+  const distance = Math.max(1, Math.hypot(dx, dy));
+  const radialSpeed = dx / distance * vx + dy / distance * vy;
+  const lateralSpeed = dx / distance * vy - dy / distance * vx;
+  const relationThreshold = Math.max(2, Number(options.relationSpeedThreshold ?? stationarySpeed));
+  const dwellTicks = Math.max(0, dwellMs / serverTickMs);
+  return {
+    currentDirection: movementDirectionState(vx, vy, stationarySpeed),
+    currentDirectionVector: movementDirectionVector(movementDirectionState(vx, vy, stationarySpeed)),
+    dwellMs: Math.round(Math.max(0, dwellMs)),
+    dwellTicks: Math.round(dwellTicks * 10) / 10,
+    dwellBand: movementDwellBand(dwellTicks),
+    ticksSinceTurn: Math.round(dwellTicks * 10) / 10,
+    speed: Math.round(speed * 100) / 100,
+    speedBand: movementSpeedBand(speed, options),
+    radialSpeed: Math.round(radialSpeed * 100) / 100,
+    radialRelation: radialSpeed > relationThreshold
+      ? 'receding'
+      : (radialSpeed < -relationThreshold ? 'closing' : 'stable'),
+    lateralSpeed: Math.round(lateralSpeed * 100) / 100,
+    lateralRelation: lateralSpeed > relationThreshold
+      ? 'right'
+      : (lateralSpeed < -relationThreshold ? 'left' : 'center'),
+    distanceBand: behaviorDistanceBand(sampleDistance(sample))
+  };
+}
+
+function movementActionPhaseCore(samples = [], options = {}) {
+  const history = (samples || []).filter(Boolean);
+  const last = history.at(-1);
+  if (!last) return movementActionPhaseFromSample({}, 0, options);
+  const stationarySpeed = Math.max(0, Number(options.stationarySpeed ?? 5));
+  const currentDirection = movementDirectionState(last.vx, last.vy, stationarySpeed);
+  let directionSinceAt = Number(last.at || 0);
+  for (let index = history.length - 2; index >= 0; index -= 1) {
+    const sample = history[index];
+    if (movementDirectionState(sample?.vx, sample?.vy, stationarySpeed) !== currentDirection) break;
+    directionSinceAt = Number(sample?.at || directionSinceAt);
+  }
+  return movementActionPhaseFromSample(
+    last,
+    Math.max(0, Number(last.at || 0) - directionSinceAt),
+    options
+  );
+}
+
+function movementRouteContextKeyCore(behavior, distance, phase = {}) {
+  const mode = String(behavior?.mode || behavior || 'mixed/unknown');
+  return [
+    `mode=${mode}`,
+    `distance=${phase.distanceBand || behaviorDistanceBand(distance)}`,
+    `direction=${phase.currentDirection || 'stop'}`,
+    `dwell=${phase.dwellBand || movementDwellBand(phase.dwellTicks)}`,
+    `speed=${phase.speedBand || 'stopped'}`,
+    `radial=${phase.radialRelation || 'stable'}`,
+    `lateral=${phase.lateralRelation || 'center'}`
+  ].join('|');
+}
+
 function movementTransitionModelCore(samples = [], options = {}) {
   const stationarySpeed = Math.max(0, Number(options.stationarySpeed ?? 5));
-  const states = (samples || []).map(sample => movementDirectionState(sample?.vx, sample?.vy, stationarySpeed));
+  const history = (samples || []).filter(Boolean);
+  const states = history.map(sample => movementDirectionState(sample?.vx, sample?.vy, stationarySpeed));
   const counts = {};
+  const conditionalCounts = {};
   let transitionCount = 0;
+  let directionSinceAt = Number(history[0]?.at || 0);
   for (let index = 1; index < states.length; index += 1) {
     const from = states[index - 1];
     const to = states[index];
     if (!counts[from]) counts[from] = {};
     counts[from][to] = Number(counts[from][to] || 0) + 1;
+    if (index > 1 && from !== states[index - 2]) directionSinceAt = Number(history[index - 1]?.at || directionSinceAt);
+    const previousSample = history[index - 1] || {};
+    const phase = movementActionPhaseFromSample(
+      previousSample,
+      Math.max(0, Number(previousSample.at || 0) - directionSinceAt),
+      options
+    );
+    const contextKey = movementRouteContextKeyCore(options.mode || 'mixed/unknown', sampleDistance(previousSample), phase);
+    if (!conditionalCounts[contextKey]) conditionalCounts[contextKey] = {};
+    conditionalCounts[contextKey][to] = Number(conditionalCounts[contextKey][to] || 0) + 1;
     transitionCount += 1;
   }
   const matrix = {};
@@ -216,6 +312,18 @@ function movementTransitionModelCore(samples = [], options = {}) {
       .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])));
   }
   const currentState = states[states.length - 1] || 'stop';
+  const phase = movementActionPhaseCore(history, options);
+  const contextKey = movementRouteContextKeyCore(options.mode || 'mixed/unknown', sampleDistance(history.at(-1)), phase);
+  const conditionalRow = conditionalCounts[contextKey] || {};
+  const conditionalTotal = Object.values(conditionalRow).reduce((sum, value) => sum + Number(value || 0), 0);
+  const conditionalNext = Object.entries(conditionalRow)
+    .map(([state, count]) => ({
+      state,
+      count: Number(count || 0),
+      probability: conditionalTotal > 0 ? Number(count) / conditionalTotal : 0,
+      vector: movementDirectionVector(state)
+    }))
+    .sort((a, b) => b.probability - a.probability || a.state.localeCompare(b.state));
   const next = Object.entries(matrix[currentState] || {})
     .map(([state, probability]) => ({ state, probability, vector: movementDirectionVector(state) }))
     .sort((a, b) => b.probability - a.probability || a.state.localeCompare(b.state));
@@ -228,6 +336,10 @@ function movementTransitionModelCore(samples = [], options = {}) {
   return {
     states: MOVEMENT_DIRECTION_STATES,
     currentState,
+    phase,
+    contextKey,
+    conditionalSampleCount: conditionalTotal,
+    conditionalNext,
     transitionCount,
     matrix,
     next,
@@ -803,6 +915,11 @@ function updateOpponentBehaviorStateCore(previous = null, sample = {}, options =
       transitionReason = `candidate:${classified.mode}:${classified.reason}`;
     }
   }
+  metrics.movementTransitions = movementTransitionModelCore(samples, {
+    ...options,
+    mode
+  });
+  metrics.movementPhase = metrics.movementTransitions.phase;
   let progressAt = Number(prior?.progressAt || since || nowMs);
   let progressDistance = numberOrNull(prior?.progressDistance);
   const distance = sampleDistance(sample);
@@ -868,6 +985,10 @@ module.exports = {
   classifyOpponentBehaviorCore,
   movementDirectionState,
   movementDirectionVector,
+  movementActionPhaseCore,
+  movementDwellBand,
+  movementRouteContextKeyCore,
+  movementSpeedBand,
   movementTransitionModelCore,
   opponentBehaviorMetricsCore,
   opponentResponsePolicyCore,

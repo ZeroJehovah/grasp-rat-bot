@@ -431,6 +431,7 @@ function replayCombat(options) {
     ]));
     baselineMisses.push(baselineMiss);
     improvedMisses.push(improvedMiss);
+    const selectedRoute = improved.routeCoverage?.candidates?.find(candidate => candidate.hypothesis === improved.routeCoverage?.selected) || null;
     shotEvaluations.push({
       shot,
       baselineMiss,
@@ -439,7 +440,10 @@ function replayCombat(options) {
       hypothesis: improved.motionProbe?.hypothesis || 'baseline',
       routeStyle: improved.routeCoverage?.style || '',
       aimConfidence: Number(improved.confidence || 0),
-      selectedRouteProbability: Number(improved.routeCoverage?.candidates?.find(candidate => candidate.hypothesis === improved.routeCoverage?.selected)?.probability || 0),
+      selectedRouteProbability: Number(selectedRoute?.probability || 0),
+      expectedHitProbability: Number(selectedRoute?.expectedHitProbability
+        ?? (Number(selectedRoute?.probability || 0) * Number(improved.confidence || 0))),
+      routeContextKey: String(improved.routeCoverage?.contextKey || ''),
       selfHp: Number(row.detail.self?.hp),
       targetHp: Number(row.detail.target?.hp),
       defensivePressure: Boolean(
@@ -508,9 +512,8 @@ function replayCombat(options) {
   for (const item of shotEvaluations) {
     const recent = recentAllowed.slice(-15);
     const recentHits = recent.filter(shot => shot.credited).length;
-    const expectedHitProbability = Math.max(0, Math.min(1,
-      Number(item.selectedRouteProbability || 0) * Math.max(0, Math.min(1, Number(item.aimConfidence || 0)))
-    ));
+    const expectedHitProbability = Math.max(0, Math.min(1, Number(item.expectedHitProbability
+      ?? (Number(item.selectedRouteProbability || 0) * Math.max(0, Math.min(1, Number(item.aimConfidence || 0)))))));
     const gate = evaluateHighEntropyFireGateCore({
       expectedHitProbability,
       recentHitRate: recent.length ? recentHits / recent.length : 0,
