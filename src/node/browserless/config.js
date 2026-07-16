@@ -37,9 +37,14 @@ const DEFAULTS = {
   httpTimeoutMs: 10000,
   decisionIntervalMs: 1000,
   loopDelayMs: 30000,
-  dailyFirstLoginDelayMs: 120000,
-  loginPointSafetySuccessRequired: 3,
+  dailyFirstLoginDelayMs: 0,
+  loginPointSafetySuccessRequired: 1,
   loginPointSafetyProbeIntervalMs: 30000,
+  snapshotEdgeEnabled: true,
+  snapshotEdgeIntervalMs: 10000,
+  snapshotEdgeMaxWaitMs: 60000,
+  snapshotEdgeMaxErrors: 3,
+  snapshotEdgeBackoffMs: 60000,
   staleSelfMs: 3000,
   staleSelfConfirmMs: 2000,
   noSelfGraceMs: 3000,
@@ -150,6 +155,11 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
     dailyFirstLoginDelayMs: numberEnv(env.GRASP_RAT_BROWSERLESS_DAILY_FIRST_LOGIN_DELAY_MS, DEFAULTS.dailyFirstLoginDelayMs),
     loginPointSafetySuccessRequired: numberEnv(env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_SAFETY_SUCCESS_REQUIRED, DEFAULTS.loginPointSafetySuccessRequired),
     loginPointSafetyProbeIntervalMs: numberEnv(env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_SAFETY_PROBE_INTERVAL_MS, DEFAULTS.loginPointSafetyProbeIntervalMs),
+    snapshotEdgeEnabled: boolEnv(env.GRASP_RAT_BROWSERLESS_SNAPSHOT_EDGE_ENABLED, DEFAULTS.snapshotEdgeEnabled),
+    snapshotEdgeIntervalMs: numberEnv(env.GRASP_RAT_BROWSERLESS_SNAPSHOT_EDGE_INTERVAL_MS, DEFAULTS.snapshotEdgeIntervalMs),
+    snapshotEdgeMaxWaitMs: numberEnv(env.GRASP_RAT_BROWSERLESS_SNAPSHOT_EDGE_MAX_WAIT_MS, DEFAULTS.snapshotEdgeMaxWaitMs),
+    snapshotEdgeMaxErrors: numberEnv(env.GRASP_RAT_BROWSERLESS_SNAPSHOT_EDGE_MAX_ERRORS, DEFAULTS.snapshotEdgeMaxErrors),
+    snapshotEdgeBackoffMs: numberEnv(env.GRASP_RAT_BROWSERLESS_SNAPSHOT_EDGE_BACKOFF_MS, DEFAULTS.snapshotEdgeBackoffMs),
     staleSelfMs: numberEnv(env.GRASP_RAT_BROWSERLESS_STALE_SELF_MS, DEFAULTS.staleSelfMs),
     staleSelfConfirmMs: numberEnv(env.GRASP_RAT_BROWSERLESS_STALE_SELF_CONFIRM_MS, DEFAULTS.staleSelfConfirmMs),
     noSelfGraceMs: numberEnv(env.GRASP_RAT_BROWSERLESS_NO_SELF_GRACE_MS, DEFAULTS.noSelfGraceMs),
@@ -270,6 +280,18 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
       config.loginPointSafetySuccessRequired = numberEnv(argv[++i], config.loginPointSafetySuccessRequired);
     } else if (arg === '--login-point-safety-probe-interval-ms') {
       config.loginPointSafetyProbeIntervalMs = numberEnv(argv[++i], config.loginPointSafetyProbeIntervalMs);
+    } else if (arg === '--snapshot-edge-enabled') {
+      config.snapshotEdgeEnabled = true;
+    } else if (arg === '--no-snapshot-edge-enabled') {
+      config.snapshotEdgeEnabled = false;
+    } else if (arg === '--snapshot-edge-interval-ms') {
+      config.snapshotEdgeIntervalMs = numberEnv(argv[++i], config.snapshotEdgeIntervalMs);
+    } else if (arg === '--snapshot-edge-max-wait-ms') {
+      config.snapshotEdgeMaxWaitMs = numberEnv(argv[++i], config.snapshotEdgeMaxWaitMs);
+    } else if (arg === '--snapshot-edge-max-errors') {
+      config.snapshotEdgeMaxErrors = numberEnv(argv[++i], config.snapshotEdgeMaxErrors);
+    } else if (arg === '--snapshot-edge-backoff-ms') {
+      config.snapshotEdgeBackoffMs = numberEnv(argv[++i], config.snapshotEdgeBackoffMs);
     } else if (arg === '--stale-self-ms') {
       config.staleSelfMs = numberEnv(argv[++i], config.staleSelfMs);
     } else if (arg === '--stale-self-confirm-ms') {
@@ -382,9 +404,14 @@ function usage() {
     '  --target-whitelist-file <file> Local whitelist fallback. Default: ./dist/target-whitelist.json',
     '  --decision-interval-ms <ms>  Dry-run decision log/status interval. Default: 1000',
     '  --loop-delay-ms <ms>    Delay before the next non-once live cycle after recoverable exit. Default: 30000',
-    '  --daily-first-login-delay-ms <ms>  Earliest UTC+8 daily first login after midnight. Default: 120000',
-    '  --login-point-safety-success-required <n>  Consecutive safe snapshot checks before entering. Default: 3',
+    '  --daily-first-login-delay-ms <ms>  Earliest UTC+8 daily first login after midnight. Default: 0',
+    '  --login-point-safety-success-required <n>  Legacy consecutive checks when snapshot edge mode is disabled. Default: 1',
     '  --login-point-safety-probe-interval-ms <ms>  Delay between those checks. Default: 30000',
+    '  --[no-]snapshot-edge-enabled  Wait for a post-baseline snapshot version and evaluate it once. Default: enabled',
+    '  --snapshot-edge-interval-ms <ms>  Snapshot version probe interval. Default: 10000',
+    '  --snapshot-edge-max-wait-ms <ms>  Maximum active edge-probe window. Default: 60000',
+    '  --snapshot-edge-max-errors <n>  Consecutive edge-probe errors before backoff. Default: 3',
+    '  --snapshot-edge-backoff-ms <ms>  Backoff after edge timeout/error limit. Default: 60000',
     '  --stale-self-ms <ms>      Safety stale-self threshold. Default: 3000',
     '  --stale-self-confirm-ms <ms>  Extra stale-self confirmation window before leave. Default: 2000',
     '  --no-self-grace-ms <ms>   Safety no-self grace window. Default: 3000',

@@ -6088,6 +6088,96 @@ async function runSelfTest() {
       want: 'false|snapshot-probe-error|0|2|2|probe transport failed'
     },
     {
+      name: 'browserless snapshot edge reuses the first newer response for one safety evaluation',
+      got: (async () => {
+        let nowMs = Date.parse('2026-07-16T01:00:00.000Z');
+        let calls = 0;
+        const ticks = [100, 100, 101];
+        const progress = [];
+        const result = await runPreLoginSnapshotSafety({
+          gameOrigin: 'https://example.test',
+          snapshotPath: '/snapshot',
+          userId: 7,
+          sessionToken: 'secret',
+          httpTimeoutMs: 1000,
+          snapshotEdgeEnabled: true,
+          snapshotEdgeIntervalMs: 10000,
+          snapshotEdgeMaxWaitMs: 60000,
+          snapshotEdgeMaxErrors: 3
+        }, {
+          loginPointSafety: { point: { x: 0, y: 0, hp: 100, source: 'test' } }
+        }, {
+          now: () => nowMs,
+          sleep: async ms => { nowMs += ms; },
+          onSnapshotEdge: value => progress.push(value.type),
+          fetchWithTimeout: async () => {
+            const tick = ticks[calls++];
+            return fakeResponseForTest({
+              status: 200,
+              body: { type: 'snapshot', tick, entities: [], bullets: [], coin_drops: [], messages: [] }
+            });
+          }
+        });
+        return [
+          result.ok,
+          result.reason,
+          calls,
+          result.edge.requestCount,
+          result.edge.safetyEvaluationCount,
+          result.edge.baseline.tick,
+          result.edge.detected.tick,
+          progress.join(',')
+        ].join('|');
+      })(),
+      want: 'true|safe|3|3|1|100|101|baseline,probe,detected'
+    },
+    {
+      name: 'browserless snapshot edge treats newer self presence as immediate recovery evidence',
+      got: (async () => {
+        let nowMs = Date.parse('2026-07-16T01:00:00.000Z');
+        let calls = 0;
+        const result = await runPreLoginSnapshotSafety({
+          gameOrigin: 'https://example.test',
+          snapshotPath: '/snapshot',
+          userId: 7,
+          sessionToken: 'secret',
+          httpTimeoutMs: 1000,
+          snapshotEdgeEnabled: true,
+          snapshotEdgeIntervalMs: 10000,
+          snapshotEdgeMaxWaitMs: 60000
+        }, {
+          loginPointSafety: { point: { x: 0, y: 0, hp: 100, source: 'test' } },
+          runner: {
+            confirmedLeave: {
+              confirmedAt: new Date(nowMs).toISOString(),
+              snapshotIgnoreUntil: new Date(nowMs + 40000).toISOString(),
+              lastRealtimeTick: 100,
+              runId: 'edge-self-present-test'
+            }
+          }
+        }, {
+          now: () => nowMs,
+          sleep: async ms => { nowMs += ms; },
+          fetchWithTimeout: async () => {
+            calls += 1;
+            return fakeResponseForTest({
+              status: 200,
+              body: {
+                type: 'snapshot',
+                tick: calls === 1 ? 100 : 101,
+                entities: calls === 1 ? [] : [{ user_id: 7, x: 0, y: 0, hp: 79, life: 'Alive', joined: 'InGame', current_join_mode: 'Active' }],
+                bullets: [],
+                coin_drops: [],
+                messages: []
+              }
+            });
+          }
+        });
+        return [result.ok, result.reason, result.bypassedPreLoginSafety, calls, result.edge.safetyEvaluationCount].join('|');
+      })(),
+      want: 'true|self-present-reentry|true|2|1'
+    },
+    {
       name: 'browserless confirmed leave quarantines cached self and requires a newer tick',
       got: (async () => {
         const baseMs = Date.parse('2026-07-14T01:00:00.000Z');
@@ -19773,7 +19863,7 @@ async function runSelfTest() {
       want: 'explicit-stop|1|1|500|1|3000|500|explicit-stop'
     },
     {
-      name: 'browserless runner bypasses precheck for first login after daily reset',
+      name: 'browserless runner keeps explicit stamina delay and checks first login after daily reset',
       got: withTempDirForTest(async dir => {
         let t = Date.parse('2026-07-12T15:59:10.000Z');
         let precheckCalls = 0;
@@ -19852,7 +19942,7 @@ async function runSelfTest() {
           }, Date.parse('2026-07-12T16:00:10.000Z'))
         ].join('|');
       }),
-      want: 'explicit-stop|1|170000|daily-first-login-invulnerability|true'
+      want: 'explicit-stop|1|60000||true'
     },
     {
       name: 'browserless runner prepares login point safety during reconnect wait',
@@ -19930,10 +20020,10 @@ async function runSelfTest() {
           preLoginSafetyLeadMs(config)
         ].join('|');
       }),
-      want: 'explicit-stop|2|1|60000|safe|60000'
+      want: 'explicit-stop|2|1|60000|safe|0'
     },
     {
-      name: 'browserless runner waits through confirmed-leave quarantine before newer self reentry',
+      name: 'browserless runner immediately checks a new snapshot after confirmed leave',
       got: withTempDirForTest(async dir => {
         let t = Date.parse('2026-07-12T17:00:00.000Z');
         let canaryCalls = 0;
@@ -20029,7 +20119,7 @@ async function runSelfTest() {
           /\"tick\":300/.test(text)
         ].join('|');
       }),
-      want: 'explicit-stop|2|1|40000|true|true|true|true'
+      want: 'explicit-stop|2|1|0|true|true|true|true'
     },
     {
       name: 'browserless runner does not resume from stale self after confirmed leave',
@@ -20123,7 +20213,7 @@ async function runSelfTest() {
           /stale-confirmed-leave-snapshot-tick/.test(text)
         ].join('|');
       }),
-      want: 'explicit-stop|2|1|100000|stale-confirmed-leave-snapshot-tick|false|true'
+      want: 'explicit-stop|2|1|0|stale-confirmed-leave-snapshot-tick|false|true'
     },
     {
       name: 'browserless runner skips persisted reconnect wait when fresh snapshot still has self',
@@ -20211,7 +20301,7 @@ async function runSelfTest() {
       want: 'explicit-stop|1|0|true|false'
     },
     {
-      name: 'browserless runner preserves confirmed-leave snapshot quarantine across restart',
+      name: 'browserless runner replaces persisted ordinary confirmed-leave wait with snapshot edge',
       got: withTempDirForTest(async dir => {
         const t = Date.parse('2026-07-11T03:45:54.610Z');
         let calls = 0;
@@ -20287,7 +20377,7 @@ async function runSelfTest() {
           /runner-persisted-wait-self-present-resume/.test(text)
         ].join('|');
       }),
-      want: 'explicit-stop|1|0|570792|true|false'
+      want: 'explicit-stop|1|0|0|false|false'
     },
     {
       name: 'browserless runner best-effort shutdown leave hydrates persisted session',
@@ -20670,7 +20760,7 @@ async function runSelfTest() {
           safetyAtCanaryStart.checkedAt === ''
         ].join('|');
       }),
-      want: 'false|manual-login-point-pending-snapshot-safety|0|3|false|true'
+      want: 'false|manual-login-point-pending-snapshot-safety|0|1|false|true'
     },
     {
       name: 'browserless runner imports legacy state and hydrates live config',

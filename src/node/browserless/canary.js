@@ -34,6 +34,7 @@ const {
   evaluateRestartReadiness,
   restartDrainAllowsDecision
 } = require('./restart-readiness');
+const { waitForSnapshotEdge } = require('./snapshot-edge-wait');
 
 const DEFAULT_READONLY_PROBE_MS = 30000;
 const DEFAULT_FRAME_GAP_ALERT_MS = 2000;
@@ -419,8 +420,7 @@ function loginPointFromState(state) {
   };
 }
 
-async function runSinglePreLoginSnapshotSafetyProbe(config, state, deps = {}, detail = {}) {
-  const loginPoint = loginPointFromState(state);
+async function fetchPreLoginSnapshot(config, deps = {}) {
   const url = buildSnapshotProbeUrl({
     gameOrigin: config.gameOrigin,
     snapshotPath: config.snapshotPath || '/snapshot',
@@ -436,16 +436,32 @@ async function runSinglePreLoginSnapshotSafetyProbe(config, state, deps = {}, de
     cache: 'no-store'
   });
   const body = await readResponseBody(response);
+  const observedAtMs = typeof deps.now === 'function' ? deps.now() : Date.now();
   if (body.json && typeof deps.onSnapshotPayload === 'function') {
     try {
       await deps.onSnapshotPayload(body.json, {
         source: 'prelogin-http',
-        observedAtMs: typeof deps.now === 'function' ? deps.now() : Date.now()
+        observedAtMs
       });
     } catch (_) {}
   }
+  return {
+    ok: Boolean(response.ok),
+    status: response.status,
+    response,
+    body,
+    payload: body.json,
+    observedAtMs,
+    url
+  };
+}
+
+async function runSinglePreLoginSnapshotSafetyProbe(config, state, deps = {}, detail = {}) {
+  const loginPoint = loginPointFromState(state);
+  const fetched = detail.fetched || await fetchPreLoginSnapshot(config, deps);
+  const { response, body, url } = fetched;
   const runtimeDefaults = buildBrowserlessRuntimeDefaults(config);
-  const observedAtMs = typeof deps.now === 'function' ? deps.now() : Date.now();
+  const observedAtMs = Number(fetched.observedAtMs || (typeof deps.now === 'function' ? deps.now() : Date.now()));
   const damageActorUserIds = snapshotSafetyDamageActorUserIds(deps, observedAtMs);
   const easyKillUserIds = snapshotSafetyEasyKillUserIds(deps, observedAtMs);
   const confirmedLeave = confirmedLeaveSnapshotGuard(state, observedAtMs);
@@ -474,7 +490,7 @@ async function runSinglePreLoginSnapshotSafetyProbe(config, state, deps = {}, de
     satisfied: Boolean(detail.satisfied),
     checkedAt
   };
-  if (response.ok && summary.valid && summary.selfPresent && confirmedLeave?.quarantined) {
+  if (response.ok && summary.valid && summary.selfPresent && confirmedLeave?.quarantined && !detail.edgeDetected) {
     return {
       ok: false,
       reason: 'confirmed-leave-snapshot-quarantine',
@@ -543,6 +559,58 @@ async function runSinglePreLoginSnapshotSafetyProbe(config, state, deps = {}, de
 }
 
 async function runPreLoginSnapshotSafety(config, state, deps = {}) {
+  if (config.snapshotEdgeEnabled === true) {
+    const edge = await waitForSnapshotEdge({
+      now: deps.now,
+      sleep: deps.sleep,
+      intervalMs: config.snapshotEdgeIntervalMs ?? 10000,
+      maxWaitMs: config.snapshotEdgeMaxWaitMs ?? 60000,
+      maxErrors: config.snapshotEdgeMaxErrors ?? 3,
+      fetchSnapshot: async () => fetchPreLoginSnapshot(config, deps),
+      onProgress: progress => {
+        if (typeof deps.onSnapshotEdge === 'function') deps.onSnapshotEdge(progress);
+      }
+    });
+    if (!edge.ok) {
+      return {
+        ok: false,
+        reason: edge.reason,
+        required: 1,
+        streak: 0,
+        satisfied: false,
+        attempt: edge.requestCount,
+        checkedAt: new Date(typeof deps.now === 'function' ? deps.now() : Date.now()).toISOString(),
+        edge: {
+          requestCount: edge.requestCount,
+          waitMs: edge.waitMs,
+          consecutiveErrors: edge.consecutiveErrors,
+          baseline: edge.baseline?.version || null
+        }
+      };
+    }
+    const evaluated = await runSinglePreLoginSnapshotSafetyProbe(config, state, deps, {
+      required: 1,
+      streak: 0,
+      satisfied: false,
+      fetched: edge.detected.fetched,
+      edgeDetected: true
+    });
+    return {
+      ...evaluated,
+      required: 1,
+      streak: evaluated.ok ? 1 : 0,
+      satisfied: Boolean(evaluated.ok),
+      attempt: 1,
+      probeIntervalMs: Number(config.snapshotEdgeIntervalMs ?? 10000),
+      edge: {
+        requestCount: edge.requestCount,
+        waitMs: edge.waitMs,
+        baseline: edge.baseline.version,
+        detected: edge.detected.version,
+        safetyEvaluationCount: 1
+      }
+    };
+  }
   const runtimeDefaults = buildBrowserlessRuntimeDefaults(config);
   const required = Math.max(0, Math.round(Number(
     config.loginPointSafetySuccessRequired

@@ -55,6 +55,7 @@ const {
   evaluateRestartReadiness
 } = require('./restart-readiness');
 const { browserlessRuntimeRevision, browserlessRuntimeRevisionStatus } = require('./runtime-revision');
+const { runSnapshotEdgeSelfTest } = require('./snapshot-edge-wait');
 const {
   buildSnapshotProbeUrl,
   readResponseBody,
@@ -99,6 +100,11 @@ function publicConfig(config) {
     dailyFirstLoginDelayMs: Number(config.dailyFirstLoginDelayMs || 0),
     loginPointSafetySuccessRequired: Number(config.loginPointSafetySuccessRequired || 0),
     loginPointSafetyProbeIntervalMs: Number(config.loginPointSafetyProbeIntervalMs || 0),
+    snapshotEdgeEnabled: config.snapshotEdgeEnabled === true,
+    snapshotEdgeIntervalMs: Number(config.snapshotEdgeIntervalMs || 0),
+    snapshotEdgeMaxWaitMs: Number(config.snapshotEdgeMaxWaitMs || 0),
+    snapshotEdgeMaxErrors: Number(config.snapshotEdgeMaxErrors || 0),
+    snapshotEdgeBackoffMs: Number(config.snapshotEdgeBackoffMs || 0),
     staleSelfMs: Number(config.staleSelfMs || 0),
     staleSelfConfirmMs: Number(config.staleSelfConfirmMs || 0),
     noSelfGraceMs: Number(config.noSelfGraceMs || 0),
@@ -193,6 +199,7 @@ function browserlessDailyFirstLoginDelayPlan(state, config = {}, nowMs = Date.no
 }
 
 function preLoginSafetyLeadMs(config = {}) {
+  if (config.snapshotEdgeEnabled === true) return 0;
   const required = loginPointSafetyRequiredFromConfig(config);
   const intervalMs = Math.max(0, Number(config.loginPointSafetyProbeIntervalMs || 0));
   return Math.max(0, required - 1) * intervalMs;
@@ -360,7 +367,8 @@ function persistedReconnectDelayPlan(state, config = {}, nowMs = Date.now()) {
     error: reason || 'persisted-reconnect-wait',
     safetyReason: lastExit.reason || reason || '',
     nextRunAt,
-    persisted: true
+    persisted: true,
+    explicitDelay: Boolean(action.explicitDelay)
   };
 }
 
@@ -448,6 +456,7 @@ function browserlessLoopPlan(result, config = {}) {
       || canary?.safety?.leaveFailure
   );
   const delayMs = Math.max(1000, Number(config.loopDelayMs || 30000));
+  const snapshotEdgeEnabled = config.snapshotEdgeEnabled === true;
   const fastDelayMs = 1000;
   const stop = reason => ({
     continue: false,
@@ -461,7 +470,7 @@ function browserlessLoopPlan(result, config = {}) {
     continue: true,
     reason,
     delayMs: /^snapshot safety not confirmed:/i.test(error)
-      ? Math.max(delayMs, 60000, Number(minimumDelayMs || 0))
+      ? Math.max(delayMs, snapshotEdgeEnabled ? 0 : 60000, Number(minimumDelayMs || 0))
       : Math.max(delayMs, Number(minimumDelayMs || 0)),
     previousRunId: runId,
     error,
@@ -504,6 +513,7 @@ function browserlessLoopPlan(result, config = {}) {
   if (safetyReason === 'direct-leave-failed' || canary?.safety?.leaveFailure) return resumeFast('direct-leave-failed');
   if (inferredStaminaExhaustion && (safetyReason === 'no-self' || error === 'no-self')) {
     return resume('stamina-exhausted-leave', inferredStaminaExhaustion.reloginDelayMs, {
+      explicitDelay: true,
       forceExitReason: true,
       staminaExhausted: inferredStaminaExhaustion
     });
@@ -520,7 +530,10 @@ function browserlessLoopPlan(result, config = {}) {
         Number.isFinite(decisionDelayMs) ? decisionDelayMs : 0,
         inferredStaminaExhaustion?.reloginDelayMs || 0
       ),
-      inferredStaminaExhaustion ? { staminaExhausted: inferredStaminaExhaustion } : null
+      {
+        explicitDelay: true,
+        ...(inferredStaminaExhaustion ? { staminaExhausted: inferredStaminaExhaustion } : {})
+      }
     );
   }
   if ([
@@ -538,7 +551,11 @@ function browserlessLoopPlan(result, config = {}) {
   if (/^websocket connect timeout$/i.test(error)) return resumeFast('ws-connect-timeout');
   if (/^snapshot safety not confirmed:/i.test(error)) {
     if (inGameRecoveryEvidence) return resumeFast('in-game-snapshot-safety-retry');
-    return resume('snapshot-safety-retry');
+    const snapshotReason = String(canary?.snapshotSafety?.reason || 'snapshot-safety-retry');
+    if (snapshotEdgeEnabled && ['snapshot-edge-timeout', 'snapshot-edge-error-limit'].includes(snapshotReason)) {
+      return resume(snapshotReason, Number(config.snapshotEdgeBackoffMs || 60000), { explicitDelay: true });
+    }
+    return resume('snapshot-safety-retry', 0, snapshotEdgeEnabled ? { snapshotEdgeRetry: true } : null);
   }
   return resume(error || safetyReason || 'unknown-error');
 }
@@ -1109,16 +1126,18 @@ async function runBrowserlessRunner(config, deps = {}) {
     const firstDailyLoginAtNextRun = isFirstBrowserlessLoginOfDay(currentBeforeWait, plannedNextRunAtMs);
     const shouldPrepareSnapshotSafety = Boolean(
       confirmedLeave
-        || (!firstDailyLoginAtNextRun && (
+        || ((config.snapshotEdgeEnabled === true || !firstDailyLoginAtNextRun) && (
           resetLoginPointForNextEntry
             || loopPlan.reason === 'snapshot-safety-retry'
         ))
     );
     const effectiveDelayMs = shouldPrepareSnapshotSafety
-      ? Math.max(
-          loopPlan.delayMs,
-          preLoginSafetyLeadMs(config) + Number(confirmedLeave?.quarantineRemainingMs || 0)
-        )
+      ? (config.snapshotEdgeEnabled === true && !loopPlan.explicitDelay
+          ? 0
+          : Math.max(
+              loopPlan.delayMs,
+              preLoginSafetyLeadMs(config) + Number(confirmedLeave?.quarantineRemainingMs || 0)
+            ))
       : loopPlan.delayMs;
     const nextRunAtMs = now() + effectiveDelayMs;
     const nextRunAt = new Date(nextRunAtMs).toISOString();
@@ -1139,6 +1158,7 @@ async function runBrowserlessRunner(config, deps = {}) {
           reason: loopPlan.reason,
           delayMs: effectiveDelayMs,
           nextRunAt,
+          explicitDelay: Boolean(loopPlan.explicitDelay),
           previousRunId: loopPlan.previousRunId || ''
         },
         confirmedLeave: confirmedLeave
@@ -1181,6 +1201,7 @@ async function runBrowserlessRunner(config, deps = {}) {
             fetchWithTimeout: sourceIpController.fetchWithTimeout,
             onSnapshotPayload: observeSnapshotPayload,
             onSnapshotSafety: recordSnapshotSafetyProgress,
+            onSnapshotEdge: progress => logStore.append('runner', `snapshot-edge-${progress.type || 'progress'}`, progress),
             easyKillPlayerTracker,
             damagePlayerTracker
           }
@@ -1585,6 +1606,20 @@ async function runBrowserlessRunner(config, deps = {}) {
   let persistedDelayPlan = !config.once && !config.dryRun
     ? persistedReconnectDelayPlan(readBrowserlessStateFile(stateFile), config, now())
     : null;
+  if (persistedDelayPlan && config.snapshotEdgeEnabled === true) {
+    const persistedState = readBrowserlessStateFile(stateFile);
+    const confirmed = activeConfirmedLeaveState(persistedState, now());
+    const explicitCooldown = Boolean(persistedDelayPlan.explicitDelay)
+      || ['stamina-budget-coin-leave', 'stamina-exhausted-leave'].includes(String(persistedDelayPlan.reason || ''));
+    if (confirmed && !explicitCooldown) {
+      logStore.append('runner', 'runner-persisted-delay-replaced-by-snapshot-edge', {
+        previousReason: persistedDelayPlan.reason || '',
+        previousNextRunAt: persistedDelayPlan.nextRunAt || '',
+        confirmedAt: confirmed.confirmedAt || ''
+      });
+      persistedDelayPlan = null;
+    }
+  }
   let preservePersistedOnlineSession = false;
   if (persistedDelayPlan) {
     const persistedStateBeforeProbe = readBrowserlessStateFile(stateFile);
@@ -1604,6 +1639,7 @@ async function runBrowserlessRunner(config, deps = {}) {
       try {
         const probe = await (deps.runPreLoginSnapshotSafety || runPreLoginSnapshotSafety)({
           ...config,
+          snapshotEdgeEnabled: false,
           loginPointSafetySuccessRequired: 1,
           loginPointSafetyProbeIntervalMs: 0
         }, persistedStateBeforeProbe, {
@@ -1893,7 +1929,8 @@ async function runBrowserlessRunner(config, deps = {}) {
       const stateBeforeCanary = readBrowserlessStateFile(stateFile);
       liveState = stateBeforeCanary;
       const hasConfirmedLeaveRecovery = Boolean(activeConfirmedLeaveState(stateBeforeCanary, now()));
-      const bypassPreLoginSafetyReason = !hasConfirmedLeaveRecovery && isFirstBrowserlessLoginOfDay(stateBeforeCanary, now())
+      const bypassPreLoginSafetyReason = config.snapshotEdgeEnabled !== true
+        && !hasConfirmedLeaveRecovery && isFirstBrowserlessLoginOfDay(stateBeforeCanary, now())
         ? 'daily-first-login-invulnerability'
         : '';
       const precheckedSnapshotSafety = bypassPreLoginSafetyReason ? null : preparedSnapshotSafety;
@@ -1910,6 +1947,7 @@ async function runBrowserlessRunner(config, deps = {}) {
         precheckedSnapshotSafety,
         onSnapshotSafety: recordSnapshotSafetyProgress,
         onSnapshotPayload: observeSnapshotPayload,
+        onSnapshotEdge: progress => logStore.append('runner', `snapshot-edge-${progress.type || 'progress'}`, progress),
         fetchWithTimeout: sourceIpController.fetchWithTimeout,
         openBrowserlessWs: sourceIpController.openBrowserlessWs,
         onTransportOpen,
@@ -2498,6 +2536,7 @@ async function runBrowserlessRunnerSelfTest() {
       await statusTestHandle.close();
     }
     const complexCombatMainThreadBudget = await runComplexCombatMainThreadBudgetSelfTest(tmp);
+    const snapshotEdge = await runSnapshotEdgeSelfTest();
     const runnerLog = path.join(tmp, 'logs', '2026-07-08', 'runner.jsonl');
     const text = fs.readFileSync(runnerLog, 'utf8');
     return {
@@ -2527,6 +2566,7 @@ async function runBrowserlessRunnerSelfTest() {
         && dynamicSnapshotPollerStatus.currentIntervalMs === DEFAULT_CHAT_ACTIVE_INTERVAL_MS
         && nearbyCoinRoutePanelTest.ok
         && statusServerChatTest.ok
+        && snapshotEdge.ok
         && complexCombatMainThreadBudget.ok
       ),
       dryRun,
@@ -2545,6 +2585,7 @@ async function runBrowserlessRunnerSelfTest() {
       dynamicSnapshotPollerStatus,
       nearbyCoinRoutePanelTest,
       statusServerChatTest,
+      snapshotEdge,
       complexCombatMainThreadBudget,
       logFile: runnerLog
     };
