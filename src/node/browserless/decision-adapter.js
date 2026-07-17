@@ -3387,7 +3387,11 @@ function singleCoinBaitVisibleCoins(input, previous = null) {
 function singleCoinBaitResidualRouteContinuation(input, opportunity, options = {}) {
   const selectedOpportunity = opportunity?.choice || null;
   const source = selectedOpportunity?.sourceCoin || selectedOpportunity?.coin || selectedOpportunity || null;
-  const route = source?.coinRoute || selectedOpportunity?.coinRoute || null;
+  const route = source?.coinRoutePreview
+    || selectedOpportunity?.coinRoutePreview
+    || source?.coinRoute
+    || selectedOpportunity?.coinRoute
+    || null;
   if (!source || source.routeDisplayOnly !== true || !Array.isArray(route?.points) || route.points.length < 2) return null;
   const anchorKey = coinRouteKey(source);
   const anchorIndex = route.points.findIndex(point => coinRouteKey(point) === anchorKey);

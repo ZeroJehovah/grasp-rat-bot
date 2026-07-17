@@ -1820,11 +1820,10 @@ async function runSelfTest() {
     if (!base || !routeCoin?.coinRoute) return base;
     return {
       ...base,
-      reason: 'best-opportunity-coin-route',
-      coinRoute: routeCoin.coinRoute,
-      routeValue: routeCoin.routeValue || null,
-      routeKind: routeCoin.routeKind || '',
-      routeLegs: routeCoin.routeLegs || 0,
+      coinRoutePreview: routeCoin.coinRoute,
+      routePreviewValue: routeCoin.routeValue || null,
+      routePreviewKind: routeCoin.routeKind || '',
+      routePreviewLegs: routeCoin.routeLegs || 0,
       routeDisplayOnly: true
     };
   }
@@ -9100,7 +9099,7 @@ async function runSelfTest() {
       want: 'combat-live|combat|combat-live-realtime|combat-live|8|realtime'
     },
     {
-      name: 'browserless profit live takes normal foot coin before broader opportunity',
+      name: 'browserless profit live takes normal foot coin without presenting weaker same-first route',
       got: (() => {
         const store = createBrowserlessStateStore({ userId: 7 });
         store.ingestFrame({
@@ -9117,7 +9116,11 @@ async function runSelfTest() {
           tick: 60,
           entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100 }],
           bullets: [],
-          coin_drops: [{ drop_id: 'foot-coin', amount: 1, x: 300, y: 0 }],
+          coin_drops: [
+            { drop_id: 'foot-coin', amount: 1, x: 300, y: 0 },
+            { drop_id: 'route-two', amount: 1, x: 16000, y: 0 },
+            { drop_id: 'route-three', amount: 1, x: 17000, y: 0 }
+          ],
           messages: []
         }, { receivedAtMs: 1100 });
         const decision = buildBrowserlessDecision(store.getState(1200), {}, {
@@ -9130,11 +9133,13 @@ async function runSelfTest() {
           decision.reason,
           decision.action.target.id,
           decision.action.target.amount,
-          decision.profit.best?.type,
-          decision.profit.best?.target?.userId
+          decision.profit.best?.reason,
+          Boolean(decision.profit.best?.coin?.coinRoute),
+          decision.input.nearby.c.find(row => row[0] === 'foot-coin')?.[4],
+          decision.input.nearby.c.some(row => Number(row[4]) > 0)
         ].join('|');
       })(),
-      want: 'coin|profit|foot-coin-priority|foot-coin|1|coin|'
+      want: 'coin|profit|foot-coin-priority|foot-coin|1|best-opportunity-coin|false|0|false'
     },
     {
       name: 'browserless profit live injured foot coin ignores ordinary active players',
@@ -10606,7 +10611,7 @@ async function runSelfTest() {
       want: 'migrate-to-known-field|field-a|6|6|true|true'
     },
     {
-      name: 'browserless snapshot fallback near route blocks distant field migration',
+      name: 'browserless snapshot fallback near coin blocks distant field migration without weaker route marker',
       got: (() => {
         const decision = buildBrowserlessDecision({
           userId: 7,
@@ -10651,12 +10656,12 @@ async function runSelfTest() {
           decision.input.profitCoinSource,
           decision.reason,
           decision.action.target.id,
-          decision.action.coinRoute.value,
+          Boolean(decision.action.coinRoute),
           decision.action.target.distance < 5000,
           decision.profit.candidates.some(item => item.reason === 'migrate-to-known-field')
         ].join('|');
       })(),
-      want: 'snapshot-fallback|best-opportunity-coin-route|near-a|3|true|false'
+      want: 'snapshot-fallback|best-opportunity-coin|near-a|false|true|false'
     },
     {
       name: 'browserless single coin bait holds a lone selected one coin within ten meters',
@@ -10801,15 +10806,17 @@ async function runSelfTest() {
           decision.profit.singleCoinBait?.phase,
           decision.profit.best?.reason,
           decision.profit.best?.reward,
+          Boolean(decision.profit.best?.coin?.coinRoute),
+          decision.input.nearby.c.some(row => Number(row[4]) > 0),
           decision.profit.threshold.eligibleCount,
           decision.profit.threshold.filteredCount,
           decision.input.profitCoinSource
         ].join('|');
       })(),
-      want: 'single-coin-bait-hold|bait|hold|best-opportunity-coin-route|3|1|2|snapshot-fallback'
+      want: 'single-coin-bait-hold|bait|hold|best-opportunity-coin|1|false|false|1|2|snapshot-fallback'
     },
     {
-      name: 'browserless single coin bait yields when residual three-coin route still meets dynamic threshold',
+      name: 'browserless single coin bait yields to foot coin when preview residual route still meets dynamic threshold',
       got: (() => {
         const nowMs = Date.parse('2026-07-12T00:00:00.000Z');
         const stateFor = () => ({
@@ -10861,6 +10868,8 @@ async function runSelfTest() {
         return [
           eligible.reason,
           eligible.action.target?.id,
+          Boolean(eligible.action.coinRoute),
+          eligible.input.nearby.c.some(row => Number(row[4]) > 0),
           eligible.profit.singleCoinBait === null,
           eligible.profit.singleCoinBaitContinuation?.reward,
           eligible.profit.singleCoinBaitContinuation?.staminaCost,
@@ -10868,7 +10877,7 @@ async function runSelfTest() {
           eligible.profit.singleCoinBaitContinuation?.suppressionReason
         ].join('|');
       })(),
-      want: 'best-opportunity-coin-route|3326|true|3|20554|true|eligible-residual-route'
+      want: 'foot-coin-priority|3326|false|false|true|3|20554|true|eligible-residual-route'
     },
     {
       name: 'browserless single coin bait releases itself before newly visible ordinary profit',
@@ -28388,7 +28397,7 @@ async function runSelfTest() {
       want: 'coin:best-opportunity-coin-route:1:1-2-3:1:best-opportunity-coin-route:1-2-3'
     },
     {
-      name: 'same first coin route keeps overlay metadata when single coin roi is higher',
+      name: 'same first weaker coin route stays preview-only when single coin roi is higher',
       got: (() => {
         const action = choose({
           self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
@@ -28398,9 +28407,9 @@ async function runSelfTest() {
             { drop_id: 3, x: 17000, y: 0, amount: 1, native: true }
           ]
         });
-        return action.kind + ':' + action.reason + ':' + action.id + ':' + action.coinRoute?.legCount + ':' + action.coinRoute?.points?.length + ':' + action.score;
+        return action.kind + ':' + action.reason + ':' + action.id + ':' + Boolean(action.coinRoute) + ':' + action.score;
       })(),
-      want: 'coin:best-opportunity-coin-route:1:3:3:300000'
+      want: 'coin:best-opportunity-coin:1:false:300000'
     },
     {
       name: 'visible afk drop still beats weaker coin route by stamina roi',
@@ -28418,7 +28427,7 @@ async function runSelfTest() {
       want: 'attack:best-opportunity-afk-drop-target'
     },
     {
-      name: 'same first coin route keeps overlay metadata near non-avoidance active',
+      name: 'same first weaker coin route stays preview-only near non-avoidance active',
       got: (() => {
         const action = choose({
           self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
@@ -28429,9 +28438,9 @@ async function runSelfTest() {
             { drop_id: 3, x: 15000, y: 0, amount: 1, native: true }
           ]
         });
-        return action.reason + ':' + action.coinRoute?.legCount;
+        return action.reason + ':' + Boolean(action.coinRoute);
       })(),
-      want: 'best-opportunity-coin-route:3'
+      want: 'best-opportunity-coin:false'
     },
     {
       name: 'coin route does not skip much closer local coin',

@@ -28,11 +28,10 @@ function mergeCoinRouteDisplayCore(base, routeCoin) {
   if (!base || !routeCoin?.coinRoute) return base;
   return {
     ...base,
-    coinRoute: routeCoin.coinRoute,
-    route: true,
-    routeValue: routeCoin.routeValue || null,
-    routeKind: routeCoin.routeKind || '',
-    routeLegs: routeCoin.routeLegs || 0,
+    coinRoutePreview: routeCoin.coinRoute,
+    routePreviewValue: routeCoin.routeValue || null,
+    routePreviewKind: routeCoin.routeKind || '',
+    routePreviewLegs: routeCoin.routeLegs || 0,
     routeDisplayOnly: true
   };
 }
@@ -114,9 +113,14 @@ function buildCoinOpportunityCandidatesCore(self, coinGroups, activeThreats, rou
       reason,
       maxDistance: coin.opportunityMaxDistance,
       coinRoute: coin.coinRoute || null,
+      coinRoutePreview: coin.coinRoutePreview || null,
       routeValue: coin.routeValue || null,
+      routePreviewValue: coin.routePreviewValue || null,
       routeKind: coin.routeKind || '',
+      routePreviewKind: coin.routePreviewKind || '',
       routeLegs: coin.routeLegs || 0,
+      routePreviewLegs: coin.routePreviewLegs || 0,
+      routeDisplayOnly: Boolean(coin.routeDisplayOnly),
       routeHeld: Boolean(coin.routeHeld),
       competingRouteScore: coin.competingRouteScore,
       sourceCoin: coin

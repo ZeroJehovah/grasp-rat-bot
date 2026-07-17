@@ -2792,15 +2792,31 @@ async function runBrowserlessRunnerSelfTest() {
       {},
       { globalCoinMaxDistance: 50000 }
     ).c;
+    const previewRows = summarizeNearbyForPanel(
+      routePanelInput(true),
+      {
+        kind: 'coin',
+        band: 'profit',
+        reason: 'best-opportunity-coin',
+        target: { type: 'coin', id: 'route-a', amount: 4, distance: 20 },
+        coinRoutePreview: routeAction.coinRoute
+      },
+      {},
+      { globalCoinMaxDistance: 50000 }
+    ).c;
     const expectedRouteRows = 'route-a:1:1,route-b:0:2,route-c:0:3';
+    const expectedPreviewRows = 'route-a:1:0,route-b:0:0,route-c:0:0';
     const routeRowsText = rows => rows.map(row => `${row[0]}:${row[3]}:${row[4]}`).join(',');
     const nearbyCoinRoutePanelTest = {
       ok: routeRowsText(routeRowsWhenFirstMissing) === expectedRouteRows
         && routeRowsText(routeRowsWhenFirstPresent) === expectedRouteRows
+        && routeRowsText(previewRows) === expectedPreviewRows
         && new Set(routeRowsWhenFirstMissing.map(row => row[0])).size === routeRowsWhenFirstMissing.length
-        && new Set(routeRowsWhenFirstPresent.map(row => row[0])).size === routeRowsWhenFirstPresent.length,
+        && new Set(routeRowsWhenFirstPresent.map(row => row[0])).size === routeRowsWhenFirstPresent.length
+        && new Set(previewRows.map(row => row[0])).size === previewRows.length,
       missingFirst: routeRowsText(routeRowsWhenFirstMissing),
-      presentFirst: routeRowsText(routeRowsWhenFirstPresent)
+      presentFirst: routeRowsText(routeRowsWhenFirstPresent),
+      previewOnly: routeRowsText(previewRows)
     };
     let chatActivityCount = 0;
     const chatSendInputs = [];

@@ -2459,9 +2459,14 @@ function runStrategyModuleSelfTests() {
   results.push({
     name: 'opportunity-candidates-route-display-merge-keeps-base-coin',
     passed: routeDisplayCandidate[0]?.amount === 5
-      && routeDisplayCandidate[0]?.reason === 'best-opportunity-coin-route'
+      && routeDisplayCandidate[0]?.reason === 'best-opportunity-coin'
+      && routeDisplayCandidate[0]?.coinRoute === null
       && routeDisplayCandidate[0]?.sourceCoin?.routeDisplayOnly === true
-      && routeDisplayCandidate[0]?.coinRoute?.ids?.join(',') === 'display,near'
+      && routeDisplayCandidate[0]?.sourceCoin?.coinRoute === undefined
+      && routeDisplayCandidate[0]?.coinRoutePreview?.ids?.join(',') === 'display,near'
+      && routeDisplayCandidate[0]?.sourceCoin?.coinRoutePreview?.ids?.join(',') === 'display,near'
+      && routeDisplayCandidate[0]?.routeValue === null
+      && routeDisplayCandidate[0]?.staminaCost === 700
   });
 
   const enemyCandidate = buildOpportunityCandidatesCore({ x: 0, y: 0 }, [], [], [

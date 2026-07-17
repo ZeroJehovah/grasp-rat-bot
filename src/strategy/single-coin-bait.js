@@ -54,7 +54,9 @@ function singleCoinBaitMatchesCore(left, right, options = {}) {
 
 function singleCoinBaitRouteIdsCore(opportunity) {
   const source = opportunity?.sourceCoin || opportunity?.coin || opportunity || {};
-  const ids = source?.coinRoute?.ids
+  const ids = source?.coinRoutePreview?.ids
+    ?? opportunity?.coinRoutePreview?.ids
+    ?? source?.coinRoute?.ids
     ?? opportunity?.coinRoute?.ids
     ?? source?.routeIds
     ?? opportunity?.routeIds;
