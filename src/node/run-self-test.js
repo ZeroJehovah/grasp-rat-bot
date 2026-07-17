@@ -6558,10 +6558,11 @@ async function runSelfTest() {
           command.lastAck?.range_cm,
           command.ackAgeMs,
           ages.latestFrameAgeMs,
+          command.shooting.shooterOrigin.sampleCount,
           store.getState(2600).frameCounts.shoot_ok
         ].join('|');
       })(),
-      want: 'realtime|shoot_ok|44|14500|600|600|1'
+      want: 'realtime|shoot_ok|44|14500|600|600|0|1'
     },
     {
       name: 'browserless state store matches confirmed shots and derives rolling execution delay',
@@ -6577,7 +6578,9 @@ async function runSelfTest() {
             targetX: 1000 + index,
             targetY: 0,
             observedTick,
-            flightTicks: 4
+            flightTicks: 4,
+            predictedShooterX: 10 + index,
+            predictedShooterY: 20 + index
           });
           store.ingestFrame({
             type: 'shoot_ok',
@@ -6585,6 +6588,8 @@ async function runSelfTest() {
             owner_user_id: 7,
             target_x: 1000 + index,
             target_y: 0,
+            start_x: 13 + index,
+            start_y: 24 + index,
             created_tick: observedTick + delay
           }, { receivedAtMs: 1050 + index * 100 });
         }
@@ -6617,13 +6622,16 @@ async function runSelfTest() {
           beforeTimeout.timing.p90Ticks,
           beforeTimeout.timing.madTicks,
           beforeTimeout.timing.source,
+          Math.round(beforeTimeout.shooterOrigin.medianCm * 10) / 10,
+          Math.round(beforeTimeout.shooterOrigin.p90Cm * 10) / 10,
+          Math.round(beforeTimeout.shooterOrigin.madCm * 10) / 10,
           beforeTimeout.ackTimeoutMs,
           slowStore.getCommandState(3000).shooting.ackTimeoutMs,
           afterTimeout.unackedShots,
           afterTimeout.pendingCount
         ].join('|');
       })(),
-      want: '4|3|1|7|9|2|confirmed-shoot-rolling|1000|1800|1|0'
+      want: '4|3|1|7|9|2|confirmed-shoot-rolling|5|5|0|1000|1800|1|0'
     },
     {
       name: 'browserless completion learning persistently downweights repeated failure and preserves success',
@@ -13742,6 +13750,78 @@ async function runSelfTest() {
       want: 'high-entropy-robust-stop|stop|stop|high-entropy-bounded-exploration|continue|2'
     },
     {
+      name: 'browserless fire-risk classification survives unaffordable route coverage',
+      got: (() => {
+        const self = { user_id: 7, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 2000 };
+        const target = { user_id: 8, x: 8000, y: 0, vx: 50, vy: 0, hp: 80, active: true };
+        const combatTargetState = {
+          noDamageMs: 12000,
+          fireRiskClassification: {
+            targetId: '8',
+            highEntropy: true,
+            confidence: 0.9,
+            evidence: ['human-like-control'],
+            classifiedAt: 1000
+          },
+          motionSamples: Array.from({ length: 30 }, (_, index) => ({
+            at: 1000 + index * 200,
+            x: 7000 + index * 30,
+            y: index % 2 ? 100 : -100,
+            vx: 50,
+            vy: index % 2 ? 50 : -50
+          })),
+          opponentBehaviorState: {
+            mode: 'zigzag-strafe',
+            dimensions: { controlStyle: { state: 'human-like', confidence: 0.9 } },
+            automationLikelihood: 0.2,
+            recentHitRate: 0
+          }
+        };
+        const aim = estimateAim(self, target, { combatTargetState, actualShots: 15, nowMs: 2000 });
+        return [
+          aim.routeCoverage === null,
+          aim.fireRiskClassification.highEntropy,
+          aim.fireRiskClassification.affordabilityDegraded,
+          aim.fireRiskClassification.evidence.join(',')
+        ].join('|');
+      })(),
+      want: 'true|true|true|human-like-control'
+    },
+    {
+      name: 'browserless parallel movement marks physically unreachable intercept and stops probe fire',
+      got: (() => {
+        const aim = estimateAim(
+          { user_id: 7, x: 4309, y: 63819, vx: 35, vy: -35, hp: 100, stamina_5s_remaining_milli: 10000 },
+          { user_id: 8, x: 15266, y: 55314, vx: 35, vy: -35, hp: 72, active: true, moving: true },
+          {
+            executionTiming: { medianTicks: 3, madTicks: 0, source: 'test' },
+            combatTargetState: { noDamageMs: 12000, motionSamples: [], opponentBehaviorState: { mode: 'steady-linear' } }
+          }
+        );
+        const gate = evaluateHighEntropyFireGateCore({
+          expectedHitProbability: 0,
+          recentHitRate: 0,
+          recentShotCount: 3,
+          noProgressAcceptedShots: 3,
+          noDamageMs: 2000,
+          selfHp: 100,
+          targetHp: 72,
+          unreachableIntercept: aim.fireReachability.unreachable,
+          reachabilityGapCm: aim.fireReachability.rangeGapCm
+        });
+        return [
+          aim.mode,
+          aim.relativeExecutionDisplacement.x,
+          aim.relativeExecutionDisplacement.y,
+          aim.fireReachability.unreachable,
+          aim.fireReachability.rangeGapCm > 0,
+          gate.suppressFire,
+          gate.reason
+        ].join('|');
+      })(),
+      want: 'relative-linear-intercept-fallback|0|0|true|true|true|intercept-out-of-range-reacquire'
+    },
+    {
       name: 'browserless high-entropy fire gate bounds exploration and preserves defense and finishing',
       got: (() => {
         const exploring = evaluateHighEntropyFireGateCore({
@@ -13796,7 +13876,7 @@ async function runSelfTest() {
           finishing.suppressFire
         ].join('|');
       })(),
-      want: 'high-entropy-bounded-exploration|800|high-entropy-reacquire|true|high-entropy-defensive-throttle|1000|high-entropy-finish-protected|false'
+      want: 'high-entropy-bounded-exploration|800|high-entropy-reacquire|true|high-entropy-defensive-throttle|1000|no-progress-finish-protected|false'
     },
     {
       name: 'browserless high-entropy combat suppresses proactive fire after accepted-shot budget',

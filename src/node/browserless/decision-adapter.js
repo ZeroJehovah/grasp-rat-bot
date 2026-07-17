@@ -3816,6 +3816,8 @@ function applyBrowserlessFinalActionArbitration(action, stateful = {}, input = {
     nowMs: input?.nowMs,
     source: options.controlMode || 'browserless',
     holdMs: finalActionArbitrationHoldMs(options),
+    profitSwitchRoiRatio: options.profitSwitchRoiRatio ?? 1,
+    profitSwitchRoiTolerance: options.profitSwitchRoiTolerance ?? 1e-9,
     historyLimit: finalActionArbitrationHistoryLimit(options),
     clone: cloneJson
   }).action;
@@ -5822,7 +5824,11 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
   reconcileEasyKillTracker(input, stateful, options);
   stageTimings.easyKill = performance.now() - stageStarted;
   stageStarted = performance.now();
-  const previousCombatTarget = cloneJson(stateful.combatTarget || null);
+  // Combat refresh replaces stateful.combatTarget rather than mutating the
+  // previous object. Keep the old reference for post-kill reconciliation so
+  // the realtime loop does not deep-clone the bounded motion/behavior history
+  // on every frame.
+  const previousCombatTarget = stateful.combatTarget || null;
   const combat = buildCombatDecision(input, stateful, {
     ...options,
     easyKillPreferredTargetId: easyKillPreferredTargetIdFromOpportunity(null, stateful)
@@ -7469,11 +7475,30 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
   }
   const ignoredActionCoinId = action?.ignoredCoin?.id || '';
   const rememberedOpportunityKey = coinDecisionKey(opportunity.opportunityChoice?.sourceCoin || opportunity.opportunityChoice);
+  const selectedProfitTargetId = action?.finalCandidate?.priorityBand === 'profit'
+    ? opportunityChoiceTargetId(action?.opportunityChoice || action?.target)
+    : '';
+  const selectedProfitChoice = action?.opportunityChoice
+    || opportunity.sorted?.find(item => opportunityChoiceTargetId(item) === selectedProfitTargetId)
+    || null;
   const outputOpportunityChoice = ignoredActionCoinId && rememberedOpportunityKey === ignoredActionCoinId
     ? null
-    : (opportunity.opportunityChoice || null);
+    : (action?.finalCandidate?.switchReason === 'best-eligible-profit'
+        ? selectedProfitChoice
+        : (opportunity.opportunityChoice || null));
   const outputSwitchLock = outputOpportunityChoice ? (opportunity.switchLock || null) : null;
-  if (finalSelection) finalSelection.selected = action?.finalCandidate || null;
+  if (finalSelection) {
+    finalSelection.selected = action?.finalCandidate || null;
+    const selectedTargetKey = String(action?.finalCandidate?.targetKey || '');
+    if (selectedTargetKey && !finalSelection.candidates.some(item => String(item.targetKey || '') === selectedTargetKey)) {
+      finalSelection.candidates.unshift({
+        kind: action.kind || '',
+        reason: action.reason || '',
+        ...action.finalCandidate,
+        retainedByArbitration: true
+      });
+    }
+  }
   rememberEasyKillApproach(action, input, stateful, options);
   stateful.lastDecisionAction = cloneJson(action);
   const easyKillCandidateDiagnostics = summarizeEasyKillCandidateDiagnostics(
@@ -7510,7 +7535,11 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       dataGaps: input.dataGaps
     },
     profit: {
-      best: summarizeOpportunity(opportunity.choice),
+      best: summarizeOpportunity(
+        action?.finalCandidate?.switchReason === 'best-eligible-profit'
+          ? (outputOpportunityChoice || opportunity.choice)
+          : opportunity.choice
+      ),
       rawBest: summarizeOpportunity(opportunity.rawChoice),
       candidates: topItems(opportunity.sorted, summarizeOpportunity),
       threshold: opportunity.threshold,

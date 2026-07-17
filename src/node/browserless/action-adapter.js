@@ -927,7 +927,11 @@ function createBrowserlessActionAdapter(options = {}) {
       routeProbability: numberOrNull(shotMeta.routeProbability),
       predictedDirectionState: String(shotMeta.predictedDirectionState || ''),
       aimConfidence: numberOrNull(shotMeta.aimConfidence),
-      expectedHitProbability: numberOrNull(shotMeta.expectedHitProbability)
+      expectedHitProbability: numberOrNull(shotMeta.expectedHitProbability),
+      predictedShooterX: numberOrNull(shotMeta.predictedShooterX),
+      predictedShooterY: numberOrNull(shotMeta.predictedShooterY),
+      predictedTargetAtCreationX: numberOrNull(shotMeta.predictedTargetAtCreationX),
+      predictedTargetAtCreationY: numberOrNull(shotMeta.predictedTargetAtCreationY)
     };
     nextCommandId += 1;
     state.sentCount += 1;
@@ -953,7 +957,11 @@ function createBrowserlessActionAdapter(options = {}) {
           routeProbability: command.routeProbability,
           predictedDirectionState: command.predictedDirectionState,
           aimConfidence: command.aimConfidence,
-          expectedHitProbability: command.expectedHitProbability
+          expectedHitProbability: command.expectedHitProbability,
+          predictedShooterX: command.predictedShooterX,
+          predictedShooterY: command.predictedShooterY,
+          predictedTargetAtCreationX: command.predictedTargetAtCreationX,
+          predictedTargetAtCreationY: command.predictedTargetAtCreationY
         });
       } catch (_) {}
     }
@@ -1496,7 +1504,11 @@ function createBrowserlessActionAdapter(options = {}) {
             routeProbability: combat.shooting?.selectedRouteProbability,
             predictedDirectionState: combat.aim?.routeCoverage?.candidates?.find(candidate => candidate.hypothesis === combat.aim?.routeCoverage?.selected)?.directionState,
             aimConfidence: combat.aim?.confidence,
-            expectedHitProbability: combat.shooting?.expectedHitProbability
+            expectedHitProbability: combat.shooting?.expectedHitProbability,
+            predictedShooterX: combat.aim?.predictedShooterOrigin?.x,
+            predictedShooterY: combat.aim?.predictedShooterOrigin?.y,
+            predictedTargetAtCreationX: combat.aim?.predictedTargetAtCreation?.x,
+            predictedTargetAtCreationY: combat.aim?.predictedTargetAtCreation?.y
           }
         );
       }

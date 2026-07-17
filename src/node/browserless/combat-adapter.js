@@ -22,6 +22,7 @@ const {
 } = require('../../strategy/combat-movement');
 const {
   checkLowConfidenceThrottle,
+  classifyFireRiskCore,
   determineCombatFireState,
   evaluateHighEntropyFireGateCore
 } = require('../../strategy/combat-fire-discipline');
@@ -858,9 +859,20 @@ function estimateAim(self, target, options = {}) {
   const timing = options.executionTiming || {};
   const timingMedian = Number.isFinite(Number(timing.medianTicks)) ? Number(timing.medianTicks) : 5;
   const timingMad = Number.isFinite(Number(timing.madTicks)) ? Number(timing.madTicks) : 0;
-  const highEntropy = (profile.maneuverScale >= 0.35 && profile.durationMs >= 8000)
-    || behavior?.dimensions?.controlStyle?.state === 'human-like'
-    || Number(behavior?.automationLikelihood) < 0.45;
+  const fireRiskClassification = combatTargetState?.fireRiskClassification || classifyFireRiskCore(null, {
+    targetId: combatTargetId(target),
+    nowMs: options.nowMs,
+    controlStyle: behavior?.dimensions?.controlStyle?.state,
+    controlStyleConfidence: behavior?.dimensions?.controlStyle?.confidence,
+    maneuverScale: profile.maneuverScale,
+    maneuverDurationMs: profile.durationMs,
+    lateralFlips: profile.lateralFlips,
+    automationLikelihood: behavior?.automationLikelihood,
+    routeSamples: behavior?.metrics?.movementTransitions?.conditionalSampleCount,
+    routeDistribution: behavior?.metrics?.movementTransitions?.conditionalNext,
+    recentHitRate: behavior?.recentHitRate
+  });
+  const highEntropy = Boolean(fireRiskClassification.highEntropy);
   let observationToExecutionTicks = Math.max(3, Math.min(12, Math.round(
     timingMedian + (highEntropy ? Math.max(1, timingMad * (profile.maneuverScale >= 0.65 ? 2 : 1)) : 0)
   )));
@@ -877,22 +889,77 @@ function estimateAim(self, target, options = {}) {
     nowMs: options.nowMs
   });
   const motionScale = Math.max(0, Math.min(1, Math.max(speed, profile.avgSpeed) / Math.max(1, Number(options.combatTargetDodgeSpeedPerTick || 50))));
-  const intercept = quadraticInterceptCore(self, target, {
+  const shooterVx = numberOrNull(options.shooterVelocity?.vx) ?? numberOrNull(self.vx) ?? 0;
+  const shooterVy = numberOrNull(options.shooterVelocity?.vy) ?? numberOrNull(self.vy) ?? 0;
+  const bulletRange = Math.max(1, Number(options.combatBulletRangeCm || COMBAT_CONSTANTS.BULLET_RANGE_CM));
+  const hitRadius = Math.max(0, Number(options.combatBulletHitRadiusCm || 90));
+  const interceptOptions = {
     bulletSpeed,
     observationToExecutionTicks,
-    bulletRange: options.combatBulletRangeCm || options.combatAttackRange || COMBAT_CONSTANTS.ATTACK_RANGE,
-    hitRadius: options.combatBulletHitRadiusCm || 90,
-    maxTicks: options.combatInterceptMaxTicks,
+    predictShooterOrigin: true,
+    shooterVelocity: {
+      vx: shooterVx,
+      vy: shooterVy
+    },
+    shooterOriginConfidence: Number(options.shooterOriginConfidence ?? 1),
+    shooterOriginSource: options.shooterOriginSource || 'realtime-self-velocity',
+    hitRadius,
     maxTargetSpeed: options.combatTargetDodgeSpeedPerTick || 50,
     motionScale
+  };
+  const intercept = quadraticInterceptCore(self, target, {
+    ...interceptOptions,
+    bulletRange,
+    maxTicks: options.combatInterceptMaxTicks,
   });
+  const unconstrainedIntercept = intercept || quadraticInterceptCore(self, target, {
+    ...interceptOptions,
+    bulletRange: Math.max(60000, bulletRange * 4),
+    maxTicks: Math.max(120, Number(options.combatInterceptMaxTicks || 0))
+  });
+  const requiredTravelDistance = numberOrNull(unconstrainedIntercept?.travelDistance);
+  const reachabilityGapCm = requiredTravelDistance === null
+    ? null
+    : Math.max(0, requiredTravelDistance - bulletRange - hitRadius);
+  const fireReachability = {
+    feasible: Boolean(intercept || (reachabilityGapCm !== null && reachabilityGapCm <= 0)),
+    unreachable: Boolean(!intercept && reachabilityGapCm !== null && reachabilityGapCm > 0),
+    reason: intercept
+      ? 'intercept-within-bullet-range'
+      : (reachabilityGapCm !== null && reachabilityGapCm > 0
+          ? 'intercept-beyond-bullet-range'
+          : 'intercept-unresolved'),
+    bulletRangeCm: bulletRange,
+    hitRadiusCm: hitRadius,
+    requiredTravelDistanceCm: requiredTravelDistance === null ? null : Math.round(requiredTravelDistance),
+    rangeGapCm: reachabilityGapCm === null ? null : Math.round(reachabilityGapCm),
+    requiredFlightTicks: numberOrNull(unconstrainedIntercept?.flightTicks)
+  };
   const flightTicks = intercept?.flightTicks ?? Math.max(0, distance / bulletSpeed);
   const leadTicks = flightTicks + observationToExecutionTicks;
+  const fallbackPredictedShooterOrigin = {
+    x: Number(self.x) + shooterVx * observationToExecutionTicks,
+    y: Number(self.y) + shooterVy * observationToExecutionTicks,
+    vx: shooterVx,
+    vy: shooterVy,
+    confidence: Math.max(0, Math.min(1, Number(options.shooterOriginConfidence ?? 1))),
+    source: String(options.shooterOriginSource || 'realtime-self-velocity')
+  };
+  const fallbackPredictedTargetAtCreation = {
+    x: tx + vx * observationToExecutionTicks,
+    y: ty + vy * observationToExecutionTicks,
+    vx,
+    vy
+  };
+  const fallbackAim = {
+    x: tx + vx * leadTicks - shooterVx * observationToExecutionTicks,
+    y: ty + vy * leadTicks - shooterVy * observationToExecutionTicks
+  };
   const stationarySpeed = Math.max(0, Number(options.stationarySpeed ?? options.combatStationarySpeed ?? 5));
   const behaviorStationary = behavior?.mode === 'stationary';
   const moving = !behaviorStationary && Boolean(target.moving || speed >= stationarySpeed || Math.hypot(vx, vy) >= stationarySpeed);
-  let x = moving ? (intercept?.x ?? tx + vx * leadTicks) : tx;
-  let y = moving ? (intercept?.y ?? ty + vy * leadTicks) : ty;
+  let x = moving ? (intercept?.x ?? fallbackAim.x) : tx;
+  let y = moving ? (intercept?.y ?? fallbackAim.y) : ty;
   const baseLeadX = x - tx;
   const baseLeadY = y - ty;
   const responseLeadScale = Math.max(0, Math.min(1.5, Number(responsePolicy?.aimLeadScale ?? 1)));
@@ -963,13 +1030,15 @@ function estimateAim(self, target, options = {}) {
   if (moving && coverageAffordable && behavior?.mode !== 'stationary') {
     const ux = vx / targetSpeed;
     const uy = vy / targetSpeed;
-    const reachable = targetSpeed * leadTicks;
+    const targetAtCreationX = Number(intercept?.predictedTargetAtCreation?.x ?? tx + vx * observationToExecutionTicks);
+    const targetAtCreationY = Number(intercept?.predictedTargetAtCreation?.y ?? ty + vy * observationToExecutionTicks);
+    const reachable = targetSpeed * flightTicks;
     const staticCandidates = [
-      { hypothesis: 'continue', x: tx + ux * reachable, y: ty + uy * reachable, probability: highEntropyCoverage ? 0.27 : 0.58 },
-      { hypothesis: 'stop', x: tx + vx * observationToExecutionTicks, y: ty + vy * observationToExecutionTicks, probability: highEntropyCoverage ? 0.29 : 0.14 },
-      { hypothesis: 'left-turn', x: tx - uy * reachable, y: ty + ux * reachable, probability: highEntropyCoverage ? 0.16 : 0.09 },
-      { hypothesis: 'right-turn', x: tx + uy * reachable, y: ty - ux * reachable, probability: highEntropyCoverage ? 0.16 : 0.09 },
-      { hypothesis: 'reverse', x: tx - ux * reachable, y: ty - uy * reachable, probability: 0.12 }
+      { hypothesis: 'continue', x: intercept?.x ?? targetAtCreationX + ux * reachable, y: intercept?.y ?? targetAtCreationY + uy * reachable, probability: highEntropyCoverage ? 0.27 : 0.58 },
+      { hypothesis: 'stop', x: targetAtCreationX, y: targetAtCreationY, probability: highEntropyCoverage ? 0.29 : 0.14 },
+      { hypothesis: 'left-turn', x: targetAtCreationX - uy * reachable, y: targetAtCreationY + ux * reachable, probability: highEntropyCoverage ? 0.16 : 0.09 },
+      { hypothesis: 'right-turn', x: targetAtCreationX + uy * reachable, y: targetAtCreationY - ux * reachable, probability: highEntropyCoverage ? 0.16 : 0.09 },
+      { hypothesis: 'reverse', x: targetAtCreationX - ux * reachable, y: targetAtCreationY - uy * reachable, probability: 0.12 }
     ].map(candidate => ({
       ...candidate,
       directionState: movementDirectionState(
@@ -998,8 +1067,8 @@ function estimateAim(self, target, options = {}) {
       candidateByDirection.set(state, {
         hypothesis: `route-${state}`,
         directionState: state,
-        x: state === 'stop' ? tx + vx * observationToExecutionTicks : tx + vector.x * reachable,
-        y: state === 'stop' ? ty + vy * observationToExecutionTicks : ty + vector.y * reachable,
+        x: state === 'stop' ? targetAtCreationX : targetAtCreationX + vector.x * reachable,
+        y: state === 'stop' ? targetAtCreationY : targetAtCreationY + vector.y * reachable,
         probability: 0.04
       });
     }
@@ -1115,7 +1184,7 @@ function estimateAim(self, target, options = {}) {
     x: Math.round(x),
     y: Math.round(y),
     mode: moving
-      ? (intercept ? (noDamageWidened ? 'quadratic-intercept-motion-probe' : 'quadratic-intercept') : 'linear-intercept-fallback')
+      ? (intercept ? (noDamageWidened ? 'quadratic-intercept-motion-probe' : 'quadratic-intercept') : 'relative-linear-intercept-fallback')
       : 'exact',
     distance: Math.round(distance),
     intercept: moving,
@@ -1136,6 +1205,24 @@ function estimateAim(self, target, options = {}) {
     } : null,
     responsePolicy,
     routeCoverage,
+    fireRiskClassification: {
+      ...fireRiskClassification,
+      coverageAffordable,
+      affordabilityDegraded: !coverageAffordable,
+      routeCoverageAvailable: Boolean(routeCoverage)
+    },
+    predictedShooterOrigin: intercept?.predictedShooterOrigin || fallbackPredictedShooterOrigin,
+    predictedTargetAtCreation: intercept?.predictedTargetAtCreation || fallbackPredictedTargetAtCreation,
+    relativeExecutionDisplacement: intercept?.relativeExecutionDisplacement || {
+      x: (vx - shooterVx) * observationToExecutionTicks,
+      y: (vy - shooterVy) * observationToExecutionTicks
+    },
+    fireReachability,
+    ackShooterOrigin: options.latestConfirmedShot?.ackShooterOrigin || null,
+    shooterOriginErrorCm: numberOrNull(options.latestConfirmedShot?.shooterOriginErrorCm),
+    shooterOriginErrorSummary: options.shooterOriginErrorSummary || null,
+    targetPredictionErrorCm: null,
+    totalCorridorMissCm: null,
     timing: {
       observedTick: numberOrNull(options.observedTick),
       createdTickEstimate: numberOrNull(options.observedTick) === null
@@ -1359,6 +1446,36 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
     !preDodgeBlockedReason
       && nextShotInMs !== null
   );
+  const preDodgeStaminaCost = Math.max(0, Number(options.combatPreDodgeStaminaCostMs ?? 1000));
+  const preDodgeDirectionThreat = currentDirectionThreats.slice().sort((a, b) =>
+    Number(a?.directHits || 0) - Number(b?.directHits || 0)
+      || Number(b?.minCPA || 0) - Number(a?.minCPA || 0))[0] || null;
+  const ordinaryDodgeThreat = (dodge?.threatField || []).find(item =>
+    Number(item?.dx) === Number(dodge?.dx) && Number(item?.dy) === Number(dodge?.dy)) || null;
+  const preDodgeCandidate = shootingPhaseState === 'preparing' ? {
+    phase: 'preparing',
+    predictedCreatedTick,
+    nextShotInMs: nextShotInMs === null ? null : Math.round(nextShotInMs),
+    commandDelayP90Ticks,
+    flightTicks,
+    latestSafeCommandTick,
+    currentTick,
+    currentStamina5s: selfStamina5s,
+    projectedStamina5s: selfStamina5s === null ? null : Math.max(0, selfStamina5s - preDodgeStaminaCost),
+    staminaCost: preDodgeStaminaCost,
+    reserveMs: COMBAT_CONSTANTS.SHOOT_DODGE_RESERVE_MS,
+    direction: currentDirection,
+    predictedMinimumCpaCm: numberOrNull(preDodgeDirectionThreat?.minCPA),
+    predictedDirectHits: numberOrNull(preDodgeDirectionThreat?.directHits),
+    blockedReason: preDodgeBlockedReason,
+    ordinaryDodge: dodge ? {
+      dx: numberOrNull(dodge.dx),
+      dy: numberOrNull(dodge.dy),
+      reason: dodge.reason || '',
+      minimumCpaCm: numberOrNull(ordinaryDodgeThreat?.minCPA),
+      directHits: numberOrNull(ordinaryDodgeThreat?.directHits)
+    } : null
+  } : null;
   const backAway = shouldBackAwayFromTarget(self, target);
   const closeRange = Math.max(0, Number(options.combatPressureCloseRange || options.combatPassiveRunnerCloseRange || COMBAT_CONSTANTS.NO_DAMAGE_PRESS_CLOSE_RANGE));
   const pressureClose = Boolean(
@@ -1461,6 +1578,7 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
       currentBurstShotCount: numberOrNull(opponentBehavior?.metrics?.currentBurstShotCount),
       burstConfidence
     } : null,
+    preDodgeCandidate,
     preDodgeBlockedReason: preDodge ? '' : preDodgeBlockedReason,
     contactEntryGuard: options.contactEntryGuard || null,
     shootingPhaseSource: shootingPhase?.shootingPhaseSource || '',
@@ -1596,6 +1714,31 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
   ].map(String))).slice(-256);
   opponentBehaviorState.recentHitRate = observedHitRate;
   behaviorMap[String(id)] = opponentBehaviorState;
+  const fireRiskProfile = opponentMotionProfileCore(self, target, motionSamples, {
+    stationarySpeed: options.combatStationarySpeed
+  });
+  const fireRiskTransition = opponentBehaviorState?.metrics?.movementTransitions || null;
+  const fireRiskRecentShots = recentAcceptedShotHitSummary(stateful, id, 15);
+  const fireRiskClassification = classifyFireRiskCore(same ? previous?.fireRiskClassification : null, {
+    targetId: id,
+    nowMs,
+    controlStyle: opponentBehaviorState?.dimensions?.controlStyle?.state,
+    controlStyleConfidence: opponentBehaviorState?.dimensions?.controlStyle?.confidence,
+    maneuverScale: fireRiskProfile.maneuverScale,
+    maneuverDurationMs: fireRiskProfile.durationMs,
+    lateralFlips: fireRiskProfile.lateralFlips,
+    automationLikelihood: opponentBehaviorState?.automationLikelihood,
+    routeSamples: fireRiskTransition?.conditionalSampleCount || fireRiskTransition?.transitionCount,
+    routeDistribution: fireRiskTransition?.conditionalSampleCount
+      ? fireRiskTransition?.conditionalNext
+      : fireRiskTransition?.next,
+    recentHitRate: fireRiskRecentShots.hitRate,
+    recentShotCount: fireRiskRecentShots.shotCount,
+    noProgressAcceptedShots: Math.max(
+      0,
+      Number(previousMetrics.acceptedShots || 0) - Number(same ? previous?.acceptedShotsAtLastDamage || 0 : 0)
+    )
+  }, options.fireRiskClassification);
   const escapeDecision = combatEscapeDecisionCore(self, target, {
     ...(same ? previous : null),
     opponentBehaviorState
@@ -1646,6 +1789,7 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
     noDamageMs: Math.max(0, nowMs - (damaged ? nowMs : (same ? Number(previous.lastDamageAt || previous.at || nowMs) : nowMs))),
     motionSamples,
     opponentBehaviorState,
+    fireRiskClassification,
     escapeDecision,
     provenHitRate: Math.max(
       Number(same ? previous.provenHitRate || 0 : 0),
@@ -1848,6 +1992,8 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     combatTargetState,
     observedTick: realtime.tick,
     executionTiming: state?.command?.shooting?.timing || options.executionTiming,
+    latestConfirmedShot: state?.command?.lastAck?.matchedShot || null,
+    shooterOriginErrorSummary: state?.command?.shooting?.shooterOrigin || null,
     actualShots: stateful?.combatMetrics?.acceptedShots || stateful?.combatMetrics?.actualShots || 0
   });
   if (!aim.ok) dataGaps.push(aim.reason);
@@ -1935,8 +2081,13 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     noDamageMs: combatTargetState?.noDamageMs,
     targetHp: hpValue(target),
     selfHp: hpValue(self),
-    highEntropy: Boolean(aim.ok && String(aim.routeCoverage?.style || '').startsWith('high-entropy-')),
-    defensivePressure
+    fireRiskClassification: aim.fireRiskClassification || combatTargetState?.fireRiskClassification || null,
+    highEntropy: Boolean((aim.fireRiskClassification || combatTargetState?.fireRiskClassification)?.highEntropy),
+    unreachableIntercept: Boolean(aim.fireReachability?.unreachable),
+    reachabilityGapCm: aim.fireReachability?.rangeGapCm,
+    defensivePressure,
+    proactiveCombat: !contactEntryOnly,
+    shootingStaminaSpent: noProgressAcceptedShots * Math.max(1, Number(options.combatShotStaminaCostMs ?? 500))
   }, options.highEntropyFireGate);
   const baseCadenceMs = Number.isFinite(Number(lowConfidence.cadenceMs)) && lowConfidence.throttle
     ? Number(lowConfidence.cadenceMs)
@@ -2028,11 +2179,14 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
       behaviorPolicy: behaviorPolicy?.name || '',
       behaviorReason: behaviorPolicy?.reason || '',
       highEntropyFireGate,
+      fireRiskClassification: aim.fireRiskClassification || combatTargetState?.fireRiskClassification || null,
       expectedHitProbability,
       selectedRouteProbability,
       recentAcceptedHitRate: recentHitSummary.hitRate,
       recentAcceptedShotCount: recentHitSummary.shotCount,
       noProgressAcceptedShots,
+      noProgressShootingStaminaSpent: noProgressAcceptedShots * Math.max(1, Number(options.combatShotStaminaCostMs ?? 500)),
+      fireSuppressionReason: highEntropyFireGate.suppressFire ? highEntropyFireGate.reason : 'none',
       defensivePressure,
       defensivePressureReason: targetCollisionBullet
         ? 'collision-risk-target-bullet'

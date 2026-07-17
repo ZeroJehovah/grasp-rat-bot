@@ -27,43 +27,67 @@ function finalActionCommitmentRank(action) {
   return Number.isFinite(value) ? Math.min(100, Math.max(0, value)) : 0;
 }
 
-function shouldHoldPreviousFinalAction(previousAction, previousFocus, currentAction, currentFocus, ageMs, options = {}) {
+function finalActionHoldDecision(previousAction, previousFocus, currentAction, currentFocus, ageMs, options = {}) {
+  const result = (hold, reason = '', detail = {}) => ({ hold, reason, ...detail });
   const holdMs = Math.max(0, Math.round(Number(options.holdMs || 0) || 0));
-  if (!(holdMs > 0) || ageMs > holdMs) return false;
-  if (!finalActionReusable(previousAction) || !currentAction || !currentFocus || !previousFocus) return false;
-  if (previousFocus.key === currentFocus.key) return false;
+  if (!(holdMs > 0) || ageMs > holdMs) return result(false);
+  if (!finalActionReusable(previousAction) || !currentAction || !currentFocus || !previousFocus) return result(false);
+  if (previousFocus.key === currentFocus.key) return result(false);
   const previousBand = String(previousFocus.band || actionPriorityBand(previousAction));
   const currentBand = String(currentFocus.band || actionPriorityBand(currentAction));
-  if (currentBand === 'exit') return false;
-  if (previousBand === 'safety' && currentBand !== 'profit') return false;
-  if (currentAction.urgent === true || currentAction.immediate === true || currentAction.realThreatEvidence === true) return false;
+  if (currentBand === 'exit') return result(false);
+  if (previousBand === 'safety' && currentBand !== 'profit') return result(false);
+  if (currentAction.urgent === true || currentAction.immediate === true || currentAction.realThreatEvidence === true) return result(false);
   if (previousBand === 'combat' && currentBand === 'safety') {
     const evidence = currentAction.threatEvidence || currentAction.safetyEvidence || {};
-    return !(evidence.recentDamage || evidence.realBulletOwner || evidence.firing || evidence.invulnerableClose);
+    return result(
+      !(evidence.recentDamage || evidence.realBulletOwner || evidence.firing || evidence.invulnerableClose),
+      'higher-priority-band-stick'
+    );
   }
   const previousRank = finalActionBandRank(previousBand);
   const currentRank = finalActionBandRank(currentBand);
-  if (previousRank <= 0 || currentRank <= 0) return false;
-  if (currentRank > previousRank) return false;
-  if (previousBand === currentBand && previousBand !== 'profit') return false;
+  if (previousRank <= 0 || currentRank <= 0) return result(false);
+  if (currentRank > previousRank) return result(false);
+  if (previousBand === currentBand && previousBand !== 'profit') return result(false);
   if (previousBand === 'profit' && currentBand === 'profit') {
     const previousCommitment = finalActionCommitmentRank(previousAction);
     const currentCommitment = finalActionCommitmentRank(currentAction);
-    if (currentCommitment > previousCommitment) return false;
-    if (previousCommitment > currentCommitment) return true;
+    if (currentCommitment > previousCommitment) return result(false);
+    if (previousCommitment > currentCommitment) {
+      return result(true, 'higher-commitment-stick', { previousCommitment, currentCommitment });
+    }
     const previousRoi = Number(previousAction.finalCandidate?.netROI ?? previousAction.netROI ?? previousAction.roiScore ?? previousAction.score);
     const currentRoi = Number(currentAction.finalCandidate?.netROI ?? currentAction.netROI ?? currentAction.roiScore ?? currentAction.score);
     const switchCost = Math.max(0, Number(currentAction.finalCandidate?.switchCost ?? currentAction.switchCost ?? 0));
     if (Number.isFinite(previousRoi) && Number.isFinite(currentRoi)) {
-      const requiredRatio = Math.max(1.05, Number(options.profitSwitchRoiRatio || 1.15));
-      const effectiveCurrent = currentRoi / Math.max(1, 1 + switchCost / 1000);
-      return effectiveCurrent < previousRoi * requiredRatio;
+      const configuredRatio = Number(options.profitSwitchRoiRatio ?? 1);
+      const requiredRatio = Math.max(1, Number.isFinite(configuredRatio) ? configuredRatio : 1);
+      const tolerance = Math.max(0, Number(options.profitSwitchRoiTolerance ?? 1e-9));
+      const requiredCurrentRoi = previousRoi * requiredRatio + tolerance;
+      const hold = currentRoi <= requiredCurrentRoi;
+      return result(hold, hold
+        ? (switchCost > 0 ? 'measured-switch-cost-stick' : 'roi-noise-tolerance')
+        : '', {
+        previousRoi,
+        currentRoi,
+        switchCost,
+        requiredRatio,
+        requiredCurrentRoi,
+        improvementRatio: previousRoi > 0 ? currentRoi / previousRoi : null,
+        previousCommitment,
+        currentCommitment
+      });
     }
-    return true;
+    return result(true, 'roi-evidence-unavailable');
   }
-  if (previousBand === 'profit' && currentBand !== 'profit') return false;
-  if (previousBand === 'safety' && currentBand === 'combat') return false;
-  return true;
+  if (previousBand === 'profit' && currentBand !== 'profit') return result(false);
+  if (previousBand === 'safety' && currentBand === 'combat') return result(false);
+  return result(true, 'higher-priority-band-stick');
+}
+
+function shouldHoldPreviousFinalAction(previousAction, previousFocus, currentAction, currentFocus, ageMs, options = {}) {
+  return finalActionHoldDecision(previousAction, previousFocus, currentAction, currentFocus, ageMs, options).hold;
 }
 
 function defaultClone(value) {
@@ -96,7 +120,12 @@ function applyFinalActionArbitrationCore(action, state, options = {}) {
   let selectedFocus = currentFocus;
   let override = null;
 
-  if (shouldHoldPreviousFinalAction(previousAction, previousFocus, action, currentFocus, ageMs, { holdMs })) {
+  const holdDecision = finalActionHoldDecision(previousAction, previousFocus, action, currentFocus, ageMs, {
+    holdMs,
+    profitSwitchRoiRatio: options.profitSwitchRoiRatio,
+    profitSwitchRoiTolerance: options.profitSwitchRoiTolerance
+  });
+  if (holdDecision.hold) {
     override = {
       type: 'final-action-arbitration',
       at: t,
@@ -107,7 +136,14 @@ function applyFinalActionArbitrationCore(action, state, options = {}) {
       holdRemainingMs: Math.max(0, Math.round(holdMs - ageMs)),
       from: currentFocus,
       to: previousFocus,
-      reason: 'higher-priority-band-stick'
+      reason: holdDecision.reason,
+      previousNetROI: Number.isFinite(holdDecision.previousRoi) ? holdDecision.previousRoi : null,
+      currentNetROI: Number.isFinite(holdDecision.currentRoi) ? holdDecision.currentRoi : null,
+      switchCost: Number.isFinite(holdDecision.switchCost) ? holdDecision.switchCost : null,
+      requiredImprovementRatio: Number.isFinite(holdDecision.requiredRatio) ? holdDecision.requiredRatio : null,
+      requiredCurrentNetROI: Number.isFinite(holdDecision.requiredCurrentRoi) ? holdDecision.requiredCurrentRoi : null,
+      previousCommitment: Number.isFinite(holdDecision.previousCommitment) ? holdDecision.previousCommitment : null,
+      currentCommitment: Number.isFinite(holdDecision.currentCommitment) ? holdDecision.currentCommitment : null
     };
     selected = {
       ...previousAction,
@@ -157,6 +193,8 @@ function applyFinalActionArbitration(currentAction, previousFinalAction, state, 
   if (previousFinalAction && !state.lastAction) state.lastAction = previousFinalAction;
   const result = applyFinalActionArbitrationCore(currentAction, state, {
     holdMs: config.finalActionArbitrationHoldMs ?? config.holdMs,
+    profitSwitchRoiRatio: config.profitSwitchRoiRatio,
+    profitSwitchRoiTolerance: config.profitSwitchRoiTolerance,
     historyLimit: config.finalActionArbitrationHistoryLimit ?? config.historyLimit,
     source: config.source || ''
   });
@@ -171,6 +209,7 @@ module.exports = {
   finalActionBandRank,
   finalActionReusable,
   finalActionCommitmentRank,
+  finalActionHoldDecision,
   shouldHoldPreviousFinalAction,
   applyFinalActionArbitrationCore,
   applyFinalActionArbitration,

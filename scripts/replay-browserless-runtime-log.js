@@ -201,6 +201,22 @@ function bulletCorridorMiss(rows, ack, aim = null) {
   return minMiss;
 }
 
+function theoreticalShotMinimumMiss(rows, ack) {
+  const startX = Number(ack.start_x);
+  const startY = Number(ack.start_y);
+  const speed = Math.max(1, Number(ack.speed_per_tick || 500));
+  const createdTick = Number(ack.created_tick);
+  const expireTick = Number(ack.expire_tick || createdTick + 30);
+  let minimum = Infinity;
+  for (let tick = createdTick; tick <= expireTick; tick += 1) {
+    const target = targetAtTick(rows, tick);
+    if (!target) continue;
+    const targetDistance = Math.hypot(Number(target.x) - startX, Number(target.y) - startY);
+    minimum = Math.min(minimum, Math.abs(targetDistance - speed * (tick - createdTick)));
+  }
+  return minimum;
+}
+
 function confirmedShotsForRows(options, rows) {
   if (!rows.length) return [];
   const wsFile = path.join(path.dirname(options.file), 'ws.jsonl');
@@ -433,6 +449,7 @@ function replayCombat(options) {
       },
       actualShots: shotEvaluations.length
     });
+    state.fireRiskClassification = improved.fireRiskClassification || state.fireRiskClassification || null;
     const baselineMiss = bulletCorridorMiss(rows, shot.ack);
     const improvedMiss = bulletCorridorMiss(rows, shot.ack, improved);
     const routeCandidateMisses = Object.fromEntries((improved.routeCoverage?.candidates || []).map(candidate => [
@@ -453,6 +470,9 @@ function replayCombat(options) {
       selectedRouteProbability: Number(selectedRoute?.probability || 0),
       expectedHitProbability: Number(selectedRoute?.expectedHitProbability
         ?? (Number(selectedRoute?.probability || 0) * Number(improved.confidence || 0))),
+      fireRiskClassification: improved.fireRiskClassification || null,
+      fireReachability: improved.fireReachability || null,
+      theoreticalMinimumMiss: theoreticalShotMinimumMiss(rows, shot.ack),
       routeContextKey: String(improved.routeCoverage?.contextKey || ''),
       selfHp: Number(row.detail.self?.hp),
       targetHp: Number(row.detail.target?.hp),
@@ -532,7 +552,10 @@ function replayCombat(options) {
       noDamageMs: Math.max(0, Number(item.shot.at || 0) - lastProgressAt),
       selfHp: item.selfHp,
       targetHp: item.targetHp,
-      highEntropy: String(item.routeStyle || '').startsWith('high-entropy-'),
+      fireRiskClassification: item.fireRiskClassification,
+      highEntropy: Boolean(item.fireRiskClassification?.highEntropy),
+      unreachableIntercept: Boolean(item.fireReachability?.unreachable),
+      reachabilityGapCm: item.fireReachability?.rangeGapCm,
       defensivePressure: item.defensivePressure
     });
     const cadenceBlocked = !gate.suppressFire
@@ -622,6 +645,19 @@ function replayCombat(options) {
   };
   const totalStaminaCost = metricDelta('totalStaminaSpent');
   const shootingStaminaCost = metricDelta('shootingStaminaSpent') ?? confirmedShots.length * 500;
+  const theoreticalMisses = shotEvaluations
+    .map(item => Number(item.theoreticalMinimumMiss))
+    .filter(Number.isFinite);
+  const physicalReachability = {
+    shots: theoreticalMisses.length,
+    theoreticalHits: theoreticalMisses.filter(value => value <= options.hitRadius).length,
+    unreachableShots: theoreticalMisses.filter(value => value > options.hitRadius).length,
+    meanMinimumMissCm: theoreticalMisses.length
+      ? Number((theoreticalMisses.reduce((sum, value) => sum + value, 0) / theoreticalMisses.length).toFixed(1))
+      : null,
+    minimumMissCm: theoreticalMisses.length ? Number(Math.min(...theoreticalMisses).toFixed(1)) : null,
+    hitRadiusCm: options.hitRadius
+  };
   const result = {
     mode: 'combat',
     targetId: options.targetId,
@@ -668,6 +704,7 @@ function replayCombat(options) {
     },
     exchangeStopLossReplay,
     fireDisciplineReplay,
+    physicalReachability,
     aimDiagnostics,
     routeCandidateOracle
   };
@@ -676,6 +713,7 @@ function replayCombat(options) {
       || (confirmedShots.length > 0 && (
         improvedHits > baselineHits
         || result.improved.meanAimMissCm < result.baseline.meanAimMissCm
+        || (physicalReachability.theoreticalHits === 0 && fireDisciplineReplay?.accepted)
         || (result.improved.firstEstimatedDamageDelayMs !== null
           && (result.baseline.firstEstimatedDamageDelayMs === null
             || result.improved.firstEstimatedDamageDelayMs < result.baseline.firstEstimatedDamageDelayMs))

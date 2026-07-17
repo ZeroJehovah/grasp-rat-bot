@@ -10,6 +10,7 @@ const { ACTION_PRIORITY_BANDS, getActionPriorityBand, buildActionFocus } = requi
 const { applyFinalActionArbitration } = require('./action-arbitration');
 const { buildFinalActionCandidate, selectFinalActionCandidateCore } = require('./final-candidate-selection');
 const { quadraticInterceptCore } = require('./combat-aim');
+const { classifyFireRiskCore, evaluateHighEntropyFireGateCore } = require('./combat-fire-discipline');
 const {
   applyCombatMovementModifiers,
   calculateDodgeDirection,
@@ -238,6 +239,92 @@ function runStrategyModuleSelfTests() {
     passed: Boolean(intercept
       && Math.abs(intercept.x - (1000 + 100 * (2 + intercept.flightTicks))) < 0.001
       && intercept.flightTicks > 0)
+  });
+  const parallelIntercept = quadraticInterceptCore(
+    { x: 0, y: 0, vx: 35, vy: -35 },
+    { x: 8000, y: 4000, vx: 35, vy: -35 },
+    { bulletSpeed: 500, observationToExecutionTicks: 5, bulletRange: 20000, predictShooterOrigin: true }
+  );
+  const movingShooterIntercept = quadraticInterceptCore(
+    { x: 0, y: 0, vx: 50, vy: 0 },
+    { x: 8000, y: 0, vx: 0, vy: 0 },
+    { bulletSpeed: 500, observationToExecutionTicks: 5, bulletRange: 20000, predictShooterOrigin: true }
+  );
+  const oppositeIntercept = quadraticInterceptCore(
+    { x: 0, y: 0, vx: -30, vy: 0 },
+    { x: 8000, y: 0, vx: 30, vy: 0 },
+    { bulletSpeed: 500, observationToExecutionTicks: 5, bulletRange: 20000, predictShooterOrigin: true }
+  );
+  const commandedTurnIntercept = quadraticInterceptCore(
+    { x: 0, y: 0, vx: 50, vy: 0 },
+    { x: 8000, y: 0, vx: 0, vy: 0 },
+    {
+      bulletSpeed: 500,
+      observationToExecutionTicks: 5,
+      bulletRange: 20000,
+      predictShooterOrigin: true,
+      shooterVelocity: { vx: 0, vy: 50 },
+      shooterOriginSource: 'confirmed-command-direction'
+    }
+  );
+  results.push({
+    name: 'created-tick-shooter-origin-covers-parallel-static-opposite-and-commanded-turn',
+    passed: Boolean(parallelIntercept
+      && parallelIntercept.relativeExecutionDisplacement.x === 0
+      && parallelIntercept.relativeExecutionDisplacement.y === 0
+      && parallelIntercept.predictedShooterOrigin.x === 175
+      && parallelIntercept.predictedTargetAtCreation.x === 8175
+      && movingShooterIntercept?.predictedShooterOrigin.x === 250
+      && movingShooterIntercept?.predictedTargetAtCreation.x === 8000
+      && oppositeIntercept?.relativeExecutionDisplacement.x === 300
+      && commandedTurnIntercept?.predictedShooterOrigin.x === 0
+      && commandedTurnIntercept?.predictedShooterOrigin.y === 250
+      && commandedTurnIntercept?.predictedShooterOrigin.source === 'confirmed-command-direction')
+  });
+  const highEntropyRisk = classifyFireRiskCore(null, {
+    targetId: 8,
+    nowMs: 1000,
+    controlStyle: 'human-like',
+    controlStyleConfidence: 0.9,
+    maneuverScale: 0.7,
+    maneuverDurationMs: 9000,
+    lateralFlips: 8,
+    routeSamples: 12,
+    routeDistribution: [{ probability: 0.4 }, { probability: 0.35 }, { probability: 0.25 }]
+  });
+  const latchedRisk = classifyFireRiskCore(highEntropyRisk, {
+    targetId: 8,
+    nowMs: 1200,
+    controlStyle: 'unknown',
+    maneuverScale: 0,
+    maneuverDurationMs: 0
+  });
+  const switchedRisk = classifyFireRiskCore(latchedRisk, {
+    targetId: 9,
+    nowMs: 1400,
+    controlStyle: 'periodic-script',
+    controlStyleConfidence: 0.9,
+    maneuverScale: 0.05
+  });
+  const boundedDefense = evaluateHighEntropyFireGateCore({
+    expectedHitProbability: 0.5,
+    recentHitRate: 0,
+    recentShotCount: 15,
+    noProgressAcceptedShots: 20,
+    noDamageMs: 12000,
+    selfHp: 80,
+    targetHp: 80,
+    highEntropy: true,
+    defensivePressure: true
+  });
+  results.push({
+    name: 'fire-risk-classification-survives-affordability-gap-and-isolates-targets',
+    passed: highEntropyRisk.highEntropy === true
+      && latchedRisk.highEntropy === true
+      && latchedRisk.latched === true
+      && switchedRisk.highEntropy === false
+      && boundedDefense.suppressFire === true
+      && boundedDefense.reason === 'high-entropy-reacquire'
   });
 
   const dodge = calculateDodgeDirection(
@@ -1348,6 +1435,49 @@ function runStrategyModuleSelfTests() {
       && strongerCommitmentResult.action.reason === 'post-attack-drop-coin'
   });
 
+  const roiFixtures = [
+    { previousId: '4117', previousRoi: 0.00014949101170801116, currentId: '4118', currentRoi: 0.00015877127897580306 },
+    { previousId: '4049', previousRoi: 0.00015278662848772437, currentId: '4017', currentRoi: 0.00016386276240056352 },
+    { previousId: '7175', previousRoi: 0.00012489330960895634, currentId: '7166', currentRoi: 0.00014179160416276859 },
+    { previousId: '7004', previousRoi: 0.00027304497994291843, currentId: '6900', currentRoi: 0.00029470426153367207 }
+  ];
+  const roiFixtureResults = roiFixtures.map(fixture => {
+    const previous = {
+      kind: 'coin',
+      band: 'profit',
+      reason: 'best-opportunity-coin-route',
+      target: { id: fixture.previousId },
+      finalCandidate: { priorityBand: 'profit', hardGate: false, commitmentRank: 0, switchCost: 0, netROI: fixture.previousRoi }
+    };
+    const current = {
+      kind: 'coin',
+      band: 'profit',
+      reason: 'best-opportunity-coin',
+      target: { id: fixture.currentId },
+      finalCandidate: { priorityBand: 'profit', hardGate: false, commitmentRank: 0, switchCost: 0, netROI: fixture.currentRoi }
+    };
+    const fixtureState = {
+      lastAction: previous,
+      lastFocus: buildActionFocus(previous),
+      lastSelectedAt: Date.now() - 100,
+      lastOverride: null,
+      history: []
+    };
+    const selected = applyFinalActionArbitration(current, previous, fixtureState, {
+      finalActionArbitrationHoldMs: 1800,
+      profitSwitchRoiRatio: 1
+    });
+    return !selected.held
+      && selected.action.target.id === fixture.currentId
+      && selected.action.finalCandidate.commitmentRank === 0
+      && selected.action.finalCandidate.hardGate === false
+      && selected.action.finalCandidate.switchCost === 0;
+  });
+  results.push({
+    name: 'arbitration-zero-cost-profit-roi-regression-fixtures-switch-immediately',
+    passed: roiFixtureResults.every(Boolean)
+  });
+
   // Test arbitration - exit never held
   const exitAction = { kind: 'leave', reason: 'test-exit' };
   const state4 = {
@@ -1395,6 +1525,8 @@ function runStrategyModuleSelfTests() {
       && switchResult.action.targetSwitch
       && switchResult.event.type === 'target-switch'
       && switchResult.event.pairSwitchCount === 1
+      && switchResult.event.oscillating === false
+      && switchResult.event.oscillationSequence.length === 0
       && switchResult.event.previousDecision.score === 2
       && switchResult.event.previousDecision.staminaCost === 9
   });
@@ -1409,6 +1541,7 @@ function runStrategyModuleSelfTests() {
     passed: oscillationResult.event
       && oscillationResult.event.pairSwitchCount === 2
       && oscillationResult.event.oscillating === true
+      && oscillationResult.event.oscillationSequence.length === 2
   });
 
   // Test coin diagnostics

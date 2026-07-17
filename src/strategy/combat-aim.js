@@ -70,10 +70,18 @@ function quadraticInterceptCore(self, target, options = {}) {
   const observationToExecutionTicks = Math.max(0, Number(
     options.observationToExecutionTicks ?? options.renderDelayTicks ?? 5
   ));
+  const predictShooterOrigin = options.predictShooterOrigin === true;
+  const shooterVelocity = options.shooterVelocity && typeof options.shooterVelocity === 'object'
+    ? options.shooterVelocity
+    : self;
+  const shooterVx = predictShooterOrigin ? (Number(shooterVelocity?.vx) || 0) : 0;
+  const shooterVy = predictShooterOrigin ? (Number(shooterVelocity?.vy) || 0) : 0;
+  const createdShooterX = sx + shooterVx * observationToExecutionTicks;
+  const createdShooterY = sy + shooterVy * observationToExecutionTicks;
   const compensatedX = px + vx * observationToExecutionTicks;
   const compensatedY = py + vy * observationToExecutionTicks;
-  const dx = compensatedX - sx;
-  const dy = compensatedY - sy;
+  const dx = compensatedX - createdShooterX;
+  const dy = compensatedY - createdShooterY;
   const c = dx * dx + dy * dy;
   if (!(c > 0)) return null;
   const a = vx * vx + vy * vy - bulletSpeed * bulletSpeed;
@@ -95,7 +103,7 @@ function quadraticInterceptCore(self, target, options = {}) {
   if (!Number.isFinite(flightTicks)) return null;
   const x = compensatedX + vx * flightTicks;
   const y = compensatedY + vy * flightTicks;
-  const travelDistance = Math.hypot(x - sx, y - sy);
+  const travelDistance = Math.hypot(x - createdShooterX, y - createdShooterY);
   if (travelDistance > bulletRange + Math.max(0, Number(options.hitRadius || 90))) return null;
   const targetSpeed = Math.hypot(vx, vy);
   const maxTargetSpeed = Math.max(1, Number(options.maxTargetSpeed || 50));
@@ -111,6 +119,24 @@ function quadraticInterceptCore(self, target, options = {}) {
     leadDistance: Math.hypot(x - px, y - py),
     observationToExecutionTicks,
     renderDelayTicks: observationToExecutionTicks,
+    predictedShooterOrigin: {
+      x: createdShooterX,
+      y: createdShooterY,
+      vx: shooterVx,
+      vy: shooterVy,
+      confidence: predictShooterOrigin ? clamp(Number(options.shooterOriginConfidence ?? 1), 0, 1) : 0,
+      source: predictShooterOrigin ? String(options.shooterOriginSource || 'realtime-velocity') : 'current-position'
+    },
+    predictedTargetAtCreation: {
+      x: compensatedX,
+      y: compensatedY,
+      vx,
+      vy
+    },
+    relativeExecutionDisplacement: {
+      x: (vx - shooterVx) * observationToExecutionTicks,
+      y: (vy - shooterVy) * observationToExecutionTicks
+    },
     targetSpeed,
     confidence: clamp(0.62 + timeFactor * 0.25 - speedPenalty - motionPenalty, 0.25, 1)
   };

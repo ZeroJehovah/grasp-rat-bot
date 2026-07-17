@@ -116,6 +116,18 @@ function shotTimingSummary(samples = []) {
   };
 }
 
+function shotOriginSummary(samples = []) {
+  const values = (samples || []).map(Number).filter(Number.isFinite).slice(-64);
+  const median = percentile(values, 0.5);
+  const deviations = median === null ? [] : values.map(value => Math.abs(value - median));
+  return {
+    sampleCount: values.length,
+    medianCm: median,
+    p90Cm: percentile(values, 0.9),
+    madCm: percentile(deviations, 0.5)
+  };
+}
+
 function shotAckTimeoutMs(samples = []) {
   const values = samples.map(Number).filter(Number.isFinite).slice(-64);
   const p90 = percentile(values, 0.9);
@@ -169,6 +181,7 @@ function createInitialState(userId = 0) {
       pendingShots: [],
       confirmedShots: [],
       delaySamples: [],
+      originErrorSamples: [],
       ackLatencySamples: []
     },
     transportDiagnostics: {
@@ -331,6 +344,19 @@ function createBrowserlessStateStore(options = {}) {
         createdTick,
         executionDelayTicks: observedTick !== null && createdTick !== null ? createdTick - observedTick : null
       };
+      const predictedShooterX = numericOrNull(confirmed.predictedShooterX);
+      const predictedShooterY = numericOrNull(confirmed.predictedShooterY);
+      const ackShooterX = numericOrNull(ack.start_x);
+      const ackShooterY = numericOrNull(ack.start_y);
+      confirmed.predictedShooterOrigin = predictedShooterX === null || predictedShooterY === null
+        ? null
+        : { x: predictedShooterX, y: predictedShooterY };
+      confirmed.ackShooterOrigin = ackShooterX === null || ackShooterY === null
+        ? null
+        : { x: ackShooterX, y: ackShooterY };
+      confirmed.shooterOriginErrorCm = confirmed.predictedShooterOrigin && confirmed.ackShooterOrigin
+        ? Math.hypot(predictedShooterX - ackShooterX, predictedShooterY - ackShooterY)
+        : null;
       state.command.acceptedShots += 1;
       state.command.ackLatencySamples.push(confirmed.requestToAckMs);
       state.command.ackLatencySamples = state.command.ackLatencySamples.slice(-64);
@@ -342,6 +368,10 @@ function createBrowserlessStateStore(options = {}) {
           executionDelayTicks: confirmed.executionDelayTicks
         });
         state.command.delaySamples = state.command.delaySamples.slice(-64);
+      }
+      if (Number.isFinite(confirmed.shooterOriginErrorCm)) {
+        state.command.originErrorSamples.push(confirmed.shooterOriginErrorCm);
+        state.command.originErrorSamples = state.command.originErrorSamples.slice(-64);
       }
     }
     state.command.lastAck = { ...ack, matchedShot: confirmed };
@@ -378,7 +408,11 @@ function createBrowserlessStateStore(options = {}) {
       routeProbability: numericOrNull(request.routeProbability),
       predictedDirectionState: String(request.predictedDirectionState || ''),
       aimConfidence: numericOrNull(request.aimConfidence),
-      expectedHitProbability: numericOrNull(request.expectedHitProbability)
+      expectedHitProbability: numericOrNull(request.expectedHitProbability),
+      predictedShooterX: numericOrNull(request.predictedShooterX),
+      predictedShooterY: numericOrNull(request.predictedShooterY),
+      predictedTargetAtCreationX: numericOrNull(request.predictedTargetAtCreationX),
+      predictedTargetAtCreationY: numericOrNull(request.predictedTargetAtCreationY)
     };
     state.command.requestedShots += 1;
     state.command.pendingShots.push(shot);
@@ -445,6 +479,7 @@ function createBrowserlessStateStore(options = {}) {
           : null,
         ackTimeoutMs,
         timing,
+        shooterOrigin: shotOriginSummary(state.command.originErrorSamples),
         pendingShots: cloneJson(state.command.pendingShots.slice(-8)),
         confirmedShots: cloneJson(state.command.confirmedShots.slice(-16))
       }
@@ -515,6 +550,7 @@ function createBrowserlessStateStore(options = {}) {
             : null,
           ackTimeoutMs,
           timing,
+          shooterOrigin: shotOriginSummary(state.command.originErrorSamples),
           pendingShots: state.command.pendingShots.slice(-8),
           confirmedShots: state.command.confirmedShots.slice(-16)
         }

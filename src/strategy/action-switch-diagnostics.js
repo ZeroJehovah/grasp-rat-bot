@@ -68,7 +68,8 @@ function recordActionSwitchDiagnosticsCore(action, state, options = {}) {
     const pairKey = actionSwitchPairKey(previous, current);
     const recentPair = state.events
       .filter(item => item?.pairKey === pairKey && t - Number(item.at || 0) <= windowMs);
-    const reversed = recentPair.some(item => item?.from?.key === current.key && item?.to?.key === previous.key);
+    const reversedEvents = recentPair.filter(item => item?.from?.key === current.key && item?.to?.key === previous.key);
+    const reversed = reversedEvents.length > 0;
     const targetChanged = Boolean(current.targeted && previousTarget && previousTarget.key !== current.key);
     const targetChange = targetChanged ? {
       from: previousTarget,
@@ -85,7 +86,16 @@ function recordActionSwitchDiagnosticsCore(action, state, options = {}) {
       targetChange,
       pairKey,
       pairSwitchCount: recentPair.length + 1,
-      oscillating: Boolean(reversed || recentPair.length + 1 >= 3),
+      oscillating: reversed,
+      oscillationSequence: reversed
+        ? [...reversedEvents, { at: t, from: previous, to: current }].map(item => ({
+            at: item.at,
+            from: item.from?.key || '',
+            to: item.to?.key || '',
+            intervalMs: Math.max(0, t - Number(item.at || t)),
+            switchCost: roundedNullable(item.switchDecision?.switchCost)
+          }))
+        : [],
       switchDecision: buildCandidateSwitchSummary(action),
       previousDecision: buildPreviousDecisionSummary(options.previousDecision || null)
     };

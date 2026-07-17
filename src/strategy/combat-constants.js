@@ -10,6 +10,7 @@
 const COMBAT_CONSTANTS = {
   // Range and distance thresholds
   ATTACK_RANGE: 14500,                    // combatAttackRange - standard attack/fire range
+  BULLET_RANGE_CM: 15000,                 // measured server bullet lifetime range
   DISENGAGE_RANGE: 17000,                 // combatDisengageRange - when to drop engaged target
   DODGE_RANGE_BUFFER: 1000,               // combatDodgeRangeBuffer - extended dodge-only detection
 

@@ -366,6 +366,8 @@ function buildRuntimeDefaults(config, combatLogEndpointConfigured) {
     coinDiagnosticsNearDistance: 50000,
     coinDiagnosticsMaxEntries: 8,
     finalActionArbitrationHoldMs: 1800,
+    profitSwitchRoiRatio: 1,
+    profitSwitchRoiTolerance: 1e-9,
     combatControlIntervalMs: 160,
     finalActionArbitrationHistoryLimit: 24,
     targetSwitchDiagnosticsHistoryLimit: 24,

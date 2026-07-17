@@ -174,6 +174,110 @@ function checkLowConfidenceThrottle(aimContext) {
   return { throttle: false, cadenceMs: COMBAT_CONSTANTS.SHOOT_EVERY_MS };
 }
 
+function normalizedEntropy(rows = []) {
+  const probabilities = (rows || [])
+    .map(item => Math.max(0, Number(item?.probability || 0)))
+    .filter(value => value > 0);
+  if (probabilities.length < 2) return 0;
+  const total = probabilities.reduce((sum, value) => sum + value, 0);
+  if (!(total > 0)) return 0;
+  const entropy = probabilities.reduce((sum, value) => {
+    const probability = value / total;
+    return sum - probability * Math.log(probability);
+  }, 0);
+  return Math.max(0, Math.min(1, entropy / Math.log(probabilities.length)));
+}
+
+function classifyFireRiskCore(previous = null, input = {}, options = {}) {
+  const targetId = String(input.targetId ?? '');
+  const nowMs = Number.isFinite(Number(input.nowMs)) ? Number(input.nowMs) : Date.now();
+  const controlStyle = String(input.controlStyle || 'unknown');
+  const controlStyleConfidence = Math.max(0, Math.min(1, Number(input.controlStyleConfidence || 0)));
+  const maneuverScale = Math.max(0, Math.min(1, Number(input.maneuverScale || 0)));
+  const maneuverDurationMs = Math.max(0, Number(input.maneuverDurationMs || 0));
+  const lateralFlips = Math.max(0, Number(input.lateralFlips || 0));
+  const automationLikelihood = numberOrNull(input.automationLikelihood);
+  const routeSamples = Math.max(0, Number(input.routeSamples || 0));
+  const routeEntropy = routeSamples >= Math.max(4, Number(options.minimumRouteSamples ?? 8))
+    ? normalizedEntropy(input.routeDistribution)
+    : 0;
+  const recentShotCount = Math.max(0, Number(input.recentShotCount || 0));
+  const recentHitRate = Math.max(0, Math.min(1, Number(input.recentHitRate || 0)));
+  const noProgressAcceptedShots = Math.max(0, Number(input.noProgressAcceptedShots || 0));
+  const evidence = [];
+  let score = 0;
+
+  if (controlStyle === 'human-like' && controlStyleConfidence >= 0.35) {
+    evidence.push('human-like-control');
+    score += 0.45 * controlStyleConfidence;
+  }
+  if (maneuverScale >= 0.35 && maneuverDurationMs >= 1200) {
+    evidence.push('maneuver-scale');
+    score += 0.35 * maneuverScale;
+  }
+  if (lateralFlips >= 2 && maneuverDurationMs >= 600) {
+    evidence.push('direction-flips');
+    score += Math.min(0.2, lateralFlips * 0.04);
+  }
+  if (automationLikelihood !== null && automationLikelihood < 0.45) {
+    evidence.push('low-automation-likelihood');
+    score += Math.min(0.25, (0.45 - automationLikelihood) * 0.7);
+  }
+  if (routeEntropy >= 0.65) {
+    evidence.push('route-distribution-entropy');
+    score += routeEntropy * 0.25;
+  }
+  if (recentShotCount >= 10 && noProgressAcceptedShots >= 10 && recentHitRate < 0.08) {
+    evidence.push('recent-low-hit-feedback');
+    score += 0.15;
+  }
+
+  const rawHighEntropy = Boolean(
+    (controlStyle === 'human-like' && controlStyleConfidence >= 0.55)
+      || (maneuverScale >= 0.55 && maneuverDurationMs >= 1200)
+      || score >= Math.max(0.45, Number(options.highEntropyScore ?? 0.55))
+  );
+  const explicitLowEntropy = Boolean(
+    ['periodic-script', 'reactive-script'].includes(controlStyle)
+      && controlStyleConfidence >= 0.65
+      && maneuverScale < 0.25
+      && routeEntropy < 0.55
+  ) || Boolean(recentShotCount >= 10 && recentHitRate >= 0.12 && maneuverScale < 0.3);
+  const sameTarget = Boolean(previous && targetId && String(previous.targetId || '') === targetId);
+  const previousHigh = Boolean(sameTarget && previous.highEntropy);
+  const lowEntropySamples = rawHighEntropy
+    ? 0
+    : (previousHigh && explicitLowEntropy ? Math.max(0, Number(previous.lowEntropySamples || 0)) + 1 : 0);
+  const releaseSamples = Math.max(2, Math.round(Number(options.releaseSamples ?? 6)));
+  const latched = Boolean(previousHigh && !rawHighEntropy && lowEntropySamples < releaseSamples);
+  const highEntropy = Boolean(rawHighEntropy || latched);
+  const classifiedAt = highEntropy
+    ? (previousHigh ? Number(previous.classifiedAt || nowMs) : nowMs)
+    : nowMs;
+  return {
+    targetId,
+    highEntropy,
+    rawHighEntropy,
+    latched,
+    confidence: highEntropy
+      ? Math.max(rawHighEntropy ? 0.35 : 0.25, Math.min(1, score), Number(previousHigh ? previous.confidence || 0 : 0))
+      : Math.max(0, Math.min(1, 1 - score)),
+    evidence: rawHighEntropy ? evidence : (latched ? ['same-target-latch', ...evidence] : evidence),
+    controlStyle,
+    maneuverScale,
+    routeEntropy,
+    recentHitRate,
+    recentShotCount,
+    noProgressAcceptedShots,
+    classifiedAt,
+    updatedAt: nowMs,
+    expiresAt: nowMs + Math.max(1000, Number(options.ttlMs ?? 5000)),
+    lowEntropySamples,
+    releaseSamples,
+    releaseCondition: highEntropy ? 'target-switch-or-consecutive-low-entropy' : 'not-high-entropy'
+  };
+}
+
 function evaluateHighEntropyFireGateCore(input = {}, options = {}) {
   const expectedHitProbability = Math.max(0, Math.min(1, Number(input.expectedHitProbability || 0)));
   const recentHitRate = Math.max(0, Math.min(1, Number(input.recentHitRate || 0)));
@@ -183,7 +287,14 @@ function evaluateHighEntropyFireGateCore(input = {}, options = {}) {
   const targetHp = numberOrNull(input.targetHp);
   const selfHp = numberOrNull(input.selfHp);
   const minimumSamples = Math.max(3, Math.round(Number(options.minimumSamples ?? 10)));
-  const explorationMaxShots = Math.max(minimumSamples, Math.round(Number(options.explorationMaxShots ?? 15)));
+  const highEntropyMaxShots = Math.max(minimumSamples, Math.round(Number(options.explorationMaxShots ?? 15)));
+  const generalMaxShots = Math.max(highEntropyMaxShots, Math.round(Number(options.generalMaxShots ?? 40)));
+  const highEntropy = Boolean(input.highEntropy ?? input.fireRiskClassification?.highEntropy);
+  const unreachableIntercept = Boolean(input.unreachableIntercept);
+  const unreachableMaxShots = Math.max(1, Math.round(Number(options.unreachableMaxShots ?? 3)));
+  const explorationMaxShots = unreachableIntercept
+    ? unreachableMaxShots
+    : (highEntropy ? highEntropyMaxShots : generalMaxShots);
   const minimumExpectedHitProbability = Math.max(0.01, Number(options.minimumExpectedHitProbability ?? 0.08));
   const minimumRecentHitRate = Math.max(0.01, Number(options.minimumRecentHitRate ?? 0.08));
   const finishProtected = targetHp !== null && selfHp !== null
@@ -191,14 +302,32 @@ function evaluateHighEntropyFireGateCore(input = {}, options = {}) {
     && selfHp >= targetHp + Math.max(0, Number(options.finishSelfLeadHp ?? 10));
   const lowExpectedHit = expectedHitProbability < minimumExpectedHitProbability;
   const lowRecentHit = recentShotCount >= minimumSamples && recentHitRate < minimumRecentHitRate;
-  const active = Boolean(input.highEntropy && !finishProtected && lowExpectedHit && lowRecentHit);
+  const proactiveCombat = input.proactiveCombat !== false;
+  const progressGateReady = noProgressAcceptedShots >= (unreachableIntercept ? unreachableMaxShots : minimumSamples);
+  const boundedNoProgress = noProgressAcceptedShots >= explorationMaxShots;
+  const active = Boolean(
+    proactiveCombat
+      && !finishProtected
+      && (unreachableIntercept
+        ? progressGateReady
+        : (progressGateReady && lowRecentHit && (lowExpectedHit || boundedNoProgress)))
+  );
   const explorationBudgetRemaining = Math.max(0, explorationMaxShots - noProgressAcceptedShots);
   if (!active) {
+    let reason = 'no-progress-fire-gate-inactive';
+    if (finishProtected) reason = 'no-progress-finish-protected';
+    else if (!proactiveCombat) reason = 'no-progress-nonproactive';
+    else if (!progressGateReady) reason = unreachableIntercept ? 'intercept-unreachable-probe' : 'no-progress-insufficient-samples';
+    else if (!lowRecentHit) reason = 'no-progress-recent-hit-evidence';
+    else if (!lowExpectedHit) reason = 'no-progress-expected-hit-evidence';
     return {
       active: false,
       suppressFire: false,
       minimumCadenceMs: 0,
-      reason: finishProtected ? 'high-entropy-finish-protected' : 'high-entropy-fire-gate-inactive',
+      reason,
+      highEntropy,
+      unreachableIntercept,
+      reachabilityGapCm: numberOrNull(input.reachabilityGapCm),
       expectedHitProbability,
       recentHitRate,
       recentShotCount,
@@ -206,6 +335,7 @@ function evaluateHighEntropyFireGateCore(input = {}, options = {}) {
       noDamageMs,
       explorationMaxShots,
       explorationBudgetRemaining,
+      boundedNoProgress,
       finishProtected,
       defensivePressure: Boolean(input.defensivePressure)
     };
@@ -213,15 +343,25 @@ function evaluateHighEntropyFireGateCore(input = {}, options = {}) {
   const explorationActive = explorationBudgetRemaining > 0
     && noDamageMs < Math.max(1000, Number(options.maximumExplorationNoDamageMs ?? 12000));
   const defensivePressure = Boolean(input.defensivePressure);
+  const defensiveExtraShots = Math.max(0, Math.round(Number(options.defensiveExtraShots ?? 5)));
+  const defensiveBudgetRemaining = Math.max(0, explorationMaxShots + defensiveExtraShots - noProgressAcceptedShots);
+  const defensiveThrottle = Boolean(!unreachableIntercept && !explorationActive && defensivePressure && defensiveBudgetRemaining > 0);
   return {
     active: true,
-    suppressFire: Boolean(!explorationActive && !defensivePressure),
+    suppressFire: Boolean(!explorationActive && !defensiveThrottle),
     minimumCadenceMs: explorationActive
       ? Math.max(320, Number(options.explorationCadenceMs ?? 800))
-      : (defensivePressure ? Math.max(500, Number(options.defensiveCadenceMs ?? 1000)) : 0),
-    reason: explorationActive
-      ? 'high-entropy-bounded-exploration'
-      : (defensivePressure ? 'high-entropy-defensive-throttle' : 'high-entropy-reacquire'),
+      : (defensiveThrottle ? Math.max(500, Number(options.defensiveCadenceMs ?? 1000)) : 0),
+    reason: unreachableIntercept
+      ? 'intercept-out-of-range-reacquire'
+      : (explorationActive
+      ? (highEntropy ? 'high-entropy-bounded-exploration' : 'no-progress-bounded-exploration')
+      : (defensiveThrottle
+          ? (highEntropy ? 'high-entropy-defensive-throttle' : 'no-progress-defensive-throttle')
+          : (highEntropy ? 'high-entropy-reacquire' : 'no-progress-reacquire'))),
+    highEntropy,
+    unreachableIntercept,
+    reachabilityGapCm: numberOrNull(input.reachabilityGapCm),
     expectedHitProbability,
     recentHitRate,
     recentShotCount,
@@ -229,6 +369,9 @@ function evaluateHighEntropyFireGateCore(input = {}, options = {}) {
     noDamageMs,
     explorationMaxShots,
     explorationBudgetRemaining,
+    boundedNoProgress,
+    defensiveBudgetRemaining,
+    shootingStaminaSpent: Math.max(0, Number(input.shootingStaminaSpent || 0)),
     explorationActive,
     finishProtected,
     defensivePressure
@@ -242,5 +385,6 @@ module.exports = {
   canFireNow,
   shouldSuppressRetreatingEdge,
   checkLowConfidenceThrottle,
+  classifyFireRiskCore,
   evaluateHighEntropyFireGateCore
 };
