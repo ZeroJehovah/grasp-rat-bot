@@ -224,6 +224,125 @@ function calculateDodgeDirection(self, bullets, options = {}) {
   };
 }
 
+function contactEntryRiskCore(self, target, previous = null, options = {}) {
+  const attackRange = Math.max(0, Number(options.attackRange ?? options.combatAttackRange ?? COMBAT_CONSTANTS.ATTACK_RANGE));
+  const guardBuffer = Math.max(0, Number(options.guardBufferCm ?? options.combatContactEntryGuardBufferCm ?? COMBAT_CONSTANTS.DODGE_RANGE_BUFFER));
+  const guardRange = attackRange + guardBuffer;
+  const distance = Number(target?.distance ?? Math.hypot(
+    Number(target?.x || 0) - Number(self?.x || 0),
+    Number(target?.y || 0) - Number(self?.y || 0)
+  ));
+  const selfVx = Number(self?.vx || 0);
+  const selfVy = Number(self?.vy || 0);
+  const targetVx = Number(target?.vx || 0);
+  const targetVy = Number(target?.vy || 0);
+  const selfSpeed = Math.hypot(selfVx, selfVy);
+  const relativeVx = targetVx - selfVx;
+  const relativeVy = targetVy - selfVy;
+  const relativeSpeed = Math.hypot(relativeVx, relativeVy);
+  const dx = Number(target?.x || 0) - Number(self?.x || 0);
+  const dy = Number(target?.y || 0) - Number(self?.y || 0);
+  const geometryDistance = Math.max(1, Math.hypot(dx, dy));
+  const radialSpeed = (dx * relativeVx + dy * relativeVy) / geometryDistance;
+  const closingSpeed = Math.max(0, -radialSpeed);
+  const closingAlignment = relativeSpeed > 0 ? Math.max(0, Math.min(1, closingSpeed / relativeSpeed)) : 0;
+  const firing = Boolean(target?.firing || target?.is_firing || target?.shooting);
+  const realBullet = Boolean(options.realBullet);
+  const active = Boolean(target?.active || firing || realBullet);
+  const selfStationarySpeed = Math.max(0, Number(options.selfStationarySpeed ?? 5));
+  const selfStationary = selfSpeed < selfStationarySpeed;
+  const minimumClosingSpeed = Math.max(0, Number(options.minimumClosingSpeed ?? 20));
+  const minimumClosingAlignment = Math.max(0, Math.min(1, Number(options.minimumClosingAlignment ?? 0.75)));
+  const directApproach = Boolean(
+    active
+      && selfStationary
+      && closingSpeed >= minimumClosingSpeed
+      && closingAlignment >= minimumClosingAlignment
+  );
+  const strongEvidence = realBullet || firing;
+  const selfHp = Number(self?.hp ?? self?.knownHp ?? 100);
+  const selfMaxHp = Number(self?.max_hp ?? self?.maxHp ?? 100);
+  const recoveringSelf = options.recoveringSelf === true
+    || (Number.isFinite(selfHp) && Number.isFinite(selfMaxHp) && selfHp < selfMaxHp);
+  const trustedWithoutFire = Boolean(target?.easyKillThreatExempt && !strongEvidence && options.recentDanger !== true);
+  const stamina5s = Number(self?.stamina_5s_remaining_milli ?? self?.stamina5sRemainingMilli);
+  const minimumStamina5s = Math.max(0, Number(options.minimumStamina5s ?? COMBAT_CONSTANTS.SHOOT_DODGE_RESERVE_MS + 1000));
+  const staminaBlocked = Number.isFinite(stamina5s) && stamina5s < minimumStamina5s && !realBullet;
+  const armed = options.armed !== false;
+  const withinGuard = Number.isFinite(distance) && distance <= guardRange;
+  const previousDistance = Number(previous?.distance);
+  const newlyEnteredGuard = !Number.isFinite(previousDistance) || previousDistance > guardRange;
+  let blockedReason = '';
+  if (!Number.isFinite(distance)) blockedReason = 'missing-distance';
+  else if (!withinGuard) blockedReason = 'outside-contact-guard';
+  else if (!active) blockedReason = 'target-not-active';
+  else if (recoveringSelf && !strongEvidence) blockedReason = 'recovery-policy-owned';
+  else if (trustedWithoutFire) blockedReason = 'trusted-target-no-fire';
+  else if (!strongEvidence && !directApproach) blockedReason = selfStationary
+    ? 'no-direct-closing-evidence'
+    : 'self-already-moving';
+  else if (staminaBlocked) blockedReason = 'stamina-insufficient';
+  else if (!armed && !strongEvidence) blockedReason = 'contact-not-rearmed';
+  return {
+    eligible: !blockedReason,
+    blockedReason,
+    trigger: realBullet
+      ? 'target-real-bullet'
+      : (firing ? 'target-firing' : 'direct-closing-entry'),
+    attackRange: Math.round(attackRange),
+    guardBuffer: Math.round(guardBuffer),
+    guardRange: Math.round(guardRange),
+    distance: Number.isFinite(distance) ? Math.round(distance) : null,
+    previousDistance: Number.isFinite(previousDistance) ? Math.round(previousDistance) : null,
+    newlyEnteredGuard,
+    inRange: Number.isFinite(distance) && distance <= attackRange,
+    withinGuard,
+    active,
+    firing,
+    realBullet,
+    recoveringSelf,
+    directApproach,
+    trustedWithoutFire,
+    selfStationary,
+    selfSpeed: Math.round(selfSpeed * 100) / 100,
+    relativeSpeed: Math.round(relativeSpeed * 100) / 100,
+    closingSpeed: Math.round(closingSpeed * 100) / 100,
+    closingAlignment: Math.round(closingAlignment * 1000) / 1000,
+    stamina5s: Number.isFinite(stamina5s) ? stamina5s : null,
+    minimumStamina5s,
+    armed
+  };
+}
+
+function contactEntrySyntheticBulletCore(self, target, options = {}) {
+  const startX = Number(target?.x);
+  const startY = Number(target?.y);
+  const selfX = Number(self?.x);
+  const selfY = Number(self?.y);
+  if (![startX, startY, selfX, selfY].every(Number.isFinite)) return null;
+  const dx = selfX - startX;
+  const dy = selfY - startY;
+  const distance = Math.hypot(dx, dy);
+  if (!(distance > 0)) return null;
+  const speed = Math.max(1, Number(options.bulletSpeedCmPerTick ?? COMBAT_CONSTANTS.BULLET_SPEED_CM_PER_TICK));
+  const tickMs = Math.max(1, Number(options.tickMs ?? 50));
+  const flightTicks = distance / speed;
+  return {
+    incoming: true,
+    synthetic: true,
+    contactEntry: true,
+    ownerId: target?.user_id ?? target?.userId ?? target?.id ?? null,
+    x: startX,
+    y: startY,
+    direction: { dx: dx / distance, dy: dy / distance },
+    speed,
+    distance,
+    cpa: 0,
+    timeToImpact: flightTicks * tickMs,
+    remainingTicks: flightTicks
+  };
+}
+
 function pickSafeClosingDodgeCore(threatField = [], options = {}) {
   const candidates = (threatField || []).filter(Boolean);
   if (!candidates.length) return null;
@@ -333,6 +452,8 @@ module.exports = {
   calculateCombatSpacing,
   shouldBackAwayFromTarget,
   calculateDodgeDirection,
+  contactEntryRiskCore,
+  contactEntrySyntheticBulletCore,
   pickSafeClosingDodgeCore,
   applyCombatMovementModifiers,
   isRecoverableOutOfRangeTarget

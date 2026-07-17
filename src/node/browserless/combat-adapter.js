@@ -7,6 +7,7 @@ const {
   defensiveTargetOverridesEngagedCore,
   incomingBulletHasCollisionRiskCore,
   isCombatEligibleThreat,
+  isInvulnerableEntity,
   pickEngagedCombatTargetCore,
   selectBestCombatTarget
 } = require('../../strategy/combat-target-selection');
@@ -14,6 +15,8 @@ const {
   applyCombatMovementModifiers,
   calculateCombatSpacing,
   calculateDodgeDirection,
+  contactEntryRiskCore,
+  contactEntrySyntheticBulletCore,
   pickSafeClosingDodgeCore,
   shouldBackAwayFromTarget
 } = require('../../strategy/combat-movement');
@@ -516,6 +519,167 @@ function normalizeCombatEntity(entity, self = null, options = {}) {
   if (entity.staminaMetadataAuthority) normalized.staminaMetadataAuthority = entity.staminaMetadataAuthority;
   normalized.distance = self ? distanceBetween(self, normalized) : numberOrNull(entity.distance);
   return normalized;
+}
+
+function ensureContactEntryGuardState(stateful = {}) {
+  if (!stateful || typeof stateful !== 'object' || Array.isArray(stateful)) return null;
+  if (!stateful.contactEntryGuard || typeof stateful.contactEntryGuard !== 'object' || Array.isArray(stateful.contactEntryGuard)) {
+    stateful.contactEntryGuard = { observations: {}, active: null };
+  }
+  if (!stateful.contactEntryGuard.observations || typeof stateful.contactEntryGuard.observations !== 'object') {
+    stateful.contactEntryGuard.observations = {};
+  }
+  return stateful.contactEntryGuard;
+}
+
+function contactEntryTargetBullet(bullets, targetId) {
+  const id = String(targetId ?? '');
+  if (!id) return null;
+  return (bullets || []).find(bullet => String(bullet?.ownerId ?? '') === id) || null;
+}
+
+function contactEntryDodgeSummary(dodge, syntheticBullet = null) {
+  const selected = (dodge?.threatField || []).find(item =>
+    Number(item?.dx) === Number(dodge?.dx) && Number(item?.dy) === Number(dodge?.dy)) || null;
+  const stationary = (dodge?.threatField || []).find(item => Number(item?.dx) === 0 && Number(item?.dy) === 0) || null;
+  return {
+    dx: Math.sign(Number(dodge?.dx || 0)),
+    dy: Math.sign(Number(dodge?.dy || 0)),
+    reason: 'contact-entry-pre-dodge',
+    sourceReason: String(dodge?.reason || ''),
+    predictedCpaCm: numberOrNull(selected?.minCPA),
+    stationaryCpaCm: numberOrNull(stationary?.minCPA),
+    predictedDirectHits: Math.max(0, Number(selected?.directHits || 0)),
+    stationaryDirectHits: Math.max(0, Number(stationary?.directHits || 0)),
+    assumedFlightTicks: numberOrNull(syntheticBullet?.remainingTicks),
+    assumedImpactMs: numberOrNull(syntheticBullet?.timeToImpact)
+  };
+}
+
+function updateContactEntryGuard(stateful, self, targets = [], bullets = [], options = {}) {
+  const state = ensureContactEntryGuardState(stateful);
+  if (!state || !self) return { active: false, reason: 'missing-state-or-self', target: null };
+  const nowMs = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
+  const currentTick = numberOrNull(options.currentTick);
+  const attackRange = Math.max(0, Number(options.combatAttackRange || options.attackRange || COMBAT_CONSTANTS.ATTACK_RANGE));
+  const guardBuffer = Math.max(0, Number(options.combatContactEntryGuardBufferCm ?? COMBAT_CONSTANTS.DODGE_RANGE_BUFFER));
+  const guardRange = attackRange + guardBuffer;
+  const observationTtlMs = Math.max(1000, Number(options.combatContactEntryObservationTtlMs ?? 3000));
+  const holdMinimumMs = Math.max(100, Number(options.combatContactEntryHoldMinMs ?? 500));
+  const holdMaximumMs = Math.max(holdMinimumMs, Number(options.combatContactEntryHoldMaxMs ?? 800));
+  const commandDelayTicks = Math.max(0, Number(options.executionTiming?.p90Ticks || 5));
+  const holdMs = Math.min(holdMaximumMs, Math.max(holdMinimumMs, commandDelayTicks * 50 * 2));
+  const visibleById = new Map();
+  for (const target of targets) {
+    const id = String(combatTargetId(target) || '');
+    if (id) visibleById.set(id, target);
+  }
+  for (const [id, observation] of Object.entries(state.observations)) {
+    if (nowMs - Number(observation?.at || 0) > observationTtlMs) delete state.observations[id];
+  }
+  if (state.active) {
+    const activeTarget = visibleById.get(String(state.active.targetId || '')) || null;
+    const activeTargetHp = hpValue(activeTarget);
+    const activeTargetInvalid = !activeTarget
+      || (activeTargetHp !== null && activeTargetHp <= 0)
+      || isInvulnerableEntity(activeTarget)
+      || isWhitelistedTargetForOptions(activeTarget, options);
+    if (activeTargetInvalid || nowMs >= Number(state.active.holdUntil || 0)) {
+      state.active = null;
+    } else {
+      const realBullet = contactEntryTargetBullet(bullets, state.active.targetId);
+      return {
+        ...state.active,
+        active: true,
+        target: activeTarget,
+        realBulletTakeover: Boolean(realBullet),
+        remainingMs: Math.max(0, Math.round(Number(state.active.holdUntil) - nowMs))
+      };
+    }
+  }
+  const candidates = [];
+  let bestBlocked = null;
+  for (const target of targets) {
+    const id = String(combatTargetId(target) || '');
+    const targetHp = hpValue(target);
+    if (!id
+      || (targetHp !== null && targetHp <= 0)
+      || isInvulnerableEntity(target)
+      || isWhitelistedTargetForOptions(target, options)) continue;
+    const previous = state.observations[id] || null;
+    const targetBullet = contactEntryTargetBullet(bullets, id);
+    const previousArmed = previous?.armed !== false;
+    const risk = contactEntryRiskCore(self, target, previous, {
+      ...options,
+      attackRange,
+      guardBufferCm: guardBuffer,
+      realBullet: Boolean(targetBullet),
+      armed: previousArmed
+    });
+    const outsideGuard = Number(target.distance) > guardRange;
+    state.observations[id] = {
+      distance: numberOrNull(target.distance),
+      at: nowMs,
+      tick: currentTick,
+      armed: outsideGuard ? true : previousArmed,
+      lastBlockedReason: risk.blockedReason
+    };
+    const row = { target, targetId: id, targetBullet, risk };
+    if (risk.eligible) candidates.push(row);
+    else if (!bestBlocked || Number(risk.distance ?? Infinity) < Number(bestBlocked.risk.distance ?? Infinity)) bestBlocked = row;
+  }
+  candidates.sort((a, b) => Number(b.risk.realBullet) - Number(a.risk.realBullet)
+    || Number(b.risk.firing) - Number(a.risk.firing)
+    || Number(a.risk.distance ?? Infinity) - Number(b.risk.distance ?? Infinity)
+    || Number(b.risk.closingSpeed || 0) - Number(a.risk.closingSpeed || 0));
+  const selected = candidates[0] || null;
+  if (!selected) {
+    return {
+      active: false,
+      reason: bestBlocked?.risk?.blockedReason || 'no-contact-entry-target',
+      target: null,
+      assessment: bestBlocked?.risk || null,
+      guardRange: Math.round(guardRange)
+    };
+  }
+  const syntheticBullet = selected.targetBullet
+    ? null
+    : contactEntrySyntheticBulletCore(self, selected.target, options);
+  const dodgeBullets = selected.targetBullet ? [selected.targetBullet] : (syntheticBullet ? [syntheticBullet] : []);
+  if (!dodgeBullets.length) {
+    return { active: false, reason: 'missing-contact-entry-trajectory', target: null, assessment: selected.risk };
+  }
+  const dodge = calculateDodgeDirection(self, dodgeBullets, {
+    tangentPreference: movementTangentPreference(self, selected.target),
+    target: selected.target,
+    moveSpeedPerTick: options.combatMoveSpeedPerTick || 50,
+    hitRadius: options.combatBulletHitRadiusCm || 200,
+    commandDelayP90Ticks: commandDelayTicks,
+    reactionSafetyMarginMs: options.combatReactionSafetyMarginMs ?? 100
+  });
+  const dodgeSummary = contactEntryDodgeSummary(dodge, syntheticBullet);
+  if (!dodgeSummary.dx && !dodgeSummary.dy) {
+    return { active: false, reason: 'no-contact-entry-displacement', target: null, assessment: selected.risk };
+  }
+  const observation = state.observations[selected.targetId];
+  observation.armed = false;
+  state.active = {
+    active: true,
+    targetId: selected.targetId,
+    trigger: selected.risk.trigger,
+    triggeredAt: nowMs,
+    triggerTick: currentTick,
+    holdUntil: nowMs + holdMs,
+    holdMs,
+    assessment: selected.risk,
+    dodge: dodgeSummary
+  };
+  return {
+    ...state.active,
+    target: selected.target,
+    realBulletTakeover: Boolean(selected.targetBullet),
+    remainingMs: holdMs
+  };
 }
 
 function bulletOwnerId(bullet) {
@@ -1218,6 +1382,10 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
         minimumClosingCm: options.combatSafeCloseMinimumClosingCm ?? 25
       })
     : null;
+  const contactEntryDodge = options.contactEntryGuard?.active === true
+    && !(Array.isArray(dodge?.threatField) && dodge.threatField.length)
+    ? options.contactEntryGuard.dodge
+    : null;
   const effectiveDodge = preDodge
     ? {
         dx: Math.sign(Number(self.vx || 0)),
@@ -1227,9 +1395,11 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
         nextShotInMs: Math.round(nextShotInMs),
         shotIntervalCv
       }
+    : (contactEntryDodge
+      ? contactEntryDodge
     : (safeClosingDodge
-    ? { ...dodge, dx: safeClosingDodge.dx, dy: safeClosingDodge.dy, reason: 'retreat-kite-safe-close' }
-    : dodge);
+      ? { ...dodge, dx: safeClosingDodge.dx, dy: safeClosingDodge.dy, reason: 'retreat-kite-safe-close' }
+      : dodge));
   const closeIn = closeAllowed
     && (pressureClose || retreatingClose || passiveRunnerClose || behaviorClose || Number(target.distance || Infinity) > spacing);
   const base = { dx: 0, dy: 0 };
@@ -1284,6 +1454,7 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
       burstConfidence
     } : null,
     preDodgeBlockedReason: preDodge ? '' : preDodgeBlockedReason,
+    contactEntryGuard: options.contactEntryGuard || null,
     shootingPhaseSource: shootingPhase?.shootingPhaseSource || '',
     oldBulletPressure: Boolean((bullets || []).length)
   };
@@ -1575,6 +1746,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     .map(bullet => normalizeCombatBullet(bullet, self, { currentTick: realtime.tick }))
     .filter(Boolean);
   if (!bullets.length) dataGaps.push('no-realtime-bullet-evidence');
+  const stateful = options.decisionState || options.stateful || null;
   const incomingBullet = pickIncomingBullet(bullets, options);
   const context = {
     userId: selfUserId,
@@ -1591,7 +1763,12 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     whitelistCheck: target => isWhitelistedTargetForOptions(target, options)
   };
   const combatAttackRange = Math.max(0, Number(options.combatAttackRange || options.attackRange || COMBAT_CONSTANTS.ATTACK_RANGE));
-  const combatDodgeRange = combatAttackRange + Math.max(0, Number(options.combatDodgeRangeBuffer || 0));
+  const combatDodgeRange = combatAttackRange + Math.max(0, Number(options.combatDodgeRangeBuffer ?? COMBAT_CONSTANTS.DODGE_RANGE_BUFFER));
+  const contactEntryGuard = updateContactEntryGuard(stateful, self, targets, bullets, {
+    ...options,
+    currentTick: realtime.tick,
+    executionTiming: state?.command?.shooting?.timing || options.executionTiming
+  });
   const candidates = targets
     .filter(target => isCombatEligibleThreat(target, context))
     .filter(target => {
@@ -1609,7 +1786,6 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
       combatScore: calculateCombatTargetPriority(self, target, context)
     }))
     .sort((a, b) => Number(b.combatScore || 0) - Number(a.combatScore || 0));
-  const stateful = options.decisionState || options.stateful || null;
   const engagedTarget = pickEngagedCombatTargetCore(self, candidates, targets, bullets, stateful, {
     ...options,
     ...context
@@ -1620,23 +1796,32 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     ? null
     : candidates.find(candidate => candidate.easyKillProfitTarget === true
       && String(combatTargetId(candidate)) === String(preferredEasyTargetId)) || null;
-  const target = defensiveTargetOverridesEngagedCore(engagedTarget, defensiveTarget, options)
+  const normalTarget = defensiveTargetOverridesEngagedCore(engagedTarget, defensiveTarget, options)
     ? defensiveTarget
     : (engagedTarget
         || (defensiveTarget?.combatIntent === 'defensive' ? defensiveTarget : null)
         || (preferredEasyTarget ? { ...preferredEasyTarget, combatIntent: 'profit' } : null)
         || defensiveTarget);
-  rememberBrowserlessCombatEngagement(stateful, self, target, {
+  const contactTarget = contactEntryGuard.active === true ? contactEntryGuard.target : null;
+  const contactApplies = Boolean(
+    contactTarget
+      && (!normalTarget || String(combatTargetId(normalTarget) || '') === String(combatTargetId(contactTarget) || ''))
+  );
+  const contactEntryOnly = Boolean(contactApplies && !normalTarget);
+  const target = normalTarget || (contactApplies
+    ? { ...contactTarget, combatIntent: 'defensive', contactEntryOnly: true }
+    : null);
+  if (!contactEntryOnly) rememberBrowserlessCombatEngagement(stateful, self, target, {
     ...options,
     bullets,
     currentTick: realtime.tick,
     executionTiming: state?.command?.shooting?.timing || options.executionTiming,
     reason: liveCombatEnabled ? 'combat-live-realtime' : (options.controlMode === 'combat-dry-run' ? 'combat-dry-run-realtime' : 'realtime-visible-threat')
   });
-  syncConfirmedCombatShots(stateful, state, target, {
+  if (!contactEntryOnly) syncConfirmedCombatShots(stateful, state, target, {
     behavior: stateful?.opponentBehaviorStates?.[String(combatTargetId(target) || '')] || null
   }, options);
-  const combatTargetState = stateful?.combatTarget || null;
+  const combatTargetState = contactEntryOnly ? null : stateful?.combatTarget || null;
   const combatStartedAtMs = target && Number.isFinite(Number(combatTargetState?.firstSeenAt || combatTargetState?.at))
     ? Number(combatTargetState.firstSeenAt || combatTargetState.at)
     : null;
@@ -1672,7 +1857,8 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     combatTargetState,
     executionTiming: state?.command?.shooting?.timing || options.executionTiming,
     currentTick: realtime.tick,
-    bullets
+    bullets,
+    contactEntryGuard: contactApplies ? contactEntryGuard : null
   });
   if (stateful?.combatMetrics && movement.dodge?.threatField) {
     stateful.combatMetrics.lastDodgeThreatField = cloneJson(movement.dodge.threatField);
@@ -1684,7 +1870,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
   if (stateful?.combatTarget && exitEvaluation.exchangeStopLoss) {
     stateful.combatTarget.exchangeDegradationSinceAt = exitEvaluation.exchangeStopLoss.degradationSinceAt;
   }
-  const exitDecision = exitEvaluation.exit;
+  const exitDecision = contactEntryOnly ? null : exitEvaluation.exit;
   const fireState = target ? determineCombatFireState(self || {}, target, {
     targetPressureFire: bullets.some(bullet => Number(bullet.ownerId) === Number(target.user_id)),
     passiveRunner: Boolean(movement.passiveRunner?.active),
@@ -1758,6 +1944,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
       && inRange
       && fireState.state !== 'disabled'
       && fireState.state !== 'paused'
+      && !contactEntryOnly
       && !behaviorPolicy?.suppressFire
       && !highEntropyFireGate.suppressFire
   );
@@ -1778,7 +1965,12 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     durationMs: combatDurationMs === null ? null : Math.round(combatDurationMs),
     self: summarizeCombatTarget(self),
     target: summarizeCombatTarget(target),
-    candidates: candidates.slice(0, 5).map(summarizeCombatTarget),
+    candidates: (contactEntryOnly ? [target, ...candidates] : candidates).slice(0, 5).map(summarizeCombatTarget),
+    contactEntryGuard: {
+      ...contactEntryGuard,
+      target: contactEntryGuard.target ? summarizeCombatTarget(contactEntryGuard.target) : null,
+      movementOnly: contactEntryOnly
+    },
     movement,
     aim: aim.ok ? aim : null,
     behavior: behaviorState ? {

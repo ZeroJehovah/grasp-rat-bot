@@ -13212,6 +13212,144 @@ async function runSelfTest() {
       want: 'script-transition-matrix|right-turn|east|north'
     },
     {
+      name: 'browserless first-contact guard starts stationary lateral dodge and holds one direction until rearmed',
+      got: (() => {
+        const stateful = {};
+        const self = { user_id: 7, entity_id: 1, x: 0, y: 0, vx: 0, vy: 0, hp: 100, stamina_5s_remaining_milli: 10000 };
+        const targetAt = (x, extra = {}) => ({
+          user_id: 8,
+          entity_id: 2,
+          x,
+          y: 0,
+          vx: -50,
+          vy: 0,
+          hp: 100,
+          active: true,
+          current_join_mode: 'Active',
+          ...extra
+        });
+        const run = (nowMs, target) => buildBrowserlessCombatDryRun({
+          userId: 7,
+          realtime: { tick: Math.round(nowMs / 50), self, entities: [self, target], bullets: [] }
+        }, { nowMs, decisionState: stateful, combatEnabled: true });
+        const first = run(1000, targetAt(15500));
+        const held = run(1200, targetAt(15300));
+        const expired = run(1900, targetAt(15200));
+        run(2100, targetAt(16000));
+        const rearmed = run(2300, targetAt(15500));
+        const dead = run(2400, targetAt(15400, { hp: 0 }));
+        return [
+          first.contactEntryGuard.active,
+          first.contactEntryGuard.trigger,
+          first.movement.reason,
+          `${first.movement.dx},${first.movement.dy}`,
+          first.shooting.wouldShoot,
+          `${held.movement.dx},${held.movement.dy}`,
+          expired.target === null,
+          expired.contactEntryGuard.reason,
+          rearmed.contactEntryGuard.active,
+          rearmed.contactEntryGuard.trigger,
+          dead.target === null,
+          dead.contactEntryGuard.reason
+        ].join('|');
+      })(),
+      want: 'true|direct-closing-entry|contact-entry-pre-dodge|0,1|false|0,1|true|contact-not-rearmed|true|direct-closing-entry|true|no-contact-entry-target'
+    },
+    {
+      name: 'browserless first-contact guard keeps trusted target passive until realtime firing evidence',
+      got: (() => {
+        const self = { user_id: 7, entity_id: 1, x: 0, y: 0, vx: 0, vy: 0, hp: 100, stamina_5s_remaining_milli: 10000 };
+        const target = {
+          user_id: 8,
+          entity_id: 2,
+          x: 15500,
+          y: 0,
+          vx: -50,
+          vy: 0,
+          hp: 100,
+          active: true,
+          current_join_mode: 'Active',
+          easyKillThreatExempt: true
+        };
+        const run = (extra = {}) => buildBrowserlessCombatDryRun({
+          userId: 7,
+          realtime: { tick: 20, self, entities: [self, { ...target, ...extra }], bullets: [] }
+        }, { nowMs: 1000, decisionState: {}, combatEnabled: true });
+        const passive = run();
+        const firing = run({ firing: true });
+        return [
+          passive.target === null,
+          passive.contactEntryGuard.reason,
+          firing.contactEntryGuard.active,
+          firing.contactEntryGuard.trigger,
+          firing.movement.reason,
+          firing.shooting.wouldShoot,
+          firing.contactEntryGuard.movementOnly
+        ].join('|');
+      })(),
+      want: 'true|trusted-target-no-fire|true|target-firing|contact-entry-pre-dodge|false|true'
+    },
+    {
+      name: 'browserless first-contact guard uses trusted target real bullet trajectory during recovery without firing',
+      got: (() => {
+        const stateful = {};
+        const self = {
+          user_id: 7,
+          entity_id: 1,
+          x: 0,
+          y: 0,
+          vx: 0,
+          vy: 0,
+          hp: 80,
+          max_hp: 100,
+          stamina_5s_remaining_milli: 10000
+        };
+        const target = {
+          user_id: 8,
+          entity_id: 2,
+          x: 15500,
+          y: 0,
+          vx: 0,
+          vy: 50,
+          hp: 100,
+          active: true,
+          current_join_mode: 'Active',
+          easyKillThreatExempt: true
+        };
+        const result = buildBrowserlessCombatDryRun({
+          userId: 7,
+          realtime: {
+            tick: 20,
+            self,
+            entities: [self, target],
+            bullets: [{
+              id: 'trusted-shot',
+              owner_id: 8,
+              x: 8000,
+              y: 0,
+              target_x: 0,
+              target_y: 0,
+              speed_per_tick: 500,
+              created_tick: 20,
+              expire_tick: 40
+            }]
+          }
+        }, { nowMs: 1000, decisionState: stateful, combatEnabled: true });
+        return [
+          result.contactEntryGuard.active,
+          result.contactEntryGuard.trigger,
+          result.contactEntryGuard.realBulletTakeover,
+          result.contactEntryGuard.movementOnly,
+          result.movement.reason,
+          result.movement.dodge?.reason,
+          `${result.movement.dx},${result.movement.dy}`,
+          result.shooting.wouldShoot,
+          result.exit === null
+        ].join('|');
+      })(),
+      want: 'true|target-real-bullet|true|true|tangent-dodge|tangent-dodge|0,1|false|true'
+    },
+    {
       name: 'browserless movement route model conditions next direction on current action phase',
       got: (() => {
         const samples = [

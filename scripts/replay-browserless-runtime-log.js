@@ -15,7 +15,12 @@ const {
   evaluateCombatHpExitCore,
   evaluatePredictedLeaveHpCore
 } = require('../src/strategy/combat-exit');
-const { calculateDodgeDirection, pickSafeClosingDodgeCore } = require('../src/strategy/combat-movement');
+const {
+  calculateDodgeDirection,
+  contactEntryRiskCore,
+  contactEntrySyntheticBulletCore,
+  pickSafeClosingDodgeCore
+} = require('../src/strategy/combat-movement');
 const {
   combatEdgePressureDecisionCore,
   combatEscapeDecisionCore
@@ -891,6 +896,7 @@ function replayDodge(options) {
   const rows = selectedEntries(options).filter(({ detail }) => !options.targetId
     || String(detail.target?.userId ?? '') === options.targetId);
   const burstCadenceReplay = replayBurstCadence(rows);
+  const contactEntryReplay = replayContactEntryDodge(rows, options);
   const reactionBudgetMs = Math.max(0, Number(options.executionDelayTicks || 5) * 50 + 50 + 100);
   let hitEvents = 0;
   let eventsWithThreatEvidence = 0;
@@ -1008,15 +1014,92 @@ function replayDodge(options) {
     oldFalseSafeRatio: oldRatio,
     newFalseSafeRatio: newRatio,
     burstCadenceReplay,
+    contactEntryReplay,
     samples,
     fullTrajectorySamples,
-    accepted: burstCadenceReplay.accepted || (
+    accepted: burstCadenceReplay.accepted || contactEntryReplay.accepted || (
       hitEvents > 0
         && reconstructedEvents > 0
         && recoveredByFullTrajectory > 0
         && recoveredAfterStaticTti > 0
         && newFalseSafe < oldFalseSafe
     )
+  };
+}
+
+function replayContactEntryDodge(rows, options = {}) {
+  let previous = null;
+  let armed = true;
+  let eligibleFrames = 0;
+  let safeFrames = 0;
+  let directHitReduction = 0;
+  const samples = [];
+  for (const row of rows) {
+    const loggedSelf = row.detail?.self;
+    const target = row.detail?.target;
+    if (!loggedSelf || !target) continue;
+    const self = {
+      ...loggedSelf,
+      vx: 0,
+      vy: 0,
+      hp: 100,
+      max_hp: 100,
+      stamina_5s_remaining_milli: 10000
+    };
+    const distance = Number(target.distance ?? Math.hypot(
+      Number(target.x || 0) - Number(self.x || 0),
+      Number(target.y || 0) - Number(self.y || 0)
+    ));
+    const risk = contactEntryRiskCore(self, { ...target, distance, easyKillThreatExempt: false }, previous, {
+      armed,
+      attackRange: 14500,
+      guardBufferCm: 1000,
+      minimumStamina5s: 3400
+    });
+    if (distance > risk.guardRange) armed = true;
+    if (!risk.eligible) {
+      previous = { distance, at: Date.parse(row.entry.at) };
+      continue;
+    }
+    eligibleFrames += 1;
+    armed = false;
+    const synthetic = contactEntrySyntheticBulletCore(self, target);
+    const dodge = synthetic ? calculateDodgeDirection(self, [synthetic], {
+      target,
+      moveSpeedPerTick: 50,
+      tickMs: 50,
+      hitRadius: 200,
+      commandDelayTicks: options.executionDelayTicks || 5
+    }) : null;
+    const selected = dodge?.threatField?.find(item => Number(item.dx) === Number(dodge.dx) && Number(item.dy) === Number(dodge.dy)) || null;
+    const stationary = dodge?.threatField?.find(item => Number(item.dx) === 0 && Number(item.dy) === 0) || null;
+    const reduction = Math.max(0, Number(stationary?.directHits || 0) - Number(selected?.directHits || 0));
+    directHitReduction += reduction;
+    if (selected && Number(selected.directHits || 0) === 0 && Number(selected.minCPA || 0) >= 200) safeFrames += 1;
+    if (samples.length < 12) samples.push({
+      line: row.line,
+      at: row.entry.at,
+      trigger: risk.trigger,
+      distance: risk.distance,
+      closingSpeed: risk.closingSpeed,
+      closingAlignment: risk.closingAlignment,
+      dx: dodge?.dx ?? 0,
+      dy: dodge?.dy ?? 0,
+      stationaryDirectHits: Number(stationary?.directHits || 0),
+      selectedDirectHits: Number(selected?.directHits || 0),
+      stationaryCpaCm: Number(stationary?.minCPA || 0),
+      selectedCpaCm: Number(selected?.minCPA || 0),
+      assumedImpactMs: Number(synthetic?.timeToImpact || 0)
+    });
+    previous = { distance, at: Date.parse(row.entry.at) };
+  }
+  return {
+    model: 'parked-full-hp-first-contact-counterfactual',
+    eligibleFrames,
+    safeFrames,
+    directHitReduction,
+    samples,
+    accepted: eligibleFrames > 0 && safeFrames > 0 && directHitReduction > 0
   };
 }
 

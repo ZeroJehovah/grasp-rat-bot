@@ -10,7 +10,12 @@ const { ACTION_PRIORITY_BANDS, getActionPriorityBand, buildActionFocus } = requi
 const { applyFinalActionArbitration } = require('./action-arbitration');
 const { buildFinalActionCandidate, selectFinalActionCandidateCore } = require('./final-candidate-selection');
 const { quadraticInterceptCore } = require('./combat-aim');
-const { calculateDodgeDirection, pickSafeClosingDodgeCore } = require('./combat-movement');
+const {
+  calculateDodgeDirection,
+  contactEntryRiskCore,
+  contactEntrySyntheticBulletCore,
+  pickSafeClosingDodgeCore
+} = require('./combat-movement');
 const { recordActionSwitchDiagnosticsCore } = require('./action-switch-diagnostics');
 const { attackWorthTakingCore } = require('./attack-worth');
 const {
@@ -278,6 +283,54 @@ function runStrategyModuleSelfTests() {
       && safeClosingDodge?.dy === 1
       && safeClosingDodge?.directHits === 0
       && safeClosingDodge?.targetDistanceChange < 0
+  });
+  const contactSelf = { user_id: 1, x: 0, y: 0, vx: 0, vy: 0, stamina_5s_remaining_milli: 10000 };
+  const contactTarget = { user_id: 2, x: 15500, y: 0, vx: -50, vy: 0, distance: 15500, active: true };
+  const contactRisk = contactEntryRiskCore(contactSelf, contactTarget, null);
+  const movingContactRisk = contactEntryRiskCore({ ...contactSelf, vx: 35, vy: 35 }, contactTarget, null);
+  const tangentialContactRisk = contactEntryRiskCore(contactSelf, { ...contactTarget, vx: 0, vy: 50 }, null);
+  const retreatingContactRisk = contactEntryRiskCore(contactSelf, { ...contactTarget, vx: 50, vy: 0 }, null);
+  const lowStaminaContactRisk = contactEntryRiskCore({ ...contactSelf, stamina_5s_remaining_milli: 3000 }, contactTarget, null);
+  const recoveryContactRisk = contactEntryRiskCore({ ...contactSelf, hp: 90, max_hp: 100 }, contactTarget, null);
+  const trustedContactRisk = contactEntryRiskCore(contactSelf, { ...contactTarget, easyKillThreatExempt: true }, null);
+  const trustedFiringRisk = contactEntryRiskCore(contactSelf, { ...contactTarget, easyKillThreatExempt: true, firing: true }, null);
+  const recoveryBulletRisk = contactEntryRiskCore({ ...contactSelf, hp: 90, max_hp: 100 }, {
+    ...contactTarget,
+    easyKillThreatExempt: true
+  }, null, { realBullet: true });
+  results.push({
+    name: 'contact-entry-risk-arms-stationary-direct-approach-with-firing-trust-override',
+    passed: contactRisk.eligible === true
+      && contactRisk.trigger === 'direct-closing-entry'
+      && contactRisk.closingAlignment === 1
+      && movingContactRisk.blockedReason === 'self-already-moving'
+      && tangentialContactRisk.blockedReason === 'no-direct-closing-evidence'
+      && retreatingContactRisk.blockedReason === 'no-direct-closing-evidence'
+      && lowStaminaContactRisk.blockedReason === 'stamina-insufficient'
+      && recoveryContactRisk.blockedReason === 'recovery-policy-owned'
+      && trustedContactRisk.blockedReason === 'trusted-target-no-fire'
+      && trustedFiringRisk.eligible === true
+      && trustedFiringRisk.trigger === 'target-firing'
+      && recoveryBulletRisk.eligible === true
+      && recoveryBulletRisk.trigger === 'target-real-bullet'
+  });
+  const contactSyntheticBullet = contactEntrySyntheticBulletCore(contactSelf, contactTarget);
+  const contactDodge = calculateDodgeDirection(contactSelf, [contactSyntheticBullet], {
+    target: contactTarget,
+    moveSpeedPerTick: 50,
+    tickMs: 50,
+    hitRadius: 200,
+    commandDelayTicks: 5
+  });
+  const contactSelected = contactDodge.threatField.find(item => item.dx === contactDodge.dx && item.dy === contactDodge.dy);
+  const contactStationary = contactDodge.threatField.find(item => item.dx === 0 && item.dy === 0);
+  results.push({
+    name: 'contact-entry-synthetic-shot-turns-stationary-first-hit-into-lateral-safe-cpa',
+    passed: Boolean(contactSyntheticBullet?.synthetic
+      && (contactDodge.dx !== 0 || contactDodge.dy !== 0)
+      && contactStationary?.directHits === 1
+      && contactSelected?.directHits === 0
+      && contactSelected?.minCPA >= 200)
   });
 
   // Test action priority bands
