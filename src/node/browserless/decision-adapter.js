@@ -129,6 +129,11 @@ const DEFAULT_AFK_ATTACK_COMMIT_RANGE_CM = 5000;
 const DEFAULT_AFK_COMBAT_MOVEMENT_STAMINA_PER_SHOT_MS = 425;
 const DEFAULT_AFK_DISPLAY_INACTIVE_MS = 60000;
 const EASY_KILL_CANDIDATE_DIAGNOSTIC_LIMIT = 8;
+const EASY_KILL_SEEK_RANGE_CM_BY_SCORE = Object.freeze({
+  1: 30000,
+  2: 40000,
+  3: 50000
+});
 const DEFAULT_INVULNERABLE_PROFIT_APPROACH_DISTANCE_CM = 5000;
 const DEFAULT_INVULNERABLE_PROFIT_MOVE_SPEED_CM_PER_SEC = 1000;
 const DEFAULT_DANGEROUS_TARGET_COOLDOWN_MS = BROWSER_RUNTIME_DEFAULTS.browserlessDangerousTargetCooldownMs ?? 900000;
@@ -515,6 +520,15 @@ function easyKillTargetUserId(target) {
   return numberOrNull(target?.userId ?? target?.user_id ?? target?.targetUserId ?? target?.target_user_id);
 }
 
+function easyKillScore(value) {
+  const score = Math.round(Number(value));
+  return Number.isFinite(score) ? Math.min(3, Math.max(1, score)) : 1;
+}
+
+function easyKillSeekRangeCm(value) {
+  return EASY_KILL_SEEK_RANGE_CM_BY_SCORE[easyKillScore(value)];
+}
+
 function easyKillPlayerTracker(options = {}) {
   const tracker = options.easyKillPlayerTracker;
   return tracker && typeof tracker === 'object' ? tracker : null;
@@ -613,7 +627,11 @@ function refreshEasyKillTargetAnnotations(input, stateful = {}, options = {}, st
   if (!input || typeof input !== 'object') return null;
   const status = statusOverride || easyKillTrackerStatus(options);
   const damageStatus = dailyDamageTrackerStatus(options, input.nowMs);
-  const knownIds = new Set((status.players || []).map(easyKillTargetUserId).filter(value => value !== null).map(String));
+  const knownPlayers = new Map((status.players || [])
+    .map(player => [easyKillTargetUserId(player), player])
+    .filter(([userId]) => userId !== null)
+    .map(([userId, player]) => [String(userId), player]));
+  const knownIds = new Set(knownPlayers.keys());
   const blockedIds = new Set((status.blockedUserIds || []).map(numberOrNull).filter(value => value !== null).map(String));
   const damagedIds = new Set([
     ...(damageStatus.userIds || []),
@@ -625,12 +643,17 @@ function refreshEasyKillTargetAnnotations(input, stateful = {}, options = {}, st
   for (const target of targets) {
     const userId = easyKillTargetUserId(target);
     const known = userId !== null && knownIds.has(String(userId));
+    const trackedPlayer = known ? knownPlayers.get(String(userId)) : null;
+    const score = known ? easyKillScore(trackedPlayer?.score) : null;
+    const seekRangeCm = known ? easyKillSeekRangeCm(score) : 0;
     const damagedToday = known && damagedIds.has(String(userId));
     const suppressed = known && (
       blockedIds.has(String(userId))
       || easyKillTargetSuppressed(stateful, target, input.nowMs)
     );
     target.easyKillKnown = known;
+    target.easyKillScore = score;
+    target.easyKillSeekRangeCm = seekRangeCm || null;
     target.easyKillDamagedToday = damagedToday;
     target.easyKillThreatExempt = Boolean(known && !damagedToday);
     target.easyKillProfitTarget = Boolean(
@@ -643,6 +666,7 @@ function refreshEasyKillTargetAnnotations(input, stateful = {}, options = {}, st
         && !target.invulnerable
         && Number.isFinite(Number(target.distance))
         && (visibleDistance <= 0 || Number(target.distance) <= visibleDistance)
+        && Number(target.distance) <= seekRangeCm
     );
   }
   input.easyKillTargets = targets.filter(target => target.easyKillProfitTarget);
@@ -1688,6 +1712,8 @@ function summarizeTarget(target) {
     whitelisted: Boolean(target.whitelisted),
     alive: target.alive !== false,
     easyKillKnown: Boolean(target.easyKillKnown),
+    easyKillScore: numberOrNull(target.easyKillScore),
+    easyKillSeekRangeCm: numberOrNull(target.easyKillSeekRangeCm),
     easyKillDamagedToday: Boolean(target.easyKillDamagedToday),
     easyKillThreatExempt: Boolean(target.easyKillThreatExempt),
     easyKillProfitTarget: Boolean(target.easyKillProfitTarget),
@@ -1779,6 +1805,9 @@ function easyKillCandidateBaseRejectionReason(target, stateful = {}, input = {},
   const visibleDistance = opportunityVisibleDistance(options);
   if (!Number.isFinite(Number(target?.distance))) return 'distance-unknown';
   if (visibleDistance > 0 && Number(target.distance) > visibleDistance) return 'out-of-range';
+  if (target.easyKillKnown === true
+    && Number.isFinite(Number(target.easyKillSeekRangeCm))
+    && Number(target.distance) > Number(target.easyKillSeekRangeCm)) return 'out-of-score-range';
   if (easyKillTargetSuppressed(stateful, target, input.nowMs)) return 'easy-kill-suppressed';
   if (target.easyKillProfitTarget !== true) return 'not-profit-eligible';
   if (targetDangerousCooldownRecord(stateful, target, input.nowMs)) return 'dangerous-target-cooldown';
@@ -6495,7 +6524,11 @@ function easyKillApproachMinClosingCm(options = {}) {
 function reconcileEasyKillTracker(input, stateful = {}, options = {}) {
   const tracker = easyKillPlayerTracker(options);
   if (!tracker) return refreshEasyKillTargetAnnotations(input, stateful, options);
-  callEasyKillPlayerTracker(options, 'observeKillEvidence', input.selfKillEvidence || [], { atMs: input.nowMs });
+  callEasyKillPlayerTracker(options, 'observeKillEvidence', input.selfKillEvidence || [], {
+    atMs: input.nowMs,
+    selfHp: hpValue(input.self),
+    selfMaxHp: numberOrNull(input.self?.max_hp ?? input.self?.maxHp)
+  });
   callEasyKillPlayerTracker(options, 'expirePendingOutcomes', input.nowMs);
   callEasyKillPlayerTracker(options, 'observeVisibleTargets', input.visibleTargets || [], {
     atMs: input.nowMs,
@@ -6675,7 +6708,9 @@ function reconcileEasyKillCombatOutcome(decision, input, options = {}) {
   if (activeCombatEngaged && combatTarget?.active === true) {
     callEasyKillPlayerTracker(options, 'observeCombatEngagement', combatTarget, {
       atMs: input.nowMs,
-      tick: decision.tick ?? decision.combat?.tick ?? null
+      tick: decision.tick ?? decision.combat?.tick ?? null,
+      selfHp: hpValue(input.self),
+      selfMaxHp: numberOrNull(input.self?.max_hp ?? input.self?.maxHp)
     });
   }
   const pursuitSuppression = decision.combat?.profitPursuitSuppression || null;
@@ -7331,7 +7366,9 @@ function recordAttackHistoryFromActionResult(decisionState, actionResult, decisi
     if (entry.active) {
       callEasyKillPlayerTracker(options, 'observeCombatShot', target, {
         atMs: nowMs,
-        tick: decision?.tick ?? decision?.combat?.tick ?? null
+        tick: decision?.tick ?? decision?.combat?.tick ?? null,
+        selfHp: numberOrNull(decision?.input?.self?.hp),
+        selfMaxHp: numberOrNull(decision?.input?.self?.maxHp ?? decision?.input?.self?.max_hp)
       });
     }
   }

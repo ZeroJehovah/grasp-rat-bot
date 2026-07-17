@@ -680,6 +680,15 @@ function latestRealtimeTickFromResult(result) {
   return candidates.length ? Math.max(...candidates) : 0;
 }
 
+function snapshotSelfForUser(payload, userId) {
+  const id = Number(userId || 0);
+  if (!id) return null;
+  const direct = payload?.self;
+  if (direct && Number(direct.user_id ?? direct.userId) === id) return direct;
+  return (Array.isArray(payload?.entities) ? payload.entities : [])
+    .find(entity => Number(entity?.user_id ?? entity?.userId) === id) || null;
+}
+
 function confirmedLeaveStateFromResult(result, nowMs = Date.now()) {
   if (!runnerResultConfirmedLeave(result)) return null;
   const confirmedAtMs = Number.isFinite(Number(nowMs)) ? Number(nowMs) : Date.now();
@@ -957,10 +966,17 @@ async function runBrowserlessRunner(config, deps = {}) {
     }
     try {
       const evidence = snapshotSelfKillEvidence(payload, config.userId);
+      const snapshotSelf = snapshotSelfForUser(payload, config.userId);
+      const latestSelf = snapshotSelf
+        || liveState?.current?.self
+        || liveState?.lastKnown?.self
+        || null;
       easyKillEvidenceResult = easyKillPlayerTracker.observeKillEvidence?.(evidence, {
         atMs: observedAtMs,
         source: detail.source || 'snapshot',
-        tick: payload?.tick
+        tick: payload?.tick,
+        selfHp: latestSelf?.hp,
+        selfMaxHp: latestSelf?.max_hp ?? latestSelf?.maxHp
       }) || null;
     } catch (err) {
       recordSupervisorError(err, { operation: 'easy-kill-snapshot-kill-observe', source: detail.source || 'snapshot' });

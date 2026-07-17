@@ -31053,6 +31053,51 @@ async function runSelfTest() {
 	      want: '1,2,3,3|3|4|2|1|0'
 	    },
 	    {
+	      name: 'browserless easy-kill tracker awards kill score from self hp and keeps low-hp kills neutral',
+	      got: (() => {
+	        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'grasp-rat-easy-kill-hp-score-'));
+	        const events = [];
+	        try {
+	          const tracker = createEasyKillPlayerTracker({
+	            file: path.join(dir, 'easy-kill-players.json'),
+	            now: () => 0,
+	            onEvent: event => events.push(event)
+	          });
+	          const confirmKill = (userId, atMs, tick, selfHp, detail = {}) => {
+	            tracker.observeCombatEngagement({ userId, name: `player-${userId}`, active: true }, {
+	              atMs,
+	              tick,
+	              selfHp,
+	              selfMaxHp: 100
+	            });
+	            tracker.observeKillEvidence([{ targetUserId: userId, targetName: `player-${userId}`, tick: tick + 1 }], {
+	              atMs: atMs + 1,
+	              ...(detail.useEngagementHp ? {} : { selfHp, selfMaxHp: 100 })
+	            });
+	          };
+	          confirmKill(8, 100, 10, 100);
+	          confirmKill(9, 200, 20, 75);
+	          confirmKill(10, 300, 30, 50);
+	          confirmKill(9, 400, 40, 40);
+	          confirmKill(11, 500, 50, 100, { useEngagementHp: true });
+	          const status = tracker.status();
+	          const killedEvents = events.filter(event => event.type === 'killed');
+	          const eventFor = userId => killedEvents.findLast(event => event.userId === userId);
+	          return [
+	            status.players.map(player => `${player.userId}:${player.score}:${player.killCount}`).sort().join(','),
+	            eventFor(8)?.scoreIncrement,
+	            eventFor(9)?.scoreIncrement,
+	            eventFor(10)?.score,
+	            eventFor(10)?.added,
+	            eventFor(11)?.scoreIncrementSource
+	          ].join('|');
+	        } finally {
+	          fs.rmSync(dir, { recursive: true, force: true });
+	        }
+	      })(),
+	      want: '11:2:1,8:2:1,9:1:2|2|0|0|false|engagement-last-self-hp'
+	    },
+	    {
 	      name: 'browserless daily damage tracker records stable player ids and resets on UTC+8 day change',
 	      got: (() => {
 	        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'grasp-rat-daily-damage-'));
@@ -31317,6 +31362,48 @@ async function runSelfTest() {
 	      want: 'profit-candidate|seek-enemy|easy-kill-active-profit|true|51450|51450'
 	    },
 	    {
+	      name: 'browserless easy-kill proactive seek range scales from score one through three',
+	      got: (() => {
+	        const decide = (score, distance) => buildBrowserlessDecision({
+	          userId: 7,
+	          realtime: {
+	            tick: 100,
+	            frameAgeMs: 0,
+	            self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+	            entities: [
+	              { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+	              { entity_id: 2, user_id: 8, name: 'known-runner', x: distance, y: 0, vx: 20, hp: 30, max_hp: 100, current_join_mode: 'Active', drop: 30 }
+	            ],
+	            bullets: [],
+	            coinDrops: []
+	          },
+	          fallback: { tick: 100, frameAgeMs: 0, entities: [], coinDrops: [], messages: [] }
+	        }, {}, {
+	          nowMs: 1000,
+	          controlMode: 'profit-live',
+	          combatEnabled: true,
+	          dynamicProfitThresholdEnabled: false,
+	          easyKillPlayers: [{ userId: 8, name: 'known-runner', score }]
+	        });
+	        const score1Edge = decide(1, 30000);
+	        const score1Outside = decide(1, 30001);
+	        const score2Edge = decide(2, 40000);
+	        const score2Outside = decide(2, 40001);
+	        const score3Edge = decide(3, 50000);
+	        return [
+	          score1Edge.action.kind,
+	          score1Edge.action.target?.easyKillScore,
+	          score1Edge.action.target?.easyKillSeekRangeCm,
+	          score1Outside.profit.easyKill.candidates[0]?.rejectedReason,
+	          score2Edge.action.kind,
+	          score2Outside.profit.easyKill.candidates[0]?.rejectedReason,
+	          score3Edge.action.kind,
+	          score3Edge.action.target?.easyKillSeekRangeCm
+	        ].join('|');
+	      })(),
+	      want: 'seek-enemy|1|30000|out-of-score-range|seek-enemy|out-of-score-range|seek-enemy|50000'
+	    },
+	    {
 	      name: 'browserless active profit threshold uses effective reward and bounded exploration admission',
 	      got: (() => {
 	        const nowMs = Date.parse('2026-07-16T00:00:00.000Z');
@@ -31468,7 +31555,7 @@ async function runSelfTest() {
 	          controlMode: 'profit-live',
 	          combatEnabled: true,
 	          dynamicProfitThresholdEnabled: false,
-	          easyKillPlayers: [{ userId: 8, name: 'xuanze00' }]
+	          easyKillPlayers: [{ userId: 8, name: 'xuanze00', score: 3 }]
 	        });
 	        const diagnostic = decision.profit.easyKill.candidates[0];
 	        const topFiveFloor = decision.profit.candidates.at(-1)?.score;

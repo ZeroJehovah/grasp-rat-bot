@@ -8,6 +8,7 @@ const INITIAL_SCORE = 1;
 const MAX_SCORE = 3;
 const DEFAULT_OUTCOME_GRACE_MS = 40000;
 const DEFAULT_PERSIST_INTERVAL_MS = 5000;
+const DEFAULT_SELF_MAX_HP = 100;
 
 function cloneJson(value) {
   if (value === null || value === undefined) return value;
@@ -59,6 +60,33 @@ function normalizedScore(value, fallback = INITIAL_SCORE) {
   const number = Number(value);
   const score = Number.isFinite(number) ? Math.round(number) : fallback;
   return Math.min(MAX_SCORE, Math.max(0, score));
+}
+
+function positiveNumberOrNull(value) {
+  const number = numberOrNull(value);
+  return number !== null && number > 0 ? number : null;
+}
+
+function killScoreIncrement(detail = {}, engagement = null) {
+  const engagementSelfHp = numberOrNull(engagement?.lastSelfHp);
+  const detailSelfHp = numberOrNull(detail.selfHp ?? detail.self_hp ?? detail.self?.hp);
+  const selfHp = engagementSelfHp ?? detailSelfHp;
+  if (selfHp === null) return { increment: 1, selfHp: null, selfMaxHp: null, source: 'unknown-hp-default' };
+  const selfMaxHp = positiveNumberOrNull(
+    engagementSelfHp !== null
+      ? engagement?.lastSelfMaxHp
+      : (detail.selfMaxHp
+          ?? detail.self_max_hp
+          ?? detail.self?.maxHp
+          ?? detail.self?.max_hp)
+  ) ?? DEFAULT_SELF_MAX_HP;
+  const increment = selfHp >= selfMaxHp ? 2 : (selfHp > 50 ? 1 : 0);
+  return {
+    increment,
+    selfHp,
+    selfMaxHp,
+    source: engagementSelfHp !== null ? 'engagement-last-self-hp' : 'kill-evidence'
+  };
 }
 
 function emptyStore() {
@@ -116,7 +144,10 @@ function normalizeEngagement(key, engagement) {
     outcomeDueAt: String(engagement.outcomeDueAt || ''),
     outcomeDueAtMs: Math.max(0, Number(engagement.outcomeDueAtMs || Date.parse(engagement.outcomeDueAt || '') || 0)),
     endReason: String(engagement.endReason || ''),
-    lastDrop: targetDrop(engagement)
+    lastDrop: targetDrop(engagement),
+    lastSelfHp: numberOrNull(engagement.lastSelfHp),
+    lastSelfMaxHp: positiveNumberOrNull(engagement.lastSelfMaxHp),
+    lastSelfHpAtMs: Math.max(0, Number(engagement.lastSelfHpAtMs || 0))
   };
 }
 
@@ -301,6 +332,13 @@ function createEasyKillPlayerTracker(options = {}) {
     const reopened = Boolean(previous && !previous.active);
     const created = !previous || reopened;
     const engagementOnly = detail.engagementOnly === true;
+    const observedSelfHp = numberOrNull(detail.selfHp ?? detail.self_hp ?? detail.self?.hp);
+    const observedSelfMaxHp = positiveNumberOrNull(
+      detail.selfMaxHp
+        ?? detail.self_max_hp
+        ?? detail.self?.maxHp
+        ?? detail.self?.max_hp
+    );
     const nameUpdates = updateNamesFromTargets([target], atMs, detail.source || 'realtime-combat', detail.tick);
     const name = previous?.name || store.players[key]?.name || targetName(target, `#${userId}`);
     const startedAtMs = created ? atMs : Number(previous.startedAtMs || atMs);
@@ -328,7 +366,10 @@ function createEasyKillPlayerTracker(options = {}) {
       outcomeDueAt: '',
       outcomeDueAtMs: 0,
       endReason: '',
-      lastDrop: targetDrop(target) ?? targetDrop(previous)
+      lastDrop: targetDrop(target) ?? targetDrop(previous),
+      lastSelfHp: observedSelfHp ?? numberOrNull(previous?.lastSelfHp),
+      lastSelfMaxHp: observedSelfMaxHp ?? positiveNumberOrNull(previous?.lastSelfMaxHp),
+      lastSelfHpAtMs: observedSelfHp === null ? Number(previous?.lastSelfHpAtMs || 0) : atMs
     };
     if (created || nameUpdates.length || !lastWriteAtMs || atMs - lastWriteAtMs >= persistIntervalMs) persist(atMs);
     for (const event of nameUpdates) emit(event);
@@ -457,20 +498,24 @@ function createEasyKillPlayerTracker(options = {}) {
       const nameObservedTick = observedNameTicks.length ? Math.max(...observedNameTicks) : null;
       const killedAt = String(item?.at || '') || new Date(atMs).toISOString();
       const previousScore = existing ? normalizedScore(existing.score, INITIAL_SCORE) : 0;
-      const score = existing ? Math.min(MAX_SCORE, previousScore + 1) : INITIAL_SCORE;
-      store.players[key] = {
-        key,
-        userId,
-        name,
-        nameUpdatedAt: killedAt,
-        nameObservedTick,
-        score,
-        killCount: Math.max(1, Number(existing?.killCount || 0) + 1),
-        firstKilledAt: existing?.firstKilledAt || killedAt,
-        lastKilledAt: killedAt,
-        lastKillTick: tick,
-        lastDrop: engagement.lastDrop ?? existing?.lastDrop ?? null
-      };
+      const scoreAward = killScoreIncrement(detail, engagement);
+      const score = Math.min(MAX_SCORE, previousScore + scoreAward.increment);
+      const killCount = Math.max(1, Number(existing?.killCount || 0) + 1);
+      if (score > 0) {
+        store.players[key] = {
+          key,
+          userId,
+          name,
+          nameUpdatedAt: killedAt,
+          nameObservedTick,
+          score,
+          killCount,
+          firstKilledAt: existing?.firstKilledAt || killedAt,
+          lastKilledAt: killedAt,
+          lastKillTick: tick,
+          lastDrop: engagement.lastDrop ?? existing?.lastDrop ?? null
+        };
+      }
       delete store.engagements[key];
       const event = {
         type: 'killed',
@@ -478,10 +523,15 @@ function createEasyKillPlayerTracker(options = {}) {
         userId,
         name,
         tick,
-        added: !existing,
+        added: Boolean(!existing && score > 0),
         previousScore,
         score,
-        killCount: store.players[key].killCount
+        scoreIncrement: scoreAward.increment,
+        appliedScoreIncrement: score - previousScore,
+        scoreIncrementSource: scoreAward.source,
+        selfHp: scoreAward.selfHp,
+        selfMaxHp: scoreAward.selfMaxHp,
+        killCount
       };
       confirmed.push(event);
       emit(event);
