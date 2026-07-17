@@ -24130,15 +24130,19 @@ async function runSelfTest() {
           panelScript.includes("document.createElementNS('http://www.w3.org/2000/svg', 'svg')"),
           panelScript.includes("const hasMultipleRouteTargets = items.some"),
           panelScript.includes('const nearbyCoinIcon = function nearbyCoinIconCore'),
-          nearbyCoinIconCore({ selected: true, bait: true }) === 'coinSingle',
-          nearbyCoinIconCore({ selected: true, bait: true, hasMultipleRouteTargets: true }) === 'coin1',
-          nearbyCoinIconCore({ selected: false, bait: true }) === 'coinBait',
+          nearbyCoinIconCore({ selected: true, bait: true, actionReason: 'single-coin-bait-hold' }) === 'coinBait',
+          nearbyCoinIconCore({ selected: true, bait: true, actionReason: 'single-coin-bait-return' }) === 'coinBait',
+          nearbyCoinIconCore({ selected: true, bait: true, actionReason: 'single-coin-bait-release' }) === 'coinSingle',
+          nearbyCoinIconCore({ selected: true, bait: true, hasMultipleRouteTargets: true, actionReason: 'single-coin-bait-release' }) === 'coin1',
+          nearbyCoinIconCore({ selected: false, bait: true, actionReason: 'wait-for-full-stamina-and-hp' }) === '',
+          nearbyCoinIconCore({ selected: false, bait: true, actionReason: 'combat-engaged' }) === '',
           nearbyCoinIconCore({ selected: false, bait: false, routeOrder: 3 }) === 'coin3',
+          panelScript.includes("const baitPresented = baitCoin && actionReason.startsWith('single-coin-bait-');"),
           panelScript.includes("const fleeTarget = (actionKind === 'flee' || actionKind === 'safety-exit' || actionKind === 'leave') && Boolean(status.action?.target);"),
           panelScript.includes("const targetType = fleeTarget ? 'flee' : (afkTarget ? 'afk' : 'combat');")
         ].join('|');
       })(),
-      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
+      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless web panel reports subunit session stamina without rounding it to one',

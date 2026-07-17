@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.17.3';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.17.4';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function panelSessionFlagsCore(status = {}) {
@@ -64,8 +64,14 @@ function nearbyCoinIconCore(options = {}) {
   const bait = Boolean(options.bait);
   const hasMultipleRouteTargets = Boolean(options.hasMultipleRouteTargets);
   const routeOrder = Number(options.routeOrder);
+  const actionReason = String(options.actionReason || '');
+  if (bait && (actionReason === 'single-coin-bait-hold' || actionReason === 'single-coin-bait-return')) {
+    return 'coinBait';
+  }
   if (selected) return hasMultipleRouteTargets ? 'coin1' : 'coinSingle';
-  if (bait) return 'coinBait';
+  if (bait && actionReason === 'single-coin-bait-release') {
+    return hasMultipleRouteTargets ? 'coin1' : 'coinSingle';
+  }
   if (Number.isFinite(routeOrder) && routeOrder > 1) {
     return 'coin' + Math.min(9, Math.max(2, Math.round(routeOrder)));
   }
@@ -1317,6 +1323,7 @@ function renderBrowserlessWebPanel() {
       if (!node) return;
       const items = Array.isArray(status.nearby?.c) ? status.nearby.c : [];
       const hiddenLowCoinCount = Math.max(0, Number(status.nearby?.coinLowHiddenCount || 0) || 0);
+      const actionReason = String(status.action?.reason || status.decision?.reason || '');
       const hasMultipleRouteTargets = items.some(item => {
         const routeIndex = number(item?.[4]);
         return routeIndex !== null && routeIndex > 1;
@@ -1335,15 +1342,17 @@ function renderBrowserlessWebPanel() {
           const routeIndex = number(routeOrder);
           const routeNext = routeIndex !== null && routeIndex > 1;
           const baitCoin = panelFlag(bait);
+          const baitPresented = baitCoin && actionReason.startsWith('single-coin-bait-');
           const rowClass = [
             selected ? 'target-current target-coin' : (routeNext ? 'target-route-next target-coin' : ''),
-            baitCoin ? 'target-bait' : ''
+            baitPresented ? 'target-bait' : ''
           ].filter(Boolean).join(' ');
           const icon = nearbyCoinIcon({
             selected,
             bait: baitCoin,
             hasMultipleRouteTargets,
-            routeOrder: routeIndex
+            routeOrder: routeIndex,
+            actionReason
           });
           fragment.appendChild(createNearbyRow('coin', [
             { text: id, icon },
