@@ -2874,6 +2874,78 @@ function runStrategyModuleSelfTests() {
       && postKillPicked.reason === 'matched-player-drop-disappeared'
   });
 
+  const postKillCrossTarget = updatePostKillSettlementCore(null, {
+    nowMs: 1784220520546,
+    previousCombatTarget: { userId: 36176, name: 'Victor8886', drop: 91, firstSeenTick: 55700 },
+    currentCombatTarget: null,
+    combatMetrics: {
+      targetId: '2889',
+      targetName: 'Wbh',
+      startedAt: 1784220520140,
+      startedTick: 57179,
+      acceptedShots: 1,
+      actualLastShotAt: 1784220520393,
+      actualLastShotTick: 57179
+    },
+    visibleTargets: [],
+    selfKillEvidence: [{ targetUserId: 36176, tick: 30783 }],
+    playerDropCoins: [],
+    snapshotTick: 57178
+  });
+  results.push({
+    name: 'post-kill-settlement-binds-recent-shot-metrics-to-target-id',
+    passed: postKillCrossTarget.state?.targetId === '2889'
+      && postKillCrossTarget.state?.targetName === 'Wbh'
+      && postKillCrossTarget.state?.phase === 'unconfirmed-tail'
+      && postKillCrossTarget.state?.confirmedAt === 0
+  });
+
+  const postKillStaleEvidence = updatePostKillSettlementCore(null, {
+    nowMs: 1784220520546,
+    previousCombatTarget: { userId: 2889, name: 'Wbh', drop: 133, firstSeenTick: 57179 },
+    currentCombatTarget: null,
+    combatMetrics: {
+      targetId: '2889',
+      targetName: 'Wbh',
+      startedAt: 1784220520140,
+      startedTick: 57179,
+      acceptedShots: 1,
+      actualLastShotAt: 1784220520393,
+      actualLastShotTick: 57179
+    },
+    visibleTargets: [],
+    selfKillEvidence: [{ targetUserId: 2889, tick: 30783 }],
+    playerDropCoins: [{ drop_id: 90, source_user_id: 2889, amount: 11, created_tick: 30790 }],
+    snapshotTick: 57187
+  });
+  const postKillFreshEvidence = updatePostKillSettlementCore(postKillStaleEvidence.state, {
+    nowMs: 1784220520746,
+    visibleTargets: [],
+    selfKillEvidence: [{ targetUserId: 2889, tick: 57190 }],
+    playerDropCoins: [{ drop_id: 90, source_user_id: 2889, amount: 11, created_tick: 30790 }],
+    snapshotTick: 57191
+  });
+  const postKillFreshDrop = updatePostKillSettlementCore(postKillFreshEvidence.state, {
+    nowMs: 1784220520946,
+    visibleTargets: [],
+    selfKillEvidence: [{ targetUserId: 2889, tick: 57190 }],
+    playerDropCoins: [
+      { drop_id: 90, source_user_id: 2889, amount: 11, created_tick: 30790 },
+      { drop_id: 91, source_user_id: 2889, amount: 32, created_tick: 57192 }
+    ],
+    snapshotTick: 57193
+  });
+  results.push({
+    name: 'post-kill-settlement-rejects-stale-kill-and-drop-generations',
+    passed: postKillStaleEvidence.state?.phase === 'unconfirmed-tail'
+      && postKillStaleEvidence.state?.matchedCoinKey === ''
+      && postKillFreshEvidence.state?.phase === 'drop-pending'
+      && postKillFreshEvidence.state?.matchedCoinKey === ''
+      && postKillFreshDrop.state?.phase === 'drop-visible'
+      && postKillFreshDrop.state?.matchedCoinKey === '91'
+      && postKillFreshDrop.state?.matchedCoinCreatedTick === 57192
+  });
+
   const postAttackCovered = pickPostAttackDropWaitTargetCore([
     { id: 'covered', x: 2200, y: 0, at: 9000, resolvedAt: 9700, drop: 20, afk: true, action: 'attack' }
   ], [{ x: 2200, y: 100, amount: 1 }], [], postAttackWaitOptions);

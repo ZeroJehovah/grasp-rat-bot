@@ -6,7 +6,10 @@ const { StringDecoder } = require('string_decoder');
 const path = require('path');
 const { forEachJsonlEntry } = require('./browserless-log-summary');
 const { estimateAim } = require('../src/node/browserless/combat-adapter');
-const { buildLowHpRecoveryThreatExitDecision } = require('../src/node/browserless/decision-adapter');
+const {
+  buildLowHpRecoveryThreatExitDecision,
+  easyKillEngagementFinishReason
+} = require('../src/node/browserless/decision-adapter');
 const { evaluateBrowserlessSafety } = require('../src/node/browserless/safety-controller');
 const { actionPriorityBand } = require('../src/strategy/action-priority');
 const {
@@ -31,6 +34,7 @@ const {
   updateOpponentBehaviorStateCore
 } = require('../src/strategy/opponent-behavior');
 const { evaluateHighEntropyFireGateCore } = require('../src/strategy/combat-fire-discipline');
+const { updatePostKillSettlementCore } = require('../src/strategy/post-kill-settlement');
 
 function parseArgs(argv) {
   const options = {
@@ -1455,6 +1459,115 @@ function replayOpportunity(options) {
   };
 }
 
+function replayEasyKillContinuity(options) {
+  const rows = selectedEntries(options);
+  const targetId = String(options.targetId || '');
+  if (!targetId) throw new Error('--target-id is required for easy-kill-continuity mode');
+  const settlementRows = rows.filter(row => row.detail?.input?.postKillSettlement?.active === true);
+  const settlementRow = settlementRows.find(row => Number(row.detail?.combat?.metrics?.acceptedShots || 0) > 0)
+    || settlementRows[0]
+    || null;
+  const baselineSettlement = settlementRow?.detail?.input?.postKillSettlement || null;
+  const settlementActionTarget = settlementRow?.detail?.action?.target || null;
+  const settlementMetrics = settlementRow?.detail?.combat?.metrics || null;
+  const correctedSettlement = settlementRow ? updatePostKillSettlementCore(null, {
+    nowMs: Date.parse(settlementRow.entry.at || settlementRow.detail.at || '') || 0,
+    previousCombatTarget: settlementActionTarget ? {
+      userId: settlementActionTarget.userId ?? settlementActionTarget.id,
+      name: settlementActionTarget.name || '',
+      drop: settlementActionTarget.drop
+    } : null,
+    currentCombatTarget: settlementRow.detail?.combat?.target || null,
+    combatMetrics: settlementMetrics,
+    visibleTargets: [],
+    selfKillEvidence: settlementRow.detail?.input?.selfKillEvidence || [],
+    playerDropCoins: settlementRow.detail?.input?.loot?.candidate
+      ? [settlementRow.detail.input.loot.candidate]
+      : [],
+    snapshotTick: baselineSettlement?.lastSnapshotTick ?? settlementRow.detail?.tick
+  }, {
+    unconfirmedMs: 1000,
+    confirmedMs: 5000,
+    recentShotMs: 1500
+  }) : null;
+  const correctedReleaseReason = settlementRow
+    ? easyKillEngagementFinishReason(settlementRow.detail, targetId)
+    : '';
+  const firstAt = rows.length ? Date.parse(rows[0].entry.at || '') : 0;
+  const lastAt = rows.length ? Date.parse(rows.at(-1).entry.at || '') : 0;
+  const runnerFile = path.join(path.dirname(options.file), 'runner.jsonl');
+  let engagementStartedEvents = 0;
+  let falseReleaseEvents = 0;
+  if (fs.existsSync(runnerFile) && firstAt > 0 && lastAt >= firstAt) {
+    forEachJsonlEntry(runnerFile, entry => {
+      const at = Date.parse(entry?.at || '');
+      if (!Number.isFinite(at) || at < firstAt || at > lastAt) return;
+      if (String(entry?.type || '') !== 'easy-kill-player-outcome') return;
+      const event = entry.detail || {};
+      if (String(event.userId ?? event.user_id ?? '') !== targetId) return;
+      if (String(event.type || '') === 'engagement-started') engagementStartedEvents += 1;
+      if (String(event.type || '') === 'engagement-ended-pending'
+        && String(event.reason || '') === 'combat-action-released') falseReleaseEvents += 1;
+    });
+  }
+  let blockedCandidateFrames = 0;
+  let recoveredHigherScoreFrames = 0;
+  const recoverySamples = [];
+  for (const row of rows) {
+    const candidates = row.detail?.profit?.easyKill?.candidates || [];
+    const candidate = candidates.find(item => String(item?.userId ?? item?.user_id ?? '') === targetId) || null;
+    if (!candidate || candidate.eligible !== false || String(candidate.rejectedReason || '') !== 'not-profit-eligible') continue;
+    blockedCandidateFrames += 1;
+    const targetScore = Number(candidate.score);
+    const selectedScore = Number(row.detail?.profit?.best?.score);
+    if (Number.isFinite(targetScore) && Number.isFinite(selectedScore) && targetScore > selectedScore) {
+      recoveredHigherScoreFrames += 1;
+      if (recoverySamples.length < 5) recoverySamples.push({
+        line: row.line,
+        at: row.entry.at || '',
+        targetScore: Math.round(targetScore),
+        selectedScore: Math.round(selectedScore),
+        selectedTargetId: String(row.detail?.profit?.best?.id ?? row.detail?.action?.target?.userId ?? '')
+      });
+    }
+  }
+  const result = {
+    mode: 'easy-kill-continuity',
+    targetId,
+    lines: `${options.startLine}-${options.endLine}`,
+    baseline: {
+      settlementTargetId: String(baselineSettlement?.targetId || ''),
+      settlementPhase: String(baselineSettlement?.phase || ''),
+      settlementReason: String(baselineSettlement?.reason || ''),
+      metricsTargetId: String(settlementMetrics?.targetId || ''),
+      engagementStartedEvents,
+      falseReleaseEvents,
+      blockedCandidateFrames
+    },
+    corrected: {
+      settlementTargetId: String(correctedSettlement?.state?.targetId || ''),
+      settlementPhase: String(correctedSettlement?.state?.phase || ''),
+      settlementReason: String(correctedSettlement?.state?.reason || ''),
+      settlementConfirmed: Number(correctedSettlement?.state?.confirmedAt || 0) > 0,
+      engagementFinishReason: correctedReleaseReason,
+      recoveredHigherScoreFrames
+    },
+    recoverySamples
+  };
+  result.accepted = rows.length > 0
+    && result.baseline.settlementTargetId
+    && result.baseline.settlementTargetId !== result.baseline.metricsTargetId
+    && result.baseline.metricsTargetId === targetId
+    && result.baseline.falseReleaseEvents > 0
+    && result.baseline.blockedCandidateFrames > 0
+    && (!result.corrected.settlementTargetId || result.corrected.settlementTargetId === targetId)
+    && (!result.corrected.settlementPhase || result.corrected.settlementPhase === 'unconfirmed-tail')
+    && result.corrected.settlementConfirmed === false
+    && result.corrected.engagementFinishReason === ''
+    && result.corrected.recoveredHigherScoreFrames > 0;
+  return result;
+}
+
 function replayEntryRunId(entry) {
   return String(entry?.detail?.runId || entry?.runId || '');
 }
@@ -2320,6 +2433,7 @@ function replayCombatPursuit(options) {
 
 function runReplay(options) {
   if (options.mode === 'opportunity') return replayOpportunity(options);
+  if (options.mode === 'easy-kill-continuity') return replayEasyKillContinuity(options);
   if (options.mode === 'leave-tail') return replayLeaveTail(options);
   if (options.mode === 'exit') return replayExit(options);
   if (options.mode === 'movement-stall-exit') return replayMovementStallExit(options);
@@ -2341,6 +2455,7 @@ if (require.main === module) {
 module.exports = {
   parseArgs,
   replayCombatPursuit,
+  replayEasyKillContinuity,
   replayLeaveTail,
   replayMovementStallExit,
   replayRecoveryThreatExit,

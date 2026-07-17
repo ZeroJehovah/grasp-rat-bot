@@ -364,12 +364,15 @@ function syncConfirmedCombatShots(stateful, state = {}, target = null, combat = 
   if (!Array.isArray(learning.acceptedBulletIds)) learning.acceptedBulletIds = [];
   const seen = new Set(learning.acceptedBulletIds.map(String));
   let added = 0;
+  let lastAcceptedShotTick = numberOrNull(stateful.combatMetrics?.lastAcceptedShotTick);
   for (const shot of state?.command?.shooting?.confirmedShots || []) {
     if (shot?.targetId !== null && shot?.targetId !== undefined && String(shot.targetId) !== targetId) continue;
     const bulletId = String(shot?.bullet_id ?? shot?.bulletId ?? `${shot?.createdTick ?? shot?.created_tick}:${shot?.sequence ?? ''}`);
     if (!bulletId || seen.has(bulletId)) continue;
     seen.add(bulletId);
     added += 1;
+    const createdTick = numberOrNull(shot.createdTick ?? shot.created_tick);
+    if (createdTick !== null) lastAcceptedShotTick = Math.max(lastAcceptedShotTick ?? createdTick, createdTick);
     recordCombatShotLearning(stateful, target, combat, {
       nowMs: Number(shot.acceptedAtMs || options.nowMs || Date.now()),
       hypothesis: shot.hypothesis,
@@ -391,7 +394,8 @@ function syncConfirmedCombatShots(stateful, state = {}, target = null, combat = 
     const metrics = stateful.combatMetrics || {};
     stateful.combatMetrics = {
       ...metrics,
-      acceptedShots: Number(metrics.acceptedShots || 0) + added
+      acceptedShots: Number(metrics.acceptedShots || 0) + added,
+      lastAcceptedShotTick
     };
   }
   return added;
@@ -1599,6 +1603,9 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
     id,
     at: nowMs,
     firstSeenAt: same ? Number(previous.firstSeenAt || previous.at || nowMs) : nowMs,
+    firstSeenTick: same
+      ? (numberOrNull(previous.firstSeenTick) ?? numberOrNull(options.currentTick))
+      : numberOrNull(options.currentTick),
     name: target.name || '',
     x: Math.round(Number(target.x) || 0),
     y: Math.round(Number(target.y) || 0),
@@ -1696,6 +1703,9 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
     targetName: target.name || previousMetrics.targetName || '',
     engagementId: `${String(id)}:${engagementStartedAt}`,
     startedAt: engagementStartedAt,
+    startedTick: same
+      ? (numberOrNull(previousMetrics.startedTick) ?? numberOrNull(previous?.firstSeenTick) ?? numberOrNull(options.currentTick))
+      : numberOrNull(options.currentTick),
     lastObservedAt: nowMs,
     initialSelfHp: same
       ? (numberOrNull(previousMetrics.initialSelfHp) ?? previousSelfHp ?? currentSelfHp)

@@ -6670,7 +6670,6 @@ function reconcileEasyKillCombatOutcome(decision, input, options = {}) {
   if (!tracker || !decision) return null;
   const action = decision.action || {};
   const combatTarget = decision.combat?.target || null;
-  const combatTargetId = easyKillTargetUserId(combatTarget);
   const activeCombatEngaged = action.kind === 'combat-live'
     || ((action.kind === 'leave' || action.kind === 'safety-exit' || action.shouldLeave) && decision.combat?.exit);
   if (activeCombatEngaged && combatTarget?.active === true) {
@@ -6688,20 +6687,28 @@ function reconcileEasyKillCombatOutcome(decision, input, options = {}) {
   }
   const status = easyKillTrackerStatus(options);
   const active = (status.engagements || []).filter(item => item.active);
-  const selectedCombatTargetId = EASY_KILL_ENGAGEMENT_CONTINUATION_ACTIONS.has(action.kind)
-    ? easyKillTargetUserId(action.target || combatTarget)
-    : null;
   for (const engagement of active) {
-    if (selectedCombatTargetId !== null && String(engagement.userId) === String(selectedCombatTargetId)) continue;
-    const stillVisible = (input.visibleTargets || []).some(target => String(easyKillTargetUserId(target) ?? '') === String(engagement.userId));
-    if (selectedCombatTargetId === null && !stillVisible) continue;
-    let reason = selectedCombatTargetId !== null ? 'combat-target-switched' : 'combat-action-released';
-    if (combatTargetId !== null && String(engagement.userId) === String(combatTargetId) && decision.combat?.kiteReassessment?.blocked) {
-      reason = 'retreat-kite-better-profit';
-    }
+    const reason = easyKillEngagementFinishReason(decision, engagement.userId);
+    if (!reason) continue;
     callEasyKillPlayerTracker(options, 'finishEngagement', engagement.userId, reason, { atMs: input.nowMs });
   }
   return null;
+}
+
+function easyKillEngagementFinishReason(decision, engagementUserId) {
+  const action = decision?.action || {};
+  const combatTarget = decision?.combat?.target || null;
+  const selectedCombatTargetId = EASY_KILL_ENGAGEMENT_CONTINUATION_ACTIONS.has(action.kind)
+    ? easyKillTargetUserId(action.target || combatTarget)
+    : null;
+  if (selectedCombatTargetId === null || String(selectedCombatTargetId) === String(engagementUserId)) return '';
+  const combatTargetId = easyKillTargetUserId(combatTarget);
+  if (combatTargetId !== null
+    && String(engagementUserId) === String(combatTargetId)
+    && decision?.combat?.kiteReassessment?.blocked) {
+    return 'retreat-kite-better-profit';
+  }
+  return 'combat-target-switched';
 }
 
 function buildReturnToCenterDecision(input, options = {}) {
@@ -7312,9 +7319,13 @@ function recordAttackHistoryFromActionResult(decisionState, actionResult, decisi
       targetId: String(id),
       targetName: target?.name || baseMetrics.targetName || '',
       startedAt: sameTarget && Number.isFinite(previousStartedAt) ? previousStartedAt : nowMs,
+      startedTick: sameTarget
+        ? (numberOrNull(baseMetrics.startedTick) ?? numberOrNull(decision?.tick ?? decision?.combat?.tick))
+        : numberOrNull(decision?.tick ?? decision?.combat?.tick),
       requestedShots: Number(baseMetrics.requestedShots ?? baseMetrics.actualShots ?? 0) + 1,
       actualShots: Number(baseMetrics.requestedShots ?? baseMetrics.actualShots ?? 0) + 1,
       actualLastShotAt: nowMs,
+      actualLastShotTick: numberOrNull(decision?.tick ?? decision?.combat?.tick),
       actualShotIntervalMs: previousShotAt > 0 ? Math.max(0, nowMs - previousShotAt) : null
     };
     if (entry.active) {
@@ -7484,6 +7495,7 @@ module.exports = {
   createBrowserlessDecisionAdapter,
   decisionStatePatch,
   distanceBetween,
+  easyKillEngagementFinishReason,
   evaluateProactiveCombatMarginalRoi,
   lowHpRecoveryThreatRadiusForHp,
   opportunityEnemyStaminaCost,

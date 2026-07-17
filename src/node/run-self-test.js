@@ -30906,6 +30906,41 @@ async function runSelfTest() {
 	      want: 'true|1|runner|8|1|0|0'
 	    },
 	    {
+	      name: 'browserless easy-kill tracker clears pending failure when target reappears alive',
+	      got: (() => {
+	        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'grasp-rat-easy-kill-reappear-'));
+	        const events = [];
+	        try {
+	          const tracker = createEasyKillPlayerTracker({
+	            file: path.join(dir, 'easy-kill-players.json'),
+	            now: () => 1000,
+	            onEvent: event => events.push(event)
+	          });
+	          tracker.observeCombatShot({ userId: 8, name: 'runner', active: true, drop: 20 }, { atMs: 1000, tick: 10 });
+	          tracker.observeKillEvidence([{ targetUserId: 8, targetName: 'runner', tick: 12 }], { atMs: 1100 });
+	          tracker.observeCombatShot({ userId: 8, name: 'runner', active: true, drop: 22 }, { atMs: 2000, tick: 20 });
+	          tracker.finishEngagement(8, 'active-target-missing', { atMs: 3000 });
+	          const pending = tracker.status();
+	          const observed = tracker.observeVisibleTargets([
+	            { userId: 8, name: 'runner', active: true, alive: true, hp: 100, drop: 22 }
+	          ], { atMs: 3500, tick: 30, missingGraceMs: 2500 });
+	          const cleared = tracker.status();
+	          return [
+	            pending.blockedUserIds.join(','),
+	            observed.cleared.length,
+	            observed.cleared[0]?.reason,
+	            cleared.blockedUserIds.length,
+	            cleared.engagements.length,
+	            cleared.players[0]?.score,
+	            events.at(-1)?.type
+	          ].join('|');
+	        } finally {
+	          fs.rmSync(dir, { recursive: true, force: true });
+	        }
+	      })(),
+	      want: '8|1|target-reappeared-alive|0|0|1|engagement-pending-cleared'
+	    },
+	    {
 	      name: 'browserless easy-kill tracker keeps user id while refreshing the latest observed name',
 	      got: (() => {
 	        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'grasp-rat-easy-kill-name-'));
@@ -31649,6 +31684,102 @@ async function runSelfTest() {
 	      want: 'seek-enemy|34711|0|true'
 	    },
 	    {
+	      name: 'browserless post-kill wait preserves a different visible easy-kill engagement',
+	      got: (() => {
+	        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'grasp-rat-easy-kill-settlement-preempt-'));
+	        try {
+	          const tracker = createEasyKillPlayerTracker({ file: path.join(dir, 'easy-kill-players.json'), now: () => 0 });
+	          tracker.observeCombatShot({ userId: 2889, name: 'Wbh', active: true }, { atMs: 100, tick: 1 });
+	          tracker.observeKillEvidence([{ targetUserId: 2889, targetName: 'Wbh', tick: 2 }], { atMs: 200 });
+	          const adapter = createBrowserlessDecisionAdapter({
+	            userId: 28886,
+	            controlMode: 'profit-live',
+	            combatEnabled: true,
+	            dynamicProfitThresholdEnabled: false,
+	            easyKillPlayerTracker: tracker
+	          });
+	          const stateAt = tick => {
+	            const self = {
+	              entity_id: 1,
+	              user_id: 28886,
+	              name: 'self',
+	              x: 0,
+	              y: 0,
+	              hp: 100,
+	              max_hp: 100,
+	              stamina_5s_remaining_milli: 10000
+	            };
+	            return {
+	              userId: 28886,
+	              realtime: {
+	                tick,
+	                frameAgeMs: 0,
+	                self,
+	                entities: [
+	                  self,
+	                  {
+	                    entity_id: 2,
+	                    user_id: 2889,
+	                    name: 'Wbh',
+	                    x: 6405,
+	                    y: 0,
+	                    vx: 35,
+	                    vy: 35,
+	                    hp: 100,
+	                    max_hp: 100,
+	                    current_join_mode: 'Active',
+	                    stamina_5s_remaining_milli: 7312,
+	                    drop: 133
+	                  }
+	                ],
+	                bullets: [],
+	                coinDrops: []
+	              },
+	              fallback: { tick, frameAgeMs: 0, entities: [], coinDrops: [], messages: [] }
+	            };
+	          };
+	          const first = adapter.decide(stateAt(57179), { nowMs: 1000 });
+	          adapter.patchState({
+	            postKillSettlement: {
+	              active: true,
+	              phase: 'drop-pending',
+	              targetId: '36176',
+	              targetName: 'Victor8886',
+	              targetDrop: 91,
+	              startedAt: 1050,
+	              confirmedAt: 1050,
+	              expiresAt: 6000,
+	              matchedCoinKey: '',
+	              matchedCoinAmount: null,
+	              lastSnapshotTick: 57178,
+	              evidenceMinTick: 56000,
+	              evidenceMinAtMs: 500,
+	              reason: 'self-kill-confirmed'
+	            }
+	          });
+	          const preempted = adapter.evaluateRealtime(stateAt(57187), { nowMs: 1100 });
+	          const during = tracker.status();
+	          const resumed = adapter.evaluateRealtime(stateAt(57290), { nowMs: 6101 });
+	          const after = tracker.status();
+	          return [
+	            first.action.kind,
+	            preempted.action.kind,
+	            preempted.action.reason,
+	            preempted.combat.target?.userId,
+	            during.blockedUserIds.length,
+	            during.engagements[0]?.active,
+	            resumed.action.kind,
+	            resumed.action.target?.userId,
+	            after.blockedUserIds.length,
+	            after.engagements[0]?.active
+	          ].join('|');
+	        } finally {
+	          fs.rmSync(dir, { recursive: true, force: true });
+	        }
+	      })(),
+	      want: 'combat-live|post-attack-drop-wait|post-kill-settlement-wait|2889|0|true|combat-live|2889|0|true'
+	    },
+	    {
 	      name: 'browserless worker planner handoff seeds realtime easy-kill control',
 	      got: (async () => {
 	        const options = {
@@ -31724,18 +31855,20 @@ async function runSelfTest() {
 	          combat: { tick: 10, target }
 	        }, { nowMs: 5000 });
 	        const metrics = adapter.getState().combatMetrics;
-	        return [
-	          metrics.targetId,
-	          metrics.targetName,
-	          metrics.startedAt,
-	          metrics.requestedShots,
-	          metrics.actualShots,
-	          metrics.targetDamage === undefined,
-	          metrics.selfDamage === undefined,
-	          metrics.confirmedHits === undefined
-	        ].join('|');
-	      })(),
-	      want: '34711|xuanze00|5000|1|1|true|true|true'
+	          return [
+	            metrics.targetId,
+	            metrics.targetName,
+	            metrics.startedAt,
+	            metrics.startedTick,
+	            metrics.requestedShots,
+	            metrics.actualShots,
+	            metrics.actualLastShotTick,
+	            metrics.targetDamage === undefined,
+	            metrics.selfDamage === undefined,
+	            metrics.confirmedHits === undefined
+	          ].join('|');
+	        })(),
+	      want: '34711|xuanze00|5000|10|1|1|10|true|true|true'
 	    },
 	    {
 	      name: 'browserless action adapter approaches known easy active player without profit-layer firing',

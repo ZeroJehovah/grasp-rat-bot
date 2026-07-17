@@ -359,9 +359,24 @@ function createEasyKillPlayerTracker(options = {}) {
       if (userId !== null) visibleByUserId.set(userId, target);
     }
     const ended = [];
-    for (const engagement of Object.values(store.engagements)) {
-      if (!engagement.active) continue;
+    const cleared = [];
+    for (const [key, engagement] of Object.entries(store.engagements)) {
       const target = visibleByUserId.get(engagement.userId) || null;
+      if (!engagement.active) {
+        if (!target || target.alive === false || Number(target.hp ?? 1) <= 0) continue;
+        delete store.engagements[key];
+        const event = {
+          type: 'engagement-pending-cleared',
+          at: new Date(atMs).toISOString(),
+          userId: engagement.userId,
+          name: targetName(target, engagement.name || `#${engagement.userId}`),
+          reason: 'target-reappeared-alive',
+          previousReason: engagement.endReason || ''
+        };
+        cleared.push(event);
+        emit(event);
+        continue;
+      }
       if (target) {
         engagement.lastSeenAtMs = atMs;
         engagement.missingSinceMs = 0;
@@ -374,11 +389,11 @@ function createEasyKillPlayerTracker(options = {}) {
       const result = finishEngagement(engagement.userId, detail.reason || 'active-target-missing', { atMs });
       if (result.ok) ended.push(result.engagement);
     }
-    if (nameUpdates.length) {
+    if (nameUpdates.length || cleared.length) {
       persist(atMs);
       for (const event of nameUpdates) emit(event);
     }
-    return { ok: true, ended, renamed: cloneJson(nameUpdates) };
+    return { ok: true, ended, cleared: cloneJson(cleared), renamed: cloneJson(nameUpdates) };
   }
 
   function finishEngagement(userIdValue, reason = 'not-killed', detail = {}) {
