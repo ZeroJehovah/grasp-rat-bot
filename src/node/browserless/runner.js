@@ -11,6 +11,7 @@ const { createLocalLogStore } = require('./local-log-store');
 const { createBrowserlessBackgroundIo } = require('./background-io');
 const {
   browserlessStatsForDecision,
+  browserlessStatsForKillEvidence,
   browserlessStatsForOffline,
   browserlessCompactStatusSource,
   buildCompactBrowserlessStatus,
@@ -19,6 +20,7 @@ const {
   mergeLiveState,
   mergeState,
   readBrowserlessStateFile,
+  reconcileBrowserlessExitKillEvidence,
   sessionFromAnyState,
   stateFilePath,
   updateBrowserlessStateFile,
@@ -993,6 +995,7 @@ async function runBrowserlessRunner(config, deps = {}) {
     seedPlayers: chatSeedPlayers,
     onPollingDemandChange: () => snapshotGapPoller?.refreshSchedule?.()
   });
+  let activeRunKillConfirmations = [];
   const observeSnapshotPayload = (payload, detail = {}) => {
     const observedAtMs = Number(detail.observedAtMs ?? now());
     const snapshotSource = String(detail.source || 'snapshot');
@@ -1042,6 +1045,18 @@ async function runBrowserlessRunner(config, deps = {}) {
         selfHp: latestSelf?.hp,
         selfMaxHp: latestSelf?.max_hp ?? latestSelf?.maxHp
       }) || null;
+      const confirmed = (easyKillEvidenceResult?.confirmed || []).map(item => ({
+        ...item,
+        source: detail.source || 'snapshot'
+      }));
+      if (confirmed.length) {
+        activeRunKillConfirmations = [...activeRunKillConfirmations, ...confirmed].slice(-100);
+        if (liveState) {
+          patchLiveState({
+            stats: browserlessStatsForKillEvidence(liveState, confirmed, { nowMs: observedAtMs })
+          }, { updatedAt: new Date(observedAtMs).toISOString() });
+        }
+      }
     } catch (err) {
       recordSupervisorError(err, { operation: 'easy-kill-snapshot-kill-observe', source: detail.source || 'snapshot' });
       logStore.append('runner', 'easy-kill-snapshot-kill-observation-error', {
@@ -2196,6 +2211,7 @@ async function runBrowserlessRunner(config, deps = {}) {
     try {
       const stateBeforeCanary = readBrowserlessStateFile(stateFile);
       liveState = stateBeforeCanary;
+      activeRunKillConfirmations = [];
       const hasConfirmedLeaveRecovery = Boolean(activeConfirmedLeaveState(stateBeforeCanary, now()));
       const bypassPreLoginSafetyReason = config.snapshotEdgeEnabled !== true
         && !hasConfirmedLeaveRecovery && isFirstBrowserlessLoginOfDay(stateBeforeCanary, now())
@@ -2271,10 +2287,10 @@ async function runBrowserlessRunner(config, deps = {}) {
     const finalDecisionPatch = canary?.decisions?.last ? decisionStatePatch(canary.decisions.last) : {};
     const safetyEvents = [canary?.safety?.event, canary?.safety?.leaveFailure]
       .filter(Boolean)
-      .map(event => ({
+      .map(event => reconcileBrowserlessExitKillEvidence({
         ...event,
         runId: event.runId || canary?.runId || ''
-      }));
+      }, activeRunKillConfirmations));
     const currentStateBeforeFinish = readBrowserlessStateFile(stateFile);
     const finalStateBase = liveState || currentStateBeforeFinish;
     const finalState = mergeState(finalStateBase, {

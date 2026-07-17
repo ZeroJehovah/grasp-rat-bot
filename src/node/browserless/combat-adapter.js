@@ -1255,25 +1255,17 @@ function buildCombatExitEvaluation(self, target, combatTargetState = {}, options
   }, options);
   combatTargetState.exchangeDegradationSinceAt = exchangeStopLoss.degradationSinceAt;
   const defensive = String(combatTargetState?.originIntent || combatTargetState?.intent || '') === 'defensive';
-  const exchangeExit = exchangeStopLoss.triggered && defensive
-    ? {
-        shouldLeave: true,
-        policy: 'exchange-stop-loss',
-        rule: exchangeStopLoss.rule,
-        reason: exchangeStopLoss.reason,
-        selfHp: hpValue(self),
-        targetHp: hpValue(target),
-        exchangeStopLoss
-      }
-    : null;
   return {
     ...evaluation,
     exchangeStopLoss: {
       ...exchangeStopLoss,
-      disengage: Boolean(exchangeStopLoss.triggered && !defensive),
-      shouldExit: Boolean(exchangeExit)
+      advisory: Boolean(exchangeStopLoss.triggered),
+      defensive,
+      response: exchangeStopLoss.triggered ? 'continue-combat-adjust-tactics' : '',
+      disengage: false,
+      shouldExit: false
     },
-    exit: exchangeExit || (evaluation.exit ? { ...evaluation.exit, noDamageMs } : null)
+    exit: evaluation.exit ? { ...evaluation.exit, noDamageMs } : null
   };
 }
 

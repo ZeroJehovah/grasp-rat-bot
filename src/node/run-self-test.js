@@ -67,6 +67,7 @@ const {
   effectiveProfitReward,
   evaluateProactiveCombatMarginalRoi,
   opportunityEnemyStaminaCost: browserlessOpportunityEnemyStaminaCost,
+  recentCombatResidualThreatContinuityCore,
   snapshotSelfKillEvidence
 } = require('./browserless/decision-adapter');
 const {
@@ -150,12 +151,14 @@ const {
 } = require('../../scripts/replay-browserless-runtime-log');
 const {
   browserlessStatsForDecision,
+  browserlessStatsForKillEvidence,
   browserlessStatsForOffline,
   browserlessCompactStatusSource,
   buildCompactBrowserlessStatus,
   buildPublicBrowserlessStatus,
   mergeLiveState,
   readBrowserlessStateFile,
+  reconcileBrowserlessExitKillEvidence,
   stateFilePath,
   updateBrowserlessStateFile
 } = require('./browserless/state-file');
@@ -15042,6 +15045,8 @@ async function runSelfTest() {
         let firstActiveAt = 0;
         let triggeredAt = 0;
         let triggeredReason = '';
+        let triggeredAdvisory = false;
+        let triggeredShouldExit = false;
         for (let index = 0; index < 90; index += 1) {
           const nowMs = 1000 + index * 160;
           const damageSteps = Math.max(0, Math.min(15, index - 38));
@@ -15077,6 +15082,8 @@ async function runSelfTest() {
           if (!triggeredAt && combat.exchangeStopLoss?.triggered) {
             triggeredAt = nowMs;
             triggeredReason = combat.exit?.reason || '';
+            triggeredAdvisory = combat.exchangeStopLoss?.advisory === true;
+            triggeredShouldExit = combat.exchangeStopLoss?.shouldExit === true;
           }
         }
         const replacementSelf = {
@@ -15112,12 +15119,14 @@ async function runSelfTest() {
           firstActiveAt,
           triggeredAt,
           triggeredAt - firstActiveAt,
-          triggeredReason,
+          triggeredReason || 'no-exit',
+          triggeredAdvisory,
+          triggeredShouldExit,
           stateful.combatTarget.id,
           stateful.combatTarget.exchangeDegradationSinceAt
         ].join('|');
       })(),
-      want: '9000|11880|2880|combat-exchange-stop-loss-negative-damage-exchange|9|0'
+      want: '9000|11880|2880|no-exit|true|false|9|0'
     },
     {
       name: 'browserless combat low hp behind exits regardless no-damage window',
@@ -15153,6 +15162,147 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'combat-low-hp-disadvantage-leave|40|90|true'
+    },
+    {
+      name: 'browserless recent established combat treats same-owner tail bullets as settlement pressure',
+      got: (() => {
+        const nowMs = Date.parse('2026-07-17T09:09:42.776Z');
+        const metrics = {
+          targetId: '31361',
+          startedAt: Date.parse('2026-07-17T09:08:05.944Z'),
+          lastObservedAt: Date.parse('2026-07-17T09:09:42.572Z'),
+          acceptedShots: 180,
+          lastTargetHp: 1
+        };
+        const settlement = {
+          active: true,
+          phase: 'unconfirmed-tail',
+          targetId: '31361',
+          expiresAt: nowMs + 1500
+        };
+        const sameOwner = recentCombatResidualThreatContinuityCore({
+          nowMs,
+          ownerIds: ['31361'],
+          recentCombatMetrics: metrics,
+          postKillSettlement: settlement
+        });
+        const thirdParty = recentCombatResidualThreatContinuityCore({
+          nowMs,
+          ownerIds: ['999'],
+          recentCombatMetrics: metrics,
+          postKillSettlement: settlement
+        });
+        const stale = recentCombatResidualThreatContinuityCore({
+          nowMs: nowMs + 5000,
+          ownerIds: ['31361'],
+          recentCombatMetrics: metrics,
+          postKillSettlement: { ...settlement, expiresAt: nowMs + 1000 }
+        });
+        const mismatchedMetrics = recentCombatResidualThreatContinuityCore({
+          nowMs,
+          ownerIds: ['31361'],
+          recentCombatTargetId: '31361',
+          recentCombatMetrics: { ...metrics, targetId: '19677' },
+          postKillSettlement: null
+        });
+        return [
+          sameOwner.active,
+          sameOwner.reason,
+          sameOwner.ageMs,
+          thirdParty.active,
+          stale.active,
+          mismatchedMetrics.active
+        ].join('|');
+      })(),
+      want: 'true|post-kill-settlement-residual-threat|204|false|false|false'
+    },
+    {
+      name: 'browserless mango finish tail keeps settlement instead of early leave',
+      got: (() => {
+        const nowMs = Date.parse('2026-07-17T09:09:42.776Z');
+        const stateful = {
+          lastDecisionAction: { kind: 'combat-live', band: 'combat', reason: 'combat-live-realtime' },
+          combatTarget: {
+            id: '31361',
+            name: 'mango',
+            at: nowMs - 204,
+            firstSeenAt: Date.parse('2026-07-17T09:08:05.944Z'),
+            lastInRangeAt: nowMs - 204,
+            hp: 1,
+            displayHp: 1,
+            drop: 28,
+            active: true,
+            intent: 'engaged',
+            originIntent: 'defensive'
+          },
+          combatMetrics: {
+            targetId: '31361',
+            targetName: 'mango',
+            startedAt: Date.parse('2026-07-17T09:08:05.944Z'),
+            lastObservedAt: nowMs - 204,
+            initialSelfHp: 100,
+            lastSelfHp: 76,
+            initialTargetHp: 94,
+            lastTargetHp: 1,
+            selfDamage: 24,
+            targetDamage: 93,
+            acceptedShots: 180,
+            confirmedHits: 31,
+            actualLastShotAt: nowMs - 607,
+            lastAcceptedShotTick: 1230428
+          }
+        };
+        const self = {
+          entity_id: 1011,
+          user_id: 28886,
+          name: '文月',
+          x: 0,
+          y: 0,
+          hp: 76,
+          max_hp: 100,
+          stamina_5s_remaining_milli: 1277,
+          stamina_5s_limit_milli: 10000
+        };
+        const decision = buildBrowserlessDecision({
+          userId: 28886,
+          realtime: {
+            tick: 1230436,
+            frameAgeMs: 0,
+            self,
+            entities: [self],
+            bullets: [{
+              bullet_id: 65858,
+              owner_user_id: 31361,
+              start_x: 1000,
+              start_y: 0,
+              target_x: -14000,
+              target_y: 0,
+              created_tick: 1230431,
+              expire_tick: 1230461,
+              speed_per_tick: 500
+            }],
+            coinDrops: []
+          },
+          fallback: { tick: 1230425, frameAgeMs: 0, entities: [], coinDrops: [], messages: [] }
+        }, stateful, {
+          nowMs,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          dynamicProfitThresholdEnabled: false,
+          combatCriticalHp: 20,
+          combatLowHpLeaveThreshold: 50,
+          combatHighHpDisadvantageGap: 20,
+          postKillUnconfirmedTailMs: 1500
+        });
+        return [
+          decision.reason,
+          decision.action.shouldLeave === true,
+          stateful.postKillSettlement?.phase,
+          decision.action.leaveRisk?.residualThreatContinuity?.active ?? false,
+          stateful.postKillSettlement?.targetId
+        ].join('|');
+      })(),
+      want: 'wait-for-full-stamina-and-hp|false|unconfirmed-tail|false|31361'
     },
     {
       name: 'browserless new high-hp-gap target waits for disadvantage confirmation',
@@ -24590,6 +24740,73 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'injury-leave|self-left|Eason|2026-07-13T08:04:31.844Z|14480|100|73|unknown|27|51|42|17|40.5'
+    },
+    {
+      name: 'browserless late mango kill evidence reconciles an in-flight leave as victory',
+      got: (() => {
+        const exitAt = '2026-07-17T09:09:42.776Z';
+        const killAt = '2026-07-17T09:09:43.245Z';
+        const rawExit = {
+          at: exitAt,
+          reason: 'incoming-bullet-early-leave',
+          shouldLeave: true,
+          detail: {
+            decision: {
+              target: { userId: 31361, name: 'mango' },
+              combat: {
+                target: null,
+                metrics: {
+                  engagementId: '31361:1784279285944',
+                  targetId: '31361',
+                  targetName: 'mango',
+                  startedAt: Date.parse('2026-07-17T09:08:05.944Z'),
+                  startedTick: 1228504,
+                  lastObservedAt: Date.parse('2026-07-17T09:09:42.572Z'),
+                  initialSelfHp: 100,
+                  lastSelfHp: 76,
+                  initialTargetHp: 94,
+                  lastTargetHp: 1,
+                  selfDamage: 24,
+                  targetDamage: 93,
+                  targetHealing: 0,
+                  requestedShots: 189,
+                  acceptedShots: 180,
+                  confirmedHits: 31
+                }
+              }
+            }
+          }
+        };
+        const kill = { type: 'killed', userId: 31361, name: 'mango', tick: 1230433, at: killAt };
+        const reconciled = reconcileBrowserlessExitKillEvidence(rawExit, [kill]);
+        const status = buildCompactBrowserlessStatus({ recentExits: [reconciled] }, parseBrowserlessRunnerArgs([], {}));
+        const stats = browserlessStatsForKillEvidence({
+          stats: {
+            currentSession: {
+              online: true,
+              sessionId: '28886:2026-07-17T09:01:04.043Z',
+              userId: 28886,
+              enteredAt: '2026-07-17T09:01:04.043Z',
+              enteredTick: 1220105,
+              lastSeenAt: exitAt,
+              killBaselineInitialized: true,
+              killBaselineKeys: [],
+              killKeys: []
+            }
+          }
+        }, [kill], { nowMs: Date.parse(killAt) });
+        const battle = status.recentExit.battle;
+        return [
+          battle.outcome,
+          battle.target.name,
+          battle.targetHpEnd,
+          battle.targetDamage,
+          battle.endedAt,
+          battle.killConfirmation.tick,
+          stats.currentSession.kills
+        ].join('|');
+      })(),
+      want: 'victory|mango|0|94|2026-07-17T09:09:43.245Z|1230433|1'
     },
     {
       name: 'browserless compact pursuit exit rejects stale unrelated combat metrics',

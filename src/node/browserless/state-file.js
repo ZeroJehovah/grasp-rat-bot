@@ -491,7 +491,7 @@ function actualBrowserlessDailyStaminaSpentMs(stats) {
 }
 
 function statsKillKey(item) {
-  const target = item?.targetUserId ?? item?.target_user_id ?? item?.targetId ?? item?.id;
+  const target = item?.targetUserId ?? item?.target_user_id ?? item?.targetId ?? item?.userId ?? item?.user_id ?? item?.id;
   const tick = statsKillTick(item);
   if (target === null || target === undefined || target === '') return '';
   return 'self-kill:' + String(target) + ':' + String(tick || 'unknown');
@@ -665,6 +665,30 @@ function browserlessStatsForDecision(state, decision, options = {}) {
     startBrowserlessStatsSession(stats, state, self, stamina, nowMs, decision);
   }
   updateBrowserlessStatsSession(stats.currentSession, decision, self, stamina, nowMs);
+  return normalizeBrowserlessStats(stats);
+}
+
+function browserlessStatsForKillEvidence(state, evidence = [], options = {}) {
+  const stats = normalizeBrowserlessStats(state?.stats);
+  const nowMs = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
+  ensureBrowserlessStatsDay(stats, nowMs);
+  const session = stats.currentSession || {};
+  if (!session.online || !session.sessionId) return stats;
+  const baselineKeys = new Set(Array.isArray(session.killBaselineKeys) ? session.killBaselineKeys : []);
+  const killKeys = new Set(normalizeSessionKillKeys(session.killKeys, session));
+  const enteredTick = compactNumber(session.enteredTick);
+  let latestAtMs = parseTimeMs(session.lastSeenAt);
+  for (const item of evidence || []) {
+    const key = statsKillKey(item);
+    if (!key || baselineKeys.has(key)) continue;
+    const tick = statsKillTick(item);
+    if (enteredTick !== null && (tick === null || tick < enteredTick)) continue;
+    killKeys.add(key);
+    latestAtMs = Math.max(latestAtMs, parseTimeMs(item?.at) || nowMs);
+  }
+  session.killKeys = Array.from(killKeys).slice(-1000);
+  session.kills = session.killKeys.length;
+  if (latestAtMs > 0) session.lastSeenAt = isoFromMs(latestAtMs);
   return normalizeBrowserlessStats(stats);
 }
 
@@ -1587,6 +1611,46 @@ function compactRun(run) {
   };
 }
 
+function reconcileBrowserlessExitKillEvidence(event, evidence = [], options = {}) {
+  if (!event || typeof event !== 'object') return event;
+  const detail = event.detail && typeof event.detail === 'object' ? event.detail : {};
+  const decision = detail.decision && typeof detail.decision === 'object' ? detail.decision : {};
+  const combat = decision.combat && typeof decision.combat === 'object'
+    ? decision.combat
+    : (detail.combat && typeof detail.combat === 'object' ? detail.combat : {});
+  const metrics = combat.metrics && typeof combat.metrics === 'object' ? combat.metrics : {};
+  const target = event.target || detail.target || decision.target || combat.exit?.target || combat.target || null;
+  const targetId = compactNumber(metrics.targetId ?? target?.userId ?? target?.user_id);
+  if (targetId === null) return event;
+  const eventAtMs = parseTimeMs(event.at || decision.at || detail.at);
+  const startedAtMs = compactNumber(metrics.startedAt) || parseTimeMs(combat.startedAt);
+  const startedTick = compactNumber(metrics.startedTick);
+  const maxAfterExitMs = Math.max(1000, Number(options.maxAfterExitMs || 5000));
+  const match = (evidence || []).find(item => {
+    const evidenceTargetId = compactNumber(
+      item?.targetUserId ?? item?.target_user_id ?? item?.targetId ?? item?.userId ?? item?.user_id
+    );
+    if (evidenceTargetId === null || evidenceTargetId !== targetId) return false;
+    const tick = statsKillTick(item);
+    if (startedTick !== null && tick !== null && tick < startedTick) return false;
+    const atMs = parseTimeMs(item?.at);
+    if (startedAtMs > 0 && atMs > 0 && atMs < startedAtMs) return false;
+    if (eventAtMs > 0 && atMs > 0 && atMs - eventAtMs > maxAfterExitMs) return false;
+    return true;
+  }) || null;
+  if (!match) return event;
+  return {
+    ...cloneJson(event),
+    killConfirmation: {
+      targetUserId: targetId,
+      targetName: compactString(match.name || match.targetName, 80),
+      tick: statsKillTick(match),
+      at: compactString(match.at, 48),
+      source: compactString(match.source || 'self-kill-evidence', 48)
+    }
+  };
+}
+
 function compactExit(event) {
   if (!event || typeof event !== 'object') return null;
   const detail = event.detail && typeof event.detail === 'object' ? event.detail : {};
@@ -1608,6 +1672,15 @@ function compactExit(event) {
   const sourceTarget = event.target || detail.target || decision.target || combatExit.target || combat.target || null;
   const sourceTargetId = compactNumber(sourceTarget?.userId ?? sourceTarget?.user_id);
   const metricsTargetId = compactNumber(metrics.targetId);
+  const killConfirmation = event.killConfirmation && typeof event.killConfirmation === 'object'
+    ? event.killConfirmation
+    : (detail.killConfirmation && typeof detail.killConfirmation === 'object' ? detail.killConfirmation : {});
+  const killTargetId = compactNumber(
+    killConfirmation.targetUserId
+      ?? killConfirmation.target_user_id
+      ?? killConfirmation.targetId
+      ?? killConfirmation.userId
+  );
   const sourceTargetName = compactString(sourceTarget?.name || sourceTarget?.label, 80);
   const metricsTargetName = compactString(metrics.targetName, 80);
   const hasMetricsTarget = metricsTargetId !== null || Boolean(metricsTargetName);
@@ -1634,6 +1707,11 @@ function compactExit(event) {
       && (!hasMetricsTarget || metricsMatchSourceTarget)
       && metricsFreshForExit
   );
+  const confirmedKill = Boolean(
+    killTargetId !== null
+      && ((metricsTargetId !== null && killTargetId === metricsTargetId)
+        || (sourceTargetId !== null && killTargetId === sourceTargetId))
+  );
   const battleMetrics = metricsAssociated ? metrics : {};
   const metricStartedAtMs = compactNumber(battleMetrics.startedAt);
   const combatStartedAtMs = (metricsAssociated || explicitBattleReason || explicitCombatExit)
@@ -1642,11 +1720,12 @@ function compactExit(event) {
   const startedAtMs = metricStartedAtMs !== null && metricStartedAtMs > 0
     ? metricStartedAtMs
     : (combatStartedAtMs > 0 ? combatStartedAtMs : null);
-  const endedAtMs = compactNumber(battleMetrics.lastObservedAt) || eventAtMs;
+  const killConfirmedAtMs = confirmedKill ? parseTimeMs(killConfirmation.at) : 0;
+  const endedAtMs = killConfirmedAtMs || compactNumber(battleMetrics.lastObservedAt) || eventAtMs;
   const durationMs = ((metricsAssociated || explicitBattleReason || explicitCombatExit) ? compactNumber(combat.durationMs) : null)
     ?? (startedAtMs !== null && endedAtMs > 0 ? Math.max(0, endedAtMs - startedAtMs) : null);
   const selfDamage = metricsAssociated ? compactNumber(battleMetrics.selfDamage) : null;
-  const targetDamage = metricsAssociated ? compactNumber(battleMetrics.targetDamage) : null;
+  const rawTargetDamage = metricsAssociated ? compactNumber(battleMetrics.targetDamage) : null;
   const selfHealing = metricsAssociated ? compactNumber(battleMetrics.selfHealing) : null;
   const targetHealing = metricsAssociated ? compactNumber(battleMetrics.targetHealing) : null;
   const selfHpEnd = metricsAssociated
@@ -1661,15 +1740,20 @@ function compactExit(event) {
         : null))
     : null;
   const targetHpEnd = metricsAssociated
-    ? (compactNumber(battleMetrics.lastTargetHp)
-      ?? (explicitCombatExit ? compactNumber(combatExit.targetHp) : null))
+    ? (confirmedKill
+      ? 0
+      : (compactNumber(battleMetrics.lastTargetHp)
+        ?? (explicitCombatExit ? compactNumber(combatExit.targetHp) : null)))
     : null;
   const targetHpStart = metricsAssociated
     ? (compactNumber(battleMetrics.initialTargetHp)
-      ?? (targetHpEnd !== null && targetDamage !== null
-        ? targetHpEnd + targetDamage - (targetHealing ?? 0)
+      ?? (targetHpEnd !== null && rawTargetDamage !== null
+        ? targetHpEnd + rawTargetDamage - (targetHealing ?? 0)
         : null))
     : null;
+  const targetDamage = confirmedKill && targetHpStart !== null
+    ? Math.max(rawTargetDamage ?? 0, targetHpStart + (targetHealing ?? 0))
+    : rawTargetDamage;
   const battleTargetSource = sourceTarget || (metricsAssociated
     ? { userId: metricsTargetId, name: metricsTargetName }
     : null);
@@ -1761,7 +1845,14 @@ function compactExit(event) {
           confirmedHits,
           estimatedHitRate,
           staminaSpentMs: compactNumber(battleMetrics.totalStaminaSpent),
-          engagementId: compactString(battleMetrics.engagementId, 128)
+          engagementId: compactString(battleMetrics.engagementId, 128),
+          killConfirmation: confirmedKill
+            ? {
+                at: compactString(killConfirmation.at, 48),
+                tick: compactNumber(killConfirmation.tick),
+                source: compactString(killConfirmation.source, 48)
+              }
+            : null
         }
       : null
   };
@@ -2189,6 +2280,7 @@ function buildCompactBrowserlessStatus(state, config = {}) {
 module.exports = {
   browserlessPatchFromLegacyState,
   browserlessStatsForDecision,
+  browserlessStatsForKillEvidence,
   browserlessStatsForOffline,
   browserlessCompactStatusSource,
   buildCompactBrowserlessStatus,
@@ -2197,6 +2289,7 @@ module.exports = {
   loginPointFromAnyState,
   mergeLiveState,
   mergeState,
+  reconcileBrowserlessExitKillEvidence,
   readBrowserlessStateFile,
   sessionFromAnyState,
   stateFilePath,

@@ -4696,7 +4696,8 @@ function reconcilePostKillSettlement(input, stateful = {}, combat = {}, previous
     playerDropCoins: input?.selfKilledPlayerDropCoins?.length ? input.selfKilledPlayerDropCoins : (observation?.coins || []),
     snapshotTick: input?.fallback?.tick ?? observation?.tick ?? null
   }, {
-    unconfirmedMs: options.postKillUnconfirmedTailMs ?? options.postAttackDropWaitMs ?? BROWSER_RUNTIME_DEFAULTS.postAttackDropWaitMs,
+    unconfirmedMs: options.postKillUnconfirmedTailMs
+      ?? Math.max(1500, Number(options.postAttackDropWaitMs ?? BROWSER_RUNTIME_DEFAULTS.postAttackDropWaitMs)),
     confirmedMs: options.postAttackDropResolveMaxMs ?? BROWSER_RUNTIME_DEFAULTS.postAttackDropResolveMaxMs,
     pickupMs: options.postAttackDropCoinPriorityMs ?? BROWSER_RUNTIME_DEFAULTS.postAttackDropCoinPriorityMs,
     recentShotMs: options.postKillRecentShotMs ?? 1500
@@ -5340,6 +5341,62 @@ function compactLeaveCover(cover) {
   return summary;
 }
 
+function recentCombatResidualThreatContinuityCore(input = {}) {
+  const nowMs = Number(input.nowMs || Date.now());
+  const ownerIds = Array.from(new Set((input.ownerIds || []).map(String).filter(Boolean)));
+  const ownerId = ownerIds.length === 1 ? ownerIds[0] : '';
+  const metrics = input.recentCombatMetrics && typeof input.recentCombatMetrics === 'object'
+    ? input.recentCombatMetrics
+    : {};
+  const settlement = input.postKillSettlement && typeof input.postKillSettlement === 'object'
+    ? input.postKillSettlement
+    : null;
+  const recentTargetId = String(
+    input.recentCombatTargetId
+      ?? settlement?.targetId
+      ?? metrics.targetId
+      ?? ''
+  );
+  const metricsTargetId = String(metrics.targetId ?? '');
+  const metricsMatch = Boolean(!metricsTargetId || !recentTargetId || metricsTargetId === recentTargetId);
+  const lastObservedAt = Number(metrics.lastObservedAt || input.recentCombatLastObservedAt || 0);
+  const startedAt = Number(metrics.startedAt || input.recentCombatStartedAt || 0);
+  const maxAgeMs = Math.max(500, Number(input.maxAgeMs || 2000));
+  const ageMs = lastObservedAt > 0 ? Math.max(0, nowMs - lastObservedAt) : null;
+  const establishedEvidence = Boolean(metricsMatch && (
+    Number(metrics.acceptedShots || 0) > 0
+      || (startedAt > 0 && nowMs - startedAt >= 1000)
+  ));
+  const settlementActive = Boolean(
+    settlement
+      && settlement.active !== false
+      && String(settlement.targetId ?? '') === recentTargetId
+      && (!Number(settlement.expiresAt) || Number(settlement.expiresAt) >= nowMs)
+  );
+  const sameOwner = Boolean(ownerId && recentTargetId && ownerId === recentTargetId);
+  const recentEstablished = Boolean(
+    sameOwner
+      && establishedEvidence
+      && ageMs !== null
+      && ageMs <= maxAgeMs
+  );
+  const active = Boolean(sameOwner && (settlementActive || recentEstablished));
+  return {
+    active,
+    reason: active
+      ? (settlementActive ? 'post-kill-settlement-residual-threat' : 'recent-established-combat-residual-threat')
+      : '',
+    ownerId: ownerId || null,
+    recentTargetId: recentTargetId || null,
+    ageMs,
+    maxAgeMs,
+    metricsMatch,
+    establishedEvidence,
+    settlementActive,
+    recentEstablished
+  };
+}
+
 function buildBrowserlessPredictedThreatExitDecision(state, input, stateful, combat, options = {}) {
   if (!browserlessSafetyExitModeEnabled(options) || !input?.self) return null;
   const nowMs = Number(input.nowMs || Date.now());
@@ -5417,7 +5474,18 @@ function buildBrowserlessPredictedThreatExitDecision(state, input, stateful, com
   const previousBand = String(previousAction?.band || '');
   const previousReason = String(previousAction?.reason || '');
   const combatDurationMs = Math.max(0, Number(combat?.dryRun?.durationMs || 0));
-  const combatEstablished = Boolean(combat?.target && options.combatActionEligible !== false);
+  const residualThreatContinuity = recentCombatResidualThreatContinuityCore({
+    nowMs,
+    ownerIds,
+    recentCombatTargetId: targetIdForAttackHistory(options.recentCombatTarget),
+    recentCombatMetrics: options.recentCombatMetrics || stateful.combatMetrics,
+    postKillSettlement: options.postKillSettlement || stateful.postKillSettlement,
+    maxAgeMs: options.recentCombatResidualThreatMs
+  });
+  const combatEstablished = Boolean(
+    (combat?.target && options.combatActionEligible !== false)
+      || residualThreatContinuity.active
+  );
   const recovering = previousBand === 'recover'
     || /recover|wait-for-full-stamina-and-hp/i.test(previousReason);
   const unestablished = !combatEstablished;
@@ -5442,13 +5510,13 @@ function buildBrowserlessPredictedThreatExitDecision(state, input, stateful, com
   if (prediction?.shouldLeave) {
     reason = prediction.reason;
     rule = prediction.rule;
-  } else if ((recovering || unestablished) && continuousIncoming) {
+  } else if ((recovering || unestablished) && !residualThreatContinuity.active && continuousIncoming) {
     reason = 'continuous-incoming-bullets-leave';
     rule = 'continuous-attributable-bullets';
-  } else if ((recovering || unestablished) && rapidDamage) {
+  } else if ((recovering || unestablished) && !residualThreatContinuity.active && rapidDamage) {
     reason = 'rapid-damage-early-leave';
     rule = 'rapid-attributable-damage';
-  } else if ((recovering || unestablished) && attributableIncoming) {
+  } else if ((recovering || unestablished) && !residualThreatContinuity.active && attributableIncoming) {
     reason = 'incoming-bullet-early-leave';
     rule = 'attributable-incoming-before-established-combat';
   }
@@ -5463,6 +5531,7 @@ function buildBrowserlessPredictedThreatExitDecision(state, input, stateful, com
     recovering,
     combatEstablished,
     combatDurationMs,
+    residualThreatContinuity,
     incomingCount: incoming.length,
     ownerIds,
     attributableIncoming,
@@ -5479,7 +5548,30 @@ function buildBrowserlessPredictedThreatExitDecision(state, input, stateful, com
     reason
   };
   stateful.browserlessLeaveRisk = assessment;
-  if (!reason) return null;
+  if (!reason) {
+    const dodgeDx = Number(pendingCover?.dx || 0);
+    const dodgeDy = Number(pendingCover?.dy || 0);
+    if (!combat?.target && residualThreatContinuity.active && incoming.length && (dodgeDx || dodgeDy)) {
+      return {
+        kind: 'flee',
+        band: 'safety',
+        reason: 'post-combat-residual-bullet-dodge',
+        shouldLeave: false,
+        stopMotion: false,
+        dx: dodgeDx,
+        dy: dodgeDy,
+        target: summarizeTarget(options.recentCombatTarget || attributedOwnerTarget),
+        threats: [],
+        residualThreatContinuity,
+        leaveRisk: {
+          ...assessment,
+          hpSamples: undefined,
+          bulletObservations: undefined
+        }
+      };
+    }
+    return null;
+  }
   return {
     kind: 'safety-exit',
     band: 'safety',
@@ -7064,7 +7156,10 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     : null;
   const safetyContextOptions = {
     ...options,
-    combatActionEligible
+    combatActionEligible,
+    recentCombatTarget: previousCombatTarget,
+    recentCombatMetrics: stateful.combatMetrics || previousCombatMetrics,
+    postKillSettlement
   };
   const predictedThreatExitAction = input.self && !realtimeStale
     ? buildBrowserlessPredictedThreatExitDecision(state, input, stateful, combat, safetyContextOptions)
@@ -7742,6 +7837,7 @@ module.exports = {
   opportunityEnemyStaminaCost,
   normalizeCoinForDecision,
   normalizeEntityForDecision,
+  recentCombatResidualThreatContinuityCore,
   recordAttackHistoryFromActionResult,
   summarizeBrowserlessDecision,
   snapshotSelfKillEvidence,

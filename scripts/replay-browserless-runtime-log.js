@@ -8,7 +8,8 @@ const { forEachJsonlEntry } = require('./browserless-log-summary');
 const { estimateAim } = require('../src/node/browserless/combat-adapter');
 const {
   buildLowHpRecoveryThreatExitDecision,
-  easyKillEngagementFinishReason
+  easyKillEngagementFinishReason,
+  recentCombatResidualThreatContinuityCore
 } = require('../src/node/browserless/decision-adapter');
 const { evaluateBrowserlessSafety } = require('../src/node/browserless/safety-controller');
 const { actionPriorityBand } = require('../src/strategy/action-priority');
@@ -2090,6 +2091,18 @@ function replayExit(options) {
     const policyExit = trustedEasyKillBeforeDamage || targetThreatExempt || unattributedPressureTarget
       ? null
       : confirmedEvaluation.exit;
+    const loggedReason = String(action.reason || decision.reason || '');
+    const residualThreatContinuity = recentCombatResidualThreatContinuityCore({
+      nowMs: atMs,
+      ownerIds: action.leaveRisk?.ownerIds || [],
+      recentCombatTargetId: metrics.targetId,
+      recentCombatMetrics: metrics,
+      postKillSettlement: decision.input?.postKillSettlement || action.postKillSettlement || null
+    });
+    const exchangeAdvisoryOnly = Boolean(
+      loggedReason.startsWith('combat-exchange-stop-loss-')
+        && !baselinePolicyExit
+    );
     evaluated.push({
       line: row.line,
       at: row.entry.at || '',
@@ -2098,7 +2111,7 @@ function replayExit(options) {
       metricsTargetId: metricsTargetId || null,
       metricsTargetName: String(metrics.targetName || ''),
       metricsTargetMatches,
-      loggedReason: String(action.reason || decision.reason || ''),
+      loggedReason,
       loggedExit,
       selfHp,
       targetHp: Number.isFinite(targetHp) ? targetHp : null,
@@ -2109,6 +2122,8 @@ function replayExit(options) {
       unattributedPressureTarget,
       targetThreatExempt,
       trustedEasyKillBeforeDamage,
+      residualThreatContinuity,
+      exchangeAdvisoryOnly,
       baselinePolicyExit,
       disadvantageObservation: confirmedEvaluation.disadvantageObservation,
       policyExit
@@ -2121,11 +2136,15 @@ function replayExit(options) {
   const confirmationPreventedExits = preventedLoggedExits.filter(item => item.disadvantageObservation?.ready === false);
   const identityMismatchPreventedExits = preventedLoggedExits.filter(item => item.unattributedPressureTarget);
   const threatExemptPreventedExits = preventedLoggedExits.filter(item => item.targetThreatExempt);
+  const residualThreatPreventedExits = preventedLoggedExits.filter(item => item.residualThreatContinuity?.active);
+  const exchangeAdvisoryPreventedExits = preventedLoggedExits.filter(item => item.exchangeAdvisoryOnly);
   const justifiedPreventedExits = preventedLoggedExits.filter(item => item.favorable
     || item.priorBattleFavorable
     || item.disadvantageObservation?.ready === false
     || item.unattributedPressureTarget
-    || item.targetThreatExempt);
+    || item.targetThreatExempt
+    || item.residualThreatContinuity?.active
+    || item.exchangeAdvisoryOnly);
   const trustedNoDamagePreventedExits = preventedLoggedExits.filter(item => item.trustedEasyKillBeforeDamage);
   const result = {
     mode: 'exit',
@@ -2139,6 +2158,8 @@ function replayExit(options) {
     confirmationPreventedExitFrames: confirmationPreventedExits.length,
     identityMismatchPreventedExitFrames: identityMismatchPreventedExits.length,
     threatExemptPreventedExitFrames: threatExemptPreventedExits.length,
+    residualThreatPreventedExitFrames: residualThreatPreventedExits.length,
+    exchangeAdvisoryPreventedExitFrames: exchangeAdvisoryPreventedExits.length,
     justifiedPreventedExitFrames: justifiedPreventedExits.length,
     trustedNoDamagePreventedExitFrames: trustedNoDamagePreventedExits.length,
     preservedRequiredExitFrames: preservedRequiredExits.length,
