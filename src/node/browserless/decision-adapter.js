@@ -4659,14 +4659,16 @@ function entityMatchesAttack(entity, attack) {
     && String(entityId) === String(attack.id);
 }
 
-function browserlessPostAttackDropResolvedAt(attack, input, nowMs) {
+function browserlessPostAttackDropResolvedAt(attack, input, nowMs, currentCombatTarget = null) {
   if (!attack) return 0;
   const selfKillIds = new Set((input?.selfKillTargetIds || []).map(String));
   if (selfKillIds.has(String(attack.id))) {
     if (!attack.postAttackDropResolvedAt) attack.postAttackDropResolvedAt = nowMs;
     return attack.postAttackDropResolvedAt;
   }
-  const visible = (input?.visibleTargets || []).find(entity => entityMatchesAttack(entity, attack));
+  const visible = [currentCombatTarget, ...(input?.visibleTargets || [])]
+    .filter(Boolean)
+    .find(entity => entityMatchesAttack(entity, attack));
   if (visible && visible.alive !== false && Number(visible.hp ?? 1) > 0) {
     attack.postAttackDropResolvedAt = 0;
     return 0;
@@ -4737,7 +4739,7 @@ function safePostAttackCoinCandidates(input, maxDistance, options = {}) {
     .filter(coin => opportunityStaminaAffordable(input.self, opportunityCoinStaminaCost(coin, options), options));
 }
 
-function buildPostAttackDropCoinDecision(input, stateful = {}, options = {}) {
+function buildPostAttackDropCoinDecision(input, stateful = {}, options = {}, combat = null) {
   if (!input?.self || !Array.isArray(stateful.attackHistory) || !stateful.attackHistory.length) return null;
   const recovery = isRecoveringSelf(input.self);
   const maxDistance = recovery
@@ -4752,7 +4754,7 @@ function buildPostAttackDropCoinDecision(input, stateful = {}, options = {}) {
     minScore: recovery ? Math.max(0, Number(options.postAttackRecoveryDropMinScore ?? 0)) : 0,
     dropCoinRadius: Math.max(0, Number(options.postAttackDropCoinRadius ?? BROWSER_RUNTIME_DEFAULTS.postAttackDropCoinRadius)),
     dist: distanceBetween,
-    resolveAttack: attack => browserlessPostAttackDropResolvedAt(attack, input, input.nowMs),
+    resolveAttack: attack => browserlessPostAttackDropResolvedAt(attack, input, input.nowMs, combat?.target || combat?.dryRun?.target),
     scoreCoin: coin => scoreCoinOpportunity(coin, options)
   });
   const coin = result.selected || null;
@@ -4762,7 +4764,7 @@ function buildPostAttackDropCoinDecision(input, stateful = {}, options = {}) {
   });
 }
 
-function buildPostAttackDropWaitDecision(input, stateful = {}, options = {}) {
+function buildPostAttackDropWaitDecision(input, stateful = {}, options = {}, combat = null) {
   if (!input?.self || !Array.isArray(stateful.attackHistory) || !stateful.attackHistory.length) return null;
   const waitMs = Math.max(0, Number(options.postAttackDropWaitMs ?? BROWSER_RUNTIME_DEFAULTS.postAttackDropWaitMs));
   const target = pickPostAttackDropWaitTargetCore(stateful.attackHistory, input.profitCoins || [], postAttackThreats(input), {
@@ -4775,7 +4777,7 @@ function buildPostAttackDropWaitDecision(input, stateful = {}, options = {}) {
     maxDistance: Math.max(0, Number(options.postAttackDropWaitMaxDistance ?? options.opportunityVisibleDistance ?? options.globalCoinMaxDistance ?? DEFAULT_GLOBAL_COIN_MAX_DISTANCE)),
     stopDistance: Math.max(0, Number(options.postAttackDropWaitStopDistance ?? BROWSER_RUNTIME_DEFAULTS.postAttackDropWaitStopDistance ?? BROWSER_RUNTIME_DEFAULTS.coinPickupSweepDistance ?? 0)),
     dropCoinRadius: Math.max(0, Number(options.postAttackDropCoinRadius ?? BROWSER_RUNTIME_DEFAULTS.postAttackDropCoinRadius)),
-    resolveAttack: attack => browserlessPostAttackDropResolvedAt(attack, input, input.nowMs),
+    resolveAttack: attack => browserlessPostAttackDropResolvedAt(attack, input, input.nowMs, combat?.target || combat?.dryRun?.target),
     coinBlockedByThreat: (_origin, item, threat) => !coinSafeFromThreats(item, [threat], options)
   });
   if (!target) return null;
@@ -6934,6 +6936,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
   });
   const easyKillPreferredTargetId = easyKillPreferredTargetIdFromOpportunity(opportunity, stateful);
   const previousCombatTarget = cloneJson(stateful.combatTarget || null);
+  const previousCombatMetrics = cloneJson(stateful.combatMetrics || null);
   const previousCombatTargetId = targetIdForAttackHistory(previousCombatTarget);
   const combat = buildCombatDecision(input, stateful, {
     ...options,
@@ -6961,6 +6964,21 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     && combatTargetId !== undefined
     && combatTargetId !== ''
     && String(previousCombatTargetId) === String(combatTargetId);
+  const recentCombatCommitmentMs = Math.max(5000, Number(options.combatEngageGraceMs || 30000));
+  const acceptedShotCommittedTarget = [stateful.combatMetrics, previousCombatMetrics].some(metrics => {
+    const metricsTargetId = metrics?.targetId;
+    const observedAt = Number(metrics?.actualLastShotAt || metrics?.lastObservedAt || metrics?.startedAt || 0);
+    return combatTargetId !== null
+      && combatTargetId !== undefined
+      && combatTargetId !== ''
+      && metricsTargetId !== null
+      && metricsTargetId !== undefined
+      && metricsTargetId !== ''
+      && String(metricsTargetId) === String(combatTargetId)
+      && Number(metrics?.acceptedShots || 0) > 0
+      && observedAt > 0
+      && input.nowMs - observedAt <= recentCombatCommitmentMs;
+  });
   const freshProactiveCombat = Boolean(
     combatActionEligible
       && combatTarget
@@ -6986,7 +7004,8 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     const sameCombatTarget = Boolean(competingTargetId
       && String(competingTargetId) === String(combatTarget?.userId ?? combatTarget?.user_id ?? ''));
     const switchRatio = 1 + Math.max(0, Number(options.opportunitySwitchRelativeMargin || OPPORTUNITY_CONSTANTS.OPPORTUNITY_SWITCH_RELATIVE_MARGIN || 0));
-    const blocked = !sameCombatTarget
+    const blocked = !acceptedShotCommittedTarget
+      && !sameCombatTarget
       && Number.isFinite(Number(combatScore))
       && competingScore > Number(combatScore) * switchRatio;
     activeCombatOpportunity = {
@@ -7122,9 +7141,9 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     ? buildEligibleProfitStaminaBudgetExitDecision(profitSelectionInput, options)
     : null;
   const staminaBudgetExitAction = rawCoinStaminaBudgetExitAction || eligibleProfitStaminaBudgetExitAction;
-  const postAttackDropCoinAction = (profitLive || nonCombatProfit) ? buildPostAttackDropCoinDecision(profitSelectionInput, stateful, options) : null;
+  const postAttackDropCoinAction = (profitLive || nonCombatProfit) ? buildPostAttackDropCoinDecision(profitSelectionInput, stateful, options, combat) : null;
   const postAttackDropWaitAction = (profitLive || nonCombatProfit)
-    ? (buildPostAttackDropWaitDecision(input, stateful, options) || buildPostKillSettlementWaitDecision(input, stateful))
+    ? (buildPostAttackDropWaitDecision(input, stateful, options, combat) || buildPostKillSettlementWaitDecision(input, stateful))
     : null;
   const recoveryFootCoinAction = (profitLive || nonCombatProfit) ? buildRecoveryFootCoinDecision(profitSelectionInput, options) : null;
   const recoveryAction = (profitLive || nonCombatProfit) ? buildRecoveryDecision(input, opportunity, options) : null;

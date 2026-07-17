@@ -204,7 +204,7 @@ function createCombatCompletionTracker(options = {}) {
     const values = decayed(previous, atMs);
     if (event.type === 'engagement-started') values.attempts += 1;
     else if (event.type === 'killed') values.successes += 1;
-    else {
+    else if (event.neutral !== true) {
       values.failures += 1;
       if (escapeOutcome(event.reason)) values.escapes += 1;
     }
@@ -214,7 +214,7 @@ function createCombatCompletionTracker(options = {}) {
       userId: String(userId),
       name: String(event.name || previous.name || ''),
       ...values,
-      lastOutcome: String(event.type || ''),
+      lastOutcome: event.type === 'not-killed' && event.neutral === true ? 'neutral' : String(event.type || ''),
       lastReason: String(event.reason || ''),
       updatedAt: new Date(atMs).toISOString()
     };

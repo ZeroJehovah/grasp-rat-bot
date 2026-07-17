@@ -6651,6 +6651,8 @@ async function runSelfTest() {
         tracker.observeCombatSample({ userId: 8, name: 'failed', startedAt: 500, targetDamage: 3, selfDamage: 30, atMs: 4000 });
         tracker.observeCombatSample({ userId: 9, name: 'successful', startedAt: 600, targetDamage: 30, selfDamage: 3, atMs: 4000 });
         const beforeRepeatedSample = tracker.probability(8, 4000);
+        tracker.observe({ type: 'not-killed', userId: 8, name: 'failed', reason: 'ws-closed', neutral: true, at: new Date(4000).toISOString() });
+        const afterNeutralOutcome = tracker.probability(8, 4000);
         tracker.observe({ type: 'not-killed', userId: 8, name: 'failed', reason: 'manual-stop', at: new Date(4000).toISOString() });
         tracker.observeCombatSample({ userId: 8, name: 'failed', startedAt: 500, targetDamage: 3, selfDamage: 30, atMs: 4000 });
         const afterRepeatedSample = tracker.probability(8, 4000);
@@ -6702,6 +6704,8 @@ async function runSelfTest() {
           failed.escapeRate > successful.escapeRate,
           successful.damageExchangeRatio > failed.damageExchangeRatio,
           successfulEstimate.probability > failedEstimate.probability,
+          afterNeutralOutcome.failures === beforeRepeatedSample.failures,
+          afterNeutralOutcome.successes === beforeRepeatedSample.successes,
           afterRepeatedSample.targetDamage === beforeRepeatedSample.targetDamage,
           afterRepeatedSample.selfDamage === beforeRepeatedSample.selfDamage,
           reloaded.probability(8).source,
@@ -6716,7 +6720,7 @@ async function runSelfTest() {
           reloaded.status().schemaVersion
         ].join('|');
       })(),
-      want: 'true|true|hitRateByModeDistance,modeMetrics,routeAimFeedback,routeTransitions|true|true|true|true|true|true|true|true|true|stable-user-completion-history|12|true|true|5|true|true|2|hitRateByModeDistance,modeMetrics,routeAimFeedback,routeTransitions|2'
+      want: 'true|true|hitRateByModeDistance,modeMetrics,routeAimFeedback,routeTransitions|true|true|true|true|true|true|true|true|true|true|true|stable-user-completion-history|12|true|true|5|true|true|2|hitRateByModeDistance,modeMetrics,routeAimFeedback,routeTransitions|2'
     },
     {
       name: 'browserless runtime revision resolves directly from Git metadata without repository trust',
@@ -10028,6 +10032,94 @@ async function runSelfTest() {
         return [decision.kind, decision.reason, decision.action.target.id, decision.action.target.postAttackTarget.drop].join('|');
       })(),
       want: 'post-attack-drop-wait|post-attack-drop-wait-position|9667|32'
+    },
+    {
+      name: 'browserless accepted first shot keeps a live target in combat instead of waiting for a drop',
+      got: (() => {
+        const stateful = {
+          attackHistory: [{
+            id: 2889,
+            name: 'Wbh',
+            x: 11967,
+            y: 0,
+            drop: 8,
+            at: 1500,
+            action: 'opportunistic-shot',
+            afk: false,
+            active: true,
+            combat: true
+          }],
+          combatMetrics: {
+            targetId: '2889',
+            targetName: 'Wbh',
+            startedAt: 1500,
+            lastObservedAt: 1900,
+            acceptedShots: 1,
+            requestedShots: 1,
+            confirmedHits: 0,
+            targetDamage: 0
+          }
+        };
+        const self = {
+          entity_id: 1,
+          user_id: 7,
+          name: 'self',
+          x: 0,
+          y: 0,
+          hp: 100,
+          max_hp: 100,
+          stamina_5s_remaining_milli: 10000,
+          stamina_5s_limit_milli: 10000
+        };
+        const decision = buildBrowserlessDecision({
+          userId: 7,
+          realtime: {
+            tick: 1196781,
+            frameAgeMs: 0,
+            self,
+            entities: [
+              self,
+              {
+                entity_id: 2,
+                user_id: 2889,
+                name: 'Wbh',
+                x: 11967,
+                y: 0,
+                vx: -35,
+                vy: 35,
+                hp: 100,
+                current_join_mode: 'Active',
+                drop: 8,
+                stamina_5s_remaining_milli: 5169,
+                stamina_5s_limit_milli: 10000
+              }
+            ],
+            bullets: [],
+            coinDrops: [{ drop_id: 99, amount: 100, x: 1000, y: 0 }]
+          },
+          fallback: { tick: 1196781, frameAgeMs: 0, entities: [], coinDrops: [], messages: [] }
+        }, stateful, {
+          nowMs: 2000,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          dynamicProfitThresholdEnabled: false,
+          easyKillPlayers: [{ userId: 2889, name: 'Wbh', score: 3 }],
+          damageActorUserIds: [2889],
+          combatAttackRange: 14500,
+          postAttackDropWaitMs: 1000,
+          postAttackDropResolveMaxMs: 5000,
+          postAttackDropWaitMinDrop: 8,
+          postAttackDropWaitStopDistance: 900
+        });
+        return [
+          decision.action.kind,
+          decision.action.target?.name,
+          decision.combat.actionEligible,
+          decision.combat.activeCombatOpportunity?.blocked === false,
+          decision.action.reason !== 'post-attack-drop-wait-position'
+        ].join('|');
+      })(),
+      want: 'combat-live|Wbh|true|true|true'
     },
     {
       name: 'browserless realtime post-kill settlement suppresses ordinary profit gap',
@@ -24108,7 +24200,7 @@ async function runSelfTest() {
         return [
           /\.target-current,\.target-route-next\{position:relative;background:var\(--target-bg\);background-clip:padding-box;/.test(panelText),
           /\.nearby-list\{display:grid;gap:0;/.test(panelText),
-          /\.target-current,\.target-route-next\{[^}]*padding:3px 0;margin:0\}/.test(panelText),
+          /\.target-current,\.target-route-next\{[^}]*padding:3px 0 3px 7px;margin:0\}/.test(panelText),
           /\.coin-row \.nearby-cell:last-child,\.player-row \.nearby-cell:last-child\{text-align:right\}/.test(panelText),
           !/\.target-current\{border:1px solid/.test(panelText),
           /\.target-flee\{--target-color:rgba\(96,165,250,\.82\)/.test(panelText),
@@ -24187,7 +24279,8 @@ async function runSelfTest() {
           panelScript.includes("'combat-pressure-disadvantage-leave': '遭到持续火力压制，我方血量处于劣势，主动退出'"),
           panelScript.includes("'dynamic-profit-threshold-wait': '当日时间充裕，动态收益门槛生效，等待更高收益目标'"),
           panelScript.includes("'single-coin-bait-hold': '当日时间充裕，动态收益门槛生效，守着 1 金币等待捡币脚本'"),
-          panelScript.includes("addRow(rowsOut, '退出触发血量', combatExitHpText(status))"),
+          panelScript.includes("const exitHpText = combatExitHpText(status);"),
+          panelScript.includes("if (exitHpText && exitHpText !== '--') addRow(rowsOut, '退出触发血量', exitHpText)"),
           panelScript.includes("if (battleHpText) addRow(rowsOut, '战斗起止血量', battleHpText)"),
           panelScript.includes("if (injuryHpText) addRow(rowsOut, '退出判定受击', injuryHpText)"),
           panelScript.includes("if (confirmedHpText) addRow(rowsOut, '离场确认血量', confirmedHpText)"),
@@ -24203,7 +24296,7 @@ async function runSelfTest() {
           panelText.indexOf('id="battlePanel"') < panelText.indexOf('class="stats-grid"')
         ].join('|');
       })(),
-      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
+      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless confirmed leave evidence preserves server hp after trigger',
@@ -31296,6 +31389,45 @@ async function runSelfTest() {
 	        }
 	      })(),
 	      want: '1,2,3,3|3|4|2|1|0'
+	    },
+	    {
+	      name: 'browserless easy-kill tracker keeps score for technical and stamina combat interruptions',
+	      got: (() => {
+	        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'grasp-rat-easy-kill-neutral-'));
+	        const events = [];
+	        try {
+	          const tracker = createEasyKillPlayerTracker({
+	            file: path.join(dir, 'easy-kill-players.json'),
+	            now: () => 0,
+	            onEvent: event => events.push(event)
+	          });
+	          const seed = (userId, atMs) => {
+	            tracker.observeCombatEngagement({ userId, name: `neutral-${userId}`, active: true }, { atMs, tick: atMs });
+	            tracker.observeKillEvidence([{ targetUserId: userId, targetName: `neutral-${userId}`, tick: atMs + 1 }], { atMs: atMs + 1 });
+	          };
+	          seed(8, 100);
+	          seed(9, 200);
+	          seed(10, 300);
+	          const interrupt = (userId, reason, atMs) => {
+	            tracker.observeCombatEngagement({ userId, name: `neutral-${userId}`, active: true }, { atMs, tick: atMs });
+	            tracker.finishEngagement(userId, reason, { atMs: atMs + 1, outcomeGraceMs: 0 });
+	            tracker.expirePendingOutcomes(atMs + 1);
+	          };
+	          interrupt(8, 'ws-closed', 1000);
+	          interrupt(9, 'frame-gap', 1100);
+	          interrupt(10, 'stamina-exhausted-leave', 1200);
+	          const status = tracker.status();
+	          const neutral = events.filter(event => event.type === 'not-killed');
+	          return [
+	            status.players.map(player => `${player.userId}:${player.score}`).sort().join(','),
+	            neutral.length,
+	            neutral.every(event => event.neutral === true && event.decremented === false)
+	          ].join('|');
+	        } finally {
+	          fs.rmSync(dir, { recursive: true, force: true });
+	        }
+	      })(),
+	      want: '10:1,8:1,9:1|3|true'
 	    },
 	    {
 	      name: 'browserless easy-kill tracker awards kill score from self hp and keeps low-hp kills neutral',

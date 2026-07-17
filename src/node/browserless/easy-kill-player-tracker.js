@@ -67,6 +67,20 @@ function positiveNumberOrNull(value) {
   return number !== null && number > 0 ? number : null;
 }
 
+function failureShouldDecrementScore(reason = '') {
+  const value = String(reason || '').trim().toLowerCase();
+  if (!value) return true;
+  return !(
+    /(?:^|[-_\s])(?:ws|websocket|socket|network|transport|connection)(?:$|[-_\s])/.test(value)
+    || /frame[-_\s]?gap|stale[-_\s]?(?:self|realtime)|no[-_\s]?self|no decoded frames|self not observed/.test(value)
+    || /action[-_\s]?settlement[-_\s]?stalled|movement[-_\s]?stall|画面.*(?:卡顿|中断)/.test(value)
+    || /stamina|体力/.test(value)
+    || /leave (?:failed|not confirmed)|direct[-_\s]?leave[-_\s]?failed/.test(value)
+    || /shutdown|restart|explicit[-_\s]?stop|process[-_\s]?stop|normal[-_\s]?complete/.test(value)
+    || /canary[-_\s]?(?:ended|complete)|service[-_\s]?(?:stop|restart)/.test(value)
+  );
+}
+
 function killScoreIncrement(detail = {}, engagement = null) {
   const engagementSelfHp = numberOrNull(engagement?.lastSelfHp);
   const detailSelfHp = numberOrNull(detail.selfHp ?? detail.self_hp ?? detail.self?.hp);
@@ -548,7 +562,8 @@ function createEasyKillPlayerTracker(options = {}) {
       if (engagement.active || !(Number(engagement.outcomeDueAtMs || 0) > 0) || atMs < Number(engagement.outcomeDueAtMs)) continue;
       const existing = store.players[key] || null;
       const previousScore = existing ? normalizedScore(existing.score, INITIAL_SCORE) : 0;
-      const score = Math.max(0, previousScore - 1);
+      const shouldDecrement = failureShouldDecrementScore(engagement.endReason);
+      const score = shouldDecrement ? Math.max(0, previousScore - 1) : previousScore;
       if (existing && score > 0) existing.score = score;
       if (existing && score <= 0) delete store.players[key];
       delete store.engagements[key];
@@ -561,8 +576,9 @@ function createEasyKillPlayerTracker(options = {}) {
         reason: engagement.endReason || 'outcome-timeout',
         previousScore,
         score,
-        decremented: Boolean(existing),
-        removed: Boolean(existing && score <= 0)
+        decremented: Boolean(existing && shouldDecrement),
+        removed: Boolean(existing && shouldDecrement && score <= 0),
+        neutral: !shouldDecrement
       };
       expired.push(event);
       emit(event);
