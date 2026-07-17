@@ -24291,10 +24291,12 @@ async function runSelfTest() {
           panelText.includes("'action-settlement-stalled': '非战斗移动指令未产生位置变化，正在重连'"),
           panelText.includes("'outside-center-profit-wait': '超出中心区，原地等待可见收益'"),
           panelText.includes("'outside-center-idle-timeout-leave': '超出中心区等待 3 分钟仍无收益，退出后重连'"),
+          panelText.includes("return 'WS实时位置'"),
+          panelText.includes("return 'WS状态帧'"),
           panelText.includes(BROWSERLESS_WEB_PANEL_VERSION)
         ].join('|');
       })(),
-      want: 'true|true|true|true|true|true'
+      want: 'true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless compact exit preserves trigger hp evidence',
