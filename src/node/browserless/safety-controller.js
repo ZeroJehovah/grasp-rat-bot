@@ -273,7 +273,7 @@ function evaluateBrowserlessSafety(state = {}, context = {}, options = {}) {
   const staminaFloor = Math.max(0, Number(options.staminaExhaustedBelowMs ?? context.staminaExhaustedBelowMs ?? DEFAULT_STAMINA_EXHAUSTED_BELOW_MS));
 
   if (context.stopRequested) {
-    return createSafetyEvent('explicit-stop', context.stopDetail || {}, { nowMs });
+    return createSafetyEvent(context.stopReason || 'explicit-stop', context.stopDetail || {}, { nowMs });
   }
 
   const decisionAction = context.decision?.action || context.decision || null;
@@ -435,6 +435,7 @@ function createBrowserlessSafetyController(options = {}) {
       const mergedContext = {
         ...context,
         stopRequested: Boolean(stopEvent),
+        stopReason: stopEvent?.reason || context.stopReason,
         stopDetail: stopEvent?.detail || context.stopDetail
       };
       if (stopEvent || context.wsError || context.wsClosed || context.snapshotSafety?.ok === false) {

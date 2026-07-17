@@ -661,7 +661,7 @@ function browserlessTerminalStopRequestsRuntimeClose(result, reason = '') {
   if (reason === 'restart-drain-ready') return true;
   const event = result?.event || result?.canary?.safety?.event || null;
   const source = String(event?.detail?.source || '');
-  return reason === 'explicit-stop' && /^signal(?:-|$)/.test(source);
+  return reason === 'explicit-stop' && /^(?:signal|restart-drain)(?:-|$)/.test(source);
 }
 
 function summarizeBrowserlessRunnerResult(result = {}) {
@@ -2756,6 +2756,15 @@ async function runBrowserlessRunnerSelfTest() {
     const apiStopKeepsRuntime = browserlessTerminalStopRequestsRuntimeClose({
       event: { reason: 'explicit-stop', detail: { source: 'status-api' } }
     }, 'explicit-stop');
+    const legacyRestartDrainExplicitStopClosesRuntime = browserlessTerminalStopRequestsRuntimeClose({
+      canary: { safety: { event: { reason: 'explicit-stop', detail: { source: 'restart-drain' } } } }
+    }, 'explicit-stop');
+    const restartDrainSafetyController = createBrowserlessSafetyController({ now: () => 1000 });
+    restartDrainSafetyController.requestStop('restart-drain-ready', { source: 'restart-drain' });
+    const restartDrainSafetyReason = restartDrainSafetyController.evaluate({
+      realtime: { self: { user_id: 7, hp: 100, x: 0, y: 0 }, frameAgeMs: 0 },
+      frameAges: {}
+    }, { nowMs: 1000 }).reason;
     let statusCloseResolved = null;
     const statusCloseHandle = {
       close: () => new Promise(resolve => {
@@ -2969,6 +2978,8 @@ async function runBrowserlessRunnerSelfTest() {
         && restartDrainClosesRuntime
         && signalForceClosesRuntime
         && !apiStopKeepsRuntime
+        && legacyRestartDrainExplicitStopClosesRuntime
+        && restartDrainSafetyReason === 'restart-drain-ready'
         && forcedStatusConnectionsClosed
         && restartDrainCombat.ready === false
         && restartDrainIdle.ready === true
@@ -3002,6 +3013,8 @@ async function runBrowserlessRunnerSelfTest() {
       restartDrainClosesRuntime,
       signalForceClosesRuntime,
       apiStopKeepsRuntime,
+      legacyRestartDrainExplicitStopClosesRuntime,
+      restartDrainSafetyReason,
       forcedStatusConnectionsClosed,
       restartDrainStatus,
       committedDropAllowed,

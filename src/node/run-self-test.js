@@ -18374,6 +18374,19 @@ async function runSelfTest() {
       want: 'explicit-stop|test|explicit-stop|true|safe'
     },
     {
+      name: 'browserless safety controller preserves typed restart drain stop reason',
+      got: (() => {
+        const controller = createBrowserlessSafetyController({ now: () => 1000 });
+        const requested = controller.requestStop('restart-drain-ready', { source: 'restart-drain' });
+        const stopped = controller.evaluate({
+          realtime: { self: { user_id: 7, x: 1, y: 2, hp: 100, stamina_5s_remaining_milli: 1000 }, frameAgeMs: 10 },
+          frameAges: {}
+        }, { nowMs: 1200 });
+        return [requested.reason, stopped.reason, stopped.detail.source].join('|');
+      })(),
+      want: 'restart-drain-ready|restart-drain-ready|restart-drain'
+    },
+    {
       name: 'browserless no-self is session recovery without leave confirmation',
       got: (() => {
         const event = evaluateBrowserlessSafety({
