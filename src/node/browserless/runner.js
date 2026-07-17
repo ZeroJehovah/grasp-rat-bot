@@ -67,6 +67,11 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const UTC8_OFFSET_MS = 8 * 60 * 60 * 1000;
 const CONFIRMED_LEAVE_SNAPSHOT_IGNORE_MS = 40000;
 const SELF_TEST_MAIN_THREAD_BUDGET_MS = 50;
+const STATUS_COMPACT_REFRESH_MS = 500;
+const STATUS_COMPACT_MAX_STALE_MS = 5000;
+const STATUS_RENDER_TIMEOUT_MS = 2000;
+const BACKGROUND_IO_CLOSE_TIMEOUT_MS = 5000;
+const STATUS_IO_CLOSE_TIMEOUT_MS = 2000;
 
 function publicConfig(config) {
   return {
@@ -632,6 +637,58 @@ function browserlessTerminalStopRequestsRuntimeClose(result, reason = '') {
   return reason === 'explicit-stop' && /^signal(?:-|$)/.test(source);
 }
 
+function summarizeBrowserlessRunnerResult(result = {}) {
+  const canary = result?.canary && typeof result.canary === 'object' ? result.canary : {};
+  const safetyEvent = canary?.safety?.event || result?.event || null;
+  const leaveAttempts = Array.isArray(canary?.leave?.attempts) ? canary.leave.attempts : [];
+  const lastLeave = leaveAttempts.length ? leaveAttempts[leaveAttempts.length - 1] : null;
+  const reason = redactSecrets(result.reason
+    || safetyEvent?.reason
+    || canary?.safety?.leaveFailure?.reason
+    || canary?.error
+    || result.error
+    || '');
+  const startedAt = canary.startedAt || result.startedAt || '';
+  const completedAt = canary.completedAt || result.completedAt || '';
+  const measuredDurationMs = Date.parse(completedAt) - Date.parse(startedAt);
+  const maxTask = canary?.hotPath?.maxTask || null;
+  return {
+    ok: Boolean(result.ok),
+    mode: result.mode || canary.mode || '',
+    reason,
+    runId: canary.runId || result.runId || '',
+    startedAt,
+    completedAt,
+    durationMs: Number(canary.durationMs || result.durationMs || (Number.isFinite(measuredDurationMs) ? Math.max(0, measuredDurationMs) : 0)),
+    error: redactSecrets(canary.error || result.error || ''),
+    safety: safetyEvent ? {
+      reason: safetyEvent.reason || '',
+      at: safetyEvent.at || '',
+      source: safetyEvent.detail?.source || ''
+    } : null,
+    leave: lastLeave ? {
+      ok: Boolean(lastLeave.ok),
+      stage: lastLeave.stage || '',
+      status: Number(lastLeave.status || 0),
+      durationMs: Number(lastLeave.durationMs || 0)
+    } : null,
+    frames: {
+      count: Number(canary?.stats?.frameCount || 0),
+      lastAt: canary?.stats?.lastFrameAt || '',
+      lastTick: Number(canary?.stats?.tick?.last || 0)
+    },
+    hotPath: {
+      overBudget: Boolean(canary?.hotPath?.overBudget),
+      maxTask: maxTask ? {
+        task: maxTask.task || '',
+        durationMs: Number(maxTask.durationMs || 0),
+        frameType: maxTask.frameType || '',
+        tick: maxTask.tick ?? null
+      } : null
+    }
+  };
+}
+
 async function closeBrowserlessStatusHandle(statusHandle) {
   if (!statusHandle?.close) return false;
   const pending = statusHandle.close();
@@ -747,6 +804,12 @@ async function runBrowserlessRunner(config, deps = {}) {
     ? null
     : createBrowserlessBackgroundIo({
         onError: (err, detail) => recordSupervisorError(err, { operation: 'background-io', ...detail })
+      }));
+  const ownsStatusRenderIo = !deps.statusRenderIo && !deps.disableBackgroundIo;
+  const statusRenderIo = deps.statusRenderIo || (deps.disableBackgroundIo
+    ? null
+    : createBrowserlessBackgroundIo({
+        onError: (err, detail) => recordSupervisorError(err, { operation: 'status-render-io', ...detail })
       }));
   const rawLogStore = deps.logStore || createLocalLogStore({ logDir: config.logDir, now, backgroundIo });
   const logStore = createNoThrowLogStore(rawLogStore, recordSupervisorError);
@@ -1535,6 +1598,16 @@ async function runBrowserlessRunner(config, deps = {}) {
   };
 
   let statusRenderDiagnostics = null;
+  const backgroundIoStatus = io => {
+    const status = io?.status?.() || null;
+    if (!status) return null;
+    return {
+      ok: Boolean(status.ok),
+      pending: Number(status.pending || 0),
+      pendingRequests: Number(status.pendingRequests || 0),
+      operationErrorCount: Number(status.operationErrorCount || 0)
+    };
+  };
   const buildStatusSource = compact => {
     const sourceStarted = performance.now();
     const source = {
@@ -1543,7 +1616,12 @@ async function runBrowserlessRunner(config, deps = {}) {
       easyKillPlayers: easyKillPlayerStatus(),
       dailyDamagePlayers: damagePlayerTracker.status(now()),
       chat: chatService.status?.(now()) || null,
-      statusRender: statusRenderDiagnostics
+      statusRender: {
+        ...(statusRenderDiagnostics || {}),
+        cacheMaxStaleMs: STATUS_COMPACT_MAX_STALE_MS,
+        logQueue: backgroundIoStatus(backgroundIo),
+        renderQueue: backgroundIoStatus(statusRenderIo)
+      }
     };
     const sourceBuildMs = performance.now() - sourceStarted;
     if (!compact) return { source, sourceBuildMs, compactProjectionMs: 0 };
@@ -1569,8 +1647,10 @@ async function runBrowserlessRunner(config, deps = {}) {
   const renderStatusTextNow = async compact => {
     const built = buildStatusSource(compact);
     const source = built.source;
-    if (backgroundIo?.renderStatus) {
-      const rendered = await backgroundIo.renderStatus(source, statusRenderConfig, compact);
+    if (statusRenderIo?.renderStatus) {
+      const rendered = await statusRenderIo.renderStatus(source, statusRenderConfig, compact, {
+        timeoutMs: STATUS_RENDER_TIMEOUT_MS
+      });
       if (compact) {
         statusRenderDiagnostics = {
           sourceBuildMs: Math.round(built.sourceBuildMs * 1000) / 1000,
@@ -1613,7 +1693,14 @@ async function runBrowserlessRunner(config, deps = {}) {
     if (compact) {
       const atMs = performance.now();
       if (compactStatusCacheText) {
-        if (atMs - compactStatusCacheAtMs >= 500 && !compactStatusInFlight) {
+        const cacheAgeMs = atMs - compactStatusCacheAtMs;
+        if (cacheAgeMs >= STATUS_COMPACT_MAX_STALE_MS) {
+          return refreshCompactStatusText().catch(err => {
+            recordSupervisorError(err, { operation: 'compact-status-required-refresh', cacheAgeMs });
+            throw err;
+          });
+        }
+        if (cacheAgeMs >= STATUS_COMPACT_REFRESH_MS && !compactStatusInFlight) {
           setImmediate(() => refreshCompactStatusText().catch(err => {
             recordSupervisorError(err, { operation: 'compact-status-refresh' });
           }));
@@ -2222,7 +2309,7 @@ async function runBrowserlessRunner(config, deps = {}) {
     finalState.updatedAt = new Date(now()).toISOString();
     writeState(finalState);
     liveState = null;
-    logStore.append('runner', result.ok ? 'runner-finish' : 'runner-stop', result);
+    logStore.append('runner', result.ok ? 'runner-finish' : 'runner-stop', summarizeBrowserlessRunnerResult(result));
 
     const loopPlan = browserlessLoopPlan(result, config);
     const stopped = await waitForLoopPlan(loopPlan, result);
@@ -2242,7 +2329,8 @@ async function runBrowserlessRunner(config, deps = {}) {
           recordSupervisorError(err, { operation: 'status-server-close' });
         }
       }
-      if (ownsBackgroundIo) await backgroundIo.close();
+      if (ownsStatusRenderIo) await statusRenderIo.close({ timeoutMs: STATUS_IO_CLOSE_TIMEOUT_MS });
+      if (ownsBackgroundIo) await backgroundIo.close({ timeoutMs: BACKGROUND_IO_CLOSE_TIMEOUT_MS });
     } finally {
       if (publishBackgroundIo) {
         try {
@@ -2534,6 +2622,42 @@ async function runBrowserlessRunnerSelfTest() {
       disableBackgroundIo: true,
       runReadOnlyOnce: async () => ({ ok: true, frames: 0, fake: true })
     });
+    const runnerResultSummary = summarizeBrowserlessRunnerResult({
+      ok: false,
+      mode: 'profit-live',
+      canary: {
+        runId: 'summary-self-test',
+        startedAt: '2026-07-08T01:00:00.000Z',
+        completedAt: '2026-07-08T01:01:00.000Z',
+        error: 'restart-drain-ready',
+        safety: { event: { reason: 'restart-drain-ready', detail: { source: 'restart-drain' } } },
+        stats: { frameCount: 100, lastFrameAt: '2026-07-08T01:00:59.000Z', tick: { last: 200 } },
+        decisions: { huge: 'x'.repeat(100000) },
+        sessionToken: 'summary-secret-token'
+      }
+    });
+    const runnerResultSummaryText = JSON.stringify(runnerResultSummary);
+    const runnerResultSummaryOk = Boolean(
+      runnerResultSummary.reason === 'restart-drain-ready'
+        && runnerResultSummary.runId === 'summary-self-test'
+        && runnerResultSummaryText.length < 2048
+        && !runnerResultSummaryText.includes('summary-secret-token')
+        && !runnerResultSummaryText.includes('"huge"')
+    );
+    const statusQueueProjection = buildCompactBrowserlessStatus({
+      updatedAt: '2026-07-08T01:01:00.000Z',
+      statusRender: {
+        renderedAt: '2026-07-08T01:00:59.000Z',
+        cacheMaxStaleMs: STATUS_COMPACT_MAX_STALE_MS,
+        logQueue: { ok: true, pending: 123, pendingRequests: 0, operationErrorCount: 1 },
+        renderQueue: { ok: true, pending: 0, pendingRequests: 1, operationErrorCount: 0 }
+      }
+    }, { statusHost: '127.0.0.1', statusPort: 18767 });
+    const statusQueueProjectionOk = Boolean(
+      statusQueueProjection.statusServer?.renderTiming?.cacheMaxStaleMs === STATUS_COMPACT_MAX_STALE_MS
+        && statusQueueProjection.statusServer?.renderTiming?.logQueue?.pending === 123
+        && statusQueueProjection.statusServer?.renderTiming?.renderQueue?.pendingRequests === 1
+    );
     const staleRestartDrainCleared = readBrowserlessStateFile(stateFilePath(liveConfig)).runner.restartDrain === null;
     const wsClosedPlan = browserlessLoopPlan({
       ok: false,
@@ -2724,6 +2848,8 @@ async function runBrowserlessRunnerSelfTest() {
       ok: Boolean(
         dryRun.ok
         && liveRun.ok
+        && runnerResultSummaryOk
+        && statusQueueProjectionOk
         && staleRestartDrainCleared
         && /runner-dry-run/.test(text)
         && /runner-finish/.test(text)
@@ -2752,6 +2878,15 @@ async function runBrowserlessRunnerSelfTest() {
       ),
       dryRun,
       liveRun,
+      runnerResultSummary: {
+        ok: runnerResultSummaryOk,
+        bytes: Buffer.byteLength(runnerResultSummaryText),
+        value: runnerResultSummary
+      },
+      statusQueueProjection: {
+        ok: statusQueueProjectionOk,
+        renderTiming: statusQueueProjection.statusServer?.renderTiming || null
+      },
       staleRestartDrainCleared,
       wsClosedPlan,
       combatExitPlan,
@@ -2792,6 +2927,7 @@ module.exports = {
   preserveOnlineSessionForLoopWait,
   publicConfig,
   runnerResultExitDetail,
+  summarizeBrowserlessRunnerResult,
   runBrowserlessRunner,
   runBrowserlessRunnerSelfTest
 };

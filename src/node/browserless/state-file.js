@@ -2135,7 +2135,24 @@ function buildCompactBrowserlessStatus(state, config = {}) {
             roundTripMs: compactNumber(normalized.statusRender.roundTripMs),
             responseSendMs: compactNumber(normalized.statusRender.responseSendMs),
             bytes: compactNumber(normalized.statusRender.bytes),
-            renderedAt: compactString(normalized.statusRender.renderedAt, 48)
+            renderedAt: compactString(normalized.statusRender.renderedAt, 48),
+            cacheMaxStaleMs: compactNumber(normalized.statusRender.cacheMaxStaleMs),
+            logQueue: normalized.statusRender.logQueue && typeof normalized.statusRender.logQueue === 'object'
+              ? {
+                  ok: Boolean(normalized.statusRender.logQueue.ok),
+                  pending: compactNumber(normalized.statusRender.logQueue.pending),
+                  pendingRequests: compactNumber(normalized.statusRender.logQueue.pendingRequests),
+                  operationErrorCount: compactNumber(normalized.statusRender.logQueue.operationErrorCount)
+                }
+              : null,
+            renderQueue: normalized.statusRender.renderQueue && typeof normalized.statusRender.renderQueue === 'object'
+              ? {
+                  ok: Boolean(normalized.statusRender.renderQueue.ok),
+                  pending: compactNumber(normalized.statusRender.renderQueue.pending),
+                  pendingRequests: compactNumber(normalized.statusRender.renderQueue.pendingRequests),
+                  operationErrorCount: compactNumber(normalized.statusRender.renderQueue.operationErrorCount)
+                }
+              : null
           }
         : null
     }

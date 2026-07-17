@@ -20,7 +20,8 @@ const {
   browserlessTerminalStopRequestsRuntimeClose,
   runBrowserlessRunner,
   hydrateConfigFromState,
-  runBrowserlessRunnerSelfTest
+  runBrowserlessRunnerSelfTest,
+  summarizeBrowserlessRunnerResult
 } = require('../src/node/browserless/runner');
 const {
   browserlessStatsForOffline,
@@ -274,7 +275,7 @@ async function main() {
     flushBackgroundIo: async () => {
       const current = activeBackgroundIo;
       activeBackgroundIo = null;
-      return current?.close?.() || null;
+      return current?.close?.({ timeoutMs: 5000 }) || null;
     }
   });
   const retentionScheduler = startLogRetentionScheduler(config.logDir, {
@@ -305,7 +306,7 @@ async function main() {
             activeLifecycleControl = control || null;
           }
         });
-        console.log(JSON.stringify(result, null, 2));
+        console.log(JSON.stringify({ type: 'runner-result', ...summarizeBrowserlessRunnerResult(result) }));
         exitAfterSignalStop = exitAfterSignalStop
           || browserlessTerminalStopRequestsRuntimeClose(result, result?.reason);
         if (config.once || config.dryRun || result?.reason === 'explicit-stop' || result?.reason === 'restart-drain-ready' || result?.reason === 'unsupported-control-mode') {
@@ -325,7 +326,7 @@ async function main() {
     retentionScheduler.stop();
     const current = activeBackgroundIo;
     activeBackgroundIo = null;
-    if (current?.close) await current.close();
+    if (current?.close) await current.close({ timeoutMs: 5000 });
     if (exitAfterSignalStop) process.exit(process.exitCode || 0);
   }
 }

@@ -22,6 +22,17 @@ function createBrowserlessBackgroundIo(options = {}) {
   let failed = false;
   let lastError = '';
   let operationErrorCount = 0;
+  let closePromise = null;
+
+  function rejectPending(error) {
+    for (const pending of barriers.values()) pending.reject(error);
+    for (const pending of requests.values()) {
+      if (pending.timer) clearTimeout(pending.timer);
+      pending.reject(error);
+    }
+    barriers.clear();
+    requests.clear();
+  }
 
   function reportError(error, detail = {}, fatal = false) {
     if (fatal) failed = true;
@@ -59,6 +70,7 @@ function createBrowserlessBackgroundIo(options = {}) {
       const pending = requests.get(message.id);
       if (pending) {
         requests.delete(message.id);
+        if (pending.timer) clearTimeout(pending.timer);
         pending.resolve({
           text: String(message.text || ''),
           bytes: Number(message.bytes || 0),
@@ -84,13 +96,13 @@ function createBrowserlessBackgroundIo(options = {}) {
   });
   worker.on('error', error => {
     reportError(error, { operation: 'worker' }, true);
-    for (const pending of barriers.values()) pending.reject(error);
-    for (const pending of requests.values()) pending.reject(error);
-    barriers.clear();
-    requests.clear();
+    rejectPending(error);
   });
   worker.on('exit', code => {
-    if (!closed && code !== 0) reportError(new Error(`background IO worker exited with code ${code}`), { operation: 'worker-exit' }, true);
+    if (closed) return;
+    const error = new Error(`background IO worker exited with code ${code}`);
+    if (code !== 0) reportError(error, { operation: 'worker-exit' }, true);
+    rejectPending(error);
   });
 
   function appendLog(message = {}) {
@@ -107,16 +119,25 @@ function createBrowserlessBackgroundIo(options = {}) {
     return post({ kind: 'json-atomic', file: path.resolve(String(file || '')), value });
   }
 
-  function renderStatus(state, config = {}, compact = false) {
+  function renderStatus(state, config = {}, compact = false, optionsForRequest = {}) {
     if (closed || failed) return Promise.reject(new Error(lastError || 'background IO worker unavailable'));
     const id = nextRequestId++;
     const started = performance.now();
+    const timeoutMs = Math.max(0, Number(optionsForRequest.timeoutMs || 0));
     return new Promise((resolve, reject) => {
-      const pending = { resolve, reject, started, postMs: 0 };
+      const pending = { resolve, reject, started, postMs: 0, timer: null };
       requests.set(id, pending);
+      if (timeoutMs > 0) {
+        pending.timer = setTimeout(() => {
+          if (!requests.delete(id)) return;
+          reject(new Error(`background status render timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+        pending.timer.unref?.();
+      }
       const postStarted = performance.now();
       if (!post({ kind: 'status-render', id, state, config, compact: Boolean(compact) })) {
         requests.delete(id);
+        if (pending.timer) clearTimeout(pending.timer);
         reject(new Error(lastError || 'background status render queue unavailable'));
         return;
       }
@@ -137,12 +158,48 @@ function createBrowserlessBackgroundIo(options = {}) {
     });
   }
 
-  async function close() {
-    if (closed) return { ok: !failed, submitted, processed, pending: 0, operationErrorCount, lastError };
-    const result = await flush();
-    closed = true;
-    await worker.terminate();
-    return result;
+  function close(optionsForClose = {}) {
+    if (closePromise) return closePromise;
+    closePromise = (async () => {
+      if (closed) return { ok: !failed, submitted, processed, pending: 0, operationErrorCount, lastError };
+      const timeoutMs = Math.max(0, Number(optionsForClose.timeoutMs || 0));
+      let timedOut = false;
+      let result;
+      if (timeoutMs > 0) {
+        let timeoutHandle = null;
+        result = await Promise.race([
+          flush(),
+          new Promise(resolve => {
+            timeoutHandle = setTimeout(() => {
+              timedOut = true;
+              resolve({
+                ok: false,
+                submitted,
+                processed,
+                pending: Math.max(0, submitted - processed),
+                operationErrorCount,
+                lastError: `background IO flush timed out after ${timeoutMs}ms`
+              });
+            }, timeoutMs);
+            timeoutHandle.unref?.();
+          })
+        ]);
+        if (timeoutHandle) clearTimeout(timeoutHandle);
+      } else {
+        result = await flush();
+      }
+      closed = true;
+      if (timedOut || requests.size || barriers.size) {
+        rejectPending(new Error(result.lastError || 'background IO worker closed'));
+      }
+      await worker.terminate();
+      return {
+        ...result,
+        timedOut,
+        dropped: timedOut ? Math.max(0, submitted - processed) : 0
+      };
+    })();
+    return closePromise;
   }
 
   function status() {
