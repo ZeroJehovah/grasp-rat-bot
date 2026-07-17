@@ -1601,6 +1601,9 @@ function compactExit(event) {
   const injury = decision.injury && typeof decision.injury === 'object'
     ? decision.injury
     : (detail.injury && typeof detail.injury === 'object' ? detail.injury : {});
+  const leaveConfirmation = event.leaveConfirmation && typeof event.leaveConfirmation === 'object'
+    ? event.leaveConfirmation
+    : (detail.leaveConfirmation && typeof detail.leaveConfirmation === 'object' ? detail.leaveConfirmation : {});
   const sourceSelf = decision.self || detail.self || decision.input?.self || combat.self || null;
   const sourceTarget = event.target || detail.target || decision.target || combatExit.target || combat.target || null;
   const sourceTargetId = compactNumber(sourceTarget?.userId ?? sourceTarget?.user_id);
@@ -1642,25 +1645,31 @@ function compactExit(event) {
   const endedAtMs = compactNumber(battleMetrics.lastObservedAt) || eventAtMs;
   const durationMs = ((metricsAssociated || explicitBattleReason || explicitCombatExit) ? compactNumber(combat.durationMs) : null)
     ?? (startedAtMs !== null && endedAtMs > 0 ? Math.max(0, endedAtMs - startedAtMs) : null);
-  const selfDamage = compactNumber(battleMetrics.selfDamage) ?? compactNumber(injury.hpDrop);
-  const targetDamage = compactNumber(battleMetrics.targetDamage);
-  const selfHealing = compactNumber(battleMetrics.selfHealing);
-  const targetHealing = compactNumber(battleMetrics.targetHealing);
-  const selfHpEnd = compactNumber(battleMetrics.lastSelfHp)
-    ?? compactNumber(combatExit.selfHp)
-    ?? compactNumber(sourceSelf?.hp)
-    ?? compactNumber(injury.currentHp);
-  const selfHpStart = compactNumber(battleMetrics.initialSelfHp)
-    ?? compactNumber(injury.previousHp)
-    ?? (selfHpEnd !== null && selfDamage !== null
-      ? selfHpEnd + selfDamage - (selfHealing ?? 0)
-      : null);
-  const targetHpEnd = compactNumber(battleMetrics.lastTargetHp)
-    ?? (explicitCombatExit ? compactNumber(combatExit.targetHp) : null);
-  const targetHpStart = compactNumber(battleMetrics.initialTargetHp)
-    ?? (targetHpEnd !== null && targetDamage !== null
-      ? targetHpEnd + targetDamage - (targetHealing ?? 0)
-      : null);
+  const selfDamage = metricsAssociated ? compactNumber(battleMetrics.selfDamage) : null;
+  const targetDamage = metricsAssociated ? compactNumber(battleMetrics.targetDamage) : null;
+  const selfHealing = metricsAssociated ? compactNumber(battleMetrics.selfHealing) : null;
+  const targetHealing = metricsAssociated ? compactNumber(battleMetrics.targetHealing) : null;
+  const selfHpEnd = metricsAssociated
+    ? (compactNumber(battleMetrics.lastSelfHp)
+      ?? compactNumber(combatExit.selfHp)
+      ?? compactNumber(sourceSelf?.hp))
+    : null;
+  const selfHpStart = metricsAssociated
+    ? (compactNumber(battleMetrics.initialSelfHp)
+      ?? (selfHpEnd !== null && selfDamage !== null
+        ? selfHpEnd + selfDamage - (selfHealing ?? 0)
+        : null))
+    : null;
+  const targetHpEnd = metricsAssociated
+    ? (compactNumber(battleMetrics.lastTargetHp)
+      ?? (explicitCombatExit ? compactNumber(combatExit.targetHp) : null))
+    : null;
+  const targetHpStart = metricsAssociated
+    ? (compactNumber(battleMetrics.initialTargetHp)
+      ?? (targetHpEnd !== null && targetDamage !== null
+        ? targetHpEnd + targetDamage - (targetHealing ?? 0)
+        : null))
+    : null;
   const battleTargetSource = sourceTarget || (metricsAssociated
     ? { userId: metricsTargetId, name: metricsTargetName }
     : null);
@@ -1713,6 +1722,23 @@ function compactExit(event) {
     hpGap: compactNumber(event.hpGap ?? detail.hpGap ?? combatExit.hpGap),
     threshold: compactNumber(event.threshold ?? detail.threshold ?? combatExit.threshold),
     minHpGap: compactNumber(event.minHpGap ?? detail.minHpGap ?? combatExit.minHpGap),
+    injury: Object.keys(injury).length
+      ? {
+          previousHp: compactNumber(injury.previousHp),
+          currentHp: compactNumber(injury.currentHp),
+          hpDrop: compactNumber(injury.hpDrop)
+        }
+      : null,
+    leaveConfirmation: Object.keys(leaveConfirmation).length
+      ? {
+          at: compactString(leaveConfirmation.at, 48),
+          selfHp: compactNumber(leaveConfirmation.selfHp),
+          maxHp: compactNumber(leaveConfirmation.maxHp),
+          triggerSelfHp: compactNumber(leaveConfirmation.triggerSelfHp),
+          hpLossAfterTrigger: compactNumber(leaveConfirmation.hpLossAfterTrigger),
+          source: compactString(leaveConfirmation.source, 48)
+        }
+      : null,
     battle: hasBattleEvidence
       ? {
           outcome,

@@ -800,6 +800,44 @@ function buildWsFrameTrace(frame, config = {}) {
   };
 }
 
+function attachConfirmedLeaveEvidence(event, leave, leavePending = null, options = {}) {
+  if (!event || typeof event !== 'object' || leave?.ok !== true) return event;
+  const finiteNumber = value => {
+    if (value === null || value === undefined || value === '') return null;
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? numeric : null;
+  };
+  const attempts = Array.isArray(leave.attempts) ? leave.attempts : [];
+  const confirmedAttempt = attempts.find(attempt => attempt?.ok && attempt?.response && typeof attempt.response === 'object') || null;
+  const response = confirmedAttempt?.response || {};
+  const responseHp = finiteNumber(response.hp);
+  const pendingMinHp = finiteNumber(leavePending?.minHp);
+  const selfHp = responseHp !== null
+    ? responseHp
+    : pendingMinHp;
+  if (selfHp === null) return event;
+  const maxHpValue = finiteNumber(response.max_hp ?? response.maxHp);
+  const decision = event.detail?.decision || event.decision || {};
+  const triggerSelfHp = finiteNumber(
+    decision.combat?.exit?.selfHp
+      ?? decision.self?.hp
+      ?? decision.action?.self?.hp
+      ?? event.selfHp
+  );
+  const completedAtMs = Number(leavePending?.completedAtMs || options.completedAtMs || 0);
+  return {
+    ...event,
+    leaveConfirmation: {
+      at: completedAtMs > 0 ? new Date(completedAtMs).toISOString() : '',
+      selfHp,
+      maxHp: maxHpValue,
+      triggerSelfHp,
+      hpLossAfterTrigger: triggerSelfHp === null ? null : Math.max(0, triggerSelfHp - selfHp),
+      source: responseHp !== null ? 'leave-response' : 'leave-pending-min'
+    }
+  };
+}
+
 function wsTraceOutboundMessage(message) {
   const text = String(message || '');
   if (!text.startsWith('chat ')) return text;
@@ -2191,6 +2229,16 @@ async function runReadOnlyCanary(config, options = {}) {
     }
   }
 
+  if (result.safety.event && result.leave?.ok) {
+    result.safety.event = attachConfirmedLeaveEvidence(
+      result.safety.event,
+      result.leave,
+      result.safety.leavePending,
+      { completedAtMs: now() }
+    );
+    if (result.safety.exit?.event) result.safety.exit.event = result.safety.event;
+  }
+
   try {
     ending = true;
     clearPublishedTransport(transport, 'canary-finish');
@@ -2261,6 +2309,7 @@ async function runReadOnlyCanary(config, options = {}) {
 }
 
 module.exports = {
+  attachConfirmedLeaveEvidence,
   createCanaryRunId,
   frameDataToBuffer,
   inspectCanaryFrame,

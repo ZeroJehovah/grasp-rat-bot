@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.17.2';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.17.3';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function panelSessionFlagsCore(status = {}) {
@@ -665,13 +665,29 @@ function renderBrowserlessWebPanel() {
         const start = number(startHp);
         const end = number(endHp);
         if (start !== null && end !== null) return label + ' ' + start + ' → ' + end;
-        if (end !== null) return label + ' ' + end;
         return '';
       };
       return joinNonBlank([
         sideText('我方', battle.selfHpStart, battle.selfHpEnd),
         sideText(targetName, battle.targetHpStart, battle.targetHpEnd)
       ]);
+    }
+    function recentInjuryHpText(status) {
+      const injury = status.recentExit?.injury || {};
+      const previousHp = number(injury.previousHp);
+      const currentHp = number(injury.currentHp);
+      if (previousHp === null || currentHp === null) return '';
+      const hpDrop = number(injury.hpDrop);
+      return '我方 ' + previousHp + ' → ' + currentHp
+        + (hpDrop === null ? '' : ' / 本次承伤 ' + hpDrop);
+    }
+    function confirmedLeaveHpText(status) {
+      const confirmation = status.recentExit?.leaveConfirmation || {};
+      const selfHp = number(confirmation.selfHp);
+      if (selfHp === null) return '';
+      const hpLoss = number(confirmation.hpLossAfterTrigger);
+      return '我方 ' + selfHp
+        + (hpLoss !== null && hpLoss > 0 ? ' / 退出请求期间再损失 ' + hpLoss : '');
     }
     function recentBattleDamageText(status) {
       const battle = recentBattle(status);
@@ -1624,8 +1640,12 @@ function renderBrowserlessWebPanel() {
         addRow(rowsOut, '交战对手', targetLabel(battle.target), true);
         addRow(rowsOut, '战斗结果', recentBattleOutcomeText(status), true);
         addRow(rowsOut, '战斗时间', recentBattleTimeText(status));
-        addRow(rowsOut, '血量变化', recentBattleHpText(status));
-        addRow(rowsOut, '输出承伤', recentBattleDamageText(status));
+        const battleHpText = recentBattleHpText(status);
+        if (battleHpText) addRow(rowsOut, '战斗起止血量', battleHpText);
+        const injuryHpText = recentInjuryHpText(status);
+        if (injuryHpText) addRow(rowsOut, '退出判定受击', injuryHpText);
+        const damageText = recentBattleDamageText(status);
+        if (damageText) addRow(rowsOut, '输出承伤', damageText);
         const healingText = recentBattleHealingText(status);
         if (healingText) addRow(rowsOut, '战斗恢复', healingText);
         addRow(rowsOut, '射击命中', recentBattleShootingText(status));
@@ -1650,6 +1670,8 @@ function renderBrowserlessWebPanel() {
         addRow(rowsOut, '战斗目标', targetLabel(status.combat?.target));
         addRow(rowsOut, '战斗退出', reasonText(status.combat?.exit?.reason));
         addRow(rowsOut, '退出触发血量', combatExitHpText(status));
+        const confirmedHpText = confirmedLeaveHpText(status);
+        if (confirmedHpText) addRow(rowsOut, '离场确认血量', confirmedHpText);
       }
 
       if (!realtimeOnline && isSafetyStatus(status, kind, reason)) {

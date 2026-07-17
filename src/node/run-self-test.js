@@ -74,6 +74,7 @@ const {
   summarizeBrowserlessDecisionState
 } = require('./browserless/decision-state');
 const {
+  attachConfirmedLeaveEvidence,
   createCanaryRunId,
   runPreLoginSnapshotSafety,
   runReadOnlyCanary
@@ -24183,10 +24184,13 @@ async function runSelfTest() {
           panelScript.includes("'dynamic-profit-threshold-wait': '当日时间充裕，动态收益门槛生效，等待更高收益目标'"),
           panelScript.includes("'single-coin-bait-hold': '当日时间充裕，动态收益门槛生效，守着 1 金币等待捡币脚本'"),
           panelScript.includes("addRow(rowsOut, '退出触发血量', combatExitHpText(status))"),
+          panelScript.includes("if (battleHpText) addRow(rowsOut, '战斗起止血量', battleHpText)"),
+          panelScript.includes("if (injuryHpText) addRow(rowsOut, '退出判定受击', injuryHpText)"),
+          panelScript.includes("if (confirmedHpText) addRow(rowsOut, '离场确认血量', confirmedHpText)"),
           panelScript.includes("return '与 ' + name + ' 交战后受伤'"),
           panelScript.includes("addRow(rowsOut, '交战对手', targetLabel(battle.target), true)"),
           panelScript.includes("addRow(rowsOut, '战斗结果', recentBattleOutcomeText(status), true)"),
-          panelScript.includes("addRow(rowsOut, '输出承伤', recentBattleDamageText(status))"),
+          panelScript.includes("if (damageText) addRow(rowsOut, '输出承伤', damageText)"),
           panelScript.includes("if (healingText) addRow(rowsOut, '战斗恢复', healingText)"),
           panelScript.includes("'请求 ' + requestedShots + ' 发 / 确认 ' + acceptedShots + ' 发'"),
           panelScript.includes("'确认命中率 ' + hitRate + '%'"),
@@ -24195,7 +24199,83 @@ async function runSelfTest() {
           panelText.indexOf('id="battlePanel"') < panelText.indexOf('class="stats-grid"')
         ].join('|');
       })(),
-      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
+      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
+    },
+    {
+      name: 'browserless confirmed leave evidence preserves server hp after trigger',
+      got: (() => {
+        const event = attachConfirmedLeaveEvidence({
+          reason: 'combat-hp-disadvantage-leave',
+          detail: {
+            decision: {
+              self: { hp: 80 },
+              combat: { exit: { selfHp: 80, targetHp: 100 } }
+            }
+          }
+        }, {
+          ok: true,
+          attempts: [{ ok: true, response: { hp: 77, max_hp: 100 } }]
+        }, {
+          completedAtMs: Date.parse('2026-07-17T01:22:34.719Z'),
+          minHp: 77
+        });
+        const missingHpEvent = attachConfirmedLeaveEvidence({ reason: 'test-exit' }, {
+          ok: true,
+          attempts: [{ ok: true, response: { hp: null } }]
+        }, { minHp: null });
+        return [
+          event.leaveConfirmation.at,
+          event.leaveConfirmation.selfHp,
+          event.leaveConfirmation.maxHp,
+          event.leaveConfirmation.triggerSelfHp,
+          event.leaveConfirmation.hpLossAfterTrigger,
+          event.leaveConfirmation.source,
+          missingHpEvent.leaveConfirmation === undefined
+        ].join('|');
+      })(),
+      want: '2026-07-17T01:22:34.719Z|77|100|80|3|leave-response|true'
+    },
+    {
+      name: 'browserless compact injury exit separates trigger jump from battle hp and confirmed leave hp',
+      got: (() => {
+        const status = buildCompactBrowserlessStatus({
+          recentExits: [{
+            at: '2026-07-17T01:22:34.151Z',
+            reason: 'combat-hp-disadvantage-leave',
+            shouldLeave: true,
+            leaveConfirmation: {
+              at: '2026-07-17T01:22:34.719Z',
+              selfHp: 77,
+              maxHp: 100,
+              triggerSelfHp: 80,
+              hpLossAfterTrigger: 3,
+              source: 'leave-response'
+            },
+            detail: {
+              decision: {
+                self: { userId: 28886, name: 'self', hp: 80, maxHp: 100 },
+                target: { userId: 36440, name: 'huaming song', hp: 100 },
+                injury: { previousHp: 86, currentHp: 80, hpDrop: 6 },
+                combat: {
+                  exit: { selfHp: 80, targetHp: 100, hpGap: 20, threshold: 20 }
+                }
+              }
+            }
+          }]
+        }, parseBrowserlessRunnerArgs([], {}));
+        return [
+          status.recentExit.selfHp,
+          status.recentExit.injury.previousHp,
+          status.recentExit.injury.currentHp,
+          status.recentExit.injury.hpDrop,
+          status.recentExit.leaveConfirmation.selfHp,
+          status.recentExit.leaveConfirmation.hpLossAfterTrigger,
+          status.recentExit.battle.selfHpStart ?? 'unknown',
+          status.recentExit.battle.selfHpEnd ?? 'unknown',
+          status.recentExit.battle.selfDamage ?? 'unknown'
+        ].join('|');
+      })(),
+      want: '80|86|80|6|77|3|unknown|unknown|unknown'
     },
     {
       name: 'browserless web panel explains combat movement failure and low-hp recovery threat exits',
