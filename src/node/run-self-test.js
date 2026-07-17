@@ -165,6 +165,7 @@ const {
   BROWSERLESS_WEB_PANEL_VERSION,
   formatSpentStaminaCore,
   groupChatMessagesForDisplay,
+  nearbyCoinIconCore,
   panelSessionFlagsCore,
   renderBrowserlessWebPanel
 } = require('./browserless/web-panel');
@@ -23970,13 +23971,16 @@ async function runSelfTest() {
           panelScript.includes("name.startsWith('coin') ? 'target-icon target-icon-coin' : 'target-icon'"),
           panelScript.includes("document.createElementNS('http://www.w3.org/2000/svg', 'svg')"),
           panelScript.includes("const hasMultipleRouteTargets = items.some"),
-          panelScript.includes("? 'coinBait'"),
-          panelScript.includes("hasMultipleRouteTargets ? 'coin1' : 'coinSingle'"),
+          panelScript.includes('const nearbyCoinIcon = function nearbyCoinIconCore'),
+          nearbyCoinIconCore({ selected: true, bait: true }) === 'coinSingle',
+          nearbyCoinIconCore({ selected: true, bait: true, hasMultipleRouteTargets: true }) === 'coin1',
+          nearbyCoinIconCore({ selected: false, bait: true }) === 'coinBait',
+          nearbyCoinIconCore({ selected: false, bait: false, routeOrder: 3 }) === 'coin3',
           panelScript.includes("const fleeTarget = (actionKind === 'flee' || actionKind === 'safety-exit' || actionKind === 'leave') && Boolean(status.action?.target);"),
           panelScript.includes("const targetType = fleeTarget ? 'flee' : (afkTarget ? 'afk' : 'combat');")
         ].join('|');
       })(),
-      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
+      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless web panel reports subunit session stamina without rounding it to one',

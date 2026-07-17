@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.16.4';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.17.1';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function panelSessionFlagsCore(status = {}) {
@@ -57,6 +57,19 @@ function formatSpentStaminaCore(input) {
   if (spent === 0) return '0';
   if (spent < 1000) return '<1';
   return String(Math.ceil(spent / 1000));
+}
+
+function nearbyCoinIconCore(options = {}) {
+  const selected = Boolean(options.selected);
+  const bait = Boolean(options.bait);
+  const hasMultipleRouteTargets = Boolean(options.hasMultipleRouteTargets);
+  const routeOrder = Number(options.routeOrder);
+  if (selected) return hasMultipleRouteTargets ? 'coin1' : 'coinSingle';
+  if (bait) return 'coinBait';
+  if (Number.isFinite(routeOrder) && routeOrder > 1) {
+    return 'coin' + Math.min(9, Math.max(2, Math.round(routeOrder)));
+  }
+  return '';
 }
 
 function renderBrowserlessWebPanel() {
@@ -359,6 +372,7 @@ function renderBrowserlessWebPanel() {
     let panelCollapseState = readPanelCollapseState();
 
     const groupChatMessagesForDisplay = ${groupChatMessagesForDisplay.toString()};
+    const nearbyCoinIcon = ${nearbyCoinIconCore.toString()};
     const spentStaminaUnit = ${formatSpentStaminaCore.toString()};
     const panelSessionFlags = ${panelSessionFlagsCore.toString()};
 
@@ -1307,11 +1321,12 @@ function renderBrowserlessWebPanel() {
             selected ? 'target-current target-coin' : (routeNext ? 'target-route-next target-coin' : ''),
             baitCoin ? 'target-bait' : ''
           ].filter(Boolean).join(' ');
-          const icon = baitCoin
-            ? 'coinBait'
-            : (selected
-                ? (hasMultipleRouteTargets ? 'coin1' : 'coinSingle')
-                : (routeNext ? 'coin' + Math.min(9, Math.max(2, Math.round(routeIndex))) : ''));
+          const icon = nearbyCoinIcon({
+            selected,
+            bait: baitCoin,
+            hasMultipleRouteTargets,
+            routeOrder: routeIndex
+          });
           fragment.appendChild(createNearbyRow('coin', [
             { text: id, icon },
             { text: integer(amount), className: 'coin' },
@@ -2106,6 +2121,7 @@ module.exports = {
   BROWSERLESS_WEB_PANEL_VERSION,
   formatSpentStaminaCore,
   groupChatMessagesForDisplay,
+  nearbyCoinIconCore,
   panelSessionFlagsCore,
   renderBrowserlessWebPanel
 };
