@@ -13030,11 +13030,13 @@ async function runSelfTest() {
           combat.target.userId,
           combat.movement.reason,
           combat.movement.modifiers.includes('dodge'),
-          combat.movement.modifiers.includes('back-away-mixed'),
+          combat.movement.modifiers.includes('back-away-deferred'),
+          combat.movement.dx === combat.movement.dodge?.dx
+            && combat.movement.dy === combat.movement.dodge?.dy,
           combat.shooting.reason
         ].join('|');
       })(),
-      want: '8|unavoidable-current-shot|true|true|target-pressure-fire'
+      want: '8|unavoidable-current-shot|true|true|true|target-pressure-fire'
     },
     {
       name: 'browserless combat movement closes passive runner engagement',

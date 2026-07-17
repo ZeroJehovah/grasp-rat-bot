@@ -896,11 +896,99 @@ function replayBurstCadence(rows) {
   };
 }
 
+function replayBackAwayDodgePriority(rows) {
+  const overrides = [];
+  let loggedDirectHits = 0;
+  let preservedDodgeDirectHits = 0;
+  let loggedCpaTotal = 0;
+  let preservedDodgeCpaTotal = 0;
+  let cpaImprovementFrames = 0;
+  let preservedDodgeWorseFrames = 0;
+  const samples = [];
+  for (const row of rows) {
+    const detail = row.detail || {};
+    const modifiers = detail.movement?.modifiers || [];
+    if (!modifiers.includes('back-away-mixed')) continue;
+    const field = detail.movement?.dodge?.threatField;
+    if (!Array.isArray(field) || !field.length) continue;
+    const logged = field.find(item => Number(item.dx) === Number(detail.movement?.dx || 0)
+      && Number(item.dy) === Number(detail.movement?.dy || 0)) || null;
+    const preserved = field.find(item => Number(item.dx) === Number(detail.movement?.dodge?.dx || 0)
+      && Number(item.dy) === Number(detail.movement?.dodge?.dy || 0)) || null;
+    if (!logged || !preserved) continue;
+    const loggedHits = Number(logged.directHits || 0);
+    const preservedHits = Number(preserved.directHits || 0);
+    const loggedCpa = Number(logged.minCPA || 0);
+    const preservedCpa = Number(preserved.minCPA || 0);
+    const atMs = Date.parse(row.entry.at || '');
+    overrides.push({ atMs, line: row.line });
+    loggedDirectHits += loggedHits;
+    preservedDodgeDirectHits += preservedHits;
+    loggedCpaTotal += loggedCpa;
+    preservedDodgeCpaTotal += preservedCpa;
+    if (preservedHits < loggedHits || (preservedHits === loggedHits && preservedCpa > loggedCpa)) {
+      cpaImprovementFrames += 1;
+    }
+    if (preservedHits > loggedHits || (preservedHits === loggedHits && preservedCpa < loggedCpa)) {
+      preservedDodgeWorseFrames += 1;
+    }
+    if (samples.length < 12 && (preservedHits !== loggedHits || Math.abs(preservedCpa - loggedCpa) >= 25)) {
+      samples.push({
+        line: row.line,
+        at: row.entry.at,
+        distance: Number.isFinite(Number(detail.target?.distance)) ? Math.round(Number(detail.target.distance)) : null,
+        logged: {
+          dx: Number(detail.movement?.dx || 0),
+          dy: Number(detail.movement?.dy || 0),
+          directHits: loggedHits,
+          minCpaCm: Math.round(loggedCpa)
+        },
+        preservedDodge: {
+          dx: Number(detail.movement?.dodge?.dx || 0),
+          dy: Number(detail.movement?.dodge?.dy || 0),
+          directHits: preservedHits,
+          minCpaCm: Math.round(preservedCpa)
+        }
+      });
+    }
+  }
+  let hitEvents = 0;
+  let hitEventsWithin750Ms = 0;
+  for (let index = 1; index < rows.length; index += 1) {
+    const previousHp = Number(rows[index - 1].detail?.self?.hp);
+    const currentHp = Number(rows[index].detail?.self?.hp);
+    if (!Number.isFinite(previousHp) || !Number.isFinite(currentHp) || currentHp >= previousHp) continue;
+    hitEvents += 1;
+    const hitAt = Date.parse(rows[index].entry.at || '');
+    if (overrides.some(item => hitAt >= item.atMs && hitAt - item.atMs <= 750)) hitEventsWithin750Ms += 1;
+  }
+  const overrideFrames = overrides.length;
+  const directHitReduction = Math.max(0, loggedDirectHits - preservedDodgeDirectHits);
+  return {
+    model: 'preserve-threat-field-dodge-before-close-spacing',
+    overrideFrames,
+    hitEvents,
+    hitEventsWithin750Ms,
+    loggedDirectHits,
+    preservedDodgeDirectHits,
+    directHitReduction,
+    loggedMeanCpaCm: overrideFrames ? Number((loggedCpaTotal / overrideFrames).toFixed(1)) : null,
+    preservedDodgeMeanCpaCm: overrideFrames ? Number((preservedDodgeCpaTotal / overrideFrames).toFixed(1)) : null,
+    cpaImprovementFrames,
+    preservedDodgeWorseFrames,
+    samples,
+    accepted: overrideFrames > 0
+      && directHitReduction > 0
+      && preservedDodgeWorseFrames === 0
+  };
+}
+
 function replayDodge(options) {
   const rows = selectedEntries(options).filter(({ detail }) => !options.targetId
     || String(detail.target?.userId ?? '') === options.targetId);
   const burstCadenceReplay = replayBurstCadence(rows);
   const contactEntryReplay = replayContactEntryDodge(rows, options);
+  const backAwayDodgePriorityReplay = replayBackAwayDodgePriority(rows);
   const reactionBudgetMs = Math.max(0, Number(options.executionDelayTicks || 5) * 50 + 50 + 100);
   let hitEvents = 0;
   let eventsWithThreatEvidence = 0;
@@ -1019,9 +1107,10 @@ function replayDodge(options) {
     newFalseSafeRatio: newRatio,
     burstCadenceReplay,
     contactEntryReplay,
+    backAwayDodgePriorityReplay,
     samples,
     fullTrajectorySamples,
-    accepted: burstCadenceReplay.accepted || contactEntryReplay.accepted || (
+    accepted: burstCadenceReplay.accepted || contactEntryReplay.accepted || backAwayDodgePriorityReplay.accepted || (
       hitEvents > 0
         && reconstructedEvents > 0
         && recoveredByFullTrajectory > 0

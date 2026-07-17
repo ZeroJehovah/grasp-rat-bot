@@ -385,16 +385,13 @@ function applyCombatMovementModifiers(baseMovement, self, target, context = {}) 
 
   // Back away from close targets
   if (context.backAway && target) {
-    const awayDx = self.x > target.x ? 1 : (self.x < target.x ? -1 : 0);
-    const awayDy = self.y > target.y ? 1 : (self.y < target.y ? -1 : 0);
-
-    // Mix dodge with back-away if both needed
     if (modifiers.includes('dodge')) {
-      // Ensure at least one axis moves away
-      if (dx * awayDx < 0) dx = awayDx;
-      if (dy * awayDy < 0) dy = awayDy;
-      modifiers.push('back-away-mixed');
+      // The threat-field direction already includes target geometry. Do not turn
+      // a safe lateral/reversal dodge into a predictable radial retreat.
+      modifiers.push('back-away-deferred');
     } else {
+      const awayDx = self.x > target.x ? 1 : (self.x < target.x ? -1 : 0);
+      const awayDy = self.y > target.y ? 1 : (self.y < target.y ? -1 : 0);
       dx = awayDx;
       dy = awayDy;
       modifiers.push('back-away');

@@ -11,6 +11,7 @@ const { applyFinalActionArbitration } = require('./action-arbitration');
 const { buildFinalActionCandidate, selectFinalActionCandidateCore } = require('./final-candidate-selection');
 const { quadraticInterceptCore } = require('./combat-aim');
 const {
+  applyCombatMovementModifiers,
   calculateDodgeDirection,
   contactEntryRiskCore,
   contactEntrySyntheticBulletCore,
@@ -283,6 +284,29 @@ function runStrategyModuleSelfTests() {
       && safeClosingDodge?.dy === 1
       && safeClosingDodge?.directHits === 0
       && safeClosingDodge?.targetDistanceChange < 0
+  });
+  const dodgeBeforeSpacing = applyCombatMovementModifiers(
+    { dx: 0, dy: 0 },
+    { x: 0, y: 0 },
+    { x: 100, y: 100 },
+    { dodge: { dx: 1, dy: -1 }, backAway: true }
+  );
+  const ordinaryBackAway = applyCombatMovementModifiers(
+    { dx: 0, dy: 0 },
+    { x: 0, y: 0 },
+    { x: 100, y: 100 },
+    { backAway: true }
+  );
+  results.push({
+    name: 'incoming-dodge-keeps-both-axes-before-close-spacing-back-away',
+    passed: dodgeBeforeSpacing.dx === 1
+      && dodgeBeforeSpacing.dy === -1
+      && dodgeBeforeSpacing.modifiers.includes('dodge')
+      && dodgeBeforeSpacing.modifiers.includes('back-away-deferred')
+      && !dodgeBeforeSpacing.modifiers.includes('back-away-mixed')
+      && ordinaryBackAway.dx === -1
+      && ordinaryBackAway.dy === -1
+      && ordinaryBackAway.modifiers.includes('back-away')
   });
   const contactSelf = { user_id: 1, x: 0, y: 0, vx: 0, vy: 0, stamina_5s_remaining_milli: 10000 };
   const contactTarget = { user_id: 2, x: 15500, y: 0, vx: -50, vy: 0, distance: 15500, active: true };
