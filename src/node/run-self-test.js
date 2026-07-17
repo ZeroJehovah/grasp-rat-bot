@@ -18490,8 +18490,26 @@ async function runSelfTest() {
           loginPointSafety: { ok: true, checkedAt: '2026-07-15T04:00:00.000Z', point: { x: 1, y: 2, hp: 100 } },
           current: {
             self: { userId: 7, name: 'self', hp: 100 },
-            action: { kind: 'wait', reason: 'self-test' },
-            decision: { kind: 'wait', reason: 'self-test', action: { kind: 'wait', reason: 'self-test' } }
+            action: { kind: 'attack', reason: 'self-test', target: { type: 'enemy', userId: 8, name: 'selected-afk', invulnerable: false } },
+            decision: {
+              kind: 'profit-candidate',
+              reason: 'self-test',
+              action: { kind: 'attack', reason: 'self-test', target: { type: 'enemy', userId: 8, name: 'selected-afk', invulnerable: false } },
+              input: {
+                nearby: {
+                  ar: 14500,
+                  vr: 50000,
+                  c: Array.from({ length: 11 }, (_, index) => [index + 1, 1, (index + 1) * 1000, 0, 0, 'snapshot', 0]),
+                  p: [
+                    ['selected-afk', 100, 10000, 1, null, 5000, 1, 'Passive', 1, 1, 1, 1, 1],
+                    ['high-afk', 100, 10000, 200, null, 6000, 0, 'Passive', 1, 1, 1, 1, 0],
+                    ['active', 100, 7000, 1, null, 7000, 0, 'Active', 0, 0, 0, 0, 0],
+                    ['low-afk', 100, 10000, 1, null, 8000, 0, 'Passive', 1, 0, 1, 1, 1],
+                    ['unknown-player', 100, 10000, null, null, 9000, 0, 'Passive', 1, 0, 1, 1, 1]
+                  ]
+                }
+              }
+            }
           },
           stats: { currentSession: { online: true } }
         };
@@ -18506,10 +18524,15 @@ async function runSelfTest() {
           source.runner.lastRun.canary.decisionState === undefined,
           direct.runner.restartDrain.commitmentKey,
           direct.runner.restartDrain.assessment.reason,
-          JSON.stringify(direct.runner.restartDrain).includes(largePayload)
+          JSON.stringify(direct.runner.restartDrain).includes(largePayload),
+          direct.nearby.compactVersion,
+          direct.nearby.p.map(row => row[0]).join(','),
+          direct.nearby.p.find(row => row[0] === 'selected-afk')?.[6],
+          direct.nearby.playerLowHiddenCount,
+          direct.nearby.coinLowHiddenCount
         ].join('|');
       })(),
-      want: 'true|true|true|true|player:9667|post-kill-settlement|false'
+      want: 'true|true|true|true|player:9667|post-kill-settlement|false|1|selected-afk,high-afk,active|1|2|1'
     },
     {
       name: 'browserless live-state merge replaces decision without deep cloning stable branches',
