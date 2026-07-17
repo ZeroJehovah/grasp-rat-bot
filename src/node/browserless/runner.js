@@ -189,11 +189,17 @@ function isFirstBrowserlessLoginOfDay(state, nowMs = Date.now()) {
   return Math.max(0, Number(today.sessionCount || 0)) <= 0;
 }
 
+function browserlessDailyFirstLoginNotBeforeMs(state, config = {}, nowMs = Date.now()) {
+  const nowValue = Number.isFinite(Number(nowMs)) ? Number(nowMs) : Date.now();
+  if (!isFirstBrowserlessLoginOfDay(state, nowValue)) return 0;
+  const delayAfterMidnightMs = Math.max(0, Number(config.dailyFirstLoginDelayMs ?? 120000));
+  return browserlessDayStartMs(nowValue) + delayAfterMidnightMs;
+}
+
 function browserlessDailyFirstLoginDelayPlan(state, config = {}, nowMs = Date.now()) {
   const nowValue = Number.isFinite(Number(nowMs)) ? Number(nowMs) : Date.now();
-  if (!isFirstBrowserlessLoginOfDay(state, nowValue)) return null;
-  const delayAfterMidnightMs = Math.max(0, Number(config.dailyFirstLoginDelayMs ?? 120000));
-  const notBeforeMs = browserlessDayStartMs(nowValue) + delayAfterMidnightMs;
+  const notBeforeMs = browserlessDailyFirstLoginNotBeforeMs(state, config, nowValue);
+  if (!notBeforeMs) return null;
   const delayMs = Math.max(0, notBeforeMs - nowValue);
   if (delayMs <= 0) return null;
   return {
@@ -203,6 +209,7 @@ function browserlessDailyFirstLoginDelayPlan(state, config = {}, nowMs = Date.no
     previousRunId: '',
     error: 'daily-first-login-delay',
     safetyReason: '',
+    explicitDelay: true,
     notBeforeAt: new Date(notBeforeMs).toISOString()
   };
 }
@@ -392,6 +399,13 @@ function persistedReconnectDelayPlan(state, config = {}, nowMs = Date.now()) {
     }
   }
   const nowValue = Number.isFinite(Number(nowMs)) ? Number(nowMs) : Date.now();
+  const originalNextRunAtMs = nextRunAtMs;
+  const dailyFirstLoginNotBeforeMs = browserlessDailyFirstLoginNotBeforeMs(state, config, nextRunAtMs);
+  const dailyFirstLoginDeadlineApplied = dailyFirstLoginNotBeforeMs > nextRunAtMs;
+  if (dailyFirstLoginDeadlineApplied) {
+    nextRunAtMs = dailyFirstLoginNotBeforeMs;
+    nextRunAt = new Date(nextRunAtMs).toISOString();
+  }
   const remainingMs = Math.max(0, nextRunAtMs - nowValue);
   if (remainingMs <= 0) return null;
   const maxDelayMs = Math.max(
@@ -418,7 +432,22 @@ function persistedReconnectDelayPlan(state, config = {}, nowMs = Date.now()) {
       || gameplayDeadline?.explicit
       || action.explicitDelay
       || selected?.explicit
+      || dailyFirstLoginDeadlineApplied
   );
+  const persistedGameplayDeadline = dailyFirstLoginDeadlineApplied
+    ? gameplayDeadlineFromLoopPlan({
+        reason: reason || 'daily-first-login-delay',
+        explicitDelay: true,
+        previousRunId: action.previousRunId || lastExit.runId || ''
+      }, nextRunAt, action.previousRunId || lastExit.runId || '')
+    : (gameplayDeadline || (staminaReason ? {
+        type: 'stamina-reset',
+        reason: staminaReason,
+        until: nextRunAt,
+        explicit: true,
+        snapshotEdgeReplaceable: false,
+        sourceRunId: String(action.previousRunId || lastExit.runId || '')
+      } : null));
   return {
     continue: true,
     reason: reason || 'persisted-reconnect-wait',
@@ -428,18 +457,13 @@ function persistedReconnectDelayPlan(state, config = {}, nowMs = Date.now()) {
     safetyReason: staminaReason || actionSafetyReason || lastExitReason || reason || '',
     nextRunAt,
     persisted: true,
-    explicitDelay: Boolean(gameplayDeadline?.explicit || action.explicitDelay || selected?.explicit),
+    explicitDelay: Boolean(gameplayDeadline?.explicit || action.explicitDelay || selected?.explicit || dailyFirstLoginDeadlineApplied),
     explicitCooldown,
-    deadlineType: String(gameplayDeadline?.type || (staminaReason ? 'stamina-reset' : 'legacy-reconnect-wait')),
-    deadlineSource: String(selected?.source || ''),
-    gameplayDeadline: gameplayDeadline || (staminaReason ? {
-      type: 'stamina-reset',
-      reason: staminaReason,
-      until: nextRunAt,
-      explicit: true,
-      snapshotEdgeReplaceable: false,
-      sourceRunId: String(action.previousRunId || lastExit.runId || '')
-    } : null),
+    deadlineType: String(persistedGameplayDeadline?.type || (staminaReason ? 'stamina-reset' : 'legacy-reconnect-wait')),
+    deadlineSource: dailyFirstLoginDeadlineApplied ? 'daily-first-login' : String(selected?.source || ''),
+    dailyFirstLoginDeadlineApplied,
+    originalNextRunAt: originalNextRunAtMs > 0 ? new Date(originalNextRunAtMs).toISOString() : '',
+    gameplayDeadline: persistedGameplayDeadline,
     processStop: runner.processStop || null
   };
 }
@@ -1286,27 +1310,51 @@ async function runBrowserlessRunner(config, deps = {}) {
         && loopPlan.reason !== 'snapshot-safety-retry'
         && loopPlan.reason !== 'in-game-snapshot-safety-retry'
     );
-    const plannedNextRunAtMs = now() + loopPlan.delayMs;
+    const schedulingNowMs = now();
+    const initialPlannedNextRunAtMs = schedulingNowMs + loopPlan.delayMs;
+    const dailyFirstLoginNotBeforeMs = browserlessDailyFirstLoginNotBeforeMs(
+      currentBeforeWait,
+      config,
+      initialPlannedNextRunAtMs
+    );
+    const dailyFirstLoginDeadlineApplied = dailyFirstLoginNotBeforeMs > initialPlannedNextRunAtMs;
+    const plannedNextRunAtMs = dailyFirstLoginDeadlineApplied
+      ? dailyFirstLoginNotBeforeMs
+      : initialPlannedNextRunAtMs;
+    const scheduledLoopPlan = dailyFirstLoginDeadlineApplied
+      ? {
+          ...loopPlan,
+          explicitDelay: true,
+          notBeforeAt: new Date(dailyFirstLoginNotBeforeMs).toISOString(),
+          dailyFirstLoginDeadlineApplied: true,
+          originalDelayMs: loopPlan.delayMs
+        }
+      : loopPlan;
     const firstDailyLoginAtNextRun = isFirstBrowserlessLoginOfDay(currentBeforeWait, plannedNextRunAtMs);
     const shouldPrepareSnapshotSafety = Boolean(
-      confirmedLeave
-        || ((config.snapshotEdgeEnabled === true || !firstDailyLoginAtNextRun) && (
+      !firstDailyLoginAtNextRun && (
+        confirmedLeave
+        || (
           resetLoginPointForNextEntry
             || loopPlan.reason === 'snapshot-safety-retry'
-        ))
+        )
+      )
     );
+    const plannedDelayMs = Math.max(0, plannedNextRunAtMs - schedulingNowMs);
     const effectiveDelayMs = shouldPrepareSnapshotSafety
-      ? (config.snapshotEdgeEnabled === true && !loopPlan.explicitDelay
+      ? (config.snapshotEdgeEnabled === true && !scheduledLoopPlan.explicitDelay
           ? 0
           : Math.max(
-              loopPlan.delayMs,
+              plannedDelayMs,
               preLoginSafetyLeadMs(config) + Number(confirmedLeave?.quarantineRemainingMs || 0)
             ))
-      : loopPlan.delayMs;
-    const nextRunAtMs = now() + effectiveDelayMs;
+      : plannedDelayMs;
+    const nextRunAtMs = effectiveDelayMs === plannedDelayMs
+      ? plannedNextRunAtMs
+      : schedulingNowMs + effectiveDelayMs;
     const nextRunAt = new Date(nextRunAtMs).toISOString();
     const waitDetail = {
-      ...loopPlan,
+      ...scheduledLoopPlan,
       delayMs: effectiveDelayMs,
       nextRunAt,
       supervisorErrors: supervisorErrors.slice(-5)
@@ -1322,10 +1370,11 @@ async function runBrowserlessRunner(config, deps = {}) {
           reason: loopPlan.reason,
           delayMs: effectiveDelayMs,
           nextRunAt,
-          explicitDelay: Boolean(loopPlan.explicitDelay),
+          explicitDelay: Boolean(scheduledLoopPlan.explicitDelay),
+          dailyFirstLoginDeadlineApplied,
           previousRunId: loopPlan.previousRunId || ''
         },
-        gameplayDeadline: gameplayDeadlineFromLoopPlan(loopPlan, nextRunAt, loopPlan.previousRunId),
+        gameplayDeadline: gameplayDeadlineFromLoopPlan(scheduledLoopPlan, nextRunAt, loopPlan.previousRunId),
         confirmedLeave: confirmedLeave
           ? {
               confirmedAt: confirmedLeave.confirmedAt || '',
@@ -2212,9 +2261,7 @@ async function runBrowserlessRunner(config, deps = {}) {
       const stateBeforeCanary = readBrowserlessStateFile(stateFile);
       liveState = stateBeforeCanary;
       activeRunKillConfirmations = [];
-      const hasConfirmedLeaveRecovery = Boolean(activeConfirmedLeaveState(stateBeforeCanary, now()));
-      const bypassPreLoginSafetyReason = config.snapshotEdgeEnabled !== true
-        && !hasConfirmedLeaveRecovery && isFirstBrowserlessLoginOfDay(stateBeforeCanary, now())
+      const bypassPreLoginSafetyReason = isFirstBrowserlessLoginOfDay(stateBeforeCanary, now())
         ? 'daily-first-login-invulnerability'
         : '';
       const precheckedSnapshotSafety = bypassPreLoginSafetyReason ? null : preparedSnapshotSafety;

@@ -20990,13 +20990,13 @@ async function runSelfTest() {
             today: { day: '2026-07-14', sessionCount: 7 },
             currentSession: { online: false }
           }
-        }, { dailyFirstLoginDelayMs: 120000 }, Date.parse('2026-07-14T16:01:10.000Z'));
+        }, {}, Date.parse('2026-07-14T16:01:10.000Z'));
         const ready = browserlessDailyFirstLoginDelayPlan({
           stats: {
             today: { day: '2026-07-14', sessionCount: 7 },
             currentSession: { online: false }
           }
-        }, { dailyFirstLoginDelayMs: 120000 }, Date.parse('2026-07-14T16:02:00.000Z'));
+        }, {}, Date.parse('2026-07-14T16:02:00.000Z'));
         const alreadyLogged = browserlessDailyFirstLoginDelayPlan({
           stats: {
             today: { day: '2026-07-15', sessionCount: 1 },
@@ -21013,12 +21013,14 @@ async function runSelfTest() {
           before.reason,
           before.delayMs,
           before.notBeforeAt,
+          before.explicitDelay,
+          parseBrowserlessRunnerArgs([], {}).dailyFirstLoginDelayMs,
           ready === null,
           alreadyLogged === null,
           alreadyOnline === null
         ].join('|');
       })(),
-      want: 'daily-first-login-delay|50000|2026-07-14T16:02:00.000Z|true|true|true'
+      want: 'daily-first-login-delay|50000|2026-07-14T16:02:00.000Z|true|120000|true|true|true'
     },
     {
       name: 'browserless runner resumes persisted reconnect wait after restart',
@@ -21318,6 +21320,8 @@ async function runSelfTest() {
           migratedPlan.explicitCooldown,
           migratedPlan.deadlineType,
           migratedPlan.gameplayDeadline.reason,
+          migratedPlan.nextRunAt,
+          migratedPlan.dailyFirstLoginDeadlineApplied,
           canaryOptions.bypassPreLoginSafetyReason,
           isFirstBrowserlessLoginOfDay({
             stats: {
@@ -21327,7 +21331,7 @@ async function runSelfTest() {
           }, Date.parse('2026-07-12T16:00:10.000Z'))
         ].join('|');
       }),
-      want: 'explicit-stop|0|60000|stamina-exhausted-leave|true|stamina-reset|stamina-exhausted-leave||true'
+      want: 'explicit-stop|0|170000|stamina-exhausted-leave|true|stamina-reset|stamina-exhausted-leave|2026-07-12T16:02:00.000Z|true|daily-first-login-invulnerability|true'
     },
     {
       name: 'browserless restart drain interrupts an in-process explicit stamina wait',
