@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.17.6';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.18.1';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function panelSessionFlagsCore(status = {}) {
@@ -106,23 +106,25 @@ function renderBrowserlessWebPanel() {
     .layout{display:grid;grid-template-columns:minmax(240px,1fr) minmax(0,2fr);gap:10px;align-items:start}
     .stack{display:flex;flex-direction:column;gap:10px;min-width:0}
     .stats-grid,.player-insights-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;align-items:start}
+    .battle-panel{border-color:rgba(251,113,133,.38);background:linear-gradient(135deg,rgba(127,29,29,.26),rgba(69,10,10,.14)),var(--panel)}
     .battle-panel[hidden]{display:none}
-    .battle-meta{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:10px;padding:7px 9px;border:1px solid var(--line);border-radius:7px;background:var(--panel2);text-align:center;font-variant-numeric:tabular-nums}
-    .battle-meta span{min-width:0;color:var(--muted)}
-    .battle-meta strong{display:block;margin-top:2px;color:var(--text);font-size:14px;font-weight:700;overflow-wrap:anywhere}
-    .battle-fighters{display:grid;grid-template-columns:minmax(0,1fr) minmax(54px,.18fr) minmax(0,1fr);gap:10px;align-items:stretch}
-    .fighter{min-width:0;border:1px solid var(--line);border-radius:8px;background:var(--panel2);padding:9px}
-    .fighter-head{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:7px}
+    .battle-panel .panel-title{color:#fda4af}
+    .battle-meta{display:flex;align-items:center;gap:14px;margin:-1px 0 7px;color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden}
+    .battle-meta span{display:inline-flex;align-items:baseline;gap:5px;min-width:0}
+    .battle-meta strong{min-width:0;color:#fecdd3;font-size:13px;font-weight:700;overflow:hidden;text-overflow:ellipsis}
+    .battle-fighters{display:grid;grid-template-columns:minmax(0,1fr) 34px minmax(0,1fr);gap:8px;align-items:start}
+    .fighter{min-width:0;padding:0}
+    .fighter-head{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:4px}
     .fighter-side{color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.04em}
-    .fighter-name{min-width:0;font-size:15px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .fighter-name{min-width:0;font-size:14px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     .fighter.enemy .fighter-head{flex-direction:row-reverse}
     .fighter.enemy dl{direction:rtl}
     .fighter.enemy dt,.fighter.enemy dd{direction:ltr}
     .fighter.enemy dt{text-align:right}.fighter.enemy dd{text-align:left}
-    .fighter-vs{display:flex;align-items:center;justify-content:center;color:var(--red);font-size:16px;font-weight:800;letter-spacing:.08em}
-    .hp-label{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:4px;color:var(--muted);font-variant-numeric:tabular-nums}
+    .fighter-vs{display:flex;align-items:center;justify-content:center;min-height:24px;color:var(--red);font-size:13px;font-weight:800;letter-spacing:.06em}
+    .hp-label{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:2px;color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums}
     .fighter.enemy .hp-label{flex-direction:row-reverse}
-    .hp-track{height:9px;margin-bottom:8px;overflow:hidden;border-radius:999px;background:#2a3036;box-shadow:inset 0 0 0 1px rgba(255,255,255,.05)}
+    .hp-track{height:7px;margin-bottom:5px;overflow:hidden;border-radius:999px;background:#2a3036;box-shadow:inset 0 0 0 1px rgba(255,255,255,.05)}
     .hp-fill{height:100%;width:0;border-radius:inherit;background:var(--green);transition:width .25s ease,background-color .25s ease}
     .fighter.enemy .hp-fill{margin-left:auto}
     .hp-fill.warn{background:var(--amber)}.hp-fill.bad{background:var(--red)}.hp-fill.ok{background:var(--green)}
@@ -197,7 +199,7 @@ function renderBrowserlessWebPanel() {
     .distance-badge{font-variant-numeric:tabular-nums}
     .range-attack{color:var(--green)}
     .range-view{color:var(--blue)}
-    .target-current,.target-route-next{position:relative;background:var(--target-bg);background-clip:padding-box;padding:3px 0 3px 7px;margin:0}
+    .target-current,.target-route-next{position:relative;background:var(--target-bg);background-clip:padding-box;padding:3px 0;margin:0}
     .target-current::before,.target-route-next::before{content:"";position:absolute;right:100%;top:-1px;bottom:-1px;width:3px;background:var(--target-color);pointer-events:none}
     .target-current+.target-current::before,.target-current+.target-route-next::before,.target-route-next+.target-current::before,.target-route-next+.target-route-next::before{top:0}
     .target-coin{--target-color:rgba(251,191,36,.82);--target-bg:rgba(251,191,36,.13)}
@@ -213,7 +215,7 @@ function renderBrowserlessWebPanel() {
     @media (max-width:760px){.layout{grid-template-columns:1fr}.stats-grid{grid-template-columns:1fr}}
     @media (max-width:600px){.player-insights-grid{grid-template-columns:1fr}}
     @media (max-width:600px){.nearby-combined,.player-memory-grid{grid-template-columns:1fr}.nearby-players-pane,.player-memory-pane+.player-memory-pane{border-left:0;border-top:1px solid var(--line);padding-left:0;padding-top:10px}}
-    @media (max-width:520px){.player-row{grid-template-columns:minmax(112px,2fr) minmax(34px,.5fr) minmax(38px,.55fr) minmax(36px,.5fr) minmax(44px,.6fr);gap:4px}.battle-fighters{grid-template-columns:minmax(0,1fr) 32px minmax(0,1fr);gap:5px}.fighter{padding:7px}.fighter-head{display:block}.fighter.enemy .fighter-head{display:block;text-align:right}.battle-meta{gap:4px;padding:6px 4px}.battle-meta strong{font-size:12px}}
+    @media (max-width:520px){.player-row{grid-template-columns:minmax(112px,2fr) minmax(34px,.5fr) minmax(38px,.55fr) minmax(36px,.5fr) minmax(44px,.6fr);gap:4px}.battle-fighters{grid-template-columns:minmax(0,1fr) 26px minmax(0,1fr);gap:5px}.fighter-head{display:block}.fighter.enemy .fighter-head{display:block;text-align:right}.battle-meta{gap:8px;font-size:11px}.battle-meta strong{font-size:11px}}
     @media (max-width:520px){main{padding:10px}header{align-items:flex-start;flex-direction:column}}
   </style>
 </head>
@@ -1588,16 +1590,12 @@ function renderBrowserlessWebPanel() {
       syncHpMeter('battleSelf', battle.self);
       syncHpMeter('battleTarget', battle.target);
       rows('battleSelfStats', [
-        ['体力5s', battleStaminaPair(battle.self.stamina5s, battle.self.stamina5sLimit, 10)],
-        ['体力1h', staminaPair(battle.self.stamina1h, 3000)],
-        ['体力1d', staminaPair(battle.self.stamina1d, 20000)],
+        ['体力', '5s ' + battleStaminaPair(battle.self.stamina5s, battle.self.stamina5sLimit, 10) + ' / 1h ' + staminaPair(battle.self.stamina1h, 3000) + ' / 1d ' + staminaPair(battle.self.stamina1d, 20000)],
         ['Drop', integer(battle.self.drop), classAttrs('coin')],
         ['状态', fighterStateText(battle.self)]
       ]);
       rows('battleTargetStats', [
-        ['体力5s', battleStaminaPair(battle.target.stamina5s, battle.target.stamina5sLimit, 10)],
-        ['体力1h', staminaPair(battle.target.stamina1h, 3000)],
-        ['体力1d', staminaPair(battle.target.stamina1d, 20000)],
+        ['体力', '5s ' + battleStaminaPair(battle.target.stamina5s, battle.target.stamina5sLimit, 10) + ' / 1h ' + staminaPair(battle.target.stamina1h, 3000) + ' / 1d ' + staminaPair(battle.target.stamina1d, 20000)],
         ['Drop', integer(battle.target.drop), classAttrs('coin')],
         ['状态', fighterStateText(battle.target)]
       ]);

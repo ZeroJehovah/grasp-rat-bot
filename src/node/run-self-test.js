@@ -24508,8 +24508,13 @@ async function runSelfTest() {
           /class="battle-fighters"/.test(panelText),
           /id="battleSelfHpFill"/.test(panelText),
           /id="battleTargetHpFill"/.test(panelText),
+          /\.battle-panel\{border-color:rgba\(251,113,133,\.38\);background:linear-gradient/.test(panelText),
+          /\.battle-meta\{display:flex;[^}]*white-space:nowrap;overflow:hidden/.test(panelText),
+          /\.fighter\{min-width:0;padding:0\}/.test(panelText),
+          /\.target-current,\.target-route-next\{[^}]*padding:3px 0;margin:0\}/.test(panelText),
           /function updateBattlePanel/.test(panelScript),
           /function updateBattleDuration/.test(panelScript),
+          panelScript.includes("['体力', '5s ' + battleStaminaPair"),
           panelScript.includes("durationNode.dataset.battleStartedAt = battle.startedAt || ''"),
           panelScript.includes('const panelSessionFlags = '),
           panelScript.includes('const { online, realtimeOnline } = panelSessionFlags(status);'),
@@ -24539,7 +24544,7 @@ async function runSelfTest() {
           panelText.indexOf('id="battlePanel"') < panelText.indexOf('class="stats-grid"')
         ].join('|');
       })(),
-      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
+      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless confirmed leave evidence preserves server hp after trigger',
