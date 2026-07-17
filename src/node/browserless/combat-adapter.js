@@ -414,6 +414,18 @@ function entityDropValue(entity) {
   return Number(entity?.drop ?? entity?.Drop ?? entity?.reward ?? entity?.coin_reward ?? entity?.death_reward_preview ?? entity?.death_drop_coins ?? 0) || 0;
 }
 
+function entityDropKnown(entity) {
+  if (typeof entity?.dropKnown === 'boolean') return entity.dropKnown;
+  return [
+    entity?.drop,
+    entity?.Drop,
+    entity?.reward,
+    entity?.coin_reward,
+    entity?.death_reward_preview,
+    entity?.death_drop_coins
+  ].some(value => value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value)));
+}
+
 function targetWhitelistFromOptions(options = {}) {
   if (options.targetWhitelist && typeof options.targetWhitelist === 'object') return options.targetWhitelist;
   const nameSet = options.targetWhitelistNameSet instanceof Set
@@ -1615,6 +1627,7 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
     damageFromStart,
     displayHp: numberOrNull(target.hp),
     drop: entityDropValue(target),
+    dropKnown: entityDropKnown(target),
     distance,
     active: Boolean(target.active),
     moving: Boolean(target.moving),

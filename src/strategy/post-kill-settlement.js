@@ -31,6 +31,22 @@ function finiteNumber(value) {
   return Number.isFinite(number) ? number : null;
 }
 
+function knownTargetDrop(target) {
+  if (!target || target.dropKnown !== true) return { known: false, value: null };
+  const value = finiteNumber(
+    target.drop
+      ?? target.Drop
+      ?? target.reward
+      ?? target.coin_reward
+      ?? target.death_reward_preview
+      ?? target.death_drop_coins
+  );
+  return {
+    known: value !== null,
+    value: value === null ? null : Math.max(0, value)
+  };
+}
+
 function timestampMs(value) {
   const number = finiteNumber(value);
   if (number !== null && number > 0) return number;
@@ -84,6 +100,7 @@ function settlementSummary(state, nowMs = Date.now()) {
     targetId: state.targetId || '',
     targetName: state.targetName || '',
     targetDrop: Number.isFinite(Number(state.targetDrop)) ? Number(state.targetDrop) : null,
+    targetDropKnown: state.targetDropKnown === true,
     startedAt: Number(state.startedAt || 0),
     ageMs: Math.max(0, Number(nowMs) - Number(state.startedAt || nowMs)),
     confirmedAt: Number(state.confirmedAt || 0),
@@ -131,12 +148,18 @@ function updatePostKillSettlementCore(previous, context = {}, options = {}) {
       && lastShotAt > 0
       && nowMs - lastShotAt <= recentShotMs) {
       const matchingPriorTarget = targetId(priorTarget) === candidateId ? priorTarget : null;
+      const visibleDrop = knownTargetDrop(visible);
+      const priorDrop = knownTargetDrop(matchingPriorTarget);
+      const selectedDrop = visibleDrop.known ? visibleDrop : priorDrop;
       state = {
         active: true,
         phase: 'unconfirmed-tail',
         targetId: candidateId,
         targetName: String(matchingPriorTarget?.name || metrics?.targetName || ''),
-        targetDrop: Number.isFinite(Number(matchingPriorTarget?.drop)) ? Number(matchingPriorTarget.drop) : null,
+        targetDrop: selectedDrop.known
+          ? selectedDrop.value
+          : (Number.isFinite(Number(matchingPriorTarget?.drop)) ? Number(matchingPriorTarget.drop) : null),
+        targetDropKnown: selectedDrop.known,
         startedAt: nowMs,
         confirmedAt: 0,
         expiresAt: nowMs + unconfirmedMs,
@@ -168,8 +191,16 @@ function updatePostKillSettlementCore(previous, context = {}, options = {}) {
 
   const id = valueId(state.targetId);
   const visible = matchingVisibleTarget(context, id);
+  const visibleDrop = knownTargetDrop(visible);
+  if (visibleDrop.known) {
+    state.targetDrop = visibleDrop.value;
+    state.targetDropKnown = true;
+  }
   if (visible && visible.alive !== false && Number(visible.hp ?? 1) > 0) {
     return { state: null, cleared: true, reason: 'target-reappeared-alive' };
+  }
+  if (state.targetDropKnown === true && Number(state.targetDrop) <= 0) {
+    return { state: null, cleared: true, reason: 'non-positive-target-drop' };
   }
 
   const evidence = matchingKillEvidence(context, state);

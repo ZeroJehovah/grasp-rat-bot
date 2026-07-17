@@ -10061,6 +10061,46 @@ async function runSelfTest() {
       want: 'post-attack-drop-wait|post-kill-settlement-wait|unconfirmed-tail|9667'
     },
     {
+      name: 'browserless realtime skips known zero-drop post-kill settlement wait',
+      got: (() => {
+        const stateful = {
+          postKillSettlement: {
+            active: true,
+            phase: 'drop-pending',
+            targetId: '30672',
+            targetName: '颓废咸鱼1号',
+            targetDrop: 0,
+            targetDropKnown: true,
+            startedAt: 1200,
+            confirmedAt: 1200,
+            expiresAt: 6200,
+            matchedCoinKey: '',
+            matchedCoinAmount: null,
+            lastSnapshotTick: 735229,
+            reason: 'self-kill-confirmed'
+          }
+        };
+        const decision = buildBrowserlessRealtimeControlDecision({
+          userId: 7,
+          realtime: {
+            tick: 735230,
+            frameAgeMs: 0,
+            self: { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+            entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 }],
+            bullets: []
+          },
+          fallback: { tick: 735230, frameAgeMs: 0, coinDrops: [], messages: [] }
+        }, stateful, {
+          nowMs: 1600,
+          userId: 7,
+          controlMode: 'profit-live',
+          combatEnabled: true
+        });
+        return [decision.action?.kind || 'none', decision.action?.reason || 'none', stateful.postKillSettlement === null].join('|');
+      })(),
+      want: 'none|none|true'
+    },
+    {
       name: 'browserless restart readiness preserves commitments and admits idle work',
       got: (() => {
         let nowMs = 1000;

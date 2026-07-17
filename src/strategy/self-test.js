@@ -2965,6 +2965,23 @@ function runStrategyModuleSelfTests() {
       && postKillPicked.reason === 'matched-player-drop-disappeared'
   });
 
+  const postKillZeroDrop = updatePostKillSettlementCore(null, {
+    nowMs: 2600,
+    previousCombatTarget: { id: 30672, name: '颓废咸鱼1号', drop: 0, dropKnown: true },
+    currentCombatTarget: null,
+    combatMetrics: { targetId: '30672', targetName: '颓废咸鱼1号', acceptedShots: 1, actualLastShotAt: 2500 },
+    visibleTargets: [],
+    selfKillEvidence: [{ targetUserId: 30672 }],
+    playerDropCoins: [],
+    snapshotTick: 1200
+  });
+  results.push({
+    name: 'post-kill-settlement-skips-known-zero-drop-target',
+    passed: postKillZeroDrop.state === null
+      && postKillZeroDrop.cleared === true
+      && postKillZeroDrop.reason === 'non-positive-target-drop'
+  });
+
   const postKillCrossTarget = updatePostKillSettlementCore(null, {
     nowMs: 1784220520546,
     previousCombatTarget: { userId: 36176, name: 'Victor8886', drop: 91, firstSeenTick: 55700 },
