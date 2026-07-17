@@ -9203,22 +9203,22 @@ async function runSelfTest() {
       want: 'coin|profit|foot-coin-priority|false|foot-coin|0|false'
     },
     {
-      name: 'browserless decision input filters ordinary profit outside center activity radius',
+      name: 'browserless decision input admits visible high-value coin outside center activity radius',
       got: (() => {
         const state = {
           userId: 7,
           realtime: {
             tick: 58,
             frameAgeMs: 100,
-            self: { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+            self: { entity_id: 1, user_id: 7, name: 'self', x: 70000, y: 0, hp: 100, max_hp: 100 },
             entities: [
-              { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
-              fullStamina5s({ entity_id: 2, user_id: 8, name: 'inside-afk', x: 9000, y: 0, hp: 80, current_join_mode: 'Passive', drop: 12 }),
-              fullStamina5s({ entity_id: 3, user_id: 9, name: 'outside-afk', x: 101000, y: 0, hp: 80, current_join_mode: 'Passive', drop: 99 })
+              { entity_id: 1, user_id: 7, name: 'self', x: 70000, y: 0, hp: 100, max_hp: 100 },
+              fullStamina5s({ entity_id: 2, user_id: 8, name: 'inside-afk', x: 90000, y: 0, hp: 80, current_join_mode: 'Passive', drop: 12 }),
+              fullStamina5s({ entity_id: 3, user_id: 9, name: 'outside-afk', x: 120000, y: 0, hp: 80, current_join_mode: 'Passive', drop: 99 })
             ],
             bullets: [],
             coinDrops: [
-              { drop_id: 1, amount: 5, x: 8000, y: 0 },
+              { drop_id: 1, amount: 5, x: 80000, y: 0 },
               { drop_id: 2, amount: 50, x: 101000, y: 0 }
             ]
           },
@@ -9234,11 +9234,12 @@ async function runSelfTest() {
           input.profitCoins.map(coin => coin.drop_id).join(','),
           input.centerActivity.filteredAfkTargets,
           input.centerActivity.filteredRealtimeCoins,
+          input.centerActivity.edgeAdmittedRealtimeCoins[0]?.centerActivityEdge?.reason,
           input.dataGaps.includes('center-afk-targets-filtered'),
-          input.dataGaps.includes('center-realtime-coins-filtered')
+          input.dataGaps.includes('center-visible-coin-edge-admitted')
         ].join('|');
       })(),
-      want: '8|1|1|1|true|true'
+      want: '8|1,2|1|0|visible-high-value-coin-outside-center|true|true'
     },
     {
       name: 'browserless realtime AFK edge belt admits July 15 Eason with return cost',
@@ -9339,7 +9340,7 @@ async function runSelfTest() {
               fullStamina5s({ entity_id: 2, user_id: 8, name: 'edge-afk', x: targetX, y: 0, hp: 80, current_join_mode: 'Passive', drop: 20 })
             ],
             bullets: [],
-            coinDrops: [{ drop_id: 9, amount: 50, x: 110000, y: 0 }]
+            coinDrops: [{ drop_id: 9, amount: 5, x: 110000, y: 0 }]
           },
           fallback: { tick: 60, frameAgeMs: 100, entities: [], coinDrops: [], messages: [] }
         }, {
@@ -9368,7 +9369,7 @@ async function runSelfTest() {
       want: '8|1|14500|0|1|0|1|outside-afk-edge-radius|0|1|self-outside-center'
     },
     {
-      name: 'browserless decision returns to center before ordinary profit outside center radius',
+      name: 'browserless decision collects visible high-value coin outside center radius',
       got: (() => {
         const decision = buildBrowserlessDecision({
           userId: 7,
@@ -9393,14 +9394,58 @@ async function runSelfTest() {
           decision.kind,
           decision.band,
           decision.reason,
-          decision.action.dx,
-          decision.action.dy,
-          decision.action.centerActivity.distanceOutsideCm > 0,
+          decision.action.target?.id,
+          decision.action.target?.amount,
+          decision.action.target?.centerActivityEdge?.reason,
           decision.input.dataGaps.includes('center-afk-targets-filtered'),
           decision.input.dataGaps.includes('center-realtime-coins-filtered')
         ].join('|');
       })(),
-      want: 'patrol|recover|return-to-center-activity-radius|-1|-1|true|true|true'
+      want: 'coin|profit|foot-coin-priority|1|99|visible-high-value-coin-outside-center|true|false'
+    },
+    {
+      name: 'browserless decision waits outside center then leaves after three profitless minutes',
+      got: (() => {
+        const adapter = createBrowserlessDecisionAdapter({
+          controlMode: 'profit-live',
+          browserlessCenterActivityRadiusCm: 100000,
+          browserlessOutsideCenterIdleExitMs: 180000,
+          finalActionArbitrationHoldMs: 0
+        });
+        const state = tick => ({
+          userId: 7,
+          realtime: {
+            tick,
+            frameAgeMs: 100,
+            self: { entity_id: 1, user_id: 7, name: 'self', x: 120000, y: 0, hp: 100, max_hp: 100 },
+            entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 120000, y: 0, hp: 100, max_hp: 100 }],
+            bullets: [],
+            coinDrops: []
+          },
+          fallback: { tick, frameAgeMs: 100, entities: [], coinDrops: [], messages: [] }
+        });
+        const started = adapter.decide(state(60), { nowMs: 1000 });
+        const beforeTimeout = adapter.decide(state(61), { nowMs: 180999 });
+        const timedOut = adapter.decide(state(62), { nowMs: 181000 });
+        const safety = evaluateBrowserlessSafety(state(62), { decision: timedOut, nowMs: 181000 });
+        return [
+          started.reason,
+          started.action.stopMotion,
+          beforeTimeout.reason,
+          beforeTimeout.input.centerActivity.outsideIdle.ageMs,
+          timedOut.kind,
+          timedOut.band,
+          timedOut.reason,
+          timedOut.action.shouldLeave,
+          timedOut.action.reloginDelayMs,
+          timedOut.input.centerActivity.outsideIdle.ageMs,
+          adapter.getState().outsideCenterIdle?.startedAt,
+          safety.reason,
+          safety.shouldLeave,
+          safety.detail.decision.reloginDelayMs
+        ].join('|');
+      })(),
+      want: 'outside-center-profit-wait|true|outside-center-profit-wait|179999|leave|safety|outside-center-idle-timeout-leave|true|30000|180000|1000|outside-center-idle-timeout-leave|true|30000'
     },
     {
       name: 'browserless profit pursuit suppression stops long outside-center active chase',
@@ -9454,7 +9499,7 @@ async function runSelfTest() {
           stateful.profitPursuitSuppressions?.['8']?.reason || ''
         ].join('|');
       })(),
-      want: 'patrol|return-to-center-activity-radius|false|profit-pursuit-target-outside-center|8|14500|114500|true|profit-pursuit-target-outside-center'
+      want: 'wait|outside-center-profit-wait|false|profit-pursuit-target-outside-center|8|14500|114500|true|profit-pursuit-target-outside-center'
     },
     {
       name: 'browserless profit pursuit keeps finishing within one attack range beyond center',
@@ -10575,7 +10620,7 @@ async function runSelfTest() {
       want: 'wait|profit|single-coin-bait-hold|bait|hold|1|foot-coin-priority|foot-coin-priority|foot-coin-priority|single-coin-bait-hold|snapshot|1|foot-coin-priority|native-two|realtime|foot-coin-priority|feature-disabled|true|foot-coin-priority|insufficient-burn-window|true|foot-coin-priority|true|0'
     },
     {
-      name: 'browserless single coin bait ignores filtered display-only route legs',
+      name: 'browserless single coin bait ignores threshold-ineligible display-only route legs',
       got: (() => {
         const nowMs = Date.parse('2026-07-12T00:00:00.000Z');
         const store = createBrowserlessStateStore({ userId: 7 });
@@ -10603,7 +10648,7 @@ async function runSelfTest() {
           coin_drops: [
             { drop_id: 'bait', amount: 1, x: 650, y: 0 },
             { drop_id: 'route-b', amount: 1, x: 11500, y: 0 },
-            { drop_id: 'route-c', amount: 1, x: 20000, y: 0 }
+            { drop_id: 'route-c', amount: 1, x: 23000, y: 0 }
           ]
         }, { receivedAtMs: nowMs + 10 });
         const decision = buildBrowserlessDecision(store.getState(nowMs + 20), {}, {
@@ -10626,6 +10671,68 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'single-coin-bait-hold|bait|hold|best-opportunity-coin-route|3|1|2|snapshot-fallback'
+    },
+    {
+      name: 'browserless single coin bait yields when residual three-coin route still meets dynamic threshold',
+      got: (() => {
+        const nowMs = Date.parse('2026-07-12T00:00:00.000Z');
+        const stateFor = () => ({
+          userId: 7,
+          realtime: {
+            tick: 58,
+            frameAgeMs: 100,
+            self: {
+              entity_id: 1,
+              user_id: 7,
+              name: 'self',
+              x: -2431,
+              y: 54988,
+              hp: 100,
+              max_hp: 100,
+              stamina_1h_remaining_milli: 3000000,
+              stamina_1d_remaining_milli: 20000000
+            },
+            entities: [{
+              entity_id: 1,
+              user_id: 7,
+              name: 'self',
+              x: -2431,
+              y: 54988,
+              hp: 100,
+              max_hp: 100,
+              stamina_1h_remaining_milli: 3000000,
+              stamina_1d_remaining_milli: 20000000
+            }],
+            bullets: [],
+            coinDrops: [
+              { drop_id: '3326', amount: 1, x: -2555, y: 54103 },
+              { drop_id: '3299', amount: 1, x: -6214, y: 44450 },
+              { drop_id: '3215', amount: 1, x: -1370, y: 41729 },
+              { drop_id: '3306', amount: 1, x: -1993, y: 37096 }
+            ]
+          },
+          fallback: { tick: 58, frameAgeMs: 100, entities: [], coinDrops: [], messages: [] }
+        });
+        const options = {
+          nowMs,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          dynamicProfitThresholdEnabled: true,
+          singleCoinBaitHoldRadiusCm: 1000,
+          finalActionArbitrationHoldMs: 0
+        };
+        const eligible = buildBrowserlessDecision(stateFor(), {}, options);
+        return [
+          eligible.reason,
+          eligible.action.target?.id,
+          eligible.profit.singleCoinBait === null,
+          eligible.profit.singleCoinBaitContinuation?.reward,
+          eligible.profit.singleCoinBaitContinuation?.staminaCost,
+          eligible.profit.singleCoinBaitContinuation?.profitThresholdEligible,
+          eligible.profit.singleCoinBaitContinuation?.suppressionReason
+        ].join('|');
+      })(),
+      want: 'best-opportunity-coin-route|3326|true|3|20554|true|eligible-residual-route'
     },
     {
       name: 'browserless single coin bait releases itself before newly visible ordinary profit',
@@ -11524,18 +11631,16 @@ async function runSelfTest() {
         store.ingestFrame({
           type: 'pos',
           tick: 61,
-          entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 100, y: 100, hp: 100 }],
+          entities: [{ entity_id: 1, user_id: 7, name: 'self', x: -6706, y: 109023, hp: 100 }],
           bullets: []
         }, { receivedAtMs: 1000 });
         store.ingestFrame({
           type: 'snapshot',
           tick: 62,
-          entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 100, y: 100, hp: 100, coins: 1000 }],
+          entities: [{ entity_id: 1, user_id: 7, name: 'self', x: -6706, y: 109023, hp: 100, coins: 1000 }],
           bullets: [],
           coin_drops: [
-            { drop_id: 'system-coin', source_user_id: 0, system_spawned: true, amount: 99, x: 120, y: 100, created_tick: 62 },
-            { drop_id: 'other-player-drop', source_user_id: 9, system_spawned: false, amount: 50, x: 130, y: 100, created_tick: 62 },
-            { drop_id: 'self-kill-drop', source_user_id: 8, system_spawned: false, amount: 6, x: 180, y: 100, created_tick: 62 }
+            { drop_id: 'self-kill-drop', source_user_id: 8, system_spawned: false, amount: 6, x: -6622, y: 109549, created_tick: 62 }
           ],
           messages: [{ kind: 'kill', user_id: 7, target_user_id: 8, tick: 62, text: 'self killed afk' }]
         }, { receivedAtMs: 1100 });
@@ -11553,11 +11658,14 @@ async function runSelfTest() {
           decision.input.fallback.selfKilledPlayerDropCount,
           decision.input.selfKillEvidence[0]?.targetUserId,
           decision.input.selfKillEvidence[0]?.tick,
+          decision.action.target.centerActivityEdge?.reason,
+          decision.input.centerActivity.edgeAdmittedSnapshotCoins[0]?.centerActivityEdge?.reason,
           decision.input.fallback.snapshotFallbackBlockedReasons.join(','),
-          decision.input.dataGaps.includes('self-killed-player-drop-visible')
+          decision.input.dataGaps.includes('self-killed-player-drop-visible'),
+          decision.input.dataGaps.includes('center-visible-coin-edge-admitted')
         ].join('|');
       })(),
-      want: 'coin|coin|coin|self-kill-drop|6|snapshot-player-drop|1|8|62||true'
+      want: 'coin|coin|coin|self-kill-drop|6|snapshot-player-drop|1|8|62|self-kill-drop-outside-center|self-kill-drop-outside-center||true|true'
     },
     {
       name: 'browserless nearby panel uses all visible players and profit coin route nodes',
@@ -19329,6 +19437,8 @@ async function runSelfTest() {
           '90',
           '--center-activity-radius-cm',
           '99000',
+          '--outside-center-idle-exit-ms',
+          '175000',
           '--profit-pursuit-max-ms',
           '45000',
           '--profit-pursuit-suppress-ms',
@@ -19390,6 +19500,8 @@ async function runSelfTest() {
           publicConfig(config).movementSettlementStallMs,
           publicConfig(config).movementSettlementMinDistanceCm,
           config.browserlessCenterActivityRadiusCm,
+          config.browserlessOutsideCenterIdleExitMs,
+          publicConfig(config).browserlessOutsideCenterIdleExitMs,
           config.browserlessProfitPursuitMaxMs,
           config.browserlessProfitPursuitSuppressMs,
           config.browserlessDangerousTargetCooldownMs,
@@ -19409,7 +19521,7 @@ async function runSelfTest() {
           config.logDir.endsWith('/tmp/grasp-rat-browserless-logs')
         ].join('|');
       })(),
-      want: 'true|false|false|combat-live|19999|cli-token|true|220|42|env-token|250|90000|90000|4|15000|3500|2250|4500|150|300|800|3|4500|90|4500|90|99000|45000|120000|123000|30000|7|true|true|4096|https://example.test/target-whitelist.json|true|1234|12|123|456|90|true|true'
+      want: 'true|false|false|combat-live|19999|cli-token|true|220|42|env-token|250|90000|90000|4|15000|3500|2250|4500|150|300|800|3|4500|90|4500|90|99000|175000|175000|45000|120000|123000|30000|7|true|true|4096|https://example.test/target-whitelist.json|true|1234|12|123|456|90|true|true'
     },
     {
       name: 'browserless deployment files define service env and install surface',
@@ -19437,6 +19549,7 @@ async function runSelfTest() {
           env.includes('GRASP_RAT_BROWSERLESS_LEAVE_HEDGE_MS=1000'),
           env.includes('GRASP_RAT_BROWSERLESS_STALE_SELF_CONFIRM_MS=2000'),
           env.includes('GRASP_RAT_BROWSERLESS_CENTER_ACTIVITY_RADIUS_CM=100000'),
+          env.includes('GRASP_RAT_BROWSERLESS_OUTSIDE_CENTER_IDLE_EXIT_MS=180000'),
           env.includes('GRASP_RAT_BROWSERLESS_PROFIT_PURSUIT_MAX_MS=60000'),
           env.includes('GRASP_RAT_BROWSERLESS_PROFIT_PURSUIT_SUPPRESS_MS=60000'),
           env.includes('GRASP_RAT_BROWSERLESS_DANGEROUS_TARGET_COOLDOWN_MS=900000'),
@@ -19451,7 +19564,7 @@ async function runSelfTest() {
           installer.includes('systemctl daemon-reload')
         ].join('|');
       })(),
-      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
+      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless deployment audit checks installed service evidence',
@@ -19794,7 +19907,8 @@ async function runSelfTest() {
         const defaultConfig = parseBrowserlessRunnerArgs([], {});
         const envConfig = parseBrowserlessRunnerArgs([], {
           GRASP_RAT_BROWSERLESS_SINGLE_COIN_BAIT_ENABLED: 'false',
-          GRASP_RAT_BROWSERLESS_SINGLE_COIN_BAIT_HOLD_RADIUS_CM: '750'
+          GRASP_RAT_BROWSERLESS_SINGLE_COIN_BAIT_HOLD_RADIUS_CM: '750',
+          GRASP_RAT_BROWSERLESS_OUTSIDE_CENTER_IDLE_EXIT_MS: '175000'
         });
         const exposed = publicConfig(envConfig);
         return [
@@ -19803,10 +19917,13 @@ async function runSelfTest() {
           envConfig.singleCoinBaitEnabled,
           envConfig.singleCoinBaitHoldRadiusCm,
           exposed.singleCoinBaitEnabled,
-          exposed.singleCoinBaitHoldRadiusCm
+          exposed.singleCoinBaitHoldRadiusCm,
+          defaultConfig.browserlessOutsideCenterIdleExitMs,
+          envConfig.browserlessOutsideCenterIdleExitMs,
+          exposed.browserlessOutsideCenterIdleExitMs
         ].join('|');
       })(),
-      want: 'true|1000|false|750|false|750'
+      want: 'true|1000|false|750|false|750|180000|175000|175000'
     },
     {
       name: 'browserless runner config maps canary profiles without enabling combat',
@@ -24048,10 +24165,12 @@ async function runSelfTest() {
           panelText.includes("'combat-action-settlement-stalled': '战斗中移动指令失效，为避免原地承伤，主动退出'"),
           panelText.includes("'recovery-low-hp-active-threat-leave': '恢复时活动玩家进入攻击射程外的血量安全预警区，主动退出'"),
           panelText.includes("'action-settlement-stalled': '非战斗移动指令未产生位置变化，正在重连'"),
+          panelText.includes("'outside-center-profit-wait': '超出中心区，原地等待可见收益'"),
+          panelText.includes("'outside-center-idle-timeout-leave': '超出中心区等待 3 分钟仍无收益，退出后重连'"),
           panelText.includes(BROWSERLESS_WEB_PANEL_VERSION)
         ].join('|');
       })(),
-      want: 'true|true|true|true'
+      want: 'true|true|true|true|true|true'
     },
     {
       name: 'browserless compact exit preserves trigger hp evidence',

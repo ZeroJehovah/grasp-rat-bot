@@ -65,6 +65,7 @@ function singleCoinBaitSameCoinHasOtherProfitCore(opportunity, bait, options = {
   const source = opportunity?.sourceCoin || opportunity?.coin || opportunity || {};
   const baitId = singleCoinBaitIdCore(bait);
   const baitAmount = Math.max(0, Number(bait?.amount || SINGLE_COIN_BAIT_AMOUNT));
+  if (opportunity?.residualRouteContinuation?.profitThresholdEligible === true) return true;
   // A lower-scoring route may be attached only for panel/next-leg display. It is
   // not another selected profit opportunity and must not veto the bait anchor.
   const routeDisplayOnly = source?.routeDisplayOnly === true || opportunity?.routeDisplayOnly === true;

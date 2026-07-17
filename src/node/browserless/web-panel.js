@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.17.1';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.17.2';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function panelSessionFlagsCore(status = {}) {
@@ -746,6 +746,8 @@ function renderBrowserlessWebPanel() {
       'stamina-budget-coin-leave': '体力不足，退出等待恢复',
       'stamina-exhausted-leave': '体力耗尽，退出等待恢复',
       'dynamic-profit-threshold-wait': '当日时间充裕，动态收益门槛生效，等待更高收益目标',
+      'outside-center-profit-wait': '超出中心区，原地等待可见收益',
+      'outside-center-idle-timeout-leave': '超出中心区等待 3 分钟仍无收益，退出后重连',
       'wait-for-full-stamina-and-hp': '等待血量和体力恢复',
       'move-to-target': '向目标移动',
       'no-opportunistic-shot': '没有顺手开火目标',

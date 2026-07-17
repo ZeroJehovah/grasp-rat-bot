@@ -118,6 +118,7 @@ function publicConfig(config) {
     singleCoinBaitEnabled: config.singleCoinBaitEnabled !== false,
     singleCoinBaitHoldRadiusCm: Number(config.singleCoinBaitHoldRadiusCm || 0),
     browserlessCenterActivityRadiusCm: Number(config.browserlessCenterActivityRadiusCm || 0),
+    browserlessOutsideCenterIdleExitMs: Number(config.browserlessOutsideCenterIdleExitMs || 0),
     browserlessProfitPursuitMaxMs: Number(config.browserlessProfitPursuitMaxMs || 0),
     browserlessProfitPursuitSuppressMs: Number(config.browserlessProfitPursuitSuppressMs || 0),
     browserlessDangerousTargetCooldownMs: Number(config.browserlessDangerousTargetCooldownMs || 0),

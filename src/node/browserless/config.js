@@ -57,6 +57,7 @@ const DEFAULTS = {
   singleCoinBaitEnabled: true,
   singleCoinBaitHoldRadiusCm: 1000,
   browserlessCenterActivityRadiusCm: 100000,
+  browserlessOutsideCenterIdleExitMs: 180000,
   browserlessProfitPursuitMaxMs: 60000,
   browserlessProfitPursuitSuppressMs: 60000,
   browserlessDangerousTargetCooldownMs: 900000,
@@ -172,6 +173,7 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
     singleCoinBaitEnabled: boolEnv(env.GRASP_RAT_BROWSERLESS_SINGLE_COIN_BAIT_ENABLED, DEFAULTS.singleCoinBaitEnabled),
     singleCoinBaitHoldRadiusCm: numberEnv(env.GRASP_RAT_BROWSERLESS_SINGLE_COIN_BAIT_HOLD_RADIUS_CM, DEFAULTS.singleCoinBaitHoldRadiusCm),
     browserlessCenterActivityRadiusCm: numberEnv(env.GRASP_RAT_BROWSERLESS_CENTER_ACTIVITY_RADIUS_CM, DEFAULTS.browserlessCenterActivityRadiusCm),
+    browserlessOutsideCenterIdleExitMs: numberEnv(env.GRASP_RAT_BROWSERLESS_OUTSIDE_CENTER_IDLE_EXIT_MS, DEFAULTS.browserlessOutsideCenterIdleExitMs),
     browserlessProfitPursuitMaxMs: numberEnv(env.GRASP_RAT_BROWSERLESS_PROFIT_PURSUIT_MAX_MS, DEFAULTS.browserlessProfitPursuitMaxMs),
     browserlessProfitPursuitSuppressMs: numberEnv(env.GRASP_RAT_BROWSERLESS_PROFIT_PURSUIT_SUPPRESS_MS, DEFAULTS.browserlessProfitPursuitSuppressMs),
     browserlessDangerousTargetCooldownMs: numberEnv(env.GRASP_RAT_BROWSERLESS_DANGEROUS_TARGET_COOLDOWN_MS, DEFAULTS.browserlessDangerousTargetCooldownMs),
@@ -312,6 +314,8 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
       config.movementSettlementMinDistanceCm = numberEnv(argv[++i], config.movementSettlementMinDistanceCm);
     } else if (arg === '--center-activity-radius-cm') {
       config.browserlessCenterActivityRadiusCm = numberEnv(argv[++i], config.browserlessCenterActivityRadiusCm);
+    } else if (arg === '--outside-center-idle-exit-ms') {
+      config.browserlessOutsideCenterIdleExitMs = numberEnv(argv[++i], config.browserlessOutsideCenterIdleExitMs);
     } else if (arg === '--profit-pursuit-max-ms') {
       config.browserlessProfitPursuitMaxMs = numberEnv(argv[++i], config.browserlessProfitPursuitMaxMs);
     } else if (arg === '--profit-pursuit-suppress-ms') {
@@ -422,6 +426,7 @@ function usage() {
     '  --movement-settlement-stall-ms <ms>  Reconnect when nonzero movement makes no coordinate progress. Default: 5000',
     '  --movement-settlement-min-distance-cm <cm>  Coordinate progress needed to reset the stall timer. Default: 80',
     '  --center-activity-radius-cm <cm>  Keep ordinary browserless profit inside this origin radius. Default: 100000',
+    '  --outside-center-idle-exit-ms <ms>  Leave after waiting outside the center without profit. Default: 180000',
     '  --profit-pursuit-max-ms <ms>  Max ordinary profit combat pursuit before suppression. Default: 60000',
     '  --profit-pursuit-suppress-ms <ms>  Suppression cooldown after a profit pursuit is stopped. Default: 60000',
     '  --dangerous-target-cooldown-ms <ms>  Cooldown for ordinary profit against targets that forced a combat leave. Default: 900000',

@@ -106,6 +106,7 @@ const {
   singleCoinBaitOtherOpportunityCore,
   singleCoinBaitPolicyCore
 } = require('./single-coin-bait');
+const { updateOutsideCenterIdleCore } = require('./outside-center-idle');
 const { patrolDirectionCore } = require('./patrol');
 const {
   postAttackVisibleCoinExistsCore,
@@ -2580,6 +2581,72 @@ function runStrategyModuleSelfTests() {
     passed: baitDisplayRoute.phase === 'hold'
       && baitDisplayRoute.entered === true
       && baitDisplayRoute.state?.id === 'bait'
+  });
+  const eligibleResidualRouteBait = singleCoinBaitPolicyCore({
+    self: { x: 0, y: 0 },
+    nowMs: 1000,
+    previous: null,
+    selectedOpportunity: {
+      ...baitDisplayRouteOpportunity,
+      residualRouteContinuation: { profitThresholdEligible: true }
+    },
+    opportunities: [baitDisplayRouteOpportunity],
+    realtimeCoins: [baitCoin]
+  }, { enabled: true, holdRadiusCm: 1000, sameCoinRadiusCm: 1200 });
+  const ineligibleResidualRouteBait = singleCoinBaitPolicyCore({
+    self: { x: 0, y: 0 },
+    nowMs: 1000,
+    previous: null,
+    selectedOpportunity: {
+      ...baitDisplayRouteOpportunity,
+      residualRouteContinuation: { profitThresholdEligible: false }
+    },
+    opportunities: [baitDisplayRouteOpportunity],
+    realtimeCoins: [baitCoin]
+  }, { enabled: true, holdRadiusCm: 1000, sameCoinRadiusCm: 1200 });
+  results.push({
+    name: 'single-coin-bait-yields-to-eligible-residual-route-only',
+    passed: eligibleResidualRouteBait.state === null
+      && ineligibleResidualRouteBait.phase === 'hold'
+      && ineligibleResidualRouteBait.state?.id === 'bait'
+  });
+
+  const outsideIdleStarted = updateOutsideCenterIdleCore(null, {
+    nowMs: 1000,
+    self: { x: 100001, y: 0 },
+    action: { kind: 'wait', reason: 'outside-center-profit-wait' }
+  }, { centerRadiusCm: 100000, timeoutMs: 180000 });
+  const outsideIdleBeforeTimeout = updateOutsideCenterIdleCore(outsideIdleStarted.state, {
+    nowMs: 180999,
+    self: { x: 100001, y: 0 },
+    action: { kind: 'wait', reason: 'single-coin-bait-hold' }
+  }, { centerRadiusCm: 100000, timeoutMs: 180000 });
+  const outsideIdleTimedOut = updateOutsideCenterIdleCore(outsideIdleBeforeTimeout.state, {
+    nowMs: 181000,
+    self: { x: 100001, y: 0 },
+    action: { kind: 'wait', reason: 'dynamic-profit-threshold-wait' }
+  }, { centerRadiusCm: 100000, timeoutMs: 180000 });
+  const outsideIdleProfitReset = updateOutsideCenterIdleCore(outsideIdleTimedOut.state, {
+    nowMs: 181100,
+    self: { x: 100001, y: 0 },
+    action: { kind: 'coin', band: 'profit', reason: 'high-value-visible-coin-priority' }
+  }, { centerRadiusCm: 100000, timeoutMs: 180000 });
+  const outsideIdleCenterReset = updateOutsideCenterIdleCore(outsideIdleTimedOut.state, {
+    nowMs: 181100,
+    self: { x: 99999, y: 0 },
+    action: { kind: 'wait', reason: 'no-profitable-candidate' }
+  }, { centerRadiusCm: 100000, timeoutMs: 180000 });
+  results.push({
+    name: 'outside-center-idle-waits-three-minutes-and-resets-on-profit-or-center-return',
+    passed: outsideIdleStarted.state?.startedAt === 1000
+      && outsideIdleBeforeTimeout.summary.ageMs === 179999
+      && outsideIdleBeforeTimeout.shouldExit === false
+      && outsideIdleTimedOut.summary.ageMs === 180000
+      && outsideIdleTimedOut.shouldExit === true
+      && outsideIdleProfitReset.state === null
+      && outsideIdleProfitReset.resetReason === 'protected-or-active-action'
+      && outsideIdleCenterReset.state === null
+      && outsideIdleCenterReset.resetReason === 'inside-center'
   });
 
   const nextCoinOpportunity = {

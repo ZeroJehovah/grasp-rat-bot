@@ -68,7 +68,9 @@ const {
 const {
   buildCoinRouteFromAnchorCore,
   coinRouteActionMetaCore,
+  coinRouteLegClearCore,
   coinRouteKey,
+  coinRouteSummaryCore,
   pickCoinRouteOpportunityCore
 } = require('../../strategy/coin-route');
 const { applyFinalActionArbitrationCore } = require('../../strategy/action-arbitration');
@@ -83,6 +85,7 @@ const {
   singleCoinBaitPolicyCore
 } = require('../../strategy/single-coin-bait');
 const { activeCoinCompetitionCore } = require('../../strategy/coin-competition');
+const { updateOutsideCenterIdleCore } = require('../../strategy/outside-center-idle');
 const {
   targetIsWhitelisted,
   targetWhitelistNameSet,
@@ -205,6 +208,56 @@ function filterCenterActivityProfitItems(items = [], options = {}) {
   return (items || []).filter(item => insideCenterActivityRadius(item, options));
 }
 
+function centerActivityCoinAdmissionReason(coin, selfKillTargetTicks, options = {}) {
+  if (insideCenterActivityRadius(coin, options)) return 'inside-center';
+  const visibleDistance = Math.max(0, Number(
+    options.snapshotVisibleCoinMaxDistanceCm
+      ?? options.snapshotCoinFallbackMaxDistanceCm
+      ?? options.globalCoinMaxDistance
+      ?? DEFAULT_SNAPSHOT_VISIBLE_COIN_MAX_DISTANCE
+  ));
+  if (!(Number.isFinite(Number(coin?.distance))) || (visibleDistance > 0 && Number(coin.distance) > visibleDistance)) return '';
+  if (selfKillTargetTicks && isSelfKilledPlayerDropCoin(coin, selfKillTargetTicks, options)) {
+    return 'self-kill-drop-outside-center';
+  }
+  if (Number(coin?.amount || 0) >= highValueCoinPriorityAmount(options)) {
+    return 'visible-high-value-coin-outside-center';
+  }
+  return '';
+}
+
+function partitionCenterActivityCoins(items = [], selfKillTargetTicks = null, options = {}) {
+  const admitted = [];
+  const filtered = [];
+  const edgeAdmitted = [];
+  const centerRadiusCm = browserlessCenterActivityRadius(options);
+  for (const coin of items || []) {
+    const reason = centerActivityCoinAdmissionReason(coin, selfKillTargetTicks, options);
+    if (!reason) {
+      filtered.push(coin);
+      continue;
+    }
+    if (reason === 'inside-center') {
+      admitted.push(coin);
+      continue;
+    }
+    const targetRadiusCm = pointRadiusFromOrigin(coin);
+    const enriched = {
+      ...coin,
+      centerActivityEdge: {
+        admitted: true,
+        reason,
+        centerRadiusCm: Math.round(centerRadiusCm),
+        targetRadiusCm: Number.isFinite(targetRadiusCm) ? Math.round(targetRadiusCm) : null,
+        outsideByCm: Number.isFinite(targetRadiusCm) ? Math.max(0, Math.round(targetRadiusCm - centerRadiusCm)) : null
+      }
+    };
+    admitted.push(enriched);
+    edgeAdmitted.push(enriched);
+  }
+  return { admitted, filtered, edgeAdmitted };
+}
+
 function centerActivityAfkEdgeExtension(options = {}) {
   const value = Number(options.combatAttackRange ?? options.attackRange ?? DEFAULT_ATTACK_RANGE);
   return Number.isFinite(value) ? Math.max(0, value) : 0;
@@ -289,6 +342,8 @@ function centerActivityInputSummary(self, filtered = {}, options = {}) {
     edgeAdmittedAfkTargets: Math.max(0, Math.round(Number(filtered.edgeAdmittedAfkTargets || 0))),
     filteredRealtimeCoins: Math.max(0, Math.round(Number(filtered.realtimeCoins || 0))),
     filteredSnapshotCoins: Math.max(0, Math.round(Number(filtered.snapshotCoins || 0))),
+    edgeAdmittedRealtimeCoins: (filtered.edgeAdmittedRealtimeCoins || []).slice(0, 8).map(item => cloneJson(item)),
+    edgeAdmittedSnapshotCoins: (filtered.edgeAdmittedSnapshotCoins || []).slice(0, 8).map(item => cloneJson(item)),
     edgeAfkTargets: (filtered.edgeAfkTargets || []).slice(0, 8).map(item => cloneJson(item)),
     filteredAfkTargetDetails: (filtered.filteredAfkTargetDetails || []).slice(0, 8).map(item => cloneJson(item))
   };
@@ -1576,7 +1631,6 @@ function selectRealtimeLootCandidate(input, stateful = {}, options = {}) {
     ? realtimeObservationCoins(observation, input?.self)
       .filter(coin => Number(coin.amount || 0) >= minAmount)
       .filter(coin => Number.isFinite(Number(coin.distance)) && (!maxDistance || Number(coin.distance) <= maxDistance))
-      .filter(coin => insideCenterActivityRadius(coin, options))
       .filter(coin => opportunityStaminaAffordable(input?.self, opportunityCoinStaminaCost(coin, options), options))
       .sort((a, b) => Number(Boolean(b.selfKilledPlayerDrop)) - Number(Boolean(a.selfKilledPlayerDrop))
         || Number(b.amount || 0) - Number(a.amount || 0)
@@ -1742,7 +1796,8 @@ function summarizeCoin(coin) {
     fieldAmount: numberOrNull(coin.snapshotAmount ?? coin.fieldAmount),
     coinRoute: routeMeta,
     native: Boolean(coin.native),
-    snapshotOnly: Boolean(coin.snapshotOnly)
+    snapshotOnly: Boolean(coin.snapshotOnly),
+    ...(coin.centerActivityEdge ? { centerActivityEdge: cloneJson(coin.centerActivityEdge) } : {})
   };
 }
 
@@ -2525,16 +2580,21 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
   const afkPanelTargets = afkObservationTargets.filter(entity => hasFull5sStamina(entity, options));
   const afkTargets = afkPanelTargets.filter(entity => !afkTargetBlockedByRecentActivity(entity, options));
   const edgeAfkTargets = afkTargets.filter(entity => entity.centerActivityEdge?.admitted === true);
+  const selfKillTargetTicks = selfKillTargetTicksFromMessages(Array.isArray(fallback.messages) ? fallback.messages : [], selfUserId);
+  const selfKillTargetIds = Array.from(selfKillTargetTicks.keys());
+  const selfKillEvidence = summarizeSelfKillEvidence(selfKillTargetTicks);
   const realtimeCoinsRaw = buildNativeCoinSnapshotCore(Array.isArray(realtime.coinDrops) ? realtime.coinDrops : [], { nowMs })
     .map(drop => normalizeCoinForDecision(drop, self, 'realtime'))
     .filter(Boolean)
     .filter(coin => Number(coin.amount || 0) > 0);
-  const realtimeCoins = filterCenterActivityProfitItems(realtimeCoinsRaw, options);
+  const realtimeCoinPartition = partitionCenterActivityCoins(realtimeCoinsRaw, selfKillTargetTicks, options);
+  const realtimeCoins = realtimeCoinPartition.admitted;
   const snapshotCoinsRaw = (Array.isArray(fallback.coinDrops) ? fallback.coinDrops : [])
     .map(drop => normalizeCoinForDecision(drop, self, 'snapshot'))
     .filter(Boolean)
     .filter(coin => Number(coin.amount || 0) > 0);
-  const snapshotCoins = filterCenterActivityProfitItems(snapshotCoinsRaw, options);
+  const snapshotCoinPartition = partitionCenterActivityCoins(snapshotCoinsRaw, selfKillTargetTicks, options);
+  const snapshotCoins = snapshotCoinPartition.admitted;
   const centerFiltered = {
     afkTargets: afkCenterPartition.filteredTargets.length,
     edgeAdmittedAfkTargets: edgeAfkTargets.length,
@@ -2545,8 +2605,10 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
       target.centerActivityEdge?.reason || 'center-afk-edge-admitted'
     )),
     filteredAfkTargetDetails: afkCenterPartition.filteredDetails,
-    realtimeCoins: Math.max(0, realtimeCoinsRaw.length - realtimeCoins.length),
-    snapshotCoins: Math.max(0, snapshotCoinsRaw.length - snapshotCoins.length)
+    realtimeCoins: realtimeCoinPartition.filtered.length,
+    snapshotCoins: snapshotCoinPartition.filtered.length,
+    edgeAdmittedRealtimeCoins: realtimeCoinPartition.edgeAdmitted.map(summarizeCoin),
+    edgeAdmittedSnapshotCoins: snapshotCoinPartition.edgeAdmitted.map(summarizeCoin)
   };
   const snapshotVisibleCoinMaxDistanceRaw = Number(options.snapshotVisibleCoinMaxDistanceCm
     ?? options.snapshotCoinFallbackMaxDistanceCm
@@ -2560,9 +2622,6 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
       && Number.isFinite(Number(coin.distance))
       && Number(coin.distance) <= snapshotVisibleCoinMaxDistance
   ));
-  const selfKillTargetTicks = selfKillTargetTicksFromMessages(Array.isArray(fallback.messages) ? fallback.messages : [], selfUserId);
-  const selfKillTargetIds = Array.from(selfKillTargetTicks.keys());
-  const selfKillEvidence = summarizeSelfKillEvidence(selfKillTargetTicks);
   const selfKilledPlayerDropFallbackEnabled = options.controlMode === 'profit-live';
   const selfKilledPlayerDropCoins = selfKilledPlayerDropFallbackEnabled
     ? snapshotCoins.filter(coin => isSelfKilledPlayerDropCoin(coin, selfKillTargetTicks, options))
@@ -2587,6 +2646,9 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
   if (afkTargets.some(target => afkOpportunityBlockedByStaminaCooldown(target, options))) dataGaps.push('afk-stamina-cooldown-target-visible');
   if (centerFiltered.afkTargets) dataGaps.push('center-afk-targets-filtered');
   if (centerFiltered.edgeAdmittedAfkTargets) dataGaps.push('center-afk-edge-target-admitted');
+  if (centerFiltered.edgeAdmittedRealtimeCoins.length || centerFiltered.edgeAdmittedSnapshotCoins.length) {
+    dataGaps.push('center-visible-coin-edge-admitted');
+  }
   if (centerFiltered.realtimeCoins) dataGaps.push('center-realtime-coins-filtered');
   if (centerFiltered.snapshotCoins) dataGaps.push('center-snapshot-coins-filtered');
   if (snapshotFallbackBlockedReasons.length) dataGaps.push(...snapshotFallbackBlockedReasons.map(reason => `snapshot-fallback-blocked:${reason}`));
@@ -3322,13 +3384,50 @@ function singleCoinBaitVisibleCoins(input, previous = null) {
   return mergeProfitCoinCandidates(coins);
 }
 
+function singleCoinBaitResidualRouteContinuation(input, opportunity, options = {}) {
+  const selectedOpportunity = opportunity?.choice || null;
+  const source = selectedOpportunity?.sourceCoin || selectedOpportunity?.coin || selectedOpportunity || null;
+  const route = source?.coinRoute || selectedOpportunity?.coinRoute || null;
+  if (!source || source.routeDisplayOnly !== true || !Array.isArray(route?.points) || route.points.length < 2) return null;
+  const anchorKey = coinRouteKey(source);
+  const anchorIndex = route.points.findIndex(point => coinRouteKey(point) === anchorKey);
+  if (anchorIndex < 0) return null;
+  const availableByKey = new Map((input?.profitCoins || []).map(coin => [coinRouteKey(coin), coin]));
+  const remaining = route.points.slice(anchorIndex + 1)
+    .map(point => availableByKey.get(coinRouteKey(point)) || null)
+    .filter(Boolean);
+  if (!remaining.length) return null;
+  const routeOptions = coinRouteCoreOptions(input, {}, options);
+  let previous = source;
+  for (const coin of remaining) {
+    if (!coinRouteLegClearCore(previous, coin, input?.activeThreats || [], routeOptions)) return null;
+    previous = coin;
+  }
+  const summary = coinRouteSummaryCore(remaining, source, routeOptions);
+  const reward = Number(summary.totalValue || 0);
+  const staminaCost = Number(summary.totalStaminaCost || 0);
+  const profitThresholdEligible = profitRewardAndCostEligible(reward, staminaCost, opportunity?.threshold);
+  return {
+    routeIds: remaining.map(coinRouteKey),
+    reward,
+    staminaCost: Math.round(staminaCost),
+    legCount: remaining.length,
+    profitThresholdEligible,
+    suppressionReason: profitThresholdEligible ? 'eligible-residual-route' : 'residual-route-below-profit-threshold'
+  };
+}
+
 function buildSingleCoinBaitDecision(input, opportunity, stateful = {}, options = {}, allowEnter = true) {
   const previous = stateful.singleCoinBait || null;
+  const continuation = singleCoinBaitResidualRouteContinuation(input, opportunity, options);
+  const selectedOpportunity = continuation
+    ? { ...(opportunity?.choice || {}), residualRouteContinuation: continuation }
+    : (opportunity?.choice || null);
   const policy = singleCoinBaitPolicyCore({
     self: input?.self || null,
     nowMs: input?.nowMs,
     previous,
-    selectedOpportunity: opportunity?.choice || null,
+    selectedOpportunity,
     opportunities: opportunity?.opportunities || [],
     visibleCoins: singleCoinBaitVisibleCoins(input, previous),
     entryCoins: input?.profitCoins || [],
@@ -3340,7 +3439,7 @@ function buildSingleCoinBaitDecision(input, opportunity, stateful = {}, options 
   }
   stateful.singleCoinBait = policy.state ? cloneJson(policy.state) : null;
   if (!policy.state || !policy.coin) {
-    return { ...policy, action: null, summary: null };
+    return { ...policy, continuation, action: null, summary: null };
   }
 
   if (policy.phase === 'hold') {
@@ -3354,6 +3453,7 @@ function buildSingleCoinBaitDecision(input, opportunity, stateful = {}, options 
   if (policy.phase === 'hold') {
     return {
       ...policy,
+      continuation,
       summary,
       action: {
         kind: 'wait',
@@ -3371,6 +3471,7 @@ function buildSingleCoinBaitDecision(input, opportunity, stateful = {}, options 
   const actionKind = Number(policy.coin.distance || Infinity) <= coinMaxDistance ? 'coin' : 'seek-coin';
   return {
     ...policy,
+    continuation,
     summary,
     action: {
       kind: actionKind,
@@ -6773,6 +6874,40 @@ function buildReturnToCenterDecision(input, options = {}) {
   };
 }
 
+function buildOutsideCenterProfitWaitDecision(input, options = {}) {
+  if (!input?.self) return null;
+  const radius = browserlessCenterActivityRadius(options);
+  if (!(radius > 0)) return null;
+  const selfRadius = pointRadiusFromOrigin(input.self);
+  if (!Number.isFinite(selfRadius) || selfRadius <= radius) return null;
+  return {
+    kind: 'wait',
+    band: 'recover',
+    reason: 'outside-center-profit-wait',
+    stopMotion: true,
+    self: summarizeTarget(input.self),
+    centerActivity: {
+      radiusCm: Math.round(radius),
+      selfRadiusCm: Math.round(selfRadius),
+      distanceOutsideCm: Math.max(0, Math.round(selfRadius - radius))
+    }
+  };
+}
+
+function buildOutsideCenterIdleTimeoutLeaveDecision(input, outsideCenterIdle, options = {}) {
+  if (!outsideCenterIdle?.shouldExit || !input?.self) return null;
+  return {
+    kind: 'leave',
+    band: 'safety',
+    reason: 'outside-center-idle-timeout-leave',
+    shouldLeave: true,
+    stopMotion: true,
+    reloginDelayMs: Math.max(1000, Number(options.loopDelayMs || 30000)),
+    self: summarizeTarget(input.self),
+    outsideCenterIdle: cloneJson(outsideCenterIdle.summary)
+  };
+}
+
 function buildBrowserlessDecision(state, stateful = {}, options = {}) {
   const input = buildBrowserlessStrategyInput(state, options, stateful);
   cleanupCoinProgressState(stateful, input.nowMs, options);
@@ -7002,6 +7137,9 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
   const returnToCenterAction = input.self && !realtimeStale && (profitLive || nonCombatProfit)
     ? buildReturnToCenterDecision(input, options)
     : null;
+  const outsideCenterProfitWaitAction = returnToCenterAction
+    ? buildOutsideCenterProfitWaitDecision(input, options)
+    : null;
   const footCoinPriorityAction = (profitLive || nonCombatProfit) ? buildFootCoinPriorityDecision(profitSelectionInput, 'foot-coin-priority', options) : null;
   const dailyFinalCoinAction = (profitLive || nonCombatProfit) && !recoveryAction
     ? buildDailyStaminaFinalCoinDecision(profitSelectionInput, options)
@@ -7058,6 +7196,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
   let reason = '';
   let action = { kind: 'wait', band: 'wait', reason: '' };
   let finalSelection = null;
+  let outsideCenterIdle = null;
   if (!input.self) {
     reason = 'missing-realtime-self';
     action.reason = reason;
@@ -7080,7 +7219,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       validUntil,
       ...extra
     });
-    const candidates = [
+    let candidates = [
       candidate(hardSafetyAction, 10, 'hard-safety', true, { riskScore: 100 }),
       candidate(longStaminaExhaustedLeaveAction, 20, 'stamina-exhausted-hard-gate', true, { riskScore: 100 }),
       candidate(combatExitAction, 30, 'combat-exit-hard-gate', true, { riskScore: 100 }),
@@ -7109,6 +7248,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
         roiScore: opportunity.choice?.score,
         staminaCost: opportunity.choice?.staminaCost
       }),
+      candidate(outsideCenterProfitWaitAction, 185, 'outside-center-profit-wait'),
       candidate(returnToCenterAction, 190, 'return-to-center-fallback'),
       candidate(opportunisticShotWaitAction, 200, 'opportunistic-shot-wait'),
       candidate(staminaBlockedWaitAction, 210, 'stamina-blocked-wait'),
@@ -7116,6 +7256,28 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     ].filter(Boolean);
     finalSelection = selectFinalActionCandidateCore(candidates);
     action = finalSelection?.action || action;
+    outsideCenterIdle = updateOutsideCenterIdleCore(
+      stateful.outsideCenterIdle,
+      {
+        nowMs: input.nowMs,
+        self: input.self,
+        action
+      },
+      {
+        centerRadiusCm: browserlessCenterActivityRadius(options),
+        timeoutMs: options.browserlessOutsideCenterIdleExitMs
+      }
+    );
+    stateful.outsideCenterIdle = outsideCenterIdle.state;
+    if (outsideCenterIdle.shouldExit) {
+      const timeoutLeaveAction = buildOutsideCenterIdleTimeoutLeaveDecision(input, outsideCenterIdle, options);
+      candidates = [
+        candidate(timeoutLeaveAction, 5, 'outside-center-idle-timeout', true, { riskScore: 100 }),
+        ...candidates
+      ].filter(Boolean);
+      finalSelection = selectFinalActionCandidateCore(candidates);
+      action = finalSelection?.action || action;
+    }
     kind = action.finalCandidate?.switchReason === 'best-eligible-profit'
       ? 'profit-candidate'
       : (action.kind || 'wait');
@@ -7129,6 +7291,21 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
         ...item.action.finalCandidate
       }))
     };
+  }
+  if (!outsideCenterIdle) {
+    outsideCenterIdle = updateOutsideCenterIdleCore(
+      stateful.outsideCenterIdle,
+      {
+        nowMs: input.nowMs,
+        self: input.self,
+        action
+      },
+      {
+        centerRadiusCm: browserlessCenterActivityRadius(options),
+        timeoutMs: options.browserlessOutsideCenterIdleExitMs
+      }
+    );
+    stateful.outsideCenterIdle = outsideCenterIdle.state;
   }
   if (input.self && !realtimeStale) {
     const selectedAction = attachOpportunisticShotDecision(action, profitSelectionInput, stateful, options, opportunity);
@@ -7203,7 +7380,10 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       stamina: input.stamina,
       realtime: input.realtime,
       fallback: input.fallback,
-      centerActivity: input.centerActivity,
+      centerActivity: {
+        ...input.centerActivity,
+        outsideIdle: cloneJson(outsideCenterIdle.summary)
+      },
       profitCoinSource: input.profitCoinSource,
       activeCoinCompetition: cloneJson(input.activeCoinCompetition),
       selfKillEvidence: topItems(input.selfKillEvidence, item => item, 20),
@@ -7219,6 +7399,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       switch: opportunity.switchDiagnostics || null,
       competition: cloneJson(input.activeCoinCompetition),
       singleCoinBait: singleCoinBait.summary,
+      singleCoinBaitContinuation: cloneJson(singleCoinBait.continuation || null),
       easyKill: {
         ...cloneJson(input.easyKill || {}),
         ...easyKillCandidateDiagnostics,
@@ -7247,7 +7428,8 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     stateful: {
       opportunityChoice: outputOpportunityChoice,
       switchLock: outputSwitchLock,
-      singleCoinBait: cloneJson(stateful.singleCoinBait || null)
+      singleCoinBait: cloneJson(stateful.singleCoinBait || null),
+      outsideCenterIdle: cloneJson(stateful.outsideCenterIdle || null)
     }
   };
   reconcileEasyKillCombatOutcome(decision, input, options);
@@ -7492,6 +7674,7 @@ function createBrowserlessDecisionAdapter(options = {}) {
         recentInvulnerableThreats: decisionState.recentInvulnerableThreats || {},
         easyKillApproach: decisionState.easyKillApproach || null,
         easyKillTargetSuppressions: decisionState.easyKillTargetSuppressions || {},
+        outsideCenterIdle: decisionState.outsideCenterIdle || null,
         fleeLock: decisionState.fleeLock || null,
         returnBlockLock: decisionState.returnBlockLock || null,
         returnBlockScan: decisionState.returnBlockScan || null
