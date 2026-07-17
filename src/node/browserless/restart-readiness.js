@@ -25,6 +25,19 @@ function actionTargetKey(action = {}) {
   if (kind === 'coin' || kind === 'seek-coin') {
     const postAttackId = valueId(action.postAttackTarget?.id ?? target.postAttackTarget?.id);
     if (postAttackId) return `player:${postAttackId}`;
+    const selfKilledDrop = Boolean(
+      action.selfKilledPlayerDrop
+      || action.playerDropPriority
+      || target.selfKilledPlayerDrop
+      || target.playerDropPriority
+    );
+    const sourceUserId = valueId(
+      action.sourceUserId
+      ?? action.source_user_id
+      ?? target.sourceUserId
+      ?? target.source_user_id
+    );
+    if (selfKilledDrop && sourceUserId) return `player:${sourceUserId}`;
     const id = valueId(target.key ?? target.id);
     return id ? `coin:${id}` : '';
   }

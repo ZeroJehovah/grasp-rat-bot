@@ -1783,6 +1783,7 @@ function summarizeTarget(target) {
 function summarizeCoin(coin) {
   if (!coin) return null;
   const routeMeta = coinRouteActionMetaCore(coin.coinRoute || null, coin.distance);
+  const sourceUserId = numberOrNull(coin.source_user_id ?? coin.sourceUserId);
   return {
     type: 'coin',
     id: coin.drop_id ?? coin.id ?? '',
@@ -1797,6 +1798,9 @@ function summarizeCoin(coin) {
     coinRoute: routeMeta,
     native: Boolean(coin.native),
     snapshotOnly: Boolean(coin.snapshotOnly),
+    sourceUserId,
+    selfKilledPlayerDrop: Boolean(coin.selfKilledPlayerDrop),
+    playerDropPriority: Boolean(coin.playerDropPriority),
     ...(coin.centerActivityEdge ? { centerActivityEdge: cloneJson(coin.centerActivityEdge) } : {})
   };
 }

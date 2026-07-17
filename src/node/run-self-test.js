@@ -10229,10 +10229,12 @@ async function runSelfTest() {
           status.ready,
           restartDrainAllowsDecision({ action: { kind: 'post-attack-drop-wait', band: 'profit', reason: 'post-kill-settlement-wait', target: { id: 9667 } } }, status),
           restartDrainAllowsDecision({ action: { kind: 'post-attack-drop-wait', band: 'profit', reason: 'post-kill-settlement-wait', target: { id: 9555 } } }, status),
+          restartDrainAllowsDecision({ action: { kind: 'coin', band: 'profit', reason: 'post-kill-drop-priority', target: { id: 'id:299', amount: 10, sourceUserId: 9667, selfKilledPlayerDrop: true } } }, status),
+          restartDrainAllowsDecision({ action: { kind: 'coin', band: 'profit', reason: 'post-kill-drop-priority', target: { id: 'id:300', amount: 10, sourceUserId: 9555, selfKilledPlayerDrop: true } } }, status),
           restartDrainAllowsDecision({ action: { kind: 'coin', band: 'profit', target: { id: 9000, amount: 10 } } }, status)
         ].join('|');
       })(),
-      want: 'false|true|true|true|false|false'
+      want: 'false|true|true|true|false|true|false|false'
     },
     {
       name: 'browserless restart drain interrupts offline loop wait',
@@ -18677,6 +18679,10 @@ async function runSelfTest() {
           direct.action.kind,
           direct.action.reason,
           direct.action.target.amount,
+          direct.action.target.sourceUserId,
+          direct.action.target.selfKilledPlayerDrop,
+          actionTargetKey(direct.action),
+          restartDrainAllowsDecision(direct, { requested: true, commitmentKey: 'player:34711' }),
           direct.input.loot.candidate.selfKilledPlayerDrop,
           direct.input.nearby.c[0][1],
           direct.input.nearby.p[0][0],
@@ -18688,7 +18694,7 @@ async function runSelfTest() {
           stale.action.reason
         ].join('|');
       })(),
-      want: 'coin|post-kill-drop-priority|57|true|57|huaming song|combat-live|post-kill-loot-safe-dodge|true|true|snapshot-stale|combat-live-realtime'
+      want: 'coin|post-kill-drop-priority|57|34711|true|player:34711|true|true|57|huaming song|combat-live|post-kill-loot-safe-dodge|true|true|snapshot-stale|combat-live-realtime'
     },
     {
       name: 'browserless realtime high-value loot yields to low hp and fresh injury',

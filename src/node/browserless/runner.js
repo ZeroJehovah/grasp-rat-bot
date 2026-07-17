@@ -55,7 +55,8 @@ const { createBrowserlessSafetyController } = require('./safety-controller');
 const {
   actionTargetKey,
   createRestartDrainCoordinator,
-  evaluateRestartReadiness
+  evaluateRestartReadiness,
+  restartDrainAllowsDecision
 } = require('./restart-readiness');
 const { browserlessRuntimeRevision, browserlessRuntimeRevisionStatus } = require('./runtime-revision');
 const { runSnapshotEdgeSelfTest } = require('./snapshot-edge-wait');
@@ -2783,6 +2784,32 @@ async function runBrowserlessRunnerSelfTest() {
     drainNowMs = 1500;
     restartDrain.observe(restartDrainIdle);
     const restartDrainStatus = restartDrain.status();
+    const committedDropAllowed = restartDrainAllowsDecision({
+      action: {
+        kind: 'coin',
+        band: 'profit',
+        reason: 'post-kill-drop-priority',
+        target: {
+          id: 'id:299',
+          amount: 10,
+          sourceUserId: 9667,
+          selfKilledPlayerDrop: true
+        }
+      }
+    }, restartDrainStatus);
+    const unrelatedDropBlocked = restartDrainAllowsDecision({
+      action: {
+        kind: 'coin',
+        band: 'profit',
+        reason: 'post-kill-drop-priority',
+        target: {
+          id: 'id:300',
+          amount: 10,
+          sourceUserId: 9555,
+          selfKilledPlayerDrop: true
+        }
+      }
+    }, restartDrainStatus);
     const closedTransportAdapter = createBrowserlessActionAdapter({
       transport: {
         sendVelocity() {
@@ -2946,6 +2973,8 @@ async function runBrowserlessRunnerSelfTest() {
         && restartDrainCombat.ready === false
         && restartDrainIdle.ready === true
         && restartDrainStatus.ready === true
+        && committedDropAllowed
+        && !unrelatedDropBlocked
         && closedTransportAction.ok === false
         && closedTransportAction.transportClosed === true
         && chatService.ok
@@ -2975,6 +3004,8 @@ async function runBrowserlessRunnerSelfTest() {
       apiStopKeepsRuntime,
       forcedStatusConnectionsClosed,
       restartDrainStatus,
+      committedDropAllowed,
+      unrelatedDropBlocked,
       closedTransportAction,
       chatService,
       dynamicSnapshotPollerStatus,
