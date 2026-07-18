@@ -1481,8 +1481,15 @@ function refreshRealtimeSnapshotObservation(state, self, stateful = {}, options 
     if (amount >= highValueAmount) coins.push(coin);
   }
   nearbyCoins.sort((a, b) => Number(a.distance) - Number(b.distance) || Number(b.amount) - Number(a.amount));
-  const coinKeys = nearbyCoins.map(coin => coin.key);
-  const coinRows = nearbyCoins.map(coin => [
+  const nearbyCoinLimit = Math.max(8, Math.round(Number(options.realtimeNearbyCoinLimit) || 48));
+  const priorityNearbyCoins = nearbyCoins.filter(coin => coin.selfKilledPlayerDrop || Number(coin.amount || 0) >= highValueAmount);
+  const priorityNearbyCoinKeys = new Set(priorityNearbyCoins.map(coin => coin.key));
+  const boundedNearbyCoins = [
+    ...priorityNearbyCoins.slice(0, nearbyCoinLimit),
+    ...nearbyCoins.filter(coin => !priorityNearbyCoinKeys.has(coin.key)).slice(0, Math.max(0, nearbyCoinLimit - priorityNearbyCoins.length))
+  ].sort((a, b) => Number(a.distance) - Number(b.distance) || Number(b.amount) - Number(a.amount));
+  const coinKeys = boundedNearbyCoins.map(coin => coin.key);
+  const coinRows = boundedNearbyCoins.map(coin => [
     valueKey(coin.id),
     numberOrNull(coin.amount),
     Math.round(Number(coin.distance)),
@@ -1559,8 +1566,15 @@ function refreshRealtimeSnapshotObservation(state, self, stateful = {}, options 
     });
   }
   nearbyPlayers.sort((a, b) => Number(a.distance) - Number(b.distance));
-  const playerKeys = nearbyPlayers.map(player => player.key);
-  const playerRows = nearbyPlayers.map(player => {
+  const nearbyPlayerLimit = Math.max(8, Math.round(Number(options.realtimeNearbyPlayerLimit) || 48));
+  const priorityNearbyPlayers = nearbyPlayers.filter(player => !player.afk || Number(player.invulnerableMs || 0) > 0);
+  const priorityNearbyPlayerKeys = new Set(priorityNearbyPlayers.map(player => player.key));
+  const boundedNearbyPlayers = [
+    ...priorityNearbyPlayers.slice(0, nearbyPlayerLimit),
+    ...nearbyPlayers.filter(player => !priorityNearbyPlayerKeys.has(player.key)).slice(0, Math.max(0, nearbyPlayerLimit - priorityNearbyPlayers.length))
+  ].sort((a, b) => Number(a.distance) - Number(b.distance));
+  const playerKeys = boundedNearbyPlayers.map(player => player.key);
+  const playerRows = boundedNearbyPlayers.map(player => {
     const foldAsLowValueAfk = Boolean(player.afk && player.dropKnown && player.drop !== null
       && player.drop < Math.max(0, Number(options.attackMinAfkDrop ?? DEFAULT_ATTACK_MIN_AFK_DROP)));
     return [
@@ -8352,6 +8366,18 @@ function createBrowserlessDecisionAdapter(options = {}) {
         ...options,
         ...nextOptions
       });
+    },
+    refreshSnapshotObservation(state, nextOptions = {}) {
+      const mergedOptions = { ...options, ...nextOptions };
+      const self = state?.realtime?.self || state?.realtime?.lastSelf || null;
+      if (!self) return null;
+      return refreshRealtimeSnapshotObservation(
+        state,
+        self,
+        decisionState,
+        mergedOptions,
+        Number.isFinite(Number(mergedOptions.nowMs)) ? Number(mergedOptions.nowMs) : Date.now()
+      );
     },
     syncPlannerDecision(decision) {
       const plannerState = decision?.stateful || null;

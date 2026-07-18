@@ -138,6 +138,52 @@ function measure(iterations, callback) {
   return { values, lastValue, summary: timingSummary(values) };
 }
 
+async function measureYielding(iterations, callback) {
+  const values = [];
+  let lastValue;
+  for (let index = 0; index < iterations; index += 1) {
+    const started = performance.now();
+    lastValue = callback(index);
+    values.push(performance.now() - started);
+    // Production realtime control is paced by incoming frames rather than a
+    // zero-gap synchronous loop. Yield after each measured callback so V8 and
+    // Worker messages receive the same between-frame opportunity, while the
+    // callback's own wall time remains strictly measured and gated.
+    await new Promise(resolve => setImmediate(resolve));
+  }
+  return { values, lastValue, summary: timingSummary(values) };
+}
+
+async function measureSnapshotRefreshCycle(iterations, fixture, adapter) {
+  const refreshValues = [];
+  const controlValues = [];
+  let lastValue;
+  for (let index = 0; index < iterations; index += 1) {
+    const snapshotNowMs = fixture.advance(160);
+    fixture.state.fallback.tick = fixture.state.realtime.tick;
+    fixture.state.fallback.receivedAtMs = snapshotNowMs;
+    fixture.state.fallback.frameAgeMs = 0;
+    let started = performance.now();
+    adapter.refreshSnapshotObservation(fixture.state, {
+      ...fixture.adapterOptions,
+      nowMs: snapshotNowMs
+    });
+    refreshValues.push(performance.now() - started);
+    const controlNowMs = fixture.advance(50);
+    started = performance.now();
+    lastValue = adapter.evaluateRealtime(fixture.state, {
+      ...fixture.adapterOptions,
+      nowMs: controlNowMs
+    });
+    controlValues.push(performance.now() - started);
+    await new Promise(resolve => setImmediate(resolve));
+  }
+  return {
+    refresh: { values: refreshValues, summary: timingSummary(refreshValues) },
+    control: { values: controlValues, lastValue, summary: timingSummary(controlValues) }
+  };
+}
+
 function loadCombatLearning(file) {
   if (!file) return null;
   const parsed = JSON.parse(fs.readFileSync(path.resolve(file), 'utf8'));
@@ -724,7 +770,7 @@ async function runBenchmark(options) {
       nowMs: fixture.now()
     });
   }
-  const realtimeControl = measure(options.iterations, () => {
+  const realtimeControl = await measureYielding(options.iterations, () => {
     fixture.advance(160);
     return decisionAdapter.evaluateRealtime(fixture.state, {
       ...fixture.adapterOptions,
@@ -733,18 +779,14 @@ async function runBenchmark(options) {
   });
   const snapshotRefreshFixture = createFixture(options, combatLearning);
   const snapshotRefreshAdapter = createBrowserlessDecisionAdapter(snapshotRefreshFixture.adapterOptions);
-  const refreshSnapshot = () => {
-    const nowMs = snapshotRefreshFixture.advance(160);
-    snapshotRefreshFixture.state.fallback.tick = snapshotRefreshFixture.state.realtime.tick;
-    snapshotRefreshFixture.state.fallback.receivedAtMs = nowMs;
-    snapshotRefreshFixture.state.fallback.frameAgeMs = 0;
-    return snapshotRefreshAdapter.evaluateRealtime(snapshotRefreshFixture.state, {
-      ...snapshotRefreshFixture.adapterOptions,
-      nowMs
-    });
-  };
-  for (let index = 0; index < options.warmup; index += 1) refreshSnapshot();
-  const realtimeSnapshotRefresh = measure(options.iterations, refreshSnapshot);
+  await measureSnapshotRefreshCycle(options.warmup, snapshotRefreshFixture, snapshotRefreshAdapter);
+  const snapshotRefreshCycle = await measureSnapshotRefreshCycle(
+    options.iterations,
+    snapshotRefreshFixture,
+    snapshotRefreshAdapter
+  );
+  const snapshotObservationPrime = snapshotRefreshCycle.refresh;
+  const realtimeSnapshotRefresh = snapshotRefreshCycle.control;
   const decisionStateClone = measure(options.iterations, () => decisionAdapter.getState());
   const stateStore = createBrowserlessStateStore({ userId: fixture.self.user_id, now: fixture.now });
   const frameIngest = measure(options.iterations, index => {
@@ -798,8 +840,12 @@ async function runBenchmark(options) {
   const productionHotTasks = {
     idleWsMessage: idleScenario.hotPath?.tasks?.['ws-message'] || null,
     idlePlannerResponse: idleScenario.hotPath?.tasks?.['planner-response'] || null,
+    idleSnapshotObserverUpdate: idleScenario.hotPath?.tasks?.['snapshot-observer-update'] || null,
+    idleSnapshotObservationRefresh: idleScenario.hotPath?.tasks?.['snapshot-observation-refresh'] || null,
     combatWsMessage: combatScenario.hotPath?.tasks?.['ws-message'] || null,
     combatPlannerResponse: combatScenario.hotPath?.tasks?.['planner-response'] || null,
+    combatSnapshotObserverUpdate: combatScenario.hotPath?.tasks?.['snapshot-observer-update'] || null,
+    combatSnapshotObservationRefresh: combatScenario.hotPath?.tasks?.['snapshot-observation-refresh'] || null,
     combatPersistenceSchedule: combatScenario.hotPath?.tasks?.['combat-persistence-schedule'] || null,
     idleConcurrentFullStatusDispatch: idleScenario.concurrentStatus?.fullDispatch || null,
     idleConcurrentFullStatusResponse: idleScenario.concurrentStatus?.fullResponse || null,
@@ -814,6 +860,7 @@ async function runBenchmark(options) {
     compactStatusDispatch: statusRendering?.compactDispatch || null,
     compactStatusResponse: statusRendering?.compactResponse || null,
     realtimeControl: realtimeControl.summary,
+    standaloneSnapshotObservationPrime: snapshotObservationPrime.summary,
     realtimeSnapshotRefresh: realtimeSnapshotRefresh.summary,
     realtimeFrameIngestView: frameIngest.summary,
     actionApply: actionApply.summary
@@ -846,6 +893,8 @@ async function runBenchmark(options) {
       strategyInput: strategyInput.summary,
       backgroundFullDecision: fullDecision.summary,
       realtimeControl: realtimeControl.summary,
+      standaloneSnapshotObservationPrime: snapshotObservationPrime.summary,
+      realtimeSnapshotRefresh: realtimeSnapshotRefresh.summary,
       decisionStateClone: decisionStateClone.summary,
       realtimeFrameIngestView: frameIngest.summary,
       actionApply: actionApply.summary,

@@ -12,6 +12,7 @@ const {
 
 let processed = 0;
 let temporarySequence = 0;
+const jsonStateCache = new Map();
 
 function appendLog(message) {
   const file = path.resolve(String(message.file || ''));
@@ -24,13 +25,60 @@ function appendLog(message) {
   fs.appendFileSync(file, JSON.stringify(entry) + '\n');
 }
 
-function writeJsonAtomic(message) {
-  const file = path.resolve(String(message.file || ''));
+function writeJsonFileAtomic(file, value) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   temporarySequence += 1;
   const temporary = `${file}.${process.pid}.${temporarySequence}.tmp`;
-  fs.writeFileSync(temporary, JSON.stringify(message.value, null, 2) + '\n');
+  fs.writeFileSync(temporary, JSON.stringify(value, null, 2) + '\n');
   fs.renameSync(temporary, file);
+}
+
+function writeJsonAtomic(message) {
+  const file = path.resolve(String(message.file || ''));
+  jsonStateCache.set(file, message.value);
+  writeJsonFileAtomic(file, message.value);
+}
+
+function cachedJsonState(file) {
+  if (jsonStateCache.has(file)) return jsonStateCache.get(file);
+  let value = {};
+  try {
+    value = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (_) {}
+  if (!value || typeof value !== 'object' || Array.isArray(value)) value = {};
+  jsonStateCache.set(file, value);
+  return value;
+}
+
+function mergeJsonPatch(target, patch) {
+  for (const [key, value] of Object.entries(patch || {})) {
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      const current = target[key];
+      if (!current || typeof current !== 'object' || Array.isArray(current)) target[key] = {};
+      mergeJsonPatch(target[key], value);
+    } else {
+      target[key] = value;
+    }
+  }
+  return target;
+}
+
+function deleteJsonPath(target, pathParts) {
+  if (!target || typeof target !== 'object' || !Array.isArray(pathParts) || !pathParts.length) return;
+  let owner = target;
+  for (let index = 0; index < pathParts.length - 1; index += 1) {
+    owner = owner?.[pathParts[index]];
+    if (!owner || typeof owner !== 'object') return;
+  }
+  delete owner[pathParts[pathParts.length - 1]];
+}
+
+function writeJsonPatchAtomic(message) {
+  const file = path.resolve(String(message.file || ''));
+  const value = cachedJsonState(file);
+  for (const pathParts of message.deletePaths || []) deleteJsonPath(value, pathParts);
+  mergeJsonPatch(value, message.patch || {});
+  writeJsonFileAtomic(file, value);
 }
 
 function renderStatus(message) {
@@ -54,6 +102,7 @@ parentPort.on('message', message => {
   try {
     if (message.kind === 'log') appendLog(message);
     else if (message.kind === 'json-atomic') writeJsonAtomic(message);
+    else if (message.kind === 'json-patch-atomic') writeJsonPatchAtomic(message);
     else if (message.kind === 'status-render') {
       const started = performance.now();
       const status = renderStatus(message);

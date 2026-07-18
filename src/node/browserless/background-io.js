@@ -119,6 +119,15 @@ function createBrowserlessBackgroundIo(options = {}) {
     return post({ kind: 'json-atomic', file: path.resolve(String(file || '')), value });
   }
 
+  function writeJsonPatchAtomic(file, patch, deletePaths = []) {
+    return post({
+      kind: 'json-patch-atomic',
+      file: path.resolve(String(file || '')),
+      patch: patch && typeof patch === 'object' ? patch : {},
+      deletePaths: Array.isArray(deletePaths) ? deletePaths : []
+    });
+  }
+
   function renderStatus(state, config = {}, compact = false, optionsForRequest = {}) {
     if (closed || failed) return Promise.reject(new Error(lastError || 'background IO worker unavailable'));
     const id = nextRequestId++;
@@ -221,7 +230,8 @@ function createBrowserlessBackgroundIo(options = {}) {
     flush,
     renderStatus,
     status,
-    writeJsonAtomic
+    writeJsonAtomic,
+    writeJsonPatchAtomic
   };
 }
 

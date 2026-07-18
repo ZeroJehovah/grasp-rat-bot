@@ -122,6 +122,50 @@ function sanitizeStrategyLearning(value) {
   return { hitRateByModeDistance, modeMetrics, routeTransitions, routeAimFeedback };
 }
 
+function equalLearningCell(left, right) {
+  if (left === right) return true;
+  if (!left || !right || typeof left !== 'object' || typeof right !== 'object') return false;
+  const leftKeys = Object.keys(left);
+  const rightKeys = Object.keys(right);
+  if (leftKeys.length !== rightKeys.length) return false;
+  for (const key of leftKeys) {
+    const leftValue = left[key];
+    const rightValue = right[key];
+    if (leftValue && typeof leftValue === 'object') {
+      if (!equalLearningCell(leftValue, rightValue)) return false;
+    } else if (leftValue !== rightValue) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function strategyLearningPatch(previous, next) {
+  const patch = {};
+  const deletePaths = [];
+  let changed = false;
+  for (const category of ['hitRateByModeDistance', 'modeMetrics', 'routeTransitions', 'routeAimFeedback']) {
+    const before = previous?.[category] && typeof previous[category] === 'object' ? previous[category] : {};
+    const after = next?.[category] && typeof next[category] === 'object' ? next[category] : {};
+    const categoryPatch = {};
+    for (const [key, cell] of Object.entries(after)) {
+      if (equalLearningCell(before[key], cell)) continue;
+      if (Object.prototype.hasOwnProperty.call(before, key)) {
+        deletePaths.push(['strategyLearning', category, key]);
+      }
+      categoryPatch[key] = cell;
+      changed = true;
+    }
+    for (const key of Object.keys(before)) {
+      if (Object.prototype.hasOwnProperty.call(after, key)) continue;
+      deletePaths.push(['strategyLearning', category, key]);
+      changed = true;
+    }
+    patch[category] = categoryPatch;
+  }
+  return { changed, patch, deletePaths };
+}
+
 function readStore(file) {
   try {
     const value = JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -182,15 +226,37 @@ function createCombatCompletionTracker(options = {}) {
   }
 
   function trimPlayers() {
+    const previousKeys = new Set(Object.keys(store.players));
     store.players = Object.fromEntries(Object.entries(store.players)
       .sort((a, b) => String(b[1].updatedAt || '').localeCompare(String(a[1].updatedAt || '')))
       .slice(0, maxPlayers));
+    return Array.from(previousKeys).filter(key => !Object.prototype.hasOwnProperty.call(store.players, key));
   }
 
-  function persist(atMs) {
-    trimPlayers();
+  function persist(atMs, detail = {}) {
+    const deletedPlayers = trimPlayers();
     store.schemaVersion = SCHEMA_VERSION;
     store.updatedAt = new Date(atMs).toISOString();
+    if (backgroundIo?.writeJsonPatchAtomic && detail.incremental !== false) {
+      const dirtyPlayerKeys = Array.from(new Set(detail.dirtyPlayerKeys || []));
+      const playerPatch = Object.fromEntries(dirtyPlayerKeys
+        .filter(key => Object.prototype.hasOwnProperty.call(store.players, key))
+        .map(key => [key, store.players[key]]));
+      const patch = {
+        schemaVersion: SCHEMA_VERSION,
+        updatedAt: store.updatedAt
+      };
+      if (dirtyPlayerKeys.length) patch.players = playerPatch;
+      if (detail.strategyPatch) patch.strategyLearning = detail.strategyPatch;
+      const deletePaths = [
+        ...deletedPlayers.map(key => ['players', key]),
+        ...(detail.deletePaths || [])
+      ];
+      if (!backgroundIo.writeJsonPatchAtomic(file, patch, deletePaths)) {
+        throw new Error('background combat-learning patch persistence unavailable');
+      }
+      return;
+    }
     writeStore(file, store, backgroundIo);
   }
 
@@ -218,7 +284,7 @@ function createCombatCompletionTracker(options = {}) {
       lastReason: String(event.reason || ''),
       updatedAt: new Date(atMs).toISOString()
     };
-    persist(atMs);
+    persist(atMs, { dirtyPlayerKeys: [key] });
     return probability(userId, atMs);
   }
 
@@ -250,7 +316,7 @@ function createCombatCompletionTracker(options = {}) {
       lastSampleAt: new Date(atMs).toISOString(),
       updatedAt: new Date(atMs).toISOString()
     };
-    persist(atMs);
+    persist(atMs, { dirtyPlayerKeys: [key] });
     return probability(userId, atMs);
   }
 
@@ -292,9 +358,15 @@ function createCombatCompletionTracker(options = {}) {
   function updateStrategyLearning(value, atMs = now()) {
     if (!value || typeof value !== 'object') return false;
     if (Number(atMs) - lastStrategyWriteAt < 5000) return false;
-    store.strategyLearning = sanitizeStrategyLearning(value);
-    persist(Number(atMs));
+    const next = sanitizeStrategyLearning(value);
+    const difference = strategyLearningPatch(store.strategyLearning, next);
+    store.strategyLearning = next;
     lastStrategyWriteAt = Number(atMs);
+    if (!difference.changed) return false;
+    persist(Number(atMs), {
+      strategyPatch: difference.patch,
+      deletePaths: difference.deletePaths
+    });
     return true;
   }
 
@@ -303,7 +375,7 @@ function createCombatCompletionTracker(options = {}) {
     storedSchema = Number(JSON.parse(fs.readFileSync(file, 'utf8'))?.schemaVersion);
   } catch (_) {}
   if (!fs.existsSync(file) || storedSchema !== SCHEMA_VERSION) {
-    persist(now());
+    persist(now(), { incremental: false });
   }
   return {
     file,

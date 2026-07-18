@@ -18943,6 +18943,59 @@ async function runSelfTest() {
       want: 'coin|post-kill-drop-priority|57|34711|true|player:34711|true|true|57|huaming song|combat-live|post-kill-loot-safe-dodge|true|true|snapshot-stale|combat-live-realtime'
     },
     {
+      name: 'browserless realtime nearby snapshot rows are bounded while retaining high-value coins',
+      got: (() => {
+        const self = {
+          entity_id: 1,
+          user_id: 7,
+          name: 'self',
+          x: 0,
+          y: 0,
+          hp: 100,
+          max_hp: 100,
+          current_join_mode: 'Active',
+          stamina_5s_remaining_milli: 10000,
+          stamina_5s_limit_milli: 10000
+        };
+        const players = Array.from({ length: 60 }, (_, index) => ({
+          entity_id: 100 + index,
+          user_id: 1000 + index,
+          name: `passive-${index}`,
+          x: 1000 + index * 500,
+          y: 0,
+          hp: 100,
+          current_join_mode: 'Passive',
+          stamina_5s_remaining_milli: 10000,
+          stamina_5s_limit_milli: 10000,
+          death_drop_coins: 0
+        }));
+        const coins = Array.from({ length: 60 }, (_, index) => ({
+          drop_id: index === 59 ? 'high-far' : `low-${index}`,
+          x: 1000 + index * 500,
+          y: 100,
+          amount: index === 59 ? 10 : 1
+        }));
+        const decision = buildBrowserlessRealtimeControlDecision({
+          userId: 7,
+          realtime: { tick: 100, receivedAtMs: 1000, frameAgeMs: 0, self, entities: [self, ...players], bullets: [] },
+          fallback: { tick: 100, receivedAtMs: 1000, frameAgeMs: 0, self, entities: [self, ...players], coinDrops: coins, messages: [] }
+        }, createBrowserlessDecisionState(), {
+          ...buildBrowserlessRuntimeDefaults({}),
+          userId: 7,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          nowMs: 1000
+        });
+        return [
+          decision.input.nearby.c.length,
+          decision.input.nearby.p.length,
+          decision.input.nearby.c.some(row => row[0] === 'high-far'),
+          decision.input.nearby.c.every(row => Number(row[2]) <= 50000)
+        ].join('|');
+      })(),
+      want: '48|48|true|true'
+    },
+    {
       name: 'browserless realtime high-value loot yields to low hp and fresh injury',
       got: (() => {
         const self = {
@@ -19127,6 +19180,53 @@ async function runSelfTest() {
           const queued = store.append('runner', 'background-test', { token: 'secret-token', ok: true });
           const jsonFile = path.join(dir, 'state', 'test.json');
           backgroundIo.writeJsonAtomic(jsonFile, { value: 7 });
+          const patchFile = path.join(dir, 'state', 'patch.json');
+          fs.mkdirSync(path.dirname(patchFile), { recursive: true });
+          fs.writeFileSync(patchFile, JSON.stringify({
+            schemaVersion: 2,
+            players: { old: { score: 1 } },
+            strategyLearning: { routeTransitions: { old: { samples: 4, outcomes: { north: 3, south: 1 } } } }
+          }));
+          backgroundIo.writeJsonPatchAtomic(patchFile, {
+            updatedAt: '2026-07-19T00:00:00.000Z',
+            players: { fresh: { score: 2 } },
+            strategyLearning: { routeTransitions: { old: { samples: 5, outcomes: { north: 5 } } } }
+          }, [
+            ['players', 'old'],
+            ['strategyLearning', 'routeTransitions', 'old']
+          ]);
+          const combatFile = path.join(dir, 'state', 'combat-learning.json');
+          const routeKey = 'mode=zigzag-strafe|distance=far|direction=east|dwell=settled|speed=fast|radial=stable|lateral=right';
+          fs.writeFileSync(combatFile, JSON.stringify({
+            schemaVersion: 2,
+            updatedAt: '2026-07-19T00:00:00.000Z',
+            players: { 'user:8': { userId: '8', name: 'target', updatedAt: '2026-07-19T00:00:00.000Z' } },
+            strategyLearning: {
+              hitRateByModeDistance: {},
+              modeMetrics: {},
+              routeTransitions: { [routeKey]: { samples: 4, outcomes: { north: 3, south: 1 }, updatedAt: 1000 } },
+              routeAimFeedback: {}
+            }
+          }));
+          const completionTracker = createCombatCompletionTracker({
+            file: combatFile,
+            now: () => 7000,
+            backgroundIo
+          });
+          completionTracker.observeCombatSample({
+            userId: 8,
+            name: 'target',
+            startedAt: 1000,
+            targetDamage: 9,
+            selfDamage: 3,
+            atMs: 7000
+          });
+          completionTracker.updateStrategyLearning({
+            hitRateByModeDistance: {},
+            modeMetrics: {},
+            routeTransitions: { [routeKey]: { samples: 5, outcomes: { north: 5 }, updatedAt: 7000 } },
+            routeAimFeedback: {}
+          }, 7000);
           const rendered = await backgroundIo.renderStatus({
             session: { userId: 7, sessionToken: 'status-secret-token' },
             runner: { running: true },
@@ -19135,6 +19235,8 @@ async function runSelfTest() {
           const flushed = await store.flush();
           const logText = fs.readFileSync(queued.file, 'utf8');
           const json = JSON.parse(fs.readFileSync(jsonFile, 'utf8'));
+          const patched = JSON.parse(fs.readFileSync(patchFile, 'utf8'));
+          const combatPatched = JSON.parse(fs.readFileSync(combatFile, 'utf8'));
           const renderedStatus = JSON.parse(rendered.text);
           const renderedText = rendered.text;
           return [
@@ -19143,6 +19245,14 @@ async function runSelfTest() {
             logText.includes('[redacted]'),
             !logText.includes('secret-token'),
             json.value,
+            patched.players.old === undefined,
+            patched.players.fresh?.score,
+            patched.strategyLearning.routeTransitions.old.outcomes.south === undefined,
+            patched.strategyLearning.routeTransitions.old.outcomes.north,
+            combatPatched.players['user:8']?.targetDamage,
+            combatPatched.players['user:8']?.selfDamage,
+            combatPatched.strategyLearning.routeTransitions[routeKey]?.outcomes.south === undefined,
+            combatPatched.strategyLearning.routeTransitions[routeKey]?.outcomes.north,
             renderedStatus.compact,
             renderedStatus.session.tokenPresent,
             !renderedText.includes('status-secret-token'),
@@ -19152,7 +19262,7 @@ async function runSelfTest() {
           await backgroundIo.close();
         }
       }),
-      want: 'true|0|true|true|7|true|true|true|true'
+      want: 'true|0|true|true|7|true|2|true|5|9|3|true|5|true|true|true|true'
     },
     {
       name: 'browserless background IO continues after one operation failure',

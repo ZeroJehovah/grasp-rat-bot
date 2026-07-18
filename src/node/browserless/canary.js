@@ -1013,6 +1013,10 @@ async function runReadOnlyCanary(config, options = {}) {
   const frameGapAlertMs = Math.max(1000, Number(config.frameGapAlertMs || DEFAULT_FRAME_GAP_ALERT_MS));
   const decisionIntervalMs = Math.max(250, Number(config.decisionIntervalMs || 1000));
   const combatControlIntervalMs = Math.max(50, Number(config.combatControlIntervalMs || 160));
+  const combatControlStatusPublishMs = Math.max(
+    combatControlIntervalMs,
+    Number(config.combatControlStatusPublishMs || 500)
+  );
   const stateStore = options.stateStore || createBrowserlessStateStore({ userId: config.userId, now });
   const runtimeDefaults = buildBrowserlessRuntimeDefaults(config);
   const targetWhitelist = options.targetWhitelist || createBrowserlessTargetWhitelist({
@@ -1169,6 +1173,8 @@ async function runReadOnlyCanary(config, options = {}) {
   let lastCombatControlAtMs = 0;
   let lastRealtimeControlLogAtMs = 0;
   let lastRealtimeControlKey = '';
+  let lastCombatControlStatusAtMs = 0;
+  let lastCombatControlStatusKey = '';
   let lastRealtimeControlScale = null;
   let realtimeControlActive = false;
   let plannerInFlight = false;
@@ -1185,6 +1191,10 @@ async function runReadOnlyCanary(config, options = {}) {
   let transportPublished = false;
   let transport = null;
   let leavePending = null;
+  let pendingSnapshotObserver = null;
+  let snapshotObserverScheduled = false;
+  let pendingSnapshotObservationRefresh = null;
+  let snapshotObservationRefreshScheduled = false;
   const restartDrain = options.restartDrainCoordinator || null;
   let lastRestartDrainPublishKey = '';
   const publishRestartDrainStatus = status => {
@@ -1357,6 +1367,88 @@ async function runReadOnlyCanary(config, options = {}) {
   };
   const logWs = (type, detail) => {
     if (config.wsTraceEnabled && logStore) logStore.append('ws', type, addRunMeta(detail));
+  };
+  const recordDeferredMainThreadTask = (taskName, started, cpuStarted, stages = {}, detail = {}) => {
+    const durationMs = performance.now() - started;
+    const entry = recordMainThreadTask(result.hotPath, taskName, durationMs, stages, {
+      workProfile: mainThreadWorkProfile(cpuStarted, durationMs),
+      ...detail
+    });
+    if (entry && entry.durationMs >= result.hotPath.budgetMs) log('main-thread-budget-exceeded', entry);
+    return entry;
+  };
+  const flushSnapshotObserver = () => {
+    snapshotObserverScheduled = false;
+    const pending = pendingSnapshotObserver;
+    pendingSnapshotObserver = null;
+    if (!pending || typeof options.onSnapshotPayload !== 'function') return;
+    const started = performance.now();
+    const cpuStarted = startMainThreadCpuUsage();
+    try {
+      options.onSnapshotPayload(pending.payload, {
+        source: 'ws',
+        observedAtMs: pending.observedAtMs
+      });
+    } catch (err) {
+      log('canary-snapshot-observer-error', { error: err?.message || String(err) });
+    } finally {
+      recordDeferredMainThreadTask('snapshot-observer-update', started, cpuStarted, {}, {
+        tick: pending.payload?.tick ?? null,
+        inputScale: {
+          entityCount: Array.isArray(pending.payload?.entities) ? pending.payload.entities.length : 0,
+          coinCount: Array.isArray(pending.payload?.coin_drops) ? pending.payload.coin_drops.length : 0,
+          messageCount: Array.isArray(pending.payload?.messages) ? pending.payload.messages.length : 0
+        }
+      });
+    }
+  };
+  const flushSnapshotObservationRefresh = () => {
+    snapshotObservationRefreshScheduled = false;
+    const pending = pendingSnapshotObservationRefresh;
+    pendingSnapshotObservationRefresh = null;
+    if (!pending || typeof decisionAdapter.refreshSnapshotObservation !== 'function') return;
+    const started = performance.now();
+    const cpuStarted = startMainThreadCpuUsage();
+    try {
+      const currentState = stateStore.getDecisionState?.(pending.observedAtMs)
+        || stateStore.getState(pending.observedAtMs);
+      decisionAdapter.refreshSnapshotObservation(currentState, {
+        ...runtimeDefaults,
+        nowMs: pending.observedAtMs,
+        controlMode,
+        combatEnabled: config.combatEnabled
+      });
+    } catch (err) {
+      log('canary-snapshot-observation-refresh-error', { error: err?.message || String(err) });
+    } finally {
+      recordDeferredMainThreadTask('snapshot-observation-refresh', started, cpuStarted, {}, {
+        tick: pending.tick ?? null,
+        inputScale: pending.inputScale
+      });
+    }
+  };
+  const scheduleSnapshotWork = (payload, observedAtMs) => {
+    if (typeof options.onSnapshotPayload === 'function') {
+      pendingSnapshotObserver = { payload, observedAtMs };
+      if (!snapshotObserverScheduled) {
+        snapshotObserverScheduled = true;
+        setImmediate(flushSnapshotObserver);
+      }
+    }
+    if (typeof decisionAdapter.refreshSnapshotObservation === 'function') {
+      pendingSnapshotObservationRefresh = {
+        observedAtMs,
+        tick: payload?.tick ?? null,
+        inputScale: {
+          entityCount: Array.isArray(payload?.entities) ? payload.entities.length : 0,
+          coinCount: Array.isArray(payload?.coin_drops) ? payload.coin_drops.length : 0
+        }
+      };
+      if (!snapshotObservationRefreshScheduled) {
+        snapshotObservationRefreshScheduled = true;
+        setImmediate(flushSnapshotObservationRefresh);
+      }
+    }
   };
   const publishTransport = currentTransport => {
     if (!currentTransport || transportPublished || typeof options.onTransportOpen !== 'function') return;
@@ -1758,6 +1850,26 @@ async function runReadOnlyCanary(config, options = {}) {
     summary?.action?.reason || '',
     summary?.action?.target?.userId ?? summary?.action?.target?.user_id ?? summary?.combat?.target?.userId ?? ''
   ].join('|');
+  const realtimeControlStatusKey = summary => [
+    realtimeControlKey(summary),
+    summary?.input?.self?.hp ?? '',
+    summary?.combat?.target?.hp ?? summary?.action?.target?.hp ?? '',
+    summary?.action?.shouldLeave ? 1 : 0
+  ].join('|');
+  const publishCombatControlStatus = (summary, currentState, control, atMs, force = false) => {
+    if (typeof options.onCombatControl !== 'function') return;
+    const key = realtimeControlStatusKey(summary);
+    const urgent = summary?.band === 'safety' || summary?.action?.shouldLeave === true;
+    if (!force && !urgent && key === lastCombatControlStatusKey
+      && atMs - lastCombatControlStatusAtMs < combatControlStatusPublishMs) return;
+    try {
+      options.onCombatControl(summary, { state: currentState, control });
+      lastCombatControlStatusKey = key;
+      lastCombatControlStatusAtMs = atMs;
+    } catch (err) {
+      log('canary-combat-status-error', { error: errorMessage(err) });
+    }
+  };
   const publishRealtimeControl = (control, currentState, atMs) => {
     control = applyRestartDrainDecisionGate(control || {});
     const action = control?.action || null;
@@ -1776,13 +1888,7 @@ async function runReadOnlyCanary(config, options = {}) {
         input: control?.input || null
       };
       result.decisions.last = release;
-      if (typeof options.onCombatControl === 'function') {
-        try {
-          options.onCombatControl(release, { state: currentState, control });
-        } catch (err) {
-          log('canary-combat-status-error', { error: errorMessage(err) });
-        }
-      }
+      publishCombatControlStatus(release, currentState, control, atMs, true);
       applyDecisionAction(currentState, release, control, atMs, { errorReason: 'realtime-control-release-failed' });
       return true;
     }
@@ -1814,13 +1920,7 @@ async function runReadOnlyCanary(config, options = {}) {
       lastRealtimeControlKey = key;
       lastRealtimeControlLogAtMs = atMs;
     }
-    if (typeof options.onCombatControl === 'function') {
-      try {
-        options.onCombatControl(summary, { state: currentState, control });
-      } catch (err) {
-        log('canary-combat-status-error', { error: errorMessage(err) });
-      }
-    }
+    publishCombatControlStatus(summary, currentState, control, atMs);
     const immediate = safetyController.evaluate(currentState, {
       startedAtMs: noSelfGuardStartedAtMs(atMs),
       decision: summary,
@@ -2133,16 +2233,7 @@ async function runReadOnlyCanary(config, options = {}) {
           }
           if (frame.decodedJson) {
             stageStarted = performance.now();
-            if (frame.decodedJson.type === 'snapshot' && typeof options.onSnapshotPayload === 'function') {
-              try {
-                options.onSnapshotPayload(frame.decodedJson, {
-                  source: 'ws',
-                  observedAtMs: atMs
-                });
-              } catch (err) {
-                log('canary-snapshot-observer-error', { error: err?.message || String(err) });
-              }
-            }
+            if (frame.decodedJson.type === 'snapshot') scheduleSnapshotWork(frame.decodedJson, atMs);
             stageDurations['snapshot-observers'] = performance.now() - stageStarted;
             stageStarted = performance.now();
             stateStore.ingestFrame(frame.decodedJson, { receivedAtMs: atMs });
@@ -2208,7 +2299,16 @@ async function runReadOnlyCanary(config, options = {}) {
             maybePrewarmLeaveConnection(currentState, atMs, 'realtime-risk');
             if (deadlineAtMs && atMs >= deadlineAtMs) return;
             stageStarted = performance.now();
-            const realtimeHandled = evaluateRealtimeControl(currentState, atMs, false, stageDurations);
+            // Pushed snapshot frames update fallback metadata and prime their
+            // bounded observation cache after this callback. Combat authority
+            // remains the high-frequency native pos stream, so running the
+            // realtime controller here would rebuild the just-invalidated
+            // snapshot observation before the deferred prime can execute.
+            const snapshotFrame = frame.decodedJson.type === 'snapshot';
+            const realtimeHandled = snapshotFrame
+              ? realtimeControlActive
+              : evaluateRealtimeControl(currentState, atMs, false, stageDurations);
+            if (snapshotFrame) stageDurations['realtime-snapshot-deferred'] = performance.now() - stageStarted;
             if (!realtimeHandled && !plannerInFlight && (!lastDecisionAtMs || atMs - lastDecisionAtMs >= decisionIntervalMs)) {
               if (decisionWorker) {
                 dispatchWorkerDecision(currentState, atMs);
@@ -2397,6 +2497,13 @@ async function runReadOnlyCanary(config, options = {}) {
     );
     if (result.safety.exit?.event) result.safety.exit.event = result.safety.event;
   }
+
+  // Preserve the final pushed snapshot's kill/chat/tracker evidence before the
+  // transport and background workers begin terminal cleanup. The queued
+  // setImmediate callbacks become harmless no-ops after these synchronous
+  // bounded flushes clear their pending payloads.
+  flushSnapshotObserver();
+  flushSnapshotObservationRefresh();
 
   try {
     ending = true;
