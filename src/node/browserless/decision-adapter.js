@@ -3388,6 +3388,97 @@ function singleCoinBaitVisibleCoins(input, previous = null) {
   return mergeProfitCoinCandidates(coins);
 }
 
+function singleCoinBaitAnchoredOpportunity(input, candidate, bait, threshold, options = {}) {
+  if (!candidate || !bait) return null;
+  const type = String(candidate.type || '');
+  const source = candidate.sourceCoin || candidate.sourceTarget || candidate.coin || candidate;
+  if (type === 'coin' && singleCoinBaitMatchesCore(source, bait, {
+    sameCoinRadiusCm: options.singleCoinBaitSameCoinRadiusCm ?? BROWSER_RUNTIME_DEFAULTS.singleCoinBaitSameCoinRadiusCm
+  })) {
+    return candidate;
+  }
+
+  let reward = 0;
+  let staminaCost = Infinity;
+  let distance = distanceBetween(bait, source);
+  let pathClear = true;
+  if (type === 'coin') {
+    const route = source?.routeDisplayOnly !== true
+      ? (source?.coinRoute || candidate?.coinRoute || null)
+      : null;
+    const routePoints = Array.isArray(route?.points) ? route.points : [];
+    const routeOptions = coinRouteCoreOptions(input, {}, options);
+    if (routePoints.length) {
+      let previous = bait;
+      for (const point of routePoints) {
+        if (!coinRouteLegClearCore(previous, point, input?.activeThreats || [], routeOptions)) {
+          pathClear = false;
+          break;
+        }
+        previous = point;
+      }
+      const summary = coinRouteSummaryCore(routePoints, bait, routeOptions);
+      reward = Number(summary.totalValue || 0);
+      staminaCost = Number(summary.totalStaminaCost || 0);
+      distance = Number(summary.totalDistance || distance);
+    } else {
+      pathClear = coinRouteLegClearCore(bait, source, input?.activeThreats || [], routeOptions);
+      reward = Math.max(0, Number(source?.amount ?? candidate?.amount ?? 0));
+      staminaCost = opportunityMoveStaminaCost(distance, options, 0)
+        + Math.max(0, Number(options.opportunityCoinPickupStaminaMs ?? BROWSER_RUNTIME_DEFAULTS.opportunityCoinPickupStaminaMs ?? 0));
+    }
+  } else if (type === 'enemy') {
+    const anchoredTarget = { ...source, distance };
+    reward = profitOpportunityThresholdReward(candidate);
+    staminaCost = opportunityEnemyStaminaCost(anchoredTarget, options);
+  } else {
+    return { ...candidate, profitThresholdEligible: false };
+  }
+
+  const affordable = opportunityStaminaAffordable(input?.self, staminaCost, options);
+  const profitThresholdEligible = pathClear
+    && affordable
+    && profitRewardAndCostEligible(reward, staminaCost, threshold);
+  return {
+    ...candidate,
+    profitThresholdEligible,
+    baitAnchorEvaluation: {
+      originId: coinRouteKey(bait),
+      type,
+      id: type === 'coin'
+        ? coinRouteKey(source)
+        : String(source?.user_id ?? source?.userId ?? source?.id ?? candidate.id ?? ''),
+      reward,
+      staminaCost: Number.isFinite(staminaCost) ? Math.round(staminaCost) : null,
+      distance: Number.isFinite(distance) ? Math.round(distance) : null,
+      pathClear,
+      affordable,
+      profitThresholdEligible
+    }
+  };
+}
+
+function singleCoinBaitAnchoredOpportunities(input, opportunity, bait, options = {}) {
+  const candidates = opportunity?.rawOpportunities || opportunity?.opportunities || [];
+  return candidates
+    .map(candidate => singleCoinBaitAnchoredOpportunity(input, candidate, bait, opportunity?.threshold, options))
+    .filter(Boolean);
+}
+
+function summarizeSingleCoinBaitOpportunityEvaluations(opportunities, bait, options = {}) {
+  return (opportunities || [])
+    .filter(opportunity => opportunity?.baitAnchorEvaluation)
+    .filter(opportunity => !singleCoinBaitMatchesCore(
+      opportunity.sourceCoin || opportunity.coin || opportunity,
+      bait,
+      { sameCoinRadiusCm: options.singleCoinBaitSameCoinRadiusCm ?? BROWSER_RUNTIME_DEFAULTS.singleCoinBaitSameCoinRadiusCm }
+    ))
+    .map(opportunity => cloneJson(opportunity.baitAnchorEvaluation))
+    .sort((left, right) => Number(right.profitThresholdEligible) - Number(left.profitThresholdEligible)
+      || Number(left.staminaCost ?? Infinity) - Number(right.staminaCost ?? Infinity))
+    .slice(0, 8);
+}
+
 function singleCoinBaitResidualRouteContinuation(input, opportunity, options = {}) {
   const selectedOpportunity = opportunity?.choice || null;
   const source = selectedOpportunity?.sourceCoin || selectedOpportunity?.coin || selectedOpportunity || null;
@@ -3401,32 +3492,72 @@ function singleCoinBaitResidualRouteContinuation(input, opportunity, options = {
   const anchorIndex = route.points.findIndex(point => coinRouteKey(point) === anchorKey);
   if (anchorIndex < 0) return null;
   const availableByKey = new Map((input?.profitCoins || []).map(coin => [coinRouteKey(coin), coin]));
-  const remaining = route.points.slice(anchorIndex + 1)
+  const remainingPoints = route.points.slice(anchorIndex + 1);
+  const firstFollowUp = availableByKey.get(coinRouteKey(remainingPoints[0])) || null;
+  if (!firstFollowUp) return null;
+  const remaining = remainingPoints
     .map(point => availableByKey.get(coinRouteKey(point)) || null)
     .filter(Boolean);
-  if (!remaining.length) return null;
   const routeOptions = coinRouteCoreOptions(input, {}, options);
-  let previous = source;
-  for (const coin of remaining) {
-    if (!coinRouteLegClearCore(previous, coin, input?.activeThreats || [], routeOptions)) return null;
-    previous = coin;
-  }
+  if (!coinRouteLegClearCore(source, firstFollowUp, input?.activeThreats || [], routeOptions)) return null;
   const summary = coinRouteSummaryCore(remaining, source, routeOptions);
+  const firstFollowUpSummary = coinRouteSummaryCore([firstFollowUp], source, routeOptions);
   const reward = Number(summary.totalValue || 0);
   const staminaCost = Number(summary.totalStaminaCost || 0);
-  const profitThresholdEligible = profitRewardAndCostEligible(reward, staminaCost, opportunity?.threshold);
+  const firstFollowUpReward = Number(firstFollowUpSummary.totalValue || 0);
+  const firstFollowUpStaminaCost = Number(firstFollowUpSummary.totalStaminaCost || 0);
+  // Once the bait anchor is collected, ordinary planning can act only on the
+  // first remaining leg. Later route value must not subsidize an ineligible
+  // first leg and leave the bot idle immediately after consuming the bait.
+  const profitThresholdEligible = profitRewardAndCostEligible(
+    firstFollowUpReward,
+    firstFollowUpStaminaCost,
+    opportunity?.threshold
+  );
   return {
     routeIds: remaining.map(coinRouteKey),
     reward,
     staminaCost: Math.round(staminaCost),
     legCount: remaining.length,
+    evaluationOrigin: {
+      id: anchorKey,
+      x: Number(source.x),
+      y: Number(source.y)
+    },
+    firstFollowUp: {
+      id: coinRouteKey(firstFollowUp),
+      reward: firstFollowUpReward,
+      staminaCost: Math.round(firstFollowUpStaminaCost)
+    },
     profitThresholdEligible,
-    suppressionReason: profitThresholdEligible ? 'eligible-residual-route' : 'residual-route-below-profit-threshold'
+    suppressionReason: profitThresholdEligible
+      ? 'eligible-first-follow-up-from-bait'
+      : 'first-follow-up-below-profit-threshold'
   };
 }
 
 function buildSingleCoinBaitDecision(input, opportunity, stateful = {}, options = {}, allowEnter = true) {
   const previous = stateful.singleCoinBait || null;
+  const selectedSource = opportunity?.choice?.sourceCoin
+    || opportunity?.choice?.coin
+    || opportunity?.choice
+    || null;
+  const selectedBaitCandidate = String(opportunity?.choice?.type || '') === 'coin'
+    && Number(selectedSource?.amount) === 1
+    ? selectedSource
+    : null;
+  const baitReference = previous || selectedBaitCandidate;
+  const anchoredOpportunities = singleCoinBaitAnchoredOpportunities(
+    input,
+    opportunity,
+    baitReference,
+    options
+  );
+  const opportunityEvaluations = summarizeSingleCoinBaitOpportunityEvaluations(
+    anchoredOpportunities,
+    baitReference,
+    options
+  );
   const continuation = singleCoinBaitResidualRouteContinuation(input, opportunity, options);
   const selectedOpportunity = continuation
     ? { ...(opportunity?.choice || {}), residualRouteContinuation: continuation }
@@ -3436,7 +3567,7 @@ function buildSingleCoinBaitDecision(input, opportunity, stateful = {}, options 
     nowMs: input?.nowMs,
     previous,
     selectedOpportunity,
-    opportunities: opportunity?.opportunities || [],
+    opportunities: anchoredOpportunities,
     visibleCoins: singleCoinBaitVisibleCoins(input, previous),
     entryCoins: input?.profitCoins || [],
     allowEnter
@@ -3447,7 +3578,7 @@ function buildSingleCoinBaitDecision(input, opportunity, stateful = {}, options 
   }
   stateful.singleCoinBait = policy.state ? cloneJson(policy.state) : null;
   if (!policy.state || !policy.coin) {
-    return { ...policy, continuation, action: null, summary: null };
+    return { ...policy, continuation, opportunityEvaluations, action: null, summary: null };
   }
 
   if (policy.phase === 'hold') {
@@ -3462,6 +3593,7 @@ function buildSingleCoinBaitDecision(input, opportunity, stateful = {}, options 
     return {
       ...policy,
       continuation,
+      opportunityEvaluations,
       summary,
       action: {
         kind: 'wait',
@@ -3480,6 +3612,7 @@ function buildSingleCoinBaitDecision(input, opportunity, stateful = {}, options 
   return {
     ...policy,
     continuation,
+    opportunityEvaluations,
     summary,
     action: {
       kind: actionKind,
@@ -7551,6 +7684,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       competition: cloneJson(input.activeCoinCompetition),
       singleCoinBait: singleCoinBait.summary,
       singleCoinBaitContinuation: cloneJson(singleCoinBait.continuation || null),
+      singleCoinBaitOpportunityEvaluations: cloneJson(singleCoinBait.opportunityEvaluations || []),
       easyKill: {
         ...cloneJson(input.easyKill || {}),
         ...easyKillCandidateDiagnostics,

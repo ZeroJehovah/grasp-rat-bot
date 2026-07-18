@@ -10826,10 +10826,10 @@ async function runSelfTest() {
       want: 'single-coin-bait-hold|bait|hold|best-opportunity-coin|1|false|false|1|2|snapshot-fallback'
     },
     {
-      name: 'browserless single coin bait yields to foot coin when preview residual route still meets dynamic threshold',
+      name: 'browserless single coin bait evaluates the first follow-up from the bait coordinate',
       got: (() => {
         const nowMs = Date.parse('2026-07-12T00:00:00.000Z');
-        const stateFor = () => ({
+        const stateFor = (coinDrops, selfPosition = { x: -2431, y: 54988 }) => ({
           userId: 7,
           realtime: {
             tick: 58,
@@ -10838,8 +10838,8 @@ async function runSelfTest() {
               entity_id: 1,
               user_id: 7,
               name: 'self',
-              x: -2431,
-              y: 54988,
+              x: selfPosition.x,
+              y: selfPosition.y,
               hp: 100,
               max_hp: 100,
               stamina_1h_remaining_milli: 3000000,
@@ -10849,20 +10849,15 @@ async function runSelfTest() {
               entity_id: 1,
               user_id: 7,
               name: 'self',
-              x: -2431,
-              y: 54988,
+              x: selfPosition.x,
+              y: selfPosition.y,
               hp: 100,
               max_hp: 100,
               stamina_1h_remaining_milli: 3000000,
               stamina_1d_remaining_milli: 20000000
             }],
             bullets: [],
-            coinDrops: [
-              { drop_id: '3326', amount: 1, x: -2555, y: 54103 },
-              { drop_id: '3299', amount: 1, x: -6214, y: 44450 },
-              { drop_id: '3215', amount: 1, x: -1370, y: 41729 },
-              { drop_id: '3306', amount: 1, x: -1993, y: 37096 }
-            ]
+            coinDrops
           },
           fallback: { tick: 58, frameAgeMs: 100, entities: [], coinDrops: [], messages: [] }
         });
@@ -10874,20 +10869,68 @@ async function runSelfTest() {
           singleCoinBaitHoldRadiusCm: 1000,
           finalActionArbitrationHoldMs: 0
         };
-        const eligible = buildBrowserlessDecision(stateFor(), {}, options);
+        const aggregateOnly = buildBrowserlessDecision(stateFor([
+          { drop_id: '3326', amount: 1, x: -2555, y: 54103 },
+          { drop_id: '3299', amount: 1, x: -6214, y: 44450 },
+          { drop_id: '3215', amount: 1, x: -1370, y: 41729 },
+          { drop_id: '3306', amount: 1, x: -1993, y: 37096 }
+        ]), {}, options);
+        const immediateEligible = buildBrowserlessDecision(stateFor([
+          { drop_id: 'bait', amount: 1, x: -2555, y: 54103 },
+          { drop_id: 'next', amount: 1, x: -2555, y: 45103 },
+          { drop_id: 'later', amount: 1, x: -2555, y: 36103 }
+        ]), {}, options);
+        const currentSelfOnlyEligible = buildBrowserlessDecision(stateFor([
+          { drop_id: 'anchored-bait', amount: 1, x: 900, y: 0 },
+          { drop_id: 'self-near-next', amount: 1, x: -9500, y: 0 }
+        ], { x: 0, y: 0 }), {}, options);
+        const currentSelfOnlyEvaluation = currentSelfOnlyEligible.profit.singleCoinBaitOpportunityEvaluations
+          .find(item => item.id === 'self-near-next');
+        const displacedAdapter = createBrowserlessDecisionAdapter(options);
+        displacedAdapter.decide(stateFor([
+          { drop_id: 'displaced-bait', amount: 1, x: 900, y: 0 }
+        ], { x: 0, y: 0 }), { nowMs });
+        const displaced = displacedAdapter.decide(stateFor([
+          { drop_id: 'displaced-bait', amount: 1, x: 900, y: 0 },
+          { drop_id: 'temporary-profit', amount: 1, x: -9500, y: 0 }
+        ], { x: -9500, y: 0 }), { nowMs: nowMs + 1000 });
+        const displacedEvaluation = displaced.profit.singleCoinBaitOpportunityEvaluations
+          .find(item => item.id === 'temporary-profit');
         return [
-          eligible.reason,
-          eligible.action.target?.id,
-          Boolean(eligible.action.coinRoute),
-          eligible.input.nearby.c.some(row => Number(row[4]) > 0),
-          eligible.profit.singleCoinBait === null,
-          eligible.profit.singleCoinBaitContinuation?.reward,
-          eligible.profit.singleCoinBaitContinuation?.staminaCost,
-          eligible.profit.singleCoinBaitContinuation?.profitThresholdEligible,
-          eligible.profit.singleCoinBaitContinuation?.suppressionReason
+          aggregateOnly.reason,
+          aggregateOnly.action.target?.id,
+          aggregateOnly.profit.singleCoinBait?.phase,
+          aggregateOnly.profit.singleCoinBaitContinuation?.reward,
+          aggregateOnly.profit.singleCoinBaitContinuation?.staminaCost,
+          aggregateOnly.profit.singleCoinBaitContinuation?.firstFollowUp?.id,
+          aggregateOnly.profit.singleCoinBaitContinuation?.firstFollowUp?.reward,
+          aggregateOnly.profit.singleCoinBaitContinuation?.firstFollowUp?.staminaCost,
+          aggregateOnly.profit.singleCoinBaitContinuation?.evaluationOrigin?.id,
+          aggregateOnly.profit.singleCoinBaitContinuation?.profitThresholdEligible,
+          aggregateOnly.profit.singleCoinBaitContinuation?.suppressionReason,
+          immediateEligible.reason,
+          immediateEligible.action.target?.id,
+          immediateEligible.profit.singleCoinBait === null,
+          immediateEligible.profit.singleCoinBaitContinuation?.firstFollowUp?.id,
+          immediateEligible.profit.singleCoinBaitContinuation?.firstFollowUp?.staminaCost,
+          immediateEligible.profit.singleCoinBaitContinuation?.profitThresholdEligible,
+          immediateEligible.profit.singleCoinBaitContinuation?.suppressionReason,
+          currentSelfOnlyEligible.reason,
+          currentSelfOnlyEligible.action.target?.id,
+          currentSelfOnlyEligible.profit.singleCoinBait?.phase,
+          currentSelfOnlyEvaluation?.originId,
+          currentSelfOnlyEvaluation?.distance,
+          currentSelfOnlyEvaluation?.staminaCost,
+          currentSelfOnlyEvaluation?.profitThresholdEligible,
+          displaced.reason,
+          displaced.action.target?.id,
+          displaced.profit.singleCoinBait?.phase,
+          displacedEvaluation?.originId,
+          displacedEvaluation?.staminaCost,
+          displacedEvaluation?.profitThresholdEligible
         ].join('|');
       })(),
-      want: 'foot-coin-priority|3326|false|false|true|3|20554|true|eligible-residual-route'
+      want: 'single-coin-bait-hold|3326|hold|3|20554|3299|1|10323|3326|false|first-follow-up-below-profit-threshold|foot-coin-priority|bait|true|next|9000|true|eligible-first-follow-up-from-bait|single-coin-bait-hold|anchored-bait|hold|anchored-bait|10400|10400|false|single-coin-bait-return|displaced-bait|return|displaced-bait|10400|false'
     },
     {
       name: 'browserless single coin bait releases itself before newly visible ordinary profit',
