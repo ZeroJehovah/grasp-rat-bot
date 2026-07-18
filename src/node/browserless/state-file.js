@@ -147,6 +147,7 @@ function shouldReplaceStateObject(pathParts) {
     || pathKey === 'runner.lastRun'
     || pathKey === 'probes.lastSnapshotProbe'
     || pathKey === 'probes.lastReadOnlyProbe'
+    || pathKey === 'loginPointSafety.detail'
     || pathKey === 'current.action'
     || pathKey === 'current.decision'
     || pathKey === 'current.decisionState'
@@ -830,6 +831,7 @@ function compactPoint(value) {
     x,
     y,
     hp: compactNumber(value.hp),
+    maxHp: compactNumber(value.maxHp ?? value.max_hp),
     source: compactString(value.source, 48)
   };
 }
@@ -865,7 +867,46 @@ function compactSafetyEntity(value) {
     fullStamina5s: value.fullStamina5s === undefined ? null : Boolean(value.fullStamina5s),
     knownEasyKill: value.knownEasyKill === undefined ? null : Boolean(value.knownEasyKill),
     knownDamageActor: value.knownDamageActor === undefined ? null : Boolean(value.knownDamageActor),
-    trustedEasyKill: value.trustedEasyKill === undefined ? null : Boolean(value.trustedEasyKill)
+    trustedEasyKill: value.trustedEasyKill === undefined ? null : Boolean(value.trustedEasyKill),
+    blockingReasons: Array.isArray(value.blockingReasons)
+      ? value.blockingReasons.map(reason => compactString(reason, 120)).filter(Boolean)
+      : []
+  };
+}
+
+function compactSafetyFactor(value) {
+  if (!value || typeof value !== 'object') return null;
+  return {
+    type: compactString(value.type, 32),
+    reason: compactString(value.reason, 120),
+    userId: compactNumber(value.userId ?? value.user_id),
+    entityId: compactNumber(value.entityId ?? value.entity_id),
+    name: compactString(value.name, 120),
+    distance: compactNumber(value.distance),
+    hp: compactNumber(value.hp)
+  };
+}
+
+function compactSingleBlockerHold(value) {
+  if (!value || typeof value !== 'object') return null;
+  return {
+    active: Boolean(value.active),
+    userId: compactNumber(value.userId),
+    name: compactString(value.name, 120),
+    firstBlockedAt: compactString(value.firstBlockedAt, 48),
+    lastBlockedAt: compactString(value.lastBlockedAt, 48),
+    durationMs: compactNumber(value.durationMs),
+    thresholdMs: compactNumber(value.thresholdMs),
+    remainingMs: compactNumber(value.remainingMs),
+    observationCount: compactNumber(value.observationCount),
+    fullHp: Boolean(value.fullHp),
+    pointHp: compactNumber(value.pointHp),
+    requiredFullHp: compactNumber(value.requiredFullHp),
+    blockingPlayerCount: compactNumber(value.blockingPlayerCount),
+    blockingFactorCount: compactNumber(value.blockingFactorCount),
+    eligible: Boolean(value.eligible),
+    bypassedAt: compactString(value.bypassedAt, 48),
+    resetReason: compactString(value.resetReason, 120)
   };
 }
 
@@ -972,6 +1013,12 @@ function compactLoginPointSafetyDetail(loginPointSafety, normalized) {
     || (isolatePendingDetail ? null : directDetail.nearestDangerous)
     || nearestDamageActor
     || (nearestActive?.trustedEasyKill ? null : nearestActive);
+  const blockingPlayers = Array.isArray(detail.blockingPlayers)
+    ? detail.blockingPlayers.map(compactSafetyEntity).filter(Boolean)
+    : [];
+  const blockingFactors = Array.isArray(detail.blockingFactors)
+    ? detail.blockingFactors.map(compactSafetyFactor).filter(Boolean)
+    : [];
   return {
     ok: okValue === undefined ? null : Boolean(okValue),
     reason: compactString(reason, 120),
@@ -986,6 +1033,9 @@ function compactLoginPointSafetyDetail(loginPointSafety, normalized) {
     bypassedPreLoginSafety: Boolean(detail.bypassedPreLoginSafety
       ?? (isolatePendingDetail ? undefined : snapshotSafety?.bypassedPreLoginSafety)
       ?? directDetail.bypassedPreLoginSafety),
+    bypassKind: compactString(detail.bypassKind
+      ?? (isolatePendingDetail ? '' : snapshotSafety?.bypassKind)
+      ?? directDetail.bypassKind, 64),
     point,
     selfPresent: isolatePendingDetail
       ? (detail.selfPresent === undefined ? null : Boolean(detail.selfPresent))
@@ -996,6 +1046,10 @@ function compactLoginPointSafetyDetail(loginPointSafety, normalized) {
     nearestDamageActor: compactSafetyEntity(nearestDamageActor),
     nearestTrustedEasyKill: compactSafetyEntity(nearestTrustedEasyKill),
     nearestDangerous: compactSafetyEntity(nearestDangerous),
+    blockingPlayers,
+    blockingFactors,
+    blockingFactorCount: compactNumber(detail.blockingFactorCount ?? blockingFactors.length),
+    singleBlockerHold: compactSingleBlockerHold(detail.singleBlockerHold),
     damageActorNearbyCount: compactNumber(detail.damageActorNearbyCount),
     trustedEasyKillNearbyCount: compactNumber(detail.trustedEasyKillNearbyCount),
     dangerousNearbyCount: compactNumber(detail.dangerousNearbyCount)

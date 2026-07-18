@@ -40,6 +40,7 @@ const DEFAULTS = {
   dailyFirstLoginDelayMs: 120000,
   loginPointSafetySuccessRequired: 1,
   loginPointSafetyProbeIntervalMs: 30000,
+  loginPointSingleBlockerBypassMs: 3600000,
   snapshotEdgeEnabled: true,
   snapshotEdgeIntervalMs: 10000,
   snapshotEdgeMaxWaitMs: 60000,
@@ -156,6 +157,7 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
     dailyFirstLoginDelayMs: numberEnv(env.GRASP_RAT_BROWSERLESS_DAILY_FIRST_LOGIN_DELAY_MS, DEFAULTS.dailyFirstLoginDelayMs),
     loginPointSafetySuccessRequired: numberEnv(env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_SAFETY_SUCCESS_REQUIRED, DEFAULTS.loginPointSafetySuccessRequired),
     loginPointSafetyProbeIntervalMs: numberEnv(env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_SAFETY_PROBE_INTERVAL_MS, DEFAULTS.loginPointSafetyProbeIntervalMs),
+    loginPointSingleBlockerBypassMs: numberEnv(env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_SINGLE_BLOCKER_BYPASS_MS, DEFAULTS.loginPointSingleBlockerBypassMs),
     snapshotEdgeEnabled: boolEnv(env.GRASP_RAT_BROWSERLESS_SNAPSHOT_EDGE_ENABLED, DEFAULTS.snapshotEdgeEnabled),
     snapshotEdgeIntervalMs: numberEnv(env.GRASP_RAT_BROWSERLESS_SNAPSHOT_EDGE_INTERVAL_MS, DEFAULTS.snapshotEdgeIntervalMs),
     snapshotEdgeMaxWaitMs: numberEnv(env.GRASP_RAT_BROWSERLESS_SNAPSHOT_EDGE_MAX_WAIT_MS, DEFAULTS.snapshotEdgeMaxWaitMs),
@@ -282,6 +284,8 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
       config.loginPointSafetySuccessRequired = numberEnv(argv[++i], config.loginPointSafetySuccessRequired);
     } else if (arg === '--login-point-safety-probe-interval-ms') {
       config.loginPointSafetyProbeIntervalMs = numberEnv(argv[++i], config.loginPointSafetyProbeIntervalMs);
+    } else if (arg === '--login-point-single-blocker-bypass-ms') {
+      config.loginPointSingleBlockerBypassMs = numberEnv(argv[++i], config.loginPointSingleBlockerBypassMs);
     } else if (arg === '--snapshot-edge-enabled') {
       config.snapshotEdgeEnabled = true;
     } else if (arg === '--no-snapshot-edge-enabled') {
@@ -443,6 +447,7 @@ function usage() {
     '  --login-point-x <cm>      Manual login point x for canary safety',
     '  --login-point-y <cm>      Manual login point y for canary safety',
     '  --login-point-hp <hp>     Manual login point HP context for canary safety',
+    '  --login-point-single-blocker-bypass-ms <ms>  Full-HP bypass after one sole blocker persists. Default: 3600000',
     '  --dynamic-profit-threshold  Enable the dynamic ordinary-profit threshold (default: true)',
     '  --no-dynamic-profit-threshold  Disable the dynamic ordinary-profit threshold',
     '  --profit-threshold-coins-per-10-stamina <n>  Reward coins per 10 stamina. Default: 1',

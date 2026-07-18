@@ -721,6 +721,9 @@ function summarizeSnapshotSafety(payload, loginPoint, options = {}) {
         x: Number(loginPoint.x),
         y: Number(loginPoint.y),
         hp: Number.isFinite(Number(loginPoint.hp)) ? Number(loginPoint.hp) : null,
+        maxHp: Number.isFinite(Number(loginPoint.maxHp ?? loginPoint.max_hp))
+          ? Number(loginPoint.maxHp ?? loginPoint.max_hp)
+          : null,
         source: String(loginPoint.source || 'last-self')
       }
     : null;
@@ -728,7 +731,10 @@ function summarizeSnapshotSafety(payload, loginPoint, options = {}) {
     return {
       ok: false,
       reason: 'missing-login-point',
-      entityCount: entities.length
+      entityCount: entities.length,
+      blockingPlayers: [],
+      blockingFactors: [{ type: 'snapshot', reason: 'missing-login-point' }],
+      blockingFactorCount: 1
     };
   }
   const healthyHpThreshold = Math.max(0, Number(options.healthyHpThreshold ?? 80));
@@ -781,6 +787,30 @@ function summarizeSnapshotSafety(payload, loginPoint, options = {}) {
   dangerousNearby.sort((a, b) => a.distance - b.distance);
   nearby.sort((a, b) => a.distance - b.distance);
   const fresh = options.freshness || summarizeSnapshotFreshness(payload, options.latestKnownTick);
+  const blockingPlayers = dangerousNearby.map(player => ({
+    ...player,
+    blockingReasons: [
+      ...((player.active && !player.trustedEasyKill) ? ['active-near-login-point'] : []),
+      ...(player.knownDamageActor ? ['damage-actor-near-login-point'] : [])
+    ]
+  }));
+  const blockingFactors = [];
+  if (!fresh.ok) {
+    blockingFactors.push({ type: 'snapshot', reason: fresh.reason || 'snapshot-not-fresh' });
+  }
+  for (const player of blockingPlayers) {
+    for (const reason of player.blockingReasons) {
+      blockingFactors.push({
+        type: 'player',
+        reason,
+        userId: player.user_id ?? player.userId ?? null,
+        entityId: player.entity_id ?? player.entityId ?? null,
+        name: player.name || '',
+        distance: player.distance ?? null,
+        hp: player.hp ?? null
+      });
+    }
+  }
   const dangerousSafe = dangerousNearby.length === 0;
   const ok = Boolean(fresh.ok && dangerousSafe);
   return {
@@ -804,7 +834,10 @@ function summarizeSnapshotSafety(payload, loginPoint, options = {}) {
     nearestDamageActor: damageActorNearby[0] || null,
     nearestTrustedEasyKill: trustedEasyKillNearby[0] || null,
     nearestDangerous: dangerousNearby[0] || null,
-    nearest: nearby[0] || null
+    nearest: nearby[0] || null,
+    blockingPlayers,
+    blockingFactors,
+    blockingFactorCount: blockingFactors.length
   };
 }
 

@@ -40,6 +40,8 @@ const DEFAULT_READONLY_PROBE_MS = 30000;
 const DEFAULT_FRAME_GAP_ALERT_MS = 2000;
 const DEFAULT_MAIN_THREAD_BUDGET_MS = 50;
 const DEFAULT_REALTIME_CONTROL_WARMUP_ITERATIONS = 6;
+const DEFAULT_LOGIN_POINT_SINGLE_BLOCKER_BYPASS_MS = 60 * 60 * 1000;
+const DEFAULT_LOGIN_POINT_FULL_HP = 100;
 
 function createTimingAggregate() {
   return { count: 0, totalMs: 0, maxMs: 0, overBudgetCount: 0 };
@@ -416,7 +418,112 @@ function loginPointFromState(state) {
     x: Number(point.x),
     y: Number(point.y),
     hp: Number.isFinite(Number(point.hp)) ? Number(point.hp) : null,
+    maxHp: Number.isFinite(Number(point.maxHp ?? point.max_hp)) ? Number(point.maxHp ?? point.max_hp) : null,
     source: point.source || 'state'
+  };
+}
+
+function loginPointSingleBlockerHold(state) {
+  const value = state?.loginPointSafety?.detail?.singleBlockerHold;
+  return value && typeof value === 'object' ? value : null;
+}
+
+function applySingleBlockerLoginBypass(summary, state, config = {}, checkedAtMs = Date.now()) {
+  if (!summary?.safety || typeof summary.safety !== 'object') {
+    return { summary, bypassed: false, bypassKind: '', originalReason: '' };
+  }
+  const safety = summary.safety;
+  const blockingPlayers = Array.isArray(safety.blockingPlayers) ? safety.blockingPlayers : [];
+  const blockingFactors = Array.isArray(safety.blockingFactors) ? safety.blockingFactors : [];
+  const pointHp = Number(safety.point?.hp);
+  const pointMaxHp = Number(safety.point?.maxHp ?? safety.point?.max_hp);
+  const requiredFullHp = Number.isFinite(pointMaxHp) && pointMaxHp > 0
+    ? pointMaxHp
+    : DEFAULT_LOGIN_POINT_FULL_HP;
+  const fullHp = Number.isFinite(pointHp) && pointHp >= requiredFullHp;
+  const solePlayer = blockingPlayers.length === 1 ? blockingPlayers[0] : null;
+  const soleUserId = Number(solePlayer?.user_id ?? solePlayer?.userId);
+  const playerFactorsOnly = blockingFactors.length > 0 && blockingFactors.every(factor => (
+    factor?.type === 'player'
+      && Number(factor.userId ?? factor.user_id) === soleUserId
+  ));
+  const qualifies = Boolean(
+    summary.valid
+      && summary.selfPresent === false
+      && safety.freshness?.ok
+      && fullHp
+      && solePlayer
+      && Number.isFinite(soleUserId)
+      && soleUserId > 0
+      && playerFactorsOnly
+  );
+  const thresholdMs = Math.max(0, Number(
+    config.loginPointSingleBlockerBypassMs
+      ?? DEFAULT_LOGIN_POINT_SINGLE_BLOCKER_BYPASS_MS
+  ) || 0);
+  const checkedAt = new Date(checkedAtMs).toISOString();
+  const previous = loginPointSingleBlockerHold(state);
+  const previousUserId = Number(previous?.userId);
+  const previousFirstMs = Date.parse(String(previous?.firstBlockedAt || ''));
+  const previousUsable = Boolean(
+    qualifies
+      && previous?.active
+      && !previous?.bypassedAt
+      && previousUserId === soleUserId
+      && Number.isFinite(previousFirstMs)
+      && previousFirstMs <= checkedAtMs
+  );
+  const firstBlockedAtMs = qualifies
+    ? (previousUsable ? previousFirstMs : checkedAtMs)
+    : 0;
+  const durationMs = qualifies ? Math.max(0, checkedAtMs - firstBlockedAtMs) : 0;
+  const bypassed = Boolean(qualifies && durationMs >= thresholdMs);
+  const resetReason = qualifies
+    ? (previousUsable ? '' : (previous?.bypassedAt ? 'previous-bypass-consumed' : (previous ? 'blocker-changed' : 'new-single-blocker')))
+    : (!fullHp
+        ? 'login-point-not-full-hp'
+        : (blockingPlayers.length > 1
+            ? 'multiple-blocking-players'
+            : (blockingPlayers.length === 0 ? 'no-single-blocking-player' : 'non-player-blocking-factor')));
+  const hold = {
+    active: qualifies,
+    userId: qualifies ? soleUserId : null,
+    name: qualifies ? String(solePlayer.name || '') : '',
+    firstBlockedAt: qualifies ? new Date(firstBlockedAtMs).toISOString() : '',
+    lastBlockedAt: qualifies ? checkedAt : '',
+    durationMs,
+    thresholdMs,
+    remainingMs: qualifies ? Math.max(0, thresholdMs - durationMs) : thresholdMs,
+    observationCount: qualifies
+      ? (previousUsable ? Math.max(0, Number(previous.observationCount || 0)) + 1 : 1)
+      : 0,
+    fullHp,
+    pointHp: Number.isFinite(pointHp) ? pointHp : null,
+    requiredFullHp,
+    blockingPlayerCount: blockingPlayers.length,
+    blockingFactorCount: blockingFactors.length,
+    eligible: bypassed,
+    bypassedAt: bypassed ? checkedAt : '',
+    resetReason
+  };
+  const originalReason = safety.reason || '';
+  const adjustedSafety = {
+    ...safety,
+    singleBlockerHold: hold,
+    ...(bypassed ? {
+      ok: true,
+      reason: 'single-blocker-timeout-bypass',
+      originalReason
+    } : {})
+  };
+  return {
+    summary: {
+      ...summary,
+      safety: adjustedSafety
+    },
+    bypassed,
+    bypassKind: bypassed ? 'single-blocker-timeout' : '',
+    originalReason
   };
 }
 
@@ -477,7 +584,7 @@ async function runSinglePreLoginSnapshotSafetyProbe(config, state, deps = {}, de
     confirmedLeaveTick,
     Number(detail.lastProbeTick || 0)
   );
-  const summary = summarizeSnapshotPayload(body.json, {
+  let summary = summarizeSnapshotPayload(body.json, {
     userId: config.userId,
     loginPoint,
     latestKnownTick,
@@ -489,7 +596,25 @@ async function runSinglePreLoginSnapshotSafetyProbe(config, state, deps = {}, de
     damageActorUserIds,
     easyKillUserIds
   });
-  const checkedAt = new Date(typeof deps.now === 'function' ? deps.now() : Date.now()).toISOString();
+  if (!response.ok && summary?.safety) {
+    const blockingFactors = Array.isArray(summary.safety.blockingFactors)
+      ? summary.safety.blockingFactors.slice()
+      : [];
+    blockingFactors.unshift({ type: 'snapshot', reason: `snapshot-http-${response.status}` });
+    summary = {
+      ...summary,
+      safety: {
+        ...summary.safety,
+        ok: false,
+        blockingFactors,
+        blockingFactorCount: blockingFactors.length
+      }
+    };
+  }
+  const checkedAtMs = typeof deps.now === 'function' ? deps.now() : Date.now();
+  const singleBlocker = applySingleBlockerLoginBypass(summary, state, config, checkedAtMs);
+  summary = singleBlocker.summary;
+  const checkedAt = new Date(checkedAtMs).toISOString();
   const progress = {
     required: detail.required ?? 1,
     streak: detail.streak ?? 0,
@@ -551,6 +676,9 @@ async function runSinglePreLoginSnapshotSafetyProbe(config, state, deps = {}, de
   return {
     ok: Boolean(response.ok && summary.valid && summary.safety?.ok),
     reason: response.ok ? (summary.safety?.reason || 'invalid-payload') : `snapshot-http-${response.status}`,
+    originalReason: singleBlocker.bypassed ? singleBlocker.originalReason : '',
+    bypassedPreLoginSafety: singleBlocker.bypassed,
+    bypassKind: singleBlocker.bypassKind,
     ...progress,
     request: { url: redactSecrets(url) },
     response: {
@@ -1865,7 +1993,9 @@ async function runReadOnlyCanary(config, options = {}) {
   }
   log('canary-snapshot-safety', result.snapshotSafety);
   result.snapshotSafety = allowSelfPresentSnapshotControl(result.snapshotSafety);
-  if (result.snapshotSafety?.bypassedPreLoginSafety && result.snapshotSafety?.bypassKind !== 'daily-first-login') {
+  if (result.snapshotSafety?.bypassKind === 'single-blocker-timeout') {
+    log('canary-snapshot-single-blocker-timeout-bypass', result.snapshotSafety);
+  } else if (result.snapshotSafety?.bypassedPreLoginSafety && result.snapshotSafety?.bypassKind !== 'daily-first-login') {
     log('canary-snapshot-self-present-reentry', result.snapshotSafety);
   } else if (result.snapshotSafety?.bypassKind === 'daily-first-login') {
     log('canary-snapshot-daily-first-login-bypass', result.snapshotSafety);
@@ -2309,6 +2439,7 @@ async function runReadOnlyCanary(config, options = {}) {
 }
 
 module.exports = {
+  applySingleBlockerLoginBypass,
   attachConfirmedLeaveEvidence,
   createCanaryRunId,
   frameDataToBuffer,

@@ -28,7 +28,11 @@ const {
 } = require('./state-file');
 const { startStatusServer } = require('./status-server');
 const { BROWSERLESS_WEB_PANEL_VERSION } = require('./web-panel');
-const { runPreLoginSnapshotSafety, runReadOnlyCanary } = require('./canary');
+const {
+  applySingleBlockerLoginBypass,
+  runPreLoginSnapshotSafety,
+  runReadOnlyCanary
+} = require('./canary');
 const {
   DEFAULT_SNAPSHOT_GAP_MS,
   createHighDropPlayerTracker,
@@ -63,7 +67,8 @@ const { runSnapshotEdgeSelfTest } = require('./snapshot-edge-wait');
 const {
   buildSnapshotProbeUrl,
   readResponseBody,
-  redactSecrets
+  redactSecrets,
+  summarizeSnapshotPayload
 } = require('./session-client');
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -109,6 +114,7 @@ function publicConfig(config) {
     dailyFirstLoginDelayMs: Number(config.dailyFirstLoginDelayMs || 0),
     loginPointSafetySuccessRequired: Number(config.loginPointSafetySuccessRequired || 0),
     loginPointSafetyProbeIntervalMs: Number(config.loginPointSafetyProbeIntervalMs || 0),
+    loginPointSingleBlockerBypassMs: Number(config.loginPointSingleBlockerBypassMs || 0),
     snapshotEdgeEnabled: config.snapshotEdgeEnabled === true,
     snapshotEdgeIntervalMs: Number(config.snapshotEdgeIntervalMs || 0),
     snapshotEdgeMaxWaitMs: Number(config.snapshotEdgeMaxWaitMs || 0),
@@ -147,6 +153,138 @@ function publicConfig(config) {
     profitThresholdResetReserveMs: Number(config.profitThresholdResetReserveMs || 0),
     userId: Number(config.userId || 0),
     sessionTokenPresent: Boolean(config.sessionToken)
+  };
+}
+
+function runLoginPointSingleBlockerSelfTest() {
+  const startedAtMs = Date.UTC(2026, 6, 18, 0, 0, 0);
+  const loginPoint = { x: 0, y: 0, hp: 100, maxHp: 100, source: 'self-test' };
+  const blocker = {
+    entity_id: 11,
+    user_id: 1011,
+    name: 'single-blocker',
+    x: 1000,
+    y: 0,
+    hp: 100,
+    max_hp: 100,
+    current_join_mode: 'Active',
+    stamina_5s_remaining_milli: 9000,
+    stamina_5s_limit_milli: 10000,
+    life: 'Alive'
+  };
+  const payload = {
+    tick: 100,
+    entities: [blocker],
+    bullets: [],
+    coin_drops: [],
+    messages: []
+  };
+  const baseSummary = summarizeSnapshotPayload(payload, {
+    userId: 7,
+    loginPoint,
+    latestKnownTick: 99,
+    damageActorUserIds: [blocker.user_id]
+  });
+  const config = { loginPointSingleBlockerBypassMs: 3600000 };
+  const first = applySingleBlockerLoginBypass(baseSummary, {}, config, startedAtMs);
+  const firstState = {
+    loginPointSafety: {
+      detail: {
+        singleBlockerHold: first.summary.safety.singleBlockerHold
+      }
+    }
+  };
+  const elapsed = applySingleBlockerLoginBypass(baseSummary, firstState, config, startedAtMs + 3599999);
+  const bypass = applySingleBlockerLoginBypass(baseSummary, firstState, config, startedAtMs + 3600000);
+  const consumed = applySingleBlockerLoginBypass(baseSummary, {
+    loginPointSafety: {
+      detail: {
+        singleBlockerHold: bypass.summary.safety.singleBlockerHold
+      }
+    }
+  }, config, startedAtMs + 3601000);
+  const multipleSummary = summarizeSnapshotPayload({
+    ...payload,
+    tick: 101,
+    entities: [
+      blocker,
+      {
+        ...blocker,
+        entity_id: 12,
+        user_id: 1012,
+        name: 'second-blocker',
+        x: 2000
+      }
+    ]
+  }, {
+    userId: 7,
+    loginPoint,
+    latestKnownTick: 100,
+    damageActorUserIds: [blocker.user_id]
+  });
+  const multiple = applySingleBlockerLoginBypass(multipleSummary, firstState, config, startedAtMs + 3600000);
+  const lowHpSummary = summarizeSnapshotPayload(payload, {
+    userId: 7,
+    loginPoint: { ...loginPoint, hp: 99 },
+    latestKnownTick: 99,
+    damageActorUserIds: [blocker.user_id]
+  });
+  const lowHp = applySingleBlockerLoginBypass(lowHpSummary, firstState, config, startedAtMs + 3600000);
+  const staleSummary = summarizeSnapshotPayload(payload, {
+    userId: 7,
+    loginPoint,
+    latestKnownTick: 101,
+    damageActorUserIds: [blocker.user_id]
+  });
+  const stale = applySingleBlockerLoginBypass(staleSummary, firstState, config, startedAtMs + 3600000);
+  const compact = buildCompactBrowserlessStatus({
+    updatedAt: new Date(startedAtMs + 3600000).toISOString(),
+    loginPointSafety: {
+      ok: bypass.summary.safety.ok,
+      reason: bypass.summary.safety.reason,
+      checkedAt: new Date(startedAtMs + 3600000).toISOString(),
+      point: loginPoint,
+      detail: bypass.summary.safety
+    }
+  });
+  const replacedDetail = mergeState({
+    loginPointSafety: { detail: { blockingFactors: [{ reason: 'stale' }], stale: true } }
+  }, {
+    loginPointSafety: { detail: { blockingFactors: [] } }
+  }).loginPointSafety.detail;
+  return {
+    ok: Boolean(
+      baseSummary.safety.blockingPlayers.length === 1
+        && baseSummary.safety.blockingFactors.length === 2
+        && first.bypassed === false
+        && first.summary.safety.singleBlockerHold.observationCount === 1
+        && elapsed.bypassed === false
+        && elapsed.summary.safety.singleBlockerHold.remainingMs === 1
+        && bypass.bypassed === true
+        && bypass.summary.safety.reason === 'single-blocker-timeout-bypass'
+        && bypass.summary.safety.singleBlockerHold.fullHp === true
+        && consumed.bypassed === false
+        && consumed.summary.safety.singleBlockerHold.durationMs === 0
+        && multiple.bypassed === false
+        && multiple.summary.safety.singleBlockerHold.resetReason === 'multiple-blocking-players'
+        && lowHp.bypassed === false
+        && lowHp.summary.safety.singleBlockerHold.resetReason === 'login-point-not-full-hp'
+        && stale.bypassed === false
+        && stale.summary.safety.singleBlockerHold.resetReason === 'non-player-blocking-factor'
+        && compact.loginPointSafety.detail.blockingPlayers.length === 1
+        && compact.loginPointSafety.detail.blockingFactors.length === 2
+        && compact.loginPointSafety.detail.singleBlockerHold.eligible === true
+        && replacedDetail.blockingFactors.length === 0
+        && replacedDetail.stale === undefined
+    ),
+    blockingPlayerCount: baseSummary.safety.blockingPlayers.length,
+    blockingFactorCount: baseSummary.safety.blockingFactors.length,
+    bypassReason: bypass.summary.safety.reason,
+    consumedDurationMs: consumed.summary.safety.singleBlockerHold.durationMs,
+    multipleResetReason: multiple.summary.safety.singleBlockerHold.resetReason,
+    lowHpResetReason: lowHp.summary.safety.singleBlockerHold.resetReason,
+    staleResetReason: stale.summary.safety.singleBlockerHold.resetReason,
+    compactFactorCount: compact.loginPointSafety.detail.blockingFactors.length
   };
 }
 
@@ -1590,6 +1728,7 @@ async function runBrowserlessRunner(config, deps = {}) {
         streak: Number.isFinite(streak) ? Math.max(0, Math.round(streak)) : 0,
         satisfied: Boolean(snapshotSafety?.satisfied ?? safety.satisfied ?? (snapshotSafety?.ok && snapshotSafety?.satisfied !== false)),
         bypassedPreLoginSafety: Boolean(snapshotSafety?.bypassedPreLoginSafety),
+        bypassKind: snapshotSafety?.bypassKind || '',
         selfPresent: summary.selfPresent === undefined ? null : Boolean(summary.selfPresent)
       }
     };
@@ -1641,7 +1780,15 @@ async function runBrowserlessRunner(config, deps = {}) {
             lastRealtimeTick: Number(snapshotSafety.confirmedLeave.lastRealtimeTick || 0),
             quarantined: Boolean(snapshotSafety.confirmedLeave.quarantined)
           }
-        : null
+        : null,
+      blockingPlayers: Array.isArray(summary?.safety?.blockingPlayers)
+        ? summary.safety.blockingPlayers
+        : [],
+      blockingFactors: Array.isArray(summary?.safety?.blockingFactors)
+        ? summary.safety.blockingFactors
+        : [],
+      singleBlockerHold: summary?.safety?.singleBlockerHold || null,
+      bypassKind: snapshotSafety?.bypassKind || ''
     });
   };
 
@@ -2722,6 +2869,12 @@ async function runBrowserlessRunnerSelfTest() {
         && statusQueueProjection.statusServer?.renderTiming?.logQueue?.pending === 123
         && statusQueueProjection.statusServer?.renderTiming?.renderQueue?.pendingRequests === 1
     );
+    const loginPointSingleBlocker = runLoginPointSingleBlockerSelfTest();
+    const singleBlockerConfig = parseBrowserlessRunnerArgs([
+      '--login-point-single-blocker-bypass-ms',
+      '1234'
+    ], {});
+    const singleBlockerConfigOk = singleBlockerConfig.loginPointSingleBlockerBypassMs === 1234;
     const staleRestartDrainCleared = readBrowserlessStateFile(stateFilePath(liveConfig)).runner.restartDrain === null;
     const wsClosedPlan = browserlessLoopPlan({
       ok: false,
@@ -2931,6 +3084,9 @@ async function runBrowserlessRunnerSelfTest() {
       const targetMarkerCoversOuterBorders = pageHtml.includes('right:100%;top:-1px;bottom:-1px;width:3px');
       const targetMarkerAvoidsAdjacentOverlap = pageHtml.includes('.target-current+.target-current::before,.target-current+.target-route-next::before,.target-route-next+.target-current::before,.target-route-next+.target-route-next::before{top:0}');
       const targetMarkerBoundaryOwnership = targetMarkerCoversOuterBorders && targetMarkerAvoidsAdjacentOverlap;
+      const loginPointBlockerPanelPresent = pageHtml.includes('function blockingFactorsText(status)')
+        && pageHtml.includes("addRow(rowsOut, '阻碍因素', blockingFactorsText(status))")
+        && pageHtml.includes("addRow(rowsOut, '单人阻挡', singleBlocker)");
       statusServerChatTest = {
         ok: Boolean(
           pageResponse.ok
@@ -2943,6 +3099,7 @@ async function runBrowserlessRunnerSelfTest() {
           && sendBody.reason === 'self-test-chat-sent'
           && chatSendInputs[0] === 'hello'
           && targetMarkerBoundaryOwnership
+          && loginPointBlockerPanelPresent
         ),
         unauthorizedStatus: unauthorizedResponse.status,
         activityCount: chatActivityCount,
@@ -2950,7 +3107,8 @@ async function runBrowserlessRunnerSelfTest() {
         webChatPanelPresent: pageHtml.includes('id="chatPanel"'),
         targetMarkerCoversOuterBorders,
         targetMarkerAvoidsAdjacentOverlap,
-        targetMarkerBoundaryOwnership
+        targetMarkerBoundaryOwnership,
+        loginPointBlockerPanelPresent
       };
     } finally {
       await statusTestHandle.close();
@@ -2965,6 +3123,8 @@ async function runBrowserlessRunnerSelfTest() {
         && liveRun.ok
         && runnerResultSummaryOk
         && statusQueueProjectionOk
+        && loginPointSingleBlocker.ok
+        && singleBlockerConfigOk
         && staleRestartDrainCleared
         && /runner-dry-run/.test(text)
         && /runner-finish/.test(text)
@@ -3006,6 +3166,8 @@ async function runBrowserlessRunnerSelfTest() {
         ok: statusQueueProjectionOk,
         renderTiming: statusQueueProjection.statusServer?.renderTiming || null
       },
+      loginPointSingleBlocker,
+      singleBlockerConfigOk,
       staleRestartDrainCleared,
       wsClosedPlan,
       combatExitPlan,

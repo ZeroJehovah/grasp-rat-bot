@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.18.1';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.18.2';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function panelSessionFlagsCore(status = {}) {
@@ -798,6 +798,14 @@ function renderBrowserlessWebPanel() {
       safe: '安全',
       'active-near-login-point': '登录点附近有危险玩家',
       'damage-actor-near-login-point': '今日伤害过我的玩家在登录点附近',
+      'single-blocker-timeout-bypass': '同一名玩家持续阻挡超过 1 小时，满血强制登录',
+      'previous-bypass-consumed': '上一轮强制登录机会已使用',
+      'blocker-changed': '阻碍玩家已变化，重新计时',
+      'new-single-blocker': '开始记录单一阻碍玩家',
+      'login-point-not-full-hp': '登录点记录不是满血',
+      'multiple-blocking-players': '附近存在多名阻碍玩家',
+      'no-single-blocking-player': '当前不是单一玩家阻挡',
+      'non-player-blocking-factor': '存在玩家以外的安全阻碍',
       'self-present-reentry': '已经在游戏中，直接连接',
       'cycle-complete': '本轮结束，等待下一轮',
       'ws-closed': '连接断开，准备重连',
@@ -1150,6 +1158,9 @@ function renderBrowserlessWebPanel() {
       if (/self-present-reentry/i.test(reasonText) || (detail.selfPresent === true && detail.bypassedPreLoginSafety)) {
         return { state: 'reentry', text: '检测到角色仍在线，正在恢复实时连接（不会新登录）' };
       }
+      if (/single-blocker-timeout-bypass/i.test(reasonText)) {
+        return { state: 'safe', text: '满血强制登录' };
+      }
       const pendingSafeReason = /snapshot-safety-streak-pending/i.test(detailReason)
         && /^safe$/i.test(originalReason);
       const streak = number(detail.streak ?? status.loginPointSafety?.streak);
@@ -1189,6 +1200,30 @@ function renderBrowserlessWebPanel() {
       if (detail.entityCount !== null && detail.entityCount !== undefined) parts.push('实体 ' + detail.entityCount);
       if (detail.httpStatus !== null && detail.httpStatus !== undefined) parts.push('HTTP ' + detail.httpStatus);
       return parts.length ? parts.join(' / ') : '--';
+    }
+    function blockingFactorsText(status) {
+      const factors = Array.isArray(status.loginPointSafety?.detail?.blockingFactors)
+        ? status.loginPointSafety.detail.blockingFactors
+        : [];
+      if (!factors.length) return '--';
+      return factors.map(factor => {
+        const label = factor.type === 'player'
+          ? targetLabel(factor)
+          : '快照检查';
+        return joinNonBlank([label, reasonText(factor.reason)]);
+      }).join('；');
+    }
+    function singleBlockerHoldText(status) {
+      const hold = status.loginPointSafety?.detail?.singleBlockerHold || null;
+      if (!hold?.active) return '--';
+      const elapsed = duration(hold.durationMs);
+      const remaining = duration(hold.remainingMs);
+      return joinNonBlank([
+        hold.name || (hold.userId ? '#' + hold.userId : '单一玩家'),
+        '已持续 ' + elapsed,
+        hold.eligible ? '已达到强制登录条件' : '还需 ' + remaining,
+        '检查 ' + (hold.observationCount || 0) + ' 次'
+      ]);
     }
     function unsafeReasonText(status) {
       if (status.game?.inGame || loginPointDisplay(status).state !== 'unsafe') return '--';
@@ -1689,7 +1724,9 @@ function renderBrowserlessWebPanel() {
         addRow(rowsOut, reentry ? '当前坐标' : '登录点坐标', pointCoordText(status.loginPointSafety?.point));
         if (loginDisplay.state === 'unsafe') {
           addRow(rowsOut, '不安全原因', unsafeReasonText(status));
-          addRow(rowsOut, '附近危险', targetLabel(status.loginPointSafety?.detail?.nearestDangerous || status.loginPointSafety?.detail?.nearestDamageActor || status.loginPointSafety?.detail?.nearestActive));
+          addRow(rowsOut, '阻碍因素', blockingFactorsText(status));
+          const singleBlocker = singleBlockerHoldText(status);
+          if (singleBlocker !== '--') addRow(rowsOut, '单人阻挡', singleBlocker);
         } else if (loginDisplay.state === 'pending') {
           addRow(rowsOut, '等待原因', loginPointPendingReasonText(status));
         }
