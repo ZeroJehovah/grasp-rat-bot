@@ -34,7 +34,10 @@ const {
   opponentResponsePolicyCore,
   updateOpponentBehaviorStateCore
 } = require('../src/strategy/opponent-behavior');
-const { evaluateHighEntropyFireGateCore } = require('../src/strategy/combat-fire-discipline');
+const {
+  evaluateHighEntropyFireGateCore,
+  updateCombatProbePhaseCore
+} = require('../src/strategy/combat-fire-discipline');
 const { updatePostKillSettlementCore } = require('../src/strategy/post-kill-settlement');
 
 function parseArgs(argv) {
@@ -155,6 +158,11 @@ function percentile(values, ratio) {
   const sorted = values.filter(Number.isFinite).sort((a, b) => a - b);
   if (!sorted.length) return null;
   return sorted[Math.max(0, Math.min(sorted.length - 1, Math.ceil(sorted.length * ratio) - 1))];
+}
+
+function numberOrNull(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
 }
 
 function targetAtTick(rows, tick) {
@@ -470,10 +478,31 @@ function replayCombat(options) {
       selectedRouteProbability: Number(selectedRoute?.probability || 0),
       expectedHitProbability: Number(selectedRoute?.expectedHitProbability
         ?? (Number(selectedRoute?.probability || 0) * Number(improved.confidence || 0))),
-      fireRiskClassification: improved.fireRiskClassification || null,
+      fireRiskClassification: row.detail.shooting?.fireRiskClassification
+        ? {
+            ...(improved.fireRiskClassification || {}),
+            ...row.detail.shooting.fireRiskClassification,
+            coverageAffordable: improved.fireRiskClassification?.coverageAffordable,
+            affordabilityDegraded: improved.fireRiskClassification?.affordabilityDegraded,
+            routeCoverageAvailable: improved.fireRiskClassification?.routeCoverageAvailable
+          }
+        : (improved.fireRiskClassification || null),
       fireReachability: improved.fireReachability || null,
       theoreticalMinimumMiss: theoreticalShotMinimumMiss(rows, shot.ack),
       routeContextKey: String(improved.routeCoverage?.contextKey || ''),
+      routeCandidate: String(improved.routeCoverage?.selected || ''),
+      behaviorMode: String(row.detail.behavior?.mode || ''),
+      responsePolicy: String(row.detail.behavior?.responsePolicy?.name || ''),
+      directionState: String(row.detail.behavior?.metrics?.movementPhase?.currentDirection
+        || row.detail.behavior?.metrics?.movementTransitions?.phase?.currentDirection
+        || ''),
+      directionDwellTicks: Number(row.detail.behavior?.metrics?.movementPhase?.dwellTicks
+        || row.detail.behavior?.metrics?.movementTransitions?.phase?.dwellTicks
+        || 0),
+      directionFlipAt: Number(row.detail.behavior?.metrics?.lastLateralFlipAt || 0),
+      distance: Number(row.detail.target?.distance || 0),
+      aimX: Number(improved.x),
+      aimY: Number(improved.y),
       selfHp: Number(row.detail.self?.hp),
       targetHp: Number(row.detail.target?.hp),
       defensivePressure: Boolean(
@@ -538,7 +567,10 @@ function replayCombat(options) {
   let lastAllowedAt = 0;
   let cadenceSuppressedShots = 0;
   let gateSuppressedShots = 0;
+  let probeSuppressedShots = 0;
   let firstSuppressed = null;
+  let probeState = null;
+  const suppressedEstimatedHitSamples = [];
   for (const item of shotEvaluations) {
     const recent = recentAllowed.slice(-15);
     const recentHits = recent.filter(shot => shot.credited).length;
@@ -558,23 +590,70 @@ function replayCombat(options) {
       reachabilityGapCm: item.fireReachability?.rangeGapCm,
       defensivePressure: item.defensivePressure
     });
-    const cadenceBlocked = !gate.suppressFire
+    const probe = updateCombatProbePhaseCore(probeState, {
+      nowMs: Number(item.shot.at || 0),
+      targetId: options.targetId,
+      acceptedShots: allowedShots.length,
+      confirmedHits: allowedShots.filter(shot => attributedBulletIds.has(String(shot.shot.ack.bullet_id ?? ''))).length,
+      shootingStamina: allowedShots.length * 500,
+      highEntropy: Boolean(item.fireRiskClassification?.highEntropy),
+      behaviorMode: item.behaviorMode,
+      responsePolicy: item.responsePolicy,
+      directionState: item.directionState,
+      directionDwellTicks: item.directionDwellTicks,
+      directionFlipAt: item.directionFlipAt,
+      routeContextKey: item.routeContextKey,
+      routeCandidate: item.routeCandidate,
+      routeProbability: item.selectedRouteProbability,
+      predictedHitProbability: expectedHitProbability,
+      recentHitRate: recent.length ? recentHits / recent.length : 0,
+      recentShotCount: recent.length,
+      distance: item.distance,
+      aimX: item.aimX,
+      aimY: item.aimY,
+      defensivePressure: item.defensivePressure,
+      finishingTarget: item.targetHp <= 20 && item.selfHp >= item.targetHp + 10
+    });
+    probeState = probe;
+    const probeBlocked = probe.suppressFire;
+    const probeReopensNovelGeometry = Boolean(
+      gate.suppressFire
+        && (probe.provenHitProtected
+          || (probe.geometryProbeEligible && probe.probeBudgetRemaining > 0))
+        && /^high-entropy-/.test(String(gate.reason || ''))
+    );
+    const gateBlocked = gate.suppressFire && !probeReopensNovelGeometry;
+    const cadenceBlocked = !gateBlocked && !probeBlocked
       && gate.minimumCadenceMs > 0
       && lastAllowedAt > 0
       && Number(item.shot.at || 0) - lastAllowedAt < gate.minimumCadenceMs;
-    fireDisciplineReasons[gate.reason] = Number(fireDisciplineReasons[gate.reason] || 0) + 1;
-    if (gate.suppressFire || cadenceBlocked) {
-      if (gate.suppressFire) gateSuppressedShots += 1;
+    const gateReason = probeBlocked
+      ? probe.suppressionReason
+      : (probeReopensNovelGeometry ? 'high-entropy-novel-geometry-probe' : gate.reason);
+    fireDisciplineReasons[gateReason] = Number(fireDisciplineReasons[gateReason] || 0) + 1;
+    if (gateBlocked || probeBlocked || cadenceBlocked) {
+      if (gateBlocked) gateSuppressedShots += 1;
+      else if (probeBlocked) probeSuppressedShots += 1;
       else cadenceSuppressedShots += 1;
       if (!firstSuppressed) {
         firstSuppressed = {
           line: rows[Math.max(0, rows.findLastIndex(row => Number(row.detail.tick) <= Number(item.shot.ack.created_tick)))]?.line ?? null,
           at: new Date(Number(item.shot.at || 0)).toISOString(),
-          reason: gate.suppressFire ? gate.reason : 'high-entropy-cadence',
+          reason: gateBlocked || probeBlocked ? gateReason : 'high-entropy-cadence',
           noProgressAcceptedShots,
           recentHitRate: recent.length ? recentHits / recent.length : 0,
           expectedHitProbability
         };
+      }
+      if (item.improvedMiss <= options.hitRadius && suppressedEstimatedHitSamples.length < 12) {
+        suppressedEstimatedHitSamples.push({
+          at: new Date(Number(item.shot.at || 0)).toISOString(),
+          reason: gateBlocked || probeBlocked ? gateReason : 'high-entropy-cadence',
+          expectedHitProbability,
+          routeCandidate: item.routeCandidate,
+          routeProbability: item.selectedRouteProbability,
+          improvedMissCm: Number(item.improvedMiss.toFixed(1))
+        });
       }
       continue;
     }
@@ -612,6 +691,9 @@ function replayCombat(options) {
     suppressedShots: confirmedShots.length - allowedShots.length,
     cadenceSuppressedShots,
     gateSuppressedShots,
+    probeSuppressedShots,
+    finalProbeState: probeState,
+    suppressedEstimatedHitSamples,
     baselineEstimatedHits: improvedHits,
     allowedEstimatedHits,
     baselineAttributedHits: damageAttributions.length,
@@ -1022,12 +1104,106 @@ function replayBackAwayDodgePriority(rows) {
   };
 }
 
+function replayPendingMovementSchedule(rows, options = {}) {
+  if (!rows.length) return { cases: 0, samples: [], accepted: false };
+  const firstAt = Date.parse(rows[0].entry.at || '') - 1500;
+  const lastAt = Date.parse(rows.at(-1).entry.at || '') + 1500;
+  const runnerFile = path.join(path.dirname(options.file), 'runner.jsonl');
+  const wsFile = path.join(path.dirname(options.file), 'ws.jsonl');
+  if (!fs.existsSync(runnerFile) || !fs.existsSync(wsFile)) {
+    return { cases: 0, samples: [], accepted: false, reason: 'missing-runner-or-ws-log' };
+  }
+  const commands = [];
+  forEachJsonlEntry(runnerFile, entry => {
+    const at = Date.parse(entry?.at || '');
+    if (!Number.isFinite(at) || at < firstAt || at > lastAt) return;
+    if (String(entry?.type || '') !== 'movement-command') return;
+    const command = entry?.detail?.action?.movement?.command || null;
+    if (!command || String(command.type || '') !== 'velocity') return;
+    commands.push({
+      at,
+      commandId: command.id ?? null,
+      dx: Number(command.dx || 0),
+      dy: Number(command.dy || 0),
+      reason: String(command.reason || '')
+    });
+  });
+  const selfFrames = [];
+  forEachJsonlEntry(wsFile, entry => {
+    const at = Date.parse(entry?.at || '');
+    if (!Number.isFinite(at) || at < firstAt || at > lastAt) return;
+    const summary = entry?.detail?.decodedSummary || null;
+    const self = summary?.self || null;
+    if (String(summary?.type || '') !== 'pos' || !self) return;
+    selfFrames.push({
+      at,
+      tick: numberOrNull(summary.tick ?? entry?.detail?.decodedTick),
+      hp: numberOrNull(self.hp),
+      vx: Number(self.vx || 0),
+      vy: Number(self.vy || 0)
+    });
+  });
+  const samples = [];
+  for (const row of rows) {
+    const at = Date.parse(row.entry.at || '');
+    const field = row.detail?.movement?.dodge?.threatField || [];
+    const selectedDx = Number(row.detail?.movement?.dx || 0);
+    const selectedDy = Number(row.detail?.movement?.dy || 0);
+    const selected = field.find(item => Number(item.dx) === selectedDx && Number(item.dy) === selectedDy) || null;
+    if (!selected || Number(selected.directHits || 0) !== 0) continue;
+    const pending = commands.filter(command => command.at <= at
+      && at - command.at <= 800
+      && (command.dx !== selectedDx || command.dy !== selectedDy)).at(-1) || null;
+    if (!pending) continue;
+    const transition = selfFrames.find(frame => frame.at >= at
+      && frame.at - at <= 300
+      && Math.sign(frame.vx) === Math.sign(pending.dx)
+      && Math.sign(frame.vy) === Math.sign(pending.dy)) || null;
+    if (!transition) continue;
+    const baselineHp = numberOrNull(row.detail?.self?.hp);
+    const damage = selfFrames.find(frame => frame.at >= transition.at
+      && frame.at - transition.at <= 300
+      && baselineHp !== null
+      && frame.hp !== null
+      && frame.hp < baselineHp) || null;
+    if (!damage) continue;
+    samples.push({
+      line: row.line,
+      observedAt: row.entry.at,
+      observedTick: numberOrNull(row.detail?.tick),
+      loggedDirection: { dx: selectedDx, dy: selectedDy },
+      loggedDirectHits: Number(selected.directHits || 0),
+      loggedMinCpaCm: numberOrNull(selected.minCPA),
+      pendingCommand: pending,
+      actualVelocityTransition: {
+        tick: transition.tick,
+        dx: Math.sign(transition.vx),
+        dy: Math.sign(transition.vy),
+        delayMs: transition.at - pending.at
+      },
+      damage: {
+        tick: damage.tick,
+        hpBefore: baselineHp,
+        hpAfter: damage.hp,
+        afterTransitionMs: damage.at - transition.at
+      }
+    });
+  }
+  return {
+    model: 'visible-current-velocity-to-pending-command-to-new-command',
+    cases: samples.length,
+    samples: samples.slice(0, 12),
+    accepted: samples.length > 0
+  };
+}
+
 function replayDodge(options) {
   const rows = selectedEntries(options).filter(({ detail }) => !options.targetId
     || String(detail.target?.userId ?? '') === options.targetId);
   const burstCadenceReplay = replayBurstCadence(rows);
   const contactEntryReplay = replayContactEntryDodge(rows, options);
   const backAwayDodgePriorityReplay = replayBackAwayDodgePriority(rows);
+  const pendingMovementScheduleReplay = replayPendingMovementSchedule(rows, options);
   const reactionBudgetMs = Math.max(0, Number(options.executionDelayTicks || 5) * 50 + 50 + 100);
   let hitEvents = 0;
   let eventsWithThreatEvidence = 0;
@@ -1147,9 +1323,10 @@ function replayDodge(options) {
     burstCadenceReplay,
     contactEntryReplay,
     backAwayDodgePriorityReplay,
+    pendingMovementScheduleReplay,
     samples,
     fullTrajectorySamples,
-    accepted: burstCadenceReplay.accepted || contactEntryReplay.accepted || backAwayDodgePriorityReplay.accepted || (
+    accepted: pendingMovementScheduleReplay.accepted || burstCadenceReplay.accepted || contactEntryReplay.accepted || backAwayDodgePriorityReplay.accepted || (
       hitEvents > 0
         && reconstructedEvents > 0
         && recoveredByFullTrajectory > 0
@@ -1584,6 +1761,87 @@ function replayOpportunity(options) {
     averageScoreRatio: betterRoiAlternativeFrames ? Number((ratioTotal / betterRoiAlternativeFrames).toFixed(2)) : null,
     maxScoreRatio: Number(maxRatio.toFixed(2)),
     accepted: correctedFrames === betterRoiAlternativeFrames && correctedFrames > 0
+  };
+}
+
+function replayExploration(options) {
+  const rows = selectedEntries(options);
+  const maxBudget = 5000;
+  const attackRange = 14500;
+  const requiredFrames = 3;
+  const observations = new Map();
+  const samples = [];
+  let baselineAdmissions = 0;
+  let correctedAdmissions = 0;
+  let resetAfterWaitAdmissions = 0;
+  let previousKind = '';
+  let previousTargetId = '';
+  for (const row of rows) {
+    const action = row.detail?.action || {};
+    const admission = action.explorationAdmission || row.detail?.profit?.threshold?.explorationAdmission || null;
+    const filteredEnemy = (row.detail?.profit?.threshold?.filtered || [])
+      .find(item => String(item.type || '') === 'enemy'
+        && (!options.targetId || String(item.id ?? '') === options.targetId)) || null;
+    const target = action.target?.type === 'enemy'
+      ? action.target
+      : null;
+    const targetId = String(admission?.targetId ?? target?.userId ?? filteredEnemy?.id ?? '');
+    if (!targetId || (options.targetId && targetId !== options.targetId)) {
+      previousKind = String(action.kind || row.detail?.kind || '');
+      continue;
+    }
+    const previous = observations.get(targetId) || { frames: 0, lastAt: 0 };
+    const at = Date.parse(row.entry.at || '') || 0;
+    const continuous = previous.lastAt > 0 && at - previous.lastAt <= 2500;
+    const frames = continuous ? previous.frames + 1 : 1;
+    observations.set(targetId, { frames, lastAt: at });
+    const distance = numberOrNull(target?.distance);
+    const estimatedApproachSpent = distance === null
+      ? Math.max(0, Number(filteredEnemy?.staminaCost || action.staminaCost || 0))
+      : Math.max(0, distance - attackRange);
+    const baselineAdmitted = Boolean(action.explorationAdmitted || admission);
+    const correctedAdmitted = frames >= requiredFrames && estimatedApproachSpent < maxBudget;
+    if (baselineAdmitted) {
+      baselineAdmissions += 1;
+      if (correctedAdmitted) correctedAdmissions += 1;
+      if (previousKind === 'wait' && previousTargetId === targetId) resetAfterWaitAdmissions += 1;
+      if (samples.length < 16) samples.push({
+        line: row.line,
+        at: row.entry.at,
+        targetId,
+        baseline: {
+          acceptedShots: numberOrNull(admission?.acceptedShots),
+          staminaSpent: numberOrNull(admission?.staminaSpent),
+          durationMs: numberOrNull(admission?.durationMs)
+        },
+        corrected: {
+          qualifiedFrames: frames,
+          requiredFrames,
+          estimatedApproachSpent: Math.round(estimatedApproachSpent),
+          remainingBudget: Math.max(0, maxBudget - estimatedApproachSpent),
+          admitted: correctedAdmitted,
+          rejectionReason: correctedAdmitted
+            ? ''
+            : (frames < requiredFrames ? 'insufficient-qualified-frames' : 'estimated-approach-over-budget')
+        }
+      });
+    }
+    previousKind = String(action.kind || row.detail?.kind || '');
+    previousTargetId = targetId;
+  }
+  return {
+    mode: 'exploration',
+    targetId: options.targetId || '',
+    lines: `${options.startLine}-${options.endLine}`,
+    evaluatedFrames: rows.length,
+    baselineAdmissions,
+    correctedAdmissions,
+    preventedAdmissions: Math.max(0, baselineAdmissions - correctedAdmissions),
+    resetAfterWaitAdmissions,
+    maxBudget,
+    requiredFrames,
+    samples,
+    accepted: baselineAdmissions > 0 && correctedAdmissions < baselineAdmissions
   };
 }
 
@@ -2170,6 +2428,7 @@ function replayExit(options) {
   const preventedLoggedExits = evaluated.filter(item => item.loggedExit && !item.policyExit);
   const preservedRequiredExits = evaluated.filter(item => item.loggedExit && item.policyExit);
   const newlyRequiredExits = evaluated.filter(item => !item.loggedExit && item.policyExit);
+  const firstNewlyRequiredExit = newlyRequiredExits[0] || null;
   const favorablePreventedExits = preventedLoggedExits.filter(item => item.favorable);
   const confirmationPreventedExits = preventedLoggedExits.filter(item => item.disadvantageObservation?.ready === false);
   const identityMismatchPreventedExits = preventedLoggedExits.filter(item => item.unattributedPressureTarget);
@@ -2202,6 +2461,13 @@ function replayExit(options) {
     trustedNoDamagePreventedExitFrames: trustedNoDamagePreventedExits.length,
     preservedRequiredExitFrames: preservedRequiredExits.length,
     newlyRequiredExitFrames: newlyRequiredExits.length,
+    firstNewlyRequiredExit: firstNewlyRequiredExit ? {
+      line: firstNewlyRequiredExit.line,
+      at: firstNewlyRequiredExit.at,
+      selfHp: firstNewlyRequiredExit.selfHp,
+      targetHp: firstNewlyRequiredExit.targetHp,
+      reason: firstNewlyRequiredExit.policyExit?.reason || ''
+    } : null,
     samples: evaluated.slice(0, 10)
   };
   result.expectNewExit = Boolean(options.expectNewExit);
@@ -2214,7 +2480,7 @@ function replayExit(options) {
     : (options.expectNewExit
     ? result.evaluatedFrames > 0
       && result.newlyRequiredExitFrames > 0
-      && evaluated[0]?.policyExit?.reason === 'combat-hp-disadvantage-leave'
+      && firstNewlyRequiredExit?.policyExit?.reason === 'combat-hp-disadvantage-leave'
     : result.evaluatedFrames > 0
       && result.preventedLoggedExitFrames > 0
       && result.justifiedPreventedExitFrames === result.preventedLoggedExitFrames
@@ -2581,6 +2847,7 @@ function replayCombatPursuit(options) {
 
 function runReplay(options) {
   if (options.mode === 'opportunity') return replayOpportunity(options);
+  if (options.mode === 'exploration') return replayExploration(options);
   if (options.mode === 'easy-kill-continuity') return replayEasyKillContinuity(options);
   if (options.mode === 'leave-tail') return replayLeaveTail(options);
   if (options.mode === 'exit') return replayExit(options);

@@ -376,6 +376,7 @@ function summarizeCommand(command) {
 function createBrowserlessActionAdapter(options = {}) {
   const now = typeof options.now === 'function' ? options.now : Date.now;
   const transport = options.transport || null;
+  const onVelocityRequest = typeof options.onVelocityRequest === 'function' ? options.onVelocityRequest : null;
   const commandIntervalMs = Math.max(0, Number(options.commandIntervalMs ?? DEFAULT_COMMAND_INTERVAL_MS));
   const decisionIntervalMs = Math.max(0, Number(options.decisionIntervalMs || 0));
   const velocityRepeatEnabled = options.velocityRepeatEnabled === true;
@@ -632,7 +633,7 @@ function createBrowserlessActionAdapter(options = {}) {
     clearShootRepeatTimer();
   }
 
-  function scheduleVelocityRepeat(dx, dy) {
+  function scheduleVelocityRepeat(dx, dy, ownerCommand) {
     if (!velocityRepeatEnabled) {
       cancelVelocityRepeat();
       return null;
@@ -659,6 +660,20 @@ function createBrowserlessActionAdapter(options = {}) {
         transport.sendVelocity(dx, dy);
         state.velocityRepeatSentCount += 1;
         state.lastVelocityRepeatError = '';
+        if (onVelocityRequest) {
+          try {
+            onVelocityRequest({
+              commandId: ownerCommand?.id ?? null,
+              repeatOwnerCommandId: ownerCommand?.id ?? null,
+              dx,
+              dy,
+              reason: ownerCommand?.reason || 'velocity-repeat',
+              requestedAtMs: now(),
+              observedTick: state.latestObservedTick,
+              repeat: true
+            });
+          } catch (_) {}
+        }
       } catch (err) {
         state.lastVelocityRepeatError = err?.message || String(err);
         return;
@@ -826,9 +841,6 @@ function createBrowserlessActionAdapter(options = {}) {
         transportClosed: /websocket is not open|not open|closed/i.test(message)
       };
     }
-    const repeat = sendOptions.suppressRepeat
-      ? (cancelVelocityRepeat(), null)
-      : scheduleVelocityRepeat(dx, dy);
     const command = {
       id: nextCommandId,
       type: 'velocity',
@@ -853,6 +865,23 @@ function createBrowserlessActionAdapter(options = {}) {
       observedFrames: 0,
       tick: null
     };
+    if (onVelocityRequest) {
+      try {
+        onVelocityRequest({
+          commandId: command.id,
+          repeatOwnerCommandId: command.id,
+          dx,
+          dy,
+          reason,
+          requestedAtMs: atMs,
+          observedTick: state.latestObservedTick,
+          repeat: false
+        });
+      } catch (_) {}
+    }
+    const repeat = sendOptions.suppressRepeat
+      ? (cancelVelocityRepeat(), null)
+      : scheduleVelocityRepeat(dx, dy, command);
     updateMovementStallIntent(command);
     return { ok: true, skipped: false, command: summarizeCommand(command), pulseToken, repeat };
   }

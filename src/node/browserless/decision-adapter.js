@@ -167,6 +167,7 @@ const EASY_KILL_ENGAGEMENT_CONTINUATION_ACTIONS = new Set([
   'seek-enemy',
   'opportunistic-shot'
 ]);
+const REALTIME_INPUT_CACHE = Symbol('browserless-realtime-input-cache');
 
 function buildBrowserlessRuntimeDefaults(config = {}) {
   return buildRuntimeDefaults(config, false);
@@ -2745,6 +2746,12 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
 }
 
 function buildBrowserlessCombatStrategyInput(state, options = {}, stateful = {}) {
+  const inputStages = {};
+  let inputStageStarted = performance.now();
+  const markInputStage = name => {
+    inputStages[name] = performance.now() - inputStageStarted;
+    inputStageStarted = performance.now();
+  };
   const realtime = state?.realtime || {};
   const fallback = state?.fallback || state?.snapshot || {};
   const nowMs = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
@@ -2773,6 +2780,7 @@ function buildBrowserlessCombatStrategyInput(state, options = {}, stateful = {})
     const limit = numberOrNull(entity?.stamina_5s_limit_milli ?? entity?.stamina5sLimitMilli ?? entity?.stamina5sLimit);
     return remaining !== null && limit !== null && limit > 0 && remaining < limit * 0.98;
   });
+  markInputStage('priority-filter');
   const metadataUserIds = new Set(rawRealtimeEntities
     .map(entity => numberOrNull(entity?.user_id ?? entity?.userId))
     .filter(value => value !== null)
@@ -2795,9 +2803,11 @@ function buildBrowserlessCombatStrategyInput(state, options = {}, stateful = {})
       }
     }
   }
+  markInputStage('metadata-index');
   const snapshotSelf = rawSelfUserId !== null ? snapshotEntitiesByUserId.get(rawSelfUserId) : null;
   const enrichedSelf = enrichRealtimeSelfWithSnapshotMetadata(realtime.self, snapshotSelf, options);
   const self = normalizeEntityForDecision(enrichedSelf.self, null, 'realtime', options);
+  markInputStage('self-normalize');
   const selfUserId = Number(self?.user_id ?? state?.userId ?? options.userId ?? 0);
   const realtimeEntities = [];
   for (const entity of rawRealtimeEntities) {
@@ -2810,7 +2820,9 @@ function buildBrowserlessCombatStrategyInput(state, options = {}, stateful = {})
     const normalized = normalizeEntityForDecision(enriched, self, 'realtime', options);
     if (normalized) realtimeEntities.push(normalized);
   }
+  markInputStage('entity-normalize');
   annotateBrowserlessRecentActivity(realtimeEntities, stateful, nowMs, options);
+  markInputStage('player-memory');
   const visibleTargets = [];
   for (const entity of realtimeEntities) {
     const refreshed = refreshDecisionEntityActivity(entity, options);
@@ -2818,6 +2830,7 @@ function buildBrowserlessCombatStrategyInput(state, options = {}, stateful = {})
     if (!Number.isFinite(Number(refreshed.x)) || !Number.isFinite(Number(refreshed.y))) continue;
     visibleTargets.push(refreshed);
   }
+  markInputStage('visible-targets');
   const easyKillInput = {
     visibleTargets,
     nowMs,
@@ -2825,6 +2838,7 @@ function buildBrowserlessCombatStrategyInput(state, options = {}, stateful = {})
     easyKill: null
   };
   refreshEasyKillTargetAnnotations(easyKillInput, stateful, options);
+  markInputStage('easy-kill');
   const activeThreats = visibleTargets.filter(entity => entity.active && entity.alive !== false && !entity.easyKillThreatExempt);
   const firingThreats = visibleTargets.filter(entity => entity.firing && entity.alive !== false && !entity.easyKillThreatExempt);
   const avoidanceThreats = mergeRecentInvulnerableThreats(
@@ -2834,8 +2848,10 @@ function buildBrowserlessCombatStrategyInput(state, options = {}, stateful = {})
     stateful,
     { ...options, nowMs, currentTick: realtime.tick }
   );
+  markInputStage('threat-index');
   const realtimeSnapshotObservation = refreshRealtimeSnapshotObservation(state, self, stateful, options, nowMs);
-  return {
+  markInputStage('snapshot-observation');
+  const result = {
     userId: Number(state?.userId || options.userId || 0),
     nowMs,
     rawRealtime: realtime,
@@ -2862,6 +2878,18 @@ function buildBrowserlessCombatStrategyInput(state, options = {}, stateful = {})
     bullets: Array.isArray(realtime.bullets) ? realtime.bullets : [],
     dataGaps: enrichedSelf.staminaMerged ? ['self-stamina-from-snapshot'] : []
   };
+  markInputStage('output');
+  if (typeof options.onCombatInputStageTimings === 'function') {
+    options.onCombatInputStageTimings(inputStages, {
+      rawEntityCount: Array.isArray(realtime.entities) ? realtime.entities.length : 0,
+      prioritizedEntityCount: rawRealtimeEntities.length,
+      metadataEntityCount: snapshotEntitiesByUserId.size,
+      normalizedEntityCount: realtimeEntities.length,
+      visibleTargetCount: visibleTargets.length,
+      bulletCount: Array.isArray(realtime.bullets) ? realtime.bullets.length : 0
+    });
+  }
+  return result;
 }
 
 function scoreCoinOpportunity(coin, options = {}) {
@@ -4327,6 +4355,247 @@ function coinRouteCoreOptions(input, stateful = {}, options = {}) {
   };
 }
 
+function controlledExplorationConfig(options = {}) {
+  return {
+    maxAcceptedShots: Math.max(1, Number(options.activeProfitExplorationMaxAcceptedShots ?? 10)),
+    maxDurationMs: Math.max(1000, Number(options.activeProfitExplorationMaxDurationMs ?? 8000)),
+    maxStaminaMs: Math.max(500, Number(options.activeProfitExplorationMaxStaminaMs ?? 5000)),
+    qualifyingFrames: Math.max(1, Number(options.activeProfitExplorationQualifyingFrames ?? 3)),
+    missingHoldMs: Math.max(250, Number(options.activeProfitExplorationMissingHoldMs ?? 1800)),
+    shotStaminaMs: Math.max(0, Number(options.opportunityShotStaminaCostMs ?? 500)),
+    moveStaminaPerCm: Math.max(0, Number(options.opportunityMoveStaminaPerCm
+      ?? BROWSER_RUNTIME_DEFAULTS.opportunityMoveStaminaPerCm
+      ?? 1)),
+    attackRange: Math.max(0, Number(options.attackRange || DEFAULT_ATTACK_RANGE))
+  };
+}
+
+function explorationTargetIdFromAction(action) {
+  if (!action || action.explorationAdmitted !== true) return '';
+  return targetKey(action.target);
+}
+
+function finishControlledExplorationSession(stateful, targetId, reason, nowMs) {
+  const sessions = stateful.explorationSessions || {};
+  const session = sessions[targetId];
+  if (!session) return null;
+  const finished = {
+    ...session,
+    active: false,
+    endedAt: nowMs,
+    durationMs: Math.max(0, nowMs - Number(session.sessionStartedAt || nowMs)),
+    terminationReason: reason || 'ended'
+  };
+  delete sessions[targetId];
+  if (stateful.explorationCandidates) delete stateful.explorationCandidates[targetId];
+  stateful.explorationTerminations = stateful.explorationTerminations && typeof stateful.explorationTerminations === 'object'
+    ? stateful.explorationTerminations
+    : {};
+  stateful.explorationTerminations[targetId] = {
+    targetId,
+    targetEntityId: session.targetEntityId ?? null,
+    endedAt: nowMs,
+    lastSeenAt: Number(session.lastSeenAt || nowMs),
+    reason: reason || 'ended'
+  };
+  stateful.explorationHistory = [
+    ...(Array.isArray(stateful.explorationHistory) ? stateful.explorationHistory : []),
+    finished
+  ].slice(-12);
+  return finished;
+}
+
+function reconcileControlledExplorationSessions(input, stateful = {}, options = {}) {
+  const config = controlledExplorationConfig(options);
+  const nowMs = Number(input?.nowMs || Date.now());
+  const sessions = stateful.explorationSessions && typeof stateful.explorationSessions === 'object'
+    ? stateful.explorationSessions
+    : {};
+  stateful.explorationSessions = sessions;
+  stateful.explorationCandidates = stateful.explorationCandidates && typeof stateful.explorationCandidates === 'object'
+    ? stateful.explorationCandidates
+    : {};
+  stateful.explorationTerminations = stateful.explorationTerminations && typeof stateful.explorationTerminations === 'object'
+    ? stateful.explorationTerminations
+    : {};
+  const visibleById = new Map((input?.visibleTargets || [])
+    .map(target => [targetKey(target), target])
+    .filter(([id]) => id));
+  const killedIds = new Set((input?.selfKillEvidence || [])
+    .map(item => String(item?.targetUserId ?? item?.target_user_id ?? item?.targetId ?? item?.target_id ?? item?.userId ?? item?.user_id ?? ''))
+    .filter(Boolean));
+  const previousActionTargetId = explorationTargetIdFromAction(stateful.lastDecisionAction);
+  const selfPoint = Number.isFinite(Number(input?.self?.x)) && Number.isFinite(Number(input?.self?.y))
+    ? { x: Number(input.self.x), y: Number(input.self.y), at: nowMs }
+    : null;
+  for (const [targetId, session] of Object.entries(sessions)) {
+    const visible = visibleById.get(targetId) || null;
+    const visibleEntityId = visible?.entity_id ?? visible?.entityId ?? visible?.id ?? null;
+    if (visible && session.targetEntityId !== null && session.targetEntityId !== undefined
+      && visibleEntityId !== null && visibleEntityId !== undefined
+      && String(visibleEntityId) !== String(session.targetEntityId)) {
+      finishControlledExplorationSession(stateful, targetId, 'target-identity-changed', nowMs);
+      continue;
+    }
+    if (visible && (visible.alive === false || hpValue(visible) === 0)) {
+      finishControlledExplorationSession(stateful, targetId, 'target-killed', nowMs);
+      continue;
+    }
+    if (killedIds.has(targetId)) {
+      finishControlledExplorationSession(stateful, targetId, 'self-kill-confirmed', nowMs);
+      continue;
+    }
+    if (stateful.dangerousCombatTargets?.[targetId] || stateful.easyKillTargetSuppressions?.[targetId]) {
+      finishControlledExplorationSession(stateful, targetId, 'target-failed-or-suppressed', nowMs);
+      continue;
+    }
+    if (visible) {
+      session.lastSeenAt = nowMs;
+      session.lastKnownDistance = numberOrNull(visible.distance ?? distanceBetween(input.self, visible));
+      session.targetName = visible.name || session.targetName || '';
+    } else if (nowMs - Number(session.lastSeenAt || session.sessionStartedAt || nowMs) > config.missingHoldMs) {
+      finishControlledExplorationSession(stateful, targetId, 'target-missing-timeout', nowMs);
+      continue;
+    }
+    if (previousActionTargetId === targetId && selfPoint && session.lastSelfPoint) {
+      const moved = Math.hypot(
+        selfPoint.x - Number(session.lastSelfPoint.x || 0),
+        selfPoint.y - Number(session.lastSelfPoint.y || 0)
+      );
+      if (Number.isFinite(moved) && moved > 0) {
+        session.approachDistanceCm = Math.max(0, Number(session.approachDistanceCm || 0)) + moved;
+        session.approachSpent = Math.max(0, Number(session.approachSpent || 0)) + moved * config.moveStaminaPerCm;
+      }
+    }
+    if (selfPoint) session.lastSelfPoint = selfPoint;
+    const metrics = stateful.combatMetrics || null;
+    if (String(metrics?.targetId ?? '') === targetId) {
+      const metricsAccepted = Math.max(0, Number(metrics.acceptedShots || 0));
+      const previousAccepted = Math.max(0, Number(session.lastCombatAcceptedShots || 0));
+      const acceptedDelta = Math.max(0, metricsAccepted - previousAccepted);
+      session.acceptedShots = Math.max(0, Number(session.acceptedShots || 0)) + acceptedDelta;
+      const metricsShooting = Math.max(0, Number(metrics.shootingStaminaSpent || metricsAccepted * config.shotStaminaMs));
+      const previousShooting = Math.max(0, Number(session.lastCombatShootingSpent || 0));
+      session.shootingSpent = Math.max(0, Number(session.shootingSpent || 0))
+        + Math.max(acceptedDelta * config.shotStaminaMs, metricsShooting - previousShooting);
+      session.lastCombatAcceptedShots = metricsAccepted;
+      session.lastCombatShootingSpent = metricsShooting;
+    }
+    session.durationMs = Math.max(0, nowMs - Number(session.sessionStartedAt || nowMs));
+    session.totalSpent = Math.max(0, Number(session.approachSpent || 0)) + Math.max(0, Number(session.shootingSpent || 0));
+    session.remainingBudget = Math.max(0, config.maxStaminaMs - session.totalSpent);
+    session.maxStaminaMs = config.maxStaminaMs;
+    session.maxAcceptedShots = config.maxAcceptedShots;
+    session.maxDurationMs = config.maxDurationMs;
+    if (session.totalSpent >= config.maxStaminaMs) {
+      finishControlledExplorationSession(stateful, targetId, 'stamina-budget-exhausted', nowMs);
+    } else if (session.acceptedShots >= config.maxAcceptedShots) {
+      finishControlledExplorationSession(stateful, targetId, 'shot-budget-exhausted', nowMs);
+    } else if (session.durationMs >= config.maxDurationMs) {
+      finishControlledExplorationSession(stateful, targetId, 'duration-budget-exhausted', nowMs);
+    }
+  }
+  for (const [targetId, candidate] of Object.entries(stateful.explorationCandidates)) {
+    if (nowMs - Number(candidate.lastSeenAt || 0) > config.missingHoldMs) delete stateful.explorationCandidates[targetId];
+  }
+  for (const [targetId, termination] of Object.entries(stateful.explorationTerminations)) {
+    const visible = visibleById.get(targetId) || null;
+    if (visible) {
+      termination.lastSeenAt = nowMs;
+      continue;
+    }
+    if (nowMs - Number(termination.lastSeenAt || termination.endedAt || 0) > config.missingHoldMs) {
+      delete stateful.explorationTerminations[targetId];
+    }
+  }
+  return config;
+}
+
+function observeControlledExplorationCandidate(input, stateful, item, config) {
+  const nowMs = Number(input.nowMs || Date.now());
+  const targetId = String(item.id);
+  const existingSession = stateful.explorationSessions?.[targetId] || null;
+  if (existingSession) return { session: existingSession, observation: null, rejectionReason: '' };
+  const termination = stateful.explorationTerminations?.[targetId] || null;
+  if (termination) {
+    return {
+      session: null,
+      observation: stateful.explorationCandidates?.[targetId] || null,
+      rejectionReason: `previous-session-${termination.reason || 'terminated'}`
+    };
+  }
+  const records = stateful.explorationCandidates;
+  const previous = records[targetId] || null;
+  const currentTick = numberOrNull(input.realtime?.tick);
+  const sameObservedFrame = previous && currentTick !== null && Number(previous.lastTick) === currentTick;
+  const continuous = Boolean(previous
+    && nowMs - Number(previous.lastSeenAt || 0) <= Math.max(config.missingHoldMs, 2500));
+  const qualifiedFrames = sameObservedFrame
+    ? Math.max(1, Number(previous.qualifiedFrames || 1))
+    : (continuous ? Math.max(1, Number(previous.qualifiedFrames || 0)) + 1 : 1);
+  const target = item.sourceTarget || {};
+  const estimatedApproachDistanceCm = Math.max(0, Number(item.distance ?? target.distance ?? distanceBetween(input.self, target)) - config.attackRange);
+  const estimatedApproachSpent = estimatedApproachDistanceCm * config.moveStaminaPerCm;
+  const observation = {
+    targetId,
+    targetName: target.name || '',
+    targetEntityId: target.entity_id ?? target.entityId ?? target.id ?? null,
+    qualifiedFrames,
+    requiredQualifiedFrames: config.qualifyingFrames,
+    firstSeenAt: continuous ? Number(previous.firstSeenAt || nowMs) : nowMs,
+    lastSeenAt: nowMs,
+    lastTick: currentTick,
+    estimatedApproachDistanceCm,
+    estimatedApproachSpent,
+    maxStaminaMs: config.maxStaminaMs
+  };
+  records[targetId] = observation;
+  if (qualifiedFrames < config.qualifyingFrames) {
+    return { session: null, observation, rejectionReason: 'insufficient-qualified-frames' };
+  }
+  if (estimatedApproachSpent >= config.maxStaminaMs) {
+    return { session: null, observation, rejectionReason: 'estimated-approach-over-budget' };
+  }
+  const existingCombatMetrics = String(stateful.combatMetrics?.targetId ?? '') === targetId
+    ? stateful.combatMetrics
+    : null;
+  const existingAcceptedShots = Math.max(0, Number(existingCombatMetrics?.acceptedShots || 0));
+  const existingShootingSpent = Math.max(0, Number(
+    existingCombatMetrics?.shootingStaminaSpent
+      ?? existingAcceptedShots * config.shotStaminaMs
+  ));
+  const session = {
+    active: true,
+    targetId,
+    targetName: target.name || '',
+    targetEntityId: observation.targetEntityId,
+    sessionStartedAt: nowMs,
+    lastSeenAt: nowMs,
+    lastKnownDistance: numberOrNull(item.distance ?? target.distance),
+    qualifiedFrames,
+    approachDistanceCm: 0,
+    approachSpent: 0,
+    shootingSpent: 0,
+    totalSpent: 0,
+    remainingBudget: config.maxStaminaMs,
+    acceptedShots: 0,
+    durationMs: 0,
+    maxStaminaMs: config.maxStaminaMs,
+    maxAcceptedShots: config.maxAcceptedShots,
+    maxDurationMs: config.maxDurationMs,
+    estimatedApproachDistanceCm,
+    estimatedApproachSpent,
+    lastSelfPoint: Number.isFinite(Number(input.self?.x)) && Number.isFinite(Number(input.self?.y))
+      ? { x: Number(input.self.x), y: Number(input.self.y), at: nowMs }
+      : null,
+    lastCombatAcceptedShots: existingAcceptedShots,
+    lastCombatShootingSpent: existingShootingSpent,
+    terminationReason: ''
+  };
+  stateful.explorationSessions[targetId] = session;
+  return { session, observation, rejectionReason: '' };
+}
+
 function buildOpportunityDecision(input, stateful = {}, options = {}) {
   const thresholdContext = options.profitThresholdContext || buildProfitThresholdContext(input, options);
   if (!input.self) {
@@ -4341,6 +4610,7 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
     };
   }
   const includeAfkProfitTargets = options.includeAfkProfitTargets !== false;
+  const explorationConfig = reconcileControlledExplorationSessions(input, stateful, options);
   const coinMaxDistance = Math.max(0, Number(options.coinMaxDistance || BROWSER_RUNTIME_DEFAULTS.coinMaxDistance));
   const globalCoinMaxDistance = Math.max(0, Number(options.globalCoinMaxDistance || DEFAULT_GLOBAL_COIN_MAX_DISTANCE));
   const opportunityThreats = input.avoidanceThreats || input.activeThreats || [];
@@ -4464,10 +4734,8 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
     profitThresholdStaminaMilli: thresholdContext.threshold?.staminaMilli ?? null
   }));
   let explorationAdmission = null;
+  const explorationEvaluations = [];
   if (thresholdContext.active && eligibleOpportunities.length === 0) {
-    const maxShots = Math.max(1, Number(options.activeProfitExplorationMaxAcceptedShots ?? 10));
-    const maxDurationMs = Math.max(1000, Number(options.activeProfitExplorationMaxDurationMs ?? 8000));
-    const maxStaminaMs = Math.max(500, Number(options.activeProfitExplorationMaxStaminaMs ?? 5000));
     const injury = stateful.browserlessInjury || null;
     const candidates = rawOpportunities
       .filter(item => item.type === 'enemy' && item.sourceTarget?.active && item.sourceTarget?.easyKillProfitTarget)
@@ -4476,25 +4744,49 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
       .filter(item => !(input.bullets || []).some(bullet => String(bulletOwnerId(bullet) ?? '') === String(item.id)))
       .filter(item => !injury || String(injury.targetKey || '') !== String(item.id) || input.nowMs - Number(injury.at || 0) > 3000)
       .map(item => {
-        const sameCombat = String(stateful.combatMetrics?.targetId ?? '') === String(item.id);
-        const acceptedShots = sameCombat ? Math.max(0, Number(stateful.combatMetrics?.acceptedShots || 0)) : 0;
-        const staminaSpent = sameCombat ? Math.max(0, Number(stateful.combatMetrics?.totalStaminaSpent || 0)) : 0;
-        const firstSeenAt = sameCombat ? Number(stateful.combatTarget?.firstSeenAt || stateful.combatTarget?.at || input.nowMs) : input.nowMs;
-        const durationMs = Math.max(0, input.nowMs - firstSeenAt);
-        return { item, acceptedShots, staminaSpent, durationMs };
+        const observed = observeControlledExplorationCandidate(input, stateful, item, explorationConfig);
+        const session = observed.session;
+        const evaluation = {
+          targetId: String(item.id),
+          targetName: item.sourceTarget?.name || '',
+          qualifiedFrames: Number(observed.observation?.qualifiedFrames ?? session?.qualifiedFrames ?? 0),
+          requiredQualifiedFrames: explorationConfig.qualifyingFrames,
+          estimatedApproachSpent: Number(observed.observation?.estimatedApproachSpent ?? session?.estimatedApproachSpent ?? 0),
+          approachSpent: Number(session?.approachSpent || 0),
+          shootingSpent: Number(session?.shootingSpent || 0),
+          totalSpent: Number(session?.totalSpent || 0),
+          remainingBudget: Number(session?.remainingBudget ?? explorationConfig.maxStaminaMs),
+          durationMs: Number(session?.durationMs || 0),
+          acceptedShots: Number(session?.acceptedShots || 0),
+          rejectionReason: observed.rejectionReason || ''
+        };
+        explorationEvaluations.push(evaluation);
+        return { item, session, evaluation };
       })
-      .filter(row => row.acceptedShots < maxShots && row.staminaSpent < maxStaminaMs && row.durationMs < maxDurationMs)
+      .filter(row => row.session
+        && row.session.acceptedShots < explorationConfig.maxAcceptedShots
+        && row.session.totalSpent < explorationConfig.maxStaminaMs
+        && row.session.durationMs < explorationConfig.maxDurationMs)
       .sort((a, b) => Number(b.item.score || -Infinity) - Number(a.item.score || -Infinity));
     const selected = candidates[0] || null;
     if (selected) {
       explorationAdmission = {
         targetId: String(selected.item.id),
-        acceptedShots: selected.acceptedShots,
-        maxAcceptedShots: maxShots,
-        durationMs: selected.durationMs,
-        maxDurationMs,
-        staminaSpent: selected.staminaSpent,
-        maxStaminaMs,
+        targetName: selected.item.sourceTarget?.name || '',
+        acceptedShots: Number(selected.session.acceptedShots || 0),
+        maxAcceptedShots: explorationConfig.maxAcceptedShots,
+        durationMs: Number(selected.session.durationMs || 0),
+        maxDurationMs: explorationConfig.maxDurationMs,
+        approachSpent: Number(selected.session.approachSpent || 0),
+        shootingSpent: Number(selected.session.shootingSpent || 0),
+        totalSpent: Number(selected.session.totalSpent || 0),
+        remainingBudget: Number(selected.session.remainingBudget || 0),
+        maxStaminaMs: explorationConfig.maxStaminaMs,
+        sessionStartedAt: Number(selected.session.sessionStartedAt || input.nowMs),
+        lastSeenAt: Number(selected.session.lastSeenAt || input.nowMs),
+        qualifiedFrames: Number(selected.session.qualifiedFrames || 0),
+        estimatedApproachSpent: Number(selected.session.estimatedApproachSpent || 0),
+        terminationReason: selected.session.terminationReason || '',
         reason: 'no-eligible-visible-profit'
       };
       eligibleOpportunities = [{
@@ -4636,7 +4928,21 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
       eligibleCount: filtered.eligibleCount,
       filteredCount: filtered.filteredCount,
       filtered: filtered.filtered,
-      explorationAdmission
+      explorationAdmission,
+      explorationEvaluations: explorationEvaluations.slice(0, 8),
+      explorationSessions: Object.values(stateful.explorationSessions || {}).slice(0, 8).map(session => ({
+        targetId: session.targetId,
+        targetName: session.targetName || '',
+        approachSpent: Number(session.approachSpent || 0),
+        shootingSpent: Number(session.shootingSpent || 0),
+        totalSpent: Number(session.totalSpent || 0),
+        remainingBudget: Number(session.remainingBudget || 0),
+        durationMs: Number(session.durationMs || 0),
+        acceptedShots: Number(session.acceptedShots || 0),
+        sessionStartedAt: Number(session.sessionStartedAt || 0),
+        lastSeenAt: Number(session.lastSeenAt || 0),
+        terminationReason: session.terminationReason || ''
+      }))
     }
   };
 }
@@ -5389,6 +5695,72 @@ function browserlessInjuryTarget(injury, currentPressure) {
   return rememberedTarget || currentTarget;
 }
 
+function resolveBrowserlessPressureActor(input, stateful, combat, options = {}, context = {}) {
+  const currentPressure = context.currentPressure
+    || pickBrowserlessInjuryPressure(input, stateful, options);
+  const injury = context.injury || stateful?.browserlessInjury || null;
+  const ownerIds = Array.from(new Set((context.ownerIds || [])
+    .map(value => String(value || ''))
+    .filter(Boolean)));
+  const singleOwnerId = ownerIds.length === 1 ? ownerIds[0] : '';
+  const ownerTarget = singleOwnerId
+    ? (input?.visibleTargets || []).find(target => targetKey(target) === singleOwnerId) || null
+    : null;
+  const injuryTarget = browserlessInjuryTarget(injury, currentPressure);
+  const actor = ownerTarget || injuryTarget || currentPressure?.target || null;
+  const actorId = targetKey(actor)
+    || singleOwnerId
+    || String(injury?.targetKey || '');
+  const combatTarget = combat?.target || combat?.dryRun?.target || null;
+  const combatTargetId = targetKey(combatTarget);
+  const actorMatchesCombatTarget = Boolean(actorId && combatTargetId && actorId === combatTargetId);
+  const actorInvulnerable = Boolean(actor && isInvulnerableEntity(actor));
+  const actorVisible = Boolean(actorId && (input?.visibleTargets || []).some(target => targetKey(target) === actorId));
+  const actorAttackable = Boolean(
+    actor
+      && actor.alive !== false
+      && actorVisible
+      && !actorInvulnerable
+  );
+  const combatCanHandlePressure = Boolean(
+    actorMatchesCombatTarget
+      && actorAttackable
+      && options.combatActionEligible !== false
+  );
+  const actorSource = ownerTarget
+    ? 'incoming-bullet-owner'
+    : (currentPressure?.target && targetKey(currentPressure.target) === actorId
+      ? currentPressure.targetSource
+      : (injury?.targetSource || 'unknown'));
+  const attributionConfidence = ownerTarget
+    ? 'direct-owner'
+    : (currentPressure?.attributable
+      ? 'attributed-current-pressure'
+      : (injury?.attributable ? 'remembered-attribution' : (actorId ? 'remembered-pressure' : 'unknown')));
+  let suppressionReason = 'no-established-combat-suppression';
+  if (combatCanHandlePressure) suppressionReason = 'same-attackable-actor-established-combat';
+  else if (!actorId) suppressionReason = 'pressure-actor-unknown';
+  else if (!combatTargetId) suppressionReason = 'combat-target-missing';
+  else if (!actorMatchesCombatTarget) suppressionReason = 'pressure-actor-differs-from-combat-target';
+  else if (actorInvulnerable) suppressionReason = 'pressure-actor-invulnerable';
+  else if (!actorVisible) suppressionReason = 'pressure-actor-not-visible';
+  else if (!actorAttackable) suppressionReason = 'pressure-actor-not-attackable';
+  else if (options.combatActionEligible === false) suppressionReason = 'combat-action-ineligible';
+  return {
+    actor,
+    actorId: actorId || null,
+    actorSource,
+    combatTargetId: combatTargetId || null,
+    actorMatchesCombatTarget,
+    actorAttackable,
+    actorInvulnerable,
+    actorVisible,
+    attributionConfidence,
+    combatCanHandlePressure,
+    suppressionReason
+  };
+}
+
 function browserlessInjuryTargetHpEvidence(stateful, target, injury, nowMs, options = {}) {
   const targetId = targetKey(target) || String(injury?.targetKey || '');
   const metrics = stateful?.combatMetrics || null;
@@ -5421,8 +5793,12 @@ function buildBrowserlessInjuryHpExitDecision(input, stateful, combat, options =
   if (options.browserlessInjuryLeaveEnabled === false) return null;
   if (!browserlessSafetyExitModeEnabled(options) || !input?.self || !injury) return null;
   const currentPressure = pickBrowserlessInjuryPressure(input, stateful, options);
-  if (combat?.target && options.combatActionEligible !== false) return null;
-  const target = browserlessInjuryTarget(injury, currentPressure);
+  const pressureActor = resolveBrowserlessPressureActor(input, stateful, combat, options, {
+    injury,
+    currentPressure
+  });
+  if (pressureActor.combatCanHandlePressure) return null;
+  const target = pressureActor.actor;
   if (!target && !injury.hasIncoming && !currentPressure.hasIncoming) return null;
   const nowMs = Number(input.nowMs || Date.now());
   const targetHpEvidence = browserlessInjuryTargetHpEvidence(stateful, target, injury, nowMs, options);
@@ -5465,7 +5841,17 @@ function buildBrowserlessInjuryHpExitDecision(input, stateful, combat, options =
       recentCombatAgeMs: numberOrNull(injury.recentCombatAgeMs ?? currentPressure.recentCombatAgeMs),
       exitRule: combatExit.rule,
       evaluatedTargetHp: targetHpEvidence.targetHp,
-      targetHpSource: targetHpEvidence.source
+      targetHpSource: targetHpEvidence.source,
+      pressureActor: {
+        actorId: pressureActor.actorId,
+        actorSource: pressureActor.actorSource,
+        combatTargetId: pressureActor.combatTargetId,
+        actorMatchesCombatTarget: pressureActor.actorMatchesCombatTarget,
+        actorAttackable: pressureActor.actorAttackable,
+        actorInvulnerable: pressureActor.actorInvulnerable,
+        attributionConfidence: pressureActor.attributionConfidence,
+        suppressionReason: pressureActor.suppressionReason
+      }
     }
   };
 }
@@ -5625,13 +6011,6 @@ function buildBrowserlessPredictedThreatExitDecision(state, input, stateful, com
     postKillSettlement: options.postKillSettlement || stateful.postKillSettlement,
     maxAgeMs: options.recentCombatResidualThreatMs
   });
-  const combatEstablished = Boolean(
-    (combat?.target && options.combatActionEligible !== false)
-      || residualThreatContinuity.active
-  );
-  const recovering = previousBand === 'recover'
-    || /recover|wait-for-full-stamina-and-hp/i.test(previousReason);
-  const unestablished = !combatEstablished;
   const ownerTarget = ownerIds.length === 1
     ? (input.visibleTargets || []).find(target => targetKey(target) === ownerIds[0] && !target.easyKillThreatExempt) || null
     : null;
@@ -5644,6 +6023,19 @@ function buildBrowserlessPredictedThreatExitDecision(state, input, stateful, com
     : 0;
   const continuousIncoming = attributableIncoming && sameOwnerDistinctBullets >= 2;
   const injury = stateful.browserlessInjury || null;
+  const currentPressure = pickBrowserlessInjuryPressure(input, stateful, options);
+  const pressureActor = resolveBrowserlessPressureActor(input, stateful, combat, options, {
+    injury,
+    currentPressure,
+    ownerIds
+  });
+  const combatEstablished = Boolean(
+    pressureActor.combatCanHandlePressure
+      || residualThreatContinuity.active
+  );
+  const recovering = previousBand === 'recover'
+    || /recover|wait-for-full-stamina-and-hp/i.test(previousReason);
+  const unestablished = !combatEstablished;
   const rapidDamage = recentDamage >= Math.max(3, Number(options.leavePredictionRapidDamageHp || 6))
     && recentDamageWindowMs > 0
     && recentDamageWindowMs <= Math.max(500, Number(options.leavePredictionRapidDamageWindowMs || 1000))
@@ -5663,9 +6055,10 @@ function buildBrowserlessPredictedThreatExitDecision(state, input, stateful, com
     reason = 'incoming-bullet-early-leave';
     rule = 'attributable-incoming-before-established-combat';
   }
-  const target = attributedOwnerTarget
+  const target = pressureActor.actor
+    || attributedOwnerTarget
     || combat?.target
-    || browserlessInjuryTarget(injury, pickBrowserlessInjuryPressure(input, stateful, options));
+    || browserlessInjuryTarget(injury, currentPressure);
   const assessment = {
     at: nowMs,
     tick: input.realtime?.tick ?? null,
@@ -5683,6 +6076,16 @@ function buildBrowserlessPredictedThreatExitDecision(state, input, stateful, com
     recentDamage,
     recentDamageWindowMs,
     rapidDamage,
+    pressureActor: {
+      actorId: pressureActor.actorId,
+      actorSource: pressureActor.actorSource,
+      combatTargetId: pressureActor.combatTargetId,
+      actorMatchesCombatTarget: pressureActor.actorMatchesCombatTarget,
+      actorAttackable: pressureActor.actorAttackable,
+      actorInvulnerable: pressureActor.actorInvulnerable,
+      attributionConfidence: pressureActor.attributionConfidence,
+      suppressionReason: pressureActor.suppressionReason
+    },
     prediction,
     lastCover: compactLeaveCover(pendingCover),
     hpSamples: hpSamples.slice(-32),
@@ -5955,7 +6358,50 @@ function buildCombatDecision(input, stateful = {}, options = {}) {
 function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options = {}) {
   const stageTimings = {};
   let stageStarted = performance.now();
-  const input = buildBrowserlessCombatStrategyInput(state, options, stateful);
+  const nowMs = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
+  const realtime = state?.realtime || {};
+  const fallback = state?.fallback || state?.snapshot || {};
+  const cacheKey = [
+    realtime.tick ?? '',
+    realtime.receivedAtMs ?? '',
+    fallback.tick ?? '',
+    fallback.receivedAtMs ?? '',
+    stateful?.combatTarget?.id ?? '',
+    options.controlMode || '',
+    options.combatEnabled === true ? 1 : 0
+  ].join('|');
+  const cached = stateful?.[REALTIME_INPUT_CACHE] || null;
+  let inputStageScale = null;
+  let input;
+  if (cached?.key === cacheKey && nowMs - Number(cached.createdAt || 0) <= 500) {
+    input = {
+      ...cached.input,
+      nowMs,
+      realtime: {
+        ...cached.input.realtime,
+        frameAgeMs: numberOrNull(realtime.frameAgeMs)
+      }
+    };
+    stageTimings['input-cache-hit'] = performance.now() - stageStarted;
+    inputStageScale = cached.scale || null;
+  } else {
+    let inputStages = null;
+    input = buildBrowserlessCombatStrategyInput(state, {
+      ...options,
+      onCombatInputStageTimings: (stages, scale) => {
+        inputStages = stages;
+        inputStageScale = scale;
+      }
+    }, stateful);
+    if (inputStages) {
+      for (const [name, durationMs] of Object.entries(inputStages)) {
+        stageTimings[`input-${name}`] = durationMs;
+      }
+    }
+    if (stateful && typeof stateful === 'object') {
+      stateful[REALTIME_INPUT_CACHE] = { key: cacheKey, createdAt: nowMs, input, scale: inputStageScale };
+    }
+  }
   stageTimings.input = performance.now() - stageStarted;
   stageStarted = performance.now();
   reconcileEasyKillTracker(input, stateful, options);
@@ -6063,7 +6509,8 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
       combatCandidateCount: combat?.candidates?.length || 0,
       behaviorSampleCount: behavior?.metrics?.sampleCount || 0,
       routeCandidateCount: combat?.dryRun?.aim?.routeCoverage?.candidates?.length || 0,
-      learningCellCount: Object.keys(stateful?.combatLearning?.hitRateByModeDistance || {}).length
+      learningCellCount: Object.keys(stateful?.combatLearning?.hitRateByModeDistance || {}).length,
+      input: inputStageScale
     });
   }
   return output;

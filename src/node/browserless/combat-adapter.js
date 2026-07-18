@@ -24,7 +24,8 @@ const {
   checkLowConfidenceThrottle,
   classifyFireRiskCore,
   determineCombatFireState,
-  evaluateHighEntropyFireGateCore
+  evaluateHighEntropyFireGateCore,
+  updateCombatProbePhaseCore
 } = require('../../strategy/combat-fire-discipline');
 const { COMBAT_CONSTANTS } = require('../../strategy/combat-constants');
 const {
@@ -672,6 +673,8 @@ function updateContactEntryGuard(stateful, self, targets = [], bullets = [], opt
     moveSpeedPerTick: options.combatMoveSpeedPerTick || 50,
     hitRadius: options.combatBulletHitRadiusCm || 200,
     commandDelayP90Ticks: commandDelayTicks,
+    movementExecutionTiming: options.movementExecutionTiming,
+    pendingVelocityCommands: options.pendingVelocityCommands,
     reactionSafetyMarginMs: options.combatReactionSafetyMarginMs ?? 100
   });
   const dodgeSummary = contactEntryDodgeSummary(dodge, syntheticBullet);
@@ -1381,7 +1384,9 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
     target,
     moveSpeedPerTick: options.combatMoveSpeedPerTick || 50,
     hitRadius: options.combatBulletHitRadiusCm || 200,
-    commandDelayP90Ticks: Number(commandTiming.p90Ticks || 5),
+    commandDelayP90Ticks: Number((options.movementExecutionTiming || commandTiming).p90Ticks || 5),
+    movementExecutionTiming: options.movementExecutionTiming,
+    pendingVelocityCommands: options.pendingVelocityCommands,
     reactionSafetyMarginMs: options.combatReactionSafetyMarginMs ?? 100
   });
   const behaviorSamples = Array.isArray(opponentBehavior?.samples) ? opponentBehavior.samples : [];
@@ -1790,6 +1795,7 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
     motionSamples,
     opponentBehaviorState,
     fireRiskClassification,
+    probeState: same ? cloneJson(previous.probeState || null) : null,
     escapeDecision,
     provenHitRate: Math.max(
       Number(same ? previous.provenHitRate || 0 : 0),
@@ -1926,7 +1932,9 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
   const contactEntryGuard = updateContactEntryGuard(stateful, self, targets, bullets, {
     ...options,
     currentTick: realtime.tick,
-    executionTiming: state?.command?.shooting?.timing || options.executionTiming
+    executionTiming: state?.command?.shooting?.timing || options.executionTiming,
+    movementExecutionTiming: state?.command?.movement?.timing || options.movementExecutionTiming,
+    pendingVelocityCommands: state?.command?.movement?.pendingVelocityCommands || options.pendingVelocityCommands
   });
   const candidates = targets
     .filter(target => isCombatEligibleThreat(target, context))
@@ -2017,6 +2025,8 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     ...options,
     combatTargetState,
     executionTiming: state?.command?.shooting?.timing || options.executionTiming,
+    movementExecutionTiming: state?.command?.movement?.timing || options.movementExecutionTiming,
+    pendingVelocityCommands: state?.command?.movement?.pendingVelocityCommands || options.pendingVelocityCommands,
     currentTick: realtime.tick,
     bullets,
     contactEntryGuard: contactApplies ? contactEntryGuard : null
@@ -2073,7 +2083,39 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
       || (Number(combatTargetState?.lastSelfDamageAt || 0) > 0
         && Number(options.nowMs || Date.now()) - Number(combatTargetState.lastSelfDamageAt) <= 3000)
   );
-  const highEntropyFireGate = evaluateHighEntropyFireGateCore({
+  const fireRisk = aim.fireRiskClassification || combatTargetState?.fireRiskClassification || null;
+  const movementPhase = behaviorState?.metrics?.movementPhase
+    || behaviorState?.metrics?.movementTransitions?.phase
+    || null;
+  const probeState = updateCombatProbePhaseCore(combatTargetState?.probeState || null, {
+    nowMs: options.nowMs,
+    targetId: combatTargetId(target),
+    acceptedShots: stateful?.combatMetrics?.acceptedShots,
+    confirmedHits: stateful?.combatMetrics?.confirmedHits,
+    shootingStamina: stateful?.combatMetrics?.shootingStaminaSpent,
+    highEntropy: Boolean(fireRisk?.highEntropy),
+    behaviorMode: behaviorState?.mode,
+    responsePolicy: behaviorPolicy?.name,
+    directionState: movementPhase?.currentDirection,
+    directionDwellTicks: movementPhase?.dwellTicks,
+    directionFlipAt: behaviorState?.metrics?.lastLateralFlipAt,
+    routeContextKey: aim.routeCoverage?.contextKey,
+    routeCandidate: aim.routeCoverage?.selected,
+    routeProbability: selectedRouteProbability,
+    predictedHitProbability: expectedHitProbability,
+    recentHitRate: recentHitSummary.hitRate,
+    recentShotCount: recentHitSummary.shotCount,
+    distance: target?.distance,
+    aimX: aim.x,
+    aimY: aim.y,
+    defensivePressure,
+    finishingTarget: Boolean(
+      (hpValue(target) ?? 100) <= Math.max(1, Number(options.combatFinishLowThreatHp ?? COMBAT_CONSTANTS.FINISH_LOW_THREAT_HP))
+        && (hpValue(self) ?? 0) >= (hpValue(target) ?? 0) + 10
+    )
+  }, options.combatProbePhase);
+  if (stateful?.combatTarget) stateful.combatTarget.probeState = probeState;
+  const baseHighEntropyFireGate = evaluateHighEntropyFireGateCore({
     expectedHitProbability,
     recentHitRate: recentHitSummary.hitRate,
     recentShotCount: recentHitSummary.shotCount,
@@ -2081,14 +2123,55 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     noDamageMs: combatTargetState?.noDamageMs,
     targetHp: hpValue(target),
     selfHp: hpValue(self),
-    fireRiskClassification: aim.fireRiskClassification || combatTargetState?.fireRiskClassification || null,
-    highEntropy: Boolean((aim.fireRiskClassification || combatTargetState?.fireRiskClassification)?.highEntropy),
+    fireRiskClassification: fireRisk,
+    highEntropy: Boolean(fireRisk?.highEntropy),
     unreachableIntercept: Boolean(aim.fireReachability?.unreachable),
     reachabilityGapCm: aim.fireReachability?.rangeGapCm,
     defensivePressure,
     proactiveCombat: !contactEntryOnly,
     shootingStaminaSpent: noProgressAcceptedShots * Math.max(1, Number(options.combatShotStaminaCostMs ?? 500))
   }, options.highEntropyFireGate);
+  const probeReopensNovelGeometry = Boolean(
+    baseHighEntropyFireGate.suppressFire
+      && (probeState.provenHitProtected
+        || (probeState.geometryProbeEligible && probeState.probeBudgetRemaining > 0))
+      && /^high-entropy-/.test(String(baseHighEntropyFireGate.reason || ''))
+  );
+  const effectiveBaseHighEntropyFireGate = probeReopensNovelGeometry
+    ? {
+        ...baseHighEntropyFireGate,
+        suppressFire: false,
+        reason: 'high-entropy-novel-geometry-probe',
+        probeOverrideReason: probeState.provenHitProtected
+          ? 'proven-hit-rate'
+          : 'geometry-novelty-and-route-probability'
+      }
+    : baseHighEntropyFireGate;
+  const highEntropyFireGate = probeState.suppressFire
+    ? {
+        ...effectiveBaseHighEntropyFireGate,
+        active: true,
+        suppressFire: true,
+        minimumCadenceMs: Math.max(0, Number(baseHighEntropyFireGate.minimumCadenceMs || 0)),
+        reason: probeState.suppressionReason,
+        probePhase: probeState.probePhase,
+        probeBudgetRemaining: probeState.probeBudgetRemaining,
+        probeResetReason: probeState.probeResetReason,
+        geometryNovelty: probeState.geometryNovelty,
+        routeProbability: probeState.routeProbability,
+        predictedHitProbability: probeState.predictedHitProbability,
+        actualHitAttribution: probeState.actualHitAttribution
+      }
+    : {
+        ...effectiveBaseHighEntropyFireGate,
+        probePhase: probeState.probePhase,
+        probeBudgetRemaining: probeState.probeBudgetRemaining,
+        probeResetReason: probeState.probeResetReason,
+        geometryNovelty: probeState.geometryNovelty,
+        routeProbability: probeState.routeProbability,
+        predictedHitProbability: probeState.predictedHitProbability,
+        actualHitAttribution: probeState.actualHitAttribution
+      };
   const baseCadenceMs = Number.isFinite(Number(lowConfidence.cadenceMs)) && lowConfidence.throttle
     ? Number(lowConfidence.cadenceMs)
     : (Number.isFinite(Number(fireState.cadenceMs)) ? Number(fireState.cadenceMs) : null);
@@ -2179,6 +2262,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
       behaviorPolicy: behaviorPolicy?.name || '',
       behaviorReason: behaviorPolicy?.reason || '',
       highEntropyFireGate,
+      probePhase: probeState,
       fireRiskClassification: aim.fireRiskClassification || combatTargetState?.fireRiskClassification || null,
       expectedHitProbability,
       selectedRouteProbability,

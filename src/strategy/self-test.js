@@ -10,7 +10,11 @@ const { ACTION_PRIORITY_BANDS, getActionPriorityBand, buildActionFocus } = requi
 const { applyFinalActionArbitration } = require('./action-arbitration');
 const { buildFinalActionCandidate, selectFinalActionCandidateCore } = require('./final-candidate-selection');
 const { quadraticInterceptCore } = require('./combat-aim');
-const { classifyFireRiskCore, evaluateHighEntropyFireGateCore } = require('./combat-fire-discipline');
+const {
+  classifyFireRiskCore,
+  evaluateHighEntropyFireGateCore,
+  updateCombatProbePhaseCore
+} = require('./combat-fire-discipline');
 const {
   applyCombatMovementModifiers,
   calculateDodgeDirection,
@@ -326,6 +330,108 @@ function runStrategyModuleSelfTests() {
       && boundedDefense.suppressFire === true
       && boundedDefense.reason === 'high-entropy-reacquire'
   });
+  const initialProbe = updateCombatProbePhaseCore(null, {
+    nowMs: 1000,
+    targetId: 8,
+    acceptedShots: 0,
+    confirmedHits: 0,
+    shootingStamina: 0,
+    highEntropy: true,
+    behaviorMode: 'retreat-kite',
+    directionState: 'east',
+    routeContextKey: 'route-a',
+    routeCandidate: 'continue',
+    routeProbability: 0.2,
+    predictedHitProbability: 0.04,
+    distance: 12000,
+    aimX: 100,
+    aimY: 0
+  });
+  const lowQualityProbe = updateCombatProbePhaseCore(initialProbe, {
+    nowMs: 1500,
+    targetId: 8,
+    acceptedShots: 3,
+    confirmedHits: 0,
+    shootingStamina: 1500,
+    highEntropy: true,
+    behaviorMode: 'retreat-kite',
+    directionState: 'east',
+    routeContextKey: 'route-a',
+    routeCandidate: 'continue',
+    routeProbability: 0.2,
+    predictedHitProbability: 0.04,
+    distance: 12000,
+    aimX: 100,
+    aimY: 0
+  });
+  const exhaustedProbe = updateCombatProbePhaseCore(lowQualityProbe, {
+    nowMs: 2000,
+    targetId: 8,
+    acceptedShots: 5,
+    confirmedHits: 0,
+    shootingStamina: 2500,
+    highEntropy: true,
+    behaviorMode: 'retreat-kite',
+    directionState: 'east',
+    routeContextKey: 'route-a',
+    routeCandidate: 'continue',
+    routeProbability: 0.2,
+    predictedHitProbability: 0.2,
+    distance: 12000,
+    aimX: 100,
+    aimY: 0
+  });
+  const cadenceOnly = updateCombatProbePhaseCore(exhaustedProbe, {
+    nowMs: 5000,
+    targetId: 8,
+    acceptedShots: 5,
+    confirmedHits: 0,
+    shootingStamina: 2500,
+    highEntropy: true,
+    behaviorMode: 'retreat-kite',
+    directionState: 'east',
+    routeContextKey: 'route-a',
+    routeCandidate: 'continue',
+    routeProbability: 0.2,
+    predictedHitProbability: 0.2,
+    distance: 12000,
+    aimX: 100,
+    aimY: 0
+  });
+  const novelGeometry = updateCombatProbePhaseCore(cadenceOnly, {
+    nowMs: 5200,
+    targetId: 8,
+    acceptedShots: 5,
+    confirmedHits: 0,
+    shootingStamina: 2500,
+    highEntropy: true,
+    behaviorMode: 'stationary',
+    directionState: 'stop',
+    directionDwellTicks: 3,
+    directionFlipAt: 5100,
+    routeContextKey: 'route-b',
+    routeCandidate: 'stop',
+    routeProbability: 0.6,
+    predictedHitProbability: 0.4,
+    distance: 9000,
+    aimX: 700,
+    aimY: 0
+  });
+  results.push({
+    name: 'combat-probe-phase-requires-probability-and-novel-geometry-instead-of-cadence-reset',
+    passed: initialProbe.probePhase === 'probe'
+      && initialProbe.suppressFire === false
+      && lowQualityProbe.probePhase === 'wait-geometry'
+      && lowQualityProbe.suppressionReason === 'probe-hit-probability-below-threshold'
+      && exhaustedProbe.probePhase === 'cooldown'
+      && exhaustedProbe.probeBudgetRemaining === 0
+      && cadenceOnly.probePhase === 'cooldown'
+      && cadenceOnly.probeResetReason === ''
+      && novelGeometry.probePhase === 'probe'
+      && novelGeometry.probeResetReason === 'mode:stationary'
+      && novelGeometry.probeBudgetRemaining === 5
+      && novelGeometry.geometryNovelty === 1
+  });
 
   const dodge = calculateDodgeDirection(
     { x: 0, y: 0 },
@@ -360,6 +466,37 @@ function runStrategyModuleSelfTests() {
     passed: fullFlightStop?.directHits === 1
       && fullFlightStop?.minCPA === 0
       && fullFlightStop?.commandDelayTicks === 5
+  });
+  const pendingCommandDodge = calculateDodgeDirection(
+    { x: 0, y: 0, vx: 0, vy: 0 },
+    [{
+      incoming: true,
+      x: -1000,
+      y: 147,
+      distance: 1011,
+      cpa: 147,
+      timeToImpact: 100,
+      speed: 500,
+      direction: { dx: 1, dy: 0 },
+      remainingTicks: 4
+    }],
+    {
+      moveSpeedPerTick: 50,
+      tickMs: 50,
+      hitRadius: 90,
+      movementExecutionTiming: { sampleCount: 8, medianTicks: 1, p90Ticks: 5, madTicks: 0 },
+      pendingVelocityCommands: [{ commandId: 2602, dx: 0, dy: 1, effectiveAfterTicks: 1 }]
+    }
+  );
+  const pendingSelected = pendingCommandDodge.threatField.find(item => (
+    item.dx === pendingCommandDodge.dx && item.dy === pendingCommandDodge.dy
+  ));
+  results.push({
+    name: 'dodge-pending-old-command-reclassifies-july-18-tick-767375-false-safe',
+    passed: pendingSelected?.directHits === 1
+      && pendingSelected?.minCPA < 90
+      && pendingSelected?.pendingVelocityCommand?.commandId === 2602
+      && pendingSelected?.predictedVelocitySchedule?.[0]?.source === 'pending-command'
   });
   const safeClosingDodge = pickSafeClosingDodgeCore([
     { dx: 0, dy: 1, directHits: 0, minCPA: 800, targetDistanceChange: 150 },

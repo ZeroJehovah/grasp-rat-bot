@@ -57,6 +57,117 @@ function shouldBackAwayFromTarget(self, target) {
   return distance < closeThreshold;
 }
 
+function normalizedPendingVelocityCommands(options = {}) {
+  return (options.pendingVelocityCommands || options.velocitySchedule || [])
+    .map((command, index) => ({
+      commandId: command?.commandId ?? command?.id ?? null,
+      repeatOwnerCommandId: command?.repeatOwnerCommandId ?? null,
+      dx: Math.max(-1, Math.min(1, Math.round(Number(command?.dx || 0)))),
+      dy: Math.max(-1, Math.min(1, Math.round(Number(command?.dy || 0)))),
+      effectiveAfterTicks: Math.max(0, Number(command?.effectiveAfterTicks ?? command?.delayTicks ?? 0)),
+      sequence: Number(command?.sequence ?? index)
+    }))
+    .filter(command => Number.isFinite(command.effectiveAfterTicks))
+    .sort((a, b) => a.effectiveAfterTicks - b.effectiveAfterTicks || a.sequence - b.sequence)
+    .slice(-8);
+}
+
+function velocityScheduleVariants(currentVelocity, direction, options = {}) {
+  const pending = normalizedPendingVelocityCommands(options);
+  const timing = options.movementExecutionTiming || options.velocityExecutionTiming || {};
+  const commandDelayTicks = Math.max(0, Number(
+    options.commandDelayTicks
+      ?? options.commandDelayP90Ticks
+      ?? timing.p90Ticks
+      ?? 5
+  ));
+  const diagonalScale = direction.dx && direction.dy ? Math.SQRT1_2 : 1;
+  const moveSpeedPerTick = Math.max(0, Number(options.moveSpeedPerTick || 50));
+  const candidateVelocity = direction.holdCurrent
+    ? { vx: currentVelocity.vx, vy: currentVelocity.vy }
+    : (direction.stop
+      ? { vx: 0, vy: 0 }
+      : {
+          vx: direction.dx * diagonalScale * moveSpeedPerTick,
+          vy: direction.dy * diagonalScale * moveSpeedPerTick
+        });
+  const pendingEvents = pending.map(command => {
+    const scale = command.dx && command.dy ? Math.SQRT1_2 : 1;
+    return {
+      ...command,
+      vx: command.dx * scale * moveSpeedPerTick,
+      vy: command.dy * scale * moveSpeedPerTick,
+      source: 'pending-command'
+    };
+  });
+  const lastPendingTick = pendingEvents.reduce((max, command) => Math.max(max, command.effectiveAfterTicks), -1);
+  const candidateEffectiveAfterTicks = Math.max(commandDelayTicks, lastPendingTick >= 0 ? lastPendingTick + 1 : 0);
+  const expected = [
+    ...pendingEvents,
+    {
+      commandId: null,
+      dx: direction.dx,
+      dy: direction.dy,
+      vx: candidateVelocity.vx,
+      vy: candidateVelocity.vy,
+      effectiveAfterTicks: candidateEffectiveAfterTicks,
+      source: 'candidate-command'
+    }
+  ];
+  const sampleCount = Math.max(0, Number(timing.sampleCount || 0));
+  const madTicks = Math.max(0, Number(timing.madTicks || 0));
+  const lowConfidence = pendingEvents.length > 0 && (sampleCount < 4 || madTicks > 1);
+  const variants = [{ name: 'expected', events: expected }];
+  if (lowConfidence) {
+    const uncertainty = Math.max(1, Math.ceil(madTicks || 1));
+    const shifted = shift => {
+      let previousTick = -1;
+      return expected.map(event => {
+        const desired = Math.max(0, Number(event.effectiveAfterTicks) + shift);
+        const effectiveAfterTicks = Math.max(desired, previousTick + (previousTick >= 0 ? 1 : 0));
+        previousTick = effectiveAfterTicks;
+        return { ...event, effectiveAfterTicks };
+      });
+    };
+    variants.push({ name: 'early-pending', events: shifted(-uncertainty) });
+    variants.push({ name: 'late-pending', events: shifted(uncertainty) });
+  }
+  return {
+    variants,
+    pending,
+    commandDelayTicks,
+    candidateEffectiveAfterTicks,
+    confidence: lowConfidence ? 'low-worst-branch' : (pending.length ? 'measured-schedule' : 'no-pending-command')
+  };
+}
+
+function scheduledVelocityAt(intervalTick, currentVelocity, events) {
+  let velocity = currentVelocity;
+  for (const event of events) {
+    if (Number(event.effectiveAfterTicks) > intervalTick + 1) break;
+    velocity = { vx: Number(event.vx || 0), vy: Number(event.vy || 0) };
+  }
+  return velocity;
+}
+
+function simulateScheduledSelfPosition(self, intervalTicks, currentVelocity, events) {
+  let x = Number(self?.x || 0);
+  let y = Number(self?.y || 0);
+  const wholeTicks = Math.max(0, Math.floor(intervalTicks));
+  for (let tick = 0; tick < wholeTicks; tick += 1) {
+    const velocity = scheduledVelocityAt(tick, currentVelocity, events);
+    x += velocity.vx;
+    y += velocity.vy;
+  }
+  const fraction = Math.max(0, intervalTicks - wholeTicks);
+  if (fraction > 0) {
+    const velocity = scheduledVelocityAt(wholeTicks, currentVelocity, events);
+    x += velocity.vx * fraction;
+    y += velocity.vy * fraction;
+  }
+  return { x, y };
+}
+
 /**
  * Calculate dodge direction for incoming bullets
  *
@@ -100,21 +211,31 @@ function calculateDodgeDirection(self, bullets, options = {}) {
   const moveSpeedPerTick = Math.max(0, Number(options.moveSpeedPerTick ?? self?.speed_per_tick ?? self?.speedPerTick ?? 50));
   const tickMs = Math.max(1, Number(options.tickMs || 50));
   const hitRadius = Math.max(1, Number(options.hitRadius || 200));
-  const commandDelayTicks = Math.max(0, Number(options.commandDelayTicks ?? options.commandDelayP90Ticks ?? 5));
+  const movementExecutionTiming = options.movementExecutionTiming || options.velocityExecutionTiming || {};
+  const commandDelayTicks = Math.max(0, Number(options.commandDelayTicks
+    ?? options.commandDelayP90Ticks
+    ?? movementExecutionTiming.p90Ticks
+    ?? 5));
   const reactionBudgetMs = Math.max(0, Number(options.reactionBudgetMs
     ?? (commandDelayTicks * tickMs + tickMs + Math.max(0, Number(options.reactionSafetyMarginMs ?? 100)))));
   const currentVx = Number(self?.vx || 0);
   const currentVy = Number(self?.vy || 0);
+  const observedVelocity = { vx: currentVx, vy: currentVy };
   const threatField = directions.map(dir => {
     let directHits = 0;
     let avoidableHits = 0;
     let unavoidableHits = 0;
     let minCPA = Infinity;
     let minTTI = Infinity;
+    const schedule = velocityScheduleVariants(observedVelocity, dir, {
+      ...options,
+      commandDelayTicks,
+      movementExecutionTiming,
+      moveSpeedPerTick
+    });
 
     for (const bullet of incoming) {
       const tti = Number(bullet.timeToImpact || 1000);
-      const diagonalScale = dir.dx && dir.dy ? Math.SQRT1_2 : 1;
       const bulletX = Number(bullet.x);
       const bulletY = Number(bullet.y);
       const directionX = Number(bullet.direction?.dx);
@@ -129,20 +250,20 @@ function calculateDodgeDirection(self, bullets, options = {}) {
           ? Math.ceil(remainingTicks)
           : ttiTicks;
         const endTick = Math.max(1, Math.min(Math.max(1, Number(options.maxTrajectoryTicks || 60)), trajectoryTicks));
-        let selfX = Number(self?.x || 0);
-        let selfY = Number(self?.y || 0);
-        for (let tick = 0; tick <= endTick; tick += 1) {
-          const bulletAtX = bulletX + directionX * bulletSpeed * tick;
-          const bulletAtY = bulletY + directionY * bulletSpeed * tick;
-          cpa = Math.min(cpa, Math.hypot(selfX - bulletAtX, selfY - bulletAtY));
-          if (tick >= endTick) break;
-          if (tick < commandDelayTicks || dir.holdCurrent) {
-            selfX += currentVx;
-            selfY += currentVy;
-          } else if (!dir.stop) {
-            selfX += dir.dx * diagonalScale * moveSpeedPerTick;
-            selfY += dir.dy * diagonalScale * moveSpeedPerTick;
+        for (const variant of schedule.variants) {
+          let variantCpa = Infinity;
+          let selfX = Number(self?.x || 0);
+          let selfY = Number(self?.y || 0);
+          for (let tick = 0; tick <= endTick; tick += 1) {
+            const bulletAtX = bulletX + directionX * bulletSpeed * tick;
+            const bulletAtY = bulletY + directionY * bulletSpeed * tick;
+            variantCpa = Math.min(variantCpa, Math.hypot(selfX - bulletAtX, selfY - bulletAtY));
+            if (tick >= endTick) break;
+            const velocity = scheduledVelocityAt(tick, observedVelocity, variant.events);
+            selfX += velocity.vx;
+            selfY += velocity.vy;
           }
+          cpa = Math.min(cpa, variantCpa);
         }
       }
 
@@ -156,17 +277,12 @@ function calculateDodgeDirection(self, bullets, options = {}) {
     }
 
     const targetFutureTicks = Number.isFinite(minTTI) ? Math.max(0, minTTI / tickMs - commandDelayTicks) : 0;
-    const targetDiagonalScale = dir.dx && dir.dy ? Math.SQRT1_2 : 1;
-    const delayedTicks = Math.min(commandDelayTicks, targetFutureTicks);
-    const controlledTicks = Math.max(0, targetFutureTicks - delayedTicks);
-    const candidateFutureSelf = {
-      x: Number(self?.x || 0)
-        + currentVx * delayedTicks
-        + (dir.holdCurrent ? currentVx * controlledTicks : (dir.stop ? 0 : dir.dx * targetDiagonalScale * moveSpeedPerTick * controlledTicks)),
-      y: Number(self?.y || 0)
-        + currentVy * delayedTicks
-        + (dir.holdCurrent ? currentVy * controlledTicks : (dir.stop ? 0 : dir.dy * targetDiagonalScale * moveSpeedPerTick * controlledTicks))
-    };
+    const candidateFutureSelf = simulateScheduledSelfPosition(
+      self,
+      targetFutureTicks,
+      observedVelocity,
+      schedule.variants[0].events
+    );
     return {
       dx: dir.dx,
       dy: dir.dy,
@@ -176,6 +292,17 @@ function calculateDodgeDirection(self, bullets, options = {}) {
       minCPA,
       minTTI,
       commandDelayTicks,
+      candidateEffectiveAfterTicks: schedule.candidateEffectiveAfterTicks,
+      observedVelocity,
+      pendingVelocityCommand: schedule.pending[0] || null,
+      predictedVelocitySchedule: schedule.variants[0].events.map(event => ({
+        commandId: event.commandId,
+        dx: event.dx,
+        dy: event.dy,
+        effectiveAfterTicks: event.effectiveAfterTicks,
+        source: event.source
+      })),
+      velocityScheduleConfidence: schedule.confidence,
       reactionBudgetMs,
       targetDistanceChange: Number.isFinite(Number(options.target?.x)) && Number.isFinite(Number(options.target?.y))
         ? Math.hypot(candidateFutureSelf.x - Number(options.target.x), candidateFutureSelf.y - Number(options.target.y))
@@ -206,6 +333,10 @@ function calculateDodgeDirection(self, bullets, options = {}) {
         dx: tangentDir.dx,
         dy: tangentDir.dy,
         reason: 'tangent-dodge',
+        observedVelocity: tangentDir.observedVelocity,
+        pendingVelocityCommand: tangentDir.pendingVelocityCommand,
+        predictedVelocitySchedule: tangentDir.predictedVelocitySchedule,
+        velocityScheduleConfidence: tangentDir.velocityScheduleConfidence,
         threatField
       };
     }
@@ -220,6 +351,10 @@ function calculateDodgeDirection(self, bullets, options = {}) {
       : (safest.directHits > 0 ? 'direct-threat-dodge' : 'safe-dodge'),
     reactionBudgetMs,
     unavoidableCurrentShot: safest.unavoidableHits > 0,
+    observedVelocity: safest.observedVelocity,
+    pendingVelocityCommand: safest.pendingVelocityCommand,
+    predictedVelocitySchedule: safest.predictedVelocitySchedule,
+    velocityScheduleConfidence: safest.velocityScheduleConfidence,
     threatField
   };
 }

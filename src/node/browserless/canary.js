@@ -95,6 +95,28 @@ function recordMainThreadTask(stats, taskName, durationMs, stageDurations = {}, 
   return entry;
 }
 
+function startMainThreadCpuUsage() {
+  if (typeof process.threadCpuUsage === 'function') return { source: 'thread', value: process.threadCpuUsage() };
+  return { source: 'process', value: process.cpuUsage() };
+}
+
+function mainThreadWorkProfile(started, wallMs) {
+  const usage = started?.source === 'thread' && typeof process.threadCpuUsage === 'function'
+    ? process.threadCpuUsage(started.value)
+    : process.cpuUsage(started?.value);
+  const cpuMs = Math.max(0, Number(usage?.user || 0) + Number(usage?.system || 0)) / 1000;
+  const nonCpuWallMs = Math.max(0, Number(wallMs || 0) - cpuMs);
+  return {
+    cpuUsageSource: started?.source || 'process',
+    cpuWorkMs: Math.round(cpuMs * 1000) / 1000,
+    nonCpuWallMs: Math.round(nonCpuWallMs * 1000) / 1000,
+    likelyPauseOrContention: nonCpuWallMs >= 5,
+    classification: nonCpuWallMs >= Math.max(5, cpuMs * 0.35)
+      ? 'pause-gc-or-contention'
+      : 'cpu-work'
+  };
+}
+
 function createRealtimeControlWarmupState(userId = 0, nowMs = Date.now()) {
   const self = {
     entity_id: 1,
@@ -1885,6 +1907,7 @@ async function runReadOnlyCanary(config, options = {}) {
     decisionWorker.decide(currentState, workerOptions, context, statePatch)
       .then(workerResult => {
         const taskStarted = performance.now();
+        const taskCpuStarted = startMainThreadCpuUsage();
         const stages = {};
         try {
           plannerInFlight = false;
@@ -1935,8 +1958,10 @@ async function runReadOnlyCanary(config, options = {}) {
           });
           stages['planner-response-apply'] = performance.now() - stageStarted;
         } finally {
-          const entry = recordMainThreadTask(result.hotPath, 'planner-response', performance.now() - taskStarted, stages, {
+          const taskDurationMs = performance.now() - taskStarted;
+          const entry = recordMainThreadTask(result.hotPath, 'planner-response', taskDurationMs, stages, {
             tick: workerResult.decision?.tick ?? null,
+            workProfile: mainThreadWorkProfile(taskCpuStarted, taskDurationMs),
             responseScale: workerResult.responseScale || {
               effectCount: workerResult.effects?.length || 0
             }
@@ -2083,6 +2108,7 @@ async function runReadOnlyCanary(config, options = {}) {
       onMessage: data => {
         if (ending) return;
         const taskStarted = performance.now();
+        const taskCpuStarted = startMainThreadCpuUsage();
         const stageDurations = {};
         const atMs = now();
         let frame = null;
@@ -2217,9 +2243,11 @@ async function runReadOnlyCanary(config, options = {}) {
             stageDurations.safety = performance.now() - stageStarted;
           }
         } finally {
-          const entry = recordMainThreadTask(result.hotPath, 'ws-message', performance.now() - taskStarted, stageDurations, {
+          const taskDurationMs = performance.now() - taskStarted;
+          const entry = recordMainThreadTask(result.hotPath, 'ws-message', taskDurationMs, stageDurations, {
             frameType: frame?.decodedType || frame?.decodedJson?.type || '',
             tick: frame?.decodedTick ?? frame?.decodedJson?.tick ?? null,
+            workProfile: mainThreadWorkProfile(taskCpuStarted, taskDurationMs),
             inputScale: {
               compressedBytes: frame?.payloadByteLength ?? frame?.byteLength ?? null,
               decodedBytes: frame?.decodedByteLength ?? null,
@@ -2251,6 +2279,7 @@ async function runReadOnlyCanary(config, options = {}) {
         movementSettlementStallMs: config.movementSettlementStallMs,
         movementSettlementMinDistanceCm: config.movementSettlementMinDistanceCm,
         combatShootMinIntervalMs: config.combatShootMinIntervalMs,
+        onVelocityRequest: request => stateStore.recordVelocityRequest(request),
         onShootRequest: request => stateStore.recordShootRequest(request)
       });
     }

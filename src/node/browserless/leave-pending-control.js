@@ -202,13 +202,16 @@ function buildLeavePendingCover(state = {}, pending = {}, options = {}) {
   const target = findLockedTarget(state, pending, self, options);
   const bullets = normalizedIncomingBullets(state, self, options);
   const executionTiming = state?.command?.shooting?.timing || state?.command?.shooting?.executionDelay || {};
+  const movementExecutionTiming = state?.command?.movement?.timing || {};
   let dodge = bullets.length
     ? calculateDodgeDirection(self, bullets, {
         tangentPreference: targetTangentPreference(self, target),
         target,
         moveSpeedPerTick: options.combatMoveSpeedPerTick || 50,
         hitRadius: options.combatBulletHitRadiusCm || 90,
-        commandDelayP90Ticks: Number(executionTiming.p90Ticks || 5),
+        commandDelayP90Ticks: Number(movementExecutionTiming.p90Ticks || executionTiming.p90Ticks || 5),
+        movementExecutionTiming,
+        pendingVelocityCommands: state?.command?.movement?.pendingVelocityCommands || [],
         reactionSafetyMarginMs: options.combatReactionSafetyMarginMs ?? 100
       })
     : null;

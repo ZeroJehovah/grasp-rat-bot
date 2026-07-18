@@ -378,6 +378,164 @@ function evaluateHighEntropyFireGateCore(input = {}, options = {}) {
   };
 }
 
+function updateCombatProbePhaseCore(previous = null, input = {}, options = {}) {
+  const nowMs = Math.max(0, Number(input.nowMs || Date.now()));
+  const targetId = String(input.targetId || '');
+  const sameTarget = Boolean(previous && targetId && String(previous.targetId || '') === targetId);
+  const highEntropy = Boolean(input.highEntropy);
+  const acceptedShots = Math.max(0, Math.round(Number(input.acceptedShots || 0)));
+  const confirmedHits = Math.max(0, Math.round(Number(input.confirmedHits || 0)));
+  const shootingStamina = Math.max(0, Number(input.shootingStamina || 0));
+  const maxAcceptedShots = Math.max(1, Math.round(Number(options.maxAcceptedShots ?? 5)));
+  const defensiveExtraShots = Math.max(0, Math.round(Number(options.defensiveExtraShots ?? 2)));
+  const mode = String(input.behaviorMode || 'mixed/unknown');
+  const responsePolicy = String(input.responsePolicy || '');
+  const directionState = String(input.directionState || '');
+  const directionFlipAt = Math.max(0, Number(input.directionFlipAt || 0));
+  const routeContextKey = String(input.routeContextKey || '');
+  const routeCandidate = String(input.routeCandidate || '');
+  const distance = Number.isFinite(Number(input.distance)) ? Number(input.distance) : null;
+  const aimX = Number.isFinite(Number(input.aimX)) ? Number(input.aimX) : null;
+  const aimY = Number.isFinite(Number(input.aimY)) ? Number(input.aimY) : null;
+  const predictedHitProbability = Math.max(0, Math.min(1, Number(input.predictedHitProbability || 0)));
+  const recentHitRate = Math.max(0, Math.min(1, Number(input.recentHitRate || 0)));
+  const recentShotCount = Math.max(0, Math.round(Number(input.recentShotCount || 0)));
+  const highEntropyMinimumProbability = Math.max(0.01, Number(options.highEntropyMinimumProbability ?? 0.10));
+  const defensiveMinimumProbability = Math.max(0.01, Number(options.defensiveMinimumProbability ?? 0.06));
+  const minimumProbability = input.defensivePressure ? defensiveMinimumProbability : highEntropyMinimumProbability;
+  const base = sameTarget ? previous : {
+    targetId,
+    phaseStartedAt: nowMs,
+    baseAcceptedShots: acceptedShots,
+    baseConfirmedHits: confirmedHits,
+    baseShootingStamina: shootingStamina,
+    lastResetAt: nowMs,
+    lastDamageAt: 0,
+    lastDirectionFlipAt: 0,
+    probeResetReason: 'target-start'
+  };
+  const newHit = sameTarget && confirmedHits > Number(previous.lastTotalConfirmedHits || previous.baseConfirmedHits || 0);
+  const aimDelta = sameTarget
+    && aimX !== null && aimY !== null
+    && Number.isFinite(Number(previous.lastAimX)) && Number.isFinite(Number(previous.lastAimY))
+    ? Math.hypot(aimX - Number(previous.lastAimX), aimY - Number(previous.lastAimY))
+    : 0;
+  const distanceDelta = sameTarget && distance !== null && Number.isFinite(Number(previous.lastDistance))
+    ? Math.abs(distance - Number(previous.lastDistance))
+    : 0;
+  const enteredStableMode = sameTarget
+    && mode !== String(previous.lastBehaviorMode || '')
+    && ['stationary', 'steady-linear'].includes(mode);
+  const exhaustedWindow = sameTarget
+    && responsePolicy === 'opponent-exhausted-window'
+    && responsePolicy !== String(previous.lastResponsePolicy || '');
+  const stableDirectionFlip = sameTarget
+    && directionFlipAt > Number(previous.lastDirectionFlipAt || 0)
+    && directionState
+    && directionState !== String(previous.lastDirectionState || '')
+    && Math.max(0, Number(input.directionDwellTicks || 0)) >= 2;
+  const novelRoute = sameTarget
+    && routeContextKey
+    && routeContextKey !== String(previous.lastRouteContextKey || '')
+    && routeCandidate
+    && routeCandidate !== String(previous.lastRouteCandidate || '')
+    && aimDelta >= Math.max(90, Number(options.minimumAimNoveltyCm ?? 180));
+  const distanceNovelty = sameTarget
+    && distanceDelta >= Math.max(500, Number(options.minimumDistanceNoveltyCm ?? 2500))
+    && aimDelta >= Math.max(90, Number(options.minimumAimNoveltyCm ?? 180));
+  let resetReason = sameTarget ? '' : 'target-start';
+  if (newHit) resetReason = 'recent-attributed-hit';
+  else if (enteredStableMode) resetReason = `mode:${mode}`;
+  else if (exhaustedWindow) resetReason = 'opponent-exhausted-window';
+  else if (stableDirectionFlip) resetReason = 'stable-direction-flip';
+  else if (novelRoute) resetReason = 'novel-intercept-route';
+  else if (distanceNovelty) resetReason = 'distance-geometry-change';
+  const previousBudgetRemaining = Math.max(0, Number(previous?.probeBudgetRemaining ?? maxAcceptedShots));
+  const resetAllowed = Boolean(resetReason && (!sameTarget || newHit || previous?.probePhase === 'cooldown' || previousBudgetRemaining <= 0));
+  const phaseBaseAcceptedShots = resetAllowed ? acceptedShots : Number(base.baseAcceptedShots || 0);
+  const phaseBaseConfirmedHits = resetAllowed ? confirmedHits : Number(base.baseConfirmedHits || 0);
+  const phaseBaseShootingStamina = resetAllowed ? shootingStamina : Number(base.baseShootingStamina || 0);
+  const probeAcceptedShots = Math.max(0, acceptedShots - phaseBaseAcceptedShots);
+  const probeHits = Math.max(0, confirmedHits - phaseBaseConfirmedHits);
+  const probeStamina = Math.max(0, shootingStamina - phaseBaseShootingStamina);
+  const totalBudget = maxAcceptedShots + (input.defensivePressure ? defensiveExtraShots : 0);
+  const probeBudgetRemaining = Math.max(0, totalBudget - probeAcceptedShots);
+  const minimumCalibrationShots = Math.max(1, Math.round(Number(options.minimumCalibrationShots ?? 3)));
+  const provenHitProtected = Boolean(
+    (recentShotCount >= 5 && recentHitRate >= Math.max(0.03, Number(options.provenHitRate ?? 0.06)))
+      || (acceptedShots >= 5 && confirmedHits / Math.max(1, acceptedShots) >= Math.max(0.03, Number(options.provenHitRate ?? 0.06)))
+  );
+  const geometryNovelty = Math.max(
+    enteredStableMode || exhaustedWindow || stableDirectionFlip ? 1 : 0,
+    Math.min(1, aimDelta / Math.max(1, Number(options.minimumAimNoveltyCm ?? 180))),
+    Math.min(1, distanceDelta / Math.max(1, Number(options.minimumDistanceNoveltyCm ?? 2500)))
+  );
+  const routeProbability = numberOrNull(input.routeProbability);
+  const geometryProbeEligible = Boolean(
+    geometryNovelty >= Math.max(0.5, Number(options.minimumGeometryNovelty ?? 0.75))
+      && routeProbability !== null
+      && routeProbability >= Math.max(0.05, Number(options.minimumNovelRouteProbability ?? 0.15))
+      && predictedHitProbability >= Math.max(0.03, Number(options.minimumNovelPredictedHitProbability ?? 0.06))
+  );
+  const probabilityBlocked = highEntropy
+    && !provenHitProtected
+    && probeAcceptedShots >= minimumCalibrationShots
+    && predictedHitProbability < minimumProbability
+    && !geometryProbeEligible;
+  const cooldown = highEntropy && !provenHitProtected && probeBudgetRemaining <= 0 && probeHits <= 0;
+  const finishingTarget = Boolean(input.finishingTarget);
+  const suppressFire = Boolean(
+    highEntropy
+      && !finishingTarget
+      && (cooldown || probabilityBlocked)
+  );
+  const probePhase = !highEntropy
+    ? 'not-required'
+    : (provenHitProtected ? 'productive' : (cooldown ? 'cooldown' : (probabilityBlocked ? 'wait-geometry' : 'probe')));
+  return {
+    targetId,
+    probePhase,
+    probeAcceptedShots,
+    probeHits,
+    probeStamina,
+    probeBudgetRemaining,
+    probeMaxAcceptedShots: totalBudget,
+    probeResetReason: resetAllowed ? resetReason : '',
+    geometryNovelty: Number(geometryNovelty.toFixed(3)),
+    routeProbability,
+    predictedHitProbability,
+    minimumProbability,
+    minimumCalibrationShots,
+    provenHitProtected,
+    recentHitRate,
+    recentShotCount,
+    geometryProbeEligible,
+    actualHitAttribution: probeHits > 0 ? 'recent-shot-attribution' : 'none',
+    suppressFire,
+    suppressionReason: cooldown
+      ? 'probe-zero-damage-budget-cooldown'
+      : (probabilityBlocked ? 'probe-hit-probability-below-threshold' : ''),
+    phaseStartedAt: resetAllowed ? nowMs : Number(base.phaseStartedAt || nowMs),
+    baseAcceptedShots: phaseBaseAcceptedShots,
+    baseConfirmedHits: phaseBaseConfirmedHits,
+    baseShootingStamina: phaseBaseShootingStamina,
+    lastResetAt: resetAllowed ? nowMs : Number(base.lastResetAt || nowMs),
+    lastDamageAt: newHit ? nowMs : Number(base.lastDamageAt || 0),
+    lastTotalAcceptedShots: acceptedShots,
+    lastTotalConfirmedHits: confirmedHits,
+    lastTotalShootingStamina: shootingStamina,
+    lastBehaviorMode: mode,
+    lastResponsePolicy: responsePolicy,
+    lastDirectionState: directionState,
+    lastDirectionFlipAt: Math.max(directionFlipAt, Number(base.lastDirectionFlipAt || 0)),
+    lastRouteContextKey: routeContextKey,
+    lastRouteCandidate: routeCandidate,
+    lastDistance: distance,
+    lastAimX: aimX,
+    lastAimY: aimY
+  };
+}
+
 module.exports = {
   FIRE_STATE,
   determineCombatFireState,
@@ -386,5 +544,6 @@ module.exports = {
   shouldSuppressRetreatingEdge,
   checkLowConfidenceThrottle,
   classifyFireRiskCore,
-  evaluateHighEntropyFireGateCore
+  evaluateHighEntropyFireGateCore,
+  updateCombatProbePhaseCore
 };

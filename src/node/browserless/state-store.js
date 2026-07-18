@@ -116,6 +116,30 @@ function shotTimingSummary(samples = []) {
   };
 }
 
+function movementTimingSummary(samples = []) {
+  const values = samples.map(item => Number(item.executionDelayTicks)).filter(Number.isFinite).slice(-64);
+  const median = percentile(values, 0.5);
+  const deviations = median === null ? [] : values.map(value => Math.abs(value - median));
+  return {
+    sampleCount: values.length,
+    medianTicks: median === null ? 2 : median,
+    p90Ticks: percentile(values, 0.9) ?? 5,
+    madTicks: percentile(deviations, 0.5) ?? 0,
+    source: values.length ? 'visible-velocity-transition-rolling' : 'startup-default'
+  };
+}
+
+function velocityDirection(entity) {
+  const vx = Number(entity?.vx || 0);
+  const vy = Number(entity?.vy || 0);
+  return {
+    dx: Math.abs(vx) < 0.001 ? 0 : Math.sign(vx),
+    dy: Math.abs(vy) < 0.001 ? 0 : Math.sign(vy),
+    vx: Number.isFinite(vx) ? vx : 0,
+    vy: Number.isFinite(vy) ? vy : 0
+  };
+}
+
 function shotOriginSummary(samples = []) {
   const values = (samples || []).map(Number).filter(Number.isFinite).slice(-64);
   const median = percentile(values, 0.5);
@@ -182,7 +206,15 @@ function createInitialState(userId = 0) {
       confirmedShots: [],
       delaySamples: [],
       originErrorSamples: [],
-      ackLatencySamples: []
+      ackLatencySamples: [],
+      movement: {
+        nextSequence: 1,
+        pendingCommands: [],
+        settledCommands: [],
+        delaySamples: [],
+        actualTransitions: [],
+        lastObservedVelocity: null
+      }
     },
     transportDiagnostics: {
       frameKeySetCounts: {},
@@ -276,6 +308,54 @@ function createBrowserlessStateStore(options = {}) {
       .filter(Boolean);
     state.realtime.self = normalizedEntities.find(entity => Number(entity.user_id) === Number(state.userId)) || null;
     if (state.realtime.self) state.realtime.lastSelf = cloneJson(state.realtime.self);
+    observeVelocityTransition(state.realtime.self, meta);
+  }
+
+  function observeVelocityTransition(self, meta = {}) {
+    if (!self) return null;
+    const movement = state.command.movement;
+    const observed = velocityDirection(self);
+    const previous = movement.lastObservedVelocity;
+    const changed = !previous || Number(previous.dx) !== observed.dx || Number(previous.dy) !== observed.dy;
+    const tick = numericOrNull(meta.tick);
+    if (changed && previous) {
+      const matchingIndex = movement.pendingCommands.findIndex(command => (
+        Number(command.dx) === observed.dx && Number(command.dy) === observed.dy
+      ));
+      const matched = matchingIndex >= 0 ? movement.pendingCommands[matchingIndex] : null;
+      const transition = {
+        at: meta.receivedAtMs,
+        tick,
+        from: { dx: previous.dx, dy: previous.dy, vx: previous.vx, vy: previous.vy },
+        to: observed,
+        commandId: matched?.commandId ?? null,
+        repeatOwnerCommandId: matched?.repeatOwnerCommandId ?? null,
+        requestedAtMs: matched?.requestedAtMs ?? null,
+        observedTick: matched?.observedTick ?? null,
+        executionDelayTicks: matched && tick !== null && numericOrNull(matched.observedTick) !== null
+          ? Math.max(0, tick - Number(matched.observedTick))
+          : null,
+        matched: Boolean(matched)
+      };
+      movement.actualTransitions.push(transition);
+      movement.actualTransitions = movement.actualTransitions.slice(-32);
+      if (matched) {
+        movement.settledCommands.push({ ...matched, settledAtMs: meta.receivedAtMs, settledTick: tick, executionDelayTicks: transition.executionDelayTicks });
+        movement.settledCommands = movement.settledCommands.slice(-32);
+        if (transition.executionDelayTicks !== null) {
+          movement.delaySamples.push({ at: meta.receivedAtMs, executionDelayTicks: transition.executionDelayTicks });
+          movement.delaySamples = movement.delaySamples.slice(-64);
+        }
+        movement.pendingCommands = movement.pendingCommands.slice(matchingIndex + 1);
+      }
+    }
+    if (!changed) {
+      movement.pendingCommands = movement.pendingCommands.filter(command => (
+        Number(command.dx) !== observed.dx || Number(command.dy) !== observed.dy
+      ));
+    }
+    movement.lastObservedVelocity = { ...observed, tick, at: meta.receivedAtMs };
+    return movement.actualTransitions.at(-1) || null;
   }
 
   function ingestSnapshotFrame(frame, meta) {
@@ -420,6 +500,64 @@ function createBrowserlessStateStore(options = {}) {
     return cloneJson(shot);
   }
 
+  function recordVelocityRequest(request = {}) {
+    const movement = state.command.movement;
+    const requestedAtMs = Number(request.requestedAtMs || now());
+    const commandId = request.commandId ?? movement.nextSequence++;
+    const repeatOwnerCommandId = request.repeatOwnerCommandId ?? commandId;
+    const dx = Math.max(-1, Math.min(1, Math.round(Number(request.dx || 0))));
+    const dy = Math.max(-1, Math.min(1, Math.round(Number(request.dy || 0))));
+    if (request.repeat === true) {
+      const owner = movement.pendingCommands.find(command => String(command.commandId) === String(repeatOwnerCommandId));
+      if (owner) {
+        owner.lastRepeatedAtMs = requestedAtMs;
+        owner.repeatCount = Math.max(0, Number(owner.repeatCount || 0)) + 1;
+        return cloneJson(owner);
+      }
+    }
+    for (const pending of movement.pendingCommands) {
+      if (!pending.replacedByCommandId) pending.replacedByCommandId = commandId;
+    }
+    const timing = movementTimingSummary(movement.delaySamples);
+    const observedTick = numericOrNull(request.observedTick ?? state.realtime.tick);
+    const command = {
+      sequence: movement.nextSequence++,
+      commandId,
+      repeatOwnerCommandId,
+      dx,
+      dy,
+      reason: String(request.reason || ''),
+      requestedAtMs,
+      observedTick,
+      expectedEffectiveTick: observedTick === null ? null : observedTick + Number(timing.p90Ticks || 5),
+      repeat: false,
+      repeatCount: 0,
+      lastRepeatedAtMs: null,
+      replacedByCommandId: null
+    };
+    movement.pendingCommands.push(command);
+    movement.pendingCommands = movement.pendingCommands.slice(-16);
+    return cloneJson(command);
+  }
+
+  function movementCommandState() {
+    const movement = state.command.movement;
+    const timing = movementTimingSummary(movement.delaySamples);
+    const currentTick = numericOrNull(state.realtime.tick);
+    return {
+      timing,
+      observedVelocity: cloneJson(movement.lastObservedVelocity),
+      pendingVelocityCommands: movement.pendingCommands.slice(-8).map(command => ({
+        ...cloneJson(command),
+        effectiveAfterTicks: currentTick === null || command.expectedEffectiveTick === null
+          ? Number(timing.p90Ticks || 5)
+          : Math.max(0, Number(command.expectedEffectiveTick) - currentTick)
+      })),
+      actualVelocityTransitions: cloneJson(movement.actualTransitions.slice(-16)),
+      settledCommands: cloneJson(movement.settledCommands.slice(-8))
+    };
+  }
+
   function getFrameAges(nowMs = now()) {
     return {
       latestFrameAgeMs: frameAge(nowMs, state.latestFrameAtMs),
@@ -482,7 +620,8 @@ function createBrowserlessStateStore(options = {}) {
         shooterOrigin: shotOriginSummary(state.command.originErrorSamples),
         pendingShots: cloneJson(state.command.pendingShots.slice(-8)),
         confirmedShots: cloneJson(state.command.confirmedShots.slice(-16))
-      }
+      },
+      movement: movementCommandState()
     };
   }
 
@@ -553,7 +692,8 @@ function createBrowserlessStateStore(options = {}) {
           shooterOrigin: shotOriginSummary(state.command.originErrorSamples),
           pendingShots: state.command.pendingShots.slice(-8),
           confirmedShots: state.command.confirmedShots.slice(-16)
-        }
+        },
+        movement: movementCommandState()
       },
       transportDiagnostics: state.transportDiagnostics
     };
@@ -569,6 +709,7 @@ function createBrowserlessStateStore(options = {}) {
     ingestDecodedFrame: ingestFrame,
     ingestFrame,
     recordShootRequest,
+    recordVelocityRequest,
     reset,
     setUserId
   };
