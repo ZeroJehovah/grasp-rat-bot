@@ -2766,6 +2766,10 @@ async function runComplexCombatMainThreadBudgetSelfTest(tmp) {
     const maxFrameCpuMs = frameCpuDurations.length ? Math.max(...frameCpuDurations) : Infinity;
     const cpuOverBudgetCount = frameCpuDurations.filter(durationMs => durationMs >= SELF_TEST_MAIN_THREAD_BUDGET_MS).length;
     const warmup = result.decisions?.realtimeControlWarmup || null;
+    const expectedWorkProfileSource = currentMainThreadCpuMs() === null
+      ? null
+      : 'linux-main-thread-schedstat';
+    const workProfileSource = String(result.hotPath?.maxTask?.workProfile?.cpuUsageSource || '');
     return {
       ok: Boolean(
         result.ok
@@ -2776,6 +2780,7 @@ async function runComplexCombatMainThreadBudgetSelfTest(tmp) {
         && frameCpuDurations.length === measuredFrameCount
         && cpuOverBudgetCount === 0
         && maxFrameCpuMs < SELF_TEST_MAIN_THREAD_BUDGET_MS
+        && (!expectedWorkProfileSource || workProfileSource === expectedWorkProfileSource)
       ),
       budgetMs: SELF_TEST_MAIN_THREAD_BUDGET_MS,
       frameCount: measuredFrameCount,
@@ -2785,6 +2790,7 @@ async function runComplexCombatMainThreadBudgetSelfTest(tmp) {
       maxFrameWallMs: Math.round(maxFrameMs * 1000) / 1000,
       wallOverBudgetCount,
       timingSource: currentMainThreadCpuMs() === null ? 'performance-now-fallback' : 'linux-main-thread-schedstat',
+      workProfileSource,
       warmup,
       maxTask: result.hotPath?.maxTask || null,
       canaryOk: Boolean(result.ok),

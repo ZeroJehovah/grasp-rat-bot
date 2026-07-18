@@ -1,5 +1,6 @@
 'use strict';
 
+const fs = require('fs');
 const { performance } = require('perf_hooks');
 const { parseGrzFrame } = require('../../shared/grz-frame');
 const {
@@ -95,16 +96,34 @@ function recordMainThreadTask(stats, taskName, durationMs, stageDurations = {}, 
   return entry;
 }
 
+function currentMainThreadCpuMs() {
+  try {
+    const text = fs.readFileSync(`/proc/self/task/${process.pid}/schedstat`, 'utf8').trim();
+    const runtimeNs = Number(text.split(/\s+/)[0]);
+    return Number.isFinite(runtimeNs) ? runtimeNs / 1e6 : null;
+  } catch (_) {
+    return null;
+  }
+}
+
 function startMainThreadCpuUsage() {
+  const schedstatMs = currentMainThreadCpuMs();
+  if (schedstatMs !== null) return { source: 'linux-main-thread-schedstat', value: schedstatMs };
   if (typeof process.threadCpuUsage === 'function') return { source: 'thread', value: process.threadCpuUsage() };
   return { source: 'process', value: process.cpuUsage() };
 }
 
 function mainThreadWorkProfile(started, wallMs) {
-  const usage = started?.source === 'thread' && typeof process.threadCpuUsage === 'function'
-    ? process.threadCpuUsage(started.value)
-    : process.cpuUsage(started?.value);
-  const cpuMs = Math.max(0, Number(usage?.user || 0) + Number(usage?.system || 0)) / 1000;
+  let cpuMs;
+  if (started?.source === 'linux-main-thread-schedstat') {
+    const current = currentMainThreadCpuMs();
+    cpuMs = current === null ? 0 : Math.max(0, current - Number(started.value || 0));
+  } else {
+    const usage = started?.source === 'thread' && typeof process.threadCpuUsage === 'function'
+      ? process.threadCpuUsage(started.value)
+      : process.cpuUsage(started?.value);
+    cpuMs = Math.max(0, Number(usage?.user || 0) + Number(usage?.system || 0)) / 1000;
+  }
   const nonCpuWallMs = Math.max(0, Number(wallMs || 0) - cpuMs);
   return {
     cpuUsageSource: started?.source || 'process',
