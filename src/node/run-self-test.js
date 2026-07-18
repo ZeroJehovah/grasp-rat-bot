@@ -24462,12 +24462,13 @@ async function runSelfTest() {
         return [
           /\.target-current,\.target-route-next\{position:relative;background:var\(--target-bg\);background-clip:padding-box;/.test(panelText),
           /\.nearby-list\{display:grid;gap:0;/.test(panelText),
-          /\.target-current,\.target-route-next\{[^}]*padding:3px 0 3px 7px;margin:0\}/.test(panelText),
+          /\.target-current,\.target-route-next\{[^}]*padding:3px 0;margin:0\}/.test(panelText),
           /\.coin-row \.nearby-cell:last-child,\.player-row \.nearby-cell:last-child\{text-align:right\}/.test(panelText),
           !/\.target-current\{border:1px solid/.test(panelText),
           /\.target-flee\{--target-color:rgba\(96,165,250,\.82\)/.test(panelText),
           /\.target-bait\{--target-color:rgba\(251,191,36,\.95\)/.test(panelText),
           /\.target-name\{display:inline-flex;align-items:center;[^}]*vertical-align:middle/.test(panelText),
+          /\.target-current \.target-name,\.target-route-next \.target-name\{padding-left:7px\}/.test(panelText),
           /\.target-current::before,\.target-route-next::before\{content:"";position:absolute;right:100%;top:-1px;bottom:-1px;width:3px;background:var\(--target-color\)/.test(panelText),
           /\.target-icon\{display:inline-block;[^}]*align-self:center;[^}]*vertical-align:middle;[^}]*transform:translateY\(1px\);[^}]*color:var\(--target-color\);fill:currentColor/.test(panelText),
           /\.target-icon-coin\{transform:translateY\(0\)\}/.test(panelText),
@@ -24496,7 +24497,7 @@ async function runSelfTest() {
           panelScript.includes("const targetType = fleeTarget ? 'flee' : (afkTarget ? 'afk' : 'combat');")
         ].join('|');
       })(),
-      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
+      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless web panel reports subunit session stamina without rounding it to one',
