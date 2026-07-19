@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.18.3';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.19.1';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function panelSessionFlagsCore(status = {}) {
@@ -97,7 +97,7 @@ function renderBrowserlessWebPanel() {
     button:hover{border-color:#58616b}
     .toolbar{display:flex;align-items:center;gap:7px;flex-wrap:wrap;justify-content:flex-end}
     .pill{display:inline-flex;align-items:center;min-height:28px;border:1px solid var(--line);border-radius:999px;padding:3px 10px;background:var(--panel2);color:var(--muted);white-space:nowrap}
-    .ok{color:var(--green)}.warn{color:var(--amber)}.bad{color:var(--red)}.info{color:var(--blue)}.coin{color:var(--coin)}.muted{color:var(--muted)}
+    .ok{color:var(--green)}.warn{color:var(--amber)}.bad{color:var(--red)}.info{color:var(--blue)}.coin{color:var(--coin)}.small-coin{color:#fde68a}.active-player{color:#fda4af}.muted{color:var(--muted)}
     .value-with-dot{display:inline-flex;align-items:center;gap:6px}
     .field-value-text{min-width:0;overflow-wrap:anywhere}
     .status-dot{width:8px;height:8px;border-radius:999px;flex:0 0 auto;background:currentColor;box-shadow:0 0 0 1px rgba(255,255,255,.12)}
@@ -117,25 +117,41 @@ function renderBrowserlessWebPanel() {
     .fighter-head{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:4px}
     .fighter-side{color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.04em}
     .fighter-name{min-width:0;font-size:14px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-    .fighter.enemy .fighter-head{flex-direction:row-reverse}
+    .fighter-summary{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:5px;min-width:0;font-variant-numeric:tabular-nums}
+    .fighter-summary-main{display:flex;align-items:baseline;gap:7px;min-width:0;overflow:hidden;white-space:nowrap}
+    .fighter-summary-main>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .fighter-summary-name{font-weight:700}
+    .fighter-summary-drop{color:var(--coin);font-weight:650}
+    .fighter-summary-state{color:var(--blue);font-size:12px}
+    .fighter-summary-hp{flex:0 0 auto;font-weight:700}
+    .fighter.enemy .fighter-head,.fighter.enemy .fighter-summary,.fighter.enemy .fighter-summary-main{flex-direction:row-reverse}
     .fighter.enemy dl{direction:rtl}
     .fighter.enemy dt,.fighter.enemy dd{direction:ltr}
     .fighter.enemy dt{text-align:right}.fighter.enemy dd{text-align:left}
     .fighter-vs{display:flex;align-items:center;justify-content:center;min-height:24px;color:var(--red);font-size:13px;font-weight:800;letter-spacing:.06em}
     .hp-label{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:2px;color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums}
-    .fighter.enemy .hp-label{flex-direction:row-reverse}
     .hp-track{height:7px;margin-bottom:5px;overflow:hidden;border-radius:999px;background:#2a3036;box-shadow:inset 0 0 0 1px rgba(255,255,255,.05)}
     .hp-fill{height:100%;width:0;border-radius:inherit;background:var(--green);transition:width .25s ease,background-color .25s ease}
     .fighter.enemy .hp-fill{margin-left:auto}
+    .fighter-stamina{display:block;width:100%;text-align:center;font-size:12px;font-variant-numeric:tabular-nums;white-space:nowrap}
     .hp-fill.warn{background:var(--amber)}.hp-fill.bad{background:var(--red)}.hp-fill.ok{background:var(--green)}
     section{border:1px solid var(--line);background:var(--panel);border-radius:8px;padding:10px;min-width:0}
-    .panel-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;min-width:0}
+    .panel-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;min-width:0;cursor:pointer;transition:margin-bottom .25s ease}
     .panel-head h2{margin:0}
-    .panel-title{cursor:pointer;user-select:none;min-width:0}
+    .panel-title{cursor:pointer;user-select:none;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     .panel-title:focus-visible{outline:1px solid var(--blue);outline-offset:3px;border-radius:2px}
-    .panel-head-meta{display:flex;align-items:center;gap:8px;min-width:0}
+    .panel-head-meta{display:flex;align-items:center;justify-content:flex-end;gap:8px;min-width:0;max-width:72%;overflow:hidden;white-space:nowrap}
+    .panel-head-meta .title-meta{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600;font-variant-numeric:tabular-nums}
+    .panel-head-meta .title-meta .meta-label{font-weight:500}
+    .collapsed-only{display:none}
+    .panel-collapsed .collapsed-only{display:inline-flex}
     .panel-collapsed .panel-head{margin-bottom:0}
-    .panel-collapsed .panel-head-meta,.panel-collapsed>.panel-body{display:none}
+    .panel-body{max-height:2400px;opacity:1;overflow:hidden;transition:max-height .28s ease,opacity .2s ease,margin-top .28s ease}
+    .panel-collapsed>.panel-body{max-height:0;opacity:0;pointer-events:none;margin-top:0}
+    #chatPanel.panel-collapsed>.panel-body{max-height:52px;opacity:1;pointer-events:auto}
+    #chatPanel .chat-log{max-height:300px;opacity:1;transition:max-height .28s ease,opacity .2s ease}
+    #chatPanel.panel-collapsed .chat-log{max-height:0;opacity:0;pointer-events:none}
+    #chatPanel.panel-collapsed .chat-hint{display:none}
     h2{font-size:11px;line-height:1.2;margin:0 0 8px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.05em}
     h3{font-size:11px;line-height:1.2;margin:0 0 6px;color:var(--muted);font-weight:700;letter-spacing:0}
     dl{display:grid;grid-template-columns:minmax(76px,auto) 1fr;gap:5px 9px;margin:0}
@@ -177,12 +193,12 @@ function renderBrowserlessWebPanel() {
     .player-memory-pane{min-width:0}
     .player-memory-pane+.player-memory-pane{border-left:1px solid var(--line);padding-left:10px}
     .player-memory-list{display:flex;flex-wrap:wrap;gap:7px;min-height:28px;align-items:flex-start}
-    .player-memory-name{display:inline-flex;align-items:center;max-width:100%;min-height:28px;padding:4px 9px;border:1px solid var(--line);border-radius:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-    .player-memory-empty{color:var(--muted);background:var(--panel2)}
-    .easy-kill-score-1{color:#86efac;background:rgba(34,197,94,.12);border-color:rgba(74,222,128,.38)}
-    .easy-kill-score-2{color:#ecfdf5;background:rgba(22,163,74,.42);border-color:rgba(74,222,128,.78)}
-    .easy-kill-score-3{color:#fff;background:#15803d;border-color:#4ade80;box-shadow:inset 0 0 0 1px rgba(255,255,255,.16)}
-    .damage-player-name{color:#fecdd3;background:rgba(251,113,133,.14);border-color:rgba(251,113,133,.46)}
+    .player-memory-name{display:inline-flex;align-items:center;max-width:100%;min-height:26px;padding:3px 0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .player-memory-empty{color:var(--muted)}
+    .easy-kill-score-1{color:#fff}
+    .easy-kill-score-2{color:#4ade80}
+    .easy-kill-score-3{color:#fff;background:rgba(34,197,94,.2);box-shadow:0 0 12px rgba(74,222,128,.62);padding-inline:5px}
+    .damage-player-name{color:var(--red)}
     .chat-title-meta{display:inline-flex;align-items:center;gap:7px;min-width:0}.chat-refresh-at{font-weight:500;letter-spacing:0;text-transform:none;white-space:nowrap}
     .chat-kill-toggle{min-height:24px;padding:2px 8px;font-size:11px;line-height:1.2}
     .chat-log{height:300px;overflow:auto;scrollbar-gutter:stable}
@@ -192,7 +208,7 @@ function renderBrowserlessWebPanel() {
     .chat-row.chat-fold-summary{display:flex;align-items:center;justify-content:center;color:var(--muted);text-align:center}
     .chat-fold-text{width:100%;color:var(--muted);font-weight:500;text-align:center}
     .chat-empty{display:flex;height:100%;align-items:center;justify-content:center;color:var(--muted)}
-    .chat-compose{display:flex;gap:7px;margin-top:8px}.chat-compose[hidden]{display:none}.chat-compose input{flex:1;min-width:0;min-height:34px;border:1px solid var(--line);border-radius:6px;background:var(--panel2);color:var(--text);padding:6px 9px}.chat-compose input:disabled{opacity:.6}.chat-compose button{flex:0 0 auto}
+    .chat-compose{display:flex;gap:7px;margin-top:8px}.chat-compose input{flex:1;min-width:0;min-height:34px;border:1px solid var(--line);border-radius:6px;background:var(--panel2);color:var(--text);padding:6px 9px}.chat-compose input:disabled{opacity:.6}.chat-compose button{flex:0 0 auto}.chat-compose .chat-collapse-toggle{min-width:52px}
     .chat-hint{margin-top:6px;color:var(--muted);overflow-wrap:anywhere}.chat-hint:empty{display:none}
     .nearby-cell{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     .coin-row .nearby-cell:last-child,.player-row .nearby-cell:last-child{text-align:right}
@@ -209,7 +225,7 @@ function renderBrowserlessWebPanel() {
     .target-route-next.target-coin{--target-color:rgba(251,191,36,.45);--target-bg:rgba(251,191,36,.07)}
     .target-bait{--target-color:rgba(251,191,36,.95);--target-bg:rgba(251,191,36,.16)}
     .target-name{display:inline-flex;align-items:center;min-width:0;vertical-align:middle}
-    .target-current .target-name,.target-route-next .target-name{padding-left:7px}
+    .target-current .target-name,.target-route-next .target-name{padding-left:4px}
     .target-name-text{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     .target-icon{display:inline-block;width:16px;height:16px;flex:0 0 16px;align-self:center;margin-right:5px;overflow:visible;vertical-align:middle;transform:translateY(1px);color:var(--target-color);fill:currentColor}
     .target-icon-coin{transform:translateY(0)}
@@ -229,7 +245,7 @@ function renderBrowserlessWebPanel() {
     <div class="layout">
       <div class="stack left-stack">
         <section data-panel-key="program-status">
-          <div class="panel-head"><h2 class="panel-title" data-panel-title role="button" tabindex="0" aria-expanded="true">程序状态</h2></div>
+          <div class="panel-head"><h2 class="panel-title" data-panel-title role="button" tabindex="0" aria-expanded="true">程序状态</h2><div class="panel-head-meta"><span id="programRefreshMeta" class="title-meta muted">--</span></div></div>
           <div class="panel-body">
             <dl>
               <dt>网页版本</dt><dd id="webVersion">${BROWSERLESS_WEB_PANEL_VERSION}</dd>
@@ -240,26 +256,26 @@ function renderBrowserlessWebPanel() {
           </div>
         </section>
         <section data-panel-key="account-status">
-          <div class="panel-head"><h2 class="panel-title" data-panel-title role="button" tabindex="0" aria-expanded="true">账号状态</h2></div>
+          <div class="panel-head"><h2 class="panel-title" data-panel-title role="button" tabindex="0" aria-expanded="true">账号状态</h2><div class="panel-head-meta"><span id="accountTitleMeta" class="title-meta muted">--</span></div></div>
           <div class="panel-body"><dl id="accountStatus"></dl></div>
         </section>
         <section data-panel-key="role-status">
-          <div class="panel-head"><h2 class="panel-title" data-panel-title role="button" tabindex="0" aria-expanded="true">角色状态</h2></div>
+          <div class="panel-head"><h2 class="panel-title" data-panel-title role="button" tabindex="0" aria-expanded="true">角色状态</h2><div class="panel-head-meta"><span id="roleTitleMeta" class="title-meta muted">--</span></div></div>
           <div class="panel-body"><dl id="roleStatus"></dl></div>
         </section>
         <section id="chatPanel" data-panel-key="game-chat">
           <div class="panel-head chat-head">
             <h2 class="panel-title" data-panel-title role="button" tabindex="0" aria-expanded="true">游戏聊天</h2>
             <div class="panel-head-meta">
-              <span id="chatRefreshAt" class="chat-refresh-at muted">--</span>
-              <button id="chatKillToggle" class="chat-kill-toggle" type="button" aria-expanded="false">展开</button>
+              <span id="chatRefreshAt" class="chat-refresh-at title-meta muted">--</span>
             </div>
           </div>
           <div class="panel-body">
             <div id="chatLog" class="chat-log"><div class="chat-empty">等待聊天快照</div></div>
-            <form id="chatForm" class="chat-compose" hidden>
+            <form id="chatForm" class="chat-compose">
+              <button id="chatCollapseToggle" class="chat-collapse-toggle" type="button" aria-expanded="true">折叠</button>
               <input id="chatInput" maxlength="240" autocomplete="off" placeholder="输入游戏聊天消息">
-              <button id="chatSendBtn" type="submit" disabled>发送</button>
+              <button id="chatSendBtn" type="submit" disabled>离线</button>
             </form>
             <div id="chatHint" class="chat-hint muted" aria-live="polite"></div>
           </div>
@@ -286,11 +302,11 @@ function renderBrowserlessWebPanel() {
           </div>
         </section>
         <section data-panel-key="current-action">
-          <div class="panel-head"><h2 class="panel-title" data-panel-title role="button" tabindex="0" aria-expanded="true">当前动作</h2></div>
+          <div class="panel-head"><h2 class="panel-title" data-panel-title role="button" tabindex="0" aria-expanded="true">当前动作</h2><div class="panel-head-meta"><span id="actionTitleMeta" class="title-meta collapsed-only">--</span></div></div>
           <div class="panel-body"><dl id="actionDetails"></dl></div>
         </section>
         <section id="battlePanel" class="battle-panel" data-panel-key="battle-status" hidden>
-          <div class="panel-head"><h2 class="panel-title" data-panel-title role="button" tabindex="0" aria-expanded="true">战斗情况</h2></div>
+          <div class="panel-head"><h2 class="panel-title" data-panel-title role="button" tabindex="0" aria-expanded="true">战斗情况</h2><div class="panel-head-meta"><span id="battleTitleMeta" class="title-meta collapsed-only">--</span></div></div>
           <div class="panel-body">
             <div class="battle-meta">
               <span>双方距离<strong id="battleDistance">--</strong></span>
@@ -299,46 +315,42 @@ function renderBrowserlessWebPanel() {
             </div>
             <div class="battle-fighters">
               <article class="fighter self">
-                <div class="fighter-head"><span class="fighter-side">我方</span><span id="battleSelfName" class="fighter-name">--</span></div>
-                <div class="hp-label"><span>血量</span><strong id="battleSelfHp">--</strong></div>
+                <div class="fighter-summary"><div class="fighter-summary-main"><span id="battleSelfName" class="fighter-summary-name">--</span><span id="battleSelfDrop" class="fighter-summary-drop">--</span><span id="battleSelfState" class="fighter-summary-state">--</span></div><strong id="battleSelfHp" class="fighter-summary-hp">--</strong></div>
                 <div class="hp-track"><div id="battleSelfHpFill" class="hp-fill"></div></div>
-                <dl id="battleSelfStats"></dl>
+                <div id="battleSelfStamina" class="fighter-stamina">--</div>
               </article>
               <div class="fighter-vs">VS</div>
               <article class="fighter enemy">
-                <div class="fighter-head"><span class="fighter-side" id="battleTargetSide">敌方</span><span id="battleTargetName" class="fighter-name">--</span></div>
-                <div class="hp-label"><span>血量</span><strong id="battleTargetHp">--</strong></div>
+                <div class="fighter-summary"><div class="fighter-summary-main"><span id="battleTargetName" class="fighter-summary-name">--</span><span id="battleTargetDrop" class="fighter-summary-drop">--</span><span id="battleTargetState" class="fighter-summary-state">--</span></div><strong id="battleTargetHp" class="fighter-summary-hp">--</strong></div>
                 <div class="hp-track"><div id="battleTargetHpFill" class="hp-fill"></div></div>
-                <dl id="battleTargetStats"></dl>
+                <div id="battleTargetStamina" class="fighter-stamina">--</div>
               </article>
             </div>
           </div>
         </section>
         <div class="stats-grid">
           <section data-panel-key="current-session">
-            <div class="panel-head"><h2 id="sessionPanelTitle" class="panel-title" data-panel-title role="button" tabindex="0" aria-expanded="true">本次游戏</h2></div>
+            <div class="panel-head"><h2 id="sessionPanelTitle" class="panel-title" data-panel-title role="button" tabindex="0" aria-expanded="true">本次游戏</h2><div class="panel-head-meta"><span id="sessionTitleMeta" class="title-meta">--</span></div></div>
             <div class="panel-body"><dl id="currentSession"></dl></div>
           </section>
           <section data-panel-key="today-stats">
-            <div class="panel-head"><h2 class="panel-title" data-panel-title role="button" tabindex="0" aria-expanded="true">今日累计</h2></div>
+            <div class="panel-head"><h2 class="panel-title" data-panel-title role="button" tabindex="0" aria-expanded="true">今日累计</h2><div class="panel-head-meta"><span id="todayTitleMeta" class="title-meta">--</span></div></div>
             <div class="panel-body"><dl id="todayStats"></dl></div>
           </section>
         </div>
         <div class="player-insights-grid">
           <section data-panel-key="high-drop-players">
-            <div class="panel-head"><h2 class="panel-title" data-panel-title role="button" tabindex="0" aria-expanded="true">今日高收益玩家</h2></div>
+            <div class="panel-head"><h2 class="panel-title" data-panel-title role="button" tabindex="0" aria-expanded="true">大户玩家</h2><div class="panel-head-meta"><span id="highDropTitleMeta" class="title-meta coin">--</span></div></div>
             <div class="panel-body player-insights-body"><div id="highDropPlayers" class="high-drop-list"></div></div>
           </section>
           <section data-panel-key="player-memory">
-            <div class="panel-head"><h2 class="panel-title" data-panel-title role="button" tabindex="0" aria-expanded="true">玩家记录</h2></div>
+            <div class="panel-head"><h2 class="panel-title" data-panel-title role="button" tabindex="0" aria-expanded="true">玩家记录</h2><div class="panel-head-meta"><span id="playerMemoryTitleMeta" class="title-meta">--</span></div></div>
             <div class="panel-body player-insights-body">
               <div class="player-memory-grid">
                 <div class="player-memory-pane">
-                  <h3>近期击杀缓冲</h3>
                   <div id="easyKillPlayers" class="player-memory-list"></div>
                 </div>
                 <div class="player-memory-pane">
-                  <h3>今日伤害玩家</h3>
                   <div id="dailyDamagePlayers" class="player-memory-list"></div>
                 </div>
               </div>
@@ -346,15 +358,15 @@ function renderBrowserlessWebPanel() {
           </section>
         </div>
         <section id="nearbyGrid" class="nearby-panel" data-panel-key="nearby-info" hidden>
-          <div class="panel-head"><h2 class="panel-title" data-panel-title role="button" tabindex="0" aria-expanded="true">附近信息</h2></div>
+          <div class="panel-head"><h2 class="panel-title" data-panel-title role="button" tabindex="0" aria-expanded="true">附近信息</h2><div class="panel-head-meta"><span id="nearbyTitleMeta" class="title-meta">--</span></div></div>
           <div class="panel-body">
             <div class="nearby-combined">
               <div class="nearby-pane nearby-coins-pane">
-                <h3>附近金币</h3>
+                <h3>金币雷达</h3>
                 <div id="nearbyCoins" class="nearby-list"></div>
               </div>
               <div class="nearby-pane nearby-players-pane">
-                <h3>附近玩家</h3>
+                <h3>玩家雷达</h3>
                 <div id="nearbyPlayers" class="nearby-list"></div>
               </div>
             </div>
@@ -370,14 +382,15 @@ function renderBrowserlessWebPanel() {
     const WEB_PANEL_VERSION = ${JSON.stringify(BROWSERLESS_WEB_PANEL_VERSION)};
     const WEB_PANEL_RELOAD_KEY = 'graspRatBrowserlessPanelReloadedVersion';
     const PANEL_COLLAPSE_KEY = 'graspRatBrowserlessPanelCollapsedV1';
-    const CHAT_KILL_COLLAPSE_KEY = 'graspRatBrowserlessChatKillCollapsed';
     const AUTO_REFRESH_MS = 3000;
     let autoRefreshTimer = 0;
     let countdownTimer = 0;
     let refreshInFlight = null;
     let chatSendInFlight = false;
     let latestChatStatus = null;
-    let chatKillsCollapsed = readChatKillsCollapsed();
+    let chatKillsCollapsed = true;
+    let lastStatusReceivedAtMs = 0;
+    let lastServerUpdatedAtMs = 0;
     let panelCollapseState = readPanelCollapseState();
 
     const groupChatMessagesForDisplay = ${groupChatMessagesForDisplay.toString()};
@@ -426,6 +439,12 @@ function renderBrowserlessWebPanel() {
           ].join(' ')
         : iso;
     };
+    const elapsedSecondsValue = value => {
+      const at = typeof value === 'number' ? value : Date.parse(String(value || ''));
+      if (!Number.isFinite(at) || at <= 0) return '--';
+      return Math.max(0, Math.floor((Date.now() - at) / 1000)) + 's';
+    };
+    const elapsedSecondsText = value => elapsedSecondsValue(value) === '--' ? '--' : elapsedSecondsValue(value) + '前';
     const duration = ms => {
       const n = number(ms);
       if (n === null) return '--';
@@ -739,8 +758,8 @@ function renderBrowserlessWebPanel() {
       return coord(point.x) + ', ' + coord(point.y);
     }
     const reasonMap = {
-      'best-opportunity-coin': '选择收益最高的金币',
-      'best-opportunity-coin-route': '按金币路线移动',
+      'best-opportunity-coin': '综合收益最高',
+      'best-opportunity-coin-route': '综合收益最高',
       'best-opportunity-visible-coin': '去看得见的金币',
       'high-value-visible-coin-priority': '优先捡高价值金币',
       'post-kill-drop-priority': '优先捡刚击杀目标的掉币',
@@ -1267,6 +1286,36 @@ function renderBrowserlessWebPanel() {
       if (kind === 'attack' || kind === 'combat-live') return '打目标 ' + targetLabel(target);
       return kindText(kind);
     }
+    function actionTitleText(status) {
+      const action = status.action || status.decision || {};
+      const kind = String(action.kind || action.actionKind || status.decision?.kind || 'wait');
+      const reason = String(action.reason || status.decision?.reason || '');
+      const target = activeTarget(status) || action.target || status.decision?.target || null;
+      if (kind === 'post-attack-drop-wait' || /post-kill-settlement-wait|post-attack-drop-wait/i.test(reason)) return '等待掉落';
+      if (kind === 'coin' || kind === 'seek-coin' || kind === 'profit-candidate') {
+        const amount = number(target?.amount);
+        if (String(reason).includes('bait')) return '正在蹲守1金币诱饵';
+        return amount !== null && amount <= 1 ? '正在移动前往小额金币' : '正在移动前往大额金币';
+      }
+      if (kind === 'attack') {
+        const afk = target && target.active !== true && target.firing !== true && target.moving !== true;
+        return afk ? '正在攻击高Drop挂机玩家' : '正在攻击玩家';
+      }
+      if (kind === 'combat-live' || /combat|fight/i.test(kind + ' ' + reason)) return '正在交战';
+      if (kind === 'recover') return '正在恢复体力';
+      if (kind === 'flee' || kind === 'safety-exit' || kind === 'leave') return '正在避开危险';
+      if (kind === 'wait' || kind === 'loop-wait') return '正在等待';
+      return actionText(status);
+    }
+    function actionReasonDisplay(status) {
+      const action = status.action || status.decision || {};
+      const reason = String(action.reason || status.decision?.reason || status.recentExit?.reason || '');
+      const kind = String(action.kind || status.decision?.kind || '');
+      if (reason === 'best-opportunity-coin' || reason === 'best-opportunity-coin-route' || reason === 'best-eligible-profit') return '综合收益最高';
+      if (reason === 'post-attack-drop-wait-position' || reason === 'post-kill-settlement-wait') return '等待掉落确认';
+      if (kind === 'coin' || kind === 'seek-coin' || kind === 'profit-candidate') return reasonText(reason) === actionTitleText(status) ? '综合收益最高' : reasonText(reason);
+      return actionReasonText(status);
+    }
     function nonBlankText(text) {
       const normalized = value(text);
       return normalized === '--' ? '' : normalized;
@@ -1359,8 +1408,23 @@ function renderBrowserlessWebPanel() {
     function renderNearbyCoins(status) {
       const node = document.getElementById('nearbyCoins');
       if (!node) return;
+      if (!status.nearby || typeof status.nearby !== 'object') status.nearby = {};
       const items = Array.isArray(status.nearby?.c) ? status.nearby.c : [];
       const hiddenLowCoinCount = Math.max(0, Number(status.nearby?.coinLowHiddenCount || 0) || 0);
+      const largeCount = items.filter(item => number(item?.[1]) !== null && number(item?.[1]) > 1).length;
+      const smallCount = items.filter(item => number(item?.[1]) === 1).length + hiddenLowCoinCount;
+      status.nearby._largeCount = largeCount;
+      status.nearby._smallCount = smallCount;
+      setRichText('nearbyTitleMeta', [
+        { text: '金币 ', className: 'meta-label' },
+        { text: String(largeCount), className: 'coin' },
+        { text: '/', className: 'meta-label' },
+        { text: String(smallCount), className: 'small-coin' },
+        { text: ' | 玩家 ', className: 'meta-label' },
+        { text: String((status.nearby?._activeCount || 0)), className: 'active-player' },
+        { text: '/', className: 'meta-label' },
+        { text: String((status.nearby?._afkCount || 0)), className: 'ok' }
+      ]);
       const actionReason = String(status.action?.reason || status.decision?.reason || '');
       const hasMultipleRouteTargets = items.some(item => {
         const routeIndex = number(item?.[4]);
@@ -1399,9 +1463,7 @@ function renderBrowserlessWebPanel() {
           ], false, rowClass));
         }
       }
-      if (hiddenLowCoinCount > 0) {
-        fragment.appendChild(createNearbySummaryRow('coin', '另有 ' + hiddenLowCoinCount + ' 个低额金币，详情略'));
-      }
+      fragment.appendChild(createNearbySummaryRow('coin', '已折叠' + hiddenLowCoinCount + '个小额金币'));
       node.replaceChildren(fragment);
     }
     function panelFlag(value) {
@@ -1428,8 +1490,27 @@ function renderBrowserlessWebPanel() {
     function renderNearbyPlayers(status) {
       const node = document.getElementById('nearbyPlayers');
       if (!node) return;
+      if (!status.nearby || typeof status.nearby !== 'object') status.nearby = {};
       const items = Array.isArray(status.nearby?.p) ? status.nearby.p : [];
       const hiddenLowAfkCount = Math.max(0, Number(status.nearby?.playerLowHiddenCount || 0) || 0);
+      let activeCount = 0;
+      let afkCount = hiddenLowAfkCount;
+      for (const item of items) {
+        if (isAfkNearbyPlayer(item)) afkCount += 1;
+        else activeCount += 1;
+      }
+      status.nearby._activeCount = activeCount;
+      status.nearby._afkCount = afkCount;
+      setRichText('nearbyTitleMeta', [
+        { text: '金币 ', className: 'meta-label' },
+        { text: String((status.nearby?._largeCount || 0)), className: 'coin' },
+        { text: '/', className: 'meta-label' },
+        { text: String((status.nearby?._smallCount || 0)), className: 'small-coin' },
+        { text: ' | 玩家 ', className: 'meta-label' },
+        { text: String(activeCount), className: 'active-player' },
+        { text: '/', className: 'meta-label' },
+        { text: String(afkCount), className: 'ok' }
+      ]);
       const fragment = document.createDocumentFragment();
       fragment.appendChild(createNearbyRow('player', [
         { text: '名称' },
@@ -1465,9 +1546,7 @@ function renderBrowserlessWebPanel() {
           ], false, rowClass));
         }
       }
-      if (hiddenLowAfkCount > 0) {
-        fragment.appendChild(createNearbySummaryRow('player', '另有 ' + hiddenLowAfkCount + ' 个低收益挂机玩家，详情略'));
-      }
+      fragment.appendChild(createNearbySummaryRow('player', '已折叠' + hiddenLowAfkCount + '个低收益挂机玩家'));
       node.replaceChildren(fragment);
     }
     function highDropValueText(item) {
@@ -1507,9 +1586,19 @@ function renderBrowserlessWebPanel() {
     function renderHighDropPlayers(status) {
       const node = document.getElementById('highDropPlayers');
       if (!node) return;
-      const items = Array.isArray(status.highDropPlayers?.p) ? status.highDropPlayers.p : [];
+      const items = Array.isArray(status.highDropPlayers?.p) ? status.highDropPlayers.p.slice() : [];
+      const self = status.game?.inGame ? status.self : (status.lastKnown?.self || status.self);
+      const selfName = self?.name ? '我 · ' + self.name : '我自己';
+      const selfDrop = number(self?.drop);
+      const currentHighDropCount = items.filter(item => number(item?.[3]) !== null && number(item?.[3]) >= 500 && item?.[5] === true).length;
+      setRichText('highDropTitleMeta', [
+        { text: '今日', className: 'meta-label' },
+        { text: String(currentHighDropCount), className: 'coin' },
+        { text: '个大户', className: 'meta-label' }
+      ], 'coin');
       const fragment = document.createDocumentFragment();
       fragment.appendChild(createHighDropRow('玩家名称', 'Drop', true));
+      if (selfDrop !== null) items.unshift([selfName, selfDrop, selfDrop, selfDrop, self?.userId, status.game?.inGame === true]);
       if (!items.length) {
         fragment.appendChild(createHighDropRow('无', '--'));
       } else {
@@ -1549,6 +1638,12 @@ function renderBrowserlessWebPanel() {
         }
         damageNode.replaceChildren(fragment);
       }
+      setRichText('playerMemoryTitleMeta', [
+        { text: '赛博善人 ', className: 'meta-label' },
+        { text: String(Array.isArray(status.easyKillPlayers?.p) ? status.easyKillPlayers.p.length : 0), className: 'ok' },
+        { text: ' | 仇恨之书 ', className: 'meta-label' },
+        { text: String(Array.isArray(status.dailyDamagePlayers?.p) ? status.dailyDamagePlayers.p.length : 0), className: 'bad' }
+      ]);
     }
     function updateNearbyPanels(status) {
       const panel = document.getElementById('nearbyGrid');
@@ -1560,6 +1655,11 @@ function renderBrowserlessWebPanel() {
       if (!show) {
         document.getElementById('nearbyCoins')?.replaceChildren();
         document.getElementById('nearbyPlayers')?.replaceChildren();
+        setRichText('nearbyTitleMeta', [
+          { text: '金币 ', className: 'meta-label' }, { text: '0', className: 'coin' }, { text: '/', className: 'meta-label' },
+          { text: '0', className: 'small-coin' }, { text: ' | 玩家 ', className: 'meta-label' },
+          { text: '0', className: 'active-player' }, { text: '/', className: 'meta-label' }, { text: '0', className: 'ok' }
+        ]);
         return;
       }
       renderNearbyCoins(status);
@@ -1567,16 +1667,29 @@ function renderBrowserlessWebPanel() {
     }
     function fighterStateText(actor) {
       if (!actor) return '--';
-      return joinNonBlank([
-        actor.active === null || actor.active === undefined ? '--' : (actor.active ? '活动' : '静止'),
-        actor.moving ? '移动中' : '--',
-        actor.firing ? '开火中' : '--'
-      ]);
+      const states = [];
+      if (actor.moving) states.push('移动中');
+      if (actor.firing) states.push('开火中');
+      if (!states.length) states.push(actor.active ? '活动中' : '静止中');
+      return states.join('/');
     }
     function battleStaminaPair(remainingMs, limitMs, defaultSeconds) {
       const limit = number(limitMs);
       const seconds = limit === null ? defaultSeconds : Math.max(0, Math.round(limit / 1000));
       return staminaPair(remainingMs, seconds);
+    }
+    function battleStaminaText(actor) {
+      return battleStaminaPair(actor?.stamina5s, actor?.stamina5sLimit, 10)
+        + ' | ' + staminaPair(actor?.stamina1h, 3000)
+        + ' | ' + staminaPair(actor?.stamina1d, 20000);
+    }
+    function battleStaminaClass(actor) {
+      const remaining = number(actor?.stamina5s);
+      if (remaining === null) return 'muted';
+      const seconds = remaining / 1000;
+      if (seconds >= 10) return 'ok';
+      if (seconds >= 5) return 'warn';
+      return 'bad';
     }
     function syncHpMeter(prefix, actor) {
       const hp = number(actor?.hp);
@@ -1584,6 +1697,7 @@ function renderBrowserlessWebPanel() {
       const maxHp = maxHpValue !== null && maxHpValue > 0 ? maxHpValue : 100;
       const ratio = hp === null ? 0 : Math.max(0, Math.min(1, hp / maxHp));
       setText(prefix + 'Hp', hp === null ? '--' : integer(hp) + '/' + integer(maxHp));
+      setClass(prefix + 'Hp', 'fighter-summary-hp ' + hpAttrs(hp).className);
       const fill = document.getElementById(prefix + 'HpFill');
       if (!fill) return;
       const width = (ratio * 100).toFixed(1) + '%';
@@ -1612,6 +1726,7 @@ function renderBrowserlessWebPanel() {
       panel.hidden = !show;
       const durationNode = document.getElementById('battleDuration');
       if (!show) {
+        setText('battleTitleMeta', '--');
         if (durationNode) {
           delete durationNode.dataset.battleStartedAt;
           delete durationNode.dataset.battleDurationMs;
@@ -1622,19 +1737,18 @@ function renderBrowserlessWebPanel() {
       setText('battleStartedAt', stamp(battle.startedAt));
       setText('battleSelfName', battle.self.name || (battle.self.userId ? '#' + battle.self.userId : '我方'));
       setText('battleTargetName', battle.target.name || (battle.target.userId ? '#' + battle.target.userId : '敌方'));
-      setText('battleTargetSide', battle.targetAfk ? '敌方 · AFK' : '敌方');
+      setText('battleSelfDrop', integer(battle.self.drop));
+      setText('battleTargetDrop', integer(battle.target.drop));
+      setText('battleSelfState', fighterStateText(battle.self));
+      setText('battleTargetState', battle.targetAfk ? 'AFK/' + fighterStateText(battle.target) : fighterStateText(battle.target));
       syncHpMeter('battleSelf', battle.self);
       syncHpMeter('battleTarget', battle.target);
-      rows('battleSelfStats', [
-        ['体力', '5s ' + battleStaminaPair(battle.self.stamina5s, battle.self.stamina5sLimit, 10) + ' / 1h ' + staminaPair(battle.self.stamina1h, 3000) + ' / 1d ' + staminaPair(battle.self.stamina1d, 20000)],
-        ['Drop', integer(battle.self.drop), classAttrs('coin')],
-        ['状态', fighterStateText(battle.self)]
-      ]);
-      rows('battleTargetStats', [
-        ['体力', '5s ' + battleStaminaPair(battle.target.stamina5s, battle.target.stamina5sLimit, 10) + ' / 1h ' + staminaPair(battle.target.stamina1h, 3000) + ' / 1d ' + staminaPair(battle.target.stamina1d, 20000)],
-        ['Drop', integer(battle.target.drop), classAttrs('coin')],
-        ['状态', fighterStateText(battle.target)]
-      ]);
+      setText('battleSelfStamina', battleStaminaText(battle.self));
+      setClass('battleSelfStamina', 'fighter-stamina ' + battleStaminaClass(battle.self));
+      setText('battleTargetStamina', battleStaminaText(battle.target));
+      setClass('battleTargetStamina', 'fighter-stamina ' + battleStaminaClass(battle.target));
+      setText('battleTitleMeta', (battle.self.name || '我方') + ' ' + integer(battle.self.hp) + '/' + integer(battle.self.maxHp || 100)
+        + ' vs ' + integer(battle.target.hp) + '/' + integer(battle.target.maxHp || 100) + ' ' + (battle.target.name || '敌方'));
       if (durationNode) {
         durationNode.dataset.battleStartedAt = battle.startedAt || '';
         durationNode.dataset.battleDurationMs = String(Math.max(0, Number(battle.durationMs || 0)));
@@ -1676,8 +1790,8 @@ function renderBrowserlessWebPanel() {
         : (offlineStats.lastExitReason || status.recentExit?.reason || currentReason);
       const rowsOut = [];
 
-      addRow(rowsOut, '状态', actionText(status), true);
-      addRow(rowsOut, online ? '原因' : '上次退出原因', dangerousPlayerExitReasonText(status, reason), true);
+      addRow(rowsOut, '状态', online ? actionTitleText(status) : actionText(status), true);
+      addRow(rowsOut, online ? '原因' : '上次退出原因', online ? actionReasonDisplay(status) : dangerousPlayerExitReasonText(status, reason), true);
       const battle = !online ? recentBattle(status) : null;
       if (battle) {
         addRow(rowsOut, '交战对手', targetLabel(battle.target), true);
@@ -1695,7 +1809,7 @@ function renderBrowserlessWebPanel() {
       }
       const decisionText = joinNonBlank([kindText(kind), actionReasonText(status)]);
       const statusText = actionText(status);
-      const reasonDisplay = dangerousPlayerExitReasonText(status, reason);
+      const reasonDisplay = online ? actionReasonDisplay(status) : dangerousPlayerExitReasonText(status, reason);
       if (online
         && decisionText !== '--'
         && decisionText !== statusText
@@ -1753,6 +1867,27 @@ function renderBrowserlessWebPanel() {
       const node = document.getElementById(id);
       if (!node) return;
       if (node.className !== className) node.className = className;
+    }
+    function setRichText(id, fragments, className = '') {
+      const node = document.getElementById(id);
+      if (!node) return;
+      const normalized = (fragments || []).map(fragment => ({
+        text: fragment?.text === null || fragment?.text === undefined ? '' : String(fragment.text),
+        className: String(fragment?.className || '')
+      }));
+      const signature = JSON.stringify(normalized);
+      if (node.dataset.richSignature !== signature) {
+        const children = normalized.map(fragment => {
+          const span = document.createElement('span');
+          span.textContent = fragment.text;
+          if (fragment.className) span.className = fragment.className;
+          return span;
+        });
+        node.replaceChildren(...children);
+        node.dataset.richSignature = signature;
+      }
+      const nextClass = ['title-meta', className].filter(Boolean).join(' ');
+      if (node.className !== nextClass) node.className = nextClass;
     }
     function updateWebVersion(latestVersion) {
       const latest = String(latestVersion || '').trim();
@@ -1827,6 +1962,13 @@ function renderBrowserlessWebPanel() {
         title.setAttribute('aria-expanded', String(!collapsed));
         title.title = collapsed ? '点击展开面板' : '点击折叠面板';
       }
+      if (key === 'game-chat') {
+        const button = document.getElementById('chatCollapseToggle');
+        if (button) {
+          button.textContent = collapsed ? '展开' : '折叠';
+          button.setAttribute('aria-expanded', String(!collapsed));
+        }
+      }
     }
     function togglePanelCollapse(panel) {
       const key = String(panel?.dataset?.panelKey || '');
@@ -1841,7 +1983,10 @@ function renderBrowserlessWebPanel() {
         const title = panel.querySelector('[data-panel-title]');
         if (!title) return;
         syncPanelCollapse(panel);
-        title.addEventListener('click', () => togglePanelCollapse(panel));
+        panel.querySelector('.panel-head')?.addEventListener('click', event => {
+          if (event.target.closest('button,a,input,textarea,select')) return;
+          togglePanelCollapse(panel);
+        });
         title.addEventListener('keydown', event => {
           if (event.key !== 'Enter' && event.key !== ' ') return;
           event.preventDefault();
@@ -1857,26 +2002,6 @@ function renderBrowserlessWebPanel() {
       if (node.textContent !== nextText) node.textContent = nextText;
       if (node.className !== nextClass) node.className = nextClass;
     }
-    function readChatKillsCollapsed() {
-      try {
-        const stored = localStorage.getItem(CHAT_KILL_COLLAPSE_KEY);
-        return stored === null ? true : stored !== 'false';
-      } catch (_) {
-        return true;
-      }
-    }
-    function persistChatKillsCollapsed() {
-      try {
-        localStorage.setItem(CHAT_KILL_COLLAPSE_KEY, String(chatKillsCollapsed));
-      } catch (_) {}
-    }
-    function syncChatKillToggle() {
-      const button = document.getElementById('chatKillToggle');
-      if (!button) return;
-      button.textContent = chatKillsCollapsed ? '展开' : '折叠';
-      button.setAttribute('aria-expanded', String(!chatKillsCollapsed));
-      button.title = chatKillsCollapsed ? '展开别人的击杀记录' : '折叠别人的击杀记录';
-    }
     function syncChatCompose(chat) {
       const current = chat || latestChatStatus || {};
       const online = Boolean(current.sendAvailable);
@@ -1884,15 +2009,18 @@ function renderBrowserlessWebPanel() {
       const form = document.getElementById('chatForm');
       const input = document.getElementById('chatInput');
       const button = document.getElementById('chatSendBtn');
-      if (form) form.hidden = !online;
       if (input) {
-        input.disabled = !available;
+        input.disabled = false;
         input.placeholder = '输入游戏聊天消息';
       }
       if (button) {
         button.disabled = !available;
-        button.textContent = chatSendInFlight ? '发送中' : '发送';
+        button.textContent = !online ? '离线' : (chatSendInFlight ? '发送中' : '发送');
       }
+    }
+    function isChatPanelRefreshAllowed() {
+      const panel = document.getElementById('chatPanel');
+      return !panel?.classList.contains('panel-collapsed');
     }
     function renderChat(chat) {
       latestChatStatus = chat && typeof chat === 'object' ? chat : {};
@@ -1952,10 +2080,9 @@ function renderBrowserlessWebPanel() {
           logNode.scrollTop = Math.max(0, previousTop + (logNode.scrollHeight - previousHeight));
         }
       }
-      syncChatKillToggle();
-      setText('chatRefreshAt', stamp(current.snapshot?.lastAt));
+      setText('chatRefreshAt', elapsedSecondsText(current.snapshot?.lastAt));
       syncChatCompose(current);
-      setChatHint('', 'muted');
+      if (!chatSendInFlight) setChatHint('', 'muted');
     }
     async function fetchStatus() {
       const requestedAt = new Date().toISOString();
@@ -1966,7 +2093,10 @@ function renderBrowserlessWebPanel() {
       const url = '/api/panel-status' + (token ? '?token=' + encodeURIComponent(token) : '');
       const res = await fetch(url, { cache: 'no-store' });
       if (!res.ok) throw new Error('HTTP ' + res.status);
-      return res.json();
+      const data = await res.json();
+      lastStatusReceivedAtMs = Date.now();
+      lastServerUpdatedAtMs = Date.parse(String(data?.updatedAt || '')) || lastStatusReceivedAtMs;
+      return data;
     }
     async function fetchChat() {
       const url = '/api/chat' + (token ? '?token=' + encodeURIComponent(token) : '');
@@ -1997,11 +2127,13 @@ function renderBrowserlessWebPanel() {
       return data || { ok: true };
     }
     async function refresh() {
-      const result = await Promise.all([fetchStatus(), fetchChat()]);
+      const statusPromise = fetchStatus();
+      const chatPromise = isChatPanelRefreshAllowed() ? fetchChat() : Promise.resolve(latestChatStatus || {});
+      const result = await Promise.all([statusPromise, chatPromise]);
       const s = result[0];
       const chat = result[1];
       if (maybeReloadForWebVersion(s)) return;
-      renderChat(chat);
+      if (isChatPanelRefreshAllowed()) renderChat(chat);
       updateAuthPanel(s);
       const authNeeds = Boolean(s.auth?.needsReauth);
       const statusClass = authNeeds ? authClass(s) : (s.runner?.lastError ? 'bad' : (s.runner?.running ? 'ok' : 'info'));
@@ -2010,6 +2142,12 @@ function renderBrowserlessWebPanel() {
       if (stampNode) stampNode.title = '';
       setText('sourceIpCount', sourceIpCountText(s.network));
       setText('sourceIp', s.network?.sourceIp);
+      setRichText('programRefreshMeta', [
+        { text: elapsedSecondsValue(lastStatusReceivedAtMs), className: 'info' },
+        { text: '/', className: 'meta-label' },
+        { text: elapsedSecondsValue(lastServerUpdatedAtMs), className: 'muted' },
+        { text: '前', className: 'meta-label' }
+      ]);
 
       rows('actionDetails', actionDetailRows(s));
       updateBattlePanel(s);
@@ -2019,6 +2157,20 @@ function renderBrowserlessWebPanel() {
       const roleSelf = s.game?.inGame ? s.self : (s.lastKnown?.self || s.self);
       const roleStamina = s.game?.inGame ? s.stamina : (s.lastKnown?.stamina || s.stamina);
       const offlineRole = !s.game?.inGame && Boolean(s.lastKnown);
+      const accountName = roleSelf?.name || s.self?.name || '账号';
+      const loggedIn = Boolean(s.session?.authenticated);
+      setRichText('accountTitleMeta', [
+        { text: accountName + ' ', className: 'meta-label' },
+        { text: loggedIn ? '已登录' : '未登录', className: loggedIn ? 'ok' : 'bad' }
+      ], loggedIn ? 'ok' : 'bad');
+      if (s.game?.inGame) {
+        setRichText('roleTitleMeta', [
+          { text: 'HP ', className: 'meta-label' }, { text: hpText(roleSelf?.hp), className: hpAttrs(roleSelf?.hp).className },
+          { text: ' | Drop ', className: 'meta-label' }, { text: integer(roleSelf?.drop), className: 'coin' }
+        ]);
+      } else {
+        setRichText('roleTitleMeta', [{ text: '已离线', className: 'muted' }], 'muted');
+      }
       rows('accountStatus', [
         ['账号', s.session?.userId],
         ['名称', roleSelf?.name || s.self?.name],
@@ -2042,18 +2194,23 @@ function renderBrowserlessWebPanel() {
       setText('sessionPanelTitle', online ? '本次游戏' : '上次游戏');
       rows('currentSession', [
         ['进入时间', fullStamp(currentSession.enteredAt), true],
-        ['持续时间', duration(currentSession.durationMs)],
-        ['消耗体力', spentStaminaUnit(currentSession.staminaSpentMs)],
-        ['拾取金币', integer(currentSession.coinsGained)],
+        ['持续时间', durationClock(currentSession.durationMs)],
         ['击杀敌人', integer(currentSession.kills)]
       ]);
       rows('todayStats', [
         ['日期', todayStats.day],
-        ['游戏时长', duration(todayStats.inGameDurationMs)],
-        ['消耗体力', spentStaminaUnit(todayStats.staminaSpentMs)],
-        ['拾取金币', integer(todayStats.coinsGained)],
+        ['游戏时长', durationClock(todayStats.inGameDurationMs)],
         ['击杀敌人', integer(todayStats.kills)]
       ]);
+      setRichText('sessionTitleMeta', [
+        { text: 'STA ', className: 'meta-label' }, { text: spentStaminaUnit(currentSession.staminaSpentMs), className: 'warn' },
+        { text: ' | Coin ', className: 'meta-label' }, { text: integer(currentSession.coinsGained), className: 'coin' }
+      ]);
+      setRichText('todayTitleMeta', [
+        { text: 'STA ', className: 'meta-label' }, { text: spentStaminaUnit(todayStats.staminaSpentMs), className: 'warn' },
+        { text: ' | Coin ', className: 'meta-label' }, { text: integer(todayStats.coinsGained), className: 'coin' }
+      ]);
+      setText('actionTitleMeta', actionTitleText(s));
       updateCountdownNodes();
     }
     function updateCountdownNodes() {
@@ -2061,6 +2218,15 @@ function renderBrowserlessWebPanel() {
         setValueText(node, countdownUntil(node.dataset.countdownAt || ''));
       });
       updateBattleDuration();
+      if (lastStatusReceivedAtMs) {
+        setRichText('programRefreshMeta', [
+          { text: elapsedSecondsValue(lastStatusReceivedAtMs), className: 'info' },
+          { text: '/', className: 'meta-label' },
+          { text: elapsedSecondsValue(lastServerUpdatedAtMs), className: 'muted' },
+          { text: '前', className: 'meta-label' }
+        ]);
+      }
+      if (latestChatStatus?.snapshot?.lastAt) setText('chatRefreshAt', elapsedSecondsText(latestChatStatus.snapshot.lastAt));
     }
     function isPageVisibleForRefresh() {
       if (document.visibilityState) return document.visibilityState === 'visible';
@@ -2135,7 +2301,7 @@ function renderBrowserlessWebPanel() {
       }
       chatSendInFlight = true;
       syncChatCompose();
-      setChatHint('正在通过在线 WebSocket 发送', 'info');
+      setChatHint('', 'muted');
       (async () => {
         const data = await api('/api/chat/send', {
           method: 'POST',
@@ -2153,11 +2319,9 @@ function renderBrowserlessWebPanel() {
         input?.focus();
       });
     });
-    document.getElementById('chatKillToggle').addEventListener('click', () => {
-      chatKillsCollapsed = !chatKillsCollapsed;
-      persistChatKillsCollapsed();
-      syncChatKillToggle();
-      renderChat(latestChatStatus);
+    document.getElementById('chatCollapseToggle').addEventListener('click', event => {
+      event.preventDefault();
+      togglePanelCollapse(document.getElementById('chatPanel'));
     });
     function setAuthMessage(text, className) {
       const node = document.getElementById('authMessage');

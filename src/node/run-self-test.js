@@ -19380,6 +19380,53 @@ async function runSelfTest() {
       want: 'true|true|true|true|player:9667|post-kill-settlement|false|1|selected-afk,high-afk,active|1|2|1'
     },
     {
+      name: 'browserless compact panel uses one decision snapshot for action and nearby loot',
+      got: (() => {
+        const compact = buildCompactBrowserlessStatus({
+          updatedAt: '2026-07-19T01:00:02.000Z',
+          runner: {
+            currentAction: { kind: 'post-attack-drop-wait', reason: 'post-attack-drop-wait-position' }
+          },
+          current: {
+            self: { userId: 7, name: '文月', hp: 100 },
+            decision: {
+              kind: 'coin',
+              band: 'profit',
+              reason: 'post-attack-drop-coin',
+              at: '2026-07-19T01:00:01.000Z',
+              tick: 42,
+              action: {
+                kind: 'coin',
+                band: 'profit',
+                reason: 'post-attack-drop-coin',
+                target: { type: 'coin', id: 'drop-42', amount: 2000, distance: 900 }
+              },
+              input: {
+                self: { userId: 7, name: '文月', hp: 100 },
+                nearby: {
+                  ar: 14500,
+                  vr: 50000,
+                  c: [['drop-42', 2000, 900, 1, 0, 'realtime', 0]],
+                  p: []
+                }
+              }
+            }
+          },
+          stats: { currentSession: { online: true } }
+        });
+        return [
+          compact.action.kind,
+          compact.action.reason,
+          compact.action.target.id,
+          compact.nearby.c[0][0],
+          compact.nearby.c[0][3],
+          compact.snapshotTick,
+          compact.snapshotAt
+        ].join('|');
+      })(),
+      want: 'coin|post-attack-drop-coin|drop-42|drop-42|1|42|2026-07-19T01:00:01.000Z'
+    },
+    {
       name: 'browserless live-state merge replaces decision without deep cloning stable branches',
       got: (() => {
         const session = { userId: 7, authenticated: true };
@@ -24531,8 +24578,8 @@ async function runSelfTest() {
             /当前动作/.test(panelText),
             /id="actionDetails"/.test(panelText),
             /附近信息/.test(panelText),
-            /附近金币/.test(panelText),
-            /附近玩家/.test(panelText),
+            /金币雷达/.test(panelText),
+            /玩家雷达/.test(panelText),
             /id="nearbyCoins"/.test(panelText),
             /id="nearbyPlayers"/.test(panelText),
             /class="nearby-combined"/.test(panelText),
@@ -24644,7 +24691,7 @@ async function runSelfTest() {
           compact.highDropPlayers.p.length,
           JSON.stringify(compact.highDropPlayers).includes('carol-low'),
           JSON.stringify(compact).includes('should-not-leak'),
-          /<h2[^>]*>今日高收益玩家<\/h2>/.test(panelText),
+          /<h2[^>]*>大户玩家<\/h2>/.test(panelText),
           /id="highDropPlayers"/.test(panelText),
           /\.high-drop-name\.online\{color:var\(--blue\)\}/.test(panelText),
           /\.high-drop-values\.offline,\.high-drop-values\.unknown\{color:var\(--muted\)\}/.test(panelText),
@@ -24697,19 +24744,20 @@ async function runSelfTest() {
           !/\.chat-id\b/.test(panelText),
           !/id="chatState"/.test(panelText),
           !/message\?\.id|message\.id/.test(panelText),
-          /<form id="chatForm" class="chat-compose" hidden>/.test(panelText),
-          /if \(form\) form\.hidden = !online;/.test(panelText),
-          /id="chatRefreshAt" class="chat-refresh-at muted">--<\/span>/.test(panelText),
-          /id="chatKillToggle"[^>]*aria-expanded="false">展开<\/button>/.test(panelText),
-          /CHAT_KILL_COLLAPSE_KEY\s*=\s*'graspRatBrowserlessChatKillCollapsed'/.test(panelText),
-          /return stored === null \? true : stored !== 'false';/.test(panelText),
+          /<form id="chatForm" class="chat-compose">/.test(panelText),
+          panelText.indexOf('id="chatCollapseToggle"') < panelText.indexOf('id="chatInput"'),
+          /id="chatRefreshAt" class="chat-refresh-at title-meta muted">--<\/span>/.test(panelText),
+          /id="chatCollapseToggle"[^>]*aria-expanded="true">折叠<\/button>/.test(panelText),
+          /input\.disabled = false;/.test(panelText),
+          /button\.textContent = !online \? '离线'/.test(panelText),
           /item\.count \+ '条击杀记录已折叠'/.test(panelText),
           /\.chat-row\.chat-fold-summary\{display:flex;align-items:center;justify-content:center;color:var\(--muted\);text-align:center\}/.test(panelText),
-          /button\.textContent = chatKillsCollapsed \? '展开' : '折叠'/.test(panelText),
-          /setText\('chatRefreshAt', stamp\(current\.snapshot\?\.lastAt\)\)/.test(panelText),
+          /function isChatPanelRefreshAllowed/.test(panelText),
+          /isChatPanelRefreshAllowed\(\) \? fetchChat\(\)/.test(panelText),
+          /setText\('chatRefreshAt', elapsedSecondsText\(current\.snapshot\?\.lastAt\)\)/.test(panelText),
           /<div id="chatHint" class="chat-hint muted" aria-live="polite"><\/div>/.test(panelText),
           /const nextText = text === null \|\| text === undefined \? '' : String\(text\);/.test(panelText),
-          !/刷新时间 --<\/div>|setChatHint\('刷新时间 /.test(panelText),
+          /setChatHint\('', 'muted'\);/.test(panelText),
           shortChat.length === 2 && shortChat.every(item => item.type === 'message'),
           foldedChat.length === 3,
           foldedChat[0]?.type === 'message' && foldedChat[0]?.message?.id === 1,
@@ -24742,13 +24790,15 @@ async function runSelfTest() {
           /PANEL_COLLAPSE_KEY\s*=\s*'graspRatBrowserlessPanelCollapsedV1'/.test(panelText),
           /localStorage\.setItem\(PANEL_COLLAPSE_KEY, JSON\.stringify\(panelCollapseState\)\)/.test(panelText),
           /panel\.classList\.toggle\('panel-collapsed', collapsed\)/.test(panelText),
-          /title\.addEventListener\('click', \(\) => togglePanelCollapse\(panel\)\)/.test(panelText),
+          /panel\.querySelector\('\.panel-head'\)\?\.addEventListener\('click'/.test(panelText),
           /event\.key !== 'Enter' && event\.key !== ' '/.test(panelText),
-          /\.panel-collapsed \.panel-head-meta,\.panel-collapsed>\.panel-body\{display:none\}/.test(panelText),
+          /\.panel-collapsed>\.panel-body\{max-height:0;opacity:0;pointer-events:none;margin-top:0\}/.test(panelText),
           /\.panel-collapsed \.panel-head\{margin-bottom:0\}/.test(panelText),
+          /\.panel-body\{max-height:2400px;opacity:1;overflow:hidden;transition:max-height/.test(panelText),
+          /\.panel-collapsed \.collapsed-only\{display:inline-flex\}/.test(panelText),
           /\.stats-grid,\.player-insights-grid\{display:grid;grid-template-columns:repeat\(2,minmax\(0,1fr\)\)/.test(panelText),
           /setText\('stamp', fullStamp\(requestedAt\)\)/.test(panelText),
-          !/setText\('stamp', fullStamp\(s\.updatedAt\)\)/.test(panelText),
+          /id="programRefreshMeta"/.test(panelText),
           !/setText\('stamp', '已暂停刷新'\)/.test(panelText)
         ].every(Boolean));
       })(),
@@ -24782,8 +24832,8 @@ async function runSelfTest() {
           JSON.stringify(compact.dailyDamagePlayers).includes('userId'),
           JSON.stringify(compact).includes('should-not-leak'),
           /<h2[^>]*>玩家记录<\/h2>/.test(panelText),
-          /<h3>近期击杀缓冲<\/h3>/.test(panelText),
-          /<h3>今日伤害玩家<\/h3>/.test(panelText),
+          !/<h3>近期击杀缓冲<\/h3>/.test(panelText),
+          !/<h3>今日伤害玩家<\/h3>/.test(panelText),
           /id="easyKillPlayers"/.test(panelText),
           /id="dailyDamagePlayers"/.test(panelText),
           /\.easy-kill-score-1\{/.test(panelText),
@@ -24811,7 +24861,7 @@ async function runSelfTest() {
           /\.target-flee\{--target-color:rgba\(96,165,250,\.82\)/.test(panelText),
           /\.target-bait\{--target-color:rgba\(251,191,36,\.95\)/.test(panelText),
           /\.target-name\{display:inline-flex;align-items:center;[^}]*vertical-align:middle/.test(panelText),
-          /\.target-current \.target-name,\.target-route-next \.target-name\{padding-left:7px\}/.test(panelText),
+          /\.target-current \.target-name,\.target-route-next \.target-name\{padding-left:4px\}/.test(panelText),
           /\.target-current::before,\.target-route-next::before\{content:"";position:absolute;right:100%;top:-1px;bottom:-1px;width:3px;background:var\(--target-color\)/.test(panelText),
           /\.target-icon\{display:inline-block;[^}]*align-self:center;[^}]*vertical-align:middle;[^}]*transform:translateY\(1px\);[^}]*color:var\(--target-color\);fill:currentColor/.test(panelText),
           /\.target-icon-coin\{transform:translateY\(0\)\}/.test(panelText),
@@ -24854,8 +24904,8 @@ async function runSelfTest() {
           formatSpentStaminaCore(999) === '<1',
           formatSpentStaminaCore(1000) === '1',
           formatSpentStaminaCore(1001) === '2',
-          panelScript.includes("['消耗体力', spentStaminaUnit(currentSession.staminaSpentMs)]"),
-          panelScript.includes("['消耗体力', spentStaminaUnit(todayStats.staminaSpentMs)]")
+          panelScript.includes("setRichText('sessionTitleMeta'"),
+          panelScript.includes("setRichText('todayTitleMeta'")
         ].join('|');
       })(),
       want: 'true|true|true|true|true|true|true|true'
@@ -24877,7 +24927,7 @@ async function runSelfTest() {
           /\.target-current,\.target-route-next\{[^}]*padding:3px 0;margin:0\}/.test(panelText),
           /function updateBattlePanel/.test(panelScript),
           /function updateBattleDuration/.test(panelScript),
-          panelScript.includes("['体力', '5s ' + battleStaminaPair"),
+          panelScript.includes("setText('battleSelfStamina', battleStaminaText(battle.self))"),
           panelScript.includes("durationNode.dataset.battleStartedAt = battle.startedAt || ''"),
           panelScript.includes('const panelSessionFlags = '),
           panelScript.includes('const { online, realtimeOnline } = panelSessionFlags(status);'),
@@ -25493,7 +25543,7 @@ async function runSelfTest() {
           !panelScript.includes('const visibleItems = items.filter(item => !isLowValueFullStaminaNearbyPlayer(item));'),
           panelScript.includes('coinLowHiddenCount'),
           panelScript.includes('playerLowHiddenCount'),
-          panelScript.includes('低额金币'),
+          panelScript.includes("'已折叠' + hiddenLowCoinCount + '个小额金币'"),
           panelScript.includes("低收益挂机玩家"),
           /function isAfkNearbyPlayer/.test(panelScript),
           /function isGreenAfkNearbyPlayer/.test(panelScript),

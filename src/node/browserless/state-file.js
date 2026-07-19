@@ -1073,7 +1073,7 @@ function compactTarget(value) {
     stamina1h: compactNumber(value.stamina1h ?? value.stamina1hRemainingMilli ?? value.stamina_1h_remaining_milli),
     stamina1d: compactNumber(value.stamina1d ?? value.stamina1dRemainingMilli ?? value.stamina_1d_remaining_milli),
     staminaMetadataAuthority: compactString(value.staminaMetadataAuthority, 48),
-    invulnerable: value.invulnerable === undefined ? null : Boolean(value.invulnerable),
+    invulnerable: value.invulnerable === undefined || value.invulnerable === null ? null : Boolean(value.invulnerable),
     invulnerableRemainingMs: compactNumber(value.invulnerableRemainingMs ?? value.invulnerable_remaining_ms),
     invulnerableMetadataAuthority: compactString(value.invulnerableMetadataAuthority, 48),
     amount: compactNumber(value.amount ?? value.value),
@@ -1194,6 +1194,7 @@ function compactDecision(decision) {
     at: compactString(decision.at, 48),
     tick: compactNumber(decision.tick),
     actionKind: compactString(decision.action?.kind, 48),
+    action: compactAction(decision.action),
     target: compactTarget(decision.target || decision.action?.target || (shouldExposeProfitTarget ? (decision.profit?.best?.target || decision.profit?.best?.coin) : null)),
     threshold: decision.profit?.threshold && typeof decision.profit.threshold === 'object'
       ? {
@@ -1438,9 +1439,9 @@ function compactBattleActor(value, fallback = {}) {
     stamina5sLimit: compact.stamina5sLimit ?? compactNumber(fallback.stamina5sLimit ?? fallback.stamina5sLimitMilli),
     stamina1h: compact.stamina1h ?? compactNumber(fallback.stamina1h ?? fallback.stamina1hRemainingMilli),
     stamina1d: compact.stamina1d ?? compactNumber(fallback.stamina1d ?? fallback.stamina1dRemainingMilli),
-    active: compact.active ?? (fallback.active === undefined ? null : Boolean(fallback.active)),
-    moving: compact.moving ?? (fallback.moving === undefined ? null : Boolean(fallback.moving)),
-    firing: compact.firing ?? (fallback.firing === undefined ? null : Boolean(fallback.firing))
+    active: compact.active ?? (fallback.active === undefined || fallback.active === null ? null : Boolean(fallback.active)),
+    moving: compact.moving ?? (fallback.moving === undefined || fallback.moving === null ? null : Boolean(fallback.moving)),
+    firing: compact.firing ?? (fallback.firing === undefined || fallback.firing === null ? null : Boolean(fallback.firing))
   };
 }
 
@@ -2148,7 +2149,7 @@ function compactDecisionSource(decision) {
     at: compact?.at || '',
     tick: compact?.tick,
     target: compact?.target || null,
-    action: {
+    action: compact?.action || {
       kind: compact?.actionKind || '',
       target: compact?.target || null
     },
@@ -2171,6 +2172,8 @@ function browserlessCompactStatusSource(state = {}) {
   return {
     schemaVersion: state.schemaVersion,
     updatedAt: state.updatedAt || '',
+    snapshotAt: state.snapshotAt || '',
+    snapshotTick: compactNumber(state.snapshotTick),
     session: {
       userId: state.session?.userId ?? null,
       authenticated: Boolean(state.session?.authenticated),
@@ -2222,17 +2225,23 @@ function buildCompactBrowserlessStatus(state, config = {}) {
   const authenticated = Boolean(inputSession.authenticated || (normalized.session.userId && tokenPresent));
   const auth = compactAuthStatus(normalized, { tokenPresent, authenticated });
   const current = normalized.current || {};
-  const action = compactAction(normalized.runner.currentAction) || compactAction(current.action);
+  const inputCurrent = state?.current && typeof state.current === 'object' ? state.current : {};
+  const decision = compactDecision(inputCurrent.decision || current.decision);
+  const game = compactGameStatus(normalized);
+  // The decision input and nearby panel are one realtime observation. Prefer
+  // its action summary so a later action-result callback cannot leave the UI
+  // showing an older wait state beside newly observed loot.
+  const action = game.inGame
+    ? (decision?.action || compactAction(normalized.runner.currentAction) || compactAction(current.action))
+    : (compactAction(normalized.runner.currentAction) || compactAction(current.action) || decision?.action);
   const recentExits = Array.isArray(normalized.recentExits) ? normalized.recentExits : [];
   const recentActualExit = latestMatchingRecentActualExit(recentExits, normalized.stats?.lastExit);
   const loginPointSafetyDetail = compactLoginPointSafetyDetail(normalized.loginPointSafety || {}, normalized);
   const loginPoint = compactPoint(normalized.loginPointSafety?.point) || loginPointSafetyDetail?.point || null;
-  const game = compactGameStatus(normalized);
   const lastKnown = compactLastKnown(normalized);
   const sourceIp = normalized.network.sourceIp || '';
   const sourceIps = Array.isArray(normalized.network.sourceIps) ? normalized.network.sourceIps : [];
   const sourceIpIndex = sourceIp ? sourceIps.findIndex(item => item === sourceIp) + 1 : 0;
-  const decision = compactDecision(current.decision);
   const combat = compactCombat(current.combatSummary || current.decision?.combat);
   const recentExit = compactExit(recentActualExit);
   const displayCombat = !game.inGame && recentExit?.battle?.target
@@ -2245,6 +2254,8 @@ function buildCompactBrowserlessStatus(state, config = {}) {
     schemaVersion: normalized.schemaVersion,
     compact: true,
     updatedAt: normalized.updatedAt || '',
+    snapshotAt: decision?.at || normalized.updatedAt || '',
+    snapshotTick: decision?.tick ?? null,
     session: {
       userId: normalized.session.userId,
       authenticated: auth.authenticated,
