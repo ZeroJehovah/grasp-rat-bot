@@ -6986,11 +6986,30 @@ function combatDecisionIsOrdinaryProfitPursuit(combatDecision, input, stateful =
 
 function profitPursuitEngagedMs(combatDecision, stateful = {}, nowMs = 0) {
   const target = combatDecision?.target || combatDecision?.dryRun?.target || null;
+  const targetId = targetIdentity(target);
+  const metrics = stateful?.combatMetrics || null;
+  const metricsStartedAt = Number(metrics?.startedAt);
+  if (targetId
+    && String(metrics?.targetId ?? '') === targetId
+    && Number.isFinite(metricsStartedAt)
+    && metricsStartedAt > 0) {
+    return Math.max(0, Number(nowMs || 0) - metricsStartedAt);
+  }
+  const combatState = stateful?.combatTarget || null;
+  const combatStateId = String(combatState?.id ?? combatState?.userId ?? combatState?.user_id ?? '');
+  const firstSeenAt = Number(combatState?.firstSeenAt || combatState?.at);
+  if (targetId
+    && combatStateId === targetId
+    && Number.isFinite(firstSeenAt)
+    && firstSeenAt > 0) {
+    return Math.max(0, Number(nowMs || 0) - firstSeenAt);
+  }
+  // combatEngagement is presentation data rebuilt from the latest realtime
+  // frame. Keep it only as a last-resort fallback because its age may reset on
+  // every frame and must never override cumulative engagement state.
   const ageMs = Number(target?.combatEngagement?.ageMs);
   if (Number.isFinite(ageMs)) return Math.max(0, ageMs);
-  const combatState = stateful?.combatTarget || null;
-  const firstSeenAt = Number(combatState?.firstSeenAt || combatState?.at || nowMs);
-  return Math.max(0, Number(nowMs || 0) - firstSeenAt);
+  return 0;
 }
 
 function clearSuppressedCombatTarget(stateful = {}, targetId = '') {

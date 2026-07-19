@@ -399,7 +399,7 @@ function runStrategyModuleSelfTests() {
     aimY: 0
   });
   const novelGeometry = updateCombatProbePhaseCore(cadenceOnly, {
-    nowMs: 5200,
+    nowMs: 7200,
     targetId: 8,
     acceptedShots: 5,
     confirmedHits: 0,
@@ -408,7 +408,7 @@ function runStrategyModuleSelfTests() {
     behaviorMode: 'stationary',
     directionState: 'stop',
     directionDwellTicks: 3,
-    directionFlipAt: 5100,
+    directionFlipAt: 7100,
     routeContextKey: 'route-b',
     routeCandidate: 'stop',
     routeProbability: 0.6,
@@ -429,8 +429,101 @@ function runStrategyModuleSelfTests() {
       && cadenceOnly.probeResetReason === ''
       && novelGeometry.probePhase === 'probe'
       && novelGeometry.probeResetReason === 'mode:stationary'
-      && novelGeometry.probeBudgetRemaining === 5
+      && novelGeometry.probeBudgetRemaining === 2
+      && novelGeometry.geometryRearmCount === 1
       && novelGeometry.geometryNovelty === 1
+  });
+
+  const exhaustedGeometryReprobe = updateCombatProbePhaseCore(novelGeometry, {
+    nowMs: 7600,
+    targetId: 8,
+    acceptedShots: 7,
+    confirmedHits: 0,
+    shootingStamina: 3500,
+    highEntropy: true,
+    behaviorMode: 'stationary',
+    directionState: 'stop',
+    directionDwellTicks: 5,
+    directionFlipAt: 7100,
+    routeContextKey: 'route-b',
+    routeCandidate: 'stop',
+    routeProbability: 0.6,
+    predictedHitProbability: 0.4,
+    distance: 9000,
+    aimX: 700,
+    aimY: 0
+  });
+  const routeChurnAfterExhaustion = updateCombatProbePhaseCore(exhaustedGeometryReprobe, {
+    nowMs: 14000,
+    targetId: 8,
+    acceptedShots: 7,
+    confirmedHits: 0,
+    shootingStamina: 3500,
+    highEntropy: true,
+    behaviorMode: 'retreat-kite',
+    directionState: 'west',
+    directionDwellTicks: 4,
+    directionFlipAt: 13900,
+    routeContextKey: 'route-c',
+    routeCandidate: 'lead-long',
+    routeProbability: 0.8,
+    predictedHitProbability: 0.5,
+    distance: 12500,
+    aimX: 1600,
+    aimY: 400
+  });
+  const secondStableModeAfterExhaustion = updateCombatProbePhaseCore(routeChurnAfterExhaustion, {
+    nowMs: 20000,
+    targetId: 8,
+    acceptedShots: 7,
+    confirmedHits: 0,
+    shootingStamina: 3500,
+    highEntropy: true,
+    behaviorMode: 'steady-linear',
+    directionState: 'west',
+    directionDwellTicks: 10,
+    directionFlipAt: 13900,
+    routeContextKey: 'route-d',
+    routeCandidate: 'continue',
+    routeProbability: 0.9,
+    predictedHitProbability: 0.6,
+    distance: 11000,
+    aimX: 1900,
+    aimY: 400
+  });
+  const attributedHitReset = updateCombatProbePhaseCore(secondStableModeAfterExhaustion, {
+    nowMs: 20500,
+    targetId: 8,
+    acceptedShots: 20,
+    confirmedHits: 1,
+    shootingStamina: 10000,
+    highEntropy: true,
+    behaviorMode: 'retreat-kite',
+    directionState: 'west',
+    directionDwellTicks: 5,
+    directionFlipAt: 13900,
+    routeContextKey: 'route-c',
+    routeCandidate: 'lead-long',
+    routeProbability: 0.8,
+    predictedHitProbability: 0.5,
+    distance: 12500,
+    aimX: 1600,
+    aimY: 400
+  });
+  results.push({
+    name: 'combat-probe-phase-bounds-geometry-rearm-until-attributed-hit',
+    passed: exhaustedGeometryReprobe.probePhase === 'cooldown'
+      && exhaustedGeometryReprobe.probeBudgetRemaining === 0
+      && routeChurnAfterExhaustion.probePhase === 'cooldown'
+      && routeChurnAfterExhaustion.probeResetReason === ''
+      && routeChurnAfterExhaustion.probeBudgetRemaining === 0
+      && routeChurnAfterExhaustion.geometryRearmCount === 1
+      && secondStableModeAfterExhaustion.probePhase === 'cooldown'
+      && secondStableModeAfterExhaustion.probeResetReason === ''
+      && secondStableModeAfterExhaustion.geometryRearmCount === 1
+      && attributedHitReset.probeResetReason === 'recent-attributed-hit'
+      && attributedHitReset.probeBudgetRemaining === 5
+      && attributedHitReset.geometryRearmCount === 0
   });
 
   const dodge = calculateDodgeDirection(

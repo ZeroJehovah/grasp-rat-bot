@@ -388,6 +388,12 @@ function updateCombatProbePhaseCore(previous = null, input = {}, options = {}) {
   const shootingStamina = Math.max(0, Number(input.shootingStamina || 0));
   const maxAcceptedShots = Math.max(1, Math.round(Number(options.maxAcceptedShots ?? 5)));
   const defensiveExtraShots = Math.max(0, Math.round(Number(options.defensiveExtraShots ?? 2)));
+  const geometryReprobeMaxShots = Math.max(1, Math.min(
+    maxAcceptedShots,
+    Math.round(Number(options.geometryReprobeMaxShots ?? 2))
+  ));
+  const maxGeometryRearms = Math.max(0, Math.round(Number(options.maxGeometryRearms ?? 1)));
+  const geometryRearmCooldownMs = Math.max(1000, Number(options.geometryRearmCooldownMs ?? 5000));
   const mode = String(input.behaviorMode || 'mixed/unknown');
   const responsePolicy = String(input.responsePolicy || '');
   const directionState = String(input.directionState || '');
@@ -434,31 +440,35 @@ function updateCombatProbePhaseCore(previous = null, input = {}, options = {}) {
     && directionState
     && directionState !== String(previous.lastDirectionState || '')
     && Math.max(0, Number(input.directionDwellTicks || 0)) >= 2;
-  const novelRoute = sameTarget
-    && routeContextKey
-    && routeContextKey !== String(previous.lastRouteContextKey || '')
-    && routeCandidate
-    && routeCandidate !== String(previous.lastRouteCandidate || '')
-    && aimDelta >= Math.max(90, Number(options.minimumAimNoveltyCm ?? 180));
-  const distanceNovelty = sameTarget
-    && distanceDelta >= Math.max(500, Number(options.minimumDistanceNoveltyCm ?? 2500))
-    && aimDelta >= Math.max(90, Number(options.minimumAimNoveltyCm ?? 180));
   let resetReason = sameTarget ? '' : 'target-start';
   if (newHit) resetReason = 'recent-attributed-hit';
   else if (enteredStableMode) resetReason = `mode:${mode}`;
   else if (exhaustedWindow) resetReason = 'opponent-exhausted-window';
-  else if (stableDirectionFlip) resetReason = 'stable-direction-flip';
-  else if (novelRoute) resetReason = 'novel-intercept-route';
-  else if (distanceNovelty) resetReason = 'distance-geometry-change';
   const previousBudgetRemaining = Math.max(0, Number(previous?.probeBudgetRemaining ?? maxAcceptedShots));
-  const resetAllowed = Boolean(resetReason && (!sameTarget || newHit || previous?.probePhase === 'cooldown' || previousBudgetRemaining <= 0));
+  const previousGeometryRearmCount = sameTarget ? Math.max(0, Number(previous?.geometryRearmCount || 0)) : 0;
+  const stableGeometryOpportunity = Boolean(enteredStableMode || exhaustedWindow);
+  const geometryRearmAllowed = Boolean(
+    sameTarget
+      && stableGeometryOpportunity
+      && previousBudgetRemaining <= 0
+      && previous?.probePhase === 'cooldown'
+      && previousGeometryRearmCount < maxGeometryRearms
+      && nowMs - Number(previous?.lastResetAt || 0) >= geometryRearmCooldownMs
+  );
+  const resetAllowed = Boolean(!sameTarget || newHit || geometryRearmAllowed);
+  if (!resetAllowed) resetReason = '';
   const phaseBaseAcceptedShots = resetAllowed ? acceptedShots : Number(base.baseAcceptedShots || 0);
   const phaseBaseConfirmedHits = resetAllowed ? confirmedHits : Number(base.baseConfirmedHits || 0);
   const phaseBaseShootingStamina = resetAllowed ? shootingStamina : Number(base.baseShootingStamina || 0);
   const probeAcceptedShots = Math.max(0, acceptedShots - phaseBaseAcceptedShots);
   const probeHits = Math.max(0, confirmedHits - phaseBaseConfirmedHits);
   const probeStamina = Math.max(0, shootingStamina - phaseBaseShootingStamina);
-  const totalBudget = maxAcceptedShots + (input.defensivePressure ? defensiveExtraShots : 0);
+  const phaseBaseBudget = resetAllowed
+    ? (geometryRearmAllowed ? geometryReprobeMaxShots : maxAcceptedShots)
+    : (Number.isFinite(Number(previous?.probeBaseMaxAcceptedShots))
+        ? Math.max(1, Number(previous.probeBaseMaxAcceptedShots))
+        : maxAcceptedShots);
+  const totalBudget = phaseBaseBudget + (input.defensivePressure ? defensiveExtraShots : 0);
   const probeBudgetRemaining = Math.max(0, totalBudget - probeAcceptedShots);
   const minimumCalibrationShots = Math.max(1, Math.round(Number(options.minimumCalibrationShots ?? 3)));
   const provenHitProtected = Boolean(
@@ -500,7 +510,14 @@ function updateCombatProbePhaseCore(previous = null, input = {}, options = {}) {
     probeStamina,
     probeBudgetRemaining,
     probeMaxAcceptedShots: totalBudget,
+    probeBaseMaxAcceptedShots: phaseBaseBudget,
     probeResetReason: resetAllowed ? resetReason : '',
+    geometryRearmCount: newHit
+      ? 0
+      : (geometryRearmAllowed ? previousGeometryRearmCount + 1 : previousGeometryRearmCount),
+    geometryReprobeMaxShots,
+    maxGeometryRearms,
+    geometryRearmCooldownMs,
     geometryNovelty: Number(geometryNovelty.toFixed(3)),
     routeProbability,
     predictedHitProbability,

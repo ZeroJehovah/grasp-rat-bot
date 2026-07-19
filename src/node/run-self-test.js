@@ -9744,6 +9744,94 @@ async function runSelfTest() {
       want: 'wait|false|profit-pursuit-low-damage|5|10|true|profit-pursuit-low-damage|profit-pursuit-low-damage'
     },
     {
+      name: 'browserless Eason-shaped pursuit uses cumulative metrics despite frame-local engagement age',
+      got: (() => {
+        const stateful = {
+          combatTarget: {
+            id: 19677,
+            at: 60800,
+            firstSeenAt: 60800,
+            lastInRangeAt: 60800,
+            lastDamageAt: 30000,
+            hp: 100,
+            firstHp: 100,
+            minHp: 94,
+            damageFromStart: 6,
+            drop: 200,
+            intent: 'profit',
+            originIntent: 'profit'
+          },
+          combatMetrics: {
+            targetId: '19677',
+            targetName: 'Eason',
+            startedAt: 1000,
+            acceptedShots: 34,
+            confirmedHits: 2,
+            targetDamage: 6,
+            targetHealing: 6
+          }
+        };
+        const decision = buildBrowserlessDecision({
+          userId: 28886,
+          realtime: {
+            tick: 90000,
+            frameAgeMs: 100,
+            self: fullStamina5s({
+              entity_id: 1,
+              user_id: 28886,
+              name: 'self',
+              x: 0,
+              y: 0,
+              hp: 100,
+              max_hp: 100
+            }),
+            entities: [
+              fullStamina5s({ entity_id: 1, user_id: 28886, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 }),
+              fullStamina5s({
+                entity_id: 2,
+                user_id: 19677,
+                name: 'Eason',
+                x: 9000,
+                y: 0,
+                vx: 80,
+                vy: 30,
+                hp: 100,
+                max_hp: 100,
+                current_join_mode: 'Active',
+                drop: 200
+              })
+            ],
+            bullets: []
+          },
+          fallback: { tick: 90000, frameAgeMs: 100, entities: [], coinDrops: [], messages: [] }
+        }, stateful, {
+          nowMs: 61000,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          combatAttackRange: 14500,
+          targetStickMs: 120000,
+          combatEngageStickMs: 120000,
+          browserlessCenterActivityRadiusCm: 100000,
+          browserlessProfitPursuitMaxMs: 60000,
+          browserlessProfitPursuitSuppressMs: 60000,
+          browserlessProfitPursuitMinDamageMs: 60000,
+          browserlessProfitPursuitMinDamageHp: 10
+        });
+        return [
+          decision.kind,
+          Boolean(decision.action.shouldLeave),
+          decision.combat.actionEligible,
+          decision.combat.target.combatEngagement.ageMs,
+          decision.combat.profitPursuitSuppression.reason,
+          decision.combat.profitPursuitSuppression.engagedMs,
+          decision.combat.profitPursuitSuppression.damageFromStart,
+          stateful.combatTarget === null,
+          stateful.profitPursuitSuppressions?.['19677']?.reason || ''
+        ].join('|');
+      })(),
+      want: 'wait|false|false|200|profit-pursuit-low-damage|60000|6|true|profit-pursuit-low-damage'
+    },
+    {
       name: 'browserless action adapter pre-approaches AFK target before shooting',
       got: (() => {
         const farCommands = [];
