@@ -16,7 +16,8 @@ const DEFAULT_MOVEMENT_SETTLEMENT_STALL_MS = 5000;
 const DEFAULT_MOVEMENT_SETTLEMENT_MIN_DISTANCE_CM = 80;
 const DEFAULT_COMBAT_SHOOT_MIN_INTERVAL_MS = 160;
 const DEFAULT_ATTACK_RANGE_CM = BROWSER_RUNTIME_DEFAULTS.attackRange;
-const DEFAULT_AFK_ATTACK_COMMIT_RANGE_CM = 5000;
+const DEFAULT_AFK_ATTACK_COMMIT_RANGE_CM = 10000;
+const DEFAULT_AFK_ATTACK_FULL_RANGE_CM = BROWSER_RUNTIME_DEFAULTS.afkAttackFullRangeCm;
 
 function numberOrNull(value) {
   const number = Number(value);
@@ -192,6 +193,14 @@ function afkAttackCommitRangeCm(options = {}) {
     ?? options.browserlessAfkAttackCommitRangeCm
     ?? DEFAULT_AFK_ATTACK_COMMIT_RANGE_CM);
   return Number.isFinite(value) ? Math.max(0, value) : DEFAULT_AFK_ATTACK_COMMIT_RANGE_CM;
+}
+
+function afkAttackFullRangeCm(options = {}) {
+  const value = Number(options.afkAttackFullRangeCm
+    ?? options.afkAttackFullRange
+    ?? options.browserlessAfkAttackFullRangeCm
+    ?? DEFAULT_AFK_ATTACK_FULL_RANGE_CM);
+  return Number.isFinite(value) ? Math.max(0, value) : DEFAULT_AFK_ATTACK_FULL_RANGE_CM;
 }
 
 function profitActionFromDecision(decision) {
@@ -1372,6 +1381,7 @@ function createBrowserlessActionAdapter(options = {}) {
     const attackRange = Math.max(0, Number(options.attackRangeCm ?? options.attackRange ?? DEFAULT_ATTACK_RANGE_CM));
     const commitRange = afkAttackCommitRangeCm(options);
     const shootRange = commitRange > 0 ? Math.min(attackRange, commitRange) : attackRange;
+    const fullAttackRange = Math.min(shootRange, afkAttackFullRangeCm(options));
     if (target?.cachedNavigationOnly) {
       if (!vector.ok || (Number.isFinite(distance) && distance <= Math.max(300, Number(options.targetDeadZoneCm || DEFAULT_TARGET_DEAD_ZONE_CM)))) {
         const stopped = stop('cached-enemy-position-reached');
@@ -1431,7 +1441,10 @@ function createBrowserlessActionAdapter(options = {}) {
       };
     }
 
-    const hold = sendVelocity(0, 0, 'profit-afk-attack-hold', target);
+    const fullAttack = Number.isFinite(distance) && distance <= fullAttackRange;
+    const movement = fullAttack
+      ? sendVelocity(0, 0, 'profit-afk-attack-hold', target)
+      : sendVelocity(vector.dx, vector.dy, 'profit-afk-attack-approach', target);
     const startX = numberOrNull(self?.x);
     const startY = numberOrNull(self?.y);
     const targetX = numberOrNull(target?.x);
@@ -1453,15 +1466,17 @@ function createBrowserlessActionAdapter(options = {}) {
       ? scheduleShootRepeat(self, target, decision?.action?.reason || decision?.reason || 'profit-afk-attack', shoot.cadenceMs)
       : null;
     return {
-      ok: Boolean(hold.ok && shoot.ok),
+      ok: Boolean(movement.ok && shoot.ok),
       kind: 'profit-attack',
       reason: 'profit-afk-attack',
       movement: {
-        ok: hold.ok,
-        skipped: Boolean(hold.skipped),
-        reason: hold.reason || 'profit-afk-attack-hold',
-        command: hold.command || null,
-        ...transportFailure(hold)
+        ok: movement.ok,
+        skipped: Boolean(movement.skipped),
+        reason: fullAttack ? 'profit-afk-attack-hold' : 'profit-afk-attack-approach',
+        command: movement.command || null,
+        fullAttack,
+        fullAttackRangeCm: Math.round(fullAttackRange),
+        ...transportFailure(movement)
       },
       shoot: {
         ok: shoot.ok,
@@ -1473,7 +1488,7 @@ function createBrowserlessActionAdapter(options = {}) {
         ...transportFailure(shoot)
       },
       target,
-      ...transportFailure(hold, shoot)
+      ...transportFailure(movement, shoot)
     };
   }
 
@@ -1659,6 +1674,7 @@ function createBrowserlessActionAdapter(options = {}) {
 module.exports = {
   DEFAULT_COMMAND_INTERVAL_MS,
   DEFAULT_AFK_ATTACK_COMMIT_RANGE_CM,
+  DEFAULT_AFK_ATTACK_FULL_RANGE_CM,
   DEFAULT_COIN_TARGET_DEAD_ZONE_CM,
   DEFAULT_COMBAT_SHOOT_MIN_INTERVAL_MS,
   DEFAULT_MOVEMENT_SETTLEMENT_MIN_DISTANCE_CM,

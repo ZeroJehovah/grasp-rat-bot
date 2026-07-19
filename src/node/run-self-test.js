@@ -9765,7 +9765,7 @@ async function runSelfTest() {
             kind: 'attack',
             band: 'profit',
             reason: 'best-opportunity-enemy',
-            target: { type: 'enemy', userId: 8, x: 10000, y: 0, active: false, drop: 12 }
+            target: { type: 'enemy', userId: 8, x: 11000, y: 0, active: false, drop: 12 }
           }
         });
         const closeCommands = [];
@@ -9790,6 +9790,28 @@ async function runSelfTest() {
             target: { type: 'enemy', userId: 8, x: 4900, y: 0, active: false, drop: 12 }
           }
         });
+        const fullCommands = [];
+        const fullAdapter = createBrowserlessActionAdapter({
+          now: () => 1600 + fullCommands.length * 200,
+          commandIntervalMs: 1,
+          attackRangeCm: 14500,
+          transport: {
+            sendVelocity: (dx, dy) => fullCommands.push(`vel ${dx} ${dy}`),
+            sendShoot: (targetX, targetY, startX, startY) => fullCommands.push(`shoot ${targetX} ${targetY} ${startX} ${startY}`)
+          }
+        });
+        const full = fullAdapter.applyDecision({
+          realtime: { self: { user_id: 7, x: 0, y: 0 }, tick: 3 }
+        }, {
+          kind: 'profit-candidate',
+          band: 'profit',
+          action: {
+            kind: 'attack',
+            band: 'profit',
+            reason: 'best-opportunity-enemy',
+            target: { type: 'enemy', userId: 8, x: 900, y: 0, active: false, drop: 12 }
+          }
+        });
         return [
           far.kind,
           far.reason,
@@ -9798,10 +9820,16 @@ async function runSelfTest() {
           !farCommands.includes('shoot'),
           close.kind,
           close.shoot.ok,
-          closeCommands.some(item => item.startsWith('shoot '))
+          close.movement.reason,
+          close.movement.fullAttack,
+          closeCommands.some(item => item.startsWith('shoot ')),
+          full.kind,
+          full.movement.reason,
+          full.movement.fullAttack,
+          fullCommands.join(',')
         ].join('|');
       })(),
-      want: 'velocity|profit-afk-preengage|5000|vel 1 0|true|profit-attack|true|true'
+      want: 'velocity|profit-afk-preengage|10000|vel 1 0|true|profit-attack|true|profit-afk-attack-approach|false|true|profit-attack|profit-afk-attack-hold|true|vel 0 0,shoot 900 0 0 0'
     },
     {
       name: 'browserless action adapter never fires while profit target remains invulnerable',

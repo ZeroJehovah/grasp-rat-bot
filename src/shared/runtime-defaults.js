@@ -38,6 +38,8 @@ function buildRuntimeDefaults(config, combatLogEndpointConfigured) {
     activeMoveMin: 120,
     activeSeenMs: 1800,
     attackRange: 14500,
+    afkAttackCommitRangeCm: 10000,
+    afkAttackFullRangeCm: 1000,
     attackPreferredRange: 14500,
     attackEngageRange: 11000,
     attackApproachRange: 50000,
