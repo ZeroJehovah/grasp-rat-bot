@@ -302,6 +302,31 @@ function numberOrNull(value) {
   return Number.isFinite(n) ? n : null;
 }
 
+function browserlessBattlePresentation(previous, decision = {}) {
+  const action = decision.action && typeof decision.action === 'object' ? decision.action : decision;
+  const kind = String(action.kind || decision.kind || '');
+  const band = String(action.band || decision.band || '');
+  const battleLike = kind === 'attack' || kind === 'combat-live' || band === 'combat';
+  const targetKey = battleLike ? actionTargetKey({ ...action, kind }) : '';
+  const self = decision.input?.self || decision.combat?.self || null;
+  const currentX = numberOrNull(self?.x);
+  const currentY = numberOrNull(self?.y);
+  if (!targetKey || currentX === null || currentY === null) return null;
+  const sameTarget = previous?.targetKey === targetKey;
+  const startX = sameTarget ? (numberOrNull(previous.startX) ?? currentX) : currentX;
+  const startY = sameTarget ? (numberOrNull(previous.startY) ?? currentY) : currentY;
+  const startedAt = sameTarget
+    ? String(previous.startedAt || decision.combat?.startedAt || decision.at || '')
+    : String(decision.combat?.startedAt || decision.at || '');
+  return {
+    targetKey,
+    startedAt,
+    startX,
+    startY,
+    movementDistance: Math.round(Math.hypot(currentX - startX, currentY - startY))
+  };
+}
+
 function loopPlanNowMs(config = {}) {
   const configured = Number(config.nowMs);
   return Number.isFinite(configured) ? configured : Date.now();
@@ -2438,8 +2463,16 @@ async function runBrowserlessRunner(config, deps = {}) {
         useDecisionWorker: deps.useDecisionWorker !== false,
         onDecision: decision => {
           const currentBeforeDecision = liveState || stateBeforeCanary;
+          const decisionPatch = decisionStatePatch(decision);
           patchLiveState({
-            ...decisionStatePatch(decision),
+            ...decisionPatch,
+            current: {
+              ...(decisionPatch.current || {}),
+              battlePresentation: browserlessBattlePresentation(
+                currentBeforeDecision.current?.battlePresentation,
+                decision
+              )
+            },
             stats: browserlessStatsForDecision(currentBeforeDecision, decision, { nowMs: now() })
           }, {
             updatedAt: new Date(now()).toISOString()
@@ -2447,8 +2480,16 @@ async function runBrowserlessRunner(config, deps = {}) {
         },
         onCombatControl: decision => {
           const currentBeforeDecision = liveState || stateBeforeCanary;
+          const decisionPatch = decisionStatePatch(decision);
           patchLiveState({
-            ...decisionStatePatch(decision),
+            ...decisionPatch,
+            current: {
+              ...(decisionPatch.current || {}),
+              battlePresentation: browserlessBattlePresentation(
+                currentBeforeDecision.current?.battlePresentation,
+                decision
+              )
+            },
             stats: browserlessStatsForDecision(currentBeforeDecision, decision, { nowMs: now() })
           }, {
             updatedAt: new Date(now()).toISOString()
@@ -3110,6 +3151,48 @@ async function runBrowserlessRunnerSelfTest() {
         }
       }
     }, {});
+    const panelAfkPresentationInitial = browserlessBattlePresentation(null, {
+      kind: 'attack',
+      band: 'profit',
+      at: '2026-07-20T00:01:00.000Z',
+      action: { kind: 'attack', band: 'profit', target: { userId: 9, distance: 900 } },
+      input: { self: { userId: 7, x: 0, y: 0 } }
+    });
+    const panelAfkPresentationMoved = browserlessBattlePresentation(panelAfkPresentationInitial, {
+      kind: 'attack',
+      band: 'profit',
+      at: '2026-07-20T00:01:01.000Z',
+      action: { kind: 'attack', band: 'profit', target: { userId: 9, distance: 800 } },
+      input: { self: { userId: 7, x: 300, y: 400 } }
+    });
+    const panelAfkBattleCompact = buildCompactBrowserlessStatus({
+      session: { userId: 7, sessionToken: 'panel-self-test-token' },
+      runner: { running: true, currentAction: { kind: 'attack', target: { userId: 9, distance: 800 } } },
+      current: {
+        self: { userId: 7, name: 'self', x: 300, y: 400, hp: 100, maxHp: 100 },
+        decision: {
+          kind: 'attack',
+          band: 'profit',
+          at: '2026-07-20T00:01:01.000Z',
+          target: { userId: 9, name: 'afk-enemy', hp: 100, distance: 800, active: false }
+        },
+        battlePresentation: panelAfkPresentationMoved
+      }
+    }, {});
+    const panelMismatchedBattleCompact = buildCompactBrowserlessStatus({
+      session: { userId: 7, sessionToken: 'panel-self-test-token' },
+      runner: { running: true, currentAction: { kind: 'attack', target: { userId: 9, distance: 800 } } },
+      current: {
+        self: { userId: 7, name: 'self', x: 300, y: 400, hp: 100, maxHp: 100 },
+        decision: {
+          kind: 'attack',
+          band: 'profit',
+          at: '2026-07-20T00:01:01.000Z',
+          target: { userId: 9, name: 'afk-enemy', hp: 100, distance: 800, active: false }
+        },
+        battlePresentation: { ...panelAfkPresentationMoved, targetKey: 'player:10' }
+      }
+    }, {});
     const panelCombatState = {};
     const panelCombatInput = (nowMs, selfX, selfY) => ({
       userId: 7,
@@ -3187,6 +3270,10 @@ async function runBrowserlessRunnerSelfTest() {
           && panelStatsCompact.stats.today.latestDrop === 20
           && panelBattleCompact.battle.distance === 5600
           && panelBattleCompact.battle.movementDistance === 20000
+          && panelAfkPresentationInitial.movementDistance === 0
+          && panelAfkPresentationMoved.movementDistance === 500
+          && panelAfkBattleCompact.battle.movementDistance === 500
+          && panelMismatchedBattleCompact.battle.movementDistance === null
           && panelCombatInitial.movementDistance === 0
           && panelCombatMoved.movementDistance === 500
         ),
@@ -3197,6 +3284,7 @@ async function runBrowserlessRunnerSelfTest() {
         },
         battleDistance: panelBattleCompact.battle.distance,
         battleMovementDistance: panelBattleCompact.battle.movementDistance,
+        afkBattleMovementDistance: panelAfkBattleCompact.battle.movementDistance,
         measuredMovementDistance: panelCombatMoved.movementDistance
       };
       statusServerChatTest = {

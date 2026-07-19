@@ -61,6 +61,7 @@ function defaultBrowserlessState() {
       stamina: null,
       profit: null,
       combatSummary: null,
+      battlePresentation: null,
       decision: null,
       decisionState: null,
       action: null
@@ -1478,11 +1479,18 @@ function compactBattleStatus(normalized, game, action, decision, combat) {
 
   const current = normalized?.current || {};
   const rawCombat = current.combatSummary || current.decision?.combat || {};
+  const battlePresentation = current.battlePresentation && typeof current.battlePresentation === 'object'
+    ? current.battlePresentation
+    : {};
+  const targetIdentity = target.userId ?? target.user_id ?? target.entityId ?? target.entity_id ?? target.id;
+  const presentationMatchesTarget = targetIdentity !== null && targetIdentity !== undefined
+    && String(battlePresentation.targetKey || '') === `player:${String(targetIdentity)}`;
   const stateCombatTarget = current.decisionState?.combat?.target || null;
   const stateStartedAtMs = compactNumber(stateCombatTarget?.firstSeenAt ?? stateCombatTarget?.at);
   const startedAt = compactString(
     combat?.startedAt
       || rawCombat.startedAt
+      || (presentationMatchesTarget ? battlePresentation.startedAt : '')
       || (stateStartedAtMs !== null ? isoFromMs(stateStartedAtMs) : '')
       || decision?.at,
     48
@@ -1513,7 +1521,11 @@ function compactBattleStatus(normalized, game, action, decision, combat) {
     startedAt,
     durationMs: compactNumber(combat?.durationMs ?? rawCombat.durationMs),
     distance: compactNumber(synchronizedTarget?.distance ?? target.distance),
-    movementDistance: compactNumber(combat?.movementDistance ?? rawCombat.movementDistance),
+    movementDistance: compactNumber(
+      combat?.movementDistance
+        ?? rawCombat.movementDistance
+        ?? (presentationMatchesTarget ? battlePresentation.movementDistance : null)
+    ),
     self: compactBattleActor(combat?.self, selfFallback),
     target: compactBattleActor(target),
     targetAfk: kind === 'attack' && target.active !== true
@@ -2242,7 +2254,16 @@ function browserlessCompactStatusSource(state = {}) {
       action: compactAction(current.action),
       decision: compactDecisionSource(current.decision),
       profit: compactProfitSource(current.profit || current.decision?.profit),
-      combatSummary: compactCombat(current.combatSummary || current.decision?.combat)
+      combatSummary: compactCombat(current.combatSummary || current.decision?.combat),
+      battlePresentation: current.battlePresentation && typeof current.battlePresentation === 'object'
+        ? {
+            targetKey: compactString(current.battlePresentation.targetKey, 128),
+            startedAt: compactString(current.battlePresentation.startedAt, 48),
+            startX: compactNumber(current.battlePresentation.startX),
+            startY: compactNumber(current.battlePresentation.startY),
+            movementDistance: compactNumber(current.battlePresentation.movementDistance)
+          }
+        : null
     },
     lastKnown: state.lastKnown || {},
     recentExits: Array.isArray(state.recentExits) ? state.recentExits : [],
