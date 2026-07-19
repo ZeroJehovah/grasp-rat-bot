@@ -2165,7 +2165,7 @@ function renderBrowserlessWebPanel() {
       ], loggedIn ? 'ok' : 'bad');
       if (s.game?.inGame) {
         setRichText('roleTitleMeta', [
-          { text: 'HP ', className: 'meta-label' }, { text: hpText(roleSelf?.hp), className: hpAttrs(roleSelf?.hp).className },
+          { text: 'HP ', className: 'meta-label' }, { text: integer(roleSelf?.hp), className: hpAttrs(roleSelf?.hp).className },
           { text: ' | Drop ', className: 'meta-label' }, { text: integer(roleSelf?.drop), className: 'coin' }
         ]);
       } else {
