@@ -194,7 +194,9 @@ function singleCoinBaitPolicyCore(input = {}, options = {}) {
     }
     const otherOpportunity = singleCoinBaitOtherOpportunityCore(opportunities, coin, matchOptions);
     const distance = singleCoinBaitDistanceCore(input.self, coin);
-    const phase = previous.phase === 'release' || otherOpportunity
+    // A release trigger is evidence to re-evaluate the bait, not a permanent
+    // promise to return after the triggering opportunity has disappeared.
+    const phase = otherOpportunity
       ? 'release'
       : (distance <= holdRadiusCm ? 'hold' : 'return');
     return {

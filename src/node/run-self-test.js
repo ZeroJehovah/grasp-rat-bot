@@ -56,6 +56,7 @@ const {
 } = require('./browserless/state-store');
 const {
   activeTargetCompletionEstimate,
+  attributeBrowserlessHpDropToBullet,
   buildBrowserlessDecision,
   buildBrowserlessCombatStrategyInput,
   buildBrowserlessRealtimeControlDecision,
@@ -11097,6 +11098,84 @@ async function runSelfTest() {
       want: 'single-coin-bait-hold|hold|coin|single-coin-bait-release|bait|release|next|next|true'
     },
     {
+      name: 'browserless single coin bait reprices distant returns against current profitable coins',
+      got: (() => {
+        const options = {
+          userId: 7,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          dynamicProfitThresholdEnabled: true,
+          singleCoinBaitHoldRadiusCm: 1000,
+          finalActionArbitrationHoldMs: 0,
+          opportunitySwitchRelativeMargin: 0.1,
+          opportunitySwitchMargin: 3000
+        };
+        const stateFor = (tick, selfX, coinDrops) => ({
+          userId: 7,
+          realtime: {
+            tick,
+            frameAgeMs: 100,
+            self: {
+              entity_id: 1,
+              user_id: 7,
+              name: 'self',
+              x: selfX,
+              y: 0,
+              hp: 100,
+              max_hp: 100,
+              stamina_1h_remaining_milli: 3000000,
+              stamina_1d_remaining_milli: 20000000
+            },
+            entities: [{
+              entity_id: 1,
+              user_id: 7,
+              name: 'self',
+              x: selfX,
+              y: 0,
+              hp: 100,
+              max_hp: 100,
+              stamina_1h_remaining_milli: 3000000,
+              stamina_1d_remaining_milli: 20000000
+            }],
+            bullets: [],
+            coinDrops
+          },
+          fallback: { tick, frameAgeMs: 100, entities: [], coinDrops: [], messages: [] }
+        });
+        const expensiveAdapter = createBrowserlessDecisionAdapter(options);
+        expensiveAdapter.decide(stateFor(1, 0, [
+          { drop_id: 'bait-3613', amount: 1, x: 900, y: 0 }
+        ]), { nowMs: 1000 });
+        const expensive = expensiveAdapter.decide(stateFor(2, 21675, [
+          { drop_id: 'bait-3613', amount: 1, x: 900, y: 0 },
+          { drop_id: 'route-3', amount: 3, x: 4646, y: 0 }
+        ]), { nowMs: 2000 });
+
+        const mismatchAdapter = createBrowserlessDecisionAdapter(options);
+        mismatchAdapter.decide(stateFor(10, 0, [
+          { drop_id: 'bait-4230', amount: 1, x: 900, y: 0 }
+        ]), { nowMs: 10000 });
+        const mismatch = mismatchAdapter.decide(stateFor(11, 14687, [
+          { drop_id: 'bait-4230', amount: 1, x: 900, y: 0 },
+          { drop_id: 'coin-4245', amount: 1, x: 11675, y: 0 }
+        ]), { nowMs: 11000 });
+        return [
+          expensive.action.target?.id !== 'bait-3613',
+          expensive.action.target?.id,
+          expensive.profit.singleCoinBait?.returnEligible,
+          expensive.profit.singleCoinBait?.returnSuppressionReason,
+          expensive.profit.singleCoinBait?.evaluationOrigin?.id,
+          expensive.action.finalCandidate?.commitmentRank,
+          mismatch.action.target?.id !== 'bait-4230',
+          mismatch.action.target?.id,
+          mismatch.profit.singleCoinBait?.returnEligible,
+          mismatch.profit.singleCoinBait?.evaluationOrigin?.id,
+          mismatch.profit.singleCoinBaitContinuation?.evaluationOrigin?.id || ''
+        ].join('|');
+      })(),
+      want: 'true|route-3|false|bait-plan-below-current-profit-margin|bait-3613|0|true|coin-4245|false|bait-4230|'
+    },
+    {
       name: 'browserless snapshot fallback bait survives a higher ROI AFK arrival until committed release',
       got: (() => {
         const adapter = createBrowserlessDecisionAdapter({
@@ -15499,6 +15578,94 @@ async function runSelfTest() {
       want: '9000|11880|2880|no-exit|true|false|9|0'
     },
     {
+      name: 'browserless defensive exchange stop loss ceases fire retreats and then exits',
+      got: (() => {
+        const stateful = {
+          combatTarget: {
+            id: 8,
+            at: 1000,
+            firstSeenAt: 1000,
+            firstSeenTick: 10,
+            hp: 100,
+            firstHp: 100,
+            minHp: 100,
+            intent: 'engaged',
+            originIntent: 'defensive',
+            originReason: 'incoming-bullet-owner',
+            self: { userId: 7, hp: 88 },
+            motionSamples: []
+          },
+          combatMetrics: {
+            targetId: '8',
+            targetName: 'active',
+            startedAt: 1000,
+            startedTick: 10,
+            initialSelfHp: 100,
+            lastSelfHp: 88,
+            minSelfHp: 88,
+            initialTargetHp: 100,
+            lastTargetHp: 100,
+            minTargetHp: 100,
+            acceptedShots: 50,
+            requestedShots: 50,
+            confirmedHits: 0,
+            selfDamage: 12,
+            targetDamage: 0,
+            initialStamina1d: 100000,
+            totalStaminaSpent: 30000,
+            shootingStaminaSpent: 25000,
+            threatBulletIds: ['threat-1'],
+            threatBulletCount: 1
+          }
+        };
+        const frame = (tick, hp) => {
+          const self = {
+            entity_id: 1,
+            user_id: 7,
+            x: 0,
+            y: 0,
+            hp,
+            max_hp: 100,
+            stamina_5s_remaining_milli: 10000,
+            stamina_1d_remaining_milli: 70000
+          };
+          return {
+            userId: 7,
+            realtime: {
+              tick,
+              self,
+              entities: [
+                self,
+                { entity_id: 2, user_id: 8, name: 'active', x: 1000, y: 0, hp: 100, max_hp: 100, current_join_mode: 'Active', active: true, firing: true, drop: 50 }
+              ],
+              bullets: []
+            }
+          };
+        };
+        const options = {
+          decisionState: stateful,
+          liveCombatEnabled: true,
+          combatAttackRange: 14500,
+          attackRange: 14500,
+          combatShootMinIntervalMs: 160
+        };
+        const retreat = buildBrowserlessCombatDryRun(frame(1000, 88), { ...options, nowMs: 50000 });
+        const exit = buildBrowserlessCombatDryRun(frame(1221, 85), { ...options, nowMs: 61050 });
+        return [
+          retreat.exchangeStopLoss.phase,
+          retreat.exchangeStopLoss.disengage,
+          retreat.shooting.wouldShoot,
+          retreat.movement.reason,
+          retreat.movement.exchangeRetreat?.phase,
+          exit.exchangeStopLoss.phase,
+          exit.exchangeStopLoss.shouldExit,
+          exit.exit?.reason,
+          stateful.combatTarget.exchangeRetreatSinceAt > 0
+        ].join('|');
+      })(),
+      want: 'retreat|true|false|defensive-exchange-no-progress-retreat|retreat|exit|true|defensive-exchange-no-progress-leave|true'
+    },
+    {
       name: 'browserless combat low hp behind exits regardless no-damage window',
       got: (() => {
         const stateful = {
@@ -17600,6 +17767,61 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: '0,1|current-frame-dodge|0|50'
+    },
+    {
+      name: 'browserless canary clears pre-open transport errors and ignores stale generations after open',
+      got: (async () => {
+        let t = Date.UTC(2026, 6, 19, 6, 0, 0);
+        let wsOptions = null;
+        let sentFrame = false;
+        const frame = encodeGrzFrameForTest({
+          type: 'pos',
+          tick: 100,
+          entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000 }],
+          bullets: []
+        });
+        const result = await runReadOnlyCanary({
+          gameOrigin: 'https://grasp-rat-game.h-e.top',
+          userId: 7,
+          sessionToken: 'generation-test-token',
+          controlMode: 'read-only',
+          readOnlyProbeMs: 100,
+          decisionIntervalMs: 1000,
+          frameGapAlertMs: 5000,
+          httpTimeoutMs: 1000
+        }, {
+          now: () => t,
+          precheckedSnapshotSafety: { ok: true, reason: 'self-test-prechecked', satisfied: true },
+          prewarmGameConnection: async () => ({ ok: true, status: 200, durationMs: 1 }),
+          sleep: async ms => {
+            t += ms;
+            if (!sentFrame) {
+              sentFrame = true;
+              wsOptions.onError?.({ transportGeneration: 1, message: 'late old error', opened: true });
+              wsOptions.onClose?.({ transportGeneration: 1, code: 1006, reason: 'late old close' });
+              wsOptions.onMessage?.(frame, { transportGeneration: 2 });
+            }
+          },
+          openBrowserlessWs: async options => {
+            wsOptions = options;
+            options.onError?.({ transportGeneration: 1, message: 'old pre-open 403', statusCode: 403, opened: false });
+            options.onOpen?.({ transportGeneration: 2, runtime: 'fake' });
+            return {
+              isOpen: () => true,
+              close: () => {},
+              send: () => {}
+            };
+          }
+        });
+        return [
+          result.error || '',
+          result.safety.event?.reason || '',
+          result.frames.count,
+          result.frames.lastTick,
+          result.ok
+        ].join('|');
+      })(),
+      want: '||1|100|true'
     },
     {
       name: 'browserless leave pending cover moves away from an overlapping locked threat without bullets',
@@ -20869,6 +21091,71 @@ async function runSelfTest() {
       want: 'true|true|18767|3'
     },
     {
+      name: 'browserless HP-drop bullet attribution distinguishes matched false-negative and unmatched hits',
+      got: (() => {
+        const baseRisk = predictedHit => ({
+          bulletObservations: [{
+            id: 'bullet-1',
+            ownerId: '8',
+            at: 1000,
+            observedTick: 20,
+            createdTick: 18,
+            expireTick: 30,
+            speed: 500,
+            timeToImpact: 200,
+            cpa: 260
+          }],
+          lastCover: {
+            selectedThreatPrediction: {
+              dx: 1,
+              dy: 0,
+              commandDelayTicks: 4,
+              pendingVelocityCommand: { commandId: 'vel-7', dx: -1, dy: 0 },
+              predictedVelocitySchedule: [{ commandId: 'vel-7', effectiveAfterTicks: 2 }],
+              dangerousBullets: [{
+                bulletId: 'bullet-1',
+                ownerId: '8',
+                createdTick: 18,
+                expireTick: 30,
+                timeToImpact: 200,
+                cpa: predictedHit ? 80 : 260,
+                predictedHit
+              }]
+            }
+          }
+        });
+        const falseNegativeState = { browserlessLeaveRisk: baseRisk(false) };
+        const falseNegative = attributeBrowserlessHpDropToBullet({
+          realtime: { tick: 24 },
+          bullets: []
+        }, falseNegativeState, 3, 1200, { combatBulletHitRadiusCm: 200 });
+        const matchedState = { browserlessLeaveRisk: baseRisk(true) };
+        const matched = attributeBrowserlessHpDropToBullet({
+          realtime: { tick: 24 },
+          bullets: []
+        }, matchedState, 3, 1200, { combatBulletHitRadiusCm: 200 });
+        const unmatchedState = { browserlessLeaveRisk: { bulletObservations: [], lastCover: null } };
+        const unmatched = attributeBrowserlessHpDropToBullet({
+          realtime: { tick: 24 },
+          bullets: []
+        }, unmatchedState, 3, 1200, { combatBulletHitRadiusCm: 200 });
+        return [
+          falseNegative.classification,
+          falseNegative.bulletId,
+          falseNegative.pendingVelocityCommand?.commandId,
+          falseNegative.commandDelayTicks,
+          matched.classification,
+          matched.predictedHit,
+          unmatched.classification,
+          unmatched.bulletId,
+          falseNegativeState.combatHitAttributionSummary.predictedSafeFalseNegative,
+          matchedState.combatHitAttributionSummary.matchedHit,
+          unmatchedState.combatHitAttributionSummary.unmatchedHit
+        ].join('|');
+      })(),
+      want: 'predicted-safe-false-negative|bullet-1|vel-7|4|matched-hit|true|unmatched-hit||1|1|1'
+    },
+    {
       name: 'browserless runner config accepts source IP binding',
       got: (() => {
         const envConfig = parseBrowserlessRunnerArgs([], {
@@ -21005,6 +21292,7 @@ async function runSelfTest() {
       got: withTempDirForTest(async dir => {
         const stateFile = path.join(dir, 'state.json');
         const opened = [];
+        const businessErrors = [];
         const controller = createSourceIpController({
           config: {
             gameOrigin: 'https://grasp-rat-game.h-e.top',
@@ -21034,19 +21322,132 @@ async function runSelfTest() {
         });
         const transport = await controller.openBrowserlessWs({
           gameOrigin: 'https://grasp-rat-game.h-e.top',
-          wsPath: '/ws'
+          wsPath: '/ws',
+          onError: event => businessErrors.push(event)
+        });
+        await controller.openBrowserlessWs({
+          gameOrigin: 'https://grasp-rat-game.h-e.top',
+          wsPath: '/ws',
+          onError: event => businessErrors.push(event)
         });
         const state = readBrowserlessStateFile(stateFile);
         return [
           transport.isOpen(),
           opened.join(','),
           controller.currentSourceIp(),
+          businessErrors.length,
           Boolean(state.network.lastSwitch?.switched),
           state.network.lastSwitch?.from,
-          state.network.lastSwitch?.to
+          state.network.lastSwitch?.to,
+          Object.keys(state.network.sourceIpQuarantine || {}).join(',')
         ].join('|');
       }),
-      want: 'true|10.0.0.101,10.0.0.20|10.0.0.20|true|10.0.0.101|10.0.0.20'
+      want: 'true|10.0.0.101,10.0.0.20,10.0.0.20|10.0.0.20|0|true|10.0.0.101|10.0.0.20|10.0.0.101'
+    },
+    {
+      name: 'browserless source IP controller ignores stale websocket generation events and stale persisted selection',
+      got: withTempDirForTest(async dir => {
+        const stateFile = path.join(dir, 'state.json');
+        const callbacks = [];
+        const business = { opens: 0, errors: 0, closes: 0, messages: 0 };
+        let clock = Date.UTC(2026, 6, 19, 6, 0, 0);
+        const controller = createSourceIpController({
+          config: {
+            gameOrigin: 'https://grasp-rat-game.h-e.top',
+            sourceIps: ['10.0.0.145', '10.0.0.20'],
+            sourceIp: '10.0.0.145',
+            httpTimeoutMs: 1000
+          },
+          stateFile,
+          now: () => clock,
+          fetchWithTimeout: async (_url, options = {}) => fakeResponseForTest({
+            status: options.localAddress === '10.0.0.145' ? 403 : 200,
+            body: 'probe'
+          }),
+          openBrowserlessWs: async options => {
+            callbacks.push(options);
+            if (options.localAddress === '10.0.0.145') {
+              options.onError?.({ message: 'unexpected response 403', statusCode: 403, opened: false });
+              throw new Error('unexpected response 403');
+            }
+            options.onOpen?.({ runtime: 'fake' });
+            return { isOpen: () => true, close: () => {} };
+          }
+        });
+        await controller.openBrowserlessWs({
+          wsUrl: 'wss://example.test/ws',
+          onOpen: () => { business.opens += 1; },
+          onError: () => { business.errors += 1; },
+          onClose: () => { business.closes += 1; },
+          onMessage: () => { business.messages += 1; }
+        });
+        callbacks[0].onError?.({ message: 'late socket error', opened: true });
+        callbacks[0].onClose?.({ code: 1006, reason: 'late close' });
+        callbacks[0].onMessage?.('late frame');
+        callbacks[1].onMessage?.('current frame');
+        clock += 1000;
+        controller.refreshFromState({
+          network: {
+            sourceIp: '10.0.0.145',
+            sourceIps: ['10.0.0.145', '10.0.0.20'],
+            sourceIpSelectionGeneration: 1,
+            lastSelectedAt: '2026-07-19T05:00:00.000Z'
+          }
+        });
+        return [
+          controller.currentSourceIp(),
+          business.opens,
+          business.errors,
+          business.closes,
+          business.messages,
+          callbacks[0].localAddress,
+          callbacks[1].localAddress
+        ].join('|');
+      }),
+      want: '10.0.0.20|1|0|0|1|10.0.0.145|10.0.0.20'
+    },
+    {
+      name: 'browserless source IP controller reports one final websocket error after all IPs fail',
+      got: withTempDirForTest(async dir => {
+        const stateFile = path.join(dir, 'state.json');
+        const opened = [];
+        const businessErrors = [];
+        const controller = createSourceIpController({
+          config: {
+            gameOrigin: 'https://grasp-rat-game.h-e.top',
+            sourceIps: ['10.0.0.145', '10.0.0.20'],
+            sourceIp: '10.0.0.145',
+            httpTimeoutMs: 1000
+          },
+          stateFile,
+          now: () => Date.UTC(2026, 6, 19, 7, 0, 0),
+          fetchWithTimeout: async () => fakeResponseForTest({ status: 403, body: 'forbidden' }),
+          openBrowserlessWs: async options => {
+            opened.push(options.localAddress || '');
+            options.onError?.({ message: 'unexpected response 403', statusCode: 403, opened: false });
+            throw new Error('unexpected response 403');
+          }
+        });
+        let attemptCount = 0;
+        try {
+          await controller.openBrowserlessWs({
+            wsUrl: 'wss://example.test/ws',
+            onError: event => businessErrors.push(event)
+          });
+        } catch (err) {
+          attemptCount = err.attempts?.length || 0;
+        }
+        const state = readBrowserlessStateFile(stateFile);
+        return [
+          opened.join(','),
+          attemptCount,
+          businessErrors.length,
+          businessErrors[0]?.final,
+          businessErrors[0]?.attempts?.length,
+          Object.keys(state.network.sourceIpQuarantine || {}).sort().join(',')
+        ].join('|');
+      }),
+      want: '10.0.0.145,10.0.0.20|2|1|true|2|10.0.0.145,10.0.0.20'
     },
     {
       name: 'browserless hedged leave 403 does not trigger source IP switching',
@@ -32749,7 +33150,14 @@ async function runSelfTest() {
 	        buildBrowserlessDecision(stateFor({ tick: 101 }), stateful, { ...options, nowMs: baseMs + 1000 });
 	        const admitted = buildBrowserlessDecision(stateFor({ tick: 102 }), stateful, { ...options, nowMs: baseMs + 2000 });
 	        const moved = buildBrowserlessDecision(stateFor({ tick: 103, selfX: 1000 }), stateful, { ...options, nowMs: baseMs + 3000 });
+	        stateful.combatMetrics = {
+	          targetId: '8',
+	          acceptedShots: 2,
+	          shootingStaminaSpent: 1000
+	        };
+	        const shot = buildBrowserlessDecision(stateFor({ tick: 103.5, selfX: 1000 }), stateful, { ...options, nowMs: baseMs + 3250 });
 	        const sessionStartedAt = stateful.explorationSessions['8'].sessionStartedAt;
+	        const sessionId = stateful.explorationSessions['8'].sessionId;
 	        const waited = buildBrowserlessDecision(stateFor({ tick: 104, selfX: 1000, visible: false }), stateful, { ...options, nowMs: baseMs + 3500 });
 	        const persistedDuringWait = Boolean(stateful.explorationSessions['8']);
 	        const resumed = buildBrowserlessDecision(stateFor({ tick: 105, selfX: 1000 }), stateful, { ...options, nowMs: baseMs + 4000 });
@@ -32805,10 +33213,18 @@ async function runSelfTest() {
 	          Boolean(changedTargetState.explorationSessions['8']),
 	          resumedSameSession,
 	          failedState.explorationHistory.at(-1)?.terminationReason,
-	          Boolean(failedState.explorationSessions['8'])
+	          Boolean(failedState.explorationSessions['8']),
+	          admitted.profit.threshold.explorationLifecycleEvents.map(event => event.type).join(','),
+	          moved.profit.threshold.explorationLifecycleEvents.map(event => event.type).join(','),
+	          shot.profit.threshold.explorationLifecycleEvents.map(event => event.type).join(','),
+	          killed.profit.threshold.explorationLifecycleEvents.map(event => event.type).join(','),
+	          killed.profit.threshold.explorationLifecycleEvents.every(event => event.sessionId === sessionId),
+	          stateful.explorationHistory.at(-1)?.approachSpent,
+	          stateful.explorationHistory.at(-1)?.shootingSpent,
+	          stateful.explorationHistory.at(-1)?.totalSpent
 	        ].join('|');
 	      })(),
-	      want: 'true|1000|dynamic-profit-threshold-wait|true|true|self-kill-confirmed|previous-session-self-kill-confirmed|dynamic-profit-threshold-wait|estimated-approach-over-budget|false|dynamic-profit-threshold-wait|1|false|true|target-failed-or-suppressed|false'
+	      want: 'true|1000|dynamic-profit-threshold-wait|true|true|self-kill-confirmed|previous-session-self-kill-confirmed|dynamic-profit-threshold-wait|estimated-approach-over-budget|false|dynamic-profit-threshold-wait|1|false|true|target-failed-or-suppressed|false|admitted|approach-progress|shot|terminated,settled|true|1000|1000|2000'
 	    },
 	    {
 	      name: 'browserless selected low-drop easy active target bypasses ordinary proactive combat gate',

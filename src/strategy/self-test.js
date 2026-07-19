@@ -528,14 +528,20 @@ function runStrategyModuleSelfTests() {
 
   const dodge = calculateDodgeDirection(
     { x: 0, y: 0 },
-    [{ incoming: true, x: -5000, y: 0, distance: 5000, cpa: 0, timeToImpact: 500, speed: 500, direction: { dx: 1, dy: 0 } }],
+    [{ incoming: true, bullet_id: 'threat-1', ownerId: 8, createdTick: 10, expireTick: 30, x: -5000, y: 0, distance: 5000, cpa: 0, timeToImpact: 500, speed: 500, direction: { dx: 1, dy: 0 } }],
     { moveSpeedPerTick: 50, tickMs: 50, hitRadius: 200 }
   );
   const dodgeMinimumHits = Math.min(...dodge.threatField.map(item => item.directHits));
   results.push({
     name: 'future-position-threat-field-improves-old-fixed-cpa-hit',
     passed: dodge.directHits === undefined
-      ? dodge.threatField.find(item => item.dx === dodge.dx && item.dy === dodge.dy)?.directHits === dodgeMinimumHits && dodgeMinimumHits < 1
+      ? dodge.threatField.find(item => item.dx === dodge.dx && item.dy === dodge.dy)?.directHits === dodgeMinimumHits
+        && dodgeMinimumHits < 1
+        && dodge.threatField.every(item => item.dangerousBullets?.[0]?.bulletId === 'threat-1')
+        && dodge.threatField[0].dangerousBullets[0].ownerId === 8
+        && dodge.threatField[0].dangerousBullets[0].createdTick === 10
+        && dodge.threatField[0].dangerousBullets[0].expireTick === 30
+        && dodge.threatField[0].dangerousBullets[0].speed === 500
       : false
   });
   const fullFlightDodge = calculateDodgeDirection(
@@ -1131,8 +1137,8 @@ function runStrategyModuleSelfTests() {
     damageObservations: 6,
     selfHp: 45,
     targetHp: 15,
-    windowSelfDamage: 21,
-    windowTargetDamage: 4,
+    windowSelfDamage: 3,
+    windowTargetDamage: 6,
     recentTargetDamage: 3
   });
   results.push({
@@ -1142,6 +1148,71 @@ function runStrategyModuleSelfTests() {
       && exchangeConfirmed.triggered === true
       && protectedFinish.lowHpFinishProtected === true
       && protectedFinish.triggered === false
+  });
+  const defensiveRetreat = evaluateCombatExchangeStopLossCore({
+    nowMs: 45000,
+    engagedMs: 45000,
+    acceptedShots: 40,
+    damageObservations: 5,
+    selfHp: 70,
+    targetHp: 100,
+    windowMs: 10000,
+    windowSelfDamage: 3,
+    windowTargetDamage: 0,
+    longWindowSelfDamage: 12,
+    longWindowTargetDamage: 0,
+    cumulativeSelfDamage: 12,
+    cumulativeTargetDamage: 0,
+    recentTargetDamage: 0,
+    distance: 14000,
+    recentThreatBulletCount: 2,
+    defensive: true
+  });
+  const defensiveExit = evaluateCombatExchangeStopLossCore({
+    nowMs: 60000,
+    engagedMs: 60000,
+    acceptedShots: 40,
+    damageObservations: 5,
+    selfHp: 67,
+    targetHp: 100,
+    cumulativeSelfDamage: 15,
+    cumulativeTargetDamage: 0,
+    recentTargetDamage: 0,
+    distance: 15000,
+    recentThreatBulletCount: 1,
+    defensive: true,
+    retreatSinceAt: defensiveRetreat.retreatSinceAt,
+    retreatSelfDamageBaseline: defensiveRetreat.retreatSelfDamageBaseline,
+    retreatTargetDamageBaseline: defensiveRetreat.retreatTargetDamageBaseline
+  });
+  const safelySeparated = evaluateCombatExchangeStopLossCore({
+    nowMs: 60000,
+    engagedMs: 60000,
+    acceptedShots: 40,
+    damageObservations: 5,
+    selfHp: 67,
+    targetHp: 100,
+    cumulativeSelfDamage: 15,
+    cumulativeTargetDamage: 0,
+    recentTargetDamage: 0,
+    distance: 18000,
+    recentThreatBulletCount: 0,
+    defensive: true,
+    retreatSinceAt: defensiveRetreat.retreatSinceAt,
+    retreatSelfDamageBaseline: defensiveRetreat.retreatSelfDamageBaseline,
+    retreatTargetDamageBaseline: defensiveRetreat.retreatTargetDamageBaseline
+  });
+  results.push({
+    name: 'defensive-combat-exchange-stop-loss-retreats-then-exits-unless-safely-separated',
+    passed: defensiveRetreat.phase === 'retreat'
+      && defensiveRetreat.disengage === true
+      && defensiveRetreat.shouldExit === false
+      && defensiveExit.phase === 'exit'
+      && defensiveExit.shouldExit === true
+      && defensiveExit.phasedReason === 'defensive-exchange-no-progress-leave'
+      && safelySeparated.disengage === true
+      && safelySeparated.safeDistanceReached === true
+      && safelySeparated.shouldExit === false
   });
 
   const attackWorthOptions = {

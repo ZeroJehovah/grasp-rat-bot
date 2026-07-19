@@ -310,8 +310,13 @@ function replayCombatExchangeStopLoss(rows) {
   if (!rows.length) return null;
   const startedAt = Date.parse(rows[0].entry.at);
   let degradationSinceAt = 0;
+  let retreatSinceAt = 0;
+  let retreatSelfDamageBaseline = 0;
+  let retreatTargetDamageBaseline = 0;
   let firstActive = null;
   let firstTriggered = null;
+  let firstDisengage = null;
+  let firstExit = null;
   let baselineTriggered = false;
   const damageWindow = (endIndex, windowMs) => {
     const nowMs = Date.parse(rows[endIndex].entry.at);
@@ -339,7 +344,7 @@ function replayCombatExchangeStopLoss(rows) {
     const nowMs = Date.parse(row.entry.at);
     const short = damageWindow(index, 10000);
     const long = damageWindow(index, 20000);
-    const recent = damageWindow(index, 3000);
+    const recent = damageWindow(index, 10000);
     const input = {
       nowMs,
       engagedMs: Math.max(0, nowMs - startedAt),
@@ -353,11 +358,28 @@ function replayCombatExchangeStopLoss(rows) {
       longWindowSelfDamage: long.selfDamage,
       longWindowTargetDamage: long.targetDamage,
       distanceProgressCm: long.distanceProgressCm,
-      recentTargetDamage: recent.targetDamage
+      recentTargetDamage: recent.targetDamage,
+      cumulativeSelfDamage: Number(row.detail.metrics?.selfDamage || 0),
+      cumulativeTargetDamage: Number(row.detail.metrics?.targetDamage || 0),
+      distance: Number(row.detail.target?.distance),
+      recentThreatBulletCount: Number(row.detail.metrics?.threatBulletCount || 0) > 0 ? 1 : 0,
+      defensive: Boolean(row.detail.exchangeStopLoss?.defensive
+        || row.detail.target?.combatIntent === 'defensive'
+        || Number(row.detail.metrics?.threatBulletCount || 0) > 0
+        || Number(row.detail.metrics?.selfDamage || 0) > 0)
     };
     const baseline = evaluateCombatExchangeStopLossCore({ ...input, degradationSinceAt: 0 });
-    const improved = evaluateCombatExchangeStopLossCore({ ...input, degradationSinceAt });
+    const improved = evaluateCombatExchangeStopLossCore({
+      ...input,
+      degradationSinceAt,
+      retreatSinceAt,
+      retreatSelfDamageBaseline,
+      retreatTargetDamageBaseline
+    });
     degradationSinceAt = improved.degradationSinceAt;
+    retreatSinceAt = improved.retreatSinceAt;
+    retreatSelfDamageBaseline = improved.retreatSelfDamageBaseline;
+    retreatTargetDamageBaseline = improved.retreatTargetDamageBaseline;
     if (baseline.triggered) baselineTriggered = true;
     if (!firstActive && improved.active) {
       firstActive = {
@@ -381,20 +403,84 @@ function replayCombatExchangeStopLoss(rows) {
         targetHp: Number(row.detail.target?.hp)
       };
     }
+    if (!firstDisengage && improved.disengage) {
+      firstDisengage = {
+        line: row.line,
+        at: row.entry.at,
+        elapsedMs: nowMs - startedAt,
+        acceptedShots: Number(row.detail.metrics?.acceptedShots || 0),
+        totalStaminaSpent: Number(row.detail.metrics?.totalStaminaSpent || 0),
+        selfDamage: Number(row.detail.metrics?.selfDamage || 0),
+        targetDamage: Number(row.detail.metrics?.targetDamage || 0),
+        selfHp: Number(row.detail.self?.hp),
+        targetHp: Number(row.detail.target?.hp),
+        reason: improved.phasedReason
+      };
+    }
+    if (!firstExit && improved.shouldExit) {
+      firstExit = {
+        line: row.line,
+        at: row.entry.at,
+        elapsedMs: nowMs - startedAt,
+        retreatMs: Math.max(0, nowMs - Number(improved.retreatSinceAt || nowMs)),
+        acceptedShots: Number(row.detail.metrics?.acceptedShots || 0),
+        totalStaminaSpent: Number(row.detail.metrics?.totalStaminaSpent || 0),
+        selfDamage: Number(row.detail.metrics?.selfDamage || 0),
+        targetDamage: Number(row.detail.metrics?.targetDamage || 0),
+        selfHp: Number(row.detail.self?.hp),
+        targetHp: Number(row.detail.target?.hp),
+        reason: improved.phasedReason
+      };
+    }
   }
   const initialSelfHp = Number(rows[0].detail.self?.hp);
   const finalSelfHp = Number(rows[rows.length - 1].detail.self?.hp);
+  const firstMetrics = rows[0].detail.metrics || {};
+  const lastMetrics = rows[rows.length - 1].detail.metrics || {};
+  const baselineAcceptedShots = Math.max(0, Number(lastMetrics.acceptedShots || 0) - Number(firstMetrics.acceptedShots || 0));
+  const retainedAcceptedShots = firstDisengage
+    ? Math.max(0, Number(firstDisengage.acceptedShots || 0) - Number(firstMetrics.acceptedShots || 0))
+    : baselineAcceptedShots;
+  const baselineStamina = Math.max(0, Number(lastMetrics.totalStaminaSpent || 0) - Number(firstMetrics.totalStaminaSpent || 0));
+  const retainedStamina = firstDisengage
+    ? Math.max(0, Number(firstDisengage.totalStaminaSpent || 0) - Number(firstMetrics.totalStaminaSpent || 0))
+    : baselineStamina;
+  const baselineSelfDamage = Math.max(0, Number(lastMetrics.selfDamage || 0) - Number(firstMetrics.selfDamage || 0));
+  const retainedSelfDamage = firstExit
+    ? Math.max(0, Number(firstExit.selfDamage || 0) - Number(firstMetrics.selfDamage || 0))
+    : baselineSelfDamage;
+  const baselineTargetDamage = Math.max(0, Number(lastMetrics.targetDamage || 0) - Number(firstMetrics.targetDamage || 0));
+  const retainedTargetDamage = firstDisengage
+    ? Math.max(0, Number(firstDisengage.targetDamage || 0) - Number(firstMetrics.targetDamage || 0))
+    : baselineTargetDamage;
   return {
     baselineTriggered,
     firstActive,
     firstTriggered,
+    firstDisengage,
+    firstExit,
+    comparison: {
+      baselineAcceptedShots,
+      retainedAcceptedShots,
+      suppressedAcceptedShots: Math.max(0, baselineAcceptedShots - retainedAcceptedShots),
+      baselineStamina,
+      retainedStamina,
+      staminaSavedBeforeRetreat: Math.max(0, baselineStamina - retainedStamina),
+      baselineSelfDamage,
+      retainedSelfDamage,
+      baselineTargetDamage,
+      retainedTargetDamage
+    },
     selfDamageBeforeTrigger: firstTriggered && Number.isFinite(initialSelfHp)
       ? Math.max(0, initialSelfHp - Number(firstTriggered.selfHp))
       : null,
     observedWindowSelfDamage: Number.isFinite(initialSelfHp) && Number.isFinite(finalSelfHp)
       ? Math.max(0, initialSelfHp - finalSelfHp)
       : null,
-    accepted: Boolean(!baselineTriggered && firstTriggered)
+    accepted: Boolean(firstDisengage
+      && retainedAcceptedShots < baselineAcceptedShots
+      && retainedSelfDamage <= baselineSelfDamage
+      && retainedTargetDamage >= baselineTargetDamage)
   };
 }
 

@@ -19,6 +19,8 @@ const {
 } = require('./state-file');
 
 const DEFAULT_PROBE_TIMEOUT_MS = 5000;
+const DEFAULT_QUARANTINE_BASE_MS = 5 * 60 * 1000;
+const DEFAULT_QUARANTINE_MAX_MS = 15 * 60 * 1000;
 
 function splitSourceIpList(value) {
   if (Array.isArray(value)) return uniqueStrings(value);
@@ -128,6 +130,22 @@ function createSourceIpController(options = {}) {
   let candidates = resolveSourceIpCandidates(config, state);
   let currentSourceIp = chooseInitialSourceIp(candidates, config, state);
   let probePromise = null;
+  let selectionGeneration = Math.max(0, Number(state?.network?.sourceIpSelectionGeneration || 0));
+  let selectedAtMs = Date.parse(state?.network?.lastSelectedAt || '') || 0;
+  let transportGeneration = 0;
+  let authoritativeTransportGeneration = 0;
+  const quarantines = new Map(Object.entries(state?.network?.sourceIpQuarantine || {})
+    .map(([sourceIp, record]) => [sourceIp, {
+      failureCount: Math.max(0, Number(record?.failureCount || 0)),
+      until: Math.max(0, Number(record?.until || 0)),
+      reason: String(record?.reason || '')
+    }]));
+
+  if (currentSourceIp && selectionGeneration <= 0) selectionGeneration = 1;
+
+  const quarantineSnapshot = () => Object.fromEntries(Array.from(quarantines.entries())
+    .filter(([sourceIp]) => candidates.includes(sourceIp))
+    .map(([sourceIp, record]) => [sourceIp, { ...record }]));
 
   const persist = patch => {
     if (!stateFile) return;
@@ -135,6 +153,8 @@ function createSourceIpController(options = {}) {
     const network = {
       sourceIp: currentSourceIp,
       sourceIps: candidates,
+      sourceIpSelectionGeneration: selectionGeneration,
+      sourceIpQuarantine: quarantineSnapshot(),
       ...patch
     };
     try {
@@ -173,7 +193,66 @@ function createSourceIpController(options = {}) {
     config.sourceIps = candidates;
   };
 
+  const quarantineRecord = sourceIp => {
+    const record = quarantines.get(String(sourceIp || '')) || null;
+    if (!record || Number(record.until || 0) <= now()) return null;
+    return record;
+  };
+
+  const sourceIpAvailable = sourceIp => Boolean(sourceIp) && !quarantineRecord(sourceIp);
+
+  const nextAvailableSourceIp = (fromSourceIp = currentSourceIp, excluded = new Set()) => {
+    if (!candidates.length) return '';
+    const start = Math.max(0, candidates.indexOf(fromSourceIp));
+    for (let offset = 1; offset <= candidates.length; offset += 1) {
+      const candidate = candidates[(start + offset) % candidates.length];
+      if (excluded.has(candidate) || !sourceIpAvailable(candidate)) continue;
+      return candidate;
+    }
+    return '';
+  };
+
+  const selectSourceIp = (sourceIp, reason) => {
+    const next = String(sourceIp || '');
+    if (!next || next === currentSourceIp) return false;
+    currentSourceIp = next;
+    selectionGeneration += 1;
+    selectedAtMs = now();
+    applyCurrentToConfig();
+    persist({
+      lastSelectedAt: new Date(selectedAtMs).toISOString(),
+      lastSelectionReason: reason
+    });
+    return true;
+  };
+
+  const quarantineSourceIp = (sourceIp, reason) => {
+    const key = String(sourceIp || '');
+    if (!key) return null;
+    const previous = quarantines.get(key) || {};
+    const failureCount = Math.max(1, Number(previous.failureCount || 0) + 1);
+    const baseMs = Math.max(1000, Number(config.sourceIpQuarantineBaseMs || DEFAULT_QUARANTINE_BASE_MS));
+    const maxMs = Math.max(baseMs, Number(config.sourceIpQuarantineMaxMs || DEFAULT_QUARANTINE_MAX_MS));
+    const durationMs = Math.min(maxMs, baseMs * (2 ** Math.min(8, failureCount - 1)));
+    const record = {
+      failureCount,
+      until: now() + durationMs,
+      reason: String(reason || 'all-probes-403')
+    };
+    quarantines.set(key, record);
+    persist({});
+    log('source-ip-quarantine', {
+      quarantinedSourceIp: key,
+      failureCount,
+      durationMs,
+      until: new Date(record.until).toISOString(),
+      reason: record.reason
+    });
+    return record;
+  };
+
   applyCurrentToConfig();
+  selectedAtMs = selectedAtMs || now();
   persist({
     lastSelectedAt: state?.network?.sourceIp === currentSourceIp
       ? state?.network?.lastSelectedAt || ''
@@ -243,11 +322,22 @@ function createSourceIpController(options = {}) {
       log('source-ip-switch-unavailable', blocked);
       return { switched: false, from: currentSourceIp, to: currentSourceIp, probe };
     }
-    const index = candidates.indexOf(currentSourceIp);
-    const next = candidates[(index >= 0 ? index + 1 : 0) % candidates.length];
+    const next = nextAvailableSourceIp(currentSourceIp);
+    if (!next) {
+      const blocked = {
+        at: new Date(now()).toISOString(),
+        reason: 'all-alternates-quarantined',
+        from: currentSourceIp,
+        to: currentSourceIp,
+        switched: false,
+        probe
+      };
+      persist({ lastSwitch: blocked });
+      log('source-ip-switch-unavailable', blocked);
+      return { switched: false, from: currentSourceIp, to: currentSourceIp, probe };
+    }
     const previous = currentSourceIp;
-    currentSourceIp = next;
-    applyCurrentToConfig();
+    selectSourceIp(next, reason);
     const detail = {
       at: new Date(now()).toISOString(),
       reason,
@@ -259,7 +349,8 @@ function createSourceIpController(options = {}) {
     persist({
       lastSwitch: detail,
       lastSelectedAt: detail.at,
-      lastSelectionReason: reason
+      lastSelectionReason: reason,
+      sourceIpSelectionGeneration: selectionGeneration
     });
     log('source-ip-switch', detail);
     return { switched: true, from: previous, to: next, probe };
@@ -271,7 +362,10 @@ function createSourceIpController(options = {}) {
       probePromise = (async () => {
         try {
           const probe = await probeCurrentIp(context);
-          if (probe.allForbidden) return switchToNext('all-probes-403', probe);
+          if (probe.allForbidden) {
+            quarantineSourceIp(probe.sourceIp, 'all-probes-403');
+            return switchToNext('all-probes-403', probe);
+          }
           return { switched: false, reason: 'not-all-probes-403', probe };
         } finally {
           probePromise = null;
@@ -330,10 +424,24 @@ function createSourceIpController(options = {}) {
       return candidates.slice();
     },
     refreshFromState(nextState = null) {
-      state = nextState || (stateFile ? readBrowserlessStateFile(stateFile) : state);
+      const incomingState = nextState || (stateFile ? readBrowserlessStateFile(stateFile) : state);
+      state = incomingState;
       const nextCandidates = resolveSourceIpCandidates(config, state);
       candidates = nextCandidates.length ? nextCandidates : candidates;
-      currentSourceIp = chooseInitialSourceIp(candidates, config, state);
+      const incomingGeneration = Math.max(0, Number(state?.network?.sourceIpSelectionGeneration || 0));
+      const incomingSelectedAtMs = Date.parse(state?.network?.lastSelectedAt || '') || 0;
+      const incomingSourceIp = String(state?.network?.sourceIp || '');
+      const incomingIsNewer = incomingGeneration > selectionGeneration
+        || (incomingGeneration === selectionGeneration && incomingSelectedAtMs > selectedAtMs);
+      if (incomingIsNewer && candidates.includes(incomingSourceIp)) {
+        currentSourceIp = incomingSourceIp;
+        selectionGeneration = incomingGeneration;
+        selectedAtMs = incomingSelectedAtMs;
+      } else if (!currentSourceIp || !candidates.includes(currentSourceIp)) {
+        currentSourceIp = chooseInitialSourceIp(candidates, config, state);
+        if (currentSourceIp) selectionGeneration += 1;
+        selectedAtMs = now();
+      }
       applyCurrentToConfig();
       persist({});
       return currentSourceIp;
@@ -341,24 +449,140 @@ function createSourceIpController(options = {}) {
     handleForbidden,
     fetchWithTimeout: fetchWithCurrentSourceIp,
     async openBrowserlessWs(wsOptions = {}) {
-      return retryForbiddenOperation(async sourceIp => {
+      const attemptedSourceIps = new Set();
+      const attemptDiagnostics = [];
+      const open = options.openBrowserlessWs || openBrowserlessWs;
+      const maxAttempts = Math.max(1, candidates.length || 1);
+      let lastError = null;
+
+      for (let attemptIndex = 0; attemptIndex < maxAttempts; attemptIndex += 1) {
+        if (currentSourceIp && (!sourceIpAvailable(currentSourceIp) || attemptedSourceIps.has(currentSourceIp))) {
+          const next = nextAvailableSourceIp(currentSourceIp, attemptedSourceIps);
+          if (!next) break;
+          selectSourceIp(next, 'ws-skip-quarantined');
+        }
+        const sourceIp = currentSourceIp;
+        const generation = ++transportGeneration;
+        let opened = false;
         let sawForbidden = false;
-        return await (options.openBrowserlessWs || openBrowserlessWs)({
-          ...wsOptions,
-          localAddress: sourceIp || undefined,
-          onError: event => {
-            sawForbidden = sawForbidden || Number(event?.statusCode || 0) === 403 || isForbiddenError(event?.message || '');
-            if (typeof wsOptions.onError === 'function') wsOptions.onError(event);
-          }
-        }).catch(err => {
-          if (sawForbidden || isForbiddenError(err)) {
-            const wrapped = new Error(err?.message || String(err));
-            wrapped.status = 403;
-            throw wrapped;
-          }
-          throw err;
+        let attemptError = null;
+        attemptedSourceIps.add(sourceIp);
+        const withGeneration = event => ({
+          ...(event && typeof event === 'object' ? event : {}),
+          transportGeneration: generation,
+          sourceIp
         });
-      }, { kind: 'ws', url: redactSecrets(wsOptions.wsUrl || ''), status: 403 });
+        try {
+          const transport = await open({
+            ...wsOptions,
+            localAddress: sourceIp || undefined,
+            onConnectStart: event => {
+              if (typeof wsOptions.onConnectStart === 'function') wsOptions.onConnectStart(withGeneration(event));
+            },
+            onOpen: event => {
+              opened = true;
+              authoritativeTransportGeneration = generation;
+              if (typeof wsOptions.onOpen === 'function') wsOptions.onOpen(withGeneration(event));
+            },
+            onError: event => {
+              const decorated = withGeneration(event);
+              const forbidden = !opened && (Number(event?.statusCode || 0) === 403 || isForbiddenError(event?.message || ''));
+              sawForbidden = sawForbidden || forbidden;
+              attemptError = decorated;
+              if (forbidden) {
+                log('ws-attempt-error', {
+                  generation,
+                  attemptedSourceIp: sourceIp,
+                  retryable: true,
+                  opened: false,
+                  statusCode: Number(event?.statusCode || 403),
+                  message: event?.message || ''
+                });
+                return;
+              }
+              if (generation !== authoritativeTransportGeneration && authoritativeTransportGeneration > 0) {
+                log('ws-stale-attempt-event', {
+                  event: 'error',
+                  generation,
+                  authoritativeTransportGeneration,
+                  attemptedSourceIp: sourceIp,
+                  message: event?.message || ''
+                });
+                return;
+              }
+              if (opened && typeof wsOptions.onError === 'function') wsOptions.onError(decorated);
+            },
+            onClose: event => {
+              const decorated = withGeneration(event);
+              if (!opened || generation !== authoritativeTransportGeneration) {
+                log('ws-stale-attempt-event', {
+                  event: 'close',
+                  generation,
+                  authoritativeTransportGeneration,
+                  attemptedSourceIp: sourceIp,
+                  code: Number(event?.code || 0)
+                });
+                return;
+              }
+              if (typeof wsOptions.onClose === 'function') wsOptions.onClose(decorated);
+            },
+            onSend: event => {
+              if (generation === authoritativeTransportGeneration && typeof wsOptions.onSend === 'function') {
+                wsOptions.onSend(withGeneration(event));
+              }
+            },
+            onMessage: data => {
+              if (generation !== authoritativeTransportGeneration) {
+                log('ws-stale-attempt-event', {
+                  event: 'message',
+                  generation,
+                  authoritativeTransportGeneration,
+                  attemptedSourceIp: sourceIp
+                });
+                return;
+              }
+              if (typeof wsOptions.onMessage === 'function') {
+                wsOptions.onMessage(data, { transportGeneration: generation, sourceIp });
+              }
+            }
+          });
+          opened = true;
+          authoritativeTransportGeneration = generation;
+          attemptDiagnostics.push({ generation, sourceIp, opened: true, status: 101, error: '' });
+          return transport;
+        } catch (err) {
+          lastError = err;
+          const forbidden = sawForbidden || isForbiddenError(err);
+          attemptDiagnostics.push({
+            generation,
+            sourceIp,
+            opened,
+            status: forbidden ? 403 : Number(attemptError?.statusCode || 0),
+            error: err?.message || String(err)
+          });
+          if (!forbidden) break;
+          const decision = await handleForbidden({
+            kind: 'ws',
+            url: redactSecrets(wsOptions.wsUrl || ''),
+            status: 403,
+            sourceIp,
+            generation
+          });
+          if (!decision.switched) break;
+        }
+      }
+
+      const error = new Error(lastError?.message || 'websocket source IP attempts exhausted');
+      error.attempts = attemptDiagnostics;
+      if (typeof wsOptions.onError === 'function') {
+        wsOptions.onError({
+          message: error.message,
+          opened: false,
+          final: true,
+          attempts: attemptDiagnostics
+        });
+      }
+      throw error;
     },
     requestAuthUrl(authOptions = {}) {
       return retryForbiddenOperation(sourceIp => (options.requestAuthUrl || requestAuthUrl)({

@@ -244,7 +244,8 @@ function evaluateCombatExchangeStopLossCore(input = {}, options = {}) {
   const lowHpFinishProtected = targetHp !== null && selfHp !== null
     && targetHp <= 20
     && selfHp >= targetHp + 10
-    && Number(input.recentTargetDamage || 0) > 0;
+    && Number(input.recentTargetDamage || 0) > 0
+    && ttkMs < ttdMs;
   let rule = '';
   if (ready && !lowHpFinishProtected) {
     if (selfDamage - targetDamage >= 12 && targetHp !== null && selfHp !== null && targetHp >= selfHp) {
@@ -260,6 +261,63 @@ function evaluateCombatExchangeStopLossCore(input = {}, options = {}) {
   const degradationSinceAt = rule ? (previousSince || nowMs) : 0;
   const confirmMs = Math.max(2500, Number(options.exchangeConfirmMs || 2750));
   const triggered = Boolean(rule && nowMs - degradationSinceAt >= confirmMs);
+  const defensive = Boolean(input.defensive);
+  const cumulativeSelfDamage = Math.max(0, Number(input.cumulativeSelfDamage ?? longSelfDamage));
+  const cumulativeTargetDamage = Math.max(0, Number(input.cumulativeTargetDamage ?? longTargetDamage));
+  const observeMs = Math.max(30000, Number(options.exchangeObserveMs || 30000));
+  const disengageMs = Math.max(observeMs, Number(options.exchangeDisengageMs || 45000));
+  const exitEngageMs = Math.max(disengageMs, Number(options.exchangeExitEngageMs || 60000));
+  const retreatMinMs = Math.max(8000, Math.min(12000, Number(options.exchangeRetreatMinMs || 10000)));
+  const retreatSelfDamageThreshold = Math.max(1, Number(options.exchangeRetreatSelfDamageHp || 12));
+  const retreatTargetDamageMax = Math.max(0, Number(options.exchangeRetreatTargetDamageMaxHp || 3));
+  const retreatNewSelfDamageExit = Math.max(1, Number(options.exchangeRetreatNewSelfDamageExitHp || 6));
+  const recentNoHit = Number(input.recentTargetDamage || 0) <= 0;
+  const retreatEligible = defensive
+    && engagedMs >= disengageMs
+    && cumulativeSelfDamage >= retreatSelfDamageThreshold
+    && cumulativeTargetDamage <= retreatTargetDamageMax
+    && recentNoHit
+    && !lowHpFinishProtected;
+  const previousRetreatSinceAt = Math.max(0, Number(input.retreatSinceAt || 0));
+  const retreatSinceAt = retreatEligible ? (previousRetreatSinceAt || nowMs) : previousRetreatSinceAt;
+  const retreatSelfDamageBaseline = retreatSinceAt
+    ? Math.max(0, Number(input.retreatSelfDamageBaseline ?? cumulativeSelfDamage))
+    : 0;
+  const retreatTargetDamageBaseline = retreatSinceAt
+    ? Math.max(0, Number(input.retreatTargetDamageBaseline ?? cumulativeTargetDamage))
+    : 0;
+  const newSelfDamageSinceRetreat = retreatSinceAt
+    ? Math.max(0, cumulativeSelfDamage - retreatSelfDamageBaseline)
+    : 0;
+  const newTargetDamageSinceRetreat = retreatSinceAt
+    ? Math.max(0, cumulativeTargetDamage - retreatTargetDamageBaseline)
+    : 0;
+  const distance = numberOrNull(input.distance);
+  const safeDistanceCm = Math.max(0, Number(options.exchangeSafeDistanceCm
+    ?? input.safeDistanceCm
+    ?? 17000));
+  const recentThreatBulletCount = Math.max(0, Number(input.recentThreatBulletCount || 0));
+  const safeDistanceReached = Boolean(
+    distance !== null
+      && distance >= safeDistanceCm
+      && recentThreatBulletCount === 0
+  );
+  const disengage = Boolean(retreatSinceAt && !lowHpFinishProtected);
+  const shouldExit = Boolean(
+    disengage
+      && !safeDistanceReached
+      && cumulativeTargetDamage <= retreatTargetDamageMax
+      && nowMs - retreatSinceAt >= retreatMinMs
+      && (engagedMs >= exitEngageMs || newSelfDamageSinceRetreat >= retreatNewSelfDamageExit)
+  );
+  const phase = shouldExit
+    ? 'exit'
+    : (disengage ? 'retreat' : (defensive && engagedMs >= observeMs ? 'observe' : ''));
+  const phasedReason = shouldExit
+    ? 'defensive-exchange-no-progress-leave'
+    : (disengage
+        ? 'defensive-exchange-no-progress-disengage'
+        : (phase === 'observe' ? 'defensive-exchange-observe' : ''));
   return {
     ready,
     active: Boolean(rule),
@@ -281,7 +339,28 @@ function evaluateCombatExchangeStopLossCore(input = {}, options = {}) {
     damageRatio: targetDamage > 0 ? Number((selfDamage / targetDamage).toFixed(3)) : (selfDamage > 0 ? null : 0),
     confirmedShotCount: acceptedShots,
     damageObservations,
-    lowHpFinishProtected
+    lowHpFinishProtected,
+    defensive,
+    phase,
+    observing: phase === 'observe',
+    disengage,
+    shouldExit,
+    phasedReason,
+    cumulativeSelfDamage,
+    cumulativeTargetDamage,
+    recentNoHit,
+    retreatSinceAt,
+    retreatSelfDamageBaseline,
+    retreatTargetDamageBaseline,
+    newSelfDamageSinceRetreat,
+    newTargetDamageSinceRetreat,
+    safeDistanceCm,
+    safeDistanceReached,
+    recentThreatBulletCount,
+    observeMs,
+    disengageMs,
+    exitEngageMs,
+    retreatMinMs
   };
 }
 

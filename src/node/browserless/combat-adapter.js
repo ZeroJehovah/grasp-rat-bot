@@ -675,6 +675,7 @@ function updateContactEntryGuard(stateful, self, targets = [], bullets = [], opt
     commandDelayP90Ticks: commandDelayTicks,
     movementExecutionTiming: options.movementExecutionTiming,
     pendingVelocityCommands: options.pendingVelocityCommands,
+    currentTick,
     reactionSafetyMarginMs: options.combatReactionSafetyMarginMs ?? 100
   });
   const dodgeSummary = contactEntryDodgeSummary(dodge, syntheticBullet);
@@ -1325,8 +1326,15 @@ function buildCombatExitEvaluation(self, target, combatTargetState = {}, options
     };
   };
   const short = damageWindow(10000);
-  const long = damageWindow(20000);
-  const recent = damageWindow(3000);
+  const long = damageWindow(45000);
+  const recent = damageWindow(10000);
+  const recentThreatBulletCount = samples.filter(sample => (
+    nowMs - Number(sample.at || 0) <= 3000
+      && sample.realBulletPressure
+  )).length;
+  const defensive = String(combatTargetState?.originIntent || combatTargetState?.intent || '') === 'defensive'
+    || recentThreatBulletCount > 0
+    || nowMs - Number(combatTargetState?.lastSelfDamageAt || 0) <= 10000;
   const exchangeStopLoss = evaluateCombatExchangeStopLossCore({
     nowMs,
     engagedMs: nowMs - Number(combatTargetState?.firstSeenAt || combatTargetState?.at || nowMs),
@@ -1341,19 +1349,32 @@ function buildCombatExitEvaluation(self, target, combatTargetState = {}, options
     longWindowTargetDamage: long.targetDamage,
     distanceProgressCm: long.distanceProgressCm,
     recentTargetDamage: recent.targetDamage,
-    degradationSinceAt: combatTargetState?.exchangeDegradationSinceAt
+    cumulativeSelfDamage: Number(combatTargetState?.combatMetrics?.selfDamage || 0),
+    cumulativeTargetDamage: Number(combatTargetState?.combatMetrics?.targetDamage || 0),
+    distance: Number(target?.distance),
+    recentThreatBulletCount,
+    defensive,
+    degradationSinceAt: combatTargetState?.exchangeDegradationSinceAt,
+    retreatSinceAt: combatTargetState?.exchangeRetreatSinceAt,
+    retreatSelfDamageBaseline: combatTargetState?.exchangeRetreatSelfDamageBaseline,
+    retreatTargetDamageBaseline: combatTargetState?.exchangeRetreatTargetDamageBaseline
   }, options);
   combatTargetState.exchangeDegradationSinceAt = exchangeStopLoss.degradationSinceAt;
-  const defensive = String(combatTargetState?.originIntent || combatTargetState?.intent || '') === 'defensive';
+  combatTargetState.exchangeRetreatSinceAt = exchangeStopLoss.retreatSinceAt;
+  combatTargetState.exchangeRetreatSelfDamageBaseline = exchangeStopLoss.retreatSelfDamageBaseline;
+  combatTargetState.exchangeRetreatTargetDamageBaseline = exchangeStopLoss.retreatTargetDamageBaseline;
   return {
     ...evaluation,
     exchangeStopLoss: {
       ...exchangeStopLoss,
-      advisory: Boolean(exchangeStopLoss.triggered),
+      reason: exchangeStopLoss.phasedReason || exchangeStopLoss.reason,
+      advisory: Boolean(exchangeStopLoss.triggered && !exchangeStopLoss.disengage),
       defensive,
-      response: exchangeStopLoss.triggered ? 'continue-combat-adjust-tactics' : '',
-      disengage: false,
-      shouldExit: false
+      response: exchangeStopLoss.shouldExit
+        ? 'leave-defensive-exchange'
+        : (exchangeStopLoss.disengage
+            ? 'cease-fire-and-retreat'
+            : (exchangeStopLoss.triggered ? 'continue-combat-adjust-tactics' : ''))
     },
     exit: evaluation.exit ? { ...evaluation.exit, noDamageMs } : null
   };
@@ -1387,6 +1408,7 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
     commandDelayP90Ticks: Number((options.movementExecutionTiming || commandTiming).p90Ticks || 5),
     movementExecutionTiming: options.movementExecutionTiming,
     pendingVelocityCommands: options.pendingVelocityCommands,
+    currentTick: options.currentTick,
     reactionSafetyMarginMs: options.combatReactionSafetyMarginMs ?? 100
   });
   const behaviorSamples = Array.isArray(opponentBehavior?.samples) ? opponentBehavior.samples : [];
@@ -1631,6 +1653,15 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
   const exchangeDegradationSinceAt = same
     ? Math.max(0, Number(previous?.exchangeDegradationSinceAt || 0))
     : 0;
+  const exchangeRetreatSinceAt = same
+    ? Math.max(0, Number(previous?.exchangeRetreatSinceAt || 0))
+    : 0;
+  const exchangeRetreatSelfDamageBaseline = same
+    ? Math.max(0, Number(previous?.exchangeRetreatSelfDamageBaseline || 0))
+    : 0;
+  const exchangeRetreatTargetDamageBaseline = same
+    ? Math.max(0, Number(previous?.exchangeRetreatTargetDamageBaseline || 0))
+    : 0;
   const previousFirstHp = same && Number.isFinite(Number(previous.firstHp)) ? Number(previous.firstHp) : null;
   const firstHp = same ? (previousFirstHp ?? previousHp ?? hp) : hp;
   const previousMinHp = same && Number.isFinite(Number(previous.minHp)) ? Number(previous.minHp) : null;
@@ -1669,7 +1700,7 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
       )
     : 0;
   const previousSamples = same && Array.isArray(previous.motionSamples) ? previous.motionSamples : [];
-  const sampleWindowMs = Math.max(20000, Number(options.combatMotionHistoryWindowMs || 20000));
+  const sampleWindowMs = Math.max(45000, Number(options.combatMotionHistoryWindowMs || 45000));
   const motionSamples = previousSamples
     .concat([{
       at: nowMs,
@@ -1695,7 +1726,7 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
       targetHp: hp
     }])
     .filter(sample => nowMs - Number(sample.at || 0) <= sampleWindowMs)
-    .slice(-160);
+    .slice(-320);
   const observedHitRate = learnedBehaviorHitRate(stateful, previousBehavior || { mode: 'mixed/unknown' }, distance)
     ?? (Number(previousMetrics.acceptedShots || 0) >= 5
       ? Number(previousMetrics.confirmedHits || 0) / Math.max(1, Number(previousMetrics.acceptedShots || 0))
@@ -1790,6 +1821,9 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
     disadvantageSinceAt,
     disadvantageSamples,
     exchangeDegradationSinceAt,
+    exchangeRetreatSinceAt,
+    exchangeRetreatSelfDamageBaseline,
+    exchangeRetreatTargetDamageBaseline,
     lastDamageAmount: damaged ? Math.max(0, previousHp - hp) : Number(previous?.lastDamageAmount || 0),
     noDamageMs: Math.max(0, nowMs - (damaged ? nowMs : (same ? Number(previous.lastDamageAt || previous.at || nowMs) : nowMs))),
     motionSamples,
@@ -1893,6 +1927,47 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
     shootingStaminaSpent,
     movementStaminaSpent: Math.max(0, totalStaminaSpent - shootingStaminaSpent),
     lastDodgeThreatField: null
+  };
+}
+
+function buildCombatExchangeRetreatMovement(baseMovement, self, target, exchangeStopLoss) {
+  const candidates = Array.isArray(baseMovement?.dodge?.threatField)
+    ? baseMovement.dodge.threatField.slice()
+    : [];
+  const selected = candidates.sort((left, right) => (
+    Number(left.directHits || 0) - Number(right.directHits || 0)
+      || Number(left.unavoidableHits || 0) - Number(right.unavoidableHits || 0)
+      || Number(left.avoidableHits || 0) - Number(right.avoidableHits || 0)
+      || Number(right.targetDistanceChange || -Infinity) - Number(left.targetDistanceChange || -Infinity)
+      || Number(right.minCPA || -Infinity) - Number(left.minCPA || -Infinity)
+  ))[0] || null;
+  const awayDx = Math.sign(Number(self?.x || 0) - Number(target?.x || 0));
+  const awayDy = Math.sign(Number(self?.y || 0) - Number(target?.y || 0));
+  const dx = selected ? Number(selected.dx || 0) : awayDx;
+  const dy = selected ? Number(selected.dy || 0) : awayDy;
+  return {
+    ...(baseMovement || {}),
+    dx,
+    dy,
+    reason: 'defensive-exchange-no-progress-retreat',
+    modifiers: Array.from(new Set([...(baseMovement?.modifiers || []), 'exchange-stop-loss-retreat'])),
+    exchangeRetreat: {
+      phase: exchangeStopLoss?.phase || 'retreat',
+      reason: exchangeStopLoss?.reason || '',
+      retreatSinceAt: exchangeStopLoss?.retreatSinceAt || 0,
+      safeDistanceCm: exchangeStopLoss?.safeDistanceCm ?? null,
+      safeDistanceReached: Boolean(exchangeStopLoss?.safeDistanceReached),
+      selectedThreatCandidate: selected ? {
+        dx,
+        dy,
+        directHits: Number(selected.directHits || 0),
+        unavoidableHits: Number(selected.unavoidableHits || 0),
+        minCPA: Number.isFinite(Number(selected.minCPA)) ? Number(selected.minCPA) : null,
+        targetDistanceChange: Number.isFinite(Number(selected.targetDistanceChange))
+          ? Number(selected.targetDistanceChange)
+          : null
+      } : null
+    }
   };
 }
 
@@ -2021,7 +2096,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
       at: Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now()
     };
   }
-  const movement = buildCombatMovementPlan(self, target, bullets, {
+  let movement = buildCombatMovementPlan(self, target, bullets, {
     ...options,
     combatTargetState,
     executionTiming: state?.command?.shooting?.timing || options.executionTiming,
@@ -2040,8 +2115,29 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
   }, options);
   if (stateful?.combatTarget && exitEvaluation.exchangeStopLoss) {
     stateful.combatTarget.exchangeDegradationSinceAt = exitEvaluation.exchangeStopLoss.degradationSinceAt;
+    stateful.combatTarget.exchangeRetreatSinceAt = exitEvaluation.exchangeStopLoss.retreatSinceAt;
+    stateful.combatTarget.exchangeRetreatSelfDamageBaseline = exitEvaluation.exchangeStopLoss.retreatSelfDamageBaseline;
+    stateful.combatTarget.exchangeRetreatTargetDamageBaseline = exitEvaluation.exchangeStopLoss.retreatTargetDamageBaseline;
   }
-  const exitDecision = contactEntryOnly ? null : exitEvaluation.exit;
+  if (!contactEntryOnly && exitEvaluation.exchangeStopLoss?.disengage) {
+    movement = buildCombatExchangeRetreatMovement(
+      movement,
+      self,
+      target,
+      exitEvaluation.exchangeStopLoss
+    );
+  }
+  let exitDecision = contactEntryOnly ? null : exitEvaluation.exit;
+  if (!exitDecision && !contactEntryOnly && exitEvaluation.exchangeStopLoss?.shouldExit) {
+    exitDecision = {
+      shouldLeave: true,
+      policy: 'defensive-exchange-stop-loss',
+      rule: 'defensive-exchange-no-progress',
+      reason: 'defensive-exchange-no-progress-leave',
+      stopMotion: false,
+      exchangeStopLoss: cloneJson(exitEvaluation.exchangeStopLoss)
+    };
+  }
   const fireState = target ? determineCombatFireState(self || {}, target, {
     targetPressureFire: bullets.some(bullet => Number(bullet.ownerId) === Number(target.user_id)),
     passiveRunner: Boolean(movement.passiveRunner?.active),
@@ -2194,6 +2290,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
       && fireState.state !== 'disabled'
       && fireState.state !== 'paused'
       && !contactEntryOnly
+      && !exitEvaluation.exchangeStopLoss?.disengage
       && !behaviorPolicy?.suppressFire
       && !highEntropyFireGate.suppressFire
   );

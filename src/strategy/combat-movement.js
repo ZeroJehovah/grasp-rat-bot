@@ -227,6 +227,7 @@ function calculateDodgeDirection(self, bullets, options = {}) {
     let unavoidableHits = 0;
     let minCPA = Infinity;
     let minTTI = Infinity;
+    const bulletRisks = [];
     const schedule = velocityScheduleVariants(observedVelocity, dir, {
       ...options,
       commandDelayTicks,
@@ -272,6 +273,25 @@ function calculateDodgeDirection(self, bullets, options = {}) {
         if (tti < reactionBudgetMs) unavoidableHits++;
         else avoidableHits++;
       }
+      bulletRisks.push({
+        bulletId: String(
+          bullet?.bullet_id
+            ?? bullet?.bulletId
+            ?? `${bullet?.createdTick ?? bullet?.created_tick ?? ''}:${bullet?.startX ?? bullet?.x ?? ''}:${bullet?.startY ?? bullet?.y ?? ''}`
+        ),
+        ownerId: bullet?.ownerId ?? bullet?.owner_id ?? null,
+        createdTick: Number.isFinite(Number(bullet?.createdTick ?? bullet?.created_tick))
+          ? Number(bullet.createdTick ?? bullet.created_tick)
+          : null,
+        expireTick: Number.isFinite(Number(bullet?.expireTick ?? bullet?.expire_tick))
+          ? Number(bullet.expireTick ?? bullet.expire_tick)
+          : null,
+        speed: Number.isFinite(bulletSpeed) ? bulletSpeed : null,
+        timeToImpact: Number.isFinite(tti) ? tti : null,
+        cpa: Number.isFinite(cpa) ? cpa : null,
+        predictedHit: cpa < hitRadius,
+        avoidable: cpa < hitRadius && tti >= reactionBudgetMs
+      });
       if (cpa < minCPA) minCPA = cpa;
       if (tti < minTTI) minTTI = tti;
     }
@@ -304,6 +324,11 @@ function calculateDodgeDirection(self, bullets, options = {}) {
       })),
       velocityScheduleConfidence: schedule.confidence,
       reactionBudgetMs,
+      dangerousBullets: bulletRisks
+        .sort((left, right) => Number(right.predictedHit) - Number(left.predictedHit)
+          || Number(left.cpa ?? Infinity) - Number(right.cpa ?? Infinity)
+          || Number(left.timeToImpact ?? Infinity) - Number(right.timeToImpact ?? Infinity))
+        .slice(0, 8),
       targetDistanceChange: Number.isFinite(Number(options.target?.x)) && Number.isFinite(Number(options.target?.y))
         ? Math.hypot(candidateFutureSelf.x - Number(options.target.x), candidateFutureSelf.y - Number(options.target.y))
           - Math.hypot(Number(self?.x || 0) - Number(options.target.x), Number(self?.y || 0) - Number(options.target.y))

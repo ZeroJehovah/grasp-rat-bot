@@ -81,6 +81,7 @@ const {
   profitTargetEligibleCore
 } = require('../../strategy/profit-threshold');
 const {
+  findSingleCoinBaitCoinCore,
   singleCoinBaitMatchesCore,
   singleCoinBaitPolicyCore
 } = require('../../strategy/single-coin-bait');
@@ -3521,13 +3522,10 @@ function summarizeSingleCoinBaitOpportunityEvaluations(opportunities, bait, opti
     .slice(0, 8);
 }
 
-function singleCoinBaitResidualRouteContinuation(input, opportunity, options = {}) {
-  const selectedOpportunity = opportunity?.choice || null;
-  const source = selectedOpportunity?.sourceCoin || selectedOpportunity?.coin || selectedOpportunity || null;
+function singleCoinBaitResidualRouteContinuation(input, opportunity, bait, options = {}) {
+  const source = bait || null;
   const route = source?.coinRoutePreview
-    || selectedOpportunity?.coinRoutePreview
     || source?.coinRoute
-    || selectedOpportunity?.coinRoute
     || null;
   if (!source || source.routeDisplayOnly !== true || !Array.isArray(route?.points) || route.points.length < 2) return null;
   const anchorKey = coinRouteKey(source);
@@ -3578,6 +3576,122 @@ function singleCoinBaitResidualRouteContinuation(input, opportunity, options = {
   };
 }
 
+function singleCoinBaitOpportunityReward(opportunity) {
+  const reward = profitOpportunityThresholdReward(opportunity);
+  return Number.isFinite(reward) && reward > 0 ? reward : null;
+}
+
+function singleCoinBaitOpportunityNetRoi(opportunity) {
+  const reward = singleCoinBaitOpportunityReward(opportunity);
+  const staminaCost = Number(opportunity?.staminaCost);
+  if (reward === null || !(staminaCost > 0)) return null;
+  return reward / staminaCost;
+}
+
+function singleCoinBaitBestOrdinaryOpportunity(opportunity, bait, options = {}) {
+  const matchOptions = {
+    sameCoinRadiusCm: options.singleCoinBaitSameCoinRadiusCm ?? BROWSER_RUNTIME_DEFAULTS.singleCoinBaitSameCoinRadiusCm
+  };
+  const candidates = [
+    opportunity?.choice,
+    ...(opportunity?.sorted || []),
+    ...(opportunity?.rawOpportunities || [])
+  ].filter(candidate => {
+    if (!candidate || candidate.profitThresholdEligible === false) return false;
+    const source = candidate.sourceCoin || candidate.coin || candidate;
+    return !singleCoinBaitMatchesCore(source, bait, matchOptions);
+  });
+  return candidates.sort((left, right) => Number(singleCoinBaitOpportunityNetRoi(right) ?? -Infinity)
+    - Number(singleCoinBaitOpportunityNetRoi(left) ?? -Infinity))[0] || null;
+}
+
+function singleCoinBaitReturnPlan(input, opportunity, bait, anchoredOpportunities, continuation, options = {}) {
+  if (!bait) return null;
+  const baitId = coinRouteKey(bait);
+  const baitX = Number(bait.x);
+  const baitY = Number(bait.y);
+  const origin = continuation?.evaluationOrigin || null;
+  const originMatches = !continuation || Boolean(
+    String(origin?.id || '') === String(baitId)
+      && Number(origin?.x) === baitX
+      && Number(origin?.y) === baitY
+  );
+  if (!originMatches) {
+    return {
+      allowed: false,
+      suppressionReason: 'bait-continuation-origin-mismatch',
+      evaluationOrigin: cloneJson(origin),
+      baitId
+    };
+  }
+  const baitCost = opportunityCoinStaminaCost(bait, options);
+  const currentBest = singleCoinBaitBestOrdinaryOpportunity(opportunity, bait, options);
+  const currentBestNetROI = singleCoinBaitOpportunityNetRoi(currentBest);
+  const relativeMargin = Math.max(0, Number(
+    options.opportunitySwitchRelativeMargin
+      ?? BROWSER_RUNTIME_DEFAULTS.opportunitySwitchRelativeMargin
+      ?? 0
+  ));
+  const fixedSwitchCost = Math.max(0, Number(options.opportunitySwitchMargin || 0));
+  const candidates = [];
+  if (continuation?.profitThresholdEligible) {
+    candidates.push({
+      source: 'residual-route',
+      reward: Number(continuation.reward || 0),
+      staminaCost: Number(continuation.staminaCost || 0),
+      firstFollowUp: cloneJson(continuation.firstFollowUp),
+      evaluationOrigin: cloneJson(continuation.evaluationOrigin)
+    });
+  }
+  for (const candidate of anchoredOpportunities || []) {
+    const evaluation = candidate?.baitAnchorEvaluation || null;
+    if (!evaluation?.profitThresholdEligible) continue;
+    const source = candidate.sourceCoin || candidate.sourceTarget || candidate.coin || candidate;
+    if (singleCoinBaitMatchesCore(source, bait, {
+      sameCoinRadiusCm: options.singleCoinBaitSameCoinRadiusCm ?? BROWSER_RUNTIME_DEFAULTS.singleCoinBaitSameCoinRadiusCm
+    })) continue;
+    candidates.push({
+      source: 'anchored-opportunity',
+      reward: Number(evaluation.reward || 0),
+      staminaCost: Number(evaluation.staminaCost || 0),
+      firstFollowUp: {
+        id: evaluation.id,
+        type: evaluation.type,
+        reward: Number(evaluation.reward || 0),
+        staminaCost: Number(evaluation.staminaCost || 0)
+      },
+      evaluationOrigin: { id: baitId, x: baitX, y: baitY }
+    });
+  }
+  const plans = candidates.map(candidate => {
+    const reward = 1 + Math.max(0, Number(candidate.reward || 0));
+    const staminaCost = Math.max(0, Number(baitCost || 0)) + Math.max(0, Number(candidate.staminaCost || 0));
+    const comparableNetROI = reward / Math.max(1, staminaCost + fixedSwitchCost);
+    const requiredNetROI = currentBestNetROI === null ? 0 : currentBestNetROI * (1 + relativeMargin);
+    return {
+      ...candidate,
+      reward,
+      staminaCost,
+      netROI: reward / Math.max(1, staminaCost),
+      comparableNetROI,
+      currentBestNetROI,
+      requiredNetROI,
+      allowed: comparableNetROI >= requiredNetROI
+    };
+  }).sort((left, right) => Number(right.comparableNetROI || 0) - Number(left.comparableNetROI || 0));
+  const selected = plans.find(plan => plan.allowed) || plans[0] || null;
+  return selected ? {
+    ...selected,
+    currentBest: currentBest ? {
+      type: currentBest.type || '',
+      id: currentBest.id ?? coinRouteKey(currentBest.sourceCoin || currentBest),
+      reward: singleCoinBaitOpportunityReward(currentBest),
+      staminaCost: Number.isFinite(Number(currentBest.staminaCost)) ? Number(currentBest.staminaCost) : null
+    } : null,
+    suppressionReason: selected.allowed ? '' : 'bait-plan-below-current-profit-margin'
+  } : null;
+}
+
 function buildSingleCoinBaitDecision(input, opportunity, stateful = {}, options = {}, allowEnter = true) {
   const previous = stateful.singleCoinBait || null;
   const selectedSource = opportunity?.choice?.sourceCoin
@@ -3600,7 +3714,12 @@ function buildSingleCoinBaitDecision(input, opportunity, stateful = {}, options 
     baitReference,
     options
   );
-  const continuation = singleCoinBaitResidualRouteContinuation(input, opportunity, options);
+  const visibleBait = findSingleCoinBaitCoinCore(
+    singleCoinBaitVisibleCoins(input, previous),
+    baitReference,
+    { sameCoinRadiusCm: options.singleCoinBaitSameCoinRadiusCm ?? BROWSER_RUNTIME_DEFAULTS.singleCoinBaitSameCoinRadiusCm }
+  ) || baitReference;
+  const continuation = singleCoinBaitResidualRouteContinuation(input, opportunity, visibleBait, options);
   const selectedOpportunity = continuation
     ? { ...(opportunity?.choice || {}), residualRouteContinuation: continuation }
     : (opportunity?.choice || null);
@@ -3620,7 +3739,20 @@ function buildSingleCoinBaitDecision(input, opportunity, stateful = {}, options 
   }
   stateful.singleCoinBait = policy.state ? cloneJson(policy.state) : null;
   if (!policy.state || !policy.coin) {
-    return { ...policy, continuation, opportunityEvaluations, action: null, summary: null };
+    return {
+      ...policy,
+      continuation,
+      opportunityEvaluations,
+      action: null,
+      summary: null,
+      lifecycle: previous ? {
+        id: previous.id || '',
+        previousPhase: previous.phase || '',
+        phase: policy.phase || '',
+        clearReason: policy.clearReason || '',
+        transitioned: Boolean(policy.transitioned)
+      } : null
+    };
   }
 
   if (policy.phase === 'hold') {
@@ -3650,20 +3782,91 @@ function buildSingleCoinBaitDecision(input, opportunity, stateful = {}, options 
   }
 
   const coinMaxDistance = Math.max(0, Number(options.coinMaxDistance || BROWSER_RUNTIME_DEFAULTS.coinMaxDistance));
+  const baitCost = opportunityCoinStaminaCost(policy.coin, options);
+  const baitThresholdEligible = profitRewardAndCostEligible(1, baitCost, opportunity?.threshold);
+  const plan = singleCoinBaitReturnPlan(
+    input,
+    opportunity,
+    policy.coin,
+    anchoredOpportunities,
+    continuation,
+    options
+  );
+  const closeCommitment = Number(policy.state.distance || Infinity) <= Math.max(
+    coinMaxDistance,
+    Number(options.singleCoinBaitHoldRadiusCm ?? BROWSER_RUNTIME_DEFAULTS.singleCoinBaitHoldRadiusCm ?? 1000)
+  );
+  const planAllowed = Boolean(plan?.allowed);
+  const allowed = closeCommitment || baitThresholdEligible || planAllowed;
+  const commitmentRank = closeCommitment || planAllowed ? 10 : 0;
+  const commitmentReason = closeCommitment
+    ? 'bait-nearby-commitment'
+    : (planAllowed ? 'bait-combination-plan-wins' : (baitThresholdEligible ? 'bait-self-threshold-eligible' : ''));
+  const releaseReason = policy.phase === 'release'
+    ? (policy.otherOpportunity ? 'other-profit-trigger-visible' : 'release-trigger-cleared')
+    : '';
+  const enrichedSummary = {
+    ...summary,
+    baitPlanReward: plan ? Number(plan.reward || 0) : null,
+    baitPlanStaminaCost: plan ? Math.round(Number(plan.staminaCost || 0)) : null,
+    baitPlanNetROI: plan ? Number(Number(plan.netROI || 0).toFixed(8)) : null,
+    evaluationOrigin: cloneJson(plan?.evaluationOrigin || continuation?.evaluationOrigin || null),
+    commitmentReason,
+    releaseReason,
+    clearReason: policy.clearReason || '',
+    profitThresholdEligible: baitThresholdEligible,
+    returnEligible: allowed,
+    returnSuppressionReason: allowed ? '' : (plan?.suppressionReason || 'bait-below-profit-threshold')
+  };
+  stateful.singleCoinBait = {
+    ...stateful.singleCoinBait,
+    commitmentReason,
+    releaseReason,
+    lastEvaluation: {
+      baitPlanReward: enrichedSummary.baitPlanReward,
+      baitPlanStaminaCost: enrichedSummary.baitPlanStaminaCost,
+      baitPlanNetROI: enrichedSummary.baitPlanNetROI,
+      evaluationOrigin: enrichedSummary.evaluationOrigin,
+      profitThresholdEligible: baitThresholdEligible,
+      returnEligible: allowed,
+      suppressionReason: enrichedSummary.returnSuppressionReason
+    }
+  };
+  if (!allowed) {
+    return {
+      ...policy,
+      continuation,
+      opportunityEvaluations,
+      plan,
+      commitmentRank: 0,
+      summary: enrichedSummary,
+      action: null
+    };
+  }
   const actionKind = Number(policy.coin.distance || Infinity) <= coinMaxDistance ? 'coin' : 'seek-coin';
+  const planReward = planAllowed ? Number(plan.reward || 1) : 1;
+  const planStaminaCost = planAllowed ? Number(plan.staminaCost || baitCost) : baitCost;
   return {
     ...policy,
     continuation,
     opportunityEvaluations,
-    summary,
+    plan,
+    commitmentRank,
+    summary: enrichedSummary,
     action: {
       kind: actionKind,
       band: 'profit',
       reason: policy.phase === 'release' ? 'single-coin-bait-release' : 'single-coin-bait-return',
       target,
-      reward: 1,
-      staminaCost: opportunityCoinStaminaCost(policy.coin, options),
-      singleCoinBait: summary
+      reward: planReward,
+      staminaCost: planStaminaCost,
+      netROI: planReward / Math.max(1, planStaminaCost),
+      baitPlanReward: enrichedSummary.baitPlanReward,
+      baitPlanStaminaCost: enrichedSummary.baitPlanStaminaCost,
+      baitPlanNetROI: enrichedSummary.baitPlanNetROI,
+      evaluationOrigin: enrichedSummary.evaluationOrigin,
+      commitmentReason,
+      singleCoinBait: enrichedSummary
     }
   };
 }
@@ -4389,6 +4592,23 @@ function explorationTargetIdFromAction(action) {
   return targetKey(action.target);
 }
 
+function recordControlledExplorationEvent(stateful, session, type, nowMs, detail = {}) {
+  if (!stateful || !session || !type) return null;
+  const event = {
+    type,
+    sessionId: String(session.sessionId || ''),
+    targetId: String(session.targetId || ''),
+    targetName: session.targetName || '',
+    at: nowMs,
+    ...detail
+  };
+  stateful.explorationLifecycleEvents = [
+    ...(Array.isArray(stateful.explorationLifecycleEvents) ? stateful.explorationLifecycleEvents : []),
+    event
+  ].slice(-32);
+  return event;
+}
+
 function finishControlledExplorationSession(stateful, targetId, reason, nowMs) {
   const sessions = stateful.explorationSessions || {};
   const session = sessions[targetId];
@@ -4400,6 +4620,19 @@ function finishControlledExplorationSession(stateful, targetId, reason, nowMs) {
     durationMs: Math.max(0, nowMs - Number(session.sessionStartedAt || nowMs)),
     terminationReason: reason || 'ended'
   };
+  recordControlledExplorationEvent(stateful, finished, 'terminated', nowMs, {
+    terminationReason: finished.terminationReason,
+    durationMs: finished.durationMs,
+    acceptedShots: Number(finished.acceptedShots || 0)
+  });
+  recordControlledExplorationEvent(stateful, finished, 'settled', nowMs, {
+    terminationReason: finished.terminationReason,
+    actualApproachSpent: Math.round(Number(finished.approachSpent || 0)),
+    actualShootingSpent: Math.round(Number(finished.shootingSpent || 0)),
+    actualTotalSpent: Math.round(Number(finished.totalSpent || 0)),
+    estimatedApproachSpent: Math.round(Number(finished.estimatedApproachSpent || 0)),
+    remainingBudget: Math.max(0, Math.round(Number(finished.remainingBudget || 0)))
+  });
   delete sessions[targetId];
   if (stateful.explorationCandidates) delete stateful.explorationCandidates[targetId];
   stateful.explorationTerminations = stateful.explorationTerminations && typeof stateful.explorationTerminations === 'object'
@@ -4479,6 +4712,14 @@ function reconcileControlledExplorationSessions(input, stateful = {}, options = 
       if (Number.isFinite(moved) && moved > 0) {
         session.approachDistanceCm = Math.max(0, Number(session.approachDistanceCm || 0)) + moved;
         session.approachSpent = Math.max(0, Number(session.approachSpent || 0)) + moved * config.moveStaminaPerCm;
+        if (nowMs - Number(session.lastApproachProgressEventAt || 0) >= 1000) {
+          recordControlledExplorationEvent(stateful, session, 'approach-progress', nowMs, {
+            movedDistanceCm: Math.round(moved),
+            approachDistanceCm: Math.round(Number(session.approachDistanceCm || 0)),
+            approachSpent: Math.round(Number(session.approachSpent || 0))
+          });
+          session.lastApproachProgressEventAt = nowMs;
+        }
       }
     }
     if (selfPoint) session.lastSelfPoint = selfPoint;
@@ -4492,6 +4733,13 @@ function reconcileControlledExplorationSessions(input, stateful = {}, options = 
       const previousShooting = Math.max(0, Number(session.lastCombatShootingSpent || 0));
       session.shootingSpent = Math.max(0, Number(session.shootingSpent || 0))
         + Math.max(acceptedDelta * config.shotStaminaMs, metricsShooting - previousShooting);
+      if (acceptedDelta > 0) {
+        recordControlledExplorationEvent(stateful, session, 'shot', nowMs, {
+          acceptedDelta,
+          acceptedShots: Number(session.acceptedShots || 0),
+          shootingSpent: Math.round(Number(session.shootingSpent || 0))
+        });
+      }
       session.lastCombatAcceptedShots = metricsAccepted;
       session.lastCombatShootingSpent = metricsShooting;
     }
@@ -4580,6 +4828,7 @@ function observeControlledExplorationCandidate(input, stateful, item, config) {
   ));
   const session = {
     active: true,
+    sessionId: `exploration-${targetId}-${nowMs}`,
     targetId,
     targetName: target.name || '',
     targetEntityId: observation.targetEntityId,
@@ -4604,9 +4853,18 @@ function observeControlledExplorationCandidate(input, stateful, item, config) {
       : null,
     lastCombatAcceptedShots: existingAcceptedShots,
     lastCombatShootingSpent: existingShootingSpent,
+    lastApproachProgressEventAt: 0,
     terminationReason: ''
   };
   stateful.explorationSessions[targetId] = session;
+  recordControlledExplorationEvent(stateful, session, 'admitted', nowMs, {
+    qualifiedFrames,
+    estimatedApproachDistanceCm: Math.round(estimatedApproachDistanceCm),
+    estimatedApproachSpent: Math.round(estimatedApproachSpent),
+    maxStaminaMs: config.maxStaminaMs,
+    maxAcceptedShots: config.maxAcceptedShots,
+    maxDurationMs: config.maxDurationMs
+  });
   return { session, observation, rejectionReason: '' };
 }
 
@@ -4925,6 +5183,9 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
       }
     : null;
   const remembered = rememberOpportunityChoiceCore(chosen, action, current, opportunityOptions);
+  const explorationLifecycleEvents = Array.isArray(stateful.explorationLifecycleEvents)
+    ? stateful.explorationLifecycleEvents.splice(0, stateful.explorationLifecycleEvents.length)
+    : [];
   return {
     opportunities,
     rawOpportunities,
@@ -4944,7 +5205,9 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
       filtered: filtered.filtered,
       explorationAdmission,
       explorationEvaluations: explorationEvaluations.slice(0, 8),
+      explorationLifecycleEvents: cloneJson(explorationLifecycleEvents),
       explorationSessions: Object.values(stateful.explorationSessions || {}).slice(0, 8).map(session => ({
+        sessionId: session.sessionId || '',
         targetId: session.targetId,
         targetName: session.targetName || '',
         approachSpent: Number(session.approachSpent || 0),
@@ -5649,6 +5912,91 @@ function browserlessInjuryRecentMs(options = {}) {
   return Math.max(1000, Number(options.browserlessInjuryLeaveRecentMs || 6000));
 }
 
+function attributeBrowserlessHpDropToBullet(input, stateful, hpDrop, nowMs, options = {}) {
+  const previousRisk = stateful?.browserlessLeaveRisk || null;
+  const observations = (Array.isArray(previousRisk?.bulletObservations) ? previousRisk.bulletObservations : [])
+    .filter(observation => nowMs - Number(observation.at || 0) <= 2000);
+  const selectedPrediction = previousRisk?.lastCover?.selectedThreatPrediction || null;
+  const predictedById = new Map((selectedPrediction?.dangerousBullets || [])
+    .map(item => [String(item?.bulletId || ''), item])
+    .filter(([id]) => id));
+  const currentIds = new Set((input?.bullets || []).map(leaveRiskBulletId).filter(Boolean));
+  const currentTick = numberOrNull(input?.realtime?.tick);
+  const timingToleranceMs = Math.max(150, Number(options.combatHitAttributionTimingToleranceMs || 350));
+  const hitRadius = Math.max(1, Number(options.combatBulletHitRadiusCm || 200));
+  const candidates = observations.map(observation => {
+    const id = String(observation.id || '');
+    const prediction = predictedById.get(id) || null;
+    const expectedImpactAt = Number(observation.at || 0) + Math.max(0, Number(observation.timeToImpact || 0));
+    const timingErrorMs = Number.isFinite(expectedImpactAt) ? Math.abs(nowMs - expectedImpactAt) : Infinity;
+    const disappeared = !currentIds.has(id);
+    const expiredNearNow = currentTick !== null && Number.isFinite(Number(observation.expireTick))
+      ? currentTick >= Number(observation.expireTick) - 1
+      : false;
+    const trajectoryClose = Number(observation.cpa) <= hitRadius * 1.5;
+    const plausible = timingErrorMs <= timingToleranceMs
+      && (disappeared || expiredNearNow || trajectoryClose);
+    return {
+      observation,
+      prediction,
+      expectedImpactAt,
+      timingErrorMs,
+      disappeared,
+      expiredNearNow,
+      trajectoryClose,
+      plausible,
+      score: (plausible ? 0 : 100000)
+        + timingErrorMs
+        + (prediction ? 0 : 1000)
+        + (disappeared ? 0 : 250)
+    };
+  }).sort((left, right) => left.score - right.score);
+  const matched = candidates.find(candidate => candidate.plausible) || null;
+  let classification = 'unmatched-hit';
+  if (matched?.prediction?.predictedHit) classification = 'matched-hit';
+  else if (matched) classification = 'predicted-safe-false-negative';
+  const attribution = {
+    classification,
+    hpDrop: Math.round(Number(hpDrop || 0) * 10) / 10,
+    bulletId: matched?.observation?.id || '',
+    ownerId: matched?.observation?.ownerId || '',
+    createdTick: numberOrNull(matched?.observation?.createdTick),
+    expireTick: numberOrNull(matched?.observation?.expireTick),
+    observedTick: numberOrNull(matched?.observation?.observedTick),
+    damageTick: currentTick,
+    observedAt: numberOrNull(matched?.observation?.at),
+    expectedImpactAt: Number.isFinite(Number(matched?.expectedImpactAt)) ? Number(matched.expectedImpactAt) : null,
+    timingErrorMs: Number.isFinite(Number(matched?.timingErrorMs)) ? Math.round(Number(matched.timingErrorMs)) : null,
+    disappeared: Boolean(matched?.disappeared),
+    predictedHit: Boolean(matched?.prediction?.predictedHit),
+    predictedCpa: numberOrNull(matched?.prediction?.cpa),
+    predictedTti: numberOrNull(matched?.prediction?.timeToImpact),
+    observedCpa: numberOrNull(matched?.observation?.cpa),
+    observedTti: numberOrNull(matched?.observation?.timeToImpact),
+    owner: matched?.prediction?.ownerId ?? matched?.observation?.ownerId ?? null,
+    pendingVelocityCommand: cloneJson(selectedPrediction?.pendingVelocityCommand || null),
+    predictedVelocitySchedule: cloneJson(selectedPrediction?.predictedVelocitySchedule || []),
+    commandDelayTicks: numberOrNull(selectedPrediction?.commandDelayTicks),
+    candidateDirection: selectedPrediction ? {
+      dx: Number(selectedPrediction.dx || 0),
+      dy: Number(selectedPrediction.dy || 0)
+    } : null
+  };
+  stateful.combatHitAttributionHistory = [
+    ...(Array.isArray(stateful.combatHitAttributionHistory) ? stateful.combatHitAttributionHistory : []),
+    attribution
+  ].slice(-32);
+  const summary = stateful.combatHitAttributionSummary && typeof stateful.combatHitAttributionSummary === 'object'
+    ? stateful.combatHitAttributionSummary
+    : { total: 0, matchedHit: 0, unmatchedHit: 0, predictedSafeFalseNegative: 0 };
+  summary.total += 1;
+  if (classification === 'matched-hit') summary.matchedHit += 1;
+  else if (classification === 'predicted-safe-false-negative') summary.predictedSafeFalseNegative += 1;
+  else summary.unmatchedHit += 1;
+  stateful.combatHitAttributionSummary = summary;
+  return attribution;
+}
+
 function rememberBrowserlessInjury(input, stateful, options = {}) {
   if (!stateful || typeof stateful !== 'object') return null;
   const nowMs = Number(input?.nowMs || Date.now());
@@ -5667,6 +6015,7 @@ function rememberBrowserlessInjury(input, stateful, options = {}) {
     const hpDrop = previousHp - hp;
     if (Number.isFinite(previousHp) && hpDrop >= minDrop) {
       const pressure = pickBrowserlessInjuryPressure(input, stateful, options);
+      const hitAttribution = attributeBrowserlessHpDropToBullet(input, stateful, hpDrop, nowMs, options);
       stateful.browserlessInjury = {
         at: nowMs,
         previousHp,
@@ -5681,6 +6030,7 @@ function rememberBrowserlessInjury(input, stateful, options = {}) {
         hasIncoming: pressure.hasIncoming,
         unknownIncoming: pressure.unknownIncoming,
         incomingCount: pressure.incomingCount,
+        hitAttribution,
         reason: 'self-hp-drop'
       };
     }
@@ -5880,8 +6230,26 @@ function leaveRiskBulletId(bullet) {
 
 function compactLeaveCover(cover) {
   if (!cover) return null;
-  const { threatField: _threatField, ...summary } = cover;
-  return summary;
+  const { threatField = [], ...summary } = cover;
+  const selected = (Array.isArray(threatField) ? threatField : []).find(candidate => (
+    Number(candidate?.dx || 0) === Number(cover.dx || 0)
+      && Number(candidate?.dy || 0) === Number(cover.dy || 0)
+  )) || null;
+  return {
+    ...summary,
+    selectedThreatPrediction: selected ? {
+      dx: Number(selected.dx || 0),
+      dy: Number(selected.dy || 0),
+      directHits: Number(selected.directHits || 0),
+      unavoidableHits: Number(selected.unavoidableHits || 0),
+      minCPA: numberOrNull(selected.minCPA),
+      minTTI: numberOrNull(selected.minTTI),
+      commandDelayTicks: numberOrNull(selected.commandDelayTicks),
+      pendingVelocityCommand: cloneJson(selected.pendingVelocityCommand || null),
+      predictedVelocitySchedule: cloneJson(selected.predictedVelocitySchedule || []),
+      dangerousBullets: cloneJson(selected.dangerousBullets || [])
+    } : null
+  };
 }
 
 function recentCombatResidualThreatContinuityCore(input = {}) {
@@ -5996,8 +6364,18 @@ function buildBrowserlessPredictedThreatExitDecision(state, input, stateful, com
       id,
       ownerId: String(bullet.ownerId ?? ''),
       at: nowMs,
+      observedTick: numberOrNull(input.realtime?.tick),
+      createdTick: numberOrNull(bullet.createdTick ?? bullet.created_tick),
+      expireTick: numberOrNull(bullet.expireTick ?? bullet.expire_tick),
+      speed: numberOrNull(bullet.speed),
       timeToImpact: numberOrNull(bullet.timeToImpact),
-      cpa: numberOrNull(bullet.cpa)
+      cpa: numberOrNull(bullet.cpa),
+      x: numberOrNull(bullet.x),
+      y: numberOrNull(bullet.y),
+      direction: bullet.direction ? {
+        dx: numberOrNull(bullet.direction.dx),
+        dy: numberOrNull(bullet.direction.dy)
+      } : null
     });
   }
   const commandDelayTicks = Math.max(0, Number(
@@ -6073,6 +6451,15 @@ function buildBrowserlessPredictedThreatExitDecision(state, input, stateful, com
     || attributedOwnerTarget
     || combat?.target
     || browserlessInjuryTarget(injury, currentPressure);
+  let lastCover = compactLeaveCover(pendingCover);
+  if (!lastCover?.selectedThreatPrediction
+    && previous.lastCover?.selectedThreatPrediction
+    && nowMs - Number(previous.lastCover.atMs || previous.at || 0) <= 1500) {
+    lastCover = {
+      ...(lastCover || {}),
+      selectedThreatPrediction: cloneJson(previous.lastCover.selectedThreatPrediction)
+    };
+  }
   const assessment = {
     at: nowMs,
     tick: input.realtime?.tick ?? null,
@@ -6101,7 +6488,7 @@ function buildBrowserlessPredictedThreatExitDecision(state, input, stateful, com
       suppressionReason: pressureActor.suppressionReason
     },
     prediction,
-    lastCover: compactLeaveCover(pendingCover),
+    lastCover,
     hpSamples: hpSamples.slice(-32),
     bulletObservations: bulletObservations.slice(-32),
     rule,
@@ -7926,7 +8313,10 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     singleCoinBaitEntryAllowed
   );
   const singleCoinBaitAction = dailyFinalCoinAction ? null : singleCoinBait.action;
-  const singleCoinBaitReleaseAction = singleCoinBait.phase === 'release' ? singleCoinBaitAction : null;
+  const singleCoinBaitReleaseAction = singleCoinBait.phase === 'release'
+    && Number(singleCoinBait.commitmentRank || 0) > 0
+    ? singleCoinBaitAction
+    : null;
   const noCandidateWaitReason = profitThresholdContext.active
     && Number(opportunity.threshold?.filteredCount || 0) > 0
     && Number(opportunity.threshold?.eligibleCount || 0) === 0
@@ -7982,7 +8372,10 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       candidate(recoveryAction, 120, 'ordinary-recovery', true),
       candidate(injuredCautionFootCoinAction, 130, 'injured-caution-foot-coin'),
       candidate(safetyAction, 140, 'yieldable-safety'),
-      candidate(singleCoinBaitAction, 150, 'single-coin-bait', false, { commitmentRank: 10 }),
+      candidate(singleCoinBaitAction, 150, 'single-coin-bait', false, {
+        commitmentRank: Number(singleCoinBait.commitmentRank || 0),
+        netROI: Number.isFinite(Number(singleCoinBaitAction?.netROI)) ? Number(singleCoinBaitAction.netROI) : undefined
+      }),
       candidate(footCoinPriorityAction, 160, 'foot-coin-priority'),
       candidate(dailyFinalCoinAction, 170, 'daily-final-coin'),
       candidate(opportunity.choice ? opportunity.action : null, 180, 'best-eligible-profit', false, {
@@ -8163,6 +8556,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       switch: opportunity.switchDiagnostics || null,
       competition: cloneJson(input.activeCoinCompetition),
       singleCoinBait: singleCoinBait.summary,
+      singleCoinBaitLifecycle: cloneJson(singleCoinBait.lifecycle || null),
       singleCoinBaitContinuation: cloneJson(singleCoinBait.continuation || null),
       singleCoinBaitOpportunityEvaluations: cloneJson(singleCoinBait.opportunityEvaluations || []),
       easyKill: {
@@ -8185,6 +8579,10 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       kiteReassessment,
       dangerousTargetCooldown: dangerousCombatExit,
       profitPursuitSuppression: combatPursuitSuppression,
+      hitAttribution: {
+        summary: cloneJson(stateful.combatHitAttributionSummary || null),
+        last: cloneJson((stateful.combatHitAttributionHistory || []).at(-1) || null)
+      },
       candidates: combat.dryRun?.candidates || topItems(combat.candidates, target => ({
         ...summarizeTarget(target),
         score: Number.isFinite(Number(target.combatScore)) ? Math.round(Number(target.combatScore)) : null
@@ -8443,6 +8841,8 @@ function createBrowserlessDecisionAdapter(options = {}) {
         combatMetrics: decisionState.combatMetrics || null,
         opponentBehaviorStates: decisionState.opponentBehaviorStates || {},
         combatLearning: decisionState.combatLearning || null,
+        combatHitAttributionHistory: decisionState.combatHitAttributionHistory || [],
+        combatHitAttributionSummary: decisionState.combatHitAttributionSummary || null,
         seenEntities: decisionState.seenEntities || {},
         browserlessLastSelf: decisionState.browserlessLastSelf || null,
         browserlessInjury: decisionState.browserlessInjury || null,
@@ -8484,6 +8884,7 @@ module.exports = {
   BROWSER_RUNTIME_DEFAULTS,
   activeTargetCompletionEstimate,
   activeTargetExpectedReward,
+  attributeBrowserlessHpDropToBullet,
   effectiveProfitReward,
   buildBrowserlessDecision,
   buildBrowserlessCombatStrategyInput,

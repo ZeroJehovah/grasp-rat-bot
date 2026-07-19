@@ -212,6 +212,7 @@ function buildLeavePendingCover(state = {}, pending = {}, options = {}) {
         commandDelayP90Ticks: Number(movementExecutionTiming.p90Ticks || executionTiming.p90Ticks || 5),
         movementExecutionTiming,
         pendingVelocityCommands: state?.command?.movement?.pendingVelocityCommands || [],
+        currentTick: state?.realtime?.tick,
         reactionSafetyMarginMs: options.combatReactionSafetyMarginMs ?? 100
       })
     : null;

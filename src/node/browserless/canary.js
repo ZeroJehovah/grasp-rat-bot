@@ -1201,6 +1201,7 @@ async function runReadOnlyCanary(config, options = {}) {
   let combatPersistenceAtMs = 0;
   let wsError = null;
   let wsClosed = null;
+  let authoritativeTransportGeneration = 0;
   let ending = false;
   let deadlineAtMs = 0;
   let transportStartedAtMs = 0;
@@ -2193,16 +2194,31 @@ async function runReadOnlyCanary(config, options = {}) {
       onConnectStart: event => {
         logWs('connect-start', {
           runtime: event?.runtime || '',
-          localAddress: event?.localAddress || ''
+          localAddress: event?.localAddress || '',
+          transportGeneration: Number(event?.transportGeneration || 0) || null
         });
       },
       onOpen: event => {
+        const generation = Number(event?.transportGeneration || 0);
+        if (generation > 0) authoritativeTransportGeneration = generation;
+        wsError = null;
+        wsClosed = null;
         transportStartedAtMs = now();
         logWs('open', {
-          runtime: event?.runtime || ''
+          runtime: event?.runtime || '',
+          transportGeneration: generation || null
         });
       },
       onError: event => {
+        const generation = Number(event?.transportGeneration || 0);
+        if (generation > 0 && authoritativeTransportGeneration > 0 && generation !== authoritativeTransportGeneration) {
+          logWs('stale-error', {
+            message: event?.message || '',
+            transportGeneration: generation,
+            authoritativeTransportGeneration
+          });
+          return;
+        }
         wsError = event;
         logWs('error', {
           message: event?.message || '',
@@ -2210,10 +2226,21 @@ async function runReadOnlyCanary(config, options = {}) {
           statusCode: event?.statusCode || null,
           statusMessage: event?.statusMessage || '',
           contentType: event?.contentType || '',
-          body: event?.body || ''
+          body: event?.body || '',
+          transportGeneration: generation || null
         });
       },
       onClose: event => {
+        const generation = Number(event?.transportGeneration || 0);
+        if (generation > 0 && authoritativeTransportGeneration > 0 && generation !== authoritativeTransportGeneration) {
+          logWs('stale-close', {
+            code: Number(event?.code || 0),
+            reason: event?.reason || '',
+            transportGeneration: generation,
+            authoritativeTransportGeneration
+          });
+          return;
+        }
         if (!ending) wsClosed = event;
         clearPublishedTransport(transport, 'websocket-close');
         logWs('close', event || {});
@@ -2224,7 +2251,15 @@ async function runReadOnlyCanary(config, options = {}) {
           message: wsTraceOutboundMessage(event?.message || '')
         });
       },
-      onMessage: data => {
+      onMessage: (data, transportMeta = null) => {
+        const generation = Number(transportMeta?.transportGeneration || 0);
+        if (generation > 0 && authoritativeTransportGeneration > 0 && generation !== authoritativeTransportGeneration) {
+          logWs('stale-message', {
+            transportGeneration: generation,
+            authoritativeTransportGeneration
+          });
+          return;
+        }
         if (ending) return;
         const taskStarted = performance.now();
         const taskCpuStarted = startMainThreadCpuUsage();
