@@ -1640,6 +1640,8 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
   const healed = hp !== null && previousHp !== null && hp > previousHp + 0.01;
   const previousSelfHp = same ? hpValue(previous?.self) : null;
   const currentSelfHp = hpValue(self);
+  const currentSelfX = numberOrNull(self?.x);
+  const currentSelfY = numberOrNull(self?.y);
   const selfDamaged = previousSelfHp !== null && currentSelfHp !== null && currentSelfHp < previousSelfHp - 0.01;
   const selfHealed = previousSelfHp !== null && currentSelfHp !== null && currentSelfHp > previousSelfHp + 0.01;
   const baselineExit = evaluateCombatHpExitCore({ self, target }, options);
@@ -1899,6 +1901,14 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
     initialSelfHp: same
       ? (numberOrNull(previousMetrics.initialSelfHp) ?? previousSelfHp ?? currentSelfHp)
       : currentSelfHp,
+    initialSelfX: same
+      ? (numberOrNull(previousMetrics.initialSelfX) ?? currentSelfX)
+      : currentSelfX,
+    initialSelfY: same
+      ? (numberOrNull(previousMetrics.initialSelfY) ?? currentSelfY)
+      : currentSelfY,
+    lastSelfX: currentSelfX,
+    lastSelfY: currentSelfY,
     lastSelfHp: currentSelfHp,
     minSelfHp: currentSelfHp === null
       ? numberOrNull(previousMetrics.minSelfHp)
@@ -2064,12 +2074,27 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     behavior: stateful?.opponentBehaviorStates?.[String(combatTargetId(target) || '')] || null
   }, options);
   const combatTargetState = contactEntryOnly ? null : stateful?.combatTarget || null;
-  const combatStartedAtMs = target && Number.isFinite(Number(combatTargetState?.firstSeenAt || combatTargetState?.at))
-    ? Number(combatTargetState.firstSeenAt || combatTargetState.at)
-    : null;
+  const metricsMatchTarget = Boolean(
+    target
+      && stateful?.combatMetrics?.targetId !== null
+      && stateful?.combatMetrics?.targetId !== undefined
+      && String(stateful.combatMetrics.targetId) === String(combatTargetId(target))
+  );
+  const metricStartedAtMs = metricsMatchTarget ? numberOrNull(stateful?.combatMetrics?.startedAt) : null;
+  const targetStartedAtMs = target ? numberOrNull(combatTargetState?.firstSeenAt ?? combatTargetState?.at) : null;
+  const combatStartedAtMs = metricStartedAtMs ?? targetStartedAtMs;
   const combatDurationMs = combatStartedAtMs === null
     ? null
     : Math.max(0, (Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now()) - combatStartedAtMs);
+  const combatMovementDistance = (() => {
+    const metrics = stateful?.combatMetrics || {};
+    const startX = numberOrNull(metrics.initialSelfX);
+    const startY = numberOrNull(metrics.initialSelfY);
+    const currentX = numberOrNull(self?.x);
+    const currentY = numberOrNull(self?.y);
+    if ([startX, startY, currentX, currentY].some(value => value === null)) return null;
+    return Math.round(Math.hypot(currentX - startX, currentY - startY));
+  })();
   const aim = estimateAim(self, target, {
     ...options,
     combatTargetState,
@@ -2309,6 +2334,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     },
     startedAt: combatStartedAtMs === null ? '' : new Date(combatStartedAtMs).toISOString(),
     durationMs: combatDurationMs === null ? null : Math.round(combatDurationMs),
+    movementDistance: combatMovementDistance,
     self: summarizeCombatTarget(self),
     target: summarizeCombatTarget(target),
     candidates: (contactEntryOnly ? [target, ...candidates] : candidates).slice(0, 5).map(summarizeCombatTarget),

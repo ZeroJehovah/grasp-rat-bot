@@ -111,6 +111,9 @@ function defaultBrowserlessStats() {
     },
     today: {
       day: '',
+      initialDrop: null,
+      maxDrop: null,
+      latestDrop: null,
       uptimeMs: 0,
       staminaSpentMs: 0,
       coinsGained: 0,
@@ -398,6 +401,9 @@ function normalizeBrowserlessStats(stats, rawStats = stats) {
   normalized.today = {
     ...today,
     day: compactString(today.day, 16),
+    initialDrop: compactNumber(today.initialDrop),
+    maxDrop: compactNumber(today.maxDrop),
+    latestDrop: compactNumber(today.latestDrop),
     uptimeMs: Math.max(0, Math.round(Number(today.uptimeMs || 0) || 0)),
     staminaSpentMs: Math.max(0, Math.round(Number(today.staminaSpentMs || 0) || 0)),
     coinsGained: Math.max(0, Math.round(Number(today.coinsGained || 0) || 0)),
@@ -620,6 +626,18 @@ function updateBrowserlessStatsSessionDrop(session, self) {
   return true;
 }
 
+function updateBrowserlessStatsTodayDrop(stats, self) {
+  const drop = statsSelfDrop(self);
+  if (drop === null) return false;
+  const today = stats.today || (stats.today = resetBrowserlessTodayStats(browserlessStatsDayKey()));
+  const initialDrop = compactNumber(today.initialDrop);
+  const maxDrop = compactNumber(today.maxDrop);
+  if (initialDrop === null) today.initialDrop = drop;
+  today.maxDrop = maxDrop === null ? drop : Math.max(maxDrop, drop);
+  today.latestDrop = drop;
+  return true;
+}
+
 function updateBrowserlessStatsSession(session, decision, self, stamina, nowMs) {
   session.lastSeenAt = isoFromMs(nowMs);
   session.exitedAt = '';
@@ -665,6 +683,7 @@ function browserlessStatsForDecision(state, decision, options = {}) {
   if (!active.online || !active.sessionId) {
     startBrowserlessStatsSession(stats, state, self, stamina, nowMs, decision);
   }
+  updateBrowserlessStatsTodayDrop(stats, self);
   updateBrowserlessStatsSession(stats.currentSession, decision, self, stamina, nowMs);
   return normalizeBrowserlessStats(stats);
 }
@@ -812,6 +831,9 @@ function compactBrowserlessStats(normalized, game, action, options = {}, lastKno
     },
     today: {
       day: stats.today.day || browserlessStatsDayKey(nowMs),
+      initialDrop: compactNumber(stats.today.initialDrop),
+      maxDrop: compactNumber(stats.today.maxDrop),
+      latestDrop: compactNumber(stats.today.latestDrop),
       inGameDurationMs: Math.max(0, Math.round(Number(stats.today.uptimeMs || 0) + activeDelta.uptimeMs)),
       staminaSpentMs: actualTodayStaminaSpentMs === null
         ? summedTodayStaminaSpentMs
@@ -1391,6 +1413,7 @@ function compactCombat(combat) {
     tick: compactNumber(combat.tick),
     startedAt: compactString(combat.startedAt, 48),
     durationMs: compactNumber(combat.durationMs),
+    movementDistance: compactNumber(combat.movementDistance),
     self: compactTarget(combat.self),
     target: compactTarget(combat.target),
     candidateCount: compactNumber(combat.candidateCount) ?? candidates.length,
@@ -1470,12 +1493,27 @@ function compactBattleStatus(normalized, game, action, decision, combat) {
     stamina1h: current.stamina?.stamina1hRemainingMilli ?? current.stamina?.stamina1h,
     stamina1d: current.stamina?.stamina1dRemainingMilli ?? current.stamina?.stamina1d
   };
+  const samePlayer = candidate => {
+    if (!candidate || !target) return false;
+    const candidateUserId = compactNumber(candidate.userId ?? candidate.user_id);
+    const targetUserId = compactNumber(target.userId ?? target.user_id);
+    if (candidateUserId !== null && targetUserId !== null) return candidateUserId === targetUserId;
+    const candidateEntityId = candidate.entityId ?? candidate.entity_id;
+    const targetEntityId = target.entityId ?? target.entity_id;
+    return candidateEntityId !== null && candidateEntityId !== undefined
+      && targetEntityId !== null && targetEntityId !== undefined
+      && String(candidateEntityId) === String(targetEntityId);
+  };
+  const synchronizedTarget = [action?.target, decision?.target].find(candidate => (
+    samePlayer(candidate) && compactNumber(candidate?.distance) !== null
+  ));
   return {
     active: true,
     kind: compactString(kind, 48),
     startedAt,
     durationMs: compactNumber(combat?.durationMs ?? rawCombat.durationMs),
-    distance: compactNumber(target.distance),
+    distance: compactNumber(synchronizedTarget?.distance ?? target.distance),
+    movementDistance: compactNumber(combat?.movementDistance ?? rawCombat.movementDistance),
     self: compactBattleActor(combat?.self, selfFallback),
     target: compactBattleActor(target),
     targetAfk: kind === 'attack' && target.active !== true

@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.19.1';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.20.1';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function panelSessionFlagsCore(status = {}) {
@@ -109,31 +109,30 @@ function renderBrowserlessWebPanel() {
     .battle-panel{border-color:rgba(251,113,133,.38);background:linear-gradient(135deg,rgba(127,29,29,.26),rgba(69,10,10,.14)),var(--panel)}
     .battle-panel[hidden]{display:none}
     .battle-panel .panel-title{color:#fda4af}
-    .battle-meta{display:flex;align-items:center;gap:14px;margin:-1px 0 7px;color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden}
-    .battle-meta span{display:inline-flex;align-items:baseline;gap:5px;min-width:0}
+    .battle-meta{display:flex;align-items:center;gap:7px;margin:-1px 0 7px;color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden}
+    .battle-meta span{display:inline-flex;align-items:baseline;gap:4px;min-width:0}
+    .battle-meta-divider{color:#64748b}
     .battle-meta strong{min-width:0;color:#fecdd3;font-size:13px;font-weight:700;overflow:hidden;text-overflow:ellipsis}
-    .battle-fighters{display:grid;grid-template-columns:minmax(0,1fr) 34px minmax(0,1fr);gap:8px;align-items:start}
-    .fighter{min-width:0;padding:0}
+    .battle-fighters{display:grid;grid-template-columns:minmax(0,1fr) 34px minmax(0,1fr);grid-template-rows:auto 7px auto;gap:5px 8px;align-items:center}
     .fighter-head{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:4px}
     .fighter-side{color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.04em}
     .fighter-name{min-width:0;font-size:14px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-    .fighter-summary{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:5px;min-width:0;font-variant-numeric:tabular-nums}
+    .fighter-summary{display:flex;align-items:baseline;justify-content:space-between;gap:8px;min-width:0;font-variant-numeric:tabular-nums}
     .fighter-summary-main{display:flex;align-items:baseline;gap:7px;min-width:0;overflow:hidden;white-space:nowrap}
     .fighter-summary-main>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     .fighter-summary-name{font-weight:700}
     .fighter-summary-drop{color:var(--coin);font-weight:650}
-    .fighter-summary-state{color:var(--blue);font-size:12px}
+    .fighter-summary-state{color:var(--blue);font-size:12px;white-space:nowrap}
     .fighter-summary-hp{flex:0 0 auto;font-weight:700}
-    .fighter.enemy .fighter-head,.fighter.enemy .fighter-summary,.fighter.enemy .fighter-summary-main{flex-direction:row-reverse}
-    .fighter.enemy dl{direction:rtl}
-    .fighter.enemy dt,.fighter.enemy dd{direction:ltr}
-    .fighter.enemy dt{text-align:right}.fighter.enemy dd{text-align:left}
-    .fighter-vs{display:flex;align-items:center;justify-content:center;min-height:24px;color:var(--red);font-size:13px;font-weight:800;letter-spacing:.06em}
+    .fighter-target-summary,.fighter-target-summary .fighter-summary-main{flex-direction:row-reverse}
+    .fighter-vs{display:flex;grid-column:2;grid-row:2;align-items:center;justify-content:center;min-height:7px;color:var(--red);font-size:13px;font-weight:800;line-height:7px;letter-spacing:.06em}
     .hp-label{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:2px;color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums}
-    .hp-track{height:7px;margin-bottom:5px;overflow:hidden;border-radius:999px;background:#2a3036;box-shadow:inset 0 0 0 1px rgba(255,255,255,.05)}
+    .hp-track{height:7px;overflow:hidden;border-radius:999px;background:#2a3036;box-shadow:inset 0 0 0 1px rgba(255,255,255,.05)}
     .hp-fill{height:100%;width:0;border-radius:inherit;background:var(--green);transition:width .25s ease,background-color .25s ease}
-    .fighter.enemy .hp-fill{margin-left:auto}
-    .fighter-stamina{display:block;width:100%;text-align:center;font-size:12px;font-variant-numeric:tabular-nums;white-space:nowrap}
+    .fighter-target-track .hp-fill{margin-left:auto}
+    .fighter-footer{display:flex;align-items:center;justify-content:space-between;gap:8px;min-width:0;font-size:12px;font-variant-numeric:tabular-nums}
+    .fighter-target-footer{flex-direction:row-reverse}
+    .fighter-stamina{display:inline-flex;align-items:center;min-width:0;color:var(--text);white-space:nowrap}
     .hp-fill.warn{background:var(--amber)}.hp-fill.bad{background:var(--red)}.hp-fill.ok{background:var(--green)}
     section{border:1px solid var(--line);background:var(--panel);border-radius:8px;padding:10px;min-width:0}
     .panel-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;min-width:0;cursor:pointer;transition:margin-bottom .25s ease}
@@ -148,10 +147,7 @@ function renderBrowserlessWebPanel() {
     .panel-collapsed .panel-head{margin-bottom:0}
     .panel-body{max-height:2400px;opacity:1;overflow:hidden;transition:max-height .28s ease,opacity .2s ease,margin-top .28s ease}
     .panel-collapsed>.panel-body{max-height:0;opacity:0;pointer-events:none;margin-top:0}
-    #chatPanel.panel-collapsed>.panel-body{max-height:52px;opacity:1;pointer-events:auto}
     #chatPanel .chat-log{max-height:300px;opacity:1;transition:max-height .28s ease,opacity .2s ease}
-    #chatPanel.panel-collapsed .chat-log{max-height:0;opacity:0;pointer-events:none}
-    #chatPanel.panel-collapsed .chat-hint{display:none}
     h2{font-size:11px;line-height:1.2;margin:0 0 8px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.05em}
     h3{font-size:11px;line-height:1.2;margin:0 0 6px;color:var(--muted);font-weight:700;letter-spacing:0}
     dl{display:grid;grid-template-columns:minmax(76px,auto) 1fr;gap:5px 9px;margin:0}
@@ -185,6 +181,7 @@ function renderBrowserlessWebPanel() {
     .high-drop-cell{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     .high-drop-name{display:flex;align-items:center;gap:6px}
     .high-drop-name.online{color:var(--blue)}
+    .high-drop-name.self.online,.high-drop-values.self.online{color:var(--green)}
     .high-drop-name.offline,.high-drop-name.unknown{color:var(--muted)}
     .high-drop-values{color:var(--coin);font-variant-numeric:tabular-nums}
     .high-drop-values.offline,.high-drop-values.unknown{color:var(--muted)}
@@ -192,13 +189,13 @@ function renderBrowserlessWebPanel() {
     .player-memory-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;align-items:start}
     .player-memory-pane{min-width:0}
     .player-memory-pane+.player-memory-pane{border-left:1px solid var(--line);padding-left:10px}
-    .player-memory-list{display:flex;flex-wrap:wrap;gap:7px;min-height:28px;align-items:flex-start}
-    .player-memory-name{display:inline-flex;align-items:center;max-width:100%;min-height:26px;padding:3px 0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .player-memory-list{display:flex;flex-wrap:wrap;gap:4px 5px;min-height:22px;align-items:flex-start;align-content:flex-start}
+    .player-memory-name{display:inline-flex;align-items:center;max-width:100%;min-height:20px;padding:1px 5px;border:1px solid transparent;border-radius:4px;line-height:1.2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     .player-memory-empty{color:var(--muted)}
-    .easy-kill-score-1{color:#fff}
-    .easy-kill-score-2{color:#4ade80}
-    .easy-kill-score-3{color:#fff;background:rgba(34,197,94,.2);box-shadow:0 0 12px rgba(74,222,128,.62);padding-inline:5px}
-    .damage-player-name{color:var(--red)}
+    .easy-kill-score-1{color:#f8fafc;border-color:rgba(248,250,252,.72);background:rgba(248,250,252,.08)}
+    .easy-kill-score-2{color:#86efac;border-color:rgba(74,222,128,.78);background:rgba(34,197,94,.12)}
+    .easy-kill-score-3{color:#fde68a;border-color:rgba(251,191,36,.82);background:rgba(251,191,36,.13)}
+    .damage-player-name{color:#fda4af;border-color:rgba(251,113,133,.8);background:rgba(251,113,133,.12)}
     .chat-title-meta{display:inline-flex;align-items:center;gap:7px;min-width:0}.chat-refresh-at{font-weight:500;letter-spacing:0;text-transform:none;white-space:nowrap}
     .chat-kill-toggle{min-height:24px;padding:2px 8px;font-size:11px;line-height:1.2}
     .chat-log{height:300px;overflow:auto;scrollbar-gutter:stable}
@@ -232,7 +229,7 @@ function renderBrowserlessWebPanel() {
     @media (max-width:760px){.layout{grid-template-columns:1fr}.stats-grid{grid-template-columns:1fr}}
     @media (max-width:600px){.player-insights-grid{grid-template-columns:1fr}}
     @media (max-width:600px){.nearby-combined,.player-memory-grid{grid-template-columns:1fr}.nearby-players-pane,.player-memory-pane+.player-memory-pane{border-left:0;border-top:1px solid var(--line);padding-left:0;padding-top:10px}}
-    @media (max-width:520px){.player-row{grid-template-columns:minmax(112px,2fr) minmax(34px,.5fr) minmax(38px,.55fr) minmax(36px,.5fr) minmax(44px,.6fr);gap:4px}.battle-fighters{grid-template-columns:minmax(0,1fr) 26px minmax(0,1fr);gap:5px}.fighter-head{display:block}.fighter.enemy .fighter-head{display:block;text-align:right}.battle-meta{gap:8px;font-size:11px}.battle-meta strong{font-size:11px}}
+    @media (max-width:520px){.player-row{grid-template-columns:minmax(112px,2fr) minmax(34px,.5fr) minmax(38px,.55fr) minmax(36px,.5fr) minmax(44px,.6fr);gap:4px}.battle-fighters{grid-template-columns:minmax(0,1fr) 26px minmax(0,1fr);column-gap:5px}.battle-meta{gap:5px;font-size:11px}.battle-meta strong{font-size:11px}}
     @media (max-width:520px){main{padding:10px}header{align-items:flex-start;flex-direction:column}}
   </style>
 </head>
@@ -273,7 +270,7 @@ function renderBrowserlessWebPanel() {
           <div class="panel-body">
             <div id="chatLog" class="chat-log"><div class="chat-empty">等待聊天快照</div></div>
             <form id="chatForm" class="chat-compose">
-              <button id="chatCollapseToggle" class="chat-collapse-toggle" type="button" aria-expanded="true">折叠</button>
+              <button id="chatCollapseToggle" class="chat-collapse-toggle" type="button" aria-expanded="false">展开</button>
               <input id="chatInput" maxlength="240" autocomplete="off" placeholder="输入游戏聊天消息">
               <button id="chatSendBtn" type="submit" disabled>离线</button>
             </form>
@@ -309,22 +306,21 @@ function renderBrowserlessWebPanel() {
           <div class="panel-head"><h2 class="panel-title" data-panel-title role="button" tabindex="0" aria-expanded="true">战斗情况</h2><div class="panel-head-meta"><span id="battleTitleMeta" class="title-meta collapsed-only">--</span></div></div>
           <div class="panel-body">
             <div class="battle-meta">
-              <span>双方距离<strong id="battleDistance">--</strong></span>
-              <span>开始时间<strong id="battleStartedAt">--</strong></span>
-              <span>持续时间<strong id="battleDuration">--</strong></span>
+              <span>距离 <strong id="battleDistance">--</strong></span><b class="battle-meta-divider">|</b>
+              <span>开始 <strong id="battleStartedAt">--</strong></span><b class="battle-meta-divider">|</b>
+              <span>持续 <strong id="battleDuration">--</strong></span><b class="battle-meta-divider">|</b>
+              <span>移动 <strong id="battleMovementDistance">--</strong></span>
             </div>
             <div class="battle-fighters">
-              <article class="fighter self">
-                <div class="fighter-summary"><div class="fighter-summary-main"><span id="battleSelfName" class="fighter-summary-name">--</span><span id="battleSelfDrop" class="fighter-summary-drop">--</span><span id="battleSelfState" class="fighter-summary-state">--</span></div><strong id="battleSelfHp" class="fighter-summary-hp">--</strong></div>
-                <div class="hp-track"><div id="battleSelfHpFill" class="hp-fill"></div></div>
-                <div id="battleSelfStamina" class="fighter-stamina">--</div>
-              </article>
+              <div class="fighter-summary fighter-self-summary"><div class="fighter-summary-main"><span id="battleSelfName" class="fighter-summary-name">--</span><span id="battleSelfDrop" class="fighter-summary-drop">--</span></div><strong id="battleSelfHp" class="fighter-summary-hp">--</strong></div>
+              <div></div>
+              <div class="fighter-summary fighter-target-summary"><div class="fighter-summary-main"><span id="battleTargetName" class="fighter-summary-name">--</span><span id="battleTargetDrop" class="fighter-summary-drop">--</span></div><strong id="battleTargetHp" class="fighter-summary-hp">--</strong></div>
+              <div class="hp-track fighter-self-track"><div id="battleSelfHpFill" class="hp-fill"></div></div>
               <div class="fighter-vs">VS</div>
-              <article class="fighter enemy">
-                <div class="fighter-summary"><div class="fighter-summary-main"><span id="battleTargetName" class="fighter-summary-name">--</span><span id="battleTargetDrop" class="fighter-summary-drop">--</span><span id="battleTargetState" class="fighter-summary-state">--</span></div><strong id="battleTargetHp" class="fighter-summary-hp">--</strong></div>
-                <div class="hp-track"><div id="battleTargetHpFill" class="hp-fill"></div></div>
-                <div id="battleTargetStamina" class="fighter-stamina">--</div>
-              </article>
+              <div class="hp-track fighter-target-track"><div id="battleTargetHpFill" class="hp-fill"></div></div>
+              <div class="fighter-footer fighter-self-footer"><div id="battleSelfStamina" class="fighter-stamina">--</div><span id="battleSelfState" class="fighter-summary-state">--</span></div>
+              <div></div>
+              <div class="fighter-footer fighter-target-footer"><div id="battleTargetStamina" class="fighter-stamina">--</div><span id="battleTargetState" class="fighter-summary-state">--</span></div>
             </div>
           </div>
         </section>
@@ -340,7 +336,7 @@ function renderBrowserlessWebPanel() {
         </div>
         <div class="player-insights-grid">
           <section data-panel-key="high-drop-players">
-            <div class="panel-head"><h2 class="panel-title" data-panel-title role="button" tabindex="0" aria-expanded="true">大户玩家</h2><div class="panel-head-meta"><span id="highDropTitleMeta" class="title-meta coin">--</span></div></div>
+            <div class="panel-head"><h2 class="panel-title" data-panel-title role="button" tabindex="0" aria-expanded="true">大户名录</h2><div class="panel-head-meta"><span id="highDropTitleMeta" class="title-meta">--</span></div></div>
             <div class="panel-body player-insights-body"><div id="highDropPlayers" class="high-drop-list"></div></div>
           </section>
           <section data-panel-key="player-memory">
@@ -382,13 +378,14 @@ function renderBrowserlessWebPanel() {
     const WEB_PANEL_VERSION = ${JSON.stringify(BROWSERLESS_WEB_PANEL_VERSION)};
     const WEB_PANEL_RELOAD_KEY = 'graspRatBrowserlessPanelReloadedVersion';
     const PANEL_COLLAPSE_KEY = 'graspRatBrowserlessPanelCollapsedV1';
+    const CHAT_KILL_COLLAPSE_KEY = 'graspRatBrowserlessChatKillsCollapsedV1';
     const AUTO_REFRESH_MS = 3000;
     let autoRefreshTimer = 0;
     let countdownTimer = 0;
     let refreshInFlight = null;
     let chatSendInFlight = false;
     let latestChatStatus = null;
-    let chatKillsCollapsed = true;
+    let chatKillsCollapsed = readChatKillCollapseState();
     let lastStatusReceivedAtMs = 0;
     let lastServerUpdatedAtMs = 0;
     let panelCollapseState = readPanelCollapseState();
@@ -769,6 +766,7 @@ function renderBrowserlessWebPanel() {
       'single-coin-bait-hold': '当日时间充裕，动态收益门槛生效，守着 1 金币等待捡币脚本',
       'single-coin-bait-return': '返回 1 金币诱饵附近',
       'single-coin-bait-release': '发现新收益，先捡掉 1 金币诱饵',
+      'best-opportunity': '综合收益最高',
       'best-opportunity-drop-target': '选择收益最高的目标',
       'best-opportunity-afk-drop-target': '攻击不动且有掉落的目标',
       'approach-profitable-drop-target': '靠近高收益目标',
@@ -863,6 +861,7 @@ function renderBrowserlessWebPanel() {
     const kindMap = {
       coin: '捡金币',
       'seek-coin': '去捡金币',
+      'seek-enemy': '靠近挂机玩家',
       'profit-candidate': '选择金币目标',
       attack: '攻击目标',
       'combat-live': '打架',
@@ -1283,6 +1282,7 @@ function renderBrowserlessWebPanel() {
       if (kind === 'coin') return '捡金币 ' + targetLabel(target);
       if (kind === 'seek-coin') return '去捡金币 ' + targetLabel(target);
       if (kind === 'profit-candidate') return '选择金币目标 ' + targetLabel(target);
+      if (kind === 'seek-enemy') return '靠近高Drop挂机玩家 ' + targetLabel(target);
       if (kind === 'attack' || kind === 'combat-live') return '打目标 ' + targetLabel(target);
       return kindText(kind);
     }
@@ -1292,11 +1292,13 @@ function renderBrowserlessWebPanel() {
       const reason = String(action.reason || status.decision?.reason || '');
       const target = activeTarget(status) || action.target || status.decision?.target || null;
       if (kind === 'post-attack-drop-wait' || /post-kill-settlement-wait|post-attack-drop-wait/i.test(reason)) return '等待掉落';
+      if (reason === 'single-coin-bait-hold') return '正在等待';
       if (kind === 'coin' || kind === 'seek-coin' || kind === 'profit-candidate') {
         const amount = number(target?.amount);
         if (String(reason).includes('bait')) return '正在蹲守1金币诱饵';
         return amount !== null && amount <= 1 ? '正在移动前往小额金币' : '正在移动前往大额金币';
       }
+      if (kind === 'seek-enemy') return '正在靠近高Drop挂机玩家';
       if (kind === 'attack') {
         const afk = target && target.active !== true && target.firing !== true && target.moving !== true;
         return afk ? '正在攻击高Drop挂机玩家' : '正在攻击玩家';
@@ -1311,7 +1313,7 @@ function renderBrowserlessWebPanel() {
       const action = status.action || status.decision || {};
       const reason = String(action.reason || status.decision?.reason || status.recentExit?.reason || '');
       const kind = String(action.kind || status.decision?.kind || '');
-      if (reason === 'best-opportunity-coin' || reason === 'best-opportunity-coin-route' || reason === 'best-eligible-profit') return '综合收益最高';
+      if (reason === 'best-opportunity' || reason === 'best-opportunity-coin' || reason === 'best-opportunity-coin-route' || reason === 'best-eligible-profit') return '综合收益最高';
       if (reason === 'post-attack-drop-wait-position' || reason === 'post-kill-settlement-wait') return '等待掉落确认';
       if (kind === 'coin' || kind === 'seek-coin' || kind === 'profit-candidate') return reasonText(reason) === actionTitleText(status) ? '综合收益最高' : reasonText(reason);
       return actionReasonText(status);
@@ -1559,13 +1561,13 @@ function renderBrowserlessWebPanel() {
       }
       return merged.length ? merged.map(integer).join(' -> ') : '--';
     }
-    function createHighDropRow(name, drops, head = false, online = undefined) {
+    function createHighDropRow(name, drops, head = false, online = undefined, self = false) {
       const row = document.createElement('div');
       row.className = 'high-drop-row' + (head ? ' high-drop-head' : '');
       const nameCell = document.createElement('div');
       const onlineClass = online === true ? 'online' : (online === false ? 'offline' : 'unknown');
       const showPresence = online !== undefined;
-      nameCell.className = 'high-drop-cell' + (!head && showPresence ? ' high-drop-name ' + onlineClass : '');
+      nameCell.className = 'high-drop-cell' + (!head && showPresence ? ' high-drop-name ' + onlineClass + (self ? ' self' : '') : '');
       if (head || !showPresence) {
         nameCell.textContent = value(name);
       } else {
@@ -1578,7 +1580,7 @@ function renderBrowserlessWebPanel() {
         nameCell.append(dot, text);
       }
       const dropCell = document.createElement('div');
-      dropCell.className = 'high-drop-cell' + (head ? '' : (showPresence ? ' high-drop-values ' + onlineClass : ' muted'));
+      dropCell.className = 'high-drop-cell' + (head ? '' : (showPresence ? ' high-drop-values ' + onlineClass + (self ? ' self' : '') : ' muted'));
       dropCell.textContent = value(drops);
       row.append(nameCell, dropCell);
       return row;
@@ -1588,21 +1590,39 @@ function renderBrowserlessWebPanel() {
       if (!node) return;
       const items = Array.isArray(status.highDropPlayers?.p) ? status.highDropPlayers.p.slice() : [];
       const self = status.game?.inGame ? status.self : (status.lastKnown?.self || status.self);
-      const selfName = self?.name ? '我 · ' + self.name : '我自己';
-      const selfDrop = number(self?.drop);
-      const currentHighDropCount = items.filter(item => number(item?.[3]) !== null && number(item?.[3]) >= 500 && item?.[5] === true).length;
+      const selfName = self?.name || (self?.userId ? '#' + self.userId : '自己');
+      const selfUserId = number(self?.userId ?? status.session?.userId);
+      const today = status.stats?.today || {};
+      const selfInitialDrop = number(today.initialDrop) ?? number(self?.drop);
+      const selfMaxDrop = number(today.maxDrop) ?? number(self?.drop);
+      const currentHighDropCount = items.filter(item => {
+        const latestDrop = number(item?.[3]);
+        const userId = number(item?.[4]);
+        return latestDrop !== null && latestDrop >= 500 && (selfUserId === null || userId !== selfUserId);
+      }).length;
       setRichText('highDropTitleMeta', [
-        { text: '今日', className: 'meta-label' },
+        { text: '今日发现', className: 'meta-label' },
         { text: String(currentHighDropCount), className: 'coin' },
         { text: '个大户', className: 'meta-label' }
-      ], 'coin');
+      ]);
       const fragment = document.createDocumentFragment();
       fragment.appendChild(createHighDropRow('玩家名称', 'Drop', true));
-      if (selfDrop !== null) items.unshift([selfName, selfDrop, selfDrop, selfDrop, self?.userId, status.game?.inGame === true]);
-      if (!items.length) {
+      if (selfInitialDrop !== null || selfMaxDrop !== null) {
+        const initial = selfInitialDrop ?? selfMaxDrop;
+        const maximum = selfMaxDrop ?? selfInitialDrop;
+        fragment.appendChild(createHighDropRow(
+          selfName,
+          integer(initial) + ' -> ' + integer(maximum),
+          false,
+          status.game?.inGame === true,
+          true
+        ));
+      }
+      const otherItems = items.filter(item => selfUserId === null || number(item?.[4]) !== selfUserId);
+      if (!otherItems.length && selfInitialDrop === null && selfMaxDrop === null) {
         fragment.appendChild(createHighDropRow('无', '--'));
       } else {
-        for (const item of items) fragment.appendChild(createHighDropRow(item?.[0], highDropValueText(item), false, item?.[5]));
+        for (const item of otherItems) fragment.appendChild(createHighDropRow(item?.[0], highDropValueText(item), false, item?.[5]));
       }
       node.replaceChildren(fragment);
     }
@@ -1667,21 +1687,19 @@ function renderBrowserlessWebPanel() {
     }
     function fighterStateText(actor) {
       if (!actor) return '--';
-      const states = [];
-      if (actor.moving) states.push('移动中');
-      if (actor.firing) states.push('开火中');
-      if (!states.length) states.push(actor.active ? '活动中' : '静止中');
-      return states.join('/');
+      if (actor.moving && actor.firing) return '移动+开火';
+      if (actor.moving) return '移动';
+      if (actor.firing) return '开火';
+      return '静止';
     }
-    function battleStaminaPair(remainingMs, limitMs, defaultSeconds) {
-      const limit = number(limitMs);
-      const seconds = limit === null ? defaultSeconds : Math.max(0, Math.round(limit / 1000));
-      return staminaPair(remainingMs, seconds);
-    }
-    function battleStaminaText(actor) {
-      return battleStaminaPair(actor?.stamina5s, actor?.stamina5sLimit, 10)
-        + ' | ' + staminaPair(actor?.stamina1h, 3000)
-        + ' | ' + staminaPair(actor?.stamina1d, 20000);
+    function battleStaminaFragments(actor) {
+      return [
+        { text: unit(actor?.stamina5s), className: battleStaminaClass(actor) },
+        { text: '/', className: '' },
+        { text: unit(actor?.stamina1h), className: '' },
+        { text: '/', className: '' },
+        { text: unit(actor?.stamina1d), className: '' }
+      ];
     }
     function battleStaminaClass(actor) {
       const remaining = number(actor?.stamina5s);
@@ -1696,7 +1714,7 @@ function renderBrowserlessWebPanel() {
       const maxHpValue = number(actor?.maxHp);
       const maxHp = maxHpValue !== null && maxHpValue > 0 ? maxHpValue : 100;
       const ratio = hp === null ? 0 : Math.max(0, Math.min(1, hp / maxHp));
-      setText(prefix + 'Hp', hp === null ? '--' : integer(hp) + '/' + integer(maxHp));
+      setText(prefix + 'Hp', hp === null ? '--' : integer(hp));
       setClass(prefix + 'Hp', 'fighter-summary-hp ' + hpAttrs(hp).className);
       const fill = document.getElementById(prefix + 'HpFill');
       if (!fill) return;
@@ -1735,18 +1753,17 @@ function renderBrowserlessWebPanel() {
       }
       setText('battleDistance', distance(battle.distance));
       setText('battleStartedAt', stamp(battle.startedAt));
+      setText('battleMovementDistance', distance(battle.movementDistance));
       setText('battleSelfName', battle.self.name || (battle.self.userId ? '#' + battle.self.userId : '我方'));
       setText('battleTargetName', battle.target.name || (battle.target.userId ? '#' + battle.target.userId : '敌方'));
       setText('battleSelfDrop', integer(battle.self.drop));
       setText('battleTargetDrop', integer(battle.target.drop));
       setText('battleSelfState', fighterStateText(battle.self));
-      setText('battleTargetState', battle.targetAfk ? 'AFK/' + fighterStateText(battle.target) : fighterStateText(battle.target));
+      setText('battleTargetState', fighterStateText(battle.target));
       syncHpMeter('battleSelf', battle.self);
       syncHpMeter('battleTarget', battle.target);
-      setText('battleSelfStamina', battleStaminaText(battle.self));
-      setClass('battleSelfStamina', 'fighter-stamina ' + battleStaminaClass(battle.self));
-      setText('battleTargetStamina', battleStaminaText(battle.target));
-      setClass('battleTargetStamina', 'fighter-stamina ' + battleStaminaClass(battle.target));
+      setInlineRichText('battleSelfStamina', battleStaminaFragments(battle.self), 'fighter-stamina');
+      setInlineRichText('battleTargetStamina', battleStaminaFragments(battle.target), 'fighter-stamina');
       setText('battleTitleMeta', (battle.self.name || '我方') + ' ' + integer(battle.self.hp) + '/' + integer(battle.self.maxHp || 100)
         + ' vs ' + integer(battle.target.hp) + '/' + integer(battle.target.maxHp || 100) + ' ' + (battle.target.name || '敌方'));
       if (durationNode) {
@@ -1889,6 +1906,26 @@ function renderBrowserlessWebPanel() {
       const nextClass = ['title-meta', className].filter(Boolean).join(' ');
       if (node.className !== nextClass) node.className = nextClass;
     }
+    function setInlineRichText(id, fragments, className = '') {
+      const node = document.getElementById(id);
+      if (!node) return;
+      const normalized = (fragments || []).map(fragment => ({
+        text: fragment?.text === null || fragment?.text === undefined ? '' : String(fragment.text),
+        className: String(fragment?.className || '')
+      }));
+      const signature = JSON.stringify(normalized);
+      if (node.dataset.richSignature !== signature) {
+        const children = normalized.map(fragment => {
+          const span = document.createElement('span');
+          span.textContent = fragment.text;
+          if (fragment.className) span.className = fragment.className;
+          return span;
+        });
+        node.replaceChildren(...children);
+        node.dataset.richSignature = signature;
+      }
+      if (node.className !== className) node.className = className;
+    }
     function updateWebVersion(latestVersion) {
       const latest = String(latestVersion || '').trim();
       const current = String(WEB_PANEL_VERSION || '').trim();
@@ -1952,6 +1989,25 @@ function renderBrowserlessWebPanel() {
         localStorage.setItem(PANEL_COLLAPSE_KEY, JSON.stringify(panelCollapseState));
       } catch (_) {}
     }
+    function readChatKillCollapseState() {
+      try {
+        return localStorage.getItem(CHAT_KILL_COLLAPSE_KEY) !== 'false';
+      } catch (_) {
+        return true;
+      }
+    }
+    function persistChatKillCollapseState() {
+      try {
+        localStorage.setItem(CHAT_KILL_COLLAPSE_KEY, String(chatKillsCollapsed));
+      } catch (_) {}
+    }
+    function syncChatKillToggle() {
+      const button = document.getElementById('chatCollapseToggle');
+      if (!button) return;
+      button.textContent = chatKillsCollapsed ? '展开' : '折叠';
+      button.setAttribute('aria-expanded', String(!chatKillsCollapsed));
+      button.title = chatKillsCollapsed ? '展开多条别人击杀记录' : '折叠多条别人击杀记录';
+    }
     function syncPanelCollapse(panel) {
       const key = String(panel?.dataset?.panelKey || '');
       if (!key) return;
@@ -1961,13 +2017,6 @@ function renderBrowserlessWebPanel() {
       if (title) {
         title.setAttribute('aria-expanded', String(!collapsed));
         title.title = collapsed ? '点击展开面板' : '点击折叠面板';
-      }
-      if (key === 'game-chat') {
-        const button = document.getElementById('chatCollapseToggle');
-        if (button) {
-          button.textContent = collapsed ? '展开' : '折叠';
-          button.setAttribute('aria-expanded', String(!collapsed));
-        }
       }
     }
     function togglePanelCollapse(panel) {
@@ -2081,6 +2130,7 @@ function renderBrowserlessWebPanel() {
         }
       }
       setText('chatRefreshAt', elapsedSecondsText(current.snapshot?.lastAt));
+      syncChatKillToggle();
       syncChatCompose(current);
       if (!chatSendInFlight) setChatHint('', 'muted');
     }
@@ -2194,21 +2244,21 @@ function renderBrowserlessWebPanel() {
       setText('sessionPanelTitle', online ? '本次游戏' : '上次游戏');
       rows('currentSession', [
         ['进入时间', fullStamp(currentSession.enteredAt), true],
-        ['持续时间', durationClock(currentSession.durationMs)],
-        ['击杀敌人', integer(currentSession.kills)]
+        ['持续时间', durationClock(currentSession.durationMs)]
       ]);
       rows('todayStats', [
         ['日期', todayStats.day],
-        ['游戏时长', durationClock(todayStats.inGameDurationMs)],
-        ['击杀敌人', integer(todayStats.kills)]
+        ['游戏时长', durationClock(todayStats.inGameDurationMs)]
       ]);
       setRichText('sessionTitleMeta', [
-        { text: 'STA ', className: 'meta-label' }, { text: spentStaminaUnit(currentSession.staminaSpentMs), className: 'warn' },
-        { text: ' | Coin ', className: 'meta-label' }, { text: integer(currentSession.coinsGained), className: 'coin' }
+        { text: 'STA ', className: 'meta-label' }, { text: spentStaminaUnit(currentSession.staminaSpentMs), className: 'ok' },
+        { text: ' | Coin ', className: 'meta-label' }, { text: integer(currentSession.coinsGained), className: 'coin' },
+        { text: ' | Kill ', className: 'meta-label' }, { text: integer(currentSession.kills), className: 'bad' }
       ]);
       setRichText('todayTitleMeta', [
-        { text: 'STA ', className: 'meta-label' }, { text: spentStaminaUnit(todayStats.staminaSpentMs), className: 'warn' },
-        { text: ' | Coin ', className: 'meta-label' }, { text: integer(todayStats.coinsGained), className: 'coin' }
+        { text: 'STA ', className: 'meta-label' }, { text: spentStaminaUnit(todayStats.staminaSpentMs), className: 'ok' },
+        { text: ' | Coin ', className: 'meta-label' }, { text: integer(todayStats.coinsGained), className: 'coin' },
+        { text: ' | Kill ', className: 'meta-label' }, { text: integer(todayStats.kills), className: 'bad' }
       ]);
       setText('actionTitleMeta', actionTitleText(s));
       updateCountdownNodes();
@@ -2321,7 +2371,10 @@ function renderBrowserlessWebPanel() {
     });
     document.getElementById('chatCollapseToggle').addEventListener('click', event => {
       event.preventDefault();
-      togglePanelCollapse(document.getElementById('chatPanel'));
+      chatKillsCollapsed = !chatKillsCollapsed;
+      persistChatKillCollapseState();
+      syncChatKillToggle();
+      renderChat(latestChatStatus || {});
     });
     function setAuthMessage(text, className) {
       const node = document.getElementById('authMessage');
@@ -2345,6 +2398,7 @@ function renderBrowserlessWebPanel() {
     window.addEventListener('pageshow', syncAutoRefreshForVisibility);
     window.addEventListener('pagehide', stopAutoRefresh);
     initPanelCollapse();
+    syncChatKillToggle();
     syncAutoRefreshForVisibility();
   </script>
 </body>

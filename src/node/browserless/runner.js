@@ -54,6 +54,7 @@ const {
   summarizeNearbyForPanel
 } = require('./decision-adapter');
 const { createBrowserlessActionAdapter } = require('./action-adapter');
+const { buildBrowserlessCombatDryRun } = require('./combat-adapter');
 const { createSourceIpController } = require('./source-ip-controller');
 const { createBrowserlessSafetyController } = require('./safety-controller');
 const {
@@ -3060,6 +3061,78 @@ async function runBrowserlessRunnerSelfTest() {
       presentFirst: routeRowsText(routeRowsWhenFirstPresent),
       previewOnly: routeRowsText(previewRows)
     };
+    const panelStatsState = {
+      session: { userId: 7, sessionToken: 'panel-self-test-token' },
+      runner: { running: true, mode: 'profit-live', controlMode: 'profit-live' }
+    };
+    const panelStatsDecision = (atMs, drop) => ({
+      at: new Date(atMs).toISOString(),
+      input: {
+        self: { userId: 7, name: 'self', drop, dropKnown: true },
+        stamina: {},
+        selfKillEvidence: []
+      }
+    });
+    const panelStatsStartedAt = Date.parse('2026-07-20T00:00:00.000Z');
+    panelStatsState.stats = browserlessStatsForDecision(
+      panelStatsState,
+      panelStatsDecision(panelStatsStartedAt, 100),
+      { nowMs: panelStatsStartedAt }
+    );
+    panelStatsState.stats = browserlessStatsForDecision(
+      panelStatsState,
+      panelStatsDecision(panelStatsStartedAt + 1000, 110),
+      { nowMs: panelStatsStartedAt + 1000 }
+    );
+    panelStatsState.stats = browserlessStatsForDecision(
+      panelStatsState,
+      panelStatsDecision(panelStatsStartedAt + 2000, 20),
+      { nowMs: panelStatsStartedAt + 2000 }
+    );
+    const panelStatsCompact = buildCompactBrowserlessStatus(panelStatsState, { nowMs: panelStatsStartedAt + 2000 });
+    const panelBattleCompact = buildCompactBrowserlessStatus({
+      session: { userId: 7, sessionToken: 'panel-self-test-token' },
+      runner: { running: true, currentAction: { kind: 'combat-live', target: { userId: 8, distance: 5600 } } },
+      current: {
+        self: { userId: 7, name: 'self', hp: 86, maxHp: 100 },
+        decision: {
+          kind: 'combat-live',
+          band: 'combat',
+          at: '2026-07-20T00:00:15.000Z',
+          target: { userId: 8, name: 'enemy', distance: 5600 }
+        },
+        combatSummary: {
+          startedAt: '2026-07-20T00:00:00.000Z',
+          durationMs: 15000,
+          movementDistance: 20000,
+          self: { userId: 7, name: 'self', hp: 86, maxHp: 100 },
+          target: { userId: 8, name: 'enemy', hp: 73, maxHp: 100, distance: 5700, moving: true, firing: true }
+        }
+      }
+    }, {});
+    const panelCombatState = {};
+    const panelCombatInput = (nowMs, selfX, selfY) => ({
+      userId: 7,
+      realtime: {
+        tick: Math.round(nowMs / 50),
+        self: { entity_id: 1, user_id: 7, x: selfX, y: selfY, hp: 100 },
+        entities: [
+          { entity_id: 1, user_id: 7, x: selfX, y: selfY, hp: 100 },
+          { entity_id: 2, user_id: 8, name: 'enemy', x: 1000, y: 0, hp: 100, current_join_mode: 'Active', firing: true }
+        ],
+        bullets: []
+      }
+    });
+    const panelCombatInitial = buildBrowserlessCombatDryRun(panelCombatInput(1000, 0, 0), {
+      nowMs: 1000,
+      decisionState: panelCombatState,
+      combatAttackRange: 11000
+    });
+    const panelCombatMoved = buildBrowserlessCombatDryRun(panelCombatInput(1500, 300, 400), {
+      nowMs: 1500,
+      decisionState: panelCombatState,
+      combatAttackRange: 11000
+    });
     let chatActivityCount = 0;
     const chatSendInputs = [];
     const statusTestHandle = await startStatusServer({
@@ -3093,6 +3166,39 @@ async function runBrowserlessRunnerSelfTest() {
       const loginPointBlockerPanelPresent = pageHtml.includes('function blockingFactorsText(status)')
         && pageHtml.includes("addRow(rowsOut, '阻碍因素', blockingFactorsText(status))")
         && pageHtml.includes("addRow(rowsOut, '单人阻挡', singleBlocker)");
+      const panelDetailTest = {
+        ok: Boolean(
+          pageHtml.includes('>大户名录</h2>')
+          && pageHtml.includes("{ text: '今日发现', className: 'meta-label' }")
+          && pageHtml.includes('.high-drop-name.self.online,.high-drop-values.self.online{color:var(--green)}')
+          && pageHtml.includes("+ (self ? ' self' : '')")
+          && pageHtml.includes("if (reason === 'single-coin-bait-hold') return '正在等待'")
+          && pageHtml.includes("if (kind === 'seek-enemy') return '正在靠近高Drop挂机玩家'")
+          && pageHtml.includes("chatKillsCollapsed = !chatKillsCollapsed")
+          && !pageHtml.includes("togglePanelCollapse(document.getElementById('chatPanel'))")
+          && pageHtml.includes('id="battleMovementDistance"')
+          && pageHtml.includes('grid-column:2;grid-row:2')
+          && pageHtml.includes("setText(prefix + 'Hp', hp === null ? '--' : integer(hp))")
+          && pageHtml.includes("{ text: unit(actor?.stamina5s), className: battleStaminaClass(actor) }")
+          && pageHtml.includes("{ text: spentStaminaUnit(currentSession.staminaSpentMs), className: 'ok' }")
+          && pageHtml.includes("{ text: integer(currentSession.kills), className: 'bad' }")
+          && panelStatsCompact.stats.today.initialDrop === 100
+          && panelStatsCompact.stats.today.maxDrop === 110
+          && panelStatsCompact.stats.today.latestDrop === 20
+          && panelBattleCompact.battle.distance === 5600
+          && panelBattleCompact.battle.movementDistance === 20000
+          && panelCombatInitial.movementDistance === 0
+          && panelCombatMoved.movementDistance === 500
+        ),
+        selfDropRange: {
+          initial: panelStatsCompact.stats.today.initialDrop,
+          max: panelStatsCompact.stats.today.maxDrop,
+          latest: panelStatsCompact.stats.today.latestDrop
+        },
+        battleDistance: panelBattleCompact.battle.distance,
+        battleMovementDistance: panelBattleCompact.battle.movementDistance,
+        measuredMovementDistance: panelCombatMoved.movementDistance
+      };
       statusServerChatTest = {
         ok: Boolean(
           pageResponse.ok
@@ -3106,6 +3212,7 @@ async function runBrowserlessRunnerSelfTest() {
           && chatSendInputs[0] === 'hello'
           && targetMarkerBoundaryOwnership
           && loginPointBlockerPanelPresent
+          && panelDetailTest.ok
         ),
         unauthorizedStatus: unauthorizedResponse.status,
         activityCount: chatActivityCount,
@@ -3114,7 +3221,8 @@ async function runBrowserlessRunnerSelfTest() {
         targetMarkerCoversOuterBorders,
         targetMarkerAvoidsAdjacentOverlap,
         targetMarkerBoundaryOwnership,
-        loginPointBlockerPanelPresent
+        loginPointBlockerPanelPresent,
+        panelDetailTest
       };
     } finally {
       await statusTestHandle.close();

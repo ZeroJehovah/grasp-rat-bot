@@ -13001,6 +13001,42 @@ async function runSelfTest() {
       want: '8|engaged|500|8|1000'
     },
     {
+      name: 'browserless combat summary measures displacement from engagement start',
+      got: (() => {
+        const stateful = {};
+        const stateAt = (nowMs, selfX, selfY) => ({
+          userId: 7,
+          realtime: {
+            tick: Math.round(nowMs / 50),
+            self: { entity_id: 1, user_id: 7, x: selfX, y: selfY, hp: 100 },
+            entities: [
+              { entity_id: 1, user_id: 7, x: selfX, y: selfY, hp: 100 },
+              { entity_id: 2, user_id: 8, name: 'enemy', x: 1000, y: 0, hp: 100, current_join_mode: 'Active', firing: true }
+            ],
+            bullets: []
+          }
+        });
+        const first = buildBrowserlessCombatDryRun(stateAt(1000, 0, 0), {
+          nowMs: 1000,
+          decisionState: stateful,
+          combatAttackRange: 11000
+        });
+        const moved = buildBrowserlessCombatDryRun(stateAt(1500, 300, 400), {
+          nowMs: 1500,
+          decisionState: stateful,
+          combatAttackRange: 11000
+        });
+        return [
+          first.movementDistance,
+          moved.movementDistance,
+          stateful.combatMetrics.initialSelfX,
+          stateful.combatMetrics.initialSelfY,
+          moved.startedAt
+        ].join('|');
+      })(),
+      want: '0|500|0|0|1970-01-01T00:00:01.000Z'
+    },
+    {
       name: 'browserless easy-kill profit engagement survives attack-range overshoot',
       got: (() => {
         const stateful = {
@@ -24059,6 +24095,7 @@ async function runSelfTest() {
             combatSummary: {
               startedAt,
               durationMs: 15000,
+              movementDistance: 20000,
               self: {
                 userId: 77,
                 name: 'self',
@@ -24080,7 +24117,7 @@ async function runSelfTest() {
                 stamina5sLimit: 10000,
                 stamina1h: 400000,
                 stamina1d: 16000000,
-                distance: 5600,
+                distance: 5700,
                 active: true,
                 moving: true,
                 firing: true
@@ -24122,6 +24159,7 @@ async function runSelfTest() {
           compactCombat.battle.startedAt,
           compactCombat.battle.durationMs,
           compactCombat.battle.distance,
+          compactCombat.battle.movementDistance,
           compactCombat.battle.self.name,
           compactCombat.battle.self.stamina1d,
           compactCombat.battle.target.name,
@@ -24132,7 +24170,7 @@ async function runSelfTest() {
           compactOffline.battle === null
         ].join('|');
       })(),
-      want: 'true|2026-07-12T01:13:00.000Z|15000|5600|self|17000000|enemy|3200|true|true|2026-07-12T01:14:00.000Z|true'
+      want: 'true|2026-07-12T01:13:00.000Z|15000|5600|20000|self|17000000|enemy|3200|true|true|2026-07-12T01:14:00.000Z|true'
     },
     {
       name: 'browserless compact status exposes session offline and today stats',
@@ -24371,10 +24409,13 @@ async function runSelfTest() {
           state.stats.currentSession.lastDrop,
           state.stats.currentSession.coinsGained,
           compact.stats.currentSession.coinsGained,
-          compact.stats.today.coinsGained
+          compact.stats.today.coinsGained,
+          compact.stats.today.initialDrop,
+          compact.stats.today.maxDrop,
+          compact.stats.today.latestDrop
         ].join('|');
       })(),
-      want: '1843|2149|306|612|612'
+      want: '1843|2149|306|612|612|1843|2149|2149'
     },
     {
       name: 'browserless stats preserve positive Drop gains across a death reset',
@@ -24403,10 +24444,13 @@ async function runSelfTest() {
           state.stats.currentSession.coinsGained,
           state.stats.currentSession.dropResetCount,
           compact.stats.currentSession.coinsGained,
-          compact.stats.today.coinsGained
+          compact.stats.today.coinsGained,
+          compact.stats.today.initialDrop,
+          compact.stats.today.maxDrop,
+          compact.stats.today.latestDrop
         ].join('|');
       })(),
-      want: '10|20|20|1|40|40'
+      want: '10|20|20|1|40|40|100|110|20'
     },
     {
       name: 'browserless today stamina reconciles cross-session gaps from 1d remaining',
@@ -25271,19 +25315,26 @@ async function runSelfTest() {
           compact.highDropPlayers.p.length,
           JSON.stringify(compact.highDropPlayers).includes('carol-low'),
           JSON.stringify(compact).includes('should-not-leak'),
-          /<h2[^>]*>大户玩家<\/h2>/.test(panelText),
+          /<h2[^>]*>大户名录<\/h2>/.test(panelText),
           /id="highDropPlayers"/.test(panelText),
           /\.high-drop-name\.online\{color:var\(--blue\)\}/.test(panelText),
+          /\.high-drop-name\.self\.online,\.high-drop-values\.self\.online\{color:var\(--green\)\}/.test(panelText),
           /\.high-drop-values\.offline,\.high-drop-values\.unknown\{color:var\(--muted\)\}/.test(panelText),
           /class="player-insights-grid"/.test(panelText),
           /\.player-insights-body\{height:164px;overflow-y:auto;scrollbar-gutter:stable\}/.test(panelText),
           /function highDropValueText/.test(panelScript),
           /merged\[merged.length - 1\] !== next/.test(panelScript),
           /join\('\s*->\s*'\)/.test(panelScript),
+          panelScript.includes("{ text: '今日发现', className: 'meta-label' }"),
+          panelScript.includes("integer(initial) + ' -> ' + integer(maximum)"),
+          panelScript.includes("status.game?.inGame === true,\n          true"),
+          panelScript.includes("latestDrop !== null && latestDrop >= 500"),
+          panelScript.includes("userId !== selfUserId"),
+          !panelScript.includes("'我 · ' + self.name"),
           panelText.indexOf('id="highDropPlayers"') < panelText.indexOf('id="nearbyGrid"')
         ].join('|');
       })(),
-      want: '2026-07-14|ws|gap-http|alice-renamed,520,700,600,8,true|bob,500,500,450,9,false|2|false|false|true|true|true|true|true|true|true|true|true|true'
+      want: '2026-07-14|ws|gap-http|alice-renamed,520,700,600,8,true|bob,500,500,450,9,false|2|false|false|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless web panel keeps compact timestamped chat below role status',
@@ -25327,7 +25378,11 @@ async function runSelfTest() {
           /<form id="chatForm" class="chat-compose">/.test(panelText),
           panelText.indexOf('id="chatCollapseToggle"') < panelText.indexOf('id="chatInput"'),
           /id="chatRefreshAt" class="chat-refresh-at title-meta muted">--<\/span>/.test(panelText),
-          /id="chatCollapseToggle"[^>]*aria-expanded="true">折叠<\/button>/.test(panelText),
+          /id="chatCollapseToggle"[^>]*aria-expanded="false">展开<\/button>/.test(panelText),
+          /CHAT_KILL_COLLAPSE_KEY\s*=\s*'graspRatBrowserlessChatKillsCollapsedV1'/.test(panelText),
+          /chatKillsCollapsed = !chatKillsCollapsed/.test(panelText),
+          /localStorage\.setItem\(CHAT_KILL_COLLAPSE_KEY, String\(chatKillsCollapsed\)\)/.test(panelText),
+          !/togglePanelCollapse\(document\.getElementById\('chatPanel'\)\)/.test(panelText),
           /input\.disabled = false;/.test(panelText),
           /button\.textContent = !online \? '离线'/.test(panelText),
           /item\.count \+ '条击杀记录已折叠'/.test(panelText),
@@ -25338,6 +25393,7 @@ async function runSelfTest() {
           /<div id="chatHint" class="chat-hint muted" aria-live="polite"><\/div>/.test(panelText),
           /const nextText = text === null \|\| text === undefined \? '' : String\(text\);/.test(panelText),
           /setChatHint\('', 'muted'\);/.test(panelText),
+          !/#chatPanel\.panel-collapsed>\.panel-body\{max-height:52px/.test(panelText),
           shortChat.length === 2 && shortChat.every(item => item.type === 'message'),
           foldedChat.length === 3,
           foldedChat[0]?.type === 'message' && foldedChat[0]?.message?.id === 1,
@@ -25419,13 +25475,18 @@ async function runSelfTest() {
           /\.easy-kill-score-1\{/.test(panelText),
           /\.easy-kill-score-2\{/.test(panelText),
           /\.easy-kill-score-3\{/.test(panelText),
+          /\.easy-kill-score-1\{color:#f8fafc;border-color:rgba\(248,250,252,\.72\);background:rgba\(248,250,252,\.08\)\}/.test(panelText),
+          /\.easy-kill-score-2\{color:#86efac;border-color:rgba\(74,222,128,\.78\);background:rgba\(34,197,94,\.12\)\}/.test(panelText),
+          /\.easy-kill-score-3\{color:#fde68a;border-color:rgba\(251,191,36,\.82\);background:rgba\(251,191,36,\.13\)\}/.test(panelText),
+          /\.damage-player-name\{color:#fda4af;border-color:rgba\(251,113,133,\.8\);background:rgba\(251,113,133,\.12\)\}/.test(panelText),
+          /\.player-memory-name\{[^}]*min-height:20px;padding:1px 5px;border:1px solid transparent;[^}]*line-height:1\.2/.test(panelText),
           /function renderPlayerMemory/.test(panelScript),
           panelScript.includes("createPlayerMemoryName(item?.[0], 'easy-kill-score-' + score)"),
           panelText.indexOf('id="highDropPlayers"') < panelText.indexOf('id="easyKillPlayers"'),
           panelText.indexOf('id="easyKillPlayers"') < panelText.indexOf('id="nearbyGrid"')
         ].join('|');
       })(),
-      want: 'score-one,1;score-two,2;score-three,3|2026-07-14|damager|false|false|false|true|true|true|true|true|true|true|true|true|true|true|true'
+      want: 'score-one,1;score-two,2;score-three,3|2026-07-14|damager|false|false|false|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless web panel renders target bars and svg target icons',
@@ -25485,10 +25546,34 @@ async function runSelfTest() {
           formatSpentStaminaCore(1000) === '1',
           formatSpentStaminaCore(1001) === '2',
           panelScript.includes("setRichText('sessionTitleMeta'"),
-          panelScript.includes("setRichText('todayTitleMeta'")
+          panelScript.includes("setRichText('todayTitleMeta'"),
+          panelScript.includes("{ text: spentStaminaUnit(currentSession.staminaSpentMs), className: 'ok' }"),
+          panelScript.includes("{ text: spentStaminaUnit(todayStats.staminaSpentMs), className: 'ok' }"),
+          panelScript.includes("{ text: ' | Kill ', className: 'meta-label' }"),
+          panelScript.includes("{ text: integer(currentSession.kills), className: 'bad' }"),
+          panelScript.includes("{ text: integer(todayStats.kills), className: 'bad' }"),
+          !panelScript.includes("['击杀敌人', integer(currentSession.kills)]"),
+          !panelScript.includes("['击杀敌人', integer(todayStats.kills)]")
         ].join('|');
       })(),
-      want: 'true|true|true|true|true|true|true|true'
+      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
+    },
+    {
+      name: 'browserless web panel distinguishes bait hold release and enemy approach actions',
+      got: (() => {
+        const panelText = renderBrowserlessWebPanel();
+        const panelScript = panelText.match(/<script>([\s\S]*?)<\/script>/)?.[1] || '';
+        return String([
+          panelScript.includes("if (reason === 'single-coin-bait-hold') return '正在等待'"),
+          panelScript.includes("if (String(reason).includes('bait')) return '正在蹲守1金币诱饵'"),
+          panelScript.includes("'single-coin-bait-hold': '当日时间充裕，动态收益门槛生效，守着 1 金币等待捡币脚本'"),
+          panelScript.includes("'single-coin-bait-release': '发现新收益，先捡掉 1 金币诱饵'"),
+          panelScript.includes("if (kind === 'seek-enemy') return '正在靠近高Drop挂机玩家'"),
+          panelScript.includes("'best-opportunity': '综合收益最高'"),
+          panelScript.includes("reason === 'best-opportunity' || reason === 'best-opportunity-coin'")
+        ].every(Boolean));
+      })(),
+      want: 'true'
     },
     {
       name: 'browserless web panel renders live battle card and offline exit reason',
@@ -25501,13 +25586,26 @@ async function runSelfTest() {
           /class="battle-fighters"/.test(panelText),
           /id="battleSelfHpFill"/.test(panelText),
           /id="battleTargetHpFill"/.test(panelText),
+          /id="battleMovementDistance"/.test(panelText),
+          /<span>距离 <strong id="battleDistance">--<\/strong><\/span><b class="battle-meta-divider">\|<\/b>/.test(panelText),
           /\.battle-panel\{border-color:rgba\(251,113,133,\.38\);background:linear-gradient/.test(panelText),
           /\.battle-meta\{display:flex;[^}]*white-space:nowrap;overflow:hidden/.test(panelText),
-          /\.fighter\{min-width:0;padding:0\}/.test(panelText),
+          /\.battle-fighters\{display:grid;grid-template-columns:minmax\(0,1fr\) 34px minmax\(0,1fr\);grid-template-rows:auto 7px auto;/.test(panelText),
+          /\.fighter-vs\{display:flex;grid-column:2;grid-row:2;/.test(panelText),
+          /\.fighter-target-summary,\.fighter-target-summary \.fighter-summary-main\{flex-direction:row-reverse\}/.test(panelText),
+          /\.fighter-target-footer\{flex-direction:row-reverse\}/.test(panelText),
           /\.target-current,\.target-route-next\{[^}]*padding:3px 0;margin:0\}/.test(panelText),
           /function updateBattlePanel/.test(panelScript),
           /function updateBattleDuration/.test(panelScript),
-          panelScript.includes("setText('battleSelfStamina', battleStaminaText(battle.self))"),
+          panelScript.includes("setInlineRichText('battleSelfStamina', battleStaminaFragments(battle.self), 'fighter-stamina')"),
+          panelScript.includes("setInlineRichText('battleTargetStamina', battleStaminaFragments(battle.target), 'fighter-stamina')"),
+          panelScript.includes("setText('battleMovementDistance', distance(battle.movementDistance))"),
+          panelScript.includes("setText(prefix + 'Hp', hp === null ? '--' : integer(hp))"),
+          panelScript.includes("if (actor.moving && actor.firing) return '移动+开火'"),
+          panelScript.includes("return '静止'"),
+          panelScript.includes("{ text: unit(actor?.stamina5s), className: battleStaminaClass(actor) }"),
+          panelScript.includes("{ text: unit(actor?.stamina1h), className: '' }"),
+          panelScript.includes("{ text: unit(actor?.stamina1d), className: '' }"),
           panelScript.includes("durationNode.dataset.battleStartedAt = battle.startedAt || ''"),
           panelScript.includes('const panelSessionFlags = '),
           panelScript.includes('const { online, realtimeOnline } = panelSessionFlags(status);'),
@@ -25537,7 +25635,7 @@ async function runSelfTest() {
           panelText.indexOf('id="battlePanel"') < panelText.indexOf('class="stats-grid"')
         ].join('|');
       })(),
-      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
+      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless confirmed leave evidence preserves server hp after trigger',
