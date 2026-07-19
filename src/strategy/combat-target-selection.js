@@ -517,11 +517,17 @@ function pickEngagedCombatTargetCore(self, combatTargets = [], entities = [], bu
     if (state && typeof state === 'object') state.combatTarget = null;
     return null;
   }
+  const afkProfitSeed = String(engaged.originIntent || '') === 'afk-profit';
   const engagedRealtimeHold = Number.isFinite(distance)
     && attackRange > 0
     && distance <= attackRange
     && maxAgeMs > 0
-    && ageMs <= maxAgeMs;
+    && ageMs <= maxAgeMs
+    // A successful AFK-profit shot seeds combat state only so later realtime
+    // activity can hand the same target to combat. The seed itself must not
+    // turn a stationary Passive target into combat spacing, which would stop
+    // the dedicated AFK approach before its 10m hold radius.
+    && (!afkProfitSeed || activeReengage);
   const establishedEasyKillProfitHold = Boolean(
     raw.easyKillProfitTarget === true
       && raw.easyKillThreatExempt === true

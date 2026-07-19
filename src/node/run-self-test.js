@@ -10036,6 +10036,69 @@ async function runSelfTest() {
       want: 'profit-candidate|profit-attack|true|combat-live|combat|8|engaged||8'
     },
     {
+      name: 'browserless stationary AFK attack seed keeps approaching until full attack range',
+      got: (() => {
+        const decisionAdapter = createBrowserlessDecisionAdapter({
+          userId: 7,
+          controlMode: 'profit-live',
+          combatEnabled: true
+        });
+        const commands = [];
+        const actionAdapter = createBrowserlessActionAdapter({
+          now: () => 1200 + commands.length * 200,
+          commandIntervalMs: 1,
+          attackRangeCm: 14500,
+          transport: {
+            sendVelocity: (dx, dy) => commands.push(`vel ${dx} ${dy}`),
+            sendShoot: (targetX, targetY, startX, startY) => commands.push(`shoot ${targetX} ${targetY} ${startX} ${startY}`)
+          }
+        });
+        const store = createBrowserlessStateStore({ userId: 7 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 59,
+          entities: [
+            { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+            fullStamina5s({ entity_id: 2, user_id: 8, name: 'stationary-afk', x: 9585, y: 0, hp: 80, current_join_mode: 'Passive', drop: 12 })
+          ],
+          bullets: []
+        }, { receivedAtMs: 1000 });
+        const firstState = store.getState(1200);
+        const first = decisionAdapter.decide(firstState, { nowMs: 1200 });
+        const firstResult = actionAdapter.applyDecision(firstState, first);
+        decisionAdapter.observeActionResult(firstResult, first, { nowMs: 1300 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 60,
+          entities: [
+            { entity_id: 1, user_id: 7, name: 'self', x: 583, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+            fullStamina5s({ entity_id: 2, user_id: 8, name: 'stationary-afk', x: 9585, y: 0, hp: 80, current_join_mode: 'Passive', drop: 12 })
+          ],
+          bullets: []
+        }, { receivedAtMs: 1500 });
+        const secondState = store.getState(1600);
+        const second = decisionAdapter.decide(secondState, { nowMs: 1600 });
+        const secondResult = actionAdapter.applyDecision(secondState, second);
+        decisionAdapter.observeActionResult(secondResult, second, { nowMs: 1700 });
+        return [
+          first.kind,
+          firstResult.kind,
+          firstResult.movement.reason,
+          second.kind,
+          second.band,
+          second.action.kind,
+          second.action.target.userId,
+          second.combat.target === null,
+          secondResult.kind,
+          secondResult.movement.reason,
+          secondResult.movement.fullAttack,
+          Math.round(second.action.target.distance),
+          decisionAdapter.getState().combatTarget?.originIntent || ''
+        ].join('|');
+      })(),
+      want: 'profit-candidate|profit-attack|profit-afk-attack-approach|profit-candidate|profit|attack|8|true|profit-attack|profit-afk-attack-approach|false|9002|afk-profit'
+    },
+    {
       name: 'browserless action shoot records attack history for post-attack logic',
       got: (() => {
         const decisionAdapter = createBrowserlessDecisionAdapter({ userId: 7, controlMode: 'profit-live' });
