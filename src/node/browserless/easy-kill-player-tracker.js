@@ -3,9 +3,10 @@
 const fs = require('fs');
 const path = require('path');
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 const INITIAL_SCORE = 1;
 const MAX_SCORE = 3;
+const UTC8_OFFSET_MS = 8 * 60 * 60 * 1000;
 const DEFAULT_OUTCOME_GRACE_MS = 40000;
 const DEFAULT_PERSIST_INTERVAL_MS = 5000;
 const DEFAULT_SELF_MAX_HP = 100;
@@ -13,6 +14,16 @@ const DEFAULT_SELF_MAX_HP = 100;
 function cloneJson(value) {
   if (value === null || value === undefined) return value;
   return JSON.parse(JSON.stringify(value));
+}
+
+function dayKey(ms = Date.now()) {
+  return new Date(Number(ms) + UTC8_OFFSET_MS).toISOString().slice(0, 10);
+}
+
+function dayIndex(value) {
+  const matched = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value || ''));
+  if (!matched) return null;
+  return Math.floor(Date.UTC(Number(matched[1]), Number(matched[2]) - 1, Number(matched[3])) / 86400000);
 }
 
 function numberOrNull(value) {
@@ -107,6 +118,7 @@ function emptyStore() {
   return {
     schemaVersion: SCHEMA_VERSION,
     updatedAt: '',
+    lastScoreDecayDay: '',
     players: {},
     engagements: {}
   };
@@ -169,6 +181,7 @@ function normalizeStore(value) {
   const output = emptyStore();
   if (!value || typeof value !== 'object') return output;
   output.updatedAt = String(value.updatedAt || '');
+  output.lastScoreDecayDay = String(value.lastScoreDecayDay || '');
   for (const [key, player] of Object.entries(value.players || {})) {
     const normalized = normalizePlayer(key, player);
     if (normalized) output.players[normalized.key] = normalized;
@@ -203,6 +216,7 @@ function storeNeedsMigration(file) {
   try {
     const value = JSON.parse(fs.readFileSync(file, 'utf8'));
     if (Number(value?.schemaVersion) !== SCHEMA_VERSION) return true;
+    if (dayIndex(value?.lastScoreDecayDay) === null) return true;
     for (const player of Object.values(value?.players || {})) {
       const rawScore = Number(player?.score);
       const score = normalizedScore(rawScore, 0);
@@ -228,6 +242,7 @@ function createEasyKillPlayerTracker(options = {}) {
   if (!Number.isFinite(lastWriteAtMs)) lastWriteAtMs = 0;
   if (!fileExists || migrateOnStart) {
     const createdAtMs = now();
+    store.lastScoreDecayDay = dayKey(createdAtMs);
     store.updatedAt = new Date(createdAtMs).toISOString();
     writeStore(file, store);
     lastWriteAtMs = createdAtMs;
@@ -247,6 +262,52 @@ function createEasyKillPlayerTracker(options = {}) {
     lastWriteAtMs = timestamp;
   }
 
+  function refreshDailyScores(atMsValue = now()) {
+    const atMs = Number.isFinite(Number(atMsValue)) ? Number(atMsValue) : now();
+    const today = dayKey(atMs);
+    const previousDay = store.lastScoreDecayDay;
+    const todayIndex = dayIndex(today);
+    const previousIndex = dayIndex(previousDay);
+    if (previousIndex === null || todayIndex === null) {
+      store.lastScoreDecayDay = today;
+      persist(atMs);
+      return { ok: true, day: today, previousDay, daysElapsed: 0, decremented: 0, removed: 0 };
+    }
+    const daysElapsed = todayIndex - previousIndex;
+    if (daysElapsed <= 0) {
+      return { ok: true, day: today, previousDay, daysElapsed: 0, decremented: 0, removed: 0 };
+    }
+    let decremented = 0;
+    let removed = 0;
+    const events = [];
+    for (const [key, player] of Object.entries(store.players)) {
+      const previousScore = normalizedScore(player?.score, INITIAL_SCORE);
+      const score = Math.max(0, previousScore - daysElapsed);
+      decremented += Math.min(previousScore, daysElapsed);
+      if (score > 0) player.score = score;
+      else {
+        delete store.players[key];
+        removed += 1;
+      }
+      events.push({
+        type: 'daily-score-decay',
+        at: new Date(atMs).toISOString(),
+        day: today,
+        previousDay,
+        daysElapsed,
+        userId: player.userId,
+        name: player.name,
+        previousScore,
+        score,
+        removed: score <= 0
+      });
+    }
+    store.lastScoreDecayDay = today;
+    persist(atMs);
+    for (const event of events) emit(event);
+    return { ok: true, day: today, previousDay, daysElapsed, decremented, removed };
+  }
+
   function playerStatus() {
     return Object.values(store.players)
       .map(player => cloneJson(player))
@@ -261,12 +322,14 @@ function createEasyKillPlayerTracker(options = {}) {
       .sort((a, b) => Number(b.lastShotAtMs || 0) - Number(a.lastShotAtMs || 0));
   }
 
-  function status() {
+  function status(atMs = now()) {
+    refreshDailyScores(atMs);
     const players = playerStatus();
     const engagements = engagementStatus();
     return {
       file,
       updatedAt: store.updatedAt,
+      lastScoreDecayDay: store.lastScoreDecayDay,
       playerCount: players.length,
       players,
       blockedUserIds: engagements.filter(item => !item.active).map(item => item.userId),
@@ -327,6 +390,7 @@ function createEasyKillPlayerTracker(options = {}) {
 
   function observePlayerNames(targets = [], detail = {}) {
     const atMs = Number.isFinite(Number(detail.atMs)) ? Number(detail.atMs) : now();
+    refreshDailyScores(atMs);
     const updates = updateNamesFromTargets(targets, atMs, detail.source || 'snapshot', detail.tick);
     if (updates.length) {
       persist(atMs);
@@ -340,6 +404,7 @@ function createEasyKillPlayerTracker(options = {}) {
     const userId = targetUserId(target);
     if (userId === null) return { ok: false, reason: 'missing-user-id' };
     const atMs = Number.isFinite(Number(detail.atMs)) ? Number(detail.atMs) : now();
+    refreshDailyScores(atMs);
     const at = new Date(atMs).toISOString();
     const key = playerKey(userId);
     const previous = store.engagements[key] || null;
@@ -406,6 +471,7 @@ function createEasyKillPlayerTracker(options = {}) {
 
   function observeVisibleTargets(targets = [], detail = {}) {
     const atMs = Number.isFinite(Number(detail.atMs)) ? Number(detail.atMs) : now();
+    refreshDailyScores(atMs);
     const missingGraceMs = Math.max(0, Number(detail.missingGraceMs || 0));
     const nameUpdates = updateNamesFromTargets(targets, atMs, detail.source || 'realtime-visible', detail.tick);
     const visibleByUserId = new Map();
@@ -459,6 +525,7 @@ function createEasyKillPlayerTracker(options = {}) {
     if (!engagement) return { ok: false, reason: 'no-engagement' };
     if (!engagement.active) return { ok: true, alreadyEnded: true, engagement: cloneJson(engagement) };
     const atMs = Number.isFinite(Number(detail.atMs)) ? Number(detail.atMs) : now();
+    refreshDailyScores(atMs);
     const dueAtMs = atMs + Math.max(0, Number(detail.outcomeGraceMs ?? outcomeGraceMs));
     engagement.active = false;
     engagement.endedAt = new Date(atMs).toISOString();
@@ -491,6 +558,7 @@ function createEasyKillPlayerTracker(options = {}) {
 
   function observeKillEvidence(evidence = [], detail = {}) {
     const atMs = Number.isFinite(Number(detail.atMs)) ? Number(detail.atMs) : now();
+    refreshDailyScores(atMs);
     const confirmed = [];
     for (const item of evidence || []) {
       const userId = targetUserId(item);
@@ -556,6 +624,7 @@ function createEasyKillPlayerTracker(options = {}) {
 
   function expirePendingOutcomes(atMsValue = now()) {
     const atMs = Number.isFinite(Number(atMsValue)) ? Number(atMsValue) : now();
+    const dailyScoreDecay = refreshDailyScores(atMs);
     const expired = [];
     let changed = false;
     for (const [key, engagement] of Object.entries(store.engagements)) {
@@ -584,13 +653,14 @@ function createEasyKillPlayerTracker(options = {}) {
       emit(event);
     }
     if (changed) persist(atMs);
-    return { ok: true, expired };
+    return { ok: true, expired, dailyScoreDecay };
   }
 
   function recordImmediateFailure(target, reason = 'approach-stop-loss', detail = {}) {
     const userId = targetUserId(target);
     if (userId === null) return { ok: false, reason: 'missing-user-id' };
     const atMs = Number.isFinite(Number(detail.atMs)) ? Number(detail.atMs) : now();
+    refreshDailyScores(atMs);
     const key = playerKey(userId);
     const existing = store.players[key] || null;
     const engagement = store.engagements[key] || null;
@@ -626,6 +696,7 @@ function createEasyKillPlayerTracker(options = {}) {
     observeKillEvidence,
     observePlayerNames,
     observeVisibleTargets,
+    refreshDailyScores,
     recordImmediateFailure,
     status
   };

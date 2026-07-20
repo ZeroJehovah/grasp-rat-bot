@@ -3363,6 +3363,8 @@ async function runBrowserlessRunnerSelfTest() {
           && pageHtml.includes('id="lastExitPanel"')
           && pageHtml.includes("return '等待重连冷却时间'")
           && pageHtml.includes("return '等待登录点快照安全检查'")
+          && pageHtml.includes("if (online) addRow(rowsOut, '原因', actionReasonDisplay(status), true)")
+          && !pageHtml.includes("addRow(rowsOut, '原因', online ? actionReasonDisplay(status) : reasonText(reason), true)")
           && pageHtml.includes("translated === '正在退出游戏' ? '已退出游戏' : translated")
           && pageHtml.includes('防守交战持续无进展，撤退后仍无法脱离，主动退出')
           && pageHtml.includes('groupBlockingFactors(factors).map(row =>')

@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.20.4';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.20.5';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function panelSessionFlagsCore(status = {}) {
@@ -214,8 +214,8 @@ function renderBrowserlessWebPanel() {
     .player-memory-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;align-items:start}
     .player-memory-pane{min-width:0}
     .player-memory-pane+.player-memory-pane{border-left:1px solid var(--line);padding-left:10px}
-    .player-memory-list{display:flex;flex-wrap:wrap;gap:4px 5px;min-height:22px;align-items:flex-start;align-content:flex-start}
-    .player-memory-name{display:inline-flex;align-items:center;max-width:100%;min-height:20px;padding:1px 5px;border:1px solid transparent;border-radius:4px;line-height:1.2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .player-memory-list{display:flex;flex-wrap:wrap;gap:6px 5px;min-height:24px;align-items:flex-start;align-content:flex-start}
+    .player-memory-name{display:inline-flex;align-items:center;max-width:100%;min-height:22px;padding:2px 5px;border:1px solid transparent;border-radius:4px;line-height:1.3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     .player-memory-empty{color:var(--muted)}
     .easy-kill-score-1{color:#f8fafc;border-color:rgba(248,250,252,.72);background:rgba(248,250,252,.08)}
     .easy-kill-score-2{color:#86efac;border-color:rgba(74,222,128,.78);background:rgba(34,197,94,.12)}
@@ -1859,9 +1859,7 @@ function renderBrowserlessWebPanel() {
       const rowsOut = [];
 
       addRow(rowsOut, '状态', online ? actionTitleText(status) : offlineActionTitleText(status), true);
-      if (online || !['pending', 'unsafe', 'reentry'].includes(loginDisplay.state)) {
-        addRow(rowsOut, '原因', online ? actionReasonDisplay(status) : reasonText(reason), true);
-      }
+      if (online) addRow(rowsOut, '原因', actionReasonDisplay(status), true);
       const decisionText = joinNonBlank([kindText(kind), actionReasonText(status)]);
       const statusText = actionText(status);
       const reasonDisplay = online ? actionReasonDisplay(status) : dangerousPlayerExitReasonText(status, reason);

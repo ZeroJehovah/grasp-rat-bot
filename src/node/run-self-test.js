@@ -26112,14 +26112,15 @@ async function runSelfTest() {
           /\.easy-kill-score-2\{color:#86efac;border-color:rgba\(74,222,128,\.78\);background:rgba\(34,197,94,\.12\)\}/.test(panelText),
           /\.easy-kill-score-3\{color:#fde68a;border-color:rgba\(251,191,36,\.82\);background:rgba\(251,191,36,\.13\)\}/.test(panelText),
           /\.damage-player-name\{color:#fda4af;border-color:rgba\(251,113,133,\.8\);background:rgba\(251,113,133,\.12\)\}/.test(panelText),
-          /\.player-memory-name\{[^}]*min-height:20px;padding:1px 5px;border:1px solid transparent;[^}]*line-height:1\.2/.test(panelText),
+          /\.player-memory-list\{[^}]*gap:6px 5px;min-height:24px/.test(panelText),
+          /\.player-memory-name\{[^}]*min-height:22px;padding:2px 5px;border:1px solid transparent;[^}]*line-height:1\.3/.test(panelText),
           /function renderPlayerMemory/.test(panelScript),
           panelScript.includes("createPlayerMemoryName(item?.[0], 'easy-kill-score-' + score)"),
           panelText.indexOf('id="highDropPlayers"') < panelText.indexOf('id="easyKillPlayers"'),
           panelText.indexOf('id="easyKillPlayers"') < panelText.indexOf('id="nearbyGrid"')
         ].join('|');
       })(),
-      want: 'score-one,1;score-two,2;score-three,3|2026-07-14|damager|false|false|false|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
+      want: 'score-one,1;score-two,2;score-three,3|2026-07-14|damager|false|false|false|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless web panel renders target bars and svg target icons',
@@ -26242,10 +26243,10 @@ async function runSelfTest() {
           panelScript.includes("durationNode.dataset.battleStartedAt = battle.startedAt || ''"),
           panelScript.includes('const panelSessionFlags = '),
           panelScript.includes('const { online, realtimeOnline } = panelSessionFlags(status);'),
-          panelScript.includes("online ? '原因' : '上次退出原因'"),
-          panelScript.includes('offlineStats.lastExitReason || status.recentExit?.reason || currentReason'),
-          panelScript.includes('const battle = !online ? recentBattle(status) : null;'),
-          panelScript.includes('if ((realtimeOnline || !online) && isCombatStatus(status, kind, reason))'),
+          panelScript.includes("if (online) addRow(rowsOut, '原因', actionReasonDisplay(status), true)"),
+          panelScript.includes("const reason = offlineStats.lastExitReason || status.recentExit?.reason || ''"),
+          panelScript.includes('const battle = recentBattle(status);'),
+          panelScript.includes('if (realtimeOnline && isCombatStatus(status, kind, reason))'),
           panelScript.includes('if (!realtimeOnline && isSafetyStatus(status, kind, reason))'),
           panelScript.includes("'combat-trade-disadvantage-leave': '战斗交换持续不利，预计继续交战风险过高，主动退出'"),
           panelScript.includes("'combat-pressure-disadvantage-leave': '遭到持续火力压制，我方血量处于劣势，主动退出'"),
@@ -26895,14 +26896,14 @@ async function runSelfTest() {
         return [
           BROWSERLESS_WEB_PANEL_VERSION,
           panelScript.includes("const loginDisplay = online ? { state: 'none', text: '--' } : loginPointDisplay(status);"),
-          panelScript.includes("if (online || !['pending', 'unsafe', 'reentry'].includes(loginDisplay.state)) {"),
+          panelScript.includes("if (online) addRow(rowsOut, '原因', actionReasonDisplay(status), true)"),
           panelScript.includes('const roleTitleMuted = !s.game?.inGame;'),
           panelScript.includes("{ text: integer(roleSelf?.hp), className: roleTitleMuted ? 'muted' : hpAttrs(roleSelf?.hp).className }"),
           panelScript.includes("{ text: integer(roleSelf?.drop), className: roleTitleMuted ? 'muted' : 'coin' }"),
           !panelScript.includes("setRichText('roleTitleMeta', [{ text: '已离线', className: 'muted' }], 'muted');")
         ].join('|');
       })(),
-      want: '2026.07.20.4|true|true|true|true|true|true'
+      want: '2026.07.20.5|true|true|true|true|true|true'
     },
     {
       name: 'browserless runner self-test passes',
@@ -33404,7 +33405,45 @@ async function runSelfTest() {
 	          fs.rmSync(dir, { recursive: true, force: true });
 	        }
 	      })(),
-	      want: '2|2|3|9:3,8:2'
+	      want: '3|2|3|9:3,8:2'
+	    },
+	    {
+	      name: 'browserless easy-kill tracker decays every score at UTC+8 midnight and removes zeroes',
+	      got: (() => {
+	        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'grasp-rat-easy-kill-daily-decay-'));
+	        let nowMs = Date.parse('2026-07-20T15:59:59.000Z');
+	        const events = [];
+	        try {
+	          const file = path.join(dir, 'easy-kill-players.json');
+	          fs.writeFileSync(file, JSON.stringify({
+	            schemaVersion: 3,
+	            updatedAt: new Date(nowMs).toISOString(),
+	            lastScoreDecayDay: '2026-07-20',
+	            players: {
+	              'user:8': { userId: 8, name: 'score-one', score: 1, killCount: 1 },
+	              'user:9': { userId: 9, name: 'score-two', score: 2, killCount: 2 },
+	              'user:10': { userId: 10, name: 'score-three', score: 3, killCount: 3 }
+	            },
+	            engagements: {}
+	          }));
+	          const tracker = createEasyKillPlayerTracker({ file, now: () => nowMs, onEvent: event => events.push(event) });
+	          const before = tracker.status();
+	          nowMs = Date.parse('2026-07-20T16:00:00.000Z');
+	          const after = tracker.status();
+	          const stored = JSON.parse(fs.readFileSync(file, 'utf8'));
+	          return [
+	            before.players.map(player => `${player.userId}:${player.score}`).sort().join(','),
+	            after.lastScoreDecayDay,
+	            after.players.map(player => `${player.userId}:${player.score}`).sort().join(','),
+	            stored.players['user:8'] === undefined,
+	            events.filter(event => event.type === 'daily-score-decay').length,
+	            events.find(event => event.userId === 8)?.removed
+	          ].join('|');
+	        } finally {
+	          fs.rmSync(dir, { recursive: true, force: true });
+	        }
+	      })(),
+	      want: '10:3,8:1,9:2|2026-07-21|10:2,9:1|true|3|true'
 	    },
 	    {
 	      name: 'browserless easy-kill tracker caps score at three and decrements failures to removal',
@@ -33820,8 +33859,8 @@ async function runSelfTest() {
 	        });
 	        const score1Edge = decide(1, 30000);
 	        const score1Outside = decide(1, 30001);
-	        const score2Edge = decide(2, 40000);
-	        const score2Outside = decide(2, 40001);
+	        const score2Edge = decide(2, 50000);
+	        const score2Outside = decide(2, 50001);
 	        const score3Edge = decide(3, 50000);
 	        return [
 	          score1Edge.action.kind,
@@ -33829,12 +33868,13 @@ async function runSelfTest() {
 	          score1Edge.action.target?.easyKillSeekRangeCm,
 	          score1Outside.profit.easyKill.candidates[0]?.rejectedReason,
 	          score2Edge.action.kind,
+	          score2Edge.action.target?.easyKillSeekRangeCm,
 	          score2Outside.profit.easyKill.candidates[0]?.rejectedReason,
 	          score3Edge.action.kind,
 	          score3Edge.action.target?.easyKillSeekRangeCm
 	        ].join('|');
 	      })(),
-	      want: 'seek-enemy|1|30000|out-of-score-range|seek-enemy|out-of-score-range|seek-enemy|50000'
+	      want: 'seek-enemy|1|30000|out-of-score-range|seek-enemy|50000|out-of-range|seek-enemy|50000'
 	    },
 	    {
 	      name: 'browserless active profit threshold uses effective reward and bounded exploration admission',
