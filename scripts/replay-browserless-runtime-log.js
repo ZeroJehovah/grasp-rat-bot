@@ -37,6 +37,7 @@ const {
 } = require('../src/strategy/opponent-behavior');
 const {
   determineCombatFireState,
+  evaluateCombatFireBudgetCore,
   evaluateHighEntropyFireGateCore,
   updateCombatProbePhaseCore
 } = require('../src/strategy/combat-fire-discipline');
@@ -791,21 +792,27 @@ function replayCombat(options) {
       finishingTarget: item.targetHp <= 20 && item.selfHp >= item.targetHp + 10
     });
     probeState = probe;
-    const probeBlocked = probe.suppressFire;
-    const probeReopensNovelGeometry = Boolean(
-      gate.suppressFire
-        && (probe.provenHitProtected
-          || (probe.geometryProbeEligible && probe.probeBudgetRemaining > 0))
-        && /^high-entropy-/.test(String(gate.reason || ''))
-    );
-    const gateBlocked = gate.suppressFire && !probeReopensNovelGeometry;
+    const sharedBudget = evaluateCombatFireBudgetCore({
+      targetId: options.targetId,
+      acceptedShotsSinceDamage: noProgressAcceptedShots,
+      fireGate: gate,
+      probeState: probe,
+      trajectoryCoverage: item.trajectoryCoveragePlan || null,
+      closePressure: Number(item.shot.at || 0) - startedAt >= 60000
+    }, {
+      minimumMarginalCoverage: 0.02,
+      geometryRearmShots: probe.geometryReprobeMaxShots,
+      maxGeometryRearms: probe.maxGeometryRearms
+    });
+    const probeBlocked = false;
+    const gateBlocked = sharedBudget.suppressFire;
     const cadenceBlocked = !gateBlocked && !probeBlocked
       && gate.minimumCadenceMs > 0
       && lastAllowedAt > 0
       && Number(item.shot.at || 0) - lastAllowedAt < gate.minimumCadenceMs;
-    const gateReason = probeBlocked
-      ? probe.suppressionReason
-      : (probeReopensNovelGeometry ? 'high-entropy-novel-geometry-probe' : gate.reason);
+    const gateReason = gateBlocked
+      ? sharedBudget.suppressionReason
+      : (sharedBudget.authorizationSource || gate.reason);
     fireDisciplineReasons[gateReason] = Number(fireDisciplineReasons[gateReason] || 0) + 1;
     if (gateBlocked || probeBlocked || cadenceBlocked) {
       if (gateBlocked) gateSuppressedShots += 1;
@@ -818,7 +825,10 @@ function replayCombat(options) {
           reason: gateBlocked || probeBlocked ? gateReason : 'high-entropy-cadence',
           noProgressAcceptedShots,
           recentHitRate: recent.length ? recentHits / recent.length : 0,
-          expectedHitProbability
+          expectedHitProbability,
+          sharedBudgetUsed: sharedBudget.sharedBudgetUsed,
+          sharedBudgetRemaining: sharedBudget.sharedBudgetRemaining,
+          marginalCoverage: sharedBudget.marginalCoverage
         };
       }
       if (item.improvedMiss <= options.hitRadius && suppressedEstimatedHitSamples.length < 12) {
@@ -851,11 +861,10 @@ function replayCombat(options) {
   const allowedEvidenceHits = damageAttributions.length > 0 ? allowedAttributedHits : allowedEstimatedHits;
   const baselineEvidenceRate = confirmedShots.length > 0 ? baselineEvidenceHits / confirmedShots.length : 0;
   const allowedEvidenceRate = allowedShots.length > 0 ? allowedEvidenceHits / allowedShots.length : 0;
-  const positiveControlPreserved = allowedShots.length === confirmedShots.length
-    && allowedEstimatedHits >= improvedHits
-    && allowedAttributedHits >= damageAttributions.length;
+  const positiveControlPreserved = damageAttributions.length > 0
+    && gateSuppressedShots === 0
+    && probeSuppressedShots === 0;
   const emptyWasteReduced = allowedShots.length < confirmedShots.length
-    && improvedHits === 0
     && damageAttributions.length === 0;
   const efficientSuppression = allowedShots.length < confirmedShots.length
     && allowedEvidenceHits > 0
@@ -1013,9 +1022,13 @@ function replayCombatShotCoverage(options) {
     baseline: combat.baseline,
     singleRouteReplay: combat.improved,
     coverage,
+    fireDiscipline: combat.fireDisciplineReplay,
     accepted: Number(coverage.estimatedHits || 0) >= 36
       && Number(coverage.meanAimMissCm || Infinity) <= 400
       && Number(coverage.p50AimMissCm || Infinity) <= 350
+      && combat.fireDisciplineReplay?.accepted === true
+      && Number(combat.fireDisciplineReplay?.allowedConfirmedShots || Infinity)
+        < Number(combat.fireDisciplineReplay?.baselineConfirmedShots || 0)
   };
 }
 

@@ -66,6 +66,11 @@ const {
 const { browserlessRuntimeRevision, browserlessRuntimeRevisionStatus } = require('./runtime-revision');
 const { runSnapshotEdgeSelfTest } = require('./snapshot-edge-wait');
 const {
+  normalizePendingExit,
+  pendingExitFromCanary,
+  pendingExitSnapshotResolution
+} = require('./pending-exit-recovery');
+const {
   buildSnapshotProbeUrl,
   readResponseBody,
   redactSecrets,
@@ -762,6 +767,10 @@ function browserlessLoopPlan(result, config = {}) {
   const delayMs = Math.max(1000, Number(config.loopDelayMs || 30000));
   const snapshotEdgeEnabled = config.snapshotEdgeEnabled === true;
   const fastDelayMs = 1000;
+  const loopNowMs = parseIsoTimeMs(canary?.completedAt) || parseIsoTimeMs(canary?.startedAt) || Date.now();
+  const pendingExit = normalizePendingExit(canary?.pendingExit, loopNowMs, {
+    maximumAgeMs: config.pendingExitPersistMaxMs
+  });
   const stop = reason => ({
     continue: false,
     reason,
@@ -808,6 +817,17 @@ function browserlessLoopPlan(result, config = {}) {
   if (!result) return resume('missing-result');
   if (result.reason === 'missing-manual-session') return resume('missing-manual-session');
   if (safetyReason === 'explicit-stop' || safetyReason === 'restart-drain-ready') return stop(safetyReason);
+  if (pendingExit) {
+    return {
+      continue: true,
+      reason: 'exit-recovery',
+      delayMs: Math.max(fastDelayMs, Number(pendingExit.retryDelayMs || fastDelayMs)),
+      previousRunId: runId,
+      error,
+      safetyReason: pendingExit.reason || safetyReason,
+      pendingExit
+    };
+  }
   if (fastRecoverableTransportReasons.has(safetyReason)) {
     return resumeFast(safetyReason);
   }
@@ -957,7 +977,7 @@ function runnerResultConfirmedLeave(result) {
 function preserveOnlineSessionForLoopWait(result, loopPlan = {}) {
   return Boolean(
     loopPlan?.continue
-      && String(loopPlan.reason || '') === 'action-settlement-stalled'
+      && ['action-settlement-stalled', 'exit-recovery'].includes(String(loopPlan.reason || ''))
       && !runnerResultConfirmedLeave(result)
   );
 }
@@ -1567,23 +1587,25 @@ async function runBrowserlessRunner(config, deps = {}) {
       nextRunAt,
       supervisorErrors: supervisorErrors.slice(-5)
     };
+    const exitRecoveryWait = loopPlan.reason === 'exit-recovery';
     const currentActionReason = resetLoginPointForNextEntry
       ? 'next-login-point-pending-snapshot-safety'
       : loopPlan.reason;
     updateState({
       runner: {
         running: true,
-        mode: config.controlMode || 'read-only',
+        mode: exitRecoveryWait ? 'exit-recovery' : (config.controlMode || 'read-only'),
         lastError: '',
         currentAction: {
-          kind: 'loop-wait',
-          band: 'recover',
+          kind: exitRecoveryWait ? 'exit-recovery' : 'loop-wait',
+          band: exitRecoveryWait ? 'exit' : 'recover',
           reason: currentActionReason,
           delayMs: effectiveDelayMs,
           nextRunAt,
           explicitDelay: Boolean(scheduledLoopPlan.explicitDelay),
           dailyFirstLoginDeadlineApplied,
-          previousRunId: loopPlan.previousRunId || ''
+          previousRunId: loopPlan.previousRunId || '',
+          ...(exitRecoveryWait ? { pendingExit: loopPlan.pendingExit || currentBeforeWait.runner?.pendingExit || null } : {})
         },
         gameplayDeadline: gameplayDeadlineFromLoopPlan(scheduledLoopPlan, nextRunAt, loopPlan.previousRunId),
         confirmedLeave: confirmedLeave
@@ -1676,27 +1698,33 @@ async function runBrowserlessRunner(config, deps = {}) {
         });
         if (snapshotSafetyAllowsImmediateResume(preparedSnapshotSafety)) {
           const currentBeforeResume = readBrowserlessStateFile(stateFile);
+          const pendingExit = normalizePendingExit(currentBeforeResume?.runner?.pendingExit, now(), {
+            maximumAgeMs: config.pendingExitPersistMaxMs
+          });
           updateState({
             runner: {
               running: true,
-              mode: config.controlMode || 'read-only',
+              mode: pendingExit ? 'exit-recovery' : (config.controlMode || 'read-only'),
               lastError: '',
               currentAction: {
-                kind: 'loop-wait',
-                band: 'recover',
-                reason: 'self-present-reentry',
+                kind: pendingExit ? 'exit-recovery' : 'loop-wait',
+                band: pendingExit ? 'exit' : 'recover',
+                reason: pendingExit ? 'exit-recovery' : 'self-present-reentry',
                 delayMs: 0,
                 nextRunAt: '',
-                previousRunId: loopPlan.previousRunId || ''
+                previousRunId: loopPlan.previousRunId || '',
+                ...(pendingExit ? { pendingExit } : {})
               },
               gameplayDeadline: null
             },
-            stats: browserlessStatsForOffline(currentBeforeResume, {
-              ...waitExitDetail,
-              reason: waitReason,
-              nextRunAt: '',
-              delayMs: 0
-            }, { nowMs: now() })
+            stats: pendingExit
+              ? currentBeforeResume.stats
+              : browserlessStatsForOffline(currentBeforeResume, {
+                  ...waitExitDetail,
+                  reason: waitReason,
+                  nextRunAt: '',
+                  delayMs: 0
+                }, { nowMs: now() })
           }, { updatedAt: new Date(now()).toISOString() });
           logStore.append('runner', 'runner-loop-wait-self-present-resume', {
             previousRunId: loopPlan.previousRunId || '',
@@ -1814,9 +1842,16 @@ async function runBrowserlessRunner(config, deps = {}) {
       freshness.ok
         && (summary.selfPresent === false || snapshotSafetyAllowsImmediateResume(snapshotSafety))
     );
+    const currentState = readBrowserlessStateFile(stateFile);
+    const pendingResolution = pendingExitSnapshotResolution(currentState?.runner?.pendingExit, snapshotSafety);
     const patch = {
       loginPointSafety: loginPointSafetyPatchFromSnapshot(snapshotSafety),
-      ...(clearsConfirmedLeave ? { runner: { confirmedLeave: null } } : {})
+      ...((clearsConfirmedLeave || pendingResolution.cleared) ? {
+        runner: {
+          ...(clearsConfirmedLeave ? { confirmedLeave: null } : {}),
+          ...(pendingResolution.cleared ? { pendingExit: null } : {})
+        }
+      } : {})
     };
     const updatedAt = new Date(now()).toISOString();
     updateState(patch, { updatedAt });
@@ -1862,6 +1897,13 @@ async function runBrowserlessRunner(config, deps = {}) {
       singleBlockerHold: summary?.safety?.singleBlockerHold || null,
       bypassKind: snapshotSafety?.bypassKind || ''
     });
+    if (pendingResolution.cleared) {
+      logStore.append('runner', 'pending-exit-cleared-by-snapshot', {
+        reason: pendingResolution.reason,
+        checkedAt: snapshotSafety?.checkedAt || '',
+        tick: summary.tick ?? null
+      });
+    }
   };
 
   const onTransportOpen = (transport, detail = {}) => {
@@ -2207,23 +2249,27 @@ async function runBrowserlessRunner(config, deps = {}) {
         if (selfPresent) {
           recordSnapshotSafetyProgress(probe);
           const currentBeforeResume = readBrowserlessStateFile(stateFile);
+          const pendingExit = normalizePendingExit(currentBeforeResume?.runner?.pendingExit, now(), {
+            maximumAgeMs: config.pendingExitPersistMaxMs
+          });
           updateState({
             runner: {
               running: true,
-              mode: config.controlMode || 'read-only',
+              mode: pendingExit ? 'exit-recovery' : (config.controlMode || 'read-only'),
               lastError: '',
               currentAction: {
-                kind: 'loop-wait',
-                band: 'recover',
-                reason: 'self-present-reentry',
+                kind: pendingExit ? 'exit-recovery' : 'loop-wait',
+                band: pendingExit ? 'exit' : 'recover',
+                reason: pendingExit ? 'exit-recovery' : 'self-present-reentry',
                 delayMs: 0,
                 nextRunAt: '',
                 previousRunId: persistedDelayPlan.previousRunId || '',
-                persisted: true
+                persisted: true,
+                ...(pendingExit ? { pendingExit } : {})
               },
               gameplayDeadline: null
             },
-            stats: preservePersistedOnlineSession
+            stats: (preservePersistedOnlineSession || pendingExit)
               ? currentBeforeResume.stats
               : browserlessStatsForOffline(currentBeforeResume, {
                   reason: persistedDelayPlan.safetyReason || persistedDelayPlan.reason,
@@ -2477,8 +2523,9 @@ async function runBrowserlessRunner(config, deps = {}) {
       }
     }
     let canary;
+    let stateBeforeCanary = null;
     try {
-      const stateBeforeCanary = readBrowserlessStateFile(stateFile);
+      stateBeforeCanary = readBrowserlessStateFile(stateFile);
       liveState = stateBeforeCanary;
       activeRunKillConfirmations = [];
       const bypassPreLoginSafetyReason = isFirstBrowserlessLoginOfDay(stateBeforeCanary, now())
@@ -2566,7 +2613,19 @@ async function runBrowserlessRunner(config, deps = {}) {
       logStore.append('runner', 'runner-canary-error', canary);
     }
     const { finalSelf, loginPoint: learnedLoginPoint } = learnedLoginPointFromCanary(canary);
-    const result = { ok: Boolean(canary?.ok), mode: config.controlMode || 'read-only', canary: canary || null };
+    const previousPendingExit = stateBeforeCanary?.runner?.pendingExit || null;
+    const snapshotClearedPendingExit = canary?.recovery?.pendingExitResolution === 'fresh-snapshot-self-absent';
+    const nextPendingExit = snapshotClearedPendingExit
+      ? null
+      : pendingExitFromCanary(previousPendingExit, canary, now(), {
+          maximumAgeMs: config.pendingExitPersistMaxMs
+        });
+    if (canary && typeof canary === 'object') canary.pendingExit = nextPendingExit;
+    const result = {
+      ok: Boolean(canary?.ok),
+      mode: nextPendingExit ? 'exit-recovery' : (config.controlMode || 'read-only'),
+      canary: canary || null
+    };
     const finalDecisionPatch = canary?.decisions?.last ? decisionStatePatch(canary.decisions.last) : {};
     const safetyEvents = [canary?.safety?.event, canary?.safety?.leaveFailure]
       .filter(Boolean)
@@ -2584,7 +2643,8 @@ async function runBrowserlessRunner(config, deps = {}) {
       runner: {
         ...(finalDecisionPatch.runner || {}),
         running: !config.once,
-        mode: config.controlMode || 'read-only',
+        mode: nextPendingExit ? 'exit-recovery' : (config.controlMode || 'read-only'),
+        pendingExit: nextPendingExit,
         lastRun: result,
         lastError: result.ok ? '' : (canary?.error || 'read-only-canary-failed')
       },

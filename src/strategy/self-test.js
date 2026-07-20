@@ -1400,16 +1400,16 @@ function runStrategyModuleSelfTests() {
     closePressure: true
   });
   results.push({
-    name: 'combat-close-pressure-overrides-economic-retreat-and-permanent-fire-cooldown',
+    name: 'combat-close-pressure-keeps-movement-but-respects-shared-fire-cooldown',
     passed: closePressureExchange.phase === 'close-pressure'
       && closePressureExchange.closePressureContinuation === true
       && closePressureExchange.disengage === false
       && closePressureExchange.shouldExit === false
-      && closePressureFireGate.suppressFire === false
-      && closePressureFireGate.minimumCadenceMs >= 320
-      && closePressureProbe.probePhase === 'close-pressure'
-      && closePressureProbe.suppressFire === false
-      && closePressureProbe.suppressionReason === 'close-pressure-fire-reopened'
+      && closePressureFireGate.suppressFire === true
+      && closePressureFireGate.reason === 'high-entropy-reacquire'
+      && closePressureProbe.probePhase === 'cooldown'
+      && closePressureProbe.suppressFire === true
+      && closePressureProbe.suppressionReason === 'probe-zero-damage-budget-cooldown'
   });
 
   const attackWorthOptions = {

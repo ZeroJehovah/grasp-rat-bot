@@ -40,6 +40,7 @@ function defaultBrowserlessState() {
       dryRun: true,
       combatEnabled: false,
       confirmedLeave: null,
+      pendingExit: null,
       restartDrain: null,
       currentAction: null,
       lastRun: null,
@@ -149,6 +150,7 @@ function shouldReplaceStateObject(pathParts) {
   const pathKey = pathParts.join('.');
   return pathKey === 'runner.currentAction'
     || pathKey === 'runner.lastRun'
+    || pathKey === 'runner.pendingExit'
     || pathKey === 'probes.lastSnapshotProbe'
     || pathKey === 'probes.lastReadOnlyProbe'
     || pathKey === 'loginPointSafety.detail'
@@ -239,6 +241,9 @@ function normalizeBrowserlessState(state, file = '') {
   normalized.runner.running = Boolean(normalized.runner.running);
   normalized.runner.readOnly = normalized.runner.readOnly !== false;
   normalized.runner.dryRun = normalized.runner.dryRun !== false;
+  normalized.runner.pendingExit = normalized.runner.pendingExit && typeof normalized.runner.pendingExit === 'object'
+    ? cloneJson(normalized.runner.pendingExit)
+    : null;
   normalized.lastKnown = normalizeBrowserlessLastKnown(
     normalized.lastKnown,
     normalized.current,

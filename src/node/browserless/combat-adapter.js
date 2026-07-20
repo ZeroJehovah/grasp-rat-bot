@@ -24,6 +24,7 @@ const {
   checkLowConfidenceThrottle,
   classifyFireRiskCore,
   determineCombatFireState,
+  evaluateCombatFireBudgetCore,
   evaluateHighEntropyFireGateCore,
   updateCombatProbePhaseCore
 } = require('../../strategy/combat-fire-discipline');
@@ -2493,66 +2494,51 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     proactiveCombat: !contactEntryOnly,
     shootingStaminaSpent: noProgressAcceptedShots * Math.max(1, Number(options.combatShotStaminaCostMs ?? 500))
   }, options.highEntropyFireGate);
-  const probeReopensNovelGeometry = Boolean(
-    baseHighEntropyFireGate.suppressFire
-      && (probeState.provenHitProtected
-        || (probeState.geometryProbeEligible && probeState.probeBudgetRemaining > 0))
-      && /^high-entropy-/.test(String(baseHighEntropyFireGate.reason || ''))
-  );
-  const effectiveBaseHighEntropyFireGate = probeReopensNovelGeometry
-    ? {
-        ...baseHighEntropyFireGate,
-        suppressFire: false,
-        reason: 'high-entropy-novel-geometry-probe',
-        probeOverrideReason: probeState.provenHitProtected
-          ? 'proven-hit-rate'
-          : 'geometry-novelty-and-route-probability'
-      }
-    : baseHighEntropyFireGate;
-  const highEntropyFireGate = closePressureActive
-    ? {
-        ...effectiveBaseHighEntropyFireGate,
-        active: true,
-        suppressFire: false,
-        minimumCadenceMs: Math.max(
-          320,
-          Number(effectiveBaseHighEntropyFireGate.minimumCadenceMs || 0),
-          Number(options.combatClosePressureShootEveryMs ?? 520)
-        ),
-        reason: 'close-pressure-fire-reopened',
-        probePhase: 'close-pressure',
-        probeBudgetRemaining: probeState.probeBudgetRemaining,
-        probeResetReason: probeState.probeResetReason,
-        geometryNovelty: probeState.geometryNovelty,
-        routeProbability: probeState.routeProbability,
-        predictedHitProbability: probeState.predictedHitProbability,
-        actualHitAttribution: probeState.actualHitAttribution
-      }
-    : probeState.suppressFire
-    ? {
-        ...effectiveBaseHighEntropyFireGate,
-        active: true,
-        suppressFire: true,
-        minimumCadenceMs: Math.max(0, Number(baseHighEntropyFireGate.minimumCadenceMs || 0)),
-        reason: probeState.suppressionReason,
-        probePhase: probeState.probePhase,
-        probeBudgetRemaining: probeState.probeBudgetRemaining,
-        probeResetReason: probeState.probeResetReason,
-        geometryNovelty: probeState.geometryNovelty,
-        routeProbability: probeState.routeProbability,
-        predictedHitProbability: probeState.predictedHitProbability,
-        actualHitAttribution: probeState.actualHitAttribution
-      }
-    : {
-        ...effectiveBaseHighEntropyFireGate,
-        probePhase: probeState.probePhase,
-        probeBudgetRemaining: probeState.probeBudgetRemaining,
-        probeResetReason: probeState.probeResetReason,
-        geometryNovelty: probeState.geometryNovelty,
-        routeProbability: probeState.routeProbability,
-        predictedHitProbability: probeState.predictedHitProbability,
-        actualHitAttribution: probeState.actualHitAttribution
-      };
+  const sharedFireBudget = evaluateCombatFireBudgetCore({
+    targetId: combatTargetId(target),
+    acceptedShotsSinceDamage: noProgressAcceptedShots,
+    fireGate: baseHighEntropyFireGate,
+    probeState,
+    trajectoryCoverage: aim.trajectoryCoverage,
+    closePressure: closePressureActive,
+    finishProtected: baseHighEntropyFireGate.finishProtected,
+    resolvedReserveMs: fireState.reserve,
+    stamina5s: fireState.stamina5s
+  }, {
+    minimumMarginalCoverage: 0.02,
+    geometryRearmShots: probeState.geometryReprobeMaxShots,
+    maxGeometryRearms: probeState.maxGeometryRearms,
+    defensiveExtraShots: options.highEntropyFireGate?.defensiveExtraShots ?? 5
+  });
+  const highEntropyFireGate = {
+    ...baseHighEntropyFireGate,
+    active: Boolean(baseHighEntropyFireGate.active || probeState.highEntropy),
+    suppressFire: sharedFireBudget.suppressFire,
+    minimumCadenceMs: Math.max(
+      0,
+      Number(baseHighEntropyFireGate.minimumCadenceMs || 0),
+      closePressureActive ? Number(options.combatClosePressureShootEveryMs ?? 520) : 0
+    ),
+    reason: sharedFireBudget.suppressFire
+      ? sharedFireBudget.suppressionReason
+      : baseHighEntropyFireGate.reason,
+    probePhase: probeState.probePhase,
+    probeBudgetRemaining: probeState.probeBudgetRemaining,
+    probeResetReason: probeState.probeResetReason,
+    geometryNovelty: probeState.geometryNovelty,
+    routeProbability: probeState.routeProbability,
+    predictedHitProbability: probeState.predictedHitProbability,
+    actualHitAttribution: probeState.actualHitAttribution,
+    sharedBudgetUsed: sharedFireBudget.sharedBudgetUsed,
+    sharedBudgetMax: sharedFireBudget.sharedBudgetMax,
+    sharedBudgetRemaining: sharedFireBudget.sharedBudgetRemaining,
+    authorizationSource: sharedFireBudget.authorizationSource,
+    marginalCoverage: sharedFireBudget.marginalCoverage,
+    coverageQualified: sharedFireBudget.coverageQualified,
+    coverageVolleyRequiredStamina: sharedFireBudget.coverageVolleyRequiredStamina,
+    coverageVolleyStaminaReady: sharedFireBudget.coverageVolleyStaminaReady,
+    suppressionReason: sharedFireBudget.suppressionReason
+  };
   const baseCadenceMs = Number.isFinite(Number(lowConfidence.cadenceMs)) && lowConfidence.throttle
     ? Number(lowConfidence.cadenceMs)
     : (Number.isFinite(Number(fireState.cadenceMs)) ? Number(fireState.cadenceMs) : null);
@@ -2666,6 +2652,13 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
       noProgressAcceptedShots,
       noProgressShootingStaminaSpent: noProgressAcceptedShots * Math.max(1, Number(options.combatShotStaminaCostMs ?? 500)),
       fireSuppressionReason: highEntropyFireGate.suppressFire ? highEntropyFireGate.reason : 'none',
+      sharedBudgetUsed: sharedFireBudget.sharedBudgetUsed,
+      sharedBudgetRemaining: sharedFireBudget.sharedBudgetRemaining,
+      authorizationSource: sharedFireBudget.authorizationSource,
+      marginalCoverage: sharedFireBudget.marginalCoverage,
+      coverageVolleyRequiredStamina: sharedFireBudget.coverageVolleyRequiredStamina,
+      coverageVolleyStaminaReady: sharedFireBudget.coverageVolleyStaminaReady,
+      suppressionReason: sharedFireBudget.suppressionReason,
       defensivePressure,
       defensivePressureReason: targetCollisionBullet
         ? 'collision-risk-target-bullet'

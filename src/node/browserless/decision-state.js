@@ -96,6 +96,8 @@ function createInitialDecisionState(options = {}) {
     explorationHistory: asArray(options.explorationHistory),
     explorationLifecycleEvents: asArray(options.explorationLifecycleEvents),
     attackHistory: asArray(options.attackHistory),
+    postAttackSettlements: cloneJson(options.postAttackSettlements || {}),
+    postAttackSettlement: cloneJson(options.postAttackSettlement || null),
     postKillSettlement: cloneJson(options.postKillSettlement || null),
     combatTarget: cloneJson(options.combatTarget || null),
     combatAim: cloneJson(options.combatAim || null),
@@ -180,6 +182,10 @@ function summarizeBrowserlessDecisionState(state, options = {}) {
     attackHistory: {
       count: Array.isArray(state.attackHistory) ? state.attackHistory.length : 0,
       recent: boundedList(state.attackHistory, limit)
+    },
+    postAttackSettlement: {
+      selected: redactBoundedValue(state.postAttackSettlement || null),
+      states: recordEntries(state.postAttackSettlements || {}, limit)
     },
     postKillSettlement: redactBoundedValue(state.postKillSettlement || null),
     combat: {

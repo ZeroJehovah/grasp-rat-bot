@@ -27,6 +27,11 @@ const {
 } = require('./safety-controller');
 const { createBrowserlessActionAdapter } = require('./action-adapter');
 const { buildLeavePendingCover } = require('./leave-pending-control');
+const {
+  normalizePendingExit,
+  pendingExitRecoveryEvent,
+  pendingExitSnapshotResolution
+} = require('./pending-exit-recovery');
 const { createBrowserlessTargetWhitelist } = require('./target-whitelist');
 const { browserlessRuntimeRevision, browserlessRuntimeRevisionStatus } = require('./runtime-revision');
 const { createBrowserlessDecisionWorker } = require('./decision-worker');
@@ -1126,6 +1131,10 @@ async function runReadOnlyCanary(config, options = {}) {
   const runId = String(options.runId || createCanaryRunId(controlMode, startedAt));
   const runtimeRevision = browserlessRuntimeRevision(options);
   const previousInGameEvidence = inGameRecoveryEvidenceFromState(options.persistedState || {});
+  const persistedPendingExit = normalizePendingExit(options.persistedState?.runner?.pendingExit, startedAt, {
+    maximumAgeMs: options.pendingExitPersistMaxMs
+  });
+  let exitRecoveryActive = Boolean(persistedPendingExit);
   const result = {
     ok: false,
     runId,
@@ -1182,7 +1191,10 @@ async function runReadOnlyCanary(config, options = {}) {
       reason: previousInGameEvidence?.reason || '',
       source: previousInGameEvidence?.source || '',
       previousRunId: previousInGameEvidence?.previousRunId || '',
-      clearedBy: ''
+      clearedBy: '',
+      exitRecovery: Boolean(persistedPendingExit),
+      pendingExit: persistedPendingExit,
+      pendingExitResolution: persistedPendingExit ? 'pending-snapshot-check' : 'inactive'
     },
     leave: null,
     targetWhitelist: targetWhitelistSummary,
@@ -2138,6 +2150,27 @@ async function runReadOnlyCanary(config, options = {}) {
   }
   log('canary-snapshot-safety', result.snapshotSafety);
   result.snapshotSafety = allowSelfPresentSnapshotControl(result.snapshotSafety);
+  const pendingExitResolution = pendingExitSnapshotResolution(persistedPendingExit, result.snapshotSafety);
+  exitRecoveryActive = pendingExitResolution.active;
+  result.recovery.exitRecovery = pendingExitResolution.active;
+  result.recovery.pendingExit = pendingExitResolution.pendingExit;
+  result.recovery.pendingExitResolution = pendingExitResolution.reason;
+  if (pendingExitResolution.cleared) {
+    log('canary-exit-recovery-cleared', {
+      reason: pendingExitResolution.reason,
+      previousRunId: persistedPendingExit?.sourceRunId || '',
+      pendingReason: persistedPendingExit?.reason || ''
+    });
+  } else if (pendingExitResolution.active) {
+    result.mode = 'exit-recovery';
+    log('canary-exit-recovery-active', {
+      reason: pendingExitResolution.reason,
+      previousRunId: persistedPendingExit?.sourceRunId || '',
+      pendingReason: persistedPendingExit?.reason || '',
+      attemptCount: persistedPendingExit?.attemptCount || 0,
+      requestAttemptCount: persistedPendingExit?.requestAttemptCount || 0
+    });
+  }
   if (result.snapshotSafety?.bypassKind === 'single-blocker-timeout') {
     log('canary-snapshot-single-blocker-timeout-bypass', result.snapshotSafety);
   } else if (result.snapshotSafety?.bypassedPreLoginSafety && result.snapshotSafety?.bypassKind !== 'daily-first-login') {
@@ -2311,6 +2344,20 @@ async function runReadOnlyCanary(config, options = {}) {
               };
               result.entry.firstSelfAt = new Date(atMs).toISOString();
               result.entry.firstSelfTick = currentState?.realtime?.tick ?? frame.decodedTick ?? null;
+            }
+            if (exitRecoveryActive && currentSelf && !leavePending) {
+              const recoveryEvent = pendingExitRecoveryEvent(persistedPendingExit, atMs);
+              if (recoveryEvent) {
+                result.recovery.inGameEvidence = true;
+                result.recovery.reason = 'pending-exit-self-present';
+                result.recovery.source = 'persisted-pending-exit';
+                result.recovery.previousRunId = persistedPendingExit?.sourceRunId || '';
+                recordSafetyEvent(recoveryEvent, {
+                  state: currentState,
+                  decision: result.decisions.last,
+                  atMs
+                });
+              }
             }
             if (actionAdapter) {
               const settlement = actionAdapter.observeState(currentState);

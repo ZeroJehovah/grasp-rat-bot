@@ -88,6 +88,10 @@ const {
 } = require('./browserless/action-adapter');
 const { buildLeavePendingCover } = require('./browserless/leave-pending-control');
 const {
+  pendingExitFromCanary,
+  pendingExitSnapshotResolution
+} = require('./browserless/pending-exit-recovery');
+const {
   buildBrowserlessCombatDryRun,
   buildCombatMovementPlan,
   estimateAim,
@@ -97,7 +101,11 @@ const {
   movementTransitionModelCore,
   updateOpponentBehaviorStateCore
 } = require('../strategy/opponent-behavior');
-const { evaluateHighEntropyFireGateCore } = require('../strategy/combat-fire-discipline');
+const {
+  evaluateCombatFireBudgetCore,
+  evaluateHighEntropyFireGateCore
+} = require('../strategy/combat-fire-discipline');
+const { updatePostAttackSettlementCore } = require('../strategy/post-attack-drop');
 const {
   actionSettlementStallAssessment,
   createBrowserlessSafetyController,
@@ -5374,6 +5382,275 @@ async function runSelfTest() {
 
   const cases = [
     {
+      name: 'browserless shared combat fire budget blocks close-pressure double authorization',
+      got: (() => {
+        const fireGate = {
+          active: true,
+          suppressFire: true,
+          reason: 'high-entropy-reacquire',
+          explorationMaxShots: 15,
+          boundedNoProgress: true,
+          defensivePressure: false,
+          finishProtected: false
+        };
+        const coverage = marginalCoverage => ({
+          active: marginalCoverage >= 0.02,
+          selected: { marginalCoverage }
+        });
+        const at14 = evaluateCombatFireBudgetCore({
+          targetId: 'target-a', acceptedShotsSinceDamage: 14,
+          fireGate: { ...fireGate, suppressFire: false, boundedNoProgress: false },
+          probeState: { suppressFire: false, geometryReprobeMaxShots: 2, maxGeometryRearms: 1 },
+          trajectoryCoverage: coverage(0.03), closePressure: true,
+          resolvedReserveMs: 2600, stamina5s: 4599
+        });
+        const at15 = evaluateCombatFireBudgetCore({
+          targetId: 'target-a', acceptedShotsSinceDamage: 15, fireGate,
+          probeState: { suppressFire: true, geometryReprobeMaxShots: 2, maxGeometryRearms: 1 },
+          trajectoryCoverage: coverage(0.03), closePressure: true,
+          resolvedReserveMs: 2600, stamina5s: 4600
+        });
+        const noGain = evaluateCombatFireBudgetCore({
+          targetId: 'target-a', acceptedShotsSinceDamage: 15, fireGate,
+          probeState: { suppressFire: true, geometryReprobeMaxShots: 2, maxGeometryRearms: 1 },
+          trajectoryCoverage: coverage(0.01), closePressure: true
+        });
+        const exhausted = evaluateCombatFireBudgetCore({
+          targetId: 'target-a', acceptedShotsSinceDamage: 17, fireGate,
+          probeState: { suppressFire: true, geometryReprobeMaxShots: 2, maxGeometryRearms: 1 },
+          trajectoryCoverage: coverage(0.03), closePressure: true
+        });
+        const damagedReset = evaluateCombatFireBudgetCore({
+          targetId: 'target-a', acceptedShotsSinceDamage: 0,
+          fireGate: { ...fireGate, active: false, suppressFire: false, boundedNoProgress: false },
+          probeState: { suppressFire: false }, trajectoryCoverage: coverage(0.03)
+        });
+        const switched = evaluateCombatFireBudgetCore({
+          targetId: 'target-b', acceptedShotsSinceDamage: 0,
+          fireGate: { ...fireGate, active: false, suppressFire: false, boundedNoProgress: false },
+          probeState: { suppressFire: false }, trajectoryCoverage: coverage(0.03)
+        });
+        return [
+          at14.suppressFire,
+          at14.sharedBudgetRemaining,
+          at14.coverageVolleyStaminaReady,
+          at15.suppressFire,
+          at15.authorizationSource,
+          at15.sharedBudgetRemaining,
+          at15.coverageVolleyStaminaReady,
+          noGain.suppressFire,
+          noGain.suppressionReason,
+          exhausted.suppressFire,
+          exhausted.suppressionReason,
+          damagedReset.sharedBudgetUsed,
+          damagedReset.suppressFire,
+          switched.targetId,
+          switched.sharedBudgetUsed
+        ].join('|');
+      })(),
+      want: 'false|3|false|false|coverage-marginal-geometry-rearm|2|true|true|coverage-no-marginal-gain|true|shared-fire-budget-exhausted|0|false|target-b|0'
+    },
+    {
+      name: 'browserless post-attack settlement consumes observed and expired generations without A-B-A reinsertion',
+      got: (() => {
+        const attack = { id: 8, name: 'target', drop: 20, x: 5000, y: 0, at: 900, action: 'attack', afk: true };
+        const options = { waitMs: 1000, resolveMaxMs: 5000, pickupMs: 45000, minDrop: 8, dropCoinRadius: 3500, resolveAttack: () => 1000 };
+        const pending = updatePostAttackSettlementCore({}, { nowMs: 1000, attacks: [attack], coins: [], visibleTargets: [] }, options);
+        const observed = updatePostAttackSettlementCore(pending.states, {
+          nowMs: 1200, attacks: [attack], coins: [{ drop_id: 'drop-8', amount: 20, x: 5100, y: 0 }], visibleTargets: []
+        }, options);
+        const protectedState = updatePostAttackSettlementCore(observed.states, {
+          nowMs: 1300, attacks: [attack], coins: [{ drop_id: 'drop-8', amount: 20, x: 5100, y: 0 }], visibleTargets: []
+        }, options);
+        const settled = updatePostAttackSettlementCore(protectedState.states, { nowMs: 1400, attacks: [attack], coins: [], visibleTargets: [] }, options);
+        const noReinsert = updatePostAttackSettlementCore(settled.states, { nowMs: 1500, attacks: [attack], coins: [], visibleTargets: [] }, options);
+        const expired = updatePostAttackSettlementCore(pending.states, { nowMs: 2201, attacks: [attack], coins: [], visibleTargets: [] }, options);
+        const expiredNoReinsert = updatePostAttackSettlementCore(expired.states, { nowMs: 2500, attacks: [attack], coins: [], visibleTargets: [] }, options);
+        const fiveLoggedGroupsStayTerminal = ['3956', '4278', '4731', 'yongren', '5104'].every((id, index) => {
+          const groupedAttack = { ...attack, id, at: 900 + index };
+          const first = updatePostAttackSettlementCore({}, {
+            nowMs: 1000 + index, attacks: [groupedAttack], coins: [], visibleTargets: []
+          }, options);
+          const ordinaryTakeoverGap = updatePostAttackSettlementCore(first.states, {
+            nowMs: 1500 + index, attacks: [groupedAttack], coins: [], visibleTargets: []
+          }, options);
+          const terminal = updatePostAttackSettlementCore(ordinaryTakeoverGap.states, {
+            nowMs: 2201 + index, attacks: [groupedAttack], coins: [], visibleTargets: []
+          }, options);
+          const replay = updatePostAttackSettlementCore(terminal.states, {
+            nowMs: 2500 + index, attacks: [groupedAttack], coins: [], visibleTargets: []
+          }, options);
+          return replay.selected === null && replay.states[id]?.phase === 'expired';
+        });
+        return [
+          pending.selected?.phase,
+          observed.selected?.phase,
+          protectedState.selected?.phase,
+          settled.states['8']?.phase,
+          noReinsert.selected === null,
+          noReinsert.states['8']?.terminalReason,
+          expired.states['8']?.phase,
+          expiredNoReinsert.selected === null,
+          fiveLoggedGroupsStayTerminal
+        ].join('|');
+      })(),
+      want: 'pending|drop-observed|pickup-protected|settled|true|matched-drop-disappeared|expired|true|true'
+    },
+    {
+      name: 'browserless single coin bait exact distant regressions select eligible alternatives or wait',
+      got: (() => {
+        const nowMs = Date.parse('2026-07-20T04:00:00.000Z');
+        const options = {
+          userId: 7,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          dynamicProfitThresholdEnabled: true,
+          singleCoinBaitHoldRadiusCm: 1000,
+          singleCoinBaitHoldHysteresisCm: 200,
+          finalActionArbitrationHoldMs: 0,
+          opportunitySwitchConfirmFrames: 1,
+          opportunitySwitchMargin: 0,
+          opportunitySwitchRelativeMargin: 0
+        };
+        const run = (name, baitDistance, alternative = null) => {
+          const adapter = createBrowserlessDecisionAdapter(options);
+          const stateFor = (tick, selfX, coins) => ({
+            userId: 7,
+            realtime: {
+              tick,
+              frameAgeMs: 0,
+              self: { entity_id: 1, user_id: 7, name: 'self', x: selfX, y: 0, hp: 100, max_hp: 100, stamina_1h_remaining_milli: 3000000, stamina_1d_remaining_milli: 20000000 },
+              entities: [{ entity_id: 1, user_id: 7, name: 'self', x: selfX, y: 0, hp: 100, max_hp: 100, stamina_1h_remaining_milli: 3000000, stamina_1d_remaining_milli: 20000000 }],
+              bullets: [],
+              coinDrops: coins
+            },
+            fallback: { tick, frameAgeMs: 0, entities: [], coinDrops: [], messages: [] }
+          });
+          const bait = { drop_id: name, amount: 1, x: 900, y: 0 };
+          adapter.decide(stateFor(1, 0, [bait]), { nowMs });
+          const selfX = 900 + baitDistance;
+          const coins = [bait];
+          if (alternative) coins.push({ drop_id: alternative.id, amount: alternative.amount, x: selfX + alternative.distance, y: 0 });
+          const decision = adapter.decide(stateFor(2, selfX, coins), { nowMs: nowMs + 1000 });
+          return [
+            decision.action.target?.id || decision.reason,
+            decision.action.finalCandidate?.commitmentRank ?? 0,
+            decision.profit.singleCoinBait?.closeCommitmentRadiusCm ?? ''
+          ].join(':');
+        };
+        return [
+          run('3093', 17461),
+          run('4460', 14195, { id: '4231', amount: 3, distance: 20877 }),
+          run('5875', 10893, { id: '5799', amount: 1, distance: 2259 }),
+          run('6312', 15293, { id: '6354', amount: 1, distance: 7576 }),
+          run('6465', 12019),
+          run('7181', 10116, { id: '7218', amount: 1, distance: 7663 })
+        ].join('|');
+      })(),
+      want: 'dynamic-profit-threshold-wait:0:1200|4231:0:1200|5799:0:1200|6354:0:1200|dynamic-profit-threshold-wait:0:1200|7218:0:1200'
+    },
+    {
+      name: 'browserless pending exit persists 502 metadata and clears only on fresh self absence',
+      got: (() => {
+        const nowMs = Date.parse('2026-07-20T06:00:00.000Z');
+        const pending = pendingExitFromCanary(null, {
+          runId: 'failed-exit-run',
+          startedAt: new Date(nowMs - 1000).toISOString(),
+          error: 'leave not confirmed',
+          safety: {
+            event: { reason: 'frame-gap', shouldLeave: true, at: new Date(nowMs - 900).toISOString() },
+            leavePending: { targetId: '31361', startHp: 85, minHp: 85, lastHp: 85, error: 'HTTP 502' }
+          },
+          leave: { ok: false, error: 'HTTP 502', attempts: [{ status: 502 }, { status: 502 }, { status: 502 }, { status: 502 }] }
+        }, nowMs);
+        const present = pendingExitSnapshotResolution(pending, {
+          ok: true,
+          response: { summary: { selfPresent: true, freshness: { ok: true } } }
+        });
+        const absent = pendingExitSnapshotResolution(pending, {
+          ok: true,
+          response: { summary: { selfPresent: false, freshness: { ok: true } } }
+        });
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'grasp-rat-pending-exit-'));
+        const file = path.join(dir, 'state.json');
+        updateBrowserlessStateFile(file, { runner: { pendingExit: pending } }, { updatedAt: new Date(nowMs).toISOString() });
+        const roundTrip = readBrowserlessStateFile(file).runner.pendingExit;
+        fs.rmSync(dir, { recursive: true, force: true });
+        return [
+          pending.reason,
+          pending.targetId,
+          pending.attemptCount,
+          pending.requestAttemptCount,
+          pending.startHp,
+          pending.lastError,
+          present.active,
+          present.reason,
+          absent.cleared,
+          absent.reason,
+          roundTrip.reason,
+          roundTrip.requestAttemptCount
+        ].join('|');
+      })(),
+      want: 'frame-gap|31361|1|4|85|HTTP 502|true|snapshot-self-present|true|fresh-snapshot-self-absent|frame-gap|4'
+    },
+    {
+      name: 'browserless pending exit self-present run is exit-only until leave confirmation',
+      got: (async () => {
+        let t = Date.parse('2026-07-20T06:05:00.000Z');
+        let receiveFrame = null;
+        const commands = [];
+        const pendingExit = pendingExitFromCanary(null, {
+          runId: 'prior-failed-exit',
+          startedAt: new Date(t - 1000).toISOString(),
+          error: 'leave not confirmed',
+          safety: { event: { reason: 'frame-gap', shouldLeave: true, at: new Date(t - 900).toISOString() } },
+          leave: { ok: false, error: 'HTTP 502', attempts: [{ status: 502 }] }
+        }, t);
+        const frame = encodeGrzFrameForTest({
+          type: 'pos', tick: 100,
+          entities: [
+            { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 85, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+            { entity_id: 2, user_id: 8, name: 'enemy', x: 5000, y: 0, hp: 100, max_hp: 100, current_join_mode: 'Active', firing: true }
+          ],
+          bullets: []
+        });
+        const result = await runReadOnlyCanary({
+          gameOrigin: 'https://self-test.invalid', userId: 7, sessionToken: 'pending-exit-token',
+          readOnly: false, controlMode: 'profit-live', combatEnabled: true,
+          readOnlyProbeMs: 1000, decisionIntervalMs: 1, frameGapAlertMs: 5000
+        }, {
+          now: () => t,
+          sleep: async ms => { t += ms; },
+          persistedState: { runner: { pendingExit } },
+          precheckedSnapshotSafety: {
+            ok: true, reason: 'self-present-reentry', satisfied: true, bypassedPreLoginSafety: true,
+            response: { summary: { selfPresent: true, freshness: { ok: true } } }
+          },
+          openBrowserlessWs: async options => {
+            receiveFrame = options.onMessage;
+            receiveFrame(frame);
+            return {
+              isOpen: () => true,
+              close() {},
+              sendVelocity: (dx, dy) => commands.push(`vel:${dx},${dy}`),
+              sendShoot: () => commands.push('shoot')
+            };
+          },
+          leaveWithVerification: async () => ({ ok: true, attempts: [{ ok: true, status: 200, summary: { leaveConfirmed: true } }] })
+        });
+        return [
+          result.mode,
+          result.recovery.exitRecovery,
+          result.safety.event?.classification,
+          result.leave?.ok,
+          result.decisions.evaluatedCount,
+          result.actions.shootSentCount,
+          commands.includes('shoot')
+        ].join('|');
+      })(),
+      want: 'exit-recovery|true|exit-recovery|true|0|0|false'
+    },
+    {
       name: 'strategy module self-tests pass',
       got: (() => {
         const result = runStrategyModuleSelfTests();
@@ -9768,6 +10045,7 @@ async function runSelfTest() {
             firstHp: 100,
             minHp: 94,
             damageFromStart: 6,
+            acceptedShotsAtLastDamage: 34,
             drop: 200,
             intent: 'profit',
             originIntent: 'profit'
@@ -10384,7 +10662,7 @@ async function runSelfTest() {
           hardExit.exit?.reason
         ].join('|');
       })(),
-      want: 'close-pressure|close-pressure|false|false|true|true|false|close-pressure|combat-low-hp-disadvantage-leave'
+      want: 'close-pressure|close-pressure|false|false|true|true|true|close-pressure|combat-low-hp-disadvantage-leave'
     },
     {
       name: 'browserless action adapter pre-approaches AFK target before shooting',
@@ -11041,8 +11319,8 @@ async function runSelfTest() {
           decision.band,
           decision.reason,
           decision.action.target.id,
-          decision.action.postAttackTarget.id,
-          decision.action.postAttackTarget.drop,
+          decision.action.postAttackTarget?.id || '',
+          decision.action.postAttackTarget?.drop ?? '',
           decision.action.target.authority
         ].join('|');
       })(),
@@ -14996,7 +15274,7 @@ async function runSelfTest() {
           combat.movement.dx !== 0 || combat.movement.dy !== 0
         ].join('|');
       })(),
-      want: 'high-entropy-robust-stop|high-entropy-reacquire|15|15|false|true|true'
+      want: 'high-entropy-robust-stop|high-entropy-reacquire|15|15|true|false|true'
     },
     {
       name: 'browserless pre-dodge requires low-variation firing cadence before induce hold',
@@ -22003,7 +22281,12 @@ async function runSelfTest() {
         const falseNegativeState = { browserlessLeaveRisk: baseRisk(false) };
         const falseNegative = attributeBrowserlessHpDropToBullet({
           realtime: { tick: 24 },
-          bullets: []
+          bullets: [],
+          command: {
+            movement: {
+              actualVelocityTransitions: [{ commandId: 'vel-7', tick: 23 }]
+            }
+          }
         }, falseNegativeState, 3, 1200, { combatBulletHitRadiusCm: 200 });
         const matchedState = { browserlessLeaveRisk: baseRisk(true) };
         const matched = attributeBrowserlessHpDropToBullet({
@@ -22020,6 +22303,8 @@ async function runSelfTest() {
           falseNegative.bulletId,
           falseNegative.pendingVelocityCommand?.commandId,
           falseNegative.commandDelayTicks,
+          falseNegative.movementCommandMatched,
+          falseNegative.actualCommandEffectiveTick,
           matched.classification,
           matched.predictedHit,
           unmatched.classification,
@@ -22029,7 +22314,7 @@ async function runSelfTest() {
           unmatchedState.combatHitAttributionSummary.unmatchedHit
         ].join('|');
       })(),
-      want: 'predicted-safe-false-negative|bullet-1|vel-7|4|matched-hit|true|unmatched-hit||1|1|1'
+      want: 'predicted-safe-false-negative|bullet-1|vel-7|4|true|23|matched-hit|true|unmatched-hit||1|1|1'
     },
     {
       name: 'browserless runner config accepts source IP binding',

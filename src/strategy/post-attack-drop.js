@@ -131,10 +131,147 @@ function pickPostAttackDropWaitTargetCore(attacks, coins, activeThreats, options
     .sort((a, b) => Number(b.drop || 0) - Number(a.drop || 0) || Number(a.distance || 0) - Number(b.distance || 0))[0] || null;
 }
 
+function stableAttackTargetId(value) {
+  const id = value?.id ?? value?.userId ?? value?.user_id ?? value?.entityId ?? value?.entity_id;
+  return id === null || id === undefined || id === '' ? '' : String(id);
+}
+
+function postAttackCoinKey(value) {
+  const id = value?.drop_id ?? value?.dropId ?? value?.id ?? value?.key;
+  return id === null || id === undefined || id === '' ? '' : String(id);
+}
+
+function postAttackCoinSourceId(value) {
+  const id = value?.sourceUserId ?? value?.source_user_id ?? value?.ownerUserId ?? value?.owner_user_id;
+  return id === null || id === undefined || id === '' ? '' : String(id);
+}
+
+function updatePostAttackSettlementCore(previous = {}, context = {}, options = {}) {
+  const nowMs = Number.isFinite(Number(context.nowMs)) ? Number(context.nowMs) : Date.now();
+  const waitMs = Math.max(0, Number(options.waitMs || 1000));
+  const resolveMaxMs = Math.max(waitMs, Number(options.resolveMaxMs || 5000));
+  const pickupMs = Math.max(resolveMaxMs, Number(options.pickupMs || 45000));
+  const minDrop = Math.max(0, Number(options.minDrop || 0));
+  const radius = Math.max(0, Number(options.dropCoinRadius || 0));
+  const dist = typeof options.dist === 'function' ? options.dist : defaultDist;
+  const resolveAttack = typeof options.resolveAttack === 'function'
+    ? options.resolveAttack
+    : attack => Number(attack?.postAttackDropResolvedAt || 0);
+  const visibleTargets = Array.isArray(context.visibleTargets) ? context.visibleTargets : [];
+  const coins = Array.isArray(context.coins) ? context.coins : [];
+  const latestByTarget = new Map();
+  for (const attack of context.attacks || []) {
+    const id = stableAttackTargetId(attack);
+    if (!id || Number(attack?.drop || 0) < minDrop) continue;
+    if (attack?.action !== 'attack' && attack?.action !== 'opportunistic-shot') continue;
+    if (!Number.isFinite(Number(attack?.x)) || !Number.isFinite(Number(attack?.y))) continue;
+    const existing = latestByTarget.get(id);
+    if (!existing || Number(attack.at || 0) >= Number(existing.at || 0)) latestByTarget.set(id, attack);
+  }
+  const states = {};
+  const targetIds = new Set([...Object.keys(previous || {}), ...latestByTarget.keys()]);
+  for (const id of targetIds) {
+    const prior = previous?.[id] && typeof previous[id] === 'object' ? { ...previous[id] } : null;
+    const attack = latestByTarget.get(id) || null;
+    if (!attack) {
+      if (prior && nowMs - Number(prior.updatedAt || prior.startedAt || 0) <= pickupMs) states[id] = prior;
+      continue;
+    }
+    const attackAt = Math.max(0, Number(attack.at || 0));
+    const newGeneration = !prior || attackAt > Number(prior.lastAttackAt || 0);
+    let state = newGeneration ? {
+      targetId: id,
+      targetName: String(attack.name || ''),
+      targetDrop: Number.isFinite(Number(attack.drop)) ? Number(attack.drop) : null,
+      x: Number(attack.x),
+      y: Number(attack.y),
+      lastAttackAt: attackAt,
+      startedAt: nowMs,
+      resolvedAt: 0,
+      phase: 'unresolved',
+      matchedCoinKey: '',
+      matchedCoinAmount: null,
+      lastCoinSeenAt: 0,
+      terminalReason: '',
+      updatedAt: nowMs
+    } : prior;
+    const visibleAlive = visibleTargets.some(target => (
+      stableAttackTargetId(target) === id
+        && target?.alive !== false
+        && Number(target?.hp ?? 1) > 0
+    ));
+    if (visibleAlive) {
+      state = {
+        ...state,
+        phase: 'settled',
+        terminalReason: 'target-reappeared-alive',
+        updatedAt: nowMs
+      };
+      states[id] = state;
+      continue;
+    }
+    if (state.phase === 'settled' || state.phase === 'expired') {
+      if (nowMs - Number(state.updatedAt || 0) <= resolveMaxMs) states[id] = state;
+      continue;
+    }
+    const resolvedAt = Number(resolveAttack(attack) || state.resolvedAt || 0);
+    if (!(resolvedAt > 0)) {
+      if (nowMs - attackAt <= resolveMaxMs) states[id] = { ...state, phase: 'unresolved', updatedAt: nowMs };
+      continue;
+    }
+    state.resolvedAt = resolvedAt;
+    const matchingCoin = coins.find(coin => (
+      Number(coin?.amount || 0) > 0
+        && (postAttackCoinSourceId(coin) === id || dist(coin, attack) <= radius)
+    )) || null;
+    if (matchingCoin) {
+      const coinKey = postAttackCoinKey(matchingCoin);
+      state = {
+        ...state,
+        phase: state.matchedCoinKey && state.matchedCoinKey === coinKey ? 'pickup-protected' : 'drop-observed',
+        matchedCoinKey: coinKey,
+        matchedCoinAmount: Number.isFinite(Number(matchingCoin.amount)) ? Number(matchingCoin.amount) : null,
+        lastCoinSeenAt: nowMs,
+        coin: matchingCoin,
+        updatedAt: nowMs
+      };
+    } else if (state.phase === 'drop-observed' || state.phase === 'pickup-protected') {
+      state = {
+        ...state,
+        phase: 'settled',
+        coin: null,
+        terminalReason: 'matched-drop-disappeared',
+        updatedAt: nowMs
+      };
+    } else if (nowMs - resolvedAt > waitMs) {
+      state = {
+        ...state,
+        phase: 'expired',
+        coin: null,
+        terminalReason: 'drop-wait-expired',
+        updatedAt: nowMs
+      };
+    } else {
+      state = { ...state, phase: 'pending', coin: null, updatedAt: nowMs };
+    }
+    states[id] = state;
+  }
+  const active = Object.values(states)
+    .filter(state => ['pending', 'drop-observed', 'pickup-protected'].includes(state.phase))
+    .sort((left, right) => Number(right.lastAttackAt || 0) - Number(left.lastAttackAt || 0));
+  return {
+    states,
+    selected: active[0] || null,
+    activeCount: active.length,
+    terminalCount: Object.values(states).filter(state => ['settled', 'expired'].includes(state.phase)).length
+  };
+}
+
 module.exports = {
   postAttackVisibleCoinExistsCore,
   resolvedRecentPostAttackDropsCore,
   buildPostAttackDropCoinCandidateCore,
   pickPostAttackDropCoinCore,
-  pickPostAttackDropWaitTargetCore
+  pickPostAttackDropWaitTargetCore,
+  updatePostAttackSettlementCore
 };

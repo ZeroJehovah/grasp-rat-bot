@@ -83,9 +83,8 @@ function determineCombatFireState(self, target, context = {}) {
     return result(FIRE_STATE.FINISH, COMBAT_CONSTANTS.SHOOT_EVERY_MS, finishReserve, 'finish-low-threat');
   }
 
-  // A stable no-progress fight uses bounded close-pressure fire. The hard
-  // stamina floor still applies, but an economic/probe cooldown may only slow
-  // cadence here; it must not permanently stop shooting.
+  // Close pressure resolves movement cadence and stamina reserve only. Final
+  // authorization still goes through the shared probe/coverage fire budget.
   if (context.closePressure) {
     const closePressureReserve = Math.max(
       hardReserve,
@@ -325,10 +324,11 @@ function evaluateHighEntropyFireGateCore(input = {}, options = {}) {
     && targetHp <= Math.max(1, Number(options.finishHp ?? 20))
     && selfHp >= targetHp + Math.max(0, Number(options.finishSelfLeadHp ?? 10));
   const lowExpectedHit = expectedHitProbability < minimumExpectedHitProbability;
-  const lowRecentHit = recentShotCount >= minimumSamples && recentHitRate < minimumRecentHitRate;
+  const boundedNoProgress = noProgressAcceptedShots >= explorationMaxShots;
+  const lowRecentHit = (recentShotCount >= minimumSamples && recentHitRate < minimumRecentHitRate)
+    || boundedNoProgress;
   const proactiveCombat = input.proactiveCombat !== false;
   const progressGateReady = noProgressAcceptedShots >= (unreachableIntercept ? unreachableMaxShots : minimumSamples);
-  const boundedNoProgress = noProgressAcceptedShots >= explorationMaxShots;
   const active = Boolean(
     proactiveCombat
       && !finishProtected
@@ -371,31 +371,6 @@ function evaluateHighEntropyFireGateCore(input = {}, options = {}) {
   const defensiveExtraShots = Math.max(0, Math.round(Number(options.defensiveExtraShots ?? 5)));
   const defensiveBudgetRemaining = Math.max(0, explorationMaxShots + defensiveExtraShots - noProgressAcceptedShots);
   const defensiveThrottle = Boolean(!unreachableIntercept && !explorationActive && defensivePressure && defensiveBudgetRemaining > 0);
-  if (closePressure) {
-    return {
-      active: true,
-      suppressFire: false,
-      minimumCadenceMs: Math.max(320, Number(options.closePressureCadenceMs ?? 520)),
-      reason: 'close-pressure-bounded-fire',
-      highEntropy,
-      unreachableIntercept,
-      reachabilityGapCm: numberOrNull(input.reachabilityGapCm),
-      expectedHitProbability,
-      recentHitRate,
-      recentShotCount,
-      noProgressAcceptedShots,
-      noDamageMs,
-      explorationMaxShots,
-      explorationBudgetRemaining,
-      boundedNoProgress,
-      defensiveBudgetRemaining,
-      shootingStaminaSpent: Math.max(0, Number(input.shootingStaminaSpent || 0)),
-      explorationActive,
-      finishProtected,
-      defensivePressure,
-      closePressure: true
-    };
-  }
   return {
     active: true,
     suppressFire: Boolean(!explorationActive && !defensiveThrottle),
@@ -425,7 +400,117 @@ function evaluateHighEntropyFireGateCore(input = {}, options = {}) {
     explorationActive,
     finishProtected,
     defensivePressure,
-    closePressure: false
+    closePressure
+  };
+}
+
+function evaluateCombatFireBudgetCore(input = {}, options = {}) {
+  const gate = input.fireGate && typeof input.fireGate === 'object' ? input.fireGate : {};
+  const probe = input.probeState && typeof input.probeState === 'object' ? input.probeState : {};
+  const coverage = input.trajectoryCoverage && typeof input.trajectoryCoverage === 'object'
+    ? input.trajectoryCoverage
+    : {};
+  const targetId = String(input.targetId || '');
+  const sharedBudgetUsed = Math.max(0, Math.round(Number(input.acceptedShotsSinceDamage ?? gate.noProgressAcceptedShots ?? 0)));
+  const baseBudget = Math.max(1, Math.round(Number(gate.explorationMaxShots || options.baseBudgetShots || 15)));
+  const geometryRearmShots = Math.max(0, Math.round(Number(
+    options.geometryRearmShots
+      ?? probe.geometryReprobeMaxShots
+      ?? 2
+  )));
+  const maxGeometryRearms = Math.max(0, Math.round(Number(
+    options.maxGeometryRearms
+      ?? probe.maxGeometryRearms
+      ?? 1
+  )));
+  const defensiveExtraShots = gate.defensivePressure
+    ? Math.max(0, Math.round(Number(options.defensiveExtraShots ?? 5)))
+    : 0;
+  const geometryBudget = geometryRearmShots * maxGeometryRearms;
+  const sharedBudgetMax = baseBudget + geometryBudget + defensiveExtraShots;
+  const sharedBudgetRemaining = Math.max(0, sharedBudgetMax - sharedBudgetUsed);
+  const baseBudgetRemaining = Math.max(0, baseBudget - sharedBudgetUsed);
+  const geometryBudgetRemaining = Math.max(0, baseBudget + geometryBudget - sharedBudgetUsed);
+  const marginalCoverage = numberOrNull(coverage?.selected?.marginalCoverage);
+  const minimumMarginalCoverage = Math.max(0, Number(options.minimumMarginalCoverage ?? 0.02));
+  const coverageQualified = Boolean(
+    coverage.active === true
+      && coverage.selected
+      && marginalCoverage !== null
+      && marginalCoverage >= minimumMarginalCoverage
+  );
+  const resolvedReserveMs = Math.max(0, Number(input.resolvedReserveMs || 0));
+  const plannedCoverageShots = Math.max(1, Math.round(Number(options.plannedCoverageShots || 3)));
+  const shotCostMs = Math.max(1, Number(options.shotCostMs || 500));
+  const controlMarginMs = Math.max(0, Number(options.controlMarginMs || 500));
+  const coverageVolleyRequiredStamina = resolvedReserveMs
+    + plannedCoverageShots * shotCostMs
+    + controlMarginMs;
+  const stamina5s = numberOrNull(input.stamina5s);
+  const finishProtected = Boolean(gate.finishProtected || input.finishProtected);
+  let suppressFire = Boolean(gate.suppressFire || probe.suppressFire);
+  let authorizationSource = suppressFire ? '' : 'base-fire-discipline';
+  let suppressionReason = suppressFire
+    ? (probe.suppressionReason || gate.reason || 'shared-fire-budget-suppressed')
+    : '';
+
+  if (finishProtected) {
+    suppressFire = false;
+    authorizationSource = 'low-hp-finish-protected';
+    suppressionReason = '';
+  } else if (probe.provenHitProtected) {
+    suppressFire = false;
+    authorizationSource = 'proven-hit-rate';
+    suppressionReason = '';
+  } else if (gate.active) {
+    if (baseBudgetRemaining > 0) {
+      suppressFire = false;
+      authorizationSource = gate.explorationActive ? 'bounded-exploration' : 'shared-probe-budget';
+      suppressionReason = '';
+    } else if (geometryBudgetRemaining > 0 && coverageQualified) {
+      suppressFire = false;
+      authorizationSource = 'coverage-marginal-geometry-rearm';
+      suppressionReason = '';
+    } else if (sharedBudgetRemaining > 0 && gate.defensivePressure) {
+      suppressFire = false;
+      authorizationSource = 'defensive-pressure-reserve';
+      suppressionReason = '';
+    } else {
+      suppressFire = true;
+      authorizationSource = '';
+      suppressionReason = coverageQualified
+        ? 'shared-fire-budget-exhausted'
+        : 'coverage-no-marginal-gain';
+    }
+  } else if (probe.highEntropy && baseBudgetRemaining > 0) {
+    suppressFire = false;
+    authorizationSource = 'shared-probe-budget';
+    suppressionReason = '';
+  }
+
+  return {
+    targetId,
+    active: Boolean(gate.active || probe.highEntropy),
+    suppressFire,
+    sharedBudgetUsed,
+    sharedBudgetMax,
+    sharedBudgetRemaining,
+    baseBudget,
+    baseBudgetRemaining,
+    geometryRearmShots,
+    maxGeometryRearms,
+    geometryBudgetRemaining,
+    defensiveExtraShots,
+    authorizationSource,
+    marginalCoverage,
+    minimumMarginalCoverage,
+    coverageQualified,
+    resolvedReserveMs,
+    coverageVolleyRequiredStamina,
+    coverageVolleyStaminaReady: stamina5s === null ? null : stamina5s >= coverageVolleyRequiredStamina,
+    suppressionReason,
+    closePressure: Boolean(input.closePressure),
+    boundedNoProgress: Boolean(gate.boundedNoProgress)
   };
 }
 
@@ -549,16 +634,14 @@ function updateCombatProbePhaseCore(previous = null, input = {}, options = {}) {
   const suppressFire = Boolean(
     highEntropy
       && !finishingTarget
-      && !closePressure
       && (cooldown || probabilityBlocked)
   );
-  const probePhase = closePressure
-    ? 'close-pressure'
-    : (!highEntropy
+  const probePhase = !highEntropy
     ? 'not-required'
-    : (provenHitProtected ? 'productive' : (cooldown ? 'cooldown' : (probabilityBlocked ? 'wait-geometry' : 'probe'))));
+    : (provenHitProtected ? 'productive' : (cooldown ? 'cooldown' : (probabilityBlocked ? 'wait-geometry' : 'probe')));
   return {
     targetId,
+    highEntropy,
     probePhase,
     probeAcceptedShots,
     probeHits,
@@ -585,11 +668,9 @@ function updateCombatProbePhaseCore(previous = null, input = {}, options = {}) {
     actualHitAttribution: probeHits > 0 ? 'recent-shot-attribution' : 'none',
     closePressure,
     suppressFire,
-    suppressionReason: closePressure
-      ? 'close-pressure-fire-reopened'
-      : (cooldown
+    suppressionReason: cooldown
       ? 'probe-zero-damage-budget-cooldown'
-      : (probabilityBlocked ? 'probe-hit-probability-below-threshold' : '')),
+      : (probabilityBlocked ? 'probe-hit-probability-below-threshold' : ''),
     phaseStartedAt: resetAllowed ? nowMs : Number(base.phaseStartedAt || nowMs),
     baseAcceptedShots: phaseBaseAcceptedShots,
     baseConfirmedHits: phaseBaseConfirmedHits,
@@ -620,5 +701,6 @@ module.exports = {
   checkLowConfidenceThrottle,
   classifyFireRiskCore,
   evaluateHighEntropyFireGateCore,
+  evaluateCombatFireBudgetCore,
   updateCombatProbePhaseCore
 };

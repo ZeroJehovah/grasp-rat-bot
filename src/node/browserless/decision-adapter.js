@@ -47,8 +47,7 @@ const {
   evaluatePredictedLeaveHpCore
 } = require('../../strategy/combat-exit');
 const {
-  pickPostAttackDropCoinCore,
-  pickPostAttackDropWaitTargetCore
+  updatePostAttackSettlementCore
 } = require('../../strategy/post-attack-drop');
 const {
   settlementSummary,
@@ -3738,7 +3737,9 @@ function buildSingleCoinBaitDecision(input, opportunity, stateful = {}, options 
     clearSingleCoinBaitTracking(stateful, previous, { clearFinalAction: true });
   }
   stateful.singleCoinBait = policy.state ? cloneJson(policy.state) : null;
-  if (!policy.state || !policy.coin) {
+  const evaluationState = policy.state || previous;
+  const evaluationCoin = policy.coin || visibleBait;
+  if (!evaluationState || !evaluationCoin) {
     return {
       ...policy,
       continuation,
@@ -3761,9 +3762,9 @@ function buildSingleCoinBaitDecision(input, opportunity, stateful = {}, options 
     clearSingleCoinBaitTracking(stateful, policy.state);
   }
 
-  const summary = singleCoinBaitActionSummary(policy.state, input, options);
-  const target = summarizeCoin(policy.coin);
-  if (policy.phase === 'hold') {
+  const summary = singleCoinBaitActionSummary(evaluationState, input, options);
+  const target = summarizeCoin(evaluationCoin);
+  if (policy.phase === 'hold' && policy.state && policy.coin) {
     return {
       ...policy,
       continuation,
@@ -3782,22 +3783,25 @@ function buildSingleCoinBaitDecision(input, opportunity, stateful = {}, options 
   }
 
   const coinMaxDistance = Math.max(0, Number(options.coinMaxDistance || BROWSER_RUNTIME_DEFAULTS.coinMaxDistance));
-  const baitCost = opportunityCoinStaminaCost(policy.coin, options);
+  const baitCost = opportunityCoinStaminaCost(evaluationCoin, options);
   const baitThresholdEligible = profitRewardAndCostEligible(1, baitCost, opportunity?.threshold);
   const plan = singleCoinBaitReturnPlan(
     input,
     opportunity,
-    policy.coin,
+    evaluationCoin,
     anchoredOpportunities,
     continuation,
     options
   );
-  const closeCommitment = Number(policy.state.distance || Infinity) <= Math.max(
-    coinMaxDistance,
+  const closeCommitmentRadiusCm = Math.max(
+    0,
     Number(options.singleCoinBaitHoldRadiusCm ?? BROWSER_RUNTIME_DEFAULTS.singleCoinBaitHoldRadiusCm ?? 1000)
+      + Math.min(300, Math.max(0, Number(options.singleCoinBaitHoldHysteresisCm ?? 200)))
   );
+  const closeCommitment = Number(evaluationState.distance || Infinity) <= closeCommitmentRadiusCm;
   const planAllowed = Boolean(plan?.allowed);
-  const allowed = closeCommitment || baitThresholdEligible || planAllowed;
+  const lifecycleActive = Boolean(policy.state && policy.coin);
+  const allowed = lifecycleActive && (closeCommitment || baitThresholdEligible || planAllowed);
   const commitmentRank = closeCommitment || planAllowed ? 10 : 0;
   const commitmentReason = closeCommitment
     ? 'bait-nearby-commitment'
@@ -3810,28 +3814,36 @@ function buildSingleCoinBaitDecision(input, opportunity, stateful = {}, options 
     baitPlanReward: plan ? Number(plan.reward || 0) : null,
     baitPlanStaminaCost: plan ? Math.round(Number(plan.staminaCost || 0)) : null,
     baitPlanNetROI: plan ? Number(Number(plan.netROI || 0).toFixed(8)) : null,
-    evaluationOrigin: cloneJson(plan?.evaluationOrigin || continuation?.evaluationOrigin || null),
+    evaluationOrigin: cloneJson(plan?.evaluationOrigin || continuation?.evaluationOrigin || {
+      id: evaluationCoin.drop_id ?? evaluationCoin.id ?? profitCoinKey(evaluationCoin),
+      x: numberOrNull(evaluationCoin.x),
+      y: numberOrNull(evaluationCoin.y)
+    }),
     commitmentReason,
+    closeCommitmentRadiusCm,
     releaseReason,
     clearReason: policy.clearReason || '',
     profitThresholdEligible: baitThresholdEligible,
     returnEligible: allowed,
     returnSuppressionReason: allowed ? '' : (plan?.suppressionReason || 'bait-below-profit-threshold')
   };
-  stateful.singleCoinBait = {
-    ...stateful.singleCoinBait,
-    commitmentReason,
-    releaseReason,
-    lastEvaluation: {
-      baitPlanReward: enrichedSummary.baitPlanReward,
-      baitPlanStaminaCost: enrichedSummary.baitPlanStaminaCost,
-      baitPlanNetROI: enrichedSummary.baitPlanNetROI,
-      evaluationOrigin: enrichedSummary.evaluationOrigin,
-      profitThresholdEligible: baitThresholdEligible,
-      returnEligible: allowed,
-      suppressionReason: enrichedSummary.returnSuppressionReason
-    }
-  };
+  if (stateful.singleCoinBait) {
+    stateful.singleCoinBait = {
+      ...stateful.singleCoinBait,
+      commitmentReason,
+      releaseReason,
+      lastEvaluation: {
+        baitPlanReward: enrichedSummary.baitPlanReward,
+        baitPlanStaminaCost: enrichedSummary.baitPlanStaminaCost,
+        baitPlanNetROI: enrichedSummary.baitPlanNetROI,
+        evaluationOrigin: enrichedSummary.evaluationOrigin,
+        closeCommitmentRadiusCm,
+        profitThresholdEligible: baitThresholdEligible,
+        returnEligible: allowed,
+        suppressionReason: enrichedSummary.returnSuppressionReason
+      }
+    };
+  }
   if (!allowed) {
     return {
       ...policy,
@@ -3843,7 +3855,7 @@ function buildSingleCoinBaitDecision(input, opportunity, stateful = {}, options 
       action: null
     };
   }
-  const actionKind = Number(policy.coin.distance || Infinity) <= coinMaxDistance ? 'coin' : 'seek-coin';
+  const actionKind = Number(evaluationCoin.distance || Infinity) <= coinMaxDistance ? 'coin' : 'seek-coin';
   const planReward = planAllowed ? Number(plan.reward || 1) : 1;
   const planStaminaCost = planAllowed ? Number(plan.staminaCost || baitCost) : baitCost;
   return {
@@ -5410,6 +5422,43 @@ function postAttackThreats(input) {
   ];
 }
 
+function reconcilePostAttackSettlements(input, stateful = {}, options = {}, combat = null) {
+  const coins = mergeProfitCoinCandidates(
+    input?.realtimeCoins || [],
+    input?.snapshotVisibleCoins || input?.profitCoins || []
+  );
+  const waitMs = Math.max(0, Number(options.postAttackDropWaitMs ?? BROWSER_RUNTIME_DEFAULTS.postAttackDropWaitMs));
+  const result = updatePostAttackSettlementCore(stateful.postAttackSettlements || {}, {
+    nowMs: input?.nowMs,
+    attacks: stateful.attackHistory || [],
+    coins,
+    visibleTargets: input?.visibleTargets || []
+  }, {
+    waitMs,
+    minDrop: 0,
+    resolveMaxMs: Math.max(waitMs, Number(options.postAttackDropResolveMaxMs ?? BROWSER_RUNTIME_DEFAULTS.postAttackDropResolveMaxMs ?? waitMs) || waitMs),
+    pickupMs: Math.max(0, Number(options.postAttackDropCoinPriorityMs ?? BROWSER_RUNTIME_DEFAULTS.postAttackDropCoinPriorityMs)),
+    dropCoinRadius: Math.max(0, Number(options.postAttackDropCoinRadius ?? BROWSER_RUNTIME_DEFAULTS.postAttackDropCoinRadius)),
+    dist: distanceBetween,
+    resolveAttack: attack => browserlessPostAttackDropResolvedAt(
+      attack,
+      input,
+      input.nowMs,
+      combat?.target || combat?.dryRun?.target
+    )
+  });
+  for (const settlement of Object.values(result.states || {})) {
+    if (settlement?.coin) settlement.matchedCoinKey = profitCoinKey(settlement.coin);
+  }
+  stateful.postAttackSettlements = result.states;
+  stateful.postAttackSettlement = result.selected || null;
+  return {
+    activeCount: result.activeCount,
+    terminalCount: result.terminalCount,
+    selected: result.selected ? cloneJson({ ...result.selected, coin: undefined }) : null
+  };
+}
+
 function reconcilePostKillSettlement(input, stateful = {}, combat = {}, previousCombatTarget = null, options = {}) {
   const observation = stateful.realtimeSnapshotObservation || null;
   const result = updatePostKillSettlementCore(stateful.postKillSettlement || null, {
@@ -5467,65 +5516,61 @@ function safePostAttackCoinCandidates(input, maxDistance, options = {}) {
 }
 
 function buildPostAttackDropCoinDecision(input, stateful = {}, options = {}, combat = null) {
-  if (!input?.self || !Array.isArray(stateful.attackHistory) || !stateful.attackHistory.length) return null;
+  if (!input?.self) return null;
+  const settlement = stateful.postAttackSettlement || null;
+  if (!settlement || !['drop-observed', 'pickup-protected'].includes(settlement.phase)) return null;
   const recovery = isRecoveringSelf(input.self);
   const maxDistance = recovery
     ? Math.max(0, Number(options.postAttackRecoveryDropMaxDistance ?? DEFAULT_POST_ATTACK_RECOVERY_DROP_MAX_DISTANCE))
     : Math.max(0, Number(options.postAttackDropCoinMaxDistance ?? BROWSER_RUNTIME_DEFAULTS.postAttackDropCoinMaxDistance));
-  const result = pickPostAttackDropCoinCore(stateful.attackHistory, safePostAttackCoinCandidates(input, maxDistance, options), {
-    nowMs: input.nowMs,
-    priorityMs: Math.max(0, Number(options.postAttackDropCoinPriorityMs ?? BROWSER_RUNTIME_DEFAULTS.postAttackDropCoinPriorityMs)),
-    includeSingle: !recovery,
-    minAmount: Math.max(0, Number(options.postAttackDropCoinMinAmount ?? 1)),
-    maxDistance,
-    minScore: recovery ? Math.max(0, Number(options.postAttackRecoveryDropMinScore ?? 0)) : 0,
-    dropCoinRadius: Math.max(0, Number(options.postAttackDropCoinRadius ?? BROWSER_RUNTIME_DEFAULTS.postAttackDropCoinRadius)),
-    dist: distanceBetween,
-    resolveAttack: attack => browserlessPostAttackDropResolvedAt(attack, input, input.nowMs, combat?.target || combat?.dryRun?.target),
-    scoreCoin: coin => scoreCoinOpportunity(coin, options)
-  });
-  const coin = result.selected || null;
+  const coin = safePostAttackCoinCandidates(input, maxDistance, options)
+    .find(candidate => profitCoinKey(candidate) === settlement.matchedCoinKey) || null;
   if (!coin) return null;
+  const score = scoreCoinOpportunity(coin, options);
+  if (recovery && score < Math.max(0, Number(options.postAttackRecoveryDropMinScore ?? 0))) return null;
   return buildPriorityCoinDecision(input, coin, 'post-attack-drop-coin', options, {
-    postAttackTarget: coin.postAttackTarget || null
+    postAttackTarget: {
+      id: settlement.targetId,
+      name: settlement.targetName || '',
+      drop: numberOrNull(settlement.targetDrop),
+      x: numberOrNull(settlement.x),
+      y: numberOrNull(settlement.y),
+      phase: settlement.phase,
+      matchedCoinKey: settlement.matchedCoinKey
+    }
   });
 }
 
 function buildPostAttackDropWaitDecision(input, stateful = {}, options = {}, combat = null) {
-  if (!input?.self || !Array.isArray(stateful.attackHistory) || !stateful.attackHistory.length) return null;
-  const waitMs = Math.max(0, Number(options.postAttackDropWaitMs ?? BROWSER_RUNTIME_DEFAULTS.postAttackDropWaitMs));
-  const target = pickPostAttackDropWaitTargetCore(stateful.attackHistory, input.profitCoins || [], postAttackThreats(input), {
-    nowMs: input.nowMs,
-    self: input.self,
-    dist: distanceBetween,
-    waitMs,
-    minDrop: Math.max(0, Number(options.postAttackDropWaitMinDrop ?? options.attackMinDrop ?? DEFAULT_ATTACK_MIN_DROP) || 0),
-    resolveMaxMs: Math.max(waitMs, Number(options.postAttackDropResolveMaxMs ?? BROWSER_RUNTIME_DEFAULTS.postAttackDropResolveMaxMs ?? waitMs) || waitMs),
-    maxDistance: Math.max(0, Number(options.postAttackDropWaitMaxDistance ?? options.opportunityVisibleDistance ?? options.globalCoinMaxDistance ?? DEFAULT_GLOBAL_COIN_MAX_DISTANCE)),
-    stopDistance: Math.max(0, Number(options.postAttackDropWaitStopDistance ?? BROWSER_RUNTIME_DEFAULTS.postAttackDropWaitStopDistance ?? BROWSER_RUNTIME_DEFAULTS.coinPickupSweepDistance ?? 0)),
-    dropCoinRadius: Math.max(0, Number(options.postAttackDropCoinRadius ?? BROWSER_RUNTIME_DEFAULTS.postAttackDropCoinRadius)),
-    resolveAttack: attack => browserlessPostAttackDropResolvedAt(attack, input, input.nowMs, combat?.target || combat?.dryRun?.target),
-    coinBlockedByThreat: (_origin, item, threat) => !coinSafeFromThreats(item, [threat], options)
-  });
-  if (!target) return null;
+  if (!input?.self) return null;
+  const target = stateful.postAttackSettlement || null;
+  if (!target || target.phase !== 'pending') return null;
+  const minDrop = Math.max(0, Number(options.postAttackDropWaitMinDrop ?? options.attackMinDrop ?? DEFAULT_ATTACK_MIN_DROP) || 0);
+  if (Number(target.targetDrop || 0) < minDrop) return null;
+  const distance = distanceBetween(input.self, target);
+  const maxDistance = Math.max(0, Number(options.postAttackDropWaitMaxDistance ?? options.opportunityVisibleDistance ?? options.globalCoinMaxDistance ?? DEFAULT_GLOBAL_COIN_MAX_DISTANCE));
+  const stopDistance = Math.max(0, Number(options.postAttackDropWaitStopDistance ?? BROWSER_RUNTIME_DEFAULTS.postAttackDropWaitStopDistance ?? BROWSER_RUNTIME_DEFAULTS.coinPickupSweepDistance ?? 0));
+  if (!(distance > stopDistance && distance <= maxDistance)) return null;
+  if (postAttackThreats(input).some(threat => !coinSafeFromThreats(target, [threat], options))) return null;
   return {
     kind: 'post-attack-drop-wait',
     band: 'profit',
     reason: 'post-attack-drop-wait-position',
     target: {
       type: 'post-attack-target',
-      id: target.id,
-      name: target.name || '',
+      id: target.targetId,
+      name: target.targetName || '',
       x: numberOrNull(target.x),
       y: numberOrNull(target.y),
-      drop: numberOrNull(target.drop),
-      distance: Number.isFinite(Number(target.distance)) ? Math.round(Number(target.distance)) : null,
+      drop: numberOrNull(target.targetDrop),
+      distance: Math.round(distance),
       postAttackTarget: {
-        id: target.id,
-        name: target.name || '',
-        drop: numberOrNull(target.drop),
-        ageMs: Math.max(0, Math.round(input.nowMs - Number(target.at || input.nowMs))),
-        resolvedAgeMs: Math.max(0, Math.round(input.nowMs - Number(target.postAttackDropResolvedAt || input.nowMs)))
+        id: target.targetId,
+        name: target.targetName || '',
+        drop: numberOrNull(target.targetDrop),
+        phase: target.phase,
+        ageMs: Math.max(0, Math.round(input.nowMs - Number(target.lastAttackAt || input.nowMs))),
+        resolvedAgeMs: Math.max(0, Math.round(input.nowMs - Number(target.resolvedAt || input.nowMs)))
       }
     }
   };
@@ -5915,46 +5960,89 @@ function browserlessInjuryRecentMs(options = {}) {
 function attributeBrowserlessHpDropToBullet(input, stateful, hpDrop, nowMs, options = {}) {
   const previousRisk = stateful?.browserlessLeaveRisk || null;
   const observations = (Array.isArray(previousRisk?.bulletObservations) ? previousRisk.bulletObservations : [])
-    .filter(observation => nowMs - Number(observation.at || 0) <= 2000);
+    .filter(observation => nowMs - Number(observation.at || 0) <= 2500);
   const selectedPrediction = previousRisk?.lastCover?.selectedThreatPrediction || null;
-  const predictedById = new Map((selectedPrediction?.dangerousBullets || [])
-    .map(item => [String(item?.bulletId || ''), item])
-    .filter(([id]) => id));
+  const fallbackPredictions = (selectedPrediction?.dangerousBullets || []).map(item => ({
+    ...item,
+    at: Number(previousRisk?.at || nowMs),
+    observedTick: numberOrNull(previousRisk?.tick),
+    pendingVelocityCommand: cloneJson(selectedPrediction?.pendingVelocityCommand || null),
+    predictedVelocitySchedule: cloneJson(selectedPrediction?.predictedVelocitySchedule || []),
+    commandDelayTicks: numberOrNull(selectedPrediction?.commandDelayTicks)
+  }));
+  const predictionHistory = [
+    ...(Array.isArray(previousRisk?.bulletPredictionHistory) ? previousRisk.bulletPredictionHistory : []),
+    ...fallbackPredictions
+  ].filter(prediction => nowMs - Number(prediction.at || 0) <= 2500);
   const currentIds = new Set((input?.bullets || []).map(leaveRiskBulletId).filter(Boolean));
   const currentTick = numberOrNull(input?.realtime?.tick);
-  const timingToleranceMs = Math.max(150, Number(options.combatHitAttributionTimingToleranceMs || 350));
+  const timingToleranceMs = Math.max(150, Number(options.combatHitAttributionTimingToleranceMs || 500));
   const hitRadius = Math.max(1, Number(options.combatBulletHitRadiusCm || 200));
-  const candidates = observations.map(observation => {
+  const candidates = observations.flatMap(observation => {
     const id = String(observation.id || '');
-    const prediction = predictedById.get(id) || null;
-    const expectedImpactAt = Number(observation.at || 0) + Math.max(0, Number(observation.timeToImpact || 0));
-    const timingErrorMs = Number.isFinite(expectedImpactAt) ? Math.abs(nowMs - expectedImpactAt) : Infinity;
-    const disappeared = !currentIds.has(id);
-    const expiredNearNow = currentTick !== null && Number.isFinite(Number(observation.expireTick))
-      ? currentTick >= Number(observation.expireTick) - 1
-      : false;
-    const trajectoryClose = Number(observation.cpa) <= hitRadius * 1.5;
-    const plausible = timingErrorMs <= timingToleranceMs
-      && (disappeared || expiredNearNow || trajectoryClose);
-    return {
-      observation,
-      prediction,
-      expectedImpactAt,
-      timingErrorMs,
-      disappeared,
-      expiredNearNow,
-      trajectoryClose,
-      plausible,
-      score: (plausible ? 0 : 100000)
-        + timingErrorMs
-        + (prediction ? 0 : 1000)
-        + (disappeared ? 0 : 250)
-    };
+    const matchingPredictions = predictionHistory.filter(prediction => {
+      if (String(prediction?.bulletId || '') !== id) return false;
+      if (prediction.ownerId !== null && prediction.ownerId !== undefined
+        && observation.ownerId !== null && observation.ownerId !== undefined
+        && String(prediction.ownerId) !== String(observation.ownerId)) return false;
+      if (numberOrNull(prediction.createdTick) !== null && numberOrNull(observation.createdTick) !== null
+        && Number(prediction.createdTick) !== Number(observation.createdTick)) return false;
+      return true;
+    });
+    const variants = matchingPredictions.length ? matchingPredictions : [null];
+    return variants.map(prediction => {
+      const expectedImpactAt = Number(prediction?.at ?? observation.at ?? 0)
+        + Math.max(0, Number(prediction?.timeToImpact ?? observation.timeToImpact ?? 0));
+      const timingErrorMs = Number.isFinite(expectedImpactAt) ? Math.abs(nowMs - expectedImpactAt) : Infinity;
+      const disappeared = !currentIds.has(id);
+      const expiredNearNow = currentTick !== null && Number.isFinite(Number(observation.expireTick))
+        ? currentTick >= Number(observation.expireTick) - 1
+        : false;
+      const predictedCpa = numberOrNull(prediction?.cpa);
+      const observedCpa = numberOrNull(observation.cpa);
+      const trajectoryClose = Math.min(
+        predictedCpa === null ? Infinity : predictedCpa,
+        observedCpa === null ? Infinity : observedCpa
+      ) <= hitRadius * 1.5;
+      const plausible = Boolean(prediction)
+        && timingErrorMs <= timingToleranceMs
+        && (disappeared || expiredNearNow || trajectoryClose);
+      return {
+        observation,
+        prediction,
+        expectedImpactAt,
+        timingErrorMs,
+        disappeared,
+        expiredNearNow,
+        trajectoryClose,
+        plausible,
+        score: (plausible ? 0 : 100000)
+          + timingErrorMs
+          + (prediction ? 0 : 1000)
+          + (disappeared ? 0 : 250)
+      };
+    });
   }).sort((left, right) => left.score - right.score);
   const matched = candidates.find(candidate => candidate.plausible) || null;
   let classification = 'unmatched-hit';
   if (matched?.prediction?.predictedHit) classification = 'matched-hit';
   else if (matched) classification = 'predicted-safe-false-negative';
+  const matchedCommand = matched?.prediction?.pendingVelocityCommand || selectedPrediction?.pendingVelocityCommand || null;
+  const actualTransitions = input?.command?.movement?.actualVelocityTransitions || [];
+  const actualTransition = matchedCommand?.commandId === null || matchedCommand?.commandId === undefined
+    ? null
+    : actualTransitions.find(item => String(item?.commandId ?? '') === String(matchedCommand.commandId)) || null;
+  const predictedSchedule = matched?.prediction?.predictedVelocitySchedule
+    || selectedPrediction?.predictedVelocitySchedule
+    || [];
+  const predictedCommand = matchedCommand?.commandId === null || matchedCommand?.commandId === undefined
+    ? null
+    : predictedSchedule.find(item => String(item?.commandId ?? '') === String(matchedCommand.commandId)) || null;
+  const expectedEffectiveTick = numberOrNull(matchedCommand?.expectedEffectiveTick)
+    ?? (numberOrNull(matched?.prediction?.observedTick) !== null && numberOrNull(predictedCommand?.effectiveAfterTicks) !== null
+      ? Number(matched.prediction.observedTick) + Number(predictedCommand.effectiveAfterTicks)
+      : null);
+  const actualEffectiveTick = numberOrNull(actualTransition?.tick);
   const attribution = {
     classification,
     hpDrop: Math.round(Number(hpDrop || 0) * 10) / 10,
@@ -5974,12 +6062,18 @@ function attributeBrowserlessHpDropToBullet(input, stateful, hpDrop, nowMs, opti
     observedCpa: numberOrNull(matched?.observation?.cpa),
     observedTti: numberOrNull(matched?.observation?.timeToImpact),
     owner: matched?.prediction?.ownerId ?? matched?.observation?.ownerId ?? null,
-    pendingVelocityCommand: cloneJson(selectedPrediction?.pendingVelocityCommand || null),
-    predictedVelocitySchedule: cloneJson(selectedPrediction?.predictedVelocitySchedule || []),
-    commandDelayTicks: numberOrNull(selectedPrediction?.commandDelayTicks),
-    candidateDirection: selectedPrediction ? {
-      dx: Number(selectedPrediction.dx || 0),
-      dy: Number(selectedPrediction.dy || 0)
+    pendingVelocityCommand: cloneJson(matchedCommand),
+    predictedVelocitySchedule: cloneJson(predictedSchedule),
+    commandDelayTicks: numberOrNull(matched?.prediction?.commandDelayTicks ?? selectedPrediction?.commandDelayTicks),
+    expectedCommandEffectiveTick: expectedEffectiveTick,
+    actualCommandEffectiveTick: actualEffectiveTick,
+    commandTimingErrorTicks: expectedEffectiveTick !== null && actualEffectiveTick !== null
+      ? actualEffectiveTick - expectedEffectiveTick
+      : null,
+    movementCommandMatched: Boolean(actualTransition),
+    candidateDirection: matched?.prediction ? {
+      dx: Number(matched.prediction.dx || 0),
+      dy: Number(matched.prediction.dy || 0)
     } : null
   };
   stateful.combatHitAttributionHistory = [
@@ -6460,6 +6554,33 @@ function buildBrowserlessPredictedThreatExitDecision(state, input, stateful, com
       selectedThreatPrediction: cloneJson(previous.lastCover.selectedThreatPrediction)
     };
   }
+  const bulletPredictionHistory = (Array.isArray(previous.bulletPredictionHistory)
+    ? previous.bulletPredictionHistory
+    : [])
+    .filter(item => nowMs - Number(item.at || 0) <= 2500);
+  const selectedThreatPrediction = lastCover?.selectedThreatPrediction || null;
+  for (const bullet of selectedThreatPrediction?.dangerousBullets || []) {
+    const bulletId = String(bullet?.bulletId || '');
+    if (!bulletId) continue;
+    const entry = {
+      ...cloneJson(bullet),
+      at: nowMs,
+      observedTick: numberOrNull(input.realtime?.tick),
+      dx: Number(selectedThreatPrediction.dx || 0),
+      dy: Number(selectedThreatPrediction.dy || 0),
+      commandDelayTicks: numberOrNull(selectedThreatPrediction.commandDelayTicks),
+      pendingVelocityCommand: cloneJson(selectedThreatPrediction.pendingVelocityCommand || null),
+      predictedVelocitySchedule: cloneJson(selectedThreatPrediction.predictedVelocitySchedule || [])
+    };
+    const duplicateIndex = bulletPredictionHistory.findIndex(item => (
+      String(item?.bulletId || '') === bulletId
+        && Number(item?.observedTick ?? -1) === Number(entry.observedTick ?? -1)
+        && Number(item?.dx || 0) === entry.dx
+        && Number(item?.dy || 0) === entry.dy
+    ));
+    if (duplicateIndex >= 0) bulletPredictionHistory[duplicateIndex] = entry;
+    else bulletPredictionHistory.push(entry);
+  }
   const assessment = {
     at: nowMs,
     tick: input.realtime?.tick ?? null,
@@ -6491,6 +6612,7 @@ function buildBrowserlessPredictedThreatExitDecision(state, input, stateful, com
     lastCover,
     hpSamples: hpSamples.slice(-32),
     bulletObservations: bulletObservations.slice(-32),
+    bulletPredictionHistory: bulletPredictionHistory.slice(-64),
     rule,
     reason
   };
@@ -6513,7 +6635,8 @@ function buildBrowserlessPredictedThreatExitDecision(state, input, stateful, com
         leaveRisk: {
           ...assessment,
           hpSamples: undefined,
-          bulletObservations: undefined
+          bulletObservations: undefined,
+          bulletPredictionHistory: undefined
         }
       };
     }
@@ -6540,7 +6663,8 @@ function buildBrowserlessPredictedThreatExitDecision(state, input, stateful, com
     leaveRisk: {
       ...assessment,
       hpSamples: undefined,
-      bulletObservations: undefined
+      bulletObservations: undefined,
+      bulletPredictionHistory: undefined
     }
   };
 }
@@ -8129,6 +8253,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
   let combatActionEligible = isCombatActionEligibleForDecision(combat, options) && !combatPursuitSuppressed;
   const combatTarget = combat?.target || null;
   const postKillSettlement = reconcilePostKillSettlement(input, stateful, combat, previousCombatTarget, options);
+  const postAttackSettlement = reconcilePostAttackSettlements(input, stateful, options, combat);
   const combatTargetId = targetIdForAttackHistory(combatTarget);
   const continuingPreviousCombatTarget = previousCombatTargetId !== null
     && previousCombatTargetId !== undefined
@@ -8611,6 +8736,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       activeCoinCompetition: cloneJson(input.activeCoinCompetition),
       selfKillEvidence: topItems(input.selfKillEvidence, item => item, 20),
       postKillSettlement,
+      postAttackSettlement,
       nearby: summarizeNearbyForPanel(input, action, combat.dryRun || combat, options, stateful.singleCoinBait),
       dataGaps: input.dataGaps
     },
@@ -8629,6 +8755,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       singleCoinBaitLifecycle: cloneJson(singleCoinBait.lifecycle || null),
       singleCoinBaitContinuation: cloneJson(singleCoinBait.continuation || null),
       singleCoinBaitOpportunityEvaluations: cloneJson(singleCoinBait.opportunityEvaluations || []),
+      postAttackSettlement,
       easyKill: {
         ...cloneJson(input.easyKill || {}),
         ...easyKillCandidateDiagnostics,
@@ -8905,6 +9032,8 @@ function createBrowserlessDecisionAdapter(options = {}) {
     getRealtimePersistenceState() {
       return {
         attackHistory: decisionState.attackHistory || [],
+        postAttackSettlements: decisionState.postAttackSettlements || {},
+        postAttackSettlement: decisionState.postAttackSettlement || null,
         postKillSettlement: decisionState.postKillSettlement || null,
         combatTarget: decisionState.combatTarget || null,
         combatAim: decisionState.combatAim || null,
