@@ -90,6 +90,13 @@ function determineCombatFireState(self, target, context = {}) {
       hardReserve,
       Number(context.closePressureReserveMs ?? COMBAT_CONSTANTS.SHOOT_DODGE_RESERVE_MS)
     );
+    const shotCost = Math.max(1, Number(context.shotCostMs ?? 500));
+    if (context.closePressureAttack) {
+      if (stamina5s !== null && stamina5s < closePressureReserve + shotCost) {
+        return result(FIRE_STATE.PAUSED, Infinity, closePressureReserve, 'close-pressure-movement-reserve');
+      }
+      return result(FIRE_STATE.PRESSURE, COMBAT_CONSTANTS.SHOOT_EVERY_MS, closePressureReserve, 'close-pressure-full-attack');
+    }
     const closePressureCadence = Math.max(
       COMBAT_CONSTANTS.SHOOT_EVERY_MS,
       Number(context.closePressureCadenceMs ?? COMBAT_CONSTANTS.SHOOT_RESERVE_BAND_MS)
@@ -448,6 +455,7 @@ function evaluateCombatFireBudgetCore(input = {}, options = {}) {
     + controlMarginMs;
   const stamina5s = numberOrNull(input.stamina5s);
   const finishProtected = Boolean(gate.finishProtected || input.finishProtected);
+  const pressureAttack = Boolean(input.pressureAttack);
   let suppressFire = Boolean(gate.suppressFire || probe.suppressFire);
   let authorizationSource = suppressFire ? '' : 'base-fire-discipline';
   let suppressionReason = suppressFire
@@ -461,6 +469,10 @@ function evaluateCombatFireBudgetCore(input = {}, options = {}) {
   } else if (probe.provenHitProtected) {
     suppressFire = false;
     authorizationSource = 'proven-hit-rate';
+    suppressionReason = '';
+  } else if (pressureAttack) {
+    suppressFire = false;
+    authorizationSource = 'close-pressure-full-attack';
     suppressionReason = '';
   } else if (gate.active) {
     if (baseBudgetRemaining > 0) {
@@ -510,6 +522,7 @@ function evaluateCombatFireBudgetCore(input = {}, options = {}) {
     coverageVolleyStaminaReady: stamina5s === null ? null : stamina5s >= coverageVolleyRequiredStamina,
     suppressionReason,
     closePressure: Boolean(input.closePressure),
+    pressureAttack,
     boundedNoProgress: Boolean(gate.boundedNoProgress)
   };
 }

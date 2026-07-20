@@ -78,6 +78,7 @@ const {
 const {
   attachConfirmedLeaveEvidence,
   createCanaryRunId,
+  nextCombatControlTickCore,
   runPreLoginSnapshotSafety,
   runReadOnlyCanary
 } = require('./browserless/canary');
@@ -102,6 +103,7 @@ const {
   updateOpponentBehaviorStateCore
 } = require('../strategy/opponent-behavior');
 const {
+  determineCombatFireState,
   evaluateCombatFireBudgetCore,
   evaluateHighEntropyFireGateCore
 } = require('../strategy/combat-fire-discipline');
@@ -5451,6 +5453,39 @@ async function runSelfTest() {
       want: 'false|3|false|false|coverage-marginal-geometry-rearm|2|true|true|coverage-no-marginal-gain|true|shared-fire-budget-exhausted|0|false|target-b|0'
     },
     {
+      name: 'browserless committed pressure attack fires at full cadence while preserving post-shot movement stamina',
+      got: (() => {
+        const paused = determineCombatFireState(
+          { stamina_5s_remaining_milli: 3099 },
+          { user_id: 8 },
+          { closePressure: true, closePressureAttack: true, closePressureReserveMs: 2600, shotCostMs: 500 }
+        );
+        const ready = determineCombatFireState(
+          { stamina_5s_remaining_milli: 3100 },
+          { user_id: 8 },
+          { closePressure: true, closePressureAttack: true, closePressureReserveMs: 2600, shotCostMs: 500 }
+        );
+        const budget = evaluateCombatFireBudgetCore({
+          targetId: 'target-a',
+          acceptedShotsSinceDamage: 100,
+          fireGate: { active: true, suppressFire: true, reason: 'high-entropy-reacquire', explorationMaxShots: 15 },
+          probeState: { suppressFire: true },
+          closePressure: true,
+          pressureAttack: true
+        });
+        return [
+          paused.state,
+          paused.reason,
+          ready.state,
+          ready.cadenceMs,
+          ready.reserve,
+          budget.suppressFire,
+          budget.authorizationSource
+        ].join('|');
+      })(),
+      want: 'paused|close-pressure-movement-reserve|pressure|160|2600|false|close-pressure-full-attack'
+    },
+    {
       name: 'browserless post-attack settlement consumes observed and expired generations without A-B-A reinsertion',
       got: (() => {
         const attack = { id: 8, name: 'target', drop: 20, x: 5000, y: 0, at: 900, action: 'attack', afk: true };
@@ -10029,7 +10064,7 @@ async function runSelfTest() {
           finishedEngagements.length
         ].join('|');
       })(),
-      want: 'combat-live|true|close-pressure|profit-pursuit-close-pressure|false|combat-close-pressure-approach|3000|8|||0'
+      want: 'combat-live|true|close-pressure|profit-pursuit-close-pressure|false|combat-close-pressure-approach|5000|8|||0'
     },
     {
       name: 'browserless Eason-shaped pursuit uses cumulative metrics despite frame-local engagement age',
@@ -10502,7 +10537,7 @@ async function runSelfTest() {
       name: 'browserless close pressure uses ballistic spacing deterministic strafe and trajectory dodge',
       got: (() => {
         const self = { user_id: 7, x: 0, y: 0, vx: 0, vy: 0, hp: 100 };
-        const target = { user_id: 8, x: 2500, y: 0, vx: 0, vy: 50, hp: 100, distance: 2500, active: true };
+        const target = { user_id: 8, x: 5000, y: 0, vx: 0, vy: 50, hp: 100, distance: 5000, active: true };
         const combatTargetState = {
           id: '8',
           combatPhase: 'close-pressure',
@@ -10513,9 +10548,14 @@ async function runSelfTest() {
             targetId: '8',
             phaseStartedAt: 60000,
             range: {
-              rangeCm: 3000,
-              flightMs: 300,
-              responseBudgetMs: 410,
+              rangeCm: 5000,
+              minRangeCm: 4500,
+              maxRangeCm: 5500,
+              reactiveBoundaryCm: 5500,
+              normalMinRangeCm: 6000,
+              normalMaxRangeCm: 6500,
+              flightMs: 500,
+              responseBudgetMs: 550,
               ballisticConstraintSatisfied: true
             }
           },
@@ -10531,19 +10571,19 @@ async function runSelfTest() {
         const strafeA = buildCombatMovementPlan(self, target, [], { ...options, nowMs: 60000 });
         const strafeSame = buildCombatMovementPlan(self, target, [], { ...options, nowMs: 60000 });
         const strafeFlip = buildCombatMovementPlan(self, target, [], { ...options, nowMs: 63500 });
-        const tooClose = buildCombatMovementPlan(self, { ...target, x: 1500, distance: 1500 }, [], { ...options, nowMs: 64000 });
+        const tooClose = buildCombatMovementPlan(self, { ...target, x: 4000, distance: 4000 }, [], { ...options, nowMs: 64000 });
         const bullet = buildCombatMovementPlan(self, target, [{
           bullet_id: 'close-pressure-bullet',
           ownerId: 8,
           incoming: true,
-          distance: 2500,
-          timeToImpact: 250,
+          distance: 5000,
+          timeToImpact: 500,
           cpa: 0,
-          x: 2500,
+          x: 5000,
           y: 0,
           direction: { dx: -1, dy: 0 },
           speed: 500,
-          remainingTicks: 5
+          remainingTicks: 10
         }], { ...options, nowMs: 61000 });
         const selectedThreat = bullet.dodge?.threatField?.find(item => item.dx === bullet.dx && item.dy === bullet.dy) || null;
         return [
@@ -10560,10 +10600,12 @@ async function runSelfTest() {
           bullet.modifiers.includes('dodge'),
           bullet.closePressure.strafe === null,
           selectedThreat?.directHits,
-          bullet.reason
+          bullet.reason,
+          bullet.movementArbitration?.source,
+          bullet.dodge?.applied
         ].join('|');
       })(),
-      want: 'close-pressure-deterministic-strafe|3000|false|true|true|true|combat-close-pressure-separate|-1|true|true|true|true|0|retreat-kite-safe-close'
+      want: 'close-pressure-deterministic-strafe|5000|false|true|true|true|combat-close-pressure-separate|-1|true|true|false|false|0|close-pressure-deterministic-strafe|strategic-safe|false'
     },
     {
       name: 'browserless close pressure keeps Eason-shaped exchange but preserves hard hp exit',
@@ -17892,7 +17934,7 @@ async function runSelfTest() {
             targetId: '8',
             targetName: 'script-runner',
             hitRadius: 90,
-            controlIntervalMs: 160
+            controlIntervalMs: 50
           });
           return [
             replay.accepted,
@@ -17902,13 +17944,16 @@ async function runSelfTest() {
             replay.threatPreserving.unsafeSafeCloseFrames,
             replay.noBulletControl.strafeFrames > 0,
             replay.noBulletControl.controlledPressureBandFrames > 0,
-            replay.reopenedFireEligibleFrames > 0
+            replay.threatPreserving.pressureAttack.committedFrames > 0,
+            replay.threatPreserving.pressureAttack.readyFrames > 0,
+            replay.threatPreserving.pressureAttack.budgetUnlockFrames > 0,
+            replay.threatPreserving.pressureAttack.cadenceMs
           ].join('|');
         } finally {
           fs.rmSync(dir, { recursive: true, force: true });
         }
       })(),
-      want: 'true|60000|3000|1|0|true|true|true'
+      want: 'true|60000|5000|1|0|true|true|true|true|true|160'
     },
     {
       name: 'browserless action adapter repeats velocity through decision gap',
@@ -18897,6 +18942,18 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: '0,1|current-frame-dodge|0|50'
+    },
+    {
+      name: 'browserless combat control runs next tick and skips stale ticks after an overrun',
+      got: [
+        nextCombatControlTickCore(100, 33, { tickMs: 50, intervalMs: 50 }),
+        nextCombatControlTickCore(100, 50, { tickMs: 50, intervalMs: 50 }),
+        nextCombatControlTickCore(100, 80, { tickMs: 50, intervalMs: 50 }),
+        nextCombatControlTickCore(100, 120, { tickMs: 50, intervalMs: 50 }),
+        nextCombatControlTickCore(100, 10, { tickMs: 50, intervalMs: 160 }),
+        nextCombatControlTickCore(null, 10, { tickMs: 50, intervalMs: 50 })
+      ].join('|'),
+      want: '101|101|102|103|104|'
     },
     {
       name: 'browserless canary clears pre-open transport errors and ignores stale generations after open',

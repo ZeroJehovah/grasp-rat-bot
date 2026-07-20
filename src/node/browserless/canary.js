@@ -49,6 +49,17 @@ const DEFAULT_REALTIME_CONTROL_WARMUP_ITERATIONS = 6;
 const DEFAULT_LOGIN_POINT_SINGLE_BLOCKER_BYPASS_MS = 60 * 60 * 1000;
 const DEFAULT_LOGIN_POINT_FULL_HP = 100;
 
+function nextCombatControlTickCore(currentTick, completeMs, options = {}) {
+  if (currentTick === null || currentTick === undefined || currentTick === '') return null;
+  const tick = Number(currentTick);
+  if (!Number.isFinite(tick)) return null;
+  const tickMs = Math.max(1, Number(options.tickMs || 50));
+  const intervalMs = Math.max(tickMs, Number(options.intervalMs || tickMs));
+  const configuredStride = Math.max(1, Math.ceil(intervalMs / tickMs));
+  const durationStride = Math.max(1, Math.ceil(Math.max(0, Number(completeMs || 0)) / tickMs));
+  return tick + Math.max(configuredStride, durationStride);
+}
+
 function createTimingAggregate() {
   return { count: 0, totalMs: 0, maxMs: 0, overBudgetCount: 0 };
 }
@@ -1036,7 +1047,9 @@ async function runReadOnlyCanary(config, options = {}) {
   const durationMs = Math.max(1000, Number(config.readOnlyProbeMs || DEFAULT_READONLY_PROBE_MS));
   const frameGapAlertMs = Math.max(1000, Number(config.frameGapAlertMs || DEFAULT_FRAME_GAP_ALERT_MS));
   const decisionIntervalMs = Math.max(250, Number(config.decisionIntervalMs || 1000));
-  const combatControlIntervalMs = Math.max(50, Number(config.combatControlIntervalMs || 160));
+  const combatServerTickMs = Math.max(1, Number(config.combatServerTickMs || 50));
+  const combatControlIntervalMs = Math.max(combatServerTickMs, Number(config.combatControlIntervalMs || combatServerTickMs));
+  const combatControlMinimumTickStride = Math.max(1, Math.ceil(combatControlIntervalMs / combatServerTickMs));
   const combatControlStatusPublishMs = Math.max(
     combatControlIntervalMs,
     Number(config.combatControlStatusPublishMs || 500)
@@ -1153,7 +1166,18 @@ async function runReadOnlyCanary(config, options = {}) {
       loggedCount: 0,
       last: null,
       worker: null,
-      realtimeControlWarmup
+      realtimeControlWarmup,
+      realtimeControlSchedule: {
+        serverTickMs: combatServerTickMs,
+        configuredIntervalMs: combatControlIntervalMs,
+        minimumTickStride: combatControlMinimumTickStride,
+        lastProcessedTick: null,
+        lastTickDelta: null,
+        nextEligibleTick: null,
+        skippedTicks: 0,
+        lastCompleteMs: null,
+        maxCompleteMs: 0
+      }
     },
     safety: {
       event: null,
@@ -1202,6 +1226,8 @@ async function runReadOnlyCanary(config, options = {}) {
   };
   let lastDecisionAtMs = 0;
   let lastCombatControlAtMs = 0;
+  let lastCombatControlTick = null;
+  let nextCombatControlTick = null;
   let lastRealtimeControlLogAtMs = 0;
   let lastRealtimeControlKey = '';
   let lastCombatControlStatusAtMs = 0;
@@ -1964,7 +1990,25 @@ async function runReadOnlyCanary(config, options = {}) {
   };
   const evaluateRealtimeControl = (currentState, atMs, force = false, outerStages = null) => {
     if (!actionAdapter || !combatLiveEnabled) return false;
-    if (!force && atMs - lastCombatControlAtMs < combatControlIntervalMs) return realtimeControlActive;
+    const inputTickValue = Number(currentState?.realtime?.tick);
+    const inputTick = Number.isFinite(inputTickValue) ? inputTickValue : null;
+    if (!force && inputTick !== null) {
+      if (lastCombatControlTick !== null && inputTick < lastCombatControlTick) {
+        lastCombatControlTick = null;
+        nextCombatControlTick = null;
+      }
+      if (lastCombatControlTick !== null && inputTick <= lastCombatControlTick) return realtimeControlActive;
+      if (nextCombatControlTick !== null && inputTick < nextCombatControlTick) {
+        const skipped = result.decisions.realtimeControlSchedule;
+        skipped.skippedTicks += 1;
+        skipped.nextEligibleTick = nextCombatControlTick;
+        return realtimeControlActive;
+      }
+    } else if (!force && atMs - lastCombatControlAtMs < combatControlIntervalMs) {
+      return realtimeControlActive;
+    }
+    const completeStarted = performance.now();
+    const previousProcessedTick = lastCombatControlTick;
     let realtimeStages = null;
     const control = typeof decisionAdapter.evaluateRealtime === 'function'
       ? decisionAdapter.evaluateRealtime(currentState, {
@@ -1988,11 +2032,43 @@ async function runReadOnlyCanary(config, options = {}) {
         outerStages[`realtime-${name}`] = durationMs;
       }
     }
+    const tickDelta = inputTick !== null && previousProcessedTick !== null
+      ? Math.max(0, inputTick - previousProcessedTick)
+      : null;
+    if (control?.combat && typeof control.combat === 'object') {
+      control.combat.controlSchedule = {
+        inputTick,
+        tickDelta,
+        configuredIntervalMs: combatControlIntervalMs,
+        minimumTickStride: combatControlMinimumTickStride,
+        previousCompleteMs: result.decisions.realtimeControlSchedule.lastCompleteMs,
+        skippedTicks: result.decisions.realtimeControlSchedule.skippedTicks
+      };
+    }
     lastCombatControlAtMs = atMs;
-    if (control?.action?.kind === 'wait' && !realtimeControlActive) return false;
-    const publishStarted = performance.now();
-    const handled = publishRealtimeControl(control || {}, currentState, atMs);
-    if (outerStages) outerStages['realtime-publish'] = performance.now() - publishStarted;
+    lastCombatControlTick = inputTick;
+    let handled = false;
+    if (!(control?.action?.kind === 'wait' && !realtimeControlActive)) {
+      const publishStarted = performance.now();
+      handled = publishRealtimeControl(control || {}, currentState, atMs);
+      if (outerStages) outerStages['realtime-publish'] = performance.now() - publishStarted;
+    }
+    const completeMs = performance.now() - completeStarted;
+    nextCombatControlTick = nextCombatControlTickCore(inputTick, completeMs, {
+      tickMs: combatServerTickMs,
+      intervalMs: combatControlIntervalMs
+    });
+    result.decisions.realtimeControlSchedule = {
+      ...result.decisions.realtimeControlSchedule,
+      lastProcessedTick: inputTick,
+      lastTickDelta: tickDelta,
+      nextEligibleTick: nextCombatControlTick,
+      lastCompleteMs: completeMs,
+      maxCompleteMs: Math.max(
+        Number(result.decisions.realtimeControlSchedule.maxCompleteMs || 0),
+        completeMs
+      )
+    };
     return handled;
   };
   const assessRestartDrain = (currentState, atMs) => {
@@ -2682,6 +2758,7 @@ module.exports = {
   frameDataToBuffer,
   inspectCanaryFrame,
   loginPointFromState,
+  nextCombatControlTickCore,
   runPreLoginSnapshotSafety,
   runReadOnlyCanary
 };

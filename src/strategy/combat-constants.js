@@ -16,7 +16,7 @@ const COMBAT_CONSTANTS = {
 
   // Spacing behavior
   CLOSE_SPACING_THRESHOLD: 4500,          // combatCloseSpacingThreshold - back away threshold
-  TARGET_SPACING_MIN: 4500,               // combatTargetSpacingMin
+  TARGET_SPACING_MIN: 6000,               // one tick beyond the reactive-dodge boundary
   TARGET_SPACING_MAX: 6500,               // combatTargetSpacingMax
   RETREAT_EDGE_RANGE: 12000,              // combatRetreatEdgeRange - suppress fire on retreating edge
 

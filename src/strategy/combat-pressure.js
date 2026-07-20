@@ -6,12 +6,14 @@
 
 const DEFAULT_SERVER_TICK_MS = 50;
 const DEFAULT_BULLET_SPEED_CM_PER_TICK = 500;
-const DEFAULT_CONTROL_INTERVAL_MS = 160;
+const DEFAULT_CONTROL_INTERVAL_MS = 50;
 const DEFAULT_MOVEMENT_P90_TICKS = 5;
 const DEFAULT_FRAME_JITTER_MS = 50;
 const DEFAULT_REACTION_MARGIN_MS = 100;
-const DEFAULT_MIN_RANGE_CM = 2000;
-const DEFAULT_MAX_RANGE_CM = 3000;
+const DEFAULT_PLAYER_SPEED_CM_PER_TICK = 50;
+const DEFAULT_BULLET_HIT_RADIUS_CM = 90;
+const DEFAULT_REACTION_RANGE_MIN_CM = 4500;
+const DEFAULT_REACTION_RANGE_MAX_CM = 7000;
 
 function numberOrNull(value) {
   if (value === null || value === undefined || value === '') return null;
@@ -59,23 +61,58 @@ function combatPressureTargetRangeCore(options = {}) {
   const reactionSafetyMarginMs = Math.max(0, Number(options.combatReactionSafetyMarginMs
     ?? options.reactionSafetyMarginMs
     ?? DEFAULT_REACTION_MARGIN_MS));
+  const playerSpeed = Math.max(1, Number(options.combatMoveSpeedPerTick
+    ?? options.playerSpeedPerTick
+    ?? DEFAULT_PLAYER_SPEED_CM_PER_TICK));
+  const hitRadius = Math.max(1, Number(options.combatBulletHitRadiusCm
+    ?? options.hitRadiusCm
+    ?? DEFAULT_BULLET_HIT_RADIUS_CM));
+  const clearanceTicks = Math.max(1, Math.ceil(hitRadius / playerSpeed));
+  const clearanceMs = clearanceTicks * tickMs;
   const responseBudgetMs = controlIntervalMs
     + p90Ticks * tickMs
     + frameJitterMs
-    + reactionSafetyMarginMs;
+    + reactionSafetyMarginMs
+    + clearanceMs;
   const unconstrainedRangeCm = bulletSpeed * responseBudgetMs / tickMs;
+  const reactiveBoundaryCm = clamp(
+    unconstrainedRangeCm,
+    Math.max(1, Number(options.combatReactiveDodgeMinRangeCm ?? DEFAULT_REACTION_RANGE_MIN_CM)),
+    Math.max(
+      Math.max(1, Number(options.combatReactiveDodgeMinRangeCm ?? DEFAULT_REACTION_RANGE_MIN_CM)),
+      Number(options.combatReactiveDodgeMaxRangeCm ?? DEFAULT_REACTION_RANGE_MAX_CM)
+    )
+  );
+  const oneTickRangeCm = bulletSpeed;
+  const derivedMinRangeCm = Math.max(oneTickRangeCm, reactiveBoundaryCm - oneTickRangeCm * 2);
+  const derivedMaxRangeCm = Math.max(derivedMinRangeCm, reactiveBoundaryCm);
   const minRangeCm = Math.max(1, Number(options.combatClosePressureMinRangeCm
     ?? options.closePressureMinRangeCm
-    ?? DEFAULT_MIN_RANGE_CM));
+    ?? derivedMinRangeCm));
   const maxRangeCm = Math.max(minRangeCm, Number(options.combatClosePressureMaxRangeCm
     ?? options.closePressureMaxRangeCm
-    ?? DEFAULT_MAX_RANGE_CM));
-  const rangeCm = clamp(unconstrainedRangeCm, minRangeCm, maxRangeCm);
+    ?? derivedMaxRangeCm));
+  const rangeCm = clamp(
+    reactiveBoundaryCm - oneTickRangeCm,
+    minRangeCm,
+    maxRangeCm
+  );
+  const normalMinRangeCm = Math.max(
+    maxRangeCm + oneTickRangeCm,
+    Number(options.combatNormalReactionMinRangeCm ?? reactiveBoundaryCm + oneTickRangeCm)
+  );
+  const normalMaxRangeCm = Math.max(
+    normalMinRangeCm,
+    Number(options.combatNormalReactionMaxRangeCm ?? reactiveBoundaryCm + oneTickRangeCm * 2)
+  );
   const flightMs = rangeCm / bulletSpeed * tickMs;
   return {
     rangeCm: Math.round(rangeCm),
     minRangeCm: Math.round(minRangeCm),
     maxRangeCm: Math.round(maxRangeCm),
+    reactiveBoundaryCm: Math.round(reactiveBoundaryCm),
+    normalMinRangeCm: Math.round(normalMinRangeCm),
+    normalMaxRangeCm: Math.round(normalMaxRangeCm),
     unconstrainedRangeCm: Math.round(unconstrainedRangeCm),
     flightMs: Math.round(flightMs),
     responseBudgetMs: Math.round(responseBudgetMs),
@@ -83,6 +120,10 @@ function combatPressureTargetRangeCore(options = {}) {
     bulletSpeedCmPerTick: bulletSpeed,
     controlIntervalMs: Math.round(controlIntervalMs),
     movementP90Ticks: p90Ticks,
+    playerSpeedCmPerTick: playerSpeed,
+    hitRadiusCm: hitRadius,
+    clearanceTicks,
+    clearanceMs,
     frameJitterMs: Math.round(frameJitterMs),
     reactionSafetyMarginMs: Math.round(reactionSafetyMarginMs),
     ballisticConstraintSatisfied: flightMs <= responseBudgetMs
@@ -142,7 +183,53 @@ function combatPressurePhaseCore(previous = {}, input = {}, options = {}) {
         ? Number(previous.phaseStartedAt)
         : nowMs)
     : nowMs;
-  const range = active ? combatPressureTargetRangeCore(options) : null;
+  const previousClosePressure = previous?.closePressure && typeof previous.closePressure === 'object'
+    ? previous.closePressure
+    : previous;
+  const previousRange = previousClosePressure?.range && typeof previousClosePressure.range === 'object'
+    ? previousClosePressure.range
+    : null;
+  const range = active
+    ? (previousPhase === 'close-pressure' && previousRange
+        ? previousRange
+        : combatPressureTargetRangeCore(options))
+    : null;
+  const targetDistance = numberOrNull(input.distance ?? input.targetDistance);
+  const pressureBandConfirmTicks = Math.max(1, Math.round(Number(options.combatPressureBandConfirmTicks ?? 3)));
+  const pressureBandReleaseTicks = Math.max(1, Math.round(Number(options.combatPressureBandReleaseTicks ?? 3)));
+  const insidePressureBand = Boolean(
+    active
+      && targetDistance !== null
+      && targetDistance >= Number(range?.minRangeCm || 0)
+      && targetDistance <= Number(range?.maxRangeCm || 0)
+  );
+  const outsideReactiveBand = Boolean(
+    active
+      && targetDistance !== null
+      && targetDistance >= Number(range?.normalMinRangeCm || Infinity)
+  );
+  const previousBandSamples = sameTarget && previousPhase === 'close-pressure'
+    ? Math.max(0, Number(previousClosePressure?.pressureBandSamples || 0))
+    : 0;
+  const previousReleaseSamples = sameTarget && previousPhase === 'close-pressure'
+    ? Math.max(0, Number(previousClosePressure?.pressureReleaseSamples || 0))
+    : 0;
+  const pressureBandSamples = insidePressureBand ? previousBandSamples + 1 : 0;
+  const pressureReleaseSamples = outsideReactiveBand ? previousReleaseSamples + 1 : 0;
+  const previouslyCommitted = Boolean(
+    sameTarget
+      && previousPhase === 'close-pressure'
+      && previousClosePressure?.pressureAttackCommitted
+  );
+  const pressureAttackCommitted = Boolean(
+    active
+      && (previouslyCommitted
+        ? pressureReleaseSamples < pressureBandReleaseTicks
+        : pressureBandSamples >= pressureBandConfirmTicks)
+  );
+  const subphase = active
+    ? (pressureAttackCommitted ? 'pressure-attack' : 'closing')
+    : 'normal-combat';
   const triggerReason = noDamageTrigger
     ? 'no-damage-threshold'
     : (maxDurationTrigger ? 'maximum-pursuit-duration' : (active ? 'latched' : ''));
@@ -165,7 +252,16 @@ function combatPressurePhaseCore(previous = {}, input = {}, options = {}) {
     minDamageMs: Math.round(minDamageMs),
     minDamageHp: Math.round(minDamageHp * 10) / 10,
     maxMs: Math.round(maxMs),
-    range
+    range,
+    subphase,
+    pressureAttackCommitted,
+    pressureBandSamples,
+    pressureBandConfirmTicks,
+    pressureReleaseSamples,
+    pressureBandReleaseTicks,
+    insidePressureBand,
+    outsideReactiveBand,
+    targetDistance: targetDistance === null ? null : Math.round(targetDistance)
   };
 }
 

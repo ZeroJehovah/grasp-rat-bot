@@ -18,6 +18,8 @@ const {
 } = require('./combat-shot-coverage');
 const {
   classifyFireRiskCore,
+  determineCombatFireState,
+  evaluateCombatFireBudgetCore,
   evaluateHighEntropyFireGateCore,
   updateCombatProbePhaseCore
 } = require('./combat-fire-discipline');
@@ -26,7 +28,8 @@ const {
   calculateDodgeDirection,
   contactEntryRiskCore,
   contactEntrySyntheticBulletCore,
-  pickSafeClosingDodgeCore
+  pickSafeClosingDodgeCore,
+  selectCombatMovementArbitrationCore
 } = require('./combat-movement');
 const { recordActionSwitchDiagnosticsCore } = require('./action-switch-diagnostics');
 const { attackWorthTakingCore } = require('./attack-worth');
@@ -1294,12 +1297,16 @@ function runStrategyModuleSelfTests() {
     movementExecutionTiming: { p90Ticks: 2 }
   });
   const pressureRange = combatPressureTargetRangeCore({
-    combatControlIntervalMs: 160,
+    combatControlIntervalMs: 50,
     combatServerTickMs: 50,
     combatBulletSpeedPerTick: 500,
-    movementExecutionTiming: { p90Ticks: 2 },
+    combatMoveSpeedPerTick: 50,
+    combatBulletHitRadiusCm: 90,
+    movementExecutionTiming: { p90Ticks: 5 },
     combatFrameJitterMs: 50,
-    combatReactionSafetyMarginMs: 100
+    combatReactionSafetyMarginMs: 100,
+    combatClosePressureMinRangeCm: 4500,
+    combatClosePressureMaxRangeCm: 5500
   });
   const pressureStrafeA = combatPressureStrafeCore(
     { x: 0, y: 0 },
@@ -1331,8 +1338,14 @@ function runStrategyModuleSelfTests() {
       && pressureAt.phase === 'close-pressure'
       && pressureAt.engagedMs === 60000
       && pressureAt.triggerReason === 'no-damage-threshold'
-      && pressureRange.rangeCm >= 2000
-      && pressureRange.rangeCm <= 3000
+      && pressureRange.clearanceTicks === 2
+      && pressureRange.responseBudgetMs === 550
+      && pressureRange.reactiveBoundaryCm === 5500
+      && pressureRange.normalMinRangeCm === 6000
+      && pressureRange.normalMaxRangeCm === 6500
+      && pressureRange.minRangeCm === 4500
+      && pressureRange.rangeCm === 5000
+      && pressureRange.maxRangeCm === 5500
       && pressureRange.flightMs <= pressureRange.responseBudgetMs
       && pressureRange.ballisticConstraintSatisfied === true
       && pressureStrafeA.active === true
@@ -1344,6 +1357,121 @@ function runStrategyModuleSelfTests() {
       && pressureStrafeLong.segmentIndex > 128
       && pressureStrafeLong.dx === 0
       && Math.abs(pressureStrafeLong.dy) === 1
+  });
+
+  const pressurePhaseOptions = {
+    combatControlIntervalMs: 50,
+    combatServerTickMs: 50,
+    combatBulletSpeedPerTick: 500,
+    combatMoveSpeedPerTick: 50,
+    combatBulletHitRadiusCm: 90,
+    combatFrameJitterMs: 50,
+    combatReactionSafetyMarginMs: 100,
+    combatClosePressureMinRangeCm: 4500,
+    combatClosePressureMaxRangeCm: 5500,
+    movementExecutionTiming: { p90Ticks: 5 }
+  };
+  const pressurePhaseInput = {
+    targetId: '8',
+    engagedAt: 1000,
+    originIntent: 'profit',
+    damageFromStart: 0,
+    damageKnown: true,
+    distance: 5000
+  };
+  const pressureSample1 = combatPressurePhaseCore({
+    id: '8', combatPhase: 'normal-combat', firstSeenAt: 1000, firstHp: 100, minHp: 100
+  }, { ...pressurePhaseInput, nowMs: 61000 }, pressurePhaseOptions);
+  const pressureState1 = { id: '8', combatPhase: pressureSample1.phase, phaseStartedAt: pressureSample1.phaseStartedAt, closePressure: pressureSample1 };
+  const pressureSample2 = combatPressurePhaseCore(pressureState1, { ...pressurePhaseInput, nowMs: 61050 }, pressurePhaseOptions);
+  const pressureState2 = { id: '8', combatPhase: pressureSample2.phase, phaseStartedAt: pressureSample2.phaseStartedAt, closePressure: pressureSample2 };
+  const pressureSample3 = combatPressurePhaseCore(pressureState2, { ...pressurePhaseInput, nowMs: 61100 }, pressurePhaseOptions);
+  const pressureState3 = { id: '8', combatPhase: pressureSample3.phase, phaseStartedAt: pressureSample3.phaseStartedAt, closePressure: pressureSample3 };
+  const pressureRelease1 = combatPressurePhaseCore(pressureState3, { ...pressurePhaseInput, nowMs: 61150, distance: 6000 }, pressurePhaseOptions);
+  const pressureRelease2 = combatPressurePhaseCore({ ...pressureState3, closePressure: pressureRelease1 }, { ...pressurePhaseInput, nowMs: 61200, distance: 6000 }, pressurePhaseOptions);
+  const pressureRelease3 = combatPressurePhaseCore({ ...pressureState3, closePressure: pressureRelease2 }, { ...pressurePhaseInput, nowMs: 61250, distance: 6000 }, pressurePhaseOptions);
+  results.push({
+    name: 'combat-close-pressure-enters-full-attack-after-three-band-ticks-and-releases-after-three-reactive-range-ticks',
+    passed: pressureSample1.subphase === 'closing'
+      && pressureSample1.pressureBandSamples === 1
+      && pressureSample2.subphase === 'closing'
+      && pressureSample2.pressureBandSamples === 2
+      && pressureSample3.subphase === 'pressure-attack'
+      && pressureSample3.pressureAttackCommitted === true
+      && pressureRelease1.pressureAttackCommitted === true
+      && pressureRelease2.pressureAttackCommitted === true
+      && pressureRelease3.pressureAttackCommitted === false
+      && pressureRelease3.subphase === 'closing'
+  });
+
+  const movementThreatField = [
+    { dx: 1, dy: 0, directHits: 0, minCPA: 250 },
+    { dx: 0, dy: 1, directHits: 0, minCPA: 300 },
+    { dx: -1, dy: 0, directHits: 0, minCPA: 500 }
+  ];
+  const strategicMove = selectCombatMovementArbitrationCore({
+    threatField: movementThreatField,
+    strategicDirection: { dx: 1, dy: 0 },
+    currentDirection: { dx: 0, dy: 1 },
+    emergencyDirection: { dx: -1, dy: 0 }
+  }, { minimumCpaCm: 200 });
+  const heldMove = selectCombatMovementArbitrationCore({
+    threatField: movementThreatField.map(item => item.dx === 1 ? { ...item, directHits: 1, minCPA: 50 } : item),
+    strategicDirection: { dx: 1, dy: 0 },
+    currentDirection: { dx: 0, dy: 1 },
+    emergencyDirection: { dx: -1, dy: 0 }
+  }, { minimumCpaCm: 200 });
+  const pendingMove = selectCombatMovementArbitrationCore({
+    threatField: movementThreatField,
+    strategicDirection: { dx: 1, dy: 0 },
+    currentDirection: { dx: 0, dy: 1 },
+    pendingDirection: { dx: 0, dy: 1 },
+    pendingActive: true,
+    emergencyDirection: { dx: -1, dy: 0 }
+  }, { minimumCpaCm: 200 });
+  const emergencyMove = selectCombatMovementArbitrationCore({
+    threatField: movementThreatField.map(item => ({ ...item, directHits: 1, minCPA: 50 })),
+    strategicDirection: { dx: 1, dy: 0 },
+    currentDirection: { dx: 0, dy: 1 },
+    emergencyDirection: { dx: -1, dy: 0 }
+  }, { minimumCpaCm: 200 });
+  results.push({
+    name: 'combat-movement-prefers-safe-strategy-then-safe-current-and-only-uses-emergency-dodge-for-real-risk',
+    passed: strategicMove.source === 'strategic-safe'
+      && strategicMove.dx === 1 && strategicMove.dy === 0
+      && heldMove.source === 'current-safe-hold'
+      && heldMove.dx === 0 && heldMove.dy === 1
+      && pendingMove.source === 'pending-safe-hold'
+      && emergencyMove.source === 'emergency-dodge'
+      && emergencyMove.dx === -1 && emergencyMove.dy === 0
+  });
+
+  const pressureAttackPaused = determineCombatFireState(
+    { stamina_5s_remaining_milli: 3099 },
+    { user_id: 8 },
+    { closePressure: true, closePressureAttack: true, closePressureReserveMs: 2600, shotCostMs: 500 }
+  );
+  const pressureAttackReady = determineCombatFireState(
+    { stamina_5s_remaining_milli: 3100 },
+    { user_id: 8 },
+    { closePressure: true, closePressureAttack: true, closePressureReserveMs: 2600, shotCostMs: 500 }
+  );
+  const pressureAttackBudget = evaluateCombatFireBudgetCore({
+    targetId: '8',
+    acceptedShotsSinceDamage: 100,
+    fireGate: { active: true, suppressFire: true, reason: 'high-entropy-reacquire', explorationMaxShots: 15 },
+    probeState: { suppressFire: true },
+    closePressure: true,
+    pressureAttack: true
+  });
+  results.push({
+    name: 'combat-pressure-attack-bypasses-probe-budget-only-above-post-shot-movement-reserve',
+    passed: pressureAttackPaused.state === 'paused'
+      && pressureAttackPaused.reason === 'close-pressure-movement-reserve'
+      && pressureAttackReady.state === 'pressure'
+      && pressureAttackReady.cadenceMs === COMBAT_CONSTANTS.SHOOT_EVERY_MS
+      && pressureAttackBudget.suppressFire === false
+      && pressureAttackBudget.authorizationSource === 'close-pressure-full-attack'
   });
 
   const closePressureExchange = evaluateCombatExchangeStopLossCore({

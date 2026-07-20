@@ -48,8 +48,8 @@ function parseArgs(argv) {
     routePoolLimit: null,
     routeAnchorLimit: null,
     routeBeamWidth: null,
-    canaryDurationMs: 1200,
-    frameIntervalMs: 10,
+    canaryDurationMs: 3000,
+    frameIntervalMs: 50,
     json: false,
     failOnBudget: false
   };
@@ -79,8 +79,8 @@ function parseArgs(argv) {
   options.realtimeEntities = Math.max(2, Math.round(Number(options.realtimeEntities) || 80));
   options.snapshotCoins = Math.max(0, Math.round(Number(options.snapshotCoins) || 88));
   options.bullets = Math.max(0, Math.round(Number(options.bullets) || 2));
-  options.canaryDurationMs = Math.max(1000, Math.round(Number(options.canaryDurationMs) || 1200));
-  options.frameIntervalMs = Math.max(1, Math.round(Number(options.frameIntervalMs) || 10));
+  options.canaryDurationMs = Math.max(1000, Math.round(Number(options.canaryDurationMs) || 3000));
+  options.frameIntervalMs = Math.max(1, Math.round(Number(options.frameIntervalMs) || 50));
   return options;
 }
 
@@ -100,8 +100,8 @@ function usage() {
     '  --route-pool-limit <n>    Override coin-route candidate pool',
     '  --route-anchor-limit <n>  Override coin-route anchor count',
     '  --route-beam-width <n>    Override coin-route beam width',
-    '  --canary-duration-ms <ms> Complete callback scenario duration. Default: 1200',
-    '  --frame-interval-ms <ms>  Synthetic WS frame interval. Default: 10',
+    '  --canary-duration-ms <ms> Complete callback scenario duration. Default: 3000',
+    '  --frame-interval-ms <ms>  Synthetic WS frame interval. Default: 50',
     '  --json                    Print JSON only',
     '  --fail-on-budget          Exit nonzero when a production hot task exceeds the budget'
   ].join('\n');
@@ -518,12 +518,14 @@ async function runCompleteCallbackScenario(options, combatLearning, activeCombat
     coin_drops: fixture.coinDrops,
     messages: []
   });
-  const posFrame = encodeGrzFrame({
+  const frameCount = Math.ceil(options.canaryDurationMs / options.frameIntervalMs) + 8;
+  const posFrames = Array.from({ length: frameCount }, (_, index) => encodeGrzFrame({
     type: 'pos',
-    tick: fixture.state.realtime.tick,
+    tick: fixture.state.realtime.tick + index + 1,
     entities: fixture.entities,
     bullets: fixture.bullets
-  });
+  }));
+  let posFrameIndex = 0;
   try {
     await Promise.all([refreshStatusCache(false), refreshStatusCache(true)]);
     scheduleStatusRender();
@@ -538,7 +540,7 @@ async function runCompleteCallbackScenario(options, combatLearning, activeCombat
       combatEnabled: true,
       readOnlyProbeMs: options.canaryDurationMs,
       decisionIntervalMs: 1000,
-      combatControlIntervalMs: 160,
+      combatControlIntervalMs: 50,
       movementCommandIntervalMs: 500,
       frameGapAlertMs: 5000,
       wsTraceEnabled: true,
@@ -570,7 +572,11 @@ async function runCompleteCallbackScenario(options, combatLearning, activeCombat
       },
       openBrowserlessWs: async wsOptions => {
         setImmediate(() => wsOptions.onMessage(snapshotFrame));
-        timer = setInterval(() => wsOptions.onMessage(posFrame), options.frameIntervalMs);
+        timer = setInterval(() => {
+          const frame = posFrames[Math.min(posFrameIndex, posFrames.length - 1)];
+          posFrameIndex += 1;
+          wsOptions.onMessage(frame);
+        }, options.frameIntervalMs);
         timer.unref?.();
         return {
           isOpen: () => true,
@@ -588,6 +594,8 @@ async function runCompleteCallbackScenario(options, combatLearning, activeCombat
       ok: result.ok,
       activeCombat,
       frameCount: result.hotPath?.tasks?.['ws-message']?.count || 0,
+      realtimeControlCount: Number(result.decisions?.realtimeControlCount || 0),
+      realtimeControlSchedule: result.decisions?.realtimeControlSchedule || null,
       hotPath: result.hotPath,
       concurrentStatus: {
         fullDispatch: timingSummary(concurrentStatus.fullDispatch),
@@ -764,14 +772,14 @@ async function runBenchmark(options) {
   const fixture = createFixture(options, combatLearning);
   const decisionAdapter = createBrowserlessDecisionAdapter(fixture.adapterOptions);
   for (let index = 0; index < options.warmup; index += 1) {
-    fixture.advance(160);
+    fixture.advance(50);
     decisionAdapter.evaluateRealtime(fixture.state, {
       ...fixture.adapterOptions,
       nowMs: fixture.now()
     });
   }
   const realtimeControl = await measureYielding(options.iterations, () => {
-    fixture.advance(160);
+    fixture.advance(50);
     return decisionAdapter.evaluateRealtime(fixture.state, {
       ...fixture.adapterOptions,
       nowMs: fixture.now()
@@ -790,7 +798,7 @@ async function runBenchmark(options) {
   const decisionStateClone = measure(options.iterations, () => decisionAdapter.getState());
   const stateStore = createBrowserlessStateStore({ userId: fixture.self.user_id, now: fixture.now });
   const frameIngest = measure(options.iterations, index => {
-    const atMs = fixture.advance(160);
+    const atMs = fixture.advance(50);
     stateStore.ingestFrame({
       type: 'pos',
       tick: 900000 + index,
@@ -870,6 +878,12 @@ async function runBenchmark(options) {
     .map(([name, summary]) => ({ name, maxMs: summary.maxMs }));
   const validationErrors = [];
   if (statusRendering && !statusRendering.secretsRedacted) validationErrors.push('status-secret-redaction-failed');
+  if (Number(combatScenario.realtimeControlCount || 0) < 40) {
+    validationErrors.push('combat-realtime-control-below-20hz-sample-floor');
+  }
+  if (Number(combatScenario.realtimeControlSchedule?.minimumTickStride || 0) !== 1) {
+    validationErrors.push('combat-realtime-control-not-single-tick');
+  }
   return {
     environment: {
       arch: process.arch,

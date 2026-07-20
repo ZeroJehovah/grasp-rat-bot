@@ -23,7 +23,8 @@ const {
   calculateDodgeDirection,
   contactEntryRiskCore,
   contactEntrySyntheticBulletCore,
-  pickSafeClosingDodgeCore
+  pickSafeClosingDodgeCore,
+  selectCombatMovementArbitrationCore
 } = require('../src/strategy/combat-movement');
 const { buildTrajectoryCoveragePlanCore } = require('../src/strategy/combat-shot-coverage');
 const {
@@ -57,7 +58,7 @@ function parseArgs(argv) {
     targetName: '',
     mode: 'combat',
     hitRadius: 90,
-    controlIntervalMs: 160,
+    controlIntervalMs: 50,
     minImprovementPct: 0,
     expectNewExit: false,
     trustEasyKillBeforeDamage: false,
@@ -1994,6 +1995,16 @@ function replayClosePressureMovement(rows = [], options = {}) {
   let safeCloseFrames = 0;
   let unsafeSafeCloseFrames = 0;
   let preservedDodgeFrames = 0;
+  let currentSafeHoldFrames = 0;
+  let pressureBandSamples = 0;
+  let pressureReleaseSamples = 0;
+  let pressureAttackCommitted = false;
+  let pressureAttackFrames = 0;
+  let pressureAttackReadyFrames = 0;
+  let pressureAttackPausedFrames = 0;
+  let pressureAttackBudgetUnlockFrames = 0;
+  let pressureAttackCadenceMs = null;
+  let firstPressureAttack = null;
   const distances = [];
   const samples = [];
   for (let index = 0; index < rows.length; index += 1) {
@@ -2010,50 +2021,132 @@ function replayClosePressureMovement(rows = [], options = {}) {
     );
     const target = { ...loggedTarget, distance };
     distances.push(distance);
+    const insidePressureBand = distance >= Number(range.minRangeCm)
+      && distance <= Number(range.maxRangeCm);
+    const outsideReactiveBand = distance >= Number(range.normalMinRangeCm);
+    pressureBandSamples = insidePressureBand ? pressureBandSamples + 1 : 0;
+    pressureReleaseSamples = outsideReactiveBand ? pressureReleaseSamples + 1 : 0;
+    pressureAttackCommitted = pressureAttackCommitted
+      ? pressureReleaseSamples < 3
+      : pressureBandSamples >= 3;
+    if (pressureAttackCommitted) {
+      pressureAttackFrames += 1;
+      const fireState = determineCombatFireState(loggedSelf, target, {
+        closePressure: true,
+        closePressureAttack: true,
+        closePressureReserveMs: 2600,
+        shotCostMs: 500
+      });
+      const exhaustedBudgetInput = {
+        targetId: options.targetId,
+        acceptedShotsSinceDamage: 100,
+        fireGate: {
+          active: true,
+          suppressFire: true,
+          reason: 'shared-fire-budget-exhausted'
+        },
+        probeState: { suppressFire: true },
+        closePressure: true
+      };
+      const baselineBudget = evaluateCombatFireBudgetCore({
+        ...exhaustedBudgetInput,
+        pressureAttack: false
+      });
+      const pressureBudget = evaluateCombatFireBudgetCore({
+        ...exhaustedBudgetInput,
+        pressureAttack: true
+      });
+      if (baselineBudget.suppressFire
+        && !pressureBudget.suppressFire
+        && pressureBudget.authorizationSource === 'close-pressure-full-attack') {
+        pressureAttackBudgetUnlockFrames += 1;
+      }
+      const fireReady = !row.detail?.exit
+        && distance <= 14500
+        && fireState.state !== 'disabled'
+        && fireState.state !== 'paused'
+        && !pressureBudget.suppressFire;
+      if (fireReady) {
+        pressureAttackReadyFrames += 1;
+        pressureAttackCadenceMs = pressureAttackCadenceMs === null
+          ? Number(fireState.cadenceMs)
+          : Math.max(pressureAttackCadenceMs, Number(fireState.cadenceMs));
+      } else {
+        pressureAttackPausedFrames += 1;
+      }
+      if (!firstPressureAttack) {
+        firstPressureAttack = {
+          line: row.line,
+          at: row.entry.at || '',
+          distanceCm: Math.round(distance),
+          bandSamples: pressureBandSamples,
+          fireState: fireState.state,
+          fireReason: fireState.reason,
+          cadenceMs: Number.isFinite(Number(fireState.cadenceMs)) ? Number(fireState.cadenceMs) : null,
+          reserveMs: Number.isFinite(Number(fireState.reserve)) ? Number(fireState.reserve) : null,
+          budgetAuthorization: pressureBudget.authorizationSource || '',
+          budgetUnlocked: Boolean(baselineBudget.suppressFire && !pressureBudget.suppressFire)
+        };
+      }
+    }
     const threatField = detail.movement?.dodge?.threatField || [];
-    const hasThreat = options.preserveThreat === true && closePressureThreatFrame(detail);
     let dx = 0;
     let dy = 0;
     let movement = '';
-    if (hasThreat) {
-      threatFrames += 1;
-      const safeClose = pickSafeClosingDodgeCore(threatField, {
-        hitRadius: options.hitRadius,
-        minimumCpaRatio: 0.75,
-        minimumClosingCm: 25
-      });
-      if (safeClose) {
-        dx = Number(safeClose.dx || 0);
-        dy = Number(safeClose.dy || 0);
-        movement = 'trajectory-safe-close';
-        safeCloseFrames += 1;
-        const selectedThreat = threatField.find(item => Number(item?.dx) === dx && Number(item?.dy) === dy) || null;
-        if (Number(selectedThreat?.directHits || 0) > 0) unsafeSafeCloseFrames += 1;
-      } else {
-        dx = Number(detail.movement?.dx || 0);
-        dy = Number(detail.movement?.dy || 0);
-        movement = 'trajectory-dodge-preserved';
-        preservedDodgeFrames += 1;
-      }
-    } else if (distance > Number(range.rangeCm) + hysteresisCm) {
-      dx = Math.sign(Number(target.x) - Number(self.x));
-      dy = Math.sign(Number(target.y) - Number(self.y));
-      movement = 'close-pressure-approach';
-      approachFrames += 1;
+    let strategicMovement = '';
+    let strategicDx = 0;
+    let strategicDy = 0;
+    if (distance > Number(range.rangeCm)) {
+      strategicDx = Math.sign(Number(target.x) - Number(self.x));
+      strategicDy = Math.sign(Number(target.y) - Number(self.y));
+      strategicMovement = 'close-pressure-approach';
     } else if (distance < Number(range.minRangeCm)) {
-      dx = Math.sign(Number(self.x) - Number(target.x));
-      dy = Math.sign(Number(self.y) - Number(target.y));
-      movement = 'close-pressure-separate';
-      separateFrames += 1;
+      strategicDx = Math.sign(Number(self.x) - Number(target.x));
+      strategicDy = Math.sign(Number(self.y) - Number(target.y));
+      strategicMovement = 'close-pressure-separate';
     } else {
       const strafe = combatPressureStrafeCore(self, target, {
         targetId: options.targetId,
         phaseStartedAt: options.phaseStartedAt
       }, { nowMs: atMs });
-      dx = Number(strafe.dx || 0);
-      dy = Number(strafe.dy || 0);
-      movement = strafe.reason || 'close-pressure-strafe';
-      strafeFrames += 1;
+      strategicDx = Number(strafe.dx || 0);
+      strategicDy = Number(strafe.dy || 0);
+      strategicMovement = strafe.reason || 'close-pressure-strafe';
+    }
+    const hasThreat = options.preserveThreat === true && threatField.length > 0;
+    if (hasThreat) {
+      threatFrames += 1;
+      const arbitration = selectCombatMovementArbitrationCore({
+        threatField,
+        strategicDirection: { dx: strategicDx, dy: strategicDy },
+        currentDirection: { dx: Math.sign(Number(self.vx || 0)), dy: Math.sign(Number(self.vy || 0)) },
+        emergencyDirection: { dx: Number(detail.movement?.dx || 0), dy: Number(detail.movement?.dy || 0) }
+      }, {
+        minimumCpaCm: Math.max(200, Number(options.hitRadius || 90) + 110)
+      });
+      dx = Number(arbitration.dx || 0);
+      dy = Number(arbitration.dy || 0);
+      if (arbitration.source === 'strategic-safe') {
+        movement = strategicMovement;
+        safeCloseFrames += 1;
+        if (strategicMovement === 'close-pressure-approach') approachFrames += 1;
+        else if (strategicMovement === 'close-pressure-separate') separateFrames += 1;
+        else strafeFrames += 1;
+        if (Number(arbitration.selectedThreat?.directHits || 0) > 0) unsafeSafeCloseFrames += 1;
+      } else if (arbitration.source === 'current-safe-hold' || arbitration.source === 'pending-safe-hold') {
+        movement = 'current-safe-hold';
+        currentSafeHoldFrames += 1;
+      } else {
+        movement = 'trajectory-dodge-preserved';
+        preservedDodgeFrames += 1;
+      }
+    } else {
+      dx = strategicDx;
+      dy = strategicDy;
+      movement = strategicMovement;
+      if (strategicMovement === 'close-pressure-approach') approachFrames += 1;
+      else if (strategicMovement === 'close-pressure-separate') separateFrames += 1;
+      else strafeFrames += 1;
     }
     if (samples.length < 12 && (movement !== 'trajectory-dodge-preserved' || safeCloseFrames <= 3)) {
       samples.push({
@@ -2088,6 +2181,17 @@ function replayClosePressureMovement(rows = [], options = {}) {
     safeCloseFrames,
     unsafeSafeCloseFrames,
     preservedDodgeFrames,
+    currentSafeHoldFrames,
+    pressureAttack: {
+      confirmTicks: 3,
+      releaseTicks: 3,
+      committedFrames: pressureAttackFrames,
+      readyFrames: pressureAttackReadyFrames,
+      pausedFrames: pressureAttackPausedFrames,
+      budgetUnlockFrames: pressureAttackBudgetUnlockFrames,
+      cadenceMs: pressureAttackCadenceMs,
+      firstCommit: firstPressureAttack
+    },
     strictPressureBandFrames: distances.filter(distance => (
       distance >= Number(range.minRangeCm) && distance <= Number(range.maxRangeCm)
     )).length,
@@ -2142,10 +2246,12 @@ function replayCombatClosePressure(options) {
     combatControlIntervalMs: options.controlIntervalMs,
     combatServerTickMs: 50,
     combatBulletSpeedPerTick: 500,
+    combatMoveSpeedPerTick: 50,
+    combatBulletHitRadiusCm: 90,
     combatFrameJitterMs: 50,
     combatReactionSafetyMarginMs: 100,
-    combatClosePressureMinRangeCm: 2000,
-    combatClosePressureMaxRangeCm: 3000,
+    combatClosePressureMinRangeCm: 4500,
+    combatClosePressureMaxRangeCm: 5500,
     movementExecutionTiming: { p90Ticks: timingP90Ticks }
   };
   for (const row of rows) {
@@ -2163,13 +2269,15 @@ function replayCombatClosePressure(options) {
       firstHp,
       minHp,
       damageFromStart,
-      damageKnown: damageFromStart !== null
+      damageKnown: damageFromStart !== null,
+      distance: numberOrNull(row.detail.target?.distance)
     }, pressureOptions);
     phaseState = {
       ...phaseState,
       id: targetId,
       combatPhase: phase.phase,
       phaseStartedAt: phase.phaseStartedAt,
+      closePressure: phase.active ? phase : null,
       firstHp,
       minHp,
       hp
@@ -2253,10 +2361,16 @@ function replayCombatClosePressure(options) {
       && range.ballisticConstraintSatisfied
       && historical.pressureFrames > 0
       && historical.targetContinuityFrames === historical.pressureFrames
-      && reopenedFireEligibleFrames > 0
       && threatPreserving.safeCloseFrames > 0
       && threatPreserving.unsafeSafeCloseFrames === 0
+      && threatPreserving.pressureAttack.committedFrames > 0
+      && threatPreserving.pressureAttack.readyFrames > 0
+      && threatPreserving.pressureAttack.budgetUnlockFrames > 0
+      && threatPreserving.pressureAttack.cadenceMs === 160
       && threatPreserving.distance.p50Cm < historical.distance.p50Cm
+      && threatPreserving.distance.p50Cm <= 6000
+      && threatPreserving.distance.p90Cm <= 7000
+      && threatPreserving.distance.finalCm <= 6000
       && noBulletControl.strafeFrames > 0
       && noBulletControl.controlledPressureBandFrames > 0
       && noBulletControl.distance.p50Cm <= range.maxRangeCm + 300

@@ -17,8 +17,12 @@ const { COMBAT_CONSTANTS } = require('./combat-constants');
  * @returns {number} Desired spacing distance in cm
  */
 function calculateCombatSpacing(self, target, context = {}) {
-  const minSpacing = COMBAT_CONSTANTS.TARGET_SPACING_MIN;
-  const maxSpacing = COMBAT_CONSTANTS.TARGET_SPACING_MAX;
+  const minSpacing = Math.max(1, Number(
+    context.normalMinRangeCm ?? context.minSpacing ?? COMBAT_CONSTANTS.TARGET_SPACING_MIN
+  ));
+  const maxSpacing = Math.max(minSpacing, Number(
+    context.normalMaxRangeCm ?? context.maxSpacing ?? COMBAT_CONSTANTS.TARGET_SPACING_MAX
+  ));
 
   // Default to mid-range
   let spacing = (minSpacing + maxSpacing) / 2;
@@ -39,6 +43,93 @@ function calculateCombatSpacing(self, target, context = {}) {
   }
 
   return Math.max(minSpacing, Math.min(maxSpacing, spacing));
+}
+
+function normalizedDirection(direction = {}) {
+  return {
+    dx: Math.max(-1, Math.min(1, Math.sign(Number(direction.dx || 0)))),
+    dy: Math.max(-1, Math.min(1, Math.sign(Number(direction.dy || 0))))
+  };
+}
+
+function directionThreatCore(threatField = [], direction = {}) {
+  const normalized = normalizedDirection(direction);
+  return (threatField || [])
+    .filter(item => Number(item?.dx) === normalized.dx && Number(item?.dy) === normalized.dy)
+    .sort((left, right) => Number(left?.directHits || 0) - Number(right?.directHits || 0)
+      || Number(right?.minCPA || 0) - Number(left?.minCPA || 0))[0] || null;
+}
+
+function movementThreatSafeCore(threat, minimumCpaCm = 200) {
+  if (!threat) return true;
+  return Number(threat.directHits || 0) === 0
+    && Number(threat.minCPA ?? Infinity) >= Math.max(1, Number(minimumCpaCm || 200));
+}
+
+/**
+ * Pick movement by collision risk first and tactical progress second.
+ * Merely having an in-flight projectile must not grant Dodge ownership.
+ */
+function selectCombatMovementArbitrationCore(input = {}, options = {}) {
+  const threatField = Array.isArray(input.threatField) ? input.threatField : [];
+  const minimumCpaCm = Math.max(1, Number(options.minimumCpaCm ?? input.minimumCpaCm ?? 200));
+  const strategicDirection = normalizedDirection(input.strategicDirection);
+  const currentDirection = normalizedDirection(input.currentDirection);
+  const pendingDirection = input.pendingDirection ? normalizedDirection(input.pendingDirection) : null;
+  const baselineDirection = pendingDirection || currentDirection;
+  const strategicThreat = directionThreatCore(threatField, strategicDirection);
+  const baselineThreat = directionThreatCore(threatField, baselineDirection);
+  const strategicSafe = movementThreatSafeCore(strategicThreat, minimumCpaCm);
+  const baselineSafe = movementThreatSafeCore(baselineThreat, minimumCpaCm);
+  const pendingActive = Boolean(input.pendingActive && pendingDirection);
+
+  if (pendingActive && baselineSafe) {
+    return {
+      ...baselineDirection,
+      source: 'pending-safe-hold',
+      strategicSafe,
+      baselineSafe,
+      minimumCpaCm,
+      selectedThreat: baselineThreat,
+      strategicThreat,
+      baselineThreat
+    };
+  }
+  if (strategicSafe) {
+    return {
+      ...strategicDirection,
+      source: 'strategic-safe',
+      strategicSafe,
+      baselineSafe,
+      minimumCpaCm,
+      selectedThreat: strategicThreat,
+      strategicThreat,
+      baselineThreat
+    };
+  }
+  if (baselineSafe) {
+    return {
+      ...baselineDirection,
+      source: 'current-safe-hold',
+      strategicSafe,
+      baselineSafe,
+      minimumCpaCm,
+      selectedThreat: baselineThreat,
+      strategicThreat,
+      baselineThreat
+    };
+  }
+  const emergency = normalizedDirection(input.emergencyDirection);
+  return {
+    ...emergency,
+    source: 'emergency-dodge',
+    strategicSafe,
+    baselineSafe,
+    minimumCpaCm,
+    selectedThreat: directionThreatCore(threatField, emergency),
+    strategicThreat,
+    baselineThreat
+  };
 }
 
 /**
@@ -607,6 +698,9 @@ function isRecoverableOutOfRangeTarget(self, target, engagement = {}) {
 
 module.exports = {
   calculateCombatSpacing,
+  directionThreatCore,
+  movementThreatSafeCore,
+  selectCombatMovementArbitrationCore,
   shouldBackAwayFromTarget,
   calculateDodgeDirection,
   contactEntryRiskCore,

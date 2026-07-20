@@ -2860,9 +2860,9 @@ async function runComplexCombatMainThreadBudgetSelfTest(tmp) {
       readOnly: false,
       controlMode: 'profit-live',
       combatEnabled: true,
-      readOnlyProbeMs: 1000,
+      readOnlyProbeMs: 3000,
       decisionIntervalMs: 1000,
-      combatControlIntervalMs: 160,
+      combatControlIntervalMs: 50,
       movementCommandIntervalMs: 500,
       frameGapAlertMs: 5000,
       wsTraceEnabled: true,
@@ -2871,8 +2871,8 @@ async function runComplexCombatMainThreadBudgetSelfTest(tmp) {
       now: () => nowMs,
       sleep: async ms => {
         const deadline = nowMs + Number(ms || 0);
-        while (receiveFrame && frameIndex < frames.length && nowMs + 10 <= deadline) {
-          nowMs += 10;
+        while (receiveFrame && frameIndex < frames.length && nowMs + 50 <= deadline) {
+          nowMs += 50;
           const wallStarted = performance.now();
           const cpuStarted = currentMainThreadCpuMs();
           receiveFrame(frames[frameIndex]);
@@ -2924,7 +2924,8 @@ async function runComplexCombatMainThreadBudgetSelfTest(tmp) {
         && warmup?.ok
         && warmup?.iterations === 6
         && measuredFrameCount >= 40
-        && Number(result.decisions?.realtimeControlCount || 0) > 0
+        && Number(result.decisions?.realtimeControlCount || 0) >= 40
+        && Number(result.decisions?.realtimeControlSchedule?.minimumTickStride || 0) === 1
         && frameCpuDurations.length === measuredFrameCount
         && cpuOverBudgetCount === 0
         && maxFrameCpuMs < SELF_TEST_MAIN_THREAD_BUDGET_MS

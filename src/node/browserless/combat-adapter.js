@@ -17,7 +17,7 @@ const {
   calculateDodgeDirection,
   contactEntryRiskCore,
   contactEntrySyntheticBulletCore,
-  pickSafeClosingDodgeCore,
+  selectCombatMovementArbitrationCore,
   shouldBackAwayFromTarget
 } = require('../../strategy/combat-movement');
 const {
@@ -1407,8 +1407,8 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
         phaseStartedAt: combatTargetState.phaseStartedAt || options.nowMs
       })
     : null;
-  const closePressureRange = closePressureState?.range
-    || (closePressureState ? combatPressureTargetRangeCore(options) : null);
+  const reactionRange = closePressureState?.range || combatPressureTargetRangeCore(options);
+  const closePressureRange = closePressureState ? reactionRange : null;
   const closePressureActive = Boolean(closePressureState?.active !== false && closePressureRange);
   const targetPressure = (bullets || []).some(bullet => Number(bullet.ownerId) === Number(target.user_id));
   const attackRange = Math.max(0, Number(options.combatAttackRange || options.attackRange || COMBAT_CONSTANTS.ATTACK_RANGE));
@@ -1425,7 +1425,13 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
     || Number(opponentBehavior?.automationLikelihood) < 0.45;
   const spacing = closePressureActive
     ? Number(closePressureRange.rangeCm)
-    : calculateCombatSpacing(self, target, { targetPressure, finishingTarget, highEntropyOpponent });
+    : calculateCombatSpacing(self, target, {
+        targetPressure,
+        finishingTarget,
+        highEntropyOpponent,
+        normalMinRangeCm: reactionRange.normalMinRangeCm,
+        normalMaxRangeCm: reactionRange.normalMaxRangeCm
+      });
   const commandTiming = options.executionTiming || {};
   const dodge = calculateDodgeDirection(self, bullets, {
     tangentPreference: movementTangentPreference(self, target),
@@ -1535,7 +1541,7 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
     ? Number(closePressureRange.rangeCm)
     : Math.max(0, Number(options.combatPressureCloseRange || options.combatPassiveRunnerCloseRange || COMBAT_CONSTANTS.NO_DAMAGE_PRESS_CLOSE_RANGE));
   const closePressureMinRange = closePressureActive
-    ? Math.max(0, Number(closePressureRange.minRangeCm || options.combatClosePressureMinRangeCm || 2000))
+    ? Math.max(0, Number(closePressureRange.minRangeCm || options.combatClosePressureMinRangeCm || 4500))
     : 0;
   const closePressureTooClose = Boolean(
     closePressureActive && Number(target.distance || Infinity) < closePressureMinRange
@@ -1569,53 +1575,89 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
       && (closePressureActive || opponentBehavior?.responsePolicy?.closeIn)
       && Number(target.distance || Infinity) > spacing
   );
-  const safeClosingDodge = (closePressureActive || behaviorClose) && targetPressure
-    ? pickSafeClosingDodgeCore(dodge?.threatField, {
-        hitRadius: options.combatBulletHitRadiusCm || 200,
-        minimumCpaRatio: options.combatSafeCloseMinimumCpaRatio ?? 0.75,
-        minimumClosingCm: options.combatSafeCloseMinimumClosingCm ?? 25
-      })
-    : null;
   const contactEntryDodge = options.contactEntryGuard?.active === true
     && !(Array.isArray(dodge?.threatField) && dodge.threatField.length)
     ? options.contactEntryGuard.dodge
     : null;
-  const effectiveDodge = preDodge
-    ? {
-        dx: Math.sign(Number(self.vx || 0)),
-        dy: Math.sign(Number(self.vy || 0)),
-        reason: 'pre-dodge-induce-hold',
-        threatField: dodge?.threatField || null,
-        nextShotInMs: Math.round(nextShotInMs),
-        shotIntervalCv
-      }
-    : (contactEntryDodge
-      ? contactEntryDodge
-    : (safeClosingDodge
-      ? { ...dodge, dx: safeClosingDodge.dx, dy: safeClosingDodge.dy, reason: 'retreat-kite-safe-close' }
-      : dodge));
   const closeIn = closeAllowed
     && (pressureClose
       || retreatingClose
       || passiveRunnerClose
       || behaviorClose
       || (!closePressureActive && Number(target.distance || Infinity) > spacing));
-  const base = { dx: 0, dy: 0 };
-  let movement = applyCombatMovementModifiers(base, self, target, { dodge: effectiveDodge, backAway, closeIn });
   const strafe = closePressureActive
     && !closePressureTooClose
-    && !movement.modifiers.includes('dodge')
-    && !movement.modifiers.includes('close-in')
+    && !pressureClose
     && Number(target.distance || Infinity) <= closeRange + closePressureHysteresisCm
     ? combatPressureStrafeCore(self, target, closePressureState, { nowMs: options.nowMs })
     : null;
-  if (strafe?.active) {
-    movement = {
-      ...movement,
-      dx: strafe.dx,
-      dy: strafe.dy,
-      modifiers: Array.from(new Set([...(movement.modifiers || []), 'close-pressure-strafe']))
-    };
+  const towardTarget = {
+    dx: Math.sign(Number(target.x || 0) - Number(self.x || 0)),
+    dy: Math.sign(Number(target.y || 0) - Number(self.y || 0))
+  };
+  const awayFromTarget = { dx: -towardTarget.dx, dy: -towardTarget.dy };
+  const strategicDirection = closePressureTooClose
+    ? awayFromTarget
+    : (strafe?.active
+        ? { dx: strafe.dx, dy: strafe.dy }
+        : (closeIn ? towardTarget : null));
+  const pendingCommands = (options.pendingVelocityCommands || [])
+    .filter(command => command && Number.isFinite(Number(command.effectiveAfterTicks)))
+    .slice()
+    .sort((left, right) => Number(left.effectiveAfterTicks) - Number(right.effectiveAfterTicks)
+      || Number(left.sequence || 0) - Number(right.sequence || 0));
+  const pendingDirection = pendingCommands.length
+    ? {
+        dx: Math.sign(Number(pendingCommands[pendingCommands.length - 1].dx || 0)),
+        dy: Math.sign(Number(pendingCommands[pendingCommands.length - 1].dy || 0))
+      }
+    : null;
+  const predictiveDirection = preDodge
+    ? currentDirection
+    : strategicDirection;
+  const movementSafetyCpaCm = Math.max(
+    Number(options.combatMovementSafeCpaCm || 0),
+    Number(options.combatBulletHitRadiusCm || COMBAT_CONSTANTS.BULLET_HIT_RADIUS_CM) + 110
+  );
+  const movementArbitration = predictiveDirection && !contactEntryDodge
+    ? selectCombatMovementArbitrationCore({
+        threatField: dodge?.threatField || [],
+        strategicDirection: predictiveDirection,
+        currentDirection,
+        pendingDirection,
+        pendingActive: Boolean(pendingDirection),
+        emergencyDirection: contactEntryDodge || dodge || { dx: 0, dy: 0 }
+      }, { minimumCpaCm: movementSafetyCpaCm })
+    : null;
+  let effectiveDodge = contactEntryDodge || dodge;
+  let movement;
+  if (movementArbitration) {
+    const source = movementArbitration.source;
+    const modifiers = [];
+    if (source === 'emergency-dodge') modifiers.push('dodge');
+    else if (source === 'pending-safe-hold' || source === 'current-safe-hold') modifiers.push('hold-current');
+    else if (preDodge) modifiers.push('predictive-hold');
+    else if (closePressureTooClose) modifiers.push('back-away');
+    else if (strafe?.active) modifiers.push('close-pressure-strafe');
+    else modifiers.push('close-in');
+    movement = { dx: movementArbitration.dx, dy: movementArbitration.dy, modifiers };
+    effectiveDodge = source === 'emergency-dodge'
+      ? { ...(contactEntryDodge || dodge), dx: movement.dx, dy: movement.dy }
+      : null;
+  } else {
+    const base = { dx: 0, dy: 0 };
+    movement = applyCombatMovementModifiers(base, self, target, {
+      dodge: preDodge
+        ? {
+            dx: currentDirection.dx,
+            dy: currentDirection.dy,
+            reason: 'pre-dodge-induce-hold',
+            threatField: dodge?.threatField || null
+          }
+        : effectiveDodge,
+      backAway,
+      closeIn
+    });
   }
   const closeReason = pressureClose
     ? (closePressureActive ? 'combat-close-pressure-approach' : 'combat-pressure-close')
@@ -1623,9 +1665,13 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
         ? 'combat-retreating-fighter-close'
         : (passiveRunnerClose ? 'passive-runner-close' : (behaviorClose ? `combat-${opponentBehavior.mode}-response` : 'close-in')));
   const reason = movement.modifiers.includes('close-pressure-strafe')
-    ? (strafe?.reason || 'close-pressure-deterministic-strafe')
+    ? (preDodge ? 'close-pressure-predictive-hold' : (strafe?.reason || 'close-pressure-deterministic-strafe'))
     : movement.modifiers.includes('dodge')
-    ? effectiveDodge.reason
+    ? (effectiveDodge?.reason || 'direct-threat-dodge')
+    : movement.modifiers.includes('hold-current')
+    ? (preDodge ? 'close-pressure-predictive-hold' : 'combat-current-safe-hold')
+    : movement.modifiers.includes('predictive-hold')
+    ? (closePressureActive ? 'close-pressure-predictive-hold' : 'pre-dodge-induce-hold')
     : (movement.modifiers.includes('back-away') || movement.modifiers.includes('back-away-mixed')
         ? (closePressureTooClose ? 'combat-close-pressure-separate' : 'back-away')
         : (movement.modifiers.includes('close-in')
@@ -1638,7 +1684,13 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
     dy: Number(movement.dy || 0),
     reason,
     spacing: Math.round(spacing),
-    dodge: effectiveDodge ? { dx: effectiveDodge.dx, dy: effectiveDodge.dy, reason: effectiveDodge.reason, threatField: effectiveDodge.threatField } : null,
+    dodge: dodge ? {
+      dx: effectiveDodge?.dx ?? dodge.dx,
+      dy: effectiveDodge?.dy ?? dodge.dy,
+      reason: effectiveDodge?.reason || dodge.reason,
+      applied: movement.modifiers.includes('dodge'),
+      threatField: dodge.threatField
+    } : null,
     modifiers: movement.modifiers || [],
     closePressure: closePressureActive ? {
       ...cloneJson(closePressureState),
@@ -1657,12 +1709,19 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
     } : null,
     edgePressure: edgePressure?.active ? edgePressure : null,
     escapeDecision: escapeDecision || null,
-    safeCloseOverride: safeClosingDodge ? {
-      dx: safeClosingDodge.dx,
-      dy: safeClosingDodge.dy,
-      directHits: safeClosingDodge.directHits,
-      minCPA: safeClosingDodge.minCPA,
-      targetDistanceChange: safeClosingDodge.targetDistanceChange
+    movementArbitration: movementArbitration ? {
+      source: movementArbitration.source,
+      minimumCpaCm: movementArbitration.minimumCpaCm,
+      strategicSafe: movementArbitration.strategicSafe,
+      baselineSafe: movementArbitration.baselineSafe,
+      strategicDirection: predictiveDirection,
+      pendingDirection,
+      selectedDirectHits: numberOrNull(movementArbitration.selectedThreat?.directHits),
+      selectedMinCpaCm: numberOrNull(movementArbitration.selectedThreat?.minCPA),
+      strategicDirectHits: numberOrNull(movementArbitration.strategicThreat?.directHits),
+      strategicMinCpaCm: numberOrNull(movementArbitration.strategicThreat?.minCPA),
+      baselineDirectHits: numberOrNull(movementArbitration.baselineThreat?.directHits),
+      baselineMinCpaCm: numberOrNull(movementArbitration.baselineThreat?.minCPA)
     } : null,
     preDodge: preDodge ? {
       phase: 'induce-hold',
@@ -2158,6 +2217,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
         nowMs: options.nowMs,
         engagedAt: phaseMetricsStartedAt ?? combatTargetState.firstSeenAt ?? combatTargetState.at,
         targetHp: hpValue(target),
+        distance: Number(target.distance),
         ordinaryProfit: ['profit', 'engaged', 'reengage', 'afk-profit'].includes(String(
           combatTargetState.originIntent || combatTargetState.intent || target.combatIntent || ''
         ))
@@ -2233,7 +2293,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
           targetId,
           createdTick: numberOrNull(aim.timing?.createdTickEstimate) ?? numberOrNull(realtime.tick) ?? 0,
           executionDelayTicks: numberOrNull(aim.timing?.executionDelayTicks) ?? 5,
-          controlIntervalTicks: Math.max(1, Math.ceil(Number(options.combatControlIntervalMs || 160) / 50)),
+          controlIntervalTicks: Math.max(1, Math.ceil(Number(options.combatControlIntervalMs || 50) / 50)),
           learnedDwellTicks: 0,
           flightTicks: aim.flightTicks,
           predictedShooterOrigin: aim.predictedShooterOrigin,
@@ -2398,11 +2458,17 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     };
   }
   const closePressureActive = combatTargetState?.combatPhase === 'close-pressure';
+  const pressureAttackActive = Boolean(
+    closePressureActive
+      && (combatPhase?.pressureAttackCommitted || combatTargetState?.closePressure?.pressureAttackCommitted)
+  );
   const fireState = target ? determineCombatFireState(self || {}, target, {
     targetPressureFire: bullets.some(bullet => Number(bullet.ownerId) === Number(target.user_id)),
     closePressure: closePressureActive,
+    closePressureAttack: pressureAttackActive,
     closePressureCadenceMs: options.combatClosePressureShootEveryMs ?? 520,
     closePressureReserveMs: options.combatClosePressureReserveMs ?? 2600,
+    shotCostMs: options.combatShotStaminaCostMs ?? 500,
     passiveRunner: Boolean(movement.passiveRunner?.active),
     finishLowThreat: Boolean(
       target
@@ -2501,6 +2567,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     probeState,
     trajectoryCoverage: aim.trajectoryCoverage,
     closePressure: closePressureActive,
+    pressureAttack: pressureAttackActive,
     finishProtected: baseHighEntropyFireGate.finishProtected,
     resolvedReserveMs: fireState.reserve,
     stamina5s: fireState.stamina5s
@@ -2517,7 +2584,11 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     minimumCadenceMs: Math.max(
       0,
       Number(baseHighEntropyFireGate.minimumCadenceMs || 0),
-      closePressureActive ? Number(options.combatClosePressureShootEveryMs ?? 520) : 0
+      closePressureActive
+        ? Number(pressureAttackActive
+            ? (options.combatShootMinIntervalMs ?? COMBAT_CONSTANTS.SHOOT_EVERY_MS)
+            : (options.combatClosePressureShootEveryMs ?? 520))
+        : 0
     ),
     reason: sharedFireBudget.suppressFire
       ? sharedFireBudget.suppressionReason
@@ -2547,7 +2618,11 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     : Math.max(
         baseCadenceMs,
         Math.max(0, Number(closePressureActive ? 0 : behaviorPolicy?.minimumCadenceMs || 0)),
-        closePressureActive ? Math.max(0, Number(options.combatClosePressureShootEveryMs ?? 520)) : 0
+        closePressureActive
+          ? Math.max(0, Number(pressureAttackActive
+              ? (options.combatShootMinIntervalMs ?? COMBAT_CONSTANTS.SHOOT_EVERY_MS)
+              : (options.combatClosePressureShootEveryMs ?? 520)))
+          : 0
       );
   const maximumCadenceMs = closePressureActive ? NaN : Number(behaviorPolicy?.maximumCadenceMs);
   const behaviorBoundedCadenceMs = effectiveCadenceMs === null
@@ -2638,7 +2713,9 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
       lowConfidenceThrottle: Boolean(lowConfidence.throttle),
       behaviorSuppressed: behaviorSuppressFire,
       closePressure: closePressureActive,
+      pressureAttack: pressureAttackActive,
       combatPhase: combatTargetState?.combatPhase || 'normal-combat',
+      combatSubphase: combatPhase?.subphase || combatTargetState?.closePressure?.subphase || 'normal-combat',
       behaviorPolicy: behaviorPolicy?.name || '',
       behaviorReason: behaviorPolicy?.reason || '',
       highEntropyFireGate,
