@@ -445,17 +445,59 @@ function pickEngagedCombatTargetCore(self, combatTargets = [], entities = [], bu
   const engaged = state?.combatTarget || null;
   if (!engaged?.id) return null;
   const nowMs = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
+  const closePressure = engaged.combatPhase === 'close-pressure'
+    || engaged.closePressure?.active === true;
   const maxAgeMs = Math.max(
     Number(options.targetStickMs || 0),
     Number(options.combatEngageStickMs || 0)
   );
   const ageMs = Math.max(0, nowMs - Number(engaged.at || 0));
+  const id = String(engaged.id);
+  const target = (combatTargets || []).find(item => combatTargetId(item) === id);
+  const raw = (entities || []).find(item => combatTargetId(item) === id);
+  const visibleTarget = target || raw;
+  const visibleHp = visibleTarget?.hp ?? visibleTarget?.knownHp ?? visibleTarget?.displayHp;
+  const visibleTargetDead = visibleTarget?.alive === false
+    || (visibleHp !== null && visibleHp !== undefined && visibleHp !== '' && Number(visibleHp) === 0);
+  // Once close pressure has started, a still-visible target remains the
+  // committed target through the ordinary attack/disengage radius. The
+  // realtime entity list is already visibility-bounded; center-bound and
+  // genuine safety release paths are evaluated by the caller.
+  if (closePressure && visibleTarget && !isInvulnerableEntity(visibleTarget)
+    && !visibleTargetDead
+    && !(typeof options.whitelistCheck === 'function' && options.whitelistCheck(visibleTarget))) {
+    const distance = Number(visibleTarget.distance);
+    const attackRange = Math.max(0, Number(options.combatAttackRange || options.attackRange || 0));
+    const lastInRangeAt = Number(engaged.lastInRangeAt || engaged.at || 0);
+    const outOfRangeMs = Math.max(0, nowMs - lastInRangeAt);
+    return {
+      ...visibleTarget,
+      combatIntent: 'reengage',
+      combatEngagement: {
+        ageMs: Math.round(ageMs),
+        outOfRangeMs: Number.isFinite(distance) && attackRange > 0 && distance > attackRange
+          ? Math.round(outOfRangeMs)
+          : 0,
+        graceRemainingMs: null,
+        graceRange: null,
+        activeReengage: Boolean(isActiveCombatMode(visibleTarget)
+          || isFiringCombatEntity(visibleTarget)
+          || visibleTarget.moving),
+        outOfRangeLimitMs: null,
+        closePressureHold: true,
+        edgePressure: null,
+        escapeDecision: engaged.escapeDecision || null,
+        escapeHold: false,
+        lastReason: engaged.reason || '',
+        realtimeHold: false,
+        reengage: true
+      }
+    };
+  }
   if (maxAgeMs > 0 && ageMs > maxAgeMs) {
     if (state && typeof state === 'object') state.combatTarget = null;
     return null;
   }
-  const id = String(engaged.id);
-  const target = (combatTargets || []).find(item => combatTargetId(item) === id);
   const incoming = Object.prototype.hasOwnProperty.call(options, 'incomingBullet')
     ? options.incomingBullet
     : (Array.isArray(bullets) ? bullets.find(bullet => bullet?.incoming) : null);
@@ -477,7 +519,9 @@ function pickEngagedCombatTargetCore(self, combatTargets = [], entities = [], bu
       }
     };
   }
-  const raw = (entities || []).find(item => combatTargetId(item) === id);
+  // `raw` is the same stable-ID realtime entity looked up above. Keep the
+  // ordinary grace/escape policy below for engagements that have not entered
+  // close pressure.
   if (!raw || isInvulnerableEntity(raw)) return null;
   const distance = Number(raw.distance);
   const attackRange = Math.max(0, Number(options.combatAttackRange || options.attackRange || 0));

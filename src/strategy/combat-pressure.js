@@ -233,8 +233,11 @@ function combatPressureStrafeCore(self = {}, target = {}, phase = {}, options = 
     durationMs = cycleDurations[cycleSegmentIndex];
   }
   const segmentIndex = cycleIndex * cycleDurations.length + cycleSegmentIndex;
-  const random = pseudoRandom(seed, segmentIndex);
-  const sign = (random & 1) === 0 ? 1 : -1;
+  // Alternate every deterministic segment. The seed chooses the initial
+  // tangent side, while segment parity guarantees an actual direction change
+  // instead of allowing several adjacent segments to repeat one heading.
+  const initialSign = (seed & 1) === 0 ? 1 : -1;
+  const sign = (segmentIndex & 1) === 0 ? initialSign : -initialSign;
   return {
     dx: tangent.dx === 0 ? 0 : tangent.dx * sign,
     dy: tangent.dy === 0 ? 0 : tangent.dy * sign,

@@ -857,6 +857,43 @@ function runStrategyModuleSelfTests() {
       && retainedEdgeTarget?.combatIntent === 'reengage'
       && retainedEdgeTarget?.combatEngagement?.edgePressure?.active === true
   });
+  const closePressureState = {
+    combatTarget: {
+      ...edgeEngaged,
+      at: 30000,
+      lastInRangeAt: 15000,
+      combatPhase: 'close-pressure',
+      closePressure: { active: true, phase: 'close-pressure' }
+    }
+  };
+  const closePressureVisibleTarget = pickEngagedCombatTargetCore(
+    edgeSelf,
+    [],
+    [{
+      ...edgeTarget,
+      x: 40000,
+      distance: 40000,
+      active: false
+    }],
+    [],
+    closePressureState,
+    {
+      nowMs: 40000,
+      targetStickMs: 5000,
+      combatEngageStickMs: 30000,
+      combatEngageGraceMs: 5000,
+      combatEngageGraceRange: 17000,
+      combatDisengageRange: 17000,
+      combatAttackRange: 14500
+    }
+  );
+  results.push({
+    name: 'close-pressure-retains-visible-target-beyond-ordinary-disengage-range',
+    passed: closePressureVisibleTarget?.user_id === 2
+      && closePressureVisibleTarget?.combatIntent === 'reengage'
+      && closePressureVisibleTarget?.combatEngagement?.closePressureHold === true
+      && closePressureState.combatTarget?.id === 2
+  });
   const escapingTarget = {
     ...edgeTarget,
     x: 15000,
@@ -1264,6 +1301,12 @@ function runStrategyModuleSelfTests() {
     { targetId: '8', phaseStartedAt: 60000 },
     { nowMs: 60000 }
   );
+  const pressureStrafeNext = combatPressureStrafeCore(
+    { x: 0, y: 0 },
+    { id: '8', x: 2500, y: 0 },
+    { targetId: '8', phaseStartedAt: 60000 },
+    { nowMs: 60420 }
+  );
   const pressureStrafeB = combatPressureStrafeCore(
     { x: 0, y: 0 },
     { id: '8', x: 2500, y: 0 },
@@ -1290,6 +1333,7 @@ function runStrategyModuleSelfTests() {
       && pressureStrafeB.active === true
       && pressureStrafeA.dx === pressureStrafeB.dx
       && pressureStrafeA.dy === -pressureStrafeB.dy
+      && pressureStrafeNext.dy === -pressureStrafeA.dy
       && pressureStrafeLong.active === true
       && pressureStrafeLong.segmentIndex > 128
       && pressureStrafeLong.dx === 0

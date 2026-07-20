@@ -9846,6 +9846,93 @@ async function runSelfTest() {
       want: 'combat-live|false|true|200|close-pressure|60000|profit-pursuit-close-pressure|false|combat-close-pressure-approach|true|19677|'
     },
     {
+      name: 'browserless close pressure retains a still-visible target past ordinary disengage range',
+      got: (() => {
+        const stateful = {
+          combatTarget: {
+            id: 19677,
+            at: 61000,
+            firstSeenAt: 1000,
+            lastInRangeAt: 60000,
+            lastDamageAt: 1000,
+            hp: 100,
+            firstHp: 100,
+            minHp: 94,
+            damageFromStart: 6,
+            intent: 'profit',
+            originIntent: 'profit',
+            combatPhase: 'close-pressure',
+            phaseStartedAt: 60000,
+            closePressure: { active: true, phase: 'close-pressure' }
+          },
+          combatMetrics: {
+            targetId: '19677',
+            startedAt: 1000,
+            acceptedShots: 34,
+            confirmedHits: 2,
+            targetDamage: 6,
+            selfDamage: 0
+          }
+        };
+        const self = fullStamina5s({
+          entity_id: 1,
+          user_id: 28886,
+          name: 'self',
+          x: 0,
+          y: 0,
+          hp: 100,
+          max_hp: 100
+        });
+        const target = fullStamina5s({
+          entity_id: 2,
+          user_id: 19677,
+          name: 'Eason',
+          x: 40000,
+          y: 0,
+          vx: 50,
+          vy: 0,
+          hp: 100,
+          max_hp: 100,
+          current_join_mode: 'Active',
+          drop: 200
+        });
+        const decision = buildBrowserlessDecision({
+          userId: 28886,
+          realtime: {
+            tick: 1240,
+            frameAgeMs: 0,
+            self,
+            entities: [self, target],
+            bullets: []
+          },
+          fallback: { tick: 1240, frameAgeMs: 0, entities: [], coinDrops: [], messages: [] }
+        }, stateful, {
+          nowMs: 61000,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          dynamicProfitThresholdEnabled: false,
+          combatAttackRange: 14500,
+          combatDisengageRange: 17000,
+          combatEngageGraceRange: 17000,
+          combatEngageGraceMs: 5000,
+          targetStickMs: 5000,
+          combatEngageStickMs: 30000,
+          browserlessCenterActivityRadiusCm: 100000,
+          browserlessProfitPursuitMaxMs: 60000,
+          browserlessProfitPursuitMinDamageMs: 60000,
+          browserlessProfitPursuitMinDamageHp: 10
+        });
+        return [
+          decision.kind,
+          decision.combat.target?.userId,
+          decision.combat.combatPhase.phase,
+          decision.combat.movement.reason,
+          stateful.combatTarget?.id
+        ].join('|');
+      })(),
+      want: 'combat-live|19677|close-pressure|combat-close-pressure-approach|19677'
+    },
+    {
       name: 'browserless close pressure changes phase exactly at sixty seconds without clearing aim',
       got: (() => {
         const run = nowMs => {
