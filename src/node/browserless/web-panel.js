@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.20.1';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.20.2';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function panelSessionFlagsCore(status = {}) {
@@ -109,6 +109,9 @@ function renderBrowserlessWebPanel() {
     .battle-panel{border-color:rgba(251,113,133,.38);background:linear-gradient(135deg,rgba(127,29,29,.26),rgba(69,10,10,.14)),var(--panel)}
     .battle-panel[hidden]{display:none}
     .battle-panel .panel-title{color:#fda4af}
+    .last-exit-panel{border-color:rgba(96,165,250,.32);background:linear-gradient(135deg,rgba(30,64,175,.16),rgba(15,23,42,.12)),var(--panel)}
+    .last-exit-panel[hidden]{display:none}
+    .last-exit-panel .panel-title{color:#93c5fd}
     .battle-meta{display:flex;align-items:center;gap:7px;margin:-1px 0 7px;color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden}
     .battle-meta span{display:inline-flex;align-items:baseline;gap:4px;min-width:0}
     .battle-meta-divider{color:#64748b}
@@ -323,6 +326,10 @@ function renderBrowserlessWebPanel() {
               <div class="fighter-footer fighter-target-footer"><div id="battleTargetStamina" class="fighter-stamina">--</div><span id="battleTargetState" class="fighter-summary-state">--</span></div>
             </div>
           </div>
+        </section>
+        <section id="lastExitPanel" class="last-exit-panel" data-panel-key="last-exit" hidden>
+          <div class="panel-head"><h2 class="panel-title" data-panel-title role="button" tabindex="0" aria-expanded="true">上次退出</h2><div class="panel-head-meta"><span id="lastExitTitleMeta" class="title-meta collapsed-only">--</span></div></div>
+          <div class="panel-body"><dl id="lastExitDetails"></dl></div>
         </section>
         <div class="stats-grid">
           <section data-panel-key="current-session">
@@ -834,6 +841,7 @@ function renderBrowserlessWebPanel() {
       'no-self': '没有看到自己，等待恢复',
       'direct-leave-failed': '退出确认失败，重试',
       'shutdown-leave': '程序停止或重启前安全退出',
+      'restart-drain-ready': '程序重启前已安全退出',
       'confirmed-leave-snapshot-quarantine': '已确认退出，等待快照刷新',
       'stale-confirmed-leave-snapshot-tick': '已确认退出，等待更新后的快照',
       'explicit-stop': '手动停止',
@@ -1041,6 +1049,10 @@ function renderBrowserlessWebPanel() {
       if (target.invulnerable) evidence.push('无敌还剩 ' + invulnerableText(target.invulnerableRemainingMs));
       const name = target.name || (target.userId !== null && target.userId !== undefined ? '玩家 ' + target.userId : '附近玩家');
       return '危险玩家 ' + name + (evidence.length ? '（' + evidence.join('、') + '）' : '') + '，退出';
+    }
+    function lastExitReasonText(status, reason) {
+      const translated = dangerousPlayerExitReasonText(status, reason);
+      return translated === '正在退出游戏' ? '已退出游戏' : translated;
     }
     function modeText(mode, combatEnabled) {
       const text = modeMap[mode] || (mode ? '自动运行' : '--');
@@ -1317,6 +1329,21 @@ function renderBrowserlessWebPanel() {
       if (reason === 'post-attack-drop-wait-position' || reason === 'post-kill-settlement-wait') return '等待掉落确认';
       if (kind === 'coin' || kind === 'seek-coin' || kind === 'profit-candidate') return reasonText(reason) === actionTitleText(status) ? '综合收益最高' : reasonText(reason);
       return actionReasonText(status);
+    }
+    function offlineActionTitleText(status) {
+      if (status.auth?.needsReauth) return '等待重新授权';
+      const offline = status.stats?.offline || {};
+      const reconnectRemainingMs = number(offline.reconnectRemainingMs);
+      if (reconnectRemainingMs !== null && reconnectRemainingMs > 1000) return '等待重连冷却时间';
+      const action = status.action || status.decision || {};
+      const reason = String(action.reason || status.decision?.reason || '');
+      const loginState = loginPointDisplay(status).state;
+      if (/snapshot|login-point|prelogin|edge/i.test(reason) || loginState === 'pending') {
+        return '等待登录点快照安全检查';
+      }
+      if (loginState === 'unsafe') return '等待登录点恢复安全';
+      if (action.kind === 'stopped' || action.kind === 'stop') return '程序已停止';
+      return actionTitleText(status);
     }
     function nonBlankText(text) {
       const normalized = value(text);
@@ -1797,33 +1824,16 @@ function renderBrowserlessWebPanel() {
       const action = status.action || {};
       const decision = status.decision || {};
       const kind = action.kind || decision.kind || 'wait';
-      const currentReason = action.reason || decision.reason || status.recentExit?.reason || '';
+      const currentReason = action.reason || decision.reason || '';
       const target = activeTarget(status);
       const currentSession = status.stats?.currentSession || {};
       const offlineStats = status.stats?.offline || {};
       const { online, realtimeOnline } = panelSessionFlags(status);
-      const reason = online
-        ? currentReason
-        : (offlineStats.lastExitReason || status.recentExit?.reason || currentReason);
+      const reason = currentReason;
       const rowsOut = [];
 
-      addRow(rowsOut, '状态', online ? actionTitleText(status) : actionText(status), true);
-      addRow(rowsOut, online ? '原因' : '上次退出原因', online ? actionReasonDisplay(status) : dangerousPlayerExitReasonText(status, reason), true);
-      const battle = !online ? recentBattle(status) : null;
-      if (battle) {
-        addRow(rowsOut, '交战对手', targetLabel(battle.target), true);
-        addRow(rowsOut, '战斗结果', recentBattleOutcomeText(status), true);
-        addRow(rowsOut, '战斗时间', recentBattleTimeText(status));
-        const battleHpText = recentBattleHpText(status);
-        if (battleHpText) addRow(rowsOut, '战斗起止血量', battleHpText);
-        const injuryHpText = recentInjuryHpText(status);
-        if (injuryHpText) addRow(rowsOut, '退出判定受击', injuryHpText);
-        const damageText = recentBattleDamageText(status);
-        if (damageText) addRow(rowsOut, '输出承伤', damageText);
-        const healingText = recentBattleHealingText(status);
-        if (healingText) addRow(rowsOut, '战斗恢复', healingText);
-        addRow(rowsOut, '射击命中', recentBattleShootingText(status));
-      }
+      addRow(rowsOut, '状态', online ? actionTitleText(status) : offlineActionTitleText(status), true);
+      addRow(rowsOut, '原因', online ? actionReasonDisplay(status) : reasonText(reason), true);
       const decisionText = joinNonBlank([kindText(kind), actionReasonText(status)]);
       const statusText = actionText(status);
       const reasonDisplay = online ? actionReasonDisplay(status) : dangerousPlayerExitReasonText(status, reason);
@@ -1834,13 +1844,15 @@ function renderBrowserlessWebPanel() {
         && decisionText !== joinNonBlank([statusText, reasonDisplay])) {
         addRow(rowsOut, '判断', decisionText);
       }
-      addRow(rowsOut, '目标', targetLabel(target));
-      addRow(rowsOut, '来源', sourceText(target?.authority));
-      addRow(rowsOut, '目标状态', targetStateText(target));
+      if (online) {
+        addRow(rowsOut, '目标', targetLabel(target));
+        addRow(rowsOut, '来源', sourceText(target?.authority));
+        addRow(rowsOut, '目标状态', targetStateText(target));
+      }
       const dataGapSummary = dataGapsText(decision);
       if (online && dataGapSummary !== '--') addRow(rowsOut, '数据缺口', dataGapSummary);
 
-      if ((realtimeOnline || !online) && isCombatStatus(status, kind, reason)) {
+      if (realtimeOnline && isCombatStatus(status, kind, reason)) {
         addRow(rowsOut, '战斗目标', targetLabel(status.combat?.target));
         addRow(rowsOut, '战斗退出', reasonText(status.combat?.exit?.reason));
         const exitHpText = combatExitHpText(status);
@@ -1867,12 +1879,56 @@ function renderBrowserlessWebPanel() {
       }
 
       if (!online) {
-        addRow(rowsOut, '退出时间', fullStamp(offlineStats.lastExitAt));
         addRow(rowsOut, '下次重连', fullStamp(offlineStats.nextReconnectAt));
         addRow(rowsOut, '剩余时间', countdownUntil(offlineStats.nextReconnectAt), false, { countdownAt: offlineStats.nextReconnectAt });
       }
 
       return rowsOut;
+    }
+    function lastExitDetailRows(status) {
+      const offlineStats = status.stats?.offline || {};
+      const reason = offlineStats.lastExitReason || status.recentExit?.reason || '';
+      const battle = recentBattle(status);
+      const rowsOut = [];
+      addRow(rowsOut, '退出原因', lastExitReasonText(status, reason), true);
+      addRow(rowsOut, '退出时间', fullStamp(offlineStats.lastExitAt), true);
+      if (battle) {
+        addRow(rowsOut, '交战对手', targetLabel(battle.target), true);
+        addRow(rowsOut, '战斗结果', recentBattleOutcomeText(status), true);
+        addRow(rowsOut, '战斗时间', recentBattleTimeText(status));
+        const battleHpText = recentBattleHpText(status);
+        if (battleHpText) addRow(rowsOut, '战斗起止血量', battleHpText);
+        const injuryHpText = recentInjuryHpText(status);
+        if (injuryHpText) addRow(rowsOut, '退出判定受击', injuryHpText);
+        const damageText = recentBattleDamageText(status);
+        if (damageText) addRow(rowsOut, '输出承伤', damageText);
+        const healingText = recentBattleHealingText(status);
+        if (healingText) addRow(rowsOut, '战斗恢复', healingText);
+        addRow(rowsOut, '射击命中', recentBattleShootingText(status));
+      }
+      const exitHpText = combatExitHpText(status);
+      if (exitHpText && exitHpText !== '--') addRow(rowsOut, '退出触发血量', exitHpText);
+      const confirmedHpText = confirmedLeaveHpText(status);
+      if (confirmedHpText) addRow(rowsOut, '离场确认血量', confirmedHpText);
+      return rowsOut;
+    }
+    function updateLastExitPanel(status) {
+      const panel = document.getElementById('lastExitPanel');
+      if (!panel) return;
+      const { online } = panelSessionFlags(status);
+      const offline = status.stats?.offline || {};
+      const show = Boolean(!online && (offline.lastExitAt || offline.lastExitReason || status.recentExit));
+      panel.hidden = !show;
+      if (!show) {
+        setText('lastExitTitleMeta', '--');
+        rows('lastExitDetails', []);
+        return;
+      }
+      rows('lastExitDetails', lastExitDetailRows(status));
+      setText('lastExitTitleMeta', joinNonBlank([
+        fullStamp(offline.lastExitAt),
+        lastExitReasonText(status, offline.lastExitReason || status.recentExit?.reason)
+      ]));
     }
     function setText(id, text) {
       const node = document.getElementById(id);
@@ -2201,6 +2257,7 @@ function renderBrowserlessWebPanel() {
 
       rows('actionDetails', actionDetailRows(s));
       updateBattlePanel(s);
+      updateLastExitPanel(s);
       updateNearbyPanels(s);
       renderHighDropPlayers(s);
       renderPlayerMemory(s);
@@ -2260,7 +2317,7 @@ function renderBrowserlessWebPanel() {
         { text: ' | Coin ', className: 'meta-label' }, { text: integer(todayStats.coinsGained), className: 'coin' },
         { text: ' | Kill ', className: 'meta-label' }, { text: integer(todayStats.kills), className: 'bad' }
       ]);
-      setText('actionTitleMeta', actionTitleText(s));
+      setText('actionTitleMeta', panelSessionFlags(s).online ? actionTitleText(s) : offlineActionTitleText(s));
       updateCountdownNodes();
     }
     function updateCountdownNodes() {

@@ -302,28 +302,70 @@ function numberOrNull(value) {
   return Number.isFinite(n) ? n : null;
 }
 
+const BATTLE_ACTIVITY_WINDOW_MS = 3000;
+
+function actorMovingAt(actor, atMs) {
+  if (!actor || typeof actor !== 'object') return 0;
+  if (actor.moving === true) return atMs;
+  const vx = numberOrNull(actor.vx);
+  const vy = numberOrNull(actor.vy);
+  return (vx !== null && Math.abs(vx) > 0) || (vy !== null && Math.abs(vy) > 0) ? atMs : 0;
+}
+
+function latestTargetShotAt(combat = {}) {
+  const events = combat?.behavior?.metrics?.shotEvents;
+  if (!Array.isArray(events) || !events.length) return 0;
+  return events.reduce((latest, event) => Math.max(latest, numberOrNull(event?.observedAt) || 0), 0);
+}
+
+function battleActivityActor(previous = {}, actor = null, evidence = {}, atMs = Date.now()) {
+  return {
+    movingAt: actorMovingAt(actor, atMs) || numberOrNull(previous.movingAt) || 0,
+    firingAt: Math.max(
+      actor?.firing === true ? atMs : 0,
+      numberOrNull(evidence.firingAt) || 0,
+      numberOrNull(previous.firingAt) || 0
+    )
+  };
+}
+
 function browserlessBattlePresentation(previous, decision = {}) {
   const action = decision.action && typeof decision.action === 'object' ? decision.action : decision;
   const kind = String(action.kind || decision.kind || '');
   const band = String(action.band || decision.band || '');
   const battleLike = kind === 'attack' || kind === 'combat-live' || band === 'combat';
   const targetKey = battleLike ? actionTargetKey({ ...action, kind }) : '';
-  const self = decision.input?.self || decision.combat?.self || null;
+  const combat = decision.combat || {};
+  const self = decision.input?.self || combat.self || null;
+  const target = combat.target || action.target || decision.target || null;
   const currentX = numberOrNull(self?.x);
   const currentY = numberOrNull(self?.y);
   if (!targetKey || currentX === null || currentY === null) return null;
   const sameTarget = previous?.targetKey === targetKey;
+  const observedAtMs = Date.parse(String(decision.at || '')) || Date.now();
   const startX = sameTarget ? (numberOrNull(previous.startX) ?? currentX) : currentX;
   const startY = sameTarget ? (numberOrNull(previous.startY) ?? currentY) : currentY;
   const startedAt = sameTarget
-    ? String(previous.startedAt || decision.combat?.startedAt || decision.at || '')
-    : String(decision.combat?.startedAt || decision.at || '');
+    ? String(previous.startedAt || combat.startedAt || decision.at || '')
+    : String(combat.startedAt || decision.at || '');
+  const previousActivity = sameTarget && previous?.activity && typeof previous.activity === 'object'
+    ? previous.activity
+    : {};
   return {
     targetKey,
     startedAt,
     startX,
     startY,
-    movementDistance: Math.round(Math.hypot(currentX - startX, currentY - startY))
+    movementDistance: Math.round(Math.hypot(currentX - startX, currentY - startY)),
+    activity: {
+      windowMs: BATTLE_ACTIVITY_WINDOW_MS,
+      self: battleActivityActor(previousActivity.self, self, {
+        firingAt: combat?.shooting?.actualLastShotAt
+      }, observedAtMs),
+      target: battleActivityActor(previousActivity.target, target, {
+        firingAt: latestTargetShotAt(combat)
+      }, observedAtMs)
+    }
   };
 }
 
@@ -3165,6 +3207,57 @@ async function runBrowserlessRunnerSelfTest() {
       action: { kind: 'attack', band: 'profit', target: { userId: 9, distance: 800 } },
       input: { self: { userId: 7, x: 300, y: 400 } }
     });
+    const panelActivityStartedAt = Date.parse('2026-07-20T00:02:00.000Z');
+    const panelActivityInitial = browserlessBattlePresentation(null, {
+      kind: 'combat-live',
+      band: 'combat',
+      at: new Date(panelActivityStartedAt).toISOString(),
+      action: { kind: 'combat-live', band: 'combat', target: { userId: 8, distance: 5000 } },
+      input: { self: { userId: 7, x: 0, y: 0, vx: 50, vy: 0 } },
+      combat: {
+        target: { userId: 8, name: 'enemy', distance: 5000, vx: 0, vy: -50, firing: false },
+        shooting: { actualLastShotAt: panelActivityStartedAt },
+        behavior: { metrics: { shotEvents: [{ bulletId: 'activity-shot', observedAt: panelActivityStartedAt }] } }
+      }
+    });
+    const panelActivityIdle = browserlessBattlePresentation(panelActivityInitial, {
+      kind: 'combat-live',
+      band: 'combat',
+      at: new Date(panelActivityStartedAt + 1000).toISOString(),
+      action: { kind: 'combat-live', band: 'combat', target: { userId: 8, distance: 5000 } },
+      input: { self: { userId: 7, x: 0, y: 0, vx: 0, vy: 0 } },
+      combat: {
+        target: { userId: 8, name: 'enemy', distance: 5000, vx: 0, vy: 0, firing: false },
+        shooting: { actualLastShotAt: panelActivityStartedAt },
+        behavior: { metrics: { shotEvents: [{ bulletId: 'activity-shot', observedAt: panelActivityStartedAt }] } }
+      }
+    });
+    const panelActivityState = {
+      session: { userId: 7, sessionToken: 'panel-self-test-token' },
+      runner: { running: true, currentAction: { kind: 'combat-live', target: { userId: 8, distance: 5000 } } },
+      current: {
+        self: { userId: 7, name: 'self', x: 0, y: 0, vx: 0, vy: 0, hp: 100, maxHp: 100 },
+        decision: {
+          kind: 'combat-live',
+          band: 'combat',
+          at: new Date(panelActivityStartedAt + 1000).toISOString(),
+          action: { kind: 'combat-live', band: 'combat', target: { userId: 8, name: 'enemy', distance: 5000 } }
+        },
+        combatSummary: {
+          self: { userId: 7, name: 'self', hp: 100, maxHp: 100, moving: false, firing: false },
+          target: { userId: 8, name: 'enemy', hp: 100, maxHp: 100, distance: 5000, moving: false, firing: false }
+        },
+        battlePresentation: panelActivityIdle
+      }
+    };
+    const panelActivityRecent = buildCompactBrowserlessStatus(
+      browserlessCompactStatusSource(panelActivityState),
+      { nowMs: panelActivityStartedAt + 2999 }
+    );
+    const panelActivityExpired = buildCompactBrowserlessStatus(
+      browserlessCompactStatusSource(panelActivityState),
+      { nowMs: panelActivityStartedAt + 3001 }
+    );
     const panelAfkBattleCompact = buildCompactBrowserlessStatus({
       session: { userId: 7, sessionToken: 'panel-self-test-token' },
       runner: { running: true, currentAction: { kind: 'attack', target: { userId: 9, distance: 800 } } },
@@ -3260,6 +3353,11 @@ async function runBrowserlessRunnerSelfTest() {
           && pageHtml.includes("chatKillsCollapsed = !chatKillsCollapsed")
           && !pageHtml.includes("togglePanelCollapse(document.getElementById('chatPanel'))")
           && pageHtml.includes('id="battleMovementDistance"')
+          && pageHtml.includes('id="lastExitPanel"')
+          && pageHtml.includes("return '等待重连冷却时间'")
+          && pageHtml.includes("return '等待登录点快照安全检查'")
+          && pageHtml.includes("translated === '正在退出游戏' ? '已退出游戏' : translated")
+          && pageHtml.includes("updateBattlePanel(s);\n      updateLastExitPanel(s);")
           && pageHtml.includes('grid-column:2;grid-row:2')
           && pageHtml.includes("setText(prefix + 'Hp', hp === null ? '--' : integer(hp))")
           && pageHtml.includes("{ text: unit(actor?.stamina5s), className: battleStaminaClass(actor) }")
@@ -3274,6 +3372,14 @@ async function runBrowserlessRunnerSelfTest() {
           && panelAfkPresentationMoved.movementDistance === 500
           && panelAfkBattleCompact.battle.movementDistance === 500
           && panelMismatchedBattleCompact.battle.movementDistance === null
+          && panelActivityRecent.battle.self.moving === true
+          && panelActivityRecent.battle.self.firing === true
+          && panelActivityRecent.battle.target.moving === true
+          && panelActivityRecent.battle.target.firing === true
+          && panelActivityExpired.battle.self.moving === false
+          && panelActivityExpired.battle.self.firing === false
+          && panelActivityExpired.battle.target.moving === false
+          && panelActivityExpired.battle.target.firing === false
           && panelCombatInitial.movementDistance === 0
           && panelCombatMoved.movementDistance === 500
         ),

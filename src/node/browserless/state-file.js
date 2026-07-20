@@ -1469,7 +1469,14 @@ function compactBattleActor(value, fallback = {}) {
   };
 }
 
-function compactBattleStatus(normalized, game, action, decision, combat) {
+function recentBattleActivity(activity, nowMs, windowMs) {
+  const atMs = compactNumber(activity);
+  if (atMs === null || atMs <= 0) return false;
+  const ageMs = nowMs - atMs;
+  return ageMs >= -500 && ageMs <= windowMs;
+}
+
+function compactBattleStatus(normalized, game, action, decision, combat, options = {}) {
   if (!game?.inGame) return null;
   const kind = String(action?.kind || decision?.kind || decision?.actionKind || '');
   const band = String(decision?.band || '');
@@ -1515,6 +1522,17 @@ function compactBattleStatus(normalized, game, action, decision, combat) {
   const synchronizedTarget = [action?.target, decision?.target].find(candidate => (
     samePlayer(candidate) && compactNumber(candidate?.distance) !== null
   ));
+  const nowMs = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
+  const activity = presentationMatchesTarget && battlePresentation.activity && typeof battlePresentation.activity === 'object'
+    ? battlePresentation.activity
+    : {};
+  const activityWindowMs = Math.max(1000, compactNumber(activity.windowMs) || 3000);
+  const selfActor = compactBattleActor(combat?.self, selfFallback);
+  const targetActor = compactBattleActor(target);
+  selfActor.moving = Boolean(selfActor.moving || recentBattleActivity(activity.self?.movingAt, nowMs, activityWindowMs));
+  selfActor.firing = Boolean(selfActor.firing || recentBattleActivity(activity.self?.firingAt, nowMs, activityWindowMs));
+  targetActor.moving = Boolean(targetActor.moving || recentBattleActivity(activity.target?.movingAt, nowMs, activityWindowMs));
+  targetActor.firing = Boolean(targetActor.firing || recentBattleActivity(activity.target?.firingAt, nowMs, activityWindowMs));
   return {
     active: true,
     kind: compactString(kind, 48),
@@ -1526,8 +1544,8 @@ function compactBattleStatus(normalized, game, action, decision, combat) {
         ?? rawCombat.movementDistance
         ?? (presentationMatchesTarget ? battlePresentation.movementDistance : null)
     ),
-    self: compactBattleActor(combat?.self, selfFallback),
-    target: compactBattleActor(target),
+    self: selfActor,
+    target: targetActor,
     targetAfk: kind === 'attack' && target.active !== true
   };
 }
@@ -2261,7 +2279,20 @@ function browserlessCompactStatusSource(state = {}) {
             startedAt: compactString(current.battlePresentation.startedAt, 48),
             startX: compactNumber(current.battlePresentation.startX),
             startY: compactNumber(current.battlePresentation.startY),
-            movementDistance: compactNumber(current.battlePresentation.movementDistance)
+            movementDistance: compactNumber(current.battlePresentation.movementDistance),
+            activity: current.battlePresentation.activity && typeof current.battlePresentation.activity === 'object'
+              ? {
+                  windowMs: compactNumber(current.battlePresentation.activity.windowMs),
+                  self: {
+                    movingAt: compactNumber(current.battlePresentation.activity.self?.movingAt),
+                    firingAt: compactNumber(current.battlePresentation.activity.self?.firingAt)
+                  },
+                  target: {
+                    movingAt: compactNumber(current.battlePresentation.activity.target?.movingAt),
+                    firingAt: compactNumber(current.battlePresentation.activity.target?.firingAt)
+                  }
+                }
+              : null
           }
         : null
     },
@@ -2341,7 +2372,7 @@ function buildCompactBrowserlessStatus(state, config = {}) {
     action,
     profit: compactProfit(current.profit || current.decision?.profit),
     combat: displayCombat,
-    battle: compactBattleStatus(normalized, game, action, decision, displayCombat),
+    battle: compactBattleStatus(normalized, game, action, decision, displayCombat, config),
     nearby: compactNearby(current.decision?.input?.nearby),
     highDropPlayers: compactHighDropPlayers(normalized.highDropPlayers),
     easyKillPlayers: compactEasyKillPlayers(normalized.easyKillPlayers),
