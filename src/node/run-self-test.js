@@ -20763,6 +20763,92 @@ async function runSelfTest() {
       want: 'true|true|true|true'
     },
     {
+      name: 'browserless realtime patch does not reset worker-owned post-attack settlement',
+      got: (async () => {
+        const options = {
+          ...buildBrowserlessRuntimeDefaults({}),
+          userId: 7,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          dynamicProfitThresholdEnabled: false,
+          postAttackDropWaitMs: 1000,
+          postAttackDropResolveMaxMs: 5000,
+          postAttackDropWaitMinDrop: 8,
+          postAttackDropWaitStopDistance: 900
+        };
+        const mainAdapter = createBrowserlessDecisionAdapter(options);
+        mainAdapter.patchState({
+          attackHistory: [{
+            id: 8,
+            name: 'finished-target',
+            hp: 1,
+            x: 5000,
+            y: 0,
+            drop: 20,
+            at: 1000,
+            action: 'attack',
+            afk: true
+          }]
+        });
+        const realtimePatch = mainAdapter.getRealtimePersistenceState();
+        const worker = createBrowserlessDecisionWorker(options);
+        const self = {
+          entity_id: 1,
+          user_id: 7,
+          name: 'self',
+          x: 0,
+          y: 0,
+          hp: 100,
+          max_hp: 100,
+          stamina_5s_remaining_milli: 10000,
+          stamina_5s_limit_milli: 10000
+        };
+        const alternative = {
+          entity_id: 2,
+          user_id: 9,
+          name: 'next-target',
+          x: 20000,
+          y: 0,
+          hp: 100,
+          max_hp: 100,
+          drop: 20,
+          current_join_mode: 'Passive',
+          stamina_5s_remaining_milli: 10000,
+          stamina_5s_limit_milli: 10000
+        };
+        const state = tick => ({
+          userId: 7,
+          realtime: { tick, frameAgeMs: 0, self, entities: [self, alternative], bullets: [], coinDrops: [] },
+          fallback: { tick, frameAgeMs: 0, self, entities: [self, alternative], bullets: [], coinDrops: [], messages: [] },
+          command: null
+        });
+        try {
+          await worker.ready();
+          const first = await worker.decide(state(1), { ...options, nowMs: 1600 }, {}, realtimePatch);
+          const second = await worker.decide(state(2), { ...options, nowMs: 2800 }, {}, realtimePatch);
+          const third = await worker.decide(state(3), { ...options, nowMs: 4000 }, {}, realtimePatch);
+          const fourth = await worker.decide(state(4), { ...options, nowMs: 10000 }, {}, realtimePatch);
+          return [
+            Object.prototype.hasOwnProperty.call(realtimePatch, 'postAttackSettlements'),
+            first.decision.action.reason,
+            first.decision.input.postAttackSettlement.selected?.phase,
+            second.decision.action.reason === 'post-attack-drop-wait-position',
+            second.decision.input.postAttackSettlement.terminalCount,
+            second.decision.input.postAttackSettlement.selected === null,
+            third.decision.action.reason !== 'post-attack-drop-wait-position',
+            third.decision.input.postAttackSettlement.terminalCount,
+            third.decision.input.postAttackSettlement.selected === null,
+            fourth.decision.action.reason !== 'post-attack-drop-wait-position',
+            fourth.decision.input.postAttackSettlement.terminalCount,
+            fourth.decision.input.postAttackSettlement.selected === null
+          ].join('|');
+        } finally {
+          await worker.close();
+        }
+      })(),
+      want: 'false|post-attack-drop-wait-position|pending|true|1|true|true|1|true|true|1|true'
+    },
+    {
       name: 'browserless local log store appends redacted UTC day files',
       got: withTempDirForTest(async dir => {
         let current = Date.UTC(2026, 6, 8, 1, 0, 0);

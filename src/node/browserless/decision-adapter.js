@@ -9084,8 +9084,6 @@ function createBrowserlessDecisionAdapter(options = {}) {
     getRealtimePersistenceState() {
       return {
         attackHistory: decisionState.attackHistory || [],
-        postAttackSettlements: decisionState.postAttackSettlements || {},
-        postAttackSettlement: decisionState.postAttackSettlement || null,
         postKillSettlement: decisionState.postKillSettlement || null,
         combatTarget: decisionState.combatTarget || null,
         combatAim: decisionState.combatAim || null,

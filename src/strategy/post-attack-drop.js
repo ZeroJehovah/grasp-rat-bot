@@ -217,7 +217,12 @@ function updatePostAttackSettlementCore(previous = {}, context = {}, options = {
       states[id] = state;
       continue;
     }
-    const resolvedAt = Number(resolveAttack(attack) || state.resolvedAt || 0);
+    // Resolution time belongs to the settlement generation, not to the
+    // transient attack object supplied by the caller. The decision Worker
+    // receives a freshly cloned attack-history patch on each plan, so calling
+    // the resolver first would stamp every frame with a new resolution time
+    // and keep `pending` alive forever.
+    const resolvedAt = Number(state.resolvedAt || resolveAttack(attack) || 0);
     if (!(resolvedAt > 0)) {
       if (nowMs - attackAt <= resolveMaxMs) states[id] = { ...state, phase: 'unresolved', updatedAt: nowMs };
       continue;
