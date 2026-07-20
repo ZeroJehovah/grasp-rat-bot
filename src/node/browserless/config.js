@@ -67,6 +67,14 @@ const DEFAULTS = {
   combatEnabled: false,
   combatShootMinIntervalMs: 160,
   combatControlIntervalMs: 160,
+  combatClosePressureMinRangeCm: 2000,
+  combatClosePressureMaxRangeCm: 3000,
+  combatFrameJitterMs: 50,
+  combatClosePressureHysteresisCm: 300,
+  combatClosePressureShootEveryMs: 520,
+  combatClosePressureReserveMs: 2600,
+  combatClosePressureMinSelfHp: 60,
+  combatClosePressureMaxHpGap: 20,
   wsTraceEnabled: false,
   wsTracePayload: true,
   wsTraceMaxPayloadChars: 0,
@@ -184,6 +192,14 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
     combatEnabled: boolEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_ENABLED, DEFAULTS.combatEnabled),
     combatShootMinIntervalMs: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_SHOOT_MIN_INTERVAL_MS, DEFAULTS.combatShootMinIntervalMs),
     combatControlIntervalMs: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_CONTROL_INTERVAL_MS, DEFAULTS.combatControlIntervalMs),
+    combatClosePressureMinRangeCm: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_CLOSE_PRESSURE_MIN_RANGE_CM, DEFAULTS.combatClosePressureMinRangeCm),
+    combatClosePressureMaxRangeCm: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_CLOSE_PRESSURE_MAX_RANGE_CM, DEFAULTS.combatClosePressureMaxRangeCm),
+    combatFrameJitterMs: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_FRAME_JITTER_MS, DEFAULTS.combatFrameJitterMs),
+    combatClosePressureHysteresisCm: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_CLOSE_PRESSURE_HYSTERESIS_CM, DEFAULTS.combatClosePressureHysteresisCm),
+    combatClosePressureShootEveryMs: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_CLOSE_PRESSURE_SHOOT_EVERY_MS, DEFAULTS.combatClosePressureShootEveryMs),
+    combatClosePressureReserveMs: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_CLOSE_PRESSURE_RESERVE_MS, DEFAULTS.combatClosePressureReserveMs),
+    combatClosePressureMinSelfHp: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_CLOSE_PRESSURE_MIN_SELF_HP, DEFAULTS.combatClosePressureMinSelfHp),
+    combatClosePressureMaxHpGap: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_CLOSE_PRESSURE_MAX_HP_GAP, DEFAULTS.combatClosePressureMaxHpGap),
     wsTraceEnabled: boolEnv(env.GRASP_RAT_BROWSERLESS_WS_TRACE_ENABLED ?? env.GRASP_RAT_BROWSERLESS_WS_TRACE, DEFAULTS.wsTraceEnabled),
     wsTracePayload: boolEnv(env.GRASP_RAT_BROWSERLESS_WS_TRACE_PAYLOAD, DEFAULTS.wsTracePayload),
     wsTraceMaxPayloadChars: numberEnv(env.GRASP_RAT_BROWSERLESS_WS_TRACE_MAX_PAYLOAD_CHARS, DEFAULTS.wsTraceMaxPayloadChars),
@@ -334,6 +350,22 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
       config.combatShootMinIntervalMs = numberEnv(argv[++i], config.combatShootMinIntervalMs);
     } else if (arg === '--combat-control-interval-ms') {
       config.combatControlIntervalMs = numberEnv(argv[++i], config.combatControlIntervalMs);
+    } else if (arg === '--combat-close-pressure-min-range-cm') {
+      config.combatClosePressureMinRangeCm = numberEnv(argv[++i], config.combatClosePressureMinRangeCm);
+    } else if (arg === '--combat-close-pressure-max-range-cm') {
+      config.combatClosePressureMaxRangeCm = numberEnv(argv[++i], config.combatClosePressureMaxRangeCm);
+    } else if (arg === '--combat-frame-jitter-ms') {
+      config.combatFrameJitterMs = numberEnv(argv[++i], config.combatFrameJitterMs);
+    } else if (arg === '--combat-close-pressure-hysteresis-cm') {
+      config.combatClosePressureHysteresisCm = numberEnv(argv[++i], config.combatClosePressureHysteresisCm);
+    } else if (arg === '--combat-close-pressure-shoot-every-ms') {
+      config.combatClosePressureShootEveryMs = numberEnv(argv[++i], config.combatClosePressureShootEveryMs);
+    } else if (arg === '--combat-close-pressure-reserve-ms') {
+      config.combatClosePressureReserveMs = numberEnv(argv[++i], config.combatClosePressureReserveMs);
+    } else if (arg === '--combat-close-pressure-min-self-hp') {
+      config.combatClosePressureMinSelfHp = numberEnv(argv[++i], config.combatClosePressureMinSelfHp);
+    } else if (arg === '--combat-close-pressure-max-hp-gap') {
+      config.combatClosePressureMaxHpGap = numberEnv(argv[++i], config.combatClosePressureMaxHpGap);
     } else if (arg === '--ws-trace') {
       config.wsTraceEnabled = true;
     } else if (arg === '--no-ws-trace') {
@@ -431,13 +463,21 @@ function usage() {
     '  --movement-settlement-min-distance-cm <cm>  Coordinate progress needed to reset the stall timer. Default: 80',
     '  --center-activity-radius-cm <cm>  Keep ordinary browserless profit inside this origin radius. Default: 100000',
     '  --outside-center-idle-exit-ms <ms>  Leave after waiting outside the center without profit. Default: 180000',
-    '  --profit-pursuit-max-ms <ms>  Max ordinary profit combat pursuit before suppression. Default: 60000',
+    '  --profit-pursuit-max-ms <ms>  Age that starts close pressure for an established ordinary-profit fight. Default: 60000',
     '  --profit-pursuit-suppress-ms <ms>  Suppression cooldown after a profit pursuit is stopped. Default: 60000',
     '  --dangerous-target-cooldown-ms <ms>  Cooldown for ordinary profit against targets that forced a combat leave. Default: 900000',
-    '  --profit-pursuit-min-damage-ms <ms>  Minimum ordinary profit pursuit age before the low-damage gate. Default: 60000',
-    '  --profit-pursuit-min-damage-hp <hp>  Required target HP progress by that age. Default: 10',
+    '  --profit-pursuit-min-damage-ms <ms>  Age that starts the low-damage close-pressure gate. Default: 60000',
+    '  --profit-pursuit-min-damage-hp <hp>  Target HP progress required to avoid that gate. Default: 10',
     '  --combat-shoot-min-interval-ms <ms>  Minimum live combat shoot interval. Default: 160',
     '  --combat-control-interval-ms <ms>     Recompute live combat from fresh realtime frames. Default: 160',
+    '  --combat-close-pressure-min-range-cm <cm>  Lower bound for no-progress close pressure. Default: 2000',
+    '  --combat-close-pressure-max-range-cm <cm>  Upper bound for no-progress close pressure. Default: 3000',
+    '  --combat-frame-jitter-ms <ms>  Realtime frame jitter included in pressure range budget. Default: 50',
+    '  --combat-close-pressure-hysteresis-cm <cm>  Distance hysteresis around pressure range. Default: 300',
+    '  --combat-close-pressure-shoot-every-ms <ms>  Bounded close-pressure firing cadence. Default: 520',
+    '  --combat-close-pressure-reserve-ms <ms>  Close-pressure stamina reserve. Default: 2600',
+    '  --combat-close-pressure-min-self-hp <hp>  Minimum HP for exchange continuation. Default: 60',
+    '  --combat-close-pressure-max-hp-gap <hp>  Maximum target HP lead for continuation. Default: 20',
     '  --ws-trace              Write decoded WebSocket frame/command trace to ws.jsonl',
     '  --no-ws-trace           Disable WebSocket trace logging',
     '  --ws-trace-summary-only  Log WebSocket frame summaries without decoded payloads',

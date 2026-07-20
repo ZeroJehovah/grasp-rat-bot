@@ -83,6 +83,29 @@ function determineCombatFireState(self, target, context = {}) {
     return result(FIRE_STATE.FINISH, COMBAT_CONSTANTS.SHOOT_EVERY_MS, finishReserve, 'finish-low-threat');
   }
 
+  // A stable no-progress fight uses bounded close-pressure fire. The hard
+  // stamina floor still applies, but an economic/probe cooldown may only slow
+  // cadence here; it must not permanently stop shooting.
+  if (context.closePressure) {
+    const closePressureReserve = Math.max(
+      hardReserve,
+      Number(context.closePressureReserveMs ?? COMBAT_CONSTANTS.SHOOT_DODGE_RESERVE_MS)
+    );
+    const closePressureCadence = Math.max(
+      COMBAT_CONSTANTS.SHOOT_EVERY_MS,
+      Number(context.closePressureCadenceMs ?? COMBAT_CONSTANTS.SHOOT_RESERVE_BAND_MS)
+    );
+    if (stamina5s !== null && stamina5s < closePressureReserve) {
+      return result(
+        FIRE_STATE.RESERVE_BAND,
+        Math.max(closePressureCadence, COMBAT_CONSTANTS.SHOOT_RESERVE_BAND_MS),
+        closePressureReserve,
+        'close-pressure-reserve-band'
+      );
+    }
+    return result(FIRE_STATE.PRESSURE, closePressureCadence, closePressureReserve, 'close-pressure-fire');
+  }
+
   // Passive runner (no threat, safe to fire)
   if (context.passiveRunner) {
     const passiveReserve = COMBAT_CONSTANTS.PASSIVE_RUNNER_DODGE_RESERVE_MS;
@@ -290,6 +313,7 @@ function evaluateHighEntropyFireGateCore(input = {}, options = {}) {
   const highEntropyMaxShots = Math.max(minimumSamples, Math.round(Number(options.explorationMaxShots ?? 15)));
   const generalMaxShots = Math.max(highEntropyMaxShots, Math.round(Number(options.generalMaxShots ?? 40)));
   const highEntropy = Boolean(input.highEntropy ?? input.fireRiskClassification?.highEntropy);
+  const closePressure = Boolean(input.closePressure);
   const unreachableIntercept = Boolean(input.unreachableIntercept);
   const unreachableMaxShots = Math.max(1, Math.round(Number(options.unreachableMaxShots ?? 3)));
   const explorationMaxShots = unreachableIntercept
@@ -337,7 +361,8 @@ function evaluateHighEntropyFireGateCore(input = {}, options = {}) {
       explorationBudgetRemaining,
       boundedNoProgress,
       finishProtected,
-      defensivePressure: Boolean(input.defensivePressure)
+      defensivePressure: Boolean(input.defensivePressure),
+      closePressure
     };
   }
   const explorationActive = explorationBudgetRemaining > 0
@@ -346,6 +371,31 @@ function evaluateHighEntropyFireGateCore(input = {}, options = {}) {
   const defensiveExtraShots = Math.max(0, Math.round(Number(options.defensiveExtraShots ?? 5)));
   const defensiveBudgetRemaining = Math.max(0, explorationMaxShots + defensiveExtraShots - noProgressAcceptedShots);
   const defensiveThrottle = Boolean(!unreachableIntercept && !explorationActive && defensivePressure && defensiveBudgetRemaining > 0);
+  if (closePressure) {
+    return {
+      active: true,
+      suppressFire: false,
+      minimumCadenceMs: Math.max(320, Number(options.closePressureCadenceMs ?? 520)),
+      reason: 'close-pressure-bounded-fire',
+      highEntropy,
+      unreachableIntercept,
+      reachabilityGapCm: numberOrNull(input.reachabilityGapCm),
+      expectedHitProbability,
+      recentHitRate,
+      recentShotCount,
+      noProgressAcceptedShots,
+      noDamageMs,
+      explorationMaxShots,
+      explorationBudgetRemaining,
+      boundedNoProgress,
+      defensiveBudgetRemaining,
+      shootingStaminaSpent: Math.max(0, Number(input.shootingStaminaSpent || 0)),
+      explorationActive,
+      finishProtected,
+      defensivePressure,
+      closePressure: true
+    };
+  }
   return {
     active: true,
     suppressFire: Boolean(!explorationActive && !defensiveThrottle),
@@ -374,7 +424,8 @@ function evaluateHighEntropyFireGateCore(input = {}, options = {}) {
     shootingStaminaSpent: Math.max(0, Number(input.shootingStaminaSpent || 0)),
     explorationActive,
     finishProtected,
-    defensivePressure
+    defensivePressure,
+    closePressure: false
   };
 }
 
@@ -383,6 +434,7 @@ function updateCombatProbePhaseCore(previous = null, input = {}, options = {}) {
   const targetId = String(input.targetId || '');
   const sameTarget = Boolean(previous && targetId && String(previous.targetId || '') === targetId);
   const highEntropy = Boolean(input.highEntropy);
+  const closePressure = Boolean(input.closePressure);
   const acceptedShots = Math.max(0, Math.round(Number(input.acceptedShots || 0)));
   const confirmedHits = Math.max(0, Math.round(Number(input.confirmedHits || 0)));
   const shootingStamina = Math.max(0, Number(input.shootingStamina || 0));
@@ -497,11 +549,14 @@ function updateCombatProbePhaseCore(previous = null, input = {}, options = {}) {
   const suppressFire = Boolean(
     highEntropy
       && !finishingTarget
+      && !closePressure
       && (cooldown || probabilityBlocked)
   );
-  const probePhase = !highEntropy
+  const probePhase = closePressure
+    ? 'close-pressure'
+    : (!highEntropy
     ? 'not-required'
-    : (provenHitProtected ? 'productive' : (cooldown ? 'cooldown' : (probabilityBlocked ? 'wait-geometry' : 'probe')));
+    : (provenHitProtected ? 'productive' : (cooldown ? 'cooldown' : (probabilityBlocked ? 'wait-geometry' : 'probe'))));
   return {
     targetId,
     probePhase,
@@ -528,10 +583,13 @@ function updateCombatProbePhaseCore(previous = null, input = {}, options = {}) {
     recentShotCount,
     geometryProbeEligible,
     actualHitAttribution: probeHits > 0 ? 'recent-shot-attribution' : 'none',
+    closePressure,
     suppressFire,
-    suppressionReason: cooldown
+    suppressionReason: closePressure
+      ? 'close-pressure-fire-reopened'
+      : (cooldown
       ? 'probe-zero-damage-budget-cooldown'
-      : (probabilityBlocked ? 'probe-hit-probability-below-threshold' : ''),
+      : (probabilityBlocked ? 'probe-hit-probability-below-threshold' : '')),
     phaseStartedAt: resetAllowed ? nowMs : Number(base.phaseStartedAt || nowMs),
     baseAcceptedShots: phaseBaseAcceptedShots,
     baseConfirmedHits: phaseBaseConfirmedHits,

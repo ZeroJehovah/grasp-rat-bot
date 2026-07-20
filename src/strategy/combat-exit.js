@@ -246,6 +246,20 @@ function evaluateCombatExchangeStopLossCore(input = {}, options = {}) {
     && selfHp >= targetHp + 10
     && Number(input.recentTargetDamage || 0) > 0
     && ttkMs < ttdMs;
+  const closePressure = input.closePressure === true;
+  const closePressureMinSelfHp = Math.max(0, Number(
+    options.closePressureMinSelfHp ?? options.combatClosePressureMinSelfHp ?? 60
+  ));
+  const closePressureMaxHpGap = Math.max(0, Number(
+    options.closePressureMaxHpGap ?? options.combatClosePressureMaxHpGap ?? 20
+  ));
+  const closePressureContinuation = Boolean(
+    closePressure
+      && selfHp !== null
+      && selfHp >= closePressureMinSelfHp
+      && (targetHp === null || targetHp - selfHp < closePressureMaxHpGap)
+      && !lowHpFinishProtected
+  );
   let rule = '';
   if (ready && !lowHpFinishProtected) {
     if (selfDamage - targetDamage >= 12 && targetHp !== null && selfHp !== null && targetHp >= selfHp) {
@@ -277,9 +291,12 @@ function evaluateCombatExchangeStopLossCore(input = {}, options = {}) {
     && cumulativeSelfDamage >= retreatSelfDamageThreshold
     && cumulativeTargetDamage <= retreatTargetDamageMax
     && recentNoHit
-    && !lowHpFinishProtected;
+    && !lowHpFinishProtected
+    && !closePressureContinuation;
   const previousRetreatSinceAt = Math.max(0, Number(input.retreatSinceAt || 0));
-  const retreatSinceAt = retreatEligible ? (previousRetreatSinceAt || nowMs) : previousRetreatSinceAt;
+  const retreatSinceAt = closePressureContinuation
+    ? 0
+    : (retreatEligible ? (previousRetreatSinceAt || nowMs) : previousRetreatSinceAt);
   const retreatSelfDamageBaseline = retreatSinceAt
     ? Math.max(0, Number(input.retreatSelfDamageBaseline ?? cumulativeSelfDamage))
     : 0;
@@ -302,7 +319,7 @@ function evaluateCombatExchangeStopLossCore(input = {}, options = {}) {
       && distance >= safeDistanceCm
       && recentThreatBulletCount === 0
   );
-  const disengage = Boolean(retreatSinceAt && !lowHpFinishProtected);
+  const disengage = Boolean(retreatSinceAt && !lowHpFinishProtected && !closePressureContinuation);
   const shouldExit = Boolean(
     disengage
       && !safeDistanceReached
@@ -312,12 +329,16 @@ function evaluateCombatExchangeStopLossCore(input = {}, options = {}) {
   );
   const phase = shouldExit
     ? 'exit'
-    : (disengage ? 'retreat' : (defensive && engagedMs >= observeMs ? 'observe' : ''));
+    : (closePressureContinuation
+        ? 'close-pressure'
+        : (disengage ? 'retreat' : (defensive && engagedMs >= observeMs ? 'observe' : '')));
   const phasedReason = shouldExit
     ? 'defensive-exchange-no-progress-leave'
-    : (disengage
-        ? 'defensive-exchange-no-progress-disengage'
-        : (phase === 'observe' ? 'defensive-exchange-observe' : ''));
+    : (closePressureContinuation
+        ? 'close-pressure-continue'
+        : (disengage
+            ? 'defensive-exchange-no-progress-disengage'
+            : (phase === 'observe' ? 'defensive-exchange-observe' : '')));
   return {
     ready,
     active: Boolean(rule),
@@ -341,6 +362,10 @@ function evaluateCombatExchangeStopLossCore(input = {}, options = {}) {
     damageObservations,
     lowHpFinishProtected,
     defensive,
+    closePressure,
+    closePressureContinuation,
+    closePressureMinSelfHp,
+    closePressureMaxHpGap,
     phase,
     observing: phase === 'observe',
     disengage,

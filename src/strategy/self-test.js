@@ -139,6 +139,11 @@ const {
 } = require('./chase-mode');
 const { COMBAT_CONSTANTS, validateCombatConstants } = require('./combat-constants');
 const {
+  combatPressurePhaseCore,
+  combatPressureStrafeCore,
+  combatPressureTargetRangeCore
+} = require('./combat-pressure');
+const {
   combatEdgePressureDecisionCore,
   combatEscapeDecisionCore,
   incomingBulletHasCollisionRiskCore,
@@ -1213,6 +1218,148 @@ function runStrategyModuleSelfTests() {
       && safelySeparated.disengage === true
       && safelySeparated.safeDistanceReached === true
       && safelySeparated.shouldExit === false
+  });
+
+  const pressureBefore = combatPressurePhaseCore({
+    id: '8',
+    combatPhase: 'normal-combat',
+    firstSeenAt: 1000,
+    firstHp: 100,
+    minHp: 100
+  }, {
+    targetId: '8',
+    nowMs: 60999,
+    engagedAt: 1000,
+    originIntent: 'profit',
+    damageFromStart: 0,
+    damageKnown: true
+  });
+  const pressureAt = combatPressurePhaseCore({
+    id: '8',
+    combatPhase: 'normal-combat',
+    firstSeenAt: 1000,
+    firstHp: 100,
+    minHp: 100
+  }, {
+    targetId: '8',
+    nowMs: 61000,
+    engagedAt: 1000,
+    originIntent: 'profit',
+    damageFromStart: 0,
+    damageKnown: true
+  }, {
+    movementExecutionTiming: { p90Ticks: 2 }
+  });
+  const pressureRange = combatPressureTargetRangeCore({
+    combatControlIntervalMs: 160,
+    combatServerTickMs: 50,
+    combatBulletSpeedPerTick: 500,
+    movementExecutionTiming: { p90Ticks: 2 },
+    combatFrameJitterMs: 50,
+    combatReactionSafetyMarginMs: 100
+  });
+  const pressureStrafeA = combatPressureStrafeCore(
+    { x: 0, y: 0 },
+    { id: '8', x: 2500, y: 0 },
+    { targetId: '8', phaseStartedAt: 60000 },
+    { nowMs: 60000 }
+  );
+  const pressureStrafeB = combatPressureStrafeCore(
+    { x: 0, y: 0 },
+    { id: '8', x: 2500, y: 0 },
+    { targetId: '8', phaseStartedAt: 60000 },
+    { nowMs: 63500 }
+  );
+  const pressureStrafeLong = combatPressureStrafeCore(
+    { x: 0, y: 0 },
+    { id: '8', x: 2500, y: 100 },
+    { targetId: '8', phaseStartedAt: 60000 },
+    { nowMs: 660000 }
+  );
+  results.push({
+    name: 'combat-close-pressure-starts-at-one-minute-with-ballistic-range-and-replayable-strafe',
+    passed: pressureBefore.phase === 'normal-combat'
+      && pressureAt.phase === 'close-pressure'
+      && pressureAt.engagedMs === 60000
+      && pressureAt.triggerReason === 'no-damage-threshold'
+      && pressureRange.rangeCm >= 2000
+      && pressureRange.rangeCm <= 3000
+      && pressureRange.flightMs <= pressureRange.responseBudgetMs
+      && pressureRange.ballisticConstraintSatisfied === true
+      && pressureStrafeA.active === true
+      && pressureStrafeB.active === true
+      && pressureStrafeA.dx === pressureStrafeB.dx
+      && pressureStrafeA.dy === -pressureStrafeB.dy
+      && pressureStrafeLong.active === true
+      && pressureStrafeLong.segmentIndex > 128
+      && pressureStrafeLong.dx === 0
+      && Math.abs(pressureStrafeLong.dy) === 1
+  });
+
+  const closePressureExchange = evaluateCombatExchangeStopLossCore({
+    nowMs: 61000,
+    engagedMs: 60000,
+    acceptedShots: 40,
+    damageObservations: 5,
+    selfHp: 88,
+    targetHp: 100,
+    windowMs: 10000,
+    windowSelfDamage: 12,
+    windowTargetDamage: 0,
+    longWindowSelfDamage: 12,
+    longWindowTargetDamage: 0,
+    cumulativeSelfDamage: 12,
+    cumulativeTargetDamage: 0,
+    recentTargetDamage: 0,
+    distance: 9000,
+    recentThreatBulletCount: 2,
+    defensive: true,
+    closePressure: true
+  });
+  const closePressureFireGate = evaluateHighEntropyFireGateCore({
+    expectedHitProbability: 0.01,
+    recentHitRate: 0,
+    recentShotCount: 40,
+    noProgressAcceptedShots: 40,
+    noDamageMs: 60000,
+    selfHp: 88,
+    targetHp: 100,
+    highEntropy: true,
+    closePressure: true
+  });
+  const closePressureProbe = updateCombatProbePhaseCore({
+    targetId: '8',
+    probePhase: 'cooldown',
+    probeBudgetRemaining: 0,
+    baseAcceptedShots: 0,
+    baseConfirmedHits: 0,
+    baseShootingStamina: 0,
+    lastTotalAcceptedShots: 40,
+    lastTotalConfirmedHits: 0,
+    lastTotalShootingStamina: 20000,
+    lastResetAt: 1000,
+    phaseStartedAt: 1000
+  }, {
+    nowMs: 61000,
+    targetId: '8',
+    acceptedShots: 40,
+    confirmedHits: 0,
+    shootingStamina: 20000,
+    highEntropy: true,
+    predictedHitProbability: 0.01,
+    closePressure: true
+  });
+  results.push({
+    name: 'combat-close-pressure-overrides-economic-retreat-and-permanent-fire-cooldown',
+    passed: closePressureExchange.phase === 'close-pressure'
+      && closePressureExchange.closePressureContinuation === true
+      && closePressureExchange.disengage === false
+      && closePressureExchange.shouldExit === false
+      && closePressureFireGate.suppressFire === false
+      && closePressureFireGate.minimumCadenceMs >= 320
+      && closePressureProbe.probePhase === 'close-pressure'
+      && closePressureProbe.suppressFire === false
+      && closePressureProbe.suppressionReason === 'close-pressure-fire-reopened'
   });
 
   const attackWorthOptions = {

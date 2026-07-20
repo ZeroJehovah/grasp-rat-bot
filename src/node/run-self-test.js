@@ -146,6 +146,7 @@ const {
   installGracefulShutdownHandlers
 } = require('../../scripts/browserless-runner');
 const {
+  replayCombatClosePressure,
   replayCombatPursuit,
   replayMovementStallExit,
   replayRecoveryThreatExit
@@ -9686,8 +9687,13 @@ async function runSelfTest() {
       want: 'wait|no-profitable-candidate|true|true|combat-live|combat-live-realtime|8|true'
     },
     {
-      name: 'browserless low-damage profit pursuit suppresses and cools target',
+      name: 'browserless low-damage profit pursuit enters close pressure without target cooldown',
       got: (() => {
+        const finishedEngagements = [];
+        const easyKillPlayerTracker = {
+          status: () => ({ players: [], blockedUserIds: [], engagements: [] }),
+          finishEngagement: (...args) => finishedEngagements.push(args)
+        };
         const stateful = {
           combatTarget: {
             id: 8,
@@ -9729,20 +9735,24 @@ async function runSelfTest() {
           browserlessProfitPursuitSuppressMs: 60000,
           browserlessProfitPursuitMinDamageMs: 60000,
           browserlessProfitPursuitMinDamageHp: 10,
-          browserlessDangerousTargetCooldownMs: 900000
+          browserlessDangerousTargetCooldownMs: 900000,
+          easyKillPlayerTracker
         });
         return [
           decision.kind,
           decision.combat.actionEligible,
+          decision.combat.combatPhase.phase,
           decision.combat.profitPursuitSuppression.reason,
-          decision.combat.profitPursuitSuppression.damageFromStart,
-          decision.combat.profitPursuitSuppression.minDamageHp,
-          stateful.combatTarget === null,
+          decision.combat.profitPursuitSuppression.suppressed,
+          decision.combat.movement.reason,
+          decision.combat.movement.spacing,
+          stateful.combatTarget?.id,
           stateful.profitPursuitSuppressions?.['8']?.reason || '',
-          stateful.dangerousCombatTargets?.['8']?.reason || ''
+          stateful.dangerousCombatTargets?.['8']?.reason || '',
+          finishedEngagements.length
         ].join('|');
       })(),
-      want: 'wait|false|profit-pursuit-low-damage|5|10|true|profit-pursuit-low-damage|profit-pursuit-low-damage'
+      want: 'combat-live|true|close-pressure|profit-pursuit-close-pressure|false|combat-close-pressure-approach|3000|8|||0'
     },
     {
       name: 'browserless Eason-shaped pursuit uses cumulative metrics despite frame-local engagement age',
@@ -9823,14 +9833,258 @@ async function runSelfTest() {
           Boolean(decision.action.shouldLeave),
           decision.combat.actionEligible,
           decision.combat.target.combatEngagement.ageMs,
+          decision.combat.combatPhase.phase,
+          decision.combat.combatPhase.engagedMs,
           decision.combat.profitPursuitSuppression.reason,
-          decision.combat.profitPursuitSuppression.engagedMs,
-          decision.combat.profitPursuitSuppression.damageFromStart,
-          stateful.combatTarget === null,
+          decision.combat.profitPursuitSuppression.suppressed,
+          decision.combat.movement.reason,
+          decision.combat.shooting.wouldShoot,
+          stateful.combatTarget?.id,
           stateful.profitPursuitSuppressions?.['19677']?.reason || ''
         ].join('|');
       })(),
-      want: 'wait|false|false|200|profit-pursuit-low-damage|60000|6|true|profit-pursuit-low-damage'
+      want: 'combat-live|false|true|200|close-pressure|60000|profit-pursuit-close-pressure|false|combat-close-pressure-approach|true|19677|'
+    },
+    {
+      name: 'browserless close pressure changes phase exactly at sixty seconds without clearing aim',
+      got: (() => {
+        const run = nowMs => {
+          const stateful = {
+            combatTarget: {
+              id: 8,
+              at: nowMs - 100,
+              firstSeenAt: 1000,
+              lastInRangeAt: nowMs - 100,
+              lastDamageAt: 1000,
+              hp: 100,
+              firstHp: 100,
+              minHp: 100,
+              damageFromStart: 0,
+              intent: 'profit',
+              originIntent: 'profit',
+              motionSamples: []
+            },
+            combatMetrics: {
+              targetId: '8',
+              startedAt: 1000,
+              acceptedShots: 15,
+              confirmedHits: 0,
+              targetDamage: 0,
+              selfDamage: 0
+            }
+          };
+          const self = fullStamina5s({ entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, max_hp: 100 });
+          const target = fullStamina5s({
+            entity_id: 2,
+            user_id: 8,
+            name: 'stable-script',
+            x: 9000,
+            y: 0,
+            vx: 50,
+            vy: 50,
+            hp: 100,
+            max_hp: 100,
+            current_join_mode: 'Active',
+            drop: 100
+          });
+          const decision = buildBrowserlessDecision({
+            userId: 7,
+            realtime: { tick: Math.round(nowMs / 50), frameAgeMs: 0, self, entities: [self, target], bullets: [] },
+            fallback: { tick: Math.round(nowMs / 50), frameAgeMs: 0, entities: [], coinDrops: [], messages: [] }
+          }, stateful, {
+            nowMs,
+            controlMode: 'profit-live',
+            combatEnabled: true,
+            dynamicProfitThresholdEnabled: false,
+            browserlessProfitPursuitMaxMs: 60000,
+            browserlessProfitPursuitMinDamageMs: 60000,
+            browserlessProfitPursuitMinDamageHp: 10,
+            targetStickMs: 120000,
+            combatEngageStickMs: 120000
+          });
+          return { decision, stateful };
+        };
+        const before = run(60999);
+        const at = run(61000);
+        return [
+          before.decision.combat.combatPhase.phase,
+          at.decision.combat.combatPhase.phase,
+          at.decision.combat.actionEligible,
+          at.decision.combat.target.userId,
+          at.stateful.combatTarget?.id,
+          at.stateful.combatAim?.targetId,
+          at.decision.combat.profitPursuitSuppression.reason,
+          at.decision.combat.profitPursuitSuppression.suppressed,
+          at.stateful.profitPursuitSuppressions?.['8']?.reason || ''
+        ].join('|');
+      })(),
+      want: 'normal-combat|close-pressure|true|8|8|8|profit-pursuit-close-pressure|false|'
+    },
+    {
+      name: 'browserless close pressure uses ballistic spacing deterministic strafe and trajectory dodge',
+      got: (() => {
+        const self = { user_id: 7, x: 0, y: 0, vx: 0, vy: 0, hp: 100 };
+        const target = { user_id: 8, x: 2500, y: 0, vx: 0, vy: 50, hp: 100, distance: 2500, active: true };
+        const combatTargetState = {
+          id: '8',
+          combatPhase: 'close-pressure',
+          phaseStartedAt: 60000,
+          closePressure: {
+            active: true,
+            phase: 'close-pressure',
+            targetId: '8',
+            phaseStartedAt: 60000,
+            range: {
+              rangeCm: 3000,
+              flightMs: 300,
+              responseBudgetMs: 410,
+              ballisticConstraintSatisfied: true
+            }
+          },
+          noDamageMs: 60000,
+          opponentBehaviorState: { mode: 'zigzag-strafe', responsePolicy: { closeIn: true } }
+        };
+        const options = {
+          combatTargetState,
+          combatBulletHitRadiusCm: 90,
+          movementExecutionTiming: { p90Ticks: 2, sampleCount: 10, madTicks: 0 },
+          currentTick: 100
+        };
+        const strafeA = buildCombatMovementPlan(self, target, [], { ...options, nowMs: 60000 });
+        const strafeSame = buildCombatMovementPlan(self, target, [], { ...options, nowMs: 60000 });
+        const strafeFlip = buildCombatMovementPlan(self, target, [], { ...options, nowMs: 63500 });
+        const tooClose = buildCombatMovementPlan(self, { ...target, x: 1500, distance: 1500 }, [], { ...options, nowMs: 64000 });
+        const bullet = buildCombatMovementPlan(self, target, [{
+          bullet_id: 'close-pressure-bullet',
+          ownerId: 8,
+          incoming: true,
+          distance: 2500,
+          timeToImpact: 250,
+          cpa: 0,
+          x: 2500,
+          y: 0,
+          direction: { dx: -1, dy: 0 },
+          speed: 500,
+          remainingTicks: 5
+        }], { ...options, nowMs: 61000 });
+        const selectedThreat = bullet.dodge?.threatField?.find(item => item.dx === bullet.dx && item.dy === bullet.dy) || null;
+        return [
+          strafeA.reason,
+          strafeA.spacing,
+          strafeA.modifiers.includes('back-away'),
+          `${strafeA.dx},${strafeA.dy}` === `${strafeSame.dx},${strafeSame.dy}`,
+          strafeA.dy === -strafeFlip.dy,
+          strafeA.closePressure.range.flightMs <= strafeA.closePressure.range.responseBudgetMs,
+          tooClose.reason,
+          tooClose.dx,
+          tooClose.closePressure.tooClose,
+          tooClose.closePressure.strafe === null,
+          bullet.modifiers.includes('dodge'),
+          bullet.closePressure.strafe === null,
+          selectedThreat?.directHits,
+          bullet.reason
+        ].join('|');
+      })(),
+      want: 'close-pressure-deterministic-strafe|3000|false|true|true|true|combat-close-pressure-separate|-1|true|true|true|true|0|retreat-kite-safe-close'
+    },
+    {
+      name: 'browserless close pressure keeps Eason-shaped exchange but preserves hard hp exit',
+      got: (() => {
+        const easonState = {
+          combatTarget: {
+            id: 8,
+            at: 60000,
+            firstSeenAt: 1000,
+            firstSeenTick: 20,
+            hp: 100,
+            firstHp: 100,
+            minHp: 100,
+            damageFromStart: 0,
+            lastDamageAt: 1000,
+            lastInRangeAt: 60000,
+            intent: 'profit',
+            originIntent: 'profit',
+            self: { userId: 7, hp: 88 },
+            motionSamples: [
+              { at: 16000, selfHp: 100, targetHp: 100, distance: 9000, realBulletPressure: true },
+              { at: 26000, selfHp: 97, targetHp: 100, distance: 9200, realBulletPressure: true },
+              { at: 36000, selfHp: 94, targetHp: 100, distance: 9400, realBulletPressure: true },
+              { at: 46000, selfHp: 91, targetHp: 100, distance: 9600, realBulletPressure: true },
+              { at: 55000, selfHp: 88, targetHp: 100, distance: 9800, realBulletPressure: true }
+            ]
+          },
+          combatMetrics: {
+            targetId: '8',
+            startedAt: 1000,
+            acceptedShots: 50,
+            confirmedHits: 0,
+            selfDamage: 12,
+            targetDamage: 0,
+            initialSelfHp: 100,
+            lastSelfHp: 88,
+            initialTargetHp: 100,
+            lastTargetHp: 100
+          }
+        };
+        const frame = selfHp => {
+          const self = fullStamina5s({ entity_id: 1, user_id: 7, x: 0, y: 0, hp: selfHp, max_hp: 100 });
+          return {
+            userId: 7,
+            realtime: {
+              tick: 1220,
+              self,
+              entities: [
+                self,
+                fullStamina5s({ entity_id: 2, user_id: 8, name: 'Eason', x: 9000, y: 0, hp: 100, max_hp: 100, current_join_mode: 'Active', firing: true, drop: 200 })
+              ],
+              bullets: [{
+                bullet_id: 'eason-live',
+                owner_user_id: 8,
+                start_x: 9000,
+                start_y: 0,
+                target_x: 0,
+                target_y: 0,
+                created_tick: 1218,
+                expire_tick: 1248,
+                speed_per_tick: 500
+              }]
+            }
+          };
+        };
+        const pressure = buildBrowserlessCombatDryRun(frame(88), {
+          nowMs: 61000,
+          decisionState: easonState,
+          liveCombatEnabled: true,
+          combatAttackRange: 14500,
+          browserlessProfitPursuitMaxMs: 60000,
+          browserlessProfitPursuitMinDamageMs: 60000,
+          browserlessProfitPursuitMinDamageHp: 10
+        });
+        const hardState = JSON.parse(JSON.stringify(easonState));
+        hardState.combatTarget.self = { userId: 7, hp: 40 };
+        const hardExit = buildBrowserlessCombatDryRun(frame(40), {
+          nowMs: 61100,
+          decisionState: hardState,
+          liveCombatEnabled: true,
+          combatAttackRange: 14500,
+          combatLowHpLeaveThreshold: 60,
+          browserlessProfitPursuitMaxMs: 60000,
+          browserlessProfitPursuitMinDamageMs: 60000,
+          browserlessProfitPursuitMinDamageHp: 10
+        });
+        return [
+          pressure.combatPhase.phase,
+          pressure.exchangeStopLoss.phase,
+          pressure.exchangeStopLoss.disengage,
+          pressure.exchangeStopLoss.shouldExit,
+          pressure.exit === null,
+          pressure.movement.reason !== 'defensive-exchange-no-progress-retreat',
+          pressure.shooting.highEntropyFireGate.suppressFire,
+          hardExit.combatPhase.phase,
+          hardExit.exit?.reason
+        ].join('|');
+      })(),
+      want: 'close-pressure|close-pressure|false|false|true|true|false|close-pressure|combat-low-hp-disadvantage-leave'
     },
     {
       name: 'browserless action adapter pre-approaches AFK target before shooting',
@@ -14530,6 +14784,8 @@ async function runSelfTest() {
           first.active,
           first.triggered,
           confirmed.triggered,
+          confirmed.disengage,
+          confirmed.advisory,
           confirmed.remainingAcceptedShots > 500,
           confirmed.bestAlternativeNetROI > confirmed.marginalNetROI,
           finish.lowHpFinishProtected,
@@ -14542,7 +14798,7 @@ async function runSelfTest() {
           stableFallbackAlternative.requiredRoi
         ].join('|');
       })(),
-      want: 'true|false|true|true|true|true|false|0|false|true|0|20|17'
+      want: 'true|false|true|false|true|true|true|true|false|0|false|true|0|20|17'
     },
     {
       name: 'browserless proactive marginal roi excludes only current defensive risk evidence',
@@ -16880,6 +17136,70 @@ async function runSelfTest() {
       want: 'true|1|1|2|2|0|0'
     },
     {
+      name: 'browserless close-pressure replay preserves threat dodge and reaches pressure band',
+      got: (() => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'grasp-rat-close-pressure-replay-'));
+        try {
+          const startedAt = Date.parse('2026-07-20T00:00:00.000Z');
+          const rows = [];
+          const frame = (atMs, index, threat = false) => ({
+            at: new Date(atMs).toISOString(),
+            type: 'combat-live',
+            detail: {
+              self: { userId: 7, x: 0, y: 0, vx: 0, vy: 0, hp: 100, stamina5s: 10000 },
+              target: { userId: 8, name: 'script-runner', x: 9000, y: 0, vx: 0, vy: 0, hp: 100, distance: 9000 },
+              timing: { rollingP90Ticks: 5 },
+              movement: {
+                dx: threat ? 0 : -1,
+                dy: threat ? 1 : 0,
+                reason: threat ? 'safe-dodge' : 'hold-spacing',
+                oldBulletPressure: threat,
+                dodge: {
+                  threatField: threat ? [
+                    { dx: 1, dy: 0, directHits: 0, minCPA: 500, targetDistanceChange: -50 },
+                    { dx: 0, dy: 1, directHits: 0, minCPA: 250, targetDistanceChange: 0 }
+                  ] : []
+                }
+              },
+              shooting: {
+                highEntropyFireGate: { suppressFire: index > 0 },
+                defensivePressure: false
+              },
+              metrics: { startedAt }
+            }
+          });
+          rows.push(frame(startedAt, 0));
+          for (let index = 0; index < 100; index += 1) {
+            rows.push(frame(startedAt + 60000 + index * 200, index + 1, index === 5));
+          }
+          const file = path.join(dir, 'combat.jsonl');
+          fs.writeFileSync(file, rows.map(item => JSON.stringify(item)).join('\n') + '\n');
+          const replay = replayCombatClosePressure({
+            file,
+            startLine: 1,
+            endLine: rows.length,
+            targetId: '8',
+            targetName: 'script-runner',
+            hitRadius: 90,
+            controlIntervalMs: 160
+          });
+          return [
+            replay.accepted,
+            replay.trigger?.engagedMs,
+            replay.range.rangeCm,
+            replay.threatPreserving.safeCloseFrames,
+            replay.threatPreserving.unsafeSafeCloseFrames,
+            replay.noBulletControl.strafeFrames > 0,
+            replay.noBulletControl.controlledPressureBandFrames > 0,
+            replay.reopenedFireEligibleFrames > 0
+          ].join('|');
+        } finally {
+          fs.rmSync(dir, { recursive: true, force: true });
+        }
+      })(),
+      want: 'true|60000|3000|1|0|true|true|true'
+    },
+    {
       name: 'browserless action adapter repeats velocity through decision gap',
       got: (() => {
         let t = 1000;
@@ -17892,6 +18212,7 @@ async function runSelfTest() {
           now: () => t,
           precheckedSnapshotSafety: { ok: true, reason: 'self-test-prechecked', satisfied: true },
           prewarmGameConnection: async () => ({ ok: true, status: 200, durationMs: 1 }),
+          leaveWithVerification: async () => ({ ok: true, attempts: [] }),
           sleep: async ms => {
             t += ms;
             if (!sentFrame) {
@@ -17915,8 +18236,8 @@ async function runSelfTest() {
         return [
           result.error || '',
           result.safety.event?.reason || '',
-          result.frames.count,
-          result.frames.lastTick,
+          result.stats.frameCount,
+          result.stats.tick.last,
           result.ok
         ].join('|');
       })(),

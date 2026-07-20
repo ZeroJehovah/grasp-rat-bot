@@ -35,9 +35,15 @@ const {
   updateOpponentBehaviorStateCore
 } = require('../src/strategy/opponent-behavior');
 const {
+  determineCombatFireState,
   evaluateHighEntropyFireGateCore,
   updateCombatProbePhaseCore
 } = require('../src/strategy/combat-fire-discipline');
+const {
+  combatPressurePhaseCore,
+  combatPressureStrafeCore,
+  combatPressureTargetRangeCore
+} = require('../src/strategy/combat-pressure');
 const { updatePostKillSettlementCore } = require('../src/strategy/post-kill-settlement');
 
 function parseArgs(argv) {
@@ -1815,6 +1821,313 @@ function replayCombatPolicy(options) {
   return result;
 }
 
+function closePressureDistanceStats(values = []) {
+  const distances = values.filter(Number.isFinite);
+  if (!distances.length) return { minimumCm: null, p50Cm: null, p90Cm: null, maximumCm: null, finalCm: null };
+  return {
+    minimumCm: Math.round(Math.min(...distances)),
+    p50Cm: Math.round(percentile(distances, 0.5)),
+    p90Cm: Math.round(percentile(distances, 0.9)),
+    maximumCm: Math.round(Math.max(...distances)),
+    finalCm: Math.round(distances[distances.length - 1])
+  };
+}
+
+function closePressureThreatFrame(detail = {}) {
+  const threatField = detail.movement?.dodge?.threatField || [];
+  return Boolean(
+    threatField.length
+      || detail.movement?.oldBulletPressure
+      || detail.contactEntryGuard?.realBulletTakeover
+      || detail.shooting?.defensivePressure
+      || detail.target?.firing
+  );
+}
+
+function replayClosePressureMovement(rows = [], options = {}) {
+  const range = options.range || combatPressureTargetRangeCore(options);
+  const hysteresisCm = Math.max(100, Number(options.hysteresisCm ?? 300));
+  const moveSpeedPerTick = Math.max(1, Number(options.moveSpeedPerTick ?? 50));
+  const tickMs = Math.max(1, Number(options.tickMs ?? 50));
+  const maxFrameMs = Math.max(tickMs, Number(options.maxFrameMs ?? 500));
+  let self = null;
+  let approachFrames = 0;
+  let separateFrames = 0;
+  let strafeFrames = 0;
+  let threatFrames = 0;
+  let safeCloseFrames = 0;
+  let unsafeSafeCloseFrames = 0;
+  let preservedDodgeFrames = 0;
+  const distances = [];
+  const samples = [];
+  for (let index = 0; index < rows.length; index += 1) {
+    const row = rows[index];
+    const detail = row.detail || {};
+    const atMs = Date.parse(row.entry.at || '');
+    const loggedSelf = detail.self;
+    const loggedTarget = detail.target;
+    if (!Number.isFinite(atMs) || !loggedSelf || !loggedTarget) continue;
+    if (!self) self = { ...loggedSelf };
+    const distance = Math.hypot(
+      Number(loggedTarget.x) - Number(self.x),
+      Number(loggedTarget.y) - Number(self.y)
+    );
+    const target = { ...loggedTarget, distance };
+    distances.push(distance);
+    const threatField = detail.movement?.dodge?.threatField || [];
+    const hasThreat = options.preserveThreat === true && closePressureThreatFrame(detail);
+    let dx = 0;
+    let dy = 0;
+    let movement = '';
+    if (hasThreat) {
+      threatFrames += 1;
+      const safeClose = pickSafeClosingDodgeCore(threatField, {
+        hitRadius: options.hitRadius,
+        minimumCpaRatio: 0.75,
+        minimumClosingCm: 25
+      });
+      if (safeClose) {
+        dx = Number(safeClose.dx || 0);
+        dy = Number(safeClose.dy || 0);
+        movement = 'trajectory-safe-close';
+        safeCloseFrames += 1;
+        const selectedThreat = threatField.find(item => Number(item?.dx) === dx && Number(item?.dy) === dy) || null;
+        if (Number(selectedThreat?.directHits || 0) > 0) unsafeSafeCloseFrames += 1;
+      } else {
+        dx = Number(detail.movement?.dx || 0);
+        dy = Number(detail.movement?.dy || 0);
+        movement = 'trajectory-dodge-preserved';
+        preservedDodgeFrames += 1;
+      }
+    } else if (distance > Number(range.rangeCm) + hysteresisCm) {
+      dx = Math.sign(Number(target.x) - Number(self.x));
+      dy = Math.sign(Number(target.y) - Number(self.y));
+      movement = 'close-pressure-approach';
+      approachFrames += 1;
+    } else if (distance < Number(range.minRangeCm)) {
+      dx = Math.sign(Number(self.x) - Number(target.x));
+      dy = Math.sign(Number(self.y) - Number(target.y));
+      movement = 'close-pressure-separate';
+      separateFrames += 1;
+    } else {
+      const strafe = combatPressureStrafeCore(self, target, {
+        targetId: options.targetId,
+        phaseStartedAt: options.phaseStartedAt
+      }, { nowMs: atMs });
+      dx = Number(strafe.dx || 0);
+      dy = Number(strafe.dy || 0);
+      movement = strafe.reason || 'close-pressure-strafe';
+      strafeFrames += 1;
+    }
+    if (samples.length < 12 && (movement !== 'trajectory-dodge-preserved' || safeCloseFrames <= 3)) {
+      samples.push({
+        line: row.line,
+        at: row.entry.at || '',
+        distanceCm: Math.round(distance),
+        movement,
+        dx,
+        dy
+      });
+    }
+    const nextAtMs = index + 1 < rows.length ? Date.parse(rows[index + 1].entry.at || '') : atMs;
+    const elapsedMs = Math.max(0, Math.min(maxFrameMs, nextAtMs - atMs));
+    const diagonalScale = dx && dy ? Math.SQRT1_2 : 1;
+    const travel = moveSpeedPerTick * (elapsedMs / tickMs) * diagonalScale;
+    self = {
+      ...self,
+      x: Number(self.x) + dx * travel,
+      y: Number(self.y) + dy * travel,
+      vx: dx * moveSpeedPerTick * diagonalScale,
+      vy: dy * moveSpeedPerTick * diagonalScale
+    };
+  }
+  const controlledMin = Math.max(0, Number(range.minRangeCm) - hysteresisCm);
+  const controlledMax = Number(range.maxRangeCm) + hysteresisCm;
+  return {
+    frames: distances.length,
+    approachFrames,
+    separateFrames,
+    strafeFrames,
+    threatFrames,
+    safeCloseFrames,
+    unsafeSafeCloseFrames,
+    preservedDodgeFrames,
+    strictPressureBandFrames: distances.filter(distance => (
+      distance >= Number(range.minRangeCm) && distance <= Number(range.maxRangeCm)
+    )).length,
+    controlledPressureBandFrames: distances.filter(distance => (
+      distance >= controlledMin && distance <= controlledMax
+    )).length,
+    distance: closePressureDistanceStats(distances),
+    samples
+  };
+}
+
+function replayCombatClosePressure(options) {
+  const rows = selectedEntries(options).filter(({ detail }) => {
+    const target = detail.target || null;
+    if (!target) return false;
+    if (options.targetId && String(target.userId ?? target.user_id ?? '') !== options.targetId) return false;
+    if (options.targetName && String(target.name || '') !== options.targetName) return false;
+    return true;
+  });
+  if (!rows.length) {
+    return {
+      mode: 'combat-close-pressure',
+      targetId: options.targetId || '',
+      targetName: options.targetName || '',
+      lines: `${options.startLine}-${options.endLine}`,
+      frames: 0,
+      accepted: false
+    };
+  }
+  const firstAtMs = Date.parse(rows[0].entry.at || '');
+  const metricStartedAt = numberOrNull(rows[0].detail.metrics?.startedAt);
+  const startedAt = metricStartedAt ?? firstAtMs;
+  const targetId = options.targetId || String(rows[0].detail.target?.userId ?? rows[0].detail.target?.user_id ?? '');
+  let firstHp = numberOrNull(rows[0].detail.target?.hp);
+  let minHp = firstHp;
+  let phaseState = {
+    id: targetId,
+    firstSeenAt: startedAt,
+    firstHp,
+    minHp,
+    combatPhase: 'normal-combat'
+  };
+  let trigger = null;
+  const phaseRows = [];
+  const timingP90Ticks = percentile(rows
+    .map(row => numberOrNull(row.detail.timing?.rollingP90Ticks))
+    .filter(Number.isFinite), 0.9) ?? 5;
+  const pressureOptions = {
+    browserlessProfitPursuitMinDamageMs: 60000,
+    browserlessProfitPursuitMinDamageHp: 10,
+    browserlessProfitPursuitMaxMs: 60000,
+    combatControlIntervalMs: options.controlIntervalMs,
+    combatServerTickMs: 50,
+    combatBulletSpeedPerTick: 500,
+    combatFrameJitterMs: 50,
+    combatReactionSafetyMarginMs: 100,
+    combatClosePressureMinRangeCm: 2000,
+    combatClosePressureMaxRangeCm: 3000,
+    movementExecutionTiming: { p90Ticks: timingP90Ticks }
+  };
+  for (const row of rows) {
+    const atMs = Date.parse(row.entry.at || '');
+    const hp = numberOrNull(row.detail.target?.hp);
+    if (firstHp === null && hp !== null) firstHp = hp;
+    if (hp !== null) minHp = minHp === null ? hp : Math.min(minHp, hp);
+    const damageFromStart = firstHp !== null && minHp !== null ? Math.max(0, firstHp - minHp) : null;
+    const phase = combatPressurePhaseCore(phaseState, {
+      targetId,
+      nowMs: atMs,
+      engagedAt: startedAt,
+      ordinaryProfit: true,
+      targetHp: hp,
+      firstHp,
+      minHp,
+      damageFromStart,
+      damageKnown: damageFromStart !== null
+    }, pressureOptions);
+    phaseState = {
+      ...phaseState,
+      id: targetId,
+      combatPhase: phase.phase,
+      phaseStartedAt: phase.phaseStartedAt,
+      firstHp,
+      minHp,
+      hp
+    };
+    if (phase.active) {
+      if (!trigger) trigger = { ...phase, line: row.line, at: row.entry.at || '' };
+      phaseRows.push(row);
+    }
+  }
+  const range = combatPressureTargetRangeCore(pressureOptions);
+  const historicalDistances = phaseRows.map(row => numberOrNull(row.detail.target?.distance)).filter(Number.isFinite);
+  const threatPreserving = replayClosePressureMovement(phaseRows, {
+    ...options,
+    targetId,
+    phaseStartedAt: trigger?.phaseStartedAt || startedAt + 60000,
+    range,
+    hysteresisCm: 300,
+    preserveThreat: true
+  });
+  const noBulletControl = replayClosePressureMovement(phaseRows, {
+    ...options,
+    targetId,
+    phaseStartedAt: trigger?.phaseStartedAt || startedAt + 60000,
+    range,
+    hysteresisCm: 300,
+    preserveThreat: false
+  });
+  let suppressedFireFrames = 0;
+  let reopenedFireEligibleFrames = 0;
+  let hardExitFrames = 0;
+  for (const row of phaseRows) {
+    const detail = row.detail || {};
+    if (detail.exit) hardExitFrames += 1;
+    if (detail.shooting?.highEntropyFireGate?.suppressFire !== true) continue;
+    suppressedFireFrames += 1;
+    const fireState = determineCombatFireState(detail.self || {}, detail.target || {}, {
+      closePressure: true,
+      closePressureCadenceMs: 520,
+      closePressureReserveMs: 2600
+    });
+    if (!detail.exit
+      && Number(detail.target?.distance) <= 14500
+      && fireState.state !== 'disabled'
+      && fireState.state !== 'paused') reopenedFireEligibleFrames += 1;
+  }
+  const historical = {
+    pressureFrames: phaseRows.length,
+    targetContinuityFrames: phaseRows.filter(row => (
+      String(row.detail.target?.userId ?? row.detail.target?.user_id ?? '') === targetId
+    )).length,
+    closeMovementFrames: phaseRows.filter(row => /close|reengage|response/.test(String(row.detail.movement?.reason || ''))).length,
+    suppressedFireFrames,
+    hardExitFrames,
+    distance: closePressureDistanceStats(historicalDistances)
+  };
+  const result = {
+    mode: 'combat-close-pressure',
+    targetId,
+    targetName: options.targetName || String(rows[0].detail.target?.name || ''),
+    lines: `${options.startLine}-${options.endLine}`,
+    frames: rows.length,
+    startedAt: Number.isFinite(startedAt) ? new Date(startedAt).toISOString() : '',
+    trigger: trigger ? {
+      line: trigger.line,
+      at: trigger.at,
+      engagedMs: trigger.engagedMs,
+      delayMs: Number.isFinite(startedAt) ? Date.parse(trigger.at) - startedAt : null,
+      reason: trigger.triggerReason,
+      damageFromStart: trigger.damageFromStart
+    } : null,
+    range,
+    historical,
+    threatPreserving,
+    noBulletControl,
+    reopenedFireEligibleFrames
+  };
+  result.accepted = Boolean(
+    trigger
+      && trigger.engagedMs >= 60000
+      && trigger.triggerReason === 'no-damage-threshold'
+      && range.ballisticConstraintSatisfied
+      && historical.pressureFrames > 0
+      && historical.targetContinuityFrames === historical.pressureFrames
+      && reopenedFireEligibleFrames > 0
+      && threatPreserving.safeCloseFrames > 0
+      && threatPreserving.unsafeSafeCloseFrames === 0
+      && threatPreserving.distance.p50Cm < historical.distance.p50Cm
+      && noBulletControl.strafeFrames > 0
+      && noBulletControl.controlledPressureBandFrames > 0
+      && noBulletControl.distance.p50Cm <= range.maxRangeCm + 300
+  );
+  return result;
+}
+
 function replayOpportunity(options) {
   const rows = selectedEntries(options);
   let selectedTargetFrames = 0;
@@ -2941,6 +3254,7 @@ function runReplay(options) {
   if (options.mode === 'recovery-threat-exit') return replayRecoveryThreatExit(options);
   if (options.mode === 'combat-pursuit') return replayCombatPursuit(options);
   if (options.mode === 'arbitration') return replayArbitration(options);
+  if (options.mode === 'combat-close-pressure') return replayCombatClosePressure(options);
   if (options.mode === 'combat-policy') return replayCombatPolicy(options);
   if (options.mode === 'dodge') return replayDodge(options);
   return replayCombat(options);
@@ -2955,6 +3269,7 @@ if (require.main === module) {
 
 module.exports = {
   parseArgs,
+  replayCombatClosePressure,
   replayCombatPursuit,
   replayEasyKillContinuity,
   replayLeaveTail,

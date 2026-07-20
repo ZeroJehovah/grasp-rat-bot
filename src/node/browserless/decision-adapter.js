@@ -7560,8 +7560,14 @@ function evaluateProactiveCombatMarginalRoi(input, combatDecision, opportunity =
     ready,
     active: disadvantaged,
     triggered,
-    disengage: triggered,
-    reason: triggered ? 'proactive-combat-marginal-roi-stop-loss' : (disadvantaged ? 'proactive-combat-marginal-roi-disadvantage' : 'proactive-combat-marginal-roi-acceptable'),
+    // ROI remains an admission signal. Once the stable fight has enough
+    // evidence to evaluate marginal ROI, dropping it would hand control to an
+    // opponent that continues firing. Keep the result as diagnostics only.
+    disengage: false,
+    advisory: triggered,
+    reason: triggered
+      ? 'proactive-combat-marginal-roi-continue-established'
+      : (disadvantaged ? 'proactive-combat-marginal-roi-disadvantage' : 'proactive-combat-marginal-roi-acceptable'),
     acceptedHitRateEWMA,
     completionProbability,
     escapeHazard,
@@ -7597,13 +7603,26 @@ function buildProfitPursuitSuppression(input, combatDecision, stateful = {}, opt
   const targetId = targetIdentity(target);
   if (!targetId) return null;
   const suppressions = profitPursuitSuppressionMap(stateful, nowMs);
+  const closePressure = combatDecision?.dryRun?.combatPhase?.active === true
+    || stateful?.combatTarget?.combatPhase === 'close-pressure';
+  const centerRadius = browserlessCenterActivityRadius(options);
+  const centerExtension = Math.max(0, Number(options.combatAttackRange ?? options.attackRange ?? DEFAULT_ATTACK_RANGE));
+  const pursuitRadius = centerRadius > 0 ? centerRadius + centerExtension : 0;
+  const selfRadius = pointRadiusFromOrigin(input?.self);
+  const targetRadius = pointRadiusFromOrigin(target);
+  const outsideCenterReason = pursuitRadius > 0 && Number.isFinite(targetRadius) && targetRadius > pursuitRadius
+    ? 'profit-pursuit-target-outside-center'
+    : (pursuitRadius > 0 && Number.isFinite(selfRadius) && selfRadius > pursuitRadius
+        ? 'profit-pursuit-self-outside-center'
+        : '');
   const cached = suppressions[targetId] || null;
-  if (cached && Number(cached.until || 0) > nowMs) {
+  if (cached && Number(cached.until || 0) > nowMs && (!closePressure || outsideCenterReason)) {
     clearSuppressedCombatTarget(stateful, targetId);
     return {
       ...cloneJson(cached),
       remainingMs: Math.max(0, Math.round(Number(cached.until || 0) - nowMs)),
-      cached: true
+      cached: true,
+      suppressed: true
     };
   }
   const dangerous = dangerousTargetCooldownRecordById(stateful, targetId, nowMs);
@@ -7614,7 +7633,24 @@ function buildProfitPursuitSuppression(input, combatDecision, stateful = {}, opt
       reason: 'profit-pursuit-dangerous-target-cooldown',
       dangerousReason: dangerous.reason || '',
       remainingMs: Math.max(0, Math.round(Number(dangerous.until || 0) - nowMs)),
-      dangerousCooldown: true
+      dangerousCooldown: true,
+      suppressed: true
+    };
+  }
+
+  if (closePressure && !outsideCenterReason) {
+    delete suppressions[targetId];
+    return {
+      suppressed: false,
+      closePressure: true,
+      reason: 'profit-pursuit-close-pressure',
+      targetId,
+      at: nowMs,
+      engagedMs: Math.round(profitPursuitEngagedMs(combatDecision, stateful, nowMs)),
+      trigger: combatDecision?.dryRun?.combatPhase?.triggerReason
+        || stateful?.combatTarget?.closePressure?.triggerReason
+        || 'stable-no-progress-engagement',
+      target: summarizeTarget(target)
     };
   }
 
@@ -7631,7 +7667,7 @@ function buildProfitPursuitSuppression(input, combatDecision, stateful = {}, opt
     };
     suppressions[targetId] = suppression;
     clearSuppressedCombatTarget(stateful, targetId);
-    return suppression;
+    return { ...suppression, suppressed: true };
   }
 
   const marginalRoiStopLoss = combatDecision?.dryRun?.marginalRoiStopLoss || null;
@@ -7647,17 +7683,12 @@ function buildProfitPursuitSuppression(input, combatDecision, stateful = {}, opt
     };
     suppressions[targetId] = suppression;
     clearSuppressedCombatTarget(stateful, targetId);
-    return suppression;
+    return { ...suppression, suppressed: true };
   }
 
-  const centerRadius = browserlessCenterActivityRadius(options);
-  const centerExtension = Math.max(0, Number(options.combatAttackRange ?? options.attackRange ?? DEFAULT_ATTACK_RANGE));
   // New ordinary-profit targets remain constrained to the dense center. An
   // already engaged target gets one attack-range of hysteresis so crossing
   // the exact circle edge cannot cancel a close finishing opportunity.
-  const pursuitRadius = centerRadius > 0 ? centerRadius + centerExtension : 0;
-  const selfRadius = pointRadiusFromOrigin(input?.self);
-  const targetRadius = pointRadiusFromOrigin(target);
   const engagedMs = profitPursuitEngagedMs(combatDecision, stateful, nowMs);
   const minDamageMs = profitPursuitMinDamageMs(options);
   const minDamageHp = profitPursuitMinDamageHp(options);
@@ -7665,18 +7696,14 @@ function buildProfitPursuitSuppression(input, combatDecision, stateful = {}, opt
   const maxMs = Math.max(0, Number(options.browserlessProfitPursuitMaxMs
     ?? BROWSER_RUNTIME_DEFAULTS.browserlessProfitPursuitMaxMs
     ?? 60000));
-  let reason = '';
-  if (pursuitRadius > 0 && Number.isFinite(targetRadius) && targetRadius > pursuitRadius) {
-    reason = 'profit-pursuit-target-outside-center';
-  } else if (pursuitRadius > 0 && Number.isFinite(selfRadius) && selfRadius > pursuitRadius) {
-    reason = 'profit-pursuit-self-outside-center';
-  } else if (minDamageMs > 0
+  let reason = outsideCenterReason;
+  if (!reason && minDamageMs > 0
     && minDamageHp > 0
     && engagedMs >= minDamageMs
     && damageProgress.known
     && Number(damageProgress.damageFromStart || 0) < minDamageHp) {
     reason = 'profit-pursuit-low-damage';
-  } else if (maxMs > 0 && engagedMs >= maxMs) {
+  } else if (!reason && maxMs > 0 && engagedMs >= maxMs) {
     reason = 'profit-pursuit-max-ms';
   }
   if (!reason) return null;
@@ -7685,6 +7712,7 @@ function buildProfitPursuitSuppression(input, combatDecision, stateful = {}, opt
     ?? BROWSER_RUNTIME_DEFAULTS.browserlessProfitPursuitSuppressMs
     ?? 60000));
   const suppression = {
+    suppressed: true,
     reason,
     targetId,
     at: nowMs,
@@ -7923,7 +7951,7 @@ function reconcileEasyKillCombatOutcome(decision, input, options = {}) {
     });
   }
   const pursuitSuppression = decision.combat?.profitPursuitSuppression || null;
-  if (pursuitSuppression?.targetId) {
+  if (pursuitSuppression?.targetId && pursuitSuppression.suppressed !== false) {
     callEasyKillPlayerTracker(options, 'finishEngagement', pursuitSuppression.targetId, pursuitSuppression.reason || 'profit-pursuit-stopped', { atMs: input.nowMs });
   }
   if (action.shouldLeave || action.kind === 'leave' || action.kind === 'safety-exit') {
@@ -8059,7 +8087,10 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
   if (combat?.dryRun && marginalRoiStopLoss) combat.dryRun.marginalRoiStopLoss = marginalRoiStopLoss;
   let dangerousCombatExit = rememberDangerousCombatExitTarget(input, combat, stateful, options);
   const combatPursuitSuppression = buildProfitPursuitSuppression(input, combat, stateful, options);
-  let combatActionEligible = isCombatActionEligibleForDecision(combat, options) && !combatPursuitSuppression;
+  const combatPursuitSuppressed = Boolean(
+    combatPursuitSuppression && combatPursuitSuppression.suppressed !== false
+  );
+  let combatActionEligible = isCombatActionEligibleForDecision(combat, options) && !combatPursuitSuppressed;
   const combatTarget = combat?.target || null;
   const postKillSettlement = reconcilePostKillSettlement(input, stateful, combat, previousCombatTarget, options);
   const combatTargetId = targetIdForAttackHistory(combatTarget);
@@ -8158,7 +8189,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     };
     if (blocked) combatActionEligible = false;
   }
-  const combatForProfit = combatPursuitSuppression
+  const combatForProfit = combatPursuitSuppressed
     ? {
         ...combat,
         target: null,
