@@ -6,8 +6,9 @@ const os = require('os');
 const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..');
+const WORKSPACE_ROOT = path.resolve(ROOT, '..');
 const DEFAULT_STATE_FILE = path.join(ROOT, '.git', 'grasp-rat-iteration-timing.json');
-const DEFAULT_DOCUMENT_FILE = path.join(ROOT, 'docs', 'iteration-records.md');
+const DEFAULT_DOCUMENT_FILE = path.join(WORKSPACE_ROOT, 'docs', 'iteration-records.md');
 const TIME_ZONE = 'Asia/Shanghai';
 const PHASE_NAMES = new Set([
   'development-end',
@@ -263,7 +264,7 @@ function appendDocument(record) {
       '',
       '本文件按时间顺序记录每次项目迭代的开发、测试验证和服务重启耗时。时间统一使用 Asia/Shanghai（UTC+8）。',
       '',
-      '记录由 `scripts/iteration-timing.js` 生成；执行规范见 `docs/agent/iteration-timing.md`。',
+      '记录由 `src/scripts/iteration-timing.js` 生成；执行规范见 `docs/agent/iteration-timing.md`。',
       '',
     ].join('\n'), 'utf8');
   }

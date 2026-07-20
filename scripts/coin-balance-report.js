@@ -7,8 +7,9 @@ const fs = require('fs');
 const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..');
+const WORKSPACE_ROOT = path.resolve(ROOT, '..');
 const DEFAULT_API_URL = 'https://elysiver.h-e.top/api/log/self';
-const DEFAULT_REPORT_ROOT = path.join(ROOT, 'docs', 'reports');
+const DEFAULT_REPORT_ROOT = path.join(WORKSPACE_ROOT, 'docs', 'reports');
 const DEFAULT_PAGE_SIZE = 100;
 const DEFAULT_DELAY_MS = 4000;
 const DEFAULT_TIMEOUT_MS = 20000;
@@ -61,7 +62,7 @@ function printHelp() {
 
 Fetches game coin balance-change logs from Elysiver and writes a monthly Markdown report.
 A local .env file is loaded automatically when present.
-The settled fetch method is documented in docs/agent/coin-balance-reporting.md.
+The maintainer workflow is documented in the adjacent private docs repository.
 
 Auth environment variables:
   ELYSIVER_COOKIE          Full Cookie header value, or use the three vars below.
@@ -73,7 +74,7 @@ Auth environment variables:
 Options:
   --month YYYY-MM          Generate a natural-month report.
   --day YYYY-MM-DD         Fetch and summarize one day instead.
-  --out <file>             Output Markdown path. Default: docs/reports/YYYY-MM/monthly-YYYY-MM.md
+  --out <file>             Output Markdown path. Default: ../docs/reports/YYYY-MM/monthly-YYYY-MM.md
   --json                   Print JSON to stdout instead of Markdown.
   --page-size <n>          API page size. Default: ${DEFAULT_PAGE_SIZE}
   --delay-ms <ms>          Delay between API requests. Default: ${DEFAULT_DELAY_MS}
@@ -687,7 +688,7 @@ function runSelfTest() {
   assert(markdown.includes('| 00:00:02 | Alice | 拾取 | +12 |'));
   assert(markdown.includes('| 00:00:03 | Bob | 死亡 | -7 |'));
   assert(markdown.includes('死亡损失金币（总计）：7'));
-  assert.strictEqual(defaultMonthlyReportPath('2026-06'), path.join(ROOT, 'docs', 'reports', '2026-06', 'monthly-2026-06.md'));
+  assert.strictEqual(defaultMonthlyReportPath('2026-06'), path.join(WORKSPACE_ROOT, 'docs', 'reports', '2026-06', 'monthly-2026-06.md'));
   console.log('coin-balance-report self-test passed');
 }
 

@@ -2,6 +2,7 @@
 *.pid
 *-state.json
 AGENTS.md
+docs/
 grasp-rat-debug-events.log
 debug-artifacts/
 headless-demo/data/

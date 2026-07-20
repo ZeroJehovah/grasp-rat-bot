@@ -6,7 +6,7 @@ const os = require('os');
 const path = require('path');
 
 const DEFAULT_DIR = path.join(__dirname, 'logs');
-const DEFAULT_REPORT_ROOT = path.join(__dirname, '..', 'docs', 'reports');
+const DEFAULT_REPORT_ROOT = path.join(__dirname, '..', '..', 'docs', 'reports');
 const JSONL_READ_CHUNK_BYTES = 1024 * 1024;
 
 function parseArgs(args) {
@@ -42,7 +42,7 @@ function printHelp() {
 Options:
   --dir <dir>   Log root directory. Default: ./logs
   --day <day>   Day directory, e.g. 2026-06-13. Default: latest day
-  --out <file>  Output Markdown path. Default: ../docs/reports/YYYY-MM/daily-YYYY-MM-DD.md
+  --out <file>  Output Markdown path. Default: ../../docs/reports/YYYY-MM/daily-YYYY-MM-DD.md
   --stdout      Print Markdown to stdout instead of writing the default report file
   --json        Print machine-readable JSON
   --self-test   Run daily-summary regression checks
@@ -2384,7 +2384,7 @@ function runSelfTest() {
   assertSelfTest(clippedRewardSession.pureRefreshCoins === 0, 'clipped session should not carry untimestamped refresh coins across day boundary');
   assertSelfTest(clippedRewardSession.afkKillCount === 1 && clippedRewardSession.activeKillCount === 0, 'clipped session kept kills outside report day');
   assertSelfTest(reasonText('login-before-session-end:no-self', '重新登录前上一局已不可用，按登录前收口').includes('上一局已经不可用'), 'login-before no-self closeout was not explained');
-  assertSelfTest(defaultDailyReportPath('2026-06-13') === path.join(__dirname, '..', 'docs', 'reports', '2026-06', 'daily-2026-06-13.md'), 'default daily report path is not under docs/reports/YYYY-MM');
+  assertSelfTest(defaultDailyReportPath('2026-06-13') === path.join(__dirname, '..', '..', 'docs', 'reports', '2026-06', 'daily-2026-06-13.md'), 'default daily report path is not under docs/reports/YYYY-MM');
   assertSelfTest(
     sessionStatusText({
       inferredExit: true,
