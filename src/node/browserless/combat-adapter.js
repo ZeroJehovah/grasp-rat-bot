@@ -35,6 +35,11 @@ const {
 } = require('../../strategy/combat-exit');
 const { opponentMotionProfileCore, quadraticInterceptCore } = require('../../strategy/combat-aim');
 const {
+  buildTrajectoryCoveragePlanCore,
+  normalizeTrajectoryCoverageMode,
+  shouldApplyTrajectoryCoverageCore
+} = require('../../strategy/combat-shot-coverage');
+const {
   behaviorLearningBaseKey,
   behaviorLearningKey,
   movementDirectionState,
@@ -1205,6 +1210,7 @@ function estimateAim(self, target, options = {}) {
     noDamageMs: Math.round(noDamageMs),
     noDamageLevel,
     noDamageWidened,
+    successfulAimProtection,
     spreadScale: noDamageWidened ? Math.round((1 + Math.min(1, noDamageLevel * 0.2)) * 100) / 100 : 1,
     opponentProfile: profile,
     opponentBehavior: behavior ? {
@@ -2186,7 +2192,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     if ([startX, startY, currentX, currentY].some(value => value === null)) return null;
     return Math.round(Math.hypot(currentX - startX, currentY - startY));
   })();
-  const aim = estimateAim(self, target, {
+  let aim = estimateAim(self, target, {
     ...options,
     combatTargetState,
     observedTick: realtime.tick,
@@ -2196,6 +2202,141 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     actualShots: stateful?.combatMetrics?.acceptedShots || stateful?.combatMetrics?.actualShots || 0
   });
   if (!aim.ok) dataGaps.push(aim.reason);
+  if (aim.ok) {
+    const requestedCoverageMode = normalizeTrajectoryCoverageMode(options.combatTrajectoryCoverageMode, 'shadow');
+    const transitionDiagnostics = aim.routeCoverage?.movementTransition || null;
+    const highEntropyCoverage = Boolean(
+      aim.fireRiskClassification?.highEntropy
+      || /^high-entropy-/.test(String(aim.routeCoverage?.style || ''))
+    );
+    const learnedCoverageReady = Number(transitionDiagnostics?.conditionalSampleCount || 0) >= 12
+      || Number(transitionDiagnostics?.globalSamples || 0) >= 8;
+    const coverageHitSummary = recentAcceptedShotHitSummary(stateful, combatTargetId(target), 15);
+    const coverageSuccessfulAimProtected = coverageHitSummary.shotCount >= 10
+      && coverageHitSummary.hitRate >= 0.12;
+    const coverageEligible = Boolean(
+      requestedCoverageMode !== 'off'
+      && target
+      && !contactEntryOnly
+      && aim.routeCoverage?.candidates?.length
+      && aim.fireReachability?.unreachable !== true
+      && (highEntropyCoverage || learnedCoverageReady)
+    );
+    const effectiveCoverageMode = requestedCoverageMode === 'live-volley' ? 'shadow' : requestedCoverageMode;
+    const targetId = String(combatTargetId(target) || '');
+    const coverageSessionId = targetId && combatStartedAtMs !== null
+      ? `${targetId}:${Math.round(combatStartedAtMs)}`
+      : '';
+    const plan = coverageEligible
+      ? buildTrajectoryCoveragePlanCore({
+          targetId,
+          createdTick: numberOrNull(aim.timing?.createdTickEstimate) ?? numberOrNull(realtime.tick) ?? 0,
+          executionDelayTicks: numberOrNull(aim.timing?.executionDelayTicks) ?? 5,
+          controlIntervalTicks: Math.max(1, Math.ceil(Number(options.combatControlIntervalMs || 160) / 50)),
+          learnedDwellTicks: 0,
+          flightTicks: aim.flightTicks,
+          predictedShooterOrigin: aim.predictedShooterOrigin,
+          predictedTargetAtCreation: aim.predictedTargetAtCreation,
+          target,
+          routeCandidates: aim.routeCoverage.candidates,
+          existingShots: [
+            ...(state?.command?.shooting?.pendingShots || []),
+            ...(state?.command?.shooting?.confirmedShots || [])
+          ]
+        }, {
+          bulletSpeedCmPerTick: COMBAT_CONSTANTS.BULLET_SPEED_CM_PER_TICK,
+          bulletLifetimeTicks: Math.round(COMBAT_CONSTANTS.BULLET_RANGE_CM / COMBAT_CONSTANTS.BULLET_SPEED_CM_PER_TICK),
+          hitRadiusCm: COMBAT_CONSTANTS.BULLET_HIT_RADIUS_CM,
+          minimumMarginalCoverage: 0.02
+        })
+      : {
+          active: false,
+          reason: requestedCoverageMode === 'off'
+            ? 'coverage-disabled'
+            : (!aim.routeCoverage?.candidates?.length
+                ? 'no-route-coverage'
+                : (aim.fireReachability?.unreachable === true
+                    ? 'intercept-unreachable'
+                    : 'coverage-evidence-not-ready')),
+          selected: null,
+          existingCoverageMass: 0,
+          existingHardCoverageMass: 0,
+          existingShotCount: 0,
+          candidateCount: 0,
+          trajectoryCount: 0,
+          clusters: [],
+          candidates: []
+        };
+    const applied = shouldApplyTrajectoryCoverageCore({
+      mode: effectiveCoverageMode,
+      highEntropy: highEntropyCoverage,
+      successfulAimProtected: coverageSuccessfulAimProtected,
+      planActive: plan.active === true,
+      hasSelection: Boolean(plan.selected)
+    });
+    if (applied) {
+      const selectedCandidate = aim.routeCoverage?.candidates?.find(candidate => (
+        String(candidate.hypothesis || '') === String(plan.selected.hypothesis || '')
+      ));
+      aim = {
+        ...aim,
+        x: plan.selected.aimX,
+        y: plan.selected.aimY,
+        mode: `trajectory-coverage-${plan.selected.hypothesis}-${plan.selected.variant}`,
+        flightTicks: plan.selected.interceptTick,
+        leadDistance: Math.round(Math.hypot(
+          Number(plan.selected.aimX) - Number(target.x),
+          Number(plan.selected.aimY) - Number(target.y)
+        )),
+        routeCoverage: {
+          ...aim.routeCoverage,
+          selected: plan.selected.hypothesis,
+          selectedVariant: plan.selected.variant,
+          candidates: aim.routeCoverage.candidates.map(candidate => ({
+            ...candidate,
+            selectedByTrajectoryCoverage: String(candidate.hypothesis || '') === String(plan.selected.hypothesis || '')
+          }))
+        },
+        motionProbe: {
+          ...(aim.motionProbe || {}),
+          hypothesis: plan.selected.hypothesis,
+          trajectoryVariant: plan.selected.variant,
+          trajectoryCoverage: true
+        },
+        trajectoryCoverage: null
+      };
+      if (selectedCandidate?.expectedHitProbability !== undefined) {
+        aim.expectedHitProbability = selectedCandidate.expectedHitProbability;
+      }
+    }
+    aim.trajectoryCoverage = {
+      requestedMode: requestedCoverageMode,
+      mode: effectiveCoverageMode,
+      applied,
+      active: Boolean(plan.active),
+      successfulAimProtected: coverageSuccessfulAimProtected,
+      successfulAimShotCount: coverageHitSummary.shotCount,
+      successfulAimHitRate: coverageHitSummary.hitRate,
+      reason: requestedCoverageMode === 'live-volley'
+        ? 'live-volley-awaits-live-single-acceptance'
+        : (effectiveCoverageMode === 'live-single' && plan.active && coverageSuccessfulAimProtected
+            ? 'live-single-successful-aim-protected'
+            : (effectiveCoverageMode === 'live-single' && plan.active && !highEntropyCoverage
+                ? 'live-single-requires-high-entropy'
+                : plan.reason)),
+      sessionId: coverageSessionId,
+      slot: 1,
+      selected: plan.selected,
+      existingCoverageMass: plan.existingCoverageMass,
+      existingHardCoverageMass: plan.existingHardCoverageMass,
+      existingShotCount: plan.existingShotCount,
+      candidateCount: plan.candidateCount,
+      trajectoryCount: plan.trajectoryCount,
+      clusters: plan.clusters,
+      candidates: plan.candidates,
+      actualAim: { x: aim.x, y: aim.y }
+    };
+  }
   if (stateful && typeof stateful === 'object' && aim.ok) {
     stateful.combatAim = {
       targetId: combatTargetId(target),
@@ -2208,6 +2349,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
       noDamageWidened: aim.noDamageWidened,
       noDamageLevel: aim.noDamageLevel,
       motionProbe: aim.motionProbe,
+      trajectoryCoverage: aim.trajectoryCoverage,
       opponentBehavior: aim.opponentBehavior,
       at: Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now()
     };
@@ -2516,6 +2658,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
       highEntropyFireGate,
       probePhase: probeState,
       fireRiskClassification: aim.fireRiskClassification || combatTargetState?.fireRiskClassification || null,
+      trajectoryCoverage: aim.trajectoryCoverage || null,
       expectedHitProbability,
       selectedRouteProbability,
       recentAcceptedHitRate: recentHitSummary.hitRate,

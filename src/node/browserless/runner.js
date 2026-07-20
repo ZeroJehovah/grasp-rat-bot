@@ -141,6 +141,7 @@ function publicConfig(config) {
     browserlessProfitPursuitMinDamageHp: Number(config.browserlessProfitPursuitMinDamageHp || 0),
     combatEnabled: Boolean(config.combatEnabled),
     combatShootMinIntervalMs: Number(config.combatShootMinIntervalMs || 0),
+    combatTrajectoryCoverageMode: String(config.combatTrajectoryCoverageMode || 'shadow'),
     wsTraceEnabled: Boolean(config.wsTraceEnabled),
     wsTracePayload: Boolean(config.wsTracePayload),
     wsTraceMaxPayloadChars: Number(config.wsTraceMaxPayloadChars || 0),

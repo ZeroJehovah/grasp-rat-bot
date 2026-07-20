@@ -969,7 +969,18 @@ function createBrowserlessActionAdapter(options = {}) {
       predictedShooterX: numberOrNull(shotMeta.predictedShooterX),
       predictedShooterY: numberOrNull(shotMeta.predictedShooterY),
       predictedTargetAtCreationX: numberOrNull(shotMeta.predictedTargetAtCreationX),
-      predictedTargetAtCreationY: numberOrNull(shotMeta.predictedTargetAtCreationY)
+      predictedTargetAtCreationY: numberOrNull(shotMeta.predictedTargetAtCreationY),
+      coverageMode: String(shotMeta.coverageMode || ''),
+      coverageSessionId: String(shotMeta.coverageSessionId || ''),
+      coverageSlot: numberOrNull(shotMeta.coverageSlot),
+      coverageSelectedTrajectory: String(shotMeta.coverageSelectedTrajectory || ''),
+      coverageVariant: String(shotMeta.coverageVariant || ''),
+      coverageMassBefore: numberOrNull(shotMeta.coverageMassBefore),
+      coverageMassAfter: numberOrNull(shotMeta.coverageMassAfter),
+      marginalCoverage: numberOrNull(shotMeta.marginalCoverage),
+      hardMarginalCoverage: numberOrNull(shotMeta.hardMarginalCoverage),
+      coverageAimX: numberOrNull(shotMeta.coverageAimX),
+      coverageAimY: numberOrNull(shotMeta.coverageAimY)
     };
     nextCommandId += 1;
     state.sentCount += 1;
@@ -999,7 +1010,18 @@ function createBrowserlessActionAdapter(options = {}) {
           predictedShooterX: command.predictedShooterX,
           predictedShooterY: command.predictedShooterY,
           predictedTargetAtCreationX: command.predictedTargetAtCreationX,
-          predictedTargetAtCreationY: command.predictedTargetAtCreationY
+          predictedTargetAtCreationY: command.predictedTargetAtCreationY,
+          coverageMode: command.coverageMode,
+          coverageSessionId: command.coverageSessionId,
+          coverageSlot: command.coverageSlot,
+          coverageSelectedTrajectory: command.coverageSelectedTrajectory,
+          coverageVariant: command.coverageVariant,
+          coverageMassBefore: command.coverageMassBefore,
+          coverageMassAfter: command.coverageMassAfter,
+          marginalCoverage: command.marginalCoverage,
+          hardMarginalCoverage: command.hardMarginalCoverage,
+          coverageAimX: command.coverageAimX,
+          coverageAimY: command.coverageAimY
         });
       } catch (_) {}
     }
@@ -1552,7 +1574,18 @@ function createBrowserlessActionAdapter(options = {}) {
             predictedShooterX: combat.aim?.predictedShooterOrigin?.x,
             predictedShooterY: combat.aim?.predictedShooterOrigin?.y,
             predictedTargetAtCreationX: combat.aim?.predictedTargetAtCreation?.x,
-            predictedTargetAtCreationY: combat.aim?.predictedTargetAtCreation?.y
+            predictedTargetAtCreationY: combat.aim?.predictedTargetAtCreation?.y,
+            coverageMode: combat.aim?.trajectoryCoverage?.mode,
+            coverageSessionId: combat.aim?.trajectoryCoverage?.sessionId,
+            coverageSlot: combat.aim?.trajectoryCoverage?.slot,
+            coverageSelectedTrajectory: combat.aim?.trajectoryCoverage?.selected?.hypothesis,
+            coverageVariant: combat.aim?.trajectoryCoverage?.selected?.variant,
+            coverageMassBefore: combat.aim?.trajectoryCoverage?.selected?.coverageMassBefore,
+            coverageMassAfter: combat.aim?.trajectoryCoverage?.selected?.coverageMassAfter,
+            marginalCoverage: combat.aim?.trajectoryCoverage?.selected?.marginalCoverage,
+            hardMarginalCoverage: combat.aim?.trajectoryCoverage?.selected?.hardMarginalCoverage,
+            coverageAimX: combat.aim?.trajectoryCoverage?.selected?.aimX,
+            coverageAimY: combat.aim?.trajectoryCoverage?.selected?.aimY
           }
         );
       }

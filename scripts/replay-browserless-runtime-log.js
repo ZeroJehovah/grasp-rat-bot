@@ -25,6 +25,7 @@ const {
   contactEntrySyntheticBulletCore,
   pickSafeClosingDodgeCore
 } = require('../src/strategy/combat-movement');
+const { buildTrajectoryCoveragePlanCore } = require('../src/strategy/combat-shot-coverage');
 const {
   combatEdgePressureDecisionCore,
   combatEscapeDecisionCore
@@ -169,6 +170,12 @@ function percentile(values, ratio) {
 function numberOrNull(value) {
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
+}
+
+function normalizeVector(dx, dy) {
+  const length = Math.hypot(Number(dx) || 0, Number(dy) || 0);
+  if (!(length > 0)) return { x: 0, y: 0 };
+  return { x: (Number(dx) || 0) / length, y: (Number(dy) || 0) / length };
 }
 
 function targetAtTick(rows, tick) {
@@ -496,6 +503,11 @@ function replayCombat(options) {
   const state = { motionSamples: [] };
   const baselineMisses = [];
   const improvedMisses = [];
+  const trajectoryCoverageMisses = [];
+  const trajectoryCoverageSelections = {};
+  const trajectoryCoverageVirtualShots = [];
+  let trajectoryCoverageActiveShots = 0;
+  let trajectoryCoverageFallbackShots = 0;
   const shotEvaluations = [];
   let baselineFirstHitAt = 0;
   let improvedFirstHitAt = 0;
@@ -552,6 +564,76 @@ function replayCombat(options) {
     state.fireRiskClassification = improved.fireRiskClassification || state.fireRiskClassification || null;
     const baselineMiss = bulletCorridorMiss(rows, shot.ack);
     const improvedMiss = bulletCorridorMiss(rows, shot.ack, improved);
+    const coverageEligible = Boolean(
+      (improved.fireRiskClassification?.highEntropy
+        || /^high-entropy-/.test(String(improved.routeCoverage?.style || '')))
+      && improved.routeCoverage?.candidates?.length
+      && improved.fireReachability?.unreachable !== true
+    );
+    const coveragePlan = coverageEligible
+      ? buildTrajectoryCoveragePlanCore({
+          targetId: options.targetId,
+          createdTick,
+          executionDelayTicks: improved.timing?.executionDelayTicks ?? options.executionDelayTicks,
+          controlIntervalTicks: Math.max(1, Math.ceil(Number(options.controlIntervalMs || 160) / 50)),
+          learnedDwellTicks: 0,
+          flightTicks: improved.flightTicks,
+          predictedShooterOrigin: {
+            x: Number(shot.ack.start_x),
+            y: Number(shot.ack.start_y)
+          },
+          predictedTargetAtCreation: improved.predictedTargetAtCreation,
+          target: row.detail.target,
+          routeCandidates: improved.routeCoverage.candidates,
+          existingShots: trajectoryCoverageVirtualShots
+        }, {
+          bulletSpeedCmPerTick: Number(shot.ack.speed_per_tick || 500),
+          bulletLifetimeTicks: Math.max(1, Number(shot.ack.expire_tick || createdTick + 30) - createdTick),
+          hitRadiusCm: options.hitRadius,
+          minimumMarginalCoverage: 0.02
+        })
+      : null;
+    const coverageRecentShotCount = Number(row.detail.shooting?.recentAcceptedShotCount || 0);
+    const coverageRecentHitRate = Number(row.detail.shooting?.recentAcceptedHitRate || 0);
+    const coverageSuccessfulAimProtected = coverageRecentShotCount >= 10 && coverageRecentHitRate >= 0.12;
+    const coverageApplied = Boolean(
+      coveragePlan?.active
+      && coveragePlan.selected
+      && !coverageSuccessfulAimProtected
+    );
+    const coverageAim = coverageApplied
+      ? { x: coveragePlan.selected.aimX, y: coveragePlan.selected.aimY }
+      : improved;
+    const trajectoryCoverageMiss = bulletCorridorMiss(rows, shot.ack, coverageAim);
+    trajectoryCoverageMisses.push(trajectoryCoverageMiss);
+    if (coverageApplied) {
+      trajectoryCoverageActiveShots += 1;
+      const key = `${coveragePlan.selected.hypothesis}:${coveragePlan.selected.variant}`;
+      trajectoryCoverageSelections[key] = Number(trajectoryCoverageSelections[key] || 0) + 1;
+    } else {
+      trajectoryCoverageFallbackShots += 1;
+    }
+    const coverageDirection = normalizeVector(
+      Number(coverageAim.x) - Number(shot.ack.start_x),
+      Number(coverageAim.y) - Number(shot.ack.start_y)
+    );
+    trajectoryCoverageVirtualShots.push({
+      id: `coverage-${String(shot.ack.bullet_id ?? shotEvaluations.length)}`,
+      targetId: options.targetId,
+      startX: Number(shot.ack.start_x),
+      startY: Number(shot.ack.start_y),
+      directionX: coverageDirection.x,
+      directionY: coverageDirection.y,
+      createdTick,
+      expireTick: Number(shot.ack.expire_tick || createdTick + 30),
+      speedPerTick: Number(shot.ack.speed_per_tick || 500),
+      coverageAimX: Number(coverageAim.x),
+      coverageAimY: Number(coverageAim.y)
+    });
+    while (trajectoryCoverageVirtualShots.length
+      && Number(trajectoryCoverageVirtualShots[0].expireTick || 0) < createdTick) {
+      trajectoryCoverageVirtualShots.shift();
+    }
     const routeCandidateMisses = Object.fromEntries((improved.routeCoverage?.candidates || []).map(candidate => [
       candidate.hypothesis,
       bulletCorridorMiss(rows, shot.ack, candidate)
@@ -563,6 +645,8 @@ function replayCombat(options) {
       shot,
       baselineMiss,
       improvedMiss,
+      trajectoryCoverageMiss,
+      trajectoryCoveragePlan: coveragePlan,
       aimMode: improved.mode || '',
       hypothesis: improved.motionProbe?.hypothesis || 'baseline',
       routeStyle: improved.routeCoverage?.style || '',
@@ -832,6 +916,27 @@ function replayCombat(options) {
     minimumMissCm: theoreticalMisses.length ? Number(Math.min(...theoreticalMisses).toFixed(1)) : null,
     hitRadiusCm: options.hitRadius
   };
+  const trajectoryCoverageHits = trajectoryCoverageMisses.filter(value => value <= options.hitRadius).length;
+  const trajectoryCoverageReplay = {
+    shots: trajectoryCoverageMisses.length,
+    activeShots: trajectoryCoverageActiveShots,
+    fallbackShots: trajectoryCoverageFallbackShots,
+    estimatedHits: trajectoryCoverageHits,
+    estimatedTargetDamage: trajectoryCoverageHits * 3,
+    meanAimMissCm: trajectoryCoverageMisses.length
+      ? Number((trajectoryCoverageMisses.reduce((sum, value) => sum + value, 0) / trajectoryCoverageMisses.length).toFixed(1))
+      : null,
+    p50AimMissCm: percentile(trajectoryCoverageMisses, 0.5),
+    p90AimMissCm: percentile(trajectoryCoverageMisses, 0.9),
+    firstEstimatedDamageDelayMs: (() => {
+      const index = trajectoryCoverageMisses.findIndex(value => value <= options.hitRadius);
+      return index >= 0 ? Math.max(0, Number(confirmedShots[index]?.at || 0) - Number(confirmedShots[0]?.at || 0)) : null;
+    })(),
+    selections: Object.entries(trajectoryCoverageSelections)
+      .map(([key, count]) => ({ key, count }))
+      .sort((a, b) => b.count - a.count || a.key.localeCompare(b.key))
+      .slice(0, 12)
+  };
   const result = {
     mode: 'combat',
     targetId: options.targetId,
@@ -879,6 +984,7 @@ function replayCombat(options) {
     exchangeStopLossReplay,
     fireDisciplineReplay,
     physicalReachability,
+    trajectoryCoverageReplay,
     aimDiagnostics,
     routeCandidateOracle
   };
@@ -894,6 +1000,23 @@ function replayCombat(options) {
       ))
   );
   return result;
+}
+
+function replayCombatShotCoverage(options) {
+  const combat = replayCombat(options);
+  const coverage = combat.trajectoryCoverageReplay || {};
+  return {
+    mode: 'combat-shot-coverage',
+    targetId: options.targetId,
+    lines: combat.lines,
+    frames: combat.frames,
+    baseline: combat.baseline,
+    singleRouteReplay: combat.improved,
+    coverage,
+    accepted: Number(coverage.estimatedHits || 0) >= 36
+      && Number(coverage.meanAimMissCm || Infinity) <= 400
+      && Number(coverage.p50AimMissCm || Infinity) <= 350
+  };
 }
 
 function fitLegacyThreatImpactPoint(detail, threatField, tickMs = 50, moveSpeedPerTick = 50) {
@@ -3255,6 +3378,7 @@ function runReplay(options) {
   if (options.mode === 'combat-pursuit') return replayCombatPursuit(options);
   if (options.mode === 'arbitration') return replayArbitration(options);
   if (options.mode === 'combat-close-pressure') return replayCombatClosePressure(options);
+  if (options.mode === 'combat-shot-coverage') return replayCombatShotCoverage(options);
   if (options.mode === 'combat-policy') return replayCombatPolicy(options);
   if (options.mode === 'dodge') return replayDodge(options);
   return replayCombat(options);
@@ -3270,6 +3394,7 @@ if (require.main === module) {
 module.exports = {
   parseArgs,
   replayCombatClosePressure,
+  replayCombatShotCoverage,
   replayCombatPursuit,
   replayEasyKillContinuity,
   replayLeaveTail,

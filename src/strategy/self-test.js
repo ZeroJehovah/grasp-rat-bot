@@ -11,6 +11,12 @@ const { applyFinalActionArbitration } = require('./action-arbitration');
 const { buildFinalActionCandidate, selectFinalActionCandidateCore } = require('./final-candidate-selection');
 const { quadraticInterceptCore } = require('./combat-aim');
 const {
+  buildTrajectoryCoveragePlanCore,
+  buildTrajectoryPathsCore,
+  shouldApplyTrajectoryCoverageCore,
+  shotCorridorMissCore
+} = require('./combat-shot-coverage');
+const {
   classifyFireRiskCore,
   evaluateHighEntropyFireGateCore,
   updateCombatProbePhaseCore
@@ -4089,6 +4095,118 @@ function runStrategyModuleSelfTests() {
       && confirmedDisadvantage.disadvantageObservation?.ready === true
       && damageConfirmedDisadvantage.exit?.reason === 'combat-hp-disadvantage-leave'
       && damageConfirmedDisadvantage.disadvantageObservation?.kind === 'confirmed-target-damage'
+  });
+
+  const coverageInput = {
+    targetId: 'target-1',
+    createdTick: 100,
+    executionDelayTicks: 5,
+    controlIntervalTicks: 4,
+    flightTicks: 16,
+    predictedShooterOrigin: { x: 0, y: 0 },
+    predictedTargetAtCreation: { x: 8000, y: 0, vx: 0, vy: 50 },
+    target: { x: 7750, y: 0, vx: 0, vy: 50 },
+    routeCandidates: [
+      { hypothesis: 'stop', probability: 0.4, x: 8000, y: 0, uncertaintyCm: 800 },
+      { hypothesis: 'continue', probability: 0.3, x: 8000, y: 800, uncertaintyCm: 800 },
+      { hypothesis: 'left-turn', probability: 0.15, x: 7200, y: 0, uncertaintyCm: 800 },
+      { hypothesis: 'right-turn', probability: 0.15, x: 8800, y: 0, uncertaintyCm: 800 }
+    ]
+  };
+  const coveragePaths = buildTrajectoryPathsCore(coverageInput, { maxTrajectoryTicks: 30 });
+  const firstCoverage = buildTrajectoryCoveragePlanCore(coverageInput, { minimumMarginalCoverage: 0 });
+  const coveredStop = firstCoverage.selected ? {
+    id: 'covered-stop',
+    targetId: 'target-1',
+    startX: 0,
+    startY: 0,
+    targetX: firstCoverage.selected.aimX,
+    targetY: firstCoverage.selected.aimY,
+    observedTick: 95,
+    predictedCreatedTick: 100,
+    expireTick: 130
+  } : null;
+  const secondCoverage = buildTrajectoryCoveragePlanCore({
+    ...coverageInput,
+    existingShots: [coveredStop]
+  }, { minimumMarginalCoverage: 0 });
+  const stopPath = coveragePaths.find(path => path.id === 'stop:immediate');
+  const directStopMiss = shotCorridorMissCore({
+    startX: 0,
+    startY: 0,
+    aimX: 8000,
+    aimY: 0,
+    startTick: 100,
+    expireTick: 130
+  }, stopPath, coverageInput, {});
+  results.push({
+    name: 'combat-shot-coverage-bounds-paths-and-selects-complementary-second-shot',
+    passed: coveragePaths.length === 8
+      && firstCoverage.active === true
+      && secondCoverage.active === true
+      && secondCoverage.selected?.id !== firstCoverage.selected?.id
+      && secondCoverage.selected?.marginalCoverage > 0
+      && secondCoverage.selected?.coverageMassAfter > firstCoverage.selected?.coverageMassAfter
+      && directStopMiss <= 90
+  });
+
+  const staleCoverage = buildTrajectoryCoveragePlanCore({
+    ...coverageInput,
+    existingShots: [{
+      id: 'expired',
+      targetId: 'target-1',
+      startX: 0,
+      startY: 0,
+      targetX: 8000,
+      targetY: 0,
+      createdTick: 60,
+      expireTick: 90
+    }]
+  }, { minimumMarginalCoverage: 0 });
+  results.push({
+    name: 'combat-shot-coverage-ignores-expired-and-other-target-shots',
+    passed: staleCoverage.existingShotCount === 0
+      && buildTrajectoryCoveragePlanCore({
+        ...coverageInput,
+        existingShots: [{
+          id: 'other-target',
+          targetId: 'target-2',
+          startX: 0,
+          startY: 0,
+          targetX: 8000,
+          targetY: 0,
+          createdTick: 100,
+          expireTick: 130
+        }]
+      }, { minimumMarginalCoverage: 0 }).existingShotCount === 0
+  });
+  results.push({
+    name: 'combat-shot-coverage-live-single-requires-high-entropy-and-active-selection',
+    passed: shouldApplyTrajectoryCoverageCore({
+      mode: 'live-single',
+      highEntropy: true,
+      planActive: true,
+      hasSelection: true
+    }) === true
+      && shouldApplyTrajectoryCoverageCore({
+        mode: 'live-single',
+        highEntropy: false,
+        planActive: true,
+        hasSelection: true
+      }) === false
+      && shouldApplyTrajectoryCoverageCore({
+        mode: 'live-single',
+        highEntropy: true,
+        successfulAimProtected: true,
+        planActive: true,
+        hasSelection: true
+      }) === false
+      && shouldApplyTrajectoryCoverageCore({
+        mode: 'shadow',
+        highEntropy: true,
+        planActive: true,
+        hasSelection: true
+      }) === false
   });
 
   // Test opportunity constants validation

@@ -60,6 +60,7 @@ function buildRuntimeDefaults(config, combatLogEndpointConfigured) {
     combatClosePressureReserveMs: numberDefault(config.combatClosePressureReserveMs, 2600),
     combatClosePressureMinSelfHp: numberDefault(config.combatClosePressureMinSelfHp, 60),
     combatClosePressureMaxHpGap: numberDefault(config.combatClosePressureMaxHpGap, 20),
+    combatTrajectoryCoverageMode: String(config.combatTrajectoryCoverageMode || 'shadow').trim().toLowerCase(),
     combatLowValueActiveDropMax: 4,
     combatProactiveActiveKillStaminaBudgetMs: 100000,
     highValueCoinPriorityAmount: 10,

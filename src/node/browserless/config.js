@@ -75,6 +75,7 @@ const DEFAULTS = {
   combatClosePressureReserveMs: 2600,
   combatClosePressureMinSelfHp: 60,
   combatClosePressureMaxHpGap: 20,
+  combatTrajectoryCoverageMode: 'shadow',
   wsTraceEnabled: false,
   wsTracePayload: true,
   wsTraceMaxPayloadChars: 0,
@@ -107,6 +108,14 @@ function numberEnv(value, fallback) {
   if (value === undefined || value === null || value === '') return fallback;
   const number = Number(value);
   return Number.isFinite(number) ? number : fallback;
+}
+
+function trajectoryCoverageMode(value, fallback = 'shadow') {
+  const allowed = new Set(['off', 'shadow', 'live-single', 'live-volley']);
+  const normalized = String(value || '').trim().toLowerCase();
+  if (allowed.has(normalized)) return normalized;
+  const normalizedFallback = String(fallback || '').trim().toLowerCase();
+  return allowed.has(normalizedFallback) ? normalizedFallback : 'shadow';
 }
 
 function listEnv(value, fallback = []) {
@@ -200,6 +209,10 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
     combatClosePressureReserveMs: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_CLOSE_PRESSURE_RESERVE_MS, DEFAULTS.combatClosePressureReserveMs),
     combatClosePressureMinSelfHp: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_CLOSE_PRESSURE_MIN_SELF_HP, DEFAULTS.combatClosePressureMinSelfHp),
     combatClosePressureMaxHpGap: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_CLOSE_PRESSURE_MAX_HP_GAP, DEFAULTS.combatClosePressureMaxHpGap),
+    combatTrajectoryCoverageMode: trajectoryCoverageMode(
+      env.GRASP_RAT_BROWSERLESS_COMBAT_TRAJECTORY_COVERAGE_MODE,
+      DEFAULTS.combatTrajectoryCoverageMode
+    ),
     wsTraceEnabled: boolEnv(env.GRASP_RAT_BROWSERLESS_WS_TRACE_ENABLED ?? env.GRASP_RAT_BROWSERLESS_WS_TRACE, DEFAULTS.wsTraceEnabled),
     wsTracePayload: boolEnv(env.GRASP_RAT_BROWSERLESS_WS_TRACE_PAYLOAD, DEFAULTS.wsTracePayload),
     wsTraceMaxPayloadChars: numberEnv(env.GRASP_RAT_BROWSERLESS_WS_TRACE_MAX_PAYLOAD_CHARS, DEFAULTS.wsTraceMaxPayloadChars),
@@ -366,6 +379,8 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
       config.combatClosePressureMinSelfHp = numberEnv(argv[++i], config.combatClosePressureMinSelfHp);
     } else if (arg === '--combat-close-pressure-max-hp-gap') {
       config.combatClosePressureMaxHpGap = numberEnv(argv[++i], config.combatClosePressureMaxHpGap);
+    } else if (arg === '--combat-trajectory-coverage-mode') {
+      config.combatTrajectoryCoverageMode = trajectoryCoverageMode(argv[++i], config.combatTrajectoryCoverageMode);
     } else if (arg === '--ws-trace') {
       config.wsTraceEnabled = true;
     } else if (arg === '--no-ws-trace') {
@@ -478,6 +493,7 @@ function usage() {
     '  --combat-close-pressure-reserve-ms <ms>  Close-pressure stamina reserve. Default: 2600',
     '  --combat-close-pressure-min-self-hp <hp>  Minimum HP for exchange continuation. Default: 60',
     '  --combat-close-pressure-max-hp-gap <hp>  Maximum target HP lead for continuation. Default: 20',
+    '  --combat-trajectory-coverage-mode <mode>  Multi-trajectory aim mode: off|shadow|live-single|live-volley. Default: shadow',
     '  --ws-trace              Write decoded WebSocket frame/command trace to ws.jsonl',
     '  --no-ws-trace           Disable WebSocket trace logging',
     '  --ws-trace-summary-only  Log WebSocket frame summaries without decoded payloads',

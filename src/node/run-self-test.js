@@ -14643,6 +14643,139 @@ async function runSelfTest() {
       want: 'high-entropy-robust-stop|stop|stop|high-entropy-bounded-exploration|continue|2'
     },
     {
+      name: 'browserless trajectory coverage defaults to shadow and live-single alone applies aim',
+      got: (() => {
+        const run = (mode, highEntropy = true) => {
+          const nowMs = 20000;
+          const targetId = 8;
+          const motionSamples = Array.from({ length: 30 }, (_, index) => ({
+            at: 10000 + index * 200,
+            selfX: 0,
+            selfY: 0,
+            x: 7000 + index * 25,
+            y: highEntropy ? (index % 2 ? 150 : -150) : 0,
+            vx: 50,
+            vy: highEntropy ? (index % 2 ? 50 : -50) : 0,
+            distance: 7000 + index * 25
+          }));
+          const behavior = {
+            mode: highEntropy ? 'zigzag-strafe' : 'straight-line',
+            dimensions: {
+              controlStyle: {
+                state: highEntropy ? 'human-like' : 'periodic-script',
+                confidence: 0.9
+              }
+            },
+            automationLikelihood: highEntropy ? 0.2 : 0.95,
+            recentHitRate: highEntropy ? 0 : 0.3,
+            metrics: {
+              movementPhase: {
+                currentDirection: 'east',
+                dwellBand: 'settled',
+                speedBand: 'fast',
+                radialRelation: 'stable',
+                lateralRelation: 'center',
+                distanceBand: 'far'
+              },
+              movementTransitions: {
+                currentState: 'east',
+                transitionCount: 20,
+                conditionalSampleCount: 20,
+                conditionalNext: highEntropy ? [] : [
+                  { state: 'east', count: 14, probability: 0.7 },
+                  { state: 'north', count: 6, probability: 0.3 }
+                ],
+                next: highEntropy ? [] : [
+                  { state: 'east', count: 14, probability: 0.7 },
+                  { state: 'north', count: 6, probability: 0.3 }
+                ]
+              }
+            }
+          };
+          return buildBrowserlessCombatDryRun({
+            userId: 7,
+            realtime: {
+              tick: 400,
+              self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
+              entities: [
+                { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
+                {
+                  entity_id: 2,
+                  user_id: targetId,
+                  x: 8000,
+                  y: highEntropy ? 100 : 0,
+                  vx: 50,
+                  vy: highEntropy ? -50 : 0,
+                  hp: 80,
+                  current_join_mode: 'Active',
+                  drop: 20
+                }
+              ],
+              bullets: []
+            },
+            command: {
+              shooting: {
+                timing: { medianTicks: 5, p90Ticks: 5, madTicks: 0, source: 'test' },
+                pendingShots: [],
+                confirmedShots: []
+              }
+            }
+          }, {
+            nowMs,
+            decisionState: {
+              combatTarget: {
+                id: targetId,
+                at: nowMs - 12000,
+                firstSeenAt: nowMs - 12000,
+                lastDamageAt: nowMs - 12000,
+                acceptedShotsAtLastDamage: 0,
+                hp: 80,
+                minHp: 80,
+                firstHp: 80,
+                originIntent: 'profit',
+                intent: 'profit',
+                motionSamples,
+                opponentBehaviorState: behavior
+              },
+              opponentBehaviorStates: { [targetId]: behavior },
+              combatMetrics: {
+                targetId: String(targetId),
+                startedAt: nowMs - 12000,
+                acceptedShots: 0,
+                confirmedHits: 0,
+                actualShots: 0,
+                lastTargetHp: 80,
+                initialTargetHp: 80,
+                lastSelfHp: 100,
+                initialSelfHp: 100,
+                threatBulletIds: []
+              }
+            },
+            combatEnabled: true,
+            combatAttackRange: 11000,
+            attackRange: 11000,
+            combatTrajectoryCoverageMode: mode
+          });
+        };
+        const shadow = run('shadow');
+        const live = run('live-single');
+        const learnedLowEntropy = run('live-single', false);
+        return [
+          shadow.aim.trajectoryCoverage.mode,
+          shadow.aim.trajectoryCoverage.applied,
+          shadow.aim.trajectoryCoverage.selected?.hypothesis || '',
+          live.aim.trajectoryCoverage.mode,
+          live.aim.trajectoryCoverage.applied,
+          live.aim.mode.startsWith('trajectory-coverage-'),
+          live.aim.x === live.aim.trajectoryCoverage.selected?.aimX,
+          live.aim.y === live.aim.trajectoryCoverage.selected?.aimY,
+          learnedLowEntropy.aim.trajectoryCoverage.applied,
+          learnedLowEntropy.aim.trajectoryCoverage.reason
+        ].join('|');
+      })(),
+      want: 'shadow|false|stop|live-single|true|true|true|true|false|coverage-evidence-not-ready'
+    },
+    {
       name: 'browserless fire-risk classification survives unaffordable route coverage',
       got: (() => {
         const self = { user_id: 7, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 2000 };
@@ -21654,6 +21787,29 @@ async function runSelfTest() {
         ].join('|');
       }),
       want: 'true|4|0|any|true|true|true|true|false|canary:profit|true|true|true'
+    },
+    {
+      name: 'browserless runner config exposes trajectory coverage shadow and live modes',
+      got: (() => {
+        const defaults = parseBrowserlessRunnerArgs([], {});
+        const envConfig = parseBrowserlessRunnerArgs([], {
+          GRASP_RAT_BROWSERLESS_COMBAT_TRAJECTORY_COVERAGE_MODE: 'live-single'
+        });
+        const cliConfig = parseBrowserlessRunnerArgs([
+          '--combat-trajectory-coverage-mode', 'off'
+        ], {});
+        const invalid = parseBrowserlessRunnerArgs([
+          '--combat-trajectory-coverage-mode', 'invalid'
+        ], {});
+        return [
+          defaults.combatTrajectoryCoverageMode,
+          envConfig.combatTrajectoryCoverageMode,
+          cliConfig.combatTrajectoryCoverageMode,
+          invalid.combatTrajectoryCoverageMode,
+          publicConfig(envConfig).combatTrajectoryCoverageMode
+        ].join('|');
+      })(),
+      want: 'shadow|live-single|off|shadow|live-single'
     },
     {
       name: 'browserless runner config exposes dynamic profit threshold env cli and public values',
