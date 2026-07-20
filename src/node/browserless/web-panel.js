@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.20.3';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.20.4';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function panelSessionFlagsCore(status = {}) {
@@ -1855,10 +1855,13 @@ function renderBrowserlessWebPanel() {
       const offlineStats = status.stats?.offline || {};
       const { online, realtimeOnline } = panelSessionFlags(status);
       const reason = currentReason;
+      const loginDisplay = online ? { state: 'none', text: '--' } : loginPointDisplay(status);
       const rowsOut = [];
 
       addRow(rowsOut, '状态', online ? actionTitleText(status) : offlineActionTitleText(status), true);
-      addRow(rowsOut, '原因', online ? actionReasonDisplay(status) : reasonText(reason), true);
+      if (online || !['pending', 'unsafe', 'reentry'].includes(loginDisplay.state)) {
+        addRow(rowsOut, '原因', online ? actionReasonDisplay(status) : reasonText(reason), true);
+      }
       const decisionText = joinNonBlank([kindText(kind), actionReasonText(status)]);
       const statusText = actionText(status);
       const reasonDisplay = online ? actionReasonDisplay(status) : dangerousPlayerExitReasonText(status, reason);
@@ -1887,7 +1890,6 @@ function renderBrowserlessWebPanel() {
       }
 
       if (!realtimeOnline && isSafetyStatus(status, kind, reason)) {
-        const loginDisplay = loginPointDisplay(status);
         const reentry = loginDisplay.state === 'reentry';
         addRow(rowsOut, reentry ? '连接状态' : '登录点', loginPointText(status), false, loginPointAttrs(status));
         addRow(rowsOut, reentry ? '当前坐标' : '登录点坐标', pointCoordText(status.loginPointSafety?.point));
@@ -2295,14 +2297,13 @@ function renderBrowserlessWebPanel() {
         { text: accountName + ' ', className: 'meta-label' },
         { text: loggedIn ? '已登录' : '未登录', className: loggedIn ? 'ok' : 'bad' }
       ], loggedIn ? 'ok' : 'bad');
-      if (s.game?.inGame) {
-        setRichText('roleTitleMeta', [
-          { text: 'HP ', className: 'meta-label' }, { text: integer(roleSelf?.hp), className: hpAttrs(roleSelf?.hp).className },
-          { text: ' | Drop ', className: 'meta-label' }, { text: integer(roleSelf?.drop), className: 'coin' }
-        ]);
-      } else {
-        setRichText('roleTitleMeta', [{ text: '已离线', className: 'muted' }], 'muted');
-      }
+      const roleTitleMuted = !s.game?.inGame;
+      setRichText('roleTitleMeta', [
+        { text: 'HP ', className: roleTitleMuted ? 'muted' : 'meta-label' },
+        { text: integer(roleSelf?.hp), className: roleTitleMuted ? 'muted' : hpAttrs(roleSelf?.hp).className },
+        { text: ' | Drop ', className: roleTitleMuted ? 'muted' : 'meta-label' },
+        { text: integer(roleSelf?.drop), className: roleTitleMuted ? 'muted' : 'coin' }
+      ], roleTitleMuted ? 'muted' : '');
       rows('accountStatus', [
         ['账号', s.session?.userId],
         ['名称', roleSelf?.name || s.self?.name],

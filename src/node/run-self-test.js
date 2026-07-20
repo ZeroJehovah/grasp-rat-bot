@@ -23147,6 +23147,8 @@ async function runSelfTest() {
         let canaryCalls = 0;
         let precheckCalls = 0;
         let sleptMs = 0;
+        let waitActionReason = '';
+        let lastExitReason = '';
         const config = parseBrowserlessRunnerArgs([
           '--live',
           '--data-dir',
@@ -23164,7 +23166,12 @@ async function runSelfTest() {
         updateBrowserlessStateFile(stateFilePath(config), {
           stats: {
             today: { day: '2026-07-13', sessionCount: 1 },
-            currentSession: { online: false }
+            currentSession: {
+              online: true,
+              sessionId: '7:2026-07-12T17:00:00.000Z',
+              userId: 7,
+              enteredAt: '2026-07-12T17:00:00.000Z'
+            }
           }
         }, { updatedAt: new Date(t).toISOString() });
         const result = await runBrowserlessRunner(config, {
@@ -23176,6 +23183,9 @@ async function runSelfTest() {
           },
           runPreLoginSnapshotSafety: async () => {
             precheckCalls += 1;
+            const waitingState = readBrowserlessStateFile(stateFilePath(config));
+            waitActionReason = waitingState.runner.currentAction.reason;
+            lastExitReason = waitingState.stats.lastExit.reason;
             return {
               ok: true,
               reason: 'self-present-reentry',
@@ -23231,13 +23241,15 @@ async function runSelfTest() {
           canaryCalls,
           precheckCalls,
           sleptMs,
+          waitActionReason,
+          lastExitReason,
           /runner-loop-wait-self-present-resume/.test(text),
           /snapshot-safety-observation/.test(text),
           /\"selfPresent\":true/.test(text),
           /\"tick\":300/.test(text)
         ].join('|');
       }),
-      want: 'explicit-stop|2|1|0|true|true|true|true'
+      want: 'explicit-stop|2|1|0|next-login-point-pending-snapshot-safety|combat-trade-disadvantage-leave|true|true|true|true'
     },
     {
       name: 'browserless runner does not resume from stale self after confirmed leave',
@@ -26874,6 +26886,23 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'true|true|true|true|true|true|true|true|true'
+    },
+    {
+      name: 'browserless web panel separates offline exit reasons and keeps muted role metrics',
+      got: (() => {
+        const panelText = renderBrowserlessWebPanel();
+        const panelScript = panelText.match(/<script>([\s\S]*?)<\/script>/)?.[1] || '';
+        return [
+          BROWSERLESS_WEB_PANEL_VERSION,
+          panelScript.includes("const loginDisplay = online ? { state: 'none', text: '--' } : loginPointDisplay(status);"),
+          panelScript.includes("if (online || !['pending', 'unsafe', 'reentry'].includes(loginDisplay.state)) {"),
+          panelScript.includes('const roleTitleMuted = !s.game?.inGame;'),
+          panelScript.includes("{ text: integer(roleSelf?.hp), className: roleTitleMuted ? 'muted' : hpAttrs(roleSelf?.hp).className }"),
+          panelScript.includes("{ text: integer(roleSelf?.drop), className: roleTitleMuted ? 'muted' : 'coin' }"),
+          !panelScript.includes("setRichText('roleTitleMeta', [{ text: '已离线', className: 'muted' }], 'muted');")
+        ].join('|');
+      })(),
+      want: '2026.07.20.4|true|true|true|true|true|true'
     },
     {
       name: 'browserless runner self-test passes',

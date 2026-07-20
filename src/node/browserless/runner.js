@@ -1566,6 +1566,9 @@ async function runBrowserlessRunner(config, deps = {}) {
       nextRunAt,
       supervisorErrors: supervisorErrors.slice(-5)
     };
+    const currentActionReason = resetLoginPointForNextEntry
+      ? 'next-login-point-pending-snapshot-safety'
+      : loopPlan.reason;
     updateState({
       runner: {
         running: true,
@@ -1574,7 +1577,7 @@ async function runBrowserlessRunner(config, deps = {}) {
         currentAction: {
           kind: 'loop-wait',
           band: 'recover',
-          reason: loopPlan.reason,
+          reason: currentActionReason,
           delayMs: effectiveDelayMs,
           nextRunAt,
           explicitDelay: Boolean(scheduledLoopPlan.explicitDelay),
