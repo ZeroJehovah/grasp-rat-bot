@@ -5397,7 +5397,43 @@ function entityMatchesAttack(entity, attack) {
     && String(entityId) === String(attack.id);
 }
 
-function browserlessPostAttackDropResolvedAt(attack, input, nowMs, currentCombatTarget = null) {
+function matchingPostAttackDropEvidence(input, attack, options = {}) {
+  const attackId = String(attack?.id ?? '');
+  if (!attackId) return false;
+  const radius = Math.max(0, Number(options.postAttackDropCoinRadius ?? BROWSER_RUNTIME_DEFAULTS.postAttackDropCoinRadius));
+  const coins = mergeProfitCoinCandidates(
+    input?.realtimeCoins || [],
+    input?.snapshotVisibleCoins || input?.profitCoins || []
+  );
+  return coins.some(coin => {
+    const sourceId = coinSourceUserId(coin);
+    if (sourceId !== null && String(sourceId) === attackId) return true;
+    return Number(coin?.amount || 0) > 0 && distanceBetween(coin, attack) <= radius;
+  });
+}
+
+function postAttackDisappearanceKillPlausibility(attack, input, options = {}) {
+  if (!attack) return null;
+  const attackId = String(attack.id ?? '');
+  const selfKillIds = new Set((input?.selfKillTargetIds || []).map(String));
+  if (attackId && selfKillIds.has(attackId)) return true;
+  if (matchingPostAttackDropEvidence(input, attack, options)) return true;
+  const hp = numberOrNull(attack.hp);
+  if (hp === null) return null;
+  if (hp <= 0) return true;
+  const selfId = input?.self?.user_id ?? input?.self?.userId ?? input?.userId ?? null;
+  const selfBulletCount = selfId === null || selfId === undefined
+    ? 0
+    : (input?.bullets || []).filter(bullet => String(bulletOwnerId(bullet) ?? '') === String(selfId)).length;
+  const damagePerShot = Math.max(0.1, Number(
+    options.opportunityEstimatedDamagePerShot
+      ?? BROWSER_RUNTIME_DEFAULTS.opportunityEstimatedDamagePerShot
+      ?? OPPORTUNITY_CONSTANTS.ESTIMATED_DAMAGE_PER_SHOT
+  ));
+  return hp <= Math.max(1, selfBulletCount) * damagePerShot;
+}
+
+function browserlessPostAttackDropResolvedAt(attack, input, nowMs, currentCombatTarget = null, options = {}) {
   if (!attack) return 0;
   const selfKillIds = new Set((input?.selfKillTargetIds || []).map(String));
   if (selfKillIds.has(String(attack.id))) {
@@ -5408,6 +5444,10 @@ function browserlessPostAttackDropResolvedAt(attack, input, nowMs, currentCombat
     .filter(Boolean)
     .find(entity => entityMatchesAttack(entity, attack));
   if (visible && visible.alive !== false && Number(visible.hp ?? 1) > 0) {
+    attack.postAttackDropResolvedAt = 0;
+    return 0;
+  }
+  if (postAttackDisappearanceKillPlausibility(attack, input, options) === false) {
     attack.postAttackDropResolvedAt = 0;
     return 0;
   }
@@ -5444,7 +5484,8 @@ function reconcilePostAttackSettlements(input, stateful = {}, options = {}, comb
       attack,
       input,
       input.nowMs,
-      combat?.target || combat?.dryRun?.target
+      combat?.target || combat?.dryRun?.target,
+      options
     )
   });
   for (const settlement of Object.values(result.states || {})) {
@@ -5461,6 +5502,14 @@ function reconcilePostAttackSettlements(input, stateful = {}, options = {}, comb
 
 function reconcilePostKillSettlement(input, stateful = {}, combat = {}, previousCombatTarget = null, options = {}) {
   const observation = stateful.realtimeSnapshotObservation || null;
+  const metricsTargetId = String(stateful.combatMetrics?.targetId ?? '');
+  const previousTargetId = String(targetIdForAttackHistory(previousCombatTarget) ?? '');
+  const disappearanceTarget = metricsTargetId && metricsTargetId === previousTargetId
+    ? previousCombatTarget
+    : null;
+  const disappearanceKillPlausible = disappearanceTarget
+    ? postAttackDisappearanceKillPlausibility(disappearanceTarget, input, options)
+    : null;
   const result = updatePostKillSettlementCore(stateful.postKillSettlement || null, {
     nowMs: input?.nowMs,
     previousCombatTarget,
@@ -5469,7 +5518,8 @@ function reconcilePostKillSettlement(input, stateful = {}, combat = {}, previous
     visibleTargets: input?.visibleTargets || [],
     selfKillEvidence: input?.selfKillEvidence?.length ? input.selfKillEvidence : (observation?.selfKillEvidence || []),
     playerDropCoins: input?.selfKilledPlayerDropCoins?.length ? input.selfKilledPlayerDropCoins : (observation?.coins || []),
-    snapshotTick: input?.fallback?.tick ?? observation?.tick ?? null
+    snapshotTick: input?.fallback?.tick ?? observation?.tick ?? null,
+    disappearanceKillPlausible
   }, {
     unconfirmedMs: options.postKillUnconfirmedTailMs
       ?? Math.max(1500, Number(options.postAttackDropWaitMs ?? BROWSER_RUNTIME_DEFAULTS.postAttackDropWaitMs)),
@@ -8870,6 +8920,8 @@ function recordAttackHistoryFromActionResult(decisionState, actionResult, decisi
     name: target?.name || '',
     drop: numberOrNull(target?.drop),
     dropKnown: entityDropKnown(target),
+    hp: numberOrNull(target?.hp),
+    maxHp: numberOrNull(target?.maxHp ?? target?.max_hp),
     x: numberOrNull(target?.x),
     y: numberOrNull(target?.y),
     distance: numberOrNull(target?.distance),

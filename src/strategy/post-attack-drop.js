@@ -211,7 +211,10 @@ function updatePostAttackSettlementCore(previous = {}, context = {}, options = {
       continue;
     }
     if (state.phase === 'settled' || state.phase === 'expired') {
-      if (nowMs - Number(state.updatedAt || 0) <= resolveMaxMs) states[id] = state;
+      // Keep the terminal tombstone for as long as the consumed attack
+      // generation is still present. Dropping it on a short timer lets the
+      // same old attack history create a fresh pending generation again.
+      states[id] = state;
       continue;
     }
     const resolvedAt = Number(resolveAttack(attack) || state.resolvedAt || 0);

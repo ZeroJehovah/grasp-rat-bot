@@ -69,6 +69,7 @@ const {
   evaluateProactiveCombatMarginalRoi,
   opportunityEnemyStaminaCost: browserlessOpportunityEnemyStaminaCost,
   recentCombatResidualThreatContinuityCore,
+  recordAttackHistoryFromActionResult,
   snapshotSelfKillEvidence
 } = require('./browserless/decision-adapter');
 const {
@@ -5499,8 +5500,14 @@ async function runSelfTest() {
         }, options);
         const settled = updatePostAttackSettlementCore(protectedState.states, { nowMs: 1400, attacks: [attack], coins: [], visibleTargets: [] }, options);
         const noReinsert = updatePostAttackSettlementCore(settled.states, { nowMs: 1500, attacks: [attack], coins: [], visibleTargets: [] }, options);
+        const settledPastOldRetention = updatePostAttackSettlementCore(settled.states, { nowMs: 50000, attacks: [attack], coins: [], visibleTargets: [] }, options);
         const expired = updatePostAttackSettlementCore(pending.states, { nowMs: 2201, attacks: [attack], coins: [], visibleTargets: [] }, options);
         const expiredNoReinsert = updatePostAttackSettlementCore(expired.states, { nowMs: 2500, attacks: [attack], coins: [], visibleTargets: [] }, options);
+        const expiredPastOldRetention = updatePostAttackSettlementCore(expired.states, { nowMs: 50000, attacks: [attack], coins: [], visibleTargets: [] }, options);
+        const nextAttack = { ...attack, at: 50100 };
+        const rearmed = updatePostAttackSettlementCore(settledPastOldRetention.states, {
+          nowMs: 50100, attacks: [attack, nextAttack], coins: [], visibleTargets: []
+        }, { ...options, resolveAttack: item => Number(item.at) === 50100 ? 50100 : 1000 });
         const fiveLoggedGroupsStayTerminal = ['3956', '4278', '4731', 'yongren', '5104'].every((id, index) => {
           const groupedAttack = { ...attack, id, at: 900 + index };
           const first = updatePostAttackSettlementCore({}, {
@@ -5524,12 +5531,31 @@ async function runSelfTest() {
           settled.states['8']?.phase,
           noReinsert.selected === null,
           noReinsert.states['8']?.terminalReason,
+          settledPastOldRetention.states['8']?.phase,
+          settledPastOldRetention.selected === null,
           expired.states['8']?.phase,
           expiredNoReinsert.selected === null,
+          expiredPastOldRetention.states['8']?.phase,
+          expiredPastOldRetention.selected === null,
+          rearmed.selected?.phase,
+          rearmed.selected?.lastAttackAt,
           fiveLoggedGroupsStayTerminal
         ].join('|');
       })(),
-      want: 'pending|drop-observed|pickup-protected|settled|true|matched-drop-disappeared|expired|true|true'
+      want: 'pending|drop-observed|pickup-protected|settled|true|matched-drop-disappeared|settled|true|expired|true|expired|true|pending|50100|true'
+    },
+    {
+      name: 'browserless attack history retains target HP for disappearance plausibility',
+      got: (() => {
+        const stateful = {};
+        const entry = recordAttackHistoryFromActionResult(stateful, {
+          kind: 'profit-attack',
+          target: { userId: 8, name: 'target', hp: 77, maxHp: 100, drop: 20, x: 5000, y: 0 },
+          shoot: { ok: true, skipped: false, command: { id: 1 } }
+        }, null, { nowMs: 1000 });
+        return [entry?.hp, entry?.maxHp, stateful.attackHistory?.[0]?.hp].join('|');
+      })(),
+      want: '77|100|77'
     },
     {
       name: 'browserless single coin bait exact distant regressions select eligible alternatives or wait',
@@ -11020,6 +11046,7 @@ async function runSelfTest() {
           attackHistory: [{
             id: 8,
             name: 'afk',
+            hp: 1,
             x: 5000,
             y: 0,
             drop: 20,
@@ -11059,12 +11086,57 @@ async function runSelfTest() {
       want: 'post-attack-drop-wait|profit|post-attack-drop-wait-position|8|5000|20'
     },
     {
+      name: 'browserless high-HP target disappearance does not start legacy drop wait',
+      got: (() => {
+        const stateful = {
+          attackHistory: [{
+            id: 8,
+            name: 'left-alive',
+            hp: 80,
+            x: 5000,
+            y: 0,
+            drop: 20,
+            at: 1000,
+            action: 'attack',
+            afk: true
+          }]
+        };
+        const decision = buildBrowserlessDecision({
+          userId: 7,
+          realtime: {
+            tick: 60,
+            frameAgeMs: 100,
+            self: { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+            entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 }],
+            bullets: [],
+            coinDrops: [{ drop_id: 9, amount: 10, x: 1000, y: 0 }]
+          },
+          fallback: { coinDrops: [] }
+        }, stateful, {
+          nowMs: 1600,
+          controlMode: 'profit-live',
+          dynamicProfitThresholdEnabled: false,
+          postAttackDropWaitMs: 1000,
+          postAttackDropResolveMaxMs: 5000,
+          postAttackDropWaitMinDrop: 8,
+          postAttackDropWaitStopDistance: 900
+        });
+        return [
+          ['coin', 'seek-coin'].includes(decision.action.kind),
+          decision.action.reason !== 'post-attack-drop-wait-position',
+          decision.input.postAttackSettlement.selected === null
+        ].join('|');
+      })(),
+      want: 'true|true|true'
+    },
+    {
       name: 'browserless combat-live kill tail blocks transient one-coin route',
       got: (() => {
         const stateful = {
           attackHistory: [{
             id: 9667,
             name: 'target',
+            hp: 1,
             x: 4500,
             y: 0,
             drop: 32,
@@ -11222,6 +11294,37 @@ async function runSelfTest() {
         return [decision.action.kind, decision.action.reason, decision.input.postKillSettlement.phase, decision.input.postKillSettlement.targetId].join('|');
       })(),
       want: 'post-attack-drop-wait|post-kill-settlement-wait|unconfirmed-tail|9667'
+    },
+    {
+      name: 'browserless realtime high-HP disappearance does not start post-kill wait',
+      got: (() => {
+        const stateful = {
+          combatTarget: { id: 9667, name: 'target', drop: 32, hp: 80, at: 1000, lastInRangeAt: 1200 },
+          combatMetrics: { targetId: '9667', targetName: 'target', acceptedShots: 1, actualLastShotAt: 1200 }
+        };
+        const decision = buildBrowserlessRealtimeControlDecision({
+          userId: 7,
+          realtime: {
+            tick: 1101447,
+            frameAgeMs: 0,
+            self: { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+            entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 }],
+            bullets: []
+          },
+          fallback: { tick: 1101435, frameAgeMs: 581, coinDrops: [], messages: [] }
+        }, stateful, {
+          nowMs: 1600,
+          userId: 7,
+          controlMode: 'profit-live',
+          combatEnabled: true
+        });
+        return [
+          decision.action?.kind || 'none',
+          decision.input.postKillSettlement === null,
+          stateful.postKillSettlement === null
+        ].join('|');
+      })(),
+      want: 'none|true|true'
     },
     {
       name: 'browserless realtime skips known zero-drop post-kill settlement wait',

@@ -151,7 +151,7 @@ function updatePostKillSettlementCore(previous, context = {}, options = {}) {
       const visibleDrop = knownTargetDrop(visible);
       const priorDrop = knownTargetDrop(matchingPriorTarget);
       const selectedDrop = visibleDrop.known ? visibleDrop : priorDrop;
-      state = {
+      const candidateState = {
         active: true,
         phase: 'unconfirmed-tail',
         targetId: candidateId,
@@ -172,6 +172,12 @@ function updatePostKillSettlementCore(previous, context = {}, options = {}) {
         confirmedEvidenceTick: null,
         reason: 'recent-combat-target-disappeared'
       };
+      const explicitSettlementEvidence = matchingKillEvidence(context, candidateState)
+        || matchingDropCoin(context, candidateState);
+      if (context.disappearanceKillPlausible === false && !explicitSettlementEvidence) {
+        return { state: null, cleared: false, reason: 'disappearance-not-kill-plausible' };
+      }
+      state = candidateState;
     }
   }
   if (!state) return { state: null, cleared: false, reason: 'inactive' };

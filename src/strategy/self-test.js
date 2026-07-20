@@ -3729,6 +3729,48 @@ function runStrategyModuleSelfTests() {
       && postKillPicked.reason === 'matched-player-drop-disappeared'
   });
 
+  const postKillHighHpExit = updatePostKillSettlementCore(null, {
+    nowMs: 2500,
+    previousCombatTarget: { id: 9777, name: 'left-alive', hp: 80, drop: 32 },
+    currentCombatTarget: null,
+    combatMetrics: {
+      targetId: '9777',
+      targetName: 'left-alive',
+      acceptedShots: 1,
+      actualLastShotAt: 2300,
+      actualLastShotTick: 200
+    },
+    visibleTargets: [],
+    selfKillEvidence: [],
+    playerDropCoins: [],
+    snapshotTick: 205,
+    disappearanceKillPlausible: false
+  });
+  const postKillHighHpConfirmed = updatePostKillSettlementCore(null, {
+    nowMs: 2500,
+    previousCombatTarget: { id: 9777, name: 'left-alive', hp: 80, drop: 32 },
+    currentCombatTarget: null,
+    combatMetrics: {
+      targetId: '9777',
+      targetName: 'left-alive',
+      acceptedShots: 1,
+      actualLastShotAt: 2300,
+      actualLastShotTick: 200
+    },
+    visibleTargets: [],
+    selfKillEvidence: [{ targetUserId: 9777, tick: 201 }],
+    playerDropCoins: [],
+    snapshotTick: 205,
+    disappearanceKillPlausible: false
+  });
+  results.push({
+    name: 'post-kill-settlement-rejects-high-hp-exit-without-evidence',
+    passed: postKillHighHpExit.state === null
+      && postKillHighHpExit.reason === 'disappearance-not-kill-plausible'
+      && postKillHighHpConfirmed.state?.phase === 'drop-pending'
+      && postKillHighHpConfirmed.state?.targetId === '9777'
+  });
+
   const postKillZeroDrop = updatePostKillSettlementCore(null, {
     nowMs: 2600,
     previousCombatTarget: { id: 30672, name: '颓废咸鱼1号', drop: 0, dropKnown: true },
