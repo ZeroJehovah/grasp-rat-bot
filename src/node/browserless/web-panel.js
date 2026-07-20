@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.20.2';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.20.3';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function panelSessionFlagsCore(status = {}) {
@@ -76,6 +76,28 @@ function nearbyCoinIconCore(options = {}) {
     return 'coin' + Math.min(9, Math.max(2, Math.round(routeOrder)));
   }
   return '';
+}
+
+function groupBlockingFactorsCore(factors = []) {
+  const rows = [];
+  const players = new Map();
+  for (const factor of Array.isArray(factors) ? factors : []) {
+    if (!factor || typeof factor !== 'object') continue;
+    if (factor.type !== 'player') {
+      rows.push({ factor, reasons: factor.reason ? [factor.reason] : [] });
+      continue;
+    }
+    const identity = factor.userId ?? factor.user_id ?? factor.entityId ?? factor.entity_id ?? factor.name ?? '';
+    const key = `player:${String(identity)}`;
+    let row = players.get(key);
+    if (!row) {
+      row = { factor, reasons: [] };
+      players.set(key, row);
+      rows.push(row);
+    }
+    if (factor.reason && !row.reasons.includes(factor.reason)) row.reasons.push(factor.reason);
+  }
+  return rows;
 }
 
 function renderBrowserlessWebPanel() {
@@ -398,6 +420,7 @@ function renderBrowserlessWebPanel() {
     let panelCollapseState = readPanelCollapseState();
 
     const groupChatMessagesForDisplay = ${groupChatMessagesForDisplay.toString()};
+    const groupBlockingFactors = ${groupBlockingFactorsCore.toString()};
     const nearbyCoinIcon = ${nearbyCoinIconCore.toString()};
     const spentStaminaUnit = ${formatSpentStaminaCore.toString()};
     const panelSessionFlags = ${panelSessionFlagsCore.toString()};
@@ -788,6 +811,7 @@ function renderBrowserlessWebPanel() {
       'combat-low-hp-no-damage-leave': '战斗中我方低血且久攻未造成伤害，主动退出',
       'combat-critical-hp-leave': '战斗中我方血量进入危险线，紧急退出',
       'combat-action-settlement-stalled': '战斗中移动指令失效，为避免原地承伤，主动退出',
+      'defensive-exchange-no-progress-leave': '防守交战持续无进展，撤退后仍无法脱离，主动退出',
       'injury-leave': '角色受伤后为避免继续掉血，主动退出',
       'pursuit-leave': '被危险玩家持续追击，主动退出',
       'profit-live-snapshot-active-threat': '附近玩家有活动威胁证据，退出',
@@ -1237,11 +1261,12 @@ function renderBrowserlessWebPanel() {
         ? status.loginPointSafety.detail.blockingFactors
         : [];
       if (!factors.length) return '--';
-      return factors.map(factor => {
-        const label = factor.type === 'player'
-          ? targetLabel(factor)
+      return groupBlockingFactors(factors).map(row => {
+        const label = row.factor.type === 'player'
+          ? targetLabel(row.factor)
           : '快照检查';
-        return joinNonBlank([label, reasonText(factor.reason)]);
+        const reasons = row.reasons.map(reasonText).filter((reason, index, list) => reason !== '--' && list.indexOf(reason) === index);
+        return joinNonBlank([label, reasons.join('、')]);
       }).join('；');
     }
     function singleBlockerHoldText(status) {
@@ -2289,8 +2314,6 @@ function renderBrowserlessWebPanel() {
       rows('roleStatus', [
         ['游戏内', bool(s.game?.inGame), gameStatusAttrs(s)],
         ['当前位置', s.game?.inGame ? pointCoordText(s.self) : '--'],
-        [offlineRole ? '上次血量' : '血量', hpText(roleSelf?.hp), hpAttrs(roleSelf?.hp)],
-        [offlineRole ? '上次Drop' : 'Drop', roleSelf?.drop, classAttrs('coin')],
         [offlineRole ? '上次体力5s' : '体力5s', staminaPair(roleStamina?.remaining5s, 10)],
         [offlineRole ? '上次体力1h' : '体力1h', staminaPair(roleStamina?.remaining1h, 3000), staminaAttrs(roleStamina?.remaining1h, 3000)],
         [offlineRole ? '上次体力1d' : '体力1d', staminaPair(roleStamina?.remaining1d, 20000), staminaAttrs(roleStamina?.remaining1d, 20000)]
@@ -2465,6 +2488,7 @@ function renderBrowserlessWebPanel() {
 module.exports = {
   BROWSERLESS_WEB_PANEL_VERSION,
   formatSpentStaminaCore,
+  groupBlockingFactorsCore,
   groupChatMessagesForDisplay,
   nearbyCoinIconCore,
   panelSessionFlagsCore,

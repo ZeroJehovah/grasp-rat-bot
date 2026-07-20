@@ -27,7 +27,7 @@ const {
   writeBrowserlessStateFile
 } = require('./state-file');
 const { startStatusServer } = require('./status-server');
-const { BROWSERLESS_WEB_PANEL_VERSION } = require('./web-panel');
+const { BROWSERLESS_WEB_PANEL_VERSION, groupBlockingFactorsCore } = require('./web-panel');
 const {
   applySingleBlockerLoginBypass,
   runPreLoginSnapshotSafety,
@@ -3258,6 +3258,10 @@ async function runBrowserlessRunnerSelfTest() {
       browserlessCompactStatusSource(panelActivityState),
       { nowMs: panelActivityStartedAt + 3001 }
     );
+    const groupedBlockingFactors = groupBlockingFactorsCore([
+      { type: 'player', userId: 31361, name: 'mango', reason: 'active-near-login-point' },
+      { type: 'player', userId: 31361, name: 'mango', reason: 'damage-actor-near-login-point' }
+    ]);
     const panelAfkBattleCompact = buildCompactBrowserlessStatus({
       session: { userId: 7, sessionToken: 'panel-self-test-token' },
       runner: { running: true, currentAction: { kind: 'attack', target: { userId: 9, distance: 800 } } },
@@ -3357,6 +3361,10 @@ async function runBrowserlessRunnerSelfTest() {
           && pageHtml.includes("return '等待重连冷却时间'")
           && pageHtml.includes("return '等待登录点快照安全检查'")
           && pageHtml.includes("translated === '正在退出游戏' ? '已退出游戏' : translated")
+          && pageHtml.includes('防守交战持续无进展，撤退后仍无法脱离，主动退出')
+          && pageHtml.includes('groupBlockingFactors(factors).map(row =>')
+          && !pageHtml.includes("[offlineRole ? '上次血量' : '血量'")
+          && !pageHtml.includes("[offlineRole ? '上次Drop' : 'Drop'")
           && pageHtml.includes("updateBattlePanel(s);\n      updateLastExitPanel(s);")
           && pageHtml.includes('grid-column:2;grid-row:2')
           && pageHtml.includes("setText(prefix + 'Hp', hp === null ? '--' : integer(hp))")
@@ -3380,6 +3388,8 @@ async function runBrowserlessRunnerSelfTest() {
           && panelActivityExpired.battle.self.firing === false
           && panelActivityExpired.battle.target.moving === false
           && panelActivityExpired.battle.target.firing === false
+          && groupedBlockingFactors.length === 1
+          && groupedBlockingFactors[0].reasons.length === 2
           && panelCombatInitial.movementDistance === 0
           && panelCombatMoved.movementDistance === 500
         ),
