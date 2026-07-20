@@ -9933,6 +9933,219 @@ async function runSelfTest() {
       want: 'combat-live|19677|close-pressure|combat-close-pressure-approach|19677'
     },
     {
+      name: 'browserless close pressure blocks realtime high-value loot takeover',
+      got: (() => {
+        const stateful = {
+          combatTarget: {
+            id: 19677,
+            at: 61000,
+            firstSeenAt: 1000,
+            lastInRangeAt: 61000,
+            lastDamageAt: 1000,
+            hp: 100,
+            firstHp: 100,
+            minHp: 94,
+            damageFromStart: 6,
+            intent: 'profit',
+            originIntent: 'profit',
+            combatPhase: 'close-pressure',
+            phaseStartedAt: 60000,
+            closePressure: { active: true, phase: 'close-pressure', phaseStartedAt: 60000 }
+          },
+          combatMetrics: {
+            targetId: '19677',
+            startedAt: 1000,
+            acceptedShots: 34,
+            confirmedHits: 2,
+            targetDamage: 6,
+            selfDamage: 0
+          }
+        };
+        const self = fullStamina5s({
+          entity_id: 1,
+          user_id: 28886,
+          name: 'self',
+          x: 0,
+          y: 0,
+          hp: 100,
+          max_hp: 100
+        });
+        const target = fullStamina5s({
+          entity_id: 2,
+          user_id: 19677,
+          name: 'Eason',
+          x: 9000,
+          y: 0,
+          vx: 50,
+          vy: 0,
+          hp: 100,
+          max_hp: 100,
+          current_join_mode: 'Active',
+          drop: 200
+        }, 5000);
+        const decision = buildBrowserlessRealtimeControlDecision({
+          userId: 28886,
+          realtime: {
+            tick: 1240,
+            receivedAtMs: 61000,
+            frameAgeMs: 0,
+            self,
+            entities: [self, target],
+            bullets: []
+          },
+          fallback: {
+            tick: 1240,
+            receivedAtMs: 61000,
+            frameAgeMs: 0,
+            self,
+            entities: [self, target],
+            coinDrops: [{ drop_id: 'valuable', amount: 30, x: 5000, y: 1000 }],
+            messages: []
+          }
+        }, stateful, {
+          ...buildBrowserlessRuntimeDefaults({}),
+          nowMs: 61000,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          dynamicProfitThresholdEnabled: false,
+          combatAttackRange: 14500,
+          combatDisengageRange: 17000,
+          combatEngageGraceRange: 17000,
+          targetStickMs: 5000,
+          combatEngageStickMs: 30000,
+          browserlessCenterActivityRadiusCm: 100000,
+          browserlessProfitPursuitMaxMs: 60000,
+          browserlessProfitPursuitMinDamageMs: 60000,
+          browserlessProfitPursuitMinDamageHp: 10
+        });
+        return [
+          decision.action.kind,
+          decision.action.reason,
+          decision.action.target.userId,
+          decision.combat.combatPhase.phase,
+          decision.input.loot.blockedReason,
+          decision.input.loot.closePressure,
+          decision.input.loot.candidate.id,
+          Boolean(decision.action.realtimeLootPriority),
+          decision.combat.shooting.state === 'loot-priority'
+        ].join('|');
+      })(),
+      want: 'combat-live|combat-live-realtime|19677|close-pressure|close-pressure-combat-lock|true|valuable|false|false'
+    },
+    {
+      name: 'browserless close pressure hard-locks planner over recovery coin and stale easy-kill approach',
+      got: (() => {
+        const stateful = {
+          combatTarget: {
+            id: 19677,
+            at: 61000,
+            firstSeenAt: 1000,
+            lastInRangeAt: 61000,
+            lastDamageAt: 1000,
+            hp: 100,
+            firstHp: 100,
+            minHp: 94,
+            damageFromStart: 6,
+            intent: 'profit',
+            originIntent: 'profit',
+            combatPhase: 'close-pressure',
+            phaseStartedAt: 60000,
+            closePressure: { active: true, phase: 'close-pressure', phaseStartedAt: 60000 }
+          },
+          combatMetrics: {
+            targetId: '19677',
+            startedAt: 1000,
+            acceptedShots: 34,
+            confirmedHits: 2,
+            targetDamage: 6,
+            selfDamage: 5
+          },
+          easyKillApproach: {
+            targetId: '19677',
+            startedAt: 50000,
+            windowStartedAt: 50000,
+            windowStartDistance: 9000,
+            lastDistance: 9000,
+            missingSince: 0
+          }
+        };
+        const self = fullStamina5s({
+          entity_id: 1,
+          user_id: 28886,
+          name: 'self',
+          x: 0,
+          y: 0,
+          hp: 95,
+          max_hp: 100
+        });
+        const target = fullStamina5s({
+          entity_id: 2,
+          user_id: 19677,
+          name: 'Eason',
+          x: 9000,
+          y: 0,
+          vx: 50,
+          vy: 0,
+          hp: 100,
+          max_hp: 100,
+          current_join_mode: 'Active',
+          drop: 200
+        }, 5000);
+        const decision = buildBrowserlessDecision({
+          userId: 28886,
+          realtime: {
+            tick: 1240,
+            receivedAtMs: 61000,
+            frameAgeMs: 0,
+            self,
+            entities: [self, target],
+            bullets: [],
+            coinDrops: [{ drop_id: 'valuable', amount: 30, x: 5000, y: 1000 }]
+          },
+          fallback: {
+            tick: 1240,
+            receivedAtMs: 61000,
+            frameAgeMs: 0,
+            self,
+            entities: [self, target],
+            coinDrops: [],
+            messages: []
+          }
+        }, stateful, {
+          ...buildBrowserlessRuntimeDefaults({}),
+          nowMs: 61000,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          dynamicProfitThresholdEnabled: false,
+          combatAttackRange: 14500,
+          combatDisengageRange: 17000,
+          combatEngageGraceRange: 17000,
+          targetStickMs: 5000,
+          combatEngageStickMs: 30000,
+          browserlessCenterActivityRadiusCm: 100000,
+          browserlessProfitPursuitMaxMs: 60000,
+          browserlessProfitPursuitMinDamageMs: 60000,
+          browserlessProfitPursuitMinDamageHp: 10
+        });
+        const combatCandidate = decision.finalSelection.candidates.find(item => item.kind === 'combat-live');
+        const hasHighValueCoin = decision.finalSelection.candidates.some(item => item.reason === 'high-value-visible-coin-priority');
+        const hasRecovery = decision.finalSelection.candidates.some(item => item.reason === 'wait-for-full-stamina-and-hp');
+        return [
+          decision.action.kind,
+          decision.action.finalCandidate.hardGate,
+          decision.action.finalCandidate.switchReason,
+          decision.combat.combatPhase.phase,
+          combatCandidate.hardGate,
+          hasHighValueCoin,
+          hasRecovery,
+          decision.profit.easyKill.stopLoss === null,
+          stateful.easyKillApproach === null,
+          Object.keys(stateful.easyKillTargetSuppressions || {}).length
+        ].join('|');
+      })(),
+      want: 'combat-live|true|engaged-defensive-combat-stick|close-pressure|true|true|true|true|true|0'
+    },
+    {
       name: 'browserless close pressure changes phase exactly at sixty seconds without clearing aim',
       got: (() => {
         const run = nowMs => {

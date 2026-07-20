@@ -6756,6 +6756,16 @@ function buildCombatDecision(input, stateful = {}, options = {}) {
   };
 }
 
+function combatDecisionClosePressureActive(combatDecision) {
+  const target = combatDecision?.target || combatDecision?.dryRun?.target || null;
+  if (!target) return false;
+  const phase = combatDecision?.dryRun?.combatPhase || null;
+  return phase?.active === true
+    || phase?.phase === 'close-pressure'
+    || target.combatPhase === 'close-pressure'
+    || target.closePressure?.active === true;
+}
+
 function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options = {}) {
   const stageTimings = {};
   let stageStarted = performance.now();
@@ -6836,6 +6846,9 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
   const lowHpRecoveryThreatExitAction = buildLowHpRecoveryThreatExitDecision(input, controlOptions);
   const safetyAction = profitLiveSafetyDecision(input, combat, stateful, controlOptions, null);
   const combatAction = combat.target && combatActionEligible ? combat.action : null;
+  const closePressureCombatAction = combatAction && combatDecisionClosePressureActive(combat)
+    ? combatAction
+    : null;
   const defensiveCombatAction = combatAction && (
     combat.target?.combatIntent === 'defensive'
       || combat.target?.firing
@@ -6848,6 +6861,7 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
     || pursuitLeaveAction
     || lowHpRecoveryThreatExitAction
     || safetyAction
+    || closePressureCombatAction
     || lootControl.action
     || defensiveCombatAction
     || postKillSettlementWaitAction
@@ -6967,6 +6981,19 @@ function buildRealtimeLootControl(input, combat, stateful = {}, options = {}) {
       combat: null,
       assessment,
       summary: { ...summaryBase, blockedReason: 'combat-exit-required', healthyHp, selfHp }
+    };
+  }
+  if (combatDecisionClosePressureActive(combat)) {
+    return {
+      action: null,
+      combat: null,
+      assessment,
+      summary: {
+        ...summaryBase,
+        blockedReason: 'close-pressure-combat-lock',
+        closePressure: true,
+        combatTargetId: targetIdentity(combat?.target || combat?.dryRun?.target)
+      }
     };
   }
   const incoming = incomingBulletPressure(input);
@@ -7842,6 +7869,14 @@ function recordEasyKillApproachFailure(input, stateful = {}, target = null, opti
 function reconcileEasyKillApproach(input, stateful = {}, options = {}) {
   const approach = stateful.easyKillApproach || null;
   if (!approach) return null;
+  const combatTarget = stateful.combatTarget || null;
+  const combatTargetId = targetIdentity(combatTarget);
+  if ((combatTarget?.combatPhase === 'close-pressure' || combatTarget?.closePressure?.active === true)
+    && combatTargetId
+    && combatTargetId === String(approach.targetId ?? '')) {
+    stateful.easyKillApproach = null;
+    return null;
+  }
   const nowMs = Number(input?.nowMs || Date.now());
   const target = easyKillApproachTarget(input, approach);
   if (!target) {
@@ -8076,6 +8111,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     ...options,
     easyKillPreferredTargetId
   });
+  const closePressureCombat = combatDecisionClosePressureActive(combat);
   const marginalRoiStopLoss = evaluateProactiveCombatMarginalRoi(
     input,
     combat,
@@ -8119,6 +8155,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
   const freshProactiveCombat = Boolean(
     combatActionEligible
       && combatTarget
+      && !closePressureCombat
       && combatTarget.combatIntent !== 'defensive'
       && !combatTarget.combatEngagement
       && !continuingPreviousCombatTarget
@@ -8161,6 +8198,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     if (blocked) combatActionEligible = false;
   }
   if (combatActionEligible
+    && !closePressureCombat
     && combat.dryRun?.behavior?.mode === 'retreat-kite'
     && combat.dryRun?.behavior?.responsePolicy?.reassessProfit
     && combatDecisionIsOrdinaryProfitPursuit(combat, input, stateful)) {
@@ -8368,7 +8406,8 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
   } else {
     const combatAction = combat.target && combatDecisionEnabled && combatActionEligible ? combat.action : null;
     const combatHardGate = Boolean(combatAction && (
-      combat.target?.combatIntent === 'defensive'
+      closePressureCombat
+      || combat.target?.combatIntent === 'defensive'
       || combat.target?.firing
       || targetHasRealBulletPressure(input, combat.target, stateful.combatTarget)
     ));
