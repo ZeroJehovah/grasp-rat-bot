@@ -25,6 +25,7 @@ const { OPPORTUNITY_CONSTANTS } = require('../../strategy/opportunity-constants'
 const {
   buildNativeCoinSnapshotCore,
   coinTargetKeyCore,
+  pickIncidentalCoinPickupsCore,
   snapshotCoinNavigationReasonCore
 } = require('../../strategy/coin-target');
 const {
@@ -2569,6 +2570,53 @@ function topItems(items, mapper, limit = 5) {
   return (items || []).slice(0, limit).map(mapper).filter(Boolean);
 }
 
+function observeBrowserlessCoinPickups(input, stateful = {}, options = {}) {
+  const nowMs = Number(input?.nowMs || Date.now());
+  if (!input?.self) {
+    stateful.coinPickupObservation = null;
+    return [];
+  }
+  if (input?.rawRealtime?.coinDropsObserved === false) return [];
+  const currentSnapshot = buildNativeCoinSnapshotCore(input?.realtimeObservedCoins || [], { nowMs });
+  const previous = stateful.coinPickupObservation || null;
+  const pickups = previous
+    ? pickIncidentalCoinPickupsCore(
+        previous.coins,
+        currentSnapshot,
+        input.self,
+        previous.self,
+        {
+          nowMs,
+          incidentalCoinPickupMemoryMs: options.incidentalCoinPickupMemoryMs,
+          coinCollectedConfirmDistance: options.coinCollectedConfirmDistance
+            ?? BROWSER_RUNTIME_DEFAULTS.coinCollectedConfirmDistance
+        }
+      )
+    : [];
+  stateful.coinPickupObservation = {
+    at: nowMs,
+    self: {
+      x: numberOrNull(input.self.x),
+      y: numberOrNull(input.self.y)
+    },
+    coins: currentSnapshot.slice(-160)
+  };
+  const seen = new Set();
+  return pickups.map(pickup => {
+    const coin = pickup?.coin || null;
+    const key = String(coin?.key || '');
+    const amount = Math.max(0, Math.round(Number(coin?.amount || 0) || 0));
+    if (!key || !amount || seen.has(key)) return null;
+    seen.add(key);
+    return {
+      key,
+      amount,
+      at: nowMs,
+      reason: 'realtime-coin-disappeared-near-path'
+    };
+  }).filter(Boolean);
+}
+
 function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
   const realtime = state?.realtime || {};
   const fallback = state?.fallback || state?.snapshot || {};
@@ -2781,6 +2829,7 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
     afkTargets,
     easyKill: easyKillInput.easyKill,
     easyKillTargets: easyKillInput.easyKillTargets,
+    realtimeObservedCoins: realtimeCoinsRaw,
     realtimeCoins,
     snapshotCoins,
     snapshotVisibleCoins,
@@ -8583,6 +8632,7 @@ function buildOutsideCenterIdleTimeoutLeaveDecision(input, outsideCenterIdle, op
 
 function buildBrowserlessDecision(state, stateful = {}, options = {}) {
   const input = buildBrowserlessStrategyInput(state, options, stateful);
+  const coinPickups = observeBrowserlessCoinPickups(input, stateful, options);
   cleanupCoinProgressState(stateful, input.nowMs, options);
   applyIgnoredCoinFilter(input, stateful);
   clearActiveCoinCompetitionDecisionState(input, stateful);
@@ -9128,6 +9178,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       },
       profitCoinSource: input.profitCoinSource,
       activeCoinCompetition: cloneJson(input.activeCoinCompetition),
+      coinPickups: topItems(coinPickups, item => item, 20),
       selfKillEvidence: topItems(input.selfKillEvidence, item => item, 20),
       postKillSettlement,
       postAttackSettlement,
@@ -9517,6 +9568,7 @@ module.exports = {
   opportunityEnemyStaminaCost,
   normalizeCoinForDecision,
   normalizeEntityForDecision,
+  observeBrowserlessCoinPickups,
   recentCombatResidualThreatContinuityCore,
   recordAttackHistoryFromActionResult,
   summarizeBrowserlessDecision,

@@ -193,7 +193,8 @@ async function analyzeDay(options) {
     },
     stats: {
       uptimeMs: inGameDurationMs,
-      coinsGained: positiveDropUnits,
+      dropUnitsGained: positiveDropUnits,
+      coinsGained: positiveDropUnits * 2,
       pickedCoins: positiveDropUnits * 2,
       kills
     }
@@ -235,14 +236,14 @@ function reconcileState(state, analysis) {
       uptimeMs: Number(currentToday.uptimeMs || 0),
       staminaSpentMs: Number(currentToday.staminaSpentMs || 0),
       coinsGained: Number(currentToday.coinsGained || 0),
-      pickedCoins: Number(currentToday.coinsGained || 0) * 2,
+      pickedCoins: Number(currentToday.coinsGained || 0),
       kills: Number(currentToday.kills || 0)
     },
     after: {
       uptimeMs: today.uptimeMs,
       staminaSpentMs: Number(today.staminaSpentMs || 0),
       coinsGained: today.coinsGained,
-      pickedCoins: today.coinsGained * 2,
+      pickedCoins: today.coinsGained,
       kills: today.kills
     },
     today
@@ -300,7 +301,8 @@ async function runSelfTest() {
       mismatchedDayRejected = true;
     }
     return {
-      ok: analysis.stats.coinsGained === 20
+      ok: analysis.stats.dropUnitsGained === 20
+        && analysis.stats.coinsGained === 40
         && analysis.stats.pickedCoins === 40
         && analysis.stats.kills === 2
         && analysis.stats.uptimeMs === 30000

@@ -6,6 +6,7 @@ const { redactStructuredSecrets } = require('./session-client');
 
 const SCHEMA_VERSION = 1;
 const KILL_ACCOUNTING_VERSION = 3;
+const COIN_ACCOUNTING_VERSION = 2;
 const UTC8_OFFSET_MS = 8 * 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const PICKED_COINS_PER_SELF_DROP = 2;
@@ -90,6 +91,7 @@ function defaultBrowserlessState() {
 function defaultBrowserlessStats() {
   return {
     killAccountingVersion: KILL_ACCOUNTING_VERSION,
+    coinAccountingVersion: COIN_ACCOUNTING_VERSION,
     currentSession: {
       online: false,
       sessionId: '',
@@ -102,6 +104,9 @@ function defaultBrowserlessStats() {
       baseDrop: null,
       lastDrop: null,
       coinsGained: 0,
+      pickupObservedCoins: 0,
+      dropCalibratedCoins: 0,
+      coinPickupKeys: [],
       dropResetCount: 0,
       lastStamina1dRemaining: null,
       lastStamina1dLimit: null,
@@ -375,9 +380,22 @@ function compactDailyFirstLoginNotBeforeMs(stats, config = {}, candidateMs = 0) 
   return browserlessStatsDayStartMs(candidateDay) + delayAfterMidnightMs;
 }
 
+function normalizeSessionCoinPickupKeys(value) {
+  return (Array.isArray(value) ? value : [])
+    .map(item => ({
+      key: compactString(item?.key, 160),
+      at: compactNumber(item?.at),
+      amount: Math.max(0, Math.round(Number(item?.amount || 0) || 0))
+    }))
+    .filter(item => item.key && item.at !== null && item.amount > 0)
+    .slice(-300);
+}
+
 function normalizeBrowserlessStats(stats, rawStats = stats) {
   const inputKillAccountingVersion = Number(rawStats?.killAccountingVersion || 0);
+  const inputCoinAccountingVersion = Number(rawStats?.coinAccountingVersion || 0);
   const resetUntrustedKills = inputKillAccountingVersion !== KILL_ACCOUNTING_VERSION;
+  const migrateLegacyCoins = inputCoinAccountingVersion < COIN_ACCOUNTING_VERSION;
   const normalized = mergeState(defaultBrowserlessStats(), stats || {});
   const session = normalized.currentSession || {};
   const today = normalized.today || {};
@@ -395,7 +413,12 @@ function normalizeBrowserlessStats(stats, rawStats = stats) {
         enteredTick,
         killBaselineKeys
       });
+  const coinMultiplier = migrateLegacyCoins ? PICKED_COINS_PER_SELF_DROP : 1;
+  const sessionCoinsGained = Math.max(0, Math.round(Number(session.coinsGained || 0) * coinMultiplier || 0));
+  const todayCoinsGained = Math.max(0, Math.round(Number(today.coinsGained || 0) * coinMultiplier || 0));
+  const activeBaseCoinsGained = Math.max(0, Math.round(Number(today.activeBaseCoinsGained || 0) * coinMultiplier || 0));
   normalized.killAccountingVersion = KILL_ACCOUNTING_VERSION;
+  normalized.coinAccountingVersion = COIN_ACCOUNTING_VERSION;
   normalized.currentSession = {
     ...session,
     online: Boolean(session.online),
@@ -408,7 +431,14 @@ function normalizeBrowserlessStats(stats, rawStats = stats) {
     exitReason: compactString(session.exitReason, 160),
     baseDrop: compactNumber(session.baseDrop),
     lastDrop: compactNumber(session.lastDrop),
-    coinsGained: Math.max(0, Math.round(Number(session.coinsGained || 0) || 0)),
+    coinsGained: sessionCoinsGained,
+    pickupObservedCoins: migrateLegacyCoins
+      ? sessionCoinsGained
+      : Math.max(0, Math.round(Number(session.pickupObservedCoins || 0) || 0)),
+    dropCalibratedCoins: migrateLegacyCoins
+      ? sessionCoinsGained
+      : Math.max(0, Math.round(Number(session.dropCalibratedCoins || 0) || 0)),
+    coinPickupKeys: normalizeSessionCoinPickupKeys(session.coinPickupKeys),
     dropResetCount: Math.max(0, Math.round(Number(session.dropResetCount || 0) || 0)),
     lastStamina1dRemaining: compactNumber(session.lastStamina1dRemaining),
     lastStamina1dLimit: compactNumber(session.lastStamina1dLimit),
@@ -426,13 +456,13 @@ function normalizeBrowserlessStats(stats, rawStats = stats) {
     latestDrop: compactNumber(today.latestDrop),
     uptimeMs: Math.max(0, Math.round(Number(today.uptimeMs || 0) || 0)),
     staminaSpentMs: Math.max(0, Math.round(Number(today.staminaSpentMs || 0) || 0)),
-    coinsGained: Math.max(0, Math.round(Number(today.coinsGained || 0) || 0)),
+    coinsGained: todayCoinsGained,
     kills: resetUntrustedKills ? 0 : Math.max(0, Math.round(Number(today.kills || 0) || 0)),
     sessionCount: Math.max(0, Math.round(Number(today.sessionCount || 0) || 0)),
     activeSessionId: compactString(today.activeSessionId, 96),
     activeEnteredAt: compactString(today.activeEnteredAt, 48),
     activeBaseStaminaSpentMs: Math.max(0, Math.round(Number(today.activeBaseStaminaSpentMs || 0) || 0)),
-    activeBaseCoinsGained: Math.max(0, Math.round(Number(today.activeBaseCoinsGained || 0) || 0)),
+    activeBaseCoinsGained,
     activeBaseKills: resetUntrustedKills ? 0 : Math.max(0, Math.round(Number(today.activeBaseKills || 0) || 0))
   };
   normalized.lastExit = {
@@ -472,10 +502,10 @@ function statsSelfDrop(self) {
   return compactNumber(self?.drop ?? self?.death_drop_coins ?? self?.coinsGained);
 }
 
-function pickedCoinsFromSelfDropDelta(value) {
-  const dropDelta = compactNumber(value);
-  if (dropDelta === null) return null;
-  return Math.max(0, Math.round(dropDelta * PICKED_COINS_PER_SELF_DROP));
+function pickedCoinsFromStatsValue(value) {
+  const pickedCoins = compactNumber(value);
+  if (pickedCoins === null) return null;
+  return Math.max(0, Math.round(pickedCoins));
 }
 
 function statsSelfUserId(self, state) {
@@ -566,6 +596,16 @@ function statsKillEvidenceFromDecision(decision) {
     .filter(item => item.key);
 }
 
+function statsCoinPickupEvidenceFromDecision(decision, nowMs = Date.now()) {
+  return (Array.isArray(decision?.input?.coinPickups) ? decision.input.coinPickups : [])
+    .map(item => ({
+      key: compactString(item?.key, 160),
+      amount: Math.max(0, Math.round(Number(item?.amount || 0) || 0)),
+      at: eventTimeMs(item?.at, nowMs)
+    }))
+    .filter(item => item.key && item.amount > 0 && item.at > 0);
+}
+
 function ensureSessionKillBaseline(session, decision) {
   const evidence = statsKillEvidenceFromDecision(decision);
   const decisionTick = statsDecisionTick(decision);
@@ -635,15 +675,44 @@ function updateBrowserlessStatsSessionDrop(session, self) {
     return true;
   }
   if (drop >= previousDrop) {
-    session.coinsGained = Math.max(0, Math.round(
-      Number(session.coinsGained || 0) + drop - previousDrop
+    session.dropCalibratedCoins = Math.max(0, Math.round(
+      Number(session.dropCalibratedCoins || 0)
+        + (drop - previousDrop) * PICKED_COINS_PER_SELF_DROP
     ));
+    session.coinsGained = Math.max(
+      Math.max(0, Math.round(Number(session.coinsGained || 0) || 0)),
+      session.dropCalibratedCoins
+    );
   } else {
     session.baseDrop = drop;
     session.dropResetCount = Math.max(0, Math.round(Number(session.dropResetCount || 0) + 1));
   }
   session.lastDrop = drop;
   return true;
+}
+
+function updateBrowserlessStatsSessionCoinPickups(session, decision, nowMs) {
+  const memoryMs = 60000;
+  const duplicateWindowMs = 5000;
+  const pickupKeys = normalizeSessionCoinPickupKeys(session.coinPickupKeys)
+    .filter(item => nowMs - Number(item.at || 0) <= memoryMs);
+  let added = 0;
+  for (const pickup of statsCoinPickupEvidenceFromDecision(decision, nowMs)) {
+    const duplicate = pickupKeys.some(item => item.key === pickup.key
+      && Math.abs(Number(item.at || 0) - pickup.at) <= duplicateWindowMs);
+    if (duplicate) continue;
+    pickupKeys.push(pickup);
+    added += pickup.amount;
+  }
+  session.coinPickupKeys = pickupKeys.slice(-300);
+  if (added > 0) {
+    session.pickupObservedCoins = Math.max(0, Math.round(Number(session.pickupObservedCoins || 0) + added));
+  }
+  session.coinsGained = Math.max(
+    Math.max(0, Math.round(Number(session.pickupObservedCoins || 0) || 0)),
+    Math.max(0, Math.round(Number(session.dropCalibratedCoins || 0) || 0))
+  );
+  return added;
 }
 
 function updateBrowserlessStatsTodayDrop(stats, self) {
@@ -663,6 +732,7 @@ function updateBrowserlessStatsSession(session, decision, self, stamina, nowMs) 
   session.exitedAt = '';
   session.exitReason = '';
   updateBrowserlessStatsSessionDrop(session, self);
+  updateBrowserlessStatsSessionCoinPickups(session, decision, nowMs);
   updateBrowserlessStatsSessionStamina(session, stamina, self);
   const evidence = ensureSessionKillBaseline(session, decision);
   const baselineKeys = new Set(Array.isArray(session.killBaselineKeys) ? session.killBaselineKeys : []);
@@ -821,7 +891,7 @@ function compactBrowserlessStats(normalized, game, action, options = {}, lastKno
   const activeDelta = todayActiveDelta(stats, nowMs);
   const summedTodayStaminaSpentMs = Math.max(0, Math.round(Number(stats.today.staminaSpentMs || 0) + activeDelta.staminaSpentMs));
   const actualTodayStaminaSpentMs = actualBrowserlessDailyStaminaSpentMs(stats);
-  const todayDropDelta = Math.max(0, Math.round(Number(stats.today.coinsGained || 0) + activeDelta.coinsGained));
+  const todayCoinsGained = Math.max(0, Math.round(Number(stats.today.coinsGained || 0) + activeDelta.coinsGained));
   const rawNextRunAt = action?.nextRunAt || stats.lastExit.nextRunAt || '';
   const offlineBlocker = compactOfflineBlocker(normalized, lastKnown, options, nowMs);
   const rawNextRunAtMs = parseTimeMs(rawNextRunAt);
@@ -842,7 +912,7 @@ function compactBrowserlessStats(normalized, game, action, options = {}, lastKno
       enteredAt: session.enteredAt || '',
       durationMs: enteredMs ? Math.max(0, Math.round(durationEndMs - enteredMs)) : 0,
       staminaSpentMs: compactNumber(session.staminaSpentMs),
-      coinsGained: pickedCoinsFromSelfDropDelta(session.coinsGained),
+      coinsGained: pickedCoinsFromStatsValue(session.coinsGained),
       kills: compactNumber(session.kills)
     },
     offline: {
@@ -863,7 +933,7 @@ function compactBrowserlessStats(normalized, game, action, options = {}, lastKno
       staminaSpentMs: actualTodayStaminaSpentMs === null
         ? summedTodayStaminaSpentMs
         : actualTodayStaminaSpentMs,
-      coinsGained: pickedCoinsFromSelfDropDelta(todayDropDelta),
+      coinsGained: pickedCoinsFromStatsValue(todayCoinsGained),
       kills: Math.max(0, Math.round(Number(stats.today.kills || 0) + activeDelta.kills))
     }
   };

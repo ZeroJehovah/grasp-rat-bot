@@ -1,8 +1,22 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.21.1';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.21.2';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
+
+function highDropRankValueCore(item) {
+  for (const index of [3, 2, 1]) {
+    const raw = item?.[index];
+    if (raw === null || raw === undefined || raw === '') continue;
+    const value = Number(raw);
+    if (Number.isFinite(value)) return value;
+  }
+  return -Infinity;
+}
+
+function isStaminaExhaustionExitReasonCore(reason) {
+  return /stamina-exhausted-leave|daily-stamina-exhausted|体力耗尽/i.test(String(reason || ''));
+}
 
 function panelSessionFlagsCore(status = {}) {
   const online = Boolean(status?.stats?.currentSession?.online);
@@ -377,7 +391,7 @@ function renderBrowserlessWebPanel() {
         </div>
         <div class="player-insights-grid">
           <section data-panel-key="high-drop-players">
-            <div class="panel-head"><h2 class="panel-title" data-panel-title role="button" tabindex="0" aria-expanded="true">大户名录</h2><div class="panel-head-meta"><span id="highDropTitleMeta" class="title-meta">--</span></div></div>
+            <div class="panel-head"><h2 class="panel-title" data-panel-title role="button" tabindex="0" aria-expanded="true">Drop排行</h2><div class="panel-head-meta"><span id="highDropTitleMeta" class="title-meta">--</span></div></div>
             <div class="panel-body player-insights-body"><div id="highDropPlayers" class="high-drop-list"></div></div>
           </section>
           <section data-panel-key="player-memory">
@@ -417,6 +431,8 @@ function renderBrowserlessWebPanel() {
     const token = params.get('token') || localStorage.graspRatBrowserlessToken || '';
     if (token) localStorage.graspRatBrowserlessToken = token;
     const WEB_PANEL_VERSION = ${JSON.stringify(BROWSERLESS_WEB_PANEL_VERSION)};
+    const highDropRankValue = ${highDropRankValueCore.toString()};
+    const isStaminaExhaustionExitReason = ${isStaminaExhaustionExitReasonCore.toString()};
     const WEB_PANEL_RELOAD_KEY = 'graspRatBrowserlessPanelReloadedVersion';
     const PANEL_COLLAPSE_KEY = 'graspRatBrowserlessPanelCollapsedV1';
     const CHAT_KILL_COLLAPSE_KEY = 'graspRatBrowserlessChatKillsCollapsedV1';
@@ -1668,34 +1684,38 @@ function renderBrowserlessWebPanel() {
       const selfLatestDrop = number(today.latestDrop) ?? number(self?.drop);
       setRichText('highDropTitleMeta', [
         { text: '更新于', className: 'meta-label' },
-        { text: stamp(status.highDropPlayers?.lastSnapshotAt), className: 'coin' }
+        { text: stamp(status.highDropPlayers?.lastSnapshotAt) }
       ]);
       const fragment = document.createDocumentFragment();
       fragment.appendChild(createHighDropRow('玩家名称', 'Drop', '推测额度', true));
+      const rankedItems = items
+        .filter(item => selfUserId === null || number(item?.[4]) !== selfUserId)
+        .map(item => ({ item, self: false, online: item?.[5] }));
       if (selfInitialDrop !== null || selfMaxDrop !== null) {
         const initial = selfInitialDrop ?? selfMaxDrop;
         const maximum = selfMaxDrop ?? selfInitialDrop;
         const latest = selfLatestDrop;
-        fragment.appendChild(createHighDropRow(
-          selfName,
-          highDropValueText([null, initial, maximum, latest]),
-          integer(estimatedHighDropQuota(initial, maximum, latest)),
-          false,
-          status.game?.inGame === true,
-          true
-        ));
+        rankedItems.push({
+          item: [selfName, initial, maximum, latest, selfUserId, status.game?.inGame === true],
+          self: true,
+          online: status.game?.inGame === true
+        });
       }
-      const otherItems = items.filter(item => selfUserId === null || number(item?.[4]) !== selfUserId);
-      if (!otherItems.length && selfInitialDrop === null && selfMaxDrop === null) {
+      rankedItems.sort((left, right) => highDropRankValue(right.item) - highDropRankValue(left.item)
+        || (number(right.item?.[2]) ?? -Infinity) - (number(left.item?.[2]) ?? -Infinity)
+        || String(left.item?.[0] || '').localeCompare(String(right.item?.[0] || '')));
+      if (!rankedItems.length) {
         fragment.appendChild(createHighDropRow('无', '--', '--'));
       } else {
-        for (const item of otherItems) {
+        for (const entry of rankedItems) {
+          const item = entry.item;
           fragment.appendChild(createHighDropRow(
             item?.[0],
             highDropValueText(item),
             integer(estimatedHighDropQuota(item?.[1], item?.[2], item?.[3])),
             false,
-            item?.[5]
+            entry.online,
+            entry.self
           ));
         }
       }
@@ -1937,10 +1957,11 @@ function renderBrowserlessWebPanel() {
       const offlineStats = status.stats?.offline || {};
       const reason = offlineStats.lastExitReason || status.recentExit?.reason || '';
       const battle = recentBattle(status);
+      const staminaExhausted = isStaminaExhaustionExitReason(reason);
       const rowsOut = [];
       addRow(rowsOut, '退出原因', lastExitReasonText(status, reason), true);
       addRow(rowsOut, '退出时间', fullStamp(offlineStats.lastExitAt), true);
-      if (battle) {
+      if (battle && !staminaExhausted) {
         addRow(rowsOut, '交战对手', targetLabel(battle.target), true);
         addRow(rowsOut, '战斗结果', recentBattleOutcomeText(status), true);
         addRow(rowsOut, '战斗时间', recentBattleTimeText(status));
@@ -1955,7 +1976,7 @@ function renderBrowserlessWebPanel() {
         addRow(rowsOut, '射击命中', recentBattleShootingText(status));
       }
       const exitHpText = combatExitHpText(status);
-      if (exitHpText && exitHpText !== '--') addRow(rowsOut, '退出触发血量', exitHpText);
+      if (!staminaExhausted && exitHpText && exitHpText !== '--') addRow(rowsOut, '退出触发血量', exitHpText);
       const confirmedHpText = confirmedLeaveHpText(status);
       if (confirmedHpText) addRow(rowsOut, '离场确认血量', confirmedHpText);
       return rowsOut;
@@ -2513,6 +2534,8 @@ module.exports = {
   formatSpentStaminaCore,
   groupBlockingFactorsCore,
   groupChatMessagesForDisplay,
+  highDropRankValueCore,
+  isStaminaExhaustionExitReasonCore,
   nearbyCoinIconCore,
   panelSessionFlagsCore,
   renderBrowserlessWebPanel

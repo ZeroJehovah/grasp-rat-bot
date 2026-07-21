@@ -27,7 +27,12 @@ const {
   writeBrowserlessStateFile
 } = require('./state-file');
 const { startStatusServer } = require('./status-server');
-const { BROWSERLESS_WEB_PANEL_VERSION, groupBlockingFactorsCore } = require('./web-panel');
+const {
+  BROWSERLESS_WEB_PANEL_VERSION,
+  groupBlockingFactorsCore,
+  highDropRankValueCore,
+  isStaminaExhaustionExitReasonCore
+} = require('./web-panel');
 const {
   applySingleBlockerLoginBypass,
   runPreLoginSnapshotSafety,
@@ -50,6 +55,7 @@ const {
 const {
   BROWSER_RUNTIME_DEFAULTS,
   decisionStatePatch,
+  observeBrowserlessCoinPickups,
   snapshotSelfKillEvidence,
   summarizeNearbyForPanel
 } = require('./decision-adapter');
@@ -3215,15 +3221,53 @@ async function runBrowserlessRunnerSelfTest() {
       presentFirst: routeRowsText(routeRowsWhenFirstPresent),
       previewOnly: routeRowsText(previewRows)
     };
+    const pickupObservationState = {};
+    const pickupObservationAt = Date.parse('2026-07-20T00:00:00.000Z');
+    const pickupBefore = observeBrowserlessCoinPickups({
+      nowMs: pickupObservationAt,
+      self: { x: 0, y: 0 },
+      rawRealtime: { coinDropsObserved: true },
+      realtimeObservedCoins: [{ drop_id: 'single-coin', amount: 1, x: 1000, y: 0 }]
+    }, pickupObservationState, { coinCollectedConfirmDistance: 1800 });
+    const pickupMissingAuthority = observeBrowserlessCoinPickups({
+      nowMs: pickupObservationAt + 500,
+      self: { x: 500, y: 0 },
+      rawRealtime: { coinDropsObserved: false },
+      realtimeObservedCoins: []
+    }, pickupObservationState, { coinCollectedConfirmDistance: 1800 });
+    const pickupAfter = observeBrowserlessCoinPickups({
+      nowMs: pickupObservationAt + 1000,
+      self: { x: 1000, y: 0 },
+      rawRealtime: { coinDropsObserved: true },
+      realtimeObservedCoins: []
+    }, pickupObservationState, { coinCollectedConfirmDistance: 1800 });
+    const browserlessCoinPickupObservationTest = {
+      ok: pickupBefore.length === 0
+        && pickupMissingAuthority.length === 0
+        && pickupAfter.length === 1
+        && pickupAfter[0].amount === 1,
+      pickupCount: pickupAfter.length,
+      amount: pickupAfter[0]?.amount ?? null
+    };
+    const highDropRankingTest = [
+      ['self', 500, 700, 600],
+      ['other', 500, 650, 650]
+    ].sort((left, right) => highDropRankValueCore(right) - highDropRankValueCore(left))
+      .map(item => item[0])
+      .join(',') === 'other,self';
+    const staminaExhaustionPanelTest = isStaminaExhaustionExitReasonCore('stamina-exhausted-leave')
+      && isStaminaExhaustionExitReasonCore('体力耗尽')
+      && !isStaminaExhaustionExitReasonCore('stamina-budget-coin-leave');
     const panelStatsState = {
       session: { userId: 7, sessionToken: 'panel-self-test-token' },
       runner: { running: true, mode: 'profit-live', controlMode: 'profit-live' }
     };
-    const panelStatsDecision = (atMs, drop) => ({
+    const panelStatsDecision = (atMs, drop, coinPickups = []) => ({
       at: new Date(atMs).toISOString(),
       input: {
         self: { userId: 7, name: 'self', drop, dropKnown: true },
         stamina: {},
+        coinPickups,
         selfKillEvidence: []
       }
     });
@@ -3235,15 +3279,27 @@ async function runBrowserlessRunnerSelfTest() {
     );
     panelStatsState.stats = browserlessStatsForDecision(
       panelStatsState,
-      panelStatsDecision(panelStatsStartedAt + 1000, 110),
+      panelStatsDecision(panelStatsStartedAt + 1000, 100, [{ key: 'id:single-coin', amount: 1, at: panelStatsStartedAt + 1000 }]),
       { nowMs: panelStatsStartedAt + 1000 }
+    );
+    const panelSingleCoinCompact = buildCompactBrowserlessStatus(panelStatsState, { nowMs: panelStatsStartedAt + 1000 });
+    panelStatsState.stats = browserlessStatsForDecision(
+      panelStatsState,
+      panelStatsDecision(panelStatsStartedAt + 2000, 101, [{ key: 'id:second-single-coin', amount: 1, at: panelStatsStartedAt + 2000 }]),
+      { nowMs: panelStatsStartedAt + 2000 }
+    );
+    const panelTwoCoinCompact = buildCompactBrowserlessStatus(panelStatsState, { nowMs: panelStatsStartedAt + 2000 });
+    panelStatsState.stats = browserlessStatsForDecision(
+      panelStatsState,
+      panelStatsDecision(panelStatsStartedAt + 3000, 110),
+      { nowMs: panelStatsStartedAt + 3000 }
     );
     panelStatsState.stats = browserlessStatsForDecision(
       panelStatsState,
-      panelStatsDecision(panelStatsStartedAt + 2000, 20),
-      { nowMs: panelStatsStartedAt + 2000 }
+      panelStatsDecision(panelStatsStartedAt + 4000, 20),
+      { nowMs: panelStatsStartedAt + 4000 }
     );
-    const panelStatsCompact = buildCompactBrowserlessStatus(panelStatsState, { nowMs: panelStatsStartedAt + 2000 });
+    const panelStatsCompact = buildCompactBrowserlessStatus(panelStatsState, { nowMs: panelStatsStartedAt + 4000 });
     const panelBattleCompact = buildCompactBrowserlessStatus({
       session: { userId: 7, sessionToken: 'panel-self-test-token' },
       runner: { running: true, currentAction: { kind: 'combat-live', target: { userId: 8, distance: 5600 } } },
@@ -3419,10 +3475,11 @@ async function runBrowserlessRunnerSelfTest() {
         && pageHtml.includes("addRow(rowsOut, '单人阻挡', singleBlocker)");
       const panelDetailTest = {
         ok: Boolean(
-          pageHtml.includes('>大户名录</h2>')
+          pageHtml.includes('>Drop排行</h2>')
           && pageHtml.includes("{ text: '更新于', className: 'meta-label' }")
-          && pageHtml.includes("stamp(status.highDropPlayers?.lastSnapshotAt)")
+          && pageHtml.includes("{ text: stamp(status.highDropPlayers?.lastSnapshotAt) }")
           && pageHtml.includes("createHighDropRow('玩家名称', 'Drop', '推测额度', true)")
+          && pageHtml.includes('rankedItems.sort((left, right) => highDropRankValue(right.item) - highDropRankValue(left.item)')
           && pageHtml.includes('initial * 20 + (latest - initial) * 2')
           && pageHtml.includes('if (latest !== maximum) return null')
           && pageHtml.includes('.high-drop-name.self.online,.high-drop-values.self.online{color:var(--green)}')
@@ -3448,6 +3505,8 @@ async function runBrowserlessRunnerSelfTest() {
           && !pageHtml.includes("[offlineRole ? '上次血量' : '血量'")
           && !pageHtml.includes("[offlineRole ? '上次Drop' : 'Drop'")
           && pageHtml.includes("updateBattlePanel(s);\n      updateLastExitPanel(s);")
+          && pageHtml.includes('const staminaExhausted = isStaminaExhaustionExitReason(reason);')
+          && pageHtml.includes('if (battle && !staminaExhausted)')
           && pageHtml.includes('grid-column:2;grid-row:2')
           && pageHtml.includes("setText(prefix + 'Hp', hp === null ? '--' : integer(hp))")
           && pageHtml.includes("{ text: unit(actor?.stamina5s), className: battleStaminaClass(actor) }")
@@ -3456,6 +3515,15 @@ async function runBrowserlessRunnerSelfTest() {
           && panelStatsCompact.stats.today.initialDrop === 100
           && panelStatsCompact.stats.today.maxDrop === 110
           && panelStatsCompact.stats.today.latestDrop === 20
+          && panelSingleCoinCompact.stats.currentSession.coinsGained === 1
+          && panelSingleCoinCompact.stats.today.coinsGained === 1
+          && panelTwoCoinCompact.stats.currentSession.coinsGained === 2
+          && panelTwoCoinCompact.stats.today.coinsGained === 2
+          && panelStatsCompact.stats.currentSession.coinsGained === 20
+          && panelStatsCompact.stats.today.coinsGained === 20
+          && browserlessCoinPickupObservationTest.ok
+          && highDropRankingTest
+          && staminaExhaustionPanelTest
           && panelBattleCompact.battle.distance === 5600
           && panelBattleCompact.battle.movementDistance === 20000
           && panelAfkPresentationInitial.movementDistance === 0
@@ -3480,6 +3548,14 @@ async function runBrowserlessRunnerSelfTest() {
           max: panelStatsCompact.stats.today.maxDrop,
           latest: panelStatsCompact.stats.today.latestDrop
         },
+        pickedCoins: {
+          single: panelSingleCoinCompact.stats.currentSession.coinsGained,
+          pair: panelTwoCoinCompact.stats.currentSession.coinsGained,
+          calibrated: panelStatsCompact.stats.currentSession.coinsGained
+        },
+        coinPickupObservation: browserlessCoinPickupObservationTest,
+        highDropRanking: highDropRankingTest,
+        staminaExhaustionPanel: staminaExhaustionPanelTest,
         battleDistance: panelBattleCompact.battle.distance,
         battleMovementDistance: panelBattleCompact.battle.movementDistance,
         afkBattleMovementDistance: panelAfkBattleCompact.battle.movementDistance,

@@ -25034,7 +25034,7 @@ async function runSelfTest() {
           stored.lastKnown.stamina.remaining1d
         ].join('|');
       }),
-      want: 'true|false|true|true||1|7|persisted-secret|10.0.0.101|2|200|1000|5000|false|1050000|18950000|8|1050000|8|1|2026-07-08T00:00:02.000Z|2026-07-08T00:00:42.000Z|330|shutdown-live-state-run|shutdown-live-state-run|88|748|8500|18950000'
+      want: 'true|false|true|true||1|7|persisted-secret|10.0.0.101|2|200|1000|5000|false|1050000|18950000|16|1050000|16|1|2026-07-08T00:00:02.000Z|2026-07-08T00:00:42.000Z|330|shutdown-live-state-run|shutdown-live-state-run|88|748|8500|18950000'
     },
     {
       name: 'browserless runner dry-run and fake read-only path write redacted logs',
@@ -26423,7 +26423,7 @@ async function runSelfTest() {
           compact.stats.today.latestDrop
         ].join('|');
       })(),
-      want: '1843|2149|306|612|612|1843|2149|2149'
+      want: '1843|2149|612|612|612|1843|2149|2149'
     },
     {
       name: 'browserless stats preserve positive Drop gains across a death reset',
@@ -26458,7 +26458,7 @@ async function runSelfTest() {
           compact.stats.today.latestDrop
         ].join('|');
       })(),
-      want: '10|20|20|1|40|40|100|110|20'
+      want: '10|20|40|1|40|40|100|110|20'
     },
     {
       name: 'browserless today stamina reconciles cross-session gaps from 1d remaining',
@@ -27243,7 +27243,8 @@ async function runSelfTest() {
             /authStatusAttrs\(s\)/.test(panelText),
             /gameStatusAttrs\(s\)/.test(panelText),
             /loginPointAttrs\(status\)/.test(panelText),
-            /classAttrs\('coin'\)/.test(panelText),
+            panelText.includes("{ text: stamp(status.highDropPlayers?.lastSnapshotAt) }")
+              && !panelText.includes("{ text: stamp(status.highDropPlayers?.lastSnapshotAt), className: 'coin' }"),
             stop.status,
             JSON.parse(await stop.text()).stopped,
             stopCalled
@@ -27323,7 +27324,7 @@ async function runSelfTest() {
           compact.highDropPlayers.p.length,
           JSON.stringify(compact.highDropPlayers).includes('carol-low'),
           JSON.stringify(compact).includes('should-not-leak'),
-          /<h2[^>]*>大户名录<\/h2>/.test(panelText),
+          /<h2[^>]*>Drop排行<\/h2>/.test(panelText),
           /id="highDropPlayers"/.test(panelText),
           /\.high-drop-name\.online\{color:var\(--blue\)\}/.test(panelText),
           /\.high-drop-name\.self\.online,\.high-drop-values\.self\.online\{color:var\(--green\)\}/.test(panelText),
@@ -27334,14 +27335,16 @@ async function runSelfTest() {
           /merged\[merged.length - 1\] !== next/.test(panelScript),
           /join\('\s*->\s*'\)/.test(panelScript),
           panelScript.includes("{ text: '更新于', className: 'meta-label' }"),
-          panelScript.includes("stamp(status.highDropPlayers?.lastSnapshotAt)"),
+          panelScript.includes("{ text: stamp(status.highDropPlayers?.lastSnapshotAt) }")
+            && !panelScript.includes("{ text: stamp(status.highDropPlayers?.lastSnapshotAt), className: 'coin' }"),
           panelScript.includes("createHighDropRow('玩家名称', 'Drop', '推测额度', true)"),
           panelScript.includes('const estimatedHighDropQuota = function estimatedHighDropQuotaCore'),
           estimatedHighDropQuotaCore(1000, 1100, 1100) === 20200,
           estimatedHighDropQuotaCore(1000, 1100, 1000) === null,
           estimatedHighDropQuotaCore(500, 500, 500) === 10000,
           estimatedHighDropQuotaCore(null, 500, 500) === null,
-          panelScript.includes("status.game?.inGame === true,\n          true"),
+          panelScript.includes('rankedItems.push({')
+            && panelScript.includes('rankedItems.sort((left, right) => highDropRankValue(right.item) - highDropRankValue(left.item)'),
           /\.high-drop-row\{display:grid;grid-template-columns:[^}]*minmax\(72px,\.8fr\)/.test(panelText),
           !panelScript.includes("'我 · ' + self.name"),
           panelText.indexOf('id="highDropPlayers"') < panelText.indexOf('id="nearbyGrid"')
@@ -28288,7 +28291,7 @@ async function runSelfTest() {
           !panelScript.includes("setRichText('roleTitleMeta', [{ text: '已离线', className: 'muted' }], 'muted');")
         ].join('|');
       })(),
-      want: '2026.07.21.1|true|true|true|true|true|true'
+      want: '2026.07.21.2|true|true|true|true|true|true'
     },
     {
       name: 'browserless runner self-test passes',

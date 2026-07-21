@@ -36,11 +36,17 @@ function topLevelCoinLikeFields(frame) {
     .sort();
 }
 
+const COIN_DROP_ARRAY_FIELDS = ['coin_drops', 'coinDrops', 'drops', 'coins'];
+
+function hasCoinDropArrayField(frame) {
+  return Boolean(frame && typeof frame === 'object'
+    && COIN_DROP_ARRAY_FIELDS.some(field => Array.isArray(frame[field])));
+}
+
 function coinDropArraysFromFrame(frame) {
   if (!frame || typeof frame !== 'object') return [];
-  const fields = ['coin_drops', 'coinDrops', 'drops', 'coins'];
   const arrays = [];
-  for (const field of fields) {
+  for (const field of COIN_DROP_ARRAY_FIELDS) {
     const value = frame[field];
     if (Array.isArray(value)) arrays.push(...value);
   }
@@ -244,7 +250,8 @@ function createInitialState(userId = 0) {
       entitiesByUserId: {},
       bullets: [],
       bulletTrajectories: {},
-      coinDrops: []
+      coinDrops: [],
+      coinDropsObserved: false
     },
     snapshot: {
       authority: 'snapshot',
@@ -353,6 +360,7 @@ function createBrowserlessStateStore(options = {}) {
     const entities = Array.isArray(frame.entities) ? frame.entities : [];
     const bullets = Array.isArray(frame.bullets) ? frame.bullets : [];
     const coinDrops = coinDropArraysFromFrame(frame);
+    const coinDropsObserved = hasCoinDropArrayField(frame);
     const normalizedEntities = entities
       .map(entity => normalizeEntity(entity, { ...meta, authority: 'realtime', source: 'pos' }))
       .filter(Boolean);
@@ -410,6 +418,7 @@ function createBrowserlessStateStore(options = {}) {
     state.realtime.coinDrops = coinDrops
       .map(drop => normalizeCoinDrop(drop, { ...meta, authority: 'realtime', source: 'pos' }))
       .filter(Boolean);
+    state.realtime.coinDropsObserved = coinDropsObserved;
     state.realtime.self = normalizedEntities.find(entity => Number(entity.user_id) === Number(state.userId)) || null;
     if (state.realtime.self) state.realtime.lastSelf = cloneJson(state.realtime.self);
     observeVelocityTransition(state.realtime.self, meta);
@@ -694,7 +703,8 @@ function createBrowserlessStateStore(options = {}) {
       entities: cloneJson(state.realtime.entities),
       entitiesByUserId: cloneJson(state.realtime.entitiesByUserId),
       bullets: cloneJson(state.realtime.bullets),
-      coinDrops: cloneJson(state.realtime.coinDrops)
+      coinDrops: cloneJson(state.realtime.coinDrops),
+      coinDropsObserved: Boolean(state.realtime.coinDropsObserved)
     };
   }
 
@@ -775,7 +785,8 @@ function createBrowserlessStateStore(options = {}) {
         entities: state.realtime.entities,
         entitiesByUserId: state.realtime.entitiesByUserId,
         bullets: state.realtime.bullets,
-        coinDrops: state.realtime.coinDrops
+        coinDrops: state.realtime.coinDrops,
+        coinDropsObserved: Boolean(state.realtime.coinDropsObserved)
       },
       fallback: {
         authority: 'snapshot',

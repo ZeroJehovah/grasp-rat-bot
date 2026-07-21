@@ -87,6 +87,7 @@ function createInitialDecisionState(options = {}) {
     staleCoinEscape: cloneJson(options.staleCoinEscape || null),
     coinCompetitionState: asRecord(options.coinCompetitionState),
     coinCompetitionReleases: asArray(options.coinCompetitionReleases),
+    coinPickupObservation: cloneJson(options.coinPickupObservation || null),
     singleCoinBait: cloneJson(options.singleCoinBait || null),
     outsideCenterIdle: cloneJson(options.outsideCenterIdle || null),
     opportunityAfkStamina: asRecord(options.opportunityAfkStamina),
