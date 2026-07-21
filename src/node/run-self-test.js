@@ -20572,6 +20572,91 @@ async function runSelfTest() {
       want: 'coin|post-kill-drop-priority|57|34711|true|player:34711|true|true|57|huaming song|combat-live|post-kill-loot-safe-dodge|true|true|snapshot-stale|combat-live-realtime'
     },
     {
+      name: 'browserless healthy post-injury coin priority defers hp-gap exit',
+      got: (() => {
+        const state = {
+          userId: 7,
+          realtime: {
+            tick: 200,
+            frameAgeMs: 0,
+            self: { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 79, max_hp: 100, stamina_5s_remaining_milli: 10000, stamina_5s_limit_milli: 10000 },
+            entities: [
+              { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 79, max_hp: 100, stamina_5s_remaining_milli: 10000, stamina_5s_limit_milli: 10000 },
+              { entity_id: 2, user_id: 8, name: 'Eason', x: 8000, y: 0, hp: 100, max_hp: 100, current_join_mode: 'Active', firing: true, drop: 1129 }
+            ],
+            bullets: []
+          },
+          fallback: {
+            tick: 200,
+            frameAgeMs: 0,
+            self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 79, max_hp: 100 },
+            entities: [],
+            coinDrops: [{ drop_id: 'coin-11', source_user_id: 999, amount: 11, x: 3000, y: 0 }],
+            messages: []
+          }
+        };
+        const stateful = createBrowserlessDecisionState({
+          browserlessInjury: { at: 1000, currentHp: 79, previousHp: 82, hpDrop: 3 }
+        });
+        const decision = buildBrowserlessRealtimeControlDecision(state, stateful, {
+          ...buildBrowserlessRuntimeDefaults({}),
+          userId: 7,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          nowMs: 2000,
+          combatDisadvantageConfirmMs: 0,
+          combatDisadvantageMinEngageMs: 0,
+          combatDisadvantageMinSamples: 1
+        });
+        return [
+          decision.action?.kind,
+          decision.action?.reason,
+          decision.input.loot.blockedReason || '',
+          decision.input.loot.deferredCombatExitReason || '',
+          decision.action?.shouldLeave === true
+        ].join('|');
+      })(),
+      want: 'coin|high-value-visible-coin-priority||combat-hp-disadvantage-leave|false'
+    },
+    {
+      name: 'browserless coin priority still yields at hp threshold',
+      got: (() => {
+        const state = {
+          userId: 7,
+          realtime: {
+            tick: 201,
+            frameAgeMs: 0,
+            self: { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 50, max_hp: 100, stamina_5s_remaining_milli: 10000, stamina_5s_limit_milli: 10000 },
+            entities: [
+              { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 50, max_hp: 100, stamina_5s_remaining_milli: 10000, stamina_5s_limit_milli: 10000 },
+              { entity_id: 2, user_id: 8, name: 'Eason', x: 8000, y: 0, hp: 100, max_hp: 100, current_join_mode: 'Active', firing: true, drop: 1129 }
+            ],
+            bullets: []
+          },
+          fallback: {
+            tick: 201,
+            frameAgeMs: 0,
+            self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 50, max_hp: 100 },
+            entities: [],
+            coinDrops: [{ drop_id: 'coin-11', source_user_id: 999, amount: 11, x: 3000, y: 0 }],
+            messages: []
+          }
+        };
+        const decision = buildBrowserlessRealtimeControlDecision(state, createBrowserlessDecisionState(), {
+          ...buildBrowserlessRuntimeDefaults({}),
+          userId: 7,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          nowMs: 2000,
+          combatDisadvantageConfirmMs: 0,
+          combatDisadvantageMinEngageMs: 0,
+          combatDisadvantageMinSamples: 1
+        });
+        return [decision.action?.kind, decision.action?.reason, decision.action?.shouldLeave === true].join('|');
+      })(),
+      want: 'safety-exit|combat-hp-disadvantage-leave|true'
+    },
+    {
       name: 'browserless realtime nearby snapshot rows are bounded while retaining high-value coins',
       got: (() => {
         const self = {

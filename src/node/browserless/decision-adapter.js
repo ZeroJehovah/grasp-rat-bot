@@ -115,7 +115,6 @@ const DEFAULT_PROFIT_LIVE_INJURY_HP = 90;
 const DEFAULT_PROFIT_LIVE_PLAYER_DROP_MAX_DISTANCE = BROWSER_RUNTIME_DEFAULTS.postAttackDropCoinMaxDistance;
 const DEFAULT_PROFIT_LIVE_PLAYER_DROP_MAX_AGE_TICKS = 8000;
 const DEFAULT_REALTIME_LOOT_MAX_AGE_MS = 2500;
-const DEFAULT_REALTIME_LOOT_INJURY_BLOCK_MS = 2000;
 const DEFAULT_SNAPSHOT_VISIBLE_COIN_MAX_DISTANCE = BROWSER_RUNTIME_DEFAULTS.globalCoinMaxDistance;
 const DEFAULT_OPPORTUNITY_VISIBLE_DISTANCE = BROWSER_RUNTIME_DEFAULTS.opportunityVisibleDistance;
 const DEFAULT_OPPORTUNITY_NEARBY_PRIORITY_DISTANCE = BROWSER_RUNTIME_DEFAULTS.opportunityNearbyPriorityDistance;
@@ -7019,6 +7018,19 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
   const pursuitLeaveAction = buildBrowserlessPursuitLeaveDecision(input, stateful, combat, controlOptions);
   const lowHpRecoveryThreatExitAction = buildLowHpRecoveryThreatExitDecision(input, controlOptions);
   const safetyAction = profitLiveSafetyDecision(input, combat, stateful, controlOptions, null);
+  const healthyLootPriority = Boolean(
+    lootControl.action
+      && lootControl.summary?.eligible
+      && hpValue(input.self) > highValueCoinPriorityHealthyHp(options)
+  );
+  const selectedCombatExitAction = healthyLootPriority
+    && combatExitAction?.reason === 'combat-hp-disadvantage-leave'
+    ? null
+    : combatExitAction;
+  const selectedInjuryHpExitAction = healthyLootPriority
+    && injuryHpExitAction?.reason === 'combat-hp-disadvantage-leave'
+    ? null
+    : injuryHpExitAction;
   const combatAction = combat.target && combatActionEligible ? combat.action : null;
   const closePressureCombatAction = combatAction && combatDecisionClosePressureActive(combat)
     ? combatAction
@@ -7029,8 +7041,8 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
       || targetHasRealBulletPressure(input, combat.target, stateful.combatTarget)
   ) ? combatAction : null;
   const action = longStaminaExhaustedLeaveAction
-    || combatExitAction
-    || injuryHpExitAction
+    || selectedCombatExitAction
+    || selectedInjuryHpExitAction
     || predictedThreatExitAction
     || pursuitLeaveAction
     || lowHpRecoveryThreatExitAction
@@ -7041,11 +7053,13 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
     || postKillSettlementWaitAction
     || combatAction
     || null;
-  let dangerousCombatExit = rememberDangerousCombatExitTarget(input, combat, stateful, options);
+  let dangerousCombatExit = selectedCombatExitAction
+    ? rememberDangerousCombatExitTarget(input, combat, stateful, options)
+    : null;
   if (!dangerousCombatExit) {
     dangerousCombatExit = rememberDangerousSafetyExitTarget(
       input,
-      injuryHpExitAction,
+      selectedInjuryHpExitAction,
       stateful,
       options,
       'recent-injury-pressure'
@@ -7130,7 +7144,7 @@ function buildRealtimeLootControl(input, combat, stateful = {}, options = {}) {
   if (!coin || !input?.self) return { action: null, combat: null, assessment, summary: summaryBase };
   const selfHp = hpValue(input.self);
   const healthyHp = highValueCoinPriorityHealthyHp(options);
-  if (selfHp === null || selfHp < healthyHp) {
+  if (selfHp === null || selfHp <= healthyHp) {
     return {
       action: null,
       combat: null,
@@ -7138,18 +7152,11 @@ function buildRealtimeLootControl(input, combat, stateful = {}, options = {}) {
       summary: { ...summaryBase, blockedReason: 'self-hp-below-loot-threshold', healthyHp, selfHp }
     };
   }
-  const injury = stateful.browserlessInjury || null;
-  const injuryBlockMs = Math.max(0, Number(options.realtimeLootInjuryBlockMs ?? DEFAULT_REALTIME_LOOT_INJURY_BLOCK_MS));
-  const injuryAgeMs = injury?.at ? Math.max(0, input.nowMs - Number(injury.at || 0)) : null;
-  if (injuryAgeMs !== null && injuryAgeMs <= injuryBlockMs) {
-    return {
-      action: null,
-      combat: null,
-      assessment,
-      summary: { ...summaryBase, blockedReason: 'recent-self-injury', healthyHp, selfHp, injuryAgeMs }
-    };
-  }
-  if (combat?.exitAction || combat?.dryRun?.exit?.shouldLeave) {
+  const combatExit = combat?.exitAction || (combat?.dryRun?.exit?.shouldLeave ? combat.dryRun.exit : null);
+  const deferredCombatExitReason = combatExit?.reason === 'combat-hp-disadvantage-leave'
+    ? combatExit.reason
+    : '';
+  if (combatExit && !deferredCombatExitReason) {
     return {
       action: null,
       combat: null,
@@ -7188,7 +7195,8 @@ function buildRealtimeLootControl(input, combat, stateful = {}, options = {}) {
         reason,
         target: summarizeCoin(coin),
         incomingCount: 0,
-        mode: 'direct-coin'
+        mode: 'direct-coin',
+        deferredCombatExitReason
       }
     } : null;
     return {
@@ -7205,7 +7213,15 @@ function buildRealtimeLootControl(input, combat, stateful = {}, options = {}) {
       },
       combat: directCombatSummary,
       assessment,
-      summary: { ...summaryBase, active: true, eligible: true, mode: 'direct-coin', healthyHp, selfHp }
+      summary: {
+        ...summaryBase,
+        active: true,
+        eligible: true,
+        mode: 'direct-coin',
+        healthyHp,
+        selfHp,
+        deferredCombatExitReason
+      }
     };
   }
   const safeDirection = safeLootDodgeDirection(combat, input.self, coin);
@@ -7243,6 +7259,7 @@ function buildRealtimeLootControl(input, combat, stateful = {}, options = {}) {
       reason,
       target: summarizeCoin(coin),
       incomingCount: incoming.incomingCount,
+      deferredCombatExitReason,
       safeDirection: { dx: Number(safeDirection.dx || 0), dy: Number(safeDirection.dy || 0) }
     }
   };
@@ -7265,6 +7282,7 @@ function buildRealtimeLootControl(input, combat, stateful = {}, options = {}) {
       healthyHp,
       selfHp,
       incomingCount: incoming.incomingCount,
+      deferredCombatExitReason,
       safeDirection: { dx: Number(safeDirection.dx || 0), dy: Number(safeDirection.dy || 0) }
     }
   };
