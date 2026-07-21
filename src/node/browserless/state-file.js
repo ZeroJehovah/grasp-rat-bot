@@ -1877,7 +1877,13 @@ function compactExit(event) {
     : (detail.combat && typeof detail.combat === 'object' ? detail.combat : {});
   const combatExit = decision.combat?.exit && typeof decision.combat.exit === 'object'
     ? decision.combat.exit
-    : (detail.combat?.exit && typeof detail.combat.exit === 'object' ? detail.combat.exit : {});
+    : (decision.action?.combatExit && typeof decision.action.combatExit === 'object'
+        ? decision.action.combatExit
+        : (detail.combat?.exit && typeof detail.combat.exit === 'object'
+            ? detail.combat.exit
+            : (detail.action?.combatExit && typeof detail.action.combatExit === 'object'
+                ? detail.action.combatExit
+                : {})));
   const metrics = combat.metrics && typeof combat.metrics === 'object' ? combat.metrics : {};
   const injury = decision.injury && typeof decision.injury === 'object'
     ? decision.injury
@@ -1885,6 +1891,9 @@ function compactExit(event) {
   const leaveConfirmation = event.leaveConfirmation && typeof event.leaveConfirmation === 'object'
     ? event.leaveConfirmation
     : (detail.leaveConfirmation && typeof detail.leaveConfirmation === 'object' ? detail.leaveConfirmation : {});
+  const missClose = combatExit.missClose && typeof combatExit.missClose === 'object'
+    ? combatExit.missClose
+    : {};
   const sourceSelf = decision.self || detail.self || decision.input?.self || combat.self || null;
   const sourceTarget = event.target || detail.target || decision.target || combatExit.target || combat.target || null;
   const combatTarget = combat.target || combat.dryRun?.target || null;
@@ -2033,6 +2042,20 @@ function compactExit(event) {
     hpGap: compactNumber(event.hpGap ?? detail.hpGap ?? combatExit.hpGap),
     threshold: compactNumber(event.threshold ?? detail.threshold ?? combatExit.threshold),
     minHpGap: compactNumber(event.minHpGap ?? detail.minHpGap ?? combatExit.minHpGap),
+    missClose: Object.keys(missClose).length
+      ? {
+          timeoutMs: compactNumber(missClose.timeoutMs),
+          stepElapsedMs: compactNumber(missClose.stepElapsedMs),
+          stepIndex: compactNumber(missClose.stepIndex),
+          stepStartDistanceCm: compactNumber(missClose.stepStartDistanceCm),
+          goalDistanceCm: compactNumber(missClose.goalDistanceCm),
+          bestDistanceCm: compactNumber(missClose.bestDistanceCm),
+          targetDistance: compactNumber(missClose.targetDistance),
+          acceptedShotsSinceDamage: compactNumber(missClose.acceptedShotsSinceDamage),
+          damageFromStart: compactNumber(missClose.damageFromStart),
+          stepTimedOut: compactBoolean(missClose.stepTimedOut)
+        }
+      : null,
     injury: Object.keys(injury).length
       ? {
           previousHp: compactNumber(injury.previousHp),

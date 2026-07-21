@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.21.2';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.22.1';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function highDropRankValueCore(item) {
@@ -24,6 +24,35 @@ function panelSessionFlagsCore(status = {}) {
     online,
     realtimeOnline: Boolean(status?.game?.inGame && online)
   };
+}
+
+function missCloseExitReasonTextCore(missClose = {}) {
+  const number = value => {
+    if (value === null || value === undefined || value === '') return null;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  };
+  const distance = value => {
+    const parsed = number(value);
+    return parsed === null ? '' : `${Math.round(parsed / 100)}m`;
+  };
+  const timeoutMs = number(missClose.timeoutMs ?? missClose.stepElapsedMs);
+  const startDistance = distance(missClose.stepStartDistanceCm);
+  const goalDistance = distance(missClose.goalDistanceCm);
+  const currentDistance = distance(missClose.targetDistance);
+  const acceptedShotsSinceDamage = number(missClose.acceptedShotsSinceDamage);
+  if (!timeoutMs && !startDistance && !goalDistance && !currentDistance && acceptedShotsSinceDamage === null) return '';
+  const duration = timeoutMs === null ? '持续一段时间' : `连续 ${Math.max(1, Math.round(timeoutMs / 1000))} 秒`;
+  let text = startDistance && goalDistance
+    ? `${duration}未能从 ${startDistance} 接近到 ${goalDistance}`
+    : (goalDistance ? `${duration}未能接近到 ${goalDistance}` : `${duration}未能完成接近目标`);
+  const evidence = [];
+  if (currentDistance) evidence.push(`退出时 ${currentDistance}`);
+  if (acceptedShotsSinceDamage !== null && acceptedShotsSinceDamage > 0) {
+    evidence.push(`${Math.round(acceptedShotsSinceDamage)} 发未造成新伤害`);
+  }
+  if (evidence.length) text += `（${evidence.join('，')}）`;
+  return `${text}，为避免继续低效追击而主动退出`;
 }
 
 function groupChatMessagesForDisplay(messages = [], collapseOtherKills = true) {
@@ -453,6 +482,7 @@ function renderBrowserlessWebPanel() {
     const spentStaminaUnit = ${formatSpentStaminaCore.toString()};
     const estimatedHighDropQuota = ${estimatedHighDropQuotaCore.toString()};
     const panelSessionFlags = ${panelSessionFlagsCore.toString()};
+    const missCloseExitReasonText = ${missCloseExitReasonTextCore.toString()};
 
     const value = v => v === null || v === undefined || v === '' ? '--' : String(v);
     const number = v => v === null || v === undefined || v === '' ? null : (Number.isFinite(Number(v)) ? Number(v) : null);
@@ -861,7 +891,7 @@ function renderBrowserlessWebPanel() {
       'combat-low-hp-no-damage-leave': '战斗中我方低血且久攻未造成伤害，主动退出',
       'combat-critical-hp-leave': '战斗中我方血量进入危险线，紧急退出',
       'combat-action-settlement-stalled': '战斗中移动指令失效，为避免原地承伤，主动退出',
-      'combat-miss-close-timeout-leave': '连续 30 秒无法完成当前 10 米接近目标，主动退出',
+      'combat-miss-close-timeout-leave': '连续 30 秒无法完成当前 10 米接近目标，为避免低效追击而主动退出',
       'defensive-exchange-no-progress-leave': '防守交战持续无进展，撤退后仍无法脱离，主动退出',
       'injury-leave': '角色受伤后为避免继续掉血，主动退出',
       'pursuit-leave': '被危险玩家持续追击，主动退出',
@@ -1079,9 +1109,9 @@ function renderBrowserlessWebPanel() {
       if (reasonMap[text]) return reasonMap[text];
       if (/stamina/i.test(text)) return '体力不足，等待恢复';
       if (/coin/i.test(text)) return '正在找金币';
+      if (/leave/i.test(text)) return '正在退出游戏';
       if (/combat/i.test(text)) return '正在处理打架';
       if (/active|threat|danger/i.test(text)) return '附近有危险';
-      if (/leave/i.test(text)) return '正在退出游戏';
       if (/wait/i.test(text)) return '等待中';
       if (/stop/i.test(text)) return '已停止';
       if (/403|forbidden|unauthorized|not logged in/i.test(text)) return '登录信息可能失效，需要重新授权';
@@ -1099,6 +1129,10 @@ function renderBrowserlessWebPanel() {
     }
     function dangerousPlayerExitReasonText(status, reason) {
       const raw = String(reason || '');
+      if (raw === 'combat-miss-close-timeout-leave') {
+        const detail = missCloseExitReasonText(status.recentExit?.missClose || status.combat?.exit?.missClose || {});
+        if (detail) return detail;
+      }
       if (raw === 'injury-leave') {
         const battle = status.game?.inGame ? null : recentBattle(status);
         const target = status.decision?.target || status.action?.target || battle?.target || status.recentExit?.target || null;
@@ -2560,6 +2594,7 @@ module.exports = {
   groupChatMessagesForDisplay,
   highDropRankValueCore,
   isStaminaExhaustionExitReasonCore,
+  missCloseExitReasonTextCore,
   nearbyCoinIconCore,
   panelSessionFlagsCore,
   renderBrowserlessWebPanel

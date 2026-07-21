@@ -185,6 +185,7 @@ const {
   estimatedHighDropQuotaCore,
   formatSpentStaminaCore,
   groupChatMessagesForDisplay,
+  missCloseExitReasonTextCore,
   nearbyCoinIconCore,
   panelSessionFlagsCore,
   renderBrowserlessWebPanel
@@ -28091,6 +28092,86 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'true|true|true'
+    },
+    {
+      name: 'browserless miss-close exit preserves quantitative reason detail',
+      got: (() => {
+        const status = buildCompactBrowserlessStatus({
+          recentExits: [{
+            at: '2026-07-21T16:23:29.881Z',
+            reason: 'combat-miss-close-timeout-leave',
+            shouldLeave: true,
+            target: { userId: 36046, name: 'yongren', hp: 59, distance: 11405, drop: 416 },
+            detail: {
+              decision: {
+                action: {
+                  kind: 'safety-exit',
+                  reason: 'combat-miss-close-timeout-leave',
+                  combatExit: {
+                    reason: 'combat-miss-close-timeout-leave',
+                    missClose: {
+                      timeoutMs: 30000,
+                      stepElapsedMs: 30033,
+                      stepIndex: 1,
+                      stepStartDistanceCm: 9736,
+                      goalDistanceCm: 8736,
+                      bestDistanceCm: 9655,
+                      targetDistance: 11405,
+                      acceptedShotsSinceDamage: 57,
+                      damageFromStart: 30,
+                      stepTimedOut: true
+                    }
+                  }
+                },
+                combat: {
+                  startedAt: '2026-07-21T16:21:38.671Z',
+                  target: { userId: 36046, name: 'yongren', hp: 59, distance: 11405, drop: 416 },
+                  metrics: {
+                    targetId: '36046',
+                    targetName: 'yongren',
+                    startedAt: Date.parse('2026-07-21T16:21:38.671Z'),
+                    lastObservedAt: Date.parse('2026-07-21T16:23:29.856Z'),
+                    initialSelfHp: 100,
+                    lastSelfHp: 100,
+                    initialTargetHp: 89,
+                    lastTargetHp: 59,
+                    selfDamage: 0,
+                    targetDamage: 30,
+                    requestedShots: 173,
+                    acceptedShots: 169,
+                    confirmedHits: 10
+                  }
+                }
+              }
+            }
+          }]
+        }, parseBrowserlessRunnerArgs([], {}));
+        const missClose = status.recentExit.missClose;
+        return [
+          missClose.stepStartDistanceCm,
+          missClose.goalDistanceCm,
+          missClose.targetDistance,
+          missClose.acceptedShotsSinceDamage,
+          missClose.stepTimedOut,
+          missCloseExitReasonTextCore(missClose)
+        ].join('|');
+      })(),
+      want: '9736|8736|11405|57|true|连续 30 秒未能从 97m 接近到 87m（退出时 114m，57 发未造成新伤害），为避免继续低效追击而主动退出'
+    },
+    {
+      name: 'browserless miss-close panel version and fallback prevent vague combat exit copy',
+      got: (() => {
+        const panelText = renderBrowserlessWebPanel();
+        const panelScript = panelText.match(/<script>([\s\S]*?)<\/script>/)?.[1] || '';
+        return [
+          BROWSERLESS_WEB_PANEL_VERSION,
+          panelScript.includes('const missCloseExitReasonText = '),
+          panelScript.includes("if (/leave/i.test(text)) return '正在退出游戏';"),
+          panelScript.indexOf("if (/leave/i.test(text)) return '正在退出游戏';")
+            < panelScript.indexOf("if (/combat/i.test(text)) return '正在处理打架';")
+        ].join('|');
+      })(),
+      want: '2026.07.22.1|true|true|true'
     },
     {
       name: 'browserless compact injury exit preserves recent battle summary',
