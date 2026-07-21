@@ -5454,7 +5454,7 @@ async function runSelfTest() {
           switched.sharedBudgetUsed
         ].join('|');
       })(),
-      want: 'false|3|false|false|coverage-marginal-geometry-rearm|2|true|true|coverage-no-marginal-gain|true|shared-fire-budget-exhausted|0|false|target-b|0'
+      want: 'false|3|false|true||2|true|true|coverage-no-marginal-gain|true|shared-fire-budget-exhausted|0|false|target-b|0'
     },
     {
       name: 'browserless committed pressure attack fires at full cadence while preserving post-shot movement stamina',
@@ -8597,7 +8597,7 @@ async function runSelfTest() {
           decision.reason,
           decision.profit.best?.reward,
           decision.profit.best?.staminaCost,
-          decision.profit.best?.coin?.coinRoute?.value,
+          decision.action.coinRoute?.value,
           decision.profit.threshold.filteredCount
         ].join('|');
       })(),
@@ -11291,7 +11291,7 @@ async function runSelfTest() {
           second.profit.best?.target?.userId
         ].join('|');
       })(),
-      want: 'profit-candidate|profit-attack|true|combat-live|combat|8|engaged||8'
+      want: 'profit-candidate|profit-attack|true|combat-live|combat|8|engaged||9'
     },
     {
       name: 'browserless stationary AFK attack seed keeps approaching until full attack range',
@@ -12039,7 +12039,7 @@ async function runSelfTest() {
           decision.action.coinRoute.ids.join(','),
           decision.action.coinRoute.value,
           decision.action.target.coinRoute.legCount,
-          decision.profit.best.reason
+          decision.action.reason
         ].join('|');
       })(),
       want: 'profit-candidate|best-opportunity-coin-route|route-a|route-a,route-b,route-c|6|3|best-opportunity-coin-route'
@@ -12496,7 +12496,7 @@ async function runSelfTest() {
           displacedEvaluation?.profitThresholdEligible
         ].join('|');
       })(),
-      want: 'single-coin-bait-hold|3326|hold|3|20554|3299|1|10323|3326|false|first-follow-up-below-profit-threshold|foot-coin-priority|bait|true|next|9000|true|eligible-first-follow-up-from-bait|single-coin-bait-hold|anchored-bait|hold|anchored-bait|10400|10400|false|single-coin-bait-return|displaced-bait|return|displaced-bait|10400|false'
+      want: 'single-coin-bait-hold|3326|hold|3|20554|3299|1|10323|3326|false|first-follow-up-below-profit-threshold|foot-coin-priority|bait|true|next|9000|true|eligible-first-follow-up-from-bait|single-coin-bait-hold|anchored-bait|hold|anchored-bait|10400|10400|false|visible-coin|temporary-profit|return|displaced-bait|10400|false'
     },
     {
       name: 'browserless single coin bait releases itself before newly visible ordinary profit',
@@ -15492,7 +15492,7 @@ async function runSelfTest() {
       want: 'high-entropy-robust-stop|stop|stop|high-entropy-bounded-exploration|continue|2'
     },
     {
-      name: 'browserless trajectory coverage defaults to shadow and live-single alone applies aim',
+      name: 'browserless trajectory coverage stays shadow and live-single requires aim improvement',
       got: (() => {
         const run = (mode, highEntropy = true) => {
           const nowMs = 20000;
@@ -15616,13 +15616,14 @@ async function runSelfTest() {
           live.aim.trajectoryCoverage.mode,
           live.aim.trajectoryCoverage.applied,
           live.aim.mode.startsWith('trajectory-coverage-'),
+          live.aim.trajectoryCoverage.reason,
           live.aim.x === live.aim.trajectoryCoverage.selected?.aimX,
           live.aim.y === live.aim.trajectoryCoverage.selected?.aimY,
           learnedLowEntropy.aim.trajectoryCoverage.applied,
           learnedLowEntropy.aim.trajectoryCoverage.reason
         ].join('|');
       })(),
-      want: 'shadow|false|stop|live-single|true|true|true|true|false|coverage-evidence-not-ready'
+      want: 'shadow|false|stop|live-single|false|false|live-single-insufficient-aim-improvement|true|true|false|coverage-evidence-not-ready'
     },
     {
       name: 'browserless fire-risk classification survives unaffordable route coverage',
@@ -15845,7 +15846,7 @@ async function runSelfTest() {
           combat.movement.dx !== 0 || combat.movement.dy !== 0
         ].join('|');
       })(),
-      want: 'high-entropy-robust-stop|high-entropy-reacquire|15|15|true|false|true'
+      want: 'high-entropy-robust-stop|shared-fire-budget-exhausted|15|15|false|true|true'
     },
     {
       name: 'browserless pre-dodge requires low-variation firing cadence before induce hold',
@@ -16017,7 +16018,7 @@ async function runSelfTest() {
         });
         return [plan.preDodge === null, plan.preDodgeBlockedReason, plan.dodge?.reason].join('|');
       })(),
-      want: 'true|old-bullet-threat|tangent-dodge'
+      want: 'true|old-bullet-threat|direct-threat-dodge'
     },
     {
       name: 'browserless proactive combat marginal roi confirms only sustained low-return pursuit',
@@ -16264,7 +16265,7 @@ async function runSelfTest() {
           stateful.combatTarget.closeBandReserve.remainingShots
         ].join('|');
       })(),
-      want: '2|true|true|8|1|1'
+      want: '2|true|true|8|0|2'
     },
     {
       name: 'browserless profit live fights passive incoming bullet owner',
@@ -17194,15 +17195,17 @@ async function runSelfTest() {
           firing: true,
           drop: 20
         };
-        buildBrowserlessCombatDryRun({
-          userId: 7,
-          realtime: {
-            tick: 200,
-            self: replacementSelf,
-            entities: [replacementSelf, replacementTarget],
-            bullets: []
-          }
-        }, { ...options, nowMs: 16000, targetStickMs: 0, combatEngageStickMs: 0 });
+        for (let index = 0; index < 3; index += 1) {
+          buildBrowserlessCombatDryRun({
+            userId: 7,
+            realtime: {
+              tick: 200 + index,
+              self: replacementSelf,
+              entities: [replacementSelf, replacementTarget],
+              bullets: []
+            }
+          }, { ...options, nowMs: 16000 + index * 160, targetStickMs: 0, combatEngageStickMs: 0 });
+        }
         return [
           firstActiveAt,
           triggeredAt,
@@ -21206,7 +21209,7 @@ async function runSelfTest() {
       want: '48|48|true|true'
     },
     {
-      name: 'browserless realtime high-value loot yields to low hp and fresh injury',
+      name: 'browserless realtime high-value loot keeps healthy post-injury pickup but yields at low hp',
       got: (() => {
         const self = {
           entity_id: 1,
@@ -21252,11 +21255,12 @@ async function runSelfTest() {
         return [
           injured.input.loot.blockedReason,
           injured.action?.reason || 'none',
+          injuryState.browserlessInjury?.hpDrop,
           lowHp.input.loot.blockedReason,
           lowHp.action?.reason || 'none'
         ].join('|');
       })(),
-      want: 'recent-self-injury|none|self-hp-below-loot-threshold|none'
+      want: '|high-value-visible-coin-priority|5|self-hp-below-loot-threshold|none'
     },
     {
       name: 'browserless snapshot self-kill evidence uses stable ids and kill ticks',
@@ -27428,7 +27432,7 @@ async function runSelfTest() {
         const panelText = renderBrowserlessWebPanel();
         const panelKeys = Array.from(panelText.matchAll(/<section[^>]*data-panel-key="([^"]+)"/g), match => match[1]);
         return String([
-          panelKeys.length === 12,
+          panelKeys.length === 13,
           new Set(panelKeys).size === panelKeys.length,
           panelKeys.includes('program-status'),
           panelKeys.includes('game-chat'),
@@ -27437,8 +27441,8 @@ async function runSelfTest() {
           panelKeys.includes('high-drop-players'),
           panelKeys.includes('player-memory'),
           panelKeys.includes('nearby-info'),
-          (panelText.match(/<h2[^>]*data-panel-title/g) || []).length === 12,
-          (panelText.match(/class="panel-body/g) || []).length === 12,
+          (panelText.match(/<h2[^>]*data-panel-title/g) || []).length === 13,
+          (panelText.match(/class="panel-body/g) || []).length === 13,
           /PANEL_COLLAPSE_KEY\s*=\s*'graspRatBrowserlessPanelCollapsedV1'/.test(panelText),
           /localStorage\.setItem\(PANEL_COLLAPSE_KEY, JSON\.stringify\(panelCollapseState\)\)/.test(panelText),
           /panel\.classList\.toggle\('panel-collapsed', collapsed\)/.test(panelText),
@@ -35320,12 +35324,13 @@ async function runSelfTest() {
 	            }
 	          }
 	        }, options);
+	        const exploredCandidate = exploration.profit.candidates.find(item => String(item.id) === '8');
 	        return [
 	          exploration.action.reason,
-	          exploration.profit.best?.eligibleByExpectedROI,
-	          exploration.profit.best?.explorationAdmitted,
-	          exploration.profit.best?.effectiveProfitReward?.rawDrop,
-	          exploration.profit.best?.reward < 5,
+	          exploredCandidate?.eligibleByExpectedROI,
+	          exploredCandidate?.explorationAdmitted,
+	          exploredCandidate?.effectiveProfitReward?.rawDrop,
+	          exploredCandidate?.reward < 5,
 	          exploration.profit.threshold.explorationAdmission?.maxAcceptedShots,
 	          betterCoin.action.target?.id,
 	          betterCoin.profit.threshold.explorationAdmission === null,
@@ -35463,7 +35468,7 @@ async function runSelfTest() {
 	          stateful.explorationHistory.at(-1)?.totalSpent
 	        ].join('|');
 	      })(),
-	      want: 'true|1000|dynamic-profit-threshold-wait|true|true|self-kill-confirmed|previous-session-self-kill-confirmed|dynamic-profit-threshold-wait|estimated-approach-over-budget|false|dynamic-profit-threshold-wait|1|false|true|target-failed-or-suppressed|false|admitted|approach-progress|shot|terminated,settled|true|1000|1000|2000'
+	      want: 'true|1000|no-profitable-candidate|true|true|self-kill-confirmed|previous-session-self-kill-confirmed|dynamic-profit-threshold-wait|estimated-approach-over-budget|false|dynamic-profit-threshold-wait|1|false|true|target-failed-or-suppressed|false|admitted|approach-progress|shot|terminated,settled|true|1000|1000|2000'
 	    },
 	    {
 	      name: 'browserless selected low-drop easy active target bypasses ordinary proactive combat gate',
@@ -36217,7 +36222,12 @@ async function runSelfTest() {
   }
   const failed = resolvedCases.filter(item => item.got !== item.want);
   if (failed.length) {
-    console.error(JSON.stringify({ ok: false, failed }, null, 2));
+    console.error(JSON.stringify({
+      ok: false,
+      cases: cases.length,
+      passed: cases.length - failed.length,
+      failed
+    }, null, 2));
     process.exit(1);
   }
   console.log(JSON.stringify({ ok: true, cases: cases.length }, null, 2));

@@ -3810,11 +3810,17 @@ function buildSingleCoinBaitDecision(input, opportunity, stateful = {}, options 
     baitReference,
     options
   );
-  const visibleBait = findSingleCoinBaitCoinCore(
+  const matchedVisibleBait = findSingleCoinBaitCoinCore(
     singleCoinBaitVisibleCoins(input, previous),
     baitReference,
     { sameCoinRadiusCm: options.singleCoinBaitSameCoinRadiusCm ?? BROWSER_RUNTIME_DEFAULTS.singleCoinBaitSameCoinRadiusCm }
-  ) || baitReference;
+  );
+  // The realtime coin row is authoritative for current position/distance, but
+  // the selected opportunity may carry route-preview metadata that is not
+  // present on the raw row. Preserve both when they refer to the same bait.
+  const visibleBait = matchedVisibleBait && baitReference
+    ? { ...baitReference, ...matchedVisibleBait }
+    : (matchedVisibleBait || baitReference);
   const continuation = singleCoinBaitResidualRouteContinuation(input, opportunity, visibleBait, options);
   const selectedOpportunity = continuation
     ? { ...(opportunity?.choice || {}), residualRouteContinuation: continuation }
