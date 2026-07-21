@@ -55,6 +55,7 @@ const {
   evaluateNonThreatCombatEconomicStopLossCore
 } = require('../src/strategy/combat-economic-stop-loss');
 const { updatePostKillSettlementCore } = require('../src/strategy/post-kill-settlement');
+const { chooseStableOpportunityCore } = require('../src/strategy/opportunity-choice');
 
 function parseArgs(argv) {
   const options = {
@@ -2922,6 +2923,65 @@ function replayOpportunity(options) {
   };
 }
 
+function replayAfkFinishCommitment(options) {
+  const rows = selectedEntries(options);
+  const samples = [];
+  let baselinePrematureSwitches = 0;
+  let correctedFinishHolds = 0;
+  for (let index = 1; index < rows.length; index += 1) {
+    const previous = rows[index - 1];
+    const current = rows[index];
+    const heldAction = previous.detail?.action || null;
+    const bestAction = current.detail?.action || null;
+    const heldTarget = heldAction?.target || null;
+    const bestTarget = bestAction?.target || null;
+    const heldId = String(heldTarget?.userId ?? '');
+    const bestId = String(bestTarget?.userId ?? '');
+    if (!heldId || !bestId || heldId === bestId) continue;
+    const heldChoice = heldAction?.opportunityChoice || {};
+    const bestChoice = bestAction?.opportunityChoice || {};
+    const opportunities = [
+      {
+        type: 'enemy', id: bestId, distance: Number(bestTarget.distance), score: Number(bestChoice.score || 0),
+        staminaCost: Number(bestAction.staminaCost), reward: Number(bestAction.reward || bestTarget.drop || 0), priorityTier: 1,
+        sourceTarget: { ...bestTarget, active: false, alive: true }
+      },
+      {
+        type: 'enemy', id: heldId, distance: Number(heldTarget.distance), score: Number(heldChoice.score || 0),
+        staminaCost: Number(heldAction.staminaCost), reward: Number(heldAction.reward || heldTarget.drop || 0), priorityTier: 1,
+        sourceTarget: { ...heldTarget, active: false, alive: true }
+      }
+    ];
+    const replay = chooseStableOpportunityCore(
+      opportunities,
+      { key: `enemy:${heldId}`, type: 'enemy', id: heldId, until: 0 },
+      { pendingKey: `enemy:${bestId}`, pendingCount: 2 },
+      { nowMs: Date.parse(current.entry.at || '') || Date.now(), attackRange: options.attackRange, switchConfirmFrames: 3, oscillationSwitchLimit: 0 }
+    );
+    if (Number(heldTarget.hp) <= 60 && Number(heldTarget.distance) <= Number(options.attackRange)) {
+      baselinePrematureSwitches += 1;
+      if (String(replay.chosen?.id || '') === heldId && replay.chosen?.finishCommitment?.active) correctedFinishHolds += 1;
+      samples.push({
+        line: current.line,
+        at: current.entry.at || '',
+        baseline: { from: heldId, to: bestId },
+        held: { name: heldTarget.name || '', hp: Number(heldTarget.hp), drop: Number(heldTarget.drop), distance: Number(heldTarget.distance), staminaCost: Number(heldAction.staminaCost) },
+        competing: { name: bestTarget.name || '', hp: Number(bestTarget.hp), drop: Number(bestTarget.drop), distance: Number(bestTarget.distance), staminaCost: Number(bestAction.staminaCost) },
+        correctedTargetId: replay.chosen?.id || '',
+        correctedReason: replay.switchDiagnostics?.bestRejectedReason || ''
+      });
+    }
+  }
+  return {
+    mode: 'afk-finish-commitment',
+    lines: `${options.startLine}-${options.endLine}`,
+    baselinePrematureSwitches,
+    correctedFinishHolds,
+    samples,
+    accepted: baselinePrematureSwitches > 0 && correctedFinishHolds === baselinePrematureSwitches
+  };
+}
+
 function replayExploration(options) {
   const rows = selectedEntries(options);
   const maxBudget = 5000;
@@ -4005,6 +4065,7 @@ function replayCombatPursuit(options) {
 
 function runReplay(options) {
   if (options.mode === 'opportunity') return replayOpportunity(options);
+  if (options.mode === 'afk-finish-commitment') return replayAfkFinishCommitment(options);
   if (options.mode === 'exploration') return replayExploration(options);
   if (options.mode === 'easy-kill-continuity') return replayEasyKillContinuity(options);
   if (options.mode === 'leave-tail') return replayLeaveTail(options);
@@ -4036,6 +4097,7 @@ module.exports = {
   replayCombatEconomicStopLoss,
   replayCombatShotCoverage,
   replayCombatPursuit,
+  replayAfkFinishCommitment,
   replayEasyKillContinuity,
   replayLeaveTail,
   replayMovementStallExit,

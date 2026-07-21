@@ -5084,6 +5084,8 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
     moveStaminaPerCm: options.opportunityMoveStaminaPerCm ?? BROWSER_RUNTIME_DEFAULTS.opportunityMoveStaminaPerCm ?? 1,
     switchConfirmFrames: options.opportunitySwitchConfirmFrames ?? 3,
     switchRelativeMargin: options.opportunitySwitchRelativeMargin ?? BROWSER_RUNTIME_DEFAULTS.opportunitySwitchRelativeMargin ?? 0,
+    afkFinishCommitmentMaxHp: options.afkFinishCommitmentMaxHp ?? 60,
+    afkFinishCommitmentMaxStaminaCost: options.afkFinishCommitmentMaxStaminaCost ?? 25000,
     nowMs: input.nowMs
   };
   const afkOpportunityTargets = includeAfkProfitTargets

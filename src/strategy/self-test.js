@@ -3312,6 +3312,63 @@ function runStrategyModuleSelfTests() {
       && farHighValueResult.chosen?.highValueCoinHold !== true
   });
 
+  const afkFinishIncidentOpportunities = [
+    {
+      type: 'enemy', id: '36046', distance: 47824, score: 3252155, staminaCost: 76749,
+      reward: 416, priorityTier: 1,
+      sourceTarget: { userId: 36046, name: 'yongren', hp: 92, drop: 416, distance: 47824, active: false, alive: true }
+    },
+    {
+      type: 'enemy', id: '32407', distance: 2683, score: 1534973, staminaCost: 16808,
+      reward: 43, priorityTier: 1, actionKind: 'attack',
+      sourceTarget: { userId: 32407, name: '白白', hp: 44, drop: 43, distance: 2683, active: false, alive: true }
+    }
+  ];
+  const afkFinishIncident = chooseStableOpportunityCore(
+    afkFinishIncidentOpportunities,
+    { key: 'enemy:32407', type: 'enemy', id: '32407', until: 0 },
+    { pendingKey: 'enemy:36046', pendingCount: 2 },
+    { nowMs: 1000, attackRange: 14500, switchConfirmFrames: 3, oscillationSwitchLimit: 0 }
+  );
+  const afkFinishReleased = chooseStableOpportunityCore(
+    afkFinishIncidentOpportunities.map(item => item.id === '32407'
+      ? { ...item, staminaCost: 26000, sourceTarget: { ...item.sourceTarget, hp: 61 } }
+      : item),
+    { key: 'enemy:32407', type: 'enemy', id: '32407', until: 0 },
+    { pendingKey: 'enemy:36046', pendingCount: 2 },
+    { nowMs: 1000, attackRange: 14500, switchConfirmFrames: 3, oscillationSwitchLimit: 0 }
+  );
+  const afkFinishReleaseVariants = [
+    { sourceTarget: { active: true } },
+    { sourceTarget: { invulnerable: true } },
+    { sourceTarget: { alive: false } },
+    { distance: 14501, sourceTarget: { distance: 14501 } }
+  ].map(overrides => chooseStableOpportunityCore(
+    afkFinishIncidentOpportunities.map(item => item.id === '32407'
+      ? { ...item, ...overrides, sourceTarget: { ...item.sourceTarget, ...(overrides.sourceTarget || {}) } }
+      : item),
+    { key: 'enemy:32407', type: 'enemy', id: '32407', until: 0 },
+    { pendingKey: 'enemy:36046', pendingCount: 2 },
+    { nowMs: 1000, attackRange: 14500, switchConfirmFrames: 3, oscillationSwitchLimit: 0 }
+  ));
+  const afkFinishDoesNotOverrideCoin = chooseStableOpportunityCore([
+    { type: 'coin', id: 'large', amount: 20, distance: 1000, score: 5000000, staminaCost: 1000, reward: 20, priorityTier: 1 },
+    afkFinishIncidentOpportunities[1]
+  ], { key: 'enemy:32407', type: 'enemy', id: '32407', until: 0 }, {
+    pendingKey: 'coin:large', pendingCount: 2
+  }, { nowMs: 1000, attackRange: 14500, switchConfirmFrames: 3, oscillationSwitchLimit: 0 });
+  results.push({
+    name: 'opportunity-choice-finishes-near-damaged-afk-before-distant-high-drop-target',
+    passed: afkFinishIncident.chosen?.id === '32407'
+      && afkFinishIncident.chosen?.finishCommitment?.reason === 'afk-finish-commitment'
+      && afkFinishIncident.switchDiagnostics?.switchBlocked === true
+      && afkFinishIncident.switchDiagnostics?.bestRejectedReason === 'afk-finish-commitment'
+      && afkFinishIncident.switchLock?.pendingCount === 0
+      && afkFinishReleased.chosen?.id === '36046'
+      && afkFinishReleaseVariants.every(result => result.chosen?.id === '36046')
+      && afkFinishDoesNotOverrideCoin.chosen?.id === 'large'
+  });
+
   const opportunityOscillationResult = chooseStableOpportunityCore([
     { type: 'coin', id: 'b', amount: 2, x: 300, y: 0, distance: 300, score: 120, priorityTier: 1 },
     { type: 'coin', id: 'a', amount: 1, x: 100, y: 0, distance: 100, score: 100, priorityTier: 1 }

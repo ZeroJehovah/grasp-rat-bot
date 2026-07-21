@@ -160,6 +160,7 @@ const {
 const {
   replayCombatClosePressure,
   replayCombatDisengage,
+  replayAfkFinishCommitment,
   replayCombatEconomicStopLoss,
   replayCombatPursuit,
   replayMovementStallExit,
@@ -18591,6 +18592,41 @@ async function runSelfTest() {
         }
       })(),
       want: 'true|2|20828|2|0|1000|1000'
+    },
+    {
+      name: 'browserless afk finish replay keeps near damaged target before distant high drop',
+      got: (() => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'grasp-rat-afk-finish-replay-'));
+        try {
+          const rows = [
+            {
+              at: '2026-07-21T16:17:49.504Z', type: 'decision', detail: {
+                action: {
+                  kind: 'attack', reward: 43, staminaCost: 16808,
+                  target: { userId: 32407, name: '白白', hp: 44, drop: 43, distance: 2683 },
+                  opportunityChoice: { score: 1534973 }
+                }
+              }
+            },
+            {
+              at: '2026-07-21T16:17:50.493Z', type: 'decision', detail: {
+                action: {
+                  kind: 'seek-enemy', reward: 416, staminaCost: 76749,
+                  target: { userId: 36046, name: 'yongren', hp: 92, drop: 416, distance: 47824 },
+                  opportunityChoice: { score: 3252155 }
+                }
+              }
+            }
+          ];
+          const file = path.join(dir, 'decisions.jsonl');
+          fs.writeFileSync(file, rows.map(item => JSON.stringify(item)).join('\n') + '\n');
+          const replay = replayAfkFinishCommitment({ file, startLine: 1, endLine: 2, attackRange: 14500 });
+          return [replay.accepted, replay.baselinePrematureSwitches, replay.correctedFinishHolds, replay.samples[0]?.correctedTargetId, replay.samples[0]?.correctedReason].join('|');
+        } finally {
+          fs.rmSync(dir, { recursive: true, force: true });
+        }
+      })(),
+      want: 'true|1|1|32407|afk-finish-commitment'
     },
     {
       name: 'browserless close-pressure replay preserves threat dodge and reaches pressure band',

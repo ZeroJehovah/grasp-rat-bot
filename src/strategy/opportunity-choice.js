@@ -188,6 +188,32 @@ function highValueCoinHoldBlocksEnemySwitchCore(held, best, options = {}) {
   return Boolean(isHighValueCoinOpportunityCore(held, options) && String(best?.type || '') === 'enemy');
 }
 
+function afkFinishCommitmentCore(held, best, options = {}) {
+  const target = held?.sourceTarget || null;
+  if (String(held?.type || '') !== 'enemy' || String(best?.type || '') !== 'enemy') return null;
+  if (Number(best.priorityTier || 0) > Number(held.priorityTier || 0)) return null;
+  if (!target || target.active !== false || target.alive === false || target.invulnerable === true) return null;
+  const hp = Number(target.hp);
+  const distance = Number(held.distance ?? target.distance);
+  const attackRange = Math.max(0, Number(options.attackRange || 0));
+  const maxHp = Math.max(1, Number(options.afkFinishCommitmentMaxHp ?? 60));
+  const maxStaminaCost = Math.max(0, Number(options.afkFinishCommitmentMaxStaminaCost ?? 25000));
+  const staminaCost = Number(held.staminaCost);
+  if (!Number.isFinite(hp) || hp <= 0 || hp > maxHp) return null;
+  if (!Number.isFinite(distance) || !(attackRange > 0) || distance > attackRange) return null;
+  if (!Number.isFinite(staminaCost) || staminaCost > maxStaminaCost) return null;
+  if (opportunityKey(held) === opportunityKey(best)) return null;
+  return {
+    active: true,
+    reason: 'afk-finish-commitment',
+    targetHp: hp,
+    targetDistance: distance,
+    remainingStaminaCost: staminaCost,
+    competingKey: opportunityKey(best),
+    competingDistance: Number.isFinite(Number(best.distance)) ? Number(best.distance) : null
+  };
+}
+
 function lockedOpportunityChoiceCore(sorted, switchLock) {
   const lock = switchLock || null;
   const lockedKey = String(lock?.lockedKey || '');
@@ -269,7 +295,23 @@ function chooseStableOpportunityCore(opportunities, current, switchLock, options
     }
   }
   const held = current ? sorted.find(item => opportunityMatchesChoiceCore(item, current, options)) || null : null;
+  const finishCommitment = afkFinishCommitmentCore(held, best, options);
+  if (finishCommitment) {
+    chosen = {
+      ...held,
+      held: true,
+      finishCommitment,
+      competingScore: best.score
+    };
+  }
   const confirmed = applyOpportunitySwitchConfirmationCore(best, held, chosen, switchLock, options);
+  if (finishCommitment) {
+    confirmed.diagnostics.switchAllowed = false;
+    confirmed.diagnostics.switchBlocked = true;
+    confirmed.diagnostics.bestRejectedReason = finishCommitment.reason;
+    confirmed.diagnostics.finishCommitment = finishCommitment;
+    confirmed.switchLock = { ...(confirmed.switchLock || {}), pendingKey: '', pendingCount: 0 };
+  }
   const locked = applyOpportunityOscillationLockCore(sorted, current, confirmed.chosen, confirmed.switchLock, options);
   if (locked.chosen?.oscillationLocked) {
     confirmed.diagnostics.switchAllowed = false;
@@ -450,7 +492,8 @@ function rememberOpportunityChoiceCore(item, action, previous = null, options = 
         switchBlocked: Boolean(action?.opportunitySwitch?.switchBlocked),
         bestRejectedReason: String(action?.opportunitySwitch?.bestRejectedReason || ''),
         confirmationFrames: Number.isFinite(Number(action?.opportunitySwitch?.confirmationFrames)) ? Number(action.opportunitySwitch.confirmationFrames) : null,
-        confirmationRequired: Number.isFinite(Number(action?.opportunitySwitch?.confirmationRequired)) ? Number(action.opportunitySwitch.confirmationRequired) : null
+        confirmationRequired: Number.isFinite(Number(action?.opportunitySwitch?.confirmationRequired)) ? Number(action.opportunitySwitch.confirmationRequired) : null,
+        finishCommitment: item.finishCommitment || action?.opportunitySwitch?.finishCommitment || null
       }
     }
   };
@@ -472,6 +515,7 @@ module.exports = {
   opportunityMatchesChoiceCore,
   isHighValueCoinOpportunityCore,
   highValueCoinHoldBlocksEnemySwitchCore,
+  afkFinishCommitmentCore,
   lockedOpportunityChoiceCore,
   applyOpportunityOscillationLockCore,
   chooseStableOpportunityCore,
