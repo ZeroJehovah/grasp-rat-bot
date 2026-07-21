@@ -1527,8 +1527,8 @@ function runStrategyModuleSelfTests() {
       && pressureAttackReady.cadenceMs === COMBAT_CONSTANTS.SHOOT_EVERY_MS
       && pressureAttackBudget.suppressFire === false
       && pressureAttackBudget.authorizationSource === 'close-pressure-full-attack'
-      && invalidPressureAttackBudget.suppressFire === true
-      && invalidPressureAttackBudget.suppressionReason === 'budget-state-invalid'
+      && invalidPressureAttackBudget.suppressFire === false
+      && invalidPressureAttackBudget.authorizationSource === 'close-pressure-full-attack'
   });
   const reserveCoverage = { active: true, selected: { marginalCoverage: 0.03 } };
   let closeBandReserve = null;
@@ -1561,15 +1561,41 @@ function runStrategyModuleSelfTests() {
     trajectoryCoverage: { active: false, selected: { marginalCoverage: 0.01 } },
     closeBandReserve: { ...closeBandReserve, coverageQualified: false, eligible: false }
   });
+  const offBandNoCoverage = evaluateCombatFireBudgetCore({
+    targetId: '8',
+    acceptedShotsSinceDamage: 15,
+    fireGate: { active: true, suppressFire: true, explorationMaxShots: 15 },
+    probeState: { suppressFire: true },
+    trajectoryCoverage: { active: false, selected: { marginalCoverage: 0.01 } },
+    closeBandReserve: { ...closeBandReserve, inBand: false, stableBandEligible: false, bandTicks: 0, coverageQualified: false, eligible: false }
+  });
+  let disabledCloseBand = null;
+  for (let index = 0; index < 3; index += 1) {
+    disabledCloseBand = updateCloseBandReserveCore(disabledCloseBand, {
+      targetId: '8', acceptedShots: 15, distance: 5000, coverageQualified: false, nowMs: 1300 + index * 50
+    }, { reservedShots: 0, enabled: false });
+  }
+  const disabledCloseRange = evaluateCombatFireBudgetCore({
+    targetId: '8',
+    acceptedShotsSinceDamage: 15,
+    fireGate: { active: true, suppressFire: true, explorationMaxShots: 15 },
+    probeState: { suppressFire: true },
+    closeBandReserve: disabledCloseBand
+  });
   results.push({
-    name: 'combat-close-band-reserve-is-protected-until-three-qualified-band-ticks',
-    passed: reserveAuthorized.authorizationSource === 'close-band-reserve'
+    name: 'combat-stable-close-range-bypasses-fire-gates-while-off-band-combat-remains-bounded',
+    passed: reserveAuthorized.authorizationSource === 'close-range-fire-override'
       && reserveAuthorized.reservedCloseBandShotsRemaining === 2
       && reserveAuthorized.ordinaryBudgetRemaining === 0
-      && reserveAfterAck.consumedShots === 1
-      && reserveAfterAck.remainingShots === 1
-      && noCoverageReserve.suppressFire === true
-      && noCoverageReserve.authorizationSource === ''
+      && reserveAuthorized.closeRangeFireOverride === true
+      && reserveAfterAck.consumedShots === 0
+      && reserveAfterAck.remainingShots === 2
+      && noCoverageReserve.suppressFire === false
+      && noCoverageReserve.authorizationSource === 'close-range-fire-override'
+      && offBandNoCoverage.suppressFire === true
+      && offBandNoCoverage.authorizationSource === ''
+      && disabledCloseBand.stableBandEligible === false
+      && disabledCloseRange.suppressFire === true
   });
 
   const closePressureExchange = evaluateCombatExchangeStopLossCore({

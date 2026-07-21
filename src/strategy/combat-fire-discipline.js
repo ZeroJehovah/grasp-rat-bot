@@ -83,8 +83,8 @@ function determineCombatFireState(self, target, context = {}) {
     return result(FIRE_STATE.FINISH, COMBAT_CONSTANTS.SHOOT_EVERY_MS, finishReserve, 'finish-low-threat');
   }
 
-  // Close pressure resolves movement cadence and stamina reserve only. Final
-  // authorization still goes through the shared probe/coverage fire budget.
+  // Close pressure resolves cadence and stamina reserve. Stable close-range
+  // ownership may bypass ordinary probe/coverage shot-count gates later.
   if (context.closePressure) {
     const closePressureReserve = Math.max(
       hardReserve,
@@ -468,13 +468,20 @@ function evaluateCombatFireBudgetCore(input = {}, options = {}) {
   const stamina5s = numberOrNull(input.stamina5s);
   const finishProtected = Boolean(gate.finishProtected || input.finishProtected);
   const pressureAttack = Boolean(input.pressureAttack);
+  const closeBandStableQualified = Boolean(
+    closeBandReserve.stableBandEligible === true
+      || (closeBandReserve.enabled !== false
+        && closeBandReserve.inBand === true
+        && Number(closeBandReserve.bandTicks || 0) >= Math.max(1, Number(closeBandReserve.requiredBandTicks || 3)))
+  );
+  const closeRangeFireOverride = Boolean(input.closeRangeFireOverride || pressureAttack || closeBandStableQualified);
   let suppressFire = Boolean(gate.suppressFire || probe.suppressFire);
   let authorizationSource = suppressFire ? '' : 'base-fire-discipline';
   let suppressionReason = suppressFire
     ? (probe.suppressionReason || gate.reason || 'shared-fire-budget-suppressed')
     : '';
-  const budgetStateInvalid = sharedBudgetUsed > sharedBudgetMax
-    || reservedCloseBandShotsUsed > reservedCloseBandShots;
+  const budgetStateInvalid = reservedCloseBandShotsUsed > reservedCloseBandShots
+    || (!closeRangeFireOverride && sharedBudgetUsed > sharedBudgetMax);
   const closeBandReserveQualified = Boolean(
     closeBandReserve.eligible === true
       && coverageQualified
@@ -485,6 +492,10 @@ function evaluateCombatFireBudgetCore(input = {}, options = {}) {
     suppressFire = true;
     authorizationSource = '';
     suppressionReason = 'budget-state-invalid';
+  } else if (closeRangeFireOverride) {
+    suppressFire = false;
+    authorizationSource = pressureAttack ? 'close-pressure-full-attack' : 'close-range-fire-override';
+    suppressionReason = '';
   } else if (sharedBudgetRemaining <= 0) {
     suppressFire = true;
     authorizationSource = '';
@@ -501,14 +512,6 @@ function evaluateCombatFireBudgetCore(input = {}, options = {}) {
     suppressFire = false;
     authorizationSource = 'proven-hit-rate';
     suppressionReason = '';
-  } else if (pressureAttack && ordinaryBudgetRemaining > 0) {
-    suppressFire = false;
-    authorizationSource = 'close-pressure-full-attack';
-    suppressionReason = '';
-  } else if (pressureAttack) {
-    suppressFire = true;
-    authorizationSource = '';
-    suppressionReason = 'close-band-reserve-awaiting-qualification';
   } else if (gate.active) {
     if (baseBudgetRemaining > 0 && ordinaryBudgetRemaining > 0) {
       suppressFire = false;
@@ -549,8 +552,11 @@ function evaluateCombatFireBudgetCore(input = {}, options = {}) {
     reservedCloseBandShotsUsed,
     reservedCloseBandShotsRemaining,
     closeBandReserveQualified,
+    closeBandStableQualified,
+    closeRangeFireOverride,
     closeBandBandTicks: Math.max(0, Number(closeBandReserve.bandTicks || 0)),
     closeBandFirstEligibleAt: Number(closeBandReserve.firstEligibleAt || 0) || null,
+    closeBandFirstStableAt: Number(closeBandReserve.firstStableAt || 0) || null,
     budgetStateInvalid,
     baseBudget,
     baseBudgetRemaining,
@@ -576,6 +582,7 @@ function updateCloseBandReserveCore(previous = null, input = {}, options = {}) {
   const targetId = String(input.targetId || '');
   const sameTarget = Boolean(previous && targetId && String(previous.targetId || '') === targetId);
   const reservedShots = Math.max(0, Math.round(Number(options.reservedShots ?? 2)));
+  const enabled = options.enabled !== false && reservedShots > 0;
   const acceptedShots = Math.max(0, Math.round(Number(input.acceptedShots || 0)));
   let consumedShots = sameTarget ? Math.max(0, Math.round(Number(previous.consumedShots || 0))) : 0;
   const previousAcceptedShots = sameTarget ? Math.max(0, Math.round(Number(previous.lastAcceptedShots || 0))) : acceptedShots;
@@ -588,14 +595,16 @@ function updateCloseBandReserveCore(previous = null, input = {}, options = {}) {
   const maxRangeCm = Math.max(minRangeCm, Number(options.maxRangeCm ?? 5500));
   const inBand = Number.isFinite(distance) && distance >= minRangeCm && distance <= maxRangeCm;
   const coverageQualified = Boolean(input.coverageQualified);
-  const bandTicks = inBand && coverageQualified
+  const bandTicks = inBand
     ? (sameTarget ? Math.max(0, Number(previous.bandTicks || 0)) + 1 : 1)
     : 0;
   const requiredBandTicks = Math.max(1, Math.round(Number(options.requiredBandTicks ?? 3)));
-  const eligible = bandTicks >= requiredBandTicks && consumedShots < reservedShots;
+  const stableBandEligible = enabled && bandTicks >= requiredBandTicks;
+  const eligible = stableBandEligible && coverageQualified && consumedShots < reservedShots;
   const nowMs = Number.isFinite(Number(input.nowMs)) ? Number(input.nowMs) : Date.now();
   return {
     targetId,
+    enabled,
     reservedShots,
     consumedShots,
     remainingShots: Math.max(0, reservedShots - consumedShots),
@@ -603,7 +612,11 @@ function updateCloseBandReserveCore(previous = null, input = {}, options = {}) {
     requiredBandTicks,
     inBand,
     coverageQualified,
+    stableBandEligible,
     eligible,
+    firstStableAt: stableBandEligible
+      ? (sameTarget && Number(previous.firstStableAt || 0) > 0 ? Number(previous.firstStableAt) : nowMs)
+      : 0,
     firstEligibleAt: eligible
       ? (sameTarget && Number(previous.firstEligibleAt || 0) > 0 ? Number(previous.firstEligibleAt) : nowMs)
       : 0,

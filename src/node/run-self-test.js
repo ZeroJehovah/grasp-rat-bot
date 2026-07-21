@@ -106,7 +106,8 @@ const {
 const {
   determineCombatFireState,
   evaluateCombatFireBudgetCore,
-  evaluateHighEntropyFireGateCore
+  evaluateHighEntropyFireGateCore,
+  updateCloseBandReserveCore
 } = require('../strategy/combat-fire-discipline');
 const { updatePostAttackSettlementCore } = require('../strategy/post-attack-drop');
 const {
@@ -5485,6 +5486,59 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'paused|close-pressure-movement-reserve|pressure|160|2600|false|close-pressure-full-attack'
+    },
+    {
+      name: 'browserless stable close range overrides exhausted high-entropy fire gates without coverage',
+      got: (() => {
+        let closeBandReserve = null;
+        for (let index = 0; index < 3; index += 1) {
+          closeBandReserve = updateCloseBandReserveCore(closeBandReserve, {
+            targetId: 'target-a',
+            acceptedShots: 40,
+            distance: 5000,
+            coverageQualified: false,
+            nowMs: 1000 + index * 50
+          });
+        }
+        const close = evaluateCombatFireBudgetCore({
+          targetId: 'target-a',
+          acceptedShotsSinceDamage: 40,
+          fireGate: { active: true, suppressFire: true, reason: 'high-entropy-reacquire', explorationMaxShots: 15 },
+          probeState: { suppressFire: true },
+          closeBandReserve
+        });
+        const far = evaluateCombatFireBudgetCore({
+          targetId: 'target-a',
+          acceptedShotsSinceDamage: 40,
+          fireGate: { active: true, suppressFire: true, reason: 'high-entropy-reacquire', explorationMaxShots: 15 },
+          probeState: { suppressFire: true },
+          closeBandReserve: { ...closeBandReserve, inBand: false, stableBandEligible: false, bandTicks: 0 }
+        });
+        let disabledCloseBand = null;
+        for (let index = 0; index < 3; index += 1) {
+          disabledCloseBand = updateCloseBandReserveCore(disabledCloseBand, {
+            targetId: 'target-a', acceptedShots: 40, distance: 5000, coverageQualified: false, nowMs: 2000 + index * 50
+          }, { reservedShots: 0, enabled: false });
+        }
+        const disabled = evaluateCombatFireBudgetCore({
+          targetId: 'target-a',
+          acceptedShotsSinceDamage: 40,
+          fireGate: { active: true, suppressFire: true, reason: 'high-entropy-reacquire', explorationMaxShots: 15 },
+          probeState: { suppressFire: true },
+          closeBandReserve: disabledCloseBand
+        });
+        return [
+          closeBandReserve.stableBandEligible,
+          close.suppressFire,
+          close.authorizationSource,
+          close.budgetStateInvalid,
+          far.suppressFire,
+          far.suppressionReason,
+          disabledCloseBand.stableBandEligible,
+          disabled.suppressFire
+        ].join('|');
+      })(),
+      want: 'true|false|close-range-fire-override|false|true|budget-state-invalid|false|true'
     },
     {
       name: 'browserless post-attack settlement consumes observed and expired generations without A-B-A reinsertion',

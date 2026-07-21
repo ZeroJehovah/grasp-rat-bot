@@ -2726,6 +2726,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     nowMs: options.nowMs
   }, {
     reservedShots: options.combatCloseBandReserveEnabled === false ? 0 : 2,
+    enabled: options.combatCloseBandReserveEnabled !== false,
     requiredBandTicks: 3,
     minRangeCm: 4500,
     maxRangeCm: 5500
@@ -2785,6 +2786,8 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     reservedCloseBandShots: sharedFireBudget.reservedCloseBandShots,
     reservedCloseBandShotsRemaining: sharedFireBudget.reservedCloseBandShotsRemaining,
     closeBandReserveQualified: sharedFireBudget.closeBandReserveQualified,
+    closeBandStableQualified: sharedFireBudget.closeBandStableQualified,
+    closeRangeFireOverride: sharedFireBudget.closeRangeFireOverride,
     budgetStateInvalid: sharedFireBudget.budgetStateInvalid,
     authorizationSource: sharedFireBudget.authorizationSource,
     marginalCoverage: sharedFireBudget.marginalCoverage,
@@ -2919,6 +2922,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
       reservedCloseBandShots: sharedFireBudget.reservedCloseBandShots,
       reservedCloseBandShotsRemaining: sharedFireBudget.reservedCloseBandShotsRemaining,
       closeBandReserve: cloneJson(closeBandReserve),
+      closeRangeFireOverride: sharedFireBudget.closeRangeFireOverride,
       budgetStateInvalid: sharedFireBudget.budgetStateInvalid,
       authorizationSource: sharedFireBudget.authorizationSource,
       marginalCoverage: sharedFireBudget.marginalCoverage,

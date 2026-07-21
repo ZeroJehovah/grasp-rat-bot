@@ -652,6 +652,12 @@ function replayCombat(options) {
     baselineMisses.push(baselineMiss);
     improvedMisses.push(improvedMiss);
     const selectedRoute = improved.routeCoverage?.candidates?.find(candidate => candidate.hypothesis === improved.routeCoverage?.selected) || null;
+    const closeRangeRows = rows.slice(Math.max(0, rowIndex - 2), rowIndex + 1);
+    const closeRangeFireOverride = closeRangeRows.length === 3
+      && closeRangeRows.every(item => {
+        const distance = Number(item.detail.target?.distance);
+        return Number.isFinite(distance) && distance >= 4500 && distance <= 5500;
+      });
     shotEvaluations.push({
       shot,
       baselineMiss,
@@ -663,6 +669,7 @@ function replayCombat(options) {
       at: Number(shot.at || 0),
       distance: numberOrNull(row.detail.target?.distance),
       closePressure: Boolean(row.detail.combatPhase?.active || row.detail.shooting?.closePressure),
+      closeRangeFireOverride,
       aimMode: improved.mode || '',
       hypothesis: improved.motionProbe?.hypothesis || 'baseline',
       routeStyle: improved.routeCoverage?.style || '',
@@ -814,7 +821,8 @@ function replayCombat(options) {
       fireGate: gate,
       probeState: probe,
       trajectoryCoverage: item.trajectoryCoveragePlan || null,
-      closePressure: Number(item.shot.at || 0) - startedAt >= 60000
+      closePressure: Number(item.shot.at || 0) - startedAt >= 60000,
+      closeRangeFireOverride: item.closeRangeFireOverride
     }, {
       minimumMarginalCoverage: 0.02,
       geometryRearmShots: probe.geometryReprobeMaxShots,
