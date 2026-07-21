@@ -2073,12 +2073,14 @@ async function runReadOnlyCanary(config, options = {}) {
   };
   const assessRestartDrain = (currentState, atMs) => {
     if (!restartDrain?.isRequested?.()) return false;
+    const pendingStatus = restartDrain.status();
     const assessment = evaluateRestartReadiness({
       online: true,
       decision: result.decisions.last,
       decisionState: decisionAdapter.getState?.() || null,
       realtime: currentState?.realtime || null,
-      leavePending: publicLeavePending(leavePending)
+      leavePending: publicLeavePending(leavePending),
+      commitmentKey: pendingStatus.commitmentKey || ''
     }, runtimeDefaults);
     const status = restartDrain.observe(assessment);
     publishRestartDrainStatus(status);

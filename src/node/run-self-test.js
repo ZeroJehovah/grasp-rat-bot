@@ -11508,6 +11508,57 @@ async function runSelfTest() {
       want: 'true|restart-drain'
     },
     {
+      name: 'browserless restart drain does not treat its synthetic wait as idle while captured combat remains active',
+      got: (() => {
+        let nowMs = 1000;
+        const coordinator = createRestartDrainCoordinator({ now: () => nowMs, idleStableMs: 500 });
+        coordinator.requestDrain('restart-drain', { commitmentKey: 'player:19677' });
+        const syntheticWait = {
+          action: {
+            kind: 'wait',
+            band: 'wait',
+            reason: 'restart-drain-new-commitment-blocked'
+          }
+        };
+        const active = evaluateRestartReadiness({
+          online: true,
+          decision: syntheticWait,
+          commitmentKey: 'player:19677',
+          decisionState: {
+            combatTarget: { id: 19677, name: 'Eason', hp: 34, reason: 'combat-live-realtime' }
+          }
+        });
+        coordinator.observe(active);
+        nowMs = 2000;
+        coordinator.observe(active);
+        const blocked = coordinator.status();
+        const released = evaluateRestartReadiness({
+          online: true,
+          decision: syntheticWait,
+          commitmentKey: 'player:19677',
+          decisionState: { combatTarget: null }
+        });
+        coordinator.observe(released);
+        nowMs = 2499;
+        const beforeStable = coordinator.status();
+        nowMs = 2500;
+        coordinator.observe(released);
+        const ready = coordinator.status();
+        return [
+          active.ready,
+          active.reason,
+          active.blocker?.targetId,
+          active.blocker?.targetHp,
+          blocked.ready,
+          released.ready,
+          released.reason,
+          beforeStable.ready,
+          ready.ready
+        ].join('|');
+      })(),
+      want: 'false|captured-combat-commitment-active|19677|34|false|true|abandonable-idle-task|false|true'
+    },
+    {
       name: 'browserless shutdown signals escalate from drain to verified stop to emergency exit',
       got: (() => {
         const signal = 'browserless-self-test-signal';

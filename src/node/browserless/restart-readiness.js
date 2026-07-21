@@ -48,12 +48,35 @@ function routeHasHighValueCoin(route, threshold) {
   return (route?.points || []).some(point => Number(point?.amount || 0) >= threshold);
 }
 
+function capturedCombatCommitmentBlocker(context = {}) {
+  const commitmentKey = valueId(context.commitmentKey ?? context.restartDrain?.commitmentKey);
+  if (!commitmentKey.startsWith('player:')) return null;
+  const targetId = commitmentKey.slice('player:'.length);
+  if (!targetId) return null;
+  const combatTarget = context.decisionState?.combatTarget || null;
+  const combatTargetId = valueId(combatTarget?.id ?? combatTarget?.userId ?? combatTarget?.user_id);
+  if (combatTargetId !== targetId) return null;
+  const hp = Number(combatTarget?.hp ?? combatTarget?.displayHp);
+  if (Number.isFinite(hp) && hp <= 0) return null;
+  return {
+    commitmentKey,
+    targetId,
+    targetName: String(combatTarget?.name || ''),
+    targetHp: Number.isFinite(hp) ? hp : null,
+    reason: String(combatTarget?.reason || '')
+  };
+}
+
 function evaluateRestartReadiness(context = {}, options = {}) {
   if (context.online === false) return { ready: true, reason: 'offline', blocker: null };
   if (context.leavePending?.active) return { ready: false, reason: 'leave-pending', blocker: context.leavePending };
   const settlement = context.decisionState?.postKillSettlement || context.postKillSettlement || null;
   if (settlement?.active !== false && settlement?.targetId) {
     return { ready: false, reason: 'post-kill-settlement', blocker: settlement };
+  }
+  const capturedCombatBlocker = capturedCombatCommitmentBlocker(context);
+  if (capturedCombatBlocker) {
+    return { ready: false, reason: 'captured-combat-commitment-active', blocker: capturedCombatBlocker };
   }
 
   const decision = context.decision || {};
@@ -195,6 +218,7 @@ function restartDrainAllowsDecision(decision, drainStatus = {}) {
 module.exports = {
   DEFAULT_IDLE_STABLE_MS,
   actionTargetKey,
+  capturedCombatCommitmentBlocker,
   createRestartDrainCoordinator,
   evaluateRestartReadiness,
   restartDrainAllowsDecision
