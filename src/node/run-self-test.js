@@ -181,6 +181,7 @@ const {
 } = require('./browserless/status-server');
 const {
   BROWSERLESS_WEB_PANEL_VERSION,
+  estimatedHighDropQuotaCore,
   formatSpentStaminaCore,
   groupChatMessagesForDisplay,
   nearbyCoinIconCore,
@@ -23713,6 +23714,42 @@ async function runSelfTest() {
       want: 'daily-first-login-delay|50000|2026-07-14T16:02:00.000Z|true|120000|true|true|true'
     },
     {
+      name: 'browserless compact status extends stale midnight reconnect display to daily 00:02 and omits missing cooldown',
+      got: (() => {
+        const waiting = buildCompactBrowserlessStatus({
+          runner: {
+            currentAction: {
+              kind: 'loop-wait',
+              reason: 'stamina-exhausted-leave',
+              nextRunAt: '2026-07-14T16:00:10.000Z'
+            }
+          },
+          stats: {
+            today: { day: '2026-07-14', sessionCount: 7 },
+            currentSession: { online: false },
+            lastExit: {
+              reason: 'stamina-exhausted-leave',
+              nextRunAt: '2026-07-14T16:00:10.000Z'
+            }
+          }
+        }, {
+          nowMs: Date.parse('2026-07-14T15:59:10.000Z'),
+          dailyFirstLoginDelayMs: 120000
+        });
+        const noCooldown = buildCompactBrowserlessStatus({
+          runner: { currentAction: { kind: 'loop-wait', reason: 'offline-wait', nextRunAt: '' } },
+          stats: { today: { day: '2026-07-14', sessionCount: 1 }, currentSession: { online: false } }
+        }, { nowMs: Date.parse('2026-07-14T08:00:00.000Z') });
+        return [
+          waiting.stats.offline.nextReconnectAt,
+          waiting.stats.offline.reconnectRemainingMs,
+          noCooldown.stats.offline.nextReconnectAt,
+          noCooldown.stats.offline.reconnectRemainingMs ?? 'null'
+        ].join('|');
+      })(),
+      want: '2026-07-14T16:02:00.000Z|170000||null'
+    },
+    {
       name: 'browserless runner resumes persisted reconnect wait after restart',
       got: withTempDirForTest(async dir => {
         let t = Date.parse('2026-07-11T03:45:54.610Z');
@@ -26557,7 +26594,7 @@ async function runSelfTest() {
           compact.stats.offline.reconnectRemainingMs
         ].join('|');
       })(),
-      want: 'false|true|true|100|2316|10000|31|stamina-exhausted-leave|1d|2026-07-10T16:00:10.000Z|2830000'
+      want: 'false|true|true|100|2316|10000|31|stamina-exhausted-leave|1d|2026-07-10T16:02:00.000Z|2940000'
     },
     {
       name: 'browserless persisted last known survives missing realtime self and blocked restart',
@@ -26680,7 +26717,7 @@ async function runSelfTest() {
           compact.stats.offline.reconnectRemainingMs
         ].join('|');
       })(),
-      want: 'true|2026-07-12T16:00:10.000Z|0'
+      want: 'true|2026-07-12T16:02:00.000Z|100000'
     },
     {
       name: 'browserless state file replaces current action snapshots',
@@ -27002,16 +27039,21 @@ async function runSelfTest() {
           /function highDropValueText/.test(panelScript),
           /merged\[merged.length - 1\] !== next/.test(panelScript),
           /join\('\s*->\s*'\)/.test(panelScript),
-          panelScript.includes("{ text: '今日发现', className: 'meta-label' }"),
-          panelScript.includes("integer(initial) + ' -> ' + integer(maximum)"),
+          panelScript.includes("{ text: '更新于', className: 'meta-label' }"),
+          panelScript.includes("stamp(status.highDropPlayers?.lastSnapshotAt)"),
+          panelScript.includes("createHighDropRow('玩家名称', 'Drop', '推测额度', true)"),
+          panelScript.includes('const estimatedHighDropQuota = function estimatedHighDropQuotaCore'),
+          estimatedHighDropQuotaCore(1000, 1100, 1100) === 20200,
+          estimatedHighDropQuotaCore(1000, 1100, 1000) === null,
+          estimatedHighDropQuotaCore(500, 500, 500) === 10000,
+          estimatedHighDropQuotaCore(null, 500, 500) === null,
           panelScript.includes("status.game?.inGame === true,\n          true"),
-          panelScript.includes("latestDrop !== null && latestDrop >= 500"),
-          panelScript.includes("userId !== selfUserId"),
+          /\.high-drop-row\{display:grid;grid-template-columns:[^}]*minmax\(72px,\.8fr\)/.test(panelText),
           !panelScript.includes("'我 · ' + self.name"),
           panelText.indexOf('id="highDropPlayers"') < panelText.indexOf('id="nearbyGrid"')
         ].join('|');
       })(),
-      want: '2026-07-14|ws|gap-http|alice-renamed,520,700,600,8,true|bob,500,500,450,9,false|2|false|false|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
+      want: '2026-07-14|ws|gap-http|alice-renamed,520,700,600,8,true|bob,500,500,450,9,false|2|false|false|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless web panel keeps compact timestamped chat below role status',
@@ -27287,10 +27329,15 @@ async function runSelfTest() {
           panelScript.includes("durationNode.dataset.battleStartedAt = battle.startedAt || ''"),
           panelScript.includes('const panelSessionFlags = '),
           panelScript.includes('const { online, realtimeOnline } = panelSessionFlags(status);'),
-          panelScript.includes("if (online) addRow(rowsOut, '原因', actionReasonDisplay(status), true)"),
+          panelScript.includes("if (online && !liveCombat) addRow(rowsOut, '原因', actionReasonDisplay(status), true)"),
           panelScript.includes("const reason = offlineStats.lastExitReason || status.recentExit?.reason || ''"),
           panelScript.includes('const battle = recentBattle(status);'),
-          panelScript.includes('if (realtimeOnline && isCombatStatus(status, kind, reason))'),
+          panelScript.includes("const liveCombat = Boolean(realtimeOnline && (kind === 'combat-live' || action.kind === 'combat-live'))"),
+          panelScript.includes('if (realtimeOnline && !liveCombat && isCombatStatus(status, kind, reason))'),
+          panelScript.includes("target.active === null || target.active === undefined ? '--' : '活动 ' + bool(target.active)"),
+          !panelScript.includes("'危险 ' + bool(target.active)"),
+          panelScript.includes('const exit = status.game?.inGame'),
+          panelScript.includes("if (!online && offlineStats.nextReconnectAt)"),
           panelScript.includes('if (!realtimeOnline && isSafetyStatus(status, kind, reason))'),
           panelScript.includes("'combat-trade-disadvantage-leave': '战斗交换持续不利，预计继续交战风险过高，主动退出'"),
           panelScript.includes("'combat-pressure-disadvantage-leave': '遭到持续火力压制，我方血量处于劣势，主动退出'"),
@@ -27313,7 +27360,7 @@ async function runSelfTest() {
           panelText.indexOf('id="battlePanel"') < panelText.indexOf('class="stats-grid"')
         ].join('|');
       })(),
-      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
+      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless confirmed leave evidence preserves server hp after trigger',
@@ -27940,14 +27987,14 @@ async function runSelfTest() {
         return [
           BROWSERLESS_WEB_PANEL_VERSION,
           panelScript.includes("const loginDisplay = online ? { state: 'none', text: '--' } : loginPointDisplay(status);"),
-          panelScript.includes("if (online) addRow(rowsOut, '原因', actionReasonDisplay(status), true)"),
+          panelScript.includes("if (online && !liveCombat) addRow(rowsOut, '原因', actionReasonDisplay(status), true)"),
           panelScript.includes('const roleTitleMuted = !s.game?.inGame;'),
           panelScript.includes("{ text: integer(roleSelf?.hp), className: roleTitleMuted ? 'muted' : hpAttrs(roleSelf?.hp).className }"),
           panelScript.includes("{ text: integer(roleSelf?.drop), className: roleTitleMuted ? 'muted' : 'coin' }"),
           !panelScript.includes("setRichText('roleTitleMeta', [{ text: '已离线', className: 'muted' }], 'muted');")
         ].join('|');
       })(),
-      want: '2026.07.20.5|true|true|true|true|true|true'
+      want: '2026.07.21.1|true|true|true|true|true|true'
     },
     {
       name: 'browserless runner self-test passes',

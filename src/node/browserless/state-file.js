@@ -361,6 +361,20 @@ function nextDailyStaminaResetAt(ms = Date.now()) {
   return Math.floor((Number(ms) + UTC8_OFFSET_MS) / DAY_MS) * DAY_MS - UTC8_OFFSET_MS + DAY_MS;
 }
 
+function compactDailyFirstLoginNotBeforeMs(stats, config = {}, candidateMs = 0) {
+  const nextRunAtMs = Number(candidateMs);
+  if (!Number.isFinite(nextRunAtMs) || nextRunAtMs <= 0) return 0;
+  const session = stats?.currentSession || {};
+  if (session.online) return 0;
+  const candidateDay = browserlessStatsDayKey(nextRunAtMs);
+  const today = stats?.today || {};
+  if (String(today.day || '') === candidateDay && Math.max(0, Number(today.sessionCount || 0)) > 0) {
+    return 0;
+  }
+  const delayAfterMidnightMs = Math.max(0, Number(config.dailyFirstLoginDelayMs ?? 120000));
+  return browserlessStatsDayStartMs(candidateDay) + delayAfterMidnightMs;
+}
+
 function normalizeBrowserlessStats(stats, rawStats = stats) {
   const inputKillAccountingVersion = Number(rawStats?.killAccountingVersion || 0);
   const resetUntrustedKills = inputKillAccountingVersion !== KILL_ACCOUNTING_VERSION;
@@ -812,10 +826,15 @@ function compactBrowserlessStats(normalized, game, action, options = {}, lastKno
   const offlineBlocker = compactOfflineBlocker(normalized, lastKnown, options, nowMs);
   const rawNextRunAtMs = parseTimeMs(rawNextRunAt);
   const blockerReadyAtMs = parseTimeMs(offlineBlocker?.nextReadyAt);
-  const nextRunAt = blockerReadyAtMs > rawNextRunAtMs
+  let nextRunAt = blockerReadyAtMs > rawNextRunAtMs
     ? offlineBlocker.nextReadyAt
     : rawNextRunAt;
-  const nextRunAtMs = parseTimeMs(nextRunAt);
+  let nextRunAtMs = parseTimeMs(nextRunAt);
+  const dailyFirstLoginNotBeforeMs = compactDailyFirstLoginNotBeforeMs(stats, options, nextRunAtMs);
+  if (dailyFirstLoginNotBeforeMs > nextRunAtMs) {
+    nextRunAtMs = dailyFirstLoginNotBeforeMs;
+    nextRunAt = new Date(nextRunAtMs).toISOString();
+  }
   return {
     currentSession: {
       online,

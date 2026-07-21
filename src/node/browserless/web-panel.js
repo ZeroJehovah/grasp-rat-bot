@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.20.5';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.21.1';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function panelSessionFlagsCore(status = {}) {
@@ -57,6 +57,18 @@ function formatSpentStaminaCore(input) {
   if (spent === 0) return '0';
   if (spent < 1000) return '<1';
   return String(Math.ceil(spent / 1000));
+}
+
+function estimatedHighDropQuotaCore(initialDrop, maxDrop, latestDrop) {
+  if ([initialDrop, maxDrop, latestDrop].some(value => value === null || value === undefined || value === '')) {
+    return null;
+  }
+  const initial = Number(initialDrop);
+  const maximum = Number(maxDrop);
+  const latest = Number(latestDrop);
+  if (![initial, maximum, latest].every(Number.isFinite)) return null;
+  if (latest !== maximum) return null;
+  return Math.max(0, Math.round(initial * 20 + (latest - initial) * 2));
 }
 
 function nearbyCoinIconCore(options = {}) {
@@ -200,7 +212,7 @@ function renderBrowserlessWebPanel() {
     .coin-row{grid-template-columns:minmax(48px,1fr) minmax(34px,.5fr) minmax(46px,.65fr)}
     .player-row{grid-template-columns:minmax(150px,2.8fr) minmax(40px,.55fr) minmax(42px,.55fr) minmax(42px,.5fr) minmax(52px,.65fr)}
     .high-drop-list{display:grid;gap:0;min-width:0}
-    .high-drop-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.35fr);gap:10px;align-items:center;min-height:26px;padding:3px 0;border-bottom:1px solid rgba(255,255,255,.06)}
+    .high-drop-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.35fr) minmax(72px,.8fr);gap:10px;align-items:center;min-height:26px;padding:3px 0;border-bottom:1px solid rgba(255,255,255,.06)}
     .high-drop-row:last-child{border-bottom:0}
     .high-drop-head{position:sticky;top:0;z-index:1;color:var(--muted);font-size:11px;font-weight:700;background:var(--panel)}
     .high-drop-cell{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -423,6 +435,7 @@ function renderBrowserlessWebPanel() {
     const groupBlockingFactors = ${groupBlockingFactorsCore.toString()};
     const nearbyCoinIcon = ${nearbyCoinIconCore.toString()};
     const spentStaminaUnit = ${formatSpentStaminaCore.toString()};
+    const estimatedHighDropQuota = ${estimatedHighDropQuotaCore.toString()};
     const panelSessionFlags = ${panelSessionFlagsCore.toString()};
 
     const value = v => v === null || v === undefined || v === '' ? '--' : String(v);
@@ -681,7 +694,9 @@ function renderBrowserlessWebPanel() {
       return parts.join(' / ');
     }
     function combatExitHpText(status) {
-      const exit = status.recentExit || status.combat?.exit || {};
+      const exit = status.game?.inGame
+        ? (status.combat?.exit || {})
+        : (status.recentExit || status.combat?.exit || {});
       const selfHp = number(exit.selfHp);
       const targetHp = number(exit.targetHp);
       if (selfHp === null && targetHp === null) return '--';
@@ -1613,7 +1628,7 @@ function renderBrowserlessWebPanel() {
       }
       return merged.length ? merged.map(integer).join(' -> ') : '--';
     }
-    function createHighDropRow(name, drops, head = false, online = undefined, self = false) {
+    function createHighDropRow(name, drops, estimatedQuota, head = false, online = undefined, self = false) {
       const row = document.createElement('div');
       row.className = 'high-drop-row' + (head ? ' high-drop-head' : '');
       const nameCell = document.createElement('div');
@@ -1634,7 +1649,10 @@ function renderBrowserlessWebPanel() {
       const dropCell = document.createElement('div');
       dropCell.className = 'high-drop-cell' + (head ? '' : (showPresence ? ' high-drop-values ' + onlineClass + (self ? ' self' : '') : ' muted'));
       dropCell.textContent = value(drops);
-      row.append(nameCell, dropCell);
+      const quotaCell = document.createElement('div');
+      quotaCell.className = 'high-drop-cell' + (head ? '' : (showPresence ? ' high-drop-values ' + onlineClass + (self ? ' self' : '') : ' muted'));
+      quotaCell.textContent = value(estimatedQuota);
+      row.append(nameCell, dropCell, quotaCell);
       return row;
     }
     function renderHighDropPlayers(status) {
@@ -1647,24 +1665,21 @@ function renderBrowserlessWebPanel() {
       const today = status.stats?.today || {};
       const selfInitialDrop = number(today.initialDrop) ?? number(self?.drop);
       const selfMaxDrop = number(today.maxDrop) ?? number(self?.drop);
-      const currentHighDropCount = items.filter(item => {
-        const latestDrop = number(item?.[3]);
-        const userId = number(item?.[4]);
-        return latestDrop !== null && latestDrop >= 500 && (selfUserId === null || userId !== selfUserId);
-      }).length;
+      const selfLatestDrop = number(today.latestDrop) ?? number(self?.drop);
       setRichText('highDropTitleMeta', [
-        { text: '今日发现', className: 'meta-label' },
-        { text: String(currentHighDropCount), className: 'coin' },
-        { text: '个大户', className: 'meta-label' }
+        { text: '更新于', className: 'meta-label' },
+        { text: stamp(status.highDropPlayers?.lastSnapshotAt), className: 'coin' }
       ]);
       const fragment = document.createDocumentFragment();
-      fragment.appendChild(createHighDropRow('玩家名称', 'Drop', true));
+      fragment.appendChild(createHighDropRow('玩家名称', 'Drop', '推测额度', true));
       if (selfInitialDrop !== null || selfMaxDrop !== null) {
         const initial = selfInitialDrop ?? selfMaxDrop;
         const maximum = selfMaxDrop ?? selfInitialDrop;
+        const latest = selfLatestDrop;
         fragment.appendChild(createHighDropRow(
           selfName,
-          integer(initial) + ' -> ' + integer(maximum),
+          highDropValueText([null, initial, maximum, latest]),
+          integer(estimatedHighDropQuota(initial, maximum, latest)),
           false,
           status.game?.inGame === true,
           true
@@ -1672,9 +1687,17 @@ function renderBrowserlessWebPanel() {
       }
       const otherItems = items.filter(item => selfUserId === null || number(item?.[4]) !== selfUserId);
       if (!otherItems.length && selfInitialDrop === null && selfMaxDrop === null) {
-        fragment.appendChild(createHighDropRow('无', '--'));
+        fragment.appendChild(createHighDropRow('无', '--', '--'));
       } else {
-        for (const item of otherItems) fragment.appendChild(createHighDropRow(item?.[0], highDropValueText(item), false, item?.[5]));
+        for (const item of otherItems) {
+          fragment.appendChild(createHighDropRow(
+            item?.[0],
+            highDropValueText(item),
+            integer(estimatedHighDropQuota(item?.[1], item?.[2], item?.[3])),
+            false,
+            item?.[5]
+          ));
+        }
       }
       node.replaceChildren(fragment);
     }
@@ -1827,7 +1850,7 @@ function renderBrowserlessWebPanel() {
     function targetStateText(target) {
       if (!target) return '--';
       return joinNonBlank([
-        target.active === null || target.active === undefined ? '--' : '危险 ' + bool(target.active),
+        target.active === null || target.active === undefined ? '--' : '活动 ' + bool(target.active),
         target.moving === null || target.moving === undefined ? '--' : '移动 ' + bool(target.moving),
         target.firing === null || target.firing === undefined ? '--' : '开火 ' + bool(target.firing)
       ]);
@@ -1857,20 +1880,22 @@ function renderBrowserlessWebPanel() {
       const reason = currentReason;
       const loginDisplay = online ? { state: 'none', text: '--' } : loginPointDisplay(status);
       const rowsOut = [];
+      const liveCombat = Boolean(realtimeOnline && (kind === 'combat-live' || action.kind === 'combat-live'));
 
       addRow(rowsOut, '状态', online ? actionTitleText(status) : offlineActionTitleText(status), true);
-      if (online) addRow(rowsOut, '原因', actionReasonDisplay(status), true);
+      if (online && !liveCombat) addRow(rowsOut, '原因', actionReasonDisplay(status), true);
       const decisionText = joinNonBlank([kindText(kind), actionReasonText(status)]);
       const statusText = actionText(status);
       const reasonDisplay = online ? actionReasonDisplay(status) : dangerousPlayerExitReasonText(status, reason);
       if (online
+        && !liveCombat
         && decisionText !== '--'
         && decisionText !== statusText
         && decisionText !== reasonDisplay
         && decisionText !== joinNonBlank([statusText, reasonDisplay])) {
         addRow(rowsOut, '判断', decisionText);
       }
-      if (online) {
+      if (online && !liveCombat) {
         addRow(rowsOut, '目标', targetLabel(target));
         addRow(rowsOut, '来源', sourceText(target?.authority));
         addRow(rowsOut, '目标状态', targetStateText(target));
@@ -1878,13 +1903,11 @@ function renderBrowserlessWebPanel() {
       const dataGapSummary = dataGapsText(decision);
       if (online && dataGapSummary !== '--') addRow(rowsOut, '数据缺口', dataGapSummary);
 
-      if (realtimeOnline && isCombatStatus(status, kind, reason)) {
+      if (realtimeOnline && !liveCombat && isCombatStatus(status, kind, reason)) {
         addRow(rowsOut, '战斗目标', targetLabel(status.combat?.target));
         addRow(rowsOut, '战斗退出', reasonText(status.combat?.exit?.reason));
         const exitHpText = combatExitHpText(status);
         if (exitHpText && exitHpText !== '--') addRow(rowsOut, '退出触发血量', exitHpText);
-        const confirmedHpText = confirmedLeaveHpText(status);
-        if (confirmedHpText) addRow(rowsOut, '离场确认血量', confirmedHpText);
       }
 
       if (!realtimeOnline && isSafetyStatus(status, kind, reason)) {
@@ -1903,7 +1926,7 @@ function renderBrowserlessWebPanel() {
         addRow(rowsOut, reentry ? '状态确认时间' : '检查时间', fullStamp(status.loginPointSafety?.checkedAt || status.loginPointSafety?.detail?.checkedAt));
       }
 
-      if (!online) {
+      if (!online && offlineStats.nextReconnectAt) {
         addRow(rowsOut, '下次重连', fullStamp(offlineStats.nextReconnectAt));
         addRow(rowsOut, '剩余时间', countdownUntil(offlineStats.nextReconnectAt), false, { countdownAt: offlineStats.nextReconnectAt });
       }
@@ -2486,6 +2509,7 @@ function renderBrowserlessWebPanel() {
 
 module.exports = {
   BROWSERLESS_WEB_PANEL_VERSION,
+  estimatedHighDropQuotaCore,
   formatSpentStaminaCore,
   groupBlockingFactorsCore,
   groupChatMessagesForDisplay,
