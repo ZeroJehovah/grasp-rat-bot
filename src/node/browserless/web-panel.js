@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.22.1';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.22.2';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function highDropRankValueCore(item) {
@@ -53,6 +53,15 @@ function missCloseExitReasonTextCore(missClose = {}) {
   }
   if (evidence.length) text += `（${evidence.join('，')}）`;
   return `${text}，为避免继续低效追击而主动退出`;
+}
+
+function restartDrainBlockedReasonTextCore(input = {}) {
+  const blockedKind = String(input.blockedAction?.kind || input.blockedKind || '');
+  let task = '新的金币或战斗任务';
+  if (/coin|profit/i.test(blockedKind)) task = '新的金币任务';
+  else if (/attack|combat|enemy|fight/i.test(blockedKind)) task = '新的战斗任务';
+  const waiting = String(input.commitmentKey || '') ? '，等待当前任务安全结束' : '';
+  return `程序正在准备重启，已暂停接取${task}${waiting}`;
 }
 
 function groupChatMessagesForDisplay(messages = [], collapseOtherKills = true) {
@@ -483,6 +492,7 @@ function renderBrowserlessWebPanel() {
     const estimatedHighDropQuota = ${estimatedHighDropQuotaCore.toString()};
     const panelSessionFlags = ${panelSessionFlagsCore.toString()};
     const missCloseExitReasonText = ${missCloseExitReasonTextCore.toString()};
+    const restartDrainBlockedReasonText = ${restartDrainBlockedReasonTextCore.toString()};
 
     const value = v => v === null || v === undefined || v === '' ? '--' : String(v);
     const number = v => v === null || v === undefined || v === '' ? null : (Number.isFinite(Number(v)) ? Number(v) : null);
@@ -947,6 +957,7 @@ function renderBrowserlessWebPanel() {
       'direct-leave-failed': '退出确认失败，重试',
       'shutdown-leave': '程序停止或重启前安全退出',
       'restart-drain-ready': '程序重启前已安全退出',
+      'restart-drain-new-commitment-blocked': '程序正在准备重启，已暂停接取新的金币或战斗任务',
       'confirmed-leave-snapshot-quarantine': '已确认退出，等待快照刷新',
       'stale-confirmed-leave-snapshot-tick': '已确认退出，等待更新后的快照',
       'explicit-stop': '手动停止',
@@ -1413,6 +1424,7 @@ function renderBrowserlessWebPanel() {
       const kind = String(action.kind || action.actionKind || status.decision?.kind || 'wait');
       const reason = String(action.reason || status.decision?.reason || '');
       const target = activeTarget(status) || action.target || status.decision?.target || null;
+      if (reason === 'restart-drain-new-commitment-blocked') return '正在准备重启';
       if (kind === 'post-attack-drop-wait' || /post-kill-settlement-wait|post-attack-drop-wait/i.test(reason)) return '等待掉落';
       if (reason === 'single-coin-bait-hold') return '正在等待';
       if (kind === 'coin' || kind === 'seek-coin' || kind === 'profit-candidate') {
@@ -1435,6 +1447,12 @@ function renderBrowserlessWebPanel() {
       const action = status.action || status.decision || {};
       const reason = String(action.reason || status.decision?.reason || status.recentExit?.reason || '');
       const kind = String(action.kind || status.decision?.kind || '');
+      if (reason === 'restart-drain-new-commitment-blocked') {
+        return restartDrainBlockedReasonText({
+          blockedAction: action.blockedAction || status.decision?.action?.blockedAction || null,
+          commitmentKey: status.runner?.restartDrain?.commitmentKey || ''
+        });
+      }
       if (reason === 'best-opportunity' || reason === 'best-opportunity-coin' || reason === 'best-opportunity-coin-route' || reason === 'best-eligible-profit') return '综合收益最高';
       if (reason === 'post-attack-drop-wait-position' || reason === 'post-kill-settlement-wait') return '等待掉落确认';
       if (kind === 'coin' || kind === 'seek-coin' || kind === 'profit-candidate') return reasonText(reason) === actionTitleText(status) ? '综合收益最高' : reasonText(reason);
@@ -2597,5 +2615,6 @@ module.exports = {
   missCloseExitReasonTextCore,
   nearbyCoinIconCore,
   panelSessionFlagsCore,
+  restartDrainBlockedReasonTextCore,
   renderBrowserlessWebPanel
 };

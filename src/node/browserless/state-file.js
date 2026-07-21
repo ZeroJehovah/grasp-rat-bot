@@ -1231,6 +1231,13 @@ function compactAction(action) {
     delayMs: compactNumber(action.delayMs),
     nextRunAt: compactString(action.nextRunAt, 48),
     target: compactTarget(action.target),
+    blockedAction: action.blockedAction && typeof action.blockedAction === 'object'
+      ? {
+          kind: compactString(action.blockedAction.kind, 48),
+          reason: compactString(action.blockedAction.reason, 120),
+          targetKey: compactString(action.blockedAction.targetKey, 128)
+        }
+      : null,
     movement: action.movement && typeof action.movement === 'object'
       ? {
           ok: compactBoolean(action.movement.ok),

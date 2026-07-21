@@ -188,6 +188,7 @@ const {
   missCloseExitReasonTextCore,
   nearbyCoinIconCore,
   panelSessionFlagsCore,
+  restartDrainBlockedReasonTextCore,
   renderBrowserlessWebPanel
 } = require('./browserless/web-panel');
 const {
@@ -28171,7 +28172,51 @@ async function runSelfTest() {
             < panelScript.indexOf("if (/combat/i.test(text)) return '正在处理打架';")
         ].join('|');
       })(),
-      want: '2026.07.22.1|true|true|true'
+      want: '2026.07.22.2|true|true|true'
+    },
+    {
+      name: 'browserless restart drain wait explains planned service restart',
+      got: (() => {
+        const status = buildCompactBrowserlessStatus({
+          runner: {
+            running: true,
+            mode: 'profit-live',
+            restartDrain: {
+              requested: true,
+              reason: 'restart-drain',
+              requestedAt: '2026-07-21T16:35:59.000Z',
+              commitmentKey: '',
+              ready: false,
+              assessment: { ready: false, reason: 'new-commitment-blocked' }
+            }
+          },
+          current: {
+            self: { userId: 28886, name: 'self', hp: 100 },
+            decision: {
+              kind: 'wait',
+              band: 'wait',
+              reason: 'restart-drain-new-commitment-blocked',
+              action: {
+                kind: 'wait',
+                band: 'wait',
+                reason: 'restart-drain-new-commitment-blocked',
+                blockedAction: { kind: '', reason: '', targetKey: '' }
+              }
+            }
+          },
+          stats: { currentSession: { online: true } }
+        }, parseBrowserlessRunnerArgs([], {}));
+        const panelScript = renderBrowserlessWebPanel().match(/<script>([\s\S]*?)<\/script>/)?.[1] || '';
+        return [
+          status.action.reason,
+          status.action.blockedAction !== null,
+          restartDrainBlockedReasonTextCore({ blockedAction: status.action.blockedAction, commitmentKey: '' }),
+          restartDrainBlockedReasonTextCore({ blockedAction: { kind: 'attack' }, commitmentKey: 'player:36046' }),
+          panelScript.includes("if (reason === 'restart-drain-new-commitment-blocked') return '正在准备重启';"),
+          panelScript.includes("'restart-drain-new-commitment-blocked': '程序正在准备重启，已暂停接取新的金币或战斗任务'")
+        ].join('|');
+      })(),
+      want: 'restart-drain-new-commitment-blocked|true|程序正在准备重启，已暂停接取新的金币或战斗任务|程序正在准备重启，已暂停接取新的战斗任务，等待当前任务安全结束|true|true'
     },
     {
       name: 'browserless compact injury exit preserves recent battle summary',
