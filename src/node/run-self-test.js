@@ -8957,6 +8957,52 @@ async function runSelfTest() {
       want: 'coin|profit|recovery-foot-coin|small-foot-coin|1|||high-value-coin'
     },
     {
+      name: 'browserless far high-value snapshot coin cannot outrank in-range AFK profit',
+      got: (() => {
+        const store = createBrowserlessStateStore({ userId: 7 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 59,
+          entities: [
+            fullStamina5s({ entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 }),
+            fullStamina5s({ entity_id: 2, user_id: 8, name: 'near-afk', x: 4404, y: 0, hp: 67, current_join_mode: 'Passive', drop: 28 })
+          ],
+          bullets: []
+        }, { receivedAtMs: 1000 });
+        store.ingestFrame({
+          type: 'snapshot',
+          tick: 60,
+          entities: [fullStamina5s({ entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 })],
+          bullets: [],
+          coin_drops: [{ drop_id: 'far-high-value', amount: 18, x: 45388, y: 0 }],
+          messages: []
+        }, { receivedAtMs: 1100 });
+        const decision = buildBrowserlessDecision(store.getState(1200), {}, {
+          nowMs: 1200,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          dynamicProfitThresholdEnabled: false,
+          attackRange: 14500
+        });
+        const coin = decision.profit.candidates.find(item => item.type === 'coin');
+        const enemy = decision.profit.candidates.find(item => item.type === 'enemy' && item.id === 8);
+        const hasHighValuePriority = decision.finalSelection.candidates
+          .some(item => item.reason === 'high-value-visible-coin-priority');
+        return [
+          decision.kind,
+          decision.reason,
+          decision.action.target.name,
+          decision.action.target.drop,
+          decision.profit.best.type,
+          decision.profit.best.id,
+          coin?.priorityTier,
+          enemy?.priorityTier,
+          hasHighValuePriority
+        ].join('|');
+      })(),
+      want: 'profit-candidate|best-opportunity|near-afk|28|enemy|8|1|1|false'
+    },
+    {
       name: 'browserless profit live exits before low-hp high-value coin under attributable incoming bullet',
       got: (() => {
         const store = createBrowserlessStateStore({ userId: 7 });
@@ -9713,7 +9759,7 @@ async function runSelfTest() {
       want: 'coin|profit|foot-coin-priority|false|foot-coin|0|false'
     },
     {
-      name: 'browserless decision input admits visible high-value coin outside center activity radius',
+      name: 'browserless decision input admits outside-center high-value coin only within attack range',
       got: (() => {
         const state = {
           userId: 7,
@@ -9749,7 +9795,7 @@ async function runSelfTest() {
           input.dataGaps.includes('center-visible-coin-edge-admitted')
         ].join('|');
       })(),
-      want: '8|1,2|1|0|visible-high-value-coin-outside-center|true|true'
+      want: '8|1|1|1||true|false'
     },
     {
       name: 'browserless realtime AFK edge belt admits July 15 Eason with return cost',

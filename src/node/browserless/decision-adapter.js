@@ -225,7 +225,9 @@ function centerActivityCoinAdmissionReason(coin, selfKillTargetTicks, options = 
   if (selfKillTargetTicks && isSelfKilledPlayerDropCoin(coin, selfKillTargetTicks, options)) {
     return 'self-kill-drop-outside-center';
   }
-  if (Number(coin?.amount || 0) >= highValueCoinPriorityAmount(options)) {
+  if (Number(coin?.amount || 0) >= highValueCoinPriorityAmount(options)
+    && Number.isFinite(Number(coin?.distance))
+    && Number(coin.distance) <= highValueCoinPriorityRange(options)) {
     return 'visible-high-value-coin-outside-center';
   }
   return '';
@@ -1479,6 +1481,7 @@ function refreshRealtimeSnapshotObservation(state, self, stateful = {}, options 
   const selfUserId = Number(self?.user_id ?? state?.userId ?? options.userId ?? 0);
   const visibleRange = Math.max(0, Number(options.globalCoinMaxDistance ?? DEFAULT_GLOBAL_COIN_MAX_DISTANCE));
   const highValueAmount = Math.max(1, highValueCoinPriorityAmount(options));
+  const highValueRange = highValueCoinPriorityRange(options);
   const selfKillTargetTicks = selfKillTargetTicksFromMessages(
     Array.isArray(fallback.messages) ? fallback.messages : [],
     selfUserId
@@ -1510,11 +1513,12 @@ function refreshRealtimeSnapshotObservation(state, self, stateful = {}, options 
     };
     coin.selfKilledPlayerDrop = isSelfKilledPlayerDropCoin(coin, selfKillTargetTicks, options);
     if (!visibleRange || distance <= visibleRange) nearbyCoins.push(coin);
-    if (amount >= highValueAmount) coins.push(coin);
+    if (amount >= highValueAmount && distance <= highValueRange) coins.push(coin);
   }
   nearbyCoins.sort((a, b) => Number(a.distance) - Number(b.distance) || Number(b.amount) - Number(a.amount));
   const nearbyCoinLimit = Math.max(8, Math.round(Number(options.realtimeNearbyCoinLimit) || 48));
-  const priorityNearbyCoins = nearbyCoins.filter(coin => coin.selfKilledPlayerDrop || Number(coin.amount || 0) >= highValueAmount);
+  const priorityNearbyCoins = nearbyCoins.filter(coin => coin.selfKilledPlayerDrop
+    || (Number(coin.amount || 0) >= highValueAmount && Number(coin.distance) <= highValueRange));
   const priorityNearbyCoinKeys = new Set(priorityNearbyCoins.map(coin => coin.key));
   const boundedNearbyCoins = [
     ...priorityNearbyCoins.slice(0, nearbyCoinLimit),
@@ -1669,11 +1673,15 @@ function selectRealtimeLootCandidate(input, stateful = {}, options = {}) {
   const maxAgeMs = Math.max(250, Number(options.realtimeLootMaxAgeMs ?? DEFAULT_REALTIME_LOOT_MAX_AGE_MS));
   const ageMs = realtimeObservationAgeMs(observation, input);
   const minAmount = Math.max(1, highValueCoinPriorityAmount(options));
-  const maxDistance = Math.max(0, Number(
+  const configuredMaxDistance = Math.max(0, Number(
     options.realtimeLootMaxDistanceCm
       ?? options.postAttackDropCoinMaxDistance
       ?? DEFAULT_PROFIT_LIVE_PLAYER_DROP_MAX_DISTANCE
   ));
+  const highValueRange = highValueCoinPriorityRange(options);
+  const maxDistance = configuredMaxDistance > 0
+    ? Math.min(configuredMaxDistance, highValueRange)
+    : highValueRange;
   const candidates = ageMs <= maxAgeMs
     ? realtimeObservationCoins(observation, input?.self)
       .filter(coin => Number(coin.amount || 0) >= minAmount)
@@ -3208,6 +3216,11 @@ function highValueCoinPriorityAmount(options = {}) {
   return Math.max(1, Number.isFinite(value) ? value : OPPORTUNITY_CONSTANTS.HIGH_VALUE_COIN_PRIORITY_AMOUNT);
 }
 
+function highValueCoinPriorityRange(options = {}) {
+  const value = Number(options.combatAttackRange ?? options.attackRange ?? DEFAULT_ATTACK_RANGE);
+  return Math.max(0, Number.isFinite(value) ? value : DEFAULT_ATTACK_RANGE);
+}
+
 function highValueCoinPriorityHealthyHp(options = {}) {
   const value = Number(options.highValueCoinPriorityHealthyHp
     ?? options.combatLowHpLeaveThreshold
@@ -3265,10 +3278,7 @@ function pickHighValueVisibleCoin(input, combatDecision, options = {}) {
   const healthyHp = highValueCoinPriorityHealthyHp(options);
   const hp = hpValue(input.self);
   const healthy = hp !== null && hp >= healthyHp;
-  const maxDistance = Math.max(0, Number(options.globalCoinMaxDistance
-    ?? options.opportunityVisibleDistance
-    ?? options.coinMaxDistance
-    ?? DEFAULT_GLOBAL_COIN_MAX_DISTANCE));
+  const maxDistance = highValueCoinPriorityRange(options);
   const threats = [
     ...(input.avoidanceThreats || input.activeThreats || []),
     ...(input.snapshotActiveThreats || [])
@@ -3317,6 +3327,7 @@ function buildHighValueVisibleCoinPriorityDecision(input, combatDecision, option
     highValueCoinPriority: {
       amount: Math.max(0, Math.round(Number(coin.amount || 0))),
       minAmount: highValueCoinPriorityAmount(options),
+      maxDistance: highValueCoinPriorityRange(options),
       hp: Math.round(hpValue(input.self) ?? 0),
       healthyHp: highValueCoinPriorityHealthyHp(options),
       source: coin.snapshotOnly
@@ -4505,7 +4516,9 @@ function browserlessOpportunityPriorityTier(item, options = {}) {
   if (String(item?.type || '') === 'coin') {
     const amount = Number(item?.amount ?? item?.sourceCoin?.amount ?? 0);
     const highValueAmount = Math.max(1, Number(options.highValueCoinPriorityAmount || OPPORTUNITY_CONSTANTS.HIGH_VALUE_COIN_PRIORITY_AMOUNT));
-    return amount >= highValueAmount ? Math.max(base, 2) : base;
+    return amount >= highValueAmount && distance <= highValueCoinPriorityRange(options)
+      ? Math.max(base, 2)
+      : base;
   }
   if (String(item?.type || '') === 'enemy') {
     // Ordinary AFK profit competes with coins on ROI. A Drop threshold is an
@@ -5029,6 +5042,7 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
     visibleDistance: opportunityVisibleDistance(options),
     nearbyPriorityDistance: opportunityNearbyPriorityDistance(options),
     highValueCoinPriorityAmount: options.highValueCoinPriorityAmount || OPPORTUNITY_CONSTANTS.HIGH_VALUE_COIN_PRIORITY_AMOUNT,
+    highValueCoinPriorityMaxDistance: highValueCoinPriorityRange(options),
     switchHoldMs: options.opportunitySwitchHoldMs || OPPORTUNITY_CONSTANTS.OPPORTUNITY_SWITCH_HOLD_MS,
     switchMargin: options.opportunitySwitchMargin || OPPORTUNITY_CONSTANTS.OPPORTUNITY_SWITCH_MARGIN,
     scoreCoinOpportunity: coin => scoreCoinOpportunity(coin, options),

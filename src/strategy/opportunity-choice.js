@@ -174,8 +174,14 @@ function opportunityMatchesChoiceCore(item, choice, options = {}) {
 }
 
 function isHighValueCoinOpportunityCore(item, options = {}) {
-  return String(item?.type || '') === 'coin'
-    && Number(item?.amount || 0) >= Math.max(0, Number(options.highValueCoinPriorityAmount || 0));
+  if (String(item?.type || '') !== 'coin'
+    || Number(item?.amount || 0) < Math.max(0, Number(options.highValueCoinPriorityAmount || 0))) {
+    return false;
+  }
+  const maxDistance = Number(options.highValueCoinPriorityMaxDistance);
+  if (!Number.isFinite(maxDistance)) return true;
+  const distance = Number(item?.distance ?? Infinity);
+  return Number.isFinite(distance) && distance <= Math.max(0, maxDistance);
 }
 
 function highValueCoinHoldBlocksEnemySwitchCore(held, best, options = {}) {

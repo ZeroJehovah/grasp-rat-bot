@@ -3252,15 +3252,29 @@ function runStrategyModuleSelfTests() {
   ], { key: 'coin:coin', type: 'coin', id: 'coin', until: 2000 }, null, {
     nowMs: 1000,
     highValueCoinPriorityAmount: 10,
+    highValueCoinPriorityMaxDistance: 14500,
+    switchMargin: 0,
+    switchRelativeMargin: 0,
+    oscillationSwitchLimit: 0
+  });
+  const farHighValueResult = chooseStableOpportunityCore([
+    { type: 'enemy', id: 'enemy', distance: 100, score: 500, priorityTier: 1 },
+    { type: 'coin', id: 'coin', amount: 10, x: 15001, y: 0, distance: 15001, score: 100, priorityTier: 1 }
+  ], { key: 'coin:coin', type: 'coin', id: 'coin', until: 2000 }, null, {
+    nowMs: 1000,
+    highValueCoinPriorityAmount: 10,
+    highValueCoinPriorityMaxDistance: 14500,
     switchMargin: 0,
     switchRelativeMargin: 0,
     oscillationSwitchLimit: 0
   });
   results.push({
-    name: 'opportunity-choice-high-value-coin-holds-enemy-switch',
+    name: 'opportunity-choice-high-value-coin-holds-enemy-switch-only-in-range',
     passed: highValueResult.chosen?.id === 'coin'
       && highValueResult.chosen?.held === true
       && highValueResult.chosen?.highValueCoinHold === true
+      && farHighValueResult.chosen?.id === 'enemy'
+      && farHighValueResult.chosen?.highValueCoinHold !== true
   });
 
   const opportunityOscillationResult = chooseStableOpportunityCore([
