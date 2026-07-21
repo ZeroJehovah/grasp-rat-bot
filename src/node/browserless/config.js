@@ -64,6 +64,10 @@ const DEFAULTS = {
   browserlessDangerousTargetCooldownMs: 900000,
   browserlessProfitPursuitMinDamageMs: 60000,
   browserlessProfitPursuitMinDamageHp: 10,
+  browserlessProfitPursuitSoftMovementStaminaMs: 100000,
+  browserlessProfitPursuitHardNoDamageMs: 180000,
+  browserlessProfitPursuitHardMovementStaminaMs: 300000,
+  browserlessProfitPursuitPressureCycleMs: 60000,
   combatEnabled: false,
   combatRobustDodgeEnabled: true,
   combatCloseBandReserveEnabled: true,
@@ -200,6 +204,10 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
     browserlessDangerousTargetCooldownMs: numberEnv(env.GRASP_RAT_BROWSERLESS_DANGEROUS_TARGET_COOLDOWN_MS, DEFAULTS.browserlessDangerousTargetCooldownMs),
     browserlessProfitPursuitMinDamageMs: numberEnv(env.GRASP_RAT_BROWSERLESS_PROFIT_PURSUIT_MIN_DAMAGE_MS, DEFAULTS.browserlessProfitPursuitMinDamageMs),
     browserlessProfitPursuitMinDamageHp: numberEnv(env.GRASP_RAT_BROWSERLESS_PROFIT_PURSUIT_MIN_DAMAGE_HP, DEFAULTS.browserlessProfitPursuitMinDamageHp),
+    browserlessProfitPursuitSoftMovementStaminaMs: numberEnv(env.GRASP_RAT_BROWSERLESS_PROFIT_PURSUIT_SOFT_MOVEMENT_STAMINA_MS, DEFAULTS.browserlessProfitPursuitSoftMovementStaminaMs),
+    browserlessProfitPursuitHardNoDamageMs: numberEnv(env.GRASP_RAT_BROWSERLESS_PROFIT_PURSUIT_HARD_NO_DAMAGE_MS, DEFAULTS.browserlessProfitPursuitHardNoDamageMs),
+    browserlessProfitPursuitHardMovementStaminaMs: numberEnv(env.GRASP_RAT_BROWSERLESS_PROFIT_PURSUIT_HARD_MOVEMENT_STAMINA_MS, DEFAULTS.browserlessProfitPursuitHardMovementStaminaMs),
+    browserlessProfitPursuitPressureCycleMs: numberEnv(env.GRASP_RAT_BROWSERLESS_PROFIT_PURSUIT_PRESSURE_CYCLE_MS, DEFAULTS.browserlessProfitPursuitPressureCycleMs),
     combatEnabled: boolEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_ENABLED, DEFAULTS.combatEnabled),
     combatRobustDodgeEnabled: boolEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_ROBUST_DODGE_ENABLED, DEFAULTS.combatRobustDodgeEnabled),
     combatCloseBandReserveEnabled: boolEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_CLOSE_BAND_RESERVE_ENABLED, DEFAULTS.combatCloseBandReserveEnabled),
@@ -363,6 +371,14 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
       config.browserlessProfitPursuitMinDamageMs = numberEnv(argv[++i], config.browserlessProfitPursuitMinDamageMs);
     } else if (arg === '--profit-pursuit-min-damage-hp') {
       config.browserlessProfitPursuitMinDamageHp = numberEnv(argv[++i], config.browserlessProfitPursuitMinDamageHp);
+    } else if (arg === '--profit-pursuit-soft-movement-stamina-ms') {
+      config.browserlessProfitPursuitSoftMovementStaminaMs = numberEnv(argv[++i], config.browserlessProfitPursuitSoftMovementStaminaMs);
+    } else if (arg === '--profit-pursuit-hard-no-damage-ms') {
+      config.browserlessProfitPursuitHardNoDamageMs = numberEnv(argv[++i], config.browserlessProfitPursuitHardNoDamageMs);
+    } else if (arg === '--profit-pursuit-hard-movement-stamina-ms') {
+      config.browserlessProfitPursuitHardMovementStaminaMs = numberEnv(argv[++i], config.browserlessProfitPursuitHardMovementStaminaMs);
+    } else if (arg === '--profit-pursuit-pressure-cycle-ms') {
+      config.browserlessProfitPursuitPressureCycleMs = numberEnv(argv[++i], config.browserlessProfitPursuitPressureCycleMs);
     } else if (arg === '--combat-shoot-min-interval-ms') {
       config.combatShootMinIntervalMs = numberEnv(argv[++i], config.combatShootMinIntervalMs);
     } else if (arg === '--no-combat-robust-dodge') {
@@ -491,6 +507,10 @@ function usage() {
     '  --dangerous-target-cooldown-ms <ms>  Cooldown for ordinary profit against targets that forced a combat leave. Default: 900000',
     '  --profit-pursuit-min-damage-ms <ms>  Age that starts the low-damage close-pressure gate. Default: 60000',
     '  --profit-pursuit-min-damage-hp <hp>  Target HP progress required to avoid that gate. Default: 10',
+    '  --profit-pursuit-soft-movement-stamina-ms <ms>  Movement stamina that forces remaining-ROI review. Default: 100000',
+    '  --profit-pursuit-hard-no-damage-ms <ms>  Absolute no-damage release limit for non-threatening profit combat. Default: 180000',
+    '  --profit-pursuit-hard-movement-stamina-ms <ms>  Absolute movement-stamina release limit. Default: 300000',
+    '  --profit-pursuit-pressure-cycle-ms <ms>  One bounded pressure cycle after a qualified ROI review. Default: 60000',
     '  --combat-shoot-min-interval-ms <ms>  Minimum live combat shoot interval. Default: 160',
     '  --combat-control-interval-ms <ms>     Recompute live combat from each fresh server tick. Default: 50',
     '  --combat-close-pressure-min-range-cm <cm>  Lower bound for predictive close pressure. Default: 4500',

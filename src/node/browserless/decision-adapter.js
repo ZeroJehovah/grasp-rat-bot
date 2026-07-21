@@ -7,6 +7,11 @@ const {
   isInvulnerableEntity
 } = require('../../strategy/combat-target-selection');
 const {
+  COMBAT_ECONOMIC_STOP_LOSS_DEFAULTS,
+  evaluateEconomicCooldownReentryCore,
+  evaluateNonThreatCombatEconomicStopLossCore
+} = require('../../strategy/combat-economic-stop-loss');
+const {
   buildOpportunityCandidatesCore,
   opportunityPriorityTierCore,
   opportunityValueScoreCore,
@@ -675,7 +680,8 @@ function ensureEasyKillTargetSuppressionMap(stateful = {}, nowMs = 0) {
 function easyKillTargetSuppressed(stateful = {}, target = null, nowMs = 0) {
   const userId = easyKillTargetUserId(target);
   if (userId === null) return false;
-  return Number(ensureEasyKillTargetSuppressionMap(stateful, nowMs)[String(userId)]?.until || 0) > Number(nowMs || 0);
+  return Number(ensureEasyKillTargetSuppressionMap(stateful, nowMs)[String(userId)]?.until || 0) > Number(nowMs || 0)
+    || Boolean(economicProfitPursuitSuppressionRecordById(stateful, String(userId), nowMs));
 }
 
 function refreshEasyKillTargetAnnotations(input, stateful = {}, options = {}, statusOverride = null) {
@@ -710,7 +716,7 @@ function refreshEasyKillTargetAnnotations(input, stateful = {}, options = {}, st
     target.easyKillScore = score;
     target.easyKillSeekRangeCm = seekRangeCm || null;
     target.easyKillDamagedToday = damagedToday;
-    target.easyKillThreatExempt = Boolean(known && !damagedToday);
+    target.easyKillThreatExempt = Boolean(known && !damagedToday && target.economicThreatReentry !== true);
     target.easyKillProfitTarget = Boolean(
       known
         && !suppressed
@@ -2592,6 +2598,11 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
   const visibleTargets = decisionEntities
     .filter(entity => Number(entity.user_id) !== selfUserId)
     .filter(entity => Number.isFinite(Number(entity.x)) && Number.isFinite(Number(entity.y)));
+  reconcileEconomicStopLossCooldowns({
+    nowMs,
+    visibleTargets,
+    bullets: Array.isArray(realtime.bullets) ? realtime.bullets : []
+  }, stateful, options);
   const easyKillInput = { visibleTargets, nowMs, easyKillTargets: [], easyKill: null };
   refreshEasyKillTargetAnnotations(easyKillInput, stateful, options);
   updateBrowserlessOpportunityAfkStaminaObservations(visibleTargets, stateful, nowMs, options);
@@ -2611,6 +2622,7 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
   ].filter(threat => snapshotFallbackThreatBlocks(threat, self, options));
   const afkObservationTargetsRaw = visibleTargets.filter(entity => {
     if (entity.whitelisted || entity.active || entity.moving || entity.firing || entity.alive === false) return false;
+    if (economicProfitPursuitSuppressionRecordById(stateful, targetIdentity(entity), nowMs)) return false;
     if (entity.invulnerable && !invulnerableProfitTargetReadyOnApproach(entity, options)) return false;
     return attackWorthTakingCore(self, entity, {
       attackMinDrop: options.attackMinDrop ?? DEFAULT_ATTACK_MIN_DROP,
@@ -2876,6 +2888,11 @@ function buildBrowserlessCombatStrategyInput(state, options = {}, stateful = {})
     visibleTargets.push(refreshed);
   }
   markInputStage('visible-targets');
+  reconcileEconomicStopLossCooldowns({
+    nowMs,
+    visibleTargets,
+    bullets: Array.isArray(realtime.bullets) ? realtime.bullets : []
+  }, stateful, options);
   const easyKillInput = {
     visibleTargets,
     nowMs,
@@ -6905,6 +6922,7 @@ function buildBrowserlessPursuitLeaveDecision(input, stateful, combat, options =
 
 function buildCombatDecision(input, stateful = {}, options = {}) {
   const combatLiveEnabled = (options.controlMode === 'combat-live' || options.controlMode === 'profit-live') && options.combatEnabled === true;
+  const combatVisibleTargets = filterEconomicSuppressedCombatTargets(input, stateful);
   const combatRealtime = {
     ...(input.rawRealtime || {}),
     // Keep targets and bullets realtime-only, but pass the enriched realtime self so
@@ -6915,7 +6933,7 @@ function buildCombatDecision(input, stateful = {}, options = {}) {
     // not enter combat target, aim, or fire decisions.
     entities: [
       input.self || input.rawRealtime?.self || null,
-      ...(input.visibleTargets || [])
+      ...combatVisibleTargets
     ].filter(Boolean)
   };
   const combat = buildBrowserlessCombatDryRun({
@@ -7032,13 +7050,68 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
     ...options,
     easyKillPreferredTargetId: easyKillPreferredTargetIdFromOpportunity(null, stateful)
   });
+  let realtimeMarginalRoiStopLoss = null;
+  let nonThreatEconomicStopLoss = evaluateNonThreatCombatEconomicStopLoss(
+    input,
+    combat,
+    stateful,
+    null,
+    options
+  );
+  if (nonThreatEconomicStopLoss?.softTriggered && !nonThreatEconomicStopLoss.excluded) {
+    realtimeMarginalRoiStopLoss = evaluateProactiveCombatMarginalRoi(
+      input,
+      combat,
+      {},
+      stateful,
+      buildProfitThresholdContext(input, options),
+      options
+    );
+    nonThreatEconomicStopLoss = evaluateNonThreatCombatEconomicStopLoss(
+      input,
+      combat,
+      stateful,
+      realtimeMarginalRoiStopLoss,
+      options
+    );
+  }
+  if (combat?.dryRun && realtimeMarginalRoiStopLoss) {
+    combat.dryRun.marginalRoiStopLoss = realtimeMarginalRoiStopLoss;
+  }
+  if (combat?.dryRun && nonThreatEconomicStopLoss) {
+    combat.dryRun.nonThreatEconomicStopLoss = nonThreatEconomicStopLoss;
+  }
+  const realtimeEconomicSuppression = rememberNonThreatCombatEconomicSuppression(
+    input,
+    combat,
+    nonThreatEconomicStopLoss,
+    stateful,
+    options
+  );
+  const combatForProfit = realtimeEconomicSuppression
+    ? {
+        ...combat,
+        target: null,
+        dryRun: combat.dryRun
+          ? {
+              ...combat.dryRun,
+              target: null,
+              combatPhase: {
+                ...(combat.dryRun.combatPhase || {}),
+                active: false,
+                economicStopLossReleased: true
+              }
+            }
+          : combat.dryRun
+      }
+    : combat;
   stageTimings.combat = performance.now() - stageStarted;
   stageStarted = performance.now();
   rememberBrowserlessInjury(input, stateful, options);
   const postKillSettlement = reconcilePostKillSettlement(input, stateful, combat, previousCombatTarget, options);
   const postKillSettlementWaitAction = buildPostKillSettlementWaitDecision(input, stateful);
-  const lootControl = buildRealtimeLootControl(input, combat, stateful, options);
-  const combatActionEligible = isCombatActionEligibleForDecision(combat, options);
+  const lootControl = buildRealtimeLootControl(input, combatForProfit, stateful, options);
+  const combatActionEligible = isCombatActionEligibleForDecision(combat, options) && !realtimeEconomicSuppression;
   const controlOptions = {
     ...options,
     combatActionEligible
@@ -7115,7 +7188,8 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
     action,
     combat: {
       ...(lootControl.combat || combat.dryRun || {}),
-      dangerousTargetCooldown: dangerousCombatExit
+      dangerousTargetCooldown: dangerousCombatExit,
+      profitPursuitSuppression: realtimeEconomicSuppression
     },
     exitAction: action?.shouldLeave ? action : null,
     realtimeControl: true,
@@ -7607,6 +7681,210 @@ function profitPursuitSuppressionMap(stateful = {}, nowMs = 0) {
     if (Number(item?.until || 0) <= nowMs) delete stateful.profitPursuitSuppressions[id];
   }
   return stateful.profitPursuitSuppressions;
+}
+
+function nonThreatCombatEconomicStateMap(stateful = {}, nowMs = 0, options = {}) {
+  if (!stateful || typeof stateful !== 'object') return {};
+  if (!stateful.nonThreatCombatEconomicsByTarget
+    || typeof stateful.nonThreatCombatEconomicsByTarget !== 'object'
+    || Array.isArray(stateful.nonThreatCombatEconomicsByTarget)) {
+    stateful.nonThreatCombatEconomicsByTarget = {};
+  }
+  const ttlMs = Math.max(
+    300000,
+    Number(options.browserlessProfitPursuitHardNoDamageMs
+      ?? BROWSER_RUNTIME_DEFAULTS.browserlessProfitPursuitHardNoDamageMs
+      ?? COMBAT_ECONOMIC_STOP_LOSS_DEFAULTS.hardNoDamageMs) * 3
+  );
+  for (const [id, item] of Object.entries(stateful.nonThreatCombatEconomicsByTarget)) {
+    if (Number(nowMs || 0) - Number(item?.updatedAt || 0) > ttlMs) delete stateful.nonThreatCombatEconomicsByTarget[id];
+  }
+  return stateful.nonThreatCombatEconomicsByTarget;
+}
+
+function economicStopLossOptions(options = {}) {
+  return {
+    softNoDamageMs: Number(options.browserlessProfitPursuitMinDamageMs
+      ?? BROWSER_RUNTIME_DEFAULTS.browserlessProfitPursuitMinDamageMs
+      ?? COMBAT_ECONOMIC_STOP_LOSS_DEFAULTS.softNoDamageMs),
+    softMovementStamina: Number(options.browserlessProfitPursuitSoftMovementStaminaMs
+      ?? BROWSER_RUNTIME_DEFAULTS.browserlessProfitPursuitSoftMovementStaminaMs
+      ?? COMBAT_ECONOMIC_STOP_LOSS_DEFAULTS.softMovementStamina),
+    hardNoDamageMs: Number(options.browserlessProfitPursuitHardNoDamageMs
+      ?? BROWSER_RUNTIME_DEFAULTS.browserlessProfitPursuitHardNoDamageMs
+      ?? COMBAT_ECONOMIC_STOP_LOSS_DEFAULTS.hardNoDamageMs),
+    hardMovementStamina: Number(options.browserlessProfitPursuitHardMovementStaminaMs
+      ?? BROWSER_RUNTIME_DEFAULTS.browserlessProfitPursuitHardMovementStaminaMs
+      ?? COMBAT_ECONOMIC_STOP_LOSS_DEFAULTS.hardMovementStamina),
+    pressureCycleMs: Number(options.browserlessProfitPursuitPressureCycleMs
+      ?? BROWSER_RUNTIME_DEFAULTS.browserlessProfitPursuitPressureCycleMs
+      ?? COMBAT_ECONOMIC_STOP_LOSS_DEFAULTS.pressureCycleMs),
+    reentryDropRatio: Number(options.browserlessProfitPursuitReentryDropRatio
+      ?? COMBAT_ECONOMIC_STOP_LOSS_DEFAULTS.reentryDropRatio),
+    reentryDropMinimum: Number(options.browserlessProfitPursuitReentryDropMinimum
+      ?? COMBAT_ECONOMIC_STOP_LOSS_DEFAULTS.reentryDropMinimum),
+    reentryDistanceRatio: Number(options.browserlessProfitPursuitReentryDistanceRatio
+      ?? COMBAT_ECONOMIC_STOP_LOSS_DEFAULTS.reentryDistanceRatio),
+    reentryDistanceMinimumCm: Number(options.browserlessProfitPursuitReentryDistanceMinimumCm
+      ?? COMBAT_ECONOMIC_STOP_LOSS_DEFAULTS.reentryDistanceMinimumCm)
+  };
+}
+
+function economicProfitPursuitSuppressionRecordById(stateful = {}, targetId = '', nowMs = 0) {
+  const id = String(targetId || '');
+  if (!id) return null;
+  const record = profitPursuitSuppressionMap(stateful, Number(nowMs || 0))[id] || null;
+  return record?.economicStopLoss === true && Number(record.until || 0) > Number(nowMs || 0)
+    ? record
+    : null;
+}
+
+function economicStopLossThreatEvidence(input = {}, target = null, stateful = {}) {
+  const targetId = targetIdentity(target);
+  const bulletOwnerMatch = Boolean(targetId && (input.bullets || []).some(bullet => (
+    !bullet?.synthetic && String(bulletOwnerId(bullet) ?? '') === targetId
+  )));
+  const combatTarget = String(stateful?.combatTarget?.id ?? '') === targetId ? stateful.combatTarget : null;
+  const metrics = String(stateful?.combatMetrics?.targetId ?? '') === targetId ? stateful.combatMetrics : null;
+  const injury = stateful?.browserlessInjury || null;
+  const recentInjury = Boolean(
+    targetId
+      && String(injury?.targetKey || injury?.recentCombatTargetKey || '') === targetId
+      && Number(input.nowMs || 0) - Number(injury?.at || 0) <= 3000
+  );
+  const reasons = [];
+  if (target?.firing) reasons.push('target-firing');
+  if (bulletOwnerMatch) reasons.push('target-real-bullet');
+  if (combatTarget?.hasDamagedSelf || Number(metrics?.selfDamage || 0) > 0 || Number(metrics?.incomingHits || 0) > 0) {
+    reasons.push('target-damaged-self');
+  }
+  if (Number(combatTarget?.seenTargetRealBulletAt || 0) > 0 || Number(metrics?.threatBulletCount || 0) > 0) {
+    reasons.push('target-historical-bullet');
+  }
+  if (recentInjury) reasons.push('recent-attributed-injury');
+  return {
+    active: reasons.length > 0,
+    reasons,
+    bulletOwnerMatch,
+    recentInjury
+  };
+}
+
+function reconcileEconomicStopLossCooldowns(input = {}, stateful = {}, options = {}) {
+  const nowMs = Number(input.nowMs || Date.now());
+  const map = profitPursuitSuppressionMap(stateful, nowMs);
+  const reentryOptions = economicStopLossOptions(options);
+  for (const target of input.visibleTargets || []) {
+    const targetId = targetIdentity(target);
+    const record = economicProfitPursuitSuppressionRecordById(stateful, targetId, nowMs);
+    if (!record) continue;
+    const threat = economicStopLossThreatEvidence(input, target, stateful);
+    const reentry = evaluateEconomicCooldownReentryCore(record, target, {
+      threatEvidence: threat.active
+    }, reentryOptions);
+    record.lastReentryEvaluation = { ...reentry, at: nowMs, threatReasons: threat.reasons };
+    if (!reentry.allowed) continue;
+    delete map[targetId];
+    delete nonThreatCombatEconomicStateMap(stateful, nowMs, options)[targetId];
+    target.economicStopLossReentry = reentry.reason;
+    if (reentry.threatEvidence) target.economicThreatReentry = true;
+  }
+}
+
+function filterEconomicSuppressedCombatTargets(input = {}, stateful = {}) {
+  const nowMs = Number(input.nowMs || Date.now());
+  return (input.visibleTargets || []).filter(target => (
+    !economicProfitPursuitSuppressionRecordById(stateful, targetIdentity(target), nowMs)
+  ));
+}
+
+function evaluateNonThreatCombatEconomicStopLoss(input, combatDecision, stateful = {}, marginalRoiStopLoss = null, options = {}) {
+  const target = combatDecision?.target || combatDecision?.dryRun?.target || null;
+  const targetId = targetIdentity(target);
+  if (!target || !targetId || !combatDecisionIsOrdinaryProfitPursuit(combatDecision, input, stateful)) return null;
+  const nowMs = Number(input?.nowMs || Date.now());
+  const combatTarget = String(stateful?.combatTarget?.id ?? '') === targetId ? stateful.combatTarget : {};
+  const metrics = String(stateful?.combatMetrics?.targetId ?? '') === targetId ? stateful.combatMetrics : {};
+  const defensiveRisk = proactiveCombatDefensiveRiskAssessment(combatDecision, input, stateful, options);
+  const threat = economicStopLossThreatEvidence(input, target, stateful);
+  const threatEvidence = Boolean(defensiveRisk.defensive || threat.active);
+  const damageProgressAt = Number(combatTarget.damageProgressAt
+    || combatTarget.lastDamageAt
+    || metrics.damageProgressAt
+    || metrics.startedAt
+    || nowMs);
+  const acceptedShotsSinceDamage = Math.max(
+    0,
+    Number(combatTarget.acceptedShotsSinceDamage
+      ?? metrics.acceptedShotsSinceDamage
+      ?? (Number(metrics.acceptedShots || 0) - Number(combatTarget.acceptedShotsAtLastDamage || 0)))
+  );
+  const movementStaminaSinceDamage = Math.max(
+    0,
+    Number(combatTarget.movementStaminaSinceDamage
+      ?? metrics.movementStaminaSinceDamage
+      ?? metrics.movementStaminaSpent
+      ?? 0)
+  );
+  const stableCloseMs = Math.max(0, Number(combatTarget.stableCloseMs ?? metrics.stableCloseMs ?? 0));
+  const stateMap = nonThreatCombatEconomicStateMap(stateful, nowMs, options);
+  const result = evaluateNonThreatCombatEconomicStopLossCore({
+    nowMs,
+    targetId,
+    startedAt: metrics.startedAt,
+    damageProgressAt,
+    acceptedShotsSinceDamage,
+    movementStaminaSinceDamage,
+    stableCloseMs,
+    marginalNetROI: marginalRoiStopLoss?.marginalNetROI,
+    requiredRoi: marginalRoiStopLoss?.requiredRoi,
+    threatEvidence
+  }, stateMap[targetId] || null, economicStopLossOptions(options));
+  stateMap[targetId] = result.state;
+  return {
+    ...result,
+    target: summarizeTarget(target),
+    targetDrop: entityDropValue(target),
+    targetDistanceCm: Number.isFinite(Number(target.distance)) ? Math.round(Number(target.distance)) : null,
+    defensiveRisk,
+    threatEvidence: {
+      active: threatEvidence,
+      reasons: Array.from(new Set([...(defensiveRisk.reasons || []), ...threat.reasons]))
+    }
+  };
+}
+
+function rememberNonThreatCombatEconomicSuppression(input, combatDecision, economicStopLoss, stateful = {}, options = {}) {
+  if (!economicStopLoss?.release) return null;
+  const target = combatDecision?.target || combatDecision?.dryRun?.target || null;
+  const targetId = targetIdentity(target);
+  if (!target || !targetId) return null;
+  const nowMs = Number(input?.nowMs || Date.now());
+  const suppressMs = Math.max(
+    30000,
+    Math.min(
+      60000,
+      Number(options.browserlessProfitPursuitSuppressMs
+        ?? BROWSER_RUNTIME_DEFAULTS.browserlessProfitPursuitSuppressMs
+        ?? COMBAT_ECONOMIC_STOP_LOSS_DEFAULTS.cooldownMs)
+    )
+  );
+  const suppression = {
+    suppressed: true,
+    economicStopLoss: true,
+    reason: economicStopLoss.reason,
+    targetId,
+    at: nowMs,
+    until: nowMs + suppressMs,
+    suppressMs: Math.round(suppressMs),
+    baselineDrop: entityDropValue(target),
+    baselineDistanceCm: Number.isFinite(Number(target.distance)) ? Math.round(Number(target.distance)) : null,
+    target: summarizeTarget(target),
+    economics: cloneJson(economicStopLoss)
+  };
+  profitPursuitSuppressionMap(stateful, nowMs)[targetId] = suppression;
+  clearSuppressedCombatTarget(stateful, targetId);
+  return suppression;
 }
 
 function combatDecisionIsOrdinaryProfitPursuit(combatDecision, input, stateful = {}) {
@@ -8345,8 +8623,24 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     options
   );
   if (combat?.dryRun && marginalRoiStopLoss) combat.dryRun.marginalRoiStopLoss = marginalRoiStopLoss;
+  const nonThreatEconomicStopLoss = evaluateNonThreatCombatEconomicStopLoss(
+    input,
+    combat,
+    stateful,
+    marginalRoiStopLoss,
+    options
+  );
+  if (combat?.dryRun && nonThreatEconomicStopLoss) {
+    combat.dryRun.nonThreatEconomicStopLoss = nonThreatEconomicStopLoss;
+  }
   let dangerousCombatExit = rememberDangerousCombatExitTarget(input, combat, stateful, options);
-  const combatPursuitSuppression = buildProfitPursuitSuppression(input, combat, stateful, options);
+  const combatPursuitSuppression = rememberNonThreatCombatEconomicSuppression(
+    input,
+    combat,
+    nonThreatEconomicStopLoss,
+    stateful,
+    options
+  ) || buildProfitPursuitSuppression(input, combat, stateful, options);
   const combatPursuitSuppressed = Boolean(
     combatPursuitSuppression && combatPursuitSuppression.suppressed !== false
   );
@@ -9120,7 +9414,9 @@ function createBrowserlessDecisionAdapter(options = {}) {
         if (key === 'combatTarget' && value && decisionState.combatTarget
           && String(value.id ?? '') === String(decisionState.combatTarget.id ?? '')) {
           decisionState.combatTarget = { ...decisionState.combatTarget, ...cloneJson(value) };
-        } else if ((key === 'combatEngagements' || key === 'combatMetricsByTarget') && value && typeof value === 'object') {
+        } else if ((key === 'combatEngagements'
+          || key === 'combatMetricsByTarget'
+          || key === 'nonThreatCombatEconomicsByTarget') && value && typeof value === 'object') {
           const current = decisionState[key] || {};
           const incoming = cloneJson(value);
           decisionState[key] = { ...current };
@@ -9168,6 +9464,7 @@ function createBrowserlessDecisionAdapter(options = {}) {
         browserlessLeaveRisk: decisionState.browserlessLeaveRisk || null,
         browserlessPursuit: decisionState.browserlessPursuit || null,
         profitPursuitSuppressions: decisionState.profitPursuitSuppressions || {},
+        nonThreatCombatEconomicsByTarget: decisionState.nonThreatCombatEconomicsByTarget || {},
         dangerousCombatTargets: decisionState.dangerousCombatTargets || {},
         recentInvulnerableThreats: decisionState.recentInvulnerableThreats || {},
         easyKillApproach: decisionState.easyKillApproach || null,

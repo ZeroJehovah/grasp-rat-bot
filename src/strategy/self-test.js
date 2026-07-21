@@ -162,6 +162,10 @@ const {
   pickEngagedCombatTargetCore
 } = require('./combat-target-selection');
 const {
+  evaluateEconomicCooldownReentryCore,
+  evaluateNonThreatCombatEconomicStopLossCore
+} = require('./combat-economic-stop-loss');
+const {
   combatHpExitThresholdsCore,
   evaluateCombatExchangeStopLossCore,
   evaluateConfirmedCombatHpExitCore,
@@ -1529,6 +1533,93 @@ function runStrategyModuleSelfTests() {
       && pressureAttackBudget.authorizationSource === 'close-pressure-full-attack'
       && invalidPressureAttackBudget.suppressFire === false
       && invalidPressureAttackBudget.authorizationSource === 'close-pressure-full-attack'
+  });
+  const economicObserve = evaluateNonThreatCombatEconomicStopLossCore({
+    nowMs: 59000,
+    targetId: '8',
+    damageProgressAt: 0,
+    acceptedShotsSinceDamage: 20,
+    movementStaminaSinceDamage: 90000,
+    stableCloseMs: 10000,
+    marginalNetROI: 2,
+    requiredRoi: 1
+  });
+  const economicPressure = evaluateNonThreatCombatEconomicStopLossCore({
+    nowMs: 60000,
+    targetId: '8',
+    damageProgressAt: 0,
+    acceptedShotsSinceDamage: 20,
+    movementStaminaSinceDamage: 100000,
+    stableCloseMs: 10000,
+    marginalNetROI: 2,
+    requiredRoi: 1
+  }, economicObserve.state);
+  const economicCycleRelease = evaluateNonThreatCombatEconomicStopLossCore({
+    nowMs: 120000,
+    targetId: '8',
+    damageProgressAt: 0,
+    acceptedShotsSinceDamage: 20,
+    movementStaminaSinceDamage: 200000,
+    stableCloseMs: 10000,
+    marginalNetROI: 2,
+    requiredRoi: 1
+  }, economicPressure.state);
+  const economicLowRoiRelease = evaluateNonThreatCombatEconomicStopLossCore({
+    nowMs: 60000,
+    targetId: '9',
+    damageProgressAt: 0,
+    acceptedShotsSinceDamage: 30,
+    movementStaminaSinceDamage: 100000,
+    marginalNetROI: 0.9,
+    requiredRoi: 1
+  });
+  const economicHardRelease = evaluateNonThreatCombatEconomicStopLossCore({
+    nowMs: 180000,
+    targetId: '10',
+    damageProgressAt: 0,
+    acceptedShotsSinceDamage: 50,
+    movementStaminaSinceDamage: 300000,
+    marginalNetROI: 50,
+    requiredRoi: 1
+  });
+  const economicThreatExcluded = evaluateNonThreatCombatEconomicStopLossCore({
+    nowMs: 180000,
+    targetId: '11',
+    damageProgressAt: 0,
+    movementStaminaSinceDamage: 300000,
+    marginalNetROI: 0,
+    requiredRoi: 1,
+    threatEvidence: true
+  });
+  const cooldownHeld = evaluateEconomicCooldownReentryCore({
+    baselineDrop: 40,
+    baselineDistanceCm: 6000
+  }, { drop: 49, distance: 4500 });
+  const cooldownDropRelease = evaluateEconomicCooldownReentryCore({
+    baselineDrop: 40,
+    baselineDistanceCm: 6000
+  }, { drop: 50, distance: 6000 });
+  const cooldownThreatRelease = evaluateEconomicCooldownReentryCore({
+    baselineDrop: 40,
+    baselineDistanceCm: 6000
+  }, { drop: 40, distance: 6000, firing: true });
+  results.push({
+    name: 'combat-economic-stop-loss-allows-one-bounded-pressure-cycle-and-preserves-threat-combat',
+    passed: economicObserve.release === false
+      && economicObserve.softTriggered === false
+      && economicPressure.continuePressureCycle === true
+      && economicPressure.reason === 'non-threat-economic-pressure-cycle-start'
+      && economicCycleRelease.release === true
+      && economicCycleRelease.reason === 'non-threat-economic-pressure-cycle-complete'
+      && economicLowRoiRelease.release === true
+      && economicLowRoiRelease.reason === 'non-threat-economic-low-roi'
+      && economicHardRelease.release === true
+      && economicHardRelease.hardTriggered === true
+      && economicThreatExcluded.release === false
+      && economicThreatExcluded.excluded === true
+      && cooldownHeld.allowed === false
+      && cooldownDropRelease.reason === 'target-drop-increased'
+      && cooldownThreatRelease.reason === 'target-became-threat'
   });
   const reserveCoverage = { active: true, selected: { marginalCoverage: 0.03 } };
   let closeBandReserve = null;

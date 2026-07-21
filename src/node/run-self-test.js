@@ -159,6 +159,7 @@ const {
 } = require('../../scripts/browserless-runner');
 const {
   replayCombatClosePressure,
+  replayCombatEconomicStopLoss,
   replayCombatPursuit,
   replayMovementStallExit,
   replayRecoveryThreatExit
@@ -10241,6 +10242,215 @@ async function runSelfTest() {
       want: 'combat-live|true|close-pressure|profit-pursuit-close-pressure|false|combat-close-pressure-approach|5000|8|||0'
     },
     {
+      name: 'browserless non-threat economic stop loss releases after one pressure cycle and threat reentry bypasses cooldown',
+      got: (() => {
+        const stateful = {
+          combatTarget: {
+            id: 8,
+            at: 120000,
+            firstSeenAt: 1000,
+            lastInRangeAt: 120000,
+            lastDamageAt: 1000,
+            damageProgressAt: 1000,
+            acceptedShotsAtLastDamage: 0,
+            acceptedShotsSinceDamage: 20,
+            movementStaminaAtLastDamage: 0,
+            movementStaminaSinceDamage: 150000,
+            stableCloseStartedAt: 110000,
+            stableCloseMs: 10000,
+            hp: 100,
+            firstHp: 100,
+            minHp: 100,
+            damageFromStart: 0,
+            drop: 200,
+            intent: 'profit',
+            originIntent: 'profit',
+            combatPhase: 'close-pressure',
+            closePressure: { active: true, phase: 'close-pressure' }
+          },
+          combatMetrics: {
+            targetId: '8',
+            startedAt: 1000,
+            acceptedShots: 20,
+            confirmedHits: 0,
+            targetDamage: 0,
+            selfDamage: 0,
+            incomingHits: 0,
+            threatBulletCount: 0,
+            movementStaminaSpent: 150000,
+            movementStaminaSinceDamage: 150000,
+            damageProgressAt: 1000,
+            initialStamina1d: 500000
+          },
+          nonThreatCombatEconomicsByTarget: {
+            8: {
+              targetId: '8',
+              damageProgressAt: 1000,
+              acceptedShotsSinceDamage: 20,
+              movementStaminaSinceDamage: 100000,
+              stableCloseMs: 0,
+              pressureCycleStartedAt: 61000,
+              updatedAt: 61000
+            }
+          }
+        };
+        const self = fullStamina5s({
+          entity_id: 1,
+          user_id: 7,
+          name: 'self',
+          x: 0,
+          y: 0,
+          hp: 100,
+          max_hp: 100,
+          stamina_1d_remaining_milli: 340000
+        });
+        const target = fullStamina5s({
+          entity_id: 2,
+          user_id: 8,
+          name: 'non-threatening-runner',
+          x: 5000,
+          y: 0,
+          vx: 0,
+          vy: 50,
+          hp: 100,
+          max_hp: 100,
+          current_join_mode: 'Active',
+          drop: 200
+        });
+        const release = buildBrowserlessDecision({
+          userId: 7,
+          realtime: { tick: 2420, frameAgeMs: 0, self, entities: [self, target], bullets: [] },
+          fallback: { tick: 2420, frameAgeMs: 0, entities: [], coinDrops: [], messages: [] }
+        }, stateful, {
+          nowMs: 121000,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          dynamicProfitThresholdEnabled: false,
+          browserlessProfitPursuitMinDamageMs: 60000,
+          browserlessProfitPursuitSoftMovementStaminaMs: 100000,
+          browserlessProfitPursuitHardNoDamageMs: 180000,
+          browserlessProfitPursuitHardMovementStaminaMs: 300000,
+          browserlessProfitPursuitPressureCycleMs: 60000,
+          browserlessProfitPursuitSuppressMs: 60000,
+          targetStickMs: 180000,
+          combatEngageStickMs: 180000
+        });
+        const releaseSuppressionReason = stateful.profitPursuitSuppressions?.['8']?.reason || '';
+        const held = buildBrowserlessRealtimeControlDecision({
+          userId: 7,
+          realtime: { tick: 2440, receivedAtMs: 122000, frameAgeMs: 0, self, entities: [self, target], bullets: [] },
+          fallback: { tick: 2440, receivedAtMs: 122000, frameAgeMs: 0, self, entities: [self, target], coinDrops: [], messages: [] }
+        }, stateful, {
+          ...buildBrowserlessRuntimeDefaults({}),
+          nowMs: 122000,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          dynamicProfitThresholdEnabled: false
+        });
+        const firingTarget = { ...target, firing: true };
+        const reentry = buildBrowserlessRealtimeControlDecision({
+          userId: 7,
+          realtime: { tick: 2460, receivedAtMs: 123000, frameAgeMs: 0, self, entities: [self, firingTarget], bullets: [] },
+          fallback: { tick: 2460, receivedAtMs: 123000, frameAgeMs: 0, self, entities: [self, firingTarget], coinDrops: [], messages: [] }
+        }, stateful, {
+          ...buildBrowserlessRuntimeDefaults({}),
+          nowMs: 123000,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          dynamicProfitThresholdEnabled: false
+        });
+        return [
+          release.combat.nonThreatEconomicStopLoss.reason,
+          release.combat.profitPursuitSuppression.reason,
+          release.combat.actionEligible,
+          releaseSuppressionReason,
+          held.action === null,
+          held.combat.target === null,
+          reentry.action?.kind,
+          reentry.action?.target?.userId,
+          reentry.combat.profitPursuitSuppression === null,
+          !stateful.profitPursuitSuppressions?.['8']
+        ].join('|');
+      })(),
+      want: 'non-threat-economic-pressure-cycle-complete|non-threat-economic-pressure-cycle-complete|false|non-threat-economic-pressure-cycle-complete|true|true|combat-live|8|true|true'
+    },
+    {
+      name: 'browserless non-threat economic stop loss preserves sub-minute positive control',
+      got: (() => {
+        const stateful = {
+          combatTarget: {
+            id: 8,
+            at: 41000,
+            firstSeenAt: 1000,
+            lastInRangeAt: 41000,
+            lastDamageAt: 1000,
+            damageProgressAt: 1000,
+            acceptedShotsAtLastDamage: 0,
+            acceptedShotsSinceDamage: 73,
+            movementStaminaSinceDamage: 90000,
+            hp: 43,
+            firstHp: 100,
+            minHp: 43,
+            damageFromStart: 57,
+            drop: 80,
+            intent: 'profit',
+            originIntent: 'profit'
+          },
+          combatMetrics: {
+            targetId: '8',
+            startedAt: 1000,
+            acceptedShots: 73,
+            confirmedHits: 19,
+            targetDamage: 57,
+            selfDamage: 0,
+            movementStaminaSpent: 90000,
+            movementStaminaSinceDamage: 90000,
+            damageProgressAt: 1000,
+            initialStamina1d: 500000
+          }
+        };
+        const self = fullStamina5s({ entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, max_hp: 100, stamina_1d_remaining_milli: 373500 });
+        const target = fullStamina5s({
+          entity_id: 2,
+          user_id: 8,
+          name: 'positive-control',
+          x: 5000,
+          y: 0,
+          vx: 0,
+          vy: 50,
+          hp: 43,
+          max_hp: 100,
+          current_join_mode: 'Active',
+          drop: 80
+        });
+        const decision = buildBrowserlessDecision({
+          userId: 7,
+          realtime: { tick: 840, frameAgeMs: 0, self, entities: [self, target], bullets: [] },
+          fallback: { tick: 840, frameAgeMs: 0, entities: [], coinDrops: [], messages: [] }
+        }, stateful, {
+          nowMs: 42000,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          dynamicProfitThresholdEnabled: true,
+          profitThresholdCoinsPer10Stamina: 1,
+          browserlessProfitPursuitMinDamageMs: 60000,
+          browserlessProfitPursuitSoftMovementStaminaMs: 100000
+        });
+        return [
+          decision.kind,
+          decision.combat.actionEligible,
+          decision.combat.nonThreatEconomicStopLoss.softTriggered,
+          decision.combat.nonThreatEconomicStopLoss.release,
+          !stateful.profitPursuitSuppressions?.['8'],
+          Boolean(decision.combat.shooting.recognizedMode),
+          decision.combat.shooting.responsePolicy === decision.combat.behavior.responsePolicy.name,
+          Boolean(decision.combat.shooting.fireAuthorizationClass),
+          Boolean(decision.combat.shooting.finalFireBlocker)
+        ].join('|');
+      })(),
+      want: 'combat-live|true|false|false|true|true|true|true|true'
+    },
+    {
       name: 'browserless Eason-shaped pursuit uses cumulative metrics despite frame-local engagement age',
       got: (() => {
         const stateful = {
@@ -18277,6 +18487,74 @@ async function runSelfTest() {
       want: 'true|60000|5000|1|0|true|true|true|true|true|160'
     },
     {
+      name: 'browserless economic stop-loss replay cuts long no-damage chase and preserves short control',
+      got: (() => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'grasp-rat-economic-stop-replay-'));
+        try {
+          const startedAt = Date.parse('2026-07-21T00:00:00.000Z');
+          const makeRows = seconds => Array.from({ length: seconds + 1 }, (_, index) => ({
+            at: new Date(startedAt + index * 1000).toISOString(),
+            type: 'combat-live',
+            detail: {
+              self: { userId: 7, x: index * 1000, y: 0, hp: 100 },
+              target: {
+                userId: 8,
+                name: 'no-damage-runner',
+                x: index * 1000 + 5000,
+                y: 0,
+                hp: 100,
+                drop: 1000,
+                distance: 5000,
+                firing: false
+              },
+              shooting: { defensivePressure: false },
+              behavior: { recentHitRate: 0.2 },
+              metrics: {
+                startedAt,
+                acceptedShots: Math.min(20, index),
+                confirmedHits: 0,
+                movementStaminaSpent: index * 1000,
+                selfDamage: 0,
+                incomingHits: 0,
+                threatBulletCount: 0
+              }
+            }
+          }));
+          const longRows = makeRows(130);
+          const shortRows = makeRows(40);
+          const longFile = path.join(dir, 'long.jsonl');
+          const shortFile = path.join(dir, 'short.jsonl');
+          fs.writeFileSync(longFile, longRows.map(item => JSON.stringify(item)).join('\n') + '\n');
+          fs.writeFileSync(shortFile, shortRows.map(item => JSON.stringify(item)).join('\n') + '\n');
+          const longReplay = replayCombatEconomicStopLoss({
+            file: longFile,
+            startLine: 1,
+            endLine: longRows.length,
+            targetId: '8',
+            targetName: 'no-damage-runner'
+          });
+          const shortReplay = replayCombatEconomicStopLoss({
+            file: shortFile,
+            startLine: 1,
+            endLine: shortRows.length,
+            targetId: '8',
+            targetName: 'no-damage-runner'
+          });
+          return [
+            longReplay.accepted,
+            longReplay.highRoiBoundedRelease?.elapsedMs,
+            longReplay.highRoiMovementStaminaSaved > 0,
+            shortReplay.accepted,
+            shortReplay.estimatedRoiRelease === null,
+            shortReplay.highRoiBoundedRelease === null
+          ].join('|');
+        } finally {
+          fs.rmSync(dir, { recursive: true, force: true });
+        }
+      })(),
+      want: 'true|120000|true|true|true|true'
+    },
+    {
       name: 'browserless action adapter repeats velocity through decision gap',
       got: (() => {
         let t = 1000;
@@ -22277,6 +22555,14 @@ async function runSelfTest() {
           '30000',
           '--profit-pursuit-min-damage-hp',
           '7',
+          '--profit-pursuit-soft-movement-stamina-ms',
+          '90000',
+          '--profit-pursuit-hard-no-damage-ms',
+          '150000',
+          '--profit-pursuit-hard-movement-stamina-ms',
+          '250000',
+          '--profit-pursuit-pressure-cycle-ms',
+          '45000',
           '--ws-trace',
           '--ws-trace-max-payload-chars',
           '4096',
@@ -22335,6 +22621,10 @@ async function runSelfTest() {
           config.browserlessDangerousTargetCooldownMs,
           config.browserlessProfitPursuitMinDamageMs,
           config.browserlessProfitPursuitMinDamageHp,
+          config.browserlessProfitPursuitSoftMovementStaminaMs,
+          config.browserlessProfitPursuitHardNoDamageMs,
+          config.browserlessProfitPursuitHardMovementStaminaMs,
+          config.browserlessProfitPursuitPressureCycleMs,
           config.wsTraceEnabled,
           config.wsTracePayload,
           config.wsTraceMaxPayloadChars,
@@ -22349,7 +22639,7 @@ async function runSelfTest() {
           config.logDir.endsWith('/tmp/grasp-rat-browserless-logs')
         ].join('|');
       })(),
-      want: 'true|false|false|combat-live|19999|cli-token|true|220|42|env-token|250|90000|90000|4|15000|3500|2250|4500|150|300|800|3|4500|90|4500|90|99000|175000|175000|45000|120000|123000|30000|7|true|true|4096|https://example.test/target-whitelist.json|true|1234|12|123|456|90|true|true'
+      want: 'true|false|false|combat-live|19999|cli-token|true|220|42|env-token|250|90000|90000|4|15000|3500|2250|4500|150|300|800|3|4500|90|4500|90|99000|175000|175000|45000|120000|123000|30000|7|90000|150000|250000|45000|true|true|4096|https://example.test/target-whitelist.json|true|1234|12|123|456|90|true|true'
     },
     {
       name: 'browserless deployment files define service env and install surface',
@@ -22383,6 +22673,10 @@ async function runSelfTest() {
           env.includes('GRASP_RAT_BROWSERLESS_DANGEROUS_TARGET_COOLDOWN_MS=900000'),
           env.includes('GRASP_RAT_BROWSERLESS_PROFIT_PURSUIT_MIN_DAMAGE_MS=60000'),
           env.includes('GRASP_RAT_BROWSERLESS_PROFIT_PURSUIT_MIN_DAMAGE_HP=10'),
+          env.includes('GRASP_RAT_BROWSERLESS_PROFIT_PURSUIT_SOFT_MOVEMENT_STAMINA_MS=100000'),
+          env.includes('GRASP_RAT_BROWSERLESS_PROFIT_PURSUIT_HARD_NO_DAMAGE_MS=180000'),
+          env.includes('GRASP_RAT_BROWSERLESS_PROFIT_PURSUIT_HARD_MOVEMENT_STAMINA_MS=300000'),
+          env.includes('GRASP_RAT_BROWSERLESS_PROFIT_PURSUIT_PRESSURE_CYCLE_MS=60000'),
           env.includes('GRASP_RAT_BROWSERLESS_WS_TRACE_ENABLED=false'),
           installer.includes('grasp-rat-browserless-runner'),
           installer.includes('DATA_DIR="/var/lib/grasp-rat-browserless"'),
@@ -22392,7 +22686,7 @@ async function runSelfTest() {
           installer.includes('systemctl daemon-reload')
         ].join('|');
       })(),
-      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
+      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless deployment audit checks installed service evidence',

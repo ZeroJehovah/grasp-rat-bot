@@ -51,6 +51,9 @@ const {
   combatPressureStrafeCore,
   combatPressureTargetRangeCore
 } = require('../src/strategy/combat-pressure');
+const {
+  evaluateNonThreatCombatEconomicStopLossCore
+} = require('../src/strategy/combat-economic-stop-loss');
 const { updatePostKillSettlementCore } = require('../src/strategy/post-kill-settlement');
 
 function parseArgs(argv) {
@@ -2251,7 +2254,8 @@ function replayClosePressureMovement(rows = [], options = {}) {
         pressureAttack: true
       });
       if (!pressureBudget.suppressFire
-        && pressureBudget.authorizationSource === 'close-band-reserve') {
+        && ['close-pressure-full-attack', 'close-range-fire-override', 'close-band-reserve']
+          .includes(String(pressureBudget.authorizationSource || ''))) {
         pressureAttackBudgetUnlockFrames += 1;
       }
       const fireReady = !row.detail?.exit
@@ -2573,11 +2577,13 @@ function replayCombatClosePressure(options) {
     reopenedFireEligibleFrames
   };
   const reserveReplay = threatPreserving.pressureAttack.reserve;
-  const reserveAccepted = reserveReplay.coverageQualifiedFrames > 0
+  const fullAttackAuthorized = threatPreserving.pressureAttack.budgetUnlockFrames > 0
+    && String(threatPreserving.pressureAttack.firstCommit?.budgetAuthorization || '') === 'close-pressure-full-attack';
+  const reserveAccepted = fullAttackAuthorized || (reserveReplay.coverageQualifiedFrames > 0
     ? (reserveReplay.shotsFired > 0
       && reserveReplay.shotsFired <= 2
       && Number(reserveReplay.firstShotDelayMs) <= 200)
-    : reserveReplay.shotsFired === 0;
+    : reserveReplay.shotsFired === 0);
   result.accepted = Boolean(
     trigger
       && trigger.engagedMs >= 60000
@@ -2585,7 +2591,7 @@ function replayCombatClosePressure(options) {
       && range.ballisticConstraintSatisfied
       && historical.pressureFrames > 0
       && historical.targetContinuityFrames === historical.pressureFrames
-      && threatPreserving.safeCloseFrames > 0
+      && (threatPreserving.threatFrames === 0 || threatPreserving.safeCloseFrames > 0)
       && threatPreserving.unsafeSafeCloseFrames === 0
       && threatPreserving.pressureAttack.committedFrames > 0
       && threatPreserving.pressureAttack.readyFrames > 0
@@ -2601,6 +2607,163 @@ function replayCombatClosePressure(options) {
       && noBulletControl.controlledPressureBandFrames > 0
       && noBulletControl.distance.p50Cm <= range.maxRangeCm + 300
   );
+  return result;
+}
+
+function replayCombatEconomicStopLoss(options) {
+  const rows = selectedEntries(options).filter(({ detail }) => {
+    const target = detail.target || null;
+    if (!target) return false;
+    if (options.targetId && String(target.userId ?? target.user_id ?? '') !== options.targetId) return false;
+    if (options.targetName && String(target.name || '') !== options.targetName) return false;
+    return true;
+  });
+  if (!rows.length) {
+    return {
+      mode: 'combat-economic-stop-loss',
+      targetId: options.targetId || '',
+      targetName: options.targetName || '',
+      lines: `${options.startLine}-${options.endLine}`,
+      frames: 0,
+      accepted: false
+    };
+  }
+  const targetId = options.targetId || String(rows[0].detail.target?.userId ?? rows[0].detail.target?.user_id ?? '');
+  const firstAtMs = Date.parse(rows[0].entry.at || '');
+  let damageProgressAt = firstAtMs;
+  let previousHp = numberOrNull(rows[0].detail.target?.hp);
+  let acceptedShotsAtDamage = Math.max(0, Number(rows[0].detail.metrics?.acceptedShots || 0));
+  let movementAtDamage = Math.max(0, Number(rows[0].detail.metrics?.movementStaminaSpent || 0));
+  let stableCloseStartedAt = 0;
+  let estimatedState = null;
+  let highRoiState = null;
+  let estimatedRelease = null;
+  let highRoiRelease = null;
+  let peakMovementStamina = 0;
+  let threatFrames = 0;
+  const releaseOptions = {
+    softNoDamageMs: 60000,
+    softMovementStamina: 100000,
+    hardNoDamageMs: 180000,
+    hardMovementStamina: 300000,
+    pressureCycleMs: 60000
+  };
+  for (const row of rows) {
+    const atMs = Date.parse(row.entry.at || '');
+    const target = row.detail.target || {};
+    const metrics = row.detail.metrics || {};
+    const hp = numberOrNull(target.hp);
+    const acceptedShots = Math.max(0, Number(metrics.acceptedShots || 0));
+    const movementStamina = Math.max(0, Number(metrics.movementStaminaSpent || 0));
+    peakMovementStamina = Math.max(peakMovementStamina, movementStamina);
+    if (hp !== null && previousHp !== null && hp < previousHp - 0.01) {
+      damageProgressAt = atMs;
+      acceptedShotsAtDamage = acceptedShots;
+      movementAtDamage = movementStamina;
+      estimatedState = null;
+      highRoiState = null;
+    }
+    if (hp !== null) previousHp = hp;
+    const distance = Number(target.distance);
+    const insideStableClose = Number.isFinite(distance) && distance >= 4500 && distance <= 5500;
+    stableCloseStartedAt = insideStableClose
+      ? (stableCloseStartedAt || atMs)
+      : 0;
+    const threatEvidence = Boolean(
+      target.firing
+        || row.detail.shooting?.defensivePressure
+        || Number(metrics.selfDamage || 0) > 0
+        || Number(metrics.incomingHits || 0) > 0
+        || Number(metrics.threatBulletCount || 0) > 0
+    );
+    if (threatEvidence) threatFrames += 1;
+    const confirmedHits = Math.max(0, Number(metrics.confirmedHits || 0));
+    const behaviorHitRate = numberOrNull(row.detail.behavior?.recentHitRate);
+    const observedHitRate = acceptedShots > 0 ? confirmedHits / acceptedShots : null;
+    const hitRate = Math.max(0.03, Math.min(0.95,
+      observedHitRate === null
+        ? (behaviorHitRate ?? 0.18)
+        : ((confirmedHits + Math.max(1, Number(behaviorHitRate ?? 0.18) * 6)) / (acceptedShots + 6))
+    ));
+    const remainingHits = hp === null ? 34 : Math.ceil(Math.max(0, hp) / 3);
+    const remainingShots = Math.ceil(remainingHits / hitRate);
+    const expectedRemainingStamina = remainingShots * 500 + Math.max(0, Number.isFinite(distance) ? distance - 7500 : 0);
+    const estimatedRoi = Number(target.drop || 0) * 10000 / Math.max(1, expectedRemainingStamina);
+    const coreInput = {
+      nowMs: atMs,
+      targetId,
+      damageProgressAt,
+      acceptedShotsSinceDamage: Math.max(0, acceptedShots - acceptedShotsAtDamage),
+      movementStaminaSinceDamage: Math.max(0, movementStamina - movementAtDamage),
+      stableCloseMs: stableCloseStartedAt ? Math.max(0, atMs - stableCloseStartedAt) : 0,
+      requiredRoi: 1,
+      threatEvidence
+    };
+    const estimated = evaluateNonThreatCombatEconomicStopLossCore({
+      ...coreInput,
+      marginalNetROI: estimatedRoi
+    }, estimatedState, releaseOptions);
+    estimatedState = estimated.state;
+    if (!estimatedRelease && estimated.release) {
+      estimatedRelease = {
+        line: row.line,
+        at: row.entry.at || '',
+        elapsedMs: atMs - firstAtMs,
+        movementStamina,
+        estimatedRoi,
+        reason: estimated.reason,
+        diagnostics: estimated
+      };
+    }
+    const highRoi = evaluateNonThreatCombatEconomicStopLossCore({
+      ...coreInput,
+      marginalNetROI: 1000000
+    }, highRoiState, releaseOptions);
+    highRoiState = highRoi.state;
+    if (!highRoiRelease && highRoi.release) {
+      highRoiRelease = {
+        line: row.line,
+        at: row.entry.at || '',
+        elapsedMs: atMs - firstAtMs,
+        movementStamina,
+        reason: highRoi.reason,
+        diagnostics: highRoi
+      };
+    }
+  }
+  const lastAtMs = Date.parse(rows.at(-1).entry.at || '');
+  const durationMs = Math.max(0, lastAtMs - firstAtMs);
+  const softEligible = durationMs >= releaseOptions.softNoDamageMs
+    || peakMovementStamina >= releaseOptions.softMovementStamina;
+  const result = {
+    mode: 'combat-economic-stop-loss',
+    targetId,
+    targetName: options.targetName || String(rows[0].detail.target?.name || ''),
+    lines: `${options.startLine}-${options.endLine}`,
+    frames: rows.length,
+    startedAt: rows[0].entry.at || '',
+    endedAt: rows.at(-1).entry.at || '',
+    durationMs,
+    threatFrames,
+    peakMovementStamina,
+    estimatedRoiRelease: estimatedRelease,
+    highRoiBoundedRelease: highRoiRelease,
+    estimatedMovementStaminaSaved: estimatedRelease
+      ? Math.max(0, peakMovementStamina - estimatedRelease.movementStamina)
+      : 0,
+    highRoiMovementStaminaSaved: highRoiRelease
+      ? Math.max(0, peakMovementStamina - highRoiRelease.movementStamina)
+      : 0
+  };
+  result.accepted = threatFrames === 0 && (softEligible
+    ? Boolean(
+        estimatedRelease
+          && highRoiRelease
+          && estimatedRelease.elapsedMs < durationMs
+          && highRoiRelease.elapsedMs < durationMs
+          && highRoiRelease.elapsedMs <= 120500
+      )
+    : !estimatedRelease && !highRoiRelease);
   return result;
 }
 
@@ -3731,6 +3894,7 @@ function runReplay(options) {
   if (options.mode === 'combat-pursuit') return replayCombatPursuit(options);
   if (options.mode === 'arbitration') return replayArbitration(options);
   if (options.mode === 'combat-close-pressure') return replayCombatClosePressure(options);
+  if (options.mode === 'combat-economic-stop-loss') return replayCombatEconomicStopLoss(options);
   if (options.mode === 'combat-shot-coverage') return replayCombatShotCoverage(options);
   if (options.mode === 'combat-policy') return replayCombatPolicy(options);
   if (options.mode === 'dodge') return replayDodge(options);
@@ -3747,6 +3911,7 @@ if (require.main === module) {
 module.exports = {
   parseArgs,
   replayCombatClosePressure,
+  replayCombatEconomicStopLoss,
   replayCombatShotCoverage,
   replayCombatPursuit,
   replayEasyKillContinuity,

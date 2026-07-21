@@ -2070,6 +2070,7 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
     : 0;
   const shootingStaminaSpent = Number(previousMetrics.acceptedShots || 0)
     * Math.max(0, Number(options.opportunityShotStaminaCostMs ?? 500));
+  const movementStaminaSpent = Math.max(0, totalStaminaSpent - shootingStaminaSpent);
   const learning = ensureCombatLearningState(stateful);
   const modeKey = behaviorLearningKey(opponentBehaviorState, distance, 'all');
   const modeMetrics = combatModeMetricsCell(stateful, modeKey);
@@ -2156,9 +2157,40 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
     threatBulletCount: threatBulletIds.length,
     totalStaminaSpent,
     shootingStaminaSpent,
-    movementStaminaSpent: Math.max(0, totalStaminaSpent - shootingStaminaSpent),
+    movementStaminaSpent,
     lastDodgeThreatField: null
   };
+  const damageProgressAt = damaged
+    ? nowMs
+    : (same ? Number(previous.damageProgressAt || previous.lastDamageAt || previous.firstSeenAt || nowMs) : nowMs);
+  const movementStaminaAtLastDamage = damaged
+    ? movementStaminaSpent
+    : (same ? Math.max(0, Number(previous.movementStaminaAtLastDamage || 0)) : 0);
+  const stableCloseMinRangeCm = Math.max(0, Number(options.combatEconomicStableCloseMinRangeCm ?? 4500));
+  const stableCloseMaxRangeCm = Math.max(
+    stableCloseMinRangeCm,
+    Number(options.combatEconomicStableCloseMaxRangeCm ?? 5500)
+  );
+  const insideStableCloseBand = Number.isFinite(distance)
+    && distance >= stableCloseMinRangeCm
+    && distance <= stableCloseMaxRangeCm;
+  const stableCloseStartedAt = insideStableCloseBand
+    ? (same && Number(previous.stableCloseStartedAt || 0) > 0 ? Number(previous.stableCloseStartedAt) : nowMs)
+    : 0;
+  stateful.combatTarget.damageProgressAt = damageProgressAt;
+  stateful.combatTarget.acceptedShotsSinceDamage = Math.max(
+    0,
+    acceptedShots - Number(stateful.combatTarget.acceptedShotsAtLastDamage || 0)
+  );
+  stateful.combatTarget.movementStaminaAtLastDamage = movementStaminaAtLastDamage;
+  stateful.combatTarget.movementStaminaSinceDamage = Math.max(0, movementStaminaSpent - movementStaminaAtLastDamage);
+  stateful.combatTarget.stableCloseStartedAt = stableCloseStartedAt;
+  stateful.combatTarget.stableCloseMs = stableCloseStartedAt > 0 ? Math.max(0, nowMs - stableCloseStartedAt) : 0;
+  stateful.combatMetrics.damageProgressAt = damageProgressAt;
+  stateful.combatMetrics.acceptedShotsSinceDamage = stateful.combatTarget.acceptedShotsSinceDamage;
+  stateful.combatMetrics.movementStaminaAtLastDamage = movementStaminaAtLastDamage;
+  stateful.combatMetrics.movementStaminaSinceDamage = stateful.combatTarget.movementStaminaSinceDamage;
+  stateful.combatMetrics.stableCloseMs = stateful.combatTarget.stableCloseMs;
   // The active target object is replaced once per realtime frame. Keep that
   // bounded object by reference here; deep cloning its motion history on the
   // 20 Hz path adds avoidable latency. Worker transport still serializes it at
@@ -2831,6 +2863,25 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
       && !behaviorSuppressFire
       && !highEntropyFireGate.suppressFire
   );
+  let finalFireBlocker = 'none';
+  if (!target) finalFireBlocker = 'no-target';
+  else if (!aim.ok) finalFireBlocker = `aim:${String(aim.reason || 'unavailable')}`;
+  else if (!inRange) finalFireBlocker = 'target-out-of-range';
+  else if (fireState.state === 'disabled' || fireState.state === 'paused') {
+    finalFireBlocker = `fire-state:${String(fireState.reason || fireState.state)}`;
+  } else if (contactEntryOnly) finalFireBlocker = 'movement-only-contact-entry';
+  else if (exitEvaluation.exchangeStopLoss?.disengage) {
+    finalFireBlocker = String(exitEvaluation.exchangeStopLoss.reason || 'exchange-stop-loss');
+  } else if (behaviorSuppressFire) {
+    finalFireBlocker = `response-policy:${String(behaviorPolicy?.reason || behaviorPolicy?.name || 'suppressed')}`;
+  } else if (highEntropyFireGate.suppressFire) {
+    finalFireBlocker = String(highEntropyFireGate.reason || 'ordinary-fire-budget-suppressed');
+  }
+  const fireAuthorizationClass = finalFireBlocker === 'none'
+    ? String(sharedFireBudget.authorizationSource || 'ordinary-fire-budget')
+    : (highEntropyFireGate.suppressFire
+        ? 'ordinary-budget-blocked'
+        : (behaviorSuppressFire ? 'response-policy-blocked' : 'hard-gate-blocked'));
   const commandSuppressed = Boolean(!liveCombatEnabled || !wouldShoot);
   return {
     ok: Boolean(self),
@@ -2905,6 +2956,10 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
       combatSubphase: combatPhase?.subphase || combatTargetState?.closePressure?.subphase || 'normal-combat',
       behaviorPolicy: behaviorPolicy?.name || '',
       behaviorReason: behaviorPolicy?.reason || '',
+      recognizedMode: behaviorState?.mode || 'mixed/unknown',
+      responsePolicy: behaviorPolicy?.name || '',
+      fireAuthorizationClass,
+      finalFireBlocker,
       highEntropyFireGate,
       probePhase: probeState,
       fireRiskClassification: aim.fireRiskClassification || combatTargetState?.fireRiskClassification || null,
