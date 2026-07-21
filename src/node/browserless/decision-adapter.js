@@ -6385,6 +6385,38 @@ function resolveBrowserlessPressureActor(input, stateful, combat, options = {}, 
   };
 }
 
+function browserlessEngagedTargetHpEvidence(input, combat, pressureTargets = [], ownerIds = []) {
+  const ownerKeys = new Set((ownerIds || []).map(value => String(value || '')).filter(Boolean));
+  const byId = new Map();
+  const add = (target, source) => {
+    if (!target || target.alive === false) return;
+    const id = targetKey(target);
+    const hp = hpValue(target);
+    if (!id || hp === null || byId.has(id)) return;
+    byId.set(id, { id, hp, source, target });
+  };
+  add(combat?.target || combat?.dryRun?.target, 'combat-target');
+  for (const target of pressureTargets || []) add(target, 'pressure-target');
+  for (const target of input?.visibleTargets || []) {
+    if (ownerKeys.has(targetKey(target))) add(target, 'incoming-bullet-owner');
+  }
+  const targets = Array.from(byId.values());
+  const averageHp = targets.length
+    ? targets.reduce((total, item) => total + item.hp, 0) / targets.length
+    : null;
+  return {
+    targetHp: averageHp === null ? null : Math.round(averageHp * 10) / 10,
+    source: targets.length > 1 ? 'engaged-target-average' : (targets[0]?.source || 'unknown'),
+    targetCount: targets.length,
+    targets: targets.map(item => ({
+      id: item.id,
+      name: entityDisplayName(item.target),
+      hp: item.hp,
+      source: item.source
+    }))
+  };
+}
+
 function browserlessInjuryTargetHpEvidence(stateful, target, injury, nowMs, options = {}) {
   const targetId = targetKey(target) || String(injury?.targetKey || '');
   const metrics = stateful?.combatMetrics || null;
@@ -6425,7 +6457,11 @@ function buildBrowserlessInjuryHpExitDecision(input, stateful, combat, options =
   const target = pressureActor.actor;
   if (!target && !injury.hasIncoming && !currentPressure.hasIncoming) return null;
   const nowMs = Number(input.nowMs || Date.now());
-  const targetHpEvidence = browserlessInjuryTargetHpEvidence(stateful, target, injury, nowMs, options);
+  const directTargetHpEvidence = browserlessInjuryTargetHpEvidence(stateful, target, injury, nowMs, options);
+  const engagedTargetHpEvidence = browserlessEngagedTargetHpEvidence(input, combat, [target]);
+  const targetHpEvidence = engagedTargetHpEvidence.targetCount > 1
+    ? engagedTargetHpEvidence
+    : directTargetHpEvidence;
   const currentPressureMatches = targetKey(currentPressure.target) === targetKey(target);
   const pressureTargetSource = currentPressureMatches
     ? currentPressure.targetSource
@@ -6449,7 +6485,9 @@ function buildBrowserlessInjuryHpExitDecision(input, stateful, combat, options =
       triggerSource: 'recent-injury-pressure',
       pressureTargetSource,
       targetHpSource: targetHpEvidence.source,
-      targetHpAgeMs: targetHpEvidence.ageMs
+      targetHpAgeMs: targetHpEvidence.ageMs,
+      engagedTargetCount: engagedTargetHpEvidence.targetCount,
+      engagedTargets: engagedTargetHpEvidence.targets
     },
     injury: {
       previousHp: numberOrNull(injury.previousHp),
@@ -6466,6 +6504,8 @@ function buildBrowserlessInjuryHpExitDecision(input, stateful, combat, options =
       exitRule: combatExit.rule,
       evaluatedTargetHp: targetHpEvidence.targetHp,
       targetHpSource: targetHpEvidence.source,
+      engagedTargetCount: engagedTargetHpEvidence.targetCount,
+      engagedTargets: engagedTargetHpEvidence.targets,
       pressureActor: {
         actorId: pressureActor.actorId,
         actorSource: pressureActor.actorSource,
@@ -6681,6 +6721,18 @@ function buildBrowserlessPredictedThreatExitDecision(state, input, stateful, com
     currentPressure,
     ownerIds
   });
+  const engagedTargetHpEvidence = browserlessEngagedTargetHpEvidence(
+    input,
+    combat,
+    [pressureActor.actor, ownerTarget],
+    ownerIds
+  );
+  const staticHpExit = engagedTargetHpEvidence.targetCount > 1
+    ? evaluateCombatHpExitCore({
+        selfHp,
+        targetHp: engagedTargetHpEvidence.targetHp
+      }, options)
+    : null;
   const combatEstablished = Boolean(
     pressureActor.combatCanHandlePressure
       || residualThreatContinuity.active
@@ -6697,15 +6749,9 @@ function buildBrowserlessPredictedThreatExitDecision(state, input, stateful, com
   if (prediction?.shouldLeave) {
     reason = prediction.reason;
     rule = prediction.rule;
-  } else if ((recovering || unestablished) && !residualThreatContinuity.active && continuousIncoming) {
-    reason = 'continuous-incoming-bullets-leave';
-    rule = 'continuous-attributable-bullets';
-  } else if ((recovering || unestablished) && !residualThreatContinuity.active && rapidDamage) {
-    reason = 'rapid-damage-early-leave';
-    rule = 'rapid-attributable-damage';
-  } else if ((recovering || unestablished) && !residualThreatContinuity.active && attributableIncoming) {
-    reason = 'incoming-bullet-early-leave';
-    rule = 'attributable-incoming-before-established-combat';
+  } else if (staticHpExit) {
+    reason = staticHpExit.reason;
+    rule = staticHpExit.rule;
   }
   const target = pressureActor.actor
     || attributedOwnerTarget
@@ -6764,6 +6810,10 @@ function buildBrowserlessPredictedThreatExitDecision(state, input, stateful, com
     recentDamage,
     recentDamageWindowMs,
     rapidDamage,
+    engagedTargetHp: engagedTargetHpEvidence.targetHp,
+    engagedTargetHpSource: engagedTargetHpEvidence.source,
+    engagedTargetCount: engagedTargetHpEvidence.targetCount,
+    engagedTargets: engagedTargetHpEvidence.targets,
     pressureActor: {
       actorId: pressureActor.actorId,
       actorSource: pressureActor.actorSource,
@@ -6818,11 +6868,14 @@ function buildBrowserlessPredictedThreatExitDecision(state, input, stateful, com
     target: summarizeTarget(target),
     combatExit: {
       shouldLeave: true,
-      policy: prediction?.shouldLeave ? prediction.policy : 'early-threat-pressure',
+      policy: prediction?.shouldLeave ? prediction.policy : staticHpExit?.policy,
       rule,
       reason,
       selfHp,
-      targetHp: hpValue(target),
+      targetHp: engagedTargetHpEvidence.targetHp,
+      targetHpSource: engagedTargetHpEvidence.source,
+      engagedTargetCount: engagedTargetHpEvidence.targetCount,
+      engagedTargets: engagedTargetHpEvidence.targets,
       predictedLeave: prediction,
       triggerSource: 'realtime-leave-risk'
     },

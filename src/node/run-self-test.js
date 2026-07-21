@@ -9003,7 +9003,7 @@ async function runSelfTest() {
       want: 'profit-candidate|best-opportunity|near-afk|28|enemy|8|1|1|false'
     },
     {
-      name: 'browserless profit live exits before low-hp high-value coin under attributable incoming bullet',
+      name: 'browserless profit live keeps recovery when incoming bullet has no enemy hp evidence',
       got: (() => {
         const store = createBrowserlessStateStore({ userId: 7 });
         store.ingestFrame({
@@ -9031,7 +9031,7 @@ async function runSelfTest() {
           decision.profit.best?.id
         ].join('|');
       })(),
-      want: 'safety-exit|safety|incoming-bullet-early-leave|true|high-value-coin'
+      want: 'recover|recover|wait-for-full-stamina-and-hp|true|high-value-coin'
     },
     {
       name: 'browserless snapshot high-value coin cannot bypass realtime combat',
@@ -16352,7 +16352,7 @@ async function runSelfTest() {
       want: 'combat-live|combat|combat-live-realtime|8|defensive|direct-threat-dodge|true|target-pressure-fire'
     },
     {
-      name: 'browserless recovery exits on attributable incoming bullet before resuming combat',
+      name: 'browserless recovery resumes combat when incoming bullet hp rule does not require exit',
       got: (() => {
         const stateful = {
           lastDecisionAction: { kind: 'recover', band: 'recover', reason: 'wait-for-full-stamina-and-hp' }
@@ -16379,20 +16379,22 @@ async function runSelfTest() {
           combatEnabled: true,
           combatAttackRange: 11000
         });
+        const leaveRisk = stateful.browserlessLeaveRisk || {};
         return [
           decision.kind,
           decision.band,
           decision.reason,
-          decision.action.shouldLeave,
+          decision.action.shouldLeave === true,
           decision.action.target.userId,
-          decision.action.leaveRisk.recovering,
-          decision.action.leaveRisk.attributableIncoming
+          leaveRisk.recovering,
+          leaveRisk.attributableIncoming,
+          leaveRisk.engagedTargetHp
         ].join('|');
       })(),
-      want: 'safety-exit|safety|incoming-bullet-early-leave|true|8|true|true'
+      want: 'combat-live|combat|combat-live-realtime|false|8|true|true|100'
     },
     {
-      name: 'browserless realtime early leave remembers the attributable attacker as dangerous',
+      name: 'browserless realtime incoming bullet alone does not remember attacker as dangerous',
       got: (() => {
         const stateful = createBrowserlessDecisionState({
           lastDecisionAction: { kind: 'recover', band: 'recover', reason: 'wait-for-full-stamina-and-hp' }
@@ -16419,19 +16421,20 @@ async function runSelfTest() {
           combatEnabled: true,
           combatAttackRange: 14500
         });
-        const remembered = stateful.dangerousCombatTargets['8'];
+        const remembered = stateful.dangerousCombatTargets['8'] || null;
+        const leaveRisk = stateful.browserlessLeaveRisk || {};
         return [
-          decision.reason,
-          decision.action.target.userId,
-          remembered.reason,
-          remembered.triggerSource,
-          decision.combat.dangerousTargetCooldown.targetId
+          decision.reason || 'no-exit',
+          decision.action?.shouldLeave === true,
+          leaveRisk.engagedTargetHp,
+          leaveRisk.reason || '',
+          remembered === null
         ].join('|');
       })(),
-      want: 'incoming-bullet-early-leave|8|incoming-bullet-early-leave|realtime-leave-risk|8'
+      want: 'no-exit|false|100||true'
     },
     {
-      name: 'browserless recovery attributes an incoming bullet even after its owner leaves the entity frame',
+      name: 'browserless recovery records unattributed hp context after bullet owner leaves frame without exiting',
       got: (() => {
         const stateful = createBrowserlessDecisionState({
           lastDecisionAction: { kind: 'recover', band: 'recover', reason: 'wait-for-full-stamina-and-hp' }
@@ -16457,16 +16460,17 @@ async function runSelfTest() {
           combatEnabled: true,
           combatAttackRange: 14500
         });
-        const remembered = stateful.dangerousCombatTargets['8'];
+        const remembered = stateful.dangerousCombatTargets['8'] || null;
+        const leaveRisk = stateful.browserlessLeaveRisk || {};
         return [
-          decision.reason,
-          decision.action.target.userId,
-          decision.action.leaveRisk.attributableIncoming,
-          remembered.targetId,
-          remembered.triggerSource
+          decision.reason || 'no-exit',
+          decision.action?.shouldLeave === true,
+          leaveRisk.attributableIncoming,
+          leaveRisk.engagedTargetCount,
+          remembered === null
         ].join('|');
       })(),
-      want: 'incoming-bullet-early-leave|8|true|8|realtime-leave-risk'
+      want: 'no-exit|false|true|0|true'
     },
     {
       name: 'browserless combat critical hp exits through safety action',
@@ -16577,7 +16581,7 @@ async function runSelfTest() {
       want: 'safety-exit|safety|combat-critical-hp-leave|true|1|no-target'
     },
     {
-      name: 'browserless profit live exits early when injury and attributable bullet cannot establish combat',
+      name: 'browserless profit live keeps recovery when rapid damage hp rule does not require exit',
       got: (() => {
         const stateful = {};
         const base = {
@@ -16628,10 +16632,78 @@ async function runSelfTest() {
           decision.reason,
           stateful.browserlessInjury.targetKey,
           stateful.browserlessInjury.currentHp,
-          decision.combat.target?.userId || 'no-target'
+          decision.combat.target?.userId || 'no-target',
+          stateful.browserlessLeaveRisk.rapidDamage,
+          stateful.browserlessLeaveRisk.engagedTargetHp
         ].join('|');
       })(),
-      want: 'safety-exit|rapid-damage-early-leave|8|73|no-target'
+      want: 'recover|wait-for-full-stamina-and-hp|8|73|no-target|true|80'
+    },
+    {
+      name: 'browserless multi-attacker pressure uses mean enemy hp instead of unconditional third-party exit',
+      got: (() => {
+        const run = selfHp => {
+          const stateful = {
+            combatTarget: { id: '36046', at: 61000, firstSeenAt: 1000, lastInRangeAt: 61000, name: 'yongren', hp: 58, active: true },
+            combatMetrics: {
+              targetId: '36046',
+              targetName: 'yongren',
+              startedAt: 1000,
+              lastObservedAt: 61000,
+              initialSelfHp: 100,
+              lastSelfHp: selfHp,
+              initialTargetHp: 100,
+              lastTargetHp: 58,
+              acceptedShots: 95,
+              selfDamage: 100 - selfHp,
+              targetDamage: 42
+            }
+          };
+          const self = { entity_id: 1, user_id: 28886, x: 0, y: 0, hp: selfHp, max_hp: 100, stamina_5s_remaining_milli: 5000 };
+          const decision = buildBrowserlessDecision({
+            userId: 28886,
+            realtime: {
+              tick: 1000,
+              frameAgeMs: 0,
+              self,
+              entities: [
+                self,
+                { entity_id: 2, user_id: 36046, name: 'yongren', x: 7000, y: 0, hp: 58, current_join_mode: 'Active', drop: 296 },
+                { entity_id: 3, user_id: 30672, name: 'third-party', x: 14000, y: 0, hp: 100, current_join_mode: 'Active', firing: true, drop: 53 }
+              ],
+              bullets: [
+                { bullet_id: 'a', owner_user_id: 30672, start_x: 14000, start_y: 0, target_x: 0, target_y: 0, created_tick: 990, expire_tick: 1020, speed_per_tick: 500 },
+                { bullet_id: 'b', owner_user_id: 30672, start_x: 14000, start_y: 0, target_x: 0, target_y: 0, created_tick: 991, expire_tick: 1021, speed_per_tick: 500 }
+              ],
+              coinDrops: []
+            },
+            fallback: { coinDrops: [] }
+          }, stateful, {
+            nowMs: 62000,
+            controlMode: 'profit-live',
+            combatEnabled: true,
+            combatAttackRange: 14500,
+            combatHighHpDisadvantageGap: 20,
+            dynamicProfitThresholdEnabled: false
+          });
+          return { decision, risk: stateful.browserlessLeaveRisk };
+        };
+        const healthy = run(94);
+        const behind = run(58);
+        return [
+          healthy.decision.kind,
+          healthy.decision.reason,
+          healthy.decision.combat.target.userId,
+          healthy.risk.continuousIncoming,
+          healthy.risk.engagedTargetHp,
+          healthy.risk.engagedTargetCount,
+          healthy.risk.reason || 'no-exit',
+          behind.decision.reason,
+          behind.decision.action.combatExit.targetHp,
+          behind.decision.action.combatExit.engagedTargetCount
+        ].join('|');
+      })(),
+      want: 'combat-live|combat-live-realtime|36046|true|79|2|no-exit|combat-hp-disadvantage-leave|79|2'
     },
     {
       name: 'browserless third-party invulnerable pressure bypasses unrelated established combat suppression',
@@ -16754,7 +16826,7 @@ async function runSelfTest() {
       want: 'combat-live|combat-live-realtime|false'
     },
     {
-      name: 'browserless recent injury exits before resuming a winning but out-of-range fight',
+      name: 'browserless recent injury keeps recovery when the known fight is winning',
       got: (() => {
         const stateful = {
           browserlessLastSelf: { key: '7', hp: 97, at: 1000 },
@@ -16798,7 +16870,7 @@ async function runSelfTest() {
           decision.combat.target?.userId || 'no-target'
         ].join('|');
       })(),
-      want: 'safety-exit|incoming-bullet-early-leave|94|46|no-target'
+      want: 'recover|wait-for-full-stamina-and-hp|94|46|no-target'
     },
     {
       name: 'browserless recent injury keeps Eason metrics instead of switching to unrelated mango',
@@ -19685,7 +19757,7 @@ async function runSelfTest() {
       want: '1,0|leave-pending-overlap-escape|true|0'
     },
     {
-      name: 'browserless leave pending starts immediately and keeps dynamic cover across ws frames',
+      name: 'browserless hp disadvantage starts leave pending immediately',
       got: (async () => {
         let t = Date.UTC(2026, 6, 16, 0, 23, 0);
         let wsOptions = null;
@@ -19702,7 +19774,7 @@ async function runSelfTest() {
           bullets: [bullet]
         });
         const frames = [
-          makeFrame(62, 73, { bullet_id: 101, owner_user_id: 8, start_x: 5000, start_y: 0, target_x: 0, target_y: 0, created_tick: 61, expire_tick: 91, speed_per_tick: 500 }),
+          makeFrame(62, 100, { bullet_id: 101, owner_user_id: 8, start_x: 5000, start_y: 0, target_x: 0, target_y: 0, created_tick: 61, expire_tick: 91, speed_per_tick: 500 }),
           makeFrame(63, 70, { bullet_id: 102, owner_user_id: 8, start_x: 0, start_y: 5000, target_x: 0, target_y: 0, created_tick: 62, expire_tick: 92, speed_per_tick: 500 }),
           makeFrame(64, 70, { bullet_id: 103, owner_user_id: 8, start_x: 0, start_y: 4500, target_x: 0, target_y: 0, created_tick: 63, expire_tick: 93, speed_per_tick: 500 })
         ];
@@ -19760,7 +19832,7 @@ async function runSelfTest() {
           result.hotPath.tasks['ws-message'].maxMs < 50
         ].join('|');
       })(),
-      want: 'incoming-bullet-early-leave|true|true|true|true|true|true|3|true|true|1|true'
+      want: 'combat-hp-disadvantage-leave|true|true|false|false|true|true|0|true|false|1|true'
     },
     {
       name: 'browserless read-only canary runs snapshot ws frames and verified leave',
@@ -27961,6 +28033,64 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'false|Pboy|Pboy|true'
+    },
+    {
+      name: 'browserless third-party pressure keeps battle summary bound to combat metrics target',
+      got: (() => {
+        const status = buildCompactBrowserlessStatus({
+          recentExits: [{
+            at: '2026-07-21T16:07:22.269Z',
+            reason: 'continuous-incoming-bullets-leave',
+            shouldLeave: true,
+            target: { userId: 30672, name: '颓废咸鱼1号', hp: 100, distance: 14177, drop: 53 },
+            detail: {
+              decision: {
+                self: { userId: 28886, name: 'self', hp: 94, maxHp: 100 },
+                target: { userId: 30672, name: '颓废咸鱼1号', hp: 100, distance: 14177, drop: 53 },
+                combat: {
+                  startedAt: '2026-07-21T16:06:20.066Z',
+                  durationMs: 61599,
+                  target: { userId: 36046, name: 'yongren', hp: 58, distance: 7287, drop: 296 },
+                  metrics: {
+                    targetId: '36046',
+                    targetName: 'yongren',
+                    startedAt: Date.parse('2026-07-21T16:06:20.066Z'),
+                    lastObservedAt: Date.parse('2026-07-21T16:07:22.245Z'),
+                    initialSelfHp: 100,
+                    lastSelfHp: 94,
+                    initialTargetHp: 100,
+                    lastTargetHp: 58,
+                    selfDamage: 6,
+                    targetDamage: 42,
+                    acceptedShots: 95
+                  }
+                }
+              }
+            }
+          }]
+        }, parseBrowserlessRunnerArgs([], {}));
+        return [
+          status.recentExit.target.name,
+          status.recentExit.targetHp,
+          status.recentExit.battle.target.name,
+          status.recentExit.battle.target.userId,
+          status.recentExit.battle.targetHpEnd,
+          status.recentExit.battle.selfHpEnd
+        ].join('|');
+      })(),
+      want: '颓废咸鱼1号|100|yongren|36046|58|94'
+    },
+    {
+      name: 'browserless web panel labels a distinct pressure actor and non-hp exit state',
+      got: (() => {
+        const panelScript = renderBrowserlessWebPanel().match(/<script>([\s\S]*?)<\/script>/)?.[1] || '';
+        return [
+          panelScript.includes("addRow(rowsOut, '退出威胁', targetLabel(exitThreat), true)"),
+          panelScript.includes("function hpTriggeredExit(status, reason)"),
+          panelScript.includes("hpTriggeredExit(status, reason) ? '退出触发血量' : '退出时血量'")
+        ].join('|');
+      })(),
+      want: 'true|true|true'
     },
     {
       name: 'browserless compact injury exit preserves recent battle summary',

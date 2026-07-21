@@ -1887,7 +1887,9 @@ function compactExit(event) {
     : (detail.leaveConfirmation && typeof detail.leaveConfirmation === 'object' ? detail.leaveConfirmation : {});
   const sourceSelf = decision.self || detail.self || decision.input?.self || combat.self || null;
   const sourceTarget = event.target || detail.target || decision.target || combatExit.target || combat.target || null;
+  const combatTarget = combat.target || combat.dryRun?.target || null;
   const sourceTargetId = compactNumber(sourceTarget?.userId ?? sourceTarget?.user_id);
+  const combatTargetId = compactNumber(combatTarget?.userId ?? combatTarget?.user_id);
   const metricsTargetId = compactNumber(metrics.targetId);
   const killConfirmation = event.killConfirmation && typeof event.killConfirmation === 'object'
     ? event.killConfirmation
@@ -1908,6 +1910,13 @@ function compactExit(event) {
         && metricsTargetName
         && sourceTargetName === metricsTargetName)
   ));
+  const metricsMatchCombatTarget = Boolean(combatTarget && (
+    (combatTargetId !== null && metricsTargetId !== null && combatTargetId === metricsTargetId)
+      || ((combatTargetId === null || metricsTargetId === null)
+        && compactString(combatTarget?.name || combatTarget?.label, 80)
+        && metricsTargetName
+        && compactString(combatTarget?.name || combatTarget?.label, 80) === metricsTargetName)
+  ));
   const at = compactString(event.at || event.time || event.createdAt, 48);
   const eventAtMs = parseTimeMs(at) || parseTimeMs(decision.at);
   const metricsLastObservedAtMs = compactNumber(metrics.lastObservedAt);
@@ -1921,7 +1930,7 @@ function compactExit(event) {
     : explicitBattleReason;
   const metricsAssociated = Boolean(
     Object.keys(metrics).length
-      && (!hasMetricsTarget || metricsMatchSourceTarget)
+      && (!hasMetricsTarget || metricsMatchCombatTarget || (!combatTarget && metricsMatchSourceTarget))
       && metricsFreshForExit
   );
   const confirmedKill = Boolean(
@@ -1971,9 +1980,10 @@ function compactExit(event) {
   const targetDamage = confirmedKill && targetHpStart !== null
     ? Math.max(rawTargetDamage ?? 0, targetHpStart + (targetHealing ?? 0))
     : rawTargetDamage;
-  const battleTargetSource = sourceTarget || (metricsAssociated
-    ? { userId: metricsTargetId, name: metricsTargetName }
-    : null);
+  const battleTargetSource = metricsAssociated
+    ? (metricsMatchCombatTarget ? combatTarget : (metricsMatchSourceTarget ? sourceTarget : null))
+      || { userId: metricsTargetId, name: metricsTargetName }
+    : sourceTarget;
   const target = compactTarget({
     ...(battleTargetSource && typeof battleTargetSource === 'object' ? battleTargetSource : {}),
     userId: battleTargetSource?.userId ?? battleTargetSource?.user_id ?? metricsTargetId,
@@ -2019,7 +2029,7 @@ function compactExit(event) {
     shouldLeave: event.shouldLeave === undefined ? null : Boolean(event.shouldLeave),
     target: compactTarget(sourceTarget),
     selfHp: compactNumber(event.selfHp ?? detail.selfHp ?? combatExit.selfHp),
-    targetHp: compactNumber(event.targetHp ?? detail.targetHp ?? combatExit.targetHp),
+    targetHp: compactNumber(event.targetHp ?? detail.targetHp ?? combatExit.targetHp ?? sourceTarget?.hp),
     hpGap: compactNumber(event.hpGap ?? detail.hpGap ?? combatExit.hpGap),
     threshold: compactNumber(event.threshold ?? detail.threshold ?? combatExit.threshold),
     minHpGap: compactNumber(event.minHpGap ?? detail.minHpGap ?? combatExit.minHpGap),

@@ -726,6 +726,25 @@ function renderBrowserlessWebPanel() {
     function recentBattle(status) {
       return status.recentExit?.battle || null;
     }
+    function targetIdentity(target) {
+      if (!target) return '';
+      const id = target.userId ?? target.user_id ?? target.entityId ?? target.entity_id ?? target.id;
+      return id === null || id === undefined || id === '' ? '' : String(id);
+    }
+    function recentExitThreat(status) {
+      const threat = status.recentExit?.target || null;
+      const battleTarget = recentBattle(status)?.target || null;
+      const threatId = targetIdentity(threat);
+      const battleId = targetIdentity(battleTarget);
+      if (!threat || (threatId && battleId && threatId === battleId)) return null;
+      return threat;
+    }
+    function hpTriggeredExit(status, reason) {
+      const exit = status.recentExit || status.combat?.exit || {};
+      return number(exit.threshold) !== null
+        || number(exit.minHpGap) !== null
+        || /(?:^|-)hp(?:-|$)|injury|predicted-leave-hp|ttd-below-ttk/i.test(String(reason || ''));
+    }
     function recentBattleOutcomeText(status) {
       const battle = recentBattle(status);
       if (!battle) return '--';
@@ -1964,6 +1983,8 @@ function renderBrowserlessWebPanel() {
       addRow(rowsOut, '退出时间', fullStamp(offlineStats.lastExitAt), true);
       if (battle && !staminaExhausted) {
         addRow(rowsOut, '交战对手', targetLabel(battle.target), true);
+        const exitThreat = recentExitThreat(status);
+        if (exitThreat) addRow(rowsOut, '退出威胁', targetLabel(exitThreat), true);
         addRow(rowsOut, '战斗结果', recentBattleOutcomeText(status), true);
         addRow(rowsOut, '战斗时间', recentBattleTimeText(status));
         const battleHpText = recentBattleHpText(status);
@@ -1977,7 +1998,9 @@ function renderBrowserlessWebPanel() {
         addRow(rowsOut, '射击命中', recentBattleShootingText(status));
       }
       const exitHpText = combatExitHpText(status);
-      if (!staminaExhausted && exitHpText && exitHpText !== '--') addRow(rowsOut, '退出触发血量', exitHpText);
+      if (!staminaExhausted && exitHpText && exitHpText !== '--') {
+        addRow(rowsOut, hpTriggeredExit(status, reason) ? '退出触发血量' : '退出时血量', exitHpText);
+      }
       const confirmedHpText = confirmedLeaveHpText(status);
       if (confirmedHpText) addRow(rowsOut, '离场确认血量', confirmedHpText);
       return rowsOut;
