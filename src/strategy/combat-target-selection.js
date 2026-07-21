@@ -441,6 +441,95 @@ function defensiveTargetOverridesEngagedCore(engagedTarget, defensiveTarget, opt
   return defensiveId !== '' && engagedId !== '' && String(defensiveId) !== String(engagedId);
 }
 
+function applyCombatTargetSwitchHysteresisCore(input = {}, previousGate = null, options = {}) {
+  const currentId = String(input.currentTargetId || '');
+  const proposedId = combatTargetId(input.proposedTarget);
+  const requiredTicks = Math.max(1, Math.round(Number(options.confirmTicks ?? 3)));
+  const oscillationWindowMs = Math.max(1000, Number(options.oscillationWindowMs ?? 10000));
+  const nowMs = Number.isFinite(Number(input.nowMs)) ? Number(input.nowMs) : Date.now();
+  if (!currentId) {
+    return {
+      target: input.proposedTarget || null,
+      gate: null,
+      diagnostic: null
+    };
+  }
+  if (input.currentInvalid === true || input.urgentSafety === true) {
+    return {
+      target: input.proposedTarget || null,
+      gate: null,
+      diagnostic: proposedId && currentId && proposedId !== currentId ? {
+        fromTargetId: currentId,
+        toTargetId: proposedId,
+        allowed: true,
+        reason: input.urgentSafety === true
+          ? 'urgent-incoming-shooter'
+          : 'current-target-invalid',
+        confirmationTicks: requiredTicks,
+        observedTicks: requiredTicks
+      } : null
+    };
+  }
+  if (!input.proposedTarget) {
+    return {
+      target: input.currentVisibleTarget || null,
+      gate: null,
+      diagnostic: null
+    };
+  }
+  if (currentId === proposedId) {
+    return {
+      target: input.proposedTarget || input.currentVisibleTarget || null,
+      gate: null,
+      diagnostic: null
+    };
+  }
+  const lastSwitch = input.lastSwitch && typeof input.lastSwitch === 'object' ? input.lastSwitch : null;
+  const reversalBlocked = Boolean(
+    lastSwitch
+      && String(lastSwitch.fromTargetId || '') === proposedId
+      && String(lastSwitch.toTargetId || '') === currentId
+      && nowMs - Number(lastSwitch.at || 0) <= oscillationWindowMs
+  );
+  if (reversalBlocked) {
+    return {
+      target: input.currentVisibleTarget || null,
+      gate: null,
+      diagnostic: {
+        fromTargetId: currentId,
+        toTargetId: proposedId,
+        allowed: false,
+        reason: 'oscillating-reversal-blocked',
+        confirmationTicks: requiredTicks,
+        observedTicks: 0,
+        holdRemainingMs: Math.max(0, oscillationWindowMs - (nowMs - Number(lastSwitch.at || 0)))
+      }
+    };
+  }
+  const sameCandidate = previousGate
+    && String(previousGate.fromTargetId || '') === currentId
+    && String(previousGate.toTargetId || '') === proposedId;
+  const observedTicks = sameCandidate ? Math.max(1, Number(previousGate.observedTicks || 0) + 1) : 1;
+  const gate = {
+    fromTargetId: currentId,
+    toTargetId: proposedId,
+    firstObservedAt: sameCandidate ? Number(previousGate.firstObservedAt || nowMs) : nowMs,
+    lastObservedAt: nowMs,
+    observedTicks,
+    confirmationTicks: requiredTicks
+  };
+  const allowed = observedTicks >= requiredTicks;
+  return {
+    target: allowed ? input.proposedTarget : (input.currentVisibleTarget || null),
+    gate: allowed ? null : gate,
+    diagnostic: {
+      ...gate,
+      allowed,
+      reason: allowed ? 'ordinary-switch-confirmed' : 'ordinary-switch-awaiting-confirmation'
+    }
+  };
+}
+
 function pickEngagedCombatTargetCore(self, combatTargets = [], entities = [], bullets = [], state = {}, options = {}) {
   const engaged = state?.combatTarget || null;
   if (!engaged?.id) return null;
@@ -627,6 +716,7 @@ module.exports = {
   calculateCombatTargetPriority,
   checkProactiveActiveCombatGates,
   combatTargetId,
+  applyCombatTargetSwitchHysteresisCore,
   defensiveTargetOverridesEngagedCore,
   incomingBulletHasCollisionRiskCore,
   incomingBulletRequiresTargetSwitchCore,

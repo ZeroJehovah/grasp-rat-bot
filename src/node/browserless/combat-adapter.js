@@ -2,6 +2,7 @@
 
 const {
   calculateCombatTargetPriority,
+  applyCombatTargetSwitchHysteresisCore,
   combatEscapeDecisionCore,
   combatTargetId,
   defensiveTargetOverridesEngagedCore,
@@ -26,6 +27,7 @@ const {
   determineCombatFireState,
   evaluateCombatFireBudgetCore,
   evaluateHighEntropyFireGateCore,
+  updateCloseBandReserveCore,
   updateCombatProbePhaseCore
 } = require('../../strategy/combat-fire-discipline');
 const { COMBAT_CONSTANTS } = require('../../strategy/combat-constants');
@@ -70,6 +72,48 @@ function cloneJson(value) {
 function numberOrNull(value) {
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
+}
+
+function summarizeDodgeThreatField(threatField = []) {
+  return (Array.isArray(threatField) ? threatField : []).slice(0, 10).map(item => ({
+    dx: Number(item.dx || 0),
+    dy: Number(item.dy || 0),
+    directHits: Number(item.directHits || 0),
+    avoidableHits: Number(item.avoidableHits || 0),
+    unavoidableHits: Number(item.unavoidableHits || 0),
+    minCPA: numberOrNull(item.minCPA),
+    rawMinCPA: numberOrNull(item.rawMinCPA),
+    worstCaseCpaCm: numberOrNull(item.worstCaseCpaCm),
+    minTTI: numberOrNull(item.minTTI),
+    scheduleRobust: item.scheduleRobust !== false,
+    robustClassification: String(item.robustClassification || ''),
+    unconfirmedTransitionRisk: Boolean(item.unconfirmedTransitionRisk),
+    trajectoryResidualCm: numberOrNull(item.trajectoryResidualCm),
+    timingUncertaintyTicks: numberOrNull(item.timingUncertaintyTicks),
+    targetDistanceChange: numberOrNull(item.targetDistanceChange),
+    velocityScheduleConfidence: String(item.velocityScheduleConfidence || ''),
+    velocityScheduleVariants: (item.velocityScheduleVariants || []).slice(0, 4).map(variant => ({
+      name: String(variant.name || ''),
+      transitionTicks: (variant.events || []).slice(0, 8).map(event => Number(event.effectiveAfterTicks || 0))
+    })),
+    dangerousBullets: (item.dangerousBullets || []).slice(0, 3).map(bullet => ({
+      bulletId: String(bullet.bulletId || ''),
+      ownerId: bullet.ownerId ?? null,
+      timeToImpact: numberOrNull(bullet.timeToImpact),
+      cpa: numberOrNull(bullet.cpa),
+      worstCaseCpaCm: numberOrNull(bullet.worstCaseCpaCm),
+      currentHoldCpaCm: numberOrNull(bullet.currentHoldCpaCm),
+      expectedCpaCm: numberOrNull(bullet.expectedCpaCm),
+      lateCpaCm: numberOrNull(bullet.lateCpaCm),
+      predictedHit: Boolean(bullet.predictedHit),
+      currentHoldHit: Boolean(bullet.currentHoldHit),
+      expectedHit: Boolean(bullet.expectedHit),
+      lateHit: Boolean(bullet.lateHit),
+      avoidable: Boolean(bullet.avoidable),
+      trajectoryResidualCm: numberOrNull(bullet.trajectoryResidualCm),
+      trajectoryUncertaintyCm: numberOrNull(bullet.trajectoryUncertaintyCm)
+    }))
+  }));
 }
 
 function ensureCombatLearningState(stateful = {}) {
@@ -686,6 +730,7 @@ function updateContactEntryGuard(stateful, self, targets = [], bullets = [], opt
     commandDelayP90Ticks: commandDelayTicks,
     movementExecutionTiming: options.movementExecutionTiming,
     pendingVelocityCommands: options.pendingVelocityCommands,
+    robustScheduleEnabled: options.combatRobustDodgeEnabled !== false,
     currentTick,
     reactionSafetyMarginMs: options.combatReactionSafetyMarginMs ?? 100
   });
@@ -1282,15 +1327,23 @@ function passiveRunnerState(self, target, combatTargetState = {}, options = {}) 
   const selfHp = hpValue(self) ?? 100;
   const engagedMs = Math.max(0, Number(options.nowMs || Date.now()) - Number(combatTargetState?.firstSeenAt || combatTargetState?.at || options.nowMs || Date.now()));
   const confirmMs = Math.max(0, Number(options.combatPassiveRunnerConfirmMs ?? COMBAT_CONSTANTS.PASSIVE_RUNNER_CONFIRM_MS));
-  const seenTargetRealBulletMs = combatTargetState?.seenTargetRealBulletAt
-    ? Math.max(0, Number(options.nowMs || Date.now()) - Number(combatTargetState.seenTargetRealBulletAt))
-    : 0;
+  const seenTargetRealBulletAt = Number(combatTargetState?.lastIncomingBulletAt || combatTargetState?.seenTargetRealBulletAt || 0);
+  const seenTargetRealBulletMs = seenTargetRealBulletAt > 0
+    ? Math.max(0, Number(options.nowMs || Date.now()) - seenTargetRealBulletAt)
+    : null;
+  const threatTtlMs = Math.max(1000, Number(options.combatThreatEvidenceTtlMs ?? 30000));
+  const persistentThreat = Boolean(
+    combatTargetState?.hasDamagedSelf
+      || (Number(combatTargetState?.lastThreatAt || 0) > 0
+        && Number(options.nowMs || Date.now()) - Number(combatTargetState.lastThreatAt) <= threatTtlMs)
+  );
   const active = Boolean(
     entityDropValue(target) > 0
       && target.moving
       && !target.firing
       && selfHp >= Math.max(1, Number(options.combatPassiveRunnerMinSelfHp || 80))
-      && !seenTargetRealBulletMs
+      && seenTargetRealBulletAt <= 0
+      && !persistentThreat
       && engagedMs >= confirmMs
   );
   return {
@@ -1298,6 +1351,7 @@ function passiveRunnerState(self, target, combatTargetState = {}, options = {}) 
     engagedMs: Math.round(engagedMs),
     confirmMs,
     seenTargetRealBulletMs,
+    persistentThreat,
     reason: 'passive-runner'
   };
 }
@@ -1549,7 +1603,7 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
   const backAway = closePressureActive ? closePressureTooClose : shouldBackAwayFromTarget(self, target);
   const pressureClose = Boolean(
     closePressureActive
-      ? closeAllowed && Number(target.distance || Infinity) > closeRange
+      ? closeAllowed && Number(target.distance || Infinity) > closeRange + closePressureHysteresisCm
       : closeAllowed
         && targetPressure
         && noDamageMs >= Math.max(0, Number(options.combatNoDamagePressCloseMs ?? COMBAT_CONSTANTS.NO_DAMAGE_PRESS_CLOSE_MS))
@@ -1689,7 +1743,7 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
       dy: effectiveDodge?.dy ?? dodge.dy,
       reason: effectiveDodge?.reason || dodge.reason,
       applied: movement.modifiers.includes('dodge'),
-      threatField: dodge.threatField
+      threatField: summarizeDodgeThreatField(dodge.threatField)
     } : null,
     modifiers: movement.modifiers || [],
     closePressure: closePressureActive ? {
@@ -1760,8 +1814,29 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
   const id = combatTargetId(target);
   if (!id) return;
   const nowMs = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
-  const previous = stateful.combatTarget || null;
-  const same = previous && String(previous.id ?? '') === String(id);
+  const engagementTtlMs = Math.max(5000, Number(options.combatEngagementMemoryTtlMs ?? 30000));
+  stateful.combatEngagements = stateful.combatEngagements && typeof stateful.combatEngagements === 'object'
+    ? stateful.combatEngagements
+    : {};
+  stateful.combatMetricsByTarget = stateful.combatMetricsByTarget && typeof stateful.combatMetricsByTarget === 'object'
+    ? stateful.combatMetricsByTarget
+    : {};
+  for (const [rememberedId, remembered] of Object.entries(stateful.combatEngagements)) {
+    if (nowMs - Number(remembered?.at || 0) > engagementTtlMs) {
+      delete stateful.combatEngagements[rememberedId];
+      delete stateful.combatMetricsByTarget[rememberedId];
+    }
+  }
+  const currentPrevious = stateful.combatTarget || null;
+  const rememberedPrevious = stateful.combatEngagements[String(id)] || null;
+  const previous = currentPrevious && String(currentPrevious.id ?? '') === String(id)
+    ? currentPrevious
+    : (rememberedPrevious && nowMs - Number(rememberedPrevious.at || 0) <= engagementTtlMs ? rememberedPrevious : null);
+  const same = Boolean(previous && String(previous.id ?? '') === String(id));
+  if (same && String(stateful.combatMetrics?.targetId ?? '') !== String(id)) {
+    const rememberedMetrics = stateful.combatMetricsByTarget[String(id)] || null;
+    if (rememberedMetrics) stateful.combatMetrics = cloneJson(rememberedMetrics);
+  }
   const distance = Number.isFinite(Number(target.distance)) ? Number(target.distance) : distanceBetween(self, target);
   const hp = numberOrNull(target.knownHp ?? target.hp);
   const previousHp = same && Number.isFinite(Number(previous.hp)) ? Number(previous.hp) : null;
@@ -1813,6 +1888,15 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
   const targetBulletIds = targetBullets
     .map(bullet => String(bullet?.bullet_id ?? bullet?.bulletId ?? `${bullet?.createdTick ?? ''}:${bullet?.startX ?? bullet?.x ?? ''}:${bullet?.startY ?? bullet?.y ?? ''}`))
     .filter(Boolean);
+  const lastIncomingBulletAt = targetBulletIds.length
+    ? nowMs
+    : (same ? Number(previous.lastIncomingBulletAt || 0) : 0);
+  const attributableSelfDamage = Boolean(
+    selfDamaged
+      && (targetOwnsRealBullet
+        || targetBulletIds.length
+        || (same && nowMs - Number(previous.lastIncomingBulletAt || 0) <= 1000))
+  );
   const previousMetrics = same && stateful.combatMetrics?.targetId === String(id) ? stateful.combatMetrics : {};
   const behaviorMap = ensureOpponentBehaviorMap(stateful);
   const previousBehavior = behaviorMap[String(id)] || null;
@@ -1947,6 +2031,13 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
       ? Number(previousMetrics.acceptedShots || 0)
       : (same ? Number(previous.acceptedShotsAtLastDamage || 0) : 0),
     lastSelfDamageAt: selfDamaged ? nowMs : (same ? Number(previous.lastSelfDamageAt || 0) : 0),
+    hasDamagedSelf: Boolean((same && previous.hasDamagedSelf) || attributableSelfDamage),
+    lastThreatAt: attributableSelfDamage || targetBulletIds.length || targetOwnsRealBullet
+      ? nowMs
+      : (same ? Number(previous.lastThreatAt || 0) : 0),
+    incomingHitCount: Math.max(0, Number(same ? previous.incomingHitCount || 0 : 0))
+      + (attributableSelfDamage ? Math.max(1, Math.round((previousSelfHp - currentSelfHp) / 3)) : 0),
+    lastIncomingBulletAt,
     lastInRangeAt: inRange ? nowMs : (same ? Number(previous.lastInRangeAt || previous.at || nowMs) : nowMs),
     seenTargetRealBulletAt: targetOwnsRealBullet ? nowMs : (same ? Number(previous.seenTargetRealBulletAt || 0) : 0),
     disadvantageSinceAt,
@@ -1961,6 +2052,7 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
     opponentBehaviorState,
     fireRiskClassification,
     probeState: same ? cloneJson(previous.probeState || null) : null,
+    closeBandReserve: same ? cloneJson(previous.closeBandReserve || null) : null,
     escapeDecision,
     provenHitRate: Math.max(
       Number(same ? previous.provenHitRate || 0 : 0),
@@ -2067,6 +2159,23 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
     movementStaminaSpent: Math.max(0, totalStaminaSpent - shootingStaminaSpent),
     lastDodgeThreatField: null
   };
+  // The active target object is replaced once per realtime frame. Keep that
+  // bounded object by reference here; deep cloning its motion history on the
+  // 20 Hz path adds avoidable latency. Worker transport still serializes it at
+  // the lower planner cadence.
+  stateful.combatEngagements[String(id)] = stateful.combatTarget;
+  stateful.combatMetricsByTarget[String(id)] = stateful.combatMetrics;
+  const retainedEngagementIds = Object.entries(stateful.combatEngagements)
+    .sort((a, b) => Number(b[1]?.at || 0) - Number(a[1]?.at || 0))
+    .slice(0, 8)
+    .map(([rememberedId]) => rememberedId);
+  const retainedEngagementSet = new Set(retainedEngagementIds);
+  for (const rememberedId of Object.keys(stateful.combatEngagements)) {
+    if (!retainedEngagementSet.has(rememberedId)) {
+      delete stateful.combatEngagements[rememberedId];
+      delete stateful.combatMetricsByTarget[rememberedId];
+    }
+  }
 }
 
 function buildCombatExchangeRetreatMovement(baseMovement, self, target, exchangeStopLoss) {
@@ -2177,12 +2286,53 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     ? null
     : candidates.find(candidate => candidate.easyKillProfitTarget === true
       && String(combatTargetId(candidate)) === String(preferredEasyTargetId)) || null;
-  const normalTarget = defensiveTargetOverridesEngagedCore(engagedTarget, defensiveTarget, options)
+  const proposedNormalTarget = defensiveTargetOverridesEngagedCore(engagedTarget, defensiveTarget, options)
     ? defensiveTarget
     : (engagedTarget
         || (defensiveTarget?.combatIntent === 'defensive' ? defensiveTarget : null)
         || (preferredEasyTarget ? { ...preferredEasyTarget, combatIntent: 'profit' } : null)
         || defensiveTarget);
+  const currentTargetId = String(stateful?.combatTarget?.id || '');
+  const currentVisibleTarget = currentTargetId
+    ? targets.find(item => String(combatTargetId(item) || '') === currentTargetId) || null
+    : null;
+  const currentVisibleHp = currentVisibleTarget?.hp ?? currentVisibleTarget?.knownHp ?? currentVisibleTarget?.displayHp;
+  const currentInvalid = Boolean(
+    currentTargetId
+      && currentVisibleTarget
+      && (isInvulnerableEntity(currentVisibleTarget)
+        || currentVisibleTarget.alive === false
+        || (currentVisibleHp !== null && currentVisibleHp !== undefined && Number(currentVisibleHp) <= 0)
+        || isWhitelistedTargetForOptions(currentVisibleTarget, options))
+  );
+  const urgentSafety = defensiveTargetOverridesEngagedCore(engagedTarget || currentVisibleTarget, defensiveTarget, options)
+    && String(combatTargetId(defensiveTarget) || '') === String(combatTargetId(proposedNormalTarget) || '');
+  const switchDecision = applyCombatTargetSwitchHysteresisCore({
+    currentTargetId,
+    currentVisibleTarget,
+    proposedTarget: proposedNormalTarget,
+    currentInvalid,
+    urgentSafety,
+    lastSwitch: stateful?.combatTargetSwitchHistory || null,
+    nowMs: options.nowMs
+  }, stateful?.combatTargetSwitchGate || null, {
+    confirmTicks: options.combatTargetSwitchConfirmTicks ?? 3,
+    oscillationWindowMs: options.combatTargetSwitchOscillationWindowMs ?? 10000
+  });
+  if (stateful && typeof stateful === 'object') {
+    stateful.combatTargetSwitchGate = switchDecision.gate;
+    if (switchDecision.diagnostic?.allowed === true
+      && switchDecision.diagnostic.fromTargetId
+      && switchDecision.diagnostic.toTargetId) {
+      stateful.combatTargetSwitchHistory = {
+        fromTargetId: switchDecision.diagnostic.fromTargetId,
+        toTargetId: switchDecision.diagnostic.toTargetId,
+        at: Number(options.nowMs || Date.now()),
+        reason: switchDecision.diagnostic.reason
+      };
+    }
+  }
+  const normalTarget = switchDecision.target;
   const contactTarget = contactEntryGuard.active === true ? contactEntryGuard.target : null;
   const contactApplies = Boolean(
     contactTarget
@@ -2264,7 +2414,8 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
   });
   if (!aim.ok) dataGaps.push(aim.reason);
   if (aim.ok) {
-    const requestedCoverageMode = normalizeTrajectoryCoverageMode(options.combatTrajectoryCoverageMode, 'shadow');
+    const baselineAim = { x: Number(aim.x), y: Number(aim.y) };
+    const requestedCoverageMode = normalizeTrajectoryCoverageMode(options.combatTrajectoryCoverageMode, 'live-single');
     const transitionDiagnostics = aim.routeCoverage?.movementTransition || null;
     const highEntropyCoverage = Boolean(
       aim.fireRiskClassification?.highEntropy
@@ -2298,6 +2449,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
           flightTicks: aim.flightTicks,
           predictedShooterOrigin: aim.predictedShooterOrigin,
           predictedTargetAtCreation: aim.predictedTargetAtCreation,
+          baselineAim,
           target,
           routeCandidates: aim.routeCoverage.candidates,
           existingShots: [
@@ -2333,7 +2485,8 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
       highEntropy: highEntropyCoverage,
       successfulAimProtected: coverageSuccessfulAimProtected,
       planActive: plan.active === true,
-      hasSelection: Boolean(plan.selected)
+      hasSelection: Boolean(plan.selected),
+      improvementQualified: plan.selected?.improvementQualified === true
     });
     if (applied) {
       const selectedCandidate = aim.routeCoverage?.candidates?.find(candidate => (
@@ -2384,7 +2537,9 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
             ? 'live-single-successful-aim-protected'
             : (effectiveCoverageMode === 'live-single' && plan.active && !highEntropyCoverage
                 ? 'live-single-requires-high-entropy'
-                : plan.reason)),
+                : (effectiveCoverageMode === 'live-single' && plan.active && plan.selected?.improvementQualified !== true
+                    ? 'live-single-insufficient-aim-improvement'
+                    : plan.reason))),
       sessionId: coverageSessionId,
       slot: 1,
       selected: plan.selected,
@@ -2560,12 +2715,28 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     proactiveCombat: !contactEntryOnly,
     shootingStaminaSpent: noProgressAcceptedShots * Math.max(1, Number(options.combatShotStaminaCostMs ?? 500))
   }, options.highEntropyFireGate);
+  const closeBandReserve = updateCloseBandReserveCore(combatTargetState?.closeBandReserve || null, {
+    targetId: combatTargetId(target),
+    acceptedShots: noProgressAcceptedShots,
+    distance: target?.distance,
+    coverageQualified: Boolean(
+      aim.trajectoryCoverage?.applied
+        && Number(aim.trajectoryCoverage?.selected?.marginalCoverage || 0) >= 0.02
+    ),
+    nowMs: options.nowMs
+  }, {
+    reservedShots: options.combatCloseBandReserveEnabled === false ? 0 : 2,
+    requiredBandTicks: 3,
+    minRangeCm: 4500,
+    maxRangeCm: 5500
+  });
   const sharedFireBudget = evaluateCombatFireBudgetCore({
     targetId: combatTargetId(target),
     acceptedShotsSinceDamage: noProgressAcceptedShots,
     fireGate: baseHighEntropyFireGate,
     probeState,
     trajectoryCoverage: aim.trajectoryCoverage,
+    closeBandReserve,
     closePressure: closePressureActive,
     pressureAttack: pressureAttackActive,
     finishProtected: baseHighEntropyFireGate.finishProtected,
@@ -2577,6 +2748,13 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     maxGeometryRearms: probeState.maxGeometryRearms,
     defensiveExtraShots: options.highEntropyFireGate?.defensiveExtraShots ?? 5
   });
+  closeBandReserve.lastAuthorization = sharedFireBudget.authorizationSource;
+  if (stateful?.combatTarget) {
+    stateful.combatTarget.closeBandReserve = closeBandReserve;
+    if (stateful.combatEngagements?.[String(combatTargetId(target) || '')]) {
+      stateful.combatEngagements[String(combatTargetId(target))].closeBandReserve = cloneJson(closeBandReserve);
+    }
+  }
   const highEntropyFireGate = {
     ...baseHighEntropyFireGate,
     active: Boolean(baseHighEntropyFireGate.active || probeState.highEntropy),
@@ -2603,6 +2781,11 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     sharedBudgetUsed: sharedFireBudget.sharedBudgetUsed,
     sharedBudgetMax: sharedFireBudget.sharedBudgetMax,
     sharedBudgetRemaining: sharedFireBudget.sharedBudgetRemaining,
+    ordinaryBudgetRemaining: sharedFireBudget.ordinaryBudgetRemaining,
+    reservedCloseBandShots: sharedFireBudget.reservedCloseBandShots,
+    reservedCloseBandShotsRemaining: sharedFireBudget.reservedCloseBandShotsRemaining,
+    closeBandReserveQualified: sharedFireBudget.closeBandReserveQualified,
+    budgetStateInvalid: sharedFireBudget.budgetStateInvalid,
     authorizationSource: sharedFireBudget.authorizationSource,
     marginalCoverage: sharedFireBudget.marginalCoverage,
     coverageQualified: sharedFireBudget.coverageQualified,
@@ -2673,6 +2856,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
       phase: combatTargetState?.combatPhase || 'normal-combat',
       active: closePressureActive
     },
+    combatTargetSwitch: switchDecision.diagnostic,
     movement,
     aim: aim.ok ? aim : null,
     behavior: behaviorState ? {
@@ -2731,6 +2915,11 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
       fireSuppressionReason: highEntropyFireGate.suppressFire ? highEntropyFireGate.reason : 'none',
       sharedBudgetUsed: sharedFireBudget.sharedBudgetUsed,
       sharedBudgetRemaining: sharedFireBudget.sharedBudgetRemaining,
+      ordinaryBudgetRemaining: sharedFireBudget.ordinaryBudgetRemaining,
+      reservedCloseBandShots: sharedFireBudget.reservedCloseBandShots,
+      reservedCloseBandShotsRemaining: sharedFireBudget.reservedCloseBandShotsRemaining,
+      closeBandReserve: cloneJson(closeBandReserve),
+      budgetStateInvalid: sharedFireBudget.budgetStateInvalid,
       authorizationSource: sharedFireBudget.authorizationSource,
       marginalCoverage: sharedFireBudget.marginalCoverage,
       coverageVolleyRequiredStamina: sharedFireBudget.coverageVolleyRequiredStamina,

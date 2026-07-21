@@ -6836,6 +6836,55 @@ async function runSelfTest() {
       want: 'realtime|11|600|realtime|pos|100|2|realtime'
     },
     {
+      name: 'browserless state store derives bounded bullet trajectory uncertainty and expires history',
+      got: (() => {
+        const store = createBrowserlessStateStore({ userId: 7 });
+        for (let index = 0; index < 3; index += 1) {
+          store.ingestFrame({
+            type: 'pos',
+            tick: 100 + index,
+            entities: [{ entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100 }],
+            bullets: [{
+              bullet_id: 90,
+              owner_user_id: 8,
+              x: index * 500,
+              y: 0,
+              dir_x: 1,
+              dir_y: 0,
+              speed_per_tick: 500
+            }]
+          }, { receivedAtMs: 1000 + index * 50 });
+        }
+        const stable = store.getRealtimeState(1200);
+        store.ingestFrame({
+          type: 'pos',
+          tick: 200,
+          entities: [{ entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100 }],
+          bullets: [{
+            bullet_id: 90,
+            owner_user_id: 8,
+            x: 5000,
+            y: 0,
+            dir_x: 1,
+            dir_y: 0,
+            speed_per_tick: 500
+          }]
+        }, { receivedAtMs: 3201 });
+        const expired = store.getRealtimeState(3201);
+        return [
+          stable.bullets[0]?.trajectoryObservationCount,
+          stable.bullets[0]?.trajectoryResidualCm,
+          stable.bullets[0]?.trajectoryUncertaintyCm,
+          stable.bullets[0]?.trajectoryConfidence,
+          Object.prototype.hasOwnProperty.call(stable, 'bulletTrajectories'),
+          expired.bullets[0]?.trajectoryObservationCount,
+          expired.bullets[0]?.trajectoryUncertaintyCm,
+          expired.bullets[0]?.trajectoryConfidence
+        ].join('|');
+      })(),
+      want: '3|0|0|bounded-history|false|1|180|insufficient-observation'
+    },
+    {
       name: 'browserless state store keeps snapshot fallback out of combat state',
       got: (() => {
         const store = createBrowserlessStateStore({ userId: 7 });
@@ -14710,7 +14759,24 @@ async function runSelfTest() {
       name: 'browserless quadratic combat aim enters motion probe after no target damage',
       got: (() => {
         const stateful = {
-          combatTarget: { id: 8, at: 1000, firstSeenAt: 1000, lastInRangeAt: 1000, lastDamageAt: 1000, hp: 80, intent: 'engaged' }
+          combatTarget: {
+            id: 8,
+            at: 1000,
+            firstSeenAt: 1000,
+            lastInRangeAt: 1000,
+            lastDamageAt: 1000,
+            hp: 80,
+            intent: 'engaged',
+            closeBandReserve: {
+              targetId: '8',
+              reservedShots: 2,
+              consumedShots: 1,
+              remainingShots: 1,
+              bandTicks: 2,
+              lastAcceptedShots: 0,
+              lastAuthorization: ''
+            }
+          }
         };
         const combat = buildBrowserlessCombatDryRun({
           userId: 7,
@@ -15833,10 +15899,12 @@ async function runSelfTest() {
           stateful.combatTarget.motionSamples.length,
           combat.aim.intercept,
           combat.aim.motionScale > 0,
-          stateful.combatAim.targetId
+          stateful.combatAim.targetId,
+          stateful.combatTarget.closeBandReserve.consumedShots,
+          stateful.combatTarget.closeBandReserve.remainingShots
         ].join('|');
       })(),
-      want: '2|true|true|8'
+      want: '2|true|true|8|1|1'
     },
     {
       name: 'browserless profit live fights passive incoming bullet owner',
@@ -20848,6 +20916,35 @@ async function runSelfTest() {
       want: 'true|true|true|true'
     },
     {
+      name: 'browserless same-target persistence patches retain threat and metric evidence',
+      got: (() => {
+        const adapter = createBrowserlessDecisionAdapter({ userId: 7, controlMode: 'profit-live' });
+        adapter.patchState({
+          combatTarget: { id: '8', hasDamagedSelf: true, lastThreatAt: 1000 },
+          combatEngagements: { '8': { id: '8', hasDamagedSelf: true, lastThreatAt: 1000 } },
+          combatMetricsByTarget: { '8': { targetId: '8', startedAt: 500, selfDamage: 3 } }
+        });
+        adapter.patchState({
+          combatTarget: { id: '8', hp: 90 },
+          combatEngagements: { '8': { hp: 90 } },
+          combatMetricsByTarget: { '8': { targetDamage: 6 } }
+        });
+        const state = adapter.getState();
+        return [
+          state.combatTarget.hasDamagedSelf,
+          state.combatTarget.lastThreatAt,
+          state.combatTarget.hp,
+          state.combatEngagements['8'].hasDamagedSelf,
+          state.combatEngagements['8'].lastThreatAt,
+          state.combatEngagements['8'].hp,
+          state.combatMetricsByTarget['8'].startedAt,
+          state.combatMetricsByTarget['8'].selfDamage,
+          state.combatMetricsByTarget['8'].targetDamage
+        ].join('|');
+      })(),
+      want: 'true|1000|90|true|1000|90|500|3|6'
+    },
+    {
       name: 'browserless realtime patch does not reset worker-owned post-attack settlement',
       got: (async () => {
         const options = {
@@ -22418,7 +22515,33 @@ async function runSelfTest() {
           publicConfig(envConfig).combatTrajectoryCoverageMode
         ].join('|');
       })(),
-      want: 'shadow|live-single|off|shadow|live-single'
+      want: 'live-single|live-single|off|live-single|live-single'
+    },
+    {
+      name: 'browserless combat remediation rollback flags expose env and cli values',
+      got: (() => {
+        const defaults = parseBrowserlessRunnerArgs([], {});
+        const envConfig = parseBrowserlessRunnerArgs([], {
+          GRASP_RAT_BROWSERLESS_COMBAT_ROBUST_DODGE_ENABLED: 'false',
+          GRASP_RAT_BROWSERLESS_COMBAT_CLOSE_BAND_RESERVE_ENABLED: 'false'
+        });
+        const cliConfig = parseBrowserlessRunnerArgs([
+          '--no-combat-robust-dodge',
+          '--no-combat-close-band-reserve'
+        ], {});
+        const exposed = publicConfig(envConfig);
+        return [
+          defaults.combatRobustDodgeEnabled,
+          defaults.combatCloseBandReserveEnabled,
+          envConfig.combatRobustDodgeEnabled,
+          envConfig.combatCloseBandReserveEnabled,
+          cliConfig.combatRobustDodgeEnabled,
+          cliConfig.combatCloseBandReserveEnabled,
+          exposed.combatRobustDodgeEnabled,
+          exposed.combatCloseBandReserveEnabled
+        ].join('|');
+      })(),
+      want: 'true|true|false|false|false|false|false|false'
     },
     {
       name: 'browserless runner config exposes dynamic profit threshold env cli and public values',

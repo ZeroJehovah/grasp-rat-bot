@@ -100,6 +100,10 @@ function createInitialDecisionState(options = {}) {
     postAttackSettlement: cloneJson(options.postAttackSettlement || null),
     postKillSettlement: cloneJson(options.postKillSettlement || null),
     combatTarget: cloneJson(options.combatTarget || null),
+    combatEngagements: asRecord(options.combatEngagements),
+    combatMetricsByTarget: asRecord(options.combatMetricsByTarget),
+    combatTargetSwitchGate: cloneJson(options.combatTargetSwitchGate || null),
+    combatTargetSwitchHistory: cloneJson(options.combatTargetSwitchHistory || null),
     combatAim: cloneJson(options.combatAim || null),
     combatMetrics: cloneJson(options.combatMetrics || null),
     opponentBehaviorStates: asRecord(options.opponentBehaviorStates),
@@ -190,6 +194,26 @@ function summarizeBrowserlessDecisionState(state, options = {}) {
     postKillSettlement: redactBoundedValue(state.postKillSettlement || null),
     combat: {
       target: redactBoundedValue(state.combatTarget || null),
+      engagements: Object.entries(state.combatEngagements || {})
+        .sort((a, b) => Number(b[1]?.at || 0) - Number(a[1]?.at || 0))
+        .slice(0, limit)
+        .map(([key, engagement]) => ({
+          key,
+          value: {
+            id: engagement?.id ?? null,
+            name: String(engagement?.name || ''),
+            at: engagement?.at || 0,
+            firstSeenAt: engagement?.firstSeenAt || 0,
+            combatPhase: String(engagement?.combatPhase || ''),
+            hasDamagedSelf: Boolean(engagement?.hasDamagedSelf),
+            incomingHitCount: Number(engagement?.incomingHitCount || 0),
+            lastThreatAt: Number(engagement?.lastThreatAt || 0),
+            closeBandReserve: redactBoundedValue(engagement?.closeBandReserve || null)
+          }
+        })),
+      metricsByTargetCount: Object.keys(state.combatMetricsByTarget || {}).length,
+      targetSwitchGate: redactBoundedValue(state.combatTargetSwitchGate || null),
+      targetSwitchHistory: redactBoundedValue(state.combatTargetSwitchHistory || null),
       aim: redactBoundedValue(state.combatAim || null),
       metrics: redactBoundedValue(state.combatMetrics || null),
       hitAttributionSummary: redactBoundedValue(state.combatHitAttributionSummary || null),

@@ -418,6 +418,9 @@ function evaluateCombatFireBudgetCore(input = {}, options = {}) {
     ? input.trajectoryCoverage
     : {};
   const targetId = String(input.targetId || '');
+  const closeBandReserve = input.closeBandReserve && typeof input.closeBandReserve === 'object'
+    ? input.closeBandReserve
+    : {};
   const sharedBudgetUsed = Math.max(0, Math.round(Number(input.acceptedShotsSinceDamage ?? gate.noProgressAcceptedShots ?? 0)));
   const baseBudget = Math.max(1, Math.round(Number(gate.explorationMaxShots || options.baseBudgetShots || 15)));
   const geometryRearmShots = Math.max(0, Math.round(Number(
@@ -435,9 +438,18 @@ function evaluateCombatFireBudgetCore(input = {}, options = {}) {
     : 0;
   const geometryBudget = geometryRearmShots * maxGeometryRearms;
   const sharedBudgetMax = baseBudget + geometryBudget + defensiveExtraShots;
+  const reservedCloseBandShots = Math.max(0, Math.min(
+    sharedBudgetMax,
+    Math.round(Number(options.reservedCloseBandShots ?? closeBandReserve.reservedShots ?? 2))
+  ));
+  const reservedCloseBandShotsUsed = Math.max(0, Math.round(Number(closeBandReserve.consumedShots || 0)));
+  const reservedCloseBandShotsRemaining = Math.max(0, reservedCloseBandShots - reservedCloseBandShotsUsed);
+  const ordinaryBudgetMax = Math.max(0, sharedBudgetMax - reservedCloseBandShots);
+  const ordinaryBudgetUsed = Math.max(0, sharedBudgetUsed - reservedCloseBandShotsUsed);
+  const ordinaryBudgetRemaining = Math.max(0, ordinaryBudgetMax - ordinaryBudgetUsed);
   const sharedBudgetRemaining = Math.max(0, sharedBudgetMax - sharedBudgetUsed);
-  const baseBudgetRemaining = Math.max(0, baseBudget - sharedBudgetUsed);
-  const geometryBudgetRemaining = Math.max(0, baseBudget + geometryBudget - sharedBudgetUsed);
+  const baseBudgetRemaining = Math.max(0, Math.min(baseBudget, ordinaryBudgetMax) - ordinaryBudgetUsed);
+  const geometryBudgetRemaining = Math.max(0, Math.min(baseBudget + geometryBudget, ordinaryBudgetMax) - ordinaryBudgetUsed);
   const marginalCoverage = numberOrNull(coverage?.selected?.marginalCoverage);
   const minimumMarginalCoverage = Math.max(0, Number(options.minimumMarginalCoverage ?? 0.02));
   const coverageQualified = Boolean(
@@ -461,8 +473,27 @@ function evaluateCombatFireBudgetCore(input = {}, options = {}) {
   let suppressionReason = suppressFire
     ? (probe.suppressionReason || gate.reason || 'shared-fire-budget-suppressed')
     : '';
+  const budgetStateInvalid = sharedBudgetUsed > sharedBudgetMax
+    || reservedCloseBandShotsUsed > reservedCloseBandShots;
+  const closeBandReserveQualified = Boolean(
+    closeBandReserve.eligible === true
+      && coverageQualified
+      && reservedCloseBandShotsRemaining > 0
+  );
 
-  if (finishProtected) {
+  if (budgetStateInvalid) {
+    suppressFire = true;
+    authorizationSource = '';
+    suppressionReason = 'budget-state-invalid';
+  } else if (sharedBudgetRemaining <= 0) {
+    suppressFire = true;
+    authorizationSource = '';
+    suppressionReason = 'shared-fire-budget-exhausted';
+  } else if (closeBandReserveQualified) {
+    suppressFire = false;
+    authorizationSource = 'close-band-reserve';
+    suppressionReason = '';
+  } else if (finishProtected) {
     suppressFire = false;
     authorizationSource = 'low-hp-finish-protected';
     suppressionReason = '';
@@ -470,16 +501,20 @@ function evaluateCombatFireBudgetCore(input = {}, options = {}) {
     suppressFire = false;
     authorizationSource = 'proven-hit-rate';
     suppressionReason = '';
-  } else if (pressureAttack) {
+  } else if (pressureAttack && ordinaryBudgetRemaining > 0) {
     suppressFire = false;
     authorizationSource = 'close-pressure-full-attack';
     suppressionReason = '';
+  } else if (pressureAttack) {
+    suppressFire = true;
+    authorizationSource = '';
+    suppressionReason = 'close-band-reserve-awaiting-qualification';
   } else if (gate.active) {
-    if (baseBudgetRemaining > 0) {
+    if (baseBudgetRemaining > 0 && ordinaryBudgetRemaining > 0) {
       suppressFire = false;
       authorizationSource = gate.explorationActive ? 'bounded-exploration' : 'shared-probe-budget';
       suppressionReason = '';
-    } else if (geometryBudgetRemaining > 0 && coverageQualified) {
+    } else if (geometryBudgetRemaining > 0 && ordinaryBudgetRemaining > 0 && coverageQualified) {
       suppressFire = false;
       authorizationSource = 'coverage-marginal-geometry-rearm';
       suppressionReason = '';
@@ -494,7 +529,7 @@ function evaluateCombatFireBudgetCore(input = {}, options = {}) {
         ? 'shared-fire-budget-exhausted'
         : 'coverage-no-marginal-gain';
     }
-  } else if (probe.highEntropy && baseBudgetRemaining > 0) {
+  } else if (probe.highEntropy && baseBudgetRemaining > 0 && ordinaryBudgetRemaining > 0) {
     suppressFire = false;
     authorizationSource = 'shared-probe-budget';
     suppressionReason = '';
@@ -507,6 +542,16 @@ function evaluateCombatFireBudgetCore(input = {}, options = {}) {
     sharedBudgetUsed,
     sharedBudgetMax,
     sharedBudgetRemaining,
+    ordinaryBudgetMax,
+    ordinaryBudgetUsed,
+    ordinaryBudgetRemaining,
+    reservedCloseBandShots,
+    reservedCloseBandShotsUsed,
+    reservedCloseBandShotsRemaining,
+    closeBandReserveQualified,
+    closeBandBandTicks: Math.max(0, Number(closeBandReserve.bandTicks || 0)),
+    closeBandFirstEligibleAt: Number(closeBandReserve.firstEligibleAt || 0) || null,
+    budgetStateInvalid,
     baseBudget,
     baseBudgetRemaining,
     geometryRearmShots,
@@ -524,6 +569,47 @@ function evaluateCombatFireBudgetCore(input = {}, options = {}) {
     closePressure: Boolean(input.closePressure),
     pressureAttack,
     boundedNoProgress: Boolean(gate.boundedNoProgress)
+  };
+}
+
+function updateCloseBandReserveCore(previous = null, input = {}, options = {}) {
+  const targetId = String(input.targetId || '');
+  const sameTarget = Boolean(previous && targetId && String(previous.targetId || '') === targetId);
+  const reservedShots = Math.max(0, Math.round(Number(options.reservedShots ?? 2)));
+  const acceptedShots = Math.max(0, Math.round(Number(input.acceptedShots || 0)));
+  let consumedShots = sameTarget ? Math.max(0, Math.round(Number(previous.consumedShots || 0))) : 0;
+  const previousAcceptedShots = sameTarget ? Math.max(0, Math.round(Number(previous.lastAcceptedShots || 0))) : acceptedShots;
+  const acceptedDelta = Math.max(0, acceptedShots - previousAcceptedShots);
+  if (sameTarget && previous.lastAuthorization === 'close-band-reserve' && acceptedDelta > 0) {
+    consumedShots = Math.min(reservedShots, consumedShots + acceptedDelta);
+  }
+  const distance = Number(input.distance);
+  const minRangeCm = Math.max(0, Number(options.minRangeCm ?? 4500));
+  const maxRangeCm = Math.max(minRangeCm, Number(options.maxRangeCm ?? 5500));
+  const inBand = Number.isFinite(distance) && distance >= minRangeCm && distance <= maxRangeCm;
+  const coverageQualified = Boolean(input.coverageQualified);
+  const bandTicks = inBand && coverageQualified
+    ? (sameTarget ? Math.max(0, Number(previous.bandTicks || 0)) + 1 : 1)
+    : 0;
+  const requiredBandTicks = Math.max(1, Math.round(Number(options.requiredBandTicks ?? 3)));
+  const eligible = bandTicks >= requiredBandTicks && consumedShots < reservedShots;
+  const nowMs = Number.isFinite(Number(input.nowMs)) ? Number(input.nowMs) : Date.now();
+  return {
+    targetId,
+    reservedShots,
+    consumedShots,
+    remainingShots: Math.max(0, reservedShots - consumedShots),
+    bandTicks,
+    requiredBandTicks,
+    inBand,
+    coverageQualified,
+    eligible,
+    firstEligibleAt: eligible
+      ? (sameTarget && Number(previous.firstEligibleAt || 0) > 0 ? Number(previous.firstEligibleAt) : nowMs)
+      : 0,
+    lastAcceptedShots: acceptedShots,
+    lastAuthorization: sameTarget ? String(previous.lastAuthorization || '') : '',
+    updatedAt: nowMs
   };
 }
 
@@ -715,5 +801,6 @@ module.exports = {
   classifyFireRiskCore,
   evaluateHighEntropyFireGateCore,
   evaluateCombatFireBudgetCore,
+  updateCloseBandReserveCore,
   updateCombatProbePhaseCore
 };

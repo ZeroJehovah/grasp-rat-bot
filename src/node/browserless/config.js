@@ -65,6 +65,8 @@ const DEFAULTS = {
   browserlessProfitPursuitMinDamageMs: 60000,
   browserlessProfitPursuitMinDamageHp: 10,
   combatEnabled: false,
+  combatRobustDodgeEnabled: true,
+  combatCloseBandReserveEnabled: true,
   combatShootMinIntervalMs: 160,
   combatControlIntervalMs: 50,
   combatClosePressureMinRangeCm: 4500,
@@ -75,7 +77,7 @@ const DEFAULTS = {
   combatClosePressureReserveMs: 2600,
   combatClosePressureMinSelfHp: 60,
   combatClosePressureMaxHpGap: 20,
-  combatTrajectoryCoverageMode: 'shadow',
+  combatTrajectoryCoverageMode: 'live-single',
   wsTraceEnabled: false,
   wsTracePayload: true,
   wsTraceMaxPayloadChars: 0,
@@ -110,12 +112,12 @@ function numberEnv(value, fallback) {
   return Number.isFinite(number) ? number : fallback;
 }
 
-function trajectoryCoverageMode(value, fallback = 'shadow') {
+function trajectoryCoverageMode(value, fallback = 'live-single') {
   const allowed = new Set(['off', 'shadow', 'live-single', 'live-volley']);
   const normalized = String(value || '').trim().toLowerCase();
   if (allowed.has(normalized)) return normalized;
   const normalizedFallback = String(fallback || '').trim().toLowerCase();
-  return allowed.has(normalizedFallback) ? normalizedFallback : 'shadow';
+  return allowed.has(normalizedFallback) ? normalizedFallback : 'live-single';
 }
 
 function listEnv(value, fallback = []) {
@@ -199,6 +201,8 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
     browserlessProfitPursuitMinDamageMs: numberEnv(env.GRASP_RAT_BROWSERLESS_PROFIT_PURSUIT_MIN_DAMAGE_MS, DEFAULTS.browserlessProfitPursuitMinDamageMs),
     browserlessProfitPursuitMinDamageHp: numberEnv(env.GRASP_RAT_BROWSERLESS_PROFIT_PURSUIT_MIN_DAMAGE_HP, DEFAULTS.browserlessProfitPursuitMinDamageHp),
     combatEnabled: boolEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_ENABLED, DEFAULTS.combatEnabled),
+    combatRobustDodgeEnabled: boolEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_ROBUST_DODGE_ENABLED, DEFAULTS.combatRobustDodgeEnabled),
+    combatCloseBandReserveEnabled: boolEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_CLOSE_BAND_RESERVE_ENABLED, DEFAULTS.combatCloseBandReserveEnabled),
     combatShootMinIntervalMs: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_SHOOT_MIN_INTERVAL_MS, DEFAULTS.combatShootMinIntervalMs),
     combatControlIntervalMs: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_CONTROL_INTERVAL_MS, DEFAULTS.combatControlIntervalMs),
     combatClosePressureMinRangeCm: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_CLOSE_PRESSURE_MIN_RANGE_CM, DEFAULTS.combatClosePressureMinRangeCm),
@@ -361,6 +365,10 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
       config.browserlessProfitPursuitMinDamageHp = numberEnv(argv[++i], config.browserlessProfitPursuitMinDamageHp);
     } else if (arg === '--combat-shoot-min-interval-ms') {
       config.combatShootMinIntervalMs = numberEnv(argv[++i], config.combatShootMinIntervalMs);
+    } else if (arg === '--no-combat-robust-dodge') {
+      config.combatRobustDodgeEnabled = false;
+    } else if (arg === '--no-combat-close-band-reserve') {
+      config.combatCloseBandReserveEnabled = false;
     } else if (arg === '--combat-control-interval-ms') {
       config.combatControlIntervalMs = numberEnv(argv[++i], config.combatControlIntervalMs);
     } else if (arg === '--combat-close-pressure-min-range-cm') {
@@ -493,7 +501,9 @@ function usage() {
     '  --combat-close-pressure-reserve-ms <ms>  Close-pressure stamina reserve. Default: 2600',
     '  --combat-close-pressure-min-self-hp <hp>  Minimum HP for exchange continuation. Default: 60',
     '  --combat-close-pressure-max-hp-gap <hp>  Maximum target HP lead for continuation. Default: 20',
-    '  --combat-trajectory-coverage-mode <mode>  Multi-trajectory aim mode: off|shadow|live-single|live-volley. Default: shadow',
+    '  --combat-trajectory-coverage-mode <mode>  Multi-trajectory aim mode: off|shadow|live-single|live-volley. Default: live-single',
+    '  --no-combat-robust-dodge  Disable robust Dodge schedule/trajectory uncertainty for rollback',
+    '  --no-combat-close-band-reserve  Disable the two-shot close-band reserve for rollback',
     '  --ws-trace              Write decoded WebSocket frame/command trace to ws.jsonl',
     '  --no-ws-trace           Disable WebSocket trace logging',
     '  --ws-trace-summary-only  Log WebSocket frame summaries without decoded payloads',

@@ -20,7 +20,8 @@ function shouldApplyTrajectoryCoverageCore(input = {}) {
     && input.highEntropy === true
     && input.successfulAimProtected !== true
     && input.planActive === true
-    && input.hasSelection === true;
+    && input.hasSelection === true
+    && input.improvementQualified === true;
 }
 
 function finiteNumber(value, fallback = null) {
@@ -302,6 +303,51 @@ function candidateCoverageMetrics(before, shot, paths, input, options) {
   return { mass, hardMass };
 }
 
+function weightedPercentile(rows = [], ratio = 0.75) {
+  const sorted = rows
+    .filter(row => Number.isFinite(Number(row.value)) && Number(row.weight) > 0)
+    .sort((a, b) => Number(a.value) - Number(b.value));
+  if (!sorted.length) return Infinity;
+  const total = sorted.reduce((sum, row) => sum + Number(row.weight), 0);
+  const threshold = total * Math.max(0, Math.min(1, Number(ratio)));
+  let cumulative = 0;
+  for (const row of sorted) {
+    cumulative += Number(row.weight);
+    if (cumulative >= threshold) return Number(row.value);
+  }
+  return Number(sorted.at(-1).value);
+}
+
+function robustShotMissCore(shot, paths, input, options = {}) {
+  if (!shot) return { expectedMissCm: Infinity, robustMissCm: Infinity };
+  const rows = paths.map(path => ({
+    value: shotCorridorMissCore(shot, path, input, options),
+    weight: path.weight
+  }));
+  return {
+    expectedMissCm: rows.reduce((sum, row) => sum + Number(row.weight || 0) * Number(row.value || 0), 0),
+    robustMissCm: weightedPercentile(rows, 0.75)
+  };
+}
+
+function baselineShotCore(input = {}, options = {}) {
+  const origin = input.predictedShooterOrigin;
+  const aim = input.baselineAim;
+  if (!origin || !aim) return null;
+  const direction = normalizeVector(Number(aim.x) - Number(origin.x), Number(aim.y) - Number(origin.y));
+  if (!(direction.length > 0)) return null;
+  const startTick = Number(input.createdTick || 0);
+  return {
+    id: 'baseline-aim',
+    startX: Number(origin.x),
+    startY: Number(origin.y),
+    directionX: direction.x,
+    directionY: direction.y,
+    startTick,
+    expireTick: startTick + Math.max(1, Number(options.bulletLifetimeTicks || DEFAULT_BULLET_LIFETIME_TICKS))
+  };
+}
+
 function summarizeClusters(paths, selectedCoverage) {
   const clusters = new Map();
   for (const path of paths) {
@@ -414,6 +460,18 @@ function buildTrajectoryCoveragePlanCore(input = {}, options = {}) {
     || b.routeProbability - a.routeProbability
     || a.radialGapCm - b.radialGapCm);
   const selected = candidates[0] || null;
+  const baselineMiss = robustShotMissCore(baselineShotCore(input, options), paths, input, options);
+  const selectedMiss = robustShotMissCore(selected, paths, input, options);
+  const expectedMissImprovementCm = Number.isFinite(baselineMiss.expectedMissCm) && Number.isFinite(selectedMiss.expectedMissCm)
+    ? Math.max(0, baselineMiss.expectedMissCm - selectedMiss.expectedMissCm)
+    : 0;
+  const minimumImprovementCm = Math.max(
+    Number(options.minimumAimImprovementCm ?? 100),
+    Number.isFinite(baselineMiss.expectedMissCm)
+      ? baselineMiss.expectedMissCm * Math.max(0, Number(options.minimumAimImprovementRatio ?? 0.20))
+      : Infinity
+  );
+  const improvementQualified = expectedMissImprovementCm >= minimumImprovementCm;
   const selectedCoverage = selected
     ? coverageWithCandidate(before, selected, paths, input, options)
     : null;
@@ -434,11 +492,22 @@ function buildTrajectoryCoveragePlanCore(input = {}, options = {}) {
     hardCoverageMassAfter: Number(selected.hardCoverageMassAfter.toFixed(4)),
     marginalCoverage: Number(selected.marginalCoverage.toFixed(4)),
     hardMarginalCoverage: Number(selected.hardMarginalCoverage.toFixed(4)),
+    baselineRobustMissCm: Number.isFinite(baselineMiss.robustMissCm) ? Math.round(baselineMiss.robustMissCm) : null,
+    selectedRobustMissCm: Number.isFinite(selectedMiss.robustMissCm) ? Math.round(selectedMiss.robustMissCm) : null,
+    baselineExpectedMissCm: Number.isFinite(baselineMiss.expectedMissCm) ? Math.round(baselineMiss.expectedMissCm) : null,
+    selectedExpectedMissCm: Number.isFinite(selectedMiss.expectedMissCm) ? Math.round(selectedMiss.expectedMissCm) : null,
+    expectedMissImprovementCm: Math.round(expectedMissImprovementCm),
+    minimumImprovementCm: Number.isFinite(minimumImprovementCm) ? Math.round(minimumImprovementCm) : null,
+    improvementQualified,
     directionState: selected.directionState || null
   } : null;
   return {
     active: qualified,
-    reason: selected ? (qualified ? 'marginal-coverage-selected' : 'marginal-coverage-below-threshold') : 'no-shot-candidates',
+    reason: selected
+      ? (qualified
+          ? (improvementQualified ? 'marginal-coverage-selected' : 'aim-improvement-below-threshold')
+          : 'marginal-coverage-below-threshold')
+      : 'no-shot-candidates',
     selected: selectedSummary,
     existingCoverageMass: Number(before.mass.toFixed(4)),
     existingHardCoverageMass: Number(before.hardMass.toFixed(4)),

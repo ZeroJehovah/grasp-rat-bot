@@ -62,8 +62,10 @@ function directionThreatCore(threatField = [], direction = {}) {
 
 function movementThreatSafeCore(threat, minimumCpaCm = 200) {
   if (!threat) return true;
+  const worstCaseCpa = Number(threat.worstCaseCpaCm ?? threat.minCPA ?? Infinity);
   return Number(threat.directHits || 0) === 0
-    && Number(threat.minCPA ?? Infinity) >= Math.max(1, Number(minimumCpaCm || 200));
+    && threat.scheduleRobust !== false
+    && worstCaseCpa >= Math.max(1, Number(minimumCpaCm || 200));
 }
 
 /**
@@ -206,29 +208,71 @@ function velocityScheduleVariants(currentVelocity, direction, options = {}) {
     }
   ];
   const sampleCount = Math.max(0, Number(timing.sampleCount || 0));
+  const medianTicks = Math.max(0, Number(timing.medianTicks || 0));
+  const p90Ticks = Math.max(commandDelayTicks, Number(timing.p90Ticks || commandDelayTicks));
   const madTicks = Math.max(0, Number(timing.madTicks || 0));
-  const lowConfidence = pendingEvents.length > 0 && (sampleCount < 4 || madTicks > 1);
-  const variants = [{ name: 'expected', events: expected }];
-  if (lowConfidence) {
-    const uncertainty = Math.max(1, Math.ceil(madTicks || 1));
-    const shifted = shift => {
-      let previousTick = -1;
-      return expected.map(event => {
-        const desired = Math.max(0, Number(event.effectiveAfterTicks) + shift);
-        const effectiveAfterTicks = Math.max(desired, previousTick + (previousTick >= 0 ? 1 : 0));
-        previousTick = effectiveAfterTicks;
-        return { ...event, effectiveAfterTicks };
-      });
+  const timingUncertaintyTicks = Math.max(
+    1,
+    Math.ceil(madTicks * 2),
+    Math.ceil(Math.max(0, p90Ticks - medianTicks))
+  );
+  if (options.robustScheduleEnabled === false) {
+    return {
+      variants: [{ name: 'expected', events: expected }],
+      pending,
+      commandDelayTicks,
+      candidateEffectiveAfterTicks,
+      timingUncertaintyTicks: 0,
+      confidence: 'legacy-expected-only'
     };
-    variants.push({ name: 'early-pending', events: shifted(-uncertainty) });
-    variants.push({ name: 'late-pending', events: shifted(uncertainty) });
+  }
+  const lowConfidence = sampleCount < 4 || madTicks > 1;
+  const currentHold = !pendingEvents.length
+    ? expected
+    : (direction.holdCurrent ? [] : [{
+        commandId: null,
+        dx: direction.dx,
+        dy: direction.dy,
+        vx: candidateVelocity.vx,
+        vy: candidateVelocity.vy,
+        effectiveAfterTicks: candidateEffectiveAfterTicks + timingUncertaintyTicks,
+        source: 'candidate-after-current-hold'
+      }]);
+  const variants = [
+    { name: 'current-hold', events: currentHold },
+    { name: 'expected', events: expected }
+  ];
+  const shifted = shift => {
+    let previousTick = -1;
+    return expected.map(event => {
+      const desired = Math.max(0, Number(event.effectiveAfterTicks) + shift);
+      const effectiveAfterTicks = Math.max(desired, previousTick + (previousTick >= 0 ? 1 : 0));
+      previousTick = effectiveAfterTicks;
+      return { ...event, effectiveAfterTicks };
+    });
+  };
+  // A velocity request is not authoritative until a matching server velocity
+  // transition is visible. Always evaluate a late transition, even when the
+  // rolling timing distribution is otherwise stable.
+  variants.push({ name: 'late-transition', events: shifted(timingUncertaintyTicks) });
+  if (lowConfidence) {
+    variants.push({ name: 'early-transition', events: shifted(-timingUncertaintyTicks) });
+  }
+  const uniqueVariants = [];
+  const signatures = new Set();
+  for (const variant of variants) {
+    const signature = variant.events.map(event => `${event.dx},${event.dy},${event.effectiveAfterTicks}`).join('|');
+    if (signatures.has(signature)) continue;
+    signatures.add(signature);
+    uniqueVariants.push(variant);
   }
   return {
-    variants,
+    variants: uniqueVariants,
     pending,
     commandDelayTicks,
     candidateEffectiveAfterTicks,
-    confidence: lowConfidence ? 'low-worst-branch' : (pending.length ? 'measured-schedule' : 'no-pending-command')
+    timingUncertaintyTicks,
+    confidence: lowConfidence ? 'low-worst-branch' : (pending.length ? 'measured-robust-schedule' : 'candidate-robust-schedule')
   };
 }
 
@@ -317,7 +361,10 @@ function calculateDodgeDirection(self, bullets, options = {}) {
     let avoidableHits = 0;
     let unavoidableHits = 0;
     let minCPA = Infinity;
+    let rawMinCPA = Infinity;
     let minTTI = Infinity;
+    let scheduleRobust = true;
+    let unconfirmedTransitionRisk = false;
     const bulletRisks = [];
     const schedule = velocityScheduleVariants(observedVelocity, dir, {
       ...options,
@@ -334,6 +381,9 @@ function calculateDodgeDirection(self, bullets, options = {}) {
       const directionY = Number(bullet.direction?.dy);
       const bulletSpeed = Number(bullet.speed || COMBAT_CONSTANTS.BULLET_SPEED_CM_PER_TICK);
       let cpa = Number(bullet.cpa ?? bullet.distance ?? Infinity);
+      let currentHoldCpa = cpa;
+      let expectedCpa = cpa;
+      let lateCpa = cpa;
       if ([bulletX, bulletY, directionX, directionY, bulletSpeed].every(Number.isFinite)) {
         cpa = Infinity;
         const ttiTicks = Math.max(1, Math.ceil(tti / tickMs));
@@ -356,10 +406,34 @@ function calculateDodgeDirection(self, bullets, options = {}) {
             selfY += velocity.vy;
           }
           cpa = Math.min(cpa, variantCpa);
+          if (variant.name === 'current-hold') currentHoldCpa = variantCpa;
+          if (variant.name === 'expected') expectedCpa = variantCpa;
+          if (variant.name === 'late-transition') lateCpa = variantCpa;
         }
       }
 
-      if (cpa < hitRadius) {
+      const trajectoryResidualCm = Math.max(0, Number(
+        bullet.trajectoryResidualCm
+          ?? bullet.trajectory_residual_cm
+          ?? 0
+      ));
+      const trajectoryUncertaintyCm = options.robustScheduleEnabled === false
+        ? 0
+        : Math.min(260, Math.max(
+        trajectoryResidualCm,
+        Number(bullet.trajectoryUncertaintyCm ?? bullet.trajectory_uncertainty_cm ?? 0)
+      ));
+      const robustCpa = Math.max(0, cpa - trajectoryUncertaintyCm);
+      const currentHoldRobustCpa = Math.max(0, currentHoldCpa - trajectoryUncertaintyCm);
+      const expectedRobustCpa = Math.max(0, expectedCpa - trajectoryUncertaintyCm);
+      const lateRobustCpa = Math.max(0, lateCpa - trajectoryUncertaintyCm);
+      const expectedHit = expectedRobustCpa < hitRadius;
+      const lateHit = lateRobustCpa < hitRadius;
+      const currentHoldHit = currentHoldRobustCpa < hitRadius;
+      if (!expectedHit && (currentHoldHit || lateHit)) unconfirmedTransitionRisk = true;
+      if (robustCpa < hitRadius) scheduleRobust = false;
+
+      if (robustCpa < hitRadius) {
         directHits++;
         if (tti < reactionBudgetMs) unavoidableHits++;
         else avoidableHits++;
@@ -380,10 +454,20 @@ function calculateDodgeDirection(self, bullets, options = {}) {
         speed: Number.isFinite(bulletSpeed) ? bulletSpeed : null,
         timeToImpact: Number.isFinite(tti) ? tti : null,
         cpa: Number.isFinite(cpa) ? cpa : null,
-        predictedHit: cpa < hitRadius,
-        avoidable: cpa < hitRadius && tti >= reactionBudgetMs
+        worstCaseCpaCm: Number.isFinite(robustCpa) ? robustCpa : null,
+        currentHoldCpaCm: Number.isFinite(currentHoldRobustCpa) ? currentHoldRobustCpa : null,
+        expectedCpaCm: Number.isFinite(expectedRobustCpa) ? expectedRobustCpa : null,
+        lateCpaCm: Number.isFinite(lateRobustCpa) ? lateRobustCpa : null,
+        trajectoryResidualCm,
+        trajectoryUncertaintyCm,
+        predictedHit: robustCpa < hitRadius,
+        currentHoldHit,
+        expectedHit,
+        lateHit,
+        avoidable: robustCpa < hitRadius && tti >= reactionBudgetMs
       });
-      if (cpa < minCPA) minCPA = cpa;
+      if (cpa < rawMinCPA) rawMinCPA = cpa;
+      if (robustCpa < minCPA) minCPA = robustCpa;
       if (tti < minTTI) minTTI = tti;
     }
 
@@ -392,7 +476,7 @@ function calculateDodgeDirection(self, bullets, options = {}) {
       self,
       targetFutureTicks,
       observedVelocity,
-      schedule.variants[0].events
+      (schedule.variants.find(variant => variant.name === 'expected') || schedule.variants[0]).events
     );
     return {
       dx: dir.dx,
@@ -401,19 +485,36 @@ function calculateDodgeDirection(self, bullets, options = {}) {
       avoidableHits,
       unavoidableHits,
       minCPA,
+      rawMinCPA,
+      worstCaseCpaCm: minCPA,
       minTTI,
       commandDelayTicks,
       candidateEffectiveAfterTicks: schedule.candidateEffectiveAfterTicks,
       observedVelocity,
       pendingVelocityCommand: schedule.pending[0] || null,
-      predictedVelocitySchedule: schedule.variants[0].events.map(event => ({
+      predictedVelocitySchedule: (schedule.variants.find(variant => variant.name === 'expected') || schedule.variants[0]).events.map(event => ({
         commandId: event.commandId,
         dx: event.dx,
         dy: event.dy,
         effectiveAfterTicks: event.effectiveAfterTicks,
         source: event.source
       })),
+      velocityScheduleVariants: schedule.variants.slice(0, 4).map(variant => ({
+        name: variant.name,
+        events: variant.events.map(event => ({
+          commandId: event.commandId,
+          dx: event.dx,
+          dy: event.dy,
+          effectiveAfterTicks: event.effectiveAfterTicks,
+          source: event.source
+        }))
+      })),
       velocityScheduleConfidence: schedule.confidence,
+      timingUncertaintyTicks: schedule.timingUncertaintyTicks,
+      scheduleRobust,
+      robustClassification: scheduleRobust ? 'robust-safe' : 'robust-unsafe',
+      unconfirmedTransitionRisk,
+      trajectoryResidualCm: Math.max(0, ...bulletRisks.map(item => Number(item.trajectoryResidualCm || 0))),
       reactionBudgetMs,
       dangerousBullets: bulletRisks
         .sort((left, right) => Number(right.predictedHit) - Number(left.predictedHit)

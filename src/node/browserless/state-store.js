@@ -75,6 +75,74 @@ function normalizeBullet(bullet, meta) {
   };
 }
 
+function bulletKey(bullet) {
+  const id = bullet?.bullet_id ?? bullet?.bulletId ?? bullet?.id;
+  if (id !== null && id !== undefined && id !== '') return `bullet:${id}`;
+  const owner = bullet?.owner_user_id ?? bullet?.ownerId ?? bullet?.owner_id ?? '';
+  const created = bullet?.created_tick ?? bullet?.createdTick ?? '';
+  const startX = bullet?.start_x ?? bullet?.startX ?? '';
+  const startY = bullet?.start_y ?? bullet?.startY ?? '';
+  return owner !== '' || created !== '' ? `trajectory:${owner}:${created}:${startX}:${startY}` : '';
+}
+
+function bulletDirectionAndSpeed(bullet) {
+  let dx = numericOrNull(bullet?.dir_x ?? bullet?.direction?.dx);
+  let dy = numericOrNull(bullet?.dir_y ?? bullet?.direction?.dy);
+  const microsX = numericOrNull(bullet?.dir_x_micros);
+  const microsY = numericOrNull(bullet?.dir_y_micros);
+  if (dx === null && microsX !== null) dx = microsX / 1000000;
+  if (dy === null && microsY !== null) dy = microsY / 1000000;
+  if (dx === null || dy === null) {
+    const startX = numericOrNull(bullet?.start_x ?? bullet?.startX);
+    const startY = numericOrNull(bullet?.start_y ?? bullet?.startY);
+    const targetX = numericOrNull(bullet?.target_x ?? bullet?.targetX);
+    const targetY = numericOrNull(bullet?.target_y ?? bullet?.targetY);
+    if ([startX, startY, targetX, targetY].every(value => value !== null)) {
+      const length = Math.hypot(targetX - startX, targetY - startY);
+      if (length > 0) {
+        dx = (targetX - startX) / length;
+        dy = (targetY - startY) / length;
+      }
+    }
+  }
+  return {
+    dx,
+    dy,
+    speed: Math.max(1, numericOrNull(bullet?.speed_per_tick ?? bullet?.speedPerTick ?? bullet?.speed) ?? 500)
+  };
+}
+
+function bulletTrajectorySummary(history) {
+  const observations = Array.isArray(history?.observations) ? history.observations : [];
+  const residuals = [];
+  let largestGapTicks = 1;
+  for (let index = 1; index < observations.length; index += 1) {
+    const previous = observations[index - 1];
+    const current = observations[index];
+    const tickGap = Math.max(1, Number(current.tick) - Number(previous.tick));
+    largestGapTicks = Math.max(largestGapTicks, tickGap);
+    if ([previous.x, previous.y, current.x, current.y, current.dx, current.dy, current.speed].every(Number.isFinite)) {
+      const predictedX = Number(previous.x) + Number(current.dx) * Number(current.speed) * tickGap;
+      const predictedY = Number(previous.y) + Number(current.dy) * Number(current.speed) * tickGap;
+      residuals.push(Math.hypot(Number(current.x) - predictedX, Number(current.y) - predictedY));
+    }
+  }
+  const residualCm = residuals.length ? Math.max(...residuals.slice(-4)) : 0;
+  const insufficientObservation = observations.length < 3;
+  const uncertaintyCm = Math.min(260, Math.max(
+    residualCm,
+    insufficientObservation ? 180 : 0,
+    Math.max(0, largestGapTicks - 1) * 50
+  ));
+  return {
+    trajectoryObservationCount: observations.length,
+    trajectoryResidualCm: Math.round(residualCm),
+    trajectoryUncertaintyCm: Math.round(uncertaintyCm),
+    trajectoryFrameGapTicks: largestGapTicks,
+    trajectoryConfidence: insufficientObservation ? 'insufficient-observation' : 'bounded-history'
+  };
+}
+
 function normalizeCoinDrop(drop, meta) {
   if (!drop || typeof drop !== 'object') return null;
   return {
@@ -175,6 +243,7 @@ function createInitialState(userId = 0) {
       entitiesByKey: {},
       entitiesByUserId: {},
       bullets: [],
+      bulletTrajectories: {},
       coinDrops: []
     },
     snapshot: {
@@ -300,8 +369,43 @@ function createBrowserlessStateStore(options = {}) {
     state.realtime.entities = normalizedEntities;
     state.realtime.entitiesByKey = entitiesByKey;
     state.realtime.entitiesByUserId = entitiesByUserId;
+    const trajectoryTtlMs = 2000;
+    for (const [key, history] of Object.entries(state.realtime.bulletTrajectories)) {
+      if (meta.receivedAtMs - Number(history.lastSeenAtMs || 0) > trajectoryTtlMs) delete state.realtime.bulletTrajectories[key];
+    }
+    for (const bullet of bullets) {
+      const key = bulletKey(bullet);
+      if (!key) continue;
+      const current = state.realtime.bulletTrajectories[key] || { observations: [] };
+      const x = numericOrNull(bullet.x ?? bullet.current_x ?? bullet.currentX);
+      const y = numericOrNull(bullet.y ?? bullet.current_y ?? bullet.currentY);
+      const direction = bulletDirectionAndSpeed(bullet);
+      if (x !== null && y !== null && meta.tick !== null) {
+        current.observations = current.observations.concat([{
+          tick: meta.tick,
+          atMs: meta.receivedAtMs,
+          x,
+          y,
+          ...direction
+        }]).slice(-5);
+      }
+      current.lastSeenAtMs = meta.receivedAtMs;
+      state.realtime.bulletTrajectories[key] = current;
+    }
+    const retainedTrajectoryKeys = Object.entries(state.realtime.bulletTrajectories)
+      .sort((a, b) => Number(b[1].lastSeenAtMs || 0) - Number(a[1].lastSeenAtMs || 0))
+      .slice(0, 32)
+      .map(([key]) => key);
+    const retainedTrajectoryKeySet = new Set(retainedTrajectoryKeys);
+    for (const key of Object.keys(state.realtime.bulletTrajectories)) {
+      if (!retainedTrajectoryKeySet.has(key)) delete state.realtime.bulletTrajectories[key];
+    }
     state.realtime.bullets = bullets
-      .map(bullet => normalizeBullet(bullet, { ...meta, authority: 'realtime', source: 'pos' }))
+      .map(bullet => {
+        const normalized = normalizeBullet(bullet, { ...meta, authority: 'realtime', source: 'pos' });
+        const history = state.realtime.bulletTrajectories[bulletKey(bullet)];
+        return normalized && history ? { ...normalized, ...bulletTrajectorySummary(history) } : normalized;
+      })
       .filter(Boolean);
     state.realtime.coinDrops = coinDrops
       .map(drop => normalizeCoinDrop(drop, { ...meta, authority: 'realtime', source: 'pos' }))

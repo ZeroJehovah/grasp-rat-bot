@@ -26,7 +26,10 @@ const {
   pickSafeClosingDodgeCore,
   selectCombatMovementArbitrationCore
 } = require('../src/strategy/combat-movement');
-const { buildTrajectoryCoveragePlanCore } = require('../src/strategy/combat-shot-coverage');
+const {
+  buildTrajectoryCoveragePlanCore,
+  shouldApplyTrajectoryCoverageCore
+} = require('../src/strategy/combat-shot-coverage');
 const {
   combatEdgePressureDecisionCore,
   combatEscapeDecisionCore
@@ -40,6 +43,7 @@ const {
   determineCombatFireState,
   evaluateCombatFireBudgetCore,
   evaluateHighEntropyFireGateCore,
+  updateCloseBandReserveCore,
   updateCombatProbePhaseCore
 } = require('../src/strategy/combat-fire-discipline');
 const {
@@ -500,7 +504,8 @@ function replayCombatExchangeStopLoss(rows) {
 }
 
 function replayCombat(options) {
-  const rows = selectedEntries(options).filter(({ detail }) => String(detail.target?.userId ?? '') === options.targetId);
+  const allRows = selectedEntries(options);
+  const rows = allRows.filter(({ detail }) => String(detail.target?.userId ?? '') === options.targetId);
   const confirmedShots = confirmedShotsForRows(options, rows);
   const state = { motionSamples: [] };
   const baselineMisses = [];
@@ -585,6 +590,7 @@ function replayCombat(options) {
             y: Number(shot.ack.start_y)
           },
           predictedTargetAtCreation: improved.predictedTargetAtCreation,
+          baselineAim: { x: Number(improved.x), y: Number(improved.y) },
           target: row.detail.target,
           routeCandidates: improved.routeCoverage.candidates,
           existingShots: trajectoryCoverageVirtualShots
@@ -598,11 +604,14 @@ function replayCombat(options) {
     const coverageRecentShotCount = Number(row.detail.shooting?.recentAcceptedShotCount || 0);
     const coverageRecentHitRate = Number(row.detail.shooting?.recentAcceptedHitRate || 0);
     const coverageSuccessfulAimProtected = coverageRecentShotCount >= 10 && coverageRecentHitRate >= 0.12;
-    const coverageApplied = Boolean(
-      coveragePlan?.active
-      && coveragePlan.selected
-      && !coverageSuccessfulAimProtected
-    );
+    const coverageApplied = shouldApplyTrajectoryCoverageCore({
+      mode: 'live-single',
+      highEntropy: coverageEligible,
+      successfulAimProtected: coverageSuccessfulAimProtected,
+      planActive: coveragePlan?.active === true,
+      hasSelection: Boolean(coveragePlan?.selected),
+      improvementQualified: coveragePlan?.selected?.improvementQualified === true
+    });
     const coverageAim = coverageApplied
       ? { x: coveragePlan.selected.aimX, y: coveragePlan.selected.aimY }
       : improved;
@@ -649,6 +658,11 @@ function replayCombat(options) {
       improvedMiss,
       trajectoryCoverageMiss,
       trajectoryCoveragePlan: coveragePlan,
+      coverageApplied,
+      line: row.line,
+      at: Number(shot.at || 0),
+      distance: numberOrNull(row.detail.target?.distance),
+      closePressure: Boolean(row.detail.combatPhase?.active || row.detail.shooting?.closePressure),
       aimMode: improved.mode || '',
       hypothesis: improved.motionProbe?.hypothesis || 'baseline',
       routeStyle: improved.routeCoverage?.style || '',
@@ -667,6 +681,7 @@ function replayCombat(options) {
         : (improved.fireRiskClassification || null),
       fireReachability: improved.fireReachability || null,
       theoreticalMinimumMiss: theoreticalShotMinimumMiss(rows, shot.ack),
+      routeCandidateMisses,
       routeContextKey: String(improved.routeCoverage?.contextKey || ''),
       routeCandidate: String(improved.routeCoverage?.selected || ''),
       behaviorMode: String(row.detail.behavior?.mode || ''),
@@ -947,6 +962,34 @@ function replayCombat(options) {
       .sort((a, b) => b.count - a.count || a.key.localeCompare(b.key))
       .slice(0, 12)
   };
+  const closePressureRows = shotEvaluations
+    .filter(item => item.closePressure || (Number(item.line) >= 1395 && Number(item.line) <= 1661));
+  const closePressureCoverageMisses = closePressureRows
+    .map(item => Number(item.trajectoryCoverageMiss))
+    .filter(Number.isFinite);
+  const closePressureCoverageReplay = {
+    shots: closePressureCoverageMisses.length,
+    estimatedHits: closePressureCoverageMisses.filter(value => value <= options.hitRadius).length,
+    p50AimMissCm: percentile(closePressureCoverageMisses, 0.5),
+    p90AimMissCm: percentile(closePressureCoverageMisses, 0.9),
+    shootingStaminaCost: closePressureCoverageMisses.length * 500,
+    nearestSamples: closePressureRows
+      .sort((left, right) => Number(left.trajectoryCoverageMiss) - Number(right.trajectoryCoverageMiss))
+      .slice(0, 8)
+      .map(item => ({
+        line: item.line,
+        at: item.shot?.entry?.at || (item.at ? new Date(item.at).toISOString() : ''),
+        missCm: Number(item.trajectoryCoverageMiss.toFixed(1)),
+        theoreticalMinimumMissCm: Number(Number(item.theoreticalMinimumMiss).toFixed(1)),
+        applied: item.coverageApplied,
+        selected: item.trajectoryCoveragePlan?.selected || null,
+        reason: item.trajectoryCoveragePlan?.reason || ''
+        ,bestRouteMisses: Object.entries(item.routeCandidateMisses || {})
+          .sort((a, b) => Number(a[1]) - Number(b[1]))
+          .slice(0, 3)
+          .map(([route, miss]) => ({ route, missCm: Number(Number(miss).toFixed(1)) }))
+      }))
+  };
   const result = {
     mode: 'combat',
     targetId: options.targetId,
@@ -995,6 +1038,8 @@ function replayCombat(options) {
     fireDisciplineReplay,
     physicalReachability,
     trajectoryCoverageReplay,
+    closePressureCoverageReplay,
+    targetSwitchReplay: replayTargetSwitchHysteresis(allRows),
     aimDiagnostics,
     routeCandidateOracle
   };
@@ -1010,6 +1055,87 @@ function replayCombat(options) {
       ))
   );
   return result;
+}
+
+function replayTargetSwitchHysteresis(rows = []) {
+  const observations = rows
+    .map(row => ({
+      at: Date.parse(row.entry.at || ''),
+      tick: numberOrNull(row.detail.tick),
+      id: String(row.detail.target?.userId ?? row.detail.target?.user_id ?? ''),
+      intent: String(row.detail.target?.combatIntent || ''),
+      dangerousBullets: row.detail.movement?.dodge?.threatField?.[0]?.dangerousBullets || []
+    }))
+    .filter(item => Number.isFinite(item.at) && item.id);
+  if (!observations.length) {
+    return { historicalSwitches: 0, confirmedSwitches: 0, maxSwitchesIn10s: 0, oscillatingSwitches: 0, events: [], accepted: true };
+  }
+  const historical = [];
+  let historicalTarget = observations[0];
+  for (const item of observations.slice(1)) {
+    if (historicalTarget.id === item.id) continue;
+    historical.push({ from: historicalTarget, to: item, at: item.at });
+    historicalTarget = item;
+  }
+  let selected = observations[0];
+  let pending = null;
+  let lastSwitch = null;
+  const accepted = [];
+  for (const item of observations.slice(1)) {
+    if (item.id === selected.id) {
+      selected = item;
+      pending = null;
+      continue;
+    }
+    const urgent = item.intent === 'defensive' && item.dangerousBullets.some(bullet => (
+      String(bullet.ownerId ?? bullet.owner_id ?? '') === item.id
+        && bullet.predictedHit === true
+        && Number(bullet.timeToImpact || Infinity) <= 400
+    ));
+    if (urgent) {
+      accepted.push({ from: selected, to: item, at: item.at, reason: 'urgent-incoming-shooter' });
+      selected = item;
+      pending = null;
+      lastSwitch = accepted.at(-1);
+      continue;
+    }
+    if (lastSwitch
+      && lastSwitch.from.id === item.id
+      && lastSwitch.to.id === selected.id
+      && item.at - lastSwitch.at <= 10000) {
+      pending = null;
+      continue;
+    }
+    pending = pending && pending.id === item.id
+      ? { ...pending, ticks: pending.ticks + 1, last: item }
+      : { id: item.id, ticks: 1, first: item, last: item };
+    if (pending.ticks >= 3) {
+      accepted.push({ from: selected, to: item, at: item.at, reason: 'ordinary-switch-confirmed' });
+      selected = item;
+      lastSwitch = accepted.at(-1);
+      pending = null;
+    }
+  }
+  const oscillations = accepted.filter((event, index) => index > 0
+    && accepted[index - 1].from.id === event.to.id
+    && accepted[index - 1].to.id === event.from.id
+    && event.at - accepted[index - 1].at <= 10000);
+  const maxSwitchesIn10s = accepted.reduce((max, event) => Math.max(max,
+    accepted.filter(candidate => candidate.at >= event.at && candidate.at <= event.at + 10000).length
+  ), 0);
+  return {
+    historicalSwitches: historical.length,
+    confirmedSwitches: accepted.length,
+    maxSwitchesIn10s,
+    oscillatingSwitches: oscillations.length,
+    events: accepted.slice(0, 16).map(event => ({
+      at: new Date(event.at).toISOString(),
+      fromTargetId: event.from.id,
+      toTargetId: event.to.id,
+      reason: event.reason
+    })),
+    accepted: maxSwitchesIn10s <= 1 && oscillations.length === 0
+  };
 }
 
 function replayCombatShotCoverage(options) {
@@ -1440,6 +1566,7 @@ function replayDodge(options) {
   let oldFalseSafe = 0;
   let newFalseSafe = 0;
   let unavoidable = 0;
+  let robustUnavoidable = 0;
   let oldFalseSafeUnavoidable = 0;
   let recoveredByFullTrajectory = 0;
   let recoveredAfterStaticTti = 0;
@@ -1474,6 +1601,7 @@ function replayDodge(options) {
       reconstruction?.minTTIMs ?? threat.minTTI ?? Infinity
     ) < reactionBudgetMs;
     const recovered = Boolean(reconstruction && Number(reconstruction.replayedSelected.directHits || 0) > 0);
+    if (oldSafe && effectiveUnavoidable && !recovered) robustUnavoidable += 1;
     if (effectiveUnavoidable) oldFalseSafeUnavoidable += 1;
     if (reconstruction) {
       reconstructedEvents += 1;
@@ -1531,7 +1659,11 @@ function replayDodge(options) {
     reactionBudgetMs,
     oldFalseSafe,
     newFalseSafe,
+    robustFalseSafe: newFalseSafe,
+    robustSafeHitEvents: newFalseSafe,
+    robustUnsafeRecoveredEvents: recoveredByFullTrajectory,
     unavoidableCurrentShot: unavoidable,
+    robustUnavoidableCurrentShot: robustUnavoidable,
     oldFalseSafeUnavoidable,
     reconstructedEvents,
     reconstructedOldFalseSafe,
@@ -1970,6 +2102,28 @@ function closePressureDistanceStats(values = []) {
   };
 }
 
+function replayVirtualShotMiss(rows, startIndex, detail, aim) {
+  const origin = detail.aim?.predictedShooterOrigin || detail.self || null;
+  const startTick = numberOrNull(detail.aim?.timing?.createdTickEstimate)
+    ?? (numberOrNull(detail.tick) === null ? null : Number(detail.tick) + 3);
+  if (!origin || !aim || startTick === null) return Infinity;
+  const direction = normalizeVector(Number(aim.x) - Number(origin.x), Number(aim.y) - Number(origin.y));
+  if (!(Math.hypot(direction.x, direction.y) > 0)) return Infinity;
+  let minimum = Infinity;
+  for (let index = startIndex; index < rows.length; index += 1) {
+    const tick = numberOrNull(rows[index].detail?.tick);
+    const target = rows[index].detail?.target;
+    if (tick === null || !target) continue;
+    if (tick < startTick) continue;
+    if (tick > startTick + 30) break;
+    const elapsedTicks = tick - startTick;
+    const bulletX = Number(origin.x) + direction.x * 500 * elapsedTicks;
+    const bulletY = Number(origin.y) + direction.y * 500 * elapsedTicks;
+    minimum = Math.min(minimum, Math.hypot(bulletX - Number(target.x), bulletY - Number(target.y)));
+  }
+  return minimum;
+}
+
 function closePressureThreatFrame(detail = {}) {
   const threatField = detail.movement?.dodge?.threatField || [];
   return Boolean(
@@ -2005,6 +2159,14 @@ function replayClosePressureMovement(rows = [], options = {}) {
   let pressureAttackBudgetUnlockFrames = 0;
   let pressureAttackCadenceMs = null;
   let firstPressureAttack = null;
+  let closeBandReserve = null;
+  let hypotheticalAcceptedShots = null;
+  let lastReserveShotAt = 0;
+  let reserveShotsFired = 0;
+  let firstReserveEligibleAt = 0;
+  let firstReserveShotAt = 0;
+  let reserveCoverageQualifiedFrames = 0;
+  const reserveShotMisses = [];
   const distances = [];
   const samples = [];
   for (let index = 0; index < rows.length; index += 1) {
@@ -2037,15 +2199,39 @@ function replayClosePressureMovement(rows = [], options = {}) {
         closePressureReserveMs: 2600,
         shotCostMs: 500
       });
+      const coverage = detail.shooting?.trajectoryCoverage || {};
+      const fireGate = {
+        ...(detail.shooting?.highEntropyFireGate || {}),
+        active: true,
+        suppressFire: true,
+        reason: 'shared-fire-budget-exhausted'
+      };
+      if (hypotheticalAcceptedShots === null) {
+        const initialBudget = evaluateCombatFireBudgetCore({
+          targetId: options.targetId,
+          acceptedShotsSinceDamage: 0,
+          fireGate,
+          probeState: { suppressFire: false },
+          trajectoryCoverage: coverage
+        });
+        hypotheticalAcceptedShots = initialBudget.ordinaryBudgetMax;
+      }
+      closeBandReserve = updateCloseBandReserveCore(closeBandReserve, {
+        targetId: options.targetId,
+        acceptedShots: hypotheticalAcceptedShots,
+        distance,
+        coverageQualified: Boolean(coverage.active && Number(coverage.selected?.marginalCoverage || 0) >= 0.02),
+        nowMs: atMs
+      });
+      if (closeBandReserve.coverageQualified) reserveCoverageQualifiedFrames += 1;
+      if (closeBandReserve.eligible && !firstReserveEligibleAt) firstReserveEligibleAt = atMs;
       const exhaustedBudgetInput = {
         targetId: options.targetId,
-        acceptedShotsSinceDamage: 100,
-        fireGate: {
-          active: true,
-          suppressFire: true,
-          reason: 'shared-fire-budget-exhausted'
-        },
+        acceptedShotsSinceDamage: hypotheticalAcceptedShots,
+        fireGate,
         probeState: { suppressFire: true },
+        trajectoryCoverage: coverage,
+        closeBandReserve,
         closePressure: true
       };
       const baselineBudget = evaluateCombatFireBudgetCore({
@@ -2056,9 +2242,8 @@ function replayClosePressureMovement(rows = [], options = {}) {
         ...exhaustedBudgetInput,
         pressureAttack: true
       });
-      if (baselineBudget.suppressFire
-        && !pressureBudget.suppressFire
-        && pressureBudget.authorizationSource === 'close-pressure-full-attack') {
+      if (!pressureBudget.suppressFire
+        && pressureBudget.authorizationSource === 'close-band-reserve') {
         pressureAttackBudgetUnlockFrames += 1;
       }
       const fireReady = !row.detail?.exit
@@ -2071,9 +2256,21 @@ function replayClosePressureMovement(rows = [], options = {}) {
         pressureAttackCadenceMs = pressureAttackCadenceMs === null
           ? Number(fireState.cadenceMs)
           : Math.max(pressureAttackCadenceMs, Number(fireState.cadenceMs));
+        if (pressureBudget.authorizationSource === 'close-band-reserve'
+          && (!lastReserveShotAt || atMs - lastReserveShotAt >= 160)) {
+          const selectedAim = coverage.selected
+            ? { x: Number(coverage.selected.aimX), y: Number(coverage.selected.aimY) }
+            : { x: Number(detail.aim?.x), y: Number(detail.aim?.y) };
+          reserveShotMisses.push(replayVirtualShotMiss(rows, index, detail, selectedAim));
+          hypotheticalAcceptedShots += 1;
+          reserveShotsFired += 1;
+          lastReserveShotAt = atMs;
+          if (!firstReserveShotAt) firstReserveShotAt = atMs;
+        }
       } else {
         pressureAttackPausedFrames += 1;
       }
+      closeBandReserve.lastAuthorization = pressureBudget.authorizationSource;
       if (!firstPressureAttack) {
         firstPressureAttack = {
           line: row.line,
@@ -2096,7 +2293,7 @@ function replayClosePressureMovement(rows = [], options = {}) {
     let strategicMovement = '';
     let strategicDx = 0;
     let strategicDy = 0;
-    if (distance > Number(range.rangeCm)) {
+    if (distance > Number(range.rangeCm) + hysteresisCm) {
       strategicDx = Math.sign(Number(target.x) - Number(self.x));
       strategicDy = Math.sign(Number(target.y) - Number(self.y));
       strategicMovement = 'close-pressure-approach';
@@ -2190,7 +2387,20 @@ function replayClosePressureMovement(rows = [], options = {}) {
       pausedFrames: pressureAttackPausedFrames,
       budgetUnlockFrames: pressureAttackBudgetUnlockFrames,
       cadenceMs: pressureAttackCadenceMs,
-      firstCommit: firstPressureAttack
+      firstCommit: firstPressureAttack,
+      reserve: {
+        shotsFired: reserveShotsFired,
+        coverageQualifiedFrames: reserveCoverageQualifiedFrames,
+        estimatedHits: reserveShotMisses.filter(miss => miss <= 90).length,
+        missesCm: reserveShotMisses.map(miss => Number.isFinite(miss) ? Number(miss.toFixed(1)) : null),
+        p50MissCm: percentile(reserveShotMisses.filter(Number.isFinite), 0.5),
+        firstEligibleAt: firstReserveEligibleAt ? new Date(firstReserveEligibleAt).toISOString() : '',
+        firstShotAt: firstReserveShotAt ? new Date(firstReserveShotAt).toISOString() : '',
+        firstShotDelayMs: firstReserveEligibleAt && firstReserveShotAt
+          ? firstReserveShotAt - firstReserveEligibleAt
+          : null,
+        state: closeBandReserve
+      }
     },
     strictPressureBandFrames: distances.filter(distance => (
       distance >= Number(range.minRangeCm) && distance <= Number(range.maxRangeCm)
@@ -2354,6 +2564,12 @@ function replayCombatClosePressure(options) {
     noBulletControl,
     reopenedFireEligibleFrames
   };
+  const reserveReplay = threatPreserving.pressureAttack.reserve;
+  const reserveAccepted = reserveReplay.coverageQualifiedFrames > 0
+    ? (reserveReplay.shotsFired > 0
+      && reserveReplay.shotsFired <= 2
+      && Number(reserveReplay.firstShotDelayMs) <= 200)
+    : reserveReplay.shotsFired === 0;
   result.accepted = Boolean(
     trigger
       && trigger.engagedMs >= 60000
@@ -2365,8 +2581,10 @@ function replayCombatClosePressure(options) {
       && threatPreserving.unsafeSafeCloseFrames === 0
       && threatPreserving.pressureAttack.committedFrames > 0
       && threatPreserving.pressureAttack.readyFrames > 0
-      && threatPreserving.pressureAttack.budgetUnlockFrames > 0
+      && (reserveReplay.coverageQualifiedFrames === 0
+        || threatPreserving.pressureAttack.budgetUnlockFrames > 0)
       && threatPreserving.pressureAttack.cadenceMs === 160
+      && reserveAccepted
       && threatPreserving.distance.p50Cm < historical.distance.p50Cm
       && threatPreserving.distance.p50Cm <= 6000
       && threatPreserving.distance.p90Cm <= 7000

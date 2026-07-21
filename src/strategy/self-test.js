@@ -21,6 +21,7 @@ const {
   determineCombatFireState,
   evaluateCombatFireBudgetCore,
   evaluateHighEntropyFireGateCore,
+  updateCloseBandReserveCore,
   updateCombatProbePhaseCore
 } = require('./combat-fire-discipline');
 const {
@@ -157,6 +158,7 @@ const {
   combatEscapeDecisionCore,
   incomingBulletHasCollisionRiskCore,
   incomingBulletRequiresTargetSwitchCore,
+  applyCombatTargetSwitchHysteresisCore,
   pickEngagedCombatTargetCore
 } = require('./combat-target-selection');
 const {
@@ -547,16 +549,61 @@ function runStrategyModuleSelfTests() {
   );
   const dodgeMinimumHits = Math.min(...dodge.threatField.map(item => item.directHits));
   results.push({
-    name: 'future-position-threat-field-improves-old-fixed-cpa-hit',
+    name: 'future-position-threat-field-rejects-command-transition-hit',
     passed: dodge.directHits === undefined
       ? dodge.threatField.find(item => item.dx === dodge.dx && item.dy === dodge.dy)?.directHits === dodgeMinimumHits
-        && dodgeMinimumHits < 1
+        && dodgeMinimumHits === 1
+        && dodge.threatField.some(item => item.dangerousBullets?.[0]?.currentHoldHit === false
+          && item.dangerousBullets?.[0]?.expectedHit === true
+          && item.scheduleRobust === false)
         && dodge.threatField.every(item => item.dangerousBullets?.[0]?.bulletId === 'threat-1')
         && dodge.threatField[0].dangerousBullets[0].ownerId === 8
         && dodge.threatField[0].dangerousBullets[0].createdTick === 10
         && dodge.threatField[0].dangerousBullets[0].expireTick === 30
         && dodge.threatField[0].dangerousBullets[0].speed === 500
       : false
+  });
+  const scheduleRobustDodge = calculateDodgeDirection(
+    { x: 0, y: 0, vx: -50, vy: 0 },
+    [{
+      incoming: true,
+      x: -3000,
+      y: -3000,
+      distance: 4243,
+      cpa: 500,
+      timeToImpact: 500,
+      speed: 500,
+      direction: { dx: Math.SQRT1_2, dy: Math.SQRT1_2 },
+      remainingTicks: 15
+    }],
+    {
+      moveSpeedPerTick: 50,
+      tickMs: 50,
+      hitRadius: 200,
+      commandDelayTicks: 2,
+      pendingVelocityCommands: [{ commandId: 'pending-west', dx: 1, dy: 0, effectiveAfterTicks: 2 }],
+      movementExecutionTiming: { sampleCount: 10, medianTicks: 2, p90Ticks: 2, madTicks: 0 }
+    }
+  );
+  const scheduleRisk = scheduleRobustDodge.threatField
+    .find(item => item.dx === 1 && item.dy === -1)?.dangerousBullets?.[0];
+  const uncertainTrajectory = calculateDodgeDirection(
+    { x: 0, y: 0 },
+    [{ incoming: true, distance: 1000, cpa: 250, timeToImpact: 500, trajectoryUncertaintyCm: 100 }],
+    { hitRadius: 200 }
+  );
+  const stableTrajectory = calculateDodgeDirection(
+    { x: 0, y: 0 },
+    [{ incoming: true, distance: 1000, cpa: 250, timeToImpact: 500, trajectoryUncertaintyCm: 0 }],
+    { hitRadius: 200 }
+  );
+  results.push({
+    name: 'combat-dodge-rejects-false-safe-pending-schedule-and-clears-bounded-trajectory-uncertainty',
+    passed: scheduleRisk?.expectedHit === false
+      && scheduleRisk?.currentHoldHit === true
+      && scheduleRobustDodge.threatField.find(item => item.dx === 1 && item.dy === -1)?.scheduleRobust === false
+      && uncertainTrajectory.threatField.every(item => item.scheduleRobust === false)
+      && stableTrajectory.threatField.every(item => item.scheduleRobust === true)
   });
   const fullFlightDodge = calculateDodgeDirection(
     { x: 0, y: 0, vx: 0, vy: 0 },
@@ -1458,6 +1505,14 @@ function runStrategyModuleSelfTests() {
   );
   const pressureAttackBudget = evaluateCombatFireBudgetCore({
     targetId: '8',
+    acceptedShotsSinceDamage: 10,
+    fireGate: { active: true, suppressFire: true, reason: 'high-entropy-reacquire', explorationMaxShots: 15 },
+    probeState: { suppressFire: true },
+    closePressure: true,
+    pressureAttack: true
+  });
+  const invalidPressureAttackBudget = evaluateCombatFireBudgetCore({
+    targetId: '8',
     acceptedShotsSinceDamage: 100,
     fireGate: { active: true, suppressFire: true, reason: 'high-entropy-reacquire', explorationMaxShots: 15 },
     probeState: { suppressFire: true },
@@ -1472,6 +1527,49 @@ function runStrategyModuleSelfTests() {
       && pressureAttackReady.cadenceMs === COMBAT_CONSTANTS.SHOOT_EVERY_MS
       && pressureAttackBudget.suppressFire === false
       && pressureAttackBudget.authorizationSource === 'close-pressure-full-attack'
+      && invalidPressureAttackBudget.suppressFire === true
+      && invalidPressureAttackBudget.suppressionReason === 'budget-state-invalid'
+  });
+  const reserveCoverage = { active: true, selected: { marginalCoverage: 0.03 } };
+  let closeBandReserve = null;
+  for (let index = 0; index < 3; index += 1) {
+    closeBandReserve = updateCloseBandReserveCore(closeBandReserve, {
+      targetId: '8',
+      acceptedShots: 15,
+      distance: 5000,
+      coverageQualified: true,
+      nowMs: 1000 + index * 50
+    });
+  }
+  const reserveAuthorized = evaluateCombatFireBudgetCore({
+    targetId: '8',
+    acceptedShotsSinceDamage: 15,
+    fireGate: { active: true, suppressFire: true, explorationMaxShots: 15 },
+    probeState: { suppressFire: true },
+    trajectoryCoverage: reserveCoverage,
+    closeBandReserve
+  });
+  closeBandReserve.lastAuthorization = reserveAuthorized.authorizationSource;
+  const reserveAfterAck = updateCloseBandReserveCore(closeBandReserve, {
+    targetId: '8', acceptedShots: 16, distance: 5000, coverageQualified: true, nowMs: 1200
+  });
+  const noCoverageReserve = evaluateCombatFireBudgetCore({
+    targetId: '8',
+    acceptedShotsSinceDamage: 15,
+    fireGate: { active: true, suppressFire: true, explorationMaxShots: 15 },
+    probeState: { suppressFire: true },
+    trajectoryCoverage: { active: false, selected: { marginalCoverage: 0.01 } },
+    closeBandReserve: { ...closeBandReserve, coverageQualified: false, eligible: false }
+  });
+  results.push({
+    name: 'combat-close-band-reserve-is-protected-until-three-qualified-band-ticks',
+    passed: reserveAuthorized.authorizationSource === 'close-band-reserve'
+      && reserveAuthorized.reservedCloseBandShotsRemaining === 2
+      && reserveAuthorized.ordinaryBudgetRemaining === 0
+      && reserveAfterAck.consumedShots === 1
+      && reserveAfterAck.remainingShots === 1
+      && noCoverageReserve.suppressFire === true
+      && noCoverageReserve.authorizationSource === ''
   });
 
   const closePressureExchange = evaluateCombatExchangeStopLossCore({
@@ -4356,27 +4454,82 @@ function runStrategyModuleSelfTests() {
       mode: 'live-single',
       highEntropy: true,
       planActive: true,
-      hasSelection: true
+      hasSelection: true,
+      improvementQualified: true
     }) === true
       && shouldApplyTrajectoryCoverageCore({
         mode: 'live-single',
         highEntropy: false,
         planActive: true,
-        hasSelection: true
+        hasSelection: true,
+        improvementQualified: true
       }) === false
       && shouldApplyTrajectoryCoverageCore({
         mode: 'live-single',
         highEntropy: true,
         successfulAimProtected: true,
         planActive: true,
-        hasSelection: true
+        hasSelection: true,
+        improvementQualified: true
       }) === false
       && shouldApplyTrajectoryCoverageCore({
         mode: 'shadow',
         highEntropy: true,
         planActive: true,
-        hasSelection: true
+        hasSelection: true,
+        improvementQualified: true
       }) === false
+      && shouldApplyTrajectoryCoverageCore({
+        mode: 'live-single',
+        highEntropy: true,
+        planActive: true,
+        hasSelection: true,
+        improvementQualified: false
+      }) === false
+  });
+  let switchGate = null;
+  const currentTarget = { user_id: 8, hp: 100 };
+  const candidateTarget = { user_id: 9, hp: 100 };
+  const targetSwitch1 = applyCombatTargetSwitchHysteresisCore({
+    currentTargetId: '8', currentVisibleTarget: currentTarget, proposedTarget: candidateTarget, nowMs: 1000
+  }, switchGate);
+  switchGate = targetSwitch1.gate;
+  const targetSwitch2 = applyCombatTargetSwitchHysteresisCore({
+    currentTargetId: '8', currentVisibleTarget: currentTarget, proposedTarget: candidateTarget, nowMs: 1050
+  }, switchGate);
+  switchGate = targetSwitch2.gate;
+  const targetSwitch3 = applyCombatTargetSwitchHysteresisCore({
+    currentTargetId: '8', currentVisibleTarget: currentTarget, proposedTarget: candidateTarget, nowMs: 1100
+  }, switchGate);
+  const switchBack = applyCombatTargetSwitchHysteresisCore({
+    currentTargetId: '8', currentVisibleTarget: currentTarget, proposedTarget: currentTarget, nowMs: 1150
+  }, targetSwitch2.gate);
+  const urgentSwitch = applyCombatTargetSwitchHysteresisCore({
+    currentTargetId: '8', currentVisibleTarget: currentTarget, proposedTarget: candidateTarget, urgentSafety: true, nowMs: 1200
+  }, null);
+  const missingProposal = applyCombatTargetSwitchHysteresisCore({
+    currentTargetId: '8', currentVisibleTarget: currentTarget, proposedTarget: null, nowMs: 1250
+  }, targetSwitch2.gate);
+  const reversalBlocked = applyCombatTargetSwitchHysteresisCore({
+    currentTargetId: '9',
+    currentVisibleTarget: candidateTarget,
+    proposedTarget: currentTarget,
+    lastSwitch: { fromTargetId: '8', toTargetId: '9', at: 1100 },
+    nowMs: 1300
+  }, null);
+  results.push({
+    name: 'combat-target-switch-requires-three-ordinary-ticks-but-urgent-shooter-preempts',
+    passed: targetSwitch1.target.user_id === 8
+      && targetSwitch2.target.user_id === 8
+      && targetSwitch3.target.user_id === 9
+      && switchBack.target.user_id === 8
+      && switchBack.gate === null
+      && urgentSwitch.target.user_id === 9
+      && urgentSwitch.diagnostic.reason === 'urgent-incoming-shooter'
+      && missingProposal.target.user_id === 8
+      && missingProposal.gate === null
+      && reversalBlocked.target.user_id === 9
+      && reversalBlocked.diagnostic.reason === 'oscillating-reversal-blocked'
   });
 
   // Test opportunity constants validation

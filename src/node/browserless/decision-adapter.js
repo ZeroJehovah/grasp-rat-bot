@@ -9085,7 +9085,21 @@ function createBrowserlessDecisionAdapter(options = {}) {
     patchState(patch = {}) {
       for (const [key, value] of Object.entries(patch || {})) {
         if (key === 'currentOpportunity' || key === 'switchLock') continue;
-        decisionState[key] = cloneJson(value);
+        if (key === 'combatTarget' && value && decisionState.combatTarget
+          && String(value.id ?? '') === String(decisionState.combatTarget.id ?? '')) {
+          decisionState.combatTarget = { ...decisionState.combatTarget, ...cloneJson(value) };
+        } else if ((key === 'combatEngagements' || key === 'combatMetricsByTarget') && value && typeof value === 'object') {
+          const current = decisionState[key] || {};
+          const incoming = cloneJson(value);
+          decisionState[key] = { ...current };
+          for (const [entryKey, entryValue] of Object.entries(incoming)) {
+            decisionState[key][entryKey] = entryValue && typeof entryValue === 'object' && current[entryKey]
+              ? { ...current[entryKey], ...entryValue }
+              : entryValue;
+          }
+        } else {
+          decisionState[key] = cloneJson(value);
+        }
       }
       return true;
     },
@@ -9096,6 +9110,8 @@ function createBrowserlessDecisionAdapter(options = {}) {
       return {
         combatMetrics: decisionState.combatMetrics || null,
         combatTarget: decisionState.combatTarget || null,
+        combatEngagements: decisionState.combatEngagements || {},
+        combatMetricsByTarget: decisionState.combatMetricsByTarget || {},
         combatLearning: decisionState.combatLearning || null
       };
     },
@@ -9104,6 +9120,10 @@ function createBrowserlessDecisionAdapter(options = {}) {
         attackHistory: decisionState.attackHistory || [],
         postKillSettlement: decisionState.postKillSettlement || null,
         combatTarget: decisionState.combatTarget || null,
+        combatEngagements: decisionState.combatEngagements || {},
+        combatMetricsByTarget: decisionState.combatMetricsByTarget || {},
+        combatTargetSwitchGate: decisionState.combatTargetSwitchGate || null,
+        combatTargetSwitchHistory: decisionState.combatTargetSwitchHistory || null,
         combatAim: decisionState.combatAim || null,
         combatMetrics: decisionState.combatMetrics || null,
         opponentBehaviorStates: decisionState.opponentBehaviorStates || {},
