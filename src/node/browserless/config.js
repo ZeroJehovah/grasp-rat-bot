@@ -81,6 +81,11 @@ const DEFAULTS = {
   combatClosePressureReserveMs: 2600,
   combatClosePressureMinSelfHp: 60,
   combatClosePressureMaxHpGap: 20,
+  combatMissCloseTriggerShots: 10,
+  combatMissCloseStepShots: 10,
+  combatMissCloseStepCm: 1000,
+  combatMissCloseMinimumDistanceCm: 1000,
+  combatMissCloseTimeoutMs: 30000,
   combatTrajectoryCoverageMode: 'live-single',
   wsTraceEnabled: false,
   wsTracePayload: true,
@@ -221,6 +226,11 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
     combatClosePressureReserveMs: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_CLOSE_PRESSURE_RESERVE_MS, DEFAULTS.combatClosePressureReserveMs),
     combatClosePressureMinSelfHp: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_CLOSE_PRESSURE_MIN_SELF_HP, DEFAULTS.combatClosePressureMinSelfHp),
     combatClosePressureMaxHpGap: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_CLOSE_PRESSURE_MAX_HP_GAP, DEFAULTS.combatClosePressureMaxHpGap),
+    combatMissCloseTriggerShots: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_MISS_CLOSE_TRIGGER_SHOTS, DEFAULTS.combatMissCloseTriggerShots),
+    combatMissCloseStepShots: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_MISS_CLOSE_STEP_SHOTS, DEFAULTS.combatMissCloseStepShots),
+    combatMissCloseStepCm: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_MISS_CLOSE_STEP_CM, DEFAULTS.combatMissCloseStepCm),
+    combatMissCloseMinimumDistanceCm: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_MISS_CLOSE_MINIMUM_DISTANCE_CM, DEFAULTS.combatMissCloseMinimumDistanceCm),
+    combatMissCloseTimeoutMs: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_MISS_CLOSE_TIMEOUT_MS, DEFAULTS.combatMissCloseTimeoutMs),
     combatTrajectoryCoverageMode: trajectoryCoverageMode(
       env.GRASP_RAT_BROWSERLESS_COMBAT_TRAJECTORY_COVERAGE_MODE,
       DEFAULTS.combatTrajectoryCoverageMode
@@ -403,6 +413,16 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
       config.combatClosePressureMinSelfHp = numberEnv(argv[++i], config.combatClosePressureMinSelfHp);
     } else if (arg === '--combat-close-pressure-max-hp-gap') {
       config.combatClosePressureMaxHpGap = numberEnv(argv[++i], config.combatClosePressureMaxHpGap);
+    } else if (arg === '--combat-miss-close-trigger-shots') {
+      config.combatMissCloseTriggerShots = numberEnv(argv[++i], config.combatMissCloseTriggerShots);
+    } else if (arg === '--combat-miss-close-step-shots') {
+      config.combatMissCloseStepShots = numberEnv(argv[++i], config.combatMissCloseStepShots);
+    } else if (arg === '--combat-miss-close-step-cm') {
+      config.combatMissCloseStepCm = numberEnv(argv[++i], config.combatMissCloseStepCm);
+    } else if (arg === '--combat-miss-close-minimum-distance-cm') {
+      config.combatMissCloseMinimumDistanceCm = numberEnv(argv[++i], config.combatMissCloseMinimumDistanceCm);
+    } else if (arg === '--combat-miss-close-timeout-ms') {
+      config.combatMissCloseTimeoutMs = numberEnv(argv[++i], config.combatMissCloseTimeoutMs);
     } else if (arg === '--combat-trajectory-coverage-mode') {
       config.combatTrajectoryCoverageMode = trajectoryCoverageMode(argv[++i], config.combatTrajectoryCoverageMode);
     } else if (arg === '--ws-trace') {
@@ -502,15 +522,15 @@ function usage() {
     '  --movement-settlement-min-distance-cm <cm>  Coordinate progress needed to reset the stall timer. Default: 80',
     '  --center-activity-radius-cm <cm>  Keep ordinary browserless profit inside this origin radius. Default: 100000',
     '  --outside-center-idle-exit-ms <ms>  Leave after waiting outside the center without profit. Default: 180000',
-    '  --profit-pursuit-max-ms <ms>  Age that starts close pressure for an established ordinary-profit fight. Default: 60000',
+    '  --profit-pursuit-max-ms <ms>  Legacy no-damage pursuit diagnostic threshold. Default: 60000',
     '  --profit-pursuit-suppress-ms <ms>  Suppression cooldown after a profit pursuit is stopped. Default: 60000',
     '  --dangerous-target-cooldown-ms <ms>  Cooldown for ordinary profit against targets that forced a combat leave. Default: 900000',
-    '  --profit-pursuit-min-damage-ms <ms>  Age that starts the low-damage close-pressure gate. Default: 60000',
-    '  --profit-pursuit-min-damage-hp <hp>  Target HP progress required to avoid that gate. Default: 10',
-    '  --profit-pursuit-soft-movement-stamina-ms <ms>  Movement stamina that forces remaining-ROI review. Default: 100000',
-    '  --profit-pursuit-hard-no-damage-ms <ms>  Absolute no-damage release limit for non-threatening profit combat. Default: 180000',
-    '  --profit-pursuit-hard-movement-stamina-ms <ms>  Absolute movement-stamina release limit. Default: 300000',
-    '  --profit-pursuit-pressure-cycle-ms <ms>  One bounded pressure cycle after a qualified ROI review. Default: 60000',
+    '  --profit-pursuit-min-damage-ms <ms>  Legacy no-damage diagnostic threshold. Default: 60000',
+    '  --profit-pursuit-min-damage-hp <hp>  Legacy low-damage diagnostic amount. Default: 10',
+    '  --profit-pursuit-soft-movement-stamina-ms <ms>  Advisory movement-stamina review threshold. Default: 100000',
+    '  --profit-pursuit-hard-no-damage-ms <ms>  Advisory no-damage review threshold. Default: 180000',
+    '  --profit-pursuit-hard-movement-stamina-ms <ms>  Advisory movement-stamina review threshold. Default: 300000',
+    '  --profit-pursuit-pressure-cycle-ms <ms>  Advisory economic pressure-cycle threshold. Default: 60000',
     '  --combat-shoot-min-interval-ms <ms>  Minimum live combat shoot interval. Default: 160',
     '  --combat-control-interval-ms <ms>     Recompute live combat from each fresh server tick. Default: 50',
     '  --combat-close-pressure-min-range-cm <cm>  Lower bound for predictive close pressure. Default: 4500',
@@ -521,6 +541,11 @@ function usage() {
     '  --combat-close-pressure-reserve-ms <ms>  Close-pressure stamina reserve. Default: 2600',
     '  --combat-close-pressure-min-self-hp <hp>  Minimum HP for exchange continuation. Default: 60',
     '  --combat-close-pressure-max-hp-gap <hp>  Maximum target HP lead for continuation. Default: 20',
+    '  --combat-miss-close-trigger-shots <n>  Accepted no-damage shots before the first 10m close step. Default: 10',
+    '  --combat-miss-close-step-shots <n>  Accepted no-damage shots at one reached goal before the next step. Default: 10',
+    '  --combat-miss-close-step-cm <cm>  Distance removed by each progressive close step. Default: 1000',
+    '  --combat-miss-close-minimum-distance-cm <cm>  Lowest progressive close goal. Default: 1000',
+    '  --combat-miss-close-timeout-ms <ms>  Leave when one close step cannot be reached. Default: 30000',
     '  --combat-trajectory-coverage-mode <mode>  Multi-trajectory aim mode: off|shadow|live-single|live-volley. Default: live-single',
     '  --no-combat-robust-dodge  Disable robust Dodge schedule/trajectory uncertainty for rollback',
     '  --no-combat-close-band-reserve  Disable the two-shot close-band reserve for rollback',

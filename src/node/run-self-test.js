@@ -22567,6 +22567,16 @@ async function runSelfTest() {
           '250000',
           '--profit-pursuit-pressure-cycle-ms',
           '45000',
+          '--combat-miss-close-trigger-shots',
+          '11',
+          '--combat-miss-close-step-shots',
+          '12',
+          '--combat-miss-close-step-cm',
+          '1200',
+          '--combat-miss-close-minimum-distance-cm',
+          '800',
+          '--combat-miss-close-timeout-ms',
+          '31000',
           '--ws-trace',
           '--ws-trace-max-payload-chars',
           '4096',
@@ -22629,6 +22639,11 @@ async function runSelfTest() {
           config.browserlessProfitPursuitHardNoDamageMs,
           config.browserlessProfitPursuitHardMovementStaminaMs,
           config.browserlessProfitPursuitPressureCycleMs,
+          config.combatMissCloseTriggerShots,
+          config.combatMissCloseStepShots,
+          config.combatMissCloseStepCm,
+          config.combatMissCloseMinimumDistanceCm,
+          publicConfig(config).combatMissCloseTimeoutMs,
           config.wsTraceEnabled,
           config.wsTracePayload,
           config.wsTraceMaxPayloadChars,
@@ -22643,7 +22658,7 @@ async function runSelfTest() {
           config.logDir.endsWith('/tmp/grasp-rat-browserless-logs')
         ].join('|');
       })(),
-      want: 'true|false|false|combat-live|19999|cli-token|true|220|42|env-token|250|90000|90000|4|15000|3500|2250|4500|150|300|800|3|4500|90|4500|90|99000|175000|175000|45000|120000|123000|30000|7|90000|150000|250000|45000|true|true|4096|https://example.test/target-whitelist.json|true|1234|12|123|456|90|true|true'
+      want: 'true|false|false|combat-live|19999|cli-token|true|220|42|env-token|250|90000|90000|4|15000|3500|2250|4500|150|300|800|3|4500|90|4500|90|99000|175000|175000|45000|120000|123000|30000|7|90000|150000|250000|45000|11|12|1200|800|31000|true|true|4096|https://example.test/target-whitelist.json|true|1234|12|123|456|90|true|true'
     },
     {
       name: 'browserless deployment files define service env and install surface',
@@ -22681,6 +22696,11 @@ async function runSelfTest() {
           env.includes('GRASP_RAT_BROWSERLESS_PROFIT_PURSUIT_HARD_NO_DAMAGE_MS=180000'),
           env.includes('GRASP_RAT_BROWSERLESS_PROFIT_PURSUIT_HARD_MOVEMENT_STAMINA_MS=300000'),
           env.includes('GRASP_RAT_BROWSERLESS_PROFIT_PURSUIT_PRESSURE_CYCLE_MS=60000'),
+          env.includes('GRASP_RAT_BROWSERLESS_COMBAT_MISS_CLOSE_TRIGGER_SHOTS=10'),
+          env.includes('GRASP_RAT_BROWSERLESS_COMBAT_MISS_CLOSE_STEP_SHOTS=10'),
+          env.includes('GRASP_RAT_BROWSERLESS_COMBAT_MISS_CLOSE_STEP_CM=1000'),
+          env.includes('GRASP_RAT_BROWSERLESS_COMBAT_MISS_CLOSE_MINIMUM_DISTANCE_CM=1000'),
+          env.includes('GRASP_RAT_BROWSERLESS_COMBAT_MISS_CLOSE_TIMEOUT_MS=30000'),
           env.includes('GRASP_RAT_BROWSERLESS_WS_TRACE_ENABLED=false'),
           installer.includes('grasp-rat-browserless-runner'),
           installer.includes('DATA_DIR="/var/lib/grasp-rat-browserless"'),
@@ -22690,7 +22710,7 @@ async function runSelfTest() {
           installer.includes('systemctl daemon-reload')
         ].join('|');
       })(),
-      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
+      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless deployment audit checks installed service evidence',

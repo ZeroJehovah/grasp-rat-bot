@@ -2199,9 +2199,11 @@ function replayClosePressureMovement(rows = [], options = {}) {
     const outsideReactiveBand = distance >= Number(range.normalMinRangeCm);
     pressureBandSamples = insidePressureBand ? pressureBandSamples + 1 : 0;
     pressureReleaseSamples = outsideReactiveBand ? pressureReleaseSamples + 1 : 0;
-    pressureAttackCommitted = pressureAttackCommitted
-      ? pressureReleaseSamples < 3
-      : pressureBandSamples >= 3;
+    pressureAttackCommitted = range.progressiveMissClose === true
+      ? true
+      : (pressureAttackCommitted
+          ? pressureReleaseSamples < 3
+          : pressureBandSamples >= 3);
     if (pressureAttackCommitted) {
       pressureAttackFrames += 1;
       const fireState = determineCombatFireState(loggedSelf, target, {
@@ -2449,6 +2451,9 @@ function replayCombatClosePressure(options) {
   const targetId = options.targetId || String(rows[0].detail.target?.userId ?? rows[0].detail.target?.user_id ?? '');
   let firstHp = numberOrNull(rows[0].detail.target?.hp);
   let minHp = firstHp;
+  let previousHp = firstHp;
+  let acceptedShotsAtDamage = Math.max(0, Number(rows[0].detail.metrics?.acceptedShots || 0));
+  let damageProgressAt = startedAt;
   let phaseState = {
     id: targetId,
     firstSeenAt: startedAt,
@@ -2457,14 +2462,20 @@ function replayCombatClosePressure(options) {
     combatPhase: 'normal-combat'
   };
   let trigger = null;
+  let policyTimeout = null;
+  let stepsStarted = 0;
+  let stepsReached = 0;
+  let lastReachedStep = 0;
   const phaseRows = [];
   const timingP90Ticks = percentile(rows
     .map(row => numberOrNull(row.detail.timing?.rollingP90Ticks))
     .filter(Number.isFinite), 0.9) ?? 5;
   const pressureOptions = {
-    browserlessProfitPursuitMinDamageMs: 60000,
-    browserlessProfitPursuitMinDamageHp: 10,
-    browserlessProfitPursuitMaxMs: 60000,
+    combatMissCloseTriggerShots: 10,
+    combatMissCloseStepShots: 10,
+    combatMissCloseStepCm: 1000,
+    combatMissCloseMinimumDistanceCm: 1000,
+    combatMissCloseTimeoutMs: 30000,
     combatControlIntervalMs: options.controlIntervalMs,
     combatServerTickMs: 50,
     combatBulletSpeedPerTick: 500,
@@ -2479,8 +2490,14 @@ function replayCombatClosePressure(options) {
   for (const row of rows) {
     const atMs = Date.parse(row.entry.at || '');
     const hp = numberOrNull(row.detail.target?.hp);
+    const acceptedShots = Math.max(0, Number(row.detail.metrics?.acceptedShots || 0));
     if (firstHp === null && hp !== null) firstHp = hp;
     if (hp !== null) minHp = minHp === null ? hp : Math.min(minHp, hp);
+    if (hp !== null && previousHp !== null && hp < previousHp - 0.01) {
+      acceptedShotsAtDamage = acceptedShots;
+      damageProgressAt = atMs;
+    }
+    if (hp !== null) previousHp = hp;
     const damageFromStart = firstHp !== null && minHp !== null ? Math.max(0, firstHp - minHp) : null;
     const phase = combatPressurePhaseCore(phaseState, {
       targetId,
@@ -2492,6 +2509,8 @@ function replayCombatClosePressure(options) {
       minHp,
       damageFromStart,
       damageKnown: damageFromStart !== null,
+      damageProgressAt,
+      acceptedShotsSinceDamage: Math.max(0, acceptedShots - acceptedShotsAtDamage),
       distance: numberOrNull(row.detail.target?.distance)
     }, pressureOptions);
     phaseState = {
@@ -2506,17 +2525,35 @@ function replayCombatClosePressure(options) {
     };
     if (phase.active) {
       if (!trigger) trigger = { ...phase, line: row.line, at: row.entry.at || '' };
+      stepsStarted = Math.max(stepsStarted, Number(phase.stepIndex || 0));
+      if (phase.withinGoal && Number(phase.stepIndex || 0) > lastReachedStep) {
+        lastReachedStep = Number(phase.stepIndex || 0);
+        stepsReached += 1;
+      }
+      if (!policyTimeout && phase.stepTimedOut) {
+        policyTimeout = {
+          line: row.line,
+          at: row.entry.at || '',
+          elapsedMs: atMs - startedAt,
+          stepIndex: phase.stepIndex,
+          stepElapsedMs: phase.stepElapsedMs,
+          stepStartDistanceCm: phase.stepStartDistanceCm,
+          goalDistanceCm: phase.goalDistanceCm,
+          targetDistanceCm: phase.targetDistance,
+          movementStamina: Math.max(0, Number(row.detail.metrics?.movementStaminaSpent || 0))
+        };
+      }
       phaseRows.push(row);
     }
   }
-  const range = combatPressureTargetRangeCore(pressureOptions);
+  const range = trigger?.range || combatPressureTargetRangeCore(pressureOptions);
   const historicalDistances = phaseRows.map(row => numberOrNull(row.detail.target?.distance)).filter(Number.isFinite);
   const threatPreserving = replayClosePressureMovement(phaseRows, {
     ...options,
     targetId,
     phaseStartedAt: trigger?.phaseStartedAt || startedAt + 60000,
     range,
-    hysteresisCm: 300,
+    hysteresisCm: trigger?.arrivalToleranceCm ?? 100,
     preserveThreat: true
   });
   const noBulletControl = replayClosePressureMovement(phaseRows, {
@@ -2524,7 +2561,7 @@ function replayCombatClosePressure(options) {
     targetId,
     phaseStartedAt: trigger?.phaseStartedAt || startedAt + 60000,
     range,
-    hysteresisCm: 300,
+    hysteresisCm: trigger?.arrivalToleranceCm ?? 100,
     preserveThreat: false
   });
   let suppressedFireFrames = 0;
@@ -2568,8 +2605,29 @@ function replayCombatClosePressure(options) {
       engagedMs: trigger.engagedMs,
       delayMs: Number.isFinite(startedAt) ? Date.parse(trigger.at) - startedAt : null,
       reason: trigger.triggerReason,
-      damageFromStart: trigger.damageFromStart
+      damageFromStart: trigger.damageFromStart,
+      acceptedShotsSinceDamage: trigger.acceptedShotsSinceDamage,
+      stepIndex: trigger.stepIndex,
+      stepStartDistanceCm: trigger.stepStartDistanceCm,
+      goalDistanceCm: trigger.goalDistanceCm
     } : null,
+    progressiveClose: {
+      stepCm: 1000,
+      stepShots: 10,
+      timeoutMs: 30000,
+      stepsStarted,
+      stepsReached,
+      timeout: policyTimeout,
+      estimatedTimeSavedMs: policyTimeout
+        ? Math.max(0, Date.parse(rows.at(-1).entry.at || '') - Date.parse(policyTimeout.at || ''))
+        : 0,
+      estimatedMovementStaminaSaved: policyTimeout
+        ? Math.max(
+            0,
+            Number(rows.at(-1).detail.metrics?.movementStaminaSpent || 0) - Number(policyTimeout.movementStamina || 0)
+          )
+        : 0
+    },
     range,
     historical,
     threatPreserving,
@@ -2586,9 +2644,11 @@ function replayCombatClosePressure(options) {
     : reserveReplay.shotsFired === 0);
   result.accepted = Boolean(
     trigger
-      && trigger.engagedMs >= 60000
-      && trigger.triggerReason === 'no-damage-threshold'
-      && range.ballisticConstraintSatisfied
+      && trigger.acceptedShotsSinceDamage >= 10
+      && trigger.triggerReason === 'missed-shots-threshold'
+      && range.progressiveMissClose === true
+      && Number(trigger.stepStartDistanceCm) - Number(trigger.goalDistanceCm) <= 1000
+      && Number(trigger.stepStartDistanceCm) - Number(trigger.goalDistanceCm) > 0
       && historical.pressureFrames > 0
       && historical.targetContinuityFrames === historical.pressureFrames
       && (threatPreserving.threatFrames === 0 || threatPreserving.safeCloseFrames > 0)
@@ -2599,13 +2659,10 @@ function replayCombatClosePressure(options) {
         || threatPreserving.pressureAttack.budgetUnlockFrames > 0)
       && threatPreserving.pressureAttack.cadenceMs === 160
       && reserveAccepted
-      && threatPreserving.distance.p50Cm < historical.distance.p50Cm
-      && threatPreserving.distance.p50Cm <= 6000
-      && threatPreserving.distance.p90Cm <= 7000
-      && threatPreserving.distance.finalCm <= 6000
-      && noBulletControl.strafeFrames > 0
-      && noBulletControl.controlledPressureBandFrames > 0
-      && noBulletControl.distance.p50Cm <= range.maxRangeCm + 300
+      && (policyTimeout
+        ? policyTimeout.stepElapsedMs >= 30000
+        : stepsReached > 0)
+      && (policyTimeout || threatPreserving.distance.p50Cm < historical.distance.p50Cm)
   );
   return result;
 }

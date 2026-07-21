@@ -842,6 +842,7 @@ function renderBrowserlessWebPanel() {
       'combat-low-hp-no-damage-leave': '战斗中我方低血且久攻未造成伤害，主动退出',
       'combat-critical-hp-leave': '战斗中我方血量进入危险线，紧急退出',
       'combat-action-settlement-stalled': '战斗中移动指令失效，为避免原地承伤，主动退出',
+      'combat-miss-close-timeout-leave': '连续 30 秒无法完成当前 10 米接近目标，主动退出',
       'defensive-exchange-no-progress-leave': '防守交战持续无进展，撤退后仍无法脱离，主动退出',
       'injury-leave': '角色受伤后为避免继续掉血，主动退出',
       'pursuit-leave': '被危险玩家持续追击，主动退出',

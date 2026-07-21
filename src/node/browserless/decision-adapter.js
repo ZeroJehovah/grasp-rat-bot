@@ -145,8 +145,6 @@ const EASY_KILL_SEEK_RANGE_CM_BY_SCORE = Object.freeze({
 const DEFAULT_INVULNERABLE_PROFIT_APPROACH_DISTANCE_CM = 5000;
 const DEFAULT_INVULNERABLE_PROFIT_MOVE_SPEED_CM_PER_SEC = 1000;
 const DEFAULT_DANGEROUS_TARGET_COOLDOWN_MS = BROWSER_RUNTIME_DEFAULTS.browserlessDangerousTargetCooldownMs ?? 900000;
-const DEFAULT_PROFIT_PURSUIT_MIN_DAMAGE_MS = BROWSER_RUNTIME_DEFAULTS.browserlessProfitPursuitMinDamageMs ?? 60000;
-const DEFAULT_PROFIT_PURSUIT_MIN_DAMAGE_HP = BROWSER_RUNTIME_DEFAULTS.browserlessProfitPursuitMinDamageHp ?? 10;
 const DEFAULT_EASY_KILL_APPROACH_WINDOW_MS = BROWSER_RUNTIME_DEFAULTS.browserlessEasyKillApproachWindowMs ?? 8000;
 const DEFAULT_EASY_KILL_APPROACH_MIN_CLOSING_CM = BROWSER_RUNTIME_DEFAULTS.browserlessEasyKillApproachMinClosingCm ?? 1000;
 const DEFAULT_ACTIVE_COIN_COMPETITION_MIN_SELF_DISTANCE_CM = BROWSER_RUNTIME_DEFAULTS.activeCoinCompetitionMinSelfDistanceCm ?? 18000;
@@ -162,6 +160,7 @@ const DANGEROUS_COMBAT_EXIT_REASONS = new Set([
   'combat-hp-disadvantage-leave',
   'combat-low-hp-disadvantage-leave',
   'combat-predicted-leave-hp',
+  'combat-miss-close-timeout-leave',
   'incoming-bullet-early-leave',
   'continuous-incoming-bullets-leave',
   'rapid-damage-early-leave'
@@ -7551,20 +7550,6 @@ function dangerousTargetCooldownMs(options = {}) {
   return Number.isFinite(value) ? Math.max(0, value) : DEFAULT_DANGEROUS_TARGET_COOLDOWN_MS;
 }
 
-function profitPursuitMinDamageMs(options = {}) {
-  const value = Number(options.browserlessProfitPursuitMinDamageMs
-    ?? BROWSER_RUNTIME_DEFAULTS.browserlessProfitPursuitMinDamageMs
-    ?? DEFAULT_PROFIT_PURSUIT_MIN_DAMAGE_MS);
-  return Number.isFinite(value) ? Math.max(0, value) : DEFAULT_PROFIT_PURSUIT_MIN_DAMAGE_MS;
-}
-
-function profitPursuitMinDamageHp(options = {}) {
-  const value = Number(options.browserlessProfitPursuitMinDamageHp
-    ?? BROWSER_RUNTIME_DEFAULTS.browserlessProfitPursuitMinDamageHp
-    ?? DEFAULT_PROFIT_PURSUIT_MIN_DAMAGE_HP);
-  return Number.isFinite(value) ? Math.max(0, value) : DEFAULT_PROFIT_PURSUIT_MIN_DAMAGE_HP;
-}
-
 function dangerousCombatTargetMap(stateful = {}, nowMs = 0) {
   if (!stateful || typeof stateful !== 'object') return {};
   if (!stateful.dangerousCombatTargets || typeof stateful.dangerousCombatTargets !== 'object' || Array.isArray(stateful.dangerousCombatTargets)) {
@@ -7860,6 +7845,22 @@ function evaluateNonThreatCombatEconomicStopLoss(input, combatDecision, stateful
   const nowMs = Number(input?.nowMs || Date.now());
   const combatTarget = String(stateful?.combatTarget?.id ?? '') === targetId ? stateful.combatTarget : {};
   const metrics = String(stateful?.combatMetrics?.targetId ?? '') === targetId ? stateful.combatMetrics : {};
+  const missClose = combatDecision?.dryRun?.combatPhase?.active === true
+    && combatDecision?.dryRun?.combatPhase?.range?.progressiveMissClose === true;
+  if (missClose) {
+    return {
+      release: false,
+      excluded: true,
+      exclusionReason: 'progressive-miss-close-owned',
+      reason: 'non-threat-economic-progressive-close-excluded',
+      targetId,
+      nowMs,
+      target: summarizeTarget(target),
+      targetDrop: entityDropValue(target),
+      targetDistanceCm: Number.isFinite(Number(target.distance)) ? Math.round(Number(target.distance)) : null,
+      missClose: cloneJson(combatDecision.dryRun.combatPhase)
+    };
+  }
   const defensiveRisk = proactiveCombatDefensiveRiskAssessment(combatDecision, input, stateful, options);
   const threat = economicStopLossThreatEvidence(input, target, stateful);
   const threatEvidence = Boolean(defensiveRisk.defensive || threat.active);
@@ -7896,8 +7897,16 @@ function evaluateNonThreatCombatEconomicStopLoss(input, combatDecision, stateful
     threatEvidence
   }, stateMap[targetId] || null, economicStopLossOptions(options));
   stateMap[targetId] = result.state;
+  const releaseSuppressed = result.release === true;
   return {
     ...result,
+    release: false,
+    advisory: Boolean(result.advisory || releaseSuppressed),
+    releaseSuppressed,
+    originalReleaseReason: releaseSuppressed ? result.reason : '',
+    reason: releaseSuppressed
+      ? 'non-threat-economic-progressive-close-owned'
+      : result.reason,
     target: summarizeTarget(target),
     targetDrop: entityDropValue(target),
     targetDistanceCm: Number.isFinite(Number(target.distance)) ? Math.round(Number(target.distance)) : null,
@@ -8274,22 +8283,8 @@ function buildProfitPursuitSuppression(input, combatDecision, stateful = {}, opt
   // already engaged target gets one attack-range of hysteresis so crossing
   // the exact circle edge cannot cancel a close finishing opportunity.
   const engagedMs = profitPursuitEngagedMs(combatDecision, stateful, nowMs);
-  const minDamageMs = profitPursuitMinDamageMs(options);
-  const minDamageHp = profitPursuitMinDamageHp(options);
   const damageProgress = profitPursuitDamageProgress(combatDecision, stateful);
-  const maxMs = Math.max(0, Number(options.browserlessProfitPursuitMaxMs
-    ?? BROWSER_RUNTIME_DEFAULTS.browserlessProfitPursuitMaxMs
-    ?? 60000));
   let reason = outsideCenterReason;
-  if (!reason && minDamageMs > 0
-    && minDamageHp > 0
-    && engagedMs >= minDamageMs
-    && damageProgress.known
-    && Number(damageProgress.damageFromStart || 0) < minDamageHp) {
-    reason = 'profit-pursuit-low-damage';
-  } else if (!reason && maxMs > 0 && engagedMs >= maxMs) {
-    reason = 'profit-pursuit-max-ms';
-  }
   if (!reason) return null;
 
   const suppressMs = Math.max(0, Number(options.browserlessProfitPursuitSuppressMs
@@ -8312,18 +8307,9 @@ function buildProfitPursuitSuppression(input, combatDecision, stateful = {}, opt
     minHp: damageProgress.minHp,
     targetHp: damageProgress.targetHp,
     damageFromStart: damageProgress.damageFromStart === null ? null : Math.round(Number(damageProgress.damageFromStart) * 10) / 10,
-    minDamageMs: Math.round(minDamageMs),
-    minDamageHp: Math.round(minDamageHp * 10) / 10,
     target: summarizeTarget(target)
   };
   suppressions[targetId] = cloneJson(suppression);
-  if (reason === 'profit-pursuit-low-damage') {
-    rememberDangerousCombatTarget(stateful, target, reason, input, options, {
-      engagedMs: Math.round(engagedMs),
-      damageFromStart: suppression.damageFromStart,
-      minDamageHp: suppression.minDamageHp
-    });
-  }
   clearSuppressedCombatTarget(stateful, targetId);
   return suppression;
 }

@@ -138,9 +138,9 @@ function ordinaryProfitEngagement(input = {}) {
 }
 
 /**
- * Resolve the stable tactical phase for one target. Once close pressure starts
- * it remains latched for that target until the target is replaced or a hard
- * safety decision takes ownership.
+ * Resolve progressive close-in pressure for one target. Each no-damage shot
+ * generation starts at a bounded sample threshold and is cleared as soon as
+ * target HP progress creates a new damage generation.
  */
 function combatPressurePhaseCore(previous = {}, input = {}, options = {}) {
   const nowMs = Math.max(0, Number(input.nowMs ?? Date.now()));
@@ -157,82 +157,117 @@ function combatPressurePhaseCore(previous = {}, input = {}, options = {}) {
   const inferredDamage = firstHp !== null && minHp !== null ? Math.max(0, firstHp - minHp) : null;
   const damageFromStart = numberOrNull(input.damageFromStart) ?? inferredDamage;
   const damageKnown = Boolean(input.damageKnown ?? (damageFromStart !== null));
-  const minDamageMs = Math.max(0, Number(options.browserlessProfitPursuitMinDamageMs
-    ?? options.profitPursuitMinDamageMs
-    ?? 60000));
-  const minDamageHp = Math.max(0, Number(options.browserlessProfitPursuitMinDamageHp
-    ?? options.profitPursuitMinDamageHp
-    ?? 10));
-  const maxMs = Math.max(0, Number(options.browserlessProfitPursuitMaxMs
-    ?? options.profitPursuitMaxMs
-    ?? 60000));
   const ordinaryProfit = ordinaryProfitEngagement(input);
-  const noDamageTrigger = ordinaryProfit
-    && minDamageMs > 0
-    && engagedMs >= minDamageMs
-    && damageKnown
-    && Number(damageFromStart || 0) < minDamageHp;
-  const maxDurationTrigger = ordinaryProfit && maxMs > 0 && engagedMs >= maxMs;
-  const trigger = noDamageTrigger || maxDurationTrigger;
   const hardSafety = input.hardSafety === true;
   const previousPhase = sameTarget ? String(previous.combatPhase || previous.phase || '') : '';
-  const active = Boolean(!hardSafety && sameTarget && (trigger || previousPhase === 'close-pressure'));
-  const phase = active ? 'close-pressure' : 'normal-combat';
-  const phaseStartedAt = active
-    ? (previousPhase === 'close-pressure' && Number(previous.phaseStartedAt || 0) > 0
-        ? Number(previous.phaseStartedAt)
-        : nowMs)
-    : nowMs;
   const previousClosePressure = previous?.closePressure && typeof previous.closePressure === 'object'
     ? previous.closePressure
     : previous;
-  const previousRange = previousClosePressure?.range && typeof previousClosePressure.range === 'object'
-    ? previousClosePressure.range
-    : null;
-  const range = active
-    ? (previousPhase === 'close-pressure' && previousRange
-        ? previousRange
-        : combatPressureTargetRangeCore(options))
-    : null;
   const targetDistance = numberOrNull(input.distance ?? input.targetDistance);
-  const pressureBandConfirmTicks = Math.max(1, Math.round(Number(options.combatPressureBandConfirmTicks ?? 3)));
-  const pressureBandReleaseTicks = Math.max(1, Math.round(Number(options.combatPressureBandReleaseTicks ?? 3)));
-  const insidePressureBand = Boolean(
-    active
+  const acceptedShotsSinceDamage = Math.max(0, Math.round(Number(input.acceptedShotsSinceDamage || 0)));
+  const damageProgressAt = Math.max(0, Number(input.damageProgressAt || input.lastDamageAt || startedAt || nowMs));
+  const triggerShots = Math.max(1, Math.round(Number(options.combatMissCloseTriggerShots ?? 10)));
+  const stepShots = Math.max(1, Math.round(Number(options.combatMissCloseStepShots ?? triggerShots)));
+  const stepCm = Math.max(100, Number(options.combatMissCloseStepCm ?? 1000));
+  const minimumDistanceCm = Math.max(0, Number(options.combatMissCloseMinimumDistanceCm ?? 1000));
+  const timeoutMs = Math.max(1000, Number(options.combatMissCloseTimeoutMs ?? 30000));
+  const arrivalToleranceCm = Math.max(0, Number(options.combatMissCloseArrivalToleranceCm ?? 100));
+  const sameDamageGeneration = Boolean(
+    previousPhase === 'close-pressure'
+      && Number(previousClosePressure?.damageProgressAt || 0) === damageProgressAt
+  );
+  const missedShotsTrigger = Boolean(
+    damageKnown
       && targetDistance !== null
-      && targetDistance >= Number(range?.minRangeCm || 0)
-      && targetDistance <= Number(range?.maxRangeCm || 0)
+      && acceptedShotsSinceDamage >= triggerShots
   );
-  const outsideReactiveBand = Boolean(
-    active
-      && targetDistance !== null
-      && targetDistance >= Number(range?.normalMinRangeCm || Infinity)
-  );
-  const previousBandSamples = sameTarget && previousPhase === 'close-pressure'
-    ? Math.max(0, Number(previousClosePressure?.pressureBandSamples || 0))
-    : 0;
-  const previousReleaseSamples = sameTarget && previousPhase === 'close-pressure'
-    ? Math.max(0, Number(previousClosePressure?.pressureReleaseSamples || 0))
-    : 0;
-  const pressureBandSamples = insidePressureBand ? previousBandSamples + 1 : 0;
-  const pressureReleaseSamples = outsideReactiveBand ? previousReleaseSamples + 1 : 0;
-  const previouslyCommitted = Boolean(
-    sameTarget
-      && previousPhase === 'close-pressure'
-      && previousClosePressure?.pressureAttackCommitted
-  );
-  const pressureAttackCommitted = Boolean(
-    active
-      && (previouslyCommitted
-        ? pressureReleaseSamples < pressureBandReleaseTicks
-        : pressureBandSamples >= pressureBandConfirmTicks)
-  );
-  const subphase = active
-    ? (pressureAttackCommitted ? 'pressure-attack' : 'closing')
-    : 'normal-combat';
-  const triggerReason = noDamageTrigger
-    ? 'no-damage-threshold'
-    : (maxDurationTrigger ? 'maximum-pursuit-duration' : (active ? 'latched' : ''));
+  const active = Boolean(!hardSafety && sameTarget && missedShotsTrigger);
+  const phase = active ? 'close-pressure' : 'normal-combat';
+  const phaseStartedAt = active
+    ? (sameDamageGeneration && Number(previous.phaseStartedAt || 0) > 0
+        ? Number(previous.phaseStartedAt)
+        : nowMs)
+    : nowMs;
+
+  let stepIndex = 0;
+  let stepStartedAt = 0;
+  let stepStartDistanceCm = null;
+  let goalDistanceCm = null;
+  let bestDistanceCm = null;
+  let goalReachedAt = 0;
+  let goalReachedAcceptedShots = acceptedShotsSinceDamage;
+  let stepAdvanced = false;
+  if (active) {
+    if (sameDamageGeneration && Number(previousClosePressure?.stepIndex || 0) > 0) {
+      stepIndex = Math.max(1, Math.round(Number(previousClosePressure.stepIndex)));
+      stepStartedAt = Math.max(0, Number(previousClosePressure.stepStartedAt || nowMs));
+      stepStartDistanceCm = numberOrNull(previousClosePressure.stepStartDistanceCm) ?? targetDistance;
+      goalDistanceCm = numberOrNull(previousClosePressure.goalDistanceCm)
+        ?? Math.max(minimumDistanceCm, Number(stepStartDistanceCm) - stepCm);
+      bestDistanceCm = Math.min(
+        numberOrNull(previousClosePressure.bestDistanceCm) ?? targetDistance,
+        targetDistance
+      );
+      goalReachedAt = Math.max(0, Number(previousClosePressure.goalReachedAt || 0));
+      goalReachedAcceptedShots = Math.max(0, Math.round(Number(
+        previousClosePressure.goalReachedAcceptedShots ?? acceptedShotsSinceDamage
+      )));
+    } else {
+      stepIndex = 1;
+      stepStartedAt = nowMs;
+      stepStartDistanceCm = targetDistance;
+      goalDistanceCm = Math.max(minimumDistanceCm, targetDistance - stepCm);
+      bestDistanceCm = targetDistance;
+    }
+
+    const withinGoalBeforeAdvance = targetDistance <= goalDistanceCm + arrivalToleranceCm;
+    if (withinGoalBeforeAdvance && !goalReachedAt) {
+      goalReachedAt = nowMs;
+      goalReachedAcceptedShots = acceptedShotsSinceDamage;
+    } else if (!withinGoalBeforeAdvance && goalReachedAt) {
+      // The opponent reopened the same distance gap. Give this renewed
+      // close-in attempt its own bounded timeout instead of inheriting an old
+      // successful step forever.
+      stepStartedAt = nowMs;
+      goalReachedAt = 0;
+      goalReachedAcceptedShots = acceptedShotsSinceDamage;
+    }
+
+    const shotsAfterGoal = goalReachedAt
+      ? Math.max(0, acceptedShotsSinceDamage - goalReachedAcceptedShots)
+      : 0;
+    if (goalReachedAt
+      && shotsAfterGoal >= stepShots
+      && targetDistance > minimumDistanceCm + arrivalToleranceCm) {
+      stepIndex += 1;
+      stepStartedAt = nowMs;
+      stepStartDistanceCm = targetDistance;
+      goalDistanceCm = Math.max(minimumDistanceCm, targetDistance - stepCm);
+      bestDistanceCm = targetDistance;
+      goalReachedAt = 0;
+      goalReachedAcceptedShots = acceptedShotsSinceDamage;
+      stepAdvanced = true;
+    }
+  }
+
+  const withinGoal = Boolean(active && targetDistance <= goalDistanceCm + arrivalToleranceCm);
+  const stepElapsedMs = active && stepStartedAt > 0 ? Math.max(0, nowMs - stepStartedAt) : 0;
+  const stepTimedOut = Boolean(active && !withinGoal && stepElapsedMs >= timeoutMs);
+  const ballisticRange = active ? combatPressureTargetRangeCore(options) : null;
+  const range = active ? {
+    ...ballisticRange,
+    rangeCm: Math.round(goalDistanceCm),
+    minRangeCm: 0,
+    maxRangeCm: Math.round(goalDistanceCm + arrivalToleranceCm),
+    normalMinRangeCm: Math.round(goalDistanceCm + arrivalToleranceCm + 1),
+    normalMaxRangeCm: Math.round(goalDistanceCm + arrivalToleranceCm + stepCm),
+    progressiveMissClose: true
+  } : null;
+  const pressureAttackCommitted = active;
+  const subphase = active ? (withinGoal ? 'pressure-attack' : 'closing') : 'normal-combat';
+  const triggerReason = active
+    ? (sameDamageGeneration ? 'missed-shots-latched' : 'missed-shots-threshold')
+    : '';
   return {
     phase,
     active,
@@ -240,8 +275,8 @@ function combatPressurePhaseCore(previous = {}, input = {}, options = {}) {
     targetId,
     ordinaryProfit,
     engagedMs: Math.round(engagedMs),
-    noDamageTrigger,
-    maxDurationTrigger,
+    noDamageTrigger: missedShotsTrigger,
+    maxDurationTrigger: false,
     triggerReason,
     phaseStartedAt,
     firstHp,
@@ -249,18 +284,37 @@ function combatPressurePhaseCore(previous = {}, input = {}, options = {}) {
     targetHp,
     damageFromStart: damageFromStart === null ? null : Math.round(damageFromStart * 10) / 10,
     damageKnown,
-    minDamageMs: Math.round(minDamageMs),
-    minDamageHp: Math.round(minDamageHp * 10) / 10,
-    maxMs: Math.round(maxMs),
+    acceptedShotsSinceDamage,
+    triggerShots,
+    stepShots,
+    stepCm: Math.round(stepCm),
+    minimumDistanceCm: Math.round(minimumDistanceCm),
+    timeoutMs: Math.round(timeoutMs),
+    arrivalToleranceCm: Math.round(arrivalToleranceCm),
+    damageProgressAt,
     range,
     subphase,
     pressureAttackCommitted,
-    pressureBandSamples,
-    pressureBandConfirmTicks,
-    pressureReleaseSamples,
-    pressureBandReleaseTicks,
-    insidePressureBand,
-    outsideReactiveBand,
+    pressureBandSamples: withinGoal ? 1 : 0,
+    pressureBandConfirmTicks: 1,
+    pressureReleaseSamples: withinGoal ? 0 : 1,
+    pressureBandReleaseTicks: 1,
+    insidePressureBand: withinGoal,
+    outsideReactiveBand: !withinGoal,
+    stepIndex,
+    stepStartedAt,
+    stepStartDistanceCm: stepStartDistanceCm === null ? null : Math.round(stepStartDistanceCm),
+    goalDistanceCm: goalDistanceCm === null ? null : Math.round(goalDistanceCm),
+    bestDistanceCm: bestDistanceCm === null ? null : Math.round(bestDistanceCm),
+    goalReachedAt,
+    goalReachedAcceptedShots,
+    shotsAfterGoal: goalReachedAt
+      ? Math.max(0, acceptedShotsSinceDamage - goalReachedAcceptedShots)
+      : 0,
+    withinGoal,
+    stepAdvanced,
+    stepElapsedMs: Math.round(stepElapsedMs),
+    stepTimedOut,
     targetDistance: targetDistance === null ? null : Math.round(targetDistance)
   };
 }

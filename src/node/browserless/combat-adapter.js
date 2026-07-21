@@ -1590,12 +1590,16 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
       directHits: numberOrNull(ordinaryDodgeThreat?.directHits)
     } : null
   } : null;
-  const closePressureHysteresisCm = Math.max(100, Number(options.combatClosePressureHysteresisCm ?? 300));
+  const closePressureHysteresisCm = closePressureState?.range?.progressiveMissClose
+    ? Math.max(0, Number(closePressureState.arrivalToleranceCm ?? 100))
+    : Math.max(100, Number(options.combatClosePressureHysteresisCm ?? 300));
   const closeRange = closePressureActive
     ? Number(closePressureRange.rangeCm)
     : Math.max(0, Number(options.combatPressureCloseRange || options.combatPassiveRunnerCloseRange || COMBAT_CONSTANTS.NO_DAMAGE_PRESS_CLOSE_RANGE));
   const closePressureMinRange = closePressureActive
-    ? Math.max(0, Number(closePressureRange.minRangeCm || options.combatClosePressureMinRangeCm || 4500))
+    ? Math.max(0, Number(closePressureRange.minRangeCm
+      ?? options.combatClosePressureMinRangeCm
+      ?? 4500))
     : 0;
   const closePressureTooClose = Boolean(
     closePressureActive && Number(target.distance || Infinity) < closePressureMinRange
@@ -2400,6 +2404,15 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
         engagedAt: phaseMetricsStartedAt ?? combatTargetState.firstSeenAt ?? combatTargetState.at,
         targetHp: hpValue(target),
         distance: Number(target.distance),
+        acceptedShotsSinceDamage: Math.max(
+          0,
+          Number(stateful?.combatMetrics?.acceptedShots || 0)
+            - Number(combatTargetState.acceptedShotsAtLastDamage || 0)
+        ),
+        damageProgressAt: Number(combatTargetState.damageProgressAt
+          || combatTargetState.lastDamageAt
+          || combatTargetState.firstSeenAt
+          || options.nowMs),
         ordinaryProfit: ['profit', 'engaged', 'reengage', 'afk-profit'].includes(String(
           combatTargetState.originIntent || combatTargetState.intent || target.combatIntent || ''
         ))
@@ -2634,6 +2647,16 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     );
   }
   let exitDecision = contactEntryOnly ? null : exitEvaluation.exit;
+  if (!exitDecision && !contactEntryOnly && combatPhase?.stepTimedOut) {
+    exitDecision = {
+      shouldLeave: true,
+      policy: 'miss-close-timeout',
+      rule: 'miss-close-step-timeout',
+      reason: 'combat-miss-close-timeout-leave',
+      stopMotion: false,
+      missClose: cloneJson(combatPhase)
+    };
+  }
   if (!exitDecision && !contactEntryOnly && exitEvaluation.exchangeStopLoss?.shouldExit) {
     exitDecision = {
       shouldLeave: true,

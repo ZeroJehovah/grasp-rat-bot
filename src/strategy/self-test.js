@@ -1322,30 +1322,36 @@ function runStrategyModuleSelfTests() {
     combatPhase: 'normal-combat',
     firstSeenAt: 1000,
     firstHp: 100,
-    minHp: 100
+    minHp: 100,
+    damageProgressAt: 1000
   }, {
     targetId: '8',
     nowMs: 60999,
     engagedAt: 1000,
     originIntent: 'profit',
     damageFromStart: 0,
-    damageKnown: true
+    damageKnown: true,
+    damageProgressAt: 1000,
+    acceptedShotsSinceDamage: 9,
+    distance: 12000
   });
   const pressureAt = combatPressurePhaseCore({
     id: '8',
     combatPhase: 'normal-combat',
     firstSeenAt: 1000,
     firstHp: 100,
-    minHp: 100
+    minHp: 100,
+    damageProgressAt: 1000
   }, {
     targetId: '8',
     nowMs: 61000,
     engagedAt: 1000,
     originIntent: 'profit',
     damageFromStart: 0,
-    damageKnown: true
-  }, {
-    movementExecutionTiming: { p90Ticks: 2 }
+    damageKnown: true,
+    damageProgressAt: 1000,
+    acceptedShotsSinceDamage: 10,
+    distance: 12000
   });
   const pressureRange = combatPressureTargetRangeCore({
     combatControlIntervalMs: 50,
@@ -1384,11 +1390,16 @@ function runStrategyModuleSelfTests() {
     { nowMs: 660000 }
   );
   results.push({
-    name: 'combat-close-pressure-starts-at-one-minute-with-ballistic-range-and-replayable-strafe',
+    name: 'combat-miss-close-starts-after-ten-no-damage-shots-with-ten-meter-goal-and-replayable-strafe',
     passed: pressureBefore.phase === 'normal-combat'
       && pressureAt.phase === 'close-pressure'
-      && pressureAt.engagedMs === 60000
-      && pressureAt.triggerReason === 'no-damage-threshold'
+      && pressureAt.triggerReason === 'missed-shots-threshold'
+      && pressureAt.stepIndex === 1
+      && pressureAt.stepStartDistanceCm === 12000
+      && pressureAt.goalDistanceCm === 11000
+      && pressureAt.stepCm === 1000
+      && pressureAt.timeoutMs === 30000
+      && pressureAt.pressureAttackCommitted === true
       && pressureRange.clearanceTicks === 2
       && pressureRange.responseBudgetMs === 550
       && pressureRange.reactiveBoundaryCm === 5500
@@ -1428,31 +1439,72 @@ function runStrategyModuleSelfTests() {
     originIntent: 'profit',
     damageFromStart: 0,
     damageKnown: true,
-    distance: 5000
+    damageProgressAt: 1000,
+    distance: 12000
   };
   const pressureSample1 = combatPressurePhaseCore({
-    id: '8', combatPhase: 'normal-combat', firstSeenAt: 1000, firstHp: 100, minHp: 100
-  }, { ...pressurePhaseInput, nowMs: 61000 }, pressurePhaseOptions);
+    id: '8', combatPhase: 'normal-combat', firstSeenAt: 1000, firstHp: 100, minHp: 100, damageProgressAt: 1000
+  }, { ...pressurePhaseInput, nowMs: 61000, acceptedShotsSinceDamage: 10 }, pressurePhaseOptions);
   const pressureState1 = { id: '8', combatPhase: pressureSample1.phase, phaseStartedAt: pressureSample1.phaseStartedAt, closePressure: pressureSample1 };
-  const pressureSample2 = combatPressurePhaseCore(pressureState1, { ...pressurePhaseInput, nowMs: 61050 }, pressurePhaseOptions);
+  const pressureSample2 = combatPressurePhaseCore(pressureState1, {
+    ...pressurePhaseInput,
+    nowMs: 62000,
+    acceptedShotsSinceDamage: 10,
+    distance: 11050
+  }, pressurePhaseOptions);
   const pressureState2 = { id: '8', combatPhase: pressureSample2.phase, phaseStartedAt: pressureSample2.phaseStartedAt, closePressure: pressureSample2 };
-  const pressureSample3 = combatPressurePhaseCore(pressureState2, { ...pressurePhaseInput, nowMs: 61100 }, pressurePhaseOptions);
+  const pressureSample3 = combatPressurePhaseCore(pressureState2, {
+    ...pressurePhaseInput,
+    nowMs: 63000,
+    acceptedShotsSinceDamage: 19,
+    distance: 11050
+  }, pressurePhaseOptions);
   const pressureState3 = { id: '8', combatPhase: pressureSample3.phase, phaseStartedAt: pressureSample3.phaseStartedAt, closePressure: pressureSample3 };
-  const pressureRelease1 = combatPressurePhaseCore(pressureState3, { ...pressurePhaseInput, nowMs: 61150, distance: 6000 }, pressurePhaseOptions);
-  const pressureRelease2 = combatPressurePhaseCore({ ...pressureState3, closePressure: pressureRelease1 }, { ...pressurePhaseInput, nowMs: 61200, distance: 6000 }, pressurePhaseOptions);
-  const pressureRelease3 = combatPressurePhaseCore({ ...pressureState3, closePressure: pressureRelease2 }, { ...pressurePhaseInput, nowMs: 61250, distance: 6000 }, pressurePhaseOptions);
+  const pressureStep2 = combatPressurePhaseCore(pressureState3, {
+    ...pressurePhaseInput,
+    nowMs: 63100,
+    acceptedShotsSinceDamage: 20,
+    distance: 11050
+  }, pressurePhaseOptions);
+  const pressureStep2State = { id: '8', combatPhase: pressureStep2.phase, phaseStartedAt: pressureStep2.phaseStartedAt, closePressure: pressureStep2 };
+  const pressureTimeoutBefore = combatPressurePhaseCore(pressureStep2State, {
+    ...pressurePhaseInput,
+    nowMs: 93099,
+    acceptedShotsSinceDamage: 30,
+    distance: 11050
+  }, pressurePhaseOptions);
+  const pressureTimeout = combatPressurePhaseCore({ ...pressureStep2State, closePressure: pressureTimeoutBefore }, {
+    ...pressurePhaseInput,
+    nowMs: 93100,
+    acceptedShotsSinceDamage: 30,
+    distance: 11050
+  }, pressurePhaseOptions);
+  const pressureDamageReset = combatPressurePhaseCore({ ...pressureStep2State, closePressure: pressureTimeout }, {
+    ...pressurePhaseInput,
+    nowMs: 93200,
+    acceptedShotsSinceDamage: 0,
+    damageProgressAt: 93200,
+    damageFromStart: 3,
+    distance: 11050
+  }, pressurePhaseOptions);
   results.push({
-    name: 'combat-close-pressure-enters-full-attack-after-three-band-ticks-and-releases-after-three-reactive-range-ticks',
+    name: 'combat-miss-close-advances-only-after-reaching-goal-and-leaves-after-thirty-second-failed-step',
     passed: pressureSample1.subphase === 'closing'
-      && pressureSample1.pressureBandSamples === 1
-      && pressureSample2.subphase === 'closing'
-      && pressureSample2.pressureBandSamples === 2
+      && pressureSample1.goalDistanceCm === 11000
+      && pressureSample2.withinGoal === true
+      && pressureSample2.goalReachedAcceptedShots === 10
       && pressureSample3.subphase === 'pressure-attack'
       && pressureSample3.pressureAttackCommitted === true
-      && pressureRelease1.pressureAttackCommitted === true
-      && pressureRelease2.pressureAttackCommitted === true
-      && pressureRelease3.pressureAttackCommitted === false
-      && pressureRelease3.subphase === 'closing'
+      && pressureSample3.stepIndex === 1
+      && pressureStep2.stepAdvanced === true
+      && pressureStep2.stepIndex === 2
+      && pressureStep2.goalDistanceCm === 10050
+      && pressureTimeoutBefore.stepElapsedMs === 29999
+      && pressureTimeoutBefore.stepTimedOut === false
+      && pressureTimeout.stepElapsedMs === 30000
+      && pressureTimeout.stepTimedOut === true
+      && pressureDamageReset.phase === 'normal-combat'
+      && pressureDamageReset.active === false
   });
 
   const movementThreatField = [
