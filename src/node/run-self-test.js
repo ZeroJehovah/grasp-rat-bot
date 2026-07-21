@@ -8232,6 +8232,50 @@ async function runSelfTest() {
       want: 'profit-candidate|attack|8|1|1|true'
     },
     {
+      name: 'browserless recent actual AFK shot keeps a non-full in-range target over distant profit',
+      got: (() => {
+        const stateful = {};
+        const makeState = (targetStamina, targetHp, tick) => ({
+          userId: 7,
+          realtime: {
+            tick,
+            frameAgeMs: 100,
+            self: { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+            entities: [
+              { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+              { entity_id: 2, user_id: 8, name: 'engaged-drop-28', x: 7000, y: 0, hp: targetHp, current_join_mode: 'None', drop: 28, stamina_5s_remaining_milli: targetStamina },
+              { entity_id: 3, user_id: 9, name: 'distant-drop-8', x: 34400, y: 0, hp: 100, current_join_mode: 'None', drop: 8, stamina_5s_remaining_milli: 10000 }
+            ],
+            bullets: [],
+            coinDrops: []
+          },
+          fallback: { coinDrops: [] }
+        });
+        const options = {
+          controlMode: 'profit-live',
+          attackRange: 14500,
+          combatEngageGraceMs: 5000,
+          finalActionArbitrationHoldMs: 0
+        };
+        const initial = buildBrowserlessDecision(makeState(10000, 76, 60), stateful, { ...options, nowMs: 1000 });
+        recordAttackHistoryFromActionResult(stateful, {
+          kind: 'profit-attack',
+          target: initial.action.target,
+          shoot: { ok: true, skipped: false, command: { id: 1 } }
+        }, initial, { nowMs: 1200 });
+        const continued = buildBrowserlessDecision(makeState(8700, 52, 61), stateful, { ...options, nowMs: 2500 });
+        const released = buildBrowserlessDecision(makeState(8700, 52, 62), stateful, { ...options, nowMs: 8000 });
+        return [
+          initial.action.target.userId,
+          continued.action.target.userId,
+          continued.action.target.hp,
+          continued.action.target.afkAttackContinuation?.source,
+          released.action.target.userId
+        ].join('|');
+      })(),
+      want: '8|8|52|recent-actual-shot|9'
+    },
+    {
       name: 'browserless AFK display stays white until sixty seconds without activity',
       got: (() => {
         const stateful = {};

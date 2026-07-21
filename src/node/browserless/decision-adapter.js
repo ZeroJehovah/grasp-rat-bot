@@ -934,6 +934,33 @@ function afkTargetBlockedByRecentActivity(target, options = {}) {
   return Boolean(target?.recentlyActive);
 }
 
+function recentAfkAttackCommitment(stateful = {}, nowMs = 0, options = {}) {
+  const attacks = Array.isArray(stateful.attackHistory) ? stateful.attackHistory : [];
+  const latest = attacks.at(-1) || null;
+  if (!latest || latest.combat || latest.afk !== true || latest.action !== 'attack') return null;
+  const at = Number(latest.at || 0);
+  const graceMs = Math.max(1000, Number(options.combatEngageGraceMs || 5000));
+  const ageMs = Math.max(0, Number(nowMs || 0) - at);
+  if (!(at > 0) || ageMs > graceMs) return null;
+  return { targetId: String(latest.id ?? ''), at, ageMs, graceMs };
+}
+
+function markAfkAttackContinuation(target, commitment, options = {}) {
+  if (!target || !commitment?.targetId) return false;
+  const targetId = targetIdentity(target);
+  const distance = Number(target.distance ?? Infinity);
+  const attackRange = Math.max(0, Number(options.attackRange ?? options.combatAttackRange ?? DEFAULT_ATTACK_RANGE));
+  if (!targetId || String(targetId) !== commitment.targetId) return false;
+  if (!Number.isFinite(distance) || distance > attackRange) return false;
+  target.afkAttackContinuation = {
+    source: 'recent-actual-shot',
+    at: commitment.at,
+    ageMs: Math.round(commitment.ageMs),
+    graceMs: Math.round(commitment.graceMs)
+  };
+  return true;
+}
+
 function isBrowserlessAvoidanceThreat(target) {
   if (!target || target.alive === false) return false;
   if (target.easyKillThreatExempt) return false;
@@ -1790,6 +1817,7 @@ function summarizeTarget(target) {
     profitMetadataAuthority: target.profitMetadataAuthority || '',
     profitMetadataMode: target.profitMetadataMode || '',
     profitMetadataActive: Boolean(target.profitMetadataActive),
+    afkAttackContinuation: target.afkAttackContinuation ? cloneJson(target.afkAttackContinuation) : null,
     ...(target.centerActivityEdge ? { centerActivityEdge: cloneJson(target.centerActivityEdge) } : {})
   };
 }
@@ -2595,8 +2623,12 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
   });
   const afkCenterPartition = partitionCenterActivityAfkTargets(afkObservationTargetsRaw, self, options);
   const afkObservationTargets = afkCenterPartition.targets;
+  const afkAttackCommitment = recentAfkAttackCommitment(stateful, nowMs, options);
   const afkPanelTargets = afkObservationTargets.filter(entity => hasFull5sStamina(entity, options));
-  const afkTargets = afkPanelTargets.filter(entity => !afkTargetBlockedByRecentActivity(entity, options));
+  const afkTargets = afkObservationTargets.filter(entity => (
+    markAfkAttackContinuation(entity, afkAttackCommitment, options)
+    || (hasFull5sStamina(entity, options) && !afkTargetBlockedByRecentActivity(entity, options))
+  ));
   const edgeAfkTargets = afkTargets.filter(entity => entity.centerActivityEdge?.admitted === true);
   const selfKillTargetTicks = selfKillTargetTicksFromMessages(Array.isArray(fallback.messages) ? fallback.messages : [], selfUserId);
   const selfKillTargetIds = Array.from(selfKillTargetTicks.keys());
