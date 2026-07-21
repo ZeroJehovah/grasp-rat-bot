@@ -159,6 +159,7 @@ const {
 } = require('../../scripts/browserless-runner');
 const {
   replayCombatClosePressure,
+  replayCombatDisengage,
   replayCombatEconomicStopLoss,
   replayCombatPursuit,
   replayMovementStallExit,
@@ -10591,7 +10592,7 @@ async function runSelfTest() {
       want: 'combat-live|false|true|200|close-pressure|60000|profit-pursuit-close-pressure|false|combat-close-pressure-approach|true|19677|'
     },
     {
-      name: 'browserless close pressure retains a still-visible target past ordinary disengage range',
+      name: 'browserless close pressure releases a visible target beyond disengage range',
       got: (() => {
         const stateful = {
           combatTarget: {
@@ -10632,7 +10633,7 @@ async function runSelfTest() {
           entity_id: 2,
           user_id: 19677,
           name: 'Eason',
-          x: 40000,
+          x: 20828,
           y: 0,
           vx: 50,
           vy: 0,
@@ -10668,14 +10669,14 @@ async function runSelfTest() {
           browserlessProfitPursuitMinDamageHp: 10
         });
         return [
-          decision.kind,
-          decision.combat.target?.userId,
-          decision.combat.combatPhase.phase,
-          decision.combat.movement.reason,
-          stateful.combatTarget?.id
+          decision.kind === 'combat-live',
+          decision.combat.target === null,
+          stateful.combatTarget === null,
+          decision.action?.kind || '',
+          decision.action?.target?.userId || 'no-target'
         ].join('|');
       })(),
-      want: 'combat-live|19677|close-pressure|combat-close-pressure-approach|19677'
+      want: 'false|true|true|seek-enemy|19677'
     },
     {
       name: 'browserless close pressure blocks realtime high-value loot takeover',
@@ -18541,6 +18542,55 @@ async function runSelfTest() {
         }
       })(),
       want: 'true|1|1|2|2|0|0'
+    },
+    {
+      name: 'browserless combat disengage replay releases far close-pressure hold',
+      got: (() => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'grasp-rat-combat-disengage-replay-'));
+        try {
+          const startedAt = Date.parse('2026-07-21T17:50:00.000Z');
+          const distances = [16000, 20828, 19000];
+          const rows = distances.map((distance, index) => ({
+            at: new Date(startedAt + index * 1000).toISOString(),
+            type: 'combat-live',
+            detail: {
+              target: {
+                userId: 36176,
+                name: 'Victor8886',
+                distance,
+                combatEngagement: {
+                  closePressureHold: true,
+                  outOfRangeMs: index * 1000
+                }
+              },
+              combatPhase: { phase: 'close-pressure', active: true },
+              metrics: { movementStaminaSpent: index * 1000 }
+            }
+          }));
+          const file = path.join(dir, 'combat.jsonl');
+          fs.writeFileSync(file, rows.map(item => JSON.stringify(item)).join('\n') + '\n');
+          const replay = replayCombatDisengage({
+            file,
+            startLine: 1,
+            endLine: rows.length,
+            targetId: '36176',
+            attackRange: 14500,
+            disengageRange: 17000
+          });
+          return [
+            replay.accepted,
+            replay.release.line,
+            replay.release.distanceCm,
+            replay.baselineCombatFramesAfterRelease,
+            replay.correctedCombatFramesAfterRelease,
+            replay.estimatedCombatHoldAvoidedMs,
+            replay.estimatedMovementStaminaSaved
+          ].join('|');
+        } finally {
+          fs.rmSync(dir, { recursive: true, force: true });
+        }
+      })(),
+      want: 'true|2|20828|2|0|1000|1000'
     },
     {
       name: 'browserless close-pressure replay preserves threat dodge and reaches pressure band',

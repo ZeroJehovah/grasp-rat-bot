@@ -65,6 +65,8 @@ function parseArgs(argv) {
     targetName: '',
     mode: 'combat',
     hitRadius: 90,
+    attackRange: 14500,
+    disengageRange: 17000,
     controlIntervalMs: 50,
     minImprovementPct: 0,
     expectNewExit: false,
@@ -85,6 +87,8 @@ function parseArgs(argv) {
     else if (arg === '--target-name') options.targetName = String(argv[++index] || '');
     else if (arg === '--mode') options.mode = String(argv[++index] || 'combat');
     else if (arg === '--hit-radius') options.hitRadius = Number(argv[++index] || 90);
+    else if (arg === '--attack-range') options.attackRange = Number(argv[++index] || 14500);
+    else if (arg === '--disengage-range') options.disengageRange = Number(argv[++index] || 17000);
     else if (arg === '--control-interval-ms') options.controlIntervalMs = Number(argv[++index] || 160);
     else if (arg === '--min-improvement-pct') options.minImprovementPct = Number(argv[++index] || 0);
     else if (arg === '--expect-new-exit') options.expectNewExit = true;
@@ -2667,6 +2671,65 @@ function replayCombatClosePressure(options) {
   return result;
 }
 
+function replayCombatDisengage(options) {
+  const rows = selectedEntries(options).filter(({ detail }) => {
+    const target = detail.target || null;
+    if (!target) return false;
+    if (options.targetId && String(target.userId ?? target.user_id ?? '') !== options.targetId) return false;
+    if (options.targetName && String(target.name || '') !== options.targetName) return false;
+    return true;
+  });
+  const attackRange = Math.max(0, Number(options.attackRange || 14500));
+  const disengageRange = Math.max(attackRange, Number(options.disengageRange || 17000));
+  const firstReleaseRow = rows.find(row => (
+    row.detail?.combatPhase?.phase === 'close-pressure'
+      && row.detail?.target?.combatEngagement?.closePressureHold === true
+      && Number(row.detail?.target?.distance) > disengageRange
+  )) || null;
+  const firstReleaseIndex = firstReleaseRow ? rows.indexOf(firstReleaseRow) : -1;
+  const baselineRowsAfterRelease = firstReleaseIndex >= 0 ? rows.slice(firstReleaseIndex) : [];
+  const baselineCombatFramesAfterRelease = baselineRowsAfterRelease.filter(row => (
+    row.detail?.combatPhase?.phase === 'close-pressure'
+  )).length;
+  const correctedCombatFramesAfterRelease = baselineRowsAfterRelease.filter(row => (
+    Number(row.detail?.target?.distance) <= attackRange
+  )).length;
+  const firstAtMs = firstReleaseRow ? Date.parse(firstReleaseRow.entry.at || '') : 0;
+  const lastAtMs = baselineRowsAfterRelease.length
+    ? Date.parse(baselineRowsAfterRelease.at(-1).entry.at || '')
+    : 0;
+  const firstMovementStamina = Number(firstReleaseRow?.detail?.metrics?.movementStaminaSpent || 0);
+  const lastMovementStamina = Number(baselineRowsAfterRelease.at(-1)?.detail?.metrics?.movementStaminaSpent || 0);
+  const result = {
+    mode: 'combat-disengage',
+    targetId: options.targetId || String(rows[0]?.detail?.target?.userId ?? ''),
+    targetName: options.targetName || String(rows[0]?.detail?.target?.name || ''),
+    lines: `${options.startLine}-${options.endLine}`,
+    frames: rows.length,
+    attackRange,
+    disengageRange,
+    release: firstReleaseRow ? {
+      line: firstReleaseRow.line,
+      at: firstReleaseRow.entry.at || '',
+      distanceCm: Number(firstReleaseRow.detail?.target?.distance || 0),
+      outOfRangeMs: Number(firstReleaseRow.detail?.target?.combatEngagement?.outOfRangeMs || 0),
+      phase: firstReleaseRow.detail?.combatPhase?.phase || '',
+      closePressureHold: firstReleaseRow.detail?.target?.combatEngagement?.closePressureHold === true
+    } : null,
+    baselineCombatFramesAfterRelease,
+    correctedCombatFramesAfterRelease,
+    estimatedCombatHoldAvoidedMs: firstAtMs > 0 && lastAtMs >= firstAtMs ? lastAtMs - firstAtMs : 0,
+    estimatedMovementStaminaSaved: Math.max(0, lastMovementStamina - firstMovementStamina)
+  };
+  result.accepted = Boolean(
+    firstReleaseRow
+      && baselineCombatFramesAfterRelease > 0
+      && correctedCombatFramesAfterRelease === 0
+      && Number(result.release.distanceCm) > disengageRange
+  );
+  return result;
+}
+
 function replayCombatEconomicStopLoss(options) {
   const rows = selectedEntries(options).filter(({ detail }) => {
     const target = detail.target || null;
@@ -3951,6 +4014,7 @@ function runReplay(options) {
   if (options.mode === 'combat-pursuit') return replayCombatPursuit(options);
   if (options.mode === 'arbitration') return replayArbitration(options);
   if (options.mode === 'combat-close-pressure') return replayCombatClosePressure(options);
+  if (options.mode === 'combat-disengage') return replayCombatDisengage(options);
   if (options.mode === 'combat-economic-stop-loss') return replayCombatEconomicStopLoss(options);
   if (options.mode === 'combat-shot-coverage') return replayCombatShotCoverage(options);
   if (options.mode === 'combat-policy') return replayCombatPolicy(options);
@@ -3968,6 +4032,7 @@ if (require.main === module) {
 module.exports = {
   parseArgs,
   replayCombatClosePressure,
+  replayCombatDisengage,
   replayCombatEconomicStopLoss,
   replayCombatShotCoverage,
   replayCombatPursuit,

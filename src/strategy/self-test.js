@@ -926,13 +926,13 @@ function runStrategyModuleSelfTests() {
       closePressure: { active: true, phase: 'close-pressure' }
     }
   };
-  const closePressureVisibleTarget = pickEngagedCombatTargetCore(
+  const closePressureInsideDisengageTarget = pickEngagedCombatTargetCore(
     edgeSelf,
     [],
     [{
       ...edgeTarget,
-      x: 40000,
-      distance: 40000,
+      x: 16000,
+      distance: 16000,
       active: false
     }],
     [],
@@ -948,11 +948,46 @@ function runStrategyModuleSelfTests() {
     }
   );
   results.push({
-    name: 'close-pressure-retains-visible-target-beyond-ordinary-disengage-range',
-    passed: closePressureVisibleTarget?.user_id === 2
-      && closePressureVisibleTarget?.combatIntent === 'reengage'
-      && closePressureVisibleTarget?.combatEngagement?.closePressureHold === true
+    name: 'close-pressure-retains-visible-target-inside-disengage-range',
+    passed: closePressureInsideDisengageTarget?.user_id === 2
+      && closePressureInsideDisengageTarget?.combatIntent === 'reengage'
+      && closePressureInsideDisengageTarget?.combatEngagement?.closePressureHold === true
       && closePressureState.combatTarget?.id === 2
+  });
+  const closePressureFarState = {
+    combatTarget: {
+      ...edgeEngaged,
+      at: 30000,
+      lastInRangeAt: 15000,
+      combatPhase: 'close-pressure',
+      closePressure: { active: true, phase: 'close-pressure' }
+    }
+  };
+  const closePressureBeyondDisengageTarget = pickEngagedCombatTargetCore(
+    edgeSelf,
+    [],
+    [{
+      ...edgeTarget,
+      x: 20828,
+      distance: 20828,
+      active: false
+    }],
+    [],
+    closePressureFarState,
+    {
+      nowMs: 40000,
+      targetStickMs: 5000,
+      combatEngageStickMs: 30000,
+      combatEngageGraceMs: 5000,
+      combatEngageGraceRange: 17000,
+      combatDisengageRange: 17000,
+      combatAttackRange: 14500
+    }
+  );
+  results.push({
+    name: 'close-pressure-releases-visible-target-beyond-disengage-range',
+    passed: closePressureBeyondDisengageTarget === null
+      && closePressureFarState.combatTarget === null
   });
   const escapingTarget = {
     ...edgeTarget,

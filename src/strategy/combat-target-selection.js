@@ -548,15 +548,23 @@ function pickEngagedCombatTargetCore(self, combatTargets = [], entities = [], bu
   const visibleHp = visibleTarget?.hp ?? visibleTarget?.knownHp ?? visibleTarget?.displayHp;
   const visibleTargetDead = visibleTarget?.alive === false
     || (visibleHp !== null && visibleHp !== undefined && visibleHp !== '' && Number(visibleHp) === 0);
-  // Once close pressure has started, a still-visible target remains the
-  // committed target through the ordinary attack/disengage radius. The
-  // realtime entity list is already visibility-bounded; center-bound and
-  // genuine safety release paths are evaluated by the caller.
+  // Close pressure may bridge the attack boundary, but it must still honor
+  // the configured disengage radius. Realtime visibility is much wider than
+  // combat range and is not sufficient evidence to keep a fight alive.
   if (closePressure && visibleTarget && !isInvulnerableEntity(visibleTarget)
     && !visibleTargetDead
     && !(typeof options.whitelistCheck === 'function' && options.whitelistCheck(visibleTarget))) {
     const distance = Number(visibleTarget.distance);
     const attackRange = Math.max(0, Number(options.combatAttackRange || options.attackRange || 0));
+    const disengageRange = Math.max(attackRange, Number(
+      options.combatDisengageRange
+        ?? options.combatEngageGraceRange
+        ?? attackRange
+    ));
+    if (Number.isFinite(distance) && disengageRange > 0 && distance > disengageRange) {
+      if (state && typeof state === 'object') state.combatTarget = null;
+      return null;
+    }
     const lastInRangeAt = Number(engaged.lastInRangeAt || engaged.at || 0);
     const outOfRangeMs = Math.max(0, nowMs - lastInRangeAt);
     return {
