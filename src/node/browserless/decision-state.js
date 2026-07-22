@@ -88,6 +88,8 @@ function createInitialDecisionState(options = {}) {
     coinCompetitionState: asRecord(options.coinCompetitionState),
     coinCompetitionReleases: asArray(options.coinCompetitionReleases),
     coinPickupObservation: cloneJson(options.coinPickupObservation || null),
+    snapshotCoinPickupObservation: cloneJson(options.snapshotCoinPickupObservation || null),
+    coinPickupRealtimeAuthorityAt: Number(options.coinPickupRealtimeAuthorityAt || 0) || 0,
     singleCoinBait: cloneJson(options.singleCoinBait || null),
     outsideCenterIdle: cloneJson(options.outsideCenterIdle || null),
     opportunityAfkStamina: asRecord(options.opportunityAfkStamina),

@@ -3282,6 +3282,52 @@ async function runBrowserlessRunnerSelfTest() {
       pickupCount: pickupAfter.length,
       amount: pickupAfter[0]?.amount ?? null
     };
+    const snapshotPickupObservationState = {};
+    const snapshotPickupBefore = observeBrowserlessCoinPickups({
+      nowMs: pickupObservationAt,
+      self: { x: 0, y: 0 },
+      rawRealtime: { coinDropsObserved: false },
+      fallback: { tick: 100, coinDropsObserved: true },
+      snapshotObservedCoins: [
+        { drop_id: 'snapshot-single', amount: 1, x: 0, y: 4000 },
+        { drop_id: 'snapshot-far', amount: 1, x: 10000, y: 10000 }
+      ]
+    }, snapshotPickupObservationState, { coinCollectedConfirmDistance: 1800 });
+    const snapshotPickupSameFrame = observeBrowserlessCoinPickups({
+      nowMs: pickupObservationAt + 5000,
+      self: { x: 0, y: 4000 },
+      rawRealtime: { coinDropsObserved: false },
+      fallback: { tick: 100, coinDropsObserved: true },
+      snapshotObservedCoins: [
+        { drop_id: 'snapshot-single', amount: 1, x: 0, y: 4000 },
+        { drop_id: 'snapshot-far', amount: 1, x: 10000, y: 10000 }
+      ]
+    }, snapshotPickupObservationState, { coinCollectedConfirmDistance: 1800 });
+    const snapshotPickupAfter = observeBrowserlessCoinPickups({
+      nowMs: pickupObservationAt + 10000,
+      self: { x: 4000, y: 4000 },
+      rawRealtime: { coinDropsObserved: false },
+      fallback: { tick: 200, coinDropsObserved: true },
+      snapshotObservedCoins: []
+    }, snapshotPickupObservationState, { coinCollectedConfirmDistance: 1800 });
+    const snapshotPickupRepeated = observeBrowserlessCoinPickups({
+      nowMs: pickupObservationAt + 11000,
+      self: { x: 4000, y: 4000 },
+      rawRealtime: { coinDropsObserved: false },
+      fallback: { tick: 200, coinDropsObserved: true },
+      snapshotObservedCoins: []
+    }, snapshotPickupObservationState, { coinCollectedConfirmDistance: 1800 });
+    const browserlessSnapshotCoinPickupObservationTest = {
+      ok: snapshotPickupBefore.length === 0
+        && snapshotPickupSameFrame.length === 0
+        && snapshotPickupAfter.length === 1
+        && snapshotPickupAfter[0].amount === 1
+        && snapshotPickupAfter[0].reason === 'snapshot-coin-disappeared-near-path'
+        && snapshotPickupRepeated.length === 0,
+      pickupCount: snapshotPickupAfter.length,
+      amount: snapshotPickupAfter[0]?.amount ?? null,
+      reason: snapshotPickupAfter[0]?.reason || ''
+    };
     const highDropRankingTest = [
       ['self', 500, 700, 600],
       ['other', 500, 650, 650]
@@ -3555,6 +3601,7 @@ async function runBrowserlessRunnerSelfTest() {
           && panelStatsCompact.stats.currentSession.coinsGained === 20
           && panelStatsCompact.stats.today.coinsGained === 20
           && browserlessCoinPickupObservationTest.ok
+          && browserlessSnapshotCoinPickupObservationTest.ok
           && highDropRankingTest
           && staminaExhaustionPanelTest
           && panelBattleCompact.battle.distance === 5600
@@ -3587,6 +3634,7 @@ async function runBrowserlessRunnerSelfTest() {
           calibrated: panelStatsCompact.stats.currentSession.coinsGained
         },
         coinPickupObservation: browserlessCoinPickupObservationTest,
+        snapshotCoinPickupObservation: browserlessSnapshotCoinPickupObservationTest,
         highDropRanking: highDropRankingTest,
         staminaExhaustionPanel: staminaExhaustionPanelTest,
         battleDistance: panelBattleCompact.battle.distance,

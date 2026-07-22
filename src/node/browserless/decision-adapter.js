@@ -2583,51 +2583,107 @@ function topItems(items, mapper, limit = 5) {
   return (items || []).slice(0, limit).map(mapper).filter(Boolean);
 }
 
-function observeBrowserlessCoinPickups(input, stateful = {}, options = {}) {
-  const nowMs = Number(input?.nowMs || Date.now());
-  if (!input?.self) {
-    stateful.coinPickupObservation = null;
-    return [];
+const SNAPSHOT_COIN_PICKUP_MEMORY_MS = 30000;
+const SNAPSHOT_COIN_PICKUP_PATH_LIMIT = 48;
+
+function coinPickupSelfPoint(self, nowMs) {
+  const x = numberOrNull(self?.x);
+  const y = numberOrNull(self?.y);
+  if (x === null || y === null) return null;
+  return { x, y, at: nowMs };
+}
+
+function appendSnapshotCoinPickupPath(observation, self, nowMs) {
+  const point = coinPickupSelfPoint(self, nowMs);
+  if (!observation || !point) return observation;
+  const path = Array.isArray(observation.path) ? observation.path.slice(-SNAPSHOT_COIN_PICKUP_PATH_LIMIT + 1) : [];
+  const previous = path.at(-1) || observation.self || null;
+  if (!previous || Math.hypot(Number(previous.x) - point.x, Number(previous.y) - point.y) >= 50) {
+    path.push(point);
+  } else if (path.length) {
+    path[path.length - 1] = point;
+  } else {
+    path.push(point);
   }
-  if (input?.rawRealtime?.coinDropsObserved === false) return [];
-  const currentSnapshot = buildNativeCoinSnapshotCore(input?.realtimeObservedCoins || [], { nowMs });
-  const previous = stateful.coinPickupObservation || null;
-  const pickups = previous
-    ? pickIncidentalCoinPickupsCore(
-        previous.coins,
-        currentSnapshot,
-        input.self,
-        previous.self,
-        {
-          nowMs,
-          incidentalCoinPickupMemoryMs: options.incidentalCoinPickupMemoryMs,
-          coinCollectedConfirmDistance: options.coinCollectedConfirmDistance
-            ?? BROWSER_RUNTIME_DEFAULTS.coinCollectedConfirmDistance
-        }
-      )
-    : [];
-  stateful.coinPickupObservation = {
-    at: nowMs,
-    self: {
-      x: numberOrNull(input.self.x),
-      y: numberOrNull(input.self.y)
-    },
-    coins: currentSnapshot.slice(-160)
-  };
+  observation.path = path.slice(-SNAPSHOT_COIN_PICKUP_PATH_LIMIT);
+  return observation;
+}
+
+function coinPickupEvidence(matches, nowMs, reason) {
   const seen = new Set();
-  return pickups.map(pickup => {
+  return (matches || []).map(pickup => {
     const coin = pickup?.coin || null;
     const key = String(coin?.key || '');
     const amount = Math.max(0, Math.round(Number(coin?.amount || 0) || 0));
     if (!key || !amount || seen.has(key)) return null;
     seen.add(key);
-    return {
-      key,
-      amount,
-      at: nowMs,
-      reason: 'realtime-coin-disappeared-near-path'
-    };
+    return { key, amount, at: nowMs, reason };
   }).filter(Boolean);
+}
+
+function observeBrowserlessCoinPickups(input, stateful = {}, options = {}) {
+  const nowMs = Number(input?.nowMs || Date.now());
+  if (!input?.self) {
+    stateful.coinPickupObservation = null;
+    stateful.snapshotCoinPickupObservation = null;
+    stateful.coinPickupRealtimeAuthorityAt = 0;
+    return [];
+  }
+  const confirmDistance = options.coinCollectedConfirmDistance
+    ?? BROWSER_RUNTIME_DEFAULTS.coinCollectedConfirmDistance;
+  const realtimeObserved = input?.rawRealtime?.coinDropsObserved === true;
+  if (realtimeObserved) {
+    stateful.coinPickupRealtimeAuthorityAt = nowMs;
+    const currentSnapshot = buildNativeCoinSnapshotCore(input?.realtimeObservedCoins || [], { nowMs });
+    const previous = stateful.coinPickupObservation || null;
+    const pickups = previous
+      ? pickIncidentalCoinPickupsCore(previous.coins, currentSnapshot, input.self, previous.self, {
+          nowMs,
+          incidentalCoinPickupMemoryMs: options.incidentalCoinPickupMemoryMs,
+          coinCollectedConfirmDistance: confirmDistance
+        })
+      : [];
+    stateful.coinPickupObservation = {
+      at: nowMs,
+      self: coinPickupSelfPoint(input.self, nowMs),
+      coins: currentSnapshot.slice(-160)
+    };
+    stateful.snapshotCoinPickupObservation = null;
+    return coinPickupEvidence(pickups, nowMs, 'realtime-coin-disappeared-near-path');
+  }
+
+  const snapshotMemoryMs = Math.max(5000, Number(
+    options.snapshotCoinPickupMemoryMs || SNAPSHOT_COIN_PICKUP_MEMORY_MS
+  ) || SNAPSHOT_COIN_PICKUP_MEMORY_MS);
+  const realtimeAuthorityAt = Number(stateful.coinPickupRealtimeAuthorityAt || 0);
+  if (realtimeAuthorityAt > 0 && nowMs - realtimeAuthorityAt <= snapshotMemoryMs) return [];
+  if (input?.fallback?.coinDropsObserved !== true || input?.fallback?.tick === null || input?.fallback?.tick === undefined) {
+    return [];
+  }
+  const identity = `tick:${String(input.fallback.tick)}`;
+  const currentSnapshot = buildNativeCoinSnapshotCore(input?.snapshotObservedCoins || [], { nowMs });
+  const previous = stateful.snapshotCoinPickupObservation || null;
+  if (previous?.identity === identity) {
+    appendSnapshotCoinPickupPath(previous, input.self, nowMs);
+    return [];
+  }
+  const pickups = previous
+    ? pickIncidentalCoinPickupsCore(previous.coins, currentSnapshot, input.self, previous.self, {
+        nowMs,
+        incidentalCoinPickupMemoryMs: snapshotMemoryMs,
+        coinCollectedConfirmDistance: confirmDistance,
+        pathPoints: previous.path
+      })
+    : [];
+  const selfPoint = coinPickupSelfPoint(input.self, nowMs);
+  stateful.snapshotCoinPickupObservation = {
+    identity,
+    at: nowMs,
+    self: selfPoint,
+    path: selfPoint ? [selfPoint] : [],
+    coins: currentSnapshot.slice(-160)
+  };
+  return coinPickupEvidence(pickups, nowMs, 'snapshot-coin-disappeared-near-path');
 }
 
 function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
@@ -2823,6 +2879,7 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
     fallback: {
       tick: fallback.tick ?? null,
       frameAgeMs: numberOrNull(fallback.frameAgeMs),
+      coinDropsObserved: fallback.coinDropsObserved === true,
       coinDropCount: snapshotCoins.length,
       snapshotVisibleCoinCount: snapshotVisibleCoins.length,
       snapshotVisibleCoinMaxDistanceCm: snapshotVisibleCoinMaxDistance,
@@ -2843,6 +2900,7 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
     easyKill: easyKillInput.easyKill,
     easyKillTargets: easyKillInput.easyKillTargets,
     realtimeObservedCoins: realtimeCoinsRaw,
+    snapshotObservedCoins: snapshotCoinsRaw,
     realtimeCoins,
     snapshotCoins,
     snapshotVisibleCoins,

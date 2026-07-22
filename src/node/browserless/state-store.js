@@ -264,6 +264,7 @@ function createInitialState(userId = 0) {
       entitiesByUserId: {},
       bullets: [],
       coinDrops: [],
+      coinDropsObserved: false,
       messages: [],
       counts: {
         totalEntities: null,
@@ -475,6 +476,7 @@ function createBrowserlessStateStore(options = {}) {
     const entities = Array.isArray(frame.entities) ? frame.entities : [];
     const bullets = Array.isArray(frame.bullets) ? frame.bullets : [];
     const coinDrops = coinDropArraysFromFrame(frame);
+    const coinDropsObserved = hasCoinDropArrayField(frame);
     const normalizedEntities = entities
       .map(entity => normalizeEntity(entity, { ...meta, authority: 'snapshot', source: 'snapshot' }))
       .filter(Boolean);
@@ -497,6 +499,7 @@ function createBrowserlessStateStore(options = {}) {
     state.snapshot.coinDrops = coinDrops
       .map(drop => normalizeCoinDrop(drop, { ...meta, authority: 'snapshot', source: 'snapshot' }))
       .filter(Boolean);
+    state.snapshot.coinDropsObserved = coinDropsObserved;
     state.snapshot.messages = Array.isArray(frame.messages) ? cloneJson(frame.messages) : [];
     state.snapshot.counts = {
       totalEntities: frame.total_entities ?? null,
@@ -720,6 +723,7 @@ function createBrowserlessStateStore(options = {}) {
       entitiesByUserId: cloneJson(state.snapshot.entitiesByUserId),
       bullets: cloneJson(state.snapshot.bullets),
       coinDrops: cloneJson(state.snapshot.coinDrops),
+      coinDropsObserved: Boolean(state.snapshot.coinDropsObserved),
       messages: cloneJson(state.snapshot.messages),
       counts: cloneJson(state.snapshot.counts)
     };
@@ -799,6 +803,7 @@ function createBrowserlessStateStore(options = {}) {
         entitiesByUserId: state.snapshot.entitiesByUserId,
         bullets: state.snapshot.bullets,
         coinDrops: state.snapshot.coinDrops,
+        coinDropsObserved: Boolean(state.snapshot.coinDropsObserved),
         messages: state.snapshot.messages,
         counts: state.snapshot.counts
       },

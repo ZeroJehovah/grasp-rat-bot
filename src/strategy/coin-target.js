@@ -102,6 +102,11 @@ function pickIncidentalCoinPickupsCore(previousSnapshot, currentSnapshot, curren
   const t = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : 0;
   const memoryMs = Math.max(500, Number(options.incidentalCoinPickupMemoryMs || 3000) || 3000);
   const radius = Math.max(0, Number(options.coinCollectedConfirmDistance || 0) || 0);
+  const pathPoints = [
+    previousSelf,
+    ...(Array.isArray(options.pathPoints) ? options.pathPoints : []),
+    currentSummary
+  ].filter(point => Number.isFinite(Number(point?.x)) && Number.isFinite(Number(point?.y)));
   const currentKeys = new Set(currentSnapshot.map(coin => String(coin?.key || '')));
   const picked = [];
   for (const coin of Array.isArray(previousSnapshot) ? previousSnapshot : []) {
@@ -109,7 +114,13 @@ function pickIncidentalCoinPickupsCore(previousSnapshot, currentSnapshot, curren
     if (t - Number(coin.at || 0) > memoryMs) continue;
     const currentDistance = coinTargetDistance(currentSummary, coin, options);
     const previousDistance = previousSelf ? coinTargetDistance(previousSelf, coin, options) : Infinity;
-    const pathDistance = previousSelf ? pointToSegmentDistanceCore(coin, previousSelf, currentSummary, options) : currentDistance;
+    let pathDistance = currentDistance;
+    for (let index = 1; index < pathPoints.length; index += 1) {
+      pathDistance = Math.min(
+        pathDistance,
+        pointToSegmentDistanceCore(coin, pathPoints[index - 1], pathPoints[index], options)
+      );
+    }
     if (Math.min(currentDistance, previousDistance, pathDistance) > radius) continue;
     picked.push({
       coin,
