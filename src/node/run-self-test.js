@@ -10681,7 +10681,132 @@ async function runSelfTest() {
       want: 'false|true|true|seek-enemy|19677'
     },
     {
-      name: 'browserless close pressure blocks realtime high-value loot takeover',
+      name: 'browserless recent AFK attack and immediate stamina block proactive active takeover',
+      got: (() => {
+        const nowMs = 2446;
+        const self = fullStamina5s({
+          entity_id: 209,
+          user_id: 28886,
+          name: 'self',
+          x: 19623,
+          y: 66268,
+          hp: 100,
+          max_hp: 100
+        });
+        const lowStaminaSelf = {
+          ...self,
+          stamina_5s_remaining_milli: 289,
+          stamina5sRemainingMilli: 289,
+          stamina5s: 289
+        };
+        const kasou = fullStamina5s({
+          entity_id: 312650,
+          user_id: 31265,
+          name: 'kasou',
+          x: 26061,
+          y: 62538,
+          hp: 67,
+          current_join_mode: 'Passive',
+          drop: 235
+        });
+        const eason = fullStamina5s({
+          entity_id: 196770,
+          user_id: 19677,
+          name: 'Eason',
+          x: 33893,
+          y: 68533,
+          vx: -35,
+          vy: -35,
+          hp: 100,
+          current_join_mode: 'Active',
+          drop: 551
+        });
+        const previousAction = {
+          kind: 'attack',
+          band: 'profit',
+          reason: 'best-opportunity',
+          target: {
+            ...kasou,
+            active: false,
+            alive: true,
+            invulnerable: false,
+            afkAttackContinuation: {
+              source: 'recent-actual-shot',
+              at: 1000,
+              ageMs: 1446,
+              graceMs: 5000
+            }
+          }
+        };
+        const options = {
+          ...buildBrowserlessRuntimeDefaults({}),
+          nowMs,
+          userId: 28886,
+          liveCombatEnabled: true,
+          combatEnabled: true,
+          combatAttackRange: 14500,
+          combatOpponentProbeReserveMs: 5600
+        };
+        const protectedState = createBrowserlessDecisionState();
+        protectedState.lastDecisionAction = previousAction;
+        const protectedDecision = buildBrowserlessCombatDryRun({
+          userId: 28886,
+          realtime: { tick: 1085292, self, entities: [self, kasou, eason], bullets: [] }
+        }, {
+          ...options,
+          decisionState: protectedState
+        });
+        const exhaustedDecision = buildBrowserlessCombatDryRun({
+          userId: 28886,
+          realtime: { tick: 1085292, self: lowStaminaSelf, entities: [lowStaminaSelf, kasou, eason], bullets: [] }
+        }, {
+          ...options,
+          decisionState: createBrowserlessDecisionState()
+        });
+        const defensiveState = createBrowserlessDecisionState();
+        defensiveState.lastDecisionAction = previousAction;
+        const defensiveDecision = buildBrowserlessCombatDryRun({
+          userId: 28886,
+          realtime: {
+            tick: 1085292,
+            self: lowStaminaSelf,
+            entities: [lowStaminaSelf, kasou, { ...eason, firing: true }],
+            bullets: []
+          }
+        }, {
+          ...options,
+          decisionState: defensiveState
+        });
+        const syncedAdapter = createBrowserlessDecisionAdapter(options);
+        const synced = syncedAdapter.syncPlannerDecision({
+          action: previousAction,
+          stateful: {
+            lastDecisionAction: previousAction,
+            opportunityChoice: { type: 'enemy', id: 31265, key: 'enemy:31265' },
+            switchLock: null
+          }
+        });
+        const syncedDecision = syncedAdapter.evaluateCombat({
+          userId: 28886,
+          realtime: { tick: 1085292, self, entities: [self, kasou, eason], bullets: [] }
+        }, options);
+        return [
+          protectedDecision.target === null,
+          protectedDecision.afkProfitCommitment?.reason,
+          protectedDecision.afkProfitCommitment?.blockedTargetId,
+          exhaustedDecision.target === null,
+          exhaustedDecision.candidates.length,
+          defensiveDecision.target?.userId,
+          defensiveDecision.target?.combatIntent,
+          defensiveDecision.afkProfitCommitment?.blockedProactiveCombat,
+          synced,
+          syncedDecision.combat?.afkProfitCommitment?.blockedTargetId
+        ].join('|');
+      })(),
+      want: 'true|recent-afk-attack-commitment|19677|true|0|19677|defensive|false|true|19677'
+    },
+    {
+      name: 'browserless ordinary-profit close pressure yields to realtime high-value loot',
       got: (() => {
         const stateful = {
           combatTarget: {
@@ -10766,19 +10891,60 @@ async function runSelfTest() {
           browserlessProfitPursuitMinDamageMs: 60000,
           browserlessProfitPursuitMinDamageHp: 10
         });
+        const defensiveStateful = {
+          combatTarget: {
+            ...stateful.combatTarget,
+            intent: 'defensive',
+            originIntent: 'defensive'
+          },
+          combatMetrics: { ...stateful.combatMetrics }
+        };
+        const defensive = buildBrowserlessRealtimeControlDecision({
+          userId: 28886,
+          realtime: {
+            tick: 1241,
+            receivedAtMs: 61050,
+            frameAgeMs: 0,
+            self,
+            entities: [self, { ...target, firing: true }],
+            bullets: []
+          },
+          fallback: {
+            tick: 1241,
+            receivedAtMs: 61050,
+            frameAgeMs: 0,
+            self,
+            entities: [self, { ...target, firing: true }],
+            coinDrops: [{ drop_id: 'valuable', amount: 30, x: 5000, y: 1000 }],
+            messages: []
+          }
+        }, defensiveStateful, {
+          ...buildBrowserlessRuntimeDefaults({}),
+          nowMs: 61050,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          dynamicProfitThresholdEnabled: false,
+          combatAttackRange: 14500,
+          combatDisengageRange: 17000,
+          combatEngageGraceRange: 17000,
+          targetStickMs: 5000,
+          combatEngageStickMs: 30000
+        });
         return [
           decision.action.kind,
           decision.action.reason,
-          decision.action.target.userId,
+          decision.action.target.id,
           decision.combat.combatPhase.phase,
-          decision.input.loot.blockedReason,
-          decision.input.loot.closePressure,
+          decision.input.loot.releasedOrdinaryProfitClosePressure,
           decision.input.loot.candidate.id,
           Boolean(decision.action.realtimeLootPriority),
-          decision.combat.shooting.state === 'loot-priority'
+          decision.combat.shooting.state === 'loot-priority',
+          defensive.action.kind,
+          defensive.input.loot.blockedReason,
+          defensive.input.loot.ordinaryProfitClosePressure
         ].join('|');
       })(),
-      want: 'combat-live|combat-live-realtime|19677|close-pressure|close-pressure-combat-lock|true|valuable|false|false'
+      want: 'coin|high-value-visible-coin-priority|valuable|close-pressure|true|valuable|true|true|combat-live|close-pressure-combat-lock|false'
     },
     {
       name: 'browserless close pressure hard-locks planner over recovery coin and stale easy-kill approach',

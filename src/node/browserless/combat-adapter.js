@@ -3,6 +3,7 @@
 const {
   calculateCombatTargetPriority,
   applyCombatTargetSwitchHysteresisCore,
+  combatTargetThreatensSelf,
   combatEscapeDecisionCore,
   combatTargetId,
   defensiveTargetOverridesEngagedCore,
@@ -10,6 +11,7 @@ const {
   isCombatEligibleThreat,
   isInvulnerableEntity,
   pickEngagedCombatTargetCore,
+  recentAfkAttackCommitmentCore,
   selectBestCombatTarget
 } = require('../../strategy/combat-target-selection');
 const {
@@ -2272,6 +2274,11 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
   if (!bullets.length) dataGaps.push('no-realtime-bullet-evidence');
   const stateful = options.decisionState || options.stateful || null;
   const incomingBullet = pickIncomingBullet(bullets, options);
+  const selfStamina5s = numberOrNull(
+    self?.stamina_5s_remaining_milli
+      ?? self?.stamina5sRemainingMilli
+      ?? self?.stamina5s
+  );
   const context = {
     userId: selfUserId,
     bullets,
@@ -2284,9 +2291,24 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
         && hpValue(self) !== null
         && hpValue(self) < (numberOrNull(self.max_hp ?? self.maxHp) ?? 100)
     ),
+    selfStamina5s,
+    proactiveActiveCombatMinimumStamina5s: Number(
+      options.combatProactiveActiveMinStamina5s
+        ?? options.combatOpponentProbeReserveMs
+        ?? 5600
+    ),
     whitelistCheck: target => isWhitelistedTargetForOptions(target, options)
   };
   const combatAttackRange = Math.max(0, Number(options.combatAttackRange || options.attackRange || COMBAT_CONSTANTS.ATTACK_RANGE));
+  const afkProfitCommitment = recentAfkAttackCommitmentCore(
+    stateful?.lastDecisionAction,
+    targets,
+    {
+      ...options,
+      nowMs: options.nowMs,
+      combatAttackRange
+    }
+  );
   const combatDodgeRange = combatAttackRange + Math.max(0, Number(options.combatDodgeRangeBuffer ?? COMBAT_CONSTANTS.DODGE_RANGE_BUFFER));
   const contactEntryGuard = updateContactEntryGuard(stateful, self, targets, bullets, {
     ...options,
@@ -2322,12 +2344,18 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     ? null
     : candidates.find(candidate => candidate.easyKillProfitTarget === true
       && String(combatTargetId(candidate)) === String(preferredEasyTargetId)) || null;
-  const proposedNormalTarget = defensiveTargetOverridesEngagedCore(engagedTarget, defensiveTarget, options)
+  const unprotectedProposedTarget = defensiveTargetOverridesEngagedCore(engagedTarget, defensiveTarget, options)
     ? defensiveTarget
     : (engagedTarget
         || (defensiveTarget?.combatIntent === 'defensive' ? defensiveTarget : null)
         || (preferredEasyTarget ? { ...preferredEasyTarget, combatIntent: 'profit' } : null)
         || defensiveTarget);
+  const afkCommitmentBlocksProactiveCombat = Boolean(
+    afkProfitCommitment
+      && unprotectedProposedTarget
+      && !combatTargetThreatensSelf(unprotectedProposedTarget, context)
+  );
+  const proposedNormalTarget = afkCommitmentBlocksProactiveCombat ? null : unprotectedProposedTarget;
   const currentTargetId = String(stateful?.combatTarget?.id || '');
   const currentVisibleTarget = currentTargetId
     ? targets.find(item => String(combatTargetId(item) || '') === currentTargetId) || null
@@ -2934,6 +2962,16 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
       active: closePressureActive
     },
     combatTargetSwitch: switchDecision.diagnostic,
+    afkProfitCommitment: afkProfitCommitment ? {
+      ...afkProfitCommitment,
+      blockedProactiveCombat: afkCommitmentBlocksProactiveCombat,
+      blockedTargetId: afkCommitmentBlocksProactiveCombat
+        ? combatTargetId(unprotectedProposedTarget)
+        : '',
+      blockedTargetName: afkCommitmentBlocksProactiveCombat
+        ? String(unprotectedProposedTarget?.name || '')
+        : ''
+    } : null,
     movement,
     aim: aim.ok ? aim : null,
     behavior: behaviorState ? {

@@ -156,10 +156,12 @@ const {
 const {
   combatEdgePressureDecisionCore,
   combatEscapeDecisionCore,
+  checkProactiveActiveCombatGates,
   incomingBulletHasCollisionRiskCore,
   incomingBulletRequiresTargetSwitchCore,
   applyCombatTargetSwitchHysteresisCore,
-  pickEngagedCombatTargetCore
+  pickEngagedCombatTargetCore,
+  recentAfkAttackCommitmentCore
 } = require('./combat-target-selection');
 const {
   evaluateEconomicCooldownReentryCore,
@@ -4603,6 +4605,66 @@ function runStrategyModuleSelfTests() {
         combatTargetSwitchIncomingDistance: 6500,
         combatTargetSwitchIncomingTimeMs: 900
       })
+  });
+
+  const recentAfkCommitment = recentAfkAttackCommitmentCore({
+    kind: 'attack',
+    target: {
+      userId: 31265,
+      name: 'kasou',
+      active: false,
+      alive: true,
+      afkAttackContinuation: {
+        source: 'recent-actual-shot',
+        at: 1000,
+        graceMs: 5000
+      }
+    }
+  }, [{ userId: 31265, name: 'kasou', active: false, alive: true, hp: 67, distance: 7882 }], {
+    nowMs: 2446,
+    combatAttackRange: 14500
+  });
+  const expiredAfkCommitment = recentAfkAttackCommitmentCore({
+    kind: 'attack',
+    target: {
+      userId: 31265,
+      active: false,
+      alive: true,
+      afkAttackContinuation: { source: 'recent-actual-shot', at: 1000, graceMs: 5000 }
+    }
+  }, [{ userId: 31265, active: false, alive: true, hp: 67, distance: 7882 }], {
+    nowMs: 7001,
+    combatAttackRange: 14500
+  });
+  const lowStaminaProactive = checkProactiveActiveCombatGates({}, {
+    userId: 19677,
+    active: true,
+    firing: false,
+    drop: 551
+  }, {
+    selfStamina5s: 289,
+    proactiveActiveCombatMinimumStamina5s: 5600,
+    opportunityStaminaBudget: 200000
+  });
+  const lowStaminaDefensive = checkProactiveActiveCombatGates({}, {
+    userId: 19677,
+    active: true,
+    firing: true,
+    drop: 551
+  }, {
+    selfStamina5s: 289,
+    proactiveActiveCombatMinimumStamina5s: 5600,
+    opportunityStaminaBudget: 200000
+  });
+  results.push({
+    name: 'combat-proactive-active-respects-recent-afk-shot-and-immediate-stamina',
+    passed: recentAfkCommitment?.reason === 'recent-afk-attack-commitment'
+      && recentAfkCommitment.targetId === '31265'
+      && recentAfkCommitment.ageMs === 1446
+      && expiredAfkCommitment === null
+      && lowStaminaProactive.allowed === false
+      && lowStaminaProactive.reason === 'insufficient-immediate-stamina'
+      && lowStaminaDefensive.allowed === true
   });
 
   const pendingDisadvantage = evaluateConfirmedCombatHpExitCore({

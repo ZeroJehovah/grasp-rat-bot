@@ -7457,7 +7457,10 @@ function buildRealtimeLootControl(input, combat, stateful = {}, options = {}) {
       summary: { ...summaryBase, blockedReason: 'combat-exit-required', healthyHp, selfHp }
     };
   }
-  if (combatDecisionClosePressureActive(combat)) {
+  const closePressureActive = combatDecisionClosePressureActive(combat);
+  const closePressurePhase = combat?.dryRun?.combatPhase || combat?.combatPhase || null;
+  const ordinaryProfitClosePressure = closePressureActive && closePressurePhase?.ordinaryProfit === true;
+  if (closePressureActive && !ordinaryProfitClosePressure) {
     return {
       action: null,
       combat: null,
@@ -7466,6 +7469,7 @@ function buildRealtimeLootControl(input, combat, stateful = {}, options = {}) {
         ...summaryBase,
         blockedReason: 'close-pressure-combat-lock',
         closePressure: true,
+        ordinaryProfitClosePressure: false,
         combatTargetId: targetIdentity(combat?.target || combat?.dryRun?.target)
       }
     };
@@ -7511,6 +7515,7 @@ function buildRealtimeLootControl(input, combat, stateful = {}, options = {}) {
         active: true,
         eligible: true,
         mode: 'direct-coin',
+        releasedOrdinaryProfitClosePressure: ordinaryProfitClosePressure,
         healthyHp,
         selfHp,
         deferredCombatExitReason
@@ -7526,6 +7531,7 @@ function buildRealtimeLootControl(input, combat, stateful = {}, options = {}) {
       summary: {
         ...summaryBase,
         blockedReason: combat?.target ? 'no-safe-loot-progress-vector' : 'incoming-bullet-without-target',
+        releasedOrdinaryProfitClosePressure: ordinaryProfitClosePressure,
         healthyHp,
         selfHp,
         incomingCount: incoming.incomingCount
@@ -7572,6 +7578,7 @@ function buildRealtimeLootControl(input, combat, stateful = {}, options = {}) {
       active: true,
       eligible: true,
       mode: 'safe-dodge-toward-coin',
+      releasedOrdinaryProfitClosePressure: ordinaryProfitClosePressure,
       healthyHp,
       selfHp,
       incomingCount: incoming.incomingCount,
@@ -9356,6 +9363,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       }))
     },
     stateful: {
+      lastDecisionAction: cloneJson(stateful.lastDecisionAction || null),
       opportunityChoice: outputOpportunityChoice,
       switchLock: outputSwitchLock,
       singleCoinBait: cloneJson(stateful.singleCoinBait || null),
@@ -9582,6 +9590,7 @@ function createBrowserlessDecisionAdapter(options = {}) {
       }
       decisionState.opportunityChoice = cloneJson(proposedChoice);
       decisionState.opportunitySwitchLock = cloneJson(plannerState.switchLock || null);
+      decisionState.lastDecisionAction = cloneJson(plannerState.lastDecisionAction || decision?.action || null);
       return true;
     },
     patchState(patch = {}) {

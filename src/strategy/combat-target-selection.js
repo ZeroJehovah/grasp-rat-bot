@@ -217,10 +217,21 @@ function proactiveActiveCombatBudgetBlocked(context = {}) {
   return Number.isFinite(budget) && budget < required;
 }
 
+function proactiveActiveCombatImmediateStaminaBlocked(context = {}) {
+  const required = Number(context.proactiveActiveCombatMinimumStamina5s);
+  const remaining = Number(context.selfStamina5s);
+  return Number.isFinite(required)
+    && required > 0
+    && Number.isFinite(remaining)
+    && remaining < required;
+}
+
 function activeCombatRequiresThreatEvidence(entity, context = {}) {
   if (!isActiveCombatMode(entity)) return false;
   if (isPreferredEasyKillTarget(entity, context)) return false;
-  return combatDropValue(entity) <= lowValueActiveDropMax(context) || proactiveActiveCombatBudgetBlocked(context);
+  return combatDropValue(entity) <= lowValueActiveDropMax(context)
+    || proactiveActiveCombatBudgetBlocked(context)
+    || proactiveActiveCombatImmediateStaminaBlocked(context);
 }
 
 function combatTargetThreatensSelf(entity, context = {}) {
@@ -228,6 +239,45 @@ function combatTargetThreatensSelf(entity, context = {}) {
   if (recentInjuryMatchesTarget(entity, context)) return true;
   if (context.unknownIncoming && isActiveCombatMode(entity) && isFiringCombatEntity(entity)) return true;
   return isFiringCombatEntity(entity);
+}
+
+function recentAfkAttackCommitmentCore(previousAction, entities = [], options = {}) {
+  const action = previousAction && typeof previousAction === 'object' ? previousAction : null;
+  const actionTarget = action?.target || null;
+  const actionKind = String(action?.kind || '');
+  if (!['attack', 'opportunistic-shot'].includes(actionKind) || !actionTarget) return null;
+  if (actionTarget.active !== false || actionTarget.alive === false || actionTarget.invulnerable === true) return null;
+  const continuation = actionTarget.afkAttackContinuation || null;
+  if (!continuation || String(continuation.source || '') !== 'recent-actual-shot') return null;
+  const nowMs = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
+  const graceMs = Math.max(0, Number(continuation.graceMs || options.targetStickMs || 0));
+  const shotAt = Number(continuation.at || 0);
+  const ageMs = shotAt > 0 ? Math.max(0, nowMs - shotAt) : Math.max(0, Number(continuation.ageMs || 0));
+  if (!(graceMs > 0) || ageMs > graceMs) return null;
+  const id = targetId(actionTarget);
+  const visibleTarget = id
+    ? (entities || []).find(entity => targetId(entity) === id) || null
+    : null;
+  if (!visibleTarget
+    || visibleTarget.active !== false
+    || visibleTarget.alive === false
+    || isInvulnerableEntity(visibleTarget)) {
+    return null;
+  }
+  const distance = combatDistanceValue(visibleTarget);
+  const attackRange = Math.max(0, Number(options.combatAttackRange || options.attackRange || 0));
+  if (!Number.isFinite(distance) || !(attackRange > 0) || distance > attackRange) return null;
+  return {
+    active: true,
+    reason: 'recent-afk-attack-commitment',
+    targetId: id,
+    targetName: String(visibleTarget.name || actionTarget.name || ''),
+    targetHp: combatHpValue(visibleTarget),
+    targetDistance: Math.round(distance),
+    lastShotAt: shotAt || null,
+    ageMs: Math.round(ageMs),
+    graceMs: Math.round(graceMs)
+  };
 }
 
 function isCombatEligibleThreat(entity, options = {}) {
@@ -353,6 +403,12 @@ function checkProactiveActiveCombatGates(self, target, context = {}) {
   if (proactiveActiveCombatBudgetBlocked(context)) {
     if (!combatTargetThreatensSelf(target, context)) {
       return { allowed: false, reason: 'insufficient-stamina-budget' };
+    }
+  }
+
+  if (proactiveActiveCombatImmediateStaminaBlocked(context)) {
+    if (!combatTargetThreatensSelf(target, context)) {
+      return { allowed: false, reason: 'insufficient-immediate-stamina' };
     }
   }
 
@@ -723,6 +779,7 @@ module.exports = {
   isInvulnerableEntity,
   calculateCombatTargetPriority,
   checkProactiveActiveCombatGates,
+  combatTargetThreatensSelf,
   combatTargetId,
   applyCombatTargetSwitchHysteresisCore,
   defensiveTargetOverridesEngagedCore,
@@ -731,6 +788,8 @@ module.exports = {
   isActiveCombatMode,
   isFiringCombatEntity,
   pickEngagedCombatTargetCore,
+  proactiveActiveCombatImmediateStaminaBlocked,
+  recentAfkAttackCommitmentCore,
   selectBestCombatTarget,
   isIdleInvulnerable
 };

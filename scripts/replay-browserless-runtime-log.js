@@ -31,8 +31,10 @@ const {
   shouldApplyTrajectoryCoverageCore
 } = require('../src/strategy/combat-shot-coverage');
 const {
+  checkProactiveActiveCombatGates,
   combatEdgePressureDecisionCore,
-  combatEscapeDecisionCore
+  combatEscapeDecisionCore,
+  recentAfkAttackCommitmentCore
 } = require('../src/strategy/combat-target-selection');
 const {
   burstCadenceMetricsCore,
@@ -2982,6 +2984,123 @@ function replayAfkFinishCommitment(options) {
   };
 }
 
+function replayAfkCombatHandoff(options) {
+  const rows = selectedEntries(options);
+  let previousAfkAction = null;
+  let takeover = null;
+  let firstLoot = null;
+  let lastLoot = null;
+  let finalExit = null;
+  for (const row of rows) {
+    const action = row.detail?.action || null;
+    const actionTarget = action?.target || null;
+    const actionTargetId = String(actionTarget?.userId ?? actionTarget?.user_id ?? '');
+    if (['attack', 'opportunistic-shot'].includes(String(action?.kind || ''))
+      && actionTarget
+      && actionTarget.active === false
+      && actionTargetId !== String(options.targetId || '')) {
+      previousAfkAction = action;
+    }
+    const combatTarget = row.detail?.combat?.target || null;
+    const combatTargetId = String(combatTarget?.userId ?? combatTarget?.user_id ?? '');
+    if (!takeover && previousAfkAction && combatTargetId === String(options.targetId || '')) {
+      const atMs = Date.parse(row.entry.at || '') || 0;
+      const previousTarget = previousAfkAction.target || null;
+      const commitment = recentAfkAttackCommitmentCore(previousAfkAction, [
+        previousTarget,
+        combatTarget
+      ], {
+        nowMs: atMs,
+        combatAttackRange: options.attackRange,
+        targetStickMs: 5000
+      });
+      const self = row.detail?.combat?.self || row.detail?.input?.self || null;
+      const readiness = checkProactiveActiveCombatGates(self, combatTarget, {
+        selfStamina5s: self?.stamina5s ?? self?.stamina5sRemainingMilli ?? self?.stamina_5s_remaining_milli,
+        proactiveActiveCombatMinimumStamina5s: 5600,
+        opportunityStaminaBudget: 200000
+      });
+      takeover = {
+        line: row.line,
+        at: row.entry.at || '',
+        baselineFromTargetId: String(previousTarget?.userId ?? previousTarget?.user_id ?? ''),
+        baselineFromTargetName: String(previousTarget?.name || ''),
+        baselineToTargetId: combatTargetId,
+        baselineToTargetName: String(combatTarget?.name || ''),
+        baselineCombatIntent: String(combatTarget?.combatIntent || ''),
+        baselineTargetFiring: Boolean(combatTarget?.firing),
+        baselineSelfHp: Number(self?.hp),
+        baselineSelfStamina5s: Number(self?.stamina5s ?? self?.stamina5sRemainingMilli ?? self?.stamina_5s_remaining_milli),
+        commitment,
+        readiness,
+        correctedTargetId: commitment?.targetId || '',
+        correctedReason: commitment?.reason || readiness.reason || ''
+      };
+    }
+    const loot = row.detail?.input?.loot || null;
+    if (loot?.candidate && Number(loot.candidate.amount || 0) >= 10) {
+      const sample = {
+        line: row.line,
+        at: row.entry.at || '',
+        amount: Number(loot.candidate.amount || 0),
+        distance: Number(loot.candidate.distance || 0),
+        sourceUserId: String(loot.candidate.sourceUserId ?? ''),
+        blockedReason: String(loot.blockedReason || ''),
+        ordinaryProfitClosePressure: row.detail?.combat?.combatPhase?.ordinaryProfit === true,
+        correctedEligible: row.detail?.combat?.combatPhase?.ordinaryProfit === true
+          && Number(row.detail?.combat?.self?.hp ?? row.detail?.input?.self?.hp ?? 0) > 50
+      };
+      if (!firstLoot) firstLoot = sample;
+      lastLoot = sample;
+    }
+    if (action?.kind === 'safety-exit') {
+      finalExit = {
+        line: row.line,
+        at: row.entry.at || '',
+        reason: String(action.reason || ''),
+        selfHp: Number(row.detail?.combat?.self?.hp),
+        targetHp: Number(row.detail?.combat?.target?.hp),
+        acceptedShots: Number(row.detail?.combat?.metrics?.acceptedShots || 0),
+        confirmedHits: Number(row.detail?.combat?.metrics?.confirmedHits || 0),
+        incomingHits: Number(row.detail?.combat?.metrics?.incomingHits || 0),
+        selfDamage: Number(row.detail?.combat?.metrics?.selfDamage || 0),
+        totalStaminaSpent: Number(row.detail?.combat?.metrics?.totalStaminaSpent || 0)
+      };
+    }
+  }
+  const baselineLootLocked = firstLoot?.blockedReason === 'close-pressure-combat-lock';
+  const result = {
+    mode: 'afk-combat-handoff',
+    lines: `${options.startLine}-${options.endLine}`,
+    takeover,
+    loot: { first: firstLoot, last: lastLoot },
+    finalExit,
+    improvement: {
+      retainedAfkTarget: Boolean(takeover?.commitment?.active),
+      avoidedUnreadyProactiveCombat: takeover?.readiness?.allowed === false,
+      recoveredHighValueLootEligibility: Boolean(baselineLootLocked && firstLoot?.correctedEligible),
+      avoidedAcceptedMisses: Number(finalExit?.confirmedHits || 0) === 0
+        ? Number(finalExit?.acceptedShots || 0)
+        : 0,
+      avoidedCombatStamina: Number(finalExit?.confirmedHits || 0) === 0
+        ? Number(finalExit?.totalStaminaSpent || 0)
+        : 0
+    }
+  };
+  result.accepted = Boolean(
+    takeover
+      && takeover.baselineCombatIntent === 'profit'
+      && takeover.baselineTargetFiring === false
+      && takeover.commitment?.active
+      && takeover.readiness?.allowed === false
+      && baselineLootLocked
+      && firstLoot?.correctedEligible
+      && Number(finalExit?.acceptedShots || 0) > 0
+      && Number(finalExit?.confirmedHits || 0) === 0
+  );
+  return result;
+}
+
 function replayExploration(options) {
   const rows = selectedEntries(options);
   const maxBudget = 5000;
@@ -4066,6 +4185,7 @@ function replayCombatPursuit(options) {
 function runReplay(options) {
   if (options.mode === 'opportunity') return replayOpportunity(options);
   if (options.mode === 'afk-finish-commitment') return replayAfkFinishCommitment(options);
+  if (options.mode === 'afk-combat-handoff') return replayAfkCombatHandoff(options);
   if (options.mode === 'exploration') return replayExploration(options);
   if (options.mode === 'easy-kill-continuity') return replayEasyKillContinuity(options);
   if (options.mode === 'leave-tail') return replayLeaveTail(options);
@@ -4098,6 +4218,7 @@ module.exports = {
   replayCombatShotCoverage,
   replayCombatPursuit,
   replayAfkFinishCommitment,
+  replayAfkCombatHandoff,
   replayEasyKillContinuity,
   replayLeaveTail,
   replayMovementStallExit,
