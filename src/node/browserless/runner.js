@@ -164,6 +164,10 @@ function publicConfig(config) {
     combatMissCloseStepCm: Number(config.combatMissCloseStepCm || 0),
     combatMissCloseMinimumDistanceCm: Number(config.combatMissCloseMinimumDistanceCm || 0),
     combatMissCloseTimeoutMs: Number(config.combatMissCloseTimeoutMs || 0),
+    combatMissCloseGenerationMaxMs: Number(config.combatMissCloseGenerationMaxMs || 0),
+    combatMissCloseGenerationMaxSteps: Number(config.combatMissCloseGenerationMaxSteps || 0),
+    combatResponsePolicyShadowConfirmTicks: Number(config.combatResponsePolicyShadowConfirmTicks || 0),
+    combatResponsePolicyShadowMinimumHoldMs: Number(config.combatResponsePolicyShadowMinimumHoldMs || 0),
     combatTrajectoryCoverageMode: String(config.combatTrajectoryCoverageMode || 'live-single'),
     wsTraceEnabled: Boolean(config.wsTraceEnabled),
     wsTracePayload: Boolean(config.wsTracePayload),
@@ -613,6 +617,30 @@ function persistedReconnectDelayPlan(state, config = {}, nowMs = Date.now()) {
   const gameplayDeadline = runner.gameplayDeadline && typeof runner.gameplayDeadline === 'object'
     ? runner.gameplayDeadline
     : null;
+  const nowValue = Number.isFinite(Number(nowMs)) ? Number(nowMs) : Date.now();
+  const pendingExit = normalizePendingExit(runner.pendingExit, nowValue, {
+    maximumAgeMs: config.pendingExitPersistMaxMs
+  });
+  if (pendingExit) {
+    const delayMs = Math.max(0, Number(pendingExit.nextRetryAtMs || 0) - nowValue);
+    return {
+      continue: true,
+      reason: 'exit-recovery',
+      delayMs,
+      previousRunId: pendingExit.sourceRunId || action.previousRunId || '',
+      error: pendingExit.lastError || pendingExit.reason || 'exit-recovery',
+      safetyReason: pendingExit.reason || 'exit-recovery',
+      nextRunAt: pendingExit.nextRetryAt,
+      persisted: true,
+      explicitDelay: false,
+      explicitCooldown: false,
+      deadlineType: 'pending-exit-retry',
+      deadlineSource: 'pending-exit',
+      pendingExit,
+      gameplayDeadline: null,
+      processStop: runner.processStop || null
+    };
+  }
   const candidates = [
     { until: gameplayDeadline?.until, source: 'gameplay-deadline', reason: gameplayDeadline?.reason, explicit: gameplayDeadline?.explicit },
     { until: action.nextRunAt, source: 'current-action', reason: action.reason, explicit: action.explicitDelay },
@@ -629,7 +657,6 @@ function persistedReconnectDelayPlan(state, config = {}, nowMs = Date.now()) {
       selected = candidate;
     }
   }
-  const nowValue = Number.isFinite(Number(nowMs)) ? Number(nowMs) : Date.now();
   const originalNextRunAtMs = nextRunAtMs;
   const dailyFirstLoginNotBeforeMs = browserlessDailyFirstLoginNotBeforeMs(state, config, nextRunAtMs);
   const dailyFirstLoginDeadlineApplied = dailyFirstLoginNotBeforeMs > nextRunAtMs;
@@ -836,14 +863,19 @@ function browserlessLoopPlan(result, config = {}) {
   if (result.reason === 'missing-manual-session') return resume('missing-manual-session');
   if (safetyReason === 'explicit-stop' || safetyReason === 'restart-drain-ready') return stop(safetyReason);
   if (pendingExit) {
+    const nextRetryAtMs = Math.max(0, Number(pendingExit.nextRetryAtMs || 0));
+    const retryDelayMs = Math.max(0, nextRetryAtMs - loopNowMs);
     return {
       continue: true,
       reason: 'exit-recovery',
-      delayMs: Math.max(fastDelayMs, Number(pendingExit.retryDelayMs || fastDelayMs)),
+      delayMs: retryDelayMs,
       previousRunId: runId,
       error,
       safetyReason: pendingExit.reason || safetyReason,
-      pendingExit
+      pendingExit,
+      nextRunAt: pendingExit.nextRetryAt,
+      explicitDelay: false,
+      deadlineType: 'pending-exit-retry'
     };
   }
   if (fastRecoverableTransportReasons.has(safetyReason)) {
@@ -885,6 +917,7 @@ function browserlessLoopPlan(result, config = {}) {
     'combat-hp-disadvantage-leave',
     'combat-low-hp-disadvantage-leave',
     'combat-miss-close-timeout-leave',
+    'combat-no-damage-generation-limit-leave',
     'recovery-low-hp-active-threat-leave',
     'injury-leave',
     'pursuit-leave'
@@ -1564,8 +1597,18 @@ async function runBrowserlessRunner(config, deps = {}) {
         && loopPlan.reason !== 'in-game-snapshot-safety-retry'
     );
     const schedulingNowMs = now();
-    const initialPlannedNextRunAtMs = schedulingNowMs + loopPlan.delayMs;
-    const dailyFirstLoginNotBeforeMs = browserlessDailyFirstLoginNotBeforeMs(
+    const pendingExit = normalizePendingExit(
+      loopPlan.pendingExit || currentBeforeWait?.runner?.pendingExit,
+      schedulingNowMs,
+      { maximumAgeMs: config.pendingExitPersistMaxMs }
+    );
+    const pendingExitDeadlineMs = pendingExit
+      ? Math.max(schedulingNowMs, Number(pendingExit.nextRetryAtMs || schedulingNowMs))
+      : 0;
+    const initialPlannedNextRunAtMs = pendingExit
+      ? pendingExitDeadlineMs
+      : schedulingNowMs + loopPlan.delayMs;
+    const dailyFirstLoginNotBeforeMs = pendingExit ? 0 : browserlessDailyFirstLoginNotBeforeMs(
       currentBeforeWait,
       config,
       initialPlannedNextRunAtMs
@@ -1583,9 +1626,10 @@ async function runBrowserlessRunner(config, deps = {}) {
           originalDelayMs: loopPlan.delayMs
         }
       : loopPlan;
-    const firstDailyLoginAtNextRun = isFirstBrowserlessLoginOfDay(currentBeforeWait, plannedNextRunAtMs);
+    const firstDailyLoginAtNextRun = !pendingExit
+      && isFirstBrowserlessLoginOfDay(currentBeforeWait, plannedNextRunAtMs);
     const shouldPrepareSnapshotSafety = Boolean(
-      !firstDailyLoginAtNextRun && (
+      !pendingExit && !firstDailyLoginAtNextRun && (
         confirmedLeave
         || (
           resetLoginPointForNextEntry
@@ -1594,14 +1638,16 @@ async function runBrowserlessRunner(config, deps = {}) {
       )
     );
     const plannedDelayMs = Math.max(0, plannedNextRunAtMs - schedulingNowMs);
-    const effectiveDelayMs = shouldPrepareSnapshotSafety
-      ? (config.snapshotEdgeEnabled === true && !scheduledLoopPlan.explicitDelay
-          ? 0
-          : Math.max(
-              plannedDelayMs,
-              preLoginSafetyLeadMs(config) + Number(confirmedLeave?.quarantineRemainingMs || 0)
-            ))
-      : plannedDelayMs;
+    const effectiveDelayMs = pendingExit
+      ? Math.max(0, pendingExitDeadlineMs - schedulingNowMs)
+      : (shouldPrepareSnapshotSafety
+          ? (config.snapshotEdgeEnabled === true && !scheduledLoopPlan.explicitDelay
+              ? 0
+              : Math.max(
+                  plannedDelayMs,
+                  preLoginSafetyLeadMs(config) + Number(confirmedLeave?.quarantineRemainingMs || 0)
+                ))
+          : plannedDelayMs);
     const nextRunAtMs = effectiveDelayMs === plannedDelayMs
       ? plannedNextRunAtMs
       : schedulingNowMs + effectiveDelayMs;
@@ -1630,9 +1676,11 @@ async function runBrowserlessRunner(config, deps = {}) {
           explicitDelay: Boolean(scheduledLoopPlan.explicitDelay),
           dailyFirstLoginDeadlineApplied,
           previousRunId: loopPlan.previousRunId || '',
-          ...(exitRecoveryWait ? { pendingExit: loopPlan.pendingExit || currentBeforeWait.runner?.pendingExit || null } : {})
+          ...(exitRecoveryWait ? { pendingExit: pendingExit || null } : {})
         },
-        gameplayDeadline: gameplayDeadlineFromLoopPlan(scheduledLoopPlan, nextRunAt, loopPlan.previousRunId),
+        gameplayDeadline: pendingExit
+          ? null
+          : gameplayDeadlineFromLoopPlan(scheduledLoopPlan, nextRunAt, loopPlan.previousRunId),
         confirmedLeave: confirmedLeave
           ? {
               confirmedAt: confirmedLeave.confirmedAt || '',
@@ -2229,9 +2277,14 @@ async function runBrowserlessRunner(config, deps = {}) {
   }
   if (persistedDelayPlan && config.snapshotEdgeEnabled === true) {
     const persistedState = readBrowserlessStateFile(stateFile);
+    const persistedPendingExit = normalizePendingExit(
+      persistedDelayPlan.pendingExit || persistedState?.runner?.pendingExit,
+      now(),
+      { maximumAgeMs: config.pendingExitPersistMaxMs }
+    );
     const confirmed = activeConfirmedLeaveState(persistedState, now());
     const explicitCooldown = Boolean(persistedDelayPlan.explicitCooldown || persistedDelayPlan.explicitDelay);
-    if (confirmed && !explicitCooldown) {
+    if (confirmed && !explicitCooldown && !persistedPendingExit) {
       logStore.append('runner', 'runner-persisted-delay-replaced-by-snapshot-edge', {
         previousReason: persistedDelayPlan.reason || '',
         previousNextRunAt: persistedDelayPlan.nextRunAt || '',
@@ -2244,11 +2297,25 @@ async function runBrowserlessRunner(config, deps = {}) {
   let preservePersistedOnlineSession = false;
   if (persistedDelayPlan) {
     const persistedStateBeforeProbe = readBrowserlessStateFile(stateFile);
+    const persistedPendingExit = normalizePendingExit(
+      persistedDelayPlan.pendingExit || persistedStateBeforeProbe?.runner?.pendingExit,
+      now(),
+      { maximumAgeMs: config.pendingExitPersistMaxMs }
+    );
     const persistedConfirmedLeave = activeConfirmedLeaveState(persistedStateBeforeProbe, now());
     const explicitCooldown = Boolean(persistedDelayPlan.explicitCooldown || persistedDelayPlan.explicitDelay);
-    preservePersistedOnlineSession = preserveOnlineSessionForLoopWait(null, persistedDelayPlan)
-      && !persistedConfirmedLeave;
-    if (explicitCooldown) {
+    preservePersistedOnlineSession = Boolean(persistedPendingExit) || (
+      preserveOnlineSessionForLoopWait(null, persistedDelayPlan)
+        && !persistedConfirmedLeave
+    );
+    if (persistedPendingExit) {
+      logStore.append('runner', 'runner-persisted-pending-exit-deadline', {
+        previousRunId: persistedPendingExit.sourceRunId || '',
+        reason: persistedPendingExit.reason,
+        nextRetryAt: persistedPendingExit.nextRetryAt,
+        delayMs: Math.max(0, Number(persistedPendingExit.nextRetryAtMs || now()) - now())
+      });
+    } else if (explicitCooldown) {
       logStore.append('runner', 'runner-persisted-explicit-cooldown-self-probe-skipped', {
         previousRunId: persistedDelayPlan.previousRunId || '',
         previousReason: persistedDelayPlan.reason,
@@ -2339,25 +2406,33 @@ async function runBrowserlessRunner(config, deps = {}) {
   }
   if (persistedDelayPlan) {
     const currentBeforeWait = readBrowserlessStateFile(stateFile);
+    const persistedPendingExit = normalizePendingExit(
+      persistedDelayPlan.pendingExit || currentBeforeWait?.runner?.pendingExit,
+      now(),
+      { maximumAgeMs: config.pendingExitPersistMaxMs }
+    );
     updateState({
       runner: {
         running: true,
-        mode: config.controlMode || 'read-only',
+        mode: persistedPendingExit ? 'exit-recovery' : (config.controlMode || 'read-only'),
         lastError: '',
         currentAction: {
-          kind: 'loop-wait',
-          band: 'recover',
+          kind: persistedPendingExit ? 'exit-recovery' : 'loop-wait',
+          band: persistedPendingExit ? 'exit' : 'recover',
           reason: persistedDelayPlan.reason,
           delayMs: persistedDelayPlan.delayMs,
           nextRunAt: persistedDelayPlan.nextRunAt,
           previousRunId: persistedDelayPlan.previousRunId || '',
-          persisted: true
+          persisted: true,
+          ...(persistedPendingExit ? { pendingExit: persistedPendingExit } : {})
         },
-        gameplayDeadline: persistedDelayPlan.gameplayDeadline || gameplayDeadlineFromLoopPlan(
-          persistedDelayPlan,
-          persistedDelayPlan.nextRunAt,
-          persistedDelayPlan.previousRunId
-        )
+        gameplayDeadline: persistedPendingExit
+          ? null
+          : (persistedDelayPlan.gameplayDeadline || gameplayDeadlineFromLoopPlan(
+              persistedDelayPlan,
+              persistedDelayPlan.nextRunAt,
+              persistedDelayPlan.previousRunId
+            ))
       },
       stats: preservePersistedOnlineSession
         ? currentBeforeWait.stats
@@ -2372,7 +2447,10 @@ async function runBrowserlessRunner(config, deps = {}) {
       supervisorErrors: supervisorErrors.slice(-5)
     });
     try {
-      await restartDrain.wait(persistedDelayPlan.delayMs, sleep);
+      const waitMs = persistedPendingExit
+        ? Math.max(0, Number(persistedPendingExit.nextRetryAtMs || now()) - now())
+        : persistedDelayPlan.delayMs;
+      await restartDrain.wait(waitMs, sleep);
     } catch (err) {
       recordSupervisorError(err, { operation: 'persisted-loop-sleep', delayMs: persistedDelayPlan.delayMs });
       logStore.append('runner', 'persisted-loop-sleep-error', { error: errorMessage(err), delayMs: persistedDelayPlan.delayMs });
@@ -2488,8 +2566,12 @@ async function runBrowserlessRunner(config, deps = {}) {
       if (stopped) return stopped;
       continue;
     }
-    const dailyFirstLoginPlan = browserlessDailyFirstLoginDelayPlan(
-      readBrowserlessStateFile(stateFile),
+    const loopState = readBrowserlessStateFile(stateFile);
+    const activePendingExit = normalizePendingExit(loopState?.runner?.pendingExit, now(), {
+      maximumAgeMs: config.pendingExitPersistMaxMs
+    });
+    const dailyFirstLoginPlan = activePendingExit ? null : browserlessDailyFirstLoginDelayPlan(
+      loopState,
       config,
       now()
     );
@@ -3076,6 +3158,61 @@ async function runBrowserlessRunnerSelfTest() {
     ], {});
     const singleBlockerConfigOk = singleBlockerConfig.loginPointSingleBlockerBypassMs === 1234;
     const staleRestartDrainCleared = readBrowserlessStateFile(stateFilePath(liveConfig)).runner.restartDrain === null;
+    const pendingDeadlineNowMs = Date.parse('2026-07-20T06:00:01.900Z');
+    const pendingDeadline = normalizePendingExit({
+      active: true,
+      reason: 'frame-gap',
+      sourceRunId: 'pending-deadline-self-test',
+      firstAtMs: pendingDeadlineNowMs - 1900,
+      lastAttemptAtMs: pendingDeadlineNowMs - 1900,
+      attemptCount: 1,
+      requestAttemptCount: 4,
+      nextRetryAtMs: pendingDeadlineNowMs + 100,
+      lastError: 'HTTP 502'
+    }, pendingDeadlineNowMs);
+    const pendingLoopPlan = browserlessLoopPlan({
+      canary: {
+        runId: 'pending-deadline-self-test',
+        completedAt: new Date(pendingDeadlineNowMs).toISOString(),
+        pendingExit: pendingDeadline,
+        safety: { event: { reason: 'frame-gap' } }
+      }
+    }, { once: false, loopDelayMs: 30000 });
+    const pendingPersistedPlan = persistedReconnectDelayPlan({
+      runner: {
+        pendingExit: pendingDeadline,
+        currentAction: {
+          reason: 'ordinary-loop-wait',
+          nextRunAt: new Date(pendingDeadlineNowMs + 79000).toISOString()
+        }
+      },
+      stats: { currentSession: { online: true } }
+    }, { pendingExitPersistMaxMs: 3600000 }, pendingDeadlineNowMs);
+    const pendingStaleResolution = pendingExitSnapshotResolution(pendingDeadline, {
+      ok: false,
+      response: { summary: { selfPresent: false, freshness: { ok: false } } }
+    });
+    const pendingAbsentResolution = pendingExitSnapshotResolution(pendingDeadline, {
+      ok: true,
+      response: { summary: { selfPresent: false, freshness: { ok: true } } }
+    });
+    const pendingDeadlineSelfTest = {
+      ok: Boolean(
+        pendingLoopPlan.reason === 'exit-recovery'
+          && pendingLoopPlan.delayMs === 100
+          && pendingPersistedPlan.reason === 'exit-recovery'
+          && pendingPersistedPlan.delayMs === 100
+          && pendingPersistedPlan.deadlineSource === 'pending-exit'
+          && pendingStaleResolution.active
+          && !pendingStaleResolution.cleared
+          && pendingAbsentResolution.cleared
+      ),
+      loopDelayMs: pendingLoopPlan.delayMs,
+      persistedDelayMs: pendingPersistedPlan.delayMs,
+      deadlineSource: pendingPersistedPlan.deadlineSource,
+      staleCleared: pendingStaleResolution.cleared,
+      freshAbsentCleared: pendingAbsentResolution.cleared
+    };
     const wsClosedPlan = browserlessLoopPlan({
       ok: false,
       canary: {
@@ -3683,6 +3820,7 @@ async function runBrowserlessRunnerSelfTest() {
         && loginPointSingleBlocker.ok
         && singleBlockerConfigOk
         && staleRestartDrainCleared
+        && pendingDeadlineSelfTest.ok
         && /runner-dry-run/.test(text)
         && /runner-finish/.test(text)
         && !/self-test-token/.test(text)
@@ -3726,6 +3864,7 @@ async function runBrowserlessRunnerSelfTest() {
       loginPointSingleBlocker,
       singleBlockerConfigOk,
       staleRestartDrainCleared,
+      pendingDeadlineSelfTest,
       wsClosedPlan,
       combatExitPlan,
       restartDrainPlan,

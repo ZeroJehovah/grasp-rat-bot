@@ -56,6 +56,9 @@ const {
 const {
   evaluateNonThreatCombatEconomicStopLossCore
 } = require('../src/strategy/combat-economic-stop-loss');
+const {
+  updateCombatResponsePolicyShadowCore
+} = require('../src/strategy/combat-response-policy-shadow');
 const { updatePostKillSettlementCore } = require('../src/strategy/post-kill-settlement');
 const { chooseStableOpportunityCore } = require('../src/strategy/opportunity-choice');
 
@@ -2260,7 +2263,8 @@ function replayClosePressureMovement(rows = [], options = {}) {
       });
       const pressureBudget = evaluateCombatFireBudgetCore({
         ...exhaustedBudgetInput,
-        pressureAttack: true
+        pressureAttack: true,
+        boundedPressureVolley: options.boundedPressureVolley === true
       });
       if (!pressureBudget.suppressFire
         && ['close-pressure-full-attack', 'close-range-fire-override', 'close-band-reserve']
@@ -2470,6 +2474,7 @@ function replayCombatClosePressure(options) {
   };
   let trigger = null;
   let policyTimeout = null;
+  let generationExit = null;
   let stepsStarted = 0;
   let stepsReached = 0;
   let lastReachedStep = 0;
@@ -2550,6 +2555,22 @@ function replayCombatClosePressure(options) {
           movementStamina: Math.max(0, Number(row.detail.metrics?.movementStaminaSpent || 0))
         };
       }
+      if (!generationExit && phase.generationLimitReached) {
+        generationExit = {
+          line: row.line,
+          at: row.entry.at || '',
+          elapsedMs: atMs - startedAt,
+          generationElapsedMs: phase.generationElapsedMs,
+          completedSteps: phase.completedSteps,
+          acceptedShots: Math.max(0, Number(row.detail.metrics?.acceptedShots || 0)),
+          confirmedHits: Math.max(0, Number(row.detail.metrics?.confirmedHits || 0)),
+          shootingStamina: Math.max(0, Number(row.detail.metrics?.shootingStaminaSpent || 0)),
+          movementStamina: Math.max(0, Number(row.detail.metrics?.movementStaminaSpent || 0)),
+          reason: phase.generationTimedOut
+            ? 'combat-no-damage-generation-deadline'
+            : 'combat-no-damage-generation-step-limit'
+        };
+      }
       phaseRows.push(row);
     }
   }
@@ -2570,6 +2591,15 @@ function replayCombatClosePressure(options) {
     range,
     hysteresisCm: trigger?.arrivalToleranceCm ?? 100,
     preserveThreat: false
+  });
+  const boundedVolley = replayClosePressureMovement(phaseRows, {
+    ...options,
+    targetId,
+    phaseStartedAt: trigger?.phaseStartedAt || startedAt + 60000,
+    range,
+    hysteresisCm: trigger?.arrivalToleranceCm ?? 100,
+    preserveThreat: true,
+    boundedPressureVolley: true
   });
   let suppressedFireFrames = 0;
   let reopenedFireEligibleFrames = 0;
@@ -2635,10 +2665,16 @@ function replayCombatClosePressure(options) {
           )
         : 0
     },
+    noDamageGeneration: {
+      maxMs: pressureOptions.combatMissCloseGenerationMaxMs ?? 90000,
+      maxSteps: pressureOptions.combatMissCloseGenerationMaxSteps ?? 4,
+      exit: generationExit
+    },
     range,
     historical,
     threatPreserving,
     noBulletControl,
+    boundedVolley,
     reopenedFireEligibleFrames
   };
   const reserveReplay = threatPreserving.pressureAttack.reserve;
@@ -2672,6 +2708,222 @@ function replayCombatClosePressure(options) {
       && (policyTimeout || threatPreserving.distance.p50Cm < historical.distance.p50Cm)
   );
   return result;
+}
+
+function replayNoDamageGenerationGrid(options) {
+  const rows = selectedEntries(options).filter(({ detail }) => {
+    const target = detail.target || null;
+    if (!target) return false;
+    if (options.targetId && String(target.userId ?? target.user_id ?? '') !== options.targetId) return false;
+    if (options.targetName && String(target.name || '') !== options.targetName) return false;
+    return true;
+  });
+  if (!rows.length) return { mode: 'combat-no-damage-generation-grid', frames: 0, accepted: false };
+  const targetId = options.targetId || String(rows[0].detail.target?.userId ?? rows[0].detail.target?.user_id ?? '');
+  const runCase = (generationMaxMs, generationMaxSteps) => {
+    const firstAtMs = Date.parse(rows[0].entry.at || '');
+    let firstHp = numberOrNull(rows[0].detail.target?.hp);
+    let minHp = firstHp;
+    let previousHp = firstHp;
+    let acceptedShotsAtDamage = Math.max(0, Number(rows[0].detail.metrics?.acceptedShots || 0));
+    let damageProgressAt = firstAtMs;
+    let phaseState = { id: targetId, firstSeenAt: firstAtMs, combatPhase: 'normal-combat' };
+    let firstTrigger = null;
+    let firstExit = null;
+    let firstDamage = null;
+    for (const row of rows) {
+      const atMs = Date.parse(row.entry.at || '');
+      const hp = numberOrNull(row.detail.target?.hp);
+      const metrics = row.detail.metrics || {};
+      const acceptedShots = Math.max(0, Number(metrics.acceptedShots || 0));
+      if (firstHp === null && hp !== null) firstHp = hp;
+      if (hp !== null) minHp = minHp === null ? hp : Math.min(minHp, hp);
+      if (hp !== null && previousHp !== null && hp < previousHp - 0.01) {
+        if (!firstDamage) {
+          firstDamage = {
+            line: row.line,
+            at: row.entry.at || '',
+            elapsedMs: atMs - firstAtMs,
+            damage: previousHp - hp,
+            acceptedShots,
+            confirmedHits: Math.max(0, Number(metrics.confirmedHits || 0))
+          };
+        }
+        acceptedShotsAtDamage = acceptedShots;
+        damageProgressAt = atMs;
+      }
+      if (hp !== null) previousHp = hp;
+      const phase = combatPressurePhaseCore(phaseState, {
+        targetId,
+        nowMs: atMs,
+        engagedAt: firstAtMs,
+        ordinaryProfit: true,
+        targetHp: hp,
+        firstHp,
+        minHp,
+        damageFromStart: firstHp !== null && minHp !== null ? Math.max(0, firstHp - minHp) : null,
+        damageKnown: firstHp !== null && minHp !== null,
+        damageProgressAt,
+        acceptedShotsSinceDamage: Math.max(0, acceptedShots - acceptedShotsAtDamage),
+        shootingStaminaSinceDamage: Math.max(0, Number(metrics.shootingStaminaSpent || 0)),
+        movementStaminaSinceDamage: Math.max(0, Number(metrics.movementStaminaSpent || 0)),
+        distance: numberOrNull(row.detail.target?.distance)
+      }, {
+        combatMissCloseTriggerShots: 10,
+        combatMissCloseStepShots: 10,
+        combatMissCloseStepCm: 1000,
+        combatMissCloseMinimumDistanceCm: 1000,
+        combatMissCloseTimeoutMs: 30000,
+        combatMissCloseGenerationMaxMs: generationMaxMs,
+        combatMissCloseGenerationMaxSteps: generationMaxSteps
+      });
+      phaseState = {
+        ...phaseState,
+        id: targetId,
+        combatPhase: phase.phase,
+        phaseStartedAt: phase.phaseStartedAt,
+        closePressure: phase.active ? phase : null,
+        firstHp,
+        minHp,
+        hp
+      };
+      if (!firstTrigger && phase.active) {
+        firstTrigger = { line: row.line, at: row.entry.at || '', acceptedShots };
+      }
+      if (!firstExit && phase.generationLimitReached) {
+        firstExit = {
+          line: row.line,
+          at: row.entry.at || '',
+          elapsedMs: atMs - firstAtMs,
+          generationElapsedMs: phase.generationElapsedMs,
+          completedSteps: phase.completedSteps,
+          retainedHits: Math.max(0, Number(metrics.confirmedHits || 0)),
+          acceptedShots,
+          shootingStamina: Math.max(0, Number(metrics.shootingStaminaSpent || 0)),
+          movementStamina: Math.max(0, Number(metrics.movementStaminaSpent || 0)),
+          reason: phase.generationTimedOut
+            ? 'combat-no-damage-generation-deadline'
+            : 'combat-no-damage-generation-step-limit'
+        };
+        break;
+      }
+    }
+    return { generationMaxMs, generationMaxSteps, firstTrigger, firstDamage, firstExit };
+  };
+  const grid = [60000, 90000, 120000].flatMap(generationMaxMs => (
+    [2, 3, 4].map(generationMaxSteps => runCase(generationMaxMs, generationMaxSteps))
+  ));
+  const selected = grid.find(item => item.generationMaxMs === 90000 && item.generationMaxSteps === 4) || null;
+  const finalMetrics = rows.at(-1).detail.metrics || {};
+  return {
+    mode: 'combat-no-damage-generation-grid',
+    targetId,
+    targetName: options.targetName || String(rows[0].detail.target?.name || ''),
+    lines: `${options.startLine}-${options.endLine}`,
+    frames: rows.length,
+    grid,
+    selected,
+    retainedConfirmedHits: Math.max(0, Number(finalMetrics.confirmedHits || 0)),
+    executionChanged: false,
+    accepted: options.expectNewExit
+      ? Boolean(selected?.firstTrigger && selected?.firstExit)
+      : Boolean(!selected?.firstExit && Math.max(0, Number(finalMetrics.confirmedHits || 0)) > 0)
+  };
+}
+
+function replayResponsePolicyShadow(options) {
+  const rows = selectedEntries(options).filter(({ detail }) => {
+    const target = detail.target || null;
+    if (!target) return false;
+    if (options.targetId && String(target.userId ?? target.user_id ?? '') !== options.targetId) return false;
+    if (options.targetName && String(target.name || '') !== options.targetName) return false;
+    return true;
+  });
+  if (!rows.length) return { mode: 'combat-response-policy-shadow', frames: 0, accepted: false };
+  const targetId = options.targetId || String(rows[0].detail.target?.userId ?? rows[0].detail.target?.user_id ?? '');
+  const baseline = { switches: 0, sameModeSwitches: 0 };
+  let lastPolicy = '';
+  let lastMode = '';
+  for (const row of rows) {
+    const policy = String(row.detail.behavior?.responsePolicy?.name || row.detail.shooting?.responsePolicy || '');
+    const mode = String(row.detail.behavior?.mode || row.detail.shooting?.recognizedMode || 'mixed/unknown');
+    if (policy && lastPolicy && policy !== lastPolicy) {
+      baseline.switches += 1;
+      if (mode === lastMode) baseline.sameModeSwitches += 1;
+    }
+    if (policy) lastPolicy = policy;
+    lastMode = mode;
+  }
+  const runCase = (confirmTicks, minimumHoldMs) => {
+    let state = null;
+    let switches = 0;
+    let sameModeSwitches = 0;
+    let suppressed = 0;
+    let bypasses = 0;
+    let previousRecognizedMode = '';
+    for (const row of rows) {
+      const policy = row.detail.behavior?.responsePolicy || row.detail.shooting?.responsePolicy || '';
+      const recognizedMode = String(
+        row.detail.behavior?.mode || row.detail.shooting?.recognizedMode || 'mixed/unknown'
+      );
+      const defensivePressureReason = String(row.detail.shooting?.defensivePressureReason || '');
+      const bypassReason = row.detail.exit
+        ? 'hp-or-exit'
+        : (defensivePressureReason === 'collision-risk-target-bullet'
+            ? 'real-incoming-bullet'
+            : (/dodge/.test(String(row.detail.movement?.reason || '')) ? 'dodge-unsafe' : ''));
+      state = updateCombatResponsePolicyShadowCore(state, {
+        targetId,
+        nowMs: Date.parse(row.entry.at || ''),
+        candidatePolicy: policy,
+        recognizedMode,
+        bypassReason
+      }, { confirmTicks, minimumHoldMs });
+      if (state.switched) {
+        switches += 1;
+        if (recognizedMode === previousRecognizedMode) sameModeSwitches += 1;
+      }
+      if (state.suppressed) suppressed += 1;
+      if (state.bypassed) bypasses += 1;
+      previousRecognizedMode = recognizedMode;
+    }
+    const reductionPct = baseline.sameModeSwitches > 0
+      ? (baseline.sameModeSwitches - sameModeSwitches) / baseline.sameModeSwitches * 100
+      : null;
+    return {
+      confirmTicks,
+      minimumHoldMs,
+      switches,
+      sameModeSwitches,
+      suppressed,
+      bypasses,
+      reductionPct: reductionPct === null ? null : Number(reductionPct.toFixed(2)),
+      finalCommittedPolicy: state?.committedPolicy || ''
+    };
+  };
+  const grid = [3, 5, 6].flatMap(confirmTicks => [300, 500].map(minimumHoldMs => runCase(confirmTicks, minimumHoldMs)));
+  const selected = grid.find(item => item.confirmTicks === 6 && item.minimumHoldMs === 500) || null;
+  const finalMetrics = rows.at(-1).detail.metrics || {};
+  const requiredReductionPct = Math.max(0, Number(options.minImprovementPct || 0));
+  return {
+    mode: 'combat-response-policy-shadow',
+    targetId,
+    targetName: options.targetName || String(rows[0].detail.target?.name || ''),
+    lines: `${options.startLine}-${options.endLine}`,
+    frames: rows.length,
+    baseline,
+    grid,
+    selected,
+    requiredReductionPct,
+    retainedConfirmedHits: Math.max(0, Number(finalMetrics.confirmedHits || 0)),
+    retainedShootingFrames: rows.filter(row => row.detail.shooting?.wouldShoot).length,
+    executionChanged: false,
+    accepted: Boolean(
+      selected
+        && selected.finalCommittedPolicy
+        && (requiredReductionPct <= 0 || Number(selected.reductionPct) >= requiredReductionPct)
+    )
+  };
 }
 
 function replayCombatDisengage(options) {
@@ -4195,6 +4447,8 @@ function runReplay(options) {
   if (options.mode === 'combat-pursuit') return replayCombatPursuit(options);
   if (options.mode === 'arbitration') return replayArbitration(options);
   if (options.mode === 'combat-close-pressure') return replayCombatClosePressure(options);
+  if (options.mode === 'combat-no-damage-generation-grid') return replayNoDamageGenerationGrid(options);
+  if (options.mode === 'combat-response-policy-shadow') return replayResponsePolicyShadow(options);
   if (options.mode === 'combat-disengage') return replayCombatDisengage(options);
   if (options.mode === 'combat-economic-stop-loss') return replayCombatEconomicStopLoss(options);
   if (options.mode === 'combat-shot-coverage') return replayCombatShotCoverage(options);
@@ -4213,6 +4467,8 @@ if (require.main === module) {
 module.exports = {
   parseArgs,
   replayCombatClosePressure,
+  replayNoDamageGenerationGrid,
+  replayResponsePolicyShadow,
   replayCombatDisengage,
   replayCombatEconomicStopLoss,
   replayCombatShotCoverage,

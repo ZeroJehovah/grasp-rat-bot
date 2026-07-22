@@ -5693,6 +5693,29 @@ async function runSelfTest() {
           ok: true,
           response: { summary: { selfPresent: false, freshness: { ok: true } } }
         });
+        const staleAbsent = pendingExitSnapshotResolution(pending, {
+          ok: false,
+          response: { summary: { selfPresent: false, freshness: { ok: false } } }
+        });
+        const nearDeadlineMs = nowMs + 1900;
+        const deadlinePlan = browserlessLoopPlan({
+          canary: {
+            runId: 'failed-exit-run',
+            completedAt: new Date(nearDeadlineMs).toISOString(),
+            pendingExit: pending,
+            safety: { event: { reason: 'frame-gap' } }
+          }
+        }, { once: false, loopDelayMs: 30000 });
+        const persistedPlan = persistedReconnectDelayPlan({
+          runner: {
+            pendingExit: pending,
+            currentAction: {
+              reason: 'ordinary-loop-wait',
+              nextRunAt: new Date(nowMs + 79000).toISOString()
+            }
+          },
+          stats: { currentSession: { online: true } }
+        }, { pendingExitPersistMaxMs: 3600000 }, nearDeadlineMs);
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'grasp-rat-pending-exit-'));
         const file = path.join(dir, 'state.json');
         updateBrowserlessStateFile(file, { runner: { pendingExit: pending } }, { updatedAt: new Date(nowMs).toISOString() });
@@ -5709,17 +5732,25 @@ async function runSelfTest() {
           present.reason,
           absent.cleared,
           absent.reason,
+          staleAbsent.active,
+          staleAbsent.cleared,
+          deadlinePlan.reason,
+          deadlinePlan.delayMs,
+          persistedPlan.reason,
+          persistedPlan.delayMs,
+          persistedPlan.deadlineSource,
           roundTrip.reason,
           roundTrip.requestAttemptCount
         ].join('|');
       })(),
-      want: 'frame-gap|31361|1|4|85|HTTP 502|true|snapshot-self-present|true|fresh-snapshot-self-absent|frame-gap|4'
+      want: 'frame-gap|31361|1|4|85|HTTP 502|true|snapshot-self-present|true|fresh-snapshot-self-absent|true|false|exit-recovery|100|exit-recovery|100|pending-exit|frame-gap|4'
     },
     {
       name: 'browserless pending exit self-present run is exit-only until leave confirmation',
       got: (async () => {
         let t = Date.parse('2026-07-20T06:05:00.000Z');
         let receiveFrame = null;
+        let recoverySnapshotConfig = null;
         const commands = [];
         const pendingExit = pendingExitFromCanary(null, {
           runId: 'prior-failed-exit',
@@ -5739,14 +5770,18 @@ async function runSelfTest() {
         const result = await runReadOnlyCanary({
           gameOrigin: 'https://self-test.invalid', userId: 7, sessionToken: 'pending-exit-token',
           readOnly: false, controlMode: 'profit-live', combatEnabled: true,
-          readOnlyProbeMs: 1000, decisionIntervalMs: 1, frameGapAlertMs: 5000
+          readOnlyProbeMs: 1000, decisionIntervalMs: 1, frameGapAlertMs: 5000,
+          snapshotEdgeEnabled: true, loginPointSafetySuccessRequired: 3, loginPointSafetyProbeIntervalMs: 1000
         }, {
           now: () => t,
           sleep: async ms => { t += ms; },
           persistedState: { runner: { pendingExit } },
-          precheckedSnapshotSafety: {
-            ok: true, reason: 'self-present-reentry', satisfied: true, bypassedPreLoginSafety: true,
-            response: { summary: { selfPresent: true, freshness: { ok: true } } }
+          runPreLoginSnapshotSafety: async config => {
+            recoverySnapshotConfig = config;
+            return {
+              ok: true, reason: 'self-present-reentry', satisfied: true, bypassedPreLoginSafety: true,
+              response: { summary: { selfPresent: true, freshness: { ok: true } } }
+            };
           },
           openBrowserlessWs: async options => {
             receiveFrame = options.onMessage;
@@ -5767,10 +5802,48 @@ async function runSelfTest() {
           result.leave?.ok,
           result.decisions.evaluatedCount,
           result.actions.shootSentCount,
-          commands.includes('shoot')
+          commands.includes('shoot'),
+          recoverySnapshotConfig.snapshotEdgeEnabled,
+          recoverySnapshotConfig.loginPointSafetySuccessRequired,
+          recoverySnapshotConfig.loginPointSafetyProbeIntervalMs
         ].join('|');
       })(),
-      want: 'exit-recovery|true|exit-recovery|true|0|0|false'
+      want: 'exit-recovery|true|exit-recovery|true|0|0|false|false|1|0'
+    },
+    {
+      name: 'browserless pending exit websocket failure remains exit-only and immediately retryable',
+      got: (async () => {
+        const t = Date.parse('2026-07-20T06:10:00.000Z');
+        const pendingExit = pendingExitFromCanary(null, {
+          runId: 'prior-failed-exit-ws',
+          startedAt: new Date(t - 1000).toISOString(),
+          error: 'leave not confirmed',
+          safety: { event: { reason: 'ws-closed', shouldLeave: true, at: new Date(t - 900).toISOString() } },
+          leave: { ok: false, error: 'HTTP 502', attempts: [{ status: 502 }, { status: 502 }, { status: 502 }, { status: 502 }] }
+        }, t);
+        const result = await runReadOnlyCanary({
+          gameOrigin: 'https://self-test.invalid', userId: 7, sessionToken: 'pending-exit-token',
+          readOnly: false, controlMode: 'profit-live', combatEnabled: true,
+          readOnlyProbeMs: 1000, wsConnectTimeoutMs: 100
+        }, {
+          now: () => t,
+          sleep: async () => {},
+          persistedState: { runner: { pendingExit } },
+          runPreLoginSnapshotSafety: async () => ({
+            ok: true, reason: 'self-present-reentry', satisfied: true, bypassedPreLoginSafety: true,
+            response: { summary: { selfPresent: true, freshness: { ok: true } } }
+          }),
+          openBrowserlessWs: async () => { throw new Error('websocket connect timeout'); }
+        });
+        return [
+          result.mode,
+          result.recovery.exitRecovery,
+          result.error,
+          result.decisions.evaluatedCount,
+          result.actions.shootSentCount
+        ].join('|');
+      })(),
+      want: 'exit-recovery|true|websocket connect timeout|0|0'
     },
     {
       name: 'strategy module self-tests pass',
@@ -10303,7 +10376,7 @@ async function runSelfTest() {
             lastInRangeAt: 120000,
             lastDamageAt: 1000,
             damageProgressAt: 1000,
-            acceptedShotsAtLastDamage: 0,
+            acceptedShotsAtLastDamage: 34,
             acceptedShotsSinceDamage: 20,
             movementStaminaAtLastDamage: 0,
             movementStaminaSinceDamage: 150000,
@@ -10515,7 +10588,7 @@ async function runSelfTest() {
             firstHp: 100,
             minHp: 94,
             damageFromStart: 6,
-            acceptedShotsAtLastDamage: 34,
+            acceptedShotsAtLastDamage: 0,
             drop: 200,
             intent: 'profit',
             originIntent: 'profit'
@@ -22950,6 +23023,14 @@ async function runSelfTest() {
           '800',
           '--combat-miss-close-timeout-ms',
           '31000',
+          '--combat-miss-close-generation-max-ms',
+          '91000',
+          '--combat-miss-close-generation-max-steps',
+          '5',
+          '--combat-response-policy-shadow-confirm-ticks',
+          '7',
+          '--combat-response-policy-shadow-minimum-hold-ms',
+          '600',
           '--ws-trace',
           '--ws-trace-max-payload-chars',
           '4096',
@@ -23017,6 +23098,10 @@ async function runSelfTest() {
           config.combatMissCloseStepCm,
           config.combatMissCloseMinimumDistanceCm,
           publicConfig(config).combatMissCloseTimeoutMs,
+          publicConfig(config).combatMissCloseGenerationMaxMs,
+          publicConfig(config).combatMissCloseGenerationMaxSteps,
+          publicConfig(config).combatResponsePolicyShadowConfirmTicks,
+          publicConfig(config).combatResponsePolicyShadowMinimumHoldMs,
           config.wsTraceEnabled,
           config.wsTracePayload,
           config.wsTraceMaxPayloadChars,
@@ -23031,7 +23116,7 @@ async function runSelfTest() {
           config.logDir.endsWith('/tmp/grasp-rat-browserless-logs')
         ].join('|');
       })(),
-      want: 'true|false|false|combat-live|19999|cli-token|true|220|42|env-token|250|90000|90000|4|15000|3500|2250|4500|150|300|800|3|4500|90|4500|90|99000|175000|175000|45000|120000|123000|30000|7|90000|150000|250000|45000|11|12|1200|800|31000|true|true|4096|https://example.test/target-whitelist.json|true|1234|12|123|456|90|true|true'
+      want: 'true|false|false|combat-live|19999|cli-token|true|220|42|env-token|250|90000|90000|4|15000|3500|2250|4500|150|300|800|3|4500|90|4500|90|99000|175000|175000|45000|120000|123000|30000|7|90000|150000|250000|45000|11|12|1200|800|31000|91000|5|7|600|true|true|4096|https://example.test/target-whitelist.json|true|1234|12|123|456|90|true|true'
     },
     {
       name: 'browserless deployment files define service env and install surface',
@@ -23060,6 +23145,10 @@ async function runSelfTest() {
           env.includes('GRASP_RAT_BROWSERLESS_STALE_SELF_CONFIRM_MS=2000'),
           env.includes('GRASP_RAT_BROWSERLESS_CENTER_ACTIVITY_RADIUS_CM=100000'),
           env.includes('GRASP_RAT_BROWSERLESS_OUTSIDE_CENTER_IDLE_EXIT_MS=180000'),
+          env.includes('GRASP_RAT_BROWSERLESS_COMBAT_MISS_CLOSE_GENERATION_MAX_MS=90000'),
+          env.includes('GRASP_RAT_BROWSERLESS_COMBAT_MISS_CLOSE_GENERATION_MAX_STEPS=4'),
+          env.includes('GRASP_RAT_BROWSERLESS_COMBAT_RESPONSE_POLICY_SHADOW_CONFIRM_TICKS=6'),
+          env.includes('GRASP_RAT_BROWSERLESS_COMBAT_RESPONSE_POLICY_SHADOW_MINIMUM_HOLD_MS=500'),
           env.includes('GRASP_RAT_BROWSERLESS_PROFIT_PURSUIT_MAX_MS=60000'),
           env.includes('GRASP_RAT_BROWSERLESS_PROFIT_PURSUIT_SUPPRESS_MS=60000'),
           env.includes('GRASP_RAT_BROWSERLESS_DANGEROUS_TARGET_COOLDOWN_MS=900000'),
@@ -23083,7 +23172,7 @@ async function runSelfTest() {
           installer.includes('systemctl daemon-reload')
         ].join('|');
       })(),
-      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
+      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless deployment audit checks installed service evidence',

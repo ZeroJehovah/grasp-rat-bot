@@ -86,6 +86,10 @@ const DEFAULTS = {
   combatMissCloseStepCm: 1000,
   combatMissCloseMinimumDistanceCm: 1000,
   combatMissCloseTimeoutMs: 30000,
+  combatMissCloseGenerationMaxMs: 90000,
+  combatMissCloseGenerationMaxSteps: 4,
+  combatResponsePolicyShadowConfirmTicks: 6,
+  combatResponsePolicyShadowMinimumHoldMs: 500,
   combatTrajectoryCoverageMode: 'live-single',
   wsTraceEnabled: false,
   wsTracePayload: true,
@@ -231,6 +235,10 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
     combatMissCloseStepCm: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_MISS_CLOSE_STEP_CM, DEFAULTS.combatMissCloseStepCm),
     combatMissCloseMinimumDistanceCm: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_MISS_CLOSE_MINIMUM_DISTANCE_CM, DEFAULTS.combatMissCloseMinimumDistanceCm),
     combatMissCloseTimeoutMs: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_MISS_CLOSE_TIMEOUT_MS, DEFAULTS.combatMissCloseTimeoutMs),
+    combatMissCloseGenerationMaxMs: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_MISS_CLOSE_GENERATION_MAX_MS, DEFAULTS.combatMissCloseGenerationMaxMs),
+    combatMissCloseGenerationMaxSteps: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_MISS_CLOSE_GENERATION_MAX_STEPS, DEFAULTS.combatMissCloseGenerationMaxSteps),
+    combatResponsePolicyShadowConfirmTicks: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_RESPONSE_POLICY_SHADOW_CONFIRM_TICKS, DEFAULTS.combatResponsePolicyShadowConfirmTicks),
+    combatResponsePolicyShadowMinimumHoldMs: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_RESPONSE_POLICY_SHADOW_MINIMUM_HOLD_MS, DEFAULTS.combatResponsePolicyShadowMinimumHoldMs),
     combatTrajectoryCoverageMode: trajectoryCoverageMode(
       env.GRASP_RAT_BROWSERLESS_COMBAT_TRAJECTORY_COVERAGE_MODE,
       DEFAULTS.combatTrajectoryCoverageMode
@@ -423,6 +431,14 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
       config.combatMissCloseMinimumDistanceCm = numberEnv(argv[++i], config.combatMissCloseMinimumDistanceCm);
     } else if (arg === '--combat-miss-close-timeout-ms') {
       config.combatMissCloseTimeoutMs = numberEnv(argv[++i], config.combatMissCloseTimeoutMs);
+    } else if (arg === '--combat-miss-close-generation-max-ms') {
+      config.combatMissCloseGenerationMaxMs = numberEnv(argv[++i], config.combatMissCloseGenerationMaxMs);
+    } else if (arg === '--combat-miss-close-generation-max-steps') {
+      config.combatMissCloseGenerationMaxSteps = numberEnv(argv[++i], config.combatMissCloseGenerationMaxSteps);
+    } else if (arg === '--combat-response-policy-shadow-confirm-ticks') {
+      config.combatResponsePolicyShadowConfirmTicks = numberEnv(argv[++i], config.combatResponsePolicyShadowConfirmTicks);
+    } else if (arg === '--combat-response-policy-shadow-minimum-hold-ms') {
+      config.combatResponsePolicyShadowMinimumHoldMs = numberEnv(argv[++i], config.combatResponsePolicyShadowMinimumHoldMs);
     } else if (arg === '--combat-trajectory-coverage-mode') {
       config.combatTrajectoryCoverageMode = trajectoryCoverageMode(argv[++i], config.combatTrajectoryCoverageMode);
     } else if (arg === '--ws-trace') {
@@ -546,6 +562,10 @@ function usage() {
     '  --combat-miss-close-step-cm <cm>  Distance removed by each progressive close step. Default: 1000',
     '  --combat-miss-close-minimum-distance-cm <cm>  Lowest progressive close goal. Default: 1000',
     '  --combat-miss-close-timeout-ms <ms>  Leave when one close step cannot be reached. Default: 30000',
+    '  --combat-miss-close-generation-max-ms <ms>  Global no-damage close-pressure limit. Default: 90000',
+    '  --combat-miss-close-generation-max-steps <n>  Maximum completed no-damage close steps. Default: 4',
+    '  --combat-response-policy-shadow-confirm-ticks <n>  Candidate confirmations for shadow policy latch. Default: 6',
+    '  --combat-response-policy-shadow-minimum-hold-ms <ms>  Minimum shadow policy hold. Default: 500',
     '  --combat-trajectory-coverage-mode <mode>  Multi-trajectory aim mode: off|shadow|live-single|live-volley. Default: live-single',
     '  --no-combat-robust-dodge  Disable robust Dodge schedule/trajectory uncertainty for rollback',
     '  --no-combat-close-band-reserve  Disable the two-shot close-band reserve for rollback',

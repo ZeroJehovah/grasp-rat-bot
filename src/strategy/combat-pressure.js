@@ -171,6 +171,8 @@ function combatPressurePhaseCore(previous = {}, input = {}, options = {}) {
   const stepCm = Math.max(100, Number(options.combatMissCloseStepCm ?? 1000));
   const minimumDistanceCm = Math.max(0, Number(options.combatMissCloseMinimumDistanceCm ?? 1000));
   const timeoutMs = Math.max(1000, Number(options.combatMissCloseTimeoutMs ?? 30000));
+  const generationMaxMs = Math.max(1000, Number(options.combatMissCloseGenerationMaxMs ?? 90000));
+  const generationMaxSteps = Math.max(1, Math.round(Number(options.combatMissCloseGenerationMaxSteps ?? 4)));
   const arrivalToleranceCm = Math.max(0, Number(options.combatMissCloseArrivalToleranceCm ?? 100));
   const sameDamageGeneration = Boolean(
     previousPhase === 'close-pressure'
@@ -188,6 +190,11 @@ function combatPressurePhaseCore(previous = {}, input = {}, options = {}) {
         ? Number(previous.phaseStartedAt)
         : nowMs)
     : nowMs;
+  const generationStartedAt = active
+    ? (sameDamageGeneration && Number(previousClosePressure?.generationStartedAt || 0) > 0
+        ? Number(previousClosePressure.generationStartedAt)
+        : nowMs)
+    : 0;
 
   let stepIndex = 0;
   let stepStartedAt = 0;
@@ -197,6 +204,10 @@ function combatPressurePhaseCore(previous = {}, input = {}, options = {}) {
   let goalReachedAt = 0;
   let goalReachedAcceptedShots = acceptedShotsSinceDamage;
   let stepAdvanced = false;
+  let completedSteps = active && sameDamageGeneration
+    ? Math.max(0, Math.round(Number(previousClosePressure?.completedSteps || 0)))
+    : 0;
+  let generationStepLimitReached = false;
   if (active) {
     if (sameDamageGeneration && Number(previousClosePressure?.stepIndex || 0) > 0) {
       stepIndex = Math.max(1, Math.round(Number(previousClosePressure.stepIndex)));
@@ -239,20 +250,31 @@ function combatPressurePhaseCore(previous = {}, input = {}, options = {}) {
     if (goalReachedAt
       && shotsAfterGoal >= stepShots
       && targetDistance > minimumDistanceCm + arrivalToleranceCm) {
-      stepIndex += 1;
-      stepStartedAt = nowMs;
-      stepStartDistanceCm = targetDistance;
-      goalDistanceCm = Math.max(minimumDistanceCm, targetDistance - stepCm);
-      bestDistanceCm = targetDistance;
-      goalReachedAt = 0;
-      goalReachedAcceptedShots = acceptedShotsSinceDamage;
-      stepAdvanced = true;
+      completedSteps = Math.max(completedSteps, stepIndex);
+      if (ordinaryProfit && completedSteps >= generationMaxSteps) {
+        generationStepLimitReached = true;
+      } else {
+        stepIndex += 1;
+        stepStartedAt = nowMs;
+        stepStartDistanceCm = targetDistance;
+        goalDistanceCm = Math.max(minimumDistanceCm, targetDistance - stepCm);
+        bestDistanceCm = targetDistance;
+        goalReachedAt = 0;
+        goalReachedAcceptedShots = acceptedShotsSinceDamage;
+        stepAdvanced = true;
+      }
     }
   }
 
   const withinGoal = Boolean(active && targetDistance <= goalDistanceCm + arrivalToleranceCm);
   const stepElapsedMs = active && stepStartedAt > 0 ? Math.max(0, nowMs - stepStartedAt) : 0;
   const stepTimedOut = Boolean(active && !withinGoal && stepElapsedMs >= timeoutMs);
+  const generationElapsedMs = generationStartedAt > 0 ? Math.max(0, nowMs - generationStartedAt) : 0;
+  const generationDeadlineAt = generationStartedAt > 0 ? generationStartedAt + generationMaxMs : 0;
+  const generationTimedOut = Boolean(
+    active && ordinaryProfit && generationStartedAt > 0 && generationElapsedMs >= generationMaxMs
+  );
+  const generationLimitReached = generationTimedOut || generationStepLimitReached;
   const ballisticRange = active ? combatPressureTargetRangeCore(options) : null;
   const range = active ? {
     ...ballisticRange,
@@ -290,8 +312,22 @@ function combatPressurePhaseCore(previous = {}, input = {}, options = {}) {
     stepCm: Math.round(stepCm),
     minimumDistanceCm: Math.round(minimumDistanceCm),
     timeoutMs: Math.round(timeoutMs),
+    generationMaxMs: Math.round(generationMaxMs),
+    generationMaxSteps,
     arrivalToleranceCm: Math.round(arrivalToleranceCm),
     damageProgressAt,
+    generationStartedAt,
+    generationDeadlineAt,
+    generationElapsedMs: Math.round(generationElapsedMs),
+    generationTimedOut,
+    generationStepLimitReached,
+    generationLimitReached,
+    completedSteps,
+    generationAcceptedShots: acceptedShotsSinceDamage,
+    generationShootingStamina: Math.max(0, Number(input.shootingStaminaSinceDamage
+      ?? acceptedShotsSinceDamage * Math.max(1, Number(options.combatShotStaminaCostMs ?? 500)))),
+    generationMovementStamina: Math.max(0, Number(input.movementStaminaSinceDamage || 0)),
+    lastTargetDamageAt: damageProgressAt,
     range,
     subphase,
     pressureAttackCommitted,

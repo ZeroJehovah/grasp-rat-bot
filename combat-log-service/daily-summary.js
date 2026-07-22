@@ -1566,6 +1566,7 @@ function combatReasonText(reason) {
   if (value === 'combat-low-hp-leave') return '低血或近身风险';
   if (value === 'combat-critical-hp-leave') return '血量过低';
   if (value === 'combat-low-hp-no-damage-leave') return '低血且久攻未中';
+  if (value === 'combat-no-damage-generation-limit-leave') return '普通收益战斗无伤害止损';
   if (value === 'injury-leave') return '受伤';
   if (value === 'offline-leave') return '连接离线';
   if (value === 'stamina-budget-coin-leave') return '一小时体力预算不足';

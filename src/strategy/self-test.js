@@ -154,6 +154,9 @@ const {
   combatPressureTargetRangeCore
 } = require('./combat-pressure');
 const {
+  updateCombatResponsePolicyShadowCore
+} = require('./combat-response-policy-shadow');
+const {
   combatEdgePressureDecisionCore,
   combatEscapeDecisionCore,
   checkProactiveActiveCombatGates,
@@ -1544,6 +1547,144 @@ function runStrategyModuleSelfTests() {
       && pressureDamageReset.active === false
   });
 
+  const generationStart = combatPressurePhaseCore({
+    id: 'generic-target', combatPhase: 'normal-combat', firstSeenAt: 1000, damageProgressAt: 1000
+  }, {
+    targetId: 'generic-target', nowMs: 1000, engagedAt: 1000, ordinaryProfit: true,
+    damageKnown: true, damageFromStart: 0, damageProgressAt: 1000,
+    acceptedShotsSinceDamage: 10, distance: 12000
+  });
+  const generationBeforeDeadline = combatPressurePhaseCore({
+    id: 'generic-target', combatPhase: generationStart.phase, phaseStartedAt: generationStart.phaseStartedAt,
+    closePressure: generationStart
+  }, {
+    targetId: 'generic-target', nowMs: 90999, engagedAt: 1000, ordinaryProfit: true,
+    threatEvidence: true, damageKnown: true, damageFromStart: 0, damageProgressAt: 1000,
+    acceptedShotsSinceDamage: 30, distance: 11000
+  });
+  const generationDeadline = combatPressurePhaseCore({
+    id: 'generic-target', combatPhase: generationBeforeDeadline.phase,
+    phaseStartedAt: generationBeforeDeadline.phaseStartedAt, closePressure: generationBeforeDeadline
+  }, {
+    targetId: 'generic-target', nowMs: 91000, engagedAt: 1000, ordinaryProfit: true,
+    threatEvidence: true, damageKnown: true, damageFromStart: 0, damageProgressAt: 1000,
+    acceptedShotsSinceDamage: 30, distance: 11000, movementStaminaSinceDamage: 123456
+  });
+  const generationDamageReset = combatPressurePhaseCore({
+    id: 'generic-target', combatPhase: generationDeadline.phase,
+    phaseStartedAt: generationDeadline.phaseStartedAt, closePressure: generationDeadline
+  }, {
+    targetId: 'generic-target', nowMs: 91050, engagedAt: 1000, ordinaryProfit: true,
+    damageKnown: true, damageFromStart: 3, damageProgressAt: 91050,
+    acceptedShotsSinceDamage: 0, distance: 11000
+  });
+  const defensiveGeneration = combatPressurePhaseCore({
+    id: 'defensive-target', combatPhase: 'normal-combat', firstSeenAt: 1000, damageProgressAt: 1000
+  }, {
+    targetId: 'defensive-target', nowMs: 500000, engagedAt: 1000, ordinaryProfit: false,
+    damageKnown: true, damageFromStart: 0, damageProgressAt: 1000,
+    acceptedShotsSinceDamage: 30, distance: 12000
+  });
+
+  const generationOptions = { combatMissCloseGenerationMaxMs: 999999, combatMissCloseGenerationMaxSteps: 2 };
+  const stepLimit1 = combatPressurePhaseCore({ id: 'step-target', combatPhase: 'normal-combat' }, {
+    targetId: 'step-target', nowMs: 1000, engagedAt: 1000, ordinaryProfit: true,
+    damageKnown: true, damageFromStart: 0, damageProgressAt: 1000,
+    acceptedShotsSinceDamage: 10, distance: 12000
+  }, generationOptions);
+  const stepLimit2 = combatPressurePhaseCore({ id: 'step-target', combatPhase: stepLimit1.phase, phaseStartedAt: stepLimit1.phaseStartedAt, closePressure: stepLimit1 }, {
+    targetId: 'step-target', nowMs: 1100, engagedAt: 1000, ordinaryProfit: true,
+    damageKnown: true, damageFromStart: 0, damageProgressAt: 1000,
+    acceptedShotsSinceDamage: 10, distance: 11000
+  }, generationOptions);
+  const stepLimit3 = combatPressurePhaseCore({ id: 'step-target', combatPhase: stepLimit2.phase, phaseStartedAt: stepLimit2.phaseStartedAt, closePressure: stepLimit2 }, {
+    targetId: 'step-target', nowMs: 1200, engagedAt: 1000, ordinaryProfit: true,
+    damageKnown: true, damageFromStart: 0, damageProgressAt: 1000,
+    acceptedShotsSinceDamage: 20, distance: 11000
+  }, generationOptions);
+  const stepLimit4 = combatPressurePhaseCore({ id: 'step-target', combatPhase: stepLimit3.phase, phaseStartedAt: stepLimit3.phaseStartedAt, closePressure: stepLimit3 }, {
+    targetId: 'step-target', nowMs: 1300, engagedAt: 1000, ordinaryProfit: true,
+    damageKnown: true, damageFromStart: 0, damageProgressAt: 1000,
+    acceptedShotsSinceDamage: 20, distance: 10000
+  }, generationOptions);
+  const stepLimit5 = combatPressurePhaseCore({ id: 'step-target', combatPhase: stepLimit4.phase, phaseStartedAt: stepLimit4.phaseStartedAt, closePressure: stepLimit4 }, {
+    targetId: 'step-target', nowMs: 1400, engagedAt: 1000, ordinaryProfit: true,
+    damageKnown: true, damageFromStart: 0, damageProgressAt: 1000,
+    acceptedShotsSinceDamage: 30, distance: 10000
+  }, generationOptions);
+  results.push({
+    name: 'combat-no-damage-generation-is-global-profit-only-and-resets-only-on-target-damage',
+    passed: generationStart.generationStartedAt === 1000
+      && generationBeforeDeadline.generationStartedAt === 1000
+      && generationBeforeDeadline.generationTimedOut === false
+      && generationDeadline.generationTimedOut === true
+      && generationDeadline.generationLimitReached === true
+      && generationDeadline.generationMovementStamina === 123456
+      && generationDamageReset.active === false
+      && generationDamageReset.generationStartedAt === 0
+      && defensiveGeneration.generationTimedOut === false
+      && defensiveGeneration.generationLimitReached === false
+      && stepLimit5.generationStepLimitReached === true
+      && stepLimit5.completedSteps === 2
+  });
+
+  const shadowInitial = updateCombatResponsePolicyShadowCore(null, {
+    targetId: 'generic-target', nowMs: 0, candidatePolicy: 'policy-a'
+  });
+  let shadowConfirmed = shadowInitial;
+  for (let tick = 1; tick <= 6; tick += 1) {
+    shadowConfirmed = updateCombatResponsePolicyShadowCore(shadowConfirmed, {
+      targetId: 'generic-target', nowMs: tick * 100, candidatePolicy: 'policy-b'
+    });
+  }
+  const shadowReversalCandidate = updateCombatResponsePolicyShadowCore(shadowInitial, {
+    targetId: 'generic-target', nowMs: 100, candidatePolicy: 'policy-b'
+  });
+  const shadowReversal = updateCombatResponsePolicyShadowCore(shadowReversalCandidate, {
+    targetId: 'generic-target', nowMs: 200, candidatePolicy: 'policy-a'
+  });
+  const shadowUnavailable = updateCombatResponsePolicyShadowCore(shadowInitial, {
+    targetId: 'generic-target', nowMs: 250, candidatePolicy: ''
+  });
+  let shadowMinimumHold = updateCombatResponsePolicyShadowCore(null, {
+    targetId: 'hold-target', nowMs: 0, candidatePolicy: 'policy-a'
+  }, { confirmTicks: 3, minimumHoldMs: 300 });
+  for (const nowMs of [50, 100, 150]) {
+    shadowMinimumHold = updateCombatResponsePolicyShadowCore(shadowMinimumHold, {
+      targetId: 'hold-target', nowMs, candidatePolicy: 'policy-b'
+    }, { confirmTicks: 3, minimumHoldMs: 300 });
+  }
+  const shadowMinimumHoldCommit = updateCombatResponsePolicyShadowCore(shadowMinimumHold, {
+    targetId: 'hold-target', nowMs: 300, candidatePolicy: 'policy-b'
+  }, { confirmTicks: 3, minimumHoldMs: 300 });
+  const shadowTargetSwitch = updateCombatResponsePolicyShadowCore(shadowInitial, {
+    targetId: 'other-target', nowMs: 50, candidatePolicy: 'policy-c'
+  });
+  const shadowBypasses = ['real-incoming-bullet', 'dodge-unsafe', 'hp-or-exit'].map(bypassReason => (
+    updateCombatResponsePolicyShadowCore(shadowInitial, {
+      targetId: 'generic-target', nowMs: 50, candidatePolicy: 'policy-b', bypassReason
+    })
+  ));
+  results.push({
+    name: 'combat-response-policy-shadow-confirms-candidates-and-never-delays-safety-bypasses',
+    passed: shadowInitial.committedPolicy === 'policy-a'
+      && shadowConfirmed.committedPolicy === 'policy-b'
+      && shadowConfirmed.switched === true
+      && shadowReversal.committedPolicy === 'policy-a'
+      && shadowReversal.candidatePolicy === ''
+      && shadowUnavailable.committedPolicy === 'policy-a'
+      && shadowUnavailable.transitionReason === 'policy-unavailable-preserve-commitment'
+      && shadowMinimumHold.committedPolicy === 'policy-a'
+      && shadowMinimumHold.transitionReason === 'minimum-hold-pending'
+      && shadowMinimumHoldCommit.committedPolicy === 'policy-b'
+      && shadowTargetSwitch.committedPolicy === 'policy-c'
+      && shadowTargetSwitch.transitionReason === 'target-changed'
+      && shadowBypasses.every(item => item.bypassed
+        && item.committedPolicy === 'policy-a'
+        && item.effectivePolicy === 'policy-b'
+        && !item.switched)
+  });
+
   const movementThreatField = [
     { dx: 1, dy: 0, directHits: 0, minCPA: 250 },
     { dx: 0, dy: 1, directHits: 0, minCPA: 300 },
@@ -1612,6 +1753,15 @@ function runStrategyModuleSelfTests() {
     closePressure: true,
     pressureAttack: true
   });
+  const boundedPressureAttackBudget = evaluateCombatFireBudgetCore({
+    targetId: '8',
+    acceptedShotsSinceDamage: 100,
+    fireGate: { active: true, suppressFire: true, reason: 'high-entropy-reacquire', explorationMaxShots: 15 },
+    probeState: { suppressFire: true, highEntropy: true },
+    closePressure: true,
+    pressureAttack: true,
+    boundedPressureVolley: true
+  });
   results.push({
     name: 'combat-pressure-attack-bypasses-probe-budget-only-above-post-shot-movement-reserve',
     passed: pressureAttackPaused.state === 'paused'
@@ -1622,6 +1772,9 @@ function runStrategyModuleSelfTests() {
       && pressureAttackBudget.authorizationSource === 'close-pressure-full-attack'
       && invalidPressureAttackBudget.suppressFire === false
       && invalidPressureAttackBudget.authorizationSource === 'close-pressure-full-attack'
+      && boundedPressureAttackBudget.suppressFire === true
+      && boundedPressureAttackBudget.boundedPressureVolley === true
+      && boundedPressureAttackBudget.suppressionReason === 'budget-state-invalid'
   });
   const economicObserve = evaluateNonThreatCombatEconomicStopLossCore({
     nowMs: 59000,

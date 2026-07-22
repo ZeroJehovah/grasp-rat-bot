@@ -161,6 +161,7 @@ const DANGEROUS_COMBAT_EXIT_REASONS = new Set([
   'combat-low-hp-disadvantage-leave',
   'combat-predicted-leave-hp',
   'combat-miss-close-timeout-leave',
+  'combat-no-damage-generation-limit-leave',
   'incoming-bullet-early-leave',
   'continuous-incoming-bullets-leave',
   'rapid-damage-early-leave'

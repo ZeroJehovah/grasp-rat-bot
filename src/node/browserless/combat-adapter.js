@@ -54,6 +54,9 @@ const {
   updateOpponentBehaviorStateCore
 } = require('../../strategy/opponent-behavior');
 const {
+  updateCombatResponsePolicyShadowCore
+} = require('../../strategy/combat-response-policy-shadow');
+const {
   targetIsWhitelisted,
   targetWhitelistNameSet,
   targetWhitelistUserIdSet
@@ -2059,6 +2062,7 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
     fireRiskClassification,
     probeState: same ? cloneJson(previous.probeState || null) : null,
     closeBandReserve: same ? cloneJson(previous.closeBandReserve || null) : null,
+    responsePolicyShadow: same ? cloneJson(previous.responsePolicyShadow || null) : null,
     escapeDecision,
     provenHitRate: Math.max(
       Number(same ? previous.provenHitRate || 0 : 0),
@@ -2441,6 +2445,12 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
           || combatTargetState.lastDamageAt
           || combatTargetState.firstSeenAt
           || options.nowMs),
+        movementStaminaSinceDamage: Number(combatTargetState.movementStaminaSinceDamage || 0),
+        shootingStaminaSinceDamage: Math.max(
+          0,
+          Number(stateful?.combatMetrics?.acceptedShots || 0)
+            - Number(combatTargetState.acceptedShotsAtLastDamage || 0)
+        ) * Math.max(1, Number(options.combatShotStaminaCostMs ?? 500)),
         ordinaryProfit: ['profit', 'engaged', 'reengage', 'afk-profit'].includes(String(
           combatTargetState.originIntent || combatTargetState.intent || target.combatIntent || ''
         ))
@@ -2685,6 +2695,18 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
       missClose: cloneJson(combatPhase)
     };
   }
+  if (!exitDecision && !contactEntryOnly && combatPhase?.generationLimitReached) {
+    exitDecision = {
+      shouldLeave: true,
+      policy: 'no-damage-generation-limit',
+      rule: combatPhase.generationTimedOut
+        ? 'no-damage-generation-deadline'
+        : 'no-damage-generation-step-limit',
+      reason: 'combat-no-damage-generation-limit-leave',
+      stopMotion: false,
+      noDamageGeneration: cloneJson(combatPhase)
+    };
+  }
   if (!exitDecision && !contactEntryOnly && exitEvaluation.exchangeStopLoss?.shouldExit) {
     exitDecision = {
       shouldLeave: true,
@@ -2748,6 +2770,28 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
       || (Number(combatTargetState?.lastSelfDamageAt || 0) > 0
         && Number(options.nowMs || Date.now()) - Number(combatTargetState.lastSelfDamageAt) <= 3000)
   );
+  const responsePolicyBypassReason = exitDecision
+    ? 'hp-or-exit'
+    : (targetCollisionBullet
+        ? 'real-incoming-bullet'
+        : (movement?.dodge?.active === true || /dodge/.test(String(movement?.reason || ''))
+            ? 'dodge-unsafe'
+            : ''));
+  const responsePolicyShadow = updateCombatResponsePolicyShadowCore(
+    combatTargetState?.responsePolicyShadow || null,
+    {
+      targetId: combatTargetId(target),
+      nowMs: options.nowMs,
+      candidatePolicy: behaviorPolicy,
+      recognizedMode: behaviorState?.mode || 'mixed/unknown',
+      bypassReason: responsePolicyBypassReason
+    },
+    {
+      confirmTicks: options.combatResponsePolicyShadowConfirmTicks ?? 6,
+      minimumHoldMs: options.combatResponsePolicyShadowMinimumHoldMs ?? 500
+    }
+  );
+  if (stateful?.combatTarget) stateful.combatTarget.responsePolicyShadow = responsePolicyShadow;
   const fireRisk = aim.fireRiskClassification || combatTargetState?.fireRiskClassification || null;
   const movementPhase = behaviorState?.metrics?.movementPhase
     || behaviorState?.metrics?.movementTransitions?.phase
@@ -2823,6 +2867,13 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     closeBandReserve,
     closePressure: closePressureActive,
     pressureAttack: pressureAttackActive,
+    boundedPressureVolley: Boolean(
+      closePressureActive
+        && pressureAttackActive
+        && combatPhase?.ordinaryProfit === true
+        && (baseHighEntropyFireGate.active || probeState.highEntropy)
+        && !baseHighEntropyFireGate.finishProtected
+    ),
     finishProtected: baseHighEntropyFireGate.finishProtected,
     resolvedReserveMs: fireState.reserve,
     stamina5s: fireState.stamina5s
@@ -2983,6 +3034,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
       candidateConfidence: behaviorState.candidateConfidence,
       transitionReason: behaviorState.transitionReason,
       responsePolicy: behaviorPolicy,
+      responsePolicyShadow,
       noProgressMs: behaviorState.noProgressMs,
       recentHitRate: behaviorState.recentHitRate,
       dimensions: behaviorState.dimensions,
@@ -3019,6 +3071,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
       behaviorReason: behaviorPolicy?.reason || '',
       recognizedMode: behaviorState?.mode || 'mixed/unknown',
       responsePolicy: behaviorPolicy?.name || '',
+      responsePolicyShadow,
       fireAuthorizationClass,
       finalFireBlocker,
       highEntropyFireGate,

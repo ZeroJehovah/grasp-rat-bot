@@ -468,13 +468,17 @@ function evaluateCombatFireBudgetCore(input = {}, options = {}) {
   const stamina5s = numberOrNull(input.stamina5s);
   const finishProtected = Boolean(gate.finishProtected || input.finishProtected);
   const pressureAttack = Boolean(input.pressureAttack);
+  const boundedPressureVolley = Boolean(input.boundedPressureVolley);
   const closeBandStableQualified = Boolean(
     closeBandReserve.stableBandEligible === true
       || (closeBandReserve.enabled !== false
         && closeBandReserve.inBand === true
         && Number(closeBandReserve.bandTicks || 0) >= Math.max(1, Number(closeBandReserve.requiredBandTicks || 3)))
   );
-  const closeRangeFireOverride = Boolean(input.closeRangeFireOverride || pressureAttack || closeBandStableQualified);
+  const closeRangeFireOverride = Boolean(
+    input.closeRangeFireOverride
+      || (!boundedPressureVolley && (pressureAttack || closeBandStableQualified))
+  );
   let suppressFire = Boolean(gate.suppressFire || probe.suppressFire);
   let authorizationSource = suppressFire ? '' : 'base-fire-discipline';
   let suppressionReason = suppressFire
@@ -496,14 +500,6 @@ function evaluateCombatFireBudgetCore(input = {}, options = {}) {
     suppressFire = false;
     authorizationSource = pressureAttack ? 'close-pressure-full-attack' : 'close-range-fire-override';
     suppressionReason = '';
-  } else if (sharedBudgetRemaining <= 0) {
-    suppressFire = true;
-    authorizationSource = '';
-    suppressionReason = 'shared-fire-budget-exhausted';
-  } else if (closeBandReserveQualified) {
-    suppressFire = false;
-    authorizationSource = 'close-band-reserve';
-    suppressionReason = '';
   } else if (finishProtected) {
     suppressFire = false;
     authorizationSource = 'low-hp-finish-protected';
@@ -511,6 +507,14 @@ function evaluateCombatFireBudgetCore(input = {}, options = {}) {
   } else if (probe.provenHitProtected) {
     suppressFire = false;
     authorizationSource = 'proven-hit-rate';
+    suppressionReason = '';
+  } else if (sharedBudgetRemaining <= 0) {
+    suppressFire = true;
+    authorizationSource = '';
+    suppressionReason = 'shared-fire-budget-exhausted';
+  } else if (closeBandReserveQualified) {
+    suppressFire = false;
+    authorizationSource = 'close-band-reserve';
     suppressionReason = '';
   } else if (gate.active) {
     if (baseBudgetRemaining > 0 && ordinaryBudgetRemaining > 0) {
@@ -574,6 +578,7 @@ function evaluateCombatFireBudgetCore(input = {}, options = {}) {
     suppressionReason,
     closePressure: Boolean(input.closePressure),
     pressureAttack,
+    boundedPressureVolley,
     boundedNoProgress: Boolean(gate.boundedNoProgress)
   };
 }

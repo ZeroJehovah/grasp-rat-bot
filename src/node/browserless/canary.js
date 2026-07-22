@@ -2234,7 +2234,19 @@ async function runReadOnlyCanary(config, options = {}) {
     } else if (options.precheckedSnapshotSafety && typeof options.precheckedSnapshotSafety === 'object') {
       result.snapshotSafety = options.precheckedSnapshotSafety;
     } else {
-      result.snapshotSafety = await (options.runPreLoginSnapshotSafety || runPreLoginSnapshotSafety)(config, options.persistedState || {}, options);
+      const recoverySnapshotConfig = persistedPendingExit
+        ? {
+            ...config,
+            snapshotEdgeEnabled: false,
+            loginPointSafetySuccessRequired: 1,
+            loginPointSafetyProbeIntervalMs: 0
+          }
+        : config;
+      result.snapshotSafety = await (options.runPreLoginSnapshotSafety || runPreLoginSnapshotSafety)(
+        recoverySnapshotConfig,
+        options.persistedState || {},
+        options
+      );
     }
   } catch (err) {
     const message = errorMessage(err);
