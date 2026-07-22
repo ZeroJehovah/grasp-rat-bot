@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.22.4';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.22.5';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function highDropRankValueCore(item) {
@@ -284,8 +284,8 @@ function renderBrowserlessWebPanel() {
     .damage-player-name{color:#fda4af;border-color:rgba(251,113,133,.8);background:rgba(251,113,133,.12)}
     .dynamic-whitelist-name{color:#fff;border-color:rgba(255,255,255,.8);background:rgba(255,255,255,.08)}
     .whitelist-meta-count{color:#fff}.easy-kill-meta-count{color:var(--coin)}
-    .dynamic-whitelist-add{display:inline-flex;align-items:center;justify-content:center;flex:0 0 26px;width:26px;height:26px;padding:0;border:0;color:#fff;background:transparent;cursor:pointer}
-    .dynamic-whitelist-add svg{width:26px;height:26px;fill:currentColor}
+    .dynamic-whitelist-add{display:inline-flex;align-items:center;justify-content:center;flex:0 0 26px;width:26px;min-width:26px;max-width:26px;height:26px;min-height:26px;max-height:26px;box-sizing:border-box;padding:0;border:0;line-height:0;color:#fff;background:transparent;cursor:pointer}
+    .dynamic-whitelist-add svg{display:block;flex:0 0 26px;width:26px;height:26px;fill:currentColor}
     .dynamic-whitelist-popover{position:fixed;z-index:20;display:flex;gap:5px;padding:7px;border:1px solid rgba(255,255,255,.8);border-radius:6px;background:#101827;box-shadow:0 8px 24px rgba(0,0,0,.35)}
     .dynamic-whitelist-popover input{width:130px;min-height:26px;border:1px solid var(--line);border-radius:4px;background:var(--panel2);color:var(--text);padding:3px 6px}
     .dynamic-whitelist-popover button{min-height:26px;padding:3px 7px}
