@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.22.6';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.22.7';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function highDropRankValueCore(item) {
@@ -278,12 +278,12 @@ function renderBrowserlessWebPanel() {
     .player-memory-list{display:flex;flex-wrap:wrap;gap:6px 5px;min-height:24px;align-items:center;align-content:flex-start}
     .player-memory-name{display:inline-flex;align-items:center;max-width:100%;height:26px;box-sizing:border-box;padding:2px 5px;border:1px solid transparent;border-radius:4px;line-height:1.3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     .player-memory-empty{color:var(--muted)}
-    .easy-kill-score-1{color:#86efac;border-color:rgba(251,191,36,.82);background:rgba(134,239,172,.12)}
-    .easy-kill-score-2{color:#86efac;border-color:rgba(251,191,36,.82);background:rgba(253,230,138,.12)}
-    .easy-kill-score-3{color:#fde68a;border-color:rgba(251,191,36,.82);background:rgba(251,191,36,.13)}
-    .damage-player-name{color:#fda4af;border-color:rgba(251,113,133,.8);background:rgba(251,113,133,.12)}
-    .dynamic-whitelist-name{color:#fff;border-color:rgba(255,255,255,.8);background:rgba(255,255,255,.08)}
-    .whitelist-meta-count{color:#fff}.easy-kill-meta-count{color:var(--coin)}
+    .easy-kill-score-1{border-color:#B8862C;background:#FFF3C4;color:#8A641C}
+    .easy-kill-score-2{border-color:#C58A16;background:#FFE8A3;color:#8B5E08}
+    .easy-kill-score-3{border-color:#A86B00;background:#FFD86B;color:#6B4300}
+    .dynamic-whitelist-name{border-color:#BFC7D5;background:#FFFFFF;color:#687386}
+    .damage-player-name{border-color:#8B1E24;background:#FFD6D8;color:#8A1C24}
+    .whitelist-meta-count{color:#687386}.easy-kill-meta-count{color:#8A641C}.damage-meta-count{color:#8A1C24}
     .dynamic-whitelist-add{display:inline-flex;align-items:center;justify-content:center;flex:0 0 16px;width:16px;min-width:16px;max-width:16px;height:16px;min-height:16px;max-height:16px;box-sizing:border-box;padding:0;border:0;line-height:0;color:#fff;background:transparent;cursor:pointer}
     .dynamic-whitelist-add svg{display:block;flex:0 0 16px;width:16px;height:16px;fill:currentColor}
     .dynamic-whitelist-popover{position:fixed;z-index:20;display:flex;gap:5px;padding:7px;border:1px solid rgba(255,255,255,.8);border-radius:6px;background:#101827;box-shadow:0 8px 24px rgba(0,0,0,.35)}
@@ -1816,12 +1816,12 @@ function renderBrowserlessWebPanel() {
       for (const item of damageItems) fragment.appendChild(createPlayerMemoryName(Array.isArray(item) ? item?.[0] : item, 'damage-player-name'));
       node.replaceChildren(fragment);
       setRichText('playerMemoryTitleMeta', [
-        { text: '相视一笑 ', className: 'meta-label' },
+        { text: '白名单 ', className: 'meta-label' },
         { text: String(Array.isArray(status.dynamicWhitelist?.p) ? status.dynamicWhitelist.p.length : 0), className: 'whitelist-meta-count' },
-        { text: ' | 赛博善人 ', className: 'meta-label' },
+        { text: ' | 行走的金币 ', className: 'meta-label' },
         { text: String(Array.isArray(status.easyKillPlayers?.p) ? status.easyKillPlayers.p.length : 0), className: 'easy-kill-meta-count' },
         { text: ' | 仇恨之书 ', className: 'meta-label' },
-        { text: String(Array.isArray(status.dailyDamagePlayers?.p) ? status.dailyDamagePlayers.p.length : 0), className: 'bad' }
+        { text: String(Array.isArray(status.dailyDamagePlayers?.p) ? status.dailyDamagePlayers.p.length : 0), className: 'damage-meta-count' }
       ]);
     }
     function showDynamicWhitelistPopover(anchor) {
