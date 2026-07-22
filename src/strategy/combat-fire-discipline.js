@@ -158,6 +158,29 @@ function canFireNow(lastShotAt, cadenceMs, now = Date.now()) {
   return elapsed >= cadenceMs;
 }
 
+function resolveEstablishedCombatFireAuthorizationCore(input = {}) {
+  const targetPresent = input.targetPresent ?? Boolean(input.target);
+  const aimOk = input.aimOk ?? Boolean(input.aim?.ok);
+  const inRange = input.inRange === true;
+  const fireState = input.fireState && typeof input.fireState === 'object'
+    ? input.fireState
+    : {};
+  const staminaBlocked = fireState.state === FIRE_STATE.DISABLED || fireState.state === FIRE_STATE.PAUSED;
+  let finalFireBlocker = 'none';
+  if (!targetPresent) finalFireBlocker = 'no-target';
+  else if (!aimOk) finalFireBlocker = `aim:${String(input.aim?.reason || input.aimReason || 'unavailable')}`;
+  else if (!inRange) finalFireBlocker = 'target-out-of-range';
+  else if (staminaBlocked) finalFireBlocker = `fire-state:${String(fireState.reason || fireState.state)}`;
+  else if (input.contactEntryOnly === true) finalFireBlocker = 'movement-only-contact-entry';
+  return {
+    wouldShoot: finalFireBlocker === 'none',
+    finalFireBlocker,
+    fireAuthorizationClass: finalFireBlocker === 'none'
+      ? 'standard-combat-fire'
+      : (staminaBlocked ? 'stamina-reserve-blocked' : 'hard-gate-blocked')
+  };
+}
+
 /**
  * Should suppress fire for retreating edge target
  *
@@ -814,6 +837,7 @@ module.exports = {
   determineCombatFireState,
   stamina5sRemaining,
   canFireNow,
+  resolveEstablishedCombatFireAuthorizationCore,
   shouldSuppressRetreatingEdge,
   checkLowConfidenceThrottle,
   classifyFireRiskCore,

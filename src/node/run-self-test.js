@@ -11374,11 +11374,16 @@ async function runSelfTest() {
           pressure.exit === null,
           pressure.movement.reason !== 'defensive-exchange-no-progress-retreat',
           pressure.shooting.highEntropyFireGate.suppressFire,
+          pressure.shooting.highEntropyFireGate.advisorySuppressFire,
+          pressure.shooting.behaviorSuppressionApplied,
+          pressure.shooting.wouldShoot,
+          pressure.shooting.fireAuthorizationClass,
+          pressure.shooting.finalFireBlocker,
           hardExit.combatPhase.phase,
           hardExit.exit?.reason
         ].join('|');
       })(),
-      want: 'close-pressure|close-pressure|false|false|true|true|true|close-pressure|combat-low-hp-disadvantage-leave'
+      want: 'close-pressure|close-pressure|false|false|true|true|false|true|false|true|standard-combat-fire|none|close-pressure|combat-low-hp-disadvantage-leave'
     },
     {
       name: 'browserless action adapter pre-approaches AFK target before shooting',
@@ -17582,7 +17587,7 @@ async function runSelfTest() {
       want: '9000|11880|2880|no-exit|true|false|9|0'
     },
     {
-      name: 'browserless defensive exchange stop loss ceases fire retreats and then exits',
+      name: 'browserless defensive exchange stop loss keeps normal fire while retreating and then exits',
       got: (() => {
         const stateful = {
           combatTarget: {
@@ -17667,7 +17672,7 @@ async function runSelfTest() {
           stateful.combatTarget.exchangeRetreatSinceAt > 0
         ].join('|');
       })(),
-      want: 'retreat|true|false|defensive-exchange-no-progress-retreat|retreat|exit|true|defensive-exchange-no-progress-leave|true'
+      want: 'retreat|true|true|defensive-exchange-no-progress-retreat|retreat|exit|true|defensive-exchange-no-progress-leave|true'
     },
     {
       name: 'browserless combat low hp behind exits regardless no-damage window',

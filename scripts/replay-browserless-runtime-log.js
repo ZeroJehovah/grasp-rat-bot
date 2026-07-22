@@ -2603,21 +2603,47 @@ function replayCombatClosePressure(options) {
   });
   let suppressedFireFrames = 0;
   let reopenedFireEligibleFrames = 0;
+  let reopenedEstimatedShots = 0;
+  let reopenedEstimatedHits = 0;
+  let lastReopenedShotAt = 0;
+  const reopenedShotMisses = [];
   let hardExitFrames = 0;
-  for (const row of phaseRows) {
+  for (let index = 0; index < phaseRows.length; index += 1) {
+    const row = phaseRows[index];
     const detail = row.detail || {};
     if (detail.exit) hardExitFrames += 1;
-    if (detail.shooting?.highEntropyFireGate?.suppressFire !== true) continue;
+    const advisorySuppressed = Boolean(
+      detail.shooting?.highEntropyFireGate?.advisorySuppressFire === true
+        || detail.shooting?.highEntropyFireGate?.suppressFire === true
+        || detail.shooting?.behaviorSuppressed === true
+    );
+    if (!advisorySuppressed) continue;
     suppressedFireFrames += 1;
     const fireState = determineCombatFireState(detail.self || {}, detail.target || {}, {
       closePressure: true,
+      closePressureAttack: true,
       closePressureCadenceMs: 520,
-      closePressureReserveMs: 2600
+      closePressureReserveMs: 2600,
+      shotCostMs: 500
     });
     if (!detail.exit
       && Number(detail.target?.distance) <= 14500
       && fireState.state !== 'disabled'
-      && fireState.state !== 'paused') reopenedFireEligibleFrames += 1;
+      && fireState.state !== 'paused') {
+      reopenedFireEligibleFrames += 1;
+      const atMs = Date.parse(row.entry.at || '');
+      const cadenceMs = Math.max(1, Number(fireState.cadenceMs || 160));
+      if (Number.isFinite(atMs) && (!lastReopenedShotAt || atMs - lastReopenedShotAt >= cadenceMs)) {
+        const aim = detail.aim && Number.isFinite(Number(detail.aim.x)) && Number.isFinite(Number(detail.aim.y))
+          ? { x: Number(detail.aim.x), y: Number(detail.aim.y) }
+          : { x: Number(detail.target?.x), y: Number(detail.target?.y) };
+        const miss = replayVirtualShotMiss(phaseRows, index, detail, aim);
+        reopenedShotMisses.push(miss);
+        reopenedEstimatedShots += 1;
+        if (miss <= Number(options.hitRadius || 90)) reopenedEstimatedHits += 1;
+        lastReopenedShotAt = atMs;
+      }
+    }
   }
   const historical = {
     pressureFrames: phaseRows.length,
@@ -2675,7 +2701,13 @@ function replayCombatClosePressure(options) {
     threatPreserving,
     noBulletControl,
     boundedVolley,
-    reopenedFireEligibleFrames
+    reopenedFireEligibleFrames,
+    reopenedFire: {
+      estimatedShots: reopenedEstimatedShots,
+      estimatedHits: reopenedEstimatedHits,
+      hitRadiusCm: Number(options.hitRadius || 90),
+      p50MissCm: percentile(reopenedShotMisses.filter(Number.isFinite), 0.5)
+    }
   };
   const reserveReplay = threatPreserving.pressureAttack.reserve;
   const fullAttackAuthorized = threatPreserving.pressureAttack.budgetUnlockFrames > 0

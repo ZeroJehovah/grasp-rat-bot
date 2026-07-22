@@ -29,6 +29,7 @@ const {
   determineCombatFireState,
   evaluateCombatFireBudgetCore,
   evaluateHighEntropyFireGateCore,
+  resolveEstablishedCombatFireAuthorizationCore,
   updateCloseBandReserveCore,
   updateCombatProbePhaseCore
 } = require('../../strategy/combat-fire-discipline');
@@ -2953,37 +2954,33 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
   const boundedCadenceMs = behaviorBoundedCadenceMs === null
     ? null
     : Math.max(behaviorBoundedCadenceMs, Math.max(0, Number(highEntropyFireGate.minimumCadenceMs || 0)));
+  // Once realtime combat is established, behavioral and statistical fire
+  // policies stay diagnostic-only. They may tune aim, cadence, and movement,
+  // but only physical target/aim/range checks and the dodge-stamina reserve
+  // may block an otherwise valid shot.
   const behaviorSuppressFire = Boolean(!closePressureActive && behaviorPolicy?.suppressFire);
-  const wouldShoot = Boolean(
-    target
-      && aim.ok
-      && inRange
-      && fireState.state !== 'disabled'
-      && fireState.state !== 'paused'
-      && !contactEntryOnly
-      && !exitEvaluation.exchangeStopLoss?.disengage
-      && !behaviorSuppressFire
-      && !highEntropyFireGate.suppressFire
-  );
-  let finalFireBlocker = 'none';
-  if (!target) finalFireBlocker = 'no-target';
-  else if (!aim.ok) finalFireBlocker = `aim:${String(aim.reason || 'unavailable')}`;
-  else if (!inRange) finalFireBlocker = 'target-out-of-range';
-  else if (fireState.state === 'disabled' || fireState.state === 'paused') {
-    finalFireBlocker = `fire-state:${String(fireState.reason || fireState.state)}`;
-  } else if (contactEntryOnly) finalFireBlocker = 'movement-only-contact-entry';
-  else if (exitEvaluation.exchangeStopLoss?.disengage) {
-    finalFireBlocker = String(exitEvaluation.exchangeStopLoss.reason || 'exchange-stop-loss');
-  } else if (behaviorSuppressFire) {
-    finalFireBlocker = `response-policy:${String(behaviorPolicy?.reason || behaviorPolicy?.name || 'suppressed')}`;
-  } else if (highEntropyFireGate.suppressFire) {
-    finalFireBlocker = String(highEntropyFireGate.reason || 'ordinary-fire-budget-suppressed');
-  }
-  const fireAuthorizationClass = finalFireBlocker === 'none'
-    ? String(sharedFireBudget.authorizationSource || 'ordinary-fire-budget')
-    : (highEntropyFireGate.suppressFire
-        ? 'ordinary-budget-blocked'
-        : (behaviorSuppressFire ? 'response-policy-blocked' : 'hard-gate-blocked'));
+  const advisoryFireSuppressionReasons = [
+    behaviorSuppressFire ? `response-policy:${String(behaviorPolicy?.reason || behaviorPolicy?.name || 'suppressed')}` : '',
+    highEntropyFireGate.suppressFire ? String(highEntropyFireGate.reason || 'ordinary-fire-budget-suppressed') : ''
+  ].filter(Boolean);
+  const executionHighEntropyFireGate = {
+    ...highEntropyFireGate,
+    advisorySuppressFire: Boolean(highEntropyFireGate.suppressFire),
+    executionSuppressed: false,
+    suppressFire: false
+  };
+  const {
+    wouldShoot,
+    finalFireBlocker,
+    fireAuthorizationClass
+  } = resolveEstablishedCombatFireAuthorizationCore({
+    targetPresent: Boolean(target),
+    aim,
+    aimOk: aim.ok,
+    inRange,
+    fireState,
+    contactEntryOnly
+  });
   const commandSuppressed = Boolean(!liveCombatEnabled || !wouldShoot);
   return {
     ok: Boolean(self),
@@ -3063,6 +3060,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
       stamina5s: fireState.stamina5s === null ? null : numberOrNull(fireState.stamina5s),
       lowConfidenceThrottle: Boolean(lowConfidence.throttle),
       behaviorSuppressed: behaviorSuppressFire,
+      behaviorSuppressionApplied: false,
       closePressure: closePressureActive,
       pressureAttack: pressureAttackActive,
       combatPhase: combatTargetState?.combatPhase || 'normal-combat',
@@ -3074,7 +3072,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
       responsePolicyShadow,
       fireAuthorizationClass,
       finalFireBlocker,
-      highEntropyFireGate,
+      highEntropyFireGate: executionHighEntropyFireGate,
       probePhase: probeState,
       fireRiskClassification: aim.fireRiskClassification || combatTargetState?.fireRiskClassification || null,
       trajectoryCoverage: aim.trajectoryCoverage || null,
@@ -3084,7 +3082,8 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
       recentAcceptedShotCount: recentHitSummary.shotCount,
       noProgressAcceptedShots,
       noProgressShootingStaminaSpent: noProgressAcceptedShots * Math.max(1, Number(options.combatShotStaminaCostMs ?? 500)),
-      fireSuppressionReason: highEntropyFireGate.suppressFire ? highEntropyFireGate.reason : 'none',
+      fireSuppressionReason: 'none',
+      advisoryFireSuppressionReasons,
       sharedBudgetUsed: sharedFireBudget.sharedBudgetUsed,
       sharedBudgetRemaining: sharedFireBudget.sharedBudgetRemaining,
       ordinaryBudgetRemaining: sharedFireBudget.ordinaryBudgetRemaining,

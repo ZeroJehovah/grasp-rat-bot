@@ -21,6 +21,7 @@ const {
   determineCombatFireState,
   evaluateCombatFireBudgetCore,
   evaluateHighEntropyFireGateCore,
+  resolveEstablishedCombatFireAuthorizationCore,
   updateCloseBandReserveCore,
   updateCombatProbePhaseCore
 } = require('./combat-fire-discipline');
@@ -354,6 +355,34 @@ function runStrategyModuleSelfTests() {
       && switchedRisk.highEntropy === false
       && boundedDefense.suppressFire === true
       && boundedDefense.reason === 'high-entropy-reacquire'
+  });
+  const standardCombatFire = resolveEstablishedCombatFireAuthorizationCore({
+    targetPresent: true,
+    aimOk: true,
+    inRange: true,
+    fireState: { state: 'normal', reason: 'normal-fire' },
+    statisticalSuppression: {
+      hitRate: 0,
+      highEntropy: true,
+      probeExhausted: true,
+      coverageMarginalGain: 0,
+      sharedBudgetRemaining: 0
+    }
+  });
+  const dodgeReserveBlockedFire = resolveEstablishedCombatFireAuthorizationCore({
+    targetPresent: true,
+    aimOk: true,
+    inRange: true,
+    fireState: { state: 'paused', reason: 'close-pressure-movement-reserve' }
+  });
+  results.push({
+    name: 'established-combat-fire-ignores-statistical-gates-but-preserves-dodge-stamina-reserve',
+    passed: standardCombatFire.wouldShoot === true
+      && standardCombatFire.finalFireBlocker === 'none'
+      && standardCombatFire.fireAuthorizationClass === 'standard-combat-fire'
+      && dodgeReserveBlockedFire.wouldShoot === false
+      && dodgeReserveBlockedFire.finalFireBlocker === 'fire-state:close-pressure-movement-reserve'
+      && dodgeReserveBlockedFire.fireAuthorizationClass === 'stamina-reserve-blocked'
   });
   const initialProbe = updateCombatProbePhaseCore(null, {
     nowMs: 1000,
