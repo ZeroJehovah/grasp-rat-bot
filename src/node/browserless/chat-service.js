@@ -293,6 +293,15 @@ function createChatService(options = {}) {
     return { updated, playerCount: names.size };
   }
 
+  function findPlayersByName(input) {
+    const requested = String(input || '').trim();
+    if (!requested) return [];
+    return Array.from(names.values())
+      .filter(record => record.name === requested)
+      .sort((left, right) => Date.parse(right.lastObservedAt || '') - Date.parse(left.lastObservedAt || ''))
+      .map(record => ({ userId: record.userId, name: record.name, lastObservedAt: record.lastObservedAt }));
+  }
+
   if (Array.isArray(options.seedPlayers) && options.seedPlayers.length) {
     rememberNames(options.seedPlayers, {
       observedAtMs: now(),
@@ -557,6 +566,7 @@ function createChatService(options = {}) {
     attachTransport,
     desiredSnapshotIntervalMs,
     detachTransport,
+    findPlayersByName,
     notePageActivity,
     observeSnapshot,
     rememberNames,

@@ -89,6 +89,7 @@ function renderStatus(message) {
     highDropPlayers: state.highDropPlayers || null,
     easyKillPlayers: state.easyKillPlayers || null,
     dailyDamagePlayers: state.dailyDamagePlayers || null,
+    dynamicWhitelist: state.dynamicWhitelist || null,
     chat: state.chat || null
   });
 }

@@ -212,6 +212,7 @@ const { resolveRepositoryRevision } = require('./browserless/runtime-revision');
 const {
   createDailyDamagePlayerTracker
 } = require('./browserless/daily-damage-player-tracker');
+const { createDynamicWhitelist } = require('./browserless/dynamic-whitelist');
 const {
   forEachJsonlEntry,
   readJsonlEntries,
@@ -27486,6 +27487,33 @@ async function runSelfTest() {
       want: '401|200|true|true|true|200|true|12|true|true|true|200|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|200|true|1'
     },
     {
+      name: 'browserless status server adds dynamic whitelist players by name',
+      got: (async () => {
+        const names = [];
+        const handle = await startStatusServer({
+          host: '127.0.0.1',
+          port: 0,
+          webToken: 'test-token',
+          onDynamicWhitelistAdd: name => {
+            names.push(name);
+            return { ok: true, player: { userId: 8, name } };
+          }
+        });
+        try {
+          const response = await fetch(`http://127.0.0.1:${handle.port}/api/dynamic-whitelist?token=test-token`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ name: 'friendly' })
+          });
+          const body = await response.json();
+          return [response.status, body.player.userId, names.join(',')].join('|');
+        } finally {
+          await handle.close();
+        }
+      })(),
+      want: '200|8|friendly'
+    },
+    {
       name: 'browserless status server accepts async pre-rendered full and compact JSON text',
       got: (async () => {
         let fullCalls = 0;
@@ -27702,38 +27730,53 @@ async function runSelfTest() {
             day: '2026-07-14',
             file: '/tmp/damage-should-not-leak.json',
             players: [{ userId: 11, name: 'damager' }]
+          },
+          dynamicWhitelist: {
+            file: '/tmp/whitelist-should-not-leak.json',
+            players: [{ userId: 12, name: 'friendly' }]
           }
         });
         const panelText = renderBrowserlessWebPanel();
         const panelScript = panelText.match(/<script>([\s\S]*?)<\/script>/)?.[1] || '';
-        return [
-          compact.easyKillPlayers.p.map(item => item.join(',')).join(';'),
-          compact.dailyDamagePlayers.day,
-          compact.dailyDamagePlayers.p.join(','),
+        return String([
+          compact.easyKillPlayers.p.map(item => item.join(',')).join(';') === 'score-one,1;score-two,2;score-three,3',
+          compact.dailyDamagePlayers.day === '2026-07-14',
+          compact.dailyDamagePlayers.p.join(',') === 'damager',
+          compact.dynamicWhitelist.p.join(',') === 'friendly',
           JSON.stringify(compact.easyKillPlayers).includes('userId'),
           JSON.stringify(compact.dailyDamagePlayers).includes('userId'),
+          JSON.stringify(compact.dynamicWhitelist).includes('userId'),
           JSON.stringify(compact).includes('should-not-leak'),
           /<h2[^>]*>玩家记录<\/h2>/.test(panelText),
           !/<h3>近期击杀缓冲<\/h3>/.test(panelText),
           !/<h3>今日伤害玩家<\/h3>/.test(panelText),
+          /id="dynamicWhitelistPlayers"/.test(panelText),
           /id="easyKillPlayers"/.test(panelText),
           /id="dailyDamagePlayers"/.test(panelText),
           /\.easy-kill-score-1\{/.test(panelText),
           /\.easy-kill-score-2\{/.test(panelText),
           /\.easy-kill-score-3\{/.test(panelText),
-          /\.easy-kill-score-1\{color:#f8fafc;border-color:rgba\(248,250,252,\.72\);background:rgba\(248,250,252,\.08\)\}/.test(panelText),
-          /\.easy-kill-score-2\{color:#86efac;border-color:rgba\(74,222,128,\.78\);background:rgba\(34,197,94,\.12\)\}/.test(panelText),
+          /\.easy-kill-score-1\{color:#86efac;border-color:rgba\(251,191,36,\.82\);background:rgba\(134,239,172,\.12\)\}/.test(panelText),
+          /\.easy-kill-score-2\{color:#86efac;border-color:rgba\(251,191,36,\.82\);background:rgba\(253,230,138,\.12\)\}/.test(panelText),
           /\.easy-kill-score-3\{color:#fde68a;border-color:rgba\(251,191,36,\.82\);background:rgba\(251,191,36,\.13\)\}/.test(panelText),
           /\.damage-player-name\{color:#fda4af;border-color:rgba\(251,113,133,\.8\);background:rgba\(251,113,133,\.12\)\}/.test(panelText),
+          /\.dynamic-whitelist-name\{color:#fff;border-color:rgba\(255,255,255,\.8\);background:rgba\(255,255,255,\.08\)\}/.test(panelText),
+          /\.player-memory-grid\{display:block;min-width:0\}/.test(panelText),
           /\.player-memory-list\{[^}]*gap:6px 5px;min-height:24px/.test(panelText),
           /\.player-memory-name\{[^}]*min-height:22px;padding:2px 5px;border:1px solid transparent;[^}]*line-height:1\.3/.test(panelText),
           /function renderPlayerMemory/.test(panelScript),
+          /function showDynamicWhitelistPopover/.test(panelScript),
+          /相视一笑/.test(panelScript),
+          /whitelist-meta-count/.test(panelScript),
+          /easy-kill-meta-count/.test(panelScript),
+          /api\('\/api\/dynamic-whitelist'/.test(panelScript),
           panelScript.includes("createPlayerMemoryName(item?.[0], 'easy-kill-score-' + score)"),
-          panelText.indexOf('id="highDropPlayers"') < panelText.indexOf('id="easyKillPlayers"'),
+          panelText.indexOf('id="highDropPlayers"') < panelText.indexOf('id="dynamicWhitelistPlayers"'),
+          panelText.indexOf('id="dynamicWhitelistPlayers"') < panelText.indexOf('id="easyKillPlayers"'),
           panelText.indexOf('id="easyKillPlayers"') < panelText.indexOf('id="nearbyGrid"')
-        ].join('|');
+        ].every(Boolean));
       })(),
-      want: 'score-one,1;score-two,2;score-three,3|2026-07-14|damager|false|false|false|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
+      want: 'true'
     },
     {
       name: 'browserless web panel renders target bars and svg target icons',
@@ -35417,6 +35460,60 @@ async function runSelfTest() {
 	        }
 	      })(),
 	      want: 'true|2026-07-14|1|8|renamed-attacker|12|user:8|0'
+	    },
+	    {
+	      name: 'browserless dynamic whitelist excludes profit combat and avoidance candidates',
+	      got: (() => {
+	        const stateful = {
+	          recentInvulnerableThreats: {
+	            8: { id: '8', name: 'friendly', x: 5000, y: 0, lastSeenAt: 1, holdUntil: 1000 }
+	          }
+	        };
+	        const input = buildBrowserlessStrategyInput({
+	          userId: 7,
+	          realtime: {
+	            tick: 2,
+	            frameAgeMs: 0,
+	            self: { user_id: 7, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+	            entities: [
+	              { user_id: 7, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+	              { user_id: 8, name: 'friendly', x: 5000, y: 0, hp: 100, current_join_mode: 'Active', firing: true, invulnerable_remaining_ticks: 100, stamina_5s_remaining_milli: 5000, drop: 100 }
+	            ],
+	            bullets: []
+	          },
+	          fallback: { frameAgeMs: 0, entities: [], coinDrops: [] }
+	        }, {
+	          nowMs: 100,
+	          whitelistCheck: target => Number(target?.user_id ?? target?.userId) === 8
+	        }, stateful);
+	        return [
+	          input.visibleTargets[0]?.whitelisted,
+	          input.afkTargets.length,
+	          input.activeThreats.length,
+	          input.firingThreats.length,
+	          input.avoidanceThreats.length,
+	          Object.keys(stateful.recentInvulnerableThreats).length
+	        ].join('|');
+	      })(),
+	      want: 'true|0|0|0|0|0'
+	    },
+	    {
+	      name: 'browserless dynamic whitelist persists stable ids and removes a player after damage',
+	      got: (() => {
+	        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'grasp-rat-dynamic-whitelist-'));
+	        const file = path.join(dir, 'dynamic-whitelist.json');
+	        try {
+	          const tracker = createDynamicWhitelist({ file, now: () => 1000 });
+	          const added = tracker.add({ userId: 8, name: 'friendly' }, 1000);
+	          const reloaded = createDynamicWhitelist({ file, now: () => 2000 });
+	          const matched = reloaded.isWhitelistedTarget({ user_id: 8, name: 'renamed' });
+	          const removal = reloaded.remove({ userId: 8 }, 'damaged-self', 3000);
+	          return [added.added, matched, removal.removed, reloaded.status().playerCount, JSON.parse(fs.readFileSync(file, 'utf8')).schemaVersion].join('|');
+	        } finally {
+	          fs.rmSync(dir, { recursive: true, force: true });
+	        }
+	      })(),
+	      want: 'true|true|true|0|1'
 	    },
 	    {
 	      name: 'browserless easy-kill players stay out of recovery combat and HP exits until damage',

@@ -48,6 +48,7 @@ const DEFAULT_MAIN_THREAD_BUDGET_MS = 50;
 const DEFAULT_REALTIME_CONTROL_WARMUP_ITERATIONS = 6;
 const DEFAULT_LOGIN_POINT_SINGLE_BLOCKER_BYPASS_MS = 60 * 60 * 1000;
 const DEFAULT_LOGIN_POINT_FULL_HP = 100;
+const CREATOR_USER_ID = 28886;
 
 function nextCombatControlTickCore(currentTick, completeMs, options = {}) {
   if (currentTick === null || currentTick === undefined || currentTick === '') return null;
@@ -1056,7 +1057,7 @@ async function runReadOnlyCanary(config, options = {}) {
   );
   const stateStore = options.stateStore || createBrowserlessStateStore({ userId: config.userId, now });
   const runtimeDefaults = buildBrowserlessRuntimeDefaults(config);
-  const targetWhitelist = options.targetWhitelist || createBrowserlessTargetWhitelist({
+  const genesisWhitelist = options.targetWhitelist || createBrowserlessTargetWhitelist({
     url: Object.prototype.hasOwnProperty.call(config, 'targetWhitelistUrl') ? config.targetWhitelistUrl : '',
     file: Object.prototype.hasOwnProperty.call(config, 'targetWhitelistFile') ? config.targetWhitelistFile : '',
     timeoutMs: config.targetWhitelistTimeoutMs,
@@ -1068,7 +1069,7 @@ async function runReadOnlyCanary(config, options = {}) {
   });
   let targetWhitelistSummary = null;
   try {
-    targetWhitelistSummary = await targetWhitelist.refresh('canary-startup');
+    targetWhitelistSummary = await genesisWhitelist.refresh('canary-startup');
   } catch (err) {
     targetWhitelistSummary = {
       loaded: false,
@@ -1076,6 +1077,18 @@ async function runReadOnlyCanary(config, options = {}) {
       lastError: errorMessage(err)
     };
   }
+  const creatorUserIds = [CREATOR_USER_ID];
+  const creatorUserIdSet = new Set(creatorUserIds);
+  const isCreatorTarget = target => {
+    const userId = Number(target?.user_id ?? target?.userId ?? target?.target_user_id ?? target?.targetUserId);
+    return Number.isFinite(userId) && creatorUserIdSet.has(userId);
+  };
+  targetWhitelistSummary = {
+    ...(targetWhitelistSummary || {}),
+    semantic: 'creator',
+    creatorUserId: CREATOR_USER_ID,
+    configuredEntryCount: Number(targetWhitelistSummary?.count || 0)
+  };
   const decisionAdapterOptions = {
     ...runtimeDefaults,
     userId: config.userId,
@@ -1089,11 +1102,12 @@ async function runReadOnlyCanary(config, options = {}) {
     combatCompletionTracker: options.combatCompletionTracker,
     combatLearning: options.combatCompletionTracker?.strategyLearning?.() || null,
     damagePlayerTracker,
-    targetWhitelistNames: targetWhitelist.names,
-    targetWhitelistNameSet: targetWhitelist.nameSet,
-    targetWhitelistUserIds: targetWhitelist.userIds,
-    targetWhitelistUserIdSet: targetWhitelist.userIdSet,
-    whitelistCheck: target => targetWhitelist.isWhitelistedTarget(target)
+    targetWhitelistNames: [],
+    targetWhitelistNameSet: new Set(),
+    targetWhitelistUserIds: creatorUserIds,
+    targetWhitelistUserIdSet: creatorUserIdSet,
+    whitelistCheck: target => isCreatorTarget(target)
+      || Boolean(options.dynamicWhitelist?.isWhitelistedTarget?.(target))
   };
   const decisionAdapter = options.decisionAdapter || createBrowserlessDecisionAdapter(decisionAdapterOptions);
   const realtimeControlWarmup = options.useDecisionWorker || options.decisionWorker
@@ -1102,8 +1116,8 @@ async function runReadOnlyCanary(config, options = {}) {
   const decisionWorker = options.decisionWorker || (options.useDecisionWorker
     ? createBrowserlessDecisionWorker({
         ...decisionAdapterOptions,
-        targetWhitelistNames: targetWhitelist.names,
-        targetWhitelistUserIds: targetWhitelist.userIds
+        targetWhitelistNames: [],
+        targetWhitelistUserIds: creatorUserIds
       })
     : null);
   const persistCombatLearning = atMs => {
@@ -2110,7 +2124,12 @@ async function runReadOnlyCanary(config, options = {}) {
       ...runtimeDefaults,
       nowMs: atMs,
       controlMode,
-      combatEnabled: config.combatEnabled
+      combatEnabled: config.combatEnabled,
+      targetWhitelistNames: [],
+      targetWhitelistUserIds: [
+        ...creatorUserIds,
+        ...(options.dynamicWhitelist?.status?.().userIds || [])
+      ]
     };
     const context = buildDecisionWorkerContext(currentState, atMs);
     const statePatch = decisionAdapter.getRealtimePersistenceState?.() || null;
@@ -2446,11 +2465,15 @@ async function runReadOnlyCanary(config, options = {}) {
             }
             if (damagePlayerTracker && typeof damagePlayerTracker.observeDecision === 'function') {
               try {
-                damagePlayerTracker.observeDecision(currentState, result.decisions.last, {
+                const damageObservation = damagePlayerTracker.observeDecision(currentState, result.decisions.last, {
                   atMs,
                   tick: currentState?.realtime?.tick,
                   source: 'realtime-frame'
                 });
+                if (damageObservation?.recorded && damageObservation.actor) {
+                  const removal = options.dynamicWhitelist?.remove?.(damageObservation.actor, 'damaged-self', atMs);
+                  if (removal?.removed) log('canary-dynamic-whitelist-removed-after-damage', removal);
+                }
               } catch (err) {
                 log('canary-damage-player-observation-error', { error: errorMessage(err) });
               }

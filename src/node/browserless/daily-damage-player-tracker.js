@@ -394,7 +394,8 @@ function createDailyDamagePlayerTracker(options = {}) {
       ok: true,
       hp,
       recorded: Boolean(recorded?.ok),
-      event: recorded?.event || null
+      event: recorded?.event || null,
+      actor: recorded?.player || null
     };
   }
 

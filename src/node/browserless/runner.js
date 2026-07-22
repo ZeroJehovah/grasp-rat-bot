@@ -46,6 +46,7 @@ const {
 const { createEasyKillPlayerTracker } = require('./easy-kill-player-tracker');
 const { createCombatCompletionTracker } = require('./combat-completion-tracker');
 const { createDailyDamagePlayerTracker } = require('./daily-damage-player-tracker');
+const { createDynamicWhitelist } = require('./dynamic-whitelist');
 const {
   DEFAULT_CHAT_ACTIVE_INTERVAL_MS,
   DEFAULT_CHAT_IDLE_INTERVAL_MS,
@@ -1248,6 +1249,11 @@ async function runBrowserlessRunner(config, deps = {}) {
     backgroundIo,
     onEvent: event => logStore.append('runner', 'daily-damage-player', event)
   });
+  const dynamicWhitelist = deps.dynamicWhitelist || createDynamicWhitelist({
+    file: path.join(config.dataDir, 'dynamic-whitelist.json'),
+    now,
+    backgroundIo
+  });
   const easyKillPlayerStatus = () => {
     easyKillPlayerTracker.expirePendingOutcomes?.(now());
     return easyKillPlayerTracker.status();
@@ -1255,7 +1261,8 @@ async function runBrowserlessRunner(config, deps = {}) {
   const chatSeedPlayers = [
     ...(highDropPlayerTracker.status?.(now())?.players || []),
     ...(easyKillPlayerTracker.status?.(now())?.players || []),
-    ...(damagePlayerTracker.status?.(now())?.players || [])
+    ...(damagePlayerTracker.status?.(now())?.players || []),
+    ...(dynamicWhitelist.status?.().players || [])
   ];
   const chatService = deps.chatService || createChatService({
     now,
@@ -1959,6 +1966,7 @@ async function runBrowserlessRunner(config, deps = {}) {
       highDropPlayers: highDropPlayerTracker.status(now()),
       easyKillPlayers: easyKillPlayerStatus(),
       dailyDamagePlayers: damagePlayerTracker.status(now()),
+      dynamicWhitelist: dynamicWhitelist.status(),
       chat: chatService.status?.(now()) || null,
       statusRender: {
         ...(statusRenderDiagnostics || {}),
@@ -2016,6 +2024,7 @@ async function runBrowserlessRunner(config, deps = {}) {
           highDropPlayers: source.highDropPlayers,
           easyKillPlayers: source.easyKillPlayers,
           dailyDamagePlayers: source.dailyDamagePlayers,
+          dynamicWhitelist: source.dynamicWhitelist,
           chat: source.chat
         };
     return JSON.stringify(status, null, 2);
@@ -2110,6 +2119,21 @@ async function runBrowserlessRunner(config, deps = {}) {
             statusCode: Number(result.statusCode || (result.ok ? 200 : 409))
           });
           return result;
+        },
+        onDynamicWhitelistAdd: name => {
+          const requestedName = String(name || '').trim();
+          if (!requestedName) return { ok: false, statusCode: 400, reason: 'empty-name', error: '请输入玩家名称' };
+          const matches = chatService.findPlayersByName?.(requestedName) || [];
+          if (!matches.length) return { ok: false, statusCode: 404, reason: 'player-not-found', error: '未找到该玩家，请等待全局快照记录后重试' };
+          if (matches.length > 1) return { ok: false, statusCode: 409, reason: 'ambiguous-name', error: '存在同名玩家，无法安全添加' };
+          const result = dynamicWhitelist.add(matches[0], now());
+          logStore.append('runner', 'dynamic-whitelist-added', {
+            userId: result.player?.userId ?? null,
+            name: result.player?.name || requestedName,
+            added: Boolean(result.added)
+          });
+          compactStatusCacheText = '';
+          return { ok: true, added: Boolean(result.added), player: result.player };
         },
         onStop: async () => {
           const event = safetyController.requestStop('explicit-stop', { source: 'status-api' });
@@ -2253,7 +2277,8 @@ async function runBrowserlessRunner(config, deps = {}) {
           fetchWithTimeout: sourceIpController.fetchWithTimeout,
           onSnapshotPayload: observeSnapshotPayload,
           easyKillPlayerTracker,
-          damagePlayerTracker
+          damagePlayerTracker,
+          dynamicWhitelist
         });
         const selfPresent = snapshotSafetyAllowsImmediateResume(probe);
         logStore.append('runner', 'runner-persisted-wait-self-probe', {
@@ -2485,6 +2510,7 @@ async function runBrowserlessRunner(config, deps = {}) {
           easyKillPlayerTracker,
           combatCompletionTracker,
           damagePlayerTracker,
+          dynamicWhitelist,
           allowMissingLoginPointBootstrap: true,
           onSnapshotSafety: recordSnapshotSafetyProgress,
           onSnapshotPayload: observeSnapshotPayload,
@@ -2559,6 +2585,7 @@ async function runBrowserlessRunner(config, deps = {}) {
         easyKillPlayerTracker,
         combatCompletionTracker,
         damagePlayerTracker,
+        dynamicWhitelist,
         bypassPreLoginSafetyReason,
         precheckedSnapshotSafety,
         onSnapshotSafety: recordSnapshotSafetyProgress,

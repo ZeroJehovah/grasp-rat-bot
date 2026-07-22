@@ -971,6 +971,7 @@ function markAfkAttackContinuation(target, commitment, options = {}) {
 
 function isBrowserlessAvoidanceThreat(target) {
   if (!target || target.alive === false) return false;
+  if (target.whitelisted) return false;
   if (target.easyKillThreatExempt) return false;
   return Boolean(target.active && target.invulnerable);
 }
@@ -1008,6 +1009,10 @@ function mergeRecentInvulnerableThreats(visibleTargets, liveThreats, self, state
   }
   const remembered = [];
   for (const [id, record] of Object.entries(memory)) {
+    if (isWhitelistedTargetForOptions({ userId: numberOrNull(id), name: record.name || '' }, options)) {
+      delete memory[id];
+      continue;
+    }
     if (liveById.has(id)) continue;
     const visible = visibleById.get(id) || null;
     if (visible) {
@@ -1089,6 +1094,7 @@ function isInjuredSelf(self, options = {}) {
 
 function snapshotFallbackThreatBlocks(threat, self, options = {}) {
   if (!threat || threat.alive === false) return false;
+  if (threat.whitelisted) return false;
   if (threat.easyKillThreatExempt) return false;
   if (threat.firing) return true;
   const distance = Number(threat.distance ?? distanceBetween(self, threat));
@@ -2661,8 +2667,8 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
   const easyKillInput = { visibleTargets, nowMs, easyKillTargets: [], easyKill: null };
   refreshEasyKillTargetAnnotations(easyKillInput, stateful, options);
   updateBrowserlessOpportunityAfkStaminaObservations(visibleTargets, stateful, nowMs, options);
-  const activeThreats = visibleTargets.filter(entity => entity.active && entity.alive !== false && !entity.easyKillThreatExempt);
-  const firingThreats = visibleTargets.filter(entity => entity.firing && entity.alive !== false && !entity.easyKillThreatExempt);
+  const activeThreats = visibleTargets.filter(entity => entity.active && entity.alive !== false && !entity.whitelisted && !entity.easyKillThreatExempt);
+  const firingThreats = visibleTargets.filter(entity => entity.firing && entity.alive !== false && !entity.whitelisted && !entity.easyKillThreatExempt);
   const avoidanceThreats = mergeRecentInvulnerableThreats(
     visibleTargets,
     visibleTargets.filter(isBrowserlessAvoidanceThreat),
@@ -2957,8 +2963,8 @@ function buildBrowserlessCombatStrategyInput(state, options = {}, stateful = {})
   };
   refreshEasyKillTargetAnnotations(easyKillInput, stateful, options);
   markInputStage('easy-kill');
-  const activeThreats = visibleTargets.filter(entity => entity.active && entity.alive !== false && !entity.easyKillThreatExempt);
-  const firingThreats = visibleTargets.filter(entity => entity.firing && entity.alive !== false && !entity.easyKillThreatExempt);
+  const activeThreats = visibleTargets.filter(entity => entity.active && entity.alive !== false && !entity.whitelisted && !entity.easyKillThreatExempt);
+  const firingThreats = visibleTargets.filter(entity => entity.firing && entity.alive !== false && !entity.whitelisted && !entity.easyKillThreatExempt);
   const avoidanceThreats = mergeRecentInvulnerableThreats(
     visibleTargets,
     visibleTargets.filter(isBrowserlessAvoidanceThreat),

@@ -1817,6 +1817,16 @@ function compactDailyDamagePlayers(value) {
   };
 }
 
+function compactDynamicWhitelist(value) {
+  if (!value || typeof value !== 'object') return null;
+  if (Array.isArray(value.p)) return { updatedAt: value.updatedAt || '', p: value.p.slice(0, 160) };
+  const players = Array.isArray(value.players) ? value.players : [];
+  return {
+    updatedAt: value.updatedAt || '',
+    p: players.map(player => compactString(player?.name, 96)).filter(Boolean).slice(0, 160)
+  };
+}
+
 function compactRun(run) {
   if (!run || typeof run !== 'object') return null;
   const canary = run.canary && typeof run.canary === 'object' ? run.canary : null;
@@ -2438,6 +2448,7 @@ function browserlessCompactStatusSource(state = {}) {
     highDropPlayers: compactHighDropPlayers(state.highDropPlayers),
     easyKillPlayers: compactEasyKillPlayers(state.easyKillPlayers),
     dailyDamagePlayers: compactDailyDamagePlayers(state.dailyDamagePlayers),
+    dynamicWhitelist: compactDynamicWhitelist(state.dynamicWhitelist),
     statusRender: state.statusRender || null
   };
 }
@@ -2511,6 +2522,7 @@ function buildCompactBrowserlessStatus(state, config = {}) {
     highDropPlayers: compactHighDropPlayers(normalized.highDropPlayers),
     easyKillPlayers: compactEasyKillPlayers(normalized.easyKillPlayers),
     dailyDamagePlayers: compactDailyDamagePlayers(normalized.dailyDamagePlayers),
+    dynamicWhitelist: compactDynamicWhitelist(normalized.dynamicWhitelist),
     stats: compactBrowserlessStats(normalized, game, action, config, lastKnown),
     loginPointSafety: {
       ok: Boolean(normalized.loginPointSafety?.ok),

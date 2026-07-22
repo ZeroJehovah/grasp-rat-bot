@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.22.2';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.22.3';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function highDropRankValueCore(item) {
@@ -275,16 +275,22 @@ function renderBrowserlessWebPanel() {
     .high-drop-values{color:var(--coin);font-variant-numeric:tabular-nums}
     .high-drop-values.offline,.high-drop-values.unknown{color:var(--muted)}
     .player-insights-body{height:164px;overflow-y:auto;scrollbar-gutter:stable}
-    .player-memory-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;align-items:start}
+    .player-memory-grid{display:block;min-width:0}
     .player-memory-pane{min-width:0}
-    .player-memory-pane+.player-memory-pane{border-left:1px solid var(--line);padding-left:10px}
     .player-memory-list{display:flex;flex-wrap:wrap;gap:6px 5px;min-height:24px;align-items:flex-start;align-content:flex-start}
     .player-memory-name{display:inline-flex;align-items:center;max-width:100%;min-height:22px;padding:2px 5px;border:1px solid transparent;border-radius:4px;line-height:1.3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     .player-memory-empty{color:var(--muted)}
-    .easy-kill-score-1{color:#f8fafc;border-color:rgba(248,250,252,.72);background:rgba(248,250,252,.08)}
-    .easy-kill-score-2{color:#86efac;border-color:rgba(74,222,128,.78);background:rgba(34,197,94,.12)}
+    .easy-kill-score-1{color:#86efac;border-color:rgba(251,191,36,.82);background:rgba(134,239,172,.12)}
+    .easy-kill-score-2{color:#86efac;border-color:rgba(251,191,36,.82);background:rgba(253,230,138,.12)}
     .easy-kill-score-3{color:#fde68a;border-color:rgba(251,191,36,.82);background:rgba(251,191,36,.13)}
     .damage-player-name{color:#fda4af;border-color:rgba(251,113,133,.8);background:rgba(251,113,133,.12)}
+    .dynamic-whitelist-name{color:#fff;border-color:rgba(255,255,255,.8);background:rgba(255,255,255,.08)}
+    .whitelist-meta-count{color:#fff}.easy-kill-meta-count{color:var(--coin)}
+    .dynamic-whitelist-add{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;padding:0;border:1px solid rgba(255,255,255,.8);border-radius:4px;color:#fff;background:rgba(255,255,255,.08);cursor:pointer}
+    .dynamic-whitelist-add svg{width:17px;height:17px;fill:currentColor}
+    .dynamic-whitelist-popover{position:fixed;z-index:20;display:flex;gap:5px;padding:7px;border:1px solid rgba(255,255,255,.8);border-radius:6px;background:#101827;box-shadow:0 8px 24px rgba(0,0,0,.35)}
+    .dynamic-whitelist-popover input{width:130px;min-height:26px;border:1px solid var(--line);border-radius:4px;background:var(--panel2);color:var(--text);padding:3px 6px}
+    .dynamic-whitelist-popover button{min-height:26px;padding:3px 7px}
     .chat-title-meta{display:inline-flex;align-items:center;gap:7px;min-width:0}.chat-refresh-at{font-weight:500;letter-spacing:0;text-transform:none;white-space:nowrap}
     .chat-kill-toggle{min-height:24px;padding:2px 8px;font-size:11px;line-height:1.2}
     .chat-log{height:300px;overflow:auto;scrollbar-gutter:stable}
@@ -317,7 +323,7 @@ function renderBrowserlessWebPanel() {
     .target-icon-coin{transform:translateY(0)}
     @media (max-width:760px){.layout{grid-template-columns:1fr}.stats-grid{grid-template-columns:1fr}}
     @media (max-width:600px){.player-insights-grid{grid-template-columns:1fr}}
-    @media (max-width:600px){.nearby-combined,.player-memory-grid{grid-template-columns:1fr}.nearby-players-pane,.player-memory-pane+.player-memory-pane{border-left:0;border-top:1px solid var(--line);padding-left:0;padding-top:10px}}
+    @media (max-width:600px){.nearby-combined{grid-template-columns:1fr}.nearby-players-pane{border-left:0;border-top:1px solid var(--line);padding-left:0;padding-top:10px}}
     @media (max-width:520px){.player-row{grid-template-columns:minmax(112px,2fr) minmax(34px,.5fr) minmax(38px,.55fr) minmax(36px,.5fr) minmax(44px,.6fr);gap:4px}.battle-fighters{grid-template-columns:minmax(0,1fr) 26px minmax(0,1fr);column-gap:5px}.battle-meta{gap:5px;font-size:11px}.battle-meta strong{font-size:11px}}
     @media (max-width:520px){main{padding:10px}header{align-items:flex-start;flex-direction:column}}
   </style>
@@ -436,12 +442,9 @@ function renderBrowserlessWebPanel() {
             <div class="panel-head"><h2 class="panel-title" data-panel-title role="button" tabindex="0" aria-expanded="true">玩家记录</h2><div class="panel-head-meta"><span id="playerMemoryTitleMeta" class="title-meta">--</span></div></div>
             <div class="panel-body player-insights-body">
               <div class="player-memory-grid">
-                <div class="player-memory-pane">
-                  <div id="easyKillPlayers" class="player-memory-list"></div>
-                </div>
-                <div class="player-memory-pane">
-                  <div id="dailyDamagePlayers" class="player-memory-list"></div>
-                </div>
+                <div class="player-memory-pane"><div id="dynamicWhitelistPlayers" class="player-memory-list"></div></div>
+                <div class="player-memory-pane"><div id="easyKillPlayers" class="player-memory-list"></div></div>
+                <div class="player-memory-pane"><div id="dailyDamagePlayers" class="player-memory-list"></div></div>
               </div>
             </div>
           </section>
@@ -1800,8 +1803,19 @@ function renderBrowserlessWebPanel() {
       return node;
     }
     function renderPlayerMemory(status) {
+      const whitelistNode = document.getElementById('dynamicWhitelistPlayers');
       const easyNode = document.getElementById('easyKillPlayers');
       const damageNode = document.getElementById('dailyDamagePlayers');
+      if (whitelistNode) {
+        const items = Array.isArray(status.dynamicWhitelist?.p) ? status.dynamicWhitelist.p : [];
+        const fragment = document.createDocumentFragment();
+        for (const item of items) fragment.appendChild(createPlayerMemoryName(item, 'dynamic-whitelist-name'));
+        const add = document.createElement('button');
+        add.type = 'button'; add.className = 'dynamic-whitelist-add'; add.title = '添加白名单玩家';
+        add.innerHTML = '<svg viewBox="0 0 1024 1024" aria-hidden="true"><path d="M514.048 62.464q93.184 0 175.616 35.328t143.872 96.768 96.768 143.872 35.328 175.616q0 94.208-35.328 176.128t-96.768 143.36-143.872 96.768-175.616 35.328q-94.208 0-176.64-35.328t-143.872-96.768-96.768-143.36-35.328-176.128q0-93.184 35.328-175.616t96.768-143.872 143.872-96.768 176.64-35.328zM772.096 576.512q26.624 0 45.056-18.944t18.432-45.568-18.432-45.056-45.056-18.432l-192.512 0 0-192.512q0-26.624-18.944-45.568t-45.568-18.944-45.056 18.944-18.432 45.568l0 192.512-192.512 0q-26.624 0-45.056 18.432t-18.432 45.056 18.432 45.568 45.056 18.944l192.512 0 0 191.488q0 26.624 18.432 45.568t45.056 18.944 45.568-18.944 18.944-45.568l0-191.488 192.512 0z"/></svg>';
+        add.addEventListener('click', event => { event.stopPropagation(); showDynamicWhitelistPopover(add); });
+        fragment.appendChild(add); whitelistNode.replaceChildren(fragment);
+      }
       if (easyNode) {
         const items = Array.isArray(status.easyKillPlayers?.p) ? status.easyKillPlayers.p : [];
         const fragment = document.createDocumentFragment();
@@ -1826,11 +1840,30 @@ function renderBrowserlessWebPanel() {
         damageNode.replaceChildren(fragment);
       }
       setRichText('playerMemoryTitleMeta', [
-        { text: '赛博善人 ', className: 'meta-label' },
-        { text: String(Array.isArray(status.easyKillPlayers?.p) ? status.easyKillPlayers.p.length : 0), className: 'ok' },
+        { text: '相视一笑 ', className: 'meta-label' },
+        { text: String(Array.isArray(status.dynamicWhitelist?.p) ? status.dynamicWhitelist.p.length : 0), className: 'whitelist-meta-count' },
+        { text: ' | 赛博善人 ', className: 'meta-label' },
+        { text: String(Array.isArray(status.easyKillPlayers?.p) ? status.easyKillPlayers.p.length : 0), className: 'easy-kill-meta-count' },
         { text: ' | 仇恨之书 ', className: 'meta-label' },
         { text: String(Array.isArray(status.dailyDamagePlayers?.p) ? status.dailyDamagePlayers.p.length : 0), className: 'bad' }
       ]);
+    }
+    function showDynamicWhitelistPopover(anchor) {
+      document.querySelector('.dynamic-whitelist-popover')?.remove();
+      const panel = document.createElement('div'); panel.className = 'dynamic-whitelist-popover';
+      const input = document.createElement('input'); input.placeholder = '玩家名称';
+      const button = document.createElement('button'); button.type = 'button'; button.textContent = '确定';
+      panel.append(input, button); document.body.appendChild(panel);
+      const rect = anchor.getBoundingClientRect();
+      panel.style.left = Math.max(6, Math.min(window.innerWidth - panel.offsetWidth - 6, rect.left)) + 'px';
+      panel.style.top = Math.max(6, Math.min(window.innerHeight - panel.offsetHeight - 6, rect.bottom + 5)) + 'px';
+      input.focus();
+      const close = event => { if (!panel.contains(event.target) && event.target !== anchor) { panel.remove(); document.removeEventListener('click', close, true); } };
+      document.addEventListener('click', close, true);
+      button.addEventListener('click', async () => {
+        try { await api('/api/dynamic-whitelist', { method: 'POST', headers: {'content-type':'application/json'}, body: JSON.stringify({ name: input.value }) }); panel.remove(); requestStatusRefresh(true); }
+        catch (error) { input.setCustomValidity(error.message || '添加失败'); input.reportValidity(); }
+      });
     }
     function updateNearbyPanels(status) {
       const panel = document.getElementById('nearbyGrid');

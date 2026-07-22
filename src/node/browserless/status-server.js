@@ -89,6 +89,9 @@ function createStatusServer(options = {}) {
   const getChat = typeof options.getChat === 'function' ? options.getChat : () => ({ ok: true, messages: [] });
   const onChatActivity = typeof options.onChatActivity === 'function' ? options.onChatActivity : null;
   const onChatSend = typeof options.onChatSend === 'function' ? options.onChatSend : null;
+  const onDynamicWhitelistAdd = typeof options.onDynamicWhitelistAdd === 'function'
+    ? options.onDynamicWhitelistAdd
+    : null;
   const recordTask = (task, started, detail = {}) => {
     if (!onMainThreadTask) return;
     try {
@@ -218,6 +221,17 @@ function createStatusServer(options = {}) {
           ? Math.max(400, Math.min(599, Number(result.statusCode || 409)))
           : 200;
         sendJson(res, statusCode, responseBody);
+        return;
+      }
+      if (req.method === 'POST' && parsed.pathname === '/api/dynamic-whitelist') {
+        const body = await readRequestJson(req);
+        const result = onDynamicWhitelistAdd
+          ? await onDynamicWhitelistAdd(body.name ?? '')
+          : { ok: false, statusCode: 409, reason: 'dynamic-whitelist-not-implemented', error: '白名单管理不可用' };
+        const statusCode = result?.ok === false
+          ? Math.max(400, Math.min(599, Number(result.statusCode || 409)))
+          : 200;
+        sendJson(res, statusCode, result || { ok: true });
         return;
       }
       if (req.method === 'POST' && parsed.pathname === '/api/stop') {
