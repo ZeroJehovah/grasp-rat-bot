@@ -20,8 +20,7 @@ function shouldApplyTrajectoryCoverageCore(input = {}) {
     && input.highEntropy === true
     && input.successfulAimProtected !== true
     && input.planActive === true
-    && input.hasSelection === true
-    && input.improvementQualified === true;
+    && input.hasSelection === true;
 }
 
 function finiteNumber(value, fallback = null) {

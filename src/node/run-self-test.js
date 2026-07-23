@@ -10136,10 +10136,10 @@ async function runSelfTest() {
           decision.kind,
           decision.reason,
           decision.combat.actionEligible,
-          decision.combat.profitPursuitSuppression.reason,
-          decision.combat.profitPursuitSuppression.targetId,
-          decision.combat.profitPursuitSuppression.centerExtensionCm,
-          decision.combat.profitPursuitSuppression.pursuitRadiusCm,
+          decision.combat.profitPursuitSuppression?.reason || '',
+          decision.combat.profitPursuitSuppression?.targetId || '',
+          decision.combat.profitPursuitSuppression?.centerExtensionCm || '',
+          decision.combat.profitPursuitSuppression?.pursuitRadiusCm || '',
           stateful.combatTarget === null,
           stateful.profitPursuitSuppressions?.['8']?.reason || ''
         ].join('|');
@@ -10364,8 +10364,8 @@ async function runSelfTest() {
           decision.kind,
           decision.combat.actionEligible,
           decision.combat.combatPhase.phase,
-          decision.combat.profitPursuitSuppression.reason,
-          decision.combat.profitPursuitSuppression.suppressed,
+          decision.combat.profitPursuitSuppression?.reason || '',
+          decision.combat.profitPursuitSuppression?.suppressed ?? '',
           decision.combat.movement.reason,
           decision.combat.movement.spacing,
           stateful.combatTarget?.id,
@@ -10496,7 +10496,7 @@ async function runSelfTest() {
         });
         return [
           release.combat.nonThreatEconomicStopLoss.reason,
-          release.combat.profitPursuitSuppression.reason,
+          release.combat.profitPursuitSuppression?.reason || '',
           release.combat.actionEligible,
           releaseSuppressionReason,
           held.action === null,
@@ -10667,8 +10667,8 @@ async function runSelfTest() {
           decision.combat.target.combatEngagement.ageMs,
           decision.combat.combatPhase.phase,
           decision.combat.combatPhase.engagedMs,
-          decision.combat.profitPursuitSuppression.reason,
-          decision.combat.profitPursuitSuppression.suppressed,
+          decision.combat.profitPursuitSuppression?.reason || '',
+          decision.combat.profitPursuitSuppression?.suppressed ?? '',
           decision.combat.movement.reason,
           decision.combat.shooting.wouldShoot,
           stateful.combatTarget?.id,
@@ -11211,8 +11211,8 @@ async function runSelfTest() {
           at.decision.combat.target.userId,
           at.stateful.combatTarget?.id,
           at.stateful.combatAim?.targetId,
-          at.decision.combat.profitPursuitSuppression.reason,
-          at.decision.combat.profitPursuitSuppression.suppressed,
+          at.decision.combat.profitPursuitSuppression?.reason || '',
+          at.decision.combat.profitPursuitSuppression?.suppressed ?? '',
           at.stateful.profitPursuitSuppressions?.['8']?.reason || ''
         ].join('|');
       })(),
@@ -16025,7 +16025,7 @@ async function runSelfTest() {
           learnedLowEntropy.aim.trajectoryCoverage.reason
         ].join('|');
       })(),
-      want: 'shadow|false|stop|live-single|false|false|live-single-insufficient-aim-improvement|true|true|false|coverage-evidence-not-ready'
+      want: 'shadow|false|stop|live-single|true|true|live-single-applied|true|true|false|coverage-evidence-not-ready'
     },
     {
       name: 'browserless fire-risk classification survives unaffordable route coverage',
@@ -17055,8 +17055,8 @@ async function runSelfTest() {
           healthy.risk.engagedTargetCount,
           healthy.risk.reason || 'no-exit',
           behind.decision.reason,
-          behind.decision.action.combatExit.targetHp,
-          behind.decision.action.combatExit.engagedTargetCount
+          behind.decision.action.combatExit?.targetHp ?? '',
+          behind.decision.action.combatExit?.engagedTargetCount ?? ''
         ].join('|');
       })(),
       want: 'combat-live|combat-live-realtime|36046|true|79|2|no-exit|combat-hp-disadvantage-leave|79|2'
@@ -21623,7 +21623,7 @@ async function runSelfTest() {
           dodge.combat.shooting.commandSuppressed,
           dodgeProgress > 0,
           stale.input.loot.blockedReason || stale.input.loot.reason,
-          stale.action.reason
+          stale.action?.reason || ''
         ].join('|');
       })(),
       want: 'coin|post-kill-drop-priority|57|34711|true|player:34711|true|true|57|huaming song|combat-live|post-kill-loot-safe-dodge|true|true|snapshot-stale|combat-live-realtime'

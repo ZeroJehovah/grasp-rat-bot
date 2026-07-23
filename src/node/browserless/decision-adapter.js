@@ -7421,8 +7421,8 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
     || pursuitLeaveAction
     || lowHpRecoveryThreatExitAction
     || safetyAction
-    || closePressureCombatAction
     || lootControl.action
+    || closePressureCombatAction
     || defensiveCombatAction
     || postKillSettlementWaitAction
     || combatAction

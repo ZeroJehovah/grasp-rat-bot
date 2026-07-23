@@ -2615,7 +2615,9 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
       successfulAimProtected: coverageSuccessfulAimProtected,
       successfulAimShotCount: coverageHitSummary.shotCount,
       successfulAimHitRate: coverageHitSummary.hitRate,
-      reason: requestedCoverageMode === 'live-volley'
+      reason: applied
+        ? 'live-single-applied'
+        : (requestedCoverageMode === 'live-volley'
         ? 'live-volley-awaits-live-single-acceptance'
         : (effectiveCoverageMode === 'live-single' && plan.active && coverageSuccessfulAimProtected
             ? 'live-single-successful-aim-protected'
@@ -2623,7 +2625,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
                 ? 'live-single-requires-high-entropy'
                 : (effectiveCoverageMode === 'live-single' && plan.active && plan.selected?.improvementQualified !== true
                     ? 'live-single-insufficient-aim-improvement'
-                    : plan.reason))),
+                    : plan.reason)))),
       sessionId: coverageSessionId,
       slot: 1,
       selected: plan.selected,
