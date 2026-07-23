@@ -3615,11 +3615,10 @@ function opportunityWindowStaminaBudget(self, windowName, options = {}) {
 }
 
 function opportunityLongStaminaBudget(self, options = {}) {
-  const values = ['1h', '1d']
-    .map(key => opportunityWindowStaminaBudget(self, key, options))
-    .filter(value => Number.isFinite(value));
-  if (!values.length) return Infinity;
-  return Math.min(...values);
+  // The daily window is a terminal runtime boundary, not an in-game hold
+  // budget. Keep taking ordinary actions while 1d stamina remains and let the
+  // hard exhaustion decision leave as soon as it crosses the threshold.
+  return opportunityWindowStaminaBudget(self, '1h', options);
 }
 
 function dailyStaminaWindowStartAt(t = Date.now()) {
@@ -4646,7 +4645,6 @@ function buildStaminaBudgetExitDecision(input, options = {}) {
 function buildEligibleProfitStaminaBudgetExitDecision(input, options = {}) {
   if (!input?.self) return null;
   const oneHourBudget = opportunityWindowStaminaBudget(input.self, '1h', options);
-  const oneDayBudget = opportunityWindowStaminaBudget(input.self, '1d', options);
   const blocked = summarizeBlockedStaminaOpportunityCore(
     safeBudgetCoinCandidates(input, options),
     input.afkTargets || [],
@@ -4658,7 +4656,6 @@ function buildEligibleProfitStaminaBudgetExitDecision(input, options = {}) {
     }
   );
   if (!blocked) return null;
-  if (Number.isFinite(Number(oneDayBudget)) && Number(blocked.requiredMs) > Number(oneDayBudget)) return null;
   const exit = {
     ...blocked,
     window: '1h',
@@ -4716,7 +4713,11 @@ function buildLongStaminaExhaustedLeaveDecision(input, options = {}) {
 function buildDailyStaminaFinalCoinDecision(input, options = {}) {
   if (!input?.self) return null;
   const coin = pickNearestDailyStaminaFinalCoinCore(safeBudgetCoinCandidates(input, options), {
-    isSnapshotOnlyCoin: item => Boolean(item?.snapshotOnly),
+    // A guarded snapshot fallback is already admitted only when no realtime
+    // profit is visible. Near daily exhaustion it is safer to keep moving to
+    // that normal fallback than to wait in-game solely because the 1d budget
+    // cannot cover the full route.
+    isSnapshotOnlyCoin: item => Boolean(item?.snapshotOnly && !input?.fallback?.snapshotCoinFallbackAllowed),
     coinStaminaCost: item => opportunityCoinStaminaCost(item, options),
     dailyStaminaBudgetIsLimiting: staminaCost => dailyStaminaBudgetIsLimitingCore(
       staminaCost,

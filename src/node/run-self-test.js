@@ -13986,7 +13986,7 @@ async function runSelfTest() {
       want: 'leave|safety|stamina-exhausted-leave|1h|31|1800000'
     },
     {
-      name: 'browserless profit live waits for budget instead of moving to unaffordable snapshot coin',
+      name: 'browserless profit live keeps acting on guarded snapshot fallback when only 1d budget is low',
       got: (() => {
         const store = createBrowserlessStateStore({ userId: 7 });
         store.ingestFrame({
@@ -14022,12 +14022,60 @@ async function runSelfTest() {
           decision.kind,
           decision.band,
           decision.reason,
-          decision.action.staminaBlocked.id,
-          decision.action.staminaBlocked.shortageMs,
-          decision.profit.best === null
+          decision.action.target.id,
+          decision.action.target.authority,
+          decision.action.dailyStaminaFinalRun.staminaCost,
+          decision.action.dailyStaminaFinalRun.budgetMs,
+          decision.action.staminaBlocked === undefined
         ].join('|');
       })(),
-      want: 'wait|wait|wait-for-stamina-budget|unaffordable-snapshot-coin|500|true'
+      want: 'coin|profit|daily-stamina-final-visible-coin|unaffordable-snapshot-coin|snapshot|1000|500|true'
+    },
+    {
+      name: 'browserless profit live exits instead of waiting in-game when 1h and 1d budgets are both low',
+      got: (() => {
+        const store = createBrowserlessStateStore({ userId: 7 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 59,
+          entities: [{
+            entity_id: 1,
+            user_id: 7,
+            name: 'self',
+            x: 0,
+            y: 0,
+            hp: 100,
+            max_hp: 100,
+            stamina_5s_remaining_milli: 10000,
+            stamina_1h_remaining_milli: 3000,
+            stamina_1d_remaining_milli: 3000
+          }],
+          bullets: []
+        }, { receivedAtMs: 1000 });
+        store.ingestFrame({
+          type: 'snapshot',
+          tick: 60,
+          entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100 }],
+          bullets: [],
+          coin_drops: [{ drop_id: 'dual-low-budget-coin', amount: 5, x: 1000, y: 0 }],
+          messages: []
+        }, { receivedAtMs: 1100 });
+        const decision = buildBrowserlessDecision(store.getState(1200), {}, {
+          nowMs: 1200,
+          controlMode: 'profit-live'
+        });
+        return [
+          decision.kind,
+          decision.band,
+          decision.reason,
+          decision.action.shouldLeave,
+          decision.action.staminaBudgetExit.window,
+          decision.action.staminaBudgetExit.id,
+          decision.action.reloginDelayMs,
+          decision.action.staminaBlocked === undefined
+        ].join('|');
+      })(),
+      want: 'leave|safety|stamina-budget-coin-leave|true|1h|dual-low-budget-coin|1800000|true'
     },
     {
       name: 'browserless profit live admits fresh in-view snapshot coin fallback',

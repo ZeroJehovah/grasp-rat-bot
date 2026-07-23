@@ -1557,7 +1557,7 @@ async function runReadOnlyCanary(config, options = {}) {
     runtimeRevisionResolution: browserlessRuntimeRevisionStatus()
   });
   log('canary-realtime-control-warmup', realtimeControlWarmup);
-  const updateActionResult = actionResult => {
+  const updateActionResult = (actionResult, context = {}) => {
     if (!actionResult) return;
     const adapterState = actionAdapter?.getState?.() || {};
     result.actions.sentCount = Number(adapterState.sentCount || 0);
@@ -1577,7 +1577,12 @@ async function runReadOnlyCanary(config, options = {}) {
     logAction({ action: actionResult, state: adapterState });
     if (typeof options.onAction === 'function') {
       try {
-        options.onAction(actionResult, { actionState: adapterState });
+        options.onAction(actionResult, {
+          actionState: adapterState,
+          decision: context.decision || null,
+          summary: context.summary || null,
+          atMs: Number(context.atMs || 0) || now()
+        });
       } catch (err) {
         log('canary-action-status-error', { error: err?.message || String(err) });
       }
@@ -1650,7 +1655,7 @@ async function runReadOnlyCanary(config, options = {}) {
         log('leave-pending-cover-applied-hook-error', { error: errorMessage(err) });
       }
     }
-    updateActionResult(actionResult);
+    updateActionResult(actionResult, { decision: built.decision, summary: built.decision, atMs });
     if (leavePending) {
       leavePending.coverRecomputeCount += 1;
       leavePending.dynamicCoverCount += 1;
@@ -1860,7 +1865,7 @@ async function runReadOnlyCanary(config, options = {}) {
         transportClosed: /websocket is not open|not open|closed/i.test(message)
       };
     }
-    updateActionResult(actionResult);
+    updateActionResult(actionResult, { decision, summary, atMs });
     if (actionResult?.transportClosed) {
       recordSafetyEvent(createSafetyEvent('ws-closed', {
         source: 'action-send',

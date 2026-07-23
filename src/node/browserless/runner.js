@@ -398,6 +398,32 @@ function browserlessBattlePresentation(previous, decision = {}) {
   };
 }
 
+function actionResultHasRecentShot(action = {}) {
+  const shoot = action?.shoot;
+  if (!shoot?.ok || !shoot.command) return false;
+  return !shoot.skipped || shoot.reason === 'shoot-command-throttled';
+}
+
+function browserlessBattlePresentationAfterAction(previous, action = {}, context = {}) {
+  if (!previous || typeof previous !== 'object' || !actionResultHasRecentShot(action)) return previous || null;
+  const target = action.target || action.opportunisticShot || context?.summary?.action?.target || null;
+  const targetKey = target ? actionTargetKey({ kind: 'attack', target }) : '';
+  if (!targetKey || targetKey !== String(previous.targetKey || '')) return previous;
+  const atMs = Number(context.atMs || 0) || Date.now();
+  const activity = previous.activity && typeof previous.activity === 'object' ? previous.activity : {};
+  return {
+    ...previous,
+    activity: {
+      ...activity,
+      windowMs: Math.max(1000, Number(activity.windowMs || BATTLE_ACTIVITY_WINDOW_MS)),
+      self: {
+        ...(activity.self && typeof activity.self === 'object' ? activity.self : {}),
+        firingAt: atMs
+      }
+    }
+  };
+}
+
 function loopPlanNowMs(config = {}) {
   const configured = Number(config.nowMs);
   return Number.isFinite(configured) ? configured : Date.now();
@@ -487,14 +513,17 @@ function lastLeaveResponseFromCanary(canary) {
     canary?.leave,
     canary?.safety?.exit?.leave
   ];
+  let fallback = null;
   for (const leave of leaves) {
     const attempts = Array.isArray(leave?.attempts) ? leave.attempts : [];
     for (let i = attempts.length - 1; i >= 0; i -= 1) {
       const response = attempts[i]?.response;
-      if (response && typeof response === 'object') return response;
+      if (!response || typeof response !== 'object') continue;
+      if (!fallback) fallback = response;
+      if (attempts[i]?.ok === true || (response.ok === true && response.event === 'left')) return response;
     }
   }
-  return null;
+  return fallback;
 }
 
 function inferredLongStaminaExhaustionFromCanary(canary, config = {}) {
@@ -764,7 +793,13 @@ function pendingLoginPointSafetyPatch(config = {}, reason = 'manual-login-point-
 }
 
 function learnedLoginPointFromCanary(canary) {
-  const finalSelf = canary?.state?.realtime?.self || canary?.decisions?.last?.input?.self || null;
+  const confirmedLeaveSelf = runnerResultConfirmedLeave({ canary })
+    ? lastLeaveResponseFromCanary(canary)
+    : null;
+  const finalSelf = confirmedLeaveSelf
+    || canary?.state?.realtime?.self
+    || canary?.decisions?.last?.input?.self
+    || null;
   const entrySelf = canary?.entry?.firstSelf || null;
   if (!finalSelf || !Number.isFinite(Number(finalSelf.x)) || !Number.isFinite(Number(finalSelf.y))) {
     return { finalSelf: null, loginPoint: null };
@@ -792,6 +827,26 @@ function learnedLoginPointFromCanary(canary) {
           source: pointSource
         }
       : null
+  };
+}
+
+function finalLastKnownFromCanary(previous, finalSelf, canary, nowMs = Date.now()) {
+  if (!finalSelf || typeof finalSelf !== 'object') return previous || null;
+  const remaining5s = numberOrNull(finalSelf.stamina_5s_remaining_milli ?? finalSelf.stamina5sRemainingMilli ?? finalSelf.stamina5s);
+  const remaining1h = numberOrNull(finalSelf.stamina_1h_remaining_milli ?? finalSelf.stamina1hRemainingMilli ?? finalSelf.stamina1h);
+  const remaining1d = numberOrNull(finalSelf.stamina_1d_remaining_milli ?? finalSelf.stamina1dRemainingMilli ?? finalSelf.stamina1d);
+  const priorStamina = previous?.stamina && typeof previous.stamina === 'object' ? previous.stamina : {};
+  return {
+    ...(previous && typeof previous === 'object' ? previous : {}),
+    self: finalSelf,
+    stamina: {
+      ...priorStamina,
+      ...(remaining5s !== null ? { remaining5s, stamina5sRemainingMilli: remaining5s } : {}),
+      ...(remaining1h !== null ? { remaining1h, stamina1hRemainingMilli: remaining1h } : {}),
+      ...(remaining1d !== null ? { remaining1d, stamina1dRemainingMilli: remaining1d } : {})
+    },
+    at: canary?.completedAt || new Date(nowMs).toISOString(),
+    tick: latestRealtimeTickFromResult({ canary }) || previous?.tick || null
   };
 }
 
@@ -2784,6 +2839,7 @@ async function runBrowserlessRunner(config, deps = {}) {
           });
         },
         onAction: (action, context = {}) => {
+          const currentBeforeAction = liveState || stateBeforeCanary;
           patchLiveState({
             runner: {
               currentAction: {
@@ -2795,7 +2851,12 @@ async function runBrowserlessRunner(config, deps = {}) {
               action: {
                 ...(action || {}),
                 actionState: context.actionState || null
-              }
+              },
+              battlePresentation: browserlessBattlePresentationAfterAction(
+                currentBeforeAction.current?.battlePresentation,
+                action,
+                context
+              )
             }
           }, {
             updatedAt: new Date(now()).toISOString()
@@ -2830,6 +2891,7 @@ async function runBrowserlessRunner(config, deps = {}) {
       }, activeRunKillConfirmations));
     const currentStateBeforeFinish = readBrowserlessStateFile(stateFile);
     const finalStateBase = liveState || currentStateBeforeFinish;
+    const finalLastKnown = finalLastKnownFromCanary(finalStateBase.lastKnown, finalSelf, canary, now());
     const finalState = mergeState(finalStateBase, {
       ...finalDecisionPatch,
       ...(safetyEvents.length ? {
@@ -2843,6 +2905,13 @@ async function runBrowserlessRunner(config, deps = {}) {
         lastRun: result,
         lastError: result.ok ? '' : (canary?.error || 'read-only-canary-failed')
       },
+      ...(finalLastKnown ? { lastKnown: finalLastKnown } : {}),
+      ...(finalSelf ? {
+        current: {
+          ...(finalDecisionPatch.current || {}),
+          self: finalSelf
+        }
+      } : {}),
       ...(learnedLoginPoint ? {
         loginPointSafety: {
           ...loginPointSafetyPatchFromSnapshot(canary?.snapshotSafety || {}),
@@ -2851,10 +2920,6 @@ async function runBrowserlessRunner(config, deps = {}) {
           point: learnedLoginPoint,
           checkedAt: canary?.completedAt || canary?.snapshotSafety?.checkedAt || new Date(now()).toISOString()
         },
-        current: {
-          ...(finalDecisionPatch.current || {}),
-          self: finalSelf
-        }
       } : {}),
       probes: {
         lastReadOnlyProbe: canary || null
@@ -3852,8 +3917,23 @@ async function runBrowserlessRunnerSelfTest() {
       band: 'profit',
       at: '2026-07-20T00:01:01.000Z',
       action: { kind: 'attack', band: 'profit', target: { userId: 9, distance: 800 } },
-      input: { self: { userId: 7, x: 300, y: 400 } }
+      input: { self: { userId: 7, x: 300, y: 400, vx: 50, vy: 0 } }
     });
+    const panelAfkShotAt = Date.parse('2026-07-20T00:01:01.250Z');
+    const panelAfkPresentationFiring = browserlessBattlePresentationAfterAction(
+      panelAfkPresentationMoved,
+      {
+        kind: 'profit-attack',
+        target: { userId: 9, distance: 800 },
+        shoot: {
+          ok: true,
+          skipped: false,
+          reason: 'profit-afk-attack',
+          command: { id: 17, type: 'shoot' }
+        }
+      },
+      { atMs: panelAfkShotAt }
+    );
     const panelActivityStartedAt = Date.parse('2026-07-20T00:02:00.000Z');
     const panelActivityInitial = browserlessBattlePresentation(null, {
       kind: 'combat-live',
@@ -3920,9 +4000,9 @@ async function runBrowserlessRunnerSelfTest() {
           at: '2026-07-20T00:01:01.000Z',
           target: { userId: 9, name: 'afk-enemy', hp: 100, distance: 800, active: false }
         },
-        battlePresentation: panelAfkPresentationMoved
+        battlePresentation: panelAfkPresentationFiring
       }
-    }, {});
+    }, { nowMs: panelAfkShotAt + 1000 });
     const panelMismatchedBattleCompact = buildCompactBrowserlessStatus({
       session: { userId: 7, sessionToken: 'panel-self-test-token' },
       runner: { running: true, currentAction: { kind: 'attack', target: { userId: 9, distance: 800 } } },
@@ -3937,6 +4017,57 @@ async function runBrowserlessRunnerSelfTest() {
         battlePresentation: { ...panelAfkPresentationMoved, targetKey: 'player:10' }
       }
     }, {});
+    const confirmedLeaveCanaryFixture = {
+      runId: 'confirmed-leave-hp-sync',
+      completedAt: '2026-07-23T16:09:53.879Z',
+      state: {
+        realtime: {
+          tick: 93000,
+          self: { user_id: 7, name: 'self', x: 100, y: 200, hp: 79 }
+        }
+      },
+      entry: { firstSelf: { user_id: 7, name: 'self', x: 0, y: 0, hp: 100 } },
+      leave: {
+        ok: true,
+        attempts: [{
+          ok: true,
+          response: {
+            ok: true,
+            event: 'left',
+            user_id: 7,
+            name: 'self',
+            x: 110,
+            y: 210,
+            hp: 76,
+            stamina_5s_remaining_milli: 6500,
+            stamina_1h_remaining_milli: 2900000,
+            stamina_1d_remaining_milli: 19000000
+          }
+        }]
+      }
+    };
+    const confirmedLeaveLearned = learnedLoginPointFromCanary(confirmedLeaveCanaryFixture);
+    const confirmedLeaveLastKnown = finalLastKnownFromCanary(
+      {
+        self: { userId: 7, name: 'self', hp: 79 },
+        stamina: { stamina1dRemainingMilli: 19001000 },
+        at: '2026-07-23T16:09:53.300Z',
+        tick: 92990
+      },
+      confirmedLeaveLearned.finalSelf,
+      confirmedLeaveCanaryFixture,
+      Date.parse(confirmedLeaveCanaryFixture.completedAt)
+    );
+    const confirmedLeavePanelCompact = buildCompactBrowserlessStatus({
+      session: { userId: 7, sessionToken: 'panel-self-test-token' },
+      runner: { running: true, currentAction: { kind: 'loop-wait', reason: 'combat-hp-disadvantage-leave' } },
+      current: { self: confirmedLeaveLearned.finalSelf },
+      lastKnown: confirmedLeaveLastKnown,
+      stats: {
+        currentSession: { online: false, exitedAt: confirmedLeaveCanaryFixture.completedAt },
+        lastExit: { at: confirmedLeaveCanaryFixture.completedAt, reason: 'combat-hp-disadvantage-leave' }
+      }
+    }, { nowMs: Date.parse(confirmedLeaveCanaryFixture.completedAt) + 1000 });
     const panelCombatState = {};
     const panelCombatInput = (nowMs, selfX, selfY) => ({
       userId: 7,
@@ -4063,7 +4194,13 @@ async function runBrowserlessRunnerSelfTest() {
           && panelAfkPresentationInitial.movementDistance === 0
           && panelAfkPresentationMoved.movementDistance === 500
           && panelAfkBattleCompact.battle.movementDistance === 500
+          && panelAfkBattleCompact.battle.self.moving === true
+          && panelAfkBattleCompact.battle.self.firing === true
           && panelMismatchedBattleCompact.battle.movementDistance === null
+          && confirmedLeaveLearned.finalSelf.hp === 76
+          && confirmedLeaveLearned.loginPoint.hp === 76
+          && confirmedLeavePanelCompact.lastKnown.self.hp === 76
+          && confirmedLeavePanelCompact.lastKnown.stamina.remaining1d === 19000000
           && panelActivityRecent.battle.self.moving === true
           && panelActivityRecent.battle.self.firing === true
           && panelActivityRecent.battle.target.moving === true
@@ -4104,6 +4241,14 @@ async function runBrowserlessRunnerSelfTest() {
         battleDistance: panelBattleCompact.battle.distance,
         battleMovementDistance: panelBattleCompact.battle.movementDistance,
         afkBattleMovementDistance: panelAfkBattleCompact.battle.movementDistance,
+        afkBattleSelfState: {
+          moving: panelAfkBattleCompact.battle.self.moving,
+          firing: panelAfkBattleCompact.battle.self.firing
+        },
+        confirmedLeaveLastKnown: {
+          hp: confirmedLeavePanelCompact.lastKnown.self.hp,
+          stamina1d: confirmedLeavePanelCompact.lastKnown.stamina.remaining1d
+        },
         measuredMovementDistance: panelCombatMoved.movementDistance,
         nearbyFleeTargetPanel: nearbyFleeTargetPanelTest,
         realtimeLootSafetyArbitration: realtimeLootSafetyArbitrationTest
