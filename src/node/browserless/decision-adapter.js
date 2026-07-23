@@ -53,6 +53,7 @@ const {
   evaluatePredictedLeaveHpCore
 } = require('../../strategy/combat-exit');
 const {
+  postAttackCoinMatchesAttackCore,
   updatePostAttackSettlementCore
 } = require('../../strategy/post-attack-drop');
 const {
@@ -2252,6 +2253,61 @@ function mergeProfitCoinCandidates(...groups) {
   return Array.from(byKey.values());
 }
 
+function observePostAttackCoinBaseline(input, stateful = {}, options = {}) {
+  if (!input || !stateful || typeof stateful !== 'object') return null;
+  const nowMs = Number(input.nowMs || 0);
+  const identity = [
+    input.fallback?.tick ?? '',
+    input.fallback?.coinDropCount ?? '',
+    input.rawRealtime?.coinDropsObserved === true ? (input.realtime?.tick ?? '') : '',
+    input.realtimeObservedCoins?.length ?? 0,
+    input.snapshotObservedCoins?.length ?? 0
+  ].join(':');
+  if (stateful.postAttackCoinBaseline?.identity === identity
+    && options.forcePostAttackCoinDecoration !== true) {
+    return stateful.postAttackCoinBaseline;
+  }
+  const observations = stateful.postAttackCoinObservations
+    && typeof stateful.postAttackCoinObservations === 'object'
+    ? stateful.postAttackCoinObservations
+    : {};
+  const coins = mergeProfitCoinCandidates(
+    input.realtimeObservedCoins || [],
+    input.snapshotObservedCoins || []
+  );
+  const keys = [];
+  for (const coin of coins) {
+    const key = profitCoinKey(coin);
+    if (!key) continue;
+    keys.push(key);
+    const previous = observations[key];
+    const firstSeenAt = Number(previous?.firstSeenAt || nowMs);
+    observations[key] = {
+      firstSeenAt,
+      lastSeenAt: nowMs,
+      amount: numberOrNull(coin.amount),
+      sourceUserId: coinSourceUserId(coin),
+      createdTick: coinCreatedTick(coin)
+    };
+    coin.postAttackFirstSeenAt = firstSeenAt;
+  }
+  const retentionMs = Math.max(
+    60000,
+    Number(options.postAttackDropCoinPriorityMs ?? BROWSER_RUNTIME_DEFAULTS.postAttackDropCoinPriorityMs) + 10000
+  );
+  const retained = Object.entries(observations)
+    .filter(([, item]) => nowMs - Number(item?.lastSeenAt || 0) <= retentionMs)
+    .sort((left, right) => Number(right[1]?.lastSeenAt || 0) - Number(left[1]?.lastSeenAt || 0))
+    .slice(0, 1024);
+  stateful.postAttackCoinObservations = Object.fromEntries(retained);
+  stateful.postAttackCoinBaseline = {
+    identity,
+    observedAt: nowMs,
+    keys: keys.slice(0, 1024)
+  };
+  return stateful.postAttackCoinBaseline;
+}
+
 function activeCoinCompetitionOptions(options = {}) {
   return {
     minSelfDistanceCm: options.activeCoinCompetitionMinSelfDistanceCm
@@ -3033,6 +3089,20 @@ function buildBrowserlessCombatStrategyInput(state, options = {}, stateful = {})
   );
   markInputStage('threat-index');
   const realtimeSnapshotObservation = refreshRealtimeSnapshotObservation(state, self, stateful, options, nowMs);
+  const realtimeObservedCoins = (realtimeSnapshotObservation?.nearby?.c || [])
+    .filter(row => Array.isArray(row) && row[0] !== undefined && Number(row[1] || 0) > 0)
+    .map(row => {
+      const id = String(row[0]);
+      return {
+        drop_id: id,
+        id,
+        key: `id:${id}`,
+        amount: Number(row[1]),
+        distance: Number(row[2] || Infinity),
+        authority: 'snapshot',
+        snapshotOnly: true
+      };
+    });
   markInputStage('snapshot-observation');
   const result = {
     userId: Number(state?.userId || options.userId || 0),
@@ -3048,6 +3118,12 @@ function buildBrowserlessCombatStrategyInput(state, options = {}, stateful = {})
       entityCount: realtimeEntities.length,
       bulletCount: Array.isArray(realtime.bullets) ? realtime.bullets.length : 0
     },
+    fallback: {
+      tick: realtimeSnapshotObservation?.tick ?? null,
+      receivedAtMs: realtimeSnapshotObservation?.observedAtMs ?? 0,
+      coinDropsObserved: true,
+      coinDropCount: realtimeObservedCoins.length
+    },
     visibleTargets,
     activeThreats,
     firingThreats,
@@ -3056,6 +3132,8 @@ function buildBrowserlessCombatStrategyInput(state, options = {}, stateful = {})
     snapshotFallbackThreats: [],
     easyKill: easyKillInput.easyKill,
     easyKillTargets: easyKillInput.easyKillTargets,
+    realtimeObservedCoins,
+    snapshotObservedCoins: realtimeObservedCoins,
     selfKillEvidence: [],
     realtimeSnapshotObservation,
     bullets: Array.isArray(realtime.bullets) ? realtime.bullets : [],
@@ -5588,11 +5666,10 @@ function matchingPostAttackDropEvidence(input, attack, options = {}) {
     input?.realtimeCoins || [],
     input?.snapshotVisibleCoins || input?.profitCoins || []
   );
-  return coins.some(coin => {
-    const sourceId = coinSourceUserId(coin);
-    if (sourceId !== null && String(sourceId) === attackId) return true;
-    return Number(coin?.amount || 0) > 0 && distanceBetween(coin, attack) <= radius;
-  });
+  return coins.some(coin => postAttackCoinMatchesAttackCore(coin, attack, {
+    dist: distanceBetween,
+    dropCoinRadius: radius
+  }));
 }
 
 function postAttackDisappearanceKillPlausibility(attack, input, options = {}) {
@@ -5769,7 +5846,8 @@ function buildPostAttackDropCoinDecision(input, stateful = {}, options = {}, com
       x: numberOrNull(settlement.x),
       y: numberOrNull(settlement.y),
       phase: settlement.phase,
-      matchedCoinKey: settlement.matchedCoinKey
+      matchedCoinKey: settlement.matchedCoinKey,
+      matchedCoinEvidence: settlement.matchedCoinEvidence || ''
     }
   });
 }
@@ -7225,6 +7303,9 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
     }
   }
   stageTimings.input = performance.now() - stageStarted;
+  stageStarted = performance.now();
+  observePostAttackCoinBaseline(input, stateful, options);
+  stageTimings.postAttackCoinBaseline = performance.now() - stageStarted;
   stageStarted = performance.now();
   reconcileEasyKillTracker(input, stateful, options);
   stageTimings.easyKill = performance.now() - stageStarted;
@@ -8765,6 +8846,10 @@ function buildOutsideCenterIdleTimeoutLeaveDecision(input, outsideCenterIdle, op
 
 function buildBrowserlessDecision(state, stateful = {}, options = {}) {
   const input = buildBrowserlessStrategyInput(state, options, stateful);
+  observePostAttackCoinBaseline(input, stateful, {
+    ...options,
+    forcePostAttackCoinDecoration: true
+  });
   const coinPickups = observeBrowserlessCoinPickups(input, stateful, options);
   cleanupCoinProgressState(stateful, input.nowMs, options);
   applyIgnoredCoinFilter(input, stateful);
@@ -9444,6 +9529,7 @@ function recordAttackHistoryFromActionResult(decisionState, actionResult, decisi
   if (id === null || id === undefined || id === '') return null;
   const nowMs = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
   const combat = actionResult.kind === 'combat-live' || decision?.band === 'combat' || decision?.action?.band === 'combat';
+  const coinBaseline = decisionState.postAttackCoinBaseline || null;
   const entry = {
     id,
     name: target?.name || '',
@@ -9455,6 +9541,9 @@ function recordAttackHistoryFromActionResult(decisionState, actionResult, decisi
     y: numberOrNull(target?.y),
     distance: numberOrNull(target?.distance),
     at: nowMs,
+    tick: numberOrNull(decision?.tick ?? decision?.combat?.tick),
+    coinBaselineObservedAt: Number(coinBaseline?.observedAt || 0),
+    coinBaselineKeys: Array.isArray(coinBaseline?.keys) ? coinBaseline.keys.slice(0, 1024) : [],
     action: combat ? 'opportunistic-shot' : 'attack',
     afk: !combat && target?.active !== true,
     active: Boolean(target?.active),

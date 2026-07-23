@@ -80,7 +80,10 @@ function pickPostAttackDropCoinCore(attacks, coins, options = {}) {
     if (!(Number(coin?.amount || 0) > minAmount)) continue;
     if (!Number.isFinite(Number(coin?.distance))) continue;
     const attack = resolvedAttacks
-      .filter(item => dist(coin, item) <= radius)
+      .filter(item => postAttackCoinMatchesAttackCore(coin, item, {
+        dist,
+        dropCoinRadius: radius
+      }))
       .sort((a, b) => Number(b.drop || 0) - Number(a.drop || 0) || Number(b.at || 0) - Number(a.at || 0))[0] || null;
     if (!attack) continue;
     const score = scoreCoin(coin);
@@ -137,13 +140,41 @@ function stableAttackTargetId(value) {
 }
 
 function postAttackCoinKey(value) {
-  const id = value?.drop_id ?? value?.dropId ?? value?.id ?? value?.key;
+  const id = value?.key ?? value?.drop_id ?? value?.dropId ?? value?.id;
   return id === null || id === undefined || id === '' ? '' : String(id);
 }
 
 function postAttackCoinSourceId(value) {
   const id = value?.sourceUserId ?? value?.source_user_id ?? value?.ownerUserId ?? value?.owner_user_id;
   return id === null || id === undefined || id === '' ? '' : String(id);
+}
+
+function postAttackCoinMatchReasonCore(coin, attack, options = {}) {
+  if (!coin || !attack || !(Number(coin.amount || 0) > 0)) return '';
+  const id = stableAttackTargetId(attack);
+  const sourceId = postAttackCoinSourceId(coin);
+  if (sourceId) return id && sourceId === id ? 'source-user-id' : '';
+
+  const targetDrop = Number(attack.drop);
+  if (!Number.isFinite(targetDrop) || targetDrop <= 0 || Number(coin.amount) !== targetDrop) return '';
+  const radius = Math.max(0, Number(options.dropCoinRadius || 0));
+  const dist = typeof options.dist === 'function' ? options.dist : defaultDist;
+  if (dist(coin, attack) > radius) return '';
+
+  // Proximity is useful only after causality is established. A source-less
+  // coin must be absent from the attack-time observation and appear later.
+  const baseline = new Set(Array.isArray(attack.coinBaselineKeys)
+    ? attack.coinBaselineKeys.map(String)
+    : []);
+  const key = postAttackCoinKey(coin);
+  if (!key || baseline.has(key)) return '';
+  const observedAt = Number(attack.coinBaselineObservedAt || 0);
+  const firstSeenAt = Number(coin.postAttackFirstSeenAt ?? coin.firstSeenAt ?? 0);
+  return observedAt > 0 && firstSeenAt > observedAt ? 'new-exact-amount' : '';
+}
+
+function postAttackCoinMatchesAttackCore(coin, attack, options = {}) {
+  return Boolean(postAttackCoinMatchReasonCore(coin, attack, options));
 }
 
 function updatePostAttackSettlementCore(previous = {}, context = {}, options = {}) {
@@ -191,6 +222,7 @@ function updatePostAttackSettlementCore(previous = {}, context = {}, options = {
       phase: 'unresolved',
       matchedCoinKey: '',
       matchedCoinAmount: null,
+      matchedCoinEvidence: '',
       lastCoinSeenAt: 0,
       terminalReason: '',
       updatedAt: nowMs
@@ -228,17 +260,22 @@ function updatePostAttackSettlementCore(previous = {}, context = {}, options = {
       continue;
     }
     state.resolvedAt = resolvedAt;
-    const matchingCoin = coins.find(coin => (
-      Number(coin?.amount || 0) > 0
-        && (postAttackCoinSourceId(coin) === id || dist(coin, attack) <= radius)
-    )) || null;
+    const matchingCoin = coins.find(coin => postAttackCoinMatchesAttackCore(coin, attack, {
+      dist,
+      dropCoinRadius: radius
+    })) || null;
     if (matchingCoin) {
       const coinKey = postAttackCoinKey(matchingCoin);
+      const matchedCoinEvidence = postAttackCoinMatchReasonCore(matchingCoin, attack, {
+        dist,
+        dropCoinRadius: radius
+      });
       state = {
         ...state,
         phase: state.matchedCoinKey && state.matchedCoinKey === coinKey ? 'pickup-protected' : 'drop-observed',
         matchedCoinKey: coinKey,
         matchedCoinAmount: Number.isFinite(Number(matchingCoin.amount)) ? Number(matchingCoin.amount) : null,
+        matchedCoinEvidence,
         lastCoinSeenAt: nowMs,
         coin: matchingCoin,
         updatedAt: nowMs
@@ -281,5 +318,7 @@ module.exports = {
   buildPostAttackDropCoinCandidateCore,
   pickPostAttackDropCoinCore,
   pickPostAttackDropWaitTargetCore,
+  postAttackCoinMatchReasonCore,
+  postAttackCoinMatchesAttackCore,
   updatePostAttackSettlementCore
 };

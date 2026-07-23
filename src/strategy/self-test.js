@@ -126,6 +126,7 @@ const { updateOutsideCenterIdleCore } = require('./outside-center-idle');
 const { patrolDirectionCore } = require('./patrol');
 const {
   postAttackVisibleCoinExistsCore,
+  postAttackCoinMatchesAttackCore,
   pickPostAttackDropCoinCore,
   pickPostAttackDropWaitTargetCore
 } = require('./post-attack-drop');
@@ -4166,11 +4167,13 @@ function runStrategyModuleSelfTests() {
       afk: true,
       action: 'opportunistic-shot',
       combat: true,
+      coinBaselineObservedAt: 9000,
+      coinBaselineKeys: ['coin-old'],
       battleStaminaSpentStartMs: 123.4,
       staminaSpentMs: 567.8
     }
   ], [
-    { drop_id: 'coin-a', x: 2050, y: 0, amount: 3, distance: 2050, score: 30 }
+    { drop_id: 'coin-a', x: 2050, y: 0, amount: 20, distance: 2050, score: 30, firstSeenAt: 9900 }
   ], postAttackCoinOptions);
   results.push({
     name: 'post-attack-drop-coin-picks-matched-visible-drop',
@@ -4198,16 +4201,44 @@ function runStrategyModuleSelfTests() {
   });
 
   const postAttackCoinBest = pickPostAttackDropCoinCore([
-    { id: 'target', x: 2000, y: 0, at: 9000, resolvedAt: 9700, drop: 20, afk: true, action: 'attack' }
+    {
+      id: 'target', x: 2000, y: 0, at: 9000, resolvedAt: 9700, drop: 20, afk: true, action: 'attack',
+      coinBaselineObservedAt: 9000, coinBaselineKeys: []
+    }
   ], [
-    { drop_id: 'score-win', x: 2100, y: 0, amount: 2, distance: 2100, score: 50 },
-    { drop_id: 'lower-score', x: 2050, y: 0, amount: 2, distance: 2050, score: 20 },
-    { drop_id: 'amount-win', x: 2500, y: 0, amount: 3, distance: 2500, score: 10 }
+    { drop_id: 'score-win', x: 2100, y: 0, amount: 20, distance: 2100, score: 50, firstSeenAt: 9800 },
+    { drop_id: 'lower-score', x: 2050, y: 0, amount: 20, distance: 2050, score: 20, firstSeenAt: 9800 },
+    { drop_id: 'amount-win', x: 2500, y: 0, amount: 20, distance: 2500, score: 10, firstSeenAt: 9800 }
   ], postAttackCoinOptions);
   results.push({
-    name: 'post-attack-drop-coin-selects-amount-before-score',
-    passed: postAttackCoinBest.selected?.drop_id === 'amount-win'
+    name: 'post-attack-drop-coin-selects-best-score-after-causal-match',
+    passed: postAttackCoinBest.selected?.drop_id === 'score-win'
       && postAttackCoinBest.candidates.length === 3
+  });
+
+  const postAttackCoinCausality = { id: 'causal-target', x: 2000, y: 0, at: 9000, drop: 20 };
+  results.push({
+    name: 'post-attack-drop-coin-requires-new-exact-amount-or-source',
+    passed: postAttackCoinMatchesAttackCore(
+      { key: 'id:old', drop_id: 'old', x: 2050, y: 0, amount: 20, firstSeenAt: 8000 },
+      { ...postAttackCoinCausality, coinBaselineObservedAt: 9000, coinBaselineKeys: ['id:old'] },
+      postAttackCoinOptions
+    ) === false
+      && postAttackCoinMatchesAttackCore(
+        { key: 'id:new-wrong', drop_id: 'new-wrong', x: 2050, y: 0, amount: 1, firstSeenAt: 9800 },
+        { ...postAttackCoinCausality, coinBaselineObservedAt: 9000, coinBaselineKeys: [] },
+        postAttackCoinOptions
+      ) === false
+      && postAttackCoinMatchesAttackCore(
+        { key: 'id:new', drop_id: 'new', x: 2050, y: 0, amount: 20, firstSeenAt: 9800 },
+        { ...postAttackCoinCausality, coinBaselineObservedAt: 9000, coinBaselineKeys: [] },
+        postAttackCoinOptions
+      ) === true
+      && postAttackCoinMatchesAttackCore(
+        { key: 'id:source', drop_id: 'source', source_user_id: 'causal-target', x: 9000, y: 0, amount: 1 },
+        { ...postAttackCoinCausality, coinBaselineObservedAt: 9000, coinBaselineKeys: ['id:source'] },
+        postAttackCoinOptions
+      ) === true
   });
 
   const postAttackWaitOptions = {

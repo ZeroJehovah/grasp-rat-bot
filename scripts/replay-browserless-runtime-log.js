@@ -60,6 +60,7 @@ const {
   updateCombatResponsePolicyShadowCore
 } = require('../src/strategy/combat-response-policy-shadow');
 const { updatePostKillSettlementCore } = require('../src/strategy/post-kill-settlement');
+const { postAttackCoinMatchesAttackCore } = require('../src/strategy/post-attack-drop');
 const { chooseStableOpportunityCore } = require('../src/strategy/opportunity-choice');
 
 function parseArgs(argv) {
@@ -4466,6 +4467,123 @@ function replayCombatPursuit(options) {
   return result;
 }
 
+function replayPostAttackDropAttribution(options) {
+  const rows = selectedEntries(options);
+  const firstSeenAtByKey = new Map();
+  const evaluated = [];
+  let firstCorrectedCandidate = null;
+  let firstLoggedCorrect = null;
+  for (const row of rows) {
+    const decision = row.detail || {};
+    const atMs = Date.parse(row.entry.at || '');
+    if (!Number.isFinite(atMs)) continue;
+    const nearbyCoins = (decision.input?.nearby?.c || [])
+      .filter(Array.isArray)
+      .map(item => ({
+        id: String(item[0] ?? ''),
+        key: `id:${String(item[0] ?? '')}`,
+        amount: Number(item[1] || 0),
+        distance: Number(item[2] || 0)
+      }))
+      .filter(coin => coin.id && coin.amount > 0);
+    for (const coin of nearbyCoins) {
+      if (!firstSeenAtByKey.has(coin.key)) firstSeenAtByKey.set(coin.key, atMs);
+    }
+
+    const action = decision.action || {};
+    const settlement = decision.input?.postAttackSettlement?.selected
+      || decision.profit?.postAttackSettlement?.selected
+      || null;
+    const target = action.postAttackTarget || settlement;
+    const targetId = String(target?.id ?? target?.targetId ?? '');
+    if (!targetId || (options.targetId && targetId !== options.targetId)) continue;
+    const targetDrop = Number(target?.drop ?? target?.targetDrop);
+    const lastAttackAt = Number(settlement?.lastAttackAt || target?.lastAttackAt || 0);
+    const baselineKeys = Array.from(firstSeenAtByKey.entries())
+      .filter(([, firstSeenAt]) => lastAttackAt > 0 && firstSeenAt <= lastAttackAt)
+      .map(([key]) => key);
+    const replayAttack = {
+      id: targetId,
+      drop: targetDrop,
+      coinBaselineObservedAt: lastAttackAt,
+      coinBaselineKeys: baselineKeys,
+      x: 0,
+      y: 0
+    };
+    const replayCoins = nearbyCoins.map(coin => ({
+      ...coin,
+      x: 0,
+      y: 0,
+      firstSeenAt: firstSeenAtByKey.get(coin.key) || 0
+    }));
+    const correctedCandidates = replayCoins.filter(coin => postAttackCoinMatchesAttackCore(
+      coin,
+      replayAttack,
+      { dropCoinRadius: 3500, dist: () => 0 }
+    ));
+    const corrected = correctedCandidates
+      .sort((left, right) => Number(left.distance) - Number(right.distance))[0] || null;
+    if (corrected && !firstCorrectedCandidate) {
+      firstCorrectedCandidate = { line: row.line, at: row.entry.at || '', id: corrected.id, amount: corrected.amount };
+    }
+
+    if (action.reason !== 'post-attack-drop-coin') continue;
+    const actionCoin = {
+      id: String(action.target?.id ?? ''),
+      key: String(action.target?.key || `id:${String(action.target?.id ?? '')}`),
+      amount: Number(action.target?.amount || 0),
+      source_user_id: action.target?.sourceUserId ?? null,
+      firstSeenAt: firstSeenAtByKey.get(String(action.target?.key || `id:${String(action.target?.id ?? '')}`)) || 0,
+      x: 0,
+      y: 0
+    };
+    const accepted = postAttackCoinMatchesAttackCore(actionCoin, replayAttack, {
+      dropCoinRadius: 3500,
+      dist: () => 0
+    });
+    if (accepted && !firstLoggedCorrect) {
+      firstLoggedCorrect = { line: row.line, at: row.entry.at || '', id: actionCoin.id, amount: actionCoin.amount };
+    }
+    evaluated.push({
+      line: row.line,
+      at: row.entry.at || '',
+      targetId,
+      targetDrop,
+      loggedCoinId: actionCoin.id,
+      loggedCoinAmount: actionCoin.amount,
+      loggedAccepted: accepted,
+      correctedCoinId: corrected?.id || '',
+      correctedCoinAmount: corrected?.amount || null,
+      baselineCoinCount: baselineKeys.length
+    });
+  }
+  const rejected = evaluated.filter(item => !item.loggedAccepted);
+  const accepted = evaluated.filter(item => item.loggedAccepted);
+  const firstCorrectedAt = Date.parse(firstCorrectedCandidate?.at || '');
+  const firstLoggedCorrectAt = Date.parse(firstLoggedCorrect?.at || '');
+  const pickupDelaySavedMs = Number.isFinite(firstCorrectedAt) && Number.isFinite(firstLoggedCorrectAt)
+    ? Math.max(0, firstLoggedCorrectAt - firstCorrectedAt)
+    : null;
+  const result = {
+    mode: 'post-attack-drop-attribution',
+    targetId: options.targetId || '',
+    lines: `${options.startLine}-${options.endLine}`,
+    evaluatedProtectedFrames: evaluated.length,
+    rejectedFalseMatchFrames: rejected.length,
+    acceptedCausalMatchFrames: accepted.length,
+    rejectedCoinIds: Array.from(new Set(rejected.map(item => item.loggedCoinId))),
+    firstCorrectedCandidate,
+    firstLoggedCorrect,
+    pickupDelaySavedMs,
+    samples: evaluated.slice(0, 20)
+  };
+  result.accepted = result.evaluatedProtectedFrames > 0
+    && result.rejectedFalseMatchFrames > 0
+    && (result.acceptedCausalMatchFrames > 0 || firstCorrectedCandidate === null)
+    && (pickupDelaySavedMs === null || pickupDelaySavedMs >= 0);
+  return result;
+}
+
 function runReplay(options) {
   if (options.mode === 'opportunity') return replayOpportunity(options);
   if (options.mode === 'afk-finish-commitment') return replayAfkFinishCommitment(options);
@@ -4477,6 +4595,7 @@ function runReplay(options) {
   if (options.mode === 'movement-stall-exit') return replayMovementStallExit(options);
   if (options.mode === 'recovery-threat-exit') return replayRecoveryThreatExit(options);
   if (options.mode === 'combat-pursuit') return replayCombatPursuit(options);
+  if (options.mode === 'post-attack-drop-attribution') return replayPostAttackDropAttribution(options);
   if (options.mode === 'arbitration') return replayArbitration(options);
   if (options.mode === 'combat-close-pressure') return replayCombatClosePressure(options);
   if (options.mode === 'combat-no-damage-generation-grid') return replayNoDamageGenerationGrid(options);
@@ -4505,6 +4624,7 @@ module.exports = {
   replayCombatEconomicStopLoss,
   replayCombatShotCoverage,
   replayCombatPursuit,
+  replayPostAttackDropAttribution,
   replayAfkFinishCommitment,
   replayAfkCombatHandoff,
   replayEasyKillContinuity,

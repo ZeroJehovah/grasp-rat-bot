@@ -5550,14 +5550,25 @@ async function runSelfTest() {
     {
       name: 'browserless post-attack settlement consumes observed and expired generations without A-B-A reinsertion',
       got: (() => {
-        const attack = { id: 8, name: 'target', drop: 20, x: 5000, y: 0, at: 900, action: 'attack', afk: true };
+        const attack = {
+          id: 8,
+          name: 'target',
+          drop: 20,
+          x: 5000,
+          y: 0,
+          at: 900,
+          action: 'attack',
+          afk: true,
+          coinBaselineObservedAt: 900,
+          coinBaselineKeys: []
+        };
         const options = { waitMs: 1000, resolveMaxMs: 5000, pickupMs: 45000, minDrop: 8, dropCoinRadius: 3500, resolveAttack: () => 1000 };
         const pending = updatePostAttackSettlementCore({}, { nowMs: 1000, attacks: [attack], coins: [], visibleTargets: [] }, options);
         const observed = updatePostAttackSettlementCore(pending.states, {
-          nowMs: 1200, attacks: [attack], coins: [{ drop_id: 'drop-8', amount: 20, x: 5100, y: 0 }], visibleTargets: []
+          nowMs: 1200, attacks: [attack], coins: [{ drop_id: 'drop-8', amount: 20, x: 5100, y: 0, firstSeenAt: 1200 }], visibleTargets: []
         }, options);
         const protectedState = updatePostAttackSettlementCore(observed.states, {
-          nowMs: 1300, attacks: [attack], coins: [{ drop_id: 'drop-8', amount: 20, x: 5100, y: 0 }], visibleTargets: []
+          nowMs: 1300, attacks: [attack], coins: [{ drop_id: 'drop-8', amount: 20, x: 5100, y: 0, firstSeenAt: 1200 }], visibleTargets: []
         }, options);
         const settled = updatePostAttackSettlementCore(protectedState.states, { nowMs: 1400, attacks: [attack], coins: [], visibleTargets: [] }, options);
         const noReinsert = updatePostAttackSettlementCore(settled.states, { nowMs: 1500, attacks: [attack], coins: [], visibleTargets: [] }, options);
@@ -12142,6 +12153,8 @@ async function runSelfTest() {
             y: 0,
             drop: 20,
             at: 1000,
+            coinBaselineObservedAt: 1000,
+            coinBaselineKeys: [],
             action: 'attack',
             afk: true
           }]
@@ -12174,6 +12187,100 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'coin|profit|post-attack-drop-coin|post-drop|8|20|realtime'
+    },
+    {
+      name: 'browserless post-attack settlement rejects preexisting nearby coin after high-drop target disappears',
+      got: (() => {
+        const stateful = {
+          attackHistory: [{
+            id: 36176,
+            name: 'Victor8886',
+            hp: 64,
+            x: 6000,
+            y: 0,
+            drop: 438,
+            at: 1500,
+            coinBaselineObservedAt: 1400,
+            coinBaselineKeys: ['id:60'],
+            action: 'opportunistic-shot',
+            afk: false,
+            combat: true
+          }]
+        };
+        const decision = buildBrowserlessDecision({
+          userId: 7,
+          realtime: {
+            tick: 60,
+            frameAgeMs: 0,
+            self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, max_hp: 100 },
+            entities: [{ entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, max_hp: 100 }],
+            bullets: [],
+            coinDrops: [{ drop_id: 60, amount: 1, x: 6100, y: 0 }]
+          },
+          fallback: { coinDrops: [] }
+        }, stateful, {
+          nowMs: 1600,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          dynamicProfitThresholdEnabled: false,
+          postAttackDropCoinRadius: 3500
+        });
+        return [
+          decision.action.reason !== 'post-attack-drop-coin',
+          decision.input.postAttackSettlement.selected === null,
+          stateful.postAttackSettlements['36176']?.phase || ''
+        ].join('|');
+      })(),
+      want: 'true|true|unresolved'
+    },
+    {
+      name: 'browserless post-attack settlement picks newly appeared exact drop over old one-coins',
+      got: (() => {
+        const stateful = {
+          attackHistory: [{
+            id: 15822,
+            name: '3280550159',
+            hp: 3,
+            x: 6000,
+            y: 0,
+            drop: 9,
+            at: 1500,
+            coinBaselineObservedAt: 1400,
+            coinBaselineKeys: ['id:7', 'id:123'],
+            action: 'attack',
+            afk: true
+          }]
+        };
+        const decision = buildBrowserlessDecision({
+          userId: 7,
+          realtime: {
+            tick: 60,
+            frameAgeMs: 0,
+            self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, max_hp: 100 },
+            entities: [{ entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, max_hp: 100 }],
+            bullets: [{ owner_user_id: 7 }],
+            coinDrops: [
+              { drop_id: 7, amount: 1, x: 5900, y: 0 },
+              { drop_id: 123, amount: 1, x: 6200, y: 0 },
+              { drop_id: 413, amount: 9, x: 6050, y: 0 }
+            ]
+          },
+          fallback: { coinDrops: [] }
+        }, stateful, {
+          nowMs: 1600,
+          controlMode: 'profit-live',
+          dynamicProfitThresholdEnabled: false,
+          postAttackDropCoinRadius: 3500
+        });
+        return [
+          decision.action.reason,
+          decision.action.target.id,
+          decision.action.target.amount,
+          decision.action.postAttackTarget?.matchedCoinKey || '',
+          stateful.postAttackSettlement?.matchedCoinEvidence || ''
+        ].join('|');
+      })(),
+      want: 'post-attack-drop-coin|413|9|id:413|new-exact-amount'
     },
     {
       name: 'browserless profit live ignores stale post-attack history',

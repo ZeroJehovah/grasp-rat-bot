@@ -100,6 +100,8 @@ function createInitialDecisionState(options = {}) {
     explorationHistory: asArray(options.explorationHistory),
     explorationLifecycleEvents: asArray(options.explorationLifecycleEvents),
     attackHistory: asArray(options.attackHistory),
+    postAttackCoinObservations: asRecord(options.postAttackCoinObservations),
+    postAttackCoinBaseline: cloneJson(options.postAttackCoinBaseline || null),
     postAttackSettlements: cloneJson(options.postAttackSettlements || {}),
     postAttackSettlement: cloneJson(options.postAttackSettlement || null),
     postKillSettlement: cloneJson(options.postKillSettlement || null),
@@ -194,6 +196,10 @@ function summarizeBrowserlessDecisionState(state, options = {}) {
       recent: boundedList(state.attackHistory, limit)
     },
     postAttackSettlement: {
+      coinBaseline: state.postAttackCoinBaseline ? {
+        observedAt: Number(state.postAttackCoinBaseline.observedAt || 0),
+        coinCount: Array.isArray(state.postAttackCoinBaseline.keys) ? state.postAttackCoinBaseline.keys.length : 0
+      } : null,
       selected: redactBoundedValue(state.postAttackSettlement || null),
       states: recordEntries(state.postAttackSettlements || {}, limit)
     },
