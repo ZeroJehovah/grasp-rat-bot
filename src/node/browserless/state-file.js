@@ -691,6 +691,15 @@ function updateBrowserlessStatsSessionDrop(session, self) {
   return true;
 }
 
+function sessionCoinUpperBound(session) {
+  const calibrated = Math.max(0, Math.round(Number(session?.dropCalibratedCoins || 0) || 0));
+  const hasDropObservation = compactNumber(session?.lastDrop) !== null
+    || compactNumber(session?.baseDrop) !== null;
+  if (!hasDropObservation) return null;
+  const lifecycleAllowance = Math.max(1, Math.round(Number(session?.dropResetCount || 0) || 0) + 1);
+  return calibrated + lifecycleAllowance;
+}
+
 function updateBrowserlessStatsSessionCoinPickups(session, decision, nowMs, previousCoinsGained = null) {
   const memoryMs = 60000;
   const duplicateWindowMs = 5000;
@@ -705,6 +714,7 @@ function updateBrowserlessStatsSessionCoinPickups(session, decision, nowMs, prev
     added += pickup.amount;
   }
   session.coinPickupKeys = pickupKeys.slice(-300);
+  const upperBound = sessionCoinUpperBound(session);
   if (added > 0) {
     // Keep explicit pickup increments relative to the displayed total. The
     // Drop calibration can be ahead of pickup evidence, so adding to the
@@ -715,11 +725,17 @@ function updateBrowserlessStatsSessionCoinPickups(session, decision, nowMs, prev
     session.pickupObservedCoins = Math.max(0, Math.round(Number(session.pickupObservedCoins || 0) + added));
     session.coinsGained = Math.max(pickupBase + added, session.pickupObservedCoins);
   }
-  session.coinsGained = Math.max(
+  const reconciledCoins = Math.max(
     Math.max(0, Math.round(Number(session.coinsGained || 0) || 0)),
     Math.max(0, Math.round(Number(session.pickupObservedCoins || 0) || 0)),
     Math.max(0, Math.round(Number(session.dropCalibratedCoins || 0) || 0))
   );
+  session.coinsGained = upperBound === null
+    ? reconciledCoins
+    : Math.max(
+        Math.max(0, Math.round(Number(session.dropCalibratedCoins || 0) || 0)),
+        Math.min(reconciledCoins, upperBound)
+      );
   return added;
 }
 

@@ -27081,7 +27081,7 @@ async function runSelfTest() {
         state.stats.currentSession.coinsGained = 64;
         state.stats = browserlessStatsForDecision(
           state,
-          decision(start + 1000, 100, [{ key: 'id:five-coin', amount: 5, at: start + 1000 }]),
+          decision(start + 1000, 102, [{ key: 'id:five-coin', amount: 5, at: start + 1000 }]),
           { nowMs: start + 1000 }
         );
         const compact = buildCompactBrowserlessStatus(state, { nowMs: start + 1000 });
