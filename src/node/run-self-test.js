@@ -70,6 +70,7 @@ const {
   opportunityEnemyStaminaCost: browserlessOpportunityEnemyStaminaCost,
   recentCombatResidualThreatContinuityCore,
   recordAttackHistoryFromActionResult,
+  singleCoinBaitReturnPlan,
   snapshotSelfKillEvidence
 } = require('./browserless/decision-adapter');
 const {
@@ -13027,6 +13028,221 @@ async function runSelfTest() {
       want: 'true|route-3|false|bait-plan-below-current-profit-margin|bait-3613|0|true|coin-4245|false|bait-4230|'
     },
     {
+      name: 'single coin bait combination plans obey the global threshold floor',
+      got: (() => {
+        const threshold = {
+          active: true,
+          threshold: { rewardCoins: 1, staminaMilli: 10000 }
+        };
+        const bait = { id: 'bait', x: 0, y: 0, opportunityStaminaCost: 15000 };
+        const anchored = [{
+          type: 'coin',
+          sourceCoin: { id: 'next', amount: 1, x: 1, y: 0 },
+          baitAnchorEvaluation: {
+            id: 'next',
+            type: 'coin',
+            reward: 1,
+            staminaCost: 5000,
+            profitThresholdEligible: true
+          }
+        }];
+        const makePlan = (extraCost = 0, rawOpportunities = []) => singleCoinBaitReturnPlan(
+          {},
+          { threshold, rawOpportunities },
+          bait,
+          anchored.map(item => ({
+            ...item,
+            baitAnchorEvaluation: {
+              ...item.baitAnchorEvaluation,
+              staminaCost: 5000 + extraCost
+            }
+          })),
+          null,
+          { opportunitySwitchMargin: 0, opportunitySwitchRelativeMargin: 0 }
+        );
+        const exact = makePlan(0);
+        const belowByOne = makePlan(1);
+        const noCurrentBestBelow = makePlan(1);
+        const strongerCurrentBest = makePlan(0, [{
+          type: 'coin',
+          id: 'best',
+          reward: 3,
+          staminaCost: 10000,
+          profitThresholdEligible: true,
+          sourceCoin: { id: 'best', amount: 3, x: 2, y: 0 }
+        }]);
+        const productionShape = singleCoinBaitReturnPlan(
+          {},
+          { threshold, rawOpportunities: [] },
+          { id: '4994', x: 0, y: 0, opportunityStaminaCost: 18582 },
+          [{
+            type: 'enemy',
+            sourceTarget: { userId: 31361 },
+            baitAnchorEvaluation: {
+              id: '31361',
+              type: 'enemy',
+              reward: 9.76452073540228,
+              staminaCost: 94317.55421378954,
+              profitThresholdEligible: true
+            }
+          }],
+          null,
+          { opportunitySwitchMargin: 0, opportunitySwitchRelativeMargin: 0 }
+        );
+        const productionShapeGood = singleCoinBaitReturnPlan(
+          {},
+          { threshold, rawOpportunities: [] },
+          { id: '4994', x: 0, y: 0, opportunityStaminaCost: 18582 },
+          [{
+            type: 'enemy',
+            sourceTarget: { userId: 31361 },
+            baitAnchorEvaluation: {
+              id: '31361',
+              type: 'enemy',
+              reward: 9.76452073540228,
+              staminaCost: 88000,
+              profitThresholdEligible: true
+            }
+          }],
+          null,
+          { opportunitySwitchMargin: 0, opportunitySwitchRelativeMargin: 0 }
+        );
+        const productionShapeAgain = singleCoinBaitReturnPlan(
+          {},
+          { threshold, rawOpportunities: [] },
+          { id: '4994', x: 0, y: 0, opportunityStaminaCost: 18582 },
+          [{
+            type: 'enemy',
+            sourceTarget: { userId: 31361 },
+            baitAnchorEvaluation: {
+              id: '31361',
+              type: 'enemy',
+              reward: 9.76452073540228,
+              staminaCost: 94317.55421378954,
+              profitThresholdEligible: true
+            }
+          }],
+          null,
+          { opportunitySwitchMargin: 0, opportunitySwitchRelativeMargin: 0 }
+        );
+        const productionFrames = [
+          { reward: 10.76452073540228, staminaCost: 112900 },
+          { reward: 10.764520685076121, staminaCost: 111499 },
+          { reward: 10.764520635952762, staminaCost: 109932 },
+          { reward: 10.764520586011466, staminaCost: 108280 },
+          { reward: 10.764520537898447, staminaCost: 106636 }
+        ];
+        const replayProductionFrames = () => productionFrames.map(frame => singleCoinBaitReturnPlan(
+          {},
+          { threshold, rawOpportunities: [] },
+          { id: '4994', x: 0, y: 0, opportunityStaminaCost: 18582 },
+          [{
+            type: 'enemy',
+            sourceTarget: { userId: 31361 },
+            baitAnchorEvaluation: {
+              id: '31361',
+              type: 'enemy',
+              reward: frame.reward - 1,
+              staminaCost: frame.staminaCost - 18582,
+              profitThresholdEligible: true
+            }
+          }],
+          null,
+          { opportunitySwitchMargin: 0, opportunitySwitchRelativeMargin: 0 }
+        ));
+        const productionReplay = replayProductionFrames();
+        const productionReplayAgain = replayProductionFrames();
+        return [
+          exact.allowed,
+          exact.planThresholdEligible,
+          exact.thresholdFloor,
+          exact.requiredNetROI,
+          belowByOne.allowed,
+          belowByOne.planThresholdEligible,
+          belowByOne.suppressionReason,
+          noCurrentBestBelow.currentBest === null,
+          noCurrentBestBelow.allowed,
+          strongerCurrentBest.allowed,
+          strongerCurrentBest.suppressionReason,
+          productionShape.allowed,
+          productionShape.planThresholdEligible,
+          productionShape.suppressionReason,
+          productionShapeGood.allowed,
+          JSON.stringify(productionShapeAgain) === JSON.stringify(productionShape),
+          productionReplay.slice(0, 4).every(plan => !plan.allowed),
+          productionReplay.slice(0, 4).map(plan => plan.allowed ? 10 : 0).join(','),
+          productionReplay[4].allowed,
+          productionReplay[4].allowed ? 10 : 0,
+          JSON.stringify(productionReplayAgain) === JSON.stringify(productionReplay)
+        ].join('|');
+      })(),
+      want: 'true|true|0.0001|0.0001|false|false|bait-plan-below-profit-threshold|true|false|false|bait-plan-below-current-profit-margin|false|false|bait-plan-below-profit-threshold|true|true|true|0,0,0,0|true|10|true'
+    },
+    {
+      name: 'browserless low ROI bait plan loses commitment outside the close radius',
+      got: (() => {
+        const options = {
+          userId: 7,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          dynamicProfitThresholdEnabled: true,
+          singleCoinBaitHoldRadiusCm: 1000,
+          finalActionArbitrationHoldMs: 0,
+          opportunitySwitchMargin: 0,
+          opportunitySwitchRelativeMargin: 0
+        };
+        const stateFor = (tick, selfX, coinDrops) => ({
+          userId: 7,
+          realtime: {
+            tick,
+            frameAgeMs: 100,
+            self: {
+              entity_id: 1,
+              user_id: 7,
+              name: 'self',
+              x: selfX,
+              y: 0,
+              hp: 100,
+              max_hp: 100,
+              stamina_1d_remaining_milli: 20000000
+            },
+            entities: [{
+              entity_id: 1,
+              user_id: 7,
+              name: 'self',
+              x: selfX,
+              y: 0,
+              hp: 100,
+              max_hp: 100,
+              stamina_1d_remaining_milli: 20000000
+            }],
+            bullets: [],
+            coinDrops
+          },
+          fallback: { tick, frameAgeMs: 100, coinDrops: [] }
+        });
+        const bait = { drop_id: 'bait', amount: 1, x: 900, y: 0 };
+        const next = { drop_id: 'next', amount: 1, x: 9900, y: 0 };
+        const farAdapter = createBrowserlessDecisionAdapter(options);
+        farAdapter.decide(stateFor(1, 0, [bait]), { nowMs: 1000 });
+        const far = farAdapter.decide(stateFor(2, 20000, [bait, next]), { nowMs: 2000 });
+        const nearAdapter = createBrowserlessDecisionAdapter(options);
+        nearAdapter.decide(stateFor(3, 0, [bait]), { nowMs: 3000 });
+        const near = nearAdapter.decide(stateFor(4, 0, [bait, next]), { nowMs: 4000 });
+        return [
+          far.reason,
+          far.action.finalCandidate?.commitmentRank || 0,
+          far.profit.singleCoinBait?.returnEligible,
+          far.profit.singleCoinBait?.planThresholdEligible,
+          far.profit.singleCoinBait?.returnSuppressionReason,
+          near.action.target?.id,
+          near.action.finalCandidate?.commitmentRank || 0,
+          near.profit.singleCoinBait?.closeCommitmentRadiusCm
+        ].join('|');
+      })(),
+      want: 'dynamic-profit-threshold-wait|0|false|false|bait-plan-below-profit-threshold|bait|10|1200'
+    },
+    {
       name: 'browserless snapshot fallback bait survives a higher ROI AFK arrival until committed release',
       got: (() => {
         const adapter = createBrowserlessDecisionAdapter({
@@ -13245,6 +13461,98 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'profit-candidate|coin-b|switched-for-roi|0|coin:coin-b'
+    },
+    {
+      name: 'browserless final arbitration confirms a valid profit dropout before stopping',
+      got: (() => {
+        const options = {
+          userId: 7,
+          controlMode: 'profit-live',
+          combatEnabled: false,
+          dynamicProfitThresholdEnabled: false,
+          browserlessCenterActivityRadiusCm: 100000,
+          finalActionArbitrationHoldMs: 1800
+        };
+        const makeState = (tick, coinDrops) => {
+          const self = {
+            entity_id: 1,
+            user_id: 7,
+            name: 'self',
+            x: 101000,
+            y: 0,
+            hp: 100,
+            max_hp: 100,
+            stamina_1h_remaining_milli: 3000000,
+            stamina_1d_remaining_milli: 20000000
+          };
+          return {
+            userId: 7,
+            realtime: {
+              tick,
+              frameAgeMs: 100,
+              self,
+              entities: [self],
+              bullets: [],
+              coinDrops: []
+            },
+            fallback: { tick, frameAgeMs: 100, coinDrops }
+          };
+        };
+        const coin = { drop_id: 'valid-profit', amount: 100, x: 115000, y: 0 };
+        const stateful = {};
+        const first = buildBrowserlessDecision(makeState(1, [coin]), stateful, { ...options, nowMs: 1000 });
+        const shortDropout = buildBrowserlessDecision(makeState(2, [coin]), stateful, {
+          ...options,
+          nowMs: 1100,
+          snapshotCoinFallbackEnabled: false
+        });
+        const repeatedDropout = buildBrowserlessDecision(makeState(3, [coin]), stateful, {
+          ...options,
+          nowMs: 2000,
+          snapshotCoinFallbackEnabled: false
+        });
+        const committedDropout = buildBrowserlessDecision(makeState(4, [coin]), stateful, {
+          ...options,
+          nowMs: 2901,
+          snapshotCoinFallbackEnabled: false
+        });
+        const missingTargetStateful = {};
+        buildBrowserlessDecision(makeState(10, [coin]), missingTargetStateful, { ...options, nowMs: 10000 });
+        const missingTarget = buildBrowserlessDecision(makeState(11, []), missingTargetStateful, {
+          ...options,
+          nowMs: 10100,
+          snapshotCoinFallbackEnabled: false
+        });
+        const deterministicStateful = {};
+        const deterministicReplay = [
+          buildBrowserlessDecision(makeState(1, [coin]), deterministicStateful, { ...options, nowMs: 1000 }),
+          buildBrowserlessDecision(makeState(2, [coin]), deterministicStateful, { ...options, nowMs: 1100, snapshotCoinFallbackEnabled: false }),
+          buildBrowserlessDecision(makeState(3, [coin]), deterministicStateful, { ...options, nowMs: 2000, snapshotCoinFallbackEnabled: false }),
+          buildBrowserlessDecision(makeState(4, [coin]), deterministicStateful, { ...options, nowMs: 2901, snapshotCoinFallbackEnabled: false })
+        ];
+        const actionSequence = decisions => decisions.map(decision => [
+          decision.action.reason,
+          decision.action.target?.id || '',
+          decision.action.stopMotion === true,
+          decision.action.finalActionArbitration?.reason || ''
+        ]);
+        return [
+          first.action.target?.id,
+          shortDropout.action.target?.id === 'valid-profit',
+          shortDropout.action.finalActionArbitration?.reason,
+          shortDropout.action.stopMotion === true,
+          repeatedDropout.action.target?.id === 'valid-profit',
+          repeatedDropout.action.finalActionArbitration?.reason,
+          committedDropout.action.reason,
+          committedDropout.action.stopMotion === true,
+          missingTarget.action.reason,
+          missingTarget.action.finalActionArbitration?.reason || '',
+          missingTarget.action.stopMotion === true,
+          JSON.stringify(actionSequence([first, shortDropout, repeatedDropout, committedDropout]))
+            === JSON.stringify(actionSequence(deterministicReplay))
+        ].join('|');
+      })(),
+      want: 'valid-profit|true|profit-dropout-confirmation|false|true|profit-dropout-confirmation|outside-center-profit-wait|true|outside-center-profit-wait||true|true'
     },
     {
       name: 'browserless final arbitration does not hold over safety action',

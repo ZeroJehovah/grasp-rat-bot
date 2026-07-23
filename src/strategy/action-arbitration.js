@@ -2,6 +2,39 @@
 
 const { actionPriorityBand, actionFocusSummary } = require('./action-priority');
 
+const PROFIT_DROPOUT_REASONS = new Set([
+  'outside-center-profit-wait',
+  'dynamic-profit-threshold-wait',
+  'no-profitable-candidate'
+]);
+
+function profitDropoutMetadata(action) {
+  if (!action || typeof action !== 'object') return null;
+  const metadata = action.profitDropout && typeof action.profitDropout === 'object'
+    ? action.profitDropout
+    : null;
+  const reason = String(action.reason || '');
+  if (!metadata && !PROFIT_DROPOUT_REASONS.has(reason)) return null;
+  return {
+    kind: String(metadata?.kind || reason),
+    targetValid: metadata?.targetValid === true,
+    thresholdViolation: metadata?.thresholdViolation === true,
+    targetKey: String(metadata?.targetKey || '')
+  };
+}
+
+function profitActionTargetUsable(action) {
+  if (!action || actionPriorityBand(action) !== 'profit' || !action.target) return false;
+  if (action.profitThresholdEligible === false || action.expired === true || action.valid === false) return false;
+  const target = action.target;
+  if (target.alive === false || target.dead === true || target.isDead === true) return false;
+  if (target.invulnerable === true || target.isInvulnerable === true) return false;
+  const invulnerableMs = Number(target.invulnerableRemainingMs ?? target.invulnerable_remaining_ms);
+  if (Number.isFinite(invulnerableMs) && invulnerableMs > 0) return false;
+  const hp = Number(target.hp ?? target.knownHp);
+  return !Number.isFinite(hp) || hp > 0;
+}
+
 function finalActionBandRank(band) {
   switch (String(band || '')) {
     case 'exit': return 600;
@@ -30,7 +63,12 @@ function finalActionCommitmentRank(action) {
 function finalActionHoldDecision(previousAction, previousFocus, currentAction, currentFocus, ageMs, options = {}) {
   const result = (hold, reason = '', detail = {}) => ({ hold, reason, ...detail });
   const holdMs = Math.max(0, Math.round(Number(options.holdMs || 0) || 0));
-  if (!(holdMs > 0) || ageMs > holdMs) return result(false);
+  const currentDropout = profitDropoutMetadata(currentAction);
+  const dropoutAgeMs = Number.isFinite(Number(options.dropoutAgeMs))
+    ? Math.max(0, Number(options.dropoutAgeMs))
+    : ageMs;
+  const effectiveAgeMs = currentDropout ? dropoutAgeMs : ageMs;
+  if (!(holdMs > 0) || effectiveAgeMs > holdMs) return result(false);
   if (!finalActionReusable(previousAction) || !currentAction || !currentFocus || !previousFocus) return result(false);
   if (previousFocus.key === currentFocus.key) return result(false);
   const previousBand = String(previousFocus.band || actionPriorityBand(previousAction));
@@ -81,7 +119,20 @@ function finalActionHoldDecision(previousAction, previousFocus, currentAction, c
     }
     return result(true, 'roi-evidence-unavailable');
   }
-  if (previousBand === 'profit' && currentBand !== 'profit') return result(false);
+  if (previousBand === 'profit' && currentBand !== 'profit') {
+    if (!currentDropout || currentDropout.thresholdViolation || currentDropout.targetValid !== true) {
+      return result(false);
+    }
+    if (!profitActionTargetUsable(previousAction)) return result(false);
+    const activeDropout = options.activeProfitDropout || null;
+    if (activeDropout?.kind && activeDropout.kind !== currentDropout.kind) return result(false);
+    return result(true, 'profit-dropout-confirmation', {
+      dropoutKind: currentDropout.kind,
+      dropoutAgeMs: effectiveAgeMs,
+      dropoutTargetKey: currentDropout.targetKey || previousFocus.targetKey,
+      targetValid: currentDropout.targetValid
+    });
+  }
   if (previousBand === 'safety' && currentBand === 'combat') return result(false);
   return result(true, 'higher-priority-band-stick');
 }
@@ -123,7 +174,11 @@ function applyFinalActionArbitrationCore(action, state, options = {}) {
   const holdDecision = finalActionHoldDecision(previousAction, previousFocus, action, currentFocus, ageMs, {
     holdMs,
     profitSwitchRoiRatio: options.profitSwitchRoiRatio,
-    profitSwitchRoiTolerance: options.profitSwitchRoiTolerance
+    profitSwitchRoiTolerance: options.profitSwitchRoiTolerance,
+    activeProfitDropout: state.profitDropout || null,
+    dropoutAgeMs: profitDropoutMetadata(action)
+      ? Math.max(0, t - Number(state.profitDropout?.startedAt || t))
+      : ageMs
   });
   if (holdDecision.hold) {
     override = {
@@ -133,7 +188,9 @@ function applyFinalActionArbitrationCore(action, state, options = {}) {
       mode: 'hold-previous',
       ageMs: Math.round(ageMs),
       holdMs,
-      holdRemainingMs: Math.max(0, Math.round(holdMs - ageMs)),
+      holdRemainingMs: Math.max(0, Math.round(holdMs - (holdDecision.dropoutKind
+        ? holdDecision.dropoutAgeMs
+        : ageMs))),
       from: currentFocus,
       to: previousFocus,
       reason: holdDecision.reason,
@@ -145,6 +202,20 @@ function applyFinalActionArbitrationCore(action, state, options = {}) {
       previousCommitment: Number.isFinite(holdDecision.previousCommitment) ? holdDecision.previousCommitment : null,
       currentCommitment: Number.isFinite(holdDecision.currentCommitment) ? holdDecision.currentCommitment : null
     };
+    if (holdDecision.dropoutKind) {
+      override.dropoutKind = holdDecision.dropoutKind;
+      override.dropoutAgeMs = Math.round(holdDecision.dropoutAgeMs);
+      override.dropoutTargetKey = holdDecision.dropoutTargetKey || null;
+      override.targetValid = holdDecision.targetValid === true;
+      state.profitDropout = {
+        kind: holdDecision.dropoutKind,
+        startedAt: state.profitDropout?.kind === holdDecision.dropoutKind
+          ? Number(state.profitDropout.startedAt || t)
+          : t,
+        lastAt: t,
+        targetKey: holdDecision.dropoutTargetKey || previousFocus.targetKey || ''
+      };
+    }
     selected = {
       ...previousAction,
       finalActionArbitration: override
@@ -161,6 +232,7 @@ function applyFinalActionArbitrationCore(action, state, options = {}) {
   state.lastAction = clone(selected) || selected;
   state.lastFocus = clone(selectedFocus) || selectedFocus;
   if (!override) state.lastSelectedAt = t;
+  if (!override || !profitDropoutMetadata(action)) state.profitDropout = null;
 
   return {
     action: selected,
@@ -182,6 +254,7 @@ function buildArbitrationStatus(state) {
     lastFocus: state.lastFocus ? { ...state.lastFocus } : null,
     lastSelectedAt: state.lastSelectedAt || 0,
     lastOverride: state.lastOverride ? { ...state.lastOverride } : null,
+    profitDropout: state.profitDropout ? { ...state.profitDropout } : null,
     history: (state.history || []).slice(-10)
   };
 }
@@ -213,5 +286,7 @@ module.exports = {
   shouldHoldPreviousFinalAction,
   applyFinalActionArbitrationCore,
   applyFinalActionArbitration,
-  buildArbitrationStatus
+  buildArbitrationStatus,
+  profitDropoutMetadata,
+  profitActionTargetUsable
 };

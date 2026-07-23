@@ -79,7 +79,10 @@ const {
   coinRouteSummaryCore,
   pickCoinRouteOpportunityCore
 } = require('../../strategy/coin-route');
-const { applyFinalActionArbitrationCore } = require('../../strategy/action-arbitration');
+const {
+  applyFinalActionArbitrationCore,
+  profitDropoutMetadata
+} = require('../../strategy/action-arbitration');
 const { recordActionSwitchDiagnosticsCore } = require('../../strategy/action-switch-diagnostics');
 const {
   buildDynamicProfitThresholdCore,
@@ -3877,6 +3880,11 @@ function singleCoinBaitReturnPlan(input, opportunity, bait, anchoredOpportunitie
       ?? 0
   ));
   const fixedSwitchCost = Math.max(0, Number(options.opportunitySwitchMargin || 0));
+  const thresholdContext = opportunity?.threshold || null;
+  const thresholdFloor = thresholdContext?.active === true
+    ? Number(thresholdContext.threshold?.rewardCoins || 0)
+      / Math.max(1, Number(thresholdContext.threshold?.staminaMilli || 10000))
+    : 0;
   const candidates = [];
   if (continuation?.profitThresholdEligible) {
     candidates.push({
@@ -3911,7 +3919,11 @@ function singleCoinBaitReturnPlan(input, opportunity, bait, anchoredOpportunitie
     const reward = 1 + Math.max(0, Number(candidate.reward || 0));
     const staminaCost = Math.max(0, Number(baitCost || 0)) + Math.max(0, Number(candidate.staminaCost || 0));
     const comparableNetROI = reward / Math.max(1, staminaCost + fixedSwitchCost);
-    const requiredNetROI = currentBestNetROI === null ? 0 : currentBestNetROI * (1 + relativeMargin);
+    const planThresholdEligible = profitRewardAndCostEligible(reward, staminaCost, thresholdContext);
+    const requiredNetROI = Math.max(
+      thresholdFloor,
+      currentBestNetROI === null ? 0 : currentBestNetROI * (1 + relativeMargin)
+    );
     return {
       ...candidate,
       reward,
@@ -3919,8 +3931,10 @@ function singleCoinBaitReturnPlan(input, opportunity, bait, anchoredOpportunitie
       netROI: reward / Math.max(1, staminaCost),
       comparableNetROI,
       currentBestNetROI,
+      thresholdFloor,
+      planThresholdEligible,
       requiredNetROI,
-      allowed: comparableNetROI >= requiredNetROI
+      allowed: planThresholdEligible && comparableNetROI >= requiredNetROI
     };
   }).sort((left, right) => Number(right.comparableNetROI || 0) - Number(left.comparableNetROI || 0));
   const selected = plans.find(plan => plan.allowed) || plans[0] || null;
@@ -3932,7 +3946,11 @@ function singleCoinBaitReturnPlan(input, opportunity, bait, anchoredOpportunitie
       reward: singleCoinBaitOpportunityReward(currentBest),
       staminaCost: Number.isFinite(Number(currentBest.staminaCost)) ? Number(currentBest.staminaCost) : null
     } : null,
-    suppressionReason: selected.allowed ? '' : 'bait-plan-below-current-profit-margin'
+    suppressionReason: selected.allowed
+      ? ''
+      : (!selected.planThresholdEligible
+          ? 'bait-plan-below-profit-threshold'
+          : 'bait-plan-below-current-profit-margin')
   } : null;
 }
 
@@ -4065,6 +4083,9 @@ function buildSingleCoinBaitDecision(input, opportunity, stateful = {}, options 
     baitPlanReward: plan ? Number(plan.reward || 0) : null,
     baitPlanStaminaCost: plan ? Math.round(Number(plan.staminaCost || 0)) : null,
     baitPlanNetROI: plan ? Number(Number(plan.netROI || 0).toFixed(8)) : null,
+    planThresholdEligible: plan ? Boolean(plan.planThresholdEligible) : null,
+    planThresholdFloor: plan ? Number(Number(plan.thresholdFloor || 0).toFixed(8)) : null,
+    planRequiredNetROI: plan ? Number(Number(plan.requiredNetROI || 0).toFixed(8)) : null,
     evaluationOrigin: cloneJson(plan?.evaluationOrigin || continuation?.evaluationOrigin || {
       id: evaluationCoin.drop_id ?? evaluationCoin.id ?? profitCoinKey(evaluationCoin),
       x: numberOrNull(evaluationCoin.x),
@@ -4087,6 +4108,9 @@ function buildSingleCoinBaitDecision(input, opportunity, stateful = {}, options 
         baitPlanReward: enrichedSummary.baitPlanReward,
         baitPlanStaminaCost: enrichedSummary.baitPlanStaminaCost,
         baitPlanNetROI: enrichedSummary.baitPlanNetROI,
+        planThresholdEligible: enrichedSummary.planThresholdEligible,
+        planThresholdFloor: enrichedSummary.planThresholdFloor,
+        planRequiredNetROI: enrichedSummary.planRequiredNetROI,
         evaluationOrigin: enrichedSummary.evaluationOrigin,
         closeCommitmentRadiusCm,
         profitThresholdEligible: baitThresholdEligible,
@@ -4400,6 +4424,57 @@ function finalActionArbitrationHistoryLimit(options = {}) {
   return Math.max(4, Math.round(Number(options.finalActionArbitrationHistoryLimit ?? BROWSER_RUNTIME_DEFAULTS.finalActionArbitrationHistoryLimit ?? 24) || 24));
 }
 
+function actionTargetCurrentValidity(action, input = {}) {
+  const target = action?.target || null;
+  if (!target) return { valid: false, reason: 'previous-target-missing' };
+  const playerId = target.userId ?? target.user_id;
+  if (playerId !== undefined && playerId !== null && playerId !== '') {
+    const current = (input.visibleTargets || []).find(item => String(
+      item.userId ?? item.user_id ?? item.id ?? ''
+    ) === String(playerId));
+    if (!current) return { valid: false, reason: 'player-disappeared' };
+    const hp = Number(current.hp ?? current.knownHp);
+    if (current.alive === false || current.dead === true || (Number.isFinite(hp) && hp <= 0)) {
+      return { valid: false, reason: 'player-dead' };
+    }
+    const invulnerableMs = Number(current.invulnerableRemainingMs ?? current.invulnerable_remaining_ms);
+    if (current.invulnerable === true || (Number.isFinite(invulnerableMs) && invulnerableMs > 0)) {
+      return { valid: false, reason: 'player-invulnerable' };
+    }
+    return { valid: true, reason: 'player-visible' };
+  }
+
+  const targetId = target.id ?? target.drop_id ?? target.dropId ?? target.coinId ?? target.coin_id;
+  if (targetId === undefined || targetId === null || targetId === '') {
+    return { valid: false, reason: 'previous-target-identity-missing' };
+  }
+  const current = mergeProfitCoinCandidates([
+    ...(input.realtimeObservedCoins || []),
+    ...(input.snapshotVisibleCoins || [])
+  ]).find(item => String(item.id ?? item.drop_id ?? item.dropId ?? item.coinId ?? item.coin_id ?? '') === String(targetId));
+  if (!current || !(Number(current.amount || 0) > 0)) return { valid: false, reason: 'coin-disappeared' };
+  return { valid: true, reason: 'coin-visible' };
+}
+
+function annotateYieldableProfitDropout(action, arbitration, input = {}) {
+  const dropout = profitDropoutMetadata(action);
+  if (!dropout) return action;
+  const previousAction = arbitration?.lastAction || null;
+  const targetValidity = actionTargetCurrentValidity(previousAction, input);
+  return {
+    ...action,
+    profitDropout: {
+      ...(action.profitDropout || {}),
+      kind: dropout.kind,
+      yieldable: true,
+      targetValid: targetValidity.valid,
+      targetValidity: targetValidity.reason,
+      targetKey: arbitration?.lastFocus?.targetKey || '',
+      thresholdViolation: previousAction?.profitThresholdEligible === false
+    }
+  };
+}
+
 function annotateProfitActionThreshold(action, thresholdContext, options = {}) {
   if (!action || !thresholdContext?.active || String(action.band || '') !== 'profit') return action;
   if (action.kind === 'post-attack-drop-wait' || action.reason === 'post-attack-drop-wait') {
@@ -4457,7 +4532,8 @@ function applyBrowserlessFinalActionArbitration(action, stateful = {}, input = {
     arbitration.lastFocus = null;
     arbitration.lastSelectedAt = 0;
   }
-  return applyFinalActionArbitrationCore(action, arbitration, {
+  const annotatedAction = annotateYieldableProfitDropout(action, arbitration, input);
+  return applyFinalActionArbitrationCore(annotatedAction, arbitration, {
     nowMs: input?.nowMs,
     source: options.controlMode || 'browserless',
     holdMs: finalActionArbitrationHoldMs(options),
@@ -8818,6 +8894,10 @@ function buildOutsideCenterProfitWaitDecision(input, options = {}) {
     band: 'recover',
     reason: 'outside-center-profit-wait',
     stopMotion: true,
+    profitDropout: {
+      kind: 'outside-center-profit-wait',
+      yieldable: true
+    },
     self: summarizeTarget(input.self),
     centerActivity: {
       radiusCm: Math.round(radius),
@@ -9240,7 +9320,15 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       candidate(returnToCenterAction, 190, 'return-to-center-fallback'),
       candidate(opportunisticShotWaitAction, 200, 'opportunistic-shot-wait'),
       candidate(staminaBlockedWaitAction, 210, 'stamina-blocked-wait'),
-      candidate({ kind: 'wait', band: 'wait', reason: noCandidateWaitReason }, 999, 'no-candidate-wait')
+      candidate({
+        kind: 'wait',
+        band: 'wait',
+        reason: noCandidateWaitReason,
+        profitDropout: {
+          kind: noCandidateWaitReason,
+          yieldable: true
+        }
+      }, 999, 'no-candidate-wait')
     ].filter(Boolean);
     finalSelection = selectFinalActionCandidateCore(candidates);
     action = finalSelection?.action || action;
@@ -9791,6 +9879,7 @@ module.exports = {
   observeBrowserlessCoinPickups,
   recentCombatResidualThreatContinuityCore,
   recordAttackHistoryFromActionResult,
+  singleCoinBaitReturnPlan,
   summarizeBrowserlessDecision,
   snapshotSelfKillEvidence,
   summarizeNearbyForPanel,

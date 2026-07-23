@@ -7,7 +7,10 @@
  */
 
 const { ACTION_PRIORITY_BANDS, getActionPriorityBand, buildActionFocus } = require('./action-priority');
-const { applyFinalActionArbitration } = require('./action-arbitration');
+const {
+  applyFinalActionArbitration,
+  applyFinalActionArbitrationCore
+} = require('./action-arbitration');
 const { buildFinalActionCandidate, selectFinalActionCandidateCore } = require('./final-candidate-selection');
 const { quadraticInterceptCore } = require('./combat-aim');
 const {
@@ -2589,6 +2592,162 @@ function runStrategyModuleSelfTests() {
   results.push({
     name: 'arbitration-zero-cost-profit-roi-regression-fixtures-switch-immediately',
     passed: roiFixtureResults.every(Boolean)
+  });
+
+  const dropoutProfit = {
+    kind: 'seek-enemy',
+    band: 'profit',
+    reason: 'easy-kill-active-profit',
+    target: { userId: 31361, name: 'generic-target', hp: 94, alive: true, invulnerable: false },
+    profitThresholdEligible: true
+  };
+  const dropoutAction = kind => ({
+    kind: 'wait',
+    band: kind === 'outside-center-profit-wait' ? 'recover' : 'wait',
+    reason: kind,
+    stopMotion: true,
+    profitDropout: {
+      kind,
+      targetValid: true,
+      targetKey: '31361'
+    }
+  });
+  const dropoutState = {
+    lastAction: dropoutProfit,
+    lastFocus: buildActionFocus(dropoutProfit, { nowMs: 1000 }),
+    lastSelectedAt: 1000,
+    lastOverride: null,
+    history: []
+  };
+  const firstDropout = applyFinalActionArbitrationCore(
+    dropoutAction('outside-center-profit-wait'),
+    dropoutState,
+    { nowMs: 1100, holdMs: 1800 }
+  );
+  const repeatedDropout = applyFinalActionArbitrationCore(
+    dropoutAction('outside-center-profit-wait'),
+    dropoutState,
+    { nowMs: 2000, holdMs: 1800 }
+  );
+  const stableDropout = applyFinalActionArbitrationCore(
+    dropoutAction('outside-center-profit-wait'),
+    dropoutState,
+    { nowMs: 2901, holdMs: 1800 }
+  );
+  results.push({
+    name: 'arbitration-profit-dropout-requires-stable-confirmation-before-stop',
+    passed: firstDropout.held
+      && firstDropout.action.reason === 'easy-kill-active-profit'
+      && firstDropout.override.dropoutKind === 'outside-center-profit-wait'
+      && firstDropout.override.dropoutAgeMs === 0
+      && repeatedDropout.held
+      && repeatedDropout.override.dropoutAgeMs === 900
+      && !stableDropout.held
+      && stableDropout.action.reason === 'outside-center-profit-wait'
+      && dropoutState.profitDropout === null
+  });
+
+  const changedDropoutState = {
+    lastAction: dropoutProfit,
+    lastFocus: buildActionFocus(dropoutProfit, { nowMs: 1000 }),
+    lastSelectedAt: 1000,
+    lastOverride: null,
+    history: []
+  };
+  applyFinalActionArbitrationCore(
+    dropoutAction('outside-center-profit-wait'),
+    changedDropoutState,
+    { nowMs: 1100, holdMs: 1800 }
+  );
+  const changedDropout = applyFinalActionArbitrationCore(
+    dropoutAction('dynamic-profit-threshold-wait'),
+    changedDropoutState,
+    { nowMs: 1200, holdMs: 1800 }
+  );
+  results.push({
+    name: 'arbitration-profit-dropout-kind-change-does-not-extend-confirmation',
+    passed: !changedDropout.held
+      && changedDropout.action.reason === 'dynamic-profit-threshold-wait'
+  });
+
+  const resumedProfitState = {
+    lastAction: dropoutProfit,
+    lastFocus: buildActionFocus(dropoutProfit, { nowMs: 1000 }),
+    lastSelectedAt: 1000,
+    lastOverride: null,
+    history: []
+  };
+  applyFinalActionArbitrationCore(
+    dropoutAction('no-profitable-candidate'),
+    resumedProfitState,
+    { nowMs: 1100, holdMs: 1800 }
+  );
+  const resumedProfit = applyFinalActionArbitrationCore(
+    dropoutProfit,
+    resumedProfitState,
+    { nowMs: 1200, holdMs: 1800 }
+  );
+  const restartedDropout = applyFinalActionArbitrationCore(
+    dropoutAction('no-profitable-candidate'),
+    resumedProfitState,
+    { nowMs: 1300, holdMs: 1800 }
+  );
+  results.push({
+    name: 'arbitration-profit-return-clears-dropout-confirmation-state',
+    passed: !resumedProfit.held
+      && resumedProfitState.profitDropout?.startedAt === 1300
+      && restartedDropout.held
+      && restartedDropout.override.dropoutAgeMs === 0
+  });
+
+  const immediateDropoutFixtures = [
+    { action: { kind: 'leave', band: 'exit', reason: 'test-exit' }, previous: dropoutProfit },
+    { action: { kind: 'flee', band: 'safety', reason: 'test-threat', urgent: true }, previous: dropoutProfit },
+    { action: { kind: 'combat-live', band: 'combat', reason: 'test-combat' }, previous: dropoutProfit },
+    { action: { kind: 'recover', band: 'recover', reason: 'recover-hp' }, previous: dropoutProfit },
+    {
+      action: {
+        ...dropoutAction('no-profitable-candidate'),
+        profitDropout: { kind: 'no-profitable-candidate', targetValid: false }
+      },
+      previous: dropoutProfit
+    },
+    {
+      action: {
+        ...dropoutAction('dynamic-profit-threshold-wait'),
+        profitDropout: { kind: 'dynamic-profit-threshold-wait', targetValid: true, thresholdViolation: true }
+      },
+      previous: dropoutProfit
+    },
+    {
+      action: dropoutAction('no-profitable-candidate'),
+      previous: { ...dropoutProfit, target: { ...dropoutProfit.target, hp: 0, alive: false } }
+    },
+    {
+      action: dropoutAction('no-profitable-candidate'),
+      previous: { ...dropoutProfit, target: { ...dropoutProfit.target, invulnerable: true } }
+    },
+    {
+      action: dropoutAction('no-profitable-candidate'),
+      previous: { ...dropoutProfit, expired: true }
+    }
+  ];
+  results.push({
+    name: 'arbitration-profit-dropout-never-delays-safety-recovery-or-invalid-targets',
+    passed: immediateDropoutFixtures.every((fixture, index) => {
+      const fixtureState = {
+        lastAction: fixture.previous,
+        lastFocus: buildActionFocus(fixture.previous, { nowMs: 1000 }),
+        lastSelectedAt: 1000,
+        lastOverride: null,
+        history: []
+      };
+      const selected = applyFinalActionArbitrationCore(fixture.action, fixtureState, {
+        nowMs: 1100 + index,
+        holdMs: 1800
+      });
+      return !selected.held && selected.action.reason === fixture.action.reason;
+    })
   });
 
   // Test arbitration - exit never held
