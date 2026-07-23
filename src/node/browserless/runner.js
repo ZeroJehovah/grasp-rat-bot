@@ -1138,6 +1138,22 @@ function snapshotOfflineTransitionPatch(state, snapshotSafety, nowMs = Date.now(
   return patch;
 }
 
+function preLoginSnapshotSafetyAction(state = {}) {
+  const action = state?.runner?.currentAction || {};
+  const safetyReason = String(state?.loginPointSafety?.reason || '');
+  const reason = /pending-snapshot-safety/i.test(safetyReason)
+    ? safetyReason
+    : 'next-login-point-pending-snapshot-safety';
+  return {
+    kind: 'loop-wait',
+    band: 'recover',
+    reason,
+    delayMs: 0,
+    nextRunAt: '',
+    previousRunId: String(action.previousRunId || state?.stats?.lastExit?.runId || '')
+  };
+}
+
 async function runBrowserlessRunner(config, deps = {}) {
   const now = typeof deps.now === 'function' ? deps.now : Date.now;
   const sleep = typeof deps.sleep === 'function'
@@ -2699,7 +2715,12 @@ async function runBrowserlessRunner(config, deps = {}) {
     let stateBeforeCanary = null;
     try {
       stateBeforeCanary = readBrowserlessStateFile(stateFile);
-      liveState = stateBeforeCanary;
+      const preLoginUpdatedAt = new Date(now()).toISOString();
+      const preLoginPatch = {
+        runner: { currentAction: preLoginSnapshotSafetyAction(stateBeforeCanary) }
+      };
+      stateBeforeCanary = updateState(preLoginPatch, { updatedAt: preLoginUpdatedAt });
+      liveState = mergeLiveState(stateBeforeCanary, { ...preLoginPatch, updatedAt: preLoginUpdatedAt });
       activeRunKillConfirmations = [];
       const bypassPreLoginSafetyReason = isFirstBrowserlessLoginOfDay(stateBeforeCanary, now())
         ? 'daily-first-login-invulnerability'
@@ -3705,6 +3726,9 @@ async function runBrowserlessRunnerSelfTest() {
         }
       }
     }, panelOfflineTransitionAt);
+    const panelPreLoginCompact = buildCompactBrowserlessStatus(mergeState(panelOfflineTransitionState, {
+      runner: { currentAction: preLoginSnapshotSafetyAction(panelOfflineTransitionState) }
+    }), { nowMs: panelOfflineTransitionAt });
     const panelOfflineTransitionCompact = buildCompactBrowserlessStatus(
       mergeState(panelOfflineTransitionState, panelOfflineTransitionPatch),
       { nowMs: panelOfflineTransitionAt }
@@ -3939,6 +3963,9 @@ async function runBrowserlessRunnerSelfTest() {
           && panelOfflineTransitionCompact.stats.offline.lastExitReason === 'combat-low-hp-disadvantage-leave'
           && panelOfflineTransitionCompact.action.kind === 'loop-wait'
           && panelOfflineTransitionCompact.action.reason === 'login-point-safe-connecting'
+          && panelPreLoginCompact.game.inGame === false
+          && panelPreLoginCompact.action.kind === 'loop-wait'
+          && panelPreLoginCompact.action.reason === 'next-login-point-pending-snapshot-safety'
           && browserlessCoinPickupObservationTest.ok
           && browserlessSnapshotCoinPickupObservationTest.ok
           && highDropRankingTest
@@ -3984,6 +4011,7 @@ async function runBrowserlessRunnerSelfTest() {
           lastExitReason: panelOfflineTransitionCompact.stats.offline.lastExitReason,
           actionReason: panelOfflineTransitionCompact.action.reason
         },
+        preLoginActionReason: panelPreLoginCompact.action.reason,
         battleDistance: panelBattleCompact.battle.distance,
         battleMovementDistance: panelBattleCompact.battle.movementDistance,
         afkBattleMovementDistance: panelAfkBattleCompact.battle.movementDistance,
