@@ -1092,6 +1092,52 @@ function snapshotSafetyAllowsImmediateResume(snapshotSafety) {
   );
 }
 
+function snapshotSafetyConfirmsOffline(snapshotSafety) {
+  const summary = snapshotSafety?.response?.summary || {};
+  return Boolean(
+    summary.selfPresent === false
+      && summary.freshness?.ok === true
+      && !snapshotSafetyAllowsImmediateResume(snapshotSafety)
+  );
+}
+
+function snapshotOfflineTransitionPatch(state, snapshotSafety, nowMs = Date.now()) {
+  if (!snapshotSafetyConfirmsOffline(snapshotSafety)) return {};
+  const safetyReady = Boolean(snapshotSafety?.ok && snapshotSafety?.satisfied !== false);
+  const action = state?.runner?.currentAction || {};
+  const session = state?.stats?.currentSession || {};
+  const lastExit = state?.stats?.lastExit || {};
+  const enteredAtMs = Date.parse(String(session.enteredAt || ''));
+  const lastExitAtMs = Date.parse(String(lastExit.at || ''));
+  const lastExitMatchesSession = Boolean(
+    Number.isFinite(lastExitAtMs)
+      && (!Number.isFinite(enteredAtMs) || lastExitAtMs >= enteredAtMs)
+  );
+  const checkedAt = snapshotSafety?.checkedAt || new Date(nowMs).toISOString();
+  const patch = {
+    runner: {
+      currentAction: {
+        kind: 'loop-wait',
+        band: 'recover',
+        reason: safetyReady ? 'login-point-safe-connecting' : 'snapshot-safety-retry',
+        delayMs: Math.max(0, Number(action.delayMs || 0)),
+        nextRunAt: String(action.nextRunAt || ''),
+        previousRunId: String(action.previousRunId || lastExit.runId || '')
+      }
+    },
+    stats: browserlessStatsForOffline(state, {
+      at: lastExitMatchesSession ? lastExit.at : checkedAt,
+      reason: lastExitMatchesSession
+        ? (lastExit.reason || session.exitReason || 'snapshot-confirmed-offline')
+        : (session.exitReason || 'snapshot-confirmed-offline'),
+      runId: lastExitMatchesSession ? lastExit.runId : '',
+      nextRunAt: String(action.nextRunAt || ''),
+      delayMs: Math.max(0, Number(action.delayMs || 0))
+    }, { nowMs })
+  };
+  return patch;
+}
+
 async function runBrowserlessRunner(config, deps = {}) {
   const now = typeof deps.now === 'function' ? deps.now : Date.now;
   const sleep = typeof deps.sleep === 'function'
@@ -1918,7 +1964,7 @@ async function runBrowserlessRunner(config, deps = {}) {
     );
     const currentState = readBrowserlessStateFile(stateFile);
     const pendingResolution = pendingExitSnapshotResolution(currentState?.runner?.pendingExit, snapshotSafety);
-    const patch = {
+    const patch = mergeState(snapshotOfflineTransitionPatch(currentState, snapshotSafety, now()), {
       loginPointSafety: loginPointSafetyPatchFromSnapshot(snapshotSafety),
       ...((clearsConfirmedLeave || pendingResolution.cleared) ? {
         runner: {
@@ -1926,7 +1972,7 @@ async function runBrowserlessRunner(config, deps = {}) {
           ...(pendingResolution.cleared ? { pendingExit: null } : {})
         }
       } : {})
-    };
+    });
     const updatedAt = new Date(now()).toISOString();
     updateState(patch, { updatedAt });
     if (liveState) patchLiveState(patch, { updatedAt });
@@ -3603,6 +3649,66 @@ async function runBrowserlessRunnerSelfTest() {
       { nowMs: panelStatsStartedAt + 4000 }
     );
     const panelStatsCompact = buildCompactBrowserlessStatus(panelStatsState, { nowMs: panelStatsStartedAt + 4000 });
+    const panelOfflineTransitionAt = panelStatsStartedAt + 120000;
+    const panelOfflineTransitionState = {
+      session: { userId: 7, sessionToken: 'panel-self-test-token' },
+      runner: {
+        running: true,
+        currentAction: {
+          kind: 'combat-live',
+          band: 'combat',
+          reason: 'combat-attack',
+          target: { userId: 8, name: 'previous-enemy' }
+        }
+      },
+      current: {
+        self: { userId: 7, name: 'self', hp: 49 },
+        decision: {
+          kind: 'combat-live',
+          band: 'combat',
+          reason: 'combat-attack',
+          action: { kind: 'combat-live', reason: 'combat-attack', target: { userId: 8 } }
+        }
+      },
+      stats: {
+        currentSession: {
+          online: true,
+          sessionId: '7:panel-transition',
+          userId: 7,
+          enteredAt: new Date(panelStatsStartedAt).toISOString(),
+          lastSeenAt: new Date(panelStatsStartedAt + 30000).toISOString()
+        },
+        lastExit: {
+          at: new Date(panelStatsStartedAt + 60000).toISOString(),
+          reason: 'combat-low-hp-disadvantage-leave',
+          runId: 'panel-previous-run'
+        }
+      }
+    };
+    const panelOfflinePersistedState = mergeState(panelOfflineTransitionState, {
+      stats: browserlessStatsForOffline(panelOfflineTransitionState, {
+        at: new Date(panelStatsStartedAt + 60000).toISOString(),
+        reason: 'combat-low-hp-disadvantage-leave',
+        runId: 'panel-previous-run'
+      }, { nowMs: panelStatsStartedAt + 60000 })
+    });
+    const panelOfflineTransitionPatch = snapshotOfflineTransitionPatch(panelOfflinePersistedState, {
+      ok: true,
+      reason: 'safe',
+      satisfied: true,
+      checkedAt: new Date(panelOfflineTransitionAt).toISOString(),
+      response: {
+        summary: {
+          selfPresent: false,
+          freshness: { ok: true },
+          safety: { ok: true, reason: 'safe' }
+        }
+      }
+    }, panelOfflineTransitionAt);
+    const panelOfflineTransitionCompact = buildCompactBrowserlessStatus(
+      mergeState(panelOfflineTransitionState, panelOfflineTransitionPatch),
+      { nowMs: panelOfflineTransitionAt }
+    );
     const panelBattleCompact = buildCompactBrowserlessStatus({
       session: { userId: 7, sessionToken: 'panel-self-test-token' },
       runner: { running: true, currentAction: { kind: 'combat-live', target: { userId: 8, distance: 5600 } } },
@@ -3795,6 +3901,7 @@ async function runBrowserlessRunnerSelfTest() {
           && pageHtml.includes('id="lastExitPanel"')
           && pageHtml.includes("return '等待重连冷却时间'")
           && pageHtml.includes("return '等待登录点快照安全检查'")
+          && pageHtml.includes("if (reason === 'login-point-safe-connecting') return '登录点已安全，正在连接游戏'")
           && pageHtml.includes("if (online && !liveCombat) addRow(rowsOut, '原因', actionReasonDisplay(status), true)")
           && pageHtml.includes("const liveCombat = Boolean(realtimeOnline && (kind === 'combat-live' || action.kind === 'combat-live'))")
           && pageHtml.includes("'活动 ' + bool(target.active)")
@@ -3826,6 +3933,12 @@ async function runBrowserlessRunnerSelfTest() {
           && panelTwoCoinCompact.stats.today.coinsGained === 2
           && panelStatsCompact.stats.currentSession.coinsGained === 20
           && panelStatsCompact.stats.today.coinsGained === 20
+          && panelOfflineTransitionCompact.game.inGame === false
+          && panelOfflineTransitionCompact.stats.currentSession.online === false
+          && panelOfflineTransitionCompact.stats.currentSession.durationMs === 60000
+          && panelOfflineTransitionCompact.stats.offline.lastExitReason === 'combat-low-hp-disadvantage-leave'
+          && panelOfflineTransitionCompact.action.kind === 'loop-wait'
+          && panelOfflineTransitionCompact.action.reason === 'login-point-safe-connecting'
           && browserlessCoinPickupObservationTest.ok
           && browserlessSnapshotCoinPickupObservationTest.ok
           && highDropRankingTest
@@ -3865,6 +3978,12 @@ async function runBrowserlessRunnerSelfTest() {
         snapshotCoinPickupObservation: browserlessSnapshotCoinPickupObservationTest,
         highDropRanking: highDropRankingTest,
         staminaExhaustionPanel: staminaExhaustionPanelTest,
+        offlineTransition: {
+          online: panelOfflineTransitionCompact.stats.currentSession.online,
+          durationMs: panelOfflineTransitionCompact.stats.currentSession.durationMs,
+          lastExitReason: panelOfflineTransitionCompact.stats.offline.lastExitReason,
+          actionReason: panelOfflineTransitionCompact.action.reason
+        },
         battleDistance: panelBattleCompact.battle.distance,
         battleMovementDistance: panelBattleCompact.battle.movementDistance,
         afkBattleMovementDistance: panelAfkBattleCompact.battle.movementDistance,

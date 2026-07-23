@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.23.2';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.24.1';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function highDropRankValueCore(item) {
@@ -919,6 +919,7 @@ function renderBrowserlessWebPanel() {
       'learned-login-point-pending-snapshot-safety': '正在检查登录点安全',
       'imported-login-point-pending-snapshot-safety': '正在检查登录点安全',
       'next-login-point-pending-snapshot-safety': '等待下一轮登录点安全检查',
+      'login-point-safe-connecting': '登录点已安全，正在连接游戏',
       'manual-session-updated': '授权已更新，等待下一轮连接',
       'auth-token-invalid': '登录信息失效，需要重新授权',
       'unsafe-login-point': '登录点不安全',
@@ -962,6 +963,7 @@ function renderBrowserlessWebPanel() {
       'self-test': '测试',
       'login-point-bootstrap-failed': '登录点检查失败',
       'snapshot-safety-retry': '重新检查登录点安全',
+      'snapshot-confirmed-offline': '快照确认角色已离线',
       'in-game-snapshot-safety-retry': '可能仍在游戏中，快速重连',
       'unsupported-control-mode': '当前方式不支持',
       'unknown-error': '出现异常'
@@ -1463,6 +1465,7 @@ function renderBrowserlessWebPanel() {
       if (reconnectRemainingMs !== null && reconnectRemainingMs > 1000) return '等待重连冷却时间';
       const action = status.action || status.decision || {};
       const reason = String(action.reason || status.decision?.reason || '');
+      if (reason === 'login-point-safe-connecting') return '登录点已安全，正在连接游戏';
       const loginState = loginPointDisplay(status).state;
       if (/snapshot|login-point|prelogin|edge/i.test(reason) || loginState === 'pending') {
         return '等待登录点快照安全检查';
