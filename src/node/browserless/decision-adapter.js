@@ -9744,7 +9744,6 @@ function createBrowserlessDecisionAdapter(options = {}) {
         recentInvulnerableThreats: decisionState.recentInvulnerableThreats || {},
         easyKillApproach: decisionState.easyKillApproach || null,
         easyKillTargetSuppressions: decisionState.easyKillTargetSuppressions || {},
-        outsideCenterIdle: decisionState.outsideCenterIdle || null,
         fleeLock: decisionState.fleeLock || null,
         returnBlockLock: decisionState.returnBlockLock || null,
         returnBlockScan: decisionState.returnBlockScan || null

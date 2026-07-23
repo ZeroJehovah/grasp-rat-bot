@@ -22021,6 +22021,67 @@ async function runSelfTest() {
       want: 'false|post-attack-drop-wait-position|pending|true|1|true|true|1|true|true|1|true'
     },
     {
+      name: 'browserless realtime patch preserves worker-owned outside-center idle timer',
+      got: (async () => {
+        const options = {
+          ...buildBrowserlessRuntimeDefaults({}),
+          userId: 7,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          dynamicProfitThresholdEnabled: false,
+          browserlessCenterActivityRadiusCm: 100000,
+          browserlessOutsideCenterIdleExitMs: 180000
+        };
+        const mainAdapter = createBrowserlessDecisionAdapter(options);
+        mainAdapter.patchState({
+          outsideCenterIdle: {
+            active: true,
+            sessionId: '',
+            startedAt: 1000,
+            lastSeenAt: 1000,
+            timeoutMs: 180000
+          }
+        });
+        const realtimePatch = mainAdapter.getRealtimePersistenceState();
+        const worker = createBrowserlessDecisionWorker(options);
+        const self = {
+          entity_id: 1,
+          user_id: 7,
+          name: 'self',
+          x: 120000,
+          y: 0,
+          hp: 100,
+          max_hp: 100,
+          stamina_5s_remaining_milli: 10000,
+          stamina_5s_limit_milli: 10000
+        };
+        const state = tick => ({
+          userId: 7,
+          realtime: { tick, frameAgeMs: 0, self, entities: [self], bullets: [], coinDrops: [] },
+          fallback: { tick, frameAgeMs: 0, self, entities: [self], bullets: [], coinDrops: [], messages: [] },
+          command: null
+        });
+        try {
+          await worker.ready();
+          const first = await worker.decide(state(1), { ...options, nowMs: 1000 }, {}, realtimePatch);
+          const second = await worker.decide(state(2), { ...options, nowMs: 180999 }, {}, realtimePatch);
+          const third = await worker.decide(state(3), { ...options, nowMs: 181000 }, {}, realtimePatch);
+          return [
+            Object.prototype.hasOwnProperty.call(realtimePatch, 'outsideCenterIdle'),
+            first.decision.input.centerActivity.outsideIdle.ageMs,
+            second.decision.input.centerActivity.outsideIdle.ageMs,
+            third.decision.kind,
+            third.decision.reason,
+            third.decision.action.shouldLeave,
+            third.decision.input.centerActivity.outsideIdle.ageMs
+          ].join('|');
+        } finally {
+          await worker.close();
+        }
+      })(),
+      want: 'false|0|179999|leave|outside-center-idle-timeout-leave|true|180000'
+    },
+    {
       name: 'browserless local log store appends redacted UTC day files',
       got: withTempDirForTest(async dir => {
         let current = Date.UTC(2026, 6, 8, 1, 0, 0);
