@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.22.8';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.23.1';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function highDropRankValueCore(item) {
@@ -237,6 +237,7 @@ function renderBrowserlessWebPanel() {
     .panel-body{max-height:2400px;opacity:1;overflow:hidden;transition:max-height .28s ease,opacity .2s ease,margin-top .28s ease}
     .panel-collapsed>.panel-body{max-height:0;opacity:0;pointer-events:none;margin-top:0}
     #chatPanel .chat-log{max-height:300px;opacity:1;transition:max-height .28s ease,opacity .2s ease}
+    .panel-collapse-initializing .panel-head,.panel-collapse-initializing .panel-body,.panel-collapse-initializing #chatPanel .chat-log{transition:none!important}
     h2{font-size:11px;line-height:1.2;margin:0 0 8px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.05em}
     h3{font-size:11px;line-height:1.2;margin:0 0 6px;color:var(--muted);font-weight:700;letter-spacing:0}
     dl{display:grid;grid-template-columns:minmax(76px,auto) 1fr;gap:5px 9px;margin:0}
@@ -326,7 +327,7 @@ function renderBrowserlessWebPanel() {
     @media (max-width:520px){main{padding:10px}header{align-items:flex-start;flex-direction:column}}
   </style>
 </head>
-<body>
+<body class="panel-collapse-initializing">
   <main>
     <header>
       <h1>囤囤鼠历险记Bot</h1>
@@ -470,14 +471,13 @@ function renderBrowserlessWebPanel() {
     const isStaminaExhaustionExitReason = ${isStaminaExhaustionExitReasonCore.toString()};
     const WEB_PANEL_RELOAD_KEY = 'graspRatBrowserlessPanelReloadedVersion';
     const PANEL_COLLAPSE_KEY = 'graspRatBrowserlessPanelCollapsedV1';
-    const CHAT_KILL_COLLAPSE_KEY = 'graspRatBrowserlessChatKillsCollapsedV1';
     const AUTO_REFRESH_MS = 3000;
     let autoRefreshTimer = 0;
     let countdownTimer = 0;
     let refreshInFlight = null;
     let chatSendInFlight = false;
     let latestChatStatus = null;
-    let chatKillsCollapsed = readChatKillCollapseState();
+    let chatKillsCollapsed = true;
     let lastStatusReceivedAtMs = 0;
     let lastServerUpdatedAtMs = 0;
     let panelCollapseState = readPanelCollapseState();
@@ -2200,18 +2200,6 @@ function renderBrowserlessWebPanel() {
         localStorage.setItem(PANEL_COLLAPSE_KEY, JSON.stringify(panelCollapseState));
       } catch (_) {}
     }
-    function readChatKillCollapseState() {
-      try {
-        return localStorage.getItem(CHAT_KILL_COLLAPSE_KEY) !== 'false';
-      } catch (_) {
-        return true;
-      }
-    }
-    function persistChatKillCollapseState() {
-      try {
-        localStorage.setItem(CHAT_KILL_COLLAPSE_KEY, String(chatKillsCollapsed));
-      } catch (_) {}
-    }
     function syncChatKillToggle() {
       const button = document.getElementById('chatCollapseToggle');
       if (!button) return;
@@ -2581,7 +2569,6 @@ function renderBrowserlessWebPanel() {
     document.getElementById('chatCollapseToggle').addEventListener('click', event => {
       event.preventDefault();
       chatKillsCollapsed = !chatKillsCollapsed;
-      persistChatKillCollapseState();
       syncChatKillToggle();
       renderChat(latestChatStatus || {});
     });
@@ -2608,6 +2595,11 @@ function renderBrowserlessWebPanel() {
     window.addEventListener('pagehide', stopAutoRefresh);
     initPanelCollapse();
     syncChatKillToggle();
+    // Apply persisted panel classes before enabling transitions so refreshes do not animate.
+    document.body.offsetHeight;
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => document.body.classList.remove('panel-collapse-initializing'));
+    });
     syncAutoRefreshForVisibility();
   </script>
 </body>
