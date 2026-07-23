@@ -55,6 +55,7 @@ const {
 } = require('./chat-service');
 const {
   BROWSER_RUNTIME_DEFAULTS,
+  buildBrowserlessRealtimeControlDecision,
   decisionStatePatch,
   observeBrowserlessCoinPickups,
   snapshotSelfKillEvidence,
@@ -3391,6 +3392,92 @@ async function runBrowserlessRunnerSelfTest() {
       presentFirst: routeRowsText(routeRowsWhenFirstPresent),
       previewOnly: routeRowsText(previewRows)
     };
+    const fleePanelInput = {
+      self: { x: 0, y: 0 },
+      visibleTargets: [
+        { userId: 21557, name: 'Pyro', x: 10000, y: 0, distance: 10000, hp: 100, active: true, invulnerable: true },
+        { userId: 34711, name: 'xuanze00', x: 5000, y: 0, distance: 5000, hp: 4, active: true }
+      ],
+      avoidanceThreats: [{ userId: 21557, name: 'Pyro', x: 10000, y: 0, distance: 10000, hp: 100, active: true, invulnerable: true }],
+      activeThreats: [],
+      firingThreats: [],
+      snapshotActiveThreats: [],
+      afkTargets: [],
+      easyKillTargets: []
+    };
+    const fleePanelRows = summarizeNearbyForPanel(
+      fleePanelInput,
+      { kind: 'flee', target: { userId: 21557, name: 'Pyro' } },
+      { target: { userId: 34711, name: 'xuanze00' } },
+      { globalCoinMaxDistance: 50000 }
+    ).p;
+    const nearbyFleeTargetPanelTest = {
+      ok: fleePanelRows.find(row => row[0] === 'Pyro')?.[9] === '21557'
+        && fleePanelRows.find(row => row[0] === 'xuanze00')?.[9] === '34711',
+      rows: fleePanelRows.map(row => `${row[0]}:${row[6]}:${row[9]}`).join(',')
+    };
+    const realtimeLootFixture = (selfHp, includeCoin) => {
+      const nowMs = Date.UTC(2026, 6, 23, 1, 29, 48);
+      return buildBrowserlessRealtimeControlDecision({
+        userId: 28886,
+        realtime: {
+          tick: 100,
+          receivedAtMs: nowMs,
+          frameAgeMs: 0,
+          self: {
+            user_id: 28886,
+            name: 'self',
+            x: 0,
+            y: 0,
+            hp: selfHp,
+            stamina_5s: 8000,
+            stamina_1h: 2000000,
+            stamina_1d: 10000000,
+            current_join_mode: 'Active'
+          },
+          entities: [{
+            user_id: 21557,
+            name: 'Pyro',
+            x: 10000,
+            y: 0,
+            hp: 100,
+            stamina_5s: 8000,
+            stamina_1h: 2000000,
+            stamina_1d: 10000000,
+            current_join_mode: 'Active',
+            invulnerable: true,
+            invulnerable_remaining_ms: 120000
+          }],
+          bullets: []
+        },
+        fallback: {
+          tick: 99,
+          receivedAtMs: nowMs - 50,
+          frameAgeMs: 50,
+          entities: [],
+          coinDrops: includeCoin ? [{ id: 5422, x: 5000, y: 0, amount: 22 }] : []
+        }
+      }, {}, {
+        nowMs,
+        controlMode: 'profit-live',
+        combatEnabled: true,
+        attackRange: 14500,
+        globalCoinMaxDistance: 50000,
+        realtimeLootMaxDistanceCm: 14500,
+        activeAvoidMaxDistance: 25000,
+        profitLiveThreatExitRange: 14500
+      });
+    };
+    const healthyLootRealtimeDecision = realtimeLootFixture(100, true);
+    const lowHpLootRealtimeDecision = realtimeLootFixture(49, true);
+    const realtimeLootSafetyArbitrationTest = {
+      ok: healthyLootRealtimeDecision.kind === 'coin'
+        && healthyLootRealtimeDecision.action?.target?.id === 5422
+        && lowHpLootRealtimeDecision.kind === 'flee'
+        && lowHpLootRealtimeDecision.reason === 'avoid-invulnerable-target',
+      healthy: { kind: healthyLootRealtimeDecision.kind, reason: healthyLootRealtimeDecision.reason },
+      lowHp: { kind: lowHpLootRealtimeDecision.kind, reason: lowHpLootRealtimeDecision.reason }
+    };
     const pickupObservationState = {};
     const pickupObservationAt = Date.parse('2026-07-20T00:00:00.000Z');
     const pickupBefore = observeBrowserlessCoinPickups({
@@ -3725,6 +3812,8 @@ async function runBrowserlessRunnerSelfTest() {
           && pageHtml.includes('if (battle && !staminaExhausted)')
           && pageHtml.includes('grid-column:2;grid-row:2')
           && pageHtml.includes("setText(prefix + 'Hp', hp === null ? '--' : integer(hp))")
+          && pageHtml.includes('const fleeTargetId = targetIdentity(status.action?.target);')
+          && pageHtml.includes('const isFleeTarget = fleeTarget && selected')
           && pageHtml.includes("{ text: unit(actor?.stamina5s), className: battleStaminaClass(actor) }")
           && pageHtml.includes("{ text: spentStaminaUnit(currentSession.staminaSpentMs), className: 'ok' }")
           && pageHtml.includes("{ text: integer(currentSession.kills), className: 'bad' }")
@@ -3759,6 +3848,8 @@ async function runBrowserlessRunnerSelfTest() {
           && groupedBlockingFactors[0].reasons.length === 2
           && panelCombatInitial.movementDistance === 0
           && panelCombatMoved.movementDistance === 500
+          && nearbyFleeTargetPanelTest.ok
+          && realtimeLootSafetyArbitrationTest.ok
         ),
         selfDropRange: {
           initial: panelStatsCompact.stats.today.initialDrop,
@@ -3777,7 +3868,9 @@ async function runBrowserlessRunnerSelfTest() {
         battleDistance: panelBattleCompact.battle.distance,
         battleMovementDistance: panelBattleCompact.battle.movementDistance,
         afkBattleMovementDistance: panelAfkBattleCompact.battle.movementDistance,
-        measuredMovementDistance: panelCombatMoved.movementDistance
+        measuredMovementDistance: panelCombatMoved.movementDistance,
+        nearbyFleeTargetPanel: nearbyFleeTargetPanelTest,
+        realtimeLootSafetyArbitration: realtimeLootSafetyArbitrationTest
       };
       statusServerChatTest = {
         ok: Boolean(

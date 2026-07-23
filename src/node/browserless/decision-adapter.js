@@ -1631,7 +1631,7 @@ function refreshRealtimeSnapshotObservation(state, self, stateful = {}, options 
       0,
       player.mode,
       player.fullStamina5s ? 1 : 0,
-      0,
+      String(player.key),
       player.afk ? 1 : 0,
       player.afk && player.afkGreen ? 1 : 0,
       foldAsLowValueAfk ? 1 : 0
@@ -2562,10 +2562,6 @@ function summarizeNearbyForPanel(input, action, combat, options = {}, singleCoin
         sameCoinRadiusCm: options.singleCoinBaitSameCoinRadiusCm ?? BROWSER_RUNTIME_DEFAULTS.singleCoinBaitSameCoinRadiusCm
       }) ? 1 : 0
     ]);
-  const selectableAfkTargetIds = new Set((input.afkTargets || [])
-    .filter(target => !afkOpportunityBlockedByStaminaCooldown(target, options))
-    .map(panelPlayerTargetKey)
-    .filter(Boolean));
   const threatTargetIds = new Set((input.activeThreats || [])
     .concat(input.firingThreats || [], input.avoidanceThreats || [], input.snapshotActiveThreats || [])
     .map(panelPlayerTargetKey)
@@ -2592,7 +2588,6 @@ function summarizeNearbyForPanel(input, action, combat, options = {}, singleCoin
       const fullStamina5s = hasFull5sStamina(target, options);
       const targetKey = panelPlayerTargetKey(target);
       const selected = targetPlayerSelected(action, combat, target);
-      const afkSelectable = selectableAfkTargetIds.has(targetKey);
       const afk = Boolean(
         fullStamina5s
           && target.alive !== false
@@ -2622,7 +2617,7 @@ function summarizeNearbyForPanel(input, action, combat, options = {}, singleCoin
         selected ? 1 : 0,
         String(target.current_join_mode || target.mode || target.joined || target.profitMetadataMode || '') || null,
         fullStamina5s ? 1 : 0,
-        afkSelectable ? 1 : 0,
+        targetKey,
         afk ? 1 : 0,
         afk && afkDisplayGreen(target, options) ? 1 : 0,
         foldAsLowValueAfk ? 1 : 0
@@ -7420,7 +7415,9 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
     || predictedThreatExitAction
     || pursuitLeaveAction
     || lowHpRecoveryThreatExitAction
-    || safetyAction
+    || (healthyLootPriority && safetyAction?.reason === 'avoid-invulnerable-target'
+      ? null
+      : safetyAction)
     || lootControl.action
     || closePressureCombatAction
     || defensiveCombatAction
