@@ -27461,7 +27461,46 @@ async function runSelfTest() {
           compact.stats.currentSession.coinsGained
         ].join('|');
       })(),
-      want: '68|64|69|69'
+      want: '68|69|69|69'
+    },
+    {
+      name: 'browserless exact pickup replaces one-coin Drop parity overestimate',
+      got: (() => {
+        const state = {
+          session: { userId: 7, sessionToken: 'state-secret-token' },
+          runner: { running: true, mode: 'profit-live', controlMode: 'profit-live' }
+        };
+        const decision = (at, drop, coinPickups = []) => ({
+          at: new Date(at).toISOString(),
+          input: {
+            self: { userId: 7, name: 'self', drop, dropKnown: true },
+            stamina: {},
+            coinPickups,
+            selfKillEvidence: []
+          }
+        });
+        const start = Date.parse('2026-07-23T16:26:00.000Z');
+        state.stats = browserlessStatsForDecision(state, decision(start, 3940), { nowMs: start });
+        state.stats.currentSession.coinsGained = 10;
+        state.stats.currentSession.dropCalibratedCoins = 10;
+        state.stats = browserlessStatsForDecision(
+          state,
+          decision(start + 1000, 3946),
+          { nowMs: start + 1000 }
+        );
+        const provisionalCoins = state.stats.currentSession.coinsGained;
+        state.stats = browserlessStatsForDecision(
+          state,
+          decision(start + 2000, 3946, [{ key: 'id:365', amount: 11, at: start + 2000 }]),
+          { nowMs: start + 2000 }
+        );
+        return [
+          provisionalCoins,
+          state.stats.currentSession.dropCalibratedCoins,
+          state.stats.currentSession.coinsGained
+        ].join('|');
+      })(),
+      want: '22|21|21'
     },
     {
       name: 'browserless today stamina reconciles cross-session gaps from 1d remaining',

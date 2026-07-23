@@ -3619,6 +3619,93 @@ async function runBrowserlessRunnerSelfTest() {
       amount: snapshotPickupAfter[0]?.amount ?? null,
       reason: snapshotPickupAfter[0]?.reason || ''
     };
+    const fastSnapshotPickupState = {};
+    const fastSnapshotPickupOptions = {
+      controlMode: 'profit-live',
+      combatEnabled: true,
+      attackRange: 14500,
+      globalCoinMaxDistance: 50000,
+      realtimeLootMaxDistanceCm: 14500,
+      highValueCoinPriorityAmount: 10,
+      coinCollectedConfirmDistance: 1800
+    };
+    const fastSnapshotPickupFrame = (atMs, tick, x, drop, coinDrops) => ({
+      userId: 28886,
+      realtime: {
+        tick,
+        receivedAtMs: atMs,
+        frameAgeMs: 0,
+        self: {
+          user_id: 28886,
+          name: 'self',
+          x,
+          y: 0,
+          hp: 100,
+          death_drop_coins: drop,
+          stamina_5s: 8000,
+          stamina_1h: 2000000,
+          stamina_1d: 10000000,
+          current_join_mode: 'Active'
+        },
+        entities: [],
+        bullets: []
+      },
+      fallback: {
+        tick: tick - 1,
+        receivedAtMs: atMs,
+        frameAgeMs: 0,
+        entities: [],
+        coinDrops
+      }
+    });
+    const fastSnapshotPickupAt = Date.parse('2026-07-23T16:30:00.000Z');
+    const fastSnapshotPickupVisible = buildBrowserlessRealtimeControlDecision(
+      fastSnapshotPickupFrame(
+        fastSnapshotPickupAt,
+        35709,
+        0,
+        3972,
+        [{ id: 424, x: 1000, y: 0, amount: 15 }]
+      ),
+      fastSnapshotPickupState,
+      { ...fastSnapshotPickupOptions, nowMs: fastSnapshotPickupAt }
+    );
+    const fastSnapshotPickupGone = buildBrowserlessRealtimeControlDecision(
+      fastSnapshotPickupFrame(fastSnapshotPickupAt + 2000, 35750, 1000, 3979, []),
+      fastSnapshotPickupState,
+      { ...fastSnapshotPickupOptions, nowMs: fastSnapshotPickupAt + 2000 }
+    );
+    const fastSnapshotPickupStatsState = {
+      session: { userId: 28886, sessionToken: 'panel-self-test-token' },
+      runner: { running: true, mode: 'profit-live', controlMode: 'profit-live' }
+    };
+    fastSnapshotPickupStatsState.stats = browserlessStatsForDecision(
+      fastSnapshotPickupStatsState,
+      fastSnapshotPickupVisible,
+      { nowMs: fastSnapshotPickupAt }
+    );
+    fastSnapshotPickupStatsState.stats.currentSession.coinsGained = 74;
+    fastSnapshotPickupStatsState.stats.currentSession.pickupObservedCoins = 27;
+    fastSnapshotPickupStatsState.stats.currentSession.dropCalibratedCoins = 74;
+    fastSnapshotPickupStatsState.stats = browserlessStatsForDecision(
+      fastSnapshotPickupStatsState,
+      fastSnapshotPickupGone,
+      { nowMs: fastSnapshotPickupAt + 2000 }
+    );
+    const fastSnapshotPickupEvidence = fastSnapshotPickupGone.input?.coinPickups || [];
+    const browserlessFastSnapshotPickupObservationTest = {
+      ok: fastSnapshotPickupEvidence.length === 1
+        && fastSnapshotPickupEvidence[0].key === 'id:424'
+        && fastSnapshotPickupEvidence[0].amount === 15
+        && fastSnapshotPickupEvidence[0].reason === 'realtime-snapshot-coin-disappeared-near-path'
+        && fastSnapshotPickupStatsState.stats.currentSession.dropCalibratedCoins === 89
+        && fastSnapshotPickupStatsState.stats.currentSession.coinsGained === 89,
+      evidenceCount: fastSnapshotPickupEvidence.length,
+      amount: fastSnapshotPickupEvidence[0]?.amount ?? null,
+      reason: fastSnapshotPickupEvidence[0]?.reason || '',
+      dropCalibratedCoins: fastSnapshotPickupStatsState.stats.currentSession.dropCalibratedCoins,
+      coinsGained: fastSnapshotPickupStatsState.stats.currentSession.coinsGained
+    };
     const highDropRankingTest = [
       ['self', 500, 700, 600],
       ['other', 500, 650, 650]
@@ -3968,6 +4055,7 @@ async function runBrowserlessRunnerSelfTest() {
           && panelPreLoginCompact.action.reason === 'next-login-point-pending-snapshot-safety'
           && browserlessCoinPickupObservationTest.ok
           && browserlessSnapshotCoinPickupObservationTest.ok
+          && browserlessFastSnapshotPickupObservationTest.ok
           && highDropRankingTest
           && staminaExhaustionPanelTest
           && panelBattleCompact.battle.distance === 5600
@@ -4003,6 +4091,7 @@ async function runBrowserlessRunnerSelfTest() {
         },
         coinPickupObservation: browserlessCoinPickupObservationTest,
         snapshotCoinPickupObservation: browserlessSnapshotCoinPickupObservationTest,
+        fastSnapshotCoinPickupObservation: browserlessFastSnapshotPickupObservationTest,
         highDropRanking: highDropRankingTest,
         staminaExhaustionPanel: staminaExhaustionPanelTest,
         offlineTransition: {

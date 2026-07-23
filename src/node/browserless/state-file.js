@@ -107,6 +107,8 @@ function defaultBrowserlessStats() {
       pickupObservedCoins: 0,
       dropCalibratedCoins: 0,
       coinPickupKeys: [],
+      pendingCoinPickupCalibration: null,
+      pendingDropCalibration: null,
       dropResetCount: 0,
       lastStamina1dRemaining: null,
       lastStamina1dLimit: null,
@@ -391,6 +393,20 @@ function normalizeSessionCoinPickupKeys(value) {
     .slice(-300);
 }
 
+function normalizePendingCoinCalibration(value) {
+  if (!value || typeof value !== 'object') return null;
+  const amount = Math.max(0, Math.round(Number(value.amount || 0) || 0));
+  const at = compactNumber(value.at);
+  if (!(amount > 0) || at === null) return null;
+  return {
+    amount,
+    at,
+    startedAt: compactNumber(value.startedAt) ?? at,
+    previousCoinsGained: Math.max(0, Math.round(Number(value.previousCoinsGained || 0) || 0)),
+    previousCalibratedCoins: Math.max(0, Math.round(Number(value.previousCalibratedCoins || 0) || 0))
+  };
+}
+
 function normalizeBrowserlessStats(stats, rawStats = stats) {
   const inputKillAccountingVersion = Number(rawStats?.killAccountingVersion || 0);
   const inputCoinAccountingVersion = Number(rawStats?.coinAccountingVersion || 0);
@@ -439,6 +455,8 @@ function normalizeBrowserlessStats(stats, rawStats = stats) {
       ? sessionCoinsGained
       : Math.max(0, Math.round(Number(session.dropCalibratedCoins || 0) || 0)),
     coinPickupKeys: normalizeSessionCoinPickupKeys(session.coinPickupKeys),
+    pendingCoinPickupCalibration: normalizePendingCoinCalibration(session.pendingCoinPickupCalibration),
+    pendingDropCalibration: normalizePendingCoinCalibration(session.pendingDropCalibration),
     dropResetCount: Math.max(0, Math.round(Number(session.dropResetCount || 0) || 0)),
     lastStamina1dRemaining: compactNumber(session.lastStamina1dRemaining),
     lastStamina1dLimit: compactNumber(session.lastStamina1dLimit),
@@ -700,7 +718,7 @@ function sessionCoinUpperBound(session) {
   return calibrated + lifecycleAllowance;
 }
 
-function updateBrowserlessStatsSessionCoinPickups(session, decision, nowMs, previousCoinsGained = null) {
+function updateBrowserlessStatsSessionCoinPickups(session, decision, nowMs, previousCoinsGained = null, dropTransition = {}) {
   const memoryMs = 60000;
   const duplicateWindowMs = 5000;
   const pickupKeys = normalizeSessionCoinPickupKeys(session.coinPickupKeys)
@@ -714,6 +732,69 @@ function updateBrowserlessStatsSessionCoinPickups(session, decision, nowMs, prev
     added += pickup.amount;
   }
   session.coinPickupKeys = pickupKeys.slice(-300);
+  const dropCalibrationAdded = Math.max(0, Math.round(Number(dropTransition.added || 0) || 0));
+  const previousDropCalibratedCoins = Math.max(
+    0,
+    Math.round(Number(dropTransition.previousCalibratedCoins || 0) || 0)
+  );
+  const calibrationMemoryMs = 5000;
+  const freshPending = value => {
+    const normalized = normalizePendingCoinCalibration(value);
+    return normalized && nowMs - normalized.at <= calibrationMemoryMs ? normalized : null;
+  };
+  const mergePending = (earlier, later) => {
+    if (!earlier) return later;
+    if (!later) return earlier;
+    return {
+      amount: earlier.amount + later.amount,
+      at: Math.max(earlier.at, later.at),
+      startedAt: Math.min(earlier.startedAt, later.startedAt),
+      previousCoinsGained: earlier.startedAt <= later.startedAt
+        ? earlier.previousCoinsGained
+        : later.previousCoinsGained,
+      previousCalibratedCoins: earlier.startedAt <= later.startedAt
+        ? earlier.previousCalibratedCoins
+        : later.previousCalibratedCoins
+    };
+  };
+  const currentPickup = added > 0 ? {
+    amount: added,
+    at: nowMs,
+    startedAt: nowMs,
+    previousCoinsGained: previousCoinsGained === null
+      ? Math.max(0, Math.round(Number(session.coinsGained || 0) || 0))
+      : Math.max(0, Math.round(Number(previousCoinsGained) || 0)),
+    previousCalibratedCoins: previousDropCalibratedCoins
+  } : null;
+  const currentDrop = dropCalibrationAdded > 0 ? {
+    amount: dropCalibrationAdded,
+    at: nowMs,
+    startedAt: nowMs,
+    previousCoinsGained: currentPickup?.previousCoinsGained
+      ?? Math.max(0, Math.round(Number(previousCoinsGained || 0) || 0)),
+    previousCalibratedCoins: previousDropCalibratedCoins
+  } : null;
+  const pickupCandidate = mergePending(freshPending(session.pendingCoinPickupCalibration), currentPickup);
+  const dropCandidate = mergePending(freshPending(session.pendingDropCalibration), currentDrop);
+  const matchedCalibration = pickupCandidate && dropCandidate
+    && Math.abs(pickupCandidate.amount - dropCandidate.amount) <= 1;
+  let matchedCoinsCandidate = null;
+  if (matchedCalibration) {
+    // A self Drop step is a two-coin estimate whose parity can be one coin
+    // above or below the real pickup. Pair nearby asynchronous observations
+    // in either order and let exact, de-duplicated disappearance evidence
+    // replace the estimate for that transition.
+    session.dropCalibratedCoins = dropCandidate.previousCalibratedCoins + pickupCandidate.amount;
+    const exactBase = dropCandidate.startedAt <= pickupCandidate.startedAt
+      ? dropCandidate.previousCoinsGained
+      : pickupCandidate.previousCoinsGained;
+    matchedCoinsCandidate = exactBase + pickupCandidate.amount;
+    session.pendingCoinPickupCalibration = null;
+    session.pendingDropCalibration = null;
+  } else {
+    session.pendingCoinPickupCalibration = pickupCandidate;
+    session.pendingDropCalibration = dropCandidate;
+  }
   const upperBound = sessionCoinUpperBound(session);
   if (added > 0) {
     // Keep explicit pickup increments relative to the displayed total. The
@@ -724,6 +805,9 @@ function updateBrowserlessStatsSessionCoinPickups(session, decision, nowMs, prev
       : Math.max(0, Math.round(Number(previousCoinsGained) || 0));
     session.pickupObservedCoins = Math.max(0, Math.round(Number(session.pickupObservedCoins || 0) + added));
     session.coinsGained = Math.max(pickupBase + added, session.pickupObservedCoins);
+  }
+  if (matchedCoinsCandidate !== null) {
+    session.coinsGained = Math.max(matchedCoinsCandidate, session.pickupObservedCoins);
   }
   const reconciledCoins = Math.max(
     Math.max(0, Math.round(Number(session.coinsGained || 0) || 0)),
@@ -756,8 +840,16 @@ function updateBrowserlessStatsSession(session, decision, self, stamina, nowMs) 
   session.exitedAt = '';
   session.exitReason = '';
   const previousCoinsGained = Math.max(0, Math.round(Number(session.coinsGained || 0) || 0));
+  const previousDropCalibratedCoins = Math.max(0, Math.round(Number(session.dropCalibratedCoins || 0) || 0));
   updateBrowserlessStatsSessionDrop(session, self);
-  updateBrowserlessStatsSessionCoinPickups(session, decision, nowMs, previousCoinsGained);
+  const dropCalibrationAdded = Math.max(
+    0,
+    Math.round(Number(session.dropCalibratedCoins || 0) || 0) - previousDropCalibratedCoins
+  );
+  updateBrowserlessStatsSessionCoinPickups(session, decision, nowMs, previousCoinsGained, {
+    added: dropCalibrationAdded,
+    previousCalibratedCoins: previousDropCalibratedCoins
+  });
   updateBrowserlessStatsSessionStamina(session, stamina, self);
   const evidence = ensureSessionKillBaseline(session, decision);
   const baselineKeys = new Set(Array.isArray(session.killBaselineKeys) ? session.killBaselineKeys : []);

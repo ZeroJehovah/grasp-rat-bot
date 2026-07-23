@@ -1642,6 +1642,12 @@ function refreshRealtimeSnapshotObservation(state, self, stateful = {}, options 
   });
   const observedAtMs = Number(fallback.receivedAtMs || 0)
     || Math.max(0, nowMs - Math.max(0, Number(fallback.frameAgeMs || 0)));
+  rememberRealtimeSnapshotCoinPickups({
+    identity,
+    observedAtMs,
+    self,
+    coins: priorityNearbyCoins
+  }, stateful, options);
   const observation = {
     identity,
     tick: numberOrNull(fallback.tick),
@@ -2640,6 +2646,8 @@ function topItems(items, mapper, limit = 5) {
 
 const SNAPSHOT_COIN_PICKUP_MEMORY_MS = 30000;
 const SNAPSHOT_COIN_PICKUP_PATH_LIMIT = 48;
+const REALTIME_SNAPSHOT_COIN_PICKUP_MEMORY_MS = 60000;
+const REALTIME_SNAPSHOT_COIN_PICKUP_LIMIT = 80;
 
 function coinPickupSelfPoint(self, nowMs) {
   const x = numberOrNull(self?.x);
@@ -2674,6 +2682,53 @@ function coinPickupEvidence(matches, nowMs, reason) {
     seen.add(key);
     return { key, amount, at: nowMs, reason };
   }).filter(Boolean);
+}
+
+function rememberRealtimeSnapshotCoinPickups(observation, stateful = {}, options = {}) {
+  if (!observation?.self || !observation?.identity) return [];
+  const nowMs = Number(observation.observedAtMs || Date.now());
+  const currentSnapshot = buildNativeCoinSnapshotCore(observation.coins || [], { nowMs }).slice(-160);
+  const previous = stateful.realtimeSnapshotCoinPickupObservation || null;
+  if (previous?.identity === observation.identity) return [];
+  const confirmDistance = options.coinCollectedConfirmDistance
+    ?? BROWSER_RUNTIME_DEFAULTS.coinCollectedConfirmDistance;
+  const pickups = previous
+    ? pickIncidentalCoinPickupsCore(previous.coins, currentSnapshot, observation.self, previous.self, {
+        nowMs,
+        incidentalCoinPickupMemoryMs: SNAPSHOT_COIN_PICKUP_MEMORY_MS,
+        coinCollectedConfirmDistance: confirmDistance
+      })
+    : [];
+  stateful.realtimeSnapshotCoinPickupObservation = {
+    identity: observation.identity,
+    at: nowMs,
+    self: coinPickupSelfPoint(observation.self, nowMs),
+    coins: currentSnapshot
+  };
+  const evidence = coinPickupEvidence(
+    pickups,
+    nowMs,
+    'realtime-snapshot-coin-disappeared-near-path'
+  );
+  const retained = (Array.isArray(stateful.realtimeSnapshotCoinPickups)
+    ? stateful.realtimeSnapshotCoinPickups
+    : [])
+    .filter(item => nowMs - Number(item?.at || 0) <= REALTIME_SNAPSHOT_COIN_PICKUP_MEMORY_MS);
+  for (const item of evidence) {
+    if (retained.some(existing => existing.key === item.key && Number(existing.at) === Number(item.at))) continue;
+    retained.push(item);
+  }
+  stateful.realtimeSnapshotCoinPickups = retained.slice(-REALTIME_SNAPSHOT_COIN_PICKUP_LIMIT);
+  return evidence;
+}
+
+function recentRealtimeSnapshotCoinPickups(stateful = {}, nowMs = Date.now()) {
+  const retained = (Array.isArray(stateful.realtimeSnapshotCoinPickups)
+    ? stateful.realtimeSnapshotCoinPickups
+    : [])
+    .filter(item => Number(nowMs) - Number(item?.at || 0) <= REALTIME_SNAPSHOT_COIN_PICKUP_MEMORY_MS);
+  stateful.realtimeSnapshotCoinPickups = retained.slice(-REALTIME_SNAPSHOT_COIN_PICKUP_LIMIT);
+  return stateful.realtimeSnapshotCoinPickups;
 }
 
 function observeBrowserlessCoinPickups(input, stateful = {}, options = {}) {
@@ -7375,6 +7430,9 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
   }
   stageTimings.input = performance.now() - stageStarted;
   stageStarted = performance.now();
+  const coinPickups = recentRealtimeSnapshotCoinPickups(stateful, input.nowMs);
+  stageTimings.coinPickups = performance.now() - stageStarted;
+  stageStarted = performance.now();
   observePostAttackCoinBaseline(input, stateful, options);
   stageTimings.postAttackCoinBaseline = performance.now() - stageStarted;
   stageStarted = performance.now();
@@ -7542,6 +7600,7 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
       stamina: input.stamina,
       realtime: input.realtime,
       nearby: realtimeNearbyObservationSummary(input, combat, lootControl.assessment, options),
+      coinPickups: topItems(coinPickups, item => item, 20),
       selfKillEvidence: input.realtimeSnapshotObservation?.selfKillEvidence || [],
       postKillSettlement,
       loot: lootControl.summary,
