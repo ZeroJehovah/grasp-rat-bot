@@ -27059,6 +27059,42 @@ async function runSelfTest() {
       want: '10|20|40|1|40|40|100|110|20'
     },
     {
+      name: 'browserless stats add explicit pickup to displayed calibration floor',
+      got: (() => {
+        const state = {
+          session: { userId: 7, sessionToken: 'state-secret-token' },
+          runner: { running: true, mode: 'profit-live', controlMode: 'profit-live' }
+        };
+        const decision = (at, drop, coinPickups = []) => ({
+          at: new Date(at).toISOString(),
+          input: {
+            self: { userId: 7, name: 'self', drop, dropKnown: true },
+            stamina: {},
+            coinPickups,
+            selfKillEvidence: []
+          }
+        });
+        const start = Date.parse('2026-07-23T00:00:00.000Z');
+        state.stats = browserlessStatsForDecision(state, decision(start, 100), { nowMs: start });
+        state.stats.currentSession.pickupObservedCoins = 63;
+        state.stats.currentSession.dropCalibratedCoins = 64;
+        state.stats.currentSession.coinsGained = 64;
+        state.stats = browserlessStatsForDecision(
+          state,
+          decision(start + 1000, 100, [{ key: 'id:five-coin', amount: 5, at: start + 1000 }]),
+          { nowMs: start + 1000 }
+        );
+        const compact = buildCompactBrowserlessStatus(state, { nowMs: start + 1000 });
+        return [
+          state.stats.currentSession.pickupObservedCoins,
+          state.stats.currentSession.dropCalibratedCoins,
+          state.stats.currentSession.coinsGained,
+          compact.stats.currentSession.coinsGained
+        ].join('|');
+      })(),
+      want: '68|64|69|69'
+    },
+    {
       name: 'browserless today stamina reconciles cross-session gaps from 1d remaining',
       got: (() => {
         const firstStartedAt = Date.parse('2026-07-10T00:00:00.000Z');

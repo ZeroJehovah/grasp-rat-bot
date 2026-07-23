@@ -691,7 +691,7 @@ function updateBrowserlessStatsSessionDrop(session, self) {
   return true;
 }
 
-function updateBrowserlessStatsSessionCoinPickups(session, decision, nowMs) {
+function updateBrowserlessStatsSessionCoinPickups(session, decision, nowMs, previousCoinsGained = null) {
   const memoryMs = 60000;
   const duplicateWindowMs = 5000;
   const pickupKeys = normalizeSessionCoinPickupKeys(session.coinPickupKeys)
@@ -706,9 +706,17 @@ function updateBrowserlessStatsSessionCoinPickups(session, decision, nowMs) {
   }
   session.coinPickupKeys = pickupKeys.slice(-300);
   if (added > 0) {
+    // Keep explicit pickup increments relative to the displayed total. The
+    // Drop calibration can be ahead of pickup evidence, so adding to the
+    // hidden pickup-only subtotal would make a later pickup appear short.
+    const pickupBase = previousCoinsGained === null
+      ? Math.max(0, Math.round(Number(session.coinsGained || 0) || 0))
+      : Math.max(0, Math.round(Number(previousCoinsGained) || 0));
     session.pickupObservedCoins = Math.max(0, Math.round(Number(session.pickupObservedCoins || 0) + added));
+    session.coinsGained = Math.max(pickupBase + added, session.pickupObservedCoins);
   }
   session.coinsGained = Math.max(
+    Math.max(0, Math.round(Number(session.coinsGained || 0) || 0)),
     Math.max(0, Math.round(Number(session.pickupObservedCoins || 0) || 0)),
     Math.max(0, Math.round(Number(session.dropCalibratedCoins || 0) || 0))
   );
@@ -731,8 +739,9 @@ function updateBrowserlessStatsSession(session, decision, self, stamina, nowMs) 
   session.lastSeenAt = isoFromMs(nowMs);
   session.exitedAt = '';
   session.exitReason = '';
+  const previousCoinsGained = Math.max(0, Math.round(Number(session.coinsGained || 0) || 0));
   updateBrowserlessStatsSessionDrop(session, self);
-  updateBrowserlessStatsSessionCoinPickups(session, decision, nowMs);
+  updateBrowserlessStatsSessionCoinPickups(session, decision, nowMs, previousCoinsGained);
   updateBrowserlessStatsSessionStamina(session, stamina, self);
   const evidence = ensureSessionKillBaseline(session, decision);
   const baselineKeys = new Set(Array.isArray(session.killBaselineKeys) ? session.killBaselineKeys : []);
