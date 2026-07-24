@@ -2505,8 +2505,16 @@ async function runReadOnlyCanary(config, options = {}) {
                   source: 'realtime-frame'
                 });
                 if (damageObservation?.recorded && damageObservation.actor) {
-                  const removal = options.dynamicWhitelist?.remove?.(damageObservation.actor, 'damaged-self', atMs);
-                  if (removal?.removed) log('canary-dynamic-whitelist-removed-after-damage', removal);
+                  const whitelist = options.dynamicWhitelist;
+                  const damageDetail = {
+                    atMs,
+                    hpLost: damageObservation.event?.hpLost
+                  };
+                  const result = typeof whitelist?.observeDamage === 'function'
+                    ? whitelist.observeDamage(damageObservation.actor, currentState, damageDetail)
+                    : whitelist?.remove?.(damageObservation.actor, 'damaged-self', atMs);
+                  if (result?.removed) log('canary-dynamic-whitelist-removed-after-damage', result);
+                  else if (result?.deferred) log('canary-dynamic-whitelist-damage-deferred', result);
                 }
               } catch (err) {
                 log('canary-damage-player-observation-error', { error: errorMessage(err) });
