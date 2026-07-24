@@ -2608,7 +2608,9 @@ function runStrategyModuleSelfTests() {
     stopMotion: true,
     profitDropout: {
       kind,
+      yieldable: true,
       targetValid: true,
+      targetValidity: 'player-visible',
       targetKey: '31361'
     }
   });
@@ -2629,6 +2631,11 @@ function runStrategyModuleSelfTests() {
     dropoutState,
     { nowMs: 2000, holdMs: 1800 }
   );
+  const boundaryDropout = applyFinalActionArbitrationCore(
+    dropoutAction('outside-center-profit-wait'),
+    dropoutState,
+    { nowMs: 2900, holdMs: 1800 }
+  );
   const stableDropout = applyFinalActionArbitrationCore(
     dropoutAction('outside-center-profit-wait'),
     dropoutState,
@@ -2642,8 +2649,19 @@ function runStrategyModuleSelfTests() {
       && firstDropout.override.dropoutAgeMs === 0
       && repeatedDropout.held
       && repeatedDropout.override.dropoutAgeMs === 900
+      && boundaryDropout.held
+      && boundaryDropout.override.dropoutAgeMs === 1800
+      && boundaryDropout.override.holdRemainingMs === 0
       && !stableDropout.held
+      && stableDropout.override === null
+      && stableDropout.diagnostic?.mode === 'commit-current'
       && stableDropout.action.reason === 'outside-center-profit-wait'
+      && stableDropout.action.finalActionArbitration?.mode === 'commit-current'
+      && stableDropout.action.finalActionArbitration?.reason === 'profit-dropout-confirmed'
+      && stableDropout.action.finalActionArbitration?.dropoutAgeMs === 1801
+      && stableDropout.action.finalActionArbitration?.targetValidity === 'player-visible'
+      && dropoutState.lastOverride?.mode === 'commit-current'
+      && dropoutState.history.at(-1)?.reason === 'profit-dropout-confirmed'
       && dropoutState.profitDropout === null
   });
 

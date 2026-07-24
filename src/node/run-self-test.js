@@ -13512,7 +13512,12 @@ async function runSelfTest() {
           nowMs: 2000,
           snapshotCoinFallbackEnabled: false
         });
-        const committedDropout = buildBrowserlessDecision(makeState(4, [coin]), stateful, {
+        const boundaryDropout = buildBrowserlessDecision(makeState(4, [coin]), stateful, {
+          ...options,
+          nowMs: 2900,
+          snapshotCoinFallbackEnabled: false
+        });
+        const committedDropout = buildBrowserlessDecision(makeState(5, [coin]), stateful, {
           ...options,
           nowMs: 2901,
           snapshotCoinFallbackEnabled: false
@@ -13529,7 +13534,8 @@ async function runSelfTest() {
           buildBrowserlessDecision(makeState(1, [coin]), deterministicStateful, { ...options, nowMs: 1000 }),
           buildBrowserlessDecision(makeState(2, [coin]), deterministicStateful, { ...options, nowMs: 1100, snapshotCoinFallbackEnabled: false }),
           buildBrowserlessDecision(makeState(3, [coin]), deterministicStateful, { ...options, nowMs: 2000, snapshotCoinFallbackEnabled: false }),
-          buildBrowserlessDecision(makeState(4, [coin]), deterministicStateful, { ...options, nowMs: 2901, snapshotCoinFallbackEnabled: false })
+          buildBrowserlessDecision(makeState(4, [coin]), deterministicStateful, { ...options, nowMs: 2900, snapshotCoinFallbackEnabled: false }),
+          buildBrowserlessDecision(makeState(5, [coin]), deterministicStateful, { ...options, nowMs: 2901, snapshotCoinFallbackEnabled: false })
         ];
         const actionSequence = decisions => decisions.map(decision => [
           decision.action.reason,
@@ -13544,16 +13550,27 @@ async function runSelfTest() {
           shortDropout.action.stopMotion === true,
           repeatedDropout.action.target?.id === 'valid-profit',
           repeatedDropout.action.finalActionArbitration?.reason,
+          boundaryDropout.action.target?.id === 'valid-profit',
+          boundaryDropout.action.finalActionArbitration?.mode,
+          boundaryDropout.action.finalActionArbitration?.dropoutAgeMs,
+          boundaryDropout.action.finalActionArbitration?.holdRemainingMs,
           committedDropout.action.reason,
           committedDropout.action.stopMotion === true,
+          committedDropout.action.finalActionArbitration?.mode,
+          committedDropout.action.finalActionArbitration?.reason,
+          committedDropout.action.finalActionArbitration?.dropoutAgeMs,
+          committedDropout.action.finalActionArbitration?.targetValidity,
+          stateful.finalActionArbitration?.lastOverride?.mode,
+          stateful.finalActionArbitration?.history?.at(-1)?.reason,
+          stateful.finalActionArbitration?.profitDropout === null,
           missingTarget.action.reason,
           missingTarget.action.finalActionArbitration?.reason || '',
           missingTarget.action.stopMotion === true,
-          JSON.stringify(actionSequence([first, shortDropout, repeatedDropout, committedDropout]))
+          JSON.stringify(actionSequence([first, shortDropout, repeatedDropout, boundaryDropout, committedDropout]))
             === JSON.stringify(actionSequence(deterministicReplay))
         ].join('|');
       })(),
-      want: 'valid-profit|true|profit-dropout-confirmation|false|true|profit-dropout-confirmation|outside-center-profit-wait|true|outside-center-profit-wait||true|true'
+      want: 'valid-profit|true|profit-dropout-confirmation|false|true|profit-dropout-confirmation|true|hold-previous|1800|0|outside-center-profit-wait|true|commit-current|profit-dropout-confirmed|1801|coin-visible|commit-current|profit-dropout-confirmed|true|outside-center-profit-wait||true|true'
     },
     {
       name: 'browserless final arbitration does not hold over safety action',
