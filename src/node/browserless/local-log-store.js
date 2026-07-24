@@ -3,12 +3,9 @@
 const fs = require('fs');
 const path = require('path');
 const { redactStructuredSecrets } = require('./session-client');
+const { utc8DayKey } = require('./utc8-day');
 
 const DEFAULT_STREAMS = new Set(['runner', 'decisions', 'combat', 'exits', 'ws']);
-
-function utcDay(ms) {
-  return new Date(Number(ms)).toISOString().slice(0, 10);
-}
 
 function sanitizeStreamName(stream) {
   const value = String(stream || '').trim();
@@ -27,7 +24,7 @@ function createLocalLogStore(options = {}) {
     : null;
 
   function dayDirFor(ms = now()) {
-    return path.join(logDir, utcDay(ms));
+    return path.join(logDir, utc8DayKey(ms));
   }
 
   function fileFor(stream, ms = now()) {
@@ -54,7 +51,7 @@ function createLocalLogStore(options = {}) {
     return { file, entry };
   }
 
-  function readEntries(stream, day = utcDay(now())) {
+  function readEntries(stream, day = utc8DayKey(now())) {
     const file = path.join(logDir, String(day), `${sanitizeStreamName(stream)}.jsonl`);
     if (!fs.existsSync(file)) return [];
     return fs.readFileSync(file, 'utf8')
@@ -78,5 +75,5 @@ function createLocalLogStore(options = {}) {
 module.exports = {
   createLocalLogStore,
   sanitizeStreamName,
-  utcDay
+  utc8DayKey
 };

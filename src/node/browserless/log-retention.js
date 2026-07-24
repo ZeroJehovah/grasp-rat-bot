@@ -2,23 +2,15 @@
 
 const fs = require('fs');
 const path = require('path');
+const { DAY_MS, utc8DayKey, utc8DayStartMs } = require('./utc8-day');
 
 const DAY_DIR_RE = /^\d{4}-\d{2}-\d{2}$/;
 const DEFAULT_RETENTION_INTERVAL_MS = 60 * 60 * 1000;
 
-function utcDayStartMs(ms) {
-  const date = new Date(Number(ms));
-  return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
-}
-
-function dayStringFromMs(ms) {
-  return new Date(Number(ms)).toISOString().slice(0, 10);
-}
-
 function retentionCutoffDay(options = {}) {
-  const keepDays = Math.max(1, Number(options.keepDays || 3));
+  const keepDays = Math.max(1, Number(options.keepDays || 2));
   const nowMs = Number(options.nowMs || Date.now());
-  return dayStringFromMs(utcDayStartMs(nowMs) - (keepDays - 1) * 86400000);
+  return utc8DayKey(utc8DayStartMs(nowMs) - (keepDays - 1) * DAY_MS);
 }
 
 function cleanupOldLogDays(logDir, options = {}) {
@@ -43,7 +35,7 @@ function cleanupOldLogDays(logDir, options = {}) {
 }
 
 function startLogRetentionScheduler(logDir, options = {}) {
-  const keepDays = Math.max(1, Number(options.keepDays || 3));
+  const keepDays = Math.max(1, Number(options.keepDays || 2));
   const intervalMs = Math.max(1000, Number(options.intervalMs || DEFAULT_RETENTION_INTERVAL_MS));
   const now = typeof options.now === 'function' ? options.now : Date.now;
   const schedule = typeof options.setInterval === 'function' ? options.setInterval : setInterval;
@@ -79,8 +71,6 @@ function startLogRetentionScheduler(logDir, options = {}) {
 module.exports = {
   DEFAULT_RETENTION_INTERVAL_MS,
   cleanupOldLogDays,
-  dayStringFromMs,
   retentionCutoffDay,
-  startLogRetentionScheduler,
-  utcDayStartMs
+  startLogRetentionScheduler
 };

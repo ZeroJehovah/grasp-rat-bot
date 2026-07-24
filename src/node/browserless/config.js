@@ -25,7 +25,7 @@ const DEFAULTS = {
   canaryProfile: '',
   dryRun: true,
   once: false,
-  logRetentionDays: 3,
+  logRetentionDays: 2,
   wsConnectTimeoutMs: 10000,
   readOnlyProbeMs: 30000,
   frameGapAlertMs: 2000,

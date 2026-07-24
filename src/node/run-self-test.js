@@ -199,6 +199,7 @@ const {
 } = require('./browserless/source-ip-controller');
 const {
   cleanupOldLogDays,
+  retentionCutoffDay,
   startLogRetentionScheduler
 } = require('./browserless/log-retention');
 const {
@@ -22438,16 +22439,16 @@ async function runSelfTest() {
       want: 'false|0|179999|leave|outside-center-idle-timeout-leave|true|180000'
     },
     {
-      name: 'browserless local log store appends redacted UTC day files',
+      name: 'browserless local log store appends redacted UTC+8 day files',
       got: withTempDirForTest(async dir => {
-        let current = Date.UTC(2026, 6, 8, 1, 0, 0);
+        let current = Date.parse('2026-07-07T15:59:59.999Z');
         const store = createLocalLogStore({ logDir: dir, now: () => current });
         const first = store.append('runner', 'session-start', {
           url: 'https://x.test/?token=secret-token',
           token: 'secret-field',
           code: 'secret-code'
         });
-        current = Date.UTC(2026, 6, 9, 1, 0, 0);
+        current = Date.parse('2026-07-07T16:00:00.000Z');
         const second = store.append('exits', 'leave', {
           authorization: 'Bearer secret-bearer',
           nested: { url: 'https://x.test/?secret=secret-url' }
@@ -22466,10 +22467,10 @@ async function runSelfTest() {
           secondText.includes('[redacted]'),
           thirdText.includes('vel 1 0'),
           !/secret-token|secret-field|secret-code|secret-bearer|secret-url/.test(firstText + secondText + thirdText),
-          store.readEntries('runner', '2026-07-08')[0]?.type
+          store.readEntries('runner', '2026-07-07')[0]?.type
         ].join('|');
       }),
-      want: '2026-07-08/runner.jsonl|2026-07-09/exits.jsonl|2026-07-09/ws.jsonl|true|true|true|true|session-start'
+      want: '2026-07-07/runner.jsonl|2026-07-08/exits.jsonl|2026-07-08/ws.jsonl|true|true|true|true|session-start'
     },
     {
       name: 'browserless background IO flushes redacted logs and atomic JSON',
@@ -22759,7 +22760,7 @@ async function runSelfTest() {
       want: 'true|true|true|true|true|true|4|3'
     },
     {
-      name: 'browserless log retention deletes day directories outside keep window',
+      name: 'browserless log retention keeps today and yesterday by UTC+8 day',
       got: withTempDirForTest(async dir => {
         for (const day of ['2026-07-04', '2026-07-05', '2026-07-06', '2026-07-07', '2026-07-08']) {
           fs.mkdirSync(path.join(dir, day), { recursive: true });
@@ -22767,19 +22768,28 @@ async function runSelfTest() {
         }
         fs.mkdirSync(path.join(dir, 'misc'), { recursive: true });
         const result = cleanupOldLogDays(dir, {
-          nowMs: Date.UTC(2026, 6, 8, 12, 0, 0),
-          keepDays: 3
+          nowMs: Date.parse('2026-07-07T16:00:00.000Z'),
+          keepDays: 2
         });
         return [
           result.cutoffDay,
           result.removed.join(','),
           result.kept.join(','),
           fs.existsSync(path.join(dir, '2026-07-05')),
-          fs.existsSync(path.join(dir, '2026-07-06')),
+          fs.existsSync(path.join(dir, '2026-07-07')),
           fs.existsSync(path.join(dir, 'misc'))
         ].join('|');
       }),
-      want: '2026-07-06|2026-07-04,2026-07-05|2026-07-06,2026-07-07,2026-07-08|false|true|true'
+      want: '2026-07-07|2026-07-04,2026-07-05,2026-07-06|2026-07-07,2026-07-08|false|true|true'
+    },
+    {
+      name: 'browserless UTC+8 retention handles month and year boundaries',
+      got: [
+        retentionCutoffDay({ nowMs: Date.parse('2026-02-28T15:59:59.999Z'), keepDays: 2 }),
+        retentionCutoffDay({ nowMs: Date.parse('2026-02-28T16:00:00.000Z'), keepDays: 2 }),
+        retentionCutoffDay({ nowMs: Date.parse('2026-12-31T16:00:00.000Z'), keepDays: 2 })
+      ].join('|'),
+      want: '2026-02-27|2026-02-28|2026-12-31'
     },
     {
       name: 'browserless scheduled log retention cleans while process remains alive',
@@ -22793,7 +22803,7 @@ async function runSelfTest() {
         let unrefed = false;
         let latestResult = null;
         const scheduler = startLogRetentionScheduler(dir, {
-          keepDays: 3,
+          keepDays: 2,
           intervalMs: 5000,
           now: () => Date.UTC(2026, 6, 9, 12, 0, 0),
           setInterval(fn) {
@@ -22818,7 +22828,7 @@ async function runSelfTest() {
           fs.existsSync(path.join(dir, '2026-07-07'))
         ].join('|');
       }),
-      want: '5000|true|true|2026-07-06|false|true'
+      want: '5000|true|true|2026-07-06,2026-07-07|false|false'
     },
     {
       name: 'browserless log summary counts streams and writes summary file',
@@ -24155,7 +24165,7 @@ async function runSelfTest() {
           config.logRetentionDays
         ].join('|');
       })(),
-      want: 'true|true|18767|3'
+      want: 'true|true|18767|2'
     },
     {
       name: 'browserless HP-drop bullet attribution distinguishes matched false-negative and unmatched hits',
