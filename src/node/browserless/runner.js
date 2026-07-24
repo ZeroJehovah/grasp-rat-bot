@@ -3119,6 +3119,11 @@ async function runComplexCombatMainThreadBudgetSelfTest(tmp) {
     now: () => nowMs,
     backgroundIo
   });
+  const combatBattleLog = createCombatBattleLog({
+    logDir: path.join(tmp, 'frame-budget-logs'),
+    now: () => nowMs,
+    backgroundIo
+  });
   const targetWhitelist = {
     names: [],
     userIds: [],
@@ -3164,6 +3169,7 @@ async function runComplexCombatMainThreadBudgetSelfTest(tmp) {
         await new Promise(resolve => setImmediate(resolve));
       },
       logStore,
+      combatBattleLog,
       mainThreadBudgetMs: SELF_TEST_MAIN_THREAD_BUDGET_MS,
       useDecisionWorker: true,
       targetWhitelist,
@@ -3182,6 +3188,7 @@ async function runComplexCombatMainThreadBudgetSelfTest(tmp) {
       },
       leaveWithVerification: async () => ({ ok: true, attempts: [{ ok: true }] })
     });
+    await backgroundIo.flush();
     const frameTiming = result.hotPath?.tasks?.['ws-message'] || {};
     const maxFrameMs = Number(frameTiming.maxMs || 0);
     const wallOverBudgetCount = Number(frameTiming.overBudgetCount || 0);
@@ -3193,6 +3200,20 @@ async function runComplexCombatMainThreadBudgetSelfTest(tmp) {
       ? null
       : 'linux-main-thread-schedstat';
     const workProfileSource = String(result.hotPath?.maxTask?.workProfile?.cpuUsageSource || '');
+    const battleLogStatus = combatBattleLog.status();
+    const combatDayDir = logStore.dayDirFor(nowMs);
+    const battlesDir = path.join(combatDayDir, 'battles');
+    const battleFiles = fs.existsSync(battlesDir)
+      ? fs.readdirSync(battlesDir).filter(name => name.endsWith('.jsonl.gz'))
+      : [];
+    const legacyCombatLogExists = fs.existsSync(path.join(combatDayDir, 'combat.jsonl'));
+    const battleIndexExists = fs.existsSync(path.join(battlesDir, 'index.jsonl'));
+    const battleLogOk = Boolean(
+      battleLogStatus.framesWritten > 0
+      && battleFiles.length > 0
+      && battleIndexExists
+      && !legacyCombatLogExists
+    );
     return {
       ok: Boolean(
         result.ok
@@ -3205,6 +3226,7 @@ async function runComplexCombatMainThreadBudgetSelfTest(tmp) {
         && cpuOverBudgetCount === 0
         && maxFrameCpuMs < SELF_TEST_MAIN_THREAD_BUDGET_MS
         && (!expectedWorkProfileSource || workProfileSource === expectedWorkProfileSource)
+        && battleLogOk
       ),
       budgetMs: SELF_TEST_MAIN_THREAD_BUDGET_MS,
       frameCount: measuredFrameCount,
@@ -3215,6 +3237,13 @@ async function runComplexCombatMainThreadBudgetSelfTest(tmp) {
       wallOverBudgetCount,
       timingSource: currentMainThreadCpuMs() === null ? 'performance-now-fallback' : 'linux-main-thread-schedstat',
       workProfileSource,
+      battleLogOk,
+      battleLog: {
+        ...battleLogStatus,
+        battleFiles: battleFiles.length,
+        indexExists: battleIndexExists,
+        legacyCombatLogExists
+      },
       warmup,
       maxTask: result.hotPath?.maxTask || null,
       canaryOk: Boolean(result.ok),
@@ -4339,6 +4368,7 @@ async function runBrowserlessRunnerSelfTest() {
         && statusServerChatTest.ok
         && snapshotEdge.ok
         && combatBattleLog.ok
+        && complexCombatMainThreadBudget.battleLogOk
         // Host scheduling/GC timing is diagnostic; functional runner blocks
         // remain release-gating without turning an external pause into a
         // product failure.

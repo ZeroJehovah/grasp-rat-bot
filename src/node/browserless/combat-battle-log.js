@@ -137,6 +137,7 @@ function createCombatBattleLog(options = {}) {
   let battlesFinalized = 0;
   let framesWritten = 0;
   let framesDiscarded = 0;
+  const allocatedBattleFiles = new Set();
 
   function battlesDirFor(atMs) {
     return path.join(logDir, utc8DayKey(atMs), BATTLES_DIR);
@@ -150,9 +151,13 @@ function createCombatBattleLog(options = {}) {
       const name = suffix === 0 ? base : `${base}-${suffix + 1}`;
       const rawFile = path.join(dir, `${name}.jsonl`);
       const gzFile = `${rawFile}.gz`;
-      if (!fs.existsSync(rawFile) && !fs.existsSync(gzFile)) return { rawFile, gzFile };
+      if (!allocatedBattleFiles.has(rawFile) && !fs.existsSync(rawFile) && !fs.existsSync(gzFile)) {
+        allocatedBattleFiles.add(rawFile);
+        return { rawFile, gzFile };
+      }
     }
-    const fallback = path.join(dir, `${base}-${Date.now()}.jsonl`);
+    const fallback = path.join(dir, `${base}-${Date.now()}-${allocatedBattleFiles.size + 1}.jsonl`);
+    allocatedBattleFiles.add(fallback);
     return { rawFile: fallback, gzFile: `${fallback}.gz` };
   }
 
@@ -312,6 +317,26 @@ function runCombatBattleLogSelfTest() {
     log.record('combat-live', frame('100:1000', { lastObservedAt: nowMs }));
     log.flush('shutdown');
     assert('re-opened battle uses distinct file', fs.existsSync(path.join(battlesDir, '100_1000-2.jsonl.gz')));
+
+    // The background worker may not have created either the raw or gz path by
+    // the time the same engagement reopens. In-memory path allocation must
+    // still prevent the later battle from overwriting the queued first one.
+    const queuedOperations = [];
+    const queuedLog = createCombatBattleLog({
+      logDir: path.join(root, 'queued'),
+      now: () => nowMs,
+      idleFinalizeMs: 15000,
+      backgroundIo: {
+        appendLog(message) { queuedOperations.push({ kind: 'log', ...message }); return true; },
+        finalizeGz(file) { queuedOperations.push({ kind: 'finalize-gz', file }); return true; },
+        appendRawLine(file, value) { queuedOperations.push({ kind: 'append-raw-line', file, value }); return true; }
+      }
+    });
+    const queuedFirst = queuedLog.record('combat-live', frame('300:3000'));
+    queuedLog.flush('idle');
+    const queuedReopen = queuedLog.record('combat-live', frame('300:3000'));
+    assert('queued re-open reserves a distinct file before worker writes', queuedFirst.file !== queuedReopen.file);
+    assert('queued background operations exercised', queuedOperations.length >= 4);
 
     const status = log.status();
     assert('status counts finalized battles', status.battlesFinalized === 3);

@@ -1440,13 +1440,18 @@ async function runReadOnlyCanary(config, options = {}) {
   const logCombat = detail => {
     const type = combatLiveEnabled ? 'combat-live' : 'combat-dry-run';
     const enriched = addRunMeta(detail);
-    if (logStore) logStore.append('combat', type, enriched);
+    // Combat frames are no longer appended to a single unbounded `combat.jsonl`.
+    // Each engagement is written to its own per-battle file and compressed on
+    // completion; idle/no-engagement diagnostic frames are discarded there.
     if (combatBattleLog) {
       try {
         combatBattleLog.record(type, enriched);
       } catch (err) {
         log('combat-battle-log-error', { error: errorMessage(err) });
       }
+    } else if (logStore) {
+      // Fallback only when no battle-log is wired (self-tests / disabled IO).
+      logStore.append('combat', type, enriched);
     }
   };
   const logWs = (type, detail) => {
