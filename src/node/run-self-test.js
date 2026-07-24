@@ -27486,6 +27486,48 @@ async function runSelfTest() {
       want: '10|20|40|1|40|40|100|110|20'
     },
     {
+      name: 'browserless today coin ledger includes Drop growth between login sessions exactly once',
+      got: (() => {
+        const state = {
+          session: { userId: 7, sessionToken: 'state-secret-token' },
+          runner: { running: true, mode: 'profit-live', controlMode: 'profit-live' }
+        };
+        const decision = (at, drop, coinPickups = []) => ({
+          at: new Date(at).toISOString(),
+          input: {
+            self: { userId: 7, name: 'self', drop, dropKnown: true },
+            stamina: {},
+            coinPickups,
+            selfKillEvidence: []
+          }
+        });
+        const start = Date.parse('2026-07-15T04:00:00.000Z');
+        state.stats = browserlessStatsForDecision(state, decision(start, 100), { nowMs: start });
+        state.stats = browserlessStatsForDecision(state, decision(start + 1000, 110), { nowMs: start + 1000 });
+        state.stats = browserlessStatsForOffline(state, {
+          at: new Date(start + 2000).toISOString(),
+          reason: 'cycle-complete',
+          self: { userId: 7, drop: 110, dropKnown: true }
+        }, { nowMs: start + 2000 });
+        state.stats = browserlessStatsForDecision(state, decision(start + 3000, 115), { nowMs: start + 3000 });
+        const afterGap = buildCompactBrowserlessStatus(state, { nowMs: start + 3000 });
+        state.stats = browserlessStatsForDecision(
+          state,
+          decision(start + 4000, 120, [{ key: 'id:ten-coin', amount: 10, at: start + 4000 }]),
+          { nowMs: start + 4000 }
+        );
+        const final = buildCompactBrowserlessStatus(state, { nowMs: start + 4000 });
+        return [
+          afterGap.stats.today.coinsGained,
+          afterGap.stats.currentSession.coinsGained,
+          final.stats.today.coinsGained,
+          final.stats.currentSession.coinsGained,
+          state.stats.today.dropResetCount
+        ].join('|');
+      })(),
+      want: '30|0|40|10|0'
+    },
+    {
       name: 'browserless stats add explicit pickup to displayed calibration floor',
       got: (() => {
         const state = {
