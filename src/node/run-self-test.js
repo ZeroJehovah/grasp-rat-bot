@@ -28673,7 +28673,7 @@ async function runSelfTest() {
           /\.target-bait\{--target-color:rgba\(251,191,36,\.95\)/.test(panelText),
           /\.target-name\{display:inline-flex;align-items:center;[^}]*vertical-align:middle/.test(panelText),
           /\.target-current \.target-name,\.target-route-next \.target-name\{padding-left:4px\}/.test(panelText),
-          /\.target-current::before,\.target-route-next::before\{content:"";position:absolute;right:100%;top:-1px;bottom:-1px;width:3px;background:var\(--target-color\)/.test(panelText),
+          /\.target-current::before,\.target-route-next::before\{content:"";position:absolute;left:0;top:-1px;bottom:-1px;width:3px;background:var\(--target-color\)/.test(panelText),
           /\.target-icon\{display:inline-block;[^}]*align-self:center;[^}]*vertical-align:middle;[^}]*transform:translateY\(1px\);[^}]*color:var\(--target-color\);fill:currentColor/.test(panelText),
           /\.target-icon-coin\{transform:translateY\(0\)\}/.test(panelText),
           panelScript.includes("coinBait: ['M617.130667 654.229333"),

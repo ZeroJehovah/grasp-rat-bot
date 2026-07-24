@@ -4162,9 +4162,9 @@ async function runBrowserlessRunnerSelfTest() {
         body: JSON.stringify({ text: 'hello' })
       });
       const sendBody = await sendResponse.json();
-      const targetMarkerCoversOuterBorders = pageHtml.includes('right:100%;top:-1px;bottom:-1px;width:3px');
+      const targetMarkerInsideSharedRowEdge = pageHtml.includes('left:0;top:-1px;bottom:-1px;width:3px');
       const targetMarkerAvoidsAdjacentOverlap = pageHtml.includes('.target-current+.target-current::before,.target-current+.target-route-next::before,.target-route-next+.target-current::before,.target-route-next+.target-route-next::before{top:0}');
-      const targetMarkerBoundaryOwnership = targetMarkerCoversOuterBorders && targetMarkerAvoidsAdjacentOverlap;
+      const targetMarkerBoundaryOwnership = targetMarkerInsideSharedRowEdge && targetMarkerAvoidsAdjacentOverlap;
       const loginPointBlockerPanelPresent = pageHtml.includes('function blockingFactorsText(status)')
         && pageHtml.includes("addRow(rowsOut, '阻碍因素', blockingFactorsText(status))")
         && pageHtml.includes("addRow(rowsOut, '单人阻挡', singleBlocker)");
@@ -4316,7 +4316,7 @@ async function runBrowserlessRunnerSelfTest() {
         activityCount: chatActivityCount,
         sendInputs: chatSendInputs.slice(),
         webChatPanelPresent: pageHtml.includes('id="chatPanel"'),
-        targetMarkerCoversOuterBorders,
+        targetMarkerInsideSharedRowEdge,
         targetMarkerAvoidsAdjacentOverlap,
         targetMarkerBoundaryOwnership,
         loginPointBlockerPanelPresent,
