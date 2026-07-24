@@ -27406,6 +27406,67 @@ async function runSelfTest() {
       want: 'false|true|false|true|false|action-settlement-stalled|self-present-reentry|combat-low-hp-disadvantage-leave|2026-07-15T04:08:09.235Z|false|false|false'
     },
     {
+      name: 'browserless compact status keeps online combat authoritative without projected self',
+      got: (() => {
+        const compact = buildCompactBrowserlessStatus({
+          runner: {
+            running: true,
+            mode: 'profit-live',
+            currentAction: {
+              kind: 'combat-live',
+              band: 'combat',
+              reason: 'combat-live-realtime',
+              target: { userId: 34711, name: 'xuanze00' }
+            }
+          },
+          current: {
+            self: null,
+            decision: {
+              kind: 'combat-live',
+              band: 'combat',
+              reason: 'combat-live-realtime',
+              action: { kind: 'combat-live', reason: 'combat-live-realtime' }
+            }
+          },
+          stats: {
+            currentSession: {
+              online: true,
+              sessionId: '28886:2026-07-24T08:21:11.214Z',
+              enteredAt: '2026-07-24T08:21:11.214Z',
+              lastSeenAt: '2026-07-24T08:25:00.000Z'
+            },
+            lastExit: {
+              at: '2026-07-24T08:20:49.191Z',
+              reason: 'frame-gap',
+              runId: 'profit-live-previous-run'
+            }
+          },
+          loginPointSafety: {
+            ok: true,
+            reason: 'safe',
+            checkedAt: '2026-07-24T08:21:10.474Z',
+            point: { x: 5999, y: 66268, hp: 100 },
+            detail: { selfPresent: false, reason: 'safe', streak: 1, required: 1 }
+          }
+        }, {
+          ...parseBrowserlessRunnerArgs([], {}),
+          nowMs: Date.parse('2026-07-24T08:25:00.000Z')
+        });
+        return [
+          compact.game.inGame,
+          compact.game.state,
+          compact.stats.currentSession.online,
+          compact.stats.currentSession.realtimeOnline,
+          panelSessionFlagsCore(compact).online,
+          panelSessionFlagsCore(compact).realtimeOnline,
+          compact.action.kind,
+          compact.loginPointSafety.checkedAt,
+          compact.stats.offline.lastExitReason
+        ].join('|');
+      })(),
+      want: 'true|in-game|true|true|true|true|combat-live|2026-07-24T08:21:10.474Z|frame-gap'
+    },
+    {
       name: 'browserless stats ignore transient unknown self drop during stale snapshot gap',
       got: (() => {
         const enteredAt = Date.parse('2026-07-14T16:00:21.844Z');

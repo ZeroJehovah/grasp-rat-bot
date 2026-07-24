@@ -2380,7 +2380,11 @@ function compactGameStatus(normalized) {
     currentSession.online === false
       && (currentSession.exitedAt || lastExit.at)
   );
-  const selfPresent = Boolean(self?.userId || self?.entityId || self?.name)
+  const identifiedSelf = Boolean(self?.userId || self?.entityId || self?.name);
+  // An online session plus an active action remains authoritative during a
+  // transient status projection that omits current.self. Waiting actions keep
+  // the existing transport-recovery distinction.
+  const selfPresent = Boolean(identifiedSelf || currentSession.online === true)
     && !waiting
     && !finalizedSession;
   return {

@@ -3929,6 +3929,19 @@ async function runBrowserlessRunnerSelfTest() {
       mergeState(panelOfflineTransitionState, panelOfflineTransitionPatch),
       { nowMs: panelOfflineTransitionAt }
     );
+    const panelOnlineCombatWithoutSelfCompact = buildCompactBrowserlessStatus(
+      mergeState(panelOfflineTransitionState, {
+        current: { self: null },
+        loginPointSafety: {
+          ok: true,
+          reason: 'safe',
+          checkedAt: '2026-07-24T08:21:10.474Z',
+          point: { x: 5999, y: 66268, hp: 100 },
+          detail: { selfPresent: false, reason: 'safe', streak: 1, required: 1 }
+        }
+      }),
+      { nowMs: Date.parse('2026-07-24T08:25:00.000Z') }
+    );
     const panelBattleCompact = buildCompactBrowserlessStatus({
       session: { userId: 7, sessionToken: 'panel-self-test-token' },
       runner: { running: true, currentAction: { kind: 'combat-live', target: { userId: 8, distance: 5600 } } },
@@ -4228,6 +4241,10 @@ async function runBrowserlessRunnerSelfTest() {
           && panelPreLoginCompact.game.inGame === false
           && panelPreLoginCompact.action.kind === 'loop-wait'
           && panelPreLoginCompact.action.reason === 'next-login-point-pending-snapshot-safety'
+          && panelOnlineCombatWithoutSelfCompact.game.inGame === true
+          && panelOnlineCombatWithoutSelfCompact.stats.currentSession.online === true
+          && panelOnlineCombatWithoutSelfCompact.stats.currentSession.realtimeOnline === true
+          && panelOnlineCombatWithoutSelfCompact.action.kind === 'combat-live'
           && browserlessCoinPickupObservationTest.ok
           && browserlessSnapshotCoinPickupObservationTest.ok
           && browserlessFastSnapshotPickupObservationTest.ok
@@ -4282,6 +4299,12 @@ async function runBrowserlessRunnerSelfTest() {
           actionReason: panelOfflineTransitionCompact.action.reason
         },
         preLoginActionReason: panelPreLoginCompact.action.reason,
+        onlineCombatWithoutSelf: {
+          inGame: panelOnlineCombatWithoutSelfCompact.game.inGame,
+          online: panelOnlineCombatWithoutSelfCompact.stats.currentSession.online,
+          realtimeOnline: panelOnlineCombatWithoutSelfCompact.stats.currentSession.realtimeOnline,
+          actionKind: panelOnlineCombatWithoutSelfCompact.action.kind
+        },
         battleDistance: panelBattleCompact.battle.distance,
         battleMovementDistance: panelBattleCompact.battle.movementDistance,
         afkBattleMovementDistance: panelAfkBattleCompact.battle.movementDistance,
