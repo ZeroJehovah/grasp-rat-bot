@@ -13560,6 +13560,7 @@ async function runSelfTest() {
           committedDropout.action.finalActionArbitration?.reason,
           committedDropout.action.finalActionArbitration?.dropoutAgeMs,
           committedDropout.action.finalActionArbitration?.targetValidity,
+          committedDropout.action.profitDropout?.yieldable === true,
           stateful.finalActionArbitration?.lastOverride?.mode,
           stateful.finalActionArbitration?.history?.at(-1)?.reason,
           stateful.finalActionArbitration?.profitDropout === null,
@@ -13570,7 +13571,7 @@ async function runSelfTest() {
             === JSON.stringify(actionSequence(deterministicReplay))
         ].join('|');
       })(),
-      want: 'valid-profit|true|profit-dropout-confirmation|false|true|profit-dropout-confirmation|true|hold-previous|1800|0|outside-center-profit-wait|true|commit-current|profit-dropout-confirmed|1801|coin-visible|commit-current|profit-dropout-confirmed|true|outside-center-profit-wait||true|true'
+      want: 'valid-profit|true|profit-dropout-confirmation|false|true|profit-dropout-confirmation|true|hold-previous|1800|0|outside-center-profit-wait|true|commit-current|profit-dropout-confirmed|1801|coin-visible|true|commit-current|profit-dropout-confirmed|true|outside-center-profit-wait||true|true'
     },
     {
       name: 'browserless final arbitration does not hold over safety action',

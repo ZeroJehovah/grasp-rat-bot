@@ -2726,14 +2726,19 @@ function runStrategyModuleSelfTests() {
     {
       action: {
         ...dropoutAction('no-profitable-candidate'),
-        profitDropout: { kind: 'no-profitable-candidate', targetValid: false }
+        profitDropout: { kind: 'no-profitable-candidate', yieldable: true, targetValid: false }
       },
       previous: dropoutProfit
     },
     {
       action: {
         ...dropoutAction('dynamic-profit-threshold-wait'),
-        profitDropout: { kind: 'dynamic-profit-threshold-wait', targetValid: true, thresholdViolation: true }
+        profitDropout: {
+          kind: 'dynamic-profit-threshold-wait',
+          yieldable: true,
+          targetValid: true,
+          thresholdViolation: true
+        }
       },
       previous: dropoutProfit
     },
@@ -2748,10 +2753,36 @@ function runStrategyModuleSelfTests() {
     {
       action: dropoutAction('no-profitable-candidate'),
       previous: { ...dropoutProfit, expired: true }
+    },
+    {
+      action: { ...dropoutAction('no-profitable-candidate'), expired: true },
+      previous: dropoutProfit
+    },
+    {
+      action: { ...dropoutAction('no-profitable-candidate'), valid: false },
+      previous: dropoutProfit
+    },
+    {
+      action: {
+        ...dropoutAction('no-profitable-candidate'),
+        profitDropout: {
+          kind: 'no-profitable-candidate',
+          yieldable: false,
+          targetValid: true
+        }
+      },
+      previous: dropoutProfit
+    },
+    {
+      action: {
+        ...dropoutAction('no-profitable-candidate'),
+        profitDropout: null
+      },
+      previous: dropoutProfit
     }
   ];
   results.push({
-    name: 'arbitration-profit-dropout-never-delays-safety-recovery-or-invalid-targets',
+    name: 'arbitration-profit-dropout-never-delays-safety-recovery-invalid-or-nonyieldable-actions',
     passed: immediateDropoutFixtures.every((fixture, index) => {
       const fixtureState = {
         lastAction: fixture.previous,

@@ -14,13 +14,16 @@ function profitDropoutMetadata(action) {
     ? action.profitDropout
     : null;
   const reason = String(action.reason || '');
-  if (!metadata && !PROFIT_DROPOUT_REASONS.has(reason)) return null;
+  if (!metadata || metadata.yieldable !== true) return null;
+  const kind = String(metadata.kind || reason);
+  if (!PROFIT_DROPOUT_REASONS.has(kind) || kind !== reason) return null;
   return {
-    kind: String(metadata?.kind || reason),
-    targetValid: metadata?.targetValid === true,
-    targetValidity: String(metadata?.targetValidity || ''),
-    thresholdViolation: metadata?.thresholdViolation === true,
-    targetKey: String(metadata?.targetKey || '')
+    kind,
+    yieldable: true,
+    targetValid: metadata.targetValid === true,
+    targetValidity: String(metadata.targetValidity || ''),
+    thresholdViolation: metadata.thresholdViolation === true,
+    targetKey: String(metadata.targetKey || '')
   };
 }
 
@@ -85,6 +88,7 @@ function finalActionHoldDecision(previousAction, previousFocus, currentAction, c
     );
   }
   if (previousBand === 'profit' && currentBand !== 'profit') {
+    if (currentAction.expired === true || currentAction.valid === false) return result(false);
     if (!currentDropout || currentDropout.thresholdViolation || currentDropout.targetValid !== true) {
       return result(false);
     }
