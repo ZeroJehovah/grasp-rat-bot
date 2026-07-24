@@ -114,10 +114,6 @@ function parseArgs(argv) {
 
 function selectedEntries(options) {
   const entries = [];
-  const descriptor = fs.openSync(options.file, 'r');
-  const decoder = new StringDecoder('utf8');
-  const buffer = Buffer.allocUnsafe(64 * 1024);
-  let carry = '';
   let line = 0;
   let finished = false;
   const consume = raw => {
@@ -130,6 +126,22 @@ function selectedEntries(options) {
     const entry = JSON.parse(raw);
     entries.push({ line, entry, detail: entry.detail || {} });
   };
+  // Per-battle logs are stored gzip-compressed (`<engagement>.jsonl.gz`). Those
+  // files are bounded to a single engagement, so decompressing in memory and
+  // iterating lines keeps the same line-range semantics as raw JSONL.
+  if (/\.gz$/i.test(options.file)) {
+    const text = require('zlib').gunzipSync(fs.readFileSync(options.file)).toString('utf8');
+    const lines = text.split('\n');
+    for (const raw of lines) {
+      if (finished) break;
+      consume(raw.replace(/\r$/, ''));
+    }
+    return entries;
+  }
+  const descriptor = fs.openSync(options.file, 'r');
+  const decoder = new StringDecoder('utf8');
+  const buffer = Buffer.allocUnsafe(64 * 1024);
+  let carry = '';
   try {
     while (!finished) {
       const bytesRead = fs.readSync(descriptor, buffer, 0, buffer.length, null);

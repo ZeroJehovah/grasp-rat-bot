@@ -128,6 +128,14 @@ function createBrowserlessBackgroundIo(options = {}) {
     });
   }
 
+  function finalizeGz(file) {
+    return post({ kind: 'finalize-gz', file: path.resolve(String(file || '')) });
+  }
+
+  function appendRawLine(file, value) {
+    return post({ kind: 'append-raw-line', file: path.resolve(String(file || '')), value });
+  }
+
   function renderStatus(state, config = {}, compact = false, optionsForRequest = {}) {
     if (closed || failed) return Promise.reject(new Error(lastError || 'background IO worker unavailable'));
     const id = nextRequestId++;
@@ -226,7 +234,9 @@ function createBrowserlessBackgroundIo(options = {}) {
 
   return {
     appendLog,
+    appendRawLine,
     close,
+    finalizeGz,
     flush,
     renderStatus,
     status,

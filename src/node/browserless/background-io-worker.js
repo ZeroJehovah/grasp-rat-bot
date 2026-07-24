@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const zlib = require('zlib');
 const { performance } = require('perf_hooks');
 const { parentPort } = require('worker_threads');
 const { redactStructuredSecrets } = require('./session-client');
@@ -81,6 +82,27 @@ function writeJsonPatchAtomic(message) {
   writeJsonFileAtomic(file, value);
 }
 
+// Compress a finished per-battle JSONL file to `<file>.gz` and remove the raw
+// file. Runs on the background worker so gzip never blocks the combat loop.
+function finalizeGz(message) {
+  const file = path.resolve(String(message.file || ''));
+  if (!fs.existsSync(file)) return;
+  const gzFile = `${file}.gz`;
+  temporarySequence += 1;
+  const temporary = `${gzFile}.${process.pid}.${temporarySequence}.tmp`;
+  fs.writeFileSync(temporary, zlib.gzipSync(fs.readFileSync(file)));
+  fs.renameSync(temporary, gzFile);
+  fs.rmSync(file, { force: true });
+}
+
+// Append one already-structured object as a JSON line (used for the battle
+// index). Values are redacted like ordinary logs.
+function appendRawLine(message) {
+  const file = path.resolve(String(message.file || ''));
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.appendFileSync(file, JSON.stringify(redactStructuredSecrets(message.value || {})) + '\n');
+}
+
 function renderStatus(message) {
   if (message.compact) return buildCompactBrowserlessStatus(message.state || {}, message.config || {});
   const state = message.state || {};
@@ -104,6 +126,8 @@ parentPort.on('message', message => {
     if (message.kind === 'log') appendLog(message);
     else if (message.kind === 'json-atomic') writeJsonAtomic(message);
     else if (message.kind === 'json-patch-atomic') writeJsonPatchAtomic(message);
+    else if (message.kind === 'finalize-gz') finalizeGz(message);
+    else if (message.kind === 'append-raw-line') appendRawLine(message);
     else if (message.kind === 'status-render') {
       const started = performance.now();
       const status = renderStatus(message);

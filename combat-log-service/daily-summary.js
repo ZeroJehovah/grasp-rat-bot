@@ -4,6 +4,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const zlib = require('zlib');
 
 const DEFAULT_DIR = path.join(__dirname, 'logs');
 const DEFAULT_REPORT_ROOT = path.join(__dirname, '..', '..', 'docs', 'reports');
@@ -153,7 +154,7 @@ function listJsonlFiles(dayDir) {
     for (const item of fs.readdirSync(dir, { withFileTypes: true })) {
       const fullPath = path.join(dir, item.name);
       if (item.isDirectory()) walk(fullPath);
-      else if (item.isFile() && item.name.endsWith('.jsonl')) files.push(fullPath);
+      else if (item.isFile() && (item.name.endsWith('.jsonl') || item.name.endsWith('.jsonl.gz'))) files.push(fullPath);
     }
   }
   walk(dayDir);
@@ -161,6 +162,17 @@ function listJsonlFiles(dayDir) {
 }
 
 function forEachJsonlLine(file, onLine) {
+  // Per-battle `.jsonl.gz` files are bounded to one engagement, so a single
+  // synchronous decompress stays well under Node's string limit.
+  if (file.endsWith('.gz')) {
+    const text = zlib.gunzipSync(fs.readFileSync(file)).toString('utf8');
+    let lineNumber = 0;
+    for (const line of text.split(/\n/)) {
+      lineNumber += 1;
+      onLine(line, lineNumber);
+    }
+    return;
+  }
   const fd = fs.openSync(file, 'r');
   const buffer = Buffer.allocUnsafe(JSONL_READ_CHUNK_BYTES);
   let remainder = '';

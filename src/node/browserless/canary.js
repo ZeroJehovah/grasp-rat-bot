@@ -1036,6 +1036,9 @@ async function runReadOnlyCanary(config, options = {}) {
     ? options.sleep
     : ms => new Promise(resolve => setTimeout(resolve, ms));
   const logStore = options.logStore || null;
+  const combatBattleLog = options.combatBattleLog && typeof options.combatBattleLog === 'object'
+    ? options.combatBattleLog
+    : null;
   const damagePlayerTracker = options.damagePlayerTracker && typeof options.damagePlayerTracker === 'object'
     ? options.damagePlayerTracker
     : null;
@@ -1435,7 +1438,16 @@ async function runReadOnlyCanary(config, options = {}) {
     if (logStore) logStore.append('runner', 'movement-command', addRunMeta(detail));
   };
   const logCombat = detail => {
-    if (logStore) logStore.append('combat', combatLiveEnabled ? 'combat-live' : 'combat-dry-run', addRunMeta(detail));
+    const type = combatLiveEnabled ? 'combat-live' : 'combat-dry-run';
+    const enriched = addRunMeta(detail);
+    if (logStore) logStore.append('combat', type, enriched);
+    if (combatBattleLog) {
+      try {
+        combatBattleLog.record(type, enriched);
+      } catch (err) {
+        log('combat-battle-log-error', { error: errorMessage(err) });
+      }
+    }
   };
   const logWs = (type, detail) => {
     if (config.wsTraceEnabled && logStore) logStore.append('ws', type, addRunMeta(detail));
@@ -2787,6 +2799,9 @@ async function runReadOnlyCanary(config, options = {}) {
   }
   result.completedAt = new Date(now()).toISOString();
   log(result.ok ? 'canary-finish' : 'canary-failed', result);
+  try {
+    combatBattleLog?.flush?.('canary-finish');
+  } catch (_) {}
   try {
     await logStore?.flush?.();
   } catch (_) {}

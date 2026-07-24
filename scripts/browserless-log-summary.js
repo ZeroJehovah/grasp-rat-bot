@@ -3,6 +3,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const zlib = require('zlib');
 const { StringDecoder } = require('string_decoder');
 
 function parseArgs(argv) {
@@ -32,10 +33,6 @@ function readJsonlEntries(file) {
 
 function forEachJsonlEntry(file, visitor, options = {}) {
   if (!fs.existsSync(file)) return 0;
-  const descriptor = fs.openSync(file, 'r');
-  const decoder = new StringDecoder('utf8');
-  const buffer = Buffer.allocUnsafe(Math.max(1024, Number(options.chunkBytes || 1024 * 1024)));
-  let carry = '';
   let lineNumber = 0;
   const consume = raw => {
     lineNumber += 1;
@@ -50,6 +47,18 @@ function forEachJsonlEntry(file, visitor, options = {}) {
       }, lineNumber);
     }
   };
+  // Per-battle `.jsonl.gz` files are bounded to a single engagement, so a
+  // synchronous gunzip stays well within a single Node string. Plain `.jsonl`
+  // files (which can be very large) are still read incrementally.
+  if (file.endsWith('.gz')) {
+    const text = zlib.gunzipSync(fs.readFileSync(file)).toString('utf8');
+    for (const line of text.split(/\n/)) consume(line.replace(/\r$/, ''));
+    return lineNumber;
+  }
+  const descriptor = fs.openSync(file, 'r');
+  const decoder = new StringDecoder('utf8');
+  const buffer = Buffer.allocUnsafe(Math.max(1024, Number(options.chunkBytes || 1024 * 1024)));
+  let carry = '';
   try {
     while (true) {
       const bytesRead = fs.readSync(descriptor, buffer, 0, buffer.length, null);

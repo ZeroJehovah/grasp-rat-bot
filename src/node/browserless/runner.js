@@ -45,6 +45,7 @@ const {
 } = require('./high-drop-player-tracker');
 const { createEasyKillPlayerTracker } = require('./easy-kill-player-tracker');
 const { createCombatCompletionTracker } = require('./combat-completion-tracker');
+const { createCombatBattleLog, runCombatBattleLogSelfTest } = require('./combat-battle-log');
 const { createDailyDamagePlayerTracker } = require('./daily-damage-player-tracker');
 const { createDynamicWhitelist } = require('./dynamic-whitelist');
 const {
@@ -1384,6 +1385,12 @@ async function runBrowserlessRunner(config, deps = {}) {
     file: path.join(config.dataDir, 'combat-learning.json'),
     now,
     backgroundIo
+  });
+  const combatBattleLog = deps.combatBattleLog || createCombatBattleLog({
+    logDir: config.logDir,
+    now,
+    backgroundIo,
+    onError: (err, detail) => recordSupervisorError(err, { operation: 'combat-battle-log', ...detail })
   });
   const easyKillPlayerTracker = deps.easyKillPlayerTracker || createEasyKillPlayerTracker({
     file: path.join(config.dataDir, 'easy-kill-players.json'),
@@ -2784,6 +2791,7 @@ async function runBrowserlessRunner(config, deps = {}) {
       preparedSnapshotSafety = null;
       canary = await readOnlyCanary(config, {
         logStore,
+        combatBattleLog,
         now,
         persistedState: stateBeforeCanary,
         safetyController,
@@ -2867,6 +2875,13 @@ async function runBrowserlessRunner(config, deps = {}) {
       recordSupervisorError(err, { operation: 'canary' });
       canary = buildRunnerErrorCanary(err, config, { now });
       logStore.append('runner', 'runner-canary-error', canary);
+    }
+    // Finalize any still-open per-battle log when the canary run ends so the
+    // last engagement is compressed and indexed before the next loop/session.
+    try {
+      combatBattleLog.flush('canary-finish');
+    } catch (err) {
+      recordSupervisorError(err, { operation: 'combat-battle-log-flush' });
     }
     const { finalSelf, loginPoint: learnedLoginPoint } = learnedLoginPointFromCanary(canary);
     const previousPendingExit = stateBeforeCanary?.runner?.pendingExit || null;
@@ -4283,6 +4298,7 @@ async function runBrowserlessRunnerSelfTest() {
     }
     const complexCombatMainThreadBudget = await runComplexCombatMainThreadBudgetSelfTest(tmp);
     const snapshotEdge = await runSnapshotEdgeSelfTest();
+    const combatBattleLog = runCombatBattleLogSelfTest();
     const runnerLog = path.join(tmp, 'logs', '2026-07-08', 'runner.jsonl');
     const text = fs.readFileSync(runnerLog, 'utf8');
     return {
@@ -4322,6 +4338,7 @@ async function runBrowserlessRunnerSelfTest() {
         && nearbyCoinRoutePanelTest.ok
         && statusServerChatTest.ok
         && snapshotEdge.ok
+        && combatBattleLog.ok
         // Host scheduling/GC timing is diagnostic; functional runner blocks
         // remain release-gating without turning an external pause into a
         // product failure.
@@ -4360,6 +4377,7 @@ async function runBrowserlessRunnerSelfTest() {
       nearbyCoinRoutePanelTest,
       statusServerChatTest,
       snapshotEdge,
+      combatBattleLog,
       complexCombatMainThreadBudget,
       logFile: runnerLog
     };
