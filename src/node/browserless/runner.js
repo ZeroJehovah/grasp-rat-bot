@@ -31,7 +31,8 @@ const {
   BROWSERLESS_WEB_PANEL_VERSION,
   groupBlockingFactorsCore,
   highDropRankValueCore,
-  isStaminaExhaustionExitReasonCore
+  isStaminaExhaustionExitReasonCore,
+  lastExitPanelVisibleCore
 } = require('./web-panel');
 const {
   applySingleBlockerLoginBypass,
@@ -3942,6 +3943,44 @@ async function runBrowserlessRunnerSelfTest() {
       }),
       { nowMs: Date.parse('2026-07-24T08:25:00.000Z') }
     );
+    const panelTransportRecoveryCompact = buildCompactBrowserlessStatus({
+      session: { userId: 7, sessionToken: 'panel-self-test-token' },
+      runner: {
+        running: true,
+        currentAction: {
+          kind: 'loop-wait',
+          band: 'recover',
+          reason: 'action-settlement-stalled',
+          previousRunId: 'panel-current-run'
+        }
+      },
+      current: {
+        self: { userId: 7, name: 'self', hp: 100 },
+        decision: { kind: 'seek-enemy', band: 'profit', reason: 'best-opportunity' }
+      },
+      stats: {
+        currentSession: {
+          online: true,
+          sessionId: '7:panel-current-session',
+          userId: 7,
+          enteredAt: '2026-07-25T07:53:37.146Z',
+          lastSeenAt: '2026-07-25T07:55:13.935Z'
+        },
+        lastExit: {
+          at: '2026-07-25T07:53:13.504Z',
+          reason: 'frame-gap',
+          runId: 'panel-previous-exit-run'
+        }
+      },
+      recentExits: [{
+        ok: false,
+        at: '2026-07-25T07:53:10.733Z',
+        reason: 'frame-gap',
+        classification: 'exit',
+        shouldLeave: true,
+        runId: 'panel-previous-exit-run'
+      }]
+    }, { nowMs: Date.parse('2026-07-25T07:55:13.935Z') });
     const panelBattleCompact = buildCompactBrowserlessStatus({
       session: { userId: 7, sessionToken: 'panel-self-test-token' },
       runner: { running: true, currentAction: { kind: 'combat-live', target: { userId: 8, distance: 5600 } } },
@@ -4245,6 +4284,13 @@ async function runBrowserlessRunnerSelfTest() {
           && panelOnlineCombatWithoutSelfCompact.stats.currentSession.online === true
           && panelOnlineCombatWithoutSelfCompact.stats.currentSession.realtimeOnline === true
           && panelOnlineCombatWithoutSelfCompact.action.kind === 'combat-live'
+          && panelTransportRecoveryCompact.game.inGame === false
+          && panelTransportRecoveryCompact.stats.currentSession.online === true
+          && panelTransportRecoveryCompact.stats.currentSession.realtimeOnline === false
+          && panelTransportRecoveryCompact.stats.offline.lastExitReason === 'frame-gap'
+          && panelTransportRecoveryCompact.recentExit?.reason === 'frame-gap'
+          && lastExitPanelVisibleCore(panelTransportRecoveryCompact) === true
+          && lastExitPanelVisibleCore(panelOnlineCombatWithoutSelfCompact) === false
           && browserlessCoinPickupObservationTest.ok
           && browserlessSnapshotCoinPickupObservationTest.ok
           && browserlessFastSnapshotPickupObservationTest.ok
@@ -4304,6 +4350,14 @@ async function runBrowserlessRunnerSelfTest() {
           online: panelOnlineCombatWithoutSelfCompact.stats.currentSession.online,
           realtimeOnline: panelOnlineCombatWithoutSelfCompact.stats.currentSession.realtimeOnline,
           actionKind: panelOnlineCombatWithoutSelfCompact.action.kind
+        },
+        transportRecovery: {
+          inGame: panelTransportRecoveryCompact.game.inGame,
+          online: panelTransportRecoveryCompact.stats.currentSession.online,
+          realtimeOnline: panelTransportRecoveryCompact.stats.currentSession.realtimeOnline,
+          lastExitReason: panelTransportRecoveryCompact.stats.offline.lastExitReason,
+          recentExitReason: panelTransportRecoveryCompact.recentExit?.reason || '',
+          lastExitPanelVisible: lastExitPanelVisibleCore(panelTransportRecoveryCompact)
         },
         battleDistance: panelBattleCompact.battle.distance,
         battleMovementDistance: panelBattleCompact.battle.movementDistance,

@@ -28902,6 +28902,8 @@ async function runSelfTest() {
           panelScript.includes('const { online, realtimeOnline } = panelSessionFlags(status);'),
           panelScript.includes("if (online && !liveCombat) addRow(rowsOut, '原因', actionReasonDisplay(status), true)"),
           panelScript.includes("const reason = offlineStats.lastExitReason || status.recentExit?.reason || ''"),
+          panelScript.includes('const lastExitPanelVisible = '),
+          panelScript.includes('const show = lastExitPanelVisible(status);'),
           panelScript.includes('const battle = recentBattle(status);'),
           panelScript.includes("const liveCombat = Boolean(realtimeOnline && (kind === 'combat-live' || action.kind === 'combat-live'))"),
           panelScript.includes('if (realtimeOnline && !liveCombat && isCombatStatus(status, kind, reason))'),
