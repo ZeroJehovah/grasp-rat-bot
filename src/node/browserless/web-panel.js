@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.25.1';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.26.1';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function highDropRankValueCore(item) {
@@ -262,6 +262,10 @@ function renderBrowserlessWebPanel() {
     input{font:inherit}
     pre.auth-url{display:none;white-space:pre-wrap;overflow-wrap:anywhere;margin:8px 0 0;border:1px solid var(--line);border-radius:6px;background:var(--panel2);color:var(--muted);padding:8px;max-height:120px;overflow:auto}
     .auth-message{min-height:18px;overflow-wrap:anywhere}
+    .map-stage{position:relative;width:min(100%,420px);aspect-ratio:1;margin:0 auto;touch-action:pan-y}
+    .map-canvas{display:block;width:100%;height:100%;aspect-ratio:1}
+    .map-tooltip{position:absolute;z-index:2;display:none;max-width:min(240px,80%);padding:6px 8px;border:1px solid rgba(255,255,255,.2);border-radius:5px;background:rgba(8,12,18,.96);color:var(--text);font-size:12px;line-height:1.4;white-space:pre-line;pointer-events:none;box-shadow:0 5px 16px rgba(0,0,0,.3)}
+    .map-tooltip.visible{display:block}
     .nearby-panel{min-width:0}
     .nearby-combined{display:grid;grid-template-columns:minmax(170px,.55fr) minmax(0,1.45fr);gap:10px;align-items:start;min-width:0}
     .nearby-pane{min-width:0}
@@ -453,6 +457,15 @@ function renderBrowserlessWebPanel() {
             </div>
           </section>
         </div>
+        <section id="mapPanel" data-panel-key="target-map">
+          <div class="panel-head"><h2 class="panel-title" data-panel-title role="button" tabindex="0" aria-expanded="true">地图</h2><div class="panel-head-meta"><span id="mapTitleMeta" class="title-meta muted">--</span></div></div>
+          <div class="panel-body">
+            <div id="mapStage" class="map-stage">
+              <canvas id="targetMap" class="map-canvas" width="420" height="420" aria-label="附近目标地图"></canvas>
+              <div id="mapTooltip" class="map-tooltip" role="tooltip"></div>
+            </div>
+          </div>
+        </section>
         <section id="nearbyGrid" class="nearby-panel" data-panel-key="nearby-info" hidden>
           <div class="panel-head"><h2 class="panel-title" data-panel-title role="button" tabindex="0" aria-expanded="true">附近信息</h2><div class="panel-head-meta"><span id="nearbyTitleMeta" class="title-meta">--</span></div></div>
           <div class="panel-body">
@@ -481,6 +494,7 @@ function renderBrowserlessWebPanel() {
     const WEB_PANEL_RELOAD_KEY = 'graspRatBrowserlessPanelReloadedVersion';
     const PANEL_COLLAPSE_KEY = 'graspRatBrowserlessPanelCollapsedV1';
     const AUTO_REFRESH_MS = 3000;
+    const MAP_STALE_MS = 15000;
     let autoRefreshTimer = 0;
     let countdownTimer = 0;
     let refreshInFlight = null;
@@ -489,6 +503,9 @@ function renderBrowserlessWebPanel() {
     let chatKillsCollapsed = true;
     let lastStatusReceivedAtMs = 0;
     let lastServerUpdatedAtMs = 0;
+    let latestMapStatus = null;
+    let mapHitTargets = [];
+    let mapEmptyReason = '';
     let panelCollapseState = readPanelCollapseState();
 
     const groupChatMessagesForDisplay = ${groupChatMessagesForDisplay.toString()};
@@ -1573,6 +1590,240 @@ function renderBrowserlessWebPanel() {
       appendCell(row, text, 'muted');
       return row;
     }
+    function mapUnavailableReason(status) {
+      if (!status?.game?.inGame) return '当前离线';
+      if (number(status.self?.x) === null || number(status.self?.y) === null) return '暂无自身坐标';
+      if (number(status.nearby?.vr) === null || number(status.nearby?.vr) <= 0) return '暂无可视范围';
+      const observedAgeMs = number(status.nearby?.ageMs);
+      const elapsedSinceRefreshMs = lastStatusReceivedAtMs ? Math.max(0, Date.now() - lastStatusReceivedAtMs) : 0;
+      if (observedAgeMs !== null && observedAgeMs + elapsedSinceRefreshMs > MAP_STALE_MS) return '地图数据已过期';
+      return '';
+    }
+    function setMapHeader(reason, visibleRange, coinCount, playerCount) {
+      if (reason) {
+        setRichText('mapTitleMeta', [{ text: reason }], 'muted');
+        return;
+      }
+      setRichText('mapTitleMeta', [
+        { text: '半径 ' + distance(visibleRange), className: 'meta-label' },
+        { text: ' | 金币 ', className: 'meta-label' },
+        { text: String(coinCount), className: 'coin' },
+        { text: ' | 玩家 ', className: 'meta-label' },
+        { text: String(playerCount), className: 'active-player' }
+      ]);
+    }
+    function prepareMapCanvas(canvas) {
+      const rect = canvas.getBoundingClientRect();
+      const size = Math.max(1, Math.min(rect.width, rect.height));
+      const pixelRatio = Math.min(2, Math.max(1, Number(window.devicePixelRatio) || 1));
+      const bitmapSize = Math.max(1, Math.round(size * pixelRatio));
+      if (canvas.width !== bitmapSize || canvas.height !== bitmapSize) {
+        canvas.width = bitmapSize;
+        canvas.height = bitmapSize;
+      }
+      const context = canvas.getContext('2d');
+      if (!context) return null;
+      context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+      context.clearRect(0, 0, size, size);
+      return { context, size };
+    }
+    function drawMapBase(context, size, attackRange, visibleRange) {
+      const center = size / 2;
+      const radius = Math.max(1, center - 2);
+      context.save();
+      context.beginPath();
+      context.arc(center, center, radius, 0, Math.PI * 2);
+      context.clip();
+      context.fillStyle = '#121518';
+      context.fillRect(0, 0, size, size);
+      context.strokeStyle = 'rgba(155,167,180,.16)';
+      context.lineWidth = 1;
+      context.beginPath();
+      context.moveTo(center, 2);
+      context.lineTo(center, size - 2);
+      context.moveTo(2, center);
+      context.lineTo(size - 2, center);
+      context.stroke();
+      if (attackRange > 0 && visibleRange > attackRange) {
+        context.setLineDash([4, 4]);
+        context.strokeStyle = 'rgba(74,222,128,.32)';
+        context.beginPath();
+        context.arc(center, center, radius * attackRange / visibleRange, 0, Math.PI * 2);
+        context.stroke();
+        context.setLineDash([]);
+      }
+      context.restore();
+      context.strokeStyle = 'rgba(96,165,250,.62)';
+      context.lineWidth = 1.5;
+      context.beginPath();
+      context.arc(center, center, radius, 0, Math.PI * 2);
+      context.stroke();
+      return { center, radius };
+    }
+    function drawMapMarker(context, marker) {
+      context.fillStyle = marker.color;
+      context.beginPath();
+      context.arc(marker.px, marker.py, marker.radius, 0, Math.PI * 2);
+      context.fill();
+      if (marker.invulnerable) {
+        context.strokeStyle = '#60a5fa';
+        context.lineWidth = 2;
+        context.beginPath();
+        context.arc(marker.px, marker.py, marker.radius + 2, 0, Math.PI * 2);
+        context.stroke();
+      }
+      if (marker.selected) {
+        context.strokeStyle = '#eef2f5';
+        context.lineWidth = 1.75;
+        context.beginPath();
+        context.arc(marker.px, marker.py, marker.radius + 5, 0, Math.PI * 2);
+        context.stroke();
+      }
+    }
+    function mapPlayerSelected(status, item) {
+      const actionKind = String(status.action?.kind || status.decision?.actionKind || status.decision?.kind || '');
+      if (actionKind === 'coin' || actionKind === 'seek-coin') return false;
+      const target = status.action?.target;
+      if (!target) return false;
+      const targetId = targetIdentity(target);
+      const rowId = item?.[9] === null || item?.[9] === undefined || item?.[9] === '' ? '' : String(item[9]);
+      if (targetId && rowId) return targetId === rowId;
+      return !targetId && Boolean(target.name) && String(target.name) === String(item?.[0] || '');
+    }
+    function renderTargetMap(status) {
+      latestMapStatus = status || null;
+      const canvas = document.getElementById('targetMap');
+      if (!canvas) return;
+      const prepared = prepareMapCanvas(canvas);
+      if (!prepared) return;
+      const { context, size } = prepared;
+      const visibleRange = Math.max(0, number(status?.nearby?.vr) || 0);
+      const attackRange = Math.max(0, number(status?.nearby?.ar) || 0);
+      const frame = drawMapBase(context, size, attackRange, visibleRange || 1);
+      const unavailable = mapUnavailableReason(status);
+      mapHitTargets = [];
+      mapEmptyReason = unavailable;
+      hideMapTooltip();
+      if (unavailable) {
+        setMapHeader(unavailable, visibleRange, 0, 0);
+        context.fillStyle = '#9ba7b4';
+        context.font = '12px system-ui,-apple-system,Segoe UI,sans-serif';
+        context.textAlign = 'center';
+        context.textBaseline = 'middle';
+        context.fillText(unavailable, frame.center, frame.center);
+        hideMapTooltip();
+        return;
+      }
+      const selfX = Number(status.self.x);
+      const selfY = Number(status.self.y);
+      const scale = frame.radius / visibleRange;
+      const coinRows = Array.isArray(status.nearby?.c) ? status.nearby.c : [];
+      const playerRows = Array.isArray(status.nearby?.p) ? status.nearby.p : [];
+      const markers = [];
+      for (const item of coinRows) {
+        const x = number(item?.[7]);
+        const y = number(item?.[8]);
+        if (x === null || y === null) continue;
+        const dx = x - selfX;
+        const dy = y - selfY;
+        if (Math.hypot(dx, dy) > visibleRange * 1.01) continue;
+        const amount = Math.max(0, number(item?.[1]) || 0);
+        markers.push({
+          px: frame.center + dx * scale,
+          py: frame.center + dy * scale,
+          radius: Math.min(5.5, 2.5 + Math.log2(amount + 1) * .55),
+          color: '#fbbf24',
+          selected: panelFlag(item?.[3]),
+          invulnerable: false,
+          tooltip: [
+            '金币 ' + value(item?.[0]),
+            '数额 ' + integer(item?.[1]) + ' · 距离 ' + distance(item?.[2])
+          ].join(String.fromCharCode(10))
+        });
+      }
+      for (const item of playerRows) {
+        const x = number(item?.[12]);
+        const y = number(item?.[13]);
+        if (x === null || y === null) continue;
+        const dx = x - selfX;
+        const dy = y - selfY;
+        if (Math.hypot(dx, dy) > visibleRange * 1.01) continue;
+        const afk = isAfkNearbyPlayer(item);
+        const invulnerable = isInvulnerableNearbyPlayer(item?.[4]);
+        markers.push({
+          px: frame.center + dx * scale,
+          py: frame.center + dy * scale,
+          radius: 4.5,
+          color: afk ? '#4ade80' : '#fb7185',
+          selected: mapPlayerSelected(status, item),
+          invulnerable,
+          tooltip: [
+            value(item?.[0]),
+            'HP ' + integer(item?.[1]) + ' · Drop ' + integer(item?.[3]) + ' · 距离 ' + distance(item?.[5]),
+            invulnerable ? '无敌 ' + invulnerableText(item?.[4]) : ''
+          ].filter(Boolean).join(String.fromCharCode(10))
+        });
+      }
+      context.save();
+      context.beginPath();
+      context.arc(frame.center, frame.center, frame.radius, 0, Math.PI * 2);
+      context.clip();
+      for (const marker of markers.filter(marker => !marker.selected)) drawMapMarker(context, marker);
+      for (const marker of markers.filter(marker => marker.selected)) drawMapMarker(context, marker);
+      context.restore();
+      context.fillStyle = '#eef2f5';
+      context.beginPath();
+      context.arc(frame.center, frame.center, 4.5, 0, Math.PI * 2);
+      context.fill();
+      context.strokeStyle = '#60a5fa';
+      context.lineWidth = 2;
+      context.beginPath();
+      context.arc(frame.center, frame.center, 8, 0, Math.PI * 2);
+      context.stroke();
+      mapHitTargets = markers;
+      if ((coinRows.length || playerRows.length) && !markers.length) {
+        mapEmptyReason = '目标缺少坐标';
+        setMapHeader(mapEmptyReason, visibleRange, 0, 0);
+        context.fillStyle = '#9ba7b4';
+        context.font = '12px system-ui,-apple-system,Segoe UI,sans-serif';
+        context.textAlign = 'center';
+        context.textBaseline = 'middle';
+        context.fillText(mapEmptyReason, frame.center, frame.center + 24);
+      } else {
+        setMapHeader('', visibleRange, markers.filter(marker => marker.color === '#fbbf24').length, markers.filter(marker => marker.color !== '#fbbf24').length);
+      }
+    }
+    function hideMapTooltip() {
+      const tooltip = document.getElementById('mapTooltip');
+      if (!tooltip) return;
+      tooltip.classList.remove('visible');
+    }
+    function updateMapTooltip(event) {
+      const canvas = document.getElementById('targetMap');
+      const stage = document.getElementById('mapStage');
+      const tooltip = document.getElementById('mapTooltip');
+      if (!canvas || !stage || !tooltip || !mapHitTargets.length) {
+        hideMapTooltip();
+        return;
+      }
+      const rect = canvas.getBoundingClientRect();
+      const localX = event.clientX - rect.left;
+      const localY = event.clientY - rect.top;
+      const marker = mapHitTargets
+        .map(item => ({ item, distance: Math.hypot(localX - item.px, localY - item.py) }))
+        .filter(candidate => candidate.distance <= Math.max(10, candidate.item.radius + 5))
+        .sort((a, b) => a.distance - b.distance || Number(b.item.selected) - Number(a.item.selected))[0]?.item;
+      if (!marker) {
+        hideMapTooltip();
+        return;
+      }
+      tooltip.textContent = marker.tooltip;
+      tooltip.classList.add('visible');
+      const left = Math.min(stage.clientWidth - tooltip.offsetWidth - 5, Math.max(5, localX + 12));
+      const top = Math.min(stage.clientHeight - tooltip.offsetHeight - 5, Math.max(5, localY + 12));
+      tooltip.style.left = left + 'px';
+      tooltip.style.top = top + 'px';
+    }
     function renderNearbyCoins(status) {
       const node = document.getElementById('nearbyCoins');
       if (!node) return;
@@ -2423,6 +2674,7 @@ function renderBrowserlessWebPanel() {
       rows('actionDetails', actionDetailRows(s));
       updateBattlePanel(s);
       updateLastExitPanel(s);
+      renderTargetMap(s);
       updateNearbyPanels(s);
       renderHighDropPlayers(s);
       renderPlayerMemory(s);
@@ -2496,6 +2748,10 @@ function renderBrowserlessWebPanel() {
         ]);
       }
       if (latestChatStatus?.snapshot?.lastAt) setText('chatRefreshAt', elapsedSecondsText(latestChatStatus.snapshot.lastAt));
+      if (latestMapStatus) {
+        const nextMapEmptyReason = mapUnavailableReason(latestMapStatus);
+        if (nextMapEmptyReason === '地图数据已过期' && nextMapEmptyReason !== mapEmptyReason) renderTargetMap(latestMapStatus);
+      }
     }
     function isPageVisibleForRefresh() {
       if (document.visibilityState) return document.visibilityState === 'visible';
@@ -2615,6 +2871,19 @@ function renderBrowserlessWebPanel() {
     document.addEventListener('visibilitychange', syncAutoRefreshForVisibility);
     window.addEventListener('pageshow', syncAutoRefreshForVisibility);
     window.addEventListener('pagehide', stopAutoRefresh);
+    document.getElementById('targetMap')?.addEventListener('pointermove', updateMapTooltip);
+    document.getElementById('targetMap')?.addEventListener('pointerleave', hideMapTooltip);
+    const mapStage = document.getElementById('mapStage');
+    if (mapStage && typeof ResizeObserver === 'function') {
+      const mapResizeObserver = new ResizeObserver(() => {
+        if (latestMapStatus) renderTargetMap(latestMapStatus);
+      });
+      mapResizeObserver.observe(mapStage);
+    } else {
+      window.addEventListener('resize', () => {
+        if (latestMapStatus) renderTargetMap(latestMapStatus);
+      });
+    }
     initPanelCollapse();
     syncChatKillToggle();
     // Apply persisted panel classes before enabling transitions so refreshes do not animate.

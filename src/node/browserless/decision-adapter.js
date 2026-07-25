@@ -1562,7 +1562,9 @@ function refreshRealtimeSnapshotObservation(state, self, stateful = {}, options 
     0,
     0,
     'snapshot',
-    0
+    0,
+    Math.round(Number(coin.x)),
+    Math.round(Number(coin.y))
   ]);
   const realtimeByUserId = new Map();
   for (const entity of Array.isArray(state?.realtime?.entities) ? state.realtime.entities : []) {
@@ -1622,6 +1624,8 @@ function refreshRealtimeSnapshotObservation(state, self, stateful = {}, options 
       dropKnown,
       invulnerableMs,
       distance,
+      x,
+      y,
       mode: String(
         realtimeEntity?.current_join_mode || realtimeEntity?.mode || realtimeEntity?.joined
         || metadataSource?.current_join_mode || metadataSource?.mode || metadataSource?.joined || ''
@@ -1656,7 +1660,9 @@ function refreshRealtimeSnapshotObservation(state, self, stateful = {}, options 
       String(player.key),
       player.afk ? 1 : 0,
       player.afk && player.afkGreen ? 1 : 0,
-      foldAsLowValueAfk ? 1 : 0
+      foldAsLowValueAfk ? 1 : 0,
+      Math.round(Number(player.x)),
+      Math.round(Number(player.y))
     ];
   });
   const observedAtMs = Number(fallback.receivedAtMs || 0)
@@ -2588,7 +2594,9 @@ function summarizeNearbyForPanel(input, action, combat, options = {}, singleCoin
       String(coin.authority || '') || null,
       singleCoinBaitMatchesCore(coin, singleCoinBait, {
         sameCoinRadiusCm: options.singleCoinBaitSameCoinRadiusCm ?? BROWSER_RUNTIME_DEFAULTS.singleCoinBaitSameCoinRadiusCm
-      }) ? 1 : 0
+      }) ? 1 : 0,
+      Math.round(Number(coin.x)),
+      Math.round(Number(coin.y))
     ]);
   const threatTargetIds = new Set((input.activeThreats || [])
     .concat(input.firingThreats || [], input.avoidanceThreats || [], input.snapshotActiveThreats || [])
@@ -2648,7 +2656,9 @@ function summarizeNearbyForPanel(input, action, combat, options = {}, singleCoin
         targetKey,
         afk ? 1 : 0,
         afk && afkDisplayGreen(target, options) ? 1 : 0,
-        foldAsLowValueAfk ? 1 : 0
+        foldAsLowValueAfk ? 1 : 0,
+        Math.round(Number(target.x)),
+        Math.round(Number(target.y))
       ];
     });
   return {

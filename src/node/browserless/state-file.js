@@ -15,7 +15,7 @@ const DEFAULT_STAMINA_RESET_GRACE_MS = 10000;
 const RECENT_EXIT_MATCH_WINDOW_MS = 60000;
 const RECENT_EXIT_COMBAT_ASSOCIATION_MAX_AGE_MS = 6000;
 const HIGH_DROP_PANEL_THRESHOLD = 500;
-const COMPACT_NEARBY_VERSION = 1;
+const COMPACT_NEARBY_VERSION = 2;
 let stateWriteSequence = 0;
 
 function defaultBrowserlessState() {
@@ -1836,7 +1836,7 @@ function sortCompactNearbyCoins(a, b) {
 }
 
 function compactNearbyCoins(list) {
-  const rows = compactNearbyList(list, 7, Number.POSITIVE_INFINITY)
+  const rows = compactNearbyList(list, 9, Number.POSITIVE_INFINITY)
     .filter(row => compactNumber(row?.[1]) !== null && compactNumber(row?.[2]) !== null);
   const highValueRows = rows.filter(row => Number(row[1]) > 1);
   const lowValueRows = rows
@@ -1856,7 +1856,7 @@ function compactNearbyCoins(list) {
 }
 
 function compactNearbyPlayers(list) {
-  const rows = compactNearbyList(list, 13, Number.POSITIVE_INFINITY);
+  const rows = compactNearbyList(list, 15, Number.POSITIVE_INFINITY);
   const visibleRows = [];
   let lowHiddenCount = 0;
   for (const row of rows) {
@@ -1868,7 +1868,11 @@ function compactNearbyPlayers(list) {
       continue;
     }
     if (currentShape) {
-      visibleRows.push(row.slice(0, 12));
+      visibleRows.push([
+        ...row.slice(0, 12),
+        row.length >= 15 ? row[13] : null,
+        row.length >= 15 ? row[14] : null
+      ]);
       continue;
     }
     const legacy = row.slice(0, 10);
@@ -1888,14 +1892,29 @@ function compactNearbyCount(value) {
 
 function compactNearby(nearby) {
   if (!nearby || typeof nearby !== 'object') return null;
+  if (Number(nearby.compactVersion) === 1) {
+    return {
+      compactVersion: COMPACT_NEARBY_VERSION,
+      ar: compactNumber(nearby.ar ?? nearby.attackRange),
+      vr: compactNumber(nearby.vr ?? nearby.visibleRange),
+      c: compactNearbyList(nearby.c || nearby.coins, 9, Number.POSITIVE_INFINITY),
+      coinLowHiddenCount: compactNearbyCount(nearby.coinLowHiddenCount),
+      p: compactNearbyList(nearby.p || nearby.players, 12, Number.POSITIVE_INFINITY)
+        .map(row => [...row, null, null]),
+      playerLowHiddenCount: compactNearbyCount(nearby.playerLowHiddenCount),
+      observedAt: nearby.observedAt || '',
+      tick: compactNumber(nearby.tick),
+      ageMs: compactNumber(nearby.ageMs)
+    };
+  }
   if (Number(nearby.compactVersion) === COMPACT_NEARBY_VERSION) {
     return {
       compactVersion: COMPACT_NEARBY_VERSION,
       ar: compactNumber(nearby.ar ?? nearby.attackRange),
       vr: compactNumber(nearby.vr ?? nearby.visibleRange),
-      c: compactNearbyList(nearby.c || nearby.coins, 7, Number.POSITIVE_INFINITY),
+      c: compactNearbyList(nearby.c || nearby.coins, 9, Number.POSITIVE_INFINITY),
       coinLowHiddenCount: compactNearbyCount(nearby.coinLowHiddenCount),
-      p: compactNearbyList(nearby.p || nearby.players, 12, Number.POSITIVE_INFINITY),
+      p: compactNearbyList(nearby.p || nearby.players, 14, Number.POSITIVE_INFINITY),
       playerLowHiddenCount: compactNearbyCount(nearby.playerLowHiddenCount),
       observedAt: nearby.observedAt || '',
       tick: compactNumber(nearby.tick),

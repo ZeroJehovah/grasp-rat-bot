@@ -3562,6 +3562,8 @@ async function runBrowserlessRunnerSelfTest() {
       ok: routeRowsText(routeRowsWhenFirstMissing) === expectedRouteRows
         && routeRowsText(routeRowsWhenFirstPresent) === expectedRouteRows
         && routeRowsText(previewRows) === expectedPreviewRows
+        && routeRowsWhenFirstPresent.find(row => row[0] === 'route-a')?.[7] === 20
+        && routeRowsWhenFirstPresent.find(row => row[0] === 'route-a')?.[8] === 0
         && new Set(routeRowsWhenFirstMissing.map(row => row[0])).size === routeRowsWhenFirstMissing.length
         && new Set(routeRowsWhenFirstPresent.map(row => row[0])).size === routeRowsWhenFirstPresent.length
         && new Set(previewRows.map(row => row[0])).size === previewRows.length,
@@ -3590,8 +3592,41 @@ async function runBrowserlessRunnerSelfTest() {
     ).p;
     const nearbyFleeTargetPanelTest = {
       ok: fleePanelRows.find(row => row[0] === 'Pyro')?.[9] === '21557'
-        && fleePanelRows.find(row => row[0] === 'xuanze00')?.[9] === '34711',
+        && fleePanelRows.find(row => row[0] === 'xuanze00')?.[9] === '34711'
+        && fleePanelRows.find(row => row[0] === 'Pyro')?.[13] === 10000
+        && fleePanelRows.find(row => row[0] === 'Pyro')?.[14] === 0,
       rows: fleePanelRows.map(row => `${row[0]}:${row[6]}:${row[9]}`).join(',')
+    };
+    const nearbyMapCompact = buildCompactBrowserlessStatus({
+      updatedAt: '2026-07-26T01:00:00.000Z',
+      session: { userId: 7, sessionToken: 'nearby-map-self-test-token' },
+      runner: { running: true },
+      current: {
+        self: { user_id: 7, name: 'self', x: 0, y: 0, hp: 100 },
+        decision: {
+          kind: 'wait',
+          at: '2026-07-26T01:00:00.000Z',
+          input: {
+            nearby: {
+              ar: 15000,
+              vr: 50000,
+              c: routeRowsWhenFirstPresent,
+              p: fleePanelRows,
+              observedAt: '2026-07-26T01:00:00.000Z',
+              ageMs: 100
+            }
+          }
+        }
+      }
+    }, { nowMs: Date.parse('2026-07-26T01:00:00.100Z') });
+    const nearbyMapCoordinatesTest = {
+      ok: nearbyMapCompact.nearby?.compactVersion === 2
+        && nearbyMapCompact.nearby?.c?.find(row => row[0] === 'route-a')?.[7] === 20
+        && nearbyMapCompact.nearby?.c?.find(row => row[0] === 'route-a')?.[8] === 0
+        && nearbyMapCompact.nearby?.p?.find(row => row[0] === 'Pyro')?.[12] === 10000
+        && nearbyMapCompact.nearby?.p?.find(row => row[0] === 'Pyro')?.[13] === 0,
+      coin: nearbyMapCompact.nearby?.c?.find(row => row[0] === 'route-a') || null,
+      player: nearbyMapCompact.nearby?.p?.find(row => row[0] === 'Pyro') || null
     };
     const realtimeLootFixture = (selfHp, includeCoin) => {
       const nowMs = Date.UTC(2026, 6, 23, 1, 29, 48);
@@ -4205,6 +4240,14 @@ async function runBrowserlessRunnerSelfTest() {
       const base = `http://127.0.0.1:${statusTestHandle.port}`;
       const pageResponse = await fetch(`${base}/`);
       const pageHtml = await pageResponse.text();
+      const pageScript = pageHtml.match(/<script>([\s\S]*)<\/script>/)?.[1] || '';
+      let pageScriptParses = false;
+      try {
+        Function(pageScript);
+        pageScriptParses = Boolean(pageScript);
+      } catch (_) {
+        pageScriptParses = false;
+      }
       const unauthorizedResponse = await fetch(`${base}/api/chat`);
       const chatResponse = await fetch(`${base}/api/chat?token=status-self-test-token`);
       const chatBody = await chatResponse.json();
@@ -4321,6 +4364,7 @@ async function runBrowserlessRunnerSelfTest() {
           && panelCombatInitial.movementDistance === 0
           && panelCombatMoved.movementDistance === 500
           && nearbyFleeTargetPanelTest.ok
+          && nearbyMapCoordinatesTest.ok
           && realtimeLootSafetyArbitrationTest.ok
         ),
         selfDropRange: {
@@ -4372,12 +4416,18 @@ async function runBrowserlessRunnerSelfTest() {
         },
         measuredMovementDistance: panelCombatMoved.movementDistance,
         nearbyFleeTargetPanel: nearbyFleeTargetPanelTest,
+        nearbyMapCoordinates: nearbyMapCoordinatesTest,
         realtimeLootSafetyArbitration: realtimeLootSafetyArbitrationTest
       };
       statusServerChatTest = {
         ok: Boolean(
           pageResponse.ok
           && pageHtml.includes('id="chatPanel"')
+          && pageHtml.includes('id="mapPanel"')
+          && pageHtml.includes('id="targetMap"')
+          && pageHtml.indexOf('id="mapPanel"') < pageHtml.indexOf('id="nearbyGrid"')
+          && pageHtml.includes('MAP_STALE_MS = 15000')
+          && pageScriptParses
           && pageHtml.includes('/api/chat/send')
           && unauthorizedResponse.status === 401
           && chatResponse.ok
@@ -4393,6 +4443,8 @@ async function runBrowserlessRunnerSelfTest() {
         activityCount: chatActivityCount,
         sendInputs: chatSendInputs.slice(),
         webChatPanelPresent: pageHtml.includes('id="chatPanel"'),
+        targetMapPanelPresent: pageHtml.includes('id="targetMap"'),
+        pageScriptParses,
         targetMarkerInsideSharedRowEdge,
         targetMarkerAvoidsAdjacentOverlap,
         targetMarkerBoundaryOwnership,
@@ -4442,6 +4494,7 @@ async function runBrowserlessRunnerSelfTest() {
         && chatService.ok
         && dynamicSnapshotPollerStatus.currentIntervalMs === DEFAULT_CHAT_ACTIVE_INTERVAL_MS
         && nearbyCoinRoutePanelTest.ok
+        && nearbyMapCoordinatesTest.ok
         && statusServerChatTest.ok
         && snapshotEdge.ok
         && combatBattleLog.ok
@@ -4482,6 +4535,7 @@ async function runBrowserlessRunnerSelfTest() {
       chatService,
       dynamicSnapshotPollerStatus,
       nearbyCoinRoutePanelTest,
+      nearbyMapCoordinatesTest,
       statusServerChatTest,
       snapshotEdge,
       combatBattleLog,
