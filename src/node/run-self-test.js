@@ -13622,6 +13622,11 @@ async function runSelfTest() {
           stateful,
           { ...options, nowMs: nowMs + 100 }
         );
+        const restored = buildBrowserlessDecision(
+          makeState({ drop_id: 'threshold-refresh', amount: 50, x: 3000, y: 0 }),
+          stateful,
+          { ...options, nowMs: nowMs + 200 }
+        );
         const explicitCoinRejection = currentProfitThresholdEligibility({
           kind: 'coin',
           target: { id: 353 }
@@ -13662,6 +13667,11 @@ async function runSelfTest() {
           rejected.action.finalActionArbitration?.mode || '',
           stateful.finalActionArbitration?.profitDropout === null,
           rejected.profit.threshold.filtered.some(item => item.id === 'threshold-refresh'),
+          restored.action.target?.id,
+          restored.action.target?.x,
+          restored.action.reward,
+          restored.action.staminaCost,
+          restored.action.finalActionArbitration === undefined,
           explicitCoinRejection?.key,
           explicitCoinRejection?.eligible,
           explicitEnemyRejection?.key,
@@ -13671,7 +13681,7 @@ async function runSelfTest() {
           nullAnnotation === null
         ].join('|');
       })(),
-      want: 'threshold-refresh|true|dynamic-profit-threshold-wait||false||true|true|coin:353|false|enemy:353|false|true|true|true'
+      want: 'threshold-refresh|true|dynamic-profit-threshold-wait||false||true|true|threshold-refresh|3000|50|3000|true|coin:353|false|enemy:353|false|true|true|true'
     },
     {
       name: 'browserless realtime final action preemption generation resets dropout once',
@@ -13698,6 +13708,21 @@ async function runSelfTest() {
           }
         });
         const consumed = adapter.getState();
+        const longPreemptionReplay = applyFinalActionArbitrationCore({
+          kind: 'wait',
+          band: 'wait',
+          reason: 'dynamic-profit-threshold-wait',
+          profitDropout: {
+            kind: 'dynamic-profit-threshold-wait',
+            yieldable: true,
+            targetValid: true,
+            targetValidity: 'coin-visible',
+            targetKey: 'coin-a'
+          }
+        }, consumed.finalActionArbitration, {
+          nowMs: 3201,
+          holdMs: 1800
+        });
         adapter.patchState({
           finalActionArbitration: {
             ...consumed.finalActionArbitration,
@@ -13721,13 +13746,16 @@ async function runSelfTest() {
           consumed.finalActionArbitration.lastPreemption.generation,
           consumed.outsideCenterIdle.startedAt,
           consumed.postAttackSettlement.phase,
+          longPreemptionReplay.held,
+          longPreemptionReplay.override.dropoutAgeMs,
+          longPreemptionReplay.override.reason,
           repeated.finalActionArbitration.profitDropout.startedAt,
           repeated.finalActionPreemptionConsumedGeneration,
           persistence.finalActionPreemption.generation,
           persistence.finalActionPreemption.reason
         ].join('|');
       })(),
-      want: 'true|1|500|waiting|1400|1|2|combat-live-realtime'
+      want: 'true|1|500|waiting|true|0|profit-dropout-confirmation|1400|1|2|combat-live-realtime'
     },
     {
       name: 'browserless rejects an in-flight planner response after newer realtime preemption',

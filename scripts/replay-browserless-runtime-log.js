@@ -8,11 +8,13 @@ const { forEachJsonlEntry } = require('./browserless-log-summary');
 const { estimateAim } = require('../src/node/browserless/combat-adapter');
 const {
   buildLowHpRecoveryThreatExitDecision,
+  currentProfitThresholdEligibility,
   easyKillEngagementFinishReason,
   recentCombatResidualThreatContinuityCore
 } = require('../src/node/browserless/decision-adapter');
 const { evaluateBrowserlessSafety } = require('../src/node/browserless/safety-controller');
 const { actionPriorityBand } = require('../src/strategy/action-priority');
+const { applyFinalActionArbitrationCore } = require('../src/strategy/action-arbitration');
 const {
   evaluateConfirmedCombatHpExitCore,
   evaluateCombatExchangeStopLossCore,
@@ -1109,7 +1111,51 @@ function replayCombat(options) {
   return result;
 }
 
-function replayTargetSwitchHysteresis(rows = []) {
+function replayTargetSwitchIdentityRemap(rows = []) {
+  const ids = Array.from(new Set(rows.map(row => String(
+    row.detail?.target?.userId ?? row.detail?.target?.user_id ?? ''
+  )).filter(Boolean)));
+  const remap = new Map(ids.map((id, index) => [id, `replay-target-${index + 1}`]));
+  return rows.map(row => {
+    const detail = row.detail || {};
+    const target = detail.target || {};
+    const targetId = String(target.userId ?? target.user_id ?? '');
+    const remappedTargetId = remap.get(targetId) || targetId;
+    const threatField = detail.movement?.dodge?.threatField || [];
+    return {
+      ...row,
+      detail: {
+        ...detail,
+        target: {
+          ...target,
+          ...(target.userId !== undefined ? { userId: remappedTargetId } : {}),
+          ...(target.user_id !== undefined ? { user_id: remappedTargetId } : {}),
+          name: targetId ? `Replay Target ${ids.indexOf(targetId) + 1}` : target.name
+        },
+        movement: {
+          ...(detail.movement || {}),
+          dodge: {
+            ...(detail.movement?.dodge || {}),
+            threatField: threatField.map(field => ({
+              ...field,
+              dangerousBullets: (field.dangerousBullets || []).map(bullet => {
+                const ownerId = String(bullet.ownerId ?? bullet.owner_id ?? '');
+                const remappedOwnerId = remap.get(ownerId) || ownerId;
+                return {
+                  ...bullet,
+                  ...(bullet.ownerId !== undefined ? { ownerId: remappedOwnerId } : {}),
+                  ...(bullet.owner_id !== undefined ? { owner_id: remappedOwnerId } : {})
+                };
+              })
+            }))
+          }
+        }
+      }
+    };
+  });
+}
+
+function replayTargetSwitchHysteresis(rows = [], options = {}) {
   const observations = rows
     .map(row => ({
       at: Date.parse(row.entry.at || ''),
@@ -1211,7 +1257,7 @@ function replayTargetSwitchHysteresis(rows = []) {
   const maxSwitchesIn10s = competitiveSwitches.reduce((max, event) => Math.max(max,
     competitiveSwitches.filter(candidate => candidate.at >= event.at && candidate.at <= event.at + 10000).length
   ), 0);
-  return {
+  const result = {
     historicalSwitches: historical.length,
     confirmedSwitches: accepted.length,
     focusSwitchesWhileCurrentValid: competitiveSwitches.length,
@@ -1225,6 +1271,21 @@ function replayTargetSwitchHysteresis(rows = []) {
     })),
     accepted: maxSwitchesIn10s <= 1 && oscillations.length === 0
   };
+  if (options.verifyIdentityRemap !== false) {
+    const remapped = replayTargetSwitchHysteresis(
+      replayTargetSwitchIdentityRemap(rows),
+      { verifyIdentityRemap: false }
+    );
+    result.identityRemapEquivalent = result.historicalSwitches === remapped.historicalSwitches
+      && result.confirmedSwitches === remapped.confirmedSwitches
+      && result.focusSwitchesWhileCurrentValid === remapped.focusSwitchesWhileCurrentValid
+      && result.maxSwitchesIn10s === remapped.maxSwitchesIn10s
+      && result.oscillatingSwitches === remapped.oscillatingSwitches
+      && JSON.stringify(result.events.map(event => event.reason))
+        === JSON.stringify(remapped.events.map(event => event.reason));
+    result.accepted = result.accepted && result.identityRemapEquivalent;
+  }
+  return result;
 }
 
 function replayCombatTargetSwitch(options) {
@@ -1234,6 +1295,148 @@ function replayCombatTargetSwitch(options) {
     lines: `${options.startLine}-${options.endLine}`,
     frames: rows.length,
     ...replayTargetSwitchHysteresis(rows)
+  };
+}
+
+function replayProfitThresholdDropout(options) {
+  const rows = selectedEntries(options);
+  const evaluations = rows.map(row => {
+    const action = row.detail.action || {};
+    const arbitration = action.finalActionArbitration || null;
+    if (arbitration?.mode !== 'hold-previous'
+      || arbitration?.reason !== 'profit-dropout-confirmation') return null;
+    const rawOpportunities = (row.detail.profit?.threshold?.filtered || []).map(item => ({
+      ...item,
+      profitThresholdEligible: false,
+      profitThresholdReason: String(item.reason || 'below-profit-threshold')
+    }));
+    const eligibility = currentProfitThresholdEligibility(action, { rawOpportunities });
+    const explicitlyRejected = eligibility?.eligible === false;
+    return {
+      line: row.line,
+      at: row.entry.at || '',
+      kind: String(action.kind || ''),
+      targetId: action.target?.id ?? action.target?.userId ?? action.target?.user_id ?? null,
+      targetKey: eligibility?.key || '',
+      historicalMode: arbitration.mode,
+      historicalDropoutAgeMs: Number(arbitration.dropoutAgeMs ?? 0),
+      explicitlyRejected,
+      replayMode: explicitlyRejected ? 'current-action' : arbitration.mode,
+      replayHeld: !explicitlyRejected
+    };
+  }).filter(Boolean);
+  const explicitlyRejectedRows = evaluations.filter(item => item.explicitlyRejected);
+  const replayedHoldRows = evaluations.filter(item => item.replayHeld);
+  return {
+    mode: 'profit-threshold-dropout',
+    lines: `${options.startLine}-${options.endLine}`,
+    frames: rows.length,
+    historicalHoldRows: evaluations.length,
+    explicitlyRejectedRows: explicitlyRejectedRows.length,
+    replayedHoldRows: replayedHoldRows.length,
+    samples: evaluations,
+    accepted: evaluations.length > 0
+      && explicitlyRejectedRows.length === evaluations.length
+      && replayedHoldRows.length === 0
+  };
+}
+
+function actionWithoutFinalArbitration(action = {}) {
+  const output = { ...action };
+  delete output.finalActionArbitration;
+  return output;
+}
+
+function dropoutActionFromArbitration(arbitration = {}) {
+  const focus = arbitration.mode === 'commit-current'
+    ? (arbitration.to || {})
+    : (arbitration.from || {});
+  return {
+    kind: String(focus.kind || 'wait'),
+    band: String(focus.band || 'wait'),
+    reason: String(focus.reason || arbitration.dropoutKind || 'no-profitable-candidate'),
+    profitDropout: {
+      kind: String(arbitration.dropoutKind || focus.reason || 'no-profitable-candidate'),
+      yieldable: true,
+      targetValid: arbitration.targetValid === true,
+      targetValidity: String(arbitration.targetValidity || ''),
+      targetKey: String(arbitration.dropoutTargetKey || '')
+    }
+  };
+}
+
+function replayProfitDropoutPreemption(options) {
+  const rows = selectedEntries(options);
+  let arbitrationState = null;
+  let generation = 0;
+  let consumedGeneration = 0;
+  let realtimeEpisodeActive = false;
+  let immediatePreemptions = 0;
+  const plannerFrames = [];
+  for (const row of rows) {
+    const action = row.detail.action || {};
+    const band = String(action.band || row.detail.band || '');
+    const realtimePreemption = ['exit', 'safety', 'combat', 'recover'].includes(band);
+    if (realtimePreemption) {
+      if (!realtimeEpisodeActive) generation += 1;
+      realtimeEpisodeActive = true;
+      immediatePreemptions += 1;
+      if (generation > consumedGeneration) {
+        consumedGeneration = generation;
+        if (arbitrationState) arbitrationState.profitDropout = null;
+      }
+      continue;
+    }
+    realtimeEpisodeActive = false;
+    const historical = action.finalActionArbitration || null;
+    if (!historical || !['profit-dropout-confirmation', 'profit-dropout-confirmed'].includes(historical.reason)) continue;
+    if (!arbitrationState) {
+      const previousAction = actionWithoutFinalArbitration(action);
+      arbitrationState = {
+        lastAction: previousAction,
+        lastFocus: historical.to || null,
+        lastSelectedAt: Number(historical.to?.at || historical.at || 0),
+        lastOverride: null,
+        history: [],
+        profitDropout: null
+      };
+    }
+    const replayed = applyFinalActionArbitrationCore(
+      dropoutActionFromArbitration(historical),
+      arbitrationState,
+      {
+        nowMs: Number(historical.at || Date.parse(row.entry.at || '')),
+        holdMs: Number(historical.holdMs || 1800),
+        source: 'profit-dropout-preemption-replay'
+      }
+    );
+    plannerFrames.push({
+      line: row.line,
+      at: row.entry.at || '',
+      historicalMode: historical.mode,
+      historicalReason: historical.reason,
+      historicalDropoutAgeMs: Number(historical.dropoutAgeMs ?? 0),
+      replayMode: replayed.action.finalActionArbitration?.mode || '',
+      replayReason: replayed.action.finalActionArbitration?.reason || '',
+      replayDropoutAgeMs: replayed.action.finalActionArbitration?.dropoutAgeMs ?? null,
+      replayHeld: replayed.held,
+      generation: consumedGeneration
+    });
+  }
+  const finalPlannerFrame = plannerFrames.at(-1) || null;
+  return {
+    mode: 'profit-dropout-preemption',
+    lines: `${options.startLine}-${options.endLine}`,
+    frames: rows.length,
+    immediatePreemptions,
+    generations: generation,
+    plannerFrames,
+    finalPlannerFrame,
+    accepted: immediatePreemptions >= 2
+      && generation >= 2
+      && finalPlannerFrame?.replayHeld === true
+      && finalPlannerFrame?.replayReason === 'profit-dropout-confirmation'
+      && finalPlannerFrame?.replayDropoutAgeMs === 0
   };
 }
 
@@ -4678,6 +4881,8 @@ function runReplay(options) {
   if (options.mode === 'combat-no-damage-generation-grid') return replayNoDamageGenerationGrid(options);
   if (options.mode === 'combat-response-policy-shadow') return replayResponsePolicyShadow(options);
   if (options.mode === 'combat-target-switch') return replayCombatTargetSwitch(options);
+  if (options.mode === 'profit-threshold-dropout') return replayProfitThresholdDropout(options);
+  if (options.mode === 'profit-dropout-preemption') return replayProfitDropoutPreemption(options);
   if (options.mode === 'combat-disengage') return replayCombatDisengage(options);
   if (options.mode === 'combat-economic-stop-loss') return replayCombatEconomicStopLoss(options);
   if (options.mode === 'combat-shot-coverage') return replayCombatShotCoverage(options);
@@ -4699,6 +4904,8 @@ module.exports = {
   replayNoDamageGenerationGrid,
   replayResponsePolicyShadow,
   replayCombatTargetSwitch,
+  replayProfitThresholdDropout,
+  replayProfitDropoutPreemption,
   replayCombatDisengage,
   replayCombatEconomicStopLoss,
   replayCombatShotCoverage,
