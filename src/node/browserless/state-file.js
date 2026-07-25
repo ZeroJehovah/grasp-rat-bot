@@ -15,7 +15,7 @@ const DEFAULT_STAMINA_RESET_GRACE_MS = 10000;
 const RECENT_EXIT_MATCH_WINDOW_MS = 60000;
 const RECENT_EXIT_COMBAT_ASSOCIATION_MAX_AGE_MS = 6000;
 const HIGH_DROP_PANEL_THRESHOLD = 500;
-const COMPACT_NEARBY_VERSION = 2;
+const COMPACT_NEARBY_VERSION = 3;
 let stateWriteSequence = 0;
 
 function defaultBrowserlessState() {
@@ -1339,6 +1339,10 @@ function compactTarget(value) {
     entityId: value.entityId ?? null,
     name: compactString(value.name || value.label, 80),
     authority: compactString(value.authority, 48),
+    x: compactNumber(value.x),
+    y: compactNumber(value.y),
+    vx: compactNumber(value.vx),
+    vy: compactNumber(value.vy),
     hp: compactNumber(value.hp),
     maxHp: compactNumber(value.maxHp ?? value.max_hp),
     drop: compactNumber(value.drop),
@@ -1523,6 +1527,8 @@ function compactSelf(self) {
     authority: compactString(self.authority, 48),
     x: compactNumber(self.x),
     y: compactNumber(self.y),
+    vx: compactNumber(self.vx),
+    vy: compactNumber(self.vy),
     hp: compactNumber(self.hp),
     drop: compactNumber(self.drop ?? self.Drop ?? self.death_drop_coins ?? self.death_reward_preview),
     active: compactBoolean(self.active),
@@ -1863,7 +1869,7 @@ function compactNearbyCoins(list) {
 }
 
 function compactNearbyPlayers(list) {
-  const rows = compactNearbyList(list, 15, Number.POSITIVE_INFINITY);
+  const rows = compactNearbyList(list, 17, Number.POSITIVE_INFINITY);
   const visibleRows = [];
   let lowHiddenCount = 0;
   for (const row of rows) {
@@ -1878,12 +1884,15 @@ function compactNearbyPlayers(list) {
       visibleRows.push([
         ...row.slice(0, 12),
         row.length >= 15 ? row[13] : null,
-        row.length >= 15 ? row[14] : null
+        row.length >= 15 ? row[14] : null,
+        row.length >= 17 ? row[15] : null,
+        row.length >= 17 ? row[16] : null
       ]);
       continue;
     }
     const legacy = row.slice(0, 10);
     legacy.push(Boolean(row?.[9]) ? 1 : 0, Boolean(row?.[9]) ? 1 : 0);
+    while (legacy.length < 16) legacy.push(null);
     visibleRows.push(legacy);
   }
   return {
@@ -1899,28 +1908,14 @@ function compactNearbyCount(value) {
 
 function compactNearby(nearby) {
   if (!nearby || typeof nearby !== 'object') return null;
-  if (Number(nearby.compactVersion) === 1) {
+  if ([1, 2, COMPACT_NEARBY_VERSION].includes(Number(nearby.compactVersion))) {
     return {
       compactVersion: COMPACT_NEARBY_VERSION,
       ar: compactNumber(nearby.ar ?? nearby.attackRange),
       vr: compactNumber(nearby.vr ?? nearby.visibleRange),
       c: compactNearbyFixedList(nearby.c || nearby.coins, 9, Number.POSITIVE_INFINITY),
       coinLowHiddenCount: compactNearbyCount(nearby.coinLowHiddenCount),
-      p: compactNearbyFixedList(nearby.p || nearby.players, 14, Number.POSITIVE_INFINITY),
-      playerLowHiddenCount: compactNearbyCount(nearby.playerLowHiddenCount),
-      observedAt: nearby.observedAt || '',
-      tick: compactNumber(nearby.tick),
-      ageMs: compactNumber(nearby.ageMs)
-    };
-  }
-  if (Number(nearby.compactVersion) === COMPACT_NEARBY_VERSION) {
-    return {
-      compactVersion: COMPACT_NEARBY_VERSION,
-      ar: compactNumber(nearby.ar ?? nearby.attackRange),
-      vr: compactNumber(nearby.vr ?? nearby.visibleRange),
-      c: compactNearbyFixedList(nearby.c || nearby.coins, 9, Number.POSITIVE_INFINITY),
-      coinLowHiddenCount: compactNearbyCount(nearby.coinLowHiddenCount),
-      p: compactNearbyFixedList(nearby.p || nearby.players, 14, Number.POSITIVE_INFINITY),
+      p: compactNearbyFixedList(nearby.p || nearby.players, 16, Number.POSITIVE_INFINITY),
       playerLowHiddenCount: compactNearbyCount(nearby.playerLowHiddenCount),
       observedAt: nearby.observedAt || '',
       tick: compactNumber(nearby.tick),

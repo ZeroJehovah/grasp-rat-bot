@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.26.1';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.26.2';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function highDropRankValueCore(item) {
@@ -495,6 +495,7 @@ function renderBrowserlessWebPanel() {
     const PANEL_COLLAPSE_KEY = 'graspRatBrowserlessPanelCollapsedV1';
     const AUTO_REFRESH_MS = 3000;
     const MAP_STALE_MS = 15000;
+    const MAP_ARROW_PATH = new Path2D('M985.080436 452.252932c50.87955-16.95037 52.1878-88.392197 1.990815-107.219621l-910.086973-341.282615C31.252407-13.398755-13.398735 31.252387 3.750717 76.984257l341.282615 910.086973c18.827424 50.196985 90.269252 48.888735 107.219621-1.990815l133.213981-399.585062 399.613502-133.242421zM154.22791 154.199449l642.464522 240.945526-274.163701 91.40686a56.880436 56.880436 0 0 0-35.976875 35.976876l-91.406861 274.163701-240.917085-642.464523z');
     let autoRefreshTimer = 0;
     let countdownTimer = 0;
     let refreshInFlight = null;
@@ -1661,6 +1662,23 @@ function renderBrowserlessWebPanel() {
       return { center, radius };
     }
     function drawMapMarker(context, marker) {
+      if (marker.direction) {
+        const scale = marker.radius * 3 / 1024;
+        context.save();
+        context.translate(marker.px, marker.py);
+        context.rotate(Math.atan2(marker.direction.vy, marker.direction.vx) + Math.PI * .75);
+        context.scale(scale, scale);
+        context.translate(-512, -512);
+        context.fillStyle = marker.color;
+        context.fill(MAP_ARROW_PATH, 'evenodd');
+        if (marker.invulnerable) {
+          context.strokeStyle = '#60a5fa';
+          context.lineWidth = 90;
+          context.stroke(MAP_ARROW_PATH);
+        }
+        context.restore();
+        return;
+      }
       context.fillStyle = marker.color;
       context.beginPath();
       context.arc(marker.px, marker.py, marker.radius, 0, Math.PI * 2);
@@ -1672,23 +1690,62 @@ function renderBrowserlessWebPanel() {
         context.arc(marker.px, marker.py, marker.radius + 2, 0, Math.PI * 2);
         context.stroke();
       }
-      if (marker.selected) {
-        context.strokeStyle = '#eef2f5';
-        context.lineWidth = 1.75;
-        context.beginPath();
-        context.arc(marker.px, marker.py, marker.radius + 5, 0, Math.PI * 2);
-        context.stroke();
-      }
     }
-    function mapPlayerSelected(status, item) {
-      const actionKind = String(status.action?.kind || status.decision?.actionKind || status.decision?.kind || '');
-      if (actionKind === 'coin' || actionKind === 'seek-coin') return false;
-      const target = status.action?.target;
+    function mapTargetMatchesPlayer(target, item) {
       if (!target) return false;
       const targetId = targetIdentity(target);
       const rowId = item?.[9] === null || item?.[9] === undefined || item?.[9] === '' ? '' : String(item[9]);
       if (targetId && rowId) return targetId === rowId;
       return !targetId && Boolean(target.name) && String(target.name) === String(item?.[0] || '');
+    }
+    function mapPlayerTargetRole(status, item, afk) {
+      if (mapTargetMatchesPlayer(status.combat?.target, item)) return 'combat';
+      const actionKind = String(status.action?.kind || status.decision?.actionKind || status.decision?.kind || '');
+      if (actionKind === 'coin' || actionKind === 'seek-coin' || !mapTargetMatchesPlayer(status.action?.target, item)) return '';
+      if (['flee', 'safety-exit', 'leave'].includes(actionKind)) return '';
+      return afk ? 'afk' : 'combat';
+    }
+    function mapVelocity(vxValue, vyValue) {
+      const vx = number(vxValue);
+      const vy = number(vyValue);
+      return vx !== null && vy !== null && Math.hypot(vx, vy) > .001 ? { vx, vy } : null;
+    }
+    function mapPlayerRecordNames(status) {
+      const names = new Set();
+      for (const item of Array.isArray(status.dynamicWhitelist?.p) ? status.dynamicWhitelist.p : []) names.add(String(item || ''));
+      for (const item of Array.isArray(status.easyKillPlayers?.p) ? status.easyKillPlayers.p : []) names.add(String(Array.isArray(item) ? item[0] : item || ''));
+      for (const item of Array.isArray(status.dailyDamagePlayers?.p) ? status.dailyDamagePlayers.p : []) names.add(String(Array.isArray(item) ? item[0] : item || ''));
+      names.delete('');
+      return names;
+    }
+    function drawMapTargetPath(context, center, markers, color) {
+      if (!markers.length) return;
+      context.save();
+      context.strokeStyle = color;
+      context.lineWidth = 1.75;
+      context.setLineDash([7, 5]);
+      context.beginPath();
+      context.moveTo(center, center);
+      for (const marker of markers) context.lineTo(marker.px, marker.py);
+      context.stroke();
+      context.restore();
+    }
+    function drawMapLabel(context, marker) {
+      if (!marker.label) return;
+      const rightSide = marker.px <= marker.mapCenter;
+      const x = marker.px + (rightSide ? marker.radius + 5 : -marker.radius - 5);
+      const y = marker.py - marker.radius - 3;
+      context.font = (marker.targetRole ? '700 ' : '600 ') + '11px system-ui,-apple-system,Segoe UI,sans-serif';
+      context.textAlign = rightSide ? 'left' : 'right';
+      context.textBaseline = 'bottom';
+      context.lineJoin = 'round';
+      context.strokeStyle = 'rgba(8,12,18,.94)';
+      context.lineWidth = 3;
+      context.strokeText(marker.label, x, y);
+      context.fillStyle = marker.targetRole === 'combat'
+        ? '#fb7185'
+        : (marker.targetRole === 'afk' ? '#4ade80' : (marker.kind === 'coin' ? '#fbbf24' : '#eef2f5'));
+      context.fillText(marker.label, x, y);
     }
     function renderTargetMap(status) {
       latestMapStatus = status || null;
@@ -1720,6 +1777,7 @@ function renderBrowserlessWebPanel() {
       const coinRows = Array.isArray(status.nearby?.c) ? status.nearby.c : [];
       const playerRows = Array.isArray(status.nearby?.p) ? status.nearby.p : [];
       const markers = [];
+      const recordNames = mapPlayerRecordNames(status);
       for (const item of coinRows) {
         const x = number(item?.[7]);
         const y = number(item?.[8]);
@@ -1733,8 +1791,12 @@ function renderBrowserlessWebPanel() {
           py: frame.center + dy * scale,
           radius: Math.min(5.5, 2.5 + Math.log2(amount + 1) * .55),
           color: '#fbbf24',
+          kind: 'coin',
           selected: panelFlag(item?.[3]),
+          routeOrder: Math.max(0, number(item?.[4]) || 0),
           invulnerable: false,
+          label: amount > 1 ? integer(amount) : '',
+          mapCenter: frame.center,
           tooltip: [
             '金币 ' + value(item?.[0]),
             '数额 ' + integer(item?.[1]) + ' · 距离 ' + distance(item?.[2])
@@ -1750,13 +1812,23 @@ function renderBrowserlessWebPanel() {
         if (Math.hypot(dx, dy) > visibleRange * 1.01) continue;
         const afk = isAfkNearbyPlayer(item);
         const invulnerable = isInvulnerableNearbyPlayer(item?.[4]);
+        const targetRole = mapPlayerTargetRole(status, item, afk);
+        const name = String(item?.[0] || '');
+        const label = targetRole === 'combat'
+          ? name + ' HP ' + integer(item?.[1])
+          : (targetRole === 'afk' ? name + ' Drop ' + integer(item?.[3]) : (recordNames.has(name) ? name : ''));
         markers.push({
           px: frame.center + dx * scale,
           py: frame.center + dy * scale,
           radius: 4.5,
           color: afk ? '#4ade80' : '#fb7185',
-          selected: mapPlayerSelected(status, item),
+          kind: 'player',
+          selected: Boolean(targetRole),
+          targetRole,
+          direction: afk ? null : mapVelocity(item?.[14], item?.[15]),
           invulnerable,
+          label,
+          mapCenter: frame.center,
           tooltip: [
             value(item?.[0]),
             'HP ' + integer(item?.[1]) + ' · Drop ' + integer(item?.[3]) + ' · 距离 ' + distance(item?.[5]),
@@ -1768,18 +1840,25 @@ function renderBrowserlessWebPanel() {
       context.beginPath();
       context.arc(frame.center, frame.center, frame.radius, 0, Math.PI * 2);
       context.clip();
+      const coinMarkers = markers.filter(marker => marker.kind === 'coin');
+      const routeMarkers = coinMarkers.filter(marker => marker.routeOrder > 0).sort((a, b) => a.routeOrder - b.routeOrder);
+      drawMapTargetPath(context, frame.center, routeMarkers.length ? routeMarkers : coinMarkers.filter(marker => marker.selected), '#fbbf24');
+      const playerTarget = markers.find(marker => marker.targetRole === 'combat')
+        || markers.find(marker => marker.targetRole === 'afk');
+      if (playerTarget) drawMapTargetPath(context, frame.center, [playerTarget], playerTarget.targetRole === 'combat' ? '#fb7185' : '#4ade80');
       for (const marker of markers.filter(marker => !marker.selected)) drawMapMarker(context, marker);
       for (const marker of markers.filter(marker => marker.selected)) drawMapMarker(context, marker);
+      drawMapMarker(context, {
+        px: frame.center,
+        py: frame.center,
+        radius: 5,
+        color: '#eef2f5',
+        direction: mapVelocity(status.self?.vx, status.self?.vy),
+        invulnerable: false
+      });
+      for (const marker of markers.filter(marker => marker.label && !marker.selected && !marker.targetRole)) drawMapLabel(context, marker);
+      for (const marker of markers.filter(marker => marker.label && (marker.selected || marker.targetRole))) drawMapLabel(context, marker);
       context.restore();
-      context.fillStyle = '#eef2f5';
-      context.beginPath();
-      context.arc(frame.center, frame.center, 4.5, 0, Math.PI * 2);
-      context.fill();
-      context.strokeStyle = '#60a5fa';
-      context.lineWidth = 2;
-      context.beginPath();
-      context.arc(frame.center, frame.center, 8, 0, Math.PI * 2);
-      context.stroke();
       mapHitTargets = markers;
       if ((coinRows.length || playerRows.length) && !markers.length) {
         mapEmptyReason = '目标缺少坐标';

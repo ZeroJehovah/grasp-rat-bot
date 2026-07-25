@@ -60,6 +60,7 @@ const {
   buildBrowserlessRealtimeControlDecision,
   decisionStatePatch,
   observeBrowserlessCoinPickups,
+  realtimeNearbyObservationSummary,
   snapshotSelfKillEvidence,
   summarizeNearbyForPanel
 } = require('./decision-adapter');
@@ -3574,7 +3575,7 @@ async function runBrowserlessRunnerSelfTest() {
     const fleePanelInput = {
       self: { x: 0, y: 0 },
       visibleTargets: [
-        { userId: 21557, name: 'Pyro', x: 10000, y: 0, distance: 10000, hp: 100, active: true, invulnerable: true },
+        { userId: 21557, name: 'Pyro', x: 10000, y: 0, vx: -35, vy: 35, distance: 10000, hp: 100, active: true, invulnerable: true },
         { userId: 34711, name: 'xuanze00', x: 5000, y: 0, distance: 5000, hp: 4, active: true }
       ],
       avoidanceThreats: [{ userId: 21557, name: 'Pyro', x: 10000, y: 0, distance: 10000, hp: 100, active: true, invulnerable: true }],
@@ -3597,12 +3598,38 @@ async function runBrowserlessRunnerSelfTest() {
         && fleePanelRows.find(row => row[0] === 'Pyro')?.[14] === 0,
       rows: fleePanelRows.map(row => `${row[0]}:${row[6]}:${row[9]}`).join(',')
     };
+    const selectedRealtimeNearby = realtimeNearbyObservationSummary({
+      self: { userId: 7, x: 0, y: 0 },
+      nowMs: Date.parse('2026-07-26T01:48:00.100Z'),
+      realtimeSnapshotObservation: {
+        observedAtMs: Date.parse('2026-07-26T01:48:00.000Z'),
+        nearby: {
+          ar: 14500,
+          vr: 50000,
+          c: [],
+          p: [['哈基米曼波噢耶', 69, 10000, 128, null, 10466, 0, 'Active', 1, '2480', 0, 0, 1, -77417, -1717, -35, 35]],
+          observedAt: '2026-07-26T01:48:00.000Z',
+          tick: 128523
+        },
+        _nearbyKeys: { coinKeys: [], playerKeys: ['2480'] }
+      }
+    }, { target: { userId: 2480, name: '哈基米曼波噢耶' } }, null);
+    const selectedRealtimePlayerRow = selectedRealtimeNearby?.p?.[0] || [];
+    const nearbySelectedPlayerCoordinatesTest = {
+      ok: selectedRealtimePlayerRow[6] === 1
+        && selectedRealtimePlayerRow[12] === 0
+        && selectedRealtimePlayerRow[13] === -77417
+        && selectedRealtimePlayerRow[14] === -1717
+        && selectedRealtimePlayerRow[15] === -35
+        && selectedRealtimePlayerRow[16] === 35,
+      row: selectedRealtimePlayerRow
+    };
     const nearbyMapCompact = buildCompactBrowserlessStatus({
       updatedAt: '2026-07-26T01:00:00.000Z',
       session: { userId: 7, sessionToken: 'nearby-map-self-test-token' },
       runner: { running: true },
       current: {
-        self: { user_id: 7, name: 'self', x: 0, y: 0, hp: 100 },
+        self: { user_id: 7, name: 'self', x: 0, y: 0, vx: 35, vy: -35, hp: 100 },
         decision: {
           kind: 'wait',
           at: '2026-07-26T01:00:00.000Z',
@@ -3620,11 +3647,15 @@ async function runBrowserlessRunnerSelfTest() {
       }
     }, { nowMs: Date.parse('2026-07-26T01:00:00.100Z') });
     const nearbyMapCoordinatesTest = {
-      ok: nearbyMapCompact.nearby?.compactVersion === 2
+      ok: nearbyMapCompact.nearby?.compactVersion === 3
         && nearbyMapCompact.nearby?.c?.find(row => row[0] === 'route-a')?.[7] === 20
         && nearbyMapCompact.nearby?.c?.find(row => row[0] === 'route-a')?.[8] === 0
         && nearbyMapCompact.nearby?.p?.find(row => row[0] === 'Pyro')?.[12] === 10000
-        && nearbyMapCompact.nearby?.p?.find(row => row[0] === 'Pyro')?.[13] === 0,
+        && nearbyMapCompact.nearby?.p?.find(row => row[0] === 'Pyro')?.[13] === 0
+        && nearbyMapCompact.nearby?.p?.find(row => row[0] === 'Pyro')?.[14] === -35
+        && nearbyMapCompact.nearby?.p?.find(row => row[0] === 'Pyro')?.[15] === 35
+        && nearbyMapCompact.self?.vx === 35
+        && nearbyMapCompact.self?.vy === -35,
       coin: nearbyMapCompact.nearby?.c?.find(row => row[0] === 'route-a') || null,
       player: nearbyMapCompact.nearby?.p?.find(row => row[0] === 'Pyro') || null
     };
@@ -3663,17 +3694,17 @@ async function runBrowserlessRunnerSelfTest() {
       }
     });
     const nearbyMapLegacyCompatibilityTest = {
-      ok: nearbyMapLegacyCompact.nearby?.compactVersion === 2
+      ok: nearbyMapLegacyCompact.nearby?.compactVersion === 3
         && nearbyMapLegacyCompact.nearby?.c?.[0]?.length === 9
         && nearbyMapLegacyCompact.nearby?.c?.[0]?.[7] === null
         && nearbyMapLegacyCompact.nearby?.c?.[0]?.[8] === null
-        && nearbyMapLegacyCompact.nearby?.p?.[0]?.length === 14
+        && nearbyMapLegacyCompact.nearby?.p?.[0]?.length === 16
         && nearbyMapLegacyCompact.nearby?.p?.[0]?.[12] === null
         && nearbyMapLegacyCompact.nearby?.p?.[0]?.[13] === null
         && nearbyMapMixedVersionCompact.nearby?.c?.[0]?.length === 9
         && nearbyMapMixedVersionCompact.nearby?.c?.[0]?.[7] === null
         && nearbyMapMixedVersionCompact.nearby?.c?.[0]?.[8] === null
-        && nearbyMapMixedVersionCompact.nearby?.p?.[0]?.length === 14
+        && nearbyMapMixedVersionCompact.nearby?.p?.[0]?.length === 16
         && nearbyMapMixedVersionCompact.nearby?.p?.[0]?.[12] === null
         && nearbyMapMixedVersionCompact.nearby?.p?.[0]?.[13] === null,
       coinRowLength: nearbyMapLegacyCompact.nearby?.c?.[0]?.length || 0,
@@ -4417,6 +4448,7 @@ async function runBrowserlessRunnerSelfTest() {
           && panelCombatInitial.movementDistance === 0
           && panelCombatMoved.movementDistance === 500
           && nearbyFleeTargetPanelTest.ok
+          && nearbySelectedPlayerCoordinatesTest.ok
           && nearbyMapCoordinatesTest.ok
           && nearbyMapLegacyCompatibilityTest.ok
           && realtimeLootSafetyArbitrationTest.ok
@@ -4470,6 +4502,7 @@ async function runBrowserlessRunnerSelfTest() {
         },
         measuredMovementDistance: panelCombatMoved.movementDistance,
         nearbyFleeTargetPanel: nearbyFleeTargetPanelTest,
+        nearbySelectedPlayerCoordinates: nearbySelectedPlayerCoordinatesTest,
         nearbyMapCoordinates: nearbyMapCoordinatesTest,
         nearbyMapLegacyCompatibility: nearbyMapLegacyCompatibilityTest,
         realtimeLootSafetyArbitration: realtimeLootSafetyArbitrationTest
@@ -4482,6 +4515,11 @@ async function runBrowserlessRunnerSelfTest() {
           && pageHtml.includes('id="targetMap"')
           && pageHtml.indexOf('id="mapPanel"') < pageHtml.indexOf('id="nearbyGrid"')
           && pageHtml.includes('MAP_STALE_MS = 15000')
+          && pageHtml.includes('const MAP_ARROW_PATH = new Path2D(')
+          && pageHtml.includes('context.setLineDash([7, 5])')
+          && pageHtml.includes("name + ' HP ' + integer(item?.[1])")
+          && pageHtml.includes("amount > 1 ? integer(amount) : ''")
+          && !pageHtml.includes('context.arc(marker.px, marker.py, marker.radius + 5')
           && pageScriptParses
           && pageHtml.includes('/api/chat/send')
           && unauthorizedResponse.status === 401
@@ -4549,6 +4587,7 @@ async function runBrowserlessRunnerSelfTest() {
         && chatService.ok
         && dynamicSnapshotPollerStatus.currentIntervalMs === DEFAULT_CHAT_ACTIVE_INTERVAL_MS
         && nearbyCoinRoutePanelTest.ok
+        && nearbySelectedPlayerCoordinatesTest.ok
         && nearbyMapCoordinatesTest.ok
         && nearbyMapLegacyCompatibilityTest.ok
         && statusServerChatTest.ok
@@ -4591,6 +4630,7 @@ async function runBrowserlessRunnerSelfTest() {
       chatService,
       dynamicSnapshotPollerStatus,
       nearbyCoinRoutePanelTest,
+      nearbySelectedPlayerCoordinatesTest,
       nearbyMapCoordinatesTest,
       nearbyMapLegacyCompatibilityTest,
       statusServerChatTest,

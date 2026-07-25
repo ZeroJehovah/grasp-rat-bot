@@ -1626,6 +1626,8 @@ function refreshRealtimeSnapshotObservation(state, self, stateful = {}, options 
       distance,
       x,
       y,
+      vx: numberOrNull(realtimeEntity?.vx) ?? numberOrNull(snapshotEntity?.vx),
+      vy: numberOrNull(realtimeEntity?.vy) ?? numberOrNull(snapshotEntity?.vy),
       mode: String(
         realtimeEntity?.current_join_mode || realtimeEntity?.mode || realtimeEntity?.joined
         || metadataSource?.current_join_mode || metadataSource?.mode || metadataSource?.joined || ''
@@ -1662,7 +1664,9 @@ function refreshRealtimeSnapshotObservation(state, self, stateful = {}, options 
       player.afk && player.afkGreen ? 1 : 0,
       foldAsLowValueAfk ? 1 : 0,
       Math.round(Number(player.x)),
-      Math.round(Number(player.y))
+      Math.round(Number(player.y)),
+      player.vx,
+      player.vy
     ];
   });
   const observedAtMs = Number(fallback.receivedAtMs || 0)
@@ -1816,7 +1820,11 @@ function realtimeNearbyObservationSummary(input, combat, lootAssessment, options
         }),
         p: observation.nearby.p.map((row, index) => {
           const selected = Boolean(combatTargetKey && playerKeys[index] === combatTargetKey);
-          return selected ? [...row.slice(0, 6), 1, ...row.slice(7, 12), 0] : row;
+          if (!selected) return row;
+          const selectedRow = [...row];
+          selectedRow[6] = 1;
+          selectedRow[12] = 0;
+          return selectedRow;
         })
       }
     };
@@ -1842,6 +1850,8 @@ function summarizeTarget(target) {
     authority: target.authority || '',
     x: numberOrNull(target.x),
     y: numberOrNull(target.y),
+    vx: numberOrNull(target.vx),
+    vy: numberOrNull(target.vy),
     hp: numberOrNull(target.hp),
     maxHp: numberOrNull(target.max_hp ?? target.maxHp),
     drop: entityDropValue(target),
@@ -2658,7 +2668,9 @@ function summarizeNearbyForPanel(input, action, combat, options = {}, singleCoin
         afk && afkDisplayGreen(target, options) ? 1 : 0,
         foldAsLowValueAfk ? 1 : 0,
         Math.round(Number(target.x)),
-        Math.round(Number(target.y))
+        Math.round(Number(target.y)),
+        numberOrNull(target.vx),
+        numberOrNull(target.vy)
       ];
     });
   return {
@@ -10058,6 +10070,7 @@ module.exports = {
   singleCoinBaitReturnPlan,
   summarizeBrowserlessDecision,
   snapshotSelfKillEvidence,
+  realtimeNearbyObservationSummary,
   summarizeNearbyForPanel,
   summarizeBrowserlessDecisionState
 };
