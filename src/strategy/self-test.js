@@ -168,6 +168,8 @@ const {
   incomingBulletHasCollisionRiskCore,
   incomingBulletRequiresTargetSwitchCore,
   applyCombatTargetSwitchHysteresisCore,
+  combatTargetIncomingThreatEvidenceCore,
+  combatTargetThreatAdvantageCore,
   pickEngagedCombatTargetCore,
   recentAfkAttackCommitmentCore
 } = require('./combat-target-selection');
@@ -5262,32 +5264,92 @@ function runStrategyModuleSelfTests() {
   const switchBack = applyCombatTargetSwitchHysteresisCore({
     currentTargetId: '8', currentVisibleTarget: currentTarget, proposedTarget: currentTarget, nowMs: 1150
   }, targetSwitch2.gate);
-  const urgentSwitch = applyCombatTargetSwitchHysteresisCore({
-    currentTargetId: '8', currentVisibleTarget: currentTarget, proposedTarget: candidateTarget, urgentSafety: true, nowMs: 1200
+  const urgentThreat = {
+    targetId: '9', bulletCount: 1, urgentBulletCount: 1, urgent: true,
+    riskLevel: 2, minTimeToImpactMs: 700, minDistanceCm: 5000
+  };
+  const noCurrentThreat = {
+    targetId: '8', bulletCount: 0, urgentBulletCount: 0, urgent: false,
+    riskLevel: 0, minTimeToImpactMs: null, minDistanceCm: null
+  };
+  const urgentSwitch1 = applyCombatTargetSwitchHysteresisCore({
+    currentTargetId: '8', currentVisibleTarget: currentTarget, proposedTarget: candidateTarget,
+    urgentSafety: true, currentThreat: noCurrentThreat, proposedThreat: urgentThreat, nowMs: 1200
+  }, null);
+  const urgentSwitch2 = applyCombatTargetSwitchHysteresisCore({
+    currentTargetId: '8', currentVisibleTarget: currentTarget, proposedTarget: candidateTarget,
+    urgentSafety: true, currentThreat: noCurrentThreat, proposedThreat: urgentThreat, nowMs: 1250
+  }, urgentSwitch1.gate);
+  const urgentSwitch3 = applyCombatTargetSwitchHysteresisCore({
+    currentTargetId: '8', currentVisibleTarget: currentTarget, proposedTarget: candidateTarget,
+    urgentSafety: true, currentThreat: noCurrentThreat, proposedThreat: urgentThreat, nowMs: 1300
+  }, urgentSwitch2.gate);
+  const nonSuperiorUrgent = applyCombatTargetSwitchHysteresisCore({
+    currentTargetId: '8', currentVisibleTarget: currentTarget, proposedTarget: candidateTarget,
+    urgentSafety: true,
+    currentThreat: { ...urgentThreat, targetId: '8', minTimeToImpactMs: 500 },
+    proposedThreat: { ...urgentThreat, minTimeToImpactMs: 400 },
+    nowMs: 1350
   }, null);
   const missingProposal = applyCombatTargetSwitchHysteresisCore({
-    currentTargetId: '8', currentVisibleTarget: currentTarget, proposedTarget: null, nowMs: 1250
+    currentTargetId: '8', currentVisibleTarget: currentTarget, proposedTarget: null, nowMs: 1400
   }, targetSwitch2.gate);
   const reversalBlocked = applyCombatTargetSwitchHysteresisCore({
     currentTargetId: '9',
     currentVisibleTarget: candidateTarget,
     proposedTarget: currentTarget,
     lastSwitch: { fromTargetId: '8', toTargetId: '9', at: 1100 },
-    nowMs: 1300
+    nowMs: 1450
   }, null);
+  const invalidCurrent = applyCombatTargetSwitchHysteresisCore({
+    currentTargetId: '8', currentVisibleTarget: null, proposedTarget: candidateTarget,
+    currentInvalid: true, nowMs: 1500
+  }, null);
+  const threatEvidence = combatTargetIncomingThreatEvidenceCore([
+    { ownerId: 8, incoming: true, cpa: 40, distance: 6200, timeToImpact: 1000 },
+    { ownerId: 9, incoming: true, cpa: 50, distance: 3000, timeToImpact: 400 },
+    { ownerId: 9, incoming: true, cpa: 500, distance: 1000, timeToImpact: 100 }
+  ], '9', {
+    combatTargetSwitchIncomingDistance: 6500,
+    combatTargetSwitchIncomingTimeMs: 900,
+    combatBulletHitRadiusCm: 90
+  });
+  const incomparableThreatMetrics = combatTargetThreatAdvantageCore({
+    urgent: true,
+    riskLevel: 2,
+    minTimeToImpactMs: null,
+    minDistanceCm: 5000
+  }, {
+    urgent: true,
+    riskLevel: 2,
+    minTimeToImpactMs: 700,
+    minDistanceCm: null
+  });
   results.push({
-    name: 'combat-target-switch-requires-three-ordinary-ticks-but-urgent-shooter-preempts',
+    name: 'combat-target-switch-requires-shared-confirmation-and-superior-urgent-threat',
     passed: targetSwitch1.target.user_id === 8
       && targetSwitch2.target.user_id === 8
       && targetSwitch3.target.user_id === 9
       && switchBack.target.user_id === 8
       && switchBack.gate === null
-      && urgentSwitch.target.user_id === 9
-      && urgentSwitch.diagnostic.reason === 'urgent-incoming-shooter'
+      && urgentSwitch1.target.user_id === 8
+      && urgentSwitch2.target.user_id === 8
+      && urgentSwitch3.target.user_id === 9
+      && urgentSwitch3.diagnostic.reason === 'urgent-incoming-shooter-confirmed'
+      && nonSuperiorUrgent.target.user_id === 8
+      && nonSuperiorUrgent.diagnostic.reason === 'urgent-incoming-threat-not-superior'
       && missingProposal.target.user_id === 8
       && missingProposal.gate === null
       && reversalBlocked.target.user_id === 9
       && reversalBlocked.diagnostic.reason === 'oscillating-reversal-blocked'
+      && invalidCurrent.target.user_id === 9
+      && invalidCurrent.diagnostic.reason === 'current-target-invalid'
+      && threatEvidence.bulletCount === 1
+      && threatEvidence.urgentBulletCount === 1
+      && threatEvidence.riskLevel === 3
+      && incomparableThreatMetrics.significant === false
+      && incomparableThreatMetrics.timeToImpactAdvantageMs === null
+      && incomparableThreatMetrics.distanceAdvantageCm === null
   });
 
   // Test opportunity constants validation

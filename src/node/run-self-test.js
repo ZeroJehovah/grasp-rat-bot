@@ -64,6 +64,7 @@ const {
   buildBrowserlessStrategyInput,
   buildLowHpRecoveryThreatExitDecision,
   createBrowserlessDecisionAdapter,
+  currentProfitThresholdEligibility,
   decisionStatePatch,
   effectiveProfitReward,
   evaluateProactiveCombatMarginalRoi,
@@ -81,6 +82,7 @@ const {
   attachConfirmedLeaveEvidence,
   createCanaryRunId,
   nextCombatControlTickCore,
+  plannerResponseHasNewerPreemption,
   runPreLoginSnapshotSafety,
   runReadOnlyCanary
 } = require('./browserless/canary');
@@ -13572,6 +13574,177 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'valid-profit|true|profit-dropout-confirmation|false|true|profit-dropout-confirmation|true|hold-previous|1800|0|outside-center-profit-wait|true|commit-current|profit-dropout-confirmed|1801|coin-visible|true|commit-current|profit-dropout-confirmed|true|outside-center-profit-wait||true|true'
+    },
+    {
+      name: 'browserless final arbitration releases a cached profit target on current threshold rejection',
+      got: (() => {
+        const nowMs = Date.parse('2026-07-12T00:00:00.000Z');
+        const stateful = {};
+        const makeState = coin => {
+          const self = {
+            entity_id: 1,
+            user_id: 7,
+            name: 'self',
+            x: 0,
+            y: 0,
+            hp: 100,
+            max_hp: 100,
+            stamina_1d_remaining_milli: 20000000
+          };
+          return {
+            userId: 7,
+            realtime: {
+              tick: 60,
+              frameAgeMs: 100,
+              self,
+              entities: [self],
+              bullets: [],
+              coinDrops: [coin]
+            },
+            fallback: { frameAgeMs: 100, coinDrops: [] }
+          };
+        };
+        const options = {
+          nowMs,
+          controlMode: 'non-combat-profit',
+          combatEnabled: false,
+          dynamicProfitThresholdEnabled: true,
+          opportunitySwitchHoldMs: 0,
+          finalActionArbitrationHoldMs: 1800
+        };
+        const selected = buildBrowserlessDecision(
+          makeState({ drop_id: 'threshold-refresh', amount: 100, x: 1000, y: 0 }),
+          stateful,
+          options
+        );
+        const rejected = buildBrowserlessDecision(
+          makeState({ drop_id: 'threshold-refresh', amount: 1, x: 20000, y: 0 }),
+          stateful,
+          { ...options, nowMs: nowMs + 100 }
+        );
+        const explicitCoinRejection = currentProfitThresholdEligibility({
+          kind: 'coin',
+          target: { id: 353 }
+        }, {
+          rawOpportunities: [{ type: 'coin', id: 353, profitThresholdEligible: false }]
+        });
+        const explicitEnemyRejection = currentProfitThresholdEligibility({
+          kind: 'seek-enemy',
+          target: { userId: 353 }
+        }, {
+          rawOpportunities: [{ type: 'enemy', id: 353, profitThresholdEligible: false }]
+        });
+        const typeCollision = currentProfitThresholdEligibility({
+          kind: 'coin',
+          target: { id: 353 }
+        }, {
+          rawOpportunities: [
+            { type: 'enemy', id: 353, profitThresholdEligible: false },
+            { type: 'coin', id: 353, profitThresholdEligible: true }
+          ]
+        });
+        const unknown = currentProfitThresholdEligibility({
+          kind: 'coin',
+          target: { id: 'not-currently-observed' }
+        }, { rawOpportunities: [] });
+        const nullAnnotation = currentProfitThresholdEligibility({
+          kind: 'coin',
+          target: { id: 'annotation-pending' }
+        }, {
+          rawOpportunities: [{ type: 'coin', id: 'annotation-pending', profitThresholdEligible: null }]
+        });
+        return [
+          selected.action.target?.id,
+          selected.action.profitThresholdEligible,
+          rejected.reason,
+          rejected.action.target?.id || '',
+          rejected.action.stopMotion === true,
+          rejected.action.finalActionArbitration?.mode || '',
+          stateful.finalActionArbitration?.profitDropout === null,
+          rejected.profit.threshold.filtered.some(item => item.id === 'threshold-refresh'),
+          explicitCoinRejection?.key,
+          explicitCoinRejection?.eligible,
+          explicitEnemyRejection?.key,
+          explicitEnemyRejection?.eligible,
+          typeCollision?.eligible,
+          unknown === null,
+          nullAnnotation === null
+        ].join('|');
+      })(),
+      want: 'threshold-refresh|true|dynamic-profit-threshold-wait||false||true|true|coin:353|false|enemy:353|false|true|true|true'
+    },
+    {
+      name: 'browserless realtime final action preemption generation resets dropout once',
+      got: (() => {
+        const adapter = createBrowserlessDecisionAdapter({
+          finalActionArbitration: {
+            lastAction: { kind: 'coin', band: 'profit', target: { id: 'coin-a' } },
+            lastFocus: { key: 'coin|profit|coin:coin-a', targetKey: 'coin:coin-a' },
+            lastSelectedAt: 1000,
+            lastOverride: null,
+            history: [],
+            profitDropout: { kind: 'dynamic-profit-threshold-wait', startedAt: 1100, lastAt: 1200 }
+          },
+          outsideCenterIdle: { startedAt: 500, lastAt: 1200 },
+          postAttackSettlement: { targetId: '8', phase: 'waiting' }
+        });
+        adapter.patchState({
+          finalActionPreemption: {
+            generation: 1,
+            at: 1300,
+            source: 'realtime-control',
+            band: 'safety',
+            reason: 'avoid-invulnerable-target'
+          }
+        });
+        const consumed = adapter.getState();
+        adapter.patchState({
+          finalActionArbitration: {
+            ...consumed.finalActionArbitration,
+            profitDropout: { kind: 'dynamic-profit-threshold-wait', startedAt: 1400, lastAt: 1400 }
+          }
+        });
+        adapter.patchState({
+          finalActionPreemption: {
+            generation: 1,
+            at: 1300,
+            source: 'realtime-control',
+            band: 'safety',
+            reason: 'avoid-invulnerable-target'
+          }
+        });
+        const repeated = adapter.getState();
+        adapter.noteRealtimeFinalActionPreemption({ band: 'combat', reason: 'combat-live-realtime' }, 1500);
+        const persistence = adapter.getRealtimePersistenceState();
+        return [
+          consumed.finalActionArbitration.profitDropout === null,
+          consumed.finalActionArbitration.lastPreemption.generation,
+          consumed.outsideCenterIdle.startedAt,
+          consumed.postAttackSettlement.phase,
+          repeated.finalActionArbitration.profitDropout.startedAt,
+          repeated.finalActionPreemptionConsumedGeneration,
+          persistence.finalActionPreemption.generation,
+          persistence.finalActionPreemption.reason
+        ].join('|');
+      })(),
+      want: 'true|1|500|waiting|1400|1|2|combat-live-realtime'
+    },
+    {
+      name: 'browserless rejects an in-flight planner response after newer realtime preemption',
+      got: [
+        plannerResponseHasNewerPreemption(
+          { finalActionPreemption: { generation: 1 } },
+          { finalActionPreemption: { generation: 2 } }
+        ),
+        plannerResponseHasNewerPreemption(
+          { finalActionPreemption: { generation: 2 } },
+          { finalActionPreemption: { generation: 2 } }
+        ),
+        plannerResponseHasNewerPreemption(null, {
+          finalActionPreemption: { generation: 1 }
+        })
+      ].join('|'),
+      want: 'true|false|true'
     },
     {
       name: 'browserless final arbitration does not hold over safety action',

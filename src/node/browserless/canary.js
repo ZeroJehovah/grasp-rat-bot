@@ -61,6 +61,15 @@ function nextCombatControlTickCore(currentTick, completeMs, options = {}) {
   return tick + Math.max(configuredStride, durationStride);
 }
 
+function finalActionPreemptionGeneration(value = null) {
+  return Math.max(0, Number(value?.finalActionPreemption?.generation || 0) || 0);
+}
+
+function plannerResponseHasNewerPreemption(sentStatePatch = null, currentStatePatch = null) {
+  return finalActionPreemptionGeneration(currentStatePatch)
+    > finalActionPreemptionGeneration(sentStatePatch);
+}
+
 function createTimingAggregate() {
   return { count: 0, totalMs: 0, maxMs: 0, overBudgetCount: 0 };
 }
@@ -1251,6 +1260,7 @@ async function runReadOnlyCanary(config, options = {}) {
   let lastCombatControlStatusKey = '';
   let lastRealtimeControlScale = null;
   let realtimeControlActive = false;
+  let realtimeFinalActionPreemptionActive = false;
   let plannerInFlight = false;
   let combatPersistenceScheduled = false;
   let combatPersistenceAtMs = 0;
@@ -1970,6 +1980,7 @@ async function runReadOnlyCanary(config, options = {}) {
     if (!action) {
       if (!realtimeControlActive) return false;
       realtimeControlActive = false;
+      realtimeFinalActionPreemptionActive = false;
       lastDecisionAtMs = 0;
       const release = {
         kind: 'wait',
@@ -1985,6 +1996,11 @@ async function runReadOnlyCanary(config, options = {}) {
       publishCombatControlStatus(release, currentState, control, atMs, true);
       applyDecisionAction(currentState, release, control, atMs, { errorReason: 'realtime-control-release-failed' });
       return true;
+    }
+    if (!realtimeFinalActionPreemptionActive
+      && ['exit', 'safety', 'combat', 'recover'].includes(String(action.band || ''))) {
+      decisionAdapter.noteRealtimeFinalActionPreemption?.(action, atMs);
+      realtimeFinalActionPreemptionActive = true;
     }
     realtimeControlActive = true;
     const combatSummary = {
@@ -2186,6 +2202,18 @@ async function runReadOnlyCanary(config, options = {}) {
             return;
           }
           stages['planner-response-stale'] = performance.now() - stageStarted;
+          const currentPersistenceState = decisionAdapter.getRealtimePersistenceState?.() || null;
+          if (plannerResponseHasNewerPreemption(statePatch, currentPersistenceState)) {
+            lastDecisionAtMs = 0;
+            log('canary-decision-worker-preempted', {
+              requestAtMs: workerResult.requestAtMs || atMs,
+              responseAtMs,
+              sentGeneration: finalActionPreemptionGeneration(statePatch),
+              currentGeneration: finalActionPreemptionGeneration(currentPersistenceState)
+            });
+            dispatchWorkerDecision(latestState, responseAtMs);
+            return;
+          }
           stageStarted = performance.now();
           decisionAdapter.syncPlannerDecision?.(workerResult.decision);
           stages['planner-response-sync'] = performance.now() - stageStarted;
@@ -2829,6 +2857,7 @@ module.exports = {
   inspectCanaryFrame,
   loginPointFromState,
   nextCombatControlTickCore,
+  plannerResponseHasNewerPreemption,
   runPreLoginSnapshotSafety,
   runReadOnlyCanary
 };

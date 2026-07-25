@@ -132,6 +132,11 @@ function createInitialDecisionState(options = {}) {
     returnBlockLock: cloneJson(options.returnBlockLock || null),
     returnBlockScan: cloneJson(options.returnBlockScan || null),
     finalActionArbitration: cloneJson(options.finalActionArbitration || null),
+    finalActionPreemption: cloneJson(options.finalActionPreemption || null),
+    finalActionPreemptionConsumedGeneration: Math.max(
+      0,
+      Number(options.finalActionPreemptionConsumedGeneration || 0) || 0
+    ),
     targetSwitchDiagnostics: asSwitchDiagnostics(options.targetSwitchDiagnostics),
     killHistory: asArray(options.killHistory),
     recentSelfKillEvidence: asArray(options.recentSelfKillEvidence),
@@ -260,6 +265,7 @@ function summarizeBrowserlessDecisionState(state, options = {}) {
       returnBlockScan: redactBoundedValue(state.returnBlockScan || null)
     },
     finalActionArbitration: redactBoundedValue(state.finalActionArbitration || null),
+    finalActionPreemption: redactBoundedValue(state.finalActionPreemption || null),
     targetSwitchDiagnostics: (() => {
       const diagnostics = state.targetSwitchDiagnostics;
       const events = Array.isArray(diagnostics) ? diagnostics : (Array.isArray(diagnostics?.events) ? diagnostics.events : []);

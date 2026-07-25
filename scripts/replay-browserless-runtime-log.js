@@ -31,7 +31,9 @@ const {
   shouldApplyTrajectoryCoverageCore
 } = require('../src/strategy/combat-shot-coverage');
 const {
+  applyCombatTargetSwitchHysteresisCore,
   checkProactiveActiveCombatGates,
+  combatTargetIncomingThreatEvidenceCore,
   combatEdgePressureDecisionCore,
   combatEscapeDecisionCore,
   recentAfkAttackCommitmentCore
@@ -66,6 +68,7 @@ const { chooseStableOpportunityCore } = require('../src/strategy/opportunity-cho
 function parseArgs(argv) {
   const options = {
     file: '',
+    wsFile: '',
     startLine: 1,
     endLine: Infinity,
     targetId: '',
@@ -88,6 +91,7 @@ function parseArgs(argv) {
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--file') options.file = argv[++index] || '';
+    else if (arg === '--ws-file') options.wsFile = argv[++index] || '';
     else if (arg === '--start-line') options.startLine = Number(argv[++index] || 1);
     else if (arg === '--end-line') options.endLine = Number(argv[++index] || Infinity);
     else if (arg === '--target-id') options.targetId = String(argv[++index] || '');
@@ -211,14 +215,28 @@ function normalizeVector(dx, dy) {
 }
 
 function targetAtTick(rows, tick) {
-  let before = null;
-  let after = null;
-  for (const row of rows) {
-    const rowTick = Number(row.detail.tick);
-    if (!Number.isFinite(rowTick)) continue;
-    if (rowTick <= tick) before = row;
-    if (rowTick >= tick) { after = row; break; }
+  let indexed = rows.__targetTickIndex;
+  if (!indexed) {
+    indexed = rows
+      .map(row => ({ row, tick: Number(row.detail.tick) }))
+      .filter(item => Number.isFinite(item.tick));
+    Object.defineProperty(rows, '__targetTickIndex', {
+      configurable: true,
+      enumerable: false,
+      value: indexed
+    });
   }
+  let low = 0;
+  let high = indexed.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (indexed[middle].tick < tick) low = middle + 1;
+    else high = middle;
+  }
+  const after = indexed[low]?.row || null;
+  const before = after && Number(after.detail.tick) === Number(tick)
+    ? after
+    : (indexed[low - 1]?.row || null);
   if (!before) return after?.detail?.target || null;
   if (!after || Number(after.detail.tick) === Number(before.detail.tick)) return before.detail.target || null;
   const ratio = (tick - Number(before.detail.tick)) / (Number(after.detail.tick) - Number(before.detail.tick));
@@ -272,7 +290,7 @@ function theoreticalShotMinimumMiss(rows, ack) {
 
 function confirmedShotsForRows(options, rows) {
   if (!rows.length) return [];
-  const wsFile = path.join(path.dirname(options.file), 'ws.jsonl');
+  const wsFile = options.wsFile || path.join(path.dirname(options.file), 'ws.jsonl');
   if (!fs.existsSync(wsFile)) return [];
   const firstAt = Date.parse(rows[0].entry.at) - 3000;
   const lastAt = Date.parse(rows[rows.length - 1].entry.at) + 3000;
@@ -1112,54 +1130,91 @@ function replayTargetSwitchHysteresis(rows = []) {
     historicalTarget = item;
   }
   let selected = observations[0];
-  let pending = null;
+  let gate = null;
   let lastSwitch = null;
   const accepted = [];
+  const observedRanges = new Map();
+  for (const observation of observations) {
+    const range = observedRanges.get(observation.id) || { firstAt: observation.at, lastAt: observation.at };
+    range.firstAt = Math.min(range.firstAt, observation.at);
+    range.lastAt = Math.max(range.lastAt, observation.at);
+    observedRanges.set(observation.id, range);
+  }
+  const threatOptions = {
+    combatTargetSwitchIncomingDistance: 6500,
+    combatTargetSwitchIncomingTimeMs: 900,
+    combatBulletHitRadiusCm: 90
+  };
   for (const item of observations.slice(1)) {
     if (item.id === selected.id) {
       selected = item;
-      pending = null;
+      gate = null;
       continue;
     }
-    const urgent = item.intent === 'defensive' && item.dangerousBullets.some(bullet => (
-      String(bullet.ownerId ?? bullet.owner_id ?? '') === item.id
-        && bullet.predictedHit === true
-        && Number(bullet.timeToImpact || Infinity) <= 400
-    ));
-    if (urgent) {
-      accepted.push({ from: selected, to: item, at: item.at, reason: 'urgent-incoming-shooter' });
+    const bullets = item.dangerousBullets.map(bullet => ({
+      ...bullet,
+      ownerId: bullet.ownerId ?? bullet.owner_id,
+      incoming: true,
+      cpa: bullet.cpa ?? bullet.minCPA,
+      distance: bullet.distance ?? bullet.currentDistance,
+      timeToImpact: bullet.timeToImpactMs ?? bullet.timeToImpact
+    }));
+    const currentThreat = combatTargetIncomingThreatEvidenceCore(bullets, selected.id, threatOptions);
+    const proposedThreat = combatTargetIncomingThreatEvidenceCore(bullets, item.id, threatOptions);
+    const currentRange = observedRanges.get(selected.id);
+    const currentVisible = Boolean(
+      currentRange
+        && item.at >= currentRange.firstAt
+        && item.at <= currentRange.lastAt
+    );
+    const switchResult = applyCombatTargetSwitchHysteresisCore({
+      currentTargetId: selected.id,
+      currentVisibleTarget: currentVisible ? { user_id: selected.id } : null,
+      proposedTarget: { user_id: item.id },
+      currentInvalid: !currentVisible,
+      urgentSafety: item.intent === 'defensive' && proposedThreat.urgent,
+      currentThreat,
+      proposedThreat,
+      currentStickAgeMs: Math.max(0, item.at - selected.at),
+      lastSwitch: lastSwitch ? {
+        fromTargetId: lastSwitch.from.id,
+        toTargetId: lastSwitch.to.id,
+        at: lastSwitch.at
+      } : null,
+      nowMs: item.at
+    }, gate, {
+      confirmTicks: 3,
+      urgentConfirmTicks: 3,
+      oscillationWindowMs: 10000,
+      threatTtiAdvantageMs: 250,
+      threatDistanceAdvantageCm: 1500
+    });
+    gate = switchResult.gate;
+    if (String(switchResult.target?.user_id || '') === item.id) {
+      const event = {
+        from: selected,
+        to: item,
+        at: item.at,
+        reason: switchResult.diagnostic?.reason || 'current-target-invalid'
+      };
+      accepted.push(event);
       selected = item;
-      pending = null;
-      lastSwitch = accepted.at(-1);
-      continue;
-    }
-    if (lastSwitch
-      && lastSwitch.from.id === item.id
-      && lastSwitch.to.id === selected.id
-      && item.at - lastSwitch.at <= 10000) {
-      pending = null;
-      continue;
-    }
-    pending = pending && pending.id === item.id
-      ? { ...pending, ticks: pending.ticks + 1, last: item }
-      : { id: item.id, ticks: 1, first: item, last: item };
-    if (pending.ticks >= 3) {
-      accepted.push({ from: selected, to: item, at: item.at, reason: 'ordinary-switch-confirmed' });
-      selected = item;
-      lastSwitch = accepted.at(-1);
-      pending = null;
+      lastSwitch = event;
+      gate = null;
     }
   }
-  const oscillations = accepted.filter((event, index) => index > 0
-    && accepted[index - 1].from.id === event.to.id
-    && accepted[index - 1].to.id === event.from.id
-    && event.at - accepted[index - 1].at <= 10000);
-  const maxSwitchesIn10s = accepted.reduce((max, event) => Math.max(max,
-    accepted.filter(candidate => candidate.at >= event.at && candidate.at <= event.at + 10000).length
+  const competitiveSwitches = accepted.filter(event => event.reason !== 'current-target-invalid');
+  const oscillations = competitiveSwitches.filter((event, index) => index > 0
+    && competitiveSwitches[index - 1].from.id === event.to.id
+    && competitiveSwitches[index - 1].to.id === event.from.id
+    && event.at - competitiveSwitches[index - 1].at <= 10000);
+  const maxSwitchesIn10s = competitiveSwitches.reduce((max, event) => Math.max(max,
+    competitiveSwitches.filter(candidate => candidate.at >= event.at && candidate.at <= event.at + 10000).length
   ), 0);
   return {
     historicalSwitches: historical.length,
     confirmedSwitches: accepted.length,
+    focusSwitchesWhileCurrentValid: competitiveSwitches.length,
     maxSwitchesIn10s,
     oscillatingSwitches: oscillations.length,
     events: accepted.slice(0, 16).map(event => ({
@@ -1169,6 +1224,16 @@ function replayTargetSwitchHysteresis(rows = []) {
       reason: event.reason
     })),
     accepted: maxSwitchesIn10s <= 1 && oscillations.length === 0
+  };
+}
+
+function replayCombatTargetSwitch(options) {
+  const rows = selectedEntries(options);
+  return {
+    mode: 'combat-target-switch',
+    lines: `${options.startLine}-${options.endLine}`,
+    frames: rows.length,
+    ...replayTargetSwitchHysteresis(rows)
   };
 }
 
@@ -4612,6 +4677,7 @@ function runReplay(options) {
   if (options.mode === 'combat-close-pressure') return replayCombatClosePressure(options);
   if (options.mode === 'combat-no-damage-generation-grid') return replayNoDamageGenerationGrid(options);
   if (options.mode === 'combat-response-policy-shadow') return replayResponsePolicyShadow(options);
+  if (options.mode === 'combat-target-switch') return replayCombatTargetSwitch(options);
   if (options.mode === 'combat-disengage') return replayCombatDisengage(options);
   if (options.mode === 'combat-economic-stop-loss') return replayCombatEconomicStopLoss(options);
   if (options.mode === 'combat-shot-coverage') return replayCombatShotCoverage(options);
@@ -4632,6 +4698,7 @@ module.exports = {
   replayCombatClosePressure,
   replayNoDamageGenerationGrid,
   replayResponsePolicyShadow,
+  replayCombatTargetSwitch,
   replayCombatDisengage,
   replayCombatEconomicStopLoss,
   replayCombatShotCoverage,

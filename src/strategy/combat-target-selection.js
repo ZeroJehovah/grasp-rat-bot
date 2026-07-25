@@ -497,10 +497,87 @@ function defensiveTargetOverridesEngagedCore(engagedTarget, defensiveTarget, opt
   return defensiveId !== '' && engagedId !== '' && String(defensiveId) !== String(engagedId);
 }
 
+function combatTargetIncomingThreatEvidenceCore(bullets = [], targetIdValue = '', options = {}) {
+  const targetIdValueString = String(targetIdValue || '');
+  if (!targetIdValueString) {
+    return { targetId: '', bulletCount: 0, urgentBulletCount: 0, urgent: false, riskLevel: 0, minTimeToImpactMs: null, minDistanceCm: null };
+  }
+  const matching = (bullets || []).filter(bullet => {
+    const ownerId = bullet?.ownerId ?? bullet?.owner_id ?? bullet?.source_user_id ?? bullet?.user_id;
+    return bullet?.incoming !== false
+      && ownerId !== null
+      && ownerId !== undefined
+      && String(ownerId) === targetIdValueString
+      && incomingBulletHasCollisionRiskCore(bullet, options);
+  });
+  const urgent = matching.filter(bullet => incomingBulletRequiresTargetSwitchCore(bullet, options));
+  const finiteMinimum = (items, selector) => {
+    const values = items.map(selector).map(Number).filter(Number.isFinite);
+    return values.length ? Math.min(...values) : null;
+  };
+  const minTimeToImpactMs = finiteMinimum(matching, bullet => bullet.timeToImpactMs ?? bullet.timeToImpact);
+  const minDistanceCm = finiteMinimum(matching, bullet => bullet.distance);
+  const switchTime = Math.max(0, Number(options.combatTargetSwitchIncomingTimeMs || 0));
+  const switchDistance = Math.max(0, Number(options.combatTargetSwitchIncomingDistance || 0));
+  const critical = urgent.some(bullet => {
+    const time = Number(bullet.timeToImpactMs ?? bullet.timeToImpact);
+    const distance = Number(bullet.distance);
+    return (switchTime > 0 && Number.isFinite(time) && time <= switchTime / 2)
+      || (switchDistance > 0 && Number.isFinite(distance) && distance <= switchDistance / 2);
+  });
+  return {
+    targetId: targetIdValueString,
+    bulletCount: matching.length,
+    urgentBulletCount: urgent.length,
+    urgent: urgent.length > 0,
+    riskLevel: critical ? 3 : (urgent.length ? 2 : (matching.length ? 1 : 0)),
+    minTimeToImpactMs,
+    minDistanceCm
+  };
+}
+
+function combatTargetThreatAdvantageCore(currentThreat = {}, proposedThreat = {}, options = {}) {
+  const proposedLevel = Math.max(0, Number(proposedThreat.riskLevel || 0));
+  const currentLevel = Math.max(0, Number(currentThreat.riskLevel || 0));
+  const finiteAdvantage = (currentValue, proposedValue) => {
+    if (currentValue === null || currentValue === undefined
+      || proposedValue === null || proposedValue === undefined) return null;
+    const current = Number(currentValue);
+    const proposed = Number(proposedValue);
+    return Number.isFinite(current) && Number.isFinite(proposed) ? current - proposed : null;
+  };
+  const ttiAdvantageMs = finiteAdvantage(
+    currentThreat.minTimeToImpactMs,
+    proposedThreat.minTimeToImpactMs
+  );
+  const distanceAdvantageCm = finiteAdvantage(
+    currentThreat.minDistanceCm,
+    proposedThreat.minDistanceCm
+  );
+  const requiredTtiAdvantageMs = Math.max(0, Number(options.threatTtiAdvantageMs ?? 250));
+  const requiredDistanceAdvantageCm = Math.max(0, Number(options.threatDistanceAdvantageCm ?? 1500));
+  const significant = proposedThreat.urgent === true && (
+    proposedLevel > currentLevel
+      || (proposedLevel === currentLevel && (
+        (ttiAdvantageMs !== null && ttiAdvantageMs >= requiredTtiAdvantageMs)
+          || (distanceAdvantageCm !== null && distanceAdvantageCm >= requiredDistanceAdvantageCm)
+      ))
+  );
+  return {
+    significant,
+    riskLevelDifference: proposedLevel - currentLevel,
+    timeToImpactAdvantageMs: ttiAdvantageMs,
+    distanceAdvantageCm,
+    requiredTtiAdvantageMs,
+    requiredDistanceAdvantageCm
+  };
+}
+
 function applyCombatTargetSwitchHysteresisCore(input = {}, previousGate = null, options = {}) {
   const currentId = String(input.currentTargetId || '');
   const proposedId = combatTargetId(input.proposedTarget);
-  const requiredTicks = Math.max(1, Math.round(Number(options.confirmTicks ?? 3)));
+  const ordinaryRequiredTicks = Math.max(1, Math.round(Number(options.confirmTicks ?? 3)));
+  const urgentRequiredTicks = Math.max(1, Math.round(Number(options.urgentConfirmTicks ?? ordinaryRequiredTicks)));
   const oscillationWindowMs = Math.max(1000, Number(options.oscillationWindowMs ?? 10000));
   const nowMs = Number.isFinite(Number(input.nowMs)) ? Number(input.nowMs) : Date.now();
   if (!currentId) {
@@ -510,7 +587,7 @@ function applyCombatTargetSwitchHysteresisCore(input = {}, previousGate = null, 
       diagnostic: null
     };
   }
-  if (input.currentInvalid === true || input.urgentSafety === true) {
+  if (input.currentInvalid === true) {
     return {
       target: input.proposedTarget || null,
       gate: null,
@@ -518,11 +595,10 @@ function applyCombatTargetSwitchHysteresisCore(input = {}, previousGate = null, 
         fromTargetId: currentId,
         toTargetId: proposedId,
         allowed: true,
-        reason: input.urgentSafety === true
-          ? 'urgent-incoming-shooter'
-          : 'current-target-invalid',
-        confirmationTicks: requiredTicks,
-        observedTicks: requiredTicks
+        reason: 'current-target-invalid',
+        confirmationTicks: 0,
+        observedTicks: 0,
+        stickAgeMs: Math.max(0, Number(input.currentStickAgeMs || 0))
       } : null
     };
   }
@@ -540,6 +616,30 @@ function applyCombatTargetSwitchHysteresisCore(input = {}, previousGate = null, 
       diagnostic: null
     };
   }
+  const urgentRequested = input.urgentSafety === true;
+  const threatAdvantage = combatTargetThreatAdvantageCore(
+    input.currentThreat || {},
+    input.proposedThreat || {},
+    options
+  );
+  if (urgentRequested && !threatAdvantage.significant) {
+    return {
+      target: input.currentVisibleTarget || null,
+      gate: null,
+      diagnostic: {
+        fromTargetId: currentId,
+        toTargetId: proposedId,
+        allowed: false,
+        reason: 'urgent-incoming-threat-not-superior',
+        confirmationTicks: urgentRequiredTicks,
+        observedTicks: 0,
+        currentThreat: input.currentThreat || null,
+        proposedThreat: input.proposedThreat || null,
+        threatDifference: threatAdvantage,
+        stickAgeMs: Math.max(0, Number(input.currentStickAgeMs || 0))
+      }
+    };
+  }
   const lastSwitch = input.lastSwitch && typeof input.lastSwitch === 'object' ? input.lastSwitch : null;
   const reversalBlocked = Boolean(
     lastSwitch
@@ -547,7 +647,7 @@ function applyCombatTargetSwitchHysteresisCore(input = {}, previousGate = null, 
       && String(lastSwitch.toTargetId || '') === currentId
       && nowMs - Number(lastSwitch.at || 0) <= oscillationWindowMs
   );
-  if (reversalBlocked) {
+  if (reversalBlocked && !urgentRequested) {
     return {
       target: input.currentVisibleTarget || null,
       gate: null,
@@ -556,15 +656,20 @@ function applyCombatTargetSwitchHysteresisCore(input = {}, previousGate = null, 
         toTargetId: proposedId,
         allowed: false,
         reason: 'oscillating-reversal-blocked',
-        confirmationTicks: requiredTicks,
+        confirmationTicks: ordinaryRequiredTicks,
         observedTicks: 0,
-        holdRemainingMs: Math.max(0, oscillationWindowMs - (nowMs - Number(lastSwitch.at || 0)))
+        holdRemainingMs: Math.max(0, oscillationWindowMs - (nowMs - Number(lastSwitch.at || 0))),
+        reversalRemainingMs: Math.max(0, oscillationWindowMs - (nowMs - Number(lastSwitch.at || 0))),
+        stickAgeMs: Math.max(0, Number(input.currentStickAgeMs || 0))
       }
     };
   }
+  const switchMode = urgentRequested ? 'urgent' : 'ordinary';
+  const requiredTicks = urgentRequested ? urgentRequiredTicks : ordinaryRequiredTicks;
   const sameCandidate = previousGate
     && String(previousGate.fromTargetId || '') === currentId
-    && String(previousGate.toTargetId || '') === proposedId;
+    && String(previousGate.toTargetId || '') === proposedId
+    && String(previousGate.mode || 'ordinary') === switchMode;
   const observedTicks = sameCandidate ? Math.max(1, Number(previousGate.observedTicks || 0) + 1) : 1;
   const gate = {
     fromTargetId: currentId,
@@ -572,7 +677,8 @@ function applyCombatTargetSwitchHysteresisCore(input = {}, previousGate = null, 
     firstObservedAt: sameCandidate ? Number(previousGate.firstObservedAt || nowMs) : nowMs,
     lastObservedAt: nowMs,
     observedTicks,
-    confirmationTicks: requiredTicks
+    confirmationTicks: requiredTicks,
+    mode: switchMode
   };
   const allowed = observedTicks >= requiredTicks;
   return {
@@ -581,7 +687,16 @@ function applyCombatTargetSwitchHysteresisCore(input = {}, previousGate = null, 
     diagnostic: {
       ...gate,
       allowed,
-      reason: allowed ? 'ordinary-switch-confirmed' : 'ordinary-switch-awaiting-confirmation'
+      reason: urgentRequested
+        ? (allowed ? 'urgent-incoming-shooter-confirmed' : 'urgent-incoming-shooter-awaiting-confirmation')
+        : (allowed ? 'ordinary-switch-confirmed' : 'ordinary-switch-awaiting-confirmation'),
+      currentThreat: input.currentThreat || null,
+      proposedThreat: input.proposedThreat || null,
+      threatDifference: threatAdvantage,
+      stickAgeMs: Math.max(0, Number(input.currentStickAgeMs || 0)),
+      reversalRemainingMs: reversalBlocked
+        ? Math.max(0, oscillationWindowMs - (nowMs - Number(lastSwitch.at || 0)))
+        : 0
     }
   };
 }
@@ -781,6 +896,8 @@ module.exports = {
   checkProactiveActiveCombatGates,
   combatTargetThreatensSelf,
   combatTargetId,
+  combatTargetIncomingThreatEvidenceCore,
+  combatTargetThreatAdvantageCore,
   applyCombatTargetSwitchHysteresisCore,
   defensiveTargetOverridesEngagedCore,
   incomingBulletHasCollisionRiskCore,

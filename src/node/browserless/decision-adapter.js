@@ -4510,11 +4510,43 @@ function actionTargetCurrentValidity(action, input = {}) {
   return { valid: true, reason: 'coin-visible' };
 }
 
-function annotateYieldableProfitDropout(action, arbitration, input = {}) {
+function normalizedProfitOpportunityKey(value, action = null) {
+  if (!value && !action) return '';
+  const type = String(value?.type || '').toLowerCase();
+  const target = value?.sourceTarget || value?.target || action?.target || value || {};
+  const enemyAction = type === 'enemy'
+    || ['attack', 'seek-enemy', 'opportunistic-shot'].includes(String(action?.kind || ''))
+    || target.userId !== undefined
+    || target.user_id !== undefined;
+  if (enemyAction) {
+    const id = value?.id ?? target.userId ?? target.user_id ?? target.id;
+    return id === null || id === undefined || id === '' ? '' : `enemy:${String(id)}`;
+  }
+  const coin = value?.sourceCoin || target;
+  const id = value?.id ?? coin.drop_id ?? coin.dropId ?? coin.coinId ?? coin.coin_id ?? coin.id;
+  return id === null || id === undefined || id === '' ? '' : `coin:${String(id)}`;
+}
+
+function currentProfitThresholdEligibility(action, opportunity = {}) {
+  const key = normalizedProfitOpportunityKey(null, action);
+  if (!key) return null;
+  const current = (opportunity.rawOpportunities || []).find(item => normalizedProfitOpportunityKey(item) === key);
+  if (!current || (current.profitThresholdEligible !== true && current.profitThresholdEligible !== false)) return null;
+  return {
+    key,
+    eligible: current.profitThresholdEligible === true,
+    reason: String(current.profitThresholdReason || (current.profitThresholdEligible === false
+      ? 'below-profit-threshold'
+      : 'eligible'))
+  };
+}
+
+function annotateYieldableProfitDropout(action, arbitration, input = {}, opportunity = {}) {
   const dropout = profitDropoutMetadata(action);
   if (!dropout) return action;
   const previousAction = arbitration?.lastAction || null;
   const targetValidity = actionTargetCurrentValidity(previousAction, input);
+  const currentEligibility = currentProfitThresholdEligibility(previousAction, opportunity);
   return {
     ...action,
     profitDropout: {
@@ -4524,7 +4556,7 @@ function annotateYieldableProfitDropout(action, arbitration, input = {}) {
       targetValid: targetValidity.valid,
       targetValidity: targetValidity.reason,
       targetKey: arbitration?.lastFocus?.targetKey || '',
-      thresholdViolation: previousAction?.profitThresholdEligible === false
+      thresholdViolation: currentEligibility?.eligible === false
     }
   };
 }
@@ -4557,16 +4589,19 @@ function annotateProfitActionThreshold(action, thresholdContext, options = {}) {
   };
 }
 
-function clearIneligibleFinalProfitHold(stateful = {}, thresholdContext, options = {}) {
+function clearIneligibleFinalProfitHold(stateful = {}, thresholdContext, opportunity = {}) {
   if (!thresholdContext?.active) return;
   const arbitration = ensureFinalActionArbitrationState(stateful);
-  const previous = annotateProfitActionThreshold(arbitration.lastAction, thresholdContext, options);
-  if (previous?.band === 'profit' && previous.profitThresholdEligible !== true) {
-    arbitration.lastAction = null;
-    arbitration.lastFocus = null;
-    arbitration.lastSelectedAt = 0;
-  } else if (previous) {
-    arbitration.lastAction = previous;
+  const previous = arbitration.lastAction || null;
+  if (previous?.band !== 'profit') return;
+  const currentEligibility = currentProfitThresholdEligibility(previous, opportunity);
+  if (currentEligibility?.eligible === false) {
+    arbitration.lastAction = {
+      ...previous,
+      profitThresholdEligible: false,
+      profitThresholdReason: currentEligibility.reason,
+      currentProfitThresholdKey: currentEligibility.key
+    };
   }
 }
 
@@ -4578,7 +4613,7 @@ function targetSwitchOscillationWindowMs(options = {}) {
   return Math.max(1000, Math.round(Number(options.targetSwitchOscillationWindowMs ?? BROWSER_RUNTIME_DEFAULTS.targetSwitchOscillationWindowMs ?? 10000) || 10000));
 }
 
-function applyBrowserlessFinalActionArbitration(action, stateful = {}, input = {}, options = {}) {
+function applyBrowserlessFinalActionArbitration(action, stateful = {}, input = {}, options = {}, opportunity = {}) {
   const arbitration = ensureFinalActionArbitrationState(stateful);
   const rememberedThreatCount = Object.keys(stateful.recentInvulnerableThreats || {}).length;
   if (arbitration.lastAction?.target?.safetyMemoryOnly && rememberedThreatCount === 0) {
@@ -4586,7 +4621,7 @@ function applyBrowserlessFinalActionArbitration(action, stateful = {}, input = {
     arbitration.lastFocus = null;
     arbitration.lastSelectedAt = 0;
   }
-  const annotatedAction = annotateYieldableProfitDropout(action, arbitration, input);
+  const annotatedAction = annotateYieldableProfitDropout(action, arbitration, input, opportunity);
   return applyFinalActionArbitrationCore(annotatedAction, arbitration, {
     nowMs: input?.nowMs,
     source: options.controlMode || 'browserless',
@@ -9472,8 +9507,8 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       reason = action.reason || reason;
     }
     action = annotateProfitActionThreshold(action, profitThresholdContext, options);
-    clearIneligibleFinalProfitHold(stateful, profitThresholdContext, options);
-    const arbitratedAction = applyBrowserlessFinalActionArbitration(action, stateful, input, options);
+    clearIneligibleFinalProfitHold(stateful, profitThresholdContext, opportunity);
+    const arbitratedAction = applyBrowserlessFinalActionArbitration(action, stateful, input, options, opportunity);
     if (arbitratedAction !== action) {
       action = arbitratedAction;
       kind = action.kind || kind;
@@ -9831,7 +9866,21 @@ function createBrowserlessDecisionAdapter(options = {}) {
     patchState(patch = {}) {
       for (const [key, value] of Object.entries(patch || {})) {
         if (key === 'currentOpportunity' || key === 'switchLock') continue;
-        if (key === 'combatTarget' && value && decisionState.combatTarget
+        if (key === 'finalActionPreemption' && value && typeof value === 'object') {
+          const incomingGeneration = Math.max(0, Number(value.generation || 0) || 0);
+          const consumedGeneration = Math.max(
+            0,
+            Number(decisionState.finalActionPreemptionConsumedGeneration || 0) || 0
+          );
+          if (incomingGeneration > consumedGeneration) {
+            decisionState.finalActionPreemption = cloneJson(value);
+            decisionState.finalActionPreemptionConsumedGeneration = incomingGeneration;
+            if (decisionState.finalActionArbitration && typeof decisionState.finalActionArbitration === 'object') {
+              decisionState.finalActionArbitration.profitDropout = null;
+              decisionState.finalActionArbitration.lastPreemption = cloneJson(value);
+            }
+          }
+        } else if (key === 'combatTarget' && value && decisionState.combatTarget
           && String(value.id ?? '') === String(decisionState.combatTarget.id ?? '')) {
           decisionState.combatTarget = { ...decisionState.combatTarget, ...cloneJson(value) };
         } else if ((key === 'combatEngagements'
@@ -9865,6 +9914,7 @@ function createBrowserlessDecisionAdapter(options = {}) {
     },
     getRealtimePersistenceState() {
       return {
+        finalActionPreemption: decisionState.finalActionPreemption || null,
         attackHistory: decisionState.attackHistory || [],
         postKillSettlement: decisionState.postKillSettlement || null,
         combatTarget: decisionState.combatTarget || null,
@@ -9893,6 +9943,22 @@ function createBrowserlessDecisionAdapter(options = {}) {
         returnBlockLock: decisionState.returnBlockLock || null,
         returnBlockScan: decisionState.returnBlockScan || null
       };
+    },
+    noteRealtimeFinalActionPreemption(action = {}, atMs = Date.now()) {
+      const band = String(action.band || '');
+      if (!['exit', 'safety', 'combat', 'recover'].includes(band)) return false;
+      const previousGeneration = Math.max(
+        0,
+        Number(decisionState.finalActionPreemption?.generation || 0) || 0
+      );
+      decisionState.finalActionPreemption = {
+        generation: Math.min(Number.MAX_SAFE_INTEGER, previousGeneration + 1),
+        at: Number.isFinite(Number(atMs)) ? Number(atMs) : Date.now(),
+        source: 'realtime-control',
+        band,
+        reason: String(action.reason || '')
+      };
+      return true;
     },
     getStatusSummary() {
       return summarizeBrowserlessDecisionState(decisionState);
@@ -9926,8 +9992,10 @@ module.exports = {
   buildBrowserlessRealtimeControlDecision,
   buildBrowserlessRuntimeDefaults,
   buildBrowserlessStrategyInput,
+  currentProfitThresholdEligibility,
   buildLowHpRecoveryThreatExitDecision,
   createBrowserlessDecisionAdapter,
+  normalizedProfitOpportunityKey,
   decisionStatePatch,
   distanceBetween,
   easyKillEngagementFinishReason,

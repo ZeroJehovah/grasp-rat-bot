@@ -3,6 +3,7 @@
 const {
   calculateCombatTargetPriority,
   applyCombatTargetSwitchHysteresisCore,
+  combatTargetIncomingThreatEvidenceCore,
   combatTargetThreatensSelf,
   combatEscapeDecisionCore,
   combatTargetId,
@@ -2368,25 +2369,34 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
   const currentVisibleHp = currentVisibleTarget?.hp ?? currentVisibleTarget?.knownHp ?? currentVisibleTarget?.displayHp;
   const currentInvalid = Boolean(
     currentTargetId
-      && currentVisibleTarget
-      && (isInvulnerableEntity(currentVisibleTarget)
+      && (!currentVisibleTarget
+        || isInvulnerableEntity(currentVisibleTarget)
         || currentVisibleTarget.alive === false
         || (currentVisibleHp !== null && currentVisibleHp !== undefined && Number(currentVisibleHp) <= 0)
         || isWhitelistedTargetForOptions(currentVisibleTarget, options))
   );
   const urgentSafety = defensiveTargetOverridesEngagedCore(engagedTarget || currentVisibleTarget, defensiveTarget, options)
     && String(combatTargetId(defensiveTarget) || '') === String(combatTargetId(proposedNormalTarget) || '');
+  const proposedTargetId = combatTargetId(proposedNormalTarget);
+  const currentThreat = combatTargetIncomingThreatEvidenceCore(bullets, currentTargetId, options);
+  const proposedThreat = combatTargetIncomingThreatEvidenceCore(bullets, proposedTargetId, options);
   const switchDecision = applyCombatTargetSwitchHysteresisCore({
     currentTargetId,
     currentVisibleTarget,
     proposedTarget: proposedNormalTarget,
     currentInvalid,
     urgentSafety,
+    currentThreat,
+    proposedThreat,
+    currentStickAgeMs: Math.max(0, Number(options.nowMs || Date.now()) - Number(stateful?.combatTarget?.at || options.nowMs || Date.now())),
     lastSwitch: stateful?.combatTargetSwitchHistory || null,
     nowMs: options.nowMs
   }, stateful?.combatTargetSwitchGate || null, {
     confirmTicks: options.combatTargetSwitchConfirmTicks ?? 3,
-    oscillationWindowMs: options.combatTargetSwitchOscillationWindowMs ?? 10000
+    urgentConfirmTicks: options.combatTargetSwitchUrgentConfirmTicks ?? 3,
+    oscillationWindowMs: options.combatTargetSwitchOscillationWindowMs ?? 10000,
+    threatTtiAdvantageMs: options.combatTargetSwitchThreatTtiAdvantageMs ?? 250,
+    threatDistanceAdvantageCm: options.combatTargetSwitchThreatDistanceAdvantageCm ?? 1500
   });
   if (stateful && typeof stateful === 'object') {
     stateful.combatTargetSwitchGate = switchDecision.gate;
