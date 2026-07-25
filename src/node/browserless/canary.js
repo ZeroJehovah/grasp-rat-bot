@@ -1381,6 +1381,27 @@ async function runReadOnlyCanary(config, options = {}) {
   const logExit = (type, detail) => {
     if (logStore) logStore.append('exits', type, addRunMeta(detail));
   };
+  const logDynamicWhitelistRestores = restored => {
+    for (const item of restored || []) log('canary-dynamic-whitelist-restored-after-combat', item);
+  };
+  const observeDynamicWhitelistBattles = (currentState, atMs) => {
+    const whitelist = options.dynamicWhitelist;
+    if (typeof whitelist?.observeBattles !== 'function') return [];
+    const restored = whitelist.observeBattles(currentState, {
+      atMs,
+      disengageRangeCm: runtimeDefaults.combatDisengageRange,
+      decisionState: decisionAdapter.getState?.() || null
+    });
+    logDynamicWhitelistRestores(restored);
+    return restored;
+  };
+  const restoreDynamicWhitelistBattles = (reason, atMs = now()) => {
+    const whitelist = options.dynamicWhitelist;
+    if (typeof whitelist?.restoreAll !== 'function') return [];
+    const restored = whitelist.restoreAll(reason, atMs);
+    logDynamicWhitelistRestores(restored);
+    return restored;
+  };
   const maybePrewarmLeaveConnection = (currentState, atMs, reason = 'risk', force = false) => {
     if (options.fetchImpl && !options.prewarmGameConnection) return null;
     if (leavePending || leavePrewarmInFlight) return leavePrewarmInFlight;
@@ -1919,6 +1940,7 @@ async function runReadOnlyCanary(config, options = {}) {
     result.decisions.evaluatedCount += 1;
     result.decisions.last = summary;
     scheduleCombatPersistence(atMs);
+    observeDynamicWhitelistBattles(currentState, atMs);
     logDecision(summary);
     result.decisions.loggedCount += 1;
     if (controlMode === 'combat-dry-run' || controlMode === 'combat-live' || combatLiveEnabled) {
@@ -1993,6 +2015,7 @@ async function runReadOnlyCanary(config, options = {}) {
         input: control?.input || null
       };
       result.decisions.last = release;
+      observeDynamicWhitelistBattles(currentState, atMs);
       publishCombatControlStatus(release, currentState, control, atMs, true);
       applyDecisionAction(currentState, release, control, atMs, { errorReason: 'realtime-control-release-failed' });
       return true;
@@ -2022,6 +2045,7 @@ async function runReadOnlyCanary(config, options = {}) {
     result.decisions.realtimeControlCount += 1;
     result.decisions.last = summary;
     scheduleCombatPersistence(atMs);
+    observeDynamicWhitelistBattles(currentState, atMs);
     logCombat(combatSummary);
     const key = realtimeControlKey(summary);
     if (key !== lastRealtimeControlKey || atMs - lastRealtimeControlLogAtMs >= decisionIntervalMs) {
@@ -2434,6 +2458,7 @@ async function runReadOnlyCanary(config, options = {}) {
           return;
         }
         if (!ending) wsClosed = event;
+        restoreDynamicWhitelistBattles('websocket-closed');
         clearPublishedTransport(transport, 'websocket-close');
         logWs('close', event || {});
       },
@@ -2484,6 +2509,7 @@ async function runReadOnlyCanary(config, options = {}) {
             stageStarted = performance.now();
             stateStore.ingestFrame(frame.decodedJson, { receivedAtMs: atMs });
             const currentState = stateStore.getDecisionState?.(atMs) || stateStore.getState(atMs);
+            observeDynamicWhitelistBattles(currentState, atMs);
             stageDurations['state-ingest-view'] = performance.now() - stageStarted;
             stageStarted = performance.now();
             const currentSelf = currentState?.realtime?.self || null;
@@ -2540,8 +2566,8 @@ async function runReadOnlyCanary(config, options = {}) {
                   };
                   const result = typeof whitelist?.observeDamage === 'function'
                     ? whitelist.observeDamage(damageObservation.actor, currentState, damageDetail)
-                    : whitelist?.remove?.(damageObservation.actor, 'damaged-self', atMs);
-                  if (result?.removed) log('canary-dynamic-whitelist-removed-after-damage', result);
+                    : null;
+                  if (result?.newlyDisabled) log('canary-dynamic-whitelist-disabled-after-damage', result);
                   else if (result?.deferred) log('canary-dynamic-whitelist-damage-deferred', result);
                 }
               } catch (err) {
@@ -2779,6 +2805,7 @@ async function runReadOnlyCanary(config, options = {}) {
 
   try {
     ending = true;
+    restoreDynamicWhitelistBattles('canary-finished');
     clearPublishedTransport(transport, 'canary-finish');
     if (transport && (transport.isOpen?.() || isWsOpen(transport.ws))) transport.close();
   } catch (_) {}

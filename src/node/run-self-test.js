@@ -37000,25 +37000,47 @@ async function runSelfTest() {
 	      want: 'true|0|0|0|0|0'
 	    },
 	    {
-	      name: 'browserless dynamic whitelist persists stable ids and removes a player after damage',
-	      got: (() => {
+		      name: 'browserless dynamic whitelist persists stable ids and has no runtime removal path',
+		      got: (() => {
 	        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'grasp-rat-dynamic-whitelist-'));
 	        const file = path.join(dir, 'dynamic-whitelist.json');
 	        try {
 	          const tracker = createDynamicWhitelist({ file, now: () => 1000 });
-	          const added = tracker.add({ userId: 8, name: 'friendly' }, 1000);
-	          const reloaded = createDynamicWhitelist({ file, now: () => 2000 });
-	          const matched = reloaded.isWhitelistedTarget({ user_id: 8, name: 'renamed' });
-	          const removal = reloaded.remove({ userId: 8 }, 'damaged-self', 3000);
-	          return [added.added, matched, removal.removed, reloaded.status().playerCount, JSON.parse(fs.readFileSync(file, 'utf8')).schemaVersion].join('|');
+		          const added = tracker.add({ userId: 8, name: 'friendly' }, 1000);
+		          const reloaded = createDynamicWhitelist({ file, now: () => 2000 });
+		          const matched = reloaded.isWhitelistedTarget({ user_id: 8, name: 'renamed' });
+		          const disabled = reloaded.observeDamage({ userId: 8 }, {
+		            userId: 7,
+		            realtime: {
+		              self: { user_id: 7, x: 0, y: 0, hp: 97 },
+		              entities: [
+		                { user_id: 7, x: 0, y: 0, hp: 97 },
+		                { user_id: 8, x: 5000, y: 0, hp: 100, drop: 20 }
+		              ]
+		            }
+		          }, { atMs: 3000, hpLost: 3 });
+		          const status = reloaded.status();
+		          const persisted = JSON.parse(fs.readFileSync(file, 'utf8'));
+		          return [
+		            added.added,
+		            matched,
+		            typeof reloaded.remove,
+		            disabled.newlyDisabled,
+		            reloaded.isWhitelistedTarget({ userId: 8 }),
+		            status.playerCount,
+		            status.enabledPlayerCount,
+		            status.temporarilyDisabledCount,
+		            Object.keys(persisted.players).length,
+		            persisted.schemaVersion
+		          ].join('|');
 	        } finally {
 	          fs.rmSync(dir, { recursive: true, force: true });
 	        }
 	      })(),
-      want: 'true|true|true|0|1'
-    },
-    {
-      name: 'browserless dynamic whitelist defers likely crossfire but removes after over 10 HP in 60 seconds',
+	      want: 'true|true|undefined|true|false|1|0|1|1|1'
+	    },
+	    {
+	      name: 'browserless dynamic whitelist defers likely crossfire but temporarily disables after over 10 HP in 60 seconds',
       got: (() => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'grasp-rat-dynamic-whitelist-crossfire-'));
         const file = path.join(dir, 'dynamic-whitelist.json');
@@ -37049,17 +37071,19 @@ async function runSelfTest() {
             bystanders[0]?.angleDeg,
             first.deferred,
             second.damageInWindow,
-            third.removed,
-            fourth.removed,
-            fourth.reason,
-            fourth.damageInWindow,
-            tracker.status().playerCount
+	            third.disabled,
+	            fourth.newlyDisabled,
+	            fourth.reason,
+	            fourth.damageInWindow,
+	            tracker.status().playerCount,
+	            tracker.status().enabledPlayerCount,
+	            Object.keys(JSON.parse(fs.readFileSync(file, 'utf8')).players).length
           ].join('|');
         } finally {
           fs.rmSync(dir, { recursive: true, force: true });
         }
       })(),
-      want: '1|13892|1|1.8|true|6|false|true|damage-over-10-in-60s|12|0'
+	      want: '1|13892|1|1.8|true|6|false|true|damage-over-10-in-60s|12|1|0|1'
     },
     {
       name: 'browserless dynamic whitelist damage threshold is strict and rolling',
@@ -37088,8 +37112,8 @@ async function runSelfTest() {
             exact.thresholdExceeded,
             exact.damageInWindow,
             expired.damageInWindow,
-            exceeded.removed,
-            exceeded.damageInWindow
+	            exceeded.newlyDisabled,
+	            exceeded.damageInWindow
           ].join('|');
         } finally {
           fs.rmSync(dir, { recursive: true, force: true });
@@ -37098,7 +37122,7 @@ async function runSelfTest() {
       want: 'true|false|10|1|true|11'
     },
     {
-      name: 'browserless dynamic whitelist removes first damage without a qualifying crossfire bystander',
+	      name: 'browserless dynamic whitelist temporarily disables on first damage without a qualifying crossfire bystander',
       got: (() => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'grasp-rat-dynamic-whitelist-direct-fire-'));
         const file = path.join(dir, 'dynamic-whitelist.json');
@@ -37116,13 +37140,99 @@ async function runSelfTest() {
               ]
             }
           }, { atMs: 2000, hpLost: 3 });
-          return [result.removed, result.deferred, result.reason, result.possibleCrossfire, tracker.status().playerCount].join('|');
+	          return [
+	            result.newlyDisabled,
+	            result.deferred,
+	            result.reason,
+	            result.possibleCrossfire,
+	            tracker.status().playerCount,
+	            tracker.status().enabledPlayerCount,
+	            Object.keys(JSON.parse(fs.readFileSync(file, 'utf8')).players).length
+	          ].join('|');
         } finally {
           fs.rmSync(dir, { recursive: true, force: true });
         }
       })(),
-      want: 'true|false|damaged-self-no-crossfire|false|0'
-    },
+	      want: 'true|false|damaged-self-no-crossfire|false|1|0|1'
+	    },
+	    {
+	      name: 'browserless dynamic whitelist restores every temporary battle disable on all combat termination paths',
+	      got: (() => {
+	        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'grasp-rat-dynamic-whitelist-battle-end-'));
+	        try {
+	          const baseState = () => ({
+	            userId: 7,
+	            realtime: {
+	              self: { user_id: 7, x: 0, y: 0, hp: 97 },
+	              entities: [
+	                { user_id: 7, x: 0, y: 0, hp: 97 },
+	                { user_id: 8, name: 'friendly', x: 5000, y: 0, hp: 100, drop: 20 }
+	              ]
+	            }
+	          });
+	          const runCase = (label, terminalState, terminalDetail = {}) => {
+	            const file = path.join(dir, `${label}.json`);
+	            const tracker = createDynamicWhitelist({ file, now: () => 1000 });
+	            tracker.add({ userId: 8, name: 'friendly' }, 1000);
+	            tracker.observeDamage({ userId: 8 }, baseState(), { atMs: 2000, hpLost: 3 });
+	            const pending = tracker.observeBattles(baseState(), { atMs: 2050, decisionState: {} });
+	            const engaged = tracker.observeBattles(baseState(), {
+	              atMs: 2100,
+	              decisionState: { combatTarget: { id: 8 } }
+	            });
+	            const restored = terminalDetail.restoreAll
+	              ? tracker.restoreAll(terminalDetail.reason, 2200)
+	              : tracker.observeBattles(terminalState, {
+	                  atMs: 2200,
+	                  decisionState: terminalDetail.decisionState ?? { combatTarget: { id: 8 } },
+	                  disengageRangeCm: 17000
+	                });
+	            const persisted = JSON.parse(fs.readFileSync(file, 'utf8'));
+	            return [
+	              pending.length,
+	              engaged.length,
+	              restored[0]?.reason,
+	              tracker.isWhitelistedTarget({ userId: 8 }),
+	              tracker.status().playerCount,
+	              Object.keys(persisted.players).length
+	            ].join(':');
+	          };
+	          const targetDead = baseState();
+	          targetDead.realtime.entities[1].hp = 0;
+	          const selfDead = baseState();
+	          selfDead.realtime.self.hp = 0;
+	          selfDead.realtime.entities[0].hp = 0;
+	          const targetLeft = baseState();
+	          targetLeft.realtime.entities = [targetLeft.realtime.entities[0]];
+	          const selfLeft = baseState();
+	          selfLeft.realtime.self = null;
+	          const outOfRange = baseState();
+	          outOfRange.realtime.entities[1].x = 17001;
+	          return [
+	            runCase('target-dead', targetDead),
+	            runCase('self-dead', selfDead),
+	            runCase('target-left', targetLeft),
+	            runCase('self-left', selfLeft),
+	            runCase('out-of-range', outOfRange),
+	            runCase('combat-released', baseState(), { decisionState: {} }),
+	            runCase('combat-switched', baseState(), { decisionState: { combatTarget: { id: 9 } } }),
+	            runCase('transport-ended', baseState(), { restoreAll: true, reason: 'websocket-closed' })
+	          ].join('|');
+	        } finally {
+	          fs.rmSync(dir, { recursive: true, force: true });
+	        }
+	      })(),
+	      want: [
+	        '0:0:target-dead:true:1:1',
+	        '0:0:self-dead:true:1:1',
+	        '0:0:target-left-realtime:true:1:1',
+	        '0:0:self-left-realtime:true:1:1',
+	        '0:0:target-out-of-combat-range:true:1:1',
+	        '0:0:combat-state-ended:true:1:1',
+	        '0:0:combat-state-ended:true:1:1',
+	        '0:0:websocket-closed:true:1:1'
+	      ].join('|')
+	    },
     {
       name: 'browserless easy-kill players stay out of recovery combat and HP exits until damage',
       got: (() => {

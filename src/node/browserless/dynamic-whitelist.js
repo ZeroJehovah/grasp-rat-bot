@@ -147,6 +147,7 @@ function createDynamicWhitelist(options = {}) {
     crossfireConeHalfAngleDeg: options.crossfireConeHalfAngleDeg
   };
   const recentDamage = new Map();
+  const temporarilyDisabled = new Map();
   let store = read(file);
   if (!fs.existsSync(file)) write(file, store, backgroundIo);
 
@@ -157,7 +158,8 @@ function createDynamicWhitelist(options = {}) {
   function userId(target) { return numberOrNull(target?.userId ?? target?.user_id ?? target); }
   function isWhitelistedTarget(target) {
     const id = userId(target);
-    return id !== null && Boolean(store.players[playerKey(id)]);
+    const key = playerKey(id);
+    return id !== null && Boolean(store.players[key]) && !temporarilyDisabled.has(key);
   }
   function add(target, atMs = now()) {
     const id = userId(target);
@@ -169,23 +171,26 @@ function createDynamicWhitelist(options = {}) {
     persist(atMs);
     return { ok: true, added: !existed, player: clone(store.players[key]) };
   }
-  function remove(target, reason = 'damage', atMs = now()) {
-    const id = userId(target);
-    if (id === null) return { ok: false, reason: 'missing-user-id' };
-    const key = playerKey(id);
-    if (!store.players[key]) return { ok: true, removed: false, userId: id };
-    const player = store.players[key];
-    delete store.players[key];
-    recentDamage.delete(key);
-    persist(atMs);
-    return { ok: true, removed: true, userId: id, name: player.name, reason };
-  }
   function observeDamage(target, state, detail = {}) {
     const id = userId(target);
-    if (id === null) return { ok: false, removed: false, deferred: false, reason: 'missing-user-id' };
+    if (id === null) return { ok: false, disabled: false, deferred: false, reason: 'missing-user-id' };
     const key = playerKey(id);
-    if (!store.players[key]) return { ok: true, removed: false, deferred: false, whitelisted: false, userId: id };
+    if (!store.players[key]) return { ok: true, disabled: false, deferred: false, whitelisted: false, userId: id };
     const atMs = Number.isFinite(Number(detail.atMs)) ? Number(detail.atMs) : now();
+    const existingDisable = temporarilyDisabled.get(key);
+    if (existingDisable) {
+      return {
+        ok: true,
+        disabled: true,
+        newlyDisabled: false,
+        deferred: false,
+        whitelisted: true,
+        userId: id,
+        name: store.players[key].name,
+        reason: existingDisable.reason,
+        disabledAt: existingDisable.disabledAt
+      };
+    }
     const hpLost = Math.max(0, Number(detail.hpLost || 0));
     const cutoff = atMs - damageWindowMs;
     const samples = (recentDamage.get(key) || []).filter(sample => sample.atMs >= cutoff);
@@ -212,17 +217,117 @@ function createDynamicWhitelist(options = {}) {
       bystanders
     };
     if (possibleCrossfire && !thresholdExceeded) {
-      return { ok: true, removed: false, deferred: true, reason: 'possible-crossfire', ...policy };
+      return { ok: true, disabled: false, deferred: true, reason: 'possible-crossfire', ...policy };
     }
     const reason = thresholdExceeded ? 'damage-over-10-in-60s' : 'damaged-self-no-crossfire';
-    const removal = remove(target, reason, atMs);
-    return { ...removal, deferred: false, ...policy, reason };
+    const disabled = {
+      key,
+      userId: id,
+      name: store.players[key].name,
+      reason,
+      disabledAt: atMs,
+      engagedAt: 0
+    };
+    temporarilyDisabled.set(key, disabled);
+    return {
+      ok: true,
+      disabled: true,
+      newlyDisabled: true,
+      deferred: false,
+      ...policy,
+      reason,
+      disabledAt: atMs
+    };
+  }
+  function observeBattles(state, detail = {}) {
+    if (!temporarilyDisabled.size) return [];
+    const atMs = Number.isFinite(Number(detail.atMs)) ? Number(detail.atMs) : now();
+    const self = state?.realtime?.self || null;
+    const entities = Array.isArray(state?.realtime?.entities) ? state.realtime.entities : [];
+    const combatTargetId = userId(detail.decisionState?.combatTarget?.id
+      ?? detail.decisionState?.combatTarget?.userId
+      ?? detail.decisionState?.combatTarget?.user_id);
+    const disengageRangeCm = Math.max(
+      0,
+      Number(detail.disengageRangeCm ?? COMBAT_CONSTANTS.DISENGAGE_RANGE)
+    );
+    const selfPoint = point(self);
+    const restored = [];
+
+    for (const [key, disabled] of temporarilyDisabled.entries()) {
+      const target = entities.find(entity => entityUserId(entity) === disabled.userId) || null;
+      let reason = '';
+      if (!self) reason = 'self-left-realtime';
+      else if (!entityAlive(self)) reason = 'self-dead';
+      else if (!target) reason = 'target-left-realtime';
+      else if (!entityAlive(target)) reason = 'target-dead';
+      else {
+        const targetPoint = point(target);
+        const distanceCm = selfPoint && targetPoint
+          ? Math.hypot(targetPoint.x - selfPoint.x, targetPoint.y - selfPoint.y)
+          : numberOrNull(target.distance ?? target.distanceCm);
+        if (distanceCm !== null && disengageRangeCm > 0 && distanceCm > disengageRangeCm) {
+          reason = 'target-out-of-combat-range';
+        } else if (combatTargetId === disabled.userId) {
+          if (!disabled.engagedAt) disabled.engagedAt = atMs;
+        } else if (disabled.engagedAt) {
+          reason = 'combat-state-ended';
+        }
+      }
+      if (!reason) continue;
+      temporarilyDisabled.delete(key);
+      recentDamage.delete(key);
+      restored.push({
+        ok: true,
+        restored: true,
+        userId: disabled.userId,
+        name: disabled.name,
+        reason,
+        disabledReason: disabled.reason,
+        disabledAt: disabled.disabledAt,
+        engagedAt: disabled.engagedAt || 0,
+        restoredAt: atMs
+      });
+    }
+    return restored;
+  }
+  function restoreAll(reason = 'combat-session-ended', atMs = now()) {
+    const restored = [];
+    for (const disabled of temporarilyDisabled.values()) {
+      recentDamage.delete(disabled.key);
+      restored.push({
+        ok: true,
+        restored: true,
+        userId: disabled.userId,
+        name: disabled.name,
+        reason,
+        disabledReason: disabled.reason,
+        disabledAt: disabled.disabledAt,
+        engagedAt: disabled.engagedAt || 0,
+        restoredAt: atMs
+      });
+    }
+    temporarilyDisabled.clear();
+    return restored;
   }
   function status() {
     const players = Object.values(store.players).map(clone).sort((a, b) => String(a.name).localeCompare(String(b.name)));
-    return { file, updatedAt: store.updatedAt, playerCount: players.length, players, userIds: players.map(item => item.userId) };
+    const disabledPlayers = Array.from(temporarilyDisabled.values()).map(clone);
+    const userIds = players
+      .filter(item => !temporarilyDisabled.has(playerKey(item.userId)))
+      .map(item => item.userId);
+    return {
+      file,
+      updatedAt: store.updatedAt,
+      playerCount: players.length,
+      enabledPlayerCount: userIds.length,
+      temporarilyDisabledCount: disabledPlayers.length,
+      players,
+      userIds,
+      temporarilyDisabled: disabledPlayers
+    };
   }
-  return { file, add, remove, observeDamage, isWhitelistedTarget, status };
+  return { file, add, observeDamage, observeBattles, restoreAll, isWhitelistedTarget, status };
 }
 
 module.exports = {

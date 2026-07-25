@@ -4550,6 +4550,7 @@ async function runBrowserlessRunnerSelfTest() {
     const complexCombatMainThreadBudget = await runComplexCombatMainThreadBudgetSelfTest(tmp);
     const snapshotEdge = await runSnapshotEdgeSelfTest();
     const combatBattleLog = runCombatBattleLogSelfTest();
+    const dynamicWhitelist = require('./dynamic-whitelist-self-test').runDynamicWhitelistSelfTest();
     const runnerLog = path.join(tmp, 'logs', '2026-07-08', 'runner.jsonl');
     const text = fs.readFileSync(runnerLog, 'utf8');
     return {
@@ -4593,6 +4594,7 @@ async function runBrowserlessRunnerSelfTest() {
         && statusServerChatTest.ok
         && snapshotEdge.ok
         && combatBattleLog.ok
+        && dynamicWhitelist.ok
         && complexCombatMainThreadBudget.battleLogOk
         // Host scheduling/GC timing is diagnostic; functional runner blocks
         // remain release-gating without turning an external pause into a
@@ -4636,6 +4638,7 @@ async function runBrowserlessRunnerSelfTest() {
       statusServerChatTest,
       snapshotEdge,
       combatBattleLog,
+      dynamicWhitelist,
       complexCombatMainThreadBudget,
       logFile: runnerLog
     };
