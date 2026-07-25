@@ -97,6 +97,10 @@ const {
 const { activeCoinCompetitionCore } = require('../../strategy/coin-competition');
 const { updateOutsideCenterIdleCore } = require('../../strategy/outside-center-idle');
 const {
+  deriveCenterActivityAfkContinuationCore,
+  evaluateCenterActivityAfkAdmissionCore
+} = require('../../strategy/center-activity-afk');
+const {
   targetIsWhitelisted,
   targetWhitelistNameSet,
   targetWhitelistUserIdSet
@@ -277,6 +281,7 @@ function centerActivityAfkEdgeExtension(options = {}) {
 
 function summarizeCenterActivityAfkTarget(target, centerRadius, edgeRadius, reason = '') {
   const targetRadius = pointRadiusFromOrigin(target);
+  const edge = target?.centerActivityEdge || {};
   return {
     userId: numberOrNull(target?.user_id ?? target?.userId),
     name: entityDisplayName(target),
@@ -285,7 +290,12 @@ function summarizeCenterActivityAfkTarget(target, centerRadius, edgeRadius, reas
     targetRadiusCm: Number.isFinite(targetRadius) ? Math.round(targetRadius) : null,
     outsideByCm: Number.isFinite(targetRadius) ? Math.max(0, Math.round(targetRadius - centerRadius)) : null,
     edgeRadiusCm: Math.round(edgeRadius),
-    reason
+    reason,
+    continued: edge.continued === true,
+    continuationAgeMs: Number.isFinite(Number(edge.continuationAgeMs))
+      ? Math.max(0, Math.round(Number(edge.continuationAgeMs)))
+      : null,
+    sourceActionKind: edge.sourceActionKind ? String(edge.sourceActionKind) : ''
   };
 }
 
@@ -297,8 +307,8 @@ function partitionCenterActivityAfkTargets(items = [], self = null, options = {}
   const edgeExtension = centerActivityAfkEdgeExtension(options);
   const edgeRadius = centerRadius + edgeExtension;
   const selfRadius = pointRadiusFromOrigin(self);
-  const selfInsideCenter = Number.isFinite(selfRadius) && selfRadius <= centerRadius;
   const visibleDistance = opportunityVisibleDistance(options);
+  const continuation = options.centerActivityAfkContinuation || null;
   const targets = [];
   const edgeTargets = [];
   const filteredTargets = [];
@@ -310,29 +320,36 @@ function partitionCenterActivityAfkTargets(items = [], self = null, options = {}
       continue;
     }
     const targetDistance = Number(target?.distance ?? Infinity);
-    const realtimeAuthority = String(target?.authority || '') === 'realtime';
-    let reason = '';
-    if (!Number.isFinite(targetRadius)) reason = 'unknown-target-radius';
-    else if (targetRadius > edgeRadius) reason = 'outside-afk-edge-radius';
-    else if (!selfInsideCenter) reason = 'self-outside-center';
-    else if (!realtimeAuthority) reason = 'non-realtime-authority';
-    else if (!Number.isFinite(targetDistance) || (visibleDistance > 0 && targetDistance > visibleDistance)) {
-      reason = 'outside-opportunity-visible-distance';
-    }
-    if (reason) {
+    const admission = evaluateCenterActivityAfkAdmissionCore({
+      centerRadiusCm: centerRadius,
+      edgeRadiusCm: edgeRadius,
+      selfRadiusCm: selfRadius,
+      targetRadiusCm: targetRadius,
+      targetDistanceCm: targetDistance,
+      visibleDistanceCm: visibleDistance,
+      authority: target?.authority,
+      targetId: target?.user_id ?? target?.userId,
+      continuation
+    });
+    if (!admission.admitted) {
       filteredTargets.push(target);
-      filteredDetails.push(summarizeCenterActivityAfkTarget(target, centerRadius, edgeRadius, reason));
+      filteredDetails.push(summarizeCenterActivityAfkTarget(target, centerRadius, edgeRadius, admission.reason));
       continue;
     }
     const outsideByCm = Math.max(0, targetRadius - centerRadius);
     target.centerActivityEdge = {
       admitted: true,
+      ...(admission.continued ? {
+        continued: true,
+        continuationAgeMs: Math.max(0, Math.round(Number(continuation.ageMs || 0))),
+        sourceActionKind: String(continuation.sourceActionKind || '')
+      } : {}),
       centerRadiusCm: Math.round(centerRadius),
       edgeRadiusCm: Math.round(edgeRadius),
       targetRadiusCm: Math.round(targetRadius),
       outsideByCm: Math.round(outsideByCm),
       returnCostMs: outsideByCm,
-      reason: 'center-afk-edge-admitted'
+      reason: admission.reason
     };
     targets.push(target);
     edgeTargets.push(target);
@@ -352,11 +369,13 @@ function centerActivityInputSummary(self, filtered = {}, options = {}) {
     selfOutsideCm: Number.isFinite(selfRadius) ? Math.max(0, Math.round(selfRadius - radiusCm)) : null,
     filteredAfkTargets: Math.max(0, Math.round(Number(filtered.afkTargets || 0))),
     edgeAdmittedAfkTargets: Math.max(0, Math.round(Number(filtered.edgeAdmittedAfkTargets || 0))),
+    edgeContinuedAfkTargets: Math.max(0, Math.round(Number(filtered.edgeContinuedAfkTargets || 0))),
     filteredRealtimeCoins: Math.max(0, Math.round(Number(filtered.realtimeCoins || 0))),
     filteredSnapshotCoins: Math.max(0, Math.round(Number(filtered.snapshotCoins || 0))),
     edgeAdmittedRealtimeCoins: (filtered.edgeAdmittedRealtimeCoins || []).slice(0, 8).map(item => cloneJson(item)),
     edgeAdmittedSnapshotCoins: (filtered.edgeAdmittedSnapshotCoins || []).slice(0, 8).map(item => cloneJson(item)),
     edgeAfkTargets: (filtered.edgeAfkTargets || []).slice(0, 8).map(item => cloneJson(item)),
+    continuedEdgeAfkTargets: (filtered.continuedEdgeAfkTargets || []).slice(0, 8).map(item => cloneJson(item)),
     filteredAfkTargetDetails: (filtered.filteredAfkTargetDetails || []).slice(0, 8).map(item => cloneJson(item))
   };
 }
@@ -2800,6 +2819,10 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
   const realtime = state?.realtime || {};
   const fallback = state?.fallback || state?.snapshot || {};
   const nowMs = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
+  const centerActivityAfkContinuation = deriveCenterActivityAfkContinuationCore(
+    stateful.finalActionArbitration,
+    { nowMs, decisionIntervalMs: options.decisionIntervalMs }
+  );
   const dataGaps = [];
   const snapshotFrameAgeMs = numberOrNull(fallback.frameAgeMs);
   const snapshotMaxAgeMs = Math.max(1000, Number(options.snapshotCoinFallbackMaxAgeMs || 5000));
@@ -2850,7 +2873,10 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
   const afkObservationTargetsRaw = visibleTargets.filter(entity => {
     if (entity.whitelisted || entity.active || entity.moving || entity.firing || entity.alive === false) return false;
     if (economicProfitPursuitSuppressionRecordById(stateful, targetIdentity(entity), nowMs)) return false;
-    if (entity.invulnerable && !invulnerableProfitTargetReadyOnApproach(entity, options)) return false;
+    if (entity.invulnerable && (
+      opportunityAfkTargetId(entity) === String(centerActivityAfkContinuation?.targetId || '')
+      || !invulnerableProfitTargetReadyOnApproach(entity, options)
+    )) return false;
     return attackWorthTakingCore(self, entity, {
       attackMinDrop: options.attackMinDrop ?? DEFAULT_ATTACK_MIN_DROP,
       attackMinAfkDrop: options.attackMinAfkDrop ?? DEFAULT_ATTACK_MIN_AFK_DROP,
@@ -2860,7 +2886,10 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
       dropValue: entityDropValue
     });
   });
-  const afkCenterPartition = partitionCenterActivityAfkTargets(afkObservationTargetsRaw, self, options);
+  const afkCenterPartition = partitionCenterActivityAfkTargets(afkObservationTargetsRaw, self, {
+    ...options,
+    centerActivityAfkContinuation
+  });
   const afkObservationTargets = afkCenterPartition.targets;
   const afkAttackCommitment = recentAfkAttackCommitment(stateful, nowMs, options);
   const afkPanelTargets = afkObservationTargets.filter(entity => hasFull5sStamina(entity, options));
@@ -2869,6 +2898,7 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
     || (hasFull5sStamina(entity, options) && !afkTargetBlockedByRecentActivity(entity, options))
   ));
   const edgeAfkTargets = afkTargets.filter(entity => entity.centerActivityEdge?.admitted === true);
+  const continuedEdgeAfkTargets = edgeAfkTargets.filter(entity => entity.centerActivityEdge?.continued === true);
   const selfKillTargetTicks = selfKillTargetTicksFromMessages(Array.isArray(fallback.messages) ? fallback.messages : [], selfUserId);
   const selfKillTargetIds = Array.from(selfKillTargetTicks.keys());
   const selfKillEvidence = summarizeSelfKillEvidence(selfKillTargetTicks);
@@ -2887,11 +2917,18 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
   const centerFiltered = {
     afkTargets: afkCenterPartition.filteredTargets.length,
     edgeAdmittedAfkTargets: edgeAfkTargets.length,
+    edgeContinuedAfkTargets: continuedEdgeAfkTargets.length,
     edgeAfkTargets: edgeAfkTargets.map(target => summarizeCenterActivityAfkTarget(
       target,
       browserlessCenterActivityRadius(options),
       browserlessCenterActivityRadius(options) + centerActivityAfkEdgeExtension(options),
       target.centerActivityEdge?.reason || 'center-afk-edge-admitted'
+    )),
+    continuedEdgeAfkTargets: continuedEdgeAfkTargets.map(target => summarizeCenterActivityAfkTarget(
+      target,
+      browserlessCenterActivityRadius(options),
+      browserlessCenterActivityRadius(options) + centerActivityAfkEdgeExtension(options),
+      target.centerActivityEdge?.reason || 'center-afk-edge-continuation'
     )),
     filteredAfkTargetDetails: afkCenterPartition.filteredDetails,
     realtimeCoins: realtimeCoinPartition.filtered.length,
@@ -2935,6 +2972,7 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
   if (afkTargets.some(target => afkOpportunityBlockedByStaminaCooldown(target, options))) dataGaps.push('afk-stamina-cooldown-target-visible');
   if (centerFiltered.afkTargets) dataGaps.push('center-afk-targets-filtered');
   if (centerFiltered.edgeAdmittedAfkTargets) dataGaps.push('center-afk-edge-target-admitted');
+  if (centerFiltered.edgeContinuedAfkTargets) dataGaps.push('center-afk-edge-target-continued');
   if (centerFiltered.edgeAdmittedRealtimeCoins.length || centerFiltered.edgeAdmittedSnapshotCoins.length) {
     dataGaps.push('center-visible-coin-edge-admitted');
   }

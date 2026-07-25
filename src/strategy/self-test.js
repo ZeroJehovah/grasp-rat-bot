@@ -191,9 +191,78 @@ const {
   nextDailyProfitResetAtCore,
   profitTargetEligibleCore
 } = require('./profit-threshold');
+const {
+  centerActivityAfkContinuationFreshnessMsCore,
+  deriveCenterActivityAfkContinuationCore,
+  evaluateCenterActivityAfkAdmissionCore
+} = require('./center-activity-afk');
 
 function runStrategyModuleSelfTests() {
   const results = [];
+
+  const edgeAction = {
+    kind: 'attack',
+    band: 'profit',
+    target: {
+      userId: 33,
+      centerActivityEdge: { admitted: true, reason: 'center-afk-edge-admitted' }
+    }
+  };
+  const edgeArbitration = {
+    lastAction: edgeAction,
+    lastFocus: { band: 'profit', type: 'enemy', id: '33' },
+    lastSelectedAt: 1000
+  };
+  const continuation = deriveCenterActivityAfkContinuationCore(edgeArbitration, {
+    nowMs: 3999,
+    decisionIntervalMs: 1000
+  });
+  results.push({
+    name: 'center-edge-afk-continuation-is-target-scoped-and-freshness-bounded',
+    passed: centerActivityAfkContinuationFreshnessMsCore({ decisionIntervalMs: 1000 }) === 3000
+      && centerActivityAfkContinuationFreshnessMsCore({ decisionIntervalMs: 2000 }) === 5000
+      && continuation?.targetId === '33'
+      && continuation?.ageMs === 2999
+      && deriveCenterActivityAfkContinuationCore(edgeArbitration, { nowMs: 4001, decisionIntervalMs: 1000 }) === null
+      && deriveCenterActivityAfkContinuationCore({
+        ...edgeArbitration,
+        lastAction: { ...edgeAction, kind: 'coin' }
+      }, { nowMs: 2000 }) === null
+      && deriveCenterActivityAfkContinuationCore({
+        ...edgeArbitration,
+        lastFocus: { band: 'profit', type: 'enemy', id: '34' }
+      }, { nowMs: 2000 }) === null
+      && deriveCenterActivityAfkContinuationCore({
+        ...edgeArbitration,
+        lastPreemption: { at: 1000, band: 'safety' }
+      }, { nowMs: 2000 }) === null
+  });
+
+  const admissionBase = {
+    centerRadiusCm: 100000,
+    edgeRadiusCm: 114500,
+    targetRadiusCm: 104737,
+    targetDistanceCm: 4305,
+    visibleDistanceCm: 50000,
+    authority: 'realtime',
+    targetId: 33,
+    continuation
+  };
+  const insideAdmission = evaluateCenterActivityAfkAdmissionCore({ ...admissionBase, selfRadiusCm: 99482 });
+  const continuedAdmission = evaluateCenterActivityAfkAdmissionCore({ ...admissionBase, selfRadiusCm: 100970 });
+  results.push({
+    name: 'center-edge-afk-admission-preserves-acquisition-boundary-and-hard-release-gates',
+    passed: insideAdmission.admitted === true
+      && insideAdmission.reason === 'center-afk-edge-admitted'
+      && continuedAdmission.admitted === true
+      && continuedAdmission.continued === true
+      && continuedAdmission.reason === 'center-afk-edge-continuation'
+      && evaluateCenterActivityAfkAdmissionCore({ ...admissionBase, selfRadiusCm: 100970, targetId: 34 }).reason === 'self-outside-center'
+      && evaluateCenterActivityAfkAdmissionCore({ ...admissionBase, selfRadiusCm: 114501 }).reason === 'self-outside-afk-edge-radius'
+      && evaluateCenterActivityAfkAdmissionCore({ ...admissionBase, selfRadiusCm: 100970, targetRadiusCm: 114501 }).reason === 'outside-afk-edge-radius'
+      && evaluateCenterActivityAfkAdmissionCore({ ...admissionBase, selfRadiusCm: 100970, authority: 'snapshot' }).reason === 'non-realtime-authority'
+      && evaluateCenterActivityAfkAdmissionCore({ ...admissionBase, selfRadiusCm: 100970, targetDistanceCm: 50001 }).reason === 'outside-opportunity-visible-distance'
+  });
 
   const headingCompetition = activeCoinCompetitionCore(
     { user_id: 1, x: 0, y: 0 },

@@ -1439,7 +1439,10 @@ function compactCenterActivity(centerActivity) {
     distanceCm: compactNumber(item?.distanceCm),
     targetRadiusCm: compactNumber(item?.targetRadiusCm),
     outsideByCm: compactNumber(item?.outsideByCm),
-    reason: compactString(item?.reason, 80)
+    reason: compactString(item?.reason, 80),
+    continued: Boolean(item?.continued),
+    continuationAgeMs: compactNumber(item?.continuationAgeMs),
+    sourceActionKind: compactString(item?.sourceActionKind, 32)
   });
   return {
     radiusCm: compactNumber(centerActivity.radiusCm),
@@ -1448,9 +1451,11 @@ function compactCenterActivity(centerActivity) {
     selfOutsideCm: compactNumber(centerActivity.selfOutsideCm),
     filteredAfkTargets: compactNumber(centerActivity.filteredAfkTargets),
     edgeAdmittedAfkTargets: compactNumber(centerActivity.edgeAdmittedAfkTargets),
+    edgeContinuedAfkTargets: compactNumber(centerActivity.edgeContinuedAfkTargets),
     filteredRealtimeCoins: compactNumber(centerActivity.filteredRealtimeCoins),
     filteredSnapshotCoins: compactNumber(centerActivity.filteredSnapshotCoins),
     edgeAfkTargets: (centerActivity.edgeAfkTargets || []).slice(0, 8).map(compactAfkTarget),
+    continuedEdgeAfkTargets: (centerActivity.continuedEdgeAfkTargets || []).slice(0, 8).map(compactAfkTarget),
     filteredAfkTargetDetails: (centerActivity.filteredAfkTargetDetails || []).slice(0, 8).map(compactAfkTarget)
   };
 }

@@ -10018,6 +10018,287 @@ async function runSelfTest() {
       want: '8|1|14500|0|1|0|1|outside-afk-edge-radius|0|1|self-outside-center'
     },
     {
+      name: 'browserless July 26 00:21 edge target stays in the opportunity set across the center boundary',
+      got: (() => {
+        const adapter = createBrowserlessDecisionAdapter({
+          controlMode: 'profit-live',
+          combatEnabled: false,
+          decisionIntervalMs: 1000,
+          combatAttackRange: 14500,
+          browserlessCenterActivityRadiusCm: 100000,
+          finalActionArbitrationHoldMs: 0,
+          singleCoinBaitEnabled: false
+        });
+        const state = (tick, selfX) => ({
+          userId: 7,
+          realtime: {
+            tick,
+            frameAgeMs: 0,
+            self: fullStamina5s({ entity_id: 1, user_id: 7, name: 'self', x: selfX, y: 0, hp: 100, max_hp: 100 }),
+            entities: [
+              fullStamina5s({ entity_id: 1, user_id: 7, name: 'self', x: selfX, y: 0, hp: 100, max_hp: 100 }),
+              fullStamina5s({ entity_id: 2, user_id: 9707, name: 'Stark-X', x: 101500, y: 0, hp: 60, max_hp: 100, current_join_mode: 'Passive', drop: 33 }),
+              fullStamina5s({ entity_id: 3, user_id: 6571, name: 'linuxdo_6571', x: 60000, y: 0, hp: 100, max_hp: 100, current_join_mode: 'Passive', drop: 32 })
+            ],
+            bullets: [],
+            coinDrops: []
+          },
+          fallback: { tick, frameAgeMs: 0, entities: [], coinDrops: [], messages: [] }
+        });
+        const inside = adapter.decide(state(1, 99000), { nowMs: 1000 });
+        const outside = adapter.decide(state(2, 100500), { nowMs: 2000 });
+        const returned = adapter.decide(state(3, 99500), { nowMs: 3000 });
+        return [
+          inside.action.target?.userId,
+          outside.action.target?.userId,
+          returned.action.target?.userId,
+          outside.action.target?.centerActivityEdge?.reason,
+          outside.action.target?.centerActivityEdge?.continuationAgeMs,
+          outside.action.target?.distance,
+          outside.input.centerActivity.edgeContinuedAfkTargets,
+          outside.input.centerActivity.filteredAfkTargetDetails.some(item => item.userId === 9707),
+          outside.input.dataGaps.includes('center-afk-edge-target-continued')
+        ].join('|');
+      })(),
+      want: '9707|9707|9707|center-afk-edge-continuation|1000|1000|1|false|true'
+    },
+    {
+      name: 'browserless July 26 00:30 continued edge target reaches AFK finish commitment with current realtime state',
+      got: (() => {
+        const adapter = createBrowserlessDecisionAdapter({
+          controlMode: 'profit-live',
+          combatEnabled: false,
+          decisionIntervalMs: 1000,
+          combatAttackRange: 14500,
+          browserlessCenterActivityRadiusCm: 100000,
+          finalActionArbitrationHoldMs: 0,
+          singleCoinBaitEnabled: false
+        });
+        const frame = ({ tick, selfX, selfY, targetHp, includeEason = false, targetPatch = {} }) => ({
+          userId: 7,
+          realtime: {
+            tick,
+            frameAgeMs: 0,
+            self: fullStamina5s({ entity_id: 1, user_id: 7, name: 'self', x: selfX, y: selfY, hp: 100, max_hp: 100 }),
+            entities: [
+              fullStamina5s({ entity_id: 1, user_id: 7, name: 'self', x: selfX, y: selfY, hp: 100, max_hp: 100 }),
+              fullStamina5s({
+                entity_id: 2,
+                user_id: 9678,
+                name: 'linuxdo_9678',
+                x: 104400,
+                y: 8400,
+                hp: targetHp,
+                max_hp: 100,
+                current_join_mode: 'Passive',
+                drop: 12,
+                ...targetPatch
+              }),
+              ...(includeEason ? [fullStamina5s({
+                entity_id: 3,
+                user_id: 19677,
+                name: 'Eason',
+                x: 55263,
+                y: 6597,
+                hp: 35,
+                max_hp: 100,
+                current_join_mode: 'Passive',
+                drop: 1336
+              })] : [])
+            ],
+            bullets: [],
+            coinDrops: []
+          },
+          fallback: { tick, frameAgeMs: 0, entities: [], coinDrops: [], messages: [] }
+        });
+        const initial = adapter.decide(frame({
+          tick: 10,
+          selfX: 99338,
+          selfY: 5358,
+          targetHp: 29
+        }), { nowMs: 1000 });
+        const continued = adapter.decide(frame({
+          tick: 11,
+          selfX: 100788,
+          selfY: 6058,
+          targetHp: 21,
+          includeEason: true
+        }), { nowMs: 2000 });
+        const target = continued.action.target || {};
+        return [
+          initial.action.target?.userId,
+          target.userId,
+          target.hp,
+          target.x,
+          target.y,
+          Math.round(target.distance),
+          target.centerActivityEdge?.reason,
+          continued.action.opportunityChoice?.finishCommitment?.reason,
+          continued.profit.switch?.bestRejectedReason,
+          continued.profit.rawBest?.id,
+          continued.input.centerActivity.continuedEdgeAfkTargets[0]?.userId
+        ].join('|');
+      })(),
+      want: '9678|9678|21|104400|8400|4305|center-afk-edge-continuation|afk-finish-commitment|afk-finish-commitment|19677|9678'
+    },
+    {
+      name: 'browserless edge continuation releases immediately for missing active invulnerable and dead targets',
+      got: (() => {
+        const evaluateRelease = targetPatch => {
+          const adapter = createBrowserlessDecisionAdapter({
+            controlMode: 'profit-live',
+            combatEnabled: false,
+            decisionIntervalMs: 1000,
+            combatAttackRange: 14500,
+            browserlessCenterActivityRadiusCm: 100000,
+            finalActionArbitrationHoldMs: 0,
+            singleCoinBaitEnabled: false
+          });
+          const state = (tick, selfX, targets) => ({
+            userId: 7,
+            realtime: {
+              tick,
+              frameAgeMs: 0,
+              self: fullStamina5s({ entity_id: 1, user_id: 7, name: 'self', x: selfX, y: 0, hp: 100, max_hp: 100 }),
+              entities: [
+                fullStamina5s({ entity_id: 1, user_id: 7, name: 'self', x: selfX, y: 0, hp: 100, max_hp: 100 }),
+                ...targets,
+                fullStamina5s({ entity_id: 3, user_id: 44, name: 'fallback', x: 60000, y: 0, hp: 100, max_hp: 100, current_join_mode: 'Passive', drop: 20 })
+              ],
+              bullets: [],
+              coinDrops: []
+            },
+            fallback: { tick, frameAgeMs: 0, entities: [], coinDrops: [], messages: [] }
+          });
+          const edgeTarget = patch => fullStamina5s({
+            entity_id: 2,
+            user_id: 33,
+            name: 'edge',
+            x: 104000,
+            y: 0,
+            hp: 50,
+            max_hp: 100,
+            current_join_mode: 'Passive',
+            drop: 30,
+            ...patch
+          });
+          adapter.decide(state(1, 99000, [edgeTarget({})]), { nowMs: 1000 });
+          const targets = targetPatch === null ? [] : [edgeTarget(targetPatch)];
+          const decision = adapter.decide(state(2, 101000, targets), { nowMs: 2000 });
+          return String(decision.action.target?.userId ?? 'none');
+        };
+        return [
+          evaluateRelease(null),
+          evaluateRelease({ vx: 50 }),
+          evaluateRelease({ invulnerable_remaining_ms: 5000 }),
+          evaluateRelease({ life: 'Dead', hp: 0 })
+        ].join('|');
+      })(),
+      want: '44|44|44|44'
+    },
+    {
+      name: 'browserless edge continuation remains eligible without blocking a confirmed better target',
+      got: (() => {
+        const adapter = createBrowserlessDecisionAdapter({
+          controlMode: 'profit-live',
+          combatEnabled: false,
+          decisionIntervalMs: 1000,
+          combatAttackRange: 14500,
+          browserlessCenterActivityRadiusCm: 100000,
+          finalActionArbitrationHoldMs: 0,
+          opportunitySwitchConfirmFrames: 3,
+          opportunitySwitchHoldMs: 0,
+          singleCoinBaitEnabled: false
+        });
+        const state = (tick, includeBetter) => ({
+          userId: 7,
+          realtime: {
+            tick,
+            frameAgeMs: 0,
+            self: fullStamina5s({ entity_id: 1, user_id: 7, name: 'self', x: tick === 1 ? 99000 : 101000, y: 0, hp: 100, max_hp: 100 }),
+            entities: [
+              fullStamina5s({ entity_id: 1, user_id: 7, name: 'self', x: tick === 1 ? 99000 : 101000, y: 0, hp: 100, max_hp: 100 }),
+              fullStamina5s({ entity_id: 2, user_id: 33, name: 'edge', x: 104000, y: 0, hp: 100, max_hp: 100, current_join_mode: 'Passive', drop: 10 }),
+              ...(includeBetter ? [fullStamina5s({ entity_id: 3, user_id: 44, name: 'better', x: 60000, y: 0, hp: 100, max_hp: 100, current_join_mode: 'Passive', drop: 1000 })] : [])
+            ],
+            bullets: [],
+            coinDrops: []
+          },
+          fallback: { tick, frameAgeMs: 0, entities: [], coinDrops: [], messages: [] }
+        });
+        const first = adapter.decide(state(1, false), { nowMs: 1000 });
+        const pending1 = adapter.decide(state(2, true), { nowMs: 2000 });
+        const pending2 = adapter.decide(state(3, true), { nowMs: 3000 });
+        const confirmed = adapter.decide(state(4, true), { nowMs: 4000 });
+        return [
+          first.action.target?.userId,
+          pending1.action.target?.userId,
+          pending1.profit.switch?.confirmationFrames,
+          pending2.action.target?.userId,
+          pending2.profit.switch?.confirmationFrames,
+          confirmed.action.target?.userId,
+          confirmed.profit.switch?.switchAllowed,
+          confirmed.action.target?.centerActivityEdge?.continued === true
+        ].join('|');
+      })(),
+      want: '33|33|1|33|2|44|true|false'
+    },
+    {
+      name: 'browserless realtime safety preemption ends old edge profit continuation',
+      got: (() => {
+        const adapter = createBrowserlessDecisionAdapter({
+          controlMode: 'profit-live',
+          combatEnabled: false,
+          decisionIntervalMs: 1000,
+          combatAttackRange: 14500,
+          browserlessCenterActivityRadiusCm: 100000,
+          finalActionArbitrationHoldMs: 0,
+          singleCoinBaitEnabled: false
+        });
+        const state = (tick, threatVisible) => ({
+          userId: 7,
+          realtime: {
+            tick,
+            frameAgeMs: 0,
+            self: fullStamina5s({ entity_id: 1, user_id: 7, name: 'self', x: tick === 1 ? 99000 : 101000, y: 0, hp: 100, max_hp: 100 }),
+            entities: [
+              fullStamina5s({ entity_id: 1, user_id: 7, name: 'self', x: tick === 1 ? 99000 : 101000, y: 0, hp: 100, max_hp: 100 }),
+              fullStamina5s({ entity_id: 2, user_id: 33, name: 'edge', x: 104000, y: 0, hp: 50, max_hp: 100, current_join_mode: 'Passive', drop: 30 }),
+              fullStamina5s({ entity_id: 3, user_id: 44, name: 'fallback', x: 60000, y: 0, hp: 100, max_hp: 100, current_join_mode: 'Passive', drop: 20 }),
+              ...(threatVisible ? [fullStamina5s({
+                entity_id: 4,
+                user_id: 55,
+                name: 'threat',
+                x: 101500,
+                y: 0,
+                hp: 100,
+                max_hp: 100,
+                current_join_mode: 'Active',
+                invulnerable_remaining_ms: 5000,
+                drop: 1
+              }, 5000)] : [])
+            ],
+            bullets: [],
+            coinDrops: []
+          },
+          fallback: { tick, frameAgeMs: 0, entities: [], coinDrops: [], messages: [] }
+        });
+        const first = adapter.decide(state(1, false), { nowMs: 1000 });
+        const safety = adapter.decide(state(2, true), { nowMs: 2000 });
+        const after = adapter.decide(state(3, false), { nowMs: 3000 });
+        return [
+          first.action.target?.userId,
+          safety.action.band,
+          safety.action.reason,
+          safety.input.centerActivity.edgeContinuedAfkTargets,
+          after.action.target?.userId,
+          after.input.centerActivity.edgeContinuedAfkTargets,
+          after.input.centerActivity.filteredAfkTargetDetails.find(item => item.userId === 33)?.reason
+        ].join('|');
+      })(),
+      want: '33|safety|avoid-invulnerable-target|1|44|0|self-outside-center'
+    },
+    {
       name: 'browserless decision collects visible high-value coin outside center radius',
       got: (() => {
         const decision = buildBrowserlessDecision({
@@ -26899,6 +27180,7 @@ async function runSelfTest() {
                   selfOutsideCm: 0,
                   filteredAfkTargets: 0,
                   edgeAdmittedAfkTargets: 1,
+                  edgeContinuedAfkTargets: 1,
                   filteredRealtimeCoins: 0,
                   filteredSnapshotCoins: 0,
                   edgeAfkTargets: [{
@@ -26909,6 +27191,18 @@ async function runSelfTest() {
                     targetRadiusCm: 102749,
                     outsideByCm: 2749,
                     reason: 'center-afk-edge-admitted'
+                  }],
+                  continuedEdgeAfkTargets: [{
+                    userId: 9678,
+                    name: 'linuxdo_9678',
+                    drop: 12,
+                    distanceCm: 4305,
+                    targetRadiusCm: 104737,
+                    outsideByCm: 4737,
+                    reason: 'center-afk-edge-continuation',
+                    continued: true,
+                    continuationAgeMs: 1012,
+                    sourceActionKind: 'attack'
                   }],
                   filteredAfkTargetDetails: []
                 },
@@ -27071,10 +27365,14 @@ async function runSelfTest() {
           !compactText.includes(largePayload) && compactText.length < publicText.length,
           compactStatus.decision.centerActivity.edgeAdmittedAfkTargets,
           compactStatus.decision.centerActivity.edgeAfkTargets[0].outsideByCm,
-          compactStatus.decision.centerActivity.edgeAfkTargets[0].reason
+          compactStatus.decision.centerActivity.edgeAfkTargets[0].reason,
+          compactStatus.decision.centerActivity.edgeContinuedAfkTargets,
+          compactStatus.decision.centerActivity.continuedEdgeAfkTargets[0].userId,
+          compactStatus.decision.centerActivity.continuedEdgeAfkTargets[0].continuationAgeMs,
+          compactStatus.decision.centerActivity.continuedEdgeAfkTargets[0].sourceActionKind
         ].join('|');
       }),
-      want: 'true|77|true|true|true|true|true|false|loop-wait|88|10|20|360000|seek-coin|8|7|enemy|5999|active-near-login-point|88|true|enemy|14500|coin-1|1|12|153|1|enemy|1|Passive|1|latest|danger-player|Active|true|214440|2|3|10.0.0.101|false|false|false|true|true|false|true|1|2749|center-afk-edge-admitted'
+      want: 'true|77|true|true|true|true|true|false|loop-wait|88|10|20|360000|seek-coin|8|7|enemy|5999|active-near-login-point|88|true|enemy|14500|coin-1|1|12|153|1|enemy|1|Passive|1|latest|danger-player|Active|true|214440|2|3|10.0.0.101|false|false|false|true|true|false|true|1|2749|center-afk-edge-admitted|1|9678|1012|attack'
     },
     {
       name: 'browserless state replaces completed run and probe snapshots instead of retaining stale safety fields',
