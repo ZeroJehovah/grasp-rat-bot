@@ -1897,7 +1897,8 @@ function compactNearby(nearby) {
       compactVersion: COMPACT_NEARBY_VERSION,
       ar: compactNumber(nearby.ar ?? nearby.attackRange),
       vr: compactNumber(nearby.vr ?? nearby.visibleRange),
-      c: compactNearbyList(nearby.c || nearby.coins, 9, Number.POSITIVE_INFINITY),
+      c: compactNearbyList(nearby.c || nearby.coins, 7, Number.POSITIVE_INFINITY)
+        .map(row => [...row, null, null]),
       coinLowHiddenCount: compactNearbyCount(nearby.coinLowHiddenCount),
       p: compactNearbyList(nearby.p || nearby.players, 12, Number.POSITIVE_INFINITY)
         .map(row => [...row, null, null]),

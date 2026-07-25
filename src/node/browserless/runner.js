@@ -3628,6 +3628,34 @@ async function runBrowserlessRunnerSelfTest() {
       coin: nearbyMapCompact.nearby?.c?.find(row => row[0] === 'route-a') || null,
       player: nearbyMapCompact.nearby?.p?.find(row => row[0] === 'Pyro') || null
     };
+    const nearbyMapLegacyCompact = buildCompactBrowserlessStatus({
+      updatedAt: '2026-07-26T01:00:00.000Z',
+      current: {
+        decision: {
+          kind: 'wait',
+          input: {
+            nearby: {
+              compactVersion: 1,
+              ar: 15000,
+              vr: 50000,
+              c: [routeRowsWhenFirstPresent[0].slice(0, 7)],
+              p: [nearbyMapCompact.nearby.p[0].slice(0, 12)]
+            }
+          }
+        }
+      }
+    });
+    const nearbyMapLegacyCompatibilityTest = {
+      ok: nearbyMapLegacyCompact.nearby?.compactVersion === 2
+        && nearbyMapLegacyCompact.nearby?.c?.[0]?.length === 9
+        && nearbyMapLegacyCompact.nearby?.c?.[0]?.[7] === null
+        && nearbyMapLegacyCompact.nearby?.c?.[0]?.[8] === null
+        && nearbyMapLegacyCompact.nearby?.p?.[0]?.length === 14
+        && nearbyMapLegacyCompact.nearby?.p?.[0]?.[12] === null
+        && nearbyMapLegacyCompact.nearby?.p?.[0]?.[13] === null,
+      coinRowLength: nearbyMapLegacyCompact.nearby?.c?.[0]?.length || 0,
+      playerRowLength: nearbyMapLegacyCompact.nearby?.p?.[0]?.length || 0
+    };
     const realtimeLootFixture = (selfHp, includeCoin) => {
       const nowMs = Date.UTC(2026, 6, 23, 1, 29, 48);
       return buildBrowserlessRealtimeControlDecision({
@@ -4365,6 +4393,7 @@ async function runBrowserlessRunnerSelfTest() {
           && panelCombatMoved.movementDistance === 500
           && nearbyFleeTargetPanelTest.ok
           && nearbyMapCoordinatesTest.ok
+          && nearbyMapLegacyCompatibilityTest.ok
           && realtimeLootSafetyArbitrationTest.ok
         ),
         selfDropRange: {
@@ -4417,6 +4446,7 @@ async function runBrowserlessRunnerSelfTest() {
         measuredMovementDistance: panelCombatMoved.movementDistance,
         nearbyFleeTargetPanel: nearbyFleeTargetPanelTest,
         nearbyMapCoordinates: nearbyMapCoordinatesTest,
+        nearbyMapLegacyCompatibility: nearbyMapLegacyCompatibilityTest,
         realtimeLootSafetyArbitration: realtimeLootSafetyArbitrationTest
       };
       statusServerChatTest = {
@@ -4495,6 +4525,7 @@ async function runBrowserlessRunnerSelfTest() {
         && dynamicSnapshotPollerStatus.currentIntervalMs === DEFAULT_CHAT_ACTIVE_INTERVAL_MS
         && nearbyCoinRoutePanelTest.ok
         && nearbyMapCoordinatesTest.ok
+        && nearbyMapLegacyCompatibilityTest.ok
         && statusServerChatTest.ok
         && snapshotEdge.ok
         && combatBattleLog.ok
@@ -4536,6 +4567,7 @@ async function runBrowserlessRunnerSelfTest() {
       dynamicSnapshotPollerStatus,
       nearbyCoinRoutePanelTest,
       nearbyMapCoordinatesTest,
+      nearbyMapLegacyCompatibilityTest,
       statusServerChatTest,
       snapshotEdge,
       combatBattleLog,
