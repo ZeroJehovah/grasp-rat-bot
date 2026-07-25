@@ -3645,6 +3645,23 @@ async function runBrowserlessRunnerSelfTest() {
         }
       }
     });
+    const nearbyMapMixedVersionCompact = buildCompactBrowserlessStatus({
+      updatedAt: '2026-07-26T01:00:00.000Z',
+      current: {
+        decision: {
+          kind: 'wait',
+          input: {
+            nearby: {
+              compactVersion: 2,
+              ar: 15000,
+              vr: 50000,
+              c: [routeRowsWhenFirstPresent[0].slice(0, 7)],
+              p: [nearbyMapCompact.nearby.p[0].slice(0, 12)]
+            }
+          }
+        }
+      }
+    });
     const nearbyMapLegacyCompatibilityTest = {
       ok: nearbyMapLegacyCompact.nearby?.compactVersion === 2
         && nearbyMapLegacyCompact.nearby?.c?.[0]?.length === 9
@@ -3652,9 +3669,17 @@ async function runBrowserlessRunnerSelfTest() {
         && nearbyMapLegacyCompact.nearby?.c?.[0]?.[8] === null
         && nearbyMapLegacyCompact.nearby?.p?.[0]?.length === 14
         && nearbyMapLegacyCompact.nearby?.p?.[0]?.[12] === null
-        && nearbyMapLegacyCompact.nearby?.p?.[0]?.[13] === null,
+        && nearbyMapLegacyCompact.nearby?.p?.[0]?.[13] === null
+        && nearbyMapMixedVersionCompact.nearby?.c?.[0]?.length === 9
+        && nearbyMapMixedVersionCompact.nearby?.c?.[0]?.[7] === null
+        && nearbyMapMixedVersionCompact.nearby?.c?.[0]?.[8] === null
+        && nearbyMapMixedVersionCompact.nearby?.p?.[0]?.length === 14
+        && nearbyMapMixedVersionCompact.nearby?.p?.[0]?.[12] === null
+        && nearbyMapMixedVersionCompact.nearby?.p?.[0]?.[13] === null,
       coinRowLength: nearbyMapLegacyCompact.nearby?.c?.[0]?.length || 0,
-      playerRowLength: nearbyMapLegacyCompact.nearby?.p?.[0]?.length || 0
+      playerRowLength: nearbyMapLegacyCompact.nearby?.p?.[0]?.length || 0,
+      mixedVersionCoinRowLength: nearbyMapMixedVersionCompact.nearby?.c?.[0]?.length || 0,
+      mixedVersionPlayerRowLength: nearbyMapMixedVersionCompact.nearby?.p?.[0]?.length || 0
     };
     const realtimeLootFixture = (selfHp, includeCoin) => {
       const nowMs = Date.UTC(2026, 6, 23, 1, 29, 48);

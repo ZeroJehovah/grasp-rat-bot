@@ -1826,6 +1826,13 @@ function compactNearbyList(list, rowSize, limit = 160) {
     .slice(0, limit);
 }
 
+function compactNearbyFixedList(list, rowSize, limit = 160) {
+  return compactNearbyList(list, rowSize, limit)
+    .map(row => row.length < rowSize
+      ? [...row, ...Array(rowSize - row.length).fill(null)]
+      : row);
+}
+
 function sortCompactNearbyCoins(a, b) {
   const distanceA = compactNumber(a?.[2]);
   const distanceB = compactNumber(b?.[2]);
@@ -1897,11 +1904,9 @@ function compactNearby(nearby) {
       compactVersion: COMPACT_NEARBY_VERSION,
       ar: compactNumber(nearby.ar ?? nearby.attackRange),
       vr: compactNumber(nearby.vr ?? nearby.visibleRange),
-      c: compactNearbyList(nearby.c || nearby.coins, 7, Number.POSITIVE_INFINITY)
-        .map(row => [...row, null, null]),
+      c: compactNearbyFixedList(nearby.c || nearby.coins, 9, Number.POSITIVE_INFINITY),
       coinLowHiddenCount: compactNearbyCount(nearby.coinLowHiddenCount),
-      p: compactNearbyList(nearby.p || nearby.players, 12, Number.POSITIVE_INFINITY)
-        .map(row => [...row, null, null]),
+      p: compactNearbyFixedList(nearby.p || nearby.players, 14, Number.POSITIVE_INFINITY),
       playerLowHiddenCount: compactNearbyCount(nearby.playerLowHiddenCount),
       observedAt: nearby.observedAt || '',
       tick: compactNumber(nearby.tick),
@@ -1913,9 +1918,9 @@ function compactNearby(nearby) {
       compactVersion: COMPACT_NEARBY_VERSION,
       ar: compactNumber(nearby.ar ?? nearby.attackRange),
       vr: compactNumber(nearby.vr ?? nearby.visibleRange),
-      c: compactNearbyList(nearby.c || nearby.coins, 9, Number.POSITIVE_INFINITY),
+      c: compactNearbyFixedList(nearby.c || nearby.coins, 9, Number.POSITIVE_INFINITY),
       coinLowHiddenCount: compactNearbyCount(nearby.coinLowHiddenCount),
-      p: compactNearbyList(nearby.p || nearby.players, 14, Number.POSITIVE_INFINITY),
+      p: compactNearbyFixedList(nearby.p || nearby.players, 14, Number.POSITIVE_INFINITY),
       playerLowHiddenCount: compactNearbyCount(nearby.playerLowHiddenCount),
       observedAt: nearby.observedAt || '',
       tick: compactNumber(nearby.tick),
