@@ -4148,6 +4148,56 @@ async function runBrowserlessRunnerSelfTest() {
         runId: 'panel-previous-exit-run'
       }]
     }, { nowMs: Date.parse('2026-07-25T07:55:13.935Z') });
+    const panelLaggingSessionStatsCompact = buildCompactBrowserlessStatus({
+      session: { userId: 7, sessionToken: 'panel-self-test-token' },
+      runner: {
+        running: true,
+        currentAction: {
+          kind: 'combat-live',
+          band: 'combat',
+          reason: 'combat-live-realtime',
+          target: { userId: 8, name: 'current-enemy' }
+        }
+      },
+      current: {
+        self: {
+          userId: 7,
+          name: 'self',
+          hp: 82,
+          authority: 'realtime',
+          source: 'pos',
+          receivedAtMs: Date.parse('2026-07-26T16:37:01.000Z')
+        },
+        decision: {
+          kind: 'combat-live',
+          band: 'combat',
+          reason: 'combat-live-realtime',
+          at: '2026-07-26T16:37:01.000Z',
+          action: { kind: 'combat-live', reason: 'combat-live-realtime', target: { userId: 8 } }
+        }
+      },
+      loginPointSafety: {
+        ok: true,
+        reason: 'safe',
+        checkedAt: '2026-07-26T16:16:34.428Z',
+        point: { x: 5999, y: 66268, hp: 100 },
+        detail: { selfPresent: false, reason: 'safe', streak: 1, required: 1 }
+      },
+      stats: {
+        currentSession: {
+          online: false,
+          sessionId: '7:previous-session',
+          userId: 7,
+          enteredAt: '2026-07-26T16:02:01.151Z',
+          exitedAt: '2026-07-26T16:16:01.755Z'
+        },
+        lastExit: {
+          at: '2026-07-26T16:16:01.755Z',
+          reason: 'combat-predicted-leave-hp',
+          runId: 'panel-previous-exit-run'
+        }
+      }
+    }, { nowMs: Date.parse('2026-07-26T16:37:01.000Z') });
     const panelBattleCompact = buildCompactBrowserlessStatus({
       session: { userId: 7, sessionToken: 'panel-self-test-token' },
       runner: { running: true, currentAction: { kind: 'combat-live', target: { userId: 8, distance: 5600 } } },
@@ -4464,8 +4514,13 @@ async function runBrowserlessRunnerSelfTest() {
           && panelTransportRecoveryCompact.stats.currentSession.realtimeOnline === false
           && panelTransportRecoveryCompact.stats.offline.lastExitReason === 'frame-gap'
           && panelTransportRecoveryCompact.recentExit?.reason === 'frame-gap'
-          && lastExitPanelVisibleCore(panelTransportRecoveryCompact) === true
+          && lastExitPanelVisibleCore(panelTransportRecoveryCompact) === false
           && lastExitPanelVisibleCore(panelOnlineCombatWithoutSelfCompact) === false
+          && panelLaggingSessionStatsCompact.game.inGame === true
+          && panelLaggingSessionStatsCompact.stats.currentSession.online === true
+          && panelLaggingSessionStatsCompact.stats.currentSession.realtimeOnline === true
+          && panelLaggingSessionStatsCompact.action.kind === 'combat-live'
+          && lastExitPanelVisibleCore(panelLaggingSessionStatsCompact) === false
           && browserlessCoinPickupObservationTest.ok
           && browserlessSnapshotCoinPickupObservationTest.ok
           && browserlessFastSnapshotPickupObservationTest.ok
@@ -4536,6 +4591,13 @@ async function runBrowserlessRunnerSelfTest() {
           lastExitReason: panelTransportRecoveryCompact.stats.offline.lastExitReason,
           recentExitReason: panelTransportRecoveryCompact.recentExit?.reason || '',
           lastExitPanelVisible: lastExitPanelVisibleCore(panelTransportRecoveryCompact)
+        },
+        laggingSessionStats: {
+          inGame: panelLaggingSessionStatsCompact.game.inGame,
+          online: panelLaggingSessionStatsCompact.stats.currentSession.online,
+          realtimeOnline: panelLaggingSessionStatsCompact.stats.currentSession.realtimeOnline,
+          actionKind: panelLaggingSessionStatsCompact.action.kind,
+          lastExitPanelVisible: lastExitPanelVisibleCore(panelLaggingSessionStatsCompact)
         },
         battleDistance: panelBattleCompact.battle.distance,
         battleMovementDistance: panelBattleCompact.battle.movementDistance,

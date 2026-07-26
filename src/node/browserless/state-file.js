@@ -1039,7 +1039,10 @@ function compactBrowserlessStats(normalized, game, action, options = {}, lastKno
   const stats = normalizeBrowserlessStats(normalized?.stats);
   ensureBrowserlessStatsDay(stats, nowMs);
   const session = stats.currentSession || {};
-  const online = Boolean(session.online);
+  // The realtime projection may observe the next session before a lagging
+  // statistics overlay publishes its online flag. Keep the compact response
+  // internally consistent without mutating persisted session accounting.
+  const online = Boolean(session.online || game?.inGame);
   const realtimeOnline = Boolean(game?.inGame && online);
   const enteredMs = parseTimeMs(session.enteredAt);
   const lastSeenMs = parseTimeMs(session.lastSeenAt);
@@ -2406,12 +2409,30 @@ function compactGameStatus(normalized) {
       && (currentSession.exitedAt || lastExit.at)
   );
   const identifiedSelf = Boolean(self?.userId || self?.entityId || self?.name);
+  const lastExitAtMs = Math.max(
+    parseTimeMs(currentSession.exitedAt),
+    parseTimeMs(lastExit.at)
+  );
+  const realtimeSelfAtMs = /^(?:realtime|pos)$/i.test(String(self?.authority || self?.source || ''))
+    ? parseTimeMs(self?.receivedAtMs || self?.receivedAt)
+    : 0;
+  const realtimeEvidenceAtMs = Math.max(
+    realtimeSelfAtMs,
+    parseTimeMs(current.decision?.at),
+    parseTimeMs(current.action?.command?.sentAt),
+    parseTimeMs(normalized.runner?.currentAction?.command?.sentAt)
+  );
+  const postExitRealtimeEvidence = Boolean(
+    lastExitAtMs > 0
+      && realtimeEvidenceAtMs > lastExitAtMs
+  );
   // An online session plus an active action remains authoritative during a
-  // transient status projection that omits current.self. Waiting actions keep
-  // the existing transport-recovery distinction.
+  // transient status projection that omits current.self. Fresh realtime
+  // evidence after the recorded exit also closes a lagging stats projection;
+  // cached pre-exit self data remains offline after a confirmed leave.
   const selfPresent = Boolean(identifiedSelf || currentSession.online === true)
     && !waiting
-    && !finalizedSession;
+    && (!finalizedSession || postExitRealtimeEvidence);
   return {
     inGame: selfPresent,
     selfPresent,
