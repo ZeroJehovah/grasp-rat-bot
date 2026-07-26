@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.27.1';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.27.2';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function highDropRankValueCore(item) {
@@ -495,7 +495,6 @@ function renderBrowserlessWebPanel() {
     const PANEL_COLLAPSE_KEY = 'graspRatBrowserlessPanelCollapsedV1';
     const AUTO_REFRESH_MS = 3000;
     const MAP_STALE_MS = 15000;
-    const MAP_ARROW_PATH = new Path2D('M985.080436 452.252932c50.87955-16.95037 52.1878-88.392197 1.990815-107.219621l-910.086973-341.282615C31.252407-13.398755-13.398735 31.252387 3.750717 76.984257l341.282615 910.086973c18.827424 50.196985 90.269252 48.888735 107.219621-1.990815l133.213981-399.585062 399.613502-133.242421zM154.22791 154.199449l642.464522 240.945526-274.163701 91.40686a56.880436 56.880436 0 0 0-35.976875 35.976876l-91.406861 274.163701-240.917085-642.464523z');
     let autoRefreshTimer = 0;
     let countdownTimer = 0;
     let refreshInFlight = null;
@@ -1647,7 +1646,7 @@ function renderBrowserlessWebPanel() {
       context.stroke();
       if (attackRange > 0 && visibleRange > attackRange) {
         context.setLineDash([4, 4]);
-        context.strokeStyle = 'rgba(74,222,128,.32)';
+        context.strokeStyle = 'rgba(251,113,133,.68)';
         context.beginPath();
         context.arc(center, center, radius * attackRange / visibleRange, 0, Math.PI * 2);
         context.stroke();
@@ -1661,23 +1660,25 @@ function renderBrowserlessWebPanel() {
       context.stroke();
       return { center, radius };
     }
+    function traceMapDirectionArrow(context, marker) {
+      const angle = Math.atan2(marker.direction.vy, marker.direction.vx);
+      const arcRadius = marker.radius + Math.max(1.5, marker.radius * .3);
+      const arcHalfAngle = Math.acos(.6);
+      const tipDistance = marker.radius * 2;
+      context.beginPath();
+      context.arc(marker.px, marker.py, arcRadius, angle - arcHalfAngle, angle + arcHalfAngle);
+      context.lineTo(
+        marker.px + Math.cos(angle) * tipDistance,
+        marker.py + Math.sin(angle) * tipDistance
+      );
+      context.closePath();
+    }
     function drawMapMarker(context, marker) {
+      context.save();
       if (marker.direction) {
-        const scale = marker.radius * 3 / 1024;
-        context.save();
-        context.translate(marker.px, marker.py);
-        context.rotate(Math.atan2(marker.direction.vy, marker.direction.vx) + Math.PI * .75);
-        context.scale(scale, scale);
-        context.translate(-512, -512);
         context.fillStyle = marker.color;
-        context.fill(MAP_ARROW_PATH, 'evenodd');
-        if (marker.invulnerable) {
-          context.strokeStyle = '#60a5fa';
-          context.lineWidth = 90;
-          context.stroke(MAP_ARROW_PATH);
-        }
-        context.restore();
-        return;
+        traceMapDirectionArrow(context, marker);
+        context.fill();
       }
       context.fillStyle = marker.color;
       context.beginPath();
@@ -1690,6 +1691,7 @@ function renderBrowserlessWebPanel() {
         context.arc(marker.px, marker.py, marker.radius + 2, 0, Math.PI * 2);
         context.stroke();
       }
+      context.restore();
     }
     function mapTargetMatchesPlayer(target, item) {
       if (!target) return false;
@@ -1722,22 +1724,29 @@ function renderBrowserlessWebPanel() {
       if (!markers.length) return;
       context.save();
       context.strokeStyle = color;
-      context.lineWidth = 1.75;
-      context.setLineDash([7, 5]);
+      context.lineWidth = .75;
       context.beginPath();
       context.moveTo(center, center);
       for (const marker of markers) context.lineTo(marker.px, marker.py);
       context.stroke();
       context.restore();
     }
-    function drawMapLabel(context, marker) {
+    function drawMapLabel(context, marker, size) {
       if (!marker.label) return;
-      const rightSide = marker.px <= marker.mapCenter;
-      const x = marker.px + (rightSide ? marker.radius + 5 : -marker.radius - 5);
-      const y = marker.py - marker.radius - 3;
       context.font = (marker.targetRole ? '700 ' : '600 ') + '11px system-ui,-apple-system,Segoe UI,sans-serif';
-      context.textAlign = rightSide ? 'left' : 'right';
-      context.textBaseline = 'bottom';
+      const metrics = context.measureText(marker.label);
+      const textWidth = Math.ceil(metrics.width);
+      const textHeight = Math.max(11, Math.ceil((metrics.actualBoundingBoxAscent || 8) + (metrics.actualBoundingBoxDescent || 3)));
+      const leftSide = marker.px < marker.mapCenter;
+      const topSide = marker.py < marker.mapCenter;
+      const gap = marker.radius + 5;
+      const edgePadding = 3;
+      let x = leftSide ? marker.px - gap - textWidth : marker.px + gap;
+      let y = topSide ? marker.py - gap - textHeight : marker.py + gap;
+      x = Math.max(edgePadding, Math.min(size - edgePadding - textWidth, x));
+      y = Math.max(edgePadding, Math.min(size - edgePadding - textHeight, y));
+      context.textAlign = 'left';
+      context.textBaseline = 'top';
       context.lineJoin = 'round';
       context.strokeStyle = 'rgba(8,12,18,.94)';
       context.lineWidth = 3;
@@ -1856,9 +1865,9 @@ function renderBrowserlessWebPanel() {
         direction: mapVelocity(status.self?.vx, status.self?.vy),
         invulnerable: false
       });
-      for (const marker of markers.filter(marker => marker.label && !marker.selected && !marker.targetRole)) drawMapLabel(context, marker);
-      for (const marker of markers.filter(marker => marker.label && (marker.selected || marker.targetRole))) drawMapLabel(context, marker);
       context.restore();
+      for (const marker of markers.filter(marker => marker.label && !marker.selected && !marker.targetRole)) drawMapLabel(context, marker, size);
+      for (const marker of markers.filter(marker => marker.label && (marker.selected || marker.targetRole))) drawMapLabel(context, marker, size);
       mapHitTargets = markers;
       if ((coinRows.length || playerRows.length) && !markers.length) {
         mapEmptyReason = '目标缺少坐标';
