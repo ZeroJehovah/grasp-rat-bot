@@ -59,6 +59,7 @@ const {
   BROWSER_RUNTIME_DEFAULTS,
   buildBrowserlessRealtimeControlDecision,
   decisionStatePatch,
+  establishedCombatLootPriority,
   observeBrowserlessCoinPickups,
   realtimeNearbyObservationSummary,
   snapshotSelfKillEvidence,
@@ -3259,6 +3260,53 @@ async function runComplexCombatMainThreadBudgetSelfTest(tmp) {
 async function runBrowserlessRunnerSelfTest() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'grasp-rat-browserless-runner-'));
   try {
+    const establishedCombatLootPriorityTest = (() => {
+      const combat = {
+        target: {
+          userId: 42,
+          alive: true,
+          active: true,
+          drop: 143,
+          easyKillKnown: true,
+          combatEngagement: { realtimeHold: true }
+        },
+        dryRun: { combatPhase: { damageFromStart: 0 } }
+      };
+      const stateful = {
+        combatMetrics: { targetId: '42', acceptedShots: 4, targetDamage: 3 }
+      };
+      const blocked = establishedCombatLootPriority(combat, { amount: 10 }, stateful);
+      const productive = establishedCombatLootPriority({
+        target: {
+          userId: 42,
+          alive: true,
+          active: false,
+          drop: 276,
+          easyKillKnown: false,
+          combatEngagement: { realtimeHold: true }
+        },
+        dryRun: { combatPhase: { damageFromStart: 3 } }
+      }, { amount: 40 }, stateful);
+      const betterCoin = establishedCombatLootPriority(combat, { amount: 200 }, stateful);
+      const selfKillDrop = establishedCombatLootPriority(combat, {
+        amount: 10,
+        selfKilledPlayerDrop: true
+      }, stateful);
+      return {
+        ok: blocked.blocked === true
+          && blocked.reason === 'established-higher-value-combat'
+          && productive.blocked === true
+          && productive.productiveCombat === true
+          && betterCoin.blocked === false
+          && betterCoin.reason === 'coin-value-outranks-combat'
+          && selfKillDrop.blocked === false
+          && selfKillDrop.reason === 'self-kill-drop-protected',
+        blocked,
+        productive,
+        betterCoin,
+        selfKillDrop
+      };
+    })();
     const dryConfig = parseBrowserlessRunnerArgs(['--once', '--dry-run', '--data-dir', tmp], {});
     const dryRun = await runBrowserlessRunner(dryConfig, {
       now: () => Date.UTC(2026, 6, 8, 1, 0, 0),
@@ -4556,6 +4604,7 @@ async function runBrowserlessRunnerSelfTest() {
     return {
       ok: Boolean(
         dryRun.ok
+        && establishedCombatLootPriorityTest.ok
         && liveRun.ok
         && runnerResultSummaryOk
         && statusQueueProjectionOk
@@ -4601,6 +4650,7 @@ async function runBrowserlessRunnerSelfTest() {
         // product failure.
         && complexCombatMainThreadBudget.canaryOk
       ),
+      establishedCombatLootPriority: establishedCombatLootPriorityTest,
       dryRun,
       liveRun,
       runnerResultSummary: {

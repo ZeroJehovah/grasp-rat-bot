@@ -129,6 +129,7 @@ const DEFAULT_PROFIT_LIVE_INJURY_HP = 90;
 const DEFAULT_PROFIT_LIVE_PLAYER_DROP_MAX_DISTANCE = BROWSER_RUNTIME_DEFAULTS.postAttackDropCoinMaxDistance;
 const DEFAULT_PROFIT_LIVE_PLAYER_DROP_MAX_AGE_TICKS = 8000;
 const DEFAULT_REALTIME_LOOT_MAX_AGE_MS = 2500;
+const DEFAULT_COMBAT_LOOT_TARGET_DROP_RATIO = 1.25;
 const DEFAULT_SNAPSHOT_VISIBLE_COIN_MAX_DISTANCE = BROWSER_RUNTIME_DEFAULTS.globalCoinMaxDistance;
 const DEFAULT_OPPORTUNITY_VISIBLE_DISTANCE = BROWSER_RUNTIME_DEFAULTS.opportunityVisibleDistance;
 const DEFAULT_OPPORTUNITY_NEARBY_PRIORITY_DISTANCE = BROWSER_RUNTIME_DEFAULTS.opportunityNearbyPriorityDistance;
@@ -7767,6 +7768,21 @@ function buildRealtimeLootControl(input, combat, stateful = {}, options = {}) {
       summary: { ...summaryBase, blockedReason: 'combat-exit-required', healthyHp, selfHp }
     };
   }
+  const combatFocus = establishedCombatLootPriority(combat, coin, stateful, options);
+  if (combatFocus.blocked) {
+    return {
+      action: null,
+      combat: null,
+      assessment,
+      summary: {
+        ...summaryBase,
+        blockedReason: combatFocus.reason,
+        healthyHp,
+        selfHp,
+        combatFocus
+      }
+    };
+  }
   const closePressureActive = combatDecisionClosePressureActive(combat);
   const closePressurePhase = combat?.dryRun?.combatPhase || combat?.combatPhase || null;
   const ordinaryProfitClosePressure = closePressureActive && closePressurePhase?.ordinaryProfit === true;
@@ -7896,6 +7912,50 @@ function buildRealtimeLootControl(input, combat, stateful = {}, options = {}) {
       safeDirection: { dx: Number(safeDirection.dx || 0), dy: Number(safeDirection.dy || 0) }
     }
   };
+}
+
+function establishedCombatLootPriority(combat, coin, stateful = {}, options = {}) {
+  const target = combat?.target || combat?.dryRun?.target || null;
+  const result = (blocked, reason, detail = {}) => ({ blocked, reason, ...detail });
+  if (!coin || !target) return result(false, 'missing-coin-or-combat-target');
+  if (coin.selfKilledPlayerDrop) return result(false, 'self-kill-drop-protected');
+  if (target.alive === false || target.invulnerable === true) return result(false, 'combat-target-invalid');
+
+  const targetId = targetIdentity(target);
+  const metrics = stateful?.combatMetrics || null;
+  const metricsMatch = Boolean(
+    targetId
+      && metrics?.targetId !== null
+      && metrics?.targetId !== undefined
+      && String(metrics.targetId) === String(targetId)
+  );
+  const targetDamage = metricsMatch ? Math.max(0, Number(metrics.targetDamage || 0)) : 0;
+  const combatPhaseDamage = Math.max(0, Number(combat?.dryRun?.combatPhase?.damageFromStart || 0));
+  const easyKillEvidence = Boolean(target.easyKillProfitTarget || target.easyKillKnown);
+  const productiveCombat = targetDamage > 0 || combatPhaseDamage > 0;
+  const established = Boolean(target.combatEngagement || (metricsMatch && Number(metrics.acceptedShots || 0) > 0));
+  const targetDrop = Math.max(0, entityDropValue(target));
+  const coinAmount = Math.max(0, Number(coin.amount || 0));
+  const configuredRatio = Number(options.combatLootTargetDropRatio ?? DEFAULT_COMBAT_LOOT_TARGET_DROP_RATIO);
+  const requiredDropRatio = Math.max(1, Number.isFinite(configuredRatio)
+    ? configuredRatio
+    : DEFAULT_COMBAT_LOOT_TARGET_DROP_RATIO);
+  const requiredTargetDrop = coinAmount * requiredDropRatio;
+  const detail = {
+    targetId: targetId || '',
+    targetDrop,
+    coinAmount,
+    requiredDropRatio,
+    requiredTargetDrop,
+    easyKillEvidence,
+    productiveCombat,
+    targetDamage: Math.max(targetDamage, combatPhaseDamage),
+    established
+  };
+  if (!established) return result(false, 'combat-not-established', detail);
+  if (!easyKillEvidence && !productiveCombat) return result(false, 'combat-profit-unproven', detail);
+  if (!(targetDrop >= requiredTargetDrop)) return result(false, 'coin-value-outranks-combat', detail);
+  return result(true, 'established-higher-value-combat', detail);
 }
 
 function isCombatActionEligibleForDecision(combatDecision, options = {}) {
@@ -10047,6 +10107,7 @@ module.exports = {
   activeTargetExpectedReward,
   attributeBrowserlessHpDropToBullet,
   effectiveProfitReward,
+  establishedCombatLootPriority,
   buildBrowserlessDecision,
   buildBrowserlessCombatStrategyInput,
   buildBrowserlessRealtimeControlDecision,
