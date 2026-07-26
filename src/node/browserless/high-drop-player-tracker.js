@@ -117,10 +117,11 @@ function normalizeStore(value, expectedDay) {
     const candidateLastMs = Date.parse(candidate.lastObservedAt || '');
     const existingLastTick = numberOrNull(existing.lastObservedTick);
     const candidateLastTick = numberOrNull(candidate.lastObservedTick);
-    const candidateIsLater = existingLastTick !== null && candidateLastTick !== null
-      ? candidateLastTick >= existingLastTick
-      : (!Number.isFinite(existingLastMs)
-        || (Number.isFinite(candidateLastMs) && candidateLastMs >= existingLastMs));
+    const candidateIsLater = Number.isFinite(existingLastMs) && Number.isFinite(candidateLastMs)
+      ? candidateLastMs >= existingLastMs
+      : (candidateLastTick !== null && existingLastTick !== null
+        ? candidateLastTick >= existingLastTick
+        : !Number.isFinite(existingLastMs));
     const first = candidateIsEarlier ? candidate : existing;
     const latest = candidateIsLater ? candidate : existing;
     output.players[normalizedKey] = {
@@ -232,8 +233,8 @@ function createHighDropPlayerTracker(options = {}) {
         continue;
       }
       const nextMax = Math.max(Number(existing.maxDrop), drop);
-      const existingTick = numberOrNull(existing.lastObservedTick);
-      const staleObservation = snapshotTick !== null && existingTick !== null && snapshotTick < existingTick;
+      const existingObservedAtMs = Date.parse(existing.lastObservedAt || '');
+      const staleObservation = Number.isFinite(existingObservedAtMs) && atMs < existingObservedAtMs;
       const displayChanged = existing.maxDrop !== nextMax
         || (!staleObservation && (existing.name !== name
           || existing.entityId !== identity.entityId

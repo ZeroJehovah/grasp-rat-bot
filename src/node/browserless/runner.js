@@ -3989,6 +3989,39 @@ async function runBrowserlessRunnerSelfTest() {
     ].sort((left, right) => highDropRankValueCore(right) - highDropRankValueCore(left))
       .map(item => item[0])
       .join(',') === 'other,self';
+    const highDropRecencyTest = (() => {
+      let observedAtMs = Date.UTC(2026, 6, 27, 0, 0, 0);
+      const file = path.join(tmp, 'high-drop-recency-self-test.json');
+      const tracker = createHighDropPlayerTracker({ file, now: () => observedAtMs });
+      tracker.observeSnapshot({
+        tick: 1722245,
+        entities: [{ user_id: 36440, entity_id: 1, name: 'huaming song', drop: 787 }]
+      }, { source: 'prelogin-http', observedAtMs });
+      observedAtMs += 60000;
+      tracker.observeSnapshot({
+        tick: 100,
+        entities: [{ user_id: 36440, entity_id: 2, name: 'huaming song', drop: 1762 }]
+      }, { source: 'ws', observedAtMs });
+      observedAtMs += 60000;
+      tracker.observeSnapshot({
+        tick: 90,
+        entities: [{ user_id: 36440, entity_id: 3, name: 'huaming song latest', drop: 1705 }]
+      }, { source: 'gap-http', observedAtMs });
+      tracker.observeSnapshot({
+        tick: 2000000,
+        entities: [{ user_id: 36440, entity_id: 4, name: 'stale old name', drop: 1800 }]
+      }, { source: 'ws', observedAtMs: observedAtMs - 90000 });
+      const player = createHighDropPlayerTracker({ file, now: () => observedAtMs }).status().players[0];
+      return {
+        ok: player?.name === 'huaming song latest'
+          && player?.entityId === '3'
+          && player?.initialDrop === 787
+          && player?.maxDrop === 1800
+          && player?.latestDrop === 1705
+          && player?.lastObservedTick === 90,
+        player
+      };
+    })();
     const staminaExhaustionPanelTest = isStaminaExhaustionExitReasonCore('stamina-exhausted-leave')
       && isStaminaExhaustionExitReasonCore('体力耗尽')
       && !isStaminaExhaustionExitReasonCore('stamina-budget-coin-leave');
@@ -4549,6 +4582,7 @@ async function runBrowserlessRunnerSelfTest() {
           && browserlessSnapshotCoinPickupObservationTest.ok
           && browserlessFastSnapshotPickupObservationTest.ok
           && highDropRankingTest
+          && highDropRecencyTest.ok
           && staminaExhaustionPanelTest
           && panelBattleCompact.battle.distance === 5600
           && panelBattleCompact.battle.movementDistance === 20000
@@ -4594,6 +4628,7 @@ async function runBrowserlessRunnerSelfTest() {
         snapshotCoinPickupObservation: browserlessSnapshotCoinPickupObservationTest,
         fastSnapshotCoinPickupObservation: browserlessFastSnapshotPickupObservationTest,
         highDropRanking: highDropRankingTest,
+        highDropRecency: highDropRecencyTest,
         staminaExhaustionPanel: staminaExhaustionPanelTest,
         offlineTransition: {
           online: panelOfflineTransitionCompact.stats.currentSession.online,

@@ -26895,8 +26895,12 @@ async function runSelfTest() {
           source: 'ws', selfUserId: 7, observedAtMs: t
         });
         t += 60000;
-        tracker.observeSnapshot({ tick: 35, entities: [{ user_id: 8, name: 'stale-old-name', drop: 800 }] }, {
+        tracker.observeSnapshot({ tick: 35, entities: [{ user_id: 8, name: 'alice-after-tick-reset', drop: 800 }] }, {
           source: 'gap-http', selfUserId: 7, observedAtMs: t
+        });
+        t += 60000;
+        tracker.observeSnapshot({ tick: 100, entities: [{ user_id: 8, name: 'stale-old-name', drop: 900 }] }, {
+          source: 'ws', selfUserId: 7, observedAtMs: t - 120000
         });
         t += 60000;
         tracker.observeSnapshot({ tick: 50, entities: [{ user_id: 9, name: 'bob', drop: 450 }] }, {
@@ -26933,7 +26937,7 @@ async function runSelfTest() {
           nextDay.players.length
         ].join('|');
       }),
-      want: '2026-07-14|3|alice-renamed|8|520|800|600|bob|500|500|450|carol-low|50|50|40|true|true|false|false|false|50|ws|gap-http|2026-07-15|0'
+      want: '2026-07-14|3|alice-after-tick-reset|8|520|900|800|bob|500|500|450|carol-low|50|50|40|true|true|false|false|false|50|ws|gap-http|2026-07-15|0'
     },
     {
       name: 'browserless snapshot gap poller waits three minutes after any observed snapshot',
