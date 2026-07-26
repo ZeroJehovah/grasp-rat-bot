@@ -2397,7 +2397,10 @@ function compactGameStatus(normalized) {
   const action = normalized.runner?.currentAction || current.action || current.decision || {};
   const kind = String(action.kind || '');
   const reason = String(action.reason || '');
-  const waiting = ['loop-wait', 'stop', 'stopped'].includes(kind)
+  // `stop` is also the normal in-game zero-velocity action (for example,
+  // combat-live-no-target). Only lifecycle waits/stopped state mean that
+  // realtime control is offline.
+  const waiting = ['loop-wait', 'stopped'].includes(kind)
     || [
       'missing-manual-session',
       'snapshot-safety-retry',

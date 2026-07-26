@@ -4110,6 +4110,25 @@ async function runBrowserlessRunnerSelfTest() {
       }),
       { nowMs: Date.parse('2026-07-24T08:25:00.000Z') }
     );
+    const panelOnlineCombatStopCompact = buildCompactBrowserlessStatus(
+      mergeState(panelOfflineTransitionState, {
+        runner: {
+          currentAction: {
+            kind: 'stop',
+            band: 'combat',
+            reason: 'combat-live-no-target'
+          }
+        },
+        loginPointSafety: {
+          ok: true,
+          reason: 'safe',
+          checkedAt: '2026-07-26T16:16:34.428Z',
+          point: { x: 5999, y: 66268, hp: 100 },
+          detail: { selfPresent: false, reason: 'safe', streak: 1, required: 1 }
+        }
+      }),
+      { nowMs: Date.parse('2026-07-26T16:37:01.000Z') }
+    );
     const panelTransportRecoveryCompact = buildCompactBrowserlessStatus({
       session: { userId: 7, sessionToken: 'panel-self-test-token' },
       runner: {
@@ -4509,6 +4528,11 @@ async function runBrowserlessRunnerSelfTest() {
           && panelOnlineCombatWithoutSelfCompact.stats.currentSession.online === true
           && panelOnlineCombatWithoutSelfCompact.stats.currentSession.realtimeOnline === true
           && panelOnlineCombatWithoutSelfCompact.action.kind === 'combat-live'
+          && panelOnlineCombatStopCompact.game.inGame === true
+          && panelOnlineCombatStopCompact.stats.currentSession.online === true
+          && panelOnlineCombatStopCompact.stats.currentSession.realtimeOnline === true
+          && panelOnlineCombatStopCompact.action.kind === 'combat-live'
+          && lastExitPanelVisibleCore(panelOnlineCombatStopCompact) === false
           && panelTransportRecoveryCompact.game.inGame === false
           && panelTransportRecoveryCompact.stats.currentSession.online === true
           && panelTransportRecoveryCompact.stats.currentSession.realtimeOnline === false
@@ -4583,6 +4607,13 @@ async function runBrowserlessRunnerSelfTest() {
           online: panelOnlineCombatWithoutSelfCompact.stats.currentSession.online,
           realtimeOnline: panelOnlineCombatWithoutSelfCompact.stats.currentSession.realtimeOnline,
           actionKind: panelOnlineCombatWithoutSelfCompact.action.kind
+        },
+        onlineCombatStop: {
+          inGame: panelOnlineCombatStopCompact.game.inGame,
+          online: panelOnlineCombatStopCompact.stats.currentSession.online,
+          realtimeOnline: panelOnlineCombatStopCompact.stats.currentSession.realtimeOnline,
+          actionKind: panelOnlineCombatStopCompact.action.kind,
+          lastExitPanelVisible: lastExitPanelVisibleCore(panelOnlineCombatStopCompact)
         },
         transportRecovery: {
           inGame: panelTransportRecoveryCompact.game.inGame,
