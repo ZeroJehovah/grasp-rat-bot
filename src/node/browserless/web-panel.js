@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.27.4';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.27.5';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function highDropRankValueCore(item) {
@@ -1358,6 +1358,10 @@ function renderBrowserlessWebPanel() {
         return { state: 'safe', text: '安全 ' + loginPointProgressText(status, true) };
       }
       if (/pending-snapshot-safety/i.test(reasonText)) {
+        const lastExitReason = String(status.stats?.offline?.lastExitReason || status.recentExit?.reason || '');
+        if (/^(frame-gap|ws-closed|action-settlement-stalled)$/i.test(lastExitReason)) {
+          return { state: 'pending', interrupted: true, text: '断线后等待检查 ' + loginPointProgressText(status, false) };
+        }
         const previousCheck = detail.previousCheck || null;
         if (previousCheck?.ok === true) {
           return { state: 'safe', reviewing: true, text: '上次检查安全，正在复查 ' + loginPointProgressText(status, false) };
@@ -2400,11 +2404,13 @@ function renderBrowserlessWebPanel() {
           addRow(rowsOut, '等待原因', loginPointPendingReasonText(status));
         }
         addRow(rowsOut, '保持离线', offlineBlockerText(status), false, status.stats?.offline?.blocker ? classAttrs('warn') : null);
-        addRow(
-          rowsOut,
-          reentry ? '状态确认时间' : (loginDisplay.reviewing ? '上次检查时间' : '检查时间'),
-          fullStamp(status.loginPointSafety?.checkedAt || status.loginPointSafety?.detail?.checkedAt || status.loginPointSafety?.detail?.previousCheck?.checkedAt)
-        );
+        if (!loginDisplay.interrupted) {
+          addRow(
+            rowsOut,
+            reentry ? '状态确认时间' : (loginDisplay.reviewing ? '上次检查时间' : '检查时间'),
+            fullStamp(status.loginPointSafety?.checkedAt || status.loginPointSafety?.detail?.checkedAt || status.loginPointSafety?.detail?.previousCheck?.checkedAt)
+          );
+        }
       }
 
       if (!online && offlineStats.nextReconnectAt) {
