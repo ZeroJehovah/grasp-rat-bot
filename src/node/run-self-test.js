@@ -14432,7 +14432,7 @@ async function runSelfTest() {
       want: 'leave|safety|stamina-budget-coin-leave|true|enemy|27165|iShareOne|12778|42745|29967|1800000|526|true'
     },
     {
-      name: 'browserless profit live takes realtime final coin under 1d stamina limit',
+      name: 'browserless profit live keeps taking realtime foot coin when only 1d budget is low',
       got: (() => {
         const store = createBrowserlessStateStore({ userId: 7 });
         store.ingestFrame({
@@ -14463,11 +14463,11 @@ async function runSelfTest() {
           decision.reason,
           decision.action.target.id,
           decision.action.target.authority,
-          decision.action.dailyStaminaFinalRun.staminaCost,
-          decision.action.dailyStaminaFinalRun.budgetMs
+          decision.action.staminaCost,
+          decision.action.staminaBlocked === undefined
         ].join('|');
       })(),
-      want: 'coin|profit|daily-stamina-final-visible-coin|final-realtime-coin|realtime|1000|500'
+      want: 'coin|profit|foot-coin-priority|final-realtime-coin|realtime|1000|true'
     },
     {
       name: 'browserless profit live leaves when 1d stamina is exhausted',
@@ -14615,12 +14615,11 @@ async function runSelfTest() {
           decision.reason,
           decision.action.target.id,
           decision.action.target.authority,
-          decision.action.dailyStaminaFinalRun.staminaCost,
-          decision.action.dailyStaminaFinalRun.budgetMs,
+          decision.action.staminaCost,
           decision.action.staminaBlocked === undefined
         ].join('|');
       })(),
-      want: 'coin|profit|daily-stamina-final-visible-coin|unaffordable-snapshot-coin|snapshot|1000|500|true'
+      want: 'coin|profit|foot-coin-priority|unaffordable-snapshot-coin|snapshot|1000|true'
     },
     {
       name: 'browserless profit live exits instead of waiting in-game when 1h and 1d budgets are both low',
@@ -26175,6 +26174,7 @@ async function runSelfTest() {
         const result = await runBrowserlessRunner(config, {
           now: () => t,
           startStatusServer: false,
+          disableBackgroundIo: true,
           sleep: async ms => {
             sleptMs += ms;
             t += ms;
@@ -26232,7 +26232,7 @@ async function runSelfTest() {
             };
           }
         });
-        const logFile = path.join(dir, 'logs', '2026-07-12', 'runner.jsonl');
+        const logFile = path.join(dir, 'logs', '2026-07-13', 'runner.jsonl');
         const text = fs.readFileSync(logFile, 'utf8');
         return [
           result.reason,
@@ -26280,6 +26280,7 @@ async function runSelfTest() {
         const result = await runBrowserlessRunner(config, {
           now: () => t,
           startStatusServer: false,
+          disableBackgroundIo: true,
           sleep: async ms => {
             sleptMs += ms;
             t += ms;
@@ -26329,7 +26330,7 @@ async function runSelfTest() {
             };
           }
         });
-        const logFile = path.join(dir, 'logs', '2026-07-12', 'runner.jsonl');
+        const logFile = path.join(dir, 'logs', '2026-07-13', 'runner.jsonl');
         const text = fs.readFileSync(logFile, 'utf8');
         return [
           result.reason,
@@ -38785,6 +38786,13 @@ async function runSelfTest() {
     process.exit(1);
   }
   console.log(JSON.stringify({ ok: true, cases: cases.length }, null, 2));
+}
+
+if (require.main === module) {
+  runSelfTest().catch(error => {
+    console.error(error?.stack || error?.message || String(error));
+    process.exitCode = 1;
+  });
 }
 
 module.exports = {
