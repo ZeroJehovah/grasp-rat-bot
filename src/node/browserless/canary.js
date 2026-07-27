@@ -1019,6 +1019,7 @@ function attachConfirmedLeaveEvidence(event, leave, leavePending = null, options
       ?? decision.self?.hp
       ?? decision.action?.self?.hp
       ?? event.selfHp
+      ?? leavePending?.startHp
   );
   const completedAtMs = Number(leavePending?.completedAtMs || options.completedAtMs || 0);
   return {

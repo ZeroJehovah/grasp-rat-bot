@@ -29700,6 +29700,17 @@ async function runSelfTest() {
           completedAtMs: Date.parse('2026-07-27T16:30:54.895Z'),
           minHp: 94
         });
+        const pendingStartHpEvent = attachConfirmedLeaveEvidence({
+          reason: 'combat-action-settlement-stalled'
+        }, {
+          ok: true,
+          attempts: [{ ok: true, response: { hp: 55, max_hp: 100 } }]
+        }, {
+          startHp: 76,
+          minHp: 55,
+          observedHpLoss: 21,
+          completedAtMs: Date.parse('2026-07-27T16:51:47.841Z')
+        });
         return [
           event.leaveConfirmation.at,
           event.leaveConfirmation.selfHp,
@@ -29710,10 +29721,14 @@ async function runSelfTest() {
           missingHpEvent.leaveConfirmation === undefined,
           lastDecisionEvent.leaveConfirmation.triggerSelfHp,
           lastDecisionEvent.leaveConfirmation.selfHp,
-          lastDecisionEvent.leaveConfirmation.hpLossAfterTrigger
+          lastDecisionEvent.leaveConfirmation.hpLossAfterTrigger,
+          pendingStartHpEvent.leaveConfirmation.at,
+          pendingStartHpEvent.leaveConfirmation.triggerSelfHp,
+          pendingStartHpEvent.leaveConfirmation.selfHp,
+          pendingStartHpEvent.leaveConfirmation.hpLossAfterTrigger
         ].join('|');
       })(),
-      want: '2026-07-17T01:22:34.719Z|77|100|80|3|leave-response|true|97|94|3'
+      want: '2026-07-17T01:22:34.719Z|77|100|80|3|leave-response|true|97|94|3|2026-07-27T16:51:47.841Z|76|55|21'
     },
     {
       name: 'browserless compact movement-stall exit reads production lastDecision shape',
