@@ -77,7 +77,8 @@ const {
   actionTargetKey,
   createRestartDrainCoordinator,
   evaluateRestartReadiness,
-  restartDrainAllowsDecision
+  restartDrainAllowsDecision,
+  restartDrainRetainsCommittedDecision
 } = require('./restart-readiness');
 const { browserlessRuntimeRevision, browserlessRuntimeRevisionStatus } = require('./runtime-revision');
 const { runSnapshotEdgeSelfTest } = require('./snapshot-edge-wait');
@@ -3541,6 +3542,36 @@ async function runBrowserlessRunnerSelfTest() {
         }
       }
     }, restartDrainStatus);
+    const productionFootDropDecision = {
+      action: {
+        kind: 'coin',
+        band: 'profit',
+        reason: 'foot-coin-priority',
+        target: {
+          id: 205,
+          amount: 9,
+          sourceUserId: 22399,
+          selfKilledPlayerDrop: true,
+          playerDropPriority: true
+        }
+      }
+    };
+    const productionFootDropStatus = {
+      ...restartDrainStatus,
+      commitmentKey: 'player:22399'
+    };
+    const productionFootDropReadiness = evaluateRestartReadiness({
+      online: true,
+      decision: productionFootDropDecision
+    });
+    const productionFootDropRetained = restartDrainRetainsCommittedDecision(
+      productionFootDropDecision,
+      productionFootDropStatus
+    );
+    const unrelatedFootDropRetained = restartDrainRetainsCommittedDecision(
+      productionFootDropDecision,
+      { ...productionFootDropStatus, commitmentKey: 'player:9555' }
+    );
     const closedTransportAdapter = createBrowserlessActionAdapter({
       transport: {
         sendVelocity() {
@@ -4869,6 +4900,10 @@ async function runBrowserlessRunnerSelfTest() {
         && restartDrainStatus.ready === true
         && committedDropAllowed
         && !unrelatedDropBlocked
+        && productionFootDropReadiness.ready === false
+        && productionFootDropReadiness.reason === 'player-drop-pickup'
+        && productionFootDropRetained
+        && !unrelatedFootDropRetained
         && closedTransportAction.ok === false
         && closedTransportAction.transportClosed === true
         && chatService.ok
@@ -4917,6 +4952,9 @@ async function runBrowserlessRunnerSelfTest() {
       restartDrainStatus,
       committedDropAllowed,
       unrelatedDropBlocked,
+      productionFootDropReadiness,
+      productionFootDropRetained,
+      unrelatedFootDropRetained,
       closedTransportAction,
       chatService,
       chatHistoryStore,

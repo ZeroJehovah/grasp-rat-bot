@@ -38,7 +38,8 @@ const { createBrowserlessDecisionWorker } = require('./decision-worker');
 const {
   actionTargetKey,
   evaluateRestartReadiness,
-  restartDrainAllowsDecision
+  restartDrainAllowsDecision,
+  restartDrainRetainsCommittedDecision
 } = require('./restart-readiness');
 const { utc8DayKey, waitForSnapshotEdge } = require('./snapshot-edge-wait');
 
@@ -1997,13 +1998,18 @@ async function runReadOnlyCanary(config, options = {}) {
     }
   };
   const publishRealtimeControl = (control, currentState, atMs) => {
-    control = applyRestartDrainDecisionGate(control || {});
-    const action = control?.action || null;
+    control = control || {};
+    const action = control.action || null;
     if (!action) {
       if (!realtimeControlActive) return false;
       realtimeControlActive = false;
       realtimeFinalActionPreemptionActive = false;
       lastDecisionAtMs = 0;
+      const drainStatus = restartDrain?.status?.() || null;
+      if (restartDrainRetainsCommittedDecision(result.decisions.last, drainStatus || {})) {
+        observeDynamicWhitelistBattles(currentState, atMs);
+        return false;
+      }
       const release = {
         kind: 'wait',
         band: 'wait',
@@ -2020,9 +2026,11 @@ async function runReadOnlyCanary(config, options = {}) {
       applyDecisionAction(currentState, release, control, atMs, { errorReason: 'realtime-control-release-failed' });
       return true;
     }
+    control = applyRestartDrainDecisionGate(control);
+    const gatedAction = control?.action || null;
     if (!realtimeFinalActionPreemptionActive
-      && ['exit', 'safety', 'combat', 'recover'].includes(String(action.band || ''))) {
-      decisionAdapter.noteRealtimeFinalActionPreemption?.(action, atMs);
+      && ['exit', 'safety', 'combat', 'recover'].includes(String(gatedAction?.band || ''))) {
+      decisionAdapter.noteRealtimeFinalActionPreemption?.(gatedAction, atMs);
       realtimeFinalActionPreemptionActive = true;
     }
     realtimeControlActive = true;
@@ -2033,12 +2041,12 @@ async function runReadOnlyCanary(config, options = {}) {
       highFrequencyControl: true
     };
     const summary = {
-      kind: action.kind || control.kind || '',
-      band: action.band || control.band || '',
-      reason: action.reason || control.reason || '',
+      kind: gatedAction?.kind || control.kind || '',
+      band: gatedAction?.band || control.band || '',
+      reason: gatedAction?.reason || control.reason || '',
       at: control.at || new Date(atMs).toISOString(),
       tick: control.tick ?? currentState?.realtime?.tick ?? null,
-      action,
+      action: gatedAction,
       combat: combatSummary,
       input: control.input || null
     };

@@ -215,11 +215,21 @@ function restartDrainAllowsDecision(decision, drainStatus = {}) {
   return defensive || evaluateRestartReadiness({ online: true, decision }).ready;
 }
 
+function restartDrainRetainsCommittedDecision(decision, drainStatus = {}) {
+  if (!drainStatus.requested) return false;
+  const commitmentKey = String(drainStatus.commitmentKey || '');
+  if (!commitmentKey) return false;
+  const action = decision?.action || decision || {};
+  return actionTargetKey(action) === commitmentKey
+    && restartDrainAllowsDecision(decision, drainStatus);
+}
+
 module.exports = {
   DEFAULT_IDLE_STABLE_MS,
   actionTargetKey,
   capturedCombatCommitmentBlocker,
   createRestartDrainCoordinator,
   evaluateRestartReadiness,
-  restartDrainAllowsDecision
+  restartDrainAllowsDecision,
+  restartDrainRetainsCommittedDecision
 };
