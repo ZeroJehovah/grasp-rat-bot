@@ -56,6 +56,10 @@ const {
   runChatServiceSelfTest
 } = require('./chat-service');
 const {
+  inspectChatHistoryDatabase,
+  runChatHistoryStoreSelfTest
+} = require('./chat-history-store');
+const {
   BROWSER_RUNTIME_DEFAULTS,
   buildBrowserlessRealtimeControlDecision,
   decisionStatePatch,
@@ -1429,6 +1433,7 @@ async function runBrowserlessRunner(config, deps = {}) {
     now,
     getSelfUserId: () => config.userId,
     nameCacheFile: path.join(config.dataDir, 'chat-player-names.json'),
+    historyFile: path.join(config.dataDir, 'chat-history.sqlite3'),
     backgroundIo,
     seedPlayers: chatSeedPlayers,
     onPollingDemandChange: () => snapshotGapPoller?.refreshSchedule?.()
@@ -3552,6 +3557,37 @@ async function runBrowserlessRunnerSelfTest() {
       action: { kind: 'wait', band: 'wait', reason: 'missing-realtime-self' }
     });
     const chatService = runChatServiceSelfTest();
+    const chatHistoryStore = runChatHistoryStoreSelfTest();
+    const chatHistoryWorkerFile = path.join(tmp, 'chat-history-worker.sqlite3');
+    const chatHistoryWorkerIo = createBrowserlessBackgroundIo();
+    const chatHistoryWorkerQueued = chatHistoryWorkerIo.appendChatHistory(chatHistoryWorkerFile, {
+      players: [{ userId: 17, name: 'Worker Alice', observedAtMs: 1000 }],
+      messages: [{
+        key: 'id:worker-1',
+        id: 1,
+        kind: 'chat',
+        userId: 17,
+        targetUserId: 0,
+        text: 'worker history',
+        occurredAtMs: 900,
+        firstObservedAtMs: 1000,
+        lastObservedAtMs: 1000,
+        source: 'self-test'
+      }]
+    });
+    const chatHistoryWorkerFlush = await chatHistoryWorkerIo.flush();
+    await chatHistoryWorkerIo.close();
+    const chatHistoryWorkerSummary = inspectChatHistoryDatabase(chatHistoryWorkerFile);
+    const chatHistoryWorker = {
+      ok: Boolean(
+        chatHistoryWorkerQueued
+        && chatHistoryWorkerFlush.ok
+        && chatHistoryWorkerSummary.messages === 1
+        && chatHistoryWorkerSummary.players === 2
+      ),
+      flush: chatHistoryWorkerFlush,
+      summary: chatHistoryWorkerSummary
+    };
     const dynamicSnapshotPoller = createSnapshotGapPoller({
       now: () => Date.UTC(2026, 6, 8, 1, 3, 0),
       intervalMs: DEFAULT_CHAT_IDLE_INTERVAL_MS,
@@ -4769,6 +4805,8 @@ async function runBrowserlessRunnerSelfTest() {
         && closedTransportAction.ok === false
         && closedTransportAction.transportClosed === true
         && chatService.ok
+        && chatHistoryStore.ok
+        && chatHistoryWorker.ok
         && dynamicSnapshotPollerStatus.currentIntervalMs === DEFAULT_CHAT_ACTIVE_INTERVAL_MS
         && nearbyCoinRoutePanelTest.ok
         && nearbySelectedPlayerCoordinatesTest.ok
@@ -4814,6 +4852,8 @@ async function runBrowserlessRunnerSelfTest() {
       unrelatedDropBlocked,
       closedTransportAction,
       chatService,
+      chatHistoryStore,
+      chatHistoryWorker,
       dynamicSnapshotPollerStatus,
       nearbyCoinRoutePanelTest,
       nearbySelectedPlayerCoordinatesTest,

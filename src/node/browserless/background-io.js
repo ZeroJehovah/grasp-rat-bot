@@ -136,6 +136,17 @@ function createBrowserlessBackgroundIo(options = {}) {
     return post({ kind: 'append-raw-line', file: path.resolve(String(file || '')), value });
   }
 
+  function appendChatHistory(file, batch = {}) {
+    return post({
+      kind: 'chat-history',
+      file: path.resolve(String(file || '')),
+      batch: {
+        players: Array.isArray(batch.players) ? batch.players : [],
+        messages: Array.isArray(batch.messages) ? batch.messages : []
+      }
+    });
+  }
+
   function renderStatus(state, config = {}, compact = false, optionsForRequest = {}) {
     if (closed || failed) return Promise.reject(new Error(lastError || 'background IO worker unavailable'));
     const id = nextRequestId++;
@@ -233,6 +244,7 @@ function createBrowserlessBackgroundIo(options = {}) {
   }
 
   return {
+    appendChatHistory,
     appendLog,
     appendRawLine,
     close,

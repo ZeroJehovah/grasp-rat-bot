@@ -18,6 +18,7 @@ const DEFAULT_CHAT_SEND_BOOST_MS = 2 * 60 * 1000;
 const DEFAULT_CHAT_NAME_CACHE_TTL_MS = 48 * 60 * 60 * 1000;
 const DEFAULT_CHAT_NAME_CACHE_LIMIT = 5000;
 const DEFAULT_CHAT_NAME_CACHE_PERSIST_INTERVAL_MS = 3 * 60 * 1000;
+const DEFAULT_CHAT_HISTORY_RESYNC_INTERVAL_MS = 3 * 60 * 1000;
 const SERVER_TICK_MS = 50;
 const MAX_MESSAGE_TICK_AGE = 2 * 24 * 60 * 60 * 1000 / SERVER_TICK_MS;
 
@@ -167,10 +168,14 @@ function createChatService(options = {}) {
   const pageActiveWindowMs = Math.max(activeIntervalMs, Number(options.pageActiveWindowMs || DEFAULT_CHAT_PAGE_ACTIVE_WINDOW_MS));
   const sendBoostMs = Math.max(activeIntervalMs, Number(options.sendBoostMs || DEFAULT_CHAT_SEND_BOOST_MS));
   const nameCacheFile = options.nameCacheFile ? path.resolve(options.nameCacheFile) : '';
+  const historyFile = options.historyFile ? path.resolve(options.historyFile) : '';
   const nameCacheTtlMs = Math.max(60 * 60 * 1000, Number(options.nameCacheTtlMs || DEFAULT_CHAT_NAME_CACHE_TTL_MS));
   const nameCacheLimit = Math.max(100, Math.round(Number(options.nameCacheLimit || DEFAULT_CHAT_NAME_CACHE_LIMIT)));
   const nameCachePersistIntervalMs = Math.max(30000, Number(
     options.nameCachePersistIntervalMs || DEFAULT_CHAT_NAME_CACHE_PERSIST_INTERVAL_MS
+  ));
+  const historyResyncIntervalMs = Math.max(30000, Number(
+    options.historyResyncIntervalMs || DEFAULT_CHAT_HISTORY_RESYNC_INTERVAL_MS
   ));
   const backgroundIo = options.backgroundIo && typeof options.backgroundIo === 'object' ? options.backgroundIo : null;
 
@@ -188,6 +193,9 @@ function createChatService(options = {}) {
   let lastNameCachePersistAtMs = Date.parse(nameCache.updatedAt || '');
   if (!Number.isFinite(lastNameCachePersistAtMs)) lastNameCachePersistAtMs = 0;
   let pendingSend = null;
+  let historyQueuedBatches = 0;
+  let historyQueuedMessages = 0;
+  let lastHistoryQueuedAtMs = 0;
   let lastSend = {
     state: 'idle',
     sentAt: '',
@@ -258,6 +266,7 @@ function createChatService(options = {}) {
     const source = String(detail.source || 'snapshot');
     let updated = 0;
     let nameChanged = false;
+    const changedPlayers = [];
     for (const entity of entities) {
       const userId = numberOrNull(entity?.user_id ?? entity?.userId);
       const name = playerName(entity);
@@ -274,14 +283,20 @@ function createChatService(options = {}) {
         lastObservedTick: numberOrNull(entity?.lastObservedTick ?? entity?.nameObservedTick ?? observedTick),
         source
       };
-      if (!existing || existing.name !== name) {
-        updated += 1;
-        nameChanged = true;
-      }
       const existingAtMs = Date.parse(existing?.lastObservedAt || '');
       if (!existing || !Number.isFinite(existingAtMs) || Date.parse(record.lastObservedAt) >= existingAtMs) {
         names.set(userId, record);
         nameCache.players[record.key] = record;
+        if (!existing || existing.name !== name) {
+          updated += 1;
+          nameChanged = true;
+          changedPlayers.push({
+            userId,
+            name,
+            observedAtMs: Date.parse(record.lastObservedAt),
+            firstObservedAtMs: existingAtMs || Date.parse(record.lastObservedAt)
+          });
+        }
       }
     }
     if (
@@ -290,7 +305,42 @@ function createChatService(options = {}) {
     ) {
       persistNameCache(observedAtMs);
     }
-    return { updated, playerCount: names.size };
+    return { updated, playerCount: names.size, changedPlayers };
+  }
+
+  function queueHistory(messagesToPersist, playersToPersist, source, observedAtMs) {
+    if (!historyFile || (!messagesToPersist.length && !playersToPersist.length)) return false;
+    if (!backgroundIo?.appendChatHistory) throw new Error('background chat-history persistence unavailable');
+    const playersById = new Map();
+    for (const player of playersToPersist) {
+      const userId = numberOrNull(player?.userId ?? player?.user_id);
+      if (userId !== null) playersById.set(userId, player);
+    }
+    for (const message of messagesToPersist) {
+      for (const userId of [message.userId, message.targetUserId]) {
+        if (userId === null || playersById.has(userId)) continue;
+        const known = names.get(userId);
+        playersById.set(userId, {
+          userId,
+          name: known?.name || '',
+          observedAtMs,
+          firstObservedAtMs: Date.parse(known?.lastObservedAt || '') || observedAtMs
+        });
+      }
+    }
+    const queued = backgroundIo.appendChatHistory(historyFile, {
+      players: Array.from(playersById.values()),
+      messages: messagesToPersist.map(message => ({
+        ...message,
+        eventKey: message.key,
+        source
+      }))
+    });
+    if (!queued) throw new Error('background chat-history queue unavailable');
+    historyQueuedBatches += 1;
+    historyQueuedMessages += messagesToPersist.length;
+    lastHistoryQueuedAtMs = observedAtMs;
+    return true;
   }
 
   function findPlayersByName(input) {
@@ -398,12 +448,16 @@ function createChatService(options = {}) {
     const sourceMessages = Array.isArray(payload.messages) ? payload.messages : [];
     const snapshotTick = numberOrNull(payload.tick);
     const normalized = [];
+    const historyMessages = [];
     let updated = 0;
     for (const item of sourceMessages) {
       const message = normalizeMessage(item, observedAtMs, snapshotTick);
       if (!message) continue;
       const existing = messages.get(message.key);
-      if (!existing || !sameMessageContent(existing, message)) updated += 1;
+      if (!existing || !sameMessageContent(existing, message)) {
+        updated += 1;
+        historyMessages.push(message);
+      }
       messages.set(message.key, message);
       normalized.push(message);
     }
@@ -413,6 +467,17 @@ function createChatService(options = {}) {
       message.mine = message.userId === selfUserId();
     }
     const ordered = trimMessages();
+    const historyResyncDue = Boolean(
+      historyFile
+      && lastHistoryQueuedAtMs
+      && observedAtMs - lastHistoryQueuedAtMs >= historyResyncIntervalMs
+    );
+    queueHistory(
+      historyResyncDue ? normalized : historyMessages,
+      nameResult.changedPlayers || [],
+      String(detail.source || 'snapshot'),
+      observedAtMs
+    );
     const confirmed = confirmPendingSend(normalized, observedAtMs);
     lastSnapshotAtMs = Math.max(lastSnapshotAtMs, observedAtMs);
     lastSnapshotSource = String(detail.source || 'snapshot');
@@ -557,6 +622,12 @@ function createChatService(options = {}) {
         playerCount: names.size,
         updatedAt: nameCache.updatedAt
       },
+      history: {
+        enabled: Boolean(historyFile),
+        queuedBatches: historyQueuedBatches,
+        queuedMessages: historyQueuedMessages,
+        lastQueuedAt: lastHistoryQueuedAtMs ? new Date(lastHistoryQueuedAtMs).toISOString() : ''
+      },
       lastSend: { ...lastSend },
       messages: ordered.map(publicMessage)
     };
@@ -578,6 +649,8 @@ function createChatService(options = {}) {
 function runChatServiceSelfTest() {
   const cacheRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'grasp-rat-chat-names-'));
   const nameCacheFile = path.join(cacheRoot, 'player-names.json');
+  const historyFile = path.join(cacheRoot, 'chat-history.sqlite3');
+  const historyBatches = [];
   let nowMs = Date.UTC(2026, 6, 14, 4, 0, 0);
   const sent = [];
   const transport = createTransportHandle({
@@ -590,6 +663,13 @@ function runChatServiceSelfTest() {
     now: () => nowMs,
     selfUserId: 7,
     nameCacheFile,
+    historyFile,
+    backgroundIo: {
+      appendChatHistory(file, batch) {
+        historyBatches.push({ file, batch });
+        return true;
+      }
+    },
     nameCacheTtlMs: 60 * 60 * 1000,
     nameCachePersistIntervalMs: 30000
   });
@@ -610,7 +690,23 @@ function runChatServiceSelfTest() {
       { id: 11, tick: 101, kind: 'chat', user_id: 7, target_user_id: 0, text: '你好' }
     ]
   }, { source: 'test', observedAtMs: nowMs });
+  const repeated = service.observeSnapshot({
+    tick: 101,
+    entities: [{ user_id: 7, name: 'Self' }, { user_id: 8, name: 'Alice' }],
+    messages: [
+      { id: 10, tick: 90, kind: 'chat', user_id: 8, target_user_id: 0, text: 'hello' },
+      { id: 11, tick: 101, kind: 'chat', user_id: 7, target_user_id: 0, text: '你好' }
+    ]
+  }, { source: 'repeat-test', observedAtMs: nowMs + 50 });
   const onlineStatus = service.status(nowMs);
+  const resynced = service.observeSnapshot({
+    tick: 101,
+    entities: [{ user_id: 7, name: 'Self' }, { user_id: 8, name: 'Alice' }],
+    messages: [
+      { id: 10, tick: 90, kind: 'chat', user_id: 8, target_user_id: 0, text: 'hello' },
+      { id: 11, tick: 101, kind: 'chat', user_id: 7, target_user_id: 0, text: '你好' }
+    ]
+  }, { source: 'resync-test', observedAtMs: nowMs + DEFAULT_CHAT_HISTORY_RESYNC_INTERVAL_MS });
   const retentionService = createChatService({
     now: () => nowMs,
     selfUserId: 7
@@ -666,6 +762,8 @@ function runChatServiceSelfTest() {
     ok: Boolean(
       first.ok
       && second.ok
+      && repeated.updated === 0
+      && resynced.updated === 0
       && second.confirmed
       && send.ok
       && sent[0] === 'chat 你好'
@@ -676,6 +774,14 @@ function runChatServiceSelfTest() {
       && onlineStatus.messages[1]?.mine === true
       && onlineStatus.messages[1]?.occurredAt === '2026-07-14T04:00:01.000Z'
       && onlineStatus.snapshot.desiredIntervalMs === DEFAULT_CHAT_ACTIVE_INTERVAL_MS
+      && onlineStatus.history.enabled
+      && onlineStatus.history.queuedBatches === 2
+      && onlineStatus.history.queuedMessages === 2
+      && historyBatches.length === 3
+      && historyBatches[0].file === historyFile
+      && historyBatches[0].batch.messages[0]?.eventKey === 'id:10'
+      && historyBatches[1].batch.messages[0]?.eventKey === 'id:11'
+      && historyBatches[2]?.batch.messages.length === 2
       && retentionSummary.limit === 200
       && retentionSummary.count === 200
       && retentionSummary.firstId === 6
@@ -689,6 +795,9 @@ function runChatServiceSelfTest() {
     first,
     send,
     second,
+    repeated,
+    resynced,
+    historyBatches,
     onlineStatus,
     retentionSummary,
     restartedStatus,

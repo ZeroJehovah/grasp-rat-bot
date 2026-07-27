@@ -14,6 +14,7 @@ const {
 let processed = 0;
 let temporarySequence = 0;
 const jsonStateCache = new Map();
+const chatHistoryWriters = new Map();
 
 function appendLog(message) {
   const file = path.resolve(String(message.file || ''));
@@ -103,6 +104,17 @@ function appendRawLine(message) {
   fs.appendFileSync(file, JSON.stringify(redactStructuredSecrets(message.value || {})) + '\n');
 }
 
+function appendChatHistory(message) {
+  const file = path.resolve(String(message.file || ''));
+  let writer = chatHistoryWriters.get(file);
+  if (!writer) {
+    const { createChatHistoryWriter } = require('./chat-history-store');
+    writer = createChatHistoryWriter(file);
+    chatHistoryWriters.set(file, writer);
+  }
+  writer.writeBatch(message.batch || {});
+}
+
 function renderStatus(message) {
   if (message.compact) return buildCompactBrowserlessStatus(message.state || {}, message.config || {});
   const state = message.state || {};
@@ -128,6 +140,7 @@ parentPort.on('message', message => {
     else if (message.kind === 'json-patch-atomic') writeJsonPatchAtomic(message);
     else if (message.kind === 'finalize-gz') finalizeGz(message);
     else if (message.kind === 'append-raw-line') appendRawLine(message);
+    else if (message.kind === 'chat-history') appendChatHistory(message);
     else if (message.kind === 'status-render') {
       const started = performance.now();
       const status = renderStatus(message);
