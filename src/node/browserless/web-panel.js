@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.27.3';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.27.4';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function highDropRankValueCore(item) {
@@ -1327,6 +1327,10 @@ function renderBrowserlessWebPanel() {
     }
     function loginPointDisplay(status) {
       if (status.game?.inGame) return { state: 'none', text: '--' };
+      const reconnectRemainingMs = number(status.stats?.offline?.reconnectRemainingMs);
+      if (reconnectRemainingMs !== null && reconnectRemainingMs > 1000) {
+        return { state: 'cooldown', text: '重登冷却中，冷却结束后再检查' };
+      }
       const detail = status.loginPointSafety?.detail || {};
       const reason = String(status.loginPointSafety?.reason || '');
       const detailReason = String(detail.reason || '');
@@ -1501,7 +1505,7 @@ function renderBrowserlessWebPanel() {
       if (status.auth?.needsReauth) return '等待重新授权';
       const offline = status.stats?.offline || {};
       const reconnectRemainingMs = number(offline.reconnectRemainingMs);
-      if (reconnectRemainingMs !== null && reconnectRemainingMs > 1000) return '等待重连冷却时间';
+      if (reconnectRemainingMs !== null && reconnectRemainingMs > 1000) return '等待重登冷却时间';
       const action = status.action || status.decision || {};
       const reason = String(action.reason || status.decision?.reason || '');
       if (reason === 'login-point-safe-connecting') return '登录点已安全，正在连接游戏';
