@@ -28186,10 +28186,10 @@ async function runSelfTest() {
           compact.stats.currentSession.coinsGained
         ].join('|');
       })(),
-      want: '68|69|69|69'
+      want: '68|68|68|68'
     },
     {
-      name: 'browserless exact pickup replaces one-coin Drop parity overestimate',
+      name: 'browserless exact pickup cannot lower authoritative Drop calibration',
       got: (() => {
         const state = {
           session: { userId: 7, sessionToken: 'state-secret-token' },
@@ -28225,7 +28225,45 @@ async function runSelfTest() {
           state.stats.currentSession.coinsGained
         ].join('|');
       })(),
-      want: '22|21|21'
+      want: '22|22|22'
+    },
+    {
+      name: 'browserless coin accounting v4 repairs cumulative pickup corrections from Drop growth',
+      got: (() => {
+        const state = {
+          session: { userId: 28886, sessionToken: 'state-secret-token' },
+          runner: { running: false, mode: 'idle', controlMode: 'profit-live' },
+          stats: {
+            coinAccountingVersion: 3,
+            currentSession: {
+              online: false,
+              sessionId: '28886:2026-07-27T00:00:00.000Z',
+              userId: 28886,
+              baseDrop: 4091,
+              lastDrop: 6110,
+              coinsGained: 3937,
+              pickupObservedCoins: 4038,
+              dropCalibratedCoins: 3937
+            },
+            today: {
+              day: '2026-07-27',
+              initialDrop: 4091,
+              maxDrop: 6110,
+              latestDrop: 6110,
+              coinsGained: 3937
+            }
+          }
+        };
+        const compact = buildCompactBrowserlessStatus(state, {
+          nowMs: Date.parse('2026-07-27T07:21:49.000Z')
+        });
+        return [
+          compact.stats.currentSession.coinsGained,
+          compact.stats.today.coinsGained,
+          compact.stats.today.latestDrop - compact.stats.today.initialDrop
+        ].join('|');
+      })(),
+      want: '4038|4038|2019'
     },
     {
       name: 'browserless today stamina reconciles cross-session gaps from 1d remaining',

@@ -6,7 +6,7 @@ const { redactStructuredSecrets } = require('./session-client');
 
 const SCHEMA_VERSION = 1;
 const KILL_ACCOUNTING_VERSION = 3;
-const COIN_ACCOUNTING_VERSION = 3;
+const COIN_ACCOUNTING_VERSION = 4;
 const UTC8_OFFSET_MS = 8 * 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const PICKED_COINS_PER_SELF_DROP = 2;
@@ -431,7 +431,24 @@ function normalizeBrowserlessStats(stats, rawStats = stats) {
         killBaselineKeys
       });
   const coinMultiplier = migrateLegacyCoins ? PICKED_COINS_PER_SELF_DROP : 1;
-  const sessionCoinsGained = Math.max(0, Math.round(Number(session.coinsGained || 0) * coinMultiplier || 0));
+  const sessionBaseDrop = compactNumber(session.baseDrop);
+  const sessionLastDrop = compactNumber(session.lastDrop);
+  const migratedSessionDropFloor = inputCoinAccountingVersion < COIN_ACCOUNTING_VERSION
+    && sessionBaseDrop !== null
+    && sessionLastDrop !== null
+    && sessionLastDrop >= sessionBaseDrop
+    ? Math.max(0, Math.round((sessionLastDrop - sessionBaseDrop) * PICKED_COINS_PER_SELF_DROP))
+    : 0;
+  const sessionDropCalibratedCoins = Math.max(
+    0,
+    Math.round(Number(session.dropCalibratedCoins || 0) * coinMultiplier || 0),
+    migratedSessionDropFloor
+  );
+  const sessionCoinsGained = Math.max(
+    0,
+    Math.round(Number(session.coinsGained || 0) * coinMultiplier || 0),
+    sessionDropCalibratedCoins
+  );
   const todayInitialDrop = compactNumber(today.initialDrop);
   const todayLatestDrop = compactNumber(today.latestDrop ?? today.maxDrop);
   const migratedTodayDropFloor = inputCoinAccountingVersion < COIN_ACCOUNTING_VERSION
@@ -457,15 +474,13 @@ function normalizeBrowserlessStats(stats, rawStats = stats) {
     lastSeenAt: compactString(session.lastSeenAt, 48),
     exitedAt: compactString(session.exitedAt, 48),
     exitReason: compactString(session.exitReason, 160),
-    baseDrop: compactNumber(session.baseDrop),
-    lastDrop: compactNumber(session.lastDrop),
+    baseDrop: sessionBaseDrop,
+    lastDrop: sessionLastDrop,
     coinsGained: sessionCoinsGained,
     pickupObservedCoins: migrateLegacyCoins
       ? sessionCoinsGained
       : Math.max(0, Math.round(Number(session.pickupObservedCoins || 0) || 0)),
-    dropCalibratedCoins: migrateLegacyCoins
-      ? sessionCoinsGained
-      : Math.max(0, Math.round(Number(session.dropCalibratedCoins || 0) || 0)),
+    dropCalibratedCoins: sessionDropCalibratedCoins,
     coinPickupKeys: normalizeSessionCoinPickupKeys(session.coinPickupKeys),
     pendingCoinPickupCalibration: normalizePendingCoinCalibration(session.pendingCoinPickupCalibration),
     pendingDropCalibration: normalizePendingCoinCalibration(session.pendingDropCalibration),
@@ -793,21 +808,22 @@ function updateBrowserlessStatsSessionCoinPickups(session, decision, nowMs, prev
     && Math.abs(pickupCandidate.amount - dropCandidate.amount) <= 1;
   let matchedCoinsCandidate = null;
   if (matchedCalibration) {
-    // A self Drop step is a two-coin estimate whose parity can be one coin
-    // above or below the real pickup. Pair nearby asynchronous observations
-    // in either order and let exact, de-duplicated disappearance evidence
-    // replace the estimate for that transition.
-    session.dropCalibratedCoins = dropCandidate.previousCalibratedCoins + pickupCandidate.amount;
     const exactBase = dropCandidate.startedAt <= pickupCandidate.startedAt
       ? dropCandidate.previousCoinsGained
       : pickupCandidate.previousCoinsGained;
-    matchedCoinsCandidate = exactBase + pickupCandidate.amount;
+    matchedCoinsCandidate = Math.max(
+      dropCandidate.previousCalibratedCoins + dropCandidate.amount,
+      exactBase + pickupCandidate.amount
+    );
     session.pendingCoinPickupCalibration = null;
     session.pendingDropCalibration = null;
   } else {
     session.pendingCoinPickupCalibration = pickupCandidate;
     session.pendingDropCalibration = dropCandidate;
   }
+  // Drop growth is the cumulative authority. Pickup evidence may lead the
+  // next Drop observation by one parity coin, but it must never rewrite the
+  // accumulated two-coins-per-Drop calibration.
   const upperBound = sessionCoinUpperBound(session);
   if (added > 0) {
     // Keep explicit pickup increments relative to the displayed total. The
@@ -820,7 +836,10 @@ function updateBrowserlessStatsSessionCoinPickups(session, decision, nowMs, prev
     session.coinsGained = Math.max(pickupBase + added, session.pickupObservedCoins);
   }
   if (matchedCoinsCandidate !== null) {
-    session.coinsGained = Math.max(matchedCoinsCandidate, session.pickupObservedCoins);
+    session.coinsGained = Math.max(
+      matchedCoinsCandidate,
+      Math.max(0, Math.round(Number(session.dropCalibratedCoins || 0) || 0))
+    );
   }
   const reconciledCoins = Math.max(
     Math.max(0, Math.round(Number(session.coinsGained || 0) || 0)),
@@ -908,19 +927,14 @@ function browserlessStatsForDecision(state, decision, options = {}) {
     }, nowMs);
   }
   const active = stats.currentSession || {};
-  let startedSession = false;
   if (!active.online || !active.sessionId) {
     startBrowserlessStatsSession(stats, state, self, stamina, nowMs, decision);
-    startedSession = true;
   }
   const todayDropTransition = updateBrowserlessStatsTodayDrop(stats, self);
-  const previousSessionCoins = Math.max(0, Math.round(Number(stats.currentSession.coinsGained || 0) || 0));
   updateBrowserlessStatsSession(stats.currentSession, decision, self, stamina, nowMs);
-  const sessionCoinDelta = Math.round(Number(stats.currentSession.coinsGained || 0)) - previousSessionCoins;
   stats.today.coinsGained = Math.max(0, Math.round(
     Number(stats.today.coinsGained || 0)
-      + sessionCoinDelta
-      + (startedSession ? todayDropTransition.addedCoins : 0)
+      + todayDropTransition.addedCoins
   ));
   return normalizeBrowserlessStats(stats);
 }
@@ -961,9 +975,8 @@ function todayActiveDelta(stats, nowMs) {
   return {
     uptimeMs: Math.max(0, Math.round(endMs - enteredMs)),
     staminaSpentMs: Math.max(0, Math.round(Number(session.staminaSpentMs || 0) - Number(today.activeBaseStaminaSpentMs || 0))),
-    // Coin changes are posted to the day ledger on every observation so that
-    // cross-login Drop gaps and later exact parity corrections are each
-    // applied once. The other counters remain finalized on session close.
+    // Coin changes are posted from authoritative day-level Drop transitions,
+    // so compact projection never adds the active session a second time.
     coinsGained: 0,
     kills: Math.max(0, Math.round(Number(session.kills || 0) - Number(today.activeBaseKills || 0)))
   };
@@ -979,13 +992,10 @@ function finalizeBrowserlessStatsSession(stats, detail = {}, nowMs = Date.now())
   let lastExitRunId = stats.lastExit.runId || '';
   if (session.online && session.sessionId) {
     const todayDropTransition = updateBrowserlessStatsTodayDrop(stats, detail.self);
-    const previousSessionCoins = Math.max(0, Math.round(Number(session.coinsGained || 0) || 0));
     const finalDropObserved = updateBrowserlessStatsSessionDrop(session, detail.self);
-    const sessionCoinDelta = Math.round(Number(session.coinsGained || 0)) - previousSessionCoins;
     stats.today.coinsGained = Math.max(0, Math.round(
       Number(stats.today.coinsGained || 0)
-        + sessionCoinDelta
-        + (!finalDropObserved ? todayDropTransition.addedCoins : 0)
+        + todayDropTransition.addedCoins
     ));
     const finalStaminaObserved = updateBrowserlessStatsSessionStamina(session, detail.stamina, detail.self);
     if ((finalDropObserved || finalStaminaObserved) && at) {

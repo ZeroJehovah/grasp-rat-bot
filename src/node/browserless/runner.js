@@ -4011,7 +4011,7 @@ async function runBrowserlessRunnerSelfTest() {
         && fastSnapshotPickupEvidence[0].key === 'id:424'
         && fastSnapshotPickupEvidence[0].amount === 15
         && fastSnapshotPickupEvidence[0].reason === 'realtime-snapshot-coin-disappeared-near-path'
-        && fastSnapshotPickupStatsState.stats.currentSession.dropCalibratedCoins === 89
+        && fastSnapshotPickupStatsState.stats.currentSession.dropCalibratedCoins === 88
         && fastSnapshotPickupStatsState.stats.currentSession.coinsGained === 89,
       evidenceCount: fastSnapshotPickupEvidence.length,
       amount: fastSnapshotPickupEvidence[0]?.amount ?? null,
@@ -4579,7 +4579,7 @@ async function runBrowserlessRunnerSelfTest() {
           && panelStatsCompact.stats.today.maxDrop === 110
           && panelStatsCompact.stats.today.latestDrop === 20
           && panelSingleCoinCompact.stats.currentSession.coinsGained === 1
-          && panelSingleCoinCompact.stats.today.coinsGained === 1
+          && panelSingleCoinCompact.stats.today.coinsGained === 0
           && panelTwoCoinCompact.stats.currentSession.coinsGained === 2
           && panelTwoCoinCompact.stats.today.coinsGained === 2
           && panelStatsCompact.stats.currentSession.coinsGained === 20
