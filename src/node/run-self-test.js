@@ -10580,7 +10580,7 @@ async function runSelfTest() {
           },
           fallback: { tick: 640, frameAgeMs: 0, entities: [], coinDrops: [], messages: [] }
         }, stateful, {
-          nowMs: 32001,
+          nowMs: 62001,
           controlMode: 'profit-live',
           combatEnabled: true,
           combatAttackRange: 14500,
@@ -10594,7 +10594,7 @@ async function runSelfTest() {
           decision.combat.exchangeStopLoss.severePoorExchange,
           decision.combat.exchangeStopLoss.cumulativeDamageRatio,
           decision.combat.dangerousTargetCooldown.reason,
-          stateful.dangerousCombatTargets?.['8']?.until - 32001
+          stateful.dangerousCombatTargets?.['8']?.until - 62001
         ].join('|');
       })(),
       want: 'safety-exit|combat-exit-poor-exchange|true|true|2.8|combat-exit-poor-exchange|300000'

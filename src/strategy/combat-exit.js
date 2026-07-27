@@ -281,7 +281,7 @@ function evaluateCombatExchangeStopLossCore(input = {}, options = {}) {
   const cumulativeDamageRatio = cumulativeTargetDamage > 0
     ? cumulativeSelfDamage / cumulativeTargetDamage
     : (cumulativeSelfDamage > 0 ? null : 0);
-  const poorExchangeMinEngageMs = Math.max(30000, Number(options.poorExchangeMinEngageMs ?? 30000));
+  const poorExchangeMinEngageMs = Math.max(60000, Number(options.poorExchangeMinEngageMs ?? 60000));
   const poorExchangeDamageRatioThreshold = Math.max(1, Number(options.poorExchangeDamageRatio ?? 1.5));
   const poorExchangeSelfHpThreshold = Math.max(1, Number(options.poorExchangeSelfHp ?? 60));
   const poorExchangeTargetHpThreshold = Math.max(0, Number(options.poorExchangeTargetHp ?? 40));

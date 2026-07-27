@@ -1396,8 +1396,8 @@ function runStrategyModuleSelfTests() {
       && protectedFinish.triggered === false
   });
   const severePoorExchange = evaluateCombatExchangeStopLossCore({
-    nowMs: 32001,
-    engagedMs: 30001,
+    nowMs: 62001,
+    engagedMs: 60001,
     acceptedShots: 50,
     damageObservations: 12,
     selfHp: 58,
@@ -1407,12 +1407,12 @@ function runStrategyModuleSelfTests() {
     recentTargetDamage: 3
   });
   const poorExchangeBoundaries = [
-    { engagedMs: 30000, selfHp: 58, targetHp: 70, cumulativeSelfDamage: 42, cumulativeTargetDamage: 15 },
-    { engagedMs: 30001, selfHp: 60, targetHp: 70, cumulativeSelfDamage: 42, cumulativeTargetDamage: 15 },
-    { engagedMs: 30001, selfHp: 58, targetHp: 40, cumulativeSelfDamage: 42, cumulativeTargetDamage: 15 },
-    { engagedMs: 30001, selfHp: 58, targetHp: 70, cumulativeSelfDamage: 15, cumulativeTargetDamage: 10 }
+    { engagedMs: 60000, selfHp: 58, targetHp: 70, cumulativeSelfDamage: 42, cumulativeTargetDamage: 15 },
+    { engagedMs: 60001, selfHp: 60, targetHp: 70, cumulativeSelfDamage: 42, cumulativeTargetDamage: 15 },
+    { engagedMs: 60001, selfHp: 58, targetHp: 40, cumulativeSelfDamage: 42, cumulativeTargetDamage: 15 },
+    { engagedMs: 60001, selfHp: 58, targetHp: 70, cumulativeSelfDamage: 15, cumulativeTargetDamage: 10 }
   ].map(item => evaluateCombatExchangeStopLossCore({
-    nowMs: 32001,
+    nowMs: 62001,
     acceptedShots: 50,
     damageObservations: 12,
     recentTargetDamage: 3,
