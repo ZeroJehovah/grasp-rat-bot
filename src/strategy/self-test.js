@@ -1395,6 +1395,38 @@ function runStrategyModuleSelfTests() {
       && protectedFinish.lowHpFinishProtected === true
       && protectedFinish.triggered === false
   });
+  const severePoorExchange = evaluateCombatExchangeStopLossCore({
+    nowMs: 32001,
+    engagedMs: 30001,
+    acceptedShots: 50,
+    damageObservations: 12,
+    selfHp: 58,
+    targetHp: 70,
+    cumulativeSelfDamage: 42,
+    cumulativeTargetDamage: 15,
+    recentTargetDamage: 3
+  });
+  const poorExchangeBoundaries = [
+    { engagedMs: 30000, selfHp: 58, targetHp: 70, cumulativeSelfDamage: 42, cumulativeTargetDamage: 15 },
+    { engagedMs: 30001, selfHp: 60, targetHp: 70, cumulativeSelfDamage: 42, cumulativeTargetDamage: 15 },
+    { engagedMs: 30001, selfHp: 58, targetHp: 40, cumulativeSelfDamage: 42, cumulativeTargetDamage: 15 },
+    { engagedMs: 30001, selfHp: 58, targetHp: 70, cumulativeSelfDamage: 15, cumulativeTargetDamage: 10 }
+  ].map(item => evaluateCombatExchangeStopLossCore({
+    nowMs: 32001,
+    acceptedShots: 50,
+    damageObservations: 12,
+    recentTargetDamage: 3,
+    ...item
+  }));
+  results.push({
+    name: 'combat-exchange-stop-loss-exits-only-after-severe-cumulative-boundaries',
+    passed: severePoorExchange.severePoorExchange === true
+      && severePoorExchange.shouldExit === true
+      && severePoorExchange.phase === 'exit'
+      && severePoorExchange.phasedReason === 'combat-exit-poor-exchange'
+      && severePoorExchange.cumulativeDamageRatio === 2.8
+      && poorExchangeBoundaries.every(item => item.severePoorExchange === false && item.shouldExit === false)
+  });
   const defensiveRetreat = evaluateCombatExchangeStopLossCore({
     nowMs: 45000,
     engagedMs: 45000,

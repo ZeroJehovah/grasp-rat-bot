@@ -1443,10 +1443,10 @@ function buildCombatExitEvaluation(self, target, combatTargetState = {}, options
     exchangeStopLoss: {
       ...exchangeStopLoss,
       reason: exchangeStopLoss.phasedReason || exchangeStopLoss.reason,
-      advisory: Boolean(exchangeStopLoss.triggered && !exchangeStopLoss.disengage),
+      advisory: Boolean(exchangeStopLoss.triggered && !exchangeStopLoss.shouldExit && !exchangeStopLoss.disengage),
       defensive,
       response: exchangeStopLoss.shouldExit
-        ? 'leave-defensive-exchange'
+        ? (exchangeStopLoss.severePoorExchange ? 'leave-poor-exchange' : 'leave-defensive-exchange')
         : (exchangeStopLoss.disengage
             ? 'cease-fire-and-retreat'
             : (exchangeStopLoss.triggered ? 'continue-combat-adjust-tactics' : '')),
@@ -2721,11 +2721,12 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     };
   }
   if (!exitDecision && !contactEntryOnly && exitEvaluation.exchangeStopLoss?.shouldExit) {
+    const severePoorExchange = exitEvaluation.exchangeStopLoss.severePoorExchange === true;
     exitDecision = {
       shouldLeave: true,
-      policy: 'defensive-exchange-stop-loss',
-      rule: 'defensive-exchange-no-progress',
-      reason: 'defensive-exchange-no-progress-leave',
+      policy: severePoorExchange ? 'poor-exchange-stop-loss' : 'defensive-exchange-stop-loss',
+      rule: severePoorExchange ? 'cumulative-poor-exchange' : 'defensive-exchange-no-progress',
+      reason: severePoorExchange ? 'combat-exit-poor-exchange' : 'defensive-exchange-no-progress-leave',
       stopMotion: false,
       exchangeStopLoss: cloneJson(exitEvaluation.exchangeStopLoss)
     };

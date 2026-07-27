@@ -929,6 +929,7 @@ function renderBrowserlessWebPanel() {
       'combat-miss-close-timeout-leave': '连续 30 秒无法完成当前 10 米接近目标，为避免低效追击而主动退出',
       'combat-no-damage-generation-limit-leave': '普通收益战斗持续无伤害达到全局上限，主动退出止损',
       'defensive-exchange-no-progress-leave': '防守交战持续无进展，撤退后仍无法脱离，主动退出',
+      'combat-exit-poor-exchange': '持续交战的伤害交换明显不利，主动退出',
       'injury-leave': '角色受伤后为避免继续掉血，主动退出',
       'pursuit-leave': '被危险玩家持续追击，主动退出',
       'profit-live-snapshot-active-threat': '附近玩家有活动威胁证据，退出',

@@ -171,6 +171,7 @@ const DANGEROUS_COMBAT_EXIT_REASONS = new Set([
   'combat-predicted-leave-hp',
   'combat-miss-close-timeout-leave',
   'combat-no-damage-generation-limit-leave',
+  'combat-exit-poor-exchange',
   'incoming-bullet-early-leave',
   'continuous-incoming-bullets-leave',
   'rapid-damage-early-leave'
@@ -8053,7 +8054,11 @@ function targetIdentity(target) {
   return String(id);
 }
 
-function dangerousTargetCooldownMs(options = {}) {
+function dangerousTargetCooldownMs(options = {}, reason = '') {
+  if (String(reason || '') === 'combat-exit-poor-exchange') {
+    const poorExchangeValue = Number(options.combatPoorExchangeCooldownMs ?? 300000);
+    return Number.isFinite(poorExchangeValue) ? Math.max(0, poorExchangeValue) : 300000;
+  }
   const value = Number(options.browserlessDangerousTargetCooldownMs
     ?? BROWSER_RUNTIME_DEFAULTS.browserlessDangerousTargetCooldownMs
     ?? DEFAULT_DANGEROUS_TARGET_COOLDOWN_MS);
@@ -8111,7 +8116,7 @@ function rememberDangerousCombatTarget(stateful = {}, target = null, reason = ''
   if (!stateful || typeof stateful !== 'object' || !target) return null;
   const targetId = targetIdentity(target);
   if (!targetId) return null;
-  const cooldownMs = dangerousTargetCooldownMs(options);
+  const cooldownMs = dangerousTargetCooldownMs(options, reason);
   if (!(cooldownMs > 0)) return null;
   const nowMs = Number.isFinite(Number(input?.nowMs)) ? Number(input.nowMs) : Date.now();
   const record = {

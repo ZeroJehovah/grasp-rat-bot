@@ -10527,6 +10527,79 @@ async function runSelfTest() {
       want: 'safety-exit|combat-hp-disadvantage-leave|true|combat-hp-disadvantage-leave|8|combat-hp-disadvantage-leave|900000'
     },
     {
+      name: 'browserless severe poor exchange exits and remembers target for five minutes',
+      got: (() => {
+        const stateful = {
+          combatTarget: {
+            id: 8,
+            at: 1000,
+            firstSeenAt: 1000,
+            hp: 70,
+            firstHp: 100,
+            minHp: 70,
+            intent: 'profit',
+            originIntent: 'profit',
+            lastDamageAt: 30000,
+            lastSelfDamageAt: 30000,
+            self: { userId: 7, hp: 61 },
+            motionSamples: [
+              { at: 1000, selfHp: 100, targetHp: 100, distance: 9000 },
+              { at: 30000, selfHp: 61, targetHp: 70, distance: 9000 }
+            ]
+          },
+          combatMetrics: {
+            targetId: '8',
+            targetName: 'poor-exchange-active',
+            startedAt: 1000,
+            initialSelfHp: 100,
+            lastSelfHp: 61,
+            minSelfHp: 61,
+            initialTargetHp: 100,
+            lastTargetHp: 70,
+            minTargetHp: 70,
+            acceptedShots: 50,
+            requestedShots: 50,
+            confirmedHits: 5,
+            selfDamage: 39,
+            targetDamage: 15,
+            threatBulletIds: ['poor-exchange-threat'],
+            threatBulletCount: 1
+          }
+        };
+        const decision = buildBrowserlessDecision({
+          userId: 7,
+          realtime: {
+            tick: 640,
+            frameAgeMs: 0,
+            self: { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 58, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+            entities: [
+              { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 58, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+              { entity_id: 2, user_id: 8, name: 'poor-exchange-active', x: 9000, y: 0, hp: 70, current_join_mode: 'Active', firing: true, drop: 30 }
+            ],
+            bullets: []
+          },
+          fallback: { tick: 640, frameAgeMs: 0, entities: [], coinDrops: [], messages: [] }
+        }, stateful, {
+          nowMs: 32001,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          combatAttackRange: 14500,
+          targetStickMs: 120000,
+          combatEngageStickMs: 120000
+        });
+        return [
+          decision.kind,
+          decision.reason,
+          decision.action.shouldLeave,
+          decision.combat.exchangeStopLoss.severePoorExchange,
+          decision.combat.exchangeStopLoss.cumulativeDamageRatio,
+          decision.combat.dangerousTargetCooldown.reason,
+          stateful.dangerousCombatTargets?.['8']?.until - 32001
+        ].join('|');
+      })(),
+      want: 'safety-exit|combat-exit-poor-exchange|true|true|2.8|combat-exit-poor-exchange|300000'
+    },
+    {
       name: 'browserless dangerous target cooldown suppresses ordinary AFK profit but keeps defensive combat',
       got: (() => {
         const profitStateful = {

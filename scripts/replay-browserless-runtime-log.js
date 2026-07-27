@@ -433,7 +433,10 @@ function replayCombatExchangeStopLoss(rows) {
         || Number(row.detail.metrics?.threatBulletCount || 0) > 0
         || Number(row.detail.metrics?.selfDamage || 0) > 0)
     };
-    const baseline = evaluateCombatExchangeStopLossCore({ ...input, degradationSinceAt: 0 });
+    const baseline = evaluateCombatExchangeStopLossCore(
+      { ...input, degradationSinceAt: 0 },
+      { poorExchangeMinEngageMs: Infinity }
+    );
     const improved = evaluateCombatExchangeStopLossCore({
       ...input,
       degradationSinceAt,
@@ -503,20 +506,21 @@ function replayCombatExchangeStopLoss(rows) {
   const firstMetrics = rows[0].detail.metrics || {};
   const lastMetrics = rows[rows.length - 1].detail.metrics || {};
   const baselineAcceptedShots = Math.max(0, Number(lastMetrics.acceptedShots || 0) - Number(firstMetrics.acceptedShots || 0));
-  const retainedAcceptedShots = firstDisengage
-    ? Math.max(0, Number(firstDisengage.acceptedShots || 0) - Number(firstMetrics.acceptedShots || 0))
+  const stopPoint = firstDisengage || firstExit;
+  const retainedAcceptedShots = stopPoint
+    ? Math.max(0, Number(stopPoint.acceptedShots || 0) - Number(firstMetrics.acceptedShots || 0))
     : baselineAcceptedShots;
   const baselineStamina = Math.max(0, Number(lastMetrics.totalStaminaSpent || 0) - Number(firstMetrics.totalStaminaSpent || 0));
-  const retainedStamina = firstDisengage
-    ? Math.max(0, Number(firstDisengage.totalStaminaSpent || 0) - Number(firstMetrics.totalStaminaSpent || 0))
+  const retainedStamina = stopPoint
+    ? Math.max(0, Number(stopPoint.totalStaminaSpent || 0) - Number(firstMetrics.totalStaminaSpent || 0))
     : baselineStamina;
   const baselineSelfDamage = Math.max(0, Number(lastMetrics.selfDamage || 0) - Number(firstMetrics.selfDamage || 0));
   const retainedSelfDamage = firstExit
     ? Math.max(0, Number(firstExit.selfDamage || 0) - Number(firstMetrics.selfDamage || 0))
     : baselineSelfDamage;
   const baselineTargetDamage = Math.max(0, Number(lastMetrics.targetDamage || 0) - Number(firstMetrics.targetDamage || 0));
-  const retainedTargetDamage = firstDisengage
-    ? Math.max(0, Number(firstDisengage.targetDamage || 0) - Number(firstMetrics.targetDamage || 0))
+  const retainedTargetDamage = stopPoint
+    ? Math.max(0, Number(stopPoint.targetDamage || 0) - Number(firstMetrics.targetDamage || 0))
     : baselineTargetDamage;
   return {
     baselineTriggered,
@@ -542,10 +546,9 @@ function replayCombatExchangeStopLoss(rows) {
     observedWindowSelfDamage: Number.isFinite(initialSelfHp) && Number.isFinite(finalSelfHp)
       ? Math.max(0, initialSelfHp - finalSelfHp)
       : null,
-    accepted: Boolean(firstDisengage
-      && retainedAcceptedShots < baselineAcceptedShots
-      && retainedSelfDamage <= baselineSelfDamage
-      && retainedTargetDamage >= baselineTargetDamage)
+    accepted: Boolean(stopPoint
+      && retainedTargetDamage >= baselineTargetDamage
+      && (retainedAcceptedShots < baselineAcceptedShots || retainedSelfDamage < baselineSelfDamage))
   };
 }
 

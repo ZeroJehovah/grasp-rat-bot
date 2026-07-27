@@ -278,6 +278,27 @@ function evaluateCombatExchangeStopLossCore(input = {}, options = {}) {
   const defensive = Boolean(input.defensive);
   const cumulativeSelfDamage = Math.max(0, Number(input.cumulativeSelfDamage ?? longSelfDamage));
   const cumulativeTargetDamage = Math.max(0, Number(input.cumulativeTargetDamage ?? longTargetDamage));
+  const cumulativeDamageRatio = cumulativeTargetDamage > 0
+    ? cumulativeSelfDamage / cumulativeTargetDamage
+    : (cumulativeSelfDamage > 0 ? null : 0);
+  const poorExchangeMinEngageMs = Math.max(30000, Number(options.poorExchangeMinEngageMs ?? 30000));
+  const poorExchangeDamageRatioThreshold = Math.max(1, Number(options.poorExchangeDamageRatio ?? 1.5));
+  const poorExchangeSelfHpThreshold = Math.max(1, Number(options.poorExchangeSelfHp ?? 60));
+  const poorExchangeTargetHpThreshold = Math.max(0, Number(options.poorExchangeTargetHp ?? 40));
+  const poorExchangeRatioExceeded = cumulativeTargetDamage > 0
+    ? cumulativeDamageRatio > poorExchangeDamageRatioThreshold
+    : cumulativeSelfDamage > 0;
+  const severePoorExchange = Boolean(
+    engagedMs > poorExchangeMinEngageMs
+      && poorExchangeRatioExceeded
+      && targetHp !== null
+      && targetHp > poorExchangeTargetHpThreshold
+      && selfHp !== null
+      && selfHp < poorExchangeSelfHpThreshold
+      && !lowHpFinishProtected
+  );
+  const effectiveRule = severePoorExchange ? 'severe-cumulative-poor-exchange' : rule;
+  const effectiveTriggered = Boolean(severePoorExchange || triggered);
   const observeMs = Math.max(30000, Number(options.exchangeObserveMs || 30000));
   const disengageMs = Math.max(observeMs, Number(options.exchangeDisengageMs || 45000));
   const exitEngageMs = Math.max(disengageMs, Number(options.exchangeExitEngageMs || 60000));
@@ -321,11 +342,12 @@ function evaluateCombatExchangeStopLossCore(input = {}, options = {}) {
   );
   const disengage = Boolean(retreatSinceAt && !lowHpFinishProtected && !closePressureContinuation);
   const shouldExit = Boolean(
-    disengage
-      && !safeDistanceReached
-      && cumulativeTargetDamage <= retreatTargetDamageMax
-      && nowMs - retreatSinceAt >= retreatMinMs
-      && (engagedMs >= exitEngageMs || newSelfDamageSinceRetreat >= retreatNewSelfDamageExit)
+    severePoorExchange
+      || (disengage
+        && !safeDistanceReached
+        && cumulativeTargetDamage <= retreatTargetDamageMax
+        && nowMs - retreatSinceAt >= retreatMinMs
+        && (engagedMs >= exitEngageMs || newSelfDamageSinceRetreat >= retreatNewSelfDamageExit))
   );
   const phase = shouldExit
     ? 'exit'
@@ -333,7 +355,7 @@ function evaluateCombatExchangeStopLossCore(input = {}, options = {}) {
         ? 'close-pressure'
         : (disengage ? 'retreat' : (defensive && engagedMs >= observeMs ? 'observe' : '')));
   const phasedReason = shouldExit
-    ? 'defensive-exchange-no-progress-leave'
+    ? (severePoorExchange ? 'combat-exit-poor-exchange' : 'defensive-exchange-no-progress-leave')
     : (closePressureContinuation
         ? 'close-pressure-continue'
         : (disengage
@@ -341,10 +363,12 @@ function evaluateCombatExchangeStopLossCore(input = {}, options = {}) {
             : (phase === 'observe' ? 'defensive-exchange-observe' : '')));
   return {
     ready,
-    active: Boolean(rule),
-    triggered,
-    rule,
-    reason: triggered ? `combat-exchange-stop-loss-${rule}` : (rule ? 'combat-exchange-degrading' : 'combat-exchange-acceptable'),
+    active: Boolean(effectiveRule),
+    triggered: effectiveTriggered,
+    rule: effectiveRule,
+    reason: severePoorExchange
+      ? 'combat-exit-poor-exchange'
+      : (triggered ? `combat-exchange-stop-loss-${rule}` : (rule ? 'combat-exchange-degrading' : 'combat-exchange-acceptable')),
     degradationSinceAt,
     confirmMs,
     exchangeWindow: {
@@ -373,6 +397,14 @@ function evaluateCombatExchangeStopLossCore(input = {}, options = {}) {
     phasedReason,
     cumulativeSelfDamage,
     cumulativeTargetDamage,
+    cumulativeDamageRatio: cumulativeDamageRatio === null ? null : Number(cumulativeDamageRatio.toFixed(3)),
+    severePoorExchange,
+    poorExchangeThresholds: {
+      minEngageMs: poorExchangeMinEngageMs,
+      damageRatio: poorExchangeDamageRatioThreshold,
+      selfHp: poorExchangeSelfHpThreshold,
+      targetHp: poorExchangeTargetHpThreshold
+    },
     recentNoHit,
     retreatSinceAt,
     retreatSelfDamageBaseline,
