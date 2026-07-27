@@ -1796,9 +1796,16 @@ function recentBattleActivity(activity, nowMs, windowMs) {
   return ageMs >= -500 && ageMs <= windowMs;
 }
 
+function rejectedTargetlessCombatDecision(decision, combat) {
+  const actionKind = String(decision?.action?.kind || decision?.actionKind || decision?.kind || '');
+  return actionKind === 'combat-live'
+    && combat?.actionEligible === false
+    && !combat?.target;
+}
+
 function compactBattleStatus(normalized, game, action, decision, combat, options = {}) {
   if (!game?.inGame) return null;
-  if (combat?.actionEligible === false && !combat?.target) return null;
+  if (rejectedTargetlessCombatDecision(decision, combat)) return null;
   const kind = String(action?.kind || decision?.kind || decision?.actionKind || '');
   const band = String(decision?.band || '');
   const combatLike = kind === 'attack' || kind === 'combat-live' || band === 'combat';
@@ -2724,11 +2731,7 @@ function buildCompactBrowserlessStatus(state, config = {}) {
   const game = compactGameStatus(normalized);
   const combat = compactCombat(current.combatSummary || current.decision?.combat);
   const executedAction = compactAction(normalized.runner.currentAction) || compactAction(current.action);
-  const rejectedCombatDecision = Boolean(
-    decision?.action?.kind === 'combat-live'
-      && combat?.actionEligible === false
-      && !combat.target
-  );
+  const rejectedCombatDecision = rejectedTargetlessCombatDecision(decision, combat);
   // The decision input and nearby panel are one realtime observation. Prefer
   // its action summary so a later action-result callback cannot leave the UI
   // showing an older wait state beside newly observed loot. When the combat

@@ -27777,6 +27777,50 @@ async function runSelfTest() {
       want: 'true|stop|combat-live-no-target|false|true|true'
     },
     {
+      name: 'browserless compact status keeps AFK profit battle when active combat is ineligible',
+      got: (() => {
+        const compact = buildCompactBrowserlessStatus({
+          session: { userId: 28886, tokenPresent: true, authenticated: true },
+          runner: {
+            running: true,
+            currentAction: {
+              kind: 'profit-attack',
+              reason: 'profit-afk-attack',
+              target: { userId: 3097, name: 'tw l', hp: 10, drop: 50, active: false, distance: 733 }
+            }
+          },
+          current: {
+            self: { userId: 28886, name: 'self', hp: 100, maxHp: 100, authority: 'realtime' },
+            decision: {
+              kind: 'profit-candidate',
+              band: 'profit',
+              reason: 'best-opportunity',
+              at: '2026-07-27T07:23:18.746Z',
+              action: {
+                kind: 'attack',
+                band: 'profit',
+                reason: 'best-opportunity',
+                target: { userId: 3097, name: 'tw l', hp: 10, drop: 50, active: false, distance: 733 }
+              },
+              combat: { actionEligible: false, target: null }
+            },
+            combatSummary: { actionEligible: false, target: null }
+          },
+          stats: { currentSession: { online: true } }
+        }, {});
+        return [
+          compact.game.inGame,
+          compact.action.kind,
+          compact.combat.actionEligible,
+          compact.combat.target === null,
+          compact.battle?.active,
+          compact.battle?.target.name,
+          compact.battle?.targetAfk
+        ].join('|');
+      })(),
+      want: 'true|attack|false|true|true|tw l|true'
+    },
+    {
       name: 'browserless compact status exposes session offline and today stats',
       got: withTempDirForTest(async dir => {
         const config = parseBrowserlessRunnerArgs(['--data-dir', dir], {});

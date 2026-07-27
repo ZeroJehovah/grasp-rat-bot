@@ -4435,15 +4435,20 @@ async function runBrowserlessRunnerSelfTest() {
     ]);
     const panelAfkBattleCompact = buildCompactBrowserlessStatus({
       session: { userId: 7, sessionToken: 'panel-self-test-token' },
-      runner: { running: true, currentAction: { kind: 'attack', target: { userId: 9, distance: 800 } } },
+      runner: { running: true, currentAction: { kind: 'profit-attack', target: { userId: 9, distance: 800 } } },
       current: {
         self: { userId: 7, name: 'self', x: 300, y: 400, hp: 100, maxHp: 100 },
         decision: {
-          kind: 'attack',
+          kind: 'profit-candidate',
           band: 'profit',
           at: '2026-07-20T00:01:01.000Z',
-          target: { userId: 9, name: 'afk-enemy', hp: 100, distance: 800, active: false }
+          action: {
+            kind: 'attack',
+            band: 'profit',
+            target: { userId: 9, name: 'afk-enemy', hp: 100, distance: 800, active: false }
+          }
         },
+        combatSummary: { actionEligible: false, target: null },
         battlePresentation: panelAfkPresentationFiring
       }
     }, { nowMs: panelAfkShotAt + 1000 });
