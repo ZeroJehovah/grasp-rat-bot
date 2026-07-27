@@ -4593,6 +4593,7 @@ async function runBrowserlessRunnerSelfTest() {
           && pageHtml.includes('.high-drop-name.self.online,.high-drop-values.self.online{color:var(--green)}')
           && pageHtml.includes("+ (self ? ' self' : '')")
           && pageHtml.includes("if (reason === 'single-coin-bait-hold') return '正在等待'")
+          && pageHtml.includes("'realtime-control-released': '当前没有需要实时接管的战斗或避险动作，等待常规规划'")
           && pageHtml.includes("if (kind === 'seek-enemy') return '正在靠近高Drop挂机玩家'")
           && pageHtml.includes("chatKillsCollapsed = !chatKillsCollapsed")
           && !pageHtml.includes("togglePanelCollapse(document.getElementById('chatPanel'))")
