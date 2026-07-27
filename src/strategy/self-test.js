@@ -2532,6 +2532,24 @@ function runStrategyModuleSelfTests() {
     passed: heldCombat.held && heldCombat.action.band === 'combat'
   });
 
+  const expiredCombatSafetyState = {
+    lastAction: { ...combatAction, band: 'combat' },
+    lastFocus: buildActionFocus({ ...combatAction, band: 'combat' }),
+    lastSelectedAt: Date.now() - 1801,
+    lastOverride: null,
+    history: []
+  };
+  const expiredCombatSafety = applyFinalActionArbitration(
+    nonUrgentSafety,
+    expiredCombatSafetyState.lastAction,
+    expiredCombatSafetyState,
+    { finalActionArbitrationHoldMs: 1800 }
+  );
+  results.push({
+    name: 'arbitration-nonurgent-safety-preempts-combat-after-hold-window',
+    passed: !expiredCombatSafety.held && expiredCombatSafety.action.band === 'safety'
+  });
+
   const urgentCombatState = {
     lastAction: { ...combatAction, band: 'combat' },
     lastFocus: buildActionFocus({ ...combatAction, band: 'combat' }),
@@ -2734,6 +2752,32 @@ function runStrategyModuleSelfTests() {
       && dropoutState.lastOverride?.mode === 'commit-current'
       && dropoutState.history.at(-1)?.reason === 'profit-dropout-confirmed'
       && dropoutState.profitDropout === null
+  });
+
+  const staleCombat = {
+    kind: 'combat-live',
+    band: 'combat',
+    reason: 'combat-live-realtime',
+    target: { userId: 34711, name: 'generic-target' }
+  };
+  const staleCombatState = {
+    lastAction: staleCombat,
+    lastFocus: buildActionFocus(staleCombat, { nowMs: 1000 }),
+    lastSelectedAt: 1000,
+    lastOverride: null,
+    history: []
+  };
+  const expiredCombatDropout = applyFinalActionArbitrationCore(
+    dropoutAction('dynamic-profit-threshold-wait'),
+    staleCombatState,
+    { nowMs: 3001, holdMs: 1800 }
+  );
+  results.push({
+    name: 'arbitration-profit-dropout-does-not-reset-expired-combat-hold-age',
+    passed: !expiredCombatDropout.held
+      && expiredCombatDropout.action.reason === 'dynamic-profit-threshold-wait'
+      && staleCombatState.lastAction.reason === 'dynamic-profit-threshold-wait'
+      && staleCombatState.profitDropout === null
   });
 
   const changedDropoutState = {

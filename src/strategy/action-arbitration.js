@@ -71,15 +71,16 @@ function finalActionHoldDecision(previousAction, previousFocus, currentAction, c
   const dropoutAgeMs = Number.isFinite(Number(options.dropoutAgeMs))
     ? Math.max(0, Number(options.dropoutAgeMs))
     : ageMs;
-  const effectiveAgeMs = currentDropout ? dropoutAgeMs : ageMs;
   if (!(holdMs > 0)) return result(false);
   if (!finalActionReusable(previousAction) || !currentAction || !currentFocus || !previousFocus) return result(false);
   if (previousFocus.key === currentFocus.key) return result(false);
   const previousBand = String(previousFocus.band || actionPriorityBand(previousAction));
   const currentBand = String(currentFocus.band || actionPriorityBand(currentAction));
+  const effectiveAgeMs = currentDropout && previousBand === 'profit' ? dropoutAgeMs : ageMs;
   if (currentBand === 'exit') return result(false);
   if (previousBand === 'safety' && currentBand !== 'profit') return result(false);
   if (currentAction.urgent === true || currentAction.immediate === true || currentAction.realThreatEvidence === true) return result(false);
+  if (previousBand !== 'profit' && effectiveAgeMs > holdMs) return result(false);
   if (previousBand === 'combat' && currentBand === 'safety') {
     const evidence = currentAction.threatEvidence || currentAction.safetyEvidence || {};
     return result(
