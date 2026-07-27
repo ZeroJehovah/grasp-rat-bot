@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.27.2';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.27.3';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function highDropRankValueCore(item) {
@@ -758,6 +758,7 @@ function renderBrowserlessWebPanel() {
     }
     function loginPointAttrs(status) {
       const display = loginPointDisplay(status);
+      if (display.reviewing) return classAttrs('warn');
       if (display.state === 'safe') return classAttrs('ok');
       if (display.state === 'unsafe') return classAttrs('bad');
       return classAttrs('warn');
@@ -1352,6 +1353,13 @@ function renderBrowserlessWebPanel() {
         return { state: 'safe', text: '安全 ' + loginPointProgressText(status, true) };
       }
       if (/pending-snapshot-safety/i.test(reasonText)) {
+        const previousCheck = detail.previousCheck || null;
+        if (previousCheck?.ok === true) {
+          return { state: 'safe', reviewing: true, text: '上次检查安全，正在复查 ' + loginPointProgressText(status, false) };
+        }
+        if (previousCheck?.ok === false) {
+          return { state: 'unsafe', reviewing: true, text: '不安全（正在复查 ' + loginPointProgressText(status, false) + '）' };
+        }
         return { state: 'pending', text: '待检查 ' + loginPointProgressText(status, false) };
       }
       return { state: 'unsafe', text: '不安全' };
@@ -1407,7 +1415,10 @@ function renderBrowserlessWebPanel() {
     function unsafeReasonText(status) {
       if (status.game?.inGame || loginPointDisplay(status).state !== 'unsafe') return '--';
       const detail = status.loginPointSafety?.detail || {};
-      const raw = detail.unsafeReason || detail.reason || status.loginPointSafety?.reason;
+      const previousCheck = detail.previousCheck || null;
+      const raw = loginPointDisplay(status).reviewing && previousCheck?.ok === false
+        ? previousCheck.reason
+        : (detail.unsafeReason || detail.reason || status.loginPointSafety?.reason);
       if (!raw || /^safe$/i.test(String(raw)) || /pending-snapshot-safety|snapshot-safety-streak-pending/i.test(String(raw))) return '--';
       const translated = reasonText(raw);
       return translated === '安全' ? '--' : translated;
@@ -2384,7 +2395,11 @@ function renderBrowserlessWebPanel() {
           addRow(rowsOut, '等待原因', loginPointPendingReasonText(status));
         }
         addRow(rowsOut, '保持离线', offlineBlockerText(status), false, status.stats?.offline?.blocker ? classAttrs('warn') : null);
-        addRow(rowsOut, reentry ? '状态确认时间' : '检查时间', fullStamp(status.loginPointSafety?.checkedAt || status.loginPointSafety?.detail?.checkedAt));
+        addRow(
+          rowsOut,
+          reentry ? '状态确认时间' : (loginDisplay.reviewing ? '上次检查时间' : '检查时间'),
+          fullStamp(status.loginPointSafety?.checkedAt || status.loginPointSafety?.detail?.checkedAt || status.loginPointSafety?.detail?.previousCheck?.checkedAt)
+        );
       }
 
       if (!online && offlineStats.nextReconnectAt) {

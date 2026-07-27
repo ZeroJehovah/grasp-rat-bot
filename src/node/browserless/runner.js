@@ -4162,6 +4162,49 @@ async function runBrowserlessRunnerSelfTest() {
     const panelPreLoginCompact = buildCompactBrowserlessStatus(mergeState(panelOfflineTransitionState, {
       runner: { currentAction: preLoginSnapshotSafetyAction(panelOfflineTransitionState) }
     }), { nowMs: panelOfflineTransitionAt });
+    const panelLoginPointRecheckState = previousCheck => buildCompactBrowserlessStatus({
+      session: { userId: 7, sessionToken: 'panel-self-test-token' },
+      runner: {
+        running: true,
+        currentAction: { kind: 'loop-wait', reason: 'next-login-point-pending-snapshot-safety' },
+        ...(previousCheck ? {
+          lastRun: {
+            completedAt: previousCheck.checkedAt,
+            canary: { snapshotSafety: previousCheck }
+          }
+        } : {})
+      },
+      loginPointSafety: {
+        ok: false,
+        reason: 'next-login-point-pending-snapshot-safety',
+        checkedAt: '',
+        point: { x: 5999, y: 66268, hp: 100, source: 'state' },
+        detail: {
+          ok: false,
+          reason: 'next-login-point-pending-snapshot-safety',
+          required: 1,
+          streak: 0,
+          satisfied: false
+        }
+      }
+    }, { nowMs: panelOfflineTransitionAt });
+    const panelUnsafeRecheckCompact = panelLoginPointRecheckState({
+      ok: false,
+      reason: 'damage-actor-near-login-point',
+      checkedAt: '2026-07-27T08:22:21.694Z',
+      required: 1,
+      streak: 0,
+      satisfied: false
+    });
+    const panelSafeRecheckCompact = panelLoginPointRecheckState({
+      ok: true,
+      reason: 'safe',
+      checkedAt: '2026-07-27T08:20:01.000Z',
+      required: 1,
+      streak: 1,
+      satisfied: true
+    });
+    const panelNeverCheckedCompact = panelLoginPointRecheckState(null);
     const panelOfflineTransitionCompact = buildCompactBrowserlessStatus(
       mergeState(panelOfflineTransitionState, panelOfflineTransitionPatch),
       { nowMs: panelOfflineTransitionAt }
@@ -4553,6 +4596,10 @@ async function runBrowserlessRunnerSelfTest() {
           && pageHtml.includes("return '等待重连冷却时间'")
           && pageHtml.includes("return '等待登录点快照安全检查'")
           && pageHtml.includes("if (reason === 'login-point-safe-connecting') return '登录点已安全，正在连接游戏'")
+          && pageHtml.includes("text: '上次检查安全，正在复查 ' + loginPointProgressText(status, false)")
+          && pageHtml.includes("text: '不安全（正在复查 ' + loginPointProgressText(status, false) + '）'")
+          && pageHtml.includes("if (display.reviewing) return classAttrs('warn');")
+          && pageHtml.includes("loginDisplay.reviewing ? '上次检查时间' : '检查时间'")
           && pageHtml.includes("if (online && !liveCombat) addRow(rowsOut, '原因', actionReasonDisplay(status), true)")
           && pageHtml.includes("const liveCombat = Boolean(realtimeOnline && (kind === 'combat-live' || action.kind === 'combat-live'))")
           && pageHtml.includes("'活动 ' + bool(target.active)")
@@ -4593,6 +4640,12 @@ async function runBrowserlessRunnerSelfTest() {
           && panelPreLoginCompact.game.inGame === false
           && panelPreLoginCompact.action.kind === 'loop-wait'
           && panelPreLoginCompact.action.reason === 'next-login-point-pending-snapshot-safety'
+          && panelUnsafeRecheckCompact.loginPointSafety.detail.previousCheck?.ok === false
+          && panelUnsafeRecheckCompact.loginPointSafety.detail.previousCheck?.reason === 'damage-actor-near-login-point'
+          && panelUnsafeRecheckCompact.loginPointSafety.detail.previousCheck?.checkedAt === '2026-07-27T08:22:21.694Z'
+          && panelSafeRecheckCompact.loginPointSafety.detail.previousCheck?.ok === true
+          && panelSafeRecheckCompact.loginPointSafety.detail.previousCheck?.reason === 'safe'
+          && panelNeverCheckedCompact.loginPointSafety.detail.previousCheck === null
           && panelOnlineCombatWithoutSelfCompact.game.inGame === true
           && panelOnlineCombatWithoutSelfCompact.stats.currentSession.online === true
           && panelOnlineCombatWithoutSelfCompact.stats.currentSession.realtimeOnline === true
@@ -4673,6 +4726,11 @@ async function runBrowserlessRunnerSelfTest() {
           actionReason: panelOfflineTransitionCompact.action.reason
         },
         preLoginActionReason: panelPreLoginCompact.action.reason,
+        loginPointRecheck: {
+          unsafe: panelUnsafeRecheckCompact.loginPointSafety.detail.previousCheck,
+          safe: panelSafeRecheckCompact.loginPointSafety.detail.previousCheck,
+          neverChecked: panelNeverCheckedCompact.loginPointSafety.detail.previousCheck
+        },
         onlineCombatWithoutSelf: {
           inGame: panelOnlineCombatWithoutSelfCompact.game.inGame,
           online: panelOnlineCombatWithoutSelfCompact.stats.currentSession.online,

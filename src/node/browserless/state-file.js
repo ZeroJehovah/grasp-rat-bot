@@ -1222,7 +1222,7 @@ function snapshotSafetyCandidate(value, owner = {}) {
   };
 }
 
-function latestSnapshotSafetyCandidateForLoginPoint(normalized) {
+function snapshotSafetyCandidatesForLoginPoint(normalized) {
   const candidates = [
     snapshotSafetyCandidate(normalized?.loginPointSafety?.snapshotSafety, normalized?.loginPointSafety),
     snapshotSafetyCandidate(normalized?.probes?.lastSnapshotProbe?.snapshotSafety, normalized?.probes?.lastSnapshotProbe),
@@ -1230,7 +1230,11 @@ function latestSnapshotSafetyCandidateForLoginPoint(normalized) {
     snapshotSafetyCandidate(normalized?.runner?.lastRun?.canary?.snapshotSafety, normalized?.runner?.lastRun?.canary)
   ].filter(Boolean);
   candidates.sort((a, b) => b.timeMs - a.timeMs);
-  return candidates[0] || null;
+  return candidates;
+}
+
+function latestSnapshotSafetyCandidateForLoginPoint(normalized) {
+  return snapshotSafetyCandidatesForLoginPoint(normalized)[0] || null;
 }
 
 function latestSnapshotSafetyForLoginPoint(normalized) {
@@ -1239,6 +1243,35 @@ function latestSnapshotSafetyForLoginPoint(normalized) {
 
 function loginPointSafetyReasonPending(reason) {
   return /pending-snapshot-safety|snapshot-safety-streak-pending/i.test(String(reason || ''));
+}
+
+function compactCompletedLoginPointSafetyCheck(normalized) {
+  for (const candidate of snapshotSafetyCandidatesForLoginPoint(normalized)) {
+    const snapshotSafety = candidate.value;
+    const response = snapshotSafety?.response && typeof snapshotSafety.response === 'object'
+      ? snapshotSafety.response
+      : {};
+    const summary = response.summary && typeof response.summary === 'object'
+      ? response.summary
+      : {};
+    const safety = summary.safety && typeof summary.safety === 'object'
+      ? summary.safety
+      : {};
+    const reason = snapshotSafety?.reason || safety.reason || '';
+    const checkedAt = snapshotSafety?.checkedAt || safety.checkedAt || '';
+    if (!checkedAt || loginPointSafetyReasonPending(reason)) continue;
+    if (/self-present-reentry|confirmed-leave-snapshot-quarantine|stale-confirmed-leave-snapshot-tick/i.test(String(reason))) continue;
+    const ok = snapshotSafety?.ok ?? safety.ok;
+    if (ok === undefined || ok === null) continue;
+    return {
+      ok: Boolean(ok),
+      reason: compactString(reason || (ok ? 'safe' : 'unsafe'), 120),
+      checkedAt: compactString(checkedAt, 48),
+      streak: compactNumber(snapshotSafety?.streak ?? safety.streak),
+      required: compactNumber(snapshotSafety?.required ?? safety.required)
+    };
+  }
+  return null;
 }
 
 function compactLoginPointSafetyDetail(loginPointSafety, normalized) {
@@ -1269,6 +1302,9 @@ function compactLoginPointSafetyDetail(loginPointSafety, normalized) {
   );
   const detail = useDirectDetail ? directDetail : (hasSnapshotDetail ? snapshotSummarySafety : directDetail);
   const isolatePendingDetail = Boolean(useDirectDetail && directDetailPending);
+  const previousCheck = isolatePendingDetail
+    ? compactCompletedLoginPointSafetyCheck(normalized)
+    : null;
   const okValue = detail.ok ?? (isolatePendingDetail ? loginPointSafety?.ok : snapshotSafety?.ok) ?? loginPointSafety?.ok;
   const reason = detail.reason || (useDirectDetail ? loginPointSafety?.reason : snapshotSafety?.reason) || loginPointSafety?.reason || '';
   const unsafeReason = okValue === false
@@ -1329,6 +1365,7 @@ function compactLoginPointSafetyDetail(loginPointSafety, normalized) {
       : (summary.selfPresent === undefined
       ? (detail.selfPresent === undefined ? null : Boolean(detail.selfPresent))
       : Boolean(summary.selfPresent)),
+    previousCheck,
     nearestActive: compactSafetyEntity(nearestActive),
     nearestDamageActor: compactSafetyEntity(nearestDamageActor),
     nearestTrustedEasyKill: compactSafetyEntity(nearestTrustedEasyKill),

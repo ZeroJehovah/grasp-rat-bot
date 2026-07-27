@@ -27476,7 +27476,11 @@ async function runSelfTest() {
         };
         const pending = buildCompactBrowserlessStatus({
           runner: {
-            currentAction: { kind: 'loop-wait', reason: 'stamina-budget-coin-leave' }
+            currentAction: { kind: 'loop-wait', reason: 'stamina-budget-coin-leave' },
+            lastRun: {
+              completedAt: '2026-07-08T00:00:00.000Z',
+              canary: staleUnsafeProbe
+            }
           },
           current: {
             self: { userId: 7, name: 'stale-self' }
@@ -27601,6 +27605,9 @@ async function runSelfTest() {
           pending.loginPointSafety.detail.unsafeReason,
           pending.loginPointSafety.detail.selfPresent,
           pending.loginPointSafety.detail.bypassedPreLoginSafety,
+          pending.loginPointSafety.detail.previousCheck?.ok,
+          pending.loginPointSafety.detail.previousCheck?.reason,
+          pending.loginPointSafety.detail.previousCheck?.checkedAt,
           pending.game.selfPresent,
           currentSafe.loginPointSafety.ok,
           currentSafe.loginPointSafety.detail.reason,
@@ -27616,7 +27623,7 @@ async function runSelfTest() {
           reentry.loginPointSafety.detail.selfPresent
         ].join('|');
       })(),
-      want: 'false|next-login-point-pending-snapshot-safety|0|3|next-login-point-pending-snapshot-safety||false|false|true|safe|3||active-near-login-point|active-near-login-point|0|active-near-login-point|self-present-reentry|true|true|true'
+      want: 'false|next-login-point-pending-snapshot-safety|0|3|next-login-point-pending-snapshot-safety||false|false|active-near-login-point|2026-07-08T00:00:00.000Z|false|true|safe|3||active-near-login-point|active-near-login-point|0|active-near-login-point|self-present-reentry|true|true|true'
     },
     {
       name: 'browserless compact status exposes symmetric live battle details',
@@ -30260,12 +30267,16 @@ async function runSelfTest() {
           panelScript.includes("reentry ? '当前坐标' : '登录点坐标'"),
           panelScript.includes("if (loginDisplay.state === 'unsafe') {"),
           panelScript.includes("addRow(rowsOut, '等待原因', loginPointPendingReasonText(status));"),
-          panelScript.includes("reentry ? '状态确认时间' : '检查时间'"),
+          panelScript.includes("loginDisplay.reviewing ? '上次检查时间' : '检查时间'"),
           /function dangerousPlayerExitReasonText/.test(panelScript),
           panelScript.includes("evidence.push('快照为 Active')"),
           panelScript.includes("evidence.push('近期有活动')"),
           panelScript.includes("evidence.push('无敌还剩 ' + invulnerableText"),
           panelScript.includes("'安全 ' + loginPointProgressText(status, true)"),
+          panelScript.includes("text: '上次检查安全，正在复查 ' + loginPointProgressText(status, false)"),
+          panelScript.includes("text: '不安全（正在复查 ' + loginPointProgressText(status, false) + '）'"),
+          panelScript.includes('loginPointDisplay(status).reviewing && previousCheck?.ok === false'),
+          panelScript.includes("if (display.reviewing) return classAttrs('warn');"),
           panelScript.includes("const pendingSafeReason = /snapshot-safety-streak-pending/i.test(detailReason)"),
           panelScript.includes("return coord(point.x) + ', ' + coord(point.y);"),
           panelScript.includes("translated === '安全'"),
@@ -30297,7 +30308,7 @@ async function runSelfTest() {
           hiddenActionLabels.every(label => !panelScript.includes("addRow(rowsOut, '" + label + "'"))
         ].join('|');
       })(),
-      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
+      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless web panel explains shutdown exits and confirmed leave snapshot waits',
@@ -30333,7 +30344,7 @@ async function runSelfTest() {
           !panelScript.includes("setRichText('roleTitleMeta', [{ text: '已离线', className: 'muted' }], 'muted');")
         ].join('|');
       })(),
-      want: '2026.07.21.2|true|true|true|true|true|true'
+      want: '2026.07.27.3|true|true|true|true|true|true'
     },
     {
       name: 'browserless runner self-test passes',
