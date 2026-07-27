@@ -1013,7 +1013,7 @@ function attachConfirmedLeaveEvidence(event, leave, leavePending = null, options
     : pendingMinHp;
   if (selfHp === null) return event;
   const maxHpValue = finiteNumber(response.max_hp ?? response.maxHp);
-  const decision = event.detail?.decision || event.decision || {};
+  const decision = event.detail?.decision || event.detail?.lastDecision || event.decision || {};
   const triggerSelfHp = finiteNumber(
     decision.combat?.exit?.selfHp
       ?? decision.self?.hp

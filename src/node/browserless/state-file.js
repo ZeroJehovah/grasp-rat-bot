@@ -2089,7 +2089,9 @@ function compactRun(run) {
 function reconcileBrowserlessExitKillEvidence(event, evidence = [], options = {}) {
   if (!event || typeof event !== 'object') return event;
   const detail = event.detail && typeof event.detail === 'object' ? event.detail : {};
-  const decision = detail.decision && typeof detail.decision === 'object' ? detail.decision : {};
+  const decision = detail.decision && typeof detail.decision === 'object'
+    ? detail.decision
+    : (detail.lastDecision && typeof detail.lastDecision === 'object' ? detail.lastDecision : {});
   const combat = decision.combat && typeof decision.combat === 'object'
     ? decision.combat
     : (detail.combat && typeof detail.combat === 'object' ? detail.combat : {});
@@ -2129,7 +2131,9 @@ function reconcileBrowserlessExitKillEvidence(event, evidence = [], options = {}
 function compactExit(event) {
   if (!event || typeof event !== 'object') return null;
   const detail = event.detail && typeof event.detail === 'object' ? event.detail : {};
-  const decision = detail.decision && typeof detail.decision === 'object' ? detail.decision : {};
+  const decision = detail.decision && typeof detail.decision === 'object'
+    ? detail.decision
+    : (detail.lastDecision && typeof detail.lastDecision === 'object' ? detail.lastDecision : {});
   const combat = decision.combat && typeof decision.combat === 'object'
     ? decision.combat
     : (detail.combat && typeof detail.combat === 'object' ? detail.combat : {});

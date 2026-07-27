@@ -860,7 +860,9 @@ function createBrowserlessActionAdapter(options = {}) {
       sentAt: new Date(atMs).toISOString(),
       target,
       settleAfterTick: null,
-      observedFrames: 0
+      observedFrames: 0,
+      settlementOrigin: state.latestSelfSample ? { ...state.latestSelfSample } : null,
+      settlementMovedCm: 0
     };
     nextCommandId += 1;
     state.sentCount += 1;
@@ -1640,20 +1642,33 @@ function createBrowserlessActionAdapter(options = {}) {
     if (tick === null) return state.lastSettlement;
     if (command.settleAfterTick === null) command.settleAfterTick = tick;
     if (tick >= command.settleAfterTick) command.observedFrames += 1;
-    if (command.observedFrames >= settlementFrames) {
+    const sample = state.latestSelfSample;
+    if (!command.settlementOrigin && sample) command.settlementOrigin = { ...sample };
+    command.settlementMovedCm = command.settlementOrigin && sample
+      ? Math.hypot(
+          Number(sample.x) - Number(command.settlementOrigin.x),
+          Number(sample.y) - Number(command.settlementOrigin.y)
+        )
+      : 0;
+    const moving = Boolean(Number(command.dx || 0) || Number(command.dy || 0));
+    const movementObserved = moving && command.settlementMovedCm >= movementSettlementMinDistanceCm;
+    const enoughFrames = command.observedFrames >= settlementFrames;
+    if (movementObserved || (!moving && enoughFrames)) {
       state.lastSettlement = {
         ok: true,
         commandId: command.id,
-        reason: 'frames-observed',
+        reason: movementObserved ? 'movement-progress-observed' : 'stop-frames-observed',
         observedFrames: command.observedFrames,
+        movedCm: Math.round(command.settlementMovedCm),
         tick
       };
     } else {
       state.lastSettlement = {
         ok: false,
         commandId: command.id,
-        reason: 'waiting-for-frames',
+        reason: enoughFrames ? 'movement-not-observed' : 'waiting-for-movement',
         observedFrames: command.observedFrames,
+        movedCm: Math.round(command.settlementMovedCm),
         tick
       };
     }

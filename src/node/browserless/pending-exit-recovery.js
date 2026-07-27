@@ -74,9 +74,11 @@ function pendingExitFromCanary(previous, canary, nowMs = Date.now(), options = {
     || timestampMs(event?.at)
     || timestampMs(canary?.startedAt)
     || Number(nowMs);
+  const eventDecision = event?.detail?.decision || event?.detail?.lastDecision || event?.decision || {};
   const targetId = pending?.targetId
-    ?? event?.detail?.decision?.action?.target?.userId
-    ?? event?.detail?.decision?.combat?.target?.userId
+    ?? eventDecision?.action?.target?.userId
+    ?? eventDecision?.combat?.target?.userId
+    ?? eventDecision?.target?.userId
     ?? '';
   return normalizePendingExit({
     active: true,

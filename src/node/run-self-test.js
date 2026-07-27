@@ -5700,6 +5700,22 @@ async function runSelfTest() {
           },
           leave: { ok: false, error: 'HTTP 502', attempts: [{ status: 502 }, { status: 502 }, { status: 502 }, { status: 502 }] }
         }, nowMs);
+        const productionShapePending = pendingExitFromCanary(null, {
+          runId: 'movement-stall-exit-run',
+          safety: {
+            event: {
+              reason: 'combat-action-settlement-stalled',
+              shouldLeave: true,
+              at: new Date(nowMs - 500).toISOString(),
+              detail: {
+                lastDecision: {
+                  target: { userId: 1789, name: 'Beicho' }
+                }
+              }
+            }
+          },
+          leave: { ok: false, error: 'HTTP 502', attempts: [{ status: 502 }] }
+        }, nowMs);
         const present = pendingExitSnapshotResolution(pending, {
           ok: true,
           response: { summary: { selfPresent: true, freshness: { ok: true } } }
@@ -5755,10 +5771,11 @@ async function runSelfTest() {
           persistedPlan.delayMs,
           persistedPlan.deadlineSource,
           roundTrip.reason,
-          roundTrip.requestAttemptCount
+          roundTrip.requestAttemptCount,
+          productionShapePending.targetId
         ].join('|');
       })(),
-      want: 'frame-gap|31361|1|4|85|HTTP 502|true|snapshot-self-present|true|fresh-snapshot-self-absent|true|false|exit-recovery|100|exit-recovery|100|pending-exit|frame-gap|4'
+      want: 'frame-gap|31361|1|4|85|HTTP 502|true|snapshot-self-present|true|fresh-snapshot-self-absent|true|false|exit-recovery|100|exit-recovery|100|pending-exit|frame-gap|4|1789'
     },
     {
       name: 'browserless pending exit self-present run is exit-only until leave confirmation',
@@ -19273,6 +19290,9 @@ async function runSelfTest() {
             sendShoot: () => commands.push('shoot')
           }
         });
+        adapter.observeState({
+          realtime: { tick: 1, receivedAtMs: 1000, self: { x: 10, y: 20 } }
+        });
         const vector = movementVectorToTarget({ x: 10, y: 20 }, { x: 1010, y: 20 }, { targetDeadZoneCm: 100 });
         const action = adapter.applyDecision({
           realtime: { self: { x: 10, y: 20 }, tick: 1 }
@@ -19285,8 +19305,10 @@ async function runSelfTest() {
             target: { type: 'coin', id: 1, x: 1010, y: 20, snapshotOnly: true }
           }
         });
-        adapter.observeState({ realtime: { tick: 2 } });
-        adapter.observeState({ realtime: { tick: 3 } });
+        adapter.observeState({ realtime: { tick: 2, receivedAtMs: 1050, self: { x: 10, y: 20 } } });
+        adapter.observeState({ realtime: { tick: 3, receivedAtMs: 1100, self: { x: 10, y: 20 } } });
+        const unchanged = adapter.getState().lastSettlement;
+        adapter.observeState({ realtime: { tick: 4, receivedAtMs: 1150, self: { x: 110, y: 20 } } });
         const state = adapter.getState();
         return [
           vector.ok,
@@ -19295,11 +19317,14 @@ async function runSelfTest() {
           action.kind,
           commands.join(','),
           state.sentCount,
+          unchanged.ok,
+          unchanged.reason,
           state.lastSettlement.ok,
+          state.lastSettlement.reason,
           !commands.join(',').includes('shoot')
         ].join('|');
       })(),
-      want: 'true|1|0|velocity|vel 1 0|1|true|true'
+      want: 'true|1|0|velocity|vel 1 0|1|false|movement-not-observed|true|movement-progress-observed|true'
     },
     {
       name: 'browserless movement execution timing tracks old command transition before its replacement',
@@ -29665,6 +29690,16 @@ async function runSelfTest() {
           ok: true,
           attempts: [{ ok: true, response: { hp: null } }]
         }, { minHp: null });
+        const lastDecisionEvent = attachConfirmedLeaveEvidence({
+          reason: 'combat-action-settlement-stalled',
+          detail: { lastDecision: { self: { hp: 97 } } }
+        }, {
+          ok: true,
+          attempts: [{ ok: true, response: { hp: 94, max_hp: 100 } }]
+        }, {
+          completedAtMs: Date.parse('2026-07-27T16:30:54.895Z'),
+          minHp: 94
+        });
         return [
           event.leaveConfirmation.at,
           event.leaveConfirmation.selfHp,
@@ -29672,10 +29707,78 @@ async function runSelfTest() {
           event.leaveConfirmation.triggerSelfHp,
           event.leaveConfirmation.hpLossAfterTrigger,
           event.leaveConfirmation.source,
-          missingHpEvent.leaveConfirmation === undefined
+          missingHpEvent.leaveConfirmation === undefined,
+          lastDecisionEvent.leaveConfirmation.triggerSelfHp,
+          lastDecisionEvent.leaveConfirmation.selfHp,
+          lastDecisionEvent.leaveConfirmation.hpLossAfterTrigger
         ].join('|');
       })(),
-      want: '2026-07-17T01:22:34.719Z|77|100|80|3|leave-response|true'
+      want: '2026-07-17T01:22:34.719Z|77|100|80|3|leave-response|true|97|94|3'
+    },
+    {
+      name: 'browserless compact movement-stall exit reads production lastDecision shape',
+      got: (() => {
+        const status = buildCompactBrowserlessStatus({
+          recentExits: [{
+            at: '2026-07-27T16:30:53.589Z',
+            reason: 'combat-action-settlement-stalled',
+            shouldLeave: true,
+            leaveConfirmation: {
+              at: '2026-07-27T16:30:54.895Z',
+              selfHp: 94,
+              maxHp: 100,
+              triggerSelfHp: 97,
+              hpLossAfterTrigger: 3,
+              source: 'leave-response'
+            },
+            detail: {
+              lastDecision: {
+                self: { userId: 28886, name: 'self', hp: 97, maxHp: 100 },
+                target: { userId: 1789, name: 'Beicho', hp: 73, drop: 167, distance: 12321 },
+                combat: {
+                  startedAt: '2026-07-27T16:30:27.636Z',
+                  durationMs: 25953,
+                  target: { userId: 1789, name: 'Beicho', hp: 73, drop: 167, distance: 12321 },
+                  metrics: {
+                    engagementId: '1789:1785169827636',
+                    targetId: '1789',
+                    targetName: 'Beicho',
+                    startedAt: Date.parse('2026-07-27T16:30:27.636Z'),
+                    lastObservedAt: Date.parse('2026-07-27T16:30:53.589Z'),
+                    initialSelfHp: 100,
+                    lastSelfHp: 97,
+                    initialTargetHp: 79,
+                    lastTargetHp: 73,
+                    selfDamage: 3,
+                    targetDamage: 6,
+                    requestedShots: 41,
+                    acceptedShots: 30,
+                    confirmedHits: 2,
+                    totalStaminaSpent: 33687
+                  }
+                }
+              }
+            }
+          }]
+        }, parseBrowserlessRunnerArgs([], {}));
+        const battle = status.recentExit.battle;
+        return [
+          status.recentExit.target.name,
+          status.recentExit.target.userId,
+          battle.target.name,
+          battle.target.drop,
+          battle.selfHpStart,
+          battle.selfHpEnd,
+          battle.targetHpStart,
+          battle.targetHpEnd,
+          battle.requestedShots,
+          battle.acceptedShots,
+          battle.confirmedHits,
+          status.recentExit.leaveConfirmation.selfHp,
+          status.recentExit.leaveConfirmation.triggerSelfHp
+        ].join('|');
+      })(),
+      want: 'Beicho|1789|Beicho|167|100|97|79|73|41|30|2|94|97'
     },
     {
       name: 'browserless compact injury exit separates trigger jump from battle hp and confirmed leave hp',
