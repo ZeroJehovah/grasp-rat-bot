@@ -1680,6 +1680,7 @@ function compactCombat(combat) {
   const dataGaps = Array.isArray(combat.dataGaps) ? combat.dataGaps : [];
   return {
     ok: compactBoolean(combat.ok),
+    actionEligible: compactBoolean(combat.actionEligible),
     dryRun: compactBoolean(combat.dryRun),
     liveEnabled: compactBoolean(combat.liveEnabled),
     authority: compactString(combat.authority, 48),
@@ -1750,6 +1751,7 @@ function recentBattleActivity(activity, nowMs, windowMs) {
 
 function compactBattleStatus(normalized, game, action, decision, combat, options = {}) {
   if (!game?.inGame) return null;
+  if (combat?.actionEligible === false && !combat?.target) return null;
   const kind = String(action?.kind || decision?.kind || decision?.actionKind || '');
   const band = String(decision?.band || '');
   const combatLike = kind === 'attack' || kind === 'combat-live' || band === 'combat';
@@ -2673,12 +2675,21 @@ function buildCompactBrowserlessStatus(state, config = {}) {
   const inputCurrent = state?.current && typeof state.current === 'object' ? state.current : {};
   const decision = compactDecision(inputCurrent.decision || current.decision);
   const game = compactGameStatus(normalized);
+  const combat = compactCombat(current.combatSummary || current.decision?.combat);
+  const executedAction = compactAction(normalized.runner.currentAction) || compactAction(current.action);
+  const rejectedCombatDecision = Boolean(
+    decision?.action?.kind === 'combat-live'
+      && combat?.actionEligible === false
+      && !combat.target
+  );
   // The decision input and nearby panel are one realtime observation. Prefer
   // its action summary so a later action-result callback cannot leave the UI
-  // showing an older wait state beside newly observed loot.
+  // showing an older wait state beside newly observed loot. When the combat
+  // adapter explicitly rejects a missing target, the executed stop is newer
+  // authority than the retained arbitration action.
   const action = game.inGame
-    ? (decision?.action || compactAction(normalized.runner.currentAction) || compactAction(current.action))
-    : (compactAction(normalized.runner.currentAction) || compactAction(current.action) || decision?.action);
+    ? (rejectedCombatDecision ? (executedAction || decision?.action) : (decision?.action || executedAction))
+    : (executedAction || decision?.action);
   const recentExits = Array.isArray(normalized.recentExits) ? normalized.recentExits : [];
   const recentActualExit = latestMatchingRecentActualExit(recentExits, normalized.stats?.lastExit);
   const loginPointSafetyDetail = compactLoginPointSafetyDetail(normalized.loginPointSafety || {}, normalized);
@@ -2687,7 +2698,6 @@ function buildCompactBrowserlessStatus(state, config = {}) {
   const sourceIp = normalized.network.sourceIp || '';
   const sourceIps = Array.isArray(normalized.network.sourceIps) ? normalized.network.sourceIps : [];
   const sourceIpIndex = sourceIp ? sourceIps.findIndex(item => item === sourceIp) + 1 : 0;
-  const combat = compactCombat(current.combatSummary || current.decision?.combat);
   const recentExit = compactExit(recentActualExit);
   const displayCombat = !game.inGame && recentExit?.battle?.target
     ? {

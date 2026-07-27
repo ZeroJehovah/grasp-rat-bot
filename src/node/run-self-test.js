@@ -27727,6 +27727,49 @@ async function runSelfTest() {
       want: 'true|2026-07-12T01:13:00.000Z|15000|5600|20000|self|17000000|enemy|3200|true|true|2026-07-12T01:14:00.000Z|true'
     },
     {
+      name: 'browserless compact status hides rejected stale combat presentation',
+      got: (() => {
+        const compact = buildCompactBrowserlessStatus({
+          session: { userId: 77, tokenPresent: true, authenticated: true },
+          runner: {
+            running: true,
+            currentAction: { kind: 'stop', reason: 'combat-live-no-target' }
+          },
+          current: {
+            self: { userId: 77, name: 'self', hp: 100, authority: 'realtime' },
+            decision: {
+              kind: 'combat-live',
+              band: 'combat',
+              reason: 'combat-live-realtime',
+              at: '2026-07-27T02:38:30.547Z',
+              action: {
+                kind: 'combat-live',
+                band: 'combat',
+                reason: 'combat-live-realtime',
+                target: { userId: 34711, name: 'xuanze00', hp: 100, distance: 9656 }
+              }
+            },
+            combatSummary: {
+              ok: true,
+              actionEligible: false,
+              target: null,
+              dataGaps: ['no-realtime-bullet-evidence', 'missing-self-or-target']
+            }
+          },
+          stats: { currentSession: { online: true } }
+        }, {});
+        return [
+          compact.game.inGame,
+          compact.action.kind,
+          compact.action.reason,
+          compact.combat.actionEligible,
+          compact.combat.target === null,
+          compact.battle === null
+        ].join('|');
+      })(),
+      want: 'true|stop|combat-live-no-target|false|true|true'
+    },
+    {
       name: 'browserless compact status exposes session offline and today stats',
       got: withTempDirForTest(async dir => {
         const config = parseBrowserlessRunnerArgs(['--data-dir', dir], {});
