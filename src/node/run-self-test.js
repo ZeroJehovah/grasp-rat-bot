@@ -195,6 +195,9 @@ const {
   estimatedHighDropQuotaCore,
   formatSpentStaminaCore,
   groupChatMessagesForDisplay,
+  interpolateMapMarkerCore,
+  mapAnimationProgressCore,
+  mapMarkerKeyCore,
   missCloseExitReasonTextCore,
   nearbyCoinIconCore,
   panelSessionFlagsCore,
@@ -30020,6 +30023,44 @@ async function runSelfTest() {
       want: '401|200|true|true|true|200|true|12|true|true|true|200|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|200|true|1'
     },
     {
+      name: 'browserless web panel animates keyed map markers between status refreshes',
+      got: (() => {
+        const panelScript = renderBrowserlessWebPanel().match(/<script>([\s\S]*?)<\/script>/)?.[1] || '';
+        const halfway = mapAnimationProgressCore(130, 260);
+        const interpolated = interpolateMapMarkerCore(
+          { mapKey: 'player:7', px: 110, py: 220, label: '目标' },
+          { px: 10, py: 20 },
+          halfway
+        );
+        const withoutPrevious = interpolateMapMarkerCore({ px: 110, py: 220 }, null, 0);
+        return [
+          BROWSERLESS_WEB_PANEL_VERSION,
+          mapMarkerKeyCore('coin', 0),
+          mapMarkerKeyCore('player', '', 'alice'),
+          mapMarkerKeyCore('', 1),
+          mapAnimationProgressCore(0, 260),
+          halfway.toFixed(3),
+          mapAnimationProgressCore(260, 260),
+          interpolated.px.toFixed(1),
+          interpolated.py.toFixed(1),
+          withoutPrevious.px,
+          withoutPrevious.py,
+          panelScript.includes('const MAP_MOVE_ANIMATION_MS = 260;'),
+          panelScript.includes('const mapAnimationProgress = function mapAnimationProgressCore'),
+          panelScript.includes("mapKey: mapMarkerKey('coin', item?.[0])"),
+          panelScript.includes("mapKey: mapMarkerKey('player', item?.[9], name)"),
+          panelScript.includes('function startMapMarkerAnimation(scene, markers, animate = true)'),
+          panelScript.includes('renderAtProgress(0);'),
+          panelScript.includes('mapAnimationFrame = requestAnimationFrame(step);'),
+          panelScript.includes("window.matchMedia('(prefers-reduced-motion: reduce)').matches"),
+          panelScript.includes('mapHitTargets = markers;'),
+          panelScript.includes('renderTargetMap(latestMapStatus, { animate: false, resetPositions: true })'),
+          /function stopAutoRefresh\(\)\s*\{\s*cancelMapMarkerAnimation\(true\);/.test(panelScript)
+        ].join('|');
+      })(),
+      want: '2026.07.29.1|coin:0|player:alice||0|0.875|1|97.5|195.0|110|220|true|true|true|true|true|true|true|true|true|true|true'
+    },
+    {
       name: 'browserless status server adds dynamic whitelist players by name',
       got: (async () => {
         const names = [];
@@ -30956,7 +30997,7 @@ async function runSelfTest() {
             < panelScript.indexOf("if (/combat/i.test(text)) return '正在处理打架';")
         ].join('|');
       })(),
-      want: '2026.07.22.2|true|true|true'
+      want: '2026.07.29.1|true|true|true'
     },
     {
       name: 'browserless restart drain wait explains planned service restart',
@@ -31405,7 +31446,7 @@ async function runSelfTest() {
           !panelScript.includes("setRichText('roleTitleMeta', [{ text: '已离线', className: 'muted' }], 'muted');")
         ].join('|');
       })(),
-      want: '2026.07.27.3|true|true|true|true|true|true'
+      want: '2026.07.29.1|true|true|true|true|true|true'
     },
     {
       name: 'browserless runner self-test passes',

@@ -1,8 +1,42 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.28.2';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.29.1';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
+
+function mapMarkerKeyCore(kind, primary, fallback = '') {
+  const normalizedKind = kind === null || kind === undefined || kind === '' ? '' : String(kind);
+  const normalizedPrimary = primary === null || primary === undefined || primary === '' ? '' : String(primary);
+  const normalizedFallback = fallback === null || fallback === undefined || fallback === '' ? '' : String(fallback);
+  const identity = normalizedPrimary || normalizedFallback;
+  return normalizedKind && identity ? `${normalizedKind}:${identity}` : '';
+}
+
+function mapAnimationProgressCore(elapsedMs, durationMs) {
+  const duration = Number(durationMs);
+  if (!Number.isFinite(duration) || duration <= 0) return 1;
+  const elapsed = Number(elapsedMs);
+  const linear = Math.max(0, Math.min(1, Number.isFinite(elapsed) ? elapsed / duration : 1));
+  return 1 - Math.pow(1 - linear, 3);
+}
+
+function interpolateMapMarkerCore(marker, previous, progress) {
+  const nextX = Number(marker?.px);
+  const nextY = Number(marker?.py);
+  if (!Number.isFinite(nextX) || !Number.isFinite(nextY)) return marker;
+  const previousX = Number(previous?.px);
+  const previousY = Number(previous?.py);
+  if (!Number.isFinite(previousX) || !Number.isFinite(previousY)) {
+    return { ...marker, px: nextX, py: nextY };
+  }
+  const parsedProgress = Number(progress);
+  const clampedProgress = Math.max(0, Math.min(1, Number.isFinite(parsedProgress) ? parsedProgress : 1));
+  return {
+    ...marker,
+    px: previousX + (nextX - previousX) * clampedProgress,
+    py: previousY + (nextY - previousY) * clampedProgress
+  };
+}
 
 function highDropRankValueCore(item) {
   for (const index of [3, 2, 1]) {
@@ -495,6 +529,7 @@ function renderBrowserlessWebPanel() {
     const PANEL_COLLAPSE_KEY = 'graspRatBrowserlessPanelCollapsedV1';
     const AUTO_REFRESH_MS = 3000;
     const MAP_STALE_MS = 15000;
+    const MAP_MOVE_ANIMATION_MS = 260;
     let autoRefreshTimer = 0;
     let countdownTimer = 0;
     let refreshInFlight = null;
@@ -506,6 +541,9 @@ function renderBrowserlessWebPanel() {
     let latestMapStatus = null;
     let mapHitTargets = [];
     let mapEmptyReason = '';
+    let mapAnimationFrame = 0;
+    let mapRenderedMarkerPositions = new Map();
+    let mapRenderedCanvasSize = 0;
     let panelCollapseState = readPanelCollapseState();
 
     const groupChatMessagesForDisplay = ${groupChatMessagesForDisplay.toString()};
@@ -517,6 +555,9 @@ function renderBrowserlessWebPanel() {
     const lastExitPanelVisible = ${lastExitPanelVisibleCore.toString().replace('panelSessionFlagsCore', 'panelSessionFlags')};
     const missCloseExitReasonText = ${missCloseExitReasonTextCore.toString()};
     const restartDrainBlockedReasonText = ${restartDrainBlockedReasonTextCore.toString()};
+    const mapMarkerKey = ${mapMarkerKeyCore.toString()};
+    const mapAnimationProgress = ${mapAnimationProgressCore.toString()};
+    const interpolateMapMarker = ${interpolateMapMarkerCore.toString()};
 
     const value = v => v === null || v === undefined || v === '' ? '--' : String(v);
     const number = v => v === null || v === undefined || v === '' ? null : (Number.isFinite(Number(v)) ? Number(v) : null);
@@ -1788,21 +1829,129 @@ function renderBrowserlessWebPanel() {
         : (marker.targetRole === 'afk' ? '#4ade80' : (marker.kind === 'coin' ? '#fbbf24' : '#eef2f5'));
       context.fillText(marker.label, x, y);
     }
-    function renderTargetMap(status) {
+    function cancelMapMarkerAnimation(resetPositions = false) {
+      if (mapAnimationFrame && typeof cancelAnimationFrame === 'function') {
+        cancelAnimationFrame(mapAnimationFrame);
+      }
+      mapAnimationFrame = 0;
+      if (resetPositions) {
+        mapRenderedMarkerPositions = new Map();
+        mapRenderedCanvasSize = 0;
+      }
+    }
+    function rememberMapMarkerPositions(markers, canvasSize) {
+      mapRenderedMarkerPositions = new Map(
+        markers
+          .filter(marker => marker.mapKey)
+          .map(marker => [marker.mapKey, { px: marker.px, py: marker.py }])
+      );
+      mapRenderedCanvasSize = canvasSize;
+    }
+    function mapAnimationNow() {
+      return typeof performance !== 'undefined' && typeof performance.now === 'function'
+        ? performance.now()
+        : Date.now();
+    }
+    function mapMotionAnimationAllowed() {
+      if (typeof requestAnimationFrame !== 'function') return false;
+      if (document.visibilityState && document.visibilityState !== 'visible') return false;
+      return !(typeof window.matchMedia === 'function'
+        && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+    }
+    function mapMarkerPositionsMoved(markers, previousPositions) {
+      return markers.some(marker => {
+        const previous = marker.mapKey ? previousPositions.get(marker.mapKey) : null;
+        return previous && Math.hypot(marker.px - previous.px, marker.py - previous.py) > .35;
+      });
+    }
+    function paintTargetMapScene(scene, markers) {
+      const { context, size, status, visibleRange, attackRange, emptyReason } = scene;
+      context.clearRect(0, 0, size, size);
+      const frame = drawMapBase(context, size, attackRange, visibleRange || 1);
+      context.save();
+      context.beginPath();
+      context.arc(frame.center, frame.center, frame.radius, 0, Math.PI * 2);
+      context.clip();
+      const coinMarkers = markers.filter(marker => marker.kind === 'coin');
+      const routeMarkers = coinMarkers.filter(marker => marker.routeOrder > 0).sort((a, b) => a.routeOrder - b.routeOrder);
+      drawMapTargetPath(context, frame.center, routeMarkers.length ? routeMarkers : coinMarkers.filter(marker => marker.selected), '#fbbf24');
+      const playerTarget = markers.find(marker => marker.targetRole === 'combat')
+        || markers.find(marker => marker.targetRole === 'afk');
+      if (playerTarget) drawMapTargetPath(context, frame.center, [playerTarget], playerTarget.targetRole === 'combat' ? '#fb7185' : '#4ade80');
+      for (const marker of markers.filter(marker => !marker.selected)) drawMapMarker(context, marker);
+      for (const marker of markers.filter(marker => marker.selected)) drawMapMarker(context, marker);
+      drawMapMarker(context, {
+        px: frame.center,
+        py: frame.center,
+        radius: 5,
+        color: '#eef2f5',
+        direction: mapVelocity(status.self?.vx, status.self?.vy),
+        invulnerable: false
+      });
+      context.restore();
+      for (const marker of markers.filter(marker => marker.label && !marker.selected && !marker.targetRole)) drawMapLabel(context, marker, size);
+      for (const marker of markers.filter(marker => marker.label && (marker.selected || marker.targetRole))) drawMapLabel(context, marker, size);
+      mapHitTargets = markers;
+      if (emptyReason) {
+        context.fillStyle = '#9ba7b4';
+        context.font = '12px system-ui,-apple-system,Segoe UI,sans-serif';
+        context.textAlign = 'center';
+        context.textBaseline = 'middle';
+        context.fillText(emptyReason, frame.center, frame.center + 24);
+      }
+    }
+    function startMapMarkerAnimation(scene, markers, animate = true) {
+      cancelMapMarkerAnimation(false);
+      const previousPositions = mapRenderedMarkerPositions;
+      const shouldAnimate = animate
+        && mapRenderedCanvasSize === scene.size
+        && mapMotionAnimationAllowed()
+        && mapMarkerPositionsMoved(markers, previousPositions);
+      const renderAtProgress = progress => {
+        const renderedMarkers = markers.map(marker => (
+          interpolateMapMarker(marker, marker.mapKey ? previousPositions.get(marker.mapKey) : null, progress)
+        ));
+        paintTargetMapScene(scene, renderedMarkers);
+        rememberMapMarkerPositions(renderedMarkers, scene.size);
+      };
+      if (!shouldAnimate) {
+        renderAtProgress(1);
+        return;
+      }
+      renderAtProgress(0);
+      const startedAt = mapAnimationNow();
+      const step = frameAt => {
+        const frameTime = Number(frameAt);
+        const elapsedMs = (Number.isFinite(frameTime) ? frameTime : mapAnimationNow()) - startedAt;
+        const progress = mapAnimationProgress(elapsedMs, MAP_MOVE_ANIMATION_MS);
+        renderAtProgress(progress);
+        if (progress < 1) {
+          mapAnimationFrame = requestAnimationFrame(step);
+        } else {
+          mapAnimationFrame = 0;
+        }
+      };
+      mapAnimationFrame = requestAnimationFrame(step);
+    }
+    function renderTargetMap(status, options = {}) {
       latestMapStatus = status || null;
       const canvas = document.getElementById('targetMap');
       if (!canvas) return;
+      if (options.resetPositions) cancelMapMarkerAnimation(true);
       const prepared = prepareMapCanvas(canvas);
       if (!prepared) return;
       const { context, size } = prepared;
       const visibleRange = Math.max(0, number(status?.nearby?.vr) || 0);
       const attackRange = Math.max(0, number(status?.nearby?.ar) || 0);
-      const frame = drawMapBase(context, size, attackRange, visibleRange || 1);
+      const frame = { center: size / 2, radius: Math.max(1, size / 2 - 2) };
       const unavailable = mapUnavailableReason(status);
       mapHitTargets = [];
       mapEmptyReason = unavailable;
       hideMapTooltip();
       if (unavailable) {
+        cancelMapMarkerAnimation(true);
+        context.clearRect(0, 0, size, size);
+        drawMapBase(context, size, attackRange, visibleRange || 1);
         setMapHeader(unavailable, visibleRange, 0, 0);
         context.fillStyle = '#9ba7b4';
         context.font = '12px system-ui,-apple-system,Segoe UI,sans-serif';
@@ -1828,6 +1977,7 @@ function renderBrowserlessWebPanel() {
         if (Math.hypot(dx, dy) > visibleRange * 1.01) continue;
         const amount = Math.max(0, number(item?.[1]) || 0);
         markers.push({
+          mapKey: mapMarkerKey('coin', item?.[0]),
           px: frame.center + dx * scale,
           py: frame.center + dy * scale,
           radius: Math.min(5.5, 2.5 + Math.log2(amount + 1) * .55),
@@ -1859,6 +2009,7 @@ function renderBrowserlessWebPanel() {
           ? name + ' HP ' + integer(item?.[1])
           : (targetRole === 'afk' ? name + ' Drop ' + integer(item?.[3]) : (recordNames.has(name) ? name : ''));
         markers.push({
+          mapKey: mapMarkerKey('player', item?.[9], name),
           px: frame.center + dx * scale,
           py: frame.center + dy * scale,
           radius: 4.5,
@@ -1877,41 +2028,21 @@ function renderBrowserlessWebPanel() {
           ].filter(Boolean).join(String.fromCharCode(10))
         });
       }
-      context.save();
-      context.beginPath();
-      context.arc(frame.center, frame.center, frame.radius, 0, Math.PI * 2);
-      context.clip();
-      const coinMarkers = markers.filter(marker => marker.kind === 'coin');
-      const routeMarkers = coinMarkers.filter(marker => marker.routeOrder > 0).sort((a, b) => a.routeOrder - b.routeOrder);
-      drawMapTargetPath(context, frame.center, routeMarkers.length ? routeMarkers : coinMarkers.filter(marker => marker.selected), '#fbbf24');
-      const playerTarget = markers.find(marker => marker.targetRole === 'combat')
-        || markers.find(marker => marker.targetRole === 'afk');
-      if (playerTarget) drawMapTargetPath(context, frame.center, [playerTarget], playerTarget.targetRole === 'combat' ? '#fb7185' : '#4ade80');
-      for (const marker of markers.filter(marker => !marker.selected)) drawMapMarker(context, marker);
-      for (const marker of markers.filter(marker => marker.selected)) drawMapMarker(context, marker);
-      drawMapMarker(context, {
-        px: frame.center,
-        py: frame.center,
-        radius: 5,
-        color: '#eef2f5',
-        direction: mapVelocity(status.self?.vx, status.self?.vy),
-        invulnerable: false
-      });
-      context.restore();
-      for (const marker of markers.filter(marker => marker.label && !marker.selected && !marker.targetRole)) drawMapLabel(context, marker, size);
-      for (const marker of markers.filter(marker => marker.label && (marker.selected || marker.targetRole))) drawMapLabel(context, marker, size);
-      mapHitTargets = markers;
-      if ((coinRows.length || playerRows.length) && !markers.length) {
-        mapEmptyReason = '目标缺少坐标';
-        setMapHeader(mapEmptyReason, visibleRange, 0, 0);
-        context.fillStyle = '#9ba7b4';
-        context.font = '12px system-ui,-apple-system,Segoe UI,sans-serif';
-        context.textAlign = 'center';
-        context.textBaseline = 'middle';
-        context.fillText(mapEmptyReason, frame.center, frame.center + 24);
+      const emptyReason = (coinRows.length || playerRows.length) && !markers.length ? '目标缺少坐标' : '';
+      mapEmptyReason = emptyReason;
+      if (emptyReason) {
+        setMapHeader(emptyReason, visibleRange, 0, 0);
       } else {
-        setMapHeader('', visibleRange, markers.filter(marker => marker.color === '#fbbf24').length, markers.filter(marker => marker.color !== '#fbbf24').length);
+        setMapHeader('', visibleRange, markers.filter(marker => marker.kind === 'coin').length, markers.filter(marker => marker.kind === 'player').length);
       }
+      startMapMarkerAnimation({
+        context,
+        size,
+        status,
+        visibleRange,
+        attackRange,
+        emptyReason
+      }, markers, options.animate !== false);
     }
     function hideMapTooltip() {
       const tooltip = document.getElementById('mapTooltip');
@@ -2875,7 +3006,9 @@ function renderBrowserlessWebPanel() {
       if (latestChatStatus?.snapshot?.lastAt) setText('chatRefreshAt', elapsedSecondsText(latestChatStatus.snapshot.lastAt));
       if (latestMapStatus) {
         const nextMapEmptyReason = mapUnavailableReason(latestMapStatus);
-        if (nextMapEmptyReason === '地图数据已过期' && nextMapEmptyReason !== mapEmptyReason) renderTargetMap(latestMapStatus);
+        if (nextMapEmptyReason === '地图数据已过期' && nextMapEmptyReason !== mapEmptyReason) {
+          renderTargetMap(latestMapStatus, { animate: false, resetPositions: true });
+        }
       }
     }
     function isPageVisibleForRefresh() {
@@ -2904,6 +3037,7 @@ function renderBrowserlessWebPanel() {
       if (!countdownTimer) countdownTimer = setInterval(updateCountdownNodes, 1000);
     }
     function stopAutoRefresh() {
+      cancelMapMarkerAnimation(true);
       if (!autoRefreshTimer) return;
       clearInterval(autoRefreshTimer);
       autoRefreshTimer = 0;
@@ -3001,12 +3135,12 @@ function renderBrowserlessWebPanel() {
     const mapStage = document.getElementById('mapStage');
     if (mapStage && typeof ResizeObserver === 'function') {
       const mapResizeObserver = new ResizeObserver(() => {
-        if (latestMapStatus) renderTargetMap(latestMapStatus);
+        if (latestMapStatus) renderTargetMap(latestMapStatus, { animate: false, resetPositions: true });
       });
       mapResizeObserver.observe(mapStage);
     } else {
       window.addEventListener('resize', () => {
-        if (latestMapStatus) renderTargetMap(latestMapStatus);
+        if (latestMapStatus) renderTargetMap(latestMapStatus, { animate: false, resetPositions: true });
       });
     }
     initPanelCollapse();
@@ -3029,8 +3163,11 @@ module.exports = {
   groupBlockingFactorsCore,
   groupChatMessagesForDisplay,
   highDropRankValueCore,
+  interpolateMapMarkerCore,
   isStaminaExhaustionExitReasonCore,
   lastExitPanelVisibleCore,
+  mapAnimationProgressCore,
+  mapMarkerKeyCore,
   missCloseExitReasonTextCore,
   nearbyCoinIconCore,
   panelSessionFlagsCore,
