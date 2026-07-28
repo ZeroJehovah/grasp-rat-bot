@@ -29867,7 +29867,18 @@ async function runSelfTest() {
               decision: {
                 target: { userId: 8, name: 'enemy', hp: 46 },
                 combat: {
-                  exit: { selfHp: 41, targetHp: 46, hpGap: 5, threshold: 50, minHpGap: 5 }
+                  exit: {
+                    selfHp: 41,
+                    targetHp: 73,
+                    hpGap: 32,
+                    threshold: 50,
+                    minHpGap: 5,
+                    targetHpSource: 'engaged-target-average',
+                    engagedTargets: [
+                      { id: '8', name: 'enemy', hp: 46, source: 'combat-target' },
+                      { id: '9', name: 'pressure', hp: 100, source: 'pressure-target' }
+                    ]
+                  }
                 }
               }
             }
@@ -29879,10 +29890,12 @@ async function runSelfTest() {
           status.recentExit.targetHp,
           status.recentExit.hpGap,
           status.recentExit.threshold,
-          status.recentExit.minHpGap
+          status.recentExit.minHpGap,
+          status.recentExit.targetHpSource,
+          status.recentExit.engagedTargets.map(target => target.name + ':' + target.hp).join(',')
         ].join('|');
       })(),
-      want: 'combat-low-hp-disadvantage-leave|41|46|5|50|5'
+      want: 'combat-low-hp-disadvantage-leave|41|73|32|50|5|engaged-target-average|enemy:46,pressure:100'
     },
     {
       name: 'browserless shutdown exit does not reuse an older combat battle summary',
@@ -30048,10 +30061,13 @@ async function runSelfTest() {
         return [
           panelScript.includes("addRow(rowsOut, '退出威胁', targetLabel(exitThreat), true)"),
           panelScript.includes("function hpTriggeredExit(status, reason)"),
-          panelScript.includes("hpTriggeredExit(status, reason) ? '退出触发血量' : '退出时血量'")
+          panelScript.includes("hpTriggeredExit(status, reason) ? '退出触发血量' : '退出时血量'"),
+          panelScript.includes('if (engagedTargets.length > 1)'),
+          panelScript.includes("parts.push(name + ' ' + number(target.hp))"),
+          panelScript.includes('if (engagedTargets.length <= 1 && hpGap !== null)')
         ].join('|');
       })(),
-      want: 'true|true|true'
+      want: 'true|true|true|true|true|true'
     },
     {
       name: 'browserless miss-close exit preserves quantitative reason detail',

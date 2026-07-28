@@ -1762,12 +1762,28 @@ function compactCombat(combat) {
           targetHp: compactNumber(combat.exit.targetHp),
           hpGap: compactNumber(combat.exit.hpGap),
           threshold: compactNumber(combat.exit.threshold),
-          minHpGap: compactNumber(combat.exit.minHpGap)
+          minHpGap: compactNumber(combat.exit.minHpGap),
+          targetHpSource: compactString(combat.exit.targetHpSource, 80),
+          engagedTargets: compactEngagedExitTargets(combat.exit.engagedTargets)
         }
       : null,
     dataGaps: dataGaps.slice(0, 5).map(item => compactString(item, 80)),
     dataGapCount: dataGaps.length
   };
+}
+
+function compactEngagedExitTargets(value) {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, 8).map(item => {
+    if (!item || typeof item !== 'object') return null;
+    const id = item.id ?? item.userId ?? item.user_id ?? item.entityId ?? item.entity_id;
+    return {
+      id: id === null || id === undefined || id === '' ? '' : compactString(id, 80),
+      name: compactString(item.name || item.label, 80),
+      hp: compactNumber(item.hp),
+      source: compactString(item.source, 80)
+    };
+  }).filter(Boolean);
 }
 
 function compactBattleActor(value, fallback = {}) {
@@ -2304,6 +2320,8 @@ function compactExit(event) {
     hpGap: compactNumber(event.hpGap ?? detail.hpGap ?? combatExit.hpGap),
     threshold: compactNumber(event.threshold ?? detail.threshold ?? combatExit.threshold),
     minHpGap: compactNumber(event.minHpGap ?? detail.minHpGap ?? combatExit.minHpGap),
+    targetHpSource: compactString(combatExit.targetHpSource, 80),
+    engagedTargets: compactEngagedExitTargets(combatExit.engagedTargets),
     missClose: Object.keys(missClose).length
       ? {
           timeoutMs: compactNumber(missClose.timeoutMs),

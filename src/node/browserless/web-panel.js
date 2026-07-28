@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.28.1';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.28.2';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function highDropRankValueCore(item) {
@@ -780,12 +780,22 @@ function renderBrowserlessWebPanel() {
         : (status.recentExit || status.combat?.exit || {});
       const selfHp = number(exit.selfHp);
       const targetHp = number(exit.targetHp);
-      if (selfHp === null && targetHp === null) return '--';
+      const engagedTargets = Array.isArray(exit.engagedTargets)
+        ? exit.engagedTargets.filter(target => number(target?.hp) !== null)
+        : [];
+      if (selfHp === null && targetHp === null && !engagedTargets.length) return '--';
       const parts = [];
       if (selfHp !== null) parts.push('我方 ' + selfHp);
-      if (targetHp !== null) parts.push('敌方 ' + targetHp);
+      if (engagedTargets.length > 1) {
+        for (const target of engagedTargets) {
+          const name = target.name || (target.id ? '#' + target.id : '威胁');
+          parts.push(name + ' ' + number(target.hp));
+        }
+      } else if (targetHp !== null) {
+        parts.push('敌方 ' + targetHp);
+      }
       const hpGap = number(exit.hpGap);
-      if (hpGap !== null) parts.push('血差 ' + hpGap);
+      if (engagedTargets.length <= 1 && hpGap !== null) parts.push('血差 ' + hpGap);
       return parts.join(' / ');
     }
     function recentBattle(status) {
