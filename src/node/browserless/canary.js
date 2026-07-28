@@ -278,7 +278,6 @@ function warmBrowserlessRealtimeControl(decisionAdapterOptions = {}, options = {
     state.realtime.receivedAtMs = nowMs;
     state.fallback.receivedAtMs = nowMs;
     adapter.evaluateRealtime(state, {
-      ...decisionAdapterOptions,
       nowMs,
       controlMode: decisionAdapterOptions.controlMode || 'profit-live',
       combatEnabled: true,
@@ -1221,6 +1220,8 @@ async function runReadOnlyCanary(config, options = {}) {
       sentCount: 0,
       velocitySentCount: 0,
       velocityRepeatSentCount: 0,
+      velocityLogicalRefreshCount: 0,
+      velocityOwnershipSuppressedCount: 0,
       shootSentCount: 0,
       shootAcceptedCount: 0,
       shootUnackedCount: 0,
@@ -1535,7 +1536,6 @@ async function runReadOnlyCanary(config, options = {}) {
       const currentState = stateStore.getDecisionState?.(pending.observedAtMs)
         || stateStore.getState(pending.observedAtMs);
       decisionAdapter.refreshSnapshotObservation(currentState, {
-        ...runtimeDefaults,
         nowMs: pending.observedAtMs,
         controlMode,
         combatEnabled: config.combatEnabled
@@ -1613,6 +1613,8 @@ async function runReadOnlyCanary(config, options = {}) {
     result.actions.sentCount = Number(adapterState.sentCount || 0);
     result.actions.velocitySentCount = Number(adapterState.velocitySentCount || 0);
     result.actions.velocityRepeatSentCount = Number(adapterState.velocityRepeatSentCount || 0);
+    result.actions.velocityLogicalRefreshCount = Number(adapterState.velocityLogicalRefreshCount || 0);
+    result.actions.velocityOwnershipSuppressedCount = Number(adapterState.velocityOwnershipSuppressedCount || 0);
     result.actions.shootSentCount = Number(adapterState.shootSentCount || 0);
     result.actions.shootAcceptedCount = Number(adapterState.shootAcceptedCount || 0);
     result.actions.shootUnackedCount = Number(adapterState.shootUnackedCount || 0);
@@ -2097,7 +2099,6 @@ async function runReadOnlyCanary(config, options = {}) {
     let realtimeStages = null;
     const control = typeof decisionAdapter.evaluateRealtime === 'function'
       ? decisionAdapter.evaluateRealtime(currentState, {
-          ...runtimeDefaults,
           nowMs: atMs,
           controlMode,
           combatEnabled: config.combatEnabled,
@@ -2107,7 +2108,6 @@ async function runReadOnlyCanary(config, options = {}) {
           }
         })
       : decisionAdapter.evaluateCombat?.(currentState, {
-          ...runtimeDefaults,
           nowMs: atMs,
           controlMode,
           combatEnabled: config.combatEnabled
@@ -2467,6 +2467,7 @@ async function runReadOnlyCanary(config, options = {}) {
           return;
         }
         if (!ending) wsClosed = event;
+        decisionAdapter.patchState?.({ combatMovementStability: null });
         restoreDynamicWhitelistBattles('websocket-closed');
         clearPublishedTransport(transport, 'websocket-close');
         logWs('close', event || {});

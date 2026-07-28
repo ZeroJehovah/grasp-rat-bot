@@ -129,13 +129,7 @@ function behaviorLearningBaseKey(behavior, distance) {
   const shooting = String(dimensions.shootingPhase?.state || 'unknown');
   const stamina = String(dimensions.staminaPhase?.state || 'unknown');
   const style = String(dimensions.controlStyle?.state || 'unknown');
-  return [
-    `movement=${movement}`,
-    `shooting=${shooting}`,
-    `stamina=${stamina}`,
-    `style=${style}`,
-    `distance=${behaviorDistanceBand(distance)}`
-  ].join('|');
+  return `movement=${movement}|shooting=${shooting}|stamina=${stamina}|style=${style}|distance=${behaviorDistanceBand(distance)}`;
 }
 
 function behaviorLearningKey(behavior, distance, aimStrategy = 'all') {
@@ -149,7 +143,12 @@ function sampleDistance(sample) {
   const sy = Number(sample?.selfY);
   const tx = Number(sample?.x);
   const ty = Number(sample?.y);
-  return [sx, sy, tx, ty].every(Number.isFinite) ? Math.hypot(tx - sx, ty - sy) : null;
+  return Number.isFinite(sx)
+    && Number.isFinite(sy)
+    && Number.isFinite(tx)
+    && Number.isFinite(ty)
+    ? Math.hypot(tx - sx, ty - sy)
+    : null;
 }
 
 const MOVEMENT_DIRECTION_STATES = Object.freeze([

@@ -72,6 +72,7 @@ function buildRuntimeDefaults(config, combatLogEndpointConfigured) {
     combatTrajectoryCoverageMode: String(config.combatTrajectoryCoverageMode || 'live-single').trim().toLowerCase(),
     combatRobustDodgeEnabled: config.combatRobustDodgeEnabled !== false,
     combatCloseBandReserveEnabled: config.combatCloseBandReserveEnabled !== false,
+    combatMovementStabilityEnabled: config.combatMovementStabilityEnabled === true,
     combatLowValueActiveDropMax: 4,
     combatProactiveActiveKillStaminaBudgetMs: 100000,
     highValueCoinPriorityAmount: 10,

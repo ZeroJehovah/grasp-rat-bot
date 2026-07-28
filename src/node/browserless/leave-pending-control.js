@@ -47,7 +47,7 @@ function normalizedIncomingBullets(state, self, options = {}) {
   const selfId = targetId(self);
   return (state?.realtime?.bullets || [])
     .map(raw => {
-      const normalized = normalizeCombatBullet(raw, self, { ...options, currentTick });
+      const normalized = normalizeCombatBullet(raw, self, { currentTick });
       if (!normalized) return null;
       const owner = targetId({ userId: normalized.ownerId });
       if (!owner || (selfId && owner !== selfId)) normalized.incoming = true;
@@ -200,7 +200,9 @@ function buildLeavePendingCover(state = {}, pending = {}, options = {}) {
     if (triggerCover) return triggerCover;
   }
   const target = findLockedTarget(state, pending, self, options);
-  const bullets = normalizedIncomingBullets(state, self, options);
+  const bullets = Array.isArray(pending.normalizedIncomingBullets)
+    ? pending.normalizedIncomingBullets
+    : normalizedIncomingBullets(state, self, options);
   const executionTiming = state?.command?.shooting?.timing || state?.command?.shooting?.executionDelay || {};
   const movementExecutionTiming = state?.command?.movement?.timing || {};
   let dodge = bullets.length

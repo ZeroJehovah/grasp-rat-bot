@@ -6,6 +6,7 @@ const { StringDecoder } = require('string_decoder');
 const path = require('path');
 const { forEachJsonlEntry } = require('./browserless-log-summary');
 const { estimateAim } = require('../src/node/browserless/combat-adapter');
+const { attributeVelocityTransition } = require('../src/node/browserless/state-store');
 const {
   buildLowHpRecoveryThreatExitDecision,
   currentProfitThresholdEligibility,
@@ -26,7 +27,8 @@ const {
   contactEntryRiskCore,
   contactEntrySyntheticBulletCore,
   pickSafeClosingDodgeCore,
-  selectCombatMovementArbitrationCore
+  selectCombatMovementArbitrationCore,
+  stabilizeCombatMovementDirectionCore
 } = require('../src/strategy/combat-movement');
 const {
   buildTrajectoryCoveragePlanCore,
@@ -71,6 +73,7 @@ const { chooseStableOpportunityCore } = require('../src/strategy/opportunity-cho
 function parseArgs(argv) {
   const options = {
     file: '',
+    runnerFile: '',
     wsFile: '',
     startLine: 1,
     endLine: Infinity,
@@ -94,6 +97,7 @@ function parseArgs(argv) {
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--file') options.file = argv[++index] || '';
+    else if (arg === '--runner-file') options.runnerFile = argv[++index] || '';
     else if (arg === '--ws-file') options.wsFile = argv[++index] || '';
     else if (arg === '--start-line') options.startLine = Number(argv[++index] || 1);
     else if (arg === '--end-line') options.endLine = Number(argv[++index] || Infinity);
@@ -169,6 +173,19 @@ function selectedEntries(options) {
     fs.closeSync(descriptor);
   }
   return entries;
+}
+
+function runtimeLogDirectoryForBattle(file) {
+  const directory = path.dirname(file);
+  return path.basename(directory) === 'battles' ? path.dirname(directory) : directory;
+}
+
+function movementReplayLogFiles(options = {}) {
+  const directory = runtimeLogDirectoryForBattle(options.file || '');
+  return {
+    runnerFile: options.runnerFile || path.join(directory, 'runner.jsonl'),
+    wsFile: options.wsFile || path.join(directory, 'ws.jsonl')
+  };
 }
 
 function aimMiss(self, target, aim) {
@@ -1794,8 +1811,7 @@ function replayPendingMovementSchedule(rows, options = {}) {
   if (!rows.length) return { cases: 0, samples: [], accepted: false };
   const firstAt = Date.parse(rows[0].entry.at || '') - 1500;
   const lastAt = Date.parse(rows.at(-1).entry.at || '') + 1500;
-  const runnerFile = path.join(path.dirname(options.file), 'runner.jsonl');
-  const wsFile = path.join(path.dirname(options.file), 'ws.jsonl');
+  const { runnerFile, wsFile } = movementReplayLogFiles(options);
   if (!fs.existsSync(runnerFile) || !fs.existsSync(wsFile)) {
     return { cases: 0, samples: [], accepted: false, reason: 'missing-runner-or-ws-log' };
   }
@@ -1881,6 +1897,444 @@ function replayPendingMovementSchedule(rows, options = {}) {
     samples: samples.slice(0, 12),
     accepted: samples.length > 0
   };
+}
+
+function movementDirectionKey(direction = {}) {
+  return `${Math.sign(Number(direction.dx || 0))},${Math.sign(Number(direction.dy || 0))}`;
+}
+
+function movementDirectionFromSelf(self = {}) {
+  return {
+    dx: Math.sign(Number(self?.vx || 0)),
+    dy: Math.sign(Number(self?.vy || 0))
+  };
+}
+
+function movementPercentileSummary(values = []) {
+  const finite = values.map(Number).filter(Number.isFinite);
+  if (!finite.length) return { count: 0, median: null, p90: null, max: null };
+  return {
+    count: finite.length,
+    median: percentile(finite.slice(), 0.5),
+    p90: percentile(finite.slice(), 0.9),
+    max: Math.max(...finite)
+  };
+}
+
+function extractMovementCommand(entry) {
+  const detail = entry?.detail || {};
+  const action = detail.action || {};
+  const movement = action.movement || {};
+  const command = movement.command || (
+    action.command && String(action.command.type || '') === 'velocity' ? action.command : null
+  );
+  if (!command || String(command.type || '') !== 'velocity') return null;
+  // A skipped action repeats the previous logical command in its compact
+  // response; it is not a new causally independent velocity generation.
+  if (action.skipped === true || movement.skipped === true) return null;
+  const telemetry = command.movementTelemetry || movement.movementTelemetry || detail.movementTelemetry || {};
+  const at = Date.parse(command.sentAt || entry.at || '');
+  if (!Number.isFinite(at)) return null;
+  return {
+    at,
+    commandId: command.id ?? telemetry.commandId ?? null,
+    dx: Math.sign(Number(command.dx || 0)),
+    dy: Math.sign(Number(command.dy || 0)),
+    reason: String(command.reason || movement.reason || action.reason || ''),
+    sequence: 0,
+    requestedAtMs: numberOrNull(command.sentAtMs ?? telemetry.requestedAtMs) ?? at,
+    observedTick: numberOrNull(command.observedTick ?? telemetry.observedTick),
+    observedAtMs: numberOrNull(telemetry.frameReceivedAtMs ?? telemetry.observedAtMs),
+    directionGeneration: numberOrNull(command.directionGeneration ?? telemetry.directionGeneration),
+    frameReceivedToDecisionMs: numberOrNull(telemetry.frameReceivedToDecisionMs),
+    decisionToVelocitySendMs: numberOrNull(telemetry.decisionToVelocitySendMs),
+    observedTickAgeAtSendMs: numberOrNull(
+      telemetry.velocitySendObservedTickAgeMs
+        ?? telemetry.observedTickAgeAtSendMs
+        ?? telemetry.velocitySendObservedTickAgeMs
+    ),
+    pendingDepthAtSend: numberOrNull(telemetry.pendingDepthAtSend),
+    replacementsBeforeVisible: numberOrNull(telemetry.replacementsBeforeVisible),
+    ownership: telemetry.ownership || command.ownership || null
+  };
+}
+
+function replayMovementCommandLatency(options = {}) {
+  const rows = selectedEntries(options).filter(({ detail }) => !options.targetId
+    || String(detail.target?.userId ?? detail.target?.user_id ?? detail.combat?.target?.userId ?? '') === options.targetId);
+  if (!rows.length) {
+    return { mode: 'movement-command-latency', accepted: false, reason: 'no-selected-battle-rows' };
+  }
+  const { runnerFile, wsFile } = movementReplayLogFiles(options);
+  if (!fs.existsSync(runnerFile) || !fs.existsSync(wsFile)) {
+    return {
+      mode: 'movement-command-latency',
+      accepted: false,
+      reason: 'missing-runner-or-ws-log',
+      runnerFile,
+      wsFile
+    };
+  }
+  const firstAt = Date.parse(rows[0].entry.at || '') - 2000;
+  const lastAt = Date.parse(rows.at(-1).entry.at || '') + 2000;
+  const runId = String(rows[0].entry?.detail?.runId || rows[0].entry?.runId || '');
+  const commands = [];
+  forEachJsonlEntry(runnerFile, entry => {
+    const at = Date.parse(entry?.at || '');
+    if (!Number.isFinite(at) || at < firstAt || at > lastAt) return;
+    const entryRunId = String(entry?.detail?.runId || entry?.runId || '');
+    if (runId && entryRunId && entryRunId !== runId) return;
+    const command = extractMovementCommand(entry);
+    if (!command) return;
+    command.sequence = commands.length + 1;
+    commands.push(command);
+  });
+  commands.sort((left, right) => left.at - right.at || left.sequence - right.sequence);
+  commands.forEach((command, index) => { command.sequence = index + 1; });
+  const selfFrames = [];
+  forEachJsonlEntry(wsFile, entry => {
+    const at = Date.parse(entry?.at || '');
+    if (!Number.isFinite(at) || at < firstAt || at > lastAt) return;
+    const detail = entry?.detail || {};
+    const summary = detail.decodedSummary || null;
+    if (String(detail.decodedType || summary?.type || '') !== 'pos') return;
+    const self = summary?.self || null;
+    if (!self) return;
+    selfFrames.push({
+      at,
+      tick: numberOrNull(summary.tick ?? detail.decodedTick),
+      hp: numberOrNull(self.hp),
+      ...movementDirectionFromSelf(self),
+      x: numberOrNull(self.x),
+      y: numberOrNull(self.y)
+    });
+  });
+  selfFrames.sort((left, right) => left.at - right.at || Number(left.tick || 0) - Number(right.tick || 0));
+
+  // Attach the freshest observed tick to old command records that predate the
+  // telemetry fields. This is a measurement fallback, never a server-latency
+  // claim.
+  let frameCursor = 0;
+  for (const command of commands) {
+    while (frameCursor + 1 < selfFrames.length && selfFrames[frameCursor + 1].at <= command.at) frameCursor += 1;
+    const frame = selfFrames[frameCursor] || null;
+    if (command.observedTick === null && frame) {
+      command.observedTick = frame.tick;
+      command.observedAtMs = frame.at;
+    }
+  }
+
+  const transitions = [];
+  const pending = [];
+  let commandCursor = 0;
+  let previousDirection = null;
+  const maxPendingAgeMs = 5000;
+  for (const frame of selfFrames) {
+    while (commandCursor < commands.length && commands[commandCursor].at <= frame.at) {
+      const nextCommand = commands[commandCursor];
+      for (const prior of pending) {
+        if (prior.replacedByCommandId === null || prior.replacedByCommandId === undefined) {
+          prior.replacedByCommandId = nextCommand.commandId;
+          prior.replacedAtMs = nextCommand.at;
+          prior.replacedByDirection = { dx: nextCommand.dx, dy: nextCommand.dy };
+        }
+      }
+      pending.push(nextCommand);
+      commandCursor += 1;
+    }
+    const observed = { dx: frame.dx, dy: frame.dy };
+    const changed = !previousDirection || movementDirectionKey(previousDirection) !== movementDirectionKey(observed);
+    if (changed && previousDirection) {
+      const attribution = attributeVelocityTransition(pending, observed, {
+        receivedAtMs: frame.at,
+        tick: frame.tick
+      });
+      const transition = {
+        at: frame.at,
+        tick: frame.tick,
+        from: previousDirection,
+        to: observed,
+        ...attribution,
+        executionDelayTicks: attribution.attributionConfidence === 'exact' ? attribution.tickDelayUpper : null,
+        executionDelayMs: attribution.attributionConfidence === 'exact' ? attribution.wallDelayMsUpper : null
+      };
+      transitions.push(transition);
+      if (attribution.attributionConfidence !== 'ambiguous-reversal'
+        && attribution.latestCandidateSequence !== null
+        && attribution.latestCandidateSequence !== undefined) {
+        const settledSequences = new Set(pending
+          .filter(command => Number(command.sequence || 0) <= Number(attribution.latestCandidateSequence)
+            && movementDirectionKey(command) === movementDirectionKey(observed))
+          .map(command => Number(command.sequence || 0)));
+        for (let index = pending.length - 1; index >= 0; index -= 1) {
+          if (settledSequences.has(Number(pending[index].sequence || 0))) pending.splice(index, 1);
+        }
+      }
+    } else if (!changed) {
+      const observedKey = movementDirectionKey(observed);
+      for (let index = pending.length - 1; index >= 0; index -= 1) {
+        if (movementDirectionKey(pending[index]) === observedKey) pending.splice(index, 1);
+      }
+    }
+    while (pending.length && frame.at - Number(pending[0].at || 0) > maxPendingAgeMs) pending.shift();
+    previousDirection = observed;
+  }
+
+  const attributionCounts = { exact: 0, bounded: 0, 'ambiguous-reversal': 0, unmatched: 0 };
+  for (const transition of transitions) {
+    const key = String(transition.attributionConfidence || 'unmatched');
+    if (Object.prototype.hasOwnProperty.call(attributionCounts, key)) attributionCounts[key] += 1;
+  }
+  const exactTickValues = transitions.filter(item => item.attributionConfidence === 'exact')
+    .map(item => Number(item.tickDelayUpper)).filter(Number.isFinite);
+  const exactWallValues = transitions.filter(item => item.attributionConfidence === 'exact')
+    .map(item => Number(item.wallDelayMsUpper)).filter(Number.isFinite);
+  const boundedTickValues = transitions.filter(item => item.attributionConfidence === 'bounded')
+    .map(item => Number(item.tickDelayUpper)).filter(Number.isFinite);
+  const boundedWallValues = transitions.filter(item => item.attributionConfidence === 'bounded')
+    .map(item => Number(item.wallDelayMsUpper)).filter(Number.isFinite);
+  const timing = {
+    exactReady: exactTickValues.length >= 4,
+    sampleCount: exactTickValues.length,
+    medianTicks: percentile(exactTickValues.slice(), 0.5) ?? 2,
+    p90Ticks: percentile(exactTickValues.slice(), 0.9) ?? 5,
+    madTicks: (() => {
+      const median = percentile(exactTickValues.slice(), 0.5);
+      return median === null ? 0 : (percentile(exactTickValues.map(value => Math.abs(value - median)), 0.5) ?? 0);
+    })(),
+    source: exactTickValues.length >= 4 ? 'visible-velocity-transition-exact-rolling' : 'replay-bounded-upper'
+  };
+
+  const commandDirectionChanges = [];
+  for (let index = 1; index < commands.length; index += 1) {
+    if (movementDirectionKey(commands[index - 1]) === movementDirectionKey(commands[index])) continue;
+    commandDirectionChanges.push({
+      at: commands[index].at,
+      from: { dx: commands[index - 1].dx, dy: commands[index - 1].dy },
+      to: { dx: commands[index].dx, dy: commands[index].dy },
+      intervalMs: Math.max(0, commands[index].at - commands[index - 1].at),
+      generation: commands[index].directionGeneration
+    });
+  }
+  const quickReversals = commandDirectionChanges.filter(item => item.intervalMs <= 200);
+  const ultraQuickReversals = commandDirectionChanges.filter(item => item.intervalMs <= 100);
+  const replacementDepth = transitions.map(item => Number(item.replacementCount || 0)).filter(Number.isFinite);
+
+  const hpLossAssociations = [];
+  for (let index = 1; index < selfFrames.length; index += 1) {
+    const previous = selfFrames[index - 1];
+    const current = selfFrames[index];
+    if (previous.hp === null || current.hp === null || current.hp >= previous.hp) continue;
+    const transition = transitions.slice().reverse().find(item => item.at <= current.at && current.at - item.at <= 1000) || null;
+    let threat = null;
+    const row = rows.slice().reverse().find(item => Date.parse(item.entry.at || '') <= current.at);
+    const field = row?.detail?.movement?.dodge?.threatField || [];
+    if (field.length && transition) {
+      threat = field.find(item => Number(item.dx || 0) === Number(transition.to.dx || 0)
+        && Number(item.dy || 0) === Number(transition.to.dy || 0)) || null;
+    }
+    hpLossAssociations.push({
+      at: current.at,
+      hpLoss: previous.hp - current.hp,
+      transitionAt: transition?.at || null,
+      attributionConfidence: transition?.attributionConfidence || 'unmatched',
+      afterTransitionMs: transition ? current.at - transition.at : null,
+      directHits: numberOrNull(threat?.directHits),
+      unavoidableHits: numberOrNull(threat?.unavoidableHits),
+      worstCaseCpaCm: numberOrNull(threat?.worstCaseCpaCm ?? threat?.minCPA)
+    });
+  }
+
+  let stabilityState = null;
+  let baselineDirection = null;
+  let shadowDirection = null;
+  let baselineSwitches = 0;
+  let shadowSwitches = 0;
+  let baselineQuick = 0;
+  let shadowQuick = 0;
+  let baselineNonHardSwitches = 0;
+  let shadowNonHardSwitches = 0;
+  let baselineNonHardQuick = 0;
+  let shadowNonHardQuick = 0;
+  let lastBaselineAt = null;
+  let lastShadowAt = null;
+  let stabilityFalseSafe = 0;
+  let stabilityHeldDirectHitRegression = 0;
+  let stabilityHeldUnavoidableHitRegression = 0;
+  let stabilityHeldBelowSafetyBoundary = 0;
+  let heldWorstCaseCpaCm = Infinity;
+  let suppressedSamples = 0;
+  const stabilitySamples = [];
+  for (const row of rows) {
+    const detail = row.detail || {};
+    const movement = detail.movement || {};
+    const candidate = { dx: Number(movement.dx || 0), dy: Number(movement.dy || 0) };
+    const atMs = Date.parse(row.entry.at || '');
+    if (!Number.isFinite(atMs)) continue;
+    const baselineKey = movementDirectionKey(candidate);
+    const baselineChanged = Boolean(
+      baselineDirection && baselineKey !== movementDirectionKey(baselineDirection)
+    );
+    const baselineQuickChanged = Boolean(
+      baselineChanged && lastBaselineAt !== null && atMs - lastBaselineAt <= 200
+    );
+    const latestCommand = commands.slice().reverse().find(command => command.at <= atMs) || null;
+    const self = detail.self || {};
+    const result = stabilizeCombatMovementDirectionCore({
+      nowMs: atMs,
+      tick: numberOrNull(detail.tick),
+      targetId: options.targetId || String(detail.target?.userId || ''),
+      engagementId: `${options.targetId || String(detail.target?.userId || '')}:${rows[0].entry.at || ''}`,
+      candidateDirection: candidate,
+      currentDirection: movementDirectionFromSelf(self),
+      pendingDirection: latestCommand,
+      threatField: movement.dodge?.threatField || [],
+      movementTiming: timing,
+      previousState: stabilityState,
+      hardGateChanged: Boolean(detail.exit?.shouldLeave || detail.action?.shouldLeave || actionPriorityBand(detail.action || {}) === 'exit'),
+      commandUnmatched: false,
+      newThreatUrgent: false
+    }, { minimumCpaCm: 200, materialCpaGainCm: 75 });
+    stabilityState = result.state;
+    const hardSafetyRelease = result.reason === 'movement-stability-immediate-safety-release';
+    if (baselineChanged) {
+      baselineSwitches += 1;
+      if (!hardSafetyRelease) baselineNonHardSwitches += 1;
+      if (baselineQuickChanged) {
+        baselineQuick += 1;
+        if (!hardSafetyRelease) baselineNonHardQuick += 1;
+      }
+      lastBaselineAt = atMs;
+    } else if (!baselineDirection) {
+      lastBaselineAt = atMs;
+    }
+    baselineDirection = candidate;
+    const selected = result.direction;
+    const selectedKey = movementDirectionKey(selected);
+    const shadowChanged = Boolean(
+      shadowDirection && selectedKey !== movementDirectionKey(shadowDirection)
+    );
+    const shadowQuickChanged = Boolean(
+      shadowChanged && lastShadowAt !== null && atMs - lastShadowAt <= 200
+    );
+    if (shadowChanged) {
+      shadowSwitches += 1;
+      if (!hardSafetyRelease) shadowNonHardSwitches += 1;
+      if (shadowQuickChanged) {
+        shadowQuick += 1;
+        if (!hardSafetyRelease) shadowNonHardQuick += 1;
+      }
+      lastShadowAt = atMs;
+    } else if (!shadowDirection) {
+      lastShadowAt = atMs;
+    }
+    shadowDirection = selected;
+    if (result.held) suppressedSamples += 1;
+    const selectedThreat = (movement.dodge?.threatField || []).find(item => Number(item.dx || 0) === Number(selected.dx || 0)
+      && Number(item.dy || 0) === Number(selected.dy || 0));
+    if (selectedThreat) {
+      const cpa = Number(selectedThreat.worstCaseCpaCm ?? selectedThreat.minCPA);
+      const candidateThreat = (movement.dodge?.threatField || []).find(item => Number(item.dx || 0) === candidate.dx
+        && Number(item.dy || 0) === candidate.dy);
+      if (result.held) {
+        if (Number.isFinite(cpa)) heldWorstCaseCpaCm = Math.min(heldWorstCaseCpaCm, cpa);
+        const directRegression = Number(selectedThreat.directHits || 0) > Number(candidateThreat?.directHits || 0);
+        const unavoidableRegression = Number(selectedThreat.unavoidableHits || 0) > Number(candidateThreat?.unavoidableHits || 0);
+        const belowSafetyBoundary = Number.isFinite(cpa) && cpa < 200;
+        if (directRegression) stabilityHeldDirectHitRegression += 1;
+        if (unavoidableRegression) stabilityHeldUnavoidableHitRegression += 1;
+        if (belowSafetyBoundary) stabilityHeldBelowSafetyBoundary += 1;
+        if (directRegression || unavoidableRegression || belowSafetyBoundary) stabilityFalseSafe += 1;
+      }
+    }
+    if (stabilitySamples.length < 16 && (result.held || result.switched)) {
+      stabilitySamples.push({
+        line: row.line,
+        at: row.entry.at,
+        candidate,
+        selected,
+        held: result.held,
+        reason: result.reason,
+        elapsedTicks: result.elapsedTicks,
+        settlementWindowTicks: result.settlementWindowTicks
+      });
+    }
+  }
+  const dodgeReplay = replayDodge({ ...options, runnerFile, wsFile });
+  const contactEntryReplay = replayContactEntryDodge(rows, options);
+  const switchReduction = baselineSwitches ? (baselineSwitches - shadowSwitches) / baselineSwitches : null;
+  const quickReduction = baselineQuick ? (baselineQuick - shadowQuick) / baselineQuick : null;
+  const nonHardSwitchReduction = baselineNonHardSwitches
+    ? (baselineNonHardSwitches - shadowNonHardSwitches) / baselineNonHardSwitches
+    : null;
+  const nonHardQuickReduction = baselineNonHardQuick
+    ? (baselineNonHardQuick - shadowNonHardQuick) / baselineNonHardQuick
+    : null;
+  const replayDataAvailable = commands.length > 0 && selfFrames.length > 0 && transitions.length > 0;
+  const safetyAccepted = Number(dodgeReplay.newFalseSafe || 0) === 0
+    && stabilityFalseSafe === 0;
+  const reductionTargetsMet = (nonHardSwitchReduction === null || nonHardSwitchReduction >= 0.4)
+    && (nonHardQuickReduction === null || nonHardQuickReduction >= 0.6);
+  const result = {
+    mode: 'movement-command-latency',
+    targetId: options.targetId || '',
+    lines: `${options.startLine}-${options.endLine}`,
+    runnerFile,
+    wsFile,
+    commandCount: commands.length,
+    visiblePosFrameCount: selfFrames.length,
+    transitionCount: transitions.length,
+    attributionCounts,
+    exactTickDelay: movementPercentileSummary(exactTickValues),
+    exactWallDelayMs: movementPercentileSummary(exactWallValues),
+    boundedTickDelay: movementPercentileSummary(boundedTickValues),
+    boundedWallDelayMs: movementPercentileSummary(boundedWallValues),
+    timing,
+    commandDirectionChangeCount: commandDirectionChanges.length,
+    quickReversalCount200Ms: quickReversals.length,
+    quickReversalCount100Ms: ultraQuickReversals.length,
+    replacementDepth: movementPercentileSummary(replacementDepth),
+    hpLossCount: hpLossAssociations.length,
+    hpLossAssociations: hpLossAssociations.slice(0, 24),
+    stabilityCounterfactual: {
+      baselineSwitches,
+      shadowSwitches,
+      switchReduction,
+      baselineNonHardSwitches,
+      shadowNonHardSwitches,
+      nonHardSwitchReduction,
+      baselineQuickReversals200Ms: baselineQuick,
+      shadowQuickReversals200Ms: shadowQuick,
+      quickReversalReduction: quickReduction,
+      baselineNonHardQuickReversals200Ms: baselineNonHardQuick,
+      shadowNonHardQuickReversals200Ms: shadowNonHardQuick,
+      nonHardQuickReversalReduction: nonHardQuickReduction,
+      suppressedSamples,
+      robustFalseSafe: stabilityFalseSafe,
+      heldDirectHitRegression: stabilityHeldDirectHitRegression,
+      heldUnavoidableHitRegression: stabilityHeldUnavoidableHitRegression,
+      heldBelowSafetyBoundary: stabilityHeldBelowSafetyBoundary,
+      heldWorstCaseCpaCm: Number.isFinite(heldWorstCaseCpaCm) ? heldWorstCaseCpaCm : null,
+      samples: stabilitySamples
+    },
+    dodgeReplay: {
+      hitEvents: dodgeReplay.hitEvents,
+      oldFalseSafe: dodgeReplay.oldFalseSafe,
+      newFalseSafe: dodgeReplay.newFalseSafe,
+      unavoidableCurrentShot: dodgeReplay.unavoidableCurrentShot
+    },
+    contactEntryReplay,
+    validation: {
+      replayDataAvailable,
+      safetyAccepted,
+      reductionTargetsMet,
+      nonHardSwitchReductionTarget: 0.4,
+      nonHardQuickReversalReductionTarget: 0.6
+    },
+    transitions: transitions.slice(0, 32),
+    accepted: replayDataAvailable && safetyAccepted
+  };
+  return result;
 }
 
 function replayDodge(options) {
@@ -4894,6 +5348,7 @@ function replayPostAttackDropAttribution(options) {
 }
 
 function runReplay(options) {
+  if (options.mode === 'movement-command-latency') return replayMovementCommandLatency(options);
   if (options.mode === 'opportunity') return replayOpportunity(options);
   if (options.mode === 'afk-finish-commitment') return replayAfkFinishCommitment(options);
   if (options.mode === 'afk-combat-handoff') return replayAfkCombatHandoff(options);
@@ -4944,6 +5399,7 @@ module.exports = {
   replayAfkCombatHandoff,
   replayEasyKillContinuity,
   replayLeaveTail,
+  replayMovementCommandLatency,
   replayMovementStallExit,
   replayRecoveryThreatExit,
   runReplay

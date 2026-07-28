@@ -168,6 +168,7 @@ function publicConfig(config) {
     combatEnabled: Boolean(config.combatEnabled),
     combatRobustDodgeEnabled: config.combatRobustDodgeEnabled !== false,
     combatCloseBandReserveEnabled: config.combatCloseBandReserveEnabled !== false,
+    combatMovementStabilityEnabled: config.combatMovementStabilityEnabled === true,
     combatShootMinIntervalMs: Number(config.combatShootMinIntervalMs || 0),
     combatMissCloseTriggerShots: Number(config.combatMissCloseTriggerShots || 0),
     combatMissCloseStepShots: Number(config.combatMissCloseStepShots || 0),

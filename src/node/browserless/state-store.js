@@ -19,6 +19,11 @@ function numericOrNull(value) {
   return Number.isFinite(number) ? number : null;
 }
 
+function optionalNumericOrNull(value) {
+  if (value === null || value === undefined || value === '') return null;
+  return numericOrNull(value);
+}
+
 function incrementCount(map, key) {
   const normalized = String(key || 'unknown');
   map[normalized] = Number(map[normalized] || 0) + 1;
@@ -190,16 +195,87 @@ function shotTimingSummary(samples = []) {
   };
 }
 
-function movementTimingSummary(samples = []) {
-  const values = samples.map(item => Number(item.executionDelayTicks)).filter(Number.isFinite).slice(-64);
-  const median = percentile(values, 0.5);
-  const deviations = median === null ? [] : values.map(value => Math.abs(value - median));
+const DEFAULT_MOVEMENT_MEDIAN_TICKS = 2;
+const DEFAULT_MOVEMENT_P90_TICKS = 5;
+const MOVEMENT_TIMING_EXACT_MIN_SAMPLES = 4;
+
+function movementTimingSummary(samples = [], transitions = []) {
+  const boundedTransitions = (transitions || []).slice(-64);
+  const exactTickValues = samples
+    .filter(item => item?.attributionConfidence === 'exact' || item?.attributionConfidence === undefined)
+    .map(item => item.tickDelayUpper ?? item.executionDelayTicks)
+    .filter(value => value !== null && value !== undefined && value !== '')
+    .map(Number)
+    .filter(Number.isFinite)
+    .slice(-64);
+  const exactWallValues = samples
+    .filter(item => item?.attributionConfidence === 'exact' || item?.attributionConfidence === undefined)
+    .map(item => item.wallDelayMsUpper ?? item.executionDelayMs)
+    .filter(value => value !== null && value !== undefined && value !== '')
+    .map(Number)
+    .filter(Number.isFinite)
+    .slice(-64);
+  const conservativeTickValues = boundedTransitions
+    .filter(item => item?.attributionConfidence === 'bounded')
+    .map(item => item.tickDelayUpper)
+    .filter(value => value !== null && value !== undefined && value !== '')
+    .map(Number)
+    .filter(Number.isFinite);
+  const conservativeWallValues = boundedTransitions
+    .filter(item => item?.attributionConfidence === 'bounded')
+    .map(item => item.wallDelayMsUpper)
+    .filter(value => value !== null && value !== undefined && value !== '')
+    .map(Number)
+    .filter(Number.isFinite);
+  const exactMedian = percentile(exactTickValues, 0.5);
+  const exactDeviations = exactMedian === null
+    ? []
+    : exactTickValues.map(value => Math.abs(value - exactMedian));
+  const exactReady = exactTickValues.length >= MOVEMENT_TIMING_EXACT_MIN_SAMPLES;
+  const conservativeMedian = percentile(conservativeTickValues, 0.5);
+  const conservativeP90 = percentile(conservativeTickValues, 0.9);
+  const medianTicks = exactReady
+    ? (exactMedian ?? DEFAULT_MOVEMENT_MEDIAN_TICKS)
+    : Math.max(DEFAULT_MOVEMENT_MEDIAN_TICKS, exactMedian ?? 0, conservativeMedian ?? 0);
+  const p90Ticks = exactReady
+    ? (percentile(exactTickValues, 0.9) ?? DEFAULT_MOVEMENT_P90_TICKS)
+    : Math.max(DEFAULT_MOVEMENT_P90_TICKS, percentile(exactTickValues, 0.9) ?? 0, conservativeP90 ?? 0);
+  const attributionCounts = {
+    exact: 0,
+    bounded: 0,
+    'ambiguous-reversal': 0,
+    unmatched: 0
+  };
+  for (const transition of boundedTransitions) {
+    const confidence = String(transition?.attributionConfidence || 'unmatched');
+    if (Object.prototype.hasOwnProperty.call(attributionCounts, confidence)) attributionCounts[confidence] += 1;
+  }
   return {
-    sampleCount: values.length,
-    medianTicks: median === null ? 2 : median,
-    p90Ticks: percentile(values, 0.9) ?? 5,
-    madTicks: percentile(deviations, 0.5) ?? 0,
-    source: values.length ? 'visible-velocity-transition-rolling' : 'startup-default'
+    sampleCount: exactTickValues.length,
+    exactSampleCount: exactTickValues.length,
+    boundedSampleCount: attributionCounts.bounded,
+    ambiguousSampleCount: attributionCounts['ambiguous-reversal'],
+    unmatchedSampleCount: attributionCounts.unmatched,
+    medianTicks,
+    p90Ticks,
+    madTicks: percentile(exactDeviations, 0.5) ?? 0,
+    medianWallMs: exactReady
+      ? percentile(exactWallValues, 0.5)
+      : (exactWallValues.length || conservativeWallValues.length
+          ? Math.max(0, percentile(exactWallValues, 0.5) ?? 0, percentile(conservativeWallValues, 0.5) ?? 0)
+          : null),
+    p90WallMs: exactReady
+      ? percentile(exactWallValues, 0.9)
+      : (exactWallValues.length || conservativeWallValues.length
+          ? Math.max(0, percentile(exactWallValues, 0.9) ?? 0, percentile(conservativeWallValues, 0.9) ?? 0)
+          : null),
+    exactReady,
+    attributionCounts,
+    source: exactReady
+      ? 'visible-velocity-transition-exact-rolling'
+      : (conservativeTickValues.length || exactTickValues.length
+          ? 'visible-velocity-transition-bounded-upper-conservative'
+          : 'startup-default')
   };
 }
 
@@ -211,6 +287,107 @@ function velocityDirection(entity) {
     dy: Math.abs(vy) < 0.001 ? 0 : Math.sign(vy),
     vx: Number.isFinite(vx) ? vx : 0,
     vy: Number.isFinite(vy) ? vy : 0
+  };
+}
+
+function velocityDirectionKey(direction = {}) {
+  return `${Math.sign(Number(direction.dx || 0))},${Math.sign(Number(direction.dy || 0))}`;
+}
+
+function commandCausallyPrecedesTransition(command, transitionAtMs, transitionTick) {
+  const requestedAtMs = optionalNumericOrNull(command?.requestedAtMs);
+  const observedAtMs = optionalNumericOrNull(transitionAtMs);
+  if (requestedAtMs !== null && observedAtMs !== null && requestedAtMs > observedAtMs) return false;
+  const observedTick = optionalNumericOrNull(command?.observedTick);
+  return transitionTick === null || observedTick === null || observedTick <= transitionTick;
+}
+
+function movementDelayBounds(candidates = [], transitionAtMs, transitionTick) {
+  const wallValues = candidates
+    .map(command => optionalNumericOrNull(command?.requestedAtMs))
+    .filter(value => value !== null && transitionAtMs !== null)
+    .map(value => Math.max(0, transitionAtMs - value));
+  const tickValues = candidates
+    .map(command => optionalNumericOrNull(command?.observedTick))
+    .filter(value => value !== null && transitionTick !== null)
+    .map(value => Math.max(0, transitionTick - value));
+  return {
+    wallDelayMsLower: wallValues.length ? Math.min(...wallValues) : null,
+    wallDelayMsUpper: wallValues.length ? Math.max(...wallValues) : null,
+    tickDelayLower: tickValues.length ? Math.min(...tickValues) : null,
+    tickDelayUpper: tickValues.length ? Math.max(...tickValues) : null
+  };
+}
+
+function attributeVelocityTransition(commands = [], observedDirection = {}, meta = {}) {
+  const transitionAtMs = optionalNumericOrNull(meta.receivedAtMs ?? meta.at);
+  const transitionTick = optionalNumericOrNull(meta.tick);
+  const observedKey = velocityDirectionKey(observedDirection);
+  const causal = (commands || [])
+    .filter(command => commandCausallyPrecedesTransition(command, transitionAtMs, transitionTick))
+    .slice()
+    .sort((left, right) => Number(left.sequence || 0) - Number(right.sequence || 0));
+  const candidates = causal.filter(command => velocityDirectionKey(command) === observedKey);
+  const earliestCandidateSequence = candidates.length
+    ? Math.min(...candidates.map(command => Number(command.sequence || 0)))
+    : null;
+  const latestCandidateSequence = candidates.length
+    ? Math.max(...candidates.map(command => Number(command.sequence || 0)))
+    : null;
+  const interveningDirections = earliestCandidateSequence === null || latestCandidateSequence === null
+    ? []
+    : causal.filter(command => Number(command.sequence || 0) > earliestCandidateSequence
+      && Number(command.sequence || 0) < latestCandidateSequence
+      && velocityDirectionKey(command) !== observedKey);
+  const latestCandidate = candidates.at(-1) || null;
+  const laterDifferentDirections = latestCandidate
+    ? causal.filter(command => Number(command.sequence || 0) > Number(latestCandidate.sequence || 0)
+      && velocityDirectionKey(command) !== observedKey)
+    : [];
+  const replacedByDifferentDirection = candidates.filter(command => (
+    command?.replacedByCommandId !== null
+      && command?.replacedByCommandId !== undefined
+      && velocityDirectionKey(command?.replacedByDirection || {}) !== observedKey
+  ));
+  const ambiguousReversal = Boolean(
+    interveningDirections.length
+      || (candidates.length > 0 && laterDifferentDirections.length > 0)
+      || replacedByDifferentDirection.length
+  );
+  let attributionConfidence = 'unmatched';
+  if (candidates.length === 1 && !ambiguousReversal) attributionConfidence = 'exact';
+  else if (candidates.length > 0 && ambiguousReversal) attributionConfidence = 'ambiguous-reversal';
+  else if (candidates.length > 1) attributionConfidence = 'bounded';
+  const bounds = movementDelayBounds(candidates, transitionAtMs, transitionTick);
+  const firstCandidate = candidates[0] || null;
+  const orderedReplacementCount = candidates.length
+    ? causal.filter(command => Number(command.sequence || 0) > Number(firstCandidate.sequence || 0)
+      && Number(command.sequence || 0) <= Number(latestCandidate.sequence || 0)).length
+    : 0;
+  const replacementCount = Math.max(orderedReplacementCount, replacedByDifferentDirection.length);
+  const observedTickAgeAtSendMsValues = candidates
+    .map(command => optionalNumericOrNull(command?.observedTickAgeAtSendMs))
+    .filter(value => value !== null);
+  return {
+    attributionConfidence,
+    candidateCommandCount: candidates.length,
+    candidateCommandIds: candidates.map(command => command.commandId).filter(value => value !== null && value !== undefined).slice(-8),
+    commandId: attributionConfidence === 'exact' ? latestCandidate?.commandId ?? null : null,
+    repeatOwnerCommandId: attributionConfidence === 'exact' ? latestCandidate?.repeatOwnerCommandId ?? null : null,
+    requestedAtMs: attributionConfidence === 'exact' ? latestCandidate?.requestedAtMs ?? null : null,
+    observedTick: attributionConfidence === 'exact' ? latestCandidate?.observedTick ?? null : null,
+    directionGeneration: candidates.length
+      ? (latestCandidate?.directionGeneration ?? firstCandidate?.directionGeneration ?? null)
+      : null,
+    replacementCount,
+    replacementsBeforeVisible: replacementCount,
+    observedTickAgeAtSendMs: observedTickAgeAtSendMsValues.length
+      ? Math.max(...observedTickAgeAtSendMsValues)
+      : null,
+    latestCandidateSequence,
+    earliestCandidateSequence,
+    causalCommandCount: causal.length,
+    ...bounds
   };
 }
 
@@ -286,11 +463,13 @@ function createInitialState(userId = 0) {
       ackLatencySamples: [],
       movement: {
         nextSequence: 1,
+        nextDirectionGeneration: 1,
         pendingCommands: [],
         settledCommands: [],
         delaySamples: [],
         actualTransitions: [],
-        lastObservedVelocity: null
+        lastObservedVelocity: null,
+        lastRequestedDirection: null
       }
     },
     transportDiagnostics: {
@@ -431,43 +610,98 @@ function createBrowserlessStateStore(options = {}) {
     const observed = velocityDirection(self);
     const previous = movement.lastObservedVelocity;
     const changed = !previous || Number(previous.dx) !== observed.dx || Number(previous.dy) !== observed.dy;
-    const tick = numericOrNull(meta.tick);
+    const tick = optionalNumericOrNull(meta.tick);
     if (changed && previous) {
-      const matchingIndex = movement.pendingCommands.findIndex(command => (
-        Number(command.dx) === observed.dx && Number(command.dy) === observed.dy
-      ));
-      const matched = matchingIndex >= 0 ? movement.pendingCommands[matchingIndex] : null;
+      const attribution = attributeVelocityTransition(movement.pendingCommands, observed, {
+        receivedAtMs: meta.receivedAtMs,
+        tick
+      });
+      const exact = attribution.attributionConfidence === 'exact';
       const transition = {
         at: meta.receivedAtMs,
         tick,
         from: { dx: previous.dx, dy: previous.dy, vx: previous.vx, vy: previous.vy },
         to: observed,
-        commandId: matched?.commandId ?? null,
-        repeatOwnerCommandId: matched?.repeatOwnerCommandId ?? null,
-        requestedAtMs: matched?.requestedAtMs ?? null,
-        observedTick: matched?.observedTick ?? null,
-        executionDelayTicks: matched && tick !== null && numericOrNull(matched.observedTick) !== null
-          ? Math.max(0, tick - Number(matched.observedTick))
-          : null,
-        matched: Boolean(matched)
+        ...attribution,
+        executionDelayTicks: exact ? attribution.tickDelayUpper : null,
+        executionDelayMs: exact ? attribution.wallDelayMsUpper : null,
+        velocitySendToVisibleWallMs: exact ? attribution.wallDelayMsUpper : null,
+        visibleTransitionTickDelay: exact ? attribution.tickDelayUpper : null,
+        matched: attribution.candidateCommandCount > 0
       };
       movement.actualTransitions.push(transition);
-      movement.actualTransitions = movement.actualTransitions.slice(-32);
-      if (matched) {
-        movement.settledCommands.push({ ...matched, settledAtMs: meta.receivedAtMs, settledTick: tick, executionDelayTicks: transition.executionDelayTicks });
-        movement.settledCommands = movement.settledCommands.slice(-32);
-        if (transition.executionDelayTicks !== null) {
-          movement.delaySamples.push({ at: meta.receivedAtMs, executionDelayTicks: transition.executionDelayTicks });
-          movement.delaySamples = movement.delaySamples.slice(-64);
+      movement.actualTransitions = movement.actualTransitions.slice(-64);
+      const causalFrontier = attribution.attributionConfidence === 'ambiguous-reversal'
+        ? null
+        : attribution.latestCandidateSequence;
+      if (causalFrontier !== null && causalFrontier !== undefined) {
+        // A visible transition settles only commands of the observed direction.
+        // Keep older, different-direction commands in the bounded schedule: they
+        // were already sent and can still affect a piecewise Dodge projection.
+        const candidateSequences = new Set(
+          movement.pendingCommands
+            .filter(command => Number(command.sequence || 0) <= Number(causalFrontier)
+              && velocityDirectionKey(command) === velocityDirectionKey(observed))
+            .map(command => Number(command.sequence || 0))
+        );
+        const settled = movement.pendingCommands.filter(command => candidateSequences.has(Number(command.sequence || 0)));
+        const retained = movement.pendingCommands.filter(command => !candidateSequences.has(Number(command.sequence || 0)));
+        for (const command of settled) {
+          movement.settledCommands.push({
+            ...command,
+            settledAtMs: meta.receivedAtMs,
+            settledTick: tick,
+            attributionConfidence: transition.attributionConfidence,
+            executionDelayTicks: exact && String(command.commandId) === String(transition.commandId)
+              ? transition.executionDelayTicks
+              : null
+          });
         }
-        movement.pendingCommands = movement.pendingCommands.slice(matchingIndex + 1);
+        movement.settledCommands = movement.settledCommands.slice(-64);
+        movement.pendingCommands = retained;
+      }
+      if (exact && transition.executionDelayTicks !== null) {
+        movement.delaySamples.push({
+          at: meta.receivedAtMs,
+          attributionConfidence: 'exact',
+          executionDelayTicks: transition.executionDelayTicks,
+          tickDelayUpper: transition.tickDelayUpper,
+          wallDelayMsUpper: transition.wallDelayMsUpper
+        });
+        movement.delaySamples = movement.delaySamples.slice(-64);
       }
     }
     if (!changed) {
-      movement.pendingCommands = movement.pendingCommands.filter(command => (
-        Number(command.dx) !== observed.dx || Number(command.dy) !== observed.dy
-      ));
+      const observedKey = velocityDirectionKey(observed);
+      const settled = [];
+      const retained = [];
+      for (const command of movement.pendingCommands) {
+        if (velocityDirectionKey(command) === observedKey) settled.push(command);
+        else retained.push(command);
+      }
+      if (settled.length) {
+        for (const command of settled) {
+          movement.settledCommands.push({
+            ...command,
+            settledAtMs: meta.receivedAtMs,
+            settledTick: tick,
+            attributionConfidence: 'same-direction-visible-no-transition',
+            executionDelayTicks: null
+          });
+        }
+        movement.settledCommands = movement.settledCommands.slice(-64);
+        movement.pendingCommands = retained;
+      }
     }
+    const timing = movementTimingSummary(movement.delaySamples, movement.actualTransitions);
+    const observedAtMs = optionalNumericOrNull(meta.receivedAtMs);
+    const maximumPendingAgeMs = Math.max(3000, Number(timing.p90Ticks || DEFAULT_MOVEMENT_P90_TICKS) * 50 * 8);
+    movement.pendingCommands = movement.pendingCommands
+      .filter(command => {
+        const requestedAtMs = optionalNumericOrNull(command.requestedAtMs);
+        return observedAtMs === null || requestedAtMs === null || observedAtMs - requestedAtMs <= maximumPendingAgeMs;
+      })
+      .slice(-32);
     movement.lastObservedVelocity = { ...observed, tick, at: meta.receivedAtMs };
     return movement.actualTransitions.at(-1) || null;
   }
@@ -630,58 +864,102 @@ function createBrowserlessStateStore(options = {}) {
   function recordVelocityRequest(request = {}) {
     const movement = state.command.movement;
     const requestedAtMs = Number(request.requestedAtMs || now());
-    const commandId = request.commandId ?? movement.nextSequence++;
+    const sequence = movement.nextSequence++;
+    const commandId = request.commandId ?? sequence;
     const repeatOwnerCommandId = request.repeatOwnerCommandId ?? commandId;
     const dx = Math.max(-1, Math.min(1, Math.round(Number(request.dx || 0))));
     const dy = Math.max(-1, Math.min(1, Math.round(Number(request.dy || 0))));
     if (request.repeat === true) {
-      const owner = movement.pendingCommands.find(command => String(command.commandId) === String(repeatOwnerCommandId));
+      const owner = [
+        ...movement.pendingCommands,
+        ...movement.settledCommands
+      ].find(command => String(command.commandId) === String(repeatOwnerCommandId));
       if (owner) {
         owner.lastRepeatedAtMs = requestedAtMs;
         owner.repeatCount = Math.max(0, Number(owner.repeatCount || 0)) + 1;
+        owner.lastRepeatObservedTickAgeMs = optionalNumericOrNull(request.observedTickAgeAtSendMs);
+        owner.lastRepeatFrameReceivedAtMs = optionalNumericOrNull(request.frameReceivedAtMs ?? request.observedAtMs);
         return cloneJson(owner);
       }
     }
+    const direction = { dx, dy };
+    const previousDirection = movement.lastRequestedDirection;
+    const directionChanged = !previousDirection || velocityDirectionKey(previousDirection) !== velocityDirectionKey(direction);
+    const directionGeneration = directionChanged
+      ? movement.nextDirectionGeneration++
+      : Number(previousDirection.directionGeneration || Math.max(1, movement.nextDirectionGeneration - 1));
     for (const pending of movement.pendingCommands) {
-      if (!pending.replacedByCommandId) pending.replacedByCommandId = commandId;
+      if (!pending.replacedByCommandId) {
+        pending.replacedByCommandId = commandId;
+        pending.replacedAtMs = requestedAtMs;
+        pending.replacedByDirection = { dx, dy };
+      }
     }
-    const timing = movementTimingSummary(movement.delaySamples);
-    const observedTick = numericOrNull(request.observedTick ?? state.realtime.tick);
+    const timing = movementTimingSummary(movement.delaySamples, movement.actualTransitions);
+    const observedTick = optionalNumericOrNull(request.observedTick ?? state.realtime.tick);
+    const observedAtMs = optionalNumericOrNull(request.observedAtMs ?? request.frameReceivedAtMs ?? state.realtime.receivedAtMs);
+    const observedTickAgeAtSendMs = optionalNumericOrNull(request.observedTickAgeAtSendMs)
+      ?? (observedAtMs === null ? null : Math.max(0, requestedAtMs - observedAtMs));
     const command = {
-      sequence: movement.nextSequence++,
+      sequence,
       commandId,
       repeatOwnerCommandId,
       dx,
       dy,
+      generation: optionalNumericOrNull(request.generation),
+      directionGeneration,
       reason: String(request.reason || ''),
       requestedAtMs,
       observedTick,
+      observedAtMs,
+      observedTickAgeAtSendMs,
+      frameReceivedToDecisionMs: optionalNumericOrNull(request.frameReceivedToDecisionMs),
+      decisionToVelocitySendMs: optionalNumericOrNull(request.decisionToVelocitySendMs),
+      velocitySendObservedTickAgeMs: observedTickAgeAtSendMs,
+      pendingDepthAtSend: movement.pendingCommands.length,
+      ownership: request.ownership && typeof request.ownership === 'object'
+        ? cloneJson(request.ownership)
+        : null,
       expectedEffectiveTick: observedTick === null ? null : observedTick + Number(timing.p90Ticks || 5),
       repeat: false,
       repeatCount: 0,
       lastRepeatedAtMs: null,
-      replacedByCommandId: null
+      lastRepeatObservedTickAgeMs: null,
+      lastRepeatFrameReceivedAtMs: null,
+      replacedByCommandId: null,
+      replacedAtMs: null,
+      replacedByDirection: null
     };
     movement.pendingCommands.push(command);
-    movement.pendingCommands = movement.pendingCommands.slice(-16);
+    movement.pendingCommands = movement.pendingCommands.slice(-32);
+    movement.lastRequestedDirection = { dx, dy, directionGeneration };
     return cloneJson(command);
   }
 
-  function movementCommandState() {
+  function movementCommandState(options = {}) {
     const movement = state.command.movement;
-    const timing = movementTimingSummary(movement.delaySamples);
-    const currentTick = numericOrNull(state.realtime.tick);
+    const timing = movementTimingSummary(movement.delaySamples, movement.actualTransitions);
+    const currentTick = optionalNumericOrNull(state.realtime.tick);
+    const clone = options.clone !== false;
+    const copy = value => clone ? cloneJson(value) : value;
+    const copyCommand = command => {
+      if (!command) return null;
+      const output = { ...command };
+      if (command.ownership && typeof command.ownership === 'object') output.ownership = { ...command.ownership };
+      return clone ? cloneJson(output) : output;
+    };
     return {
       timing,
-      observedVelocity: cloneJson(movement.lastObservedVelocity),
+      observedVelocity: copy(movement.lastObservedVelocity),
       pendingVelocityCommands: movement.pendingCommands.slice(-8).map(command => ({
-        ...cloneJson(command),
+        ...copyCommand(command),
         effectiveAfterTicks: currentTick === null || command.expectedEffectiveTick === null
           ? Number(timing.p90Ticks || 5)
           : Math.max(0, Number(command.expectedEffectiveTick) - currentTick)
       })),
-      actualVelocityTransitions: cloneJson(movement.actualTransitions.slice(-16)),
-      settledCommands: cloneJson(movement.settledCommands.slice(-8))
+      actualVelocityTransitions: copy(movement.actualTransitions.slice(-16)),
+      settledCommands: copy(movement.settledCommands.slice(-8)),
+      lastRequestedDirection: copy(movement.lastRequestedDirection)
     };
   }
 
@@ -750,7 +1028,7 @@ function createBrowserlessStateStore(options = {}) {
         pendingShots: cloneJson(state.command.pendingShots.slice(-8)),
         confirmedShots: cloneJson(state.command.confirmedShots.slice(-16))
       },
-      movement: movementCommandState()
+      movement: movementCommandState({ clone: true })
     };
   }
 
@@ -824,7 +1102,7 @@ function createBrowserlessStateStore(options = {}) {
           pendingShots: state.command.pendingShots.slice(-8),
           confirmedShots: state.command.confirmedShots.slice(-16)
         },
-        movement: movementCommandState()
+        movement: movementCommandState({ clone: false })
       },
       transportDiagnostics: state.transportDiagnostics
     };
@@ -864,5 +1142,10 @@ module.exports = {
   coinDropArraysFromFrame,
   entityKey,
   frameKeySet,
-  selectRealtimeCombatState
+  selectRealtimeCombatState,
+  attributeVelocityTransition,
+  commandCausallyPrecedesTransition,
+  movementDelayBounds,
+  movementTimingSummary,
+  velocityDirectionKey
 };

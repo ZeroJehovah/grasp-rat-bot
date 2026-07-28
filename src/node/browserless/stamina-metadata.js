@@ -104,10 +104,16 @@ function summarizeStaminaWindow(entity, windowName, options = {}) {
 }
 
 function hasFull5sStamina(entity, options = {}) {
-  return summarizeStaminaWindow(entity, '5s', {
-    ...options,
-    defaultLimit: options.defaultLimit ?? 10000
-  }).full;
+  const remaining = staminaRemainingValue(entity, '5s');
+  if (remaining === null) return false;
+  const explicitLimit = staminaLimitForWindow(entity, '5s');
+  const defaultLimit = numberOrNull(options.defaultLimit ?? 10000);
+  const limit = explicitLimit !== null
+    ? explicitLimit
+    : (defaultLimit !== null && defaultLimit > 0 ? defaultLimit : null);
+  if (limit === null || limit <= 0) return false;
+  const fullRatio = Math.max(0, Number(options.staminaFullRatio ?? options.fullRatio ?? 0.98) || 0.98);
+  return remaining >= limit * fullRatio;
 }
 
 module.exports = {

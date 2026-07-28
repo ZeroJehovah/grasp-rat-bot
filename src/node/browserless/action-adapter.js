@@ -24,6 +24,11 @@ function numberOrNull(value) {
   return Number.isFinite(number) ? number : null;
 }
 
+function optionalNumber(value) {
+  if (value === null || value === undefined || value === '') return null;
+  return numberOrNull(value);
+}
+
 function roundVelocity(value) {
   const number = Number(value);
   if (!Number.isFinite(number)) return 0;
@@ -311,6 +316,7 @@ function createInitialActionState() {
     shootUnackedCount: 0,
     pendingShootCommands: [],
     latestObservedTick: null,
+    latestObservedAtMs: null,
     shootAckTimeoutMs: 3000,
     stopCount: 0,
     skippedCount: 0,
@@ -353,6 +359,14 @@ function createInitialActionState() {
     velocityRepeatUntilMs: 0,
     velocityStopRepeatsLeft: 0,
     velocityRepeatTimer: null,
+    velocityRepeatOwnerCommandId: null,
+    velocityRepeatDx: 0,
+    velocityRepeatDy: 0,
+    velocityDirectionGeneration: 0,
+    velocityOwnership: null,
+    velocityLogicalRefreshCount: 0,
+    velocityOwnershipSuppressedCount: 0,
+    lastVelocityTelemetry: null,
     shootRepeatToken: 0,
     shootRepeatUntilMs: 0,
     shootRepeatTimer: null,
@@ -378,6 +392,10 @@ function summarizeCommand(command) {
     startY: command.startY,
     reason: command.reason,
     sentAt: command.sentAt,
+    sentAtMs: command.sentAtMs,
+    directionGeneration: command.directionGeneration ?? null,
+    ownership: command.ownership || null,
+    movementTelemetry: command.movementTelemetry || null,
     target: command.target || null
   };
 }
@@ -424,6 +442,137 @@ function createBrowserlessActionAdapter(options = {}) {
   const clearTimeoutFn = typeof options.clearTimeout === 'function' ? options.clearTimeout : clearTimeout;
   const state = createInitialActionState();
   let nextCommandId = 1;
+  let activeApplyContext = null;
+
+  function velocityOwnershipPriority(ownership = {}) {
+    const band = String(ownership.band || '');
+    const source = String(ownership.source || 'planner');
+    if (ownership.hardSafety === true || band === 'exit') return 50;
+    if (band === 'safety') return 40;
+    if (source === 'realtime-control' || band === 'combat' || band === 'recover') return 30;
+    if (source === 'leave-pending') return 45;
+    return 10;
+  }
+
+  function actionApplyContext(stateSnapshot, decision, applyOptions = {}) {
+    const action = decision?.action || decision || {};
+    const frameReceivedAtMs = optionalNumber(
+      applyOptions.frameReceivedAtMs
+        ?? stateSnapshot?.realtime?.receivedAtMs
+        ?? state.latestObservedAtMs
+    );
+    const decisionAtMs = optionalNumber(applyOptions.decisionAtMs) ?? now();
+    const source = String(applyOptions.source || (
+      decision?.combat?.highFrequencyControl === true ? 'realtime-control' : 'planner'
+    ));
+    const band = String(applyOptions.band || action.band || decision?.band || '');
+    const hardSafety = applyOptions.hardSafety === true
+      || action.shouldLeave === true
+      || band === 'exit'
+      || (band === 'safety' && action.urgent === true);
+    const ownership = {
+      source,
+      band,
+      hardSafety,
+      observedTick: optionalNumber(applyOptions.observedTick ?? stateSnapshot?.realtime?.tick ?? state.latestObservedTick),
+      frameReceivedAtMs,
+      decisionAtMs
+    };
+    ownership.priority = velocityOwnershipPriority(ownership);
+    return ownership;
+  }
+
+  function velocityOwnershipSuperseded(candidate, current) {
+    if (!current) return false;
+    if (candidate?.hardSafety === true && current?.hardSafety !== true) return false;
+    const candidateTick = optionalNumber(candidate?.observedTick);
+    const currentTick = optionalNumber(current?.observedTick);
+    if (candidateTick !== null && currentTick !== null) {
+      if (candidateTick < currentTick && candidate?.hardSafety !== true) return true;
+      if (candidateTick === currentTick) {
+        if (Number(candidate?.priority || 0) < Number(current?.priority || 0)) return true;
+        if (String(candidate?.source || '') === 'planner'
+          && String(current?.source || '') === 'realtime-control') return true;
+      }
+    }
+    return Boolean(
+      current?.hardSafety === true
+        && candidate?.hardSafety !== true
+        && (candidateTick === null || currentTick === null || candidateTick <= currentTick)
+    );
+  }
+
+  function shouldRefreshVelocityOwnership(candidate, current) {
+    if (!current) return true;
+    if (candidate?.hardSafety === true && current?.hardSafety !== true) return true;
+    if (candidate?.hardSafety !== true && current?.hardSafety === true) return false;
+    const candidateTick = optionalNumber(candidate?.observedTick);
+    const currentTick = optionalNumber(current?.observedTick);
+    if (candidateTick !== null && currentTick !== null) {
+      if (candidateTick > currentTick) return true;
+      if (candidateTick < currentTick) return false;
+    } else if (candidateTick !== null && currentTick === null) {
+      return true;
+    } else if (candidateTick === null && currentTick !== null) {
+      return false;
+    }
+    const candidatePriority = Number(candidate?.priority || 0);
+    const currentPriority = Number(current?.priority || 0);
+    if (candidatePriority !== currentPriority) return candidatePriority > currentPriority;
+    return String(candidate?.source || '') === 'realtime-control'
+      && String(current?.source || '') !== 'realtime-control';
+  }
+
+  function refreshVelocityOwnership(candidate, command) {
+    if (!command || !shouldRefreshVelocityOwnership(candidate, state.velocityOwnership)) return;
+    const ownership = {
+      ...(state.velocityOwnership || {}),
+      ...candidate,
+      directionGeneration: command.directionGeneration ?? state.velocityOwnership?.directionGeneration ?? null,
+      commandId: command.id ?? state.velocityOwnership?.commandId ?? null,
+      dx: command.dx,
+      dy: command.dy,
+      sentAtMs: command.sentAtMs ?? state.velocityOwnership?.sentAtMs ?? null
+    };
+    state.velocityOwnership = ownership;
+    command.ownership = {
+      source: ownership.source,
+      band: ownership.band,
+      hardSafety: ownership.hardSafety === true,
+      observedTick: optionalNumber(ownership.observedTick),
+      priority: Number(ownership.priority || 0)
+    };
+  }
+
+  function velocityRequestTiming(atMs, sendOptions = {}) {
+    const context = {
+      ...(activeApplyContext || {}),
+      ...(sendOptions.ownership || {})
+    };
+    const frameReceivedAtMs = optionalNumber(
+      sendOptions.frameReceivedAtMs
+        ?? sendOptions.observedAtMs
+        ?? context.frameReceivedAtMs
+        ?? state.latestObservedAtMs
+    );
+    const decisionAtMs = optionalNumber(sendOptions.decisionAtMs ?? context.decisionAtMs) ?? atMs;
+    const ownership = {
+      source: String(context.source || 'planner'),
+      band: String(context.band || ''),
+      hardSafety: context.hardSafety === true,
+      observedTick: optionalNumber(sendOptions.observedTick ?? context.observedTick ?? state.latestObservedTick),
+      priority: Number(context.priority || velocityOwnershipPriority(context))
+    };
+    return {
+      frameReceivedAtMs,
+      decisionAtMs,
+      observedTick: ownership.observedTick,
+      observedTickAgeAtSendMs: frameReceivedAtMs === null ? null : Math.max(0, atMs - frameReceivedAtMs),
+      frameReceivedToDecisionMs: frameReceivedAtMs === null ? null : Math.max(0, decisionAtMs - frameReceivedAtMs),
+      decisionToVelocitySendMs: Math.max(0, atMs - decisionAtMs),
+      ownership
+    };
+  }
 
   function unrefTimer(timer) {
     if (timer && typeof timer.unref === 'function') timer.unref();
@@ -597,6 +746,9 @@ function createBrowserlessActionAdapter(options = {}) {
     state.velocityRepeatToken += 1;
     state.velocityRepeatUntilMs = 0;
     state.velocityStopRepeatsLeft = 0;
+    state.velocityRepeatOwnerCommandId = null;
+    state.velocityRepeatDx = 0;
+    state.velocityRepeatDy = 0;
     clearVelocityRepeatTimer();
   }
 
@@ -648,9 +800,28 @@ function createBrowserlessActionAdapter(options = {}) {
       return null;
     }
     const moving = Boolean(dx || dy);
+    const sameOwner = state.velocityRepeatOwnerCommandId !== null
+      && String(state.velocityRepeatOwnerCommandId) === String(ownerCommand?.id ?? '')
+      && Number(state.velocityRepeatDx) === Number(dx)
+      && Number(state.velocityRepeatDy) === Number(dy);
+    if (sameOwner && moving) {
+      state.velocityRepeatUntilMs = Math.max(Number(state.velocityRepeatUntilMs || 0), now() + velocityRepeatHoldMs);
+      state.velocityLogicalRefreshCount += 1;
+      if (state.velocityRepeatTimer) {
+        return {
+          repeatMs: velocityRepeatMs,
+          holdMs: velocityRepeatHoldMs,
+          stopRepeats: 0,
+          ownerReused: true
+        };
+      }
+    }
     clearVelocityRepeatTimer();
     state.velocityRepeatToken += 1;
     const token = state.velocityRepeatToken;
+    state.velocityRepeatOwnerCommandId = ownerCommand?.id ?? null;
+    state.velocityRepeatDx = dx;
+    state.velocityRepeatDy = dy;
     if (moving) {
       state.velocityRepeatUntilMs = now() + velocityRepeatHoldMs;
       state.velocityStopRepeatsLeft = 0;
@@ -671,16 +842,24 @@ function createBrowserlessActionAdapter(options = {}) {
         state.lastVelocityRepeatError = '';
         if (onVelocityRequest) {
           try {
-            onVelocityRequest({
+            const repeatAtMs = now();
+            const frameReceivedAtMs = optionalNumber(state.latestObservedAtMs);
+            const telemetry = onVelocityRequest({
               commandId: ownerCommand?.id ?? null,
               repeatOwnerCommandId: ownerCommand?.id ?? null,
               dx,
               dy,
               reason: ownerCommand?.reason || 'velocity-repeat',
-              requestedAtMs: now(),
+              requestedAtMs: repeatAtMs,
               observedTick: state.latestObservedTick,
+              observedAtMs: frameReceivedAtMs,
+              frameReceivedAtMs,
+              observedTickAgeAtSendMs: frameReceivedAtMs === null ? null : Math.max(0, repeatAtMs - frameReceivedAtMs),
+              generation: ownerCommand?.directionGeneration ?? null,
+              ownership: ownerCommand?.ownership || null,
               repeat: true
             });
+            if (telemetry) state.lastVelocityTelemetry = telemetry;
           } catch (_) {}
         }
       } catch (err) {
@@ -817,6 +996,8 @@ function createBrowserlessActionAdapter(options = {}) {
     const atMs = now();
     dx = quantizeVelocity(dx);
     dy = quantizeVelocity(dy);
+    const requestTiming = velocityRequestTiming(atMs, sendOptions);
+    const ownership = requestTiming.ownership;
     if (state.transportSealed) {
       state.skippedCount += 1;
       return { ok: false, skipped: true, reason: state.transportSealReason || 'transport-sealed' };
@@ -828,6 +1009,31 @@ function createBrowserlessActionAdapter(options = {}) {
     }
     const last = state.lastCommand;
     const changed = !last || Number(last.dx) !== Number(dx) || Number(last.dy) !== Number(dy);
+    if (changed && velocityOwnershipSuperseded(ownership, state.velocityOwnership)) {
+      state.skippedCount += 1;
+      state.velocityOwnershipSuppressedCount += 1;
+      return {
+        ok: true,
+        skipped: true,
+        reason: 'velocity-ownership-superseded',
+        command: summarizeCommand(last),
+        ownership,
+        currentOwnership: state.velocityOwnership ? { ...state.velocityOwnership } : null
+      };
+    }
+    if (!changed) refreshVelocityOwnership(ownership, last);
+    if (!changed && velocityRepeatEnabled && !sendOptions.suppressRepeat) {
+      const repeat = scheduleVelocityRepeat(dx, dy, last);
+      state.skippedCount += 1;
+      return {
+        ok: true,
+        skipped: true,
+        reason: 'unchanged-direction-repeat-owned',
+        command: summarizeCommand(last),
+        repeat,
+        directionGeneration: last?.directionGeneration ?? null
+      };
+    }
     if (!changed && atMs - Number(last.sentAtMs || 0) < commandIntervalMs) {
       state.skippedCount += 1;
       return { ok: true, skipped: true, reason: 'unchanged-command-throttled', command: summarizeCommand(last) };
@@ -835,6 +1041,7 @@ function createBrowserlessActionAdapter(options = {}) {
     clearPrecisionPulseStop();
     state.velocityPulseToken += 1;
     const pulseToken = state.velocityPulseToken;
+    if (changed) cancelVelocityRepeat();
     try {
       transport.sendVelocity(dx, dy);
     } catch (err) {
@@ -850,6 +1057,7 @@ function createBrowserlessActionAdapter(options = {}) {
         transportClosed: /websocket is not open|not open|closed/i.test(message)
       };
     }
+    if (changed) state.velocityDirectionGeneration += 1;
     const command = {
       id: nextCommandId,
       type: 'velocity',
@@ -858,6 +1066,8 @@ function createBrowserlessActionAdapter(options = {}) {
       reason,
       sentAtMs: atMs,
       sentAt: new Date(atMs).toISOString(),
+      directionGeneration: Math.max(1, Number(state.velocityDirectionGeneration || 1)),
+      ownership: { ...ownership },
       target,
       settleAfterTick: null,
       observedFrames: 0,
@@ -878,22 +1088,44 @@ function createBrowserlessActionAdapter(options = {}) {
     };
     if (onVelocityRequest) {
       try {
-        onVelocityRequest({
+        const telemetry = onVelocityRequest({
           commandId: command.id,
           repeatOwnerCommandId: command.id,
           dx,
           dy,
           reason,
           requestedAtMs: atMs,
-          observedTick: state.latestObservedTick,
+          observedTick: requestTiming.observedTick,
+          observedAtMs: requestTiming.frameReceivedAtMs,
+          frameReceivedAtMs: requestTiming.frameReceivedAtMs,
+          frameReceivedToDecisionMs: requestTiming.frameReceivedToDecisionMs,
+          decisionToVelocitySendMs: requestTiming.decisionToVelocitySendMs,
+          observedTickAgeAtSendMs: requestTiming.observedTickAgeAtSendMs,
+          generation: command.directionGeneration,
+          ownership,
           repeat: false
         });
+        if (telemetry) {
+          command.movementTelemetry = telemetry;
+          state.lastVelocityTelemetry = telemetry;
+          if (Number.isFinite(Number(telemetry.directionGeneration))) {
+            command.directionGeneration = Number(telemetry.directionGeneration);
+          }
+        }
       } catch (_) {}
     }
     const repeat = sendOptions.suppressRepeat
       ? (cancelVelocityRepeat(), null)
       : scheduleVelocityRepeat(dx, dy, command);
     updateMovementStallIntent(command);
+    state.velocityOwnership = {
+      ...ownership,
+      directionGeneration: command.directionGeneration,
+      commandId: command.id,
+      dx,
+      dy,
+      sentAtMs: atMs
+    };
     return { ok: true, skipped: false, command: summarizeCommand(command), pulseToken, repeat };
   }
 
@@ -1030,9 +1262,21 @@ function createBrowserlessActionAdapter(options = {}) {
     return { ok: true, skipped: false, command: summarizeCommand(command), cadenceMs: intervalMs };
   }
 
-  function stop(reason = 'stop') {
+  function stop(reason = 'stop', stopOptions = {}) {
     cancelShootRepeat('stop');
-    return sendVelocity(0, 0, reason);
+    const ownership = stopOptions.ownership || (!activeApplyContext
+      ? {
+          source: 'adapter-stop',
+          band: 'safety',
+          hardSafety: true,
+          observedTick: state.latestObservedTick,
+          priority: 50
+        }
+      : null);
+    return sendVelocity(0, 0, reason, null, {
+      ...stopOptions,
+      ownership
+    });
   }
 
   function sealTransport(reason = 'transport-sealed') {
@@ -1058,11 +1302,14 @@ function createBrowserlessActionAdapter(options = {}) {
       : {};
   }
 
-  function applyDecision(stateSnapshot, decision) {
-    cancelShootRepeat('new-decision');
-    if (combatSummaryFromDecision(decision)) {
-      return applyCombatDecision(stateSnapshot, decision);
-    }
+  function applyDecision(stateSnapshot, decision, applyOptions = {}) {
+    const previousApplyContext = activeApplyContext;
+    activeApplyContext = actionApplyContext(stateSnapshot, decision, applyOptions);
+    try {
+      cancelShootRepeat('new-decision');
+      if (combatSummaryFromDecision(decision)) {
+        return applyCombatDecision(stateSnapshot, decision);
+      }
     const safetyMotion = safetyMotionFromDecision(decision);
     if (safetyMotion) {
       return applySafetyMotionDecision(safetyMotion);
@@ -1161,26 +1408,29 @@ function createBrowserlessActionAdapter(options = {}) {
       ? sendOpportunisticShot(self, opportunisticShot, decision)
       : { ok: true, skipped: true, reason: 'no-opportunistic-shot' };
     const precisionPulseMs = schedulePrecisionPulseStop(sent, vector.precisionPulseMs, profitAction.kind);
-    return {
-      ok: Boolean(sent.ok && shoot.ok),
-      kind: 'velocity',
-      reason: vector.reason,
-      vector,
-      command: sent.command || null,
-      shoot: {
-        ok: shoot.ok,
-        skipped: Boolean(shoot.skipped),
-        reason: shoot.reason,
-        command: shoot.command || null,
-        cadenceMs: shoot.cadenceMs || null
-      },
-      opportunisticShot: opportunisticShot || null,
-      target: opportunisticShot || target,
-      skipped: Boolean(sent.skipped),
-      precisionPulseMs,
-      feedbackGuided,
-      ...transportFailure(sent, shoot)
-    };
+      return {
+        ok: Boolean(sent.ok && shoot.ok),
+        kind: 'velocity',
+        reason: vector.reason,
+        vector,
+        command: sent.command || null,
+        shoot: {
+          ok: shoot.ok,
+          skipped: Boolean(shoot.skipped),
+          reason: shoot.reason,
+          command: shoot.command || null,
+          cadenceMs: shoot.cadenceMs || null
+        },
+        opportunisticShot: opportunisticShot || null,
+        target: opportunisticShot || target,
+        skipped: Boolean(sent.skipped),
+        precisionPulseMs,
+        feedbackGuided,
+        ...transportFailure(sent, shoot)
+      };
+    } finally {
+      activeApplyContext = previousApplyContext;
+    }
   }
 
   function sendOpportunisticShot(self, target, decision) {
@@ -1516,21 +1766,24 @@ function createBrowserlessActionAdapter(options = {}) {
     };
   }
 
-  function applyCombatDecision(stateSnapshot, decision) {
-    cancelShootRepeat('combat-decision');
-    const combat = combatSummaryFromDecision(decision);
-    const self = stateSnapshot?.realtime?.self || combat?.self || null;
-    if (!combat?.target) {
-      const stopped = stop('combat-live-no-target');
-      return {
-        ok: stopped.ok,
-        kind: 'stop',
-        reason: 'combat-live-no-target',
-        command: stopped.command || null,
-        skipped: Boolean(stopped.skipped),
-        ...transportFailure(stopped)
-      };
-    }
+  function applyCombatDecision(stateSnapshot, decision, applyOptions = {}) {
+    const previousApplyContext = activeApplyContext;
+    if (!activeApplyContext) activeApplyContext = actionApplyContext(stateSnapshot, decision, applyOptions);
+    try {
+      cancelShootRepeat('combat-decision');
+      const combat = combatSummaryFromDecision(decision);
+      const self = stateSnapshot?.realtime?.self || combat?.self || null;
+      if (!combat?.target) {
+        const stopped = stop('combat-live-no-target');
+        return {
+          ok: stopped.ok,
+          kind: 'stop',
+          reason: 'combat-live-no-target',
+          command: stopped.command || null,
+          skipped: Boolean(stopped.skipped),
+          ...transportFailure(stopped)
+        };
+      }
     const movement = combat.movement || {};
     const velocity = sendVelocity(
       roundVelocity(movement.dx),
@@ -1592,34 +1845,40 @@ function createBrowserlessActionAdapter(options = {}) {
         );
       }
     }
-    return {
-      ok: Boolean(velocity.ok && shoot.ok),
-      kind: 'combat-live',
-      reason: decision?.action?.reason || decision?.reason || 'combat-live',
-      movement: {
-        ok: velocity.ok,
-        skipped: Boolean(velocity.skipped),
-        reason: movement.reason || velocity.reason,
-        command: velocity.command || null,
-        ...transportFailure(velocity)
-      },
-      shoot: {
-        ok: shoot.ok,
-        skipped: Boolean(shoot.skipped),
-        reason: shoot.reason,
-        command: shoot.command || null,
-        cadenceMs: shoot.cadenceMs || null,
-        ...transportFailure(shoot)
-      },
-      target: combat.target,
-      ...transportFailure(velocity, shoot)
-    };
+      return {
+        ok: Boolean(velocity.ok && shoot.ok),
+        kind: 'combat-live',
+        reason: decision?.action?.reason || decision?.reason || 'combat-live',
+        movement: {
+          ok: velocity.ok,
+          skipped: Boolean(velocity.skipped),
+          reason: velocity.reason || movement.reason,
+          command: velocity.command || null,
+          ownership: velocity.ownership || null,
+          currentOwnership: velocity.currentOwnership || null,
+          ...transportFailure(velocity)
+        },
+        shoot: {
+          ok: shoot.ok,
+          skipped: Boolean(shoot.skipped),
+          reason: shoot.reason,
+          command: shoot.command || null,
+          cadenceMs: shoot.cadenceMs || null,
+          ...transportFailure(shoot)
+        },
+        target: combat.target,
+        ...transportFailure(velocity, shoot)
+      };
+    } finally {
+      if (!previousApplyContext) activeApplyContext = null;
+    }
   }
 
   function observeState(stateSnapshot) {
     validateShootRepeatState(stateSnapshot);
     observeMovementStall(stateSnapshot);
-    state.latestObservedTick = numberOrNull(stateSnapshot?.realtime?.tick);
+    state.latestObservedTick = optionalNumber(stateSnapshot?.realtime?.tick);
+    state.latestObservedAtMs = optionalNumber(stateSnapshot?.realtime?.receivedAtMs);
     state.shootAckTimeoutMs = Math.max(500, Number(
       stateSnapshot?.command?.shooting?.ackTimeoutMs ?? state.shootAckTimeoutMs ?? initialShootAckTimeoutMs
     ));
@@ -1689,6 +1948,12 @@ function createBrowserlessActionAdapter(options = {}) {
       velocityRepeatSentCount: state.velocityRepeatSentCount,
       shootRepeatSentCount: state.shootRepeatSentCount,
       velocityRepeatUntilMs: state.velocityRepeatUntilMs,
+      velocityRepeatOwnerCommandId: state.velocityRepeatOwnerCommandId,
+      velocityDirectionGeneration: state.velocityDirectionGeneration,
+      velocityLogicalRefreshCount: state.velocityLogicalRefreshCount,
+      velocityOwnershipSuppressedCount: state.velocityOwnershipSuppressedCount,
+      velocityOwnership: state.velocityOwnership ? { ...state.velocityOwnership } : null,
+      lastVelocityTelemetry: state.lastVelocityTelemetry,
       velocityStopRepeatsLeft: state.velocityStopRepeatsLeft,
       shootRepeatUntilMs: state.shootRepeatUntilMs,
       shootRepeatTargetKey: state.shootRepeatTargetKey,

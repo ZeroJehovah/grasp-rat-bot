@@ -68,6 +68,274 @@ function movementThreatSafeCore(threat, minimumCpaCm = 200) {
     && worstCaseCpa >= Math.max(1, Number(minimumCpaCm || 200));
 }
 
+function movementDirectionKeyCore(direction = {}) {
+  const normalized = normalizedDirection(direction);
+  return `${normalized.dx},${normalized.dy}`;
+}
+
+function movementSettlementWindowTicksCore(timing = {}) {
+  const exactReady = timing?.exactReady === true
+    || (String(timing?.source || '').includes('exact') && Number(timing?.sampleCount || 0) >= 4);
+  const trustedMedian = exactReady ? Number(timing?.medianTicks) : 2;
+  return Math.max(2, Math.min(7, Math.round(Number.isFinite(trustedMedian) ? trustedMedian : 2)));
+}
+
+/**
+ * Threat-aware short settlement window for combat movement generations.
+ * The function is pure: callers own lifecycle state and may apply the returned
+ * direction or keep it as a shadow counterfactual while the rollout flag is off.
+ */
+function stabilizeCombatMovementDirectionCore(input = {}, options = {}) {
+  const nowMs = Number.isFinite(Number(input.nowMs)) ? Number(input.nowMs) : Date.now();
+  const tick = Number.isFinite(Number(input.tick)) ? Number(input.tick) : null;
+  const targetId = String(input.targetId ?? '');
+  const engagementId = String(input.engagementId ?? targetId);
+  const candidateDirection = normalizedDirection(input.candidateDirection);
+  const candidateKey = movementDirectionKeyCore(candidateDirection);
+  const minimumCpaCm = Math.max(1, Number(options.minimumCpaCm ?? input.minimumCpaCm ?? 200));
+  const materialCpaGainCm = Math.max(1, Number(options.materialCpaGainCm ?? input.materialCpaGainCm ?? 75));
+  const settlementWindowTicks = movementSettlementWindowTicksCore(input.movementTiming || {});
+  const tickMs = Math.max(1, Number(options.tickMs ?? input.tickMs ?? 50));
+  const ttlMs = Math.max(
+    settlementWindowTicks * tickMs * 2,
+    Math.min(2500, Math.max(750, Number(options.ttlMs ?? input.ttlMs ?? 1500)))
+  );
+  const maximumGenerationHoldTicks = Math.max(
+    settlementWindowTicks,
+    Math.ceil(ttlMs / tickMs)
+  );
+  const previous = input.previousState && typeof input.previousState === 'object'
+    ? input.previousState
+    : null;
+  const lifecycleMatch = Boolean(
+    previous
+      && String(previous.targetId ?? '') === targetId
+      && String(previous.engagementId ?? '') === engagementId
+      && Number(previous.expiresAtMs || 0) >= nowMs
+  );
+  const baseCounters = lifecycleMatch && previous?.counters
+    ? { ...previous.counters }
+    : {
+        candidateSwitches: 0,
+        appliedSwitches: 0,
+        suppressedSwitches: 0,
+        rapidReversalSuppressed: 0,
+        hardReleases: 0
+      };
+
+  if (!lifecycleMatch) {
+    const state = {
+      targetId,
+      engagementId,
+      direction: candidateDirection,
+      previousDirection: null,
+      proposedDirection: null,
+      proposedAtMs: null,
+      proposedTick: null,
+      generation: Math.max(1, Number(previous?.generation || 0) + 1),
+      selectedAtMs: nowMs,
+      selectedTick: tick,
+      updatedAtMs: nowMs,
+      expiresAtMs: nowMs + ttlMs,
+      counters: baseCounters
+    };
+    return {
+      direction: candidateDirection,
+      state,
+      held: false,
+      switched: true,
+      reason: previous ? 'movement-stability-lifecycle-reset' : 'movement-stability-initialized',
+      settlementWindowTicks,
+      maximumGenerationHoldTicks,
+      generationAgeTicks: 0,
+      candidateThreat: directionThreatCore(input.threatField, candidateDirection),
+      heldThreat: null,
+      newDirectHits: 0,
+      newUnavoidableHits: 0,
+      worstCaseCpaCm: null
+    };
+  }
+
+  const heldDirection = normalizedDirection(previous.direction);
+  const heldKey = movementDirectionKeyCore(heldDirection);
+  const candidateThreat = directionThreatCore(input.threatField, candidateDirection);
+  const heldThreat = directionThreatCore(input.threatField, heldDirection);
+  const candidateDirectHits = Math.max(0, Number(candidateThreat?.directHits || 0));
+  const heldDirectHits = Math.max(0, Number(heldThreat?.directHits || 0));
+  const candidateUnavoidableHits = Math.max(0, Number(candidateThreat?.unavoidableHits || 0));
+  const heldUnavoidableHits = Math.max(0, Number(heldThreat?.unavoidableHits || 0));
+  const candidateCpa = Number(candidateThreat?.worstCaseCpaCm ?? candidateThreat?.minCPA ?? Infinity);
+  const heldCpa = Number(heldThreat?.worstCaseCpaCm ?? heldThreat?.minCPA ?? Infinity);
+  const candidateSafe = movementThreatSafeCore(candidateThreat, minimumCpaCm)
+    && candidateUnavoidableHits === 0;
+  const heldSafe = movementThreatSafeCore(heldThreat, minimumCpaCm)
+    && heldUnavoidableHits === 0;
+  const selectedTick = Number.isFinite(Number(previous.selectedTick)) ? Number(previous.selectedTick) : null;
+  const selectedElapsedTicks = tick !== null && selectedTick !== null
+    ? Math.max(0, tick - selectedTick)
+    : Math.max(0, Math.floor((nowMs - Number(previous.selectedAtMs || nowMs)) / tickMs));
+  const candidateChanged = candidateKey !== heldKey;
+  const proposedDirection = previous.proposedDirection
+    ? normalizedDirection(previous.proposedDirection)
+    : null;
+  const proposedKey = proposedDirection ? movementDirectionKeyCore(proposedDirection) : '';
+  const proposedMatchesCandidate = Boolean(candidateChanged && proposedDirection && proposedKey === candidateKey);
+  const proposedAtMs = proposedMatchesCandidate
+    ? Number(previous.proposedAtMs || nowMs)
+    : nowMs;
+  const proposedTick = proposedMatchesCandidate && Number.isFinite(Number(previous.proposedTick))
+    ? Number(previous.proposedTick)
+    : tick;
+  const elapsedTicks = candidateChanged
+    ? (tick !== null && proposedTick !== null
+        ? Math.max(0, tick - proposedTick)
+        : Math.max(0, Math.floor((nowMs - proposedAtMs) / tickMs)))
+    : selectedElapsedTicks;
+  const reducedHits = candidateDirectHits < heldDirectHits
+    || candidateUnavoidableHits < heldUnavoidableHits;
+  const restoredSafety = heldCpa < minimumCpaCm && candidateCpa >= minimumCpaCm;
+  const materialCpaGain = Number.isFinite(candidateCpa) && Number.isFinite(heldCpa)
+    && candidateCpa - heldCpa >= materialCpaGainCm;
+  const hardRelease = Boolean(
+    input.hardGateChanged
+      || input.transportReset
+      || input.commandUpperBoundExpired
+      || input.commandUnmatched
+      || input.newThreatUrgent
+      || !heldSafe
+      || reducedHits
+      || restoredSafety
+      || materialCpaGain
+  );
+  const withinWindow = elapsedTicks < settlementWindowTicks
+    && selectedElapsedTicks < maximumGenerationHoldTicks;
+  const canHold = candidateChanged
+    && !hardRelease
+    && withinWindow
+    && heldSafe
+    && candidateSafe
+    && candidateDirectHits >= heldDirectHits
+    && candidateUnavoidableHits >= heldUnavoidableHits;
+
+  if (canHold) {
+    const newProposal = !proposedMatchesCandidate;
+    if (newProposal) {
+      baseCounters.candidateSwitches += 1;
+      baseCounters.suppressedSwitches += 1;
+    }
+    const rapidReversal = previous.previousDirection
+      && movementDirectionKeyCore(previous.previousDirection) === candidateKey;
+    if (rapidReversal && newProposal) baseCounters.rapidReversalSuppressed += 1;
+    const state = {
+      ...previous,
+      proposedDirection: candidateDirection,
+      proposedAtMs,
+      proposedTick,
+      updatedAtMs: nowMs,
+      expiresAtMs: nowMs + ttlMs,
+      counters: baseCounters
+    };
+    return {
+      direction: heldDirection,
+      state,
+      held: true,
+      switched: false,
+      rapidReversal,
+      reason: rapidReversal ? 'movement-stability-a-b-a-suppressed' : 'movement-stability-safe-settlement-hold',
+      settlementWindowTicks,
+      maximumGenerationHoldTicks,
+      generationAgeTicks: selectedElapsedTicks,
+      elapsedTicks,
+      candidateThreat,
+      heldThreat,
+      newDirectHits: Math.max(0, heldDirectHits - candidateDirectHits),
+      newUnavoidableHits: Math.max(0, heldUnavoidableHits - candidateUnavoidableHits),
+      worstCaseCpaCm: Number.isFinite(heldCpa) ? heldCpa : null
+    };
+  }
+
+  if (!candidateChanged) {
+    const proposalReturnedToHeld = Boolean(previous.proposedDirection);
+    if (proposalReturnedToHeld) baseCounters.rapidReversalSuppressed += 1;
+    return {
+      direction: heldDirection,
+      state: {
+        ...previous,
+        proposedDirection: null,
+        proposedAtMs: null,
+        proposedTick: null,
+        updatedAtMs: nowMs,
+        expiresAtMs: nowMs + ttlMs,
+        counters: baseCounters
+      },
+      held: false,
+      switched: false,
+      rapidReversal: proposalReturnedToHeld,
+      reason: proposalReturnedToHeld
+        ? 'movement-stability-a-b-a-suppressed'
+        : 'movement-stability-direction-unchanged',
+      settlementWindowTicks,
+      maximumGenerationHoldTicks,
+      generationAgeTicks: selectedElapsedTicks,
+      elapsedTicks,
+      candidateThreat,
+      heldThreat,
+      newDirectHits: 0,
+      newUnavoidableHits: 0,
+      worstCaseCpaCm: Number.isFinite(candidateCpa) ? candidateCpa : null
+    };
+  }
+
+  if (!proposedMatchesCandidate) baseCounters.candidateSwitches += 1;
+  baseCounters.appliedSwitches += 1;
+  if (hardRelease) baseCounters.hardReleases += 1;
+  const state = {
+    targetId,
+    engagementId,
+    direction: candidateDirection,
+    previousDirection: heldDirection,
+    proposedDirection: null,
+    proposedAtMs: null,
+    proposedTick: null,
+    generation: Math.max(1, Number(previous.generation || 0) + 1),
+    selectedAtMs: nowMs,
+    selectedTick: tick,
+    updatedAtMs: nowMs,
+    expiresAtMs: nowMs + ttlMs,
+    counters: baseCounters
+  };
+  return {
+    direction: candidateDirection,
+    state,
+    held: false,
+    switched: true,
+    reason: hardRelease
+      ? 'movement-stability-immediate-safety-release'
+      : 'movement-stability-window-expired',
+    release: {
+      hardGateChanged: Boolean(input.hardGateChanged),
+      transportReset: Boolean(input.transportReset),
+      commandUpperBoundExpired: Boolean(input.commandUpperBoundExpired),
+      commandUnmatched: Boolean(input.commandUnmatched),
+      newThreatUrgent: Boolean(input.newThreatUrgent),
+      heldSafe,
+      candidateSafe,
+      reducedHits,
+      restoredSafety,
+      materialCpaGain
+    },
+    settlementWindowTicks,
+    maximumGenerationHoldTicks,
+    generationAgeTicks: selectedElapsedTicks,
+    elapsedTicks,
+    candidateThreat,
+    heldThreat,
+    newDirectHits: 0,
+    newUnavoidableHits: 0,
+    worstCaseCpaCm: Number.isFinite(candidateCpa) ? candidateCpa : null
+  };
+}
+
 /**
  * Pick movement by collision risk first and tactical progress second.
  * Merely having an in-flight projectile must not grant Dodge ownership.
@@ -800,8 +1068,11 @@ function isRecoverableOutOfRangeTarget(self, target, engagement = {}) {
 module.exports = {
   calculateCombatSpacing,
   directionThreatCore,
+  movementDirectionKeyCore,
+  movementSettlementWindowTicksCore,
   movementThreatSafeCore,
   selectCombatMovementArbitrationCore,
+  stabilizeCombatMovementDirectionCore,
   shouldBackAwayFromTarget,
   calculateDodgeDirection,
   contactEntryRiskCore,

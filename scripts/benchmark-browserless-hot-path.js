@@ -165,14 +165,12 @@ async function measureSnapshotRefreshCycle(iterations, fixture, adapter) {
     fixture.state.fallback.frameAgeMs = 0;
     let started = performance.now();
     adapter.refreshSnapshotObservation(fixture.state, {
-      ...fixture.adapterOptions,
       nowMs: snapshotNowMs
     });
     refreshValues.push(performance.now() - started);
     const controlNowMs = fixture.advance(50);
     started = performance.now();
     lastValue = adapter.evaluateRealtime(fixture.state, {
-      ...fixture.adapterOptions,
       nowMs: controlNowMs
     });
     controlValues.push(performance.now() - started);
@@ -774,14 +772,12 @@ async function runBenchmark(options) {
   for (let index = 0; index < options.warmup; index += 1) {
     fixture.advance(50);
     decisionAdapter.evaluateRealtime(fixture.state, {
-      ...fixture.adapterOptions,
       nowMs: fixture.now()
     });
   }
   const realtimeControl = await measureYielding(options.iterations, () => {
     fixture.advance(50);
     return decisionAdapter.evaluateRealtime(fixture.state, {
-      ...fixture.adapterOptions,
       nowMs: fixture.now()
     });
   });

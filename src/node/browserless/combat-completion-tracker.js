@@ -54,25 +54,61 @@ function validRouteFeedbackKey(key) {
     && Boolean(text.slice(marker + '|candidate='.length));
 }
 
+function boundedLearningMap(value, limit, validCell, normalizeCell) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const entries = [];
+  for (const key of Object.keys(value)) {
+    const cell = value[key];
+    if (!validCell(key, cell)) continue;
+    entries.push({
+      key: String(key),
+      cell: normalizeCell(cell),
+      updatedAt: numeric(cell.updatedAt)
+    });
+  }
+  if (entries.length > limit) {
+    entries.sort((left, right) => right.updatedAt - left.updatedAt);
+    entries.length = limit;
+  }
+  const output = {};
+  for (const entry of entries) output[entry.key] = entry.cell;
+  return output;
+}
+
+function sanitizeRouteOutcomes(value) {
+  const entries = [];
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    for (const state of Object.keys(value)) {
+      const count = numeric(value[state]);
+      if (!/^[a-z-]+$/.test(String(state)) || !(count > 0)) continue;
+      entries.push({ state: String(state), count });
+    }
+  }
+  entries.sort((left, right) => right.count - left.count);
+  if (entries.length > 9) entries.length = 9;
+  const output = {};
+  for (const entry of entries) output[entry.state] = entry.count;
+  return output;
+}
+
 function sanitizeStrategyLearning(value) {
   if (!value || typeof value !== 'object') return null;
-  const hitRateByModeDistance = value.hitRateByModeDistance && typeof value.hitRateByModeDistance === 'object'
-    ? Object.fromEntries(Object.entries(value.hitRateByModeDistance)
-      .filter(([key, cell]) => validGenericLearningKey(key) && cell && typeof cell === 'object')
-      .sort((a, b) => Number(b[1]?.updatedAt || 0) - Number(a[1]?.updatedAt || 0))
-      .slice(0, 512)
-      .map(([key, cell]) => [String(key), {
+  const genericCell = (key, cell) => validGenericLearningKey(key) && cell && typeof cell === 'object';
+  const hitRateByModeDistance = boundedLearningMap(
+    value.hitRateByModeDistance,
+    512,
+    genericCell,
+    cell => ({
         shots: numeric(cell.shots),
         hits: numeric(cell.hits),
         updatedAt: numeric(cell.updatedAt)
-      }]))
-    : {};
-  const modeMetrics = value.modeMetrics && typeof value.modeMetrics === 'object'
-    ? Object.fromEntries(Object.entries(value.modeMetrics)
-      .filter(([key, cell]) => validGenericLearningKey(key) && cell && typeof cell === 'object')
-      .sort((a, b) => Number(b[1]?.updatedAt || 0) - Number(a[1]?.updatedAt || 0))
-      .slice(0, 256)
-      .map(([key, cell]) => [String(key), {
+      })
+  );
+  const modeMetrics = boundedLearningMap(
+    value.modeMetrics,
+    256,
+    genericCell,
+    cell => ({
         engagements: numeric(cell.engagements),
         shots: numeric(cell.shots),
         hits: numeric(cell.hits),
@@ -86,39 +122,33 @@ function sanitizeStrategyLearning(value) {
         disengagements: numeric(cell.disengagements),
         modeTransitions: numeric(cell.modeTransitions),
         updatedAt: numeric(cell.updatedAt)
-      }]))
-    : {};
-  const routeTransitions = value.routeTransitions && typeof value.routeTransitions === 'object'
-    ? Object.fromEntries(Object.entries(value.routeTransitions)
-      .filter(([key, cell]) => validRouteContextKey(key)
-        && cell && typeof cell === 'object'
-        && numeric(cell.samples) >= 4)
-      .sort((a, b) => Number(b[1]?.updatedAt || 0) - Number(a[1]?.updatedAt || 0))
-      .slice(0, 256)
-      .map(([key, cell]) => [String(key), {
+      })
+  );
+  const routeTransitions = boundedLearningMap(
+    value.routeTransitions,
+    256,
+    (key, cell) => validRouteContextKey(key)
+      && cell && typeof cell === 'object'
+      && numeric(cell.samples) >= 4,
+    cell => ({
         samples: numeric(cell.samples),
-        outcomes: Object.fromEntries(Object.entries(cell.outcomes || {})
-          .filter(([state, count]) => /^[a-z-]+$/.test(String(state)) && numeric(count) > 0)
-          .sort((a, b) => Number(b[1]) - Number(a[1]))
-          .slice(0, 9)
-          .map(([state, count]) => [String(state), numeric(count)])),
+        outcomes: sanitizeRouteOutcomes(cell.outcomes),
         updatedAt: numeric(cell.updatedAt)
-      }]))
-    : {};
-  const routeAimFeedback = value.routeAimFeedback && typeof value.routeAimFeedback === 'object'
-    ? Object.fromEntries(Object.entries(value.routeAimFeedback)
-      .filter(([key, cell]) => validRouteFeedbackKey(key)
-        && cell && typeof cell === 'object'
-        && numeric(cell.samples) >= 4)
-      .sort((a, b) => Number(b[1]?.updatedAt || 0) - Number(a[1]?.updatedAt || 0))
-      .slice(0, 512)
-      .map(([key, cell]) => [String(key), {
+      })
+  );
+  const routeAimFeedback = boundedLearningMap(
+    value.routeAimFeedback,
+    512,
+    (key, cell) => validRouteFeedbackKey(key)
+      && cell && typeof cell === 'object'
+      && numeric(cell.samples) >= 4,
+    cell => ({
         samples: numeric(cell.samples),
         hits: Math.min(numeric(cell.hits), numeric(cell.samples)),
         missTotalCm: numeric(cell.missTotalCm),
         updatedAt: numeric(cell.updatedAt)
-      }]))
-    : {};
+      })
+  );
   return { hitRateByModeDistance, modeMetrics, routeTransitions, routeAimFeedback };
 }
 

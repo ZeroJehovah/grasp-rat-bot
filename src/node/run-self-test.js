@@ -51,7 +51,9 @@ const {
   openBrowserlessWs
 } = require('./browserless/ws-transport');
 const {
+  attributeVelocityTransition,
   createBrowserlessStateStore,
+  movementTimingSummary,
   selectRealtimeCombatState
 } = require('./browserless/state-store');
 const {
@@ -106,6 +108,9 @@ const {
   movementTransitionModelCore,
   updateOpponentBehaviorStateCore
 } = require('../strategy/opponent-behavior');
+const {
+  stabilizeCombatMovementDirectionCore
+} = require('../strategy/combat-movement');
 const {
   determineCombatFireState,
   evaluateCombatFireBudgetCore,
@@ -19530,40 +19535,380 @@ async function runSelfTest() {
       want: 'true|1|0|velocity|vel 1 0|1|false|movement-not-observed|true|movement-progress-observed|true'
     },
     {
-      name: 'browserless movement execution timing tracks old command transition before its replacement',
+      name: 'browserless movement attribution marks one causal command exact',
+      got: (() => {
+        const result = attributeVelocityTransition([
+          { sequence: 1, commandId: 11, dx: 1, dy: 0, requestedAtMs: 100, observedTick: 10, directionGeneration: 1 }
+        ], { dx: 1, dy: 0 }, { receivedAtMs: 200, tick: 12 });
+        return [
+          result.attributionConfidence,
+          result.wallDelayMsLower,
+          result.wallDelayMsUpper,
+          result.tickDelayLower,
+          result.tickDelayUpper,
+          result.commandId
+        ].join('|');
+      })(),
+      want: 'exact|100|100|2|2|11'
+    },
+    {
+      name: 'browserless movement attribution keeps same-direction repeats bounded',
+      got: (() => {
+        const result = attributeVelocityTransition([
+          { sequence: 1, commandId: 11, dx: 1, dy: 0, requestedAtMs: 100, observedTick: 10 },
+          { sequence: 2, commandId: 12, dx: 1, dy: 0, requestedAtMs: 140, observedTick: 11 }
+        ], { dx: 1, dy: 0 }, { receivedAtMs: 220, tick: 13 });
+        return [
+          result.attributionConfidence,
+          result.candidateCommandCount,
+          result.wallDelayMsLower,
+          result.wallDelayMsUpper,
+          result.tickDelayLower,
+          result.tickDelayUpper,
+          result.replacementCount
+        ].join('|');
+      })(),
+      want: 'bounded|2|80|120|2|3|1'
+    },
+    {
+      name: 'browserless movement attribution marks A-B-A ambiguous',
+      got: (() => {
+        const result = attributeVelocityTransition([
+          { sequence: 1, commandId: 11, dx: 1, dy: 0, requestedAtMs: 100, observedTick: 10 },
+          { sequence: 2, commandId: 12, dx: -1, dy: 0, requestedAtMs: 130, observedTick: 11 },
+          { sequence: 3, commandId: 13, dx: 1, dy: 0, requestedAtMs: 160, observedTick: 12 }
+        ], { dx: 1, dy: 0 }, { receivedAtMs: 220, tick: 14 });
+        return [
+          result.attributionConfidence,
+          result.candidateCommandCount,
+          result.wallDelayMsLower,
+          result.wallDelayMsUpper,
+          result.tickDelayLower,
+          result.tickDelayUpper,
+          result.replacementCount,
+          result.commandId
+        ].join('|');
+      })(),
+      want: 'ambiguous-reversal|2|60|120|2|4|2|'
+    },
+    {
+      name: 'browserless movement attribution keeps a previously replaced old direction ambiguous',
+      got: (() => {
+        const result = attributeVelocityTransition([
+          {
+            sequence: 1,
+            commandId: 11,
+            dx: 1,
+            dy: 0,
+            requestedAtMs: 100,
+            observedTick: 10,
+            replacedByCommandId: 12,
+            replacedByDirection: { dx: -1, dy: 0 }
+          }
+        ], { dx: 1, dy: 0 }, { receivedAtMs: 220, tick: 14 });
+        return [
+          result.attributionConfidence,
+          result.candidateCommandCount,
+          result.replacementCount,
+          result.commandId
+        ].join('|');
+      })(),
+      want: 'ambiguous-reversal|1|1|'
+    },
+    {
+      name: 'browserless movement attribution reports unmatched transitions',
+      got: (() => {
+        const result = attributeVelocityTransition([
+          { sequence: 1, commandId: 11, dx: 1, dy: 0, requestedAtMs: 100, observedTick: 10 }
+        ], { dx: 0, dy: 1 }, { receivedAtMs: 200, tick: 12 });
+        return [result.attributionConfidence, result.candidateCommandCount, result.wallDelayMsUpper].join('|');
+      })(),
+      want: 'unmatched|0|'
+    },
+    {
+      name: 'browserless movement timing learns only exact samples once ready',
+      got: (() => {
+        const timing = movementTimingSummary([
+          { attributionConfidence: 'exact', tickDelayUpper: 2, wallDelayMsUpper: 100 },
+          { attributionConfidence: 'exact', tickDelayUpper: 3, wallDelayMsUpper: 150 },
+          { attributionConfidence: 'exact', tickDelayUpper: 4, wallDelayMsUpper: 200 },
+          { attributionConfidence: 'exact', tickDelayUpper: 4, wallDelayMsUpper: 200 }
+        ], [
+          { attributionConfidence: 'bounded', tickDelayUpper: 20, wallDelayMsUpper: 1000 },
+          { attributionConfidence: 'ambiguous-reversal', tickDelayUpper: 1, wallDelayMsUpper: 50 }
+        ]);
+        return [timing.exactReady, timing.medianTicks, timing.p90Ticks, timing.boundedSampleCount, timing.ambiguousSampleCount].join('|');
+      })(),
+      want: 'true|3|4|1|1'
+    },
+    {
+      name: 'browserless movement timing ignores exact samples without measurable bounds',
+      got: (() => {
+        const timing = movementTimingSummary([
+          { attributionConfidence: 'exact', tickDelayUpper: null, wallDelayMsUpper: null }
+        ], []);
+        return [
+          timing.sampleCount,
+          timing.medianTicks,
+          timing.p90Ticks,
+          timing.medianWallMs,
+          timing.source
+        ].join('|');
+      })(),
+      want: '0|2|5||startup-default'
+    },
+    {
+      name: 'browserless movement timing records exact tick and wall stages',
       got: (() => {
         let nowMs = 1000;
         const store = createBrowserlessStateStore({ userId: 7, now: () => nowMs });
         store.ingestFrame({
           type: 'pos',
-          tick: 767375,
-          entities: [{ entity_id: 1, user_id: 7, x: 11000, y: -48205, vx: 0, vy: 0, hp: 100 }],
+          tick: 10,
+          entities: [{ entity_id: 1, user_id: 7, x: 0, y: 0, vx: 0, vy: 0, hp: 100 }],
           bullets: []
         }, { receivedAtMs: nowMs });
-        store.recordVelocityRequest({ commandId: 2602, dx: 0, dy: 1, observedTick: 767375, requestedAtMs: 1001, reason: 'safe-dodge' });
-        store.recordVelocityRequest({ commandId: 2604, dx: 1, dy: -1, observedTick: 767375, requestedAtMs: 1183, reason: 'tangent-dodge' });
-        nowMs = 1050;
+        store.recordVelocityRequest({
+          commandId: 21,
+          dx: 1,
+          dy: 0,
+          observedTick: 10,
+          observedAtMs: 1000,
+          requestedAtMs: 1010,
+          frameReceivedToDecisionMs: 4,
+          decisionToVelocitySendMs: 6,
+          observedTickAgeAtSendMs: 10,
+          reason: 'safe-dodge'
+        });
+        nowMs = 1100;
         store.ingestFrame({
           type: 'pos',
-          tick: 767376,
-          entities: [{ entity_id: 1, user_id: 7, x: 11000, y: -48155, vx: 0, vy: 50, hp: 100 }],
+          tick: 12,
+          entities: [{ entity_id: 1, user_id: 7, x: 50, y: 0, vx: 50, vy: 0, hp: 100 }],
+          bullets: []
+        }, { receivedAtMs: nowMs });
+        const transition = store.getCommandState(nowMs).movement.actualVelocityTransitions[0];
+        return [
+          transition.attributionConfidence,
+          transition.velocitySendToVisibleWallMs,
+          transition.visibleTransitionTickDelay,
+          transition.observedTickAgeAtSendMs,
+          transition.candidateCommandCount
+        ].join('|');
+      })(),
+      want: 'exact|90|2|10|1'
+    },
+    {
+      name: 'browserless replaced movement commands remain in Dodge schedule when attribution is ambiguous',
+      got: (() => {
+        let nowMs = 1000;
+        const store = createBrowserlessStateStore({ userId: 7, now: () => nowMs });
+        store.ingestFrame({
+          type: 'pos', tick: 10,
+          entities: [{ entity_id: 1, user_id: 7, x: 0, y: 0, vx: 0, vy: 0, hp: 100 }],
+          bullets: []
+        }, { receivedAtMs: nowMs });
+        store.recordVelocityRequest({ commandId: 31, dx: 1, dy: 0, observedTick: 10, requestedAtMs: 1001 });
+        store.recordVelocityRequest({ commandId: 32, dx: -1, dy: 0, observedTick: 10, requestedAtMs: 1010 });
+        nowMs = 1050;
+        store.ingestFrame({
+          type: 'pos', tick: 11,
+          entities: [{ entity_id: 1, user_id: 7, x: 50, y: 0, vx: 50, vy: 0, hp: 100 }],
+          bullets: []
+        }, { receivedAtMs: nowMs });
+        const movement = store.getDecisionState(nowMs).command.movement;
+        return [
+          movement.actualVelocityTransitions[0]?.attributionConfidence,
+          movement.pendingVelocityCommands.length,
+          movement.pendingVelocityCommands[0]?.commandId,
+          movement.pendingVelocityCommands[0]?.replacedByCommandId,
+          movement.pendingVelocityCommands[0]?.directionGeneration,
+          movement.pendingVelocityCommands[1]?.directionGeneration
+        ].join('|');
+      })(),
+      want: 'ambiguous-reversal|2|31|32|1|2'
+    },
+    {
+      name: 'browserless visible replacement does not make an older reversed command exact later',
+      got: (() => {
+        let nowMs = 1000;
+        const store = createBrowserlessStateStore({ userId: 7, now: () => nowMs });
+        store.ingestFrame({
+          type: 'pos', tick: 10,
+          entities: [{ entity_id: 1, user_id: 7, x: 0, y: 0, vx: 0, vy: 0, hp: 100 }],
+          bullets: []
+        }, { receivedAtMs: nowMs });
+        store.recordVelocityRequest({ commandId: 41, dx: 1, dy: 0, observedTick: 10, requestedAtMs: 1001 });
+        store.recordVelocityRequest({ commandId: 42, dx: -1, dy: 0, observedTick: 10, requestedAtMs: 1010 });
+        nowMs = 1050;
+        store.ingestFrame({
+          type: 'pos', tick: 11,
+          entities: [{ entity_id: 1, user_id: 7, x: -50, y: 0, vx: -50, vy: 0, hp: 100 }],
+          bullets: []
+        }, { receivedAtMs: nowMs });
+        nowMs = 1100;
+        store.ingestFrame({
+          type: 'pos', tick: 12,
+          entities: [{ entity_id: 1, user_id: 7, x: 0, y: 0, vx: 50, vy: 0, hp: 100 }],
           bullets: []
         }, { receivedAtMs: nowMs });
         const movement = store.getCommandState(nowMs).movement;
         return [
-          movement.timing.sampleCount,
-          movement.timing.medianTicks,
-          movement.timing.p90Ticks,
+          movement.actualVelocityTransitions[0]?.attributionConfidence,
           movement.actualVelocityTransitions[0]?.commandId,
-          movement.actualVelocityTransitions[0]?.executionDelayTicks,
-          movement.pendingVelocityCommands.length,
-          movement.pendingVelocityCommands[0]?.commandId,
-          movement.pendingVelocityCommands[0]?.dx,
-          movement.pendingVelocityCommands[0]?.dy,
-          movement.observedVelocity?.dy
+          movement.actualVelocityTransitions[1]?.attributionConfidence,
+          movement.actualVelocityTransitions[1]?.replacementCount,
+          movement.timing.exactSampleCount
         ].join('|');
       })(),
-      want: '1|1|1|2602|1|1|2604|1|-1|1'
+      want: 'exact|42|ambiguous-reversal|1|1'
+    },
+    {
+      name: 'combat movement stability holds the current robust-safe generation',
+      got: (() => {
+        const result = stabilizeCombatMovementDirectionCore({
+          nowMs: 1100,
+          tick: 103,
+          targetId: '8',
+          engagementId: '8:1000',
+          candidateDirection: { dx: 0, dy: 1 },
+          threatField: [
+            { dx: 1, dy: 0, directHits: 0, unavoidableHits: 0, worstCaseCpaCm: 320, scheduleRobust: true },
+            { dx: 0, dy: 1, directHits: 0, unavoidableHits: 0, worstCaseCpaCm: 360, scheduleRobust: true }
+          ],
+          movementTiming: { exactReady: true, sampleCount: 8, medianTicks: 5, source: 'visible-velocity-transition-exact-rolling' },
+          previousState: {
+            targetId: '8', engagementId: '8:1000', direction: { dx: 1, dy: 0 }, previousDirection: null,
+            generation: 3, selectedAtMs: 1000, selectedTick: 100, expiresAtMs: 2500,
+            counters: { candidateSwitches: 0, appliedSwitches: 0, suppressedSwitches: 0, rapidReversalSuppressed: 0, hardReleases: 0 }
+          }
+        }, { minimumCpaCm: 200, materialCpaGainCm: 75 });
+        return [result.held, result.direction.dx, result.direction.dy, result.state.generation, result.settlementWindowTicks, result.newDirectHits].join('|');
+      })(),
+      want: 'true|1|0|3|5|0'
+    },
+    {
+      name: 'combat movement stability immediately releases for fewer direct hits',
+      got: (() => {
+        const result = stabilizeCombatMovementDirectionCore({
+          nowMs: 1050,
+          tick: 101,
+          targetId: '8',
+          engagementId: '8:1000',
+          candidateDirection: { dx: 0, dy: -1 },
+          threatField: [
+            { dx: 1, dy: 0, directHits: 1, unavoidableHits: 0, worstCaseCpaCm: 80, scheduleRobust: false },
+            { dx: 0, dy: -1, directHits: 0, unavoidableHits: 0, worstCaseCpaCm: 410, scheduleRobust: true }
+          ],
+          movementTiming: { exactReady: true, sampleCount: 8, medianTicks: 5 },
+          previousState: {
+            targetId: '8', engagementId: '8:1000', direction: { dx: 1, dy: 0 }, previousDirection: null,
+            generation: 1, selectedAtMs: 1000, selectedTick: 100, expiresAtMs: 2500,
+            counters: { candidateSwitches: 0, appliedSwitches: 0, suppressedSwitches: 0, rapidReversalSuppressed: 0, hardReleases: 0 }
+          }
+        }, { minimumCpaCm: 200 });
+        return [result.held, result.direction.dx, result.direction.dy, result.state.generation, result.reason, result.release.reducedHits].join('|');
+      })(),
+      want: 'false|0|-1|2|movement-stability-immediate-safety-release|true'
+    },
+    {
+      name: 'combat movement stability suppresses safe A-B-A without material gain',
+      got: (() => {
+        const result = stabilizeCombatMovementDirectionCore({
+          nowMs: 1100,
+          tick: 102,
+          targetId: '8',
+          engagementId: '8:1000',
+          candidateDirection: { dx: 1, dy: 0 },
+          threatField: [
+            { dx: 0, dy: 1, directHits: 0, unavoidableHits: 0, worstCaseCpaCm: 330, scheduleRobust: true },
+            { dx: 1, dy: 0, directHits: 0, unavoidableHits: 0, worstCaseCpaCm: 350, scheduleRobust: true }
+          ],
+          movementTiming: { exactReady: true, sampleCount: 8, medianTicks: 4 },
+          previousState: {
+            targetId: '8', engagementId: '8:1000', direction: { dx: 0, dy: 1 }, previousDirection: { dx: 1, dy: 0 },
+            generation: 2, selectedAtMs: 1000, selectedTick: 100, expiresAtMs: 2500,
+            counters: { candidateSwitches: 1, appliedSwitches: 1, suppressedSwitches: 0, rapidReversalSuppressed: 0, hardReleases: 0 }
+          }
+        });
+        return [result.held, result.rapidReversal, result.reason, result.state.counters.rapidReversalSuppressed].join('|');
+      })(),
+      want: 'true|true|movement-stability-a-b-a-suppressed|1'
+    },
+    {
+      name: 'browserless combat clears movement stability without realtime self or target',
+      got: (() => {
+        const stateful = {
+          combatMovementStability: { targetId: '8', engagementId: '8:1000', direction: { dx: 1, dy: 0 } }
+        };
+        buildBrowserlessCombatDryRun({
+          userId: 7,
+          realtime: { tick: 100, self: null, entities: [], bullets: [] }
+        }, { decisionState: stateful, nowMs: 1000 });
+        return stateful.combatMovementStability;
+      })(),
+      want: null
+    },
+    {
+      name: 'browserless combat retains one authoritative dodge threat field without metrics duplication',
+      got: (() => {
+        const self = {
+          entity_id: 1,
+          user_id: 7,
+          x: 0,
+          y: 0,
+          vx: 0,
+          vy: 0,
+          hp: 100,
+          max_hp: 100,
+          stamina_5s_remaining_milli: 10000,
+          stamina_5s_limit_milli: 10000
+        };
+        const target = {
+          entity_id: 2,
+          user_id: 8,
+          x: 5000,
+          y: 0,
+          vx: 0,
+          vy: 0,
+          hp: 100,
+          max_hp: 100,
+          current_join_mode: 'Active',
+          firing: true,
+          stamina_5s_remaining_milli: 5000,
+          stamina_5s_limit_milli: 10000
+        };
+        const combat = buildBrowserlessCombatDryRun({
+          userId: 7,
+          realtime: {
+            tick: 100,
+            self,
+            entities: [self, target],
+            bullets: [{
+              bullet_id: 1,
+              owner_user_id: 8,
+              start_x: 5000,
+              start_y: 0,
+              dir_x_micros: -1000000,
+              dir_y_micros: 0,
+              range_cm: 15000,
+              speed_per_tick: 500,
+              created_tick: 99,
+              expire_tick: 129
+            }]
+          }
+        }, {
+          nowMs: 1000,
+          decisionState: {},
+          combatEnabled: true
+        });
+        return [
+          Array.isArray(combat.movement?.dodge?.threatField),
+          combat.movement?.dodge?.threatField?.length > 0,
+          combat.metrics?.lastDodgeThreatField === null
+        ].join('|');
+      })(),
+      want: 'true|true|true'
     },
     {
       name: 'browserless action adapter maps seek-coin target to velocity',
@@ -20330,6 +20675,175 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'velocity|1|0|vel 1 0|22|21|1050|none'
+    },
+    {
+      name: 'browserless velocity telemetry splits frame decision and send stages',
+      got: (() => {
+        let t = 1020;
+        let request = null;
+        const adapter = createBrowserlessActionAdapter({
+          now: () => t,
+          transport: { sendVelocity: () => {} },
+          onVelocityRequest: value => {
+            request = value;
+            return { ...value, directionGeneration: 7, pendingDepthAtSend: 2 };
+          }
+        });
+        adapter.observeState({ realtime: { tick: 10, receivedAtMs: 1000, self: { x: 0, y: 0 } } });
+        const action = adapter.applyDecision({
+          realtime: { tick: 10, receivedAtMs: 1000, self: { x: 0, y: 0 } }
+        }, {
+          action: { kind: 'patrol', band: 'combat', reason: 'telemetry', dx: 1, dy: 0 }
+        }, {
+          source: 'realtime-control', decisionAtMs: 1012, frameReceivedAtMs: 1000
+        });
+        return [
+          request.frameReceivedToDecisionMs,
+          request.decisionToVelocitySendMs,
+          request.observedTickAgeAtSendMs,
+          request.ownership.source,
+          action.command.directionGeneration,
+          action.command.movementTelemetry.pendingDepthAtSend
+        ].join('|');
+      })(),
+      want: '12|8|20|realtime-control|7|2'
+    },
+    {
+      name: 'browserless stale planner velocity cannot override newer realtime Dodge ownership',
+      got: (() => {
+        let t = 1000;
+        const commands = [];
+        const adapter = createBrowserlessActionAdapter({
+          now: () => t,
+          commandIntervalMs: 1,
+          transport: { sendVelocity: (dx, dy) => commands.push(`vel ${dx} ${dy}`) }
+        });
+        const combatDecision = (dx, reason, highFrequencyControl) => ({
+          action: { kind: 'combat-live', band: 'combat', reason },
+          combat: {
+            highFrequencyControl,
+            target: { userId: 8, x: 1000, y: 0 },
+            movement: { dx, dy: 0, reason },
+            shooting: { wouldShoot: false, commandSuppressed: true }
+          }
+        });
+        adapter.applyDecision({ realtime: { tick: 20, receivedAtMs: 990, self: { x: 0, y: 0 } } }, combatDecision(1, 'realtime-dodge', true));
+        t = 1010;
+        const stale = adapter.applyDecision({ realtime: { tick: 19, receivedAtMs: 980, self: { x: 0, y: 0 } } }, combatDecision(-1, 'planner-old', false));
+        const state = adapter.getState();
+        return [
+          commands.join(','),
+          stale.movement.skipped,
+          stale.movement.reason,
+          state.velocityOwnership.source,
+          state.velocityOwnership.observedTick,
+          state.velocityOwnershipSuppressedCount
+        ].join('|');
+      })(),
+      want: 'vel 1 0|true|velocity-ownership-superseded|realtime-control|20|1'
+    },
+    {
+      name: 'browserless same-direction safety refresh keeps ownership without a new generation',
+      got: (() => {
+        let t = 1000;
+        const commands = [];
+        const adapter = createBrowserlessActionAdapter({
+          now: () => t,
+          commandIntervalMs: 1,
+          velocityRepeatEnabled: true,
+          setTimeout: () => ({ unref() {} }),
+          clearTimeout: () => {},
+          transport: { sendVelocity: (dx, dy) => commands.push(`vel ${dx} ${dy}`) }
+        });
+        const combatDecision = dx => ({
+          action: { kind: 'combat-live', band: 'combat', reason: 'ownership-refresh' },
+          combat: {
+            highFrequencyControl: true,
+            target: { userId: 8, x: 1000, y: 0 },
+            movement: { dx, dy: 0, reason: 'ownership-refresh' },
+            shooting: { wouldShoot: false, commandSuppressed: true }
+          }
+        });
+        const first = adapter.applyDecision(
+          { realtime: { tick: 20, receivedAtMs: 990, self: { x: 0, y: 0 } } },
+          combatDecision(1)
+        );
+        t = 1010;
+        const refreshed = adapter.applyDecision(
+          { realtime: { tick: 21, receivedAtMs: 1000, self: { x: 0, y: 0 } } },
+          combatDecision(1),
+          { source: 'leave-pending', band: 'safety', hardSafety: true }
+        );
+        t = 1020;
+        const stale = adapter.applyDecision(
+          { realtime: { tick: 20, receivedAtMs: 990, self: { x: 0, y: 0 } } },
+          combatDecision(-1),
+          { source: 'planner' }
+        );
+        const state = adapter.getState();
+        return [
+          commands.join(','),
+          first.movement.command.directionGeneration,
+          refreshed.movement.command.directionGeneration,
+          state.velocityOwnership.source,
+          state.velocityOwnership.hardSafety,
+          state.velocityOwnership.observedTick,
+          stale.movement.reason,
+          state.velocityDirectionGeneration
+        ].join('|');
+      })(),
+      want: 'vel 1 0|1|1|leave-pending|true|21|velocity-ownership-superseded|1'
+    },
+    {
+      name: 'browserless repeat reuses generation and direction switch cancels old owner',
+      got: (() => {
+        let t = 1000;
+        const commands = [];
+        const timers = [];
+        const adapter = createBrowserlessActionAdapter({
+          now: () => t,
+          commandIntervalMs: 500,
+          velocityRepeatEnabled: true,
+          velocityRepeatMs: 50,
+          velocityRepeatHoldMs: 220,
+          setTimeout: (fn, ms) => {
+            const timer = { fn, ms, canceled: false };
+            timers.push(timer);
+            return timer;
+          },
+          clearTimeout: timer => {
+            if (timer) timer.canceled = true;
+          },
+          transport: { sendVelocity: (dx, dy) => commands.push(`vel ${dx} ${dy}`) }
+        });
+        const decision = dx => ({
+          action: { kind: 'combat-live', band: 'combat', reason: 'repeat-owner' },
+          combat: {
+            highFrequencyControl: true,
+            target: { userId: 8, x: 1000, y: 0 },
+            movement: { dx, dy: 0, reason: 'repeat-owner' },
+            shooting: { wouldShoot: false, commandSuppressed: true }
+          }
+        });
+        const first = adapter.applyDecision({ realtime: { tick: 1, receivedAtMs: 990, self: { x: 0, y: 0 } } }, decision(1));
+        const firstTimer = timers[0];
+        t = 1050;
+        const same = adapter.applyDecision({ realtime: { tick: 2, receivedAtMs: 1040, self: { x: 0, y: 0 } } }, decision(1));
+        t = 1060;
+        const switched = adapter.applyDecision({ realtime: { tick: 2, receivedAtMs: 1040, self: { x: 0, y: 0 } } }, decision(-1));
+        const state = adapter.getState();
+        return [
+          commands.join(','),
+          first.movement.command.directionGeneration,
+          same.movement.command.directionGeneration,
+          same.movement.reason,
+          switched.movement.command.directionGeneration,
+          firstTimer.canceled,
+          state.velocityRepeatOwnerCommandId,
+          state.velocityLogicalRefreshCount
+        ].join('|');
+      })(),
+      want: 'vel 1 0,vel -1 0|1|1|unchanged-direction-repeat-owned|2|true|2|1'
     },
     {
       name: 'browserless action adapter uses tighter dead zone for coins',
@@ -21424,7 +21938,8 @@ async function runSelfTest() {
           pending.coverRecomputeCount >= 2,
           pending.dynamicCoverCount >= 1,
           pending.observedHpLoss,
-          commands.length >= 3,
+          commands.length >= 2
+            && commands.some(command => command !== '0,0' && command !== 'vel 0 0'),
           commands.every(command => command !== '0,0' && command !== 'vel 0 0'),
           result.decisions.realtimeControlCount,
           result.hotPath.tasks['ws-message'].maxMs < 50
@@ -22674,6 +23189,90 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: '3|true|true|2|2|1'
+    },
+    {
+      name: 'browserless realtime combat input reconciles tracker annotations once per fresh frame',
+      got: (() => {
+        let easyKillStatusCalls = 0;
+        let visibleTargetCalls = 0;
+        let damageStatusCalls = 0;
+        const easyKillPlayerTracker = {
+          status() {
+            easyKillStatusCalls += 1;
+            return { players: [], blockedUserIds: [], engagements: [] };
+          },
+          observeKillEvidence() {},
+          expirePendingOutcomes() {},
+          observeVisibleTargets() {
+            visibleTargetCalls += 1;
+          },
+          observeCombatEngagement() {}
+        };
+        const damagePlayerTracker = {
+          status() {
+            damageStatusCalls += 1;
+            return { players: [], userIds: [] };
+          }
+        };
+        const self = {
+          entity_id: 1,
+          user_id: 7,
+          x: 0,
+          y: 0,
+          hp: 100,
+          max_hp: 100,
+          current_join_mode: 'Active',
+          stamina_5s_remaining_milli: 10000,
+          stamina_5s_limit_milli: 10000
+        };
+        const target = {
+          entity_id: 2,
+          user_id: 8,
+          x: 1000,
+          y: 0,
+          hp: 100,
+          max_hp: 100,
+          current_join_mode: 'Active',
+          firing: true,
+          stamina_5s_remaining_milli: 5000,
+          stamina_5s_limit_milli: 10000
+        };
+        const adapter = createBrowserlessDecisionAdapter({
+          userId: 7,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          easyKillPlayerTracker,
+          damagePlayerTracker
+        });
+        const result = adapter.evaluateRealtime({
+          userId: 7,
+          realtime: {
+            tick: 50,
+            receivedAtMs: 1000,
+            frameAgeMs: 0,
+            self,
+            entities: [self, target],
+            bullets: []
+          },
+          fallback: {
+            tick: 49,
+            receivedAtMs: 900,
+            frameAgeMs: 100,
+            entitiesByUserId: { 7: self, 8: target },
+            entities: [self, target],
+            coinDrops: [],
+            messages: []
+          }
+        }, { nowMs: 1000 });
+        return [
+          easyKillStatusCalls,
+          visibleTargetCalls,
+          damageStatusCalls,
+          result.action?.kind,
+          result.combat?.target?.userId ?? result.combat?.target?.user_id
+        ].join('|');
+      })(),
+      want: '1|1|1|combat-live|8'
     },
     {
       name: 'browserless realtime control prioritizes fresh high-value self-kill drops with safe combat-aware movement',
@@ -24793,25 +25392,31 @@ async function runSelfTest() {
         const defaults = parseBrowserlessRunnerArgs([], {});
         const envConfig = parseBrowserlessRunnerArgs([], {
           GRASP_RAT_BROWSERLESS_COMBAT_ROBUST_DODGE_ENABLED: 'false',
-          GRASP_RAT_BROWSERLESS_COMBAT_CLOSE_BAND_RESERVE_ENABLED: 'false'
+          GRASP_RAT_BROWSERLESS_COMBAT_CLOSE_BAND_RESERVE_ENABLED: 'false',
+          GRASP_RAT_BROWSERLESS_COMBAT_MOVEMENT_STABILITY_ENABLED: 'true'
         });
         const cliConfig = parseBrowserlessRunnerArgs([
           '--no-combat-robust-dodge',
-          '--no-combat-close-band-reserve'
+          '--no-combat-close-band-reserve',
+          '--combat-movement-stability'
         ], {});
         const exposed = publicConfig(envConfig);
         return [
           defaults.combatRobustDodgeEnabled,
           defaults.combatCloseBandReserveEnabled,
+          defaults.combatMovementStabilityEnabled,
           envConfig.combatRobustDodgeEnabled,
           envConfig.combatCloseBandReserveEnabled,
+          envConfig.combatMovementStabilityEnabled,
           cliConfig.combatRobustDodgeEnabled,
           cliConfig.combatCloseBandReserveEnabled,
+          cliConfig.combatMovementStabilityEnabled,
           exposed.combatRobustDodgeEnabled,
-          exposed.combatCloseBandReserveEnabled
+          exposed.combatCloseBandReserveEnabled,
+          exposed.combatMovementStabilityEnabled
         ].join('|');
       })(),
-      want: 'true|true|false|false|false|false|false|false'
+      want: 'true|true|false|false|false|true|false|false|true|false|false|true'
     },
     {
       name: 'browserless runner config exposes dynamic profit threshold env cli and public values',

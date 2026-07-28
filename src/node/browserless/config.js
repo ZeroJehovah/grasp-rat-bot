@@ -71,6 +71,7 @@ const DEFAULTS = {
   combatEnabled: false,
   combatRobustDodgeEnabled: true,
   combatCloseBandReserveEnabled: true,
+  combatMovementStabilityEnabled: false,
   combatShootMinIntervalMs: 160,
   combatControlIntervalMs: 50,
   combatClosePressureMinRangeCm: 4500,
@@ -220,6 +221,7 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
     combatEnabled: boolEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_ENABLED, DEFAULTS.combatEnabled),
     combatRobustDodgeEnabled: boolEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_ROBUST_DODGE_ENABLED, DEFAULTS.combatRobustDodgeEnabled),
     combatCloseBandReserveEnabled: boolEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_CLOSE_BAND_RESERVE_ENABLED, DEFAULTS.combatCloseBandReserveEnabled),
+    combatMovementStabilityEnabled: boolEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_MOVEMENT_STABILITY_ENABLED, DEFAULTS.combatMovementStabilityEnabled),
     combatShootMinIntervalMs: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_SHOOT_MIN_INTERVAL_MS, DEFAULTS.combatShootMinIntervalMs),
     combatControlIntervalMs: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_CONTROL_INTERVAL_MS, DEFAULTS.combatControlIntervalMs),
     combatClosePressureMinRangeCm: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_CLOSE_PRESSURE_MIN_RANGE_CM, DEFAULTS.combatClosePressureMinRangeCm),
@@ -403,6 +405,10 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
       config.combatRobustDodgeEnabled = false;
     } else if (arg === '--no-combat-close-band-reserve') {
       config.combatCloseBandReserveEnabled = false;
+    } else if (arg === '--combat-movement-stability') {
+      config.combatMovementStabilityEnabled = true;
+    } else if (arg === '--no-combat-movement-stability') {
+      config.combatMovementStabilityEnabled = false;
     } else if (arg === '--combat-control-interval-ms') {
       config.combatControlIntervalMs = numberEnv(argv[++i], config.combatControlIntervalMs);
     } else if (arg === '--combat-close-pressure-min-range-cm') {
@@ -536,6 +542,7 @@ function usage() {
     '  --movement-settlement-frames <n>  Realtime frames needed after command. Default: 2',
     '  --movement-settlement-stall-ms <ms>  Reconnect when nonzero movement makes no coordinate progress. Default: 5000',
     '  --movement-settlement-min-distance-cm <cm>  Coordinate progress needed to reset the stall timer. Default: 80',
+    '  --[no-]combat-movement-stability  Apply threat-aware short combat direction settlement. Default: disabled',
     '  --center-activity-radius-cm <cm>  Keep ordinary browserless profit inside this origin radius. Default: 100000',
     '  --outside-center-idle-exit-ms <ms>  Leave after waiting outside the center without profit. Default: 180000',
     '  --profit-pursuit-max-ms <ms>  Legacy no-damage pursuit diagnostic threshold. Default: 60000',
