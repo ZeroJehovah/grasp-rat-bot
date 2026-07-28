@@ -30,6 +30,7 @@ const {
 } = require('../src/strategy/combat-movement');
 const {
   buildTrajectoryCoveragePlanCore,
+  dynamicBehaviorTrajectoryEligibilityCore,
   shouldApplyTrajectoryCoverageCore
 } = require('../src/strategy/combat-shot-coverage');
 const {
@@ -606,23 +607,46 @@ function replayCombat(options) {
       : replayBehavior;
     state.provenHitRate = Math.max(Number(state.provenHitRate || 0), Number(row.detail.behavior?.recentHitRate || 0));
     state.noDamageMs = Number(row.detail.aim?.noDamageMs || 0);
-    const improved = estimateAim(row.detail.self, row.detail.target, {
+    // Preserve the production classification captured with the frame when it
+    // exists. Recomputing it from the shortened replay history can incorrectly
+    // admit high-entropy route coverage before the logged runtime did.
+    state.fireRiskClassification = row.detail.shooting?.fireRiskClassification
+      || state.fireRiskClassification
+      || null;
+    const replayExecutionDelayTicks = numberOrNull(row.detail.aim?.timing?.executionDelayTicks)
+      ?? options.executionDelayTicks;
+    const recomputedAim = estimateAim(row.detail.self, row.detail.target, {
       combatTargetState: state,
       observedTick: row.detail.tick,
       executionTiming: {
-        medianTicks: options.executionDelayTicks,
-        p90Ticks: options.executionDelayTicks,
+        medianTicks: replayExecutionDelayTicks,
+        p90Ticks: replayExecutionDelayTicks,
         madTicks: 0,
-        source: 'july-14-confirmed-shoot-baseline'
+        source: 'logged-frame-execution-delay'
       },
       actualShots: shotEvaluations.length
     });
+    const replayDynamicBehaviorEligible = dynamicBehaviorTrajectoryEligibilityCore(
+      state.opponentBehaviorState || replayBehavior
+    );
+    const loggedAim = row.detail.aim && typeof row.detail.aim === 'object' ? row.detail.aim : null;
+    const improved = !replayDynamicBehaviorEligible && loggedAim
+      ? {
+          ...recomputedAim,
+          x: Number(loggedAim.x),
+          y: Number(loggedAim.y),
+          mode: String(loggedAim.mode || recomputedAim.mode || 'logged-aim'),
+          routeCoverage: null,
+          trajectoryCoverage: loggedAim.trajectoryCoverage || null
+        }
+      : recomputedAim;
     state.fireRiskClassification = improved.fireRiskClassification || state.fireRiskClassification || null;
     const baselineMiss = bulletCorridorMiss(rows, shot.ack);
     const improvedMiss = bulletCorridorMiss(rows, shot.ack, improved);
     const coverageEligible = Boolean(
       (improved.fireRiskClassification?.highEntropy
-        || /^high-entropy-/.test(String(improved.routeCoverage?.style || '')))
+        || /^high-entropy-/.test(String(improved.routeCoverage?.style || ''))
+        || improved.routeCoverage?.dynamicBehaviorEligible === true)
       && improved.routeCoverage?.candidates?.length
       && improved.fireReachability?.unreachable !== true
     );
@@ -655,7 +679,9 @@ function replayCombat(options) {
     const coverageSuccessfulAimProtected = coverageRecentShotCount >= 10 && coverageRecentHitRate >= 0.12;
     const coverageApplied = shouldApplyTrajectoryCoverageCore({
       mode: 'live-single',
-      highEntropy: coverageEligible,
+      highEntropy: Boolean(improved.fireRiskClassification?.highEntropy
+        || /^high-entropy-/.test(String(improved.routeCoverage?.style || ''))),
+      dynamicBehaviorEligible: dynamicBehaviorTrajectoryEligibilityCore(state.opponentBehaviorState || replayBehavior),
       successfulAimProtected: coverageSuccessfulAimProtected,
       planActive: coveragePlan?.active === true,
       hasSelection: Boolean(coveragePlan?.selected),

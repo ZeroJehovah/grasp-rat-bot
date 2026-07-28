@@ -16,6 +16,7 @@ const { quadraticInterceptCore } = require('./combat-aim');
 const {
   buildTrajectoryCoveragePlanCore,
   buildTrajectoryPathsCore,
+  dynamicBehaviorTrajectoryEligibilityCore,
   shouldApplyTrajectoryCoverageCore,
   shotCorridorMissCore
 } = require('./combat-shot-coverage');
@@ -3909,13 +3910,20 @@ function runStrategyModuleSelfTests() {
       && afkFinishDoesNotOverrideCoin.chosen?.id === 'large'
   });
 
-  const opportunityOscillationResult = chooseStableOpportunityCore([
+  const oscillationReturnOpportunities = [
+    { type: 'coin', id: 'a', amount: 1, x: 100, y: 0, distance: 100, score: 130, priorityTier: 1 },
     { type: 'coin', id: 'b', amount: 2, x: 300, y: 0, distance: 300, score: 120, priorityTier: 1 },
+  ];
+  const oscillationCompetingOpportunities = [
+    { type: 'coin', id: 'b', amount: 2, x: 300, y: 0, distance: 300, score: 140, priorityTier: 1 },
     { type: 'coin', id: 'a', amount: 1, x: 100, y: 0, distance: 100, score: 100, priorityTier: 1 }
-  ], { key: 'coin:a', type: 'coin', id: 'a', until: 0 }, {
+  ];
+  const opportunityOscillationResult = chooseStableOpportunityCore(oscillationReturnOpportunities,
+    { key: 'coin:b', type: 'coin', id: 'b', until: 0 }, {
     pairKey: 'coin:a|coin:b',
-    lastKey: 'coin:a',
+    lastKey: 'coin:b',
     switchCount: 1,
+    windowStartedAt: 900,
     lockedKey: '',
     blockedKey: '',
     lockedAt: 0,
@@ -3925,14 +3933,69 @@ function runStrategyModuleSelfTests() {
     sameCoinRadius: 50,
     switchMargin: 0,
     switchRelativeMargin: 0,
-    oscillationSwitchLimit: 1
+    oscillationSwitchLimit: 2,
+    oscillationWindowMs: 30000,
+    oscillationLockMs: 30000
   });
+  const opportunityOscillationHeld = chooseStableOpportunityCore(oscillationCompetingOpportunities,
+    { key: 'coin:a', type: 'coin', id: 'a', until: 0 },
+    opportunityOscillationResult.switchLock,
+    { nowMs: 1100, sameCoinRadius: 50, switchMargin: 0, switchRelativeMargin: 0, oscillationSwitchLimit: 2, oscillationWindowMs: 30000, oscillationLockMs: 30000 });
+  const opportunityOscillationExpired = chooseStableOpportunityCore(oscillationCompetingOpportunities,
+    { key: 'coin:a', type: 'coin', id: 'a', until: 0 },
+    opportunityOscillationResult.switchLock,
+    { nowMs: 31101, sameCoinRadius: 50, switchMargin: 0, switchRelativeMargin: 0, oscillationSwitchLimit: 2, oscillationWindowMs: 30000, oscillationLockMs: 30000 });
+  const opportunityOscillationMissing = chooseStableOpportunityCore(
+    oscillationCompetingOpportunities.filter(item => item.id === 'b'),
+    { key: 'coin:a', type: 'coin', id: 'a', until: 0 },
+    opportunityOscillationResult.switchLock,
+    { nowMs: 1200, sameCoinRadius: 50, switchMargin: 0, switchRelativeMargin: 0, oscillationSwitchLimit: 2, oscillationWindowMs: 30000, oscillationLockMs: 30000 });
+  const opportunityOscillationWindowReset = chooseStableOpportunityCore(oscillationReturnOpportunities,
+    { key: 'coin:b', type: 'coin', id: 'b', until: 0 }, {
+    pairKey: 'coin:a|coin:b',
+    lastKey: 'coin:b',
+    switchCount: 1,
+    windowStartedAt: 900,
+    lockedKey: '',
+    blockedKey: '',
+    lockedAt: 0,
+    updatedAt: 900
+  }, {
+    nowMs: 30901,
+    sameCoinRadius: 50,
+    switchMargin: 0,
+    switchRelativeMargin: 0,
+    oscillationSwitchLimit: 2,
+    oscillationWindowMs: 30000,
+    oscillationLockMs: 30000
+  });
+  const opportunityOscillationCurrentMissing = chooseStableOpportunityCore(
+    oscillationCompetingOpportunities,
+    null,
+    opportunityOscillationResult.switchLock,
+    { nowMs: 1200, sameCoinRadius: 50, switchMargin: 0, switchRelativeMargin: 0, oscillationSwitchLimit: 2, oscillationWindowMs: 30000, oscillationLockMs: 30000 });
   results.push({
-    name: 'opportunity-choice-oscillation-locks-current',
+    name: 'opportunity-choice-oscillation-locks-returned-target-and-releases',
     passed: opportunityOscillationResult.chosen?.id === 'a'
       && opportunityOscillationResult.chosen?.oscillationLocked === true
       && opportunityOscillationResult.switchLock?.lockedKey === 'coin:a'
       && opportunityOscillationResult.switchLock?.blockedKey === 'coin:b'
+      && opportunityOscillationResult.switchLock?.switchCount === 2
+      && opportunityOscillationResult.switchLock?.windowStartedAt === 900
+      && opportunityOscillationResult.switchLock?.lockUntil === 31000
+      && opportunityOscillationHeld.chosen?.id === 'a'
+      && opportunityOscillationHeld.chosen?.oscillationLocked === true
+      && opportunityOscillationExpired.chosen?.id === 'b'
+      && opportunityOscillationExpired.chosen?.oscillationReleaseReason === 'lock-expired'
+      && opportunityOscillationMissing.chosen?.id === 'b'
+      && opportunityOscillationMissing.chosen?.oscillationReleaseReason === 'pair-ineligible'
+      && opportunityOscillationWindowReset.chosen?.id === 'a'
+      && opportunityOscillationWindowReset.chosen?.oscillationLocked === false
+      && opportunityOscillationWindowReset.switchLock?.switchCount === 1
+      && opportunityOscillationWindowReset.switchLock?.windowStartedAt === 30901
+      && opportunityOscillationWindowReset.chosen?.oscillationReleaseReason === 'window-or-pair-reset'
+      && opportunityOscillationCurrentMissing.chosen?.id === 'b'
+      && opportunityOscillationCurrentMissing.chosen?.oscillationReleaseReason === 'current-missing'
   });
 
   const rememberedChoice = rememberOpportunityChoiceCore(
@@ -5365,6 +5428,13 @@ function runStrategyModuleSelfTests() {
       && shouldApplyTrajectoryCoverageCore({
         mode: 'live-single',
         highEntropy: false,
+        dynamicBehaviorEligible: true,
+        planActive: true,
+        hasSelection: true
+      }) === true
+      && shouldApplyTrajectoryCoverageCore({
+        mode: 'live-single',
+        highEntropy: false,
         planActive: true,
         hasSelection: true,
         improvementQualified: true
@@ -5391,6 +5461,34 @@ function runStrategyModuleSelfTests() {
         hasSelection: true,
         improvementQualified: false
       }) === true
+  });
+  results.push({
+    name: 'combat-shot-coverage-dynamic-behavior-requires-stable-high-confidence-evidence',
+    passed: dynamicBehaviorTrajectoryEligibilityCore({
+      mode: 'zigzag-strafe',
+      confidence: 0.7,
+      metrics: { sampleCount: 8, durationMs: 2500 }
+    }) === true
+      && dynamicBehaviorTrajectoryEligibilityCore({
+        mode: 'retreat-kite',
+        confidence: 0.9,
+        metrics: { sampleCount: 20, durationMs: 5000 }
+      }) === true
+      && dynamicBehaviorTrajectoryEligibilityCore({
+        mode: 'zigzag-strafe',
+        confidence: 0.69,
+        metrics: { sampleCount: 20, durationMs: 5000 }
+      }) === false
+      && dynamicBehaviorTrajectoryEligibilityCore({
+        mode: 'retreat-kite',
+        confidence: 0.9,
+        metrics: { sampleCount: 7, durationMs: 5000 }
+      }) === false
+      && dynamicBehaviorTrajectoryEligibilityCore({
+        mode: 'stationary',
+        confidence: 0.95,
+        metrics: { sampleCount: 20, durationMs: 5000 }
+      }) === false
   });
   let switchGate = null;
   const currentTarget = { user_id: 8, hp: 100 };

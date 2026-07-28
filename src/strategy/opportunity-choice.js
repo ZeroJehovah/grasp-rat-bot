@@ -214,57 +214,138 @@ function afkFinishCommitmentCore(held, best, options = {}) {
   };
 }
 
-function lockedOpportunityChoiceCore(sorted, switchLock) {
+function releasedOpportunitySwitchLockCore(switchLock, reason, atMs) {
+  return {
+    pairKey: '',
+    lastKey: '',
+    switchCount: 0,
+    windowStartedAt: 0,
+    lockedKey: '',
+    blockedKey: '',
+    lockedAt: 0,
+    lockUntil: 0,
+    updatedAt: atMs,
+    releaseReason: String(reason || ''),
+    releasedAt: atMs,
+    previousPairKey: String(switchLock?.pairKey || '')
+  };
+}
+
+function opportunityOscillationMetadataCore(item, switchLock) {
+  if (!item) return item;
+  const lock = switchLock || {};
+  return {
+    ...item,
+    oscillationLocked: Boolean(lock.lockedKey),
+    oscillationSwitchCount: Number(lock.switchCount || 0),
+    oscillationWindowStartedAt: Number(lock.windowStartedAt || 0),
+    oscillationLockUntil: Number(lock.lockUntil || 0),
+    oscillationReleaseReason: String(lock.releaseReason || '')
+  };
+}
+
+function lockedOpportunityChoiceCore(sorted, switchLock, options = {}) {
   const lock = switchLock || null;
   const lockedKey = String(lock?.lockedKey || '');
   if (!lockedKey) return { choice: null, switchLock: lock };
+  const t = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
+  if (Number(lock.lockUntil || 0) > 0 && t >= Number(lock.lockUntil)) {
+    return { choice: null, switchLock: releasedOpportunitySwitchLockCore(lock, 'lock-expired', t) };
+  }
   const pairKeys = String(lock.pairKey || '').split('|').filter(Boolean);
   if (pairKeys.length === 2 && pairKeys.some(key => !opportunityByKey(sorted, key))) {
-    return { choice: null, switchLock: null };
+    return { choice: null, switchLock: releasedOpportunitySwitchLockCore(lock, 'pair-ineligible', t) };
   }
   const locked = opportunityByKey(sorted, lockedKey);
-  if (!locked) return { choice: null, switchLock: null };
+  if (!locked) return { choice: null, switchLock: releasedOpportunitySwitchLockCore(lock, 'locked-target-ineligible', t) };
   const best = sorted[0] || null;
   return {
-    choice: {
+    choice: opportunityOscillationMetadataCore({
       ...locked,
       held: true,
-      oscillationLocked: true,
-      oscillationSwitchCount: Number(lock.switchCount || 0),
       competingScore: best && opportunityKey(best) !== lockedKey ? best.score : locked.competingScore
-    },
+    }, lock),
     switchLock: lock
   };
 }
 
 function applyOpportunityOscillationLockCore(sorted, current, chosen, switchLock, options = {}) {
-  const locked = lockedOpportunityChoiceCore(sorted, switchLock);
+  const t = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
+  if (!current) {
+    const released = switchLock && (switchLock.pairKey || switchLock.lockedKey)
+      ? releasedOpportunitySwitchLockCore(switchLock, 'current-missing', t)
+      : switchLock;
+    return { chosen: opportunityOscillationMetadataCore(chosen, released), switchLock: released };
+  }
+  const locked = lockedOpportunityChoiceCore(sorted, switchLock, options);
   if (locked.choice) return { chosen: locked.choice, switchLock: locked.switchLock };
   let nextSwitchLock = locked.switchLock;
   if (!chosen) return { chosen, switchLock: nextSwitchLock };
-  if (!current) return { chosen, switchLock: null };
-  if (opportunityMatchesChoiceCore(chosen, current, options)) return { chosen, switchLock: nextSwitchLock };
-  const held = (sorted || []).find(item => opportunityMatchesChoiceCore(item, current, options)) || null;
-  if (!held) return { chosen, switchLock: null };
+  if (opportunityMatchesChoiceCore(chosen, current, options)) {
+    return { chosen: opportunityOscillationMetadataCore(chosen, nextSwitchLock), switchLock: nextSwitchLock };
+  }
+  const held = (sorted || []).find(item => opportunityMatchesChoiceCore(item, current, options))
+    || (!nextSwitchLock?.lockedKey ? current : null);
+  if (!held) {
+    const released = nextSwitchLock
+      ? releasedOpportunitySwitchLockCore(
+          nextSwitchLock,
+          nextSwitchLock.releaseReason || 'current-target-ineligible',
+          t
+        )
+      : null;
+    return { chosen: opportunityOscillationMetadataCore(chosen, released), switchLock: released };
+  }
   const fromKey = opportunityKey(held);
   const toKey = opportunityKey(chosen);
   if (!fromKey || !toKey || fromKey === toKey) return { chosen, switchLock: nextSwitchLock };
   const limit = Math.max(0, Number(options.oscillationSwitchLimit || 0));
   if (!limit) return { chosen, switchLock: nextSwitchLock };
-  const t = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
+  const windowMs = Math.max(1, Number(options.oscillationWindowMs || 30000));
+  const lockMs = Math.max(1, Number(options.oscillationLockMs || 30000));
   const pairKey = opportunityPairKey(fromKey, toKey);
   const previous = nextSwitchLock || {};
-  const continuing = !previous.lockedKey && previous.pairKey === pairKey && previous.lastKey === fromKey;
+  const previousWindowStartedAt = Number(previous.windowStartedAt || 0);
+  const continuing = !previous.lockedKey
+    && previous.pairKey === pairKey
+    && previous.lastKey === fromKey
+    && previousWindowStartedAt > 0
+    && t - previousWindowStartedAt <= windowMs;
   const switchCount = continuing ? Number(previous.switchCount || 0) + 1 : 1;
-  if (switchCount > limit) {
-    nextSwitchLock = { pairKey, lastKey: fromKey, switchCount, lockedKey: fromKey, blockedKey: toKey, lockedAt: t, updatedAt: t };
+  const windowStartedAt = continuing ? previousWindowStartedAt : t;
+  if (switchCount >= limit) {
+    nextSwitchLock = {
+      pairKey,
+      lastKey: toKey,
+      switchCount,
+      windowStartedAt,
+      lockedKey: toKey,
+      blockedKey: fromKey,
+      lockedAt: t,
+      lockUntil: t + lockMs,
+      updatedAt: t,
+      releaseReason: '',
+      releasedAt: 0
+    };
     return {
-      chosen: { ...held, held: true, oscillationLocked: true, oscillationSwitchCount: switchCount, competingScore: chosen.score },
+      chosen: opportunityOscillationMetadataCore(chosen, nextSwitchLock),
       switchLock: nextSwitchLock
     };
   }
-  nextSwitchLock = { pairKey, lastKey: toKey, switchCount, lockedKey: '', blockedKey: '', lockedAt: 0, updatedAt: t };
-  return { chosen, switchLock: nextSwitchLock };
+  nextSwitchLock = {
+    pairKey,
+    lastKey: toKey,
+    switchCount,
+    windowStartedAt,
+    lockedKey: '',
+    blockedKey: '',
+    lockedAt: 0,
+    lockUntil: 0,
+    updatedAt: t,
+    releaseReason: String(previous.releaseReason || (continuing ? '' : (previous.pairKey ? 'window-or-pair-reset' : ''))),
+    releasedAt: 0
+  };
+  return { chosen: opportunityOscillationMetadataCore(chosen, nextSwitchLock), switchLock: nextSwitchLock };
 }
 
 function chooseStableOpportunityCore(opportunities, current, switchLock, options = {}) {
@@ -456,6 +537,9 @@ function rememberOpportunityChoiceCore(item, action, previous = null, options = 
     missingSince: missingHold ? Number(previous?.missingSince || t) : 0,
     oscillationLocked: Boolean(item.oscillationLocked),
     oscillationSwitchCount: Number(item.oscillationSwitchCount || 0),
+    oscillationWindowStartedAt: Number(item.oscillationWindowStartedAt || 0),
+    oscillationLockUntil: Number(item.oscillationLockUntil || 0),
+    oscillationReleaseReason: String(item.oscillationReleaseReason || ''),
     coinRouteIds: routeIds.length ? routeIds : null,
     coinRouteValue: Number.isFinite(Number(routeMeta?.value)) ? Math.round(Number(routeMeta.value)) : null,
     coinRouteLegs: Number.isFinite(Number(routeMeta?.legCount)) ? Math.round(Number(routeMeta.legCount)) : null
@@ -479,6 +563,9 @@ function rememberOpportunityChoiceCore(item, action, previous = null, options = 
         holdRemainingMs: Math.max(0, Math.round(Number(choice.until || 0) - t)),
         oscillationLocked: Boolean(item.oscillationLocked),
         oscillationSwitchCount: Number(item.oscillationSwitchCount || 0),
+        oscillationWindowStartedAt: Number(item.oscillationWindowStartedAt || 0),
+        oscillationLockUntil: Number(item.oscillationLockUntil || 0),
+        oscillationReleaseReason: String(item.oscillationReleaseReason || ''),
         coinRouteIds: routeIds.length ? routeIds : null,
         coinRouteValue: Number.isFinite(Number(routeMeta?.value)) ? Math.round(Number(routeMeta.value)) : null,
         coinRouteLegs: Number.isFinite(Number(routeMeta?.legCount)) ? Math.round(Number(routeMeta.legCount)) : null,

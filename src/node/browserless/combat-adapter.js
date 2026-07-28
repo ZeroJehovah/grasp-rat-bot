@@ -43,6 +43,7 @@ const {
 const { opponentMotionProfileCore, quadraticInterceptCore } = require('../../strategy/combat-aim');
 const {
   buildTrajectoryCoveragePlanCore,
+  dynamicBehaviorTrajectoryEligibilityCore,
   normalizeTrajectoryCoverageMode,
   shouldApplyTrajectoryCoverageCore
 } = require('../../strategy/combat-shot-coverage');
@@ -1083,6 +1084,7 @@ function estimateAim(self, target, options = {}) {
   const highEntropyCoverage = (controlStyle === 'human-like'
     && controlStyleConfidence >= 0.35)
     || (profile.maneuverScale >= 0.45 && noDamageWidened);
+  const dynamicBehaviorCoverage = dynamicBehaviorTrajectoryEligibilityCore(behavior);
   const transitionModel = behavior?.metrics?.movementTransitions || null;
   const routePhase = behavior?.metrics?.movementPhase || transitionModel?.phase || null;
   const routeContextKey = transitionModel?.contextKey
@@ -1100,11 +1102,12 @@ function estimateAim(self, target, options = {}) {
     const targetAtCreationX = Number(intercept?.predictedTargetAtCreation?.x ?? tx + vx * observationToExecutionTicks);
     const targetAtCreationY = Number(intercept?.predictedTargetAtCreation?.y ?? ty + vy * observationToExecutionTicks);
     const reachable = targetSpeed * flightTicks;
+    const uncertainDynamicRoute = highEntropyCoverage || dynamicBehaviorCoverage;
     const staticCandidates = [
-      { hypothesis: 'continue', x: intercept?.x ?? targetAtCreationX + ux * reachable, y: intercept?.y ?? targetAtCreationY + uy * reachable, probability: highEntropyCoverage ? 0.27 : 0.58 },
-      { hypothesis: 'stop', x: targetAtCreationX, y: targetAtCreationY, probability: highEntropyCoverage ? 0.29 : 0.14 },
-      { hypothesis: 'left-turn', x: targetAtCreationX - uy * reachable, y: targetAtCreationY + ux * reachable, probability: highEntropyCoverage ? 0.16 : 0.09 },
-      { hypothesis: 'right-turn', x: targetAtCreationX + uy * reachable, y: targetAtCreationY - ux * reachable, probability: highEntropyCoverage ? 0.16 : 0.09 },
+      { hypothesis: 'continue', x: intercept?.x ?? targetAtCreationX + ux * reachable, y: intercept?.y ?? targetAtCreationY + uy * reachable, probability: uncertainDynamicRoute ? 0.27 : 0.58 },
+      { hypothesis: 'stop', x: targetAtCreationX, y: targetAtCreationY, probability: uncertainDynamicRoute ? 0.29 : 0.14 },
+      { hypothesis: 'left-turn', x: targetAtCreationX - uy * reachable, y: targetAtCreationY + ux * reachable, probability: uncertainDynamicRoute ? 0.16 : 0.09 },
+      { hypothesis: 'right-turn', x: targetAtCreationX + uy * reachable, y: targetAtCreationY - ux * reachable, probability: uncertainDynamicRoute ? 0.16 : 0.09 },
       { hypothesis: 'reverse', x: targetAtCreationX - ux * reachable, y: targetAtCreationY - uy * reachable, probability: 0.12 }
     ].map(candidate => ({
       ...candidate,
@@ -1177,25 +1180,41 @@ function estimateAim(self, target, options = {}) {
     const primaryCandidate = rankedCandidates[0] || null;
     const explorationCandidate = rankedCandidates[1] || null;
     const highEntropyExplore = Boolean(highEntropyCoverage && noDamageLevel >= 12 && shotIndex % 5 === 4 && explorationCandidate);
-    const coverageSequence = highEntropyCoverage
-      ? [primaryCandidate, ...(highEntropyExplore ? [explorationCandidate] : [])].filter(Boolean)
-      : rankedCandidates.slice(0, 2);
-    const selected = highEntropyCoverage
-      ? (highEntropyExplore ? explorationCandidate : primaryCandidate)
-      : coverageSequence[shotIndex % coverageSequence.length];
-    if (selected && (highEntropyCoverage || noDamageWidened || scriptTransitionCoverage)) {
+    const preferredTurn = rankedCandidates
+      .filter(candidate => candidate.hypothesis === 'left-turn' || candidate.hypothesis === 'right-turn')
+      .sort((a, b) => b.probability - a.probability || a.hypothesis.localeCompare(b.hypothesis))[0] || null;
+    const dynamicCoverageSequence = dynamicBehaviorCoverage
+      ? ['continue', 'stop', preferredTurn?.hypothesis, 'reverse']
+          .map(hypothesis => candidates.find(candidate => candidate.hypothesis === hypothesis))
+          .filter(Boolean)
+      : [];
+    const coverageSequence = dynamicBehaviorCoverage
+      ? dynamicCoverageSequence
+      : (highEntropyCoverage
+          ? [primaryCandidate, ...(highEntropyExplore ? [explorationCandidate] : [])].filter(Boolean)
+          : rankedCandidates.slice(0, 2));
+    const selected = dynamicBehaviorCoverage
+      ? coverageSequence[shotIndex % coverageSequence.length]
+      : (highEntropyCoverage
+          ? (highEntropyExplore ? explorationCandidate : primaryCandidate)
+          : coverageSequence[shotIndex % coverageSequence.length]);
+    if (selected && (dynamicBehaviorCoverage || highEntropyCoverage || noDamageWidened || scriptTransitionCoverage)) {
+      const persistedCandidates = dynamicBehaviorCoverage ? coverageSequence : rankedCandidates.slice(0, 4);
       x = selected.x;
       y = selected.y;
       routeCoverage = {
         enabled: true,
-        style: highEntropyCoverage
-          ? (highEntropyExplore ? 'high-entropy-bounded-exploration' : 'high-entropy-robust-stop')
-          : (scriptTransitionCoverage ? 'script-transition-matrix' : 'predictable-top-routes'),
+        style: dynamicBehaviorCoverage
+          ? `dynamic-behavior-${behavior.mode}`
+          : (highEntropyCoverage
+              ? (highEntropyExplore ? 'high-entropy-bounded-exploration' : 'high-entropy-robust-stop')
+              : (scriptTransitionCoverage ? 'script-transition-matrix' : 'predictable-top-routes')),
+        dynamicBehaviorEligible: dynamicBehaviorCoverage,
         selected: selected.hypothesis,
         sequence: coverageSequence.map(item => item.hypothesis),
         contextKey: routeContextKey,
         phase: routePhase,
-        candidates: rankedCandidates.slice(0, 4).map(item => ({
+        candidates: persistedCandidates.map(item => ({
           hypothesis: item.hypothesis,
           probability: item.probability,
           directionState: item.directionState || null,
@@ -2515,6 +2534,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
       aim.fireRiskClassification?.highEntropy
       || /^high-entropy-/.test(String(aim.routeCoverage?.style || ''))
     );
+    const dynamicBehaviorCoverage = Boolean(aim.routeCoverage?.dynamicBehaviorEligible);
     const learnedCoverageReady = Number(transitionDiagnostics?.conditionalSampleCount || 0) >= 12
       || Number(transitionDiagnostics?.globalSamples || 0) >= 8;
     const coverageHitSummary = recentAcceptedShotHitSummary(stateful, combatTargetId(target), 15);
@@ -2526,7 +2546,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
       && !contactEntryOnly
       && aim.routeCoverage?.candidates?.length
       && aim.fireReachability?.unreachable !== true
-      && (highEntropyCoverage || learnedCoverageReady)
+      && (highEntropyCoverage || dynamicBehaviorCoverage || learnedCoverageReady)
     );
     const effectiveCoverageMode = requestedCoverageMode === 'live-volley' ? 'shadow' : requestedCoverageMode;
     const targetId = String(combatTargetId(target) || '');
@@ -2577,6 +2597,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     const applied = shouldApplyTrajectoryCoverageCore({
       mode: effectiveCoverageMode,
       highEntropy: highEntropyCoverage,
+      dynamicBehaviorEligible: dynamicBehaviorCoverage,
       successfulAimProtected: coverageSuccessfulAimProtected,
       planActive: plan.active === true,
       hasSelection: Boolean(plan.selected),
@@ -2631,8 +2652,8 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
         ? 'live-volley-awaits-live-single-acceptance'
         : (effectiveCoverageMode === 'live-single' && plan.active && coverageSuccessfulAimProtected
             ? 'live-single-successful-aim-protected'
-            : (effectiveCoverageMode === 'live-single' && plan.active && !highEntropyCoverage
-                ? 'live-single-requires-high-entropy'
+            : (effectiveCoverageMode === 'live-single' && plan.active && !highEntropyCoverage && !dynamicBehaviorCoverage
+                ? 'live-single-requires-coverage-qualification'
                 : (effectiveCoverageMode === 'live-single' && plan.active && plan.selected?.improvementQualified !== true
                     ? 'live-single-insufficient-aim-improvement'
                     : plan.reason)))),

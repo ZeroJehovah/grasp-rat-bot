@@ -526,7 +526,9 @@ async function runSelfTest() {
     opportunitySwitchRelativeMargin: 0.1,
     opportunitySwitchHoldMs: 7000,
     opportunityMissingHoldMs: 7000,
-    opportunityOscillationSwitchLimit: 5,
+    opportunityOscillationSwitchLimit: 2,
+    opportunityOscillationWindowMs: 30000,
+    opportunityOscillationLockMs: 30000,
     opportunitySameCoinRadius: 1200,
     opportunityVisibleDistance: 50000,
     opportunityNearbyPriorityDistance: 50000,
@@ -6221,11 +6223,11 @@ async function runSelfTest() {
           const warm = await prewarmGameConnection({
             gameOrigin: origin,
             localAddress: '127.0.0.1',
-            timeoutMs: 1000
+            timeoutMs: 5000
           });
           const response = await browserlessFetchWithTimeout(`${origin}/leave`, {
             localAddress: '127.0.0.1',
-            timeoutMs: 1000
+            timeoutMs: 5000
           });
           await response.text();
           const pool = localAddressAgentStatus().find(item => item.key === 'http:|127.0.0.1');
@@ -10259,6 +10261,148 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: '33|33|1|33|2|44|true|false'
+    },
+    {
+      name: 'browserless profit oscillation config locks A-B-A while safety and combat still preempt',
+      got: (() => {
+        const adapterOptions = {
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          decisionIntervalMs: 1000,
+          finalActionArbitrationHoldMs: 0,
+          singleCoinBaitEnabled: false,
+          opportunitySwitchConfirmFrames: 1,
+          opportunitySwitchHoldMs: 0,
+          opportunitySwitchMargin: 0,
+          opportunitySwitchRelativeMargin: 0,
+          opportunityOscillationSwitchLimit: 2,
+          opportunityOscillationWindowMs: 5000,
+          opportunityOscillationLockMs: 2000
+        };
+        const frame = (tick, aDrop, bDrop, extraEntities = []) => {
+          const self = fullStamina5s({
+            entity_id: 1,
+            user_id: 7,
+            name: 'self',
+            x: 0,
+            y: 0,
+            hp: 100,
+            max_hp: 100,
+            current_join_mode: 'Active',
+            drop: 0
+          });
+          return {
+            userId: 7,
+            realtime: {
+              tick,
+              frameAgeMs: 0,
+              self,
+              entities: [
+                self,
+                fullStamina5s({
+                  entity_id: 2,
+                  user_id: 8,
+                  name: 'A',
+                  x: 10000,
+                  y: 0,
+                  hp: 100,
+                  max_hp: 100,
+                  current_join_mode: 'Passive',
+                  drop: aDrop
+                }),
+                fullStamina5s({
+                  entity_id: 3,
+                  user_id: 9,
+                  name: 'B',
+                  x: -10000,
+                  y: 0,
+                  hp: 100,
+                  max_hp: 100,
+                  current_join_mode: 'Passive',
+                  drop: bDrop
+                }),
+                ...extraEntities
+              ],
+              bullets: [],
+              coinDrops: []
+            },
+            fallback: { tick, frameAgeMs: 0, entities: [], coinDrops: [], messages: [] }
+          };
+        };
+        const primeLock = adapter => {
+          const first = adapter.decide(frame(1, 100, 20), { nowMs: 1000 });
+          const second = adapter.decide(frame(2, 20, 100), { nowMs: 2000 });
+          const returned = adapter.decide(frame(3, 100, 20), { nowMs: 3000 });
+          return { first, second, returned };
+        };
+
+        const adapter = createBrowserlessDecisionAdapter(adapterOptions);
+        const locked = primeLock(adapter);
+        const held = adapter.decide(frame(4, 20, 100), { nowMs: 3500 });
+        const expired = adapter.decide(frame(5, 20, 100), { nowMs: 5001 });
+
+        const windowAdapter = createBrowserlessDecisionAdapter(adapterOptions);
+        windowAdapter.decide(frame(1, 100, 20), { nowMs: 1000 });
+        windowAdapter.decide(frame(2, 20, 100), { nowMs: 2000 });
+        const windowReset = windowAdapter.decide(frame(3, 100, 20), { nowMs: 8001 });
+
+        const safetyAdapter = createBrowserlessDecisionAdapter(adapterOptions);
+        primeLock(safetyAdapter);
+        const safety = safetyAdapter.decide(frame(4, 20, 100, [fullStamina5s({
+          entity_id: 4,
+          user_id: 10,
+          name: 'invulnerable-threat',
+          x: 5000,
+          y: 0,
+          hp: 100,
+          max_hp: 100,
+          current_join_mode: 'Active',
+          invulnerable_remaining_ms: 5000,
+          drop: 1
+        })]), { nowMs: 3500 });
+
+        const combatAdapter = createBrowserlessDecisionAdapter(adapterOptions);
+        primeLock(combatAdapter);
+        const combat = combatAdapter.decide(frame(4, 20, 100, [fullStamina5s({
+          entity_id: 4,
+          user_id: 10,
+          name: 'firing-threat',
+          x: 5000,
+          y: 0,
+          hp: 100,
+          max_hp: 100,
+          current_join_mode: 'Active',
+          firing: true,
+          drop: 20
+        })]), { nowMs: 3500 });
+
+        const returnedChoice = locked.returned.action.opportunityChoice || {};
+        const heldChoice = held.action.opportunityChoice || {};
+        const expiredChoice = expired.action.opportunityChoice || {};
+        const resetChoice = windowReset.action.opportunityChoice || {};
+        return [
+          locked.first.action.target?.userId,
+          locked.second.action.target?.userId,
+          locked.returned.action.target?.userId,
+          returnedChoice.oscillationSwitchCount,
+          returnedChoice.oscillationWindowStartedAt,
+          returnedChoice.oscillationLocked,
+          returnedChoice.oscillationLockUntil,
+          held.action.target?.userId,
+          heldChoice.oscillationLocked,
+          expired.action.target?.userId,
+          expiredChoice.oscillationReleaseReason,
+          windowReset.action.target?.userId,
+          resetChoice.oscillationSwitchCount,
+          resetChoice.oscillationWindowStartedAt,
+          resetChoice.oscillationLocked,
+          safety.action.band,
+          safety.action.reason,
+          combat.action.band,
+          combat.action.reason
+        ].join('|');
+      })(),
+      want: '8|9|8|2|2000|true|5000|8|true|9|lock-expired|8|1|8001|false|safety|avoid-invulnerable-target|combat|combat-live-realtime'
     },
     {
       name: 'browserless realtime safety preemption ends old edge profit continuation',
@@ -16838,6 +16982,66 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'high-entropy-robust-stop|stop|stop|high-entropy-bounded-exploration|continue|2'
+    },
+    {
+      name: 'browserless dynamic zigzag and retreat aim rotate four bounded routes',
+      got: (() => {
+        const self = { user_id: 7, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 };
+        const target = { user_id: 8, x: 8000, y: 0, vx: 50, vy: 0, hp: 80, active: true };
+        const behavior = mode => ({
+          mode,
+          confidence: 0.8,
+          dimensions: { controlStyle: { state: 'periodic-script', confidence: 0.9 } },
+          metrics: {
+            sampleCount: 20,
+            durationMs: 4000,
+            movementPhase: { currentDirection: 'east' },
+            movementTransitions: {
+              currentState: 'east',
+              conditionalSampleCount: 10,
+              conditionalNext: [
+                { state: 'north', probability: 0.8 },
+                { state: 'east', probability: 0.2 }
+              ],
+              transitionCount: 10,
+              next: [
+                { state: 'north', probability: 0.8 },
+                { state: 'east', probability: 0.2 }
+              ]
+            }
+          }
+        });
+        const run = (mode, shots, confidence = 0.8, stamina = 10000) => estimateAim(
+          { ...self, stamina_5s_remaining_milli: stamina },
+          target,
+          {
+            nowMs: 5000,
+            actualShots: shots,
+            combatTargetState: {
+              noDamageMs: 0,
+              motionSamples: [],
+              opponentBehaviorState: { ...behavior(mode), confidence }
+            }
+          }
+        );
+        const zigzag = [0, 1, 2, 3].map(shots => run('zigzag-strafe', shots));
+        const retreat = [0, 1, 2, 3].map(shots => run('retreat-kite', shots));
+        const lowConfidence = run('zigzag-strafe', 0, 0.69);
+        const stationary = run('stationary', 0, 0.95);
+        const unaffordable = run('zigzag-strafe', 0, 0.8, 2000);
+        return [
+          zigzag[0].routeCoverage?.style,
+          zigzag.map(item => item.routeCoverage?.selected).join(','),
+          zigzag[0].routeCoverage?.sequence?.join(','),
+          retreat[0].routeCoverage?.style,
+          retreat.map(item => item.routeCoverage?.selected).join(','),
+          lowConfidence.routeCoverage?.dynamicBehaviorEligible === true,
+          stationary.routeCoverage?.dynamicBehaviorEligible === true,
+          unaffordable.routeCoverage === null,
+          unaffordable.fireRiskClassification?.affordabilityDegraded === true
+        ].join('|');
+      })(),
+      want: 'dynamic-behavior-zigzag-strafe|continue,stop,right-turn,reverse|continue,stop,right-turn,reverse|dynamic-behavior-retreat-kite|continue,stop,right-turn,reverse|false|false|true|true'
     },
     {
       name: 'browserless trajectory coverage stays shadow and live-single requires aim improvement',

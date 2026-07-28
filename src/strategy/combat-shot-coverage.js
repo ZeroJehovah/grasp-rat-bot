@@ -17,10 +17,24 @@ function normalizeTrajectoryCoverageMode(value, fallback = 'shadow') {
 
 function shouldApplyTrajectoryCoverageCore(input = {}) {
   return normalizeTrajectoryCoverageMode(input.mode, 'shadow') === 'live-single'
-    && input.highEntropy === true
+    && (input.highEntropy === true || input.dynamicBehaviorEligible === true)
     && input.successfulAimProtected !== true
     && input.planActive === true
     && input.hasSelection === true;
+}
+
+function dynamicBehaviorTrajectoryEligibilityCore(behavior = {}, options = {}) {
+  const mode = String(behavior?.mode || '');
+  const confidence = Number(behavior?.confidence || 0);
+  const sampleCount = Number(behavior?.metrics?.sampleCount || 0);
+  const durationMs = Number(behavior?.metrics?.durationMs || 0);
+  const eligibleModes = Array.isArray(options.modes)
+    ? options.modes.map(String)
+    : ['zigzag-strafe', 'retreat-kite'];
+  return eligibleModes.includes(mode)
+    && confidence >= Math.max(0, Number(options.minimumConfidence ?? 0.7))
+    && sampleCount >= Math.max(1, Number(options.minimumSampleCount ?? 8))
+    && durationMs >= Math.max(0, Number(options.minimumDurationMs ?? 2500));
 }
 
 function finiteNumber(value, fallback = null) {
@@ -529,6 +543,7 @@ function buildTrajectoryCoveragePlanCore(input = {}, options = {}) {
 module.exports = {
   buildTrajectoryCoveragePlanCore,
   buildTrajectoryPathsCore,
+  dynamicBehaviorTrajectoryEligibilityCore,
   normalizeTrajectoryCoverageMode,
   shouldApplyTrajectoryCoverageCore,
   shotCorridorMissCore

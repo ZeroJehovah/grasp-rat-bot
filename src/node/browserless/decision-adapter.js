@@ -5451,6 +5451,9 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
     moveStaminaPerCm: options.opportunityMoveStaminaPerCm ?? BROWSER_RUNTIME_DEFAULTS.opportunityMoveStaminaPerCm ?? 1,
     switchConfirmFrames: options.opportunitySwitchConfirmFrames ?? 3,
     switchRelativeMargin: options.opportunitySwitchRelativeMargin ?? BROWSER_RUNTIME_DEFAULTS.opportunitySwitchRelativeMargin ?? 0,
+    oscillationSwitchLimit: options.opportunityOscillationSwitchLimit ?? BROWSER_RUNTIME_DEFAULTS.opportunityOscillationSwitchLimit,
+    oscillationWindowMs: options.opportunityOscillationWindowMs ?? BROWSER_RUNTIME_DEFAULTS.opportunityOscillationWindowMs,
+    oscillationLockMs: options.opportunityOscillationLockMs ?? BROWSER_RUNTIME_DEFAULTS.opportunityOscillationLockMs,
     afkFinishCommitmentMaxHp: options.afkFinishCommitmentMaxHp ?? 60,
     afkFinishCommitmentMaxStaminaCost: options.afkFinishCommitmentMaxStaminaCost ?? 25000,
     nowMs: input.nowMs
