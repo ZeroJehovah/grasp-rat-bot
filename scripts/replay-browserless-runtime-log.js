@@ -228,6 +228,11 @@ function numberOrNull(value) {
   return Number.isFinite(number) ? number : null;
 }
 
+function optionalNumberOrNull(value) {
+  if (value === null || value === undefined || value === '') return null;
+  return numberOrNull(value);
+}
+
 function normalizeVector(dx, dy) {
   const length = Math.hypot(Number(dx) || 0, Number(dy) || 0);
   if (!(length > 0)) return { x: 0, y: 0 };
@@ -1943,18 +1948,18 @@ function extractMovementCommand(entry) {
     reason: String(command.reason || movement.reason || action.reason || ''),
     sequence: 0,
     requestedAtMs: numberOrNull(command.sentAtMs ?? telemetry.requestedAtMs) ?? at,
-    observedTick: numberOrNull(command.observedTick ?? telemetry.observedTick),
-    observedAtMs: numberOrNull(telemetry.frameReceivedAtMs ?? telemetry.observedAtMs),
-    directionGeneration: numberOrNull(command.directionGeneration ?? telemetry.directionGeneration),
-    frameReceivedToDecisionMs: numberOrNull(telemetry.frameReceivedToDecisionMs),
-    decisionToVelocitySendMs: numberOrNull(telemetry.decisionToVelocitySendMs),
-    observedTickAgeAtSendMs: numberOrNull(
+    observedTick: optionalNumberOrNull(command.observedTick ?? telemetry.observedTick),
+    observedAtMs: optionalNumberOrNull(telemetry.frameReceivedAtMs ?? telemetry.observedAtMs),
+    directionGeneration: optionalNumberOrNull(command.directionGeneration ?? telemetry.directionGeneration),
+    frameReceivedToDecisionMs: optionalNumberOrNull(telemetry.frameReceivedToDecisionMs),
+    decisionToVelocitySendMs: optionalNumberOrNull(telemetry.decisionToVelocitySendMs),
+    observedTickAgeAtSendMs: optionalNumberOrNull(
       telemetry.velocitySendObservedTickAgeMs
         ?? telemetry.observedTickAgeAtSendMs
         ?? telemetry.velocitySendObservedTickAgeMs
     ),
-    pendingDepthAtSend: numberOrNull(telemetry.pendingDepthAtSend),
-    replacementsBeforeVisible: numberOrNull(telemetry.replacementsBeforeVisible),
+    pendingDepthAtSend: optionalNumberOrNull(telemetry.pendingDepthAtSend),
+    replacementsBeforeVisible: optionalNumberOrNull(telemetry.replacementsBeforeVisible),
     ownership: telemetry.ownership || command.ownership || null
   };
 }
@@ -2086,13 +2091,25 @@ function replayMovementCommandLatency(options = {}) {
     if (Object.prototype.hasOwnProperty.call(attributionCounts, key)) attributionCounts[key] += 1;
   }
   const exactTickValues = transitions.filter(item => item.attributionConfidence === 'exact')
-    .map(item => Number(item.tickDelayUpper)).filter(Number.isFinite);
+    .map(item => optionalNumberOrNull(item.tickDelayUpper)).filter(value => value !== null);
   const exactWallValues = transitions.filter(item => item.attributionConfidence === 'exact')
-    .map(item => Number(item.wallDelayMsUpper)).filter(Number.isFinite);
+    .map(item => optionalNumberOrNull(item.wallDelayMsUpper)).filter(value => value !== null);
   const boundedTickValues = transitions.filter(item => item.attributionConfidence === 'bounded')
-    .map(item => Number(item.tickDelayUpper)).filter(Number.isFinite);
+    .map(item => optionalNumberOrNull(item.tickDelayUpper)).filter(value => value !== null);
   const boundedWallValues = transitions.filter(item => item.attributionConfidence === 'bounded')
-    .map(item => Number(item.wallDelayMsUpper)).filter(Number.isFinite);
+    .map(item => optionalNumberOrNull(item.wallDelayMsUpper)).filter(value => value !== null);
+  const frameReceivedToDecisionValues = commands
+    .map(item => optionalNumberOrNull(item.frameReceivedToDecisionMs))
+    .filter(value => value !== null);
+  const decisionToVelocitySendValues = commands
+    .map(item => optionalNumberOrNull(item.decisionToVelocitySendMs))
+    .filter(value => value !== null);
+  const velocitySendObservedTickAgeValues = commands
+    .map(item => optionalNumberOrNull(item.observedTickAgeAtSendMs))
+    .filter(value => value !== null);
+  const pendingDepthAtSendValues = commands
+    .map(item => optionalNumberOrNull(item.pendingDepthAtSend))
+    .filter(value => value !== null);
   const timing = {
     exactReady: exactTickValues.length >= 4,
     sampleCount: exactTickValues.length,
@@ -2148,27 +2165,56 @@ function replayMovementCommandLatency(options = {}) {
   let stabilityState = null;
   let baselineDirection = null;
   let shadowDirection = null;
+  let actualDirection = null;
   let baselineSwitches = 0;
   let shadowSwitches = 0;
+  let actualSwitches = 0;
   let baselineQuick = 0;
   let shadowQuick = 0;
+  let actualQuick = 0;
   let baselineNonHardSwitches = 0;
   let shadowNonHardSwitches = 0;
+  let actualNonHardSwitches = 0;
   let baselineNonHardQuick = 0;
   let shadowNonHardQuick = 0;
+  let actualNonHardQuick = 0;
   let lastBaselineAt = null;
   let lastShadowAt = null;
+  let lastActualAt = null;
   let stabilityFalseSafe = 0;
   let stabilityHeldDirectHitRegression = 0;
   let stabilityHeldUnavoidableHitRegression = 0;
   let stabilityHeldBelowSafetyBoundary = 0;
+  let rolloutEnabledFrames = 0;
+  let rolloutAppliedFrames = 0;
+  let rolloutShadowHeldFrames = 0;
+  let loggedShadowMismatchFrames = 0;
+  let loggedAppliedDirectHitRegression = 0;
+  let loggedAppliedUnavoidableHitRegression = 0;
+  let loggedAppliedBelowSafetyBoundary = 0;
   let heldWorstCaseCpaCm = Infinity;
   let suppressedSamples = 0;
   const stabilitySamples = [];
   for (const row of rows) {
     const detail = row.detail || {};
     const movement = detail.movement || {};
-    const candidate = { dx: Number(movement.dx || 0), dy: Number(movement.dy || 0) };
+    const stabilityTelemetry = movement.movementStability || {};
+    const candidate = stabilityTelemetry.candidateDirection
+      ? {
+          dx: Number(stabilityTelemetry.candidateDirection.dx || 0),
+          dy: Number(stabilityTelemetry.candidateDirection.dy || 0)
+        }
+      : { dx: Number(movement.dx || 0), dy: Number(movement.dy || 0) };
+    const actual = { dx: Number(movement.dx || 0), dy: Number(movement.dy || 0) };
+    const loggedShadow = stabilityTelemetry.selectedDirection
+      ? {
+          dx: Number(stabilityTelemetry.selectedDirection.dx || 0),
+          dy: Number(stabilityTelemetry.selectedDirection.dy || 0)
+        }
+      : actual;
+    if (stabilityTelemetry.enabled === true) rolloutEnabledFrames += 1;
+    if (stabilityTelemetry.applied === true) rolloutAppliedFrames += 1;
+    if (stabilityTelemetry.shadowHeld === true) rolloutShadowHeldFrames += 1;
     const atMs = Date.parse(row.entry.at || '');
     if (!Number.isFinite(atMs)) continue;
     const baselineKey = movementDirectionKey(candidate);
@@ -2229,6 +2275,45 @@ function replayMovementCommandLatency(options = {}) {
       lastShadowAt = atMs;
     }
     shadowDirection = selected;
+    const actualKey = movementDirectionKey(actual);
+    const actualChanged = Boolean(
+      actualDirection && actualKey !== movementDirectionKey(actualDirection)
+    );
+    const actualQuickChanged = Boolean(
+      actualChanged && lastActualAt !== null && atMs - lastActualAt <= 200
+    );
+    if (actualChanged) {
+      actualSwitches += 1;
+      if (!hardSafetyRelease) actualNonHardSwitches += 1;
+      if (actualQuickChanged) {
+        actualQuick += 1;
+        if (!hardSafetyRelease) actualNonHardQuick += 1;
+      }
+      lastActualAt = atMs;
+    } else if (!actualDirection) {
+      lastActualAt = atMs;
+    }
+    actualDirection = actual;
+    if (stabilityTelemetry.selectedDirection
+      && movementDirectionKey(loggedShadow) !== movementDirectionKey(selected)) {
+      loggedShadowMismatchFrames += 1;
+    }
+    if (stabilityTelemetry.applied === true) {
+      const candidateDirectHits = numberOrNull(stabilityTelemetry.candidateDirectHits);
+      const heldDirectHits = numberOrNull(stabilityTelemetry.heldDirectHits);
+      const candidateUnavoidableHits = numberOrNull(stabilityTelemetry.candidateUnavoidableHits);
+      const heldUnavoidableHits = numberOrNull(stabilityTelemetry.heldUnavoidableHits);
+      const heldCpa = numberOrNull(stabilityTelemetry.heldWorstCaseCpaCm);
+      if (candidateDirectHits !== null && heldDirectHits !== null && heldDirectHits > candidateDirectHits) {
+        loggedAppliedDirectHitRegression += 1;
+      }
+      if (candidateUnavoidableHits !== null
+        && heldUnavoidableHits !== null
+        && heldUnavoidableHits > candidateUnavoidableHits) {
+        loggedAppliedUnavoidableHitRegression += 1;
+      }
+      if (heldCpa !== null && heldCpa < 200) loggedAppliedBelowSafetyBoundary += 1;
+    }
     if (result.held) suppressedSamples += 1;
     const selectedThreat = (movement.dodge?.threatField || []).find(item => Number(item.dx || 0) === Number(selected.dx || 0)
       && Number(item.dy || 0) === Number(selected.dy || 0));
@@ -2270,11 +2355,39 @@ function replayMovementCommandLatency(options = {}) {
   const nonHardQuickReduction = baselineNonHardQuick
     ? (baselineNonHardQuick - shadowNonHardQuick) / baselineNonHardQuick
     : null;
+  const actualSwitchReduction = baselineSwitches
+    ? (baselineSwitches - actualSwitches) / baselineSwitches
+    : null;
+  const actualQuickReduction = baselineQuick
+    ? (baselineQuick - actualQuick) / baselineQuick
+    : null;
+  const actualNonHardSwitchReduction = baselineNonHardSwitches
+    ? (baselineNonHardSwitches - actualNonHardSwitches) / baselineNonHardSwitches
+    : null;
+  const actualNonHardQuickReduction = baselineNonHardQuick
+    ? (baselineNonHardQuick - actualNonHardQuick) / baselineNonHardQuick
+    : null;
   const replayDataAvailable = commands.length > 0 && selfFrames.length > 0 && transitions.length > 0;
   const safetyAccepted = Number(dodgeReplay.newFalseSafe || 0) === 0
-    && stabilityFalseSafe === 0;
-  const reductionTargetsMet = (nonHardSwitchReduction === null || nonHardSwitchReduction >= 0.4)
-    && (nonHardQuickReduction === null || nonHardQuickReduction >= 0.6);
+    && stabilityFalseSafe === 0
+    && loggedAppliedDirectHitRegression === 0
+    && loggedAppliedUnavoidableHitRegression === 0
+    && loggedAppliedBelowSafetyBoundary === 0;
+  const reductionAssessment = rolloutEnabledFrames > 0
+    ? {
+        source: 'logged-applied',
+        nonHardSwitchReduction: actualNonHardSwitchReduction,
+        nonHardQuickReduction: actualNonHardQuickReduction
+      }
+    : {
+        source: 'shadow-counterfactual',
+        nonHardSwitchReduction,
+        nonHardQuickReduction
+      };
+  const reductionTargetsMet = (reductionAssessment.nonHardSwitchReduction === null
+      || reductionAssessment.nonHardSwitchReduction >= 0.4)
+    && (reductionAssessment.nonHardQuickReduction === null
+      || reductionAssessment.nonHardQuickReduction >= 0.6);
   const result = {
     mode: 'movement-command-latency',
     targetId: options.targetId || '',
@@ -2289,6 +2402,10 @@ function replayMovementCommandLatency(options = {}) {
     exactWallDelayMs: movementPercentileSummary(exactWallValues),
     boundedTickDelay: movementPercentileSummary(boundedTickValues),
     boundedWallDelayMs: movementPercentileSummary(boundedWallValues),
+    frameReceivedToDecisionMs: movementPercentileSummary(frameReceivedToDecisionValues),
+    decisionToVelocitySendMs: movementPercentileSummary(decisionToVelocitySendValues),
+    velocitySendObservedTickAgeMs: movementPercentileSummary(velocitySendObservedTickAgeValues),
+    pendingDepthAtSend: movementPercentileSummary(pendingDepthAtSendValues),
     timing,
     commandDirectionChangeCount: commandDirectionChanges.length,
     quickReversalCount200Ms: quickReversals.length,
@@ -2309,6 +2426,21 @@ function replayMovementCommandLatency(options = {}) {
       baselineNonHardQuickReversals200Ms: baselineNonHardQuick,
       shadowNonHardQuickReversals200Ms: shadowNonHardQuick,
       nonHardQuickReversalReduction: nonHardQuickReduction,
+      actualSwitches,
+      actualSwitchReduction,
+      actualNonHardSwitches,
+      actualNonHardSwitchReduction,
+      actualQuickReversals200Ms: actualQuick,
+      actualQuickReversalReduction: actualQuickReduction,
+      actualNonHardQuickReversals200Ms: actualNonHardQuick,
+      actualNonHardQuickReversalReduction: actualNonHardQuickReduction,
+      rolloutEnabledFrames,
+      rolloutAppliedFrames,
+      rolloutShadowHeldFrames,
+      loggedShadowMismatchFrames,
+      loggedAppliedDirectHitRegression,
+      loggedAppliedUnavoidableHitRegression,
+      loggedAppliedBelowSafetyBoundary,
       suppressedSamples,
       robustFalseSafe: stabilityFalseSafe,
       heldDirectHitRegression: stabilityHeldDirectHitRegression,
@@ -2328,10 +2460,14 @@ function replayMovementCommandLatency(options = {}) {
       replayDataAvailable,
       safetyAccepted,
       reductionTargetsMet,
+      reductionAssessmentSource: reductionAssessment.source,
+      measuredNonHardSwitchReduction: reductionAssessment.nonHardSwitchReduction,
+      measuredNonHardQuickReversalReduction: reductionAssessment.nonHardQuickReduction,
       nonHardSwitchReductionTarget: 0.4,
       nonHardQuickReversalReductionTarget: 0.6
     },
     transitions: transitions.slice(0, 32),
+    rolloutAccepted: replayDataAvailable && safetyAccepted && reductionTargetsMet,
     accepted: replayDataAvailable && safetyAccepted
   };
   return result;

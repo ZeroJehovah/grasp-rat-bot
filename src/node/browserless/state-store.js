@@ -368,6 +368,7 @@ function attributeVelocityTransition(commands = [], observedDirection = {}, meta
   const observedTickAgeAtSendMsValues = candidates
     .map(command => optionalNumericOrNull(command?.observedTickAgeAtSendMs))
     .filter(value => value !== null);
+  const exactCandidate = attributionConfidence === 'exact' ? latestCandidate : null;
   return {
     attributionConfidence,
     candidateCommandCount: candidates.length,
@@ -384,6 +385,12 @@ function attributeVelocityTransition(commands = [], observedDirection = {}, meta
     observedTickAgeAtSendMs: observedTickAgeAtSendMsValues.length
       ? Math.max(...observedTickAgeAtSendMsValues)
       : null,
+    frameReceivedToDecisionMs: optionalNumericOrNull(exactCandidate?.frameReceivedToDecisionMs),
+    decisionToVelocitySendMs: optionalNumericOrNull(exactCandidate?.decisionToVelocitySendMs),
+    velocitySendObservedTickAgeMs: optionalNumericOrNull(
+      exactCandidate?.velocitySendObservedTickAgeMs ?? exactCandidate?.observedTickAgeAtSendMs
+    ),
+    pendingDepthAtSend: optionalNumericOrNull(exactCandidate?.pendingDepthAtSend),
     latestCandidateSequence,
     earliestCandidateSequence,
     causalCommandCount: causal.length,

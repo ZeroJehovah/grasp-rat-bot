@@ -171,6 +171,7 @@ const {
   replayAfkFinishCommitment,
   replayCombatEconomicStopLoss,
   replayCombatPursuit,
+  replayMovementCommandLatency,
   replayMovementStallExit,
   replayRecoveryThreatExit
 } = require('../../scripts/replay-browserless-runtime-log');
@@ -19696,10 +19697,133 @@ async function runSelfTest() {
           transition.velocitySendToVisibleWallMs,
           transition.visibleTransitionTickDelay,
           transition.observedTickAgeAtSendMs,
+          transition.frameReceivedToDecisionMs,
+          transition.decisionToVelocitySendMs,
+          transition.velocitySendObservedTickAgeMs,
+          transition.pendingDepthAtSend,
           transition.candidateCommandCount
         ].join('|');
       })(),
-      want: 'exact|90|2|10|1'
+      want: 'exact|90|2|10|4|6|10|0|1'
+    },
+    {
+      name: 'movement latency replay reports local stages and logged rollout reduction',
+      got: withTempDirForTest(async dir => {
+        const battleFile = path.join(dir, 'battle.jsonl');
+        const runnerFile = path.join(dir, 'runner.jsonl');
+        const wsFile = path.join(dir, 'ws.jsonl');
+        const runId = 'movement-rollout-test';
+        const write = (file, entry) => fs.appendFileSync(file, `${JSON.stringify(entry)}\n`);
+        const threatField = [
+          { dx: 1, dy: 0, directHits: 0, unavoidableHits: 0, worstCaseCpaCm: 320, scheduleRobust: true },
+          { dx: 0, dy: 1, directHits: 0, unavoidableHits: 0, worstCaseCpaCm: 300, scheduleRobust: true }
+        ];
+        const battleRow = (at, tick, candidate, applied) => ({
+          at,
+          type: 'combat-live',
+          detail: {
+            runId,
+            tick,
+            target: { userId: 77, distance: 12000 },
+            self: { userId: 7, x: 0, y: 0, vx: 50, vy: 0, hp: 100 },
+            movement: {
+              dx: 1,
+              dy: 0,
+              dodge: { threatField },
+              movementStability: {
+                enabled: true,
+                applied,
+                shadowHeld: applied,
+                candidateDirection: candidate,
+                selectedDirection: { dx: 1, dy: 0 },
+                candidateDirectHits: 0,
+                heldDirectHits: 0,
+                candidateUnavoidableHits: 0,
+                heldUnavoidableHits: 0,
+                heldWorstCaseCpaCm: 320,
+                newDirectHits: 0,
+                newUnavoidableHits: 0
+              }
+            }
+          }
+        });
+        write(battleFile, battleRow('2026-07-15T01:00:00.100Z', 100, { dx: 1, dy: 0 }, false));
+        write(battleFile, battleRow('2026-07-15T01:00:00.400Z', 106, { dx: 0, dy: 1 }, true));
+        write(battleFile, battleRow('2026-07-15T01:00:00.700Z', 112, { dx: 1, dy: 0 }, false));
+        const sentAt = Date.parse('2026-07-15T01:00:00.120Z');
+        write(runnerFile, {
+          at: '2026-07-15T01:00:00.120Z',
+          type: 'movement-command',
+          detail: {
+            runId,
+            action: {
+              command: {
+                id: 1,
+                type: 'velocity',
+                dx: 1,
+                dy: 0,
+                sentAt: '2026-07-15T01:00:00.120Z',
+                sentAtMs: sentAt,
+                directionGeneration: 1,
+                movementTelemetry: {
+                  commandId: 1,
+                  directionGeneration: 1,
+                  requestedAtMs: sentAt,
+                  observedTick: 100,
+                  observedAtMs: sentAt - 15,
+                  frameReceivedToDecisionMs: 12,
+                  decisionToVelocitySendMs: 3,
+                  observedTickAgeAtSendMs: 15,
+                  pendingDepthAtSend: 0
+                }
+              }
+            }
+          }
+        });
+        write(wsFile, {
+          at: '2026-07-15T01:00:00.050Z',
+          type: 'message',
+          detail: {
+            runId,
+            decodedType: 'pos',
+            decodedTick: 100,
+            decodedSummary: { type: 'pos', tick: 100, self: { x: 0, y: 0, vx: 0, vy: 0, hp: 100 } }
+          }
+        });
+        write(wsFile, {
+          at: '2026-07-15T01:00:00.300Z',
+          type: 'message',
+          detail: {
+            runId,
+            decodedType: 'pos',
+            decodedTick: 104,
+            decodedSummary: { type: 'pos', tick: 104, self: { x: 50, y: 0, vx: 50, vy: 0, hp: 100 } }
+          }
+        });
+        const replay = replayMovementCommandLatency({
+          file: battleFile,
+          runnerFile,
+          wsFile,
+          startLine: 1,
+          endLine: 3,
+          targetId: '77'
+        });
+        return [
+          replay.frameReceivedToDecisionMs.count,
+          replay.frameReceivedToDecisionMs.median,
+          replay.decisionToVelocitySendMs.median,
+          replay.velocitySendObservedTickAgeMs.median,
+          replay.pendingDepthAtSend.median,
+          replay.stabilityCounterfactual.baselineSwitches,
+          replay.stabilityCounterfactual.actualSwitches,
+          replay.stabilityCounterfactual.rolloutEnabledFrames,
+          replay.stabilityCounterfactual.rolloutAppliedFrames,
+          replay.validation.reductionAssessmentSource,
+          replay.rolloutAccepted,
+          replay.accepted
+        ].join('|');
+      }),
+      want: '1|12|3|15|0|2|0|3|1|logged-applied|true|true'
     },
     {
       name: 'browserless replaced movement commands remain in Dodge schedule when attribution is ambiguous',
