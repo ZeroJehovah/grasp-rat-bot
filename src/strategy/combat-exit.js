@@ -44,7 +44,7 @@ function evaluateCombatHpExitCore(input = {}, options = {}) {
   const thresholds = combatHpExitThresholdsCore(options);
   const hpGap = targetHp === null ? null : targetHp - selfHp;
 
-  if (thresholds.criticalHp > 0 && selfHp < thresholds.criticalHp) {
+  if (thresholds.criticalHp > 0 && selfHp <= thresholds.criticalHp) {
     return {
       shouldLeave: true,
       policy: 'static-hp',
@@ -115,9 +115,11 @@ function evaluatePredictedLeaveHpCore(input = {}, options = {}) {
   const collisionDamage = collisionHits * damagePerHit;
   const recentDamage = Math.max(0, numberOrNull(input.recentDamage) ?? 0);
   const recentDamageWindowMs = Math.max(0, numberOrNull(input.recentDamageWindowMs) ?? 0);
-  const damageRateHpPerMs = recentDamage > 0 && recentDamageWindowMs >= 100
+  const sampleDamageRateHpPerMs = recentDamage > 0 && recentDamageWindowMs >= 100
     ? recentDamage / recentDamageWindowMs
     : 0;
+  const latchedDamageRateHpPerMs = Math.max(0, numberOrNull(input.latchedDamageRateHpPerSecond) ?? 0) / 1000;
+  const damageRateHpPerMs = Math.max(sampleDamageRateHpPerMs, latchedDamageRateHpPerMs);
   const rateDamage = damageRateHpPerMs > 0
     ? Math.ceil(damageRateHpPerMs * windowMs * 10) / 10
     : 0;
@@ -125,7 +127,7 @@ function evaluatePredictedLeaveHpCore(input = {}, options = {}) {
   const uncertaintyDamage = Math.max(0, firstConfiguredNumber(options, [
     'leavePredictionUncertaintyDamage',
     'combatLeavePredictionUncertaintyDamage'
-  ], damagePerHit));
+  ], damagePerHit * 2));
   const predictedHp = selfHp - predictedDamage;
   const riskAdjustedHp = predictedHp - uncertaintyDamage;
   const survivalMarginHp = Math.max(0, firstConfiguredNumber(options, [
@@ -134,7 +136,7 @@ function evaluatePredictedLeaveHpCore(input = {}, options = {}) {
     'criticalHp',
     'combatCriticalHp',
     'combatCriticalHpLeaveThreshold'
-  ], COMBAT_CONSTANTS.CRITICAL_HP));
+  ], COMBAT_CONSTANTS.LEAVE_SURVIVAL_MARGIN_HP));
   const shouldLeave = predictedDamage > 0 && riskAdjustedHp <= survivalMarginHp;
   return {
     shouldLeave,
@@ -152,6 +154,8 @@ function evaluatePredictedLeaveHpCore(input = {}, options = {}) {
     damagePerHit,
     recentDamage: Math.round(recentDamage * 10) / 10,
     recentDamageWindowMs: Math.round(recentDamageWindowMs),
+    sampleDamageRateHpPerSecond: Math.round(sampleDamageRateHpPerMs * 1000 * 10) / 10,
+    latchedDamageRateHpPerSecond: Math.round(latchedDamageRateHpPerMs * 1000 * 10) / 10,
     damageRateHpPerSecond: Math.round(damageRateHpPerMs * 1000 * 10) / 10,
     baseWindowMs,
     commandDelayMs,

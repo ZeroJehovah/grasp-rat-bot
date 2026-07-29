@@ -21,7 +21,8 @@ const COMBAT_CONSTANTS = {
   RETREAT_EDGE_RANGE: 12000,              // combatRetreatEdgeRange - suppress fire on retreating edge
 
   // HP and disadvantage gates
-  CRITICAL_HP: 20,                        // combatCriticalHp - immediate exit threshold
+  CRITICAL_HP: 30,                        // combatCriticalHp - immediate exit threshold
+  LEAVE_SURVIVAL_MARGIN_HP: 20,           // desired HP remaining after verified leave
   LOW_HP_THRESHOLD: 50,                   // combatLowHpLeaveThreshold - low HP exit threshold
   DISADVANTAGE_HP_GAP: 20,                // combatDisadvantageHpGap - HP gap for disadvantage
   DISADVANTAGE_CONFIRM_MS: 2500,           // combatDisadvantageConfirmMs - sustained gap window
@@ -101,6 +102,11 @@ function validateCombatConstants() {
   // HP thresholds
   if (COMBAT_CONSTANTS.CRITICAL_HP < 0 || COMBAT_CONSTANTS.CRITICAL_HP > 100) {
     errors.push('CRITICAL_HP should be 0-100');
+  }
+
+  if (COMBAT_CONSTANTS.LEAVE_SURVIVAL_MARGIN_HP < 0
+    || COMBAT_CONSTANTS.LEAVE_SURVIVAL_MARGIN_HP > COMBAT_CONSTANTS.CRITICAL_HP) {
+    errors.push('LEAVE_SURVIVAL_MARGIN_HP should be 0-CRITICAL_HP');
   }
 
   if (COMBAT_CONSTANTS.LOW_HP_THRESHOLD < COMBAT_CONSTANTS.CRITICAL_HP) {

@@ -7082,8 +7082,9 @@ function buildBrowserlessPredictedThreatExitDecision(state, input, stateful, com
   const previous = stateful.browserlessLeaveRisk && typeof stateful.browserlessLeaveRisk === 'object'
     ? stateful.browserlessLeaveRisk
     : {};
+  const damageMemoryMs = Math.max(1250, Number(options.leavePredictionDamageMemoryMs || 2500));
   const hpSamples = (Array.isArray(previous.hpSamples) ? previous.hpSamples : [])
-    .filter(sample => nowMs - Number(sample.at || 0) <= 2500);
+    .filter(sample => nowMs - Number(sample.at || 0) <= damageMemoryMs);
   const lastHpSample = hpSamples[hpSamples.length - 1] || null;
   if (!lastHpSample
     || Number(lastHpSample.hp) !== selfHp
@@ -7095,6 +7096,30 @@ function buildBrowserlessPredictedThreatExitDecision(state, input, stateful, com
   const recentDamage = peakSample ? Math.max(0, Number(peakSample.hp) - selfHp) : 0;
   const recentDamageWindowMs = recentDamage > 0 && peakSample
     ? Math.max(0, nowMs - Number(peakSample.at || nowMs))
+    : 0;
+  const sampleDamageRateHpPerSecond = recentDamage > 0 && recentDamageWindowMs >= 100
+    ? recentDamage / recentDamageWindowMs * 1000
+    : 0;
+  const previousDamageRatePeakHpPerSecond = Math.max(0, Number(
+    previous.damageRatePeakHpPerSecond
+      ?? previous.prediction?.damageRateHpPerSecond
+      ?? 0
+  ));
+  const previousDamageRatePeakAt = Math.max(0, Number(
+    previous.damageRatePeakAt
+      ?? previous.at
+      ?? 0
+  ));
+  const previousDamageRatePeakFresh = previousDamageRatePeakHpPerSecond > 0
+    && previousDamageRatePeakAt > 0
+    && nowMs - previousDamageRatePeakAt <= damageMemoryMs;
+  const refreshDamageRatePeak = sampleDamageRateHpPerSecond >= previousDamageRatePeakHpPerSecond
+    || !previousDamageRatePeakFresh;
+  const damageRatePeakHpPerSecond = refreshDamageRatePeak
+    ? sampleDamageRateHpPerSecond
+    : previousDamageRatePeakHpPerSecond;
+  const damageRatePeakAt = damageRatePeakHpPerSecond > 0
+    ? (refreshDamageRatePeak ? nowMs : previousDamageRatePeakAt)
     : 0;
   const bulletObservations = (Array.isArray(previous.bulletObservations) ? previous.bulletObservations : [])
     .filter(item => nowMs - Number(item.at || 0) <= 1500);
@@ -7132,6 +7157,7 @@ function buildBrowserlessPredictedThreatExitDecision(state, input, stateful, com
     unavoidableHits: pendingCover?.unavoidableHits,
     recentDamage,
     recentDamageWindowMs,
+    latchedDamageRateHpPerSecond: damageRatePeakHpPerSecond,
     commandDelayMs: commandDelayTicks * 50
   }, options);
   const previousAction = stateful.lastDecisionAction || null;
@@ -7252,6 +7278,10 @@ function buildBrowserlessPredictedThreatExitDecision(state, input, stateful, com
     continuousIncoming,
     recentDamage,
     recentDamageWindowMs,
+    damageMemoryMs,
+    sampleDamageRateHpPerSecond: Math.round(sampleDamageRateHpPerSecond * 10) / 10,
+    damageRatePeakHpPerSecond: Math.round(damageRatePeakHpPerSecond * 10) / 10,
+    damageRatePeakAt,
     rapidDamage,
     engagedTargetHp: engagedTargetHpEvidence.targetHp,
     engagedTargetHpSource: engagedTargetHpEvidence.source,

@@ -1425,7 +1425,11 @@ function passiveRunnerState(self, target, combatTargetState = {}, options = {}) 
 }
 
 function buildCombatExitEvaluation(self, target, combatTargetState = {}, options = {}) {
-  if (!self || !target || target.easyKillThreatExempt) {
+  if (!self || !target) {
+    return { exit: null, baselineExit: null, disadvantageObservation: null };
+  }
+  const immediateHpExit = evaluateCombatHpExitCore({ self, target }, options);
+  if (target.easyKillThreatExempt && immediateHpExit?.rule !== 'critical-hp') {
     return { exit: null, baselineExit: null, disadvantageObservation: null };
   }
   const noDamageMs = Math.max(0, Number(combatTargetState?.noDamageMs || 0));

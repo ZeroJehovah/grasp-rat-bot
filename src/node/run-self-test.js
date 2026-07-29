@@ -18118,6 +18118,143 @@ async function runSelfTest() {
       want: 'safety-exit|safety|combat-critical-hp-leave|true|8|combat-critical-hp-leave'
     },
     {
+      name: 'browserless production emergency hp floor exits at exact thirty even while ahead',
+      got: (() => {
+        const run = hp => buildBrowserlessDecision({
+          userId: 7,
+          realtime: {
+            tick: 62,
+            frameAgeMs: 0,
+            self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp, stamina_5s_remaining_milli: 10000 },
+            entities: [
+              { entity_id: 1, user_id: 7, x: 0, y: 0, hp, stamina_5s_remaining_milli: 10000 },
+              { entity_id: 2, user_id: 8, name: 'active', x: 5000, y: 0, hp: 3, current_join_mode: 'Active', firing: true, drop: 12 }
+            ],
+            bullets: [],
+            coinDrops: []
+          },
+          fallback: { coinDrops: [] }
+        }, {}, {
+          nowMs: 1500,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          combatAttackRange: 11000
+        });
+        const emergency = run(30);
+        const aboveFloor = run(31);
+        return [
+          emergency.kind,
+          emergency.reason,
+          emergency.action.shouldLeave,
+          emergency.combat.exit.threshold,
+          aboveFloor.kind,
+          aboveFloor.reason
+        ].join('|');
+      })(),
+      want: 'safety-exit|combat-critical-hp-leave|true|30|combat-live|combat-live-realtime'
+    },
+    {
+      name: 'browserless production emergency hp floor overrides easy-kill trust',
+      got: (() => {
+        const decision = buildBrowserlessDecision({
+          userId: 7,
+          realtime: {
+            tick: 62,
+            frameAgeMs: 0,
+            self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 30, stamina_5s_remaining_milli: 10000 },
+            entities: [
+              { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 30, stamina_5s_remaining_milli: 10000 },
+              { entity_id: 2, user_id: 8, name: 'trusted', x: 5000, y: 0, hp: 3, current_join_mode: 'Active', firing: true, drop: 12 }
+            ],
+            bullets: [],
+            coinDrops: []
+          },
+          fallback: { coinDrops: [] }
+        }, {}, {
+          nowMs: 1500,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          combatAttackRange: 11000,
+          easyKillPlayers: [{ userId: 8, name: 'trusted' }]
+        });
+        return [
+          decision.kind,
+          decision.reason,
+          decision.combat.target?.easyKillThreatExempt,
+          decision.combat.exit?.rule,
+          decision.combat.exit?.threshold
+        ].join('|');
+      })(),
+      want: 'safety-exit|combat-critical-hp-leave|true|critical-hp|30'
+    },
+    {
+      name: 'browserless predicted leave retains peak damage rate across a short firing lull',
+      got: (() => {
+        const buildStateful = peakAt => ({
+          lastDecisionAction: { kind: 'combat-live', band: 'combat', reason: 'combat-live-realtime' },
+          combatTarget: {
+            id: '8',
+            at: 1000,
+            firstSeenAt: 1000,
+            lastInRangeAt: 2900,
+            hp: 40,
+            intent: 'engaged',
+            active: true
+          },
+          browserlessLeaveRisk: {
+            at: 2900,
+            damageRatePeakHpPerSecond: 15,
+            damageRatePeakAt: peakAt,
+            hpSamples: [{ at: 2900, tick: 61, hp: 44 }],
+            prediction: { damageRateHpPerSecond: 15 }
+          }
+        });
+        const input = nowMs => ({
+          userId: 7,
+          realtime: {
+            tick: 62,
+            frameAgeMs: 0,
+            self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 44, stamina_5s_remaining_milli: 10000 },
+            entities: [
+              { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 44, stamina_5s_remaining_milli: 10000 },
+              { entity_id: 2, user_id: 8, name: 'active', x: 5000, y: 0, hp: 40, current_join_mode: 'Active', firing: false, drop: 12 }
+            ],
+            bullets: [],
+            coinDrops: []
+          },
+          fallback: { coinDrops: [] },
+          nowMs
+        });
+        const retainedState = buildStateful(1000);
+        const retained = buildBrowserlessDecision(input(3000), retainedState, {
+          nowMs: 3000,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          combatAttackRange: 11000
+        });
+        const expiredState = buildStateful(1000);
+        const expired = buildBrowserlessDecision(input(3600), expiredState, {
+          nowMs: 3600,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          combatAttackRange: 11000
+        });
+        return [
+          retained.kind,
+          retained.reason,
+          retainedState.browserlessLeaveRisk.recentDamage,
+          retainedState.browserlessLeaveRisk.sampleDamageRateHpPerSecond,
+          retainedState.browserlessLeaveRisk.damageRatePeakHpPerSecond,
+          retainedState.browserlessLeaveRisk.prediction.damageRateHpPerSecond,
+          retainedState.browserlessLeaveRisk.prediction.riskAdjustedHp,
+          expired.kind,
+          expired.reason,
+          expiredState.browserlessLeaveRisk.damageRatePeakHpPerSecond
+        ].join('|');
+      })(),
+      want: 'safety-exit|combat-predicted-leave-hp|0|0|15|15|19.2|recover|wait-for-full-stamina-and-hp|0'
+    },
+    {
       name: 'browserless profit live critical hp exits on out-of-range firing threat',
       got: (() => {
         const decision = buildBrowserlessDecision({
@@ -19305,7 +19442,7 @@ async function runSelfTest() {
       want: 'combat-low-hp-disadvantage-leave|1|true'
     },
     {
-      name: 'browserless combat critical threshold is strict below 20 hp',
+      name: 'browserless combat critical threshold is inclusive at the configured hp',
       got: (() => {
         const combatAt = selfHp => buildBrowserlessCombatDryRun({
           userId: 7,
@@ -19323,15 +19460,15 @@ async function runSelfTest() {
           combatAttackRange: 11000,
           combatCriticalHp: 20
         });
+        const above = combatAt(21);
         const boundary = combatAt(20);
-        const critical = combatAt(19);
         return [
-          boundary.exit === null,
-          critical.exit.reason,
-          critical.exit.selfHp
+          above.exit === null,
+          boundary.exit.reason,
+          boundary.exit.selfHp
         ].join('|');
       })(),
-      want: 'true|combat-critical-hp-leave|19'
+      want: 'true|combat-critical-hp-leave|20'
     },
     {
       name: 'browserless combat pressure no-damage does not override static hp rules',

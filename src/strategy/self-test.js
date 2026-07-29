@@ -5170,11 +5170,12 @@ function runStrategyModuleSelfTests() {
   const hpExitThresholds = combatHpExitThresholdsCore();
   results.push({
     name: 'combat-exit-static-hp-boundaries',
-    passed: hpExitThresholds.criticalHp === 20
+    passed: hpExitThresholds.criticalHp === 30
+      && COMBAT_CONSTANTS.LEAVE_SURVIVAL_MARGIN_HP === 20
       && hpExitThresholds.lowHp === 50
       && hpExitThresholds.disadvantageHpGap === 20
-      && evaluateCombatHpExitCore({ selfHp: 19, targetHp: 10 })?.rule === 'critical-hp'
-      && evaluateCombatHpExitCore({ selfHp: 20, targetHp: 20 }) === null
+      && evaluateCombatHpExitCore({ selfHp: 30, targetHp: 10 })?.rule === 'critical-hp'
+      && evaluateCombatHpExitCore({ selfHp: 31, targetHp: 31 }) === null
       && evaluateCombatHpExitCore({ selfHp: 49, targetHp: 50 })?.rule === 'low-hp-behind'
       && evaluateCombatHpExitCore({ selfHp: 49, targetHp: 49 }) === null
       && evaluateCombatHpExitCore({ selfHp: 80, targetHp: 100 })?.rule === 'clear-hp-gap'
@@ -5185,7 +5186,7 @@ function runStrategyModuleSelfTests() {
     name: 'combat-exit-does-not-leave-winning-or-unattributed-healthy-fight',
     passed: evaluateCombatHpExitCore({ selfHp: 94, targetHp: 46 }) === null
       && evaluateCombatHpExitCore({ selfHp: 65, targetHp: null }) === null
-      && evaluateCombatHpExitCore({ selfHp: 19, targetHp: null })?.reason === 'combat-critical-hp-leave'
+      && evaluateCombatHpExitCore({ selfHp: 30, targetHp: null })?.reason === 'combat-critical-hp-leave'
   });
 
   const predictedCritical = evaluatePredictedLeaveHpCore({
@@ -5212,15 +5213,37 @@ function runStrategyModuleSelfTests() {
     recentDamageWindowMs: 1000,
     commandDelayMs: 250
   });
+  const predictedLatchedRateLoss = evaluatePredictedLeaveHpCore({
+    selfHp: 44,
+    directHits: 0,
+    unavoidableHits: 0,
+    recentDamage: 0,
+    recentDamageWindowMs: 0,
+    latchedDamageRateHpPerSecond: 15,
+    commandDelayMs: 250
+  });
+  const predictedPressureBoundary = evaluatePredictedLeaveHpCore({
+    selfHp: 41,
+    directHits: 5,
+    unavoidableHits: 5,
+    recentDamage: 0,
+    recentDamageWindowMs: 0,
+    commandDelayMs: 250
+  });
   results.push({
-    name: 'combat-exit-predicts-leave-window-damage-with-one-hit-uncertainty',
+    name: 'combat-exit-predicts-leave-window-damage-with-two-hit-uncertainty-and-latched-rate',
     passed: predictedCritical.shouldLeave === true
       && predictedCritical.windowMs === 1250
       && predictedCritical.predictedDamage === 3
-      && predictedCritical.riskAdjustedHp === 15
+      && predictedCritical.riskAdjustedHp === 12
       && predictedRateLoss.shouldLeave === true
       && predictedRateLoss.predictedDamage >= 56
       && predictedSafe.shouldLeave === false
+      && predictedLatchedRateLoss.shouldLeave === true
+      && predictedLatchedRateLoss.sampleDamageRateHpPerSecond === 0
+      && predictedLatchedRateLoss.damageRateHpPerSecond === 15
+      && predictedPressureBoundary.shouldLeave === true
+      && predictedPressureBoundary.riskAdjustedHp === 20
   });
 
   results.push({
