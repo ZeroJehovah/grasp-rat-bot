@@ -131,10 +131,16 @@ function createTransportHandle(ws, runtime, wsUrl, hooks = {}) {
     isOpen() {
       return isWsOpen(ws, runtime);
     },
+    bufferedAmount() {
+      const value = Number(ws?.bufferedAmount || 0);
+      return Number.isFinite(value) ? Math.max(0, value) : 0;
+    },
     send(message) {
       if (!handle.isOpen()) throw new Error('websocket is not open');
+      const bufferedBefore = handle.bufferedAmount();
       ws.send(message);
-      if (typeof hooks.onSend === 'function') hooks.onSend({ message });
+      const bufferedAfter = handle.bufferedAmount();
+      if (typeof hooks.onSend === 'function') hooks.onSend({ message, bufferedBefore, bufferedAfter });
       return message;
     },
     sendVelocity(dx, dy) {

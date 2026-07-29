@@ -96,6 +96,149 @@ function createBattleObservations() {
   };
 }
 
+function createBattleExitTail() {
+  return {
+    active: false,
+    triggerReason: '',
+    triggerAtMs: null,
+    triggerTick: null,
+    triggerHp: null,
+    frames: 0,
+    lastObservedAtMs: null,
+    lastObservedTick: null,
+    finalObservedHp: null,
+    minPostTriggerHp: null,
+    selfMissingBeforeConfirmation: false,
+    deathObserved: false,
+    deathAtMs: null,
+    deathTick: null,
+    deathEvidence: '',
+    firstRequestAtMs: null,
+    firstRequestDelayMs: null,
+    hedgeStartedAtMs: null,
+    hedgeDispatchDriftMs: null,
+    leaveConfirmed: false,
+    leaveCompletedAtMs: null
+  };
+}
+
+function firstFiniteNumber(...values) {
+  for (const value of values) {
+    const number = numberOrNull(value);
+    if (number !== null) return number;
+  }
+  return null;
+}
+
+function observeBattleExitTail(tail, type, detail, atMs) {
+  const next = tail || createBattleExitTail();
+  const value = detail && typeof detail === 'object' ? detail : {};
+  const pending = value.pending && typeof value.pending === 'object' ? value.pending : {};
+  const response = value.response && typeof value.response === 'object' ? value.response : {};
+  const normalizedType = String(type || '');
+  const tick = firstFiniteNumber(value.tick, pending.tick, response.tick);
+  const hp = firstFiniteNumber(
+    value.selfHp,
+    value.lastKnownHp,
+    pending.lastHp,
+    pending.minHp,
+    response.hp
+  );
+
+  if (normalizedType === 'safety-trigger') {
+    next.active = true;
+    next.triggerReason = String(value.reason || '');
+    next.triggerAtMs = firstFiniteNumber(value.atMs, atMs);
+    next.triggerTick = tick;
+    next.triggerHp = hp;
+    next.finalObservedHp = hp;
+    next.minPostTriggerHp = hp;
+  }
+  if (!next.active) return next;
+
+  next.frames += 1;
+  next.lastObservedAtMs = firstFiniteNumber(value.atMs, value.startedAtMs, atMs);
+  if (tick !== null) next.lastObservedTick = tick;
+  if (hp !== null) {
+    next.finalObservedHp = hp;
+    next.minPostTriggerHp = next.minPostTriggerHp === null ? hp : Math.min(next.minPostTriggerHp, hp);
+  }
+  if (value.selfPresent === false && !next.leaveConfirmed) next.selfMissingBeforeConfirmation = true;
+
+  const deathTicks = Array.isArray(response.death_ticks)
+    ? response.death_ticks.map(Number).filter(Number.isFinite)
+    : [];
+  const responseHp = numberOrNull(response.hp);
+  const responseDead = (responseHp !== null && responseHp <= 0)
+    || /^dead$/i.test(String(response.life || ''));
+  if (value.deathObserved === true || responseDead) {
+    next.deathObserved = true;
+    next.deathAtMs = firstFiniteNumber(value.deathAtMs, value.atMs, atMs);
+    next.deathTick = firstFiniteNumber(value.deathTick, deathTicks.at(-1), tick);
+    next.deathEvidence = String(value.deathEvidence || (responseDead ? 'leave-response-dead' : 'frame-death-evidence'));
+  }
+
+  const stage = String(value.stage || '');
+  const requestAtMs = firstFiniteNumber(value.startedAtMs, value.firstRequestAtMs);
+  if (normalizedType === 'leave-request-start' && requestAtMs !== null) {
+    if (next.firstRequestAtMs === null || requestAtMs < next.firstRequestAtMs) next.firstRequestAtMs = requestAtMs;
+    const firstDelay = firstFiniteNumber(value.firstRequestDelayMs);
+    if (firstDelay !== null && (next.firstRequestDelayMs === null || firstDelay < next.firstRequestDelayMs)) {
+      next.firstRequestDelayMs = firstDelay;
+    }
+    if (/^hedge-/.test(stage)) {
+      next.hedgeStartedAtMs = requestAtMs;
+      const drift = firstFiniteNumber(value.dispatchDriftMs);
+      if (drift !== null) next.hedgeDispatchDriftMs = drift;
+    }
+  }
+  if (normalizedType === 'leave-request-result' && value.ok === true) next.leaveConfirmed = true;
+  if (normalizedType === 'leave-confirmed') next.leaveConfirmed = true;
+  if (normalizedType === 'leave-pending-finish') {
+    if (pending.ok === true || value.ok === true) next.leaveConfirmed = true;
+    next.leaveCompletedAtMs = firstFiniteNumber(pending.completedAtMs, value.completedAtMs, atMs);
+  }
+  return next;
+}
+
+function summarizeBattleExitTail(tail) {
+  const value = tail || createBattleExitTail();
+  if (!value.active) return null;
+  const triggerHp = numberOrNull(value.triggerHp);
+  const minHp = numberOrNull(value.minPostTriggerHp);
+  const postTriggerDamage = triggerHp === null || minHp === null
+    ? null
+    : Math.max(0, triggerHp - minHp);
+  const terminalOutcome = value.deathObserved
+    ? 'death-observed'
+    : (value.leaveConfirmed
+        ? 'leave-confirmed'
+        : (value.selfMissingBeforeConfirmation ? 'self-missing-before-confirmation' : 'leave-unconfirmed'));
+  return {
+    triggerReason: String(value.triggerReason || ''),
+    triggerAtMs: numberOrNull(value.triggerAtMs),
+    triggerTick: numberOrNull(value.triggerTick),
+    triggerHp,
+    tailFrames: Math.max(0, Number(value.frames || 0)),
+    finalObservedHp: numberOrNull(value.finalObservedHp),
+    minPostTriggerHp: minHp,
+    postTriggerDamage,
+    finalObservedTick: numberOrNull(value.lastObservedTick),
+    selfMissingBeforeConfirmation: Boolean(value.selfMissingBeforeConfirmation),
+    deathObserved: Boolean(value.deathObserved),
+    deathAtMs: numberOrNull(value.deathAtMs),
+    deathTick: numberOrNull(value.deathTick),
+    deathEvidence: String(value.deathEvidence || ''),
+    firstRequestAtMs: numberOrNull(value.firstRequestAtMs),
+    firstRequestDelayMs: numberOrNull(value.firstRequestDelayMs),
+    hedgeStartedAtMs: numberOrNull(value.hedgeStartedAtMs),
+    hedgeDispatchDriftMs: numberOrNull(value.hedgeDispatchDriftMs),
+    leaveConfirmed: Boolean(value.leaveConfirmed),
+    leaveCompletedAtMs: numberOrNull(value.leaveCompletedAtMs),
+    terminalOutcome
+  };
+}
+
 function stableShotEventId(event, targetId) {
   const bulletId = event?.bulletId ?? event?.bullet_id ?? event?.id;
   if (bulletId !== null && bulletId !== undefined && String(bulletId)) return `bullet:${String(bulletId)}`;
@@ -165,6 +308,7 @@ function summarizeBattleObservations(observations) {
 function buildBattleSummary(battle, reason, finalizeMs) {
   const metrics = battle.lastMetrics && typeof battle.lastMetrics === 'object' ? battle.lastMetrics : {};
   const endedAtMs = Number(metrics.lastObservedAt) || battle.lastFrameAtMs || finalizeMs;
+  const exitTail = summarizeBattleExitTail(battle.exitTail);
   return {
     at: new Date(finalizeMs).toISOString(),
     engagementId: battle.engagementId,
@@ -195,6 +339,13 @@ function buildBattleSummary(battle, reason, finalizeMs) {
     shootingStaminaSpent: numberOrNull(metrics.shootingStaminaSpent),
     movementStaminaSpent: numberOrNull(metrics.movementStaminaSpent),
     firstDamageDelayMs: numberOrNull(metrics.firstDamageDelayMs),
+    exitTriggerHp: exitTail?.triggerHp ?? null,
+    finalObservedHp: exitTail?.finalObservedHp ?? numberOrNull(metrics.lastSelfHp),
+    postTriggerDamage: exitTail?.postTriggerDamage ?? null,
+    deathTick: exitTail?.deathTick ?? null,
+    leaveHedgeDispatchDriftMs: exitTail?.hedgeDispatchDriftMs ?? null,
+    terminalOutcome: exitTail?.terminalOutcome ?? null,
+    exitTail,
     ...summarizeBattleObservations(battle.observations),
     runId: String(battle.runId || ''),
     runtimeRevision: String(battle.runtimeRevision || '')
@@ -313,6 +464,7 @@ function createCombatBattleLog(options = {}) {
       runId: detail && detail.runId ? String(detail.runId) : '',
       runtimeRevision: detail && detail.runtimeRevision ? String(detail.runtimeRevision) : '',
       observations: createBattleObservations(),
+      exitTail: createBattleExitTail(),
       lastMetrics: null
     };
   }
@@ -347,6 +499,16 @@ function createCombatBattleLog(options = {}) {
     return { recorded: true, file: active.rawFile, engagementId };
   }
 
+  function recordTail(type, detail, recordOptions = {}) {
+    if (!active) return { recorded: false, reason: 'no-active-battle' };
+    const atMs = Number(recordOptions.atMs || now());
+    io.appendFrame(active.rawFile, atMs, type, detail);
+    active.lastFrameAtMs = Math.max(active.lastFrameAtMs, atMs);
+    active.exitTail = observeBattleExitTail(active.exitTail, type, detail, atMs);
+    framesWritten += 1;
+    return { recorded: true, file: active.rawFile, engagementId: active.engagementId, tail: true };
+  }
+
   function flush(reason = 'flush') {
     return finalizeActive(reason, now());
   }
@@ -356,6 +518,7 @@ function createCombatBattleLog(options = {}) {
       logDir,
       activeEngagementId: active ? active.engagementId : '',
       activeFrames: active ? active.frames : 0,
+      activeTailFrames: active ? Number(active.exitTail?.frames || 0) : 0,
       battlesFinalized,
       framesWritten,
       framesDiscarded,
@@ -364,7 +527,7 @@ function createCombatBattleLog(options = {}) {
     };
   }
 
-  return { record, finalizeActive, flush, status };
+  return { record, recordTail, finalizeActive, flush, status };
 }
 
 function runCombatBattleLogSelfTest() {
@@ -379,6 +542,13 @@ function runCombatBattleLogSelfTest() {
   try {
     // Fixed clock so engagement/day boundaries are deterministic.
     let nowMs = Date.UTC(2026, 6, 24, 4, 0, 0);
+    const historicalDeathTail = createBattleExitTail();
+    observeBattleExitTail(historicalDeathTail, 'safety-trigger', { selfHp: 90 }, nowMs);
+    observeBattleExitTail(historicalDeathTail, 'leave-request-result', {
+      ok: true,
+      response: { hp: 90, life: 'Alive', death_ticks: [100] }
+    }, nowMs + 1);
+    assert('historical death ticks alone do not mark the exit tail dead', historicalDeathTail.deathObserved === false);
     const dayKey = utc8DayKey(nowMs);
     const battlesDir = path.join(root, dayKey, BATTLES_DIR);
     const log = createCombatBattleLog({ logDir: root, now: () => nowMs, idleFinalizeMs: 15000 });
@@ -426,6 +596,38 @@ function runCombatBattleLogSelfTest() {
     // Idle diagnostic frames are discarded and do not create files yet.
     nowMs += 50;
     log.record('combat-dry-run', frame(''));
+    log.recordTail('safety-trigger', {
+      reason: 'outbound-control-unresponsive',
+      atMs: nowMs,
+      tick: 120,
+      selfHp: 79
+    });
+    nowMs += 50;
+    log.recordTail('leave-pending-frame', {
+      atMs: nowMs,
+      tick: 121,
+      selfPresent: true,
+      selfHp: 40
+    });
+    nowMs += 50;
+    log.recordTail('leave-request-start', {
+      stage: 'hedge-1',
+      startedAtMs: nowMs,
+      scheduledAtMs: nowMs - 12,
+      dispatchDriftMs: 12,
+      firstRequestDelayMs: 350
+    });
+    nowMs += 50;
+    log.recordTail('leave-request-result', {
+      stage: 'hedge-1',
+      ok: true,
+      response: { hp: 0, life: 'Dead', death_ticks: [122] }
+    });
+    nowMs += 50;
+    log.recordTail('leave-pending-finish', {
+      ok: true,
+      pending: { ok: true, completedAtMs: nowMs }
+    });
     assert('active battle raw file exists before switch', fs.existsSync(path.join(battlesDir, '100_1000.jsonl')));
 
     // Switching to a new engagement finalizes the first battle.
@@ -468,6 +670,14 @@ function runCombatBattleLogSelfTest() {
       && first.trajectoryCoverageAppliedFrames === 1
       && first.trajectoryCoverageReasonCounts['live-single-applied'] === 1
       && first.trajectoryCoverageReasonCounts['coverage-evidence-not-ready'] === 1);
+    assert('index summary preserves exit and death tail', first.exitTriggerHp === 79
+      && first.finalObservedHp === 0
+      && first.postTriggerDamage === 79
+      && first.deathTick === 122
+      && first.leaveHedgeDispatchDriftMs === 12
+      && first.terminalOutcome === 'death-observed'
+      && first.exitTail?.tailFrames === 5
+      && first.exitTail?.terminalOutcome === 'death-observed');
     assert('index summary remains below eight KiB', Buffer.byteLength(JSON.stringify(first), 'utf8') <= MAX_INDEX_LINE_BYTES);
     const second = JSON.parse(indexLines[1]);
     assert('battle observation sets are isolated across targets', second.targetId === '200'
@@ -476,7 +686,7 @@ function runCombatBattleLogSelfTest() {
     // Compressed content round-trips and secrets were redacted at append time.
     const decompressed = zlibSync.gunzipSync(fs.readFileSync(path.join(battlesDir, '100_1000.jsonl.gz'))).toString('utf8');
     const gzLines = decompressed.trim().split('\n').filter(Boolean);
-    assert('gz has both frames', gzLines.length === 2);
+    assert('gz has combat frames and terminal tail', gzLines.length === 7);
     assert('gz frames keep {at,type,detail} shape', gzLines.every(line => {
       const entry = JSON.parse(line);
       return entry.at && entry.type && entry.detail && typeof entry.detail === 'object';
@@ -528,10 +738,13 @@ module.exports = {
   TRAJECTORY_COVERAGE_REASON_KEYS,
   buildBattleSummary,
   createBattleObservations,
+  createBattleExitTail,
   createCombatBattleLog,
   extractEngagementId,
   observeBattleDetail,
+  observeBattleExitTail,
   runCombatBattleLogSelfTest,
   sanitizeEngagementId,
-  summarizeBattleObservations
+  summarizeBattleObservations,
+  summarizeBattleExitTail
 };

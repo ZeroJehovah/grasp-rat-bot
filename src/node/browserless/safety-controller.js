@@ -11,6 +11,9 @@ const DEFAULT_NO_SELF_GRACE_MS = 3000;
 const DEFAULT_FRAME_GAP_ALERT_MS = 2000;
 const DEFAULT_STAMINA_EXHAUSTED_BELOW_MS = 200;
 const DEFAULT_COMBAT_MOVEMENT_SETTLEMENT_STALL_MS = 2500;
+const DEFAULT_OUTBOUND_CONTROL_MIN_MS = 900;
+const DEFAULT_OUTBOUND_CONTROL_MAX_MS = 3000;
+const DEFAULT_OUTBOUND_ACK_MIN_MS = 1200;
 
 function numberOrNull(value) {
   const number = Number(value);
@@ -216,9 +219,20 @@ function actionSettlementStallAssessment(state = {}, context = {}, options = {})
   const configuredCombatThresholdMs = numberOrNull(
     context.combatMovementSettlementStallMs ?? options.combatMovementSettlementStallMs
   );
-  const combatThresholdMs = Math.max(1000, configuredCombatThresholdMs === null
-    ? Math.min(adapterThresholdMs, DEFAULT_COMBAT_MOVEMENT_SETTLEMENT_STALL_MS)
-    : configuredCombatThresholdMs);
+  const combatThresholdMs = dynamicCombatMovementStallThresholdMs(
+    state,
+    {
+      movement,
+      hostilePressure,
+      directThreatPressure,
+      targetOwnedBulletCount,
+      injuryPressure,
+      targetFiring,
+      configuredCombatThresholdMs,
+      adapterThresholdMs
+    },
+    options
+  );
   const observedFrames = Math.max(0, Number(movement?.observedFrames || 0));
   const minimumFrames = Math.max(1, Number(context.movementSettlementFrames ?? options.movementSettlementFrames ?? 2));
   const noProgressMs = Math.max(0, Number(movement?.noProgressMs || 0));
@@ -237,6 +251,7 @@ function actionSettlementStallAssessment(state = {}, context = {}, options = {})
     hostilePressure,
     combatAction,
     combatPressure,
+    directThreatPressure,
     easyKillThreatExempt,
     easyKillProfitTarget,
     exemptProfitCombat,
@@ -259,7 +274,162 @@ function actionSettlementStallAssessment(state = {}, context = {}, options = {})
     noProgressMs,
     thresholdMs: hostilePressure ? combatThresholdMs : adapterThresholdMs,
     combatThresholdMs,
-    adapterThresholdMs
+    adapterThresholdMs,
+    trustedLatencyMs: trustedMovementLatencyMs(state),
+    thresholdSource: movementThresholdSource(state, configuredCombatThresholdMs)
+  };
+}
+
+function trustedMovementLatencyMs(state = {}) {
+  const timing = state?.command?.movement?.timing || {};
+  const source = String(timing.source || '');
+  const measuredSampleCount = Math.max(
+    0,
+    Number(timing.sampleCount || 0),
+    Number(timing.exactSampleCount || 0),
+    Number(timing.boundedSampleCount || 0)
+  );
+  const measured = measuredSampleCount > 0 || (source && source !== 'startup-default');
+  if (!measured) return null;
+  const wall = Number(timing.p90WallMs ?? timing.medianWallMs);
+  if (Number.isFinite(wall) && wall > 0) return Math.max(50, wall);
+  const ticks = Number(timing.p90Ticks ?? timing.medianTicks);
+  if (Number.isFinite(ticks) && ticks > 0) return Math.max(50, ticks * 50);
+  return null;
+}
+
+function movementThresholdSource(state = {}, configuredCombatThresholdMs = null) {
+  if (configuredCombatThresholdMs !== null) return 'configured';
+  if (trustedMovementLatencyMs(state) !== null) return 'measured-command-delay';
+  return 'conservative-default';
+}
+
+function dynamicCombatMovementStallThresholdMs(state = {}, context = {}, options = {}) {
+  const adapterThresholdMs = Math.max(1000, Number(context.adapterThresholdMs || 5000));
+  const configured = context.configuredCombatThresholdMs === null
+    || context.configuredCombatThresholdMs === undefined
+    ? null
+    : numberOrNull(context.configuredCombatThresholdMs);
+  if (configured !== null) return Math.max(1000, configured);
+
+  // Preserve the conservative historical boundary until the runtime has an
+  // actual movement-timing sample. Synthetic/unit-test states and startup
+  // frames therefore cannot cause an early exit merely because a field is
+  // absent.
+  const latencyMs = trustedMovementLatencyMs(state);
+  if (latencyMs === null) return Math.min(adapterThresholdMs, DEFAULT_COMBAT_MOVEMENT_SETTLEMENT_STALL_MS);
+
+  const capMs = Math.min(
+    adapterThresholdMs,
+    Math.max(1000, Number(options.combatMovementSettlementStallMaxMs || DEFAULT_COMBAT_MOVEMENT_SETTLEMENT_STALL_MS))
+  );
+  const directPressure = Boolean(context.directThreatPressure);
+  const bulletPressure = Number(context.targetOwnedBulletCount || 0) > 0;
+  const injuryPressure = Boolean(context.injuryPressure);
+  const firingPressure = Boolean(context.targetFiring);
+  let threshold = Math.max(
+    DEFAULT_OUTBOUND_CONTROL_MIN_MS,
+    latencyMs * (directPressure ? 2.2 : 3) + (directPressure ? 250 : 350)
+  );
+  if (firingPressure) threshold = Math.min(threshold, Math.max(DEFAULT_OUTBOUND_CONTROL_MIN_MS, latencyMs * 2 + 250));
+  if (bulletPressure || injuryPressure) threshold = Math.min(threshold, Math.max(DEFAULT_OUTBOUND_CONTROL_MIN_MS, latencyMs * 1.6 + 200));
+  return Math.round(Math.max(DEFAULT_OUTBOUND_CONTROL_MIN_MS, Math.min(capMs, threshold)));
+}
+
+function directionKey(direction = {}) {
+  return `${Math.sign(Number(direction.dx || 0))},${Math.sign(Number(direction.dy || 0))}`;
+}
+
+function outboundControlHealthAssessment(state = {}, context = {}, options = {}) {
+  const nowMs = numberOrNull(context.nowMs) ?? Date.now();
+  const pressure = actionSettlementStallAssessment(state, context, options);
+  const realtime = state?.realtime || {};
+  const frameAgeMs = numberOrNull(realtime.frameAgeMs ?? state?.frameAges?.realtimeAgeMs);
+  const timing = state?.command?.movement?.timing || {};
+  const measuredLatencyMs = trustedMovementLatencyMs(state);
+  const latencyBudgetMs = measuredLatencyMs === null
+    ? 250
+    : Math.max(100, measuredLatencyMs);
+  const inboundFreshLimitMs = Math.max(500, latencyBudgetMs * 2 + 100);
+  const inboundFresh = frameAgeMs === null || frameAgeMs <= inboundFreshLimitMs;
+  const movement = state?.command?.movement || {};
+  const requested = movement.lastRequestedDirection || null;
+  const observed = movement.observedVelocity || null;
+  const movingRequested = Boolean(Number(requested?.dx || 0) || Number(requested?.dy || 0));
+  const directionMismatch = movingRequested
+    && observed
+    && directionKey(requested) !== directionKey(observed);
+  const pending = Array.isArray(movement.pendingVelocityCommands)
+    ? movement.pendingVelocityCommands
+    : [];
+  const currentDirectionPending = pending.filter(command => directionKey(command) === directionKey(requested || {}));
+  const latestPending = currentDirectionPending.at(-1) || pending.at(-1) || null;
+  const noProgressMs = Math.max(0, Number(context.actionSettlementStall?.noProgressMs || 0));
+  const movementDeadlineMs = Math.max(
+    DEFAULT_OUTBOUND_CONTROL_MIN_MS,
+    Math.min(
+      DEFAULT_OUTBOUND_CONTROL_MAX_MS,
+      latencyBudgetMs * (pressure.directThreatPressure ? 1.6 : 2.2) + 300
+    )
+  );
+  const movementOverdue = Boolean(
+    pressure.hostilePressure
+      && inboundFresh
+      && movingRequested
+      && directionMismatch
+      && currentDirectionPending.length
+      && noProgressMs >= movementDeadlineMs
+  );
+  const pendingShots = Array.isArray(state?.command?.shooting?.pendingShots)
+    ? state.command.shooting.pendingShots
+    : [];
+  const oldestShot = pendingShots
+    .slice()
+    .sort((left, right) => Number(left.requestedAtMs || 0) - Number(right.requestedAtMs || 0))[0] || null;
+  const oldestShotAgeMs = oldestShot
+    ? Math.max(0, nowMs - Number(oldestShot.requestedAtMs || nowMs))
+    : 0;
+  const ackTimeoutMs = Math.max(1000, Number(state?.command?.shooting?.ackTimeoutMs || 3000));
+  const shootDeadlineMs = Math.max(
+    DEFAULT_OUTBOUND_ACK_MIN_MS,
+    Math.min(3500, Math.max(latencyBudgetMs * 3, ackTimeoutMs * 0.6))
+  );
+  const shootingOverdue = Boolean(
+    pressure.hostilePressure
+      && inboundFresh
+      && pendingShots.length >= 2
+      && oldestShotAgeMs >= shootDeadlineMs
+  );
+  const triggered = Boolean(
+    movementOverdue
+      || (shootingOverdue && (movementOverdue || noProgressMs >= Math.max(DEFAULT_OUTBOUND_CONTROL_MIN_MS, movementDeadlineMs * 0.8)))
+  );
+  return {
+    triggered,
+    hostilePressure: Boolean(pressure.hostilePressure),
+    directThreatPressure: Boolean(pressure.directThreatPressure),
+    inboundFresh,
+    frameAgeMs,
+    inboundFreshLimitMs,
+    measuredLatencyMs,
+    timingSource: movementThresholdSource(state),
+    requestedDirection: requested ? { dx: Number(requested.dx || 0), dy: Number(requested.dy || 0) } : null,
+    observedVelocity: observed ? { dx: Number(observed.dx || 0), dy: Number(observed.dy || 0), vx: Number(observed.vx || 0), vy: Number(observed.vy || 0) } : null,
+    directionMismatch: Boolean(directionMismatch),
+    currentDirectionPendingCount: currentDirectionPending.length,
+    pendingDepth: pending.length,
+    latestPendingAtMs: latestPending?.requestedAtMs ?? null,
+    noProgressMs,
+    movementDeadlineMs,
+    movementOverdue,
+    pendingShotCount: pendingShots.length,
+    oldestShotAgeMs,
+    shootDeadlineMs,
+    shootingOverdue,
+    pressureSources: pressure.pressureSources,
+    targetId: pressure.targetId,
+    targetName: pressure.targetName,
+    timing
   };
 }
 
@@ -373,6 +543,29 @@ function evaluateBrowserlessSafety(state = {}, context = {}, options = {}) {
       staminaRemainingMs,
       staminaExhaustedBelowMs: staminaFloor
     }, { nowMs });
+  }
+
+  const outboundControlHealth = outboundControlHealthAssessment(state, context, options);
+  if (outboundControlHealth.triggered) {
+    return createSafetyEvent('outbound-control-unresponsive', {
+      controlHealth: outboundControlHealth,
+      movement: context.actionSettlementStall || null,
+      lastDecision: (context.lastDecision || context.decision)
+        ? decisionSafetyDetail(context.lastDecision || context.decision)
+        : null,
+      realtime: {
+        tick: state?.realtime?.tick ?? null,
+        receivedAtMs: state?.realtime?.receivedAtMs ?? null,
+        self: state?.realtime?.self || null
+      }
+    }, {
+      nowMs,
+      shouldLeave: true,
+      stopMotion: true,
+      classification: 'exit',
+      leaveAttempted: true,
+      exitConfirmationRequired: true
+    });
   }
 
   const movementStallAssessment = actionSettlementStallAssessment(state, context, options);
@@ -627,9 +820,12 @@ module.exports = {
   actionSettlementStallAssessment,
   createBrowserlessSafetyController,
   createSafetyEvent,
+  dynamicCombatMovementStallThresholdMs,
   evaluateBrowserlessSafety,
   executeSafetyExit,
   frameGapRiskAssessment,
+  outboundControlHealthAssessment,
   selfStaminaRemainingMs,
+  trustedMovementLatencyMs,
   sendStopMotion
 };

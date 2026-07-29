@@ -15,6 +15,8 @@ const DEFAULT_SETTLEMENT_FRAMES = 2;
 const DEFAULT_MOVEMENT_SETTLEMENT_STALL_MS = 5000;
 const DEFAULT_MOVEMENT_SETTLEMENT_MIN_DISTANCE_CM = 80;
 const DEFAULT_COMBAT_SHOOT_MIN_INTERVAL_MS = 160;
+const DEFAULT_REPEAT_MAX_DRIFT_MS = 125;
+const DEFAULT_TRANSPORT_HIGH_WATER_BYTES = 64 * 1024;
 const DEFAULT_ATTACK_RANGE_CM = BROWSER_RUNTIME_DEFAULTS.attackRange;
 const DEFAULT_AFK_ATTACK_COMMIT_RANGE_CM = 10000;
 const DEFAULT_AFK_ATTACK_FULL_RANGE_CM = BROWSER_RUNTIME_DEFAULTS.afkAttackFullRangeCm;
@@ -366,6 +368,10 @@ function createInitialActionState() {
     velocityOwnership: null,
     velocityLogicalRefreshCount: 0,
     velocityOwnershipSuppressedCount: 0,
+    velocityRepeatSuppressedCount: 0,
+    shootRepeatSuppressedCount: 0,
+    lastRepeatTimerDriftMs: 0,
+    lastTransportBufferedAmount: 0,
     lastVelocityTelemetry: null,
     shootRepeatToken: 0,
     shootRepeatUntilMs: 0,
@@ -437,6 +443,24 @@ function createBrowserlessActionAdapter(options = {}) {
     shootRepeatMs,
     configuredShootRepeatHoldMs,
     decisionIntervalMs + shootRepeatMs
+  );
+  const configuredRepeatMaxDriftMs = Number(
+    options.repeatMaxDriftMs ?? options.velocityRepeatMaxDriftMs ?? DEFAULT_REPEAT_MAX_DRIFT_MS
+  );
+  const repeatMaxDriftMs = Math.max(
+    velocityRepeatMs,
+    Number.isFinite(configuredRepeatMaxDriftMs) ? configuredRepeatMaxDriftMs : DEFAULT_REPEAT_MAX_DRIFT_MS
+  );
+  const configuredTransportHighWaterBytes = Number(
+    options.transportHighWaterBytes
+      ?? options.wsBufferedAmountHighWaterBytes
+      ?? DEFAULT_TRANSPORT_HIGH_WATER_BYTES
+  );
+  const transportHighWaterBytes = Math.max(
+    1024,
+    Number.isFinite(configuredTransportHighWaterBytes)
+      ? configuredTransportHighWaterBytes
+      : DEFAULT_TRANSPORT_HIGH_WATER_BYTES
   );
   const setTimeoutFn = typeof options.setTimeout === 'function' ? options.setTimeout : setTimeout;
   const clearTimeoutFn = typeof options.clearTimeout === 'function' ? options.clearTimeout : clearTimeout;
@@ -576,6 +600,20 @@ function createBrowserlessActionAdapter(options = {}) {
 
   function unrefTimer(timer) {
     if (timer && typeof timer.unref === 'function') timer.unref();
+  }
+
+  function transportBufferedAmount() {
+    let value = 0;
+    try {
+      value = typeof transport?.bufferedAmount === 'function'
+        ? Number(transport.bufferedAmount())
+        : Number(transport?.bufferedAmount ?? transport?.ws?.bufferedAmount ?? 0);
+    } catch (_) {
+      value = 0;
+    }
+    value = Number.isFinite(value) ? Math.max(0, value) : 0;
+    state.lastTransportBufferedAmount = value;
+    return value;
   }
 
   function clearPrecisionPulseStop() {
@@ -829,12 +867,30 @@ function createBrowserlessActionAdapter(options = {}) {
       state.velocityRepeatUntilMs = 0;
       state.velocityStopRepeatsLeft = velocityStopRepeatCount;
     }
+    let scheduledForMs = now() + velocityRepeatMs;
+    const scheduleNext = run => {
+      scheduledForMs = now() + velocityRepeatMs;
+      state.velocityRepeatTimer = setTimeoutFn(run, velocityRepeatMs);
+      unrefTimer(state.velocityRepeatTimer);
+    };
     const run = () => {
       if (state.velocityRepeatToken !== token) return;
       state.velocityRepeatTimer = null;
-      const keepMoving = moving && now() <= Number(state.velocityRepeatUntilMs || 0);
+      const repeatAtMs = now();
+      const timerDriftMs = Math.max(0, repeatAtMs - scheduledForMs);
+      state.lastRepeatTimerDriftMs = timerDriftMs;
+      const keepMoving = moving && repeatAtMs <= Number(state.velocityRepeatUntilMs || 0);
       const keepStopping = !moving && Number(state.velocityStopRepeatsLeft || 0) > 0;
       if (!keepMoving && !keepStopping) return;
+      const ownerStillCurrent = state.lastCommand
+        && String(state.lastCommand.id) === String(ownerCommand?.id ?? '')
+        && Number(state.lastCommand.directionGeneration || 0) === Number(ownerCommand?.directionGeneration || 0);
+      const overloaded = timerDriftMs > repeatMaxDriftMs || transportBufferedAmount() > transportHighWaterBytes;
+      if (!ownerStillCurrent || overloaded) {
+        state.velocityRepeatSuppressedCount += 1;
+        if (keepMoving || keepStopping) scheduleNext(run);
+        return;
+      }
       if (!moving) state.velocityStopRepeatsLeft = Math.max(0, Number(state.velocityStopRepeatsLeft || 0) - 1);
       try {
         transport.sendVelocity(dx, dy);
@@ -842,7 +898,6 @@ function createBrowserlessActionAdapter(options = {}) {
         state.lastVelocityRepeatError = '';
         if (onVelocityRequest) {
           try {
-            const repeatAtMs = now();
             const frameReceivedAtMs = optionalNumber(state.latestObservedAtMs);
             const telemetry = onVelocityRequest({
               commandId: ownerCommand?.id ?? null,
@@ -866,8 +921,7 @@ function createBrowserlessActionAdapter(options = {}) {
         state.lastVelocityRepeatError = err?.message || String(err);
         return;
       }
-      state.velocityRepeatTimer = setTimeoutFn(run, velocityRepeatMs);
-      unrefTimer(state.velocityRepeatTimer);
+      scheduleNext(run);
     };
     state.velocityRepeatTimer = setTimeoutFn(run, velocityRepeatMs);
     unrefTimer(state.velocityRepeatTimer);
@@ -944,11 +998,24 @@ function createBrowserlessActionAdapter(options = {}) {
     state.shootRepeatTargetKey = targetKey;
     state.shootRepeatUntilMs = now() + shootRepeatHoldMs;
     state.lastShootRepeatError = '';
+    let scheduledForMs = now() + repeatCadenceMs;
+    const scheduleNext = run => {
+      scheduledForMs = now() + repeatCadenceMs;
+      state.shootRepeatTimer = setTimeoutFn(run, repeatCadenceMs);
+      unrefTimer(state.shootRepeatTimer);
+    };
     const run = () => {
       if (state.shootRepeatToken !== token) return;
       state.shootRepeatTimer = null;
       const current = state.shootRepeat;
       if (!current || now() > Number(state.shootRepeatUntilMs || 0)) return;
+      const timerDriftMs = Math.max(0, now() - scheduledForMs);
+      state.lastRepeatTimerDriftMs = Math.max(state.lastRepeatTimerDriftMs, timerDriftMs);
+      if (timerDriftMs > repeatMaxDriftMs || transportBufferedAmount() > transportHighWaterBytes) {
+        state.shootRepeatSuppressedCount += 1;
+        scheduleNext(run);
+        return;
+      }
       const sent = sendShoot(
         current.targetX,
         current.targetY,
@@ -963,6 +1030,7 @@ function createBrowserlessActionAdapter(options = {}) {
         return;
       }
       if (!sent.skipped) state.shootRepeatSentCount += 1;
+      scheduledForMs = now() + current.cadenceMs;
       state.shootRepeatTimer = setTimeoutFn(run, current.cadenceMs);
       unrefTimer(state.shootRepeatTimer);
     };
@@ -1952,6 +2020,11 @@ function createBrowserlessActionAdapter(options = {}) {
       velocityDirectionGeneration: state.velocityDirectionGeneration,
       velocityLogicalRefreshCount: state.velocityLogicalRefreshCount,
       velocityOwnershipSuppressedCount: state.velocityOwnershipSuppressedCount,
+      velocityRepeatSuppressedCount: state.velocityRepeatSuppressedCount,
+      shootRepeatSuppressedCount: state.shootRepeatSuppressedCount,
+      lastRepeatTimerDriftMs: state.lastRepeatTimerDriftMs,
+      lastTransportBufferedAmount: transportBufferedAmount(),
+      transportHighWaterBytes,
       velocityOwnership: state.velocityOwnership ? { ...state.velocityOwnership } : null,
       lastVelocityTelemetry: state.lastVelocityTelemetry,
       velocityStopRepeatsLeft: state.velocityStopRepeatsLeft,
@@ -1992,8 +2065,10 @@ module.exports = {
   DEFAULT_COMBAT_SHOOT_MIN_INTERVAL_MS,
   DEFAULT_MOVEMENT_SETTLEMENT_MIN_DISTANCE_CM,
   DEFAULT_MOVEMENT_SETTLEMENT_STALL_MS,
+  DEFAULT_REPEAT_MAX_DRIFT_MS,
   DEFAULT_SETTLEMENT_FRAMES,
   DEFAULT_TARGET_DEAD_ZONE_CM,
+  DEFAULT_TRANSPORT_HIGH_WATER_BYTES,
   combatSummaryFromDecision,
   createBrowserlessActionAdapter,
   coinMotionCoreOptions,

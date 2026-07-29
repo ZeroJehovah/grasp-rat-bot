@@ -2735,7 +2735,7 @@ async function runBrowserlessRunner(config, deps = {}) {
           openBrowserlessWs: sourceIpController.openBrowserlessWs,
           onTransportOpen,
           onTransportClose,
-          leaveWithVerification: sourceIpController.leaveWithVerification
+          leaveWithVerificationFallback: sourceIpController.leaveWithVerification
         });
       } catch (err) {
         recordSupervisorError(err, { operation: 'login-point-bootstrap-canary' });
@@ -2818,7 +2818,7 @@ async function runBrowserlessRunner(config, deps = {}) {
         openBrowserlessWs: sourceIpController.openBrowserlessWs,
         onTransportOpen,
         onTransportClose,
-        leaveWithVerification: sourceIpController.leaveWithVerification,
+        leaveWithVerificationFallback: sourceIpController.leaveWithVerification,
         restartDrainCoordinator: restartDrain,
         onRestartDrainStatus: status => publishRestartDrainStatus(status),
         useDecisionWorker: deps.useDecisionWorker !== false,
@@ -3181,6 +3181,7 @@ async function runComplexCombatMainThreadBudgetSelfTest(tmp) {
       logStore,
       combatBattleLog,
       mainThreadBudgetMs: SELF_TEST_MAIN_THREAD_BUDGET_MS,
+      wsFrameCoalescing: true,
       useDecisionWorker: true,
       targetWhitelist,
       precheckedSnapshotSafety: { ok: true, reason: 'self-test-prechecked', satisfied: true },
@@ -3199,12 +3200,24 @@ async function runComplexCombatMainThreadBudgetSelfTest(tmp) {
       leaveWithVerification: async () => ({ ok: true, attempts: [{ ok: true }] })
     });
     await backgroundIo.flush();
+    const ingressTiming = result.hotPath?.tasks?.['ws-message-ingress'] || {};
     const frameTiming = result.hotPath?.tasks?.['ws-message'] || {};
     const maxFrameMs = Number(frameTiming.maxMs || 0);
-    const wallOverBudgetCount = Number(frameTiming.overBudgetCount || 0);
+    const maxIngressWallMs = Number(ingressTiming.maxMs || 0);
+    const wallOverBudgetCount = Number(frameTiming.overBudgetCount || 0)
+      + Number(ingressTiming.overBudgetCount || 0);
     const measuredFrameCount = Number(frameTiming.count || 0);
-    const maxFrameCpuMs = frameCpuDurations.length ? Math.max(...frameCpuDurations) : Infinity;
-    const cpuOverBudgetCount = frameCpuDurations.filter(durationMs => durationMs >= SELF_TEST_MAIN_THREAD_BUDGET_MS).length;
+    const ingressFrameCount = Number(ingressTiming.count || 0);
+    const measuredIngressCpuMs = frameCpuDurations.length ? Math.max(...frameCpuDurations) : Infinity;
+    const maxIngressCpuMs = Number.isFinite(Number(ingressTiming.maxCpuMs))
+      ? Number(ingressTiming.maxCpuMs)
+      : measuredIngressCpuMs;
+    const maxProcessingCpuMs = Number.isFinite(Number(frameTiming.maxCpuMs))
+      ? Number(frameTiming.maxCpuMs)
+      : Infinity;
+    const maxFrameCpuMs = Math.max(maxIngressCpuMs, maxProcessingCpuMs);
+    const cpuOverBudgetCount = Number(ingressTiming.cpuOverBudgetCount || 0)
+      + Number(frameTiming.cpuOverBudgetCount || 0);
     const warmup = result.decisions?.realtimeControlWarmup || null;
     const expectedWorkProfileSource = currentMainThreadCpuMs() === null
       ? null
@@ -3230,9 +3243,10 @@ async function runComplexCombatMainThreadBudgetSelfTest(tmp) {
         && warmup?.ok
         && warmup?.iterations === 6
         && measuredFrameCount >= 40
+        && ingressFrameCount >= 40
         && Number(result.decisions?.realtimeControlCount || 0) >= 40
         && Number(result.decisions?.realtimeControlSchedule?.minimumTickStride || 0) === 1
-        && frameCpuDurations.length === measuredFrameCount
+        && frameCpuDurations.length === ingressFrameCount
         && cpuOverBudgetCount === 0
         && maxFrameCpuMs < SELF_TEST_MAIN_THREAD_BUDGET_MS
         && (!expectedWorkProfileSource || workProfileSource === expectedWorkProfileSource)
@@ -3240,10 +3254,14 @@ async function runComplexCombatMainThreadBudgetSelfTest(tmp) {
       ),
       budgetMs: SELF_TEST_MAIN_THREAD_BUDGET_MS,
       frameCount: measuredFrameCount,
+      ingressFrameCount,
       realtimeControlCount: Number(result.decisions?.realtimeControlCount || 0),
       maxFrameCpuMs: Math.round(maxFrameCpuMs * 1000) / 1000,
+      maxIngressCpuMs: Math.round(maxIngressCpuMs * 1000) / 1000,
+      maxProcessingCpuMs: Math.round(maxProcessingCpuMs * 1000) / 1000,
       cpuOverBudgetCount,
       maxFrameWallMs: Math.round(maxFrameMs * 1000) / 1000,
+      maxIngressWallMs: Math.round(maxIngressWallMs * 1000) / 1000,
       wallOverBudgetCount,
       timingSource: currentMainThreadCpuMs() === null ? 'performance-now-fallback' : 'linux-main-thread-schedstat',
       workProfileSource,

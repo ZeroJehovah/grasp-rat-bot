@@ -15,6 +15,7 @@ const { createFrameStats, updateFrameStats } = require('./frame-stats');
 const { createBrowserlessStateStore } = require('./state-store');
 const { openBrowserlessWs, isWsOpen } = require('./ws-transport');
 const { leaveWithVerification } = require('./leave-client');
+const { createBrowserlessLeaveSupervisor } = require('./leave-supervisor');
 const {
   buildBrowserlessRuntimeDefaults,
   createBrowserlessDecisionAdapter,
@@ -100,11 +101,22 @@ function createMainThreadTimingStats(budgetMs = DEFAULT_MAIN_THREAD_BUDGET_MS) {
 function recordMainThreadTask(stats, taskName, durationMs, stageDurations = {}, detail = {}) {
   if (!stats) return null;
   const name = String(taskName || 'task');
+  const taskAggregate = stats.tasks[name] || (stats.tasks[name] = createTimingAggregate());
   const duration = recordTimingAggregate(
-    stats.tasks[name] || (stats.tasks[name] = createTimingAggregate()),
+    taskAggregate,
     durationMs,
     stats.budgetMs
   );
+  const cpuWorkMs = Number(detail?.workProfile?.cpuWorkMs);
+  if (Number.isFinite(cpuWorkMs) && cpuWorkMs >= 0) {
+    taskAggregate.cpuCount = Math.max(0, Number(taskAggregate.cpuCount || 0)) + 1;
+    taskAggregate.totalCpuMs = Math.max(0, Number(taskAggregate.totalCpuMs || 0)) + cpuWorkMs;
+    taskAggregate.maxCpuMs = Math.max(0, Number(taskAggregate.maxCpuMs || 0), cpuWorkMs);
+    taskAggregate.meanCpuMs = taskAggregate.totalCpuMs / taskAggregate.cpuCount;
+    if (cpuWorkMs >= stats.budgetMs) {
+      taskAggregate.cpuOverBudgetCount = Math.max(0, Number(taskAggregate.cpuOverBudgetCount || 0)) + 1;
+    }
+  }
   for (const [stage, value] of Object.entries(stageDurations || {})) {
     recordTimingAggregate(stats.stages[stage] || (stats.stages[stage] = createTimingAggregate()), value);
   }
@@ -121,6 +133,133 @@ function recordMainThreadTask(stats, taskName, durationMs, stageDurations = {}, 
     stats.lastViolation = entry;
   }
   return entry;
+}
+
+function createLatestFrameScheduler(options = {}) {
+  const processFrame = typeof options.processFrame === 'function' ? options.processFrame : () => {};
+  const onError = typeof options.onError === 'function' ? options.onError : () => {};
+  const maxPriorityQueue = Math.max(8, Number(options.maxPriorityQueue || 64));
+  const schedule = typeof options.schedule === 'function' ? options.schedule : setImmediate;
+  const cancelSchedule = typeof options.cancelSchedule === 'function' ? options.cancelSchedule : clearImmediate;
+  const priority = [];
+  let latestPos = null;
+  let latestSnapshot = null;
+  let scheduled = false;
+  let scheduleHandle = null;
+  let closed = false;
+  let received = 0;
+  let processed = 0;
+  let coalescedPos = 0;
+  let coalescedSnapshot = 0;
+  let droppedPriority = 0;
+  let maxQueueDepth = 0;
+
+  function queueDepth() {
+    return priority.length + (latestPos ? 1 : 0) + (latestSnapshot ? 1 : 0);
+  }
+
+  function takeNext() {
+    if (priority.length) return priority.shift();
+    if (latestPos) {
+      const item = latestPos;
+      latestPos = null;
+      return item;
+    }
+    if (latestSnapshot) {
+      const item = latestSnapshot;
+      latestSnapshot = null;
+      return item;
+    }
+    return null;
+  }
+
+  function processNext() {
+    const item = takeNext();
+    if (!item) return false;
+    try {
+      processFrame(item);
+    } catch (error) {
+      try { onError(error, item); } catch (_) {}
+    }
+    processed += 1;
+    return true;
+  }
+
+  function scheduleDrain() {
+    if (closed || scheduled || !queueDepth()) return;
+    scheduled = true;
+    scheduleHandle = schedule(() => {
+      scheduled = false;
+      scheduleHandle = null;
+      processNext();
+      scheduleDrain();
+    });
+  }
+
+  function enqueue(item) {
+    if (closed || !item) return false;
+    received += 1;
+    const type = String(item.frame?.decodedJson?.type || item.frame?.decodedType || '');
+    if (type === 'pos') {
+      if (latestPos) coalescedPos += 1;
+      latestPos = item;
+    } else if (type === 'snapshot') {
+      if (latestSnapshot) coalescedSnapshot += 1;
+      latestSnapshot = item;
+    } else {
+      priority.push(item);
+      if (priority.length > maxPriorityQueue) {
+        priority.shift();
+        droppedPriority += 1;
+      }
+    }
+    maxQueueDepth = Math.max(maxQueueDepth, queueDepth());
+    scheduleDrain();
+    return true;
+  }
+
+  function flush() {
+    if (scheduled && scheduleHandle !== null) {
+      try { cancelSchedule(scheduleHandle); } catch (_) {}
+      scheduled = false;
+      scheduleHandle = null;
+    }
+    while (processNext()) {}
+    return status();
+  }
+
+  function close(closeOptions = {}) {
+    if (closeOptions.flush !== false) flush();
+    closed = true;
+    if (scheduled && scheduleHandle !== null) {
+      try { cancelSchedule(scheduleHandle); } catch (_) {}
+    }
+    scheduled = false;
+    scheduleHandle = null;
+    if (closeOptions.flush === false) {
+      priority.length = 0;
+      latestPos = null;
+      latestSnapshot = null;
+    }
+    return status();
+  }
+
+  function status() {
+    return {
+      enabled: true,
+      closed,
+      received,
+      processed,
+      pending: queueDepth(),
+      coalescedPos,
+      coalescedSnapshot,
+      droppedPriority,
+      maxQueueDepth,
+      maxPriorityQueue
+    };
+  }
+
+  return { close, enqueue, flush, status };
 }
 
 function currentMainThreadCpuMs() {
@@ -1211,6 +1350,7 @@ async function runReadOnlyCanary(config, options = {}) {
       exit: null,
       leavePending: null,
       leavePrewarm: null,
+      leaveSupervisor: null,
       leaveFailure: null,
       frameGapSoftStops: [],
       lastFrameGapRecovery: null
@@ -1222,6 +1362,8 @@ async function runReadOnlyCanary(config, options = {}) {
       velocityRepeatSentCount: 0,
       velocityLogicalRefreshCount: 0,
       velocityOwnershipSuppressedCount: 0,
+      velocityRepeatSuppressedCount: 0,
+      shootRepeatSuppressedCount: 0,
       shootSentCount: 0,
       shootAcceptedCount: 0,
       shootUnackedCount: 0,
@@ -1279,6 +1421,8 @@ async function runReadOnlyCanary(config, options = {}) {
   let transportPublished = false;
   let transport = null;
   let leavePending = null;
+  let leaveSupervisor = options.leaveSupervisor || null;
+  let wsFrameScheduler = null;
   let pendingSnapshotObserver = null;
   let snapshotObserverScheduled = false;
   let pendingSnapshotObservationRefresh = null;
@@ -1406,7 +1550,7 @@ async function runReadOnlyCanary(config, options = {}) {
     return restored;
   };
   const maybePrewarmLeaveConnection = (currentState, atMs, reason = 'risk', force = false) => {
-    if (options.fetchImpl && !options.prewarmGameConnection) return null;
+    if (options.fetchImpl && !options.prewarmGameConnection && !leaveSupervisor) return null;
     if (leavePending || leavePrewarmInFlight) return leavePrewarmInFlight;
     const intervalMs = Math.max(1000, Number(config.leavePrewarmIntervalMs || 3000));
     if (!force && atMs - lastLeavePrewarmAtMs < intervalMs) return null;
@@ -1433,7 +1577,8 @@ async function runReadOnlyCanary(config, options = {}) {
       error: ''
     };
     logExit('leave-connection-prewarm-start', result.safety.leavePrewarm);
-    const prewarm = options.prewarmGameConnection || prewarmGameConnection;
+    const prewarm = options.prewarmGameConnection
+      || (leaveSupervisor ? request => leaveSupervisor.prewarm(request) : prewarmGameConnection);
     leavePrewarmInFlight = Promise.resolve(prewarm({
       gameOrigin: config.gameOrigin,
       localAddress: config.sourceIp,
@@ -1486,6 +1631,41 @@ async function runReadOnlyCanary(config, options = {}) {
     } else if (logStore) {
       // Fallback only when no battle-log is wired (self-tests / disabled IO).
       logStore.append('combat', type, enriched);
+    }
+  };
+  const logBattleTail = (type, detail, atMs = now()) => {
+    if (!combatBattleLog?.recordTail) return null;
+    try {
+      return combatBattleLog.recordTail(type, addRunMeta(detail), { atMs });
+    } catch (err) {
+      log('combat-battle-tail-error', { type, error: errorMessage(err) });
+      return null;
+    }
+  };
+  const invokeVerifiedLeave = async leaveOptions => {
+    if (typeof options.leaveWithVerification === 'function') {
+      return options.leaveWithVerification(leaveOptions);
+    }
+    const fallback = typeof options.leaveWithVerificationFallback === 'function'
+      ? options.leaveWithVerificationFallback
+      : leaveWithVerification;
+    if (!leaveSupervisor) return fallback(leaveOptions);
+    try {
+      const supervised = await leaveSupervisor.leave(leaveOptions, {
+        onRequest: leaveOptions?.onRequest,
+        onResult: leaveOptions?.onResult
+      });
+      if (supervised?.ok || typeof options.leaveWithVerificationFallback !== 'function') return supervised;
+      logExit('leave-supervisor-unconfirmed-fallback', {
+        attempts: Array.isArray(supervised?.attempts) ? supervised.attempts.length : 0,
+        statuses: Array.isArray(supervised?.attempts)
+          ? supervised.attempts.map(attempt => Number(attempt?.status || 0))
+          : []
+      });
+      return fallback(leaveOptions);
+    } catch (err) {
+      logExit('leave-supervisor-fallback', { error: errorMessage(err) });
+      return fallback(leaveOptions);
     }
   };
   const logWs = (type, detail) => {
@@ -1615,6 +1795,8 @@ async function runReadOnlyCanary(config, options = {}) {
     result.actions.velocityRepeatSentCount = Number(adapterState.velocityRepeatSentCount || 0);
     result.actions.velocityLogicalRefreshCount = Number(adapterState.velocityLogicalRefreshCount || 0);
     result.actions.velocityOwnershipSuppressedCount = Number(adapterState.velocityOwnershipSuppressedCount || 0);
+    result.actions.velocityRepeatSuppressedCount = Number(adapterState.velocityRepeatSuppressedCount || 0);
+    result.actions.shootRepeatSuppressedCount = Number(adapterState.shootRepeatSuppressedCount || 0);
     result.actions.shootSentCount = Number(adapterState.shootSentCount || 0);
     result.actions.shootAcceptedCount = Number(adapterState.shootAcceptedCount || 0);
     result.actions.shootUnackedCount = Number(adapterState.shootUnackedCount || 0);
@@ -1655,6 +1837,9 @@ async function runReadOnlyCanary(config, options = {}) {
     firstRequestDelayMs: pending.firstRequestAtMs
       ? Math.max(0, pending.firstRequestAtMs - pending.eventAtMs)
       : null,
+    hedgeScheduledAtMs: pending.hedgeScheduledAtMs || 0,
+    hedgeStartedAtMs: pending.hedgeStartedAtMs || 0,
+    hedgeDispatchDriftMs: pending.hedgeDispatchDriftMs ?? null,
     completedAtMs: pending.completedAtMs || 0,
     durationMs: (pending.completedAtMs || now()) - pending.startedAtMs,
     frameCount: pending.frameCount,
@@ -1735,6 +1920,9 @@ async function runReadOnlyCanary(config, options = {}) {
       eventAtMs: Number.isFinite(eventAtMs) ? eventAtMs : atMs,
       dispatchedAtMs: now(),
       firstRequestAtMs: 0,
+      hedgeScheduledAtMs: 0,
+      hedgeStartedAtMs: 0,
+      hedgeDispatchDriftMs: null,
       completedAtMs: 0,
       frameCount: 0,
       realtimeFrameCount: 0,
@@ -1755,21 +1943,38 @@ async function runReadOnlyCanary(config, options = {}) {
     leavePending.promise = executeSafetyExit(event, config, {
       transport,
       allowStopMotion: actionEnabled,
-      leaveWithVerification: options.leaveWithVerification,
+      leaveWithVerification: invokeVerifiedLeave,
       now,
       sleep,
       onLeaveRequest: request => {
-        if (!leavePending.firstRequestAtMs) leavePending.firstRequestAtMs = now();
+        const requestAtMs = Number(request?.startedAtMs || now());
+        if (!leavePending.firstRequestAtMs || requestAtMs < leavePending.firstRequestAtMs) {
+          leavePending.firstRequestAtMs = requestAtMs;
+        }
+        if (/^hedge-/.test(String(request?.stage || ''))) {
+          leavePending.hedgeScheduledAtMs = Number(request?.scheduledAtMs || 0);
+          leavePending.hedgeStartedAtMs = requestAtMs;
+          leavePending.hedgeDispatchDriftMs = request?.dispatchDriftMs === null || request?.dispatchDriftMs === undefined
+            ? null
+            : Number(request.dispatchDriftMs || 0);
+        }
         result.safety.leavePending = publicLeavePending(leavePending);
-        logExit('leave-request-start', {
+        const detail = {
           ...request,
           firstRequestDelayMs: result.safety.leavePending.firstRequestDelayMs
-        });
+        };
+        logExit('leave-request-start', detail);
+        logBattleTail('leave-request-start', detail, requestAtMs);
       },
       onLeaveResult: attempt => {
         logExit('leave-request-result', attempt);
+        logBattleTail('leave-request-result', attempt, now());
       },
       onLeaveConfirmed: async leave => {
+        if (wsFrameScheduler) {
+          wsFrameScheduler.flush();
+          result.hotPath.frameScheduler = wsFrameScheduler.status();
+        }
         ending = true;
         clearPublishedTransport(transport, 'leave-confirmed');
         const actionSeal = actionAdapter?.sealTransport
@@ -1785,6 +1990,12 @@ async function runReadOnlyCanary(config, options = {}) {
           actionSeal,
           transportClose
         });
+        const confirmedAttempt = (leave?.attempts || []).find(attempt => attempt?.ok) || null;
+        logBattleTail('leave-confirmed', {
+          ok: true,
+          stage: confirmedAttempt?.stage || '',
+          response: confirmedAttempt?.response || null
+        }, now());
         return { ok: true, actionSeal, transportClose };
       }
     }).then(exit => {
@@ -1795,6 +2006,7 @@ async function runReadOnlyCanary(config, options = {}) {
       result.leave = exit?.leave || null;
       result.safety.leavePending = publicLeavePending(leavePending);
       logExit('leave-pending-finish', result.safety.leavePending);
+      logBattleTail('leave-pending-finish', { pending: result.safety.leavePending, ok: Boolean(exit?.ok) }, leavePending.completedAtMs);
       return exit;
     }).catch(err => {
       leavePending.settled = true;
@@ -1803,6 +2015,7 @@ async function runReadOnlyCanary(config, options = {}) {
       leavePending.completedAtMs = now();
       result.safety.leavePending = publicLeavePending(leavePending);
       logExit('leave-pending-finish', result.safety.leavePending);
+      logBattleTail('leave-pending-finish', { pending: result.safety.leavePending, ok: false, error: leavePending.error }, leavePending.completedAtMs);
       throw err;
     });
     return leavePending;
@@ -1817,6 +2030,16 @@ async function runReadOnlyCanary(config, options = {}) {
       leaveStarted = true;
       result.safety.event = event;
       result.error = event.reason;
+      logBattleTail('safety-trigger', {
+        reason: event.reason,
+        atMs,
+        tick: currentState?.realtime?.tick ?? null,
+        selfHp: Number.isFinite(Number(currentState?.realtime?.self?.hp))
+          ? Number(currentState.realtime.self.hp)
+          : null,
+        target: context.decision?.action?.target || context.decision?.combat?.target || null,
+        cover
+      }, atMs);
       startLeavePending(event, currentState, atMs, {
         decision: context.decision || result.decisions.last,
         cover
@@ -2405,9 +2628,35 @@ async function runReadOnlyCanary(config, options = {}) {
   }
 
   try {
+    if (!leaveSupervisor
+      && options.useLeaveSupervisor !== false
+      && !options.leaveWithVerification
+      && !options.fetchImpl) {
+      leaveSupervisor = createBrowserlessLeaveSupervisor({
+        onError: err => logExit('leave-supervisor-error', { error: errorMessage(err) })
+      });
+    }
+    if (leaveSupervisor) {
+      try {
+        await leaveSupervisor.ready();
+        result.safety.leaveSupervisor = leaveSupervisor.status?.() || { ready: true };
+        logExit('leave-supervisor-ready', result.safety.leaveSupervisor);
+      } catch (err) {
+        result.safety.leaveSupervisor = {
+          ...(leaveSupervisor.status?.() || {}),
+          ready: false,
+          error: errorMessage(err)
+        };
+        logExit('leave-supervisor-unavailable', result.safety.leaveSupervisor);
+        try { await leaveSupervisor.close?.(); } catch (_) {}
+        leaveSupervisor = null;
+      }
+    }
     if (decisionWorker) await decisionWorker.ready();
     maybePrewarmLeaveConnection(stateStore.getState(now()), now(), 'ws-connect', true);
     const open = options.openBrowserlessWs || openBrowserlessWs;
+    const wsFrameCoalescingEnabled = options.wsFrameCoalescing === true
+      || (!options.openBrowserlessWs && options.wsFrameCoalescing !== false);
     transport = await open({
       gameOrigin: config.gameOrigin,
       wsPath: config.wsPath,
@@ -2475,10 +2724,12 @@ async function runReadOnlyCanary(config, options = {}) {
       onSend: event => {
         logWs('send', {
           direction: 'out',
-          message: wsTraceOutboundMessage(event?.message || '')
+          message: wsTraceOutboundMessage(event?.message || ''),
+          bufferedBefore: Number(event?.bufferedBefore || 0),
+          bufferedAfter: Number(event?.bufferedAfter || 0)
         });
       },
-      onMessage: (data, transportMeta = null) => {
+      onMessage: function handleWsMessage(data, transportMeta = null) {
         const generation = Number(transportMeta?.transportGeneration || 0);
         if (generation > 0 && authoritativeTransportGeneration > 0 && generation !== authoritativeTransportGeneration) {
           logWs('stale-message', {
@@ -2488,24 +2739,78 @@ async function runReadOnlyCanary(config, options = {}) {
           return;
         }
         if (ending) return;
-        const taskStarted = performance.now();
-        const taskCpuStarted = startMainThreadCpuUsage();
-        const stageDurations = {};
-        const atMs = now();
-        let frame = null;
-        try {
+        if (wsFrameCoalescingEnabled && transportMeta?.coalescedDispatch !== true) {
+          const ingressStarted = performance.now();
+          const ingressCpuStarted = startMainThreadCpuUsage();
+          const atMs = now();
           if (!frameHealth.firstFrameAtMs) frameHealth.firstFrameAtMs = atMs;
           if (frameHealth.lastFrameAtMs) frameHealth.maxFrameGapMs = Math.max(frameHealth.maxFrameGapMs, atMs - frameHealth.lastFrameAtMs);
           frameHealth.lastFrameAtMs = atMs;
-          let stageStarted = performance.now();
-          frame = inspectCanaryFrame(data, { userId: config.userId });
+          const frame = inspectCanaryFrame(data, { userId: config.userId });
           if (config.wsTraceEnabled) logWs('message', buildWsFrameTrace(frame, config));
           if (frame.decodeError || frame.jsonParseError) frameHealth.decodeErrors += 1;
           updateFrameStats(stats, {
             at: new Date(atMs).toISOString(),
             ...frame
           });
-          stageDurations['frame-decode-log'] = performance.now() - stageStarted;
+          const ingressDurationMs = performance.now() - ingressStarted;
+          const ingressEntry = recordMainThreadTask(result.hotPath, 'ws-message-ingress', ingressDurationMs, {
+            'frame-gzip': Number(frame.decodeTimings?.gzipMs || 0),
+            'frame-utf8': Number(frame.decodeTimings?.utf8Ms || 0),
+            'frame-json-decode': Number(frame.decodeTimings?.jsonDecodeMs || 0),
+            'frame-summary': Number(frame.decodeTimings?.summaryMs || 0)
+          }, {
+            frameType: frame?.decodedType || frame?.decodedJson?.type || '',
+            tick: frame?.decodedTick ?? frame?.decodedJson?.tick ?? null,
+            workProfile: mainThreadWorkProfile(ingressCpuStarted, ingressDurationMs)
+          });
+          if (ingressEntry && ingressEntry.durationMs >= result.hotPath.budgetMs) {
+            log('main-thread-budget-exceeded', ingressEntry);
+          }
+          if (!wsFrameScheduler) {
+            wsFrameScheduler = createLatestFrameScheduler({
+              processFrame: item => handleWsMessage(item.data, {
+                ...(item.transportMeta || {}),
+                coalescedDispatch: true,
+                predecodedFrame: item.frame,
+                receivedAtMs: item.atMs,
+                ingressDurationMs: item.ingressDurationMs
+              }),
+              onError: err => log('ws-frame-scheduler-error', { error: errorMessage(err) })
+            });
+          }
+          wsFrameScheduler.enqueue({
+            data,
+            frame,
+            atMs,
+            ingressDurationMs,
+            transportMeta
+          });
+          result.hotPath.frameScheduler = wsFrameScheduler.status();
+          return;
+        }
+        const taskStarted = performance.now();
+        const taskCpuStarted = startMainThreadCpuUsage();
+        const stageDurations = {};
+        const atMs = Number(transportMeta?.receivedAtMs || now());
+        let frame = null;
+        try {
+          let stageStarted = performance.now();
+          frame = transportMeta?.predecodedFrame || inspectCanaryFrame(data, { userId: config.userId });
+          if (!transportMeta?.predecodedFrame) {
+            if (!frameHealth.firstFrameAtMs) frameHealth.firstFrameAtMs = atMs;
+            if (frameHealth.lastFrameAtMs) frameHealth.maxFrameGapMs = Math.max(frameHealth.maxFrameGapMs, atMs - frameHealth.lastFrameAtMs);
+            frameHealth.lastFrameAtMs = atMs;
+            if (config.wsTraceEnabled) logWs('message', buildWsFrameTrace(frame, config));
+            if (frame.decodeError || frame.jsonParseError) frameHealth.decodeErrors += 1;
+            updateFrameStats(stats, {
+              at: new Date(atMs).toISOString(),
+              ...frame
+            });
+          }
+          stageDurations['frame-decode-log'] = transportMeta?.predecodedFrame
+            ? Number(transportMeta?.ingressDurationMs || 0)
+            : performance.now() - stageStarted;
           if (frame.decodeTimings) {
             stageDurations['frame-gzip'] = Number(frame.decodeTimings.gzipMs || 0);
             stageDurations['frame-utf8'] = Number(frame.decodeTimings.utf8Ms || 0);
@@ -2588,11 +2893,36 @@ async function runReadOnlyCanary(config, options = {}) {
             if (leavePending && !leavePending.settled) {
               leavePending.frameCount += 1;
               if (frame.decodedJson.type === 'pos') leavePending.realtimeFrameCount += 1;
-              const hp = Number(currentSelf?.hp);
+              const frameEntities = Array.isArray(frame.decodedJson.entities) ? frame.decodedJson.entities : [];
+              const frameSelf = frameEntities.find(entity => Number(entity?.user_id ?? entity?.userId) === Number(config.userId)) || null;
+              const hp = Number(frameSelf?.hp ?? currentSelf?.hp);
               if (Number.isFinite(hp)) {
                 leavePending.lastHp = hp;
                 leavePending.minHp = leavePending.minHp === null ? hp : Math.min(leavePending.minHp, hp);
               }
+              const life = String(frameSelf?.life || '').toLowerCase();
+              const deathObserved = Boolean((Number.isFinite(hp) && hp <= 0) || life === 'dead');
+              logBattleTail('leave-pending-frame', {
+                atMs,
+                frameType: frame.decodedJson.type,
+                tick: currentState?.realtime?.tick ?? frame.decodedTick ?? frame.decodedJson.tick ?? null,
+                selfPresent: Boolean(frameSelf),
+                selfHp: Number.isFinite(hp) ? hp : null,
+                lastKnownHp: leavePending.lastHp,
+                minHp: leavePending.minHp,
+                postTriggerDamage: leavePending.startHp === null || leavePending.minHp === null
+                  ? null
+                  : Math.max(0, leavePending.startHp - leavePending.minHp),
+                life,
+                deathObserved,
+                deathTick: deathObserved ? (frame.decodedJson.tick ?? currentState?.realtime?.tick ?? null) : null,
+                deathAtMs: deathObserved ? atMs : null,
+                deathEvidence: deathObserved ? (life === 'dead' ? 'frame-life-dead' : 'frame-hp-zero') : '',
+                x: Number.isFinite(Number(frameSelf?.x ?? currentSelf?.x)) ? Number(frameSelf?.x ?? currentSelf?.x) : null,
+                y: Number.isFinite(Number(frameSelf?.y ?? currentSelf?.y)) ? Number(frameSelf?.y ?? currentSelf?.y) : null,
+                vx: Number.isFinite(Number(frameSelf?.vx ?? currentSelf?.vx)) ? Number(frameSelf?.vx ?? currentSelf?.vx) : null,
+                vy: Number.isFinite(Number(frameSelf?.vy ?? currentSelf?.vy)) ? Number(frameSelf?.vy ?? currentSelf?.vy) : null
+              }, atMs);
               stageStarted = performance.now();
               applyLeavePendingCover(currentState, atMs, { trigger: 'pending-frame' });
               stageDurations['leave-pending-cover'] = performance.now() - stageStarted;
@@ -2655,6 +2985,9 @@ async function runReadOnlyCanary(config, options = {}) {
           const entry = recordMainThreadTask(result.hotPath, 'ws-message', taskDurationMs, stageDurations, {
             frameType: frame?.decodedType || frame?.decodedJson?.type || '',
             tick: frame?.decodedTick ?? frame?.decodedJson?.tick ?? null,
+            queueDelayMs: transportMeta?.coalescedDispatch === true
+              ? Math.max(0, now() - atMs)
+              : 0,
             workProfile: mainThreadWorkProfile(taskCpuStarted, taskDurationMs),
             inputScale: {
               compressedBytes: frame?.payloadByteLength ?? frame?.byteLength ?? null,
@@ -2668,6 +3001,7 @@ async function runReadOnlyCanary(config, options = {}) {
           if (entry && entry.durationMs >= result.hotPath.budgetMs) {
             log('main-thread-budget-exceeded', entry);
           }
+          if (wsFrameScheduler) result.hotPath.frameScheduler = wsFrameScheduler.status();
         }
       }
     });
@@ -2721,6 +3055,10 @@ async function runReadOnlyCanary(config, options = {}) {
       });
       assessRestartDrain(stateStore.getDecisionState?.(atMs) || stateStore.getState(atMs), atMs);
     }
+    if (wsFrameScheduler) {
+      wsFrameScheduler.flush();
+      result.hotPath.frameScheduler = wsFrameScheduler.status();
+    }
   } catch (err) {
     openFailedBeforeTransport = !transport;
     result.error = err?.message || String(err);
@@ -2749,7 +3087,7 @@ async function runReadOnlyCanary(config, options = {}) {
           result.safety.exit = await executeSafetyExit(result.safety.event, config, {
             transport,
             allowStopMotion: actionEnabled,
-            leaveWithVerification: options.leaveWithVerification,
+            leaveWithVerification: invokeVerifiedLeave,
             now,
             sleep
           });
@@ -2759,8 +3097,7 @@ async function runReadOnlyCanary(config, options = {}) {
         clearPublishedTransport(transport, 'leave-start');
         if (actionAdapter) updateActionResult(actionAdapter.stop('normal-complete'));
         if (shouldVerifyExitAfterOpenFailure) log('canary-open-failed-leave', { error: result.error });
-        const leave = options.leaveWithVerification || leaveWithVerification;
-        result.leave = await leave({
+        result.leave = await invokeVerifiedLeave({
           gameOrigin: config.gameOrigin,
           userId: config.userId,
           sessionToken: config.sessionToken,
@@ -2815,6 +3152,7 @@ async function runReadOnlyCanary(config, options = {}) {
 
   try {
     ending = true;
+    if (wsFrameScheduler) result.hotPath.frameScheduler = wsFrameScheduler.close({ flush: false });
     restoreDynamicWhitelistBattles('canary-finished');
     clearPublishedTransport(transport, 'canary-finish');
     if (transport && (transport.isOpen?.() || isWsOpen(transport.ws))) transport.close();
@@ -2852,6 +3190,19 @@ async function runReadOnlyCanary(config, options = {}) {
       log('canary-decision-worker-close-error', { error: errorMessage(err) });
     }
   }
+  if (leaveSupervisor) {
+    try {
+      result.safety.leaveSupervisor = {
+        ...(leaveSupervisor.status?.() || {}),
+        close: await leaveSupervisor.close?.()
+      };
+    } catch (err) {
+      result.safety.leaveSupervisor = {
+        ...(leaveSupervisor.status?.() || {}),
+        closeError: errorMessage(err)
+      };
+    }
+  }
   result.state = stateStore.getState(now());
   if (typeof decisionAdapter.getStatusSummary === 'function') {
     result.decisionState = decisionAdapter.getStatusSummary();
@@ -2861,8 +3212,10 @@ async function runReadOnlyCanary(config, options = {}) {
     result.actions.sentCount = Number(adapterState.sentCount || 0);
     result.actions.velocitySentCount = Number(adapterState.velocitySentCount || 0);
     result.actions.velocityRepeatSentCount = Number(adapterState.velocityRepeatSentCount || 0);
+    result.actions.velocityRepeatSuppressedCount = Number(adapterState.velocityRepeatSuppressedCount || 0);
     result.actions.shootSentCount = Number(adapterState.shootSentCount || 0);
     result.actions.shootRepeatSentCount = Number(adapterState.shootRepeatSentCount || 0);
+    result.actions.shootRepeatSuppressedCount = Number(adapterState.shootRepeatSuppressedCount || 0);
     result.actions.stopCount = Number(adapterState.stopCount || 0);
     result.actions.skippedCount = Number(adapterState.skippedCount || 0);
     result.actions.settlement = adapterState.lastSettlement || result.actions.settlement;
@@ -2889,6 +3242,7 @@ async function runReadOnlyCanary(config, options = {}) {
 module.exports = {
   applySingleBlockerLoginBypass,
   attachConfirmedLeaveEvidence,
+  createLatestFrameScheduler,
   createCanaryRunId,
   frameDataToBuffer,
   inspectCanaryFrame,

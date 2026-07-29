@@ -34,11 +34,17 @@ async function leaveOnce(options = {}) {
   const url = buildLeaveUrl(options);
   const now = typeof options.now === 'function' ? options.now : Date.now;
   const startedAt = now();
+  const scheduledAtMs = Number(options.scheduledAtMs || 0) || null;
+  const timerFiredAtMs = Number(options.timerFiredAtMs || 0) || null;
+  const dispatchDriftMs = scheduledAtMs === null ? null : Math.max(0, startedAt - scheduledAtMs);
   if (typeof options.onRequest === 'function') {
     options.onRequest({
       stage: options.stage || 'initial',
       url: redactSecrets(url),
       startedAtMs: startedAt,
+      scheduledAtMs,
+      timerFiredAtMs,
+      dispatchDriftMs,
       hedged: Boolean(options.hedged)
     });
   }
@@ -56,6 +62,9 @@ async function leaveOnce(options = {}) {
     status: response.status,
     statusText: response.statusText || '',
     durationMs: now() - startedAt,
+    scheduledAtMs,
+    timerFiredAtMs,
+    dispatchDriftMs,
     connectionReused: Boolean(response.connectionReused),
     response: body.json || { textSample: body.text.slice(0, 1000) }
   };
@@ -103,6 +112,17 @@ async function leaveWithVerification(options = {}) {
         error: err?.message || String(err)
       }))
       .then(result => {
+        if (result && typeof result === 'object') {
+          const scheduledAtMs = Number(attemptOptions.scheduledAtMs || 0) || null;
+          const timerFiredAtMs = Number(attemptOptions.timerFiredAtMs || 0) || null;
+          if (result.scheduledAtMs === undefined) result.scheduledAtMs = scheduledAtMs;
+          if (result.timerFiredAtMs === undefined) result.timerFiredAtMs = timerFiredAtMs;
+          if (result.dispatchDriftMs === undefined) {
+            result.dispatchDriftMs = scheduledAtMs === null
+              ? null
+              : Math.max(0, startedAt - scheduledAtMs);
+          }
+        }
         attempts.push(result);
         if (result?.ok) verificationState.confirmed = true;
         return result;
@@ -112,10 +132,15 @@ async function leaveWithVerification(options = {}) {
   let nextIndex = 0;
 
   if (retryMax >= 1 && hedgeDelayMs > 0) {
+    const hedgeScheduledAtMs = now() + hedgeDelayMs;
     const initialPromise = runAttempt(0, { deferForbiddenRecovery: true });
     let hedgeTimerId = null;
     const hedgeTimerPromise = new Promise(resolve => {
-      hedgeTimerId = setTimeoutImpl(() => resolve({ kind: 'timer' }), hedgeDelayMs);
+      hedgeTimerId = setTimeoutImpl(() => resolve({
+        kind: 'timer',
+        scheduledAtMs: hedgeScheduledAtMs,
+        firedAtMs: now()
+      }), hedgeDelayMs);
     });
     const first = await Promise.race([
       initialPromise.then(result => ({ kind: 'result', result })),
@@ -129,7 +154,9 @@ async function leaveWithVerification(options = {}) {
     } else {
       const hedgePromise = runAttempt(1, {
         hedged: true,
-        deferForbiddenRecovery: true
+        deferForbiddenRecovery: true,
+        scheduledAtMs: first.scheduledAtMs,
+        timerFiredAtMs: first.firedAtMs
       });
       const pending = [
         initialPromise.then(result => ({ source: 'initial', result })),
@@ -193,6 +220,11 @@ function summarizeLeaveAttemptForPublic(attempt) {
     status: Number(attempt.status || 0),
     statusText: attempt.statusText || '',
     durationMs: Number(attempt.durationMs || 0),
+    scheduledAtMs: Number(attempt.scheduledAtMs || 0) || null,
+    timerFiredAtMs: Number(attempt.timerFiredAtMs || 0) || null,
+    dispatchDriftMs: attempt.dispatchDriftMs === null || attempt.dispatchDriftMs === undefined
+      ? null
+      : Number(attempt.dispatchDriftMs || 0),
     connectionReused: Boolean(attempt.connectionReused),
     ok: Boolean(attempt.ok),
     summary: attempt.summary || null

@@ -82,12 +82,16 @@ const {
 } = require('./browserless/decision-state');
 const {
   attachConfirmedLeaveEvidence,
+  createLatestFrameScheduler,
   createCanaryRunId,
   nextCombatControlTickCore,
   plannerResponseHasNewerPreemption,
   runPreLoginSnapshotSafety,
   runReadOnlyCanary
 } = require('./browserless/canary');
+const {
+  createBrowserlessLeaveSupervisor
+} = require('./browserless/leave-supervisor');
 const {
   createBrowserlessActionAdapter,
   coinMotionVectorToTarget,
@@ -122,7 +126,8 @@ const {
   actionSettlementStallAssessment,
   createBrowserlessSafetyController,
   evaluateBrowserlessSafety,
-  executeSafetyExit
+  executeSafetyExit,
+  outboundControlHealthAssessment
 } = require('./browserless/safety-controller');
 const {
   actionTargetKey,
@@ -6212,6 +6217,96 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'true|initial:true:false,hedge-1:true:true|hedge-1:200:true,initial:403:false'
+    },
+    {
+      name: 'browserless leave supervisor keeps hedge wall clock independent from main event loop',
+      got: (async () => {
+        let requestCount = 0;
+        const server = http.createServer((_request, response) => {
+          requestCount += 1;
+          const finish = () => {
+            if (response.writableEnded) return;
+            response.statusCode = 200;
+            response.setHeader('content-type', 'application/json');
+            response.end('{"event":"left"}');
+          };
+          if (requestCount === 1) setTimeout(finish, 500);
+          else finish();
+        });
+        await new Promise((resolve, reject) => {
+          server.once('error', reject);
+          server.listen(0, '127.0.0.1', resolve);
+        });
+        const address = server.address();
+        const supervisor = createBrowserlessLeaveSupervisor();
+        const requests = [];
+        let resolveInitial;
+        const initialStarted = new Promise(resolve => { resolveInitial = resolve; });
+        try {
+          await supervisor.ready();
+          const resultPromise = supervisor.leave({
+            gameOrigin: `http://127.0.0.1:${address.port}`,
+            userId: 7,
+            sessionToken: 'worker-timer-token',
+            timeoutMs: 2000,
+            retryMax: 1,
+            retryDelayMs: 0,
+            hedgeDelayMs: 50
+          }, {
+            onRequest: request => {
+              requests.push(request);
+              if (request.stage === 'initial') resolveInitial();
+            }
+          });
+          await initialStarted;
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1000);
+          const mainThreadBlockEndedAtMs = Date.now();
+          const result = await resultPromise;
+          const hedge = requests.find(request => request.stage === 'hedge-1') || null;
+          return [
+            result.ok,
+            requests.some(request => request.stage === 'initial'),
+            Boolean(hedge),
+            Number(hedge?.timerFiredAtMs || 0) > 0
+              && Number(hedge?.timerFiredAtMs || 0) < mainThreadBlockEndedAtMs
+              && Number(hedge?.dispatchDriftMs || 0) < 900,
+            requestCount >= 2,
+            supervisor.status().completedLeaves
+          ].join('|');
+        } finally {
+          await supervisor.close();
+          await new Promise(resolve => server.close(resolve));
+        }
+      })(),
+      want: 'true|true|true|true|true|1'
+    },
+    {
+      name: 'browserless WS scheduler keeps latest pos and snapshot while preserving control frames',
+      got: (() => {
+        const processed = [];
+        const scheduler = createLatestFrameScheduler({
+          schedule: () => 1,
+          cancelSchedule: () => {},
+          processFrame: item => processed.push(`${item.frame.decodedJson.type}:${item.frame.decodedJson.tick}`)
+        });
+        const enqueue = (type, tick) => scheduler.enqueue({ frame: { decodedJson: { type, tick } } });
+        enqueue('pos', 1);
+        enqueue('pos', 2);
+        enqueue('shoot_ok', 3);
+        enqueue('pos', 4);
+        enqueue('snapshot', 5);
+        enqueue('snapshot', 6);
+        const status = scheduler.flush();
+        return [
+          processed.join(','),
+          status.received,
+          status.processed,
+          status.coalescedPos,
+          status.coalescedSnapshot,
+          status.pending
+        ].join('|');
+      })(),
+      want: 'shoot_ok:3,pos:4,snapshot:6|6|3|2|1|0'
     },
     {
       name: 'browserless source-ip HTTP client reuses a keep-alive socket after prewarm',
@@ -20157,7 +20252,19 @@ async function runSelfTest() {
             self: { user_id: 7, hp: 100, stamina_5s_remaining_milli: 6000 },
             bullets: []
           },
-          frameAges: {}
+          frameAges: {},
+          command: {
+            movement: {
+              timing: {
+                sampleCount: 0,
+                exactSampleCount: 0,
+                boundedSampleCount: 0,
+                medianTicks: 2,
+                p90Ticks: 5,
+                source: 'startup-default'
+              }
+            }
+          }
         };
         const movement = {
           active: true,
@@ -20196,6 +20303,70 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'combat-action-settlement-stalled|true|exit|false|true|2500|combat-action|action-settlement-stalled|false|transport-recovery|5000'
+    },
+    {
+      name: 'browserless outbound control health escalates fresh inbound and stale visible control asymmetry',
+      got: (() => {
+        const nowMs = 5000;
+        const state = {
+          realtime: {
+            tick: 200,
+            receivedAtMs: nowMs,
+            frameAgeMs: 0,
+            self: { user_id: 7, hp: 79, x: 100, y: 200, stamina_5s_remaining_milli: 6000 },
+            bullets: [{ owner_user_id: 8 }]
+          },
+          frameAges: { realtimeAgeMs: 0 },
+          command: {
+            movement: {
+              timing: { p90Ticks: 5, p90WallMs: 250, source: 'visible-velocity-transition-exact-rolling' },
+              observedVelocity: { dx: 0, dy: 0, vx: 0, vy: 0 },
+              lastRequestedDirection: { dx: 0, dy: -1, directionGeneration: 9 },
+              pendingVelocityCommands: [
+                { commandId: 20, dx: 0, dy: -1, requestedAtMs: 3900, directionGeneration: 9 }
+              ]
+            },
+            shooting: {
+              ackTimeoutMs: 3000,
+              pendingShots: [
+                { commandId: 30, requestedAtMs: 2900 },
+                { commandId: 31, requestedAtMs: 3100 }
+              ]
+            }
+          }
+        };
+        const context = {
+          nowMs,
+          actionSettlementStall: {
+            active: true,
+            stalled: false,
+            stallMs: 5000,
+            noProgressMs: 1000,
+            observedFrames: 20
+          },
+          lastDecision: {
+            kind: 'combat-live',
+            band: 'combat',
+            target: { userId: 8, name: 'enemy', firing: true }
+          }
+        };
+        const health = outboundControlHealthAssessment(state, context);
+        const event = evaluateBrowserlessSafety(state, context);
+        const movement = actionSettlementStallAssessment(state, context);
+        return [
+          health.triggered,
+          health.inboundFresh,
+          health.directionMismatch,
+          health.movementOverdue,
+          health.shootingOverdue,
+          health.movementDeadlineMs,
+          movement.thresholdMs,
+          movement.thresholdSource,
+          event.reason,
+          event.shouldLeave
+        ].join('|');
+      })(),
+      want: 'true|true|true|true|true|900|900|measured-command-delay|outbound-control-unresponsive|true'
     },
     {
       name: 'browserless trusted easy-kill stall uses ordinary recovery until direct threat evidence appears',
@@ -20974,6 +21145,62 @@ async function runSelfTest() {
       want: 'vel 1 0,vel -1 0|1|1|unchanged-direction-repeat-owned|2|true|2|1'
     },
     {
+      name: 'browserless velocity repeat suppresses delayed and backpressured stale sends',
+      got: (() => {
+        let t = 1000;
+        let bufferedAmount = 0;
+        const commands = [];
+        const timers = [];
+        const adapter = createBrowserlessActionAdapter({
+          now: () => t,
+          commandIntervalMs: 1,
+          decisionIntervalMs: 1000,
+          velocityRepeatEnabled: true,
+          velocityRepeatMs: 50,
+          repeatMaxDriftMs: 75,
+          transportHighWaterBytes: 4096,
+          setTimeout: (fn, ms) => {
+            const timer = { fn, ms, canceled: false };
+            timers.push(timer);
+            return timer;
+          },
+          clearTimeout: timer => {
+            if (timer) timer.canceled = true;
+          },
+          transport: {
+            bufferedAmount: () => bufferedAmount,
+            sendVelocity: (dx, dy) => commands.push(`vel ${dx} ${dy}`)
+          }
+        });
+        adapter.applyDecision({
+          realtime: { tick: 1, receivedAtMs: 990, self: { x: 0, y: 0 } }
+        }, {
+          action: { kind: 'patrol', band: 'combat', reason: 'repeat-overload', dx: 1, dy: 0 }
+        });
+        const delayed = timers.shift();
+        t = 1200;
+        delayed.fn();
+        const backpressured = timers.shift();
+        t = 1250;
+        bufferedAmount = 8192;
+        backpressured.fn();
+        const recovered = timers.shift();
+        t = 1300;
+        bufferedAmount = 0;
+        recovered.fn();
+        const state = adapter.getState();
+        return [
+          commands.join(','),
+          state.velocityRepeatSentCount,
+          state.velocityRepeatSuppressedCount,
+          state.lastRepeatTimerDriftMs,
+          state.lastTransportBufferedAmount,
+          state.transportHighWaterBytes
+        ].join('|');
+      })(),
+      want: 'vel 1 0,vel 1 0|1|2|0|0|4096'
+    },
+    {
       name: 'browserless action adapter uses tighter dead zone for coins',
       got: (() => {
         const coinVector = movementVectorToTarget(
@@ -21403,6 +21630,64 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'profit-attack|3|2|4|1160|none|vel 0 0|shoot 1000 0 0 0|shoot 1000 0 0 0'
+    },
+    {
+      name: 'browserless shoot repeat pauses at websocket high water and resumes without catch-up burst',
+      got: (() => {
+        let t = 1000;
+        let bufferedAmount = 8192;
+        const commands = [];
+        const timers = [];
+        const adapter = createBrowserlessActionAdapter({
+          now: () => t,
+          commandIntervalMs: 1,
+          decisionIntervalMs: 500,
+          combatShootMinIntervalMs: 160,
+          shootRepeatEnabled: true,
+          attackRangeCm: 14500,
+          transportHighWaterBytes: 4096,
+          setTimeout: (fn, ms) => {
+            const timer = { fn, ms, canceled: false };
+            timers.push(timer);
+            return timer;
+          },
+          clearTimeout: timer => {
+            if (timer) timer.canceled = true;
+          },
+          transport: {
+            bufferedAmount: () => bufferedAmount,
+            sendVelocity: (dx, dy) => commands.push(`vel ${dx} ${dy}`),
+            sendShoot: (targetX, targetY, startX, startY) => commands.push(`shoot ${targetX} ${targetY} ${startX} ${startY}`)
+          }
+        });
+        adapter.applyDecision({
+          realtime: { self: { x: 0, y: 0 }, tick: 1 }
+        }, {
+          kind: 'profit-candidate',
+          band: 'profit',
+          action: {
+            kind: 'attack',
+            band: 'profit',
+            target: { type: 'enemy', userId: 8, x: 1000, y: 0, active: false }
+          }
+        });
+        const blocked = timers.shift();
+        t += blocked.ms;
+        blocked.fn();
+        bufferedAmount = 0;
+        const resumed = timers.shift();
+        t += resumed.ms;
+        resumed.fn();
+        const state = adapter.getState();
+        return [
+          commands.join(','),
+          state.shootSentCount,
+          state.shootRepeatSentCount,
+          state.shootRepeatSuppressedCount,
+          state.lastTransportBufferedAmount
+        ].join('|');
+      })(),
+      want: 'vel 0 0,shoot 1000 0 0 0,shoot 1000 0 0 0|2|1|1|0'
     },
     {
       name: 'browserless action adapter keeps AFK shot repeat across throttled decision boundary',

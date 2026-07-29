@@ -516,13 +516,7 @@ async function runCompleteCallbackScenario(options, combatLearning, activeCombat
     coin_drops: fixture.coinDrops,
     messages: []
   });
-  const frameCount = Math.ceil(options.canaryDurationMs / options.frameIntervalMs) + 8;
-  const posFrames = Array.from({ length: frameCount }, (_, index) => encodeGrzFrame({
-    type: 'pos',
-    tick: fixture.state.realtime.tick + index + 1,
-    entities: fixture.entities,
-    bullets: fixture.bullets
-  }));
+  let simulatedVelocity = { dx: 0, dy: 0 };
   let posFrameIndex = 0;
   try {
     await Promise.all([refreshStatusCache(false), refreshStatusCache(true)]);
@@ -545,6 +539,7 @@ async function runCompleteCallbackScenario(options, combatLearning, activeCombat
       wsTracePayload: false
     }, {
       useDecisionWorker: true,
+      wsFrameCoalescing: true,
       mainThreadBudgetMs: options.maxMs,
       logStore,
       easyKillPlayerTracker,
@@ -571,7 +566,16 @@ async function runCompleteCallbackScenario(options, combatLearning, activeCombat
       openBrowserlessWs: async wsOptions => {
         setImmediate(() => wsOptions.onMessage(snapshotFrame));
         timer = setInterval(() => {
-          const frame = posFrames[Math.min(posFrameIndex, posFrames.length - 1)];
+          fixture.self.vx = simulatedVelocity.dx;
+          fixture.self.vy = simulatedVelocity.dy;
+          fixture.self.x += simulatedVelocity.dx * 120;
+          fixture.self.y += simulatedVelocity.dy * 120;
+          const frame = encodeGrzFrame({
+            type: 'pos',
+            tick: fixture.state.realtime.tick + posFrameIndex + 1,
+            entities: fixture.entities,
+            bullets: fixture.bullets
+          });
           posFrameIndex += 1;
           wsOptions.onMessage(frame);
         }, options.frameIntervalMs);
@@ -582,7 +586,12 @@ async function runCompleteCallbackScenario(options, combatLearning, activeCombat
             if (timer) clearInterval(timer);
             timer = null;
           },
-          sendVelocity() {},
+          sendVelocity(dx, dy) {
+            simulatedVelocity = {
+              dx: Math.max(-1, Math.min(1, Math.round(Number(dx) || 0))),
+              dy: Math.max(-1, Math.min(1, Math.round(Number(dy) || 0)))
+            };
+          },
           sendShoot() {}
         };
       },
@@ -590,8 +599,11 @@ async function runCompleteCallbackScenario(options, combatLearning, activeCombat
     });
     return {
       ok: result.ok,
+      error: result.error || '',
+      safetyReason: result.safety?.event?.reason || '',
       activeCombat,
       frameCount: result.hotPath?.tasks?.['ws-message']?.count || 0,
+      ingressFrameCount: result.hotPath?.tasks?.['ws-message-ingress']?.count || 0,
       realtimeControlCount: Number(result.decisions?.realtimeControlCount || 0),
       realtimeControlSchedule: result.decisions?.realtimeControlSchedule || null,
       hotPath: result.hotPath,
