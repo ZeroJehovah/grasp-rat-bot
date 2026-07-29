@@ -2299,11 +2299,11 @@ function replayMovementCommandLatency(options = {}) {
       loggedShadowMismatchFrames += 1;
     }
     if (stabilityTelemetry.applied === true) {
-      const candidateDirectHits = numberOrNull(stabilityTelemetry.candidateDirectHits);
-      const heldDirectHits = numberOrNull(stabilityTelemetry.heldDirectHits);
-      const candidateUnavoidableHits = numberOrNull(stabilityTelemetry.candidateUnavoidableHits);
-      const heldUnavoidableHits = numberOrNull(stabilityTelemetry.heldUnavoidableHits);
-      const heldCpa = numberOrNull(stabilityTelemetry.heldWorstCaseCpaCm);
+      const candidateDirectHits = optionalNumberOrNull(stabilityTelemetry.candidateDirectHits);
+      const heldDirectHits = optionalNumberOrNull(stabilityTelemetry.heldDirectHits);
+      const candidateUnavoidableHits = optionalNumberOrNull(stabilityTelemetry.candidateUnavoidableHits);
+      const heldUnavoidableHits = optionalNumberOrNull(stabilityTelemetry.heldUnavoidableHits);
+      const heldCpa = optionalNumberOrNull(stabilityTelemetry.heldWorstCaseCpaCm);
       if (candidateDirectHits !== null && heldDirectHits !== null && heldDirectHits > candidateDirectHits) {
         loggedAppliedDirectHitRegression += 1;
       }

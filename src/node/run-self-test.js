@@ -19736,11 +19736,11 @@ async function runSelfTest() {
                 shadowHeld: applied,
                 candidateDirection: candidate,
                 selectedDirection: { dx: 1, dy: 0 },
-                candidateDirectHits: 0,
-                heldDirectHits: 0,
-                candidateUnavoidableHits: 0,
-                heldUnavoidableHits: 0,
-                heldWorstCaseCpaCm: 320,
+                candidateDirectHits: applied ? null : 0,
+                heldDirectHits: applied ? null : 0,
+                candidateUnavoidableHits: applied ? null : 0,
+                heldUnavoidableHits: applied ? null : 0,
+                heldWorstCaseCpaCm: applied ? null : 320,
                 newDirectHits: 0,
                 newUnavoidableHits: 0
               }
@@ -19819,11 +19819,12 @@ async function runSelfTest() {
           replay.stabilityCounterfactual.rolloutEnabledFrames,
           replay.stabilityCounterfactual.rolloutAppliedFrames,
           replay.validation.reductionAssessmentSource,
+          replay.stabilityCounterfactual.loggedAppliedBelowSafetyBoundary,
           replay.rolloutAccepted,
           replay.accepted
         ].join('|');
       }),
-      want: '1|12|3|15|0|2|0|3|1|logged-applied|true|true'
+      want: '1|12|3|15|0|2|0|3|1|logged-applied|0|true|true'
     },
     {
       name: 'browserless replaced movement commands remain in Dodge schedule when attribution is ambiguous',
