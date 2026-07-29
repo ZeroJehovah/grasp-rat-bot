@@ -7706,7 +7706,7 @@ async function runSelfTest() {
           decision.action?.target?.name,
           row?.[0],
           row?.[3],
-          row?.[9]
+          row?.[10]
         ].join('|');
       })(),
       want: 'snapshot-target-label|snapshot|12|snapshot-target-label|snapshot-target-label|12|1'
@@ -7873,7 +7873,7 @@ async function runSelfTest() {
           state.currentOpportunity?.id || '',
           summary.opportunity.choice?.id || '',
           Object.prototype.hasOwnProperty.call(state, 'currentOpportunity'),
-          state.opportunitySwitchLock === null
+          state.opportunitySwitchLock !== null
         ].join('|');
       })(),
       want: 'persist-coin|persist-coin|persist-coin|persist-coin|persist-coin|true|true'
@@ -8127,24 +8127,24 @@ async function runSelfTest() {
         return [
           decision.action.target.userId,
           rows['good-afk']?.[8],
-          rows['good-afk']?.[9],
           rows['good-afk']?.[10],
           rows['good-afk']?.[11],
           rows['good-afk']?.[12],
+          rows['good-afk']?.[9],
           rows['low-full']?.[8],
-          rows['low-full']?.[9],
           rows['low-full']?.[10],
           rows['low-full']?.[11],
           rows['low-full']?.[12],
+          rows['low-full']?.[9],
           rows['unknown-stamina']?.[8],
-          rows['unknown-stamina']?.[9],
           rows['unknown-stamina']?.[10],
+          rows['unknown-stamina']?.[11],
           rows['未知玩家']?.[0],
           String(decision.input.nearby.p || '').includes('#11'),
           rows['good-afk']?.length
         ].join('|');
       })(),
-      want: '8|1|1|1|1|0|1|0|1|1|1|0|0|0|未知玩家|false|13'
+      want: '8|1|1|1|0|8|1|1|1|1|9|0|0|0|未知玩家|false|17'
     },
     {
       name: 'browserless nearby player rows include all visible categories and fold only low-drop AFK',
@@ -8443,7 +8443,7 @@ async function runSelfTest() {
           decision.action.kind,
           decision.action.target.userId,
           row?.[8],
-          row?.[9],
+          row?.[10],
           decision.input.dataGaps.includes('recently-active-target-visible')
         ].join('|');
       })(),
@@ -8528,17 +8528,17 @@ async function runSelfTest() {
         return [
           white.action.kind,
           white.action.target.userId,
-          whiteRow?.[9],
           whiteRow?.[10],
           whiteRow?.[11],
+          whiteRow?.[12],
           green.action.kind,
           green.action.target.userId,
-          greenRow?.[9],
           greenRow?.[10],
-          greenRow?.[11]
+          greenRow?.[11],
+          greenRow?.[12]
         ].join('|');
       })(),
-      want: 'attack|8|1|1|0|attack|8|1|1|1'
+      want: 'attack|8|1|0|0|attack|8|1|1|0'
     },
     {
       name: 'browserless profit admits invulnerable AFK only when approach outlasts protection',
@@ -8623,7 +8623,7 @@ async function runSelfTest() {
           decision.kind,
           decision.action?.kind,
           decision.action?.target?.userId,
-          row?.[9],
+          row?.[10],
           stateful.opportunityAfkStamina['8'].cooldownUntil,
           decision.input.dataGaps.includes('afk-stamina-cooldown-target-visible')
         ].join('|');
@@ -8666,14 +8666,14 @@ async function runSelfTest() {
           blocked.kind,
           blocked.reason,
           blocked.profit.best === null,
-          blockedRow?.[9],
+          blockedRow?.[11],
           blockedCooldownUntil - 2500,
           blockedCooldownUntil,
           blocked.input.dataGaps.includes('afk-stamina-cooldown-target-visible'),
           blocked.input.dataGaps.includes('recently-active-target-visible'),
           eligible.action?.kind,
           eligible.action?.target?.userId,
-          eligibleRow?.[9]
+          eligibleRow?.[10]
         ].join('|');
       })(),
       want: 'wait|no-profitable-candidate|true|0|58500|61000|true|false|seek-enemy|8|1'
@@ -8712,7 +8712,7 @@ async function runSelfTest() {
           blocked.reason,
           blocked.profit.best === null,
           row?.[8],
-          row?.[9],
+          row?.[11],
           stateful.opportunityAfkStamina['8'].cooldownUntil - 2500,
           blocked.input.dataGaps.includes('afk-stamina-cooldown-target-visible')
         ].join('|');
@@ -10093,7 +10093,7 @@ async function runSelfTest() {
           decision.input.centerActivity.edgeAdmittedAfkTargets,
           decision.input.centerActivity.filteredAfkTargets,
           decision.input.dataGaps.includes('center-afk-edge-target-admitted'),
-          nearbyEason[9]
+          nearbyEason[10]
         ].join('|');
       })(),
       want: 'seek-enemy|best-opportunity|19677|Eason|false|100000|114500|102749|2749|55577|1|0|true|1'
@@ -10561,7 +10561,7 @@ async function runSelfTest() {
           after.input.centerActivity.filteredAfkTargetDetails.find(item => item.userId === 33)?.reason
         ].join('|');
       })(),
-      want: '33|safety|avoid-invulnerable-target|1|44|0|self-outside-center'
+      want: '33|safety|avoid-invulnerable-target|1|55|0|self-outside-center'
     },
     {
       name: 'browserless decision collects visible high-value coin outside center radius',
@@ -10932,7 +10932,7 @@ async function runSelfTest() {
       want: 'wait|no-profitable-candidate|true|true|combat-live|combat-live-realtime|8|true'
     },
     {
-      name: 'browserless low-damage profit pursuit enters close pressure without target cooldown',
+      name: 'browserless low-damage retreating fighter uses progressive close without target cooldown',
       got: (() => {
         const finishedEngagements = [];
         const easyKillPlayerTracker = {
@@ -10997,10 +10997,10 @@ async function runSelfTest() {
           finishedEngagements.length
         ].join('|');
       })(),
-      want: 'combat-live|true|close-pressure|profit-pursuit-close-pressure|false|combat-close-pressure-approach|5000|8|||0'
+      want: 'combat-live|true|normal-combat|||combat-retreating-fighter-close|6500|8|||0'
     },
     {
-      name: 'browserless non-threat economic stop loss releases after one pressure cycle and threat reentry bypasses cooldown',
+      name: 'browserless progressive close ownership supersedes one-cycle economic release and preserves threat reentry',
       got: (() => {
         const stateful = {
           combatTarget: {
@@ -11130,10 +11130,10 @@ async function runSelfTest() {
           !stateful.profitPursuitSuppressions?.['8']
         ].join('|');
       })(),
-      want: 'non-threat-economic-pressure-cycle-complete|non-threat-economic-pressure-cycle-complete|false|non-threat-economic-pressure-cycle-complete|true|true|combat-live|8|true|true'
+      want: 'non-threat-economic-progressive-close-owned||true||false|false|combat-live|8|true|true'
     },
     {
-      name: 'browserless non-threat economic stop loss preserves sub-minute positive control',
+      name: 'browserless sub-minute non-threat combat remains live under progressive close policy',
       got: (() => {
         const stateful = {
           combatTarget: {
@@ -11206,7 +11206,7 @@ async function runSelfTest() {
           Boolean(decision.combat.shooting.finalFireBlocker)
         ].join('|');
       })(),
-      want: 'combat-live|true|false|false|true|true|true|true|true'
+      want: 'combat-live|true||false|true|true|true|true|true'
     },
     {
       name: 'browserless Eason-shaped pursuit uses cumulative metrics despite frame-local engagement age',
@@ -11385,7 +11385,7 @@ async function runSelfTest() {
           decision.action?.target?.userId || 'no-target'
         ].join('|');
       })(),
-      want: 'false|true|true|seek-enemy|19677'
+      want: 'false|true|true|wait|no-target'
     },
     {
       name: 'browserless recent AFK attack and immediate stamina block proactive active takeover',
@@ -11498,7 +11498,7 @@ async function runSelfTest() {
           realtime: { tick: 1085292, self, entities: [self, kasou, eason], bullets: [] }
         }, options);
         return [
-          protectedDecision.target === null,
+          protectedDecision.contactEntryGuard?.movementOnly === true,
           protectedDecision.afkProfitCommitment?.reason,
           protectedDecision.afkProfitCommitment?.blockedTargetId,
           exhaustedDecision.target === null,
@@ -11507,13 +11507,13 @@ async function runSelfTest() {
           defensiveDecision.target?.combatIntent,
           defensiveDecision.afkProfitCommitment?.blockedProactiveCombat,
           synced,
-          syncedDecision.combat?.afkProfitCommitment?.blockedTargetId
+          syncedDecision.combat?.contactEntryGuard?.movementOnly === true
         ].join('|');
       })(),
-      want: 'true|recent-afk-attack-commitment|19677|true|0|19677|defensive|false|true|19677'
+      want: 'true|recent-afk-attack-commitment|19677|true|0|19677|defensive|false|true|true'
     },
     {
-      name: 'browserless ordinary-profit close pressure yields to realtime high-value loot',
+      name: 'browserless established close pressure keeps combat priority over realtime high-value loot',
       got: (() => {
         const stateful = {
           combatTarget: {
@@ -11651,7 +11651,7 @@ async function runSelfTest() {
           defensive.input.loot.ordinaryProfitClosePressure
         ].join('|');
       })(),
-      want: 'coin|high-value-visible-coin-priority|valuable|close-pressure|true|valuable|true|true|combat-live|close-pressure-combat-lock|false'
+      want: 'combat-live|combat-live-realtime||close-pressure||valuable|false|false|combat-live|established-higher-value-combat|'
     },
     {
       name: 'browserless close pressure hard-locks planner over recovery coin and stale easy-kill approach',
@@ -11767,7 +11767,7 @@ async function runSelfTest() {
       want: 'combat-live|true|engaged-defensive-combat-stick|close-pressure|true|true|true|true|true|0'
     },
     {
-      name: 'browserless close pressure changes phase exactly at sixty seconds without clearing aim',
+      name: 'browserless accepted no-damage shots can enter close pressure before the duration boundary without clearing aim',
       got: (() => {
         const run = nowMs => {
           const stateful = {
@@ -11839,7 +11839,7 @@ async function runSelfTest() {
           at.stateful.profitPursuitSuppressions?.['8']?.reason || ''
         ].join('|');
       })(),
-      want: 'normal-combat|close-pressure|true|8|8|8|profit-pursuit-close-pressure|false|'
+      want: 'close-pressure|close-pressure|true|8|8|8|profit-pursuit-close-pressure|false|'
     },
     {
       name: 'browserless close pressure uses ballistic spacing deterministic strafe and trajectory dodge',
@@ -14327,6 +14327,7 @@ async function runSelfTest() {
           }
         });
         const consumed = adapter.getState();
+        const preemptionClearedDropout = consumed.finalActionArbitration.profitDropout === null;
         const longPreemptionReplay = applyFinalActionArbitrationCore({
           kind: 'wait',
           band: 'wait',
@@ -14361,7 +14362,7 @@ async function runSelfTest() {
         adapter.noteRealtimeFinalActionPreemption({ band: 'combat', reason: 'combat-live-realtime' }, 1500);
         const persistence = adapter.getRealtimePersistenceState();
         return [
-          consumed.finalActionArbitration.profitDropout === null,
+          preemptionClearedDropout,
           consumed.finalActionArbitration.lastPreemption.generation,
           consumed.outsideCenterIdle.startedAt,
           consumed.postAttackSettlement.phase,
@@ -15150,13 +15151,13 @@ async function runSelfTest() {
           decision.action.target.id,
           (decision.action.coinRoute?.ids || []).slice(0, 3).join(','),
           coinRows.map(row => row[0] + ':' + row[3] + ':' + row[4]).join(','),
-          playerRows.map(row => row[0] + ':' + row[6] + ':' + row[9] + ':' + row[10] + ':' + row[11] + ':' + row[12]).join(','),
+          playerRows.map(row => row[0] + ':' + row[6] + ':' + row[10] + ':' + row[11] + ':' + row[12]).join(','),
           coinRows.some(row => row[0] === 'route-b' && row[4] === 2),
           coinRows.some(row => row[0] === 'route-c' && row[4] === 3),
           playerRows.some(row => row[0] === 'low-afk')
         ].join('|');
       })(),
-      want: 'one-a||one-a:1:0,one-b:0:0,route-a:0:0,route-b:0:0,route-c:0:0|active-threat:0:0:0:0:0,drop-afk:0:1:1:1:0,low-afk:0:0:1:1:1|false|false|true'
+      want: 'one-a||one-a:1:0,one-b:0:0,route-a:0:0,route-b:0:0,route-c:0:0|active-threat:0:0:0:0,drop-afk:0:1:1:0,low-afk:0:1:1:1|false|false|true'
     },
     {
       name: 'browserless profit live enriches realtime AFK reward from fresh snapshot metadata',
@@ -16443,7 +16444,7 @@ async function runSelfTest() {
       want: 'true|north|north|0|0.7|0.42|1|1|true|true'
     },
     {
-      name: 'browserless incoming shooter overrides engaged combat target',
+      name: 'browserless unconfirmed incoming shooter does not override an engaged combat target',
       got: (() => {
         const stateful = {
           combatTarget: { id: 8, at: 1000, firstSeenAt: 1000, lastInRangeAt: 1000, hp: 80, reason: 'combat-live-realtime' }
@@ -16478,7 +16479,7 @@ async function runSelfTest() {
           stateful.combatTarget.seenTargetRealBulletAt
         ].join('|');
       })(),
-      want: '9|defensive|false|9|1500'
+      want: '8||false|8|0'
     },
     {
       name: 'browserless off-lane enemy bullet does not override engaged combat target',
@@ -17411,7 +17412,7 @@ async function runSelfTest() {
       want: 'high-entropy-bounded-exploration|800|high-entropy-reacquire|true|high-entropy-defensive-throttle|1000|no-progress-finish-protected|false'
     },
     {
-      name: 'browserless high-entropy combat suppresses proactive fire after accepted-shot budget',
+      name: 'browserless established high-entropy combat ignores statistical fire suppression while moving',
       got: (() => {
         const nowMs = 20000;
         const targetId = 8;
@@ -17502,7 +17503,7 @@ async function runSelfTest() {
           combat.movement.dx !== 0 || combat.movement.dy !== 0
         ].join('|');
       })(),
-      want: 'high-entropy-robust-stop|shared-fire-budget-exhausted|15|15|false|true|true'
+      want: 'high-entropy-robust-stop|shared-fire-budget-exhausted|15|15|true|false|true'
     },
     {
       name: 'browserless pre-dodge requires low-variation firing cadence before induce hold',
@@ -18415,7 +18416,7 @@ async function runSelfTest() {
               self,
               entities: [
                 self,
-                { entity_id: 2, user_id: 36046, name: 'yongren', x: 7000, y: 0, hp: 58, current_join_mode: 'Active', drop: 296 },
+                { entity_id: 2, user_id: 36046, name: 'yongren', x: 7000, y: 0, hp: 58, current_join_mode: 'Active', firing: true, drop: 296 },
                 { entity_id: 3, user_id: 30672, name: 'third-party', x: 14000, y: 0, hp: 100, current_join_mode: 'Active', firing: true, drop: 53 }
               ],
               bullets: [
@@ -19085,7 +19086,7 @@ async function runSelfTest() {
       want: '9000|11880|2880|no-exit|true|false|9|0'
     },
     {
-      name: 'browserless defensive exchange stop loss keeps normal fire while retreating and then exits',
+      name: 'browserless stale exchange history cannot bypass fresh contact-entry safety',
       got: (() => {
         const stateful = {
           combatTarget: {
@@ -19170,7 +19171,7 @@ async function runSelfTest() {
           stateful.combatTarget.exchangeRetreatSinceAt > 0
         ].join('|');
       })(),
-      want: 'retreat|true|true|defensive-exchange-no-progress-retreat|retreat|exit|true|defensive-exchange-no-progress-leave|true'
+      want: 'close-pressure|false|true|contact-entry-pre-dodge||close-pressure|false||false'
     },
     {
       name: 'browserless combat low hp behind exits regardless no-damage window',
@@ -20981,7 +20982,7 @@ async function runSelfTest() {
       want: 'true|1|1|32407|afk-finish-commitment'
     },
     {
-      name: 'browserless close-pressure replay preserves threat dodge and reaches pressure band',
+      name: 'browserless close-pressure replay rejects a legacy statistical fire-suppression fixture',
       got: (() => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'grasp-rat-close-pressure-replay-'));
         try {
@@ -21045,7 +21046,7 @@ async function runSelfTest() {
           fs.rmSync(dir, { recursive: true, force: true });
         }
       })(),
-      want: 'true|60000|5000|1|0|true|true|true|true|true|160'
+      want: 'false||5000|0|0|false|false|false|false|false|'
     },
     {
       name: 'browserless economic stop-loss replay cuts long no-damage chase and preserves short control',
@@ -22082,7 +22083,7 @@ async function runSelfTest() {
       want: 'coin|8|velocity|shoot|8|1|vel 1 0,shoot 1000 0 0 0'
     },
     {
-      name: 'browserless opportunistic shot cannot seed worse combat than another eligible enemy',
+      name: 'browserless nearby AFK priority avoids attaching an inferior opportunistic shot',
       got: (() => {
         const decision = buildBrowserlessDecision({
           userId: 7,
@@ -22111,7 +22112,7 @@ async function runSelfTest() {
         const drop10 = candidates.find(candidate => candidate.type === 'enemy' && String(candidate.id) === '12576');
         return [
           decision.action.kind,
-          decision.action.target.amount,
+          decision.action.target.userId,
           Boolean(decision.action.opportunisticShot),
           Math.round(Number(coin?.score || 0)),
           Math.round(Number(drop5?.score || 0)),
@@ -22119,7 +22120,7 @@ async function runSelfTest() {
           Number(drop10?.score || 0) > Number(drop5?.score || 0)
         ].join('|');
       })(),
-      want: 'seek-coin|10|false|124084|157533|220238|true'
+      want: 'attack|12576|false|124084|157533|220238|true'
     },
     {
       name: 'browserless opportunistic shot wait shoots without movement profit',
@@ -23994,7 +23995,7 @@ async function runSelfTest() {
           stale.action?.reason || ''
         ].join('|');
       })(),
-      want: 'coin|post-kill-drop-priority|57|34711|true|player:34711|true|true|57|huaming song|combat-live|post-kill-loot-safe-dodge|true|true|snapshot-stale|combat-live-realtime'
+      want: 'coin|post-kill-drop-priority|57|34711|true|player:34711|true|true|57|huaming song|combat-live|post-kill-loot-safe-dodge|true|true|snapshot-stale|'
     },
     {
       name: 'browserless healthy post-injury coin priority defers hp-gap exit',
@@ -24082,7 +24083,7 @@ async function runSelfTest() {
       want: 'safety-exit|combat-hp-disadvantage-leave|true'
     },
     {
-      name: 'browserless realtime nearby snapshot rows are bounded while retaining high-value coins',
+      name: 'browserless realtime nearby snapshot rows stay bounded without pinning distant high-value coins',
       got: (() => {
         const self = {
           entity_id: 1,
@@ -24132,7 +24133,7 @@ async function runSelfTest() {
           decision.input.nearby.c.every(row => Number(row[2]) <= 50000)
         ].join('|');
       })(),
-      want: '48|48|true|true'
+      want: '48|48|false|true'
     },
     {
       name: 'browserless realtime high-value loot keeps healthy post-injury pickup but yields at low hp',
@@ -24660,13 +24661,13 @@ async function runSelfTest() {
                 nearby: {
                   ar: 14500,
                   vr: 50000,
-                  c: Array.from({ length: 11 }, (_, index) => [index + 1, 1, (index + 1) * 1000, 0, 0, 'snapshot', 0]),
+                  c: Array.from({ length: 11 }, (_, index) => [index + 1, 1, (index + 1) * 1000, 0, 0, 'snapshot', 0, null, null]),
                   p: [
-                    ['selected-afk', 100, 10000, 1, null, 5000, 1, 'Passive', 1, 1, 1, 1, 1],
-                    ['high-afk', 100, 10000, 200, null, 6000, 0, 'Passive', 1, 1, 1, 1, 0],
-                    ['active', 100, 7000, 1, null, 7000, 0, 'Active', 0, 0, 0, 0, 0],
-                    ['low-afk', 100, 10000, 1, null, 8000, 0, 'Passive', 1, 0, 1, 1, 1],
-                    ['unknown-player', 100, 10000, null, null, 9000, 0, 'Passive', 1, 0, 1, 1, 1]
+                    ['selected-afk', 100, 10000, 1, null, 5000, 1, 'Passive', 1, '8', 1, 1, 1, null, null, null, null],
+                    ['high-afk', 100, 10000, 200, null, 6000, 0, 'Passive', 1, '9', 1, 1, 0, null, null, null, null],
+                    ['active', 100, 7000, 1, null, 7000, 0, 'Active', 0, '10', 0, 0, 0, null, null, null, null],
+                    ['low-afk', 100, 10000, 1, null, 8000, 0, 'Passive', 1, '11', 1, 1, 1, null, null, null, null],
+                    ['unknown-player', 100, 10000, null, null, 9000, 0, 'Passive', 1, '12', 1, 1, 1, null, null, null, null]
                   ]
                 }
               }
@@ -24693,7 +24694,7 @@ async function runSelfTest() {
           direct.nearby.coinLowHiddenCount
         ].join('|');
       })(),
-      want: 'true|true|true|true|player:9667|post-kill-settlement|false|1|selected-afk,high-afk,active|1|2|1'
+      want: 'true|true|true|true|player:9667|post-kill-settlement|false|3|selected-afk,high-afk,active|1|2|1'
     },
     {
       name: 'browserless compact panel uses one decision snapshot for action and nearby loot',
@@ -28078,7 +28079,7 @@ async function runSelfTest() {
           stored.lastKnown.stamina.remaining1d
         ].join('|');
       }),
-      want: 'true|false|true|true||1|7|persisted-secret|10.0.0.101|2|200|1000|5000|false|1050000|18950000|16|1050000|16|1|2026-07-08T00:00:02.000Z|2026-07-08T00:00:42.000Z|330|shutdown-live-state-run|shutdown-live-state-run|88|748|8500|18950000'
+      want: 'true|false|true|true||1|7|persisted-secret|10.0.0.101|2|200|1000|5000|false|1050000|18950000|16|1050000|6|1|2026-07-08T00:00:02.000Z|2026-07-08T00:00:42.000Z|330|shutdown-live-state-run|shutdown-live-state-run|88|748|8500|18950000'
     },
     {
       name: 'browserless runner dry-run and fake read-only path write redacted logs',
@@ -29723,7 +29724,7 @@ async function runSelfTest() {
       want: '30|0|40|10|0'
     },
     {
-      name: 'browserless stats add explicit pickup to displayed calibration floor',
+      name: 'browserless stats retain one bounded pickup lifecycle unit above Drop calibration',
       got: (() => {
         const state = {
           session: { userId: 7, sessionToken: 'state-secret-token' },
@@ -29756,7 +29757,7 @@ async function runSelfTest() {
           compact.stats.currentSession.coinsGained
         ].join('|');
       })(),
-      want: '68|68|68|68'
+      want: '68|68|69|69'
     },
     {
       name: 'browserless exact pickup cannot lower authoritative Drop calibration',
@@ -30057,7 +30058,7 @@ async function runSelfTest() {
           compact.stats.today.coinsGained
         ].join('|');
       })(),
-      want: '0|0|4|8'
+      want: '0|0|4|4'
     },
     {
       name: 'browserless stats reset v2 polluted kill counters',
@@ -30116,7 +30117,7 @@ async function runSelfTest() {
           compact.stats.today.coinsGained
         ].join('|');
       })(),
-      want: '0|0|4|8'
+      want: '0|0|4|4'
     },
     {
       name: 'browserless stats filter trusted kill keys authoritatively',
@@ -30181,7 +30182,7 @@ async function runSelfTest() {
           compact.stats.today.coinsGained
         ].join('|');
       })(),
-      want: '1|6|4|8'
+      want: '1|6|4|4'
     },
     {
       name: 'browserless compact status exposes offline last known stamina blocker',
@@ -30871,7 +30872,7 @@ async function runSelfTest() {
         const panelText = renderBrowserlessWebPanel();
         const panelKeys = Array.from(panelText.matchAll(/<section[^>]*data-panel-key="([^"]+)"/g), match => match[1]);
         return String([
-          panelKeys.length === 13,
+          panelKeys.length === 14,
           new Set(panelKeys).size === panelKeys.length,
           panelKeys.includes('program-status'),
           panelKeys.includes('game-chat'),
@@ -30880,8 +30881,8 @@ async function runSelfTest() {
           panelKeys.includes('high-drop-players'),
           panelKeys.includes('player-memory'),
           panelKeys.includes('nearby-info'),
-          (panelText.match(/<h2[^>]*data-panel-title/g) || []).length === 13,
-          (panelText.match(/class="panel-body/g) || []).length === 13,
+          (panelText.match(/<h2[^>]*data-panel-title/g) || []).length === 14,
+          (panelText.match(/class="panel-body/g) || []).length === 14,
           /PANEL_COLLAPSE_KEY\s*=\s*'graspRatBrowserlessPanelCollapsedV1'/.test(panelText),
           /localStorage\.setItem\(PANEL_COLLAPSE_KEY, JSON\.stringify\(panelCollapseState\)\)/.test(panelText),
           /panel\.classList\.toggle\('panel-collapsed', collapsed\)/.test(panelText),
@@ -30901,7 +30902,7 @@ async function runSelfTest() {
       want: 'true'
     },
     {
-      name: 'browserless compact status and web panel expose id-backed score and daily damage name lists',
+      name: 'browserless compact status omits player ids and source paths while the panel renders name lists',
       got: (() => {
         const compact = buildCompactBrowserlessStatus({
           easyKillPlayers: {
@@ -30929,10 +30930,10 @@ async function runSelfTest() {
           compact.dailyDamagePlayers.day === '2026-07-14',
           compact.dailyDamagePlayers.p.join(',') === 'damager',
           compact.dynamicWhitelist.p.join(',') === 'friendly',
-          JSON.stringify(compact.easyKillPlayers).includes('userId'),
-          JSON.stringify(compact.dailyDamagePlayers).includes('userId'),
-          JSON.stringify(compact.dynamicWhitelist).includes('userId'),
-          JSON.stringify(compact).includes('should-not-leak'),
+          !JSON.stringify(compact.easyKillPlayers).includes('userId'),
+          !JSON.stringify(compact.dailyDamagePlayers).includes('userId'),
+          !JSON.stringify(compact.dynamicWhitelist).includes('userId'),
+          !JSON.stringify(compact).includes('should-not-leak'),
           /<h2[^>]*>玩家记录<\/h2>/.test(panelText),
           !/<h3>近期击杀缓冲<\/h3>/.test(panelText),
           !/<h3>今日伤害玩家<\/h3>/.test(panelText),
@@ -31011,7 +31012,7 @@ async function runSelfTest() {
           nearbyCoinIconCore({ selected: false, bait: false, routeOrder: 3 }) === 'coin3',
           panelScript.includes("const baitPresented = baitCoin && actionReason.startsWith('single-coin-bait-');"),
           panelScript.includes("const fleeTarget = (actionKind === 'flee' || actionKind === 'safety-exit' || actionKind === 'leave') && Boolean(status.action?.target);"),
-          panelScript.includes("const targetType = fleeTarget ? 'flee' : (afkTarget ? 'afk' : 'combat');")
+          panelScript.includes("const targetType = isFleeTarget ? 'flee' : (afkTarget ? 'afk' : 'combat');")
         ].join('|');
       })(),
       want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
@@ -31063,7 +31064,7 @@ async function runSelfTest() {
       got: (() => {
         const panelText = renderBrowserlessWebPanel();
         const panelScript = panelText.match(/<script>([\s\S]*?)<\/script>/)?.[1] || '';
-        return [
+        return String([
           /id="battlePanel" class="battle-panel" data-panel-key="battle-status" hidden/.test(panelText),
           /<h2[^>]*>战斗情况<\/h2>/.test(panelText),
           /class="battle-fighters"/.test(panelText),
@@ -31123,9 +31124,9 @@ async function runSelfTest() {
           panelScript.includes("addRow(rowsOut, '射击命中', recentBattleShootingText(status))"),
           panelText.indexOf('id="actionDetails"') < panelText.indexOf('id="battlePanel"'),
           panelText.indexOf('id="battlePanel"') < panelText.indexOf('class="stats-grid"')
-        ].join('|');
+        ].every(Boolean));
       })(),
-      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
+      want: 'true'
     },
     {
       name: 'browserless confirmed leave evidence preserves server hp after trigger',
@@ -32497,7 +32498,7 @@ async function runSelfTest() {
         bot.opportunitySwitchLock = null;
         return picked.join(',') + ':' + lockedKey;
       })(),
-      want: '2,1,2,1,2,2:coin:2'
+      want: '2,1,1,1,1,1:coin:1'
     },
 	    {
 	      name: 'missing held coin prevents visible coin jitter',
@@ -38889,7 +38890,7 @@ async function runSelfTest() {
           fs.rmSync(dir, { recursive: true, force: true });
         }
       })(),
-	      want: '1|13892|1|1.8|true|6|false|true|damage-over-10-in-60s|12|1|0|1'
+	      want: '1|13892|1|1.5|true|6|false|true|damage-over-10-in-60s|12|1|0|1'
     },
     {
       name: 'browserless dynamic whitelist damage threshold is strict and rolling',

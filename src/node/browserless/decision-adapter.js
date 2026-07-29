@@ -3144,6 +3144,13 @@ function buildBrowserlessCombatStrategyInput(state, options = {}, stateful = {})
   if (currentTargetId !== null && currentTargetId !== undefined && currentTargetId !== '') {
     priorityUserIds.add(String(currentTargetId));
   }
+  const previousActionTarget = stateful?.lastDecisionAction?.target || null;
+  const previousActionTargetId = previousActionTarget?.userId
+    ?? previousActionTarget?.user_id
+    ?? previousActionTarget?.id;
+  if (previousActionTargetId !== null && previousActionTargetId !== undefined && previousActionTargetId !== '') {
+    priorityUserIds.add(String(previousActionTargetId));
+  }
   for (const bullet of Array.isArray(realtime.bullets) ? realtime.bullets : []) {
     const ownerId = bulletOwnerId(bullet);
     if (ownerId !== null && ownerId !== undefined && ownerId !== '') priorityUserIds.add(String(ownerId));
@@ -4597,7 +4604,7 @@ function finalActionArbitrationHistoryLimit(options = {}) {
   return Math.max(4, Math.round(Number(options.finalActionArbitrationHistoryLimit ?? BROWSER_RUNTIME_DEFAULTS.finalActionArbitrationHistoryLimit ?? 24) || 24));
 }
 
-function actionTargetCurrentValidity(action, input = {}) {
+function actionTargetCurrentValidity(action, input = {}, options = {}) {
   const target = action?.target || null;
   if (!target) return { valid: false, reason: 'previous-target-missing' };
   const playerId = target.userId ?? target.user_id;
@@ -4613,6 +4620,23 @@ function actionTargetCurrentValidity(action, input = {}) {
     const invulnerableMs = Number(current.invulnerableRemainingMs ?? current.invulnerable_remaining_ms);
     if (current.invulnerable === true || (Number.isFinite(invulnerableMs) && invulnerableMs > 0)) {
       return { valid: false, reason: 'player-invulnerable' };
+    }
+    if (String(action.band || action.finalCandidate?.band || '') === 'profit') {
+      const distance = Number(current.distance ?? target.distance ?? Infinity);
+      const attackRange = Math.max(0, Number(
+        options.attackRange ?? options.combatAttackRange ?? DEFAULT_ATTACK_RANGE
+      ));
+      const outsideAttackRange = !Number.isFinite(distance) || distance > attackRange;
+      if (current.whitelisted === true) return { valid: false, reason: 'player-whitelisted' };
+      if (target.easyKillProfitTarget === true && current.easyKillProfitTarget !== true) {
+        return { valid: false, reason: 'easy-kill-not-eligible' };
+      }
+      if (outsideAttackRange && current.recentlyActive === true) {
+        return { valid: false, reason: 'player-recently-active' };
+      }
+      if (outsideAttackRange && Number(current.afkStaminaCooldownRemainingMs || 0) > 0) {
+        return { valid: false, reason: 'player-stamina-cooldown' };
+      }
     }
     return { valid: true, reason: 'player-visible' };
   }
@@ -4660,11 +4684,11 @@ function currentProfitThresholdEligibility(action, opportunity = {}) {
   };
 }
 
-function annotateYieldableProfitDropout(action, arbitration, input = {}, opportunity = {}) {
+function annotateYieldableProfitDropout(action, arbitration, input = {}, opportunity = {}, options = {}) {
   const dropout = profitDropoutMetadata(action);
   if (!dropout) return action;
   const previousAction = arbitration?.lastAction || null;
-  const targetValidity = actionTargetCurrentValidity(previousAction, input);
+  const targetValidity = actionTargetCurrentValidity(previousAction, input, options);
   const currentEligibility = currentProfitThresholdEligibility(previousAction, opportunity);
   return {
     ...action,
@@ -4740,7 +4764,7 @@ function applyBrowserlessFinalActionArbitration(action, stateful = {}, input = {
     arbitration.lastFocus = null;
     arbitration.lastSelectedAt = 0;
   }
-  const annotatedAction = annotateYieldableProfitDropout(action, arbitration, input, opportunity);
+  const annotatedAction = annotateYieldableProfitDropout(action, arbitration, input, opportunity, options);
   return applyFinalActionArbitrationCore(annotatedAction, arbitration, {
     nowMs: input?.nowMs,
     source: options.controlMode || 'browserless',
