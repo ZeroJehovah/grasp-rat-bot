@@ -126,6 +126,11 @@ function defaultBrowserlessStats() {
       latestDrop: null,
       uptimeMs: 0,
       staminaSpentMs: 0,
+      staminaSpentBeforeResetMs: 0,
+      staminaResetCount: 0,
+      lastStamina1dRemaining: null,
+      lastStamina1dLimit: null,
+      lastStamina1dObservedAt: '',
       coinsGained: 0,
       dropResetCount: 0,
       kills: 0,
@@ -597,6 +602,11 @@ function normalizeBrowserlessStats(stats, rawStats = stats) {
     latestDrop: compactNumber(today.latestDrop),
     uptimeMs: Math.max(0, Math.round(Number(today.uptimeMs || 0) || 0)),
     staminaSpentMs: Math.max(0, Math.round(Number(today.staminaSpentMs || 0) || 0)),
+    staminaSpentBeforeResetMs: Math.max(0, Math.round(Number(today.staminaSpentBeforeResetMs || 0) || 0)),
+    staminaResetCount: Math.max(0, Math.round(Number(today.staminaResetCount || 0) || 0)),
+    lastStamina1dRemaining: compactNumber(today.lastStamina1dRemaining),
+    lastStamina1dLimit: compactNumber(today.lastStamina1dLimit),
+    lastStamina1dObservedAt: compactString(today.lastStamina1dObservedAt, 48),
     coinsGained: todayCoinsGained,
     dropResetCount: Math.max(0, Math.round(Number(today.dropResetCount || 0) || 0)),
     kills: resetUntrustedKills ? 0 : Math.max(0, Math.round(Number(today.kills || 0) || 0)),
@@ -680,13 +690,13 @@ function statsStamina1dLimit(stamina, self) {
 
 function actualBrowserlessDailyStaminaSpentMs(stats) {
   const today = stats?.today || {};
-  const session = stats?.currentSession || {};
-  const observedAt = parseTimeMs(session.lastSeenAt);
+  const observedAt = parseTimeMs(today.lastStamina1dObservedAt);
   if (!today.day || !observedAt || browserlessStatsDayKey(observedAt) !== today.day) return null;
-  const remaining = compactNumber(session.lastStamina1dRemaining);
-  const limit = compactNumber(session.lastStamina1dLimit);
+  const remaining = compactNumber(today.lastStamina1dRemaining);
+  const limit = compactNumber(today.lastStamina1dLimit);
   if (remaining === null || limit === null || limit <= 0) return null;
-  return Math.max(0, Math.round(limit - remaining));
+  const spentBeforeReset = Math.max(0, Number(today.staminaSpentBeforeResetMs || 0) || 0);
+  return Math.max(0, Math.round(spentBeforeReset + limit - remaining));
 }
 
 function statsKillKey(item) {
@@ -792,7 +802,7 @@ function startBrowserlessStatsSession(stats, state, self, stamina, nowMs, decisi
   return stats.currentSession;
 }
 
-function updateBrowserlessStatsSessionStamina(session, stamina, self) {
+function updateBrowserlessStatsSessionStamina(stats, session, stamina, self, nowMs = Date.now()) {
   const stamina1d = statsStamina1dRemaining(stamina, self);
   const stamina1dLimit = statsStamina1dLimit(stamina, self);
   const previousStamina = compactNumber(session.lastStamina1dRemaining);
@@ -804,6 +814,32 @@ function updateBrowserlessStatsSessionStamina(session, stamina, self) {
     session.lastStamina1dRemaining = stamina1d;
   }
   if (stamina1dLimit !== null && stamina1dLimit > 0) session.lastStamina1dLimit = stamina1dLimit;
+  if (stamina1d !== null) {
+    const today = stats.today || (stats.today = resetBrowserlessTodayStats(browserlessStatsDayKey(nowMs)));
+    const previousDailyStamina = compactNumber(today.lastStamina1dRemaining);
+    const previousDailyLimit = compactNumber(today.lastStamina1dLimit);
+    const effectiveLimit = stamina1dLimit !== null && stamina1dLimit > 0
+      ? stamina1dLimit
+      : previousDailyLimit;
+    const fullDailyRefill = previousDailyStamina !== null
+      && effectiveLimit !== null
+      && effectiveLimit > 0
+      && stamina1d > previousDailyStamina
+      && stamina1d >= effectiveLimit;
+    if (fullDailyRefill) {
+      const completedSegmentLimit = previousDailyLimit !== null && previousDailyLimit > 0
+        ? previousDailyLimit
+        : effectiveLimit;
+      today.staminaSpentBeforeResetMs = Math.max(0, Math.round(
+        Number(today.staminaSpentBeforeResetMs || 0)
+          + Math.max(0, completedSegmentLimit - previousDailyStamina)
+      ));
+      today.staminaResetCount = Math.max(0, Math.round(Number(today.staminaResetCount || 0) + 1));
+    }
+    today.lastStamina1dRemaining = stamina1d;
+    if (effectiveLimit !== null && effectiveLimit > 0) today.lastStamina1dLimit = effectiveLimit;
+    today.lastStamina1dObservedAt = isoFromMs(nowMs);
+  }
   return stamina1d !== null;
 }
 
@@ -971,7 +1007,7 @@ function updateBrowserlessStatsTodayDrop(stats, self) {
   return { observed: true, addedCoins, reset };
 }
 
-function updateBrowserlessStatsSession(session, decision, self, stamina, nowMs) {
+function updateBrowserlessStatsSession(stats, session, decision, self, stamina, nowMs) {
   session.lastSeenAt = isoFromMs(nowMs);
   session.exitedAt = '';
   session.exitReason = '';
@@ -986,7 +1022,7 @@ function updateBrowserlessStatsSession(session, decision, self, stamina, nowMs) 
     added: dropCalibrationAdded,
     previousCalibratedCoins: previousDropCalibratedCoins
   });
-  updateBrowserlessStatsSessionStamina(session, stamina, self);
+  updateBrowserlessStatsSessionStamina(stats, session, stamina, self, nowMs);
   const evidence = ensureSessionKillBaseline(session, decision);
   const baselineKeys = new Set(Array.isArray(session.killBaselineKeys) ? session.killBaselineKeys : []);
   const killKeys = new Set(normalizeSessionKillKeys(session.killKeys, session));
@@ -1027,7 +1063,7 @@ function browserlessStatsForDecision(state, decision, options = {}) {
     startBrowserlessStatsSession(stats, state, self, stamina, nowMs, decision);
   }
   const todayDropTransition = updateBrowserlessStatsTodayDrop(stats, self);
-  updateBrowserlessStatsSession(stats.currentSession, decision, self, stamina, nowMs);
+  updateBrowserlessStatsSession(stats, stats.currentSession, decision, self, stamina, nowMs);
   stats.today.coinsGained = Math.max(0, Math.round(
     Number(stats.today.coinsGained || 0)
       + todayDropTransition.addedCoins
@@ -1093,7 +1129,7 @@ function finalizeBrowserlessStatsSession(stats, detail = {}, nowMs = Date.now())
       Number(stats.today.coinsGained || 0)
         + todayDropTransition.addedCoins
     ));
-    const finalStaminaObserved = updateBrowserlessStatsSessionStamina(session, detail.stamina, detail.self);
+    const finalStaminaObserved = updateBrowserlessStatsSessionStamina(stats, session, detail.stamina, detail.self, nowMs);
     if ((finalDropObserved || finalStaminaObserved) && at) {
       session.lastSeenAt = at;
     }

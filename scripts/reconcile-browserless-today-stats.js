@@ -102,6 +102,23 @@ function killEvidence(entry) {
   return Array.isArray(decision?.input?.selfKillEvidence) ? decision.input.selfKillEvidence : null;
 }
 
+function staminaEvidence(entry) {
+  const decision = entry?.detail?.decision || entry?.detail || {};
+  const stamina = decision?.input?.stamina || {};
+  const remaining = Number(stamina.stamina1dRemainingMilli ?? stamina.remaining1d ?? stamina.stamina1d);
+  const limit = Number(stamina.stamina1dLimitMilli ?? stamina.limit1d ?? stamina.stamina1dLimit);
+  if (!Number.isFinite(remaining) || !Number.isFinite(limit) || limit <= 0) return null;
+  return { remaining, limit };
+}
+
+function exitStaminaEvidence(entry) {
+  const response = entry?.detail?.response || {};
+  const remaining = Number(response.stamina_1d_remaining_milli ?? response.stamina1dRemainingMilli);
+  const limit = Number(response.stamina_1d_limit_milli ?? response.stamina1dLimitMilli);
+  if (!Number.isFinite(remaining) || !Number.isFinite(limit) || limit <= 0) return null;
+  return { remaining, limit };
+}
+
 function killKey(item) {
   const target = item?.targetUserId ?? item?.target_user_id ?? item?.targetId ?? item?.id;
   const tick = item?.tick ?? item?.createdTick ?? item?.created_tick;
@@ -116,6 +133,7 @@ async function analyzeDay(options) {
   const days = utcLogDays(startMs, endMs);
   const wsFiles = days.map(day => path.join(options.logDir, day, 'ws.jsonl'));
   const decisionFiles = days.map(day => path.join(options.logDir, day, 'decisions.jsonl'));
+  const exitFiles = days.map(day => path.join(options.logDir, day, 'exits.jsonl'));
   const runs = new Map();
   let previousDrop = null;
   let positiveDropUnits = 0;
@@ -152,9 +170,48 @@ async function analyzeDay(options) {
   const seenKills = new Set();
   let kills = 0;
   let decisionRows = 0;
+  let staminaSamples = 0;
+  let staminaSpentBeforeResetMs = 0;
+  let staminaResetCount = 0;
+  let lastStamina1dRemaining = null;
+  let lastStamina1dLimit = null;
+  let lastStamina1dObservedAt = '';
+  const exitStaminaEvents = [];
+  await eachJsonLine(exitFiles, entry => {
+    const atMs = Date.parse(String(entry?.at || ''));
+    if (!Number.isFinite(atMs) || atMs < startMs || atMs > endMs) return;
+    const stamina = exitStaminaEvidence(entry);
+    if (!stamina) return;
+    exitStaminaEvents.push({ at: entry.at, atMs, stamina });
+  });
+  exitStaminaEvents.sort((a, b) => a.atMs - b.atMs);
+  function observeStamina(stamina, at) {
+    const fullDailyRefill = lastStamina1dRemaining !== null
+      && stamina.remaining > lastStamina1dRemaining
+      && stamina.remaining >= stamina.limit;
+    if (fullDailyRefill) {
+      const completedSegmentLimit = lastStamina1dLimit !== null && lastStamina1dLimit > 0
+        ? lastStamina1dLimit
+        : stamina.limit;
+      staminaSpentBeforeResetMs += Math.max(0, completedSegmentLimit - lastStamina1dRemaining);
+      staminaResetCount += 1;
+    }
+    lastStamina1dRemaining = stamina.remaining;
+    lastStamina1dLimit = stamina.limit;
+    lastStamina1dObservedAt = at;
+    staminaSamples += 1;
+  }
+  let nextExitStaminaIndex = 0;
   await eachJsonLine(decisionFiles, entry => {
     const atMs = Date.parse(String(entry?.at || ''));
     if (!Number.isFinite(atMs) || atMs < startMs || atMs > endMs) return;
+    while (nextExitStaminaIndex < exitStaminaEvents.length
+      && exitStaminaEvents[nextExitStaminaIndex].atMs <= atMs) {
+      const exitEvent = exitStaminaEvents[nextExitStaminaIndex++];
+      observeStamina(exitEvent.stamina, exitEvent.at);
+    }
+    const stamina = staminaEvidence(entry);
+    if (stamina) observeStamina(stamina, entry.at);
     const evidence = killEvidence(entry);
     if (!evidence) return;
     decisionRows += 1;
@@ -171,15 +228,26 @@ async function analyzeDay(options) {
       kills += 1;
     }
   });
+  while (nextExitStaminaIndex < exitStaminaEvents.length) {
+    const exitEvent = exitStaminaEvents[nextExitStaminaIndex++];
+    observeStamina(exitEvent.stamina, exitEvent.at);
+  }
 
   const inGameDurationMs = Array.from(runs.values()).reduce((sum, run) => (
     sum + Math.max(0, run.lastAtMs - run.firstAtMs)
   ), 0);
+  const staminaSpentMs = lastStamina1dRemaining === null || lastStamina1dLimit === null
+    ? null
+    : Math.max(0, Math.round(staminaSpentBeforeResetMs + lastStamina1dLimit - lastStamina1dRemaining));
   return {
     day: options.day,
     cutoff: new Date(endMs).toISOString(),
     userId: Number(options.userId),
-    files: { ws: wsFiles.filter(fs.existsSync), decisions: decisionFiles.filter(fs.existsSync) },
+    files: {
+      ws: wsFiles.filter(fs.existsSync),
+      decisions: decisionFiles.filter(fs.existsSync),
+      exits: exitFiles.filter(fs.existsSync)
+    },
     evidence: {
       selfSamples,
       decisionRows,
@@ -189,10 +257,17 @@ async function analyzeDay(options) {
       firstEvidenceAt,
       initialKillBaselineCount: baseline?.size || 0,
       dropResetCount,
-      lastDrop
+      lastDrop,
+      staminaSamples,
+      staminaResetCount,
+      lastStamina1dRemaining,
+      lastStamina1dLimit,
+      lastStamina1dObservedAt
     },
     stats: {
       uptimeMs: inGameDurationMs,
+      staminaSpentMs,
+      staminaSpentBeforeResetMs: Math.max(0, Math.round(staminaSpentBeforeResetMs)),
       dropUnitsGained: positiveDropUnits,
       coinsGained: positiveDropUnits * 2,
       pickedCoins: positiveDropUnits * 2,
@@ -213,7 +288,12 @@ function authoritativeStaminaSpent(state, day) {
 
 function reconcileState(state, analysis) {
   const currentToday = state?.stats?.today || {};
-  const staminaSpentMs = authoritativeStaminaSpent(state, analysis.day);
+  const rawAnalyzedStaminaSpentMs = analysis?.stats?.staminaSpentMs;
+  const staminaSpentMs = rawAnalyzedStaminaSpentMs !== null
+    && rawAnalyzedStaminaSpentMs !== undefined
+    && Number.isFinite(Number(rawAnalyzedStaminaSpentMs))
+    ? Math.max(0, Math.round(Number(rawAnalyzedStaminaSpentMs)))
+    : authoritativeStaminaSpent(state, analysis.day);
   const today = {
     ...currentToday,
     day: analysis.day,
@@ -221,7 +301,14 @@ function reconcileState(state, analysis) {
     coinsGained: Math.max(Number(currentToday.coinsGained || 0), analysis.stats.coinsGained),
     kills: Math.max(Number(currentToday.kills || 0), analysis.stats.kills),
     sessionCount: Math.max(Number(currentToday.sessionCount || 0), analysis.evidence.runCount),
-    ...(staminaSpentMs === null ? {} : { staminaSpentMs })
+    ...(staminaSpentMs === null ? {} : { staminaSpentMs }),
+    ...(analysis.evidence.staminaSamples > 0 ? {
+      staminaSpentBeforeResetMs: analysis.stats.staminaSpentBeforeResetMs,
+      staminaResetCount: analysis.evidence.staminaResetCount,
+      lastStamina1dRemaining: analysis.evidence.lastStamina1dRemaining,
+      lastStamina1dLimit: analysis.evidence.lastStamina1dLimit,
+      lastStamina1dObservedAt: analysis.evidence.lastStamina1dObservedAt
+    } : {})
   };
   if (!state?.stats?.currentSession?.online) {
     today.activeSessionId = '';
@@ -277,18 +364,45 @@ async function runSelfTest() {
       detail: { runId, decodedSummary: { self: { user_id: 7, death_drop_coins: drop } } }
     })).join('\n') + '\n';
     const decisions = [
-      ['2026-07-15T00:00:00.000Z', [{ targetUserId: 1, tick: 1 }]],
-      ['2026-07-15T00:00:05.000Z', [{ targetUserId: 1, tick: 1 }, { targetUserId: 2, tick: 2 }]],
-      ['2026-07-15T00:01:05.000Z', [{ targetUserId: 2, tick: 2 }, { targetUserId: 3, tick: 3 }]]
-    ].map(([at, selfKillEvidence]) => JSON.stringify({ at, detail: { input: { selfKillEvidence } } })).join('\n') + '\n';
+      ['2026-07-15T00:00:00.000Z', 20000000, [{ targetUserId: 1, tick: 1 }]],
+      ['2026-07-15T00:00:05.000Z', 19000000, [{ targetUserId: 1, tick: 1 }, { targetUserId: 2, tick: 2 }]],
+      ['2026-07-15T00:00:10.000Z', 19500000, null],
+      ['2026-07-15T00:00:15.000Z', 18800000, null],
+      ['2026-07-15T00:01:05.000Z', 19400000, [{ targetUserId: 2, tick: 2 }, { targetUserId: 3, tick: 3 }]]
+    ].map(([at, remaining, selfKillEvidence]) => JSON.stringify({
+      at,
+      detail: {
+        input: {
+          ...(selfKillEvidence ? { selfKillEvidence } : {}),
+          stamina: { stamina1dRemainingMilli: remaining, stamina1dLimitMilli: 20000000 }
+        }
+      }
+    })).join('\n') + '\n';
+    const exits = JSON.stringify({
+      at: '2026-07-15T00:01:00.000Z',
+      type: 'leave-request-result',
+      detail: {
+        response: {
+          stamina_1d_remaining_milli: 20000000,
+          stamina_1d_limit_milli: 20000000
+        }
+      }
+    }) + '\n';
     fs.writeFileSync(path.join(dir, 'ws.jsonl'), ws);
     fs.writeFileSync(path.join(dir, 'decisions.jsonl'), decisions);
+    fs.writeFileSync(path.join(dir, 'exits.jsonl'), exits);
     const analysis = await analyzeDay({
       day: '2026-07-15',
       cutoffMs: Date.parse('2026-07-15T07:59:59.000Z'),
       logDir,
       userId: 7
     });
+    const reconciled = reconcileState({
+      stats: {
+        currentSession: { online: false },
+        today: { day: '2026-07-15', staminaSpentMs: 600000 }
+      }
+    }, analysis);
     let mismatchedDayRejected = false;
     try {
       assertApplySafe({
@@ -305,6 +419,11 @@ async function runSelfTest() {
         && analysis.stats.coinsGained === 40
         && analysis.stats.pickedCoins === 40
         && analysis.stats.kills === 2
+        && analysis.stats.staminaSpentMs === 1800000
+        && analysis.stats.staminaSpentBeforeResetMs === 1200000
+        && analysis.evidence.staminaResetCount === 1
+        && reconciled.today.staminaSpentMs === 1800000
+        && reconciled.today.staminaSpentBeforeResetMs === 1200000
         && analysis.stats.uptimeMs === 30000
         && analysis.evidence.dropResetCount === 1
         && mismatchedDayRejected,

@@ -29941,6 +29941,47 @@ async function runSelfTest() {
       want: '1700000|1200000|1200000'
     },
     {
+      name: 'browserless today stamina preserves spent segments across a death refill',
+      got: (() => {
+        const state = { session: { userId: 77, sessionToken: 'state-secret-token' } };
+        const at = Date.parse('2026-07-29T00:00:00.000Z');
+        const decision = (offset, remaining) => ({
+          at: new Date(at + offset).toISOString(),
+          input: {
+            self: { userId: 77, name: 'self', drop: 10 },
+            stamina: { stamina1dRemainingMilli: remaining, stamina1dLimitMilli: 20000000 },
+            selfKillEvidence: []
+          }
+        });
+        state.stats = browserlessStatsForDecision(state, decision(0, 20000000), { nowMs: at });
+        state.stats = browserlessStatsForDecision(state, decision(1000, 16147136), { nowMs: at + 1000 });
+        state.stats = browserlessStatsForOffline(state, {
+          at: new Date(at + 2000).toISOString(),
+          reason: 'death-observed',
+          stamina: { stamina1dRemainingMilli: 20000000, stamina1dLimitMilli: 20000000 }
+        }, { nowMs: at + 2000 });
+        const afterDeath = state.stats.today.staminaSpentMs;
+        const spentBeforeReset = state.stats.today.staminaSpentBeforeResetMs;
+        const resetCount = state.stats.today.staminaResetCount;
+        state.stats = browserlessStatsForDecision(state, decision(3000, 19927135), { nowMs: at + 3000 });
+        state.stats = browserlessStatsForDecision(state, decision(4000, 10315635), { nowMs: at + 4000 });
+        const compact = buildCompactBrowserlessStatus(state, { nowMs: at + 4000 });
+        state.stats = browserlessStatsForOffline(state, {
+          at: new Date(at + 5000).toISOString(),
+          reason: 'cycle-complete',
+          stamina: { stamina1dRemainingMilli: 10315635, stamina1dLimitMilli: 20000000 }
+        }, { nowMs: at + 5000 });
+        return [
+          afterDeath,
+          spentBeforeReset,
+          resetCount,
+          compact.stats.today.staminaSpentMs,
+          state.stats.today.staminaSpentMs
+        ].join('|');
+      })(),
+      want: '3852864|3852864|1|13537229|13537229'
+    },
+    {
       name: 'browserless stats ignore kill messages already present at session entry',
       got: (() => {
         const config = parseBrowserlessRunnerArgs([], {});
