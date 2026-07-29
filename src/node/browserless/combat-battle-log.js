@@ -597,7 +597,7 @@ function runCombatBattleLogSelfTest() {
     nowMs += 50;
     log.record('combat-dry-run', frame(''));
     log.recordTail('safety-trigger', {
-      reason: 'outbound-control-unresponsive',
+      reason: 'realtime-transport-degraded',
       atMs: nowMs,
       tick: 120,
       selfHp: 79

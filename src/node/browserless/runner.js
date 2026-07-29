@@ -36,9 +36,11 @@ const {
 } = require('./web-panel');
 const {
   applySingleBlockerLoginBypass,
+  inspectCanaryFrame,
   runPreLoginSnapshotSafety,
   runReadOnlyCanary
 } = require('./canary');
+const { runTransportHealthSelfTest } = require('./transport-health');
 const {
   DEFAULT_SNAPSHOT_GAP_MS,
   createHighDropPlayerTracker,
@@ -127,6 +129,15 @@ function publicConfig(config) {
     logRetentionDays: Number(config.logRetentionDays || 0),
     readOnlyProbeMs: Number(config.readOnlyProbeMs || 0),
     frameGapAlertMs: Number(config.frameGapAlertMs || 0),
+    transportHealthWindowMs: Number(config.transportHealthWindowMs || 0),
+    transportHealthActiveWarmupMs: Number(config.transportHealthActiveWarmupMs || 0),
+    transportHealthActiveHoldMs: Number(config.transportHealthActiveHoldMs || 0),
+    transportLatencyDecisionWindowMs: Number(config.transportLatencyDecisionWindowMs || 0),
+    transportLatencyExitMs: Number(config.transportLatencyExitMs || 0),
+    transportLatencyExitSustainMs: Number(config.transportLatencyExitSustainMs || 0),
+    transportFrameLossExitRate: Number(config.transportFrameLossExitRate || 0),
+    transportFrameLossExitSustainMs: Number(config.transportFrameLossExitSustainMs || 0),
+    transportFrameLossMinimumExpectedTicks: Number(config.transportFrameLossMinimumExpectedTicks || 0),
     leaveRetryMax: Number(config.leaveRetryMax || 0),
     leaveRetryMs: Number(config.leaveRetryMs || 0),
     leaveHedgeMs: Number(config.leaveHedgeMs || 0),
@@ -978,6 +989,7 @@ function browserlessLoopPlan(result, config = {}) {
   }
   if ([
     'combat-action-settlement-stalled',
+    'realtime-transport-degraded',
     'profit-live-snapshot-active-threat',
     'combat-critical-hp-leave',
     'combat-hp-disadvantage-leave',
@@ -2735,6 +2747,11 @@ async function runBrowserlessRunner(config, deps = {}) {
           openBrowserlessWs: sourceIpController.openBrowserlessWs,
           onTransportOpen,
           onTransportClose,
+          onTransportHealth: transportHealth => {
+            patchLiveState({ network: { transportHealth } }, {
+              updatedAt: new Date(now()).toISOString()
+            });
+          },
           leaveWithVerificationFallback: sourceIpController.leaveWithVerification
         });
       } catch (err) {
@@ -2818,6 +2835,13 @@ async function runBrowserlessRunner(config, deps = {}) {
         openBrowserlessWs: sourceIpController.openBrowserlessWs,
         onTransportOpen,
         onTransportClose,
+        onTransportHealth: transportHealth => {
+          patchLiveState({
+            network: { transportHealth }
+          }, {
+            updatedAt: new Date(now()).toISOString()
+          });
+        },
         leaveWithVerificationFallback: sourceIpController.leaveWithVerification,
         restartDrainCoordinator: restartDrain,
         onRestartDrainStatus: status => publishRestartDrainStatus(status),
@@ -3332,6 +3356,35 @@ async function runBrowserlessRunnerSelfTest() {
         selfKillDrop
       };
     })();
+    const transportHealth = runTransportHealthSelfTest();
+    const textFramePayload = {
+      type: 'pos',
+      tick: 123456,
+      entities: [{ user_id: 7, entity_id: 1, hp: 88, x: 100, y: 200 }],
+      bullets: []
+    };
+    const parsedTextFrame = inspectCanaryFrame(JSON.stringify(textFramePayload), { userId: 7 });
+    const parsedBinaryFrame = inspectCanaryFrame(encodeBrowserlessSelfTestFrame(textFramePayload), { userId: 7 });
+    const textFrameParsing = {
+      ok: Boolean(
+        parsedTextFrame.kind === 'text'
+          && parsedTextFrame.decodedType === parsedBinaryFrame.decodedType
+          && parsedTextFrame.decodedTick === parsedBinaryFrame.decodedTick
+          && parsedTextFrame.decodedSummary?.selfPresent === true
+          && parsedTextFrame.decodedSummary?.entityCount === parsedBinaryFrame.decodedSummary?.entityCount
+          && parsedTextFrame.jsonParseError === undefined
+      ),
+      text: {
+        type: parsedTextFrame.decodedType,
+        tick: parsedTextFrame.decodedTick,
+        summary: parsedTextFrame.decodedSummary
+      },
+      binary: {
+        type: parsedBinaryFrame.decodedType,
+        tick: parsedBinaryFrame.decodedTick,
+        summary: parsedBinaryFrame.decodedSummary
+      }
+    };
     const dryConfig = parseBrowserlessRunnerArgs(['--once', '--dry-run', '--data-dir', tmp], {});
     const dryRun = await runBrowserlessRunner(dryConfig, {
       now: () => Date.UTC(2026, 6, 8, 1, 0, 0),
@@ -3409,6 +3462,28 @@ async function runBrowserlessRunnerSelfTest() {
       '1234'
     ], {});
     const singleBlockerConfigOk = singleBlockerConfig.loginPointSingleBlockerBypassMs === 1234;
+    const transportHealthConfig = parseBrowserlessRunnerArgs([
+      '--transport-health-window-ms', '12000',
+      '--transport-health-active-warmup-ms', '1100',
+      '--transport-health-active-hold-ms', '2600',
+      '--transport-latency-decision-window-ms', '3200',
+      '--transport-latency-exit-ms', '2700',
+      '--transport-latency-exit-sustain-ms', '2100',
+      '--transport-frame-loss-exit-rate', '0.06',
+      '--transport-frame-loss-exit-sustain-ms', '2200',
+      '--transport-frame-loss-minimum-expected-ticks', '120'
+    ], {});
+    const transportHealthConfigOk = Boolean(
+      transportHealthConfig.transportHealthWindowMs === 12000
+        && transportHealthConfig.transportHealthActiveWarmupMs === 1100
+        && transportHealthConfig.transportHealthActiveHoldMs === 2600
+        && transportHealthConfig.transportLatencyDecisionWindowMs === 3200
+        && transportHealthConfig.transportLatencyExitMs === 2700
+        && transportHealthConfig.transportLatencyExitSustainMs === 2100
+        && transportHealthConfig.transportFrameLossExitRate === 0.06
+        && transportHealthConfig.transportFrameLossExitSustainMs === 2200
+        && transportHealthConfig.transportFrameLossMinimumExpectedTicks === 120
+    );
     const staleRestartDrainCleared = readBrowserlessStateFile(stateFilePath(liveConfig)).runner.restartDrain === null;
     const pendingDeadlineNowMs = Date.parse('2026-07-20T06:00:01.900Z');
     const pendingDeadline = normalizePendingExit({
@@ -3471,6 +3546,14 @@ async function runBrowserlessRunnerSelfTest() {
         runId: 'self-test-ws-closed',
         error: 'ws-closed',
         safety: { event: { reason: 'ws-closed' } }
+      }
+    }, { loopDelayMs: 30000 });
+    const transportDegradedPlan = browserlessLoopPlan({
+      ok: false,
+      canary: {
+        runId: 'self-test-transport-degraded',
+        error: 'realtime-transport-degraded',
+        safety: { event: { reason: 'realtime-transport-degraded' } }
       }
     }, { loopDelayMs: 30000 });
     const combatExitPlan = browserlessLoopPlan({
@@ -4113,7 +4196,22 @@ async function runBrowserlessRunnerSelfTest() {
       && !isStaminaExhaustionExitReasonCore('stamina-budget-coin-leave');
     const panelStatsState = {
       session: { userId: 7, sessionToken: 'panel-self-test-token' },
-      runner: { running: true, mode: 'profit-live', controlMode: 'profit-live' }
+      runner: { running: true, mode: 'profit-live', controlMode: 'profit-live' },
+      network: {
+        transportHealth: {
+          enabled: true,
+          connected: true,
+          mode: 'active',
+          modeLabel: 'active-sampling',
+          activity: { activeEvidence: true, reasons: ['combat-control'] },
+          latency: { currentMs: 168, p90Ms: 448, sampleCount: 59, decisionWindowMs: 3000, exitThresholdMs: 2500 },
+          processingQueue: { currentMs: 3, p90Ms: 12, sampleCount: 59, windowMs: 3000 },
+          frameLoss: { rate: 0.005, percent: 0.5, missingTicks: 1, expectedTicks: 200, windowMs: 10000 },
+          command: { movementP90Ms: 244, movementSampleCount: 56, shootingAckP90Ms: 877, shootingAckSampleCount: 12 },
+          frames: { count: 200, lastTick: 123456 },
+          exit: { hostilePressure: true, triggered: false, failureModes: [] }
+        }
+      }
     };
     const panelStatsDecision = (atMs, drop, coinPickups = []) => ({
       at: new Date(atMs).toISOString(),
@@ -4634,6 +4732,12 @@ async function runBrowserlessRunnerSelfTest() {
       const panelDetailTest = {
         ok: Boolean(
           pageHtml.includes('>Drop排行</h2>')
+          && pageHtml.includes('id="transportHealthMode"')
+          && pageHtml.includes('id="transportLatency"')
+          && pageHtml.includes('id="transportFrameLoss"')
+          && pageHtml.includes('帧丢失（推断）')
+          && pageHtml.includes("if (health.mode === 'paused') return '挂机暂停'")
+          && pageHtml.includes("if (health.mode === 'active') return '活跃采样'")
           && pageHtml.includes("{ text: '更新于', className: 'meta-label' }")
           && pageHtml.includes("{ text: stamp(status.highDropPlayers?.lastSnapshotAt) }")
           && pageHtml.includes("createHighDropRow('玩家名称', 'Drop', '推测额度', true)")
@@ -4684,6 +4788,10 @@ async function runBrowserlessRunnerSelfTest() {
           && panelStatsCompact.stats.today.initialDrop === 100
           && panelStatsCompact.stats.today.maxDrop === 110
           && panelStatsCompact.stats.today.latestDrop === 20
+          && panelStatsCompact.network.transportHealth.mode === 'active'
+          && panelStatsCompact.network.transportHealth.latency.p90Ms === 448
+          && panelStatsCompact.network.transportHealth.frameLoss.percent === 0.5
+          && panelStatsCompact.network.transportHealth.command.movementP90Ms === 244
           && panelSingleCoinCompact.stats.currentSession.coinsGained === 1
           && panelSingleCoinCompact.stats.today.coinsGained === 0
           && panelTwoCoinCompact.stats.currentSession.coinsGained === 2
@@ -4897,11 +5005,14 @@ async function runBrowserlessRunnerSelfTest() {
       ok: Boolean(
         dryRun.ok
         && establishedCombatLootPriorityTest.ok
+        && transportHealth.ok
+        && textFrameParsing.ok
         && liveRun.ok
         && runnerResultSummaryOk
         && statusQueueProjectionOk
         && loginPointSingleBlocker.ok
         && singleBlockerConfigOk
+        && transportHealthConfigOk
         && staleRestartDrainCleared
         && pendingDeadlineSelfTest.ok
         && /runner-dry-run/.test(text)
@@ -4909,6 +5020,8 @@ async function runBrowserlessRunnerSelfTest() {
         && !/self-test-token/.test(text)
         && wsClosedPlan.continue
         && wsClosedPlan.delayMs === 1000
+        && transportDegradedPlan.continue
+        && transportDegradedPlan.delayMs === 30000
         && combatExitPlan.continue
         && combatExitPlan.delayMs === 30000
         && restartDrainPlan.continue === false
@@ -4949,6 +5062,8 @@ async function runBrowserlessRunnerSelfTest() {
         && complexCombatMainThreadBudget.canaryOk
       ),
       establishedCombatLootPriority: establishedCombatLootPriorityTest,
+      transportHealth,
+      textFrameParsing,
       dryRun,
       liveRun,
       runnerResultSummary: {
@@ -4962,9 +5077,11 @@ async function runBrowserlessRunnerSelfTest() {
       },
       loginPointSingleBlocker,
       singleBlockerConfigOk,
+      transportHealthConfigOk,
       staleRestartDrainCleared,
       pendingDeadlineSelfTest,
       wsClosedPlan,
+      transportDegradedPlan,
       combatExitPlan,
       restartDrainPlan,
       restartDrainClosesRuntime,

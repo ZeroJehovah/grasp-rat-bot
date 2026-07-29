@@ -20500,10 +20500,71 @@ async function runSelfTest() {
           movement.thresholdMs,
           movement.thresholdSource,
           event.reason,
+          event.detail.failureModes.join(','),
           event.shouldLeave
         ].join('|');
       })(),
-      want: 'true|true|true|true|true|900|900|measured-command-delay|outbound-control-unresponsive|true'
+      want: 'true|true|true|true|true|900|900|measured-command-delay|realtime-transport-degraded|outbound-control|true'
+    },
+    {
+      name: 'browserless inbound transport degradation exits only under hostile pressure',
+      got: (() => {
+        const state = {
+          realtime: {
+            tick: 200,
+            receivedAtMs: 5000,
+            frameAgeMs: 0,
+            self: { user_id: 7, hp: 100, x: 100, y: 200, stamina_5s_remaining_milli: 6000 },
+            bullets: []
+          },
+          frameAges: { realtimeAgeMs: 0 },
+          command: {
+            movement: {
+              timing: { source: 'startup-default', p90Ticks: 5 },
+              observedVelocity: { dx: 1, dy: 0, vx: 20, vy: 0 },
+              lastRequestedDirection: { dx: 1, dy: 0 },
+              pendingVelocityCommands: []
+            },
+            shooting: { pendingShots: [], ackTimeoutMs: 3000 }
+          }
+        };
+        const transportHealth = {
+          mode: 'active',
+          exit: {
+            hostilePressure: true,
+            latencyTriggered: true,
+            frameLossTriggered: true,
+            triggered: true,
+            failureModes: ['inbound-latency', 'frame-loss']
+          }
+        };
+        const hostile = evaluateBrowserlessSafety(state, {
+          nowMs: 5000,
+          transportHealth,
+          lastDecision: {
+            kind: 'combat-live',
+            band: 'combat',
+            target: { userId: 8, name: 'enemy', firing: true }
+          }
+        });
+        const ordinary = evaluateBrowserlessSafety(state, {
+          nowMs: 5000,
+          transportHealth,
+          lastDecision: {
+            kind: 'seek-coin',
+            band: 'profit',
+            target: { kind: 'coin' }
+          }
+        });
+        return [
+          hostile.reason,
+          hostile.detail.failureModes.join(','),
+          hostile.shouldLeave,
+          ordinary.reason,
+          ordinary.ok
+        ].join('|');
+      })(),
+      want: 'realtime-transport-degraded|inbound-latency,frame-loss|true|safe|true'
     },
     {
       name: 'browserless trusted easy-kill stall uses ordinary recovery until direct threat evidence appears',
@@ -30605,7 +30666,7 @@ async function runSelfTest() {
           /function stopAutoRefresh\(\)\s*\{\s*cancelMapMarkerAnimation\(true\);/.test(panelScript)
         ].join('|');
       })(),
-      want: '2026.07.29.1|coin:0|player:alice||0|0.875|1|97.5|195.0|110|220|true|true|true|true|true|true|true|true|true|true|true'
+      want: '2026.07.29.2|coin:0|player:alice||0|0.875|1|97.5|195.0|110|220|true|true|true|true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless status server adds dynamic whitelist players by name',
@@ -31544,7 +31605,7 @@ async function runSelfTest() {
             < panelScript.indexOf("if (/combat/i.test(text)) return '正在处理打架';")
         ].join('|');
       })(),
-      want: '2026.07.29.1|true|true|true'
+      want: '2026.07.29.2|true|true|true'
     },
     {
       name: 'browserless restart drain wait explains planned service restart',
@@ -31993,7 +32054,7 @@ async function runSelfTest() {
           !panelScript.includes("setRichText('roleTitleMeta', [{ text: '已离线', className: 'muted' }], 'muted');")
         ].join('|');
       })(),
-      want: '2026.07.29.1|true|true|true|true|true|true'
+      want: '2026.07.29.2|true|true|true|true|true|true'
     },
     {
       name: 'browserless runner self-test passes',

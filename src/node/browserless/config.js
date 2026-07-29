@@ -29,6 +29,15 @@ const DEFAULTS = {
   wsConnectTimeoutMs: 10000,
   readOnlyProbeMs: 30000,
   frameGapAlertMs: 2000,
+  transportHealthWindowMs: 10000,
+  transportHealthActiveWarmupMs: 1000,
+  transportHealthActiveHoldMs: 2500,
+  transportLatencyDecisionWindowMs: 3000,
+  transportLatencyExitMs: 2500,
+  transportLatencyExitSustainMs: 2000,
+  transportFrameLossExitRate: 0.05,
+  transportFrameLossExitSustainMs: 2000,
+  transportFrameLossMinimumExpectedTicks: 100,
   leaveRetryMax: 3,
   leaveRetryMs: 200,
   leaveHedgeMs: 1000,
@@ -179,6 +188,15 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
     wsConnectTimeoutMs: numberEnv(env.GRASP_RAT_BROWSERLESS_WS_CONNECT_TIMEOUT_MS, DEFAULTS.wsConnectTimeoutMs),
     readOnlyProbeMs: numberEnv(env.GRASP_RAT_BROWSERLESS_READONLY_PROBE_MS, DEFAULTS.readOnlyProbeMs),
     frameGapAlertMs: numberEnv(env.GRASP_RAT_BROWSERLESS_FRAME_GAP_ALERT_MS, DEFAULTS.frameGapAlertMs),
+    transportHealthWindowMs: numberEnv(env.GRASP_RAT_BROWSERLESS_TRANSPORT_HEALTH_WINDOW_MS, DEFAULTS.transportHealthWindowMs),
+    transportHealthActiveWarmupMs: numberEnv(env.GRASP_RAT_BROWSERLESS_TRANSPORT_HEALTH_ACTIVE_WARMUP_MS, DEFAULTS.transportHealthActiveWarmupMs),
+    transportHealthActiveHoldMs: numberEnv(env.GRASP_RAT_BROWSERLESS_TRANSPORT_HEALTH_ACTIVE_HOLD_MS, DEFAULTS.transportHealthActiveHoldMs),
+    transportLatencyDecisionWindowMs: numberEnv(env.GRASP_RAT_BROWSERLESS_TRANSPORT_LATENCY_DECISION_WINDOW_MS, DEFAULTS.transportLatencyDecisionWindowMs),
+    transportLatencyExitMs: numberEnv(env.GRASP_RAT_BROWSERLESS_TRANSPORT_LATENCY_EXIT_MS, DEFAULTS.transportLatencyExitMs),
+    transportLatencyExitSustainMs: numberEnv(env.GRASP_RAT_BROWSERLESS_TRANSPORT_LATENCY_EXIT_SUSTAIN_MS, DEFAULTS.transportLatencyExitSustainMs),
+    transportFrameLossExitRate: numberEnv(env.GRASP_RAT_BROWSERLESS_TRANSPORT_FRAME_LOSS_EXIT_RATE, DEFAULTS.transportFrameLossExitRate),
+    transportFrameLossExitSustainMs: numberEnv(env.GRASP_RAT_BROWSERLESS_TRANSPORT_FRAME_LOSS_EXIT_SUSTAIN_MS, DEFAULTS.transportFrameLossExitSustainMs),
+    transportFrameLossMinimumExpectedTicks: numberEnv(env.GRASP_RAT_BROWSERLESS_TRANSPORT_FRAME_LOSS_MINIMUM_EXPECTED_TICKS, DEFAULTS.transportFrameLossMinimumExpectedTicks),
     leaveRetryMax: numberEnv(env.GRASP_RAT_BROWSERLESS_LEAVE_RETRY_MAX, DEFAULTS.leaveRetryMax),
     leaveRetryMs: numberEnv(env.GRASP_RAT_BROWSERLESS_LEAVE_RETRY_MS, DEFAULTS.leaveRetryMs),
     leaveHedgeMs: numberEnv(env.GRASP_RAT_BROWSERLESS_LEAVE_HEDGE_MS, DEFAULTS.leaveHedgeMs),
@@ -325,6 +343,24 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
       config.readOnlyProbeMs = numberEnv(argv[++i], config.readOnlyProbeMs);
     } else if (arg === '--frame-gap-alert-ms') {
       config.frameGapAlertMs = numberEnv(argv[++i], config.frameGapAlertMs);
+    } else if (arg === '--transport-health-window-ms') {
+      config.transportHealthWindowMs = numberEnv(argv[++i], config.transportHealthWindowMs);
+    } else if (arg === '--transport-health-active-warmup-ms') {
+      config.transportHealthActiveWarmupMs = numberEnv(argv[++i], config.transportHealthActiveWarmupMs);
+    } else if (arg === '--transport-health-active-hold-ms') {
+      config.transportHealthActiveHoldMs = numberEnv(argv[++i], config.transportHealthActiveHoldMs);
+    } else if (arg === '--transport-latency-decision-window-ms') {
+      config.transportLatencyDecisionWindowMs = numberEnv(argv[++i], config.transportLatencyDecisionWindowMs);
+    } else if (arg === '--transport-latency-exit-ms') {
+      config.transportLatencyExitMs = numberEnv(argv[++i], config.transportLatencyExitMs);
+    } else if (arg === '--transport-latency-exit-sustain-ms') {
+      config.transportLatencyExitSustainMs = numberEnv(argv[++i], config.transportLatencyExitSustainMs);
+    } else if (arg === '--transport-frame-loss-exit-rate') {
+      config.transportFrameLossExitRate = numberEnv(argv[++i], config.transportFrameLossExitRate);
+    } else if (arg === '--transport-frame-loss-exit-sustain-ms') {
+      config.transportFrameLossExitSustainMs = numberEnv(argv[++i], config.transportFrameLossExitSustainMs);
+    } else if (arg === '--transport-frame-loss-minimum-expected-ticks') {
+      config.transportFrameLossMinimumExpectedTicks = numberEnv(argv[++i], config.transportFrameLossMinimumExpectedTicks);
     } else if (arg === '--snapshot-path') {
       config.snapshotPath = argv[++i] || config.snapshotPath;
     } else if (arg === '--target-whitelist-url') {
@@ -520,6 +556,15 @@ function usage() {
     '  --session-token <token>  Manual session token, usually loaded from state later',
     '  --read-only-probe-ms <ms>  Read-only canary duration. Default: 30000',
     '  --frame-gap-alert-ms <ms>  Read-only canary frame-gap failure threshold. Default: 2000',
+    '  --transport-health-window-ms <ms>  Active inferred frame-loss window. Default: 10000',
+    '  --transport-health-active-warmup-ms <ms>  Active sampling warmup. Default: 1000',
+    '  --transport-health-active-hold-ms <ms>  Keep active sampling after control quiets. Default: 2500',
+    '  --transport-latency-decision-window-ms <ms>  Relative-latency P90 window. Default: 3000',
+    '  --transport-latency-exit-ms <ms>  Hostile active latency P90 exit threshold. Default: 2500',
+    '  --transport-latency-exit-sustain-ms <ms>  Required sustained latency breach. Default: 2000',
+    '  --transport-frame-loss-exit-rate <ratio>  Hostile active inferred-loss exit ratio. Default: 0.05',
+    '  --transport-frame-loss-exit-sustain-ms <ms>  Required sustained inferred-loss breach. Default: 2000',
+    '  --transport-frame-loss-minimum-expected-ticks <n>  Minimum active ticks before loss exit. Default: 100',
     '  --snapshot-path <path>    Snapshot path for pre-login safety. Default: /snapshot',
     '  --target-whitelist-url <url>   Browserless target whitelist URL. Default: project dist/target-whitelist.json',
     '  --target-whitelist-file <file> Local whitelist fallback. Default: ./dist/target-whitelist.json',

@@ -76,7 +76,8 @@ function defaultBrowserlessState() {
       lastSelectedAt: '',
       lastSelectionReason: '',
       lastProbe: null,
-      lastSwitch: null
+      lastSwitch: null,
+      transportHealth: null
     },
     stats: defaultBrowserlessStats(),
     logs: {
@@ -165,6 +166,7 @@ function shouldReplaceStateObject(pathParts) {
     || pathKey === 'current.action'
     || pathKey === 'current.decision'
     || pathKey === 'current.decisionState'
+    || pathKey === 'network.transportHealth'
     || pathKey === 'lastKnown.self'
     || pathKey === 'lastKnown.stamina';
 }
@@ -263,6 +265,10 @@ function normalizeBrowserlessState(state, file = '') {
   normalized.network.sourceIps = Array.isArray(normalized.network.sourceIps)
     ? normalized.network.sourceIps.map(item => String(item || '').trim()).filter(Boolean)
     : [];
+  normalized.network.transportHealth = normalized.network.transportHealth
+    && typeof normalized.network.transportHealth === 'object'
+    ? cloneJson(normalized.network.transportHealth)
+    : null;
   if (file) normalized.logs.stateFile = path.resolve(file);
   return normalized;
 }
@@ -336,6 +342,96 @@ function compactString(value, maxLength = 160) {
   const text = String(value || '');
   if (!text) return '';
   return text.length > maxLength ? text.slice(0, maxLength - 1) + '...' : text;
+}
+
+function compactTransportHealth(value) {
+  if (!value || typeof value !== 'object') return null;
+  const activity = value.activity && typeof value.activity === 'object' ? value.activity : {};
+  const latency = value.latency && typeof value.latency === 'object' ? value.latency : {};
+  const processingQueue = value.processingQueue && typeof value.processingQueue === 'object'
+    ? value.processingQueue
+    : {};
+  const frameLoss = value.frameLoss && typeof value.frameLoss === 'object' ? value.frameLoss : {};
+  const command = value.command && typeof value.command === 'object' ? value.command : {};
+  const frames = value.frames && typeof value.frames === 'object' ? value.frames : {};
+  const exit = value.exit && typeof value.exit === 'object' ? value.exit : {};
+  return {
+    enabled: value.enabled !== false,
+    connected: Boolean(value.connected),
+    mode: compactString(value.mode, 24),
+    modeLabel: compactString(value.modeLabel, 32),
+    connectedAt: compactString(value.connectedAt, 48),
+    activity: {
+      activeEvidence: Boolean(activity.activeEvidence),
+      reasons: Array.isArray(activity.reasons)
+        ? activity.reasons.map(reason => compactString(reason, 40)).filter(Boolean).slice(0, 12)
+        : [],
+      evidenceAt: compactString(activity.evidenceAt, 48),
+      activeSince: compactString(activity.activeSince, 48),
+      warmupRemainingMs: compactNumber(activity.warmupRemainingMs),
+      holdRemainingMs: compactNumber(activity.holdRemainingMs),
+      decisionKind: compactString(activity.decisionKind, 64),
+      decisionBand: compactString(activity.decisionBand, 32)
+    },
+    latency: {
+      source: compactString(latency.source, 64),
+      currentMs: compactNumber(latency.currentMs),
+      p90Ms: compactNumber(latency.p90Ms),
+      sampleCount: compactNumber(latency.sampleCount),
+      decisionWindowMs: compactNumber(latency.decisionWindowMs),
+      exitThresholdMs: compactNumber(latency.exitThresholdMs),
+      exitSustainMs: compactNumber(latency.exitSustainMs)
+    },
+    processingQueue: {
+      currentMs: compactNumber(processingQueue.currentMs),
+      p90Ms: compactNumber(processingQueue.p90Ms),
+      sampleCount: compactNumber(processingQueue.sampleCount),
+      windowMs: compactNumber(processingQueue.windowMs)
+    },
+    frameLoss: {
+      source: compactString(frameLoss.source, 64),
+      rate: compactNumber(frameLoss.rate),
+      percent: compactNumber(frameLoss.percent),
+      missingTicks: compactNumber(frameLoss.missingTicks),
+      expectedTicks: compactNumber(frameLoss.expectedTicks),
+      sampleCount: compactNumber(frameLoss.sampleCount),
+      windowMs: compactNumber(frameLoss.windowMs),
+      exitRate: compactNumber(frameLoss.exitRate),
+      exitPercent: compactNumber(frameLoss.exitPercent),
+      exitSustainMs: compactNumber(frameLoss.exitSustainMs),
+      minimumExpectedTicks: compactNumber(frameLoss.minimumExpectedTicks)
+    },
+    command: {
+      movementP90Ms: compactNumber(command.movementP90Ms),
+      movementSampleCount: compactNumber(command.movementSampleCount),
+      movementSource: compactString(command.movementSource, 80),
+      shootingAckP90Ms: compactNumber(command.shootingAckP90Ms),
+      shootingAckSampleCount: compactNumber(command.shootingAckSampleCount)
+    },
+    frames: {
+      count: compactNumber(frames.count),
+      lastAt: compactString(frames.lastAt, 48),
+      lastAgeMs: compactNumber(frames.lastAgeMs),
+      lastType: compactString(frames.lastType, 24),
+      lastTick: compactNumber(frames.lastTick),
+      duplicateTickCount: compactNumber(frames.duplicateTickCount),
+      outOfOrderTickCount: compactNumber(frames.outOfOrderTickCount),
+      tickResetCount: compactNumber(frames.tickResetCount)
+    },
+    exit: {
+      hostilePressure: Boolean(exit.hostilePressure),
+      latencyBreached: Boolean(exit.latencyBreached),
+      latencyBreachForMs: compactNumber(exit.latencyBreachForMs),
+      latencyTriggered: Boolean(exit.latencyTriggered),
+      frameLossBreached: Boolean(exit.frameLossBreached),
+      frameLossBreachForMs: compactNumber(exit.frameLossBreachForMs),
+      frameLossTriggered: Boolean(exit.frameLossTriggered),
+      triggered: Boolean(exit.triggered),
+      failureModes: Array.isArray(exit.failureModes)
+        ? exit.failureModes.map(mode => compactString(mode, 40)).filter(Boolean).slice(0, 4)
+        : []
+    }
+  };
 }
 
 function parseTimeMs(value) {
@@ -2828,7 +2924,8 @@ function buildCompactBrowserlessStatus(state, config = {}) {
       sourceIpIndex: sourceIpIndex > 0 ? sourceIpIndex : null,
       sourceIpCount: sourceIps.length,
       lastSelectedAt: normalized.network.lastSelectedAt || '',
-      lastSelectionReason: compactString(normalized.network.lastSelectionReason, 120)
+      lastSelectionReason: compactString(normalized.network.lastSelectionReason, 120),
+      transportHealth: compactTransportHealth(normalized.network.transportHealth)
     },
     recentExit,
     statusServer: {

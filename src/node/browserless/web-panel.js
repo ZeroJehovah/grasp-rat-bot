@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.29.1';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.29.2';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function mapMarkerKeyCore(kind, primary, fallback = '') {
@@ -390,6 +390,11 @@ function renderBrowserlessWebPanel() {
               <dt>刷新时间</dt><dd id="stamp">--</dd>
               <dt>出口数量</dt><dd id="sourceIpCount">--</dd>
               <dt>当前出口</dt><dd id="sourceIp">--</dd>
+              <dt>网络监控</dt><dd id="transportHealthMode">--</dd>
+              <dt>实时延迟</dt><dd id="transportLatency">--</dd>
+              <dt>本地排队</dt><dd id="transportQueue">--</dd>
+              <dt>指令延迟</dt><dd id="transportCommandLatency">--</dd>
+              <dt>帧丢失（推断）</dt><dd id="transportFrameLoss">--</dd>
             </dl>
           </div>
         </section>
@@ -657,6 +662,43 @@ function renderBrowserlessWebPanel() {
       return (index === null || index <= 0 ? '?' : String(Math.round(index)))
         + '/'
         + (total === null || total <= 0 ? '?' : String(Math.round(total)));
+    };
+    const transportModeText = health => {
+      if (!health || health.enabled === false) return '--';
+      if (!health.connected || health.mode === 'offline') return '离线';
+      if (health.mode === 'paused') return '挂机暂停';
+      if (health.mode === 'warming') {
+        const remaining = number(health.activity?.warmupRemainingMs);
+        return remaining === null ? '采样预热' : '采样预热 ' + (remaining / 1000).toFixed(1) + 's';
+      }
+      if (health.mode === 'active') return '活跃采样';
+      return '等待数据';
+    };
+    const latencyPairText = metric => {
+      const current = number(metric?.currentMs);
+      const p90 = number(metric?.p90Ms);
+      if (current === null && p90 === null) return '--';
+      return '当前 ' + (current === null ? '--' : Math.round(current))
+        + ' / P90 ' + (p90 === null ? '--' : Math.round(p90)) + 'ms';
+    };
+    const transportCommandLatencyText = command => {
+      const movement = number(command?.movementP90Ms);
+      const shooting = number(command?.shootingAckP90Ms);
+      if (movement === null && shooting === null) return '--';
+      return '移 ' + (movement === null ? '--' : Math.round(movement))
+        + ' / 射 ' + (shooting === null ? '--' : Math.round(shooting)) + 'ms';
+    };
+    const transportFrameLossText = frameLoss => {
+      const percent = number(frameLoss?.percent);
+      const missing = number(frameLoss?.missingTicks);
+      const expected = number(frameLoss?.expectedTicks);
+      if (percent === null || expected === null || expected <= 0) return '--';
+      return percent.toFixed(2) + '% (' + Math.round(missing || 0) + '/' + Math.round(expected) + ')';
+    };
+    const transportHealthClass = health => {
+      if (!health || !health.connected || health.mode === 'offline' || health.mode === 'paused') return 'muted';
+      if (health.exit?.triggered || health.exit?.latencyBreached || health.exit?.frameLossBreached) return 'bad';
+      return health.mode === 'active' ? 'ok' : 'info';
     };
     function rowKey(pair, index) {
       return String(pair?.[3] || pair?.[0] || index);
@@ -976,6 +1018,8 @@ function renderBrowserlessWebPanel() {
       'combat-low-hp-disadvantage-leave': '战斗中我方低血且落后，主动退出',
       'combat-low-hp-no-damage-leave': '战斗中我方低血且久攻未造成伤害，主动退出',
       'combat-critical-hp-leave': '战斗中我方血量进入危险线，紧急退出',
+      'realtime-transport-degraded': '战斗中实时传输持续异常，为避免失去控制，主动退出',
+      'outbound-control-unresponsive': '战斗中移动或射击指令持续失效，为避免原地承伤，主动退出',
       'combat-action-settlement-stalled': '战斗中移动指令失效，为避免原地承伤，主动退出',
       'combat-miss-close-timeout-leave': '连续 30 秒无法完成当前 10 米接近目标，为避免低效追击而主动退出',
       'combat-no-damage-generation-limit-leave': '普通收益战斗持续无伤害达到全局上限，主动退出止损',
@@ -2920,6 +2964,18 @@ function renderBrowserlessWebPanel() {
       if (stampNode) stampNode.title = '';
       setText('sourceIpCount', sourceIpCountText(s.network));
       setText('sourceIp', s.network?.sourceIp);
+      const transportHealth = s.network?.transportHealth || null;
+      setText('transportHealthMode', transportModeText(transportHealth));
+      setText('transportLatency', latencyPairText(transportHealth?.latency));
+      setText('transportQueue', latencyPairText(transportHealth?.processingQueue));
+      setText('transportCommandLatency', transportCommandLatencyText(transportHealth?.command));
+      setText('transportFrameLoss', transportFrameLossText(transportHealth?.frameLoss));
+      const transportClass = transportHealthClass(transportHealth);
+      setClass('transportHealthMode', transportClass);
+      setClass('transportLatency', transportHealth?.exit?.latencyBreached ? 'bad' : transportClass);
+      setClass('transportQueue', transportClass);
+      setClass('transportCommandLatency', transportClass);
+      setClass('transportFrameLoss', transportHealth?.exit?.frameLossBreached ? 'bad' : transportClass);
       setRichText('programRefreshMeta', [
         { text: elapsedSecondsValue(lastStatusReceivedAtMs), className: 'info' },
         { text: '/', className: 'meta-label' },

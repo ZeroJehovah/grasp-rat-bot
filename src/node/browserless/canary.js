@@ -2,7 +2,7 @@
 
 const fs = require('fs');
 const { performance } = require('perf_hooks');
-const { parseGrzFrame } = require('../../shared/grz-frame');
+const { parseGrzFrame, summarizeGrzJson } = require('../../shared/grz-frame');
 const {
   buildSnapshotProbeUrl,
   fetchWithTimeout,
@@ -22,10 +22,16 @@ const {
   summarizeBrowserlessDecision
 } = require('./decision-adapter');
 const {
+  actionSettlementStallAssessment,
   createBrowserlessSafetyController,
   createSafetyEvent,
   executeSafetyExit
 } = require('./safety-controller');
+const {
+  DEFAULT_TRANSPORT_SERVER_TICK_MS,
+  createTransportHealthMonitor,
+  realtimeTransportActivityAssessment
+} = require('./transport-health');
 const { createBrowserlessActionAdapter } = require('./action-adapter');
 const { buildLeavePendingCover } = require('./leave-pending-control');
 const {
@@ -1075,8 +1081,36 @@ async function runPreLoginSnapshotSafety(config, state, deps = {}) {
 }
 
 function inspectCanaryFrame(data, options = {}) {
+  const normalized = normalizeFrameData(data);
+  if (typeof normalized === 'string') {
+    const frame = {
+      kind: 'text',
+      byteLength: Buffer.byteLength(normalized),
+      sample: normalized.slice(0, 240),
+      format: 'JSON',
+      compression: 'none',
+      decodedByteLength: Buffer.byteLength(normalized)
+    };
+    const timings = {};
+    try {
+      let started = performance.now();
+      const json = JSON.parse(normalized);
+      timings.jsonDecodeMs = performance.now() - started;
+      frame.decodedJson = json;
+      frame.decodedJsonKeys = json && typeof json === 'object' ? Object.keys(json).slice(0, 20) : [];
+      frame.decodedType = typeof json?.type === 'string' ? json.type : '';
+      if (Number.isFinite(Number(json?.tick))) frame.decodedTick = Number(json.tick);
+      started = performance.now();
+      frame.decodedSummary = summarizeGrzJson(json, options.userId);
+      timings.summaryMs = performance.now() - started;
+    } catch (err) {
+      frame.jsonParseError = err?.message || String(err);
+    }
+    frame.decodeTimings = timings;
+    return frame;
+  }
   const buffer = frameDataToBuffer(data);
-  if (!buffer) return { kind: 'text', sample: String(normalizeFrameData(data) || '').slice(0, 240) };
+  if (!buffer) return { kind: 'text', sample: String(normalized || '').slice(0, 240) };
   const frame = {
     kind: 'binary',
     byteLength: buffer.length,
@@ -1125,7 +1159,8 @@ function buildWsFrameTrace(frame, config = {}) {
   if (frame?.kind === 'text') {
     return {
       ...base,
-      sample: redactSecrets(frame.sample || '')
+      sample: redactSecrets(frame.sample || ''),
+      ...wsTracePayloadPatch(frame?.decodedJson, config)
     };
   }
   return {
@@ -1299,6 +1334,18 @@ async function runReadOnlyCanary(config, options = {}) {
     movementSettlementFrames: config.movementSettlementFrames
   });
   safetyController.clearFrameGapSoftStop?.();
+  const transportHealthMonitor = options.transportHealthMonitor || createTransportHealthMonitor({
+    serverTickMs: config.combatServerTickMs || DEFAULT_TRANSPORT_SERVER_TICK_MS,
+    windowMs: config.transportHealthWindowMs,
+    activeWarmupMs: config.transportHealthActiveWarmupMs,
+    activeHoldMs: config.transportHealthActiveHoldMs,
+    latencyDecisionWindowMs: config.transportLatencyDecisionWindowMs,
+    latencyExitMs: config.transportLatencyExitMs,
+    latencyExitSustainMs: config.transportLatencyExitSustainMs,
+    frameLossExitRate: config.transportFrameLossExitRate,
+    frameLossExitSustainMs: config.transportFrameLossExitSustainMs,
+    frameLossMinimumExpectedTicks: config.transportFrameLossMinimumExpectedTicks
+  });
   const stats = createFrameStats(durationMs);
   const frameHealth = {
     firstFrameAtMs: 0,
@@ -1324,6 +1371,7 @@ async function runReadOnlyCanary(config, options = {}) {
     snapshotSafety: null,
     stats,
     frameHealth,
+    transportHealth: transportHealthMonitor.snapshot(startedAt),
     hotPath: createMainThreadTimingStats(options.mainThreadBudgetMs || DEFAULT_MAIN_THREAD_BUDGET_MS),
     decisions: {
       intervalMs: decisionIntervalMs,
@@ -1427,6 +1475,9 @@ async function runReadOnlyCanary(config, options = {}) {
   let snapshotObserverScheduled = false;
   let pendingSnapshotObservationRefresh = null;
   let snapshotObservationRefreshScheduled = false;
+  let lastTransportHealthPublishAtMs = 0;
+  let lastTransportHealthLogAtMs = 0;
+  let lastTransportHealthSignature = '';
   const restartDrain = options.restartDrainCoordinator || null;
   let lastRestartDrainPublishKey = '';
   const publishRestartDrainStatus = status => {
@@ -1671,6 +1722,58 @@ async function runReadOnlyCanary(config, options = {}) {
   const logWs = (type, detail) => {
     if (config.wsTraceEnabled && logStore) logStore.append('ws', type, addRunMeta(detail));
   };
+  const transportHealthSignature = status => [
+    status?.mode || '',
+    status?.exit?.hostilePressure ? 1 : 0,
+    status?.exit?.latencyBreached ? 1 : 0,
+    status?.exit?.latencyTriggered ? 1 : 0,
+    status?.exit?.frameLossBreached ? 1 : 0,
+    status?.exit?.frameLossTriggered ? 1 : 0
+  ].join('|');
+  const publishTransportHealth = (status, atMs, publishOptions = {}) => {
+    if (!status) return null;
+    const timestamp = Number(atMs || now());
+    result.transportHealth = status;
+    const signature = transportHealthSignature(status);
+    const changed = signature !== lastTransportHealthSignature;
+    const callbackDue = publishOptions.force === true
+      || changed
+      || timestamp - lastTransportHealthPublishAtMs >= 500;
+    if (callbackDue && typeof options.onTransportHealth === 'function') {
+      try {
+        options.onTransportHealth(status);
+        lastTransportHealthPublishAtMs = timestamp;
+      } catch (err) {
+        log('canary-transport-health-hook-error', { error: errorMessage(err) });
+      }
+    }
+    const logDue = changed
+      || status?.exit?.triggered
+      || (status?.mode === 'active' && timestamp - lastTransportHealthLogAtMs >= 5000);
+    if (logDue) {
+      log('transport-health', status);
+      lastTransportHealthLogAtMs = timestamp;
+    }
+    lastTransportHealthSignature = signature;
+    return status;
+  };
+  const assessTransportHealth = (currentState, atMs) => {
+    const context = {
+      actionSettlementStall: result.actions.movementStall,
+      lastDecision: result.decisions.last,
+      nowMs: atMs
+    };
+    const activity = realtimeTransportActivityAssessment(currentState, context);
+    transportHealthMonitor.updateActivity(activity, atMs);
+    const pressure = actionSettlementStallAssessment(currentState, context, {
+      movementSettlementFrames: config.movementSettlementFrames
+    });
+    return publishTransportHealth(transportHealthMonitor.assess({
+      nowMs: atMs,
+      hostilePressure: pressure.hostilePressure
+    }), atMs);
+  };
+  publishTransportHealth(result.transportHealth, startedAt, { force: true });
   const recordDeferredMainThreadTask = (taskName, started, cpuStarted, stages = {}, detail = {}) => {
     const durationMs = performance.now() - started;
     const entry = recordMainThreadTask(result.hotPath, taskName, durationMs, stages, {
@@ -1767,6 +1870,12 @@ async function runReadOnlyCanary(config, options = {}) {
     }
   };
   const clearPublishedTransport = (currentTransport, reason = 'closed') => {
+    const closedAtMs = now();
+    publishTransportHealth(
+      transportHealthMonitor.setConnected(false, closedAtMs),
+      closedAtMs,
+      { force: true }
+    );
     if (!transportPublished) return;
     transportPublished = false;
     if (typeof options.onTransportClose !== 'function') return;
@@ -2678,6 +2787,11 @@ async function runReadOnlyCanary(config, options = {}) {
         wsError = null;
         wsClosed = null;
         transportStartedAtMs = now();
+        publishTransportHealth(
+          transportHealthMonitor.setConnected(true, transportStartedAtMs),
+          transportStartedAtMs,
+          { force: true }
+        );
         logWs('open', {
           runtime: event?.runtime || '',
           transportGeneration: generation || null
@@ -2747,6 +2861,7 @@ async function runReadOnlyCanary(config, options = {}) {
           if (frameHealth.lastFrameAtMs) frameHealth.maxFrameGapMs = Math.max(frameHealth.maxFrameGapMs, atMs - frameHealth.lastFrameAtMs);
           frameHealth.lastFrameAtMs = atMs;
           const frame = inspectCanaryFrame(data, { userId: config.userId });
+          transportHealthMonitor.observeFrame(frame, { receivedAtMs: atMs });
           if (config.wsTraceEnabled) logWs('message', buildWsFrameTrace(frame, config));
           if (frame.decodeError || frame.jsonParseError) frameHealth.decodeErrors += 1;
           updateFrameStats(stats, {
@@ -2801,6 +2916,7 @@ async function runReadOnlyCanary(config, options = {}) {
             if (!frameHealth.firstFrameAtMs) frameHealth.firstFrameAtMs = atMs;
             if (frameHealth.lastFrameAtMs) frameHealth.maxFrameGapMs = Math.max(frameHealth.maxFrameGapMs, atMs - frameHealth.lastFrameAtMs);
             frameHealth.lastFrameAtMs = atMs;
+            transportHealthMonitor.observeFrame(frame, { receivedAtMs: atMs });
             if (config.wsTraceEnabled) logWs('message', buildWsFrameTrace(frame, config));
             if (frame.decodeError || frame.jsonParseError) frameHealth.decodeErrors += 1;
             updateFrameStats(stats, {
@@ -2817,6 +2933,10 @@ async function runReadOnlyCanary(config, options = {}) {
             stageDurations['frame-json-decode'] = Number(frame.decodeTimings.jsonDecodeMs || 0);
             stageDurations['frame-summary'] = Number(frame.decodeTimings.summaryMs || 0);
           }
+          transportHealthMonitor.observeProcessing({
+            receivedAtMs: atMs,
+            processedAtMs: now()
+          });
           if (frame.decodedJson) {
             stageStarted = performance.now();
             if (frame.decodedJson.type === 'snapshot') scheduleSnapshotWork(frame.decodedJson, atMs);
@@ -2972,6 +3092,7 @@ async function runReadOnlyCanary(config, options = {}) {
               noSelfGraceMs: config.noSelfGraceMs,
               staminaExhaustedBelowMs: config.staminaExhaustedBelowMs,
               actionSettlementStall: result.actions.movementStall,
+              transportHealth: assessTransportHealth(currentState, atMs),
               lastDecision: result.decisions.last,
               wsOpen: isWsOpen(transport),
               wsError,
@@ -3007,6 +3128,11 @@ async function runReadOnlyCanary(config, options = {}) {
     });
     publishTransport(transport);
     if (!transportStartedAtMs) transportStartedAtMs = now();
+    publishTransportHealth(
+      transportHealthMonitor.setConnected(true, transportStartedAtMs),
+      transportStartedAtMs,
+      { force: true }
+    );
     if (actionEnabled) {
       actionAdapter = options.actionAdapter || createBrowserlessActionAdapter({
         ...runtimeDefaults,
@@ -3033,7 +3159,8 @@ async function runReadOnlyCanary(config, options = {}) {
       const atMs = now();
       if (atMs >= deadlineAtMs) break;
       const frameGapMs = frameHealth.lastFrameAtMs ? atMs - frameHealth.lastFrameAtMs : null;
-      const safetyEvent = safetyController.evaluate(stateStore.getState(atMs), {
+      const currentState = stateStore.getDecisionState?.(atMs) || stateStore.getState(atMs);
+      const safetyEvent = safetyController.evaluate(currentState, {
         startedAtMs: noSelfGuardStartedAtMs(atMs),
         frameGapMs,
         frameGapAlertMs,
@@ -3042,6 +3169,7 @@ async function runReadOnlyCanary(config, options = {}) {
         noSelfGraceMs: config.noSelfGraceMs,
         staminaExhaustedBelowMs: config.staminaExhaustedBelowMs,
         actionSettlementStall: result.actions.movementStall,
+        transportHealth: assessTransportHealth(currentState, atMs),
         wsError,
         wsClosed,
         wsOpen: isWsOpen(transport),
@@ -3049,11 +3177,11 @@ async function runReadOnlyCanary(config, options = {}) {
         nowMs: atMs
       });
       handleSafetyAssessment(safetyEvent, {
-        state: stateStore.getDecisionState?.(atMs) || stateStore.getState(atMs),
+        state: currentState,
         decision: result.decisions.last,
         atMs
       });
-      assessRestartDrain(stateStore.getDecisionState?.(atMs) || stateStore.getState(atMs), atMs);
+      assessRestartDrain(currentState, atMs);
     }
     if (wsFrameScheduler) {
       wsFrameScheduler.flush();

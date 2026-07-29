@@ -433,6 +433,39 @@ function outboundControlHealthAssessment(state = {}, context = {}, options = {})
   };
 }
 
+function realtimeTransportHealthAssessment(state = {}, context = {}, options = {}) {
+  const outboundControl = outboundControlHealthAssessment(state, context, options);
+  const incoming = context.transportHealth && typeof context.transportHealth === 'object'
+    ? context.transportHealth
+    : null;
+  const hostilePressure = Boolean(outboundControl.hostilePressure);
+  const inboundLatency = Boolean(
+    hostilePressure
+      && incoming?.mode === 'active'
+      && incoming?.exit?.latencyTriggered
+  );
+  const frameLoss = Boolean(
+    hostilePressure
+      && incoming?.mode === 'active'
+      && incoming?.exit?.frameLossTriggered
+  );
+  const failureModes = [
+    outboundControl.triggered ? 'outbound-control' : '',
+    inboundLatency ? 'inbound-latency' : '',
+    frameLoss ? 'frame-loss' : ''
+  ].filter(Boolean);
+  return {
+    triggered: failureModes.length > 0,
+    failureModes,
+    hostilePressure,
+    directThreatPressure: Boolean(outboundControl.directThreatPressure),
+    outboundControl,
+    inbound: incoming,
+    inboundLatency,
+    frameLoss
+  };
+}
+
 function evaluateBrowserlessSafety(state = {}, context = {}, options = {}) {
   const nowMs = numberOrNull(options.nowMs ?? context.nowMs) ?? Date.now();
   const staleSelfMs = Math.max(1000, Number(options.staleSelfMs ?? context.staleSelfMs ?? DEFAULT_STALE_SELF_MS));
@@ -545,10 +578,11 @@ function evaluateBrowserlessSafety(state = {}, context = {}, options = {}) {
     }, { nowMs });
   }
 
-  const outboundControlHealth = outboundControlHealthAssessment(state, context, options);
-  if (outboundControlHealth.triggered) {
-    return createSafetyEvent('outbound-control-unresponsive', {
-      controlHealth: outboundControlHealth,
+  const transportHealth = realtimeTransportHealthAssessment(state, context, options);
+  if (transportHealth.triggered) {
+    return createSafetyEvent('realtime-transport-degraded', {
+      failureModes: transportHealth.failureModes,
+      transportHealth,
       movement: context.actionSettlementStall || null,
       lastDecision: (context.lastDecision || context.decision)
         ? decisionSafetyDetail(context.lastDecision || context.decision)
@@ -825,6 +859,7 @@ module.exports = {
   executeSafetyExit,
   frameGapRiskAssessment,
   outboundControlHealthAssessment,
+  realtimeTransportHealthAssessment,
   selfStaminaRemainingMs,
   trustedMovementLatencyMs,
   sendStopMotion
