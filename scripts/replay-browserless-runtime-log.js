@@ -88,6 +88,9 @@ function parseArgs(argv) {
     expectNewExit: false,
     trustEasyKillBeforeDamage: false,
     executionDelayTicks: 5,
+    trajectoryRouteSelectionMode: 'weighted',
+    trajectoryImprovementGate: true,
+    trajectoryRouteSequencePhase: 0,
     cutoffAt: '',
     expectCases: 0,
     expectTailLoss: null,
@@ -112,6 +115,9 @@ function parseArgs(argv) {
     else if (arg === '--expect-new-exit') options.expectNewExit = true;
     else if (arg === '--trust-easy-kill-before-damage') options.trustEasyKillBeforeDamage = true;
     else if (arg === '--execution-delay-ticks') options.executionDelayTicks = Number(argv[++index] || 5);
+    else if (arg === '--trajectory-route-selection-mode') options.trajectoryRouteSelectionMode = String(argv[++index] || 'weighted');
+    else if (arg === '--trajectory-improvement-gate') options.trajectoryImprovementGate = String(argv[++index] || 'on') !== 'off';
+    else if (arg === '--trajectory-route-sequence-phase') options.trajectoryRouteSequencePhase = Number(argv[++index] || 0);
     else if (arg === '--cutoff-at') options.cutoffAt = String(argv[++index] || '');
     else if (arg === '--expect-cases') options.expectCases = Number(argv[++index] || 0);
     else if (arg === '--expect-tail-loss') options.expectTailLoss = Number(argv[++index]);
@@ -233,6 +239,19 @@ function optionalNumberOrNull(value) {
   return numberOrNull(value);
 }
 
+function normalizedReplayCombatEntity(value = {}) {
+  const source = value && typeof value === 'object' ? value : {};
+  const stamina5s = source.stamina_5s_remaining_milli
+    ?? source.stamina5sRemainingMilli
+    ?? source.stamina5s;
+  return {
+    ...source,
+    ...(stamina5s === null || stamina5s === undefined
+      ? {}
+      : { stamina_5s_remaining_milli: stamina5s })
+  };
+}
+
 function normalizeVector(dx, dy) {
   const length = Math.hypot(Number(dx) || 0, Number(dy) || 0);
   if (!(length > 0)) return { x: 0, y: 0 };
@@ -313,22 +332,34 @@ function theoreticalShotMinimumMiss(rows, ack) {
   return minimum;
 }
 
+const confirmedShotAckCache = new Map();
+
+function confirmedShotAcksForFile(wsFile) {
+  const resolved = path.resolve(wsFile);
+  if (confirmedShotAckCache.has(resolved)) return confirmedShotAckCache.get(resolved);
+  const shots = [];
+  forEachJsonlEntry(resolved, entry => {
+    const at = Date.parse(entry?.at || '');
+    const ack = entry?.detail?.decodedSummary?.ack;
+    if (!Number.isFinite(at) || !ack) return;
+    shots.push({ at, ack });
+  });
+  confirmedShotAckCache.set(resolved, shots);
+  return shots;
+}
+
 function confirmedShotsForRows(options, rows) {
   if (!rows.length) return [];
-  const wsFile = options.wsFile || path.join(path.dirname(options.file), 'ws.jsonl');
+  const wsFile = options.wsFile || movementReplayLogFiles(options).wsFile;
   if (!fs.existsSync(wsFile)) return [];
   const firstAt = Date.parse(rows[0].entry.at) - 3000;
   const lastAt = Date.parse(rows[rows.length - 1].entry.at) + 3000;
   const selfId = String(rows[0].detail.self?.userId ?? '');
-  const shots = [];
-  forEachJsonlEntry(wsFile, entry => {
-    const at = Date.parse(entry?.at || '');
-    if (!Number.isFinite(at) || at < firstAt || at > lastAt) return;
-    const ack = entry?.detail?.decodedSummary?.ack;
-    if (!ack || String(ack.owner_user_id ?? '') !== selfId) return;
-    shots.push({ at, ack });
-  });
-  return shots;
+  return confirmedShotAcksForFile(wsFile).filter(shot => (
+    shot.at >= firstAt
+      && shot.at <= lastAt
+      && String(shot.ack.owner_user_id ?? '') === selfId
+  ));
 }
 
 function combatDamageEvents(rows) {
@@ -605,6 +636,8 @@ function replayCombat(options) {
       distance: item.detail.target?.distance
     }));
     state.motionSamples = history;
+    const replaySelf = normalizedReplayCombatEntity(row.detail.self);
+    const replayTarget = normalizedReplayCombatEntity(row.detail.target);
     let replayBehavior = null;
     for (const sample of history) {
       replayBehavior = updateOpponentBehaviorStateCore(replayBehavior, {
@@ -615,13 +648,15 @@ function replayCombat(options) {
         targetHp: row.detail.target?.hp
       }, { nowMs: sample.at, windowMs: 12000 });
     }
-    state.opponentBehaviorState = row.detail.behavior?.mode
+    const loggedBehavior = row.detail.behavior && typeof row.detail.behavior === 'object'
+      ? row.detail.behavior
+      : null;
+    state.opponentBehaviorState = loggedBehavior?.mode
       ? {
           ...replayBehavior,
-          mode: row.detail.behavior.mode,
-          confidence: row.detail.behavior.confidence,
-          recentHitRate: row.detail.behavior.recentHitRate,
-          responsePolicy: opponentResponsePolicyCore(row.detail.behavior.mode, {
+          ...loggedBehavior,
+          metrics: loggedBehavior.metrics || replayBehavior?.metrics || null,
+          responsePolicy: loggedBehavior.responsePolicy || opponentResponsePolicyCore(loggedBehavior.mode, {
             distance: row.detail.target?.distance,
             nowMs: Date.parse(row.entry.at)
           })
@@ -637,7 +672,7 @@ function replayCombat(options) {
       || null;
     const replayExecutionDelayTicks = numberOrNull(row.detail.aim?.timing?.executionDelayTicks)
       ?? options.executionDelayTicks;
-    const recomputedAim = estimateAim(row.detail.self, row.detail.target, {
+    const recomputedAim = estimateAim(replaySelf, replayTarget, {
       combatTargetState: state,
       observedTick: row.detail.tick,
       executionTiming: {
@@ -646,7 +681,12 @@ function replayCombat(options) {
         madTicks: 0,
         source: 'logged-frame-execution-delay'
       },
-      actualShots: shotEvaluations.length
+      actualShots: shotEvaluations.length,
+      // The legacy fixed four-route rotation is intentionally available only
+      // to this offline replay path so the production weighted selector can
+      // be compared on identical accepted-shot opportunities.
+      trajectoryRouteSelectionMode: options.trajectoryRouteSelectionMode,
+      combatDynamicRouteSequencePhase: options.trajectoryRouteSequencePhase
     });
     const replayDynamicBehaviorEligible = dynamicBehaviorTrajectoryEligibilityCore(
       state.opponentBehaviorState || replayBehavior
@@ -686,7 +726,7 @@ function replayCombat(options) {
           },
           predictedTargetAtCreation: improved.predictedTargetAtCreation,
           baselineAim: { x: Number(improved.x), y: Number(improved.y) },
-          target: row.detail.target,
+          target: replayTarget,
           routeCandidates: improved.routeCoverage.candidates,
           existingShots: trajectoryCoverageVirtualShots
         }, {
@@ -707,7 +747,9 @@ function replayCombat(options) {
       successfulAimProtected: coverageSuccessfulAimProtected,
       planActive: coveragePlan?.active === true,
       hasSelection: Boolean(coveragePlan?.selected),
-      improvementQualified: coveragePlan?.selected?.improvementQualified === true
+      improvementQualified: options.trajectoryImprovementGate === false
+        ? true
+        : coveragePlan?.selected?.improvementQualified === true
     });
     const coverageAim = coverageApplied
       ? { x: coveragePlan.selected.aimX, y: coveragePlan.selected.aimY }
@@ -1048,6 +1090,8 @@ function replayCombat(options) {
   };
   const trajectoryCoverageHits = trajectoryCoverageMisses.filter(value => value <= options.hitRadius).length;
   const trajectoryCoverageReplay = {
+    routeSelectionMode: options.trajectoryRouteSelectionMode || 'weighted',
+    improvementGate: options.trajectoryImprovementGate !== false,
     shots: trajectoryCoverageMisses.length,
     activeShots: trajectoryCoverageActiveShots,
     fallbackShots: trajectoryCoverageFallbackShots,

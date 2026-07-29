@@ -6,6 +6,8 @@ const DEFAULT_HIT_RADIUS_CM = 90;
 const DEFAULT_TARGET_SPEED_CM_PER_TICK = 50;
 const DEFAULT_CONTROL_INTERVAL_TICKS = 4;
 const DEFAULT_MINIMUM_MARGINAL_COVERAGE = 0.02;
+const DEFAULT_DYNAMIC_EXPLORATION_INTERVAL = 8;
+const DEFAULT_DYNAMIC_EXPLORATION_LIMIT = 4;
 const COVERAGE_MODES = new Set(['off', 'shadow', 'live-single', 'live-volley']);
 
 function normalizeTrajectoryCoverageMode(value, fallback = 'shadow') {
@@ -20,7 +22,12 @@ function shouldApplyTrajectoryCoverageCore(input = {}) {
     && (input.highEntropy === true || input.dynamicBehaviorEligible === true)
     && input.successfulAimProtected !== true
     && input.planActive === true
-    && input.hasSelection === true;
+    && input.hasSelection === true
+    // A coverage candidate may add geometric diversity without improving the
+    // expected miss over the normal intercept. Live mode is allowed to alter
+    // the aim point only when that separate improvement test passed. Shadow
+    // mode deliberately remains observable regardless of this gate.
+    && input.improvementQualified === true;
 }
 
 function dynamicBehaviorTrajectoryEligibilityCore(behavior = {}, options = {}) {
@@ -40,6 +47,131 @@ function dynamicBehaviorTrajectoryEligibilityCore(behavior = {}, options = {}) {
 function finiteNumber(value, fallback = null) {
   const number = Number(value);
   return Number.isFinite(number) ? number : fallback;
+}
+
+function normalizedDynamicRouteSelectionMode(value) {
+  // `legacy-fixed` exists only for deterministic offline counterfactual
+  // comparison. Production callers use the weighted selector by default.
+  return String(value || '').trim().toLowerCase() === 'legacy-fixed'
+    ? 'legacy-fixed'
+    : 'weighted';
+}
+
+function dynamicRouteCandidateWeight(candidate = {}, input = {}) {
+  const probability = Math.max(0.0001, finiteNumber(candidate.probability, 0));
+  const priorProbability = Math.max(0.0001, finiteNumber(candidate.priorProbability, probability));
+  const localSamples = Math.max(0, finiteNumber(candidate.localTransitionSamples, 0));
+  const globalSamples = Math.max(0, finiteNumber(candidate.globalTransitionSamples, 0));
+  const localProbability = Math.max(0, finiteNumber(candidate.localTransitionProbability, 0));
+  const globalProbability = Math.max(0, finiteNumber(candidate.globalTransitionProbability, 0));
+  const localEvidence = localProbability * Math.min(1, localSamples / 12);
+  const globalEvidence = globalProbability * Math.min(1, globalSamples / 24);
+  const learnedHitRate = finiteNumber(candidate.learnedHitRate);
+  const learnedMeanMissCm = finiteNumber(candidate.learnedMeanMissCm);
+  const feedbackSamples = Math.max(0, finiteNumber(candidate.feedbackSamples, 0));
+  const feedbackConfidence = Math.min(1, feedbackSamples / 12);
+  const hitQuality = learnedHitRate === null ? 0.5 : clamp(learnedHitRate, 0, 1);
+  const missQuality = learnedMeanMissCm === null
+    ? 0.5
+    : clamp(1 / (1 + Math.max(0, learnedMeanMissCm) / 450), 0, 1);
+  const feedbackQuality = (hitQuality * 0.65 + missQuality * 0.35);
+  const transitionQuality = localEvidence * 0.58 + globalEvidence * 0.42;
+  const transitionConfidence = Math.max(
+    Math.min(1, localSamples / 12),
+    Math.min(1, globalSamples / 24)
+  );
+  const predictionHorizonTicks = Math.max(1, finiteNumber(input.predictionHorizonTicks, 1));
+  // Movement transitions are sampled every realtime tick. A one-step
+  // self-transition probability must not be treated as the endpoint
+  // probability of a bullet that arrives tens of ticks later. Blend it back
+  // toward the route prior as the ballistic horizon grows; exact route-aim
+  // feedback remains eligible to calibrate that long-horizon prior.
+  const transitionInfluence = transitionConfidence / (predictionHorizonTicks * predictionHorizonTicks);
+  const ballisticProbability = priorProbability * (1 - transitionInfluence)
+    + probability * transitionInfluence;
+  const selectionWeight = ballisticProbability * (
+    1 + feedbackConfidence * (feedbackQuality - 0.5) * 0.80
+  );
+  return {
+    probability,
+    priorProbability,
+    localEvidence,
+    globalEvidence,
+    transitionQuality,
+    transitionConfidence,
+    transitionInfluence,
+    predictionHorizonTicks,
+    ballisticProbability,
+    feedbackConfidence,
+    feedbackQuality,
+    selectionWeight: Math.max(0.000001, selectionWeight)
+  };
+}
+
+function rankedDynamicRouteCandidates(candidates = [], input = {}) {
+  return (Array.isArray(candidates) ? candidates : [])
+    .filter(candidate => candidate && Number.isFinite(Number(candidate.x)) && Number.isFinite(Number(candidate.y)))
+    .map(candidate => ({ ...candidate, ...dynamicRouteCandidateWeight(candidate, input) }))
+    .sort((left, right) => right.selectionWeight - left.selectionWeight
+      || right.probability - left.probability
+      || String(left.hypothesis || '').localeCompare(String(right.hypothesis || '')));
+}
+
+function deterministicWeightedCandidate(candidates = [], ordinal = 0, phase = 0) {
+  if (!candidates.length) return null;
+  const total = candidates.reduce((sum, candidate) => sum + Math.max(0, Number(candidate.selectionWeight || 0)), 0);
+  if (!(total > 0)) return candidates[0] || null;
+  // A low-discrepancy stride gives each alternative its probability-weighted
+  // share without a random source or an identity-derived branch.
+  const normalizedPhase = ((finiteNumber(phase, 0) % 1) + 1) % 1;
+  const fraction = (normalizedPhase
+    + Math.max(0, Math.floor(Number(ordinal || 0))) * 0.6180339887498949) % 1;
+  let remaining = fraction * total;
+  for (const candidate of candidates) {
+    remaining -= Math.max(0, Number(candidate.selectionWeight || 0));
+    if (remaining <= 0) return candidate;
+  }
+  return candidates.at(-1) || null;
+}
+
+function selectDynamicRouteCandidateCore(candidates = [], input = {}) {
+  const ranked = rankedDynamicRouteCandidates(candidates, input);
+  const primary = ranked[0] || null;
+  const shotIndex = Math.max(0, Math.floor(finiteNumber(input.acceptedShotIndex, 0)));
+  const interval = Math.max(2, Math.floor(finiteNumber(
+    input.explorationInterval,
+    DEFAULT_DYNAMIC_EXPLORATION_INTERVAL
+  )));
+  const limit = Math.max(0, Math.floor(finiteNumber(
+    input.explorationLimit,
+    DEFAULT_DYNAMIC_EXPLORATION_LIMIT
+  )));
+  const explorationOrdinal = Math.floor((shotIndex + 1) / interval) - 1;
+  const alternatives = ranked.slice(1);
+  const sequencePhase = finiteNumber(input.sequencePhase, 0);
+  const explorationAllowed = Boolean(
+    alternatives.length
+      && explorationOrdinal >= 0
+      && explorationOrdinal < limit
+      && (shotIndex + 1) % interval === 0
+  );
+  const selected = explorationAllowed
+    ? deterministicWeightedCandidate(alternatives, explorationOrdinal, sequencePhase)
+    : deterministicWeightedCandidate(ranked, shotIndex, sequencePhase);
+  return {
+    selected,
+    primary,
+    ranked,
+    selectionMode: explorationAllowed ? 'bounded-exploration' : 'weighted-sample',
+    explorationInterval: interval,
+    explorationLimit: limit,
+    sequencePhase,
+    explorationOrdinal: explorationAllowed ? explorationOrdinal : null,
+    explorationAllowed,
+    explorationCountRemaining: explorationAllowed
+      ? Math.max(0, limit - explorationOrdinal - 1)
+      : Math.max(0, limit - Math.max(0, explorationOrdinal + 1))
+  };
 }
 
 function clamp(value, min, max) {
@@ -543,8 +675,12 @@ function buildTrajectoryCoveragePlanCore(input = {}, options = {}) {
 module.exports = {
   buildTrajectoryCoveragePlanCore,
   buildTrajectoryPathsCore,
+  dynamicRouteCandidateWeight,
   dynamicBehaviorTrajectoryEligibilityCore,
   normalizeTrajectoryCoverageMode,
+  normalizedDynamicRouteSelectionMode,
+  rankedDynamicRouteCandidates,
+  selectDynamicRouteCandidateCore,
   shouldApplyTrajectoryCoverageCore,
   shotCorridorMissCore
 };

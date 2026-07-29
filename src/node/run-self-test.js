@@ -121,6 +121,10 @@ const {
   evaluateHighEntropyFireGateCore,
   updateCloseBandReserveCore
 } = require('../strategy/combat-fire-discipline');
+const {
+  selectDynamicRouteCandidateCore,
+  shouldApplyTrajectoryCoverageCore
+} = require('../strategy/combat-shot-coverage');
 const { updatePostAttackSettlementCore } = require('../strategy/post-attack-drop');
 const {
   actionSettlementStallAssessment,
@@ -5854,10 +5858,14 @@ async function runSelfTest() {
           commands.includes('shoot'),
           recoverySnapshotConfig.snapshotEdgeEnabled,
           recoverySnapshotConfig.loginPointSafetySuccessRequired,
-          recoverySnapshotConfig.loginPointSafetyProbeIntervalMs
+          recoverySnapshotConfig.loginPointSafetyProbeIntervalMs,
+          result.recovery.exitOutcomes.find(item => item.exitAttemptId === pendingExit.exitAttemptId)?.outcome,
+          result.recovery.exitOutcomes.find(item => item.exitAttemptId !== pendingExit.exitAttemptId)?.outcome,
+          result.recovery.exitOutcomes.find(item => item.exitAttemptId !== pendingExit.exitAttemptId)?.recoveredFromExitAttemptId === pendingExit.exitAttemptId,
+          result.recovery.exitOutcomes.find(item => item.exitAttemptId !== pendingExit.exitAttemptId)?.httpStatuses.join(',')
         ].join('|');
       })(),
-      want: 'exit-recovery|true|exit-recovery|true|0|0|false|false|1|0'
+      want: 'exit-recovery|true|exit-recovery|true|0|0|false|false|1|0|self-present-recovered|confirmed-absent|true|200'
     },
     {
       name: 'browserless pending exit websocket failure remains exit-only and immediately retryable',
@@ -5893,6 +5901,118 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'exit-recovery|true|websocket connect timeout|0|0'
+    },
+    {
+      name: 'browserless stale pending-exit snapshot retries the same audit chain',
+      got: (async () => {
+        let t = Date.parse('2026-07-20T06:15:00.000Z');
+        let wsOpened = false;
+        const pendingExit = pendingExitFromCanary(null, {
+          runId: 'prior-stale-snapshot-exit',
+          startedAt: new Date(t - 1000).toISOString(),
+          error: 'leave not confirmed',
+          safety: { event: { reason: 'ws-closed', shouldLeave: true, at: new Date(t - 900).toISOString() } },
+          leave: {
+            ok: false,
+            error: 'HTTP 502',
+            attempts: [{ status: 502 }, { status: 502 }, { status: 502 }, { status: 502 }]
+          }
+        }, t);
+        const result = await runReadOnlyCanary({
+          gameOrigin: 'https://self-test.invalid', userId: 7, sessionToken: 'pending-exit-token',
+          readOnly: false, controlMode: 'profit-live', combatEnabled: true,
+          readOnlyProbeMs: 100, wsConnectTimeoutMs: 100
+        }, {
+          now: () => t,
+          sleep: async ms => { t += Number(ms || 0); },
+          persistedState: { runner: { pendingExit } },
+          runPreLoginSnapshotSafety: async () => ({
+            ok: false,
+            reason: 'snapshot-self-absence-unconfirmed',
+            satisfied: false,
+            response: { summary: { selfPresent: null, freshness: { ok: false } } }
+          }),
+          openBrowserlessWs: async () => {
+            wsOpened = true;
+            throw new Error('websocket connect timeout');
+          },
+          leaveWithVerification: async () => ({
+            ok: false,
+            error: 'HTTP 502',
+            attempts: [{ status: 502 }, { status: 502 }, { status: 502 }, { status: 502 }]
+          })
+        });
+        const persisted = pendingExitFromCanary(pendingExit, result, t);
+        return [
+          persisted?.exitAttemptId === pendingExit.exitAttemptId,
+          persisted?.attemptCount,
+          persisted?.requestAttemptCount,
+          persisted?.httpStatuses.join(','),
+          result.recovery.exitOutcomes.length,
+          result.safety.event?.detail?.continuePendingExit,
+          result.actions.shootSentCount,
+          wsOpened
+        ].join('|');
+      })(),
+      want: 'true|2|8|502,502,502,502,502,502,502,502|0|true|0|false'
+    },
+    {
+      name: 'browserless expired pending exit records timeout and renews a protected leave chain',
+      got: (async () => {
+        let t = Date.parse('2026-07-20T06:20:00.000Z');
+        let wsOpened = false;
+        const oldPending = pendingExitFromCanary(null, {
+          runId: 'expired-exit-chain',
+          startedAt: new Date(t - 5000).toISOString(),
+          error: 'leave not confirmed',
+          safety: { event: { reason: 'frame-gap', shouldLeave: true, at: new Date(t - 4900).toISOString() } },
+          leave: {
+            ok: false,
+            error: 'HTTP 502',
+            attempts: [{ status: 502 }, { status: 502 }, { status: 502 }, { status: 502 }]
+          }
+        }, t - 4000);
+        const result = await runReadOnlyCanary({
+          gameOrigin: 'https://self-test.invalid', userId: 7, sessionToken: 'pending-exit-token',
+          readOnly: false, controlMode: 'profit-live', combatEnabled: true,
+          readOnlyProbeMs: 100, wsConnectTimeoutMs: 100
+        }, {
+          now: () => t,
+          sleep: async ms => { t += Number(ms || 0); },
+          pendingExitPersistMaxMs: 1000,
+          persistedState: { runner: { pendingExit: oldPending } },
+          runPreLoginSnapshotSafety: async () => ({
+            ok: false,
+            reason: 'snapshot-self-absence-unconfirmed',
+            satisfied: false,
+            response: { summary: { selfPresent: null, freshness: { ok: false } } }
+          }),
+          openBrowserlessWs: async () => {
+            wsOpened = true;
+            throw new Error('websocket connect timeout');
+          },
+          leaveWithVerification: async () => ({
+            ok: false,
+            error: 'HTTP 502',
+            attempts: [{ status: 502 }, { status: 502 }, { status: 502 }, { status: 502 }]
+          })
+        });
+        const timeout = result.recovery.exitOutcomes.find(item => item.exitAttemptId === oldPending.exitAttemptId);
+        const persisted = pendingExitFromCanary(oldPending, result, t, { maximumAgeMs: 1000 });
+        return [
+          timeout?.outcome,
+          timeout?.reloginAllowed,
+          persisted?.exitAttemptId !== oldPending.exitAttemptId,
+          persisted?.recoveredFromExitAttemptId === oldPending.exitAttemptId,
+          persisted?.attemptCount,
+          persisted?.requestAttemptCount,
+          persisted?.httpStatuses.join(','),
+          result.safety.event?.classification,
+          result.actions.shootSentCount,
+          wsOpened
+        ].join('|');
+      })(),
+      want: 'timeout-unconfirmed|false|true|true|1|4|502,502,502,502|exit-recovery|0|false'
     },
     {
       name: 'strategy module self-tests pass',
@@ -17090,7 +17210,86 @@ async function runSelfTest() {
       want: 'high-entropy-robust-stop|stop|stop|high-entropy-bounded-exploration|continue|2'
     },
     {
-      name: 'browserless dynamic zigzag and retreat aim rotate four bounded routes',
+      name: 'browserless trajectory coverage live mode requires qualified aim improvement without changing fire authorization',
+      got: (() => {
+        const shared = {
+          mode: 'live-single',
+          highEntropy: true,
+          dynamicBehaviorEligible: false,
+          successfulAimProtected: false,
+          planActive: true,
+          hasSelection: true
+        };
+        return [
+          shouldApplyTrajectoryCoverageCore({ ...shared, improvementQualified: false }),
+          shouldApplyTrajectoryCoverageCore({ ...shared, improvementQualified: true }),
+          shouldApplyTrajectoryCoverageCore({ ...shared, mode: 'shadow', improvementQualified: true })
+        ].join('|');
+      })(),
+      want: 'false|true|false'
+    },
+    {
+      name: 'browserless dynamic route selector weights probabilities and limits exploration without fixed rotation',
+      got: (() => {
+        const candidates = [
+          {
+            hypothesis: 'continue', x: 100, y: 0, probability: 0.72,
+            localTransitionProbability: 0.75, localTransitionSamples: 16,
+            globalTransitionProbability: 0.7, globalTransitionSamples: 40,
+            learnedHitRate: 0.6, learnedMeanMissCm: 120, feedbackSamples: 16
+          },
+          {
+            hypothesis: 'stop', x: 0, y: 0, probability: 0.16,
+            localTransitionProbability: 0.12, localTransitionSamples: 16,
+            globalTransitionProbability: 0.15, globalTransitionSamples: 40,
+            learnedHitRate: 0.35, learnedMeanMissCm: 500, feedbackSamples: 16
+          },
+          {
+            hypothesis: 'left-turn', x: 0, y: 100, probability: 0.08,
+            localTransitionProbability: 0.08, localTransitionSamples: 16,
+            globalTransitionProbability: 0.1, globalTransitionSamples: 40,
+            learnedHitRate: 0.2, learnedMeanMissCm: 800, feedbackSamples: 16
+          },
+          {
+            hypothesis: 'reverse', x: -100, y: 0, probability: 0.04,
+            localTransitionProbability: 0.05, localTransitionSamples: 16,
+            globalTransitionProbability: 0.05, globalTransitionSamples: 40,
+            learnedHitRate: 0.1, learnedMeanMissCm: 1000, feedbackSamples: 16
+          }
+        ];
+        const selections = Array.from({ length: 64 }, (_, acceptedShotIndex) => (
+          selectDynamicRouteCandidateCore(candidates, {
+            acceptedShotIndex,
+            explorationInterval: 8,
+            explorationLimit: 4
+          })
+        ));
+        const primary = selections.filter(item => item.selectionMode === 'weighted-sample');
+        const exploration = selections.filter(item => item.selectionMode === 'bounded-exploration');
+        const weightedCounts = primary.reduce((counts, item) => {
+          const key = String(item.selected?.hypothesis || '');
+          counts.set(key, Number(counts.get(key) || 0) + 1);
+          return counts;
+        }, new Map());
+        const continueCount = Number(weightedCounts.get('continue') || 0);
+        const alternativeMax = Math.max(0, ...Array.from(weightedCounts.entries())
+          .filter(([key]) => key !== 'continue')
+          .map(([, count]) => Number(count || 0)));
+        return [
+          selections[0].selected?.hypothesis,
+          primary.length,
+          exploration.length,
+          exploration.every(item => item.selected?.hypothesis !== item.primary?.hypothesis),
+          exploration.map(item => item.explorationOrdinal).join(','),
+          continueCount > alternativeMax,
+          selections[32].selectionMode,
+          selections[33].selectionMode
+        ].join('|');
+      })(),
+      want: 'continue|60|4|true|0,1,2,3|true|weighted-sample|weighted-sample'
+    },
+    {
+      name: 'browserless dynamic zigzag and retreat aim use weighted primary routes with bounded exploration',
       got: (() => {
         const self = { user_id: 7, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 };
         const target = { user_id: 8, x: 8000, y: 0, vx: 50, vy: 0, hp: 80, active: true };
@@ -17130,27 +17329,32 @@ async function runSelfTest() {
             }
           }
         );
-        const zigzag = [0, 1, 2, 3].map(shots => run('zigzag-strafe', shots));
-        const retreat = [0, 1, 2, 3].map(shots => run('retreat-kite', shots));
+        const zigzag = [0, 1, 7, 8].map(shots => run('zigzag-strafe', shots));
+        const retreat = [0, 1, 7, 8].map(shots => run('retreat-kite', shots));
         const lowConfidence = run('zigzag-strafe', 0, 0.69);
         const stationary = run('stationary', 0, 0.95);
         const unaffordable = run('zigzag-strafe', 0, 0.8, 2000);
         return [
           zigzag[0].routeCoverage?.style,
-          zigzag.map(item => item.routeCoverage?.selected).join(','),
-          zigzag[0].routeCoverage?.sequence?.join(','),
+          zigzag.every(item => Boolean(item.routeCoverage?.selected)),
+          zigzag.map(item => item.routeCoverage?.selection?.mode).join(','),
+          zigzag[2].routeCoverage?.selection?.explorationOrdinal,
+          zigzag[2].routeCoverage?.selected !== zigzag[2].routeCoverage?.candidates?.[0]?.hypothesis,
+          run('zigzag-strafe', 0).routeCoverage?.selected === zigzag[0].routeCoverage?.selected,
           retreat[0].routeCoverage?.style,
-          retreat.map(item => item.routeCoverage?.selected).join(','),
+          retreat.every(item => Boolean(item.routeCoverage?.selected)),
+          retreat.map(item => item.routeCoverage?.selection?.mode).join(','),
+          retreat[2].routeCoverage?.selected !== retreat[2].routeCoverage?.candidates?.[0]?.hypothesis,
           lowConfidence.routeCoverage?.dynamicBehaviorEligible === true,
           stationary.routeCoverage?.dynamicBehaviorEligible === true,
           unaffordable.routeCoverage === null,
           unaffordable.fireRiskClassification?.affordabilityDegraded === true
         ].join('|');
       })(),
-      want: 'dynamic-behavior-zigzag-strafe|continue,stop,right-turn,reverse|continue,stop,right-turn,reverse|dynamic-behavior-retreat-kite|continue,stop,right-turn,reverse|false|false|true|true'
+      want: 'dynamic-behavior-weighted-zigzag-strafe|true|weighted-sample,weighted-sample,bounded-exploration,weighted-sample|0|true|true|dynamic-behavior-weighted-retreat-kite|true|weighted-sample,weighted-sample,bounded-exploration,weighted-sample|true|false|false|true|true'
     },
     {
-      name: 'browserless trajectory coverage stays shadow and live-single requires aim improvement',
+      name: 'browserless trajectory coverage stays shadow and rejects unqualified live aim without changing fire',
       got: (() => {
         const run = (mode, highEntropy = true) => {
           const nowMs = 20000;
@@ -17278,10 +17482,12 @@ async function runSelfTest() {
           live.aim.x === live.aim.trajectoryCoverage.selected?.aimX,
           live.aim.y === live.aim.trajectoryCoverage.selected?.aimY,
           learnedLowEntropy.aim.trajectoryCoverage.applied,
-          learnedLowEntropy.aim.trajectoryCoverage.reason
+          learnedLowEntropy.aim.trajectoryCoverage.reason,
+          shadow.shooting.wouldShoot === live.shooting.wouldShoot,
+          shadow.shooting.reserve === live.shooting.reserve
         ].join('|');
       })(),
-      want: 'shadow|false|stop|live-single|true|true|live-single-applied|true|true|false|coverage-evidence-not-ready'
+      want: 'shadow|false|stop|live-single|false|false|live-single-insufficient-aim-improvement|true|true|false|coverage-evidence-not-ready|true|true'
     },
     {
       name: 'browserless fire-risk classification survives unaffordable route coverage',

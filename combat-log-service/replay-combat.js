@@ -3,6 +3,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const zlib = require('zlib');
 
 const DEFAULTS = {
   hitRadiusCm: 90,
@@ -158,7 +159,7 @@ function unit(v) {
 
 function sameTarget(entity, options) {
   if (!entity) return false;
-  const id = entity.id ?? entity.user_id;
+  const id = entity.id ?? entity.user_id ?? entity.userId;
   if (options.targetId && id !== null && id !== undefined && String(id) === options.targetId) return true;
   return Boolean(options.targetName && String(entity.name || '') === options.targetName);
 }
@@ -382,6 +383,94 @@ function cloneShotWithSimulatedSelf(shot, simulatedSelfSamples) {
   };
 }
 
+function normalizedCombatEntity(value = {}) {
+  const source = value && typeof value === 'object' ? value : {};
+  const id = source.id ?? source.user_id ?? source.userId ?? source.entity_id ?? source.entityId;
+  const stamina5s = source.stamina_5s_remaining_milli ?? source.stamina5sRemainingMilli ?? source.stamina5s;
+  return {
+    ...source,
+    ...(id === null || id === undefined || id === '' ? {} : { id, user_id: id }),
+    ...(stamina5s === null || stamina5s === undefined ? {} : { stamina_5s_remaining_milli: stamina5s })
+  };
+}
+
+function entryAtMs(value) {
+  const numeric = Number(value);
+  if (Number.isFinite(numeric)) return numeric;
+  const parsed = Date.parse(String(value || ''));
+  return Number.isFinite(parsed) ? parsed : NaN;
+}
+
+function browserlessSyntheticBullets(detail, state = {}) {
+  const metrics = detail?.metrics && typeof detail.metrics === 'object' ? detail.metrics : {};
+  const target = normalizedCombatEntity(detail?.target);
+  const self = normalizedCombatEntity(detail?.self);
+  const engagementId = String(metrics.engagementId || metrics.targetId || target.user_id || 'unknown');
+  const accepted = numberOrNull(metrics.acceptedShots);
+  const previous = state.acceptedByEngagement.get(engagementId);
+  state.acceptedByEngagement.set(engagementId, accepted);
+  if (accepted === null || previous === undefined) return [];
+  const delta = accepted >= previous ? accepted - previous : accepted;
+  const count = Math.max(0, Math.min(16, Math.round(delta)));
+  const aim = detail?.aim && typeof detail.aim === 'object' ? detail.aim : target;
+  const origin = pointOf(self);
+  const aimPoint = pointOf(aim) || pointOf(target);
+  if (!origin || !aimPoint || !count) return [];
+  const direction = unit(sub(aimPoint, origin));
+  if (!direction) return [];
+  const speed = Math.max(1, Number(detail?.bulletSpeedPerTick || DEFAULTS.bulletSpeedPerTick));
+  const firstSequence = Math.max(0, Math.round(accepted - count + 1));
+  return Array.from({ length: count }, (_, index) => ({
+    id: `synthetic:${engagementId}:${firstSequence + index}`,
+    owner_id: self.user_id ?? null,
+    x: origin.x,
+    y: origin.y,
+    vx: direction.x * speed,
+    vy: direction.y * speed,
+    synthetic: true
+  }));
+}
+
+function normalizeBrowserlessCombatLiveEntry(entry, state = {}) {
+  const detail = entry?.detail && typeof entry.detail === 'object' ? entry.detail : {};
+  const self = normalizedCombatEntity(detail.self);
+  const target = normalizedCombatEntity(detail.target);
+  const aim = detail.aim && typeof detail.aim === 'object' ? detail.aim : {};
+  const shooting = detail.shooting && typeof detail.shooting === 'object' ? detail.shooting : {};
+  const metrics = detail.metrics && typeof detail.metrics === 'object' ? detail.metrics : {};
+  return {
+    type: 'combat-frame',
+    sourceType: 'combat-live',
+    at: entryAtMs(entry?.at),
+    self,
+    target,
+    nearbyEntities: target.user_id === undefined ? [] : [target],
+    aimTarget: aim,
+    bullets: browserlessSyntheticBullets(detail, state),
+    combatState: {
+      aim,
+      shooting,
+      combatMetrics: metrics,
+      passiveRunner: detail.passiveRunner || null,
+      outOfRangeHold: detail.outOfRangeHold || null
+    },
+    combatMetrics: metrics,
+    control: detail.control || null,
+    incomingBullet: detail.incomingBullet || null,
+    decision: {
+      self,
+      target,
+      reason: detail.reason || shooting.reason || '',
+      combatState: {
+        aim,
+        shooting,
+        passiveRunner: detail.passiveRunner || null,
+        outOfRangeHold: detail.outOfRangeHold || null
+      }
+    }
+  };
+}
+
 function loadFrames(options) {
   if (!options.file) throw new Error('--file is required');
   const filePath = path.resolve(options.file);
@@ -389,30 +478,43 @@ function loadFrames(options) {
   const requestedEnd = Number(options.endLine || 0);
   const end = requestedEnd > 0 ? requestedEnd : Infinity;
   const frames = [];
+  const foundTypes = new Set();
+  const browserlessState = { acceptedByEngagement: new Map() };
   let inferredSelfId = options.selfId;
   let inferredTargetId = options.targetId;
   let inferredTargetName = options.targetName;
 
   const processLine = (raw, lineNo) => {
     if (lineNo < start || lineNo > end || !raw || !raw.trim()) return;
-    let entry;
+    let sourceEntry;
     try {
-      entry = JSON.parse(raw);
+      sourceEntry = JSON.parse(raw);
     } catch (_) {
       return;
     }
-    if (entry.type !== 'combat-frame') return;
+    const sourceType = String(sourceEntry.type || '');
+    if (sourceType) foundTypes.add(sourceType);
+    const entry = sourceType === 'combat-frame'
+      ? sourceEntry
+      : (sourceType === 'combat-live' ? normalizeBrowserlessCombatLiveEntry(sourceEntry, browserlessState) : null);
+    if (!entry) return;
     const self = entry.self || entry.decision?.self || null;
-    if (!inferredSelfId && (self?.id ?? self?.user_id) !== undefined) inferredSelfId = String(self.id ?? self.user_id);
+    if (!inferredSelfId && (self?.id ?? self?.user_id ?? self?.userId) !== undefined) {
+      inferredSelfId = String(self.id ?? self.user_id ?? self.userId);
+    }
     const target = targetFromEntry(entry, { targetId: inferredTargetId, targetName: inferredTargetName });
-    if (!inferredTargetId && (target?.id ?? target?.user_id) !== undefined) inferredTargetId = String(target.id ?? target.user_id);
+    if (!inferredTargetId && (target?.id ?? target?.user_id ?? target?.userId) !== undefined) {
+      inferredTargetId = String(target.id ?? target.user_id ?? target.userId);
+    }
     if (!inferredTargetName && target?.name) inferredTargetName = String(target.name);
     const matchOptions = { ...options, selfId: inferredSelfId, targetId: inferredTargetId, targetName: inferredTargetName };
     const nearbyTarget = findNearbyTarget(entry, matchOptions);
+    const at = entryAtMs(entry.at);
+    if (!Number.isFinite(at)) return;
     const frame = {
       lineNo,
       entry,
-      at: Number(entry.at),
+      at,
       self: pointOf(self),
       decisionTarget: pointOf(target),
       nearbyTarget: pointOf(nearbyTarget),
@@ -431,29 +533,43 @@ function loadFrames(options) {
     frames.push(frame);
   };
 
-  const fd = fs.openSync(filePath, 'r');
-  const buffer = Buffer.allocUnsafe(1024 * 1024);
-  let carry = '';
-  let lineNo = 1;
-  try {
-    while (lineNo <= end) {
-      const bytes = fs.readSync(fd, buffer, 0, buffer.length, null);
-      if (!bytes) break;
-      carry += buffer.toString('utf8', 0, bytes);
-      let newline;
-      while ((newline = carry.indexOf('\n')) !== -1) {
-        const raw = carry.slice(0, newline).replace(/\r$/, '');
-        carry = carry.slice(newline + 1);
-        processLine(raw, lineNo);
-        lineNo += 1;
-        if (lineNo > end) break;
-      }
+  const consumeText = text => {
+    const lines = String(text || '').split('\n');
+    for (let index = 0; index < lines.length && index + 1 <= end; index += 1) {
+      processLine(lines[index].replace(/\r$/, ''), index + 1);
     }
-    if (lineNo <= end && carry) processLine(carry.replace(/\r$/, ''), lineNo);
-  } finally {
-    fs.closeSync(fd);
+  };
+
+  if (/\.gz$/i.test(filePath)) {
+    consumeText(zlib.gunzipSync(fs.readFileSync(filePath)).toString('utf8'));
+  } else {
+    const fd = fs.openSync(filePath, 'r');
+    const buffer = Buffer.allocUnsafe(1024 * 1024);
+    let carry = '';
+    let lineNo = 1;
+    try {
+      while (lineNo <= end) {
+        const bytes = fs.readSync(fd, buffer, 0, buffer.length, null);
+        if (!bytes) break;
+        carry += buffer.toString('utf8', 0, bytes);
+        let newline;
+        while ((newline = carry.indexOf('\n')) !== -1) {
+          const raw = carry.slice(0, newline).replace(/\r$/, '');
+          carry = carry.slice(newline + 1);
+          processLine(raw, lineNo);
+          lineNo += 1;
+          if (lineNo > end) break;
+        }
+      }
+      if (lineNo <= end && carry) processLine(carry.replace(/\r$/, ''), lineNo);
+    } finally {
+      fs.closeSync(fd);
+    }
   }
-  if (!frames.length) throw new Error('no combat-frame entries matched the selected line range');
+  if (!frames.length) {
+    const actual = foundTypes.size ? Array.from(foundTypes).sort().join(', ') : 'none';
+    throw new Error(`no replayable combat entries matched the selected line range; accepted formats: combat-frame, combat-live; found types: ${actual}`);
+  }
   return {
     file: filePath,
     frames,
@@ -461,6 +577,79 @@ function loadFrames(options) {
     targetId: inferredTargetId || options.targetId,
     targetName: inferredTargetName || options.targetName
   };
+}
+
+function runLoadFramesSelfTest() {
+  const os = require('os');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'grasp-rat-replay-loader-'));
+  const cases = [];
+  const assert = (name, condition) => {
+    cases.push({ name, ok: Boolean(condition) });
+    if (!condition) throw new Error(`replay loader self-test failed: ${name}`);
+  };
+  try {
+    const legacyFile = path.join(root, 'legacy.jsonl');
+    fs.writeFileSync(legacyFile, JSON.stringify({
+      type: 'combat-frame',
+      at: 1000,
+      self: { id: '7', x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 9000 },
+      target: { id: '8', name: 'target', x: 5000, y: 0, hp: 100 },
+      nearbyEntities: [{ id: '8', name: 'target', x: 5000, y: 0, hp: 100 }],
+      aimTarget: { x: 5000, y: 0 },
+      bullets: []
+    }) + '\n');
+    const legacy = loadFrames({ file: legacyFile, startLine: 1, endLine: 1, selfId: '', targetId: '', targetName: '' });
+    assert('legacy combat-frame remains readable', legacy.frames.length === 1
+      && legacy.selfId === '7' && legacy.targetId === '8');
+
+    const liveFile = path.join(root, 'browserless.jsonl.gz');
+    const liveEntries = [
+      {
+        at: '2026-07-29T00:00:00.000Z',
+        type: 'combat-live',
+        detail: {
+          self: { userId: '7', x: 0, y: 0, hp: 100, stamina5s: 9000 },
+          target: { userId: '8', name: 'target', x: 5000, y: 0, hp: 100, vx: 20, vy: 0 },
+          aim: { x: 5100, y: 0, noDamageMs: 0 },
+          shooting: { reason: 'normal-cadence' },
+          metrics: { engagementId: '8:1', acceptedShots: 0, confirmedHits: 0 }
+        }
+      },
+      {
+        at: '2026-07-29T00:00:00.050Z',
+        type: 'combat-live',
+        detail: {
+          self: { userId: '7', x: 0, y: 0, hp: 100, stamina5s: 8500 },
+          target: { userId: '8', name: 'target', x: 5010, y: 0, hp: 100, vx: 20, vy: 0 },
+          aim: { x: 5110, y: 0, noDamageMs: 50 },
+          shooting: { reason: 'normal-cadence' },
+          metrics: { engagementId: '8:1', acceptedShots: 1, confirmedHits: 0 }
+        }
+      }
+    ];
+    fs.writeFileSync(liveFile, zlib.gzipSync(Buffer.from(liveEntries.map(JSON.stringify).join('\n') + '\n')));
+    const live = loadFrames({ file: liveFile, startLine: 1, endLine: 2, selfId: '', targetId: '', targetName: '' });
+    assert('gzip browserless combat-live normalizes ids and ISO time', live.frames.length === 2
+      && live.selfId === '7' && live.targetId === '8'
+      && Number.isFinite(live.frames[0].at) && live.frames[0].at < live.frames[1].at);
+    assert('browserless accepted-shot deltas normalize to synthetic replay bullets',
+      Array.isArray(live.frames[1].entry.bullets) && live.frames[1].entry.bullets.length === 1);
+
+    const invalidFile = path.join(root, 'invalid.jsonl');
+    fs.writeFileSync(invalidFile, JSON.stringify({ type: 'other', at: 1 }) + '\n');
+    let diagnostic = '';
+    try {
+      loadFrames({ file: invalidFile, startLine: 1, endLine: 1, selfId: '', targetId: '', targetName: '' });
+    } catch (err) {
+      diagnostic = String(err?.message || err);
+    }
+    assert('unsupported formats produce an actionable diagnostic', diagnostic.includes('combat-frame, combat-live') && diagnostic.includes('other'));
+    return { ok: true, cases };
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err), cases };
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 }
 
 function collectShots(frames, selfId) {
@@ -1799,6 +1988,8 @@ function printReport(result) {
 }
 
 function selfTest() {
+  const loader = runLoadFramesSelfTest();
+  if (!loader.ok) throw new Error(loader.error || 'browserless replay loader self-test failed');
   const cases = [
     {
       id: '2026-06-14-xmsthc-reference',
@@ -2133,7 +2324,7 @@ function selfTest() {
       snapshotOutlierRejections: result.snapshotOutlierRejections
     };
   });
-  console.log(JSON.stringify({ ok: true, cases: summaries, skipped }, null, 2));
+  console.log(JSON.stringify({ ok: true, loader, cases: summaries, skipped }, null, 2));
 }
 
 function main() {
@@ -2156,4 +2347,9 @@ if (require.main === module) {
   }
 }
 
-module.exports = { replay, DEFAULTS };
+module.exports = {
+  DEFAULTS,
+  loadFrames,
+  replay,
+  runLoadFramesSelfTest
+};

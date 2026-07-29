@@ -46,6 +46,8 @@ const {
   buildTrajectoryCoveragePlanCore,
   dynamicBehaviorTrajectoryEligibilityCore,
   normalizeTrajectoryCoverageMode,
+  normalizedDynamicRouteSelectionMode,
+  selectDynamicRouteCandidateCore,
   shouldApplyTrajectoryCoverageCore
 } = require('../../strategy/combat-shot-coverage');
 const {
@@ -369,7 +371,17 @@ function recordCombatShotLearning(stateful, target, combat = {}, options = {}) {
     flightTicks,
     expectedArrivalTick: createdTick !== null && flightTicks !== null ? createdTick + flightTicks : null,
     aimX: numberOrNull(options.aimX),
-    aimY: numberOrNull(options.aimY)
+    aimY: numberOrNull(options.aimY),
+    acceptedShotOrdinal: numberOrNull(options.acceptedShotOrdinal),
+    coverageApplied: options.coverageApplied === true,
+    coverageBaselineExpectedMissCm: numberOrNull(options.coverageBaselineExpectedMissCm),
+    coverageSelectedExpectedMissCm: numberOrNull(options.coverageSelectedExpectedMissCm),
+    coverageExpectedMissImprovementCm: numberOrNull(options.coverageExpectedMissImprovementCm),
+    coverageImprovementQualified: options.coverageImprovementQualified === true,
+    coverageSelectedTrajectory: String(options.coverageSelectedTrajectory || ''),
+    coverageVariant: String(options.coverageVariant || ''),
+    coverageSelectionMode: String(options.coverageSelectionMode || ''),
+    coverageRouteSelectionMode: String(options.coverageRouteSelectionMode || '')
   });
   learning.recentShots = learning.recentShots.filter(item => nowMs - Number(item.at || 0) <= 30000).slice(-80);
   const behaviorMap = ensureOpponentBehaviorMap(stateful);
@@ -458,6 +470,28 @@ function recentAcceptedShotHitSummary(stateful, targetId, limit = 15) {
   };
 }
 
+function compactCoverageShotAttribution(stateful, targetId, limit = 64) {
+  const shots = ensureCombatLearningState(stateful).recentShots
+    .filter(item => String(item.targetId) === String(targetId))
+    .filter(item => item.coverageApplied === true || item.coverageImprovementQualified === true)
+    .slice(-Math.max(1, Math.round(Number(limit || 64))));
+  return shots.map(shot => ({
+    bulletId: String(shot.bulletId || ''),
+    acceptedShotOrdinal: numberOrNull(shot.acceptedShotOrdinal),
+    acceptedAtMs: numberOrNull(shot.at),
+    coverageApplied: shot.coverageApplied === true,
+    coverageImprovementQualified: shot.coverageImprovementQualified === true,
+    baselineExpectedMissCm: numberOrNull(shot.coverageBaselineExpectedMissCm),
+    selectedExpectedMissCm: numberOrNull(shot.coverageSelectedExpectedMissCm),
+    expectedMissImprovementCm: numberOrNull(shot.coverageExpectedMissImprovementCm),
+    hypothesis: String(shot.coverageSelectedTrajectory || shot.routeCandidate || shot.hypothesis || ''),
+    variant: String(shot.coverageVariant || ''),
+    selectionMode: String(shot.coverageSelectionMode || ''),
+    routeSelectionMode: String(shot.coverageRouteSelectionMode || ''),
+    confirmedHit: shot.credited === true
+  }));
+}
+
 function syncConfirmedCombatShots(stateful, state = {}, target = null, combat = {}, options = {}) {
   if (!stateful || !target) return 0;
   const targetId = String(combatTargetId(target) || '');
@@ -473,6 +507,7 @@ function syncConfirmedCombatShots(stateful, state = {}, target = null, combat = 
     if (!bulletId || seen.has(bulletId)) continue;
     seen.add(bulletId);
     added += 1;
+    const acceptedShotOrdinal = Math.max(0, Number(stateful.combatMetrics?.acceptedShots || 0)) + added;
     const createdTick = numberOrNull(shot.createdTick ?? shot.created_tick);
     if (createdTick !== null) lastAcceptedShotTick = Math.max(lastAcceptedShotTick ?? createdTick, createdTick);
     recordCombatShotLearning(stateful, target, combat, {
@@ -488,7 +523,17 @@ function syncConfirmedCombatShots(stateful, state = {}, target = null, combat = 
       routeProbability: shot.routeProbability,
       predictedDirectionState: shot.predictedDirectionState,
       aimConfidence: shot.aimConfidence,
-      expectedHitProbability: shot.expectedHitProbability
+      expectedHitProbability: shot.expectedHitProbability,
+      acceptedShotOrdinal,
+      coverageApplied: shot.coverageApplied,
+      coverageBaselineExpectedMissCm: shot.coverageBaselineExpectedMissCm,
+      coverageSelectedExpectedMissCm: shot.coverageSelectedExpectedMissCm,
+      coverageExpectedMissImprovementCm: shot.coverageExpectedMissImprovementCm,
+      coverageImprovementQualified: shot.coverageImprovementQualified,
+      coverageSelectedTrajectory: shot.coverageSelectedTrajectory,
+      coverageVariant: shot.coverageVariant,
+      coverageSelectionMode: shot.coverageSelectionMode,
+      coverageRouteSelectionMode: shot.coverageRouteSelectionMode
     });
   }
   learning.acceptedBulletIds = Array.from(seen).slice(-256);
@@ -1207,6 +1252,7 @@ function estimateAim(self, target, options = {}) {
         learnedMeanMissCm: feedbackSamples >= 4
           ? Number(feedback?.missTotalCm || 0) / Math.max(1, feedbackSamples)
           : null,
+        feedbackSamples,
         probability: Math.max(0.001, rawProbability),
         shotStaminaCost: Math.max(1, Number(options.combatShotStaminaCostMs ?? 500)),
         uncertaintyCm: Math.round(targetSpeed * leadTicks * Math.max(0.1, 1 - rawProbability))
@@ -1218,42 +1264,80 @@ function estimateAim(self, target, options = {}) {
       probability: probabilityTotal > 0 ? Number(candidate.probability || 0) / probabilityTotal : 0
     }));
     const shotIndex = Math.max(0, Math.round(Number(options.actualShots || 0)));
-    const rankedCandidates = candidates.slice().sort((a, b) => b.probability - a.probability);
+    const rankedCandidates = candidates.slice().sort((a, b) => b.probability - a.probability
+      || String(a.hypothesis || '').localeCompare(String(b.hypothesis || '')));
     const primaryCandidate = rankedCandidates[0] || null;
     const explorationCandidate = rankedCandidates[1] || null;
     const highEntropyExplore = Boolean(highEntropyCoverage && noDamageLevel >= 12 && shotIndex % 5 === 4 && explorationCandidate);
     const preferredTurn = rankedCandidates
       .filter(candidate => candidate.hypothesis === 'left-turn' || candidate.hypothesis === 'right-turn')
       .sort((a, b) => b.probability - a.probability || a.hypothesis.localeCompare(b.hypothesis))[0] || null;
-    const dynamicCoverageSequence = dynamicBehaviorCoverage
+    const routeSelectionMode = normalizedDynamicRouteSelectionMode(options.trajectoryRouteSelectionMode);
+    const legacyDynamicCoverageSequence = dynamicBehaviorCoverage
       ? ['continue', 'stop', preferredTurn?.hypothesis, 'reverse']
           .map(hypothesis => candidates.find(candidate => candidate.hypothesis === hypothesis))
           .filter(Boolean)
       : [];
+    const dynamicSelection = dynamicBehaviorCoverage && routeSelectionMode !== 'legacy-fixed'
+      ? selectDynamicRouteCandidateCore(candidates, {
+          acceptedShotIndex: shotIndex,
+          predictionHorizonTicks: leadTicks,
+          sequencePhase: options.combatDynamicRouteSequencePhase,
+          explorationInterval: options.combatDynamicRouteExplorationInterval,
+          explorationLimit: options.combatDynamicRouteExplorationLimit
+        })
+      : null;
     const coverageSequence = dynamicBehaviorCoverage
-      ? dynamicCoverageSequence
+      ? (routeSelectionMode === 'legacy-fixed'
+          ? legacyDynamicCoverageSequence
+          : dynamicSelection?.ranked || [])
       : (highEntropyCoverage
           ? [primaryCandidate, ...(highEntropyExplore ? [explorationCandidate] : [])].filter(Boolean)
           : rankedCandidates.slice(0, 2));
     const selected = dynamicBehaviorCoverage
-      ? coverageSequence[shotIndex % coverageSequence.length]
+      ? (routeSelectionMode === 'legacy-fixed'
+          ? coverageSequence[shotIndex % Math.max(1, coverageSequence.length)]
+          : dynamicSelection?.selected || null)
       : (highEntropyCoverage
           ? (highEntropyExplore ? explorationCandidate : primaryCandidate)
           : coverageSequence[shotIndex % coverageSequence.length]);
     if (selected && (dynamicBehaviorCoverage || highEntropyCoverage || noDamageWidened || scriptTransitionCoverage)) {
-      const persistedCandidates = dynamicBehaviorCoverage ? coverageSequence : rankedCandidates.slice(0, 4);
+      const persistedCandidates = dynamicBehaviorCoverage ? coverageSequence.slice(0, 4) : rankedCandidates.slice(0, 4);
       x = selected.x;
       y = selected.y;
       routeCoverage = {
         enabled: true,
         style: dynamicBehaviorCoverage
-          ? `dynamic-behavior-${behavior.mode}`
+          ? (routeSelectionMode === 'legacy-fixed'
+              ? `dynamic-behavior-legacy-fixed-${behavior.mode}`
+              : `dynamic-behavior-weighted-${behavior.mode}`)
           : (highEntropyCoverage
               ? (highEntropyExplore ? 'high-entropy-bounded-exploration' : 'high-entropy-robust-stop')
               : (scriptTransitionCoverage ? 'script-transition-matrix' : 'predictable-top-routes')),
         dynamicBehaviorEligible: dynamicBehaviorCoverage,
         selected: selected.hypothesis,
         sequence: coverageSequence.map(item => item.hypothesis),
+        selection: dynamicBehaviorCoverage ? {
+          mode: routeSelectionMode === 'legacy-fixed'
+            ? 'legacy-fixed'
+            : (dynamicSelection?.selectionMode || 'weighted-sample'),
+          explorationInterval: routeSelectionMode === 'legacy-fixed'
+            ? null
+            : dynamicSelection?.explorationInterval ?? null,
+          explorationLimit: routeSelectionMode === 'legacy-fixed'
+            ? null
+            : dynamicSelection?.explorationLimit ?? null,
+          explorationOrdinal: routeSelectionMode === 'legacy-fixed'
+            ? null
+            : dynamicSelection?.explorationOrdinal ?? null,
+          explorationAllowed: routeSelectionMode === 'legacy-fixed'
+            ? false
+            : Boolean(dynamicSelection?.explorationAllowed),
+          explorationCountRemaining: routeSelectionMode === 'legacy-fixed'
+            ? null
+            : dynamicSelection?.explorationCountRemaining ?? null,
+          acceptedShotIndex: shotIndex
+        } : null,
         contextKey: routeContextKey,
         phase: routePhase,
         candidates: persistedCandidates.map(item => ({
@@ -1267,6 +1351,10 @@ function estimateAim(self, target, options = {}) {
           globalTransitionSamples: item.globalTransitionSamples,
           learnedHitRate: item.learnedHitRate,
           learnedMeanMissCm: item.learnedMeanMissCm,
+          feedbackSamples: item.feedbackSamples,
+          selectionWeight: Number.isFinite(Number(item.selectionWeight))
+            ? Number(Number(item.selectionWeight).toFixed(6))
+            : null,
           shotStaminaCost: item.shotStaminaCost,
           uncertaintyCm: item.uncertaintyCm,
           x: Math.round(item.x),
@@ -3371,6 +3459,11 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
       const actualShots = Math.max(0, Number(metrics.actualShots || 0));
       const acceptedShots = Math.max(0, Number(metrics.acceptedShots || 0));
       const confirmedHits = Math.min(acceptedShots, Math.max(0, Number(metrics.confirmedHits || 0)));
+      const coverageShotAttribution = compactCoverageShotAttribution(
+        stateful,
+        combatTargetId(target),
+        64
+      );
       return {
         ...metrics,
         actualShots,
@@ -3381,6 +3474,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
         estimatedHitRate: acceptedShots > 0
           ? Number((confirmedHits / acceptedShots * 100).toFixed(1))
           : null,
+        coverageShotAttribution,
         firstDamageDelayMs: Number(stateful.combatMetrics.firstDamageAt || 0) > 0
           ? Math.max(0, Number(stateful.combatMetrics.firstDamageAt) - Number(stateful.combatMetrics.startedAt || 0))
           : null

@@ -23,6 +23,31 @@ const DEFAULT_IDLE_FINALIZE_MS = 15000;
 const BATTLES_DIR = 'battles';
 const INDEX_FILE = 'index.jsonl';
 const MAX_INDEX_LINE_BYTES = 8192;
+const BATTLE_INDEX_FORMAT_VERSION = 2;
+const MAX_TRACKED_ENGAGEMENT_SEGMENTS = 256;
+const MAX_TRAJECTORY_COVERAGE_SHOT_EVENTS = 128;
+const SEGMENT_METRIC_FIELDS = Object.freeze([
+  'requestedShots',
+  'acceptedShots',
+  'confirmedHits',
+  'targetDamage',
+  'selfDamage',
+  'incomingHits',
+  'totalStaminaSpent',
+  'shootingStaminaSpent',
+  'movementStaminaSpent'
+]);
+const SEGMENT_METRIC_FIELD_NAMES = Object.freeze({
+  requestedShots: 'RequestedShots',
+  acceptedShots: 'AcceptedShots',
+  confirmedHits: 'ConfirmedHits',
+  targetDamage: 'TargetDamage',
+  selfDamage: 'SelfDamage',
+  incomingHits: 'IncomingHits',
+  totalStaminaSpent: 'TotalStaminaSpent',
+  shootingStaminaSpent: 'ShootingStaminaSpent',
+  movementStaminaSpent: 'MovementStaminaSpent'
+});
 const BEHAVIOR_MODE_KEYS = Object.freeze([
   'zigzag-strafe',
   'retreat-kite',
@@ -61,6 +86,72 @@ function numberOrNull(value) {
   return Number.isFinite(number) ? number : null;
 }
 
+function metricSnapshot(metrics = {}) {
+  const source = metrics && typeof metrics === 'object' ? metrics : {};
+  return Object.fromEntries(SEGMENT_METRIC_FIELDS.map(field => [field, numberOrNull(source[field])]));
+}
+
+function zeroMetricBaseline(metrics = {}) {
+  const snapshot = metricSnapshot(metrics);
+  return Object.fromEntries(SEGMENT_METRIC_FIELDS.map(field => [
+    field,
+    snapshot[field] === null ? null : 0
+  ]));
+}
+
+function segmentMetricDeltas(baseline = {}, metrics = {}) {
+  const current = metricSnapshot(metrics);
+  const prior = metricSnapshot(baseline);
+  const values = {};
+  const counterResetFields = [];
+  for (const field of SEGMENT_METRIC_FIELDS) {
+    const currentValue = current[field];
+    const baselineValue = prior[field];
+    if (currentValue === null) {
+      values[field] = null;
+      continue;
+    }
+    if (baselineValue === null) {
+      values[field] = Math.max(0, currentValue);
+      continue;
+    }
+    if (currentValue < baselineValue) {
+      values[field] = Math.max(0, currentValue);
+      counterResetFields.push(field);
+      continue;
+    }
+    values[field] = Math.max(0, currentValue - baselineValue);
+  }
+  return { values, counterResetFields };
+}
+
+function segmentMetricSummary(values = {}) {
+  const result = {};
+  for (const field of SEGMENT_METRIC_FIELDS) {
+    result[`segment${SEGMENT_METRIC_FIELD_NAMES[field]}`] = numberOrNull(values[field]);
+  }
+  const accepted = numberOrNull(values.acceptedShots);
+  const hits = numberOrNull(values.confirmedHits);
+  result.segmentEstimatedHitRate = accepted !== null && accepted > 0 && hits !== null
+    ? Number((hits / accepted * 100).toFixed(1))
+    : null;
+  return result;
+}
+
+function cumulativeMetricSummary(metrics = {}) {
+  const snapshot = metricSnapshot(metrics);
+  const result = {};
+  for (const field of SEGMENT_METRIC_FIELDS) {
+    result[`engagementCumulative${SEGMENT_METRIC_FIELD_NAMES[field]}`] = snapshot[field];
+  }
+  const accepted = snapshot.acceptedShots;
+  const hits = snapshot.confirmedHits;
+  result.engagementEstimatedHitRate = accepted !== null && accepted > 0 && hits !== null
+    ? Number((hits / accepted * 100).toFixed(1))
+    : null;
+  return result;
+}
+
 function extractEngagementId(detail) {
   const metrics = detail && typeof detail === 'object' ? detail.metrics : null;
   if (!metrics || typeof metrics !== 'object') return '';
@@ -82,7 +173,165 @@ function normalizeTrajectoryCoverageReason(value) {
   return TRAJECTORY_COVERAGE_REASON_KEYS.includes(reason) ? reason : 'other';
 }
 
-function createBattleObservations() {
+function boundedIncrement(counter, key, limit = 8) {
+  const normalized = String(key || 'other').slice(0, 64) || 'other';
+  if (Object.prototype.hasOwnProperty.call(counter, normalized)) {
+    counter[normalized] += 1;
+    return;
+  }
+  const keys = Object.keys(counter);
+  if (keys.length >= limit) {
+    counter.other = Number(counter.other || 0) + 1;
+    return;
+  }
+  counter[normalized] = 1;
+}
+
+function createTrajectoryCoverageShotObservations(acceptedShotFloor = 0) {
+  return {
+    acceptedShotFloor: Math.max(0, Number(acceptedShotFloor || 0)),
+    events: new Map(),
+    appliedAcceptedShots: 0,
+    appliedConfirmedHits: 0,
+    baselineExpectedMissTotal: 0,
+    baselineExpectedMissSamples: 0,
+    selectedExpectedMissTotal: 0,
+    selectedExpectedMissSamples: 0,
+    expectedMissImprovementTotal: 0,
+    expectedMissImprovementSamples: 0,
+    hypothesisCounts: {},
+    variantCounts: {},
+    selectionModeCounts: {}
+  };
+}
+
+function finiteAttributionNumber(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const number = numberOrNull(value);
+  return number === null ? null : number;
+}
+
+function trajectoryCoverageEventId(event = {}) {
+  const bulletId = String(event.bulletId ?? event.bullet_id ?? '');
+  if (bulletId) return `bullet:${bulletId}`;
+  const ordinal = finiteAttributionNumber(event.acceptedShotOrdinal);
+  return ordinal === null ? '' : `accepted:${Math.round(ordinal)}`;
+}
+
+function addTrajectoryCoverageShotObservation(observed, event = {}, options = {}) {
+  const value = event && typeof event === 'object' ? event : {};
+  if (value.coverageApplied !== true) return false;
+  const id = trajectoryCoverageEventId(value);
+  if (!id) return false;
+  const ordinal = finiteAttributionNumber(value.acceptedShotOrdinal);
+  const floor = Math.max(0, Number(options.acceptedShotFloor ?? observed.acceptedShotFloor ?? 0));
+  if (ordinal !== null && ordinal <= floor) return false;
+  let row = observed.events.get(id);
+  if (!row) {
+    if (observed.events.size >= MAX_TRAJECTORY_COVERAGE_SHOT_EVENTS) {
+      const oldest = observed.events.keys().next().value;
+      if (oldest) observed.events.delete(oldest);
+    }
+    row = {
+      id,
+      confirmedHit: false,
+      baselineExpectedMissCm: finiteAttributionNumber(value.baselineExpectedMissCm),
+      selectedExpectedMissCm: finiteAttributionNumber(value.selectedExpectedMissCm),
+      expectedMissImprovementCm: finiteAttributionNumber(value.expectedMissImprovementCm),
+      hypothesis: String(value.hypothesis || '').slice(0, 64),
+      variant: String(value.variant || '').slice(0, 64),
+      selectionMode: String(value.selectionMode || '').slice(0, 64)
+    };
+    observed.events.set(id, row);
+    observed.appliedAcceptedShots += 1;
+    if (row.baselineExpectedMissCm !== null) {
+      observed.baselineExpectedMissTotal += row.baselineExpectedMissCm;
+      observed.baselineExpectedMissSamples += 1;
+    }
+    if (row.selectedExpectedMissCm !== null) {
+      observed.selectedExpectedMissTotal += row.selectedExpectedMissCm;
+      observed.selectedExpectedMissSamples += 1;
+    }
+    if (row.expectedMissImprovementCm !== null) {
+      observed.expectedMissImprovementTotal += row.expectedMissImprovementCm;
+      observed.expectedMissImprovementSamples += 1;
+    }
+    boundedIncrement(observed.hypothesisCounts, row.hypothesis || 'other');
+    boundedIncrement(observed.variantCounts, row.variant || 'other');
+    boundedIncrement(observed.selectionModeCounts, row.selectionMode || 'other');
+  }
+  if (!row.confirmedHit && value.confirmedHit === true) {
+    row.confirmedHit = true;
+    observed.appliedConfirmedHits += 1;
+  }
+  return true;
+}
+
+function observeTrajectoryCoverageShots(observed, metrics = {}) {
+  const entries = Array.isArray(metrics?.coverageShotAttribution)
+    ? metrics.coverageShotAttribution
+    : [];
+  for (const entry of entries) addTrajectoryCoverageShotObservation(observed, entry);
+  return observed;
+}
+
+function roundedMean(total, samples) {
+  return samples > 0 ? Number((total / samples).toFixed(1)) : null;
+}
+
+function summarizeTrajectoryCoverageShots(observed, prefix) {
+  const value = observed || createTrajectoryCoverageShotObservations();
+  const appliedAcceptedShots = Math.max(0, Number(value.appliedAcceptedShots || 0));
+  const appliedConfirmedHits = Math.max(0, Number(value.appliedConfirmedHits || 0));
+  return {
+    [`${prefix}TrajectoryCoverageAppliedAcceptedShots`]: appliedAcceptedShots,
+    [`${prefix}TrajectoryCoverageAppliedConfirmedHits`]: appliedConfirmedHits,
+    [`${prefix}TrajectoryCoverageAppliedEstimatedHitRate`]: appliedAcceptedShots > 0
+      ? Number((appliedConfirmedHits / appliedAcceptedShots * 100).toFixed(1))
+      : null,
+    [`${prefix}TrajectoryCoverageBaselineExpectedMissCmMean`]: roundedMean(
+      Number(value.baselineExpectedMissTotal || 0),
+      Number(value.baselineExpectedMissSamples || 0)
+    ),
+    [`${prefix}TrajectoryCoverageSelectedExpectedMissCmMean`]: roundedMean(
+      Number(value.selectedExpectedMissTotal || 0),
+      Number(value.selectedExpectedMissSamples || 0)
+    ),
+    [`${prefix}TrajectoryCoverageExpectedMissImprovementCmMean`]: roundedMean(
+      Number(value.expectedMissImprovementTotal || 0),
+      Number(value.expectedMissImprovementSamples || 0)
+    ),
+    [`${prefix}TrajectoryCoverageHypothesisCounts`]: { ...(value.hypothesisCounts || {}) },
+    [`${prefix}TrajectoryCoverageVariantCounts`]: { ...(value.variantCounts || {}) },
+    [`${prefix}TrajectoryCoverageSelectionModeCounts`]: { ...(value.selectionModeCounts || {}) },
+    [`${prefix}TrajectoryCoverageHitAttribution`]: {
+      confirmedByAcceptedShotMetadata: appliedConfirmedHits,
+      pendingOrUnattributedAppliedShots: Math.max(0, appliedAcceptedShots - appliedConfirmedHits)
+    }
+  };
+}
+
+function mergeTrajectoryCoverageShotObservations(target, source) {
+  const ledger = target || createTrajectoryCoverageShotObservations();
+  const rows = source?.events instanceof Map ? source.events.values() : [];
+  for (const row of rows) {
+    addTrajectoryCoverageShotObservation(ledger, {
+      bulletId: row.id.startsWith('bullet:') ? row.id.slice('bullet:'.length) : '',
+      acceptedShotOrdinal: row.id.startsWith('accepted:') ? Number(row.id.slice('accepted:'.length)) : null,
+      coverageApplied: true,
+      confirmedHit: row.confirmedHit === true,
+      baselineExpectedMissCm: row.baselineExpectedMissCm,
+      selectedExpectedMissCm: row.selectedExpectedMissCm,
+      expectedMissImprovementCm: row.expectedMissImprovementCm,
+      hypothesis: row.hypothesis,
+      variant: row.variant,
+      selectionMode: row.selectionMode
+    }, { acceptedShotFloor: 0 });
+  }
+  return ledger;
+}
+
+function createBattleObservations(options = {}) {
   return {
     targetActiveObserved: false,
     targetMovingObserved: false,
@@ -92,7 +341,8 @@ function createBattleObservations() {
     behaviorModeFrameCounts: boundedCounter(BEHAVIOR_MODE_KEYS),
     routeCoverageCandidateFrames: 0,
     trajectoryCoverageAppliedFrames: 0,
-    trajectoryCoverageReasonCounts: boundedCounter(TRAJECTORY_COVERAGE_REASON_KEYS)
+    trajectoryCoverageReasonCounts: boundedCounter(TRAJECTORY_COVERAGE_REASON_KEYS),
+    trajectoryCoverageShots: createTrajectoryCoverageShotObservations(options.acceptedShotFloor)
   };
 }
 
@@ -285,6 +535,7 @@ function observeBattleDetail(observations, detail) {
   if (trajectoryCoverage) {
     next.trajectoryCoverageReasonCounts[normalizeTrajectoryCoverageReason(trajectoryCoverage.reason)] += 1;
   }
+  observeTrajectoryCoverageShots(next.trajectoryCoverageShots, metrics);
   return next;
 }
 
@@ -299,46 +550,58 @@ function summarizeBattleObservations(observations) {
     behaviorModeFrameCounts: { ...observed.behaviorModeFrameCounts },
     routeCoverageCandidateFrames: Number(observed.routeCoverageCandidateFrames || 0),
     trajectoryCoverageAppliedFrames: Number(observed.trajectoryCoverageAppliedFrames || 0),
-    trajectoryCoverageReasonCounts: { ...observed.trajectoryCoverageReasonCounts }
+    trajectoryCoverageReasonCounts: { ...observed.trajectoryCoverageReasonCounts },
+    ...summarizeTrajectoryCoverageShots(observed.trajectoryCoverageShots, 'segment')
   };
 }
 
-// Build the persisted per-battle summary from the latest cumulative combat
-// metrics plus the writer's own frame/wall bookkeeping.
+// Build the persisted per-segment summary. Runtime combat metrics are
+// engagement-cumulative, while every physical gzip file is a segment; retain
+// the two namespaces separately so index rows can be added without double
+// counting after A -> B -> A target switches.
 function buildBattleSummary(battle, reason, finalizeMs) {
   const metrics = battle.lastMetrics && typeof battle.lastMetrics === 'object' ? battle.lastMetrics : {};
-  const endedAtMs = Number(metrics.lastObservedAt) || battle.lastFrameAtMs || finalizeMs;
+  const segmentEndedAtMs = battle.lastFrameAtMs || finalizeMs;
+  const engagementEndedAtMs = Number(metrics.lastObservedAt) || segmentEndedAtMs;
+  const engagementStartedAtMs = numberOrNull(metrics.startedAt) ?? battle.engagementStartedAtMs ?? battle.firstFrameAtMs;
+  const segmentMetrics = segmentMetricDeltas(battle.segmentMetricBaseline, metrics);
   const exitTail = summarizeBattleExitTail(battle.exitTail);
+  const engagementTrajectoryCoverage = mergeTrajectoryCoverageShotObservations(
+    battle.trajectoryCoverageLedger,
+    battle.observations?.trajectoryCoverageShots
+  );
   return {
+    formatVersion: BATTLE_INDEX_FORMAT_VERSION,
+    segmentId: battle.segmentId,
+    segmentOrdinal: battle.segmentOrdinal,
     at: new Date(finalizeMs).toISOString(),
     engagementId: battle.engagementId,
     file: path.basename(battle.gzFile),
+    priorSegmentFile: String(battle.priorSegmentFile || ''),
     reason,
     targetId: metrics.targetId != null ? String(metrics.targetId) : (battle.targetId || ''),
     targetName: String(metrics.targetName || battle.targetName || ''),
-    frames: battle.frames,
-    startedAt: numberOrNull(metrics.startedAt) ?? battle.firstFrameAtMs,
-    startedAtIso: new Date(numberOrNull(metrics.startedAt) ?? battle.firstFrameAtMs).toISOString(),
-    endedAt: endedAtMs,
-    endedAtIso: new Date(endedAtMs).toISOString(),
-    durationMs: Math.max(0, endedAtMs - (numberOrNull(metrics.startedAt) ?? battle.firstFrameAtMs)),
-    requestedShots: numberOrNull(metrics.requestedShots),
-    acceptedShots: numberOrNull(metrics.acceptedShots),
-    confirmedHits: numberOrNull(metrics.confirmedHits),
-    estimatedHitRate: numberOrNull(metrics.estimatedHitRate),
-    targetDamage: numberOrNull(metrics.targetDamage),
-    selfDamage: numberOrNull(metrics.selfDamage),
-    incomingHits: numberOrNull(metrics.incomingHits),
-    initialSelfHp: numberOrNull(metrics.initialSelfHp),
-    minSelfHp: numberOrNull(metrics.minSelfHp),
-    lastSelfHp: numberOrNull(metrics.lastSelfHp),
-    initialTargetHp: numberOrNull(metrics.initialTargetHp),
-    minTargetHp: numberOrNull(metrics.minTargetHp),
-    lastTargetHp: numberOrNull(metrics.lastTargetHp),
-    totalStaminaSpent: numberOrNull(metrics.totalStaminaSpent),
-    shootingStaminaSpent: numberOrNull(metrics.shootingStaminaSpent),
-    movementStaminaSpent: numberOrNull(metrics.movementStaminaSpent),
-    firstDamageDelayMs: numberOrNull(metrics.firstDamageDelayMs),
+    segmentFrames: battle.frames,
+    segmentStartedAt: battle.firstFrameAtMs,
+    segmentStartedAtIso: new Date(battle.firstFrameAtMs).toISOString(),
+    segmentEndedAt: segmentEndedAtMs,
+    segmentEndedAtIso: new Date(segmentEndedAtMs).toISOString(),
+    segmentDurationMs: Math.max(0, segmentEndedAtMs - battle.firstFrameAtMs),
+    engagementStartedAt: engagementStartedAtMs,
+    engagementStartedAtIso: new Date(engagementStartedAtMs).toISOString(),
+    engagementEndedAt: engagementEndedAtMs,
+    engagementEndedAtIso: new Date(engagementEndedAtMs).toISOString(),
+    engagementDurationMs: Math.max(0, engagementEndedAtMs - engagementStartedAtMs),
+    ...segmentMetricSummary(segmentMetrics.values),
+    counterResetFields: segmentMetrics.counterResetFields,
+    ...cumulativeMetricSummary(metrics),
+    engagementInitialSelfHp: numberOrNull(metrics.initialSelfHp),
+    engagementMinSelfHp: numberOrNull(metrics.minSelfHp),
+    engagementLastSelfHp: numberOrNull(metrics.lastSelfHp),
+    engagementInitialTargetHp: numberOrNull(metrics.initialTargetHp),
+    engagementMinTargetHp: numberOrNull(metrics.minTargetHp),
+    engagementLastTargetHp: numberOrNull(metrics.lastTargetHp),
+    engagementFirstDamageDelayMs: numberOrNull(metrics.firstDamageDelayMs),
     exitTriggerHp: exitTail?.triggerHp ?? null,
     finalObservedHp: exitTail?.finalObservedHp ?? numberOrNull(metrics.lastSelfHp),
     postTriggerDamage: exitTail?.postTriggerDamage ?? null,
@@ -347,6 +610,7 @@ function buildBattleSummary(battle, reason, finalizeMs) {
     terminalOutcome: exitTail?.terminalOutcome ?? null,
     exitTail,
     ...summarizeBattleObservations(battle.observations),
+    ...summarizeTrajectoryCoverageShots(engagementTrajectoryCoverage, 'engagementCumulative'),
     runId: String(battle.runId || ''),
     runtimeRevision: String(battle.runtimeRevision || '')
   };
@@ -407,6 +671,10 @@ function createCombatBattleLog(options = {}) {
   let framesWritten = 0;
   let framesDiscarded = 0;
   const allocatedBattleFiles = new Set();
+  // A root engagement can be physically split whenever another target takes
+  // control. Keep only the bounded cumulative baseline needed to make the
+  // next segment additive; this state is process-local and never persisted.
+  const engagementSegments = new Map();
 
   function battlesDirFor(atMs) {
     return path.join(logDir, utc8DayKey(atMs), BATTLES_DIR);
@@ -430,6 +698,27 @@ function createCombatBattleLog(options = {}) {
     return { rawFile: fallback, gzFile: `${fallback}.gz` };
   }
 
+  function touchEngagementSegment(engagementId, update = {}) {
+    const id = String(engagementId || '');
+    const existing = engagementSegments.get(id) || {
+      nextOrdinal: 0,
+      lastSegmentFile: '',
+      lastMetrics: null,
+      trajectoryCoverageLedger: createTrajectoryCoverageShotObservations(),
+      engagementStartedAtMs: 0,
+      touchedAtMs: 0
+    };
+    const next = { ...existing, ...update, touchedAtMs: Number(update.touchedAtMs || now()) };
+    engagementSegments.delete(id);
+    engagementSegments.set(id, next);
+    while (engagementSegments.size > MAX_TRACKED_ENGAGEMENT_SEGMENTS) {
+      const oldest = engagementSegments.keys().next().value;
+      if (oldest === id) break;
+      engagementSegments.delete(oldest);
+    }
+    return next;
+  }
+
   function finalizeActive(reason = 'engagement-switch', atMs = now()) {
     if (!active) return null;
     const battle = active;
@@ -439,6 +728,14 @@ function createCombatBattleLog(options = {}) {
       io.finalize(battle.rawFile);
       summary = buildBattleSummary(battle, reason, atMs);
       io.appendIndex(path.join(battle.dir, INDEX_FILE), summary);
+      touchEngagementSegment(battle.engagementId, {
+        nextOrdinal: battle.segmentOrdinal,
+        lastSegmentFile: summary.file,
+        lastMetrics: metricSnapshot(battle.lastMetrics),
+        trajectoryCoverageLedger: battle.trajectoryCoverageLedger,
+        engagementStartedAtMs: battle.engagementStartedAtMs,
+        touchedAtMs: atMs
+      });
       battlesFinalized += 1;
     } catch (err) {
       if (typeof options.onError === 'function') options.onError(err, { operation: 'battle-finalize', engagementId: battle.engagementId });
@@ -451,11 +748,35 @@ function createCombatBattleLog(options = {}) {
     const dir = battlesDirFor(atMs);
     const { rawFile, gzFile } = chooseBattleFile(dir, engagementId);
     const metrics = detail && typeof detail === 'object' ? detail.metrics : null;
+    const previous = engagementSegments.get(String(engagementId || '')) || null;
+    const segmentOrdinal = Math.max(0, Number(previous?.nextOrdinal || 0)) + 1;
+    const engagementStartedAtMs = numberOrNull(metrics?.startedAt)
+      ?? numberOrNull(previous?.engagementStartedAtMs)
+      ?? atMs;
+    const priorMetrics = previous?.lastMetrics && typeof previous.lastMetrics === 'object'
+      ? previous.lastMetrics
+      : null;
+    const priorAcceptedShots = numberOrNull(priorMetrics?.acceptedShots);
+    const currentAcceptedShots = numberOrNull(metrics?.acceptedShots);
+    const acceptedShotFloor = priorAcceptedShots !== null
+      && currentAcceptedShots !== null
+      && currentAcceptedShots < priorAcceptedShots
+      ? 0
+      : Math.max(0, Number(priorAcceptedShots || 0));
     active = {
       engagementId,
       dir,
       rawFile,
       gzFile,
+      segmentId: `${String(engagementId)}#${segmentOrdinal}`,
+      segmentOrdinal,
+      priorSegmentFile: String(previous?.lastSegmentFile || ''),
+      engagementStartedAtMs,
+      // The first segment starts from zero. Re-opened files start from the
+      // previous segment's final cumulative counters, which makes all
+      // segment* metrics additive without relying on a filename suffix.
+      segmentMetricBaseline: priorMetrics || zeroMetricBaseline(metrics),
+      trajectoryCoverageLedger: previous?.trajectoryCoverageLedger || createTrajectoryCoverageShotObservations(),
       frames: 0,
       firstFrameAtMs: atMs,
       lastFrameAtMs: atMs,
@@ -463,10 +784,17 @@ function createCombatBattleLog(options = {}) {
       targetName: metrics ? String(metrics.targetName || '') : '',
       runId: detail && detail.runId ? String(detail.runId) : '',
       runtimeRevision: detail && detail.runtimeRevision ? String(detail.runtimeRevision) : '',
-      observations: createBattleObservations(),
+      observations: createBattleObservations({
+        acceptedShotFloor: previous ? acceptedShotFloor : 0
+      }),
       exitTail: createBattleExitTail(),
       lastMetrics: null
     };
+    touchEngagementSegment(engagementId, {
+      nextOrdinal: segmentOrdinal,
+      engagementStartedAtMs,
+      touchedAtMs: atMs
+    });
   }
 
   // Record one combat frame. `detail` is the same enriched combat payload that
@@ -493,6 +821,14 @@ function createCombatBattleLog(options = {}) {
     active.lastMetrics = detail && typeof detail === 'object' && detail.metrics && typeof detail.metrics === 'object'
       ? detail.metrics
       : active.lastMetrics;
+    if (active.lastMetrics) {
+      touchEngagementSegment(active.engagementId, {
+        lastMetrics: metricSnapshot(active.lastMetrics),
+        trajectoryCoverageLedger: active.trajectoryCoverageLedger,
+        engagementStartedAtMs: active.engagementStartedAtMs,
+        touchedAtMs: atMs
+      });
+    }
     observeBattleDetail(active.observations, detail);
     if (!active.targetName && active.lastMetrics) active.targetName = String(active.lastMetrics.targetName || '');
     framesWritten += 1;
@@ -565,10 +901,29 @@ function runCombatBattleLogSelfTest() {
     // First battle: two frames.
     log.record('combat-live', frame('100:1000', {
       requestedShots: 2,
+      acceptedShots: 2,
       confirmedHits: 1,
       targetDamage: 40,
+      selfDamage: 4,
+      incomingHits: 1,
+      totalStaminaSpent: 1500,
+      shootingStaminaSpent: 1000,
+      movementStaminaSpent: 500,
       lastObservedAt: nowMs,
-      threatBulletIds: ['bullet-a']
+      threatBulletIds: ['bullet-a'],
+      coverageShotAttribution: [{
+        bulletId: 'coverage-2',
+        acceptedShotOrdinal: 2,
+        coverageApplied: true,
+        coverageImprovementQualified: true,
+        baselineExpectedMissCm: 540,
+        selectedExpectedMissCm: 260,
+        expectedMissImprovementCm: 280,
+        hypothesis: 'stop',
+        variant: 'immediate',
+        selectionMode: 'weighted-primary',
+        confirmedHit: false
+      }]
     }, {
       target: { userId: 100, active: true, firing: false, vx: 20, vy: 0 },
       behavior: { mode: 'zigzag-strafe', metrics: { shotEvents: [{ bulletId: 'bullet-a', createdTick: 10 }] } },
@@ -580,11 +935,30 @@ function runCombatBattleLogSelfTest() {
     nowMs += 50;
     log.record('combat-live', frame('100:1000', {
       requestedShots: 5,
+      acceptedShots: 5,
       confirmedHits: 3,
       targetDamage: 90,
+      selfDamage: 6,
+      incomingHits: 2,
+      totalStaminaSpent: 3600,
+      shootingStaminaSpent: 2500,
+      movementStaminaSpent: 1100,
       lastObservedAt: nowMs,
       sessionToken: 'leak-token',
-      threatBulletIds: ['bullet-a', 'bullet-b']
+      threatBulletIds: ['bullet-a', 'bullet-b'],
+      coverageShotAttribution: [{
+        bulletId: 'coverage-2',
+        acceptedShotOrdinal: 2,
+        coverageApplied: true,
+        coverageImprovementQualified: true,
+        baselineExpectedMissCm: 540,
+        selectedExpectedMissCm: 260,
+        expectedMissImprovementCm: 280,
+        hypothesis: 'stop',
+        variant: 'immediate',
+        selectionMode: 'weighted-primary',
+        confirmedHit: true
+      }]
     }, {
       target: { userId: 100, active: true, firing: false, vx: 0, vy: 0 },
       behavior: {
@@ -634,8 +1008,14 @@ function runCombatBattleLogSelfTest() {
     nowMs += 50;
     log.record('combat-live', frame('200:2000', {
       requestedShots: 1,
+      acceptedShots: 1,
       confirmedHits: 0,
       targetDamage: 0,
+      selfDamage: 0,
+      incomingHits: 0,
+      totalStaminaSpent: 500,
+      shootingStaminaSpent: 500,
+      movementStaminaSpent: 0,
       lastObservedAt: nowMs,
       threatBulletIds: ['bullet-a']
     }, {
@@ -657,8 +1037,15 @@ function runCombatBattleLogSelfTest() {
     assert('index has two battles', indexLines.length === 2);
     const first = JSON.parse(indexLines[0]);
     assert('index summary keeps engagement id', first.engagementId === '100:1000');
-    assert('index summary counts frames', first.frames === 2);
-    assert('index summary carries cumulative metrics', first.confirmedHits === 3 && first.targetDamage === 90);
+    assert('index summary has versioned segment identity', first.formatVersion === BATTLE_INDEX_FORMAT_VERSION
+      && first.segmentId === '100:1000#1' && first.segmentOrdinal === 1 && first.priorSegmentFile === '');
+    assert('index summary counts physical segment frames', first.segmentFrames === 2);
+    assert('index summary separates segment and cumulative metrics', first.segmentConfirmedHits === 3
+      && first.segmentTargetDamage === 90
+      && first.segmentAcceptedShots === 5
+      && first.engagementCumulativeConfirmedHits === 3
+      && first.engagementCumulativeTargetDamage === 90
+      && first.engagementCumulativeAcceptedShots === 5);
     assert('index summary reason recorded', first.reason === 'engagement-switch');
     assert('index summary points at gz file', first.file === '100_1000.jsonl.gz');
     assert('index summary observes target activity and movement', first.targetActiveObserved === true && first.targetMovingObserved === true);
@@ -670,6 +1057,14 @@ function runCombatBattleLogSelfTest() {
       && first.trajectoryCoverageAppliedFrames === 1
       && first.trajectoryCoverageReasonCounts['live-single-applied'] === 1
       && first.trajectoryCoverageReasonCounts['coverage-evidence-not-ready'] === 1);
+    assert('index summary keeps bounded applied-shot trajectory attribution', first.segmentTrajectoryCoverageAppliedAcceptedShots === 1
+      && first.segmentTrajectoryCoverageAppliedConfirmedHits === 1
+      && first.segmentTrajectoryCoverageBaselineExpectedMissCmMean === 540
+      && first.segmentTrajectoryCoverageSelectedExpectedMissCmMean === 260
+      && first.segmentTrajectoryCoverageHypothesisCounts.stop === 1
+      && first.segmentTrajectoryCoverageHitAttribution.confirmedByAcceptedShotMetadata === 1
+      && first.engagementCumulativeTrajectoryCoverageAppliedAcceptedShots === 1
+      && first.engagementCumulativeTrajectoryCoverageAppliedConfirmedHits === 1);
     assert('index summary preserves exit and death tail', first.exitTriggerHp === 79
       && first.finalObservedHp === 0
       && first.postTriggerDamage === 79
@@ -693,11 +1088,73 @@ function runCombatBattleLogSelfTest() {
     }));
     assert('gz frames redacted secrets', !decompressed.includes('leak-token'));
 
-    // Same engagement re-opening after an idle gap gets a distinct file.
+    // A -> B -> A carries an explicit prior file and only the new segment
+    // delta, rather than duplicating the root engagement cumulative metrics.
     nowMs += 100000;
-    log.record('combat-live', frame('100:1000', { lastObservedAt: nowMs }));
+    log.record('combat-live', frame('100:1000', {
+      requestedShots: 8,
+      acceptedShots: 8,
+      confirmedHits: 4,
+      targetDamage: 120,
+      selfDamage: 8,
+      incomingHits: 3,
+      totalStaminaSpent: 5100,
+      shootingStaminaSpent: 4000,
+      movementStaminaSpent: 1100,
+      lastObservedAt: nowMs
+    }));
     log.flush('shutdown');
     assert('re-opened battle uses distinct file', fs.existsSync(path.join(battlesDir, '100_1000-2.jsonl.gz')));
+    const afterReopen = fs.readFileSync(path.join(battlesDir, INDEX_FILE), 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse);
+    const reopened = afterReopen.at(-1);
+    assert('re-opened segment uses additive deltas and prior file', reopened.segmentOrdinal === 2
+      && reopened.priorSegmentFile === '100_1000.jsonl.gz'
+      && reopened.segmentRequestedShots === 3
+      && reopened.segmentAcceptedShots === 3
+      && reopened.segmentConfirmedHits === 1
+      && reopened.segmentTargetDamage === 30
+      && reopened.segmentSelfDamage === 2
+      && reopened.engagementCumulativeAcceptedShots === 8);
+    const additiveAccepted = afterReopen
+      .filter(item => item.engagementId === '100:1000')
+      .reduce((sum, item) => sum + Number(item.segmentAcceptedShots || 0), 0);
+    assert('segments sum to the final root cumulative metrics', additiveAccepted === reopened.engagementCumulativeAcceptedShots);
+
+    // A counter reset is explicit and never produces a negative segment value.
+    nowMs += 100000;
+    log.record('combat-live', frame('100:1000', {
+      requestedShots: 2,
+      acceptedShots: 2,
+      confirmedHits: 1,
+      targetDamage: 6,
+      selfDamage: 1,
+      incomingHits: 1,
+      totalStaminaSpent: 1200,
+      shootingStaminaSpent: 1000,
+      movementStaminaSpent: 200,
+      lastObservedAt: nowMs,
+      coverageShotAttribution: [{
+        bulletId: 'coverage-reset-1',
+        acceptedShotOrdinal: 1,
+        coverageApplied: true,
+        coverageImprovementQualified: true,
+        baselineExpectedMissCm: 500,
+        selectedExpectedMissCm: 300,
+        expectedMissImprovementCm: 200,
+        hypothesis: 'continue',
+        variant: 'immediate',
+        selectionMode: 'weighted-sample',
+        confirmedHit: false
+      }]
+    }));
+    log.flush('counter-reset');
+    const resetSummary = fs.readFileSync(path.join(battlesDir, INDEX_FILE), 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse).at(-1);
+    assert('counter resets stay non-negative and are labeled', resetSummary.segmentOrdinal === 3
+      && resetSummary.segmentAcceptedShots === 2
+      && resetSummary.segmentTargetDamage === 6
+      && resetSummary.segmentTrajectoryCoverageAppliedAcceptedShots === 1
+      && resetSummary.counterResetFields.includes('acceptedShots')
+      && resetSummary.counterResetFields.includes('targetDamage'));
 
     // The background worker may not have created either the raw or gz path by
     // the time the same engagement reopens. In-memory path allocation must
@@ -720,7 +1177,7 @@ function runCombatBattleLogSelfTest() {
     assert('queued background operations exercised', queuedOperations.length >= 4);
 
     const status = log.status();
-    assert('status counts finalized battles', status.battlesFinalized === 3);
+    assert('status counts finalized battles', status.battlesFinalized === 4);
     assert('status counts discarded idle frames', status.framesDiscarded >= 1);
 
     return { ok: true, cases };
@@ -732,6 +1189,7 @@ function runCombatBattleLogSelfTest() {
 }
 
 module.exports = {
+  BATTLE_INDEX_FORMAT_VERSION,
   DEFAULT_IDLE_FINALIZE_MS,
   MAX_INDEX_LINE_BYTES,
   BEHAVIOR_MODE_KEYS,

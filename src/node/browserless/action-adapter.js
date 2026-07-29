@@ -1282,7 +1282,14 @@ function createBrowserlessActionAdapter(options = {}) {
       marginalCoverage: numberOrNull(shotMeta.marginalCoverage),
       hardMarginalCoverage: numberOrNull(shotMeta.hardMarginalCoverage),
       coverageAimX: numberOrNull(shotMeta.coverageAimX),
-      coverageAimY: numberOrNull(shotMeta.coverageAimY)
+      coverageAimY: numberOrNull(shotMeta.coverageAimY),
+      coverageApplied: shotMeta.coverageApplied === true,
+      coverageBaselineExpectedMissCm: numberOrNull(shotMeta.coverageBaselineExpectedMissCm),
+      coverageSelectedExpectedMissCm: numberOrNull(shotMeta.coverageSelectedExpectedMissCm),
+      coverageExpectedMissImprovementCm: numberOrNull(shotMeta.coverageExpectedMissImprovementCm),
+      coverageImprovementQualified: shotMeta.coverageImprovementQualified === true,
+      coverageSelectionMode: String(shotMeta.coverageSelectionMode || ''),
+      coverageRouteSelectionMode: String(shotMeta.coverageRouteSelectionMode || '')
     };
     nextCommandId += 1;
     state.sentCount += 1;
@@ -1323,7 +1330,14 @@ function createBrowserlessActionAdapter(options = {}) {
           marginalCoverage: command.marginalCoverage,
           hardMarginalCoverage: command.hardMarginalCoverage,
           coverageAimX: command.coverageAimX,
-          coverageAimY: command.coverageAimY
+          coverageAimY: command.coverageAimY,
+          coverageApplied: command.coverageApplied,
+          coverageBaselineExpectedMissCm: command.coverageBaselineExpectedMissCm,
+          coverageSelectedExpectedMissCm: command.coverageSelectedExpectedMissCm,
+          coverageExpectedMissImprovementCm: command.coverageExpectedMissImprovementCm,
+          coverageImprovementQualified: command.coverageImprovementQualified,
+          coverageSelectionMode: command.coverageSelectionMode,
+          coverageRouteSelectionMode: command.coverageRouteSelectionMode
         });
       } catch (_) {}
     }
@@ -1908,7 +1922,16 @@ function createBrowserlessActionAdapter(options = {}) {
             marginalCoverage: combat.aim?.trajectoryCoverage?.selected?.marginalCoverage,
             hardMarginalCoverage: combat.aim?.trajectoryCoverage?.selected?.hardMarginalCoverage,
             coverageAimX: combat.aim?.trajectoryCoverage?.selected?.aimX,
-            coverageAimY: combat.aim?.trajectoryCoverage?.selected?.aimY
+            coverageAimY: combat.aim?.trajectoryCoverage?.selected?.aimY,
+            coverageApplied: combat.aim?.trajectoryCoverage?.applied === true,
+            coverageBaselineExpectedMissCm: combat.aim?.trajectoryCoverage?.selected?.baselineExpectedMissCm,
+            coverageSelectedExpectedMissCm: combat.aim?.trajectoryCoverage?.selected?.selectedExpectedMissCm,
+            coverageExpectedMissImprovementCm: combat.aim?.trajectoryCoverage?.selected?.expectedMissImprovementCm,
+            coverageImprovementQualified: combat.aim?.trajectoryCoverage?.selected?.improvementQualified === true,
+            coverageSelectionMode: combat.aim?.routeCoverage?.selection?.mode,
+            coverageRouteSelectionMode: combat.aim?.routeCoverage?.selection?.mode === 'legacy-fixed'
+              ? 'legacy-fixed'
+              : 'weighted'
           }
         );
       }

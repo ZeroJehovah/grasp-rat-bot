@@ -860,7 +860,14 @@ function createBrowserlessStateStore(options = {}) {
       marginalCoverage: numericOrNull(request.marginalCoverage),
       hardMarginalCoverage: numericOrNull(request.hardMarginalCoverage),
       coverageAimX: numericOrNull(request.coverageAimX),
-      coverageAimY: numericOrNull(request.coverageAimY)
+      coverageAimY: numericOrNull(request.coverageAimY),
+      coverageApplied: request.coverageApplied === true,
+      coverageBaselineExpectedMissCm: numericOrNull(request.coverageBaselineExpectedMissCm),
+      coverageSelectedExpectedMissCm: numericOrNull(request.coverageSelectedExpectedMissCm),
+      coverageExpectedMissImprovementCm: numericOrNull(request.coverageExpectedMissImprovementCm),
+      coverageImprovementQualified: request.coverageImprovementQualified === true,
+      coverageSelectionMode: String(request.coverageSelectionMode || ''),
+      coverageRouteSelectionMode: String(request.coverageRouteSelectionMode || '')
     };
     state.command.requestedShots += 1;
     state.command.pendingShots.push(shot);

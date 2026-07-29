@@ -35,7 +35,10 @@ const {
 const { createBrowserlessActionAdapter } = require('./action-adapter');
 const { buildLeavePendingCover } = require('./leave-pending-control');
 const {
+  buildExitRecoveryOutcome,
+  createExitAttemptId,
   normalizePendingExit,
+  pendingExitIsExpired,
   pendingExitRecoveryEvent,
   pendingExitSnapshotResolution
 } = require('./pending-exit-recovery');
@@ -1357,10 +1360,26 @@ async function runReadOnlyCanary(config, options = {}) {
   const runId = String(options.runId || createCanaryRunId(controlMode, startedAt));
   const runtimeRevision = browserlessRuntimeRevision(options);
   const previousInGameEvidence = inGameRecoveryEvidenceFromState(options.persistedState || {});
-  const persistedPendingExit = normalizePendingExit(options.persistedState?.runner?.pendingExit, startedAt, {
+  const persistedPendingExitValue = options.persistedState?.runner?.pendingExit || null;
+  const pendingExitPersistenceOptions = {
+    maximumAgeMs: options.pendingExitPersistMaxMs
+  };
+  const persistedPendingExit = normalizePendingExit(persistedPendingExitValue, startedAt, {
     maximumAgeMs: options.pendingExitPersistMaxMs
   });
-  let exitRecoveryActive = Boolean(persistedPendingExit);
+  const expiredPendingExit = pendingExitIsExpired(persistedPendingExitValue, startedAt, pendingExitPersistenceOptions)
+    ? normalizePendingExit(persistedPendingExitValue, startedAt, {
+        ...pendingExitPersistenceOptions,
+        allowExpired: true
+      })
+    : null;
+  let exitRecoveryActive = Boolean(persistedPendingExit || expiredPendingExit);
+  const persistedExitOutcomeLedger = Array.isArray(options.persistedState?.runner?.exitRecoveryOutcomes)
+    ? options.persistedState.runner.exitRecoveryOutcomes
+    : [];
+  const emittedExitOutcomeIds = new Set(persistedExitOutcomeLedger
+    .map(item => String(item?.exitAttemptId || ''))
+    .filter(Boolean));
   const result = {
     ok: false,
     runId,
@@ -1435,9 +1454,10 @@ async function runReadOnlyCanary(config, options = {}) {
       source: previousInGameEvidence?.source || '',
       previousRunId: previousInGameEvidence?.previousRunId || '',
       clearedBy: '',
-      exitRecovery: Boolean(persistedPendingExit),
-      pendingExit: persistedPendingExit,
-      pendingExitResolution: persistedPendingExit ? 'pending-snapshot-check' : 'inactive'
+      exitRecovery: Boolean(persistedPendingExit || expiredPendingExit),
+      pendingExit: persistedPendingExit || expiredPendingExit,
+      pendingExitResolution: persistedPendingExit ? 'pending-snapshot-check' : (expiredPendingExit ? 'pending-timeout' : 'inactive'),
+      exitOutcomes: []
     },
     leave: null,
     targetWhitelist: targetWhitelistSummary,
@@ -1469,6 +1489,7 @@ async function runReadOnlyCanary(config, options = {}) {
   let transportPublished = false;
   let transport = null;
   let leavePending = null;
+  let exitAttemptSequence = 0;
   let leaveSupervisor = options.leaveSupervisor || null;
   let wsFrameScheduler = null;
   let pendingSnapshotObserver = null;
@@ -1574,10 +1595,42 @@ async function runReadOnlyCanary(config, options = {}) {
     if (logStore) logStore.append('decisions', 'decision', addRunMeta(detail));
   };
   const logSafety = detail => {
-    if (logStore) logStore.append('exits', 'safety-event', addRunMeta(detail));
+    if (logStore) logStore.append('exits', 'safety-event', addRunMeta(withExitAttemptId(detail)));
+  };
+  const exitAttemptIdForDetail = detail => String(
+    detail?.exitAttemptId
+      ?? detail?.pending?.exitAttemptId
+      ?? leavePending?.exitAttemptId
+      ?? persistedPendingExit?.exitAttemptId
+      ?? expiredPendingExit?.exitAttemptId
+      ?? ''
+  );
+  const withExitAttemptId = detail => {
+    const base = detail && typeof detail === 'object' && !Array.isArray(detail)
+      ? detail
+      : { value: detail };
+    const exitAttemptId = exitAttemptIdForDetail(base);
+    return exitAttemptId && !base.exitAttemptId ? { ...base, exitAttemptId } : base;
   };
   const logExit = (type, detail) => {
-    if (logStore) logStore.append('exits', type, addRunMeta(detail));
+    if (logStore) logStore.append('exits', type, addRunMeta(withExitAttemptId(detail)));
+  };
+  const emitExitRecoveryOutcome = outcome => {
+    if (!outcome?.exitAttemptId) return false;
+    const id = String(outcome.exitAttemptId);
+    if (emittedExitOutcomeIds.has(id)) return false;
+    emittedExitOutcomeIds.add(id);
+    const normalized = {
+      ...outcome,
+      exitAttemptId: id,
+      httpStatuses: Array.isArray(outcome.httpStatuses) ? outcome.httpStatuses.slice(-16) : [],
+      reloginAllowed: outcome.reloginAllowed === true
+    };
+    result.recovery.exitOutcomes.push(normalized);
+    result.recovery.exitOutcomes = result.recovery.exitOutcomes.slice(-8);
+    result.recovery.lastExitOutcome = normalized;
+    logExit('exit-recovery-outcome', normalized);
+    return true;
   };
   const logDynamicWhitelistRestores = restored => {
     for (const item of restored || []) log('canary-dynamic-whitelist-restored-after-combat', item);
@@ -1687,7 +1740,7 @@ async function runReadOnlyCanary(config, options = {}) {
   const logBattleTail = (type, detail, atMs = now()) => {
     if (!combatBattleLog?.recordTail) return null;
     try {
-      return combatBattleLog.recordTail(type, addRunMeta(detail), { atMs });
+      return combatBattleLog.recordTail(type, addRunMeta(withExitAttemptId(detail)), { atMs });
     } catch (err) {
       log('combat-battle-tail-error', { type, error: errorMessage(err) });
       return null;
@@ -1938,6 +1991,12 @@ async function runReadOnlyCanary(config, options = {}) {
   };
   const publicLeavePending = pending => pending ? {
     active: Boolean(!pending.settled),
+    exitAttemptId: String(pending.exitAttemptId || ''),
+    recoveredFromExitAttemptId: String(pending.recoveredFromExitAttemptId || ''),
+    originalReason: String(pending.originalReason || pending.event?.reason || ''),
+    sourceRunId: String(pending.sourceRunId || runId || ''),
+    firstAt: new Date(pending.firstAtMs || pending.startedAtMs).toISOString(),
+    firstAtMs: pending.firstAtMs || pending.startedAtMs,
     startedAt: new Date(pending.startedAtMs).toISOString(),
     startedAtMs: pending.startedAtMs,
     eventAtMs: pending.eventAtMs,
@@ -1963,6 +2022,9 @@ async function runReadOnlyCanary(config, options = {}) {
       ? null
       : Math.max(0, pending.startHp - pending.minHp),
     targetId: pending.targetId || '',
+    httpStatuses: Array.isArray(pending.httpStatuses) ? pending.httpStatuses.slice(-16) : [],
+    requestResultCount: Math.max(0, Number(pending.requestResultCount || 0)),
+    reloginAllowed: false,
     lastCover: compactLeavePendingCover(pending.lastCover),
     settled: Boolean(pending.settled),
     ok: pending.ok === null ? null : Boolean(pending.ok),
@@ -2018,13 +2080,27 @@ async function runReadOnlyCanary(config, options = {}) {
   };
   const startLeavePending = (event, currentState, atMs, detail = {}) => {
     if (!event?.shouldLeave || leavePending) return leavePending;
+    const continuedPendingExit = detail.continuePendingExit === true
+      ? normalizePendingExit(detail.pendingExit, atMs, {
+          maximumAgeMs: Number.MAX_SAFE_INTEGER,
+          allowExpired: true
+        })
+      : null;
     const selfHp = Number(currentState?.realtime?.self?.hp);
+    const currentHp = Number.isFinite(selfHp) ? selfHp : null;
+    const previousMinHp = Number(continuedPendingExit?.minHp);
+    const previousLastHp = Number(continuedPendingExit?.lastHp);
     const eventAtMs = Date.parse(String(event.at || ''));
     leavePending = {
+      exitAttemptId: continuedPendingExit?.exitAttemptId
+        || createExitAttemptId(runId, atMs, exitAttemptSequence++),
+      originalReason: String(continuedPendingExit?.originalReason || event.reason || 'unconfirmed-leave'),
+      sourceRunId: String(continuedPendingExit?.sourceRunId || runId),
       event,
       triggerDecision: detail.decision || result.decisions.last,
       target: detail.decision?.action?.target || detail.decision?.combat?.target || null,
       targetId: String(detail.decision?.action?.target?.userId ?? detail.decision?.combat?.target?.userId ?? ''),
+      firstAtMs: continuedPendingExit?.firstAtMs || atMs,
       startedAtMs: atMs,
       eventAtMs: Number.isFinite(eventAtMs) ? eventAtMs : atMs,
       dispatchedAtMs: now(),
@@ -2038,9 +2114,20 @@ async function runReadOnlyCanary(config, options = {}) {
       coverRecomputeCount: 0,
       dynamicCoverCount: 0,
       directionChangeCount: 0,
-      startHp: Number.isFinite(selfHp) ? selfHp : null,
-      lastHp: Number.isFinite(selfHp) ? selfHp : null,
-      minHp: Number.isFinite(selfHp) ? selfHp : null,
+      startHp: continuedPendingExit?.startHp ?? currentHp,
+      lastHp: currentHp ?? (Number.isFinite(previousLastHp) ? previousLastHp : null),
+      minHp: currentHp === null
+        ? (Number.isFinite(previousMinHp) ? previousMinHp : null)
+        : (Number.isFinite(previousMinHp) ? Math.min(previousMinHp, currentHp) : currentHp),
+      httpStatuses: Array.isArray(continuedPendingExit?.httpStatuses)
+        ? continuedPendingExit.httpStatuses.slice(-16)
+        : [],
+      requestResultCount: 0,
+      recoveredFromExitAttemptId: String(
+        continuedPendingExit?.recoveredFromExitAttemptId
+          || detail.recoveredFromExitAttemptId
+          || ''
+      ),
       lastCover: detail.cover || null,
       settled: false,
       ok: null,
@@ -2076,8 +2163,16 @@ async function runReadOnlyCanary(config, options = {}) {
         logBattleTail('leave-request-start', detail, requestAtMs);
       },
       onLeaveResult: attempt => {
-        logExit('leave-request-result', attempt);
-        logBattleTail('leave-request-result', attempt, now());
+        const status = Number(attempt?.status);
+        if (Number.isFinite(status)) {
+          leavePending.httpStatuses.push(Math.max(0, Math.round(status)));
+          leavePending.httpStatuses = leavePending.httpStatuses.slice(-16);
+        }
+        leavePending.requestResultCount += 1;
+        result.safety.leavePending = publicLeavePending(leavePending);
+        const detail = { ...attempt, exitAttemptId: leavePending.exitAttemptId };
+        logExit('leave-request-result', detail);
+        logBattleTail('leave-request-result', detail, now());
       },
       onLeaveConfirmed: async leave => {
         if (wsFrameScheduler) {
@@ -2116,6 +2211,24 @@ async function runReadOnlyCanary(config, options = {}) {
       result.safety.leavePending = publicLeavePending(leavePending);
       logExit('leave-pending-finish', result.safety.leavePending);
       logBattleTail('leave-pending-finish', { pending: result.safety.leavePending, ok: Boolean(exit?.ok) }, leavePending.completedAtMs);
+      if (exit?.ok) {
+        emitExitRecoveryOutcome(buildExitRecoveryOutcome(leavePending, {
+          outcome: 'confirmed-absent',
+          authority: 'HTTP',
+          completedAtMs: leavePending.completedAtMs,
+          // Result callbacks already recorded every attempt in the pending
+          // chain. Fall back to the terminal response only for adapters that
+          // cannot emit those callbacks, preserving the actual sequence.
+          httpStatuses: Number(leavePending.requestResultCount || 0) > 0
+            ? []
+            : [
+                ...(Array.isArray(exit?.leave?.attempts) ? exit.leave.attempts.map(item => item?.status) : []),
+                ...(Array.isArray(exit?.attempts) ? exit.attempts.map(item => item?.status) : [])
+              ],
+          lastHp: leavePending.lastHp,
+          minHp: leavePending.minHp
+        }));
+      }
       return exit;
     }).catch(err => {
       leavePending.settled = true;
@@ -2151,7 +2264,12 @@ async function runReadOnlyCanary(config, options = {}) {
       }, atMs);
       startLeavePending(event, currentState, atMs, {
         decision: context.decision || result.decisions.last,
-        cover
+        cover,
+        pendingExit: event?.detail?.pendingExit || null,
+        continuePendingExit: event?.detail?.continuePendingExit === true,
+        recoveredFromExitAttemptId: event?.detail?.continuePendingExit === true
+          ? ''
+          : (event?.detail?.pendingExit?.exitAttemptId || '')
       });
     };
     let cover = null;
@@ -2674,26 +2792,114 @@ async function runReadOnlyCanary(config, options = {}) {
   }
   log('canary-snapshot-safety', result.snapshotSafety);
   result.snapshotSafety = allowSelfPresentSnapshotControl(result.snapshotSafety);
-  const pendingExitResolution = pendingExitSnapshotResolution(persistedPendingExit, result.snapshotSafety);
+  const recoveryPendingExit = persistedPendingExit || expiredPendingExit;
+  const pendingExitResolution = recoveryPendingExit
+    ? pendingExitSnapshotResolution(recoveryPendingExit, result.snapshotSafety, {
+        maximumAgeMs: Number.MAX_SAFE_INTEGER,
+        allowExpired: true
+      })
+    : { active: false, cleared: false, reason: 'inactive', pendingExit: null, outcome: null };
   exitRecoveryActive = pendingExitResolution.active;
   result.recovery.exitRecovery = pendingExitResolution.active;
   result.recovery.pendingExit = pendingExitResolution.pendingExit;
   result.recovery.pendingExitResolution = pendingExitResolution.reason;
   if (pendingExitResolution.cleared) {
+    emitExitRecoveryOutcome(pendingExitResolution.outcome);
+    logExit('exit-recovery-snapshot-resolution', {
+      exitAttemptId: recoveryPendingExit?.exitAttemptId || '',
+      reason: pendingExitResolution.reason,
+      authority: 'snapshot',
+      selfPresent: false
+    });
     log('canary-exit-recovery-cleared', {
       reason: pendingExitResolution.reason,
-      previousRunId: persistedPendingExit?.sourceRunId || '',
-      pendingReason: persistedPendingExit?.reason || ''
+      previousRunId: recoveryPendingExit?.sourceRunId || '',
+      pendingReason: recoveryPendingExit?.reason || '',
+      exitAttemptId: recoveryPendingExit?.exitAttemptId || ''
     });
   } else if (pendingExitResolution.active) {
+    const snapshotSummary = result.snapshotSafety?.response?.summary || {};
+    const snapshotFresh = snapshotSummary?.freshness?.ok === true
+      || (snapshotSummary?.freshness?.ok === undefined && result.snapshotSafety?.ok === true);
+    const snapshotSelfPresent = snapshotFresh && snapshotSummary.selfPresent === true;
+    const timeoutUnconfirmed = Boolean(expiredPendingExit && !snapshotSelfPresent);
+    if (timeoutUnconfirmed) {
+      emitExitRecoveryOutcome(buildExitRecoveryOutcome(expiredPendingExit, {
+        outcome: 'timeout-unconfirmed',
+        authority: 'HTTP',
+        completedAtMs: startedAt,
+        lastHp: expiredPendingExit.lastHp,
+        minHp: expiredPendingExit.minHp
+      }));
+    }
+    logExit('exit-recovery-snapshot-resolution', {
+      exitAttemptId: recoveryPendingExit?.exitAttemptId || '',
+      reason: pendingExitResolution.reason,
+      authority: 'snapshot',
+      selfPresent: snapshotSelfPresent
+    });
     result.mode = 'exit-recovery';
     log('canary-exit-recovery-active', {
       reason: pendingExitResolution.reason,
-      previousRunId: persistedPendingExit?.sourceRunId || '',
-      pendingReason: persistedPendingExit?.reason || '',
-      attemptCount: persistedPendingExit?.attemptCount || 0,
-      requestAttemptCount: persistedPendingExit?.requestAttemptCount || 0
+      previousRunId: recoveryPendingExit?.sourceRunId || '',
+      pendingReason: recoveryPendingExit?.reason || '',
+      exitAttemptId: recoveryPendingExit?.exitAttemptId || '',
+      attemptCount: recoveryPendingExit?.attemptCount || 0,
+      requestAttemptCount: recoveryPendingExit?.requestAttemptCount || 0
     });
+    // Fresh self presence closes the old chain as recovered; an expired chain
+    // without authoritative absence closes as timeout-unconfirmed. Neither is
+    // relogin authority, so both immediately launch a new protected leave ID.
+    if ((snapshotSelfPresent || timeoutUnconfirmed) && recoveryPendingExit) {
+      if (snapshotSelfPresent) {
+        emitExitRecoveryOutcome(buildExitRecoveryOutcome(recoveryPendingExit, {
+          outcome: 'self-present-recovered',
+          authority: 'snapshot',
+          completedAtMs: startedAt,
+          lastHp: result.snapshotSafety?.response?.summary?.self?.hp ?? recoveryPendingExit.lastHp,
+          minHp: recoveryPendingExit.minHp
+        }));
+      }
+      const recoveryEvent = pendingExitRecoveryEvent(recoveryPendingExit, startedAt, {
+        maximumAgeMs: Number.MAX_SAFE_INTEGER,
+        allowExpired: true
+      });
+      if (recoveryEvent) {
+        if (snapshotSelfPresent) result.recovery.inGameEvidence = true;
+        result.recovery.reason = snapshotSelfPresent
+          ? 'pending-exit-self-present'
+          : 'pending-exit-timeout-unconfirmed';
+        result.recovery.source = snapshotSelfPresent
+          ? 'persisted-pending-exit-snapshot'
+          : 'persisted-pending-exit-timeout';
+        result.recovery.previousRunId = recoveryPendingExit.sourceRunId || '';
+        recordSafetyEvent(recoveryEvent, {
+          state: stateStore.getDecisionState?.(startedAt) || stateStore.getState(startedAt),
+          decision: result.decisions.last,
+          atMs: startedAt
+        });
+      }
+    } else if (recoveryPendingExit) {
+      // A stale/failed snapshot supplies no terminal authority. Retry the
+      // existing protected chain under the same ID so its duration, attempts,
+      // and HTTP sequence remain continuous until absence, presence, or the
+      // explicit persistence timeout closes it.
+      const recoveryEvent = pendingExitRecoveryEvent(recoveryPendingExit, startedAt, {
+        maximumAgeMs: Number.MAX_SAFE_INTEGER,
+        allowExpired: true,
+        continueAttempt: true
+      });
+      if (recoveryEvent) {
+        result.recovery.reason = 'pending-exit-absence-unconfirmed';
+        result.recovery.source = 'persisted-pending-exit-snapshot-unconfirmed';
+        result.recovery.previousRunId = recoveryPendingExit.sourceRunId || '';
+        recordSafetyEvent(recoveryEvent, {
+          state: stateStore.getDecisionState?.(startedAt) || stateStore.getState(startedAt),
+          decision: result.decisions.last,
+          atMs: startedAt
+        });
+      }
+    }
   }
   if (result.snapshotSafety?.bypassKind === 'single-blocker-timeout') {
     log('canary-snapshot-single-blocker-timeout-bypass', result.snapshotSafety);
@@ -2727,6 +2933,26 @@ async function runReadOnlyCanary(config, options = {}) {
         nowMs: now()
       }));
       result.error = `snapshot safety not confirmed: ${result.snapshotSafety.reason}`;
+      // An expired unconfirmed chain may already have started a fresh
+      // protected leave above. Settle it before this pre-login rejection
+      // returns so request/result statuses and the renewed pending chain are
+      // not left racing the runner's persistence step.
+      if (leavePending?.promise) {
+        try {
+          result.safety.exit = await leavePending.promise;
+          result.leave = result.safety.exit?.leave || null;
+        } catch (err) {
+          const message = errorMessage(err);
+          result.leave = { ok: false, error: message, attempts: [] };
+          result.safety.exit = {
+            ok: false,
+            event: result.safety.event,
+            stopMotion: null,
+            leave: result.leave,
+            error: message
+          };
+        }
+      }
       result.completedAt = new Date(now()).toISOString();
       log('canary-blocked', { error: result.error });
       try {
@@ -2966,12 +3192,28 @@ async function runReadOnlyCanary(config, options = {}) {
               result.entry.firstSelfTick = currentState?.realtime?.tick ?? frame.decodedTick ?? null;
             }
             if (exitRecoveryActive && currentSelf && !leavePending) {
-              const recoveryEvent = pendingExitRecoveryEvent(persistedPendingExit, atMs);
+              const recoveryEvent = pendingExitRecoveryEvent(recoveryPendingExit, atMs, {
+                maximumAgeMs: Number.MAX_SAFE_INTEGER,
+                allowExpired: true
+              });
               if (recoveryEvent) {
+                emitExitRecoveryOutcome(buildExitRecoveryOutcome(recoveryPendingExit, {
+                  outcome: 'self-present-recovered',
+                  authority: 'realtime',
+                  completedAtMs: atMs,
+                  lastHp: currentSelf.hp ?? recoveryPendingExit?.lastHp,
+                  minHp: recoveryPendingExit?.minHp
+                }));
+                logExit('exit-recovery-realtime-observed', {
+                  exitAttemptId: recoveryPendingExit?.exitAttemptId || '',
+                  authority: 'realtime',
+                  tick: currentState?.realtime?.tick ?? frame.decodedTick ?? null,
+                  selfHp: Number.isFinite(Number(currentSelf.hp)) ? Number(currentSelf.hp) : null
+                });
                 result.recovery.inGameEvidence = true;
                 result.recovery.reason = 'pending-exit-self-present';
                 result.recovery.source = 'persisted-pending-exit';
-                result.recovery.previousRunId = persistedPendingExit?.sourceRunId || '';
+                result.recovery.previousRunId = recoveryPendingExit?.sourceRunId || '';
                 recordSafetyEvent(recoveryEvent, {
                   state: currentState,
                   decision: result.decisions.last,

@@ -5440,7 +5440,7 @@ function runStrategyModuleSelfTests() {
       }, { minimumMarginalCoverage: 0 }).existingShotCount === 0
   });
   results.push({
-    name: 'combat-shot-coverage-live-single-applies-high-entropy-selection-without-history-gate',
+    name: 'combat-shot-coverage-live-single-requires-qualified-improvement-without-history-gate',
     passed: shouldApplyTrajectoryCoverageCore({
       mode: 'live-single',
       highEntropy: true,
@@ -5453,7 +5453,8 @@ function runStrategyModuleSelfTests() {
         highEntropy: false,
         dynamicBehaviorEligible: true,
         planActive: true,
-        hasSelection: true
+        hasSelection: true,
+        improvementQualified: true
       }) === true
       && shouldApplyTrajectoryCoverageCore({
         mode: 'live-single',
@@ -5483,7 +5484,7 @@ function runStrategyModuleSelfTests() {
         planActive: true,
         hasSelection: true,
         improvementQualified: false
-      }) === true
+      }) === false
   });
   results.push({
     name: 'combat-shot-coverage-dynamic-behavior-requires-stable-high-confidence-evidence',

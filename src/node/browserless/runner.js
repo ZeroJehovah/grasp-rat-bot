@@ -87,7 +87,8 @@ const { runSnapshotEdgeSelfTest } = require('./snapshot-edge-wait');
 const {
   normalizePendingExit,
   pendingExitFromCanary,
-  pendingExitSnapshotResolution
+  pendingExitSnapshotResolution,
+  runPendingExitRecoverySelfTest
 } = require('./pending-exit-recovery');
 const {
   buildSnapshotProbeUrl,
@@ -1803,6 +1804,7 @@ async function runBrowserlessRunner(config, deps = {}) {
       ...scheduledLoopPlan,
       delayMs: effectiveDelayMs,
       nextRunAt,
+      exitAttemptId: pendingExit?.exitAttemptId || '',
       supervisorErrors: supervisorErrors.slice(-5)
     };
     const exitRecoveryWait = loopPlan.reason === 'exit-recovery';
@@ -1823,7 +1825,10 @@ async function runBrowserlessRunner(config, deps = {}) {
           explicitDelay: Boolean(scheduledLoopPlan.explicitDelay),
           dailyFirstLoginDeadlineApplied,
           previousRunId: loopPlan.previousRunId || '',
-          ...(exitRecoveryWait ? { pendingExit: pendingExit || null } : {})
+          ...(exitRecoveryWait ? {
+            pendingExit: pendingExit || null,
+            exitAttemptId: pendingExit?.exitAttemptId || ''
+          } : {})
         },
         gameplayDeadline: pendingExit
           ? null
@@ -2064,12 +2069,23 @@ async function runBrowserlessRunner(config, deps = {}) {
     );
     const currentState = readBrowserlessStateFile(stateFile);
     const pendingResolution = pendingExitSnapshotResolution(currentState?.runner?.pendingExit, snapshotSafety);
+    const priorExitRecoveryOutcomes = Array.isArray(currentState?.runner?.exitRecoveryOutcomes)
+      ? currentState.runner.exitRecoveryOutcomes
+      : [];
+    const outcome = pendingResolution.outcome?.exitAttemptId
+      && !priorExitRecoveryOutcomes.some(item => String(item?.exitAttemptId || '') === String(pendingResolution.outcome.exitAttemptId))
+      ? pendingResolution.outcome
+      : null;
+    const exitRecoveryOutcomes = outcome
+      ? [...priorExitRecoveryOutcomes, outcome].slice(-64)
+      : priorExitRecoveryOutcomes;
     const patch = mergeState(snapshotOfflineTransitionPatch(currentState, snapshotSafety, now()), {
       loginPointSafety: loginPointSafetyPatchFromSnapshot(snapshotSafety),
       ...((clearsConfirmedLeave || pendingResolution.cleared) ? {
         runner: {
           ...(clearsConfirmedLeave ? { confirmedLeave: null } : {}),
-          ...(pendingResolution.cleared ? { pendingExit: null } : {})
+          ...(pendingResolution.cleared ? { pendingExit: null } : {}),
+          ...(outcome ? { exitRecoveryOutcomes } : {})
         }
       } : {})
     });
@@ -2085,6 +2101,7 @@ async function runBrowserlessRunner(config, deps = {}) {
       streak: snapshotSafety?.streak ?? null,
       required: snapshotSafety?.required ?? null,
       selfPresent: summary.selfPresent === undefined ? null : Boolean(summary.selfPresent),
+      exitAttemptId: pendingResolution.pendingExit?.exitAttemptId || outcome?.exitAttemptId || '',
       tick: summary.tick ?? null,
       freshness: {
         ok: freshness.ok === undefined ? null : Boolean(freshness.ok),
@@ -2117,6 +2134,7 @@ async function runBrowserlessRunner(config, deps = {}) {
       singleBlockerHold: summary?.safety?.singleBlockerHold || null,
       bypassKind: snapshotSafety?.bypassKind || ''
     });
+    if (outcome) logStore.append('runner', 'exit-recovery-outcome', outcome);
     if (pendingResolution.cleared) {
       logStore.append('runner', 'pending-exit-cleared-by-snapshot', {
         reason: pendingResolution.reason,
@@ -2940,6 +2958,16 @@ async function runBrowserlessRunner(config, deps = {}) {
       }, activeRunKillConfirmations));
     const currentStateBeforeFinish = readBrowserlessStateFile(stateFile);
     const finalStateBase = liveState || currentStateBeforeFinish;
+    const priorExitRecoveryOutcomes = Array.isArray(finalStateBase?.runner?.exitRecoveryOutcomes)
+      ? finalStateBase.runner.exitRecoveryOutcomes
+      : [];
+    const currentExitRecoveryOutcomes = Array.isArray(canary?.recovery?.exitOutcomes)
+      ? canary.recovery.exitOutcomes
+      : [];
+    const exitRecoveryOutcomes = Array.from(new Map([
+      ...priorExitRecoveryOutcomes,
+      ...currentExitRecoveryOutcomes
+    ].filter(item => item?.exitAttemptId).map(item => [String(item.exitAttemptId), item])).values()).slice(-64);
     const finalLastKnown = finalLastKnownFromCanary(finalStateBase.lastKnown, finalSelf, canary, now());
     const finalState = mergeState(finalStateBase, {
       ...finalDecisionPatch,
@@ -2951,6 +2979,7 @@ async function runBrowserlessRunner(config, deps = {}) {
         running: !config.once,
         mode: nextPendingExit ? 'exit-recovery' : (config.controlMode || 'read-only'),
         pendingExit: nextPendingExit,
+        exitRecoveryOutcomes,
         lastRun: result,
         lastError: result.ok ? '' : (canary?.error || 'read-only-canary-failed')
       },
@@ -5003,6 +5032,7 @@ async function runBrowserlessRunnerSelfTest() {
     }
     const complexCombatMainThreadBudget = await runComplexCombatMainThreadBudgetSelfTest(tmp);
     const snapshotEdge = await runSnapshotEdgeSelfTest();
+    const pendingExitRecovery = runPendingExitRecoverySelfTest();
     const combatBattleLog = runCombatBattleLogSelfTest();
     const dynamicWhitelist = require('./dynamic-whitelist-self-test').runDynamicWhitelistSelfTest();
     const runnerLog = path.join(tmp, 'logs', '2026-07-08', 'runner.jsonl');
@@ -5059,6 +5089,7 @@ async function runBrowserlessRunnerSelfTest() {
         && nearbyMapLegacyCompatibilityTest.ok
         && statusServerChatTest.ok
         && snapshotEdge.ok
+        && pendingExitRecovery.ok
         && combatBattleLog.ok
         && dynamicWhitelist.ok
         && complexCombatMainThreadBudget.battleLogOk
@@ -5113,6 +5144,7 @@ async function runBrowserlessRunnerSelfTest() {
       nearbyMapLegacyCompatibilityTest,
       statusServerChatTest,
       snapshotEdge,
+      pendingExitRecovery,
       combatBattleLog,
       dynamicWhitelist,
       complexCombatMainThreadBudget,
