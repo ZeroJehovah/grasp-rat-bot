@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.29.2';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.29.3';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function mapMarkerKeyCore(kind, primary, fallback = '') {
@@ -50,6 +50,23 @@ function highDropRankValueCore(item) {
 
 function isStaminaExhaustionExitReasonCore(reason) {
   return /stamina-exhausted-leave|daily-stamina-exhausted|体力耗尽/i.test(String(reason || ''));
+}
+
+function transportMetricValueClassCore(value, metricKind) {
+  if (value === null || value === undefined || value === '') return 'muted';
+  const number = Number(value);
+  if (!Number.isFinite(number)) return 'muted';
+  const thresholds = {
+    latency: [200, 500],
+    queue: [50, 200],
+    movement: [300, 600],
+    shooting: [500, 1000],
+    frameLoss: [1, 5]
+  };
+  const limits = thresholds[metricKind] || thresholds.latency;
+  if (number < limits[0]) return 'ok';
+  if (number < limits[1]) return 'warn';
+  return 'bad';
 }
 
 function panelSessionFlagsCore(status = {}) {
@@ -231,6 +248,9 @@ function renderBrowserlessWebPanel() {
     .field-value-text{min-width:0;overflow-wrap:anywhere}
     .status-dot{width:8px;height:8px;border-radius:999px;flex:0 0 auto;background:currentColor;box-shadow:0 0 0 1px rgba(255,255,255,.12)}
     .status-dot.breathe{animation:status-breathe 1.6s ease-in-out infinite}
+    .transport-metric{color:var(--text);font-variant-numeric:tabular-nums}
+    .transport-metric .metric-value{font-weight:650}
+    .transport-metric.muted,.transport-metric.muted .metric-value{color:var(--muted)}
     @keyframes status-breathe{0%,100%{opacity:.62;transform:scale(.82);box-shadow:0 0 0 0 rgba(255,255,255,.18)}50%{opacity:1;transform:scale(1);box-shadow:0 0 0 6px rgba(255,255,255,0)}}
     .layout{display:grid;grid-template-columns:minmax(240px,1fr) minmax(0,2fr);gap:10px;align-items:start}
     .stack{display:flex;flex-direction:column;gap:10px;min-width:0}
@@ -563,6 +583,7 @@ function renderBrowserlessWebPanel() {
     const mapMarkerKey = ${mapMarkerKeyCore.toString()};
     const mapAnimationProgress = ${mapAnimationProgressCore.toString()};
     const interpolateMapMarker = ${interpolateMapMarkerCore.toString()};
+    const transportMetricValueClass = ${transportMetricValueClassCore.toString()};
 
     const value = v => v === null || v === undefined || v === '' ? '--' : String(v);
     const number = v => v === null || v === undefined || v === '' ? null : (Number.isFinite(Number(v)) ? Number(v) : null);
@@ -674,27 +695,53 @@ function renderBrowserlessWebPanel() {
       if (health.mode === 'active') return '活跃采样';
       return '等待数据';
     };
-    const latencyPairText = metric => {
+    const metricValueFragment = (value, metricKind, unitText = '') => ({
+      text: value === null ? '--' : Math.round(value) + unitText,
+      className: 'metric-value ' + transportMetricValueClass(value, metricKind)
+    });
+    const latencyPairFragments = (metric, metricKind) => {
       const current = number(metric?.currentMs);
       const p90 = number(metric?.p90Ms);
-      if (current === null && p90 === null) return '--';
-      return '当前 ' + (current === null ? '--' : Math.round(current))
-        + ' / P90 ' + (p90 === null ? '--' : Math.round(p90)) + 'ms';
+      if (current === null && p90 === null) return [metricValueFragment(null, metricKind)];
+      return [
+        { text: '当前 ' },
+        metricValueFragment(current, metricKind, 'ms'),
+        { text: ' / P90 ' },
+        metricValueFragment(p90, metricKind, 'ms')
+      ];
     };
-    const transportCommandLatencyText = command => {
+    const transportCommandLatencyFragments = command => {
       const movement = number(command?.movementP90Ms);
       const shooting = number(command?.shootingAckP90Ms);
-      if (movement === null && shooting === null) return '--';
-      return '移 ' + (movement === null ? '--' : Math.round(movement))
-        + ' / 射 ' + (shooting === null ? '--' : Math.round(shooting)) + 'ms';
+      if (movement === null && shooting === null) return [metricValueFragment(null, 'movement')];
+      return [
+        { text: '移动 ' },
+        metricValueFragment(movement, 'movement', 'ms'),
+        { text: ' / 射击 ' },
+        metricValueFragment(shooting, 'shooting', 'ms')
+      ];
     };
-    const transportFrameLossText = frameLoss => {
+    const transportFrameLossFragments = frameLoss => {
       const percent = number(frameLoss?.percent);
       const missing = number(frameLoss?.missingTicks);
       const expected = number(frameLoss?.expectedTicks);
-      if (percent === null || expected === null || expected <= 0) return '--';
-      return percent.toFixed(2) + '% (' + Math.round(missing || 0) + '/' + Math.round(expected) + ')';
+      if (percent === null || expected === null || expected <= 0) return [metricValueFragment(null, 'frameLoss')];
+      const valueClass = 'metric-value ' + transportMetricValueClass(percent, 'frameLoss');
+      return [
+        { text: percent.toFixed(2) + '%', className: valueClass },
+        { text: ' (' },
+        { text: String(Math.round(missing || 0)), className: valueClass },
+        { text: '/' },
+        { text: String(Math.round(expected)), className: valueClass },
+        { text: ')' }
+      ];
     };
+    const transportMetricClass = health => !health
+      || !health.connected
+      || health.mode === 'offline'
+      || health.mode === 'paused'
+      ? 'transport-metric muted'
+      : 'transport-metric';
     const transportHealthClass = health => {
       if (!health || !health.connected || health.mode === 'offline' || health.mode === 'paused') return 'muted';
       if (health.exit?.triggered || health.exit?.latencyBreached || health.exit?.frameLossBreached) return 'bad';
@@ -2966,16 +3013,13 @@ function renderBrowserlessWebPanel() {
       setText('sourceIp', s.network?.sourceIp);
       const transportHealth = s.network?.transportHealth || null;
       setText('transportHealthMode', transportModeText(transportHealth));
-      setText('transportLatency', latencyPairText(transportHealth?.latency));
-      setText('transportQueue', latencyPairText(transportHealth?.processingQueue));
-      setText('transportCommandLatency', transportCommandLatencyText(transportHealth?.command));
-      setText('transportFrameLoss', transportFrameLossText(transportHealth?.frameLoss));
+      const metricClass = transportMetricClass(transportHealth);
+      setInlineRichText('transportLatency', latencyPairFragments(transportHealth?.latency, 'latency'), metricClass);
+      setInlineRichText('transportQueue', latencyPairFragments(transportHealth?.processingQueue, 'queue'), metricClass);
+      setInlineRichText('transportCommandLatency', transportCommandLatencyFragments(transportHealth?.command), metricClass);
+      setInlineRichText('transportFrameLoss', transportFrameLossFragments(transportHealth?.frameLoss), metricClass);
       const transportClass = transportHealthClass(transportHealth);
       setClass('transportHealthMode', transportClass);
-      setClass('transportLatency', transportHealth?.exit?.latencyBreached ? 'bad' : transportClass);
-      setClass('transportQueue', transportClass);
-      setClass('transportCommandLatency', transportClass);
-      setClass('transportFrameLoss', transportHealth?.exit?.frameLossBreached ? 'bad' : transportClass);
       setRichText('programRefreshMeta', [
         { text: elapsedSecondsValue(lastStatusReceivedAtMs), className: 'info' },
         { text: '/', className: 'meta-label' },
@@ -3228,5 +3272,6 @@ module.exports = {
   nearbyCoinIconCore,
   panelSessionFlagsCore,
   restartDrainBlockedReasonTextCore,
+  transportMetricValueClassCore,
   renderBrowserlessWebPanel
 };

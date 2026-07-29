@@ -208,6 +208,7 @@ const {
   nearbyCoinIconCore,
   panelSessionFlagsCore,
   restartDrainBlockedReasonTextCore,
+  transportMetricValueClassCore,
   renderBrowserlessWebPanel
 } = require('./browserless/web-panel');
 const {
@@ -30673,6 +30674,32 @@ async function runSelfTest() {
       want: '401|200|true|true|true|200|true|12|true|true|true|200|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|200|true|1'
     },
     {
+      name: 'browserless web panel colors each transport metric value by severity',
+      got: (() => {
+        const panelHtml = renderBrowserlessWebPanel();
+        return [
+          BROWSERLESS_WEB_PANEL_VERSION,
+          transportMetricValueClassCore(168, 'latency'),
+          transportMetricValueClassCore(448, 'latency'),
+          transportMetricValueClassCore(900, 'latency'),
+          transportMetricValueClassCore(20, 'queue'),
+          transportMetricValueClassCore(120, 'queue'),
+          transportMetricValueClassCore(300, 'queue'),
+          transportMetricValueClassCore(244, 'movement'),
+          transportMetricValueClassCore(877, 'shooting'),
+          transportMetricValueClassCore(5, 'frameLoss'),
+          transportMetricValueClassCore(null, 'latency'),
+          panelHtml.includes("metricValueFragment(current, metricKind, 'ms')"),
+          panelHtml.includes("metricValueFragment(p90, metricKind, 'ms')"),
+          panelHtml.includes("metricValueFragment(movement, 'movement', 'ms')"),
+          panelHtml.includes("metricValueFragment(shooting, 'shooting', 'ms')"),
+          panelHtml.includes("? 'transport-metric muted'"),
+          panelHtml.includes('.transport-metric.muted,.transport-metric.muted .metric-value{color:var(--muted)}')
+        ].join('|');
+      })(),
+      want: '2026.07.29.3|ok|warn|bad|ok|warn|bad|ok|warn|bad|muted|true|true|true|true|true|true'
+    },
+    {
       name: 'browserless web panel animates keyed map markers between status refreshes',
       got: (() => {
         const panelScript = renderBrowserlessWebPanel().match(/<script>([\s\S]*?)<\/script>/)?.[1] || '';
@@ -30708,7 +30735,7 @@ async function runSelfTest() {
           /function stopAutoRefresh\(\)\s*\{\s*cancelMapMarkerAnimation\(true\);/.test(panelScript)
         ].join('|');
       })(),
-      want: '2026.07.29.2|coin:0|player:alice||0|0.875|1|97.5|195.0|110|220|true|true|true|true|true|true|true|true|true|true|true'
+      want: '2026.07.29.3|coin:0|player:alice||0|0.875|1|97.5|195.0|110|220|true|true|true|true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless status server adds dynamic whitelist players by name',
@@ -31647,7 +31674,7 @@ async function runSelfTest() {
             < panelScript.indexOf("if (/combat/i.test(text)) return '正在处理打架';")
         ].join('|');
       })(),
-      want: '2026.07.29.2|true|true|true'
+      want: '2026.07.29.3|true|true|true'
     },
     {
       name: 'browserless restart drain wait explains planned service restart',
@@ -32096,7 +32123,7 @@ async function runSelfTest() {
           !panelScript.includes("setRichText('roleTitleMeta', [{ text: '已离线', className: 'muted' }], 'muted');")
         ].join('|');
       })(),
-      want: '2026.07.29.2|true|true|true|true|true|true'
+      want: '2026.07.29.3|true|true|true|true|true|true'
     },
     {
       name: 'browserless runner self-test passes',
