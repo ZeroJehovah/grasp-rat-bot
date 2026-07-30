@@ -129,6 +129,9 @@ const DEFAULT_PROFIT_LIVE_INJURY_HP = 90;
 const DEFAULT_PROFIT_LIVE_PLAYER_DROP_MAX_DISTANCE = BROWSER_RUNTIME_DEFAULTS.postAttackDropCoinMaxDistance;
 const DEFAULT_PROFIT_LIVE_PLAYER_DROP_MAX_AGE_TICKS = 8000;
 const DEFAULT_REALTIME_LOOT_MAX_AGE_MS = 2500;
+const DEFAULT_INVULNERABLE_THREAT_MEMORY_MS = 2500;
+const DEFAULT_INVULNERABLE_THREAT_CLEAR_CONFIRMATIONS = 2;
+const DEFAULT_INVULNERABLE_THREAT_CLEAR_MIN_MS = 500;
 const DEFAULT_COMBAT_LOOT_TARGET_DROP_RATIO = 1.25;
 const DEFAULT_SNAPSHOT_VISIBLE_COIN_MAX_DISTANCE = BROWSER_RUNTIME_DEFAULTS.globalCoinMaxDistance;
 const DEFAULT_OPPORTUNITY_VISIBLE_DISTANCE = BROWSER_RUNTIME_DEFAULTS.opportunityVisibleDistance;
@@ -1034,8 +1037,25 @@ function mergeRecentInvulnerableThreats(visibleTargets, liveThreats, self, state
   const memory = stateful.recentInvulnerableThreats;
   const nowMs = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
   const currentTick = numberOrNull(options.currentTick ?? options.realtimeTick);
-  const ttlMs = Math.max(1000, Number(options.invulnerableThreatMemoryMs ?? 2500));
-  const clearConfirmationsRequired = Math.max(2, Math.round(Number(options.invulnerableThreatClearConfirmations ?? 2)));
+  const configuredTtlMs = Number(options.invulnerableThreatMemoryMs ?? DEFAULT_INVULNERABLE_THREAT_MEMORY_MS);
+  const ttlMs = Math.max(
+    1000,
+    Number.isFinite(configuredTtlMs) ? configuredTtlMs : DEFAULT_INVULNERABLE_THREAT_MEMORY_MS
+  );
+  const configuredClearConfirmations = Number(
+    options.invulnerableThreatClearConfirmations ?? DEFAULT_INVULNERABLE_THREAT_CLEAR_CONFIRMATIONS
+  );
+  const clearConfirmationsRequired = Math.max(
+    2,
+    Math.round(Number.isFinite(configuredClearConfirmations)
+      ? configuredClearConfirmations
+      : DEFAULT_INVULNERABLE_THREAT_CLEAR_CONFIRMATIONS)
+  );
+  const configuredClearMinMs = Number(options.invulnerableThreatClearMinMs ?? DEFAULT_INVULNERABLE_THREAT_CLEAR_MIN_MS);
+  const clearMinMs = Math.min(
+    ttlMs,
+    Math.max(0, Number.isFinite(configuredClearMinMs) ? configuredClearMinMs : DEFAULT_INVULNERABLE_THREAT_CLEAR_MIN_MS)
+  );
   const visibleById = new Map();
   for (const target of visibleTargets || []) {
     const id = targetIdentity(target);
@@ -1058,7 +1078,8 @@ function mergeRecentInvulnerableThreats(visibleTargets, liveThreats, self, state
       lastSeenAt: nowMs,
       holdUntil: nowMs + ttlMs,
       lastConfirmationTick: currentTick,
-      clearConfirmations: 0
+      clearConfirmations: 0,
+      clearObservedAt: 0
     };
   }
   const remembered = [];
@@ -1073,13 +1094,20 @@ function mergeRecentInvulnerableThreats(visibleTargets, liveThreats, self, state
       const lastTick = numberOrNull(record.lastConfirmationTick);
       const fresh = currentTick !== null && (lastTick === null || currentTick > lastTick);
       if (fresh) {
+        if (Number(record.clearConfirmations || 0) <= 0 || numberOrNull(record.clearObservedAt) === null) {
+          record.clearObservedAt = nowMs;
+        }
         record.clearConfirmations = Math.max(0, Number(record.clearConfirmations || 0)) + 1;
         record.lastConfirmationTick = currentTick;
       }
-      if (record.clearConfirmations >= clearConfirmationsRequired) {
-        delete memory[id];
-        continue;
-      }
+    }
+    const clearObservedAt = numberOrNull(record.clearObservedAt);
+    const clearObservationAgeMs = clearObservedAt === null ? 0 : Math.max(0, nowMs - clearObservedAt);
+    if (visible
+      && record.clearConfirmations >= clearConfirmationsRequired
+      && clearObservationAgeMs >= clearMinMs) {
+      delete memory[id];
+      continue;
     }
     if (nowMs > Number(record.holdUntil || 0)) {
       delete memory[id];
@@ -1115,7 +1143,9 @@ function mergeRecentInvulnerableThreats(visibleTargets, liveThreats, self, state
         remainingMs: Math.max(0, Number(record.holdUntil || 0) - nowMs),
         uncertaintyCm,
         clearConfirmations: Number(record.clearConfirmations || 0),
-        clearConfirmationsRequired
+        clearConfirmationsRequired,
+        clearObservationAgeMs,
+        clearMinMs
       }
     });
   }

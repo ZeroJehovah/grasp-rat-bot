@@ -15910,7 +15910,7 @@ async function runSelfTest() {
       want: 'flee|safety|avoid-invulnerable-target|8|true|5000|1'
     },
     {
-      name: 'browserless invulnerable threat memory prevents safety profit oscillation and releases within ttl',
+      name: 'browserless invulnerable threat memory requires stable clear evidence before releasing safety',
       got: (() => {
         const stateful = createBrowserlessDecisionState();
         const self = { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 };
@@ -15951,8 +15951,15 @@ async function runSelfTest() {
 
         const clearState = createBrowserlessDecisionState();
         buildBrowserlessDecision(stateAt(10, true), clearState, { ...options, nowMs: 1000 });
-        const clearOne = buildBrowserlessDecision(stateAt(11, false, true), clearState, { ...options, nowMs: 1400 });
-        const clearTwo = buildBrowserlessDecision(stateAt(12, false, true), clearState, { ...options, nowMs: 1800 });
+        const clearOne = buildBrowserlessDecision(stateAt(11, false, true), clearState, { ...options, nowMs: 1050 });
+        const clearTwo = buildBrowserlessDecision(stateAt(12, false, true), clearState, { ...options, nowMs: 1100 });
+        buildBrowserlessDecision(stateAt(13, true), clearState, { ...options, nowMs: 1150 });
+        const resetRecord = Object.values(clearState.recentInvulnerableThreats)[0] || {};
+        const resetClearConfirmations = resetRecord.clearConfirmations;
+        const resetClearObservedAt = resetRecord.clearObservedAt;
+        const renewedClearOne = buildBrowserlessDecision(stateAt(14, false, true), clearState, { ...options, nowMs: 1200 });
+        const renewedClearTwo = buildBrowserlessDecision(stateAt(15, false, true), clearState, { ...options, nowMs: 1250 });
+        const released = buildBrowserlessDecision(stateAt(16, false, true), clearState, { ...options, nowMs: 1700 });
         return [
           seen.reason,
           missingOne.reason,
@@ -15963,11 +15970,21 @@ async function runSelfTest() {
           Object.keys(stateful.recentInvulnerableThreats).length,
           clearOne.reason,
           clearOne.action.target?.safetyMemory?.clearConfirmations,
-          clearTwo.action.target?.id,
+          clearTwo.reason,
+          clearTwo.action.target?.safetyMemory?.clearConfirmations,
+          clearTwo.action.target?.safetyMemory?.clearObservationAgeMs,
+          clearTwo.action.target?.safetyMemory?.clearMinMs,
+          resetClearConfirmations,
+          resetClearObservedAt,
+          renewedClearOne.reason,
+          renewedClearOne.action.target?.safetyMemory?.clearConfirmations,
+          renewedClearTwo.reason,
+          renewedClearTwo.action.target?.safetyMemory?.clearConfirmations,
+          released.action.target?.id,
           Object.keys(clearState.recentInvulnerableThreats).length
         ].join('|');
       })(),
-      want: 'avoid-invulnerable-target|avoid-invulnerable-target|true|1900|avoid-invulnerable-target|one-coin|0|avoid-invulnerable-target|1|one-coin|0'
+      want: 'avoid-invulnerable-target|avoid-invulnerable-target|true|1900|avoid-invulnerable-target|one-coin|0|avoid-invulnerable-target|1|avoid-invulnerable-target|2|50|500|0|0|avoid-invulnerable-target|1|avoid-invulnerable-target|2|one-coin|0'
     },
     {
       name: 'browserless healthy high-value coin remains available near idle passive invulnerable',
