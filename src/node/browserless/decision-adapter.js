@@ -106,6 +106,9 @@ const {
   targetWhitelistUserIdSet
 } = require('../../shared/target-whitelist');
 const {
+  evaluateDynamicWhitelistContactCore
+} = require('../../strategy/dynamic-whitelist-safety');
+const {
   createBrowserlessDecisionState,
   summarizeBrowserlessDecisionState
 } = require('./decision-state');
@@ -177,7 +180,9 @@ const DANGEROUS_COMBAT_EXIT_REASONS = new Set([
   'combat-exit-poor-exchange',
   'incoming-bullet-early-leave',
   'continuous-incoming-bullets-leave',
-  'rapid-damage-early-leave'
+  'rapid-damage-early-leave',
+  'dynamic-whitelist-low-hp-contact-leave',
+  'dynamic-whitelist-contact-no-dodge-budget-leave'
 ]);
 const EASY_KILL_ENGAGEMENT_CONTINUATION_ACTIONS = new Set([
   'combat-live',
@@ -187,6 +192,7 @@ const EASY_KILL_ENGAGEMENT_CONTINUATION_ACTIONS = new Set([
 ]);
 const REALTIME_INPUT_CACHE = Symbol('browserless-realtime-input-cache');
 const EASY_KILL_RECONCILED = Symbol('browserless-easy-kill-reconciled');
+const DAMAGE_STATUS_RECONCILED = Symbol('browserless-damage-status-reconciled');
 const MISSING_OPTION_VALUE = Symbol('browserless-missing-option-value');
 
 function buildBrowserlessRuntimeDefaults(config = {}) {
@@ -584,24 +590,147 @@ function targetWhitelistFromOptions(options = {}) {
 
 function isWhitelistedTargetForOptions(entity, options = {}) {
   if (!entity) return false;
-  if (entity.whitelisted === true) return true;
+  if (entity.profitProtected === true
+    || entity.creatorProtected === true
+    || entity.dynamicWhitelistMember === true
+    || entity.whitelisted === true) return true;
   if (typeof options.whitelistCheck === 'function' && options.whitelistCheck(entity)) return true;
   return targetIsWhitelisted(entity, targetWhitelistFromOptions(options));
 }
 
-function refreshDecisionEntityActivity(entity, options = {}) {
+function targetStableUserId(entity) {
+  return numberOrNull(entity?.user_id ?? entity?.userId ?? entity?.target_user_id ?? entity?.targetUserId);
+}
+
+function optionUserIdSet(options = {}, setKey, arrayKey) {
+  if (options[setKey] instanceof Set) {
+    return new Set(Array.from(options[setKey]).map(numberOrNull).filter(value => value !== null).map(String));
+  }
+  if (Array.isArray(options[arrayKey])) {
+    return new Set(options[arrayKey].map(value => numberOrNull(value?.userId ?? value?.user_id ?? value))
+      .filter(value => value !== null)
+      .map(String));
+  }
+  return new Set();
+}
+
+function buildWhitelistSafetyIdentityContext(options = {}, nowMs = Date.now()) {
+  const creatorIds = optionUserIdSet(options, 'creatorUserIdSet', 'creatorUserIds');
+  const dynamicMemberIds = optionUserIdSet(
+    options,
+    'dynamicWhitelistMemberUserIdSet',
+    'dynamicWhitelistMemberUserIds'
+  );
+  const dynamicEnabledIds = optionUserIdSet(
+    options,
+    'dynamicWhitelistEnabledUserIdSet',
+    'dynamicWhitelistEnabledUserIds'
+  );
+  const damageStatus = dailyDamageTrackerStatus(options, nowMs);
+  const damagedIds = new Set([
+    ...(damageStatus.userIds || []),
+    ...(damageStatus.players || []),
+    ...(Array.isArray(options.dailyDamageUserIds) ? options.dailyDamageUserIds : [])
+  ].map(value => numberOrNull(value?.userId ?? value?.user_id ?? value))
+    .filter(value => value !== null)
+    .map(String));
+  const dynamicEnabledAuthority = typeof options.dynamicWhitelistEnabledCheck === 'function'
+    || options.dynamicWhitelistEnabledUserIdSet instanceof Set
+    || Array.isArray(options.dynamicWhitelistEnabledUserIds);
+  return {
+    creatorIds,
+    dynamicMemberIds,
+    dynamicEnabledIds,
+    damagedIds,
+    damageStatus,
+    dynamicEnabledAuthority,
+    creatorCheck: typeof options.creatorCheck === 'function' ? options.creatorCheck : null,
+    dynamicMemberCheck: typeof options.dynamicWhitelistMemberCheck === 'function'
+      ? options.dynamicWhitelistMemberCheck
+      : null,
+    dynamicEnabledCheck: typeof options.dynamicWhitelistEnabledCheck === 'function'
+      ? options.dynamicWhitelistEnabledCheck
+      : null,
+    damagedCheck: typeof options.damagedSelfTodayCheck === 'function'
+      ? options.damagedSelfTodayCheck
+      : null
+  };
+}
+
+function whitelistSafetyIdentityForEntity(entity, context = {}, options = {}) {
+  const userId = targetStableUserId(entity);
+  const key = userId === null ? '' : String(userId);
+  const creatorProtected = Boolean(
+    context.creatorCheck?.(entity)
+      || (key && context.creatorIds?.has(key))
+  );
+  const dynamicWhitelistMember = Boolean(
+    context.dynamicMemberCheck?.(entity)
+      || (key && context.dynamicMemberIds?.has(key))
+  );
+  const dynamicWhitelistEnabled = dynamicWhitelistMember && (context.dynamicEnabledAuthority
+    ? Boolean(context.dynamicEnabledCheck?.(entity) || (key && context.dynamicEnabledIds?.has(key)))
+    : true);
+  const damagedSelfToday = dynamicWhitelistMember && Boolean(
+    context.damagedCheck?.(entity)
+      || (key && context.damagedIds?.has(key))
+  );
+  const legacyWhitelistProtected = !creatorProtected
+    && !dynamicWhitelistMember
+    && Boolean(
+      entity?.whitelisted === true
+        || (typeof options.whitelistCheck === 'function' && options.whitelistCheck(entity))
+        || targetIsWhitelisted(entity, targetWhitelistFromOptions(options))
+    );
+  return {
+    creatorProtected,
+    dynamicWhitelistMember,
+    dynamicWhitelistEnabled,
+    damagedSelfToday,
+    legacyWhitelistProtected
+  };
+}
+
+function annotateWhitelistSafetyPolicy(entity, self, identityContext, options = {}) {
+  if (!entity) return entity;
+  const identity = whitelistSafetyIdentityForEntity(entity, identityContext, options);
+  const recoveryRadius = lowHpRecoveryThreatRadiusForHp(hpValue(self), options)?.radius || 0;
+  const policy = evaluateDynamicWhitelistContactCore(self, entity, {
+    ...identity,
+    recovering: isRecoveringSelf(self),
+    recoveryRadiusCm: recoveryRadius
+  }, options);
+  return {
+    ...entity,
+    creatorProtected: policy.creatorProtected,
+    dynamicWhitelistMember: policy.dynamicWhitelistMember,
+    dynamicWhitelistEnabled: policy.dynamicWhitelistEnabled,
+    damagedSelfToday: policy.damagedSelfToday,
+    legacyWhitelistProtected: policy.legacyWhitelistProtected,
+    profitProtected: policy.profitProtected,
+    whitelisted: policy.profitProtected,
+    whitelistContactPolicy: policy
+  };
+}
+
+function refreshDecisionEntityActivity(entity, options = {}, self = null, whitelistIdentityContext = null) {
   if (!entity) return entity;
   const moving = isMovingEntity(entity, options);
   const firing = isFiringEntity(entity);
   const fullStamina5s = hasFull5sStamina(entity, options);
-  return {
+  const refreshed = {
     ...entity,
     moving,
     firing,
     fullStamina5s,
-    active: moving || firing || (isActiveEntity(entity) && (!fullStamina5s || isInvulnerableEntity(entity))),
-    whitelisted: isWhitelistedTargetForOptions(entity, options)
+    active: moving || firing || (isActiveEntity(entity) && (!fullStamina5s || isInvulnerableEntity(entity)))
   };
+  return annotateWhitelistSafetyPolicy(
+    refreshed,
+    self,
+    whitelistIdentityContext || buildWhitelistSafetyIdentityContext(options, options.nowMs),
+    options
+  );
 }
 
 function isCurrentlyActiveEntity(entity, options = {}) {
@@ -739,10 +868,16 @@ function easyKillTargetSuppressed(stateful = {}, target = null, nowMs = 0) {
     || Boolean(economicProfitPursuitSuppressionRecordById(stateful, String(userId), nowMs));
 }
 
-function refreshEasyKillTargetAnnotations(input, stateful = {}, options = {}, statusOverride = null) {
+function refreshEasyKillTargetAnnotations(
+  input,
+  stateful = {},
+  options = {},
+  statusOverride = null,
+  damageStatusOverride = null
+) {
   if (!input || typeof input !== 'object') return null;
   const status = statusOverride || easyKillTrackerStatus(options);
-  const damageStatus = dailyDamageTrackerStatus(options, input.nowMs);
+  const damageStatus = damageStatusOverride || dailyDamageTrackerStatus(options, input.nowMs);
   const knownPlayers = new Map((status.players || [])
     .map(player => [easyKillTargetUserId(player), player])
     .filter(([userId]) => userId !== null)
@@ -1902,6 +2037,33 @@ function realtimeNearbyObservationSummary(input, combat, lootAssessment, options
   };
 }
 
+function summarizeWhitelistContactPolicy(policy) {
+  if (!policy || typeof policy !== 'object') return null;
+  return {
+    membershipSource: String(policy.membershipSource || 'none'),
+    profitProtected: Boolean(policy.profitProtected),
+    creatorProtected: Boolean(policy.creatorProtected),
+    dynamicWhitelistMember: Boolean(policy.dynamicWhitelistMember),
+    dynamicWhitelistEnabled: Boolean(policy.dynamicWhitelistEnabled),
+    damagedSelfToday: Boolean(policy.damagedSelfToday),
+    legacyWhitelistProtected: Boolean(policy.legacyWhitelistProtected),
+    proactiveCombatEligible: Boolean(policy.proactiveCombatEligible),
+    proactiveCombatRangeCm: numberOrNull(policy.proactiveCombatRangeCm),
+    incomingDodgeRequired: Boolean(policy.incomingDodgeRequired),
+    lowHpSafetyExit: Boolean(policy.lowHpSafetyExit),
+    contactNoDodgeBudgetExit: Boolean(policy.contactNoDodgeBudgetExit),
+    dodgeOnly: Boolean(policy.dodgeOnly),
+    selfHp: numberOrNull(policy.selfHp),
+    maxHp: numberOrNull(policy.maxHp),
+    distanceCm: numberOrNull(policy.distanceCm),
+    recoveryRadiusCm: numberOrNull(policy.recoveryRadiusCm),
+    lowHpSafetyRadiusCm: numberOrNull(policy.lowHpSafetyRadiusCm),
+    stamina5s: numberOrNull(policy.stamina5s),
+    requiredDodgeBudgetMs: numberOrNull(policy.requiredDodgeBudgetMs),
+    reason: String(policy.reason || '')
+  };
+}
+
 function summarizeTarget(target) {
   if (!target) return null;
   return {
@@ -1933,6 +2095,13 @@ function summarizeTarget(target) {
     recentlyActive: Boolean(target.recentlyActive),
     recentlyMoved: Boolean(target.recentlyMoved),
     whitelisted: Boolean(target.whitelisted),
+    creatorProtected: Boolean(target.creatorProtected),
+    dynamicWhitelistMember: Boolean(target.dynamicWhitelistMember),
+    dynamicWhitelistEnabled: Boolean(target.dynamicWhitelistEnabled),
+    damagedSelfToday: Boolean(target.damagedSelfToday),
+    legacyWhitelistProtected: Boolean(target.legacyWhitelistProtected),
+    profitProtected: Boolean(target.profitProtected),
+    whitelistContactPolicy: summarizeWhitelistContactPolicy(target.whitelistContactPolicy),
     alive: target.alive !== false,
     easyKillKnown: Boolean(target.easyKillKnown),
     easyKillScore: numberOrNull(target.easyKillScore),
@@ -2918,6 +3087,7 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
   const self = normalizeEntityForDecision(enrichedSelf.self, null, 'realtime', options);
   if (enrichedSelf.staminaMerged) dataGaps.push('self-stamina-from-snapshot');
   if (!self) dataGaps.push('missing-realtime-self');
+  const whitelistIdentityContext = buildWhitelistSafetyIdentityContext(options, nowMs);
   const selfUserId = Number(self?.user_id ?? state?.userId ?? options.userId ?? 0);
   const realtimeEntities = (Array.isArray(realtime.entities) ? realtime.entities : [])
     .map(entity => enrichRealtimeEntityWithSnapshotProfitMetadata(
@@ -2928,7 +3098,12 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
     .map(entity => normalizeEntityForDecision(entity, self, 'realtime', options))
     .filter(Boolean);
   annotateBrowserlessRecentActivity(realtimeEntities, stateful, nowMs, options);
-  const decisionEntities = realtimeEntities.map(entity => refreshDecisionEntityActivity(entity, options));
+  const decisionEntities = realtimeEntities.map(entity => refreshDecisionEntityActivity(
+    entity,
+    options,
+    self,
+    whitelistIdentityContext
+  ));
   const visibleTargets = decisionEntities
     .filter(entity => Number(entity.user_id) !== selfUserId)
     .filter(entity => Number.isFinite(Number(entity.x)) && Number.isFinite(Number(entity.y)));
@@ -2938,7 +3113,13 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
     bullets: Array.isArray(realtime.bullets) ? realtime.bullets : []
   }, stateful, options);
   const easyKillInput = { visibleTargets, nowMs, easyKillTargets: [], easyKill: null };
-  refreshEasyKillTargetAnnotations(easyKillInput, stateful, options);
+  refreshEasyKillTargetAnnotations(
+    easyKillInput,
+    stateful,
+    options,
+    null,
+    whitelistIdentityContext.damageStatus
+  );
   updateBrowserlessOpportunityAfkStaminaObservations(visibleTargets, stateful, nowMs, options);
   const activeThreats = visibleTargets.filter(entity => entity.active && entity.alive !== false && !entity.whitelisted && !entity.easyKillThreatExempt);
   const firingThreats = visibleTargets.filter(entity => entity.firing && entity.alive !== false && !entity.whitelisted && !entity.easyKillThreatExempt);
@@ -3093,7 +3274,7 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
   const profitCoins = activeCoinCompetition.available;
   const panelProfitCoins = activeCoinCompetition.panel;
   if (activeCoinCompetition.contested.length) dataGaps.push('active-player-coin-competition');
-  return {
+  const result = {
     userId: Number(state?.userId || options.userId || 0),
     nowMs,
     rawRealtime: realtime,
@@ -3152,6 +3333,15 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
     bullets: Array.isArray(realtime.bullets) ? realtime.bullets : [],
     dataGaps
   };
+  Object.defineProperty(result, DAMAGE_STATUS_RECONCILED, {
+    value: {
+      nowMs,
+      tick: realtime.tick ?? null,
+      status: whitelistIdentityContext.damageStatus
+    },
+    configurable: true
+  });
+  return result;
 }
 
 function buildBrowserlessCombatStrategyInput(state, options = {}, stateful = {}) {
@@ -3164,6 +3354,7 @@ function buildBrowserlessCombatStrategyInput(state, options = {}, stateful = {})
   const realtime = state?.realtime || {};
   const fallback = state?.fallback || state?.snapshot || {};
   const nowMs = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
+  const whitelistIdentityContext = buildWhitelistSafetyIdentityContext(options, nowMs);
   const snapshotFrameAgeMs = numberOrNull(fallback.frameAgeMs);
   const snapshotMaxAgeMs = Math.max(1000, Number(options.snapshotCoinFallbackMaxAgeMs || 5000));
   const snapshotFreshForMetadata = snapshotFrameAgeMs === null || snapshotFrameAgeMs <= snapshotMaxAgeMs;
@@ -3188,6 +3379,7 @@ function buildBrowserlessCombatStrategyInput(state, options = {}, stateful = {})
   const rawRealtimeEntities = (Array.isArray(realtime.entities) ? realtime.entities : []).filter(entity => {
     const userId = entity?.user_id ?? entity?.userId;
     if (userId !== null && userId !== undefined && priorityUserIds.has(String(userId))) return true;
+    if (whitelistSafetyIdentityForEntity(entity, whitelistIdentityContext, options).dynamicWhitelistMember) return true;
     if (entity?.firing || entity?.shooting || entity?.is_firing) return true;
     if (Math.abs(Number(entity?.vx || 0)) > 0 || Math.abs(Number(entity?.vy || 0)) > 0) return true;
     const mode = String(entity?.current_join_mode || entity?.mode || entity?.joined || '').toLowerCase();
@@ -3242,7 +3434,7 @@ function buildBrowserlessCombatStrategyInput(state, options = {}, stateful = {})
   markInputStage('player-memory');
   const visibleTargets = [];
   for (const entity of realtimeEntities) {
-    const refreshed = refreshDecisionEntityActivity(entity, options);
+    const refreshed = refreshDecisionEntityActivity(entity, options, self, whitelistIdentityContext);
     if (!Number.isFinite(Number(refreshed.x)) || !Number.isFinite(Number(refreshed.y))) continue;
     visibleTargets.push(refreshed);
   }
@@ -3261,7 +3453,12 @@ function buildBrowserlessCombatStrategyInput(state, options = {}, stateful = {})
     easyKillTargets: [],
     easyKill: null
   };
-  const easyKillTrackerState = reconcileEasyKillTracker(easyKillInput, stateful, options);
+  const easyKillTrackerState = reconcileEasyKillTracker(
+    easyKillInput,
+    stateful,
+    options,
+    whitelistIdentityContext.damageStatus
+  );
   markInputStage('easy-kill');
   const activeThreats = [];
   const firingThreats = [];
@@ -3345,6 +3542,14 @@ function buildBrowserlessCombatStrategyInput(state, options = {}, stateful = {})
       nowMs,
       tick: realtime.tick ?? null,
       trackerState: easyKillTrackerState
+    },
+    configurable: true
+  });
+  Object.defineProperty(result, DAMAGE_STATUS_RECONCILED, {
+    value: {
+      nowMs,
+      tick: realtime.tick ?? null,
+      status: whitelistIdentityContext.damageStatus
     },
     configurable: true
   });
@@ -5986,6 +6191,53 @@ function buildLowHpRecoveryThreatExitDecision(input, options = {}) {
   };
 }
 
+function buildDynamicWhitelistContactSafetyExitDecision(input, options = {}, incomingAssessment = null) {
+  if (!browserlessSafetyExitModeEnabled(options) || !input?.self) return null;
+  const contacts = (input.visibleTargets || [])
+    .filter(target => target?.whitelistContactPolicy?.dynamicWhitelistMember === true)
+    .filter(target => target.whitelistContactPolicy.lowHpSafetyExit === true
+      || target.whitelistContactPolicy.contactNoDodgeBudgetExit === true)
+    .sort((left, right) => Number(left.distance ?? Infinity) - Number(right.distance ?? Infinity));
+  const target = contacts[0] || null;
+  if (!target) return null;
+  const policy = target.whitelistContactPolicy;
+  const selfHp = hpValue(input.self);
+  const criticalExit = evaluateCombatHpExitCore({ selfHp, targetHp: null }, options);
+  const critical = policy.lowHpSafetyExit === true && criticalExit?.rule === 'critical-hp';
+  const reason = critical
+    ? criticalExit.reason
+    : (policy.contactNoDodgeBudgetExit
+        ? 'dynamic-whitelist-contact-no-dodge-budget-leave'
+        : 'dynamic-whitelist-low-hp-contact-leave');
+  const cover = incomingAssessment?.cover || null;
+  const hasIncoming = Number(incomingAssessment?.collisionBullets?.length || 0) > 0;
+  const dx = hasIncoming ? Number(cover?.dx || 0) : 0;
+  const dy = hasIncoming ? Number(cover?.dy || 0) : 0;
+  return {
+    kind: 'safety-exit',
+    band: 'safety',
+    reason,
+    shouldLeave: true,
+    stopMotion: !hasIncoming,
+    ...(hasIncoming ? { dx, dy } : {}),
+    self: summarizeTarget(input.self),
+    target: summarizeTarget(target),
+    threats: contacts.slice(0, 5).map(summarizeTarget),
+    ...(critical ? {
+      combatExit: {
+        ...criticalExit,
+        triggerSource: 'dynamic-whitelist-low-hp-contact'
+      }
+    } : {}),
+    whitelistSafety: {
+      type: policy.contactNoDodgeBudgetExit ? 'contact-no-dodge-budget' : 'low-hp-contact',
+      policy: summarizeWhitelistContactPolicy(policy),
+      contactCount: contacts.length,
+      cover: hasIncoming ? compactLeaveCover(cover) : null
+    }
+  };
+}
+
 function entityMatchesAttack(entity, attack) {
   if (!entity || !attack) return false;
   const entityId = entity.user_id ?? entity.userId ?? entity.entity_id ?? entity.entityId;
@@ -7091,45 +7343,245 @@ function recentCombatResidualThreatContinuityCore(input = {}) {
   };
 }
 
-function buildBrowserlessPredictedThreatExitDecision(state, input, stateful, combat, options = {}) {
+function selectExecutableIncomingCover(cover) {
+  if (!cover) return null;
+  if (Number(cover.dx || 0) || Number(cover.dy || 0)) return cover;
+  const selected = (cover.threatField || []).find(item => (
+    Number(item?.dx || 0) === Number(cover.dx || 0)
+      && Number(item?.dy || 0) === Number(cover.dy || 0)
+  )) || null;
+  const moving = (cover.threatField || [])
+    .filter(item => Number(item?.dx || 0) || Number(item?.dy || 0))
+    .filter(item => !selected
+      || (Number(item.directHits || 0) <= Number(selected.directHits || 0)
+        && Number(item.unavoidableHits || 0) <= Number(selected.unavoidableHits || 0)))
+    .sort((left, right) => Number(left.directHits || 0) - Number(right.directHits || 0)
+      || Number(left.unavoidableHits || 0) - Number(right.unavoidableHits || 0)
+      || Number(right.minCPA || 0) - Number(left.minCPA || 0))[0] || null;
+  if (!moving) return cover;
+  return {
+    ...cover,
+    dx: Number(moving.dx || 0),
+    dy: Number(moving.dy || 0),
+    reason: 'incoming-bullet-safe-moving-cover',
+    directHits: Number(moving.directHits || 0),
+    avoidableHits: Number(moving.avoidableHits || 0),
+    unavoidableHits: Number(moving.unavoidableHits || 0),
+    minCPA: numberOrNull(moving.minCPA),
+    minTTI: numberOrNull(moving.minTTI)
+  };
+}
+
+function buildBrowserlessIncomingThreatAssessment(state, input, combat, options = {}) {
+  if (!input?.self) return null;
+  const nowMs = Number(input.nowMs || Date.now());
+  const normalizedBullets = normalizedIncomingBullets(state, input.self, options);
+  const collisionBullets = normalizedBullets
+    .filter(bullet => incomingBulletHasCollisionRiskCore(bullet, options));
+  const combatMovement = combat?.dryRun?.movement || combat?.movement || null;
+  const combatTarget = combat?.target || combat?.dryRun?.target || null;
+  const combatTargetId = targetKey(combatTarget);
+  const preexistingCombatTargetId = String(
+    options.preexistingCombatTargetId
+      ?? targetKey(options.preexistingCombatTarget)
+      ?? ''
+  );
+  const combatWasEstablished = Boolean(
+    combatTargetId
+      && preexistingCombatTargetId
+      && combatTargetId === preexistingCombatTargetId
+  );
+  const combatMovementCovered = Boolean(
+    combatWasEstablished
+      && options.combatActionEligible !== false
+      && combatTarget
+      && combatMovement
+      && Array.isArray(combatMovement.dodge?.threatField)
+      && combatMovement.dodge.threatField.length > 0
+      && collisionBullets.length > 0
+  );
+  const pending = {
+    triggerDecision: combatMovementCovered ? {
+      action: combat?.exitAction || combat?.action || null,
+      combat: combat?.dryRun || null
+    } : null,
+    target: combat?.target || null,
+    lastCover: null,
+    normalizedIncomingBullets: collisionBullets
+  };
+  const coverResult = collisionBullets.length
+    ? buildLeavePendingCover(state, pending, {
+        ...options,
+        preferTriggerCover: combatMovementCovered,
+        nowMs
+      })
+    : null;
+  const cover = selectExecutableIncomingCover(coverResult?.cover || null);
+  const ownerIds = Array.from(new Set(collisionBullets
+    .map(bullet => String(bullet?.ownerId ?? ''))
+    .filter(Boolean)));
+  const ownerTargets = ownerIds
+    .map(ownerId => (input.visibleTargets || []).find(target => targetKey(target) === ownerId) || null)
+    .filter(Boolean);
+  return {
+    at: nowMs,
+    tick: input.realtime?.tick ?? null,
+    normalizedBullets,
+    collisionBullets,
+    ownerIds,
+    ownerTargets,
+    cover,
+    combatMovementCovered,
+    combatWasEstablished,
+    combatTargetId,
+    preexistingCombatTargetId: preexistingCombatTargetId || null,
+    bullets: collisionBullets.slice(0, 8).map(bullet => ({
+      id: leaveRiskBulletId(bullet),
+      ownerId: String(bullet?.ownerId ?? ''),
+      cpa: numberOrNull(bullet?.cpa),
+      timeToImpact: numberOrNull(bullet?.timeToImpact),
+      distance: numberOrNull(bullet?.distance),
+      createdTick: numberOrNull(bullet?.createdTick),
+      expireTick: numberOrNull(bullet?.expireTick)
+    }))
+  };
+}
+
+function buildBrowserlessPreTargetIncomingSafetyDecision(input, assessment, options = {}) {
+  if (options.preTargetIncomingDodgeEnabled === false || !input?.self || !assessment?.collisionBullets?.length) {
+    return null;
+  }
+  if (assessment.combatMovementCovered) return null;
+  const cover = assessment.cover || null;
+  const dx = Number(cover?.dx || 0);
+  const dy = Number(cover?.dy || 0);
+  const target = assessment.ownerTargets[0] || null;
+  const criticalExit = evaluateCombatHpExitCore({ selfHp: hpValue(input.self), targetHp: null }, options);
+  const whitelistOwners = assessment.ownerTargets
+    .filter(owner => owner.creatorProtected || owner.dynamicWhitelistMember)
+    .slice(0, 8)
+    .map(summarizeTarget);
+  const incomingSafety = {
+    collisionBulletCount: assessment.collisionBullets.length,
+    ownerIds: assessment.ownerIds.slice(0, 8),
+    whitelistOwners,
+    combatMovementCovered: false,
+    dodgeDirection: { dx, dy },
+    cover: compactLeaveCover(cover),
+    bullets: assessment.bullets
+  };
+  if (criticalExit?.rule === 'critical-hp') {
+    return {
+      kind: 'safety-exit',
+      band: 'safety',
+      reason: criticalExit.reason,
+      shouldLeave: true,
+      stopMotion: false,
+      dx,
+      dy,
+      self: summarizeTarget(input.self),
+      target: summarizeTarget(target),
+      combatExit: {
+        ...criticalExit,
+        triggerSource: 'pre-target-incoming-bullet'
+      },
+      incomingSafety
+    };
+  }
+  if (!dx && !dy) return null;
+  return {
+    kind: 'flee',
+    band: 'safety',
+    reason: 'incoming-bullet-dodge',
+    shouldLeave: false,
+    stopMotion: false,
+    dx,
+    dy,
+    self: summarizeTarget(input.self),
+    target: summarizeTarget(target),
+    threats: assessment.ownerTargets.slice(0, 5).map(summarizeTarget),
+    incomingSafety
+  };
+}
+
+function attachIncomingCoverToLeaveDecision(action, assessment) {
+  if (!action?.shouldLeave || !assessment?.collisionBullets?.length) return action;
+  const cover = assessment.cover || null;
+  const dx = Number(cover?.dx || 0);
+  const dy = Number(cover?.dy || 0);
+  if (!dx && !dy) return action;
+  return {
+    ...action,
+    stopMotion: false,
+    dx,
+    dy,
+    incomingSafety: action.incomingSafety || {
+      collisionBulletCount: assessment.collisionBullets.length,
+      ownerIds: assessment.ownerIds.slice(0, 8),
+      combatMovementCovered: Boolean(assessment.combatMovementCovered),
+      dodgeDirection: { dx, dy },
+      cover: compactLeaveCover(cover),
+      bullets: assessment.bullets
+    }
+  };
+}
+
+function dynamicWhitelistContactSupersedesLowHpExit(contactAction, exitAction) {
+  return Boolean(
+    contactAction?.shouldLeave
+      && exitAction?.reason === 'combat-low-hp-disadvantage-leave'
+  );
+}
+
+function summarizeIncomingThreatAssessment(assessment) {
+  if (!assessment || typeof assessment !== 'object') return null;
+  return {
+    at: numberOrNull(assessment.at),
+    tick: numberOrNull(assessment.tick),
+    collisionBulletCount: Number(assessment.collisionBullets?.length || 0),
+    ownerIds: (assessment.ownerIds || []).slice(0, 8),
+    combatMovementCovered: Boolean(assessment.combatMovementCovered),
+    combatWasEstablished: Boolean(assessment.combatWasEstablished),
+    combatTargetId: assessment.combatTargetId || null,
+    preexistingCombatTargetId: assessment.preexistingCombatTargetId || null,
+    cover: compactLeaveCover(assessment.cover),
+    bullets: (assessment.bullets || []).slice(0, 8)
+  };
+}
+
+function summarizeWhitelistSafetyState(input, assessment, options = {}) {
+  const targets = (input?.visibleTargets || [])
+    .filter(target => target?.creatorProtected
+      || target?.dynamicWhitelistMember
+      || target?.damagedSelfToday)
+    .slice()
+    .sort((left, right) => Number(left?.distance ?? Infinity) - Number(right?.distance ?? Infinity))
+    .slice(0, 8)
+    .map(target => ({
+      target: summarizeTarget(target),
+      policy: summarizeWhitelistContactPolicy(target.whitelistContactPolicy)
+    }));
+  if (!targets.length && !assessment?.collisionBullets?.length) return null;
+  return {
+    dynamicWhitelistProximitySafetyEnabled: options.dynamicWhitelistProximitySafetyEnabled !== false,
+    preTargetIncomingDodgeEnabled: options.preTargetIncomingDodgeEnabled !== false,
+    targetCount: targets.length,
+    targets,
+    incoming: summarizeIncomingThreatAssessment(assessment)
+  };
+}
+
+function buildBrowserlessPredictedThreatExitDecision(state, input, stateful, combat, options = {}, incomingAssessment = null) {
   if (!browserlessSafetyExitModeEnabled(options) || !input?.self) return null;
   const nowMs = Number(input.nowMs || Date.now());
   const selfHp = hpValue(input.self);
   if (selfHp === null) return null;
   const maxHp = maxHpValue(input.self) ?? 100;
-  const normalizedBullets = normalizedIncomingBullets(state, input.self, options);
-  const pending = {
-    triggerDecision: {
-      action: combat?.exitAction || combat?.action || null,
-      combat: combat?.dryRun || null
-    },
-    target: combat?.target || null,
-    lastCover: stateful?.browserlessLeaveRisk?.lastCover || null,
-    normalizedIncomingBullets: normalizedBullets
-  };
-  const hadPreferTriggerCover = Object.prototype.hasOwnProperty.call(options, 'preferTriggerCover');
-  const previousPreferTriggerCover = options.preferTriggerCover;
-  const hadPendingCoverNowMs = Object.prototype.hasOwnProperty.call(options, 'nowMs');
-  const previousPendingCoverNowMs = options.nowMs;
-  options.preferTriggerCover = true;
-  options.nowMs = nowMs;
-  let pendingCover;
-  try {
-    pendingCover = buildLeavePendingCover(state, pending, options)?.cover || null;
-  } finally {
-    if (hadPendingCoverNowMs) options.nowMs = previousPendingCoverNowMs;
-    else delete options.nowMs;
-    if (hadPreferTriggerCover) options.preferTriggerCover = previousPreferTriggerCover;
-    else delete options.preferTriggerCover;
-  }
-  const incoming = normalizedBullets
-    .filter(bullet => incomingBulletHasCollisionRiskCore(bullet, options))
-    .filter(bullet => {
-      const ownerId = String(bullet?.ownerId ?? '');
-      if (!ownerId) return true;
-      const target = (input.visibleTargets || []).find(item => targetKey(item) === ownerId) || null;
-      return !target?.easyKillThreatExempt;
-    });
+  const threatAssessment = incomingAssessment
+    || buildBrowserlessIncomingThreatAssessment(state, input, combat, options);
+  const normalizedBullets = threatAssessment?.normalizedBullets || [];
+  const pendingCover = threatAssessment?.cover || null;
+  const incoming = threatAssessment?.collisionBullets || [];
   const ownerIds = Array.from(new Set(incoming
     .map(bullet => String(bullet?.ownerId ?? ''))
     .filter(Boolean)));
@@ -7227,7 +7679,7 @@ function buildBrowserlessPredictedThreatExitDecision(state, input, stateful, com
     maxAgeMs: options.recentCombatResidualThreatMs
   });
   const ownerTarget = ownerIds.length === 1
-    ? (input.visibleTargets || []).find(target => targetKey(target) === ownerIds[0] && !target.easyKillThreatExempt) || null
+    ? (input.visibleTargets || []).find(target => targetKey(target) === ownerIds[0]) || null
     : null;
   const attributableIncoming = ownerIds.length === 1 && incoming.length > 0;
   const attributedOwnerTarget = ownerTarget || (attributableIncoming
@@ -7363,7 +7815,11 @@ function buildBrowserlessPredictedThreatExitDecision(state, input, stateful, com
   if (!reason) {
     const dodgeDx = Number(pendingCover?.dx || 0);
     const dodgeDy = Number(pendingCover?.dy || 0);
-    if (!combat?.target && residualThreatContinuity.active && incoming.length && (dodgeDx || dodgeDy)) {
+    if (options.preTargetIncomingDodgeEnabled === false
+      && !combat?.target
+      && residualThreatContinuity.active
+      && incoming.length
+      && (dodgeDx || dodgeDy)) {
       return {
         kind: 'flee',
         band: 'safety',
@@ -7391,6 +7847,10 @@ function buildBrowserlessPredictedThreatExitDecision(state, input, stateful, com
     reason,
     shouldLeave: true,
     stopMotion: false,
+    ...(incoming.length ? {
+      dx: Number(pendingCover?.dx || 0),
+      dy: Number(pendingCover?.dy || 0)
+    } : {}),
     self: summarizeTarget(input.self),
     target: summarizeTarget(target),
     combatExit: {
@@ -7805,27 +8265,62 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
   const postKillSettlementWaitAction = buildPostKillSettlementWaitDecision(input, stateful);
   const lootControl = buildRealtimeLootControl(input, combatForProfit, stateful, options);
   const combatActionEligible = isCombatActionEligibleForDecision(combat, options) && !realtimeEconomicSuppression;
-  const hadCombatActionEligible = Object.prototype.hasOwnProperty.call(options, 'combatActionEligible');
-  const previousCombatActionEligible = options.combatActionEligible;
-  options.combatActionEligible = combatActionEligible;
-  let longStaminaExhaustedLeaveAction;
-  let injuryHpExitAction;
-  let predictedThreatExitAction;
-  let pursuitLeaveAction;
-  let lowHpRecoveryThreatExitAction;
-  let safetyAction;
-  try {
-    longStaminaExhaustedLeaveAction = buildLongStaminaExhaustedLeaveDecision(input, options);
-    injuryHpExitAction = buildBrowserlessInjuryHpExitDecision(input, stateful, combat, options);
-    predictedThreatExitAction = buildBrowserlessPredictedThreatExitDecision(state, input, stateful, combat, options);
-    pursuitLeaveAction = buildBrowserlessPursuitLeaveDecision(input, stateful, combat, options);
-    lowHpRecoveryThreatExitAction = buildLowHpRecoveryThreatExitDecision(input, options);
-    safetyAction = profitLiveSafetyDecision(input, combat, stateful, options, null);
-  } finally {
-    if (hadCombatActionEligible) options.combatActionEligible = previousCombatActionEligible;
-    else delete options.combatActionEligible;
-  }
-  const combatExitAction = combat.exitAction || null;
+  const safetyContextOptions = {
+    ...options,
+    combatActionEligible,
+    preexistingCombatTarget: previousCombatTarget
+  };
+  const incomingThreatAssessment = buildBrowserlessIncomingThreatAssessment(
+    state,
+    input,
+    combat,
+    safetyContextOptions
+  );
+  const preTargetIncomingSafetyAction = buildBrowserlessPreTargetIncomingSafetyDecision(
+    input,
+    incomingThreatAssessment,
+    safetyContextOptions
+  );
+  const longStaminaExhaustedLeaveAction = attachIncomingCoverToLeaveDecision(
+    buildLongStaminaExhaustedLeaveDecision(input, safetyContextOptions),
+    incomingThreatAssessment
+  );
+  const injuryHpExitAction = attachIncomingCoverToLeaveDecision(
+    buildBrowserlessInjuryHpExitDecision(input, stateful, combat, safetyContextOptions),
+    incomingThreatAssessment
+  );
+  const predictedThreatExitAction = attachIncomingCoverToLeaveDecision(
+    buildBrowserlessPredictedThreatExitDecision(
+      state,
+      input,
+      stateful,
+      combat,
+      safetyContextOptions,
+      incomingThreatAssessment
+    ),
+    incomingThreatAssessment
+  );
+  const dynamicWhitelistContactExitAction = buildDynamicWhitelistContactSafetyExitDecision(
+    input,
+    safetyContextOptions,
+    incomingThreatAssessment
+  );
+  const pursuitLeaveAction = attachIncomingCoverToLeaveDecision(
+    buildBrowserlessPursuitLeaveDecision(input, stateful, combat, safetyContextOptions),
+    incomingThreatAssessment
+  );
+  const lowHpRecoveryThreatExitAction = attachIncomingCoverToLeaveDecision(
+    buildLowHpRecoveryThreatExitDecision(input, safetyContextOptions),
+    incomingThreatAssessment
+  );
+  const safetyAction = attachIncomingCoverToLeaveDecision(
+    profitLiveSafetyDecision(input, combat, stateful, safetyContextOptions, null),
+    incomingThreatAssessment
+  );
+  const combatExitAction = attachIncomingCoverToLeaveDecision(
+    combat.exitAction || null,
+    incomingThreatAssessment
+  );
   const healthyLootPriority = Boolean(
     lootControl.action
       && lootControl.summary?.eligible
@@ -7848,15 +8343,49 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
       || combat.target?.firing
       || targetHasRealBulletPressure(input, combat.target, stateful.combatTarget)
   ) ? combatAction : null;
+  const dynamicDefensiveCombatAction = defensiveCombatAction
+    && combat.target?.dynamicWhitelistMember === true
+    ? defensiveCombatAction
+    : null;
+  const dynamicProximityCombatAction = combatAction
+    && combat.target?.combatIntent === 'whitelist-proximity'
+    ? combatAction
+    : null;
+  const criticalIncomingExitAction = preTargetIncomingSafetyAction?.shouldLeave
+    ? preTargetIncomingSafetyAction
+    : null;
+  const standaloneIncomingDodgeAction = preTargetIncomingSafetyAction
+    && !preTargetIncomingSafetyAction.shouldLeave
+    ? preTargetIncomingSafetyAction
+    : null;
+  const deferCombatExitForDynamicContact = dynamicWhitelistContactSupersedesLowHpExit(
+    dynamicWhitelistContactExitAction,
+    selectedCombatExitAction
+  );
+  const deferInjuryExitForDynamicContact = dynamicWhitelistContactSupersedesLowHpExit(
+    dynamicWhitelistContactExitAction,
+    selectedInjuryHpExitAction
+  );
+  const immediateCombatExitAction = deferCombatExitForDynamicContact ? null : selectedCombatExitAction;
+  const immediateInjuryHpExitAction = deferInjuryExitForDynamicContact ? null : selectedInjuryHpExitAction;
+  const deferredCombatExitAction = deferCombatExitForDynamicContact ? selectedCombatExitAction : null;
+  const deferredInjuryHpExitAction = deferInjuryExitForDynamicContact ? selectedInjuryHpExitAction : null;
   const action = longStaminaExhaustedLeaveAction
-    || selectedCombatExitAction
-    || selectedInjuryHpExitAction
+    || criticalIncomingExitAction
+    || immediateCombatExitAction
+    || immediateInjuryHpExitAction
     || predictedThreatExitAction
+    || dynamicWhitelistContactExitAction
+    || deferredCombatExitAction
+    || deferredInjuryHpExitAction
     || pursuitLeaveAction
     || lowHpRecoveryThreatExitAction
+    || standaloneIncomingDodgeAction
     || (healthyLootPriority && safetyAction?.reason === 'avoid-invulnerable-target'
       ? null
       : safetyAction)
+    || dynamicDefensiveCombatAction
+    || dynamicProximityCombatAction
     || lootControl.action
     || closePressureCombatAction
     || defensiveCombatAction
@@ -7878,10 +8407,28 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
   if (!dangerousCombatExit) {
     dangerousCombatExit = rememberDangerousSafetyExitTarget(
       input,
+      criticalIncomingExitAction,
+      stateful,
+      options,
+      'pre-target-incoming-bullet'
+    );
+  }
+  if (!dangerousCombatExit) {
+    dangerousCombatExit = rememberDangerousSafetyExitTarget(
+      input,
       predictedThreatExitAction,
       stateful,
       options,
       'realtime-leave-risk'
+    );
+  }
+  if (!dangerousCombatExit) {
+    dangerousCombatExit = rememberDangerousSafetyExitTarget(
+      input,
+      dynamicWhitelistContactExitAction,
+      stateful,
+      options,
+      'dynamic-whitelist-contact'
     );
   }
   stageTimings.gates = performance.now() - stageStarted;
@@ -7897,6 +8444,7 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
       profitPursuitSuppression: realtimeEconomicSuppression
     },
     exitAction: action?.shouldLeave ? action : null,
+    whitelistSafety: summarizeWhitelistSafetyState(input, incomingThreatAssessment, safetyContextOptions),
     realtimeControl: true,
     tick: input.realtime.tick,
     at: new Date(input.nowMs).toISOString(),
@@ -8172,6 +8720,7 @@ function isCombatActionEligibleForDecision(combatDecision, options = {}) {
   if (options.controlMode !== 'profit-live') return true;
   if (target.combatEngagement) return true;
   if (target.combatIntent === 'defensive') return true;
+  if (target.combatIntent === 'whitelist-proximity') return true;
   return Boolean(target.active || target.firing);
 }
 
@@ -8556,7 +9105,9 @@ function reconcileEconomicStopLossCooldowns(input = {}, stateful = {}, options =
 function filterEconomicSuppressedCombatTargets(input = {}, stateful = {}) {
   const nowMs = Number(input.nowMs || Date.now());
   return (input.visibleTargets || []).filter(target => (
-    !economicProfitPursuitSuppressionRecordById(stateful, targetIdentity(target), nowMs)
+    target?.dynamicWhitelistMember === true
+      || target?.whitelistContactPolicy?.dynamicWhitelistMember === true
+      || !economicProfitPursuitSuppressionRecordById(stateful, targetIdentity(target), nowMs)
   ));
 }
 
@@ -8673,9 +9224,23 @@ function rememberNonThreatCombatEconomicSuppression(input, combatDecision, econo
   return suppression;
 }
 
+function combatDecisionIsWhitelistSafetyCombat(combatDecision, stateful = {}) {
+  const target = combatDecision?.target || combatDecision?.dryRun?.target || null;
+  if (!target) return false;
+  const dynamicWhitelistMember = Boolean(
+    target.dynamicWhitelistMember || target.whitelistContactPolicy?.dynamicWhitelistMember
+  );
+  if (!dynamicWhitelistMember) return false;
+  const combatState = stateful?.combatTarget || null;
+  return [target.combatIntent, combatState?.intent, combatState?.originIntent]
+    .map(value => String(value || ''))
+    .some(intent => intent === 'whitelist-proximity' || intent === 'defensive');
+}
+
 function combatDecisionIsOrdinaryProfitPursuit(combatDecision, input, stateful = {}) {
   const target = combatDecision?.target || combatDecision?.dryRun?.target || null;
   if (!target) return false;
+  if (combatDecisionIsWhitelistSafetyCombat(combatDecision, stateful)) return false;
   const combatState = stateful?.combatTarget || null;
   const intent = String(target.combatIntent || combatState?.intent || '');
   const originIntent = String(combatState?.originIntent || combatState?.intent || intent || '');
@@ -8761,6 +9326,7 @@ function rewardPerTenStamina(reward, staminaCost) {
 function evaluateProactiveCombatMarginalRoi(input, combatDecision, opportunity = {}, stateful = {}, thresholdContext = {}, options = {}) {
   const target = combatDecision?.target || combatDecision?.dryRun?.target || null;
   if (!target) return null;
+  if (combatDecisionIsWhitelistSafetyCombat(combatDecision, stateful)) return null;
   const combatState = stateful?.combatTarget || null;
   const intent = String(target.combatIntent || combatState?.intent || '');
   const originIntent = String(combatState?.originIntent || combatState?.intent || intent || '');
@@ -9050,15 +9616,18 @@ function easyKillApproachMinClosingCm(options = {}) {
   return Number.isFinite(value) ? Math.max(0, value) : DEFAULT_EASY_KILL_APPROACH_MIN_CLOSING_CM;
 }
 
-function reconcileEasyKillTracker(input, stateful = {}, options = {}) {
+function reconcileEasyKillTracker(input, stateful = {}, options = {}, damageStatusOverride = null) {
   const reconciled = input?.[EASY_KILL_RECONCILED] || null;
   if (reconciled
     && Number(reconciled.nowMs) === Number(input?.nowMs)
     && String(reconciled.tick ?? '') === String(input?.realtime?.tick ?? '')) {
     return reconciled.trackerState || null;
   }
+  const damageStatus = damageStatusOverride
+    || input?.[DAMAGE_STATUS_RECONCILED]?.status
+    || null;
   const tracker = easyKillPlayerTracker(options);
-  if (!tracker) return refreshEasyKillTargetAnnotations(input, stateful, options);
+  if (!tracker) return refreshEasyKillTargetAnnotations(input, stateful, options, null, damageStatus);
   callEasyKillPlayerTracker(options, 'observeKillEvidence', input.selfKillEvidence || [], {
     atMs: input.nowMs,
     selfHp: hpValue(input.self),
@@ -9071,7 +9640,13 @@ function reconcileEasyKillTracker(input, stateful = {}, options = {}) {
     missingGraceMs: Math.max(2500, Number(options.enemyMissingHoldMs || 0)),
     reason: 'active-target-missing'
   });
-  return refreshEasyKillTargetAnnotations(input, stateful, options, easyKillTrackerStatus(options));
+  return refreshEasyKillTargetAnnotations(
+    input,
+    stateful,
+    options,
+    easyKillTrackerStatus(options),
+    damageStatus
+  );
 }
 
 function easyKillApproachTarget(input, approach) {
@@ -9424,6 +9999,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
   );
   let combatActionEligible = isCombatActionEligibleForDecision(combat, options) && !combatPursuitSuppressed;
   const combatTarget = combat?.target || null;
+  const whitelistSafetyCombat = combatDecisionIsWhitelistSafetyCombat(combat, stateful);
   const postKillSettlement = reconcilePostKillSettlement(input, stateful, combat, previousCombatTarget, options);
   const postAttackSettlement = reconcilePostAttackSettlements(input, stateful, options, combat);
   const combatTargetId = targetIdForAttackHistory(combatTarget);
@@ -9452,6 +10028,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
   const freshProactiveCombat = Boolean(
     combatActionEligible
       && combatTarget
+      && !whitelistSafetyCombat
       && !closePressureCombat
       && combatTarget.combatIntent !== 'defensive'
       && !combatTarget.combatEngagement
@@ -9539,14 +10116,44 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     combatActionEligible,
     recentCombatTarget: previousCombatTarget,
     recentCombatMetrics: stateful.combatMetrics || previousCombatMetrics,
-    postKillSettlement
+    postKillSettlement,
+    preexistingCombatTarget: previousCombatTarget
   };
-  const predictedThreatExitAction = input.self && !realtimeStale
-    ? buildBrowserlessPredictedThreatExitDecision(state, input, stateful, combat, safetyContextOptions)
+  const incomingThreatAssessment = input.self && !realtimeStale
+    ? buildBrowserlessIncomingThreatAssessment(state, input, combat, safetyContextOptions)
     : null;
-  const lowHpRecoveryThreatExitAction = input.self && !realtimeStale
-    ? buildLowHpRecoveryThreatExitDecision(input, safetyContextOptions)
+  const preTargetIncomingSafetyAction = input.self && !realtimeStale
+    ? buildBrowserlessPreTargetIncomingSafetyDecision(input, incomingThreatAssessment, safetyContextOptions)
     : null;
+  const predictedThreatExitAction = attachIncomingCoverToLeaveDecision(
+    input.self && !realtimeStale
+      ? buildBrowserlessPredictedThreatExitDecision(
+          state,
+          input,
+          stateful,
+          combat,
+          safetyContextOptions,
+          incomingThreatAssessment
+        )
+      : null,
+    incomingThreatAssessment
+  );
+  const dynamicWhitelistContactExitAction = input.self && !realtimeStale
+    ? buildDynamicWhitelistContactSafetyExitDecision(input, safetyContextOptions, incomingThreatAssessment)
+    : null;
+  const criticalIncomingExitAction = preTargetIncomingSafetyAction?.shouldLeave
+    ? preTargetIncomingSafetyAction
+    : null;
+  const standaloneIncomingDodgeAction = preTargetIncomingSafetyAction
+    && !preTargetIncomingSafetyAction.shouldLeave
+    ? preTargetIncomingSafetyAction
+    : null;
+  const lowHpRecoveryThreatExitAction = attachIncomingCoverToLeaveDecision(
+    input.self && !realtimeStale
+      ? buildLowHpRecoveryThreatExitDecision(input, safetyContextOptions)
+      : null,
+    incomingThreatAssessment
+  );
   let safetyAction = profitLiveSafetyDecision(input, combat, stateful, safetyContextOptions, opportunity.rawAction);
   if (safetyAction) {
     const threat = safetyAction.target || safetyAction.threats?.[0] || null;
@@ -9567,9 +10174,13 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       urgent: Object.values(evidence).some(Boolean)
     };
   }
-  const injuryHpExitAction = input.self && !realtimeStale
-    ? buildBrowserlessInjuryHpExitDecision(input, stateful, combat, safetyContextOptions)
-    : null;
+  safetyAction = attachIncomingCoverToLeaveDecision(safetyAction, incomingThreatAssessment);
+  const injuryHpExitAction = attachIncomingCoverToLeaveDecision(
+    input.self && !realtimeStale
+      ? buildBrowserlessInjuryHpExitDecision(input, stateful, combat, safetyContextOptions)
+      : null,
+    incomingThreatAssessment
+  );
   if (!dangerousCombatExit) {
     dangerousCombatExit = rememberDangerousSafetyExitTarget(
       input,
@@ -9582,20 +10193,59 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
   if (!dangerousCombatExit) {
     dangerousCombatExit = rememberDangerousSafetyExitTarget(
       input,
+      criticalIncomingExitAction,
+      stateful,
+      options,
+      'pre-target-incoming-bullet'
+    );
+  }
+  if (!dangerousCombatExit) {
+    dangerousCombatExit = rememberDangerousSafetyExitTarget(
+      input,
       predictedThreatExitAction,
       stateful,
       options,
       'realtime-leave-risk'
     );
   }
-  const pursuitLeaveAction = input.self && !realtimeStale
-    ? buildBrowserlessPursuitLeaveDecision(input, stateful, combat, safetyContextOptions)
-    : null;
-  const longStaminaExhaustedLeaveAction = input.self && !realtimeStale
-    ? buildLongStaminaExhaustedLeaveDecision(input, options)
-    : null;
+  if (!dangerousCombatExit) {
+    dangerousCombatExit = rememberDangerousSafetyExitTarget(
+      input,
+      dynamicWhitelistContactExitAction,
+      stateful,
+      options,
+      'dynamic-whitelist-contact'
+    );
+  }
+  const pursuitLeaveAction = attachIncomingCoverToLeaveDecision(
+    input.self && !realtimeStale
+      ? buildBrowserlessPursuitLeaveDecision(input, stateful, combat, safetyContextOptions)
+      : null,
+    incomingThreatAssessment
+  );
+  const longStaminaExhaustedLeaveAction = attachIncomingCoverToLeaveDecision(
+    input.self && !realtimeStale
+      ? buildLongStaminaExhaustedLeaveDecision(input, options)
+      : null,
+    incomingThreatAssessment
+  );
   const hardSafetyAction = safetyActionIsHardLeave(safetyAction) ? safetyAction : null;
-  const combatExitAction = combat.exitAction || null;
+  const combatExitAction = attachIncomingCoverToLeaveDecision(
+    combat.exitAction || null,
+    incomingThreatAssessment
+  );
+  const deferCombatExitForDynamicContact = dynamicWhitelistContactSupersedesLowHpExit(
+    dynamicWhitelistContactExitAction,
+    combatExitAction
+  );
+  const deferInjuryExitForDynamicContact = dynamicWhitelistContactSupersedesLowHpExit(
+    dynamicWhitelistContactExitAction,
+    injuryHpExitAction
+  );
+  const immediateCombatExitAction = deferCombatExitForDynamicContact ? null : combatExitAction;
+  const immediateInjuryHpExitAction = deferInjuryExitForDynamicContact ? null : injuryHpExitAction;
+  const deferredCombatExitAction = deferCombatExitForDynamicContact ? combatExitAction : null;
+  const deferredInjuryHpExitAction = deferInjuryExitForDynamicContact ? injuryHpExitAction : null;
   const safetyYieldsToHighValueCoin = Boolean(
     safetyAction
       && safetyAction.reason === 'avoid-invulnerable-target'
@@ -9620,8 +10270,12 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
   const postAttackDropWaitAction = (profitLive || nonCombatProfit)
     ? (buildPostAttackDropWaitDecision(input, stateful, options, combat) || buildPostKillSettlementWaitDecision(input, stateful))
     : null;
-  const recoveryFootCoinAction = (profitLive || nonCombatProfit) ? buildRecoveryFootCoinDecision(profitSelectionInput, options) : null;
-  const recoveryAction = (profitLive || nonCombatProfit) ? buildRecoveryDecision(input, opportunity, options) : null;
+  const recoveryFootCoinAction = (profitLive || nonCombatProfit) && !whitelistSafetyCombat
+    ? buildRecoveryFootCoinDecision(profitSelectionInput, options)
+    : null;
+  const recoveryAction = (profitLive || nonCombatProfit) && !whitelistSafetyCombat
+    ? buildRecoveryDecision(input, opportunity, options)
+    : null;
   const injuredCautionFootCoinAction = safetyAction
     && safetyActionCanYieldToInjuredFootCoin(safetyAction)
     && input.self
@@ -9649,6 +10303,9 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       && input.self
       && !realtimeStale
       && !hardSafetyAction
+      && !criticalIncomingExitAction
+      && !dynamicWhitelistContactExitAction
+      && !standaloneIncomingDodgeAction
       && !lowHpRecoveryThreatExitAction
       && !longStaminaExhaustedLeaveAction
       && !predictedThreatExitAction
@@ -9702,6 +10359,8 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     action.reason = reason;
   } else {
     const combatAction = combat.target && combatDecisionEnabled && combatActionEligible ? combat.action : null;
+    const whitelistSafetyCombatAction = combatAction && whitelistSafetyCombat ? combatAction : null;
+    const ordinaryCombatAction = whitelistSafetyCombat ? null : combatAction;
     const combatHardGate = Boolean(combatAction && (
       closePressureCombat
       || combat.target?.combatIntent === 'defensive'
@@ -9720,13 +10379,22 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     let candidates = [
       candidate(hardSafetyAction, 10, 'hard-safety', true, { riskScore: 100 }),
       candidate(longStaminaExhaustedLeaveAction, 20, 'stamina-exhausted-hard-gate', true, { riskScore: 100 }),
-      candidate(combatExitAction, 30, 'combat-exit-hard-gate', true, { riskScore: 100 }),
-      candidate(injuryHpExitAction, 35, 'injury-hp-hard-gate', true, { riskScore: 100 }),
+      candidate(criticalIncomingExitAction, 25, 'critical-incoming-hard-gate', true, { riskScore: 100 }),
+      candidate(immediateCombatExitAction, 30, 'combat-exit-hard-gate', true, { riskScore: 100 }),
+      candidate(immediateInjuryHpExitAction, 35, 'injury-hp-hard-gate', true, { riskScore: 100 }),
       candidate(predictedThreatExitAction, 40, 'predicted-threat-hard-gate', true, { riskScore: 100 }),
+      candidate(dynamicWhitelistContactExitAction, 45, 'dynamic-whitelist-contact-hard-gate', true, { riskScore: 100 }),
+      candidate(deferredCombatExitAction, 47, 'combat-low-hp-exit-after-whitelist-contact', true, { riskScore: 100 }),
+      candidate(deferredInjuryHpExitAction, 48, 'injury-low-hp-exit-after-whitelist-contact', true, { riskScore: 100 }),
       candidate(pursuitLeaveAction, 50, 'pursuit-hard-gate', true, { riskScore: 90 }),
       candidate(lowHpRecoveryThreatExitAction, 52, 'low-hp-recovery-threat-hard-gate', true, { riskScore: 100 }),
+      candidate(standaloneIncomingDodgeAction, 54, 'incoming-bullet-dodge-hard-gate', true, { riskScore: 100 }),
       candidate(immediateSafetyAction, 55, 'realtime-safety-hard-gate', true, { riskScore: immediateSafetyAction?.urgent ? 100 : 80 }),
-      candidate(combatAction, 60, 'engaged-defensive-combat-stick', combatHardGate, {
+      candidate(whitelistSafetyCombatAction, 58, 'dynamic-whitelist-safety-combat', combatHardGate, {
+        staminaCost: combat.dryRun?.metrics?.totalStaminaSpent,
+        riskScore: combat.target?.combatIntent === 'defensive' ? 80 : 60
+      }),
+      candidate(ordinaryCombatAction, 60, 'engaged-defensive-combat-stick', combatHardGate, {
         roiScore: activeCombatOpportunity?.combatScore,
         staminaCost: combat.dryRun?.metrics?.totalStaminaSpent,
         riskScore: combat.dryRun?.behavior?.mode === 'pressure-shooter' ? 70 : 40
@@ -9903,6 +10571,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     tick: input.realtime.tick,
     action,
     finalSelection,
+    whitelistSafety: summarizeWhitelistSafetyState(input, incomingThreatAssessment, safetyContextOptions),
     input: {
       self: summarizeTarget(input.self),
       stamina: input.stamina,
@@ -9989,6 +10658,7 @@ function summarizeBrowserlessDecision(decision) {
     tick: decision.tick ?? null,
     action: decision.action || null,
     finalSelection: decision.finalSelection || null,
+    whitelistSafety: decision.whitelistSafety || null,
     input: decision.input || null,
     profit: decision.profit || null,
     combat: decision.combat || null

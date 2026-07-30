@@ -1,6 +1,10 @@
 'use strict';
 
 const { COMBAT_CONSTANTS } = require('./combat-constants');
+const {
+  dynamicWhitelistDistanceGuardBlocksCombatCore,
+  dynamicWhitelistIncomingOverrideCore
+} = require('./dynamic-whitelist-safety');
 
 /**
  * Combat Target Classification and Selection
@@ -189,11 +193,41 @@ function combatEdgePressureDecisionCore(self, target, engaged = {}, escapeDecisi
   };
 }
 
+function incomingBulletForTarget(entity, context = {}) {
+  const id = targetId(entity);
+  if (!id) return null;
+  const explicit = context.incomingBullet || null;
+  const explicitOwner = explicit?.ownerId
+    ?? explicit?.owner_id
+    ?? explicit?.ownerUserId
+    ?? explicit?.owner_user_id
+    ?? explicit?.source_user_id
+    ?? explicit?.user_id;
+  if (explicitOwner !== null
+    && explicitOwner !== undefined
+    && String(explicitOwner) === id
+    && incomingBulletHasCollisionRiskCore(explicit, context)) return explicit;
+  return (context.bullets || []).find(bullet => {
+    const ownerId = bullet?.ownerId
+      ?? bullet?.owner_id
+      ?? bullet?.ownerUserId
+      ?? bullet?.owner_user_id
+      ?? bullet?.source_user_id
+      ?? bullet?.user_id;
+    return bullet?.incoming !== false
+      && ownerId !== null
+      && ownerId !== undefined
+      && String(ownerId) === id
+      && incomingBulletHasCollisionRiskCore(bullet, context);
+  }) || null;
+}
+
 function incomingOwnerMatchesTarget(entity, context = {}) {
   const ownerId = context.incomingBulletOwnerId ?? context.incomingOwnerId ?? context.incomingBullet?.ownerId;
-  if (ownerId === null || ownerId === undefined) return false;
   const id = targetId(entity);
-  return id !== '' && String(ownerId) === id;
+  if (id === '') return false;
+  if (ownerId !== null && ownerId !== undefined && String(ownerId) === id) return true;
+  return Boolean(incomingBulletForTarget(entity, context));
 }
 
 function recentInjuryMatchesTarget(entity, context = {}) {
@@ -283,18 +317,37 @@ function recentAfkAttackCommitmentCore(previousAction, entities = [], options = 
 function isCombatEligibleThreat(entity, options = {}) {
   if (!entity) return false;
 
-  // Invulnerable targets are not combat eligible
-  if (isInvulnerableEntity(entity)) return false;
+  if (entity.alive === false || isInvulnerableEntity(entity)) return false;
+  if (entity.authority && entity.authority !== 'realtime') return false;
 
-  // Whitelisted targets are protected
-  if (options.whitelistCheck && options.whitelistCheck(entity)) return false;
+  const incomingBullet = incomingBulletForTarget(entity, options);
+  const incomingOverride = dynamicWhitelistIncomingOverrideCore(entity, incomingBullet, {}, options);
+  const recentInjury = recentInjuryMatchesTarget(entity, options);
+  const dynamicPolicy = entity.whitelistContactPolicy || null;
+  const dynamicWhitelistMember = Boolean(entity.dynamicWhitelistMember || dynamicPolicy?.dynamicWhitelistMember);
+  const creatorProtected = Boolean(entity.creatorProtected || dynamicPolicy?.creatorProtected);
+  const legacyWhitelistProtected = Boolean(
+    entity.legacyWhitelistProtected
+      || dynamicPolicy?.legacyWhitelistProtected
+      || (!dynamicWhitelistMember && options.whitelistCheck && options.whitelistCheck(entity))
+  );
+
+  // The creator and legacy hard whitelist remain offensive vetoes. Their
+  // bullets are handled by the pre-target Dodge/leave safety path instead.
+  if (creatorProtected || legacyWhitelistProtected) return false;
+
+  // Realtime collision-path fire and recent attributable injury outrank the
+  // dynamic whitelist distance guard and the easy-kill trust exemption.
+  if (incomingOverride.defensiveTargetEligible || recentInjury) return true;
+
+  if (dynamicWhitelistMember) return dynamicPolicy?.proactiveCombatEligible === true;
 
   // A recently killed player stays outside ordinary defensive combat until it
   // has actually damaged self. A deliberately selected easy-kill profit target
   // may still be fought while healthy, but it cannot take over HP recovery.
   if (easyKillThreatExempt(entity, options)) return false;
 
-  if (incomingOwnerMatchesTarget(entity, options) || recentInjuryMatchesTarget(entity, options)) return true;
+  if (incomingOwnerMatchesTarget(entity, options) || recentInjury) return true;
 
   // Match the browser runtime's split between defensive/proactive Active combat
   // and ordinary Passive/AFK profit. Moving or Drop value alone should not make
@@ -430,7 +483,7 @@ function selectBestCombatTarget(self, candidates, context = {}) {
   if (incomingShooter) {
     return {
       ...incomingShooter,
-      incomingBullet: context.incomingBullet || null,
+      incomingBullet: incomingBulletForTarget(incomingShooter, context),
       combatIntent: 'defensive'
     };
   }
@@ -452,7 +505,11 @@ function selectBestCombatTarget(self, candidates, context = {}) {
   // Return highest priority target
   return {
     ...scored[0].target,
-    combatIntent: combatTargetThreatensSelf(scored[0].target, context) ? 'defensive' : 'profit'
+    combatIntent: combatTargetThreatensSelf(scored[0].target, context)
+      ? 'defensive'
+      : (scored[0].target?.whitelistContactPolicy?.proactiveCombatEligible === true
+          ? 'whitelist-proximity'
+          : 'profit')
   };
 }
 
@@ -719,12 +776,32 @@ function pickEngagedCombatTargetCore(self, combatTargets = [], entities = [], bu
   const visibleHp = visibleTarget?.hp ?? visibleTarget?.knownHp ?? visibleTarget?.displayHp;
   const visibleTargetDead = visibleTarget?.alive === false
     || (visibleHp !== null && visibleHp !== undefined && visibleHp !== '' && Number(visibleHp) === 0);
+  const incoming = Object.prototype.hasOwnProperty.call(options, 'incomingBullet')
+    ? options.incomingBullet
+    : (Array.isArray(bullets) ? bullets.find(bullet => bullet?.incoming) : null);
+  const context = {
+    ...options,
+    bullets,
+    incomingBullet: incoming || null,
+    incomingBulletOwnerId: incoming?.ownerId,
+    unknownIncoming: Boolean(incoming && (incoming.ownerId === null || incoming.ownerId === undefined))
+  };
+  if (visibleTarget && dynamicWhitelistDistanceGuardBlocksCombatCore(visibleTarget, {
+    incomingOverride: incomingOwnerMatchesTarget(visibleTarget, context),
+    recentInjury: recentInjuryMatchesTarget(visibleTarget, context)
+  })) {
+    if (state && typeof state === 'object') state.combatTarget = null;
+    return null;
+  }
   // Close pressure may bridge the attack boundary, but it must still honor
   // the configured disengage radius. Realtime visibility is much wider than
   // combat range and is not sufficient evidence to keep a fight alive.
   if (closePressure && visibleTarget && !isInvulnerableEntity(visibleTarget)
     && !visibleTargetDead
-    && !(typeof options.whitelistCheck === 'function' && options.whitelistCheck(visibleTarget))) {
+    && !(typeof options.whitelistCheck === 'function'
+      && options.whitelistCheck(visibleTarget)
+      && !visibleTarget.dynamicWhitelistMember
+      && !visibleTarget.whitelistContactPolicy?.dynamicWhitelistMember)) {
     const distance = Number(visibleTarget.distance);
     const attackRange = Math.max(0, Number(options.combatAttackRange || options.attackRange || 0));
     const disengageRange = Math.max(attackRange, Number(
@@ -766,15 +843,6 @@ function pickEngagedCombatTargetCore(self, combatTargets = [], entities = [], bu
     if (state && typeof state === 'object') state.combatTarget = null;
     return null;
   }
-  const incoming = Object.prototype.hasOwnProperty.call(options, 'incomingBullet')
-    ? options.incomingBullet
-    : (Array.isArray(bullets) ? bullets.find(bullet => bullet?.incoming) : null);
-  const context = {
-    ...options,
-    incomingBullet: incoming || null,
-    incomingBulletOwnerId: incoming?.ownerId,
-    unknownIncoming: Boolean(incoming && (incoming.ownerId === null || incoming.ownerId === undefined))
-  };
   if (target && !isInvulnerableEntity(target) && isCombatEligibleThreat(target, context)) {
     return {
       ...target,

@@ -185,6 +185,12 @@ function createDailyDamagePlayerTracker(options = {}) {
     };
   }
 
+  function hasUserId(target, atMs = now()) {
+    ensureToday(atMs);
+    const userId = playerUserId(target);
+    return userId !== null && Boolean(store.players[playerKey(userId)]);
+  }
+
   function observePlayerNames(targets = [], detail = {}) {
     const atMs = Number.isFinite(Number(detail.atMs)) ? Number(detail.atMs) : now();
     ensureToday(atMs);
@@ -405,6 +411,7 @@ function createDailyDamagePlayerTracker(options = {}) {
     observePlayerNames,
     recordDamage,
     resetObservation,
+    hasUserId,
     status
   };
 }

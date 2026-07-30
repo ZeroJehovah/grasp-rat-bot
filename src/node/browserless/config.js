@@ -78,6 +78,8 @@ const DEFAULTS = {
   browserlessProfitPursuitHardMovementStaminaMs: 300000,
   browserlessProfitPursuitPressureCycleMs: 60000,
   combatEnabled: false,
+  dynamicWhitelistProximitySafetyEnabled: true,
+  preTargetIncomingDodgeEnabled: true,
   combatRobustDodgeEnabled: true,
   combatCloseBandReserveEnabled: true,
   combatMovementStabilityEnabled: false,
@@ -237,6 +239,14 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
     browserlessProfitPursuitHardMovementStaminaMs: numberEnv(env.GRASP_RAT_BROWSERLESS_PROFIT_PURSUIT_HARD_MOVEMENT_STAMINA_MS, DEFAULTS.browserlessProfitPursuitHardMovementStaminaMs),
     browserlessProfitPursuitPressureCycleMs: numberEnv(env.GRASP_RAT_BROWSERLESS_PROFIT_PURSUIT_PRESSURE_CYCLE_MS, DEFAULTS.browserlessProfitPursuitPressureCycleMs),
     combatEnabled: boolEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_ENABLED, DEFAULTS.combatEnabled),
+    dynamicWhitelistProximitySafetyEnabled: boolEnv(
+      env.GRASP_RAT_BROWSERLESS_DYNAMIC_WHITELIST_PROXIMITY_SAFETY_ENABLED,
+      DEFAULTS.dynamicWhitelistProximitySafetyEnabled
+    ),
+    preTargetIncomingDodgeEnabled: boolEnv(
+      env.GRASP_RAT_BROWSERLESS_PRE_TARGET_INCOMING_DODGE_ENABLED,
+      DEFAULTS.preTargetIncomingDodgeEnabled
+    ),
     combatRobustDodgeEnabled: boolEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_ROBUST_DODGE_ENABLED, DEFAULTS.combatRobustDodgeEnabled),
     combatCloseBandReserveEnabled: boolEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_CLOSE_BAND_RESERVE_ENABLED, DEFAULTS.combatCloseBandReserveEnabled),
     combatMovementStabilityEnabled: boolEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_MOVEMENT_STABILITY_ENABLED, DEFAULTS.combatMovementStabilityEnabled),
@@ -311,6 +321,14 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
       config.combatEnabled = true;
     } else if (arg === '--no-combat-enabled') {
       config.combatEnabled = false;
+    } else if (arg === '--dynamic-whitelist-proximity-safety') {
+      config.dynamicWhitelistProximitySafetyEnabled = true;
+    } else if (arg === '--no-dynamic-whitelist-proximity-safety') {
+      config.dynamicWhitelistProximitySafetyEnabled = false;
+    } else if (arg === '--pre-target-incoming-dodge') {
+      config.preTargetIncomingDodgeEnabled = true;
+    } else if (arg === '--no-pre-target-incoming-dodge') {
+      config.preTargetIncomingDodgeEnabled = false;
     } else if (arg === '--control-mode') {
       config.controlMode = argv[++i] || config.controlMode;
       config.readOnly = config.controlMode === 'read-only';
@@ -542,6 +560,8 @@ function usage() {
     '  --combat-dry-run         Evaluate combat target/movement/aim/fire intent without movement or shooting',
     '  --combat-live            Enable guarded live combat mode; requires --combat-enabled before shooting',
     '  --combat-enabled         Allow combat-live/profit-live combat movement and shoot commands. Default: false',
+    '  --[no-]dynamic-whitelist-proximity-safety  Enable HP-scaled whitelist contact combat and low-HP exits. Default: enabled',
+    '  --[no-]pre-target-incoming-dodge  Execute collision-path Dodge before a combat target exists. Default: enabled',
     '  --canary-profile <name>  read-only, movement-only, profit, combat-dry-run, or combat-live',
     '  --control-mode <mode>    read-only, movement-only, non-combat-profit, profit-live, combat-dry-run, or combat-live. Default: read-only',
     '  --dry-run                Do not connect to live game transport (default)',

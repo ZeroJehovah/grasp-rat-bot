@@ -1577,6 +1577,9 @@ function combatReasonText(reason) {
   if (value === 'combat-hp-disadvantage-leave') return 'HP劣势';
   if (value === 'combat-low-hp-leave') return '低血或近身风险';
   if (value === 'combat-critical-hp-leave') return '血量过低';
+  if (value === 'dynamic-whitelist-low-hp-contact-leave') return '低血量动态白名单近身风险';
+  if (value === 'dynamic-whitelist-contact-no-dodge-budget-leave') return '动态白名单近身且闪避体力不足';
+  if (value === 'incoming-bullet-dodge') return '碰撞路径来弹闪避';
   if (value === 'combat-low-hp-no-damage-leave') return '低血且久攻未中';
   if (value === 'combat-no-damage-generation-limit-leave') return '普通收益战斗无伤害止损';
   if (value === 'injury-leave') return '受伤';

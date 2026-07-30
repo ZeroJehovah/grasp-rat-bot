@@ -156,6 +156,10 @@ function createDynamicWhitelist(options = {}) {
     write(file, store, backgroundIo);
   }
   function userId(target) { return numberOrNull(target?.userId ?? target?.user_id ?? target); }
+  function isMember(target) {
+    const id = userId(target);
+    return id !== null && Boolean(store.players[playerKey(id)]);
+  }
   function isWhitelistedTarget(target) {
     const id = userId(target);
     const key = playerKey(id);
@@ -320,6 +324,7 @@ function createDynamicWhitelist(options = {}) {
       file,
       updatedAt: store.updatedAt,
       playerCount: players.length,
+      memberUserIds: players.map(item => item.userId),
       enabledPlayerCount: userIds.length,
       temporarilyDisabledCount: disabledPlayers.length,
       players,
@@ -327,7 +332,17 @@ function createDynamicWhitelist(options = {}) {
       temporarilyDisabled: disabledPlayers
     };
   }
-  return { file, add, observeDamage, observeBattles, restoreAll, isWhitelistedTarget, status };
+  return {
+    file,
+    add,
+    observeDamage,
+    observeBattles,
+    restoreAll,
+    isMember,
+    isEnabled: isWhitelistedTarget,
+    isWhitelistedTarget,
+    status
+  };
 }
 
 module.exports = {

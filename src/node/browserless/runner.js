@@ -998,6 +998,8 @@ function browserlessLoopPlan(result, config = {}) {
     'combat-miss-close-timeout-leave',
     'combat-no-damage-generation-limit-leave',
     'recovery-low-hp-active-threat-leave',
+    'dynamic-whitelist-low-hp-contact-leave',
+    'dynamic-whitelist-contact-no-dodge-budget-leave',
     'injury-leave',
     'pursuit-leave'
   ].includes(safetyReason)) {
@@ -5034,7 +5036,7 @@ async function runBrowserlessRunnerSelfTest() {
     const snapshotEdge = await runSnapshotEdgeSelfTest();
     const pendingExitRecovery = runPendingExitRecoverySelfTest();
     const combatBattleLog = runCombatBattleLogSelfTest();
-    const dynamicWhitelist = require('./dynamic-whitelist-self-test').runDynamicWhitelistSelfTest();
+    const dynamicWhitelist = await require('./dynamic-whitelist-self-test').runDynamicWhitelistSelfTest();
     const runnerLog = path.join(tmp, 'logs', '2026-07-08', 'runner.jsonl');
     const text = fs.readFileSync(runnerLog, 'utf8');
     return {

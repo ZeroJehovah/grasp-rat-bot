@@ -1312,13 +1312,30 @@ async function runReadOnlyCanary(config, options = {}) {
   }
   const creatorUserIds = [CREATOR_USER_ID];
   const creatorUserIdSet = new Set(creatorUserIds);
+  const targetWhitelistMaxEntries = Math.max(0, Math.round(Number(config.targetWhitelistMaxNames || 100)));
+  const workerWhitelistMaxEntries = Math.max(1, targetWhitelistMaxEntries || 100);
+  const legacyStaticWhitelistNames = targetWhitelistMaxEntries > 0
+    ? genesisWhitelist.names.slice(0, targetWhitelistMaxEntries)
+    : genesisWhitelist.names;
+  const allStaticWhitelistUserIds = Array.from(new Set([
+    ...creatorUserIds,
+    ...genesisWhitelist.userIds
+  ].map(Number).filter(Number.isFinite)));
+  const staticWhitelistUserIds = targetWhitelistMaxEntries > 0
+    ? allStaticWhitelistUserIds.slice(0, targetWhitelistMaxEntries)
+    : allStaticWhitelistUserIds;
+  const staticWhitelistNameSet = new Set(legacyStaticWhitelistNames);
+  const staticWhitelistUserIdSet = new Set(staticWhitelistUserIds);
   const isCreatorTarget = target => {
     const userId = Number(target?.user_id ?? target?.userId ?? target?.target_user_id ?? target?.targetUserId);
     return Number.isFinite(userId) && creatorUserIdSet.has(userId);
   };
+  const isStaticWhitelistTarget = target => (
+    isCreatorTarget(target) || Boolean(genesisWhitelist.isWhitelistedTarget?.(target))
+  );
   targetWhitelistSummary = {
     ...(targetWhitelistSummary || {}),
-    semantic: 'creator',
+    semantic: 'creator-and-legacy-static',
     creatorUserId: CREATOR_USER_ID,
     configuredEntryCount: Number(targetWhitelistSummary?.count || 0)
   };
@@ -1335,22 +1352,38 @@ async function runReadOnlyCanary(config, options = {}) {
     combatCompletionTracker: options.combatCompletionTracker,
     combatLearning: options.combatCompletionTracker?.strategyLearning?.() || null,
     damagePlayerTracker,
-    targetWhitelistNames: [],
-    targetWhitelistNameSet: new Set(),
-    targetWhitelistUserIds: creatorUserIds,
-    targetWhitelistUserIdSet: creatorUserIdSet,
-    whitelistCheck: target => isCreatorTarget(target)
-      || Boolean(options.dynamicWhitelist?.isWhitelistedTarget?.(target))
+    creatorUserIds,
+    creatorUserIdSet,
+    creatorCheck: isCreatorTarget,
+    dynamicWhitelistMemberCheck: target => {
+      if (typeof options.dynamicWhitelist?.isMember === 'function') {
+        return Boolean(options.dynamicWhitelist.isMember(target));
+      }
+      return Boolean(options.dynamicWhitelist?.status?.().players?.some(item => (
+        Number(item?.userId ?? item?.user_id) === Number(target?.userId ?? target?.user_id)
+      )));
+    },
+    dynamicWhitelistEnabledCheck: target => Boolean(
+      options.dynamicWhitelist?.isEnabled?.(target)
+        ?? options.dynamicWhitelist?.isWhitelistedTarget?.(target)
+    ),
+    damagedSelfTodayCheck: target => Boolean(damagePlayerTracker?.hasUserId?.(target, now())),
+    targetWhitelistNames: legacyStaticWhitelistNames,
+    targetWhitelistNameSet: staticWhitelistNameSet,
+    targetWhitelistUserIds: staticWhitelistUserIds,
+    targetWhitelistUserIdSet: staticWhitelistUserIdSet,
+    whitelistCheck: isStaticWhitelistTarget
   };
   const decisionAdapter = options.decisionAdapter || createBrowserlessDecisionAdapter(decisionAdapterOptions);
   const realtimeControlWarmup = options.useDecisionWorker || options.decisionWorker
     ? warmBrowserlessRealtimeControl(decisionAdapterOptions, options)
     : { ok: true, skipped: true, iterations: 0, durationMs: 0, maxIterationMs: 0 };
   const decisionWorker = options.decisionWorker || (options.useDecisionWorker
-    ? createBrowserlessDecisionWorker({
+      ? createBrowserlessDecisionWorker({
         ...decisionAdapterOptions,
-        targetWhitelistNames: [],
-        targetWhitelistUserIds: creatorUserIds
+        targetWhitelistNames: legacyStaticWhitelistNames,
+        targetWhitelistUserIds: staticWhitelistUserIds,
+        creatorUserIds
       })
     : null);
   const persistCombatLearning = atMs => {
@@ -2437,15 +2470,31 @@ async function runReadOnlyCanary(config, options = {}) {
   const buildDecisionWorkerContext = (currentState, atMs) => {
     let easyKillStatus = null;
     let damageStatus = null;
+    let dynamicWhitelistStatus = null;
     try {
       easyKillStatus = options.easyKillPlayerTracker?.status?.(atMs) || null;
     } catch (_) {}
     try {
       damageStatus = options.damagePlayerTracker?.status?.(atMs) || null;
     } catch (_) {}
+    try {
+      dynamicWhitelistStatus = options.dynamicWhitelist?.status?.() || null;
+    } catch (_) {}
+    const dynamicMemberUserIds = (
+      dynamicWhitelistStatus?.memberUserIds
+      || (dynamicWhitelistStatus?.players || []).map(item => item?.userId ?? item?.user_id)
+    ).map(Number).filter(Number.isFinite).slice(0, workerWhitelistMaxEntries);
+    const dynamicEnabledUserIds = (dynamicWhitelistStatus?.userIds || [])
+      .map(Number)
+      .filter(Number.isFinite)
+      .slice(0, workerWhitelistMaxEntries);
     return {
       easyKillStatus,
       damageStatus,
+      dynamicWhitelistStatus: {
+        memberUserIds: dynamicMemberUserIds,
+        userIds: dynamicEnabledUserIds
+      },
       combatCompletionByUserId: completionContext(currentState, atMs)
     };
   };
@@ -2751,18 +2800,20 @@ async function runReadOnlyCanary(config, options = {}) {
     if (!currentState?.realtime?.self) return false;
     plannerInFlight = true;
     lastDecisionAtMs = atMs;
+    const context = buildDecisionWorkerContext(currentState, atMs);
+    const dynamicWhitelistStatus = context.dynamicWhitelistStatus || {};
     const workerOptions = {
       ...runtimeDefaults,
       nowMs: atMs,
       controlMode,
       combatEnabled: config.combatEnabled,
-      targetWhitelistNames: [],
-      targetWhitelistUserIds: [
-        ...creatorUserIds,
-        ...(options.dynamicWhitelist?.status?.().userIds || [])
-      ]
+      targetWhitelistNames: legacyStaticWhitelistNames,
+      targetWhitelistUserIds: staticWhitelistUserIds,
+      creatorUserIds,
+      dynamicWhitelistMemberUserIds: dynamicWhitelistStatus.memberUserIds || [],
+      dynamicWhitelistEnabledUserIds: dynamicWhitelistStatus.userIds || [],
+      dailyDamageUserIds: context.damageStatus?.userIds || []
     };
-    const context = buildDecisionWorkerContext(currentState, atMs);
     const statePatch = decisionAdapter.getRealtimePersistenceState?.() || null;
     decisionWorker.decide(currentState, workerOptions, context, statePatch)
       .then(workerResult => {

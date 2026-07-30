@@ -175,7 +175,7 @@ function classifyNormalizedAction(action) {
       message: 'browserless still exits for a threat branch where browser runtime may fight, flee, wait, or return-block'
     };
   }
-  if (kind === 'safety-exit' && /^(?:combat-.*-leave|injury-leave|pursuit-leave|profit-live-critical-(?:threat|unknown-pressure))$/.test(reason)) {
+  if (kind === 'safety-exit' && /^(?:combat-.*-leave|dynamic-whitelist-.*-leave|injury-leave|pursuit-leave|profit-live-critical-(?:threat|unknown-pressure))$/.test(reason)) {
     return {
       status: GAP_ALIGNED,
       key: 'browserless-survival-exit',

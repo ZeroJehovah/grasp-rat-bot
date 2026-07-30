@@ -72,6 +72,9 @@ const {
   combatPressureStrafeCore,
   combatPressureTargetRangeCore
 } = require('../../strategy/combat-pressure');
+const {
+  dynamicWhitelistDistanceGuardBlocksCombatCore
+} = require('../../strategy/dynamic-whitelist-safety');
 
 const DEFAULT_STAMINA_FULL_RATIO = 0.98;
 const MISSING_OPTION_VALUE = Symbol('browserless-combat-missing-option-value');
@@ -590,9 +593,19 @@ function targetWhitelistFromOptions(options = {}) {
 
 function isWhitelistedTargetForOptions(entity, options = {}) {
   if (!entity) return false;
-  if (entity.whitelisted === true) return true;
+  if (entity.profitProtected === true
+    || entity.creatorProtected === true
+    || entity.dynamicWhitelistMember === true
+    || entity.whitelisted === true) return true;
   if (typeof options.whitelistCheck === 'function' && options.whitelistCheck(entity)) return true;
   return targetIsWhitelisted(entity, targetWhitelistFromOptions(options));
+}
+
+function isHardCombatProtectedTarget(entity, options = {}) {
+  if (!entity) return false;
+  if (entity.creatorProtected === true || entity.legacyWhitelistProtected === true) return true;
+  if (entity.dynamicWhitelistMember === true || entity.whitelistContactPolicy?.dynamicWhitelistMember === true) return false;
+  return isWhitelistedTargetForOptions(entity, options);
 }
 
 function hpValue(entity) {
@@ -749,7 +762,13 @@ function updateContactEntryGuard(stateful, self, targets = [], bullets = [], opt
     const activeTargetInvalid = !activeTarget
       || (activeTargetHp !== null && activeTargetHp <= 0)
       || isInvulnerableEntity(activeTarget)
-      || isWhitelistedTargetForOptions(activeTarget, options);
+      || isHardCombatProtectedTarget(activeTarget, options)
+      || dynamicWhitelistDistanceGuardBlocksCombatCore(activeTarget, {
+        incomingOverride: Boolean((bullets || []).some(bullet => (
+          String(bullet?.ownerId ?? '') === String(state.active.targetId || '')
+            && incomingBulletHasCollisionRiskCore(bullet, options)
+        )))
+      });
     if (activeTargetInvalid || nowMs >= Number(state.active.holdUntil || 0)) {
       state.active = null;
     } else {
@@ -768,12 +787,20 @@ function updateContactEntryGuard(stateful, self, targets = [], bullets = [], opt
   for (const target of targets) {
     const id = String(combatTargetId(target) || '');
     const targetHp = hpValue(target);
+    let targetBullet = contactEntryTargetBullet(bullets, id);
+    const dynamicWhitelistMember = Boolean(
+      target.dynamicWhitelistMember || target.whitelistContactPolicy?.dynamicWhitelistMember
+    );
+    if (dynamicWhitelistMember && targetBullet && !incomingBulletHasCollisionRiskCore(targetBullet, options)) {
+      targetBullet = null;
+    }
+    const dynamicContactEligible = target.whitelistContactPolicy?.proactiveCombatEligible === true;
     if (!id
       || (targetHp !== null && targetHp <= 0)
       || isInvulnerableEntity(target)
-      || isWhitelistedTargetForOptions(target, options)) continue;
+      || isHardCombatProtectedTarget(target, options)
+      || (dynamicWhitelistMember && !dynamicContactEligible && !targetBullet)) continue;
     const previous = state.observations[id] || null;
-    const targetBullet = contactEntryTargetBullet(bullets, id);
     const previousArmed = previous?.armed !== false;
     const risk = withOptionOverrides(options, {
       attackRange,
@@ -986,6 +1013,27 @@ function summarizeCombatTarget(target) {
     easyKillDamagedToday: Boolean(target.easyKillDamagedToday),
     easyKillThreatExempt: Boolean(target.easyKillThreatExempt),
     easyKillProfitTarget: Boolean(target.easyKillProfitTarget),
+    creatorProtected: Boolean(target.creatorProtected),
+    dynamicWhitelistMember: Boolean(target.dynamicWhitelistMember),
+    dynamicWhitelistEnabled: Boolean(target.dynamicWhitelistEnabled),
+    damagedSelfToday: Boolean(target.damagedSelfToday),
+    legacyWhitelistProtected: Boolean(target.legacyWhitelistProtected),
+    profitProtected: Boolean(target.profitProtected),
+    whitelistContactPolicy: target.whitelistContactPolicy ? {
+      membershipSource: String(target.whitelistContactPolicy.membershipSource || 'none'),
+      profitProtected: Boolean(target.whitelistContactPolicy.profitProtected),
+      creatorProtected: Boolean(target.whitelistContactPolicy.creatorProtected),
+      dynamicWhitelistMember: Boolean(target.whitelistContactPolicy.dynamicWhitelistMember),
+      dynamicWhitelistEnabled: Boolean(target.whitelistContactPolicy.dynamicWhitelistEnabled),
+      damagedSelfToday: Boolean(target.whitelistContactPolicy.damagedSelfToday),
+      legacyWhitelistProtected: Boolean(target.whitelistContactPolicy.legacyWhitelistProtected),
+      proactiveCombatEligible: Boolean(target.whitelistContactPolicy.proactiveCombatEligible),
+      proactiveCombatRangeCm: numberOrNull(target.whitelistContactPolicy.proactiveCombatRangeCm),
+      lowHpSafetyExit: Boolean(target.whitelistContactPolicy.lowHpSafetyExit),
+      contactNoDodgeBudgetExit: Boolean(target.whitelistContactPolicy.contactNoDodgeBudgetExit),
+      distanceCm: numberOrNull(target.whitelistContactPolicy.distanceCm),
+      reason: String(target.whitelistContactPolicy.reason || '')
+    } : null,
     distance: Number.isFinite(Number(target.distance)) ? Math.round(Number(target.distance)) : null,
     score: Number.isFinite(Number(target.combatScore)) ? Math.round(Number(target.combatScore)) : null,
     combatIntent: target.combatIntent || '',
@@ -2491,6 +2539,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
       const distance = Number(target.distance);
       if (!Number.isFinite(distance)) return false;
       if (distance <= combatAttackRange) return true;
+      if (target.dynamicWhitelistMember || target.creatorProtected || target.legacyWhitelistProtected) return false;
       return incomingBullet
         && incomingBullet.ownerId !== null
         && incomingBullet.ownerId !== undefined
@@ -2534,7 +2583,13 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
         || isInvulnerableEntity(currentVisibleTarget)
         || currentVisibleTarget.alive === false
         || (currentVisibleHp !== null && currentVisibleHp !== undefined && Number(currentVisibleHp) <= 0)
-        || isWhitelistedTargetForOptions(currentVisibleTarget, options))
+        || isHardCombatProtectedTarget(currentVisibleTarget, options)
+        || dynamicWhitelistDistanceGuardBlocksCombatCore(currentVisibleTarget, {
+          incomingOverride: Boolean((bullets || []).some(bullet => (
+            String(bullet?.ownerId ?? '') === String(combatTargetId(currentVisibleTarget) || '')
+              && incomingBulletHasCollisionRiskCore(bullet, options)
+          )))
+        }))
   );
   const urgentSafety = defensiveTargetOverridesEngagedCore(engagedTarget || currentVisibleTarget, defensiveTarget, options)
     && String(combatTargetId(defensiveTarget) || '') === String(combatTargetId(proposedNormalTarget) || '');

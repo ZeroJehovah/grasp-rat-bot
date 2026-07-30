@@ -55,6 +55,7 @@ function dynamicOptions(message, effects) {
   const context = message.context || {};
   return {
     ...(message.options || {}),
+    dailyDamageUserIds: message.options?.dailyDamageUserIds || context.damageStatus?.userIds || [],
     easyKillPlayerTracker: easyKillTrackerProxy(context, effects),
     damagePlayerTracker: {
       status: () => context.damageStatus || { players: [], userIds: [] }

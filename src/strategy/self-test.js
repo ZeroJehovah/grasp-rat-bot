@@ -197,9 +197,150 @@ const {
   deriveCenterActivityAfkContinuationCore,
   evaluateCenterActivityAfkAdmissionCore
 } = require('./center-activity-afk');
+const {
+  dynamicWhitelistCombatRangeCore,
+  dynamicWhitelistIncomingOverrideCore,
+  evaluateDynamicWhitelistContactCore
+} = require('./dynamic-whitelist-safety');
 
 function runStrategyModuleSelfTests() {
   const results = [];
+
+  const dynamicSelf = (hp, maxHp = 100, stamina5s = 10000) => ({
+    hp,
+    max_hp: maxHp,
+    stamina_5s_remaining_milli: stamina5s
+  });
+  const dynamicTarget = (distance, extra = {}) => ({
+    user_id: 8,
+    hp: 100,
+    alive: true,
+    authority: 'realtime',
+    distance,
+    ...extra
+  });
+  const dynamicContext = {
+    dynamicWhitelistMember: true,
+    dynamicWhitelistEnabled: true
+  };
+  const dynamicPolicy = (hp, distance, context = {}, targetExtra = {}, selfExtra = {}) => (
+    evaluateDynamicWhitelistContactCore(
+      { ...dynamicSelf(hp), ...selfExtra },
+      dynamicTarget(distance, targetExtra),
+      { ...dynamicContext, ...context },
+      { combatAttackRange: 14500 }
+    )
+  );
+  const fullHpInside = dynamicPolicy(100, 6500);
+  const fullHpOutside = dynamicPolicy(100, 6501);
+  const seventyFiveInside = dynamicPolicy(75, 10500);
+  const seventyFiveOutside = dynamicPolicy(75, 10501);
+  const fiftyOneRange = dynamicWhitelistCombatRangeCore(dynamicSelf(51), { combatAttackRange: 14500 });
+  const fiftyOneInside = dynamicPolicy(51, 14340);
+  const fiftyOneOutside = dynamicPolicy(51, 14341);
+  results.push({
+    name: 'dynamic-whitelist-hp-scaled-proximity-boundaries',
+    passed: fullHpInside.proactiveCombatEligible === true
+      && fullHpOutside.proactiveCombatEligible === false
+      && seventyFiveInside.proactiveCombatEligible === true
+      && seventyFiveOutside.proactiveCombatEligible === false
+      && fiftyOneRange.rangeCm === 14340
+      && fiftyOneInside.proactiveCombatEligible === true
+      && fiftyOneOutside.proactiveCombatEligible === false
+      && fiftyOneRange.rangeCm <= 14500
+  });
+
+  const fiftyLowHp = dynamicPolicy(50, 15000, { recovering: true, recoveryRadiusCm: 15000 });
+  const fortyLowHp = dynamicPolicy(40, 20000, { recovering: true, recoveryRadiusCm: 20000 });
+  const rollbackLowHp = evaluateDynamicWhitelistContactCore(
+    dynamicSelf(40),
+    dynamicTarget(20000),
+    { ...dynamicContext, recovering: true, recoveryRadiusCm: 20000 },
+    { combatAttackRange: 14500, dynamicWhitelistProximitySafetyEnabled: false }
+  );
+  results.push({
+    name: 'dynamic-whitelist-low-hp-contact-exits-survive-proximity-rollback',
+    passed: fiftyLowHp.proactiveCombatEligible === false
+      && fiftyLowHp.lowHpSafetyExit === true
+      && fortyLowHp.proactiveCombatEligible === false
+      && fortyLowHp.lowHpSafetyExit === true
+      && rollbackLowHp.lowHpSafetyExit === true
+  });
+
+  const damagedInside = dynamicPolicy(80, 14500, { damagedSelfToday: true });
+  const damagedOutside = dynamicPolicy(80, 14501, { damagedSelfToday: true });
+  const disabledWithoutMaxHp = evaluateDynamicWhitelistContactCore(
+    { hp: 80, stamina_5s_remaining_milli: 10000 },
+    dynamicTarget(14500),
+    { dynamicWhitelistMember: true, dynamicWhitelistEnabled: false },
+    { combatAttackRange: 14500 }
+  );
+  const proportionalRange = dynamicWhitelistCombatRangeCore(dynamicSelf(150, 200), { combatAttackRange: 14500 });
+  results.push({
+    name: 'dynamic-whitelist-daily-damage-and-normalized-max-hp-ranges',
+    passed: damagedInside.proactiveCombatEligible === true
+      && damagedInside.ordinaryRangeOverride === true
+      && damagedOutside.proactiveCombatEligible === false
+      && disabledWithoutMaxHp.proactiveCombatEligible === true
+      && proportionalRange.rangeCm === 10500
+  });
+
+  const creatorPolicy = dynamicPolicy(100, 1000, { creatorProtected: true });
+  const missingHpPolicy = evaluateDynamicWhitelistContactCore(
+    { max_hp: 100, stamina_5s_remaining_milli: 10000 },
+    dynamicTarget(1000),
+    dynamicContext,
+    { combatAttackRange: 14500 }
+  );
+  const deadPolicy = dynamicPolicy(100, 1000, {}, { alive: false, hp: 0 });
+  const invulnerablePolicy = dynamicPolicy(100, 1000, {}, { invulnerable: true });
+  const snapshotPolicy = dynamicPolicy(100, 1000, {}, { authority: 'snapshot' });
+  const legacyPolicy = evaluateDynamicWhitelistContactCore(
+    dynamicSelf(100),
+    dynamicTarget(1000, { whitelisted: true }),
+    { legacyWhitelistProtected: true },
+    { combatAttackRange: 14500 }
+  );
+  results.push({
+    name: 'dynamic-whitelist-hard-protection-and-authority-invalid-targets',
+    passed: creatorPolicy.proactiveCombatEligible === false
+      && creatorPolicy.lowHpSafetyExit === false
+      && legacyPolicy.proactiveCombatEligible === false
+      && legacyPolicy.reason === 'legacy-whitelist-hard-protection'
+      && missingHpPolicy.proactiveCombatEligible === false
+      && deadPolicy.proactiveCombatEligible === false
+      && invulnerablePolicy.proactiveCombatEligible === false
+      && snapshotPolicy.proactiveCombatEligible === false
+  });
+
+  const insufficientDodge = dynamicPolicy(80, 9000, {}, {}, { stamina_5s_remaining_milli: 5000 });
+  const insufficientRollback = evaluateDynamicWhitelistContactCore(
+    dynamicSelf(80, 100, 5000),
+    dynamicTarget(9000),
+    dynamicContext,
+    { combatAttackRange: 14500, dynamicWhitelistProximitySafetyEnabled: false }
+  );
+  const collisionOverride = dynamicWhitelistIncomingOverrideCore(
+    dynamicTarget(5000),
+    { ownerId: 8, incoming: true, cpa: 50 },
+    dynamicContext,
+    { combatAttackRange: 14500, combatBulletHitRadiusCm: 90 }
+  );
+  const offLaneOverride = dynamicWhitelistIncomingOverrideCore(
+    dynamicTarget(5000),
+    { ownerId: 8, incoming: true, cpa: 500 },
+    dynamicContext,
+    { combatAttackRange: 14500, combatBulletHitRadiusCm: 90 }
+  );
+  results.push({
+    name: 'dynamic-whitelist-dodge-budget-and-incoming-collision-gates',
+    passed: insufficientDodge.contactNoDodgeBudgetExit === true
+      && insufficientDodge.proactiveCombatEligible === false
+      && insufficientRollback.contactNoDodgeBudgetExit === false
+      && collisionOverride.incomingDodgeRequired === true
+      && collisionOverride.defensiveTargetEligible === true
+      && offLaneOverride.incomingDodgeRequired === false
+  });
 
   const edgeAction = {
     kind: 'attack',

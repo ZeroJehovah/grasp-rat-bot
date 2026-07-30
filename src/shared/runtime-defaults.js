@@ -70,6 +70,8 @@ function buildRuntimeDefaults(config, combatLogEndpointConfigured) {
     combatResponsePolicyShadowConfirmTicks: numberDefault(config.combatResponsePolicyShadowConfirmTicks, 6),
     combatResponsePolicyShadowMinimumHoldMs: numberDefault(config.combatResponsePolicyShadowMinimumHoldMs, 500),
     combatTrajectoryCoverageMode: String(config.combatTrajectoryCoverageMode || 'live-single').trim().toLowerCase(),
+    dynamicWhitelistProximitySafetyEnabled: config.dynamicWhitelistProximitySafetyEnabled !== false,
+    preTargetIncomingDodgeEnabled: config.preTargetIncomingDodgeEnabled !== false,
     combatRobustDodgeEnabled: config.combatRobustDodgeEnabled !== false,
     combatCloseBandReserveEnabled: config.combatCloseBandReserveEnabled !== false,
     combatMovementStabilityEnabled: config.combatMovementStabilityEnabled === true,

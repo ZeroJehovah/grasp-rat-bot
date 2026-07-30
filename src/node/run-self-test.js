@@ -9194,7 +9194,7 @@ async function runSelfTest() {
       want: 'wait|no-profitable-candidate|true|1|0|58500|true'
     },
     {
-      name: 'browserless dynamic profit threshold preserves realtime combat decisions',
+      name: 'browserless dynamic profit threshold preserves realtime safety decisions',
       got: (() => {
         const nowMs = Date.parse('2026-07-12T00:00:00.000Z');
         const store = createBrowserlessStateStore({ userId: 7 });
@@ -9217,7 +9217,7 @@ async function runSelfTest() {
         const active = buildBrowserlessDecision(state, {}, { nowMs, controlMode: 'profit-live', combatEnabled: true, dynamicProfitThresholdEnabled: true });
         return [disabled.band, active.band, disabled.action.target?.userId, active.action.target?.userId, disabled.reason === active.reason].join('|');
       })(),
-      want: 'combat|combat|8|8|true'
+      want: 'safety|safety|8|8|true'
     },
     {
       name: 'browserless dynamic profit threshold clears held low ROI profit without changing stamina exit',
@@ -9693,7 +9693,7 @@ async function runSelfTest() {
       want: 'profit-candidate|best-opportunity|near-afk|28|enemy|8|1|1|false'
     },
     {
-      name: 'browserless profit live keeps recovery when incoming bullet has no enemy hp evidence',
+      name: 'browserless profit live dodges incoming bullet without enemy hp evidence',
       got: (() => {
         const store = createBrowserlessStateStore({ userId: 7 });
         store.ingestFrame({
@@ -9721,7 +9721,7 @@ async function runSelfTest() {
           decision.profit.best?.id
         ].join('|');
       })(),
-      want: 'recover|recover|wait-for-full-stamina-and-hp|true|high-value-coin'
+      want: 'flee|safety|incoming-bullet-dodge|true|high-value-coin'
     },
     {
       name: 'browserless snapshot high-value coin cannot bypass realtime combat',
@@ -11339,7 +11339,7 @@ async function runSelfTest() {
       want: 'safety-exit|combat-exit-poor-exchange|true|true|2.8|combat-exit-poor-exchange|300000'
     },
     {
-      name: 'browserless dangerous target cooldown suppresses ordinary AFK profit but keeps defensive combat',
+      name: 'browserless dangerous target cooldown suppresses AFK profit but keeps defensive admission behind first dodge',
       got: (() => {
         const profitStateful = {
           dangerousCombatTargets: {
@@ -11403,7 +11403,7 @@ async function runSelfTest() {
           combatDecision.combat.actionEligible
         ].join('|');
       })(),
-      want: 'wait|no-profitable-candidate|true|true|combat-live|combat-live-realtime|8|true'
+      want: 'wait|no-profitable-candidate|true|true|flee|incoming-bullet-dodge|8|true'
     },
     {
       name: 'browserless low-damage retreating fighter uses progressive close without target cooldown',
@@ -18502,7 +18502,7 @@ async function runSelfTest() {
       want: '2|true|true|8|0|2'
     },
     {
-      name: 'browserless profit live fights passive incoming bullet owner',
+      name: 'browserless profit live first dodges passive incoming bullet owner',
       got: (() => {
         const decision = buildBrowserlessDecision({
           userId: 7,
@@ -18537,10 +18537,10 @@ async function runSelfTest() {
           decision.combat.shooting.reason
         ].join('|');
       })(),
-      want: 'combat-live|combat|combat-live-realtime|8|defensive|direct-threat-dodge|true|target-pressure-fire'
+      want: 'flee|safety|incoming-bullet-dodge|8|defensive|direct-threat-dodge|true|target-pressure-fire'
     },
     {
-      name: 'browserless recovery resumes combat when incoming bullet hp rule does not require exit',
+      name: 'browserless recovery first dodges when incoming bullet hp rule does not require exit',
       got: (() => {
         const stateful = {
           lastDecisionAction: { kind: 'recover', band: 'recover', reason: 'wait-for-full-stamina-and-hp' }
@@ -18579,10 +18579,10 @@ async function runSelfTest() {
           leaveRisk.engagedTargetHp
         ].join('|');
       })(),
-      want: 'combat-live|combat|combat-live-realtime|false|8|true|true|100'
+      want: 'flee|safety|incoming-bullet-dodge|false|8|true|true|100'
     },
     {
-      name: 'browserless realtime incoming bullet alone does not remember attacker as dangerous',
+      name: 'browserless realtime incoming bullet dodges without remembering attacker as dangerous',
       got: (() => {
         const stateful = createBrowserlessDecisionState({
           lastDecisionAction: { kind: 'recover', band: 'recover', reason: 'wait-for-full-stamina-and-hp' }
@@ -18619,10 +18619,10 @@ async function runSelfTest() {
           remembered === null
         ].join('|');
       })(),
-      want: 'no-exit|false|100||true'
+      want: 'incoming-bullet-dodge|false|100||true'
     },
     {
-      name: 'browserless recovery records unattributed hp context after bullet owner leaves frame without exiting',
+      name: 'browserless recovery records unattributed hp context while dodging after owner leaves frame',
       got: (() => {
         const stateful = createBrowserlessDecisionState({
           lastDecisionAction: { kind: 'recover', band: 'recover', reason: 'wait-for-full-stamina-and-hp' }
@@ -18658,7 +18658,7 @@ async function runSelfTest() {
           remembered === null
         ].join('|');
       })(),
-      want: 'no-exit|false|true|0|true'
+      want: 'incoming-bullet-dodge|false|true|0|true'
     },
     {
       name: 'browserless combat critical hp exits through safety action',
@@ -18906,7 +18906,7 @@ async function runSelfTest() {
       want: 'safety-exit|safety|combat-critical-hp-leave|true|1|no-target'
     },
     {
-      name: 'browserless profit live keeps recovery when rapid damage hp rule does not require exit',
+      name: 'browserless profit live dodges when rapid damage hp rule does not require exit',
       got: (() => {
         const stateful = {};
         const base = {
@@ -18962,7 +18962,7 @@ async function runSelfTest() {
           stateful.browserlessLeaveRisk.engagedTargetHp
         ].join('|');
       })(),
-      want: 'recover|wait-for-full-stamina-and-hp|8|73|no-target|true|80'
+      want: 'flee|incoming-bullet-dodge|8|73|no-target|true|80'
     },
     {
       name: 'browserless multi-attacker pressure uses mean enemy hp instead of unconditional third-party exit',
@@ -19151,7 +19151,7 @@ async function runSelfTest() {
       want: 'combat-live|combat-live-realtime|false'
     },
     {
-      name: 'browserless recent injury keeps recovery when the known fight is winning',
+      name: 'browserless recent injury still dodges when the known fight is winning',
       got: (() => {
         const stateful = {
           browserlessLastSelf: { key: '7', hp: 97, at: 1000 },
@@ -19195,7 +19195,7 @@ async function runSelfTest() {
           decision.combat.target?.userId || 'no-target'
         ].join('|');
       })(),
-      want: 'recover|wait-for-full-stamina-and-hp|94|46|no-target'
+      want: 'flee|incoming-bullet-dodge|94|46|no-target'
     },
     {
       name: 'browserless recent injury keeps Eason metrics instead of switching to unrelated mango',
@@ -23134,7 +23134,7 @@ async function runSelfTest() {
           result.hotPath.tasks['ws-message'].maxMs < 50
         ].join('|');
       })(),
-      want: 'combat-hp-disadvantage-leave|true|true|false|false|true|true|0|true|false|1|true'
+      want: 'combat-hp-disadvantage-leave|true|true|false|false|true|true|0|true|false|2|true'
     },
     {
       name: 'browserless read-only canary runs snapshot ws frames and verified leave',
