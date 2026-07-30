@@ -205,6 +205,11 @@ function createSourceIpController(options = {}) {
 
   const sourceIpAvailable = sourceIp => Boolean(sourceIp) && !quarantineRecord(sourceIp);
 
+  const allSourceIpsCloudflareQuarantined = () => candidates.length > 0 && candidates.every(sourceIp => {
+    const record = quarantineRecord(sourceIp);
+    return record?.reason === 'all-probes-403';
+  });
+
   const nextAvailableSourceIp = (fromSourceIp = currentSourceIp, excluded = new Set()) => {
     if (!candidates.length) return '';
     const start = Math.max(0, candidates.indexOf(fromSourceIp));
@@ -603,6 +608,12 @@ function createSourceIpController(options = {}) {
         }
       }
 
+      if (!connectionFailure && allSourceIpsCloudflareQuarantined()) {
+        connectionFailure = {
+          type: 'cloudflare-challenge',
+          source: 'all-source-ips-quarantined-after-http-403'
+        };
+      }
       const error = new Error(lastError?.message || 'websocket source IP attempts exhausted');
       error.attempts = attemptDiagnostics;
       if (connectionFailure) {

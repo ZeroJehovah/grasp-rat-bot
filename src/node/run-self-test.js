@@ -27629,6 +27629,15 @@ async function runSelfTest() {
         } catch (err) {
           error = err;
         }
+        let quarantinedError = null;
+        try {
+          await controller.openBrowserlessWs({
+            wsUrl: 'wss://example.test/ws',
+            onError: event => businessErrors.push(event)
+          });
+        } catch (err) {
+          quarantinedError = err;
+        }
         const state = readBrowserlessStateFile(stateFile);
         return [
           opened.join(','),
@@ -27639,10 +27648,13 @@ async function runSelfTest() {
           error?.connectionFailure?.type,
           error?.connectionFailure?.source,
           businessErrors[0]?.connectionFailure?.type,
+          quarantinedError?.attempts?.length || 0,
+          quarantinedError?.connectionFailure?.type,
+          quarantinedError?.connectionFailure?.source,
           Object.keys(state.network.sourceIpQuarantine || {}).sort().join(',')
         ].join('|');
       }),
-      want: '10.0.0.145,10.0.0.20|2|1|true|2|cloudflare-challenge|ws-403-all-http-probes-403|cloudflare-challenge|10.0.0.145,10.0.0.20'
+      want: '10.0.0.145,10.0.0.20|2|2|true|2|cloudflare-challenge|ws-403-all-http-probes-403|cloudflare-challenge|0|cloudflare-challenge|all-source-ips-quarantined-after-http-403|10.0.0.145,10.0.0.20'
     },
     {
       name: 'browserless hedged leave 403 does not trigger source IP switching',
