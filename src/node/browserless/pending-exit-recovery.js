@@ -157,6 +157,27 @@ function buildExitRecoveryOutcome(pendingExit, detail = {}) {
   };
 }
 
+function hasCanaryInGameEvidence(canary) {
+  const stats = canary?.stats || {};
+  return Boolean(
+    canary?.recovery?.inGameEvidence === true
+      || canary?.snapshotSafety?.response?.summary?.selfPresent === true
+      || canary?.entry?.firstSelf
+      || Number(stats.frameCount || 0) > 0
+      || Number(stats.realtimeFrameCount || 0) > 0
+      || Number(stats.selfPresent?.true || 0) > 0
+  );
+}
+
+function isExplicitZeroFrameCanary(canary) {
+  const stats = canary?.stats;
+  return Boolean(
+    stats
+      && Object.prototype.hasOwnProperty.call(stats, 'frameCount')
+      && Number(stats.frameCount) === 0
+  );
+}
+
 function pendingExitFromCanary(previous, canary, nowMs = Date.now(), options = {}) {
   const leave = canary?.leave || canary?.safety?.exit?.leave || null;
   if (leave?.ok) return null;
@@ -164,6 +185,9 @@ function pendingExitFromCanary(previous, canary, nowMs = Date.now(), options = {
   const leaveFailed = Boolean(leave && leave.ok !== true);
   if (!event?.shouldLeave && !leaveFailed) return normalizePendingExit(previous, nowMs, options);
   const prior = normalizePendingExit(previous, nowMs, options);
+  // A rejected handshake can still make the generic leave fallback fail. It
+  // is not an in-game exit, so it must not start a relogin-blocking chain.
+  if (!prior && isExplicitZeroFrameCanary(canary) && !hasCanaryInGameEvidence(canary)) return null;
   const pending = canary?.safety?.leavePending || null;
   const pendingAttemptId = String(pending?.exitAttemptId || '');
   const continuesPriorAttempt = Boolean(
@@ -336,6 +360,61 @@ function runPendingExitRecoverySelfTest() {
     }, nowMs);
     assert('persisted fallback status sequence is not duplicated from final leave attempts',
       deduplicatedPersist?.httpStatuses.join(',') === '502,502,502,502');
+    const rejectedInitialHandshake = pendingExitFromCanary(null, {
+      runId: 'zero-frame-cf-rejection',
+      startedAt: new Date(nowMs - 750).toISOString(),
+      error: 'websocket source IP attempts exhausted',
+      recovery: { inGameEvidence: false },
+      entry: { firstSelf: null },
+      stats: {
+        frameCount: 0,
+        realtimeFrameCount: 0,
+        selfPresent: { true: 0, false: 0, unknown: 0 }
+      },
+      safety: {
+        leaveFailure: { reason: 'direct-leave-failed' }
+      },
+      leave: {
+        ok: false,
+        error: 'HTTP 403',
+        attempts: [{ status: 403 }, { status: 403 }, { status: 403 }, { status: 403 }]
+      }
+    }, nowMs);
+    assert('zero-frame rejected handshakes never start a pending-exit chain', rejectedInitialHandshake === null);
+    const liveSafetyLeave = pendingExitFromCanary(null, {
+      runId: 'live-safety-leave',
+      startedAt: new Date(nowMs - 750).toISOString(),
+      recovery: { inGameEvidence: true },
+      stats: { frameCount: 12, selfPresent: { true: 12, false: 0, unknown: 0 } },
+      safety: {
+        event: { reason: 'frame-gap', shouldLeave: true, at: new Date(nowMs - 700).toISOString() }
+      },
+      leave: { ok: false, error: 'HTTP 502', attempts: [{ status: 502 }] }
+    }, nowMs);
+    assert('an in-game safety leave failure still starts protected recovery', liveSafetyLeave?.active === true
+      && liveSafetyLeave.reason === 'frame-gap'
+      && liveSafetyLeave.httpStatuses.join(',') === '502');
+    const continuedProtectedExit = pendingExitFromCanary({
+      active: true,
+      exitAttemptId: createExitAttemptId('existing-live-exit', nowMs - 2000, 0),
+      originalReason: 'frame-gap',
+      reason: 'frame-gap',
+      sourceRunId: 'existing-live-exit',
+      firstAtMs: nowMs - 2000,
+      lastAttemptAtMs: nowMs - 1000,
+      attemptCount: 1,
+      requestAttemptCount: 4,
+      httpStatuses: [502, 502, 502, 502]
+    }, {
+      runId: 'zero-frame-retry-of-existing-exit',
+      recovery: { inGameEvidence: false },
+      stats: { frameCount: 0, selfPresent: { true: 0, false: 0, unknown: 0 } },
+      leave: { ok: false, error: 'HTTP 502', attempts: [{ status: 502 }] }
+    }, nowMs);
+    assert('an existing protected exit continues through a later zero-frame retry',
+      continuedProtectedExit?.exitAttemptId === createExitAttemptId('existing-live-exit', nowMs - 2000, 0)
+        && continuedProtectedExit.attemptCount === 2
+        && continuedProtectedExit.httpStatuses.join(',') === '502,502,502,502,502');
     const previousAttemptId = createExitAttemptId('p3-old-chain', nowMs - 5000, 0);
     const nextAttemptId = createExitAttemptId('p3-new-chain', nowMs - 500, 0);
     const freshChain = pendingExitFromCanary({
