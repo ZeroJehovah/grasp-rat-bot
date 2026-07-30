@@ -127,6 +127,11 @@ const {
   singleCoinBaitPolicyCore
 } = require('./single-coin-bait');
 const { updateOutsideCenterIdleCore } = require('./outside-center-idle');
+const {
+  DEFAULT_CENTER_ACTIVITY_HARD_BOUNDARY_RADIUS_CM,
+  evaluateCenterActivityHardBoundaryCore,
+  highValueCoinTargetForActionCore
+} = require('./center-activity-boundary');
 const { patrolDirectionCore } = require('./patrol');
 const {
   postAttackVisibleCoinExistsCore,
@@ -1019,20 +1024,20 @@ function runStrategyModuleSelfTests() {
   });
 
   const combatFocus = buildActionFocus({ kind: 'combat-live', band: 'combat', target: { user_id: 8, name: 'target' } }, { nowMs: 1000 });
-  const returnFocus = buildActionFocus({ kind: 'patrol', band: 'recover', reason: 'return-to-center-activity-radius' }, { nowMs: 1000 });
+  const hardBoundaryFocus = buildActionFocus({ kind: 'leave', band: 'safety', reason: 'outside-center-hard-boundary-leave' }, { nowMs: 1000 });
   results.push({
-    name: 'action-priority-prefers-standard-explicit-band-and-normalizes-legacy-kinds',
+    name: 'action-priority-prefers-standard-explicit-band-without-center-return-special-case',
     passed: combatFocus.band === 'combat'
-      && returnFocus.band === 'recover'
+      && hardBoundaryFocus.band === 'safety'
       && getActionPriorityBand({ kind: 'combat-live' }) === 'combat'
       && getActionPriorityBand({ kind: 'combat-candidate' }) === 'combat'
       && getActionPriorityBand({ kind: 'safety-exit' }) === 'safety'
-      && getActionPriorityBand({ kind: 'patrol', reason: 'return-to-center-activity-radius' }) === 'recover'
-      && [combatFocus.band, returnFocus.band].every(value => Object.values(ACTION_PRIORITY_BANDS).includes(value))
+      && getActionPriorityBand({ kind: 'patrol', reason: 'return-to-center-activity-radius' }) === 'patrol'
+      && [combatFocus.band, hardBoundaryFocus.band].every(value => Object.values(ACTION_PRIORITY_BANDS).includes(value))
   });
 
   const selectedCombatCandidate = selectFinalActionCandidateCore([
-    buildFinalActionCandidate({ kind: 'patrol', band: 'recover', reason: 'return-to-center-activity-radius' }, { order: 190 }),
+    buildFinalActionCandidate({ kind: 'recover', band: 'recover', reason: 'wait-for-full-stamina-and-hp' }, { order: 190 }),
     buildFinalActionCandidate({ kind: 'combat-live', band: 'combat', reason: 'combat-live-realtime', target: { user_id: 8 } }, { order: 60 })
   ]);
   const selectedHardSafetyCandidate = selectFinalActionCandidateCore([
@@ -2866,7 +2871,7 @@ function runStrategyModuleSelfTests() {
   };
   const dropoutAction = kind => ({
     kind: 'wait',
-    band: kind === 'outside-center-profit-wait' ? 'recover' : 'wait',
+    band: 'wait',
     reason: kind,
     stopMotion: true,
     profitDropout: {
@@ -2885,22 +2890,22 @@ function runStrategyModuleSelfTests() {
     history: []
   };
   const firstDropout = applyFinalActionArbitrationCore(
-    dropoutAction('outside-center-profit-wait'),
+    dropoutAction('no-profitable-candidate'),
     dropoutState,
     { nowMs: 1100, holdMs: 1800 }
   );
   const repeatedDropout = applyFinalActionArbitrationCore(
-    dropoutAction('outside-center-profit-wait'),
+    dropoutAction('no-profitable-candidate'),
     dropoutState,
     { nowMs: 2000, holdMs: 1800 }
   );
   const boundaryDropout = applyFinalActionArbitrationCore(
-    dropoutAction('outside-center-profit-wait'),
+    dropoutAction('no-profitable-candidate'),
     dropoutState,
     { nowMs: 2900, holdMs: 1800 }
   );
   const stableDropout = applyFinalActionArbitrationCore(
-    dropoutAction('outside-center-profit-wait'),
+    dropoutAction('no-profitable-candidate'),
     dropoutState,
     { nowMs: 2901, holdMs: 1800 }
   );
@@ -2908,7 +2913,7 @@ function runStrategyModuleSelfTests() {
     name: 'arbitration-profit-dropout-requires-stable-confirmation-before-stop',
     passed: firstDropout.held
       && firstDropout.action.reason === 'easy-kill-active-profit'
-      && firstDropout.override.dropoutKind === 'outside-center-profit-wait'
+      && firstDropout.override.dropoutKind === 'no-profitable-candidate'
       && firstDropout.override.dropoutAgeMs === 0
       && repeatedDropout.held
       && repeatedDropout.override.dropoutAgeMs === 900
@@ -2918,7 +2923,7 @@ function runStrategyModuleSelfTests() {
       && !stableDropout.held
       && stableDropout.override === null
       && stableDropout.diagnostic?.mode === 'commit-current'
-      && stableDropout.action.reason === 'outside-center-profit-wait'
+      && stableDropout.action.reason === 'no-profitable-candidate'
       && stableDropout.action.finalActionArbitration?.mode === 'commit-current'
       && stableDropout.action.finalActionArbitration?.reason === 'profit-dropout-confirmed'
       && stableDropout.action.finalActionArbitration?.dropoutAgeMs === 1801
@@ -2962,7 +2967,7 @@ function runStrategyModuleSelfTests() {
     history: []
   };
   applyFinalActionArbitrationCore(
-    dropoutAction('outside-center-profit-wait'),
+    dropoutAction('no-profitable-candidate'),
     changedDropoutState,
     { nowMs: 1100, holdMs: 1800 }
   );
@@ -4492,10 +4497,41 @@ function runStrategyModuleSelfTests() {
       && ineligibleResidualRouteBait.state?.id === 'bait'
   });
 
+  const boundaryAtLimit = evaluateCenterActivityHardBoundaryCore({
+    self: { x: DEFAULT_CENTER_ACTIVITY_HARD_BOUNDARY_RADIUS_CM, y: 0 },
+    action: { kind: 'combat-live', band: 'combat', reason: 'combat-live-realtime' }
+  }, { highValueCoinMinAmount: 10 });
+  const boundaryNormalCoin = evaluateCenterActivityHardBoundaryCore({
+    self: { x: DEFAULT_CENTER_ACTIVITY_HARD_BOUNDARY_RADIUS_CM + 1, y: 0 },
+    action: { kind: 'coin', band: 'profit', target: { type: 'coin', id: 'ordinary', amount: 9 } }
+  }, { highValueCoinMinAmount: 10 });
+  const boundaryLargeCoin = evaluateCenterActivityHardBoundaryCore({
+    self: { x: DEFAULT_CENTER_ACTIVITY_HARD_BOUNDARY_RADIUS_CM + 1, y: 0 },
+    action: { kind: 'seek-coin', band: 'profit', target: { type: 'coin', id: 'large', amount: 10 } }
+  }, { highValueCoinMinAmount: 10 });
+  const boundaryLootDodge = highValueCoinTargetForActionCore({
+    kind: 'combat-live',
+    band: 'combat',
+    realtimeLootPriority: true,
+    lootTarget: { type: 'coin', id: 'loot', amount: 12 }
+  }, 10);
+  results.push({
+    name: 'center-activity-hard-boundary-allows-only-large-coin-beyond-1300m',
+    passed: boundaryAtLimit.outside === false
+      && boundaryAtLimit.allowed === true
+      && boundaryNormalCoin.outside === true
+      && boundaryNormalCoin.allowed === false
+      && boundaryNormalCoin.outsideByCm === 1
+      && boundaryLargeCoin.allowed === true
+      && boundaryLargeCoin.highValueCoin?.target?.id === 'large'
+      && boundaryLootDodge?.source === 'loot-target'
+      && boundaryLootDodge?.amount === 12
+  });
+
   const outsideIdleStarted = updateOutsideCenterIdleCore(null, {
     nowMs: 1000,
     self: { x: 100001, y: 0 },
-    action: { kind: 'wait', reason: 'outside-center-profit-wait' }
+    action: { kind: 'wait', reason: 'no-profitable-candidate' }
   }, { centerRadiusCm: 100000, timeoutMs: 180000 });
   const outsideIdleBeforeTimeout = updateOutsideCenterIdleCore(outsideIdleStarted.state, {
     nowMs: 180999,

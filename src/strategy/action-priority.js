@@ -22,7 +22,6 @@ function actionPriorityBand(action) {
   if (kind === 'flee' || kind === 'safety-exit') return 'safety';
   if (kind === 'recover') return 'recover';
   if (kind === 'combat-live' || kind === 'combat-candidate' || kind === 'combat-dry-run') return 'combat';
-  if (kind === 'patrol' && !action?.target && String(action?.reason || '') === 'return-to-center-activity-radius') return 'recover';
   if (action?.combat || (kind === 'wait' && action?.target && action?.combat)) return 'combat';
   if (kind === 'attack' || kind === 'seek-enemy' || kind === 'seek-drop' || kind === 'coin' || kind === 'seek-coin') return 'profit';
   if (kind === 'patrol' && (action?.target || String(action?.reason || '').includes('coin'))) return 'profit';

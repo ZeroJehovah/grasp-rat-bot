@@ -608,7 +608,7 @@ function usage() {
     '  --movement-settlement-stall-ms <ms>  Reconnect when nonzero movement makes no coordinate progress. Default: 5000',
     '  --movement-settlement-min-distance-cm <cm>  Coordinate progress needed to reset the stall timer. Default: 80',
     '  --[no-]combat-movement-stability  Apply threat-aware short combat direction settlement. Default: disabled',
-    '  --center-activity-radius-cm <cm>  Keep ordinary browserless profit inside this origin radius. Default: 100000',
+    '  --center-activity-radius-cm <cm>  Start the outside-center no-profit timer beyond this origin radius. Default: 100000',
     '  --outside-center-idle-exit-ms <ms>  Leave after waiting outside the center without profit. Default: 180000',
     '  --profit-pursuit-max-ms <ms>  Legacy no-damage pursuit diagnostic threshold. Default: 60000',
     '  --profit-pursuit-suppress-ms <ms>  Suppression cooldown after a profit pursuit is stopped. Default: 60000',

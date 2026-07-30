@@ -97,9 +97,10 @@ const {
 const { activeCoinCompetitionCore } = require('../../strategy/coin-competition');
 const { updateOutsideCenterIdleCore } = require('../../strategy/outside-center-idle');
 const {
-  deriveCenterActivityAfkContinuationCore,
-  evaluateCenterActivityAfkAdmissionCore
-} = require('../../strategy/center-activity-afk');
+  DEFAULT_CENTER_ACTIVITY_HARD_BOUNDARY_RADIUS_CM,
+  evaluateCenterActivityHardBoundaryCore,
+  pointRadiusFromOriginCore
+} = require('../../strategy/center-activity-boundary');
 const {
   targetIsWhitelisted,
   targetWhitelistNameSet,
@@ -236,13 +237,6 @@ function numberOrNull(value) {
   return Number.isFinite(number) ? number : null;
 }
 
-function pointRadiusFromOrigin(point) {
-  const x = Number(point?.x);
-  const y = Number(point?.y);
-  if (!Number.isFinite(x) || !Number.isFinite(y)) return Infinity;
-  return Math.hypot(x, y);
-}
-
 function browserlessCenterActivityRadius(options = {}) {
   const value = Number(options.browserlessCenterActivityRadiusCm
     ?? BROWSER_RUNTIME_DEFAULTS.browserlessCenterActivityRadiusCm
@@ -250,173 +244,31 @@ function browserlessCenterActivityRadius(options = {}) {
   return Number.isFinite(value) ? Math.max(0, value) : 0;
 }
 
-function insideCenterActivityRadius(point, options = {}) {
-  const radius = browserlessCenterActivityRadius(options);
-  if (!(radius > 0)) return true;
-  return pointRadiusFromOrigin(point) <= radius;
-}
-
-function filterCenterActivityProfitItems(items = [], options = {}) {
-  const radius = browserlessCenterActivityRadius(options);
-  if (!(radius > 0)) return items || [];
-  return (items || []).filter(item => insideCenterActivityRadius(item, options));
-}
-
-function centerActivityCoinAdmissionReason(coin, selfKillTargetTicks, options = {}) {
-  if (insideCenterActivityRadius(coin, options)) return 'inside-center';
-  const visibleDistance = Math.max(0, Number(
-    options.snapshotVisibleCoinMaxDistanceCm
-      ?? options.snapshotCoinFallbackMaxDistanceCm
-      ?? options.globalCoinMaxDistance
-      ?? DEFAULT_SNAPSHOT_VISIBLE_COIN_MAX_DISTANCE
-  ));
-  if (!(Number.isFinite(Number(coin?.distance))) || (visibleDistance > 0 && Number(coin.distance) > visibleDistance)) return '';
-  if (selfKillTargetTicks && isSelfKilledPlayerDropCoin(coin, selfKillTargetTicks, options)) {
-    return 'self-kill-drop-outside-center';
-  }
-  if (Number(coin?.amount || 0) >= highValueCoinPriorityAmount(options)
-    && Number.isFinite(Number(coin?.distance))
-    && Number(coin.distance) <= highValueCoinPriorityRange(options)) {
-    return 'visible-high-value-coin-outside-center';
-  }
-  return '';
-}
-
-function partitionCenterActivityCoins(items = [], selfKillTargetTicks = null, options = {}) {
-  const admitted = [];
-  const filtered = [];
-  const edgeAdmitted = [];
-  const centerRadiusCm = browserlessCenterActivityRadius(options);
-  for (const coin of items || []) {
-    const reason = centerActivityCoinAdmissionReason(coin, selfKillTargetTicks, options);
-    if (!reason) {
-      filtered.push(coin);
-      continue;
-    }
-    if (reason === 'inside-center') {
-      admitted.push(coin);
-      continue;
-    }
-    const targetRadiusCm = pointRadiusFromOrigin(coin);
-    const enriched = {
-      ...coin,
-      centerActivityEdge: {
-        admitted: true,
-        reason,
-        centerRadiusCm: Math.round(centerRadiusCm),
-        targetRadiusCm: Number.isFinite(targetRadiusCm) ? Math.round(targetRadiusCm) : null,
-        outsideByCm: Number.isFinite(targetRadiusCm) ? Math.max(0, Math.round(targetRadiusCm - centerRadiusCm)) : null
-      }
-    };
-    admitted.push(enriched);
-    edgeAdmitted.push(enriched);
-  }
-  return { admitted, filtered, edgeAdmitted };
-}
-
-function centerActivityAfkEdgeExtension(options = {}) {
-  const value = Number(options.combatAttackRange ?? options.attackRange ?? DEFAULT_ATTACK_RANGE);
-  return Number.isFinite(value) ? Math.max(0, value) : 0;
-}
-
-function summarizeCenterActivityAfkTarget(target, centerRadius, edgeRadius, reason = '') {
-  const targetRadius = pointRadiusFromOrigin(target);
-  const edge = target?.centerActivityEdge || {};
-  return {
-    userId: numberOrNull(target?.user_id ?? target?.userId),
-    name: entityDisplayName(target),
-    drop: entityDropValue(target),
-    distanceCm: Number.isFinite(Number(target?.distance)) ? Math.round(Number(target.distance)) : null,
-    targetRadiusCm: Number.isFinite(targetRadius) ? Math.round(targetRadius) : null,
-    outsideByCm: Number.isFinite(targetRadius) ? Math.max(0, Math.round(targetRadius - centerRadius)) : null,
-    edgeRadiusCm: Math.round(edgeRadius),
-    reason,
-    continued: edge.continued === true,
-    continuationAgeMs: Number.isFinite(Number(edge.continuationAgeMs))
-      ? Math.max(0, Math.round(Number(edge.continuationAgeMs)))
-      : null,
-    sourceActionKind: edge.sourceActionKind ? String(edge.sourceActionKind) : ''
-  };
-}
-
-function partitionCenterActivityAfkTargets(items = [], self = null, options = {}) {
-  const centerRadius = browserlessCenterActivityRadius(options);
-  if (!(centerRadius > 0)) {
-    return { targets: items || [], edgeTargets: [], filteredTargets: [], filteredDetails: [] };
-  }
-  const edgeExtension = centerActivityAfkEdgeExtension(options);
-  const edgeRadius = centerRadius + edgeExtension;
-  const selfRadius = pointRadiusFromOrigin(self);
-  const visibleDistance = opportunityVisibleDistance(options);
-  const continuation = options.centerActivityAfkContinuation || null;
-  const targets = [];
-  const edgeTargets = [];
-  const filteredTargets = [];
-  const filteredDetails = [];
-  for (const target of items || []) {
-    const targetRadius = pointRadiusFromOrigin(target);
-    if (Number.isFinite(targetRadius) && targetRadius <= centerRadius) {
-      targets.push(target);
-      continue;
-    }
-    const targetDistance = Number(target?.distance ?? Infinity);
-    const admission = evaluateCenterActivityAfkAdmissionCore({
-      centerRadiusCm: centerRadius,
-      edgeRadiusCm: edgeRadius,
-      selfRadiusCm: selfRadius,
-      targetRadiusCm: targetRadius,
-      targetDistanceCm: targetDistance,
-      visibleDistanceCm: visibleDistance,
-      authority: target?.authority,
-      targetId: target?.user_id ?? target?.userId,
-      continuation
-    });
-    if (!admission.admitted) {
-      filteredTargets.push(target);
-      filteredDetails.push(summarizeCenterActivityAfkTarget(target, centerRadius, edgeRadius, admission.reason));
-      continue;
-    }
-    const outsideByCm = Math.max(0, targetRadius - centerRadius);
-    target.centerActivityEdge = {
-      admitted: true,
-      ...(admission.continued ? {
-        continued: true,
-        continuationAgeMs: Math.max(0, Math.round(Number(continuation.ageMs || 0))),
-        sourceActionKind: String(continuation.sourceActionKind || '')
-      } : {}),
-      centerRadiusCm: Math.round(centerRadius),
-      edgeRadiusCm: Math.round(edgeRadius),
-      targetRadiusCm: Math.round(targetRadius),
-      outsideByCm: Math.round(outsideByCm),
-      returnCostMs: outsideByCm,
-      reason: admission.reason
-    };
-    targets.push(target);
-    edgeTargets.push(target);
-  }
-  return { targets, edgeTargets, filteredTargets, filteredDetails };
-}
-
-function centerActivityInputSummary(self, filtered = {}, options = {}) {
+function centerActivityInputSummary(self, options = {}) {
   const radiusCm = browserlessCenterActivityRadius(options);
-  if (!(radiusCm > 0)) return null;
-  const selfRadius = pointRadiusFromOrigin(self);
-  const afkEdgeRadiusCm = radiusCm + centerActivityAfkEdgeExtension(options);
+  const selfRadius = pointRadiusFromOriginCore(self);
+  const hardBoundaryRadiusCm = DEFAULT_CENTER_ACTIVITY_HARD_BOUNDARY_RADIUS_CM;
   return {
     radiusCm: Math.round(radiusCm),
-    afkEdgeRadiusCm: Math.round(afkEdgeRadiusCm),
-    selfRadiusCm: Number.isFinite(selfRadius) ? Math.round(selfRadius) : null,
-    selfOutsideCm: Number.isFinite(selfRadius) ? Math.max(0, Math.round(selfRadius - radiusCm)) : null,
-    filteredAfkTargets: Math.max(0, Math.round(Number(filtered.afkTargets || 0))),
-    edgeAdmittedAfkTargets: Math.max(0, Math.round(Number(filtered.edgeAdmittedAfkTargets || 0))),
-    edgeContinuedAfkTargets: Math.max(0, Math.round(Number(filtered.edgeContinuedAfkTargets || 0))),
-    filteredRealtimeCoins: Math.max(0, Math.round(Number(filtered.realtimeCoins || 0))),
-    filteredSnapshotCoins: Math.max(0, Math.round(Number(filtered.snapshotCoins || 0))),
-    edgeAdmittedRealtimeCoins: (filtered.edgeAdmittedRealtimeCoins || []).slice(0, 8).map(item => cloneJson(item)),
-    edgeAdmittedSnapshotCoins: (filtered.edgeAdmittedSnapshotCoins || []).slice(0, 8).map(item => cloneJson(item)),
-    edgeAfkTargets: (filtered.edgeAfkTargets || []).slice(0, 8).map(item => cloneJson(item)),
-    continuedEdgeAfkTargets: (filtered.continuedEdgeAfkTargets || []).slice(0, 8).map(item => cloneJson(item)),
-    filteredAfkTargetDetails: (filtered.filteredAfkTargetDetails || []).slice(0, 8).map(item => cloneJson(item))
+    hardBoundaryRadiusCm,
+    selfRadiusCm: selfRadius === null ? null : Math.round(selfRadius),
+    selfOutsideCm: selfRadius === null ? null : Math.max(0, Math.round(selfRadius - radiusCm)),
+    selfOutsideHardBoundaryCm: selfRadius === null
+      ? null
+      : Math.max(0, Math.round(selfRadius - hardBoundaryRadiusCm)),
+    targetPositionRestricted: false,
+    // Retained as zero/empty compatibility telemetry for old status readers;
+    // activity range no longer filters or edge-admits target coordinates.
+    filteredAfkTargets: 0,
+    edgeAdmittedAfkTargets: 0,
+    edgeContinuedAfkTargets: 0,
+    filteredRealtimeCoins: 0,
+    filteredSnapshotCoins: 0,
+    edgeAdmittedRealtimeCoins: [],
+    edgeAdmittedSnapshotCoins: [],
+    edgeAfkTargets: [],
+    continuedEdgeAfkTargets: [],
+    filteredAfkTargetDetails: []
   };
 }
 
@@ -2117,7 +1969,6 @@ function summarizeTarget(target) {
     profitMetadataMode: target.profitMetadataMode || '',
     profitMetadataActive: Boolean(target.profitMetadataActive),
     afkAttackContinuation: target.afkAttackContinuation ? cloneJson(target.afkAttackContinuation) : null,
-    ...(target.centerActivityEdge ? { centerActivityEdge: cloneJson(target.centerActivityEdge) } : {})
   };
 }
 
@@ -2141,8 +1992,7 @@ function summarizeCoin(coin) {
     snapshotOnly: Boolean(coin.snapshotOnly),
     sourceUserId,
     selfKilledPlayerDrop: Boolean(coin.selfKilledPlayerDrop),
-    playerDropPriority: Boolean(coin.playerDropPriority),
-    ...(coin.centerActivityEdge ? { centerActivityEdge: cloneJson(coin.centerActivityEdge) } : {})
+    playerDropPriority: Boolean(coin.playerDropPriority)
   };
 }
 
@@ -3074,10 +2924,6 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
   const realtime = state?.realtime || {};
   const fallback = state?.fallback || state?.snapshot || {};
   const nowMs = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
-  const centerActivityAfkContinuation = deriveCenterActivityAfkContinuationCore(
-    stateful.finalActionArbitration,
-    { nowMs, decisionIntervalMs: options.decisionIntervalMs }
-  );
   const dataGaps = [];
   const snapshotFrameAgeMs = numberOrNull(fallback.frameAgeMs);
   const snapshotMaxAgeMs = Math.max(1000, Number(options.snapshotCoinFallbackMaxAgeMs || 5000));
@@ -3140,10 +2986,7 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
   const afkObservationTargetsRaw = visibleTargets.filter(entity => {
     if (entity.whitelisted || entity.active || entity.moving || entity.firing || entity.alive === false) return false;
     if (economicProfitPursuitSuppressionRecordById(stateful, targetIdentity(entity), nowMs)) return false;
-    if (entity.invulnerable && (
-      opportunityAfkTargetId(entity) === String(centerActivityAfkContinuation?.targetId || '')
-      || !invulnerableProfitTargetReadyOnApproach(entity, options)
-    )) return false;
+    if (entity.invulnerable && !invulnerableProfitTargetReadyOnApproach(entity, options)) return false;
     return attackWorthTakingCore(self, entity, {
       attackMinDrop: options.attackMinDrop ?? DEFAULT_ATTACK_MIN_DROP,
       attackMinAfkDrop: options.attackMinAfkDrop ?? DEFAULT_ATTACK_MIN_AFK_DROP,
@@ -3153,19 +2996,13 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
       dropValue: entityDropValue
     });
   });
-  const afkCenterPartition = partitionCenterActivityAfkTargets(afkObservationTargetsRaw, self, {
-    ...options,
-    centerActivityAfkContinuation
-  });
-  const afkObservationTargets = afkCenterPartition.targets;
+  const afkObservationTargets = afkObservationTargetsRaw;
   const afkAttackCommitment = recentAfkAttackCommitment(stateful, nowMs, options);
   const afkPanelTargets = afkObservationTargets.filter(entity => hasFull5sStamina(entity, options));
   const afkTargets = afkObservationTargets.filter(entity => (
     markAfkAttackContinuation(entity, afkAttackCommitment, options)
     || (hasFull5sStamina(entity, options) && !afkTargetBlockedByRecentActivity(entity, options))
   ));
-  const edgeAfkTargets = afkTargets.filter(entity => entity.centerActivityEdge?.admitted === true);
-  const continuedEdgeAfkTargets = edgeAfkTargets.filter(entity => entity.centerActivityEdge?.continued === true);
   const selfKillTargetTicks = selfKillTargetTicksFromMessages(Array.isArray(fallback.messages) ? fallback.messages : [], selfUserId);
   const selfKillTargetIds = Array.from(selfKillTargetTicks.keys());
   const selfKillEvidence = summarizeSelfKillEvidence(selfKillTargetTicks);
@@ -3173,36 +3010,12 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
     .map(drop => normalizeCoinForDecision(drop, self, 'realtime'))
     .filter(Boolean)
     .filter(coin => Number(coin.amount || 0) > 0);
-  const realtimeCoinPartition = partitionCenterActivityCoins(realtimeCoinsRaw, selfKillTargetTicks, options);
-  const realtimeCoins = realtimeCoinPartition.admitted;
+  const realtimeCoins = realtimeCoinsRaw;
   const snapshotCoinsRaw = (Array.isArray(fallback.coinDrops) ? fallback.coinDrops : [])
     .map(drop => normalizeCoinForDecision(drop, self, 'snapshot'))
     .filter(Boolean)
     .filter(coin => Number(coin.amount || 0) > 0);
-  const snapshotCoinPartition = partitionCenterActivityCoins(snapshotCoinsRaw, selfKillTargetTicks, options);
-  const snapshotCoins = snapshotCoinPartition.admitted;
-  const centerFiltered = {
-    afkTargets: afkCenterPartition.filteredTargets.length,
-    edgeAdmittedAfkTargets: edgeAfkTargets.length,
-    edgeContinuedAfkTargets: continuedEdgeAfkTargets.length,
-    edgeAfkTargets: edgeAfkTargets.map(target => summarizeCenterActivityAfkTarget(
-      target,
-      browserlessCenterActivityRadius(options),
-      browserlessCenterActivityRadius(options) + centerActivityAfkEdgeExtension(options),
-      target.centerActivityEdge?.reason || 'center-afk-edge-admitted'
-    )),
-    continuedEdgeAfkTargets: continuedEdgeAfkTargets.map(target => summarizeCenterActivityAfkTarget(
-      target,
-      browserlessCenterActivityRadius(options),
-      browserlessCenterActivityRadius(options) + centerActivityAfkEdgeExtension(options),
-      target.centerActivityEdge?.reason || 'center-afk-edge-continuation'
-    )),
-    filteredAfkTargetDetails: afkCenterPartition.filteredDetails,
-    realtimeCoins: realtimeCoinPartition.filtered.length,
-    snapshotCoins: snapshotCoinPartition.filtered.length,
-    edgeAdmittedRealtimeCoins: realtimeCoinPartition.edgeAdmitted.map(summarizeCoin),
-    edgeAdmittedSnapshotCoins: snapshotCoinPartition.edgeAdmitted.map(summarizeCoin)
-  };
+  const snapshotCoins = snapshotCoinsRaw;
   const snapshotVisibleCoinMaxDistanceRaw = Number(options.snapshotVisibleCoinMaxDistanceCm
     ?? options.snapshotCoinFallbackMaxDistanceCm
     ?? options.globalCoinMaxDistance
@@ -3237,14 +3050,6 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
   if (visibleTargets.some(target => target.whitelisted)) dataGaps.push('whitelisted-target-visible');
   if (visibleTargets.some(target => target.recentlyActive)) dataGaps.push('recently-active-target-visible');
   if (afkTargets.some(target => afkOpportunityBlockedByStaminaCooldown(target, options))) dataGaps.push('afk-stamina-cooldown-target-visible');
-  if (centerFiltered.afkTargets) dataGaps.push('center-afk-targets-filtered');
-  if (centerFiltered.edgeAdmittedAfkTargets) dataGaps.push('center-afk-edge-target-admitted');
-  if (centerFiltered.edgeContinuedAfkTargets) dataGaps.push('center-afk-edge-target-continued');
-  if (centerFiltered.edgeAdmittedRealtimeCoins.length || centerFiltered.edgeAdmittedSnapshotCoins.length) {
-    dataGaps.push('center-visible-coin-edge-admitted');
-  }
-  if (centerFiltered.realtimeCoins) dataGaps.push('center-realtime-coins-filtered');
-  if (centerFiltered.snapshotCoins) dataGaps.push('center-snapshot-coins-filtered');
   if (snapshotFallbackBlockedReasons.length) dataGaps.push(...snapshotFallbackBlockedReasons.map(reason => `snapshot-fallback-blocked:${reason}`));
   if (numberOrNull(realtime.frameAgeMs) === null && Number(realtime.receivedAtMs) > 0) {
     dataGaps.push('unknown-realtime-frame-age');
@@ -3282,7 +3087,7 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
     rawRealtime: realtime,
     command: state?.command || null,
     self,
-    centerActivity: centerActivityInputSummary(self, centerFiltered, options),
+    centerActivity: centerActivityInputSummary(self, options),
     stamina: entityStaminaSummary(self || {}),
     frameAges: state?.frameAges || {},
     realtime: {
@@ -3920,7 +3725,6 @@ function estimatedKillShots(target, options = {}) {
 
 function opportunityEnemyStaminaCost(target, options = {}) {
   const moveCost = opportunityMoveStaminaCost(target?.distance, options, 0);
-  const centerEdgeReturnCost = Math.max(0, Number(target?.centerActivityEdge?.returnCostMs || 0));
   const metrics = options.recentCombatMetrics?.targetId !== undefined
     && String(options.recentCombatMetrics.targetId) === String(target?.user_id ?? target?.userId ?? '')
     ? options.recentCombatMetrics
@@ -3954,8 +3758,7 @@ function opportunityEnemyStaminaCost(target, options = {}) {
     + shotCost
     + expectedCombatMovementCost
     + expectedDodgeCost
-    + expectedSwitchCost
-    + centerEdgeReturnCost) * riskScale;
+    + expectedSwitchCost) * riskScale;
 }
 
 function staminaRemaining(self, windowName) {
@@ -8437,7 +8240,7 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
   const immediateInjuryHpExitAction = deferInjuryExitForDynamicContact ? null : selectedInjuryHpExitAction;
   const deferredCombatExitAction = deferCombatExitForDynamicContact ? selectedCombatExitAction : null;
   const deferredInjuryHpExitAction = deferInjuryExitForDynamicContact ? selectedInjuryHpExitAction : null;
-  const action = longStaminaExhaustedLeaveAction
+  let action = longStaminaExhaustedLeaveAction
     || criticalIncomingExitAction
     || immediateCombatExitAction
     || immediateInjuryHpExitAction
@@ -8460,6 +8263,12 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
     || postKillSettlementWaitAction
     || combatAction
     || null;
+  let centerHardBoundary = applyCenterActivityHardBoundary(input, action, options);
+  if (centerHardBoundary.boundary.outside && !action) {
+    const highValueCoinAction = buildCenterHardBoundaryHighValueCoinAction(state, input, options);
+    centerHardBoundary = applyCenterActivityHardBoundary(input, highValueCoinAction, options);
+  }
+  if (centerHardBoundary.applied) action = centerHardBoundary.action;
   let dangerousCombatExit = selectedCombatExitAction
     ? rememberDangerousCombatExitTarget(input, combat, stateful, options)
     : null;
@@ -8534,6 +8343,7 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
       selfKillEvidence: input.realtimeSnapshotObservation?.selfKillEvidence || [],
       postKillSettlement,
       loot: lootControl.summary,
+      centerHardBoundary: summarizeCenterHardBoundary(centerHardBoundary.boundary),
       dataGaps: input.dataGaps
     }
   };
@@ -9563,18 +9373,8 @@ function buildProfitPursuitSuppression(input, combatDecision, stateful = {}, opt
   const suppressions = profitPursuitSuppressionMap(stateful, nowMs);
   const closePressure = combatDecision?.dryRun?.combatPhase?.active === true
     || stateful?.combatTarget?.combatPhase === 'close-pressure';
-  const centerRadius = browserlessCenterActivityRadius(options);
-  const centerExtension = Math.max(0, Number(options.combatAttackRange ?? options.attackRange ?? DEFAULT_ATTACK_RANGE));
-  const pursuitRadius = centerRadius > 0 ? centerRadius + centerExtension : 0;
-  const selfRadius = pointRadiusFromOrigin(input?.self);
-  const targetRadius = pointRadiusFromOrigin(target);
-  const outsideCenterReason = pursuitRadius > 0 && Number.isFinite(targetRadius) && targetRadius > pursuitRadius
-    ? 'profit-pursuit-target-outside-center'
-    : (pursuitRadius > 0 && Number.isFinite(selfRadius) && selfRadius > pursuitRadius
-        ? 'profit-pursuit-self-outside-center'
-        : '');
   const cached = suppressions[targetId] || null;
-  if (cached && Number(cached.until || 0) > nowMs && (!closePressure || outsideCenterReason)) {
+  if (cached && Number(cached.until || 0) > nowMs && !closePressure) {
     clearSuppressedCombatTarget(stateful, targetId);
     return {
       ...cloneJson(cached),
@@ -9596,7 +9396,7 @@ function buildProfitPursuitSuppression(input, combatDecision, stateful = {}, opt
     };
   }
 
-  if (closePressure && !outsideCenterReason) {
+  if (closePressure) {
     delete suppressions[targetId];
     return {
       suppressed: false,
@@ -9644,39 +9444,7 @@ function buildProfitPursuitSuppression(input, combatDecision, stateful = {}, opt
     return { ...suppression, suppressed: true };
   }
 
-  // New ordinary-profit targets remain constrained to the dense center. An
-  // already engaged target gets one attack-range of hysteresis so crossing
-  // the exact circle edge cannot cancel a close finishing opportunity.
-  const engagedMs = profitPursuitEngagedMs(combatDecision, stateful, nowMs);
-  const damageProgress = profitPursuitDamageProgress(combatDecision, stateful);
-  let reason = outsideCenterReason;
-  if (!reason) return null;
-
-  const suppressMs = Math.max(0, Number(options.browserlessProfitPursuitSuppressMs
-    ?? BROWSER_RUNTIME_DEFAULTS.browserlessProfitPursuitSuppressMs
-    ?? 60000));
-  const suppression = {
-    suppressed: true,
-    reason,
-    targetId,
-    at: nowMs,
-    until: nowMs + suppressMs,
-    suppressMs: Math.round(suppressMs),
-    engagedMs: Math.round(engagedMs),
-    centerRadiusCm: Math.round(centerRadius),
-    centerExtensionCm: Math.round(centerExtension),
-    pursuitRadiusCm: Math.round(pursuitRadius),
-    selfRadiusCm: Number.isFinite(selfRadius) ? Math.round(selfRadius) : null,
-    targetRadiusCm: Number.isFinite(targetRadius) ? Math.round(targetRadius) : null,
-    firstHp: damageProgress.firstHp,
-    minHp: damageProgress.minHp,
-    targetHp: damageProgress.targetHp,
-    damageFromStart: damageProgress.damageFromStart === null ? null : Math.round(Number(damageProgress.damageFromStart) * 10) / 10,
-    target: summarizeTarget(target)
-  };
-  suppressions[targetId] = cloneJson(suppression);
-  clearSuppressedCombatTarget(stateful, targetId);
-  return suppression;
+  return null;
 }
 
 function easyKillApproachWindowMs(options = {}) {
@@ -9941,53 +9709,125 @@ function easyKillEngagementFinishReason(decision, engagementUserId) {
   return 'combat-target-switched';
 }
 
-function buildReturnToCenterDecision(input, options = {}) {
-  if (!input?.self) return null;
-  const radius = browserlessCenterActivityRadius(options);
-  if (!(radius > 0)) return null;
-  const selfRadius = pointRadiusFromOrigin(input.self);
-  if (!Number.isFinite(selfRadius) || selfRadius <= radius) return null;
-  const x = Number(input.self.x);
-  const y = Number(input.self.y);
-  const dx = Number.isFinite(x) ? Math.sign(-x) : 0;
-  const dy = Number.isFinite(y) ? Math.sign(-y) : 0;
-  if (!dx && !dy) return null;
+function summarizeCenterHardBoundary(boundary = {}) {
+  const coin = boundary.highValueCoin || null;
   return {
-    kind: 'patrol',
-    band: 'recover',
-    reason: 'return-to-center-activity-radius',
-    dx,
-    dy,
-    stopMotion: false,
-    self: summarizeTarget(input.self),
-    centerActivity: {
-      radiusCm: Math.round(radius),
-      selfRadiusCm: Math.round(selfRadius),
-      distanceOutsideCm: Math.max(0, Math.round(selfRadius - radius))
-    }
+    boundaryRadiusCm: Math.round(Number(boundary.boundaryRadiusCm || DEFAULT_CENTER_ACTIVITY_HARD_BOUNDARY_RADIUS_CM)),
+    selfRadiusCm: boundary.selfRadiusCm === null || boundary.selfRadiusCm === undefined
+      ? null
+      : Math.round(Number(boundary.selfRadiusCm)),
+    outsideByCm: Math.max(0, Math.round(Number(boundary.outsideByCm || 0))),
+    allowedHighValueCoin: Boolean(coin),
+    highValueCoin: coin ? {
+      id: String(coin.target?.id ?? coin.target?.drop_id ?? ''),
+      amount: Math.round(Number(coin.amount || 0)),
+      minAmount: Math.round(Number(coin.minAmount || 0)),
+      source: String(coin.source || '')
+    } : null
   };
 }
 
-function buildOutsideCenterProfitWaitDecision(input, options = {}) {
-  if (!input?.self) return null;
-  const radius = browserlessCenterActivityRadius(options);
-  if (!(radius > 0)) return null;
-  const selfRadius = pointRadiusFromOrigin(input.self);
-  if (!Number.isFinite(selfRadius) || selfRadius <= radius) return null;
+function applyCenterActivityHardBoundary(input, action, options = {}) {
+  const boundary = evaluateCenterActivityHardBoundaryCore({
+    self: input?.self,
+    action
+  }, {
+    boundaryRadiusCm: DEFAULT_CENTER_ACTIVITY_HARD_BOUNDARY_RADIUS_CM,
+    highValueCoinMinAmount: highValueCoinPriorityAmount(options)
+  });
+  if (!boundary.outside) return { action, boundary, applied: false };
+  const summary = summarizeCenterHardBoundary(boundary);
+  if (boundary.allowed) {
+    return {
+      action: {
+        ...(action || {}),
+        centerHardBoundary: summary
+      },
+      boundary,
+      applied: true
+    };
+  }
   return {
-    kind: 'wait',
-    band: 'recover',
-    reason: 'outside-center-profit-wait',
-    stopMotion: true,
-    profitDropout: {
-      kind: 'outside-center-profit-wait',
-      yieldable: true
+    action: {
+      kind: 'leave',
+      band: 'safety',
+      reason: 'outside-center-hard-boundary-leave',
+      shouldLeave: true,
+      stopMotion: true,
+      urgent: true,
+      immediate: true,
+      reloginDelayMs: Math.max(1000, Number(options.loopDelayMs || 30000)),
+      self: summarizeTarget(input?.self),
+      finalCandidate: {
+        priorityBand: 'safety',
+        hardGate: true,
+        targetKey: 'center-hard-boundary',
+        roiScore: null,
+        riskScore: 100,
+        expectedReward: null,
+        switchCost: 0,
+        commitmentRank: 0,
+        netROI: null,
+        staminaCost: null,
+        validUntil: Number(input?.nowMs || 0) || null,
+        switchReason: 'outside-center-hard-boundary',
+        order: 0
+      },
+      centerHardBoundary: {
+        ...summary,
+        blockedAction: action ? {
+          kind: String(action.kind || ''),
+          band: String(action.band || ''),
+          reason: String(action.reason || '')
+        } : null
+      }
     },
-    self: summarizeTarget(input.self),
-    centerActivity: {
-      radiusCm: Math.round(radius),
-      selfRadiusCm: Math.round(selfRadius),
-      distanceOutsideCm: Math.max(0, Math.round(selfRadius - radius))
+    boundary,
+    applied: true
+  };
+}
+
+function centerHardBoundaryCoinId(coin) {
+  const id = coin?.id ?? coin?.drop_id ?? coin?.dropId ?? coin?.coin_id ?? coin?.coinId;
+  return id === null || id === undefined || id === '' ? '' : String(id);
+}
+
+function buildCenterHardBoundaryHighValueCoinAction(state, input, options = {}) {
+  if (!input?.self) return null;
+  const minAmount = highValueCoinPriorityAmount(options);
+  const maxDistance = Math.max(0, Number(options.globalCoinMaxDistance ?? DEFAULT_GLOBAL_COIN_MAX_DISTANCE));
+  const normalize = (drops, authority) => (Array.isArray(drops) ? drops : [])
+    .map(drop => normalizeCoinForDecision(drop, input.self, authority))
+    .filter(Boolean)
+    .filter(coin => Number(coin.amount || 0) >= minAmount)
+    .filter(coin => Number.isFinite(Number(coin.distance)))
+    .filter(coin => !(maxDistance > 0) || Number(coin.distance) <= maxDistance)
+    .filter(coin => opportunityStaminaAffordable(input.self, opportunityCoinStaminaCost(coin, options), options));
+  const realtimeCoins = normalize(state?.realtime?.coinDrops, 'realtime');
+  const snapshotFrameAgeMs = numberOrNull(state?.fallback?.frameAgeMs ?? state?.snapshot?.frameAgeMs);
+  const snapshotMaxAgeMs = Math.max(1000, Number(options.snapshotCoinFallbackMaxAgeMs || 5000));
+  const snapshotCoins = snapshotFrameAgeMs !== null && snapshotFrameAgeMs > snapshotMaxAgeMs
+    ? []
+    : normalize(state?.fallback?.coinDrops ?? state?.snapshot?.coinDrops, 'snapshot');
+  const coins = (realtimeCoins.length ? realtimeCoins : snapshotCoins)
+    .sort((left, right) => Number(right.amount || 0) - Number(left.amount || 0)
+      || Number(left.distance || Infinity) - Number(right.distance || Infinity));
+  const coin = coins[0] || null;
+  if (!coin) return null;
+  return {
+    kind: Number(coin.distance || Infinity) <= Number(options.coinMaxDistance ?? BROWSER_RUNTIME_DEFAULTS.coinMaxDistance)
+      ? 'coin'
+      : 'seek-coin',
+    band: 'profit',
+    reason: 'outside-center-hard-boundary-high-value-coin',
+    reward: Number(coin.coinRoute?.value ?? coin.fieldAmount ?? coin.amount ?? 0),
+    staminaCost: opportunityCoinStaminaCost(coin, options),
+    target: summarizeCoin(coin),
+    centerHardBoundaryContinuation: {
+      source: realtimeCoins.length ? 'realtime-visible-coin' : 'snapshot-visible-coin',
+      coinId: centerHardBoundaryCoinId(coin),
+      amount: Math.round(Number(coin.amount || 0)),
+      minAmount
     }
   };
 }
@@ -10376,12 +10216,6 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     && isInjuredSelf(input.self, options)
     ? buildFootCoinPriorityDecision(profitSelectionInput, 'foot-coin-before-active-caution', options)
     : null;
-  const returnToCenterAction = input.self && !realtimeStale && (profitLive || nonCombatProfit)
-    ? buildReturnToCenterDecision(input, options)
-    : null;
-  const outsideCenterProfitWaitAction = returnToCenterAction
-    ? buildOutsideCenterProfitWaitDecision(input, options)
-    : null;
   const footCoinPriorityAction = (profitLive || nonCombatProfit) ? buildFootCoinPriorityDecision(profitSelectionInput, 'foot-coin-priority', options) : null;
   const dailyFinalCoinAction = (profitLive || nonCombatProfit) && !recoveryAction
     ? buildDailyStaminaFinalCoinDecision(profitSelectionInput, options)
@@ -10408,7 +10242,6 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       && !injuryHpExitAction
       && !pursuitLeaveAction
       && !immediateSafetyAction
-      && !returnToCenterAction
       && !highValueCoinPriorityAction
       && !(combat.target && combatDecisionEnabled && combatActionEligible)
       && !postAttackDropCoinAction
@@ -10446,6 +10279,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
   let action = { kind: 'wait', band: 'wait', reason: '' };
   let finalSelection = null;
   let outsideCenterIdle = null;
+  let centerHardBoundary = null;
   if (!input.self) {
     reason = 'missing-realtime-self';
     action.reason = reason;
@@ -10513,8 +10347,6 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
         roiScore: opportunity.choice?.score,
         staminaCost: opportunity.choice?.staminaCost
       }),
-      candidate(outsideCenterProfitWaitAction, 185, 'outside-center-profit-wait'),
-      candidate(returnToCenterAction, 190, 'return-to-center-fallback'),
       candidate(opportunisticShotWaitAction, 200, 'opportunistic-shot-wait'),
       candidate(staminaBlockedWaitAction, 210, 'stamina-blocked-wait'),
       candidate({
@@ -10610,17 +10442,33 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     }
     action = annotateProfitActionThreshold(action, profitThresholdContext, options);
     clearIneligibleFinalProfitHold(stateful, profitThresholdContext, opportunity);
-    const arbitratedAction = applyBrowserlessFinalActionArbitration(action, stateful, input, options, opportunity);
-    if (arbitratedAction !== action) {
-      action = arbitratedAction;
-      kind = action.kind || kind;
-      band = action.band || band;
-      reason = action.reason || reason;
+    const boundaryAction = applyCenterActivityHardBoundary(input, action, options);
+    centerHardBoundary = boundaryAction.boundary;
+    if (boundaryAction.boundary.outside) {
+      action = boundaryAction.action;
+      const arbitration = ensureFinalActionArbitrationState(stateful);
+      arbitration.lastAction = null;
+      arbitration.lastFocus = null;
+      arbitration.lastSelectedAt = 0;
+      arbitration.profitDropout = null;
+    } else {
+      const arbitratedAction = applyBrowserlessFinalActionArbitration(action, stateful, input, options, opportunity);
+      if (arbitratedAction !== action) action = arbitratedAction;
     }
     const diagnosedAction = recordBrowserlessActionSwitchDiagnostics(action, stateful, input, options);
-    if (diagnosedAction !== action) {
-      action = diagnosedAction;
-    }
+    if (diagnosedAction !== action) action = diagnosedAction;
+  }
+  if (input.self) {
+    const boundaryAction = applyCenterActivityHardBoundary(input, action, options);
+    centerHardBoundary = boundaryAction.boundary;
+    if (boundaryAction.applied) action = boundaryAction.action;
+  }
+  if (action) {
+    kind = action.finalCandidate?.switchReason === 'best-eligible-profit'
+      ? 'profit-candidate'
+      : (action.kind || kind || 'wait');
+    band = action.band || band || 'wait';
+    reason = action.reason || reason || 'no-profitable-candidate';
   }
   const ignoredActionCoinId = action?.ignoredCoin?.id || '';
   const rememberedOpportunityKey = coinDecisionKey(opportunity.opportunityChoice?.sourceCoin || opportunity.opportunityChoice);
@@ -10675,6 +10523,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       fallback: input.fallback,
       centerActivity: {
         ...input.centerActivity,
+        hardBoundary: centerHardBoundary ? summarizeCenterHardBoundary(centerHardBoundary) : null,
         outsideIdle: cloneJson(outsideCenterIdle.summary)
       },
       profitCoinSource: input.profitCoinSource,

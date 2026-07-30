@@ -1618,31 +1618,41 @@ function compactAction(action) {
 
 function compactCenterActivity(centerActivity) {
   if (!centerActivity || typeof centerActivity !== 'object') return null;
-  const compactAfkTarget = item => ({
-    userId: compactNumber(item?.userId),
-    name: compactString(item?.name, 96),
-    drop: compactNumber(item?.drop),
-    distanceCm: compactNumber(item?.distanceCm),
-    targetRadiusCm: compactNumber(item?.targetRadiusCm),
-    outsideByCm: compactNumber(item?.outsideByCm),
-    reason: compactString(item?.reason, 80),
-    continued: Boolean(item?.continued),
-    continuationAgeMs: compactNumber(item?.continuationAgeMs),
-    sourceActionKind: compactString(item?.sourceActionKind, 32)
-  });
+  const hardBoundary = centerActivity.hardBoundary && typeof centerActivity.hardBoundary === 'object'
+    ? centerActivity.hardBoundary
+    : null;
+  const outsideIdle = centerActivity.outsideIdle && typeof centerActivity.outsideIdle === 'object'
+    ? centerActivity.outsideIdle
+    : null;
   return {
     radiusCm: compactNumber(centerActivity.radiusCm),
-    afkEdgeRadiusCm: compactNumber(centerActivity.afkEdgeRadiusCm),
+    hardBoundaryRadiusCm: compactNumber(centerActivity.hardBoundaryRadiusCm),
     selfRadiusCm: compactNumber(centerActivity.selfRadiusCm),
     selfOutsideCm: compactNumber(centerActivity.selfOutsideCm),
-    filteredAfkTargets: compactNumber(centerActivity.filteredAfkTargets),
-    edgeAdmittedAfkTargets: compactNumber(centerActivity.edgeAdmittedAfkTargets),
-    edgeContinuedAfkTargets: compactNumber(centerActivity.edgeContinuedAfkTargets),
-    filteredRealtimeCoins: compactNumber(centerActivity.filteredRealtimeCoins),
-    filteredSnapshotCoins: compactNumber(centerActivity.filteredSnapshotCoins),
-    edgeAfkTargets: (centerActivity.edgeAfkTargets || []).slice(0, 8).map(compactAfkTarget),
-    continuedEdgeAfkTargets: (centerActivity.continuedEdgeAfkTargets || []).slice(0, 8).map(compactAfkTarget),
-    filteredAfkTargetDetails: (centerActivity.filteredAfkTargetDetails || []).slice(0, 8).map(compactAfkTarget)
+    selfOutsideHardBoundaryCm: compactNumber(centerActivity.selfOutsideHardBoundaryCm),
+    targetPositionRestricted: Boolean(centerActivity.targetPositionRestricted),
+    hardBoundary: hardBoundary ? {
+      boundaryRadiusCm: compactNumber(hardBoundary.boundaryRadiusCm),
+      selfRadiusCm: compactNumber(hardBoundary.selfRadiusCm),
+      outsideByCm: compactNumber(hardBoundary.outsideByCm),
+      allowedHighValueCoin: Boolean(hardBoundary.allowedHighValueCoin),
+      highValueCoin: hardBoundary.highValueCoin ? {
+        id: compactString(hardBoundary.highValueCoin.id, 128),
+        amount: compactNumber(hardBoundary.highValueCoin.amount),
+        minAmount: compactNumber(hardBoundary.highValueCoin.minAmount),
+        source: compactString(hardBoundary.highValueCoin.source, 32)
+      } : null
+    } : null,
+    outsideIdle: outsideIdle ? {
+      active: Boolean(outsideIdle.active),
+      startedAt: compactNumber(outsideIdle.startedAt),
+      ageMs: compactNumber(outsideIdle.ageMs),
+      timeoutMs: compactNumber(outsideIdle.timeoutMs),
+      selfRadiusCm: compactNumber(outsideIdle.selfRadiusCm),
+      outsideByCm: compactNumber(outsideIdle.outsideByCm),
+      actionReason: compactString(outsideIdle.actionReason, 80),
+      resetReason: compactString(outsideIdle.resetReason, 80)
+    } : null
   };
 }
 

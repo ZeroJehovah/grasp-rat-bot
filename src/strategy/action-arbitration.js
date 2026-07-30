@@ -3,7 +3,6 @@
 const { actionPriorityBand, actionFocusSummary } = require('./action-priority');
 
 const PROFIT_DROPOUT_REASONS = new Set([
-  'outside-center-profit-wait',
   'dynamic-profit-threshold-wait',
   'no-profitable-candidate'
 ]);

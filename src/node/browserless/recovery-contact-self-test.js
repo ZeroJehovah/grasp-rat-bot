@@ -138,8 +138,8 @@ function runRecoveryContactSelfTest() {
     const decisionState = {
       lastDecisionAction: {
         kind: 'wait',
-        band: 'recover',
-        reason: 'outside-center-profit-wait'
+        band: 'wait',
+        reason: 'no-profitable-candidate'
       }
     };
     const decision = buildBrowserlessDecision(

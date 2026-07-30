@@ -17,7 +17,7 @@ function outsideCenterIdleActionCore(action) {
   if (!action) return false;
   const kind = String(action.kind || '');
   const reason = String(action.reason || '');
-  if (reason === 'outside-center-profit-wait' || reason === 'single-coin-bait-hold') return true;
+  if (reason === 'single-coin-bait-hold') return true;
   return kind === 'wait' && ['dynamic-profit-threshold-wait', 'no-profitable-candidate'].includes(reason);
 }
 
