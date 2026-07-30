@@ -22191,6 +22191,238 @@ async function runSelfTest() {
       want: 'conservative|2000|frame-loss-rate-high|feedback-wait|coin-position-feedback-wait|vel 1 0'
     },
     {
+      name: 'browserless healthy close coin continuation waits for stop feedback and keeps the planner lease',
+      got: (() => {
+        let t = 1000;
+        const commands = [];
+        const timers = [];
+        const adapter = createBrowserlessActionAdapter({
+          now: () => t,
+          commandIntervalMs: 1,
+          decisionIntervalMs: 1000,
+          setTimeout: (fn, ms) => {
+            const timer = { fn, ms, canceled: false };
+            timers.push(timer);
+            return timer;
+          },
+          clearTimeout: timer => {
+            if (timer) timer.canceled = true;
+          },
+          getTransportHealth: () => ({
+            connected: true,
+            latency: { p90Ms: 120 },
+            processingQueue: { p90Ms: 5 },
+            frameLoss: { rate: 0.005, expectedTicks: 100 },
+            frames: { lastAgeMs: 20 },
+            exit: { triggered: false }
+          }),
+          transport: {
+            sendVelocity: (dx, dy) => commands.push(`vel ${dx} ${dy}`)
+          }
+        });
+        const target = { type: 'coin', id: 'continuation-coin', x: 800, y: 0 };
+        const decision = {
+          kind: 'profit-candidate',
+          band: 'profit',
+          action: { kind: 'coin', band: 'profit', target }
+        };
+        const state = (tick, x, vx = 0) => ({
+          realtime: {
+            authority: 'realtime',
+            source: 'pos',
+            tick,
+            receivedAtMs: t,
+            frameAgeMs: 20,
+            self: { x, y: 0, vx, vy: 0 },
+            coinDropsObserved: true,
+            coinDrops: [{ drop_id: 'continuation-coin', x: 800, y: 0, amount: 1, authority: 'realtime', source: 'pos' }]
+          },
+          command: { movement: { timing: { exactReady: true, exactSampleCount: 4, p90WallMs: 200 } } }
+        });
+        const firstState = state(1, 0);
+        adapter.observeState(firstState);
+        const first = adapter.applyDecision(firstState, decision);
+        const firstExpiry = first.nearCoinContinuation?.expiresAtMs;
+        t = 1100;
+        const beforeStop = adapter.continueCloseCoinPickup(state(2, 0));
+        t = 1150;
+        timers[0].fn();
+        t = 1200;
+        const advanced = state(5, 150);
+        adapter.observeState(advanced);
+        const continuation = adapter.continueCloseCoinPickup(advanced);
+        t = firstExpiry;
+        const expired = adapter.continueCloseCoinPickup(state(6, 150));
+        const adapterState = adapter.getState();
+        return [
+          first.nearCoinContinuation?.pulseCount,
+          beforeStop === null,
+          continuation?.nearCoinContinuation?.pulseCount,
+          continuation?.nearCoinContinuation?.expiresAtMs === firstExpiry,
+          expired === null,
+          adapterState.nearCoinContinuation === null,
+          adapterState.nearCoinContinuationLastCancelReason,
+          commands.join(',')
+        ].join('|');
+      })(),
+      want: '1|true|2|true|true|true|planner-lease-expired|vel 1 0,vel 0 0,vel 1 0'
+    },
+    {
+      name: 'browserless close coin continuation never emits a speculative reversal',
+      got: (() => {
+        let t = 1000;
+        const commands = [];
+        const timers = [];
+        const adapter = createBrowserlessActionAdapter({
+          now: () => t,
+          commandIntervalMs: 1,
+          decisionIntervalMs: 1000,
+          setTimeout: (fn, ms) => {
+            const timer = { fn, ms, canceled: false };
+            timers.push(timer);
+            return timer;
+          },
+          clearTimeout: timer => {
+            if (timer) timer.canceled = true;
+          },
+          getTransportHealth: () => ({
+            connected: true,
+            latency: { p90Ms: 120 },
+            processingQueue: { p90Ms: 5 },
+            frameLoss: { rate: 0.005, expectedTicks: 100 },
+            frames: { lastAgeMs: 20 },
+            exit: { triggered: false }
+          }),
+          transport: {
+            sendVelocity: (dx, dy) => commands.push(`vel ${dx} ${dy}`)
+          }
+        });
+        const target = { type: 'coin', id: 'reversal-coin', x: 800, y: 0 };
+        const decision = {
+          kind: 'profit-candidate',
+          band: 'profit',
+          action: { kind: 'coin', band: 'profit', target }
+        };
+        const state = (tick, x) => ({
+          realtime: {
+            authority: 'realtime',
+            source: 'pos',
+            tick,
+            receivedAtMs: t,
+            frameAgeMs: 20,
+            self: { x, y: 0, vx: 0, vy: 0 },
+            coinDropsObserved: true,
+            coinDrops: [{ drop_id: 'reversal-coin', x: 800, y: 0, amount: 1, authority: 'realtime', source: 'pos' }]
+          },
+          command: { movement: { timing: { exactReady: true, exactSampleCount: 4, p90WallMs: 200 } } }
+        });
+        const initial = state(1, 0);
+        adapter.observeState(initial);
+        adapter.applyDecision(initial, decision);
+        t = 1150;
+        timers[0].fn();
+        t = 1200;
+        const crossed = state(5, 900);
+        adapter.observeState(crossed);
+        const continuation = adapter.continueCloseCoinPickup(crossed);
+        const adapterState = adapter.getState();
+        return [
+          continuation === null,
+          adapterState.nearCoinContinuation === null,
+          adapterState.nearCoinContinuationLastCancelReason,
+          commands.join(',')
+        ].join('|');
+      })(),
+      want: 'true|true|locked-direction-reversal|vel 1 0,vel 0 0'
+    },
+    {
+      name: 'browserless close coin continuation clears when realtime visibility or transport health degrades',
+      got: (() => {
+        let t = 1000;
+        let degraded = false;
+        const commands = [];
+        const timers = [];
+        const adapter = createBrowserlessActionAdapter({
+          now: () => t,
+          commandIntervalMs: 1,
+          decisionIntervalMs: 1000,
+          setTimeout: (fn, ms) => {
+            const timer = { fn, ms, canceled: false };
+            timers.push(timer);
+            return timer;
+          },
+          clearTimeout: timer => {
+            if (timer) timer.canceled = true;
+          },
+          getTransportHealth: () => ({
+            connected: true,
+            latency: { p90Ms: 120 },
+            processingQueue: { p90Ms: 5 },
+            frameLoss: { rate: degraded ? 0.03 : 0.005, expectedTicks: 100 },
+            frames: { lastAgeMs: 20 },
+            exit: { triggered: false }
+          }),
+          transport: {
+            sendVelocity: (dx, dy) => commands.push(`vel ${dx} ${dy}`)
+          }
+        });
+        const target = { type: 'coin', id: 'degraded-coin', x: 800, y: 0 };
+        const decision = {
+          kind: 'profit-candidate',
+          band: 'profit',
+          action: { kind: 'coin', band: 'profit', target }
+        };
+        const state = (tick, x, visible = true) => ({
+          realtime: {
+            authority: 'realtime',
+            source: 'pos',
+            tick,
+            receivedAtMs: t,
+            frameAgeMs: 20,
+            self: { x, y: 0, vx: 0, vy: 0 },
+            coinDropsObserved: true,
+            coinDrops: visible
+              ? [{ drop_id: 'degraded-coin', x: 800, y: 0, amount: 1, authority: 'realtime', source: 'pos' }]
+              : []
+          },
+          command: { movement: { timing: { exactReady: true, exactSampleCount: 4, p90WallMs: 200 } } }
+        });
+        const initial = state(1, 0);
+        adapter.observeState(initial);
+        adapter.applyDecision(initial, decision);
+        t = 1150;
+        timers[0].fn();
+        t = 1200;
+        degraded = true;
+        const degradedState = state(5, 150);
+        adapter.observeState(degradedState);
+        const degradedContinuation = adapter.continueCloseCoinPickup(degradedState);
+        const degradedReason = adapter.getState().nearCoinContinuationLastCancelReason;
+
+        degraded = false;
+        t = 2000;
+        const retry = state(20, 0);
+        adapter.observeState(retry);
+        adapter.applyDecision(retry, decision);
+        t = 2150;
+        timers.at(-1).fn();
+        t = 2200;
+        const invisibleState = state(24, 150, false);
+        adapter.observeState(invisibleState);
+        const invisibleContinuation = adapter.continueCloseCoinPickup(invisibleState);
+        const adapterState = adapter.getState();
+        return [
+          degradedContinuation === null,
+          degradedReason,
+          invisibleContinuation === null,
+          adapterState.nearCoinContinuation === null,
+          adapterState.nearCoinContinuationLastCancelReason,
+          commands.join(',')
+        ].join('|');
+      })(),
+      want: 'true|transport-or-timing-degraded|true|true|target-not-realtime-visible|vel 1 0,vel 0 0,vel 1 0,vel 0 0'
+    },
+    {
       name: 'browserless distant targets follow the long axis without short-axis oscillation',
       got: (() => {
         const align = movementVectorToTarget(

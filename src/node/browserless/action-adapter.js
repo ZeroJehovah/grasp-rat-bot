@@ -29,6 +29,9 @@ const DEFAULT_COIN_FEEDBACK_MAX_QUEUE_P90_MS = 250;
 const DEFAULT_COIN_FEEDBACK_MAX_FRAME_LOSS_RATE = 0.02;
 const DEFAULT_COIN_FEEDBACK_MIN_EXPECTED_TICKS = 20;
 const DEFAULT_COIN_FEEDBACK_MAX_REALTIME_FRAME_AGE_MS = 500;
+const DEFAULT_NEAR_COIN_CONTINUATION_LEASE_SLACK_MS = 125;
+const DEFAULT_NEAR_COIN_CONTINUATION_MIN_LEASE_MS = 250;
+const DEFAULT_NEAR_COIN_CONTINUATION_STOP_SPEED_TOLERANCE = 1;
 
 function numberOrNull(value) {
   const number = Number(value);
@@ -364,6 +367,12 @@ function createInitialActionState() {
     coinFeedbackWaitCount: 0,
     coinFeedbackAckCount: 0,
     coinFeedbackTimeoutCount: 0,
+    nearCoinContinuation: null,
+    nearCoinContinuationStartCount: 0,
+    nearCoinContinuationRenewCount: 0,
+    nearCoinContinuationPulseCount: 0,
+    nearCoinContinuationCancelCount: 0,
+    nearCoinContinuationLastCancelReason: '',
     velocityPulseToken: 0,
     velocityStopTimer: null,
     velocityRepeatToken: 0,
@@ -915,6 +924,295 @@ function createBrowserlessActionAdapter(options = {}) {
     return true;
   }
 
+  function nearCoinContinuationSummary(continuation = state.nearCoinContinuation) {
+    if (!continuation) return null;
+    const pulse = continuation.lastPulse || null;
+    return {
+      targetKey: String(continuation.targetKey || ''),
+      createdAtMs: Number(continuation.createdAtMs || 0),
+      renewedAtMs: Number(continuation.renewedAtMs || 0),
+      expiresAtMs: Number(continuation.expiresAtMs || 0),
+      plannerTick: continuation.plannerTick ?? null,
+      lastObservedTick: continuation.lastObservedTick ?? null,
+      pulseCount: Math.max(0, Number(continuation.pulseCount || 0)),
+      lastPulse: pulse ? {
+        commandId: pulse.commandId ?? null,
+        pulseToken: pulse.pulseToken ?? null,
+        startedAtMs: Number(pulse.startedAtMs || 0),
+        startTick: pulse.startTick ?? null,
+        dx: Number(pulse.dx || 0),
+        dy: Number(pulse.dy || 0),
+        distance: Number.isFinite(Number(pulse.distance)) ? Number(pulse.distance) : null,
+        stopSentAtMs: Number(pulse.stopSentAtMs || 0),
+        stopSentTick: pulse.stopSentTick ?? null,
+        stopCommandId: pulse.stopCommandId ?? null,
+        stopFailed: pulse.stopFailed === true
+      } : null
+    };
+  }
+
+  function clearNearCoinContinuation(reason = '') {
+    if (!state.nearCoinContinuation) return false;
+    state.nearCoinContinuation = null;
+    state.nearCoinContinuationCancelCount += 1;
+    state.nearCoinContinuationLastCancelReason = String(reason || 'cleared');
+    return true;
+  }
+
+  function nearCoinContinuationLeaseMs() {
+    return Math.max(
+      DEFAULT_NEAR_COIN_CONTINUATION_MIN_LEASE_MS,
+      Math.round(decisionIntervalMs + DEFAULT_NEAR_COIN_CONTINUATION_LEASE_SLACK_MS)
+    );
+  }
+
+  function feedbackGuidedCoinVector(vector) {
+    return Boolean(vector?.ok) && Number(vector.distance) <= optionNumber(
+      options,
+      'coinFeedbackGuidedDistanceCm',
+      BROWSER_RUNTIME_DEFAULTS.coinPickupSweepDistance
+    );
+  }
+
+  function nearCoinContinuationEligible(target, vector, feedbackPlan) {
+    return Boolean(
+      coinTargetKey(target)
+      && vector?.ok
+      && feedbackGuidedCoinVector(vector)
+      && Number(vector.precisionPulseMs) > 0
+      && feedbackPlan?.mode === 'adaptive-healthy'
+    );
+  }
+
+  function beginOrRenewNearCoinContinuation(stateSnapshot, target, vector, feedbackPlan, sent = null, renewLease = true) {
+    if (!nearCoinContinuationEligible(target, vector, feedbackPlan)) {
+      clearNearCoinContinuation('continuation-ineligible');
+      return null;
+    }
+    const targetKey = coinTargetKey(target);
+    const atMs = now();
+    let continuation = state.nearCoinContinuation;
+    if (!continuation || continuation.targetKey !== targetKey) {
+      if (continuation) clearNearCoinContinuation('planner-target-changed');
+      if (!renewLease || !sent?.command) return null;
+      continuation = {
+        targetKey,
+        target: { ...target, type: 'coin' },
+        createdAtMs: atMs,
+        renewedAtMs: atMs,
+        expiresAtMs: atMs + nearCoinContinuationLeaseMs(),
+        plannerTick: optionalNumber(stateSnapshot?.realtime?.tick),
+        lastObservedTick: null,
+        pulseCount: 0,
+        lastPulse: null
+      };
+      state.nearCoinContinuation = continuation;
+      state.nearCoinContinuationStartCount += 1;
+    } else {
+      continuation.target = { ...target, type: 'coin' };
+      if (renewLease) {
+        continuation.renewedAtMs = atMs;
+        continuation.expiresAtMs = atMs + nearCoinContinuationLeaseMs();
+        continuation.plannerTick = optionalNumber(stateSnapshot?.realtime?.tick);
+        state.nearCoinContinuationRenewCount += 1;
+      }
+    }
+    if (sent?.command) {
+      const self = stateSnapshot?.realtime?.self || null;
+      const startX = numberOrNull(self?.x);
+      const startY = numberOrNull(self?.y);
+      if (startX === null || startY === null) {
+        clearNearCoinContinuation('continuation-missing-position');
+        return null;
+      }
+      continuation.pulseCount = Math.max(0, Number(continuation.pulseCount || 0)) + 1;
+      continuation.lastPulse = {
+        commandId: sent.command.id,
+        pulseToken: sent.pulseToken ?? null,
+        startedAtMs: atMs,
+        startTick: optionalNumber(stateSnapshot?.realtime?.tick),
+        startX,
+        startY,
+        dx: Number(sent.command.dx || 0),
+        dy: Number(sent.command.dy || 0),
+        distance: Number(vector.distance),
+        minPositionDeltaCm: Math.max(1, optionNumber(options, 'coinFeedbackMinPositionDeltaCm', 1)),
+        stopSentAtMs: 0,
+        stopSentTick: null,
+        stopCommandId: null,
+        stopFailed: false
+      };
+      state.nearCoinContinuationPulseCount += 1;
+    }
+    return continuation;
+  }
+
+  function noteNearCoinContinuationPulseStop(commandId, pulseToken, stopped) {
+    const continuation = state.nearCoinContinuation;
+    const pulse = continuation?.lastPulse;
+    if (!pulse
+      || String(pulse.commandId ?? '') !== String(commandId ?? '')
+      || String(pulse.pulseToken ?? '') !== String(pulseToken ?? '')) {
+      return;
+    }
+    pulse.stopSentAtMs = now();
+    pulse.stopSentTick = state.latestObservedTick;
+    pulse.stopCommandId = stopped?.command?.id ?? null;
+    pulse.stopFailed = !stopped?.ok || stopped?.skipped === true || !pulse.stopCommandId;
+  }
+
+  function armCoinFeedbackGate(stateSnapshot, target, feedbackPlan, sent, self = stateSnapshot?.realtime?.self || null) {
+    if (!sent?.ok || sent.skipped || !sent.command) return null;
+    const startX = numberOrNull(self?.x);
+    const startY = numberOrNull(self?.y);
+    if (startX === null || startY === null) return null;
+    const feedbackStartedAtMs = now();
+    state.coinFeedbackGate = {
+      targetKey: coinTargetKey(target),
+      commandId: sent.command.id,
+      startX,
+      startY,
+      startTick: optionalNumber(stateSnapshot?.realtime?.tick),
+      sentAtMs: feedbackStartedAtMs,
+      expiresAtMs: feedbackStartedAtMs + Number(feedbackPlan?.timeoutMs || 0),
+      timeoutMs: Number(feedbackPlan?.timeoutMs || 0),
+      mode: String(feedbackPlan?.mode || 'conservative'),
+      planReason: String(feedbackPlan?.reason || 'missing-feedback-plan'),
+      movementP90Ms: feedbackPlan?.movementP90Ms ?? null,
+      movementSampleCount: feedbackPlan?.movementSampleCount ?? 0,
+      frameLossRate: feedbackPlan?.frameLossRate ?? null,
+      frameLossExpectedTicks: feedbackPlan?.frameLossExpectedTicks ?? 0,
+      inboundLatencyP90Ms: feedbackPlan?.inboundLatencyP90Ms ?? null,
+      processingQueueP90Ms: feedbackPlan?.processingQueueP90Ms ?? null,
+      realtimeFrameAgeMs: feedbackPlan?.realtimeFrameAgeMs ?? null,
+      transportFrameAgeMs: feedbackPlan?.transportFrameAgeMs ?? null,
+      minPositionDeltaCm: Math.max(1, optionNumber(options, 'coinFeedbackMinPositionDeltaCm', 1))
+    };
+    return state.coinFeedbackGate;
+  }
+
+  function realtimeCoinForContinuation(stateSnapshot, targetKey) {
+    const realtime = stateSnapshot?.realtime || null;
+    if (!realtime
+      || (realtime.authority && realtime.authority !== 'realtime')
+      || (realtime.source && realtime.source !== 'pos')
+      || realtime.coinDropsObserved !== true
+      || !Array.isArray(realtime.coinDrops)) {
+      return null;
+    }
+    return realtime.coinDrops.find(coin => coinTargetKey(coin) === targetKey) || null;
+  }
+
+  function nearCoinPulsePositionObserved(pulse, self) {
+    const x = numberOrNull(self?.x);
+    const y = numberOrNull(self?.y);
+    if (x === null || y === null) return false;
+    return Math.hypot(x - Number(pulse.startX), y - Number(pulse.startY)) >= Number(pulse.minPositionDeltaCm || 1);
+  }
+
+  function nearCoinPulseStopSettled(pulse, self) {
+    const vx = optionalNumber(self?.vx);
+    const vy = optionalNumber(self?.vy);
+    if (vx !== null && vy !== null) {
+      return Math.hypot(vx, vy) <= DEFAULT_NEAR_COIN_CONTINUATION_STOP_SPEED_TOLERANCE;
+    }
+    const settlement = state.lastSettlement;
+    return Boolean(
+      settlement?.ok
+      && pulse.stopCommandId !== null
+      && String(settlement.commandId) === String(pulse.stopCommandId)
+    );
+  }
+
+  function continueCloseCoinPickup(stateSnapshot) {
+    const continuation = state.nearCoinContinuation;
+    if (!continuation || state.transportSealed) return null;
+    const atMs = now();
+    if (atMs >= Number(continuation.expiresAtMs || 0)) {
+      clearNearCoinContinuation('planner-lease-expired');
+      return null;
+    }
+    const realtime = stateSnapshot?.realtime || null;
+    const tick = optionalNumber(realtime?.tick);
+    if (tick !== null && tick === optionalNumber(continuation.lastObservedTick)) return null;
+    if (tick !== null) continuation.lastObservedTick = tick;
+    const target = realtimeCoinForContinuation(stateSnapshot, continuation.targetKey);
+    if (!target) {
+      clearNearCoinContinuation('target-not-realtime-visible');
+      return null;
+    }
+    const self = realtime?.self || null;
+    const vector = coinMotionVectorToTarget(self, target, options, state, atMs);
+    if (!vector.ok || !feedbackGuidedCoinVector(vector)) {
+      clearNearCoinContinuation(vector.ok ? 'target-left-close-sweep' : vector.reason || 'target-unavailable');
+      return null;
+    }
+    const feedbackPlan = coinFeedbackPlan(stateSnapshot);
+    if (feedbackPlan.mode !== 'adaptive-healthy') {
+      clearNearCoinContinuation('transport-or-timing-degraded');
+      return null;
+    }
+    const pulse = continuation.lastPulse;
+    if (!pulse || pulse.stopFailed) {
+      clearNearCoinContinuation('pulse-stop-unavailable');
+      return null;
+    }
+    if (!pulse.stopSentAtMs || pulse.stopCommandId === null) return null;
+    const observedAtMs = optionalNumber(realtime?.receivedAtMs);
+    const stopSentTick = optionalNumber(pulse.stopSentTick);
+    if ((observedAtMs !== null && observedAtMs < Number(pulse.stopSentAtMs))
+      || (tick !== null && stopSentTick !== null && tick <= stopSentTick)) {
+      return null;
+    }
+    if (!nearCoinPulsePositionObserved(pulse, self)) return null;
+    if (!nearCoinPulseStopSettled(pulse, self)) return null;
+    const directionDot = Number(pulse.dx || 0) * Number(vector.dx || 0)
+      + Number(pulse.dy || 0) * Number(vector.dy || 0);
+    if (directionDot < 0) {
+      clearNearCoinContinuation('locked-direction-reversal');
+      return null;
+    }
+    const ownership = {
+      source: 'near-coin-continuation',
+      band: 'profit',
+      hardSafety: false,
+      observedTick: tick,
+      frameReceivedAtMs: optionalNumber(realtime?.receivedAtMs),
+      decisionAtMs: atMs,
+      priority: 10
+    };
+    const sent = sendVelocity(vector.dx, vector.dy, vector.reason, target, {
+      suppressRepeat: true,
+      ownership
+    });
+    if (!sent.ok || sent.skipped || !sent.command) {
+      clearNearCoinContinuation('continuation-send-not-accepted');
+      return null;
+    }
+    const renewed = beginOrRenewNearCoinContinuation(stateSnapshot, target, vector, feedbackPlan, sent, false);
+    if (!renewed) return null;
+    armCoinFeedbackGate(stateSnapshot, target, feedbackPlan, sent, self);
+    const precisionPulseMs = schedulePrecisionPulseStop(sent, vector.precisionPulseMs, 'coin', stopped => {
+      noteNearCoinContinuationPulseStop(sent.command.id, sent.pulseToken, stopped);
+    });
+    if (!precisionPulseMs) {
+      clearNearCoinContinuation('continuation-pulse-stop-unscheduled');
+      return null;
+    }
+    return {
+      ok: true,
+      kind: 'velocity',
+      reason: vector.reason,
+      vector,
+      command: sent.command,
+      target,
+      skipped: false,
+      precisionPulseMs,
+      feedbackGuided: true,
+      nearCoinContinuation: nearCoinContinuationSummary(renewed)
+    };
+  }
+
   function cancelShootRepeat(reason = '', options = {}) {
     state.shootRepeatToken += 1;
     state.shootRepeatUntilMs = 0;
@@ -1135,7 +1433,7 @@ function createBrowserlessActionAdapter(options = {}) {
     };
   }
 
-  function schedulePrecisionPulseStop(sent, pulseMs, actionKind) {
+  function schedulePrecisionPulseStop(sent, pulseMs, actionKind, onStopped = null) {
     const pulse = Number(pulseMs);
     if (!sent?.ok || sent.skipped || !(pulse > 0)) return null;
     const command = sent.command || null;
@@ -1147,7 +1445,12 @@ function createBrowserlessActionAdapter(options = {}) {
     state.velocityStopTimer = setTimeoutFn(() => {
       if (state.velocityPulseToken !== token) return;
       state.velocityStopTimer = null;
-      sendVelocity(0, 0, 'precision-pulse');
+      const stopped = sendVelocity(0, 0, 'precision-pulse');
+      if (typeof onStopped === 'function') {
+        try {
+          onStopped(stopped);
+        } catch (_) {}
+      }
     }, delayMs);
     return delayMs;
   }
@@ -1438,6 +1741,7 @@ function createBrowserlessActionAdapter(options = {}) {
 
   function stop(reason = 'stop', stopOptions = {}) {
     cancelShootRepeat('stop');
+    clearNearCoinContinuation(`stop:${reason}`);
     const ownership = stopOptions.ownership || (!activeApplyContext
       ? {
           source: 'adapter-stop',
@@ -1460,6 +1764,7 @@ function createBrowserlessActionAdapter(options = {}) {
     cancelVelocityRepeat();
     cancelShootRepeat(state.transportSealReason);
     clearCoinFeedbackGate();
+    clearNearCoinContinuation(state.transportSealReason);
     return {
       sealed: true,
       reason: state.transportSealReason,
@@ -1481,6 +1786,8 @@ function createBrowserlessActionAdapter(options = {}) {
     activeApplyContext = actionApplyContext(stateSnapshot, decision, applyOptions);
     try {
       cancelShootRepeat('new-decision');
+      const profitAction = profitActionFromDecision(decision);
+      if (profitAction?.type !== 'coin') clearNearCoinContinuation('planner-non-coin-action');
       if (combatSummaryFromDecision(decision)) {
         return applyCombatDecision(stateSnapshot, decision);
       }
@@ -1507,7 +1814,6 @@ function createBrowserlessActionAdapter(options = {}) {
       return applyControlDecision(controlAction);
     }
     const self = stateSnapshot?.realtime?.self || decision?.input?.self || null;
-    const profitAction = profitActionFromDecision(decision);
     if (!profitAction) {
       clearCoinFeedbackGate();
       const diagnostics = unsupportedActionDiagnostics(decision);
@@ -1527,18 +1833,9 @@ function createBrowserlessActionAdapter(options = {}) {
       return applyProfitEnemyDecision(self, profitAction.target, decision);
     }
     const target = profitAction.target;
-    if (coinFeedbackPending(self, target)) {
-      return {
-        ok: true,
-        kind: 'feedback-wait',
-        reason: 'coin-position-feedback-wait',
-        skipped: true,
-        target,
-        feedbackGate: { ...state.coinFeedbackGate }
-      };
-    }
     const vector = coinMotionVectorToTarget(self, target, options, state, now());
     if (!vector.ok) {
+      clearNearCoinContinuation(vector.reason || 'coin-vector-unavailable');
       const stopped = stop(vector.reason);
       return {
         ok: stopped.ok,
@@ -1550,46 +1847,37 @@ function createBrowserlessActionAdapter(options = {}) {
         ...transportFailure(stopped)
       };
     }
-    const feedbackGuided = Number(vector.distance) <= optionNumber(
-      options,
-      'coinFeedbackGuidedDistanceCm',
-      BROWSER_RUNTIME_DEFAULTS.coinPickupSweepDistance
-    );
+    const feedbackGuided = feedbackGuidedCoinVector(vector);
     const feedbackPlan = feedbackGuided ? coinFeedbackPlan(stateSnapshot) : null;
-    const sent = sendVelocity(vector.dx, vector.dy, vector.reason, target, { suppressRepeat: feedbackGuided });
-    if (feedbackGuided && sent.ok && !sent.skipped && sent.command) {
-      const startX = numberOrNull(self?.x);
-      const startY = numberOrNull(self?.y);
-      if (startX !== null && startY !== null) {
-        const feedbackStartedAtMs = now();
-        state.coinFeedbackGate = {
-          targetKey: coinTargetKey(target),
-          commandId: sent.command.id,
-          startX,
-          startY,
-          startTick: numberOrNull(stateSnapshot?.realtime?.tick),
-          sentAtMs: feedbackStartedAtMs,
-          expiresAtMs: feedbackStartedAtMs + Number(feedbackPlan?.timeoutMs || 0),
-          timeoutMs: Number(feedbackPlan?.timeoutMs || 0),
-          mode: String(feedbackPlan?.mode || 'conservative'),
-          planReason: String(feedbackPlan?.reason || 'missing-feedback-plan'),
-          movementP90Ms: feedbackPlan?.movementP90Ms ?? null,
-          movementSampleCount: feedbackPlan?.movementSampleCount ?? 0,
-          frameLossRate: feedbackPlan?.frameLossRate ?? null,
-          frameLossExpectedTicks: feedbackPlan?.frameLossExpectedTicks ?? 0,
-          inboundLatencyP90Ms: feedbackPlan?.inboundLatencyP90Ms ?? null,
-          processingQueueP90Ms: feedbackPlan?.processingQueueP90Ms ?? null,
-          realtimeFrameAgeMs: feedbackPlan?.realtimeFrameAgeMs ?? null,
-          transportFrameAgeMs: feedbackPlan?.transportFrameAgeMs ?? null,
-          minPositionDeltaCm: Math.max(1, optionNumber(options, 'coinFeedbackMinPositionDeltaCm', 1))
-        };
-      }
+    if (!nearCoinContinuationEligible(target, vector, feedbackPlan)) {
+      clearNearCoinContinuation('planner-close-coin-health-unavailable');
+    } else {
+      beginOrRenewNearCoinContinuation(stateSnapshot, target, vector, feedbackPlan);
     }
+    if (coinFeedbackPending(self, target)) {
+      return {
+        ok: true,
+        kind: 'feedback-wait',
+        reason: 'coin-position-feedback-wait',
+        skipped: true,
+        target,
+        feedbackGate: { ...state.coinFeedbackGate },
+        nearCoinContinuation: nearCoinContinuationSummary()
+      };
+    }
+    const sent = sendVelocity(vector.dx, vector.dy, vector.reason, target, { suppressRepeat: feedbackGuided });
+    if (feedbackGuided) armCoinFeedbackGate(stateSnapshot, target, feedbackPlan, sent, self);
+    const continuation = nearCoinContinuationEligible(target, vector, feedbackPlan)
+      ? beginOrRenewNearCoinContinuation(stateSnapshot, target, vector, feedbackPlan, sent)
+      : null;
     const opportunisticShot = opportunisticShotFromDecision(decision);
     const shoot = opportunisticShot
       ? sendOpportunisticShot(self, opportunisticShot, decision)
       : { ok: true, skipped: true, reason: 'no-opportunistic-shot' };
-    const precisionPulseMs = schedulePrecisionPulseStop(sent, vector.precisionPulseMs, profitAction.kind);
+    const precisionPulseMs = schedulePrecisionPulseStop(sent, vector.precisionPulseMs, profitAction.kind, stopped => {
+      if (continuation) noteNearCoinContinuationPulseStop(sent.command?.id, sent.pulseToken, stopped);
+    });
+    if (continuation && !precisionPulseMs) clearNearCoinContinuation('planner-pulse-stop-unscheduled');
       return {
         ok: Boolean(sent.ok && shoot.ok),
         kind: 'velocity',
@@ -1609,6 +1897,7 @@ function createBrowserlessActionAdapter(options = {}) {
         precisionPulseMs,
         feedbackGuided,
         feedbackGate: state.coinFeedbackGate ? { ...state.coinFeedbackGate } : null,
+        nearCoinContinuation: nearCoinContinuationSummary(),
         ...transportFailure(sent, shoot)
       };
     } finally {
@@ -1722,6 +2011,7 @@ function createBrowserlessActionAdapter(options = {}) {
   }
 
   function applyPatrolMotionDecision(action) {
+    clearNearCoinContinuation('patrol-motion');
     const sent = sendVelocity(
       roundVelocity(action.dx),
       roundVelocity(action.dy),
@@ -1742,6 +2032,7 @@ function createBrowserlessActionAdapter(options = {}) {
   }
 
   function applySafetyMotionDecision(action) {
+    clearNearCoinContinuation('safety-motion');
     const sent = sendVelocity(
       roundVelocity(action.dx),
       roundVelocity(action.dy),
@@ -1763,6 +2054,7 @@ function createBrowserlessActionAdapter(options = {}) {
   }
 
   function applyProfitEnemyDecision(self, target, decision) {
+    clearNearCoinContinuation('profit-enemy-action');
     if (target?.active && target?.easyKillProfitTarget) {
       const vector = movementVectorToTarget(self, target, options);
       const distance = Number.isFinite(Number(vector.distance))
@@ -1954,6 +2246,7 @@ function createBrowserlessActionAdapter(options = {}) {
     if (!activeApplyContext) activeApplyContext = actionApplyContext(stateSnapshot, decision, applyOptions);
     try {
       cancelShootRepeat('combat-decision');
+      clearNearCoinContinuation('combat-decision');
       const combat = combatSummaryFromDecision(decision);
       const self = stateSnapshot?.realtime?.self || combat?.self || null;
       if (!combat?.target) {
@@ -2167,13 +2460,20 @@ function createBrowserlessActionAdapter(options = {}) {
       coinFeedbackGate: state.coinFeedbackGate ? { ...state.coinFeedbackGate } : null,
       coinFeedbackWaitCount: state.coinFeedbackWaitCount,
       coinFeedbackAckCount: state.coinFeedbackAckCount,
-      coinFeedbackTimeoutCount: state.coinFeedbackTimeoutCount
+      coinFeedbackTimeoutCount: state.coinFeedbackTimeoutCount,
+      nearCoinContinuation: nearCoinContinuationSummary(),
+      nearCoinContinuationStartCount: state.nearCoinContinuationStartCount,
+      nearCoinContinuationRenewCount: state.nearCoinContinuationRenewCount,
+      nearCoinContinuationPulseCount: state.nearCoinContinuationPulseCount,
+      nearCoinContinuationCancelCount: state.nearCoinContinuationCancelCount,
+      nearCoinContinuationLastCancelReason: state.nearCoinContinuationLastCancelReason
     };
   }
 
   return {
     applyDecision,
     applyCombatDecision,
+    continueCloseCoinPickup,
     getState,
     observeState,
     sealTransport,

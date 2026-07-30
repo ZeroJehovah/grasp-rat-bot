@@ -3528,7 +3528,7 @@ async function runReadOnlyCanary(config, options = {}) {
             stageDurations['realtime-control-dispatch'] = performance.now() - stageStarted;
             if (assessRestartDrain(currentState, atMs)) return;
             stageStarted = performance.now();
-            handleSafetyAssessment(safetyController.evaluate(currentState, {
+            const safetyHandled = handleSafetyAssessment(safetyController.evaluate(currentState, {
               startedAtMs: noSelfGuardStartedAtMs(atMs),
               frameGapAlertMs,
               staleSelfMs: config.staleSelfMs,
@@ -3544,6 +3544,27 @@ async function runReadOnlyCanary(config, options = {}) {
               nowMs: atMs
             }), { state: currentState, decision: result.decisions.last, atMs });
             stageDurations.safety = performance.now() - stageStarted;
+            if (
+              frame.decodedJson.type === 'pos'
+              && !realtimeHandled
+              && !safetyHandled
+              && !leavePending
+              && !result.safety.event
+              && !ending
+              && actionAdapter
+              && typeof actionAdapter.continueCloseCoinPickup === 'function'
+            ) {
+              stageStarted = performance.now();
+              const continuation = actionAdapter.continueCloseCoinPickup(currentState);
+              if (continuation) {
+                updateActionResult(continuation, {
+                  decision: result.decisions.last,
+                  summary: result.decisions.last,
+                  atMs
+                });
+              }
+              stageDurations['near-coin-continuation'] = performance.now() - stageStarted;
+            }
           }
         } finally {
           const taskDurationMs = performance.now() - taskStarted;
