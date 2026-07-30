@@ -3653,6 +3653,7 @@ async function runReadOnlyCanary(config, options = {}) {
           movementSettlementStallMs: config.movementSettlementStallMs,
           movementSettlementMinDistanceCm: config.movementSettlementMinDistanceCm,
           combatShootMinIntervalMs: config.combatShootMinIntervalMs,
+          getTransportHealth: () => result.transportHealth || transportHealthMonitor.snapshot(now()),
           onVelocityRequest: request => stateStore.recordVelocityRequest(request),
           onShootRequest: request => stateStore.recordShootRequest(request)
         });

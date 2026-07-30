@@ -20,6 +20,15 @@ const DEFAULT_TRANSPORT_HIGH_WATER_BYTES = 64 * 1024;
 const DEFAULT_ATTACK_RANGE_CM = BROWSER_RUNTIME_DEFAULTS.attackRange;
 const DEFAULT_AFK_ATTACK_COMMIT_RANGE_CM = 10000;
 const DEFAULT_AFK_ATTACK_FULL_RANGE_CM = BROWSER_RUNTIME_DEFAULTS.afkAttackFullRangeCm;
+const DEFAULT_COIN_FEEDBACK_MIN_TIMEOUT_MS = 250;
+const DEFAULT_COIN_FEEDBACK_MAX_TIMEOUT_MS = 800;
+const DEFAULT_COIN_FEEDBACK_DELAY_SLACK_MS = 125;
+const DEFAULT_COIN_FEEDBACK_MAX_MOVEMENT_P90_MS = 650;
+const DEFAULT_COIN_FEEDBACK_MAX_INBOUND_P90_MS = 750;
+const DEFAULT_COIN_FEEDBACK_MAX_QUEUE_P90_MS = 250;
+const DEFAULT_COIN_FEEDBACK_MAX_FRAME_LOSS_RATE = 0.02;
+const DEFAULT_COIN_FEEDBACK_MIN_EXPECTED_TICKS = 20;
+const DEFAULT_COIN_FEEDBACK_MAX_REALTIME_FRAME_AGE_MS = 500;
 
 function numberOrNull(value) {
   const number = Number(value);
@@ -410,6 +419,7 @@ function createBrowserlessActionAdapter(options = {}) {
   const now = typeof options.now === 'function' ? options.now : Date.now;
   const transport = options.transport || null;
   const onVelocityRequest = typeof options.onVelocityRequest === 'function' ? options.onVelocityRequest : null;
+  const getTransportHealth = typeof options.getTransportHealth === 'function' ? options.getTransportHealth : null;
   const commandIntervalMs = Math.max(0, Number(options.commandIntervalMs ?? DEFAULT_COMMAND_INTERVAL_MS));
   const decisionIntervalMs = Math.max(0, Number(options.decisionIntervalMs || 0));
   const velocityRepeatEnabled = options.velocityRepeatEnabled === true;
@@ -800,6 +810,88 @@ function createBrowserlessActionAdapter(options = {}) {
 
   function clearCoinFeedbackGate() {
     state.coinFeedbackGate = null;
+  }
+
+  function currentTransportHealth() {
+    if (!getTransportHealth) return null;
+    try {
+      const health = getTransportHealth();
+      return health && typeof health === 'object' ? health : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function coinFeedbackPlan(stateSnapshot = {}) {
+    const configuredTimeoutMs = optionalNumber(options.coinFeedbackTimeoutMs);
+    const fallbackTimeoutMs = configuredTimeoutMs === null
+      ? Math.max(1500, decisionIntervalMs * 2)
+      : Math.max(DEFAULT_COIN_FEEDBACK_MIN_TIMEOUT_MS, configuredTimeoutMs);
+    const timing = stateSnapshot?.command?.movement?.timing || {};
+    const movementP90Ms = optionalNumber(timing.p90WallMs);
+    const movementSampleCount = Math.max(0, Number(timing.exactSampleCount ?? timing.sampleCount ?? 0));
+    const realtimeFrameAgeMs = optionalNumber(stateSnapshot?.realtime?.frameAgeMs);
+    const transportHealth = currentTransportHealth();
+    const frameLossRate = optionalNumber(transportHealth?.frameLoss?.rate);
+    const frameLossExpectedTicks = Math.max(0, Number(transportHealth?.frameLoss?.expectedTicks || 0));
+    const inboundLatencyP90Ms = optionalNumber(transportHealth?.latency?.p90Ms);
+    const processingQueueP90Ms = optionalNumber(transportHealth?.processingQueue?.p90Ms);
+    const transportFrameAgeMs = optionalNumber(transportHealth?.frames?.lastAgeMs);
+    const summary = {
+      movementP90Ms,
+      movementSampleCount,
+      frameLossRate,
+      frameLossExpectedTicks,
+      inboundLatencyP90Ms,
+      processingQueueP90Ms,
+      realtimeFrameAgeMs,
+      transportFrameAgeMs
+    };
+    const conservative = reason => ({
+      mode: configuredTimeoutMs === null ? 'conservative' : 'configured',
+      reason,
+      timeoutMs: Math.round(fallbackTimeoutMs),
+      ...summary
+    });
+
+    if (configuredTimeoutMs !== null) return conservative('configured-timeout');
+    if (timing.exactReady !== true || movementSampleCount < 4) return conservative('movement-timing-untrusted');
+    if (movementP90Ms === null || movementP90Ms > DEFAULT_COIN_FEEDBACK_MAX_MOVEMENT_P90_MS) {
+      return conservative('movement-p90-too-high');
+    }
+    if (!transportHealth || transportHealth.connected !== true) return conservative('transport-health-unavailable');
+    if (transportHealth.exit?.triggered === true
+      || transportHealth.exit?.latencyTriggered === true
+      || transportHealth.exit?.frameLossTriggered === true) {
+      return conservative('transport-health-degraded');
+    }
+    if (frameLossExpectedTicks >= DEFAULT_COIN_FEEDBACK_MIN_EXPECTED_TICKS
+      && frameLossRate !== null
+      && frameLossRate > DEFAULT_COIN_FEEDBACK_MAX_FRAME_LOSS_RATE) {
+      return conservative('frame-loss-rate-high');
+    }
+    if (inboundLatencyP90Ms !== null && inboundLatencyP90Ms > DEFAULT_COIN_FEEDBACK_MAX_INBOUND_P90_MS) {
+      return conservative('inbound-latency-high');
+    }
+    if (processingQueueP90Ms !== null && processingQueueP90Ms > DEFAULT_COIN_FEEDBACK_MAX_QUEUE_P90_MS) {
+      return conservative('processing-queue-high');
+    }
+    if (realtimeFrameAgeMs !== null && realtimeFrameAgeMs > DEFAULT_COIN_FEEDBACK_MAX_REALTIME_FRAME_AGE_MS) {
+      return conservative('realtime-frame-stale');
+    }
+    if (transportFrameAgeMs !== null && transportFrameAgeMs > DEFAULT_COIN_FEEDBACK_MAX_REALTIME_FRAME_AGE_MS) {
+      return conservative('transport-frame-stale');
+    }
+    return {
+      mode: 'adaptive-healthy',
+      reason: 'trusted-movement-p90',
+      timeoutMs: Math.round(clampNumber(
+        movementP90Ms + DEFAULT_COIN_FEEDBACK_DELAY_SLACK_MS,
+        DEFAULT_COIN_FEEDBACK_MIN_TIMEOUT_MS,
+        DEFAULT_COIN_FEEDBACK_MAX_TIMEOUT_MS
+      )),
+      ...summary
+    };
   }
 
   function coinFeedbackPending(self, target, atMs = now()) {
@@ -1463,24 +1555,32 @@ function createBrowserlessActionAdapter(options = {}) {
       'coinFeedbackGuidedDistanceCm',
       BROWSER_RUNTIME_DEFAULTS.coinPickupSweepDistance
     );
+    const feedbackPlan = feedbackGuided ? coinFeedbackPlan(stateSnapshot) : null;
     const sent = sendVelocity(vector.dx, vector.dy, vector.reason, target, { suppressRepeat: feedbackGuided });
     if (feedbackGuided && sent.ok && !sent.skipped && sent.command) {
       const startX = numberOrNull(self?.x);
       const startY = numberOrNull(self?.y);
       if (startX !== null && startY !== null) {
-        const feedbackTimeoutMs = Math.max(250, optionNumber(
-          options,
-          'coinFeedbackTimeoutMs',
-          Math.max(1500, decisionIntervalMs * 2)
-        ));
+        const feedbackStartedAtMs = now();
         state.coinFeedbackGate = {
           targetKey: coinTargetKey(target),
           commandId: sent.command.id,
           startX,
           startY,
           startTick: numberOrNull(stateSnapshot?.realtime?.tick),
-          sentAtMs: now(),
-          expiresAtMs: now() + feedbackTimeoutMs,
+          sentAtMs: feedbackStartedAtMs,
+          expiresAtMs: feedbackStartedAtMs + Number(feedbackPlan?.timeoutMs || 0),
+          timeoutMs: Number(feedbackPlan?.timeoutMs || 0),
+          mode: String(feedbackPlan?.mode || 'conservative'),
+          planReason: String(feedbackPlan?.reason || 'missing-feedback-plan'),
+          movementP90Ms: feedbackPlan?.movementP90Ms ?? null,
+          movementSampleCount: feedbackPlan?.movementSampleCount ?? 0,
+          frameLossRate: feedbackPlan?.frameLossRate ?? null,
+          frameLossExpectedTicks: feedbackPlan?.frameLossExpectedTicks ?? 0,
+          inboundLatencyP90Ms: feedbackPlan?.inboundLatencyP90Ms ?? null,
+          processingQueueP90Ms: feedbackPlan?.processingQueueP90Ms ?? null,
+          realtimeFrameAgeMs: feedbackPlan?.realtimeFrameAgeMs ?? null,
+          transportFrameAgeMs: feedbackPlan?.transportFrameAgeMs ?? null,
           minPositionDeltaCm: Math.max(1, optionNumber(options, 'coinFeedbackMinPositionDeltaCm', 1))
         };
       }
@@ -1508,6 +1608,7 @@ function createBrowserlessActionAdapter(options = {}) {
         skipped: Boolean(sent.skipped),
         precisionPulseMs,
         feedbackGuided,
+        feedbackGate: state.coinFeedbackGate ? { ...state.coinFeedbackGate } : null,
         ...transportFailure(sent, shoot)
       };
     } finally {

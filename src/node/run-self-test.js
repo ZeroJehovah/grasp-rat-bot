@@ -22098,6 +22098,99 @@ async function runSelfTest() {
       want: 'true|1|0|feedback-wait|coin-position-feedback-wait|velocity|0|1|1|vel 1 0,vel 1 0'
     },
     {
+      name: 'browserless close coin uses trusted movement P90 for an earlier same-direction retry',
+      got: (() => {
+        let t = 1000;
+        const commands = [];
+        const adapter = createBrowserlessActionAdapter({
+          now: () => t,
+          commandIntervalMs: 1,
+          decisionIntervalMs: 1000,
+          setTimeout: () => null,
+          clearTimeout: () => {},
+          getTransportHealth: () => ({
+            connected: true,
+            latency: { p90Ms: 120 },
+            processingQueue: { p90Ms: 5 },
+            frameLoss: { rate: 0.005, expectedTicks: 100 },
+            frames: { lastAgeMs: 20 },
+            exit: { triggered: false }
+          }),
+          transport: {
+            sendVelocity: (dx, dy) => commands.push(`vel ${dx} ${dy}`)
+          }
+        });
+        const decision = {
+          kind: 'profit-candidate',
+          band: 'profit',
+          action: { kind: 'coin', band: 'profit', target: { type: 'coin', id: 'adaptive-feedback-coin', x: 80, y: 0 } }
+        };
+        const state = tick => ({
+          realtime: { self: { x: 0, y: 0 }, tick, frameAgeMs: 20 },
+          command: { movement: { timing: { exactReady: true, exactSampleCount: 4, p90WallMs: 200 } } }
+        });
+        const first = adapter.applyDecision(state(1), decision);
+        t = 1500;
+        const retry = adapter.applyDecision(state(11), decision);
+        return [
+          first.feedbackGate?.mode,
+          first.feedbackGate?.timeoutMs,
+          first.feedbackGate?.planReason,
+          retry.kind,
+          retry.command?.dx,
+          retry.command?.dy,
+          commands.join(',')
+        ].join('|');
+      })(),
+      want: 'adaptive-healthy|325|trusted-movement-p90|velocity|1|0|vel 1 0,vel 1 0'
+    },
+    {
+      name: 'browserless close coin retains conservative feedback wait during inferred frame loss',
+      got: (() => {
+        let t = 1000;
+        const commands = [];
+        const adapter = createBrowserlessActionAdapter({
+          now: () => t,
+          commandIntervalMs: 1,
+          decisionIntervalMs: 1000,
+          setTimeout: () => null,
+          clearTimeout: () => {},
+          getTransportHealth: () => ({
+            connected: true,
+            latency: { p90Ms: 120 },
+            processingQueue: { p90Ms: 5 },
+            frameLoss: { rate: 0.03, expectedTicks: 100 },
+            frames: { lastAgeMs: 20 },
+            exit: { triggered: false }
+          }),
+          transport: {
+            sendVelocity: (dx, dy) => commands.push(`vel ${dx} ${dy}`)
+          }
+        });
+        const decision = {
+          kind: 'profit-candidate',
+          band: 'profit',
+          action: { kind: 'coin', band: 'profit', target: { type: 'coin', id: 'loss-feedback-coin', x: 80, y: 0 } }
+        };
+        const state = tick => ({
+          realtime: { self: { x: 0, y: 0 }, tick, frameAgeMs: 20 },
+          command: { movement: { timing: { exactReady: true, exactSampleCount: 4, p90WallMs: 200 } } }
+        });
+        const first = adapter.applyDecision(state(1), decision);
+        t = 1500;
+        const waiting = adapter.applyDecision(state(11), decision);
+        return [
+          first.feedbackGate?.mode,
+          first.feedbackGate?.timeoutMs,
+          first.feedbackGate?.planReason,
+          waiting.kind,
+          waiting.reason,
+          commands.join(',')
+        ].join('|');
+      })(),
+      want: 'conservative|2000|frame-loss-rate-high|feedback-wait|coin-position-feedback-wait|vel 1 0'
+    },
+    {
       name: 'browserless distant targets follow the long axis without short-axis oscillation',
       got: (() => {
         const align = movementVectorToTarget(
