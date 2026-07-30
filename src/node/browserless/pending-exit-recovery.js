@@ -160,8 +160,7 @@ function buildExitRecoveryOutcome(pendingExit, detail = {}) {
 function hasCanaryInGameEvidence(canary) {
   const stats = canary?.stats || {};
   return Boolean(
-    canary?.recovery?.inGameEvidence === true
-      || canary?.snapshotSafety?.response?.summary?.selfPresent === true
+    canary?.snapshotSafety?.response?.summary?.selfPresent === true
       || canary?.entry?.firstSelf
       || Number(stats.frameCount || 0) > 0
       || Number(stats.realtimeFrameCount || 0) > 0
@@ -364,7 +363,9 @@ function runPendingExitRecoverySelfTest() {
       runId: 'zero-frame-cf-rejection',
       startedAt: new Date(nowMs - 750).toISOString(),
       error: 'websocket source IP attempts exhausted',
-      recovery: { inGameEvidence: false },
+      // This flag can be inherited from an earlier canary, so it cannot on
+      // its own authorize a new zero-frame exit-recovery chain.
+      recovery: { inGameEvidence: true, source: 'previous-canary' },
       entry: { firstSelf: null },
       stats: {
         frameCount: 0,
