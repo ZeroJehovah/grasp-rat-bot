@@ -1030,7 +1030,6 @@ function summarizeCombatTarget(target) {
       proactiveCombatEligible: Boolean(target.whitelistContactPolicy.proactiveCombatEligible),
       proactiveCombatRangeCm: numberOrNull(target.whitelistContactPolicy.proactiveCombatRangeCm),
       lowHpSafetyExit: Boolean(target.whitelistContactPolicy.lowHpSafetyExit),
-      contactNoDodgeBudgetExit: Boolean(target.whitelistContactPolicy.contactNoDodgeBudgetExit),
       distanceCm: numberOrNull(target.whitelistContactPolicy.distanceCm),
       reason: String(target.whitelistContactPolicy.reason || '')
     } : null,

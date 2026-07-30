@@ -405,13 +405,13 @@ async function runDynamicWhitelistSelfTest() {
     }
 
     {
-      const noBudget = buildBrowserlessDecision(
-        decisionState({ hp: 80, stamina5s: 5000, withBullet: false, targetDistance: 9000 }),
+      const lowStaminaContact = buildBrowserlessDecision(
+        decisionState({ hp: 80, stamina5s: 2399, withBullet: false, targetDistance: 9000 }),
         {},
         decisionOptions()
       );
       const rolledBack = buildBrowserlessDecision(
-        decisionState({ hp: 80, stamina5s: 5000, withBullet: false, targetDistance: 9000 }),
+        decisionState({ hp: 80, stamina5s: 2399, withBullet: false, targetDistance: 9000 }),
         {},
         decisionOptions({ dynamicWhitelistProximitySafetyEnabled: false })
       );
@@ -420,10 +420,38 @@ async function runDynamicWhitelistSelfTest() {
         {},
         decisionOptions({ dynamicWhitelistProximitySafetyEnabled: false })
       );
-      assert.strictEqual(noBudget.reason, 'dynamic-whitelist-contact-no-dodge-budget-leave');
+      assert.strictEqual(lowStaminaContact.reason, 'combat-live-realtime');
+      assert.strictEqual(String(lowStaminaContact.combat.target.userId), '8');
       assert.notStrictEqual(rolledBack.reason, 'dynamic-whitelist-contact-no-dodge-budget-leave');
       assert.strictEqual(rollbackLowHp.reason, 'dynamic-whitelist-low-hp-contact-leave');
-      cases.push('dodge-budget-exit-and-independent-proximity-rollback');
+      cases.push('low-stamina-contact-engages-and-low-hp-exit-survives-proximity-rollback');
+    }
+
+    {
+      const observedContacts = [
+        { name: 'huaming song', distance: 12727, stamina5s: 3582, targetHp: 97 },
+        { name: 'Haskell', distance: 14444, stamina5s: 5492, targetHp: 100 },
+        { name: 'yongren', distance: 13496, stamina5s: 3270, targetHp: 88 }
+      ];
+      for (const contact of observedContacts) {
+        const decision = buildBrowserlessDecision(
+          decisionState({
+            hp: 100,
+            stamina5s: contact.stamina5s,
+            targetDistance: contact.distance,
+            targetHp: contact.targetHp,
+            targetMode: 'Active',
+            targetName: contact.name,
+            withBullet: false
+          }),
+          {},
+          decisionOptions({ dailyDamageUserIds: [8] })
+        );
+        assert.strictEqual(decision.reason, 'combat-live-realtime', contact.name);
+        assert.strictEqual(String(decision.combat.target.userId), '8', contact.name);
+        assert.notStrictEqual(decision.action?.kind, 'safety-exit', contact.name);
+      }
+      cases.push('observed-low-stamina-dynamic-contacts-remain-in-combat');
     }
 
     {

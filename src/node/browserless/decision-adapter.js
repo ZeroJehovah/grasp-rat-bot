@@ -2056,15 +2056,12 @@ function summarizeWhitelistContactPolicy(policy) {
     proactiveCombatRangeCm: numberOrNull(policy.proactiveCombatRangeCm),
     incomingDodgeRequired: Boolean(policy.incomingDodgeRequired),
     lowHpSafetyExit: Boolean(policy.lowHpSafetyExit),
-    contactNoDodgeBudgetExit: Boolean(policy.contactNoDodgeBudgetExit),
     dodgeOnly: Boolean(policy.dodgeOnly),
     selfHp: numberOrNull(policy.selfHp),
     maxHp: numberOrNull(policy.maxHp),
     distanceCm: numberOrNull(policy.distanceCm),
     recoveryRadiusCm: numberOrNull(policy.recoveryRadiusCm),
     lowHpSafetyRadiusCm: numberOrNull(policy.lowHpSafetyRadiusCm),
-    stamina5s: numberOrNull(policy.stamina5s),
-    requiredDodgeBudgetMs: numberOrNull(policy.requiredDodgeBudgetMs),
     reason: String(policy.reason || '')
   };
 }
@@ -6262,8 +6259,7 @@ function buildDynamicWhitelistContactSafetyExitDecision(input, options = {}, inc
   if (!browserlessSafetyExitModeEnabled(options) || !input?.self) return null;
   const contacts = (input.visibleTargets || [])
     .filter(target => target?.whitelistContactPolicy?.dynamicWhitelistMember === true)
-    .filter(target => target.whitelistContactPolicy.lowHpSafetyExit === true
-      || target.whitelistContactPolicy.contactNoDodgeBudgetExit === true)
+    .filter(target => target.whitelistContactPolicy.lowHpSafetyExit === true)
     .sort((left, right) => Number(left.distance ?? Infinity) - Number(right.distance ?? Infinity));
   const target = contacts[0] || null;
   if (!target) return null;
@@ -6273,9 +6269,7 @@ function buildDynamicWhitelistContactSafetyExitDecision(input, options = {}, inc
   const critical = policy.lowHpSafetyExit === true && criticalExit?.rule === 'critical-hp';
   const reason = critical
     ? criticalExit.reason
-    : (policy.contactNoDodgeBudgetExit
-        ? 'dynamic-whitelist-contact-no-dodge-budget-leave'
-        : 'dynamic-whitelist-low-hp-contact-leave');
+    : 'dynamic-whitelist-low-hp-contact-leave';
   const cover = incomingAssessment?.cover || null;
   const hasIncoming = Number(incomingAssessment?.collisionBullets?.length || 0) > 0;
   const dx = hasIncoming ? Number(cover?.dx || 0) : 0;
@@ -6297,7 +6291,7 @@ function buildDynamicWhitelistContactSafetyExitDecision(input, options = {}, inc
       }
     } : {}),
     whitelistSafety: {
-      type: policy.contactNoDodgeBudgetExit ? 'contact-no-dodge-budget' : 'low-hp-contact',
+      type: 'low-hp-contact',
       policy: summarizeWhitelistContactPolicy(policy),
       contactCount: contacts.length,
       cover: hasIncoming ? compactLeaveCover(cover) : null

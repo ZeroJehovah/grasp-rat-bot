@@ -4,7 +4,6 @@ const DEFAULT_PROXIMITY_BASE_RANGE_CM = 6500;
 const DEFAULT_COMBAT_ATTACK_RANGE_CM = 14500;
 const DEFAULT_LOW_HP_THRESHOLD = 50;
 const DEFAULT_RISK_HP_RATIO = 0.5;
-const DEFAULT_MINIMUM_DODGE_BUDGET_MS = 5600;
 const DEFAULT_BULLET_HIT_RADIUS_CM = 90;
 
 function numberOrNull(value) {
@@ -65,24 +64,6 @@ function lowHpThreshold(options = {}) {
       ?? options.lowHpThreshold
   );
   return Math.max(0, configured ?? DEFAULT_LOW_HP_THRESHOLD);
-}
-
-function minimumDodgeBudget(options = {}) {
-  const configured = numberOrNull(
-    options.dynamicWhitelistMinimumDodgeBudgetMs
-      ?? options.combatProactiveActiveMinStamina5s
-      ?? options.combatOpponentProbeReserveMs
-  );
-  return Math.max(0, configured ?? DEFAULT_MINIMUM_DODGE_BUDGET_MS);
-}
-
-function selfStamina5s(self) {
-  return numberOrNull(
-    self?.stamina_5s_remaining_milli
-      ?? self?.stamina5sRemainingMilli
-      ?? self?.stamina5s
-      ?? self?.stamina_5s
-  );
 }
 
 function dynamicWhitelistCombatRangeCore(self, options = {}) {
@@ -216,21 +197,7 @@ function evaluateDynamicWhitelistContactCore(self, target, context = {}, options
       && lowHp
       && distanceCm <= lowHpSafetyRadiusCm
   );
-  const stamina5s = selfStamina5s(self);
-  const requiredDodgeBudgetMs = minimumDodgeBudget(options);
-  const dodgeBudgetKnown = stamina5s !== null;
-  const dodgeBudgetReady = !dodgeBudgetKnown || stamina5s >= requiredDodgeBudgetMs;
   const proximitySafetyEnabled = options.dynamicWhitelistProximitySafetyEnabled !== false;
-  const contactNoDodgeBudgetExit = Boolean(
-    proximitySafetyEnabled
-      && targetValid
-      && dynamicWhitelistMember
-      && !creatorProtected
-      && !lowHp
-      && inProactiveRange
-      && dodgeBudgetKnown
-      && !dodgeBudgetReady
-  );
   const proactiveCombatEligible = Boolean(
     proximitySafetyEnabled
       && targetValid
@@ -240,13 +207,11 @@ function evaluateDynamicWhitelistContactCore(self, target, context = {}, options
       && selfHp !== null
       && (ordinaryRangeOverride || rangeModel.valid)
       && inProactiveRange
-      && !contactNoDodgeBudgetExit
   );
   let reason = 'ordinary-target';
   if (creatorProtected) reason = 'creator-hard-protection';
   else if (legacyWhitelistProtected) reason = 'legacy-whitelist-hard-protection';
   else if (dynamicWhitelistMember && lowHpSafetyExit) reason = 'dynamic-whitelist-low-hp-contact';
-  else if (dynamicWhitelistMember && contactNoDodgeBudgetExit) reason = 'dynamic-whitelist-contact-no-dodge-budget';
   else if (dynamicWhitelistMember && damagedSelfToday) reason = 'dynamic-whitelist-damaged-today';
   else if (dynamicWhitelistMember) reason = 'dynamic-whitelist-distance-guard';
   return {
@@ -275,11 +240,6 @@ function evaluateDynamicWhitelistContactCore(self, target, context = {}, options
     recoveryRadiusCm,
     lowHpSafetyRadiusCm,
     lowHpSafetyExit,
-    stamina5s,
-    requiredDodgeBudgetMs,
-    dodgeBudgetKnown,
-    dodgeBudgetReady,
-    contactNoDodgeBudgetExit,
     incomingDodgeRequired: false,
     dodgeOnly: false,
     reason,
@@ -375,7 +335,6 @@ function dynamicWhitelistDistanceGuardBlocksCombatCore(target, context = {}) {
 module.exports = {
   DEFAULT_COMBAT_ATTACK_RANGE_CM,
   DEFAULT_LOW_HP_THRESHOLD,
-  DEFAULT_MINIMUM_DODGE_BUDGET_MS,
   DEFAULT_PROXIMITY_BASE_RANGE_CM,
   dynamicWhitelistCombatRangeCore,
   dynamicWhitelistDistanceGuardBlocksCombatCore,

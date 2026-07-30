@@ -313,9 +313,9 @@ function runStrategyModuleSelfTests() {
       && snapshotPolicy.proactiveCombatEligible === false
   });
 
-  const insufficientDodge = dynamicPolicy(80, 9000, {}, {}, { stamina_5s_remaining_milli: 5000 });
-  const insufficientRollback = evaluateDynamicWhitelistContactCore(
-    dynamicSelf(80, 100, 5000),
+  const lowStaminaContact = dynamicPolicy(80, 9000, {}, {}, { stamina_5s_remaining_milli: 2399 });
+  const lowStaminaRollback = evaluateDynamicWhitelistContactCore(
+    dynamicSelf(80, 100, 2399),
     dynamicTarget(9000),
     dynamicContext,
     { combatAttackRange: 14500, dynamicWhitelistProximitySafetyEnabled: false }
@@ -333,10 +333,10 @@ function runStrategyModuleSelfTests() {
     { combatAttackRange: 14500, combatBulletHitRadiusCm: 90 }
   );
   results.push({
-    name: 'dynamic-whitelist-dodge-budget-and-incoming-collision-gates',
-    passed: insufficientDodge.contactNoDodgeBudgetExit === true
-      && insufficientDodge.proactiveCombatEligible === false
-      && insufficientRollback.contactNoDodgeBudgetExit === false
+    name: 'dynamic-whitelist-low-stamina-contact-and-incoming-collision-gates',
+    passed: lowStaminaContact.proactiveCombatEligible === true
+      && lowStaminaContact.reason === 'dynamic-whitelist-distance-guard'
+      && lowStaminaRollback.proactiveCombatEligible === false
       && collisionOverride.incomingDodgeRequired === true
       && collisionOverride.defensiveTargetEligible === true
       && offLaneOverride.incomingDodgeRequired === false
