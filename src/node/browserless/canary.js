@@ -13,7 +13,11 @@ const {
 } = require('./session-client');
 const { createFrameStats, updateFrameStats } = require('./frame-stats');
 const { createBrowserlessStateStore } = require('./state-store');
-const { openBrowserlessWs, isWsOpen } = require('./ws-transport');
+const {
+  isWebSocketConnectAbortError,
+  isWsOpen,
+  openBrowserlessWs
+} = require('./ws-transport');
 const { leaveWithVerification } = require('./leave-client');
 const { createBrowserlessLeaveSupervisor } = require('./leave-supervisor');
 const {
@@ -482,6 +486,45 @@ function confirmedLeaveSnapshotGuard(state, nowMs = Date.now()) {
 
 function errorMessage(error) {
   return error?.message || String(error || 'unknown error');
+}
+
+function activeJoinAuditFromLeave(leave) {
+  const attempts = Array.isArray(leave?.attempts) ? leave.attempts : [];
+  const confirmed = attempts.slice().reverse().find(attempt => attempt?.ok && attempt?.response) || null;
+  const response = confirmed?.response;
+  if (!response || typeof response !== 'object' || Array.isArray(response)) return null;
+  const countValue = Number(response.active_join_count ?? response.activeJoinCount);
+  const count = Number.isFinite(countValue) ? Math.max(0, Math.round(countValue)) : null;
+  const rawTicks = response.active_join_ticks ?? response.activeJoinTicks;
+  const ticks = Array.isArray(rawTicks)
+    ? rawTicks
+        .map(value => Number(value))
+        .filter(Number.isFinite)
+        .map(value => Math.round(value))
+        .slice(-64)
+    : [];
+  if (count === null && !ticks.length) return null;
+  return {
+    count,
+    ticks,
+    latestTick: ticks.length ? ticks[ticks.length - 1] : null
+  };
+}
+
+function compareActiveJoinAudits(before, after) {
+  if (!before || !after) return null;
+  const beforeTicks = new Set(before.ticks || []);
+  const addedTicks = (after.ticks || []).filter(tick => !beforeTicks.has(tick));
+  const countDelta = before.count === null || after.count === null
+    ? null
+    : after.count - before.count;
+  return {
+    grew: Boolean((countDelta !== null && countDelta > 0) || addedTicks.length),
+    countDelta,
+    addedTicks: addedTicks.slice(-16),
+    before,
+    after
+  };
 }
 
 function snapshotSafetyDamageActorUserIds(options = {}, atMs = Date.now()) {
@@ -1419,6 +1462,15 @@ async function runReadOnlyCanary(config, options = {}) {
       leavePrewarm: null,
       leaveSupervisor: null,
       leaveFailure: null,
+      transportLifecycle: {
+        generation: 0,
+        phase: 'idle',
+        pendingConnectCancel: null,
+        terminalOpenBlocked: null,
+        reassertLeave: null,
+        confirmedLeaveActiveJoin: null,
+        activeJoinAudit: null
+      },
       frameGapSoftStops: [],
       lastFrameGapRecovery: null
     },
@@ -1488,6 +1540,11 @@ async function runReadOnlyCanary(config, options = {}) {
   let openFailedBeforeTransport = false;
   let transportPublished = false;
   let transport = null;
+  let wsConnectGeneration = 0;
+  let pendingWsConnect = null;
+  let terminalBeforeWsActive = false;
+  let postLeaveWsOpenViolation = null;
+  let confirmedLeaveActiveJoinAudit = null;
   let leavePending = null;
   let exitAttemptSequence = 0;
   let leaveSupervisor = options.leaveSupervisor || null;
@@ -1774,6 +1831,48 @@ async function runReadOnlyCanary(config, options = {}) {
   };
   const logWs = (type, detail) => {
     if (config.wsTraceEnabled && logStore) logStore.append('ws', type, addRunMeta(detail));
+  };
+  const updateTransportLifecycle = patch => {
+    result.safety.transportLifecycle = {
+      ...(result.safety.transportLifecycle || {}),
+      ...(patch || {})
+    };
+    return result.safety.transportLifecycle;
+  };
+  const cancelPendingWsConnect = (reason = 'cancelled') => {
+    const pending = pendingWsConnect;
+    if (!pending || pending.phase !== 'connecting') {
+      const detail = {
+        attempted: false,
+        aborted: false,
+        generation: pending?.generation || null,
+        reason: pending?.phase || 'not-pending'
+      };
+      updateTransportLifecycle({ pendingConnectCancel: detail });
+      return detail;
+    }
+    pending.phase = 'cancelled';
+    pending.cancelReason = reason;
+    let abortError = '';
+    try {
+      if (!pending.controller.signal.aborted) pending.controller.abort(reason);
+    } catch (err) {
+      abortError = errorMessage(err);
+    }
+    const detail = {
+      attempted: true,
+      aborted: pending.controller.signal.aborted,
+      generation: pending.generation,
+      reason,
+      error: abortError
+    };
+    updateTransportLifecycle({
+      generation: pending.generation,
+      phase: 'cancelled',
+      pendingConnectCancel: detail
+    });
+    logWs('connect-abort', detail);
+    return detail;
   };
   const transportHealthSignature = status => [
     status?.mode || '',
@@ -2175,11 +2274,15 @@ async function runReadOnlyCanary(config, options = {}) {
         logBattleTail('leave-request-result', detail, now());
       },
       onLeaveConfirmed: async leave => {
+        // HTTP has already supplied terminal authority. Flip the gate before
+        // flushing any queued frame so no ordinary decision can run after
+        // confirmation, then cancel an unresolved handshake immediately.
+        ending = true;
+        const pendingConnectCancel = cancelPendingWsConnect('leave-confirmed');
         if (wsFrameScheduler) {
           wsFrameScheduler.flush();
           result.hotPath.frameScheduler = wsFrameScheduler.status();
         }
-        ending = true;
         clearPublishedTransport(transport, 'leave-confirmed');
         const actionSeal = actionAdapter?.sealTransport
           ? actionAdapter.sealTransport('leave-confirmed')
@@ -2192,15 +2295,22 @@ async function runReadOnlyCanary(config, options = {}) {
         log('canary-leave-confirmed-control-close', {
           leaveConfirmed: Boolean(leave?.ok),
           actionSeal,
-          transportClose
+          transportClose,
+          pendingConnectCancel
         });
         const confirmedAttempt = (leave?.attempts || []).find(attempt => attempt?.ok) || null;
+        confirmedLeaveActiveJoinAudit = activeJoinAuditFromLeave(leave);
+        if (confirmedLeaveActiveJoinAudit) {
+          updateTransportLifecycle({
+            confirmedLeaveActiveJoin: confirmedLeaveActiveJoinAudit
+          });
+        }
         logBattleTail('leave-confirmed', {
           ok: true,
           stage: confirmedAttempt?.stage || '',
           response: confirmedAttempt?.response || null
         }, now());
-        return { ok: true, actionSeal, transportClose };
+        return { ok: true, actionSeal, transportClose, pendingConnectCancel };
       }
     }).then(exit => {
       leavePending.settled = true;
@@ -2992,7 +3102,36 @@ async function runReadOnlyCanary(config, options = {}) {
     const open = options.openBrowserlessWs || openBrowserlessWs;
     const wsFrameCoalescingEnabled = options.wsFrameCoalescing === true
       || (!options.openBrowserlessWs && options.wsFrameCoalescing !== false);
-    transport = await open({
+    let connectGeneration = 0;
+    let pendingOpenEvent = null;
+    if (ending) {
+      terminalBeforeWsActive = true;
+      updateTransportLifecycle({ phase: 'suppressed-after-leave' });
+      log('canary-ws-connect-suppressed-after-leave', {
+        leaveConfirmed: Boolean(result.leave?.ok || leavePending?.ok)
+      });
+    } else {
+      // The recovery leave chain may confirm while open() is still awaiting
+      // the HTTP upgrade. Keep the connect cancellable and unpublished until
+      // the post-await terminal/generation gate accepts it.
+      connectGeneration = ++wsConnectGeneration;
+      pendingWsConnect = {
+        generation: connectGeneration,
+        phase: 'connecting',
+        startedAtMs: now(),
+        controller: new AbortController(),
+        cancelReason: ''
+      };
+      updateTransportLifecycle({
+        generation: connectGeneration,
+        phase: 'connecting',
+        pendingConnectCancel: null,
+        terminalOpenBlocked: null,
+        reassertLeave: null,
+        confirmedLeaveActiveJoin: null,
+        activeJoinAudit: null
+      });
+      const openedTransport = await open({
       gameOrigin: config.gameOrigin,
       wsPath: config.wsPath,
       wsExtraQuery: config.wsExtraQuery,
@@ -3000,6 +3139,7 @@ async function runReadOnlyCanary(config, options = {}) {
       sessionToken: config.sessionToken,
       localAddress: config.sourceIp,
       connectTimeoutMs: config.wsConnectTimeoutMs,
+      signal: pendingWsConnect.controller.signal,
       onConnectStart: event => {
         logWs('connect-start', {
           runtime: event?.runtime || '',
@@ -3008,23 +3148,34 @@ async function runReadOnlyCanary(config, options = {}) {
         });
       },
       onOpen: event => {
-        const generation = Number(event?.transportGeneration || 0);
-        if (generation > 0) authoritativeTransportGeneration = generation;
-        wsError = null;
-        wsClosed = null;
-        transportStartedAtMs = now();
-        publishTransportHealth(
-          transportHealthMonitor.setConnected(true, transportStartedAtMs),
-          transportStartedAtMs,
-          { force: true }
-        );
-        logWs('open', {
-          runtime: event?.runtime || '',
-          transportGeneration: generation || null
+        pendingOpenEvent = event || {};
+      },
+      onConnectAbort: event => {
+        logWs('connect-aborted', {
+          ...(event || {}),
+          connectGeneration
         });
+      },
+      onAbortedOpen: event => {
+        const detail = {
+          ...(event || {}),
+          connectGeneration,
+          reason: 'open-after-connect-abort'
+        };
+        postLeaveWsOpenViolation = postLeaveWsOpenViolation || detail;
+        updateTransportLifecycle({ terminalOpenBlocked: detail });
+        log('canary-post-leave-ws-open-violation', detail);
       },
       onError: event => {
         const generation = Number(event?.transportGeneration || 0);
+        if (ending || pendingWsConnect?.controller?.signal?.aborted) {
+          logWs('terminal-error', {
+            message: event?.message || '',
+            transportGeneration: generation || null,
+            connectGeneration
+          });
+          return;
+        }
         if (generation > 0 && authoritativeTransportGeneration > 0 && generation !== authoritativeTransportGeneration) {
           logWs('stale-error', {
             message: event?.message || '',
@@ -3368,71 +3519,158 @@ async function runReadOnlyCanary(config, options = {}) {
         }
       }
     });
-    publishTransport(transport);
-    if (!transportStartedAtMs) transportStartedAtMs = now();
-    publishTransportHealth(
-      transportHealthMonitor.setConnected(true, transportStartedAtMs),
-      transportStartedAtMs,
-      { force: true }
-    );
-    if (actionEnabled) {
-      actionAdapter = options.actionAdapter || createBrowserlessActionAdapter({
-        ...runtimeDefaults,
-        transport,
-        now,
-        decisionIntervalMs: config.decisionIntervalMs,
-        commandIntervalMs: config.movementCommandIntervalMs,
-        velocityRepeatEnabled: true,
-        shootRepeatEnabled: true,
-        targetDeadZoneCm: config.movementTargetDeadZoneCm,
-        settlementFrames: config.movementSettlementFrames,
-        movementSettlementStallMs: config.movementSettlementStallMs,
-        movementSettlementMinDistanceCm: config.movementSettlementMinDistanceCm,
-        combatShootMinIntervalMs: config.combatShootMinIntervalMs,
-        onVelocityRequest: request => stateStore.recordVelocityRequest(request),
-        onShootRequest: request => stateStore.recordShootRequest(request)
-      });
+      const terminalReason = ending
+        ? 'leave-confirmed'
+        : (pendingWsConnect?.generation !== connectGeneration
+            ? 'stale-generation'
+            : (pendingWsConnect?.controller?.signal?.aborted
+                ? (pendingWsConnect.cancelReason || 'connect-aborted')
+                : ''));
+      if (terminalReason) {
+        terminalBeforeWsActive = true;
+        const close = {
+          attempted: Boolean(openedTransport),
+          closed: false,
+          error: ''
+        };
+        if (openedTransport) {
+          try {
+            openedTransport.close();
+            close.closed = true;
+          } catch (err) {
+            close.error = errorMessage(err);
+          }
+        }
+        postLeaveWsOpenViolation = {
+          connectGeneration,
+          transportGeneration: Number(pendingOpenEvent?.transportGeneration || 0) || null,
+          reason: terminalReason,
+          close
+        };
+        if (pendingWsConnect) pendingWsConnect.phase = 'blocked-after-open';
+        updateTransportLifecycle({
+          generation: connectGeneration,
+          phase: 'blocked-after-open',
+          terminalOpenBlocked: postLeaveWsOpenViolation
+        });
+        log('canary-post-leave-ws-open-violation', postLeaveWsOpenViolation);
+      } else {
+        transport = openedTransport;
+        if (pendingWsConnect) pendingWsConnect.phase = 'active';
+        const generation = Number(pendingOpenEvent?.transportGeneration || 0);
+        if (generation > 0) authoritativeTransportGeneration = generation;
+        wsError = null;
+        wsClosed = null;
+        transportStartedAtMs = now();
+        publishTransportHealth(
+          transportHealthMonitor.setConnected(true, transportStartedAtMs),
+          transportStartedAtMs,
+          { force: true }
+        );
+        if (pendingOpenEvent) {
+          logWs('open', {
+            runtime: pendingOpenEvent.runtime || '',
+            transportGeneration: generation || null
+          });
+        }
+        updateTransportLifecycle({
+          generation: connectGeneration,
+          phase: 'active'
+        });
+        pendingWsConnect = null;
+      }
     }
-    log('canary-ws-open', { durationMs });
-    deadlineAtMs = now() + durationMs;
-    while (now() < deadlineAtMs && !ending && (!result.safety.event || (leavePending && !leavePending.settled))) {
-      const waitMs = Math.min(250, Math.max(0, deadlineAtMs - now()));
-      if (waitMs > 0) await sleep(waitMs);
-      const atMs = now();
-      if (atMs >= deadlineAtMs) break;
-      const frameGapMs = frameHealth.lastFrameAtMs ? atMs - frameHealth.lastFrameAtMs : null;
-      const currentState = stateStore.getDecisionState?.(atMs) || stateStore.getState(atMs);
-      const safetyEvent = safetyController.evaluate(currentState, {
-        startedAtMs: noSelfGuardStartedAtMs(atMs),
-        frameGapMs,
-        frameGapAlertMs,
-        staleSelfMs: config.staleSelfMs,
-        staleSelfConfirmMs: config.staleSelfConfirmMs,
-        noSelfGraceMs: config.noSelfGraceMs,
-        staminaExhaustedBelowMs: config.staminaExhaustedBelowMs,
-        actionSettlementStall: result.actions.movementStall,
-        transportHealth: assessTransportHealth(currentState, atMs),
-        wsError,
-        wsClosed,
-        wsOpen: isWsOpen(transport),
-        lastDecision: result.decisions.last,
-        nowMs: atMs
-      });
-      handleSafetyAssessment(safetyEvent, {
-        state: currentState,
-        decision: result.decisions.last,
-        atMs
-      });
-      assessRestartDrain(currentState, atMs);
-    }
-    if (wsFrameScheduler) {
-      wsFrameScheduler.flush();
-      result.hotPath.frameScheduler = wsFrameScheduler.status();
+    if (transport) {
+      publishTransport(transport);
+      if (!transportStartedAtMs) transportStartedAtMs = now();
+      publishTransportHealth(
+        transportHealthMonitor.setConnected(true, transportStartedAtMs),
+        transportStartedAtMs,
+        { force: true }
+      );
+      if (actionEnabled) {
+        actionAdapter = options.actionAdapter || createBrowserlessActionAdapter({
+          ...runtimeDefaults,
+          transport,
+          now,
+          decisionIntervalMs: config.decisionIntervalMs,
+          commandIntervalMs: config.movementCommandIntervalMs,
+          velocityRepeatEnabled: true,
+          shootRepeatEnabled: true,
+          targetDeadZoneCm: config.movementTargetDeadZoneCm,
+          settlementFrames: config.movementSettlementFrames,
+          movementSettlementStallMs: config.movementSettlementStallMs,
+          movementSettlementMinDistanceCm: config.movementSettlementMinDistanceCm,
+          combatShootMinIntervalMs: config.combatShootMinIntervalMs,
+          onVelocityRequest: request => stateStore.recordVelocityRequest(request),
+          onShootRequest: request => stateStore.recordShootRequest(request)
+        });
+      }
+      log('canary-ws-open', { durationMs });
+      deadlineAtMs = now() + durationMs;
+      while (now() < deadlineAtMs && !ending && (!result.safety.event || (leavePending && !leavePending.settled))) {
+        const waitMs = Math.min(250, Math.max(0, deadlineAtMs - now()));
+        if (waitMs > 0) await sleep(waitMs);
+        const atMs = now();
+        if (atMs >= deadlineAtMs) break;
+        const frameGapMs = frameHealth.lastFrameAtMs ? atMs - frameHealth.lastFrameAtMs : null;
+        const currentState = stateStore.getDecisionState?.(atMs) || stateStore.getState(atMs);
+        const safetyEvent = safetyController.evaluate(currentState, {
+          startedAtMs: noSelfGuardStartedAtMs(atMs),
+          frameGapMs,
+          frameGapAlertMs,
+          staleSelfMs: config.staleSelfMs,
+          staleSelfConfirmMs: config.staleSelfConfirmMs,
+          noSelfGraceMs: config.noSelfGraceMs,
+          staminaExhaustedBelowMs: config.staminaExhaustedBelowMs,
+          actionSettlementStall: result.actions.movementStall,
+          transportHealth: assessTransportHealth(currentState, atMs),
+          wsError,
+          wsClosed,
+          wsOpen: isWsOpen(transport),
+          lastDecision: result.decisions.last,
+          nowMs: atMs
+        });
+        handleSafetyAssessment(safetyEvent, {
+          state: currentState,
+          decision: result.decisions.last,
+          atMs
+        });
+        assessRestartDrain(currentState, atMs);
+      }
+      if (wsFrameScheduler) {
+        wsFrameScheduler.flush();
+        result.hotPath.frameScheduler = wsFrameScheduler.status();
+      }
     }
   } catch (err) {
-    openFailedBeforeTransport = !transport;
-    result.error = err?.message || String(err);
-    log('canary-error', { error: result.error });
+    const cancelledForConfirmedLeave = Boolean(
+      terminalBeforeWsActive
+      || (
+        ending
+        && !transport
+        && (
+          pendingWsConnect?.controller?.signal?.aborted
+          || isWebSocketConnectAbortError(err)
+        )
+      )
+    );
+    if (cancelledForConfirmedLeave) {
+      terminalBeforeWsActive = true;
+      if (pendingWsConnect) pendingWsConnect.phase = 'cancelled';
+      updateTransportLifecycle({
+        generation: pendingWsConnect?.generation || wsConnectGeneration || 0,
+        phase: 'cancelled'
+      });
+      log('canary-ws-connect-cancelled-after-leave', {
+        generation: pendingWsConnect?.generation || null,
+        error: errorMessage(err)
+      });
+    } else {
+      openFailedBeforeTransport = !transport;
+      result.error = err?.message || String(err);
+      log('canary-error', { error: result.error });
+    }
   }
 
   const authOpenFailure = /websocket unexpected response 403|http 403|not logged in/i.test(result.error || '');
@@ -3503,6 +3741,143 @@ async function runReadOnlyCanary(config, options = {}) {
     }
   }
 
+  if (postLeaveWsOpenViolation) {
+    const reassertStartedAtMs = now();
+    const reassertPending = {
+      exitAttemptId: createExitAttemptId(runId, reassertStartedAtMs, exitAttemptSequence++),
+      recoveredFromExitAttemptId: leavePending?.exitAttemptId || '',
+      originalReason: 'post-leave-ws-open',
+      sourceRunId: runId,
+      event: result.safety.event,
+      firstAtMs: reassertStartedAtMs,
+      startedAtMs: reassertStartedAtMs,
+      eventAtMs: reassertStartedAtMs,
+      dispatchedAtMs: reassertStartedAtMs,
+      firstRequestAtMs: 0,
+      hedgeScheduledAtMs: 0,
+      hedgeStartedAtMs: 0,
+      hedgeDispatchDriftMs: null,
+      completedAtMs: 0,
+      frameCount: 0,
+      realtimeFrameCount: 0,
+      coverRecomputeCount: 0,
+      dynamicCoverCount: 0,
+      directionChangeCount: 0,
+      startHp: leavePending?.lastHp ?? leavePending?.minHp ?? null,
+      lastHp: leavePending?.lastHp ?? leavePending?.minHp ?? null,
+      minHp: leavePending?.minHp ?? leavePending?.lastHp ?? null,
+      targetId: leavePending?.targetId || '',
+      httpStatuses: [],
+      requestResultCount: 0,
+      lastCover: null,
+      settled: false,
+      ok: null,
+      error: ''
+    };
+    logExit('post-leave-ws-open-reassert-start', {
+      exitAttemptId: reassertPending.exitAttemptId,
+      recoveredFromExitAttemptId: reassertPending.recoveredFromExitAttemptId,
+      violation: postLeaveWsOpenViolation
+    });
+    let reassertLeave = null;
+    try {
+      reassertLeave = await invokeVerifiedLeave({
+        gameOrigin: config.gameOrigin,
+        userId: config.userId,
+        sessionToken: config.sessionToken,
+        localAddress: config.sourceIp,
+        timeoutMs: config.httpTimeoutMs || 10000,
+        retryMax: config.leaveRetryMax ?? 3,
+        retryDelayMs: config.leaveRetryMs ?? 200,
+        hedgeDelayMs: config.leaveDangerHedgeMs ?? 350,
+        onRequest: request => {
+          const requestAtMs = Number(request?.startedAtMs || now());
+          if (!reassertPending.firstRequestAtMs) reassertPending.firstRequestAtMs = requestAtMs;
+          logExit('leave-request-start', {
+            ...request,
+            exitAttemptId: reassertPending.exitAttemptId,
+            lifecycleReassertion: true
+          });
+        },
+        onResult: attempt => {
+          const status = Number(attempt?.status);
+          if (Number.isFinite(status)) {
+            reassertPending.httpStatuses.push(Math.max(0, Math.round(status)));
+            reassertPending.httpStatuses = reassertPending.httpStatuses.slice(-16);
+          }
+          reassertPending.requestResultCount += 1;
+          logExit('leave-request-result', {
+            ...attempt,
+            exitAttemptId: reassertPending.exitAttemptId,
+            lifecycleReassertion: true
+          });
+        }
+      });
+    } catch (err) {
+      reassertLeave = { ok: false, error: errorMessage(err), attempts: [] };
+    }
+    reassertPending.completedAtMs = now();
+    reassertPending.settled = true;
+    reassertPending.ok = Boolean(reassertLeave?.ok);
+    reassertPending.error = reassertLeave?.ok ? '' : errorMessage(reassertLeave?.error || 'leave not confirmed');
+    if (!reassertPending.httpStatuses.length && Array.isArray(reassertLeave?.attempts)) {
+      reassertPending.httpStatuses = reassertLeave.attempts
+        .map(attempt => Number(attempt?.status))
+        .filter(Number.isFinite)
+        .map(status => Math.max(0, Math.round(status)))
+        .slice(-16);
+    }
+    const reassertSummary = {
+      exitAttemptId: reassertPending.exitAttemptId,
+      recoveredFromExitAttemptId: reassertPending.recoveredFromExitAttemptId,
+      ok: Boolean(reassertLeave?.ok),
+      httpStatuses: reassertPending.httpStatuses,
+      completedAtMs: reassertPending.completedAtMs,
+      error: reassertPending.error
+    };
+    const reassertActiveJoinAudit = activeJoinAuditFromLeave(reassertLeave);
+    const activeJoinAudit = compareActiveJoinAudits(
+      confirmedLeaveActiveJoinAudit,
+      reassertActiveJoinAudit
+    );
+    if (activeJoinAudit) reassertSummary.activeJoinAudit = activeJoinAudit;
+    updateTransportLifecycle({
+      reassertLeave: reassertSummary,
+      activeJoinAudit
+    });
+    logExit('post-leave-ws-open-reassert-finish', reassertSummary);
+    if (activeJoinAudit?.grew) {
+      const detail = {
+        exitAttemptId: reassertPending.exitAttemptId,
+        recoveredFromExitAttemptId: reassertPending.recoveredFromExitAttemptId,
+        ...activeJoinAudit
+      };
+      log('canary-post-leave-active-join-growth', detail);
+      logExit('post-leave-active-join-growth', detail);
+    }
+    result.leave = reassertLeave;
+    if (result.safety.exit) {
+      result.safety.exit = {
+        ...result.safety.exit,
+        ok: Boolean(reassertLeave?.ok),
+        leave: reassertLeave,
+        error: reassertLeave?.ok ? '' : reassertPending.error
+      };
+    }
+    if (reassertLeave?.ok) {
+      emitExitRecoveryOutcome(buildExitRecoveryOutcome(reassertPending, {
+        outcome: 'confirmed-absent',
+        authority: 'HTTP',
+        completedAtMs: reassertPending.completedAtMs
+      }));
+      log('canary-post-leave-ws-open-reasserted', reassertSummary);
+    } else {
+      result.safety.leavePending = publicLeavePending(reassertPending);
+      result.error = `post-leave websocket lifecycle violation: ${reassertPending.error || 'leave not confirmed'}`;
+      log('canary-post-leave-ws-open-reassert-failed', reassertSummary);
+    }
+  }
+
   if (result.safety.event && result.leave?.ok) {
     result.safety.event = attachConfirmedLeaveEvidence(
       result.safety.event,
@@ -3532,8 +3907,9 @@ async function runReadOnlyCanary(config, options = {}) {
   const noSelf = Number(stats.selfPresent.true || 0) <= 0;
   const frameGap = Number(frameHealth.maxFrameGapMs || 0) > frameGapAlertMs;
   const leaveFailed = !result.leave?.ok;
-  if (!result.error && noFrames) result.error = 'no decoded frames received';
-  if (!result.error && noSelf) result.error = 'self not observed in realtime frames';
+  const confirmedAbsentBeforeWsActive = Boolean(terminalBeforeWsActive && result.leave?.ok);
+  if (!result.error && noFrames && !confirmedAbsentBeforeWsActive) result.error = 'no decoded frames received';
+  if (!result.error && noSelf && !confirmedAbsentBeforeWsActive) result.error = 'self not observed in realtime frames';
   if (!result.error && frameGap) result.error = `frame gap exceeded ${frameGapAlertMs}ms`;
   if (leaveFailed && result.leave) {
     const leaveFailure = safetyController.evaluate(null, {

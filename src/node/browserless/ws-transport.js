@@ -86,6 +86,27 @@ function closeReasonText(reason) {
   return String(reason || '');
 }
 
+function createWebSocketConnectAbortError(reason = '') {
+  const detail = reason instanceof Error
+    ? reason.message
+    : (typeof reason === 'string' ? reason : '');
+  const error = new Error(`websocket connect aborted${detail ? `: ${detail}` : ''}`);
+  error.name = 'AbortError';
+  error.code = 'websocket-connect-aborted';
+  return error;
+}
+
+function isWebSocketConnectAbortError(error) {
+  return Boolean(
+    error
+    && (
+      error.code === 'websocket-connect-aborted'
+      || error.name === 'AbortError'
+      || /websocket connect aborted/i.test(error.message || '')
+    )
+  );
+}
+
 function createWebSocket(runtime, wsUrl, options = {}) {
   if (!runtime.supportsOptions) return new runtime.WebSocket(wsUrl);
   return new runtime.WebSocket(wsUrl, [], {
@@ -164,6 +185,10 @@ function openBrowserlessWs(options = {}) {
   const runtime = getWebSocketRuntime(options);
   const wsUrl = options.wsUrl || buildWsUrl(options);
   const connectTimeoutMs = Math.max(1, Number(options.connectTimeoutMs || DEFAULT_CONNECT_TIMEOUT_MS));
+  const signal = options.signal || null;
+  if (signal?.aborted) {
+    return Promise.reject(createWebSocketConnectAbortError(signal.reason));
+  }
   if (typeof options.onConnectStart === 'function') {
     options.onConnectStart({ wsUrl, runtime: runtime.name, localAddress: options.localAddress || '' });
   }
@@ -171,23 +196,63 @@ function openBrowserlessWs(options = {}) {
   const handle = createTransportHandle(ws, runtime, wsUrl, options);
   let opened = false;
   let settled = false;
+  let aborted = false;
+  let timer = null;
+  let abortHandler = null;
   return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      if (timer) clearTimeout(timer);
+      timer = null;
+      if (signal && abortHandler && typeof signal.removeEventListener === 'function') {
+        signal.removeEventListener('abort', abortHandler);
+      }
+    };
     const failOpen = error => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
+      cleanup();
       reject(error);
     };
-    const timer = setTimeout(() => {
+    const abortConnect = () => {
+      if (settled) return;
+      aborted = true;
+      const error = createWebSocketConnectAbortError(signal?.reason);
+      if (typeof options.onConnectAbort === 'function') {
+        options.onConnectAbort({ wsUrl, runtime: runtime.name, error: error.message });
+      }
+      // Settle from the close event (or the original connect timeout), not
+      // immediately. If the upgrade already crossed the cancellation edge,
+      // a late open is then observed, invalidated, and surfaced to the caller
+      // before its await continues.
+      try {
+        handle.close(1000, 'connect-aborted');
+      } catch (_) {
+        failOpen(error);
+      }
+    };
+    timer = setTimeout(() => {
       if (!opened) {
+        failOpen(aborted
+          ? createWebSocketConnectAbortError(signal?.reason)
+          : new Error('websocket connect timeout'));
         try { handle.close(); } catch (_) {}
-        failOpen(new Error('websocket connect timeout'));
       }
     }, connectTimeoutMs);
     addWsHandler(ws, 'open', () => {
+      if (aborted || signal?.aborted || settled) {
+        if (typeof options.onAbortedOpen === 'function' && (aborted || signal?.aborted)) {
+          options.onAbortedOpen({ wsUrl, runtime: runtime.name });
+        }
+        try {
+          handle.close(1000, 'stale-connect');
+        } catch (_) {
+          if (!settled) failOpen(createWebSocketConnectAbortError(signal?.reason));
+        }
+        return;
+      }
       opened = true;
       settled = true;
-      clearTimeout(timer);
+      cleanup();
       if (typeof options.onOpen === 'function') options.onOpen({ wsUrl, runtime: runtime.name });
       resolve(handle);
     });
@@ -218,9 +283,9 @@ function openBrowserlessWs(options = {}) {
     }
     addWsHandler(ws, 'error', event => {
       const message = event?.message || event?.error?.message || String(event || 'websocket error');
-      if (typeof options.onError === 'function') options.onError({ message, event, opened });
-      if (!opened) {
-        failOpen(new Error(message));
+      if (!aborted && typeof options.onError === 'function') options.onError({ message, event, opened });
+      if (!opened && !aborted) {
+        failOpen(aborted ? createWebSocketConnectAbortError(signal?.reason) : new Error(message));
       }
     });
     addWsHandler(ws, 'close', (eventOrCode, reason) => {
@@ -228,10 +293,20 @@ function openBrowserlessWs(options = {}) {
       const textReason = typeof eventOrCode === 'number' ? closeReasonText(reason) : closeReasonText(eventOrCode?.reason);
       const wasClean = typeof eventOrCode === 'number' ? code === 1000 : Boolean(eventOrCode?.wasClean);
       if (typeof options.onClose === 'function') options.onClose({ code, reason: textReason, wasClean });
+      if (!opened && !settled) {
+        failOpen(aborted
+          ? createWebSocketConnectAbortError(signal?.reason)
+          : new Error(`websocket closed before open${code ? ` (${code})` : ''}${textReason ? `: ${textReason}` : ''}`));
+      }
     });
     addWsHandler(ws, 'message', eventOrData => {
       if (typeof options.onMessage === 'function') options.onMessage(eventOrData);
     });
+    if (signal && typeof signal.addEventListener === 'function') {
+      abortHandler = abortConnect;
+      signal.addEventListener('abort', abortHandler, { once: true });
+      if (signal.aborted) abortConnect();
+    }
   });
 }
 
@@ -244,10 +319,12 @@ module.exports = {
   addWsHandler,
   buildWsUrl,
   closeReasonText,
+  createWebSocketConnectAbortError,
   createTransportHandle,
   createWebSocket,
   getWebSocketRuntime,
   isWsOpen,
+  isWebSocketConnectAbortError,
   normalizeChatText,
   openBrowserlessWs,
   resetWebSocketRuntimeForTest,

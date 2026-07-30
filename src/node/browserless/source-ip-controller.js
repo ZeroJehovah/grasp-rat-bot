@@ -12,7 +12,11 @@ const {
   leaveOnce,
   leaveWithVerification
 } = require('./leave-client');
-const { openBrowserlessWs } = require('./ws-transport');
+const {
+  createWebSocketConnectAbortError,
+  isWebSocketConnectAbortError,
+  openBrowserlessWs
+} = require('./ws-transport');
 const {
   readBrowserlessStateFile,
   updateBrowserlessStateFile
@@ -453,9 +457,15 @@ function createSourceIpController(options = {}) {
       const attemptDiagnostics = [];
       const open = options.openBrowserlessWs || openBrowserlessWs;
       const maxAttempts = Math.max(1, candidates.length || 1);
+      const signal = wsOptions.signal || null;
       let lastError = null;
 
       for (let attemptIndex = 0; attemptIndex < maxAttempts; attemptIndex += 1) {
+        if (signal?.aborted) {
+          const error = createWebSocketConnectAbortError(signal.reason);
+          error.attempts = attemptDiagnostics;
+          throw error;
+        }
         if (currentSourceIp && (!sourceIpAvailable(currentSourceIp) || attemptedSourceIps.has(currentSourceIp))) {
           const next = nextAvailableSourceIp(currentSourceIp, attemptedSourceIps);
           if (!next) break;
@@ -479,6 +489,12 @@ function createSourceIpController(options = {}) {
             onConnectStart: event => {
               if (typeof wsOptions.onConnectStart === 'function') wsOptions.onConnectStart(withGeneration(event));
             },
+            onConnectAbort: event => {
+              if (typeof wsOptions.onConnectAbort === 'function') wsOptions.onConnectAbort(withGeneration(event));
+            },
+            onAbortedOpen: event => {
+              if (typeof wsOptions.onAbortedOpen === 'function') wsOptions.onAbortedOpen(withGeneration(event));
+            },
             onOpen: event => {
               opened = true;
               authoritativeTransportGeneration = generation;
@@ -486,6 +502,7 @@ function createSourceIpController(options = {}) {
             },
             onError: event => {
               const decorated = withGeneration(event);
+              if (signal?.aborted) return;
               const forbidden = !opened && (Number(event?.statusCode || 0) === 403 || isForbiddenError(event?.message || ''));
               sawForbidden = sawForbidden || forbidden;
               attemptError = decorated;
@@ -560,6 +577,10 @@ function createSourceIpController(options = {}) {
             status: forbidden ? 403 : Number(attemptError?.statusCode || 0),
             error: err?.message || String(err)
           });
+          if (signal?.aborted || isWebSocketConnectAbortError(err)) {
+            err.attempts = attemptDiagnostics;
+            throw err;
+          }
           if (!forbidden) break;
           const decision = await handleForbidden({
             kind: 'ws',

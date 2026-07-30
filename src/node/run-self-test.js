@@ -48,6 +48,7 @@ const {
 } = require('./browserless/frame-stats');
 const {
   buildWsUrl,
+  isWebSocketConnectAbortError,
   openBrowserlessWs
 } = require('./browserless/ws-transport');
 const {
@@ -5365,6 +5366,7 @@ async function runSelfTest() {
         this.readyState = FakeWebSocket.CONNECTING;
         this.sent = [];
         this.closed = false;
+        this.closeCount = 0;
         this.listeners = {};
         instances.push(this);
       }
@@ -5393,6 +5395,7 @@ async function runSelfTest() {
 
       close(code = 1000, reason = '') {
         this.closed = true;
+        this.closeCount += 1;
         this.readyState = FakeWebSocket.CLOSED;
         this.emit('close', { code, reason, wasClean: code === 1000 });
       }
@@ -5866,6 +5869,277 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'exit-recovery|true|exit-recovery|true|0|0|false|false|1|0|self-present-recovered|confirmed-absent|true|200'
+    },
+    {
+      name: 'browserless pending exit confirmation aborts websocket handshake before active join',
+      got: (async () => {
+        let t = Date.parse('2026-07-30T04:02:46.820Z');
+        let resolveLeave = null;
+        let activeJoinCount = 0;
+        let connectCancelled = false;
+        const logs = [];
+        const pendingExit = pendingExitFromCanary(null, {
+          runId: 'incident-prior-exit',
+          startedAt: new Date(t - 9000).toISOString(),
+          error: 'leave not confirmed',
+          safety: { event: { reason: 'combat-hp-disadvantage-leave', shouldLeave: true, at: new Date(t - 8900).toISOString() } },
+          leave: { ok: false, error: 'HTTP 403', attempts: [{ status: 403 }] }
+        }, t);
+        const result = await runReadOnlyCanary({
+          gameOrigin: 'https://self-test.invalid',
+          userId: 7,
+          sessionToken: 'incident-race-token',
+          readOnly: false,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          readOnlyProbeMs: 1000,
+          wsConnectTimeoutMs: 1000
+        }, {
+          now: () => t,
+          sleep: async ms => { t += Number(ms || 0); },
+          persistedState: { runner: { pendingExit } },
+          logStore: {
+            append: (stream, type, detail) => logs.push({ stream, type, detail }),
+            flush: async () => {}
+          },
+          runPreLoginSnapshotSafety: async () => ({
+            ok: true,
+            reason: 'self-present-reentry',
+            satisfied: true,
+            bypassedPreLoginSafety: true,
+            response: { summary: { selfPresent: true, freshness: { ok: true }, self: { hp: 25 } } }
+          }),
+          leaveWithVerification: async () => new Promise(resolve => { resolveLeave = resolve; }),
+          openBrowserlessWs: options => new Promise((resolve, reject) => {
+            const activeJoin = setImmediate(() => {
+              activeJoinCount += 1;
+              options.onOpen?.({ runtime: 'fake' });
+              resolve({ isOpen: () => true, close: () => {}, sendVelocity: () => {}, sendShoot: () => {} });
+            });
+            options.signal.addEventListener('abort', () => {
+              connectCancelled = true;
+              clearImmediate(activeJoin);
+              const error = new Error('websocket connect aborted: leave-confirmed');
+              error.name = 'AbortError';
+              error.code = 'websocket-connect-aborted';
+              reject(error);
+            }, { once: true });
+            resolveLeave({
+              ok: true,
+              attempts: [{ stage: 'initial', ok: true, status: 200, summary: { leaveConfirmed: true } }]
+            });
+          })
+        });
+        const confirmed = result.recovery.exitOutcomes.find(item => item.outcome === 'confirmed-absent');
+        const close = result.safety.exit?.confirmedControlClose || {};
+        return [
+          result.ok,
+          result.error,
+          result.leave?.ok,
+          connectCancelled,
+          activeJoinCount,
+          close.transportClose?.reason,
+          close.pendingConnectCancel?.attempted,
+          close.pendingConnectCancel?.aborted,
+          result.safety.transportLifecycle.phase,
+          result.decisions.evaluatedCount,
+          result.actions.sentCount,
+          logs.some(item => item.type === 'canary-ws-open'),
+          logs.some(item => item.type === 'canary-ws-connect-cancelled-after-leave'),
+          confirmed?.reloginAllowed
+        ].join('|');
+      })(),
+      want: 'false|combat-hp-disadvantage-leave|true|true|0|missing-transport|true|true|cancelled|0|0|false|true|true'
+    },
+    {
+      name: 'browserless leave confirmation closes an already active transport without pending-connect cancellation',
+      got: (async () => {
+        let t = Date.parse('2026-07-30T04:10:00.000Z');
+        let resolveLeave = null;
+        let leaveResolved = false;
+        let transportOpen = true;
+        let transportCloseCount = 0;
+        const logs = [];
+        const pendingExit = pendingExitFromCanary(null, {
+          runId: 'active-transport-prior-exit',
+          startedAt: new Date(t - 1000).toISOString(),
+          error: 'leave not confirmed',
+          safety: { event: { reason: 'frame-gap', shouldLeave: true, at: new Date(t - 900).toISOString() } },
+          leave: { ok: false, error: 'HTTP 502', attempts: [{ status: 502 }] }
+        }, t);
+        const frame = encodeGrzFrameForTest({
+          type: 'pos',
+          tick: 100,
+          entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 85, max_hp: 100 }],
+          bullets: []
+        });
+        const result = await runReadOnlyCanary({
+          gameOrigin: 'https://self-test.invalid',
+          userId: 7,
+          sessionToken: 'active-transport-token',
+          readOnly: false,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          readOnlyProbeMs: 1000,
+          decisionIntervalMs: 1,
+          frameGapAlertMs: 5000
+        }, {
+          now: () => t,
+          sleep: async ms => {
+            t += Number(ms || 0);
+            if (!leaveResolved && resolveLeave) {
+              leaveResolved = true;
+              resolveLeave({
+                ok: true,
+                attempts: [{ stage: 'initial', ok: true, status: 200, summary: { leaveConfirmed: true } }]
+              });
+              await Promise.resolve();
+            }
+          },
+          persistedState: { runner: { pendingExit } },
+          logStore: {
+            append: (stream, type, detail) => logs.push({ stream, type, detail }),
+            flush: async () => {}
+          },
+          runPreLoginSnapshotSafety: async () => ({
+            ok: true,
+            reason: 'self-present-reentry',
+            satisfied: true,
+            bypassedPreLoginSafety: true,
+            response: { summary: { selfPresent: true, freshness: { ok: true } } }
+          }),
+          leaveWithVerification: async () => new Promise(resolve => { resolveLeave = resolve; }),
+          openBrowserlessWs: async options => {
+            options.onOpen?.({ runtime: 'fake' });
+            options.onMessage(frame);
+            return {
+              isOpen: () => transportOpen,
+              close: () => {
+                transportOpen = false;
+                transportCloseCount += 1;
+              },
+              sendVelocity: () => {},
+              sendShoot: () => {}
+            };
+          }
+        });
+        const close = result.safety.exit?.confirmedControlClose || {};
+        return [
+          result.ok,
+          result.leave?.ok,
+          close.transportClose?.attempted,
+          close.transportClose?.reason,
+          close.pendingConnectCancel?.attempted,
+          close.pendingConnectCancel?.reason,
+          close.actionSeal?.sealed,
+          transportCloseCount,
+          logs.filter(item => item.type === 'canary-ws-open').length,
+          result.decisions.evaluatedCount,
+          result.actions.shootSentCount
+        ].join('|');
+      })(),
+      want: 'false|true|true|leave-confirmed|false|not-pending|true|1|1|0|0'
+    },
+    {
+      name: 'browserless stale websocket open after leave is blocked and independently reasserted',
+      got: (async () => {
+        let t = Date.parse('2026-07-30T04:20:00.000Z');
+        let resolveFirstLeave = null;
+        let leaveCalls = 0;
+        let activeJoinCount = 0;
+        let transportCloseCount = 0;
+        const logs = [];
+        const pendingExit = pendingExitFromCanary(null, {
+          runId: 'stale-open-prior-exit',
+          startedAt: new Date(t - 1000).toISOString(),
+          error: 'leave not confirmed',
+          safety: { event: { reason: 'frame-gap', shouldLeave: true, at: new Date(t - 900).toISOString() } },
+          leave: { ok: false, error: 'HTTP 502', attempts: [{ status: 502 }] }
+        }, t);
+        const result = await runReadOnlyCanary({
+          gameOrigin: 'https://self-test.invalid',
+          userId: 7,
+          sessionToken: 'stale-open-token',
+          readOnly: false,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          readOnlyProbeMs: 1000,
+          wsConnectTimeoutMs: 1000
+        }, {
+          now: () => t,
+          sleep: async ms => { t += Number(ms || 0); },
+          persistedState: { runner: { pendingExit } },
+          logStore: {
+            append: (stream, type, detail) => logs.push({ stream, type, detail }),
+            flush: async () => {}
+          },
+          runPreLoginSnapshotSafety: async () => ({
+            ok: true,
+            reason: 'self-present-reentry',
+            satisfied: true,
+            bypassedPreLoginSafety: true,
+            response: { summary: { selfPresent: true, freshness: { ok: true } } }
+          }),
+          leaveWithVerification: async () => {
+            leaveCalls += 1;
+            if (leaveCalls === 1) return new Promise(resolve => { resolveFirstLeave = resolve; });
+            return {
+              ok: true,
+              attempts: [{
+                stage: 'lifecycle-reassert',
+                ok: true,
+                status: 200,
+                response: { active_join_count: 5, active_join_ticks: [100, 200, 201] },
+                summary: { leaveConfirmed: true }
+              }]
+            };
+          },
+          openBrowserlessWs: async options => {
+            resolveFirstLeave({
+              ok: true,
+              attempts: [{
+                stage: 'initial',
+                ok: true,
+                status: 200,
+                response: { active_join_count: 4, active_join_ticks: [100, 200] },
+                summary: { leaveConfirmed: true }
+              }]
+            });
+            if (!options.signal.aborted) {
+              await new Promise(resolve => options.signal.addEventListener('abort', resolve, { once: true }));
+            }
+            activeJoinCount += 1;
+            options.onOpen?.({ runtime: 'fake' });
+            return {
+              isOpen: () => true,
+              close: () => { transportCloseCount += 1; },
+              sendVelocity: () => {},
+              sendShoot: () => {}
+            };
+          }
+        });
+        const reassertedOutcome = result.recovery.exitOutcomes.find(item => item.originalReason === 'post-leave-ws-open');
+        return [
+          result.ok,
+          result.error,
+          result.leave?.ok,
+          leaveCalls,
+          activeJoinCount,
+          transportCloseCount,
+          result.safety.transportLifecycle.phase,
+          result.safety.transportLifecycle.reassertLeave?.ok,
+          logs.some(item => item.type === 'canary-post-leave-ws-open-violation'),
+          logs.some(item => item.type === 'canary-post-leave-ws-open-reasserted'),
+          result.safety.transportLifecycle.activeJoinAudit?.grew,
+          result.safety.transportLifecycle.activeJoinAudit?.addedTicks.join(','),
+          logs.some(item => item.type === 'canary-post-leave-active-join-growth'),
+          logs.some(item => item.type === 'canary-ws-open'),
+          result.decisions.evaluatedCount,
+          result.actions.sentCount,
+          reassertedOutcome?.reloginAllowed
+        ].join('|');
+      })(),
+      want: 'false|frame-gap|true|2|1|1|blocked-after-open|true|true|true|true|201|true|false|0|0|true'
     },
     {
       name: 'browserless pending exit websocket failure remains exit-only and immediately retryable',
@@ -7109,6 +7383,85 @@ async function runSelfTest() {
         }
       })(),
       want: 'true|1|true'
+    },
+    {
+      name: 'browserless websocket transport rejects an already aborted connect without creating a socket',
+      got: (async () => {
+        const fake = createFakeWebSocketRuntimeForTest();
+        const controller = new AbortController();
+        controller.abort('leave-confirmed');
+        try {
+          await openBrowserlessWs({
+            runtime: fake.runtime,
+            gameOrigin: 'https://grasp-rat-game.h-e.top',
+            userId: 7,
+            sessionToken: 'ws-token',
+            connectTimeoutMs: 1000,
+            signal: controller.signal
+          });
+          return 'opened';
+        } catch (err) {
+          return [
+            isWebSocketConnectAbortError(err),
+            err.name,
+            err.code,
+            fake.instances.length
+          ].join('|');
+        }
+      })(),
+      want: 'true|AbortError|websocket-connect-aborted|0'
+    },
+    {
+      name: 'browserless websocket transport aborts a pending socket and blocks a late open event',
+      got: (async () => {
+        const fake = createFakeWebSocketRuntimeForTest();
+        const controller = new AbortController();
+        let openEvents = 0;
+        let abortedOpenEvents = 0;
+        const openPromise = openBrowserlessWs({
+          runtime: fake.runtime,
+          gameOrigin: 'https://grasp-rat-game.h-e.top',
+          userId: 7,
+          sessionToken: 'ws-token',
+          connectTimeoutMs: 1000,
+          signal: controller.signal,
+          onOpen: () => { openEvents += 1; },
+          onAbortedOpen: () => { abortedOpenEvents += 1; }
+        });
+        const socket = fake.instances[0];
+        socket.close = function closeAfterLateOpen(code = 1000, reason = '') {
+          this.closed = true;
+          this.closeCount += 1;
+          if (this.readyState !== fake.runtime.WebSocket.OPEN) return;
+          this.readyState = fake.runtime.WebSocket.CLOSED;
+          this.emit('close', { code, reason, wasClean: code === 1000 });
+        };
+        let settled = false;
+        const observed = openPromise.then(
+          () => null,
+          err => {
+            settled = true;
+            return err;
+          }
+        );
+        controller.abort('leave-confirmed');
+        await Promise.resolve();
+        const settledBeforeLateOpen = settled;
+        socket.open();
+        const err = await observed;
+        if (!err) {
+          return 'opened';
+        }
+        return [
+          isWebSocketConnectAbortError(err),
+          settledBeforeLateOpen,
+          socket.closeCount,
+          socket.readyState === fake.runtime.WebSocket.CLOSED,
+          openEvents,
+          abortedOpenEvents
+        ].join('|');
+      })(),
+      want: 'true|false|2|true|0|1'
     },
     {
       name: 'browserless websocket transport reports unexpected response details',
@@ -26669,6 +27022,52 @@ async function runSelfTest() {
         ].join('|');
       }),
       want: 'true|10.0.0.101,10.0.0.20,10.0.0.20|10.0.0.20|0|true|10.0.0.101|10.0.0.20|10.0.0.101'
+    },
+    {
+      name: 'browserless source IP controller stops websocket retries when connect is aborted',
+      got: withTempDirForTest(async dir => {
+        const stateFile = path.join(dir, 'state.json');
+        const attempted = [];
+        const businessErrors = [];
+        const abortController = new AbortController();
+        const controller = createSourceIpController({
+          config: {
+            gameOrigin: 'https://grasp-rat-game.h-e.top',
+            sourceIps: ['10.0.0.101', '10.0.0.20'],
+            sourceIp: '10.0.0.101',
+            httpTimeoutMs: 1000
+          },
+          stateFile,
+          now: () => Date.UTC(2026, 6, 30, 4, 0, 0),
+          openBrowserlessWs: options => new Promise((_resolve, reject) => {
+            attempted.push(options.localAddress || '');
+            options.signal.addEventListener('abort', () => {
+              const error = new Error('synthetic connect abort');
+              error.name = 'AbortError';
+              reject(error);
+            }, { once: true });
+            queueMicrotask(() => abortController.abort('leave-confirmed'));
+          })
+        });
+        let error = null;
+        try {
+          await controller.openBrowserlessWs({
+            wsUrl: 'wss://example.test/ws',
+            signal: abortController.signal,
+            onError: event => businessErrors.push(event)
+          });
+        } catch (err) {
+          error = err;
+        }
+        return [
+          isWebSocketConnectAbortError(error),
+          attempted.join(','),
+          controller.currentSourceIp(),
+          businessErrors.length,
+          error?.attempts?.length || 0
+        ].join('|');
+      }),
+      want: 'true|10.0.0.101|10.0.0.101|0|1'
     },
     {
       name: 'browserless source IP controller ignores stale websocket generation events and stale persisted selection',
