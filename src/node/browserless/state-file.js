@@ -2248,6 +2248,14 @@ function reconcileBrowserlessExitKillEvidence(event, evidence = [], options = {}
   const targetId = compactNumber(metrics.targetId ?? target?.userId ?? target?.user_id);
   if (targetId === null) return event;
   const eventAtMs = parseTimeMs(event.at || decision.at || detail.at);
+  const currentTargetHp = compactNumber(
+    combat.exit?.targetHp
+      ?? combat.exit?.target?.hp
+      ?? decision.target?.hp
+      ?? detail.target?.hp
+      ?? combat.target?.hp
+      ?? metrics.lastTargetHp
+  );
   const startedAtMs = compactNumber(metrics.startedAt) || parseTimeMs(combat.startedAt);
   const startedTick = compactNumber(metrics.startedTick);
   const maxAfterExitMs = Math.max(1000, Number(options.maxAfterExitMs || 5000));
@@ -2264,15 +2272,39 @@ function reconcileBrowserlessExitKillEvidence(event, evidence = [], options = {}
     return true;
   }) || null;
   if (!match) return event;
+  const confirmation = {
+    targetUserId: targetId,
+    targetName: compactString(match.name || match.targetName, 80),
+    tick: statsKillTick(match),
+    at: compactString(match.at, 48),
+    source: compactString(match.source || 'self-kill-evidence', 48)
+  };
+  const killAtMs = parseTimeMs(confirmation.at);
+  // A player can respawn/reappear with the same stable user ID before the
+  // canary finishes. Do not let the prior life turn a later full-HP safety
+  // exit into a fabricated victory. Keep the confirmed kill as bounded
+  // history so the panel can render the two phases separately.
+  if (eventAtMs > 0
+    && killAtMs > 0
+    && killAtMs < eventAtMs
+    && currentTargetHp !== null
+    && currentTargetHp > 1) {
+    const separatedEvent = cloneJson(event);
+    delete separatedEvent.killConfirmation;
+    if (separatedEvent.detail && typeof separatedEvent.detail === 'object') {
+      delete separatedEvent.detail.killConfirmation;
+    }
+    return {
+      ...separatedEvent,
+      priorKillConfirmation: {
+        ...confirmation,
+        targetReappearedAt: compactString(event.at || decision.at || detail.at, 48)
+      }
+    };
+  }
   return {
     ...cloneJson(event),
-    killConfirmation: {
-      targetUserId: targetId,
-      targetName: compactString(match.name || match.targetName, 80),
-      tick: statsKillTick(match),
-      at: compactString(match.at, 48),
-      source: compactString(match.source || 'self-kill-evidence', 48)
-    }
+    killConfirmation: confirmation
   };
 }
 
@@ -2313,11 +2345,20 @@ function compactExit(event) {
   const killConfirmation = event.killConfirmation && typeof event.killConfirmation === 'object'
     ? event.killConfirmation
     : (detail.killConfirmation && typeof detail.killConfirmation === 'object' ? detail.killConfirmation : {});
+  const priorKillConfirmation = event.priorKillConfirmation && typeof event.priorKillConfirmation === 'object'
+    ? event.priorKillConfirmation
+    : (detail.priorKillConfirmation && typeof detail.priorKillConfirmation === 'object' ? detail.priorKillConfirmation : {});
   const killTargetId = compactNumber(
     killConfirmation.targetUserId
       ?? killConfirmation.target_user_id
       ?? killConfirmation.targetId
       ?? killConfirmation.userId
+  );
+  const priorKillTargetId = compactNumber(
+    priorKillConfirmation.targetUserId
+      ?? priorKillConfirmation.target_user_id
+      ?? priorKillConfirmation.targetId
+      ?? priorKillConfirmation.userId
   );
   const sourceTargetName = compactString(sourceTarget?.name || sourceTarget?.label, 80);
   const metricsTargetName = compactString(metrics.targetName, 80);
@@ -2357,6 +2398,34 @@ function compactExit(event) {
       && ((metricsTargetId !== null && killTargetId === metricsTargetId)
         || (sourceTargetId !== null && killTargetId === sourceTargetId))
   );
+  const confirmedKillAtMs = confirmedKill ? parseTimeMs(killConfirmation.at) : 0;
+  const priorKillMatchesTarget = Boolean(
+    compactString(priorKillConfirmation.targetReappearedAt, 48)
+      && priorKillTargetId !== null
+      && ((metricsTargetId !== null && priorKillTargetId === metricsTargetId)
+        || (sourceTargetId !== null && priorKillTargetId === sourceTargetId))
+  );
+  const targetHpAtExit = compactNumber(
+    combatExit.targetHp
+      ?? combatExit.target?.hp
+      ?? sourceTarget?.hp
+      ?? combatTarget?.hp
+      ?? metrics.lastTargetHp
+  );
+  // Older persisted exit events already contain `killConfirmation`. Reapply
+  // the same separation at projection time so an upgrade immediately fixes
+  // their presentation without rewriting historical logs.
+  const legacyKillPrecedesReappearance = Boolean(
+    confirmedKill
+      && eventAtMs > 0
+      && confirmedKillAtMs > 0
+      && confirmedKillAtMs < eventAtMs
+      && targetHpAtExit !== null
+      && targetHpAtExit > 1
+  );
+  const targetReappearedAfterKill = priorKillMatchesTarget || legacyKillPrecedesReappearance;
+  const reappearanceKillConfirmation = priorKillMatchesTarget ? priorKillConfirmation : killConfirmation;
+  const terminalConfirmedKill = confirmedKill && !targetReappearedAfterKill;
   const battleMetrics = metricsAssociated ? metrics : {};
   const metricStartedAtMs = compactNumber(battleMetrics.startedAt);
   const combatStartedAtMs = (metricsAssociated || explicitBattleReason || explicitCombatExit)
@@ -2365,14 +2434,15 @@ function compactExit(event) {
   const startedAtMs = metricStartedAtMs !== null && metricStartedAtMs > 0
     ? metricStartedAtMs
     : (combatStartedAtMs > 0 ? combatStartedAtMs : null);
-  const killConfirmedAtMs = confirmedKill ? parseTimeMs(killConfirmation.at) : 0;
-  const endedAtMs = killConfirmedAtMs || compactNumber(battleMetrics.lastObservedAt) || eventAtMs;
+  const endedAtMs = (terminalConfirmedKill ? confirmedKillAtMs : 0)
+    || compactNumber(battleMetrics.lastObservedAt)
+    || eventAtMs;
   const durationMs = ((metricsAssociated || explicitBattleReason || explicitCombatExit) ? compactNumber(combat.durationMs) : null)
     ?? (startedAtMs !== null && endedAtMs > 0 ? Math.max(0, endedAtMs - startedAtMs) : null);
   const selfDamage = metricsAssociated ? compactNumber(battleMetrics.selfDamage) : null;
   const rawTargetDamage = metricsAssociated ? compactNumber(battleMetrics.targetDamage) : null;
   const selfHealing = metricsAssociated ? compactNumber(battleMetrics.selfHealing) : null;
-  const targetHealing = metricsAssociated ? compactNumber(battleMetrics.targetHealing) : null;
+  const rawTargetHealing = metricsAssociated ? compactNumber(battleMetrics.targetHealing) : null;
   const selfHpEnd = metricsAssociated
     ? (compactNumber(battleMetrics.lastSelfHp)
       ?? compactNumber(combatExit.selfHp)
@@ -2385,7 +2455,7 @@ function compactExit(event) {
         : null))
     : null;
   const targetHpEnd = metricsAssociated
-    ? (confirmedKill
+    ? (terminalConfirmedKill
       ? 0
       : (compactNumber(battleMetrics.lastTargetHp)
         ?? (explicitCombatExit ? compactNumber(combatExit.targetHp) : null)))
@@ -2393,12 +2463,16 @@ function compactExit(event) {
   const targetHpStart = metricsAssociated
     ? (compactNumber(battleMetrics.initialTargetHp)
       ?? (targetHpEnd !== null && rawTargetDamage !== null
-        ? targetHpEnd + rawTargetDamage - (targetHealing ?? 0)
+        ? targetHpEnd + rawTargetDamage - (rawTargetHealing ?? 0)
         : null))
     : null;
-  const targetDamage = confirmedKill && targetHpStart !== null
-    ? Math.max(rawTargetDamage ?? 0, targetHpStart + (targetHealing ?? 0))
+  const targetDamage = terminalConfirmedKill && targetHpStart !== null
+    ? Math.max(rawTargetDamage ?? 0, targetHpStart + (rawTargetHealing ?? 0))
     : rawTargetDamage;
+  // A post-kill respawn is not combat healing. The raw metric is retained in
+  // detailed logs, but omitted from the compact exit summary in favor of the
+  // explicit reappearance marker below.
+  const targetHealing = targetReappearedAfterKill ? null : rawTargetHealing;
   const battleTargetSource = metricsAssociated
     ? (metricsMatchCombatTarget ? combatTarget : (metricsMatchSourceTarget ? sourceTarget : null))
       || { userId: metricsTargetId, name: metricsTargetName }
@@ -2508,7 +2582,21 @@ function compactExit(event) {
           estimatedHitRate,
           staminaSpentMs: compactNumber(battleMetrics.totalStaminaSpent),
           engagementId: compactString(battleMetrics.engagementId, 128),
-          killConfirmation: confirmedKill
+          targetReappearedAfterKill,
+          priorKillConfirmation: targetReappearedAfterKill
+            ? {
+                at: compactString(reappearanceKillConfirmation.at, 48),
+                tick: compactNumber(reappearanceKillConfirmation.tick),
+                source: compactString(reappearanceKillConfirmation.source, 48),
+                targetReappearedAt: compactString(
+                  priorKillMatchesTarget
+                    ? priorKillConfirmation.targetReappearedAt
+                    : (at || decision.at || detail.at),
+                  48
+                )
+              }
+            : null,
+          killConfirmation: terminalConfirmedKill
             ? {
                 at: compactString(killConfirmation.at, 48),
                 tick: compactNumber(killConfirmation.tick),

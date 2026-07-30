@@ -953,6 +953,7 @@ function renderBrowserlessWebPanel() {
     function recentBattleOutcomeText(status) {
       const battle = recentBattle(status);
       if (!battle) return '--';
+      if (battle.targetReappearedAfterKill) return '前段已击杀；目标重现后我方主动退出';
       if (battle.outcome === 'victory') return '胜利，目标已被击败';
       if (battle.outcome === 'defeat') return '失败，角色已被击败';
       if (battle.outcome === 'self-left') return '未击杀，我方主动退出';
@@ -977,6 +978,15 @@ function renderBrowserlessWebPanel() {
         if (start !== null && end !== null) return label + ' ' + start + ' → ' + end;
         return '';
       };
+      if (battle.targetReappearedAfterKill) {
+        const targetStart = number(battle.targetHpStart);
+        const targetEnd = number(battle.targetHpEnd);
+        return joinNonBlank([
+          sideText('我方', battle.selfHpStart, battle.selfHpEnd),
+          targetStart === null ? targetName + ' 已在前段被击杀' : targetName + ' ' + targetStart + ' → 0（前段击杀）',
+          targetEnd === null ? '' : targetName + '重现后 ' + targetEnd
+        ]);
+      }
       return joinNonBlank([
         sideText('我方', battle.selfHpStart, battle.selfHpEnd),
         sideText(targetName, battle.targetHpStart, battle.targetHpEnd)
@@ -1004,6 +1014,12 @@ function renderBrowserlessWebPanel() {
       if (!battle) return '--';
       const selfDamage = number(battle.selfDamage);
       const targetDamage = number(battle.targetDamage);
+      if (battle.targetReappearedAfterKill) {
+        return joinNonBlank([
+          selfDamage === null ? '' : '交战窗口承伤 ' + selfDamage,
+          '目标重现，未汇总跨重生对敌伤害'
+        ]);
+      }
       return joinNonBlank([
         selfDamage === null ? '' : '我方承伤 ' + selfDamage,
         targetDamage === null ? '' : '对敌造成 ' + targetDamage
@@ -1016,7 +1032,12 @@ function renderBrowserlessWebPanel() {
       const targetHealing = number(battle.targetHealing);
       return joinNonBlank([
         selfHealing === null || selfHealing <= 0 ? '' : '我方恢复 ' + selfHealing,
-        targetHealing === null || targetHealing <= 0 ? '' : (battle.target?.name || '敌方') + '恢复 ' + targetHealing
+        battle.targetReappearedAfterKill
+          ? (battle.target?.name || '敌方') + '击杀后以满血重现（非恢复）'
+          : '',
+        battle.targetReappearedAfterKill || targetHealing === null || targetHealing <= 0
+          ? ''
+          : (battle.target?.name || '敌方') + '恢复 ' + targetHealing
       ]);
     }
     function recentBattleShootingText(status) {
@@ -1030,7 +1051,7 @@ function renderBrowserlessWebPanel() {
         ? '请求 ' + requestedShots + ' 发 / 确认 ' + acceptedShots + ' 发'
         : (acceptedShots === null ? '' : acceptedShots + ' 发');
       return joinNonBlank([
-        shotText,
+        shotText && battle.targetReappearedAfterKill ? '交战窗口 ' + shotText : shotText,
         hits === null ? '' : hits + ' 中',
         hitRate === null ? '' : '确认命中率 ' + hitRate + '%'
       ]);
@@ -2666,17 +2687,20 @@ function renderBrowserlessWebPanel() {
         addRow(rowsOut, '交战对手', targetLabel(battle.target), true);
         const exitThreat = recentExitThreat(status);
         if (exitThreat) addRow(rowsOut, '退出威胁', targetLabel(exitThreat), true);
+        if (battle.targetReappearedAfterKill && battle.priorKillConfirmation?.at) {
+          addRow(rowsOut, '此前击杀', (battle.target?.name || '目标') + ' / ' + fullStamp(battle.priorKillConfirmation.at));
+        }
         addRow(rowsOut, '战斗结果', recentBattleOutcomeText(status), true);
-        addRow(rowsOut, '战斗时间', recentBattleTimeText(status));
+        addRow(rowsOut, battle.targetReappearedAfterKill ? '交战窗口' : '战斗时间', recentBattleTimeText(status));
         const battleHpText = recentBattleHpText(status);
-        if (battleHpText) addRow(rowsOut, '战斗起止血量', battleHpText);
+        if (battleHpText) addRow(rowsOut, battle.targetReappearedAfterKill ? '分段血量' : '战斗起止血量', battleHpText);
         const injuryHpText = recentInjuryHpText(status);
         if (injuryHpText) addRow(rowsOut, '退出判定受击', injuryHpText);
         const damageText = recentBattleDamageText(status);
-        if (damageText) addRow(rowsOut, '输出承伤', damageText);
+        if (damageText) addRow(rowsOut, battle.targetReappearedAfterKill ? '交战窗口承伤' : '输出承伤', damageText);
         const healingText = recentBattleHealingText(status);
-        if (healingText) addRow(rowsOut, '战斗恢复', healingText);
-        addRow(rowsOut, '射击命中', recentBattleShootingText(status));
+        if (healingText) addRow(rowsOut, battle.targetReappearedAfterKill ? '目标重现' : '战斗恢复', healingText);
+        addRow(rowsOut, battle.targetReappearedAfterKill ? '交战窗口射击' : '射击命中', recentBattleShootingText(status));
       }
       const exitHpText = combatExitHpText(status);
       if (!staminaExhausted && exitHpText && exitHpText !== '--') {

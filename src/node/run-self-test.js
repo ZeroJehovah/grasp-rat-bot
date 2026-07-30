@@ -31385,17 +31385,17 @@ async function runSelfTest() {
           panelScript.includes("'single-coin-bait-hold': '当日时间充裕，动态收益门槛生效，守着 1 金币等待捡币脚本'"),
           panelScript.includes("const exitHpText = combatExitHpText(status);"),
           panelScript.includes("if (exitHpText && exitHpText !== '--') addRow(rowsOut, '退出触发血量', exitHpText)"),
-          panelScript.includes("if (battleHpText) addRow(rowsOut, '战斗起止血量', battleHpText)"),
+          panelScript.includes("if (battleHpText) addRow(rowsOut, battle.targetReappearedAfterKill ? '分段血量' : '战斗起止血量', battleHpText)"),
           panelScript.includes("if (injuryHpText) addRow(rowsOut, '退出判定受击', injuryHpText)"),
           panelScript.includes("if (confirmedHpText) addRow(rowsOut, '离场确认血量', confirmedHpText)"),
           panelScript.includes("return '与 ' + name + ' 交战后受伤'"),
           panelScript.includes("addRow(rowsOut, '交战对手', targetLabel(battle.target), true)"),
           panelScript.includes("addRow(rowsOut, '战斗结果', recentBattleOutcomeText(status), true)"),
-          panelScript.includes("if (damageText) addRow(rowsOut, '输出承伤', damageText)"),
-          panelScript.includes("if (healingText) addRow(rowsOut, '战斗恢复', healingText)"),
+          panelScript.includes("if (damageText) addRow(rowsOut, battle.targetReappearedAfterKill ? '交战窗口承伤' : '输出承伤', damageText)"),
+          panelScript.includes("if (healingText) addRow(rowsOut, battle.targetReappearedAfterKill ? '目标重现' : '战斗恢复', healingText)"),
           panelScript.includes("'请求 ' + requestedShots + ' 发 / 确认 ' + acceptedShots + ' 发'"),
           panelScript.includes("'确认命中率 ' + hitRate + '%'"),
-          panelScript.includes("addRow(rowsOut, '射击命中', recentBattleShootingText(status))"),
+          panelScript.includes("addRow(rowsOut, battle.targetReappearedAfterKill ? '交战窗口射击' : '射击命中', recentBattleShootingText(status))"),
           panelText.indexOf('id="actionDetails"') < panelText.indexOf('id="battlePanel"'),
           panelText.indexOf('id="battlePanel"') < panelText.indexOf('class="stats-grid"')
         ].every(Boolean));
@@ -32052,6 +32052,93 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'victory|mango|0|94|2026-07-17T09:09:43.245Z|1230433|1'
+    },
+    {
+      name: 'browserless same-id reappearance keeps an earlier kill separate from hp exit',
+      got: (() => {
+        const exitAt = '2026-07-29T09:37:53.586Z';
+        const killAt = '2026-07-29T09:37:46.124Z';
+        const rawExit = {
+          at: exitAt,
+          reason: 'combat-hp-disadvantage-leave',
+          shouldLeave: true,
+          detail: {
+            decision: {
+              at: exitAt,
+              target: { userId: 1789, name: 'Beicho', hp: 100 },
+              combat: {
+                target: { userId: 1789, name: 'Beicho', hp: 100 },
+                exit: {
+                  shouldLeave: true,
+                  reason: 'combat-hp-disadvantage-leave',
+                  selfHp: 62,
+                  targetHp: 100,
+                  hpGap: 38,
+                  threshold: 20,
+                  target: { userId: 1789, name: 'Beicho', hp: 100 }
+                },
+                metrics: {
+                  engagementId: '1789:1785317749122',
+                  targetId: '1789',
+                  targetName: 'Beicho',
+                  startedAt: Date.parse('2026-07-29T09:35:49.122Z'),
+                  startedTick: 1262720,
+                  lastObservedAt: Date.parse(exitAt),
+                  initialSelfHp: 68,
+                  lastSelfHp: 62,
+                  initialTargetHp: 55,
+                  lastTargetHp: 100,
+                  minTargetHp: 1,
+                  selfDamage: 6,
+                  targetDamage: 54,
+                  targetHealing: 99,
+                  requestedShots: 208,
+                  acceptedShots: 206,
+                  confirmedHits: 18
+                }
+              }
+            }
+          }
+        };
+        const kill = { type: 'killed', userId: 1789, name: 'Beicho', tick: 1265249, at: killAt };
+        const reconciled = reconcileBrowserlessExitKillEvidence(rawExit, [kill]);
+        const status = buildCompactBrowserlessStatus({ recentExits: [reconciled] }, parseBrowserlessRunnerArgs([], {}));
+        const battle = status.recentExit.battle;
+        const legacyStatus = buildCompactBrowserlessStatus({
+          recentExits: [{
+            ...rawExit,
+            killConfirmation: {
+              targetUserId: 1789,
+              targetName: 'Beicho',
+              tick: 1265249,
+              at: killAt,
+              source: 'snapshot'
+            }
+          }]
+        }, parseBrowserlessRunnerArgs([], {}));
+        const legacyBattle = legacyStatus.recentExit.battle;
+        const panelScript = renderBrowserlessWebPanel().match(/<script>([\s\S]*?)<\/script>/)?.[1] || '';
+        return [
+          Boolean(reconciled.killConfirmation),
+          Boolean(reconciled.priorKillConfirmation),
+          battle.outcome,
+          battle.targetHpEnd,
+          battle.targetDamage,
+          battle.targetHealing === null,
+          battle.targetReappearedAfterKill,
+          battle.priorKillConfirmation.at,
+          battle.endedAt,
+          legacyBattle.outcome,
+          legacyBattle.targetHpEnd,
+          legacyBattle.targetDamage,
+          legacyBattle.targetHealing === null,
+          legacyBattle.targetReappearedAfterKill,
+          panelScript.includes("if (battle.targetReappearedAfterKill) return '前段已击杀；目标重现后我方主动退出';"),
+          panelScript.includes("addRow(rowsOut, '此前击杀'"),
+          panelScript.includes("battle.targetReappearedAfterKill ? '交战窗口' : '战斗时间'")
+        ].join('|');
+      })(),
+      want: 'false|true|self-left|100|54|true|true|2026-07-29T09:37:46.124Z|2026-07-29T09:37:53.586Z|self-left|100|54|true|true|true|true|true'
     },
     {
       name: 'browserless compact pursuit exit rejects stale unrelated combat metrics',
