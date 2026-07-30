@@ -459,6 +459,7 @@ function createSourceIpController(options = {}) {
       const maxAttempts = Math.max(1, candidates.length || 1);
       const signal = wsOptions.signal || null;
       let lastError = null;
+      let connectionFailure = null;
 
       for (let attemptIndex = 0; attemptIndex < maxAttempts; attemptIndex += 1) {
         if (signal?.aborted) {
@@ -581,7 +582,10 @@ function createSourceIpController(options = {}) {
             err.attempts = attemptDiagnostics;
             throw err;
           }
-          if (!forbidden) break;
+          if (!forbidden) {
+            connectionFailure = null;
+            break;
+          }
           const decision = await handleForbidden({
             kind: 'ws',
             url: redactSecrets(wsOptions.wsUrl || ''),
@@ -589,18 +593,29 @@ function createSourceIpController(options = {}) {
             sourceIp,
             generation
           });
+          connectionFailure = decision.probe?.allForbidden
+            ? {
+                type: 'cloudflare-challenge',
+                source: 'ws-403-all-http-probes-403'
+              }
+            : null;
           if (!decision.switched) break;
         }
       }
 
       const error = new Error(lastError?.message || 'websocket source IP attempts exhausted');
       error.attempts = attemptDiagnostics;
+      if (connectionFailure) {
+        error.code = connectionFailure.type;
+        error.connectionFailure = connectionFailure;
+      }
       if (typeof wsOptions.onError === 'function') {
         wsOptions.onError({
           message: error.message,
           opened: false,
           final: true,
-          attempts: attemptDiagnostics
+          attempts: attemptDiagnostics,
+          connectionFailure
         });
       }
       throw error;

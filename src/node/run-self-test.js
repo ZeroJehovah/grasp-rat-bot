@@ -23782,7 +23782,12 @@ async function runSelfTest() {
             }
           }),
           openBrowserlessWs: async () => {
-            throw new Error('websocket unexpected response 403 Forbidden content-type=text/html; charset=utf-8');
+            const error = new Error('websocket unexpected response 403 Forbidden content-type=text/html; charset=utf-8');
+            error.connectionFailure = {
+              type: 'cloudflare-challenge',
+              source: 'ws-403-all-http-probes-403'
+            };
+            throw error;
           },
           leaveWithVerification: async () => {
             leaveCalls += 1;
@@ -23798,10 +23803,12 @@ async function runSelfTest() {
           Boolean(result.leave),
           result.leave?.ok,
           leaveCalls,
-          result.safety.leaveFailure === null
+          result.safety.leaveFailure === null,
+          result.connectionFailure?.type,
+          result.connectionFailure?.source
         ].join('|');
       })(),
-      want: 'false|true|true|self-present-reentry|true|true|true|1|true'
+      want: 'false|true|true|self-present-reentry|true|true|true|1|true|cloudflare-challenge|ws-403-all-http-probes-403'
     },
     {
       name: 'browserless canary opens ws when snapshot self is already present near active login point',
@@ -27246,17 +27253,24 @@ async function runSelfTest() {
       got: (() => {
         const envConfig = parseBrowserlessRunnerArgs([], {
           GRASP_RAT_BROWSERLESS_SOURCE_IP: '10.0.0.101',
-          GRASP_RAT_BROWSERLESS_SOURCE_IPS: '10.0.0.101,10.0.0.145'
+          GRASP_RAT_BROWSERLESS_SOURCE_IPS: '10.0.0.101,10.0.0.145',
+          GRASP_RAT_BROWSERLESS_CLOUDFLARE_CHALLENGE_RETRY_COOLDOWN_MS: '181000'
         });
-        const cliConfig = parseBrowserlessRunnerArgs(['--source-ip', '10.0.0.145', '--source-ips', '10.0.0.145 10.0.0.20'], {});
+        const cliConfig = parseBrowserlessRunnerArgs([
+          '--source-ip', '10.0.0.145',
+          '--source-ips', '10.0.0.145 10.0.0.20',
+          '--cloudflare-challenge-retry-cooldown-ms', '182000'
+        ], {});
         return [
           envConfig.sourceIp,
           envConfig.sourceIps.join(','),
+          envConfig.cloudflareChallengeRetryCooldownMs,
           cliConfig.sourceIp,
-          cliConfig.sourceIps.join(',')
+          cliConfig.sourceIps.join(','),
+          cliConfig.cloudflareChallengeRetryCooldownMs
         ].join('|');
       })(),
-      want: '10.0.0.101|10.0.0.101,10.0.0.145|10.0.0.145|10.0.0.145,10.0.0.20'
+      want: '10.0.0.101|10.0.0.101,10.0.0.145|181000|10.0.0.145|10.0.0.145,10.0.0.20|182000'
     },
     {
       name: 'browserless source IP controller keeps persisted selection',
@@ -27372,6 +27386,52 @@ async function runSelfTest() {
         ].join('|');
       }),
       want: '403|10.0.0.101|false|false'
+    },
+    {
+      name: 'browserless source IP controller keeps IP for ws 403 when another HTTP probe is healthy',
+      got: withTempDirForTest(async dir => {
+        const stateFile = path.join(dir, 'state.json');
+        const opened = [];
+        const businessErrors = [];
+        const controller = createSourceIpController({
+          config: {
+            gameOrigin: 'https://grasp-rat-game.h-e.top',
+            sourceIps: ['10.0.0.101', '10.0.0.20'],
+            sourceIp: '10.0.0.101',
+            httpTimeoutMs: 1000
+          },
+          stateFile,
+          now: () => Date.UTC(2026, 6, 31, 1, 0, 0),
+          fetchWithTimeout: async url => fakeResponseForTest({
+            status: new URL(url).pathname === '/' ? 200 : 403,
+            body: 'probe'
+          }),
+          openBrowserlessWs: async options => {
+            opened.push(options.localAddress || '');
+            options.onError?.({ message: 'unexpected response 403', statusCode: 403, opened: false });
+            throw new Error('unexpected response 403');
+          }
+        });
+        let error = null;
+        try {
+          await controller.openBrowserlessWs({
+            wsUrl: 'wss://example.test/ws',
+            onError: event => businessErrors.push(event)
+          });
+        } catch (err) {
+          error = err;
+        }
+        const state = readBrowserlessStateFile(stateFile);
+        return [
+          opened.join(','),
+          controller.currentSourceIp(),
+          Boolean(state.network.lastSwitch?.switched),
+          state.network.lastProbe?.allForbidden,
+          error?.connectionFailure?.type || '',
+          businessErrors.length
+        ].join('|');
+      }),
+      want: '10.0.0.101|10.0.0.101|false|false||1'
     },
     {
       name: 'browserless source IP controller switches ws 403 before retrying',
@@ -27560,26 +27620,29 @@ async function runSelfTest() {
             throw new Error('unexpected response 403');
           }
         });
-        let attemptCount = 0;
+        let error = null;
         try {
           await controller.openBrowserlessWs({
             wsUrl: 'wss://example.test/ws',
             onError: event => businessErrors.push(event)
           });
         } catch (err) {
-          attemptCount = err.attempts?.length || 0;
+          error = err;
         }
         const state = readBrowserlessStateFile(stateFile);
         return [
           opened.join(','),
-          attemptCount,
+          error?.attempts?.length || 0,
           businessErrors.length,
           businessErrors[0]?.final,
           businessErrors[0]?.attempts?.length,
+          error?.connectionFailure?.type,
+          error?.connectionFailure?.source,
+          businessErrors[0]?.connectionFailure?.type,
           Object.keys(state.network.sourceIpQuarantine || {}).sort().join(',')
         ].join('|');
       }),
-      want: '10.0.0.145,10.0.0.20|2|1|true|2|10.0.0.145,10.0.0.20'
+      want: '10.0.0.145,10.0.0.20|2|1|true|2|cloudflare-challenge|ws-403-all-http-probes-403|cloudflare-challenge|10.0.0.145,10.0.0.20'
     },
     {
       name: 'browserless hedged leave 403 does not trigger source IP switching',
@@ -27779,6 +27842,18 @@ async function runSelfTest() {
             error: 'websocket unexpected response 403'
           }
         }, config);
+        const cloudflareChallenge = browserlessLoopPlan({
+          ok: false,
+          canary: {
+            runId: 'cloudflare-challenge-test',
+            error: 'websocket unexpected response 403',
+            connectionFailure: {
+              type: 'cloudflare-challenge',
+              source: 'ws-403-all-http-probes-403'
+            },
+            safety: { leaveFailure: { reason: 'direct-leave-failed' } }
+          }
+        }, config);
         const auth403SelfPresent = browserlessLoopPlan({
           ok: false,
           canary: {
@@ -27856,6 +27931,11 @@ async function runSelfTest() {
           explicitStop.continue,
           noSelf.continue,
           auth403.continue,
+          cloudflareChallenge.continue,
+          cloudflareChallenge.reason,
+          cloudflareChallenge.delayMs,
+          cloudflareChallenge.explicitDelay,
+          cloudflareChallenge.connectionFailure?.source,
           auth403SelfPresent.continue,
           auth403SelfPresent.reason,
           auth403SelfPresent.delayMs,
@@ -27869,7 +27949,7 @@ async function runSelfTest() {
           connectTimeout.delayMs
         ].join('|');
       })(),
-      want: 'true|1234|true|stamina-budget-coin-leave|1800000|true|stamina-exhausted-leave|600000|true|injury-leave|1234|true|pursuit-leave|1234|true|combat-hp-disadvantage-leave|1234|true|ws-closed|1000|true|action-settlement-stalled|1000|true|false|false|true|ws-closed|1000|false|true|true|true|ws-auth-blocked-self-present|1000|true|60000|true|in-game-snapshot-safety-retry|1000|true|ws-connect-timeout|1000'
+      want: 'true|1234|true|stamina-budget-coin-leave|1800000|true|stamina-exhausted-leave|600000|true|injury-leave|1234|true|pursuit-leave|1234|true|combat-hp-disadvantage-leave|1234|true|ws-closed|1000|true|action-settlement-stalled|1000|true|false|false|true|ws-closed|1000|false|true|true|true|cloudflare-challenge|180000|true|ws-403-all-http-probes-403|true|ws-auth-blocked-self-present|1000|true|60000|true|in-game-snapshot-safety-retry|1000|true|ws-connect-timeout|1000'
     },
     {
       name: 'browserless runner treats combat stall and low-hp recovery threat as normal confirmed exits',

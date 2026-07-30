@@ -146,6 +146,7 @@ function publicConfig(config) {
     leavePrewarmIntervalMs: Number(config.leavePrewarmIntervalMs || 0),
     decisionIntervalMs: Number(config.decisionIntervalMs || 0),
     loopDelayMs: Number(config.loopDelayMs || 0),
+    cloudflareChallengeRetryCooldownMs: Number(config.cloudflareChallengeRetryCooldownMs || 0),
     dailyFirstLoginDelayMs: Number(config.dailyFirstLoginDelayMs || 0),
     loginPointSafetySuccessRequired: Number(config.loginPointSafetySuccessRequired || 0),
     loginPointSafetyProbeIntervalMs: Number(config.loginPointSafetyProbeIntervalMs || 0),
@@ -608,6 +609,7 @@ function buildRunnerErrorCanary(error, config = {}, options = {}) {
     startedAt: new Date(startedAt).toISOString(),
     completedAt: new Date(now()).toISOString(),
     error: message,
+    connectionFailure: error?.connectionFailure || null,
     safety: {
       event: null,
       exit: null,
@@ -940,6 +942,19 @@ function browserlessLoopPlan(result, config = {}) {
   if (!result) return resume('missing-result');
   if (result.reason === 'missing-manual-session') return resume('missing-manual-session');
   if (safetyReason === 'explicit-stop' || safetyReason === 'restart-drain-ready') return stop(safetyReason);
+  if (canary?.connectionFailure?.type === 'cloudflare-challenge') {
+    const cooldownMs = Math.max(1000, Number(config.cloudflareChallengeRetryCooldownMs || 180000));
+    return {
+      continue: true,
+      reason: 'cloudflare-challenge',
+      delayMs: cooldownMs,
+      previousRunId: runId,
+      error,
+      safetyReason,
+      explicitDelay: true,
+      connectionFailure: canary.connectionFailure
+    };
+  }
   if (pendingExit) {
     const nextRetryAtMs = Math.max(0, Number(pendingExit.nextRetryAtMs || 0));
     const retryDelayMs = Math.max(0, nextRetryAtMs - loopNowMs);

@@ -1546,6 +1546,7 @@ async function runReadOnlyCanary(config, options = {}) {
     },
     leave: null,
     targetWhitelist: targetWhitelistSummary,
+    connectionFailure: null,
     error: ''
   };
   let lastDecisionAtMs = 0;
@@ -3742,7 +3743,11 @@ async function runReadOnlyCanary(config, options = {}) {
     } else {
       openFailedBeforeTransport = !transport;
       result.error = err?.message || String(err);
-      log('canary-error', { error: result.error });
+      result.connectionFailure = err?.connectionFailure || null;
+      log('canary-error', {
+        error: result.error,
+        connectionFailure: result.connectionFailure
+      });
     }
   }
 
