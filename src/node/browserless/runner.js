@@ -998,6 +998,8 @@ function browserlessLoopPlan(result, config = {}) {
     'combat-miss-close-timeout-leave',
     'combat-no-damage-generation-limit-leave',
     'recovery-low-hp-active-threat-leave',
+    'recovery-contact-threat-leave',
+    'recovery-contact-no-dodge-budget-leave',
     'dynamic-whitelist-low-hp-contact-leave',
     'dynamic-whitelist-contact-no-dodge-budget-leave',
     'injury-leave',
@@ -5037,6 +5039,7 @@ async function runBrowserlessRunnerSelfTest() {
     const pendingExitRecovery = runPendingExitRecoverySelfTest();
     const combatBattleLog = runCombatBattleLogSelfTest();
     const dynamicWhitelist = await require('./dynamic-whitelist-self-test').runDynamicWhitelistSelfTest();
+    const recoveryContact = require('./recovery-contact-self-test').runRecoveryContactSelfTest();
     const runnerLog = path.join(tmp, 'logs', '2026-07-08', 'runner.jsonl');
     const text = fs.readFileSync(runnerLog, 'utf8');
     return {
@@ -5094,6 +5097,7 @@ async function runBrowserlessRunnerSelfTest() {
         && pendingExitRecovery.ok
         && combatBattleLog.ok
         && dynamicWhitelist.ok
+        && recoveryContact.ok
         && complexCombatMainThreadBudget.battleLogOk
         // Host scheduling/GC timing is diagnostic; functional runner blocks
         // remain release-gating without turning an external pause into a
@@ -5149,6 +5153,7 @@ async function runBrowserlessRunnerSelfTest() {
       pendingExitRecovery,
       combatBattleLog,
       dynamicWhitelist,
+      recoveryContact,
       complexCombatMainThreadBudget,
       logFile: runnerLog
     };

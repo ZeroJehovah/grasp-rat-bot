@@ -109,6 +109,9 @@ const {
   evaluateDynamicWhitelistContactCore
 } = require('../../strategy/dynamic-whitelist-safety');
 const {
+  updateRecoveryContactGuardCore
+} = require('../../strategy/recovery-contact-guard');
+const {
   createBrowserlessDecisionState,
   summarizeBrowserlessDecisionState
 } = require('./decision-state');
@@ -182,7 +185,9 @@ const DANGEROUS_COMBAT_EXIT_REASONS = new Set([
   'continuous-incoming-bullets-leave',
   'rapid-damage-early-leave',
   'dynamic-whitelist-low-hp-contact-leave',
-  'dynamic-whitelist-contact-no-dodge-budget-leave'
+  'dynamic-whitelist-contact-no-dodge-budget-leave',
+  'recovery-contact-threat-leave',
+  'recovery-contact-no-dodge-budget-leave'
 ]);
 const EASY_KILL_ENGAGEMENT_CONTINUATION_ACTIONS = new Set([
   'combat-live',
@@ -6191,6 +6196,68 @@ function buildLowHpRecoveryThreatExitDecision(input, options = {}) {
   };
 }
 
+function buildRecoveryContactGuardDecision(input, stateful = {}, options = {}, incomingAssessment = null) {
+  const result = updateRecoveryContactGuardCore(
+    stateful.recoveryContactGuard,
+    {
+      nowMs: input?.nowMs,
+      observationKey: input?.realtime?.tick ?? input?.nowMs,
+      self: input?.self || null,
+      targets: input?.visibleTargets || [],
+      recovering: Boolean(input?.self && isRecoveringSelf(input.self)),
+      previousAction: stateful.lastDecisionAction || null,
+      realBulletOwnerIds: incomingAssessment?.ownerIds || []
+    },
+    {
+      ...BROWSER_RUNTIME_DEFAULTS,
+      ...options
+    }
+  );
+  stateful.recoveryContactGuard = result.state;
+  const guard = result.decision;
+  if (!guard?.target || !input?.self) return null;
+  const flee = lockedFleeDirectionCore(
+    stateful,
+    input.self,
+    [guard.target],
+    guard.reason,
+    {
+      ...options,
+      nowMs: input.nowMs,
+      dangerRadius: guard.ranges?.releaseRange
+    }
+  );
+  let dx = Number(flee.dx || 0);
+  let dy = Number(flee.dy || 0);
+  if (!dx && !dy) {
+    dx = Math.sign(Number(input.self.x || 0) - Number(guard.target.x || 0)) || 1;
+    dy = Math.sign(Number(input.self.y || 0) - Number(guard.target.y || 0));
+  }
+  const action = {
+    kind: guard.mode === 'leave' ? 'safety-exit' : 'flee',
+    band: 'safety',
+    reason: guard.reason,
+    shouldLeave: guard.mode === 'leave',
+    stopMotion: false,
+    dx,
+    dy,
+    locked: flee.locked,
+    self: summarizeTarget(input.self),
+    target: summarizeTarget(guard.target),
+    threats: [summarizeTarget(guard.target)].filter(Boolean),
+    recovery: recoverySummary(input.self),
+    recoveryContact: {
+      retained: Boolean(guard.retained),
+      evidence: cloneJson(guard.evidence),
+      stamina5s: numberOrNull(guard.stamina5s),
+      minimumDodgeBudgetMs: numberOrNull(guard.minimumDodgeBudgetMs),
+      insufficientDodgeBudget: Boolean(guard.insufficientDodgeBudget),
+      ranges: cloneJson(guard.ranges)
+    }
+  };
+  return attachIncomingCoverToLeaveDecision(action, incomingAssessment);
+}
+
 function buildDynamicWhitelistContactSafetyExitDecision(input, options = {}, incomingAssessment = null) {
   if (!browserlessSafetyExitModeEnabled(options) || !input?.self) return null;
   const contacts = (input.visibleTargets || [])
@@ -8358,6 +8425,12 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
     && !preTargetIncomingSafetyAction.shouldLeave
     ? preTargetIncomingSafetyAction
     : null;
+  const recoveryContactGuardAction = buildRecoveryContactGuardDecision(
+    input,
+    stateful,
+    safetyContextOptions,
+    incomingThreatAssessment
+  );
   const deferCombatExitForDynamicContact = dynamicWhitelistContactSupersedesLowHpExit(
     dynamicWhitelistContactExitAction,
     selectedCombatExitAction
@@ -8381,6 +8454,7 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
     || pursuitLeaveAction
     || lowHpRecoveryThreatExitAction
     || standaloneIncomingDodgeAction
+    || recoveryContactGuardAction
     || (healthyLootPriority && safetyAction?.reason === 'avoid-invulnerable-target'
       ? null
       : safetyAction)
@@ -8429,6 +8503,15 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
       stateful,
       options,
       'dynamic-whitelist-contact'
+    );
+  }
+  if (!dangerousCombatExit) {
+    dangerousCombatExit = rememberDangerousSafetyExitTarget(
+      input,
+      recoveryContactGuardAction,
+      stateful,
+      options,
+      'recovery-contact'
     );
   }
   stageTimings.gates = performance.now() - stageStarted;
@@ -10148,6 +10231,14 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     && !preTargetIncomingSafetyAction.shouldLeave
     ? preTargetIncomingSafetyAction
     : null;
+  const recoveryContactGuardAction = input.self && !realtimeStale
+    ? buildRecoveryContactGuardDecision(
+        input,
+        stateful,
+        safetyContextOptions,
+        incomingThreatAssessment
+      )
+    : null;
   const lowHpRecoveryThreatExitAction = attachIncomingCoverToLeaveDecision(
     input.self && !realtimeStale
       ? buildLowHpRecoveryThreatExitDecision(input, safetyContextOptions)
@@ -10215,6 +10306,15 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       stateful,
       options,
       'dynamic-whitelist-contact'
+    );
+  }
+  if (!dangerousCombatExit) {
+    dangerousCombatExit = rememberDangerousSafetyExitTarget(
+      input,
+      recoveryContactGuardAction,
+      stateful,
+      options,
+      'recovery-contact'
     );
   }
   const pursuitLeaveAction = attachIncomingCoverToLeaveDecision(
@@ -10306,6 +10406,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       && !criticalIncomingExitAction
       && !dynamicWhitelistContactExitAction
       && !standaloneIncomingDodgeAction
+      && !recoveryContactGuardAction
       && !lowHpRecoveryThreatExitAction
       && !longStaminaExhaustedLeaveAction
       && !predictedThreatExitAction
@@ -10389,7 +10490,8 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       candidate(pursuitLeaveAction, 50, 'pursuit-hard-gate', true, { riskScore: 90 }),
       candidate(lowHpRecoveryThreatExitAction, 52, 'low-hp-recovery-threat-hard-gate', true, { riskScore: 100 }),
       candidate(standaloneIncomingDodgeAction, 54, 'incoming-bullet-dodge-hard-gate', true, { riskScore: 100 }),
-      candidate(immediateSafetyAction, 55, 'realtime-safety-hard-gate', true, { riskScore: immediateSafetyAction?.urgent ? 100 : 80 }),
+      candidate(recoveryContactGuardAction, 56, 'recovery-contact-hard-gate', true, { riskScore: 100 }),
+      candidate(immediateSafetyAction, 57, 'realtime-safety-hard-gate', true, { riskScore: immediateSafetyAction?.urgent ? 100 : 80 }),
       candidate(whitelistSafetyCombatAction, 58, 'dynamic-whitelist-safety-combat', combatHardGate, {
         staminaCost: combat.dryRun?.metrics?.totalStaminaSpent,
         riskScore: combat.target?.combatIntent === 'defensive' ? 80 : 60
@@ -10640,7 +10742,8 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       opportunityChoice: outputOpportunityChoice,
       switchLock: outputSwitchLock,
       singleCoinBait: cloneJson(stateful.singleCoinBait || null),
-      outsideCenterIdle: cloneJson(stateful.outsideCenterIdle || null)
+      outsideCenterIdle: cloneJson(stateful.outsideCenterIdle || null),
+      recoveryContactGuard: cloneJson(stateful.recoveryContactGuard || null)
     }
   };
   reconcileEasyKillCombatOutcome(decision, input, options);
@@ -10883,6 +10986,11 @@ function createBrowserlessDecisionAdapter(options = {}) {
       decisionState.opportunityChoice = cloneJson(proposedChoice);
       decisionState.opportunitySwitchLock = cloneJson(plannerState.switchLock || null);
       decisionState.lastDecisionAction = cloneJson(plannerState.lastDecisionAction || decision?.action || null);
+      const currentGuardAt = Number(decisionState.recoveryContactGuard?.observedAt || 0);
+      const plannerGuardAt = Number(plannerState.recoveryContactGuard?.observedAt || 0);
+      if (plannerGuardAt >= currentGuardAt) {
+        decisionState.recoveryContactGuard = cloneJson(plannerState.recoveryContactGuard || null);
+      }
       return true;
     },
     patchState(patch = {}) {
@@ -10937,6 +11045,8 @@ function createBrowserlessDecisionAdapter(options = {}) {
     getRealtimePersistenceState() {
       return {
         finalActionPreemption: decisionState.finalActionPreemption || null,
+        lastDecisionAction: decisionState.lastDecisionAction || null,
+        recoveryContactGuard: decisionState.recoveryContactGuard || null,
         attackHistory: decisionState.attackHistory || [],
         postKillSettlement: decisionState.postKillSettlement || null,
         combatTarget: decisionState.combatTarget || null,
@@ -11018,6 +11128,7 @@ module.exports = {
   buildBrowserlessStrategyInput,
   currentProfitThresholdEligibility,
   buildLowHpRecoveryThreatExitDecision,
+  buildRecoveryContactGuardDecision,
   createBrowserlessDecisionAdapter,
   normalizedProfitOpportunityKey,
   decisionStatePatch,
