@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.29.3';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.30.1';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function mapMarkerKeyCore(kind, primary, fallback = '') {
@@ -2689,9 +2689,9 @@ function renderBrowserlessWebPanel() {
       const rowsOut = [];
       addRow(rowsOut, '退出原因', lastExitReasonText(status, reason), true);
       addRow(rowsOut, '退出时间', fullStamp(offlineStats.lastExitAt), true);
+      const exitThreat = recentExitThreat(status);
       if (battle && !staminaExhausted) {
         addRow(rowsOut, '交战对手', targetLabel(battle.target), true);
-        const exitThreat = recentExitThreat(status);
         if (exitThreat) addRow(rowsOut, '退出威胁', targetLabel(exitThreat), true);
         if (battle.targetReappearedAfterKill && battle.priorKillConfirmation?.at) {
           addRow(rowsOut, '此前击杀', (battle.target?.name || '目标') + ' / ' + fullStamp(battle.priorKillConfirmation.at));
@@ -2700,14 +2700,16 @@ function renderBrowserlessWebPanel() {
         addRow(rowsOut, battle.targetReappearedAfterKill ? '交战窗口' : '战斗时间', recentBattleTimeText(status));
         const battleHpText = recentBattleHpText(status);
         if (battleHpText) addRow(rowsOut, battle.targetReappearedAfterKill ? '分段血量' : '战斗起止血量', battleHpText);
-        const injuryHpText = recentInjuryHpText(status);
-        if (injuryHpText) addRow(rowsOut, '退出判定受击', injuryHpText);
         const damageText = recentBattleDamageText(status);
         if (damageText) addRow(rowsOut, battle.targetReappearedAfterKill ? '交战窗口承伤' : '输出承伤', damageText);
         const healingText = recentBattleHealingText(status);
         if (healingText) addRow(rowsOut, battle.targetReappearedAfterKill ? '目标重现' : '战斗恢复', healingText);
         addRow(rowsOut, battle.targetReappearedAfterKill ? '交战窗口射击' : '射击命中', recentBattleShootingText(status));
+      } else if (exitThreat && !staminaExhausted) {
+        addRow(rowsOut, '退出威胁', targetLabel(exitThreat), true);
       }
+      const injuryHpText = recentInjuryHpText(status);
+      if (!staminaExhausted && injuryHpText) addRow(rowsOut, '退出判定受击', injuryHpText);
       const exitHpText = combatExitHpText(status);
       if (!staminaExhausted && exitHpText && exitHpText !== '--') {
         addRow(rowsOut, hpTriggeredExit(status, reason) ? '退出触发血量' : '退出时血量', exitHpText);

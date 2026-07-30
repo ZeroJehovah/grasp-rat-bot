@@ -31319,7 +31319,7 @@ async function runSelfTest() {
           panelHtml.includes('.transport-metric.muted,.transport-metric.muted .metric-value{color:var(--muted)}')
         ].join('|');
       })(),
-      want: '2026.07.29.3|ok|warn|bad|ok|warn|bad|ok|warn|bad|muted|true|true|true|true|true|true'
+      want: '2026.07.30.1|ok|warn|bad|ok|warn|bad|ok|warn|bad|muted|true|true|true|true|true|true'
     },
     {
       name: 'browserless web panel animates keyed map markers between status refreshes',
@@ -31357,7 +31357,7 @@ async function runSelfTest() {
           /function stopAutoRefresh\(\)\s*\{\s*cancelMapMarkerAnimation\(true\);/.test(panelScript)
         ].join('|');
       })(),
-      want: '2026.07.29.3|coin:0|player:alice||0|0.875|1|97.5|195.0|110|220|true|true|true|true|true|true|true|true|true|true|true'
+      want: '2026.07.30.1|coin:0|player:alice||0|0.875|1|97.5|195.0|110|220|true|true|true|true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless status server adds dynamic whitelist players by name',
@@ -31802,7 +31802,7 @@ async function runSelfTest() {
           panelScript.includes("const exitHpText = combatExitHpText(status);"),
           panelScript.includes("if (exitHpText && exitHpText !== '--') addRow(rowsOut, '退出触发血量', exitHpText)"),
           panelScript.includes("if (battleHpText) addRow(rowsOut, battle.targetReappearedAfterKill ? '分段血量' : '战斗起止血量', battleHpText)"),
-          panelScript.includes("if (injuryHpText) addRow(rowsOut, '退出判定受击', injuryHpText)"),
+          panelScript.includes("if (!staminaExhausted && injuryHpText) addRow(rowsOut, '退出判定受击', injuryHpText)"),
           panelScript.includes("if (confirmedHpText) addRow(rowsOut, '离场确认血量', confirmedHpText)"),
           panelScript.includes("return '与 ' + name + ' 交战后受伤'"),
           panelScript.includes("addRow(rowsOut, '交战对手', targetLabel(battle.target), true)"),
@@ -32296,7 +32296,7 @@ async function runSelfTest() {
             < panelScript.indexOf("if (/combat/i.test(text)) return '正在处理打架';")
         ].join('|');
       })(),
-      want: '2026.07.29.3|true|true|true'
+      want: '2026.07.30.1|true|true|true'
     },
     {
       name: 'browserless restart drain wait explains planned service restart',
@@ -32832,7 +32832,7 @@ async function runSelfTest() {
           !panelScript.includes("setRichText('roleTitleMeta', [{ text: '已离线', className: 'muted' }], 'muted');")
         ].join('|');
       })(),
-      want: '2026.07.29.3|true|true|true|true|true|true'
+      want: '2026.07.30.1|true|true|true|true|true|true'
     },
     {
       name: 'browserless runner self-test passes',

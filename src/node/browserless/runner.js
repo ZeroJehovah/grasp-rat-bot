@@ -4633,6 +4633,39 @@ async function runBrowserlessRunnerSelfTest() {
         battlePresentation: panelAfkPresentationFiring
       }
     }, { nowMs: panelAfkShotAt + 1000 });
+    const panelRetargetPresentationInitial = browserlessBattlePresentation(null, {
+      kind: 'combat-live',
+      band: 'combat',
+      at: '2026-07-30T07:47:54.065Z',
+      action: { kind: 'combat-live', band: 'combat', target: { userId: 37288, distance: 13798 } },
+      input: { self: { userId: 7, x: 14490, y: -2347 } }
+    });
+    const panelRetargetPresentationMoved = browserlessBattlePresentation(panelRetargetPresentationInitial, {
+      kind: 'combat-live',
+      band: 'combat',
+      at: '2026-07-30T07:47:55.080Z',
+      action: { kind: 'combat-live', band: 'combat', target: { userId: 37288, distance: 12703 } },
+      input: { self: { userId: 7, x: 13930, y: -2907 } }
+    });
+    const panelRetargetCompact = buildCompactBrowserlessStatus({
+      session: { userId: 7, sessionToken: 'panel-self-test-token' },
+      runner: { running: true, currentAction: { kind: 'combat-live', target: { userId: 37288, distance: 12703 } } },
+      current: {
+        self: { userId: 7, name: 'self', x: 13930, y: -2907, hp: 100, maxHp: 100 },
+        decision: {
+          kind: 'combat-live',
+          band: 'combat',
+          at: '2026-07-30T07:47:55.080Z',
+          target: { userId: 37288, name: 'new-enemy', distance: 12703 }
+        },
+        combatSummary: {
+          movementDistance: 79246,
+          self: { userId: 7, name: 'self', hp: 100, maxHp: 100 },
+          target: { userId: 37288, name: 'new-enemy', hp: 100, distance: 12703 }
+        },
+        battlePresentation: panelRetargetPresentationMoved
+      }
+    }, { nowMs: Date.parse('2026-07-30T07:47:55.080Z') });
     const panelMismatchedBattleCompact = buildCompactBrowserlessStatus({
       session: { userId: 7, sessionToken: 'panel-self-test-token' },
       runner: { running: true, currentAction: { kind: 'attack', target: { userId: 9, distance: 800 } } },
@@ -4884,6 +4917,7 @@ async function runBrowserlessRunnerSelfTest() {
           && panelAfkPresentationInitial.movementDistance === 0
           && panelAfkPresentationMoved.movementDistance === 500
           && panelAfkBattleCompact.battle.movementDistance === 500
+          && panelRetargetCompact.battle.movementDistance === 792
           && panelAfkBattleCompact.battle.self.moving === true
           && panelAfkBattleCompact.battle.self.firing === true
           && panelMismatchedBattleCompact.battle.movementDistance === null
@@ -4968,6 +5002,7 @@ async function runBrowserlessRunnerSelfTest() {
         battleDistance: panelBattleCompact.battle.distance,
         battleMovementDistance: panelBattleCompact.battle.movementDistance,
         afkBattleMovementDistance: panelAfkBattleCompact.battle.movementDistance,
+        retargetBattleMovementDistance: panelRetargetCompact.battle.movementDistance,
         afkBattleSelfState: {
           moving: panelAfkBattleCompact.battle.self.moving,
           firing: panelAfkBattleCompact.battle.self.firing

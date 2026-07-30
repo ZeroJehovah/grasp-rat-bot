@@ -2016,9 +2016,9 @@ function compactBattleStatus(normalized, game, action, decision, combat, options
     durationMs: compactNumber(combat?.durationMs ?? rawCombat.durationMs),
     distance: compactNumber(synchronizedTarget?.distance ?? target.distance),
     movementDistance: compactNumber(
-      combat?.movementDistance
+      (presentationMatchesTarget ? battlePresentation.movementDistance : null)
+        ?? combat?.movementDistance
         ?? rawCombat.movementDistance
-        ?? (presentationMatchesTarget ? battlePresentation.movementDistance : null)
     ),
     self: selfActor,
     target: targetActor,
