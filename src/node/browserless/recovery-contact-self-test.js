@@ -46,7 +46,7 @@ function state(options = {}) {
     current_join_mode: 'Active',
     firing: options.targetFiring === true,
     stamina_5s_remaining_milli: 10000,
-    drop: 20
+    drop: Number(options.targetDrop ?? 20)
   };
   const bullets = options.withBullet ? [{
     bullet_id: 21,
@@ -101,10 +101,10 @@ function nonZeroDirection(action) {
   return Boolean(Number(action?.dx || 0) || Number(action?.dy || 0));
 }
 
-function confirmOuterGuard(decide, stateful, extra = {}) {
-  decide(state({ nowMs: 1000, tick: 100, targetX: 19000, targetVx: -50, ...extra }), stateful, decisionOptions(1000));
+function confirmLowHpContact(decide, stateful, extra = {}) {
+  decide(state({ nowMs: 1000, tick: 100, hp: 50, targetX: 19000, targetVx: -50, ...extra }), stateful, decisionOptions(1000));
   return decide(
-    state({ nowMs: 1050, tick: 101, targetX: 18800, targetVx: -50, ...extra }),
+    state({ nowMs: 1050, tick: 101, hp: 50, targetX: 18800, targetVx: -50, ...extra }),
     stateful,
     decisionOptions(1050)
   );
@@ -115,23 +115,35 @@ function runRecoveryContactSelfTest() {
 
   {
     const stateful = { lastDecisionAction: recoveryAction() };
-    const decision = confirmOuterGuard(buildBrowserlessDecision, stateful);
-    assert.strictEqual(decision.reason, 'recovery-contact-guard-retreat');
-    assert.strictEqual(decision.action.kind, 'flee');
-    assert.strictEqual(decision.action.shouldLeave, false);
+    const decision = confirmLowHpContact(buildBrowserlessDecision, stateful);
+    assert.strictEqual(decision.reason, 'recovery-low-hp-contact-leave');
+    assert.strictEqual(decision.action.kind, 'safety-exit');
+    assert.strictEqual(decision.action.shouldLeave, true);
     assert.strictEqual(nonZeroDirection(decision.action), true);
-    cases.push('committed-recovery-direct-closing-selects-retreat');
+    assert.strictEqual(decision.action.recoveryContact.evidence.selfHp, 50);
+    assert.strictEqual(decision.action.recoveryContact.evidence.lowHpThreshold, 50);
+    cases.push('low-hp-recovery-direct-closing-leaves-before-contact');
   }
 
   {
-    const decision = buildBrowserlessDecision(
-      state({ nowMs: 1000, tick: 100, targetX: 10000, targetVx: -50, targetFiring: true }),
-      {},
+    const stateful = { lastDecisionAction: recoveryAction() };
+    const outside = buildBrowserlessDecision(
+      state({ nowMs: 1000, tick: 100, hp: 98, targetX: 19600, targetVx: -50 }),
+      stateful,
       decisionOptions(1000)
     );
+    const decision = buildBrowserlessDecision(
+      state({ nowMs: 1050, tick: 101, hp: 98, targetX: 14000, targetVx: -50 }),
+      stateful,
+      decisionOptions(1050)
+    );
+    assert.strictEqual(outside.reason, 'wait-for-full-stamina-and-hp');
+    assert.notStrictEqual(outside.action.kind, 'flee');
     assert.strictEqual(decision.reason, 'combat-live-realtime');
-    assert.notStrictEqual(decision.reason, 'recovery-contact-threat-leave');
-    cases.push('ordinary-combat-without-recovery-commitment-is-unchanged');
+    assert.strictEqual(decision.combat.target.combatIntent, 'recovery-contact');
+    assert.notStrictEqual(decision.reason, 'recovery-low-hp-contact-leave');
+    assert.strictEqual(stateful.recoveryContactGuard, null);
+    cases.push('healthy-recovery-waits-for-attack-range-then-enters-combat');
   }
 
   {
@@ -155,51 +167,60 @@ function runRecoveryContactSelfTest() {
   {
     const stateful = { lastDecisionAction: recoveryAction() };
     buildBrowserlessDecision(
-      state({ nowMs: 1000, tick: 100, targetX: 19000, targetVx: 0, targetVy: 50 }),
+      state({ nowMs: 1000, tick: 100, hp: 50, targetX: 19000, targetVx: 0, targetVy: 50 }),
       stateful,
       decisionOptions(1000)
     );
     const decision = buildBrowserlessDecision(
-      state({ nowMs: 1050, tick: 101, targetX: 19000, targetY: 100, targetVx: 0, targetVy: 50 }),
+      state({ nowMs: 1050, tick: 101, hp: 50, targetX: 19000, targetY: 100, targetVx: 0, targetVy: 50 }),
       stateful,
       decisionOptions(1050)
     );
-    assert.notStrictEqual(decision.reason, 'recovery-contact-guard-retreat');
-    assert.notStrictEqual(decision.reason, 'recovery-contact-threat-leave');
+    assert.notStrictEqual(decision.reason, 'recovery-low-hp-contact-leave');
     assert.strictEqual(Boolean(stateful.recoveryContactGuard?.active), false);
-    cases.push('tangential-active-player-does-not-trigger');
+    cases.push('low-hp-tangential-active-player-does-not-trigger');
   }
 
   {
     const stateful = { lastDecisionAction: recoveryAction() };
-    confirmOuterGuard(buildBrowserlessDecision, stateful);
     const decision = buildBrowserlessDecision(
-      state({ nowMs: 1100, tick: 102, targetX: 14000, targetVx: -50 }),
+      state({ nowMs: 1000, tick: 100, hp: 98, targetX: 14000, targetVx: -50 }),
       stateful,
-      decisionOptions(1100)
+      decisionOptions(1000, {
+        easyKillPlayerTracker: {
+          status: () => ({ players: [{ userId: 8, score: 3 }] })
+        }
+      })
     );
-    assert.strictEqual(decision.reason, 'recovery-contact-threat-leave');
-    assert.strictEqual(decision.action.shouldLeave, true);
-    assert.strictEqual(nonZeroDirection(decision.action), true);
-    cases.push('confirmed-contact-entering-attack-range-leaves-with-cover');
+    assert.strictEqual(decision.reason, 'combat-live-realtime');
+    assert.strictEqual(decision.combat.target.userId, 8);
+    assert.strictEqual(decision.combat.target.easyKillProfitTarget, true);
+    cases.push('healthy-recovery-allows-selected-easy-kill-into-combat');
   }
 
   {
     const stateful = { lastDecisionAction: recoveryAction() };
-    buildBrowserlessDecision(
-      state({ nowMs: 1000, tick: 100, targetX: 19000, targetVx: -50, stamina5s: 3000 }),
-      stateful,
-      decisionOptions(1000)
-    );
     const decision = buildBrowserlessDecision(
-      state({ nowMs: 1050, tick: 101, targetX: 18800, targetVx: -50, stamina5s: 3000 }),
+      state({ nowMs: 1000, tick: 100, hp: 98, targetX: 6800, targetVx: -50, targetDrop: 1 }),
       stateful,
-      decisionOptions(1050)
+      decisionOptions(1000, {
+        dynamicWhitelistMemberUserIds: [8],
+        dynamicWhitelistEnabledUserIds: [8]
+      })
     );
-    assert.strictEqual(decision.reason, 'recovery-contact-no-dodge-budget-leave');
+    assert.strictEqual(decision.reason, 'combat-live-realtime');
+    assert.strictEqual(decision.combat.target.combatIntent, 'whitelist-proximity');
+    assert.strictEqual(decision.combat.target.whitelistContactPolicy.proactiveCombatEligible, true);
+    cases.push('healthy-recovery-allows-dynamic-whitelist-proximity-combat');
+  }
+
+  {
+    const stateful = { lastDecisionAction: recoveryAction() };
+    const decision = confirmLowHpContact(buildBrowserlessDecision, stateful, { stamina5s: 3000 });
+    assert.strictEqual(decision.reason, 'recovery-low-hp-contact-leave');
     assert.strictEqual(decision.action.shouldLeave, true);
     assert.strictEqual(nonZeroDirection(decision.action), true);
-    cases.push('confirmed-contact-without-dodge-budget-leaves');
+    cases.push('low-hp-contact-leave-does-not-depend-on-dodge-budget');
   }
 
   {
@@ -215,20 +236,23 @@ function runRecoveryContactSelfTest() {
   }
 
   {
-    const stateful = { lastDecisionAction: recoveryAction() };
-    confirmOuterGuard(buildBrowserlessDecision, stateful);
+    const stateful = {
+      lastDecisionAction: recoveryAction(),
+      recoveryContactGuard: { armedByRecovery: true, active: true, targetId: '8', observedAt: 1000 }
+    };
     const decision = buildBrowserlessDecision(
-      state({ nowMs: 1100, tick: 102, hp: 100, targetX: 18800, targetVx: -50 }),
+      state({ nowMs: 1100, tick: 102, hp: 98, targetX: 18800, targetVx: -50 }),
       stateful,
       decisionOptions(1100)
     );
-    assert.notStrictEqual(decision.reason, 'recovery-contact-guard-retreat');
+    assert.notStrictEqual(decision.reason, 'recovery-low-hp-contact-leave');
     assert.strictEqual(stateful.recoveryContactGuard, null);
-    cases.push('full-hp-releases-recovery-contact-guard');
+    cases.push('healthy-recovery-clears-legacy-contact-guard-state');
   }
 
   {
-    const self = state().realtime.self;
+    const healthySelf = state().realtime.self;
+    const lowHpSelf = { ...healthySelf, hp: 50 };
     const target = {
       user_id: 8,
       name: 'ordinary-active',
@@ -240,10 +264,18 @@ function runRecoveryContactSelfTest() {
       active: true,
       authority: 'realtime'
     };
+    const healthy = updateRecoveryContactGuardCore(null, {
+      nowMs: 1000,
+      observationKey: 100,
+      self: healthySelf,
+      targets: [target],
+      recovering: true,
+      previousAction: recoveryAction()
+    });
     const first = updateRecoveryContactGuardCore(null, {
       nowMs: 1000,
       observationKey: 100,
-      self,
+      self: lowHpSelf,
       targets: [target],
       recovering: true,
       previousAction: recoveryAction()
@@ -251,100 +283,25 @@ function runRecoveryContactSelfTest() {
     const confirmed = updateRecoveryContactGuardCore(first.state, {
       nowMs: 1050,
       observationKey: 101,
-      self,
+      self: lowHpSelf,
       targets: [{ ...target, x: 18800, distance: 18800 }],
       recovering: true,
       previousAction: recoveryAction()
     });
-    const missingOnce = updateRecoveryContactGuardCore(confirmed.state, {
-      nowMs: 1100,
-      observationKey: 102,
-      self,
-      targets: [],
-      recovering: true,
-      previousAction: recoveryAction()
-    });
-    const released = updateRecoveryContactGuardCore(missingOnce.state, {
-      nowMs: 2600,
-      observationKey: 103,
-      self,
-      targets: [],
-      recovering: true,
-      previousAction: recoveryAction()
-    });
-    assert.strictEqual(missingOnce.decision.reason, 'recovery-contact-guard-retreat');
-    assert.strictEqual(missingOnce.decision.retained, true);
-    assert.strictEqual(released.decision, null);
-    assert.strictEqual(released.state, null);
-    cases.push('missing-target-hysteresis-retains-then-releases');
-  }
-
-  {
-    const self = state().realtime.self;
-    const target = {
-      user_id: 8,
-      x: 19000,
-      y: 0,
-      vx: -50,
-      vy: 0,
-      distance: 19000,
-      active: true,
-      authority: 'realtime'
-    };
-    const first = updateRecoveryContactGuardCore(null, {
-      nowMs: 1000,
-      observationKey: 100,
-      self,
-      targets: [target],
-      recovering: true,
-      previousAction: recoveryAction()
-    });
-    const confirmed = updateRecoveryContactGuardCore(first.state, {
-      nowMs: 1050,
-      observationKey: 101,
-      self,
-      targets: [{ ...target, x: 18800, distance: 18800 }],
-      recovering: true,
-      previousAction: recoveryAction()
-    });
-    const outsideOnce = updateRecoveryContactGuardCore(confirmed.state, {
-      nowMs: 1100,
-      observationKey: 102,
-      self,
-      targets: [{ ...target, x: 22000, distance: 22000 }],
-      recovering: true,
-      previousAction: recoveryAction()
-    });
-    const duplicate = updateRecoveryContactGuardCore(outsideOnce.state, {
-      nowMs: 1200,
-      observationKey: 102,
-      self,
-      targets: [{ ...target, x: 22000, distance: 22000 }],
-      recovering: true,
-      previousAction: recoveryAction()
-    });
-    const released = updateRecoveryContactGuardCore(duplicate.state, {
-      nowMs: 2600,
-      observationKey: 103,
-      self,
-      targets: [{ ...target, x: 22000, distance: 22000 }],
-      recovering: true,
-      previousAction: recoveryAction()
-    });
-    assert.strictEqual(outsideOnce.state.clearConfirmations, 1);
-    assert.strictEqual(duplicate.state.clearConfirmations, 1);
-    assert.strictEqual(duplicate.decision.reason, 'recovery-contact-guard-retreat');
-    assert.strictEqual(released.state, null);
-    cases.push('release-radius-needs-two-fresh-clear-observations');
+    assert.strictEqual(healthy.reason, 'healthy-recovery-contact-no-guard');
+    assert.strictEqual(healthy.state, null);
+    assert.strictEqual(first.decision, null);
+    assert.strictEqual(confirmed.decision.reason, 'recovery-low-hp-contact-leave');
+    cases.push('core-only-arms-low-hp-recovery-contact');
   }
 
   {
     const fullState = { lastDecisionAction: recoveryAction() };
     const realtimeState = { lastDecisionAction: recoveryAction() };
-    const full = confirmOuterGuard(buildBrowserlessDecision, fullState);
-    const realtime = confirmOuterGuard(buildBrowserlessRealtimeControlDecision, realtimeState);
-    assert.strictEqual(full.reason, 'recovery-contact-guard-retreat');
-    assert.strictEqual(realtime.reason, 'recovery-contact-guard-retreat');
+    const full = confirmLowHpContact(buildBrowserlessDecision, fullState);
+    const realtime = confirmLowHpContact(buildBrowserlessRealtimeControlDecision, realtimeState);
+    assert.strictEqual(full.reason, 'recovery-low-hp-contact-leave');
+    assert.strictEqual(realtime.reason, 'recovery-low-hp-contact-leave');
     assert.deepStrictEqual(
       { kind: full.action.kind, shouldLeave: full.action.shouldLeave },
       { kind: realtime.action.kind, shouldLeave: realtime.action.shouldLeave }

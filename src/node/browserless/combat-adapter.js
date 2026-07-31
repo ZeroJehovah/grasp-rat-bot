@@ -36,6 +36,7 @@ const {
   updateCombatProbePhaseCore
 } = require('../../strategy/combat-fire-discipline');
 const { COMBAT_CONSTANTS } = require('../../strategy/combat-constants');
+const { previousActionWasRecoveryCore } = require('../../strategy/recovery-contact-guard');
 const {
   evaluateCombatExchangeStopLossCore,
   evaluateConfirmedCombatHpExitCore,
@@ -2580,6 +2581,13 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
       ?? self?.stamina5sRemainingMilli
       ?? self?.stamina5s
   );
+  const selfHp = hpValue(self);
+  const configuredLowHpThreshold = numberOrNull(
+    options.combatLowHpLeaveThreshold
+      ?? options.combatLowHpThreshold
+      ?? options.lowHpThreshold
+  );
+  const lowHpThreshold = Math.max(0, configuredLowHpThreshold ?? COMBAT_CONSTANTS.LOW_HP_THRESHOLD);
   const configuredWhitelistCheck = typeof options.whitelistCheck === 'function'
     ? options.whitelistCheck
     : null;
@@ -2593,8 +2601,14 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     easyKillPreferredTargetId: options.easyKillPreferredTargetId,
     recoveringSelf: Boolean(
       self
-        && hpValue(self) !== null
-        && hpValue(self) < (numberOrNull(self.max_hp ?? self.maxHp) ?? 100)
+        && selfHp !== null
+        && selfHp < (numberOrNull(self.max_hp ?? self.maxHp) ?? 100)
+    ),
+    lowHpSelf: selfHp !== null && selfHp <= lowHpThreshold,
+    healthyRecoveryCombat: Boolean(
+      selfHp !== null
+        && selfHp > lowHpThreshold
+        && previousActionWasRecoveryCore(stateful?.lastDecisionAction)
     ),
     selfStamina5s,
     proactiveActiveCombatMinimumStamina5s: Number(
@@ -2655,7 +2669,10 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     ? defensiveTarget
     : (engagedTarget
         || (defensiveTarget?.combatIntent === 'defensive' ? defensiveTarget : null)
-        || (preferredEasyTarget ? { ...preferredEasyTarget, combatIntent: 'profit' } : null)
+        || (preferredEasyTarget ? {
+          ...preferredEasyTarget,
+          combatIntent: context.healthyRecoveryCombat === true ? 'recovery-contact' : 'profit'
+        } : null)
         || defensiveTarget);
   const afkCommitmentBlocksProactiveCombat = Boolean(
     afkProfitCommitment

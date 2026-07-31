@@ -61,7 +61,7 @@ function isPreferredEasyKillTarget(entity, context = {}) {
 function easyKillThreatExempt(entity, context = {}) {
   if (entity?.easyKillThreatExempt !== true) return false;
   if (!isPreferredEasyKillTarget(entity, context)) return true;
-  return context.recoveringSelf === true;
+  return context.lowHpSelf === true;
 }
 
 function combatTargetId(entity) {
@@ -344,7 +344,7 @@ function isCombatEligibleThreat(entity, options = {}) {
 
   // A recently killed player stays outside ordinary defensive combat until it
   // has actually damaged self. A deliberately selected easy-kill profit target
-  // may still be fought while healthy, but it cannot take over HP recovery.
+  // may still be fought while health is above the ordinary low-HP exit line.
   if (easyKillThreatExempt(entity, options)) return false;
 
   if (incomingOwnerMatchesTarget(entity, options) || recentInjury) return true;
@@ -353,6 +353,7 @@ function isCombatEligibleThreat(entity, options = {}) {
   // and ordinary Passive/AFK profit. Moving or Drop value alone should not make
   // a Passive target a combat target; those belong to profit arbitration.
   if (isActiveCombatMode(entity)) {
+    if (options.healthyRecoveryCombat === true) return true;
     return activeCombatRequiresThreatEvidence(entity, options)
       ? combatTargetThreatensSelf(entity, options)
       : true;
@@ -509,7 +510,9 @@ function selectBestCombatTarget(self, candidates, context = {}) {
       ? 'defensive'
       : (scored[0].target?.whitelistContactPolicy?.proactiveCombatEligible === true
           ? 'whitelist-proximity'
-          : 'profit')
+          : (context.healthyRecoveryCombat === true && isActiveCombatMode(scored[0].target)
+              ? 'recovery-contact'
+              : 'profit'))
   };
 }
 

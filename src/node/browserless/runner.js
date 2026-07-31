@@ -1014,6 +1014,7 @@ function browserlessLoopPlan(result, config = {}) {
     'combat-miss-close-timeout-leave',
     'combat-no-damage-generation-limit-leave',
     'recovery-low-hp-active-threat-leave',
+    'recovery-low-hp-contact-leave',
     'recovery-contact-threat-leave',
     'recovery-contact-no-dodge-budget-leave',
     'dynamic-whitelist-low-hp-contact-leave',

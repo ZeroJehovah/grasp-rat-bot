@@ -1,14 +1,12 @@
 'use strict';
 
+const { COMBAT_CONSTANTS } = require('./combat-constants');
+
 const DEFAULT_ATTACK_RANGE_CM = 14500;
 const DEFAULT_GUARD_BUFFER_CM = 5000;
-const DEFAULT_RELEASE_BUFFER_CM = 2000;
 const DEFAULT_CONFIRMATIONS = 2;
-const DEFAULT_CLEAR_CONFIRMATIONS = 2;
-const DEFAULT_HOLD_MS = 1500;
 const DEFAULT_MINIMUM_CLOSING_SPEED = 20;
 const DEFAULT_MINIMUM_CLOSING_ALIGNMENT = 0.65;
-const DEFAULT_MINIMUM_DODGE_BUDGET_MS = 3800;
 
 function numberOrNull(value) {
   if (value === null || value === undefined || value === '') return null;
@@ -105,26 +103,25 @@ function recoveryContactRanges(options = {}) {
     options.recoveryContactGuardBufferCm
       ?? DEFAULT_GUARD_BUFFER_CM
   ));
-  const releaseBuffer = Math.max(0, Number(
-    options.recoveryContactReleaseBufferCm
-      ?? DEFAULT_RELEASE_BUFFER_CM
-  ));
   return {
     attackRange,
     guardBuffer,
-    guardRange: attackRange + guardBuffer,
-    releaseBuffer,
-    releaseRange: attackRange + guardBuffer + releaseBuffer
+    guardRange: attackRange + guardBuffer
   };
 }
 
-function selfStamina5s(self) {
-  return numberOrNull(
-    self?.stamina_5s_remaining_milli
-      ?? self?.stamina5sRemainingMilli
-      ?? self?.stamina5s
-      ?? self?.stamina_5s
+function selfHp(self) {
+  return numberOrNull(self?.hp ?? self?.knownHp ?? self?.displayHp);
+}
+
+function recoveryContactLowHpThreshold(options = {}) {
+  const configured = numberOrNull(
+    options.recoveryContactLowHpThreshold
+      ?? options.combatLowHpLeaveThreshold
+      ?? options.combatLowHpThreshold
+      ?? options.lowHpThreshold
   );
+  return Math.max(0, configured ?? COMBAT_CONSTANTS.LOW_HP_THRESHOLD);
 }
 
 function updateRecoveryContactGuardCore(previousState, context = {}, options = {}) {
@@ -137,6 +134,14 @@ function updateRecoveryContactGuardCore(previousState, context = {}, options = {
   const recoveryCommitted = previousActionWasRecoveryCore(context.previousAction);
   if (!previous?.armedByRecovery && !recoveryCommitted) {
     return { state: null, decision: null, reason: 'recovery-not-committed' };
+  }
+  const currentHp = selfHp(self);
+  const lowHpThreshold = recoveryContactLowHpThreshold(options);
+  if (currentHp === null) {
+    return { state: null, decision: null, reason: 'missing-self-hp' };
+  }
+  if (currentHp > lowHpThreshold) {
+    return { state: null, decision: null, reason: 'healthy-recovery-contact-no-guard' };
   }
 
   const ranges = recoveryContactRanges(options);
@@ -157,44 +162,10 @@ function updateRecoveryContactGuardCore(previousState, context = {}, options = {
 
   const lockedId = String(previous?.targetId || '');
   let selected = lockedId
-    ? targets.find(item => item.id === lockedId && item.distance <= ranges.releaseRange) || null
+    ? targets.find(item => item.id === lockedId && item.distance <= ranges.guardRange) || null
     : null;
-  if (!selected && lockedId) {
-    selected = targets.find(item => (
-      item.distance <= ranges.guardRange
-        && (item.firing || item.realBullet || item.distance <= ranges.attackRange)
-    )) || null;
-  }
-  if (!selected && !lockedId) {
+  if (!selected) {
     selected = targets.find(item => item.distance <= ranges.guardRange) || null;
-  }
-
-  const holdMs = Math.max(0, Number(options.recoveryContactHoldMs ?? DEFAULT_HOLD_MS));
-  const clearRequired = Math.max(1, Number(
-    options.recoveryContactClearConfirmations
-      ?? DEFAULT_CLEAR_CONFIRMATIONS
-  ));
-  if (!selected && previous?.active) {
-    const observationKey = context.observationKey ?? nowMs;
-    const freshObservation = observationKey !== previous.lastObservationKey;
-    const clearConfirmations = Number(previous.clearConfirmations || 0) + (freshObservation ? 1 : 0);
-    const holdComplete = nowMs >= Number(previous.holdUntil || 0);
-    if (clearConfirmations >= clearRequired && holdComplete) {
-      return { state: null, decision: null, reason: 'threat-missing-confirmed' };
-    }
-    const retainedState = { ...previous, clearConfirmations, lastObservationKey: observationKey };
-    return {
-      state: retainedState,
-      decision: {
-        mode: 'retreat',
-        reason: 'recovery-contact-guard-retreat',
-        target: previous.lastTarget || null,
-        retained: true,
-        evidence: previous.evidence || null,
-        ranges
-      },
-      reason: 'threat-missing-hysteresis'
-    };
   }
   if (!selected) {
     return { state: null, decision: null, reason: 'no-recovery-contact' };
@@ -237,7 +208,9 @@ function updateRecoveryContactGuardCore(previousState, context = {}, options = {
     closingSpeed: closing.closingSpeed,
     closingAlignment: closing.closingAlignment,
     closingConfirmations,
-    confirmationsRequired
+    confirmationsRequired,
+    selfHp: currentHp,
+    lowHpThreshold
   };
   const nextState = {
     armedByRecovery: true,
@@ -248,46 +221,30 @@ function updateRecoveryContactGuardCore(previousState, context = {}, options = {
     distance: selected.distance,
     lastTarget: targetSnapshot(selected.target, selected.distance),
     closingConfirmations,
-    clearConfirmations: 0,
     confirmedAt: confirmed ? Number(previous?.confirmedAt || nowMs) : 0,
-    holdUntil: confirmed ? Math.max(Number(previous?.holdUntil || 0), nowMs + holdMs) : 0,
     evidence
   };
   if (!confirmed) {
     return { state: nextState, decision: null, reason: ordinaryEvidence ? 'closing-confirmation-pending' : 'no-hostile-approach' };
   }
 
-  const stamina5s = selfStamina5s(self);
-  const minimumDodgeBudgetMs = Math.max(0, Number(
-    options.recoveryContactMinimumDodgeBudgetMs
-      ?? options.combatShootDodgeReserveMs
-      ?? DEFAULT_MINIMUM_DODGE_BUDGET_MS
-  ));
-  const insufficientDodgeBudget = stamina5s !== null && stamina5s < minimumDodgeBudgetMs;
-  const shouldLeave = inRange || selected.firing || selected.realBullet || insufficientDodgeBudget;
   return {
     state: nextState,
     decision: {
-      mode: shouldLeave ? 'leave' : 'retreat',
-      reason: shouldLeave
-        ? (insufficientDodgeBudget && !inRange && !selected.firing && !selected.realBullet
-            ? 'recovery-contact-no-dodge-budget-leave'
-            : 'recovery-contact-threat-leave')
-        : 'recovery-contact-guard-retreat',
+      mode: 'leave',
+      reason: 'recovery-low-hp-contact-leave',
       target: selected.target,
-      retained: previous?.active === true,
+      retained: false,
       evidence,
-      stamina5s,
-      minimumDodgeBudgetMs,
-      insufficientDodgeBudget,
       ranges
     },
-    reason: shouldLeave ? 'confirmed-contact-leave' : 'confirmed-contact-retreat'
+    reason: 'confirmed-low-hp-contact-leave'
   };
 }
 
 module.exports = {
   previousActionWasRecoveryCore,
   recoveryContactRanges,
+  recoveryContactLowHpThreshold,
   updateRecoveryContactGuardCore
 };

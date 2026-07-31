@@ -1097,6 +1097,7 @@ function renderBrowserlessWebPanel() {
       'pursuit-leave': '被危险玩家持续追击，主动退出',
       'profit-live-snapshot-active-threat': '附近玩家有活动威胁证据，退出',
       'recovery-low-hp-active-threat-leave': '恢复时活动玩家进入攻击射程外的血量安全预警区，主动退出',
+      'recovery-low-hp-contact-leave': '低血量恢复时，活动玩家持续逼近，主动退出',
       'recovery-contact-guard-retreat': '回血时发现活动玩家持续逼近，保持闪避储备并撤离接触区',
       'recovery-contact-threat-leave': '回血时逼近玩家进入攻击范围或已开火，主动退出',
       'recovery-contact-no-dodge-budget-leave': '回血时玩家持续逼近且闪避体力不足，主动退出',

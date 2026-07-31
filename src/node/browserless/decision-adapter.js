@@ -187,6 +187,7 @@ const DANGEROUS_COMBAT_EXIT_REASONS = new Set([
   'rapid-damage-early-leave',
   'dynamic-whitelist-low-hp-contact-leave',
   'dynamic-whitelist-contact-no-dodge-budget-leave',
+  'recovery-low-hp-contact-leave',
   'recovery-contact-threat-leave',
   'recovery-contact-no-dodge-budget-leave'
 ]);
@@ -6049,6 +6050,8 @@ function buildRecoveryContactGuardDecision(input, stateful = {}, options = {}, i
     recoveryContact: {
       retained: Boolean(guard.retained),
       evidence: cloneJson(guard.evidence),
+      selfHp: numberOrNull(guard.evidence?.selfHp),
+      lowHpThreshold: numberOrNull(guard.evidence?.lowHpThreshold),
       stamina5s: numberOrNull(guard.stamina5s),
       minimumDodgeBudgetMs: numberOrNull(guard.minimumDodgeBudgetMs),
       insufficientDodgeBudget: Boolean(guard.insufficientDodgeBudget),
@@ -8607,6 +8610,7 @@ function isCombatActionEligibleForDecision(combatDecision, options = {}) {
   if (options.controlMode !== 'profit-live') return true;
   if (target.combatEngagement) return true;
   if (target.combatIntent === 'defensive') return true;
+  if (target.combatIntent === 'recovery-contact') return true;
   if (target.combatIntent === 'whitelist-proximity') return true;
   return Boolean(target.active || target.firing);
 }
@@ -9131,6 +9135,7 @@ function combatDecisionIsOrdinaryProfitPursuit(combatDecision, input, stateful =
   const combatState = stateful?.combatTarget || null;
   const intent = String(target.combatIntent || combatState?.intent || '');
   const originIntent = String(combatState?.originIntent || combatState?.intent || intent || '');
+  if (intent === 'recovery-contact' || originIntent === 'recovery-contact') return false;
   if (proactiveCombatDefensiveRiskAssessment(combatDecision, input, stateful).defensive) return false;
   if (intent === 'profit' || intent === 'engaged' || intent === 'reengage') return true;
   if (originIntent === 'profit' || originIntent === 'engaged' || originIntent === 'reengage') return true;
@@ -10293,6 +10298,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     const combatHardGate = Boolean(combatAction && (
       closePressureCombat
       || combat.target?.combatIntent === 'defensive'
+      || combat.target?.combatIntent === 'recovery-contact'
       || combat.target?.firing
       || targetHasRealBulletPressure(input, combat.target, stateful.combatTarget)
     ));
