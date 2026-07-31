@@ -265,6 +265,9 @@ function normalizeBrowserlessState(state, file = '') {
   );
   normalized.recentExits = Array.isArray(normalized.recentExits) ? normalized.recentExits.slice(-20) : [];
   normalized.stats = normalizeBrowserlessStats(normalized.stats, state?.stats);
+  delete normalized.network.lastProbe;
+  delete normalized.network.lastSwitch;
+  delete normalized.network.sourceIpQuarantine;
   normalized.network.sourceIp = String(normalized.network.sourceIp || '');
   normalized.network.sourceIps = Array.isArray(normalized.network.sourceIps)
     ? normalized.network.sourceIps.map(item => String(item || '').trim()).filter(Boolean)

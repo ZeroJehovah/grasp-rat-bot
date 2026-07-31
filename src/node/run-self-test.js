@@ -31899,6 +31899,40 @@ async function runSelfTest() {
       want: 'stop|true|true|true|1|stop|true|true|wait|wait|true|true|snapshot-fallback-blocked:snapshot-fallback-disabled|0|true'
     },
     {
+      name: 'browserless state file removes retired network probe and source-ip switching fields',
+      got: withTempDirForTest(async dir => {
+        const config = parseBrowserlessRunnerArgs(['--data-dir', dir], {});
+        const file = stateFilePath(config);
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, JSON.stringify({
+          network: {
+            sourceIp: '10.0.0.101',
+            lastProbe: { at: '2026-07-31T02:27:07.012Z', allForbidden: true },
+            lastSwitch: { at: '2026-07-31T02:27:07.060Z', switched: false },
+            sourceIpQuarantine: { '10.0.0.101': { failureCount: 4 } }
+          }
+        }));
+        const readState = readBrowserlessStateFile(file);
+        updateBrowserlessStateFile(file, {
+          network: { lastSelectionReason: 'migration-test' }
+        }, { updatedAt: '2026-07-31T12:00:00.000Z' });
+        const writtenNetwork = JSON.parse(fs.readFileSync(file, 'utf8')).network;
+        const stored = readBrowserlessStateFile(file);
+        const has = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
+        return [
+          has(readState.network, 'lastProbe'),
+          has(readState.network, 'lastSwitch'),
+          has(readState.network, 'sourceIpQuarantine'),
+          has(writtenNetwork, 'lastProbe'),
+          has(writtenNetwork, 'lastSwitch'),
+          has(writtenNetwork, 'sourceIpQuarantine'),
+          stored.network.sourceIp,
+          stored.network.lastSelectionReason
+        ].join('|');
+      }),
+      want: 'false|false|false|false|false|false|10.0.0.101|migration-test'
+    },
+    {
       name: 'browserless status server gates status and redacts payload',
       got: (async () => {
         let stopCalled = 0;
