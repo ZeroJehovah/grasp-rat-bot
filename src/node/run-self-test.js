@@ -27969,6 +27969,104 @@ async function runSelfTest() {
       want: 'true|2|0|10.0.0.101|true|200:true,403:false'
     },
     {
+      name: 'browserless leave switches IP after a full current-IP failure and confirms on the next IP',
+      got: withTempDirForTest(async dir => {
+        const stateFile = path.join(dir, 'state.json');
+        const requests = [];
+        const switches = [];
+        const controller = createSourceIpController({
+          config: {
+            gameOrigin: 'https://grasp-rat-game.h-e.top',
+            sourceIp: '10.0.0.101',
+            sourceIps: ['10.0.0.101', '10.0.0.145', '10.0.0.20']
+          },
+          stateFile,
+          now: () => Date.UTC(2026, 7, 1, 1, 0, 0),
+          logStore: {
+            append: (_stream, type, detail) => {
+              if (type === 'leave-source-ip-switch') switches.push(detail);
+            }
+          },
+        });
+        const result = await controller.leaveWithVerification({
+          gameOrigin: 'https://grasp-rat-game.h-e.top',
+          userId: 7,
+          sessionToken: 'test-token',
+          retryMax: 0,
+          hedgeDelayMs: 0,
+          fetchImpl: async (_url, options = {}) => {
+            requests.push(options.localAddress || '');
+            const ok = options.localAddress === '10.0.0.145';
+            return fakeResponseForTest({
+              status: ok ? 200 : 502,
+              body: ok
+                ? { ok: true, event: 'left', joined: 'UserRecordOnly', current_join_mode: 'None' }
+                : { ok: false, error: 'temporary leave failure' }
+            });
+          }
+        });
+        const state = readBrowserlessStateFile(stateFile);
+        return [
+          result.ok,
+          requests.join(','),
+          result.attempts.length,
+          switches.length,
+          switches.map(item => `${item.from}>${item.to}`).join(','),
+          controller.currentSourceIp(),
+          state.network.lastSelectionReason
+        ].join('|');
+      }),
+      want: 'true|10.0.0.101,10.0.0.145|2|1|10.0.0.101>10.0.0.145|10.0.0.145|leave-failed-source-ip-switch'
+    },
+    {
+      name: 'browserless leave caps source IP switching at two attempts',
+      got: withTempDirForTest(async dir => {
+        const stateFile = path.join(dir, 'state.json');
+        const requests = [];
+        const switches = [];
+        const controller = createSourceIpController({
+          config: {
+            gameOrigin: 'https://grasp-rat-game.h-e.top',
+            sourceIp: '10.0.0.101',
+            sourceIps: ['10.0.0.101', '10.0.0.145', '10.0.0.20', '10.0.0.233']
+          },
+          stateFile,
+          now: () => Date.UTC(2026, 7, 1, 1, 1, 0),
+          logStore: {
+            append: (_stream, type, detail) => {
+              if (type === 'leave-source-ip-switch') switches.push(detail);
+            }
+          },
+        });
+        const result = await controller.leaveWithVerification({
+          gameOrigin: 'https://grasp-rat-game.h-e.top',
+          userId: 7,
+          sessionToken: 'test-token',
+          retryMax: 0,
+          hedgeDelayMs: 0,
+          fetchImpl: async (_url, options = {}) => {
+            requests.push(options.localAddress || '');
+            return fakeResponseForTest({
+              status: 502,
+              body: { ok: false, error: 'leave unavailable' }
+            });
+          }
+        });
+        const state = readBrowserlessStateFile(stateFile);
+        return [
+          result.ok,
+          requests.join(','),
+          result.attempts.length,
+          switches.length,
+          switches.map(item => `${item.from}>${item.to}`).join(','),
+          controller.currentSourceIp(),
+          state.network.sourceIp,
+          state.network.lastSelectionReason
+        ].join('|');
+      }),
+      want: 'false|10.0.0.101,10.0.0.145,10.0.0.20|3|2|10.0.0.101>10.0.0.145,10.0.0.145>10.0.0.20|10.0.0.20|10.0.0.20|leave-failed-source-ip-switch'
+    },
+    {
       name: 'browserless runner loop plan retries non-explicit failures',
       got: (() => {
         const config = { once: false, loopDelayMs: 1234 };

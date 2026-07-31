@@ -24,6 +24,8 @@ const {
   detectCloudflareChallenge
 } = require('./cloudflare-challenge');
 
+const MAX_LEAVE_SOURCE_IP_SWITCHES = 2;
+
 function splitSourceIpList(value) {
   if (Array.isArray(value)) return uniqueStrings(value);
   return uniqueStrings(String(value || '')
@@ -202,6 +204,36 @@ function createSourceIpController(options = {}) {
     }
     return response;
   }
+
+  const nextLeaveSourceIp = triedSourceIps => {
+    if (!candidates.length) return '';
+    const currentIndex = candidates.indexOf(currentSourceIp);
+    const startIndex = currentIndex >= 0 ? currentIndex : -1;
+    for (let offset = 1; offset <= candidates.length; offset += 1) {
+      const candidate = candidates[(startIndex + offset) % candidates.length];
+      if (candidate && !triedSourceIps.has(candidate)) return candidate;
+    }
+    return '';
+  };
+
+  const switchSourceIpForLeave = (nextSourceIp, switchCount) => {
+    const previousSourceIp = currentSourceIp;
+    currentSourceIp = nextSourceIp;
+    selectionGeneration += 1;
+    selectedAtMs = now();
+    applyCurrentToConfig();
+    persist({
+      lastSelectedAt: new Date(selectedAtMs).toISOString(),
+      lastSelectionReason: 'leave-failed-source-ip-switch'
+    });
+    log('leave-source-ip-switch', {
+      from: previousSourceIp,
+      to: nextSourceIp,
+      reason: 'leave-not-confirmed',
+      switchCount,
+      maxSwitches: MAX_LEAVE_SOURCE_IP_SWITCHES
+    });
+  };
 
   return {
     currentSourceIp() {
@@ -409,16 +441,60 @@ function createSourceIpController(options = {}) {
         localAddress: currentSourceIp || undefined
       });
     },
-    leaveWithVerification(leaveOptions = {}) {
-      return (options.leaveWithVerification || leaveWithVerification)({
-        ...leaveOptions,
-        localAddress: currentSourceIp || undefined
-      });
+    async leaveWithVerification(leaveOptions = {}) {
+      const leave = options.leaveWithVerification || leaveWithVerification;
+      const onRequest = leaveOptions.onRequest;
+      const onResult = leaveOptions.onResult;
+      const triedSourceIps = new Set();
+      const attempts = [];
+      let switchCount = 0;
+      let result = null;
+
+      while (true) {
+        const sourceIp = currentSourceIp;
+        if (sourceIp) triedSourceIps.add(sourceIp);
+        const attemptOptions = {
+          ...leaveOptions,
+          localAddress: sourceIp || undefined
+        };
+        if (typeof onRequest === 'function') {
+          attemptOptions.onRequest = request => onRequest({
+            ...request,
+            sourceIp,
+            sourceIpSwitchCount: switchCount
+          });
+        }
+        if (typeof onResult === 'function') {
+          attemptOptions.onResult = attempt => onResult({
+            ...attempt,
+            sourceIp,
+            sourceIpSwitchCount: switchCount
+          });
+        }
+        result = await leave(attemptOptions);
+        const sourceAttempts = Array.isArray(result?.attempts)
+          ? result.attempts.map(attempt => ({
+              ...attempt,
+              sourceIp,
+              sourceIpSwitchCount: switchCount
+            }))
+          : [];
+        attempts.push(...sourceAttempts);
+        if (result?.ok || switchCount >= MAX_LEAVE_SOURCE_IP_SWITCHES) {
+          return { ...(result || { ok: false }), attempts };
+        }
+        const nextSourceIp = nextLeaveSourceIp(triedSourceIps);
+        if (!nextSourceIp) return { ...(result || { ok: false }), attempts };
+        switchCount += 1;
+        triedSourceIps.add(nextSourceIp);
+        switchSourceIpForLeave(nextSourceIp, switchCount);
+      }
     }
   };
 }
 
 module.exports = {
+  MAX_LEAVE_SOURCE_IP_SWITCHES,
   chooseInitialSourceIp,
   createSourceIpController,
   discoverLocalSourceIps,
