@@ -4746,10 +4746,6 @@ function replayLeaveTail(options) {
           && item.attributableEvidence
           && nearbyContainsTarget(row.decision, item.target)
       );
-      const rapidDamage = recentDamage >= 6
-        && recentDamageWindowMs > 0
-        && recentDamageWindowMs <= 1000
-        && attributableIncoming;
       let reason = '';
       let source = '';
       if (prediction?.shouldLeave) {
@@ -4757,9 +4753,6 @@ function replayLeaveTail(options) {
         source = 'predicted-leave-hp';
       } else if ((recovering || !combatEstablished) && attributableIncoming && bulletCount >= 2) {
         reason = 'continuous-incoming-bullets-leave';
-        source = 'event-confirmed-bullet-owner';
-      } else if ((recovering || !combatEstablished) && rapidDamage) {
-        reason = 'rapid-damage-early-leave';
         source = 'event-confirmed-bullet-owner';
       } else if ((recovering || !combatEstablished) && attributableIncoming) {
         reason = 'incoming-bullet-early-leave';

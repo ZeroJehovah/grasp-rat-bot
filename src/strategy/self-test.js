@@ -1495,13 +1495,13 @@ function runStrategyModuleSelfTests() {
       && exhausted?.responsePolicy?.maximumCadenceMs === 160
   });
 
-  const exchangeFirst = evaluateCombatExchangeStopLossCore({
+  const shortExchangeFirst = evaluateCombatExchangeStopLossCore({
     nowMs: 10000,
     engagedMs: 10000,
     acceptedShots: 12,
     damageObservations: 5,
-    selfHp: 60,
-    targetHp: 80,
+    selfHp: 82,
+    targetHp: 94,
     windowMs: 10000,
     windowSelfDamage: 18,
     windowTargetDamage: 3,
@@ -1509,19 +1509,19 @@ function runStrategyModuleSelfTests() {
     longWindowTargetDamage: 3,
     recentTargetDamage: 0
   });
-  const exchangeConfirmed = evaluateCombatExchangeStopLossCore({
+  const shortExchangeLater = evaluateCombatExchangeStopLossCore({
     nowMs: 13000,
     engagedMs: 13000,
     acceptedShots: 16,
     damageObservations: 6,
-    selfHp: 55,
-    targetHp: 79,
+    selfHp: 79,
+    targetHp: 91,
     windowMs: 10000,
     windowSelfDamage: 21,
     windowTargetDamage: 4,
     longWindowSelfDamage: 21,
     longWindowTargetDamage: 4,
-    degradationSinceAt: exchangeFirst.degradationSinceAt
+    degradationSinceAt: shortExchangeFirst.degradationSinceAt
   });
   const protectedFinish = evaluateCombatExchangeStopLossCore({
     nowMs: 13000,
@@ -1535,10 +1535,11 @@ function runStrategyModuleSelfTests() {
     recentTargetDamage: 3
   });
   results.push({
-    name: 'combat-exchange-stop-loss-confirms-degradation-but-protects-low-hp-finish',
-    passed: exchangeFirst.active === true
-      && exchangeFirst.triggered === false
-      && exchangeConfirmed.triggered === true
+    name: 'combat-exchange-does-not-forecast-from-short-window-hp-velocity',
+    passed: shortExchangeFirst.active === false
+      && shortExchangeFirst.triggered === false
+      && shortExchangeLater.active === false
+      && shortExchangeLater.triggered === false
       && protectedFinish.lowHpFinishProtected === true
       && protectedFinish.triggered === false
   });
@@ -5408,17 +5409,17 @@ function runStrategyModuleSelfTests() {
     commandDelayMs: 250
   });
   results.push({
-    name: 'combat-exit-predicts-leave-window-damage-with-two-hit-uncertainty-and-latched-rate',
+    name: 'combat-exit-uses-only-current-unavoidable-collision-damage',
     passed: predictedCritical.shouldLeave === true
       && predictedCritical.windowMs === 1250
       && predictedCritical.predictedDamage === 3
       && predictedCritical.riskAdjustedHp === 12
-      && predictedRateLoss.shouldLeave === true
-      && predictedRateLoss.predictedDamage >= 56
+      && predictedRateLoss.shouldLeave === false
+      && predictedRateLoss.predictedDamage === 0
+      && predictedRateLoss.predictionBasis === 'realtime-unavoidable-collision'
       && predictedSafe.shouldLeave === false
-      && predictedLatchedRateLoss.shouldLeave === true
-      && predictedLatchedRateLoss.sampleDamageRateHpPerSecond === 0
-      && predictedLatchedRateLoss.damageRateHpPerSecond === 15
+      && predictedLatchedRateLoss.shouldLeave === false
+      && predictedLatchedRateLoss.predictedDamage === 0
       && predictedPressureBoundary.shouldLeave === true
       && predictedPressureBoundary.riskAdjustedHp === 20
   });

@@ -18848,7 +18848,7 @@ async function runSelfTest() {
       want: 'safety-exit|combat-critical-hp-leave|true|critical-hp|30'
     },
     {
-      name: 'browserless predicted leave retains peak damage rate across a short firing lull',
+      name: 'browserless healthy combat ignores short-term damage rate',
       got: (() => {
         const buildStateful = peakAt => ({
           lastDecisionAction: { kind: 'combat-live', band: 'combat', reason: 'combat-live-realtime' },
@@ -18865,7 +18865,10 @@ async function runSelfTest() {
             at: 2900,
             damageRatePeakHpPerSecond: 15,
             damageRatePeakAt: peakAt,
-            hpSamples: [{ at: 2900, tick: 61, hp: 44 }],
+            hpSamples: [
+              { at: 1790, tick: 60, hp: 94 },
+              { at: 2900, tick: 61, hp: 82 }
+            ],
             prediction: { damageRateHpPerSecond: 15 }
           }
         });
@@ -18874,10 +18877,10 @@ async function runSelfTest() {
           realtime: {
             tick: 62,
             frameAgeMs: 0,
-            self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 44, stamina_5s_remaining_milli: 10000 },
+            self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 82, stamina_5s_remaining_milli: 10000 },
             entities: [
-              { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 44, stamina_5s_remaining_milli: 10000 },
-              { entity_id: 2, user_id: 8, name: 'active', x: 5000, y: 0, hp: 40, current_join_mode: 'Active', firing: false, drop: 12 }
+              { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 82, stamina_5s_remaining_milli: 10000 },
+              { entity_id: 2, user_id: 8, name: 'mango', x: 5000, y: 0, hp: 46, current_join_mode: 'Active', firing: false, drop: 34 }
             ],
             bullets: [],
             coinDrops: []
@@ -18902,17 +18905,19 @@ async function runSelfTest() {
         return [
           retained.kind,
           retained.reason,
+          retained.action?.shouldLeave === true,
           retainedState.browserlessLeaveRisk.recentDamage,
           retainedState.browserlessLeaveRisk.sampleDamageRateHpPerSecond,
           retainedState.browserlessLeaveRisk.damageRatePeakHpPerSecond,
-          retainedState.browserlessLeaveRisk.prediction.damageRateHpPerSecond,
+          retainedState.browserlessLeaveRisk.prediction.predictedDamage,
           retainedState.browserlessLeaveRisk.prediction.riskAdjustedHp,
           expired.kind,
           expired.reason,
+          expired.action?.shouldLeave === true,
           expiredState.browserlessLeaveRisk.damageRatePeakHpPerSecond
         ].join('|');
       })(),
-      want: 'safety-exit|combat-predicted-leave-hp|0|0|15|15|19.2|recover|wait-for-full-stamina-and-hp|0'
+      want: 'recover|wait-for-full-stamina-and-hp|false|12|9.9|15|0|76|recover|wait-for-full-stamina-and-hp|false|0'
     },
     {
       name: 'browserless profit live critical hp exits on out-of-range firing threat',

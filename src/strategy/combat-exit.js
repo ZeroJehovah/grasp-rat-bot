@@ -113,17 +113,9 @@ function evaluatePredictedLeaveHpCore(input = {}, options = {}) {
   const unavoidableHits = Math.max(0, Math.round(numberOrNull(input.unavoidableHits) ?? 0));
   const collisionHits = Math.max(directHits, unavoidableHits);
   const collisionDamage = collisionHits * damagePerHit;
-  const recentDamage = Math.max(0, numberOrNull(input.recentDamage) ?? 0);
-  const recentDamageWindowMs = Math.max(0, numberOrNull(input.recentDamageWindowMs) ?? 0);
-  const sampleDamageRateHpPerMs = recentDamage > 0 && recentDamageWindowMs >= 100
-    ? recentDamage / recentDamageWindowMs
-    : 0;
-  const latchedDamageRateHpPerMs = Math.max(0, numberOrNull(input.latchedDamageRateHpPerSecond) ?? 0) / 1000;
-  const damageRateHpPerMs = Math.max(sampleDamageRateHpPerMs, latchedDamageRateHpPerMs);
-  const rateDamage = damageRateHpPerMs > 0
-    ? Math.ceil(damageRateHpPerMs * windowMs * 10) / 10
-    : 0;
-  const predictedDamage = Math.min(selfHp, Math.max(collisionDamage, rateDamage));
+  // Recent HP deltas and damage rates are diagnostics only. They are not a
+  // reliable basis for extrapolating a healthy established fight into leave.
+  const predictedDamage = Math.min(selfHp, collisionDamage);
   const uncertaintyDamage = Math.max(0, firstConfiguredNumber(options, [
     'leavePredictionUncertaintyDamage',
     'combatLeavePredictionUncertaintyDamage'
@@ -144,19 +136,14 @@ function evaluatePredictedLeaveHpCore(input = {}, options = {}) {
     rule: shouldLeave ? 'predicted-survival-margin' : 'predicted-survivable',
     reason: shouldLeave ? 'combat-predicted-leave-hp' : 'combat-predicted-hp-acceptable',
     selfHp,
+    predictionBasis: 'realtime-unavoidable-collision',
     predictedHp: Math.round(predictedHp * 10) / 10,
     riskAdjustedHp: Math.round(riskAdjustedHp * 10) / 10,
     predictedDamage: Math.round(predictedDamage * 10) / 10,
     collisionDamage: Math.round(collisionDamage * 10) / 10,
-    rateDamage: Math.round(rateDamage * 10) / 10,
     directHits,
     unavoidableHits,
     damagePerHit,
-    recentDamage: Math.round(recentDamage * 10) / 10,
-    recentDamageWindowMs: Math.round(recentDamageWindowMs),
-    sampleDamageRateHpPerSecond: Math.round(sampleDamageRateHpPerMs * 1000 * 10) / 10,
-    latchedDamageRateHpPerSecond: Math.round(latchedDamageRateHpPerMs * 1000 * 10) / 10,
-    damageRateHpPerSecond: Math.round(damageRateHpPerMs * 1000 * 10) / 10,
     baseWindowMs,
     commandDelayMs,
     windowMs,
@@ -248,8 +235,7 @@ function evaluateCombatExchangeStopLossCore(input = {}, options = {}) {
   const lowHpFinishProtected = targetHp !== null && selfHp !== null
     && targetHp <= 20
     && selfHp >= targetHp + 10
-    && Number(input.recentTargetDamage || 0) > 0
-    && ttkMs < ttdMs;
+    && Number(input.recentTargetDamage || 0) > 0;
   const closePressure = input.closePressure === true;
   const closePressureMinSelfHp = Math.max(0, Number(
     options.closePressureMinSelfHp ?? options.combatClosePressureMinSelfHp ?? 60
@@ -264,13 +250,12 @@ function evaluateCombatExchangeStopLossCore(input = {}, options = {}) {
       && (targetHp === null || targetHp - selfHp < closePressureMaxHpGap)
       && !lowHpFinishProtected
   );
+  // A short exchange window is too noisy to forecast the outcome of a healthy
+  // fight. Keep its damage values for diagnostics, but only long-horizon
+  // no-progress and cumulative safety boundaries may create a stop-loss rule.
   let rule = '';
   if (ready && !lowHpFinishProtected) {
-    if (selfDamage - targetDamage >= 12 && targetHp !== null && selfHp !== null && targetHp >= selfHp) {
-      rule = 'negative-damage-exchange';
-    } else if (Number.isFinite(ttdMs) && ttdMs * 1.25 < ttkMs && targetHp !== null && targetHp > 25) {
-      rule = 'ttd-below-ttk';
-    } else if (engagedMs >= 20000 && longTargetDamage < 6 && longSelfDamage >= 9 && distanceProgressCm < 500) {
+    if (engagedMs >= 20000 && longTargetDamage < 6 && longSelfDamage >= 9 && distanceProgressCm < 500) {
       rule = 'long-no-progress-loss';
     }
   }

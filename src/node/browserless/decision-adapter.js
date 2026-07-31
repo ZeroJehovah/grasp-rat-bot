@@ -7528,9 +7528,6 @@ function buildBrowserlessPredictedThreatExitDecision(state, input, stateful, com
     selfHp,
     directHits: pendingCover?.directHits,
     unavoidableHits: pendingCover?.unavoidableHits,
-    recentDamage,
-    recentDamageWindowMs,
-    latchedDamageRateHpPerSecond: damageRatePeakHpPerSecond,
     commandDelayMs: commandDelayTicks * 50
   }, options);
   const previousAction = stateful.lastDecisionAction || null;
