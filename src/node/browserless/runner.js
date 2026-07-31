@@ -73,6 +73,7 @@ const {
 } = require('./decision-adapter');
 const { createBrowserlessActionAdapter } = require('./action-adapter');
 const { buildBrowserlessCombatDryRun } = require('./combat-adapter');
+const { runCombatShotExecutionSelfTest } = require('./combat-shot-execution-self-test');
 const { createSourceIpController } = require('./source-ip-controller');
 const { createBrowserlessSafetyController } = require('./safety-controller');
 const {
@@ -5088,6 +5089,7 @@ async function runBrowserlessRunnerSelfTest() {
     const snapshotEdge = await runSnapshotEdgeSelfTest();
     const pendingExitRecovery = runPendingExitRecoverySelfTest();
     const combatBattleLog = runCombatBattleLogSelfTest();
+    const combatShotExecution = runCombatShotExecutionSelfTest();
     const dynamicWhitelist = await require('./dynamic-whitelist-self-test').runDynamicWhitelistSelfTest();
     const recoveryContact = require('./recovery-contact-self-test').runRecoveryContactSelfTest();
     const runnerLog = path.join(tmp, 'logs', '2026-07-08', 'runner.jsonl');
@@ -5146,6 +5148,7 @@ async function runBrowserlessRunnerSelfTest() {
         && snapshotEdge.ok
         && pendingExitRecovery.ok
         && combatBattleLog.ok
+        && combatShotExecution.ok
         && dynamicWhitelist.ok
         && recoveryContact.ok
         && complexCombatMainThreadBudget.battleLogOk
@@ -5202,6 +5205,7 @@ async function runBrowserlessRunnerSelfTest() {
       snapshotEdge,
       pendingExitRecovery,
       combatBattleLog,
+      combatShotExecution,
       dynamicWhitelist,
       recoveryContact,
       complexCombatMainThreadBudget,

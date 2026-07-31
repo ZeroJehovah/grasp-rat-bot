@@ -10693,19 +10693,32 @@ function recordAttackHistoryFromActionResult(decisionState, actionResult, decisi
   if (combat) {
     const previousMetrics = decisionState.combatMetrics || {};
     const sameTarget = String(previousMetrics.targetId ?? '') === String(id);
-    const baseMetrics = sameTarget ? previousMetrics : {};
+    const dispatchedGeneration = String(
+      shoot.command?.engagementGeneration
+        || decision?.combat?.metrics?.engagementGeneration
+        || ''
+    );
+    const sameGeneration = !dispatchedGeneration
+      || !previousMetrics.engagementGeneration
+      || String(previousMetrics.engagementGeneration) === dispatchedGeneration;
+    const baseMetrics = sameTarget && sameGeneration ? previousMetrics : {};
     const previousShotAt = Number(baseMetrics.actualLastShotAt || 0);
     const previousStartedAt = Number(baseMetrics.startedAt);
     decisionState.combatMetrics = {
       ...baseMetrics,
       targetId: String(id),
       targetName: target?.name || baseMetrics.targetName || '',
+      controlGeneration: String(
+        shoot.command?.controlGeneration
+          || decision?.combat?.metrics?.controlGeneration
+          || baseMetrics.controlGeneration
+          || ''
+      ),
+      engagementGeneration: dispatchedGeneration || String(baseMetrics.engagementGeneration || ''),
       startedAt: sameTarget && Number.isFinite(previousStartedAt) ? previousStartedAt : nowMs,
       startedTick: sameTarget
         ? (numberOrNull(baseMetrics.startedTick) ?? numberOrNull(decision?.tick ?? decision?.combat?.tick))
         : numberOrNull(decision?.tick ?? decision?.combat?.tick),
-      requestedShots: Number(baseMetrics.requestedShots ?? baseMetrics.actualShots ?? 0) + 1,
-      actualShots: Number(baseMetrics.requestedShots ?? baseMetrics.actualShots ?? 0) + 1,
       actualLastShotAt: nowMs,
       actualLastShotTick: numberOrNull(decision?.tick ?? decision?.combat?.tick),
       actualShotIntervalMs: previousShotAt > 0 ? Math.max(0, nowMs - previousShotAt) : null
@@ -10940,11 +10953,18 @@ function createBrowserlessDecisionAdapter(options = {}) {
       return summarizeBrowserlessDecisionState(decisionState);
     },
     observeActionResult(actionResult, decision, eventOptions = {}) {
-      return recordAttackHistoryFromActionResult(decisionState, actionResult, decision, {
+      const nowMs = eventOptions.nowMs ?? eventOptions.atMs ?? options.now?.() ?? Date.now();
+      const attack = recordAttackHistoryFromActionResult(decisionState, actionResult, decision, {
         ...options,
         ...eventOptions,
-        nowMs: eventOptions.nowMs ?? eventOptions.atMs ?? options.now?.() ?? Date.now()
+        nowMs
       });
+      const action = decision?.action || decision || {};
+      if (decisionState.combatMetrics
+        && (action.shouldLeave === true || action.band === 'exit' || action.kind === 'leave')) {
+        decisionState.combatMetrics.stopDispatchAt = Number(nowMs);
+      }
+      return attack;
     },
     finalizeEasyKillEngagements(reason = 'canary-ended', eventOptions = {}) {
       return callEasyKillPlayerTracker({

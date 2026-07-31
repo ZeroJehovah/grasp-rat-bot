@@ -22,11 +22,14 @@ const { utc8DayKey } = require('./utc8-day');
 const DEFAULT_IDLE_FINALIZE_MS = 15000;
 const BATTLES_DIR = 'battles';
 const INDEX_FILE = 'index.jsonl';
+const SHOT_AMENDMENTS_FILE = 'shot-amendments.jsonl';
 const MAX_INDEX_LINE_BYTES = 8192;
 const BATTLE_INDEX_FORMAT_VERSION = 2;
 const MAX_TRACKED_ENGAGEMENT_SEGMENTS = 256;
 const MAX_TRAJECTORY_COVERAGE_SHOT_EVENTS = 128;
 const SEGMENT_METRIC_FIELDS = Object.freeze([
+  'intentShotCount',
+  'wireRequestCount',
   'requestedShots',
   'acceptedShots',
   'confirmedHits',
@@ -38,6 +41,8 @@ const SEGMENT_METRIC_FIELDS = Object.freeze([
   'movementStaminaSpent'
 ]);
 const SEGMENT_METRIC_FIELD_NAMES = Object.freeze({
+  intentShotCount: 'IntentShotCount',
+  wireRequestCount: 'WireRequestCount',
   requestedShots: 'RequestedShots',
   acceptedShots: 'AcceptedShots',
   confirmedHits: 'ConfirmedHits',
@@ -82,6 +87,8 @@ function sanitizeEngagementId(value, fallback = 'battle') {
 }
 
 function numberOrNull(value) {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'string' && value.trim() === '') return null;
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
 }
@@ -358,6 +365,9 @@ function createBattleExitTail() {
     lastObservedTick: null,
     finalObservedHp: null,
     minPostTriggerHp: null,
+    hpObservationEndedReason: '',
+    lastRealHpObservedAtMs: null,
+    lastRealHpObservedTick: null,
     selfMissingBeforeConfirmation: false,
     deathObserved: false,
     deathAtMs: null,
@@ -387,13 +397,12 @@ function observeBattleExitTail(tail, type, detail, atMs) {
   const response = value.response && typeof value.response === 'object' ? value.response : {};
   const normalizedType = String(type || '');
   const tick = firstFiniteNumber(value.tick, pending.tick, response.tick);
-  const hp = firstFiniteNumber(
-    value.selfHp,
-    value.lastKnownHp,
-    pending.lastHp,
-    pending.minHp,
-    response.hp
-  );
+  const responseHp = numberOrNull(response.hp);
+  const hp = responseHp !== null
+    ? responseHp
+    : (value.selfPresent === false
+        ? null
+        : firstFiniteNumber(value.selfHp, pending.lastHp, pending.minHp, value.lastKnownHp));
 
   if (normalizedType === 'safety-trigger') {
     next.active = true;
@@ -412,17 +421,22 @@ function observeBattleExitTail(tail, type, detail, atMs) {
   if (hp !== null) {
     next.finalObservedHp = hp;
     next.minPostTriggerHp = next.minPostTriggerHp === null ? hp : Math.min(next.minPostTriggerHp, hp);
+    next.lastRealHpObservedAtMs = firstFiniteNumber(value.atMs, value.startedAtMs, atMs);
+    next.lastRealHpObservedTick = tick;
   }
-  if (value.selfPresent === false && !next.leaveConfirmed) next.selfMissingBeforeConfirmation = true;
+  if (value.selfPresent === false) {
+    next.hpObservationEndedReason = 'self-missing';
+    if (!next.leaveConfirmed) next.selfMissingBeforeConfirmation = true;
+  }
 
   const deathTicks = Array.isArray(response.death_ticks)
     ? response.death_ticks.map(Number).filter(Number.isFinite)
     : [];
-  const responseHp = numberOrNull(response.hp);
   const responseDead = (responseHp !== null && responseHp <= 0)
     || /^dead$/i.test(String(response.life || ''));
   if (value.deathObserved === true || responseDead) {
     next.deathObserved = true;
+    next.hpObservationEndedReason = 'death-observed';
     next.deathAtMs = firstFiniteNumber(value.deathAtMs, value.atMs, atMs);
     next.deathTick = firstFiniteNumber(value.deathTick, deathTicks.at(-1), tick);
     next.deathEvidence = String(value.deathEvidence || (responseDead ? 'leave-response-dead' : 'frame-death-evidence'));
@@ -473,6 +487,9 @@ function summarizeBattleExitTail(tail) {
     finalObservedHp: numberOrNull(value.finalObservedHp),
     minPostTriggerHp: minHp,
     postTriggerDamage,
+    hpObservationEndedReason: String(value.hpObservationEndedReason || ''),
+    lastRealHpObservedAtMs: numberOrNull(value.lastRealHpObservedAtMs),
+    lastRealHpObservedTick: numberOrNull(value.lastRealHpObservedTick),
     finalObservedTick: numberOrNull(value.lastObservedTick),
     selfMissingBeforeConfirmation: Boolean(value.selfMissingBeforeConfirmation),
     deathObserved: Boolean(value.deathObserved),
@@ -560,11 +577,36 @@ function summarizeBattleObservations(observations) {
 // the two namespaces separately so index rows can be added without double
 // counting after A -> B -> A target switches.
 function buildBattleSummary(battle, reason, finalizeMs) {
-  const metrics = battle.lastMetrics && typeof battle.lastMetrics === 'object' ? battle.lastMetrics : {};
+  const metrics = battle.lastMetrics && typeof battle.lastMetrics === 'object'
+    ? { ...battle.lastMetrics }
+    : {};
+  const executionEvents = Array.isArray(battle.shotExecutionEvents) ? battle.shotExecutionEvents : [];
+  const lastExecutionSequence = Math.max(0, Number(metrics.lastExecutionSequence || 0));
+  const unsyncedDispatches = executionEvents.filter(event => event.type === 'shoot-dispatch'
+    && Number(event.sequence || 0) > lastExecutionSequence);
+  if (unsyncedDispatches.length) {
+    metrics.wireRequestCount = Math.max(0, Number(metrics.wireRequestCount || 0)) + unsyncedDispatches.length;
+    metrics.requestedShots = metrics.wireRequestCount;
+    metrics.actualShots = metrics.wireRequestCount;
+  }
+  const dispatchEvents = executionEvents.filter(event => event.type === 'shoot-dispatch');
+  const stopEvent = executionEvents.find(event => event.type === 'shoot-stop') || null;
+  if (dispatchEvents.length) {
+    metrics.firstDispatchAt = numberOrNull(metrics.firstDispatchAt) ?? numberOrNull(dispatchEvents[0].atMs);
+    metrics.lastDispatchAt = numberOrNull(dispatchEvents.at(-1)?.atMs) ?? numberOrNull(metrics.lastDispatchAt);
+  }
+  if (stopEvent) metrics.stopDispatchAt = numberOrNull(metrics.stopDispatchAt) ?? numberOrNull(stopEvent.atMs);
+  battle.lastMetrics = metrics;
   const segmentEndedAtMs = battle.lastFrameAtMs || finalizeMs;
   const engagementEndedAtMs = Number(metrics.lastObservedAt) || segmentEndedAtMs;
   const engagementStartedAtMs = numberOrNull(metrics.startedAt) ?? battle.engagementStartedAtMs ?? battle.firstFrameAtMs;
   const segmentMetrics = segmentMetricDeltas(battle.segmentMetricBaseline, metrics);
+  const segmentAcceptedShots = numberOrNull(segmentMetrics.values.acceptedShots) ?? 0;
+  const segmentRequestedShots = numberOrNull(segmentMetrics.values.requestedShots) ?? 0;
+  const cumulativeAcceptedShots = numberOrNull(metrics.acceptedShots) ?? 0;
+  const cumulativeRequestedShots = numberOrNull(metrics.requestedShots) ?? 0;
+  const shotOwnershipInvariantOk = segmentAcceptedShots <= segmentRequestedShots
+    && cumulativeAcceptedShots <= cumulativeRequestedShots;
   const exitTail = summarizeBattleExitTail(battle.exitTail);
   const engagementTrajectoryCoverage = mergeTrajectoryCoverageShotObservations(
     battle.trajectoryCoverageLedger,
@@ -576,6 +618,8 @@ function buildBattleSummary(battle, reason, finalizeMs) {
     segmentOrdinal: battle.segmentOrdinal,
     at: new Date(finalizeMs).toISOString(),
     engagementId: battle.engagementId,
+    controlGeneration: String(metrics.controlGeneration || ''),
+    engagementGeneration: String(metrics.engagementGeneration || ''),
     file: path.basename(battle.gzFile),
     priorSegmentFile: String(battle.priorSegmentFile || ''),
     reason,
@@ -602,6 +646,23 @@ function buildBattleSummary(battle, reason, finalizeMs) {
     engagementMinTargetHp: numberOrNull(metrics.minTargetHp),
     engagementLastTargetHp: numberOrNull(metrics.lastTargetHp),
     engagementFirstDamageDelayMs: numberOrNull(metrics.firstDamageDelayMs),
+    engagementLateAckCount: Math.max(0, Number(metrics.lateAckCount || 0)),
+    engagementOrphanAckCount: Math.max(0, Number(metrics.orphanAckCount || 0)),
+    engagementExecutionSkipCount: Math.max(0, Number(metrics.executionSkipCount || 0)),
+    engagementExecutionSkipReasons: { ...(metrics.executionSkipReasons || {}) },
+    firstEligibleAt: numberOrNull(metrics.firstEligibleAt),
+    firstDispatchAt: numberOrNull(metrics.firstDispatchAt),
+    lastEligibleAt: numberOrNull(metrics.lastEligibleAt),
+    lastDispatchAt: numberOrNull(metrics.lastDispatchAt),
+    stopEligibleAt: numberOrNull(metrics.stopEligibleAt),
+    stopDispatchAt: numberOrNull(metrics.stopDispatchAt),
+    shotOwnershipInvariantOk,
+    shotOwnershipInvariant: {
+      segmentAcceptedShots,
+      segmentRequestedShots,
+      cumulativeAcceptedShots,
+      cumulativeRequestedShots
+    },
     exitTriggerHp: exitTail?.triggerHp ?? null,
     finalObservedHp: exitTail?.finalObservedHp ?? numberOrNull(metrics.lastSelfHp),
     postTriggerDamage: exitTail?.postTriggerDamage ?? null,
@@ -788,6 +849,7 @@ function createCombatBattleLog(options = {}) {
         acceptedShotFloor: previous ? acceptedShotFloor : 0
       }),
       exitTail: createBattleExitTail(),
+      shotExecutionEvents: [],
       lastMetrics: null
     };
     touchEngagementSegment(engagementId, {
@@ -845,6 +907,42 @@ function createCombatBattleLog(options = {}) {
     return { recorded: true, file: active.rawFile, engagementId: active.engagementId, tail: true };
   }
 
+  function recordShotExecution(detail, recordOptions = {}) {
+    const atMs = Number(recordOptions.atMs || detail?.atMs || now());
+    const event = {
+      sequence: Math.max(0, Number(detail?.sequence || 0)),
+      type: String(detail?.type || 'shoot-execution'),
+      atMs,
+      requestId: detail?.requestId ?? null,
+      commandId: detail?.commandId ?? null,
+      controlGeneration: String(detail?.controlGeneration || ''),
+      engagementGeneration: String(detail?.engagementGeneration || ''),
+      targetId: detail?.targetId ?? null,
+      baseCadenceMs: numberOrNull(detail?.baseCadenceMs),
+      executionCadenceMs: numberOrNull(detail?.executionCadenceMs),
+      advisoryCadenceMs: numberOrNull(detail?.advisoryCadenceMs),
+      lastDispatchAt: numberOrNull(detail?.lastDispatchAt),
+      skipReason: String(detail?.skipReason || ''),
+      outcome: String(detail?.outcome || ''),
+      observedTick: numberOrNull(detail?.observedTick),
+      runId: String(detail?.runId || ''),
+      runtimeRevision: String(detail?.runtimeRevision || '')
+    };
+    const activeGeneration = String(active?.lastMetrics?.engagementGeneration || '');
+    if (active && event.engagementGeneration && event.engagementGeneration === activeGeneration) {
+      io.appendFrame(active.rawFile, atMs, 'shoot-execution', event);
+      active.shotExecutionEvents.push(event);
+      active.shotExecutionEvents = active.shotExecutionEvents.slice(-256);
+      active.frames += 1;
+      active.lastFrameAtMs = Math.max(active.lastFrameAtMs, atMs);
+      framesWritten += 1;
+    }
+    if (['shoot-ack-late', 'shoot-ack-orphan', 'shoot-ack-duplicate'].includes(event.type)) {
+      io.appendIndex(path.join(battlesDirFor(atMs), SHOT_AMENDMENTS_FILE), event);
+    }
+    return event;
+  }
+
   function flush(reason = 'flush') {
     return finalizeActive(reason, now());
   }
@@ -863,7 +961,7 @@ function createCombatBattleLog(options = {}) {
     };
   }
 
-  return { record, recordTail, finalizeActive, flush, status };
+  return { record, recordTail, recordShotExecution, finalizeActive, flush, status };
 }
 
 function runCombatBattleLogSelfTest() {
@@ -878,6 +976,50 @@ function runCombatBattleLogSelfTest() {
   try {
     // Fixed clock so engagement/day boundaries are deterministic.
     let nowMs = Date.UTC(2026, 6, 24, 4, 0, 0);
+    assert('nullable metric conversion preserves only explicit zero', numberOrNull(null) === null
+      && numberOrNull(undefined) === null
+      && numberOrNull('') === null
+      && numberOrNull('   ') === null
+      && numberOrNull(0) === 0
+      && numberOrNull('0') === 0);
+    const missingSelfTail = createBattleExitTail();
+    observeBattleExitTail(missingSelfTail, 'safety-trigger', {
+      atMs: nowMs,
+      tick: 90,
+      selfHp: 90,
+      selfPresent: true
+    }, nowMs);
+    observeBattleExitTail(missingSelfTail, 'leave-pending-frame', {
+      atMs: nowMs + 50,
+      tick: 91,
+      selfPresent: false,
+      selfHp: null,
+      lastKnownHp: 90
+    }, nowMs + 50);
+    observeBattleExitTail(missingSelfTail, 'leave-pending-finish', {
+      ok: true,
+      pending: { ok: true, completedAtMs: nowMs + 100 }
+    }, nowMs + 100);
+    const missingSelfSummary = summarizeBattleExitTail(missingSelfTail);
+    assert('missing self ends HP observation without fabricating zero damage', missingSelfSummary.finalObservedHp === 90
+      && missingSelfSummary.minPostTriggerHp === 90
+      && missingSelfSummary.postTriggerDamage === 0
+      && missingSelfSummary.hpObservationEndedReason === 'self-missing'
+      && missingSelfSummary.lastRealHpObservedTick === 90
+      && missingSelfSummary.deathObserved === false);
+    const explicitDeathTail = createBattleExitTail();
+    observeBattleExitTail(explicitDeathTail, 'safety-trigger', { selfHp: 12, tick: 95 }, nowMs);
+    observeBattleExitTail(explicitDeathTail, 'leave-request-result', {
+      ok: false,
+      selfPresent: false,
+      response: { hp: 0, life: 'Dead', tick: 96 }
+    }, nowMs + 50);
+    const explicitDeathSummary = summarizeBattleExitTail(explicitDeathTail);
+    assert('explicit death remains authoritative zero HP evidence', explicitDeathSummary.finalObservedHp === 0
+      && explicitDeathSummary.minPostTriggerHp === 0
+      && explicitDeathSummary.postTriggerDamage === 12
+      && explicitDeathSummary.hpObservationEndedReason === 'death-observed'
+      && explicitDeathSummary.deathObserved === true);
     const historicalDeathTail = createBattleExitTail();
     observeBattleExitTail(historicalDeathTail, 'safety-trigger', { selfHp: 90 }, nowMs);
     observeBattleExitTail(historicalDeathTail, 'leave-request-result', {
@@ -935,6 +1077,7 @@ function runCombatBattleLogSelfTest() {
     nowMs += 50;
     log.record('combat-live', frame('100:1000', {
       requestedShots: 5,
+      wireRequestCount: 5,
       acceptedShots: 5,
       confirmedHits: 3,
       targetDamage: 90,
@@ -944,6 +1087,9 @@ function runCombatBattleLogSelfTest() {
       shootingStaminaSpent: 2500,
       movementStaminaSpent: 1100,
       lastObservedAt: nowMs,
+      controlGeneration: 'control:test',
+      engagementGeneration: 'control:test:100:1',
+      lastExecutionSequence: 1,
       sessionToken: 'leak-token',
       threatBulletIds: ['bullet-a', 'bullet-b'],
       coverageShotAttribution: [{
@@ -967,6 +1113,27 @@ function runCombatBattleLogSelfTest() {
       },
       aim: { trajectoryCoverage: { applied: false, reason: 'coverage-evidence-not-ready' } }
     }));
+    nowMs += 1;
+    log.recordShotExecution({
+      sequence: 2,
+      type: 'shoot-dispatch',
+      atMs: nowMs,
+      requestId: 'request-final',
+      controlGeneration: 'control:test',
+      engagementGeneration: 'control:test:100:1',
+      targetId: '100',
+      outcome: 'transport-accepted'
+    });
+    nowMs += 1;
+    log.recordShotExecution({
+      sequence: 3,
+      type: 'shoot-stop',
+      atMs: nowMs,
+      controlGeneration: 'control:test',
+      engagementGeneration: 'control:test:100:1',
+      targetId: '100',
+      outcome: 'sealed'
+    });
     // Idle diagnostic frames are discarded and do not create files yet.
     nowMs += 50;
     log.record('combat-dry-run', frame(''));
@@ -1039,13 +1206,19 @@ function runCombatBattleLogSelfTest() {
     assert('index summary keeps engagement id', first.engagementId === '100:1000');
     assert('index summary has versioned segment identity', first.formatVersion === BATTLE_INDEX_FORMAT_VERSION
       && first.segmentId === '100:1000#1' && first.segmentOrdinal === 1 && first.priorSegmentFile === '');
-    assert('index summary counts physical segment frames', first.segmentFrames === 2);
+    assert('index summary counts physical segment frames', first.segmentFrames === 4);
     assert('index summary separates segment and cumulative metrics', first.segmentConfirmedHits === 3
       && first.segmentTargetDamage === 90
       && first.segmentAcceptedShots === 5
+      && first.segmentRequestedShots === 6
       && first.engagementCumulativeConfirmedHits === 3
       && first.engagementCumulativeTargetDamage === 90
-      && first.engagementCumulativeAcceptedShots === 5);
+      && first.engagementCumulativeAcceptedShots === 5
+      && first.engagementCumulativeRequestedShots === 6);
+    assert('index summary merges terminal execution events without a later combat frame', first.firstDispatchAt !== null
+      && first.lastDispatchAt === first.firstDispatchAt
+      && first.stopDispatchAt === first.firstDispatchAt + 1
+      && first.shotOwnershipInvariantOk === true);
     assert('index summary reason recorded', first.reason === 'engagement-switch');
     assert('index summary points at gz file', first.file === '100_1000.jsonl.gz');
     assert('index summary observes target activity and movement', first.targetActiveObserved === true && first.targetMovingObserved === true);
@@ -1081,7 +1254,7 @@ function runCombatBattleLogSelfTest() {
     // Compressed content round-trips and secrets were redacted at append time.
     const decompressed = zlibSync.gunzipSync(fs.readFileSync(path.join(battlesDir, '100_1000.jsonl.gz'))).toString('utf8');
     const gzLines = decompressed.trim().split('\n').filter(Boolean);
-    assert('gz has combat frames and terminal tail', gzLines.length === 7);
+    assert('gz has combat frames, execution events, and terminal tail', gzLines.length === 9);
     assert('gz frames keep {at,type,detail} shape', gzLines.every(line => {
       const entry = JSON.parse(line);
       return entry.at && entry.type && entry.detail && typeof entry.detail === 'object';
@@ -1092,7 +1265,7 @@ function runCombatBattleLogSelfTest() {
     // delta, rather than duplicating the root engagement cumulative metrics.
     nowMs += 100000;
     log.record('combat-live', frame('100:1000', {
-      requestedShots: 8,
+      requestedShots: 9,
       acceptedShots: 8,
       confirmedHits: 4,
       targetDamage: 120,
@@ -1114,7 +1287,8 @@ function runCombatBattleLogSelfTest() {
       && reopened.segmentConfirmedHits === 1
       && reopened.segmentTargetDamage === 30
       && reopened.segmentSelfDamage === 2
-      && reopened.engagementCumulativeAcceptedShots === 8);
+      && reopened.engagementCumulativeAcceptedShots === 8
+      && reopened.engagementCumulativeRequestedShots === 9);
     const additiveAccepted = afterReopen
       .filter(item => item.engagementId === '100:1000')
       .reduce((sum, item) => sum + Number(item.segmentAcceptedShots || 0), 0);

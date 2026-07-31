@@ -398,6 +398,10 @@ function createInitialActionState() {
     shootRepeat: null,
     lastVelocityRepeatError: '',
     lastShootRepeatError: '',
+    shootingSealed: false,
+    shootingSealReason: '',
+    shootingSealedAtMs: null,
+    shootingSealEngagementGeneration: '',
     transportSealed: false,
     transportSealReason: ''
   };
@@ -417,6 +421,12 @@ function summarizeCommand(command) {
     reason: command.reason,
     sentAt: command.sentAt,
     sentAtMs: command.sentAtMs,
+    requestId: command.requestId ?? null,
+    controlGeneration: command.controlGeneration || '',
+    engagementGeneration: command.engagementGeneration || '',
+    baseCadenceMs: command.baseCadenceMs ?? null,
+    executionCadenceMs: command.executionCadenceMs ?? command.cadenceMs ?? null,
+    advisoryCadenceMs: command.advisoryCadenceMs ?? null,
     directionGeneration: command.directionGeneration ?? null,
     ownership: command.ownership || null,
     movementTelemetry: command.movementTelemetry || null,
@@ -452,6 +462,8 @@ function createBrowserlessActionAdapter(options = {}) {
   const maxPendingShootCommands = Math.max(1, Math.round(Number(options.maxPendingShootCommands ?? 3)));
   const initialShootAckTimeoutMs = Math.max(500, Number(options.shootAckTimeoutMs ?? 3000));
   const onShootRequest = typeof options.onShootRequest === 'function' ? options.onShootRequest : null;
+  const onShootExecution = typeof options.onShootExecution === 'function' ? options.onShootExecution : null;
+  const controlGeneration = String(options.controlGeneration || '');
   const shootRepeatEnabled = options.shootRepeatEnabled === true;
   const shootRepeatMs = Math.max(
     combatShootMinIntervalMs,
@@ -485,7 +497,57 @@ function createBrowserlessActionAdapter(options = {}) {
   const clearTimeoutFn = typeof options.clearTimeout === 'function' ? options.clearTimeout : clearTimeout;
   const state = createInitialActionState();
   let nextCommandId = 1;
+  let nextShootAttemptSequence = 1;
   let activeApplyContext = null;
+
+  function emitShootExecution(event = {}) {
+    const entry = {
+      type: String(event.type || 'shoot-execution'),
+      atMs: optionalNumber(event.atMs) ?? now(),
+      requestId: event.requestId ?? null,
+      commandId: event.commandId ?? null,
+      controlGeneration: String(event.controlGeneration || controlGeneration || ''),
+      engagementGeneration: String(event.engagementGeneration || ''),
+      targetId: event.targetId ?? null,
+      baseCadenceMs: optionalNumber(event.baseCadenceMs),
+      executionCadenceMs: optionalNumber(event.executionCadenceMs),
+      advisoryCadenceMs: optionalNumber(event.advisoryCadenceMs),
+      lastDispatchAt: optionalNumber(event.lastDispatchAt),
+      skipReason: String(event.skipReason || ''),
+      outcome: String(event.outcome || ''),
+      observedTick: optionalNumber(event.observedTick),
+      advisoryReasons: Array.isArray(event.advisoryReasons)
+        ? event.advisoryReasons.map(String).filter(Boolean).slice(0, 8)
+        : []
+    };
+    if (!onShootExecution) return entry;
+    try {
+      return onShootExecution(entry) || entry;
+    } catch (_) {
+      return entry;
+    }
+  }
+
+  function skippedShootExecution(reason, target = null, shotMeta = {}, detail = {}) {
+    const requestId = `${controlGeneration || 'control'}:shoot-attempt:${nextShootAttemptSequence++}`;
+    return emitShootExecution({
+      type: 'shoot-skip',
+      atMs: now(),
+      requestId,
+      controlGeneration,
+      engagementGeneration: shotMeta.engagementGeneration,
+      targetId: targetRepeatKey(target),
+      baseCadenceMs: shotMeta.baseCadenceMs,
+      executionCadenceMs: shotMeta.executionCadenceMs,
+      advisoryCadenceMs: shotMeta.advisoryCadenceMs,
+      lastDispatchAt: state.lastShootCommand?.sentAtMs,
+      skipReason: reason,
+      outcome: 'skipped',
+      observedTick: shotMeta.observedTick ?? state.latestObservedTick,
+      advisoryReasons: shotMeta.advisoryReasons,
+      ...detail
+    });
+  }
 
   function velocityOwnershipPriority(ownership = {}) {
     const band = String(ownership.band || '');
@@ -1603,30 +1665,100 @@ function createBrowserlessActionAdapter(options = {}) {
 
   function sendShoot(targetX, targetY, startX, startY, reason, target = null, cadenceMs = combatShootMinIntervalMs, shotMeta = {}) {
     const atMs = now();
+    const requestId = `${controlGeneration || 'control'}:shoot-attempt:${nextShootAttemptSequence++}`;
+    const executionContext = {
+      atMs,
+      requestId,
+      controlGeneration,
+      engagementGeneration: shotMeta.engagementGeneration,
+      targetId: targetRepeatKey(target),
+      baseCadenceMs: shotMeta.baseCadenceMs,
+      executionCadenceMs: shotMeta.executionCadenceMs ?? cadenceMs,
+      advisoryCadenceMs: shotMeta.advisoryCadenceMs,
+      lastDispatchAt: state.lastShootCommand?.sentAtMs,
+      observedTick: shotMeta.observedTick ?? state.latestObservedTick,
+      advisoryReasons: shotMeta.advisoryReasons
+    };
     expirePendingShootCommands(atMs);
+    if (state.shootingSealed) {
+      state.skippedCount += 1;
+      const skipReason = state.shootingSealReason || 'shooting-sealed';
+      return {
+        ok: true,
+        skipped: true,
+        reason: skipReason,
+        execution: emitShootExecution({
+          ...executionContext,
+          type: 'shoot-skip',
+          skipReason,
+          outcome: 'shooting-sealed'
+        })
+      };
+    }
     if (state.transportSealed) {
       state.skippedCount += 1;
-      return { ok: false, skipped: true, reason: state.transportSealReason || 'transport-sealed' };
+      const skipReason = state.transportSealReason || 'transport-sealed';
+      return {
+        ok: false,
+        skipped: true,
+        reason: skipReason,
+        execution: emitShootExecution({
+          ...executionContext,
+          type: 'shoot-skip',
+          skipReason,
+          outcome: 'skipped'
+        })
+      };
     }
     if (!transport || typeof transport.sendShoot !== 'function') {
       state.skippedCount += 1;
-      return { ok: false, skipped: true, reason: 'missing-transport' };
+      return {
+        ok: false,
+        skipped: true,
+        reason: 'missing-transport',
+        execution: emitShootExecution({
+          ...executionContext,
+          type: 'shoot-skip',
+          skipReason: 'missing-transport',
+          outcome: 'skipped'
+        })
+      };
     }
     if (state.pendingShootCommands.length >= maxPendingShootCommands) {
       state.skippedCount += 1;
+      const execution = emitShootExecution({
+        ...executionContext,
+        type: 'shoot-skip',
+        skipReason: 'shoot-unacked-backpressure',
+        outcome: 'skipped'
+      });
       return {
         ok: true,
         skipped: true,
         reason: 'shoot-unacked-backpressure',
         pendingCount: state.pendingShootCommands.length,
-        maxPendingShootCommands
+        maxPendingShootCommands,
+        execution
       };
     }
     const last = state.lastShootCommand;
     const intervalMs = Math.max(combatShootMinIntervalMs, Number(cadenceMs || 0));
     if (last && atMs - Number(last.sentAtMs || 0) < intervalMs) {
       state.skippedCount += 1;
-      return { ok: true, skipped: true, reason: 'shoot-command-throttled', command: summarizeCommand(last), cadenceMs: intervalMs };
+      return {
+        ok: true,
+        skipped: true,
+        reason: 'shoot-command-throttled',
+        command: summarizeCommand(last),
+        cadenceMs: intervalMs,
+        execution: emitShootExecution({
+          ...executionContext,
+          type: 'shoot-skip',
+          executionCadenceMs: intervalMs,
+          skipReason: 'shoot-command-throttled',
+          outcome: 'skipped'
+        })
+      };
     }
     try {
       transport.sendShoot(targetX, targetY, startX, startY);
@@ -1638,7 +1770,13 @@ function createBrowserlessActionAdapter(options = {}) {
         skipped: false,
         reason: 'send-shoot-failed',
         error: message,
-        transportClosed: /websocket is not open|not open|closed/i.test(message)
+        transportClosed: /websocket is not open|not open|closed/i.test(message),
+        execution: emitShootExecution({
+          ...executionContext,
+          type: 'shoot-transport-rejected',
+          skipReason: 'send-shoot-failed',
+          outcome: 'transport-rejected'
+        })
       };
     }
     const command = {
@@ -1649,10 +1787,16 @@ function createBrowserlessActionAdapter(options = {}) {
       startX: Math.round(Number(startX) || 0),
       startY: Math.round(Number(startY) || 0),
       reason,
+      requestId,
+      controlGeneration,
+      engagementGeneration: String(shotMeta.engagementGeneration || ''),
       sentAtMs: atMs,
       sentAt: new Date(atMs).toISOString(),
       target,
       cadenceMs: intervalMs,
+      baseCadenceMs: numberOrNull(shotMeta.baseCadenceMs),
+      executionCadenceMs: intervalMs,
+      advisoryCadenceMs: numberOrNull(shotMeta.advisoryCadenceMs),
       observedTick: numberOrNull(shotMeta.observedTick ?? state.latestObservedTick),
       aimMode: String(shotMeta.aimMode || ''),
       hypothesis: String(shotMeta.hypothesis || ''),
@@ -1693,8 +1837,11 @@ function createBrowserlessActionAdapter(options = {}) {
     state.pendingShootCommands.push(command);
     if (onShootRequest) {
       try {
-        onShootRequest({
+        const telemetry = onShootRequest({
           commandId: command.id,
+          requestId: command.requestId,
+          controlGeneration: command.controlGeneration,
+          engagementGeneration: command.engagementGeneration,
           requestedAtMs: command.sentAtMs,
           targetId: targetRepeatKey(target),
           targetX: command.targetX,
@@ -1734,9 +1881,25 @@ function createBrowserlessActionAdapter(options = {}) {
           coverageSelectionMode: command.coverageSelectionMode,
           coverageRouteSelectionMode: command.coverageRouteSelectionMode
         });
+        if (telemetry && typeof telemetry === 'object') {
+          command.requestId = telemetry.requestId ?? command.requestId;
+          command.controlGeneration = String(telemetry.controlGeneration || command.controlGeneration || '');
+          command.engagementGeneration = String(telemetry.engagementGeneration || command.engagementGeneration || '');
+        }
       } catch (_) {}
     }
-    return { ok: true, skipped: false, command: summarizeCommand(command), cadenceMs: intervalMs };
+    const execution = emitShootExecution({
+      ...executionContext,
+      type: 'shoot-dispatch',
+      commandId: command.id,
+      requestId: command.requestId,
+      controlGeneration: command.controlGeneration,
+      engagementGeneration: command.engagementGeneration,
+      executionCadenceMs: intervalMs,
+      lastDispatchAt: command.sentAtMs,
+      outcome: 'transport-accepted'
+    });
+    return { ok: true, skipped: false, command: summarizeCommand(command), cadenceMs: intervalMs, execution };
   }
 
   function stop(reason = 'stop', stopOptions = {}) {
@@ -1755,6 +1918,46 @@ function createBrowserlessActionAdapter(options = {}) {
       ...stopOptions,
       ownership
     });
+  }
+
+  function sealShooting(reason = 'shooting-sealed', detail = {}) {
+    const atMs = now();
+    const engagementGeneration = String(
+      detail.engagementGeneration
+      || state.lastShootCommand?.engagementGeneration
+      || ''
+    );
+    state.shootingSealed = true;
+    state.shootingSealReason = String(reason || 'shooting-sealed');
+    state.shootingSealedAtMs = atMs;
+    state.shootingSealEngagementGeneration = engagementGeneration;
+    cancelShootRepeat(state.shootingSealReason);
+    const execution = emitShootExecution({
+      type: 'shoot-stop',
+      atMs,
+      requestId: null,
+      commandId: state.lastShootCommand?.id ?? null,
+      controlGeneration,
+      engagementGeneration,
+      targetId: detail.targetId ?? targetRepeatKey(detail.target),
+      baseCadenceMs: detail.baseCadenceMs,
+      executionCadenceMs: detail.executionCadenceMs,
+      advisoryCadenceMs: detail.advisoryCadenceMs,
+      lastDispatchAt: state.lastShootCommand?.sentAtMs,
+      skipReason: state.shootingSealReason,
+      outcome: 'sealed',
+      observedTick: detail.observedTick ?? state.latestObservedTick,
+      advisoryReasons: detail.advisoryReasons
+    });
+    return {
+      sealed: true,
+      reason: state.shootingSealReason,
+      atMs,
+      controlGeneration,
+      engagementGeneration,
+      targetId: detail.targetId ?? targetRepeatKey(detail.target),
+      execution
+    };
   }
 
   function sealTransport(reason = 'transport-sealed') {
@@ -1912,7 +2115,12 @@ function createBrowserlessActionAdapter(options = {}) {
     const targetY = numberOrNull(target?.y);
     if (startX === null || startY === null || targetX === null || targetY === null) {
       state.skippedCount += 1;
-      return { ok: false, skipped: true, reason: 'missing-shoot-coordinates' };
+      return {
+        ok: false,
+        skipped: true,
+        reason: 'missing-shoot-coordinates',
+        execution: skippedShootExecution('missing-shoot-coordinates', target)
+      };
     }
     return sendShoot(
       targetX,
@@ -2210,6 +2418,7 @@ function createBrowserlessActionAdapter(options = {}) {
       );
     } else {
       state.skippedCount += 1;
+      shoot.execution = skippedShootExecution('missing-shoot-coordinates', target);
     }
     const repeat = canScheduleShootRepeat(shoot)
       ? scheduleShootRepeat(self, target, decision?.action?.reason || decision?.reason || 'profit-afk-attack', shoot.cadenceMs)
@@ -2281,7 +2490,20 @@ function createBrowserlessActionAdapter(options = {}) {
       const targetY = numberOrNull(aim.y);
       if (startX === null || startY === null || targetX === null || targetY === null) {
         state.skippedCount += 1;
-        shoot = { ok: false, skipped: true, reason: 'missing-shoot-coordinates' };
+        const shotMeta = {
+          observedTick: combat.timing?.observedTick ?? combat.tick,
+          engagementGeneration: combat.metrics?.engagementGeneration,
+          baseCadenceMs: shooting.cadenceMs,
+          executionCadenceMs: shooting.executionCadenceMs ?? shooting.cadenceMs,
+          advisoryCadenceMs: shooting.advisoryCadenceMs,
+          advisoryReasons: shooting.advisoryCadenceReasons
+        };
+        shoot = {
+          ok: false,
+          skipped: true,
+          reason: 'missing-shoot-coordinates',
+          execution: skippedShootExecution('missing-shoot-coordinates', combat.target, shotMeta)
+        };
       } else {
         shoot = sendShoot(
           targetX,
@@ -2290,9 +2512,14 @@ function createBrowserlessActionAdapter(options = {}) {
           startY,
           shooting.reason || 'combat-live-shoot',
           combat.target,
-          shooting.effectiveCadenceMs || shooting.cadenceMs,
+          shooting.executionCadenceMs || shooting.cadenceMs,
           {
             observedTick: combat.timing?.observedTick ?? combat.tick,
+            engagementGeneration: combat.metrics?.engagementGeneration,
+            baseCadenceMs: shooting.cadenceMs,
+            executionCadenceMs: shooting.executionCadenceMs || shooting.cadenceMs,
+            advisoryCadenceMs: shooting.advisoryCadenceMs,
+            advisoryReasons: shooting.advisoryCadenceReasons,
             aimMode: combat.aim?.mode,
             hypothesis: combat.aim?.motionProbe?.hypothesis,
             flightTicks: combat.aim?.flightTicks,
@@ -2349,6 +2576,7 @@ function createBrowserlessActionAdapter(options = {}) {
           reason: shoot.reason,
           command: shoot.command || null,
           cadenceMs: shoot.cadenceMs || null,
+          execution: shoot.execution || null,
           ...transportFailure(shoot)
         },
         target: combat.target,
@@ -2449,6 +2677,10 @@ function createBrowserlessActionAdapter(options = {}) {
       shootRepeatTargetKey: state.shootRepeatTargetKey,
       lastVelocityRepeatError: state.lastVelocityRepeatError,
       lastShootRepeatError: state.lastShootRepeatError,
+      shootingSealed: state.shootingSealed,
+      shootingSealReason: state.shootingSealReason,
+      shootingSealedAtMs: state.shootingSealedAtMs,
+      shootingSealEngagementGeneration: state.shootingSealEngagementGeneration,
       transportSealed: state.transportSealed,
       transportSealReason: state.transportSealReason,
       lastCommand: summarizeCommand(state.lastCommand),
@@ -2476,6 +2708,7 @@ function createBrowserlessActionAdapter(options = {}) {
     continueCloseCoinPickup,
     getState,
     observeState,
+    sealShooting,
     sealTransport,
     stop
   };

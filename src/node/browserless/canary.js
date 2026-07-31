@@ -1837,6 +1837,11 @@ async function runReadOnlyCanary(config, options = {}) {
       return null;
     }
   };
+  stateStore.setShootExecutionListener?.(event => {
+    const enriched = addRunMeta(event);
+    log('shoot-execution', event);
+    combatBattleLog?.recordShotExecution?.(enriched, { atMs: event.atMs });
+  });
   const invokeVerifiedLeave = async leaveOptions => {
     if (typeof options.leaveWithVerification === 'function') {
       return options.leaveWithVerification(leaveOptions);
@@ -2390,6 +2395,18 @@ async function runReadOnlyCanary(config, options = {}) {
     if (!event || event.ok || result.safety.event) return false;
     const atMs = Number(context.atMs || now());
     const currentState = context.state || stateStore.getDecisionState?.(atMs) || stateStore.getState(atMs);
+    const currentDecision = context.decision || result.decisions.last;
+    const shootStop = event.shouldLeave && actionAdapter?.sealShooting
+      ? actionAdapter.sealShooting(`safety-trigger:${event.reason || 'leave'}`, {
+          observedTick: currentState?.realtime?.tick,
+          engagementGeneration: currentDecision?.combat?.metrics?.engagementGeneration,
+          target: currentDecision?.action?.target || currentDecision?.combat?.target || null,
+          baseCadenceMs: currentDecision?.combat?.shooting?.cadenceMs,
+          executionCadenceMs: currentDecision?.combat?.shooting?.executionCadenceMs,
+          advisoryCadenceMs: currentDecision?.combat?.shooting?.advisoryCadenceMs,
+          advisoryReasons: currentDecision?.combat?.shooting?.advisoryCadenceReasons
+        })
+      : null;
     let leaveStarted = false;
     const lockAndStartLeave = cover => {
       if (leaveStarted) return;
@@ -2404,7 +2421,8 @@ async function runReadOnlyCanary(config, options = {}) {
           ? Number(currentState.realtime.self.hp)
           : null,
         target: context.decision?.action?.target || context.decision?.combat?.target || null,
-        cover
+        cover,
+        shootStop
       }, atMs);
       startLeavePending(event, currentState, atMs, {
         decision: context.decision || result.decisions.last,
@@ -3662,6 +3680,9 @@ async function runReadOnlyCanary(config, options = {}) {
         { force: true }
       );
       if (actionEnabled) {
+        const controlGeneration = stateStore.beginControlGeneration?.('ws-open')
+          || stateStore.getControlGeneration?.()
+          || '';
         actionAdapter = options.actionAdapter || createBrowserlessActionAdapter({
           ...runtimeDefaults,
           transport,
@@ -3675,9 +3696,11 @@ async function runReadOnlyCanary(config, options = {}) {
           movementSettlementStallMs: config.movementSettlementStallMs,
           movementSettlementMinDistanceCm: config.movementSettlementMinDistanceCm,
           combatShootMinIntervalMs: config.combatShootMinIntervalMs,
+          controlGeneration,
           getTransportHealth: () => result.transportHealth || transportHealthMonitor.snapshot(now()),
           onVelocityRequest: request => stateStore.recordVelocityRequest(request),
-          onShootRequest: request => stateStore.recordShootRequest(request)
+          onShootRequest: request => stateStore.recordShootRequest(request),
+          onShootExecution: event => stateStore.recordShootExecution?.(event) || event
         });
       }
       log('canary-ws-open', { durationMs });

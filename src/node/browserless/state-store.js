@@ -416,7 +416,7 @@ function shotAckTimeoutMs(samples = []) {
   return Math.max(1000, Math.min(5000, Math.round((p90 ?? 1000) * 3)));
 }
 
-function createInitialState(userId = 0) {
+function createInitialState(userId = 0, controlGeneration = '') {
   return {
     userId: Number(userId || 0),
     frameCounts: {},
@@ -458,13 +458,21 @@ function createInitialState(userId = 0) {
       }
     },
     command: {
+      controlGeneration: String(controlGeneration || ''),
       lastAck: null,
       nextShotSequence: 1,
+      nextConfirmationSequence: 1,
+      nextExecutionSequence: 1,
       requestedShots: 0,
       acceptedShots: 0,
       unackedShots: 0,
+      orphanAckCount: 0,
+      lateAckCount: 0,
+      duplicateAckCount: 0,
       pendingShots: [],
+      expiredShots: [],
       confirmedShots: [],
+      shootExecutionEvents: [],
       delaySamples: [],
       originErrorSamples: [],
       ackLatencySamples: [],
@@ -495,16 +503,70 @@ function createInitialState(userId = 0) {
 
 function createBrowserlessStateStore(options = {}) {
   const now = typeof options.now === 'function' ? options.now : Date.now;
-  const state = createInitialState(options.userId);
+  let shootExecutionListener = typeof options.onShootExecution === 'function'
+    ? options.onShootExecution
+    : null;
+  let controlGenerationSequence = 0;
+  const nextControlGeneration = reason => [
+    'control',
+    Math.round(Number(now()) || Date.now()),
+    ++controlGenerationSequence,
+    String(reason || 'start').replace(/[^\w.-]+/g, '_').slice(0, 32)
+  ].join(':');
+  const state = createInitialState(options.userId, nextControlGeneration('start'));
 
   function setUserId(userId) {
     state.userId = Number(userId || 0);
   }
 
   function reset(nextOptions = {}) {
-    const next = createInitialState(nextOptions.userId ?? state.userId);
+    const next = createInitialState(
+      nextOptions.userId ?? state.userId,
+      nextControlGeneration(nextOptions.reason || 'reset')
+    );
     for (const key of Object.keys(state)) delete state[key];
     Object.assign(state, next);
+  }
+
+  function beginControlGeneration(reason = 'reconnect') {
+    state.command.controlGeneration = nextControlGeneration(reason);
+    return state.command.controlGeneration;
+  }
+
+  function getControlGeneration() {
+    return String(state.command.controlGeneration || '');
+  }
+
+  function recordShootExecution(event = {}) {
+    const entry = {
+      sequence: state.command.nextExecutionSequence++,
+      type: String(event.type || 'shoot-execution'),
+      atMs: optionalNumericOrNull(event.atMs) ?? now(),
+      requestId: event.requestId ?? null,
+      commandId: event.commandId ?? event.requestId ?? null,
+      controlGeneration: String(event.controlGeneration || state.command.controlGeneration || ''),
+      engagementGeneration: String(event.engagementGeneration || ''),
+      targetId: event.targetId ?? null,
+      baseCadenceMs: optionalNumericOrNull(event.baseCadenceMs),
+      executionCadenceMs: optionalNumericOrNull(event.executionCadenceMs),
+      advisoryCadenceMs: optionalNumericOrNull(event.advisoryCadenceMs),
+      lastDispatchAt: optionalNumericOrNull(event.lastDispatchAt),
+      skipReason: String(event.skipReason || ''),
+      outcome: String(event.outcome || ''),
+      observedTick: optionalNumericOrNull(event.observedTick)
+    };
+    state.command.shootExecutionEvents.push(entry);
+    state.command.shootExecutionEvents = state.command.shootExecutionEvents.slice(-128);
+    if (shootExecutionListener) {
+      try {
+        shootExecutionListener(cloneJson(entry));
+      } catch (_) {}
+    }
+    return cloneJson(entry);
+  }
+
+  function setShootExecutionListener(listener) {
+    shootExecutionListener = typeof listener === 'function' ? listener : null;
   }
 
   function ingestFrame(frame, meta = {}) {
@@ -760,21 +822,64 @@ function createBrowserlessStateStore(options = {}) {
       receivedAtMs: meta.receivedAtMs
     };
     expirePendingShots(meta.receivedAtMs);
+    const ackIdentity = String(
+      ack.bullet_id
+        ?? ack.bulletId
+        ?? (ack.created_tick === null || ack.created_tick === undefined
+          ? ''
+          : `${ack.created_tick}:${ack.start_x ?? ''}:${ack.start_y ?? ''}:${ack.target_x ?? ''}:${ack.target_y ?? ''}`)
+    );
+    const duplicate = ackIdentity
+      ? state.command.confirmedShots.find(item => String(item.ackIdentity || '') === ackIdentity)
+      : null;
+    if (duplicate) {
+      state.command.duplicateAckCount += 1;
+      const execution = recordShootExecution({
+        type: 'shoot-ack-duplicate',
+        atMs: meta.receivedAtMs,
+        requestId: duplicate.requestId ?? duplicate.commandId ?? null,
+        controlGeneration: duplicate.controlGeneration,
+        engagementGeneration: duplicate.engagementGeneration,
+        targetId: duplicate.targetId,
+        outcome: 'duplicate-ack',
+        observedTick: meta.tick
+      });
+      state.command.lastAck = { ...ack, matchedShot: null, duplicateOf: cloneJson(duplicate), execution };
+      return;
+    }
     const targetX = numericOrNull(ack.target_x);
     const targetY = numericOrNull(ack.target_y);
-    const pending = state.command.pendingShots
-      .map((item, index) => ({ item, index, distance: targetX === null || targetY === null
-        ? index
-        : Math.hypot(Number(item.targetX) - targetX, Number(item.targetY) - targetY) }))
-      .sort((a, b) => a.distance - b.distance || a.index - b.index)[0] || null;
+    const candidates = [
+      ...state.command.pendingShots.map((item, index) => ({ item, index, source: 'pending' })),
+      ...state.command.expiredShots.map((item, index) => ({ item, index, source: 'expired' }))
+    ];
+    const pending = candidates
+      .map(candidate => ({
+        ...candidate,
+        distance: targetX === null || targetY === null
+          ? candidate.index
+          : Math.hypot(Number(candidate.item.targetX) - targetX, Number(candidate.item.targetY) - targetY)
+      }))
+      .filter(candidate => targetX === null || targetY === null || candidate.distance <= 5)
+      .sort((a, b) => a.distance - b.distance
+        || Number(a.item.requestedAtMs || 0) - Number(b.item.requestedAtMs || 0))[0] || null;
     let confirmed = null;
     if (pending) {
-      state.command.pendingShots.splice(pending.index, 1);
+      if (pending.source === 'expired') {
+        state.command.expiredShots.splice(pending.index, 1);
+        state.command.unackedShots = Math.max(0, state.command.unackedShots - 1);
+        state.command.lateAckCount += 1;
+      } else {
+        state.command.pendingShots.splice(pending.index, 1);
+      }
       const observedTick = numericOrNull(pending.item.observedTick);
       const createdTick = numericOrNull(ack.created_tick);
       confirmed = {
         ...pending.item,
         ...ack,
+        ackIdentity,
+        confirmationSequence: state.command.nextConfirmationSequence++,
+        lateAck: pending.source === 'expired',
         acceptedAtMs: meta.receivedAtMs,
         requestToAckMs: Math.max(0, meta.receivedAtMs - Number(pending.item.requestedAtMs || 0)),
         observedTick,
@@ -810,6 +915,25 @@ function createBrowserlessStateStore(options = {}) {
         state.command.originErrorSamples.push(confirmed.shooterOriginErrorCm);
         state.command.originErrorSamples = state.command.originErrorSamples.slice(-64);
       }
+      recordShootExecution({
+        type: pending.source === 'expired' ? 'shoot-ack-late' : 'shoot-ack-accepted',
+        atMs: meta.receivedAtMs,
+        requestId: confirmed.requestId ?? confirmed.commandId ?? null,
+        controlGeneration: confirmed.controlGeneration,
+        engagementGeneration: confirmed.engagementGeneration,
+        targetId: confirmed.targetId,
+        outcome: pending.source === 'expired' ? 'late-ack' : 'accepted',
+        observedTick: meta.tick
+      });
+    } else {
+      state.command.orphanAckCount += 1;
+      recordShootExecution({
+        type: 'shoot-ack-orphan',
+        atMs: meta.receivedAtMs,
+        controlGeneration: state.command.controlGeneration,
+        outcome: 'orphan-ack',
+        observedTick: meta.tick
+      });
     }
     state.command.lastAck = { ...ack, matchedShot: confirmed };
   }
@@ -818,10 +942,14 @@ function createBrowserlessStateStore(options = {}) {
     const timeoutMs = shotAckTimeoutMs(state.command.ackLatencySamples);
     const retained = [];
     for (const shot of state.command.pendingShots) {
-      if (Number(atMs) - Number(shot.requestedAtMs || 0) > timeoutMs) state.command.unackedShots += 1;
+      if (Number(atMs) - Number(shot.requestedAtMs || 0) > timeoutMs) {
+        state.command.unackedShots += 1;
+        state.command.expiredShots.push({ ...shot, expiredAtMs: Number(atMs) });
+      }
       else retained.push(shot);
     }
     state.command.pendingShots = retained;
+    state.command.expiredShots = state.command.expiredShots.slice(-64);
   }
 
   function recordShootRequest(request = {}) {
@@ -830,6 +958,9 @@ function createBrowserlessStateStore(options = {}) {
     const shot = {
       sequence: state.command.nextShotSequence++,
       commandId: request.commandId ?? null,
+      requestId: request.requestId ?? request.commandId ?? null,
+      controlGeneration: String(request.controlGeneration || state.command.controlGeneration || ''),
+      engagementGeneration: String(request.engagementGeneration || ''),
       requestedAtMs,
       targetId: request.targetId ?? null,
       targetX: numericOrNull(request.targetX),
@@ -1029,9 +1160,15 @@ function createBrowserlessStateStore(options = {}) {
       lastAck: cloneJson(state.command.lastAck),
       ackAgeMs: frameAge(nowMs, state.command.lastAck?.receivedAtMs),
       shooting: {
+        controlGeneration: state.command.controlGeneration,
+        lastRequestSequence: state.command.nextShotSequence - 1,
+        lastConfirmationSequence: state.command.nextConfirmationSequence - 1,
         requestedShots: state.command.requestedShots,
         acceptedShots: state.command.acceptedShots,
         unackedShots: state.command.unackedShots,
+        orphanAckCount: state.command.orphanAckCount,
+        lateAckCount: state.command.lateAckCount,
+        duplicateAckCount: state.command.duplicateAckCount,
         pendingCount: state.command.pendingShots.length,
         acceptanceRate: state.command.requestedShots > 0
           ? state.command.acceptedShots / state.command.requestedShots
@@ -1040,7 +1177,9 @@ function createBrowserlessStateStore(options = {}) {
         timing,
         shooterOrigin: shotOriginSummary(state.command.originErrorSamples),
         pendingShots: cloneJson(state.command.pendingShots.slice(-8)),
-        confirmedShots: cloneJson(state.command.confirmedShots.slice(-16))
+        expiredShots: cloneJson(state.command.expiredShots.slice(-8)),
+        confirmedShots: cloneJson(state.command.confirmedShots.slice(-16)),
+        executionEvents: cloneJson(state.command.shootExecutionEvents.slice(-32))
       },
       movement: movementCommandState({ clone: true })
     };
@@ -1103,9 +1242,15 @@ function createBrowserlessStateStore(options = {}) {
         lastAck: state.command.lastAck,
         ackAgeMs: frameAge(nowMs, state.command.lastAck?.receivedAtMs),
         shooting: {
+          controlGeneration: state.command.controlGeneration,
+          lastRequestSequence: state.command.nextShotSequence - 1,
+          lastConfirmationSequence: state.command.nextConfirmationSequence - 1,
           requestedShots: state.command.requestedShots,
           acceptedShots: state.command.acceptedShots,
           unackedShots: state.command.unackedShots,
+          orphanAckCount: state.command.orphanAckCount,
+          lateAckCount: state.command.lateAckCount,
+          duplicateAckCount: state.command.duplicateAckCount,
           pendingCount: state.command.pendingShots.length,
           acceptanceRate: state.command.requestedShots > 0
             ? state.command.acceptedShots / state.command.requestedShots
@@ -1114,7 +1259,9 @@ function createBrowserlessStateStore(options = {}) {
           timing,
           shooterOrigin: shotOriginSummary(state.command.originErrorSamples),
           pendingShots: state.command.pendingShots.slice(-8),
-          confirmedShots: state.command.confirmedShots.slice(-16)
+          expiredShots: state.command.expiredShots.slice(-8),
+          confirmedShots: state.command.confirmedShots.slice(-16),
+          executionEvents: state.command.shootExecutionEvents.slice(-32)
         },
         movement: movementCommandState({ clone: false })
       },
@@ -1124,6 +1271,7 @@ function createBrowserlessStateStore(options = {}) {
 
   return {
     getCommandState,
+    getControlGeneration,
     getDecisionState,
     getFallbackState,
     getFrameAges,
@@ -1131,9 +1279,12 @@ function createBrowserlessStateStore(options = {}) {
     getState,
     ingestDecodedFrame: ingestFrame,
     ingestFrame,
+    beginControlGeneration,
+    recordShootExecution,
     recordShootRequest,
     recordVelocityRequest,
     reset,
+    setShootExecutionListener,
     setUserId
   };
 }

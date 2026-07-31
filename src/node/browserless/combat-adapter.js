@@ -503,13 +503,22 @@ function syncConfirmedCombatShots(stateful, state = {}, target = null, combat = 
   if (!Array.isArray(learning.acceptedBulletIds)) learning.acceptedBulletIds = [];
   const seen = new Set(learning.acceptedBulletIds.map(String));
   let added = 0;
+  let lateAdded = 0;
   let lastAcceptedShotTick = numberOrNull(stateful.combatMetrics?.lastAcceptedShotTick);
+  const controlGeneration = String(stateful.combatMetrics?.controlGeneration || '');
+  const engagementGeneration = String(stateful.combatMetrics?.engagementGeneration || '');
+  const confirmationBaseline = Math.max(0, Number(stateful.combatMetrics?.confirmationSequenceBaseline || 0));
   for (const shot of state?.command?.shooting?.confirmedShots || []) {
     if (shot?.targetId !== null && shot?.targetId !== undefined && String(shot.targetId) !== targetId) continue;
+    if (controlGeneration && String(shot?.controlGeneration || '') !== controlGeneration) continue;
+    if (engagementGeneration && String(shot?.engagementGeneration || '') !== engagementGeneration) continue;
+    if (Number(shot?.confirmationSequence || 0) <= confirmationBaseline) continue;
     const bulletId = String(shot?.bullet_id ?? shot?.bulletId ?? `${shot?.createdTick ?? shot?.created_tick}:${shot?.sequence ?? ''}`);
-    if (!bulletId || seen.has(bulletId)) continue;
-    seen.add(bulletId);
+    const ownershipKey = `${controlGeneration}|${engagementGeneration}|${bulletId}`;
+    if (!bulletId || seen.has(ownershipKey)) continue;
+    seen.add(ownershipKey);
     added += 1;
+    if (shot?.lateAck === true) lateAdded += 1;
     const acceptedShotOrdinal = Math.max(0, Number(stateful.combatMetrics?.acceptedShots || 0)) + added;
     const createdTick = numberOrNull(shot.createdTick ?? shot.created_tick);
     if (createdTick !== null) lastAcceptedShotTick = Math.max(lastAcceptedShotTick ?? createdTick, createdTick);
@@ -545,9 +554,60 @@ function syncConfirmedCombatShots(stateful, state = {}, target = null, combat = 
     stateful.combatMetrics = {
       ...metrics,
       acceptedShots: Number(metrics.acceptedShots || 0) + added,
+      lateAckCount: Number(metrics.lateAckCount || 0) + lateAdded,
       lastAcceptedShotTick
     };
   }
+  return added;
+}
+
+function syncCombatShotExecutionEvents(stateful, state = {}, target = null) {
+  if (!stateful || !target || !stateful.combatMetrics) return 0;
+  const metrics = stateful.combatMetrics;
+  const targetId = String(combatTargetId(target) || '');
+  const controlGeneration = String(metrics.controlGeneration || '');
+  const engagementGeneration = String(metrics.engagementGeneration || '');
+  if (!targetId || !controlGeneration || !engagementGeneration) return 0;
+  const ledger = stateful.combatExecutionLedger
+    && String(stateful.combatExecutionLedger.engagementGeneration || '') === engagementGeneration
+    ? stateful.combatExecutionLedger
+    : { engagementGeneration, eventIds: [] };
+  const seen = new Set((ledger.eventIds || []).map(String));
+  let added = 0;
+  for (const event of state?.command?.shooting?.executionEvents || []) {
+    if (String(event?.controlGeneration || '') !== controlGeneration) continue;
+    if (String(event?.engagementGeneration || '') !== engagementGeneration) continue;
+    if (event?.targetId !== null && event?.targetId !== undefined && String(event.targetId) !== targetId) continue;
+    const eventId = `${controlGeneration}|${Number(event?.sequence || 0)}|${String(event?.type || '')}`;
+    if (seen.has(eventId)) continue;
+    seen.add(eventId);
+    added += 1;
+    metrics.lastExecutionSequence = Math.max(
+      Number(metrics.lastExecutionSequence || 0),
+      Number(event?.sequence || 0)
+    );
+    const atMs = numberOrNull(event.atMs);
+    if (event.type === 'shoot-dispatch') {
+      metrics.wireRequestCount = Number(metrics.wireRequestCount || 0) + 1;
+      metrics.requestedShots = metrics.wireRequestCount;
+      metrics.actualShots = metrics.wireRequestCount;
+      if (metrics.firstDispatchAt === null || metrics.firstDispatchAt === undefined) metrics.firstDispatchAt = atMs;
+      if (atMs !== null) metrics.lastDispatchAt = atMs;
+    } else if (event.type === 'shoot-stop') {
+      if (metrics.stopDispatchAt === null || metrics.stopDispatchAt === undefined) {
+        metrics.stopDispatchAt = atMs;
+      }
+    } else if (event.type === 'shoot-skip' || event.type === 'shoot-transport-rejected') {
+      metrics.executionSkipCount = Number(metrics.executionSkipCount || 0) + 1;
+      const reason = String(event.skipReason || event.outcome || 'unknown').slice(0, 64);
+      metrics.executionSkipReasons = metrics.executionSkipReasons && typeof metrics.executionSkipReasons === 'object'
+        ? metrics.executionSkipReasons
+        : {};
+      metrics.executionSkipReasons[reason] = Number(metrics.executionSkipReasons[reason] || 0) + 1;
+    }
+  }
+  ledger.eventIds = Array.from(seen).slice(-128);
+  stateful.combatExecutionLedger = ledger;
   return added;
 }
 
@@ -2039,6 +2099,16 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
     }
   }
   const currentPrevious = stateful.combatTarget || null;
+  const commandShooting = options.commandShooting && typeof options.commandShooting === 'object'
+    ? options.commandShooting
+    : {};
+  const currentControlGeneration = String(commandShooting.controlGeneration || options.controlGeneration || '');
+  const activeTargetMatches = Boolean(currentPrevious && String(currentPrevious.id ?? '') === String(id));
+  const previousControlGeneration = String(stateful.combatMetrics?.controlGeneration || '');
+  const controlGenerationMatches = !currentControlGeneration
+    || !previousControlGeneration
+    || currentControlGeneration === previousControlGeneration;
+  const continuesActiveGeneration = activeTargetMatches && controlGenerationMatches;
   const rememberedPrevious = stateful.combatEngagements[String(id)] || null;
   const previous = currentPrevious && String(currentPrevious.id ?? '') === String(id)
     ? currentPrevious
@@ -2047,6 +2117,24 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
   if (same && String(stateful.combatMetrics?.targetId ?? '') !== String(id)) {
     const rememberedMetrics = stateful.combatMetricsByTarget[String(id)] || null;
     if (rememberedMetrics) stateful.combatMetrics = cloneJson(rememberedMetrics);
+  }
+  let engagementGeneration = String(stateful.combatMetrics?.engagementGeneration || '');
+  let confirmationSequenceBaseline = Math.max(0, Number(stateful.combatMetrics?.confirmationSequenceBaseline || 0));
+  let requestSequenceBaseline = Math.max(0, Number(stateful.combatMetrics?.requestSequenceBaseline || 0));
+  if (!continuesActiveGeneration || !engagementGeneration) {
+    stateful.combatEngagementGenerationSequence = Math.max(
+      0,
+      Number(stateful.combatEngagementGenerationSequence || 0)
+    ) + 1;
+    engagementGeneration = [
+      currentControlGeneration || 'control-unknown',
+      String(id),
+      stateful.combatEngagementGenerationSequence,
+      numberOrNull(options.currentTick) ?? Math.round(nowMs)
+    ].join(':');
+    confirmationSequenceBaseline = Math.max(0, Number(commandShooting.lastConfirmationSequence || 0));
+    requestSequenceBaseline = Math.max(0, Number(commandShooting.lastRequestSequence || 0));
+    stateful.combatExecutionLedger = { engagementGeneration, eventIds: [] };
   }
   const distance = Number.isFinite(Number(target.distance)) ? Number(target.distance) : distanceBetween(self, target);
   const hp = numberOrNull(target.knownHp ?? target.hp);
@@ -2329,6 +2417,10 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
     targetId: String(id),
     targetName: target.name || previousMetrics.targetName || '',
     engagementId: `${String(id)}:${engagementStartedAt}`,
+    controlGeneration: currentControlGeneration || previousControlGeneration,
+    engagementGeneration,
+    confirmationSequenceBaseline,
+    requestSequenceBaseline,
     startedAt: engagementStartedAt,
     startedTick: same
       ? (numberOrNull(previousMetrics.startedTick) ?? numberOrNull(previous?.firstSeenTick) ?? numberOrNull(options.currentTick))
@@ -2641,10 +2733,12 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
   if (!contactEntryOnly) withOptionOverrides(options, {
     bullets,
     currentTick: realtime.tick,
+    commandShooting: state?.command?.shooting || null,
     executionTiming: state?.command?.shooting?.timing || options.executionTiming,
     movementExecutionTiming: state?.command?.movement?.timing || options.movementExecutionTiming,
     reason: liveCombatEnabled ? 'combat-live-realtime' : (options.controlMode === 'combat-dry-run' ? 'combat-dry-run-realtime' : 'realtime-visible-threat')
   }, mergedOptions => rememberBrowserlessCombatEngagement(stateful, self, target, mergedOptions));
+  if (!contactEntryOnly) syncCombatShotExecutionEvents(stateful, state, target);
   if (!contactEntryOnly) syncConfirmedCombatShots(stateful, state, target, {
     behavior: stateful?.opponentBehaviorStates?.[String(combatTargetId(target) || '')] || null
   }, options);
@@ -3325,13 +3419,16 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     coverageVolleyStaminaReady: sharedFireBudget.coverageVolleyStaminaReady,
     suppressionReason: sharedFireBudget.suppressionReason
   };
-  const baseCadenceMs = Number.isFinite(Number(lowConfidence.cadenceMs)) && lowConfidence.throttle
+  const executionCadenceMs = Number.isFinite(Number(fireState.cadenceMs))
+    ? Number(fireState.cadenceMs)
+    : null;
+  const advisoryBaseCadenceMs = Number.isFinite(Number(lowConfidence.cadenceMs)) && lowConfidence.throttle
     ? Number(lowConfidence.cadenceMs)
-    : (Number.isFinite(Number(fireState.cadenceMs)) ? Number(fireState.cadenceMs) : null);
-  const effectiveCadenceMs = baseCadenceMs === null
+    : executionCadenceMs;
+  const advisoryUnboundedCadenceMs = advisoryBaseCadenceMs === null
     ? null
     : Math.max(
-        baseCadenceMs,
+        advisoryBaseCadenceMs,
         Math.max(0, Number(closePressureActive ? 0 : behaviorPolicy?.minimumCadenceMs || 0)),
         closePressureActive
           ? Math.max(0, Number(pressureAttackActive
@@ -3340,22 +3437,29 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
           : 0
       );
   const maximumCadenceMs = closePressureActive ? NaN : Number(behaviorPolicy?.maximumCadenceMs);
-  const behaviorBoundedCadenceMs = effectiveCadenceMs === null
+  const behaviorBoundedCadenceMs = advisoryUnboundedCadenceMs === null
     ? null
     : (Number.isFinite(maximumCadenceMs) && maximumCadenceMs > 0
-        ? Math.min(effectiveCadenceMs, maximumCadenceMs)
-        : effectiveCadenceMs);
-  const boundedCadenceMs = behaviorBoundedCadenceMs === null
+        ? Math.max(executionCadenceMs ?? 0, Math.min(advisoryUnboundedCadenceMs, maximumCadenceMs))
+        : advisoryUnboundedCadenceMs);
+  const advisoryCadenceMs = behaviorBoundedCadenceMs === null
     ? null
     : Math.max(behaviorBoundedCadenceMs, Math.max(0, Number(highEntropyFireGate.minimumCadenceMs || 0)));
   // Once realtime combat is established, behavioral and statistical fire
-  // policies stay diagnostic-only. They may tune aim, cadence, and movement,
-  // but only physical target/aim/range checks and the dodge-stamina reserve
-  // may block an otherwise valid shot.
+  // policies stay diagnostic-only. Only physical target/aim/range checks and
+  // the dodge-stamina reserve may block or slow an otherwise valid shot.
   const behaviorSuppressFire = Boolean(!closePressureActive && behaviorPolicy?.suppressFire);
   const advisoryFireSuppressionReasons = [
     behaviorSuppressFire ? `response-policy:${String(behaviorPolicy?.reason || behaviorPolicy?.name || 'suppressed')}` : '',
     highEntropyFireGate.suppressFire ? String(highEntropyFireGate.reason || 'ordinary-fire-budget-suppressed') : ''
+  ].filter(Boolean);
+  const advisoryCadenceReasons = [
+    lowConfidence.throttle && Number(lowConfidence.cadenceMs || 0) > Number(executionCadenceMs || 0)
+      ? 'low-confidence' : '',
+    !closePressureActive && Number(behaviorPolicy?.minimumCadenceMs || 0) > Number(executionCadenceMs || 0)
+      ? `response-policy:${String(behaviorPolicy?.name || behaviorPolicy?.reason || 'minimum-cadence')}` : '',
+    Number(highEntropyFireGate.minimumCadenceMs || 0) > Number(executionCadenceMs || 0)
+      ? `high-entropy:${String(highEntropyFireGate.reason || 'minimum-cadence')}` : ''
   ].filter(Boolean);
   const executionHighEntropyFireGate = {
     ...highEntropyFireGate,
@@ -3375,6 +3479,21 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     fireState,
     contactEntryOnly
   });
+  if (stateful?.combatMetrics) {
+    const metrics = stateful.combatMetrics;
+    const observationKey = numberOrNull(realtime.tick) ?? Number(options.nowMs || Date.now());
+    if (wouldShoot && Number(metrics.lastIntentObservationKey) !== observationKey) {
+      metrics.intentShotCount = Number(metrics.intentShotCount || 0) + 1;
+      metrics.lastIntentObservationKey = observationKey;
+      if (metrics.firstEligibleAt === null || metrics.firstEligibleAt === undefined) {
+        metrics.firstEligibleAt = Number(options.nowMs || Date.now());
+      }
+      metrics.lastEligibleAt = Number(options.nowMs || Date.now());
+    }
+    if (exitDecision && (metrics.stopEligibleAt === null || metrics.stopEligibleAt === undefined)) {
+      metrics.stopEligibleAt = Number(options.nowMs || Date.now());
+    }
+  }
   const commandSuppressed = Boolean(!liveCombatEnabled || !wouldShoot);
   return {
     ok: Boolean(self),
@@ -3497,7 +3616,14 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
         : (String(combatTargetState?.originIntent || '') === 'defensive'
             ? 'defensive-origin'
             : (defensivePressure ? 'recent-attributed-injury' : 'none')),
-      effectiveCadenceMs: boundedCadenceMs,
+      effectiveCadenceMs: executionCadenceMs,
+      executionCadenceMs,
+      advisoryCadenceMs,
+      advisoryCadenceReasons,
+      advisoryCadenceRaised: false,
+      advisoryCadenceWouldRaise: advisoryCadenceMs !== null
+        && executionCadenceMs !== null
+        && advisoryCadenceMs > executionCadenceMs,
       decisionIntervalMs: Number.isFinite(Number(options.decisionIntervalMs)) ? Number(options.decisionIntervalMs) : null,
       combatControlIntervalMs: Number.isFinite(Number(options.combatControlIntervalMs)) ? Number(options.combatControlIntervalMs) : null,
       actualLastShotAt: Number.isFinite(Number(stateful?.combatMetrics?.actualLastShotAt)) ? Number(stateful.combatMetrics.actualLastShotAt) : null,
@@ -3545,5 +3671,8 @@ module.exports = {
   normalizeCombatBullet,
   normalizeCombatEntity,
   recordCombatShotLearning,
+  rememberBrowserlessCombatEngagement,
+  syncCombatShotExecutionEvents,
+  syncConfirmedCombatShots,
   summarizeCombatTarget
 };
