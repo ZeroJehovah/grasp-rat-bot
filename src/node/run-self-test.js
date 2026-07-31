@@ -33714,6 +33714,83 @@ async function runSelfTest() {
       want: true
     },
     {
+      name: 'browserless non-combat settlement recovery is the only fast recovery context',
+      got: (() => {
+        const ordinary = browserlessLoopPlan({
+          ok: false,
+          canary: {
+            runId: 'ordinary-stall',
+            error: 'action-settlement-stalled',
+            safety: { event: { reason: 'action-settlement-stalled', shouldLeave: false } }
+          }
+        }, { loopDelayMs: 30000 });
+        const combat = browserlessLoopPlan({
+          ok: false,
+          canary: {
+            runId: 'combat-stall',
+            error: 'combat-action-settlement-stalled',
+            safety: { event: { reason: 'combat-action-settlement-stalled', shouldLeave: true } }
+          }
+        }, { loopDelayMs: 30000 });
+        return [
+          ordinary.reason,
+          ordinary.delayMs,
+          ordinary.transportRecovery?.expectedSelfPresent === true,
+          ordinary.transportRecovery?.sourceRunId,
+          Boolean(combat.transportRecovery),
+          combat.reason
+        ].join('|');
+      })(),
+      want: 'action-settlement-stalled|1000|true|ordinary-stall|false|combat-action-settlement-stalled'
+    },
+    {
+      name: 'browserless settlement recovery deadline starts one protected verified leave',
+      got: (async () => {
+        const atMs = Date.parse('2026-08-01T00:00:10.000Z');
+        const result = await runReadOnlyCanary({
+          gameOrigin: 'https://example.test',
+          userId: 7,
+          sessionToken: 'self-test-token',
+          controlMode: 'profit-live',
+          readOnly: false,
+          httpTimeoutMs: 1000,
+          leaveRetryMax: 0,
+          leaveRetryMs: 0,
+          leaveDangerHedgeMs: 0
+        }, {
+          now: () => atMs,
+          persistedState: {},
+          transportRecoveryEscalation: {
+            recoveryId: 'transport-recovery:source:1',
+            sourceRunId: 'source',
+            startedAt: '2026-08-01T00:00:00.000Z',
+            deadlineAt: '2026-08-01T00:00:10.000Z',
+            lastRealtimeTick: 321,
+            expectedSelfPresent: true
+          },
+          leaveWithVerification: async () => ({ ok: true, attempts: [{ ok: true, status: 200 }] })
+        });
+        return [
+          result.safety.event?.reason,
+          result.safety.event?.shouldLeave,
+          result.leave?.ok,
+          /^exit:/.test(String(result.safety.leavePending?.exitAttemptId || '')),
+          result.safety.leavePending?.originalReason
+        ].join('|');
+      })(),
+      want: 'transport-recovery-deadline-leave|true|true|true|transport-recovery-deadline-leave'
+    },
+    {
+      name: 'browserless settlement recovery window is bounded by config',
+      got: (() => {
+        const low = parseBrowserlessRunnerArgs(['--action-settlement-recovery-max-ms', '1'], {});
+        const high = parseBrowserlessRunnerArgs(['--action-settlement-recovery-max-ms', '999999'], {});
+        const normal = parseBrowserlessRunnerArgs([], {});
+        return [low.actionSettlementRecoveryMaxMs, normal.actionSettlementRecoveryMaxMs, high.actionSettlementRecoveryMaxMs].join('|');
+      })(),
+      want: '3000|10000|30000'
+    },
+    {
       name: 'browserless public config redacts target whitelist URL secrets',
       got: (() => {
         const config = publicConfig({

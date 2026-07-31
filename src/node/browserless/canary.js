@@ -2887,7 +2887,31 @@ async function runReadOnlyCanary(config, options = {}) {
     return true;
   };
 
-  try {
+  if (options.transportRecoveryEscalation?.expectedSelfPresent === true) {
+    const recovery = options.transportRecoveryEscalation;
+    result.snapshotSafety = {
+      ok: false,
+      reason: 'transport-recovery-deadline-leave',
+      checkedAt: new Date(now()).toISOString()
+    };
+    recordSafetyEvent(createSafetyEvent('transport-recovery-deadline-leave', {
+      recoveryId: String(recovery.recoveryId || ''),
+      sourceRunId: String(recovery.sourceRunId || ''),
+      startedAt: String(recovery.startedAt || ''),
+      deadlineAt: String(recovery.deadlineAt || ''),
+      lastRealtimeTick: Number(recovery.lastRealtimeTick || 0),
+      expectedSelfPresent: true
+    }, {
+      nowMs: now(),
+      classification: 'exit',
+      shouldLeave: true,
+      selfAuthorityMissing: true
+    }), {
+      state: stateStore.getDecisionState?.(startedAt) || stateStore.getState(startedAt),
+      decision: result.decisions.last,
+      atMs: now()
+    });
+  } else try {
     if (options.bypassPreLoginSafetyReason) {
       const required = Math.max(1, Math.round(Number(
         config.loginPointSafetySuccessRequired
@@ -3752,7 +3776,7 @@ async function runReadOnlyCanary(config, options = {}) {
       && authoritativeInGameEvidence
       && (!authOpenFailure || snapshotSafetySelfPresent(result.snapshotSafety))
   );
-  const shouldAttemptLeave = Boolean(authoritativeInGameEvidence || protectedExitEvidence);
+  const shouldAttemptLeave = Boolean(authoritativeInGameEvidence || protectedExitEvidence || leavePending?.promise);
 
   if (shouldAttemptLeave) {
     try {

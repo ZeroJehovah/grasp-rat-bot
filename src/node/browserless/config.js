@@ -47,6 +47,7 @@ const DEFAULTS = {
   httpTimeoutMs: 10000,
   decisionIntervalMs: 1000,
   loopDelayMs: 30000,
+  actionSettlementRecoveryMaxMs: 10000,
   dailyFirstLoginDelayMs: 120000,
   loginPointSafetySuccessRequired: 1,
   loginPointSafetyProbeIntervalMs: 30000,
@@ -207,6 +208,10 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
     httpTimeoutMs: numberEnv(env.GRASP_RAT_BROWSERLESS_HTTP_TIMEOUT_MS, DEFAULTS.httpTimeoutMs),
     decisionIntervalMs: numberEnv(env.GRASP_RAT_BROWSERLESS_DECISION_INTERVAL_MS, DEFAULTS.decisionIntervalMs),
     loopDelayMs: numberEnv(env.GRASP_RAT_BROWSERLESS_LOOP_DELAY_MS, DEFAULTS.loopDelayMs),
+    actionSettlementRecoveryMaxMs: Math.min(30000, Math.max(3000, numberEnv(
+      env.GRASP_RAT_BROWSERLESS_ACTION_SETTLEMENT_RECOVERY_MAX_MS,
+      DEFAULTS.actionSettlementRecoveryMaxMs
+    ))),
     dailyFirstLoginDelayMs: numberEnv(env.GRASP_RAT_BROWSERLESS_DAILY_FIRST_LOGIN_DELAY_MS, DEFAULTS.dailyFirstLoginDelayMs),
     loginPointSafetySuccessRequired: numberEnv(env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_SAFETY_SUCCESS_REQUIRED, DEFAULTS.loginPointSafetySuccessRequired),
     loginPointSafetyProbeIntervalMs: numberEnv(env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_SAFETY_PROBE_INTERVAL_MS, DEFAULTS.loginPointSafetyProbeIntervalMs),
@@ -396,6 +401,10 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
       config.decisionIntervalMs = numberEnv(argv[++i], config.decisionIntervalMs);
     } else if (arg === '--loop-delay-ms') {
       config.loopDelayMs = numberEnv(argv[++i], config.loopDelayMs);
+    } else if (arg === '--action-settlement-recovery-max-ms') {
+      config.actionSettlementRecoveryMaxMs = Math.min(30000, Math.max(3000, numberEnv(
+        argv[++i], config.actionSettlementRecoveryMaxMs
+      )));
     } else if (arg === '--daily-first-login-delay-ms') {
       config.dailyFirstLoginDelayMs = numberEnv(argv[++i], config.dailyFirstLoginDelayMs);
     } else if (arg === '--login-point-safety-success-required') {
@@ -596,6 +605,7 @@ function usage() {
     '  --target-whitelist-file <file> Local whitelist fallback. Default: ./dist/target-whitelist.json',
     '  --decision-interval-ms <ms>  Dry-run decision log/status interval. Default: 1000',
     '  --loop-delay-ms <ms>    Delay before the next non-once live cycle after recoverable exit. Default: 30000',
+    '  --action-settlement-recovery-max-ms <ms>  Bounded non-combat settlement recovery window (3000-30000). Default: 10000',
     '  --daily-first-login-delay-ms <ms>  Earliest UTC+8 daily first login after midnight. Default: 120000',
     '  --login-point-safety-success-required <n>  Legacy consecutive checks when snapshot edge mode is disabled. Default: 1',
     '  --login-point-safety-probe-interval-ms <ms>  Delay between those checks. Default: 30000',

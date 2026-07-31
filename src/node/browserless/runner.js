@@ -147,6 +147,7 @@ function publicConfig(config) {
     leaveDangerHedgeMs: Number(config.leaveDangerHedgeMs || 0),
     decisionIntervalMs: Number(config.decisionIntervalMs || 0),
     loopDelayMs: Number(config.loopDelayMs || 0),
+    actionSettlementRecoveryMaxMs: actionSettlementRecoveryMaxMs(config),
     dailyFirstLoginDelayMs: Number(config.dailyFirstLoginDelayMs || 0),
     loginPointSafetySuccessRequired: Number(config.loginPointSafetySuccessRequired || 0),
     loginPointSafetyProbeIntervalMs: Number(config.loginPointSafetyProbeIntervalMs || 0),
@@ -638,6 +639,65 @@ function parseIsoTimeMs(value) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function actionSettlementRecoveryMaxMs(config = {}) {
+  return Math.min(30000, Math.max(3000, Number(
+    config.actionSettlementRecoveryMaxMs ?? 10000
+  ) || 10000));
+}
+
+function normalizeTransportRecovery(value, nowMs = Date.now(), config = {}) {
+  if (!value || typeof value !== 'object') return null;
+  if (value.expectedSelfPresent !== true) return null;
+  const startedAtMs = parseIsoTimeMs(value.startedAt) || Number(value.startedAtMs || 0);
+  if (!Number.isFinite(startedAtMs) || startedAtMs <= 0) return null;
+  const deadlineAtMs = parseIsoTimeMs(value.deadlineAt) || Number(value.deadlineAtMs || 0)
+    || startedAtMs + actionSettlementRecoveryMaxMs(config);
+  const recoveryId = String(value.recoveryId || '');
+  const sourceRunId = String(value.sourceRunId || '');
+  if (!recoveryId || !sourceRunId) return null;
+  const currentMs = Number.isFinite(Number(nowMs)) ? Number(nowMs) : Date.now();
+  return {
+    recoveryId,
+    sourceRunId,
+    startedAt: new Date(startedAtMs).toISOString(),
+    startedAtMs,
+    deadlineAt: new Date(deadlineAtMs).toISOString(),
+    deadlineAtMs,
+    lastRealtimeTick: Math.max(0, Number(value.lastRealtimeTick || 0) || 0),
+    expectedSelfPresent: true,
+    probeCount: Math.max(0, Number(value.probeCount || 0) || 0),
+    lastProbeAt: String(value.lastProbeAt || ''),
+    lastProbeReason: String(value.lastProbeReason || ''),
+    escalated: value.escalated === true,
+    expired: currentMs >= deadlineAtMs
+  };
+}
+
+function createTransportRecovery(loopPlan = {}, result = null, existing = null, config = {}, nowMs = Date.now()) {
+  const current = normalizeTransportRecovery(existing, nowMs, config);
+  const sourceRunId = String(loopPlan.previousRunId || result?.canary?.runId || '');
+  if (current && current.sourceRunId === sourceRunId) return current;
+  if (!sourceRunId) return null;
+  const startedAtMs = Number.isFinite(Number(nowMs)) ? Number(nowMs) : Date.now();
+  const deadlineAtMs = startedAtMs + actionSettlementRecoveryMaxMs(config);
+  const lastRealtimeTick = latestRealtimeTickFromResult(result);
+  return {
+    recoveryId: `transport-recovery:${sourceRunId}:${startedAtMs}`,
+    sourceRunId,
+    startedAt: new Date(startedAtMs).toISOString(),
+    startedAtMs,
+    deadlineAt: new Date(deadlineAtMs).toISOString(),
+    deadlineAtMs,
+    lastRealtimeTick,
+    expectedSelfPresent: true,
+    probeCount: 0,
+    lastProbeAt: '',
+    lastProbeReason: '',
+    escalated: false,
+    expired: false
+  };
+}
+
 const STAMINA_GAMEPLAY_DEADLINE_REASONS = new Set([
   'stamina-budget-coin-leave',
   'stamina-exhausted-leave'
@@ -672,6 +732,7 @@ function persistedReconnectDelayPlan(state, config = {}, nowMs = Date.now()) {
     ? runner.gameplayDeadline
     : null;
   const nowValue = Number.isFinite(Number(nowMs)) ? Number(nowMs) : Date.now();
+  const transportRecovery = normalizeTransportRecovery(runner.transportRecovery, nowValue, config);
   const pendingExit = normalizePendingExit(runner.pendingExit, nowValue, {
     maximumAgeMs: config.pendingExitPersistMaxMs
   });
@@ -693,6 +754,26 @@ function persistedReconnectDelayPlan(state, config = {}, nowMs = Date.now()) {
       pendingExit,
       gameplayDeadline: null,
       processStop: runner.processStop || null
+    };
+  }
+  if (transportRecovery) {
+    const remainingMs = Math.max(0, transportRecovery.deadlineAtMs - nowValue);
+    return {
+      continue: true,
+      reason: 'action-settlement-stalled',
+      delayMs: Math.min(1000, remainingMs),
+      previousRunId: transportRecovery.sourceRunId,
+      error: 'action-settlement-stalled',
+      safetyReason: 'action-settlement-stalled',
+      nextRunAt: new Date(nowValue + Math.min(1000, remainingMs)).toISOString(),
+      persisted: true,
+      explicitDelay: false,
+      explicitCooldown: false,
+      deadlineType: 'transport-recovery',
+      deadlineSource: 'transport-recovery',
+      gameplayDeadline: null,
+      processStop: runner.processStop || null,
+      transportRecovery
     };
   }
   const candidates = [
@@ -776,7 +857,8 @@ function persistedReconnectDelayPlan(state, config = {}, nowMs = Date.now()) {
     dailyFirstLoginDeadlineApplied,
     originalNextRunAt: originalNextRunAtMs > 0 ? new Date(originalNextRunAtMs).toISOString() : '',
     gameplayDeadline: persistedGameplayDeadline,
-    processStop: runner.processStop || null
+    processStop: runner.processStop || null,
+    transportRecovery
   };
 }
 
@@ -962,6 +1044,16 @@ function browserlessLoopPlan(result, config = {}) {
     return {
       ...stop('cloudflare-challenge'),
       connectionFailure: canary.connectionFailure
+    };
+  }
+  if (safetyReason === 'action-settlement-stalled' && !runnerResultConfirmedLeave(result)) {
+    return {
+      ...resumeFast(safetyReason),
+      transportRecovery: {
+        sourceRunId: runId,
+        lastRealtimeTick: latestRealtimeTickFromResult(result),
+        expectedSelfPresent: true
+      }
     };
   }
   if (fastRecoverableTransportReasons.has(safetyReason)) {
@@ -1763,6 +1855,20 @@ async function runBrowserlessRunner(config, deps = {}) {
       schedulingNowMs,
       { maximumAgeMs: config.pendingExitPersistMaxMs }
     );
+    const existingTransportRecovery = normalizeTransportRecovery(
+      currentBeforeWait?.runner?.transportRecovery,
+      schedulingNowMs,
+      config
+    );
+    const transportRecovery = !pendingExit && !confirmedLeave
+      ? (loopPlan.transportRecovery
+          ? createTransportRecovery(loopPlan, resultForStop, existingTransportRecovery, config, schedulingNowMs)
+          : existingTransportRecovery)
+      : null;
+    const transportRecoveryStarted = Boolean(
+      transportRecovery
+        && (!existingTransportRecovery || existingTransportRecovery.recoveryId !== transportRecovery.recoveryId)
+    );
     const pendingExitDeadlineMs = pendingExit
       ? Math.max(schedulingNowMs, Number(pendingExit.nextRetryAtMs || schedulingNowMs))
       : 0;
@@ -1846,6 +1952,7 @@ async function runBrowserlessRunner(config, deps = {}) {
         gameplayDeadline: pendingExit
           ? null
           : gameplayDeadlineFromLoopPlan(scheduledLoopPlan, nextRunAt, loopPlan.previousRunId),
+        transportRecovery,
         confirmedLeave: confirmedLeave
           ? {
               confirmedAt: confirmedLeave.confirmedAt || '',
@@ -1872,6 +1979,112 @@ async function runBrowserlessRunner(config, deps = {}) {
           }, { nowMs: now() })
     }, { updatedAt: new Date(now()).toISOString() });
     logStore.append('runner', 'runner-loop-wait', waitDetail);
+    if (transportRecovery) {
+      if (transportRecoveryStarted) {
+        logStore.append('runner', 'transport-recovery-start', {
+          recoveryId: transportRecovery.recoveryId,
+          sourceRunId: transportRecovery.sourceRunId,
+          startedAt: transportRecovery.startedAt,
+          deadlineAt: transportRecovery.deadlineAt,
+          lastRealtimeTick: transportRecovery.lastRealtimeTick,
+          expectedSelfPresent: true
+        });
+      }
+      if (transportRecovery.expired) {
+        const escalated = { ...transportRecovery, escalated: true, expired: true };
+        updateState({
+          runner: {
+            transportRecovery: escalated,
+            currentAction: {
+              kind: 'exit-recovery',
+              band: 'exit',
+              reason: 'transport-recovery-deadline-leave',
+              previousRunId: transportRecovery.sourceRunId,
+              recoveryId: transportRecovery.recoveryId
+            }
+          }
+        }, { updatedAt: new Date(now()).toISOString() });
+        logStore.append('runner', 'transport-recovery-deadline-reached', {
+          recoveryId: transportRecovery.recoveryId,
+          sourceRunId: transportRecovery.sourceRunId,
+          reason: 'deadline-expired',
+          elapsedMs: Math.max(0, schedulingNowMs - transportRecovery.startedAtMs),
+          deadlineAt: transportRecovery.deadlineAt,
+          exitAttemptId: ''
+        });
+        return null;
+      }
+      let probe;
+      try {
+        probe = await (deps.runPreLoginSnapshotSafety || runPreLoginSnapshotSafety)({
+          ...config,
+          snapshotEdgeEnabled: false,
+          loginPointSafetySuccessRequired: 1,
+          loginPointSafetyProbeIntervalMs: 0
+        }, currentBeforeWait, {
+          now,
+          sleep,
+          fetchWithTimeout: sourceIpController.fetchWithTimeout,
+          onSnapshotPayload: observeSnapshotPayload,
+          easyKillPlayerTracker,
+          damagePlayerTracker,
+          dynamicWhitelist
+        });
+      } catch (err) {
+        probe = { ok: false, reason: 'snapshot-error', error: errorMessage(err) };
+      }
+      const probeSummary = probe?.response?.summary || {};
+      const selfPresent = snapshotSafetyAllowsImmediateResume(probe);
+      const selfAbsent = snapshotSafetyConfirmsOffline(probe);
+      const updatedRecovery = {
+        ...transportRecovery,
+        probeCount: transportRecovery.probeCount + 1,
+        lastProbeAt: probe?.checkedAt || new Date(now()).toISOString(),
+        lastProbeReason: String(probe?.reason || 'snapshot-error')
+      };
+      if (probe && typeof probe === 'object') recordSnapshotSafetyProgress(probe);
+      logStore.append('runner', 'transport-recovery-probe', {
+        recoveryId: updatedRecovery.recoveryId,
+        sourceRunId: updatedRecovery.sourceRunId,
+        reason: updatedRecovery.lastProbeReason,
+        freshness: probeSummary?.freshness?.ok === undefined ? null : Boolean(probeSummary.freshness.ok),
+        selfPresent,
+        elapsedMs: Math.max(0, now() - updatedRecovery.startedAtMs),
+        deadlineAt: updatedRecovery.deadlineAt
+      });
+      if (selfPresent) {
+        preparedSnapshotSafety = probe;
+        updateState({
+          runner: {
+            transportRecovery: updatedRecovery,
+            currentAction: {
+              kind: 'loop-wait',
+              band: 'recover',
+              reason: 'transport-recovery-ws-reopen',
+              delayMs: 0,
+              nextRunAt: '',
+              previousRunId: updatedRecovery.sourceRunId,
+              recoveryId: updatedRecovery.recoveryId
+            }
+          }
+        }, { updatedAt: new Date(now()).toISOString() });
+        refreshFromPersistedState();
+        return null;
+      }
+      if (selfAbsent) {
+        updateState({ runner: { transportRecovery: null } }, { updatedAt: new Date(now()).toISOString() });
+        logStore.append('runner', 'transport-recovery-escalated', {
+          recoveryId: updatedRecovery.recoveryId,
+          sourceRunId: updatedRecovery.sourceRunId,
+          reason: 'fresh-self-absent-full-login-safety',
+          elapsedMs: Math.max(0, now() - updatedRecovery.startedAtMs),
+          deadlineAt: updatedRecovery.deadlineAt,
+          exitAttemptId: ''
+        });
+      } else {
+        updateState({ runner: { transportRecovery: updatedRecovery } }, { updatedAt: new Date(now()).toISOString() });
+      }
+    }
     try {
       if (shouldPrepareSnapshotSafety) {
         const leadMs = preLoginSafetyLeadMs(config);
@@ -2509,6 +2722,13 @@ async function runBrowserlessRunner(config, deps = {}) {
         lastRealtimeTick: Number(persistedConfirmedLeave.lastRealtimeTick || 0),
         remainingMs: persistedConfirmedLeave.quarantineRemainingMs
       });
+    } else if (persistedDelayPlan.transportRecovery) {
+      logStore.append('runner', 'transport-recovery-persisted-resume', {
+        recoveryId: persistedDelayPlan.transportRecovery.recoveryId,
+        sourceRunId: persistedDelayPlan.transportRecovery.sourceRunId,
+        deadlineAt: persistedDelayPlan.transportRecovery.deadlineAt,
+        elapsedMs: Math.max(0, now() - persistedDelayPlan.transportRecovery.startedAtMs)
+      });
     } else {
       try {
         const probe = await (deps.runPreLoginSnapshotSafety || runPreLoginSnapshotSafety)({
@@ -2758,6 +2978,30 @@ async function runBrowserlessRunner(config, deps = {}) {
       if (stopped) return stopped;
       continue;
     }
+    const transportRecoveryState = normalizeTransportRecovery(
+      loopState?.runner?.transportRecovery,
+      now(),
+      config
+    );
+    if (transportRecoveryState && !transportRecoveryState.expired && !preparedSnapshotSafety) {
+      const stopped = await waitForLoopPlan({
+        continue: true,
+        reason: 'action-settlement-stalled',
+        delayMs: Math.min(1000, Math.max(0, transportRecoveryState.deadlineAtMs - now())),
+        previousRunId: transportRecoveryState.sourceRunId,
+        error: 'action-settlement-stalled',
+        safetyReason: 'action-settlement-stalled',
+        transportRecovery: transportRecoveryState
+      }, {
+        ok: false,
+        canary: {
+          runId: transportRecoveryState.sourceRunId,
+          safety: { event: { reason: 'action-settlement-stalled', shouldLeave: false } }
+        }
+      });
+      if (stopped) return stopped;
+      continue;
+    }
     loginPointProvided = hasConfigNumber(config.loginPointX) && hasConfigNumber(config.loginPointY);
     if (!loginPointProvided && config.controlMode === 'read-only') {
       let bootstrap;
@@ -2835,6 +3079,14 @@ async function runBrowserlessRunner(config, deps = {}) {
     let stateBeforeCanary = null;
     try {
       stateBeforeCanary = readBrowserlessStateFile(stateFile);
+      const activeTransportRecovery = normalizeTransportRecovery(
+        stateBeforeCanary?.runner?.transportRecovery,
+        now(),
+        config
+      );
+      const transportRecoveryEscalation = activeTransportRecovery?.expired === true
+        ? activeTransportRecovery
+        : null;
       const preLoginUpdatedAt = new Date(now()).toISOString();
       const preLoginPatch = {
         runner: { currentAction: preLoginSnapshotSafetyAction(stateBeforeCanary) }
@@ -2859,6 +3111,7 @@ async function runBrowserlessRunner(config, deps = {}) {
         dynamicWhitelist,
         bypassPreLoginSafetyReason,
         precheckedSnapshotSafety,
+        transportRecoveryEscalation,
         onSnapshotSafety: recordSnapshotSafetyProgress,
         onSnapshotPayload: observeSnapshotPayload,
         onSnapshotEdge: progress => logStore.append('runner', `snapshot-edge-${progress.type || 'progress'}`, progress),
@@ -2971,6 +3224,16 @@ async function runBrowserlessRunner(config, deps = {}) {
       }, activeRunKillConfirmations));
     const currentStateBeforeFinish = readBrowserlessStateFile(stateFile);
     const finalStateBase = liveState || currentStateBeforeFinish;
+    const activeTransportRecovery = normalizeTransportRecovery(
+      finalStateBase?.runner?.transportRecovery,
+      now(),
+      config
+    );
+    const transportRecoveryRecovered = Boolean(
+      activeTransportRecovery
+        && canary?.entry?.firstSelf
+        && !canary?.safety?.event?.shouldLeave
+    );
     const priorExitRecoveryOutcomes = Array.isArray(finalStateBase?.runner?.exitRecoveryOutcomes)
       ? finalStateBase.runner.exitRecoveryOutcomes
       : [];
@@ -2992,6 +3255,9 @@ async function runBrowserlessRunner(config, deps = {}) {
         running: !config.once,
         mode: nextPendingExit ? 'exit-recovery' : (config.controlMode || 'read-only'),
         pendingExit: nextPendingExit,
+        transportRecovery: (transportRecoveryRecovered || canary?.safety?.event?.reason === 'transport-recovery-deadline-leave')
+          ? null
+          : activeTransportRecovery,
         connectionFailure: canary?.connectionFailure || null,
         exitRecoveryOutcomes,
         lastRun: result,
@@ -3021,6 +3287,23 @@ async function runBrowserlessRunner(config, deps = {}) {
     writeState(finalState);
     liveState = null;
     logStore.append('runner', result.ok ? 'runner-finish' : 'runner-stop', summarizeBrowserlessRunnerResult(result));
+    if (transportRecoveryRecovered) {
+      logStore.append('runner', 'transport-recovery-recovered', {
+        recoveryId: activeTransportRecovery.recoveryId,
+        sourceRunId: activeTransportRecovery.sourceRunId,
+        elapsedMs: Math.max(0, now() - activeTransportRecovery.startedAtMs),
+        wsReopenLatencyMs: Math.max(0, now() - activeTransportRecovery.startedAtMs),
+        lastRealtimeTick: latestRealtimeTickFromResult({ canary })
+      });
+    } else if (activeTransportRecovery?.expired && canary?.safety?.event?.reason === 'transport-recovery-deadline-leave') {
+      logStore.append('runner', 'transport-recovery-escalated', {
+        recoveryId: activeTransportRecovery.recoveryId,
+        sourceRunId: activeTransportRecovery.sourceRunId,
+        reason: 'deadline-verified-leave',
+        elapsedMs: Math.max(0, now() - activeTransportRecovery.startedAtMs),
+        exitAttemptId: canary?.safety?.leavePending?.exitAttemptId || nextPendingExit?.exitAttemptId || ''
+      });
+    }
 
     const loopPlan = browserlessLoopPlan(result, config);
     const stopped = await waitForLoopPlan(loopPlan, result);
