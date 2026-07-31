@@ -698,6 +698,23 @@ function createTransportRecovery(loopPlan = {}, result = null, existing = null, 
   };
 }
 
+function resumeTransportRecoveryAfterCloudflareStop(loopPlan = {}, state = {}, config = {}, nowMs = Date.now()) {
+  if (loopPlan.continue || loopPlan.reason !== 'cloudflare-challenge') return loopPlan;
+  const transportRecovery = normalizeTransportRecovery(state?.runner?.transportRecovery, nowMs, config);
+  if (!transportRecovery) return loopPlan;
+  const remainingMs = Math.max(0, transportRecovery.deadlineAtMs - Number(nowMs));
+  return {
+    continue: true,
+    reason: 'action-settlement-stalled',
+    delayMs: Math.min(1000, remainingMs),
+    previousRunId: transportRecovery.sourceRunId,
+    error: 'cloudflare-challenge',
+    safetyReason: 'action-settlement-stalled',
+    transportRecovery,
+    recoveredFromTerminalReason: 'cloudflare-challenge'
+  };
+}
+
 const STAMINA_GAMEPLAY_DEADLINE_REASONS = new Set([
   'stamina-budget-coin-leave',
   'stamina-exhausted-leave'
@@ -1799,6 +1816,12 @@ async function runBrowserlessRunner(config, deps = {}) {
 
   let preparedSnapshotSafety = null;
   const waitForLoopPlan = async (loopPlan, resultForStop = null) => {
+    loopPlan = resumeTransportRecoveryAfterCloudflareStop(
+      loopPlan,
+      readBrowserlessStateFile(stateFile),
+      config,
+      now()
+    );
     if (!loopPlan.continue) {
       if (!config.once) {
         const currentBeforeStop = readBrowserlessStateFile(stateFile);
@@ -5365,6 +5388,50 @@ async function runBrowserlessRunnerSelfTest() {
     const complexCombatMainThreadBudget = await runComplexCombatMainThreadBudgetSelfTest(tmp);
     const snapshotEdge = await runSnapshotEdgeSelfTest();
     const cloudflareChallenge = runCloudflareChallengeSelfTest();
+    const transportRecoveryCloudflare = (() => {
+      const startedAtMs = Date.parse('2026-08-01T00:00:00.000Z');
+      const recoveryState = {
+        runner: {
+          transportRecovery: {
+            recoveryId: 'transport-recovery:self-test:1',
+            sourceRunId: 'self-test-run',
+            startedAt: '2026-08-01T00:00:00.000Z',
+            deadlineAt: '2026-08-01T00:00:10.000Z',
+            lastRealtimeTick: 321,
+            expectedSelfPresent: true
+          }
+        }
+      };
+      const resumed = resumeTransportRecoveryAfterCloudflareStop({
+        continue: false,
+        reason: 'cloudflare-challenge',
+        delayMs: 0,
+        previousRunId: 'cloudflare-run'
+      }, recoveryState, { actionSettlementRecoveryMaxMs: 10000 }, startedAtMs + 1000);
+      const expired = resumeTransportRecoveryAfterCloudflareStop({
+        continue: false,
+        reason: 'cloudflare-challenge',
+        delayMs: 0
+      }, recoveryState, { actionSettlementRecoveryMaxMs: 10000 }, startedAtMs + 10000);
+      const explicitStop = resumeTransportRecoveryAfterCloudflareStop({
+        continue: false,
+        reason: 'explicit-stop',
+        delayMs: 0
+      }, recoveryState, { actionSettlementRecoveryMaxMs: 10000 }, startedAtMs + 1000);
+      return {
+        ok: resumed.continue === true
+          && resumed.reason === 'action-settlement-stalled'
+          && resumed.delayMs === 1000
+          && resumed.transportRecovery?.recoveryId === 'transport-recovery:self-test:1'
+          && expired.continue === true
+          && expired.delayMs === 0
+          && explicitStop.reason === 'explicit-stop'
+          && explicitStop.continue === false,
+        resumed,
+        expired,
+        explicitStop
+      };
+    })();
     const pendingExitRecovery = runPendingExitRecoverySelfTest();
     const combatBattleLog = runCombatBattleLogSelfTest();
     const combatShotExecution = runCombatShotExecutionSelfTest();
@@ -5425,6 +5492,7 @@ async function runBrowserlessRunnerSelfTest() {
         && statusServerChatTest.ok
         && snapshotEdge.ok
         && cloudflareChallenge.ok
+        && transportRecoveryCloudflare.ok
         && pendingExitRecovery.ok
         && combatBattleLog.ok
         && combatShotExecution.ok
@@ -5483,6 +5551,7 @@ async function runBrowserlessRunnerSelfTest() {
       statusServerChatTest,
       snapshotEdge,
       cloudflareChallenge,
+      transportRecoveryCloudflare,
       pendingExitRecovery,
       combatBattleLog,
       combatShotExecution,
@@ -5513,6 +5582,7 @@ module.exports = {
   preserveOnlineSessionForLoopWait,
   publicConfig,
   runnerResultExitDetail,
+  resumeTransportRecoveryAfterCloudflareStop,
   summarizeBrowserlessRunnerResult,
   runBrowserlessRunner,
   runBrowserlessRunnerSelfTest
