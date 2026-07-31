@@ -6,6 +6,8 @@ const {
   DEFAULT_TARGET_WHITELIST_URL
 } = require('./target-whitelist');
 
+const MIN_SNAPSHOT_EDGE_INTERVAL_MS = 30000;
+
 const DEFAULTS = {
   gameOrigin: 'https://grasp-rat-game.h-e.top',
   wsPath: '/ws',
@@ -42,7 +44,6 @@ const DEFAULTS = {
   leaveRetryMs: 200,
   leaveHedgeMs: 1000,
   leaveDangerHedgeMs: 350,
-  leavePrewarmIntervalMs: 3000,
   httpTimeoutMs: 10000,
   decisionIntervalMs: 1000,
   loopDelayMs: 30000,
@@ -51,7 +52,7 @@ const DEFAULTS = {
   loginPointSafetyProbeIntervalMs: 30000,
   loginPointSingleBlockerBypassMs: 3600000,
   snapshotEdgeEnabled: true,
-  snapshotEdgeIntervalMs: 10000,
+  snapshotEdgeIntervalMs: MIN_SNAPSHOT_EDGE_INTERVAL_MS,
   snapshotEdgeMaxWaitMs: 60000,
   snapshotEdgeMaxErrors: 3,
   snapshotEdgeBackoffMs: 60000,
@@ -203,7 +204,6 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
     leaveRetryMs: numberEnv(env.GRASP_RAT_BROWSERLESS_LEAVE_RETRY_MS, DEFAULTS.leaveRetryMs),
     leaveHedgeMs: numberEnv(env.GRASP_RAT_BROWSERLESS_LEAVE_HEDGE_MS, DEFAULTS.leaveHedgeMs),
     leaveDangerHedgeMs: numberEnv(env.GRASP_RAT_BROWSERLESS_LEAVE_DANGER_HEDGE_MS, DEFAULTS.leaveDangerHedgeMs),
-    leavePrewarmIntervalMs: numberEnv(env.GRASP_RAT_BROWSERLESS_LEAVE_PREWARM_INTERVAL_MS, DEFAULTS.leavePrewarmIntervalMs),
     httpTimeoutMs: numberEnv(env.GRASP_RAT_BROWSERLESS_HTTP_TIMEOUT_MS, DEFAULTS.httpTimeoutMs),
     decisionIntervalMs: numberEnv(env.GRASP_RAT_BROWSERLESS_DECISION_INTERVAL_MS, DEFAULTS.decisionIntervalMs),
     loopDelayMs: numberEnv(env.GRASP_RAT_BROWSERLESS_LOOP_DELAY_MS, DEFAULTS.loopDelayMs),
@@ -212,7 +212,10 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
     loginPointSafetyProbeIntervalMs: numberEnv(env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_SAFETY_PROBE_INTERVAL_MS, DEFAULTS.loginPointSafetyProbeIntervalMs),
     loginPointSingleBlockerBypassMs: numberEnv(env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_SINGLE_BLOCKER_BYPASS_MS, DEFAULTS.loginPointSingleBlockerBypassMs),
     snapshotEdgeEnabled: boolEnv(env.GRASP_RAT_BROWSERLESS_SNAPSHOT_EDGE_ENABLED, DEFAULTS.snapshotEdgeEnabled),
-    snapshotEdgeIntervalMs: numberEnv(env.GRASP_RAT_BROWSERLESS_SNAPSHOT_EDGE_INTERVAL_MS, DEFAULTS.snapshotEdgeIntervalMs),
+    snapshotEdgeIntervalMs: Math.max(
+      MIN_SNAPSHOT_EDGE_INTERVAL_MS,
+      numberEnv(env.GRASP_RAT_BROWSERLESS_SNAPSHOT_EDGE_INTERVAL_MS, DEFAULTS.snapshotEdgeIntervalMs)
+    ),
     snapshotEdgeMaxWaitMs: numberEnv(env.GRASP_RAT_BROWSERLESS_SNAPSHOT_EDGE_MAX_WAIT_MS, DEFAULTS.snapshotEdgeMaxWaitMs),
     snapshotEdgeMaxErrors: numberEnv(env.GRASP_RAT_BROWSERLESS_SNAPSHOT_EDGE_MAX_ERRORS, DEFAULTS.snapshotEdgeMaxErrors),
     snapshotEdgeBackoffMs: numberEnv(env.GRASP_RAT_BROWSERLESS_SNAPSHOT_EDGE_BACKOFF_MS, DEFAULTS.snapshotEdgeBackoffMs),
@@ -406,7 +409,10 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
     } else if (arg === '--no-snapshot-edge-enabled') {
       config.snapshotEdgeEnabled = false;
     } else if (arg === '--snapshot-edge-interval-ms') {
-      config.snapshotEdgeIntervalMs = numberEnv(argv[++i], config.snapshotEdgeIntervalMs);
+      config.snapshotEdgeIntervalMs = Math.max(
+        MIN_SNAPSHOT_EDGE_INTERVAL_MS,
+        numberEnv(argv[++i], config.snapshotEdgeIntervalMs)
+      );
     } else if (arg === '--snapshot-edge-max-wait-ms') {
       config.snapshotEdgeMaxWaitMs = numberEnv(argv[++i], config.snapshotEdgeMaxWaitMs);
     } else if (arg === '--snapshot-edge-max-errors') {
@@ -594,7 +600,7 @@ function usage() {
     '  --login-point-safety-success-required <n>  Legacy consecutive checks when snapshot edge mode is disabled. Default: 1',
     '  --login-point-safety-probe-interval-ms <ms>  Delay between those checks. Default: 30000',
     '  --[no-]snapshot-edge-enabled  Wait for a post-baseline snapshot version and evaluate it once. Default: enabled',
-    '  --snapshot-edge-interval-ms <ms>  Snapshot version probe interval. Default: 10000',
+    '  --snapshot-edge-interval-ms <ms>  Snapshot version probe interval; values below 30000 are clamped. Default: 30000',
     '  --snapshot-edge-max-wait-ms <ms>  Maximum active edge-probe window. Default: 60000',
     '  --snapshot-edge-max-errors <n>  Consecutive edge-probe errors before backoff. Default: 3',
     '  --snapshot-edge-backoff-ms <ms>  Backoff after edge timeout/error limit. Default: 60000',
@@ -646,7 +652,7 @@ function usage() {
     '  --ws-trace-summary-only  Log WebSocket frame summaries without decoded payloads',
     '  --ws-trace-max-payload-chars <n>  Truncate decoded WS payload JSON; 0 means full payload',
     '  --source-ip <ip>        Bind browserless HTTP/WS outbound sockets to this local source IP',
-    '  --source-ips <list>     Ordered local source IP list for 403-based hot switching',
+    '  --source-ips <list>     Local source IP candidates; the first selected IP is used for all requests',
     '  --login-point-x <cm>      Manual login point x for canary safety',
     '  --login-point-y <cm>      Manual login point y for canary safety',
     '  --login-point-hp <hp>     Manual login point HP context for canary safety',

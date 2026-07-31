@@ -40,7 +40,6 @@ function createBrowserlessLeaveSupervisor(options = {}) {
   let failed = false;
   let lastError = '';
   let completedLeaves = 0;
-  let completedPrewarms = 0;
   let readyResolve;
   let readyReject;
   const readyPromise = new Promise((resolve, reject) => {
@@ -76,11 +75,10 @@ function createBrowserlessLeaveSupervisor(options = {}) {
       try { request?.hooks?.onResult?.(message.attempt); } catch (_) {}
       return;
     }
-    if (message?.kind === 'leave-result' || message?.kind === 'prewarm-result') {
+    if (message?.kind === 'leave-result') {
       if (!request) return;
       pending.delete(message.id);
-      if (message.kind === 'leave-result') completedLeaves += 1;
-      else completedPrewarms += 1;
+      completedLeaves += 1;
       request.resolve(message.result);
       return;
     }
@@ -118,11 +116,6 @@ function createBrowserlessLeaveSupervisor(options = {}) {
     return waitUntilReady().then(() => post('leave', requestOptions, hooks));
   }
 
-  function prewarm(requestOptions = {}) {
-    if (ready) return post('prewarm', requestOptions);
-    return waitUntilReady().then(() => post('prewarm', requestOptions));
-  }
-
   async function close() {
     if (closed) return status();
     closed = true;
@@ -140,7 +133,6 @@ function createBrowserlessLeaveSupervisor(options = {}) {
       failed,
       pending: pending.size,
       completedLeaves,
-      completedPrewarms,
       lastError
     };
   }
@@ -148,7 +140,6 @@ function createBrowserlessLeaveSupervisor(options = {}) {
   return {
     close,
     leave,
-    prewarm,
     ready: waitUntilReady,
     status
   };

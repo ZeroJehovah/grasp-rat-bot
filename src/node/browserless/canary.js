@@ -6,7 +6,6 @@ const { parseGrzFrame, summarizeGrzJson } = require('../../shared/grz-frame');
 const {
   buildSnapshotProbeUrl,
   fetchWithTimeout,
-  prewarmGameConnection,
   readResponseBody,
   redactSecrets,
   summarizeSnapshotPayload
@@ -55,7 +54,11 @@ const {
   restartDrainAllowsDecision,
   restartDrainRetainsCommittedDecision
 } = require('./restart-readiness');
-const { utc8DayKey, waitForSnapshotEdge } = require('./snapshot-edge-wait');
+const {
+  MIN_SNAPSHOT_EDGE_INTERVAL_MS,
+  utc8DayKey,
+  waitForSnapshotEdge
+} = require('./snapshot-edge-wait');
 const {
   createCloudflareChallengeError,
   detectCloudflareChallenge
@@ -974,7 +977,7 @@ async function runPreLoginSnapshotSafety(config, state, deps = {}) {
     const edge = await waitForSnapshotEdge({
       now: deps.now,
       sleep: deps.sleep,
-      intervalMs: config.snapshotEdgeIntervalMs ?? 10000,
+      intervalMs: config.snapshotEdgeIntervalMs ?? MIN_SNAPSHOT_EDGE_INTERVAL_MS,
       maxWaitMs: config.snapshotEdgeMaxWaitMs ?? 60000,
       maxErrors: config.snapshotEdgeMaxErrors ?? 3,
       fetchSnapshot: async () => fetchPreLoginSnapshot(config, deps),
@@ -1012,7 +1015,7 @@ async function runPreLoginSnapshotSafety(config, state, deps = {}) {
       streak: evaluated.ok ? 1 : 0,
       satisfied: Boolean(evaluated.ok),
       attempt: 1,
-      probeIntervalMs: Number(config.snapshotEdgeIntervalMs ?? 10000),
+      probeIntervalMs: Number(config.snapshotEdgeIntervalMs ?? MIN_SNAPSHOT_EDGE_INTERVAL_MS),
       edge: {
         requestCount: edge.requestCount,
         waitMs: edge.waitMs,
@@ -1029,11 +1032,16 @@ async function runPreLoginSnapshotSafety(config, state, deps = {}) {
       ?? 3
   ) || 0));
   const effectiveRequired = Math.max(1, required);
-  const intervalMs = Math.max(0, Number(
-    config.loginPointSafetyProbeIntervalMs
-      ?? runtimeDefaults.loginPointSafetyProbeIntervalMs
-      ?? 30000
-  ) || 0);
+  const intervalMs = effectiveRequired > 1
+    ? Math.max(
+      MIN_SNAPSHOT_EDGE_INTERVAL_MS,
+      Number(
+        config.loginPointSafetyProbeIntervalMs
+          ?? runtimeDefaults.loginPointSafetyProbeIntervalMs
+          ?? MIN_SNAPSHOT_EDGE_INTERVAL_MS
+      ) || 0
+    )
+    : 0;
   const sleep = typeof deps.sleep === 'function'
     ? deps.sleep
     : ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -1511,7 +1519,6 @@ async function runReadOnlyCanary(config, options = {}) {
       event: null,
       exit: null,
       leavePending: null,
-      leavePrewarm: null,
       leaveSupervisor: null,
       leaveFailure: null,
       transportLifecycle: {
@@ -1647,8 +1654,6 @@ async function runReadOnlyCanary(config, options = {}) {
       }
     };
   };
-  let leavePrewarmInFlight = null;
-  let lastLeavePrewarmAtMs = 0;
   const flushScheduledCombatPersistence = () => {
     if (!combatPersistenceScheduled && !combatPersistenceAtMs) return;
     const started = performance.now();
@@ -1762,70 +1767,6 @@ async function runReadOnlyCanary(config, options = {}) {
     const restored = whitelist.restoreAll(reason, atMs);
     logDynamicWhitelistRestores(restored);
     return restored;
-  };
-  const maybePrewarmLeaveConnection = (currentState, atMs, reason = 'risk', force = false) => {
-    if (options.fetchImpl && !options.prewarmGameConnection && !leaveSupervisor) return null;
-    if (leavePending || leavePrewarmInFlight) return leavePrewarmInFlight;
-    const intervalMs = Math.max(1000, Number(config.leavePrewarmIntervalMs || 3000));
-    if (!force && atMs - lastLeavePrewarmAtMs < intervalMs) return null;
-    const self = currentState?.realtime?.self || null;
-    const selfHp = Number(self?.hp);
-    const maxHp = Number(self?.max_hp ?? self?.maxHp ?? 100);
-    const action = result.decisions.last?.action || result.decisions.last || {};
-    const bulletCount = Number(currentState?.realtime?.bullets?.length || 0);
-    const risk = force
-      || bulletCount > 0
-      || (Number.isFinite(selfHp) && Number.isFinite(maxHp) && selfHp < maxHp)
-      || ['combat', 'recover', 'safety'].includes(String(action.band || ''));
-    if (!risk) return null;
-    lastLeavePrewarmAtMs = atMs;
-    result.safety.leavePrewarm = {
-      active: true,
-      reason,
-      startedAtMs: atMs,
-      completedAtMs: 0,
-      ok: null,
-      status: null,
-      durationMs: null,
-      connectionReused: false,
-      error: ''
-    };
-    logExit('leave-connection-prewarm-start', result.safety.leavePrewarm);
-    const prewarm = options.prewarmGameConnection
-      || (leaveSupervisor ? request => leaveSupervisor.prewarm(request) : prewarmGameConnection);
-    leavePrewarmInFlight = Promise.resolve(prewarm({
-      gameOrigin: config.gameOrigin,
-      localAddress: config.sourceIp,
-      timeoutMs: Math.min(3000, Math.max(500, Number(config.httpTimeoutMs || 3000))),
-      fetchImpl: options.fetchImpl,
-      now
-    })).then(warm => {
-      result.safety.leavePrewarm = {
-        ...result.safety.leavePrewarm,
-        active: false,
-        completedAtMs: now(),
-        ok: Boolean(warm?.ok),
-        status: Number(warm?.status || 0),
-        durationMs: Number(warm?.durationMs || 0),
-        connectionReused: Boolean(warm?.connectionReused),
-        error: ''
-      };
-      logExit('leave-connection-prewarm-result', result.safety.leavePrewarm);
-      return warm;
-    }).catch(err => {
-      result.safety.leavePrewarm = {
-        ...result.safety.leavePrewarm,
-        active: false,
-        completedAtMs: now(),
-        ok: false,
-        error: errorMessage(err)
-      };
-      logExit('leave-connection-prewarm-result', result.safety.leavePrewarm);
-      return result.safety.leavePrewarm;
-    }).finally(() => {
-      leavePrewarmInFlight = null;
-    });
-    return leavePrewarmInFlight;
   };
   const logAction = detail => {
     if (logStore) logStore.append('runner', 'movement-command', addRunMeta(detail));
@@ -3192,7 +3133,6 @@ async function runReadOnlyCanary(config, options = {}) {
       }
     }
     if (decisionWorker) await decisionWorker.ready();
-    maybePrewarmLeaveConnection(stateStore.getState(now()), now(), 'ws-connect', true);
     const open = options.openBrowserlessWs || openBrowserlessWs;
     const wsFrameCoalescingEnabled = options.wsFrameCoalescing === true
       || (!options.openBrowserlessWs && options.wsFrameCoalescing !== false);
@@ -3541,7 +3481,6 @@ async function runReadOnlyCanary(config, options = {}) {
               });
               return;
             }
-            maybePrewarmLeaveConnection(currentState, atMs, 'realtime-risk');
             if (deadlineAtMs && atMs >= deadlineAtMs) return;
             stageStarted = performance.now();
             // Pushed snapshot frames update fallback metadata and prime their

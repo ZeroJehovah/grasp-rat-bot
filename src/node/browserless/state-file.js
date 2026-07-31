@@ -76,8 +76,6 @@ function defaultBrowserlessState() {
       sourceIps: [],
       lastSelectedAt: '',
       lastSelectionReason: '',
-      lastProbe: null,
-      lastSwitch: null,
       transportHealth: null
     },
     stats: defaultBrowserlessStats(),

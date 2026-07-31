@@ -2,7 +2,6 @@
 
 const { parentPort } = require('worker_threads');
 const { leaveWithVerification } = require('./leave-client');
-const { prewarmGameConnection } = require('./session-client');
 
 let activeLeaveId = null;
 
@@ -12,15 +11,6 @@ function errorMessage(error) {
 
 function post(message) {
   parentPort.postMessage(message);
-}
-
-async function runPrewarm(message) {
-  try {
-    const result = await prewarmGameConnection(message.options || {});
-    post({ kind: 'prewarm-result', id: message.id, result });
-  } catch (error) {
-    post({ kind: 'request-error', id: message.id, operation: 'prewarm', error: errorMessage(error) });
-  }
 }
 
 async function runLeave(message) {
@@ -50,10 +40,6 @@ async function runLeave(message) {
 
 parentPort.on('message', message => {
   if (!message || typeof message !== 'object') return;
-  if (message.kind === 'prewarm') {
-    runPrewarm(message);
-    return;
-  }
   if (message.kind === 'leave') {
     runLeave(message);
     return;

@@ -1,6 +1,7 @@
 'use strict';
 
 const UTC8_OFFSET_MS = 8 * 60 * 60 * 1000;
+const MIN_SNAPSHOT_EDGE_INTERVAL_MS = 30000;
 
 function finiteTick(payload) {
   const tick = Number(payload?.tick);
@@ -37,7 +38,10 @@ async function waitForSnapshotEdge(options = {}) {
     : ms => new Promise(resolve => setTimeout(resolve, ms));
   const fetchSnapshot = options.fetchSnapshot;
   if (typeof fetchSnapshot !== 'function') throw new Error('snapshot edge fetchSnapshot is required');
-  const intervalMs = Math.max(1000, Number(options.intervalMs || 10000));
+  const intervalMs = Math.max(
+    MIN_SNAPSHOT_EDGE_INTERVAL_MS,
+    Number(options.intervalMs || MIN_SNAPSHOT_EDGE_INTERVAL_MS)
+  );
   const maxWaitMs = Math.max(intervalMs, Number(options.maxWaitMs || 60000));
   const maxErrors = Math.max(1, Math.round(Number(options.maxErrors || 3)));
   const onProgress = typeof options.onProgress === 'function' ? options.onProgress : () => {};
@@ -160,7 +164,7 @@ async function runSnapshotEdgeSelfTest() {
   const result = await waitForSnapshotEdge({
     now: () => nowMs,
     sleep: async ms => { nowMs += ms; },
-    intervalMs: 10000,
+    intervalMs: MIN_SNAPSHOT_EDGE_INTERVAL_MS,
     maxWaitMs: 60000,
     fetchSnapshot: async () => ({
       ok: true,
@@ -172,7 +176,7 @@ async function runSnapshotEdgeSelfTest() {
   const timeout = await waitForSnapshotEdge({
     now: () => timeoutNowMs,
     sleep: async ms => { timeoutNowMs += ms; },
-    intervalMs: 10000,
+    intervalMs: MIN_SNAPSHOT_EDGE_INTERVAL_MS,
     maxWaitMs: 60000,
     fetchSnapshot: async () => ({
       ok: true,
@@ -184,7 +188,7 @@ async function runSnapshotEdgeSelfTest() {
   const errors = await waitForSnapshotEdge({
     now: () => errorNowMs,
     sleep: async ms => { errorNowMs += ms; },
-    intervalMs: 10000,
+    intervalMs: MIN_SNAPSHOT_EDGE_INTERVAL_MS,
     maxWaitMs: 60000,
     maxErrors: 3,
     fetchSnapshot: async () => { throw new Error('expected test error'); }
@@ -195,7 +199,7 @@ async function runSnapshotEdgeSelfTest() {
       && result.requestCount === 3
       && result.detected?.version?.tick === 120
       && timeout.reason === 'snapshot-edge-timeout'
-      && timeout.requestCount === 7
+      && timeout.requestCount === 3
       && timeout.waitMs === 60000
       && errors.reason === 'snapshot-edge-error-limit'
       && errors.requestCount === 3,
@@ -209,6 +213,7 @@ async function runSnapshotEdgeSelfTest() {
 }
 
 module.exports = {
+  MIN_SNAPSHOT_EDGE_INTERVAL_MS,
   runSnapshotEdgeSelfTest,
   snapshotVersion,
   snapshotVersionAdvanced,

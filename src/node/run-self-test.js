@@ -31,7 +31,6 @@ const {
 const {
   fetchWithTimeout: browserlessFetchWithTimeout,
   localAddressAgentStatus,
-  prewarmGameConnection,
   redactSecrets,
   redactStructuredSecrets,
   submitGameCallbackUrl,
@@ -6704,7 +6703,7 @@ async function runSelfTest() {
       want: 'shoot_ok:3,pos:4,snapshot:6|6|3|2|1|0'
     },
     {
-      name: 'browserless source-ip HTTP client reuses a keep-alive socket after prewarm',
+      name: 'browserless source-ip HTTP client reuses a keep-alive socket normally',
       got: (async () => {
         const server = http.createServer((request, response) => {
           response.statusCode = 200;
@@ -6719,11 +6718,11 @@ async function runSelfTest() {
         const address = server.address();
         const origin = `http://127.0.0.1:${address.port}`;
         try {
-          const warm = await prewarmGameConnection({
-            gameOrigin: origin,
+          const warm = await browserlessFetchWithTimeout(`${origin}/first`, {
             localAddress: '127.0.0.1',
             timeoutMs: 5000
           });
+          await warm.text();
           const response = await browserlessFetchWithTimeout(`${origin}/leave`, {
             localAddress: '127.0.0.1',
             timeoutMs: 5000
@@ -7119,7 +7118,7 @@ async function runSelfTest() {
           sessionToken: 'secret',
           httpTimeoutMs: 1000,
           snapshotEdgeEnabled: true,
-          snapshotEdgeIntervalMs: 10000,
+          snapshotEdgeIntervalMs: 30000,
           snapshotEdgeMaxWaitMs: 60000,
           snapshotEdgeMaxErrors: 3
         }, {
@@ -7161,7 +7160,7 @@ async function runSelfTest() {
           sessionToken: 'secret',
           httpTimeoutMs: 1000,
           snapshotEdgeEnabled: true,
-          snapshotEdgeIntervalMs: 10000,
+          snapshotEdgeIntervalMs: 30000,
           snapshotEdgeMaxWaitMs: 60000
         }, {
           loginPointSafety: { point: { x: 0, y: 0, hp: 100, source: 'test' } },
@@ -23575,7 +23574,6 @@ async function runSelfTest() {
         }, {
           now: () => t,
           precheckedSnapshotSafety: { ok: true, reason: 'self-test-prechecked', satisfied: true },
-          prewarmGameConnection: async () => ({ ok: true, status: 200, durationMs: 1 }),
           leaveWithVerification: async () => ({ ok: true, attempts: [] }),
           sleep: async ms => {
             t += ms;
@@ -23669,7 +23667,6 @@ async function runSelfTest() {
         }, {
           now: () => t,
           precheckedSnapshotSafety: { ok: true, reason: 'self-test-prechecked', satisfied: true },
-          prewarmGameConnection: async () => ({ ok: true, status: 200, durationMs: 1, connectionReused: false }),
           sleep: async ms => {
             t += ms;
             if (sleepStep < frames.length) wsOptions.onMessage(frames[sleepStep]);
@@ -23997,7 +23994,6 @@ async function runSelfTest() {
             satisfied: true,
             response: { summary: { selfPresent: false, freshness: { ok: true } } }
           },
-          prewarmGameConnection: async () => ({ ok: true, status: 200, durationMs: 1 }),
           openBrowserlessWs: async () => {
             const error = new Error('Cloudflare challenge detected');
             error.connectionFailure = {
@@ -27302,24 +27298,20 @@ async function runSelfTest() {
       want: '2000|2000|2500|1000|1500|3000|safe|frame-gap|2000'
     },
     {
-      name: 'browserless dangerous leave hedge and connection prewarm defaults are configurable',
+      name: 'browserless dangerous leave hedge remains configurable',
       got: (() => {
         const defaults = parseBrowserlessRunnerArgs([], {});
         const configured = parseBrowserlessRunnerArgs([], {
-          GRASP_RAT_BROWSERLESS_LEAVE_DANGER_HEDGE_MS: '275',
-          GRASP_RAT_BROWSERLESS_LEAVE_PREWARM_INTERVAL_MS: '2200'
+          GRASP_RAT_BROWSERLESS_LEAVE_DANGER_HEDGE_MS: '275'
         });
         const exposed = publicConfig(configured);
         return [
           defaults.leaveDangerHedgeMs,
-          defaults.leavePrewarmIntervalMs,
           configured.leaveDangerHedgeMs,
-          configured.leavePrewarmIntervalMs,
-          exposed.leaveDangerHedgeMs,
-          exposed.leavePrewarmIntervalMs
+          exposed.leaveDangerHedgeMs
         ].join('|');
       })(),
-      want: '350|3000|275|2200|275|2200'
+      want: '350|275|275'
     },
     {
       name: 'browserless runner config exposes single coin bait env and public values',
@@ -27531,7 +27523,7 @@ async function runSelfTest() {
       want: '|0'
     },
     {
-      name: 'browserless source IP controller switches only when all probes are 403',
+      name: 'browserless source IP controller returns 403 without probing or switching',
       got: withTempDirForTest(async dir => {
         const stateFile = path.join(dir, 'state.json');
         const calls = [];
@@ -27555,20 +27547,16 @@ async function runSelfTest() {
           }
         });
         const response = await controller.fetchWithTimeout('https://grasp-rat-game.h-e.top/target', { timeoutMs: 1000 });
-        const state = readBrowserlessStateFile(stateFile);
         return [
           response.status,
           controller.currentSourceIp(),
-          state.network.lastSwitch?.switched,
-          state.network.lastSwitch?.from,
-          state.network.lastSwitch?.to,
           calls.join(',')
         ].join('|');
       }),
-      want: '200|10.0.0.145|true|10.0.0.101|10.0.0.145|10.0.0.101:/target,10.0.0.101:/,10.0.0.101:/auth/linuxdo/start,10.0.0.145:/target'
+      want: '403|10.0.0.101|10.0.0.101:/target'
     },
     {
-      name: 'browserless source IP controller keeps IP when another probe is healthy',
+      name: 'browserless source IP controller keeps IP after a 403',
       got: withTempDirForTest(async dir => {
         const stateFile = path.join(dir, 'state.json');
         const controller = createSourceIpController({
@@ -27588,18 +27576,16 @@ async function runSelfTest() {
           }
         });
         const response = await controller.fetchWithTimeout('https://grasp-rat-game.h-e.top/target', { timeoutMs: 1000 });
-        const state = readBrowserlessStateFile(stateFile);
         return [
           response.status,
           controller.currentSourceIp(),
-          Boolean(state.network.lastSwitch?.switched),
-          state.network.lastProbe?.allForbidden
+          controller.sourceIps().length
         ].join('|');
       }),
-      want: '403|10.0.0.101|false|false'
+      want: '403|10.0.0.101|2'
     },
     {
-      name: 'browserless source IP controller keeps IP for ws 403 when another HTTP probe is healthy',
+      name: 'browserless source IP controller uses one source IP for ws 403',
       got: withTempDirForTest(async dir => {
         const stateFile = path.join(dir, 'state.json');
         const opened = [];
@@ -27632,20 +27618,17 @@ async function runSelfTest() {
         } catch (err) {
           error = err;
         }
-        const state = readBrowserlessStateFile(stateFile);
         return [
           opened.join(','),
           controller.currentSourceIp(),
-          Boolean(state.network.lastSwitch?.switched),
-          state.network.lastProbe?.allForbidden,
           error?.connectionFailure?.type || '',
           businessErrors.length
         ].join('|');
       }),
-      want: '10.0.0.101|10.0.0.101|false|false||1'
+      want: '10.0.0.101|10.0.0.101||1'
     },
     {
-      name: 'browserless source IP controller stops websocket Challenge without switching or retrying',
+      name: 'browserless source IP controller stops websocket Challenge without probing',
       got: withTempDirForTest(async dir => {
         const stateFile = path.join(dir, 'state.json');
         const opened = [];
@@ -27694,7 +27677,7 @@ async function runSelfTest() {
       want: '10.0.0.101|0|10.0.0.101|cloudflare-challenge|ws-response|challenge-ray'
     },
     {
-      name: 'browserless source IP controller does not switch for a non-403 websocket error',
+      name: 'browserless source IP controller keeps non-403 websocket error local',
       got: withTempDirForTest(async dir => {
         const stateFile = path.join(dir, 'state.json');
         const opened = [];
@@ -27735,7 +27718,7 @@ async function runSelfTest() {
       want: '10.0.0.101|0|10.0.0.101||socket protocol error'
     },
     {
-      name: 'browserless source IP controller switches ws 403 before retrying',
+      name: 'browserless source IP controller does not retry ws 403 on another IP',
       got: withTempDirForTest(async dir => {
         const stateFile = path.join(dir, 'state.json');
         const opened = [];
@@ -27749,47 +27732,47 @@ async function runSelfTest() {
           },
           stateFile,
           now: () => Date.UTC(2026, 6, 8, 1, 0, 0),
-          fetchWithTimeout: async (url, options = {}) => fakeResponseForTest({
-            status: options.localAddress === '10.0.0.101' ? 403 : 200,
-            body: 'probe'
-          }),
           openBrowserlessWs: async options => {
             opened.push(options.localAddress || '');
-            if (options.localAddress === '10.0.0.101') {
-              if (typeof options.onError === 'function') {
-                options.onError({
-                  message: 'websocket unexpected response 403 Forbidden',
-                  statusCode: 403
-                });
-              }
-              throw new Error('websocket unexpected response 403 Forbidden');
-            }
-            return { isOpen: () => true, close: () => {} };
+            options.onError?.({
+              message: 'websocket unexpected response 403 Forbidden',
+              statusCode: 403
+            });
+            throw new Error('websocket unexpected response 403 Forbidden');
           }
         });
-        const transport = await controller.openBrowserlessWs({
-          gameOrigin: 'https://grasp-rat-game.h-e.top',
-          wsPath: '/ws',
-          onError: event => businessErrors.push(event)
-        });
-        await controller.openBrowserlessWs({
-          gameOrigin: 'https://grasp-rat-game.h-e.top',
-          wsPath: '/ws',
-          onError: event => businessErrors.push(event)
-        });
+        let firstError = null;
+        let secondError = null;
+        try {
+          await controller.openBrowserlessWs({
+            gameOrigin: 'https://grasp-rat-game.h-e.top',
+            wsPath: '/ws',
+            onError: event => businessErrors.push(event)
+          });
+        } catch (err) {
+          firstError = err;
+        }
+        try {
+          await controller.openBrowserlessWs({
+            gameOrigin: 'https://grasp-rat-game.h-e.top',
+            wsPath: '/ws',
+            onError: event => businessErrors.push(event)
+          });
+        } catch (err) {
+          secondError = err;
+        }
         const state = readBrowserlessStateFile(stateFile);
         return [
-          transport.isOpen(),
           opened.join(','),
           controller.currentSourceIp(),
           businessErrors.length,
-          Boolean(state.network.lastSwitch?.switched),
-          state.network.lastSwitch?.from,
-          state.network.lastSwitch?.to,
-          Object.keys(state.network.sourceIpQuarantine || {}).join(',')
+          firstError?.attempts?.length || 0,
+          secondError?.attempts?.length || 0,
+          Boolean(state.network.sourceIp),
+          state.network.sourceIps.length
         ].join('|');
       }),
-      want: 'true|10.0.0.101,10.0.0.20,10.0.0.20|10.0.0.20|0|true|10.0.0.101|10.0.0.20|10.0.0.101'
+      want: '10.0.0.101,10.0.0.101|10.0.0.101|2|1|1|true|2'
     },
     {
       name: 'browserless source IP controller stops websocket retries when connect is aborted',
@@ -27838,69 +27821,36 @@ async function runSelfTest() {
       want: 'true|10.0.0.101|10.0.0.101|0|1'
     },
     {
-      name: 'browserless source IP controller ignores stale websocket generation events and stale persisted selection',
+      name: 'browserless source IP controller keeps the configured IP across retries',
       got: withTempDirForTest(async dir => {
         const stateFile = path.join(dir, 'state.json');
-        const callbacks = [];
-        const business = { opens: 0, errors: 0, closes: 0, messages: 0 };
-        let clock = Date.UTC(2026, 6, 19, 6, 0, 0);
+        const opened = [];
         const controller = createSourceIpController({
           config: {
             gameOrigin: 'https://grasp-rat-game.h-e.top',
             sourceIps: ['10.0.0.145', '10.0.0.20'],
-            sourceIp: '10.0.0.145',
-            httpTimeoutMs: 1000
+            sourceIp: '10.0.0.145'
           },
           stateFile,
-          now: () => clock,
-          fetchWithTimeout: async (_url, options = {}) => fakeResponseForTest({
-            status: options.localAddress === '10.0.0.145' ? 403 : 200,
-            body: 'probe'
-          }),
+          now: () => Date.UTC(2026, 6, 19, 6, 0, 0),
           openBrowserlessWs: async options => {
-            callbacks.push(options);
-            if (options.localAddress === '10.0.0.145') {
-              options.onError?.({ message: 'unexpected response 403', statusCode: 403, opened: false });
-              throw new Error('unexpected response 403');
-            }
-            options.onOpen?.({ runtime: 'fake' });
+            opened.push(options.localAddress || '');
             return { isOpen: () => true, close: () => {} };
           }
         });
-        await controller.openBrowserlessWs({
-          wsUrl: 'wss://example.test/ws',
-          onOpen: () => { business.opens += 1; },
-          onError: () => { business.errors += 1; },
-          onClose: () => { business.closes += 1; },
-          onMessage: () => { business.messages += 1; }
-        });
-        callbacks[0].onError?.({ message: 'late socket error', opened: true });
-        callbacks[0].onClose?.({ code: 1006, reason: 'late close' });
-        callbacks[0].onMessage?.('late frame');
-        callbacks[1].onMessage?.('current frame');
-        clock += 1000;
-        controller.refreshFromState({
-          network: {
-            sourceIp: '10.0.0.145',
-            sourceIps: ['10.0.0.145', '10.0.0.20'],
-            sourceIpSelectionGeneration: 1,
-            lastSelectedAt: '2026-07-19T05:00:00.000Z'
-          }
-        });
+        const first = await controller.openBrowserlessWs({ wsUrl: 'wss://example.test/ws' });
+        const second = await controller.openBrowserlessWs({ wsUrl: 'wss://example.test/ws' });
         return [
-          controller.currentSourceIp(),
-          business.opens,
-          business.errors,
-          business.closes,
-          business.messages,
-          callbacks[0].localAddress,
-          callbacks[1].localAddress
+          first.isOpen(),
+          second.isOpen(),
+          opened.join(','),
+          controller.currentSourceIp()
         ].join('|');
       }),
-      want: '10.0.0.20|1|0|0|1|10.0.0.145|10.0.0.20'
+      want: 'true|true|10.0.0.145,10.0.0.145|10.0.0.145'
     },
     {
-      name: 'browserless source IP controller reports one final websocket error after all IPs fail',
+      name: 'browserless source IP controller reports one final websocket error per attempt',
       got: withTempDirForTest(async dir => {
         const stateFile = path.join(dir, 'state.json');
         const opened = [];
@@ -27952,10 +27902,10 @@ async function runSelfTest() {
           quarantinedError?.attempts?.length || 0,
           quarantinedError?.connectionFailure?.type,
           quarantinedError?.connectionFailure?.source,
-          Object.keys(state.network.sourceIpQuarantine || {}).sort().join(',')
+          state.network.sourceIps.length
         ].join('|');
       }),
-      want: '10.0.0.145,10.0.0.20|2|2|true|2||||0|||10.0.0.145,10.0.0.20'
+      want: '10.0.0.145,10.0.0.145|1|2|true|1||||1|||2'
     },
     {
       name: 'browserless hedged leave 403 does not trigger source IP switching',
@@ -28012,11 +27962,11 @@ async function runSelfTest() {
           requestCount,
           probeCount,
           controller.currentSourceIp(),
-          Boolean(state.network.lastSwitch?.switched),
+          Boolean(state.network.sourceIp),
           result.attempts.map(item => `${item.status}:${item.ok}`).sort().join(',')
         ].join('|');
       }),
-      want: 'true|2|0|10.0.0.101|false|200:true,403:false'
+      want: 'true|2|0|10.0.0.101|true|200:true,403:false'
     },
     {
       name: 'browserless runner loop plan retries non-explicit failures',

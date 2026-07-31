@@ -192,32 +192,6 @@ function fetchWithLocalAddress(url, options = {}) {
   });
 }
 
-async function prewarmGameConnection(options = {}) {
-  const gameOrigin = String(options.gameOrigin || DEFAULT_GAME_ORIGIN).replace(/\/$/, '');
-  const now = typeof options.now === 'function' ? options.now : Date.now;
-  const startedAtMs = now();
-  const response = await fetchWithTimeout(`${gameOrigin}/favicon.ico`, {
-    fetchImpl: options.fetchImpl,
-    timeoutMs: Math.max(250, Number(options.timeoutMs || 3000)),
-    localAddress: options.localAddress,
-    method: 'GET',
-    cache: 'no-store',
-    headers: {
-      connection: 'keep-alive',
-      range: 'bytes=0-0'
-    }
-  });
-  await response.text();
-  await new Promise(resolve => setImmediate(resolve));
-  return {
-    ok: true,
-    status: Number(response.status || 0),
-    durationMs: Math.max(0, now() - startedAtMs),
-    connectionReused: Boolean(response.connectionReused),
-    localAddress: response.socketLocalAddress || String(options.localAddress || '')
-  };
-}
-
 async function readResponseBody(response) {
   const text = await response.text();
   try {
@@ -914,7 +888,6 @@ module.exports = {
   localAddressAgentStatus,
   normalizeCallbackUrl,
   parseCurlCommand,
-  prewarmGameConnection,
   readResponseBody,
   redactSecrets,
   redactStructuredSecrets,
