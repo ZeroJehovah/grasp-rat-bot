@@ -32,6 +32,7 @@ const DEFAULT_COIN_FEEDBACK_MAX_REALTIME_FRAME_AGE_MS = 500;
 const DEFAULT_NEAR_COIN_CONTINUATION_LEASE_SLACK_MS = 125;
 const DEFAULT_NEAR_COIN_CONTINUATION_MIN_LEASE_MS = 250;
 const DEFAULT_NEAR_COIN_CONTINUATION_STOP_SPEED_TOLERANCE = 1;
+const DEFAULT_NEAR_COIN_CONTINUATION_SNAPSHOT_MAX_AGE_MS = 5000;
 
 function numberOrNull(value) {
   const number = Number(value);
@@ -1153,16 +1154,45 @@ function createBrowserlessActionAdapter(options = {}) {
     return state.coinFeedbackGate;
   }
 
-  function realtimeCoinForContinuation(stateSnapshot, targetKey) {
+  function currentCoinForContinuation(stateSnapshot, targetKey, continuation) {
     const realtime = stateSnapshot?.realtime || null;
-    if (!realtime
-      || (realtime.authority && realtime.authority !== 'realtime')
-      || (realtime.source && realtime.source !== 'pos')
-      || realtime.coinDropsObserved !== true
-      || !Array.isArray(realtime.coinDrops)) {
+    const realtimeCoinListAvailable = Boolean(
+      realtime
+      && (!realtime.authority || realtime.authority === 'realtime')
+      && (!realtime.source || realtime.source === 'pos')
+      && realtime.coinDropsObserved === true
+      && Array.isArray(realtime.coinDrops)
+    );
+    if (realtimeCoinListAvailable) {
+      // An explicit realtime list is authoritative, including removal of the
+      // selected coin. Never resurrect a missing realtime coin from fallback.
+      return realtime.coinDrops.find(coin => coinTargetKey(coin) === targetKey) || null;
+    }
+
+    const plannerTarget = continuation?.target || null;
+    const snapshotTarget = plannerTarget.snapshotOnly === true
+      || plannerTarget.authority === 'snapshot'
+      || plannerTarget.source === 'snapshot';
+    if (!snapshotTarget) return null;
+    const fallback = stateSnapshot?.fallback || stateSnapshot?.snapshot || null;
+    if (!fallback
+      || (fallback.authority && fallback.authority !== 'snapshot')
+      || (fallback.source && fallback.source !== 'snapshot')
+      || fallback.coinDropsObserved !== true
+      || !Array.isArray(fallback.coinDrops)) {
       return null;
     }
-    return realtime.coinDrops.find(coin => coinTargetKey(coin) === targetKey) || null;
+    const maxAgeMs = Math.max(
+      1000,
+      Number(options.coinContinuationSnapshotMaxAgeMs
+        ?? options.snapshotCoinFallbackMaxAgeMs
+        ?? DEFAULT_NEAR_COIN_CONTINUATION_SNAPSHOT_MAX_AGE_MS)
+    );
+    const frameAgeMs = optionalNumber(fallback.frameAgeMs);
+    // An unknown age is not evidence that the snapshot is fresh enough to
+    // drive another movement pulse.
+    if (frameAgeMs === null || frameAgeMs > maxAgeMs) return null;
+    return fallback.coinDrops.find(coin => coinTargetKey(coin) === targetKey) || null;
   }
 
   function nearCoinPulsePositionObserved(pulse, self) {
@@ -1198,7 +1228,7 @@ function createBrowserlessActionAdapter(options = {}) {
     const tick = optionalNumber(realtime?.tick);
     if (tick !== null && tick === optionalNumber(continuation.lastObservedTick)) return null;
     if (tick !== null) continuation.lastObservedTick = tick;
-    const target = realtimeCoinForContinuation(stateSnapshot, continuation.targetKey);
+    const target = currentCoinForContinuation(stateSnapshot, continuation.targetKey, continuation);
     if (!target) {
       clearNearCoinContinuation('target-not-realtime-visible');
       return null;

@@ -22350,6 +22350,95 @@ async function runSelfTest() {
       want: '1|true|2|true|true|true|planner-lease-expired|vel 1 0,vel 0 0,vel 1 0'
     },
     {
+      name: 'browserless close coin continuation uses a fresh snapshot coin when realtime frames omit coin arrays',
+      got: (() => {
+        let t = 1000;
+        const commands = [];
+        const timers = [];
+        const adapter = createBrowserlessActionAdapter({
+          now: () => t,
+          commandIntervalMs: 1,
+          decisionIntervalMs: 1000,
+          setTimeout: (fn, ms) => {
+            const timer = { fn, ms, canceled: false };
+            timers.push(timer);
+            return timer;
+          },
+          clearTimeout: timer => {
+            if (timer) timer.canceled = true;
+          },
+          getTransportHealth: () => ({
+            connected: true,
+            latency: { p90Ms: 120 },
+            processingQueue: { p90Ms: 5 },
+            frameLoss: { rate: 0.005, expectedTicks: 100 },
+            frames: { lastAgeMs: 20 },
+            exit: { triggered: false }
+          }),
+          transport: {
+            sendVelocity: (dx, dy) => commands.push(`vel ${dx} ${dy}`)
+          }
+        });
+        const target = {
+          type: 'coin',
+          id: 'snapshot-continuation-coin',
+          authority: 'snapshot',
+          source: 'snapshot',
+          snapshotOnly: true,
+          x: 800,
+          y: 0
+        };
+        const decision = {
+          kind: 'profit-candidate',
+          band: 'profit',
+          action: { kind: 'coin', band: 'profit', target }
+        };
+        const state = (tick, x, frameAgeMs = 100) => ({
+          realtime: {
+            authority: 'realtime',
+            source: 'pos',
+            tick,
+            receivedAtMs: t,
+            frameAgeMs: 20,
+            self: { x, y: 0, vx: 0, vy: 0 },
+            coinDropsObserved: false,
+            coinDrops: []
+          },
+          fallback: {
+            authority: 'snapshot',
+            source: 'snapshot',
+            frameAgeMs,
+            coinDropsObserved: true,
+            coinDrops: [{ drop_id: 'snapshot-continuation-coin', x: 800, y: 0, amount: 1 }]
+          },
+          command: { movement: { timing: { exactReady: true, exactSampleCount: 4, p90WallMs: 200 } } }
+        });
+        const initial = state(1, 0);
+        adapter.observeState(initial);
+        const first = adapter.applyDecision(initial, decision);
+        t = 1150;
+        timers[0].fn();
+        t = 1200;
+        const advanced = state(5, 150);
+        adapter.observeState(advanced);
+        const continuation = adapter.continueCloseCoinPickup(advanced);
+        t = 1300;
+        const staleStateInput = state(6, 300, 6000);
+        adapter.observeState(staleStateInput);
+        const stale = adapter.continueCloseCoinPickup(staleStateInput);
+        const adapterState = adapter.getState();
+        return [
+          first.feedbackGuided,
+          continuation?.nearCoinContinuation?.pulseCount,
+          stale === null,
+          adapterState.nearCoinContinuation === null,
+          adapterState.nearCoinContinuationLastCancelReason,
+          commands.join(',')
+        ].join('|');
+      })(),
+      want: 'true|2|true|true|target-not-realtime-visible|vel 1 0,vel 0 0,vel 1 0'
+    },
+    {
       name: 'browserless close coin continuation never emits a speculative reversal',
       got: (() => {
         let t = 1000;
@@ -22466,6 +22555,13 @@ async function runSelfTest() {
             coinDrops: visible
               ? [{ drop_id: 'degraded-coin', x: 800, y: 0, amount: 1, authority: 'realtime', source: 'pos' }]
               : []
+          },
+          fallback: {
+            authority: 'snapshot',
+            source: 'snapshot',
+            frameAgeMs: 100,
+            coinDropsObserved: true,
+            coinDrops: [{ drop_id: 'degraded-coin', x: 800, y: 0, amount: 1 }]
           },
           command: { movement: { timing: { exactReady: true, exactSampleCount: 4, p90WallMs: 200 } } }
         });
