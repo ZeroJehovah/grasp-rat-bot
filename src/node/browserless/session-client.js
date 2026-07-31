@@ -4,6 +4,10 @@ const http = require('http');
 const https = require('https');
 const { summarizeGrzEntity } = require('../../shared/grz-frame');
 const { summarizeStaminaWindow } = require('./stamina-metadata');
+const {
+  createCloudflareChallengeError,
+  detectCloudflareChallenge
+} = require('./cloudflare-challenge');
 
 const DEFAULT_GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
 const DEFAULT_HTTP_TIMEOUT_MS = 10000;
@@ -246,6 +250,19 @@ async function requestAuthUrl(options = {}) {
     cache: 'no-store'
   });
   const body = await readResponseBody(response);
+  const challenge = detectCloudflareChallenge({
+    status: response.status,
+    headers: response.headers,
+    contentType: response.headers?.get?.('content-type') || '',
+    body: body.text
+  });
+  if (challenge.detected) {
+    throw createCloudflareChallengeError(challenge, {
+      operation: 'authorization',
+      source: 'auth-start-response',
+      sourceIp: options.localAddress
+    });
+  }
   if (!response.ok) throw new Error(`/auth/linuxdo/start HTTP ${response.status}: ${body.text.slice(0, 240)}`);
   const authUrl = extractAuthUrl(body.json);
   if (!authUrl || !/^https:\/\/connect\.linux\.do\/oauth2\/authorize\b/i.test(authUrl)) {
@@ -497,6 +514,19 @@ async function submitGameCallbackUrl(url, options = {}) {
     cache: 'no-store'
   });
   const body = await readResponseBody(response);
+  const challenge = detectCloudflareChallenge({
+    status: response.status,
+    headers: response.headers,
+    contentType: response.headers?.get?.('content-type') || '',
+    body: body.text
+  });
+  if (challenge.detected) {
+    throw createCloudflareChallengeError(challenge, {
+      operation: 'authorization',
+      source: 'callback-response',
+      sourceIp: options.localAddress
+    });
+  }
   const location = resolveLocation(response.headers.get('location') || '', url);
   const refreshUrl = extractMetaRefreshUrl(body.text, url);
   const summary = {

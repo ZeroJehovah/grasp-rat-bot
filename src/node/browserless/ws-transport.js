@@ -265,6 +265,12 @@ function openBrowserlessWs(options = {}) {
         const finish = () => {
           const body = Buffer.concat(chunks).toString('utf8').slice(0, 300);
           const contentType = headers['content-type'] || headers['Content-Type'] || '';
+          const responseHeaders = {
+            'cf-mitigated': headers['cf-mitigated'] || headers['CF-Mitigated'] || '',
+            'cf-ray': headers['cf-ray'] || headers['CF-Ray'] || '',
+            server: headers.server || headers.Server || '',
+            'content-type': contentType
+          };
           const message = [
             `websocket unexpected response ${statusCode || 'unknown'}`,
             statusMessage,
@@ -272,9 +278,23 @@ function openBrowserlessWs(options = {}) {
             body ? `body=${body}` : ''
           ].filter(Boolean).join(' ');
           if (typeof options.onError === 'function') {
-            options.onError({ message, opened, statusCode, statusMessage, contentType, body });
+            options.onError({
+              message,
+              opened,
+              statusCode,
+              statusMessage,
+              contentType,
+              body,
+              headers: responseHeaders
+            });
           }
-          failOpen(new Error(message));
+          const error = new Error(message);
+          error.statusCode = statusCode;
+          error.statusMessage = statusMessage;
+          error.contentType = contentType;
+          error.body = body;
+          error.headers = responseHeaders;
+          failOpen(error);
         };
         response.on('data', chunk => chunks.push(Buffer.from(chunk)));
         response.on('end', finish);

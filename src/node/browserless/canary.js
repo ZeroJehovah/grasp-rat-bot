@@ -56,6 +56,10 @@ const {
   restartDrainRetainsCommittedDecision
 } = require('./restart-readiness');
 const { utc8DayKey, waitForSnapshotEdge } = require('./snapshot-edge-wait');
+const {
+  createCloudflareChallengeError,
+  detectCloudflareChallenge
+} = require('./cloudflare-challenge');
 
 const DEFAULT_READONLY_PROBE_MS = 30000;
 const DEFAULT_FRAME_GAP_ALERT_MS = 2000;
@@ -605,14 +609,15 @@ function inGameRecoveryEvidenceFromCanary(canary) {
       previousRunId: canary.runId || ''
     };
   }
-  if (canary.safety?.leaveFailure || canary.safety?.event?.reason === 'direct-leave-failed') {
-    return {
-      reason: 'leave-not-confirmed',
-      source: 'leave-failure',
-      previousRunId: canary.runId || ''
-    };
-  }
   return null;
+}
+
+function canaryHasAuthoritativeInGameEvidence(canary) {
+  return Boolean(
+    snapshotSafetySelfPresent(canary?.snapshotSafety)
+      || canary?.entry?.firstSelf
+      || Number(canary?.stats?.selfPresent?.true || 0) > 0
+  );
 }
 
 function canaryEvidenceTimeMs(canary) {
@@ -797,10 +802,24 @@ async function fetchPreLoginSnapshot(config, deps = {}) {
     fetchImpl,
     timeoutMs: config.httpTimeoutMs || config.wsConnectTimeoutMs || 10000,
     localAddress: config.sourceIp,
+    challengePolicy: 'login-stop',
     method: 'GET',
     cache: 'no-store'
   });
   const body = await readResponseBody(response);
+  const challenge = detectCloudflareChallenge({
+    status: response.status,
+    headers: response.headers,
+    contentType: response.headers?.get?.('content-type') || '',
+    body: body.text
+  });
+  if (challenge.detected) {
+    throw createCloudflareChallengeError(challenge, {
+      operation: 'login',
+      source: 'prelogin-snapshot-response',
+      sourceIp: config.sourceIp
+    });
+  }
   const observedAtMs = typeof deps.now === 'function' ? deps.now() : Date.now();
   if (body.json && typeof deps.onSnapshotPayload === 'function') {
     try {
@@ -2965,9 +2984,14 @@ async function runReadOnlyCanary(config, options = {}) {
     const message = errorMessage(err);
     result.snapshotSafety = {
       ok: false,
-      reason: 'snapshot-error',
+      reason: err?.connectionFailure?.type === 'cloudflare-challenge'
+        ? 'cloudflare-challenge'
+        : 'snapshot-error',
       error: message
     };
+    if (err?.connectionFailure && !persistedPendingExit && !expiredPendingExit) {
+      result.connectionFailure = err.connectionFailure;
+    }
     log('canary-snapshot-safety-error', { error: message });
   }
   log('canary-snapshot-safety', result.snapshotSafety);
@@ -3775,15 +3799,23 @@ async function runReadOnlyCanary(config, options = {}) {
   }
 
   const authOpenFailure = /websocket unexpected response 403|http 403|not logged in/i.test(result.error || '');
+  const authoritativeInGameEvidence = canaryHasAuthoritativeInGameEvidence(result);
+  const protectedExitEvidence = Boolean(
+    result.recovery?.exitRecovery
+      || persistedPendingExit
+      || expiredPendingExit
+  );
   const shouldVerifyExitAfterOpenFailure = Boolean(
     openFailedBeforeTransport
       && result.snapshotSafety?.ok
       && config.userId
       && config.sessionToken
+      && authoritativeInGameEvidence
       && (!authOpenFailure || snapshotSafetySelfPresent(result.snapshotSafety))
   );
+  const shouldAttemptLeave = Boolean(authoritativeInGameEvidence || protectedExitEvidence);
 
-  if (transport || !result.error || shouldVerifyExitAfterOpenFailure) {
+  if (shouldAttemptLeave) {
     try {
       if (result.safety.event) {
         if (result.safety.event.shouldLeave === false && actionAdapter) {
@@ -3840,6 +3872,11 @@ async function runReadOnlyCanary(config, options = {}) {
       if (!result.error) result.error = `leave failed: ${message}`;
       log('canary-leave-error', { error: message });
     }
+  } else if (result.connectionFailure?.type === 'cloudflare-challenge') {
+    log('canary-login-challenge-no-leave', {
+      source: result.connectionFailure.source || '',
+      evidence: result.connectionFailure.evidence || []
+    });
   }
 
   if (postLeaveWsOpenViolation) {
@@ -4069,6 +4106,14 @@ async function runReadOnlyCanary(config, options = {}) {
     result.actions.movementStall = adapterState.movementStall || result.actions.movementStall;
     result.actions.lastMovementStall = adapterState.lastMovementStall || result.actions.lastMovementStall;
     result.actions.lastShootAck = adapterState.lastShootAck || result.actions.lastShootAck;
+  }
+  if (result.connectionFailure?.type === 'cloudflare-challenge') {
+    result.connectionFailure = {
+      ...result.connectionFailure,
+      inGameEvidence: authoritativeInGameEvidence,
+      leaveAttempted: Boolean(result.leave),
+      leaveConfirmed: Boolean(result.leave?.ok)
+    };
   }
   result.ok = Boolean(!result.error);
   if (result.ok && result.snapshotSafety?.bootstrapOnly && !result.state?.realtime?.self) {

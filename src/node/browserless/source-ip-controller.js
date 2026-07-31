@@ -21,6 +21,12 @@ const {
   readBrowserlessStateFile,
   updateBrowserlessStateFile
 } = require('./state-file');
+const {
+  createCloudflareChallengeError,
+  cloudflareChallengeFailure,
+  detectCloudflareChallenge,
+  isCloudflareChallengeError
+} = require('./cloudflare-challenge');
 
 const DEFAULT_PROBE_TIMEOUT_MS = 5000;
 const DEFAULT_QUARANTINE_BASE_MS = 5 * 60 * 1000;
@@ -94,6 +100,35 @@ function isForbiddenError(error) {
   return /(?:^|\s)(?:http\s*)?403(?:\s|$)|forbidden|unexpected response 403/i.test(error?.message || String(error || ''));
 }
 
+function isWebSocketForbiddenError(value) {
+  const status = Number(value?.statusCode || value?.status || 0);
+  if (status === 403) return true;
+  const message = value?.message || String(value || '');
+  return /(?:unexpected response|http)\s*403\b|\b403\s+forbidden\b/i.test(message);
+}
+
+async function inspectResponseChallenge(response) {
+  if (!response || typeof response.text !== 'function') return null;
+  let body = '';
+  let bodyRead = false;
+  try {
+    if (typeof response.clone === 'function') body = await response.clone().text();
+    else {
+      body = await response.text();
+      bodyRead = true;
+    }
+  } catch (_) {}
+  const challenge = detectCloudflareChallenge({
+    status: response.status,
+    headers: response.headers,
+    contentType: response.headers?.get?.('content-type') || '',
+    body
+  });
+  if (typeof response.clone !== 'function' && bodyRead) response.text = async () => body;
+  if (!challenge.detected) return null;
+  return challenge;
+}
+
 function buildProbeUrls(config = {}) {
   const origin = String(config.gameOrigin || 'https://grasp-rat-game.h-e.top').replace(/\/$/, '');
   const probes = [
@@ -121,6 +156,10 @@ function summarizeProbeResult(result) {
     status: Number(result.status || 0),
     ok: Boolean(result.ok),
     forbidden: Boolean(result.forbidden),
+    challenge: result.challenge?.detected ? {
+      evidence: Array.isArray(result.challenge.evidence) ? result.challenge.evidence.slice(0, 8) : [],
+      cfRay: result.challenge.cfRay || ''
+    } : null,
     error: result.error || ''
   };
 }
@@ -205,11 +244,6 @@ function createSourceIpController(options = {}) {
 
   const sourceIpAvailable = sourceIp => Boolean(sourceIp) && !quarantineRecord(sourceIp);
 
-  const allSourceIpsCloudflareQuarantined = () => candidates.length > 0 && candidates.every(sourceIp => {
-    const record = quarantineRecord(sourceIp);
-    return record?.reason === 'all-probes-403';
-  });
-
   const nextAvailableSourceIp = (fromSourceIp = currentSourceIp, excluded = new Set()) => {
     if (!candidates.length) return '';
     const start = Math.max(0, candidates.indexOf(fromSourceIp));
@@ -286,13 +320,30 @@ function createSourceIpController(options = {}) {
           cache: 'no-store'
         });
         if (typeof response.text === 'function') {
-          try { await response.text(); } catch (_) {}
+          try {
+            const body = await response.text();
+            const challenge = detectCloudflareChallenge({
+              status: response.status,
+              headers: response.headers,
+              contentType: response.headers?.get?.('content-type') || '',
+              body
+            });
+            results.push({
+              name: probe.name,
+              status: Number(response.status || 0),
+              ok: Boolean(response.ok),
+              forbidden: isForbiddenResponse(response),
+              challenge: challenge.detected ? challenge : null
+            });
+            continue;
+          } catch (_) {}
         }
         results.push({
           name: probe.name,
           status: Number(response.status || 0),
           ok: Boolean(response.ok),
-          forbidden: isForbiddenResponse(response)
+          forbidden: isForbiddenResponse(response),
+          challenge: null
         });
       } catch (err) {
         results.push({
@@ -300,6 +351,7 @@ function createSourceIpController(options = {}) {
           status: 0,
           ok: false,
           forbidden: false,
+          challenge: null,
           error: err?.message || String(err)
         });
       }
@@ -310,6 +362,7 @@ function createSourceIpController(options = {}) {
       trigger: context,
       sourceIp,
       allForbidden,
+      challenge: results.find(result => result.challenge)?.challenge || null,
       results: results.map(summarizeProbeResult)
     };
     persist({ lastProbe: summary });
@@ -371,6 +424,18 @@ function createSourceIpController(options = {}) {
       probePromise = (async () => {
         try {
           const probe = await probeCurrentIp(context);
+          if (context.stopOnChallenge && probe.challenge?.detected) {
+            return {
+              switched: false,
+              reason: 'cloudflare-challenge',
+              probe,
+              connectionFailure: cloudflareChallengeFailure(probe.challenge, {
+                operation: context.operation || 'login',
+                source: context.source || 'http-probe',
+                sourceIp: probe.sourceIp
+              })
+            };
+          }
           if (probe.allForbidden) {
             quarantineSourceIp(probe.sourceIp, 'all-probes-403');
             return switchToNext('all-probes-403', probe);
@@ -385,24 +450,47 @@ function createSourceIpController(options = {}) {
   }
 
   async function fetchWithCurrentSourceIp(url, requestOptions = {}) {
+    const challengePolicy = String(requestOptions.challengePolicy || '');
+    const { challengePolicy: _challengePolicy, ...forwardOptions } = requestOptions;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const sourceIp = currentSourceIp;
       const response = await (options.fetchWithTimeout || fetchWithTimeout)(url, {
-        ...requestOptions,
+        ...forwardOptions,
         localAddress: sourceIp || undefined
       });
+      if (challengePolicy === 'login-stop') {
+        const challenge = await inspectResponseChallenge(response);
+        if (challenge?.detected) {
+          throw createCloudflareChallengeError(challenge, {
+            operation: 'login',
+            source: 'http-response',
+            sourceIp
+          });
+        }
+      }
       if (!isForbiddenResponse(response)) return response;
       const decision = await handleForbidden({
         kind: 'http',
         url: redactSecrets(url),
         status: response.status,
-        sourceIp
+        sourceIp,
+        stopOnChallenge: challengePolicy === 'login-stop',
+        operation: 'login',
+        source: 'http-probe'
       });
+      if (decision.connectionFailure) {
+        const error = createCloudflareChallengeError(
+          decision.probe?.challenge,
+          decision.connectionFailure
+        );
+        error.connectionFailure = decision.connectionFailure;
+        throw error;
+      }
       if (decision.switched && attempt === 0) continue;
       return response;
     }
     return (options.fetchWithTimeout || fetchWithTimeout)(url, {
-      ...requestOptions,
+      ...forwardOptions,
       localAddress: currentSourceIp || undefined
     });
   }
@@ -414,6 +502,7 @@ function createSourceIpController(options = {}) {
         return await operation(sourceIp);
       } catch (err) {
         if (!isForbiddenError(err)) throw err;
+        if (isCloudflareChallengeError(err)) throw err;
         const decision = await handleForbidden({
           ...context,
           sourceIp,
@@ -481,6 +570,7 @@ function createSourceIpController(options = {}) {
         const generation = ++transportGeneration;
         let opened = false;
         let sawForbidden = false;
+        let challengeFailure = null;
         let attemptError = null;
         attemptedSourceIps.add(sourceIp);
         const withGeneration = event => ({
@@ -509,16 +599,30 @@ function createSourceIpController(options = {}) {
             onError: event => {
               const decorated = withGeneration(event);
               if (signal?.aborted) return;
-              const forbidden = !opened && (Number(event?.statusCode || 0) === 403 || isForbiddenError(event?.message || ''));
+              const forbidden = !opened && isWebSocketForbiddenError(event);
+              const challenge = detectCloudflareChallenge({
+                status: event?.statusCode,
+                headers: event?.headers,
+                contentType: event?.contentType,
+                body: event?.body
+              });
+              if (!opened && challenge.detected) {
+                challengeFailure = cloudflareChallengeFailure(challenge, {
+                  operation: 'login',
+                  source: 'ws-response',
+                  sourceIp
+                });
+              }
               sawForbidden = sawForbidden || forbidden;
               attemptError = decorated;
-              if (forbidden) {
+              if (forbidden || challenge.detected) {
                 log('ws-attempt-error', {
                   generation,
                   attemptedSourceIp: sourceIp,
                   retryable: true,
                   opened: false,
                   statusCode: Number(event?.statusCode || 403),
+                  challenge: challenge.detected ? challengeFailure : null,
                   message: event?.message || ''
                 });
                 return;
@@ -575,7 +679,20 @@ function createSourceIpController(options = {}) {
           return transport;
         } catch (err) {
           lastError = err;
-          const forbidden = sawForbidden || isForbiddenError(err);
+          const forbidden = sawForbidden || isWebSocketForbiddenError(err) || isWebSocketForbiddenError(attemptError);
+          const errorChallenge = detectCloudflareChallenge({
+            status: err?.statusCode || attemptError?.statusCode,
+            headers: err?.headers || attemptError?.headers,
+            contentType: err?.contentType || attemptError?.contentType,
+            body: err?.body || attemptError?.body
+          });
+          if (!challengeFailure && errorChallenge.detected) {
+            challengeFailure = cloudflareChallengeFailure(errorChallenge, {
+              operation: 'login',
+              source: 'ws-error',
+              sourceIp
+            });
+          }
           attemptDiagnostics.push({
             generation,
             sourceIp,
@@ -591,28 +708,23 @@ function createSourceIpController(options = {}) {
             connectionFailure = null;
             break;
           }
+          if (challengeFailure) {
+            connectionFailure = challengeFailure;
+            break;
+          }
           const decision = await handleForbidden({
             kind: 'ws',
             url: redactSecrets(wsOptions.wsUrl || ''),
             status: 403,
             sourceIp,
-            generation
+            generation,
+            stopOnChallenge: true,
+            operation: 'login',
+            source: 'ws-probe'
           });
-          connectionFailure = decision.probe?.allForbidden
-            ? {
-                type: 'cloudflare-challenge',
-                source: 'ws-403-all-http-probes-403'
-              }
-            : null;
+          connectionFailure = decision.connectionFailure || null;
           if (!decision.switched) break;
         }
-      }
-
-      if (!connectionFailure && allSourceIpsCloudflareQuarantined()) {
-        connectionFailure = {
-          type: 'cloudflare-challenge',
-          source: 'all-source-ips-quarantined-after-http-403'
-        };
       }
       const error = new Error(lastError?.message || 'websocket source IP attempts exhausted');
       error.attempts = attemptDiagnostics;

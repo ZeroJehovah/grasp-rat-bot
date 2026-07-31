@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.30.1';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.31.1';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function mapMarkerKeyCore(kind, primary, fallback = '') {
@@ -1086,6 +1086,7 @@ function renderBrowserlessWebPanel() {
       'combat-low-hp-disadvantage-leave': '战斗中我方低血且落后，主动退出',
       'combat-low-hp-no-damage-leave': '战斗中我方低血且久攻未造成伤害，主动退出',
       'combat-critical-hp-leave': '战斗中我方血量进入危险线，紧急退出',
+      'cloudflare-challenge': 'Cloudflare 挑战已确认，自动登录已停止',
       'realtime-transport-degraded': '战斗中实时传输持续异常，为避免失去控制，主动退出',
       'outbound-control-unresponsive': '战斗中移动或射击指令持续失效，为避免原地承伤，主动退出',
       'combat-action-settlement-stalled': '战斗中移动指令失效，为避免原地承伤，主动退出',
@@ -1678,6 +1679,9 @@ function renderBrowserlessWebPanel() {
       return actionReasonText(status);
     }
     function offlineActionTitleText(status) {
+      if (status.runner?.connectionFailure?.type === 'cloudflare-challenge') {
+        return 'Cloudflare 挑战已确认，自动登录已停止';
+      }
       if (status.auth?.needsReauth) return '等待重新授权';
       const offline = status.stats?.offline || {};
       const reconnectRemainingMs = number(offline.reconnectRemainingMs);
@@ -2626,6 +2630,22 @@ function renderBrowserlessWebPanel() {
       const liveCombat = Boolean(realtimeOnline && (kind === 'combat-live' || action.kind === 'combat-live'));
 
       addRow(rowsOut, '状态', online ? actionTitleText(status) : offlineActionTitleText(status), true);
+      const cloudflareChallenge = status.runner?.connectionFailure?.type === 'cloudflare-challenge'
+        ? status.runner.connectionFailure
+        : null;
+      if (!online && cloudflareChallenge) {
+        addRow(rowsOut, '连接状态', 'Cloudflare 挑战已确认，已停止自动登录', true, classAttrs('bad'));
+        addRow(rowsOut, '检测依据', Array.isArray(cloudflareChallenge.evidence) && cloudflareChallenge.evidence.length
+          ? cloudflareChallenge.evidence.join('、')
+          : '响应明确标记为 Challenge');
+        addRow(rowsOut, '检测时间', fullStamp(cloudflareChallenge.detectedAt));
+        addRow(rowsOut, 'HTTP 状态', cloudflareChallenge.status || '--');
+        addRow(rowsOut, 'CF Ray', cloudflareChallenge.cfRay || '--');
+        addRow(rowsOut, '游戏状态', cloudflareChallenge.inGameEvidence ? '存在游戏内证据' : '未确认进入游戏');
+        addRow(rowsOut, '退出请求', cloudflareChallenge.leaveAttempted
+          ? (cloudflareChallenge.leaveConfirmed ? '已调用并确认' : '已调用但未确认')
+          : '未调用 leave');
+      }
       if (online && !liveCombat) addRow(rowsOut, '原因', actionReasonDisplay(status), true);
       const decisionText = joinNonBlank([kindText(kind), actionReasonText(status)]);
       const statusText = actionText(status);

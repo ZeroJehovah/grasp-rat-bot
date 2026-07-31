@@ -23785,7 +23785,7 @@ async function runSelfTest() {
             const error = new Error('websocket unexpected response 403 Forbidden content-type=text/html; charset=utf-8');
             error.connectionFailure = {
               type: 'cloudflare-challenge',
-              source: 'ws-403-all-http-probes-403'
+              source: 'ws-response'
             };
             throw error;
           },
@@ -23808,7 +23808,54 @@ async function runSelfTest() {
           result.connectionFailure?.source
         ].join('|');
       })(),
-      want: 'false|true|true|self-present-reentry|true|true|true|1|true|cloudflare-challenge|ws-403-all-http-probes-403'
+      want: 'false|true|true|self-present-reentry|true|true|true|1|true|cloudflare-challenge|ws-response'
+    },
+    {
+      name: 'browserless canary does not call leave for login Challenge without in-game evidence',
+      got: (async () => {
+        let leaveCalls = 0;
+        const result = await runReadOnlyCanary({
+          gameOrigin: 'https://grasp-rat-game.h-e.top',
+          userId: 7,
+          sessionToken: 'challenge-without-self-token',
+          readOnlyProbeMs: 1000,
+          wsConnectTimeoutMs: 1000,
+          httpTimeoutMs: 1000
+        }, {
+          now: () => Date.UTC(2026, 6, 31, 1, 45, 0),
+          precheckedSnapshotSafety: {
+            ok: true,
+            reason: 'safe',
+            satisfied: true,
+            response: { summary: { selfPresent: false, freshness: { ok: true } } }
+          },
+          prewarmGameConnection: async () => ({ ok: true, status: 200, durationMs: 1 }),
+          openBrowserlessWs: async () => {
+            const error = new Error('Cloudflare challenge detected');
+            error.connectionFailure = {
+              type: 'cloudflare-challenge',
+              source: 'ws-response',
+              status: 403,
+              evidence: ['header:cf-mitigated=challenge']
+            };
+            throw error;
+          },
+          leaveWithVerification: async () => {
+            leaveCalls += 1;
+            return { ok: true, attempts: [{ ok: true, summary: { leaveConfirmed: true } }] };
+          }
+        });
+        return [
+          result.ok,
+          result.error.includes('Cloudflare'),
+          result.connectionFailure?.type || '',
+          result.connectionFailure?.inGameEvidence,
+          result.connectionFailure?.leaveAttempted,
+          leaveCalls,
+          result.connectionFailure?.source || ''
+        ].join('|');
+      })(),
+      want: 'false|true|cloudflare-challenge|false|false|0|ws-response'
     },
     {
       name: 'browserless canary opens ws when snapshot self is already present near active login point',
@@ -27253,24 +27300,20 @@ async function runSelfTest() {
       got: (() => {
         const envConfig = parseBrowserlessRunnerArgs([], {
           GRASP_RAT_BROWSERLESS_SOURCE_IP: '10.0.0.101',
-          GRASP_RAT_BROWSERLESS_SOURCE_IPS: '10.0.0.101,10.0.0.145',
-          GRASP_RAT_BROWSERLESS_CLOUDFLARE_CHALLENGE_RETRY_COOLDOWN_MS: '181000'
+          GRASP_RAT_BROWSERLESS_SOURCE_IPS: '10.0.0.101,10.0.0.145'
         });
         const cliConfig = parseBrowserlessRunnerArgs([
           '--source-ip', '10.0.0.145',
-          '--source-ips', '10.0.0.145 10.0.0.20',
-          '--cloudflare-challenge-retry-cooldown-ms', '182000'
+          '--source-ips', '10.0.0.145 10.0.0.20'
         ], {});
         return [
           envConfig.sourceIp,
           envConfig.sourceIps.join(','),
-          envConfig.cloudflareChallengeRetryCooldownMs,
           cliConfig.sourceIp,
-          cliConfig.sourceIps.join(','),
-          cliConfig.cloudflareChallengeRetryCooldownMs
+          cliConfig.sourceIps.join(',')
         ].join('|');
       })(),
-      want: '10.0.0.101|10.0.0.101,10.0.0.145|181000|10.0.0.145|10.0.0.145,10.0.0.20|182000'
+      want: '10.0.0.101|10.0.0.101,10.0.0.145|10.0.0.145|10.0.0.145,10.0.0.20'
     },
     {
       name: 'browserless source IP controller keeps persisted selection',
@@ -27432,6 +27475,96 @@ async function runSelfTest() {
         ].join('|');
       }),
       want: '10.0.0.101|10.0.0.101|false|false||1'
+    },
+    {
+      name: 'browserless source IP controller stops websocket Challenge without switching or retrying',
+      got: withTempDirForTest(async dir => {
+        const stateFile = path.join(dir, 'state.json');
+        const opened = [];
+        const probes = [];
+        const controller = createSourceIpController({
+          config: {
+            gameOrigin: 'https://grasp-rat-game.h-e.top',
+            sourceIps: ['10.0.0.101', '10.0.0.20'],
+            sourceIp: '10.0.0.101',
+            httpTimeoutMs: 1000
+          },
+          stateFile,
+          now: () => Date.UTC(2026, 6, 31, 1, 30, 0),
+          fetchWithTimeout: async (url, options = {}) => {
+            probes.push(`${options.localAddress || ''}:${new URL(url).pathname}`);
+            return fakeResponseForTest({ status: 403, body: 'forbidden' });
+          },
+          openBrowserlessWs: async options => {
+            opened.push(options.localAddress || '');
+            options.onError?.({
+              message: 'websocket unexpected response 403 Forbidden',
+              statusCode: 403,
+              headers: { 'cf-mitigated': 'challenge', 'cf-ray': 'challenge-ray' },
+              contentType: 'text/html',
+              body: '<title>Just a moment...</title>',
+              opened: false
+            });
+            throw new Error('websocket unexpected response 403 Forbidden');
+          }
+        });
+        let error = null;
+        try {
+          await controller.openBrowserlessWs({ wsUrl: 'wss://example.test/ws' });
+        } catch (err) {
+          error = err;
+        }
+        return [
+          opened.join(','),
+          probes.length,
+          controller.currentSourceIp(),
+          error?.connectionFailure?.type || '',
+          error?.connectionFailure?.source || '',
+          error?.connectionFailure?.cfRay || ''
+        ].join('|');
+      }),
+      want: '10.0.0.101|0|10.0.0.101|cloudflare-challenge|ws-response|challenge-ray'
+    },
+    {
+      name: 'browserless source IP controller does not switch for a non-403 websocket error',
+      got: withTempDirForTest(async dir => {
+        const stateFile = path.join(dir, 'state.json');
+        const opened = [];
+        const probes = [];
+        const controller = createSourceIpController({
+          config: {
+            gameOrigin: 'https://grasp-rat-game.h-e.top',
+            sourceIps: ['10.0.0.101', '10.0.0.20'],
+            sourceIp: '10.0.0.101',
+            httpTimeoutMs: 1000
+          },
+          stateFile,
+          now: () => Date.UTC(2026, 6, 31, 1, 35, 0),
+          fetchWithTimeout: async (url, options = {}) => {
+            probes.push(`${options.localAddress || ''}:${new URL(url).pathname}`);
+            return fakeResponseForTest({ status: 403, body: 'forbidden' });
+          },
+          openBrowserlessWs: async options => {
+            opened.push(options.localAddress || '');
+            options.onError?.({ message: 'socket protocol error', opened: false });
+            throw new Error('socket protocol error');
+          }
+        });
+        let error = null;
+        try {
+          await controller.openBrowserlessWs({ wsUrl: 'wss://example.test/ws' });
+        } catch (err) {
+          error = err;
+        }
+        return [
+          opened.join(','),
+          probes.length,
+          controller.currentSourceIp(),
+          error?.connectionFailure?.type || '',
+          error?.message || ''
+        ].join('|');
+      }),
+      want: '10.0.0.101|0|10.0.0.101||socket protocol error'
     },
     {
       name: 'browserless source IP controller switches ws 403 before retrying',
@@ -27654,7 +27787,7 @@ async function runSelfTest() {
           Object.keys(state.network.sourceIpQuarantine || {}).sort().join(',')
         ].join('|');
       }),
-      want: '10.0.0.145,10.0.0.20|2|2|true|2|cloudflare-challenge|ws-403-all-http-probes-403|cloudflare-challenge|0|cloudflare-challenge|all-source-ips-quarantined-after-http-403|10.0.0.145,10.0.0.20'
+      want: '10.0.0.145,10.0.0.20|2|2|true|2||||0|||10.0.0.145,10.0.0.20'
     },
     {
       name: 'browserless hedged leave 403 does not trigger source IP switching',
@@ -27861,7 +27994,7 @@ async function runSelfTest() {
             error: 'websocket unexpected response 403',
             connectionFailure: {
               type: 'cloudflare-challenge',
-              source: 'ws-403-all-http-probes-403'
+              source: 'ws-response'
             },
             safety: { leaveFailure: { reason: 'direct-leave-failed' } }
           }
@@ -27961,7 +28094,7 @@ async function runSelfTest() {
           connectTimeout.delayMs
         ].join('|');
       })(),
-      want: 'true|1234|true|stamina-budget-coin-leave|1800000|true|stamina-exhausted-leave|600000|true|injury-leave|1234|true|pursuit-leave|1234|true|combat-hp-disadvantage-leave|1234|true|ws-closed|1000|true|action-settlement-stalled|1000|true|false|false|true|ws-closed|1000|false|true|true|true|cloudflare-challenge|180000|true|ws-403-all-http-probes-403|true|ws-auth-blocked-self-present|1000|true|60000|true|in-game-snapshot-safety-retry|1000|true|ws-connect-timeout|1000'
+      want: 'true|1234|true|stamina-budget-coin-leave|1800000|true|stamina-exhausted-leave|600000|true|injury-leave|1234|true|pursuit-leave|1234|true|combat-hp-disadvantage-leave|1234|true|ws-closed|1000|true|action-settlement-stalled|1000|true|false|false|true|ws-closed|1000|false|true|true|false|cloudflare-challenge|0||true|ws-auth-blocked-self-present|1000|true|60000|true|in-game-snapshot-safety-retry|1000|true|ws-connect-timeout|1000'
     },
     {
       name: 'browserless runner treats combat stall and low-hp recovery threat as normal confirmed exits',

@@ -162,8 +162,6 @@ function hasCanaryInGameEvidence(canary) {
   return Boolean(
     canary?.snapshotSafety?.response?.summary?.selfPresent === true
       || canary?.entry?.firstSelf
-      || Number(stats.frameCount || 0) > 0
-      || Number(stats.realtimeFrameCount || 0) > 0
       || Number(stats.selfPresent?.true || 0) > 0
   );
 }

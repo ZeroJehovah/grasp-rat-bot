@@ -97,6 +97,7 @@ const {
   redactSecrets,
   summarizeSnapshotPayload
 } = require('./session-client');
+const { runCloudflareChallengeSelfTest } = require('./cloudflare-challenge');
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const UTC8_OFFSET_MS = 8 * 60 * 60 * 1000;
@@ -147,7 +148,6 @@ function publicConfig(config) {
     leavePrewarmIntervalMs: Number(config.leavePrewarmIntervalMs || 0),
     decisionIntervalMs: Number(config.decisionIntervalMs || 0),
     loopDelayMs: Number(config.loopDelayMs || 0),
-    cloudflareChallengeRetryCooldownMs: Number(config.cloudflareChallengeRetryCooldownMs || 0),
     dailyFirstLoginDelayMs: Number(config.dailyFirstLoginDelayMs || 0),
     loginPointSafetySuccessRequired: Number(config.loginPointSafetySuccessRequired || 0),
     loginPointSafetyProbeIntervalMs: Number(config.loginPointSafetyProbeIntervalMs || 0),
@@ -943,19 +943,6 @@ function browserlessLoopPlan(result, config = {}) {
   if (!result) return resume('missing-result');
   if (result.reason === 'missing-manual-session') return resume('missing-manual-session');
   if (safetyReason === 'explicit-stop' || safetyReason === 'restart-drain-ready') return stop(safetyReason);
-  if (canary?.connectionFailure?.type === 'cloudflare-challenge') {
-    const cooldownMs = Math.max(1000, Number(config.cloudflareChallengeRetryCooldownMs || 180000));
-    return {
-      continue: true,
-      reason: 'cloudflare-challenge',
-      delayMs: cooldownMs,
-      previousRunId: runId,
-      error,
-      safetyReason,
-      explicitDelay: true,
-      connectionFailure: canary.connectionFailure
-    };
-  }
   if (pendingExit) {
     const nextRetryAtMs = Math.max(0, Number(pendingExit.nextRetryAtMs || 0));
     const retryDelayMs = Math.max(0, nextRetryAtMs - loopNowMs);
@@ -970,6 +957,12 @@ function browserlessLoopPlan(result, config = {}) {
       nextRunAt: pendingExit.nextRetryAt,
       explicitDelay: false,
       deadlineType: 'pending-exit-retry'
+    };
+  }
+  if (canary?.connectionFailure?.type === 'cloudflare-challenge') {
+    return {
+      ...stop('cloudflare-challenge'),
+      connectionFailure: canary.connectionFailure
     };
   }
   if (fastRecoverableTransportReasons.has(safetyReason)) {
@@ -3000,6 +2993,7 @@ async function runBrowserlessRunner(config, deps = {}) {
         running: !config.once,
         mode: nextPendingExit ? 'exit-recovery' : (config.controlMode || 'read-only'),
         pendingExit: nextPendingExit,
+        connectionFailure: canary?.connectionFailure || null,
         exitRecoveryOutcomes,
         lastRun: result,
         lastError: result.ok ? '' : (canary?.error || 'read-only-canary-failed')
@@ -5088,6 +5082,7 @@ async function runBrowserlessRunnerSelfTest() {
     }
     const complexCombatMainThreadBudget = await runComplexCombatMainThreadBudgetSelfTest(tmp);
     const snapshotEdge = await runSnapshotEdgeSelfTest();
+    const cloudflareChallenge = runCloudflareChallengeSelfTest();
     const pendingExitRecovery = runPendingExitRecoverySelfTest();
     const combatBattleLog = runCombatBattleLogSelfTest();
     const combatShotExecution = runCombatShotExecutionSelfTest();
@@ -5147,6 +5142,7 @@ async function runBrowserlessRunnerSelfTest() {
         && nearbyMapLegacyCompatibilityTest.ok
         && statusServerChatTest.ok
         && snapshotEdge.ok
+        && cloudflareChallenge.ok
         && pendingExitRecovery.ok
         && combatBattleLog.ok
         && combatShotExecution.ok
@@ -5204,6 +5200,7 @@ async function runBrowserlessRunnerSelfTest() {
       nearbyMapLegacyCompatibilityTest,
       statusServerChatTest,
       snapshotEdge,
+      cloudflareChallenge,
       pendingExitRecovery,
       combatBattleLog,
       combatShotExecution,

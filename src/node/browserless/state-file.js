@@ -45,6 +45,7 @@ function defaultBrowserlessState() {
       restartDrain: null,
       currentAction: null,
       lastRun: null,
+      connectionFailure: null,
       lastError: ''
     },
     probes: {
@@ -2823,6 +2824,26 @@ function compactLastRunSource(value) {
   };
 }
 
+function compactConnectionFailure(value) {
+  if (!value || typeof value !== 'object') return null;
+  return {
+    type: compactString(value.type, 80),
+    operation: compactString(value.operation, 40),
+    source: compactString(value.source, 100),
+    detectedAt: compactString(value.detectedAt, 48),
+    status: compactNumber(value.status),
+    contentType: compactString(value.contentType, 120),
+    cfRay: compactString(value.cfRay, 120),
+    evidence: Array.isArray(value.evidence)
+      ? value.evidence.map(item => compactString(item, 100)).filter(Boolean).slice(0, 8)
+      : [],
+    sourceIp: compactString(value.sourceIp, 64),
+    inGameEvidence: value.inGameEvidence === undefined ? null : Boolean(value.inGameEvidence),
+    leaveAttempted: value.leaveAttempted === undefined ? null : Boolean(value.leaveAttempted),
+    leaveConfirmed: value.leaveConfirmed === undefined ? null : Boolean(value.leaveConfirmed)
+  };
+}
+
 function compactRestartDrain(value) {
   if (!value || typeof value !== 'object' || !value.requested) return null;
   const assessment = value.assessment && typeof value.assessment === 'object'
@@ -2919,6 +2940,7 @@ function browserlessCompactStatusSource(state = {}) {
       dryRun: runner.dryRun !== false,
       combatEnabled: Boolean(runner.combatEnabled),
       lastError: runner.lastError || '',
+      connectionFailure: compactConnectionFailure(runner.connectionFailure),
       restartDrain: runner.restartDrain || null,
       currentAction: compactAction(runner.currentAction),
       lastRun: compactLastRunSource(runner.lastRun)
@@ -3028,6 +3050,10 @@ function buildCompactBrowserlessStatus(state, config = {}) {
       canaryProfile: normalized.runner.canaryProfile || '',
       dryRun: normalized.runner.dryRun,
       combatEnabled: Boolean(normalized.runner.combatEnabled),
+      connectionFailure: compactConnectionFailure(
+        normalized.runner.connectionFailure
+          || normalized.runner.lastRun?.canary?.connectionFailure
+      ),
       restartDrain: compactRestartDrain(normalized.runner.restartDrain),
       lastError: compactString(normalized.runner.lastError, 160)
     },
