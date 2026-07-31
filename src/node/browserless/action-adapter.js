@@ -3,6 +3,7 @@
 const { buildRuntimeDefaults } = require('../../shared/runtime-defaults');
 const {
   coinDirectionToCore,
+  coinPickupJitterAllowedCore,
   coinMotionMetaCore,
   targetLaneAlignmentDirectionCore
 } = require('../../strategy/coin-motion');
@@ -80,6 +81,10 @@ function coinMotionCoreOptions(options = {}, extra = {}) {
     coinPickupStopPulseMs: optionNumber(options, 'coinPickupStopPulseMs', BROWSER_RUNTIME_DEFAULTS.coinPickupStopPulseMs),
     coinPickupMicroDistance: optionNumber(options, 'coinPickupMicroDistance', BROWSER_RUNTIME_DEFAULTS.coinPickupMicroDistance),
     coinPickupMicroPulseMs: optionNumber(options, 'coinPickupMicroPulseMs', BROWSER_RUNTIME_DEFAULTS.coinPickupMicroPulseMs),
+    coinPickupJitterEnabled: options.coinPickupJitterEnabled !== false,
+    coinPickupJitterMaxDistance: optionNumber(options, 'coinPickupJitterMaxDistance', BROWSER_RUNTIME_DEFAULTS.coinPickupJitterMaxDistance),
+    coinPickupJitterMaxBacktrack: optionNumber(options, 'coinPickupJitterMaxBacktrack', BROWSER_RUNTIME_DEFAULTS.coinPickupJitterMaxBacktrack),
+    coinPickupJitterMaxPulses: optionNumber(options, 'coinPickupJitterMaxPulses', BROWSER_RUNTIME_DEFAULTS.coinPickupJitterMaxPulses),
     coinPickupFineDistance: optionNumber(options, 'coinPickupFineDistance', BROWSER_RUNTIME_DEFAULTS.coinPickupFineDistance),
     coinPickupFinePulseMs: optionNumber(options, 'coinPickupFinePulseMs', BROWSER_RUNTIME_DEFAULTS.coinPickupFinePulseMs),
     coinPickupBrakeDistance: optionNumber(options, 'coinPickupBrakeDistance', BROWSER_RUNTIME_DEFAULTS.coinPickupBrakeDistance),
@@ -998,6 +1003,7 @@ function createBrowserlessActionAdapter(options = {}) {
       plannerTick: continuation.plannerTick ?? null,
       lastObservedTick: continuation.lastObservedTick ?? null,
       pulseCount: Math.max(0, Number(continuation.pulseCount || 0)),
+      jitterCount: Math.max(0, Number(continuation.jitterCount || 0)),
       lastPulse: pulse ? {
         commandId: pulse.commandId ?? null,
         pulseToken: pulse.pulseToken ?? null,
@@ -1009,7 +1015,8 @@ function createBrowserlessActionAdapter(options = {}) {
         stopSentAtMs: Number(pulse.stopSentAtMs || 0),
         stopSentTick: pulse.stopSentTick ?? null,
         stopCommandId: pulse.stopCommandId ?? null,
-        stopFailed: pulse.stopFailed === true
+        stopFailed: pulse.stopFailed === true,
+        jitter: pulse.jitter === true
       } : null
     };
   }
@@ -1067,6 +1074,7 @@ function createBrowserlessActionAdapter(options = {}) {
         plannerTick: optionalNumber(stateSnapshot?.realtime?.tick),
         lastObservedTick: null,
         pulseCount: 0,
+        jitterCount: 0,
         lastPulse: null
       };
       state.nearCoinContinuation = continuation;
@@ -1103,7 +1111,8 @@ function createBrowserlessActionAdapter(options = {}) {
         stopSentAtMs: 0,
         stopSentTick: null,
         stopCommandId: null,
-        stopFailed: false
+        stopFailed: false,
+        jitter: Boolean(vector?.jitter || vector?.crossSweep)
       };
       state.nearCoinContinuationPulseCount += 1;
     }
@@ -1260,9 +1269,22 @@ function createBrowserlessActionAdapter(options = {}) {
     if (!nearCoinPulseStopSettled(pulse, self)) return null;
     const directionDot = Number(pulse.dx || 0) * Number(vector.dx || 0)
       + Number(pulse.dy || 0) * Number(vector.dy || 0);
-    if (directionDot < 0) {
+    const jitter = directionDot < 0
+      && coinPickupJitterAllowedCore(
+        pulse,
+        vector,
+        coinMotionCoreOptions(options),
+        continuation.jitterCount
+      );
+    if (directionDot < 0 && !jitter) {
       clearNearCoinContinuation('locked-direction-reversal');
       return null;
+    }
+    if (jitter) {
+      continuation.jitterCount = Math.max(0, Number(continuation.jitterCount || 0)) + 1;
+      vector.jitter = true;
+      vector.crossSweep = true;
+      if (vector.pickupMode === 'micro') vector.pickupMode = 'micro-cross-sweep';
     }
     const ownership = {
       source: 'near-coin-continuation',

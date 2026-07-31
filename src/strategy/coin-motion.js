@@ -74,6 +74,31 @@ function coinPickupPrecisionPulseMsCore(distance, failureCount = 0, options = {}
   return Math.max(minPulse, Math.round(pulse - slowMs));
 }
 
+function coinPickupJitterAllowedCore(previous = {}, current = {}, options = {}, jitterCount = 0) {
+  if (options.coinPickupJitterEnabled === false) return false;
+  const maxPulses = Math.max(0, Math.floor(coinMotionNumber(options.coinPickupJitterMaxPulses, 0)));
+  if (Math.max(0, Math.floor(Number(jitterCount) || 0)) >= maxPulses) return false;
+  const maxDistance = Math.max(0, coinMotionNumber(options.coinPickupJitterMaxDistance, 0));
+  const maxBacktrack = Math.max(0, coinMotionNumber(options.coinPickupJitterMaxBacktrack, 0));
+  const previousDistance = Number(previous.distance);
+  const currentDistance = Number(current.distance);
+  if (!(maxDistance > 0)
+    || !Number.isFinite(previousDistance)
+    || !Number.isFinite(currentDistance)
+    || currentDistance > maxDistance
+    || previousDistance > maxDistance + maxBacktrack
+    || currentDistance > previousDistance + maxBacktrack) {
+    return false;
+  }
+  let oppositeAxes = 0;
+  for (const axis of ['dx', 'dy']) {
+    const before = Math.sign(Number(previous[axis] || 0));
+    const after = Math.sign(Number(current[axis] || 0));
+    if (before && after && before === -after) oppositeAxes += 1;
+  }
+  return oppositeAxes === 1;
+}
+
 function coinAxisLockShouldHoldCore(lock, dxRaw, dyRaw, options = {}) {
   if (!lock || !(lock.dx || lock.dy)) return false;
   const axisRaw = lock.dx ? dxRaw : dyRaw;
@@ -224,6 +249,7 @@ module.exports = {
   targetLaneAlignmentDirectionCore,
   coinAxisApproachDirectionCore,
   coinPickupPrecisionPulseMsCore,
+  coinPickupJitterAllowedCore,
   coinAxisLockShouldHoldCore,
   coinNearApproachAxisCore,
   coinDirectionToCore,

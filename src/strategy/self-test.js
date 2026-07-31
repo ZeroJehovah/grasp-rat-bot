@@ -71,6 +71,7 @@ const {
   coinAxisLockShouldHoldCore,
   coinDirectionToCore,
   coinMotionMetaCore,
+  coinPickupJitterAllowedCore,
   coinPickupPrecisionPulseMsCore
 } = require('./coin-motion');
 const {
@@ -3225,6 +3226,10 @@ function runStrategyModuleSelfTests() {
     coinPickupStopPulseMs: 45,
     coinPickupMicroDistance: 120,
     coinPickupMicroPulseMs: 60,
+    coinPickupJitterEnabled: true,
+    coinPickupJitterMaxDistance: 180,
+    coinPickupJitterMaxBacktrack: 90,
+    coinPickupJitterMaxPulses: 1,
     coinPickupFineDistance: 320,
     coinPickupFinePulseMs: 75,
     coinPickupBrakeDistance: 650,
@@ -3308,6 +3313,34 @@ function runStrategyModuleSelfTests() {
     name: 'coin-motion-pickup-failures-reduce-pulse',
     passed: coinPickupPrecisionPulseMsCore(500, 3, coinMotionOptions) < coinPickupPrecisionPulseMsCore(500, 0, coinMotionOptions)
       && coinPickupPrecisionPulseMsCore(500, 100, coinMotionOptions) === coinMotionOptions.coinPickupFailureMinPulseMs
+  });
+
+  results.push({
+    name: 'coin-motion-allows-one-bounded-close-jitter',
+    passed: coinPickupJitterAllowedCore(
+      { dx: 1, dy: 1, distance: 120 },
+      { dx: -1, dy: 1, distance: 70 },
+      coinMotionOptions,
+      0
+    ) === true
+      && coinPickupJitterAllowedCore(
+        { dx: 1, dy: 1, distance: 120 },
+        { dx: -1, dy: -1, distance: 70 },
+        coinMotionOptions,
+        0
+      ) === false
+      && coinPickupJitterAllowedCore(
+        { dx: 1, dy: 1, distance: 120 },
+        { dx: -1, dy: 1, distance: 70 },
+        coinMotionOptions,
+        1
+      ) === false
+      && coinPickupJitterAllowedCore(
+        { dx: 1, dy: 1, distance: 500 },
+        { dx: -1, dy: 1, distance: 70 },
+        coinMotionOptions,
+        0
+      ) === false
   });
 
   const closeCoinMotion = coinDirectionToCore(

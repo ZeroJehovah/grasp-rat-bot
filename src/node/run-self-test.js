@@ -22512,6 +22512,73 @@ async function runSelfTest() {
       want: 'true|true|locked-direction-reversal|vel 1 0,vel 0 0'
     },
     {
+      name: 'browserless close coin continuation allows one bounded jitter correction',
+      got: (() => {
+        let t = 1000;
+        const commands = [];
+        const timers = [];
+        const adapter = createBrowserlessActionAdapter({
+          now: () => t,
+          commandIntervalMs: 1,
+          decisionIntervalMs: 1000,
+          setTimeout: (fn, ms) => {
+            const timer = { fn, ms, canceled: false };
+            timers.push(timer);
+            return timer;
+          },
+          clearTimeout: timer => {
+            if (timer) timer.canceled = true;
+          },
+          getTransportHealth: () => ({
+            connected: true,
+            latency: { p90Ms: 120 },
+            processingQueue: { p90Ms: 5 },
+            frameLoss: { rate: 0.005, expectedTicks: 100 },
+            frames: { lastAgeMs: 20 },
+            exit: { triggered: false }
+          }),
+          transport: {
+            sendVelocity: (dx, dy) => commands.push(`vel ${dx} ${dy}`)
+          }
+        });
+        const target = { type: 'coin', id: 'jitter-coin', x: 800, y: 0 };
+        const decision = {
+          kind: 'profit-candidate',
+          band: 'profit',
+          action: { kind: 'coin', band: 'profit', target }
+        };
+        const state = (tick, x) => ({
+          realtime: {
+            authority: 'realtime',
+            source: 'pos',
+            tick,
+            receivedAtMs: t,
+            frameAgeMs: 20,
+            self: { x, y: 0, vx: 0, vy: 0 },
+            coinDropsObserved: true,
+            coinDrops: [{ drop_id: 'jitter-coin', x: 800, y: 0, amount: 1, authority: 'realtime', source: 'pos' }]
+          },
+          command: { movement: { timing: { exactReady: true, exactSampleCount: 4, p90WallMs: 200 } } }
+        });
+        const initial = state(1, 680);
+        adapter.observeState(initial);
+        adapter.applyDecision(initial, decision);
+        t = 1100;
+        timers[0].fn();
+        t = 1200;
+        const jitter = adapter.continueCloseCoinPickup(state(5, 850));
+        const adapterState = adapter.getState();
+        return [
+          jitter?.vector?.jitter === true,
+          jitter?.nearCoinContinuation?.jitterCount,
+          jitter?.nearCoinContinuation?.lastPulse?.jitter === true,
+          adapterState.nearCoinContinuationLastCancelReason,
+          commands.join(',')
+        ].join('|');
+      })(),
+      want: 'true|1|true||vel 1 0,vel 0 0,vel -1 0'
+    },
+    {
       name: 'browserless close coin continuation clears when realtime visibility or transport health degrades',
       got: (() => {
         let t = 1000;
