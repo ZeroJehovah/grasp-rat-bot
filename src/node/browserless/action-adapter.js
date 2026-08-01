@@ -7,6 +7,7 @@ const {
   coinMotionMetaCore,
   targetLaneAlignmentDirectionCore
 } = require('../../strategy/coin-motion');
+const { stamina5sRemaining } = require('../../strategy/combat-fire-discipline');
 
 const BROWSER_RUNTIME_DEFAULTS = buildRuntimeDefaults({}, false);
 const DEFAULT_TARGET_DEAD_ZONE_CM = 900;
@@ -16,6 +17,14 @@ const DEFAULT_SETTLEMENT_FRAMES = 2;
 const DEFAULT_MOVEMENT_SETTLEMENT_STALL_MS = 5000;
 const DEFAULT_MOVEMENT_SETTLEMENT_MIN_DISTANCE_CM = 80;
 const DEFAULT_COMBAT_SHOOT_MIN_INTERVAL_MS = 160;
+const DEFAULT_AFK_SHOOT_DODGE_RESERVE_MS = Math.max(
+  0,
+  Number(BROWSER_RUNTIME_DEFAULTS.combatShootPassiveRunnerDodgeReserveMs || 1800)
+);
+const DEFAULT_AFK_SHOOT_STAMINA_COST_MS = Math.max(
+  0,
+  Number(BROWSER_RUNTIME_DEFAULTS.opportunityShotStaminaCostMs || 500)
+);
 const DEFAULT_REPEAT_MAX_DRIFT_MS = 125;
 const DEFAULT_TRANSPORT_HIGH_WATER_BYTES = 64 * 1024;
 const DEFAULT_ATTACK_RANGE_CM = BROWSER_RUNTIME_DEFAULTS.attackRange;
@@ -402,6 +411,10 @@ function createInitialActionState() {
     shootRepeatTimer: null,
     shootRepeatTargetKey: '',
     shootRepeat: null,
+    shootRepeatWaitReason: '',
+    shootRepeatStamina5s: null,
+    shootRepeatRequiredStaminaMs: null,
+    shootRepeatOutstandingCommandId: null,
     lastVelocityRepeatError: '',
     lastShootRepeatError: '',
     shootingSealed: false,
@@ -465,6 +478,17 @@ function createBrowserlessActionAdapter(options = {}) {
     options.movementSettlementMinDistanceCm ?? DEFAULT_MOVEMENT_SETTLEMENT_MIN_DISTANCE_CM
   ));
   const combatShootMinIntervalMs = Math.max(1, Number(options.combatShootMinIntervalMs ?? DEFAULT_COMBAT_SHOOT_MIN_INTERVAL_MS));
+  const afkShootDodgeReserveMs = Math.max(0, Number(
+    options.afkShootDodgeReserveMs
+      ?? options.combatShootPassiveRunnerDodgeReserveMs
+      ?? DEFAULT_AFK_SHOOT_DODGE_RESERVE_MS
+  ));
+  const afkShootStaminaCostMs = Math.max(0, Number(
+    options.afkShootStaminaCostMs
+      ?? options.opportunityShotStaminaCostMs
+      ?? DEFAULT_AFK_SHOOT_STAMINA_COST_MS
+  ));
+  const afkShootRequiredStaminaMs = afkShootDodgeReserveMs + afkShootStaminaCostMs;
   const maxPendingShootCommands = Math.max(1, Math.round(Number(options.maxPendingShootCommands ?? 3)));
   const initialShootAckTimeoutMs = Math.max(500, Number(options.shootAckTimeoutMs ?? 3000));
   const onShootRequest = typeof options.onShootRequest === 'function' ? options.onShootRequest : null;
@@ -1332,6 +1356,10 @@ function createBrowserlessActionAdapter(options = {}) {
     state.shootRepeatUntilMs = 0;
     state.shootRepeatTargetKey = '';
     state.shootRepeat = null;
+    state.shootRepeatWaitReason = '';
+    state.shootRepeatStamina5s = null;
+    state.shootRepeatRequiredStaminaMs = null;
+    state.shootRepeatOutstandingCommandId = null;
     if (reason && options.error) state.lastShootRepeatError = reason;
     clearShootRepeatTimer();
   }
@@ -1441,6 +1469,149 @@ function createBrowserlessActionAdapter(options = {}) {
     return id === null || id === undefined || id === '' ? '' : String(id);
   }
 
+  function shotTargetKey(shot) {
+    const explicit = shot?.targetId ?? shot?.target_id;
+    if (explicit !== null && explicit !== undefined && explicit !== '') return String(explicit);
+    return targetRepeatKey(shot?.target);
+  }
+
+  function sameControlGeneration(shot) {
+    const generation = String(shot?.controlGeneration || '');
+    return !controlGeneration || !generation || generation === controlGeneration;
+  }
+
+  function shotCoordinatesMatchTarget(shot, target) {
+    const shotX = numberOrNull(shot?.targetX ?? shot?.target_x);
+    const shotY = numberOrNull(shot?.targetY ?? shot?.target_y);
+    const targetX = numberOrNull(target?.x);
+    const targetY = numberOrNull(target?.y);
+    return shotX !== null
+      && shotY !== null
+      && targetX !== null
+      && targetY !== null
+      && Math.hypot(shotX - targetX, shotY - targetY) <= 5;
+  }
+
+  function afkOutstandingShot(target, commandShooting = null) {
+    const targetKey = targetRepeatKey(target);
+    const matchesTarget = shot => {
+      if (!sameControlGeneration(shot)) return false;
+      const shotKey = shotTargetKey(shot);
+      if (targetKey && shotKey) return shotKey === targetKey;
+      return shotCoordinatesMatchTarget(shot, target);
+    };
+    const local = state.pendingShootCommands.find(matchesTarget);
+    if (local) {
+      return {
+        source: 'adapter-pending',
+        commandId: local.id ?? null,
+        requestId: local.requestId ?? null
+      };
+    }
+    const pending = Array.isArray(commandShooting?.pendingShots)
+      ? commandShooting.pendingShots.find(matchesTarget)
+      : null;
+    if (pending) {
+      return {
+        source: 'state-pending',
+        commandId: pending.commandId ?? null,
+        requestId: pending.requestId ?? null
+      };
+    }
+    const expired = Array.isArray(commandShooting?.expiredShots)
+      ? commandShooting.expiredShots.find(matchesTarget)
+      : null;
+    if (expired) {
+      return {
+        source: 'state-expired',
+        commandId: expired.commandId ?? null,
+        requestId: expired.requestId ?? null
+      };
+    }
+    return null;
+  }
+
+  function afkShootGate(self, target, commandShooting = null) {
+    const stamina5s = stamina5sRemaining(self);
+    const outstanding = afkOutstandingShot(target, commandShooting);
+    if (outstanding) {
+      return {
+        ok: false,
+        reason: 'afk-shoot-awaiting-ack',
+        stamina5s,
+        requiredStaminaMs: afkShootRequiredStaminaMs,
+        outstanding
+      };
+    }
+    if (stamina5s !== null && stamina5s < afkShootRequiredStaminaMs) {
+      return {
+        ok: false,
+        reason: 'afk-shoot-stamina-reserve',
+        stamina5s,
+        requiredStaminaMs: afkShootRequiredStaminaMs,
+        outstanding: null
+      };
+    }
+    return {
+      ok: true,
+      reason: 'afk-shoot-ready',
+      stamina5s,
+      requiredStaminaMs: afkShootRequiredStaminaMs,
+      outstanding: null
+    };
+  }
+
+  function updateShootRepeatGate(gate) {
+    state.shootRepeatWaitReason = gate?.ok ? '' : String(gate?.reason || '');
+    state.shootRepeatStamina5s = optionalNumber(gate?.stamina5s);
+    state.shootRepeatRequiredStaminaMs = optionalNumber(gate?.requiredStaminaMs);
+    state.shootRepeatOutstandingCommandId = gate?.outstanding?.commandId ?? null;
+  }
+
+  function blockedAfkShootResult(gate, target, recordSkip = true) {
+    if (recordSkip) state.skippedCount += 1;
+    return {
+      ok: true,
+      skipped: true,
+      reason: gate.reason,
+      stamina5s: gate.stamina5s,
+      requiredStaminaMs: gate.requiredStaminaMs,
+      outstanding: gate.outstanding,
+      execution: recordSkip
+        ? skippedShootExecution(gate.reason, target, {}, {
+            outcome: gate.reason === 'afk-shoot-awaiting-ack' ? 'awaiting-ack' : 'stamina-reserve'
+          })
+        : null
+    };
+  }
+
+  function sendAfkShoot(stateSnapshot, self, target, reason, cadenceMs, sendOptions = {}) {
+    const gate = afkShootGate(self, target, stateSnapshot?.command?.shooting || null);
+    if (state.shootRepeat) updateShootRepeatGate(gate);
+    if (!gate.ok) return blockedAfkShootResult(gate, target, sendOptions.recordSkip !== false);
+    const startX = numberOrNull(self?.x);
+    const startY = numberOrNull(self?.y);
+    const targetX = numberOrNull(target?.x);
+    const targetY = numberOrNull(target?.y);
+    if (startX === null || startY === null || targetX === null || targetY === null) {
+      if (sendOptions.recordSkip !== false) state.skippedCount += 1;
+      return {
+        ok: false,
+        skipped: true,
+        reason: 'missing-shoot-coordinates',
+        execution: sendOptions.recordSkip === false
+          ? null
+          : skippedShootExecution('missing-shoot-coordinates', target)
+      };
+    }
+    const sent = sendShoot(targetX, targetY, startX, startY, reason, target, cadenceMs);
+    if (state.shootRepeat && !sent.skipped && sent.command) {
+      state.shootRepeatWaitReason = 'afk-shoot-awaiting-ack';
+      state.shootRepeatOutstandingCommandId = sent.command.id ?? null;
+    }
+    return sent;
+  }
+
   function entityActiveLike(entity) {
     const mode = String(entity?.current_join_mode || entity?.mode || entity?.joined || '').toLowerCase();
     return Boolean(entity?.active === true || entity?.firing || entity?.shooting || entity?.is_firing || mode === 'active');
@@ -1471,11 +1642,100 @@ function createBrowserlessActionAdapter(options = {}) {
         cancelShootRepeat('shoot-repeat-target-active', { error: true });
         return false;
       }
+      repeat.target = { ...repeat.target, ...entity };
     }
+    repeat.self = realtime.self;
+    repeat.commandShooting = stateSnapshot?.command?.shooting || repeat.commandShooting || null;
+    repeat.observedTick = optionalNumber(realtime.tick);
     return true;
   }
 
-  function scheduleShootRepeat(self, target, reason, cadenceMs = shootRepeatMs) {
+  function armShootRepeatTimer(delayMs) {
+    const repeat = state.shootRepeat;
+    if (!repeat) return null;
+    clearShootRepeatTimer();
+    const token = state.shootRepeatToken;
+    const delay = Math.max(1, Math.ceil(Number(delayMs) || repeat.cadenceMs));
+    const scheduledForMs = now() + delay;
+    state.shootRepeatTimer = setTimeoutFn(() => {
+      if (state.shootRepeatToken !== token) return;
+      state.shootRepeatTimer = null;
+      const current = state.shootRepeat;
+      if (!current) return;
+      if (now() > Number(state.shootRepeatUntilMs || 0)) {
+        cancelShootRepeat();
+        return;
+      }
+      const timerDriftMs = Math.max(0, now() - scheduledForMs);
+      state.lastRepeatTimerDriftMs = Math.max(state.lastRepeatTimerDriftMs, timerDriftMs);
+      if (timerDriftMs > repeatMaxDriftMs || transportBufferedAmount() > transportHighWaterBytes) {
+        state.shootRepeatSuppressedCount += 1;
+        state.shootRepeatWaitReason = 'shoot-repeat-overloaded';
+        armShootRepeatTimer(current.cadenceMs);
+        return;
+      }
+      dispatchShootRepeat();
+    }, delay);
+    unrefTimer(state.shootRepeatTimer);
+    return delay;
+  }
+
+  function dispatchShootRepeat() {
+    const repeat = state.shootRepeat;
+    if (!repeat) return null;
+    if (now() > Number(state.shootRepeatUntilMs || 0)) {
+      cancelShootRepeat();
+      return null;
+    }
+    const gate = afkShootGate(repeat.self, repeat.target, repeat.commandShooting);
+    updateShootRepeatGate(gate);
+    if (!gate.ok) {
+      clearShootRepeatTimer();
+      return blockedAfkShootResult(gate, repeat.target, false);
+    }
+    const lastSentAtMs = optionalNumber(state.lastShootCommand?.sentAtMs);
+    const remainingMs = lastSentAtMs === null
+      ? 0
+      : Math.max(0, repeat.cadenceMs - (now() - lastSentAtMs));
+    if (remainingMs > 0) {
+      state.shootRepeatWaitReason = 'shoot-command-throttled';
+      armShootRepeatTimer(remainingMs);
+      return {
+        ok: true,
+        skipped: true,
+        reason: 'shoot-command-throttled',
+        cadenceMs: repeat.cadenceMs
+      };
+    }
+    if (transportBufferedAmount() > transportHighWaterBytes) {
+      state.shootRepeatSuppressedCount += 1;
+      state.shootRepeatWaitReason = 'shoot-repeat-overloaded';
+      armShootRepeatTimer(repeat.cadenceMs);
+      return {
+        ok: true,
+        skipped: true,
+        reason: 'shoot-repeat-overloaded'
+      };
+    }
+    const sent = sendAfkShoot({ command: { shooting: repeat.commandShooting } }, repeat.self, repeat.target, repeat.reason, repeat.cadenceMs, {
+      recordSkip: false
+    });
+    if (!sent.ok) {
+      cancelShootRepeat(sent.error || sent.reason || 'shoot-repeat-failed', { error: true });
+      return sent;
+    }
+    if (!sent.skipped) {
+      state.shootRepeatSentCount += 1;
+      return sent;
+    }
+    if (sent.reason === 'shoot-command-throttled' || sent.reason === 'shoot-unacked-backpressure') {
+      state.shootRepeatWaitReason = sent.reason;
+      armShootRepeatTimer(repeat.cadenceMs);
+    }
+    return sent;
+  }
+
+  function scheduleShootRepeat(stateSnapshot, self, target, reason, cadenceMs = shootRepeatMs) {
     cancelShootRepeat();
     if (!shootRepeatEnabled) return null;
     if (!transport || typeof transport.sendShoot !== 'function') return null;
@@ -1487,14 +1747,13 @@ function createBrowserlessActionAdapter(options = {}) {
     const targetKey = targetRepeatKey(target);
     const repeatCadenceMs = Math.max(combatShootMinIntervalMs, Number(cadenceMs || 0), shootRepeatMs);
     const repeat = {
-      targetX,
-      targetY,
-      startX,
-      startY,
+      self,
       reason,
       target,
       targetKey,
-      cadenceMs: repeatCadenceMs
+      cadenceMs: repeatCadenceMs,
+      commandShooting: stateSnapshot?.command?.shooting || null,
+      observedTick: optionalNumber(stateSnapshot?.realtime?.tick)
     };
     const token = state.shootRepeatToken + 1;
     state.shootRepeatToken = token;
@@ -1502,48 +1761,13 @@ function createBrowserlessActionAdapter(options = {}) {
     state.shootRepeatTargetKey = targetKey;
     state.shootRepeatUntilMs = now() + shootRepeatHoldMs;
     state.lastShootRepeatError = '';
-    let scheduledForMs = now() + repeatCadenceMs;
-    const scheduleNext = run => {
-      scheduledForMs = now() + repeatCadenceMs;
-      state.shootRepeatTimer = setTimeoutFn(run, repeatCadenceMs);
-      unrefTimer(state.shootRepeatTimer);
-    };
-    const run = () => {
-      if (state.shootRepeatToken !== token) return;
-      state.shootRepeatTimer = null;
-      const current = state.shootRepeat;
-      if (!current || now() > Number(state.shootRepeatUntilMs || 0)) return;
-      const timerDriftMs = Math.max(0, now() - scheduledForMs);
-      state.lastRepeatTimerDriftMs = Math.max(state.lastRepeatTimerDriftMs, timerDriftMs);
-      if (timerDriftMs > repeatMaxDriftMs || transportBufferedAmount() > transportHighWaterBytes) {
-        state.shootRepeatSuppressedCount += 1;
-        scheduleNext(run);
-        return;
-      }
-      const sent = sendShoot(
-        current.targetX,
-        current.targetY,
-        current.startX,
-        current.startY,
-        current.reason,
-        current.target,
-        current.cadenceMs
-      );
-      if (!sent.ok) {
-        cancelShootRepeat(sent.error || sent.reason || 'shoot-repeat-failed', { error: true });
-        return;
-      }
-      if (!sent.skipped) state.shootRepeatSentCount += 1;
-      scheduledForMs = now() + current.cadenceMs;
-      state.shootRepeatTimer = setTimeoutFn(run, current.cadenceMs);
-      unrefTimer(state.shootRepeatTimer);
-    };
-    state.shootRepeatTimer = setTimeoutFn(run, repeatCadenceMs);
-    unrefTimer(state.shootRepeatTimer);
+    dispatchShootRepeat();
     return {
       repeatMs: repeatCadenceMs,
       holdMs: shootRepeatHoldMs,
-      targetKey
+      targetKey,
+      mode: 'ack-paced',
+      requiredStaminaMs: afkShootRequiredStaminaMs
     };
   }
 
@@ -2085,7 +2309,7 @@ function createBrowserlessActionAdapter(options = {}) {
     }
     if (profitAction.type === 'enemy') {
       clearCoinFeedbackGate();
-      return applyProfitEnemyDecision(self, profitAction.target, decision);
+      return applyProfitEnemyDecision(stateSnapshot, self, profitAction.target, decision);
     }
     const target = profitAction.target;
     const vector = coinMotionVectorToTarget(self, target, options, state, now());
@@ -2127,7 +2351,7 @@ function createBrowserlessActionAdapter(options = {}) {
       : null;
     const opportunisticShot = opportunisticShotFromDecision(decision);
     const shoot = opportunisticShot
-      ? sendOpportunisticShot(self, opportunisticShot, decision)
+      ? sendOpportunisticShot(stateSnapshot, self, opportunisticShot, decision)
       : { ok: true, skipped: true, reason: 'no-opportunistic-shot' };
     const precisionPulseMs = schedulePrecisionPulseStop(sent, vector.precisionPulseMs, profitAction.kind, stopped => {
       if (continuation) noteNearCoinContinuationPulseStop(sent.command?.id, sent.pulseToken, stopped);
@@ -2144,7 +2368,10 @@ function createBrowserlessActionAdapter(options = {}) {
           skipped: Boolean(shoot.skipped),
           reason: shoot.reason,
           command: shoot.command || null,
-          cadenceMs: shoot.cadenceMs || null
+          cadenceMs: shoot.cadenceMs || null,
+          stamina5s: shoot.stamina5s ?? null,
+          requiredStaminaMs: shoot.requiredStaminaMs ?? null,
+          outstanding: shoot.outstanding || null
         },
         opportunisticShot: opportunisticShot || null,
         target: opportunisticShot || target,
@@ -2160,41 +2387,31 @@ function createBrowserlessActionAdapter(options = {}) {
     }
   }
 
-  function sendOpportunisticShot(self, target, decision) {
-    const startX = numberOrNull(self?.x);
-    const startY = numberOrNull(self?.y);
-    const targetX = numberOrNull(target?.x);
-    const targetY = numberOrNull(target?.y);
-    if (startX === null || startY === null || targetX === null || targetY === null) {
-      state.skippedCount += 1;
-      return {
-        ok: false,
-        skipped: true,
-        reason: 'missing-shoot-coordinates',
-        execution: skippedShootExecution('missing-shoot-coordinates', target)
-      };
-    }
-    return sendShoot(
-      targetX,
-      targetY,
-      startX,
-      startY,
-      target?.reason || decision?.action?.reason || decision?.reason || 'opportunistic-afk-drop-shot',
+  function sendOpportunisticShot(stateSnapshot, self, target, decision) {
+    return sendAfkShoot(
+      stateSnapshot,
+      self,
       target,
+      target?.reason || decision?.action?.reason || decision?.reason || 'opportunistic-afk-drop-shot',
       options.opportunisticShootEveryMs || options.combatShootMinIntervalMs
     );
   }
 
   function canScheduleShootRepeat(shoot) {
-    return Boolean(shoot?.ok && shoot.command && (!shoot.skipped || shoot.reason === 'shoot-command-throttled'));
+    return Boolean(shoot?.ok && (
+      shoot.command
+      || shoot.reason === 'shoot-command-throttled'
+      || shoot.reason === 'afk-shoot-awaiting-ack'
+      || shoot.reason === 'afk-shoot-stamina-reserve'
+    ));
   }
 
   function applyOpportunisticShotDecision(stateSnapshot, target, decision) {
     const self = stateSnapshot?.realtime?.self || decision?.input?.self || null;
     const stopped = stop('opportunistic-shot-hold');
-    const shoot = sendOpportunisticShot(self, target, decision);
+    const shoot = sendOpportunisticShot(stateSnapshot, self, target, decision);
     const repeat = canScheduleShootRepeat(shoot)
-      ? scheduleShootRepeat(self, target, target?.reason || decision?.reason || 'opportunistic-afk-drop-shot', shoot.cadenceMs)
+      ? scheduleShootRepeat(stateSnapshot, self, target, target?.reason || decision?.reason || 'opportunistic-afk-drop-shot', shoot.cadenceMs)
       : null;
     return {
       ok: Boolean(stopped.ok && shoot.ok),
@@ -2213,6 +2430,9 @@ function createBrowserlessActionAdapter(options = {}) {
         reason: shoot.reason,
         command: shoot.command || null,
         cadenceMs: shoot.cadenceMs || null,
+        stamina5s: shoot.stamina5s ?? null,
+        requiredStaminaMs: shoot.requiredStaminaMs ?? null,
+        outstanding: shoot.outstanding || null,
         repeat,
         ...transportFailure(shoot)
       },
@@ -2313,7 +2533,7 @@ function createBrowserlessActionAdapter(options = {}) {
     };
   }
 
-  function applyProfitEnemyDecision(self, target, decision) {
+  function applyProfitEnemyDecision(stateSnapshot, self, target, decision) {
     clearNearCoinContinuation('profit-enemy-action');
     if (target?.active && target?.easyKillProfitTarget) {
       const vector = movementVectorToTarget(self, target, options);
@@ -2454,26 +2674,15 @@ function createBrowserlessActionAdapter(options = {}) {
     const movement = fullAttack
       ? sendVelocity(0, 0, 'profit-afk-attack-hold', target)
       : sendVelocity(vector.dx, vector.dy, 'profit-afk-attack-approach', target);
-    const startX = numberOrNull(self?.x);
-    const startY = numberOrNull(self?.y);
-    const targetX = numberOrNull(target?.x);
-    const targetY = numberOrNull(target?.y);
-    let shoot = { ok: false, skipped: true, reason: 'missing-shoot-coordinates' };
-    if (startX !== null && startY !== null && targetX !== null && targetY !== null) {
-      shoot = sendShoot(
-        targetX,
-        targetY,
-        startX,
-        startY,
-        decision?.action?.reason || decision?.reason || 'profit-afk-attack',
-        target
-      );
-    } else {
-      state.skippedCount += 1;
-      shoot.execution = skippedShootExecution('missing-shoot-coordinates', target);
-    }
+    const shoot = sendAfkShoot(
+      stateSnapshot,
+      self,
+      target,
+      decision?.action?.reason || decision?.reason || 'profit-afk-attack',
+      combatShootMinIntervalMs
+    );
     const repeat = canScheduleShootRepeat(shoot)
-      ? scheduleShootRepeat(self, target, decision?.action?.reason || decision?.reason || 'profit-afk-attack', shoot.cadenceMs)
+      ? scheduleShootRepeat(stateSnapshot, self, target, decision?.action?.reason || decision?.reason || 'profit-afk-attack', shoot.cadenceMs)
       : null;
     return {
       ok: Boolean(movement.ok && shoot.ok),
@@ -2494,6 +2703,9 @@ function createBrowserlessActionAdapter(options = {}) {
         reason: shoot.reason,
         command: shoot.command || null,
         cadenceMs: shoot.cadenceMs || null,
+        stamina5s: shoot.stamina5s ?? null,
+        requiredStaminaMs: shoot.requiredStaminaMs ?? null,
+        outstanding: shoot.outstanding || null,
         repeat,
         ...transportFailure(shoot)
       },
@@ -2640,7 +2852,7 @@ function createBrowserlessActionAdapter(options = {}) {
   }
 
   function observeState(stateSnapshot) {
-    validateShootRepeatState(stateSnapshot);
+    const shootRepeatValid = validateShootRepeatState(stateSnapshot);
     observeMovementStall(stateSnapshot);
     state.latestObservedTick = optionalNumber(stateSnapshot?.realtime?.tick);
     state.latestObservedAtMs = optionalNumber(stateSnapshot?.realtime?.receivedAtMs);
@@ -2660,6 +2872,7 @@ function createBrowserlessActionAdapter(options = {}) {
         state.shootAcceptedCount += 1;
       }
     }
+    if (shootRepeatValid) dispatchShootRepeat();
     const command = state.lastCommand;
     if (!command) return null;
     const tick = numberOrNull(stateSnapshot?.realtime?.tick);
@@ -2727,6 +2940,10 @@ function createBrowserlessActionAdapter(options = {}) {
       velocityStopRepeatsLeft: state.velocityStopRepeatsLeft,
       shootRepeatUntilMs: state.shootRepeatUntilMs,
       shootRepeatTargetKey: state.shootRepeatTargetKey,
+      shootRepeatWaitReason: state.shootRepeatWaitReason,
+      shootRepeatStamina5s: state.shootRepeatStamina5s,
+      shootRepeatRequiredStaminaMs: state.shootRepeatRequiredStaminaMs,
+      shootRepeatOutstandingCommandId: state.shootRepeatOutstandingCommandId,
       lastVelocityRepeatError: state.lastVelocityRepeatError,
       lastShootRepeatError: state.lastShootRepeatError,
       shootingSealed: state.shootingSealed,

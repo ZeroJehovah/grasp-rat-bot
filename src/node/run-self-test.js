@@ -12819,6 +12819,17 @@ async function runSelfTest() {
         const first = decisionAdapter.decide(firstState, { nowMs: 1200 });
         const firstResult = actionAdapter.applyDecision(firstState, first);
         decisionAdapter.observeActionResult(firstResult, first, { nowMs: 1300 });
+        actionAdapter.observeState({
+          realtime: firstState.realtime,
+          command: {
+            lastAck: {
+              bullet_id: 48,
+              receivedAtMs: 1400,
+              matchedShot: { commandId: firstResult.shoot.command.id, targetId: '8' }
+            },
+            shooting: { pendingShots: [], expiredShots: [] }
+          }
+        });
         store.ingestFrame({
           type: 'pos',
           tick: 60,
@@ -22963,15 +22974,17 @@ async function runSelfTest() {
       want: 'profit-attack|velocity|shoot|vel 0 0,shoot 1000 0 0 0|1|1'
     },
     {
-      name: 'browserless action adapter repeats AFK profit shots through decision gap',
+      name: 'browserless action adapter waits for late AFK ACK before the next same-coordinate shot',
       got: (() => {
         let t = 1000;
         const commands = [];
         const timers = [];
+        const target = { type: 'enemy', userId: 8, x: 1000, y: 0, active: false };
+        const self = { x: 0, y: 0, stamina_5s_remaining_milli: 10000 };
         const adapter = createBrowserlessActionAdapter({
           now: () => t,
           commandIntervalMs: 1,
-          decisionIntervalMs: 1000,
+          decisionIntervalMs: 6000,
           combatShootMinIntervalMs: 160,
           shootRepeatEnabled: true,
           attackRangeCm: 14500,
@@ -22988,47 +23001,132 @@ async function runSelfTest() {
             sendShoot: (targetX, targetY, startX, startY) => commands.push(`shoot ${targetX} ${targetY} ${startX} ${startY}`)
           }
         });
-        const action = adapter.applyDecision({
-          realtime: { self: { x: 0, y: 0 }, tick: 1 }
-        }, {
+        const decision = {
           kind: 'profit-candidate',
           band: 'profit',
-          action: {
-            kind: 'attack',
-            band: 'profit',
-            target: { type: 'enemy', userId: 8, x: 1000, y: 0, active: false }
+          action: { kind: 'attack', band: 'profit', target }
+        };
+        const action = adapter.applyDecision({
+          realtime: { self, entities: [target], tick: 1 },
+          command: { shooting: { pendingShots: [], expiredShots: [] } }
+        }, decision);
+        const firstCommandId = action.shoot.command.id;
+        t = 4500;
+        const expiredState = {
+          realtime: { self, entities: [target], tick: 2 },
+          command: {
+            shooting: {
+              ackTimeoutMs: 3000,
+              pendingShots: [],
+              expiredShots: [{ commandId: firstCommandId, targetId: '8', targetX: 1000, targetY: 0 }]
+            }
+          }
+        };
+        adapter.observeState(expiredState);
+        const afterExpired = adapter.getState();
+        const second = adapter.applyDecision(expiredState, decision);
+        t = 5308;
+        const refreshedSelf = { ...self, x: 100, y: 50 };
+        const refreshedTarget = { ...target, x: 1100, y: 100 };
+        adapter.observeState({
+          realtime: { self: refreshedSelf, entities: [refreshedTarget], tick: 3 },
+          command: {
+            lastAck: {
+              bullet_id: 44,
+              receivedAtMs: t,
+              matchedShot: { commandId: firstCommandId, targetId: '8', lateAck: true }
+            },
+            shooting: { ackTimeoutMs: 3000, pendingShots: [], expiredShots: [] }
           }
         });
-        let guard = 0;
-        while (timers.length && guard < 20) {
-          guard += 1;
-          const timer = timers.shift();
-          if (!timer || timer.canceled) continue;
-          t += timer.ms;
-          timer.fn();
-        }
         const state = adapter.getState();
         return [
           action.kind,
+          second.shoot.reason,
+          second.shoot.outstanding.source,
+          afterExpired.pendingShootCount,
           state.shootSentCount,
           state.shootRepeatSentCount,
-          commands.length,
-          state.shootRepeatUntilMs - 1000,
-          state.lastShootRepeatError || 'none',
-          commands[0],
-          commands[1],
-          commands[commands.length - 1]
+          commands.filter(command => command.startsWith('shoot ')).length,
+          state.shootRepeatOutstandingCommandId,
+          commands.join(',')
         ].join('|');
       })(),
-      want: 'profit-attack|3|2|4|1160|none|vel 0 0|shoot 1000 0 0 0|shoot 1000 0 0 0'
+      want: 'profit-attack|afk-shoot-awaiting-ack|state-expired|0|2|1|2|4|vel 0 0,shoot 1000 0 0 0,vel 0 0,shoot 1100 100 100 50'
+    },
+    {
+      name: 'browserless AFK shooting preserves Dodge reserve and resumes at the exact stamina boundary',
+      got: (() => {
+        let t = 1000;
+        const commands = [];
+        const target = { type: 'enemy', userId: 8, x: 1000, y: 0, active: false };
+        const adapter = createBrowserlessActionAdapter({
+          now: () => t,
+          commandIntervalMs: 1,
+          decisionIntervalMs: 1000,
+          combatShootMinIntervalMs: 160,
+          combatShootPassiveRunnerDodgeReserveMs: 1800,
+          opportunityShotStaminaCostMs: 500,
+          shootRepeatEnabled: true,
+          attackRangeCm: 14500,
+          transport: {
+            sendVelocity: (dx, dy) => commands.push(`vel ${dx} ${dy}`),
+            sendShoot: (targetX, targetY, startX, startY) => commands.push(`shoot ${targetX} ${targetY} ${startX} ${startY}`)
+          }
+        });
+        const action = adapter.applyDecision({
+          realtime: {
+            self: { x: 0, y: 0, stamina_5s_remaining_milli: 2200 },
+            entities: [target],
+            tick: 1
+          },
+          command: { shooting: { pendingShots: [], expiredShots: [] } }
+        }, {
+          kind: 'profit-candidate',
+          band: 'profit',
+          action: { kind: 'attack', band: 'profit', target }
+        });
+        t = 1100;
+        adapter.observeState({
+          realtime: {
+            self: { x: 0, y: 0, stamina_5s_remaining_milli: 2299 },
+            entities: [target],
+            tick: 2
+          },
+          command: { shooting: { pendingShots: [], expiredShots: [] } }
+        });
+        const belowBoundary = adapter.getState();
+        t = 1200;
+        adapter.observeState({
+          realtime: {
+            self: { x: 0, y: 0, stamina_5s_remaining_milli: 2300 },
+            entities: [target],
+            tick: 3
+          },
+          command: { shooting: { pendingShots: [], expiredShots: [] } }
+        });
+        const state = adapter.getState();
+        return [
+          action.shoot.reason,
+          action.shoot.requiredStaminaMs,
+          belowBoundary.shootSentCount,
+          state.shootSentCount,
+          state.shootRepeatSentCount,
+          state.shootRepeatWaitReason,
+          commands.join(',')
+        ].join('|');
+      })(),
+      want: 'afk-shoot-stamina-reserve|2300|0|1|1|afk-shoot-awaiting-ack|vel 0 0,shoot 1000 0 0 0'
     },
     {
       name: 'browserless shoot repeat pauses at websocket high water and resumes without catch-up burst',
       got: (() => {
         let t = 1000;
-        let bufferedAmount = 8192;
+        let bufferedAmount = 0;
         const commands = [];
         const timers = [];
+        const target = { type: 'enemy', userId: 8, x: 1000, y: 0, active: false };
+        const self = { x: 0, y: 0, stamina_5s_remaining_milli: 10000 };
         const adapter = createBrowserlessActionAdapter({
           now: () => t,
           commandIntervalMs: 1,
@@ -23051,20 +23149,31 @@ async function runSelfTest() {
             sendShoot: (targetX, targetY, startX, startY) => commands.push(`shoot ${targetX} ${targetY} ${startX} ${startY}`)
           }
         });
-        adapter.applyDecision({
-          realtime: { self: { x: 0, y: 0 }, tick: 1 }
+        const action = adapter.applyDecision({
+          realtime: { self, entities: [target], tick: 1 },
+          command: { shooting: { pendingShots: [], expiredShots: [] } }
         }, {
           kind: 'profit-candidate',
           band: 'profit',
           action: {
             kind: 'attack',
             band: 'profit',
-            target: { type: 'enemy', userId: 8, x: 1000, y: 0, active: false }
+            target
           }
         });
-        const blocked = timers.shift();
-        t += blocked.ms;
-        blocked.fn();
+        bufferedAmount = 8192;
+        t = 1200;
+        adapter.observeState({
+          realtime: { self, entities: [target], tick: 2 },
+          command: {
+            lastAck: {
+              bullet_id: 45,
+              receivedAtMs: t,
+              matchedShot: { commandId: action.shoot.command.id, targetId: '8' }
+            },
+            shooting: { pendingShots: [], expiredShots: [] }
+          }
+        });
         bufferedAmount = 0;
         const resumed = timers.shift();
         t += resumed.ms;
@@ -23081,11 +23190,13 @@ async function runSelfTest() {
       want: 'vel 0 0,shoot 1000 0 0 0,shoot 1000 0 0 0|2|1|1|0'
     },
     {
-      name: 'browserless action adapter keeps AFK shot repeat across throttled decision boundary',
+      name: 'browserless action adapter keeps ACK-paced AFK repeat across a decision boundary',
       got: (() => {
         let t = 1000;
         const commands = [];
         const timers = [];
+        const target = { type: 'enemy', userId: 8, x: 1000, y: 0, active: false };
+        const self = { x: 0, y: 0, stamina_5s_remaining_milli: 10000 };
         const adapter = createBrowserlessActionAdapter({
           now: () => t,
           commandIntervalMs: 1,
@@ -23112,38 +23223,35 @@ async function runSelfTest() {
           action: {
             kind: 'attack',
             band: 'profit',
-            target: { type: 'enemy', userId: 8, x: 1000, y: 0, active: false }
+            target
           }
         };
-        adapter.applyDecision({
-          realtime: { self: { x: 0, y: 0 }, tick: 1 }
+        const first = adapter.applyDecision({
+          realtime: { self, entities: [target], tick: 1 },
+          command: { shooting: { pendingShots: [], expiredShots: [] } }
         }, decision);
-        let guard = 0;
-        while (timers.length && guard < 20) {
-          guard += 1;
-          const timer = timers[0];
-          if (!timer || timer.canceled) {
-            timers.shift();
-            continue;
-          }
-          if (t + timer.ms > 2000) break;
-          timers.shift();
-          t += timer.ms;
-          timer.fn();
-        }
         t = 2000;
         const second = adapter.applyDecision({
-          realtime: { self: { x: 0, y: 0 }, tick: 2 }
+          realtime: { self, entities: [target], tick: 2 },
+          command: {
+            shooting: {
+              pendingShots: [{ commandId: first.shoot.command.id, targetId: '8', targetX: 1000, targetY: 0 }],
+              expiredShots: []
+            }
+          }
         }, decision);
-        guard = 0;
-        while (timers.length && guard < 20) {
-          guard += 1;
-          const timer = timers.shift();
-          if (!timer || timer.canceled) continue;
-          t += timer.ms;
-          timer.fn();
-          break;
-        }
+        t = 2160;
+        adapter.observeState({
+          realtime: { self, entities: [target], tick: 3 },
+          command: {
+            lastAck: {
+              bullet_id: 46,
+              receivedAtMs: t,
+              matchedShot: { commandId: first.shoot.command.id, targetId: '8' }
+            },
+            shooting: { pendingShots: [], expiredShots: [] }
+          }
+        });
         const state = adapter.getState();
         return [
           second.kind,
@@ -23156,7 +23264,7 @@ async function runSelfTest() {
           commands[commands.length - 1]
         ].join('|');
       })(),
-      want: 'profit-attack|shoot-unacked-backpressure|no-repeat|3|2|5|none|vel 0 0'
+      want: 'profit-attack|afk-shoot-awaiting-ack|repeat|2|1|4|none|shoot 1000 0 0 0'
     },
     {
       name: 'browserless action adapter cancels AFK shot repeat when target turns active',
@@ -23359,7 +23467,7 @@ async function runSelfTest() {
       want: 'opportunistic-shot|opportunistic-afk-drop-shot|opportunistic-shot|shoot|vel 0 0,shoot 1000 0 0 0'
     },
     {
-      name: 'browserless opportunistic shot hold repeats static shot',
+      name: 'browserless opportunistic shot hold repeats only after ACK',
       got: (() => {
         let t = 1000;
         const commands = [];
@@ -23384,8 +23492,10 @@ async function runSelfTest() {
           }
         });
         const target = { type: 'enemy', userId: 8, x: 1000, y: 0, active: false, reason: 'opportunistic-afk-drop-shot' };
+        const self = { x: 0, y: 0, stamina_5s_remaining_milli: 10000 };
         const action = adapter.applyDecision({
-          realtime: { self: { x: 0, y: 0 }, tick: 70 }
+          realtime: { self, entities: [target], tick: 70 },
+          command: { shooting: { pendingShots: [], expiredShots: [] } }
         }, {
           kind: 'opportunistic-shot',
           band: 'profit',
@@ -23397,14 +23507,18 @@ async function runSelfTest() {
             opportunisticShot: target
           }
         });
-        let guard = 0;
-        while (timers.length && guard < 20) {
-          guard += 1;
-          const timer = timers.shift();
-          if (!timer || timer.canceled) continue;
-          t += timer.ms;
-          timer.fn();
-        }
+        t = 1160;
+        adapter.observeState({
+          realtime: { self, entities: [target], tick: 71 },
+          command: {
+            lastAck: {
+              bullet_id: 47,
+              receivedAtMs: t,
+              matchedShot: { commandId: action.shoot.command.id, targetId: '8' }
+            },
+            shooting: { pendingShots: [], expiredShots: [] }
+          }
+        });
         const state = adapter.getState();
         return [
           action.kind,
@@ -23412,11 +23526,12 @@ async function runSelfTest() {
           state.shootRepeatSentCount,
           commands.length,
           action.shoot.repeat.repeatMs,
+          action.shoot.repeat.mode,
           commands[0],
           commands[commands.length - 1]
         ].join('|');
       })(),
-      want: 'opportunistic-shot|3|2|4|160|vel 0 0|shoot 1000 0 0 0'
+      want: 'opportunistic-shot|2|1|3|160|ack-paced|vel 0 0|shoot 1000 0 0 0'
     },
     {
       name: 'browserless opportunistic shot is suppressed during recovery',
@@ -23498,6 +23613,60 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'combat-live|velocity|shoot|vel 1 0,shoot 1000 0 0 0|2|1|1|44'
+    },
+    {
+      name: 'browserless active combat keeps normal multi-pending cadence without AFK ACK pacing',
+      got: (() => {
+        let t = 1000;
+        const commands = [];
+        const adapter = createBrowserlessActionAdapter({
+          now: () => t,
+          commandIntervalMs: 1,
+          combatShootMinIntervalMs: 160,
+          maxPendingShootCommands: 3,
+          shootRepeatEnabled: true,
+          transport: {
+            sendVelocity: (dx, dy) => commands.push(`vel ${dx} ${dy}`),
+            sendShoot: (targetX, targetY, startX, startY) => commands.push(`shoot ${targetX} ${targetY} ${startX} ${startY}`)
+          }
+        });
+        const target = { userId: 8, x: 1000, y: 0, authority: 'realtime' };
+        const decision = tick => ({
+          kind: 'combat-live',
+          band: 'combat',
+          action: { kind: 'combat-live', band: 'combat', reason: 'combat-live-realtime' },
+          combat: {
+            self: { x: 0, y: 0, stamina_5s_remaining_milli: 10000 },
+            target,
+            movement: { dx: 1, dy: 0, reason: 'close-in' },
+            aim: { x: 1000, y: 0 },
+            shooting: {
+              wouldShoot: true,
+              commandSuppressed: false,
+              reason: 'normal-fire',
+              effectiveCadenceMs: 160,
+              observedTick: tick
+            }
+          }
+        });
+        const first = adapter.applyDecision({
+          realtime: { self: { x: 0, y: 0 }, tick: 1 }
+        }, decision(1));
+        t = 1160;
+        const second = adapter.applyDecision({
+          realtime: { self: { x: 0, y: 0 }, tick: 2 }
+        }, decision(2));
+        const state = adapter.getState();
+        return [
+          first.shoot.command.reason,
+          second.shoot.command.reason,
+          state.shootSentCount,
+          state.pendingShootCount,
+          state.shootRepeatSentCount,
+          commands.filter(command => command.startsWith('shoot ')).length
+        ].join('|');
+      })(),
+      want: 'normal-fire|normal-fire|2|2|0|2'
     },
     {
       name: 'browserless leave pending cover avoids a trajectory that only hits the old movement direction',
