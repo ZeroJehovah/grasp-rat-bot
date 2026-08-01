@@ -1576,6 +1576,60 @@ function runStrategyModuleSelfTests() {
       && severePoorExchange.cumulativeDamageRatio === 2.8
       && poorExchangeBoundaries.every(item => item.severePoorExchange === false && item.shouldExit === false)
   });
+  const severeCumulativeReversalInput = {
+    nowMs: 65000,
+    engagedMs: 64000,
+    acceptedShots: 80,
+    damageObservations: 8,
+    selfHp: 58,
+    targetHp: 23,
+    longWindowSelfDamage: 12,
+    longWindowTargetDamage: 3,
+    cumulativeSelfDamage: 42,
+    cumulativeTargetDamage: 12,
+    recentTargetDamage: 0,
+    recentThreatBulletCount: 4,
+    defensive: true,
+    closePressure: true
+  };
+  const severeCumulativeReversal = evaluateCombatExchangeStopLossCore(severeCumulativeReversalInput);
+  const identityRemappedReversal = evaluateCombatExchangeStopLossCore({
+    ...severeCumulativeReversalInput,
+    targetId: 'remapped-target',
+    targetName: 'remapped-name'
+  });
+  const closePressureCannotOverrideReversal = evaluateCombatExchangeStopLossCore(
+    severeCumulativeReversalInput,
+    { closePressureMinSelfHp: 50 }
+  );
+  const cumulativeReversalControls = [
+    { engagedMs: 60000 },
+    { selfHp: 60 },
+    { cumulativeSelfDamage: 18, cumulativeTargetDamage: 12 },
+    { longWindowSelfDamage: 11 },
+    { longWindowTargetDamage: 4 },
+    { recentTargetDamage: 3 },
+    { recentThreatBulletCount: 0 },
+    { defensive: false },
+    { targetHp: 15, recentTargetDamage: 3 }
+  ].map(overrides => evaluateCombatExchangeStopLossCore({
+    ...severeCumulativeReversalInput,
+    ...overrides
+  }));
+  results.push({
+    name: 'combat-exchange-exits-severe-low-target-hp-cumulative-reversal-only-with-current-pressure',
+    passed: severeCumulativeReversal.severeCumulativeReversal === true
+      && severeCumulativeReversal.severePoorExchangeRule === 'severe-cumulative-reversal'
+      && severeCumulativeReversal.shouldExit === true
+      && severeCumulativeReversal.phasedReason === 'combat-exit-poor-exchange'
+      && severeCumulativeReversal.closePressureContinuation === false
+      && severeCumulativeReversal.severeCumulativeReversalQualification.realtimePressure === true
+      && severeCumulativeReversal.severeCumulativeReversalQualification.recentNoHit === true
+      && identityRemappedReversal.severeCumulativeReversal === true
+      && closePressureCannotOverrideReversal.closePressureContinuation === true
+      && closePressureCannotOverrideReversal.shouldExit === true
+      && cumulativeReversalControls.every(item => item.severeCumulativeReversal === false && item.shouldExit === false)
+  });
   const defensiveRetreat = evaluateCombatExchangeStopLossCore({
     nowMs: 45000,
     engagedMs: 45000,

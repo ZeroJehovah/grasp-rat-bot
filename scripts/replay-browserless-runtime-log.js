@@ -555,12 +555,14 @@ function replayCombatExchangeStopLoss(rows) {
       };
     }
   }
-  const initialSelfHp = Number(rows[0].detail.self?.hp);
-  const finalSelfHp = Number(rows[rows.length - 1].detail.self?.hp);
-  const firstMetrics = rows[0].detail.metrics || {};
-  const lastMetrics = rows[rows.length - 1].detail.metrics || {};
+  const hpRows = rows.filter(row => Number.isFinite(Number(row.detail.self?.hp)));
+  const metricRows = rows.filter(row => row.detail.metrics && typeof row.detail.metrics === 'object');
+  const initialSelfHp = Number(hpRows[0]?.detail.self?.hp);
+  const finalSelfHp = Number(hpRows[hpRows.length - 1]?.detail.self?.hp);
+  const firstMetrics = metricRows[0]?.detail.metrics || {};
+  const lastMetrics = metricRows[metricRows.length - 1]?.detail.metrics || {};
   const baselineAcceptedShots = Math.max(0, Number(lastMetrics.acceptedShots || 0) - Number(firstMetrics.acceptedShots || 0));
-  const stopPoint = firstDisengage || firstExit;
+  const stopPoint = firstExit || firstDisengage;
   const retainedAcceptedShots = stopPoint
     ? Math.max(0, Number(stopPoint.acceptedShots || 0) - Number(firstMetrics.acceptedShots || 0))
     : baselineAcceptedShots;
@@ -576,6 +578,11 @@ function replayCombatExchangeStopLoss(rows) {
   const retainedTargetDamage = stopPoint
     ? Math.max(0, Number(stopPoint.targetDamage || 0) - Number(firstMetrics.targetDamage || 0))
     : baselineTargetDamage;
+  const terminalReversalImprovesSurvival = Boolean(
+    firstExit?.reason === 'combat-exit-poor-exchange'
+      && retainedSelfDamage < baselineSelfDamage
+      && Number(rows[rows.length - 1]?.detail?.target?.hp) > 0
+  );
   return {
     baselineTriggered,
     firstActive,
@@ -592,7 +599,8 @@ function replayCombatExchangeStopLoss(rows) {
       baselineSelfDamage,
       retainedSelfDamage,
       baselineTargetDamage,
-      retainedTargetDamage
+      retainedTargetDamage,
+      terminalReversalImprovesSurvival
     },
     selfDamageBeforeTrigger: firstTriggered && Number.isFinite(initialSelfHp)
       ? Math.max(0, initialSelfHp - Number(firstTriggered.selfHp))
@@ -601,8 +609,9 @@ function replayCombatExchangeStopLoss(rows) {
       ? Math.max(0, initialSelfHp - finalSelfHp)
       : null,
     accepted: Boolean(stopPoint
-      && retainedTargetDamage >= baselineTargetDamage
-      && (retainedAcceptedShots < baselineAcceptedShots || retainedSelfDamage < baselineSelfDamage))
+      && ((retainedTargetDamage >= baselineTargetDamage
+          && (retainedAcceptedShots < baselineAcceptedShots || retainedSelfDamage < baselineSelfDamage))
+        || terminalReversalImprovesSurvival))
   };
 }
 

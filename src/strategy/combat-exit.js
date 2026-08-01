@@ -277,7 +277,11 @@ function evaluateCombatExchangeStopLossCore(input = {}, options = {}) {
   const poorExchangeRatioExceeded = cumulativeTargetDamage > 0
     ? cumulativeDamageRatio > poorExchangeDamageRatioThreshold
     : cumulativeSelfDamage > 0;
-  const severePoorExchange = Boolean(
+  const retreatSelfDamageThreshold = Math.max(1, Number(options.exchangeRetreatSelfDamageHp || 12));
+  const retreatTargetDamageMax = Math.max(0, Number(options.exchangeRetreatTargetDamageMaxHp || 3));
+  const recentNoHit = Number(input.recentTargetDamage || 0) <= 0;
+  const recentThreatBulletCount = Math.max(0, Number(input.recentThreatBulletCount || 0));
+  const severeCumulativePoorExchange = Boolean(
     engagedMs > poorExchangeMinEngageMs
       && poorExchangeRatioExceeded
       && targetHp !== null
@@ -286,16 +290,32 @@ function evaluateCombatExchangeStopLossCore(input = {}, options = {}) {
       && selfHp < poorExchangeSelfHpThreshold
       && !lowHpFinishProtected
   );
-  const effectiveRule = severePoorExchange ? 'severe-cumulative-poor-exchange' : rule;
+  const severeCumulativeReversal = Boolean(
+    ready
+      && engagedMs > poorExchangeMinEngageMs
+      && poorExchangeRatioExceeded
+      && targetHp !== null
+      && targetHp <= poorExchangeTargetHpThreshold
+      && selfHp !== null
+      && selfHp < poorExchangeSelfHpThreshold
+      && longSelfDamage >= retreatSelfDamageThreshold
+      && longTargetDamage <= retreatTargetDamageMax
+      && recentNoHit
+      && defensive
+      && recentThreatBulletCount > 0
+      && !lowHpFinishProtected
+  );
+  const severePoorExchange = severeCumulativePoorExchange || severeCumulativeReversal;
+  const severePoorExchangeRule = severeCumulativeReversal
+    ? 'severe-cumulative-reversal'
+    : 'severe-cumulative-poor-exchange';
+  const effectiveRule = severePoorExchange ? severePoorExchangeRule : rule;
   const effectiveTriggered = Boolean(severePoorExchange || triggered);
   const observeMs = Math.max(30000, Number(options.exchangeObserveMs || 30000));
   const disengageMs = Math.max(observeMs, Number(options.exchangeDisengageMs || 45000));
   const exitEngageMs = Math.max(disengageMs, Number(options.exchangeExitEngageMs || 60000));
   const retreatMinMs = Math.max(8000, Math.min(12000, Number(options.exchangeRetreatMinMs || 10000)));
-  const retreatSelfDamageThreshold = Math.max(1, Number(options.exchangeRetreatSelfDamageHp || 12));
-  const retreatTargetDamageMax = Math.max(0, Number(options.exchangeRetreatTargetDamageMaxHp || 3));
   const retreatNewSelfDamageExit = Math.max(1, Number(options.exchangeRetreatNewSelfDamageExitHp || 6));
-  const recentNoHit = Number(input.recentTargetDamage || 0) <= 0;
   const retreatEligible = defensive
     && engagedMs >= disengageMs
     && cumulativeSelfDamage >= retreatSelfDamageThreshold
@@ -323,7 +343,6 @@ function evaluateCombatExchangeStopLossCore(input = {}, options = {}) {
   const safeDistanceCm = Math.max(0, Number(options.exchangeSafeDistanceCm
     ?? input.safeDistanceCm
     ?? 17000));
-  const recentThreatBulletCount = Math.max(0, Number(input.recentThreatBulletCount || 0));
   const safeDistanceReached = Boolean(
     distance !== null
       && distance >= safeDistanceCm
@@ -388,6 +407,22 @@ function evaluateCombatExchangeStopLossCore(input = {}, options = {}) {
     cumulativeTargetDamage,
     cumulativeDamageRatio: cumulativeDamageRatio === null ? null : Number(cumulativeDamageRatio.toFixed(3)),
     severePoorExchange,
+    severePoorExchangeRule: severePoorExchange ? severePoorExchangeRule : '',
+    severeCumulativePoorExchange,
+    severeCumulativeReversal,
+    severeCumulativeReversalQualification: {
+      ready,
+      engageQualified: engagedMs > poorExchangeMinEngageMs,
+      cumulativeRatioQualified: poorExchangeRatioExceeded,
+      lowTargetHpQualified: targetHp !== null && targetHp <= poorExchangeTargetHpThreshold,
+      lowSelfHpQualified: selfHp !== null && selfHp < poorExchangeSelfHpThreshold,
+      longSelfDamageQualified: longSelfDamage >= retreatSelfDamageThreshold,
+      longTargetDamageQualified: longTargetDamage <= retreatTargetDamageMax,
+      recentNoHit,
+      defensive,
+      realtimePressure: recentThreatBulletCount > 0,
+      finishProtected: lowHpFinishProtected
+    },
     poorExchangeThresholds: {
       minEngageMs: poorExchangeMinEngageMs,
       damageRatio: poorExchangeDamageRatioThreshold,

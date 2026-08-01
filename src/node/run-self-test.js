@@ -11347,24 +11347,28 @@ async function runSelfTest() {
       want: 'safety-exit|combat-hp-disadvantage-leave|true|combat-hp-disadvantage-leave|8|combat-hp-disadvantage-leave|900000'
     },
     {
-      name: 'browserless severe poor exchange exits and remembers target for five minutes',
+      name: 'browserless severe low-target cumulative reversal exits and remembers target for five minutes',
       got: (() => {
         const stateful = {
           combatTarget: {
             id: 8,
             at: 1000,
             firstSeenAt: 1000,
-            hp: 70,
-            firstHp: 100,
-            minHp: 70,
+            hp: 23,
+            firstHp: 35,
+            minHp: 23,
             intent: 'profit',
             originIntent: 'profit',
-            lastDamageAt: 30000,
-            lastSelfDamageAt: 30000,
-            self: { userId: 7, hp: 61 },
+            lastDamageAt: 52000,
+            lastSelfDamageAt: 52000,
+            self: { userId: 7, hp: 58 },
             motionSamples: [
-              { at: 1000, selfHp: 100, targetHp: 100, distance: 9000 },
-              { at: 30000, selfHp: 61, targetHp: 70, distance: 9000 }
+              { at: 20000, selfHp: 70, targetHp: 26, distance: 9000 },
+              { at: 30000, selfHp: 67, targetHp: 26, distance: 9000 },
+              { at: 40000, selfHp: 64, targetHp: 26, distance: 9000 },
+              { at: 50000, selfHp: 61, targetHp: 26, distance: 9000 },
+              { at: 52000, selfHp: 58, targetHp: 23, distance: 9000 },
+              { at: 61000, selfHp: 58, targetHp: 23, distance: 9000, realBulletPressure: true }
             ]
           },
           combatMetrics: {
@@ -11372,16 +11376,16 @@ async function runSelfTest() {
             targetName: 'poor-exchange-active',
             startedAt: 1000,
             initialSelfHp: 100,
-            lastSelfHp: 61,
-            minSelfHp: 61,
-            initialTargetHp: 100,
-            lastTargetHp: 70,
-            minTargetHp: 70,
-            acceptedShots: 50,
-            requestedShots: 50,
-            confirmedHits: 5,
-            selfDamage: 39,
-            targetDamage: 15,
+            lastSelfHp: 58,
+            minSelfHp: 58,
+            initialTargetHp: 35,
+            lastTargetHp: 23,
+            minTargetHp: 23,
+            acceptedShots: 80,
+            requestedShots: 80,
+            confirmedHits: 4,
+            selfDamage: 42,
+            targetDamage: 12,
             threatBulletIds: ['poor-exchange-threat'],
             threatBulletCount: 1
           }
@@ -11394,7 +11398,7 @@ async function runSelfTest() {
             self: { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 58, max_hp: 100, stamina_5s_remaining_milli: 10000 },
             entities: [
               { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 58, max_hp: 100, stamina_5s_remaining_milli: 10000 },
-              { entity_id: 2, user_id: 8, name: 'poor-exchange-active', x: 9000, y: 0, hp: 70, current_join_mode: 'Active', firing: true, drop: 30 }
+              { entity_id: 2, user_id: 8, name: 'poor-exchange-active', x: 9000, y: 0, hp: 23, current_join_mode: 'Active', firing: true, drop: 30 }
             ],
             bullets: []
           },
@@ -11412,12 +11416,14 @@ async function runSelfTest() {
           decision.reason,
           decision.action.shouldLeave,
           decision.combat.exchangeStopLoss.severePoorExchange,
+          decision.combat.exchangeStopLoss.severeCumulativeReversal,
+          decision.combat.exchangeStopLoss.severePoorExchangeRule,
           decision.combat.exchangeStopLoss.cumulativeDamageRatio,
           decision.combat.dangerousTargetCooldown.reason,
           stateful.dangerousCombatTargets?.['8']?.until - 62001
         ].join('|');
       })(),
-      want: 'safety-exit|combat-exit-poor-exchange|true|true|2.8|combat-exit-poor-exchange|300000'
+      want: 'safety-exit|combat-exit-poor-exchange|true|true|true|severe-cumulative-reversal|3.5|combat-exit-poor-exchange|300000'
     },
     {
       name: 'browserless dangerous target cooldown suppresses AFK profit but keeps defensive admission behind first dodge',
