@@ -16971,7 +16971,8 @@ async function runSelfTest() {
       got: (() => {
         const stateful = {};
         const contextKey = 'mode=zigzag-strafe|distance=far|direction=east|dwell=settled|speed=fast|radial=stable|lateral=center';
-        const confirmed = [{
+        const confirmed = [];
+        const confirmedShot = {
           targetId: '8',
           bullet_id: 201,
           acceptedAtMs: 1000,
@@ -16986,7 +16987,7 @@ async function runSelfTest() {
           predictedDirectionState: 'north',
           aimConfidence: 0.6,
           expectedHitProbability: 0.42
-        }];
+        };
         const stateAt = (tick, nowMs, x, y, vx, vy, hp) => ({
           userId: 7,
           realtime: {
@@ -16998,10 +16999,21 @@ async function runSelfTest() {
             ],
             bullets: []
           },
-          command: { shooting: { confirmedShots: confirmed } },
+          command: {
+            shooting: {
+              controlGeneration: 'control:route-feedback-test',
+              confirmedShots: confirmed
+            }
+          },
           nowMs
         });
         buildBrowserlessCombatDryRun(stateAt(100, 1000, 8000, 0, 50, 0, 100), { nowMs: 1000, decisionState: stateful, combatEnabled: true });
+        confirmed.push({
+          ...confirmedShot,
+          controlGeneration: stateful.combatMetrics.controlGeneration,
+          engagementGeneration: stateful.combatMetrics.engagementGeneration,
+          confirmationSequence: stateful.combatMetrics.confirmationSequenceBaseline + 1
+        });
         buildBrowserlessCombatDryRun(stateAt(105, 1250, 8000, -100, 0, -50, 100), { nowMs: 1250, decisionState: stateful, combatEnabled: true });
         buildBrowserlessCombatDryRun(stateAt(117, 1850, 8000, -700, 0, -50, 97), { nowMs: 1850, decisionState: stateful, combatEnabled: true });
         const shot = stateful.combatLearning.recentShots.find(item => item.bulletId === '201');
