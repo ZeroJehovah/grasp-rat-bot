@@ -27127,6 +27127,7 @@ async function runSelfTest() {
           env.includes('GRASP_RAT_BROWSERLESS_COMBAT_MISS_CLOSE_MINIMUM_DISTANCE_CM=1000'),
           env.includes('GRASP_RAT_BROWSERLESS_COMBAT_MISS_CLOSE_TIMEOUT_MS=30000'),
           env.includes('GRASP_RAT_BROWSERLESS_WS_TRACE_ENABLED=false'),
+          env.includes('GRASP_RAT_BROWSERLESS_SOURCE_IP_INTERFACE=enp0s6'),
           installer.includes('grasp-rat-browserless-runner'),
           installer.includes('DATA_DIR="/var/lib/grasp-rat-browserless"'),
           installer.includes('LOG_DIR="/var/log/grasp-rat-browserless"'),
@@ -27135,7 +27136,7 @@ async function runSelfTest() {
           installer.includes('systemctl daemon-reload')
         ].join('|');
       })(),
-      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
+      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless deployment audit checks installed service evidence',
@@ -27145,9 +27146,11 @@ async function runSelfTest() {
         const dataDir = path.join(dir, 'data');
         const logDir = path.join(dir, 'logs');
         fs.mkdirSync(scriptsDir, { recursive: true });
+        fs.mkdirSync(path.join(appDir, 'src', 'node', 'browserless'), { recursive: true });
         fs.mkdirSync(dataDir, { recursive: true });
         fs.mkdirSync(logDir, { recursive: true });
         fs.writeFileSync(path.join(scriptsDir, 'browserless-runner.js'), '');
+        fs.writeFileSync(path.join(appDir, 'src', 'node', 'browserless', 'source-ip-preflight.js'), '');
         const unitPath = path.join(dir, 'grasp-rat-browserless-runner.service');
         const envPath = path.join(dir, 'browserless-runner.env');
         fs.writeFileSync(unitPath, [
@@ -27169,16 +27172,24 @@ async function runSelfTest() {
           'GRASP_RAT_BROWSERLESS_WEB_TOKEN=local-secret-token',
           ''
         ].join('\n'));
-        const ok = auditBrowserlessDeployment({
-          unitPath,
-          envPath
-        }, {
+        const auditDeps = {
           runCommand: (_command, args) => ({
             status: 0,
             stdout: args[0] === 'is-enabled' ? 'enabled\n' : 'active\n',
             stderr: ''
+          }),
+          networkInterfaces: () => ({
+            enp0s6: [
+              { family: 'IPv4', address: '10.0.0.18' },
+              { family: 'IPv4', address: '10.0.0.19' },
+              { family: 'IPv4', address: '10.0.0.101' }
+            ]
           })
-        });
+        };
+        const ok = auditBrowserlessDeployment({
+          unitPath,
+          envPath
+        }, auditDeps);
         fs.writeFileSync(envPath, [
           `GRASP_RAT_BROWSERLESS_DATA_DIR=${dataDir}`,
           `GRASP_RAT_BROWSERLESS_LOG_DIR=${logDir}`,
@@ -27207,13 +27218,13 @@ async function runSelfTest() {
           envPath,
           envMode: 'live',
           skipSystemctl: true
-        });
+        }, auditDeps);
         const aggregate = auditBrowserlessDeployment({
           unitPath,
           envPath,
           envMode: 'any',
           skipSystemctl: true
-        });
+        }, auditDeps);
         const conflictEnvPath = path.join(dir, 'conflict.env');
         fs.writeFileSync(conflictEnvPath, fs.readFileSync(envPath, 'utf8').replace('GRASP_RAT_BROWSERLESS_CONTROL_MODE=non-combat-profit', 'GRASP_RAT_BROWSERLESS_CONTROL_MODE=combat-live'));
         const conflict = auditBrowserlessDeployment({
@@ -27221,7 +27232,7 @@ async function runSelfTest() {
           envPath: conflictEnvPath,
           envMode: 'live',
           skipSystemctl: true
-        });
+        }, auditDeps);
         const missingLoginPointEnvPath = path.join(dir, 'missing-login-point.env');
         fs.writeFileSync(missingLoginPointEnvPath, fs.readFileSync(envPath, 'utf8')
           .replace(`GRASP_RAT_BROWSERLESS_DATA_DIR=${dataDir}`, `GRASP_RAT_BROWSERLESS_DATA_DIR=${path.join(dir, 'missing-data')}`));
@@ -27230,14 +27241,14 @@ async function runSelfTest() {
           envPath: missingLoginPointEnvPath,
           envMode: 'live',
           skipSystemctl: true
-        });
+        }, auditDeps);
         const placeholderEnvPath = path.join(dir, 'placeholder.env');
         fs.writeFileSync(placeholderEnvPath, fs.readFileSync(envPath, 'utf8').replace('local-secret-token', 'replace-with-a-long-random-token'));
         const placeholder = auditBrowserlessDeployment({
           unitPath,
           envPath: placeholderEnvPath,
           skipSystemctl: true
-        });
+        }, auditDeps);
         return [
           ok.ok,
           ok.failed.length,
@@ -27668,22 +27679,43 @@ async function runSelfTest() {
     {
       name: 'browserless runner config accepts source IP binding',
       got: (() => {
+        const defaults = parseBrowserlessRunnerArgs([], {});
         const envConfig = parseBrowserlessRunnerArgs([], {
           GRASP_RAT_BROWSERLESS_SOURCE_IP: '10.0.0.101',
-          GRASP_RAT_BROWSERLESS_SOURCE_IPS: '10.0.0.101,10.0.0.145'
+          GRASP_RAT_BROWSERLESS_SOURCE_IPS: '10.0.0.101,10.0.0.145',
+          GRASP_RAT_BROWSERLESS_SOURCE_IP_INTERFACE: 'enp0s6'
         });
         const cliConfig = parseBrowserlessRunnerArgs([
           '--source-ip', '10.0.0.145',
-          '--source-ips', '10.0.0.145 10.0.0.20'
+          '--source-ips', '10.0.0.145 10.0.0.20',
+          '--source-ip-interface', 'enp0s6'
         ], {});
+        let invalidEnvRejected = false;
+        let invalidCliRejected = false;
+        try {
+          parseBrowserlessRunnerArgs([], { GRASP_RAT_BROWSERLESS_SOURCE_IP_INTERFACE: 'eth9' });
+        } catch (error) {
+          invalidEnvRejected = /unsupported source IP interface/.test(String(error?.message || ''));
+        }
+        try {
+          parseBrowserlessRunnerArgs(['--source-ip-interface', 'enp7s0'], {});
+        } catch (error) {
+          invalidCliRejected = /unsupported source IP interface/.test(String(error?.message || ''));
+        }
         return [
+          defaults.sourceIpInterface,
           envConfig.sourceIp,
           envConfig.sourceIps.join(','),
+          envConfig.sourceIpInterface,
           cliConfig.sourceIp,
-          cliConfig.sourceIps.join(',')
+          cliConfig.sourceIps.join(','),
+          cliConfig.sourceIpInterface,
+          publicConfig(cliConfig).sourceIpInterface,
+          invalidEnvRejected,
+          invalidCliRejected
         ].join('|');
       })(),
-      want: '10.0.0.101|10.0.0.101,10.0.0.145|10.0.0.145|10.0.0.145,10.0.0.20'
+      want: 'enp0s6|10.0.0.101|10.0.0.101,10.0.0.145|enp0s6|10.0.0.145|10.0.0.145,10.0.0.20|enp0s6|enp0s6|true|true'
     },
     {
       name: 'browserless source IP controller keeps persisted selection',
@@ -28277,6 +28309,54 @@ async function runSelfTest() {
       want: 'false|10.0.0.101,10.0.0.145,10.0.0.20|3|2|10.0.0.101>10.0.0.145,10.0.0.145>10.0.0.20|10.0.0.20|10.0.0.20|leave-failed-source-ip-switch'
     },
     {
+      name: 'browserless preflight lifecycle ignores the legacy pool and bounds verified leave to three IPs',
+      got: withTempDirForTest(async dir => {
+        const stateFile = path.join(dir, 'state.json');
+        const requests = [];
+        updateBrowserlessStateFile(stateFile, {
+          network: { sourceIp: '10.0.0.250' },
+          stats: { currentSession: { online: false } }
+        }, { updatedAt: '2026-08-01T01:00:00.000Z' });
+        const controller = createSourceIpController({
+          preflightEnabled: true,
+          config: {
+            gameOrigin: 'https://grasp-rat-game.h-e.top',
+            sourceIp: '10.0.0.250',
+            sourceIps: ['10.0.0.250', '10.0.0.251', '10.0.0.252', '10.0.0.253']
+          },
+          stateFile,
+          now: () => Date.UTC(2026, 7, 1, 1, 0, 0),
+          leaveWithVerification: async options => {
+            requests.push(options.localAddress || '');
+            const ok = options.localAddress === '10.0.0.103';
+            return {
+              ok,
+              attempts: [{ ok, status: ok ? 200 : 502 }]
+            };
+          }
+        });
+        const beforePrepare = readBrowserlessStateFile(stateFile);
+        controller.prepareLifecycleSourceIps(['10.0.0.101', '10.0.0.102', '10.0.0.103']);
+        const result = await controller.leaveWithVerification({
+          gameOrigin: 'https://grasp-rat-game.h-e.top',
+          userId: 7,
+          sessionToken: 'test-token'
+        });
+        controller.clearLifecycleSourceIps({ reason: 'self-test-complete' });
+        const afterClear = readBrowserlessStateFile(stateFile);
+        return [
+          beforePrepare.network.sourceIps.length,
+          result.ok,
+          requests.join(','),
+          requests.includes('10.0.0.250'),
+          requests.includes('10.0.0.251'),
+          afterClear.network.lifecycleSourceIps.length,
+          afterClear.network.sourceIps.length
+        ].join('|');
+      }),
+      want: '0|true|10.0.0.101,10.0.0.102,10.0.0.103|false|false|0|0'
+    },
+    {
       name: 'browserless runner loop plan retries non-explicit failures',
       got: (() => {
         const config = { once: false, loopDelayMs: 1234 };
@@ -28601,6 +28681,7 @@ async function runSelfTest() {
         const result = await runBrowserlessRunner(config, {
           now: () => t,
           startStatusServer: false,
+          disableSourceIpPreflight: true,
           sleep: async ms => {
             sleptMs += ms;
             t += ms;
@@ -28824,6 +28905,7 @@ async function runSelfTest() {
         const result = await runBrowserlessRunner(config, {
           now: () => t,
           startStatusServer: false,
+          disableSourceIpPreflight: true,
           sleep: async ms => {
             sleptMs += ms;
             t += ms;
@@ -28922,6 +29004,7 @@ async function runSelfTest() {
         const result = await runBrowserlessRunner(config, {
           now: () => t,
           startStatusServer: false,
+          disableSourceIpPreflight: true,
           sleep: async ms => {
             sleptMs += ms;
             t += ms;
@@ -29031,6 +29114,7 @@ async function runSelfTest() {
         const result = await runBrowserlessRunner(config, {
           now: () => t,
           startStatusServer: false,
+          disableSourceIpPreflight: true,
           sleep: async ms => {
             sleptMs += ms;
             t += ms;
@@ -29104,6 +29188,8 @@ async function runSelfTest() {
         const result = await runBrowserlessRunner(config, {
           now: () => t,
           startStatusServer: false,
+          disableSourceIpPreflight: true,
+          allowLegacyPreLoginWaitPreparation: true,
           onLifecycleControlReady: control => { lifecycleControl = control; },
           sleep: ms => {
             sleepCalls += 1;
@@ -29191,6 +29277,8 @@ async function runSelfTest() {
         const result = await runBrowserlessRunner(config, {
           now: () => t,
           startStatusServer: false,
+          disableSourceIpPreflight: true,
+          allowLegacyPreLoginWaitPreparation: true,
           sleep: async ms => {
             sleptMs += ms;
             t += ms;
@@ -29277,6 +29365,8 @@ async function runSelfTest() {
           now: () => t,
           startStatusServer: false,
           disableBackgroundIo: true,
+          disableSourceIpPreflight: true,
+          allowLegacyPreLoginWaitPreparation: true,
           sleep: async ms => {
             sleptMs += ms;
             t += ms;
@@ -29383,6 +29473,8 @@ async function runSelfTest() {
           now: () => t,
           startStatusServer: false,
           disableBackgroundIo: true,
+          disableSourceIpPreflight: true,
+          allowLegacyPreLoginWaitPreparation: true,
           sleep: async ms => {
             sleptMs += ms;
             t += ms;
@@ -29489,6 +29581,7 @@ async function runSelfTest() {
         const result = await runBrowserlessRunner(config, {
           now: () => t,
           startStatusServer: false,
+          disableSourceIpPreflight: true,
           sleep: async ms => {
             sleptMs += ms;
           },
@@ -29585,6 +29678,7 @@ async function runSelfTest() {
         const result = await runBrowserlessRunner(config, {
           now: () => t,
           startStatusServer: false,
+          disableSourceIpPreflight: true,
           sleep: async ms => {
             sleptMs += ms;
           },
@@ -29787,6 +29881,7 @@ async function runSelfTest() {
         ], {});
         const liveRun = await runBrowserlessRunner(liveConfig, {
           now: () => Date.UTC(2026, 6, 8, 1, 1, 0),
+          disableSourceIpPreflight: true,
           runReadOnlyOnce: async (_config, context) => {
             context.logStore.append('runner', 'fake-read-only', { ok: true });
             return { ok: true, frames: 0 };
@@ -29871,6 +29966,7 @@ async function runSelfTest() {
           now: () => t,
           safetyController,
           startStatusServer: false,
+          disableSourceIpPreflight: true,
           sleep: async ms => {
             sleeps += 1;
             t += ms;
@@ -29916,6 +30012,7 @@ async function runSelfTest() {
         const result = await runBrowserlessRunner(config, {
           now: () => Date.UTC(2026, 6, 8, 1, 1, 0),
           startStatusServer: false,
+          disableSourceIpPreflight: true,
           runReadOnlyOnce: async () => ({
             ok: false,
             runId: 'explicit-stop-self-test',
@@ -29975,6 +30072,7 @@ async function runSelfTest() {
         await runBrowserlessRunner(config, {
           now: () => Date.UTC(2026, 6, 8, 1, 1, 0),
           startStatusServer: false,
+          disableSourceIpPreflight: true,
           runReadOnlyOnce: async () => {
             safetyAtCanaryStart = readBrowserlessStateFile(file).loginPointSafety;
             return {
@@ -30022,6 +30120,7 @@ async function runSelfTest() {
         let hydratedLoginPointX = null;
         const liveRun = await runBrowserlessRunner(config, {
           now: () => Date.UTC(2026, 6, 8, 1, 2, 0),
+          disableSourceIpPreflight: true,
           runReadOnlyOnce: async hydrated => {
             hydratedLoginPointX = hydrated.loginPointX;
             return {
@@ -32241,6 +32340,46 @@ async function runSelfTest() {
       want: 'false|false|false|false|false|false|10.0.0.101|migration-test'
     },
     {
+      name: 'browserless compact status bounds source IP risk and lifecycle payloads',
+      got: (() => {
+        const sourceIpRisk = {};
+        for (let index = 0; index < 500; index += 1) {
+          const ip = `10.${1 + Math.floor(index / 256)}.0.${index % 256}`;
+          sourceIpRisk[ip] = {
+            ip,
+            firstObserved403At: new Date(Date.UTC(2026, 7, 1, 0, 0, 0) + index * 1000).toISOString()
+          };
+        }
+        const state = {
+          network: {
+            sourceIp: '10.0.0.1',
+            sourceIps: ['10.0.0.1', '10.0.0.2', '10.0.0.3', '10.0.0.4'],
+            lifecycleSourceIps: ['10.0.0.1', '10.0.0.2', '10.0.0.3', '10.0.0.4'],
+            sourceIpRisk,
+            sourceIpPreflight: {
+              phase: 'testing',
+              reason: 'testing-non-risk-ip',
+              availableIps: ['10.0.0.1', '10.0.0.2', '10.0.0.3', '10.0.0.4']
+            }
+          }
+        };
+        const projected = browserlessCompactStatusSource(state);
+        const compact = buildCompactBrowserlessStatus(projected, {});
+        const text = JSON.stringify(compact);
+        return [
+          Object.keys(sourceIpRisk).length,
+          compact.network.sourceIpRiskCount,
+          Object.prototype.hasOwnProperty.call(compact.network, 'sourceIpRisk'),
+          text.includes('firstObserved403At'),
+          compact.network.lifecycleSourceIps.length,
+          compact.network.sourceIpCount,
+          compact.network.sourceIpPreflight.availableIps.length,
+          text.length < 50000
+        ].join('|');
+      })(),
+      want: '500|500|false|false|3|3|3|true'
+    },
+    {
       name: 'browserless status server gates status and redacts payload',
       got: (async () => {
         let stopCalled = 0;
@@ -32400,7 +32539,7 @@ async function runSelfTest() {
           panelHtml.includes('.transport-metric.muted,.transport-metric.muted .metric-value{color:var(--muted)}')
         ].join('|');
       })(),
-      want: '2026.07.31.1|ok|warn|bad|ok|warn|bad|ok|warn|bad|muted|true|true|true|true|true|true'
+      want: '2026.08.02.1|ok|warn|bad|ok|warn|bad|ok|warn|bad|muted|true|true|true|true|true|true'
     },
     {
       name: 'browserless web panel animates keyed map markers between status refreshes',
@@ -32438,7 +32577,7 @@ async function runSelfTest() {
           /function stopAutoRefresh\(\)\s*\{\s*cancelMapMarkerAnimation\(true\);/.test(panelScript)
         ].join('|');
       })(),
-      want: '2026.07.31.1|coin:0|player:alice||0|0.875|1|97.5|195.0|110|220|true|true|true|true|true|true|true|true|true|true|true'
+      want: '2026.08.02.1|coin:0|player:alice||0|0.875|1|97.5|195.0|110|220|true|true|true|true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless status server adds dynamic whitelist players by name',
@@ -33377,7 +33516,7 @@ async function runSelfTest() {
             < panelScript.indexOf("if (/combat/i.test(text)) return '正在处理打架';")
         ].join('|');
       })(),
-      want: '2026.07.31.1|true|true|true'
+      want: '2026.08.02.1|true|true|true'
     },
     {
       name: 'browserless restart drain wait explains planned service restart',
@@ -33913,7 +34052,7 @@ async function runSelfTest() {
           !panelScript.includes("setRichText('roleTitleMeta', [{ text: '已离线', className: 'muted' }], 'muted');")
         ].join('|');
       })(),
-      want: '2026.07.31.1|true|true|true|true|true|true'
+      want: '2026.08.02.1|true|true|true|true|true|true'
     },
     {
       name: 'browserless runner self-test passes',

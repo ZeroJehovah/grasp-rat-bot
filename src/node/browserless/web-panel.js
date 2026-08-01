@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.07.31.1';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.08.02.1';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function mapMarkerKeyCore(kind, primary, fallback = '') {
@@ -410,6 +410,11 @@ function renderBrowserlessWebPanel() {
               <dt>刷新时间</dt><dd id="stamp">--</dd>
               <dt>出口数量</dt><dd id="sourceIpCount">--</dd>
               <dt>当前出口</dt><dd id="sourceIp">--</dd>
+              <dt>出口预检阶段</dt><dd id="sourceIpPreflightPhase">--</dd>
+              <dt>出口预检进度</dt><dd id="sourceIpPreflightProgress">--</dd>
+              <dt>预检当前 IP</dt><dd id="sourceIpPreflightCurrentIp">--</dd>
+              <dt>预检最近结果</dt><dd id="sourceIpPreflightLastResult">--</dd>
+              <dt>预检下次重试</dt><dd id="sourceIpPreflightNextRetry">--</dd>
               <dt>网络监控</dt><dd id="transportHealthMode">--</dd>
               <dt>实时延迟</dt><dd id="transportLatency">--</dd>
               <dt>本地排队</dt><dd id="transportQueue">--</dd>
@@ -684,6 +689,51 @@ function renderBrowserlessWebPanel() {
         + '/'
         + (total === null || total <= 0 ? '?' : String(Math.round(total)));
     };
+    const sourceIpPreflightPhaseText = network => {
+      const preflight = network?.sourceIpPreflight || {};
+      const phase = String(preflight.phase || '');
+      const queue = String(preflight.queuePhase || '');
+      if (phase === 'testing') return queue === 'risk' ? '正在复查风控 IP' : '正在测试普通 IP';
+      if (phase === 'retry-wait') return queue === 'risk' ? '风控 IP 临时重试等待' : '普通 IP 临时重试等待';
+      if (phase === 'ready') return preflight.reuseWithoutRetest ? '已选出 3 个 IP' : '预检完成';
+      if (phase === 'deferred') return '已保留 3 个 IP，等待下一个登录时点';
+      if (phase === 'insufficient') return '可用出口不足 3 个，冷却中';
+      if (phase === 'login-attempt') return '正在使用主 IP 登录';
+      if (phase === 'active') return '本局三 IP 生命周期已生效';
+      if (phase === 'login-failed') return '登录失败，等待重新预检';
+      if (phase === 'interrupted') return '预检被停止/重启打断';
+      if (phase === 'error') return '出口预检异常，禁止登录';
+      return phase || '--';
+    };
+    const sourceIpPreflightProgressText = network => {
+      const preflight = network?.sourceIpPreflight || {};
+      const tested = number(preflight.testedCount);
+      const discovered = number(preflight.discoveredCount);
+      const available = number(preflight.availableCount);
+      const required = number(preflight.requiredCount) || 3;
+      const risk = number(preflight.riskCount);
+      const progress = tested === null || discovered === null ? '--' : Math.round(tested) + '/' + Math.round(discovered);
+      return progress + '，可用 ' + (available === null ? '--' : Math.round(available)) + '/' + Math.round(required)
+        + '，风控 ' + (risk === null ? '--' : Math.round(risk));
+    };
+    const sourceIpPreflightLastResultText = network => {
+      const preflight = network?.sourceIpPreflight || {};
+      const status = number(preflight.lastStatus);
+      const error = String(preflight.lastErrorCategory || '');
+      const attempt = number(preflight.currentAttempt);
+      if (status !== null) return 'HTTP ' + Math.round(status) + (attempt === null ? '' : ' / 第 ' + Math.round(attempt) + ' 次');
+      if (error) return error + (attempt === null ? '' : ' / 第 ' + Math.round(attempt) + ' 次');
+      return '--';
+    };
+    const utc8DayKey = value => new Date(Number(value ?? Date.now()) + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const dailyFirstLoginExempt = status => {
+      if (status?.stats?.currentSession?.online) return false;
+      const today = status?.stats?.today || {};
+      return String(today.day || '') !== utc8DayKey(Date.now()) || Math.max(0, number(today.sessionCount) || 0) <= 0;
+    };
+    const sourceIpDeferredDetailText = status => dailyFirstLoginExempt(status)
+      ? '已保留 3 个 IP，等待下一个登录时点；每日首次登录豁免仍有效，届时直接使用主 IP 登录'
+      : '已保留 3 个 IP，等待下一个登录时点；届时不重复主页测试，并先使用主 IP 做快照安全检查';
     const transportModeText = health => {
       if (!health || health.enabled === false) return '--';
       if (!health.connected || health.mode === 'offline') return '离线';
@@ -1163,6 +1213,16 @@ function renderBrowserlessWebPanel() {
       'explicit-stop': '手动停止',
       'self-test': '测试',
       'login-point-bootstrap-failed': '登录点检查失败',
+      'source-ip-preflight': '正在测试出口 IP',
+      'source-ip-preflight-ready': '出口 IP 预检完成',
+      'source-ip-preflight-temporary-error': '出口 IP 临时异常，等待重试',
+      'source-ip-preflight-insufficient': '可用出口不足 3 个，冷却一小时',
+      'source-ip-preflight-deferred': '出口测试耗时超过 10 秒，等待下一个登录时点',
+      'source-ip-preflight-deferred-next-login-point': '出口测试耗时超过 10 秒，已保留 3 个 IP',
+      'source-ip-preflight-reused-without-retest': '复用已保存的 3 个出口 IP，不重复测试',
+      'source-ip-preflight-error': '出口预检异常，禁止登录',
+      'source-ip-risk-403': '主页返回 403，已加入风控列表',
+      'source-ip-login-websocket-attempt': '正在使用主出口登录',
       'snapshot-safety-retry': '重新检查登录点安全',
       'snapshot-confirmed-offline': '快照确认角色已离线',
       'in-game-snapshot-safety-retry': '可能仍在游戏中，快速重连',
@@ -1201,7 +1261,9 @@ function renderBrowserlessWebPanel() {
       stop: '停止',
       stopped: '已停止',
       'post-attack-drop-wait': '等待掉落',
-      'return-block-scan': '避开危险'
+      'return-block-scan': '避开危险',
+      'source-ip-preflight': '测试出口 IP',
+      'source-ip-preflight-cooldown': '出口不足冷却'
     };
     const modeMap = {
       'read-only': '只观察',
@@ -1644,6 +1706,9 @@ function renderBrowserlessWebPanel() {
       const kind = String(action.kind || action.actionKind || status.decision?.kind || 'wait');
       const reason = String(action.reason || status.decision?.reason || '');
       const target = activeTarget(status) || action.target || status.decision?.target || null;
+      if (kind === 'source-ip-preflight' || kind === 'source-ip-preflight-cooldown') {
+        return sourceIpPreflightPhaseText(status.network);
+      }
       if (reason === 'restart-drain-new-commitment-blocked') return '正在准备重启';
       if (kind === 'post-attack-drop-wait' || /post-kill-settlement-wait|post-attack-drop-wait/i.test(reason)) return '等待掉落';
       if (reason === 'single-coin-bait-hold') return '正在等待';
@@ -1688,6 +1753,11 @@ function renderBrowserlessWebPanel() {
       if (reconnectRemainingMs !== null && reconnectRemainingMs > 1000) return '等待重登冷却时间';
       const action = status.action || status.decision || {};
       const reason = String(action.reason || status.decision?.reason || '');
+      const preflightPhase = String(status.network?.sourceIpPreflight?.phase || '');
+      if (action.kind === 'source-ip-preflight' || action.kind === 'source-ip-preflight-cooldown'
+        || ['testing', 'retry-wait', 'deferred', 'insufficient'].includes(preflightPhase)) {
+        return sourceIpPreflightPhaseText(status.network);
+      }
       if (reason === 'login-point-safe-connecting') return '登录点已安全，正在连接游戏';
       const loginState = loginPointDisplay(status).state;
       if (/snapshot|login-point|prelogin|edge/i.test(reason) || loginState === 'pending') {
@@ -2630,6 +2700,25 @@ function renderBrowserlessWebPanel() {
       const liveCombat = Boolean(realtimeOnline && (kind === 'combat-live' || action.kind === 'combat-live'));
 
       addRow(rowsOut, '状态', online ? actionTitleText(status) : offlineActionTitleText(status), true);
+      const preflight = status.network?.sourceIpPreflight || null;
+      const preflightPhase = String(preflight?.phase || '');
+      if (!online && preflight && ['testing', 'retry-wait', 'deferred', 'insufficient', 'ready', 'login-attempt', 'login-failed'].includes(preflightPhase)) {
+        addRow(rowsOut, '出口预检', sourceIpPreflightPhaseText(status.network), true,
+          preflightPhase === 'insufficient' ? classAttrs('bad') : classAttrs('info'));
+        addRow(rowsOut, '预检进度', sourceIpPreflightProgressText(status.network));
+        addRow(rowsOut, '当前测试 IP', preflight.currentIp || '--');
+        addRow(rowsOut, '最近响应', sourceIpPreflightLastResultText(status.network));
+        const preflightRetryAt = preflightPhase === 'insufficient'
+          ? status.stats?.offline?.nextReconnectAt
+          : preflight.nextRetryAt;
+        addRow(rowsOut, preflightPhase === 'insufficient' ? '冷却结束' : '下次重试', countdownUntil(preflightRetryAt), false, { countdownAt: preflightRetryAt });
+        if (preflightPhase === 'deferred') {
+          addRow(rowsOut, '延期说明', sourceIpDeferredDetailText(status), true, classAttrs('warn'));
+        }
+        if (preflightPhase === 'insufficient') {
+          addRow(rowsOut, '阻断原因', '可用出口不足 3 个，已进入一小时重连冷却', true, classAttrs('bad'));
+        }
+      }
       const cloudflareChallenge = status.runner?.connectionFailure?.type === 'cloudflare-challenge'
         ? status.runner.connectionFailure
         : null;
@@ -3064,6 +3153,16 @@ function renderBrowserlessWebPanel() {
       if (stampNode) stampNode.title = '';
       setText('sourceIpCount', sourceIpCountText(s.network));
       setText('sourceIp', s.network?.sourceIp);
+      setText('sourceIpPreflightPhase', sourceIpPreflightPhaseText(s.network));
+      setText('sourceIpPreflightProgress', sourceIpPreflightProgressText(s.network));
+      setText('sourceIpPreflightCurrentIp', s.network?.sourceIpPreflight?.currentIp || '--');
+      setText('sourceIpPreflightLastResult', sourceIpPreflightLastResultText(s.network));
+      setText('sourceIpPreflightNextRetry', countdownUntil(
+        s.network?.sourceIpPreflight?.phase === 'insufficient'
+          ? s.stats?.offline?.nextReconnectAt
+          : s.network?.sourceIpPreflight?.nextRetryAt
+      ));
+      setClass('sourceIpPreflightPhase', String(s.network?.sourceIpPreflight?.phase || '').includes('insufficient') ? 'bad' : '');
       const transportHealth = s.network?.transportHealth || null;
       setText('transportHealthMode', transportModeText(transportHealth));
       const metricClass = transportMetricClass(transportHealth);

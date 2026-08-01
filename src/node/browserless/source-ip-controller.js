@@ -23,6 +23,7 @@ const {
   cloudflareChallengeFailure,
   detectCloudflareChallenge
 } = require('./cloudflare-challenge');
+const { uniqueIpv4 } = require('./source-ip-preflight');
 
 const MAX_LEAVE_SOURCE_IP_SWITCHES = 2;
 
@@ -66,16 +67,47 @@ function discoverLocalSourceIps(preferredIp = '') {
   return uniqueStrings(ordered.map(item => item.address));
 }
 
-function resolveSourceIpCandidates(config = {}, state = {}) {
-  const explicit = splitSourceIpList(config.sourceIps);
-  const persisted = state?.network?.sourceIp || '';
-  if (explicit.length) return explicit;
-  const seed = config.sourceIp || persisted;
+function sourceIpSessionInFlight(state = {}) {
+  return Boolean(
+    state?.stats?.currentSession?.online
+      || state?.runner?.pendingExit
+      || state?.runner?.transportRecovery
+      || state?.network?.sourceIpPreflight?.phase === 'login-attempt'
+  );
+}
+
+function resolveSourceIpCandidates(config = {}, state = {}, options = {}) {
+  if (options.preflightEnabled !== true) {
+    const explicit = splitSourceIpList(config.sourceIps);
+    const persisted = state?.network?.sourceIp || '';
+    if (explicit.length) return explicit;
+    const seed = config.sourceIp || persisted;
+    if (!seed) return [];
+    return uniqueStrings([
+      seed,
+      ...discoverLocalSourceIps(seed)
+    ]);
+  }
+  const lifecycle = uniqueIpv4(state?.network?.lifecycleSourceIps).slice(0, 3);
+  if (lifecycle.length === 3) return lifecycle;
+
+  // The old SOURCE_IPS value is intentionally not a login candidate pool.
+  // During an already active/uncertain session, retain at most the current
+  // address plus two persisted legacy fallbacks so verified leave can finish
+  // a pre-upgrade lifecycle without expanding its IP boundary.
+  const sessionInFlight = sourceIpSessionInFlight(state);
+  const persisted = String(state?.network?.sourceIp || '').trim();
+  const configured = String(config.sourceIp || '').trim();
+  const seed = persisted || configured;
   if (!seed) return [];
-  return uniqueStrings([
+  if (!sessionInFlight) return [seed];
+  const legacy = [
     seed,
+    ...uniqueIpv4(state?.network?.sourceIps),
+    ...splitSourceIpList(config.sourceIps),
     ...discoverLocalSourceIps(seed)
-  ]);
+  ];
+  return uniqueStrings(legacy).slice(0, 3);
 }
 
 function chooseInitialSourceIp(candidates, config = {}, state = {}) {
@@ -121,7 +153,8 @@ function createSourceIpController(options = {}) {
   const now = typeof options.now === 'function' ? options.now : Date.now;
   const logStore = options.logStore || null;
   let state = options.state || (stateFile ? readBrowserlessStateFile(stateFile) : {});
-  let candidates = resolveSourceIpCandidates(config, state);
+  const preflightEnabled = options.preflightEnabled === true;
+  let candidates = resolveSourceIpCandidates(config, state, { preflightEnabled });
   let currentSourceIp = chooseInitialSourceIp(candidates, config, state);
   let selectionGeneration = Math.max(0, Number(state?.network?.sourceIpSelectionGeneration || 0));
   let selectedAtMs = Date.parse(state?.network?.lastSelectedAt || '') || 0;
@@ -133,9 +166,13 @@ function createSourceIpController(options = {}) {
   const persist = patch => {
     if (!stateFile) return;
     const updatedAt = new Date(now()).toISOString();
+    const persistedLifecycle = uniqueIpv4(state?.network?.lifecycleSourceIps).slice(0, 3);
+    const persistedCandidates = persistedLifecycle.length === 3
+      ? persistedLifecycle
+      : (preflightEnabled && !sourceIpSessionInFlight(state) ? [] : candidates);
     const network = {
       sourceIp: currentSourceIp,
-      sourceIps: candidates,
+      sourceIps: persistedCandidates,
       sourceIpSelectionGeneration: selectionGeneration,
       ...patch
     };
@@ -173,6 +210,54 @@ function createSourceIpController(options = {}) {
   const applyCurrentToConfig = () => {
     config.sourceIp = currentSourceIp;
     config.sourceIps = candidates;
+  };
+
+  const prepareLifecycleSourceIps = (ips, detail = {}) => {
+    const selected = uniqueIpv4(ips).slice(0, 3);
+    if (selected.length !== 3) throw new Error('lifecycle source IP selection requires exactly three IPv4 addresses');
+    const previous = currentSourceIp;
+    candidates = selected;
+    currentSourceIp = selected[0];
+    selectionGeneration += 1;
+    selectedAtMs = now();
+    applyCurrentToConfig();
+    persist({
+      sourceIp: currentSourceIp,
+      sourceIps: selected,
+      lifecycleSourceIps: selected,
+      lifecycleSourceIpIndex: 0,
+      lifecyclePreparedAt: detail.lifecyclePreparedAt || new Date(selectedAtMs).toISOString(),
+      lastSelectedAt: new Date(selectedAtMs).toISOString(),
+      lastSelectionReason: detail.lastSelectionReason || 'source-ip-preflight-selected',
+      ...(detail.sourceIpRisk ? { sourceIpRisk: detail.sourceIpRisk } : {}),
+      ...(detail.sourceIpPreflight ? { sourceIpPreflight: detail.sourceIpPreflight } : {})
+    });
+    log('source-ip-lifecycle-prepared', {
+      from: previous,
+      sourceIps: selected,
+      reason: detail.lastSelectionReason || 'source-ip-preflight-selected'
+    });
+    return selected.slice();
+  };
+
+  const clearLifecycleSourceIps = (detail = {}) => {
+    const previous = candidates.slice();
+    candidates = currentSourceIp ? [currentSourceIp] : [];
+    applyCurrentToConfig();
+    persist({
+      sourceIps: [],
+      lifecycleSourceIps: [],
+      lifecycleSourceIpIndex: 0,
+      lifecyclePreparedAt: '',
+      ...(detail.sourceIpRisk ? { sourceIpRisk: detail.sourceIpRisk } : {}),
+      ...(detail.sourceIpPreflight ? { sourceIpPreflight: detail.sourceIpPreflight } : {}),
+      ...(detail.lastSelectionReason ? { lastSelectionReason: detail.lastSelectionReason } : {})
+    });
+    log('source-ip-lifecycle-cleared', {
+      previousSourceIps: previous,
+      reason: detail.reason || detail.lastSelectionReason || 'source-ip-lifecycle-cleared'
+    });
+    return candidates.slice();
   };
 
   applyCurrentToConfig();
@@ -224,7 +309,10 @@ function createSourceIpController(options = {}) {
     applyCurrentToConfig();
     persist({
       lastSelectedAt: new Date(selectedAtMs).toISOString(),
-      lastSelectionReason: 'leave-failed-source-ip-switch'
+      lastSelectionReason: 'leave-failed-source-ip-switch',
+      ...(Array.isArray(state?.network?.lifecycleSourceIps) && state.network.lifecycleSourceIps.length === 3
+        ? { lifecycleSourceIpIndex: Math.max(0, state.network.lifecycleSourceIps.indexOf(nextSourceIp)) }
+        : {})
     });
     log('leave-source-ip-switch', {
       from: previousSourceIp,
@@ -242,11 +330,17 @@ function createSourceIpController(options = {}) {
     sourceIps() {
       return candidates.slice();
     },
+    hasLifecycleSourceIps() {
+      return uniqueIpv4(state?.network?.lifecycleSourceIps).length === 3
+        && candidates.length === 3;
+    },
+    prepareLifecycleSourceIps,
+    clearLifecycleSourceIps,
     refreshFromState(nextState = null) {
       const incomingState = nextState || (stateFile ? readBrowserlessStateFile(stateFile) : state);
       state = incomingState;
-      const nextCandidates = resolveSourceIpCandidates(config, state);
-      candidates = nextCandidates.length ? nextCandidates : candidates;
+      const nextCandidates = resolveSourceIpCandidates(config, state, { preflightEnabled });
+      candidates = nextCandidates.length ? nextCandidates : (currentSourceIp ? [currentSourceIp] : candidates);
       const incomingGeneration = Math.max(0, Number(state?.network?.sourceIpSelectionGeneration || 0));
       const incomingSelectedAtMs = Date.parse(state?.network?.lastSelectedAt || '') || 0;
       const incomingSourceIp = String(state?.network?.sourceIp || '');
@@ -499,5 +593,6 @@ module.exports = {
   createSourceIpController,
   discoverLocalSourceIps,
   resolveSourceIpCandidates,
+  sourceIpSessionInFlight,
   splitSourceIpList
 };

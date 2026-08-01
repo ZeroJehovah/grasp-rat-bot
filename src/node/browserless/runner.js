@@ -75,6 +75,17 @@ const { createBrowserlessActionAdapter } = require('./action-adapter');
 const { buildBrowserlessCombatDryRun } = require('./combat-adapter');
 const { runCombatShotExecutionSelfTest } = require('./combat-shot-execution-self-test');
 const { createSourceIpController } = require('./source-ip-controller');
+const {
+  DEFAULT_SOURCE_IP_INTERFACE,
+  SOURCE_IP_PREFLIGHT_INSUFFICIENT_COOLDOWN_MS,
+  SOURCE_IP_PREFLIGHT_REQUIRED_COUNT,
+  ensureSourceIpPreflight,
+  normalizeSourceIpPreflight,
+  requestAnonymousGameRoot,
+  reusableSourceIpPreflight,
+  runSourceIpPreflightSelfTest,
+  sourceIpPreflightErrorCategory
+} = require('./source-ip-preflight');
 const { createBrowserlessSafetyController } = require('./safety-controller');
 const {
   actionTargetKey,
@@ -199,6 +210,7 @@ function publicConfig(config) {
     wsTraceMaxPayloadChars: Number(config.wsTraceMaxPayloadChars || 0),
     sourceIp: config.sourceIp || '',
     sourceIps: config.sourceIps || [],
+    sourceIpInterface: config.sourceIpInterface || 'enp0s6',
     stateFile: config.stateFile || stateFilePath(config),
     loginPointPresent: hasConfigNumber(config.loginPointX) && hasConfigNumber(config.loginPointY),
     dynamicProfitThresholdEnabled: Boolean(config.dynamicProfitThresholdEnabled),
@@ -505,6 +517,38 @@ function preLoginSafetyLeadMs(config = {}) {
   const required = loginPointSafetyRequiredFromConfig(config);
   const intervalMs = Math.max(0, Number(config.loginPointSafetyProbeIntervalMs || 0));
   return Math.max(0, required - 1) * intervalMs;
+}
+
+function sourceIpPreflightAction(status = {}, options = {}) {
+  const preflight = normalizeSourceIpPreflight(status, Number(status.riskCount || 0));
+  const phase = preflight.phase || 'idle';
+  const reason = preflight.reason || 'source-ip-preflight';
+  const kind = phase === 'insufficient' ? 'source-ip-preflight-cooldown' : 'source-ip-preflight';
+  return {
+    kind,
+    band: 'safety',
+    reason,
+    phase,
+    queuePhase: preflight.queuePhase || '',
+    currentIp: preflight.currentIp || '',
+    currentAttempt: preflight.currentAttempt,
+    testedCount: preflight.testedCount,
+    discoveredCount: preflight.discoveredCount,
+    availableCount: preflight.availableCount,
+    requiredCount: preflight.requiredCount,
+    riskCount: preflight.riskCount,
+    lastStatus: preflight.lastStatus,
+    lastErrorCategory: preflight.lastErrorCategory || '',
+    nextRetryAt: preflight.nextRetryAt || '',
+    deferredForNextLoginPoint: Boolean(preflight.deferredForNextLoginPoint),
+    deferredAt: preflight.deferredAt || '',
+    reused: Boolean(options.reused),
+    nextRunAt: options.nextRunAt || ''
+  };
+}
+
+function sourceIpPreflightCanReuse(state = {}) {
+  return reusableSourceIpPreflight(state);
 }
 
 function staminaExhaustedThresholdMs(config = {}) {
@@ -1750,6 +1794,7 @@ async function runBrowserlessRunner(config, deps = {}) {
 
   const sourceIpController = deps.sourceIpController || createSourceIpController({
     config,
+    preflightEnabled: true,
     stateFile,
     state: persisted,
     logStore,
@@ -1812,6 +1857,197 @@ async function runBrowserlessRunner(config, deps = {}) {
       recordSupervisorError(err, { operation: 'source-ip-refresh' });
       logStore.append('runner', 'source-ip-refresh-error', { error: errorMessage(err) });
     }
+  };
+
+  const publishSourceIpNetwork = patch => {
+    const preflightPatch = patch?.sourceIpPreflight;
+    const runnerPatch = preflightPatch
+      ? { currentAction: sourceIpPreflightAction(preflightPatch) }
+      : {};
+    const updated = updateState({
+      network: patch,
+      ...(Object.keys(runnerPatch).length ? { runner: runnerPatch } : {})
+    }, { updatedAt: new Date(now()).toISOString() });
+    persisted = updated;
+    if (liveState) {
+      patchLiveState({
+        network: patch,
+        ...(Object.keys(runnerPatch).length ? { runner: runnerPatch } : {})
+      }, { updatedAt: new Date(now()).toISOString() });
+    }
+    return updated;
+  };
+
+  const commitSourceIpLifecycle = (ips, patch = {}) => {
+    if (typeof sourceIpController.prepareLifecycleSourceIps === 'function') {
+      sourceIpController.prepareLifecycleSourceIps(ips, {
+        ...patch,
+        lifecyclePreparedAt: patch.sourceIpPreflight?.completedAt || new Date(now()).toISOString()
+      });
+      persisted = readBrowserlessStateFile(stateFile);
+      config.sourceIp = sourceIpController.currentSourceIp();
+      config.sourceIps = sourceIpController.sourceIps();
+      if (liveState) {
+        patchLiveState({ network: persisted.network }, { updatedAt: new Date(now()).toISOString() });
+      }
+      return persisted;
+    }
+    return publishSourceIpNetwork({
+      ...patch,
+      sourceIp: ips[0] || '',
+      sourceIps: ips,
+      lifecycleSourceIps: ips,
+      lifecycleSourceIpIndex: 0,
+      lifecyclePreparedAt: patch.sourceIpPreflight?.completedAt || new Date(now()).toISOString()
+    });
+  };
+
+  const clearSourceIpLifecycle = (patch = {}) => {
+    if (typeof sourceIpController.clearLifecycleSourceIps === 'function') {
+      sourceIpController.clearLifecycleSourceIps({
+        ...patch,
+        reason: patch.reason || patch.sourceIpPreflight?.reason || 'source-ip-lifecycle-cleared'
+      });
+      persisted = readBrowserlessStateFile(stateFile);
+      config.sourceIp = sourceIpController.currentSourceIp();
+      config.sourceIps = sourceIpController.sourceIps();
+      if (liveState) {
+        patchLiveState({ network: persisted.network }, { updatedAt: new Date(now()).toISOString() });
+      }
+      return persisted;
+    }
+    return publishSourceIpNetwork({
+      ...patch,
+      sourceIps: [],
+      lifecycleSourceIps: [],
+      lifecycleSourceIpIndex: 0,
+      lifecyclePreparedAt: ''
+    });
+  };
+
+  const runLoginSourceIpPreflight = async () => {
+    const stateBefore = readBrowserlessStateFile(stateFile);
+    const result = await ensureSourceIpPreflight({
+      gameOrigin: config.gameOrigin,
+      interfaceName: DEFAULT_SOURCE_IP_INTERFACE,
+      state: stateBefore,
+      readState: () => readBrowserlessStateFile(stateFile),
+      now,
+      monotonicNow: typeof deps.monotonicNow === 'function' ? deps.monotonicNow : () => performance.now(),
+      networkInterfaces: deps.networkInterfaces,
+      discoverIps: deps.discoverSourceIps,
+      request: deps.sourceIpPreflightRequest || ((origin, ip, requestOptions) => requestAnonymousGameRoot(origin, ip, requestOptions)),
+      requestTimeoutMs: 10000,
+      sleep: async delayMs => restartDrain.wait(delayMs, sleep),
+      shouldInterrupt: () => safetyController.getStopEvent()?.reason || (
+        restartDrain.status?.().requested ? 'restart-drain' : ''
+      ),
+      persistNetwork: async patch => publishSourceIpNetwork(patch),
+      commitLifecycle: async (ips, patch) => commitSourceIpLifecycle(ips, patch),
+      clearLifecycle: async patch => clearSourceIpLifecycle(patch),
+      log: (type, detail) => logStore.append('runner', type, detail)
+    });
+    if (result?.ok) {
+      refreshFromPersistedState();
+      const status = result.sourceIpPreflight || {};
+      updateState({ runner: { currentAction: sourceIpPreflightAction(status, { reused: result.reused }) } }, {
+        updatedAt: new Date(now()).toISOString()
+      });
+    }
+    return result;
+  };
+
+  const markSourceIpLoginAttempt = () => {
+    const current = readBrowserlessStateFile(stateFile);
+    const preflight = normalizeSourceIpPreflight(
+      current.network?.sourceIpPreflight,
+      Object.keys(current.network?.sourceIpRisk || {}).length
+    );
+    if (!current.network?.lifecycleSourceIps?.length) return;
+    publishSourceIpNetwork({
+      sourceIpPreflight: {
+        ...preflight,
+        phase: 'login-attempt',
+        reason: 'source-ip-login-websocket-attempt',
+        deferredForNextLoginPoint: false,
+        reuseWithoutRetest: false,
+        nextRetryAt: ''
+      }
+    });
+    logStore.append('runner', 'source-ip-login-attempt', {
+      sourceIp: current.network.sourceIp || '',
+      lifecycleSourceIps: current.network.lifecycleSourceIps.slice(0, 3)
+    });
+  };
+
+  const markSourceIpSnapshotWait = reason => {
+    const current = readBrowserlessStateFile(stateFile);
+    const lifecycleSourceIps = Array.isArray(current.network?.lifecycleSourceIps)
+      ? current.network.lifecycleSourceIps.slice(0, 3)
+      : [];
+    if (lifecycleSourceIps.length !== SOURCE_IP_PREFLIGHT_REQUIRED_COUNT) return;
+    const preflight = normalizeSourceIpPreflight(
+      current.network?.sourceIpPreflight,
+      Object.keys(current.network?.sourceIpRisk || {}).length
+    );
+    publishSourceIpNetwork({
+      sourceIpPreflight: {
+        ...preflight,
+        phase: 'snapshot-wait',
+        reason: String(reason || 'source-ip-snapshot-safety-wait').slice(0, 120),
+        deferredForNextLoginPoint: false,
+        reuseWithoutRetest: true,
+        nextRetryAt: ''
+      }
+    });
+  };
+
+  const markSourceIpLoginSuccess = canary => {
+    const current = readBrowserlessStateFile(stateFile);
+    const preflight = normalizeSourceIpPreflight(
+      current.network?.sourceIpPreflight,
+      Object.keys(current.network?.sourceIpRisk || {}).length
+    );
+    publishSourceIpNetwork({
+      sourceIpPreflight: {
+        ...preflight,
+        phase: 'active',
+        reason: 'source-ip-lifecycle-active',
+        deferredForNextLoginPoint: false,
+        reuseWithoutRetest: false,
+        reusedAt: '',
+        nextRetryAt: ''
+      }
+    });
+    logStore.append('runner', 'source-ip-login-success', {
+      runId: canary?.runId || '',
+      sourceIp: current.network.sourceIp || '',
+      lifecycleSourceIps: current.network.lifecycleSourceIps.slice(0, 3)
+    });
+  };
+
+  const markSourceIpLoginFailure = (reason, canary = null) => {
+    const current = readBrowserlessStateFile(stateFile);
+    const preflight = normalizeSourceIpPreflight(
+      current.network?.sourceIpPreflight,
+      Object.keys(current.network?.sourceIpRisk || {}).length
+    );
+    clearSourceIpLifecycle({
+      sourceIpPreflight: {
+        ...preflight,
+        phase: 'login-failed',
+        reason: String(reason || 'source-ip-login-failed').slice(0, 120),
+        completedAt: new Date(now()).toISOString(),
+        deferredForNextLoginPoint: false,
+        reuseWithoutRetest: false,
+        nextRetryAt: ''
+      },
+      reason: reason || 'source-ip-login-failed'
+    });
+    logStore.append('runner', 'source-ip-login-failed', {
+      reason: reason || 'source-ip-login-failed',
+      runId: canary?.runId || ''
+    });
   };
 
   let preparedSnapshotSafety = null;
@@ -1916,17 +2152,21 @@ async function runBrowserlessRunner(config, deps = {}) {
           originalDelayMs: loopPlan.delayMs
         }
       : loopPlan;
+    // Fresh login-point snapshot checks are deliberately deferred until the
+    // next real login gate, after anonymous source-IP preflight completes.
+    // The injected legacy switch exists only for focused historical wait
+    // self-tests; production never enables it.
     const firstDailyLoginAtNextRun = !pendingExit
       && isFirstBrowserlessLoginOfDay(currentBeforeWait, plannedNextRunAtMs);
-    const shouldPrepareSnapshotSafety = Boolean(
-      !pendingExit && !firstDailyLoginAtNextRun && (
-        confirmedLeave
-        || (
-          resetLoginPointForNextEntry
+    const shouldPrepareSnapshotSafety = deps.allowLegacyPreLoginWaitPreparation === true
+      ? Boolean(
+          !pendingExit && !firstDailyLoginAtNextRun && (
+            confirmedLeave
+            || resetLoginPointForNextEntry
             || loopPlan.reason === 'snapshot-safety-retry'
+          )
         )
-      )
-    );
+      : false;
     const plannedDelayMs = Math.max(0, plannedNextRunAtMs - schedulingNowMs);
     const effectiveDelayMs = pendingExit
       ? Math.max(0, pendingExitDeadlineMs - schedulingNowMs)
@@ -3025,10 +3265,180 @@ async function runBrowserlessRunner(config, deps = {}) {
       if (stopped) return stopped;
       continue;
     }
+
+    // A fresh anonymous source-IP preflight is a login gate. It runs only
+    // after all existing waits/recovery branches have settled; an active
+    // session and pending-exit recovery keep their already-bound lifecycle.
+    let loginPreflightResult = null;
+    const sessionOnline = Boolean(loopState?.stats?.currentSession?.online);
+    if (!deps.disableSourceIpPreflight && !activePendingExit && !transportRecoveryState && !sessionOnline) {
+      try {
+        loginPreflightResult = await runLoginSourceIpPreflight();
+      } catch (err) {
+        recordSupervisorError(err, { operation: 'source-ip-preflight' });
+        logStore.append('runner', 'source-ip-preflight-error', { error: errorMessage(err) });
+        const current = readBrowserlessStateFile(stateFile);
+        const previousPreflight = normalizeSourceIpPreflight(
+          current.network?.sourceIpPreflight,
+          Object.keys(current.network?.sourceIpRisk || {}).length
+        );
+        const errorReason = 'source-ip-preflight-error';
+        const errorStatus = {
+          ...previousPreflight,
+          phase: 'error',
+          reason: errorReason,
+          completedAt: new Date(now()).toISOString(),
+          nextRetryAt: '',
+          deferredForNextLoginPoint: false,
+          reuseWithoutRetest: false,
+          reusedAt: '',
+          lastErrorCategory: sourceIpPreflightErrorCategory(err)
+        };
+        try {
+          await clearSourceIpLifecycle({
+            sourceIpPreflight: errorStatus,
+            reason: errorReason
+          });
+        } catch (clearError) {
+          recordSupervisorError(clearError, { operation: 'source-ip-preflight-error-clear' });
+          logStore.append('runner', 'source-ip-preflight-error-clear', {
+            error: errorMessage(clearError)
+          });
+        }
+        loginPreflightResult = {
+          ok: false,
+          reason: errorReason,
+          error: errorMessage(err),
+          sourceIpPreflight: errorStatus
+        };
+      }
+      if (loginPreflightResult?.interrupted) {
+        const interrupted = {
+          ok: false,
+          mode: config.controlMode || 'read-only',
+          reason: loginPreflightResult.reason || 'source-ip-preflight-interrupted'
+        };
+        updateState({
+          runner: {
+            running: false,
+            lastRun: interrupted,
+            lastError: interrupted.reason,
+            currentAction: sourceIpPreflightAction(loginPreflightResult.sourceIpPreflight || {}, {
+              nextRunAt: ''
+            })
+          }
+        }, { updatedAt: new Date(now()).toISOString() });
+        return interrupted;
+      }
+      if (loginPreflightResult?.insufficient || loginPreflightResult?.reason === 'source-ip-preflight-insufficient') {
+        const insufficientStatus = loginPreflightResult.sourceIpPreflight || readBrowserlessStateFile(stateFile).network?.sourceIpPreflight || {};
+        const cooldownPlan = {
+          continue: true,
+          reason: 'source-ip-preflight-insufficient',
+          safetyReason: 'source-ip-preflight-insufficient',
+          delayMs: SOURCE_IP_PREFLIGHT_INSUFFICIENT_COOLDOWN_MS,
+          explicitDelay: true,
+          explicitCooldown: true,
+          sourceIpPreflight: insufficientStatus,
+          error: 'source-ip-preflight-insufficient'
+        };
+        updateState({
+          runner: {
+            currentAction: sourceIpPreflightAction(insufficientStatus, {
+              nextRunAt: new Date(now() + SOURCE_IP_PREFLIGHT_INSUFFICIENT_COOLDOWN_MS).toISOString()
+            }),
+            gameplayDeadline: {
+              type: 'source-ip-preflight-insufficient',
+              reason: 'source-ip-preflight-insufficient',
+              explicit: true,
+              until: new Date(now() + SOURCE_IP_PREFLIGHT_INSUFFICIENT_COOLDOWN_MS).toISOString()
+            }
+          }
+        }, { updatedAt: new Date(now()).toISOString() });
+        const stopped = await waitForLoopPlan(cooldownPlan, {
+          ok: false,
+          mode: config.controlMode || 'read-only',
+          reason: 'source-ip-preflight-insufficient'
+        });
+        if (stopped) return stopped;
+        continue;
+      }
+      if (loginPreflightResult?.ok && loginPreflightResult.deferredForNextLoginPoint && !loginPreflightResult.reused) {
+        const deferredStatus = loginPreflightResult.sourceIpPreflight || readBrowserlessStateFile(stateFile).network?.sourceIpPreflight || {};
+        const deferredDelayMs = Math.max(1000, Number(config.loopDelayMs || 30000));
+        const deferredPlan = {
+          continue: true,
+          reason: 'source-ip-preflight-deferred',
+          safetyReason: 'source-ip-preflight-deferred',
+          delayMs: deferredDelayMs,
+          explicitDelay: true,
+          sourceIpPreflight: deferredStatus,
+          error: 'source-ip-preflight-deferred'
+        };
+        updateState({
+          runner: {
+            currentAction: sourceIpPreflightAction(deferredStatus, {
+              nextRunAt: new Date(now() + deferredDelayMs).toISOString()
+            })
+          }
+        }, { updatedAt: new Date(now()).toISOString() });
+        logStore.append('runner', 'source-ip-preflight-deferred-loop', {
+          delayMs: deferredDelayMs,
+          sourceIps: loginPreflightResult.availableIps || [],
+          elapsedMs: deferredStatus.elapsedMs || 0
+        });
+        const stopped = await waitForLoopPlan(deferredPlan, {
+          ok: false,
+          mode: config.controlMode || 'read-only',
+          reason: 'source-ip-preflight-deferred'
+        });
+        if (stopped) return stopped;
+        continue;
+      }
+      // Any unexpected preflight failure is a hard login gate failure.  Do
+      // not fall through to snapshot/bootstrap/canary: no anonymous result
+      // means there is no authorized three-IP lifecycle for a WebSocket.
+      if (loginPreflightResult && !loginPreflightResult.ok) {
+        const errorStatus = loginPreflightResult.sourceIpPreflight
+          || readBrowserlessStateFile(stateFile).network?.sourceIpPreflight
+          || {};
+        const retryDelayMs = Math.max(1000, Number(config.loopDelayMs || 30000));
+        const failurePlan = {
+          continue: !config.once,
+          reason: loginPreflightResult.reason || 'source-ip-preflight-error',
+          safetyReason: loginPreflightResult.reason || 'source-ip-preflight-error',
+          delayMs: retryDelayMs,
+          explicitDelay: true,
+          sourceIpPreflight: errorStatus,
+          error: loginPreflightResult.error || loginPreflightResult.reason || 'source-ip-preflight-error'
+        };
+        updateState({
+          runner: {
+            currentAction: sourceIpPreflightAction(errorStatus, {
+              nextRunAt: config.once ? '' : new Date(now() + retryDelayMs).toISOString()
+            }),
+            lastError: failurePlan.error
+          }
+        }, { updatedAt: new Date(now()).toISOString() });
+        logStore.append('runner', 'source-ip-preflight-gate-failed', {
+          reason: failurePlan.reason,
+          error: failurePlan.error,
+          retryDelayMs
+        });
+        const stopped = await waitForLoopPlan(failurePlan, {
+          ok: false,
+          mode: config.controlMode || 'read-only',
+          reason: failurePlan.reason
+        });
+        if (stopped) return stopped;
+        continue;
+      }
+    }
     loginPointProvided = hasConfigNumber(config.loginPointX) && hasConfigNumber(config.loginPointY);
     if (!loginPointProvided && config.controlMode === 'read-only') {
       let bootstrap;
       try {
+        markSourceIpSnapshotWait('source-ip-login-point-bootstrap-wait');
         bootstrap = await readOnlyCanary(config, {
           logStore,
           now,
@@ -3043,6 +3453,7 @@ async function runBrowserlessRunner(config, deps = {}) {
           onSnapshotPayload: observeSnapshotPayload,
           fetchWithTimeout: sourceIpController.fetchWithTimeout,
           openBrowserlessWs: sourceIpController.openBrowserlessWs,
+          onLoginTransportAttempt: markSourceIpLoginAttempt,
           onTransportOpen,
           onTransportClose,
           onTransportHealth: transportHealth => {
@@ -3122,6 +3533,9 @@ async function runBrowserlessRunner(config, deps = {}) {
         : '';
       const precheckedSnapshotSafety = bypassPreLoginSafetyReason ? null : preparedSnapshotSafety;
       preparedSnapshotSafety = null;
+      if (!bypassPreLoginSafetyReason) {
+        markSourceIpSnapshotWait('source-ip-snapshot-safety-wait');
+      }
       canary = await readOnlyCanary(config, {
         logStore,
         combatBattleLog,
@@ -3140,6 +3554,7 @@ async function runBrowserlessRunner(config, deps = {}) {
         onSnapshotEdge: progress => logStore.append('runner', `snapshot-edge-${progress.type || 'progress'}`, progress),
         fetchWithTimeout: sourceIpController.fetchWithTimeout,
         openBrowserlessWs: sourceIpController.openBrowserlessWs,
+        onLoginTransportAttempt: markSourceIpLoginAttempt,
         onTransportOpen,
         onTransportClose,
         onTransportHealth: transportHealth => {
@@ -3238,6 +3653,37 @@ async function runBrowserlessRunner(config, deps = {}) {
       mode: nextPendingExit ? 'exit-recovery' : (config.controlMode || 'read-only'),
       canary: canary || null
     };
+    const sourceIpPreflightStateAfterCanary = readBrowserlessStateFile(stateFile);
+    const sourceIpPreflightAfterCanary = normalizeSourceIpPreflight(
+      sourceIpPreflightStateAfterCanary.network?.sourceIpPreflight,
+      Object.keys(sourceIpPreflightStateAfterCanary.network?.sourceIpRisk || {}).length
+    );
+    const sourceIpLoginAttempted = sourceIpPreflightAfterCanary.phase === 'login-attempt';
+    const sourceIpLoginSucceeded = Boolean(canary?.entry?.firstSelf);
+    if (sourceIpLoginSucceeded) {
+      markSourceIpLoginSuccess(canary);
+    }
+    if (runnerResultConfirmedLeave(result)) {
+      clearSourceIpLifecycle({
+        sourceIpPreflight: {
+          ...sourceIpPreflightAfterCanary,
+          phase: 'consumed',
+          reason: 'source-ip-lifecycle-consumed-after-leave',
+          completedAt: new Date(now()).toISOString(),
+          deferredForNextLoginPoint: false,
+          reuseWithoutRetest: false,
+          nextRetryAt: ''
+        },
+        reason: 'source-ip-lifecycle-consumed-after-leave'
+      });
+    } else if (!sourceIpLoginSucceeded &&
+      sourceIpLoginAttempted
+      && !nextPendingExit
+      && !canary?.recovery?.exitRecovery
+      && canary?.snapshotSafety?.ok !== false
+    ) {
+      markSourceIpLoginFailure(canary?.error || 'source-ip-login-failed', canary);
+    }
     const finalDecisionPatch = canary?.decisions?.last ? decisionStatePatch(canary.decisions.last) : {};
     const safetyEvents = [canary?.safety?.event, canary?.safety?.leaveFailure]
       .filter(Boolean)
@@ -3655,9 +4101,481 @@ async function runComplexCombatMainThreadBudgetSelfTest(tmp) {
   }
 }
 
+async function runSourceIpPreflightRunnerIntegrationSelfTest(tmp) {
+  const buildConfig = (name, options = {}) => {
+    const dir = path.join(tmp, `source-ip-runner-${name}`);
+    const argv = [
+      ...(options.once === false ? [] : ['--once']),
+      '--live',
+      '--data-dir', dir,
+      '--loop-delay-ms', '1000',
+      '--user-id', '7',
+      '--session-token', 'source-ip-runner-self-test-token',
+      '--login-point-x', '1',
+      '--login-point-y', '2',
+      '--login-point-hp', '100',
+      '--source-ip', '10.0.0.250',
+      '--source-ips', '10.0.0.250,10.0.0.251,10.0.0.252,10.0.0.253'
+    ];
+    return parseBrowserlessRunnerArgs(argv, {});
+  };
+  const successfulCanary = (nowMs, options, runId) => {
+    const self = { userId: 7, name: 'self', x: 1, y: 2, hp: 100, drop: 20 };
+    options.onLoginTransportAttempt?.();
+    options.onDecision?.({
+      at: new Date(nowMs).toISOString(),
+      input: {
+        self,
+        stamina: { stamina1dRemainingMilli: 20000000, stamina1dLimitMilli: 20000000 },
+        selfKillEvidence: []
+      }
+    });
+    return {
+      ok: true,
+      runId,
+      completedAt: new Date(nowMs).toISOString(),
+      snapshotSafety: { ok: true, reason: 'safe', satisfied: true },
+      entry: { firstSelf: { user_id: 7, x: 1, y: 2, hp: 100 } },
+      state: { realtime: { self } }
+    };
+  };
+  const baseDeps = {
+    startStatusServer: false,
+    disableBackgroundIo: true
+  };
+
+  const immediate = await (async () => {
+    const config = buildConfig('immediate');
+    let nowMs = Date.UTC(2026, 7, 2, 1, 0, 0);
+    let monotonicMs = 0;
+    const order = [];
+    let canarySourceIp = '';
+    let canarySourceIps = [];
+    let bypassReason = '';
+    const result = await runBrowserlessRunner(config, {
+      ...baseDeps,
+      now: () => nowMs,
+      monotonicNow: () => monotonicMs,
+      discoverSourceIps: () => ['10.0.0.12', '10.0.0.10', '10.0.0.9', '10.0.0.11'],
+      sourceIpPreflightRequest: async (_origin, ip) => {
+        order.push(ip);
+        nowMs += 100;
+        monotonicMs += 100;
+        return { status: 200 };
+      },
+      runReadOnlyOnce: async (runtimeConfig, options) => {
+        order.push('canary');
+        canarySourceIp = runtimeConfig.sourceIp;
+        canarySourceIps = runtimeConfig.sourceIps.slice();
+        bypassReason = options.bypassPreLoginSafetyReason || '';
+        return successfulCanary(nowMs, options, 'source-ip-immediate-success');
+      }
+    });
+    const state = readBrowserlessStateFile(stateFilePath(config));
+    const logFile = path.join(config.logDir, browserlessDayKey(nowMs), 'runner.jsonl');
+    const logText = fs.existsSync(logFile) ? fs.readFileSync(logFile, 'utf8') : '';
+    const logSafe = Boolean(
+      logText
+        && !logText.includes('source-ip-runner-self-test-token')
+        && !/\?(?:[^\s"']*token|session|authorization|cookie)/i.test(logText)
+    );
+    return {
+      ok: Boolean(
+        result.ok
+          && JSON.stringify(order) === JSON.stringify(['10.0.0.9', '10.0.0.10', '10.0.0.11', 'canary'])
+          && canarySourceIp === '10.0.0.9'
+          && JSON.stringify(canarySourceIps) === JSON.stringify(['10.0.0.9', '10.0.0.10', '10.0.0.11'])
+          && JSON.stringify(state.network.lifecycleSourceIps) === JSON.stringify(canarySourceIps)
+          && state.network.sourceIpPreflight.phase === 'active'
+          && bypassReason === 'daily-first-login-invulnerability'
+          && logSafe
+      ),
+      order,
+      sourceIp: canarySourceIp,
+      sourceIps: canarySourceIps,
+      phase: state.network.sourceIpPreflight.phase,
+      bypassReason,
+      logSafe
+    };
+  })();
+
+  const deferredRestartReuse = await (async () => {
+    const firstConfig = buildConfig('deferred-restart', { once: false });
+    let nowMs = Date.UTC(2026, 7, 2, 2, 0, 0);
+    let monotonicMs = 0;
+    let firstRequestCount = 0;
+    const firstSafety = createBrowserlessSafetyController({ now: () => nowMs });
+    const firstResult = await runBrowserlessRunner(firstConfig, {
+      ...baseDeps,
+      now: () => nowMs,
+      monotonicNow: () => monotonicMs,
+      safetyController: firstSafety,
+      discoverSourceIps: () => ['10.0.0.1', '10.0.0.2', '10.0.0.3'],
+      sourceIpPreflightRequest: async () => {
+        firstRequestCount += 1;
+        nowMs -= 1000;
+        monotonicMs += 4000;
+        return { status: 200 };
+      },
+      sleep: async ms => {
+        nowMs += Math.max(1, Math.floor(ms / 2));
+        firstSafety.requestStop('source-ip-deferred-restart', { source: 'self-test' });
+      },
+      runReadOnlyOnce: async () => {
+        throw new Error('deferred preflight opened canary before the next login point');
+      }
+    });
+    const deferredState = readBrowserlessStateFile(stateFilePath(firstConfig));
+    const deferredIps = deferredState.network.lifecycleSourceIps.slice();
+    let secondRequestCount = 0;
+    let secondDiscoveryCount = 0;
+    let bypassReason = '';
+    let reusedAtBeforeCanary = '';
+    const secondConfig = buildConfig('deferred-restart');
+    const secondResult = await runBrowserlessRunner(secondConfig, {
+      ...baseDeps,
+      now: () => nowMs,
+      monotonicNow: () => monotonicMs,
+      sleep: async ms => { nowMs += ms; },
+      discoverSourceIps: () => {
+        secondDiscoveryCount += 1;
+        return ['10.0.0.99'];
+      },
+      sourceIpPreflightRequest: async () => {
+        secondRequestCount += 1;
+        return { status: 200 };
+      },
+      runReadOnlyOnce: async (_runtimeConfig, options) => {
+        reusedAtBeforeCanary = readBrowserlessStateFile(stateFilePath(secondConfig)).network.sourceIpPreflight.reusedAt || '';
+        bypassReason = options.bypassPreLoginSafetyReason || '';
+        return successfulCanary(nowMs, options, 'source-ip-deferred-reused-success');
+      }
+    });
+    const reusedState = readBrowserlessStateFile(stateFilePath(secondConfig));
+    return {
+      ok: Boolean(
+        firstResult.reason === 'source-ip-deferred-restart'
+          && firstRequestCount === 3
+          && deferredState.network.sourceIpPreflight.phase === 'deferred'
+          && deferredState.network.sourceIpPreflight.elapsedMs > 10000
+          && Date.parse(deferredState.network.sourceIpPreflight.completedAt) < Date.parse(deferredState.network.sourceIpPreflight.startedAt)
+          && deferredIps.length === 3
+          && secondResult.ok
+          && secondRequestCount === 0
+          && secondDiscoveryCount === 0
+          && reusedState.network.sourceIpPreflight.phase === 'active'
+          && reusedAtBeforeCanary
+          && JSON.stringify(reusedState.network.lifecycleSourceIps) === JSON.stringify(deferredIps)
+          && bypassReason === 'daily-first-login-invulnerability'
+      ),
+      firstRequestCount,
+      secondRequestCount,
+      secondDiscoveryCount,
+      deferredPhase: deferredState.network.sourceIpPreflight.phase,
+      deferredElapsedMs: deferredState.network.sourceIpPreflight.elapsedMs,
+      wallClockMovedBackward: Date.parse(deferredState.network.sourceIpPreflight.completedAt) < Date.parse(deferredState.network.sourceIpPreflight.startedAt),
+      reusedPhase: reusedState.network.sourceIpPreflight.phase,
+      reusedAt: reusedAtBeforeCanary,
+      bypassReason
+    };
+  })();
+
+  const snapshotWaitReuse = await (async () => {
+    const config = buildConfig('snapshot-wait', { once: false });
+    let nowMs = Date.UTC(2026, 7, 2, 3, 0, 0);
+    let monotonicMs = 0;
+    let requestCount = 0;
+    let canaryCount = 0;
+    const bypassReasons = [];
+    updateBrowserlessStateFile(stateFilePath(config), {
+      stats: {
+        today: { day: browserlessDayKey(nowMs), sessionCount: 1 },
+        currentSession: { online: false }
+      }
+    }, { updatedAt: new Date(nowMs).toISOString() });
+    const result = await runBrowserlessRunner(config, {
+      ...baseDeps,
+      now: () => nowMs,
+      monotonicNow: () => monotonicMs,
+      discoverSourceIps: () => ['10.0.0.21', '10.0.0.22', '10.0.0.23'],
+      sourceIpPreflightRequest: async () => {
+        requestCount += 1;
+        nowMs += 50;
+        monotonicMs += 50;
+        return { status: 200 };
+      },
+      sleep: async ms => { nowMs += ms; },
+      runReadOnlyOnce: async (_runtimeConfig, options) => {
+        canaryCount += 1;
+        bypassReasons.push(options.bypassPreLoginSafetyReason || '');
+        if (canaryCount === 1) {
+          return {
+            ok: false,
+            runId: 'source-ip-snapshot-wait',
+            completedAt: new Date(nowMs).toISOString(),
+            error: 'snapshot safety not confirmed: active-near-login-point',
+            snapshotSafety: { ok: false, reason: 'active-near-login-point', satisfied: false }
+          };
+        }
+        return {
+          ok: false,
+          runId: 'source-ip-snapshot-reuse-stop',
+          completedAt: new Date(nowMs).toISOString(),
+          error: 'explicit-stop',
+          snapshotSafety: { ok: true, reason: 'safe', satisfied: true },
+          safety: { event: { reason: 'explicit-stop', at: new Date(nowMs).toISOString() } }
+        };
+      }
+    });
+    const state = readBrowserlessStateFile(stateFilePath(config));
+    return {
+      ok: Boolean(
+        result.reason === 'explicit-stop'
+          && requestCount === 3
+          && canaryCount === 2
+          && bypassReasons.every(reason => reason === '')
+          && state.network.lifecycleSourceIps.length === 3
+          && state.network.sourceIpPreflight.reusedAt
+      ),
+      requestCount,
+      canaryCount,
+      bypassReasons,
+      lifecycleCount: state.network.lifecycleSourceIps.length,
+      reusedAt: state.network.sourceIpPreflight.reusedAt
+    };
+  })();
+
+  const loginFailureRetest = await (async () => {
+    const firstConfig = buildConfig('login-failure-retest');
+    let nowMs = Date.UTC(2026, 7, 2, 4, 0, 0);
+    let monotonicMs = 0;
+    let requestCount = 0;
+    const bypassReasons = [];
+    const discover = () => ['10.0.0.31', '10.0.0.32', '10.0.0.33'];
+    const request = async () => {
+      requestCount += 1;
+      nowMs += 50;
+      monotonicMs += 50;
+      return { status: 200 };
+    };
+    await runBrowserlessRunner(firstConfig, {
+      ...baseDeps,
+      now: () => nowMs,
+      monotonicNow: () => monotonicMs,
+      discoverSourceIps: discover,
+      sourceIpPreflightRequest: request,
+      runReadOnlyOnce: async (_runtimeConfig, options) => {
+        bypassReasons.push(options.bypassPreLoginSafetyReason || '');
+        options.onLoginTransportAttempt?.();
+        return {
+          ok: false,
+          runId: 'source-ip-login-failure',
+          completedAt: new Date(nowMs).toISOString(),
+          error: 'websocket connect timeout',
+          snapshotSafety: { ok: true, reason: 'safe', satisfied: true }
+        };
+      }
+    });
+    const failedState = readBrowserlessStateFile(stateFilePath(firstConfig));
+    const secondConfig = buildConfig('login-failure-retest');
+    const secondResult = await runBrowserlessRunner(secondConfig, {
+      ...baseDeps,
+      now: () => nowMs,
+      monotonicNow: () => monotonicMs,
+      discoverSourceIps: discover,
+      sourceIpPreflightRequest: request,
+      runReadOnlyOnce: async (_runtimeConfig, options) => {
+        bypassReasons.push(options.bypassPreLoginSafetyReason || '');
+        return successfulCanary(nowMs, options, 'source-ip-login-retest-success');
+      }
+    });
+    const succeededState = readBrowserlessStateFile(stateFilePath(secondConfig));
+    return {
+      ok: Boolean(
+        failedState.network.lifecycleSourceIps.length === 0
+          && failedState.network.sourceIps.length === 0
+          && failedState.network.sourceIpPreflight.phase === 'login-failed'
+          && failedState.stats.today.sessionCount === 0
+          && requestCount === 6
+          && secondResult.ok
+          && bypassReasons.length === 2
+          && bypassReasons.every(reason => reason === 'daily-first-login-invulnerability')
+          && (succeededState.stats.currentSession.online || succeededState.stats.today.sessionCount === 1)
+      ),
+      requestCount,
+      failedLifecycleCount: failedState.network.lifecycleSourceIps.length,
+      failedSourceIpCount: failedState.network.sourceIps.length,
+      failedSessionCount: failedState.stats.today.sessionCount,
+      succeededSessionCount: succeededState.stats.today.sessionCount,
+      succeededSessionOnline: Boolean(succeededState.stats.currentSession.online),
+      bypassReasons
+    };
+  })();
+
+  const insufficientRestartCooldown = await (async () => {
+    const firstConfig = buildConfig('insufficient-restart', { once: false });
+    let nowMs = Date.UTC(2026, 7, 2, 5, 0, 0);
+    let monotonicMs = 0;
+    let firstRequestCount = 0;
+    const firstSafety = createBrowserlessSafetyController({ now: () => nowMs });
+    await runBrowserlessRunner(firstConfig, {
+      ...baseDeps,
+      now: () => nowMs,
+      monotonicNow: () => monotonicMs,
+      safetyController: firstSafety,
+      discoverSourceIps: () => ['10.0.0.41', '10.0.0.42', '10.0.0.43'],
+      sourceIpPreflightRequest: async (_origin, ip) => {
+        firstRequestCount += 1;
+        nowMs += 100;
+        monotonicMs += 100;
+        return { status: ip === '10.0.0.43' ? 403 : 200 };
+      },
+      sleep: async ms => {
+        nowMs += Math.max(1, Math.floor(ms / 10));
+        firstSafety.requestStop('source-ip-cooldown-restart', { source: 'self-test' });
+      },
+      runReadOnlyOnce: async () => {
+        throw new Error('insufficient preflight opened canary');
+      }
+    });
+    const cooldownState = readBrowserlessStateFile(stateFilePath(firstConfig));
+    const originalDeadline = cooldownState.runner.gameplayDeadline?.until || '';
+    let secondRequestCount = 0;
+    let secondDiscoveryCount = 0;
+    const secondSafety = createBrowserlessSafetyController({ now: () => nowMs });
+    const secondConfig = buildConfig('insufficient-restart', { once: false });
+    const secondResult = await runBrowserlessRunner(secondConfig, {
+      ...baseDeps,
+      now: () => nowMs,
+      monotonicNow: () => monotonicMs,
+      safetyController: secondSafety,
+      discoverSourceIps: () => {
+        secondDiscoveryCount += 1;
+        return ['10.0.0.44', '10.0.0.45', '10.0.0.46'];
+      },
+      sourceIpPreflightRequest: async () => {
+        secondRequestCount += 1;
+        return { status: 200 };
+      },
+      sleep: async ms => {
+        nowMs += Math.max(1, Math.floor(ms / 10));
+        secondSafety.requestStop('source-ip-cooldown-restart-second', { source: 'self-test' });
+      },
+      runReadOnlyOnce: async () => {
+        throw new Error('cooldown restart opened canary');
+      }
+    });
+    const restartedState = readBrowserlessStateFile(stateFilePath(secondConfig));
+    return {
+      ok: Boolean(
+        firstRequestCount === 3
+          && cooldownState.network.sourceIpPreflight.phase === 'insufficient'
+          && cooldownState.network.sourceIpPreflight.availableCount === 2
+          && cooldownState.network.lifecycleSourceIps.length === 0
+          && originalDeadline
+          && secondResult.reason === 'source-ip-cooldown-restart-second'
+          && secondRequestCount === 0
+          && secondDiscoveryCount === 0
+          && restartedState.runner.gameplayDeadline?.until === originalDeadline
+      ),
+      firstRequestCount,
+      secondRequestCount,
+      secondDiscoveryCount,
+      availableCount: cooldownState.network.sourceIpPreflight.availableCount,
+      originalDeadline,
+      restartedDeadline: restartedState.runner.gameplayDeadline?.until || ''
+    };
+  })();
+
+  const genericFailureGate = await (async () => {
+    const config = buildConfig('generic-failure');
+    const nowMs = Date.UTC(2026, 7, 2, 6, 0, 0);
+    let canaryCount = 0;
+    const result = await runBrowserlessRunner(config, {
+      ...baseDeps,
+      now: () => nowMs,
+      discoverSourceIps: () => {
+        throw new Error('synthetic interface discovery failure');
+      },
+      runReadOnlyOnce: async () => {
+        canaryCount += 1;
+        return { ok: true };
+      }
+    });
+    const state = readBrowserlessStateFile(stateFilePath(config));
+    return {
+      ok: Boolean(
+        !result.ok
+          && result.reason === 'source-ip-preflight-error'
+          && canaryCount === 0
+          && state.network.lifecycleSourceIps.length === 0
+          && state.network.sourceIpPreflight.phase === 'error'
+      ),
+      reason: result.reason,
+      canaryCount,
+      lifecycleCount: state.network.lifecycleSourceIps.length,
+      phase: state.network.sourceIpPreflight.phase
+    };
+  })();
+
+  const confirmedLeaveClears = await (async () => {
+    const config = buildConfig('confirmed-leave');
+    let nowMs = Date.UTC(2026, 7, 2, 7, 0, 0);
+    let monotonicMs = 0;
+    const result = await runBrowserlessRunner(config, {
+      ...baseDeps,
+      now: () => nowMs,
+      monotonicNow: () => monotonicMs,
+      discoverSourceIps: () => ['10.0.0.51', '10.0.0.52', '10.0.0.53'],
+      sourceIpPreflightRequest: async () => {
+        nowMs += 50;
+        monotonicMs += 50;
+        return { status: 200 };
+      },
+      runReadOnlyOnce: async (_runtimeConfig, options) => ({
+        ...successfulCanary(nowMs, options, 'source-ip-confirmed-leave'),
+        leave: { ok: true, attempts: [{ ok: true, status: 200 }] }
+      })
+    });
+    const state = readBrowserlessStateFile(stateFilePath(config));
+    return {
+      ok: Boolean(
+        result.ok
+          && state.network.lifecycleSourceIps.length === 0
+          && state.network.sourceIps.length === 0
+          && state.network.sourceIpPreflight.phase === 'consumed'
+      ),
+      lifecycleCount: state.network.lifecycleSourceIps.length,
+      sourceIpCount: state.network.sourceIps.length,
+      phase: state.network.sourceIpPreflight.phase
+    };
+  })();
+
+  return {
+    ok: Boolean(
+      immediate.ok
+        && deferredRestartReuse.ok
+        && snapshotWaitReuse.ok
+        && loginFailureRetest.ok
+        && insufficientRestartCooldown.ok
+        && genericFailureGate.ok
+        && confirmedLeaveClears.ok
+    ),
+    immediate,
+    deferredRestartReuse,
+    snapshotWaitReuse,
+    loginFailureRetest,
+    insufficientRestartCooldown,
+    genericFailureGate,
+    confirmedLeaveClears
+  };
+}
+
 async function runBrowserlessRunnerSelfTest() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'grasp-rat-browserless-runner-'));
   try {
+    const sourceIpPreflight = await runSourceIpPreflightSelfTest();
+    const sourceIpPreflightRunner = await runSourceIpPreflightRunnerIntegrationSelfTest(tmp);
     const establishedCombatLootPriorityTest = (() => {
       const combat = {
         target: {
@@ -3767,6 +4685,7 @@ async function runBrowserlessRunnerSelfTest() {
     const liveRun = await runBrowserlessRunner(liveConfig, {
       now: () => Date.UTC(2026, 6, 8, 1, 1, 0),
       disableBackgroundIo: true,
+      disableSourceIpPreflight: true,
       runReadOnlyOnce: async () => ({ ok: true, frames: 0, fake: true })
     });
     const runnerResultSummary = summarizeBrowserlessRunnerResult({
@@ -5343,6 +6262,9 @@ async function runBrowserlessRunnerSelfTest() {
           && pageHtml.indexOf('id="mapPanel"') < pageHtml.indexOf('id="nearbyGrid"')
           && pageHtml.includes('MAP_STALE_MS = 15000')
           && pageHtml.includes('MAP_MOVE_ANIMATION_MS = 260')
+          && pageHtml.includes('const sourceIpDeferredDetailText = status => dailyFirstLoginExempt(status)')
+          && pageHtml.includes('每日首次登录豁免仍有效，届时直接使用主 IP 登录')
+          && pageHtml.includes('先使用主 IP 做快照安全检查')
           && pageHtml.includes('function startMapMarkerAnimation(scene, markers, animate = true)')
           && pageHtml.includes("mapKey: mapMarkerKey('coin', item?.[0])")
           && pageHtml.includes("mapKey: mapMarkerKey('player', item?.[9], name)")
@@ -5442,6 +6364,8 @@ async function runBrowserlessRunnerSelfTest() {
     return {
       ok: Boolean(
         dryRun.ok
+        && sourceIpPreflight.ok
+        && sourceIpPreflightRunner.ok
         && establishedCombatLootPriorityTest.ok
         && transportHealth.ok
         && textFrameParsing.ok
@@ -5505,6 +6429,8 @@ async function runBrowserlessRunnerSelfTest() {
         && complexCombatMainThreadBudget.canaryOk
       ),
       establishedCombatLootPriority: establishedCombatLootPriorityTest,
+      sourceIpPreflight,
+      sourceIpPreflightRunner,
       transportHealth,
       textFrameParsing,
       dryRun,
@@ -5577,6 +6503,8 @@ module.exports = {
   isFirstBrowserlessLoginOfDay,
   learnedLoginPointFromCanary,
   preLoginSafetyLeadMs,
+  sourceIpPreflightAction,
+  sourceIpPreflightCanReuse,
   snapshotSafetyAllowsImmediateResume,
   persistedReconnectDelayPlan,
   preserveOnlineSessionForLoopWait,

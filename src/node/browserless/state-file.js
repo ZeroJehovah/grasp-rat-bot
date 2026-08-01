@@ -3,6 +3,11 @@
 const fs = require('fs');
 const path = require('path');
 const { redactStructuredSecrets } = require('./session-client');
+const {
+  normalizeSourceIpPreflight,
+  normalizeSourceIpRisk,
+  uniqueIpv4
+} = require('./source-ip-preflight');
 
 const SCHEMA_VERSION = 1;
 const KILL_ACCOUNTING_VERSION = 3;
@@ -74,6 +79,11 @@ function defaultBrowserlessState() {
     network: {
       sourceIp: '',
       sourceIps: [],
+      sourceIpRisk: {},
+      sourceIpPreflight: null,
+      lifecycleSourceIps: [],
+      lifecycleSourceIpIndex: 0,
+      lifecyclePreparedAt: '',
       lastSelectedAt: '',
       lastSelectionReason: '',
       transportHealth: null
@@ -170,6 +180,8 @@ function shouldReplaceStateObject(pathParts) {
     || pathKey === 'current.action'
     || pathKey === 'current.decision'
     || pathKey === 'current.decisionState'
+    || pathKey === 'network.sourceIpRisk'
+    || pathKey === 'network.sourceIpPreflight'
     || pathKey === 'network.transportHealth'
     || pathKey === 'lastKnown.self'
     || pathKey === 'lastKnown.stamina';
@@ -272,6 +284,19 @@ function normalizeBrowserlessState(state, file = '') {
   normalized.network.sourceIps = Array.isArray(normalized.network.sourceIps)
     ? normalized.network.sourceIps.map(item => String(item || '').trim()).filter(Boolean)
     : [];
+  normalized.network.sourceIpRisk = normalizeSourceIpRisk(normalized.network.sourceIpRisk);
+  normalized.network.sourceIpPreflight = normalizeSourceIpPreflight(
+    normalized.network.sourceIpPreflight,
+    Object.keys(normalized.network.sourceIpRisk).length
+  );
+  normalized.network.lifecycleSourceIps = uniqueIpv4(normalized.network.lifecycleSourceIps).slice(0, 3);
+  normalized.network.lifecycleSourceIpIndex = Math.min(
+    Math.max(0, Math.round(Number(normalized.network.lifecycleSourceIpIndex || 0))),
+    Math.max(0, normalized.network.lifecycleSourceIps.length - 1)
+  );
+  normalized.network.lifecyclePreparedAt = Number.isFinite(Date.parse(normalized.network.lifecyclePreparedAt || ''))
+    ? String(normalized.network.lifecyclePreparedAt)
+    : '';
   normalized.network.transportHealth = normalized.network.transportHealth
     && typeof normalized.network.transportHealth === 'object'
     ? cloneJson(normalized.network.transportHealth)
@@ -339,6 +364,43 @@ function compactNumber(value) {
   if (value === null || value === undefined || value === '') return null;
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
+}
+
+function sourceIpRiskCount(network = {}) {
+  const tableCount = Object.keys(normalizeSourceIpRisk(network.sourceIpRisk)).length;
+  const projectedCount = compactNumber(network.sourceIpRiskCount);
+  return Math.max(tableCount, projectedCount === null ? 0 : Math.max(0, Math.round(projectedCount)));
+}
+
+function compactSourceIpPreflight(network = {}) {
+  const riskCount = sourceIpRiskCount(network);
+  const preflight = normalizeSourceIpPreflight(network.sourceIpPreflight, riskCount);
+  return {
+    phase: compactString(preflight.phase, 48),
+    reason: compactString(preflight.reason, 120),
+    queuePhase: compactString(preflight.queuePhase, 32),
+    startedAt: compactString(preflight.startedAt, 48),
+    completedAt: compactString(preflight.completedAt, 48),
+    elapsedMs: compactNumber(preflight.elapsedMs),
+    discoveredCount: compactNumber(preflight.discoveredCount),
+    ordinaryQueueCount: compactNumber(preflight.ordinaryQueueCount),
+    riskQueueCount: compactNumber(preflight.riskQueueCount),
+    testedCount: compactNumber(preflight.testedCount),
+    requestCount: compactNumber(preflight.requestCount),
+    currentIp: compactString(preflight.currentIp, 48),
+    currentAttempt: compactNumber(preflight.currentAttempt),
+    lastStatus: compactNumber(preflight.lastStatus),
+    lastErrorCategory: compactString(preflight.lastErrorCategory, 48),
+    availableIps: uniqueIpv4(preflight.availableIps).slice(0, 3),
+    availableCount: compactNumber(preflight.availableCount),
+    requiredCount: 3,
+    riskCount: compactNumber(riskCount),
+    nextRetryAt: compactString(preflight.nextRetryAt, 48),
+    deferredForNextLoginPoint: Boolean(preflight.deferredForNextLoginPoint),
+    deferredAt: compactString(preflight.deferredAt, 48),
+    reuseWithoutRetest: Boolean(preflight.reuseWithoutRetest),
+    reusedAt: compactString(preflight.reusedAt, 48)
+  };
 }
 
 function compactBoolean(value) {
@@ -1230,6 +1292,7 @@ function compactBrowserlessStats(normalized, game, action, options = {}, lastKno
     },
     today: {
       day: stats.today.day || browserlessStatsDayKey(nowMs),
+      sessionCount: Math.max(0, Math.round(Number(stats.today.sessionCount || 0))),
       initialDrop: compactNumber(stats.today.initialDrop),
       maxDrop: compactNumber(stats.today.maxDrop),
       latestDrop: compactNumber(stats.today.latestDrop),
@@ -2983,7 +3046,18 @@ function browserlessCompactStatusSource(state = {}) {
     },
     lastKnown: state.lastKnown || {},
     recentExits: Array.isArray(state.recentExits) ? state.recentExits : [],
-    network: state.network || {},
+    network: {
+      sourceIp: compactString(state.network?.sourceIp, 48),
+      sourceIps: uniqueIpv4(state.network?.sourceIps).slice(0, 3),
+      lifecycleSourceIps: uniqueIpv4(state.network?.lifecycleSourceIps).slice(0, 3),
+      lifecycleSourceIpIndex: compactNumber(state.network?.lifecycleSourceIpIndex),
+      lifecyclePreparedAt: compactString(state.network?.lifecyclePreparedAt, 48),
+      sourceIpRiskCount: sourceIpRiskCount(state.network || {}),
+      sourceIpPreflight: compactSourceIpPreflight(state.network || {}),
+      lastSelectedAt: compactString(state.network?.lastSelectedAt, 48),
+      lastSelectionReason: compactString(state.network?.lastSelectionReason, 120),
+      transportHealth: compactTransportHealth(state.network?.transportHealth)
+    },
     stats: state.stats || {},
     logs: { stateFile: state.logs?.stateFile || '' },
     highDropPlayers: compactHighDropPlayers(state.highDropPlayers),
@@ -3021,7 +3095,10 @@ function buildCompactBrowserlessStatus(state, config = {}) {
   const loginPoint = compactPoint(normalized.loginPointSafety?.point) || loginPointSafetyDetail?.point || null;
   const lastKnown = compactLastKnown(normalized);
   const sourceIp = normalized.network.sourceIp || '';
-  const sourceIps = Array.isArray(normalized.network.sourceIps) ? normalized.network.sourceIps : [];
+  const lifecycleSourceIps = uniqueIpv4(normalized.network.lifecycleSourceIps).slice(0, 3);
+  const sourceIps = lifecycleSourceIps.length
+    ? lifecycleSourceIps
+    : (Array.isArray(normalized.network.sourceIps) ? normalized.network.sourceIps.slice(0, 3) : []);
   const sourceIpIndex = sourceIp ? sourceIps.findIndex(item => item === sourceIp) + 1 : 0;
   const recentExit = compactExit(recentActualExit);
   const displayCombat = !game.inGame && recentExit?.battle?.target
@@ -3084,6 +3161,11 @@ function buildCompactBrowserlessStatus(state, config = {}) {
       sourceIp,
       sourceIpIndex: sourceIpIndex > 0 ? sourceIpIndex : null,
       sourceIpCount: sourceIps.length,
+      lifecycleSourceIps,
+      lifecycleSourceIpIndex: compactNumber(normalized.network.lifecycleSourceIpIndex),
+      lifecyclePreparedAt: normalized.network.lifecyclePreparedAt || '',
+      sourceIpRiskCount: sourceIpRiskCount(normalized.network),
+      sourceIpPreflight: compactSourceIpPreflight(normalized.network),
       lastSelectedAt: normalized.network.lastSelectedAt || '',
       lastSelectionReason: compactString(normalized.network.lastSelectionReason, 120),
       transportHealth: compactTransportHealth(normalized.network.transportHealth)
@@ -3136,6 +3218,7 @@ module.exports = {
   browserlessCompactStatusSource,
   buildCompactBrowserlessStatus,
   buildPublicBrowserlessStatus,
+  compactSourceIpPreflight,
   defaultBrowserlessState,
   loginPointFromAnyState,
   mergeLiveState,

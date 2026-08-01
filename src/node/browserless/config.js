@@ -110,6 +110,7 @@ const DEFAULTS = {
   wsTraceMaxPayloadChars: 0,
   sourceIp: '',
   sourceIps: [],
+  sourceIpInterface: 'enp0s6',
   loginPointX: null,
   loginPointY: null,
   loginPointHp: null,
@@ -286,6 +287,7 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
     wsTraceMaxPayloadChars: numberEnv(env.GRASP_RAT_BROWSERLESS_WS_TRACE_MAX_PAYLOAD_CHARS, DEFAULTS.wsTraceMaxPayloadChars),
     sourceIp: env.GRASP_RAT_BROWSERLESS_SOURCE_IP || DEFAULTS.sourceIp,
     sourceIps: listEnv(env.GRASP_RAT_BROWSERLESS_SOURCE_IPS, DEFAULTS.sourceIps),
+    sourceIpInterface: env.GRASP_RAT_BROWSERLESS_SOURCE_IP_INTERFACE || DEFAULTS.sourceIpInterface,
     userId: numberEnv(env.GRASP_RAT_BROWSERLESS_USER_ID, 0),
     sessionToken: env.GRASP_RAT_BROWSERLESS_SESSION_TOKEN || '',
     loginPointX: numberEnv(env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_X, DEFAULTS.loginPointX),
@@ -528,6 +530,8 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
       config.sourceIp = argv[++i] || '';
     } else if (arg === '--source-ips') {
       config.sourceIps = listEnv(argv[++i] || '', []);
+    } else if (arg === '--source-ip-interface') {
+      config.sourceIpInterface = String(argv[++i] || config.sourceIpInterface).trim() || config.sourceIpInterface;
     } else if (arg === '--login-point-x') {
       config.loginPointX = numberEnv(argv[++i], config.loginPointX);
     } else if (arg === '--login-point-y') {
@@ -554,6 +558,9 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
   }
   if (!['read-only', 'movement-only', 'non-combat-profit', 'profit-live', 'combat-dry-run', 'combat-live'].includes(String(config.controlMode || ''))) {
     throw new Error(`unsupported control mode: ${config.controlMode}`);
+  }
+  if (String(config.sourceIpInterface || '') !== DEFAULTS.sourceIpInterface) {
+    throw new Error(`unsupported source IP interface: ${config.sourceIpInterface}; expected ${DEFAULTS.sourceIpInterface}`);
   }
   config.readOnly = config.controlMode === 'read-only';
   config.dataDir = path.resolve(config.dataDir);
@@ -662,7 +669,8 @@ function usage() {
     '  --ws-trace-summary-only  Log WebSocket frame summaries without decoded payloads',
     '  --ws-trace-max-payload-chars <n>  Truncate decoded WS payload JSON; 0 means full payload',
     '  --source-ip <ip>        Bind browserless HTTP/WS outbound sockets to this local source IP',
-    '  --source-ips <list>     Local source IP candidates; the first selected IP is used for all requests',
+    '  --source-ips <list>     Legacy compatibility pool; new login candidates come from the enp0s6 interface',
+    '  --source-ip-interface <name>  Fixed login-preflight interface; only enp0s6 is accepted',
     '  --login-point-x <cm>      Manual login point x for canary safety',
     '  --login-point-y <cm>      Manual login point y for canary safety',
     '  --login-point-hp <hp>     Manual login point HP context for canary safety',

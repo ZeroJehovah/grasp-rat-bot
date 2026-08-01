@@ -3189,6 +3189,17 @@ async function runReadOnlyCanary(config, options = {}) {
         confirmedLeaveActiveJoin: null,
         activeJoinAudit: null
       });
+      if (typeof options.onLoginTransportAttempt === 'function') {
+        try {
+          options.onLoginTransportAttempt({
+            sourceIp: config.sourceIp || '',
+            connectGeneration,
+            runId
+          });
+        } catch (err) {
+          log('canary-source-ip-login-attempt-state-error', { error: errorMessage(err) });
+        }
+      }
       const openedTransport = await open({
       gameOrigin: config.gameOrigin,
       wsPath: config.wsPath,

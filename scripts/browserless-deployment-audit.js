@@ -2,6 +2,7 @@
 'use strict';
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const {
@@ -133,6 +134,8 @@ function addEnvChecks(checks, env, envMode, persistedState = {}) {
   const profile = env.GRASP_RAT_BROWSERLESS_CANARY_PROFILE || '';
   const control = env.GRASP_RAT_BROWSERLESS_CONTROL_MODE || '';
   const dryRun = env.GRASP_RAT_BROWSERLESS_DRY_RUN || '';
+  const sourceIpInterface = env.GRASP_RAT_BROWSERLESS_SOURCE_IP_INTERFACE || 'enp0s6';
+  const legacySourceIpPool = env.GRASP_RAT_BROWSERLESS_SOURCE_IPS || '';
   const stateSession = sessionFromAnyState(persistedState);
   const stateLoginPoint = loginPointFromAnyState(persistedState);
   const profilePresent = Boolean(profile);
@@ -145,6 +148,14 @@ function addEnvChecks(checks, env, envMode, persistedState = {}) {
 
   addCheck(checks, 'env-mode', VALID_ENV_MODES.has(envMode), `envMode=${envMode}`);
   if (!VALID_ENV_MODES.has(envMode)) return;
+
+  addCheck(checks, 'env-source-ip-interface', sourceIpInterface === 'enp0s6', `GRASP_RAT_BROWSERLESS_SOURCE_IP_INTERFACE=${sourceIpInterface}`);
+  addCheck(
+    checks,
+    'env-source-ip-static-pool-removed',
+    !legacySourceIpPool,
+    `GRASP_RAT_BROWSERLESS_SOURCE_IPS=${legacySourceIpPool ? '[legacy pool still configured]' : 'absent'}`
+  );
 
   if (envMode === 'safe') {
     addCheck(checks, 'env-safe-dry-run', dryRun === 'true', `GRASP_RAT_BROWSERLESS_DRY_RUN=${dryRun || 'missing'}`);
@@ -178,6 +189,9 @@ function auditDeployment(options = {}, deps = {}) {
   const envPath = path.resolve(String(options.envPath || DEFAULT_ENV_PATH));
   const envMode = String(options.envMode || 'safe').trim() || 'safe';
   const runCommand = deps.runCommand || commandRunner;
+  const networkInterfaces = typeof deps.networkInterfaces === 'function'
+    ? deps.networkInterfaces
+    : os.networkInterfaces;
   const checks = [];
 
   const unit = readText(unitPath);
@@ -196,6 +210,7 @@ function auditDeployment(options = {}, deps = {}) {
   addCheck(checks, 'service-name', serviceName === DEFAULT_SERVICE_NAME, `serviceName=${serviceName}`);
   addCheck(checks, 'working-directory', Boolean(workingDirectory && fs.existsSync(workingDirectory)), `WorkingDirectory=${workingDirectory || 'missing'}`);
   addCheck(checks, 'runner-entrypoint', Boolean(workingDirectory && fs.existsSync(path.join(workingDirectory, 'scripts', 'browserless-runner.js'))), `entrypoint=${workingDirectory ? path.join(workingDirectory, 'scripts', 'browserless-runner.js') : 'missing'}`);
+  addCheck(checks, 'source-ip-preflight-module', Boolean(workingDirectory && fs.existsSync(path.join(workingDirectory, 'src', 'node', 'browserless', 'source-ip-preflight.js'))), `module=${workingDirectory ? path.join(workingDirectory, 'src', 'node', 'browserless', 'source-ip-preflight.js') : 'missing'}`);
   addCheck(checks, 'environment-file-reference', environmentFile === envPath, `EnvironmentFile=${environmentFile || 'missing'}`);
   addCheck(checks, 'exec-start', execStart.includes('node scripts/browserless-runner.js'), `ExecStart=${execStart || 'missing'}`);
   addCheck(checks, 'restart-policy', unitValue(unit.text, 'Restart') === 'on-failure', `Restart=${unitValue(unit.text, 'Restart') || 'missing'}`);
@@ -206,6 +221,13 @@ function auditDeployment(options = {}, deps = {}) {
   addCheck(checks, 'env-log-dir', env.GRASP_RAT_BROWSERLESS_LOG_DIR === logDir, `GRASP_RAT_BROWSERLESS_LOG_DIR=${env.GRASP_RAT_BROWSERLESS_LOG_DIR || 'missing'}`);
   const persistedState = readBrowserlessStateFile(path.join(dataDir, 'state.json'));
   addEnvChecks(checks, env, envMode, persistedState);
+  if (envMode === 'live' || envMode === 'any') {
+    const interfaces = networkInterfaces() || {};
+    const addresses = Array.isArray(interfaces.enp0s6)
+      ? interfaces.enp0s6.filter(item => (item?.family === 'IPv4' || item?.family === 4) && item?.address)
+      : [];
+    addCheck(checks, 'source-ip-interface-addresses', addresses.length >= 3, `enp0s6 IPv4 count=${addresses.length}`);
+  }
   addCheck(checks, 'env-web-token', Boolean(env.GRASP_RAT_BROWSERLESS_WEB_TOKEN && env.GRASP_RAT_BROWSERLESS_WEB_TOKEN !== 'replace-with-a-long-random-token'), 'web token is present and not the example placeholder');
 
   const dataAccess = accessOk(dataDir);
