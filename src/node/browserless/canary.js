@@ -3400,7 +3400,7 @@ async function runReadOnlyCanary(config, options = {}) {
               && Number.isFinite(Number(currentSelf.x))
               && Number.isFinite(Number(currentSelf.y))
             ) {
-              result.entry.firstSelf = {
+              const firstSelf = {
                 userId: Number.isFinite(Number(currentSelf.user_id ?? currentSelf.userId)) ? Number(currentSelf.user_id ?? currentSelf.userId) : null,
                 entityId: Number.isFinite(Number(currentSelf.entity_id ?? currentSelf.entityId)) ? Number(currentSelf.entity_id ?? currentSelf.entityId) : null,
                 name: currentSelf.name || '',
@@ -3408,8 +3408,24 @@ async function runReadOnlyCanary(config, options = {}) {
                 y: Number(currentSelf.y),
                 hp: Number.isFinite(Number(currentSelf.hp)) ? Number(currentSelf.hp) : null
               };
-              result.entry.firstSelfAt = new Date(atMs).toISOString();
-              result.entry.firstSelfTick = currentState?.realtime?.tick ?? frame.decodedTick ?? null;
+              const firstSelfAt = new Date(atMs).toISOString();
+              const firstSelfTick = currentState?.realtime?.tick ?? frame.decodedTick ?? null;
+              result.entry.firstSelf = firstSelf;
+              result.entry.firstSelfAt = firstSelfAt;
+              result.entry.firstSelfTick = firstSelfTick;
+              if (typeof options.onLoginSuccess === 'function') {
+                try {
+                  options.onLoginSuccess({
+                    runId,
+                    sourceIp: config.sourceIp || '',
+                    firstSelf,
+                    firstSelfAt,
+                    firstSelfTick
+                  });
+                } catch (err) {
+                  log('canary-source-ip-login-success-state-error', { error: errorMessage(err) });
+                }
+              }
             }
             if (exitRecoveryActive && currentSelf && !leavePending) {
               const recoveryEvent = pendingExitRecoveryEvent(recoveryPendingExit, atMs, {

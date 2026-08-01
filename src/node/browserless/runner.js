@@ -2008,6 +2008,11 @@ async function runBrowserlessRunner(config, deps = {}) {
       current.network?.sourceIpPreflight,
       Object.keys(current.network?.sourceIpRisk || {}).length
     );
+    const lifecycleSourceIps = Array.isArray(current.network?.lifecycleSourceIps)
+      ? current.network.lifecycleSourceIps.slice(0, SOURCE_IP_PREFLIGHT_REQUIRED_COUNT)
+      : [];
+    if (lifecycleSourceIps.length !== SOURCE_IP_PREFLIGHT_REQUIRED_COUNT) return false;
+    if (preflight.phase === 'active' && preflight.reason === 'source-ip-lifecycle-active') return false;
     publishSourceIpNetwork({
       sourceIpPreflight: {
         ...preflight,
@@ -2022,8 +2027,9 @@ async function runBrowserlessRunner(config, deps = {}) {
     logStore.append('runner', 'source-ip-login-success', {
       runId: canary?.runId || '',
       sourceIp: current.network.sourceIp || '',
-      lifecycleSourceIps: current.network.lifecycleSourceIps.slice(0, 3)
+      lifecycleSourceIps
     });
+    return true;
   };
 
   const markSourceIpLoginFailure = (reason, canary = null) => {
@@ -3454,6 +3460,7 @@ async function runBrowserlessRunner(config, deps = {}) {
           fetchWithTimeout: sourceIpController.fetchWithTimeout,
           openBrowserlessWs: sourceIpController.openBrowserlessWs,
           onLoginTransportAttempt: markSourceIpLoginAttempt,
+          onLoginSuccess: markSourceIpLoginSuccess,
           onTransportOpen,
           onTransportClose,
           onTransportHealth: transportHealth => {
@@ -3555,6 +3562,7 @@ async function runBrowserlessRunner(config, deps = {}) {
         fetchWithTimeout: sourceIpController.fetchWithTimeout,
         openBrowserlessWs: sourceIpController.openBrowserlessWs,
         onLoginTransportAttempt: markSourceIpLoginAttempt,
+        onLoginSuccess: markSourceIpLoginSuccess,
         onTransportOpen,
         onTransportClose,
         onTransportHealth: transportHealth => {
@@ -4122,6 +4130,13 @@ async function runSourceIpPreflightRunnerIntegrationSelfTest(tmp) {
   const successfulCanary = (nowMs, options, runId) => {
     const self = { userId: 7, name: 'self', x: 1, y: 2, hp: 100, drop: 20 };
     options.onLoginTransportAttempt?.();
+    options.onLoginSuccess?.({
+      runId,
+      sourceIp: '',
+      firstSelf: self,
+      firstSelfAt: new Date(nowMs).toISOString(),
+      firstSelfTick: 1
+    });
     options.onDecision?.({
       at: new Date(nowMs).toISOString(),
       input: {
@@ -4152,6 +4167,7 @@ async function runSourceIpPreflightRunnerIntegrationSelfTest(tmp) {
     let canarySourceIp = '';
     let canarySourceIps = [];
     let bypassReason = '';
+    let phaseBeforeCanaryReturn = '';
     const result = await runBrowserlessRunner(config, {
       ...baseDeps,
       now: () => nowMs,
@@ -4168,7 +4184,9 @@ async function runSourceIpPreflightRunnerIntegrationSelfTest(tmp) {
         canarySourceIp = runtimeConfig.sourceIp;
         canarySourceIps = runtimeConfig.sourceIps.slice();
         bypassReason = options.bypassPreLoginSafetyReason || '';
-        return successfulCanary(nowMs, options, 'source-ip-immediate-success');
+        const canary = successfulCanary(nowMs, options, 'source-ip-immediate-success');
+        phaseBeforeCanaryReturn = readBrowserlessStateFile(stateFilePath(config)).network.sourceIpPreflight.phase;
+        return canary;
       }
     });
     const state = readBrowserlessStateFile(stateFilePath(config));
@@ -4179,6 +4197,7 @@ async function runSourceIpPreflightRunnerIntegrationSelfTest(tmp) {
         && !logText.includes('source-ip-runner-self-test-token')
         && !/\?(?:[^\s"']*token|session|authorization|cookie)/i.test(logText)
     );
+    const loginSuccessLogCount = (logText.match(/"type":"source-ip-login-success"/g) || []).length;
     return {
       ok: Boolean(
         result.ok
@@ -4187,6 +4206,8 @@ async function runSourceIpPreflightRunnerIntegrationSelfTest(tmp) {
           && JSON.stringify(canarySourceIps) === JSON.stringify(['10.0.0.9', '10.0.0.10', '10.0.0.11'])
           && JSON.stringify(state.network.lifecycleSourceIps) === JSON.stringify(canarySourceIps)
           && state.network.sourceIpPreflight.phase === 'active'
+          && phaseBeforeCanaryReturn === 'active'
+          && loginSuccessLogCount === 1
           && bypassReason === 'daily-first-login-invulnerability'
           && logSafe
       ),
@@ -4194,6 +4215,8 @@ async function runSourceIpPreflightRunnerIntegrationSelfTest(tmp) {
       sourceIp: canarySourceIp,
       sourceIps: canarySourceIps,
       phase: state.network.sourceIpPreflight.phase,
+      phaseBeforeCanaryReturn,
+      loginSuccessLogCount,
       bypassReason,
       logSafe
     };

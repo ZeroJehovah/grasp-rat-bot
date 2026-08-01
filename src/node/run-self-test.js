@@ -24140,6 +24140,7 @@ async function runSelfTest() {
         let commandCount = 0;
         let frameGapClearCount = 0;
         const snapshotSources = [];
+        const loginSuccessEvents = [];
         const safetyController = createBrowserlessSafetyController({ now: () => t, frameGapAlertMs: 5000 });
         const clearFrameGapSoftStop = safetyController.clearFrameGapSoftStop.bind(safetyController);
         safetyController.clearFrameGapSoftStop = () => {
@@ -24180,6 +24181,7 @@ async function runSelfTest() {
             loginPointSafety: { point: { x: 100, y: 200, hp: 90, source: 'test' } }
           },
           onSnapshotPayload: (_payload, detail) => snapshotSources.push(detail.source),
+          onLoginSuccess: event => loginSuccessEvents.push({ ...event, observedAtMs: t }),
           fetchImpl: async () => fakeResponseForTest({
             body: {
               type: 'snapshot',
@@ -24217,10 +24219,15 @@ async function runSelfTest() {
           result.state.fallback.coinDrops[0].amount,
           commandCount,
           snapshotSources.join(','),
-          frameGapClearCount
+          frameGapClearCount,
+          loginSuccessEvents.length,
+          loginSuccessEvents[0]?.runId === result.runId,
+          loginSuccessEvents[0]?.firstSelf?.userId,
+          loginSuccessEvents[0]?.firstSelfTick,
+          loginSuccessEvents[0]?.observedAtMs < t
         ].join('|');
       })(),
-      want: 'true|true|2|1|1|2|2|profit-candidate|true|self|2|0|prelogin-http,ws|1'
+      want: 'true|true|2|1|1|2|2|profit-candidate|true|self|2|0|prelogin-http,ws|1|1|true|7|10|true'
     },
     {
       name: 'browserless no-self grace starts at ws open after slow snapshot safety',
