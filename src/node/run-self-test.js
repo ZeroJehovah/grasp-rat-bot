@@ -10985,6 +10985,7 @@ async function runSelfTest() {
           combatAttackRange: 14500,
           browserlessCenterActivityRadiusCm: 100000,
           finalActionArbitrationHoldMs: 0,
+          opportunitySwitchConfirmFrames: 1,
           singleCoinBaitEnabled: false
         });
         const state = (tick, threatVisible) => ({
@@ -11017,7 +11018,10 @@ async function runSelfTest() {
         });
         const first = adapter.decide(state(1, false), { nowMs: 1000 });
         const safety = adapter.decide(state(2, true), { nowMs: 2000 });
-        const after = adapter.decide(state(3, false), { nowMs: 3000 });
+        // The disappeared invulnerable threat is intentionally retained for a
+        // short safety-memory window. Check ordinary target selection after
+        // that window expires so this case remains scoped to center filtering.
+        const after = adapter.decide(state(3, false), { nowMs: 5001 });
         return [
           first.action.target?.userId,
           safety.action.band,
@@ -15665,7 +15669,7 @@ async function runSelfTest() {
           decision.input.dataGaps.includes('center-visible-coin-edge-admitted')
         ].join('|');
       })(),
-      want: 'coin|coin|coin|self-kill-drop|6|snapshot-player-drop|1|8|62|||true|false'
+      want: 'coin|coin|coin|self-kill-drop|6|snapshot-player-drop|1|8|62||||true|false'
     },
     {
       name: 'browserless nearby panel uses all visible players and profit coin route nodes',
@@ -16935,16 +16939,15 @@ async function runSelfTest() {
       name: 'browserless combat hit learning credits confirmed bullet nearest created-tick arrival',
       got: (() => {
         const stateful = {};
-        const confirmed = [
-          {
-            targetId: '8', bullet_id: 101, acceptedAtMs: 1000, createdTick: 100,
-            flightTicks: 20, targetX: 1000, targetY: 0, hypothesis: 'continue'
-          },
-          {
-            targetId: '8', bullet_id: 102, acceptedAtMs: 1100, createdTick: 110,
-            flightTicks: 2, targetX: 1000, targetY: 0, hypothesis: 'stop'
-          }
-        ];
+        const confirmed = [];
+        const firstShot = {
+          targetId: '8', bullet_id: 101, acceptedAtMs: 1000, createdTick: 100,
+          flightTicks: 20, targetX: 1000, targetY: 0, hypothesis: 'continue'
+        };
+        const secondShot = {
+          targetId: '8', bullet_id: 102, acceptedAtMs: 1100, createdTick: 110,
+          flightTicks: 2, targetX: 1000, targetY: 0, hypothesis: 'stop'
+        };
         const stateAt = (tick, hp, shots) => ({
           userId: 7,
           realtime: {
@@ -16956,9 +16959,29 @@ async function runSelfTest() {
             ],
             bullets: []
           },
-          command: { shooting: { confirmedShots: shots } }
+          command: {
+            shooting: {
+              controlGeneration: 'control:hit-learning-test',
+              confirmedShots: shots
+            }
+          }
         });
-        buildBrowserlessCombatDryRun(stateAt(100, 100, confirmed.slice(0, 1)), { nowMs: 1000, decisionState: stateful, combatEnabled: true });
+        buildBrowserlessCombatDryRun(stateAt(100, 100, confirmed), { nowMs: 1000, decisionState: stateful, combatEnabled: true });
+        const generation = {
+          controlGeneration: stateful.combatMetrics.controlGeneration,
+          engagementGeneration: stateful.combatMetrics.engagementGeneration
+        };
+        const confirmationSequenceBaseline = stateful.combatMetrics.confirmationSequenceBaseline;
+        confirmed.push({
+          ...firstShot,
+          ...generation,
+          confirmationSequence: confirmationSequenceBaseline + 1
+        });
+        confirmed.push({
+          ...secondShot,
+          ...generation,
+          confirmationSequence: confirmationSequenceBaseline + 2
+        });
         buildBrowserlessCombatDryRun(stateAt(110, 100, confirmed), { nowMs: 1100, decisionState: stateful, combatEnabled: true });
         const after = buildBrowserlessCombatDryRun(stateAt(112, 97, confirmed), { nowMs: 1200, decisionState: stateful, combatEnabled: true });
         const credited = stateful.combatLearning.recentShots.filter(item => item.credited).map(item => item.bulletId).join(',');
@@ -19683,7 +19706,7 @@ async function runSelfTest() {
         let triggeredReason = '';
         let triggeredAdvisory = false;
         let triggeredShouldExit = false;
-        for (let index = 0; index < 90; index += 1) {
+        for (let index = 0; index < 160; index += 1) {
           const nowMs = 1000 + index * 160;
           const damageSteps = Math.max(0, Math.min(15, index - 38));
           const selfHp = 100 - damageSteps;
@@ -19751,7 +19774,7 @@ async function runSelfTest() {
               entities: [replacementSelf, replacementTarget],
               bullets: []
             }
-          }, { ...options, nowMs: 16000 + index * 160, targetStickMs: 0, combatEngageStickMs: 0 });
+          }, { ...options, nowMs: 28000 + index * 160, targetStickMs: 0, combatEngageStickMs: 0 });
         }
         return [
           firstActiveAt,
@@ -19764,7 +19787,7 @@ async function runSelfTest() {
           stateful.combatTarget.exchangeDegradationSinceAt
         ].join('|');
       })(),
-      want: '9000|11880|2880|no-exit|true|false|9|0'
+      want: '21000|23880|2880|no-exit|true|false|9|0'
     },
     {
       name: 'browserless stale exchange history cannot bypass fresh contact-entry safety',
@@ -28328,7 +28351,7 @@ async function runSelfTest() {
           connectTimeout.delayMs
         ].join('|');
       })(),
-      want: 'true|1234|true|stamina-budget-coin-leave|1800000|true|stamina-exhausted-leave|600000|true|injury-leave|1234|true|pursuit-leave|1234|true|combat-hp-disadvantage-leave|1234|true|ws-closed|1000|true|action-settlement-stalled|1000|true|false|false|true|ws-closed|1000|false|true|true|false|cloudflare-challenge|0||true|ws-auth-blocked-self-present|1000|true|60000|true|in-game-snapshot-safety-retry|1000|true|ws-connect-timeout|1000'
+      want: 'true|1234|true|stamina-budget-coin-leave|1800000|true|stamina-exhausted-leave|600000|true|injury-leave|1234|true|pursuit-leave|1234|true|combat-hp-disadvantage-leave|1234|true|ws-closed|1000|true|action-settlement-stalled|1000|true|false|false|true|ws-closed|1000|false|true|true|false|cloudflare-challenge|0||ws-response|true|ws-auth-blocked-self-present|1000|true|60000|true|in-game-snapshot-safety-retry|1000|true|ws-connect-timeout|1000'
     },
     {
       name: 'browserless runner treats combat stall and low-hp recovery threat as normal confirmed exits',
@@ -28459,7 +28482,7 @@ async function runSelfTest() {
           stored.stats.lastExit.reason
         ].join('|');
       }),
-      want: 'explicit-stop|2|1000|1|2026-07-14T16:17:52.114Z|11000|500|explicit-stop'
+      want: 'explicit-stop|2|10000|1|2026-07-14T16:17:52.114Z|20000|500|explicit-stop'
     },
     {
       name: 'browserless runner preserves stamina exhausted wait after no-self leave',
@@ -32208,7 +32231,7 @@ async function runSelfTest() {
           panelHtml.includes('.transport-metric.muted,.transport-metric.muted .metric-value{color:var(--muted)}')
         ].join('|');
       })(),
-      want: '2026.07.30.1|ok|warn|bad|ok|warn|bad|ok|warn|bad|muted|true|true|true|true|true|true'
+      want: '2026.07.31.1|ok|warn|bad|ok|warn|bad|ok|warn|bad|muted|true|true|true|true|true|true'
     },
     {
       name: 'browserless web panel animates keyed map markers between status refreshes',
@@ -32246,7 +32269,7 @@ async function runSelfTest() {
           /function stopAutoRefresh\(\)\s*\{\s*cancelMapMarkerAnimation\(true\);/.test(panelScript)
         ].join('|');
       })(),
-      want: '2026.07.30.1|coin:0|player:alice||0|0.875|1|97.5|195.0|110|220|true|true|true|true|true|true|true|true|true|true|true'
+      want: '2026.07.31.1|coin:0|player:alice||0|0.875|1|97.5|195.0|110|220|true|true|true|true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless status server adds dynamic whitelist players by name',
@@ -33185,7 +33208,7 @@ async function runSelfTest() {
             < panelScript.indexOf("if (/combat/i.test(text)) return '正在处理打架';")
         ].join('|');
       })(),
-      want: '2026.07.30.1|true|true|true'
+      want: '2026.07.31.1|true|true|true'
     },
     {
       name: 'browserless restart drain wait explains planned service restart',
@@ -33721,7 +33744,7 @@ async function runSelfTest() {
           !panelScript.includes("setRichText('roleTitleMeta', [{ text: '已离线', className: 'muted' }], 'muted');")
         ].join('|');
       })(),
-      want: '2026.07.30.1|true|true|true|true|true|true'
+      want: '2026.07.31.1|true|true|true|true|true|true'
     },
     {
       name: 'browserless runner self-test passes',
@@ -40784,7 +40807,7 @@ async function runSelfTest() {
 	      ].join('|')
 	    },
     {
-      name: 'browserless easy-kill players stay out of recovery combat and HP exits until damage',
+      name: 'browserless easy-kill recovery remains recovery-owned and HP-exit exempt until damage',
       got: (() => {
 	        const state = {
 	          userId: 7,
@@ -40813,7 +40836,7 @@ async function runSelfTest() {
 	        return [
 	          trusted.action.kind,
 	          trusted.action.reason,
-	          trusted.combat.target === null,
+	          trusted.combat.target?.easyKillThreatExempt,
 	          trusted.profit.best?.target?.easyKillThreatExempt,
 	          damaged.action.reason,
 	          damaged.action.combatExit?.rule,
@@ -41705,7 +41728,7 @@ async function runSelfTest() {
 	      want: '34711|true|true|combat-live|34711'
 	    },
 	    {
-	      name: 'browserless combat metrics reset atomically when target identity changes',
+	      name: 'browserless combat metrics reset atomically without inventing execution counts',
 	      got: (() => {
 	        const adapter = createBrowserlessDecisionAdapter({ userId: 28886 });
 	        adapter.patchState({
@@ -41738,15 +41761,15 @@ async function runSelfTest() {
 	            metrics.targetName,
 	            metrics.startedAt,
 	            metrics.startedTick,
-	            metrics.requestedShots,
-	            metrics.actualShots,
+	            metrics.requestedShots === undefined,
+	            metrics.actualShots === undefined,
 	            metrics.actualLastShotTick,
 	            metrics.targetDamage === undefined,
 	            metrics.selfDamage === undefined,
 	            metrics.confirmedHits === undefined
 	          ].join('|');
 	        })(),
-	      want: '34711|xuanze00|5000|10|1|1|10|true|true|true'
+	      want: '34711|xuanze00|5000|10|true|true|10|true|true|true'
 	    },
 	    {
 	      name: 'browserless action adapter approaches known easy active player without profit-layer firing',

@@ -182,11 +182,21 @@ function pendingExitFromCanary(previous, canary, nowMs = Date.now(), options = {
   const leaveFailed = Boolean(leave && leave.ok !== true);
   if (!event?.shouldLeave && !leaveFailed) return normalizePendingExit(previous, nowMs, options);
   const prior = normalizePendingExit(previous, nowMs, options);
-  // A rejected handshake can still make the generic leave fallback fail. It
-  // is not an in-game exit, so it must not start a relogin-blocking chain.
-  if (!prior && isExplicitZeroFrameCanary(canary) && !hasCanaryInGameEvidence(canary)) return null;
   const pending = canary?.safety?.leavePending || null;
   const pendingAttemptId = String(pending?.exitAttemptId || '');
+  const renewedRecoveryChain = Boolean(
+    pending?.recoveredFromExitAttemptId
+      || event?.detail?.exitRecovery === true
+  );
+  // A rejected handshake can still make the generic leave fallback fail. It
+  // is not an in-game exit, so it must not start a relogin-blocking chain.
+  // An expired pending-exit chain is different: its fresh protected leave has
+  // an explicit recovered-from link and must remain persisted even though the
+  // recovery canary intentionally opens no WebSocket frames.
+  if (!prior
+    && isExplicitZeroFrameCanary(canary)
+    && !hasCanaryInGameEvidence(canary)
+    && !renewedRecoveryChain) return null;
   const continuesPriorAttempt = Boolean(
     prior && (!pendingAttemptId || pendingAttemptId === String(prior.exitAttemptId || ''))
   );

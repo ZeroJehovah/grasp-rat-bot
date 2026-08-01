@@ -3026,7 +3026,13 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
       exitEvaluation.exchangeStopLoss
     );
   }
-  let exitDecision = contactEntryOnly ? null : exitEvaluation.exit;
+  // Contact-entry is movement-only and suppresses ordinary engagement exits,
+  // but it must never mask the production emergency HP floor. In particular,
+  // an Easy-kill target can be threat-exempt while healthy without keeping a
+  // role at or below the critical boundary in game.
+  let exitDecision = contactEntryOnly && exitEvaluation.exit?.rule !== 'critical-hp'
+    ? null
+    : exitEvaluation.exit;
   if (!exitDecision && !contactEntryOnly && combatPhase?.stepTimedOut) {
     exitDecision = {
       shouldLeave: true,
