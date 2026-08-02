@@ -2195,6 +2195,9 @@ async function runReadOnlyCanary(config, options = {}) {
     status?.exit?.hostilePressure ? 1 : 0,
     status?.exit?.criticalLatencyBreached ? 1 : 0,
     status?.exit?.criticalLatencyTriggered ? 1 : 0,
+    status?.latency?.critical?.profile || '',
+    status?.latency?.critical?.p90ThresholdMs || 0,
+    status?.latency?.critical?.currentThresholdMs || 0,
     status?.latency?.critical?.currentFrameStreak || 0,
     status?.exit?.latencyBreached ? 1 : 0,
     status?.exit?.latencyTriggered ? 1 : 0,
@@ -2241,7 +2244,9 @@ async function runReadOnlyCanary(config, options = {}) {
     });
     return publishTransportHealth(transportHealthMonitor.assess({
       nowMs: atMs,
-      hostilePressure: pressure.hostilePressure
+      hostilePressure: pressure.hostilePressure,
+      combatActive: activity.combatControl,
+      selfHp: currentState?.realtime?.self?.hp
     }), atMs);
   };
   publishTransportHealth(result.transportHealth, startedAt, { force: true });
