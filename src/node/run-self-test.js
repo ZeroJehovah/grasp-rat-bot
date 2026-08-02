@@ -7256,6 +7256,7 @@ async function runSelfTest() {
         let calls = 0;
         const ticks = [100, 100, 101];
         const progress = [];
+        const published = [];
         const result = await runPreLoginSnapshotSafety({
           gameOrigin: 'https://example.test',
           snapshotPath: '/snapshot',
@@ -7272,6 +7273,7 @@ async function runSelfTest() {
           now: () => nowMs,
           sleep: async ms => { nowMs += ms; },
           onSnapshotEdge: value => progress.push(value.type),
+          onSnapshotSafety: value => published.push(value),
           fetchWithTimeout: async () => {
             const tick = ticks[calls++];
             return fakeResponseForTest({
@@ -7288,10 +7290,141 @@ async function runSelfTest() {
           result.edge.safetyEvaluationCount,
           result.edge.baseline.tick,
           result.edge.detected.tick,
+          published.length,
+          published[0]?.reason,
           progress.join(',')
         ].join('|');
       })(),
-      want: 'true|safe|3|3|1|100|101|baseline,probe,detected'
+      want: 'true|safe|3|3|1|100|101|1|safe|baseline,probe,detected'
+    },
+    {
+      name: 'browserless snapshot edge publishes unsafe checks and retains the single-blocker hold',
+      got: (async () => {
+        let nowMs = Date.parse('2026-08-02T02:30:00.000Z');
+        let tick = 100;
+        let calls = 0;
+        let state = {
+          loginPointSafety: {
+            point: { x: 0, y: 0, hp: 100, maxHp: 100, source: 'test' }
+          }
+        };
+        const published = [];
+        const config = {
+          gameOrigin: 'https://example.test',
+          snapshotPath: '/snapshot',
+          userId: 7,
+          sessionToken: 'secret',
+          httpTimeoutMs: 1000,
+          snapshotEdgeEnabled: true,
+          snapshotEdgeIntervalMs: 30000,
+          snapshotEdgeMaxWaitMs: 60000,
+          loginPointSingleBlockerBypassMs: 3600000
+        };
+        const run = async () => runPreLoginSnapshotSafety(config, state, {
+          now: () => nowMs,
+          sleep: async ms => { nowMs += ms; },
+          damagePlayerTracker: {
+            status: () => ({ players: [{ userId: 8, name: 'known-damager' }] })
+          },
+          onSnapshotSafety: value => {
+            published.push(value);
+            state = {
+              ...state,
+              loginPointSafety: {
+                ...state.loginPointSafety,
+                ok: value.ok,
+                reason: value.reason,
+                checkedAt: value.checkedAt,
+                detail: value.response?.summary?.safety || {}
+              }
+            };
+          },
+          fetchWithTimeout: async () => {
+            calls += 1;
+            return fakeResponseForTest({
+              status: 200,
+              body: {
+                type: 'snapshot',
+                tick: tick++,
+                entities: [{
+                  user_id: 8,
+                  name: 'known-damager',
+                  x: 100,
+                  y: 0,
+                  hp: 100,
+                  max_hp: 100,
+                  current_join_mode: 'Passive',
+                  life: 'Alive',
+                  stamina_5s_remaining_milli: 10000,
+                  stamina_5s_limit_milli: 10000
+                }],
+                bullets: [],
+                coin_drops: [],
+                messages: []
+              }
+            });
+          }
+        });
+        const first = await run();
+        const second = await run();
+        const firstHold = first.response.summary.safety.singleBlockerHold;
+        const secondHold = second.response.summary.safety.singleBlockerHold;
+        return [
+          first.ok,
+          first.reason,
+          second.ok,
+          second.reason,
+          calls,
+          published.length,
+          firstHold.observationCount,
+          secondHold.observationCount,
+          secondHold.durationMs,
+          firstHold.firstBlockedAt === secondHold.firstBlockedAt,
+          secondHold.resetReason
+        ].join('|');
+      })(),
+      want: 'false|damage-actor-near-login-point|false|damage-actor-near-login-point|4|2|1|2|30000|true|'
+    },
+    {
+      name: 'browserless snapshot edge publishes its terminal timeout result once',
+      got: (async () => {
+        let nowMs = Date.parse('2026-08-02T02:30:00.000Z');
+        let calls = 0;
+        const published = [];
+        const result = await runPreLoginSnapshotSafety({
+          gameOrigin: 'https://example.test',
+          snapshotPath: '/snapshot',
+          userId: 7,
+          sessionToken: 'secret',
+          httpTimeoutMs: 1000,
+          snapshotEdgeEnabled: true,
+          snapshotEdgeIntervalMs: 30000,
+          snapshotEdgeMaxWaitMs: 60000,
+          snapshotEdgeMaxErrors: 3
+        }, {
+          loginPointSafety: { point: { x: 0, y: 0, hp: 100, source: 'test' } }
+        }, {
+          now: () => nowMs,
+          sleep: async ms => { nowMs += ms; },
+          onSnapshotSafety: value => published.push(value),
+          fetchWithTimeout: async () => {
+            calls += 1;
+            return fakeResponseForTest({
+              status: 200,
+              body: { type: 'snapshot', tick: 100, entities: [], bullets: [], coin_drops: [], messages: [] }
+            });
+          }
+        });
+        return [
+          result.ok,
+          result.reason,
+          result.edge.requestCount,
+          calls,
+          published.length,
+          published[0]?.reason
+        ].join('|');
+      })(),
+      want: 'false|snapshot-edge-timeout|3|3|1|snapshot-edge-timeout'
     },
     {
       name: 'browserless snapshot edge treats newer self presence as immediate recovery evidence',

@@ -1241,7 +1241,7 @@ async function runPreLoginSnapshotSafety(config, state, deps = {}) {
       }
     });
     if (!edge.ok) {
-      return {
+      const result = {
         ok: false,
         reason: edge.reason,
         required: 1,
@@ -1256,6 +1256,8 @@ async function runPreLoginSnapshotSafety(config, state, deps = {}) {
           baseline: edge.baseline?.version || null
         }
       };
+      if (typeof deps.onSnapshotSafety === 'function') deps.onSnapshotSafety(result);
+      return result;
     }
     const evaluated = await runSinglePreLoginSnapshotSafetyProbe(config, state, deps, {
       required: 1,
@@ -1264,7 +1266,7 @@ async function runPreLoginSnapshotSafety(config, state, deps = {}) {
       fetched: edge.detected.fetched,
       edgeDetected: true
     });
-    return {
+    const result = {
       ...evaluated,
       required: 1,
       streak: evaluated.ok ? 1 : 0,
@@ -1279,6 +1281,8 @@ async function runPreLoginSnapshotSafety(config, state, deps = {}) {
         safetyEvaluationCount: 1
       }
     };
+    if (typeof deps.onSnapshotSafety === 'function') deps.onSnapshotSafety(result);
+    return result;
   }
   const runtimeDefaults = buildBrowserlessRuntimeDefaults(config);
   const required = Math.max(0, Math.round(Number(

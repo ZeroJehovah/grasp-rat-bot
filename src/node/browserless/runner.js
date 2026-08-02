@@ -256,11 +256,20 @@ function runLoginPointSingleBlockerSelfTest() {
   const first = applySingleBlockerLoginBypass(baseSummary, {}, config, startedAtMs);
   const firstState = {
     loginPointSafety: {
+      point: loginPoint,
       detail: {
         singleBlockerHold: first.summary.safety.singleBlockerHold
       }
     }
   };
+  const persistedHold = persistedSingleBlockerHoldForPoint(firstState, loginPoint);
+  const changedPointHold = persistedSingleBlockerHoldForPoint(firstState, { ...loginPoint, x: 1 });
+  const startupPending = pendingLoginPointSafetyPatch(
+    config,
+    'manual-login-point-pending-snapshot-safety',
+    loginPoint,
+    { detail: persistedHold ? { singleBlockerHold: persistedHold } : {} }
+  );
   const elapsed = applySingleBlockerLoginBypass(baseSummary, firstState, config, startedAtMs + 3599999);
   const bypass = applySingleBlockerLoginBypass(baseSummary, firstState, config, startedAtMs + 3600000);
   const consumed = applySingleBlockerLoginBypass(baseSummary, {
@@ -325,6 +334,9 @@ function runLoginPointSingleBlockerSelfTest() {
         && baseSummary.safety.blockingFactors.length === 2
         && first.bypassed === false
         && first.summary.safety.singleBlockerHold.observationCount === 1
+        && startupPending.detail.singleBlockerHold?.firstBlockedAt === first.summary.safety.singleBlockerHold.firstBlockedAt
+        && startupPending.detail.singleBlockerHold?.observationCount === 1
+        && changedPointHold === null
         && elapsed.bypassed === false
         && elapsed.summary.safety.singleBlockerHold.remainingMs === 1
         && bypass.bypassed === true
@@ -346,6 +358,8 @@ function runLoginPointSingleBlockerSelfTest() {
     ),
     blockingPlayerCount: baseSummary.safety.blockingPlayers.length,
     blockingFactorCount: baseSummary.safety.blockingFactors.length,
+    startupHoldPreserved: Boolean(startupPending.detail.singleBlockerHold),
+    changedPointHoldPreserved: Boolean(changedPointHold),
     bypassReason: bypass.summary.safety.reason,
     consumedDurationMs: consumed.summary.safety.singleBlockerHold.durationMs,
     multipleResetReason: multiple.summary.safety.singleBlockerHold.resetReason,
@@ -958,6 +972,20 @@ function pendingLoginPointSafetyPatch(config = {}, reason = 'manual-login-point-
       ...(options.detail && typeof options.detail === 'object' ? options.detail : {})
     }
   };
+}
+
+function persistedSingleBlockerHoldForPoint(state = {}, point = null) {
+  const previousPoint = state?.loginPointSafety?.point || loginPointFromAnyState(state);
+  const hold = state?.loginPointSafety?.detail?.singleBlockerHold;
+  if (!hold || typeof hold !== 'object' || !hold.active) return null;
+  if (!previousPoint || !point) return null;
+  const previousX = Number(previousPoint.x);
+  const previousY = Number(previousPoint.y);
+  const nextX = Number(point.x);
+  const nextY = Number(point.y);
+  if (![previousX, previousY, nextX, nextY].every(Number.isFinite)) return null;
+  if (previousX !== nextX || previousY !== nextY) return null;
+  return { ...hold };
 }
 
 function learnedLoginPointFromCanary(canary) {
@@ -1756,6 +1784,15 @@ async function runBrowserlessRunner(config, deps = {}) {
   const persistedLoginPoint = loginPointFromAnyState(persisted);
   config = hydrateConfigFromState(config, persisted);
   let loginPointProvided = hasConfigNumber(config.loginPointX) && hasConfigNumber(config.loginPointY);
+  const startupLoginPoint = loginPointProvided
+    ? {
+        x: Number(config.loginPointX),
+        y: Number(config.loginPointY),
+        hp: hasConfigNumber(config.loginPointHp) ? Number(config.loginPointHp) : null,
+        source: envLoginPointProvided ? 'cli' : (persistedLoginPoint?.source || 'state')
+      }
+    : null;
+  const startupSingleBlockerHold = persistedSingleBlockerHoldForPoint(persisted, startupLoginPoint);
   persisted = writeState({
     ...persisted,
     updatedAt: new Date(now()).toISOString(),
@@ -1777,11 +1814,8 @@ async function runBrowserlessRunner(config, deps = {}) {
       lastError: ''
     },
     loginPointSafety: loginPointProvided
-      ? pendingLoginPointSafetyPatch(config, 'manual-login-point-pending-snapshot-safety', {
-          x: Number(config.loginPointX),
-          y: Number(config.loginPointY),
-          hp: hasConfigNumber(config.loginPointHp) ? Number(config.loginPointHp) : null,
-          source: envLoginPointProvided ? 'cli' : (persistedLoginPoint?.source || 'state')
+      ? pendingLoginPointSafetyPatch(config, 'manual-login-point-pending-snapshot-safety', startupLoginPoint, {
+          detail: startupSingleBlockerHold ? { singleBlockerHold: startupSingleBlockerHold } : {}
         })
       : persisted.loginPointSafety,
     logs: {
@@ -3703,6 +3737,9 @@ async function runBrowserlessRunner(config, deps = {}) {
       ...currentExitRecoveryOutcomes
     ].filter(item => item?.exitAttemptId).map(item => [String(item.exitAttemptId), item])).values()).slice(-64);
     const finalLastKnown = finalLastKnownFromCanary(finalStateBase.lastKnown, finalSelf, canary, now());
+    const completedLoginPointSafety = canary?.snapshotSafety && typeof canary.snapshotSafety === 'object'
+      ? loginPointSafetyPatchFromSnapshot(canary.snapshotSafety)
+      : null;
     const finalState = mergeState(finalStateBase, {
       ...finalDecisionPatch,
       ...(safetyEvents.length ? {
@@ -3728,14 +3765,21 @@ async function runBrowserlessRunner(config, deps = {}) {
           self: finalSelf
         }
       } : {}),
-      ...(learnedLoginPoint ? {
+      ...(completedLoginPointSafety ? {
         loginPointSafety: {
-          ...loginPointSafetyPatchFromSnapshot(canary?.snapshotSafety || {}),
-          ok: Boolean(canary?.snapshotSafety?.ok && canary?.snapshotSafety?.satisfied !== false),
-          reason: canary?.snapshotSafety?.reason || 'learned-from-canary-self',
-          point: learnedLoginPoint,
-          checkedAt: canary?.completedAt || canary?.snapshotSafety?.checkedAt || new Date(now()).toISOString()
+          ...completedLoginPointSafety,
+          ...(learnedLoginPoint ? {
+            point: learnedLoginPoint,
+            checkedAt: canary?.snapshotSafety?.checkedAt || canary?.completedAt || new Date(now()).toISOString()
+          } : {})
         },
+      } : learnedLoginPoint ? {
+        loginPointSafety: {
+          ok: false,
+          reason: 'learned-from-canary-self',
+          point: learnedLoginPoint,
+          checkedAt: canary?.completedAt || new Date(now()).toISOString()
+        }
       } : {}),
       probes: {
         lastReadOnlyProbe: canary || null
@@ -4692,6 +4736,117 @@ async function runBrowserlessRunnerSelfTest() {
       disableSourceIpPreflight: true,
       runReadOnlyOnce: async () => ({ ok: true, frames: 0, fake: true })
     });
+    const snapshotPersistenceDir = path.join(tmp, 'snapshot-persistence');
+    const snapshotPersistenceConfig = parseBrowserlessRunnerArgs([
+      '--once',
+      '--live',
+      '--data-dir',
+      snapshotPersistenceDir,
+      '--user-id',
+      '7',
+      '--session-token',
+      'snapshot-persistence-token',
+      '--login-point-x',
+      '1',
+      '--login-point-y',
+      '2',
+      '--login-point-hp',
+      '100'
+    ], {});
+    const snapshotPersistenceStartedAt = '2026-08-02T02:30:00.000Z';
+    const snapshotPersistenceCheckedAt = '2026-08-02T02:31:00.000Z';
+    updateBrowserlessStateFile(stateFilePath(snapshotPersistenceConfig), {
+      loginPointSafety: {
+        ok: false,
+        reason: 'damage-actor-near-login-point',
+        checkedAt: snapshotPersistenceStartedAt,
+        point: { x: 1, y: 2, hp: 100, source: 'self-test' },
+        detail: {
+          singleBlockerHold: {
+            active: true,
+            userId: 8,
+            name: 'known-damager',
+            firstBlockedAt: snapshotPersistenceStartedAt,
+            lastBlockedAt: snapshotPersistenceStartedAt,
+            durationMs: 0,
+            thresholdMs: 3600000,
+            remainingMs: 3600000,
+            observationCount: 1,
+            fullHp: true,
+            pointHp: 100,
+            requiredFullHp: 100,
+            blockingPlayerCount: 1,
+            blockingFactorCount: 1,
+            eligible: false,
+            bypassedAt: '',
+            resetReason: 'new-single-blocker'
+          }
+        }
+      }
+    }, { updatedAt: snapshotPersistenceStartedAt });
+    let startupHoldSeenByCanary = null;
+    await runBrowserlessRunner(snapshotPersistenceConfig, {
+      now: () => Date.parse(snapshotPersistenceCheckedAt),
+      disableBackgroundIo: true,
+      disableSourceIpPreflight: true,
+      runReadOnlyOnce: async (_runtimeConfig, options) => {
+        startupHoldSeenByCanary = options.persistedState?.loginPointSafety?.detail?.singleBlockerHold || null;
+        return {
+          ok: false,
+          runId: 'snapshot-persistence-self-test',
+          startedAt: snapshotPersistenceCheckedAt,
+          completedAt: snapshotPersistenceCheckedAt,
+          error: 'snapshot safety not confirmed: damage-actor-near-login-point',
+          snapshotSafety: {
+            ok: false,
+            reason: 'damage-actor-near-login-point',
+            checkedAt: snapshotPersistenceCheckedAt,
+            required: 1,
+            streak: 0,
+            satisfied: false,
+            response: {
+              summary: {
+                valid: true,
+                selfPresent: false,
+                tick: 101,
+                freshness: { ok: true, reason: 'fresh' },
+                safety: {
+                  ok: false,
+                  reason: 'damage-actor-near-login-point',
+                  point: { x: 1, y: 2, hp: 100, source: 'self-test' },
+                  singleBlockerHold: {
+                    ...startupHoldSeenByCanary,
+                    lastBlockedAt: snapshotPersistenceCheckedAt,
+                    durationMs: 60000,
+                    remainingMs: 3540000,
+                    observationCount: 2,
+                    resetReason: ''
+                  }
+                }
+              }
+            }
+          },
+          entry: { firstSelf: null },
+          state: { realtime: { self: null } },
+          decisions: { last: null },
+          safety: { event: null, leaveFailure: null }
+        };
+      }
+    });
+    const snapshotPersistenceState = readBrowserlessStateFile(stateFilePath(snapshotPersistenceConfig));
+    const completedSnapshotSafetyPersisted = {
+      ok: Boolean(
+        startupHoldSeenByCanary?.firstBlockedAt === snapshotPersistenceStartedAt
+          && startupHoldSeenByCanary?.observationCount === 1
+          && snapshotPersistenceState.loginPointSafety?.reason === 'damage-actor-near-login-point'
+          && snapshotPersistenceState.loginPointSafety?.checkedAt === snapshotPersistenceCheckedAt
+          && snapshotPersistenceState.loginPointSafety?.detail?.singleBlockerHold?.firstBlockedAt === snapshotPersistenceStartedAt
+          && snapshotPersistenceState.loginPointSafety?.detail?.singleBlockerHold?.observationCount === 2
+          && snapshotPersistenceState.loginPointSafety?.detail?.singleBlockerHold?.durationMs === 60000
+      ),
+      startupHold: startupHoldSeenByCanary,
+      persisted: snapshotPersistenceState.loginPointSafety
+    };
     const runnerResultSummary = summarizeBrowserlessRunnerResult({
       ok: false,
       mode: 'profit-live',
@@ -6374,6 +6529,7 @@ async function runBrowserlessRunnerSelfTest() {
         && transportHealth.ok
         && textFrameParsing.ok
         && liveRun.ok
+        && completedSnapshotSafetyPersisted.ok
         && runnerResultSummaryOk
         && statusQueueProjectionOk
         && loginPointSingleBlocker.ok
@@ -6439,6 +6595,7 @@ async function runBrowserlessRunnerSelfTest() {
       textFrameParsing,
       dryRun,
       liveRun,
+      completedSnapshotSafetyPersisted,
       runnerResultSummary: {
         ok: runnerResultSummaryOk,
         bytes: Buffer.byteLength(runnerResultSummaryText),
