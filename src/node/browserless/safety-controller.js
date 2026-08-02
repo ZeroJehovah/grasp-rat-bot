@@ -451,6 +451,11 @@ function realtimeTransportHealthAssessment(state = {}, context = {}, options = {
     ? context.transportHealth
     : null;
   const hostilePressure = Boolean(outboundControl.hostilePressure);
+  const criticalLatency = Boolean(incoming?.exit?.criticalLatencyTriggered);
+  const criticalLatencyRecentBreach = Boolean(
+    Number(incoming?.latency?.currentMs || 0) >= Number(incoming?.latency?.critical?.currentThresholdMs || 10000)
+      || Number(incoming?.latency?.critical?.p90Ms || 0) >= Number(incoming?.latency?.critical?.p90ThresholdMs || 5000)
+  );
   const inboundLatency = Boolean(
     hostilePressure
       && incoming?.mode === 'active'
@@ -473,6 +478,8 @@ function realtimeTransportHealthAssessment(state = {}, context = {}, options = {
     directThreatPressure: Boolean(outboundControl.directThreatPressure),
     outboundControl,
     inbound: incoming,
+    criticalLatency,
+    criticalLatencyRecentBreach,
     inboundLatency,
     frameLoss
   };
@@ -510,6 +517,29 @@ function evaluateBrowserlessSafety(state = {}, context = {}, options = {}) {
     return createSafetyEvent('unsafe-login-point', {
       snapshotSafety: context.snapshotSafety
     }, { nowMs, shouldLeave: false, stopMotion: false });
+  }
+
+  const criticalTransport = realtimeTransportHealthAssessment(state, context, options);
+  if (criticalTransport.criticalLatency) {
+    return createSafetyEvent('realtime-transport-critical-latency', {
+      failureModes: ['critical-inbound-latency'],
+      transportHealth: criticalTransport,
+      lastDecision: (context.lastDecision || context.decision)
+        ? decisionSafetyDetail(context.lastDecision || context.decision)
+        : null,
+      realtime: {
+        tick: state?.realtime?.tick ?? null,
+        receivedAtMs: state?.realtime?.receivedAtMs ?? null,
+        self: state?.realtime?.self || null
+      }
+    }, {
+      nowMs,
+      shouldLeave: true,
+      stopMotion: true,
+      classification: 'exit',
+      leaveAttempted: true,
+      exitConfirmationRequired: true
+    });
   }
 
   if (context.wsError) {
@@ -616,6 +646,28 @@ function evaluateBrowserlessSafety(state = {}, context = {}, options = {}) {
   }
 
   if (movementStallAssessment.triggered) {
+    if (transportHealth.criticalLatencyRecentBreach) {
+      return createSafetyEvent('realtime-transport-critical-latency', {
+        failureModes: ['action-settlement-stalled', 'critical-inbound-latency'],
+        transportHealth,
+        movement: context.actionSettlementStall,
+        lastDecision: (context.lastDecision || context.decision)
+          ? decisionSafetyDetail(context.lastDecision || context.decision)
+          : null,
+        realtime: {
+          tick: state?.realtime?.tick ?? null,
+          receivedAtMs: state?.realtime?.receivedAtMs ?? null,
+          self: state?.realtime?.self || null
+        }
+      }, {
+        nowMs,
+        shouldLeave: true,
+        stopMotion: true,
+        classification: 'exit',
+        leaveAttempted: true,
+        exitConfirmationRequired: true
+      });
+    }
     const combatStall = movementStallAssessment.hostilePressure;
     return createSafetyEvent(combatStall ? 'combat-action-settlement-stalled' : 'action-settlement-stalled', {
       movement: context.actionSettlementStall,

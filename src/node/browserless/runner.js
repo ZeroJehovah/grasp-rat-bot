@@ -1180,6 +1180,7 @@ function browserlessLoopPlan(result, config = {}) {
   }
   if ([
     'combat-action-settlement-stalled',
+    'realtime-transport-critical-latency',
     'realtime-transport-degraded',
     'profit-live-snapshot-active-threat',
     'combat-critical-hp-leave',
@@ -4621,11 +4622,163 @@ async function runSourceIpPreflightRunnerIntegrationSelfTest(tmp) {
   };
 }
 
+async function runCriticalLatencyExitRegressionSelfTest() {
+  const nowMs = Date.parse('2026-08-02T11:00:00.000Z');
+  const state = {
+    realtime: {
+      tick: 9001,
+      receivedAtMs: nowMs,
+      frameAgeMs: 0,
+      self: { user_id: 7, hp: 3, x: 100, y: 200, vx: 0, vy: 0 },
+      entities: [],
+      bullets: []
+    },
+    command: { movement: { timing: { source: 'startup-default' } } }
+  };
+  const transportHealth = {
+    connected: true,
+    mode: 'active',
+    latency: {
+      currentMs: 29600,
+      p90Ms: 29600,
+      critical: {
+        p90Ms: 29600,
+        p90ThresholdMs: 5000,
+        currentThresholdMs: 10000,
+        currentFrameStreak: 2,
+        currentFrameThreshold: 3
+      }
+    },
+    exit: {
+      hostilePressure: false,
+      criticalLatencyTriggered: false,
+      latencyTriggered: false,
+      frameLossTriggered: false
+    }
+  };
+  const controller = createBrowserlessSafetyController({ now: () => nowMs });
+  const incidentEvent = controller.evaluate(state, {
+    nowMs,
+    transportHealth,
+    actionSettlementStall: {
+      active: true,
+      stalled: true,
+      stallMs: 5000,
+      noProgressMs: 29600,
+      observedFrames: 3
+    },
+    lastDecision: {
+      kind: 'move-to-target',
+      band: 'profit',
+      action: { kind: 'move-to-target', band: 'profit', reason: 'best-opportunity-coin' }
+    }
+  });
+  const pendingExit = pendingExitFromCanary(null, {
+    runId: 'critical-latency-incident',
+    startedAt: new Date(nowMs - 29600).toISOString(),
+    stats: { frameCount: 4, realtimeFrameCount: 4, selfPresent: { true: 4, false: 0, unknown: 0 } },
+    safety: {
+      event: incidentEvent,
+      leavePending: {
+        exitAttemptId: `exit:critical-latency-incident:${nowMs}:0`,
+        originalReason: incidentEvent.reason,
+        sourceRunId: 'critical-latency-incident',
+        startedAtMs: nowMs,
+        startHp: 3,
+        minHp: 3,
+        lastHp: 3,
+        httpStatuses: [502],
+        requestResultCount: 1
+      }
+    },
+    leave: { ok: false, error: 'HTTP 502', attempts: [{ status: 502 }] }
+  }, nowMs);
+  let wsOpenAttempts = 0;
+  let leaveCalls = 0;
+  const recovery = await runReadOnlyCanary({
+    controlMode: 'read-only',
+    gameOrigin: 'https://example.invalid',
+    userId: '7',
+    sessionToken: 'critical-latency-test-token',
+    readOnlyProbeMs: 1000,
+    targetWhitelistUrl: '',
+    targetWhitelistFile: ''
+  }, {
+    now: () => nowMs + 1000,
+    persistedState: {
+      runner: { pendingExit },
+      stats: { currentSession: { online: true } }
+    },
+    useLeaveSupervisor: false,
+    runPreLoginSnapshotSafety: async () => ({
+      ok: false,
+      reason: 'active-session-present',
+      checkedAt: new Date(nowMs + 1000).toISOString(),
+      response: {
+        summary: {
+          valid: true,
+          selfPresent: true,
+          self: { user_id: 7, hp: 3 },
+          freshness: { ok: true }
+        }
+      }
+    }),
+    openBrowserlessWs: async () => {
+      wsOpenAttempts += 1;
+      throw new Error('pending exit opened a forbidden websocket');
+    },
+    leaveWithVerification: async options => {
+      leaveCalls += 1;
+      options.onRequest?.({ stage: 'initial', startedAtMs: nowMs + 1000 });
+      options.onResult?.({ stage: 'initial', status: 502, ok: false });
+      return { ok: false, error: 'HTTP 502', attempts: [{ stage: 'initial', status: 502, ok: false }] };
+    }
+  });
+  const loopPlan = browserlessLoopPlan({
+    ok: false,
+    canary: {
+      ...recovery,
+      pendingExit: pendingExitFromCanary(pendingExit, recovery, nowMs + 1000)
+    }
+  }, { loopDelayMs: 30000 });
+  return {
+    ok: Boolean(
+      incidentEvent.reason === 'realtime-transport-critical-latency'
+        && incidentEvent.shouldLeave === true
+        && incidentEvent.stopMotion === true
+        && incidentEvent.classification === 'exit'
+        && incidentEvent.detail?.failureModes?.includes('action-settlement-stalled')
+        && pendingExit?.reason === 'realtime-transport-critical-latency'
+        && recovery.snapshotSafety?.reason === 'pending-exit-self-present'
+        && recovery.recovery?.exitRecovery === true
+        && recovery.safety?.event?.shouldLeave === true
+        && recovery.safety?.transportLifecycle?.phase === 'suppressed-for-exit-recovery'
+        && recovery.leave?.ok === false
+        && leaveCalls === 1
+        && wsOpenAttempts === 0
+        && loopPlan.reason === 'exit-recovery'
+    ),
+    incidentEvent,
+    pendingExit,
+    recovery: {
+      snapshotReason: recovery.snapshotSafety?.reason || '',
+      exitRecovery: Boolean(recovery.recovery?.exitRecovery),
+      safetyReason: recovery.safety?.event?.reason || '',
+      transportPhase: recovery.safety?.transportLifecycle?.phase || '',
+      leaveOk: recovery.leave?.ok === true,
+      leaveCalls,
+      wsOpenAttempts
+    },
+    loopPlan: { reason: loopPlan.reason, delayMs: loopPlan.delayMs }
+  };
+}
+
 async function runBrowserlessRunnerSelfTest() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'grasp-rat-browserless-runner-'));
   try {
     const sourceIpPreflight = await runSourceIpPreflightSelfTest();
     const sourceIpPreflightRunner = await runSourceIpPreflightRunnerIntegrationSelfTest(tmp);
+    const criticalLatencyExitRegression = await runCriticalLatencyExitRegressionSelfTest();
     const establishedCombatLootPriorityTest = (() => {
       const combat = {
         target: {
@@ -6527,6 +6680,7 @@ async function runBrowserlessRunnerSelfTest() {
         dryRun.ok
         && sourceIpPreflight.ok
         && sourceIpPreflightRunner.ok
+        && criticalLatencyExitRegression.ok
         && establishedCombatLootPriorityTest.ok
         && transportHealth.ok
         && textFrameParsing.ok
@@ -6593,6 +6747,7 @@ async function runBrowserlessRunnerSelfTest() {
       establishedCombatLootPriority: establishedCombatLootPriorityTest,
       sourceIpPreflight,
       sourceIpPreflightRunner,
+      criticalLatencyExitRegression,
       transportHealth,
       textFrameParsing,
       dryRun,

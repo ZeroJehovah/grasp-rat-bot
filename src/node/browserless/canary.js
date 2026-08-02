@@ -2193,6 +2193,9 @@ async function runReadOnlyCanary(config, options = {}) {
   const transportHealthSignature = status => [
     status?.mode || '',
     status?.exit?.hostilePressure ? 1 : 0,
+    status?.exit?.criticalLatencyBreached ? 1 : 0,
+    status?.exit?.criticalLatencyTriggered ? 1 : 0,
+    status?.latency?.critical?.currentFrameStreak || 0,
     status?.exit?.latencyBreached ? 1 : 0,
     status?.exit?.latencyTriggered ? 1 : 0,
     status?.exit?.frameLossBreached ? 1 : 0,
@@ -3368,6 +3371,14 @@ async function runReadOnlyCanary(config, options = {}) {
     const snapshotFresh = snapshotSummary?.freshness?.ok === true
       || (snapshotSummary?.freshness?.ok === undefined && result.snapshotSafety?.ok === true);
     const snapshotSelfPresent = snapshotFresh && snapshotSummary.selfPresent === true;
+    if (snapshotSelfPresent) {
+      result.snapshotSafety = {
+        ...result.snapshotSafety,
+        reason: 'pending-exit-self-present',
+        bypassedPreLoginSafety: false,
+        exitRecovery: true
+      };
+    }
     const timeoutUnconfirmed = Boolean(expiredPendingExit && !snapshotSelfPresent);
     if (timeoutUnconfirmed) {
       emitExitRecoveryOutcome(buildExitRecoveryOutcome(expiredPendingExit, {
@@ -3539,11 +3550,13 @@ async function runReadOnlyCanary(config, options = {}) {
       || (!options.openBrowserlessWs && options.wsFrameCoalescing !== false);
     let connectGeneration = 0;
     let pendingOpenEvent = null;
-    if (ending) {
+    if (ending || exitRecoveryActive || result.safety.event?.shouldLeave) {
       terminalBeforeWsActive = true;
-      updateTransportLifecycle({ phase: 'suppressed-after-leave' });
+      updateTransportLifecycle({ phase: 'suppressed-for-exit-recovery' });
       log('canary-ws-connect-suppressed-after-leave', {
-        leaveConfirmed: Boolean(result.leave?.ok || leavePending?.ok)
+        leaveConfirmed: Boolean(result.leave?.ok || leavePending?.ok),
+        exitRecoveryActive,
+        pendingReason: result.safety.event?.reason || ''
       });
     } else {
       // The recovery leave chain may confirm while open() is still awaiting

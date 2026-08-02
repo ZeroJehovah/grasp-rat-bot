@@ -7,6 +7,10 @@ const DEFAULT_TRANSPORT_LATENCY_BASELINE_WINDOW_MS = 60000;
 const DEFAULT_TRANSPORT_LATENCY_DECISION_WINDOW_MS = 3000;
 const DEFAULT_TRANSPORT_LATENCY_EXIT_MS = 2500;
 const DEFAULT_TRANSPORT_LATENCY_EXIT_SUSTAIN_MS = 2000;
+const CRITICAL_TRANSPORT_LATENCY_P90_MS = 5000;
+const CRITICAL_TRANSPORT_LATENCY_P90_SUSTAIN_MS = 1000;
+const CRITICAL_TRANSPORT_LATENCY_CURRENT_MS = 10000;
+const CRITICAL_TRANSPORT_LATENCY_CURRENT_FRAMES = 3;
 const DEFAULT_TRANSPORT_FRAME_LOSS_EXIT_RATE = 0.05;
 const DEFAULT_TRANSPORT_FRAME_LOSS_EXIT_SUSTAIN_MS = 2000;
 const DEFAULT_TRANSPORT_FRAME_LOSS_MINIMUM_EXPECTED_TICKS = 100;
@@ -188,6 +192,8 @@ function createTransportHealthMonitor(options = {}) {
   let outOfOrderTickCount = 0;
   let tickResetCount = 0;
   let latencyBreachSinceMs = null;
+  let criticalLatencyBreachSinceMs = null;
+  let criticalCurrentLatencyFrameStreak = 0;
   let frameLossBreachSinceMs = null;
   let lastAssessment = null;
   const offsetSamples = [];
@@ -206,6 +212,8 @@ function createTransportHealthMonitor(options = {}) {
   function resetSamplingBaseline() {
     lastSampledTick = null;
     latencyBreachSinceMs = null;
+    criticalLatencyBreachSinceMs = null;
+    criticalCurrentLatencyFrameStreak = 0;
     frameLossBreachSinceMs = null;
     lastAssessment = null;
   }
@@ -276,6 +284,8 @@ function createTransportHealthMonitor(options = {}) {
     lastSampledTick = null;
     currentLatencyOffset = null;
     latencyBreachSinceMs = null;
+    criticalLatencyBreachSinceMs = null;
+    criticalCurrentLatencyFrameStreak = 0;
     frameLossBreachSinceMs = null;
     tickResetCount += 1;
   }
@@ -304,6 +314,13 @@ function createTransportHealthMonitor(options = {}) {
     offsetSamples.push({ atMs: receivedAtMs, offset });
     trimBounded(offsetSamples);
     prune(offsetSamples, receivedAtMs - latencyBaselineWindowMs);
+    const baselineOffset = offsetSamples.length
+      ? Math.min(...offsetSamples.map(sample => Number(sample.offset)))
+      : offset;
+    const currentLatencyMs = Math.max(0, offset - baselineOffset);
+    criticalCurrentLatencyFrameStreak = currentLatencyMs >= CRITICAL_TRANSPORT_LATENCY_CURRENT_MS
+      ? criticalCurrentLatencyFrameStreak + 1
+      : 0;
 
     const phase = phaseAt(receivedAtMs);
     if (phase !== 'active') {
@@ -355,6 +372,10 @@ function createTransportHealthMonitor(options = {}) {
       : Math.max(0, currentLatencyOffset - baselineOffset);
     const latencyDecisionSamples = latencySamples.filter(sample => sample.atMs >= nowMs - latencyDecisionWindowMs);
     const latencyValues = latencyDecisionSamples.map(relativeLatency).filter(value => value !== null);
+    const criticalLatencyValues = offsetSamples
+      .filter(sample => sample.atMs >= nowMs - latencyDecisionWindowMs)
+      .map(relativeLatency)
+      .filter(value => value !== null);
     const queueDecisionSamples = queueSamples.filter(sample => sample.atMs >= nowMs - latencyDecisionWindowMs);
     let missingTicks = 0;
     let expectedTicks = 0;
@@ -395,7 +416,16 @@ function createTransportHealthMonitor(options = {}) {
         baselineWindowMs: latencyBaselineWindowMs,
         exitThresholdMs: latencyExitMs,
         exitSustainMs: latencyExitSustainMs,
-        minimumSamples: latencyMinimumSamples
+        minimumSamples: latencyMinimumSamples,
+        critical: {
+          p90Ms: rounded(percentile(criticalLatencyValues, 0.9)),
+          sampleCount: criticalLatencyValues.length,
+          p90ThresholdMs: CRITICAL_TRANSPORT_LATENCY_P90_MS,
+          p90SustainMs: CRITICAL_TRANSPORT_LATENCY_P90_SUSTAIN_MS,
+          currentThresholdMs: CRITICAL_TRANSPORT_LATENCY_CURRENT_MS,
+          currentFrameStreak: criticalCurrentLatencyFrameStreak,
+          currentFrameThreshold: CRITICAL_TRANSPORT_LATENCY_CURRENT_FRAMES
+        }
       },
       processingQueue: {
         currentMs: rounded(currentQueueDelayMs),
@@ -444,6 +474,11 @@ function createTransportHealthMonitor(options = {}) {
         ...metrics,
         exit: {
           hostilePressure: false,
+          criticalLatencyBreached: false,
+          criticalLatencyBreachForMs: 0,
+          criticalLatencyP90Triggered: false,
+          criticalCurrentLatencyTriggered: false,
+          criticalLatencyTriggered: false,
           latencyBreached: false,
           latencyBreachForMs: 0,
           latencyTriggered: false,
@@ -463,6 +498,27 @@ function createTransportHealthMonitor(options = {}) {
     const metrics = metricSnapshot(nowMs);
     const hostilePressure = Boolean(context.hostilePressure);
     const eligible = metrics.mode === 'active' && hostilePressure;
+    const criticalLatencyBreached = Boolean(
+      metrics.connected
+        && numberOrNull(metrics.latency.critical?.p90Ms) !== null
+        && Number(metrics.latency.critical.p90Ms) >= CRITICAL_TRANSPORT_LATENCY_P90_MS
+    );
+    criticalLatencyBreachSinceMs = criticalLatencyBreached
+      ? (criticalLatencyBreachSinceMs ?? nowMs)
+      : null;
+    const criticalLatencyBreachForMs = criticalLatencyBreachSinceMs === null
+      ? 0
+      : Math.max(0, nowMs - criticalLatencyBreachSinceMs);
+    const criticalLatencyP90Triggered = Boolean(
+      criticalLatencyBreached
+        && criticalLatencyBreachForMs >= CRITICAL_TRANSPORT_LATENCY_P90_SUSTAIN_MS
+    );
+    const criticalCurrentLatencyTriggered = Boolean(
+      metrics.connected
+        && Number(metrics.latency.currentMs || 0) >= CRITICAL_TRANSPORT_LATENCY_CURRENT_MS
+        && criticalCurrentLatencyFrameStreak >= CRITICAL_TRANSPORT_LATENCY_CURRENT_FRAMES
+    );
+    const criticalLatencyTriggered = criticalLatencyP90Triggered || criticalCurrentLatencyTriggered;
     const latencyBreached = Boolean(
       eligible
         && Number(metrics.latency.sampleCount || 0) >= latencyMinimumSamples
@@ -486,6 +542,7 @@ function createTransportHealthMonitor(options = {}) {
     const latencyTriggered = Boolean(latencyBreached && latencyBreachForMs >= latencyExitSustainMs);
     const frameLossTriggered = Boolean(frameLossBreached && frameLossBreachForMs >= frameLossExitSustainMs);
     const failureModes = [
+      criticalLatencyTriggered ? 'critical-inbound-latency' : '',
       latencyTriggered ? 'inbound-latency' : '',
       frameLossTriggered ? 'frame-loss' : ''
     ].filter(Boolean);
@@ -493,6 +550,11 @@ function createTransportHealthMonitor(options = {}) {
       ...metrics,
       exit: {
         hostilePressure,
+        criticalLatencyBreached,
+        criticalLatencyBreachForMs,
+        criticalLatencyP90Triggered,
+        criticalCurrentLatencyTriggered,
+        criticalLatencyTriggered,
         latencyBreached,
         latencyBreachForMs,
         latencyTriggered,
@@ -524,6 +586,8 @@ function createTransportHealthMonitor(options = {}) {
     outOfOrderTickCount = 0;
     tickResetCount = 0;
     latencyBreachSinceMs = null;
+    criticalLatencyBreachSinceMs = null;
+    criticalCurrentLatencyFrameStreak = 0;
     frameLossBreachSinceMs = null;
     lastAssessment = null;
     offsetSamples.length = 0;
@@ -585,6 +649,24 @@ function runTransportHealthSelfTest() {
   noPressureMonitor.observeFrame(frame(100), { receivedAtMs: 5000 });
   noPressureMonitor.observeFrame(frame(101), { receivedAtMs: 6050 });
   const noPressure = noPressureMonitor.assess({ nowMs: 6050, hostilePressure: false });
+
+  const criticalMonitor = createTransportHealthMonitor({ activeWarmupMs: 0 });
+  criticalMonitor.setConnected(true, 1000);
+  criticalMonitor.updateActivity(realtimeTransportActivityAssessment(activeState), 1000);
+  criticalMonitor.observeFrame(frame(100), { receivedAtMs: 5000 });
+  for (let index = 1; index <= 3; index += 1) {
+    const atMs = 5000 + index * 50 + 29600;
+    criticalMonitor.observeFrame(frame(100 + index), { receivedAtMs: atMs });
+    criticalMonitor.assess({ nowMs: atMs, hostilePressure: false });
+  }
+  const critical = criticalMonitor.assess({ nowMs: 34750, hostilePressure: false });
+
+  const criticalP90Monitor = createTransportHealthMonitor({ activeWarmupMs: 0 });
+  criticalP90Monitor.setConnected(true, 1000);
+  criticalP90Monitor.observeFrame(frame(100), { receivedAtMs: 5000 });
+  criticalP90Monitor.observeFrame(frame(101), { receivedAtMs: 11050 });
+  criticalP90Monitor.assess({ nowMs: 11050, hostilePressure: false });
+  const criticalP90 = criticalP90Monitor.assess({ nowMs: 12050, hostilePressure: false });
 
   const latencyMonitor = createTransportHealthMonitor({
     activeWarmupMs: 0,
@@ -652,6 +734,11 @@ function runTransportHealthSelfTest() {
         && duplicate.frameLoss.expectedTicks === 1
         && duplicate.frames.duplicateTickCount === 1
         && noPressure.exit.triggered === false
+        && critical.exit.criticalLatencyTriggered === true
+        && critical.exit.criticalCurrentLatencyTriggered === true
+        && critical.latency.critical.currentFrameStreak === 3
+        && criticalP90.exit.criticalLatencyP90Triggered === true
+        && criticalP90.exit.criticalCurrentLatencyTriggered === false
         && latency.exit.latencyTriggered === true
         && loss.exit.frameLossTriggered === true
         && warming.mode === 'warming'
@@ -661,6 +748,8 @@ function runTransportHealthSelfTest() {
     idle,
     duplicate,
     noPressure,
+    critical,
+    criticalP90,
     latency,
     loss,
     activityHold: {
@@ -681,6 +770,10 @@ module.exports = {
   DEFAULT_TRANSPORT_LATENCY_DECISION_WINDOW_MS,
   DEFAULT_TRANSPORT_LATENCY_EXIT_MS,
   DEFAULT_TRANSPORT_LATENCY_EXIT_SUSTAIN_MS,
+  CRITICAL_TRANSPORT_LATENCY_CURRENT_FRAMES,
+  CRITICAL_TRANSPORT_LATENCY_CURRENT_MS,
+  CRITICAL_TRANSPORT_LATENCY_P90_MS,
+  CRITICAL_TRANSPORT_LATENCY_P90_SUSTAIN_MS,
   DEFAULT_TRANSPORT_SERVER_TICK_MS,
   commandTimingSummary,
   createTransportHealthMonitor,

@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.08.02.1';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.08.02.2';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function mapMarkerKeyCore(kind, primary, fallback = '') {
@@ -1138,6 +1138,7 @@ function renderBrowserlessWebPanel() {
       'combat-critical-hp-leave': '战斗中我方血量进入危险线，紧急退出',
       'cloudflare-challenge': 'Cloudflare 挑战已确认，自动登录已停止',
       'realtime-transport-degraded': '战斗中实时传输持续异常，为避免失去控制，主动退出',
+      'realtime-transport-critical-latency': '实时传输延迟严重，已强制退出并等待确认离场',
       'outbound-control-unresponsive': '战斗中移动或射击指令持续失效，为避免原地承伤，主动退出',
       'combat-action-settlement-stalled': '战斗中移动指令失效，为避免原地承伤，主动退出',
       'combat-miss-close-timeout-leave': '连续 30 秒无法完成当前 10 米接近目标，为避免低效追击而主动退出',
