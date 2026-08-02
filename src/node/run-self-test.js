@@ -85,11 +85,14 @@ const {
   createActionPublicationGate,
   createLatestFrameScheduler,
   createCanaryRunId,
+  createMainThreadTimingStats,
   nextCombatControlTickCore,
   plannerResponseHasNewerPreemption,
+  recordMainThreadTask,
   runPreLoginSnapshotSafety,
   runReadOnlyCanary
 } = require('./browserless/canary');
+const { evaluateCpuGate } = require('../../scripts/benchmark-browserless-hot-path');
 const {
   createBrowserlessLeaveSupervisor
 } = require('./browserless/leave-supervisor');
@@ -5424,6 +5427,40 @@ async function runSelfTest() {
   }
 
   const cases = [
+    {
+      name: 'main-thread release budget gates CPU work and keeps wall spikes diagnostic',
+      got: (() => {
+        const stats = createMainThreadTimingStats(50);
+        const wallSpike = recordMainThreadTask(stats, 'wall-spike', 99, {}, {
+          workProfile: { cpuWorkMs: 48 }
+        });
+        const cpuViolation = recordMainThreadTask(stats, 'cpu-violation', 49, {}, {
+          workProfile: { cpuWorkMs: 50 }
+        });
+        return [
+          wallSpike.cpuOverBudget,
+          wallSpike.wallOverBudget,
+          cpuViolation.cpuOverBudget,
+          stats.accepted,
+          stats.wallViolationCount,
+          stats.violationCount
+        ].join('|');
+      })(),
+      want: 'false|true|true|false|1|1'
+    },
+    {
+      name: 'benchmark CPU gate ignores wall-only diagnostics and rejects missing CPU samples',
+      got: (() => {
+        const result = evaluateCpuGate({
+          wallOnly: { count: 1, maxMs: 99 },
+          measured: { count: 2, cpuCount: 2, maxCpuMs: 48, maxMs: 99 },
+          missing: { count: 1, cpuCount: 0, maxMs: 10 },
+          violation: { count: 1, cpuCount: 1, maxCpuMs: 55, maxMs: 55 }
+        }, 50);
+        return [result.overBudget.length, result.missing.length, result.maxCpuMs].join('|');
+      })(),
+      want: '1|1|55'
+    },
     {
       name: 'browserless shared combat fire budget blocks close-pressure double authorization',
       got: (() => {

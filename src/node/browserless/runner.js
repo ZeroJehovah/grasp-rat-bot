@@ -2840,9 +2840,10 @@ async function runBrowserlessRunner(config, deps = {}) {
             };
           }
           if (Number(durationMs) < 50) return;
-          logStore.append('runner', 'main-thread-budget-exceeded', {
+          logStore.append('runner', 'main-thread-wall-time-spike', {
             task,
             durationMs: Math.round(Number(durationMs) * 1000) / 1000,
+            diagnosticOnly: true,
             ...detail
           });
         },
@@ -4056,8 +4057,8 @@ async function runComplexCombatMainThreadBudgetSelfTest(tmp) {
     const frameTiming = result.hotPath?.tasks?.['ws-message'] || {};
     const maxFrameMs = Number(frameTiming.maxMs || 0);
     const maxIngressWallMs = Number(ingressTiming.maxMs || 0);
-    const wallOverBudgetCount = Number(frameTiming.overBudgetCount || 0)
-      + Number(ingressTiming.overBudgetCount || 0);
+    const wallOverBudgetCount = Number(frameTiming.wallOverBudgetCount || 0)
+      + Number(ingressTiming.wallOverBudgetCount || 0);
     const measuredFrameCount = Number(frameTiming.count || 0);
     const ingressFrameCount = Number(ingressTiming.count || 0);
     const measuredIngressCpuMs = frameCpuDurations.length ? Math.max(...frameCpuDurations) : Infinity;
@@ -4126,6 +4127,7 @@ async function runComplexCombatMainThreadBudgetSelfTest(tmp) {
       },
       warmup,
       maxTask: result.hotPath?.maxTask || null,
+      maxCpuTask: result.hotPath?.maxCpuTask || null,
       canaryOk: Boolean(result.ok),
       canaryError: result.error || ''
     };

@@ -110,7 +110,7 @@ function usage() {
     'Options:',
     '  --iterations <n>          Measured iterations. Default: 200',
     '  --warmup <n>              Warmup iterations. Default: 20',
-    '  --max-ms <ms>             Main-thread budget. Default: 50',
+    '  --max-ms <ms>             Main-thread CPU-work budget. Default: 50',
     '  --learning-file <file>    Optional production combat-learning.json',
     '  --state-file <file>       Optional persisted state.json update benchmark',
     '  --realtime-entities <n>   Realtime entity count. Default: 80',
@@ -122,7 +122,7 @@ function usage() {
     '  --canary-duration-ms <ms> Complete callback scenario duration. Default: 3000',
     '  --frame-interval-ms <ms>  Synthetic WS frame interval. Default: 50',
     '  --json                    Print JSON only',
-    '  --fail-on-budget          Exit nonzero when a production hot task exceeds the budget',
+    '  --fail-on-budget          Exit nonzero when measured main-thread CPU work exceeds the budget',
     `                            Linux release gates also require process nice <= ${RELEASE_PROCESS_NICE}`
   ].join('\n');
 }
@@ -144,6 +144,36 @@ function timingSummary(values) {
     p99Ms: round(percentile(sorted, 0.99)),
     maxMs: round(sorted.length ? sorted[sorted.length - 1] : null),
     meanMs: round(sorted.length ? sorted.reduce((sum, value) => sum + value, 0) / sorted.length : null)
+  };
+}
+
+function evaluateCpuGate(tasks, budgetMs) {
+  const measured = [];
+  const missing = [];
+  const overBudget = [];
+  for (const [name, summary] of Object.entries(tasks || {})) {
+    if (!summary || !Object.prototype.hasOwnProperty.call(summary, 'cpuCount')) continue;
+    const count = Math.max(0, Number(summary.count || 0));
+    const cpuCount = Math.max(0, Number(summary.cpuCount || 0));
+    if (!count) continue;
+    if (cpuCount !== count || !Number.isFinite(Number(summary.maxCpuMs))) {
+      missing.push({ name, count, cpuCount });
+      continue;
+    }
+    const maxCpuMs = Number(summary.maxCpuMs);
+    measured.push({ name, count, maxCpuMs, maxWallMs: Number(summary.maxMs || 0) });
+    if (maxCpuMs >= budgetMs) {
+      overBudget.push({ name, maxCpuMs, maxWallMs: Number(summary.maxMs || 0) });
+    }
+  }
+  return {
+    metric: 'cpu-work',
+    budgetMs,
+    measured,
+    missing,
+    overBudget,
+    maxCpuMs: measured.length ? Math.max(...measured.map(item => item.maxCpuMs)) : null,
+    maxWallMs: measured.length ? Math.max(...measured.map(item => item.maxWallMs)) : null
   };
 }
 
@@ -940,10 +970,12 @@ async function runBenchmark(options) {
   });
   const persistedState = benchmarkPersistedState(options.stateFile, Math.min(options.iterations, 50));
   const productionHotTasks = {
+    idleWsMessageIngress: idleScenario.hotPath?.tasks?.['ws-message-ingress'] || null,
     idleWsMessage: idleScenario.hotPath?.tasks?.['ws-message'] || null,
     idlePlannerResponse: idleScenario.hotPath?.tasks?.['planner-response'] || null,
     idleSnapshotObserverUpdate: idleScenario.hotPath?.tasks?.['snapshot-observer-update'] || null,
     idleSnapshotObservationRefresh: idleScenario.hotPath?.tasks?.['snapshot-observation-refresh'] || null,
+    combatWsMessageIngress: combatScenario.hotPath?.tasks?.['ws-message-ingress'] || null,
     combatWsMessage: combatScenario.hotPath?.tasks?.['ws-message'] || null,
     combatPlannerResponse: combatScenario.hotPath?.tasks?.['planner-response'] || null,
     combatSnapshotObserverUpdate: combatScenario.hotPath?.tasks?.['snapshot-observer-update'] || null,
@@ -967,9 +999,8 @@ async function runBenchmark(options) {
     realtimeFrameIngestView: frameIngest.summary,
     actionApply: actionApply.summary
   };
-  const overBudget = Object.entries(productionHotTasks)
-    .filter(([, summary]) => summary && Number(summary.maxMs) >= options.maxMs)
-    .map(([name, summary]) => ({ name, maxMs: summary.maxMs }));
+  const cpuGate = evaluateCpuGate(productionHotTasks, options.maxMs);
+  const overBudget = cpuGate.overBudget;
   const validationErrors = [];
   if (options.failOnBudget
     && process.platform === 'linux'
@@ -977,6 +1008,10 @@ async function runBenchmark(options) {
     validationErrors.push(`release-process-nice-must-be-${RELEASE_PROCESS_NICE}-or-lower`);
   }
   if (statusRendering && !statusRendering.secretsRedacted) validationErrors.push('status-secret-redaction-failed');
+  if (cpuGate.measured.length === 0) validationErrors.push('main-thread-cpu-measurement-missing');
+  if (cpuGate.missing.length) {
+    validationErrors.push(`main-thread-cpu-measurement-incomplete:${cpuGate.missing.map(item => item.name).join(',')}`);
+  }
   if (Number(combatScenario.realtimeControlCount || 0) < 40) {
     validationErrors.push('combat-realtime-control-below-20hz-sample-floor');
   }
@@ -1001,9 +1036,11 @@ async function runBenchmark(options) {
       combatLearningBytes: options.learningFile ? fs.statSync(path.resolve(options.learningFile)).size : 0
     },
     budgetMs: options.maxMs,
+    budgetMetric: 'main-thread-cpu-work',
     accepted: overBudget.length === 0 && validationErrors.length === 0,
     overBudget,
     validationErrors,
+    cpuGate,
     timings: {
       strategyInput: strategyInput.summary,
       backgroundFullDecision: fullDecision.summary,
@@ -1035,7 +1072,7 @@ async function runBenchmark(options) {
 
 function printHuman(result) {
   console.log(`Browserless hot-path benchmark: ${result.accepted ? 'accepted' : 'over budget'}`);
-  console.log(`Budget: < ${result.budgetMs}ms`);
+  console.log(`Budget: main-thread CPU work < ${result.budgetMs}ms (wall-clock is diagnostic)`);
   console.log(`Process nice: ${result.environment.processNice ?? 'unknown'} (release requires <= ${result.environment.requiredReleaseNice})`);
   console.log(`Fixture: ${result.fixture.realtimeEntities} realtime entities, ${result.fixture.snapshotCoins} snapshot coins, ${result.fixture.bullets} bullets`);
   for (const [name, value] of Object.entries(result.timings)) {
@@ -1045,19 +1082,26 @@ function printHuman(result) {
   }
   for (const [name, summary] of Object.entries(result.mainThreadTasks || {})) {
     if (!summary || summary.maxMs === undefined) continue;
-    console.log(`- main-thread ${name}: mean=${Math.round(Number(summary.meanMs || 0) * 1000) / 1000}ms max=${summary.maxMs}ms`);
+    const cpuMax = Number.isFinite(Number(summary.maxCpuMs)) ? `${summary.maxCpuMs}ms` : 'n/a';
+    const cpuMean = Number.isFinite(Number(summary.meanCpuMs)) ? `${Math.round(Number(summary.meanCpuMs) * 1000) / 1000}ms` : 'n/a';
+    console.log(`- main-thread ${name}: cpu-mean=${cpuMean} cpu-max=${cpuMax} wall-mean=${Math.round(Number(summary.meanMs || 0) * 1000) / 1000}ms wall-max=${summary.maxMs}ms`);
   }
   for (const [name, scenario] of Object.entries(result.completeCallbacks || {})) {
     const maxTask = scenario?.hotPath?.maxTask || null;
+    const maxCpuTask = scenario?.hotPath?.maxCpuTask || null;
     const workProfile = maxTask?.workProfile || {};
     const publication = scenario?.actionPublication || {};
     if (maxTask) {
       console.log(`- ${name} max-task detail: task=${maxTask.task || ''} wall=${maxTask.durationMs || 0}ms cpu=${workProfile.cpuWorkMs ?? 'n/a'}ms nonCpu=${workProfile.nonCpuWallMs ?? 'n/a'}ms classification=${workProfile.classification || ''}`);
       console.log(`- ${name} max-task stages: ${JSON.stringify(maxTask.stages || {})}`);
     }
+    if (maxCpuTask && maxCpuTask !== maxTask) {
+      const cpuProfile = maxCpuTask.workProfile || {};
+      console.log(`- ${name} max-cpu-task: task=${maxCpuTask.task || ''} cpu=${cpuProfile.cpuWorkMs ?? 'n/a'}ms wall=${maxCpuTask.durationMs || 0}ms`);
+    }
     console.log(`- ${name} action-publication: published=${publication.publishedCount || 0} immediate=${publication.immediatePublishedCount || 0} coalescible=${publication.coalesciblePublishedCount || 0} suppressed=${publication.suppressedSkippedCount || 0}`);
   }
-  for (const item of result.overBudget) console.log(`- over-budget ${item.name}: ${item.maxMs}ms`);
+  for (const item of result.overBudget) console.log(`- over-budget ${item.name}: cpu=${item.maxCpuMs}ms wall=${item.maxWallMs}ms`);
   for (const item of result.validationErrors || []) console.log(`- validation-error ${item}`);
 }
 
@@ -1100,6 +1144,7 @@ if (require.main === module) {
 
 module.exports = {
   createFixture,
+  evaluateCpuGate,
   parseArgs,
   runBenchmark,
   timingSummary

@@ -334,7 +334,19 @@ function plannerResponseHasNewerPreemption(sentStatePatch = null, currentStatePa
 }
 
 function createTimingAggregate() {
-  return { count: 0, totalMs: 0, maxMs: 0, overBudgetCount: 0 };
+  return {
+    count: 0,
+    totalMs: 0,
+    maxMs: 0,
+    overBudgetCount: 0,
+    wallOverBudgetCount: 0,
+    cpuCount: 0,
+    totalCpuMs: 0,
+    maxCpuMs: 0,
+    meanCpuMs: 0,
+    cpuOverBudgetCount: 0,
+    cpuMissingCount: 0
+  };
 }
 
 function recordTimingAggregate(aggregate, durationMs, budgetMs = Infinity) {
@@ -350,11 +362,16 @@ function recordTimingAggregate(aggregate, durationMs, budgetMs = Infinity) {
 function createMainThreadTimingStats(budgetMs = DEFAULT_MAIN_THREAD_BUDGET_MS) {
   return {
     budgetMs: Math.max(1, Number(budgetMs || DEFAULT_MAIN_THREAD_BUDGET_MS)),
+    budgetMetric: 'cpu-work',
     accepted: true,
+    overBudget: false,
     tasks: {},
     stages: {},
     maxTask: null,
+    maxCpuTask: null,
     violationCount: 0,
+    wallViolationCount: 0,
+    cpuMeasurementMissingCount: 0,
     lastViolation: null
   };
 }
@@ -365,18 +382,22 @@ function recordMainThreadTask(stats, taskName, durationMs, stageDurations = {}, 
   const taskAggregate = stats.tasks[name] || (stats.tasks[name] = createTimingAggregate());
   const duration = recordTimingAggregate(
     taskAggregate,
-    durationMs,
-    stats.budgetMs
+    durationMs
   );
   const cpuWorkMs = Number(detail?.workProfile?.cpuWorkMs);
-  if (Number.isFinite(cpuWorkMs) && cpuWorkMs >= 0) {
-    taskAggregate.cpuCount = Math.max(0, Number(taskAggregate.cpuCount || 0)) + 1;
-    taskAggregate.totalCpuMs = Math.max(0, Number(taskAggregate.totalCpuMs || 0)) + cpuWorkMs;
-    taskAggregate.maxCpuMs = Math.max(0, Number(taskAggregate.maxCpuMs || 0), cpuWorkMs);
+  const cpuMeasured = Number.isFinite(cpuWorkMs) && cpuWorkMs >= 0;
+  if (cpuMeasured) {
+    taskAggregate.cpuCount += 1;
+    taskAggregate.totalCpuMs += cpuWorkMs;
+    taskAggregate.maxCpuMs = Math.max(taskAggregate.maxCpuMs, cpuWorkMs);
     taskAggregate.meanCpuMs = taskAggregate.totalCpuMs / taskAggregate.cpuCount;
     if (cpuWorkMs >= stats.budgetMs) {
-      taskAggregate.cpuOverBudgetCount = Math.max(0, Number(taskAggregate.cpuOverBudgetCount || 0)) + 1;
+      taskAggregate.cpuOverBudgetCount += 1;
+      taskAggregate.overBudgetCount += 1;
     }
+  } else {
+    taskAggregate.cpuMissingCount += 1;
+    stats.cpuMeasurementMissingCount += 1;
   }
   for (const stage in (stageDurations || {})) {
     if (!Object.prototype.hasOwnProperty.call(stageDurations, stage)) continue;
@@ -385,10 +406,17 @@ function recordMainThreadTask(stats, taskName, durationMs, stageDurations = {}, 
       stageDurations[stage]
     );
   }
-  const overBudget = duration >= stats.budgetMs;
+  const wallOverBudget = duration >= stats.budgetMs;
+  const cpuOverBudget = cpuMeasured && cpuWorkMs >= stats.budgetMs;
+  if (wallOverBudget) {
+    taskAggregate.wallOverBudgetCount += 1;
+    stats.wallViolationCount += 1;
+  }
   const newMaximum = !stats.maxTask || duration > Number(stats.maxTask.durationMs || 0);
+  const newCpuMaximum = cpuMeasured
+    && (!stats.maxCpuTask || cpuWorkMs > Number(stats.maxCpuTask.workProfile?.cpuWorkMs || 0));
   let entry = null;
-  if (newMaximum || overBudget) {
+  if (newMaximum || newCpuMaximum || wallOverBudget || cpuOverBudget) {
     const roundedStages = {};
     for (const stage in (stageDurations || {})) {
       if (!Object.prototype.hasOwnProperty.call(stageDurations, stage)) continue;
@@ -398,16 +426,23 @@ function recordMainThreadTask(stats, taskName, durationMs, stageDurations = {}, 
       task: name,
       durationMs: Math.round(duration * 1000) / 1000,
       stages: roundedStages,
-      ...detail
+      ...detail,
+      budgetMs: stats.budgetMs,
+      budgetMetric: stats.budgetMetric,
+      cpuMeasured,
+      cpuOverBudget,
+      wallOverBudget
     };
     if (newMaximum) stats.maxTask = entry;
+    if (newCpuMaximum) stats.maxCpuTask = entry;
   }
-  if (overBudget) {
+  if (cpuOverBudget) {
     stats.accepted = false;
+    stats.overBudget = true;
     stats.violationCount += 1;
     stats.lastViolation = entry;
   }
-  return overBudget ? entry : null;
+  return wallOverBudget || cpuOverBudget ? entry : null;
 }
 
 function createLatestFrameScheduler(options = {}) {
@@ -1923,20 +1958,22 @@ async function runReadOnlyCanary(config, options = {}) {
   const flushScheduledCombatPersistence = () => {
     if (!combatPersistenceScheduled && !combatPersistenceAtMs) return;
     const started = performance.now();
+    const cpuStarted = startMainThreadCpuUsage();
     combatPersistenceScheduled = false;
     const atMs = combatPersistenceAtMs || now();
     combatPersistenceAtMs = 0;
     try {
       persistCombatLearning(atMs);
     } finally {
+      const durationMs = performance.now() - started;
       const entry = recordMainThreadTask(
         result.hotPath,
         'combat-persistence-schedule',
-        performance.now() - started
+        durationMs,
+        {},
+        { workProfile: mainThreadWorkProfile(cpuStarted, durationMs) }
       );
-      if (entry && entry.durationMs >= result.hotPath.budgetMs) {
-        log('main-thread-budget-exceeded', entry);
-      }
+      logMainThreadTiming(entry);
     }
   };
   const scheduleCombatPersistence = atMs => {
@@ -1971,6 +2008,14 @@ async function runReadOnlyCanary(config, options = {}) {
 
   const log = (type, detail) => {
     if (logStore) logStore.append('runner', type, addRunMeta(detail));
+  };
+  const logMainThreadTiming = entry => {
+    if (!entry) return;
+    if (entry.cpuOverBudget) {
+      log('main-thread-budget-exceeded', entry);
+    } else if (entry.wallOverBudget) {
+      log('main-thread-wall-time-spike', entry);
+    }
   };
   const logDecision = detail => {
     if (logStore) logStore.append('decisions', 'decision', addRunMeta(detail));
@@ -2203,7 +2248,7 @@ async function runReadOnlyCanary(config, options = {}) {
       workProfile: mainThreadWorkProfile(cpuStarted, durationMs),
       ...detail
     });
-    if (entry && entry.durationMs >= result.hotPath.budgetMs) log('main-thread-budget-exceeded', entry);
+    logMainThreadTiming(entry);
     return entry;
   };
   const flushSnapshotObserver = () => {
@@ -3202,9 +3247,7 @@ async function runReadOnlyCanary(config, options = {}) {
               effectCount: workerResult.effects?.length || 0
             }
           });
-          if (entry && entry.durationMs >= result.hotPath.budgetMs) {
-            log('main-thread-budget-exceeded', entry);
-          }
+          logMainThreadTiming(entry);
         }
       })
       .catch(err => {
@@ -3659,9 +3702,7 @@ async function runReadOnlyCanary(config, options = {}) {
             tick: frame?.decodedTick ?? frame?.decodedJson?.tick ?? null,
             workProfile: mainThreadWorkProfile(ingressCpuStarted, ingressDurationMs)
           });
-          if (ingressEntry && ingressEntry.durationMs >= result.hotPath.budgetMs) {
-            log('main-thread-budget-exceeded', ingressEntry);
-          }
+          logMainThreadTiming(ingressEntry);
           if (!wsFrameScheduler) {
             wsFrameScheduler = createLatestFrameScheduler({
               processFrame: item => handleWsMessage(item.data, {
@@ -3960,9 +4001,7 @@ async function runReadOnlyCanary(config, options = {}) {
               realtime: lastRealtimeControlScale
             }
           });
-          if (entry && entry.durationMs >= result.hotPath.budgetMs) {
-            log('main-thread-budget-exceeded', entry);
-          }
+          logMainThreadTiming(entry);
           if (wsFrameScheduler) result.hotPath.frameScheduler = wsFrameScheduler.status();
         }
       }
@@ -4475,11 +4514,13 @@ module.exports = {
   createActionPublicationGate,
   createLatestFrameScheduler,
   createCanaryRunId,
+  createMainThreadTimingStats,
   frameDataToBuffer,
   inspectCanaryFrame,
   loginPointFromState,
   nextCombatControlTickCore,
   plannerResponseHasNewerPreemption,
+  recordMainThreadTask,
   runPreLoginSnapshotSafety,
   runReadOnlyCanary
 };
